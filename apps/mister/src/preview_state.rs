@@ -13,7 +13,8 @@ use slint_ui::launcher::PreviewStatus;
 use crate::arcade_catalog::{ArcadeGameEntry, ArcadeGameView};
 use crate::preview_worker::{
     DEFAULT_PREVIEW_CACHE_CAP, DEFAULT_PREVIEW_RADIUS, PreviewLoadSource, PreviewPixels,
-    PreviewPriority, PreviewResult, PreviewWorker, preview_asset_cache_key, preview_window_indices,
+    PreviewPriority, PreviewResult, PreviewSelectedRequestHandle, PreviewWorker,
+    preview_asset_cache_key, preview_window_indices,
 };
 use crate::ui_display::{UI_FB_H, UI_FB_W};
 
@@ -343,6 +344,14 @@ pub(crate) struct PreviewState {
     frame_cache_evictions: u32,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct SystemEntryPreviewPrelude {
+    pub(crate) generation: u64,
+    pub(crate) title: String,
+    pub(crate) preview_archive_path: String,
+    pub(crate) preview_asset_key: String,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum PreviewSelectionTransition {
     #[default]
@@ -623,6 +632,44 @@ impl PreviewState {
             last_selected_timing: SelectedPreviewTiming::default(),
             frame_cache_evictions: 0,
         }
+    }
+
+    pub(crate) fn reserve_system_entry_preview(&mut self) -> (PreviewSelectedRequestHandle, u64) {
+        let requests = self.worker.selected_request_handle();
+        let generation = requests.reserve_generation();
+        self.current_generation = generation;
+        self.terminal_empty = false;
+        self.demand_loading();
+        (requests, generation)
+    }
+
+    pub(crate) fn adopt_system_entry_preview(
+        &mut self,
+        game: &ArcadeGameEntry,
+        prelude: SystemEntryPreviewPrelude,
+    ) {
+        if self.current_generation != prelude.generation
+            || game.title.as_ref() != prelude.title
+            || game.preview_archive_path.as_ref() != prelude.preview_archive_path
+            || game.preview_asset_key.as_ref() != prelude.preview_asset_key
+        {
+            return;
+        }
+        self.selected_mra_path = Some(game.mra_path.to_string());
+        self.selected_preview_key = Some(preview_asset_cache_key(
+            &prelude.preview_archive_path,
+            &prelude.preview_asset_key,
+        ));
+        self.selection_transition = PreviewSelectionTransition::InstantOnEntry;
+        self.terminal_empty = false;
+    }
+
+    pub(crate) fn cancel_system_entry_preview(&mut self) {
+        self.current_generation = 0;
+        self.selected_mra_path = None;
+        self.selected_preview_key = None;
+        self.terminal_empty = true;
+        self.demand_empty(PreviewTransitionPace::Normal);
     }
 
     pub(crate) fn clear(&mut self, bridge: &slint_ui::launcher::MisterBridge) {
@@ -2597,6 +2644,53 @@ mod tests {
         preview.prefetch_throttle_until = Some(Instant::now() - Duration::from_millis(1));
         assert!(!prefetch_should_throttle(&mut preview, false, false));
         assert!(preview.prefetch_throttle_until.is_none());
+    }
+
+    #[test]
+    fn system_entry_preview_adopts_only_the_reserved_exact_selection() {
+        let mut preview = PreviewState::new();
+        let (_requests, generation) = preview.reserve_system_entry_preview();
+        let game = preview_game("Selected", "selected.mra", "selected.png", true);
+
+        preview.adopt_system_entry_preview(
+            &game,
+            SystemEntryPreviewPrelude {
+                generation,
+                title: game.title.to_string(),
+                preview_archive_path: game.preview_archive_path.to_string(),
+                preview_asset_key: game.preview_asset_key.to_string(),
+            },
+        );
+
+        assert_eq!(preview.current_generation, generation);
+        assert_eq!(preview.selected_mra_path.as_deref(), Some("selected.mra"));
+        assert_eq!(preview.selected_preview_key, game_preview_key(&game));
+        assert!(!preview.terminal_empty());
+    }
+
+    #[test]
+    fn system_entry_preview_rejects_stale_generation_and_cancels_to_empty() {
+        let mut preview = PreviewState::new();
+        let (_requests, stale_generation) = preview.reserve_system_entry_preview();
+        let (_requests, current_generation) = preview.reserve_system_entry_preview();
+        let game = preview_game("Selected", "selected.mra", "selected.png", true);
+
+        preview.adopt_system_entry_preview(
+            &game,
+            SystemEntryPreviewPrelude {
+                generation: stale_generation,
+                title: game.title.to_string(),
+                preview_archive_path: game.preview_archive_path.to_string(),
+                preview_asset_key: game.preview_asset_key.to_string(),
+            },
+        );
+
+        assert_eq!(preview.current_generation, current_generation);
+        assert!(preview.selected_mra_path.is_none());
+        assert!(preview.selected_preview_key.is_none());
+        preview.cancel_system_entry_preview();
+        assert_eq!(preview.current_generation, 0);
+        assert!(preview.terminal_empty());
     }
 
     #[test]

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use super::*;
+use crate::preview_state::SystemEntryPreviewPrelude;
 use mister_magik_catalog::builder_protocol::{
     BuilderSummary, CatalogBuilderEvent, CatalogChangeReason,
 };
@@ -1437,6 +1438,7 @@ pub(super) enum CatalogWorkerMessage {
         game_count: usize,
         prepare_us: u64,
         profile: SystemEntryCatalogProfile,
+        preview_prelude: Option<SystemEntryPreviewPrelude>,
     },
     SystemShardFailed {
         system_id: String,

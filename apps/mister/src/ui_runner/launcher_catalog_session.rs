@@ -7,6 +7,7 @@ use super::launcher_worker_intents::{
     parse_games_found_detail,
 };
 use super::*;
+use crate::preview_state::SystemEntryPreviewPrelude;
 
 pub(super) struct CatalogWorkerStart {
     pub(super) root: String,
@@ -101,6 +102,7 @@ pub(super) enum CatalogSessionEffect {
         game_count: usize,
         prepare_us: u64,
         profile: SystemEntryCatalogProfile,
+        preview_prelude: Option<SystemEntryPreviewPrelude>,
     },
     RequestLibraryRebuildOnNextBoot,
     Confirm(launcher::ConfirmAction),
@@ -376,6 +378,7 @@ impl LauncherCatalogSession {
                 game_count,
                 prepare_us,
                 profile,
+                preview_prelude,
             } => effects.push(CatalogSessionEffect::ApplySystemShard {
                 system_id,
                 catalog,
@@ -383,6 +386,7 @@ impl LauncherCatalogSession {
                 game_count,
                 prepare_us,
                 profile,
+                preview_prelude,
             }),
             CatalogWorkerMessage::SystemShardFailed { system_id, error } => {
                 effects.push(CatalogSessionEffect::CatalogSystemHydrationFailed {
@@ -1185,6 +1189,7 @@ mod tests {
                 game_count: 0,
                 prepare_us: 42,
                 profile: SystemEntryCatalogProfile::default(),
+                preview_prelude: None,
             },
             now,
         );

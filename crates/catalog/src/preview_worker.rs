@@ -10,6 +10,7 @@ use std::io::Read;
 #[cfg(unix)]
 use std::os::unix::fs::FileExt;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant, UNIX_EPOCH};
@@ -413,7 +414,38 @@ pub struct PreviewWorker {
     prefetch_rx: mpsc::Receiver<PreviewResult>,
     decoded_cache: SharedPreviewDecodedCache,
     trace_start: Instant,
-    next_generation: u64,
+    next_generation: Arc<AtomicU64>,
+}
+
+#[derive(Clone)]
+pub struct PreviewSelectedRequestHandle {
+    selected_tx: Arc<LatestMailbox<PreviewRequest>>,
+    trace_start: Instant,
+    next_generation: Arc<AtomicU64>,
+}
+
+impl PreviewSelectedRequestHandle {
+    pub fn reserve_generation(&self) -> u64 {
+        self.next_generation.fetch_add(1, Ordering::Relaxed).max(1)
+    }
+
+    pub fn publish_reserved(
+        &self,
+        generation: u64,
+        title: String,
+        preview_archive_path: String,
+        preview_asset_key: String,
+    ) -> bool {
+        self.selected_tx.publish(PreviewRequest {
+            generation,
+            title,
+            preview_archive_path,
+            preview_asset_key,
+            requested_at: Instant::now(),
+            requested_at_ms: self.trace_start.elapsed().as_millis() as u64,
+            priority: PreviewPriority::Selected,
+        })
+    }
 }
 
 impl Default for PreviewWorker {
@@ -470,7 +502,15 @@ impl PreviewWorker {
             prefetch_rx: prefetch_result_rx,
             decoded_cache,
             trace_start,
-            next_generation: 1,
+            next_generation: Arc::new(AtomicU64::new(1)),
+        }
+    }
+
+    pub fn selected_request_handle(&self) -> PreviewSelectedRequestHandle {
+        PreviewSelectedRequestHandle {
+            selected_tx: Arc::clone(&self.selected_tx),
+            trace_start: self.trace_start,
+            next_generation: Arc::clone(&self.next_generation),
         }
     }
 
@@ -480,17 +520,9 @@ impl PreviewWorker {
         preview_archive_path: String,
         preview_asset_key: String,
     ) -> u64 {
-        let generation = self.next_generation;
-        self.next_generation += 1;
-        let _ = self.selected_tx.publish(PreviewRequest {
-            generation,
-            title,
-            preview_archive_path,
-            preview_asset_key,
-            requested_at: Instant::now(),
-            requested_at_ms: self.trace_start.elapsed().as_millis() as u64,
-            priority: PreviewPriority::Selected,
-        });
+        let handle = self.selected_request_handle();
+        let generation = handle.reserve_generation();
+        let _ = handle.publish_reserved(generation, title, preview_archive_path, preview_asset_key);
         generation
     }
 
@@ -501,8 +533,7 @@ impl PreviewWorker {
         preview_asset_key: String,
         distance: usize,
     ) -> bool {
-        let generation = self.next_generation;
-        self.next_generation += 1;
+        let generation = self.next_generation.fetch_add(1, Ordering::Relaxed).max(1);
         match self.prefetch_tx.try_send(PreviewRequest {
             generation,
             title,
@@ -2695,6 +2726,36 @@ mod tests {
         assert_eq!(request.preview_asset_key, "new");
         mailbox.close();
         assert!(mailbox.take_blocking().is_none());
+    }
+
+    #[test]
+    fn selected_request_handle_reserves_shared_generations_and_publishes_latest() {
+        let selected_tx = Arc::new(LatestMailbox::new());
+        let handle = PreviewSelectedRequestHandle {
+            selected_tx: Arc::clone(&selected_tx),
+            trace_start: Instant::now(),
+            next_generation: Arc::new(AtomicU64::new(1)),
+        };
+        let first = handle.reserve_generation();
+        let second = handle.reserve_generation();
+
+        assert_eq!((first, second), (1, 2));
+        assert!(handle.publish_reserved(
+            first,
+            "old selected".to_string(),
+            "old archive".to_string(),
+            "old key".to_string(),
+        ));
+        assert!(handle.publish_reserved(
+            second,
+            "new selected".to_string(),
+            "new archive".to_string(),
+            "new key".to_string(),
+        ));
+
+        let request = selected_tx.try_take().expect("latest selected request");
+        assert_eq!(request.generation, second);
+        assert_eq!(request.preview_asset_key, "new key");
     }
 
     #[test]

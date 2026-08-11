@@ -3660,6 +3660,7 @@ struct ColdCollectionEntryStart {
 fn begin_cold_collection_entry(
     scheduler: &mut LauncherScheduler,
     nav: &mut LauncherNav,
+    preview: &mut PreviewState,
     catalog: &ArcadeCatalog,
     catalog_version: usize,
     collection_id: &str,
@@ -3670,27 +3671,41 @@ fn begin_cold_collection_entry(
     start: Instant,
 ) -> ColdCollectionEntryStart {
     let hydration_failed = nav.catalog_system_hydration_has_failed(collection_id);
-    let hydration_requested = if hydration_failed {
-        retry_system_shard_hydration(
-            scheduler,
-            nav,
-            catalog,
-            catalog_version,
-            collection_id,
+    let already_loading = nav.catalog_system_hydration_is_loading(collection_id);
+    let preview_dispatch = (!already_loading).then(|| {
+        let (requests, generation) = preview.reserve_system_entry_preview();
+        SystemEntryPreviewDispatch {
+            generation,
+            requests,
+        }
+    });
+    let hydration_requested = if already_loading {
+        false
+    } else if hydration_failed {
+        scheduler.retry_system_shard_with_preview(
+            collection_id.to_string(),
             "explicit-retry",
+            catalog.clone(),
+            catalog_version,
             requested_at,
+            preview_dispatch,
         )
     } else {
-        request_system_shard_hydration(
-            scheduler,
-            nav,
-            catalog,
-            catalog_version,
-            collection_id,
+        scheduler.request_system_shard_with_preview(
+            collection_id.to_string(),
             "open-collection",
+            catalog.clone(),
+            catalog_version,
             requested_at,
+            preview_dispatch,
         )
     };
+    if !hydration_requested && !already_loading {
+        preview.cancel_system_entry_preview();
+    }
+    if hydration_requested {
+        nav.catalog_system_hydration_started(collection_id);
+    }
     let pending = (hydration_requested || nav.catalog_system_hydration_is_loading(collection_id))
         .then(|| {
             arcade_entry_latency.record_collection_enter_input(
@@ -5610,6 +5625,7 @@ pub(super) fn run_launcher_loop(
                 let entry = begin_cold_collection_entry(
                     &mut scheduler,
                     &mut nav,
+                    &mut preview,
                     &catalog,
                     catalog_version,
                     &collection_id,
@@ -6094,6 +6110,7 @@ pub(super) fn run_launcher_loop(
             &mut nav,
             start,
         ) {
+            preview.cancel_system_entry_preview();
             arcade_entry_latency.cancel_enter();
             full_bridge_dirty = true;
             if navigation_transition.is_active() {
@@ -6769,6 +6786,7 @@ pub(super) fn run_launcher_loop(
                                 start,
                             );
                         if pending_collection_cancelled {
+                            preview.cancel_system_entry_preview();
                             arcade_entry_latency.cancel_enter();
                             if navigation_transition.is_active() {
                                 let now_us = frame_now
@@ -6960,6 +6978,7 @@ pub(super) fn run_launcher_loop(
                                         let entry = begin_cold_collection_entry(
                                             &mut scheduler,
                                             &mut nav,
+                                            &mut preview,
                                             &catalog,
                                             catalog_version,
                                             collection_id,
@@ -7562,6 +7581,7 @@ pub(super) fn run_launcher_loop(
                         let nav_after = LauncherBridgeKey::from_nav(&nav);
                         if nav_before != nav_after {
                             if let Some(entry) = pending_collection_entry.take() {
+                                preview.cancel_system_entry_preview();
                                 nav.catalog_system_hydration_finished(&entry.collection_id);
                                 print_startup_event(
                                     start,
@@ -8080,6 +8100,7 @@ pub(super) fn run_launcher_loop(
             if endpoint == Some(NavigationTransitionEndpoint::Source)
                 && let Some(entry) = pending_collection_entry.take()
             {
+                preview.cancel_system_entry_preview();
                 deferred_navigation_hydration_finish = Some(entry.collection_id);
                 arcade_entry_latency.cancel_enter();
             }
@@ -9177,6 +9198,7 @@ pub(super) fn run_launcher_loop(
                     completion.endpoint == NavigationTransitionEndpoint::Source
                 }) {
                     if let Some(entry) = pending_collection_entry.take() {
+                        preview.cancel_system_entry_preview();
                         nav.catalog_system_hydration_finished(&entry.collection_id);
                         arcade_entry_latency.cancel_enter();
                     }
@@ -11512,8 +11534,10 @@ fn apply_catalog_session_effects(
                 game_count,
                 prepare_us,
                 profile,
+                preview_prelude,
             } => {
                 if base_catalog_version != *catalog_version {
+                    preview.cancel_system_entry_preview();
                     let _ = retry_system_shard_hydration(
                         scheduler,
                         nav,
@@ -11541,6 +11565,11 @@ fn apply_catalog_session_effects(
                 let retired_catalog = std::mem::replace(catalog, prepared_catalog);
                 *catalog_version = (*catalog_version).wrapping_add(1);
                 launcher_response_trace.end_catalog_phase(phase);
+                if let Some(prelude) = preview_prelude
+                    && let Some(game) = catalog.system_game_at(&system_id, 0)
+                {
+                    preview.adopt_system_entry_preview(game, prelude);
+                }
                 let phase = launcher_response_trace.begin_catalog_phase("catalog-retirement");
                 drop(retired_catalog);
                 launcher_response_trace.end_catalog_phase(phase);

@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use super::*;
+use crate::preview_state::SystemEntryPreviewPrelude;
 use std::collections::{BTreeSet, VecDeque};
 use std::sync::{Arc, Mutex};
 
@@ -158,6 +159,12 @@ struct SystemShardRequest {
     requested_at: Instant,
     base_catalog: ArcadeCatalog,
     base_catalog_version: usize,
+    preview: Option<SystemEntryPreviewDispatch>,
+}
+
+pub(super) struct SystemEntryPreviewDispatch {
+    pub(super) generation: u64,
+    pub(super) requests: mister_magik_catalog::preview_worker::PreviewSelectedRequestHandle,
 }
 
 struct SystemEntryPrepareRequest {
@@ -213,6 +220,7 @@ fn prepare_system_shard(request: SystemShardRequest) -> CatalogWorkerMessage {
     let worker_system_id = request.system_id;
     let base_catalog = request.base_catalog;
     let base_catalog_version = request.base_catalog_version;
+    let preview_dispatch = request.preview;
     let execution_started = system_entry_thread_snapshot();
     crate::allocation_metrics::begin();
     let storage = mister_magik_catalog::catalog_config::default_sharded_catalog_path();
@@ -241,6 +249,27 @@ fn prepare_system_shard(request: SystemShardRequest) -> CatalogWorkerMessage {
             let prepare_started = Instant::now();
             let games = system.games();
             let game_count = games.len();
+            let preview_prelude = preview_dispatch.and_then(|dispatch| {
+                let game = games.first().filter(|game| {
+                    game.has_preview
+                        && !game.preview_archive_path.is_empty()
+                        && !game.preview_asset_key.is_empty()
+                })?;
+                dispatch
+                    .requests
+                    .publish_reserved(
+                        dispatch.generation,
+                        game.title.clone(),
+                        game.preview_archive_path.clone(),
+                        game.preview_asset_key.clone(),
+                    )
+                    .then(|| SystemEntryPreviewPrelude {
+                        generation: dispatch.generation,
+                        title: game.title.clone(),
+                        preview_archive_path: game.preview_archive_path.clone(),
+                        preview_asset_key: game.preview_asset_key.clone(),
+                    })
+            });
             let projection_started = Instant::now();
             let projection_pmu =
                 mister_magik_perf_events::sampled_span("system-entry-row-projection");
@@ -282,6 +311,7 @@ fn prepare_system_shard(request: SystemShardRequest) -> CatalogWorkerMessage {
                     allocations: allocations.allocations,
                     allocated_bytes: allocations.bytes,
                 },
+                preview_prelude,
             }
         }
         Err(error) => {
@@ -394,6 +424,25 @@ impl LauncherScheduler {
         base_catalog_version: usize,
         now: Instant,
     ) -> bool {
+        self.request_system_shard_with_preview(
+            system_id,
+            reason,
+            base_catalog,
+            base_catalog_version,
+            now,
+            None,
+        )
+    }
+
+    pub(super) fn request_system_shard_with_preview(
+        &mut self,
+        system_id: String,
+        reason: &'static str,
+        base_catalog: ArcadeCatalog,
+        base_catalog_version: usize,
+        now: Instant,
+        preview: Option<SystemEntryPreviewDispatch>,
+    ) -> bool {
         if self.system_shard_generation.is_none() {
             return false;
         }
@@ -407,6 +456,7 @@ impl LauncherScheduler {
             requested_at: now,
             base_catalog,
             base_catalog_version,
+            preview,
         });
         self.start_next_system_shard_load();
         true
@@ -430,13 +480,39 @@ impl LauncherScheduler {
         base_catalog_version: usize,
         now: Instant,
     ) -> bool {
+        self.retry_system_shard_with_preview(
+            system_id,
+            reason,
+            base_catalog,
+            base_catalog_version,
+            now,
+            None,
+        )
+    }
+
+    pub(super) fn retry_system_shard_with_preview(
+        &mut self,
+        system_id: String,
+        reason: &'static str,
+        base_catalog: ArcadeCatalog,
+        base_catalog_version: usize,
+        now: Instant,
+        preview: Option<SystemEntryPreviewDispatch>,
+    ) -> bool {
         if self.system_shard_loading(&system_id) {
             return false;
         }
         self.system_shard_attempted.remove(&system_id);
         self.system_shard_queue
             .retain(|request| request.system_id != system_id);
-        self.request_system_shard(system_id, reason, base_catalog, base_catalog_version, now)
+        self.request_system_shard_with_preview(
+            system_id,
+            reason,
+            base_catalog,
+            base_catalog_version,
+            now,
+            preview,
+        )
     }
 
     fn start_next_system_shard_load(&mut self) {
