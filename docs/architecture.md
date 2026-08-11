@@ -189,6 +189,18 @@ conversion:
   routes compose Slint, Rust Arcade rows, screensavers, and overlays into one
   route-owned cached RGB565 frame: 640×480 for 240p/480p, 640×288 for 288p,
   and 640×576 for 576p.
+- Portrait keeps logical UI geometry separate from the physical RGB565 output
+  layout. Slint's software renderer receives `Rotate90` or `Rotate270` and the
+  physical scanout stride, so it rasterizes directly into the persistent
+  landscape composition cache. The monitor orientation is the inverse of the
+  buffer rotation. There is no complete logical portrait framebuffer and no
+  post-render full-frame transpose.
+- Rust-owned layers use the same output-layout mapping. Arcade rows map while
+  copying their cached row bands; previews map only their dirty rectangle;
+  screenshot-parade workers raster directly into oriented recyclable buffers;
+  and navigation snapshots, effects, and destination overlays use physical
+  geometry throughout portrait playback. RGB565 scanout remains physically
+  landscape for Main and the FPGA latch.
 - CRT presentation preserves all 640 horizontal pixels. Only 240p converts the
   vertical axis, using centred nearest-row sampling from 480 to 240 rows.
   Dirty source rectangles map to exact destination bands there; 288p, 480p,
@@ -379,6 +391,13 @@ route reassertion forces a full present while Arcade remains active, the list
 and preview layers must be repainted in the same frame. This prevents Slint's
 cached base frame from silently overwriting a still-truthful `exact` preview
 with the blank placeholder area.
+
+Portrait does not change those ownership states. It changes only how logical
+coordinates reach the physical cache. Slint damage is already physical;
+custom layer damage is converted with the shared output layout at the layer
+boundary. The retained `orientation_damage_rotation_us` telemetry field is a
+v1 schema-compatibility field and is zero because steady rendering performs no
+post-raster rotation.
 
 Navigation capture has its own composition phase. `NavigationTransition` owns
 the source snapshot and playback while direct layers are suppressed. After the

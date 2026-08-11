@@ -159,6 +159,12 @@ receipt, completion-poll, and Rust-vsync observations for each leg. These are
 diagnostic timing fields; protocol-v5 counters remain the physical cadence
 authority.
 
+The portrait half of this route exercises native physical-space composition:
+Slint software-renderer rotation, mapped Arcade and preview rectangles, and
+physical navigation snapshots/effects. `orientation_damage_rotation_us` must
+remain zero. A nonzero value indicates a regression to post-raster portrait
+rotation even when cadence still passes.
+
 The matching `settings-navigation-pprof` scenario executes all twelve directed
 legs at 999 Hz sampling and retains one route-level flamegraph and folded-stack
 file. Its cadence is diagnostic only. Both scenarios override orientation and motion only in

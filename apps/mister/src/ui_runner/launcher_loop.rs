@@ -5222,7 +5222,8 @@ pub(super) fn run_launcher_loop(
     window.request_redraw();
     let startup_intro_eligible = startup_mode == StartupMode::ColdNoCatalog
         && launcher_bench_scenario.is_none()
-        && screensaver_start_mode == ScreensaverStartMode::Inactive;
+        && screensaver_start_mode == ScreensaverStartMode::Inactive
+        && !layout.is_portrait();
     let mut startup_intro = if startup_intro_eligible
         && launcher_presenter.startup_intro_native_hidden_slots_available(ui)
     {
