@@ -670,9 +670,12 @@ jobs:
         run: |
           set -euo pipefail
           args=()
-          while IFS= read -r -d '' report; do args+=(--stock "$report"); done < <(find build/fpga-signoff/stock -type f \( -name '*.log' -o -name '*.rpt' -o -name '*.summary' \) -print0)
-          while IFS= read -r -d '' report; do args+=(--baseline "$report"); done < <(find build/fpga-signoff/pre-observer -type f \( -name '*.log' -o -name '*.rpt' -o -name '*.summary' \) -print0)
-          while IFS= read -r -d '' report; do args+=(--patched "$report"); done < <(find build/fpga-signoff/patched -type f \( -name '*.log' -o -name '*.rpt' -o -name '*.summary' \) -print0)
+          while IFS= read -r -d '' report; do args+=(--stock "$report"); done < <(find build/fpga-signoff/stock -maxdepth 1 -type f \( -name '*.log' -o -name '*.rpt' -o -name '*.summary' \) -print0)
+          while IFS= read -r -d '' report; do args+=(--stock "$report"); done < <(find build/fpga-signoff/stock/reports -maxdepth 1 -type f \( -name '*.log' -o -name '*.rpt' -o -name '*.summary' \) -print0)
+          while IFS= read -r -d '' report; do args+=(--baseline "$report"); done < <(find build/fpga-signoff/pre-observer -maxdepth 1 -type f \( -name '*.log' -o -name '*.rpt' -o -name '*.summary' \) -print0)
+          while IFS= read -r -d '' report; do args+=(--baseline "$report"); done < <(find build/fpga-signoff/pre-observer/reports -maxdepth 1 -type f \( -name '*.log' -o -name '*.rpt' -o -name '*.summary' \) -print0)
+          while IFS= read -r -d '' report; do args+=(--patched "$report"); done < <(find build/fpga-signoff/patched -maxdepth 1 -type f \( -name '*.log' -o -name '*.rpt' -o -name '*.summary' \) -print0)
+          while IFS= read -r -d '' report; do args+=(--patched "$report"); done < <(find build/fpga-signoff/patched/reports -maxdepth 1 -type f \( -name '*.log' -o -name '*.rpt' -o -name '*.summary' \) -print0)
           scripts/checks/check-fpga-quartus-delta.py "${args[@]}" | tee build/fpga-signoff/quartus-delta-signoff.tsv
           cp build/fpga-signoff/quartus-delta-signoff.tsv build/fpga-signoff/patched/reports/quartus-delta-signoff.tsv
           delta_sha="$(shasum -a 256 build/fpga-signoff/patched/reports/quartus-delta-signoff.tsv | awk '{print $1}')"

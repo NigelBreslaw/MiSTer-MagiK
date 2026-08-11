@@ -127,8 +127,8 @@ fi
 
 CI_ACTION="$ROOT/.github/actions/setup-agent-cli/action.yml"
 grep -q 'MISTER_AGENT_CLI_PROFILE=debug.*GITHUB_ENV' "$CI_ACTION"
-grep -q 'path: agent-cli/target/debug$' "$CI_ACTION"
-grep -q 'agent-cli-fast-v2-' "$CI_ACTION"
+grep -q 'path: agent-cli/target/debug/agent-cli$' "$CI_ACTION"
+grep -q 'agent-cli-fast-v3-' "$CI_ACTION"
 if grep -q 'RUSTUP_TOOLCHAIN=.*GITHUB_ENV' "$CI_ACTION"; then
   echo "CI agent setup leaked its bootstrap toolchain into host validation" >&2
   exit 1

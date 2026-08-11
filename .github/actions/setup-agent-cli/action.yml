@@ -27,10 +27,10 @@ runs:
       id: cache
       uses: actions/cache@v6
       with:
-        path: agent-cli/target/debug
-        key: agent-cli-fast-v2-${{ runner.os }}-${{ runner.arch }}-${{ inputs.cache-scope }}-${{ steps.identity.outputs.deps }}-${{ steps.identity.outputs.value }}
+        path: agent-cli/target/debug/agent-cli
+        key: agent-cli-fast-v3-${{ runner.os }}-${{ runner.arch }}-${{ inputs.cache-scope }}-${{ steps.identity.outputs.deps }}-${{ steps.identity.outputs.value }}
         restore-keys: |
-          agent-cli-fast-v2-${{ runner.os }}-${{ runner.arch }}-${{ inputs.cache-scope }}-${{ steps.identity.outputs.deps }}-
+          agent-cli-fast-v3-${{ runner.os }}-${{ runner.arch }}-${{ inputs.cache-scope }}-${{ steps.identity.outputs.deps }}-
 
     - name: Certify restored agent CLI
       if: steps.cache.outputs.cache-hit == 'true'
