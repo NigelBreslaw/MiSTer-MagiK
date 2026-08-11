@@ -156,8 +156,6 @@ module mister_magik_video_diagnostics_avalon (
 			last_address <= vbuf_address;
 			reads_since_frame <= 1'b1;
 			if(accepted_bursts != 16'hffff) accepted_bursts <= accepted_bursts + 1'd1;
-			else freeze_fault(MAGIK_VIDEO_DIAGNOSTICS_TRIGGER_AVALON_RETURN,
-				MAGIK_VIDEO_DIAGNOSTICS_AVALON_FAULT_FLAGS_COUNTER_OVERFLOW);
 			if(outstanding <= 21'h1fff7f) outstanding <= outstanding + vbuf_burstcount;
 			else freeze_fault(MAGIK_VIDEO_DIAGNOSTICS_TRIGGER_AVALON_RETURN,
 				MAGIK_VIDEO_DIAGNOSTICS_AVALON_FAULT_FLAGS_COUNTER_OVERFLOW);
@@ -173,8 +171,6 @@ module mister_magik_video_diagnostics_avalon (
 
 		if(vbuf_readdatavalid && !frozen) begin
 			if(returned_beats != 16'hffff) returned_beats <= returned_beats + 1'd1;
-			else freeze_fault(MAGIK_VIDEO_DIAGNOSTICS_TRIGGER_AVALON_RETURN,
-				MAGIK_VIDEO_DIAGNOSTICS_AVALON_FAULT_FLAGS_COUNTER_OVERFLOW);
 			if((outstanding == 0) && !(vbuf_read && !vbuf_waitrequest))
 				freeze_fault(MAGIK_VIDEO_DIAGNOSTICS_TRIGGER_AVALON_RETURN,
 					MAGIK_VIDEO_DIAGNOSTICS_AVALON_FAULT_FLAGS_UNEXPECTED_RETURN);

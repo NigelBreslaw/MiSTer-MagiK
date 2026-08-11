@@ -118,6 +118,18 @@ module tb_mister_magik_video_diagnostics_avalon;
 		accepted_read(expected_base[31:4], 8'd128);
 		if(fault_toggle || fault_trigger != 0) $fatal(1, "legal read faulted");
 
+		// Lifetime traffic counters are evidence, not fault predicates. Legal
+		// scanout must continue after both compact counters saturate.
+		@(negedge clk_100m);
+		dut.accepted_bursts = 16'hfffe;
+		dut.returned_beats = 16'hfffe;
+		accepted_read(expected_base[31:4] + 28'd1, 8'd128);
+		accepted_read(expected_base[31:4] + 28'd2, 8'd128);
+		if(fault_toggle || fault_trigger != 0)
+			$fatal(1, "legal saturated traffic counter faulted");
+		if(dut.accepted_bursts != 16'hffff || dut.returned_beats != 16'hffff)
+			$fatal(1, "traffic counters did not saturate");
+
 		// The first invalid burst freezes the evidence. Later faults cannot replace it.
 		accepted_read(expected_base[31:4] + 28'd128, 8'd4);
 		repeat(4) @(negedge clk_100m);
