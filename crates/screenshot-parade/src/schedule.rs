@@ -418,8 +418,6 @@ impl ScreenshotParade {
         let delta = i64::try_from(motion_ticks_fp - self.previous_motion_ticks_fp)
             .map_err(|_| "screenshot parade motion clock step overflowed".to_owned())?;
         self.previous_motion_ticks_fp = motion_ticks_fp;
-        let width = self.geometry.width();
-        let height = self.geometry.height();
         let preparation_epoch_start = self.preparation_epoch.load(Ordering::Relaxed);
         let preparation_stage_start = self.preparation_stage.load(Ordering::Relaxed);
         let preparation_slack_start = self
