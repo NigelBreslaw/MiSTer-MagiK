@@ -7071,13 +7071,19 @@ pub(super) fn run_launcher_loop(
                                     let transition_spec =
                                         navigation_transition_for_intent(&nav, &event);
                                     if transition_spec.is_some()
+                                        && let Some(logical_target) = portrait_target.as_mut()
+                                    {
+                                        let _ = sync_composition_to_logical(
+                                            target,
+                                            logical_target,
+                                            layout,
+                                        );
+                                    }
+                                    if transition_spec.is_some()
                                         && nav.screen == Screen::Arcade
                                         && !crt_layout
                                     {
-                                        if let Some(logical_target) = portrait_target.as_mut() {
-                                            arcade_list_renderer
-                                                .compose_layer_to_cached(logical_target, true);
-                                        } else {
+                                        if portrait_target.is_none() {
                                             arcade_list_renderer
                                                 .compose_layer_to_cached(target, true);
                                             let _ = target.compose_direct_preview_rect(
@@ -9123,6 +9129,9 @@ pub(super) fn run_launcher_loop(
                         && full_screen_transition.capture_issued());
                 let destination_raster_ready = composition_decision.prepare_navigation_destination
                     && controlled_destination_raster_ready;
+                if destination_raster_ready && layout.is_portrait() {
+                    let _ = layer_target.sync_composition_to_logical();
+                }
                 let mut destination_layers_ready =
                     destination_raster_ready && nav.screen != Screen::Arcade;
                 if destination_raster_ready && nav.screen == Screen::Arcade {
@@ -9163,8 +9172,10 @@ pub(super) fn run_launcher_loop(
                             nav.arcade.visual_index,
                             true,
                         ) {
-                            let _ = layer_target
-                                .compose_arcade_list_update(&mut arcade_list_renderer, update);
+                            let _ = layer_target.compose_arcade_list_snapshot_update(
+                                &mut arcade_list_renderer,
+                                update,
+                            );
                         }
                         destination_layers_ready = true;
                     }
@@ -9354,11 +9365,17 @@ pub(super) fn run_launcher_loop(
             launcher_arcade_scroll_offset =
                 launcher_arcade_scroll_offset.saturating_add(delta_y as i64);
         }
+        let mut physical_arcade_rect = None;
         let cached_arcade_rect = if crt_layout || layout.is_portrait() {
-            arcade_list_rect.map(|update| {
+            arcade_list_rect.and_then(|update| {
                 let rect = arcade_update_dirty_rect(&update);
                 let _ = layer_target.compose_arcade_list_update(&mut arcade_list_renderer, update);
-                rect
+                if layout.is_portrait() {
+                    physical_arcade_rect = Some(layout.logical_rect_to_composition(rect));
+                    None
+                } else {
+                    Some(rect)
+                }
             })
         } else {
             None
@@ -9407,6 +9424,7 @@ pub(super) fn run_launcher_loop(
             let mut damage = slint_damage;
             damage.extend_from(&mapped_custom_damage);
             damage.push_if_some(physical_custom_damage);
+            damage.push_if_some(physical_arcade_rect);
             damage
         };
         let orientation_damage_rotation_us = damage_rotation_started.elapsed().as_micros();

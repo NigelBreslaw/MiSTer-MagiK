@@ -377,6 +377,21 @@ pub(super) fn compose_arcade_list_update(
     }
 }
 
+pub(super) fn compose_arcade_list_update_oriented(
+    target: &mut UiFrameTarget,
+    output_layout: mister_magik_framebuffer_scenes::Rgb565OutputLayout,
+    renderer: &mut ArcadeListRenderer,
+    update: ArcadeListUpdate,
+) -> PresentCopyStats {
+    let redraw_selection_frame = matches!(update, ArcadeListUpdate::Full(_));
+    renderer.compose_layer_to_oriented_cached(target, output_layout, redraw_selection_frame);
+    PresentCopyStats {
+        rows: arcade_update_dirty_rect(&update).rows(),
+        bytes: renderer.present_pixels(&update, redraw_selection_frame)
+            * mister_magik_fb::framebuffer::format::RGB565_BYTES_PER_PIXEL,
+    }
+}
+
 pub(super) fn copy_arcade_list_update_to_hidden(
     hidden: &mut ScanoutSlotsRgb565Framebuffer,
     renderer: &mut ArcadeListRenderer,

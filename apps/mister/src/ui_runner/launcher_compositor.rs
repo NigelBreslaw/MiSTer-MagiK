@@ -322,6 +322,23 @@ impl<'a> LayerTarget<'a> {
         renderer: &mut ArcadeListRenderer,
         update: ArcadeListUpdate,
     ) -> PresentCopyStats {
+        if self.layout.is_portrait() {
+            compose_arcade_list_update_oriented(
+                self.target,
+                self.layout.output_layout(),
+                renderer,
+                update,
+            )
+        } else {
+            compose_arcade_list_update(self.target, renderer, update)
+        }
+    }
+
+    pub(super) fn compose_arcade_list_snapshot_update(
+        &mut self,
+        renderer: &mut ArcadeListRenderer,
+        update: ArcadeListUpdate,
+    ) -> PresentCopyStats {
         compose_arcade_list_update(self.drawing_target_mut(), renderer, update)
     }
 
@@ -344,6 +361,13 @@ impl<'a> LayerTarget<'a> {
 
     pub(super) fn presentation_pixels_mut(&mut self) -> &mut [Rgb565Pixel] {
         self.target.cached_565_mut()
+    }
+
+    pub(super) fn sync_composition_to_logical(&mut self) -> bool {
+        let Some(logical) = self.logical_target.as_deref_mut() else {
+            return true;
+        };
+        sync_composition_to_logical(self.target, logical, self.layout)
     }
 
     pub(super) fn direct_preview_view(&self) -> Option<DirectPreviewView<'_>> {
@@ -384,6 +408,29 @@ impl<'a> LayerTarget<'a> {
         }
         mapped
     }
+}
+
+pub(super) fn sync_composition_to_logical(
+    composition: &UiFrameTarget,
+    logical: &mut UiFrameTarget,
+    layout: UiLayoutGeometry,
+) -> bool {
+    if !layout.is_portrait()
+        || composition.cached_565().len() != layout.output_layout().len()
+        || logical.cached_565().len() != layout.logical_w().saturating_mul(layout.logical_h())
+    {
+        return false;
+    }
+    let composition = composition.cached_565();
+    let logical_pixels = logical.cached_565_mut();
+    for logical_y in 0..layout.logical_h() {
+        let logical_row = logical_y * layout.logical_w();
+        for logical_x in 0..layout.logical_w() {
+            logical_pixels[logical_row + logical_x] =
+                composition[layout.output_layout().physical_offset(logical_x, logical_y)];
+        }
+    }
+    true
 }
 
 fn snapshot_cached_565(target: &UiFrameTarget) -> Vec<Rgb565Pixel> {
@@ -535,6 +582,40 @@ mod tests {
                 .iter()
                 .all(|pixel| *pixel == Rgb565Pixel(0x1234))
         );
+    }
+
+    #[test]
+    fn portrait_transition_snapshot_recovers_logical_coordinates() {
+        let ui = UiDisplay::for_framebuffer(4, 3);
+        for orientation in [
+            ScreenOrientation::MonitorClockwise,
+            ScreenOrientation::MonitorCounterclockwise,
+        ] {
+            let layout = UiLayoutGeometry::for_display(&ui, orientation);
+            let mut composition = UiFrameTarget::cached(FramebufferTargetGeometry::new(4, 3));
+            for logical_y in 0..layout.logical_h() {
+                for logical_x in 0..layout.logical_w() {
+                    let value = Rgb565Pixel((logical_y * 16 + logical_x) as u16);
+                    let offset = layout.output_layout().physical_offset(logical_x, logical_y);
+                    composition.cached_565_mut()[offset] = value;
+                }
+            }
+            let mut logical = UiFrameTarget::cached(FramebufferTargetGeometry::new(3, 4));
+
+            assert!(sync_composition_to_logical(
+                &composition,
+                &mut logical,
+                layout
+            ));
+            for logical_y in 0..layout.logical_h() {
+                for logical_x in 0..layout.logical_w() {
+                    assert_eq!(
+                        logical.cached_565()[logical_y * layout.logical_w() + logical_x],
+                        Rgb565Pixel((logical_y * 16 + logical_x) as u16)
+                    );
+                }
+            }
+        }
     }
 
     #[test]
