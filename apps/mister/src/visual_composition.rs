@@ -652,9 +652,9 @@ fn clear_rect(
     surface: PreviewSurface,
 ) {
     for y in rect.y0..rect.y1.min(frame_height) {
-        for x in rect.x0..rect.x1.min(frame_width) {
-            destination[surface.row_start(y, x)] = Rgb565Pixel(0);
-        }
+        let x1 = rect.x1.min(frame_width);
+        let start = surface.row_start(y, rect.x0);
+        destination[start..start + x1.saturating_sub(rect.x0)].fill(Rgb565Pixel(0));
     }
 }
 
