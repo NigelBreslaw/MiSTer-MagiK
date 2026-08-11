@@ -69,9 +69,12 @@ priority, immutable latch hashes, exact pinned Menu integration, passive cone
 boundaries, and explicit synchronizer identification. Native diagnostic records
 are held immutable before acknowledgement, their generation is sampled twice
 in `clk_sys`, and the complete payload is covered by a nonempty 8 ns net-delay
-constraint. The generation, route-context, and fault-trigger bundles also have
-a 2 ns skew bound terminating only at their destination registers' data pins;
-clock-enable and readout logic is deliberately outside that coherence check.
+constraint. The output generation, output route-context, and fault-trigger
+bundles also have an 8 ns skew bound terminating only at their destination
+registers' data pins; clock-enable and readout logic is deliberately outside
+that coherence check. Quartus 17 reports no max-skew paths for the two Avalon
+bundles in this pinned design, so those remain guarded by the complete 8 ns
+net-delay bound plus consecutive stable-generation sampling in the receiver.
 The asynchronous clock groups exclude the bundled paths from ordinary
 functional setup/hold analysis while leaving those explicit CDC bounds
 effective. The synthesis

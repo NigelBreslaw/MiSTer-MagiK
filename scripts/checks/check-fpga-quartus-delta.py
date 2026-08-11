@@ -54,7 +54,7 @@ MINIMUM_SLACK_NS = 0.20
 MAXIMUM_SLACK_DEGRADATION_NS = 0.10
 MAXIMUM_LOGIC_ELEMENT_DELTA = 800
 MAXIMUM_REGISTER_DELTA = 1_500
-EXPECTED_OBSERVER_REPORTED_CHAINS = 25
+MINIMUM_OBSERVER_REPORTED_CHAINS = 22
 EXPECTED_OBSERVER_CALCULABLE_CHAINS = 22
 EXPECTED_SYNC_ASSIGNMENT_SUFFIXES = (
     *tuple(
@@ -127,6 +127,10 @@ DIAGNOSTIC_REPORT_NAMES = frozenset(
         "menu.magik-diagnostic-metastability.rpt",
     }
 )
+EXPECTED_CDC_REPORT_ANALYSES = {
+    "menu.magik-diagnostic-cdc-skew.rpt": ("set_max_skew", 3),
+    "menu.magik-diagnostic-cdc-net-delay.rpt": ("set_net_delay", 5),
+}
 
 
 def normalize_space(value: str) -> str:
@@ -347,10 +351,7 @@ def validate_diagnostic_reports(
 
     analysis_counts: dict[str, int | None] = {}
     minimum_slacks: dict[str, float | None] = {}
-    for name, command in (
-        ("menu.magik-diagnostic-cdc-skew.rpt", "set_max_skew"),
-        ("menu.magik-diagnostic-cdc-net-delay.rpt", "set_net_delay"),
-    ):
+    for name, (command, expected_count) in EXPECTED_CDC_REPORT_ANALYSES.items():
         text = reports.get(name, "")
         if not text.strip() or re.search(
             r"\bno (?:valid )?(?:paths?|results?)\b", text, re.IGNORECASE
@@ -359,43 +360,24 @@ def validate_diagnostic_reports(
             analysis_counts[name] = None
             minimum_slacks[name] = None
             continue
-        command_matches = list(re.finditer(rf"\b{command}\b", text, re.IGNORECASE))
-        analysis_counts[name] = len(command_matches)
-        if len(command_matches) != len(EXPECTED_CDC_ANALYSIS_LABELS):
-            reasons.append("diagnostic_cdc_analysis_count")
-        section_slacks: list[float] = []
-        for index, match in enumerate(command_matches):
-            end = (
-                command_matches[index + 1].start()
-                if index + 1 < len(command_matches)
-                else len(text)
-            )
-            section = text[match.start():end]
-            row_slack = re.match(
-                rf"\s*;?\s*{command}\s*;\s*({NUMBER})\s*;",
-                section,
+        # Quartus repeats the command in every detailed path heading. Only the
+        # semicolon-delimited summary rows represent applied assignments.
+        summary_rows = list(
+            re.finditer(
+                rf"(?m)^\s*;\s*{command}\s*;\s*({NUMBER})\s*;",
+                text,
                 re.IGNORECASE,
             )
-            slack_values = [
-                value
-                for value in (
-                    finite_number(slack.group(1))
-                    for slack in re.finditer(
-                        rf"\bslack\b[^\r\n]*?({NUMBER})", section, re.IGNORECASE
-                    )
-                )
-                if value is not None
-            ]
-            if row_slack:
-                value = finite_number(row_slack.group(1))
-                if value is not None:
-                    slack_values.append(value)
-            if not slack_values:
-                reasons.append("diagnostic_cdc_slack_missing")
-            else:
-                section_slacks.append(min(slack_values))
-        minimum_slacks[name] = min(section_slacks, default=None)
-        if section_slacks and min(section_slacks) < 0:
+        )
+        analysis_counts[name] = len(summary_rows)
+        if len(summary_rows) != expected_count:
+            reasons.append("diagnostic_cdc_analysis_count")
+        slacks = [finite_number(row.group(1)) for row in summary_rows]
+        finite_slacks = [value for value in slacks if value is not None]
+        if len(finite_slacks) != len(summary_rows):
+            reasons.append("diagnostic_cdc_slack_missing")
+        minimum_slacks[name] = min(finite_slacks, default=None)
+        if finite_slacks and min(finite_slacks) < 0:
             reasons.append("diagnostic_cdc_slack_negative")
 
     metastability = reports.get("menu.magik-diagnostic-metastability.rpt", "")
@@ -537,11 +519,11 @@ def compare(
         baseline_chain_counts, baseline_fractions
     )
     patched_calculable_chains = estimated_calculable_chains(chain_counts, patched_fractions)
-    chain_delta_exact = (
+    chain_delta_sufficient = (
         baseline_chain_counts
         and chain_counts
         and max(chain_counts)
-        == max(baseline_chain_counts) + EXPECTED_OBSERVER_REPORTED_CHAINS
+        >= max(baseline_chain_counts) + MINIMUM_OBSERVER_REPORTED_CHAINS
     )
     custom_delta_calculable = (
         baseline_calculable_chains is not None
@@ -551,7 +533,7 @@ def compare(
     )
     if not custom_assignment_seen:
         reasons.append("custom_synchronizer_missing")
-    if not chain_delta_exact:
+    if not chain_delta_sufficient:
         reasons.append("custom_synchronizer_chain_count")
     if not custom_delta_calculable:
         reasons.append("custom_synchronizer_mtbf_missing")

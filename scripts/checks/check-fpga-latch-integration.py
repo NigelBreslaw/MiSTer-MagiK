@@ -189,6 +189,11 @@ def main() -> None:
         fail("diagnostic bundled-data net-delay constraint is missing")
     if diagnostics_sdc_text.count("set_max_skew -from") != 1:
         fail("diagnostic bundled-data skew constraint is missing")
+    held_mailbox_skew = (
+        "set_max_skew -from $source -to $destination -exclude {ccpp} 8.000"
+    )
+    if held_mailbox_skew not in diagnostics_sdc_text:
+        fail("diagnostic bundled-data skew constraint does not match the held-mailbox window")
     if "set_false_path -from" in diagnostics_sdc_text:
         fail("diagnostic false path overrides its explicit skew analysis")
     if diagnostics_sdc_text.count("-exclude {ccpp}") != 1:
@@ -199,7 +204,7 @@ def main() -> None:
         fail("diagnostic SDC requires the constant-folded reference-flags register")
     if diagnostics_sdc_text.count("magik_require_registers") < 8:
         fail("diagnostic CDC constraints do not reject empty node collections")
-    if diagnostics_sdc_text.count("magik_require_data_pins") < 5:
+    if diagnostics_sdc_text.count("magik_require_data_pins") < 3:
         fail("diagnostic CDC skew constraints do not reject empty data-pin collections")
     for data_pin in ("|d\"", "|asdata\"", "|sdata\""):
         if data_pin not in diagnostics_sdc_text:

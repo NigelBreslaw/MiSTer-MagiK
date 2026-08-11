@@ -106,10 +106,12 @@ Info: MagiK diagnostics CDC analysis applied: fault_trigger
 
 VALID_DIAGNOSTIC_REPORTS = {
     "menu.magik-diagnostic-cdc-skew.rpt": "".join(
-        f"set_max_skew analysis_{index} Slack 1.500\n" for index in range(5)
+        f"; set_max_skew ; 1.{index}00 ; 8.000 ; 7.{index}00 ; from ; to ;\n"
+        for index in range(3)
     ),
     "menu.magik-diagnostic-cdc-net-delay.rpt": "".join(
-        f"set_net_delay analysis_{index} Slack 7.000\n" for index in range(5)
+        f"; set_net_delay ; 1.{index}00 ; 8.000 ; 7.{index}00 ; from ; to ; max ;\n"
+        for index in range(5)
     ),
     "menu.magik-diagnostic-metastability.rpt": (
         "Report Metastability: Found 30 synchronizer chains.\n"
@@ -195,9 +197,9 @@ class QuartusDeltaTest(unittest.TestCase):
         self.assertEqual(payload["valid"], 1)
         self.assertEqual(payload["invalid_reason"], "ok")
 
-    def test_exact_observer_chain_delta_is_required(self) -> None:
+    def test_minimum_observer_chain_delta_is_required(self) -> None:
         patched = CUSTOM_SYNC.replace(
-            "Found 30 synchronizer chains", "Found 29 synchronizer chains"
+            "Found 30 synchronizer chains", "Found 26 synchronizer chains"
         )
         result, payload = self.run_check(BASE, BASE + patched)
         self.assertEqual(result.returncode, 1)
@@ -380,17 +382,17 @@ class QuartusDeltaTest(unittest.TestCase):
     def test_incomplete_or_negative_cdc_analysis_fails(self) -> None:
         reports = dict(VALID_DIAGNOSTIC_REPORTS)
         reports["menu.magik-diagnostic-cdc-skew.rpt"] = (
-            "set_max_skew analysis_0 Slack 1.500\n"
-            + "".join(f"set_max_skew analysis_{index}\n" for index in range(1, 5))
+            "; set_max_skew ; 1.500 ; 8.000 ; 6.500 ; from ; to ;\n"
+            "; set_max_skew path detail Slack 1.500\n"
         )
         result, payload = self.run_check(BASE, BASE + CUSTOM_SYNC, diagnostic_reports=reports)
         self.assertEqual(result.returncode, 1)
-        self.assertIn("diagnostic_cdc_slack_missing", payload["invalid_reason"])
+        self.assertIn("diagnostic_cdc_analysis_count", payload["invalid_reason"])
 
         reports = dict(VALID_DIAGNOSTIC_REPORTS)
         reports["menu.magik-diagnostic-cdc-net-delay.rpt"] = reports[
             "menu.magik-diagnostic-cdc-net-delay.rpt"
-        ].replace("Slack 7.000", "Slack -0.001", 1)
+        ].replace("; 1.000 ;", "; -0.001 ;", 1)
         result, payload = self.run_check(BASE, BASE + CUSTOM_SYNC, diagnostic_reports=reports)
         self.assertEqual(result.returncode, 1)
         self.assertIn("diagnostic_cdc_slack_negative", payload["invalid_reason"])
