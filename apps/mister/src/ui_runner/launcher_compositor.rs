@@ -47,7 +47,6 @@ impl LauncherPresentStatus {
 pub(super) struct LayerTarget<'a> {
     target: &'a mut UiFrameTarget,
     logical_target: Option<&'a mut UiFrameTarget>,
-    ui: &'a UiDisplay,
     layout: UiLayoutGeometry,
     drawing_ui: UiDisplay,
 }
@@ -57,7 +56,6 @@ impl<'a> LayerTarget<'a> {
         Self {
             target,
             logical_target: None,
-            ui,
             layout: UiLayoutGeometry::for_display(ui, ScreenOrientation::Normal),
             drawing_ui: UiDisplay::for_framebuffer(ui.render_w(), ui.render_h()),
         }
@@ -69,11 +67,9 @@ impl<'a> LayerTarget<'a> {
         ui: &'a UiDisplay,
         layout: UiLayoutGeometry,
     ) -> Self {
-        debug_assert_eq!(layout.is_portrait(), logical_target.is_some());
         Self {
             target,
             logical_target,
-            ui,
             layout,
             drawing_ui: UiDisplay::for_framebuffer(layout.logical_w(), layout.logical_h()),
         }
@@ -289,18 +285,32 @@ impl<'a> LayerTarget<'a> {
         full_frame_present: bool,
     ) -> (Option<RawPreviewPresent>, PreviewTransitionTrace) {
         let drawing_ui = &self.drawing_ui;
-        let allow_direct = !self.layout.is_portrait();
-        let target = self.logical_target.as_deref_mut().unwrap_or(self.target);
-        blit_raw_preview_if_needed(
-            target,
+        let (present, trace) = blit_raw_preview_if_needed(
+            self.target,
             drawing_ui,
             preview,
             transition,
             elapsed,
             slint_dirty,
             full_frame_present,
-            allow_direct,
-        )
+            self.layout.is_portrait() || preview_direct_present_enabled(),
+        );
+        if self.layout.is_portrait()
+            && let Some(RawPreviewPresent::Direct(rect)) = present
+        {
+            let rows = self
+                .target
+                .compose_direct_preview_rect_mapped(rect, |x, y| {
+                    self.layout.logical_pixel_to_composition(x, y)
+                });
+            return (
+                (rows > 0).then(|| {
+                    RawPreviewPresent::Cached(self.layout.logical_rect_to_composition(rect))
+                }),
+                trace,
+            );
+        }
+        (present, trace)
     }
 
     pub(super) fn compose_exact_preview(
@@ -311,10 +321,22 @@ impl<'a> LayerTarget<'a> {
         if frame.status() != PreviewRawFrameStatus::Ready {
             return None;
         }
-        if preview_direct_present_enabled() && !self.layout.is_portrait() {
-            self.target
-                .blit_raw_preview_direct(self.ui, &frame, true)
-                .map(RawPreviewPresent::Direct)
+        if self.layout.is_portrait() || preview_direct_present_enabled() {
+            let rect = self
+                .target
+                .blit_raw_preview_direct(&self.drawing_ui, &frame, true)?;
+            if self.layout.is_portrait() {
+                let rows = self
+                    .target
+                    .compose_direct_preview_rect_mapped(rect, |x, y| {
+                        self.layout.logical_pixel_to_composition(x, y)
+                    });
+                (rows > 0).then(|| {
+                    RawPreviewPresent::Cached(self.layout.logical_rect_to_composition(rect))
+                })
+            } else {
+                Some(RawPreviewPresent::Direct(rect))
+            }
         } else {
             self.logical_target
                 .as_deref_mut()
@@ -333,17 +355,8 @@ impl<'a> LayerTarget<'a> {
                 .compose_exact_preview(preview)
                 .and_then(RawPreviewPresent::cached_rect);
         }
-        let frame = preview.raw_frame()?;
-        if frame.status() != PreviewRawFrameStatus::Ready {
-            return None;
-        }
-        let logical_rect = self
-            .logical_target
-            .as_deref_mut()
-            .expect("portrait logical target")
-            .blit_raw_preview(&self.drawing_ui, &frame, true)?;
-        let mapped = self.rotate_damage_to_composition(&DirtyRectList::from_one(logical_rect));
-        mapped.iter().next()
+        self.compose_exact_preview(preview)
+            .and_then(RawPreviewPresent::cached_rect)
     }
 
     pub(super) fn compose_direct_preview_rect(&mut self, rect: DirtyRect) -> u32 {
@@ -429,11 +442,14 @@ impl<'a> LayerTarget<'a> {
         if !self.layout.is_portrait() {
             return *logical_damage;
         }
-        let logical = self
+        let Some(logical) = self
             .logical_target
             .as_deref()
-            .expect("portrait logical target")
-            .cached_565();
+            .map(UiFrameTarget::cached_565)
+        else {
+            debug_assert!(logical_damage.is_empty());
+            return DirtyRectList::new();
+        };
         let composition = self.target.cached_565_mut();
         let mut mapped = DirtyRectList::new();
         for rect in logical_damage.iter() {

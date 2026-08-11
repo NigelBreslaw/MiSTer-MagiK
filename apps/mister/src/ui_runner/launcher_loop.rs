@@ -4315,20 +4315,7 @@ fn apply_orientation_layout(
     nav.sync_orientation_selection();
     *layout = UiLayoutGeometry::for_display(ui, orientation);
     nav.set_portrait_layout(layout.is_portrait());
-    if layout.is_portrait() {
-        let expected_len = layout.logical_w().saturating_mul(layout.logical_h());
-        if portrait_target
-            .as_ref()
-            .is_none_or(|target| target.cached_565().len() != expected_len)
-        {
-            *portrait_target = Some(UiFrameTarget::cached(FramebufferTargetGeometry::new(
-                layout.logical_w(),
-                layout.logical_h(),
-            )));
-        }
-    } else {
-        *portrait_target = None;
-    }
+    *portrait_target = None;
 
     let mister_ui = app.global::<slint_ui::launcher::MisterUi>();
     mister_ui.set_window_width(layout.logical_w() as i32);
@@ -4623,12 +4610,7 @@ pub(super) fn run_launcher_loop(
     let mut layout = UiLayoutGeometry::for_display(ui, nav.settings.screen_orientation);
     nav.set_portrait_layout(layout.is_portrait());
     nav.sync_orientation_selection();
-    let mut portrait_target = layout.is_portrait().then(|| {
-        UiFrameTarget::cached(FramebufferTargetGeometry::new(
-            layout.logical_w(),
-            layout.logical_h(),
-        ))
-    });
+    let mut portrait_target = None;
     let navigation_motion_enabled =
         !nav.settings.reduce_motion || cpu_profile::navigation_transition_profile_requested();
     let mut navigation_transition = NavigationTransitionRuntime::new(
@@ -7111,7 +7093,7 @@ pub(super) fn run_launcher_loop(
                                         && nav.screen == Screen::Arcade
                                         && !crt_layout
                                     {
-                                        if portrait_target.is_none() {
+                                        if !layout.is_portrait() {
                                             arcade_list_renderer
                                                 .compose_layer_to_cached(target, true);
                                             let _ = target.compose_direct_preview_rect(
@@ -9114,7 +9096,11 @@ pub(super) fn run_launcher_loop(
             && !memory_guard.active()
             && preview.empty_base_commit_pending()
         {
-            Some(layer_target.clear_cached_preview())
+            Some(if layout.is_portrait() {
+                layer_target.clear_presentation_preview()
+            } else {
+                layer_target.clear_cached_preview()
+            })
         } else {
             None
         };
@@ -9417,6 +9403,20 @@ pub(super) fn run_launcher_loop(
             y1: layout.composition_h(),
         };
         let raw_preview_cached_rect = raw_preview.and_then(RawPreviewPresent::cached_rect);
+        let logical_raw_preview_rect = (!layout.is_portrait())
+            .then_some(raw_preview_cached_rect)
+            .flatten();
+        let physical_raw_preview_rect = layout
+            .is_portrait()
+            .then_some(raw_preview_cached_rect)
+            .flatten();
+        let logical_empty_preview_rect = (!layout.is_portrait())
+            .then_some(empty_base_cached_rect)
+            .flatten();
+        let physical_empty_preview_rect = layout
+            .is_portrait()
+            .then_some(empty_base_cached_rect)
+            .flatten();
         let raw_preview_direct_rect = raw_preview.and_then(RawPreviewPresent::direct_rect);
         if raw_preview_direct_rect.is_some() {
             launcher_preview_version = launcher_preview_version.wrapping_add(1).max(1);
@@ -9481,8 +9481,8 @@ pub(super) fn run_launcher_loop(
         } else if slint_damage.is_empty() && physical_custom_damage.is_none() {
             logical_custom_damage.push_if_some(this_rect);
         }
-        logical_custom_damage.push_if_some(empty_base_cached_rect);
-        logical_custom_damage.push_if_some(raw_preview_cached_rect);
+        logical_custom_damage.push_if_some(logical_empty_preview_rect);
+        logical_custom_damage.push_if_some(logical_raw_preview_rect);
         logical_custom_damage.push_if_some(cached_arcade_rect);
         let orientation_damage_rects_before = logical_custom_damage.len() as u32;
         let damage_rotation_started = Instant::now();
@@ -9495,6 +9495,8 @@ pub(super) fn run_launcher_loop(
             damage.extend_from(&mapped_custom_damage);
             damage.push_if_some(physical_custom_damage);
             damage.push_if_some(physical_arcade_rect);
+            damage.push_if_some(physical_empty_preview_rect);
+            damage.push_if_some(physical_raw_preview_rect);
             damage
         };
         let orientation_damage_rotation_us = damage_rotation_started.elapsed().as_micros();

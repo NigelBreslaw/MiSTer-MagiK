@@ -272,7 +272,7 @@ pub(super) fn blit_raw_preview_if_needed(
     let Some(transition_frame) = transition_frame else {
         return (None, trace);
     };
-    let direct_present = allow_direct && preview_direct_present_enabled();
+    let direct_present = allow_direct;
     let raw_rect = if trace.active {
         let (raw_rect, fade) = if direct_present {
             target.blit_raw_preview_transition_direct(
