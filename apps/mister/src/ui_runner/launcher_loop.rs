@@ -903,6 +903,14 @@ fn collection_has_resident_rows(catalog: &ArcadeCatalog, collection_id: &str) ->
     catalog.system_game_count(collection_id) > 0
 }
 
+fn system_entry_collection_id(system_id: &str) -> &str {
+    if system_id == "arcade" {
+        arcade_catalog::MENU_ARCADE_SYSTEM_ID
+    } else {
+        system_id
+    }
+}
+
 fn empty_collection_invariant_violated(catalog: &ArcadeCatalog, nav: &LauncherNav) -> bool {
     nav.screen == Screen::Arcade
         && active_system(catalog, nav).is_some_and(|system| {
@@ -4383,7 +4391,12 @@ pub(super) fn run_launcher_loop(
     let system_entry_benchmark_system = launcher_system_entry_benchmark_system_from_env();
     let system_entry_benchmark_direct = launcher_system_entry_benchmark_direct_from_env();
     let mut pending_direct_system_entry = system_entry_benchmark_direct
-        .then(|| system_entry_benchmark_system.clone())
+        .then(|| {
+            system_entry_benchmark_system
+                .as_deref()
+                .map(system_entry_collection_id)
+                .map(str::to_string)
+        })
         .flatten();
     let env_start_menu = launcher_bench_scenario
         .is_some()
@@ -12155,6 +12168,15 @@ mod tests {
     fn direct_system_entry_measurement_starts_after_home_settles() {
         assert!(!system_entry_benchmark_direct_settled(2_245, 246));
         assert!(system_entry_benchmark_direct_settled(2_246, 246));
+    }
+
+    #[test]
+    fn direct_arcade_entry_uses_the_production_root_collection() {
+        assert_eq!(
+            system_entry_collection_id("arcade"),
+            arcade_catalog::MENU_ARCADE_SYSTEM_ID
+        );
+        assert_eq!(system_entry_collection_id("c64"), "c64");
     }
 
     #[test]
