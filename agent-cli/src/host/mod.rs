@@ -710,8 +710,9 @@ impl NativeDevice {
     pub(crate) fn profile_cold_boot(
         &mut self,
         output_dir: &Path,
+        pprof: bool,
     ) -> std::result::Result<String, DeviceFailure> {
-        self.benchmark_profile(|config| profile_installed_cold_boot(config, output_dir))
+        self.benchmark_profile(|config| profile_installed_cold_boot(config, output_dir, pprof))
     }
 
     pub(crate) fn profile_navigation_transitions(
@@ -8891,6 +8892,8 @@ const LAUNCH_RETURN_CYCLES: usize = 2;
 const LAUNCH_RETURN_BLACK_LIMIT_MS: u64 = 5_000;
 const LAUNCH_RETURN_GAME_SETTLE_SECS: u64 = 10;
 
+const COLD_BOOT_PROFILE_REMOTE_DIR: &str = "/tmp/mister-magik/cold-boot-profile";
+
 fn cold_boot_profile_preflight_command() -> String {
     let verify = installed_platform_verify_command(Layout::Development);
     shell_sequence([
@@ -8906,6 +8909,26 @@ fn cold_boot_profile_preflight_command() -> String {
         "test ! -e /media/fat/mister-magik-dev/rebuild-on-next-boot",
         "sync",
     ])
+}
+
+fn cold_boot_pprof_launcher_env() -> Vec<(String, String)> {
+    vec![
+        ("MISTER_PPROF".into(), "1".into()),
+        ("MISTER_PPROF_TRIGGER".into(), "cold-boot".into()),
+        ("MISTER_PPROF_HZ".into(), "999".into()),
+        (
+            "MISTER_PPROF_OUT".into(),
+            format!("{COLD_BOOT_PROFILE_REMOTE_DIR}/flamegraph.svg"),
+        ),
+        (
+            "MISTER_PPROF_FOLDED_OUT".into(),
+            format!("{COLD_BOOT_PROFILE_REMOTE_DIR}/stacks.folded"),
+        ),
+        (
+            "MISTER_PPROF_COMPLETE".into(),
+            format!("{COLD_BOOT_PROFILE_REMOTE_DIR}/profile.json"),
+        ),
+    ]
 }
 
 fn parse_boot_events(text: &str) -> Result<Vec<Value>> {
@@ -8962,7 +8985,46 @@ fn parse_magik_startup_events(text: &str) -> Vec<Value> {
         .collect()
 }
 
-fn profile_installed_cold_boot(config: &NativeDeviceConfig, output_dir: &Path) -> Result<String> {
+fn profile_installed_cold_boot(
+    config: &NativeDeviceConfig,
+    output_dir: &Path,
+    pprof: bool,
+) -> Result<String> {
+    fs::create_dir_all(output_dir)?;
+    let run_result = profile_installed_cold_boot_run(config, output_dir, pprof);
+    if !pprof {
+        return run_result;
+    }
+    let cleanup_result = cleanup_cold_boot_pprof(config);
+    match (run_result, cleanup_result) {
+        (Ok(summary), Ok(())) => Ok(summary),
+        (Err(error), Ok(())) => Err(error),
+        (Ok(_), Err(error)) => Err(format!("cold-boot pprof cleanup failed: {error}").into()),
+        (Err(run), Err(cleanup)) => {
+            Err(format!("{run}; cold-boot pprof cleanup failed: {cleanup}").into())
+        }
+    }
+}
+
+fn cleanup_cold_boot_pprof(config: &NativeDeviceConfig) -> Result<()> {
+    let session = connect_with(&config.connection, 10)?;
+    exec_checked(
+        &session,
+        "cold-boot pprof cleanup",
+        &format!(
+            "set -eu; rm -f {env}; rm -rf {profile}; test ! -e {env}; test ! -e /media/fat/mister-magik/launcher.env; test ! -e /tmp/mister-magik/fs-fault-launcher.env; test ! -e /tmp/mister-magik/fs-fault-session; test ! -e /tmp/mister-magik/fs-fault.json; test ! -e /media/fat/mister-magik/rebuild-on-next-boot; test ! -e /media/fat/mister-magik-dev/rebuild-on-next-boot",
+            env = sh(DEVELOPMENT_LAUNCHER_ENV_REMOTE),
+            profile = sh(COLD_BOOT_PROFILE_REMOTE_DIR),
+        ),
+    )?;
+    Ok(())
+}
+
+fn profile_installed_cold_boot_run(
+    config: &NativeDeviceConfig,
+    output_dir: &Path,
+    pprof: bool,
+) -> Result<String> {
     fs::create_dir_all(output_dir)?;
     let session = connect_with(&config.connection, 10)?;
     let installed_manifest = remote_read(&session, LOCAL_MAIN_MANIFEST_REMOTE)
@@ -8976,6 +9038,40 @@ fn profile_installed_cold_boot(config: &NativeDeviceConfig, output_dir: &Path) -
         "cold-boot benchmark safety preflight",
         &cold_boot_profile_preflight_command(),
     )?;
+    if pprof {
+        let capability = exec_checked_output(
+            &session,
+            "installed cold-boot pprof capability",
+            "/media/fat/mister-magik-dev/mister-magik-fb benchmark-capabilities",
+        )?;
+        let capability = last_json_line(&capability.stdout)
+            .ok_or("installed benchmark capability output contains no JSON report")?;
+        if capability
+            .get("cold-boot-pprof-v1")
+            .and_then(Value::as_bool)
+            != Some(true)
+        {
+            return Err("installed app does not support cold-boot-pprof-v1".into());
+        }
+        exec_checked(
+            &session,
+            "prepare cold-boot pprof artifacts",
+            &format!(
+                "set -eu; rm -rf {0}; mkdir -p {0}",
+                sh(COLD_BOOT_PROFILE_REMOTE_DIR)
+            ),
+        )?;
+        put_bytes(
+            &session,
+            DEVELOPMENT_LAUNCHER_ENV_REMOTE,
+            one_shot_launcher_env_text(
+                &cold_boot_pprof_launcher_env(),
+                DEVELOPMENT_LAUNCHER_ENV_REMOTE,
+            )
+            .as_bytes(),
+        )?;
+        exec_checked(&session, "sync cold-boot pprof one-shot state", "sync")?;
+    }
 
     let host_started = Instant::now();
     let issue_started = Instant::now();
@@ -9029,6 +9125,48 @@ fn profile_installed_cold_boot(config: &NativeDeviceConfig, output_dir: &Path) -
         remote_read(&session, "/tmp/mister-magik-boot-analytics.tsv").unwrap_or_default();
     let events = parse_boot_events(&events_text)?;
     let startup_events = parse_magik_startup_events(&launcher_log);
+    let profile = if pprof {
+        let remote_complete = format!("{COLD_BOOT_PROFILE_REMOTE_DIR}/profile.json");
+        let metadata_text =
+            wait_launch_return_artifact(&session, &remote_complete, Duration::from_secs(10))?;
+        let metadata: Value = serde_json::from_str(metadata_text.trim())?;
+        if metadata.get("schema").and_then(Value::as_str) != Some("mister-magik-cold-boot-pprof-v1")
+            || metadata.get("state").and_then(Value::as_str) != Some("complete")
+            || metadata
+                .get("sample_hits")
+                .and_then(Value::as_i64)
+                .unwrap_or(0)
+                <= 0
+        {
+            return Err("cold-boot pprof produced no CPU samples".into());
+        }
+        let svg = remote_read(
+            &session,
+            &format!("{COLD_BOOT_PROFILE_REMOTE_DIR}/flamegraph.svg"),
+        )
+        .filter(|text| !text.trim().is_empty())
+        .ok_or("cold-boot pprof flamegraph is missing")?;
+        let folded = remote_read(
+            &session,
+            &format!("{COLD_BOOT_PROFILE_REMOTE_DIR}/stacks.folded"),
+        )
+        .filter(|text| !text.trim().is_empty())
+        .ok_or("cold-boot pprof folded stacks are missing")?;
+        if !folded.contains("mister_magik") && !folded.contains("slint::") {
+            return Err(
+                "cold-boot pprof folded stacks have no resolved application symbols".into(),
+            );
+        }
+        fs::write(output_dir.join("flamegraph.svg"), svg)?;
+        fs::write(output_dir.join("stacks.folded"), folded)?;
+        fs::write(
+            output_dir.join("profile.json"),
+            format!("{}\n", serde_json::to_string_pretty(&metadata)?),
+        )?;
+        Some(metadata)
+    } else {
+        None
+    };
 
     let agent_timeline = agent_diagnostics
         .pointer("/timeline/events")
@@ -9141,8 +9279,9 @@ fn profile_installed_cold_boot(config: &NativeDeviceConfig, output_dir: &Path) -
             == Some(true);
     let summary = json!({
         "schema": "mister-magik-cold-boot-benchmark-v1",
-        "scenario": "cold-boot",
+        "scenario": if pprof { "cold-boot-pprof" } else { "cold-boot" },
         "timing_class": "device-monotonic-instrumented-installed-dev",
+        "timing_authoritative": !pprof,
         "main_revision": main_revision,
         "main_sha256": main_sha256,
         "boot_id_before": boot_id_before.trim(),
@@ -9156,6 +9295,7 @@ fn profile_installed_cold_boot(config: &NativeDeviceConfig, output_dir: &Path) -
         "capture_verified": true,
         "capture_file": "boot-rgb565.png",
         "capture_metadata_file": "boot-capture.json",
+        "profile": profile,
         "phases": phases,
         "timeline": timeline,
     });

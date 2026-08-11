@@ -722,6 +722,7 @@ mod tests {
             "launcher-response",
             "input-latency-lab",
             "cold-boot",
+            "cold-boot-pprof",
             "search",
             "streamline",
         ];

@@ -22,6 +22,7 @@ Supported scenarios:
 
 - `screensaver` (the default)
 - `cold-boot`
+- `cold-boot-pprof`
 - `input-integrity`
 - `launcher-response`
 - `input-latency-lab`
@@ -306,6 +307,17 @@ Main revision/hash, and a nonblank authoritative RGB565 capture. Raw Main
 events, MagiK log, both status files, the manifest, timeline, summary, capture,
 and capture metadata are retained under
 `build/agent-benchmarks/cold-boot/<timestamp>/`.
+
+`cold-boot-pprof` runs the same single supervised reboot with a self-removing,
+profiler-only launcher environment. It starts the installed runtime's dormant
+pprof sampler at MagiK process entry and stops after the first real launcher
+frame has enabled application input. The retained flamegraph and folded stacks
+attribute MagiK CPU work only; the ordinary `cold-boot` scenario remains the
+timing authority because sampling perturbs execution and cannot explain the
+Linux or Main intervals. Profile evidence is written below
+`build/agent-benchmarks/cold-boot-pprof/<timestamp>/`. Cleanup removes the
+one-shot environment and volatile profile directory and verifies that no boot
+arming file remains.
 
 ## Arcade launch and return
 

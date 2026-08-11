@@ -178,7 +178,7 @@ fn main() {
     // worker threads exist.
     unsafe { mister_magik_catalog::device_layout::initialize_process_env() };
     let _ = process_start_monotonic_us();
-    let launch_return_cpu_profile = cpu_profile::start_launch_return();
+    let process_entry_cpu_profile = cpu_profile::start_process_entry();
     let args: Vec<String> = std::env::args().collect();
     mister_magik_fb::crash_report::install_panic_hook(args.clone());
     let build_identity = build_identity::BuildIdentity::current();
@@ -263,7 +263,7 @@ fn main() {
         }
     };
 
-    dispatch_fpga(&cmd, &args, &mut f, launch_return_cpu_profile);
+    dispatch_fpga(&cmd, &args, &mut f, process_entry_cpu_profile);
 }
 
 enum ProcessLockState {
@@ -428,6 +428,7 @@ fn benchmark_capabilities() -> serde_json::Value {
     let mut capabilities = serde_json::json!({
         "schema": "mister-magik-benchmark-capabilities-v1",
         "screensaver-pprof-v1": cfg!(feature = "profile"),
+        "cold-boot-pprof-v1": cfg!(feature = "profile"),
         "particle-capacity-v1": true,
         "orientation-transition-v2": true,
         "orientation-transition-pprof-v1": cfg!(feature = "profile"),
@@ -475,12 +476,12 @@ fn dispatch_fpga(
     cmd: &str,
     args: &[String],
     f: &mut Fpga,
-    launch_return_cpu_profile: Option<cpu_profile::CpuProfiler>,
+    process_entry_cpu_profile: Option<cpu_profile::CpuProfiler>,
 ) {
     match cmd {
         "read" => read_mode(f),
         "early-black" => early_black_route(f),
-        "ui" => ui_runner::run_ui(f, launch_return_cpu_profile),
+        "ui" => ui_runner::run_ui(f, process_entry_cpu_profile),
         #[cfg(mister_bench_scenes)]
         "scenes" => ui_runner::print_scenes(),
         #[cfg(mister_experiments)]

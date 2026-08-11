@@ -10,6 +10,7 @@ pub enum BenchmarkScenario {
     #[default]
     Screensaver,
     ColdBoot,
+    ColdBootPprof,
     Particles,
     ParticleCapacity,
     #[serde(rename = "particle-demo-40k")]
@@ -47,6 +48,7 @@ impl BenchmarkScenario {
         match self {
             Self::Screensaver => "screensaver",
             Self::ColdBoot => "cold-boot",
+            Self::ColdBootPprof => "cold-boot-pprof",
             Self::Particles => "particles",
             Self::ParticleCapacity => "particle-capacity",
             Self::ParticleDemo40k => "particle-demo-40k",

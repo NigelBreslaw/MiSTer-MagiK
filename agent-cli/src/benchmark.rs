@@ -44,6 +44,7 @@ enum BenchmarkProfile {
     LauncherResponse,
     InputLatencyLab,
     ColdBoot,
+    ColdBootPprof,
     NavigationTransitions,
     SettingsNavigation,
     SettingsNavigationPprof,
@@ -103,7 +104,8 @@ impl BenchmarkDevice for DeviceClient {
             BenchmarkProfile::InputIntegrity => device.verify_input_integrity(&output_dir),
             BenchmarkProfile::LauncherResponse => device.verify_launcher_response(&output_dir),
             BenchmarkProfile::InputLatencyLab => device.verify_input_latency_lab(&output_dir),
-            BenchmarkProfile::ColdBoot => device.profile_cold_boot(&output_dir),
+            BenchmarkProfile::ColdBoot => device.profile_cold_boot(&output_dir, false),
+            BenchmarkProfile::ColdBootPprof => device.profile_cold_boot(&output_dir, true),
             BenchmarkProfile::NavigationTransitions => {
                 device.profile_navigation_transitions(&output_dir)
             }
@@ -241,7 +243,10 @@ fn require_clean_installed_commit(
             execute_input_latency_lab(&mut device, manifest, output_dir, reporter)
         }
         BenchmarkScenario::ColdBoot => {
-            execute_cold_boot(&mut device, manifest, output_dir, reporter)
+            execute_cold_boot(&mut device, manifest, output_dir, reporter, false)
+        }
+        BenchmarkScenario::ColdBootPprof => {
+            execute_cold_boot(&mut device, manifest, output_dir, reporter, true)
         }
         BenchmarkScenario::NavigationTransitions => {
             execute_navigation_transitions(&mut device, manifest, output_dir, reporter)
@@ -571,6 +576,7 @@ fn particle_scene_lab_command(scenario: BenchmarkScenario) -> Option<&'static st
         BenchmarkScenario::Streamline
         | BenchmarkScenario::Screensaver
         | BenchmarkScenario::ColdBoot
+        | BenchmarkScenario::ColdBootPprof
         | BenchmarkScenario::CatalogLifecycle
         | BenchmarkScenario::SystemEntry
         | BenchmarkScenario::SystemEntryCritical
@@ -958,16 +964,26 @@ fn execute_cold_boot(
     manifest: String,
     output_dir: std::path::PathBuf,
     reporter: &mut Reporter<'_>,
+    pprof: bool,
 ) -> AgentResult<Outcome> {
     reporter.emit(
         EventKind::Progress,
         "profile",
-        "profiling one controlled Dev cold boot through the first real launcher frame",
+        if pprof {
+            "sampling one controlled Dev cold boot from MagiK process entry through the first real launcher frame"
+        } else {
+            "profiling one controlled Dev cold boot through the first real launcher frame"
+        },
         Some(35),
     )?;
-    let detail = device.profile(BenchmarkProfile::ColdBoot, output_dir.clone())?;
+    let profile = if pprof {
+        BenchmarkProfile::ColdBootPprof
+    } else {
+        BenchmarkProfile::ColdBoot
+    };
+    let detail = device.profile(profile, output_dir.clone())?;
     let summary: Value = serde_json::from_str(&detail).map_err(|error| error.to_string())?;
-    evaluate_cold_boot_summary(&summary)?;
+    evaluate_cold_boot_summary(&summary, pprof)?;
     device.verify_health()?;
     reporter.emit(
         EventKind::Progress,
@@ -983,7 +999,7 @@ fn execute_cold_boot(
     Ok(Outcome::Passed)
 }
 
-fn evaluate_cold_boot_summary(summary: &Value) -> AgentResult<()> {
+fn evaluate_cold_boot_summary(summary: &Value, pprof: bool) -> AgentResult<()> {
     if summary.get("schema").and_then(Value::as_str) != Some("mister-magik-cold-boot-benchmark-v1")
         || summary.get("timing_class").and_then(Value::as_str)
             != Some("device-monotonic-instrumented-installed-dev")
@@ -1016,6 +1032,16 @@ fn evaluate_cold_boot_summary(summary: &Value) -> AgentResult<()> {
         || summary.get("launcher_ready").and_then(Value::as_bool) != Some(true)
     {
         return Err("cold-boot benchmark did not verify the visible launcher".into());
+    }
+    if pprof
+        && (summary.pointer("/profile/state").and_then(Value::as_str) != Some("complete")
+            || summary
+                .pointer("/profile/sample_hits")
+                .and_then(Value::as_i64)
+                .unwrap_or(0)
+                <= 0)
+    {
+        return Err("cold-boot pprof benchmark produced no CPU samples".into());
     }
     Ok(())
 }
@@ -2043,15 +2069,21 @@ mod tests {
                 "first_launcher_present_us": 8,
             }
         });
-        evaluate_cold_boot_summary(&passing).unwrap();
+        evaluate_cold_boot_summary(&passing, false).unwrap();
 
         let mut unordered = passing.clone();
         unordered["timeline"]["launcher_exec_us"] = json!(9);
-        assert!(evaluate_cold_boot_summary(&unordered).is_err());
+        assert!(evaluate_cold_boot_summary(&unordered, false).is_err());
 
-        let mut missing_capture = passing;
+        let mut missing_capture = passing.clone();
         missing_capture["capture_verified"] = json!(false);
-        assert!(evaluate_cold_boot_summary(&missing_capture).is_err());
+        assert!(evaluate_cold_boot_summary(&missing_capture, false).is_err());
+
+        let mut profiled = passing.clone();
+        profiled["profile"] = json!({"state": "complete", "sample_hits": 42});
+        evaluate_cold_boot_summary(&profiled, true).unwrap();
+        profiled["profile"]["sample_hits"] = json!(0);
+        assert!(evaluate_cold_boot_summary(&profiled, true).is_err());
     }
 
     #[test]

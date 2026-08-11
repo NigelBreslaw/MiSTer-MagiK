@@ -4434,7 +4434,7 @@ pub(super) fn run_launcher_loop(
     mut pad: PadPool,
     app: slint_ui::launcher::Launcher,
     animation_clock: &AnimationClock,
-    launch_return_cpu_profile: Option<cpu_profile::CpuProfiler>,
+    process_entry_cpu_profile: Option<cpu_profile::CpuProfiler>,
 ) {
     let start = Instant::now();
     let startup_monotonic_us = monotonic_clock_us().unwrap_or(0);
@@ -4783,7 +4783,7 @@ pub(super) fn run_launcher_loop(
     let mut launcher_arcade_scroll_offset = 0i64;
     let mut arcade_drawer_view_cache = ArcadeDrawerViewCache::default();
     let mut composition = UiCompositionController::new();
-    let mut cpu = launch_return_cpu_profile.or_else(cpu_profile::start);
+    let mut cpu = process_entry_cpu_profile.or_else(cpu_profile::start);
     let mut system_entry_cpu_profile = None;
     let mut screensaver_cpu_profile = cpu_profile::ScreensaverProfiler::from_env();
     let mut bridge_models = LauncherBridgeModels::default();
@@ -9722,6 +9722,14 @@ pub(super) fn run_launcher_loop(
                 catalog_publication_test.hold_first_launcher_frame(start);
             }
             lifecycle.note_startup_frame_presented(frames, frame_t4, &mut lifecycle_effects);
+            if first_launcher_frame_logged
+                && lifecycle.startup_status().input_enabled
+                && cpu_profile::cold_boot_profile_requested()
+                && cpu.is_some()
+                && let Err(error) = cpu_profile::finish_cold_boot_async(cpu.take())
+            {
+                crate::ui_errln!("cold-boot cpu profile finalization failed: {error}");
+            }
             if lifecycle.startup_status().mode == StartupMode::ReturnFromGame
                 && lifecycle.startup_status().revealed
             {
