@@ -856,6 +856,7 @@ fn remove_planned_generation(storage_root: &Path, rebuilds: &[&PlannedSystem], g
             .join(planned.system_id.as_str());
         let _ = fs::remove_file(directory.join(format!("{generation}.sqlite3")));
         let _ = fs::remove_file(directory.join(format!("{generation}.nav.lz4b")));
+        let _ = fs::remove_file(directory.join(format!("{generation}.navpack")));
     }
 }
 
@@ -1282,6 +1283,8 @@ mod tests {
         assert_eq!(read_latest_manifest(&root, limits()).unwrap(), before);
         assert_eq!(materializer.commits, 1);
         assert!(!root.join("systems/c64/2.sqlite3").exists());
+        assert!(!root.join("systems/c64/2.nav.lz4b").exists());
+        assert!(!root.join("systems/c64/2.navpack").exists());
 
         materializer.fail_on = None;
         materializer.calls.clear();
