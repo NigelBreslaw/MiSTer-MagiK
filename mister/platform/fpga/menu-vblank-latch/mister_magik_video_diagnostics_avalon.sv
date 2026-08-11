@@ -62,9 +62,7 @@ module mister_magik_video_diagnostics_avalon (
 	reg [9:0] observed_flags_now;
 	wire route_context_changing =
 		(route_sync != route_seen) || route_capture_pending ||
-		({expected_base, route_epoch, route_flags} !=
-		 {expected_base_async,
-		  expected_route_epoch_async, expected_route_flags_async[4:0]});
+		(route_epoch != expected_route_epoch_async);
 
 	wire [15:0] snapshot_state_word =
 		(frozen ? (MAGIK_VIDEO_DIAGNOSTICS_STATE_FROZEN |
@@ -120,26 +118,16 @@ module mister_magik_video_diagnostics_avalon (
 
 		if(!frozen && ((route_sync != route_seen) ||
 		   (!route_capture_pending &&
-		    ({expected_base, route_epoch, route_flags} !=
-		     {expected_base_async,
-		      expected_route_epoch_async, expected_route_flags_async[4:0]})))) begin
+		    (route_epoch != expected_route_epoch_async)))) begin
 			if(route_capture_pending) mailbox_overrun <= 1'b1;
 			route_seen <= route_sync;
-			expected_base <= expected_base_async;
-			route_epoch <= expected_route_epoch_async;
-			route_flags <= expected_route_flags_async[4:0];
 			route_capture_pending <= 1'b1;
 		end
 		else if(!frozen && route_capture_pending) begin
-			if({expected_base, route_epoch, route_flags} ==
-			   {expected_base_async,
-				expected_route_epoch_async, expected_route_flags_async[4:0]})
-				route_capture_pending <= 1'b0;
-			else begin
-				expected_base <= expected_base_async;
-				route_epoch <= expected_route_epoch_async;
-				route_flags <= expected_route_flags_async[4:0];
-			end
+			expected_base <= expected_base_async;
+			route_epoch <= expected_route_epoch_async;
+			route_flags <= expected_route_flags_async[4:0];
+			route_capture_pending <= 1'b0;
 		end
 
 		frame_seen <= frame_sync;
@@ -205,16 +193,13 @@ module mister_magik_video_diagnostics_avalon (
 
 		if(request_sync != request_seen) begin
 			request_seen <= request_sync;
-			snapshot_generation <= diagnostic_generation_async;
 			request_capture_pending <= 1'b1;
 		end
 		else if(request_capture_pending) begin
-			if(snapshot_generation == diagnostic_generation_async) begin
-				request_capture_pending <= 1'b0;
-				frozen <= 1'b1;
-				request_ack_pending <= 1'b1;
-			end
-			else snapshot_generation <= diagnostic_generation_async;
+			snapshot_generation <= diagnostic_generation_async;
+			request_capture_pending <= 1'b0;
+			frozen <= 1'b1;
+			request_ack_pending <= 1'b1;
 		end
 
 		if(freeze_request_now) begin

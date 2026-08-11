@@ -93,6 +93,13 @@ module tb_mister_magik_video_diagnostics_avalon;
 		route_context = ~route_context;
 		armed = 1'b1;
 		repeat(4) @(negedge clk_100m);
+		// An even number of route toggles can coalesce while this clock is
+		// stopped. The monotonic epoch must still recover the latest bundle.
+		expected_base = 32'h22800000;
+		route_epoch = route_epoch + 2'd2;
+		repeat(4) @(negedge clk_100m);
+		if(dut.expected_base != expected_base || dut.route_epoch != route_epoch)
+			$fatal(1, "coalesced route epoch did not recover latest Avalon context");
 
 		// A base flip and first read can arrive together. The old slot must not
 		// be used to reject the new route while its observer mailbox settles.

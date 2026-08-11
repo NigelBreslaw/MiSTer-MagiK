@@ -169,26 +169,16 @@ module mister_magik_video_diagnostics_output (
 
 		if(!frozen && ((route_sync != route_seen) ||
 		   (!route_capture_pending &&
-		    ({route_epoch, active_sequence, route_flags} !=
-		     {expected_route_epoch_async, expected_active_seq_async,
-		      expected_route_flags_async[4:0]})))) begin
+		    (route_epoch != expected_route_epoch_async)))) begin
 			if(route_capture_pending) mailbox_overrun <= 1'b1;
 			route_seen <= route_sync;
-			route_epoch <= expected_route_epoch_async;
-			active_sequence <= expected_active_seq_async;
-			route_flags <= expected_route_flags_async[4:0];
 			route_capture_pending <= 1'b1;
 		end
 		else if(!frozen && route_capture_pending) begin
-			if({route_epoch, active_sequence, route_flags} ==
-			   {expected_route_epoch_async, expected_active_seq_async,
-				expected_route_flags_async[4:0]})
-				route_capture_pending <= 1'b0;
-			else begin
-				route_epoch <= expected_route_epoch_async;
-				active_sequence <= expected_active_seq_async;
-				route_flags <= expected_route_flags_async[4:0];
-			end
+			route_epoch <= expected_route_epoch_async;
+			active_sequence <= expected_active_seq_async;
+			route_flags <= expected_route_flags_async[4:0];
+			route_capture_pending <= 1'b0;
 		end
 
 		if(armed && !armed_d) begin
@@ -283,20 +273,17 @@ module mister_magik_video_diagnostics_output (
 
 		if(request_sync != request_seen) begin
 			request_seen <= request_sync;
-			snapshot_generation <= diagnostic_generation_async;
 			request_capture_pending <= 1'b1;
 		end
 		else if(request_capture_pending) begin
-			if(snapshot_generation == diagnostic_generation_async) begin
-				request_capture_pending <= 1'b0;
-				if(!frozen) begin
-					frozen <= 1'b1;
-					snapshot_source_flags <= source_flags;
-					snapshot_control_flags <= live_control_flags;
-				end
-				request_ack_pending <= 1'b1;
+			snapshot_generation <= diagnostic_generation_async;
+			request_capture_pending <= 1'b0;
+			if(!frozen) begin
+				frozen <= 1'b1;
+				snapshot_source_flags <= source_flags;
+				snapshot_control_flags <= live_control_flags;
 			end
-			else snapshot_generation <= diagnostic_generation_async;
+			request_ack_pending <= 1'b1;
 		end
 
 		if(freeze_request_now) begin

@@ -159,13 +159,9 @@ module mister_magik_video_diagnostics_control #(
 	reg [15:0] frozen_active_route_epoch = 16'd0;
 	reg [4:0] frozen_route_state_flags = 5'd0;
 
-	reg avalon_verify_pending = 1'b0, output_verify_pending = 1'b0;
 	reg avalon_sample_pending = 1'b0, output_sample_pending = 1'b0;
-	reg [15:0] avalon_verify_candidate = 16'd0, output_verify_candidate = 16'd0;
 	reg [15:0] avalon_verify_sample = 16'd0, output_verify_sample = 16'd0;
-	reg avalon_trigger_verify_pending = 1'b0, output_trigger_verify_pending = 1'b0;
 	reg avalon_trigger_sample_pending = 1'b0, output_trigger_sample_pending = 1'b0;
-	reg [7:0] avalon_trigger_candidate = 8'd0, output_trigger_candidate = 8'd0;
 	reg [7:0] avalon_trigger_sample = 8'd0, output_trigger_sample = 8'd0;
 	integer capture_index;
 
@@ -510,47 +506,21 @@ module mister_magik_video_diagnostics_control #(
 
 		if(monitor_armed && (avalon_fault_sys != avalon_fault_seen)) begin
 			avalon_fault_seen <= avalon_fault_sys;
-			avalon_trigger_candidate <= avalon_trigger_async;
+			avalon_trigger_sample <= avalon_trigger_async;
 			avalon_trigger_sample_pending <= 1'b1;
-			avalon_trigger_verify_pending <= 1'b0;
 		end
 		if(monitor_armed && (output_fault_sys != output_fault_seen)) begin
 			output_fault_seen <= output_fault_sys;
-			output_trigger_candidate <= output_trigger_async;
+			output_trigger_sample <= output_trigger_async;
 			output_trigger_sample_pending <= 1'b1;
-			output_trigger_verify_pending <= 1'b0;
 		end
 		if(avalon_trigger_sample_pending) begin
-			avalon_trigger_sample <= avalon_trigger_async;
 			avalon_trigger_sample_pending <= 1'b0;
-			avalon_trigger_verify_pending <= 1'b1;
-		end
-		else if(avalon_trigger_verify_pending) begin
-			if(avalon_trigger_candidate == avalon_trigger_sample) begin
-				avalon_trigger_verify_pending <= 1'b0;
-				request_freeze(avalon_trigger_candidate, 8'd0);
-			end
-			else begin
-				avalon_trigger_candidate <= avalon_trigger_sample;
-				avalon_trigger_sample_pending <= 1'b1;
-				avalon_trigger_verify_pending <= 1'b0;
-			end
+			request_freeze(avalon_trigger_sample, 8'd0);
 		end
 		if(output_trigger_sample_pending) begin
-			output_trigger_sample <= output_trigger_async;
 			output_trigger_sample_pending <= 1'b0;
-			output_trigger_verify_pending <= 1'b1;
-		end
-		else if(output_trigger_verify_pending) begin
-			if(output_trigger_candidate == output_trigger_sample) begin
-				output_trigger_verify_pending <= 1'b0;
-				request_freeze(output_trigger_candidate, 8'd0);
-			end
-			else begin
-				output_trigger_candidate <= output_trigger_sample;
-				output_trigger_sample_pending <= 1'b1;
-				output_trigger_verify_pending <= 1'b0;
-			end
+			request_freeze(output_trigger_sample, 8'd0);
 		end
 
 		// Commit at one site after priority arbitration. Keeping the wide frozen
@@ -579,49 +549,27 @@ module mister_magik_video_diagnostics_control #(
 			freeze_timeout <= freeze_timeout + 1'd1;
 			if(avalon_ack_sys != avalon_ack_seen) begin
 				avalon_ack_seen <= avalon_ack_sys;
-				avalon_verify_candidate <= avalon_snapshot_payload_async[63:48];
+				avalon_verify_sample <= avalon_snapshot_payload_async[63:48];
 				avalon_sample_pending <= 1'b1;
-				avalon_verify_pending <= 1'b0;
 			end
 			if(output_ack_sys != output_ack_seen) begin
 				output_ack_seen <= output_ack_sys;
-				output_verify_candidate <= output_snapshot_payload_async[63:48];
+				output_verify_sample <= output_snapshot_payload_async[63:48];
 				output_sample_pending <= 1'b1;
-				output_verify_pending <= 1'b0;
 			end
 			if(avalon_sample_pending) begin
-				avalon_verify_sample <= avalon_snapshot_payload_async[63:48];
-				avalon_sample_pending <= 1'b0;
-				avalon_verify_pending <= 1'b1;
-			end
-			else if(avalon_verify_pending) begin
-				if((avalon_verify_candidate == avalon_verify_sample) &&
-				   (avalon_verify_sample == generation)) begin
-					avalon_verify_pending <= 1'b0;
+				if(avalon_verify_sample == generation) begin
+					avalon_sample_pending <= 1'b0;
 					missing_domains[1] <= 1'b0;
 				end
-				else begin
-					avalon_verify_candidate <= avalon_snapshot_payload_async[63:48];
-					avalon_sample_pending <= 1'b1;
-					avalon_verify_pending <= 1'b0;
-				end
+				else avalon_verify_sample <= avalon_snapshot_payload_async[63:48];
 			end
 			if(output_sample_pending) begin
-				output_verify_sample <= output_snapshot_payload_async[63:48];
-				output_sample_pending <= 1'b0;
-				output_verify_pending <= 1'b1;
-			end
-			else if(output_verify_pending) begin
-				if((output_verify_candidate == output_verify_sample) &&
-				   (output_verify_sample == generation)) begin
-					output_verify_pending <= 1'b0;
+				if(output_verify_sample == generation) begin
+					output_sample_pending <= 1'b0;
 					missing_domains[2] <= 1'b0;
 				end
-				else begin
-					output_verify_candidate <= output_snapshot_payload_async[63:48];
-					output_sample_pending <= 1'b1;
-					output_verify_pending <= 1'b0;
-				end
+				else output_verify_sample <= output_snapshot_payload_async[63:48];
 			end
 			if((missing_domains & 3'b110) == 0) begin
 				freeze_pending <= 1'b0;

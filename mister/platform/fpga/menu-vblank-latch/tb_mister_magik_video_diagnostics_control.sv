@@ -239,25 +239,6 @@ module tb_mister_magik_video_diagnostics_control;
 		$finish;
 	end
 
-	always @(snapshot_request) begin
-		if(snapshot_request) fork
-			begin
-				wait(dut.avalon_sample_pending);
-				@(negedge clk_sys);
-				avalon_payload[3*16 +: 16] = 16'h2222;
-				@(negedge clk_sys);
-				avalon_payload[3*16 +: 16] = diagnostic_generation;
-			end
-			begin
-				wait(dut.output_sample_pending);
-				@(negedge clk_sys);
-				output_payload[3*16 +: 16] = 16'h3333;
-				@(negedge clk_sys);
-				output_payload[3*16 +: 16] = diagnostic_generation;
-			end
-		join_none
-	end
-
 	always @(diagnostic_generation) begin
 		avalon_payload[3*16 +: 16] = diagnostic_generation;
 		output_payload[3*16 +: 16] = diagnostic_generation;

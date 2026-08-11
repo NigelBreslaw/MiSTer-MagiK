@@ -85,6 +85,13 @@ module tb_mister_magik_video_diagnostics_output;
 		route_toggle = ~route_toggle;
 		armed = 1'b1;
 		repeat(4) @(negedge clk);
+		// Recover the newest route even when an even number of toggles was
+		// invisible while the output clock was stopped.
+		route_epoch = route_epoch + 2'd2;
+		active_seq = active_seq + 2'd2;
+		repeat(4) @(negedge clk);
+		if(dut.route_epoch != route_epoch || dut.active_sequence != active_seq)
+			$fatal(1, "coalesced route epoch did not recover latest output context");
 
 		// Two identical colored frames establish a reference; white blanking is ignored.
 		drive_frame(24'h204080);
