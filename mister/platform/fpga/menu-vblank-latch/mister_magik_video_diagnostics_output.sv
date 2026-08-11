@@ -169,16 +169,26 @@ module mister_magik_video_diagnostics_output (
 
 		if(!frozen && ((route_sync != route_seen) ||
 		   (!route_capture_pending &&
-		    (route_epoch != expected_route_epoch_async)))) begin
+		    ({route_epoch, active_sequence, route_flags} !=
+		     {expected_route_epoch_async, expected_active_seq_async,
+		      expected_route_flags_async[4:0]})))) begin
 			if(route_capture_pending) mailbox_overrun <= 1'b1;
 			route_seen <= route_sync;
-			route_capture_pending <= 1'b1;
-		end
-		else if(!frozen && route_capture_pending) begin
 			route_epoch <= expected_route_epoch_async;
 			active_sequence <= expected_active_seq_async;
 			route_flags <= expected_route_flags_async[4:0];
-			route_capture_pending <= 1'b0;
+			route_capture_pending <= 1'b1;
+		end
+		else if(!frozen && route_capture_pending) begin
+			if({route_epoch, active_sequence, route_flags} ==
+			   {expected_route_epoch_async, expected_active_seq_async,
+				expected_route_flags_async[4:0]})
+				route_capture_pending <= 1'b0;
+			else begin
+				route_epoch <= expected_route_epoch_async;
+				active_sequence <= expected_active_seq_async;
+				route_flags <= expected_route_flags_async[4:0];
+			end
 		end
 
 		if(armed && !armed_d) begin

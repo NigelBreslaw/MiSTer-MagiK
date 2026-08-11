@@ -62,7 +62,9 @@ module mister_magik_video_diagnostics_avalon (
 	reg [9:0] observed_flags_now;
 	wire route_context_changing =
 		(route_sync != route_seen) || route_capture_pending ||
-		(route_epoch != expected_route_epoch_async);
+		({expected_base, route_epoch, route_flags} !=
+		 {expected_base_async,
+		  expected_route_epoch_async, expected_route_flags_async[4:0]});
 
 	wire [15:0] snapshot_state_word =
 		(frozen ? (MAGIK_VIDEO_DIAGNOSTICS_STATE_FROZEN |
@@ -118,16 +120,26 @@ module mister_magik_video_diagnostics_avalon (
 
 		if(!frozen && ((route_sync != route_seen) ||
 		   (!route_capture_pending &&
-		    (route_epoch != expected_route_epoch_async)))) begin
+		    ({expected_base, route_epoch, route_flags} !=
+		     {expected_base_async,
+		      expected_route_epoch_async, expected_route_flags_async[4:0]})))) begin
 			if(route_capture_pending) mailbox_overrun <= 1'b1;
 			route_seen <= route_sync;
-			route_capture_pending <= 1'b1;
-		end
-		else if(!frozen && route_capture_pending) begin
 			expected_base <= expected_base_async;
 			route_epoch <= expected_route_epoch_async;
 			route_flags <= expected_route_flags_async[4:0];
-			route_capture_pending <= 1'b0;
+			route_capture_pending <= 1'b1;
+		end
+		else if(!frozen && route_capture_pending) begin
+			if({expected_base, route_epoch, route_flags} ==
+			   {expected_base_async,
+				expected_route_epoch_async, expected_route_flags_async[4:0]})
+				route_capture_pending <= 1'b0;
+			else begin
+				expected_base <= expected_base_async;
+				route_epoch <= expected_route_epoch_async;
+				route_flags <= expected_route_flags_async[4:0];
+			end
 		end
 
 		frame_seen <= frame_sync;
