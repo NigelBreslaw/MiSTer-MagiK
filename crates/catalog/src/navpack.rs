@@ -11,12 +11,18 @@ use std::fs::File;
 use std::path::Path;
 use std::sync::Arc;
 
-pub const NAVPACK_SCHEMA_VERSION: u32 = 1;
+pub const NAVPACK_SCHEMA_VERSION: u32 = 2;
 pub const NAVPACK_HEADER_BYTES: usize = 160;
 pub const NAVPACK_ROW_BYTES: usize = 48;
 pub const NAVPACK_COLD_BYTES: usize = 32;
 pub const NAVPACK_LAUNCH_BYTES: usize = 64;
-const MAGIC: &[u8; 8] = b"MGKNAVP1";
+pub const NAVPACK_ENTRY_VIEWPORT_ROWS: usize = 10;
+const MAGIC: &[u8; 8] = b"MGKNAVP2";
+const PRELUDE_MAGIC: &[u8; 8] = b"MGKPREL1";
+const PRELUDE_VERSION: u32 = 1;
+const PRELUDE_HEADER_BYTES: usize = 48;
+const PRELUDE_FLAG_TERMINAL_EMPTY: u32 = 1;
+const PRELUDE_FLAG_EXACT_PREVIEW: u32 = 2;
 const ENDIAN_MARKER: u32 = 0x0102_0304;
 const NONE_U32: u32 = u32::MAX;
 
@@ -26,6 +32,21 @@ pub struct NavPackIdentity {
     pub generation: u64,
     pub games: usize,
     pub launches: usize,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct NavPackPreviewIdentityRef<'a> {
+    pub ordinal: usize,
+    pub title: &'a str,
+    pub preview_archive_path: &'a str,
+    pub preview_asset_key: &'a str,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct NavPackEntryPreludeRef<'a> {
+    pub first_viewport_ordinals: Vec<usize>,
+    pub selected_preview: Option<NavPackPreviewIdentityRef<'a>>,
+    pub terminal_empty: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Serialize)]
@@ -45,6 +66,8 @@ pub struct MappedNavPack {
     launch_offset: usize,
     strings_offset: usize,
     strings_bytes: usize,
+    prelude_offset: usize,
+    prelude_bytes: usize,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -124,6 +147,8 @@ impl MappedNavPack {
                 launch_offset: header.launch_offset,
                 strings_offset: header.strings_offset,
                 strings_bytes: header.strings_bytes,
+                prelude_offset: header.prelude_offset,
+                prelude_bytes: header.prelude_bytes,
             },
             NavPackOpenTiming {
                 file_open_us,
@@ -140,6 +165,15 @@ impl MappedNavPack {
 
     pub fn identity(&self) -> &NavPackIdentity {
         &self.identity
+    }
+
+    pub fn entry_prelude(&self) -> Result<NavPackEntryPreludeRef<'_>, String> {
+        parse_entry_prelude(
+            self.mapping
+                .get(self.prelude_offset..self.prelude_offset + self.prelude_bytes)
+                .ok_or("NavPack entry prelude is out of bounds")?,
+            self.identity.games,
+        )
     }
 
     pub fn row(&self, ordinal: usize) -> Result<NavPackRowRef<'_>, String> {
@@ -217,6 +251,8 @@ struct CheckedHeader {
     launch_offset: usize,
     strings_offset: usize,
     strings_bytes: usize,
+    prelude_offset: usize,
+    prelude_bytes: usize,
 }
 
 #[cfg(feature = "builder")]
@@ -323,7 +359,9 @@ pub fn encode(
     encode_u8_postings(&mut index_bytes, &indexes.players)?;
     encode_string_postings(&mut index_bytes, &indexes.controls, &mut strings)?;
 
-    let rows_offset = NAVPACK_HEADER_BYTES;
+    let prelude = encode_entry_prelude(games, indexes)?;
+    let prelude_offset = NAVPACK_HEADER_BYTES;
+    let rows_offset = aligned_after(prelude_offset, prelude.len())?;
     let cold_offset = aligned_after(rows_offset, rows.len())?;
     let launch_offset = aligned_after(cold_offset, cold.len())?;
     let index_offset = aligned_after(launch_offset, launches.len())?;
@@ -332,6 +370,7 @@ pub fn encode(
         .checked_add(strings.bytes.len())
         .ok_or("NavPack size overflow")?;
     let mut output = vec![0; total];
+    output[prelude_offset..prelude_offset + prelude.len()].copy_from_slice(&prelude);
     output[rows_offset..rows_offset + rows.len()].copy_from_slice(&rows);
     output[cold_offset..cold_offset + cold.len()].copy_from_slice(&cold);
     output[launch_offset..launch_offset + launches.len()].copy_from_slice(&launches);
@@ -368,9 +407,86 @@ pub fn encode(
             u64::try_from(bytes).map_err(|_| "NavPack length overflow")?,
         );
     }
+    put_u64(
+        &mut header,
+        u64::try_from(prelude_offset).map_err(|_| "NavPack prelude offset overflow")?,
+    );
+    put_u64(
+        &mut header,
+        u64::try_from(prelude.len()).map_err(|_| "NavPack prelude length overflow")?,
+    );
     header.resize(NAVPACK_HEADER_BYTES, 0);
     output[..NAVPACK_HEADER_BYTES].copy_from_slice(&header);
     validate(&output, system_id, generation, games.len())?;
+    Ok(output)
+}
+
+#[cfg(feature = "builder")]
+fn encode_entry_prelude(
+    games: &[SystemGame],
+    indexes: &SystemNavigationIndexes,
+) -> Result<Vec<u8>, String> {
+    let first_viewport = indexes
+        .title_ordinals
+        .iter()
+        .copied()
+        .take(NAVPACK_ENTRY_VIEWPORT_ROWS)
+        .collect::<Vec<_>>();
+    let selected_preview = games.first().filter(|game| {
+        game.has_preview
+            && !game.preview_archive_path.is_empty()
+            && !game.preview_asset_key.is_empty()
+    });
+    let (selected_ordinal, flags, title, archive, asset_key) = match selected_preview {
+        Some(game) => (
+            0u32,
+            PRELUDE_FLAG_EXACT_PREVIEW,
+            game.title.as_bytes(),
+            game.preview_archive_path.as_bytes(),
+            game.preview_asset_key.as_bytes(),
+        ),
+        None => (
+            NONE_U32,
+            PRELUDE_FLAG_TERMINAL_EMPTY,
+            &[][..],
+            &[][..],
+            &[][..],
+        ),
+    };
+    let total_bytes = PRELUDE_HEADER_BYTES
+        .checked_add(first_viewport.len().saturating_mul(4))
+        .and_then(|value| value.checked_add(title.len()))
+        .and_then(|value| value.checked_add(archive.len()))
+        .and_then(|value| value.checked_add(asset_key.len()))
+        .ok_or("NavPack entry prelude size overflow")?;
+    let mut output = Vec::with_capacity(total_bytes);
+    output.extend_from_slice(PRELUDE_MAGIC);
+    put_u32(&mut output, PRELUDE_VERSION);
+    put_u32(
+        &mut output,
+        u32::try_from(total_bytes).map_err(|_| "NavPack entry prelude exceeds 32 bits")?,
+    );
+    put_u32(
+        &mut output,
+        u32::try_from(first_viewport.len()).map_err(|_| "too many entry viewport ordinals")?,
+    );
+    put_u32(&mut output, selected_ordinal);
+    put_u32(&mut output, flags);
+    put_u32(&mut output, 0);
+    for value in [title.len(), archive.len(), asset_key.len()] {
+        put_u32(
+            &mut output,
+            u32::try_from(value).map_err(|_| "NavPack entry identity exceeds 32 bits")?,
+        );
+    }
+    put_u32(&mut output, 0);
+    for ordinal in first_viewport {
+        put_u32(&mut output, ordinal);
+    }
+    output.extend_from_slice(title);
+    output.extend_from_slice(archive);
+    output.extend_from_slice(asset_key);
+    debug_assert_eq!(output.len(), total_bytes);
     Ok(output)
 }
 
@@ -405,6 +521,14 @@ pub fn validate(
     let sections = (0..5)
         .map(|index| read_section(bytes, 56 + index * 16))
         .collect::<Result<Vec<_>, _>>()?;
+    let (prelude_offset, prelude_bytes) = read_section(bytes, 136)?;
+    if prelude_offset != NAVPACK_HEADER_BYTES || prelude_offset + prelude_bytes > sections[0].0 {
+        return Err("NavPack entry prelude is not the leading section".into());
+    }
+    let prelude = parse_entry_prelude(
+        &bytes[prelude_offset..prelude_offset + prelude_bytes],
+        games,
+    )?;
     for window in sections.windows(2) {
         if window[0].0 + window[0].1 > window[1].0 {
             return Err("overlapping or unordered NavPack sections".into());
@@ -425,6 +549,17 @@ pub fn validate(
     let strings = &bytes[strings_offset..strings_offset + strings_bytes];
     if read_string(strings, system_ref)? != expected_system_id {
         return Err("NavPack system identity mismatch".into());
+    }
+    if let Some(selected) = prelude.selected_preview {
+        let row = rows_offset + selected.ordinal * NAVPACK_ROW_BYTES;
+        let flags = read_u32(bytes, row + 40)?;
+        if flags & 1 == 0
+            || read_string(strings, read_ref(bytes, row)?)? != selected.title
+            || read_string(strings, read_ref(bytes, row + 16)?)? != selected.preview_archive_path
+            || read_string(strings, read_ref(bytes, row + 24)?)? != selected.preview_asset_key
+        {
+            return Err("NavPack entry preview identity does not match its selected row".into());
+        }
     }
     for ordinal in 0..games {
         let row = rows_offset + ordinal * NAVPACK_ROW_BYTES;
@@ -494,9 +629,14 @@ fn validate_header(
     let sections = (0..5)
         .map(|index| read_section(bytes, 56 + index * 16))
         .collect::<Result<Vec<_>, _>>()?;
-    if sections[0].0 < NAVPACK_HEADER_BYTES {
-        return Err("NavPack rows overlap the header".into());
+    let (prelude_offset, prelude_bytes) = read_section(bytes, 136)?;
+    if prelude_offset != NAVPACK_HEADER_BYTES || prelude_offset + prelude_bytes > sections[0].0 {
+        return Err("NavPack entry prelude is not the leading section".into());
     }
+    parse_entry_prelude(
+        &bytes[prelude_offset..prelude_offset + prelude_bytes],
+        games,
+    )?;
     for window in sections.windows(2) {
         let end = window[0]
             .0
@@ -546,6 +686,99 @@ fn validate_header(
         launch_offset: sections[2].0,
         strings_offset: sections[4].0,
         strings_bytes: sections[4].1,
+        prelude_offset,
+        prelude_bytes,
+    })
+}
+
+fn parse_entry_prelude(bytes: &[u8], games: usize) -> Result<NavPackEntryPreludeRef<'_>, String> {
+    if bytes.len() < PRELUDE_HEADER_BYTES || &bytes[..8] != PRELUDE_MAGIC {
+        return Err("invalid NavPack entry prelude".into());
+    }
+    if read_u32(bytes, 8)? != PRELUDE_VERSION || read_u32(bytes, 12)? as usize != bytes.len() {
+        return Err("unsupported NavPack entry prelude version or size".into());
+    }
+    let viewport_count = read_u32(bytes, 16)? as usize;
+    if viewport_count > NAVPACK_ENTRY_VIEWPORT_ROWS || viewport_count > games {
+        return Err("NavPack entry viewport count is out of bounds".into());
+    }
+    let selected_ordinal = read_u32(bytes, 20)?;
+    let flags = read_u32(bytes, 24)?;
+    let terminal_empty = flags == PRELUDE_FLAG_TERMINAL_EMPTY;
+    let exact_preview = flags == PRELUDE_FLAG_EXACT_PREVIEW;
+    if !terminal_empty && !exact_preview {
+        return Err("NavPack entry preview state is not terminal".into());
+    }
+    let title_bytes = read_u32(bytes, 32)? as usize;
+    let archive_bytes = read_u32(bytes, 36)? as usize;
+    let asset_key_bytes = read_u32(bytes, 40)? as usize;
+    let ordinals_end = PRELUDE_HEADER_BYTES
+        .checked_add(viewport_count.saturating_mul(4))
+        .ok_or("NavPack entry viewport size overflow")?;
+    let identity_end = ordinals_end
+        .checked_add(title_bytes)
+        .and_then(|value| value.checked_add(archive_bytes))
+        .and_then(|value| value.checked_add(asset_key_bytes))
+        .filter(|value| *value == bytes.len())
+        .ok_or("NavPack entry identity size mismatch")?;
+    debug_assert_eq!(identity_end, bytes.len());
+    let mut first_viewport_ordinals = Vec::with_capacity(viewport_count);
+    for index in 0..viewport_count {
+        let ordinal = read_u32(bytes, PRELUDE_HEADER_BYTES + index * 4)? as usize;
+        if ordinal >= games {
+            return Err("NavPack entry viewport ordinal is out of bounds".into());
+        }
+        first_viewport_ordinals.push(ordinal);
+    }
+    let mut cursor = ordinals_end;
+    let title = std::str::from_utf8(
+        bytes
+            .get(cursor..cursor + title_bytes)
+            .ok_or("truncated NavPack entry title")?,
+    )
+    .map_err(|_| "NavPack entry title is not UTF-8")?;
+    cursor += title_bytes;
+    let preview_archive_path = std::str::from_utf8(
+        bytes
+            .get(cursor..cursor + archive_bytes)
+            .ok_or("truncated NavPack entry archive")?,
+    )
+    .map_err(|_| "NavPack entry archive is not UTF-8")?;
+    cursor += archive_bytes;
+    let preview_asset_key = std::str::from_utf8(
+        bytes
+            .get(cursor..cursor + asset_key_bytes)
+            .ok_or("truncated NavPack entry asset key")?,
+    )
+    .map_err(|_| "NavPack entry asset key is not UTF-8")?;
+    let selected_preview = if exact_preview {
+        let ordinal = usize::try_from(selected_ordinal)
+            .ok()
+            .filter(|ordinal| *ordinal < games)
+            .ok_or("NavPack entry selected ordinal is out of bounds")?;
+        if preview_archive_path.is_empty() || preview_asset_key.is_empty() {
+            return Err("NavPack exact entry preview identity is empty".into());
+        }
+        Some(NavPackPreviewIdentityRef {
+            ordinal,
+            title,
+            preview_archive_path,
+            preview_asset_key,
+        })
+    } else {
+        if selected_ordinal != NONE_U32
+            || title_bytes != 0
+            || archive_bytes != 0
+            || asset_key_bytes != 0
+        {
+            return Err("NavPack empty entry preview carries an identity".into());
+        }
+        None
+    };
+    Ok(NavPackEntryPreludeRef {
+        first_viewport_ordinals,
+        selected_preview,
+        terminal_empty,
     })
 }
 
@@ -823,6 +1056,51 @@ mod tests {
         assert_eq!(identity.games, 2);
         assert_eq!(identity.launches, 1);
         assert_eq!(encoded.len() % 1, 0);
+    }
+
+    #[test]
+    fn navpack_entry_prelude_is_leading_bounded_and_preview_terminal() {
+        let games = fixture();
+        let indexes = build_navigation_indexes(&games).unwrap();
+        let encoded = encode("c64", 9, &games, &indexes).unwrap();
+        let path = temp_navpack_path("entry-prelude");
+        std::fs::write(&path, &encoded).unwrap();
+        let (mapped, _) =
+            MappedNavPack::open(&path, encoded.len() as u64, "c64", 9, games.len()).unwrap();
+        std::fs::remove_file(path).unwrap();
+
+        let prelude = mapped.entry_prelude().unwrap();
+        assert_eq!(prelude.first_viewport_ordinals, vec![0, 1]);
+        assert!(!prelude.terminal_empty);
+        let selected = prelude.selected_preview.unwrap();
+        assert_eq!(selected.ordinal, 0);
+        assert_eq!(selected.title, "Alpha");
+        assert_eq!(selected.preview_archive_path, "/preview/c64.zip");
+        assert_eq!(selected.preview_asset_key, "Alpha");
+        assert_eq!(
+            read_u64(&encoded, 136).unwrap() as usize,
+            NAVPACK_HEADER_BYTES
+        );
+        assert!((read_u64(&encoded, 144).unwrap() as usize) < 4096);
+    }
+
+    #[test]
+    fn navpack_entry_prelude_confirms_no_preview_without_an_identity() {
+        let mut games = fixture();
+        games[0].has_preview = false;
+        games[0].preview_archive_path.clear();
+        games[0].preview_asset_key.clear();
+        let indexes = build_navigation_indexes(&games).unwrap();
+        let encoded = encode("c64", 9, &games, &indexes).unwrap();
+        let path = temp_navpack_path("empty-entry-prelude");
+        std::fs::write(&path, &encoded).unwrap();
+        let (mapped, _) =
+            MappedNavPack::open(&path, encoded.len() as u64, "c64", 9, games.len()).unwrap();
+        std::fs::remove_file(path).unwrap();
+
+        let prelude = mapped.entry_prelude().unwrap();
+        assert!(prelude.terminal_empty);
+        assert!(prelude.selected_preview.is_none());
     }
 
     #[test]

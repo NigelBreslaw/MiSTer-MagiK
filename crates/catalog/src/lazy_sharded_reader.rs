@@ -35,6 +35,14 @@ pub struct LazySystemGeneration {
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Serialize)]
+pub struct EntryPreludeWarmupReport {
+    pub systems: usize,
+    pub exact_previews: usize,
+    pub terminal_empty: usize,
+    pub elapsed_us: u64,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Serialize)]
 pub struct LazySystemOpenTiming {
     pub descriptor_lookup_us: u64,
     pub navigation: SystemNavigationOpenTiming,
@@ -244,6 +252,65 @@ impl LazyShardedCatalogReader {
         })
         .collect()
     }
+
+    /// Maps and faults only each populated system's bounded entry prelude.
+    pub fn warm_entry_preludes(&self) -> Result<EntryPreludeWarmupReport, CatalogError> {
+        let started = std::time::Instant::now();
+        let mut report = EntryPreludeWarmupReport::default();
+        for system in &self.manifest.systems {
+            if system.active.games == 0 {
+                continue;
+            }
+            let candidates = [Some(&system.active), system.previous.as_ref()];
+            let mut errors = Vec::new();
+            let mut warmed = None;
+            for generation in candidates.into_iter().flatten() {
+                let Some(navpack) = generation.navpack.as_ref() else {
+                    errors.push("generation has no NavPack".to_string());
+                    continue;
+                };
+                let games = usize::try_from(generation.games).map_err(|_| {
+                    CatalogError::new(
+                        "warm-entry-preludes",
+                        "system game count exceeds platform size",
+                    )
+                })?;
+                let path = self.storage_root.join(&navpack.path);
+                match crate::navpack::MappedNavPack::open(
+                    &path,
+                    navpack.bytes,
+                    system.system_id.as_str(),
+                    generation.generation,
+                    games,
+                )
+                .and_then(|(mapped, _)| {
+                    let prelude = mapped.entry_prelude()?;
+                    Ok((prelude.selected_preview.is_some(), prelude.terminal_empty))
+                }) {
+                    Ok(state) => {
+                        warmed = Some(state);
+                        break;
+                    }
+                    Err(error) => errors.push(error),
+                }
+            }
+            let Some((exact_preview, terminal_empty)) = warmed else {
+                return Err(CatalogError::new(
+                    "warm-entry-preludes",
+                    format!(
+                        "{} has no usable entry prelude: {}",
+                        system.system_id,
+                        errors.join("; ")
+                    ),
+                ));
+            };
+            report.systems += 1;
+            report.exact_previews += usize::from(exact_preview);
+            report.terminal_empty += usize::from(terminal_empty);
+        }
+        report.elapsed_us = elapsed_us(started);
+        Ok(report)
+    }
 }
 
 fn elapsed_us(started: std::time::Instant) -> u64 {
@@ -297,6 +364,30 @@ mod tests {
         assert_eq!(registry.generation(), 1);
         assert_eq!(registry.systems().len(), 2);
         assert!(reader.open_system(&system("snes")).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn entry_prelude_warmup_maps_every_system_without_opening_shards() {
+        let root = temporary_root("entry-prelude-warmup");
+        seed(&root);
+        fs::write(
+            root.join("systems/c64/1.nav.lz4b"),
+            b"corrupt navigation must remain untouched",
+        )
+        .unwrap();
+        fs::write(
+            root.join("systems/snes/1.nav.lz4b"),
+            b"corrupt navigation must remain untouched",
+        )
+        .unwrap();
+
+        let reader = LazyShardedCatalogReader::open(&root, limits()).unwrap();
+        let report = reader.warm_entry_preludes().unwrap();
+        assert_eq!(report.systems, 2);
+        assert_eq!(report.exact_previews, 0);
+        assert_eq!(report.terminal_empty, 2);
+        assert!(reader.open_system(&system("c64")).is_err());
         fs::remove_dir_all(root).unwrap();
     }
 

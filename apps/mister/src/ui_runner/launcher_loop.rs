@@ -4815,6 +4815,23 @@ pub(super) fn run_launcher_loop(
         .or(retained_arcade_fingerprint);
     let mut catalog_generation =
         initialize_catalog_generation(&mut scheduler, initial_catalog_fingerprint);
+    if sharded_seed_ready {
+        match scheduler.warm_entry_preludes_before_input() {
+            Ok(report) => print_startup_event(
+                start,
+                "system_entry_preludes_warmed",
+                format!(
+                    "systems={} exact_previews={} terminal_empty={} elapsed_us={} cpu=0",
+                    report.systems, report.exact_previews, report.terminal_empty, report.elapsed_us
+                ),
+            ),
+            Err(error) => print_startup_event(
+                start,
+                "system_entry_preludes_warmup_failed",
+                format!("error={}", error.replace('\t', " ")),
+            ),
+        }
+    }
     let mut startup_ready_catalog_source = CatalogSource::FreshBuild;
     if capsule_seed_ready {
         startup_ready_catalog_source = CatalogSource::ReturnCapsule;

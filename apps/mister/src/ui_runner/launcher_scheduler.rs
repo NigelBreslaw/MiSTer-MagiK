@@ -175,6 +175,11 @@ struct SystemEntryPrepareRequest {
 enum SystemEntryPrepareCommand {
     Prepare(SystemEntryPrepareRequest),
     RetireCatalog(ArcadeCatalog),
+    WarmEntryPreludes(
+        mpsc::SyncSender<
+            Result<mister_magik_catalog::lazy_sharded_reader::EntryPreludeWarmupReport, String>,
+        >,
+    ),
 }
 
 struct SystemEntryPrepareResult {
@@ -215,6 +220,17 @@ impl SystemEntryPrepareWorker {
                             }
                         }
                         SystemEntryPrepareCommand::RetireCatalog(catalog) => drop(catalog),
+                        SystemEntryPrepareCommand::WarmEntryPreludes(reply) => {
+                            let result = mister_magik_catalog::lazy_sharded_reader::LazyShardedCatalogReader::open(
+                                &mister_magik_catalog::catalog_config::default_sharded_catalog_path(),
+                                mister_magik_catalog::production_sharded_projection::production_registry_limits(),
+                            )
+                            .map_err(|error| error.to_string())
+                            .and_then(|reader| {
+                                reader.warm_entry_preludes().map_err(|error| error.to_string())
+                            });
+                            let _ = reply.send(result);
+                        }
                     }
                 }
             })
@@ -615,6 +631,23 @@ impl LauncherScheduler {
 
     pub(super) fn system_shard_attempted(&self, system_id: &str) -> bool {
         self.system_shard_attempted.contains(system_id)
+    }
+
+    pub(super) fn warm_entry_preludes_before_input(
+        &self,
+    ) -> Result<mister_magik_catalog::lazy_sharded_reader::EntryPreludeWarmupReport, String> {
+        let worker = self
+            .system_entry_prepare
+            .as_ref()
+            .ok_or_else(|| "system-entry prepare worker is unavailable".to_string())?;
+        let (reply_tx, reply_rx) = mpsc::sync_channel(1);
+        worker
+            .requests
+            .send(SystemEntryPrepareCommand::WarmEntryPreludes(reply_tx))
+            .map_err(|_| "system-entry prepare worker disconnected".to_string())?;
+        reply_rx
+            .recv_timeout(Duration::from_secs(5))
+            .map_err(|_| "system-entry prelude warmup timed out".to_string())?
     }
 
     pub(super) fn request_system_shard(
