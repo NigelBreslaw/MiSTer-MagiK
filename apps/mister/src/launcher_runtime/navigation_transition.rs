@@ -400,7 +400,12 @@ pub struct NavigationTransitionRuntime {
     enabled: bool,
     duration_override_us: Option<u64>,
     controller: NavigationTransitionController,
+    deferred_request: Option<NavigationTransitionRequest>,
+    deferred_capture_us: u64,
+    deferred_started_us: u64,
     pending_prepare_started: Option<Instant>,
+    pending_status_quiesce_us: u64,
+    pending_status_quiesce_timeout: bool,
     buffers: NavigationTransitionBuffers,
     logical_width: usize,
     logical_height: usize,
@@ -421,7 +426,12 @@ impl NavigationTransitionRuntime {
             enabled,
             duration_override_us: None,
             controller: NavigationTransitionController::default(),
+            deferred_request: None,
+            deferred_capture_us: 0,
+            deferred_started_us: 0,
             pending_prepare_started: None,
+            pending_status_quiesce_us: 0,
+            pending_status_quiesce_timeout: false,
             buffers: NavigationTransitionBuffers::new(buffer_width, buffer_height),
             logical_width: buffer_width,
             logical_height: buffer_height,
@@ -451,6 +461,7 @@ impl NavigationTransitionRuntime {
             return;
         }
         self.enabled = enabled;
+        self.deferred_request = None;
         self.controller = NavigationTransitionController::default();
         self.geometry_history.clear();
         self.route = None;
@@ -475,7 +486,7 @@ impl NavigationTransitionRuntime {
         if let Some(duration_us) = self.duration_override_us {
             request.duration_us = duration_us;
         }
-        let started = self.begin_request(request, source, now_us)?;
+        let started = self.begin_request(request, source, now_us, true)?;
         if started {
             self.route = Some(NavigationTransitionRoute::from_super_scaler_edge(edge));
         }
@@ -551,7 +562,7 @@ impl NavigationTransitionRuntime {
         if let Some(duration_us) = self.duration_override_us {
             request.duration_us = duration_us;
         }
-        self.begin_request(request, source, now_us)
+        self.begin_request(request, source, now_us, false)
     }
 
     fn begin_request(
@@ -559,6 +570,7 @@ impl NavigationTransitionRuntime {
         request: NavigationTransitionRequest,
         source: &[Rgb565Pixel],
         now_us: u64,
+        start_immediately: bool,
     ) -> Result<bool, NavigationTransitionFailure> {
         if !self.enabled || self.is_active() {
             return Ok(false);
@@ -568,11 +580,20 @@ impl NavigationTransitionRuntime {
         self.buffers
             .capture_source(slint_rgb565_as_shared(source))?;
         let capture_us = capture_started.elapsed().as_micros().min(u64::MAX as u128) as u64;
-        if !self.controller.begin(request, now_us) || !self.controller.captured(now_us, capture_us)
-        {
-            return Ok(false);
+        if start_immediately {
+            if !self.controller.begin(request, now_us)
+                || !self.controller.captured(now_us, capture_us)
+            {
+                return Ok(false);
+            }
+        } else {
+            self.deferred_request = Some(request);
+            self.deferred_capture_us = capture_us;
+            self.deferred_started_us = now_us;
         }
         self.pending_prepare_started = Some(Instant::now());
+        self.pending_status_quiesce_us = 0;
+        self.pending_status_quiesce_timeout = false;
         Ok(true)
     }
 
@@ -589,7 +610,7 @@ impl NavigationTransitionRuntime {
     pub fn capture_destination(
         &mut self,
         destination: &[Rgb565Pixel],
-        _now_us: u64,
+        now_us: u64,
     ) -> Result<(), NavigationTransitionFailure> {
         self.buffers
             .capture_destination(slint_rgb565_as_shared(destination))?;
@@ -598,11 +619,23 @@ impl NavigationTransitionRuntime {
             .take()
             .map(|started| started.elapsed().as_micros().min(u64::MAX as u128) as u64)
             .unwrap_or(0);
+        if self.deferred_request.is_some() {
+            self.activate_deferred(now_us);
+        }
         self.controller.note_destination_prepared(prepare_us);
         Ok(())
     }
 
     pub fn tick(&mut self, now_us: u64) -> NavigationTransitionFrame {
+        if let Some(request) = self.deferred_request {
+            if now_us.saturating_sub(self.deferred_started_us) >= request.preparation_timeout_us {
+                self.activate_deferred(now_us);
+                self.controller
+                    .fail(NavigationTransitionFailure::DestinationTimeout, now_us);
+                return self.controller.frame();
+            }
+            return self.frame();
+        }
         self.controller
             .tick(now_us, self.buffers.destination_ready())
     }
@@ -612,7 +645,15 @@ impl NavigationTransitionRuntime {
             return Err(NavigationTransitionFailure::SnapshotSizeMismatch);
         };
         let frame = self.frame();
-        let stats = render_navigation_transition(&mut self.buffers, request, frame)?;
+        let stats = if self.deferred_request.is_some() {
+            let copied_pixels = self.buffers.copy_source_to_working()?;
+            NavigationTransitionRenderStats {
+                copied_pixels: copied_pixels as u64,
+                ..NavigationTransitionRenderStats::default()
+            }
+        } else {
+            render_navigation_transition(&mut self.buffers, request, frame)?
+        };
         self.controller.telemetry.overlay_us = self
             .controller
             .telemetry
@@ -645,8 +686,20 @@ impl NavigationTransitionRuntime {
             return Err(NavigationTransitionFailure::SnapshotSizeMismatch);
         };
         let frame = self.frame();
-        let mut stats =
-            render_settings_page_transition_into(&self.buffers, request, frame, output)?;
+        let mut stats = if self.deferred_request.is_some() {
+            let source = self
+                .buffers
+                .source()
+                .filter(|source| source.len() == output.len())
+                .ok_or(NavigationTransitionFailure::SnapshotSizeMismatch)?;
+            output.copy_from_slice(source);
+            NavigationTransitionRenderStats {
+                copied_pixels: source.len() as u64,
+                ..NavigationTransitionRenderStats::default()
+            }
+        } else {
+            render_settings_page_transition_into(&self.buffers, request, frame, output)?
+        };
         stats.render_us = started.elapsed().as_micros().min(u64::MAX as u128) as u64;
         self.controller
             .telemetry_mut()
@@ -656,14 +709,23 @@ impl NavigationTransitionRuntime {
     }
 
     pub fn request_reverse(&mut self, now_us: u64) -> bool {
+        if self.deferred_request.is_some() {
+            self.activate_deferred(now_us);
+        }
         self.controller.request_reverse(now_us)
     }
 
     pub fn settle_at_destination(&mut self) -> bool {
+        if self.deferred_request.is_some() {
+            self.activate_deferred(self.deferred_started_us);
+        }
         self.controller.settle_at_destination()
     }
 
     pub fn cancel_for_exclusive_view(&mut self) -> Option<NavigationTransitionEndpoint> {
+        if self.deferred_request.is_some() {
+            self.activate_deferred(self.deferred_started_us);
+        }
         self.controller
             .cancel_for_exclusive_view(self.buffers.destination_ready())
     }
@@ -698,11 +760,18 @@ impl NavigationTransitionRuntime {
     }
 
     pub fn frame(&self) -> NavigationTransitionFrame {
+        if self.deferred_request.is_some() {
+            return NavigationTransitionFrame {
+                phase: NavigationTransitionPhase::Capture,
+                owns_full_frame: true,
+                ..NavigationTransitionFrame::default()
+            };
+        }
         self.controller.frame()
     }
 
     pub fn request(&self) -> Option<NavigationTransitionRequest> {
-        self.controller.request()
+        self.deferred_request.or_else(|| self.controller.request())
     }
 
     pub const fn route(&self) -> Option<NavigationTransitionRoute> {
@@ -710,7 +779,7 @@ impl NavigationTransitionRuntime {
     }
 
     pub const fn is_active(&self) -> bool {
-        self.controller.is_active()
+        self.deferred_request.is_some() || self.controller.is_active()
     }
 
     pub const fn destination_ready(&self) -> bool {
@@ -721,7 +790,7 @@ impl NavigationTransitionRuntime {
     /// Slint must retain its pending redraw without advancing or rasterizing until
     /// this playback settles.
     pub const fn snapshot_locked(&self) -> bool {
-        self.is_active() && self.buffers.destination_ready()
+        self.is_active() && self.deferred_request.is_none() && self.buffers.destination_ready()
     }
 
     pub const fn settings_physical_space(&self) -> bool {
@@ -741,13 +810,32 @@ impl NavigationTransitionRuntime {
     }
 
     pub fn note_pending_status_quiesce(&mut self, wait_us: u64, timed_out: bool) {
-        let telemetry = self.controller.telemetry_mut();
-        telemetry.status_quiesce_wait_us = wait_us;
-        telemetry.status_quiesce_timeout = timed_out;
+        self.pending_status_quiesce_us = wait_us;
+        self.pending_status_quiesce_timeout = timed_out;
+        if self.deferred_request.is_none() {
+            let telemetry = self.controller.telemetry_mut();
+            telemetry.status_quiesce_wait_us = wait_us;
+            telemetry.status_quiesce_timeout = timed_out;
+        }
     }
 
     pub const fn telemetry(&self) -> NavigationTransitionTelemetry {
         self.controller.telemetry()
+    }
+
+    fn activate_deferred(&mut self, now_us: u64) -> bool {
+        let Some(request) = self.deferred_request.take() else {
+            return false;
+        };
+        if !self.controller.begin(request, now_us)
+            || !self.controller.captured(now_us, self.deferred_capture_us)
+        {
+            return false;
+        }
+        let telemetry = self.controller.telemetry_mut();
+        telemetry.status_quiesce_wait_us = self.pending_status_quiesce_us;
+        telemetry.status_quiesce_timeout = self.pending_status_quiesce_timeout;
+        true
     }
 }
 
@@ -1578,6 +1666,31 @@ mod tests {
         assert_eq!(
             (runtime.buffers.width(), runtime.buffers.height()),
             (16, 12)
+        );
+    }
+
+    #[test]
+    fn settings_transition_waits_for_destination_before_animation() {
+        let mut runtime = NavigationTransitionRuntime::new(16, 12, true);
+        let source = vec![Rgb565Pixel(0x1111); 16 * 12];
+        let destination = vec![Rgb565Pixel(0x2222); 16 * 12];
+        runtime
+            .begin_settings_page(
+                NavigationTransitionRoute::HomeToSettings,
+                NavigationTransitionDirection::Forward,
+                &source,
+                0,
+            )
+            .unwrap();
+
+        assert_eq!(
+            runtime.tick(100_000).phase,
+            NavigationTransitionPhase::Capture
+        );
+        runtime.capture_destination(&destination, 100_000).unwrap();
+        assert_eq!(
+            runtime.tick(100_000).phase,
+            NavigationTransitionPhase::Expand
         );
     }
 
