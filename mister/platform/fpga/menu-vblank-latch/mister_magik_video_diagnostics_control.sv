@@ -170,7 +170,8 @@ module mister_magik_video_diagnostics_control #(
 	integer capture_index;
 
 	reg [15:0] tx_crc = 16'hffff;
-	reg [7:0] tx_command = 8'd0;
+	reg [15:0] tx_crc_word = 16'd0;
+	reg tx_crc_pending = 1'b0;
 	reg freeze_request_now;
 	reg [7:0] freeze_request_trigger;
 	reg [7:0] freeze_request_flags;
@@ -334,7 +335,9 @@ module mister_magik_video_diagnostics_control #(
 			endcase
 		end
 		else if(command_data && diagnostic_command) begin
-			if(word_count == (response_words - 1'd1)) response_data = tx_crc;
+			if(word_count == (response_words - 1'd1))
+				response_data = tx_crc_pending ?
+					crc_update_word(tx_crc, tx_crc_word) : tx_crc;
 			else response_data = current_snapshot_word;
 		end
 	end
@@ -356,6 +359,10 @@ module mister_magik_video_diagnostics_control #(
 		freeze_request_now = 1'b0;
 		freeze_request_trigger = MAGIK_VIDEO_DIAGNOSTICS_TRIGGER_NONE;
 		freeze_request_flags = 8'd0;
+		if(tx_crc_pending) begin
+			tx_crc <= crc_update_word(tx_crc, tx_crc_word);
+			tx_crc_pending <= 1'b0;
+		end
 		vbl_d <= control_vbl_sys;
 		avalon_fault_meta <= avalon_fault_toggle_async;
 		avalon_fault_sys <= avalon_fault_meta;
@@ -440,8 +447,8 @@ module mister_magik_video_diagnostics_control #(
 			if((io_din[7:0] == MAGIK_UIO_GET_VIDEO_DIAGNOSTICS_CONTROL) ||
 			   (io_din[7:0] == MAGIK_UIO_GET_VIDEO_DIAGNOSTICS_AVALON) ||
 			   (io_din[7:0] == MAGIK_UIO_GET_VIDEO_DIAGNOSTICS_OUTPUT)) begin
-				tx_command <= io_din[7:0];
 				tx_crc <= crc_header(io_din[7:0], response_words - 1'd1);
+				tx_crc_pending <= 1'b0;
 			end
 		end
 		else if(command_data) begin
@@ -463,9 +470,10 @@ module mister_magik_video_diagnostics_control #(
 				legacy_mask[word_count] <= 1'b1;
 				ownership <= 1'b0;
 			end
-			if((command == tx_command) && diagnostic_command &&
-			   (word_count < (response_words - 1'd1)))
-				tx_crc <= crc_update_word(tx_crc, current_snapshot_word);
+			if(diagnostic_command && (word_count < (response_words - 1'd1))) begin
+				tx_crc_word <= current_snapshot_word;
+				tx_crc_pending <= 1'b1;
+			end
 		end
 
 		if(!io_uio && has_command) begin
