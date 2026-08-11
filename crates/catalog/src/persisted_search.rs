@@ -740,6 +740,7 @@ mod tests {
                         sqlite_hash: String::new(),
                         navigation_hash: String::new(),
                         games: 2,
+                        navpack: None,
                     },
                     previous: None,
                 }],

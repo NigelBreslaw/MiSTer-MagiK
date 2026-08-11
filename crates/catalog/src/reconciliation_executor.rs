@@ -555,7 +555,10 @@ fn saved_system_matches(
 
 fn remove_saved_system_artifacts(storage_root: &Path, saved: &ManifestSystem) {
     let expected = PathBuf::from("systems").join(saved.system_id.as_str());
-    for path in [&saved.active.sqlite_path, &saved.active.navigation_path] {
+    for path in [&saved.active.sqlite_path, &saved.active.navigation_path]
+        .into_iter()
+        .chain(saved.active.navpack.iter().map(|navpack| &navpack.path))
+    {
         if path.parent() == Some(expected.as_path()) {
             let _ = fs::remove_file(storage_root.join(path));
         }

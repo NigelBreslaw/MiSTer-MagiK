@@ -202,6 +202,15 @@ pub fn write_system_shard(
     )
 }
 
+pub fn navpack_path_for_navigation(navigation_path: &Path) -> std::path::PathBuf {
+    let filename = navigation_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("navigation.nav.lz4b");
+    let stem = filename.strip_suffix(".nav.lz4b").unwrap_or(filename);
+    navigation_path.with_file_name(format!("{stem}.navpack"))
+}
+
 #[cfg(feature = "builder")]
 pub(crate) fn write_system_shard_with_durability(
     sqlite_path: &Path,
@@ -224,11 +233,19 @@ pub(crate) fn write_system_shard_with_durability(
         encode_navigation(&stored, limits)?
     };
     let navigation_hash = checksum_hex(&navigation);
+    let navpack = crate::navpack::encode(
+        data.system_id.as_str(),
+        data.generation,
+        &data.games,
+        &navigation_indexes,
+    )
+    .map_err(|error| SystemShardError::new("write NavPack", error))?;
+    let navpack_path = navpack_path_for_navigation(navigation_path);
     let preview_archive_default = common_preview_archive_path(&data.games);
     drop(navigation_pmu);
     create_parent(sqlite_path)?;
     create_parent(navigation_path)?;
-    if sqlite_path.exists() || navigation_path.exists() {
+    if sqlite_path.exists() || navigation_path.exists() || navpack_path.exists() {
         return Err(SystemShardError::new(
             "write",
             "staging artifact already exists",
@@ -402,6 +419,8 @@ pub(crate) fn write_system_shard_with_durability(
     drop(connection);
     fs::write(navigation_path, &navigation)
         .map_err(|error| SystemShardError::with("write adjacent navigation", error))?;
+    fs::write(&navpack_path, &navpack)
+        .map_err(|error| SystemShardError::with("write adjacent NavPack", error))?;
     if durability == ShardDurability::Immediate {
         fs::File::open(sqlite_path)
             .and_then(|file| file.sync_all())
@@ -409,6 +428,9 @@ pub(crate) fn write_system_shard_with_durability(
         fs::File::open(navigation_path)
             .and_then(|file| file.sync_all())
             .map_err(|error| SystemShardError::with("sync shard navigation", error))?;
+        fs::File::open(&navpack_path)
+            .and_then(|file| file.sync_all())
+            .map_err(|error| SystemShardError::with("sync shard NavPack", error))?;
     }
     drop(commit_pmu);
     let system_id = data.system_id.clone();
@@ -815,7 +837,7 @@ fn validate_loaded_game_shapes(
     Ok(())
 }
 
-fn build_navigation_indexes(
+pub(crate) fn build_navigation_indexes(
     games: &[SystemGame],
 ) -> Result<SystemNavigationIndexes, SystemShardError> {
     let ordinal = |index: usize| {

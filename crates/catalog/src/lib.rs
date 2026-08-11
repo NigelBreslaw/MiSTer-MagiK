@@ -54,6 +54,7 @@ mod media_metadata;
 #[cfg(feature = "builder")]
 pub mod multi_system_projection;
 mod namespace_walk;
+pub mod navpack;
 pub mod persisted_search;
 #[cfg(feature = "builder")]
 pub mod portable_catalog_builder;

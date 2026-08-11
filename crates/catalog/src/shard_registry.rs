@@ -76,6 +76,14 @@ pub struct PublishedGeneration {
     pub sqlite_hash: String,
     pub navigation_hash: String,
     pub games: u64,
+    pub navpack: Option<PublishedNavPack>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct PublishedNavPack {
+    pub path: PathBuf,
+    pub bytes: u64,
+    pub hash: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -109,6 +117,15 @@ struct StoredGeneration {
     sqlite_hash: String,
     navigation_hash: String,
     games: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    navpack: Option<StoredNavPack>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+struct StoredNavPack {
+    path: String,
+    bytes: u64,
+    hash: String,
 }
 
 #[cfg(feature = "builder")]
@@ -157,9 +174,11 @@ fn publish_system_artifacts_with_options(
     sync_target_directory: bool,
     copy_staged: bool,
 ) -> Result<ArtifactPublication, RegistryError> {
+    let staged_navpack = crate::system_shard::navpack_path_for_navigation(staged_navigation);
     if !copy_staged {
         ensure_staging_path(storage_root, staged_sqlite)?;
         ensure_staging_path(storage_root, staged_navigation)?;
+        ensure_staging_path(storage_root, &staged_navpack)?;
     }
     if validate_staged {
         open_system_shard(
@@ -170,13 +189,25 @@ fn publish_system_artifacts_with_options(
             limits.shard,
         )
         .map_err(|error| RegistryError::new("validate-staged", error.to_string()))?;
+        let navpack = fs::read(&staged_navpack)
+            .map_err(|error| RegistryError::with("read staged NavPack", error))?;
+        crate::navpack::validate(
+            &navpack,
+            system_id.as_str(),
+            generation,
+            usize::try_from(games)
+                .map_err(|_| RegistryError::new("validate-staged", "game count too large"))?,
+        )
+        .map_err(|error| RegistryError::new("validate-staged", error))?;
     }
     let relative_directory = PathBuf::from("systems").join(system_id.as_str());
     let sqlite_path = relative_directory.join(format!("{generation}.sqlite3"));
     let navigation_path = relative_directory.join(format!("{generation}.nav.lz4b"));
+    let navpack_path = relative_directory.join(format!("{generation}.navpack"));
     let target_sqlite = storage_root.join(&sqlite_path);
     let target_navigation = storage_root.join(&navigation_path);
-    if target_sqlite.exists() || target_navigation.exists() {
+    let target_navpack = storage_root.join(&navpack_path);
+    if target_sqlite.exists() || target_navigation.exists() || target_navpack.exists() {
         return Err(RegistryError::new(
             "publish-artifact",
             "immutable generation artifact already exists",
@@ -187,12 +218,14 @@ fn publish_system_artifacts_with_options(
         staged_navigation,
         limits.shard.max_navigation_compressed_bytes as u64,
     )?;
+    let navpack_bytes = regular_file_size(&staged_navpack, limits.shard.max_sqlite_bytes)?;
     let target_directory = target_sqlite
         .parent()
         .ok_or_else(|| RegistryError::new("publish-artifact", "target has no parent"))?;
     fs::create_dir_all(target_directory)
         .map_err(|error| RegistryError::with("create system generation directory", error))?;
-    let (sqlite_hash, navigation_hash, copy_hash_time, copied_bytes) = if copy_staged {
+    let (sqlite_hash, navigation_hash, navpack_hash, copy_hash_time, copied_bytes) = if copy_staged
+    {
         let copied = (|| {
             let sqlite =
                 copy_staged_artifact(staged_sqlite, &target_sqlite, "SQLite", sqlite_bytes)?;
@@ -202,11 +235,17 @@ fn publish_system_artifacts_with_options(
                 "navigation",
                 navigation_bytes,
             )?;
+            let navpack =
+                copy_staged_artifact(&staged_navpack, &target_navpack, "NavPack", navpack_bytes)?;
             Ok((
                 sqlite.hash,
                 navigation.hash,
-                sqlite.copy_hash_time + navigation.copy_hash_time,
-                sqlite.bytes.saturating_add(navigation.bytes),
+                navpack.hash,
+                sqlite.copy_hash_time + navigation.copy_hash_time + navpack.copy_hash_time,
+                sqlite
+                    .bytes
+                    .saturating_add(navigation.bytes)
+                    .saturating_add(navpack.bytes),
             ))
         })();
         match copied {
@@ -214,17 +253,27 @@ fn publish_system_artifacts_with_options(
             Err(error) => {
                 let _ = fs::remove_file(&target_sqlite);
                 let _ = fs::remove_file(&target_navigation);
+                let _ = fs::remove_file(&target_navpack);
                 return Err(error);
             }
         }
     } else {
         let sqlite_hash = file_checksum(staged_sqlite)?;
         let navigation_hash = file_checksum(staged_navigation)?;
+        let navpack_hash = file_checksum(&staged_navpack)?;
         fs::rename(staged_sqlite, &target_sqlite)
             .map_err(|error| RegistryError::with("publish immutable SQLite", error))?;
         fs::rename(staged_navigation, &target_navigation)
             .map_err(|error| RegistryError::with("publish immutable navigation", error))?;
-        (sqlite_hash, navigation_hash, Duration::ZERO, 0)
+        fs::rename(&staged_navpack, &target_navpack)
+            .map_err(|error| RegistryError::with("publish immutable NavPack", error))?;
+        (
+            sqlite_hash,
+            navigation_hash,
+            navpack_hash,
+            Duration::ZERO,
+            0,
+        )
     };
     if sync_target_directory {
         sync_directory(target_directory)?;
@@ -239,6 +288,11 @@ fn publish_system_artifacts_with_options(
             sqlite_hash,
             navigation_hash,
             games,
+            navpack: Some(PublishedNavPack {
+                path: navpack_path,
+                bytes: navpack_bytes,
+                hash: navpack_hash,
+            }),
         },
         copy_hash_time,
         copied_bytes,
@@ -610,6 +664,18 @@ pub(crate) fn validate_published_system(
         limits.shard,
     )
     .map_err(|error| RegistryError::new("validate-manifest", error.to_string()))?;
+    if let Some(navpack) = &system.active.navpack {
+        let bytes = fs::read(storage_root.join(&navpack.path))
+            .map_err(|error| RegistryError::with("read NavPack", error))?;
+        crate::navpack::validate(
+            &bytes,
+            system.system_id.as_str(),
+            system.active.generation,
+            usize::try_from(system.active.games)
+                .map_err(|_| RegistryError::new("validate-manifest", "game count too large"))?,
+        )
+        .map_err(|error| RegistryError::new("validate-manifest", error))?;
+    }
     if let Some(previous) = &system.previous {
         crate::system_shard::open_verified_system_navigation_with_compatibility_and_timing(
             &storage_root.join(&previous.navigation_path),
@@ -636,10 +702,17 @@ fn validate_generation(
     let expected_sqlite = expected_directory.join(format!("{}.sqlite3", generation.generation));
     let expected_navigation =
         expected_directory.join(format!("{}.nav.lz4b", generation.generation));
+    let expected_navpack = expected_directory.join(format!("{}.navpack", generation.generation));
     if generation.sqlite_path != expected_sqlite
         || generation.navigation_path != expected_navigation
         || !safe_relative_path(&generation.sqlite_path)
         || !safe_relative_path(&generation.navigation_path)
+        || generation.navpack.as_ref().is_some_and(|navpack| {
+            navpack.path != expected_navpack
+                || !safe_relative_path(&navpack.path)
+                || navpack.bytes > limits.shard.max_sqlite_bytes
+                || !valid_hash(&navpack.hash)
+        })
     {
         return Err(RegistryError::new(
             "validate-manifest",
@@ -662,6 +735,10 @@ fn validate_generation(
     }
     let sqlite = storage_root.join(&generation.sqlite_path);
     let navigation = storage_root.join(&generation.navigation_path);
+    let navpack = generation
+        .navpack
+        .as_ref()
+        .map(|published| (storage_root.join(&published.path), published));
     if regular_file_size(&sqlite, limits.shard.max_sqlite_bytes)? != generation.sqlite_bytes
         || regular_file_size(
             &navigation,
@@ -673,6 +750,14 @@ fn validate_generation(
             "manifest artifact size does not match file",
         ));
     }
+    if let Some((path, published)) = &navpack {
+        if regular_file_size(path, limits.shard.max_sqlite_bytes)? != published.bytes {
+            return Err(RegistryError::new(
+                "validate-manifest",
+                "manifest NavPack size does not match file",
+            ));
+        }
+    }
     if verify_hashes
         && (file_checksum(&sqlite)? != generation.sqlite_hash
             || file_checksum(&navigation)? != generation.navigation_hash)
@@ -681,6 +766,16 @@ fn validate_generation(
             "validate-manifest",
             "manifest artifact hash does not match file",
         ));
+    }
+    if verify_hashes {
+        if let Some((path, published)) = &navpack {
+            if file_checksum(path)? != published.hash {
+                return Err(RegistryError::new(
+                    "validate-manifest",
+                    "manifest NavPack hash does not match file",
+                ));
+            }
+        }
     }
     Ok(())
 }
@@ -723,6 +818,11 @@ fn generation_to_stored(generation: &PublishedGeneration) -> StoredGeneration {
         sqlite_hash: generation.sqlite_hash.clone(),
         navigation_hash: generation.navigation_hash.clone(),
         games: generation.games,
+        navpack: generation.navpack.as_ref().map(|navpack| StoredNavPack {
+            path: path_string(&navpack.path),
+            bytes: navpack.bytes,
+            hash: navpack.hash.clone(),
+        }),
     }
 }
 
@@ -774,6 +874,11 @@ fn generation_from_stored(generation: StoredGeneration) -> PublishedGeneration {
         sqlite_hash: generation.sqlite_hash,
         navigation_hash: generation.navigation_hash,
         games: generation.games,
+        navpack: generation.navpack.map(|navpack| PublishedNavPack {
+            path: PathBuf::from(navpack.path),
+            bytes: navpack.bytes,
+            hash: navpack.hash,
+        }),
     }
 }
 
@@ -798,10 +903,17 @@ pub(crate) fn garbage_collect_unreferenced_with_retained(
             std::iter::once(&system.active)
                 .chain(system.previous.iter())
                 .flat_map(|generation| {
-                    [
+                    let mut paths = vec![
                         generation.sqlite_path.clone(),
                         generation.navigation_path.clone(),
-                    ]
+                    ];
+                    paths.extend(
+                        generation
+                            .navpack
+                            .iter()
+                            .map(|navpack| navpack.path.clone()),
+                    );
+                    paths
                 })
         })
         .collect::<BTreeSet<_>>();
@@ -1175,6 +1287,7 @@ mod tests {
                     sqlite_hash: "0000000000000000".to_string(),
                     navigation_hash: "0000000000000000".to_string(),
                     games: 1,
+                    navpack: None,
                 },
                 previous: None,
             }],
