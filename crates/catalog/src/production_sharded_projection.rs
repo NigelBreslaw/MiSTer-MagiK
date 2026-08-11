@@ -243,6 +243,43 @@ fn publish_production_projection_with_options(
     let current_generation = current_manifest
         .as_ref()
         .map(|manifest| manifest.generation);
+    let format_rebuild_required = match current_manifest
+        .as_ref()
+        .and_then(|manifest| manifest.format.as_ref())
+    {
+        None => current_manifest.is_some(),
+        Some(format) => match crate::catalog_format::classify(format) {
+            CatalogFormatStatus::Current => false,
+            CatalogFormatStatus::UpgradeRequired { .. } => true,
+            CatalogFormatStatus::UnsupportedFuture {
+                installed,
+                required,
+            } => {
+                return Err(ReconciliationError::new(
+                    "projection",
+                    format!(
+                        "unsupported future catalog format: installed {}, required {}",
+                        installed.label(),
+                        required.label()
+                    ),
+                ));
+            }
+            CatalogFormatStatus::Corrupt {
+                installed,
+                required,
+            } => {
+                return Err(ReconciliationError::new(
+                    "projection",
+                    format!(
+                        "incoherent catalog format: installed {}, required {}",
+                        installed.label(),
+                        required.label()
+                    ),
+                ));
+            }
+        },
+    };
+    let force_all_systems = force_all_systems || format_rebuild_required;
     let systems = catalog
         .systems
         .iter()
@@ -813,6 +850,40 @@ mod tests {
                 .map(|system_id| system_id.as_str())
                 .collect::<Vec<_>>(),
             vec!["c64", "snes"]
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn format_upgrade_republishes_every_system_even_when_rows_match() {
+        let root = std::env::temp_dir().join(format!(
+            "mister-magik-production-projection-format-upgrade-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        let catalog = two_system_catalog("Super Game");
+        publish_production_projection(&root, &catalog, limits()).unwrap();
+        let manifest_path = root.join("registry/manifest-a.json");
+        let mut manifest: serde_json::Value =
+            serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
+        manifest["format"] = serde_json::to_value(
+            crate::catalog_format::CatalogFormatDescriptor::entry_prelude_predecessor(),
+        )
+        .unwrap();
+        fs::write(
+            &manifest_path,
+            serde_json::to_vec_pretty(&manifest).unwrap(),
+        )
+        .unwrap();
+
+        let outcome = publish_production_projection(&root, &catalog, limits()).unwrap();
+        let upgraded = read_latest_manifest(&root, limits()).unwrap();
+
+        assert_eq!(outcome.generation, 2);
+        assert_eq!(outcome.rebuilt_systems, 2);
+        assert_eq!(
+            upgraded.format,
+            Some(crate::catalog_format::CatalogFormatDescriptor::current())
         );
         let _ = fs::remove_dir_all(root);
     }
