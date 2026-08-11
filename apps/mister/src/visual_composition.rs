@@ -232,38 +232,33 @@ pub fn compose_preview_frame(
             pixels,
             stride_pixels,
         } => {
-            blit_rgb565_preview(
-                destination,
-                surface,
-                rect,
-                image_x,
-                image_y,
-                frame,
-                pixels,
-                stride_pixels,
-            )?;
+            for y in rect.y0..rect.y1 {
+                let source_y = ((y as isize - image_y).max(0) as usize * frame.source_height
+                    / frame.display_height)
+                    .min(frame.source_height - 1);
+                for x in rect.x0..rect.x1 {
+                    let source_x = ((x as isize - image_x).max(0) as usize * frame.source_width
+                        / frame.display_width)
+                        .min(frame.source_width - 1);
+                    let source_index = source_y * stride_pixels + source_x;
+                    if let Some(pixel) = pixels.get(source_index) {
+                        destination[surface.row_start(y, x)] = *pixel;
+                    }
+                }
+            }
         }
         PreviewPixels::Rgb8(pixels) => {
-            let source_x = scaled_axis_map(
-                rect.x0,
-                rect.x1,
-                image_x,
-                frame.source_width,
-                frame.display_width,
-            );
-            let source_y = scaled_axis_map(
-                rect.y0,
-                rect.y1,
-                image_y,
-                frame.source_height,
-                frame.display_height,
-            );
             for y in rect.y0..rect.y1 {
-                let source_y = source_y[y - rect.y0];
-                for (destination_x, source_x) in (rect.x0..rect.x1).zip(source_x.iter().copied()) {
+                let source_y = ((y as isize - image_y).max(0) as usize * frame.source_height
+                    / frame.display_height)
+                    .min(frame.source_height - 1);
+                for x in rect.x0..rect.x1 {
+                    let source_x = ((x as isize - image_x).max(0) as usize * frame.source_width
+                        / frame.display_width)
+                        .min(frame.source_width - 1);
                     let source_index = (source_y * frame.source_width + source_x) * 3;
                     if let Some(rgb) = pixels.get(source_index..source_index + 3) {
-                        destination[surface.row_start(y, destination_x)] =
+                        destination[surface.row_start(y, x)] =
                             rgb888_to_rgb565(rgb[0], rgb[1], rgb[2]);
                     }
                 }
@@ -271,101 +266,6 @@ pub fn compose_preview_frame(
         }
     }
     Some(if clear_screen { screen } else { rect })
-}
-
-#[allow(clippy::too_many_arguments)]
-fn blit_rgb565_preview(
-    destination: &mut [Rgb565Pixel],
-    surface: PreviewSurface,
-    rect: DirtyRect,
-    image_x: isize,
-    image_y: isize,
-    frame: PreviewFrame<'_>,
-    pixels: &[Rgb565Pixel],
-    stride_pixels: usize,
-) -> Option<()> {
-    let local_x0 = usize::try_from(rect.x0 as isize - image_x).ok()?;
-    let local_y0 = usize::try_from(rect.y0 as isize - image_y).ok()?;
-    let width = rect.width();
-
-    if frame.display_width == frame.source_width && frame.display_height == frame.source_height {
-        for (row, y) in (rect.y0..rect.y1).enumerate() {
-            let source_start = (local_y0 + row)
-                .checked_mul(stride_pixels)?
-                .checked_add(local_x0)?;
-            let source = pixels.get(source_start..source_start + width)?;
-            let destination_start = surface.row_start(y, rect.x0);
-            destination
-                .get_mut(destination_start..destination_start + width)?
-                .copy_from_slice(source);
-        }
-        return Some(());
-    }
-
-    if frame.display_width % frame.source_width == 0
-        && frame.display_height % frame.source_height == 0
-    {
-        let scale_x = frame.display_width / frame.source_width;
-        let scale_y = frame.display_height / frame.source_height;
-        for (row, y) in (rect.y0..rect.y1).enumerate() {
-            let source_y = ((local_y0 + row) / scale_y).min(frame.source_height - 1);
-            let source_row = pixels
-                .get(source_y * stride_pixels..source_y * stride_pixels + frame.source_width)?;
-            let destination_start = surface.row_start(y, rect.x0);
-            let destination_row =
-                destination.get_mut(destination_start..destination_start + width)?;
-            let mut output_x = 0;
-            while output_x < width {
-                let scaled_x = local_x0 + output_x;
-                let source_x = (scaled_x / scale_x).min(frame.source_width - 1);
-                let run = (scale_x - scaled_x % scale_x).min(width - output_x);
-                destination_row[output_x..output_x + run].fill(source_row[source_x]);
-                output_x += run;
-            }
-        }
-        return Some(());
-    }
-
-    let source_x = scaled_axis_map(
-        rect.x0,
-        rect.x1,
-        image_x,
-        frame.source_width,
-        frame.display_width,
-    );
-    let source_y = scaled_axis_map(
-        rect.y0,
-        rect.y1,
-        image_y,
-        frame.source_height,
-        frame.display_height,
-    );
-    for (row, y) in (rect.y0..rect.y1).enumerate() {
-        let source_row = source_y[row] * stride_pixels;
-        let destination_start = surface.row_start(y, rect.x0);
-        let destination_row = destination.get_mut(destination_start..destination_start + width)?;
-        for (destination_pixel, source_x) in
-            destination_row.iter_mut().zip(source_x.iter().copied())
-        {
-            *destination_pixel = pixels[source_row + source_x];
-        }
-    }
-    Some(())
-}
-
-fn scaled_axis_map(
-    destination_start: usize,
-    destination_end: usize,
-    image_origin: isize,
-    source_extent: usize,
-    display_extent: usize,
-) -> Vec<usize> {
-    (destination_start..destination_end)
-        .map(|coordinate| {
-            ((coordinate as isize - image_origin).max(0) as usize * source_extent / display_extent)
-                .min(source_extent - 1)
-        })
-        .collect()
 }
 
 #[derive(Clone)]
@@ -652,9 +552,9 @@ fn clear_rect(
     surface: PreviewSurface,
 ) {
     for y in rect.y0..rect.y1.min(frame_height) {
-        let x1 = rect.x1.min(frame_width);
-        let start = surface.row_start(y, rect.x0);
-        destination[start..start + x1.saturating_sub(rect.x0)].fill(Rgb565Pixel(0));
+        for x in rect.x0..rect.x1.min(frame_width) {
+            destination[surface.row_start(y, x)] = Rgb565Pixel(0);
+        }
     }
 }
 
@@ -667,104 +567,6 @@ fn rgb888_to_rgb565(red: u8, green: u8, blue: u8) -> Rgb565Pixel {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[allow(clippy::too_many_arguments)]
-    fn compose_rgb565_scalar_reference(
-        destination: &mut [Rgb565Pixel],
-        frame_width: usize,
-        frame_height: usize,
-        screen: DirtyRect,
-        frame: PreviewFrame<'_>,
-        clear_screen: bool,
-        surface: PreviewSurface,
-    ) -> Option<DirtyRect> {
-        let PreviewPixels::Rgb565 {
-            pixels,
-            stride_pixels,
-        } = frame.pixels
-        else {
-            return None;
-        };
-        if frame.source_width == 0
-            || frame.source_height == 0
-            || frame.display_width == 0
-            || frame.display_height == 0
-        {
-            return None;
-        }
-        let image_x =
-            screen.x0 as isize + (screen.width() as isize - frame.display_width as isize) / 2;
-        let image_y =
-            screen.y0 as isize + (screen.height() as isize - frame.display_height as isize) / 2;
-        let rect = DirtyRect {
-            x0: image_x.max(screen.x0 as isize).max(0) as usize,
-            y0: image_y.max(screen.y0 as isize).max(0) as usize,
-            x1: (image_x + frame.display_width as isize)
-                .min(screen.x1 as isize)
-                .min(frame_width as isize)
-                .max(0) as usize,
-            y1: (image_y + frame.display_height as isize)
-                .min(screen.y1 as isize)
-                .min(frame_height as isize)
-                .max(0) as usize,
-        };
-        if rect.x0 >= rect.x1 || rect.y0 >= rect.y1 {
-            return None;
-        }
-        if clear_screen {
-            clear_rect(destination, screen, frame_width, frame_height, surface);
-        }
-        for y in rect.y0..rect.y1 {
-            let source_y = ((y as isize - image_y).max(0) as usize * frame.source_height
-                / frame.display_height)
-                .min(frame.source_height - 1);
-            for x in rect.x0..rect.x1 {
-                let source_x = ((x as isize - image_x).max(0) as usize * frame.source_width
-                    / frame.display_width)
-                    .min(frame.source_width - 1);
-                destination[surface.row_start(y, x)] = pixels[source_y * stride_pixels + source_x];
-            }
-        }
-        Some(if clear_screen { screen } else { rect })
-    }
-
-    fn assert_rgb565_scaler_matches_scalar(
-        source_width: usize,
-        source_height: usize,
-        display_width: usize,
-        display_height: usize,
-        screen: DirtyRect,
-    ) {
-        let stride_pixels = source_width + 2;
-        let source = (0..stride_pixels * source_height)
-            .map(|index| Rgb565Pixel(index as u16 * 37 + 1))
-            .collect::<Vec<_>>();
-        let frame = PreviewFrame {
-            pixels: PreviewPixels::Rgb565 {
-                pixels: &source,
-                stride_pixels,
-            },
-            source_width,
-            source_height,
-            display_width,
-            display_height,
-        };
-        let surface = PreviewSurface {
-            x: 2,
-            y: 1,
-            stride: 11,
-        };
-        let mut optimized = vec![Rgb565Pixel(0xa55a); surface.stride * 8];
-        let mut scalar = optimized.clone();
-
-        let optimized_rect =
-            compose_preview_frame(&mut optimized, 13, 9, screen, frame, true, surface);
-        let scalar_rect =
-            compose_rgb565_scalar_reference(&mut scalar, 13, 9, screen, frame, true, surface);
-
-        assert_eq!(optimized_rect, scalar_rect);
-        assert_eq!(optimized, scalar);
-    }
 
     #[test]
     fn hdmi_preview_is_centered_in_visible_black_area() {
@@ -819,31 +621,6 @@ mod tests {
         assert_eq!(destination[3], source[1]);
         assert_eq!(destination[12], source[2]);
         assert_eq!(destination[15], source[3]);
-    }
-
-    #[test]
-    fn optimized_rgb565_paths_match_scalar_reference() {
-        let screen = DirtyRect {
-            x0: 2,
-            y0: 1,
-            x1: 12,
-            y1: 9,
-        };
-        for (source_width, source_height, display_width, display_height) in [
-            (5, 4, 5, 4),
-            (3, 2, 6, 4),
-            (3, 2, 7, 5),
-            (7, 5, 4, 3),
-            (12, 8, 12, 8),
-        ] {
-            assert_rgb565_scaler_matches_scalar(
-                source_width,
-                source_height,
-                display_width,
-                display_height,
-                screen,
-            );
-        }
     }
 
     #[test]
