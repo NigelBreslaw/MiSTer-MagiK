@@ -3123,13 +3123,13 @@ mod linux {
                     contract::VideoDiagnosticsState::Frozen
                 ) && matches!(self.avalon.state, contract::VideoDiagnosticsState::Frozen)
                     && matches!(self.output.state, contract::VideoDiagnosticsState::Frozen);
-            let mailbox_overrun = [
-                &self.control_after.words,
-                &self.avalon.words,
-                &self.output.words,
-            ]
-            .iter()
-            .any(|words| words[1] & contract::VIDEO_DIAGNOSTICS_STATE_FLAGS_MAILBOX_OVERRUN != 0);
+            let mailbox_overrun = self.control_after.words[1]
+                & contract::VIDEO_DIAGNOSTICS_STATE_FLAGS_MAILBOX_OVERRUN
+                != 0
+                || self.avalon.words[1] & contract::VIDEO_DIAGNOSTICS_STATE_FLAGS_MAILBOX_OVERRUN
+                    != 0
+                || self.output.words[1] & contract::VIDEO_DIAGNOSTICS_STATE_FLAGS_MAILBOX_OVERRUN
+                    != 0;
             let (ownership_changed, ownership_unverified) = video_diagnostics_ownership_state(
                 owner_epoch_before,
                 owner_epoch_after,
@@ -3215,7 +3215,7 @@ mod linux {
                     "legacy_word_mask": self.control_after.words
                         [contract::VIDEO_DIAGNOSTICS_CONTROL_LEGACY_MASK_DISPOSITION]
                         & 0x03ff,
-                    "raw_words": self.control_after.words,
+                    "raw_words": self.control_after.words.as_slice(),
                 },
                 "avalon": {
                     "state": video_diagnostics_state_name(self.avalon.state),
@@ -3228,7 +3228,7 @@ mod linux {
                     "accepted_bursts": self.avalon.words[contract::VIDEO_DIAGNOSTICS_AVALON_ACCEPTED_BURSTS],
                     "expected_beats": u32::from(self.avalon.words[contract::VIDEO_DIAGNOSTICS_AVALON_ACCEPTED_BURSTS]) * 128,
                     "returned_beats": self.avalon.words[contract::VIDEO_DIAGNOSTICS_AVALON_RETURNED_BEATS],
-                    "raw_words": self.avalon.words,
+                    "raw_words": self.avalon.words.as_slice(),
                 },
                 "output": {
                     "state": video_diagnostics_state_name(self.output.state),
@@ -3240,7 +3240,7 @@ mod linux {
                     "control_flags": self.output.words[contract::VIDEO_DIAGNOSTICS_OUTPUT_CONTROL_FLAGS],
                     "fault_flags": self.output.words[contract::VIDEO_DIAGNOSTICS_OUTPUT_FAULT_SUMMARY] & 0x00ff,
                     "geometry_faults": (self.output.words[contract::VIDEO_DIAGNOSTICS_OUTPUT_FAULT_SUMMARY] >> 8) & 0x0007,
-                    "raw_words": self.output.words,
+                    "raw_words": self.output.words.as_slice(),
                 },
             })
         }
