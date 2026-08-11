@@ -78,8 +78,6 @@ module mister_magik_video_diagnostics_output (
 	reg [7:0] freeze_request_trigger;
 	reg [7:0] freeze_request_flags;
 	reg [2:0] freeze_request_geometry;
-	reg [2:0] freeze_request_source_flags;
-	reg [4:0] freeze_request_control_flags;
 	reg [7:0] observed_flags_now;
 
 	wire vs_rise = hdmi_out_vs && !vs_d;
@@ -107,16 +105,12 @@ module mister_magik_video_diagnostics_output (
 		input [7:0] new_trigger;
 		input [7:0] new_flags;
 		input [2:0] new_geometry;
-		input [2:0] new_source_flags;
-		input [4:0] new_control_flags;
 		begin
 			if(armed && !frozen && !freeze_request_now) begin
 				freeze_request_now = 1'b1;
 				freeze_request_trigger = new_trigger;
 				freeze_request_flags = new_flags;
 				freeze_request_geometry = new_geometry;
-				freeze_request_source_flags = new_source_flags;
-				freeze_request_control_flags = new_control_flags;
 			end
 		end
 	endtask
@@ -143,8 +137,6 @@ module mister_magik_video_diagnostics_output (
 		freeze_request_trigger = MAGIK_VIDEO_DIAGNOSTICS_TRIGGER_NONE;
 		freeze_request_flags = 8'd0;
 		freeze_request_geometry = 3'd0;
-		freeze_request_source_flags = 3'd0;
-		freeze_request_control_flags = 5'd0;
 		observed_flags_now = 8'd0;
 		armed_meta <= monitor_armed_async;
 		armed <= armed_meta;
@@ -233,6 +225,8 @@ module mister_magik_video_diagnostics_output (
 			end
 			if(armed && have_frame && !frozen) begin
 				fault_period <= frame_period;
+				snapshot_source_flags <= source_flags;
+				snapshot_control_flags <= live_control_flags;
 				if(frame_is_black) begin
 					if(consecutive_black < 3)
 						consecutive_black <= consecutive_black + 1'd1;
@@ -240,7 +234,7 @@ module mister_magik_video_diagnostics_output (
 						request_freeze(MAGIK_VIDEO_DIAGNOSTICS_TRIGGER_FINAL_BLACK,
 							completed_frame_flags |
 							MAGIK_VIDEO_DIAGNOSTICS_OUTPUT_FAULT_FLAGS_ALL_BLACK,
-							3'd0, source_flags, live_control_flags);
+							3'd0);
 				end
 				else consecutive_black <= 2'd0;
 				if(frame_is_white) begin
@@ -250,7 +244,7 @@ module mister_magik_video_diagnostics_output (
 						request_freeze(MAGIK_VIDEO_DIAGNOSTICS_TRIGGER_FINAL_WHITE,
 							completed_frame_flags |
 							MAGIK_VIDEO_DIAGNOSTICS_OUTPUT_FAULT_FLAGS_ALL_WHITE,
-							3'd0, source_flags, live_control_flags);
+							3'd0);
 				end
 				else consecutive_white <= 2'd0;
 				if(frame_timing_changed) begin
@@ -260,14 +254,14 @@ module mister_magik_video_diagnostics_output (
 						request_freeze(MAGIK_VIDEO_DIAGNOSTICS_TRIGGER_FINAL_TIMING,
 							completed_frame_flags |
 							MAGIK_VIDEO_DIAGNOSTICS_OUTPUT_FAULT_FLAGS_TIMING_CHANGED,
-							frame_geometry, source_flags, live_control_flags);
+							frame_geometry);
 				end
 				else consecutive_timing <= 2'd0;
 				if(frame_source_changed)
 					request_freeze(MAGIK_VIDEO_DIAGNOSTICS_TRIGGER_FINAL_TIMING,
 						completed_frame_flags |
 						MAGIK_VIDEO_DIAGNOSTICS_OUTPUT_FAULT_FLAGS_MUX_CHANGED,
-						3'd0, source_flags, live_control_flags);
+						3'd0);
 				if(!reference_valid && source_stable && saw_de && saw_nonblack && saw_nonwhite) begin
 					reference_valid <= 1'b1;
 					reference_period <= frame_period;
@@ -310,8 +304,6 @@ module mister_magik_video_diagnostics_output (
 			fault_trigger <= freeze_request_trigger;
 			fault_flags <= freeze_request_flags | observed_flags_now;
 			geometry_faults <= freeze_request_geometry;
-			snapshot_source_flags <= freeze_request_source_flags;
-			snapshot_control_flags <= freeze_request_control_flags;
 			fault_notify_pending <= 1'b1;
 		end
 		else if(observed_flags_now != 0)
