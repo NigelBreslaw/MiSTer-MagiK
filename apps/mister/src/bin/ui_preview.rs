@@ -60,6 +60,7 @@ mod macos {
         ArcadeVisualLayer, PreviewFrame, PreviewPixels, PreviewSurface, hdmi_preview_rect,
     };
     use mister_magik_fb::visual_platform::{MisterPlatform, MisterSoftwareWindow};
+    use mister_magik_framebuffer_scenes::Rgb565SurfaceMut;
     use mister_magik_ui::launcher::{
         ArcadeGame, Launcher, MenuItem, MenuItemKind, MenuItemPresentation, MenuItemStatus,
         MisterBridge, MisterUi, ScreenshotPackProgress,
@@ -2960,15 +2961,19 @@ mod macos {
         if !layout.is_portrait() {
             return logical.to_vec();
         }
-        let mut composition = vec![Rgb565Pixel(0); layout.composition_w() * layout.composition_h()];
-        for logical_y in 0..layout.logical_h() {
-            for logical_x in 0..layout.logical_w() {
-                let (composition_x, composition_y) =
-                    layout.logical_pixel_to_composition(logical_x, logical_y);
-                composition[composition_y * layout.composition_w() + composition_x] =
-                    logical[logical_y * layout.logical_w() + logical_x];
-            }
-        }
+        let mut composition = vec![Rgb565Pixel(0); layout.output_layout().len()];
+        let mut surface = Rgb565SurfaceMut::new(&mut composition, layout.output_layout())
+            .expect("preview output layout matches its capture buffer");
+        assert!(surface.copy_rect_strided(
+            0,
+            0,
+            layout.logical_w(),
+            layout.logical_h(),
+            logical,
+            layout.logical_w(),
+            0,
+            0,
+        ));
         composition
     }
 
@@ -3457,6 +3462,25 @@ mod macos {
             assert_eq!(rgb565_to_xrgb8888(Rgb565Pixel(0xf800)), 0x00ff0000);
             assert_eq!(rgb565_to_xrgb8888(Rgb565Pixel(0x07e0)), 0x0000ff00);
             assert_eq!(rgb565_to_xrgb8888(Rgb565Pixel(0x001f)), 0x000000ff);
+        }
+
+        #[test]
+        fn portrait_capture_uses_the_shared_output_layout() {
+            let display = UiDisplay::for_framebuffer(3, 2);
+            let layout =
+                UiLayoutGeometry::for_display(&display, ScreenOrientation::MonitorCounterclockwise);
+            let logical = (1..=6).map(Rgb565Pixel).collect::<Vec<_>>();
+
+            let physical = oriented_capture(&logical, layout);
+
+            for y in 0..layout.logical_h() {
+                for x in 0..layout.logical_w() {
+                    assert_eq!(
+                        physical[layout.output_layout().physical_offset(x, y)],
+                        logical[y * layout.logical_w() + x]
+                    );
+                }
+            }
         }
 
         #[test]
