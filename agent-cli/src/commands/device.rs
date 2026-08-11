@@ -45,6 +45,10 @@ pub enum DeviceCommand {
         #[command(subcommand)]
         command: MediaCommand,
     },
+    Fpga {
+        #[command(subcommand)]
+        command: DeviceFpgaCommand,
+    },
 }
 
 #[derive(Debug, Args)]
@@ -325,6 +329,23 @@ pub struct MediaDownloadArgs {
     attended: bool,
 }
 
+#[derive(Debug, Subcommand)]
+pub enum DeviceFpgaCommand {
+    InstallExperimental(ExperimentalFpgaArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct ExperimentalFpgaArgs {
+    #[arg(long)]
+    pub(crate) rbf: PathBuf,
+    #[arg(long)]
+    pub(crate) metadata: PathBuf,
+    #[arg(long)]
+    pub(crate) signoff_report: PathBuf,
+    #[arg(long, required = true)]
+    attended: bool,
+}
+
 pub fn run(command: DeviceCommand) -> AgentResult<()> {
     if command.requires_repository() {
         return Err("live particle sessions require the repository workflow".into());
@@ -406,6 +427,7 @@ impl DeviceCommand {
             Self::Launcher { command } => !matches!(command, LauncherCommand::Status),
             Self::Catalog { .. } => false,
             Self::Media { command } => matches!(command, MediaCommand::Download(_)),
+            Self::Fpga { .. } => true,
         }
     }
 }
@@ -465,7 +487,36 @@ mod tests {
     fn mutations_require_attendance_during_parsing() {
         assert!(TestCli::try_parse_from(["test", "mode", "set", "dev"]).is_err());
         assert!(TestCli::try_parse_from(["test", "reboot"]).is_err());
+        assert!(
+            TestCli::try_parse_from([
+                "test",
+                "fpga",
+                "install-experimental",
+                "--rbf",
+                "candidate.rbf",
+                "--metadata",
+                "candidate.txt",
+                "--signoff-report",
+                "signoff.tsv",
+            ])
+            .is_err()
+        );
         assert!(TestCli::try_parse_from(["test", "mode", "set", "dev", "--attended"]).is_ok());
+        assert!(
+            TestCli::try_parse_from([
+                "test",
+                "fpga",
+                "install-experimental",
+                "--rbf",
+                "candidate.rbf",
+                "--metadata",
+                "candidate.txt",
+                "--signoff-report",
+                "signoff.tsv",
+                "--attended",
+            ])
+            .is_ok()
+        );
     }
 
     #[test]

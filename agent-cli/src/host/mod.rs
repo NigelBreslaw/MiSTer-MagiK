@@ -306,8 +306,8 @@ impl NativeDevice {
         command: &crate::commands::device::DeviceCommand,
     ) -> std::result::Result<(), DeviceFailure> {
         use crate::commands::device::{
-            CaptureCommand, CatalogCommand, CrtCommand, DeviceCommand, DisplayCommand,
-            LauncherCommand, MediaCommand, ModeCommand,
+            CaptureCommand, CatalogCommand, CrtCommand, DeviceCommand, DeviceFpgaCommand,
+            DisplayCommand, LauncherCommand, MediaCommand, ModeCommand,
         };
 
         let agent = matches!(
@@ -471,6 +471,16 @@ impl NativeDevice {
                     MediaCommand::Download(args) => {
                         let session = connect(10)?;
                         media::media_download(&session, &device_media_args(&args.media))
+                    }
+                },
+                DeviceCommand::Fpga { command } => match command {
+                    DeviceFpgaCommand::InstallExperimental(args) => {
+                        install_experimental_fpga_transaction(
+                            &prepared.config,
+                            &args.rbf,
+                            &args.metadata,
+                            &args.signoff_report,
+                        )
                     }
                 },
             }
@@ -2757,6 +2767,266 @@ fn deliver_local_main_transaction(
         },
         true,
     )
+}
+
+const EXPERIMENTAL_FPGA_RBF_REMOTE: &str =
+    "/media/fat/mister-magik-dev/fpga/menu-magik-vblank-latch.rbf";
+const EXPERIMENTAL_FPGA_METADATA_REMOTE: &str =
+    "/media/fat/mister-magik-dev/fpga/menu-magik-vblank-latch.metadata.txt";
+const EXPERIMENTAL_FPGA_TRANSACTION_REMOTE: &str =
+    "/media/fat/mister-magik-dev/experimental-fpga.delivery-state";
+
+fn unique_field(text: &str, name: &str) -> Result<String> {
+    let prefix = format!("{name}=");
+    let mut values = text.lines().filter_map(|line| line.strip_prefix(&prefix));
+    let value = values
+        .next()
+        .ok_or_else(|| format!("missing field {name}"))?;
+    if value.is_empty() || values.next().is_some() {
+        return Err(format!("field {name} is empty or duplicated").into());
+    }
+    Ok(value.to_owned())
+}
+
+fn validate_experimental_fpga_inputs(
+    rbf: &Path,
+    metadata: &Path,
+    signoff_report: &Path,
+) -> Result<(String, String, String)> {
+    if rbf.file_name().and_then(|name| name.to_str()) != Some("menu-magik-vblank-latch.rbf")
+        || metadata.file_name().and_then(|name| name.to_str())
+            != Some("menu-magik-vblank-latch.metadata.txt")
+        || signoff_report.file_name().and_then(|name| name.to_str())
+            != Some("quartus-delta-signoff.tsv")
+        || rbf.parent() != metadata.parent()
+        || rbf.parent().and_then(Path::parent) != signoff_report.parent()
+    {
+        return Err("experimental FPGA install requires one canonical local signoff set".into());
+    }
+    let metadata_text = fs::read_to_string(metadata)?;
+    let report_text = fs::read_to_string(signoff_report)?;
+    if unique_field(&metadata_text, "format")? != "mister-magik-fpga-release-v2"
+        || unique_field(&metadata_text, "quartus_mode")? != "local"
+        || unique_field(&metadata_text, "apply_patch")? != "1"
+    {
+        return Err("experimental FPGA metadata is not a patched local build".into());
+    }
+    let expected_rbf_sha256 = unique_field(&metadata_text, "rbf_sha256")?;
+    require_delivery_sha256(&expected_rbf_sha256).map_err(|error| format!("{error:?}"))?;
+    let actual_rbf_sha256 = file_sha256(rbf.to_path_buf())?;
+    if actual_rbf_sha256 != expected_rbf_sha256 {
+        return Err("experimental FPGA RBF hash does not match its metadata".into());
+    }
+    let report = report_text
+        .lines()
+        .find(|line| line.starts_with("quartus_delta_signoff_tsv\t"))
+        .ok_or("experimental FPGA signoff report has no summary")?;
+    let report_fields: BTreeMap<_, _> = report
+        .split('\t')
+        .skip(1)
+        .filter_map(|field| field.split_once('='))
+        .collect();
+    if report_fields.get("valid") != Some(&"0")
+        || report_fields.get("invalid_reason") != Some(&"logic_alms_delta")
+    {
+        return Err(
+            "experimental FPGA install accepts only an otherwise-clean ALM-budget failure".into(),
+        );
+    }
+    for field in ["patched_setup_slack_min", "patched_hold_slack_min"] {
+        let value = report_fields
+            .get(field)
+            .ok_or_else(|| format!("experimental FPGA report is missing {field}"))?
+            .parse::<f64>()?;
+        if value < 0.20 {
+            return Err(format!("experimental FPGA {field} is below 0.20 ns").into());
+        }
+    }
+    if report_fields.get("patched_tns_max_abs") != Some(&"0.0")
+        || report_fields.get("custom_sync_seen") != Some(&"1")
+        || report_fields.get("custom_sync_mtbf") != Some(&"1")
+    {
+        return Err("experimental FPGA timing or CDC evidence is incomplete".into());
+    }
+    let metadata_sha256 = file_sha256(metadata.to_path_buf())?;
+    let contract = unique_field(&metadata_text, "platform_contract_sha256")?;
+    require_delivery_sha256(&contract).map_err(|error| format!("{error:?}"))?;
+    let menu_revision = unique_field(&metadata_text, "source_commit")?;
+    require_local_main_hex("menu_revision", &menu_revision, 40)?;
+    Ok((expected_rbf_sha256, metadata_sha256, menu_revision))
+}
+
+fn experimental_fpga_manifest(
+    installed: &BTreeMap<String, String>,
+    rbf_sha256: &str,
+    metadata_sha256: &str,
+    menu_revision: &str,
+) -> Result<String> {
+    let mut candidate = installed.clone();
+    candidate.insert("latch_rbf_sha256".into(), rbf_sha256.into());
+    candidate.insert("latch_metadata_sha256".into(), metadata_sha256.into());
+    candidate.insert("menu_revision".into(), menu_revision.into());
+    candidate.insert("qualification_candidate_id".into(), String::new());
+    let identity = local_main_candidate_id(&candidate);
+    candidate.insert("qualification_candidate_id".into(), identity);
+    let mut output = String::new();
+    for field in RUNTIME_MANIFEST_FIELDS {
+        let value = candidate
+            .get(*field)
+            .ok_or_else(|| format!("installed Dev manifest is missing {field}"))?;
+        output.push_str(field);
+        output.push('=');
+        output.push_str(value);
+        output.push('\n');
+    }
+    parse_local_main_manifest_text(&output)?;
+    Ok(output)
+}
+
+fn experimental_fpga_cleanup_script() -> String {
+    format!(
+        "rm -f {rbf}.delivery-rollback {metadata}.delivery-rollback {manifest}.delivery-rollback {rbf}.upload {metadata}.upload {manifest}.upload {transaction}; sync",
+        rbf = sh(EXPERIMENTAL_FPGA_RBF_REMOTE),
+        metadata = sh(EXPERIMENTAL_FPGA_METADATA_REMOTE),
+        manifest = sh(LOCAL_MAIN_MANIFEST_REMOTE),
+        transaction = sh(EXPERIMENTAL_FPGA_TRANSACTION_REMOTE),
+    )
+}
+
+fn install_experimental_fpga_transaction(
+    config: &NativeDeviceConfig,
+    rbf: &Path,
+    metadata: &Path,
+    signoff_report: &Path,
+) -> Result<()> {
+    let _signal_guard = LocalMainDeliverySignalGuard::install();
+    let (rbf_sha256, metadata_sha256, menu_revision) =
+        validate_experimental_fpga_inputs(rbf, metadata, signoff_report)?;
+    let session = connect_with(&config.connection, 10)?;
+    exec_checked(
+        &session,
+        "installed Dev platform verification before experimental FPGA install",
+        &installed_platform_verify_command(Layout::Development),
+    )?;
+    let installed_text = remote_read(&session, LOCAL_MAIN_MANIFEST_REMOTE)
+        .ok_or("installed Dev manifest is missing")?;
+    let installed = parse_local_main_manifest_text(&installed_text)?;
+    let metadata_text = fs::read_to_string(metadata)?;
+    if installed["platform_contract_sha256"]
+        != unique_field(&metadata_text, "platform_contract_sha256")?
+        || installed["latch_protocol_version"]
+            != unique_field(&metadata_text, "latch_protocol_version")?
+        || installed["latch_capability_mask"]
+            != unique_field(&metadata_text, "latch_capability_mask")?
+    {
+        return Err(
+            "experimental FPGA build is incompatible with the installed Dev platform".into(),
+        );
+    }
+    let manifest_text =
+        experimental_fpga_manifest(&installed, &rbf_sha256, &metadata_sha256, &menu_revision)?;
+    let manifest_path = env::temp_dir().join(format!(
+        "mister-magik-experimental-fpga-{}-{}.manifest",
+        std::process::id(),
+        unix_ms_now()
+    ));
+    fs::write(&manifest_path, manifest_text)?;
+    let manifest_sha256 = file_sha256(manifest_path.clone())?;
+    let safety = platform_safety_script();
+    let snapshot = format!(
+        "set -eu; {safety}; test ! -e {transaction}; test ! -e {rbf}.delivery-rollback; test ! -e {metadata}.delivery-rollback; test ! -e {manifest}.delivery-rollback; rm -f {rbf}.upload {metadata}.upload {manifest}.upload; cp -p {rbf} {rbf}.delivery-rollback; cp -p {metadata} {metadata}.delivery-rollback; cp -p {manifest} {manifest}.delivery-rollback; printf 'snapshot\\n' > {transaction}; sync",
+        transaction = sh(EXPERIMENTAL_FPGA_TRANSACTION_REMOTE),
+        rbf = sh(EXPERIMENTAL_FPGA_RBF_REMOTE),
+        metadata = sh(EXPERIMENTAL_FPGA_METADATA_REMOTE),
+        manifest = sh(LOCAL_MAIN_MANIFEST_REMOTE),
+    );
+    exec_checked(&session, "experimental FPGA snapshot", &snapshot)?;
+    let install = (|| -> Result<()> {
+        put(
+            &session,
+            rbf,
+            &format!("{EXPERIMENTAL_FPGA_RBF_REMOTE}.upload"),
+        )?;
+        put(
+            &session,
+            metadata,
+            &format!("{EXPERIMENTAL_FPGA_METADATA_REMOTE}.upload"),
+        )?;
+        put(
+            &session,
+            &manifest_path,
+            &format!("{LOCAL_MAIN_MANIFEST_REMOTE}.upload"),
+        )?;
+        if LOCAL_MAIN_DELIVERY_INTERRUPTED.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err("experimental FPGA install interrupted".into());
+        }
+        exec_checked(
+            &session,
+            "experimental FPGA activation",
+            &format!(
+                "set -eu; test \"$(sha256sum {rbf}.upload | awk '{{print $1}}')\" = {rbf_hash}; test \"$(sha256sum {metadata}.upload | awk '{{print $1}}')\" = {metadata_hash}; test \"$(sha256sum {manifest}.upload | awk '{{print $1}}')\" = {manifest_hash}; printf 'activating\\n' > {transaction}; mv -f {rbf}.upload {rbf}; mv -f {metadata}.upload {metadata}; mv -f {manifest}.upload {manifest}; sync",
+                transaction = sh(EXPERIMENTAL_FPGA_TRANSACTION_REMOTE),
+                rbf = sh(EXPERIMENTAL_FPGA_RBF_REMOTE),
+                metadata = sh(EXPERIMENTAL_FPGA_METADATA_REMOTE),
+                manifest = sh(LOCAL_MAIN_MANIFEST_REMOTE),
+                rbf_hash = sh(&rbf_sha256),
+                metadata_hash = sh(&metadata_sha256),
+                manifest_hash = sh(&manifest_sha256),
+            ),
+        )?;
+        drop(session);
+        delivery_reboot_wait(config).map_err(|error| format!("{error:?}"))?;
+        let smoke = connect_with(&config.connection, 10)?;
+        exec_checked(
+            &smoke,
+            "experimental FPGA smoke",
+            &installed_platform_verify_command(Layout::Development),
+        )?;
+        verify_delivery_health(config).map_err(|error| format!("{error:?}"))?;
+        exec_checked(
+            &smoke,
+            "experimental FPGA commit",
+            &experimental_fpga_cleanup_script(),
+        )?;
+        Ok(())
+    })();
+    let _ = fs::remove_file(&manifest_path);
+    if let Err(error) = install {
+        let rollback = (|| -> Result<()> {
+            let rollback = connect_with(&config.connection, 10)?;
+            exec_checked(
+                &rollback,
+                "experimental FPGA rollback",
+                &format!(
+                    "set -eu; test -f {rbf}.delivery-rollback; test -f {metadata}.delivery-rollback; test -f {manifest}.delivery-rollback; cp -p {rbf}.delivery-rollback {rbf}; cp -p {metadata}.delivery-rollback {metadata}; cp -p {manifest}.delivery-rollback {manifest}; printf 'rolled-back\\n' > {transaction}; sync",
+                    transaction = sh(EXPERIMENTAL_FPGA_TRANSACTION_REMOTE),
+                    rbf = sh(EXPERIMENTAL_FPGA_RBF_REMOTE),
+                    metadata = sh(EXPERIMENTAL_FPGA_METADATA_REMOTE),
+                    manifest = sh(LOCAL_MAIN_MANIFEST_REMOTE),
+                ),
+            )?;
+            drop(rollback);
+            delivery_reboot_wait(config).map_err(|error| format!("{error:?}"))?;
+            verify_delivery_health(config).map_err(|failure| format!("{failure:?}"))?;
+            let cleanup = connect_with(&config.connection, 10)?;
+            exec_checked(
+                &cleanup,
+                "experimental FPGA rollback cleanup",
+                &experimental_fpga_cleanup_script(),
+            )?;
+            Ok(())
+        })();
+        return match rollback {
+            Ok(()) => {
+                Err(format!("experimental FPGA install failed ({error}); rollback=complete").into())
+            }
+            Err(rollback) => Err(format!(
+                "experimental FPGA install failed ({error}); rollback failed ({rollback})"
+            )
+            .into()),
+        };
+    }
+    Ok(())
 }
 
 fn device_failure(error: impl std::fmt::Display) -> DeviceFailure {
@@ -19643,6 +19913,83 @@ H: Handlers=event3 js0"#
         ));
         assert!(local_main_cleanup_script().contains("validated"));
         assert!(local_main_rollback_cleanup_script().contains("rolled-back"));
+    }
+
+    #[test]
+    fn experimental_fpga_validation_accepts_only_clean_alm_budget_failure() {
+        let root = temp_path("experimental-fpga");
+        let patched = root.join("signoff/patched");
+        fs::create_dir_all(&patched).unwrap();
+        let rbf = patched.join("menu-magik-vblank-latch.rbf");
+        let metadata = patched.join("menu-magik-vblank-latch.metadata.txt");
+        let report = root.join("signoff/quartus-delta-signoff.tsv");
+        fs::write(&rbf, b"diagnostic rbf").unwrap();
+        let rbf_sha256 = file_sha256(rbf.clone()).unwrap();
+        fs::write(
+            &metadata,
+            format!(
+                "format=mister-magik-fpga-release-v2\nplatform_contract_sha256={}\nsource_commit={}\napply_patch=1\nquartus_mode=local\nrbf_sha256={rbf_sha256}\n",
+                "a".repeat(64),
+                "b".repeat(40),
+            ),
+        )
+        .unwrap();
+        let clean_alm_failure = "quartus_delta_signoff_tsv\tvalid=0\tinvalid_reason=logic_alms_delta\tpatched_setup_slack_min=0.331\tpatched_hold_slack_min=0.241\tpatched_tns_max_abs=0.0\tcustom_sync_seen=1\tcustom_sync_mtbf=1\n";
+        fs::write(&report, clean_alm_failure).unwrap();
+        assert!(validate_experimental_fpga_inputs(&rbf, &metadata, &report).is_ok());
+
+        fs::write(
+            &report,
+            clean_alm_failure.replace("logic_alms_delta", "patched_setup_slack_min"),
+        )
+        .unwrap();
+        assert!(validate_experimental_fpga_inputs(&rbf, &metadata, &report).is_err());
+
+        fs::write(
+            &report,
+            clean_alm_failure.replace(
+                "patched_hold_slack_min=0.241",
+                "patched_hold_slack_min=0.199",
+            ),
+        )
+        .unwrap();
+        assert!(validate_experimental_fpga_inputs(&rbf, &metadata, &report).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn experimental_fpga_manifest_changes_only_fpga_identity() {
+        let installed = parse_local_main_manifest_text(&local_main_manifest_for(
+            &"a".repeat(64),
+            &"c".repeat(64),
+        ))
+        .unwrap();
+        let rbf_sha256 = "d".repeat(64);
+        let metadata_sha256 = "e".repeat(64);
+        let menu_revision = "f".repeat(40);
+        let text =
+            experimental_fpga_manifest(&installed, &rbf_sha256, &metadata_sha256, &menu_revision)
+                .unwrap();
+        let candidate = parse_local_main_manifest_text(&text).unwrap();
+        for field in RUNTIME_MANIFEST_FIELDS {
+            if matches!(
+                *field,
+                "latch_rbf_sha256"
+                    | "latch_metadata_sha256"
+                    | "menu_revision"
+                    | "qualification_candidate_id"
+            ) {
+                continue;
+            }
+            assert_eq!(candidate[*field], installed[*field], "field {field}");
+        }
+        assert_eq!(candidate["latch_rbf_sha256"], rbf_sha256);
+        assert_eq!(candidate["latch_metadata_sha256"], metadata_sha256);
+        assert_eq!(candidate["menu_revision"], menu_revision);
+        assert_eq!(
+            candidate["qualification_candidate_id"],
+            local_main_candidate_id(&candidate)
+        );
     }
 
     #[test]
