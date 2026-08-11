@@ -17,7 +17,8 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 
 const MENU_REPOSITORY: &str = "https://github.com/MiSTer-devel/Menu_MiSTer.git";
-const SIGNOFF_FORMAT: &str = "mister-magik-local-fpga-signoff-v2";
+const SIGNOFF_FORMAT: &str = "mister-magik-local-fpga-signoff-v3";
+const VARIANT_CACHE_MARKER: &str = "local-signoff-input-v3.txt";
 const QUARTUS_IMAGE: &str = "mister-magik-quartus17-apple:ubuntu18-amd64";
 const QUARTUS_VERSION: &str = "17.0.0 Build 595";
 const BUILD_DEADLINE: Duration = Duration::from_secs(3 * 60 * 60);
@@ -101,16 +102,38 @@ fn signoff(repository: &Path, rebuild: bool, reporter: &mut Reporter<'_>) -> Age
     )?;
     let local_root = local_root(repository);
     let signoff_root = local_root.join("signoff");
-    let marker = signoff_root.join("local-signoff-input-v2.txt");
     let source_root = local_root.join("sources/main");
     prepare_local_checkout(repository, &source_root, &main_revision)?;
-    let synthesis_identity = component_identity(&source_root, "fpga-synthesis")?;
-    let cache_manifest = cache_manifest(&synthesis_identity, &menu_revision, &baseline_revision);
-    let cache_hit = !rebuild
-        && fs::read_to_string(&marker).is_ok_and(|value| value == cache_manifest)
-        && variants_complete(&signoff_root);
+    let baseline_root = local_root.join("sources/pre-observer");
+    prepare_local_checkout(repository, &baseline_root, &baseline_revision)?;
+    let stock_identity = synthesis_files_identity(&source_root, false)?;
+    let baseline_identity = synthesis_files_identity(&baseline_root, true)?;
+    let patched_identity = synthesis_files_identity(&source_root, true)?;
+    let stock_manifest = cache_manifest("stock", &stock_identity, &menu_revision, None);
+    let baseline_manifest = cache_manifest(
+        "pre-observer",
+        &baseline_identity,
+        &menu_revision,
+        Some(&baseline_revision),
+    );
+    let patched_manifest = cache_manifest("patched", &patched_identity, &menu_revision, None);
 
-    if cache_hit {
+    migrate_legacy_variant_cache(
+        &signoff_root,
+        "pre-observer",
+        &baseline_revision,
+        &menu_revision,
+        &baseline_revision,
+        &baseline_manifest,
+    )?;
+
+    let stock_hit = !rebuild && variant_cache_hit(&signoff_root.join("stock"), &stock_manifest);
+    let baseline_hit =
+        !rebuild && variant_cache_hit(&signoff_root.join("pre-observer"), &baseline_manifest);
+    let patched_hit =
+        !rebuild && variant_cache_hit(&signoff_root.join("patched"), &patched_manifest);
+
+    if stock_hit && baseline_hit && patched_hit {
         reporter.emit(
             EventKind::Progress,
             "fpga-synthesis",
@@ -125,17 +148,10 @@ fn signoff(repository: &Path, rebuild: bool, reporter: &mut Reporter<'_>) -> Age
             &format!("Building matched FPGA variants for main {main_revision}"),
             Some(10),
         )?;
-        if rebuild {
-            for flavour in ["stock", "pre-observer", "patched"] {
-                remove_generated_dir(&signoff_root, &signoff_root.join(flavour))?;
-            }
-        }
-        let baseline_root = local_root.join("sources/pre-observer");
-        prepare_local_checkout(repository, &baseline_root, &baseline_revision)?;
         let menu_root = prepare_menu(&local_root, &menu_revision)?;
         let wrapper_root = write_quartus_wrappers(&local_root)?;
 
-        build_variant(
+        build_cached_variant(
             &source_root,
             &menu_root,
             &wrapper_root,
@@ -144,9 +160,11 @@ fn signoff(repository: &Path, rebuild: bool, reporter: &mut Reporter<'_>) -> Age
             false,
             &main_revision,
             &build_date,
+            &stock_manifest,
+            stock_hit,
             reporter,
         )?;
-        build_variant(
+        build_cached_variant(
             &baseline_root,
             &menu_root,
             &wrapper_root,
@@ -155,9 +173,11 @@ fn signoff(repository: &Path, rebuild: bool, reporter: &mut Reporter<'_>) -> Age
             true,
             &main_revision,
             &build_date,
+            &baseline_manifest,
+            baseline_hit,
             reporter,
         )?;
-        build_variant(
+        build_cached_variant(
             &source_root,
             &menu_root,
             &wrapper_root,
@@ -166,12 +186,10 @@ fn signoff(repository: &Path, rebuild: bool, reporter: &mut Reporter<'_>) -> Age
             true,
             &main_revision,
             &build_date,
+            &patched_manifest,
+            patched_hit,
             reporter,
         )?;
-        fs::create_dir_all(&signoff_root)
-            .map_err(|error| format!("cannot create {}: {error}", signoff_root.display()))?;
-        fs::write(&marker, &cache_manifest)
-            .map_err(|error| format!("cannot write {}: {error}", marker.display()))?;
     }
 
     reporter.emit(
@@ -183,31 +201,48 @@ fn signoff(repository: &Path, rebuild: bool, reporter: &mut Reporter<'_>) -> Age
     run_delta_checker(&source_root, &signoff_root)
 }
 
-fn cache_manifest(synthesis_identity: &str, menu: &str, baseline: &str) -> String {
+fn cache_manifest(
+    flavour: &str,
+    synthesis_identity: &str,
+    menu: &str,
+    baseline: Option<&str>,
+) -> String {
+    let baseline = baseline.unwrap_or("-");
     format!(
-        "format={SIGNOFF_FORMAT}\nfpga_synthesis_input_sha256={synthesis_identity}\nmenu_revision={menu}\nbaseline_revision={baseline}\nquartus_version={QUARTUS_VERSION}\nquartus_seed=1\nparallel_synthesis=off\nmenu_clock_groups=asynchronous\n"
+        "format={SIGNOFF_FORMAT}\nflavour={flavour}\nsynthesis_input={synthesis_identity}\nmenu_revision={menu}\nbaseline_revision={baseline}\nquartus_version={QUARTUS_VERSION}\nquartus_seed=1\nparallel_synthesis=off\nmenu_clock_groups=asynchronous\n"
     )
 }
 
-fn component_identity(repository: &Path, component: &str) -> AgentResult<String> {
-    let output = Command::new("python3")
-        .arg(repository.join("scripts/release/platform/platform-component-id.py"))
-        .args(["component", component])
-        .current_dir(repository)
-        .output()
-        .map_err(|error| format!("cannot compute {component} identity: {error}"))?;
-    if !output.status.success() {
-        return Err(format!(
-            "cannot compute {component} identity: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        )
-        .into());
+fn synthesis_files_identity(repository: &Path, apply_patch: bool) -> AgentResult<String> {
+    let mut paths = vec![
+        "scripts/build-fpga-vblank-latch-core.sh",
+        "mister/platform/fpga/menu-vblank-latch/report_top_timing.tcl",
+        "mister/platform/kernel/scanout-slots/mister_magik_scanout_platform.h",
+    ];
+    if apply_patch {
+        paths.extend([
+            "mister/platform/fpga/menu-vblank-latch/Menu_MiSTer-vblank-latched-fbuf.patch",
+            "mister/platform/fpga/menu-vblank-latch/mister_magik_vblank_latch.sv",
+            "mister/platform/fpga/menu-vblank-latch/mister_magik_latch_sys_top_bridge.sv",
+            "mister/platform/fpga/menu-vblank-latch/mister_magik_bootstrap_black.sv",
+            "mister/platform/fpga/menu-vblank-latch/mister_magik_latch_protocol.svh",
+            "mister/platform/fpga/menu-vblank-latch/mister_magik_video_diagnostics_control.sv",
+            "mister/platform/fpga/menu-vblank-latch/mister_magik_video_diagnostics_avalon.sv",
+            "mister/platform/fpga/menu-vblank-latch/mister_magik_video_diagnostics_output.sv",
+            "mister/platform/fpga/menu-vblank-latch/mister_magik_video_diagnostics_protocol.svh",
+            "mister/platform/fpga/menu-vblank-latch/mister_magik_video_diagnostics.sdc",
+        ]);
     }
-    let identity = String::from_utf8_lossy(&output.stdout).trim().to_owned();
-    if identity.len() != 64 || !identity.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        return Err(format!("invalid {component} identity: {identity}").into());
+    let mut blobs = Vec::new();
+    for path in paths {
+        let object = format!("HEAD:{path}");
+        let blob = git::value(repository, &["rev-parse", &object])?;
+        if blob.len() != 40 || !blob.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            return Err(format!("invalid synthesis blob for {path}: {blob}").into());
+        }
+        blobs.push(blob);
     }
-    Ok(identity)
+    Ok(blobs.join(":"))
 }
 
 fn local_root(repository: &Path) -> PathBuf {
@@ -218,14 +253,66 @@ fn local_root(repository: &Path) -> PathBuf {
     }
 }
 
-fn variants_complete(root: &Path) -> bool {
-    ["stock", "pre-observer", "patched"].iter().all(|flavour| {
-        let root = root.join(flavour);
-        root.join("menu-magik-vblank-latch.rbf").is_file()
-            && root.join("menu-magik-vblank-latch.metadata.txt").is_file()
-            && root.join("menu-magik-vblank-latch.build.log").is_file()
-            && root.join("reports").is_dir()
+fn variant_complete(root: &Path) -> bool {
+    root.join("menu-magik-vblank-latch.rbf").is_file()
+        && root.join("menu-magik-vblank-latch.metadata.txt").is_file()
+        && root.join("menu-magik-vblank-latch.build.log").is_file()
+        && root.join("reports").is_dir()
+}
+
+fn variant_cache_hit(root: &Path, expected_manifest: &str) -> bool {
+    variant_complete(root)
+        && fs::read_to_string(root.join(VARIANT_CACHE_MARKER))
+            .is_ok_and(|value| value == expected_manifest)
+}
+
+fn manifest_value<'a>(manifest: &'a str, name: &str) -> Option<&'a str> {
+    manifest.lines().find_map(|line| {
+        let (key, value) = line.split_once('=')?;
+        (key == name).then_some(value)
     })
+}
+
+fn migrate_legacy_variant_cache(
+    signoff_root: &Path,
+    flavour: &str,
+    expected_builder: &str,
+    menu_revision: &str,
+    baseline_revision: &str,
+    new_manifest: &str,
+) -> AgentResult<()> {
+    let output = signoff_root.join(flavour);
+    let marker = output.join(VARIANT_CACHE_MARKER);
+    if marker.exists() || !variant_complete(&output) {
+        return Ok(());
+    }
+    let legacy = match fs::read_to_string(signoff_root.join("local-signoff-input-v2.txt")) {
+        Ok(value) => value,
+        Err(_) => return Ok(()),
+    };
+    let metadata = match fs::read_to_string(output.join("menu-magik-vblank-latch.metadata.txt")) {
+        Ok(value) => value,
+        Err(_) => return Ok(()),
+    };
+    let legacy_matches = manifest_value(&legacy, "format")
+        == Some("mister-magik-local-fpga-signoff-v2")
+        && manifest_value(&legacy, "menu_revision") == Some(menu_revision)
+        && manifest_value(&legacy, "baseline_revision") == Some(baseline_revision)
+        && manifest_value(&legacy, "quartus_version") == Some(QUARTUS_VERSION)
+        && manifest_value(&legacy, "quartus_seed") == Some("1")
+        && manifest_value(&legacy, "parallel_synthesis") == Some("off")
+        && manifest_value(&legacy, "menu_clock_groups") == Some("asynchronous");
+    let metadata_matches = manifest_value(&metadata, "builder_commit") == Some(expected_builder)
+        && manifest_value(&metadata, "source_commit") == Some(menu_revision)
+        && manifest_value(&metadata, "apply_patch") == Some("1")
+        && manifest_value(&metadata, "quartus_version") == Some(QUARTUS_VERSION)
+        && manifest_value(&metadata, "quartus_seed") == Some("1");
+    if legacy_matches && metadata_matches {
+        fs::write(&marker, new_manifest).map_err(|error| {
+            format!("cannot migrate cache marker {}: {error}", marker.display())
+        })?;
+    }
+    Ok(())
 }
 
 fn require_revision(label: &str, revision: &str) -> AgentResult<()> {
@@ -367,7 +454,7 @@ fn write_executable(path: &Path, source: &str) -> AgentResult<()> {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn build_variant(
+fn build_cached_variant(
     source_root: &Path,
     menu_root: &Path,
     wrapper_root: &Path,
@@ -376,9 +463,56 @@ fn build_variant(
     apply_patch: bool,
     main_revision: &str,
     build_date: &str,
+    cache_manifest: &str,
+    cache_hit: bool,
     reporter: &mut Reporter<'_>,
 ) -> AgentResult<()> {
+    if cache_hit {
+        reporter.emit(
+            EventKind::Progress,
+            "fpga-synthesis",
+            &format!("Reusing completed {flavour} FPGA variant"),
+            None,
+        )?;
+        return Ok(());
+    }
+    fs::create_dir_all(signoff_root)
+        .map_err(|error| format!("cannot create {}: {error}", signoff_root.display()))?;
     let output = signoff_root.join(flavour);
+    let staging = signoff_root.join(format!(".{flavour}.building"));
+    remove_generated_dir(signoff_root, &staging)?;
+    build_variant(
+        source_root,
+        menu_root,
+        wrapper_root,
+        &staging,
+        flavour,
+        apply_patch,
+        main_revision,
+        build_date,
+        reporter,
+    )?;
+    fs::write(staging.join(VARIANT_CACHE_MARKER), cache_manifest).map_err(|error| {
+        format!(
+            "cannot write staged {flavour} cache marker {}: {error}",
+            staging.join(VARIANT_CACHE_MARKER).display()
+        )
+    })?;
+    promote_variant(signoff_root, flavour, &staging, &output)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_variant(
+    source_root: &Path,
+    menu_root: &Path,
+    wrapper_root: &Path,
+    output: &Path,
+    flavour: &str,
+    apply_patch: bool,
+    main_revision: &str,
+    build_date: &str,
+    reporter: &mut Reporter<'_>,
+) -> AgentResult<()> {
     let path = prefixed_path(wrapper_root)?;
     reporter.emit(
         EventKind::Progress,
@@ -408,6 +542,35 @@ fn build_variant(
         reporter,
         "fpga-synthesis",
     )
+}
+
+fn promote_variant(
+    signoff_root: &Path,
+    flavour: &str,
+    staging: &Path,
+    output: &Path,
+) -> AgentResult<()> {
+    let backup = signoff_root.join(format!(".{flavour}.previous"));
+    remove_generated_dir(signoff_root, &backup)?;
+    if output.exists() {
+        fs::rename(output, &backup).map_err(|error| {
+            format!(
+                "cannot preserve previous {flavour} cache {}: {error}",
+                output.display()
+            )
+        })?;
+    }
+    if let Err(error) = fs::rename(staging, output) {
+        if backup.exists() {
+            let _ = fs::rename(&backup, output);
+        }
+        return Err(format!(
+            "cannot promote completed {flavour} cache {}: {error}",
+            staging.display()
+        )
+        .into());
+    }
+    remove_generated_dir(signoff_root, &backup)
 }
 
 fn prefixed_path(prefix: &Path) -> AgentResult<OsString> {
@@ -549,13 +712,29 @@ mod tests {
 
     #[test]
     fn cache_manifest_binds_every_matched_build_input() {
-        let manifest = cache_manifest(&"a".repeat(64), &"b".repeat(40), &"c".repeat(40));
+        let manifest = cache_manifest(
+            "patched",
+            &"a".repeat(64),
+            &"b".repeat(40),
+            Some(&"c".repeat(40)),
+        );
         assert!(manifest.contains(&format!("format={SIGNOFF_FORMAT}")));
-        assert!(manifest.contains("fpga_synthesis_input_sha256=aaaaaaaa"));
+        assert!(manifest.contains("flavour=patched"));
+        assert!(manifest.contains("synthesis_input=aaaaaaaa"));
         assert!(manifest.contains("menu_revision=bbbbbbbb"));
         assert!(manifest.contains("baseline_revision=cccccccc"));
         assert!(manifest.contains("quartus_seed=1"));
         assert!(manifest.contains("parallel_synthesis=off"));
         assert!(manifest.contains("menu_clock_groups=asynchronous"));
+    }
+
+    #[test]
+    fn cache_manifest_is_independent_per_variant() {
+        let stock = cache_manifest("stock", "stock-input", "menu", None);
+        let baseline = cache_manifest("pre-observer", "baseline-input", "menu", Some("baseline"));
+        let patched = cache_manifest("patched", "patched-input", "menu", None);
+        assert_ne!(stock, baseline);
+        assert_ne!(baseline, patched);
+        assert_ne!(stock, patched);
     }
 }

@@ -159,9 +159,11 @@ Markdown artifact link and refuse to overwrite explicit output paths.
 `fpga signoff` resolves the current local `main` ref, builds stock Menu, the
 exact pinned pre-observer revision, and final Main inputs in generated isolated
 checkouts, then runs the unchanged Quartus delta checker. Completed synthesis
-is cached before validation, so an expected delta failure can be rerun without
-rebuilding. The cache key uses the FPGA synthesis identity, so unrelated Main
-commits do not invalidate it. Set `MISTER_FPGA_LOCAL_ROOT` to a stable absolute directory when
+is cached per variant before validation, so an expected delta failure can be
+rerun without rebuilding. Observer RTL changes rebuild only the final patched
+variant; stock and pinned pre-observer results retain independent cache keys.
+Failed or interrupted builds remain staged and cannot replace a completed
+variant. Set `MISTER_FPGA_LOCAL_ROOT` to a stable absolute directory when
 multiple worktrees must share the Quartus install and synthesis cache.
 Do not narrate successful operation counts or names: report only that validation
 is running, passed, or failed with the actionable summary. Agents must not

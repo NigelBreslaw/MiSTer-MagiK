@@ -98,9 +98,13 @@ qualification before device deployment.
 
 On Apple Silicon, `scripts/agent fpga signoff` runs that same three-way build
 and unchanged checker in Apple containers. It resolves the local `main` ref in
-an isolated generated checkout, caches completed synthesis before validation,
-and retains a failing report for fast reruns. Local Rosetta synthesis is a
-development signoff lane only; GitHub still owns publishable platform RBFs.
+an isolated generated checkout and caches stock, pre-observer, and patched
+synthesis independently. Observer RTL changes rebuild only the patched variant;
+the invariant references are reused. Each replacement is built in a staging
+directory and promoted only after it completes, so cancellation or failure
+cannot destroy an existing valid cache. A failing checker report is retained
+for fast reruns. Local Rosetta synthesis is a development signoff lane only;
+GitHub still owns publishable platform RBFs.
 
 Internal `ascal.vhd` probes, SDRAM data inspection, BRAM history, SignalTap,
 writable diagnostics, and pixel-rate CRCs are explicitly outside Phase 2. They
