@@ -540,7 +540,7 @@ fn build_variant(
         )
         .env("MISTER_FPGA_QUARTUS_SEED", "1")
         .env("MISTER_FPGA_BUILD_DATE", build_date)
-        .env("MISTER_FPGA_OUT_DIR", &output)
+        .env("MISTER_FPGA_OUT_DIR", output)
         .env("MISTER_MENU_BUILD_DIR", output.join("Menu-work"))
         .env("MISTER_FPGA_QUALIFIED_MAGIK_REVISION", main_revision);
     run_inherited(
