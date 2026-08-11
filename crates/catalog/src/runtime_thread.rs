@@ -11,6 +11,7 @@ pub enum RuntimeThreadRole {
     InputReader,
     InputDiscovery,
     CatalogWorker,
+    SystemEntryPrepare,
     CatalogForeground,
     SearchIndex,
     LibraryWalker,
@@ -38,6 +39,7 @@ impl RuntimeThreadRole {
             Self::InputReader => "input-reader",
             Self::InputDiscovery => "input-discovery",
             Self::CatalogWorker => "catalog-worker",
+            Self::SystemEntryPrepare => "system-entry-prepare",
             Self::CatalogForeground => "catalog-foreground",
             Self::SearchIndex => "search-index",
             Self::LibraryWalker => "library-walker",
@@ -71,6 +73,7 @@ impl RuntimeThreadRole {
             // navigation capture, so keep it away from the launcher/input CPU.
             Self::InputDiscovery => RuntimeThreadPolicy::new(10, ThreadAffinity::Cpu0),
             Self::CatalogWorker => RuntimeThreadPolicy::new(5, ThreadAffinity::Cpu0),
+            Self::SystemEntryPrepare => RuntimeThreadPolicy::new(0, ThreadAffinity::Cpu0),
             // Initial index construction is part of making a newly published
             // catalog fully usable. Give it both A9 cores until the P4
             // coordinator can yield it to an actual foreground request.
@@ -555,6 +558,7 @@ mod tests {
     fn heavy_background_roles_default_to_cpu0_affinity() {
         for role in [
             RuntimeThreadRole::CatalogWorker,
+            RuntimeThreadRole::SystemEntryPrepare,
             RuntimeThreadRole::InputDiscovery,
             RuntimeThreadRole::LibraryWalker,
             RuntimeThreadRole::MediaWorker,
@@ -566,8 +570,11 @@ mod tests {
             RuntimeThreadRole::ScreensaverScaler,
         ] {
             assert_eq!(role.default_policy().affinity, ThreadAffinity::Cpu0);
-            if role == RuntimeThreadRole::ScreensaverRenderer {
-                assert_eq!(role.default_policy().nice, -5);
+            if matches!(
+                role,
+                RuntimeThreadRole::ScreensaverRenderer | RuntimeThreadRole::SystemEntryPrepare
+            ) {
+                assert!(role.default_policy().nice <= 0);
             } else {
                 assert!(role.default_policy().nice >= 5);
             }
@@ -614,6 +621,11 @@ mod tests {
             (RuntimeThreadRole::InputReader, -15, ThreadAffinity::Cpu1),
             (RuntimeThreadRole::InputDiscovery, 10, ThreadAffinity::Cpu0),
             (RuntimeThreadRole::CatalogWorker, 5, ThreadAffinity::Cpu0),
+            (
+                RuntimeThreadRole::SystemEntryPrepare,
+                0,
+                ThreadAffinity::Cpu0,
+            ),
             (
                 RuntimeThreadRole::CatalogForeground,
                 0,

@@ -5729,10 +5729,14 @@ pub(super) fn run_launcher_loop(
         let catalog_worker_trace_start = prepare_trace_enabled.then(Instant::now);
         let slint_animation_active = app.window().has_active_animations();
         let startup_return_waiting_for_catalog = lifecycle.startup_waiting_for_return_catalog();
-        // Post-reveal catalog work is already constrained to the CPU0
-        // background role. Input, navigation, media, and preview activity must
-        // never suspend it or catalog construction can starve indefinitely.
-        mister_magik_catalog::builder_service::set_background_heavy_work_allowed(true);
+        if scheduler.system_entry_prepare_active() {
+            background_work_allowed = false;
+        }
+        // System entry is the only foreground CPU0 lease. Validation and
+        // indexing resume as soon as its terminal result has been adopted.
+        mister_magik_catalog::builder_service::set_background_heavy_work_allowed(
+            !scheduler.system_entry_prepare_active(),
+        );
         if background_work_allowed {
             scheduler.tick_catalog_progress(true, loop_start);
         }

@@ -149,7 +149,6 @@ enum SystemShardJobState {
     Running {
         system_id: String,
         generation: Option<String>,
-        receiver: mpsc::Receiver<CatalogWorkerMessage>,
     },
 }
 
@@ -159,6 +158,157 @@ struct SystemShardRequest {
     requested_at: Instant,
     base_catalog: ArcadeCatalog,
     base_catalog_version: usize,
+}
+
+struct SystemEntryPrepareRequest {
+    generation: Option<String>,
+    request: SystemShardRequest,
+}
+
+struct SystemEntryPrepareResult {
+    generation: Option<String>,
+    message: CatalogWorkerMessage,
+}
+
+struct SystemEntryPrepareWorker {
+    requests: mpsc::Sender<SystemEntryPrepareRequest>,
+    results: mpsc::Receiver<SystemEntryPrepareResult>,
+}
+
+impl SystemEntryPrepareWorker {
+    fn start() -> Option<Self> {
+        let (request_tx, request_rx) = mpsc::channel::<SystemEntryPrepareRequest>();
+        let (result_tx, result_rx) = mpsc::channel::<SystemEntryPrepareResult>();
+        std::thread::Builder::new()
+            .name("system-entry-prepare".to_string())
+            .spawn(move || {
+                mister_magik_catalog::runtime_thread::apply_runtime_thread_policy(
+                    mister_magik_catalog::runtime_thread::RuntimeThreadRole::SystemEntryPrepare,
+                );
+                while let Ok(work) = request_rx.recv() {
+                    let _lease =
+                        mister_magik_catalog::work_coordinator::foreground("system-entry-prepare");
+                    let message = prepare_system_shard(work.request);
+                    if result_tx
+                        .send(SystemEntryPrepareResult {
+                            generation: work.generation,
+                            message,
+                        })
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+            })
+            .ok()?;
+        Some(Self {
+            requests: request_tx,
+            results: result_rx,
+        })
+    }
+}
+
+fn prepare_system_shard(request: SystemShardRequest) -> CatalogWorkerMessage {
+    let load_started = Instant::now();
+    let worker_system_id = request.system_id;
+    let base_catalog = request.base_catalog;
+    let base_catalog_version = request.base_catalog_version;
+    let execution_started = system_entry_thread_snapshot();
+    crate::allocation_metrics::begin();
+    let storage = mister_magik_catalog::catalog_config::default_sharded_catalog_path();
+    let descriptor_pmu = mister_magik_perf_events::sampled_span("system-entry-registry-open");
+    let result = mister_magik_catalog::lazy_sharded_reader::LazyShardedCatalogReader::open(
+        &storage,
+        mister_magik_catalog::production_sharded_projection::production_registry_limits(),
+    );
+    drop(descriptor_pmu);
+    let result = result.and_then(|reader| {
+        let parsed = mister_magik_catalog::catalog_classify::SystemId::parse(&worker_system_id)
+            .map_err(|error| {
+                mister_magik_catalog::sharded_catalog::CatalogError::new(
+                    "open-system",
+                    error.to_string(),
+                )
+            })?;
+        let open_pmu = mister_magik_perf_events::sampled_span("system-entry-shard-open");
+        let result = reader.open_system_with_timing(&parsed);
+        drop(open_pmu);
+        result
+    });
+    let navigation_decode_us = load_started.elapsed().as_micros();
+    let message = match result {
+        Ok((system, open_timing)) => {
+            let prepare_started = Instant::now();
+            let games = system.games();
+            let game_count = games.len();
+            let projection_started = Instant::now();
+            let projection_pmu =
+                mister_magik_perf_events::sampled_span("system-entry-row-projection");
+            let (replacement, launch_plans) = arcade_rows_from_shard(&worker_system_id, games);
+            drop(projection_pmu);
+            let row_projection_us = elapsed_us(projection_started);
+            let replacement_started = Instant::now();
+            let replacement_pmu =
+                mister_magik_perf_events::sampled_span("system-entry-catalog-replacement");
+            let catalog =
+                base_catalog.replacing_system_games(&worker_system_id, replacement, launch_plans);
+            drop(replacement_pmu);
+            let catalog_replacement_us = elapsed_us(replacement_started);
+            let allocations = crate::allocation_metrics::finish();
+            let execution_finished = system_entry_thread_snapshot();
+            mister_magik_perf_events::submit_thread_profile("system-entry-catalog");
+            CatalogWorkerMessage::SystemShardReady {
+                system_id: worker_system_id.clone(),
+                catalog,
+                base_catalog_version,
+                game_count,
+                prepare_us: elapsed_us(prepare_started),
+                profile: SystemEntryCatalogProfile {
+                    open: open_timing,
+                    row_projection_us,
+                    catalog_replacement_us,
+                    total_wall_us: elapsed_us(load_started),
+                    thread_cpu_us: execution_finished
+                        .thread_cpu_us
+                        .saturating_sub(execution_started.thread_cpu_us),
+                    cpu_start: execution_started.cpu,
+                    cpu_end: execution_finished.cpu,
+                    minor_page_faults: execution_finished
+                        .minor_page_faults
+                        .saturating_sub(execution_started.minor_page_faults),
+                    major_page_faults: execution_finished
+                        .major_page_faults
+                        .saturating_sub(execution_started.major_page_faults),
+                    allocations: allocations.allocations,
+                    allocated_bytes: allocations.bytes,
+                },
+            }
+        }
+        Err(error) => {
+            let _ = crate::allocation_metrics::finish();
+            mister_magik_perf_events::submit_thread_profile("system-entry-catalog");
+            CatalogWorkerMessage::SystemShardFailed {
+                system_id: worker_system_id.clone(),
+                error: error.to_string(),
+            }
+        }
+    };
+    crate::ui_logln!(
+        "catalog_system_shard_load_finish system={} status={} load_us={}",
+        worker_system_id,
+        if matches!(&message, CatalogWorkerMessage::SystemShardReady { .. }) {
+            "ready"
+        } else {
+            "failed"
+        },
+        load_started.elapsed().as_micros()
+    );
+    crate::ui_logln!(
+        "catalog_navigation_decode system={} decode_us={}",
+        worker_system_id,
+        navigation_decode_us
+    );
+    message
 }
 
 enum MediaJobState {
@@ -184,6 +334,7 @@ pub(super) struct LauncherScheduler {
     system_shard_attempted: BTreeSet<String>,
     system_shard_queue: VecDeque<SystemShardRequest>,
     system_shard_generation: Option<String>,
+    system_entry_prepare: Option<SystemEntryPrepareWorker>,
     media: MediaJobState,
     launch_handoff: LaunchHandoffSession,
 }
@@ -201,6 +352,7 @@ impl LauncherScheduler {
             system_shard_attempted: BTreeSet::new(),
             system_shard_queue: VecDeque::new(),
             system_shard_generation: None,
+            system_entry_prepare: SystemEntryPrepareWorker::start(),
             media: MediaJobState::Idle,
             launch_handoff: LaunchHandoffSession::from_env(launch_handoff_bench_enabled),
         }
@@ -224,6 +376,10 @@ impl LauncherScheduler {
                 ..
             } if active == system_id
         )
+    }
+
+    pub(super) fn system_entry_prepare_active(&self) -> bool {
+        matches!(self.system_shard, SystemShardJobState::Running { .. })
     }
 
     pub(super) fn system_shard_attempted(&self, system_id: &str) -> bool {
@@ -290,142 +446,28 @@ impl LauncherScheduler {
         let Some(request) = self.system_shard_queue.pop_front() else {
             return;
         };
-        let system_id = request.system_id;
-        let base_catalog = request.base_catalog;
-        let base_catalog_version = request.base_catalog_version;
+        let system_id = request.system_id.clone();
         crate::ui_logln!(
             "catalog_system_shard_load_start system={} reason={} queue_wait_us={}",
             system_id,
             request.reason,
             request.requested_at.elapsed().as_micros()
         );
-        let worker_system_id = system_id.clone();
-        let (tx, rx) = mpsc::channel();
+        let generation = self.system_shard_generation.clone();
         self.system_shard = SystemShardJobState::Running {
             system_id,
-            generation: self.system_shard_generation.clone(),
-            receiver: rx,
+            generation: generation.clone(),
         };
-        if std::thread::Builder::new()
-            .name("catalog-shard-load".to_string())
-            .spawn(move || {
-                let load_started = Instant::now();
-                mister_magik_catalog::runtime_thread::apply_runtime_thread_policy(
-                    mister_magik_catalog::runtime_thread::RuntimeThreadRole::CatalogWorker,
-                );
-                let execution_started = system_entry_thread_snapshot();
-                crate::allocation_metrics::begin();
-                let storage =
-                    mister_magik_catalog::catalog_config::default_sharded_catalog_path();
-                let descriptor_pmu =
-                    mister_magik_perf_events::sampled_span("system-entry-registry-open");
-                let result =
-                    mister_magik_catalog::lazy_sharded_reader::LazyShardedCatalogReader::open(
-                        &storage,
-                        mister_magik_catalog::production_sharded_projection::production_registry_limits(),
-                    );
-                drop(descriptor_pmu);
-                let result = result.and_then(|reader| {
-                    let parsed = mister_magik_catalog::catalog_classify::SystemId::parse(
-                        &worker_system_id,
-                    )
-                    .map_err(|error| {
-                        mister_magik_catalog::sharded_catalog::CatalogError::new(
-                            "open-system",
-                            error.to_string(),
-                        )
-                    })?;
-                    let open_pmu =
-                        mister_magik_perf_events::sampled_span("system-entry-shard-open");
-                    let result = reader.open_system_with_timing(&parsed);
-                    drop(open_pmu);
-                    result
-                });
-                let navigation_decode_us = load_started.elapsed().as_micros();
-                let message = match result {
-                    Ok((system, open_timing)) => {
-                        let prepare_started = Instant::now();
-                        let games = system.games();
-                        let game_count = games.len();
-                        let projection_started = Instant::now();
-                        let projection_pmu =
-                            mister_magik_perf_events::sampled_span("system-entry-row-projection");
-                        let (replacement, launch_plans) =
-                            arcade_rows_from_shard(&worker_system_id, games);
-                        drop(projection_pmu);
-                        let row_projection_us = elapsed_us(projection_started);
-                        let replacement_started = Instant::now();
-                        let replacement_pmu = mister_magik_perf_events::sampled_span(
-                            "system-entry-catalog-replacement",
-                        );
-                        let catalog = base_catalog.replacing_system_games(
-                            &worker_system_id,
-                            replacement,
-                            launch_plans,
-                        );
-                        drop(replacement_pmu);
-                        let catalog_replacement_us = elapsed_us(replacement_started);
-                        let allocations = crate::allocation_metrics::finish();
-                        let execution_finished = system_entry_thread_snapshot();
-                        mister_magik_perf_events::submit_thread_profile("system-entry-catalog");
-                        CatalogWorkerMessage::SystemShardReady {
-                            system_id: worker_system_id.clone(),
-                            catalog,
-                            base_catalog_version,
-                            game_count,
-                            prepare_us: prepare_started
-                                .elapsed()
-                                .as_micros()
-                                .min(u64::MAX as u128) as u64,
-                            profile: SystemEntryCatalogProfile {
-                                open: open_timing,
-                                row_projection_us,
-                                catalog_replacement_us,
-                                total_wall_us: elapsed_us(load_started),
-                                thread_cpu_us: execution_finished
-                                    .thread_cpu_us
-                                    .saturating_sub(execution_started.thread_cpu_us),
-                                cpu_start: execution_started.cpu,
-                                cpu_end: execution_finished.cpu,
-                                minor_page_faults: execution_finished
-                                    .minor_page_faults
-                                    .saturating_sub(execution_started.minor_page_faults),
-                                major_page_faults: execution_finished
-                                    .major_page_faults
-                                    .saturating_sub(execution_started.major_page_faults),
-                                allocations: allocations.allocations,
-                                allocated_bytes: allocations.bytes,
-                            },
-                        }
-                    }
-                    Err(error) => {
-                        let _ = crate::allocation_metrics::finish();
-                        mister_magik_perf_events::submit_thread_profile("system-entry-catalog");
-                        CatalogWorkerMessage::SystemShardFailed {
-                            system_id: worker_system_id.clone(),
-                            error: error.to_string(),
-                        }
-                    }
-                };
-                crate::ui_logln!(
-                    "catalog_system_shard_load_finish system={} status={} load_us={}",
-                    worker_system_id,
-                    if matches!(&message, CatalogWorkerMessage::SystemShardReady { .. }) {
-                        "ready"
-                    } else {
-                        "failed"
-                    },
-                    load_started.elapsed().as_micros()
-                );
-                crate::ui_logln!(
-                    "catalog_navigation_decode system={} decode_us={}",
-                    worker_system_id,
-                    navigation_decode_us
-                );
-                let _ = tx.send(message);
-            })
-            .is_err()
-        {
+        let dispatched = self.system_entry_prepare.as_ref().is_some_and(|worker| {
+            worker
+                .requests
+                .send(SystemEntryPrepareRequest {
+                    generation,
+                    request,
+                })
+                .is_ok()
+        });
+        if !dispatched {
             self.system_shard = SystemShardJobState::Idle;
             self.start_next_system_shard_load();
         }
@@ -559,33 +601,27 @@ impl LauncherScheduler {
             self.start_next_arcade_search();
         }
         let mut shard_terminal = false;
-        if let SystemShardJobState::Running {
-            generation,
-            receiver,
-            ..
-        } = &self.system_shard
+        if matches!(self.system_shard, SystemShardJobState::Running { .. })
+            && out.events.len() < CATALOG_MESSAGES_PER_FRAME
+            && let Some(worker) = self.system_entry_prepare.as_ref()
         {
-            let generation_is_current = generation == &self.system_shard_generation;
-            while out.events.len() < CATALOG_MESSAGES_PER_FRAME {
-                match receiver.try_recv() {
-                    Ok(message) => {
-                        shard_terminal = matches!(
-                            message,
-                            CatalogWorkerMessage::SystemShardReady { .. }
-                                | CatalogWorkerMessage::SystemShardFailed { .. }
-                        );
-                        if generation_is_current {
-                            out.push(message);
-                        }
-                        if shard_terminal {
-                            break;
-                        }
+            match worker.results.try_recv() {
+                Ok(result) => {
+                    shard_terminal = true;
+                    let generation_is_current = matches!(
+                        &self.system_shard,
+                        SystemShardJobState::Running { generation, .. }
+                            if generation == &result.generation
+                                && generation == &self.system_shard_generation
+                    );
+                    if generation_is_current {
+                        out.push(result.message);
                     }
-                    Err(mpsc::TryRecvError::Empty) => break,
-                    Err(mpsc::TryRecvError::Disconnected) => {
-                        shard_terminal = true;
-                        break;
-                    }
+                }
+                Err(mpsc::TryRecvError::Empty) => {}
+                Err(mpsc::TryRecvError::Disconnected) => {
+                    shard_terminal = true;
+                    self.system_entry_prepare = None;
                 }
             }
         }
@@ -1048,10 +1084,11 @@ mod tests {
     }
 
     #[test]
-    fn scheduler_starts_without_background_workers() {
+    fn scheduler_starts_with_idle_system_entry_worker() {
         let scheduler = LauncherScheduler::new(false);
 
         assert!(!scheduler.catalog_worker_running());
+        assert!(scheduler.system_entry_prepare.is_some());
         assert!(!scheduler.media_worker_running());
         assert!(!scheduler.media_worker_unavailable());
         assert!(!scheduler.launch_benchmark_enabled());
@@ -1059,13 +1096,11 @@ mod tests {
 
     #[test]
     fn system_shard_requests_deduplicate_without_replacing_the_original_request() {
-        let (_tx, rx) = mpsc::channel();
         let mut scheduler = LauncherScheduler::new(false);
         scheduler.system_shard_generation = Some("generation-a".to_string());
         scheduler.system_shard = SystemShardJobState::Running {
             system_id: "active".to_string(),
             generation: Some("generation-a".to_string()),
-            receiver: rx,
         };
         let now = Instant::now();
 
@@ -1092,13 +1127,11 @@ mod tests {
 
     #[test]
     fn system_shard_requests_remain_fifo() {
-        let (_tx, rx) = mpsc::channel();
         let mut scheduler = LauncherScheduler::new(false);
         scheduler.system_shard_generation = Some("generation-a".to_string());
         scheduler.system_shard = SystemShardJobState::Running {
             system_id: "active".to_string(),
             generation: Some("generation-a".to_string()),
-            receiver: rx,
         };
         let now = Instant::now();
         assert!(scheduler.request_system_shard(
@@ -1125,13 +1158,11 @@ mod tests {
 
     #[test]
     fn system_shard_generation_change_clears_attempts_and_queue() {
-        let (_tx, rx) = mpsc::channel();
         let mut scheduler = LauncherScheduler::new(false);
         scheduler.system_shard_generation = Some("generation-a".to_string());
         scheduler.system_shard = SystemShardJobState::Running {
             system_id: "active".to_string(),
             generation: Some("generation-a".to_string()),
-            receiver: rx,
         };
         assert!(scheduler.request_system_shard(
             "c64".to_string(),
@@ -1149,13 +1180,11 @@ mod tests {
 
     #[test]
     fn explicit_retry_requeues_a_failed_attempt() {
-        let (_tx, rx) = mpsc::channel();
         let mut scheduler = LauncherScheduler::new(false);
         scheduler.system_shard_generation = Some("generation-a".to_string());
         scheduler.system_shard = SystemShardJobState::Running {
             system_id: "active".to_string(),
             generation: Some("generation-a".to_string()),
-            receiver: rx,
         };
         scheduler.system_shard_attempted.insert("c64".to_string());
 
@@ -1187,17 +1216,24 @@ mod tests {
     #[test]
     fn stale_generation_shard_completion_is_discarded() {
         let (tx, rx) = mpsc::channel();
+        let (requests, _request_rx) = mpsc::channel();
         let mut scheduler = LauncherScheduler::new(false);
+        scheduler.system_entry_prepare = Some(SystemEntryPrepareWorker {
+            requests,
+            results: rx,
+        });
         scheduler.system_shard_generation = Some("generation-a".to_string());
         scheduler.system_shard = SystemShardJobState::Running {
             system_id: "c64".to_string(),
             generation: Some("generation-a".to_string()),
-            receiver: rx,
         };
         let _ = scheduler.set_system_shard_generation(Some("generation-b"));
-        tx.send(CatalogWorkerMessage::SystemShardFailed {
-            system_id: "c64".to_string(),
-            error: "stale".to_string(),
+        tx.send(SystemEntryPrepareResult {
+            generation: Some("generation-a".to_string()),
+            message: CatalogWorkerMessage::SystemShardFailed {
+                system_id: "c64".to_string(),
+                error: "stale".to_string(),
+            },
         })
         .unwrap();
         let mut events = CatalogJobEventBuf::new();
@@ -1211,17 +1247,24 @@ mod tests {
     #[test]
     fn terminal_failure_becomes_idle_before_same_frame_retry() {
         let (tx, rx) = mpsc::channel();
+        let (requests, _request_rx) = mpsc::channel();
         let mut scheduler = LauncherScheduler::new(false);
+        scheduler.system_entry_prepare = Some(SystemEntryPrepareWorker {
+            requests,
+            results: rx,
+        });
         scheduler.system_shard_generation = Some("generation-a".to_string());
         scheduler.system_shard_attempted.insert("c64".to_string());
         scheduler.system_shard = SystemShardJobState::Running {
             system_id: "c64".to_string(),
             generation: Some("generation-a".to_string()),
-            receiver: rx,
         };
-        tx.send(CatalogWorkerMessage::SystemShardFailed {
-            system_id: "c64".to_string(),
-            error: "temporary".to_string(),
+        tx.send(SystemEntryPrepareResult {
+            generation: Some("generation-a".to_string()),
+            message: CatalogWorkerMessage::SystemShardFailed {
+                system_id: "c64".to_string(),
+                error: "temporary".to_string(),
+            },
         })
         .unwrap();
         let mut events = CatalogJobEventBuf::new();
