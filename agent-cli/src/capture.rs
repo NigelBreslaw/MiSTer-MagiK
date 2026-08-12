@@ -238,6 +238,9 @@ fn execute_with_backend(
     timestamp_ms: u128,
     started: Instant,
 ) -> AgentResult<CaptureArtifact> {
+    if let Some(output) = output {
+        explicit_destination(output)?;
+    }
     let frame = backend.capture(CAPTURE_TIMEOUT)?;
     store_frame(output, temporary_root, timestamp_ms, started, frame)
 }
