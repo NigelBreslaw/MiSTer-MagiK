@@ -87,6 +87,18 @@ fn system_entry_benchmark_settled(elapsed_ms: u64, input_enabled_ms: u64) -> boo
     elapsed_ms.saturating_sub(input_enabled_ms) >= SYSTEM_ENTRY_BENCHMARK_SETTLE_MS
 }
 
+fn navigation_capture_source_carrier_required(
+    policy: FullScreenTransitionPolicy,
+    owner: Option<FullScreenTransitionOwner>,
+    phase: NavigationTransitionPhase,
+    settings_physical_space: bool,
+) -> bool {
+    policy.controlled_capture
+        && owner == Some(FullScreenTransitionOwner::Navigation)
+        && phase == NavigationTransitionPhase::Capture
+        && settings_physical_space
+}
+
 fn discrete_selection_feedback_target(
     nav: &LauncherNav,
     setup: &SetupNav,
@@ -9074,6 +9086,40 @@ pub(super) fn run_launcher_loop(
         let mut completed_hidden_frame_for_present = None;
         let mut accepted_startup_intro_frame = false;
         let mut startup_intro_failure = None;
+        let mut navigation_capture_source_carrier_rendered = false;
+        if navigation_capture_source_carrier_required(
+            full_screen_transition_policy_before_render,
+            full_screen_transition.owner(),
+            navigation_transition.frame().phase,
+            navigation_transition.settings_physical_space(),
+        ) {
+            let mut direct_render_timing = None;
+            match launcher_presenter.try_render_direct_hidden_frame(f, display_session, |pixels| {
+                let started = Instant::now();
+                let start_phase_us = pacer.age_since_last_hit_us(started);
+                let rendered = navigation_transition.render_into(pixels).is_ok();
+                direct_render_timing = Some((started, Instant::now(), start_phase_us));
+                rendered
+            }) {
+                Ok(Some(completed)) => {
+                    let (direct_render_started, direct_render_completed, start_phase_us) =
+                        direct_render_timing.expect("successful source carrier was timed");
+                    frame_production_trace.class = FrameProductionClass::SynchronousAnimation;
+                    frame_production_trace.sequence = completed.grant.generation;
+                    frame_production_trace.render_start_phase_us = start_phase_us;
+                    frame_production_trace.render_wall_us = direct_render_completed
+                        .saturating_duration_since(direct_render_started)
+                        .as_micros()
+                        .try_into()
+                        .unwrap_or(u64::MAX);
+                    frame_production_completed_at = Some(direct_render_completed);
+                    completed_hidden_frame_for_present = Some(completed);
+                    navigation_capture_source_carrier_rendered = true;
+                }
+                Ok(None) => {}
+                Err(failure) => launcher_presenter.fail_latch_completion(failure),
+            }
+        }
         if let Some(intro) = startup_intro.as_mut() {
             if intro.snapshot_capture_needed() && startup_intro_launcher_frame_ready {
                 let launcher_pixels = layer_target.presentation_frame_view().pixels();
@@ -9604,7 +9650,7 @@ pub(super) fn run_launcher_loop(
             let destination_committed = pending_navigation_transition
                 .as_ref()
                 .is_some_and(|pending| pending.committed);
-            let mut render_transition_frame = true;
+            let mut render_transition_frame = !navigation_capture_source_carrier_rendered;
             if destination_committed && !navigation_transition.destination_ready() {
                 let controlled_destination_raster_ready = full_screen_controlled_capture_rendered
                     || (full_screen_transition.owner()
@@ -15295,6 +15341,42 @@ mod tests {
             launcher_startup_orientation(persisted, false, true),
             ScreenOrientation::Normal
         );
+    }
+
+    #[test]
+    pub(super) fn settings_capture_uses_one_source_carrier_only_while_capture_is_pending() {
+        let mut transition = FullScreenTransitionStateChart::default();
+        let generation = transition
+            .begin(FullScreenTransitionOwner::Navigation)
+            .unwrap();
+        let capture_policy = transition.policy();
+
+        assert!(navigation_capture_source_carrier_required(
+            capture_policy,
+            transition.owner(),
+            NavigationTransitionPhase::Capture,
+            true,
+        ));
+        assert!(!navigation_capture_source_carrier_required(
+            capture_policy,
+            transition.owner(),
+            NavigationTransitionPhase::Expand,
+            true,
+        ));
+        assert!(!navigation_capture_source_carrier_required(
+            capture_policy,
+            transition.owner(),
+            NavigationTransitionPhase::Capture,
+            false,
+        ));
+
+        assert!(transition.take_controlled_capture(generation).unwrap());
+        assert!(!navigation_capture_source_carrier_required(
+            transition.policy(),
+            transition.owner(),
+            NavigationTransitionPhase::Capture,
+            true,
+        ));
     }
 
     #[test]
