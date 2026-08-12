@@ -1298,6 +1298,17 @@ impl LauncherFrameAccounting {
         self.runtime_status_publisher.metrics().worker_active
     }
 
+    pub(super) fn runtime_status_submitted_sequence(&self) -> u64 {
+        self.runtime_status_publisher.metrics().submitted_sequence
+    }
+
+    pub(super) fn runtime_status_written_after(&self, sequence: u64) -> bool {
+        let metrics = self.runtime_status_publisher.metrics();
+        metrics.submitted_sequence > sequence
+            && metrics.written_sequence == metrics.submitted_sequence
+            && !metrics.worker_active
+    }
+
     pub(super) fn frame_analytics_mode(&self) -> FrameAnalyticsMode {
         self.frame_analytics_mode
     }

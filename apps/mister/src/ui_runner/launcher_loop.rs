@@ -38,6 +38,8 @@ const LAUNCHER_INPUT_SCRIPT_DEFAULT_WAIT_FRAMES: usize = 60;
 const LAUNCHER_INPUT_SCRIPT_PRESS_FRAMES: usize = 2;
 const LAUNCHER_INPUT_SCRIPT_RELEASE_FRAMES: usize = 6;
 const SYSTEM_ENTRY_BENCHMARK_SETTLE_MS: u64 = 2_000;
+const SETTINGS_NAVIGATION_STATUS_DRAIN_MIN: Duration = Duration::from_millis(500);
+const SETTINGS_NAVIGATION_STATUS_DRAIN_LIMIT: Duration = Duration::from_secs(2);
 const SQLITE_HEADER: &[u8; 16] = b"SQLite format 3\0";
 const MODAL_INPUT_TEST_ROOT: &str = "/tmp/mister-magik/modal-input-benchmark";
 const MODAL_INPUT_TEST_ENV: &str = "MISTER_MAGIK_TEST_CATALOG_RECOVERY_DIALOG";
@@ -97,6 +99,11 @@ fn navigation_capture_source_carrier_required(
         && owner == Some(FullScreenTransitionOwner::Navigation)
         && phase == NavigationTransitionPhase::Capture
         && settings_physical_space
+}
+
+fn settings_navigation_status_drain_complete(elapsed: Duration, status_current: bool) -> bool {
+    elapsed >= SETTINGS_NAVIGATION_STATUS_DRAIN_LIMIT
+        || (elapsed >= SETTINGS_NAVIGATION_STATUS_DRAIN_MIN && status_current)
 }
 
 fn discrete_selection_feedback_target(
@@ -4859,6 +4866,7 @@ pub(super) fn run_launcher_loop(
     let mut settings_navigation_benchmark =
         SettingsNavigationBenchmark::new(settings_navigation_benchmark_enabled);
     let mut settings_navigation_benchmark_completed_at = None;
+    let mut settings_navigation_status_baseline = None;
     let orientation_benchmark_effect = std::env::var("MISTER_ORIENTATION_TRANSITION_EFFECT")
         .ok()
         .as_deref()
@@ -11069,6 +11077,8 @@ pub(super) fn run_launcher_loop(
                 settings_navigation_benchmark.fail("completion-write-failed");
             }
             if settings_navigation_benchmark.complete() {
+                settings_navigation_status_baseline =
+                    Some(frame_accounting.runtime_status_submitted_sequence());
                 print_startup_event(
                     start,
                     "settings_navigation_benchmark_complete",
@@ -11083,9 +11093,14 @@ pub(super) fn run_launcher_loop(
                 request_launcher_redraw!();
             }
         }
-        if settings_navigation_benchmark_completed_at
-            .is_some_and(|completed| completed.elapsed() >= Duration::from_millis(500))
-        {
+        if settings_navigation_benchmark_completed_at.is_some_and(|completed| {
+            settings_navigation_status_drain_complete(
+                completed.elapsed(),
+                settings_navigation_status_baseline.is_some_and(|sequence| {
+                    frame_accounting.runtime_status_written_after(sequence)
+                }),
+            )
+        }) {
             break;
         }
         if settings_navigation_benchmark.failed() {
@@ -15378,6 +15393,26 @@ mod tests {
             transition.owner(),
             NavigationTransitionPhase::Capture,
             true,
+        ));
+    }
+
+    #[test]
+    pub(super) fn settings_evidence_waits_for_fresh_status_with_a_bounded_fallback() {
+        assert!(!settings_navigation_status_drain_complete(
+            SETTINGS_NAVIGATION_STATUS_DRAIN_MIN - Duration::from_millis(1),
+            true,
+        ));
+        assert!(settings_navigation_status_drain_complete(
+            SETTINGS_NAVIGATION_STATUS_DRAIN_MIN,
+            true,
+        ));
+        assert!(!settings_navigation_status_drain_complete(
+            SETTINGS_NAVIGATION_STATUS_DRAIN_LIMIT - Duration::from_millis(1),
+            false,
+        ));
+        assert!(settings_navigation_status_drain_complete(
+            SETTINGS_NAVIGATION_STATUS_DRAIN_LIMIT,
+            false,
         ));
     }
 
