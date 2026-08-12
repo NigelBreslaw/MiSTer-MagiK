@@ -92,8 +92,8 @@ fn require_ok_main_reply(reply: &str) -> Result<(), String> {
 }
 
 #[cfg(any(target_os = "linux", test))]
-fn io_operation_evidence(
-    operation: &str,
+struct IoOperationEvidence<'a> {
+    operation: &'a str,
     request_received_monotonic_us: u64,
     operation_started_monotonic_us: u64,
     operation_ended_monotonic_us: u64,
@@ -102,7 +102,21 @@ fn io_operation_evidence(
     peak_buffer_ownership_bytes: u64,
     peak_rss_kb: Option<u64>,
     phases_us: Value,
-) -> Value {
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn io_operation_evidence(evidence: IoOperationEvidence<'_>) -> Value {
+    let IoOperationEvidence {
+        operation,
+        request_received_monotonic_us,
+        operation_started_monotonic_us,
+        operation_ended_monotonic_us,
+        bytes_read,
+        bytes_written,
+        peak_buffer_ownership_bytes,
+        peak_rss_kb,
+        phases_us,
+    } = evidence;
     json!({
         "schema": "mister-magik-agent-io-operation-v1",
         "operation": operation,
@@ -141,7 +155,6 @@ mod png_capture {
         pub png_wrap_us: u64,
     }
 
-    #[derive(Debug)]
     pub struct EncodeResult {
         pub bytes: Vec<u8>,
         pub timing: Timing,
@@ -2717,17 +2730,17 @@ mod linux {
                     .unwrap_or_else(|| json!({}));
                 attach_io_operation_evidence(
                     &mut snapshot.result,
-                    io_operation_evidence(
-                        "library_snapshot",
+                    io_operation_evidence(IoOperationEvidence {
+                        operation: "library_snapshot",
                         request_received_monotonic_us,
                         operation_started_monotonic_us,
                         operation_ended_monotonic_us,
-                        raw_bytes,
-                        payload_bytes,
+                        bytes_read: raw_bytes,
+                        bytes_written: payload_bytes,
                         peak_buffer_ownership_bytes,
-                        peak_rss_kb(),
-                        phases,
-                    ),
+                        peak_rss_kb: peak_rss_kb(),
+                        phases_us: phases,
+                    }),
                 );
                 append_log_line(format!(
                     "library_database_snapshot_lz4_stream raw_bytes={} payload_bytes={} checksum={}",
@@ -3189,17 +3202,17 @@ mod linux {
             .unwrap_or_else(|| json!({}));
         attach_io_operation_evidence(
             result,
-            io_operation_evidence(
+            io_operation_evidence(IoOperationEvidence {
                 operation,
                 request_received_monotonic_us,
                 operation_started_monotonic_us,
                 operation_ended_monotonic_us,
-                0,
-                serialized_bytes,
-                serialized_bytes,
-                peak_rss_kb(),
-                phases,
-            ),
+                bytes_read: 0,
+                bytes_written: serialized_bytes,
+                peak_buffer_ownership_bytes: serialized_bytes,
+                peak_rss_kb: peak_rss_kb(),
+                phases_us: phases,
+            }),
         );
     }
 
@@ -3396,17 +3409,17 @@ mod linux {
         });
         attach_io_operation_evidence(
             &mut result,
-            io_operation_evidence(
-                "framebuffer_png_capture",
+            io_operation_evidence(IoOperationEvidence {
+                operation: "framebuffer_png_capture",
                 request_received_monotonic_us,
                 operation_started_monotonic_us,
                 operation_ended_monotonic_us,
-                raw_bytes,
-                png_hex_bytes,
+                bytes_read: raw_bytes,
+                bytes_written: png_hex_bytes,
                 peak_buffer_ownership_bytes,
-                peak_rss_kb(),
-                phases,
-            ),
+                peak_rss_kb: peak_rss_kb(),
+                phases_us: phases,
+            }),
         );
         Ok(result)
     }
@@ -4361,8 +4374,8 @@ mod linux {
         });
         attach_io_operation_evidence(
             &mut result,
-            io_operation_evidence(
-                if lz4 {
+            io_operation_evidence(IoOperationEvidence {
+                operation: if lz4 {
                     "framebuffer_lz4_capture"
                 } else {
                     "framebuffer_raw_capture"
@@ -4370,12 +4383,12 @@ mod linux {
                 request_received_monotonic_us,
                 operation_started_monotonic_us,
                 operation_ended_monotonic_us,
-                raw_bytes,
-                payload_bytes,
-                raw_bytes.saturating_add(payload_bytes),
-                peak_rss_kb(),
-                phases,
-            ),
+                bytes_read: raw_bytes,
+                bytes_written: payload_bytes,
+                peak_buffer_ownership_bytes: raw_bytes.saturating_add(payload_bytes),
+                peak_rss_kb: peak_rss_kb(),
+                phases_us: phases,
+            }),
         );
         Ok(RawFramebufferCapture { result, payload })
     }
@@ -5401,7 +5414,8 @@ mod tests {
                     bpp: 16,
                 },
             )
-            .unwrap_err()
+            .err()
+            .expect("malformed geometry should fail")
             .contains("stride")
         );
         assert!(
@@ -5414,7 +5428,8 @@ mod tests {
                     bpp: 32,
                 },
             )
-            .unwrap_err()
+            .err()
+            .expect("malformed geometry should fail")
             .contains("expected at least")
         );
         assert!(
@@ -5427,7 +5442,8 @@ mod tests {
                     bpp: 24,
                 },
             )
-            .unwrap_err()
+            .err()
+            .expect("malformed geometry should fail")
             .contains("unsupported")
         );
     }
@@ -6313,17 +6329,17 @@ mod tests {
 
     #[test]
     fn io_operation_evidence_uses_common_monotonic_and_capacity_fields() {
-        let evidence = io_operation_evidence(
-            "fixture_operation",
-            900,
-            1_000,
-            1_250,
-            4_096,
-            1_024,
-            5_120,
-            Some(12_345),
-            serde_json::json!({"read": 100, "serialization": 50}),
-        );
+        let evidence = io_operation_evidence(IoOperationEvidence {
+            operation: "fixture_operation",
+            request_received_monotonic_us: 900,
+            operation_started_monotonic_us: 1_000,
+            operation_ended_monotonic_us: 1_250,
+            bytes_read: 4_096,
+            bytes_written: 1_024,
+            peak_buffer_ownership_bytes: 5_120,
+            peak_rss_kb: Some(12_345),
+            phases_us: serde_json::json!({"read": 100, "serialization": 50}),
+        });
         assert_eq!(evidence["schema"], "mister-magik-agent-io-operation-v1");
         assert_eq!(evidence["clock_domain"], "CLOCK_MONOTONIC");
         assert_eq!(evidence["elapsed_us"], 250);
