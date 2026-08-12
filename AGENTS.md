@@ -101,8 +101,11 @@ those trees are part of the task.
 - RBF synthesis runs either in the `Build MiSTer MagiK Platform` GitHub Actions
   workflow or through the typed Apple Silicon `scripts/agent fpga signoff`
   workflow. Never invoke Quartus, its installer, or the FPGA build script
-  directly. Local RBFs are ignored signoff-cache artifacts and are never
-  deployable or release-qualified by the local workflow.
+  directly. A canonical local signoff set is deployable only to the Dev layout
+  through the attended rollback-capable
+  `scripts/agent device fpga install-experimental` transaction. Never copy a
+  local RBF to the device directly. Local artifacts are not release-qualified;
+  production and release delivery still require the GitHub platform workflow.
 - Enable `.githooks/pre-commit` with
   `git config core.hooksPath .githooks`.
 - Treat `private/magik-assets` and `private/magik-cloud` as their own
@@ -124,6 +127,7 @@ scripts/agent diagnose
 scripts/agent dependencies sync path/to/Cargo.toml
 QUARTUS_ACCEPT_EULA=1 scripts/agent fpga setup
 scripts/agent fpga signoff
+scripts/agent device fpga install-experimental --rbf PATH --metadata PATH --signoff-report PATH --attended
 scripts/agent release qualify
 git add -- path/to/file
 git commit -m "Describe the completed change"
@@ -165,6 +169,11 @@ variant; stock and pinned pre-observer results retain independent cache keys.
 Failed or interrupted builds remain staged and cannot replace a completed
 variant. Set `MISTER_FPGA_LOCAL_ROOT` to a stable absolute directory when
 multiple worktrees must share the Quartus install and synthesis cache.
+The matched patched RBF, metadata, and delta report may be installed only with
+the typed attended experimental-FPGA command above. That transaction validates
+the canonical signoff set and installed platform contract, snapshots rollback
+state, updates only the Dev FPGA identity, and reconciles interruption or
+activation failure. It is a development exception, not release qualification.
 Do not narrate successful operation counts or names: report only that validation
 is running, passed, or failed with the actionable summary. Agents must not
 construct hook or CI assurance commands directly; those boundaries select and
