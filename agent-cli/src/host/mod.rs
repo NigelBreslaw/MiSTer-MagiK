@@ -8480,6 +8480,7 @@ struct StreamlineInstalledIdentity {
     gui_sha256: String,
     agent_sha256: String,
     agent_bytes: u64,
+    agent_version: u64,
 }
 
 impl<'a> SystemWideStreamlineCapture<'a> {
@@ -10183,6 +10184,12 @@ fn streamline_installed_identity(
     if installed_gui_sha256 != gui_sha256 {
         return Err("installed GUI hash does not match the development manifest".into());
     }
+    let agent_identity = agent_request("ping", json!({}), Duration::from_secs(3))?;
+    let agent_version = agent_identity
+        .response
+        .pointer("/result/agent_version")
+        .and_then(Value::as_u64)
+        .ok_or("installed device agent omitted its authenticated version")?;
     Ok(StreamlineInstalledIdentity {
         boot_id,
         platform_manifest_sha256: encode_hex(&Sha256::digest(platform_manifest.as_bytes())),
@@ -10198,6 +10205,7 @@ fn streamline_installed_identity(
             "installed device agent",
             "/media/fat/mister-magik-dev/mister-magik-agent",
         )?,
+        agent_version,
     })
 }
 
@@ -10262,7 +10270,8 @@ fn streamline_capture_manifest(
         "magik_revision": identity.magik_revision,
         "gui_sha256": identity.gui_sha256,
         "agent_sha256": identity.agent_sha256,
-        "agent_build_revision": identity.magik_revision,
+        "agent_build_revision": format!("agent-v{}", identity.agent_version),
+        "agent_version": identity.agent_version,
         "agent_bytes": identity.agent_bytes,
         "gatord_version": gatord_version,
         "gatord_sha256": gatord_sha256,
@@ -22315,6 +22324,7 @@ mod tests {
             gui_sha256: "c".repeat(64),
             agent_sha256: "d".repeat(64),
             agent_bytes: 1_234_567,
+            agent_version: 16,
         };
         let manifest = streamline_capture_manifest(
             &identity,
@@ -22330,7 +22340,8 @@ mod tests {
         );
         assert_eq!(manifest["boot_id"], "boot-id");
         assert_eq!(manifest["agent_sha256"], "d".repeat(64));
-        assert_eq!(manifest["agent_build_revision"], "b".repeat(40));
+        assert_eq!(manifest["agent_build_revision"], "agent-v16");
+        assert_eq!(manifest["agent_version"], 16);
         assert_eq!(manifest["agent_bytes"], 1_234_567);
         assert_eq!(manifest["capture_started_monotonic_ns"], 1_000);
         assert_eq!(manifest["capture_ended_monotonic_ns"], 4_500);
