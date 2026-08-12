@@ -4,14 +4,19 @@
 `timescale 1ns/1ps
 `default_nettype none
 
-// Passive, configuration-lifetime evidence for the physical HDMI FPLL lock.
-// Its only output is the dedicated read-only UIO response pair.
+// Passive, configuration-lifetime evidence for the physical HDMI FPLL lock
+// and completed activity at the final registered HDMI output. Its only output
+// is the dedicated read-only UIO response pair.
 module mister_magik_hdmi_lock_evidence (
 	input  wire        clk_sys,
+	input  wire        hdmi_tx_clk,
 	input  wire        io_uio,
 	input  wire        io_strobe,
 	input  wire [15:0] io_din,
 	input  wire        hdmi_pll_locked,
+	input  wire        hdmi_out_vs,
+	input  wire        hdmi_out_de,
+	input  wire [23:0] hdmi_out_d,
 	output wire        response_valid,
 	output reg  [15:0] response_data
 );
@@ -19,16 +24,62 @@ module mister_magik_hdmi_lock_evidence (
 `include "mister_magik_video_diagnostics_protocol.svh"
 
 	reg       has_command = 1'b0;
-	reg       command_selected = 1'b0;
+	reg [1:0] command_kind = 2'd0;
 	reg [2:0] word_count = 3'd0;
 	wire command_start = io_uio && io_strobe && !has_command;
 	wire command_data = io_uio && io_strobe && has_command;
-	wire selected_start = io_din[7:0] == MAGIK_UIO_GET_HDMI_EVIDENCE;
-	wire selected_command = command_selected;
+	wire lock_start = io_din[7:0] == MAGIK_UIO_GET_HDMI_EVIDENCE;
+	wire activity_start = io_din[7:0] == MAGIK_UIO_GET_HDMI_OUTPUT_ACTIVITY;
+	wire selected_start = lock_start || activity_start;
+	wire selected_command = command_kind != 2'd0;
+	wire [2:0] selected_words =
+		(command_kind == 2'd1) ? MAGIK_HDMI_EVIDENCE_WORDS :
+		(command_kind == 2'd2) ? MAGIK_HDMI_OUTPUT_ACTIVITY_WORDS : 3'd0;
+	wire [2:0] selected_crc_word =
+		(command_kind == 2'd1) ? {1'b0, MAGIK_HDMI_EVIDENCE_CRC_WORD} :
+		(command_kind == 2'd2) ? MAGIK_HDMI_OUTPUT_ACTIVITY_CRC_WORD : 3'd0;
 
 	assign response_valid =
 		(command_start && selected_start) ||
-		(command_data && selected_command && (word_count < MAGIK_HDMI_EVIDENCE_WORDS));
+		(command_data && selected_command && (word_count < selected_words));
+
+	// Classify only the final registered values that directly drive the HDMI
+	// transmitter pins. The first rising VS arms and discards the partial
+	// configuration-start interval. Every later rising VS toggles exactly one
+	// completed-frame class.
+	reg output_vs_previous = 1'b0;
+	reg output_frame_armed = 1'b0;
+	reg output_frame_saw_de = 1'b0;
+	reg output_frame_saw_nonzero = 1'b0;
+	reg output_no_de_toggle = 1'b0;
+	reg output_de_all_zero_toggle = 1'b0;
+	reg output_de_has_nonzero_toggle = 1'b0;
+	wire output_vs_rise = hdmi_out_vs && !output_vs_previous;
+	wire output_sample_nonzero = hdmi_out_de && (|hdmi_out_d);
+	wire output_frame_saw_de_now = output_frame_saw_de || hdmi_out_de;
+	wire output_frame_saw_nonzero_now =
+		output_frame_saw_nonzero || output_sample_nonzero;
+
+	always @(posedge hdmi_tx_clk) begin
+		output_vs_previous <= hdmi_out_vs;
+		if(output_vs_rise) begin
+			if(output_frame_armed) begin
+				if(!output_frame_saw_de_now)
+					output_no_de_toggle <= !output_no_de_toggle;
+				else if(!output_frame_saw_nonzero_now)
+					output_de_all_zero_toggle <= !output_de_all_zero_toggle;
+				else
+					output_de_has_nonzero_toggle <= !output_de_has_nonzero_toggle;
+			end
+			output_frame_armed <= 1'b1;
+			output_frame_saw_de <= 1'b0;
+			output_frame_saw_nonzero <= 1'b0;
+		end
+		else begin
+			output_frame_saw_de <= output_frame_saw_de_now;
+			output_frame_saw_nonzero <= output_frame_saw_nonzero_now;
+		end
+	end
 
 	// Preserve these exact named stages. The raw status path is excluded only
 	// into the first stage; the first-to-second settling path remains timed.
@@ -36,6 +87,48 @@ module mister_magik_hdmi_lock_evidence (
 	reg control_pll_lock_meta = 1'b0;
 	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS" *)
 	reg control_pll_lock_sys = 1'b0;
+
+	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED" *)
+	reg output_no_de_meta = 1'b0;
+	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS" *)
+	reg output_no_de_sys = 1'b0;
+	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED" *)
+	reg output_de_all_zero_meta = 1'b0;
+	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS" *)
+	reg output_de_all_zero_sys = 1'b0;
+	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED" *)
+	reg output_de_has_nonzero_meta = 1'b0;
+	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS" *)
+	reg output_de_has_nonzero_sys = 1'b0;
+
+	reg output_no_de_previous = 1'b0;
+	reg output_de_all_zero_previous = 1'b0;
+	reg output_de_has_nonzero_previous = 1'b0;
+	reg [7:0] output_no_de_count = 8'd0;
+	reg [7:0] output_de_all_zero_count = 8'd0;
+	reg [7:0] output_de_has_nonzero_count = 8'd0;
+	reg output_frame_valid = 1'b0;
+	reg output_counter_collision = 1'b0;
+	wire output_no_de_event = output_no_de_sys != output_no_de_previous;
+	wire output_de_all_zero_event =
+		output_de_all_zero_sys != output_de_all_zero_previous;
+	wire output_de_has_nonzero_event =
+		output_de_has_nonzero_sys != output_de_has_nonzero_previous;
+	wire output_any_event = output_no_de_event || output_de_all_zero_event ||
+		output_de_has_nonzero_event;
+	wire output_event_collision =
+		(output_no_de_event && output_de_all_zero_event) ||
+		(output_no_de_event && output_de_has_nonzero_event) ||
+		(output_de_all_zero_event && output_de_has_nonzero_event);
+	wire [7:0] output_no_de_count_next =
+		output_no_de_count + (output_no_de_event ? 1'd1 : 1'd0);
+	wire [7:0] output_de_all_zero_count_next =
+		output_de_all_zero_count + (output_de_all_zero_event ? 1'd1 : 1'd0);
+	wire [7:0] output_de_has_nonzero_count_next =
+		output_de_has_nonzero_count + (output_de_has_nonzero_event ? 1'd1 : 1'd0);
+	wire output_frame_valid_next = output_frame_valid || output_any_event;
+	wire output_counter_collision_next =
+		output_counter_collision || output_event_collision;
 
 	reg lock_previous = 1'b0;
 	reg lock_seen_high = 1'b0;
@@ -70,6 +163,7 @@ module mister_magik_hdmi_lock_evidence (
 
 	reg [4:0] snapshot_flags = 5'd0;
 	reg [15:0] snapshot_lock_loss_count = 16'd0;
+	reg [7:0] snapshot_output_nonzero_count = 8'd0;
 	reg [15:0] tx_crc = MAGIK_HDMI_EVIDENCE_HEADER_CRC;
 	reg [15:0] response_word;
 
@@ -96,27 +190,61 @@ module mister_magik_hdmi_lock_evidence (
 	endfunction
 
 	always @(*) begin
-		case(word_count)
-			MAGIK_HDMI_EVIDENCE_SCHEMA_WORD:
-				response_word = MAGIK_HDMI_EVIDENCE_SCHEMA;
-			MAGIK_HDMI_EVIDENCE_FLAGS_WORD:
-				response_word = {11'd0, snapshot_flags};
-			MAGIK_HDMI_EVIDENCE_LOCK_LOSS_COUNT_WORD:
-				response_word = snapshot_lock_loss_count;
-			default: response_word = tx_crc;
-		endcase
+		response_word = tx_crc;
+		if(command_kind == 2'd1) begin
+			case(word_count)
+				MAGIK_HDMI_EVIDENCE_SCHEMA_WORD:
+					response_word = MAGIK_HDMI_EVIDENCE_SCHEMA;
+				MAGIK_HDMI_EVIDENCE_FLAGS_WORD:
+					response_word = {11'd0, snapshot_flags};
+				MAGIK_HDMI_EVIDENCE_LOCK_LOSS_COUNT_WORD:
+					response_word = snapshot_lock_loss_count;
+				default: response_word = tx_crc;
+			endcase
+		end
+		else if(command_kind == 2'd2) begin
+			case(word_count)
+				MAGIK_HDMI_OUTPUT_ACTIVITY_SCHEMA_WORD:
+					response_word = MAGIK_HDMI_OUTPUT_ACTIVITY_SCHEMA;
+				MAGIK_HDMI_OUTPUT_ACTIVITY_FLAGS_WORD:
+					response_word = {11'd0, snapshot_flags};
+				MAGIK_HDMI_OUTPUT_ACTIVITY_NO_DE_COUNT_WORD:
+					response_word = {8'd0, snapshot_lock_loss_count[7:0]};
+				MAGIK_HDMI_OUTPUT_ACTIVITY_DE_ALL_ZERO_COUNT_WORD:
+					response_word = {8'd0, snapshot_lock_loss_count[15:8]};
+				MAGIK_HDMI_OUTPUT_ACTIVITY_DE_HAS_NONZERO_COUNT_WORD:
+					response_word = {8'd0, snapshot_output_nonzero_count};
+				default: response_word = tx_crc;
+			endcase
+		end
 
 		response_data = 16'd0;
-		if(command_start && selected_start)
+		if(command_start && lock_start)
 			response_data = MAGIK_HDMI_EVIDENCE_MAGIC;
+		else if(command_start && activity_start)
+			response_data = MAGIK_HDMI_OUTPUT_ACTIVITY_MAGIC;
 		else if(command_data && selected_command &&
-			(word_count < MAGIK_HDMI_EVIDENCE_WORDS))
+			(word_count < selected_words))
 			response_data = response_word;
 	end
 
 	always @(posedge clk_sys) begin
 		control_pll_lock_meta <= hdmi_pll_locked;
 		control_pll_lock_sys <= control_pll_lock_meta;
+		output_no_de_meta <= output_no_de_toggle;
+		output_no_de_sys <= output_no_de_meta;
+		output_de_all_zero_meta <= output_de_all_zero_toggle;
+		output_de_all_zero_sys <= output_de_all_zero_meta;
+		output_de_has_nonzero_meta <= output_de_has_nonzero_toggle;
+		output_de_has_nonzero_sys <= output_de_has_nonzero_meta;
+		output_no_de_previous <= output_no_de_sys;
+		output_de_all_zero_previous <= output_de_all_zero_sys;
+		output_de_has_nonzero_previous <= output_de_has_nonzero_sys;
+		output_no_de_count <= output_no_de_count_next;
+		output_de_all_zero_count <= output_de_all_zero_count_next;
+		output_de_has_nonzero_count <= output_de_has_nonzero_count_next;
+		output_frame_valid <= output_frame_valid_next;
+		output_counter_collision <= output_counter_collision_next;
 		lock_previous <= control_pll_lock_sys;
 		lock_seen_high <= lock_seen_high_next;
 		lock_armed <= lock_armed_next;
@@ -126,24 +254,32 @@ module mister_magik_hdmi_lock_evidence (
 
 		if(command_start) begin
 			has_command <= 1'b1;
-			command_selected <= selected_start;
+			command_kind <= lock_start ? 2'd1 : activity_start ? 2'd2 : 2'd0;
 			word_count <= 3'd0;
-			if(selected_start) begin
+			if(lock_start) begin
 				snapshot_flags <= evidence_flags_next[4:0];
 				snapshot_lock_loss_count <= lock_loss_count_next;
 				tx_crc <= MAGIK_HDMI_EVIDENCE_HEADER_CRC;
 			end
+			else if(activity_start) begin
+				snapshot_flags <= {3'd0, output_counter_collision_next,
+					output_frame_valid_next};
+				snapshot_lock_loss_count <= {output_de_all_zero_count_next,
+					output_no_de_count_next};
+				snapshot_output_nonzero_count <= output_de_has_nonzero_count_next;
+				tx_crc <= MAGIK_HDMI_OUTPUT_ACTIVITY_HEADER_CRC;
+			end
 		end
 		else if(command_data && selected_command &&
-			(word_count < MAGIK_HDMI_EVIDENCE_WORDS)) begin
+			(word_count < selected_words)) begin
 			word_count <= word_count + 1'd1;
-			if(word_count < MAGIK_HDMI_EVIDENCE_CRC_WORD)
+			if(word_count < selected_crc_word)
 				tx_crc <= crc_update_word(tx_crc, response_word);
 		end
 
 		if(!io_uio && has_command) begin
 			has_command <= 1'b0;
-			command_selected <= 1'b0;
+			command_kind <= 2'd0;
 			word_count <= 3'd0;
 		end
 	end

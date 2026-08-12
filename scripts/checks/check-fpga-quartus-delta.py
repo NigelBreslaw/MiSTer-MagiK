@@ -54,11 +54,17 @@ MINIMUM_SLACK_NS = 0.20
 MAXIMUM_SLACK_DEGRADATION_NS = 0.15
 MAXIMUM_LOGIC_ELEMENT_DELTA = 800
 MAXIMUM_REGISTER_DELTA = 96
-MINIMUM_OBSERVER_REPORTED_CHAINS = 1
-EXPECTED_OBSERVER_CALCULABLE_CHAINS = 1
+MINIMUM_OBSERVER_REPORTED_CHAINS = 4
+EXPECTED_OBSERVER_CALCULABLE_CHAINS = 4
 EXPECTED_SYNC_ASSIGNMENT_SUFFIXES = (
     "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|control_pll_lock_meta",
     "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|control_pll_lock_sys",
+    "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|output_no_de_meta",
+    "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|output_no_de_sys",
+    "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|output_de_all_zero_meta",
+    "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|output_de_all_zero_sys",
+    "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|output_de_has_nonzero_meta",
+    "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|output_de_has_nonzero_sys",
 )
 EXPECTED_CDC_ANALYSIS_LABELS: frozenset[str] = frozenset()
 DIAGNOSTIC_REPORT_NAMES = frozenset(

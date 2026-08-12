@@ -175,7 +175,6 @@ def main() -> None:
         "fault_toggle",
         "heartbeat_toggle",
         "vbuf_address",
-        "hdmi_out_d",
         "reset_req",
         "cfg_done",
         "altsyncram",
@@ -184,27 +183,34 @@ def main() -> None:
         if retired_fragment in compiled_diagnostics:
             fail(f"retired wide diagnostic fragment remains in lock recorder: {retired_fragment}")
     sync_assignment = "SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS"
-    control_pll_meta = (
-        '(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED" *)\n'
-        "\treg control_pll_lock_meta = 1'b0;"
-    )
-    control_pll_sync = (
-        '(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS" *)\n'
-        "\treg control_pll_lock_sys = 1'b0;"
+    synchronizer_stages = (
+        ("control_pll_lock_meta", "FORCED"),
+        ("control_pll_lock_sys", "FORCED_IF_ASYNCHRONOUS"),
+        ("output_no_de_meta", "FORCED"),
+        ("output_no_de_sys", "FORCED_IF_ASYNCHRONOUS"),
+        ("output_de_all_zero_meta", "FORCED"),
+        ("output_de_all_zero_sys", "FORCED_IF_ASYNCHRONOUS"),
+        ("output_de_has_nonzero_meta", "FORCED"),
+        ("output_de_has_nonzero_sys", "FORCED_IF_ASYNCHRONOUS"),
     )
     if (
         "ASYNC_REG" in control_source
-        or control_source.count(sync_assignment) != 1
-        or control_source.count(control_pll_meta) != 1
-        or control_source.count(control_pll_sync) != 1
+        or control_source.count(sync_assignment) != 4
     ):
-        fail("HDMI lock synchronizer is not exactly identified")
+        fail("HDMI evidence synchronizers are not exactly identified")
+    for stage, assignment in synchronizer_stages:
+        declaration = (
+            f'(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION {assignment}" *)\n'
+            f"\treg {stage} = 1'b0;"
+        )
+        if control_source.count(declaration) != 1:
+            fail(f"HDMI evidence synchronizer stage is not exact: {stage}")
     if (
         control_source.count("control_pll_lock_meta <= hdmi_pll_locked;") != 1
         or len(re.findall(r"\bhdmi_pll_locked\b", control_source)) != 2
     ):
         fail("lock recorder consumes raw HDMI PLL status outside its first stage")
-    pll_chain_bindings = {
+    synchronizer_bindings = {
         "control PLL first stage": (
             control_source,
             "control_pll_lock_meta <= hdmi_pll_locked;",
@@ -213,12 +219,81 @@ def main() -> None:
             control_source,
             "control_pll_lock_sys <= control_pll_lock_meta;",
         ),
+        "no-DE first stage": (
+            control_source,
+            "output_no_de_meta <= output_no_de_toggle;",
+        ),
+        "no-DE second stage": (
+            control_source,
+            "output_no_de_sys <= output_no_de_meta;",
+        ),
+        "all-zero first stage": (
+            control_source,
+            "output_de_all_zero_meta <= output_de_all_zero_toggle;",
+        ),
+        "all-zero second stage": (
+            control_source,
+            "output_de_all_zero_sys <= output_de_all_zero_meta;",
+        ),
+        "nonzero first stage": (
+            control_source,
+            "output_de_has_nonzero_meta <= output_de_has_nonzero_toggle;",
+        ),
+        "nonzero second stage": (
+            control_source,
+            "output_de_has_nonzero_sys <= output_de_has_nonzero_meta;",
+        ),
     }
-    for label, (source, binding) in pll_chain_bindings.items():
+    for label, (source, binding) in synchronizer_bindings.items():
         if source.count(binding) != 1:
             fail(f"{label} binding mismatch")
     if control_source.count("module mister_magik_hdmi_lock_evidence") != 1:
-        fail("minimal HDMI lock evidence module is missing or ambiguous")
+        fail("HDMI lock and output evidence module is missing or ambiguous")
+    module_match = re.search(
+        r"module\s+mister_magik_hdmi_lock_evidence\s*\((.*?)\);",
+        control_source,
+        re.S,
+    )
+    if module_match is None:
+        fail("HDMI evidence module interface is missing")
+    module_ports = re.findall(
+        r"\b(?:input|output)\s+(?:wire|reg)\s+(?:\[[^\]]+\]\s+)?"
+        r"([A-Za-z_][A-Za-z0-9_]*)",
+        module_match.group(1),
+    )
+    expected_module_ports = [
+        "clk_sys",
+        "hdmi_tx_clk",
+        "io_uio",
+        "io_strobe",
+        "io_din",
+        "hdmi_pll_locked",
+        "hdmi_out_vs",
+        "hdmi_out_de",
+        "hdmi_out_d",
+        "response_valid",
+        "response_data",
+    ]
+    if module_ports != expected_module_ports:
+        fail("HDMI evidence module interface is not the exact passive allowlist")
+    required_activity_fragments = (
+        "wire output_sample_nonzero = hdmi_out_de && (|hdmi_out_d);",
+        "if(!output_frame_saw_de_now)",
+        "else if(!output_frame_saw_nonzero_now)",
+        "output_no_de_toggle <= !output_no_de_toggle;",
+        "output_de_all_zero_toggle <= !output_de_all_zero_toggle;",
+        "output_de_has_nonzero_toggle <= !output_de_has_nonzero_toggle;",
+        "wire activity_start = io_din[7:0] == MAGIK_UIO_GET_HDMI_OUTPUT_ACTIVITY;",
+        "tx_crc <= MAGIK_HDMI_OUTPUT_ACTIVITY_HEADER_CRC;",
+    )
+    for fragment in required_activity_fragments:
+        if control_source.count(fragment) != 1:
+            fail(f"final-output evidence behavior is missing or ambiguous: {fragment}")
+    if re.search(
+        r"\b(?:LFB_|FB_|vbuf_|reset_req|cfg_done)[A-Za-z0-9_]*\s*(?:<=|=)",
+        control_source,
+    ):
+        fail("HDMI evidence module drives a functional video or control signal")
     diagnostics_sdc_text = diagnostics_sdc.read_text()
     timing_report_text = timing_report.read_text()
     unconstrained_report = (
@@ -351,10 +426,14 @@ def main() -> None:
         expected_lock_ports = sorted(
             (
                 ("clk_sys", "clk_sys"),
+                ("hdmi_tx_clk", "hdmi_tx_clk"),
                 ("io_uio", "io_uio"),
                 ("io_strobe", "io_strobe"),
                 ("io_din", "io_din"),
                 ("hdmi_pll_locked", "hdmi_pll_locked"),
+                ("hdmi_out_vs", "hdmi_out_vs"),
+                ("hdmi_out_de", "hdmi_out_de"),
+                ("hdmi_out_d", "hdmi_out_d"),
                 ("response_valid", "magik_diag_response_valid"),
                 ("response_data", "magik_diag_response_data"),
             )
@@ -369,16 +448,16 @@ def main() -> None:
         all_lock_port_names = re.findall(
             r"\.([A-Za-z_][A-Za-z0-9_]*)\s*\(", control_binding.group(1)
         )
-        if actual_lock_ports != expected_lock_ports or len(all_lock_port_names) != 7:
-            fail("minimal HDMI lock evidence port map is not exact")
+        if actual_lock_ports != expected_lock_ports or len(all_lock_port_names) != 11:
+            fail("HDMI lock and final-output evidence port map is not exact")
         for response_net in ("magik_diag_response_valid", "magik_diag_response_data"):
             if len(re.findall(rf"\b{response_net}\b", patched)) != 4:
                 fail(f"HDMI lock response net use is not exact: {response_net}")
         if re.search(
-            r"\.(?:hdmi_out|vbuf|reset|route|snapshot|fault|heartbeat|generation)",
+            r"\.(?:vbuf|reset|route|snapshot|fault|heartbeat|generation)",
             control_binding.group(1),
         ):
-            fail("minimal HDMI lock evidence binding regained a retired observer input")
+            fail("HDMI evidence binding regained a retired observer input")
         if re.search(r"\.hdmi_pll_locked(?:_async)?\s*\(\s*led_locked\s*\)", patched):
             fail("diagnostics must not observe the adjustment-PLL LED signal")
 
@@ -467,6 +546,7 @@ def main() -> None:
                     str(simulation),
                     str(rtl),
                     str(bridge),
+                    str(diagnostics_control),
                     str(integration_tb),
                 ],
                 check=True,

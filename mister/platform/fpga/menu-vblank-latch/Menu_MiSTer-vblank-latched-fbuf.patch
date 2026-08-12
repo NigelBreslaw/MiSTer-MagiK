@@ -2,7 +2,7 @@ diff --git a/sys/sys_top.v b/sys/sys_top.v
 index a416879..f6a40ea 100644
 --- a/sys/sys_top.v
 +++ b/sys/sys_top.v
-@@ -351,6 +351,81 @@ reg [12:0] arc2x = 0;
+@@ -351,6 +351,85 @@ reg [12:0] arc2x = 0;
  reg [12:0] arc2y = 0;
  reg [15:0] io_dout_sys;
  
@@ -73,10 +73,14 @@ index a416879..f6a40ea 100644
 +mister_magik_hdmi_lock_evidence magik_hdmi_lock_evidence
 +(
 +	.clk_sys(clk_sys),
++	.hdmi_tx_clk(hdmi_tx_clk),
 +	.io_uio(io_uio),
 +	.io_strobe(io_strobe),
 +	.io_din(io_din),
 +	.hdmi_pll_locked(hdmi_pll_locked),
++	.hdmi_out_vs(hdmi_out_vs),
++	.hdmi_out_de(hdmi_out_de),
++	.hdmi_out_d(hdmi_out_d),
 +	.response_valid(magik_diag_response_valid),
 +	.response_data(magik_diag_response_data)
 +);

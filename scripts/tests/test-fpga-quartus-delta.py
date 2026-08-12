@@ -36,7 +36,16 @@ Total block memory bits: 1,000,000
 Total DSP Blocks: 2
 """
 
-CONTROL_SYNC_NAMES = ("control_pll_lock_meta", "control_pll_lock_sys")
+CONTROL_SYNC_NAMES = (
+    "control_pll_lock_meta",
+    "control_pll_lock_sys",
+    "output_no_de_meta",
+    "output_no_de_sys",
+    "output_de_all_zero_meta",
+    "output_de_all_zero_sys",
+    "output_de_has_nonzero_meta",
+    "output_de_has_nonzero_sys",
+)
 SYNC_NAMES = tuple(
     f"mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|{name}"
     for name in CONTROL_SYNC_NAMES
@@ -60,15 +69,15 @@ CONTROL_SYNC_ASSIGNMENTS = quartus_assignment_section(
 )
 SYNC_ASSIGNMENTS = CONTROL_SYNC_ASSIGNMENTS
 CUSTOM_SYNC = SYNC_ASSIGNMENTS + """\
-Info (332114): Report Metastability: Found 6 synchronizer chains.
-Info (332114): Fraction of Chains for which MTBFs Could Not be Calculated: 0.667
+Info (332114): Report Metastability: Found 9 synchronizer chains.
+Info (332114): Fraction of Chains for which MTBFs Could Not be Calculated: 0.444
 """
 
 VALID_DIAGNOSTIC_REPORTS = {
     "menu.magik-diagnostic-cdc-skew.rpt": "No paths to report.\n",
     "menu.magik-diagnostic-cdc-net-delay.rpt": "No paths to report.\n",
     "menu.magik-diagnostic-metastability.rpt": (
-        "Report Metastability: Found 6 synchronizer chains.\n"
+        "Report Metastability: Found 9 synchronizer chains.\n"
         + "".join(
             f"; Synchronizer Chain ; {name} ; MTBF 1e+09 years ;\n"
             for name in SYNC_NAMES
@@ -162,7 +171,7 @@ class QuartusDeltaTest(unittest.TestCase):
 
     def test_minimum_observer_chain_delta_is_required(self) -> None:
         patched = CUSTOM_SYNC.replace(
-            "Found 6 synchronizer chains", "Found 5 synchronizer chains"
+            "Found 9 synchronizer chains", "Found 8 synchronizer chains"
         )
         result, payload = self.run_check(BASE, BASE + patched)
         self.assertEqual(result.returncode, 1)
