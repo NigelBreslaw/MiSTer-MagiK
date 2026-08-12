@@ -4,8 +4,9 @@
 use serde_json::{Value, json};
 
 pub const PORT: u16 = 7498;
-// Version 21 collapses telemetry process discovery into one /proc scan.
-pub const AGENT_VERSION: u64 = 21;
+// Version 22 acknowledges an IO-disabled FPGA command boundary before every
+// UIO command so independently implemented readers cannot retain stale framing.
+pub const AGENT_VERSION: u64 = 22;
 pub const PROTOCOL_VERSION: u64 = 2;
 pub const FRAMEBUFFER_CAPTURE_CAPABILITY: &str = "framebuffer-capture-v2";
 pub const DEVICE_TELEMETRY_CAPABILITY: &str = "device-telemetry-v2";
