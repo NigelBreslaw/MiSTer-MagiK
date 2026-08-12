@@ -1,0 +1,26 @@
+{
+  "schema": 1,
+  "command": 96,
+  "magic": 19792,
+  "word_count": 4,
+  "flags": {
+    "lock_seen_high": 0,
+    "lock_armed": 1,
+    "lock_current": 2,
+    "lock_ever_lost": 3,
+    "lock_loss_count_overflow": 4
+  },
+  "words": [
+    "schema",
+    "flags",
+    "lock_loss_count",
+    "crc"
+  ],
+  "crc": {
+    "polynomial": 4129,
+    "initial": 65535,
+    "final_xor": 0,
+    "word_byte_order": "high-low",
+    "header_words": ["command", "schema", "non_crc_word_count"]
+  }
+}

@@ -16,6 +16,9 @@ SPEC_PATH = ROOT / "mister/platform/fpga/menu-vblank-latch/latch-protocol.json"
 VIDEO_DIAGNOSTICS_SPEC_PATH = (
     ROOT / "mister/platform/fpga/menu-vblank-latch/video-diagnostics-protocol.json"
 )
+HDMI_EVIDENCE_SPEC_PATH = (
+    ROOT / "mister/platform/fpga/menu-vblank-latch/hdmi-evidence-protocol.json"
+)
 
 
 def crc16_ccitt_false(words: list[int]) -> int:
@@ -30,6 +33,14 @@ def crc16_ccitt_false(words: list[int]) -> int:
 
 subprocess.run(
     [sys.executable, str(ROOT / "scripts/checks/generate-latch-protocol.py"), "--check"],
+    check=True,
+)
+subprocess.run(
+    [
+        sys.executable,
+        str(ROOT / "scripts/checks/generate-hdmi-evidence-protocol.py"),
+        "--check",
+    ],
     check=True,
 )
 subprocess.run(
@@ -90,4 +101,42 @@ for group, flags in video_diagnostics["flags"].items():
     bits = list(flags.values())
     if len(bits) != len(set(bits)) or any(bit < 0 or bit > 15 for bit in bits):
         raise SystemExit(f"video diagnostics {group} flag bits must be unique u16 positions")
+hdmi_evidence = json.loads(HDMI_EVIDENCE_SPEC_PATH.read_text())
+if hdmi_evidence["schema"] != 1:
+    raise SystemExit("HDMI evidence protocol schema must be v1")
+if hdmi_evidence["command"] in set(spec["commands"].values()) | set(
+    video_diagnostics["commands"].values()
+):
+    raise SystemExit("HDMI evidence command overlaps an existing platform command")
+if hdmi_evidence["magic"] in set(video_diagnostics["magic"].values()):
+    raise SystemExit("HDMI evidence magic overlaps an existing diagnostics record")
+if hdmi_evidence["magic"] != 0x4D50:
+    raise SystemExit("HDMI evidence magic must be exactly 0x4d50")
+if hdmi_evidence["command"] != 0x60:
+    raise SystemExit("HDMI evidence command must be exactly 0x60")
+if hdmi_evidence["word_count"] != 4:
+    raise SystemExit("HDMI lock evidence v1 must contain exactly four words")
+if hdmi_evidence["words"] != ["schema", "flags", "lock_loss_count", "crc"]:
+    raise SystemExit("HDMI lock evidence v1 word layout changed without a schema update")
+hdmi_flag_bits = list(hdmi_evidence["flags"].values())
+if len(hdmi_flag_bits) != len(set(hdmi_flag_bits)) or any(
+    bit < 0 or bit > 15 for bit in hdmi_flag_bits
+):
+    raise SystemExit("HDMI evidence flag bits must be unique u16 positions")
+if hdmi_evidence["flags"] != {
+    "lock_seen_high": 0,
+    "lock_armed": 1,
+    "lock_current": 2,
+    "lock_ever_lost": 3,
+    "lock_loss_count_overflow": 4,
+}:
+    raise SystemExit("HDMI lock evidence v1 flags changed without a schema update")
+if hdmi_evidence["crc"] != {
+    "polynomial": 0x1021,
+    "initial": 0xFFFF,
+    "final_xor": 0,
+    "word_byte_order": "high-low",
+    "header_words": ["command", "schema", "non_crc_word_count"],
+}:
+    raise SystemExit("HDMI lock evidence CRC parameters changed unexpectedly")
 print("latch protocol contract: ok")

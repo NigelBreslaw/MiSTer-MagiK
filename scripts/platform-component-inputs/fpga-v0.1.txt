@@ -11,6 +11,7 @@ scripts/install-quartus-lite-docker.sh
 scripts/checks/check-latch-protocol.py
 scripts/checks/generate-latch-protocol.py
 scripts/checks/generate-video-diagnostics-protocol.py
+scripts/checks/generate-hdmi-evidence-protocol.py
 scripts/checks/check-fpga-latch-integration.py
 scripts/checks/check-fpga-latch-coverage.py
 scripts/checks/check-fpga-quartus-delta.py

@@ -2,8 +2,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 mod generated;
+mod generated_hdmi_evidence;
 
 pub use generated::*;
+pub use generated_hdmi_evidence::*;
 
 const CRC_POLYNOMIAL: u16 = 0x1021;
 const CRC_INITIAL: u16 = 0xffff;
@@ -112,6 +114,85 @@ pub fn message_crc(command: u16, payload: &[u16]) -> u16 {
         crc = crc16_update_word(crc, *word);
     }
     crc
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HdmiEvidence {
+    pub words: [u16; HDMI_EVIDENCE_WORDS],
+}
+
+impl HdmiEvidence {
+    pub fn flags(&self) -> u16 {
+        self.words[HDMI_EVIDENCE_FLAGS_WORD]
+    }
+}
+
+fn message_crc_with_schema(command: u16, schema: u16, payload: &[u16]) -> u16 {
+    let mut crc = CRC_INITIAL;
+    for word in [command, schema, payload.len() as u16] {
+        crc = crc16_update_word(crc, word);
+    }
+    for word in payload {
+        crc = crc16_update_word(crc, *word);
+    }
+    crc
+}
+
+pub fn decode_hdmi_evidence(words: &[u16]) -> Result<HdmiEvidence, String> {
+    if words.len() != HDMI_EVIDENCE_WORDS {
+        return Err(format!(
+            "HDMI evidence command 0x{GET_HDMI_EVIDENCE:02x} needs {HDMI_EVIDENCE_WORDS} words, got {}",
+            words.len()
+        ));
+    }
+    if words[HDMI_EVIDENCE_SCHEMA_WORD] != HDMI_EVIDENCE_SCHEMA {
+        return Err(format!(
+            "unsupported HDMI evidence schema {}",
+            words[HDMI_EVIDENCE_SCHEMA_WORD]
+        ));
+    }
+    let expected = words[HDMI_EVIDENCE_CRC_WORD];
+    let actual = message_crc_with_schema(
+        GET_HDMI_EVIDENCE,
+        HDMI_EVIDENCE_SCHEMA,
+        &words[..HDMI_EVIDENCE_CRC_WORD],
+    );
+    if expected != actual {
+        return Err(format!(
+            "HDMI evidence CRC mismatch expected=0x{expected:04x} actual=0x{actual:04x}"
+        ));
+    }
+    let flags = words[HDMI_EVIDENCE_FLAGS_WORD];
+    if flags & !HDMI_EVIDENCE_FLAGS_MASK != 0 {
+        return Err(format!(
+            "HDMI evidence flags contain reserved bits: 0x{flags:04x}"
+        ));
+    }
+    let lock_loss_count = words[HDMI_EVIDENCE_LOCK_LOSS_COUNT_WORD];
+    if flags & HDMI_EVIDENCE_FLAG_LOCK_CURRENT != 0
+        && flags & HDMI_EVIDENCE_FLAG_LOCK_SEEN_HIGH == 0
+    {
+        return Err(
+            "HDMI lock evidence reports current lock before observing lock high".to_string(),
+        );
+    }
+    if flags & HDMI_EVIDENCE_FLAG_LOCK_ARMED != 0 && flags & HDMI_EVIDENCE_FLAG_LOCK_SEEN_HIGH == 0
+    {
+        return Err("HDMI lock evidence armed without first observing lock high".to_string());
+    }
+    if flags & HDMI_EVIDENCE_FLAG_LOCK_EVER_LOST != 0 && flags & HDMI_EVIDENCE_FLAG_LOCK_ARMED == 0
+    {
+        return Err("HDMI lock evidence reports loss before arming".to_string());
+    }
+    if (lock_loss_count != 0) != (flags & HDMI_EVIDENCE_FLAG_LOCK_EVER_LOST != 0) {
+        return Err("HDMI lock evidence loss count disagrees with sticky loss state".to_string());
+    }
+    if flags & HDMI_EVIDENCE_FLAG_LOCK_LOSS_COUNT_OVERFLOW != 0 && lock_loss_count != u16::MAX {
+        return Err("HDMI lock evidence overflow requires a saturated count".to_string());
+    }
+    let mut owned = [0; HDMI_EVIDENCE_WORDS];
+    owned.copy_from_slice(words);
+    Ok(HdmiEvidence { words: owned })
 }
 
 fn decode<const N: usize>(
@@ -240,6 +321,87 @@ mod tests {
             decode_output(&output).unwrap().state,
             VideoDiagnosticsState::Idle
         );
+    }
+
+    #[test]
+    fn hdmi_evidence_zero_record_has_independent_golden() {
+        let mut words = [0; HDMI_EVIDENCE_WORDS];
+        words[HDMI_EVIDENCE_SCHEMA_WORD] = HDMI_EVIDENCE_SCHEMA;
+        words[HDMI_EVIDENCE_CRC_WORD] = message_crc_with_schema(
+            GET_HDMI_EVIDENCE,
+            HDMI_EVIDENCE_SCHEMA,
+            &words[..HDMI_EVIDENCE_CRC_WORD],
+        );
+        assert_eq!(words[HDMI_EVIDENCE_CRC_WORD], HDMI_EVIDENCE_ZERO_GOLDEN_CRC);
+        let decoded = decode_hdmi_evidence(&words).unwrap();
+        assert_eq!(decoded.flags(), 0);
+    }
+
+    #[test]
+    fn hdmi_evidence_rejects_reserved_flags_and_bad_crc() {
+        let mut words = [0; HDMI_EVIDENCE_WORDS];
+        words[HDMI_EVIDENCE_SCHEMA_WORD] = HDMI_EVIDENCE_SCHEMA;
+        words[HDMI_EVIDENCE_FLAGS_WORD] = 1 << 15;
+        words[HDMI_EVIDENCE_CRC_WORD] = message_crc_with_schema(
+            GET_HDMI_EVIDENCE,
+            HDMI_EVIDENCE_SCHEMA,
+            &words[..HDMI_EVIDENCE_CRC_WORD],
+        );
+        assert!(decode_hdmi_evidence(&words).is_err());
+        words[HDMI_EVIDENCE_FLAGS_WORD] = 0;
+        words[HDMI_EVIDENCE_CRC_WORD] ^= 1;
+        assert!(decode_hdmi_evidence(&words).is_err());
+    }
+
+    #[test]
+    fn hdmi_evidence_rejects_impossible_lock_state() {
+        let mut words = [0; HDMI_EVIDENCE_WORDS];
+        words[HDMI_EVIDENCE_SCHEMA_WORD] = HDMI_EVIDENCE_SCHEMA;
+        words[HDMI_EVIDENCE_FLAGS_WORD] = HDMI_EVIDENCE_FLAG_LOCK_EVER_LOST;
+        words[HDMI_EVIDENCE_CRC_WORD] = message_crc_with_schema(
+            GET_HDMI_EVIDENCE,
+            HDMI_EVIDENCE_SCHEMA,
+            &words[..HDMI_EVIDENCE_CRC_WORD],
+        );
+        assert!(decode_hdmi_evidence(&words).is_err());
+
+        words[HDMI_EVIDENCE_FLAGS_WORD] = HDMI_EVIDENCE_FLAG_LOCK_CURRENT;
+        words[HDMI_EVIDENCE_CRC_WORD] = message_crc_with_schema(
+            GET_HDMI_EVIDENCE,
+            HDMI_EVIDENCE_SCHEMA,
+            &words[..HDMI_EVIDENCE_CRC_WORD],
+        );
+        assert!(decode_hdmi_evidence(&words).is_err());
+
+        words[HDMI_EVIDENCE_FLAGS_WORD] = HDMI_EVIDENCE_FLAG_LOCK_SEEN_HIGH
+            | HDMI_EVIDENCE_FLAG_LOCK_ARMED
+            | HDMI_EVIDENCE_FLAG_LOCK_EVER_LOST
+            | HDMI_EVIDENCE_FLAG_LOCK_LOSS_COUNT_OVERFLOW;
+        words[HDMI_EVIDENCE_CRC_WORD] = message_crc_with_schema(
+            GET_HDMI_EVIDENCE,
+            HDMI_EVIDENCE_SCHEMA,
+            &words[..HDMI_EVIDENCE_CRC_WORD],
+        );
+        assert!(decode_hdmi_evidence(&words).is_err());
+
+        words[HDMI_EVIDENCE_FLAGS_WORD] =
+            HDMI_EVIDENCE_FLAG_LOCK_SEEN_HIGH | HDMI_EVIDENCE_FLAG_LOCK_ARMED;
+        words[HDMI_EVIDENCE_LOCK_LOSS_COUNT_WORD] = 1;
+        words[HDMI_EVIDENCE_CRC_WORD] = message_crc_with_schema(
+            GET_HDMI_EVIDENCE,
+            HDMI_EVIDENCE_SCHEMA,
+            &words[..HDMI_EVIDENCE_CRC_WORD],
+        );
+        assert!(decode_hdmi_evidence(&words).is_err());
+
+        words[HDMI_EVIDENCE_FLAGS_WORD] |= HDMI_EVIDENCE_FLAG_LOCK_EVER_LOST;
+        words[HDMI_EVIDENCE_LOCK_LOSS_COUNT_WORD] = 0;
+        words[HDMI_EVIDENCE_CRC_WORD] = message_crc_with_schema(
+            GET_HDMI_EVIDENCE,
+            HDMI_EVIDENCE_SCHEMA,
+            &words[..HDMI_EVIDENCE_CRC_WORD],
+        );
+        assert!(decode_hdmi_evidence(&words).is_err());
     }
 
     #[test]
