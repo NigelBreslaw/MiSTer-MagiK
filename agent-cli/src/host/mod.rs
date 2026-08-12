@@ -758,6 +758,15 @@ impl NativeDevice {
         })
     }
 
+    pub(crate) fn profile_launch_return_attribution(
+        &mut self,
+        output_dir: &Path,
+    ) -> std::result::Result<String, DeviceFailure> {
+        self.benchmark_profile(|config| {
+            profile_installed_launch_return_attribution(config, output_dir)
+        })
+    }
+
     pub(crate) fn profile_cold_boot(
         &mut self,
         output_dir: &Path,
@@ -8415,6 +8424,13 @@ const TRANSITION_STREAMLINE_CAPTURE: SystemWideStreamlineCaptureSpec =
         max_duration_seconds: 300,
     };
 
+const LAUNCH_RETURN_STREAMLINE_CAPTURE: SystemWideStreamlineCaptureSpec =
+    SystemWideStreamlineCaptureSpec {
+        label: "launch-return attribution Streamline",
+        archive_file: "mister-magik-launch-return-attribution.apc.tar.gz",
+        max_duration_seconds: 180,
+    };
+
 struct SystemWideStreamlineCapture<'a> {
     session: &'a Session,
     connection: ConnectionConfig,
@@ -11884,10 +11900,69 @@ fn exact_manifest_field(manifest: &str, field: &str, length: usize) -> Result<St
     Ok(values[0].into())
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum LaunchReturnAttributionArm {
+    Control,
+    Pmu,
+    Pprof,
+}
+
+impl LaunchReturnAttributionArm {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Control => "control",
+            Self::Pmu => "pmu",
+            Self::Pprof => "pprof",
+        }
+    }
+}
+
+fn launch_return_initial_env(arm: LaunchReturnAttributionArm) -> Vec<(String, String)> {
+    let mut environment = vec![
+        ("MISTER_CATALOG_REFRESH".into(), "off".into()),
+        ("MISTER_LAUNCHER_START_SCREEN".into(), "arcade".into()),
+        ("MISTER_LAUNCHER_START_SYSTEM".into(), "arcade".into()),
+        ("MISTER_ARCADE_SELECTED_INDEX".into(), "128".into()),
+        ("MISTER_LAUNCHER_AUTO_LAUNCH_SELECTED".into(), "1".into()),
+        (
+            "MISTER_MAGIK_TEST_AUTO_LAUNCH_GATE".into(),
+            LAUNCH_RETURN_GATE_REMOTE.into(),
+        ),
+    ];
+    if arm == LaunchReturnAttributionArm::Pmu {
+        environment.extend([
+            ("MISTER_PMU_PROFILE".into(), "1".into()),
+            ("MISTER_PMU_SAMPLE_EVERY".into(), "1".into()),
+            ("MISTER_PMU_RECORD_LIMIT".into(), "4096".into()),
+            (
+                "MISTER_LAUNCH_RETURN_PMU_HANDOFF_OUT".into(),
+                format!("{LAUNCH_RETURN_PROFILE_REMOTE_DIR}/cycle-1-handoff-pmu.json"),
+            ),
+        ]);
+    }
+    environment
+}
+
 fn profile_installed_launch_return(
     config: &NativeDeviceConfig,
     output_dir: &Path,
     force_capsule_miss: bool,
+) -> Result<String> {
+    profile_installed_launch_return_arm(
+        config,
+        output_dir,
+        force_capsule_miss,
+        LaunchReturnAttributionArm::Pprof,
+        true,
+    )
+}
+
+fn profile_installed_launch_return_arm(
+    config: &NativeDeviceConfig,
+    output_dir: &Path,
+    force_capsule_miss: bool,
+    arm: LaunchReturnAttributionArm,
+    enforce_product_boundary: bool,
 ) -> Result<String> {
     let session = connect_with(&config.connection, 10)?;
     fs::create_dir_all(output_dir)?;
@@ -11918,17 +11993,7 @@ fn profile_installed_launch_return(
         restart_launcher_with_one_shot_env(
             &session,
             LauncherRestartOptions {
-                env_vars: vec![
-                    ("MISTER_CATALOG_REFRESH".into(), "off".into()),
-                    ("MISTER_LAUNCHER_START_SCREEN".into(), "arcade".into()),
-                    ("MISTER_LAUNCHER_START_SYSTEM".into(), "arcade".into()),
-                    ("MISTER_ARCADE_SELECTED_INDEX".into(), "128".into()),
-                    ("MISTER_LAUNCHER_AUTO_LAUNCH_SELECTED".into(), "1".into()),
-                    (
-                        "MISTER_MAGIK_TEST_AUTO_LAUNCH_GATE".into(),
-                        LAUNCH_RETURN_GATE_REMOTE.into(),
-                    ),
-                ],
+                env_vars: launch_return_initial_env(arm),
                 timeout_secs: 45,
                 remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
                 ..LauncherRestartOptions::default()
@@ -11955,12 +12020,6 @@ fn profile_installed_launch_return(
             let remote_frames = format!("{remote_profile_dir}/cycle-{cycle_number}-frames.tsv");
             let remote_complete = format!("{remote_profile_dir}/cycle-{cycle_number}-profile.json");
             let mut return_env = vec![
-                ("MISTER_PPROF".into(), "1".into()),
-                ("MISTER_PPROF_TRIGGER".into(), "launch-return".into()),
-                ("MISTER_PPROF_HZ".into(), "999".into()),
-                ("MISTER_PPROF_OUT".into(), remote_svg.clone()),
-                ("MISTER_PPROF_FOLDED_OUT".into(), remote_folded.clone()),
-                ("MISTER_PPROF_COMPLETE".into(), remote_complete.clone()),
                 ("MISTER_PROFILE".into(), "full".into()),
                 ("MISTER_BOOT_ANALYTICS".into(), "1".into()),
                 (
@@ -11969,6 +12028,30 @@ fn profile_installed_launch_return(
                 ),
                 ("MISTER_BOOT_FRAME_PROFILE_FRAMES".into(), "240".into()),
             ];
+            if arm == LaunchReturnAttributionArm::Pprof {
+                return_env.extend([
+                    ("MISTER_PPROF".into(), "1".into()),
+                    ("MISTER_PPROF_TRIGGER".into(), "launch-return".into()),
+                    ("MISTER_PPROF_HZ".into(), "999".into()),
+                    ("MISTER_PPROF_OUT".into(), remote_svg.clone()),
+                    ("MISTER_PPROF_FOLDED_OUT".into(), remote_folded.clone()),
+                    ("MISTER_PPROF_COMPLETE".into(), remote_complete.clone()),
+                ]);
+            }
+            if arm == LaunchReturnAttributionArm::Pmu {
+                return_env.extend([
+                    ("MISTER_PMU_PROFILE".into(), "1".into()),
+                    ("MISTER_PMU_SAMPLE_EVERY".into(), "1".into()),
+                    ("MISTER_PMU_RECORD_LIMIT".into(), "4096".into()),
+                    (
+                        "MISTER_LAUNCH_RETURN_PMU_HANDOFF_OUT".into(),
+                        format!(
+                            "{LAUNCH_RETURN_PROFILE_REMOTE_DIR}/cycle-{}-handoff-pmu.json",
+                            cycle_number + 1
+                        ),
+                    ),
+                ]);
+            }
             if cycle_index + 1 < LAUNCH_RETURN_CYCLES {
                 return_env.extend([
                     (
@@ -12104,14 +12187,15 @@ fn profile_installed_launch_return(
             }
             let total_return_us = present_us - request_us;
             let visible_black_ms = total_return_us.saturating_add(999) / 1_000;
-            let restored = status.get("return_screen").and_then(Value::as_str) == Some("arcade")
+            let exact_restored = status.get("return_screen").and_then(Value::as_str)
+                == Some("arcade")
                 && selected == expected_index
                 && (visual_index - expected_index as f64).abs() < 0.01
                 && scroll_y == expected_scroll_y
                 && selected_path == expected_path
                 && selected_collection == expected_collection
-                && preview_verified
-                && visible_black_ms < LAUNCH_RETURN_BLACK_LIMIT_MS;
+                && preview_verified;
+            let product_boundary_passed = visible_black_ms < LAUNCH_RETURN_BLACK_LIMIT_MS;
             let capture =
                 request_framebuffer_png_at_when_latched(config.agent()?, Duration::from_secs(3))?;
             validate_visible_launcher_capture(&capture)?;
@@ -12122,61 +12206,100 @@ fn profile_installed_launch_return(
                 output_dir.join(&capture_metadata_file),
                 format!("{}\n", serde_json::to_string_pretty(&capture.result)?),
             )?;
-            let profile_metadata_text =
-                wait_launch_return_artifact(&session, &remote_complete, Duration::from_secs(5))?;
-            let profile_metadata: Value = serde_json::from_str(profile_metadata_text.trim())?;
-            let sample_hits = profile_metadata
-                .get("sample_hits")
-                .and_then(Value::as_i64)
-                .unwrap_or(0);
-            let sample_stacks = profile_metadata
-                .get("sample_stacks")
-                .and_then(Value::as_u64)
-                .unwrap_or(0);
-            if profile_metadata.get("state").and_then(Value::as_str) != Some("complete")
-                || sample_hits <= 0
-                || sample_stacks == 0
-            {
-                return Err(format!(
-                    "launch-return cycle {cycle_number} produced no valid CPU samples"
-                )
-                .into());
-            }
-            let folded = remote_read(&session, &remote_folded)
-                .filter(|text| !text.trim().is_empty())
-                .ok_or_else(|| {
-                    format!("launch-return profile artifact is missing: {remote_folded}")
-                })?;
-            let resolved_application_symbols =
-                folded.contains("mister_magik") || folded.contains("slint::");
-            if !resolved_application_symbols {
-                return Err(format!(
-                    "launch-return cycle {cycle_number} folded stacks have no resolved application symbols"
-                )
-                .into());
-            }
-            fs::write(
-                output_dir.join(format!("cycle-{cycle_number}-stacks.folded")),
-                &folded,
-            )?;
-            fs::write(
-                output_dir.join(format!("cycle-{cycle_number}-profile.json")),
-                format!("{}\n", serde_json::to_string_pretty(&profile_metadata)?),
-            )?;
+            let profiler_artifacts = match arm {
+                LaunchReturnAttributionArm::Pprof => {
+                    let profile_metadata_text = wait_launch_return_artifact(
+                        &session,
+                        &remote_complete,
+                        Duration::from_secs(5),
+                    )?;
+                    let profile_metadata: Value =
+                        serde_json::from_str(profile_metadata_text.trim())?;
+                    let sample_hits = profile_metadata
+                        .get("sample_hits")
+                        .and_then(Value::as_i64)
+                        .unwrap_or(0);
+                    let sample_stacks = profile_metadata
+                        .get("sample_stacks")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0);
+                    if profile_metadata.get("state").and_then(Value::as_str) != Some("complete")
+                        || sample_hits <= 0
+                        || sample_stacks == 0
+                    {
+                        return Err(format!(
+                            "launch-return cycle {cycle_number} produced no valid CPU samples"
+                        )
+                        .into());
+                    }
+                    let folded = remote_read(&session, &remote_folded)
+                        .filter(|text| !text.trim().is_empty())
+                        .ok_or_else(|| {
+                            format!("launch-return profile artifact is missing: {remote_folded}")
+                        })?;
+                    let resolved_application_symbols =
+                        folded.contains("mister_magik") || folded.contains("slint::");
+                    if !resolved_application_symbols {
+                        return Err(format!(
+                            "launch-return cycle {cycle_number} folded stacks have no resolved application symbols"
+                        )
+                        .into());
+                    }
+                    fs::write(
+                        output_dir.join(format!("cycle-{cycle_number}-stacks.folded")),
+                        &folded,
+                    )?;
+                    fs::write(
+                        output_dir.join(format!("cycle-{cycle_number}-profile.json")),
+                        format!("{}\n", serde_json::to_string_pretty(&profile_metadata)?),
+                    )?;
+                    let artifact = remote_read(&session, &remote_svg)
+                        .filter(|text| !text.trim().is_empty())
+                        .ok_or_else(|| {
+                            format!("launch-return profile artifact is missing: {remote_svg}")
+                        })?;
+                    fs::write(
+                        output_dir.join(format!("cycle-{cycle_number}-flamegraph.svg")),
+                        artifact,
+                    )?;
+                    json!({
+                        "cpu_profile_file": format!("cycle-{cycle_number}-profile.json"),
+                        "cpu_sample_hits": sample_hits,
+                        "cpu_sample_stacks": sample_stacks,
+                        "resolved_application_symbols": true,
+                    })
+                }
+                LaunchReturnAttributionArm::Pmu => {
+                    let remote_pmu = format!(
+                        "{LAUNCH_RETURN_PROFILE_REMOTE_DIR}/cycle-{cycle_number}-handoff-pmu.json"
+                    );
+                    let text =
+                        wait_launch_return_artifact(&session, &remote_pmu, Duration::from_secs(5))?;
+                    let pmu: Value = serde_json::from_str(text.trim())?;
+                    if pmu["schema"] != "mister-magik-launch-return-handoff-pmu-v1"
+                        || pmu["state"] != "complete"
+                        || pmu["ui_profile"]["dropped_spans"].as_u64() != Some(0)
+                        || pmu["worker_profiles"]["dropped_profiles"].as_u64() != Some(0)
+                    {
+                        return Err(format!(
+                            "launch-return cycle {cycle_number} produced incomplete PMU evidence"
+                        )
+                        .into());
+                    }
+                    let local = format!("cycle-{cycle_number}-handoff-pmu.json");
+                    fs::write(
+                        output_dir.join(&local),
+                        format!("{}\n", serde_json::to_string_pretty(&pmu)?),
+                    )?;
+                    json!({"pmu_profile_file": local, "pmu": pmu})
+                }
+                LaunchReturnAttributionArm::Control => Value::Null,
+            };
             let frame_profile =
                 wait_launch_return_artifact(&session, &remote_frames, Duration::from_secs(6))?;
             fs::write(
                 output_dir.join(format!("cycle-{cycle_number}-frames.tsv")),
                 frame_profile,
-            )?;
-            let artifact = remote_read(&session, &remote_svg)
-                .filter(|text| !text.trim().is_empty())
-                .ok_or_else(|| {
-                    format!("launch-return profile artifact is missing: {remote_svg}")
-                })?;
-            fs::write(
-                output_dir.join(format!("cycle-{cycle_number}-flamegraph.svg")),
-                artifact,
             )?;
             for (remote, local) in [
                 (
@@ -12255,15 +12378,12 @@ fn profile_installed_launch_return(
                 "total_return_us": total_return_us,
                 "capture_file": capture_file,
                 "capture_metadata_file": capture_metadata_file,
-                "flamegraph_file": format!("cycle-{cycle_number}-flamegraph.svg"),
-                "folded_stacks_file": format!("cycle-{cycle_number}-stacks.folded"),
-                "cpu_profile_file": format!("cycle-{cycle_number}-profile.json"),
-                "cpu_sample_hits": sample_hits,
-                "cpu_sample_stacks": sample_stacks,
-                "resolved_application_symbols": resolved_application_symbols,
+                "profiler": profiler_artifacts,
                 "frame_profile_file": format!("cycle-{cycle_number}-frames.tsv"),
                 "timeline_file": format!("cycle-{cycle_number}-timeline.json"),
-                "restored": restored,
+                "exact_restored": exact_restored,
+                "product_boundary_passed": product_boundary_passed,
+                "restored": exact_restored && (!enforce_product_boundary || product_boundary_passed),
             });
             cycle
                 .as_object_mut()
@@ -12294,9 +12414,9 @@ fn profile_installed_launch_return(
                 ),
             )?;
             cycles.push(cycle);
-            if !restored {
+            if !exact_restored || (enforce_product_boundary && !product_boundary_passed) {
                 return Err(format!(
-                    "launch-return cycle {} did not restore within budget: status={status}",
+                    "launch-return cycle {} did not restore exact context within the required product boundary: status={status}",
                     cycle_index + 1
                 )
                 .into());
@@ -12336,12 +12456,20 @@ fn profile_installed_launch_return(
         Ok(json!({
             "schema": "mister-magik-launch-return-benchmark-v3",
             "scenario": if force_capsule_miss { "launch-return-fallback" } else { "launch-return" },
-            "timing_class": "instrumented-installed-dev-symbols",
+            "attribution_arm": arm.label(),
+            "timing_class": match arm {
+                LaunchReturnAttributionArm::Control => "unprofiled-installed-dev-control",
+                LaunchReturnAttributionArm::Pmu => "pmu-instrumented-installed-dev",
+                LaunchReturnAttributionArm::Pprof => "instrumented-installed-dev-symbols",
+            },
+            "timing_authority": arm == LaunchReturnAttributionArm::Control,
+            "product_boundary_enforced": enforce_product_boundary,
+            "product_quality_status": if cycles.iter().all(|cycle| cycle["product_boundary_passed"].as_bool() == Some(true)) { "passed" } else { "failed" },
             "main_revision": &main_revision,
             "main_sha256": &main_sha256,
             "magik_revision": &magik_revision,
             "gui_sha256": &gui_sha256,
-            "cpu_profile_hz": 999,
+            "cpu_profile_hz": if arm == LaunchReturnAttributionArm::Pprof { json!(999) } else { Value::Null },
             "cycles": cycles.clone(),
             "latency": {
                 "command_to_process": latency_values("command_to_process_us"),
@@ -12382,6 +12510,10 @@ fn profile_installed_launch_return(
                 format!("{LAUNCH_RETURN_PROFILE_REMOTE_DIR}/cycle-{cycle}-profile.json"),
                 format!("cycle-{cycle}-profile.json"),
             ),
+            (
+                format!("{LAUNCH_RETURN_PROFILE_REMOTE_DIR}/cycle-{cycle}-handoff-pmu.json"),
+                format!("cycle-{cycle}-handoff-pmu.json"),
+            ),
         ] {
             if !output_dir.join(&local).is_file()
                 && let Some(text) = remote_read(&session, &remote)
@@ -12398,12 +12530,13 @@ fn profile_installed_launch_return(
             let failure = json!({
                 "schema": "mister-magik-launch-return-benchmark-v3",
                 "scenario": if force_capsule_miss { "launch-return-fallback" } else { "launch-return" },
-                "timing_class": "instrumented-installed-dev-symbols",
+                "attribution_arm": arm.label(),
+                "timing_class": "incomplete-attribution-arm",
                 "main_revision": &main_revision,
                 "main_sha256": &main_sha256,
                 "magik_revision": &magik_revision,
                 "gui_sha256": &gui_sha256,
-                "cpu_profile_hz": 999,
+                "cpu_profile_hz": if arm == LaunchReturnAttributionArm::Pprof { json!(999) } else { Value::Null },
                 "cycles": cycles,
                 "black_interval_limit_ms": LAUNCH_RETURN_BLACK_LIMIT_MS,
                 "game_settle_secs": LAUNCH_RETURN_GAME_SETTLE_SECS,
@@ -12425,6 +12558,146 @@ fn profile_installed_launch_return(
             .into());
         }
     };
+    fs::write(
+        output_dir.join("summary.json"),
+        format!("{}\n", serde_json::to_string_pretty(&summary)?),
+    )?;
+    serde_json::to_string(&summary).map_err(Into::into)
+}
+
+fn profile_installed_launch_return_attribution(
+    config: &NativeDeviceConfig,
+    output_dir: &Path,
+) -> Result<String> {
+    let gatord = streamline_gatord_path(env::var_os("MISTER_GATORD_PATH"))?;
+    let gatord_metadata = fs::metadata(&gatord)?;
+    if !gatord_metadata.is_file() || gatord_metadata.len() == 0 {
+        return Err("MISTER_GATORD_PATH must name a non-empty regular file".into());
+    }
+    if gatord_metadata.len() > 64 * 1024 * 1024 {
+        return Err("MISTER_GATORD_PATH exceeds the 64 MiB upload limit".into());
+    }
+    let gatord_sha256 = file_sha256(gatord.clone())?;
+    fs::create_dir_all(output_dir)?;
+    let session = connect_with(&config.connection, 10)?;
+    let manifest = remote_read(&session, LOCAL_MAIN_MANIFEST_REMOTE)
+        .ok_or("development manifest is unavailable before launch-return attribution")?;
+    let installed_identity = streamline_installed_identity(&session, &manifest)?;
+    let control: Value = serde_json::from_str(&profile_installed_launch_return_arm(
+        config,
+        &output_dir.join("control"),
+        false,
+        LaunchReturnAttributionArm::Control,
+        false,
+    )?)?;
+    let pmu: Value = serde_json::from_str(&profile_installed_launch_return_arm(
+        config,
+        &output_dir.join("pmu"),
+        false,
+        LaunchReturnAttributionArm::Pmu,
+        false,
+    )?)?;
+    let pprof: Value = serde_json::from_str(&profile_installed_launch_return_arm(
+        config,
+        &output_dir.join("pprof"),
+        false,
+        LaunchReturnAttributionArm::Pprof,
+        false,
+    )?)?;
+
+    let streamline_dir = output_dir.join("streamline");
+    fs::create_dir_all(&streamline_dir)?;
+    let capture = SystemWideStreamlineCapture::new(
+        &session,
+        &config.connection,
+        &streamline_dir,
+        LAUNCH_RETURN_STREAMLINE_CAPTURE,
+    );
+    let gatord_version = capture.prepare(&gatord)?;
+    let capture_thread = capture.start();
+    let streamline_result = (|| -> Result<(Value, u64, u64)> {
+        capture.wait_ready(Duration::from_secs(10))?;
+        let started = capture.monotonic_ns("launch-return capture start")?;
+        let route = profile_installed_launch_return_arm(
+            config,
+            &streamline_dir.join("route"),
+            false,
+            LaunchReturnAttributionArm::Control,
+            false,
+        )?;
+        let ended = capture.monotonic_ns("launch-return capture end")?;
+        Ok((serde_json::from_str(&route)?, started, ended))
+    })();
+    let capture_result = capture.stop(capture_thread);
+    capture.retain_log()?;
+    let package_result = capture_result.and_then(|()| capture.package_extract());
+    let cleanup_result = capture.cleanup();
+    let ((streamline, capture_started, capture_ended), archive_sha256) =
+        match (streamline_result, package_result, cleanup_result) {
+            (Ok(route), Ok(archive), Ok(())) => (route, archive),
+            (route, package, cleanup) => {
+                return Err(format!(
+                    "launch-return Streamline arm failed: route={:?}; package={:?}; cleanup={:?}",
+                    route.err(),
+                    package.err(),
+                    cleanup.err(),
+                )
+                .into());
+            }
+        };
+    let final_manifest = remote_read(&session, LOCAL_MAIN_MANIFEST_REMOTE)
+        .ok_or("development manifest is unavailable after launch-return attribution")?;
+    if final_manifest != manifest
+        || streamline_installed_identity(&session, &final_manifest)? != installed_identity
+    {
+        return Err("installed identity changed during launch-return attribution".into());
+    }
+    let capture_manifest = streamline_capture_manifest(
+        &installed_identity,
+        &gatord_version,
+        &gatord_sha256,
+        LAUNCH_RETURN_STREAMLINE_CAPTURE,
+        capture_started,
+        capture_ended,
+    );
+    fs::write(
+        streamline_dir.join("capture-manifest.json"),
+        format!("{}\n", serde_json::to_string_pretty(&capture_manifest)?),
+    )?;
+    let latency_median = |route: &Value| {
+        route
+            .pointer("/latency/total_return/median_us")
+            .and_then(Value::as_u64)
+    };
+    let control_median = latency_median(&control);
+    let summary = json!({
+        "schema": "mister-magik-launch-return-attribution-v1",
+        "artifact_status": "passed",
+        "product_quality_status": control["product_quality_status"],
+        "performance_authority": "unprofiled-control",
+        "product_boundary_ms": LAUNCH_RETURN_BLACK_LIMIT_MS,
+        "product_boundary_is_artifact_gate": false,
+        "identity": capture_manifest,
+        "observer_deltas": {
+            "pmu_total_return_median_delta_us": signed_measurement_delta(latency_median(&pmu), control_median),
+            "pprof_total_return_median_delta_us": signed_measurement_delta(latency_median(&pprof), control_median),
+            "streamline_total_return_median_delta_us": signed_measurement_delta(latency_median(&streamline), control_median),
+        },
+        "arms": {
+            "control": control,
+            "pmu": pmu,
+            "pprof": pprof,
+            "streamline": {
+                "route": streamline,
+                "gatord_version": gatord_version,
+                "gatord_sha256": gatord_sha256,
+                "archive_sha256": archive_sha256,
+                "capture": "streamline/mister-magik.apc",
+                "archive": format!("streamline/{}", LAUNCH_RETURN_STREAMLINE_CAPTURE.archive_file),
+                "capture_manifest": "streamline/capture-manifest.json",
+            },
+        },
+    });
     fs::write(
         output_dir.join("summary.json"),
         format!("{}\n", serde_json::to_string_pretty(&summary)?),
@@ -21245,6 +21518,28 @@ mod tests {
         ] {
             assert!(cleanup.contains(arming_path));
         }
+    }
+
+    #[test]
+    fn launch_return_attribution_arms_enable_only_owned_profilers() {
+        let control = launch_return_initial_env(LaunchReturnAttributionArm::Control);
+        let pmu = launch_return_initial_env(LaunchReturnAttributionArm::Pmu);
+        assert!(control.iter().all(|(name, _)| name != "MISTER_PMU_PROFILE"));
+        assert!(control.iter().all(|(name, _)| name != "MISTER_PPROF"));
+        assert!(
+            pmu.iter()
+                .any(|(name, value)| name == "MISTER_PMU_PROFILE" && value == "1")
+        );
+        assert!(
+            pmu.iter()
+                .any(|(name, _)| name == "MISTER_LAUNCH_RETURN_PMU_HANDOFF_OUT")
+        );
+        assert!(pmu.iter().all(|(name, _)| name != "MISTER_PPROF"));
+        assert_eq!(
+            LAUNCH_RETURN_STREAMLINE_CAPTURE.archive_file,
+            "mister-magik-launch-return-attribution.apc.tar.gz"
+        );
+        assert_eq!(LAUNCH_RETURN_STREAMLINE_CAPTURE.max_duration_seconds, 180);
     }
 
     #[test]

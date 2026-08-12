@@ -11,6 +11,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 const DEFAULT_LAUNCH_HANDOFF_BENCH_DELAY: Duration = Duration::from_millis(750);
 const PMU_CAPSULE_CONSTRUCTION: &str = "launch.return-capsule-construction";
 const PMU_LAUNCH_PREPARATION: &str = "launch.preparation";
+const LAUNCH_RETURN_PMU_HANDOFF_ENV: &str = "MISTER_LAUNCH_RETURN_PMU_HANDOFF_OUT";
 
 #[derive(Debug)]
 struct LaunchWorkerResult {
@@ -392,6 +393,7 @@ impl LaunchHandoffSession {
             },
         };
         let pending = self.pending.take().expect("pending launch result");
+        finish_launch_return_handoff_pmu_async();
         match worker_result.result {
             Ok(spawned) => {
                 self.launch_started = result_received;
@@ -499,6 +501,49 @@ impl LaunchHandoffSession {
         session.arcade_core_running = arcade_core_running;
         session
     }
+}
+
+fn finish_launch_return_handoff_pmu_async() {
+    let Some(path) = std::env::var_os(LAUNCH_RETURN_PMU_HANDOFF_ENV).map(std::path::PathBuf::from)
+    else {
+        return;
+    };
+    if !path.is_absolute()
+        || !path.starts_with("/tmp/mister-magik")
+        || path.components().any(|component| {
+            matches!(
+                component,
+                std::path::Component::ParentDir | std::path::Component::CurDir
+            )
+        })
+    {
+        return;
+    }
+    let ui_profile = mister_magik_perf_events::take_thread_profile();
+    let worker_profiles = mister_magik_perf_events::take_process_profiles();
+    std::thread::spawn(move || {
+        let passed = ui_profile.enabled
+            && ui_profile.failure.is_none()
+            && ui_profile.dropped_spans == 0
+            && !ui_profile.records.is_empty()
+            && worker_profiles.dropped_profiles == 0
+            && worker_profiles.profiles.iter().all(|submitted| {
+                submitted.profile.failure.is_none()
+                    && submitted.profile.dropped_spans == 0
+                    && !submitted.profile.records.is_empty()
+            })
+            && !worker_profiles.profiles.is_empty();
+        let payload = serde_json::json!({
+            "schema": "mister-magik-launch-return-handoff-pmu-v1",
+            "state": if passed { "complete" } else { "failed" },
+            "ui_profile": ui_profile,
+            "worker_profiles": worker_profiles,
+        });
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let _ = std::fs::write(path, format!("{payload}\n"));
+    });
 }
 
 fn spawn_launch_worker(request: LaunchWorkerRequest) -> mpsc::Receiver<LaunchWorkerResult> {
@@ -610,6 +655,14 @@ mod tests {
         assert_eq!(PMU_LAUNCH_PREPARATION, "launch.preparation");
         assert!(PMU_CAPSULE_CONSTRUCTION.starts_with("launch.return-capsule"));
         assert!(!PMU_LAUNCH_PREPARATION.starts_with("launch.return-capsule"));
+    }
+
+    #[test]
+    fn launch_return_pmu_handoff_path_is_fixed_to_volatile_state() {
+        assert_eq!(
+            LAUNCH_RETURN_PMU_HANDOFF_ENV,
+            "MISTER_LAUNCH_RETURN_PMU_HANDOFF_OUT"
+        );
     }
 
     #[test]

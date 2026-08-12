@@ -40,6 +40,7 @@ enum BenchmarkProfile {
     SystemEntryQualification,
     LaunchReturn,
     LaunchReturnFallback,
+    LaunchReturnAttribution,
     ModalInput,
     InputIntegrity,
     LauncherResponse,
@@ -107,6 +108,9 @@ impl BenchmarkDevice for DeviceClient {
             BenchmarkProfile::LaunchReturn => device.profile_launch_return(&output_dir, false),
             BenchmarkProfile::LaunchReturnFallback => {
                 device.profile_launch_return(&output_dir, true)
+            }
+            BenchmarkProfile::LaunchReturnAttribution => {
+                device.profile_launch_return_attribution(&output_dir)
             }
             BenchmarkProfile::ModalInput => device.verify_modal_input(&output_dir),
             BenchmarkProfile::InputIntegrity => device.verify_input_integrity(&output_dir),
@@ -259,6 +263,15 @@ fn require_clean_installed_commit(
         BenchmarkScenario::LaunchReturnFallback => {
             execute_launch_return(&mut device, manifest, output_dir, reporter, true)
         }
+        BenchmarkScenario::LaunchReturnAttribution => execute_attribution_capture(
+            &mut device,
+            manifest,
+            output_dir,
+            reporter,
+            BenchmarkProfile::LaunchReturnAttribution,
+            "launch-return-attribution",
+            "mister-magik-launch-return-attribution-v1",
+        ),
         BenchmarkScenario::ModalInput => {
             execute_modal_input(&mut device, manifest, output_dir, reporter)
         }
@@ -672,6 +685,7 @@ fn particle_scene_lab_command(scenario: BenchmarkScenario) -> Option<&'static st
         | BenchmarkScenario::SystemEntryQualification
         | BenchmarkScenario::LaunchReturn
         | BenchmarkScenario::LaunchReturnFallback
+        | BenchmarkScenario::LaunchReturnAttribution
         | BenchmarkScenario::ModalInput
         | BenchmarkScenario::InputIntegrity
         | BenchmarkScenario::LauncherResponse
@@ -1255,7 +1269,9 @@ const fn benchmark_requires_initial_health(scenario: BenchmarkScenario) -> bool 
     // exact state and then performs the same development health check itself.
     !matches!(
         scenario,
-        BenchmarkScenario::LaunchReturn | BenchmarkScenario::LaunchReturnFallback
+        BenchmarkScenario::LaunchReturn
+            | BenchmarkScenario::LaunchReturnFallback
+            | BenchmarkScenario::LaunchReturnAttribution
     )
 }
 

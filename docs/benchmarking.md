@@ -45,6 +45,7 @@ Supported scenarios:
 - `catalog-lifecycle`
 - `launch-return`
 - `launch-return-fallback`
+- `launch-return-attribution`
 - `modal-input`
 - `navigation-transitions`
 - `settings-navigation`
@@ -442,6 +443,16 @@ elapsed time is recorded separately and is never counted as visible black. The
 explicit restoration/fallback boundary is five seconds. Its timing class is
 `instrumented-installed-dev-symbols`: sampling overhead is present, but the
 binary and manifest remain the exact installed pair for the entire run.
+
+`launch-return-attribution` repeats the same fixed two-cycle route in four
+independent launcher processes: unprofiled control, PMU, existing pprof, and
+system-wide Streamline. Capsule construction/encoding/save is attributed to
+the UI thread while launch preparation, archive extraction, FIFO request, and
+acknowledgement are retained as a submitted launch-worker profile. Every arm
+must restore exact context, terminal preview state, and an authoritative first
+correct presentation. The v1 artifact remains valid when a diagnostic arm, or
+even the control, exceeds five seconds; the summary reports that product
+boundary separately and treats only the unprofiled control as timing authority.
 
 The former showcase, firework, commercial-technique and Form-scene scenarios
 are archived with their code and visual contracts under

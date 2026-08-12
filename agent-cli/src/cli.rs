@@ -731,6 +731,7 @@ mod tests {
             "pmu-profile",
             "launch-return",
             "launch-return-fallback",
+            "launch-return-attribution",
             "modal-input",
             "input-integrity",
             "launcher-response",
