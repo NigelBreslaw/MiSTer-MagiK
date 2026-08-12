@@ -154,6 +154,7 @@ def main() -> None:
     diagnostics_output = source_dir / "mister_magik_video_diagnostics_output.sv"
     diagnostics_protocol = source_dir / "mister_magik_video_diagnostics_protocol.svh"
     diagnostics_sdc = source_dir / "mister_magik_video_diagnostics.sdc"
+    timing_report = source_dir / "report_top_timing.tcl"
     integration_tb = source_dir / "tb_mister_magik_sys_top_integration.sv"
     control_source = diagnostics_control.read_text()
     avalon_source = diagnostics_avalon.read_text()
@@ -217,6 +218,13 @@ def main() -> None:
     if "cfg_done_meta" in control_source or "cfg_done_sys" in control_source:
         fail("clk_sys cfg_done was unnecessarily synchronized in control diagnostics")
     diagnostics_sdc_text = diagnostics_sdc.read_text()
+    timing_report_text = timing_report.read_text()
+    unconstrained_report = (
+        "report_ucp \\\n"
+        "\t-file output_files/menu.unconstrained-paths.rpt"
+    )
+    if timing_report_text.count(unconstrained_report) != 1:
+        fail("full unconstrained-path timing report is missing or ambiguous")
     if "get_registers -nowarn -hierarchical" in diagnostics_sdc_text:
         fail("diagnostic SDC uses unsupported Quartus get_registers syntax")
     if "get_registers -nowarn -no_duplicates" not in diagnostics_sdc_text:

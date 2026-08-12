@@ -21,6 +21,8 @@ report_timing \
 	-nworst 1 \
 	-detail full_path \
 	-file output_files/menu.top-hold-paths.rpt
+report_ucp \
+	-file output_files/menu.unconstrained-paths.rpt
 
 report_max_skew \
 	-panel_name "MagiK Diagnostic CDC Skew" \
