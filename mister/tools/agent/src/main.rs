@@ -1127,8 +1127,8 @@ mod linux {
         ScanoutSlotsLayout,
     };
     use super::{
-        ControlRequest, io_operation_evidence, parse_control_request, require_ok_main_reply,
-        select_framebuffer_capture,
+        ControlRequest, IoOperationEvidence, io_operation_evidence, parse_control_request,
+        require_ok_main_reply, select_framebuffer_capture,
     };
     use libc::{c_ulong, ioctl};
     use mister_magik_framebuffer_stream::{
