@@ -8735,7 +8735,7 @@ fn profile_installed_launcher_response_streamline(
     let session = connect_with(&config.connection, 30)?;
     let manifest = remote_read(&session, "/media/fat/mister-magik-dev/platform-v3.manifest")
         .ok_or("development manifest is unavailable before launcher-response Streamline capture")?;
-    let installed_identity = streamline_installed_identity(&session, &manifest)?;
+    let installed_identity = streamline_installed_identity(&session, config.agent()?, &manifest)?;
     let original_reply = exec_checked_output(
         &session,
         "query launcher-response Streamline display mode",
@@ -8837,7 +8837,7 @@ fn profile_installed_launcher_response_streamline(
                 .into(),
         );
     }
-    let final_identity = streamline_installed_identity(&session, &final_manifest)?;
+    let final_identity = streamline_installed_identity(&session, config.agent()?, &final_manifest)?;
     if final_identity != installed_identity {
         return Err(
             "installed identity changed during launcher-response Streamline capture".into(),
@@ -8909,7 +8909,7 @@ fn profile_installed_gui_frame_attribution(
     let session = connect_with(&config.connection, 30)?;
     let manifest = remote_read(&session, "/media/fat/mister-magik-dev/platform-v3.manifest")
         .ok_or("development manifest is unavailable before GUI frame attribution")?;
-    let installed_identity = streamline_installed_identity(&session, &manifest)?;
+    let installed_identity = streamline_installed_identity(&session, config.agent()?, &manifest)?;
     let original_reply = exec_checked_output(
         &session,
         "query GUI frame attribution display mode",
@@ -8989,7 +8989,7 @@ fn profile_installed_gui_frame_attribution(
     if final_manifest != manifest {
         return Err("installed platform manifest changed during GUI frame attribution".into());
     }
-    let final_identity = streamline_installed_identity(&session, &final_manifest)?;
+    let final_identity = streamline_installed_identity(&session, config.agent()?, &final_manifest)?;
     if final_identity != installed_identity {
         return Err("installed identity changed during GUI frame attribution".into());
     }
@@ -9221,7 +9221,7 @@ fn profile_installed_transition_streamline(
     let session = connect_with(&config.connection, 10)?;
     let manifest = remote_read(&session, "/media/fat/mister-magik-dev/platform-v3.manifest")
         .ok_or("development manifest is unavailable before transition Streamline capture")?;
-    let installed_identity = streamline_installed_identity(&session, &manifest)?;
+    let installed_identity = streamline_installed_identity(&session, config.agent()?, &manifest)?;
     let original_settings = remote_read(&session, ORIENTATION_TRANSITION_SETTINGS_REMOTE);
     let original_status = read_launcher_status(&session)?;
     let capture = SystemWideStreamlineCapture::new(
@@ -9311,7 +9311,8 @@ fn profile_installed_transition_streamline(
     let final_manifest = remote_read(&session, "/media/fat/mister-magik-dev/platform-v3.manifest")
         .ok_or("development manifest is unavailable after transition Streamline capture")?;
     if final_manifest != manifest
-        || streamline_installed_identity(&session, &final_manifest)? != installed_identity
+        || streamline_installed_identity(&session, config.agent()?, &final_manifest)?
+            != installed_identity
     {
         return Err("installed identity changed during transition Streamline capture".into());
     }
@@ -9657,7 +9658,7 @@ fn profile_installed_agent_observer_attribution(
     let session = connect_with(&config.connection, 10)?;
     let manifest = remote_read(&session, LOCAL_MAIN_MANIFEST_REMOTE)
         .ok_or("development manifest is unavailable before agent observer attribution")?;
-    let installed_identity = streamline_installed_identity(&session, &manifest)?;
+    let installed_identity = streamline_installed_identity(&session, config.agent()?, &manifest)?;
     let timing = run_agent_observer_matrix(config, &session, &output_dir.join("timing"))?;
     let streamline_dir = output_dir.join("streamline");
     let capture = SystemWideStreamlineCapture::new(
@@ -9694,7 +9695,8 @@ fn profile_installed_agent_observer_attribution(
     let final_manifest = remote_read(&session, LOCAL_MAIN_MANIFEST_REMOTE)
         .ok_or("development manifest is unavailable after agent observer attribution")?;
     if final_manifest != manifest
-        || streamline_installed_identity(&session, &final_manifest)? != installed_identity
+        || streamline_installed_identity(&session, config.agent()?, &final_manifest)?
+            != installed_identity
     {
         return Err("installed identity changed during agent observer attribution".into());
     }
@@ -10050,7 +10052,7 @@ fn profile_installed_agent_io_attribution(
     let session = connect_with(&config.connection, 10)?;
     let manifest = remote_read(&session, LOCAL_MAIN_MANIFEST_REMOTE)
         .ok_or("development manifest is unavailable before agent I/O attribution")?;
-    let installed_identity = streamline_installed_identity(&session, &manifest)?;
+    let installed_identity = streamline_installed_identity(&session, config.agent()?, &manifest)?;
     let endpoint = config.agent()?;
     let preflight = select_agent_io_directory(endpoint)?;
     let directory = preflight["selected_path"]
@@ -10115,7 +10117,8 @@ fn profile_installed_agent_io_attribution(
     let final_manifest = remote_read(&session, LOCAL_MAIN_MANIFEST_REMOTE)
         .ok_or("development manifest is unavailable after agent I/O attribution")?;
     if final_manifest != manifest
-        || streamline_installed_identity(&session, &final_manifest)? != installed_identity
+        || streamline_installed_identity(&session, config.agent()?, &final_manifest)?
+            != installed_identity
     {
         return Err("installed identity changed during agent I/O attribution".into());
     }
@@ -10166,6 +10169,7 @@ fn profile_installed_agent_io_attribution(
 
 fn streamline_installed_identity(
     session: &Session,
+    endpoint: &AgentEndpoint,
     platform_manifest: &str,
 ) -> Result<StreamlineInstalledIdentity> {
     let boot_id = remote_read(session, "/proc/sys/kernel/random/boot_id")
@@ -10184,7 +10188,7 @@ fn streamline_installed_identity(
     if installed_gui_sha256 != gui_sha256 {
         return Err("installed GUI hash does not match the development manifest".into());
     }
-    let agent_identity = agent_request("ping", json!({}), Duration::from_secs(3))?;
+    let agent_identity = agent_request_at(endpoint, "ping", json!({}), Duration::from_secs(3))?;
     let agent_version = agent_identity
         .response
         .pointer("/result/agent_version")
@@ -11256,7 +11260,7 @@ fn profile_installed_system_entry_critical_streamline(
     let session = connect_with(&config.connection, 10)?;
     let manifest = remote_read(&session, "/media/fat/mister-magik-dev/platform-v3.manifest")
         .ok_or("development manifest is unavailable before system-entry Streamline capture")?;
-    let installed_identity = streamline_installed_identity(&session, &manifest)?;
+    let installed_identity = streamline_installed_identity(&session, config.agent()?, &manifest)?;
     let original_settings = remote_read(&session, ORIENTATION_TRANSITION_SETTINGS_REMOTE);
     let original_status = read_launcher_status(&session)?;
     let capability = exec_checked_output(
@@ -11380,7 +11384,8 @@ fn profile_installed_system_entry_critical_streamline(
     let final_manifest = remote_read(&session, "/media/fat/mister-magik-dev/platform-v3.manifest")
         .ok_or("development manifest is unavailable after system-entry Streamline capture")?;
     if final_manifest != manifest
-        || streamline_installed_identity(&session, &final_manifest)? != installed_identity
+        || streamline_installed_identity(&session, config.agent()?, &final_manifest)?
+            != installed_identity
     {
         return Err("installed identity changed during system-entry Streamline capture".into());
     }
@@ -13440,7 +13445,7 @@ fn profile_installed_launch_return_attribution(
     let session = connect_with(&config.connection, 10)?;
     let manifest = remote_read(&session, LOCAL_MAIN_MANIFEST_REMOTE)
         .ok_or("development manifest is unavailable before launch-return attribution")?;
-    let installed_identity = streamline_installed_identity(&session, &manifest)?;
+    let installed_identity = streamline_installed_identity(&session, config.agent()?, &manifest)?;
     let control: Value = serde_json::from_str(&profile_installed_launch_return_arm(
         config,
         &output_dir.join("control"),
@@ -13506,7 +13511,8 @@ fn profile_installed_launch_return_attribution(
     let final_manifest = remote_read(&session, LOCAL_MAIN_MANIFEST_REMOTE)
         .ok_or("development manifest is unavailable after launch-return attribution")?;
     if final_manifest != manifest
-        || streamline_installed_identity(&session, &final_manifest)? != installed_identity
+        || streamline_installed_identity(&session, config.agent()?, &final_manifest)?
+            != installed_identity
     {
         return Err("installed identity changed during launch-return attribution".into());
     }
