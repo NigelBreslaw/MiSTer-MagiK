@@ -206,9 +206,11 @@ def main() -> None:
         fail("diagnostic CDC constraints do not reject empty node collections")
     if diagnostics_sdc_text.count("magik_require_data_pins") < 3:
         fail("diagnostic CDC skew constraints do not reject empty data-pin collections")
-    for data_pin in ("|d\"", "|asdata\"", "|sdata\""):
-        if data_pin not in diagnostics_sdc_text:
-            fail(f"diagnostic CDC skew constraints omit legal data pin {data_pin[:-1]}")
+    if (
+        "foreach suffix [list d asdata sdata]" not in diagnostics_sdc_text
+        or '"${register_pattern}|${suffix}"' not in diagnostics_sdc_text
+    ):
+        fail("diagnostic CDC skew constraints omit a legal direct register data pin")
     diagnostic_hierarchies = (
         "mister_magik_video_diagnostics_control:magik_video_diagnostics|",
         "mister_magik_video_diagnostics_avalon:magik_video_diagnostics_avalon|",
