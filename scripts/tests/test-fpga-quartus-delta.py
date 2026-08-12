@@ -36,35 +36,10 @@ Total block memory bits: 1,000,000
 Total DSP Blocks: 2
 """
 
-CONTROL_SYNC_NAMES = (
-    "avalon_fault_meta", "avalon_fault_sys", "output_fault_meta", "output_fault_sys",
-    "avalon_ack_meta", "avalon_ack_sys", "output_ack_meta", "output_ack_sys",
-    "heartbeat_meta", "heartbeat_sys", "control_vbl_meta", "control_vbl_sys",
-    "control_reset_req_meta", "control_reset_req_sys", "control_reset_out_meta",
-    "control_reset_out_sys", "control_pll_lock_meta", "control_pll_lock_sys",
-)
-AVALON_SYNC_NAMES = (
-    "armed_meta", "armed", "request_meta", "request_sync", "route_meta", "route_sync",
-    "frame_meta", "frame_sync", "reset_meta", "reset_sync",
-)
-OUTPUT_SYNC_NAMES = (
-    "armed_meta", "armed", "request_meta", "request_sync", "route_meta", "route_sync",
-    "direct_meta", "direct_sync", "csync_meta", "csync_sync", "reset_meta", "reset_sync",
-    "cfg_meta", "cfg_sync", "pll_meta", "pll_sync",
-)
-SYNC_NAMES = (
-    *(
-        f"mister_magik_video_diagnostics_control:magik_video_diagnostics|{name}"
-        for name in CONTROL_SYNC_NAMES
-    ),
-    *(
-        f"mister_magik_video_diagnostics_avalon:magik_video_diagnostics_avalon|{name}"
-        for name in AVALON_SYNC_NAMES
-    ),
-    *(
-        f"mister_magik_video_diagnostics_output:magik_video_diagnostics_output|{name}"
-        for name in OUTPUT_SYNC_NAMES
-    ),
+CONTROL_SYNC_NAMES = ("control_pll_lock_meta", "control_pll_lock_sys")
+SYNC_NAMES = tuple(
+    f"mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|{name}"
+    for name in CONTROL_SYNC_NAMES
 )
 
 
@@ -80,41 +55,20 @@ def quartus_assignment_section(hierarchy: str, names: tuple[str, ...]) -> str:
 
 
 CONTROL_SYNC_ASSIGNMENTS = quartus_assignment_section(
-    "mister_magik_video_diagnostics_control:magik_video_diagnostics",
+    "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence",
     CONTROL_SYNC_NAMES,
 )
-AVALON_SYNC_ASSIGNMENTS = quartus_assignment_section(
-    "mister_magik_video_diagnostics_avalon:magik_video_diagnostics_avalon",
-    AVALON_SYNC_NAMES,
-)
-OUTPUT_SYNC_ASSIGNMENTS = quartus_assignment_section(
-    "mister_magik_video_diagnostics_output:magik_video_diagnostics_output",
-    OUTPUT_SYNC_NAMES,
-)
-SYNC_ASSIGNMENTS = (
-    CONTROL_SYNC_ASSIGNMENTS + AVALON_SYNC_ASSIGNMENTS + OUTPUT_SYNC_ASSIGNMENTS
-)
+SYNC_ASSIGNMENTS = CONTROL_SYNC_ASSIGNMENTS
 CUSTOM_SYNC = SYNC_ASSIGNMENTS + """\
-Info (332114): Report Metastability: Found 30 synchronizer chains.
-Info (332114): Fraction of Chains for which MTBFs Could Not be Calculated: 0.233
-Info: MagiK diagnostics CDC analysis applied: avalon_payload
-Info: MagiK diagnostics CDC analysis applied: output_payload
-Info: MagiK diagnostics CDC analysis applied: avalon_route
-Info: MagiK diagnostics CDC analysis applied: output_route
-Info: MagiK diagnostics CDC analysis applied: fault_trigger
+Info (332114): Report Metastability: Found 6 synchronizer chains.
+Info (332114): Fraction of Chains for which MTBFs Could Not be Calculated: 0.667
 """
 
 VALID_DIAGNOSTIC_REPORTS = {
-    "menu.magik-diagnostic-cdc-skew.rpt": "".join(
-        f"; set_max_skew ; 1.{index}00 ; 8.000 ; 7.{index}00 ; from ; to ;\n"
-        for index in range(3)
-    ),
-    "menu.magik-diagnostic-cdc-net-delay.rpt": "".join(
-        f"; set_net_delay ; 1.{index}00 ; 8.000 ; 7.{index}00 ; from ; to ; max ;\n"
-        for index in range(5)
-    ),
+    "menu.magik-diagnostic-cdc-skew.rpt": "No paths to report.\n",
+    "menu.magik-diagnostic-cdc-net-delay.rpt": "No paths to report.\n",
     "menu.magik-diagnostic-metastability.rpt": (
-        "Report Metastability: Found 30 synchronizer chains.\n"
+        "Report Metastability: Found 6 synchronizer chains.\n"
         + "".join(
             f"; Synchronizer Chain ; {name} ; MTBF 1e+09 years ;\n"
             for name in SYNC_NAMES
@@ -208,7 +162,7 @@ class QuartusDeltaTest(unittest.TestCase):
 
     def test_minimum_observer_chain_delta_is_required(self) -> None:
         patched = CUSTOM_SYNC.replace(
-            "Found 30 synchronizer chains", "Found 26 synchronizer chains"
+            "Found 6 synchronizer chains", "Found 5 synchronizer chains"
         )
         result, payload = self.run_check(BASE, BASE + patched)
         self.assertEqual(result.returncode, 1)
@@ -310,14 +264,14 @@ class QuartusDeltaTest(unittest.TestCase):
             "Total registers : 20,000\nTotal block memory bits : 1,000,000\nTotal DSP Blocks : 2\n",
             "Logic utilization (in ALMs) : 7,800 / 41,910 ( 19 % )\n"
             "Total registers : 20,500\nTotal block memory bits : 1,000,000\nTotal DSP Blocks : 2\n",
-            "Logic utilization (in ALMs) : 8,899 / 41,910 ( 21 % )\n"
-            "Total registers : 21,999\nTotal block memory bits : 1,000,000\nTotal DSP Blocks : 2\n",
+            "Logic utilization (in ALMs) : 7,864 / 41,910 ( 19 % )\n"
+            "Total registers : 20,596\nTotal block memory bits : 1,000,000\nTotal DSP Blocks : 2\n",
         )
         result, payload = self.run_check(stock, patched, baseline, fitter_resources)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(payload["baseline_unconstrained_output_paths"], 12)
-        self.assertEqual(payload["resource_deltas"]["logic utilization (in alms)"], 1099)
-        self.assertEqual(payload["resource_deltas"]["total registers"], 1499)
+        self.assertEqual(payload["resource_deltas"]["logic utilization (in alms)"], 64)
+        self.assertEqual(payload["resource_deltas"]["total registers"], 96)
 
     def test_alm_budget_excess_fails(self) -> None:
         summaries = (
@@ -325,7 +279,7 @@ class QuartusDeltaTest(unittest.TestCase):
             "Total block memory bits : 1,000,000\nTotal DSP Blocks : 2\n",
             "Logic utilization (in ALMs) : 7,800\nTotal registers : 20,000\n"
             "Total block memory bits : 1,000,000\nTotal DSP Blocks : 2\n",
-            "Logic utilization (in ALMs) : 8,901\nTotal registers : 20,000\n"
+            "Logic utilization (in ALMs) : 7,865\nTotal registers : 20,000\n"
             "Total block memory bits : 1,000,000\nTotal DSP Blocks : 2\n",
         )
         result, payload = self.run_check(BASE, BASE + CUSTOM_SYNC, BASE, summaries)
@@ -366,7 +320,7 @@ class QuartusDeltaTest(unittest.TestCase):
     def test_resource_and_timing_budgets_are_enforced(self) -> None:
         patched = (BASE + CUSTOM_SYNC).replace(
             "Total logic elements: 10,000", "Total logic elements: 10,801"
-        ).replace("Worst-case hold slack is 0.249", "Worst-case hold slack is 0.148")
+        ).replace("Worst-case hold slack is 0.249", "Worst-case hold slack is 0.098")
         result, payload = self.run_check(BASE, patched)
         self.assertEqual(result.returncode, 1)
         self.assertIn("logic_elements_delta", payload["invalid_reason"])
@@ -408,29 +362,20 @@ class QuartusDeltaTest(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertIn("diagnostic_cdc_analysis_count", payload["invalid_reason"])
 
-        reports = dict(VALID_DIAGNOSTIC_REPORTS)
-        reports["menu.magik-diagnostic-cdc-net-delay.rpt"] = reports[
-            "menu.magik-diagnostic-cdc-net-delay.rpt"
-        ].replace("; 1.000 ;", "; -0.001 ;", 1)
-        result, payload = self.run_check(BASE, BASE + CUSTOM_SYNC, diagnostic_reports=reports)
-        self.assertEqual(result.returncode, 1)
-        self.assertIn("diagnostic_cdc_slack_negative", payload["invalid_reason"])
-
     def test_synchronizer_hierarchy_is_required(self) -> None:
         wrong = CUSTOM_SYNC.replace(
-            "mister_magik_video_diagnostics_avalon:magik_video_diagnostics_avalon",
-            "mister_magik_video_diagnostics_avalon:wrong_observer",
+            "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence",
+            "mister_magik_hdmi_lock_evidence:wrong_observer",
             1,
         )
         result, payload = self.run_check(BASE, BASE + wrong)
         self.assertEqual(result.returncode, 1)
         self.assertIn("custom_synchronizer_missing", payload["invalid_reason"])
 
-    def test_output_reset_synchronizer_hierarchy_is_required(self) -> None:
-        wrong_output = OUTPUT_SYNC_ASSIGNMENTS.replace(
-            "; reset_meta ;", "; unrelated_reset_meta ;", 1
+    def test_second_lock_synchronizer_stage_is_required(self) -> None:
+        wrong = CUSTOM_SYNC.replace(
+            "; control_pll_lock_sys ;", "; unrelated_lock_sys ;", 1
         )
-        wrong = CUSTOM_SYNC.replace(OUTPUT_SYNC_ASSIGNMENTS, wrong_output, 1)
         result, payload = self.run_check(BASE, BASE + wrong)
         self.assertEqual(result.returncode, 1)
         self.assertIn("custom_synchronizer_missing", payload["invalid_reason"])
@@ -440,8 +385,10 @@ class QuartusDeltaTest(unittest.TestCase):
             SCRIPT.parents[2]
             / "mister/platform/fpga/menu-vblank-latch/mister_magik_video_diagnostics.sdc"
         ).read_text(encoding="utf-8")
-        self.assertNotIn("get_registers -nowarn -hierarchical", sdc)
-        self.assertIn("get_registers -nowarn -no_duplicates", sdc)
+        self.assertNotIn("get_registers", sdc)
+        self.assertIn("get_pins -nowarn -no_duplicates", sdc)
+        self.assertNotIn("set_max_skew", sdc)
+        self.assertNotIn("set_net_delay", sdc)
 
 
 if __name__ == "__main__":

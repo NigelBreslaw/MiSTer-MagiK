@@ -52,74 +52,15 @@ EXPECTED_BOOTSTRAP_BLACK_REMOVED_WARNING_IDENTITIES = frozenset(
 )
 MINIMUM_SLACK_NS = 0.20
 MAXIMUM_SLACK_DEGRADATION_NS = 0.15
-MAXIMUM_LOGIC_ELEMENT_DELTA = 1_100
-MAXIMUM_REGISTER_DELTA = 1_500
-MINIMUM_OBSERVER_REPORTED_CHAINS = 22
-EXPECTED_OBSERVER_CALCULABLE_CHAINS = 22
+MAXIMUM_LOGIC_ELEMENT_DELTA = 64
+MAXIMUM_REGISTER_DELTA = 96
+MINIMUM_OBSERVER_REPORTED_CHAINS = 1
+EXPECTED_OBSERVER_CALCULABLE_CHAINS = 1
 EXPECTED_SYNC_ASSIGNMENT_SUFFIXES = (
-    *tuple(
-        f"mister_magik_video_diagnostics_control:magik_video_diagnostics|{name}"
-        for name in (
-            "avalon_fault_meta",
-            "avalon_fault_sys",
-            "output_fault_meta",
-            "output_fault_sys",
-            "avalon_ack_meta",
-            "avalon_ack_sys",
-            "output_ack_meta",
-            "output_ack_sys",
-            "heartbeat_meta",
-            "heartbeat_sys",
-            "control_vbl_meta",
-            "control_vbl_sys",
-            "control_reset_req_meta",
-            "control_reset_req_sys",
-            "control_reset_out_meta",
-            "control_reset_out_sys",
-            "control_pll_lock_meta",
-            "control_pll_lock_sys",
-        )
-    ),
-    *tuple(
-        f"mister_magik_video_diagnostics_avalon:magik_video_diagnostics_avalon|{name}"
-        for name in (
-            "armed_meta",
-            "armed",
-            "request_meta",
-            "request_sync",
-            "route_meta",
-            "route_sync",
-            "frame_meta",
-            "frame_sync",
-            "reset_meta",
-            "reset_sync",
-        )
-    ),
-    *tuple(
-        f"mister_magik_video_diagnostics_output:magik_video_diagnostics_output|{name}"
-        for name in (
-            "armed_meta",
-            "armed",
-            "request_meta",
-            "request_sync",
-            "route_meta",
-            "route_sync",
-            "direct_meta",
-            "direct_sync",
-            "csync_meta",
-            "csync_sync",
-            "reset_meta",
-            "reset_sync",
-            "cfg_meta",
-            "cfg_sync",
-            "pll_meta",
-            "pll_sync",
-        )
-    ),
+    "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|control_pll_lock_meta",
+    "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|control_pll_lock_sys",
 )
-EXPECTED_CDC_ANALYSIS_LABELS = frozenset(
-    {"avalon_payload", "output_payload", "avalon_route", "output_route", "fault_trigger"}
-)
+EXPECTED_CDC_ANALYSIS_LABELS: frozenset[str] = frozenset()
 DIAGNOSTIC_REPORT_NAMES = frozenset(
     {
         "menu.magik-diagnostic-cdc-skew.rpt",
@@ -128,8 +69,8 @@ DIAGNOSTIC_REPORT_NAMES = frozenset(
     }
 )
 EXPECTED_CDC_REPORT_ANALYSES = {
-    "menu.magik-diagnostic-cdc-skew.rpt": ("set_max_skew", 3),
-    "menu.magik-diagnostic-cdc-net-delay.rpt": ("set_net_delay", 5),
+    "menu.magik-diagnostic-cdc-skew.rpt": "set_max_skew",
+    "menu.magik-diagnostic-cdc-net-delay.rpt": "set_net_delay",
 }
 
 
@@ -343,25 +284,17 @@ def validate_diagnostic_reports(
     if missing_reports or unexpected_reports:
         reasons.append("diagnostic_cdc_report_missing")
 
-    labels_valid = set(analysis_labels) == EXPECTED_CDC_ANALYSIS_LABELS and all(
-        analysis_labels[label] >= 1 for label in EXPECTED_CDC_ANALYSIS_LABELS
-    )
+    labels_valid = set(analysis_labels) == EXPECTED_CDC_ANALYSIS_LABELS
     if not labels_valid:
         reasons.append("diagnostic_cdc_analysis_missing")
 
     analysis_counts: dict[str, int | None] = {}
     minimum_slacks: dict[str, float | None] = {}
-    for name, (command, expected_count) in EXPECTED_CDC_REPORT_ANALYSES.items():
+    for name, command in EXPECTED_CDC_REPORT_ANALYSES.items():
         text = reports.get(name, "")
-        if not text.strip() or re.search(
-            r"\bno (?:valid )?(?:paths?|results?)\b", text, re.IGNORECASE
-        ):
-            reasons.append("diagnostic_cdc_paths_missing")
-            analysis_counts[name] = None
-            minimum_slacks[name] = None
-            continue
-        # Quartus repeats the command in every detailed path heading. Only the
-        # semicolon-delimited summary rows represent applied assignments.
+        # Lock-only v1 deliberately has no bundled-data CDC assignment. Keep
+        # the legacy report files for cache identity and prove they contain no
+        # applied max-skew/net-delay rows.
         summary_rows = list(
             re.finditer(
                 rf"(?m)^\s*;\s*{command}\s*;\s*({NUMBER})\s*;",
@@ -370,15 +303,13 @@ def validate_diagnostic_reports(
             )
         )
         analysis_counts[name] = len(summary_rows)
-        if len(summary_rows) != expected_count:
+        if summary_rows:
             reasons.append("diagnostic_cdc_analysis_count")
         slacks = [finite_number(row.group(1)) for row in summary_rows]
         finite_slacks = [value for value in slacks if value is not None]
         if len(finite_slacks) != len(summary_rows):
             reasons.append("diagnostic_cdc_slack_missing")
         minimum_slacks[name] = min(finite_slacks, default=None)
-        if finite_slacks and min(finite_slacks) < 0:
-            reasons.append("diagnostic_cdc_slack_negative")
 
     metastability = reports.get("menu.magik-diagnostic-metastability.rpt", "")
     metastability_lower = metastability.lower()
