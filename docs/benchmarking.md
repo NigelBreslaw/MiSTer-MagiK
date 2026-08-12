@@ -33,6 +33,8 @@ Supported scenarios:
 - `launcher-response`
 - `launcher-response-attribution`
 - `gui-frame-attribution`
+- `system-entry-critical-streamline`
+- `transition-streamline`
 - `launcher-response-streamline`
 - `input-latency-lab`
 - `particles`
@@ -263,6 +265,16 @@ Evidence is written below the selected scenario at
 run the same isolated six-leg workloads with bounded pprof sampling. These
 instrumented scenarios provide attribution only and do not qualify cadence.
 They retain the confirmed 1280×720/60 Hz mode and restore the ordinary launcher.
+
+`transition-streamline` runs the fixed landscape/portrait Settings-navigation
+route followed by the fixed fade and zoom orientation routes inside one bounded
+system-wide capture. Every route has an independent device-monotonic bracket,
+and the summary keeps landscape, portrait, fade, and zoom evidence separate
+while reporting the combined snapshot/raster, portrait composition,
+hidden-slot copy, post, and confirmation dimensions. A complete identity-bound
+capture remains a valid attribution artifact even when observer overhead makes
+an existing product gate fail; the unprofiled scenarios above remain cadence
+authority.
 
 New benchmarks must add a named registry entry and a fixed typed device
 request. They may not expose arbitrary commands, duration knobs, remote paths,

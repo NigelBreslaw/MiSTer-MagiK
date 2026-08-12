@@ -641,6 +641,13 @@ impl NativeDevice {
         self.benchmark_profile(|config| profile_installed_gui_frame_attribution(config, output_dir))
     }
 
+    pub(crate) fn profile_transition_streamline(
+        &mut self,
+        output_dir: &Path,
+    ) -> std::result::Result<String, DeviceFailure> {
+        self.benchmark_profile(|config| profile_installed_transition_streamline(config, output_dir))
+    }
+
     pub(crate) fn verify_search_ui(
         &mut self,
         output_dir: &Path,
@@ -8401,6 +8408,13 @@ const SYSTEM_ENTRY_STREAMLINE_CAPTURE: SystemWideStreamlineCaptureSpec =
         max_duration_seconds: 120,
     };
 
+const TRANSITION_STREAMLINE_CAPTURE: SystemWideStreamlineCaptureSpec =
+    SystemWideStreamlineCaptureSpec {
+        label: "transition Streamline",
+        archive_file: "mister-magik-transitions.apc.tar.gz",
+        max_duration_seconds: 300,
+    };
+
 struct SystemWideStreamlineCapture<'a> {
     session: &'a Session,
     connection: ConnectionConfig,
@@ -9067,6 +9081,242 @@ fn run_gui_frame_streamline_arm(
         )
         .into()),
     }
+}
+
+fn retain_transition_attribution_route(
+    route_result: Result<String>,
+    summary_path: &Path,
+    schema: &str,
+) -> Result<Value> {
+    match route_result {
+        Ok(summary) => {
+            let summary: Value = serde_json::from_str(&summary)?;
+            if summary.get("schema").and_then(Value::as_str) != Some(schema) {
+                return Err(
+                    format!("transition attribution returned the wrong {schema} route").into(),
+                );
+            }
+            Ok(summary)
+        }
+        Err(route_error) => {
+            let summary: Value = serde_json::from_str(&fs::read_to_string(summary_path)?)?;
+            if summary.get("schema").and_then(Value::as_str) != Some(schema)
+                || summary.pointer("/completion/state").and_then(Value::as_str) != Some("complete")
+            {
+                return Err(format!(
+                    "transition attribution route failed without a complete retained artifact: {route_error}"
+                )
+                .into());
+            }
+            Ok(json!({
+                "product_quality_error": route_error.to_string(),
+                "summary": summary,
+            }))
+        }
+    }
+}
+
+fn transition_route_summary(route: &Value) -> &Value {
+    route.get("summary").unwrap_or(route)
+}
+
+fn transition_cost_report(settings: &Value, fade: &Value, zoom: &Value) -> Value {
+    let settings = transition_route_summary(settings);
+    let fade = transition_route_summary(fade);
+    let zoom = transition_route_summary(zoom);
+    let settings_legs = settings["legs"].as_array().cloned().unwrap_or_default();
+    let portrait = settings_legs
+        .iter()
+        .filter(|leg| leg["orientation"].as_str() == Some("monitor-counterclockwise"))
+        .cloned()
+        .collect::<Vec<_>>();
+    json!({
+        "interpretation": "Streamline owns function-level attribution; route telemetry brackets combined snapshot, raster, composition, hidden-copy, post, and confirmation costs",
+        "settings_landscape_and_portrait": settings_legs,
+        "portrait_composition_windows": portrait,
+        "orientation_fade": fade["legs"],
+        "orientation_zoom": zoom["legs"],
+        "reported_dimensions": [
+            "snapshot and raster wall time",
+            "portrait composition",
+            "hidden-slot copy",
+            "post request",
+            "completion polling and active confirmation"
+        ],
+    })
+}
+
+fn profile_installed_transition_streamline(
+    config: &NativeDeviceConfig,
+    output_dir: &Path,
+) -> Result<String> {
+    let gatord = streamline_gatord_path(env::var_os("MISTER_GATORD_PATH"))?;
+    let gatord_metadata = fs::metadata(&gatord)?;
+    if !gatord_metadata.is_file() || gatord_metadata.len() == 0 {
+        return Err("MISTER_GATORD_PATH must name a non-empty regular file".into());
+    }
+    if gatord_metadata.len() > 64 * 1024 * 1024 {
+        return Err("MISTER_GATORD_PATH exceeds the 64 MiB upload limit".into());
+    }
+    let gatord_sha256 = file_sha256(gatord.clone())?;
+    fs::create_dir_all(output_dir)?;
+    let settings_dir = output_dir.join("settings-navigation");
+    let fade_dir = output_dir.join("orientation-fade");
+    let zoom_dir = output_dir.join("orientation-zoom");
+    fs::create_dir_all(&settings_dir)?;
+    fs::create_dir_all(&fade_dir)?;
+    fs::create_dir_all(&zoom_dir)?;
+    let session = connect_with(&config.connection, 10)?;
+    let manifest = remote_read(&session, "/media/fat/mister-magik-dev/platform-v3.manifest")
+        .ok_or("development manifest is unavailable before transition Streamline capture")?;
+    let installed_identity = streamline_installed_identity(&session, &manifest)?;
+    let original_settings = remote_read(&session, ORIENTATION_TRANSITION_SETTINGS_REMOTE);
+    let original_status = read_launcher_status(&session)?;
+    let capture = SystemWideStreamlineCapture::new(
+        &session,
+        &config.connection,
+        output_dir,
+        TRANSITION_STREAMLINE_CAPTURE,
+    );
+    let gatord_version = capture.prepare(&gatord)?;
+    let capture_thread = capture.start();
+    let run_result = (|| -> Result<(Vec<Value>, u64, u64)> {
+        capture.wait_ready(Duration::from_secs(10))?;
+        let capture_started = capture.monotonic_ns("transition capture start")?;
+        let mut routes = Vec::with_capacity(3);
+
+        let settings_started = capture.monotonic_ns("Settings navigation start")?;
+        let settings_result = run_installed_settings_navigation(config, &settings_dir, false);
+        let settings_ended = capture.monotonic_ns("Settings navigation end")?;
+        let settings = retain_transition_attribution_route(
+            settings_result,
+            &settings_dir.join("summary.json"),
+            "mister-magik-settings-navigation-qualification-v4",
+        )?;
+        routes.push(json!({
+            "route": "settings-navigation",
+            "window_started_monotonic_ns": settings_started,
+            "window_ended_monotonic_ns": settings_ended,
+            "window_duration_ns": settings_ended.saturating_sub(settings_started),
+            "summary": settings,
+        }));
+
+        for (label, effect, directory) in [
+            ("orientation-fade", "brightness-fade", &fade_dir),
+            ("orientation-zoom", "center-pixel-zoom", &zoom_dir),
+        ] {
+            let started = capture.monotonic_ns(&format!("{label} start"))?;
+            let result = run_installed_orientation_transition(config, directory, effect, false);
+            let ended = capture.monotonic_ns(&format!("{label} end"))?;
+            let summary = retain_transition_attribution_route(
+                result,
+                &directory.join("summary.json"),
+                "mister-magik-orientation-transition-qualification-v1",
+            )?;
+            routes.push(json!({
+                "route": label,
+                "effect": effect,
+                "window_started_monotonic_ns": started,
+                "window_ended_monotonic_ns": ended,
+                "window_duration_ns": ended.saturating_sub(started),
+                "summary": summary,
+            }));
+        }
+        let capture_ended = capture.monotonic_ns("transition capture end")?;
+        Ok((routes, capture_started, capture_ended))
+    })();
+    let capture_result = capture.stop(capture_thread);
+    capture.retain_log()?;
+    let package_result = capture_result.and_then(|()| capture.package_extract());
+    let capture_cleanup = capture.cleanup();
+    let launcher_restore = launcher_restart(
+        &session,
+        &LauncherRestartOptions {
+            clear_env: true,
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+            timeout_secs: 45,
+            ..LauncherRestartOptions::default()
+        },
+    );
+    let ((routes, capture_started, capture_ended), archive_sha256) = match (
+        run_result,
+        package_result,
+        capture_cleanup,
+        launcher_restore,
+    ) {
+        (Ok(run), Ok(archive), Ok(()), Ok(())) => (run, archive),
+        (run, package, capture, launcher) => {
+            return Err(format!(
+                    "transition Streamline failed: run={:?}; package={:?}; capture_cleanup={:?}; launcher_restore={:?}",
+                    run.err(),
+                    package.err(),
+                    capture.err(),
+                    launcher.err(),
+                )
+                .into());
+        }
+    };
+    let final_manifest = remote_read(&session, "/media/fat/mister-magik-dev/platform-v3.manifest")
+        .ok_or("development manifest is unavailable after transition Streamline capture")?;
+    if final_manifest != manifest
+        || streamline_installed_identity(&session, &final_manifest)? != installed_identity
+    {
+        return Err("installed identity changed during transition Streamline capture".into());
+    }
+    if remote_read(&session, ORIENTATION_TRANSITION_SETTINGS_REMOTE) != original_settings {
+        return Err("transition Streamline capture changed settings.json".into());
+    }
+    let final_status = read_launcher_status(&session)?;
+    if final_status.get("output_route") != original_status.get("output_route") {
+        return Err("transition Streamline capture changed the display route".into());
+    }
+    let capture_manifest = streamline_capture_manifest(
+        &installed_identity,
+        &gatord_version,
+        &gatord_sha256,
+        TRANSITION_STREAMLINE_CAPTURE,
+        capture_started,
+        capture_ended,
+    );
+    fs::write(
+        output_dir.join("capture-manifest.json"),
+        format!("{}\n", serde_json::to_string_pretty(&capture_manifest)?),
+    )?;
+    let costs = transition_cost_report(
+        &routes[0]["summary"],
+        &routes[1]["summary"],
+        &routes[2]["summary"],
+    );
+    let product_quality_status = if routes.iter().all(|route| {
+        transition_route_summary(&route["summary"])["qualification_passed"].as_bool() == Some(true)
+    }) {
+        "passed"
+    } else {
+        "failed"
+    };
+    let summary = json!({
+        "schema": "mister-magik-transition-streamline-v1",
+        "artifact_status": "passed",
+        "product_quality_status": product_quality_status,
+        "measurement": "system-wide attribution only; existing unprofiled transition scenarios remain cadence authority",
+        "identity": capture_manifest,
+        "correlation_clock": "CLOCK_MONOTONIC",
+        "routes": routes,
+        "costs": costs,
+        "streamline": {
+            "gatord_version": gatord_version,
+            "gatord_sha256": gatord_sha256,
+            "archive_sha256": archive_sha256,
+            "capture": "mister-magik.apc",
+            "archive": TRANSITION_STREAMLINE_CAPTURE.archive_file,
+            "capture_manifest": "capture-manifest.json",
+        },
+    });
+    fs::write(
+        output_dir.join("summary.json"),
+        format!("{}\n", serde_json::to_string_pretty(&summary)?),
+    )?;
+    serde_json::to_string(&summary).map_err(Into::into)
 }
 
 fn streamline_installed_identity(
@@ -20927,6 +21177,11 @@ mod tests {
             "mister-magik-system-entry-critical.apc.tar.gz"
         );
         assert_eq!(SYSTEM_ENTRY_STREAMLINE_CAPTURE.max_duration_seconds, 120);
+        assert_eq!(
+            TRANSITION_STREAMLINE_CAPTURE.archive_file,
+            "mister-magik-transitions.apc.tar.gz"
+        );
+        assert_eq!(TRANSITION_STREAMLINE_CAPTURE.max_duration_seconds, 300);
     }
 
     #[test]

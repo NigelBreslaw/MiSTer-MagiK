@@ -735,6 +735,8 @@ mod tests {
             "input-integrity",
             "launcher-response",
             "launcher-response-attribution",
+            "gui-frame-attribution",
+            "transition-streamline",
             "input-latency-lab",
             "launcher-response-streamline",
             "cold-boot",
