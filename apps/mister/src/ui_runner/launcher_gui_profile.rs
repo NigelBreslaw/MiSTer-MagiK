@@ -86,6 +86,53 @@ pub(super) const fn gui_raster_profile_phase(
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) struct GuiCustomProfileSelection {
+    pub(super) arcade_row_update: Option<&'static str>,
+    pub(super) preview_composition: Option<&'static str>,
+    pub(super) navigation_transition_raster: Option<&'static str>,
+    pub(super) orientation_transition_raster: Option<&'static str>,
+}
+
+impl GuiCustomProfileSelection {
+    pub(super) const fn any(self) -> bool {
+        self.arcade_row_update.is_some()
+            || self.preview_composition.is_some()
+            || self.navigation_transition_raster.is_some()
+            || self.orientation_transition_raster.is_some()
+    }
+}
+
+pub(super) const fn gui_custom_profile_selection(
+    arcade: bool,
+    preview: bool,
+    navigation_transition: bool,
+    orientation_transition: bool,
+) -> GuiCustomProfileSelection {
+    GuiCustomProfileSelection {
+        arcade_row_update: if arcade {
+            Some("gui.custom.arcade-row-update")
+        } else {
+            None
+        },
+        preview_composition: if preview {
+            Some("gui.custom.preview-cut-fade")
+        } else {
+            None
+        },
+        navigation_transition_raster: if navigation_transition {
+            Some("gui.custom.navigation-transition-raster")
+        } else {
+            None
+        },
+        orientation_transition_raster: if orientation_transition {
+            Some("gui.custom.orientation-transition-raster")
+        } else {
+            None
+        },
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum GuiProfilePhase {
     SettledSettings,
@@ -477,6 +524,39 @@ mod tests {
             gui_raster_profile_phase(true, true),
             GuiRasterProfilePhase::ForcedFull
         );
+    }
+
+    #[test]
+    fn custom_frame_classification_selects_only_applicable_spans() {
+        assert_eq!(
+            gui_custom_profile_selection(false, false, false, false),
+            GuiCustomProfileSelection::default()
+        );
+        let arcade_preview = gui_custom_profile_selection(true, true, false, false);
+        assert_eq!(
+            arcade_preview.arcade_row_update,
+            Some("gui.custom.arcade-row-update")
+        );
+        assert_eq!(
+            arcade_preview.preview_composition,
+            Some("gui.custom.preview-cut-fade")
+        );
+        assert_eq!(arcade_preview.navigation_transition_raster, None);
+        assert_eq!(arcade_preview.orientation_transition_raster, None);
+        assert!(arcade_preview.any());
+        let transitions = gui_custom_profile_selection(false, false, true, true);
+        assert_eq!(
+            transitions.navigation_transition_raster,
+            Some("gui.custom.navigation-transition-raster")
+        );
+        assert_eq!(
+            transitions.orientation_transition_raster,
+            Some("gui.custom.orientation-transition-raster")
+        );
+        assert_eq!(transitions.arcade_row_update, None);
+        assert_eq!(transitions.preview_composition, None);
+        assert!(transitions.any());
+        assert!(!GuiCustomProfileSelection::default().any());
     }
 
     #[test]

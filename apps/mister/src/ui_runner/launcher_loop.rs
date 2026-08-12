@@ -9365,15 +9365,28 @@ pub(super) fn run_launcher_loop(
                 rect
             }
         });
+        let gui_custom_selection = gui_custom_profile_selection(
+            wants_arcade_list && composition_decision.allow_arcade_list_blit,
+            (wants_preview || preview.empty_base_commit_pending())
+                && composition_decision.allow_preview_blit,
+            navigation_transition.is_active(),
+            orientation_transition.is_active(),
+        );
+        let gui_custom_generation_pmu = gui_profiling.phase_span(
+            gui_custom_selection
+                .any()
+                .then_some("gui.custom-layer-generation"),
+        );
         let arcade_list_update_start = Instant::now();
         let arcade_list_rect = if wants_arcade_list && composition_decision.allow_arcade_list_blit {
+            let gui_arcade_pmu = gui_profiling.phase_span(gui_custom_selection.arcade_row_update);
             configure_arcade_list_renderer_geometry(&mut arcade_list_renderer, &nav, ui);
             let force_arcade_redraw = arcade_list_needs_forced_redraw(
                 &arcade_list_renderer,
                 logical_slint_rect,
                 full_frame_present,
             );
-            if nav.arcade_filter.drawer_open {
+            let update = if nav.arcade_filter.drawer_open {
                 let feedback_surface = format!(
                     "arcade-filter:{}:{:?}",
                     nav.active_collection_id().unwrap_or("none"),
@@ -9409,12 +9422,15 @@ pub(super) fn run_launcher_loop(
                     nav.arcade.visual_index,
                     force_arcade_redraw,
                 )
-            }
+            };
+            drop(gui_arcade_pmu);
+            update
         } else {
             None
         };
         let arcade_list_update_us = arcade_list_update_start.elapsed().as_micros();
         let preview_blit_start = Instant::now();
+        let gui_preview_pmu = gui_profiling.phase_span(gui_custom_selection.preview_composition);
         let empty_base_cached_rect = if (layout.is_portrait() || preview_direct_present_enabled())
             && preview_route.allows_preview_work()
             && composition_decision.allow_preview_blit
@@ -9441,6 +9457,7 @@ pub(super) fn run_launcher_loop(
             } else {
                 (None, PreviewTransitionTrace::default())
             };
+        drop(gui_preview_pmu);
         let preview_blit_us = preview_blit_start.elapsed().as_micros();
         if preview_transition_trace.active {
             request_launcher_redraw!();
@@ -9594,6 +9611,8 @@ pub(super) fn run_launcher_loop(
                 }
             }
             if render_transition_frame {
+                let gui_navigation_pmu =
+                    gui_profiling.phase_span(gui_custom_selection.navigation_transition_raster);
                 let mut rendered_direct = false;
                 if navigation_transition.settings_physical_space() {
                     let mut direct_render_timing = None;
@@ -9635,6 +9654,7 @@ pub(super) fn run_launcher_loop(
                     let _ = layer_target.restore_cached(frame);
                     navigation_logical_frame_rendered = true;
                 }
+                drop(gui_navigation_pmu);
             }
             full_frame_present = true;
             request_launcher_redraw!();
@@ -9885,9 +9905,12 @@ pub(super) fn run_launcher_loop(
                     );
                 }
             }
-            if let Some((done, render_stats, transition_damage)) = orientation_transition
-                .render_into(layer_target.presentation_pixels_mut(), Instant::now())
-            {
+            let gui_orientation_pmu =
+                gui_profiling.phase_span(gui_custom_selection.orientation_transition_raster);
+            let orientation_rendered = orientation_transition
+                .render_into(layer_target.presentation_pixels_mut(), Instant::now());
+            drop(gui_orientation_pmu);
+            if let Some((done, render_stats, transition_damage)) = orientation_rendered {
                 custom_draw_trace.orientation_transition_stats = render_stats;
                 custom_draw_trace.orientation_effect_read_bytes =
                     render_stats.blended_pixels.saturating_mul(2);
@@ -9950,6 +9973,7 @@ pub(super) fn run_launcher_loop(
             final_preview_target_presented,
             empty_base_cached_rect.is_some() || cached_empty_target_presented,
         );
+        drop(gui_custom_generation_pmu);
         let frame_plan = LauncherFramePlan::new(
             cached_damage,
             preview_desired,
