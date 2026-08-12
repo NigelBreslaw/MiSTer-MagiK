@@ -7762,6 +7762,8 @@ const STREAMLINE_REMOTE_ARCHIVE: &str =
     "/tmp/mister-magik/streamline-capture/mister-magik.apc.tar.gz";
 const STREAMLINE_REMOTE_PID: &str = "/tmp/mister-magik/streamline-capture/gatord.pid";
 const STREAMLINE_REMOTE_LOG: &str = "/tmp/mister-magik/streamline-capture/gatord.log";
+const STREAMLINE_TRACEFS_MOUNT: &str = "/sys/kernel/tracing";
+const STREAMLINE_TRACEFS_MARKER: &str = "/tmp/mister-magik/streamline-capture/owned-tracefs.mount";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum StreamlineWorkload {
@@ -8098,8 +8100,11 @@ fn parse_gatord_version(output: &ExecOutput) -> Result<String> {
 
 fn streamline_prepare_command() -> String {
     format!(
-        "set -eu; rm -rf {root}; mkdir -p {root}; test ! -e /media/fat/mister-magik/launcher.env; test ! -e /media/fat/mister-magik-dev/launcher.env; test ! -e /tmp/mister-magik/fs-fault-launcher.env; test ! -e /tmp/mister-magik/fs-fault-session; test ! -e /tmp/mister-magik/fs-fault.json; test ! -e /media/fat/mister-magik/rebuild-on-next-boot; test ! -e /media/fat/mister-magik-dev/rebuild-on-next-boot",
+        "set -eu; marker={marker}; if test -f \"$marker\"; then current=$(awk '$2 == \"{mount_path}\" && $3 == \"tracefs\" {{ print }}' /proc/mounts); owned=$(cat \"$marker\"); test -n \"$current\"; test \"$current\" = \"$owned\"; umount {mount}; fi; rm -rf {root}; mkdir -p {root}; test ! -e /media/fat/mister-magik/launcher.env; test ! -e /media/fat/mister-magik-dev/launcher.env; test ! -e /tmp/mister-magik/fs-fault-launcher.env; test ! -e /tmp/mister-magik/fs-fault-session; test ! -e /tmp/mister-magik/fs-fault.json; test ! -e /media/fat/mister-magik/rebuild-on-next-boot; test ! -e /media/fat/mister-magik-dev/rebuild-on-next-boot",
         root = sh(STREAMLINE_REMOTE_ROOT),
+        marker = sh(STREAMLINE_TRACEFS_MARKER),
+        mount = sh(STREAMLINE_TRACEFS_MOUNT),
+        mount_path = STREAMLINE_TRACEFS_MOUNT,
     )
 }
 
@@ -8128,7 +8133,10 @@ fn streamline_launcher_response_start_command() -> String {
         apc = sh(STREAMLINE_REMOTE_APC),
     );
     format!(
-        "set -eu; nohup {invocation} >{log} 2>&1 </dev/null & pid=$!; printf '%s\\n' \"$pid\" > {pid_file}; i=0; while test \"$i\" -lt 100; do if ! kill -0 \"$pid\" 2>/dev/null; then cat {log} >&2 || true; exit 21; fi; test -d {apc} && exit 0; i=$((i+1)); sleep 0.1; done; cat {log} >&2 || true; exit 22",
+        "set -eu; tracefs={tracefs}; marker={marker}; current=$(awk '$2 == \"{tracefs_path}\" && $3 == \"tracefs\" {{ print }}' /proc/mounts); if test -z \"$current\"; then mount -t tracefs tracefs \"$tracefs\"; awk '$2 == \"{tracefs_path}\" && $3 == \"tracefs\" {{ print }}' /proc/mounts > \"$marker\"; test -s \"$marker\"; fi; nohup {invocation} >{log} 2>&1 </dev/null & pid=$!; printf '%s\\n' \"$pid\" > {pid_file}; i=0; while test \"$i\" -lt 100; do if ! kill -0 \"$pid\" 2>/dev/null; then cat {log} >&2 || true; exit 21; fi; test -d {apc} && exit 0; i=$((i+1)); sleep 0.1; done; cat {log} >&2 || true; exit 22",
+        tracefs = sh(STREAMLINE_TRACEFS_MOUNT),
+        tracefs_path = STREAMLINE_TRACEFS_MOUNT,
+        marker = sh(STREAMLINE_TRACEFS_MARKER),
         invocation = invocation,
         log = sh(STREAMLINE_REMOTE_LOG),
         pid_file = sh(STREAMLINE_REMOTE_PID),
@@ -8156,9 +8164,12 @@ fn streamline_package_command() -> String {
 
 fn streamline_cleanup_command() -> String {
     format!(
-        "set -eu; pid_file={pid_file}; if test -f \"$pid_file\"; then pid=$(cat \"$pid_file\"); case \"$pid\" in ''|*[!0-9]*) exit 19;; esac; if test \"$(readlink /proc/$pid/exe 2>/dev/null || true)\" = {gatord}; then kill \"$pid\"; fi; fi; rm -rf {root}; test ! -e {root}; test ! -e /media/fat/mister-magik/launcher.env; test ! -e /media/fat/mister-magik-dev/launcher.env; test ! -e /tmp/mister-magik/fs-fault-launcher.env; test ! -e /tmp/mister-magik/fs-fault-session; test ! -e /tmp/mister-magik/fs-fault.json; test ! -e /media/fat/mister-magik/rebuild-on-next-boot; test ! -e /media/fat/mister-magik-dev/rebuild-on-next-boot",
+        "set -eu; pid_file={pid_file}; if test -f \"$pid_file\"; then pid=$(cat \"$pid_file\"); case \"$pid\" in ''|*[!0-9]*) exit 19;; esac; if test \"$(readlink /proc/$pid/exe 2>/dev/null || true)\" = {gatord}; then kill \"$pid\"; fi; fi; marker={marker}; if test -f \"$marker\"; then current=$(awk '$2 == \"{mount_path}\" && $3 == \"tracefs\" {{ print }}' /proc/mounts); owned=$(cat \"$marker\"); test -n \"$current\"; test \"$current\" = \"$owned\"; umount {mount}; fi; rm -rf {root}; test ! -e {root}; test ! -e /media/fat/mister-magik/launcher.env; test ! -e /media/fat/mister-magik-dev/launcher.env; test ! -e /tmp/mister-magik/fs-fault-launcher.env; test ! -e /tmp/mister-magik/fs-fault-session; test ! -e /tmp/mister-magik/fs-fault.json; test ! -e /media/fat/mister-magik/rebuild-on-next-boot; test ! -e /media/fat/mister-magik-dev/rebuild-on-next-boot",
         pid_file = sh(&format!("{STREAMLINE_REMOTE_ROOT}/gatord.pid")),
         gatord = sh(STREAMLINE_REMOTE_GATORD),
+        marker = sh(STREAMLINE_TRACEFS_MARKER),
+        mount = sh(STREAMLINE_TRACEFS_MOUNT),
+        mount_path = STREAMLINE_TRACEFS_MOUNT,
         root = sh(STREAMLINE_REMOTE_ROOT),
     )
 }
@@ -19575,6 +19586,8 @@ mod tests {
         assert!(start.contains("nohup"));
         assert!(start.contains(STREAMLINE_REMOTE_PID));
         assert!(start.contains("cat '/tmp/mister-magik/streamline-capture/gatord.log' >&2"));
+        assert!(start.contains("mount -t tracefs tracefs \"$tracefs\""));
+        assert!(start.contains(STREAMLINE_TRACEFS_MARKER));
         assert!(stop.contains("/proc/$pid/exe"));
         assert!(stop.contains("kill -INT"));
         assert!(stop.contains("kill -TERM"));
@@ -19678,10 +19691,14 @@ mod tests {
 
     #[test]
     fn streamline_cleanup_owns_only_its_pid_and_checks_arming_state() {
+        let prepare = streamline_prepare_command();
         let cleanup = streamline_cleanup_command();
         assert!(cleanup.contains("/proc/$pid/exe"));
         assert!(cleanup.contains(STREAMLINE_REMOTE_GATORD));
         assert!(!cleanup.contains("pidof gatord"));
+        assert!(prepare.contains("test \"$current\" = \"$owned\""));
+        assert!(cleanup.contains("test \"$current\" = \"$owned\""));
+        assert!(cleanup.contains("umount '/sys/kernel/tracing'"));
         for arming_path in [
             "/tmp/mister-magik/fs-fault-launcher.env",
             "/tmp/mister-magik/fs-fault-session",

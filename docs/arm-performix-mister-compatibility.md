@@ -114,7 +114,11 @@ process. Capture is limited to 120 seconds, uses the low sampling rate, includes
 kernel execution, disables call-stack unwinding, and always restores the prior
 display mode and ordinary launcher. The report records the exact daemon version,
 daemon hash, archive hash, boot identity, and route results; the repository does
-not copy or redistribute the daemon.
+not copy or redistribute the daemon. System-wide collection requires tracefs.
+If tracefs is not already mounted, the bounded workflow mounts it at
+`/sys/kernel/tracing`, records the exact `/proc/mounts` entry it owns under the
+volatile capture root, and unmounts only while that entry still matches during
+cleanup. It never persists the mount in boot configuration.
 
 The combined diagnostic command uses the same explicit daemon and makes this
 system timeline a required fifth arm rather than an optional add-on:
