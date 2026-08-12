@@ -7348,12 +7348,14 @@ fn run_gui_frame_profile_route(
             &nonce,
             AutomationAction::Tap(AutomationButton::Right),
         )?;
+        modal_input_action(config, &nonce, AutomationAction::ReleaseAll)?;
         let pan_right = launcher_automation::snapshot(config, &nonce)?;
         let pan_left_sequence = modal_input_action(
             config,
             &nonce,
             AutomationAction::Tap(AutomationButton::Left),
         )?;
+        modal_input_action(config, &nonce, AutomationAction::ReleaseAll)?;
         let pan_left = launcher_automation::snapshot(config, &nonce)?;
         modal_input_action(config, &nonce, AutomationAction::Tap(AutomationButton::A))?;
         let arcade_entered = wait_gui_profile_snapshot(
@@ -9958,11 +9960,13 @@ fn run_agent_io_operation_sequence(
             &nonce,
             AutomationAction::Tap(AutomationButton::Right),
         )?;
+        modal_input_action(config, &nonce, AutomationAction::ReleaseAll)?;
         modal_input_action(
             config,
             &nonce,
             AutomationAction::Tap(AutomationButton::Left),
         )?;
+        modal_input_action(config, &nonce, AutomationAction::ReleaseAll)?;
         modal_input_action(config, &nonce, AutomationAction::Tap(AutomationButton::A))?;
         wait_gui_profile_snapshot(
             config,
