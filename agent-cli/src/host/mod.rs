@@ -11396,6 +11396,7 @@ fn profile_installed_system_entry_critical_streamline(
     )?;
     let summary = json!({
         "schema": "mister-magik-system-entry-critical-streamline-v1",
+        "status": "passed",
         "artifact_status": "passed",
         "product_quality_status": if systems.iter().all(|system| system["sample"]["status"] == "passed") { "passed" } else { "failed" },
         "measurement": "system-wide attribution only; existing unprofiled system-entry controls remain performance authority",
