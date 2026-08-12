@@ -32,6 +32,7 @@ Supported scenarios:
 - `input-integrity`
 - `launcher-response`
 - `launcher-response-attribution`
+- `gui-frame-attribution`
 - `launcher-response-streamline`
 - `input-latency-lab`
 - `particles`
@@ -156,6 +157,14 @@ product-quality status. It therefore completes successfully when all evidence is
 valid even if the control still misses the product latency target. The command
 requires an explicit audited `MISTER_GATORD_PATH`; it never silently skips the
 system timeline.
+
+`gui-frame-attribution` independently restarts the fixed 1280x720p60 route for
+an unprofiled control, a dormant-window PMU arm, and a bounded system-wide
+Streamline arm. Each route uses authenticated production input from settled
+Settings through Home pan right/left and held Arcade scroll to a terminal
+preview and confirmed settled Arcade frame. Artifact validity is independent
+from control-arm product quality; every arm restores the ordinary launcher and
+the scenario restores the original confirmed display mode.
 
 `input-latency-lab` is the fixed diagnostic experiment for attributing
 intermittent launcher response, not a release qualification. It switches the

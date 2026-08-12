@@ -43,6 +43,7 @@ enum BenchmarkProfile {
     InputIntegrity,
     LauncherResponse,
     LauncherResponseAttribution,
+    GuiFrameAttribution,
     InputLatencyLab,
     LauncherResponseStreamline,
     ColdBoot,
@@ -107,6 +108,9 @@ impl BenchmarkDevice for DeviceClient {
             BenchmarkProfile::LauncherResponse => device.verify_launcher_response(&output_dir),
             BenchmarkProfile::LauncherResponseAttribution => {
                 device.profile_launcher_response_attribution(&output_dir)
+            }
+            BenchmarkProfile::GuiFrameAttribution => {
+                device.profile_gui_frame_attribution(&output_dir)
             }
             BenchmarkProfile::InputLatencyLab => device.verify_input_latency_lab(&output_dir),
             BenchmarkProfile::LauncherResponseStreamline => {
@@ -249,6 +253,9 @@ fn require_clean_installed_commit(
         }
         BenchmarkScenario::LauncherResponseAttribution => {
             execute_launcher_response_attribution(&mut device, manifest, output_dir, reporter)
+        }
+        BenchmarkScenario::GuiFrameAttribution => {
+            execute_gui_frame_attribution(&mut device, manifest, output_dir, reporter)
         }
         BenchmarkScenario::InputLatencyLab => {
             execute_input_latency_lab(&mut device, manifest, output_dir, reporter)
@@ -641,6 +648,7 @@ fn particle_scene_lab_command(scenario: BenchmarkScenario) -> Option<&'static st
         | BenchmarkScenario::InputIntegrity
         | BenchmarkScenario::LauncherResponse
         | BenchmarkScenario::LauncherResponseAttribution
+        | BenchmarkScenario::GuiFrameAttribution
         | BenchmarkScenario::InputLatencyLab
         | BenchmarkScenario::LauncherResponseStreamline
         | BenchmarkScenario::NavigationTransitions
@@ -872,6 +880,44 @@ fn execute_launcher_response_attribution(
         || summary["arms"].as_array().map(Vec::len) != Some(5)
     {
         return Err("launcher-response attribution did not produce complete v1 evidence".into());
+    }
+    device.verify_health()?;
+    reporter.emit(
+        EventKind::Progress,
+        "benchmark-result",
+        &serde_json::to_string(&json!({
+            "installed_manifest": manifest,
+            "summary": summary,
+            "output_dir": output_dir,
+        }))
+        .map_err(|error| error.to_string())?,
+        Some(100),
+    )?;
+    Ok(Outcome::Passed)
+}
+
+fn execute_gui_frame_attribution(
+    device: &mut impl BenchmarkDevice,
+    manifest: String,
+    output_dir: PathBuf,
+    reporter: &mut Reporter<'_>,
+) -> AgentResult<Outcome> {
+    reporter.emit(
+        EventKind::Progress,
+        "gui-frame-attribution",
+        "collecting independent control, PMU, and system-wide Streamline GUI frame evidence",
+        Some(35),
+    )?;
+    let detail = device.profile(BenchmarkProfile::GuiFrameAttribution, output_dir.clone())?;
+    let summary: Value = serde_json::from_str(&detail).map_err(|error| error.to_string())?;
+    if summary.get("schema").and_then(Value::as_str)
+        != Some("mister-magik-gui-frame-attribution-v1")
+        || summary.get("artifact_status").and_then(Value::as_str) != Some("passed")
+        || !matches!(summary.pointer("/arms/control"), Some(Value::Object(_)))
+        || !matches!(summary.pointer("/arms/pmu"), Some(Value::Object(_)))
+        || !matches!(summary.pointer("/arms/streamline"), Some(Value::Object(_)))
+    {
+        return Err("GUI frame attribution did not produce complete v1 evidence".into());
     }
     device.verify_health()?;
     reporter.emit(

@@ -634,6 +634,13 @@ impl NativeDevice {
         })
     }
 
+    pub(crate) fn profile_gui_frame_attribution(
+        &mut self,
+        output_dir: &Path,
+    ) -> std::result::Result<String, DeviceFailure> {
+        self.benchmark_profile(|config| profile_installed_gui_frame_attribution(config, output_dir))
+    }
+
     pub(crate) fn verify_search_ui(
         &mut self,
         output_dir: &Path,
@@ -8059,6 +8066,13 @@ const LAUNCHER_RESPONSE_STREAMLINE_CAPTURE: SystemWideStreamlineCaptureSpec =
         max_duration_seconds: 120,
     };
 
+const GUI_FRAME_STREAMLINE_CAPTURE: SystemWideStreamlineCaptureSpec =
+    SystemWideStreamlineCaptureSpec {
+        label: "GUI frame attribution Streamline",
+        archive_file: "mister-magik-gui-frame-attribution.apc.tar.gz",
+        max_duration_seconds: 120,
+    };
+
 struct SystemWideStreamlineCapture<'a> {
     session: &'a Session,
     connection: ConnectionConfig,
@@ -8474,6 +8488,255 @@ fn profile_installed_launcher_response_streamline(
         format!("{}\n", serde_json::to_string_pretty(&summary)?),
     )?;
     serde_json::to_string(&summary).map_err(Into::into)
+}
+
+struct GuiFrameStreamlineArm {
+    route: Value,
+    gatord_version: String,
+    archive_sha256: String,
+    capture_started_monotonic_ns: u64,
+    capture_ended_monotonic_ns: u64,
+}
+
+fn profile_installed_gui_frame_attribution(
+    config: &NativeDeviceConfig,
+    output_dir: &Path,
+) -> Result<String> {
+    let gatord = streamline_gatord_path(env::var_os("MISTER_GATORD_PATH"))?;
+    let gatord_metadata = fs::metadata(&gatord)?;
+    if !gatord_metadata.is_file() || gatord_metadata.len() == 0 {
+        return Err("MISTER_GATORD_PATH must name a non-empty regular file".into());
+    }
+    if gatord_metadata.len() > 64 * 1024 * 1024 {
+        return Err("MISTER_GATORD_PATH exceeds the 64 MiB upload limit".into());
+    }
+    let gatord_sha256 = file_sha256(gatord.clone())?;
+    fs::create_dir_all(output_dir)?;
+    let session = connect_with(&config.connection, 30)?;
+    let manifest = remote_read(&session, "/media/fat/mister-magik-dev/platform-v3.manifest")
+        .ok_or("development manifest is unavailable before GUI frame attribution")?;
+    let installed_identity = streamline_installed_identity(&session, &manifest)?;
+    let original_reply = exec_checked_output(
+        &session,
+        "query GUI frame attribution display mode",
+        &acknowledged_main_command("mister_magik_display_get_v1"),
+    )?;
+    if parse_display_reply_pending(original_reply.stdout.trim())?.is_some() {
+        return Err("GUI frame attribution cannot start during a display transaction".into());
+    }
+    let original_id = parse_display_reply_active(original_reply.stdout.trim())?;
+    let original_mode = DISPLAY_MATRIX_MODES
+        .iter()
+        .find(|mode| mode.id == original_id)
+        .copied()
+        .ok_or_else(|| {
+            format!("GUI frame attribution cannot restore unknown mode {original_id}")
+        })?;
+    let capture_mode = DISPLAY_MATRIX_MODES
+        .iter()
+        .find(|mode| mode.id == "hdmi-1280x720p60")
+        .copied()
+        .ok_or("missing GUI frame attribution display mode")?;
+    apply_confirmed_display_mode(config, capture_mode, "GUI frame attribution")?;
+
+    let run_result = (|| -> Result<(Value, Value, GuiFrameStreamlineArm)> {
+        let control =
+            run_gui_frame_profile_arm(config, &session, &output_dir.join("control"), false)?;
+        let pmu = run_gui_frame_profile_arm(config, &session, &output_dir.join("pmu"), true)?;
+        let streamline = run_gui_frame_streamline_arm(
+            config,
+            &session,
+            &gatord,
+            &output_dir.join("streamline"),
+        )?;
+        Ok((control, pmu, streamline))
+    })();
+
+    let final_launcher_restore = launcher_restart(
+        &session,
+        &LauncherRestartOptions {
+            clear_env: true,
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+            timeout_secs: 45,
+            ..LauncherRestartOptions::default()
+        },
+    );
+    let final_route_cleanup = exec_checked(
+        &session,
+        "clean final GUI profiling route state",
+        &gui_profile_route_cleanup_command(),
+    );
+    let display_restore = apply_confirmed_display_mode(
+        config,
+        original_mode,
+        "GUI frame attribution display restoration",
+    );
+    let (control, pmu, streamline) = match (
+        run_result,
+        final_launcher_restore,
+        final_route_cleanup,
+        display_restore,
+    ) {
+        (Ok(result), Ok(()), Ok(()), Ok(())) => result,
+        (run, launcher, cleanup, display) => {
+            return Err(format!(
+                "GUI frame attribution failed: run={:?}; launcher_restore={:?}; cleanup={:?}; display_restore={:?}",
+                run.err(),
+                launcher.err(),
+                cleanup.err(),
+                display.err()
+            )
+            .into());
+        }
+    };
+
+    let final_manifest = remote_read(&session, "/media/fat/mister-magik-dev/platform-v3.manifest")
+        .ok_or("development manifest is unavailable after GUI frame attribution")?;
+    if final_manifest != manifest {
+        return Err("installed platform manifest changed during GUI frame attribution".into());
+    }
+    let final_identity = streamline_installed_identity(&session, &final_manifest)?;
+    if final_identity != installed_identity {
+        return Err("installed identity changed during GUI frame attribution".into());
+    }
+    let capture_manifest = streamline_capture_manifest(
+        &installed_identity,
+        &streamline.gatord_version,
+        &gatord_sha256,
+        GUI_FRAME_STREAMLINE_CAPTURE,
+        streamline.capture_started_monotonic_ns,
+        streamline.capture_ended_monotonic_ns,
+    );
+    fs::write(
+        output_dir.join("streamline/capture-manifest.json"),
+        format!("{}\n", serde_json::to_string_pretty(&capture_manifest)?),
+    )?;
+    let summary = json!({
+        "schema": "mister-magik-gui-frame-attribution-v1",
+        "artifact_status": "passed",
+        "product_quality_status": "diagnostic-control-pending-summary",
+        "display_mode": capture_mode.id,
+        "refresh_hz": 60,
+        "identity": capture_manifest,
+        "arms": {
+            "control": control,
+            "pmu": pmu,
+            "streamline": {
+                "route": streamline.route,
+                "gatord_version": streamline.gatord_version,
+                "gatord_sha256": gatord_sha256,
+                "archive_sha256": streamline.archive_sha256,
+                "capture": "streamline/mister-magik.apc",
+                "archive": format!("streamline/{}", GUI_FRAME_STREAMLINE_CAPTURE.archive_file),
+                "capture_manifest": "streamline/capture-manifest.json",
+            },
+        },
+    });
+    fs::write(
+        output_dir.join("summary.json"),
+        format!("{}\n", serde_json::to_string_pretty(&summary)?),
+    )?;
+    serde_json::to_string(&summary).map_err(Into::into)
+}
+
+fn run_gui_frame_profile_arm(
+    config: &NativeDeviceConfig,
+    session: &Session,
+    output_dir: &Path,
+    pmu: bool,
+) -> Result<Value> {
+    let run_result = run_gui_frame_profile_route(config, session, output_dir, pmu);
+    if let Some(log) = remote_read(session, "/tmp/mister-magik-slint.log") {
+        fs::write(output_dir.join("launcher.log"), log)?;
+    }
+    let launcher_restore = launcher_restart(
+        session,
+        &LauncherRestartOptions {
+            clear_env: true,
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+            timeout_secs: 45,
+            ..LauncherRestartOptions::default()
+        },
+    );
+    let cleanup = exec_checked(
+        session,
+        "clean GUI profiling arm state",
+        &gui_profile_route_cleanup_command(),
+    );
+    match (run_result, launcher_restore, cleanup) {
+        (Ok(route), Ok(()), Ok(())) => Ok(route),
+        (run, launcher, cleanup) => Err(format!(
+            "GUI profiling arm failed: run={:?}; launcher_restore={:?}; cleanup={:?}",
+            run.err(),
+            launcher.err(),
+            cleanup.err()
+        )
+        .into()),
+    }
+}
+
+fn run_gui_frame_streamline_arm(
+    config: &NativeDeviceConfig,
+    session: &Session,
+    gatord: &Path,
+    output_dir: &Path,
+) -> Result<GuiFrameStreamlineArm> {
+    fs::create_dir_all(output_dir)?;
+    let capture = SystemWideStreamlineCapture::new(
+        session,
+        &config.connection,
+        output_dir,
+        GUI_FRAME_STREAMLINE_CAPTURE,
+    );
+    let run_result = (|| -> Result<GuiFrameStreamlineArm> {
+        let gatord_version = capture.prepare(gatord)?;
+        let capture_thread = capture.start();
+        capture.wait_ready(Duration::from_secs(10))?;
+        let capture_started_monotonic_ns = capture.monotonic_ns("GUI frame capture start")?;
+        let route_result = run_gui_frame_profile_route(config, session, output_dir, false);
+        let capture_result = capture.stop(capture_thread);
+        let capture_ended_monotonic_ns = capture.monotonic_ns("GUI frame capture end")?;
+        capture.retain_log()?;
+        if let Some(log) = remote_read(session, "/tmp/mister-magik-slint.log") {
+            fs::write(output_dir.join("launcher.log"), log)?;
+        }
+        let route = route_result?;
+        capture_result?;
+        let archive_sha256 = capture.package_extract()?;
+        Ok(GuiFrameStreamlineArm {
+            route,
+            gatord_version,
+            archive_sha256,
+            capture_started_monotonic_ns,
+            capture_ended_monotonic_ns,
+        })
+    })();
+    let capture_cleanup = capture.cleanup();
+    let launcher_restore = launcher_restart(
+        session,
+        &LauncherRestartOptions {
+            clear_env: true,
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+            timeout_secs: 45,
+            ..LauncherRestartOptions::default()
+        },
+    );
+    let route_cleanup = exec_checked(
+        session,
+        "clean GUI Streamline route state",
+        &gui_profile_route_cleanup_command(),
+    );
+    match (run_result, capture_cleanup, launcher_restore, route_cleanup) {
+        (Ok(arm), Ok(()), Ok(()), Ok(())) => Ok(arm),
+        (run, capture, launcher, route) => Err(format!(
+            "GUI Streamline arm failed: run={:?}; capture_cleanup={:?}; launcher_restore={:?}; route_cleanup={:?}",
+            run.err(),
+            capture.err(),
+            launcher.err(),
+            route.err()
+        )
+        .into()),
+    }
 }
 
 fn streamline_installed_identity(
