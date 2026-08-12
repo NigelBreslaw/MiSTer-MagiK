@@ -208,7 +208,7 @@ impl OrientationTransitionBenchmark {
                     presentation_elapsed_us,
                     presentation_error: self.presentation_error.take(),
                 };
-                self.records.push(record);
+                self.records.push(record.clone());
                 self.next_leg += 1;
                 self.phase = if self.next_leg == ORIENTATION_TRANSITION_BENCHMARK_LEGS {
                     BenchmarkPhase::Complete
