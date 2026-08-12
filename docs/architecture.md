@@ -161,10 +161,13 @@ mode; direct render-thread waits remain diagnostic opt-in only.
 
 Root `/media/fat/menu.rbf` is stock firmware owned by `update_all`; MagiK never
 writes it. `mister_magik_exit_to_menu` stays on the active latch Menu core.
-Game returns and `load_core menu.rbf` are redirected by `MiSTer_MagiK` to the
-MagiK-owned RBF after manifest verification. A missing, malformed, duplicate,
-mixed-version, or hash-mismatched manifest disables the redirect and falls back
-to stock behavior without rebooting repeatedly.
+For compatibility, game returns and `load_core menu.rbf` may be redirected by
+`MiSTer_MagiK` to the MagiK-owned RBF after manifest verification. This is not
+an activation or identity-proof interface: a missing, malformed, duplicate,
+mixed-version, or hash-mismatched manifest legitimately falls back to stock
+Menu. Typed delivery and experimental FPGA transactions must instead use the
+explicit `mister_magik_reload_main` command, which restarts Dev Main with the
+layout-selected latch RBF path.
 
 Each manifest binds its layout's fixed installed paths, SHA-256 hashes, Main/MagiK/Menu source
 revisions, and the framebuffer platform-contract hash for Main, the Rust
@@ -715,10 +718,13 @@ Current command surface:
 ```text
 mister_magik_launch <absolute .mgl/.mra/.rbf path>
 mister_magik_exit_to_menu
+mister_magik_reload_main
 ```
 
-Older fifo `load_core` flows may appear in history. Current work should prefer
-the explicit fork command surface when operating under `MiSTer_MagiK`.
+Older fifo `load_core` flows may appear in history. Current work must use the
+explicit fork command surface when operating under `MiSTer_MagiK`. In
+particular, `/media/fat/menu.rbf` is never evidence that the MagiK latch RBF was
+configured.
 
 Never use external `rbf_load` from Slint; that path has historically left the
 display without valid scan-out.
