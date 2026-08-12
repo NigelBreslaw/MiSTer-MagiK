@@ -39,10 +39,11 @@ carrying generic trace history or pixel-rate counters.
 
 Schema 4 preserves schema 3's record sizes and layout while correcting the
 lock signal's meaning: both the control and HDMI records now observe the real
-`pll_hdmi_0002.locked` output exported through `pll_hdmi`, not the unrelated
-adjustment-PLL LED status. A transient unlock that clears before the observer
-arms is ignored; any unlock sampled after arming is retained as a control/clock
-fault.
+`pll_hdmi_0002.locked` status already carried by `reconfig_from_pll[16]`, not
+the unrelated adjustment-PLL LED status. The stock `pll_hdmi` wrapper keeps its
+redundant lock output terminated. A transient unlock that clears before the
+observer arms is ignored; any unlock sampled after arming is retained as a
+control/clock fault.
 
 ## Collection
 
