@@ -58,7 +58,8 @@ Every system-wide capture carries a shared manifest with:
 
 - device boot ID;
 - installed platform-manifest hash;
-- installed GUI and device-agent hashes;
+- installed GUI and device-agent hashes, agent byte size, and the exact MagiK
+  build revision that produced the agent;
 - gatord version and executable hash;
 - device monotonic clock domain and capture start and end timestamps;
 - fixed capture mode and bounded duration;

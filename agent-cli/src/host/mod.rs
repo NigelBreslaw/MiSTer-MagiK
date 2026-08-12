@@ -8445,6 +8445,7 @@ struct StreamlineInstalledIdentity {
     magik_revision: String,
     gui_sha256: String,
     agent_sha256: String,
+    agent_bytes: u64,
 }
 
 impl<'a> SystemWideStreamlineCapture<'a> {
@@ -9365,7 +9366,25 @@ fn streamline_installed_identity(
             "installed device agent",
             "/media/fat/mister-magik-dev/mister-magik-agent",
         )?,
+        agent_bytes: streamline_remote_size(
+            session,
+            "installed device agent",
+            "/media/fat/mister-magik-dev/mister-magik-agent",
+        )?,
     })
+}
+
+fn streamline_remote_size(session: &Session, label: &str, path: &str) -> Result<u64> {
+    let output = exec_checked_output(
+        session,
+        &format!("measure {label}"),
+        &format!("wc -c < {}", sh(path)),
+    )?;
+    output
+        .stdout
+        .trim()
+        .parse::<u64>()
+        .map_err(|error| format!("invalid {label} byte size: {error}").into())
 }
 
 fn streamline_remote_sha256(session: &Session, label: &str, path: &str) -> Result<String> {
@@ -9416,6 +9435,8 @@ fn streamline_capture_manifest(
         "magik_revision": identity.magik_revision,
         "gui_sha256": identity.gui_sha256,
         "agent_sha256": identity.agent_sha256,
+        "agent_build_revision": identity.magik_revision,
+        "agent_bytes": identity.agent_bytes,
         "gatord_version": gatord_version,
         "gatord_sha256": gatord_sha256,
         "clock_domain": "CLOCK_MONOTONIC",
@@ -21465,6 +21486,7 @@ mod tests {
             magik_revision: "b".repeat(40),
             gui_sha256: "c".repeat(64),
             agent_sha256: "d".repeat(64),
+            agent_bytes: 1_234_567,
         };
         let manifest = streamline_capture_manifest(
             &identity,
@@ -21480,6 +21502,8 @@ mod tests {
         );
         assert_eq!(manifest["boot_id"], "boot-id");
         assert_eq!(manifest["agent_sha256"], "d".repeat(64));
+        assert_eq!(manifest["agent_build_revision"], "b".repeat(40));
+        assert_eq!(manifest["agent_bytes"], 1_234_567);
         assert_eq!(manifest["capture_started_monotonic_ns"], 1_000);
         assert_eq!(manifest["capture_ended_monotonic_ns"], 4_500);
         assert_eq!(manifest["capture_duration_ns"], 3_500);
