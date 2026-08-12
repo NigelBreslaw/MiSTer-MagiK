@@ -141,6 +141,7 @@ mod png_capture {
         pub png_wrap_us: u64,
     }
 
+    #[derive(Debug)]
     pub struct EncodeResult {
         pub bytes: Vec<u8>,
         pub timing: Timing,
@@ -6028,6 +6029,7 @@ mod tests {
         assert_eq!(linux::cpu_busy_percent(previous, current), 50.0);
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
     fn telemetry_phase_aggregation_uses_fixture_counts_without_device_reads() {
         let evidence = linux::aggregate_process_telemetry_evidence(&[
