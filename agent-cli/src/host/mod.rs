@@ -26758,7 +26758,12 @@ H: Handlers=event3 js0"#
         let summary = summarize_settings_navigation_qualification(&telemetry, completion, None)
             .expect("exact zero-repeat window should qualify");
         assert_eq!(summary["legs"][11]["physical_dropped_frames"], 0);
-        assert!(summary["legs"][11]["protocol_v5"]["physical_fps"] < 59.9);
+        assert!(
+            summary["legs"][11]["protocol_v5"]["physical_fps"]
+                .as_f64()
+                .expect("physical fps should be numeric")
+                < 59.9
+        );
         assert_eq!(summary["legs"][11]["passed"], true);
     }
 
