@@ -74,8 +74,8 @@ for name, golden in spec["goldens"].items():
         )
 
 video_diagnostics = json.loads(VIDEO_DIAGNOSTICS_SPEC_PATH.read_text())
-if video_diagnostics["schema"] != 3:
-    raise SystemExit("video diagnostics protocol schema must be v3")
+if video_diagnostics["schema"] != 4:
+    raise SystemExit("video diagnostics protocol schema must be v4")
 if set(video_diagnostics["commands"].values()) & set(spec["commands"].values()):
     raise SystemExit("video diagnostics commands overlap the latch protocol")
 if set(video_diagnostics["commands"].values()) != {0x5D, 0x5E, 0x5F}:

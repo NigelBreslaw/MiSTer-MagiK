@@ -29,13 +29,20 @@ The diagnostic ABI is separate from latch protocol v5. Existing commands
 unchanged. Every diagnostic response has its own magic, fixed length, schema,
 and CRC-16/CCITT-FALSE value.
 
-Schema 3 keeps the complete legacy payload and route geometry in a compact
+Schema 4 keeps the complete legacy payload and route geometry in a compact
 41-word control history, with compact 16-word Avalon and HDMI event records.
 The control record uses a 16-bit vblank epoch and saturating 8-bit lifetime
 event counters; host monotonic timestamps retain the wider collection timeline.
 The native records retain the first/last actual address, accepted/returned
 accounting, route generation, reference timing, and fault flags without
 carrying generic trace history or pixel-rate counters.
+
+Schema 4 preserves schema 3's record sizes and layout while correcting the
+lock signal's meaning: both the control and HDMI records now observe the real
+`pll_hdmi_0002.locked` output exported through `pll_hdmi`, not the unrelated
+adjustment-PLL LED status. A transient unlock that clears before the observer
+arms is ignored; any unlock sampled after arming is retained as a control/clock
+fault.
 
 ## Collection
 
@@ -93,8 +100,10 @@ remain stock-versus-final checks. Observer overhead is final relative to the
 pre-observer build: no added unconstrained output paths, no more than 0.15 ns
 slack degradation, no more than 1,100 ALMs or 1,500 registers, and no added DSP
 or block-memory use. The final build must also have zero TNS and at least 0.20
-ns setup and hold slack. A changed RBF still requires the normal release
-qualification before device deployment.
+ns setup and hold slack. Production deployment of a changed RBF still requires
+normal release qualification. A locally signed coherent artifact set may be
+installed only in the Dev layout through the typed attended experimental FPGA
+installer; it is neither production-deployable nor release-qualified.
 
 On Apple Silicon, `scripts/agent fpga signoff` runs that same three-way build
 and unchanged checker in Apple containers. It resolves the local `main` ref in

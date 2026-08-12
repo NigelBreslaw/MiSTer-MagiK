@@ -29,7 +29,7 @@ module tb_mister_magik_video_diagnostics_output;
 		.expected_route_flags_async(route_flags),
 		.mux_direct_async(mux_direct), .mux_csync_async(mux_csync),
 		.reset_req_async(reset_req), .cfg_done_async(cfg_done),
-		.pll_adjust_locked_async(pll_locked), .hdmi_out_d(data),
+		.hdmi_pll_locked_async(pll_locked), .hdmi_out_d(data),
 		.hdmi_out_de(de), .hdmi_out_hs(hs), .hdmi_out_vs(vs),
 		.heartbeat_toggle(heartbeat), .fault_toggle(fault),
 		.fault_trigger(trigger), .snapshot_ack_toggle(ack),

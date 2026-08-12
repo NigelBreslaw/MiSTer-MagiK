@@ -171,7 +171,7 @@ def main() -> None:
         "hdmi_vbl": "control_vbl_meta <= hdmi_vbl;",
         "reset_req": "control_reset_req_meta <= reset_req;",
         "reset_out": "control_reset_out_meta <= reset_out;",
-        "pll_adjust_locked": "control_pll_lock_meta <= pll_adjust_locked;",
+        "hdmi_pll_locked": "control_pll_lock_meta <= hdmi_pll_locked;",
     }
     for raw_name, binding in control_cdc_bindings.items():
         if binding not in control_source or len(re.findall(rf"\b{raw_name}\b", control_source)) != 2:
@@ -269,6 +269,7 @@ def main() -> None:
             )
 
         patched = (work / "sys/sys_top.v").read_text()
+        patched_pll = (work / "sys/pll_hdmi.v").read_text()
         required_counts = {
             BRIDGE_MAPPING: 1,
             APPLY_BUNDLE: 1,
@@ -286,6 +287,14 @@ def main() -> None:
         ]
         if mismatches:
             fail("patched production bridge binding mismatch: " + "; ".join(mismatches))
+        if not re.search(
+            r"output\s+wire\s+locked\b.*?\.locked\s*\(\s*locked\s*\)",
+            patched_pll,
+            re.S,
+        ):
+            fail("HDMI PLL wrapper does not export pll_hdmi_0002.locked")
+        if patched.count(".locked(hdmi_pll_locked)") != 1:
+            fail("sys_top does not bind the real HDMI PLL lock exactly once")
         if re.search(
             r"\b(?:LFB_|FB_|hdmi_out_|vbuf_|reset_req)[A-Za-z0-9_]*\s*"
             r"(?:<=|=)\s*magik_diag_",
@@ -313,6 +322,7 @@ def main() -> None:
         if output_binding is None:
             fail("missing final registered HDMI diagnostics binding")
         for required_tap in (
+            ".hdmi_pll_locked_async(hdmi_pll_locked)",
             ".hdmi_out_d(hdmi_out_d)",
             ".hdmi_out_de(hdmi_out_de)",
             ".hdmi_out_hs(hdmi_out_hs)",
@@ -320,6 +330,19 @@ def main() -> None:
         ):
             if output_binding.group(1).count(required_tap) != 1:
                 fail(f"final HDMI diagnostics tap mismatch: {required_tap}")
+
+        control_binding = re.search(
+            r"mister_magik_video_diagnostics_control\s+"
+            r"magik_video_diagnostics\s*\((.*?)\);",
+            patched,
+            re.S,
+        )
+        if control_binding is None:
+            fail("missing control diagnostics binding")
+        if control_binding.group(1).count(".hdmi_pll_locked(hdmi_pll_locked)") != 1:
+            fail("control diagnostics does not observe the real HDMI PLL lock")
+        if re.search(r"\.hdmi_pll_locked(?:_async)?\s*\(\s*led_locked\s*\)", patched):
+            fail("diagnostics must not observe the adjustment-PLL LED signal")
 
         video_paths = {
             "native black to shared scanline stage": re.compile(

@@ -45,7 +45,7 @@ module tb_mister_magik_video_diagnostics_control;
 	reg reset_req = 1'b0;
 	reg reset_out = 1'b0;
 	reg cfg_done = 1'b1;
-	reg pll_adjust_locked = 1'b1;
+	reg hdmi_pll_locked = 1'b1;
 	reg output_heartbeat = 1'b0;
 	reg avalon_fault = 1'b0;
 	reg output_fault = 1'b0;
@@ -74,7 +74,7 @@ module tb_mister_magik_video_diagnostics_control;
 		.lfb_height(lfb_height), .lfb_hmin(lfb_hmin), .lfb_hmax(lfb_hmax),
 		.lfb_vmin(lfb_vmin), .lfb_vmax(lfb_vmax), .lfb_base(lfb_base),
 		.lfb_stride(lfb_stride), .reset_req(reset_req), .reset_out(reset_out),
-		.cfg_done(cfg_done), .pll_adjust_locked(pll_adjust_locked),
+		.cfg_done(cfg_done), .hdmi_pll_locked(hdmi_pll_locked),
 		.output_heartbeat_toggle_async(output_heartbeat),
 		.avalon_fault_toggle_async(avalon_fault), .avalon_trigger_async(8'd0),
 		.avalon_snapshot_ack_async(snapshot_request),

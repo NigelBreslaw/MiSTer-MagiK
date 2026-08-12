@@ -50,7 +50,7 @@ module mister_magik_video_diagnostics_control #(
 	input  wire         reset_req,
 	input  wire         reset_out,
 	input  wire         cfg_done,
-	input  wire         pll_adjust_locked,
+	input  wire         hdmi_pll_locked,
 	input  wire         output_heartbeat_toggle_async,
 
 	input  wire         avalon_fault_toggle_async,
@@ -372,7 +372,7 @@ module mister_magik_video_diagnostics_control #(
 		control_reset_req_sys <= control_reset_req_meta;
 		control_reset_out_meta <= reset_out;
 		control_reset_out_sys <= control_reset_out_meta;
-		control_pll_lock_meta <= pll_adjust_locked;
+		control_pll_lock_meta <= hdmi_pll_locked;
 		control_pll_lock_sys <= control_pll_lock_meta;
 
 		if(heartbeat_sys != heartbeat_seen) begin

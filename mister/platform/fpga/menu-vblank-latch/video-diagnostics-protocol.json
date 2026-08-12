@@ -1,5 +1,5 @@
 {
-  "schema": 3,
+  "schema": 4,
   "commands": {
     "control": 93,
     "avalon": 94,
@@ -52,7 +52,7 @@
       "reset_request": 0,
       "reset_output": 1,
       "configuration_lost": 2,
-      "pll_adjust_lock_lost": 3,
+      "hdmi_pll_lock_lost": 3,
       "owned_osd_write": 4,
       "route_divergence": 5,
       "heartbeat_timeout": 6,
@@ -80,7 +80,7 @@
       "active_enabled": 1,
       "reset_request": 2,
       "configuration_done": 3,
-      "pll_adjust_locked": 4
+      "hdmi_pll_locked": 4
     },
     "output_fault_flags": {
       "saw_de": 0,

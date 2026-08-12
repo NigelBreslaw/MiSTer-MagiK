@@ -19,7 +19,7 @@ module mister_magik_video_diagnostics_output (
 	input  wire         mux_csync_async,
 	input  wire         reset_req_async,
 	input  wire         cfg_done_async,
-	input  wire         pll_adjust_locked_async,
+	input  wire         hdmi_pll_locked_async,
 	input  wire [23:0]  hdmi_out_d,
 	input  wire         hdmi_out_de,
 	input  wire         hdmi_out_hs,
@@ -153,7 +153,7 @@ module mister_magik_video_diagnostics_output (
 		reset_sync <= reset_meta;
 		cfg_meta <= cfg_done_async;
 		cfg_sync <= cfg_meta;
-		pll_meta <= pll_adjust_locked_async;
+		pll_meta <= hdmi_pll_locked_async;
 		pll_sync <= pll_meta;
 		vs_d <= hdmi_out_vs;
 		hs_d <= hdmi_out_hs;

@@ -1,3 +1,26 @@
+diff --git a/sys/pll_hdmi.v b/sys/pll_hdmi.v
+index 4094896..40b59b1 100644
+--- a/sys/pll_hdmi.v
++++ b/sys/pll_hdmi.v
+@@ -10,7 +10,8 @@ module pll_hdmi (
+ 		input  wire        rst,               //             reset.reset
+ 		output wire        outclk_0,          //           outclk0.clk
+ 		input  wire [63:0] reconfig_to_pll,   //   reconfig_to_pll.reconfig_to_pll
+-		output wire [63:0] reconfig_from_pll  // reconfig_from_pll.reconfig_from_pll
++		output wire [63:0] reconfig_from_pll, // reconfig_from_pll.reconfig_from_pll
++		output wire        locked             //             locked.export
+ 	);
+ 
+ 	pll_hdmi_0002 pll_hdmi_inst (
+@@ -19,7 +20,7 @@ module pll_hdmi (
+ 		.outclk_0          (outclk_0),          //           outclk0.clk
+ 		.reconfig_to_pll   (reconfig_to_pll),   //   reconfig_to_pll.reconfig_to_pll
+ 		.reconfig_from_pll (reconfig_from_pll), // reconfig_from_pll.reconfig_from_pll
+-		.locked            ()                   //       (terminated)
++		.locked            (locked)             //             locked.export
+ 	);
+ 
+ endmodule
 diff --git a/sys/sys_top.v b/sys/sys_top.v
 index a416879..d05a447 100644
 --- a/sys/sys_top.v
@@ -126,7 +149,7 @@ index a416879..d05a447 100644
 +	.reset_req(reset_req),
 +	.reset_out(reset),
 +	.cfg_done(cfg_done),
-+	.pll_adjust_locked(led_locked),
++	.hdmi_pll_locked(hdmi_pll_locked),
 +	.output_heartbeat_toggle_async(magik_diag_output_heartbeat),
 +	.avalon_fault_toggle_async(magik_diag_avalon_fault),
 +	.avalon_trigger_async(magik_diag_avalon_trigger),
@@ -231,7 +254,28 @@ index a416879..d05a447 100644
  wire         hdmi_vs, hdmi_hs, hdmi_de, hdmi_vbl, hdmi_brd;
  wire         freeze;
  wire         bob_deint;
-@@ -1332,8 +1516,34 @@ always @(posedge hdmi_tx_clk) begin
+@@ -1026,15 +1210,19 @@ always @(posedge clk_pal) begin
+ 
+ /////////////////////////  HDMI output  /////////////////////////////////
++wire hdmi_pll_locked;
+ `ifndef MISTER_DEBUG_NOHDMI
+ 	wire hdmi_clk_out;
+ 	pll_hdmi pll_hdmi
+ 	(
+ 		.refclk(FPGA_CLK1_50),
+ 		.rst(reset_req),
+ 		.reconfig_to_pll(reconfig_to_pll),
+ 		.reconfig_from_pll(reconfig_from_pll),
+-		.outclk_0(hdmi_clk_out)
++		.outclk_0(hdmi_clk_out),
++		.locked(hdmi_pll_locked)
+ 	);
++`else
++	assign hdmi_pll_locked = 1'b0;
+ `endif
+ 
+ //1920x1080@60 PCLK=148.5MHz CEA
+@@ -1332,8 +1520,34 @@ always @(posedge hdmi_tx_clk) begin
  end
  
 +mister_magik_video_diagnostics_output magik_video_diagnostics_output
@@ -248,7 +292,7 @@ index a416879..d05a447 100644
 +	.mux_csync_async(direct_video & csync_en),
 +	.reset_req_async(reset_req),
 +	.cfg_done_async(cfg_done),
-+	.pll_adjust_locked_async(led_locked),
++	.hdmi_pll_locked_async(hdmi_pll_locked),
 +	.hdmi_out_d(hdmi_out_d),
 +	.hdmi_out_de(hdmi_out_de),
 +	.hdmi_out_hs(hdmi_out_hs),
@@ -266,7 +310,7 @@ index a416879..d05a447 100644
  assign HDMI_TX_D  = hdmi_out_d;
  
  /////////////////////////  VGA output  //////////////////////////////////
-@@ -1380,15 +1590,30 @@ assign HDMI_TX_D  = hdmi_out_d;
+@@ -1380,15 +1594,30 @@ assign HDMI_TX_D  = hdmi_out_d;
  
  wire [23:0] vga_data_sl;
  wire        vga_de_sl, vga_ce_sl, vga_vs_sl, vga_hs_sl;

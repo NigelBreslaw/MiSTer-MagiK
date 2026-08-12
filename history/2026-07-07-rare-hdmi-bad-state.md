@@ -189,3 +189,18 @@ When the rare bad state appears again, do not reboot first.
 
 The goal next time is to find the smallest no-reboot operation that changes the
 HDMI picture, not to infer state from one register value.
+
+## 2026-08-12 Return-From-Game Occurrence
+
+A separate rare black-screen occurrence was captured after returning from an
+FPGA Arcade game to MiSTer MagiK. The launcher framebuffer remained healthy
+while USB Video was black, and `UIO_GET_VRES=529x240` again did not distinguish
+the failure from normal operation. Reapplying Main's current runtime HDMI
+output configuration restored the picture without a reboot.
+
+The retained FPGA record was misleading because its field named for HDMI PLL
+lock was connected to the adjustment-PLL LED status. Schema 4 corrects only
+that passive observer connection by exporting the real HDMI PLL lock from the
+existing wrapper. It does not change the latch, reset, clocks, scaler, SDRAM,
+or output path. Main now reasserts the already-selected runtime HDMI output
+configuration on the marked game-to-launcher return path.

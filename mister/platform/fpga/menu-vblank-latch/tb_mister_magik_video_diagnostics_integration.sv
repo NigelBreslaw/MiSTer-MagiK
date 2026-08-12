@@ -39,7 +39,7 @@ module tb_mister_magik_video_diagnostics_integration;
 		.lfb_hmax(12'd959), .lfb_vmin(12'd0), .lfb_vmax(12'd539),
 		.lfb_base(32'h227e9000), .lfb_stride(14'd1920),
 		.reset_req(1'b0), .reset_out(1'b0), .cfg_done(1'b1),
-		.pll_adjust_locked(1'b1), .output_heartbeat_toggle_async(output_heartbeat),
+		.hdmi_pll_locked(1'b1), .output_heartbeat_toggle_async(output_heartbeat),
 		.avalon_fault_toggle_async(avalon_fault), .avalon_trigger_async(avalon_trigger),
 		.avalon_snapshot_ack_async(avalon_ack),
 		.avalon_snapshot_payload_async(avalon_payload),
@@ -78,7 +78,7 @@ module tb_mister_magik_video_diagnostics_integration;
 		.expected_active_seq_async(expected_active_seq),
 		.expected_route_flags_async(expected_route_flags),
 		.mux_direct_async(1'b0), .mux_csync_async(1'b0), .reset_req_async(1'b0),
-		.cfg_done_async(1'b1), .pll_adjust_locked_async(1'b1),
+		.cfg_done_async(1'b1), .hdmi_pll_locked_async(1'b1),
 		.hdmi_out_d(24'h204080), .hdmi_out_de(1'b1), .hdmi_out_hs(1'b0),
 		.hdmi_out_vs(hdmi_vs), .heartbeat_toggle(output_heartbeat),
 		.fault_toggle(output_fault), .fault_trigger(output_trigger),
@@ -130,6 +130,8 @@ module tb_mister_magik_video_diagnostics_integration;
 		if(avalon_payload[3*16 +: 16] != generation ||
 		   output_payload[3*16 +: 16] != generation)
 			$fatal(1, "frozen domain generations do not match control");
+		if(output_payload[2*16 +: 16] != MAGIK_VIDEO_DIAGNOSTICS_TRIGGER_NONE)
+			$fatal(1, "control-origin snapshot assigned a native output trigger");
 		if(avalon_payload[4*16 +: 16] != expected_route_epoch ||
 		   output_payload[4*16 +: 16] != expected_route_epoch)
 			$fatal(1, "frozen route epochs do not match");

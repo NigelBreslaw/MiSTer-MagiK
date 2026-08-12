@@ -29,7 +29,7 @@ module tb_mister_magik_video_diagnostics_timeout;
 		.lfb_hmax(12'd959), .lfb_vmin(12'd0), .lfb_vmax(12'd539),
 		.lfb_base(32'h227e9000), .lfb_stride(14'd1920),
 		.reset_req(1'b0), .reset_out(1'b0), .cfg_done(1'b1),
-		.pll_adjust_locked(1'b1), .output_heartbeat_toggle_async(1'b0),
+		.hdmi_pll_locked(1'b1), .output_heartbeat_toggle_async(1'b0),
 		.avalon_fault_toggle_async(1'b0), .avalon_trigger_async(8'd0),
 		.avalon_snapshot_ack_async(1'b0), .avalon_snapshot_payload_async(240'd0),
 		.output_fault_toggle_async(1'b0), .output_trigger_async(8'd0),
