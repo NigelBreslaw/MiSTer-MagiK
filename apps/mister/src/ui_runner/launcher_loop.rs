@@ -9712,6 +9712,19 @@ pub(super) fn run_launcher_loop(
             arcade_list_update_us,
             preview_blit_us,
             effect_label_us,
+            navigation_transition_base_copy_us: navigation_transition
+                .last_render_stats()
+                .base_copy_us as u128,
+            navigation_transition_settings_blit_us: navigation_transition
+                .last_render_stats()
+                .settings_blit_us as u128,
+            navigation_transition_card_scale_us: navigation_transition
+                .last_render_stats()
+                .card_scale_us as u128,
+            navigation_transition_destination_reveal_us: navigation_transition
+                .last_render_stats()
+                .destination_reveal_us
+                as u128,
             navigation_transition_overlay_us: navigation_transition.last_render_stats().overlay_us
                 as u128,
             navigation_transition_edge: navigation_transition_route,

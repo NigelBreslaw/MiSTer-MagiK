@@ -89,6 +89,10 @@ pub struct NavigationTransitionTelemetry {
     pub covered_hold_us: u64,
     pub frames: u64,
     pub reused_frames: u64,
+    pub base_copy_us: u64,
+    pub settings_blit_us: u64,
+    pub card_scale_us: u64,
+    pub destination_reveal_us: u64,
     pub overlay_us: u64,
     pub phosphor_pixels: u64,
     pub scanline_pixels: u64,
@@ -696,6 +700,26 @@ impl NavigationTransitionRuntime {
             .telemetry
             .overlay_us
             .saturating_add(stats.overlay_us);
+        self.controller.telemetry.base_copy_us = self
+            .controller
+            .telemetry
+            .base_copy_us
+            .saturating_add(stats.base_copy_us);
+        self.controller.telemetry.settings_blit_us = self
+            .controller
+            .telemetry
+            .settings_blit_us
+            .saturating_add(stats.settings_blit_us);
+        self.controller.telemetry.card_scale_us = self
+            .controller
+            .telemetry
+            .card_scale_us
+            .saturating_add(stats.card_scale_us);
+        self.controller.telemetry.destination_reveal_us = self
+            .controller
+            .telemetry
+            .destination_reveal_us
+            .saturating_add(stats.destination_reveal_us);
         self.controller.telemetry.phosphor_pixels = self
             .controller
             .telemetry

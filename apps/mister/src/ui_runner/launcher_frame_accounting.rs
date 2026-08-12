@@ -947,6 +947,10 @@ pub(super) struct LauncherCustomDrawTrace {
     pub(super) arcade_list_update_us: u128,
     pub(super) preview_blit_us: u128,
     pub(super) effect_label_us: u128,
+    pub(super) navigation_transition_base_copy_us: u128,
+    pub(super) navigation_transition_settings_blit_us: u128,
+    pub(super) navigation_transition_card_scale_us: u128,
+    pub(super) navigation_transition_destination_reveal_us: u128,
     pub(super) navigation_transition_overlay_us: u128,
     pub(super) navigation_transition_edge: &'static str,
     pub(super) navigation_transition_route: &'static str,
@@ -1913,6 +1917,22 @@ impl LauncherFrameAccounting {
                     .settings_navigation_benchmark_leg,
                 navigation_transition_us: u128_to_u64_saturating(
                     frame.custom_draw_trace.effect_label_us,
+                ),
+                navigation_transition_base_copy_us: u128_to_u64_saturating(
+                    frame.custom_draw_trace.navigation_transition_base_copy_us,
+                ),
+                navigation_transition_settings_blit_us: u128_to_u64_saturating(
+                    frame
+                        .custom_draw_trace
+                        .navigation_transition_settings_blit_us,
+                ),
+                navigation_transition_card_scale_us: u128_to_u64_saturating(
+                    frame.custom_draw_trace.navigation_transition_card_scale_us,
+                ),
+                navigation_transition_destination_reveal_us: u128_to_u64_saturating(
+                    frame
+                        .custom_draw_trace
+                        .navigation_transition_destination_reveal_us,
                 ),
                 navigation_transition_overlay_us: u128_to_u64_saturating(
                     frame.custom_draw_trace.navigation_transition_overlay_us,

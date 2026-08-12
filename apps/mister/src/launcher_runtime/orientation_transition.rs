@@ -416,6 +416,8 @@ impl OrientationTransitionRuntime {
             self.to,
             OrientationPmuPhase::Fill,
         ));
+        let (frame, levels, revealing) =
+            orientation_wave_state(self.effect, &self.source, &self.destination, elapsed);
         drop(fill_pmu);
         let fill_us = elapsed_us(fill_started);
         let map_started = Instant::now();
@@ -425,6 +427,13 @@ impl OrientationTransitionRuntime {
             self.to,
             OrientationPmuPhase::Map,
         ));
+        let done = elapsed >= self.duration;
+        let damage = if !self.previous_levels_valid || self.previous_revealing != revealing || done
+        {
+            OrientationTransitionDamage::full()
+        } else {
+            OrientationTransitionDamage::changed(&self.previous_levels, &levels)
+        };
         drop(map_pmu);
         let map_us = elapsed_us(map_started);
         let crossfade_started = Instant::now();
@@ -434,15 +443,6 @@ impl OrientationTransitionRuntime {
             self.to,
             OrientationPmuPhase::Crossfade,
         ));
-        let (frame, levels, revealing) =
-            orientation_wave_state(self.effect, &self.source, &self.destination, elapsed);
-        let done = elapsed >= self.duration;
-        let damage = if !self.previous_levels_valid || self.previous_revealing != revealing || done
-        {
-            OrientationTransitionDamage::full()
-        } else {
-            OrientationTransitionDamage::changed(&self.previous_levels, &levels)
-        };
         match self.effect {
             OrientationTransitionEffect::BrightnessFade => render_brightness_wave_dirty(
                 frame,

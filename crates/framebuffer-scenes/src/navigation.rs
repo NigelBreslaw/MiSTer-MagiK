@@ -834,6 +834,10 @@ fn copy_snapshot(
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct NavigationTransitionRenderStats {
     pub render_us: u64,
+    pub base_copy_us: u64,
+    pub settings_blit_us: u64,
+    pub card_scale_us: u64,
+    pub destination_reveal_us: u64,
     pub copied_pixels: u64,
     pub filled_pixels: u64,
     pub outline_pixels: u64,
@@ -1077,11 +1081,14 @@ fn render_super_scaler_shell(
     if frame.phase == NavigationTransitionPhase::Settled {
         match frame.endpoint {
             Some(NavigationTransitionEndpoint::Source) => {
+                let phase_started = Instant::now();
                 working.copy_from_slice(source);
+                stats.base_copy_us = elapsed_us(phase_started);
                 stats.copied_pixels = source.len() as u64;
                 return Ok(stats);
             }
             Some(NavigationTransitionEndpoint::Destination) => {
+                let phase_started = Instant::now();
                 if let Some(destination) = destination {
                     working.copy_from_slice(destination);
                     stats.copied_pixels = destination.len() as u64;
@@ -1089,13 +1096,16 @@ fn render_super_scaler_shell(
                     working.copy_from_slice(source);
                     stats.copied_pixels = source.len() as u64;
                 }
+                stats.base_copy_us = elapsed_us(phase_started);
                 return Ok(stats);
             }
             None => {}
         }
     }
     if frame.progress_q16 == 0 {
+        let phase_started = Instant::now();
         working.copy_from_slice(source);
+        stats.base_copy_us = elapsed_us(phase_started);
         stats.copied_pixels = source.len() as u64;
         return Ok(stats);
     }
@@ -1103,7 +1113,9 @@ fn render_super_scaler_shell(
         && frame.reveal_progress_q16 >= 62_000
         && let Some(destination) = destination
     {
+        let phase_started = Instant::now();
         working.copy_from_slice(destination);
+        stats.base_copy_us = elapsed_us(phase_started);
         stats.copied_pixels = destination.len() as u64;
         return Ok(stats);
     }
@@ -1116,7 +1128,9 @@ fn render_super_scaler_shell(
         NavigationTransitionDirection::Reverse => false,
     };
     if needs_source_base {
+        let phase_started = Instant::now();
         working.copy_from_slice(source);
+        stats.base_copy_us = stats.base_copy_us.saturating_add(elapsed_us(phase_started));
         stats.copied_pixels = source.len() as u64;
     }
 
@@ -1124,6 +1138,7 @@ fn render_super_scaler_shell(
         NavigationTransitionDirection::Forward => {
             if frame.reveal_progress_q16 > 0 {
                 if let Some(destination) = destination {
+                    let phase_started = Instant::now();
                     if request.edge.enters_system_browser() {
                         compose_system_background_horizon(
                             working,
@@ -1149,13 +1164,21 @@ fn render_super_scaler_shell(
                         request,
                         &mut stats,
                     );
+                    stats.destination_reveal_us = stats
+                        .destination_reveal_us
+                        .saturating_add(elapsed_us(phase_started));
                 } else {
+                    let phase_started = Instant::now();
                     fill_super_scaler_covered_surface(
                         working, width, height, full, shell, &mut stats,
                     );
+                    stats.destination_reveal_us = stats
+                        .destination_reveal_us
+                        .saturating_add(elapsed_us(phase_started));
                 }
             }
             if frame.reveal_progress_q16 == 0 {
+                let phase_started = Instant::now();
                 render_super_scaler_card_cover(
                     working,
                     source,
@@ -1173,10 +1196,14 @@ fn render_super_scaler_shell(
                     scale_dither_x,
                     &mut stats,
                 );
+                stats.card_scale_us = stats
+                    .card_scale_us
+                    .saturating_add(elapsed_us(phase_started));
             }
         }
         NavigationTransitionDirection::Reverse => {
             if frame.reveal_progress_q16 == 0 {
+                let phase_started = Instant::now();
                 conceal_source_regions_inverse(
                     working,
                     source,
@@ -1187,9 +1214,15 @@ fn render_super_scaler_shell(
                     shell,
                     &mut stats,
                 );
+                stats.card_scale_us = stats
+                    .card_scale_us
+                    .saturating_add(elapsed_us(phase_started));
             } else if let Some(destination) = destination {
+                let base_started = Instant::now();
                 working.copy_from_slice(destination);
+                stats.base_copy_us = stats.base_copy_us.saturating_add(elapsed_us(base_started));
                 stats.copied_pixels = stats.copied_pixels.saturating_add(destination.len() as u64);
+                let phase_started = Instant::now();
                 render_super_scaler_card_cover(
                     working,
                     destination,
@@ -1207,6 +1240,9 @@ fn render_super_scaler_shell(
                     scale_dither_x,
                     &mut stats,
                 );
+                stats.card_scale_us = stats
+                    .card_scale_us
+                    .saturating_add(elapsed_us(phase_started));
             }
         }
     }
@@ -1276,6 +1312,7 @@ pub fn render_settings_page_transition_into(
             blit_snapshot_y(output, snapshot, buffers.width, buffers.height, -offset)
         }
     };
+    let blit_started = Instant::now();
     match request.direction {
         NavigationTransitionDirection::Forward => {
             let source_x = -(source_travel * travel_q16 / PROGRESS_MAX as isize);
@@ -1294,7 +1331,12 @@ pub fn render_settings_page_transition_into(
                 .saturating_add(blit(output, source, source_x));
         }
     }
+    stats.settings_blit_us = elapsed_us(blit_started);
     Ok(stats)
+}
+
+fn elapsed_us(started: Instant) -> u64 {
+    started.elapsed().as_micros().min(u64::MAX as u128) as u64
 }
 
 fn blit_snapshot_y(
