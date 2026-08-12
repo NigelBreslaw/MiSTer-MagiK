@@ -12402,6 +12402,7 @@ const LAUNCH_RETURN_CYCLES: usize = 2;
 const LAUNCH_RETURN_BLACK_LIMIT_MS: u64 = 5_000;
 const LAUNCH_RETURN_GAME_SETTLE_SECS: u64 = 10;
 const LAUNCH_RETURN_ONCE_GAME: &str = "/media/fat/_Arcade/1943 Kai Midway Kaisen (Japan).mra";
+const LAUNCH_RETURN_ONCE_STEP_MS: u64 = 120;
 
 const COLD_BOOT_PROFILE_REMOTE_DIR: &str = "/tmp/mister-magik/cold-boot-profile";
 
@@ -12895,6 +12896,25 @@ fn launch_return_once_action(
     Ok(sequence)
 }
 
+fn launch_return_once_next_game(config: &NativeDeviceConfig, nonce: &str) -> Result<()> {
+    let detail = launcher_automation::send_action(
+        config,
+        nonce,
+        &AutomationAction::Hold {
+            button: AutomationButton::Down,
+            duration_ms: LAUNCH_RETURN_ONCE_STEP_MS,
+        },
+    )?;
+    let value: Value = serde_json::from_str(&detail)?;
+    let sequence = value
+        .get("action_sequence")
+        .and_then(Value::as_u64)
+        .ok_or("launch-return-once game step has no sequence")?;
+    launcher_automation::await_presented(config, nonce, sequence, 3_000)?;
+    launcher_automation::send_action(config, nonce, &AutomationAction::ReleaseAll)?;
+    Ok(())
+}
+
 fn launch_return_once_initial_env() -> Vec<(String, String)> {
     vec![
         ("MISTER_CATALOG_REFRESH".into(), "off".into()),
@@ -13007,7 +13027,7 @@ fn launch_return_once_select_game(config: &NativeDeviceConfig, nonce: &str) -> R
             .and_then(Value::as_str)
             .unwrap_or("")
             .to_owned();
-        launch_return_once_action(config, nonce, AutomationButton::Down)?;
+        launch_return_once_next_game(config, nonce)?;
         state = launch_return_once_wait(
             config,
             nonce,
@@ -22909,6 +22929,7 @@ mod tests {
             "MISTER_LAUNCHER_AUTO_LAUNCH_SELECTED" | "MISTER_LAUNCHER_INPUT_SCRIPT"
         )));
         assert!(LAUNCH_RETURN_ONCE_GAME.ends_with("1943 Kai Midway Kaisen (Japan).mra"));
+        assert_eq!(LAUNCH_RETURN_ONCE_STEP_MS, 120);
         assert_eq!(LAUNCH_RETURN_CYCLES, 2);
     }
 
