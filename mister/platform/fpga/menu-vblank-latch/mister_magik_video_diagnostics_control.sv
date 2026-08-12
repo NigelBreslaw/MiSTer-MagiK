@@ -84,7 +84,6 @@ module mister_magik_video_diagnostics_control #(
 	wire command_start = io_uio && io_strobe && !has_command;
 	wire command_data = io_uio && io_strobe && has_command;
 	wire [7:0] command_id = has_command ? command : io_din[7:0];
-	wire [7:0] snapshot_select_command = command_start ? io_din[7:0] : command;
 	wire [7:0] snapshot_select_word = command_start ? 8'd0 : (word_count + 1'd1);
 	wire diagnostic_command =
 		(command_id == MAGIK_UIO_GET_VIDEO_DIAGNOSTICS_CONTROL) ||
@@ -145,8 +144,10 @@ module mister_magik_video_diagnostics_control #(
 	reg [15:0] legacy_words [0:9];
 	reg [7:0] legacy_total = 8'd0;
 	reg [7:0] legacy_owned = 8'd0;
-	reg [7:0] legacy_partial = 8'd0;
-	reg [7:0] legacy_abort = 8'd0;
+	// Schema 4 exposes partial and abort counts separately, but the observer's
+	// only incomplete disposition increments both together. Retain one physical
+	// counter and emit it in both protocol fields.
+	reg [7:0] legacy_incomplete_count = 8'd0;
 	reg [3:0] legacy_disposition = MAGIK_VIDEO_DIAGNOSTICS_DISPOSITION_NONE;
 
 	reg [31:0] pre_base = 32'd0, post_base = 32'd0;
@@ -171,8 +172,12 @@ module mister_magik_video_diagnostics_control #(
 	reg [7:0] avalon_trigger_sample = 8'd0, output_trigger_sample = 8'd0;
 	integer capture_index;
 
+	// CRC-16/CCITT-FALSE after command, schema 4, and the non-CRC word count.
+	// The remaining payload words continue to update tx_crc serially.
+	localparam [15:0] CONTROL_CRC_HEADER = 16'h43f2;
+	localparam [15:0] AVALON_CRC_HEADER = 16'hf9a5;
+	localparam [15:0] OUTPUT_CRC_HEADER = 16'h53f4;
 	reg [15:0] tx_crc = 16'hffff;
-	reg [7:0] tx_command = 8'd0;
 	reg [15:0] response_word = 16'd0;
 	reg freeze_request_now;
 	reg [7:0] freeze_request_trigger;
@@ -204,17 +209,6 @@ module mister_magik_video_diagnostics_control #(
 		end
 	endfunction
 
-	function automatic [15:0] crc_header;
-		input [7:0] header_command;
-		input [15:0] payload_words;
-		reg [15:0] value;
-		begin
-			value = crc_update_word(16'hffff, {8'd0, header_command});
-			value = crc_update_word(value, MAGIK_VIDEO_DIAGNOSTICS_SCHEMA);
-			crc_header = crc_update_word(value, payload_words);
-		end
-	endfunction
-
 	function automatic [15:0] state_flags;
 		begin
 			state_flags = {10'd0,
@@ -232,7 +226,7 @@ module mister_magik_video_diagnostics_control #(
 	reg [15:0] current_snapshot_word;
 	always @(*) begin
 		current_snapshot_word = 16'd0;
-		case(snapshot_select_command)
+		case(command_id)
 			MAGIK_UIO_GET_VIDEO_DIAGNOSTICS_CONTROL: begin
 				case(snapshot_select_word)
 					0: current_snapshot_word = MAGIK_VIDEO_DIAGNOSTICS_SCHEMA;
@@ -243,7 +237,8 @@ module mister_magik_video_diagnostics_control #(
 					5: current_snapshot_word = 16'd1;
 					6: current_snapshot_word = frozen_vblank_count;
 					7: current_snapshot_word = {legacy_total, legacy_owned};
-					8: current_snapshot_word = {legacy_partial, legacy_abort};
+					8: current_snapshot_word =
+						{legacy_incomplete_count, legacy_incomplete_count};
 					9: current_snapshot_word = {legacy_disposition, 2'd0, legacy_mask};
 					10: current_snapshot_word = {control_fault_flags, 3'd0,
 						frozen_route_state_flags};
@@ -443,8 +438,15 @@ module mister_magik_video_diagnostics_control #(
 			if((io_din[7:0] == MAGIK_UIO_GET_VIDEO_DIAGNOSTICS_CONTROL) ||
 			   (io_din[7:0] == MAGIK_UIO_GET_VIDEO_DIAGNOSTICS_AVALON) ||
 			   (io_din[7:0] == MAGIK_UIO_GET_VIDEO_DIAGNOSTICS_OUTPUT)) begin
-				tx_command <= io_din[7:0];
-				tx_crc <= crc_header(io_din[7:0], response_words - 1'd1);
+				case(io_din[7:0])
+					MAGIK_UIO_GET_VIDEO_DIAGNOSTICS_CONTROL:
+						tx_crc <= CONTROL_CRC_HEADER;
+					MAGIK_UIO_GET_VIDEO_DIAGNOSTICS_AVALON:
+						tx_crc <= AVALON_CRC_HEADER;
+					MAGIK_UIO_GET_VIDEO_DIAGNOSTICS_OUTPUT:
+						tx_crc <= OUTPUT_CRC_HEADER;
+					default: begin end
+				endcase
 				response_word <= current_snapshot_word;
 			end
 		end
@@ -467,7 +469,7 @@ module mister_magik_video_diagnostics_control #(
 				legacy_mask[word_count] <= 1'b1;
 				ownership <= 1'b0;
 			end
-			if((command == tx_command) && diagnostic_command &&
+			if(diagnostic_command &&
 			   (word_count < (response_words - 1'd1)))
 				tx_crc <= crc_update_word(tx_crc, response_word);
 			if(diagnostic_command && (word_count < (response_words - 2'd2)))
@@ -476,9 +478,6 @@ module mister_magik_video_diagnostics_control #(
 
 		if(!io_uio && has_command) begin
 			has_command <= 1'b0;
-			command <= 8'd0;
-			word_count <= 8'd0;
-			response_word <= 16'd0;
 			if(legacy_open) begin
 				legacy_open <= 1'b0;
 				if(legacy_total != 8'hff) legacy_total <= legacy_total + 1'd1;
@@ -491,8 +490,8 @@ module mister_magik_video_diagnostics_control #(
 					legacy_disposition <= MAGIK_VIDEO_DIAGNOSTICS_DISPOSITION_COMPLETE;
 				else begin
 					legacy_disposition <= MAGIK_VIDEO_DIAGNOSTICS_DISPOSITION_PARTIAL;
-					if(legacy_partial != 8'hff) legacy_partial <= legacy_partial + 1'd1;
-					if(legacy_abort != 8'hff) legacy_abort <= legacy_abort + 1'd1;
+					if(legacy_incomplete_count != 8'hff)
+						legacy_incomplete_count <= legacy_incomplete_count + 1'd1;
 				end
 				if(legacy_owned_at_start) begin
 					if(legacy_owned != 8'hff) legacy_owned <= legacy_owned + 1'd1;
