@@ -1621,6 +1621,7 @@ const LAUNCHER_RESPONSE_EXPECTED_CONFIRMED_ENV: &str =
     "MISTER_LAUNCHER_RESPONSE_EXPECTED_CONFIRMED";
 const LAUNCHER_RESPONSE_EXPECTED_FEEDBACK_HIDDEN_ENV: &str =
     "MISTER_LAUNCHER_RESPONSE_EXPECTED_FEEDBACK_HIDDEN";
+const LAUNCHER_RESPONSE_PMU_COMPLETE_ENV: &str = "MISTER_LAUNCHER_RESPONSE_PMU_COMPLETE";
 
 struct InputIntegrityTrace {
     enabled: bool,
@@ -1813,6 +1814,9 @@ struct LauncherResponsePresentReceipt {
 struct LauncherResponseTrace {
     enabled: bool,
     execution_enabled: bool,
+    pmu_enabled: bool,
+    pmu_active: bool,
+    pmu_completion_path: Option<String>,
     records: Vec<LauncherResponseRecord>,
     feedback_records: Vec<LauncherResponseFeedbackRecord>,
     pending_dispatches: VecDeque<usize>,
@@ -1911,6 +1915,8 @@ impl LauncherResponseTrace {
         let enabled = launcher_env_flag("MISTER_LAUNCHER_RESPONSE_TRACE");
         let execution_enabled =
             enabled && launcher_env_flag("MISTER_LAUNCHER_RESPONSE_EXECUTION_TRACE");
+        let pmu_enabled = enabled && launcher_env_flag("MISTER_LAUNCHER_RESPONSE_PMU");
+        let pmu_completion_path = response_trace_volatile_path(LAUNCHER_RESPONSE_PMU_COMPLETE_ENV);
         let run_id = std::env::var(LAUNCHER_RESPONSE_RUN_ID_ENV).unwrap_or_default();
         let expected_confirmed =
             response_trace_expected_count(LAUNCHER_RESPONSE_EXPECTED_CONFIRMED_ENV, enabled);
@@ -1922,16 +1928,23 @@ impl LauncherResponseTrace {
             for name in [
                 LAUNCHER_RESPONSE_COMPLETE_ENV,
                 LAUNCHER_RESPONSE_FRAME_COMPLETE_ENV,
+                LAUNCHER_RESPONSE_PMU_COMPLETE_ENV,
             ] {
                 if let Some(path) = response_trace_volatile_path(name) {
                     let _ = std::fs::remove_file(path);
                 }
             }
         }
+        if pmu_enabled {
+            mister_magik_perf_events::clear_process_profiles();
+        }
         let writer = enabled.then(|| spawn_launcher_response_trace_writer(completion_path));
         Self {
             enabled,
             execution_enabled,
+            pmu_enabled,
+            pmu_active: false,
+            pmu_completion_path,
             records: Vec::with_capacity(LAUNCHER_RESPONSE_TRACE_LIMIT),
             feedback_records: Vec::with_capacity(LAUNCHER_RESPONSE_TRACE_LIMIT),
             pending_dispatches: VecDeque::new(),
@@ -1972,6 +1985,9 @@ impl LauncherResponseTrace {
         Self {
             enabled: true,
             execution_enabled: false,
+            pmu_enabled: false,
+            pmu_active: false,
+            pmu_completion_path: None,
             records: Vec::with_capacity(LAUNCHER_RESPONSE_TRACE_LIMIT),
             feedback_records: Vec::with_capacity(LAUNCHER_RESPONSE_TRACE_LIMIT),
             pending_dispatches: VecDeque::new(),
@@ -2028,6 +2044,16 @@ impl LauncherResponseTrace {
 
     fn execution_stamp(&self) -> Option<ThreadExecutionStamp> {
         self.execution_enabled.then(ThreadExecutionStamp::capture)
+    }
+
+    fn input_pmu_span(
+        &self,
+        relevant: bool,
+        name: &'static str,
+    ) -> Option<mister_magik_perf_events::SampledSpan> {
+        (self.pmu_active && relevant)
+            .then(|| mister_magik_perf_events::sampled_span(name))
+            .flatten()
     }
 
     fn observe_drained_input(&mut self, drained: &crate::input_hub::DrainedInput) {
@@ -2449,6 +2475,43 @@ impl LauncherResponseTrace {
                         && state.selected_item_id == "menu:computers:acorn"
                 })
         })
+    }
+
+    fn start_pmu_if_ready(&mut self) {
+        if self.pmu_enabled && self.launcher_profile_start_ready() {
+            self.pmu_active = true;
+        }
+    }
+
+    fn finish_pmu(&mut self) -> Result<(), String> {
+        if !self.pmu_enabled {
+            return Ok(());
+        }
+        self.pmu_active = false;
+        let profile = mister_magik_perf_events::take_thread_profile();
+        let passed = profile.enabled
+            && profile.failure.is_none()
+            && profile.dropped_spans == 0
+            && !profile.records.is_empty();
+        let payload = serde_json::json!({
+            "schema": "mister-magik-launcher-response-pmu-v1",
+            "run_id": self.run_id,
+            "state": if passed { "complete" } else { "failed" },
+            "profile": profile,
+        });
+        let path = self
+            .pmu_completion_path
+            .as_deref()
+            .ok_or_else(|| format!("{LAUNCHER_RESPONSE_PMU_COMPLETE_ENV} is missing"))?;
+        if let Some(parent) = std::path::Path::new(path).parent() {
+            std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+        }
+        std::fs::write(path, format!("{payload}\n")).map_err(|error| error.to_string())?;
+        if passed {
+            Ok(())
+        } else {
+            Err("launcher response PMU profile is incomplete".into())
+        }
     }
 
     fn observe_presentation(
@@ -6715,6 +6778,10 @@ pub(super) fn run_launcher_loop(
         input_observation = drained_input.observation;
         launcher_response_trace.observe_drained_input(&drained_input);
         let input_batch = drained_input.batch;
+        let input_route_pmu = launcher_response_trace.input_pmu_span(
+            !input_batch.events.is_empty(),
+            "launcher-response.input-route",
+        );
         input_integrity_trace.observe_batch(&input_batch);
         launcher_response_trace.record_lab(input_latency_lab.before_input_route());
         if !input_batch.events.is_empty()
@@ -7937,8 +8004,13 @@ pub(super) fn run_launcher_loop(
         }
 
         launcher_response_trace.record_lab(input_latency_lab.arm_if_computers_ready(&nav));
+        drop(input_route_pmu);
         scheduler_phase =
             launcher_response_trace.record_scheduler_interval("input-route", scheduler_phase);
+        let interaction_projection_pmu = launcher_response_trace.input_pmu_span(
+            latency_critical_input_pending,
+            "launcher-response.interaction-projection",
+        );
 
         if empty_collection_invariant_violated(&catalog, &nav) {
             if let Some(system) = active_system(&catalog, &nav) {
@@ -8056,6 +8128,7 @@ pub(super) fn run_launcher_loop(
             .unwrap_or(0);
         let response_projected_at_us = crate::input_hub::monotonic_us();
         let response_projected_execution = launcher_response_trace.execution_stamp();
+        drop(interaction_projection_pmu);
         scheduler_phase = launcher_response_trace
             .record_scheduler_interval("interaction-projection", scheduler_phase);
         if !startup_intro_suppress_launcher_ui {
@@ -9037,6 +9110,10 @@ pub(super) fn run_launcher_loop(
         let mut orientation_controlled_slint_raster_us = 0;
         let response_raster_started_at_us = crate::input_hub::monotonic_us();
         let response_raster_started_execution = launcher_response_trace.execution_stamp();
+        let raster_pmu = launcher_response_trace.input_pmu_span(
+            latency_critical_input_pending,
+            "launcher-response.slint-raster",
+        );
         let this_rect = if screensaver.active && screensaver_frame_visible {
             if accepted_screensaver_frame {
                 if screensaver_fade_alpha.is_some_and(|alpha| alpha < 255) {
@@ -9138,6 +9215,11 @@ pub(super) fn run_launcher_loop(
         };
         let response_raster_completed_at_us = crate::input_hub::monotonic_us();
         let response_raster_completed_execution = launcher_response_trace.execution_stamp();
+        drop(raster_pmu);
+        let frame_plan_pmu = launcher_response_trace.input_pmu_span(
+            latency_critical_input_pending,
+            "launcher-response.damage-frame-plan",
+        );
         let mut launcher_response_frame_stamp = launcher_response_trace.frame_stamp(
             &nav,
             response_projected_at_us,
@@ -9795,6 +9877,11 @@ pub(super) fn run_launcher_loop(
             || navigation_transition_composition_active;
         let direct_hidden_present_mode =
             startup_intro.is_some() || completed_hidden_frame_for_present.is_some();
+        drop(frame_plan_pmu);
+        let hidden_present_pmu = launcher_response_trace.input_pmu_span(
+            latency_critical_input_pending,
+            "launcher-response.hidden-present",
+        );
         let present_cycle = launcher_presenter.present(
             LauncherPresentFrame {
                 plan: frame_plan,
@@ -9817,6 +9904,7 @@ pub(super) fn run_launcher_loop(
             },
             display_session,
         );
+        drop(hidden_present_pmu);
         let LauncherPresentCycle {
             presentation,
             frame_t3,
@@ -10367,6 +10455,7 @@ pub(super) fn run_launcher_loop(
                     presented_frame.main_present_sequence,
                 );
                 if launcher_response_trace.launcher_profile_start_ready() {
+                    launcher_response_trace.start_pmu_if_ready();
                     screensaver_cpu_profile.begin_launcher_response(frames.saturating_add(1));
                 }
                 if let Ok(telemetry) = f.read_magik_presentation_telemetry() {
@@ -10515,6 +10604,10 @@ pub(super) fn run_launcher_loop(
                 latch_trace_flush_deferred,
             );
         }
+        let post_confirmation_pmu = launcher_response_trace.input_pmu_span(
+            launcher_response_frame_stamp.is_some(),
+            "launcher-response.post-confirmation",
+        );
         if let Some(confirmed_at) = selection_feedback_confirmed_at {
             for confirmation in
                 bridge_models.confirm_selection_feedback(&selection_feedback_stamp, confirmed_at)
@@ -10554,13 +10647,21 @@ pub(super) fn run_launcher_loop(
                 }
             }
         }
+        drop(post_confirmation_pmu);
         scheduler_phase =
             launcher_response_trace.record_scheduler_interval("post-confirmation", scheduler_phase);
         launcher_response_trace.flush();
         if launcher_response_trace.take_frame_trace_finalize_pending() {
             frame_accounting.finish_preview_scroll_trace();
+            if let Err(error) = launcher_response_trace.finish_pmu() {
+                crate::ui_errln!("launcher response PMU finalization failed: {error}");
+            }
             screensaver_cpu_profile.complete_launcher_response(frames.saturating_add(1));
         }
+        let frame_tail_pmu = launcher_response_trace.input_pmu_span(
+            launcher_response_frame_stamp.is_some(),
+            "launcher-response.frame-tail",
+        );
         latch_v5_qualification.record_present(
             accepted_and_active_confirmed,
             scheduler.catalog_worker_running(),
@@ -10759,6 +10860,7 @@ pub(super) fn run_launcher_loop(
         }
         launcher_response_trace
             .record_lab(input_latency_lab.cooperative_quantum(input_observation));
+        drop(frame_tail_pmu);
         let _ = launcher_response_trace.record_scheduler_interval("frame-tail", scheduler_phase);
     }
     if let Some(mut intro) = startup_intro.take() {

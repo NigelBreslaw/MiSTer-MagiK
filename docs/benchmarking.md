@@ -117,6 +117,15 @@ therefore outside the measured response window. The installed runtime advertises
 this support as `launcher-response-pprof-v1`; typed attribution workflows own
 the volatile trigger and artifact paths.
 
+The matching PMU arm is independently one-shot. After Acorn confirmation it
+samples only input-bearing routing, interaction projection, Slint raster,
+damage/frame planning, hidden presentation, post-confirmation, and frame-tail
+spans. The final active span is closed before the bounded thread profile is
+removed from memory and written after response-trace completion. Its
+`mister-magik-launcher-response-pmu-v1` artifact separates processor work from
+the execution-stamp arm's off-CPU wall time; PMU counters are never treated as
+evidence about time when the UI thread was not running.
+
 `input-latency-lab` is the fixed diagnostic experiment for attributing
 intermittent launcher response, not a release qualification. It switches the
 physical display to 1920×1200p60 for the bounded run, then restores the prior
