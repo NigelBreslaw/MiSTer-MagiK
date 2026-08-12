@@ -29,7 +29,7 @@ UNCONSTRAINED_RE = re.compile(r"\bunconstrained\b|not fully constrained", re.IGN
 UNCONSTRAINED_OUTPUT_RE = re.compile(r"Unconstrained Output Port Paths\s*;\s*(\d+)\s*;", re.IGNORECASE)
 UNCALCULATED_FRACTION_RE = re.compile(r"Fraction of Chains for which MTBFs Could Not be Calculated:\s*([0-9.]+)", re.IGNORECASE)
 SYNC_ASSIGN_RE = re.compile(
-    r"SYNCHRONIZER_IDENTIFICATION\s*;\s*FORCED_IF_ASYNCHRONOUS",
+    r"SYNCHRONIZER_IDENTIFICATION\s*;\s*FORCED(?:_IF_ASYNCHRONOUS)?\s*;",
     re.IGNORECASE,
 )
 SOURCE_ASSIGNMENTS_RE = re.compile(

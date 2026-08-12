@@ -125,7 +125,7 @@ module mister_magik_video_diagnostics_control #(
 	reg control_reset_req_meta = 1'b0, control_reset_req_sys = 1'b0;
 	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS" *)
 	reg control_reset_out_meta = 1'b0, control_reset_out_sys = 1'b0;
-	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS" *)
+	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED" *)
 	reg control_pll_lock_meta = 1'b0, control_pll_lock_sys = 1'b0;
 	reg avalon_fault_seen = 1'b0, output_fault_seen = 1'b0;
 	reg avalon_ack_seen = 1'b0, output_ack_seen = 1'b0;

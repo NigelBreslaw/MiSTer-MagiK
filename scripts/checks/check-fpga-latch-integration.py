@@ -161,11 +161,27 @@ def main() -> None:
     if re.search(r"\bvbuf_(?:read|write)data\b", avalon_source):
         fail("passive Avalon diagnostics source must not expose framebuffer data")
     sync_assignment = "SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS"
+    control_pll_sync = (
+        '(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED" *)\n'
+        "\treg control_pll_lock_meta = 1'b0, control_pll_lock_sys = 1'b0;"
+    )
+    output_pll_sync = (
+        '(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED" *)\n'
+        "\treg pll_meta = 1'b0, pll_sync = 1'b0;"
+    )
     if "ASYNC_REG" in avalon_source or avalon_source.count(sync_assignment) != 5:
         fail("passive Avalon diagnostics synchronizers are not explicitly identified")
-    if "ASYNC_REG" in output_source or output_source.count(sync_assignment) != 8:
+    if (
+        "ASYNC_REG" in output_source
+        or output_source.count(sync_assignment) != 7
+        or output_source.count(output_pll_sync) != 1
+    ):
         fail("final HDMI diagnostics synchronizers are not explicitly identified")
-    if "ASYNC_REG" in control_source or control_source.count(sync_assignment) != 9:
+    if (
+        "ASYNC_REG" in control_source
+        or control_source.count(sync_assignment) != 8
+        or control_source.count(control_pll_sync) != 1
+    ):
         fail("control diagnostics synchronizers are not explicitly identified")
     control_cdc_bindings = {
         "hdmi_vbl": "control_vbl_meta <= hdmi_vbl;",

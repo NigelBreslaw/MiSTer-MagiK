@@ -47,7 +47,7 @@ module mister_magik_video_diagnostics_output (
 	reg reset_meta = 1'b0, reset_sync = 1'b0;
 	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS" *)
 	reg cfg_meta = 1'b0, cfg_sync = 1'b0;
-	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS" *)
+	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED" *)
 	reg pll_meta = 1'b0, pll_sync = 1'b0;
 
 	reg armed_d = 1'b0, request_seen = 1'b0, route_seen = 1'b0;

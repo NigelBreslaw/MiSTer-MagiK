@@ -76,7 +76,10 @@ health, or SDRAM data correctness.
 The FPGA fast gate checks the separate generated contract, all native-domain
 fault-injection simulations, the complete 41-word control response, final response
 priority, immutable latch hashes, exact pinned Menu integration, passive cone
-boundaries, and explicit synchronizer identification. Native diagnostic records
+boundaries, and explicit synchronizer identification. The real PLL status
+chains use forced identification because Quartus otherwise treats that status
+as clock-related instead of reporting the two defensive synchronizers. Native
+diagnostic records
 are held immutable before acknowledgement, their generation is sampled twice
 in `clk_sys`, and the complete payload is covered by a nonempty 8 ns net-delay
 constraint. The output generation, output route-context, and fault-trigger
