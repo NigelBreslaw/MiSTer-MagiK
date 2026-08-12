@@ -3719,8 +3719,26 @@ mod linux {
     }
 
     enum VideoDiagnosticsReadout {
-        HdmiLock(mister_magik_video_diagnostics_contract::HdmiEvidence),
+        HdmiLock(HdmiLockDiagnosticsReadout),
         Legacy(Box<LegacyVideoDiagnosticsReadout>),
+    }
+
+    struct HdmiLockDiagnosticsReadout {
+        lock: mister_magik_video_diagnostics_contract::HdmiEvidence,
+        output_activity: Option<HdmiOutputActivityWindow>,
+    }
+
+    struct HdmiOutputActivityWindow {
+        first: mister_magik_video_diagnostics_contract::HdmiOutputActivity,
+        second: mister_magik_video_diagnostics_contract::HdmiOutputActivity,
+        sample_interval_us: u64,
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub(super) struct HdmiOutputActivityDeltas {
+        pub(super) no_de: u8,
+        pub(super) de_all_zero: u8,
+        pub(super) de_has_nonzero: u8,
     }
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -3739,9 +3757,30 @@ mod linux {
     }
 
     pub(super) fn classify_hdmi_evidence_ack(magic_hi: u16, magic_lo: u16) -> HdmiEvidenceAck {
-        if magic_hi == mister_magik_video_diagnostics_contract::HDMI_EVIDENCE_MAGIC
-            || magic_lo == mister_magik_video_diagnostics_contract::HDMI_EVIDENCE_MAGIC
-        {
+        classify_diagnostic_ack(
+            magic_hi,
+            magic_lo,
+            mister_magik_video_diagnostics_contract::HDMI_EVIDENCE_MAGIC,
+        )
+    }
+
+    pub(super) fn classify_hdmi_output_activity_ack(
+        magic_hi: u16,
+        magic_lo: u16,
+    ) -> HdmiEvidenceAck {
+        classify_diagnostic_ack(
+            magic_hi,
+            magic_lo,
+            mister_magik_video_diagnostics_contract::HDMI_OUTPUT_ACTIVITY_MAGIC,
+        )
+    }
+
+    fn classify_diagnostic_ack(
+        magic_hi: u16,
+        magic_lo: u16,
+        expected_magic: u16,
+    ) -> HdmiEvidenceAck {
+        if magic_hi == expected_magic || magic_lo == expected_magic {
             HdmiEvidenceAck::Present
         } else if magic_hi == 0 && magic_lo == 0 {
             HdmiEvidenceAck::Unsupported
@@ -3807,21 +3846,109 @@ mod linux {
         }
     }
 
+    pub(super) fn hdmi_output_activity_deltas(
+        first_no_de: u8,
+        first_de_all_zero: u8,
+        first_de_has_nonzero: u8,
+        second_no_de: u8,
+        second_de_all_zero: u8,
+        second_de_has_nonzero: u8,
+    ) -> HdmiOutputActivityDeltas {
+        HdmiOutputActivityDeltas {
+            no_de: second_no_de.wrapping_sub(first_no_de),
+            de_all_zero: second_de_all_zero.wrapping_sub(first_de_all_zero),
+            de_has_nonzero: second_de_has_nonzero.wrapping_sub(first_de_has_nonzero),
+        }
+    }
+
+    pub(super) fn hdmi_output_activity_classification(
+        flags: u16,
+        deltas: HdmiOutputActivityDeltas,
+    ) -> &'static str {
+        use mister_magik_video_diagnostics_contract as contract;
+        if flags & contract::HDMI_OUTPUT_ACTIVITY_FLAG_COUNTER_COLLISION != 0 {
+            "final_output_activity_invalid"
+        } else {
+            match (
+                deltas.no_de != 0,
+                deltas.de_all_zero != 0,
+                deltas.de_has_nonzero != 0,
+            ) {
+                (false, false, false) => "final_output_no_completed_frame",
+                (true, false, false) => "final_output_no_de",
+                (false, true, false) => "final_output_de_all_zero",
+                (false, false, true) => "final_output_de_has_nonzero",
+                _ => "final_output_mixed",
+            }
+        }
+    }
+
     impl VideoDiagnosticsReadout {
         fn to_json(&self, context: VideoDiagnosticsJsonContext) -> Value {
             match self {
-                Self::HdmiLock(evidence) => {
+                Self::HdmiLock(readout) => {
                     use mister_magik_video_diagnostics_contract as contract;
+                    let evidence = &readout.lock;
                     let flags = evidence.flags();
                     let coherent = context.owner_stable
                         && context.latch_ownership_stable == Some(true)
                         && context.launcher_state_stable;
+                    let output_activity = readout.output_activity.as_ref().map(|window| {
+                        let first_flags = window.first.flags();
+                        let second_flags = window.second.flags();
+                        let deltas = hdmi_output_activity_deltas(
+                            window.first.no_de_count(),
+                            window.first.de_all_zero_count(),
+                            window.first.de_has_nonzero_count(),
+                            window.second.no_de_count(),
+                            window.second.de_all_zero_count(),
+                            window.second.de_has_nonzero_count(),
+                        );
+                        json!({
+                            "classification": hdmi_output_activity_classification(
+                                first_flags | second_flags,
+                                deltas,
+                            ),
+                            "sample_interval_us": window.sample_interval_us,
+                            "counter_collision": (first_flags | second_flags)
+                                & contract::HDMI_OUTPUT_ACTIVITY_FLAG_COUNTER_COLLISION
+                                != 0,
+                            "first": {
+                                "frame_valid": first_flags
+                                    & contract::HDMI_OUTPUT_ACTIVITY_FLAG_FRAME_VALID
+                                    != 0,
+                                "no_de_count": window.first.no_de_count(),
+                                "de_all_zero_count": window.first.de_all_zero_count(),
+                                "de_has_nonzero_count": window.first.de_has_nonzero_count(),
+                                "raw_words": window.first.words.as_slice(),
+                            },
+                            "second": {
+                                "frame_valid": second_flags
+                                    & contract::HDMI_OUTPUT_ACTIVITY_FLAG_FRAME_VALID
+                                    != 0,
+                                "no_de_count": window.second.no_de_count(),
+                                "de_all_zero_count": window.second.de_all_zero_count(),
+                                "de_has_nonzero_count": window.second.de_has_nonzero_count(),
+                                "raw_words": window.second.words.as_slice(),
+                            },
+                            "deltas": {
+                                "no_de": deltas.no_de,
+                                "de_all_zero": deltas.de_all_zero,
+                                "de_has_nonzero": deltas.de_has_nonzero,
+                            },
+                        })
+                    });
+                    let classification = output_activity
+                        .as_ref()
+                        .and_then(|value| value.get("classification"))
+                        .and_then(Value::as_str)
+                        .unwrap_or_else(|| hdmi_lock_classification(flags));
                     json!({
                         "schema": "mister-magik-fpga-video-diagnostics-v2",
                         "diagnostic_architecture": "hdmi-lock-evidence-v1",
                         "available": true,
                         "coherent": coherent,
-                        "classification": hdmi_lock_classification(flags),
+                        "classification": classification,
                         "capture_start_monotonic_us": context.capture_start_monotonic_us,
                         "capture_end_monotonic_us": context.capture_end_monotonic_us,
                         "owner_epoch_before": context.owner_epoch_before,
@@ -3834,7 +3961,7 @@ mod linux {
                         },
                         "capabilities": {
                             "physical_hdmi_pll_lock": true,
-                            "final_hdmi_output": false,
+                            "final_hdmi_output": output_activity.is_some(),
                             "avalon_read_path": false,
                         },
                         "hdmi_lock": {
@@ -3848,6 +3975,7 @@ mod linux {
                                 != 0,
                             "raw_words": evidence.words.as_slice(),
                         },
+                        "final_hdmi_output_activity": output_activity,
                     })
                 }
                 Self::Legacy(readout) => readout.to_json(context),
@@ -4161,7 +4289,19 @@ mod linux {
 
         fn read_video_diagnostics(&mut self) -> io::Result<VideoDiagnosticsReadout> {
             match self.read_hdmi_lock_evidence() {
-                Ok(evidence) => return Ok(VideoDiagnosticsReadout::HdmiLock(evidence)),
+                Ok(lock) => {
+                    let output_activity = match self.read_hdmi_output_activity_window() {
+                        Ok(window) => Some(window),
+                        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+                        Err(error) => return Err(error),
+                    };
+                    return Ok(VideoDiagnosticsReadout::HdmiLock(
+                        HdmiLockDiagnosticsReadout {
+                            lock,
+                            output_activity,
+                        },
+                    ));
+                }
                 Err(error)
                     if hdmi_evidence_probe_action(Some(error.kind()), false)
                         == HdmiEvidenceProbeAction::ReadLegacy => {}
@@ -4239,6 +4379,88 @@ mod linux {
             self.disable_io();
             let words = result?;
             contract::decode_hdmi_evidence(&words)
+                .map_err(|message| io::Error::new(io::ErrorKind::InvalidData, message))
+        }
+
+        fn read_hdmi_output_activity_window(&mut self) -> io::Result<HdmiOutputActivityWindow> {
+            let first = self.read_hdmi_output_activity()?;
+            let sample_started = Instant::now();
+            thread::sleep(Duration::from_millis(100));
+            let second = self.read_hdmi_output_activity().map_err(|error| {
+                if error.kind() == io::ErrorKind::NotFound {
+                    io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!(
+                            "HDMI output activity became unsupported within one sample window: {error}"
+                        ),
+                    )
+                } else {
+                    error
+                }
+            })?;
+            Ok(HdmiOutputActivityWindow {
+                first,
+                second,
+                sample_interval_us: sample_started.elapsed().as_micros() as u64,
+            })
+        }
+
+        fn read_hdmi_output_activity(
+            &mut self,
+        ) -> io::Result<mister_magik_video_diagnostics_contract::HdmiOutputActivity> {
+            let first = self.read_hdmi_output_activity_once();
+            match first {
+                Err(first_error)
+                    if hdmi_evidence_probe_action(Some(first_error.kind()), false)
+                        == HdmiEvidenceProbeAction::RetryNew =>
+                {
+                    self.reset_spi_transport();
+                    self.read_hdmi_output_activity_once()
+                        .map_err(|retry_error| {
+                            io::Error::new(
+                                first_error.kind(),
+                                format!(
+                                    "HDMI output activity failed after retry: first={first_error}; retry={retry_error}"
+                                ),
+                            )
+                        })
+                }
+                result => result,
+            }
+        }
+
+        fn read_hdmi_output_activity_once(
+            &mut self,
+        ) -> io::Result<mister_magik_video_diagnostics_contract::HdmiOutputActivity> {
+            use mister_magik_video_diagnostics_contract as contract;
+            let result = (|| {
+                let (magic_hi, magic_lo) = self.cmd_capture(contract::GET_HDMI_OUTPUT_ACTIVITY)?;
+                match classify_hdmi_output_activity_ack(magic_hi, magic_lo) {
+                    HdmiEvidenceAck::Present => {}
+                    HdmiEvidenceAck::Unsupported => {
+                        return Err(io::Error::new(
+                            io::ErrorKind::NotFound,
+                            "HDMI output activity command 0x61 is unsupported",
+                        ));
+                    }
+                    HdmiEvidenceAck::Invalid => {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            format!(
+                                "HDMI output activity acknowledgement is malformed: ack_high=0x{magic_hi:04x} ack_low=0x{magic_lo:04x}"
+                            ),
+                        ));
+                    }
+                }
+                let mut words = [0u16; contract::HDMI_OUTPUT_ACTIVITY_WORDS];
+                for word in &mut words {
+                    *word = self.spi_capture(0)?.1;
+                }
+                Ok(words)
+            })();
+            self.disable_io();
+            let words = result?;
+            contract::decode_hdmi_output_activity(&words)
                 .map_err(|message| io::Error::new(io::ErrorKind::InvalidData, message))
         }
 
@@ -6632,6 +6854,100 @@ mod tests {
         assert_eq!(
             linux::hdmi_evidence_probe_action(Some(std::io::ErrorKind::NotFound), true),
             HdmiEvidenceProbeAction::Fail
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn hdmi_output_activity_ack_and_modular_classification_are_strict() {
+        use linux::{HdmiEvidenceAck, HdmiOutputActivityDeltas};
+        use mister_magik_video_diagnostics_contract as contract;
+
+        assert_eq!(
+            linux::classify_hdmi_output_activity_ack(contract::HDMI_OUTPUT_ACTIVITY_MAGIC, 0,),
+            HdmiEvidenceAck::Present
+        );
+        assert_eq!(
+            linux::classify_hdmi_output_activity_ack(0, 0),
+            HdmiEvidenceAck::Unsupported
+        );
+        assert_eq!(
+            linux::classify_hdmi_output_activity_ack(0x1234, 0),
+            HdmiEvidenceAck::Invalid
+        );
+
+        let wrapped = linux::hdmi_output_activity_deltas(254, 3, 7, 1, 3, 9);
+        assert_eq!(
+            wrapped,
+            HdmiOutputActivityDeltas {
+                no_de: 3,
+                de_all_zero: 0,
+                de_has_nonzero: 2,
+            }
+        );
+        assert_eq!(
+            linux::hdmi_output_activity_classification(
+                contract::HDMI_OUTPUT_ACTIVITY_FLAG_FRAME_VALID,
+                HdmiOutputActivityDeltas {
+                    no_de: 0,
+                    de_all_zero: 0,
+                    de_has_nonzero: 0,
+                },
+            ),
+            "final_output_no_completed_frame"
+        );
+        for (deltas, expected) in [
+            (
+                HdmiOutputActivityDeltas {
+                    no_de: 2,
+                    de_all_zero: 0,
+                    de_has_nonzero: 0,
+                },
+                "final_output_no_de",
+            ),
+            (
+                HdmiOutputActivityDeltas {
+                    no_de: 0,
+                    de_all_zero: 2,
+                    de_has_nonzero: 0,
+                },
+                "final_output_de_all_zero",
+            ),
+            (
+                HdmiOutputActivityDeltas {
+                    no_de: 0,
+                    de_all_zero: 0,
+                    de_has_nonzero: 2,
+                },
+                "final_output_de_has_nonzero",
+            ),
+            (
+                HdmiOutputActivityDeltas {
+                    no_de: 1,
+                    de_all_zero: 0,
+                    de_has_nonzero: 1,
+                },
+                "final_output_mixed",
+            ),
+        ] {
+            assert_eq!(
+                linux::hdmi_output_activity_classification(
+                    contract::HDMI_OUTPUT_ACTIVITY_FLAG_FRAME_VALID,
+                    deltas,
+                ),
+                expected
+            );
+        }
+        assert_eq!(
+            linux::hdmi_output_activity_classification(
+                contract::HDMI_OUTPUT_ACTIVITY_FLAG_COUNTER_COLLISION,
+                HdmiOutputActivityDeltas {
+                    no_de: 0,
+                    de_all_zero: 0,
+                    de_has_nonzero: 1,
+                },
+            ),
+            "final_output_activity_invalid"
         );
     }
 
