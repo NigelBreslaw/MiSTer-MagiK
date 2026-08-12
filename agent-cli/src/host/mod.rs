@@ -13096,7 +13096,7 @@ fn profile_installed_launch_return_once(
             format!("{}\n", serde_json::to_string_pretty(&selected)?),
         )?;
 
-        let returned = launcher_automation::exercise_launch_return(
+        let returned = launcher_automation::exercise_launch_return_to_magik(
             config,
             &nonce,
             LAUNCH_RETURN_ONCE_GAME,

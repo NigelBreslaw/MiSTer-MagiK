@@ -31,6 +31,12 @@ enum MainRoute {
     Development,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum RestoreExpectation {
+    Arcade,
+    Magik,
+}
+
 impl MainRoute {
     const fn executable_path(self) -> &'static str {
         match self {
@@ -387,6 +393,37 @@ pub(super) fn exercise_launch_return(
     expected_game_id: &str,
     lifetime_seconds: u64,
 ) -> std::result::Result<String, LaunchReturnError> {
+    exercise_launch_return_with_expectation(
+        config,
+        nonce,
+        expected_game_id,
+        lifetime_seconds,
+        RestoreExpectation::Arcade,
+    )
+}
+
+pub(super) fn exercise_launch_return_to_magik(
+    config: &NativeDeviceConfig,
+    nonce: &str,
+    expected_game_id: &str,
+    lifetime_seconds: u64,
+) -> std::result::Result<String, LaunchReturnError> {
+    exercise_launch_return_with_expectation(
+        config,
+        nonce,
+        expected_game_id,
+        lifetime_seconds,
+        RestoreExpectation::Magik,
+    )
+}
+
+fn exercise_launch_return_with_expectation(
+    config: &NativeDeviceConfig,
+    nonce: &str,
+    expected_game_id: &str,
+    lifetime_seconds: u64,
+    expectation: RestoreExpectation,
+) -> std::result::Result<String, LaunchReturnError> {
     if !(1..=120).contains(&lifetime_seconds) {
         return fail_before_launch(config, nonce, "invalid replacement automation lifetime");
     }
@@ -511,7 +548,7 @@ pub(super) fn exercise_launch_return(
         .ok_or_else(|| LaunchReturnError::Failed("replacement session has no nonce".into()))?
         .to_owned();
     let (post_return_sequence, restored_snapshot) =
-        match prepare_replacement_session(config, &new_nonce, expected_game_id) {
+        match prepare_replacement_session(config, &new_nonce, expected_game_id, expectation) {
             Ok(evidence) => evidence,
             Err(error) => {
                 let _ = end(config, &new_nonce);
@@ -535,6 +572,7 @@ fn prepare_replacement_session(
     config: &NativeDeviceConfig,
     new_nonce: &str,
     expected_game_id: &str,
+    expectation: RestoreExpectation,
 ) -> Result<(u64, Value)> {
     let released: Value = serde_json::from_str(
         &send_action(config, new_nonce, &AutomationAction::ReleaseAll)
@@ -546,7 +584,8 @@ fn prepare_replacement_session(
         .and_then(Value::as_u64)
         .ok_or("release action has no sequence")?;
     await_presented(config, new_nonce, post_return_sequence, 3_000)?;
-    let restored_snapshot = wait_for_restored_snapshot(config, new_nonce, expected_game_id)?;
+    let restored_snapshot =
+        wait_for_restored_snapshot(config, new_nonce, expected_game_id, expectation)?;
     Ok((post_return_sequence, restored_snapshot))
 }
 
@@ -554,20 +593,36 @@ fn wait_for_restored_snapshot(
     config: &NativeDeviceConfig,
     nonce: &str,
     expected_game_id: &str,
+    expectation: RestoreExpectation,
 ) -> Result<Value> {
     let deadline = Instant::now() + Duration::from_secs(8);
     let mut last_error = String::from("no restored snapshot");
     while Instant::now() < deadline {
         match snapshot(config, nonce) {
-            Ok(value) => match validate_restored_snapshot(&value, expected_game_id) {
-                Ok(()) => return Ok(value),
-                Err(error) => last_error = error.to_string(),
-            },
+            Ok(value) => {
+                let validation = match expectation {
+                    RestoreExpectation::Arcade => {
+                        validate_restored_snapshot(&value, expected_game_id)
+                    }
+                    RestoreExpectation::Magik => validate_returned_magik_snapshot(&value),
+                };
+                match validation {
+                    Ok(()) => return Ok(value),
+                    Err(error) => last_error = error.to_string(),
+                }
+            }
             Err(error) => last_error = error.to_string(),
         }
         thread::sleep(Duration::from_millis(10));
     }
-    Err(format!("returned launcher did not restore Arcade state: {last_error}").into())
+    Err(format!(
+        "returned launcher did not satisfy {} state: {last_error}",
+        match expectation {
+            RestoreExpectation::Arcade => "Arcade",
+            RestoreExpectation::Magik => "MagiK",
+        }
+    )
+    .into())
 }
 
 fn fail_before_launch<T>(
@@ -912,6 +967,20 @@ fn validate_restored_snapshot(snapshot: &Value, expected_game_id: &str) -> Resul
     Ok(())
 }
 
+fn validate_returned_magik_snapshot(snapshot: &Value) -> Result<()> {
+    validate_snapshot(snapshot)?;
+    if !matches!(
+        semantic(snapshot, "effective_view").and_then(Value::as_str),
+        Some("home" | "arcade")
+    ) || semantic(snapshot, "launch_state").and_then(Value::as_str) != Some("idle")
+        || semantic(snapshot, "overlay").and_then(Value::as_str) != Some("none")
+        || semantic(snapshot, "input_enabled").and_then(Value::as_bool) != Some(true)
+    {
+        return Err("returned launcher is not an input-ready MagiK view".into());
+    }
+    Ok(())
+}
+
 fn validate_handoff_status(
     status: &Value,
     identity: &LaunchIdentity,
@@ -1182,6 +1251,28 @@ mod tests {
         let mut blocked = snapshot;
         blocked["semantic"]["overlay"] = json!("confirm");
         assert!(validate_pre_launch_snapshot(&blocked, "/media/fat/_Arcade/game.mra").is_err());
+    }
+
+    #[test]
+    fn one_shot_return_accepts_input_ready_home_or_arcade() {
+        let mut snapshot = json!({
+            "state_revision": 1,
+            "action_sequence": 2,
+            "presented_state_revision": 1,
+            "presented_action_sequence": 2,
+            "presented_latch_sequence": 3,
+            "semantic": {
+                "effective_view": "home",
+                "launch_state": "idle",
+                "overlay": "none",
+                "input_enabled": true,
+            }
+        });
+        assert!(validate_returned_magik_snapshot(&snapshot).is_ok());
+        snapshot["semantic"]["effective_view"] = json!("arcade");
+        assert!(validate_returned_magik_snapshot(&snapshot).is_ok());
+        snapshot["semantic"]["input_enabled"] = json!(false);
+        assert!(validate_returned_magik_snapshot(&snapshot).is_err());
     }
 
     #[test]
