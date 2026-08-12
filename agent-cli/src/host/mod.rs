@@ -7443,6 +7443,318 @@ fn validate_gui_profile_route(profile: &Value, pmu: bool) -> Result<()> {
     Ok(())
 }
 
+const GUI_PROFILE_PHASES: [&str; 5] = [
+    "settled-settings",
+    "home-pan-right",
+    "home-pan-left",
+    "arcade-scroll",
+    "settled-arcade",
+];
+
+fn gui_profile_payload(route: &Value) -> Result<&Value> {
+    let profile = route
+        .get("profile")
+        .ok_or("GUI frame attribution arm has no profile payload")?;
+    validate_gui_profile_route(
+        profile,
+        route.get("pmu_requested").and_then(Value::as_bool) == Some(true),
+    )?;
+    Ok(profile)
+}
+
+fn gui_phase_wall_times(profile: &Value) -> Result<Value> {
+    let markers = profile["phase_markers"]
+        .as_array()
+        .ok_or("GUI profile phase markers are missing")?;
+    let mut result = serde_json::Map::new();
+    for phase in GUI_PROFILE_PHASES {
+        let marker_time = |event: &str| {
+            markers.iter().find_map(|marker| {
+                (marker["phase"].as_str() == Some(phase) && marker["event"].as_str() == Some(event))
+                    .then(|| marker["monotonic_us"].as_u64())
+                    .flatten()
+            })
+        };
+        let started = marker_time("started")
+            .ok_or_else(|| format!("GUI profile is missing {phase} start time"))?;
+        let presented = marker_time("presented")
+            .ok_or_else(|| format!("GUI profile is missing {phase} presentation time"))?;
+        result.insert(
+            phase.into(),
+            json!({
+                "started_monotonic_us": started,
+                "presented_monotonic_us": presented,
+                "wall_time_us": presented.saturating_sub(started),
+            }),
+        );
+    }
+    Ok(Value::Object(result))
+}
+
+fn gui_profile_duration_us(profile: &Value) -> Result<u64> {
+    let started = profile["measurement_started_at_us"]
+        .as_u64()
+        .ok_or("GUI profile has no measurement start")?;
+    let ended = profile["measurement_ended_at_us"]
+        .as_u64()
+        .ok_or("GUI profile has no measurement end")?;
+    Ok(ended.saturating_sub(started))
+}
+
+fn gui_counter_ratio(numerator: u64, denominator: u64) -> f64 {
+    if denominator == 0 {
+        0.0
+    } else {
+        numerator as f64 / denominator as f64
+    }
+}
+
+#[derive(Clone, Copy, Default)]
+struct GuiPmuCounters {
+    cycles: u64,
+    instructions: u64,
+    l1d_accesses: u64,
+    l1d_refills: u64,
+    branches: u64,
+    branch_mispredicts: u64,
+}
+
+impl GuiPmuCounters {
+    fn add_record(&mut self, record: &Value) {
+        let counters = &record["counters"]["counters"];
+        self.cycles = self
+            .cycles
+            .saturating_add(counters["cycles"].as_u64().unwrap_or(0));
+        self.instructions = self
+            .instructions
+            .saturating_add(counters["instructions"].as_u64().unwrap_or(0));
+        self.l1d_accesses = self
+            .l1d_accesses
+            .saturating_add(counters["l1d_accesses"].as_u64().unwrap_or(0));
+        self.l1d_refills = self
+            .l1d_refills
+            .saturating_add(counters["l1d_refills"].as_u64().unwrap_or(0));
+        self.branches = self
+            .branches
+            .saturating_add(counters["branches"].as_u64().unwrap_or(0));
+        self.branch_mispredicts = self
+            .branch_mispredicts
+            .saturating_add(counters["branch_mispredicts"].as_u64().unwrap_or(0));
+    }
+
+    fn summary(self, frame_count: usize) -> Value {
+        json!({
+            "cycles": self.cycles,
+            "instructions": self.instructions,
+            "l1d_accesses": self.l1d_accesses,
+            "l1d_refills": self.l1d_refills,
+            "branches": self.branches,
+            "branch_mispredicts": self.branch_mispredicts,
+            "cycles_per_frame": gui_counter_ratio(self.cycles, frame_count as u64),
+            "instructions_per_cycle": gui_counter_ratio(self.instructions, self.cycles),
+            "l1d_refill_ratio": gui_counter_ratio(self.l1d_refills, self.l1d_accesses),
+            "branch_mispredict_ratio": gui_counter_ratio(self.branch_mispredicts, self.branches),
+        })
+    }
+}
+
+fn gui_pmu_summary(profile: &Value) -> Result<Value> {
+    let thread_profile = &profile["thread_profile"];
+    if thread_profile["enabled"].as_bool() != Some(true)
+        || !thread_profile["failure"].is_null()
+        || thread_profile["dropped_spans"].as_u64() != Some(0)
+    {
+        return Err("GUI PMU thread profile is incomplete".into());
+    }
+    let records = thread_profile["records"]
+        .as_array()
+        .filter(|records| !records.is_empty())
+        .ok_or("GUI PMU thread profile contains no spans")?;
+    let mut total = GuiPmuCounters::default();
+    let mut phases = BTreeMap::<String, GuiPmuCounters>::new();
+    for record in records {
+        total.add_record(record);
+        if let Some(name) = record["name"].as_str() {
+            phases
+                .entry(name.to_owned())
+                .or_default()
+                .add_record(record);
+        }
+    }
+    let frame_count = profile["frames"]
+        .as_array()
+        .map_or(0, |frames| frames.len());
+    let phases = phases
+        .into_iter()
+        .map(|(name, counters)| (name, counters.summary(frame_count)))
+        .collect::<serde_json::Map<_, _>>();
+    Ok(json!({
+        "frame_count": frame_count,
+        "total": total.summary(frame_count),
+        "spans": phases,
+    }))
+}
+
+fn gui_copy_amplification(profile: &Value) -> Result<Value> {
+    let frames = profile["frames"]
+        .as_array()
+        .ok_or("GUI profile has no frame records")?;
+    let mut damage_bytes = 0_u64;
+    let mut invalid_bytes = 0_u64;
+    let mut catchup_bytes = 0_u64;
+    let mut copied_rectangles = 0_u64;
+    let mut full_copies = 0_u64;
+    for frame in frames {
+        if let Some(rectangles) = frame["slint_damage_rects"].as_array() {
+            for rectangle in rectangles {
+                let Some(values) = rectangle.as_array() else {
+                    continue;
+                };
+                if values.len() == 4 {
+                    let width = values[2].as_u64().unwrap_or(0);
+                    let height = values[3].as_u64().unwrap_or(0);
+                    damage_bytes =
+                        damage_bytes.saturating_add(width.saturating_mul(height).saturating_mul(2));
+                }
+            }
+        }
+        invalid_bytes =
+            invalid_bytes.saturating_add(frame["latch"]["invalid_bytes"].as_u64().unwrap_or(0));
+        catchup_bytes =
+            catchup_bytes.saturating_add(frame["latch"]["catchup_bytes"].as_u64().unwrap_or(0));
+        copied_rectangles = copied_rectangles
+            .saturating_add(frame["latch"]["copied_rectangles"].as_u64().unwrap_or(0));
+        full_copies = full_copies.saturating_add(u64::from(
+            frame["latch"]["full_copy"].as_bool() == Some(true),
+        ));
+    }
+    Ok(json!({
+        "slint_damage_bytes": damage_bytes,
+        "invalid_bytes": invalid_bytes,
+        "catchup_bytes": catchup_bytes,
+        "copied_rectangles": copied_rectangles,
+        "full_copies": full_copies,
+        "invalid_to_damage_ratio": gui_counter_ratio(invalid_bytes, damage_bytes),
+        "catchup_to_damage_ratio": gui_counter_ratio(catchup_bytes, damage_bytes),
+        "total_copy_to_damage_ratio": gui_counter_ratio(invalid_bytes.saturating_add(catchup_bytes), damage_bytes),
+    }))
+}
+
+fn gui_presentation_summary(profile: &Value) -> Result<Value> {
+    let frames = profile["frames"]
+        .as_array()
+        .ok_or("GUI profile has no frame records")?;
+    let mut repeated_vblanks = 0_u64;
+    let mut latch_drops = 0_u64;
+    let mut ownership_losses = 0_u64;
+    let mut sequence_gaps = 0_u64;
+    let mut outliers = Vec::new();
+    let mut previous: Option<&Value> = None;
+    for frame in frames {
+        if frame.get("presentation").is_none() {
+            continue;
+        }
+        if let Some(before) = previous {
+            let same_phase = before["phase"].as_str() == frame["phase"].as_str();
+            let active_phase = matches!(
+                frame["phase"].as_str(),
+                Some("home-pan-right" | "home-pan-left" | "arcade-scroll")
+            );
+            if same_phase && active_phase {
+                let counter_delta = |name: &str| {
+                    frame["presentation"][name]
+                        .as_u64()
+                        .unwrap_or(0)
+                        .saturating_sub(before["presentation"][name].as_u64().unwrap_or(0))
+                };
+                let repeated_delta = counter_delta("repeated_vblank_count");
+                let latch_delta = counter_delta("latch_drop_count");
+                let ownership_delta = counter_delta("ownership_loss_count");
+                repeated_vblanks = repeated_vblanks.saturating_add(repeated_delta);
+                latch_drops = latch_drops.saturating_add(latch_delta);
+                ownership_losses = ownership_losses.saturating_add(ownership_delta);
+                let before_sequence = before["presentation"]["active_sequence"]
+                    .as_u64()
+                    .unwrap_or(0) as u16;
+                let sequence = frame["presentation"]["active_sequence"]
+                    .as_u64()
+                    .unwrap_or(0) as u16;
+                if sequence != before_sequence.wrapping_add(1) {
+                    sequence_gaps = sequence_gaps.saturating_add(1);
+                }
+                let gap_us = frame["monotonic_us"]
+                    .as_u64()
+                    .unwrap_or(0)
+                    .saturating_sub(before["monotonic_us"].as_u64().unwrap_or(0));
+                if gap_us > 25_000 || repeated_delta > 0 {
+                    outliers.push(json!({
+                        "phase": frame["phase"],
+                        "frame": frame["frame"],
+                        "inter_frame_gap_us": gap_us,
+                        "physical_repeated_vblanks": repeated_delta,
+                        "latch_drops": latch_delta,
+                    }));
+                }
+            }
+        }
+        previous = Some(frame);
+    }
+    let quality_status =
+        if repeated_vblanks == 0 && latch_drops == 0 && ownership_losses == 0 && sequence_gaps == 0
+        {
+            "passed"
+        } else {
+            "failed"
+        };
+    Ok(json!({
+        "quality_status": quality_status,
+        "physical_repeated_vblanks": repeated_vblanks,
+        "latch_drops": latch_drops,
+        "ownership_losses": ownership_losses,
+        "sequence_gaps": sequence_gaps,
+        "phase_outliers": outliers,
+    }))
+}
+
+fn summarize_gui_frame_attribution(
+    control_route: &Value,
+    pmu_route: &Value,
+    streamline_route: &Value,
+) -> Result<Value> {
+    let control = gui_profile_payload(control_route)?;
+    let pmu = gui_profile_payload(pmu_route)?;
+    let streamline = gui_profile_payload(streamline_route)?;
+    let control_duration = gui_profile_duration_us(control)?;
+    let pmu_duration = gui_profile_duration_us(pmu)?;
+    let streamline_duration = gui_profile_duration_us(streamline)?;
+    Ok(json!({
+        "artifact_validity": "passed",
+        "performance_authority": "unprofiled-control",
+        "control": {
+            "duration_us": control_duration,
+            "phase_wall_times": gui_phase_wall_times(control)?,
+            "copy_amplification": gui_copy_amplification(control)?,
+            "presentation": gui_presentation_summary(control)?,
+        },
+        "pmu": {
+            "duration_us": pmu_duration,
+            "phase_wall_times": gui_phase_wall_times(pmu)?,
+            "counters": gui_pmu_summary(pmu)?,
+            "copy_amplification": gui_copy_amplification(pmu)?,
+        },
+        "streamline": {
+            "duration_us": streamline_duration,
+            "phase_wall_times": gui_phase_wall_times(streamline)?,
+            "copy_amplification": gui_copy_amplification(streamline)?,
+        },
+        "observer_deltas": {
+            "pmu_duration_delta_us": signed_measurement_delta(Some(pmu_duration), Some(control_duration)),
+            "streamline_duration_delta_us": signed_measurement_delta(Some(streamline_duration), Some(control_duration)),
+        },
+        "counter_interpretation": "PMU and Streamline are attribution-only; physical presentation counters from the control arm qualify cadence",
+    }))
+}
+
 fn modal_input_action(
     config: &NativeDeviceConfig,
     nonce: &str,
@@ -8611,13 +8923,15 @@ fn profile_installed_gui_frame_attribution(
         output_dir.join("streamline/capture-manifest.json"),
         format!("{}\n", serde_json::to_string_pretty(&capture_manifest)?),
     )?;
+    let metrics = summarize_gui_frame_attribution(&control, &pmu, &streamline.route)?;
     let summary = json!({
         "schema": "mister-magik-gui-frame-attribution-v1",
         "artifact_status": "passed",
-        "product_quality_status": "diagnostic-control-pending-summary",
+        "product_quality_status": metrics["control"]["presentation"]["quality_status"],
         "display_mode": capture_mode.id,
         "refresh_hz": 60,
         "identity": capture_manifest,
+        "metrics": metrics,
         "arms": {
             "control": control,
             "pmu": pmu,
@@ -20498,6 +20812,132 @@ mod tests {
         let mut missing = passing;
         missing["phase_markers"].as_array_mut().unwrap().pop();
         assert!(validate_gui_profile_route(&missing, false).is_err());
+    }
+
+    fn gui_attribution_test_route(pmu: bool, repeated_vblank_count: u64) -> Value {
+        let markers = GUI_PROFILE_PHASES
+            .iter()
+            .enumerate()
+            .flat_map(|(index, phase)| {
+                let started = 1_000 + index as u64 * 1_000;
+                [
+                    json!({"phase": phase, "event": "started", "monotonic_us": started}),
+                    json!({"phase": phase, "event": "presented", "monotonic_us": started + 500}),
+                ]
+            })
+            .collect::<Vec<_>>();
+        let records = if pmu {
+            vec![json!({
+                "name": "gui.slint-raster.ordinary",
+                "counters": {
+                    "time_enabled_ns": 100,
+                    "time_running_ns": 100,
+                    "counters": {
+                        "cycles": 1_000,
+                        "instructions": 750,
+                        "l1d_accesses": 100,
+                        "l1d_refills": 10,
+                        "branches": 50,
+                        "branch_mispredicts": 5,
+                    },
+                },
+            })]
+        } else {
+            Vec::new()
+        };
+        let frames = [
+            (1_u64, 2_000_u64, 1_u64, 0_u64),
+            (2_u64, 20_000_u64, 2_u64, repeated_vblank_count),
+        ]
+        .into_iter()
+        .map(|(frame, monotonic_us, sequence, repeated)| {
+            json!({
+                "frame": frame,
+                "monotonic_us": monotonic_us,
+                "phase": "home-pan-right",
+                "slint_damage_rects": [[0, 0, 10, 10]],
+                "latch": {
+                    "invalid_bytes": 200,
+                    "catchup_bytes": 0,
+                    "copied_rectangles": 1,
+                    "full_copy": false,
+                },
+                "presentation": {
+                    "repeated_vblank_count": repeated,
+                    "latch_drop_count": 0,
+                    "ownership_loss_count": 0,
+                    "active_sequence": sequence,
+                },
+            })
+        })
+        .collect::<Vec<_>>();
+        json!({
+            "schema": "mister-magik-gui-profile-route-v1",
+            "pmu_requested": pmu,
+            "profile": {
+                "schema": "mister-magik-gui-profiling-window-v1",
+                "state": "complete",
+                "pmu_requested": pmu,
+                "pmu_valid": true,
+                "dropped_frame_records": 0,
+                "measurement_started_at_us": 1_000,
+                "measurement_ended_at_us": 6_000,
+                "phase_markers": markers,
+                "frames": frames,
+                "thread_profile": {
+                    "enabled": pmu,
+                    "failure": null,
+                    "dropped_spans": 0,
+                    "records": records,
+                },
+            },
+        })
+    }
+
+    #[test]
+    fn gui_attribution_summary_separates_pmu_metrics_from_control_quality() {
+        let control = gui_attribution_test_route(false, 0);
+        let pmu = gui_attribution_test_route(true, 0);
+        let streamline = gui_attribution_test_route(false, 0);
+        let summary = summarize_gui_frame_attribution(&control, &pmu, &streamline).unwrap();
+        assert_eq!(summary["artifact_validity"], "passed");
+        assert_eq!(
+            summary["control"]["presentation"]["quality_status"],
+            "passed"
+        );
+        assert_eq!(
+            summary["pmu"]["counters"]["total"]["cycles_per_frame"],
+            500.0
+        );
+        assert_eq!(
+            summary["pmu"]["counters"]["total"]["instructions_per_cycle"],
+            0.75
+        );
+        assert_eq!(
+            summary["control"]["copy_amplification"]["invalid_to_damage_ratio"],
+            1.0
+        );
+    }
+
+    #[test]
+    fn gui_attribution_correlates_repeated_vblank_outliers_without_latch_drops() {
+        let control = gui_attribution_test_route(false, 1);
+        let pmu = gui_attribution_test_route(true, 0);
+        let streamline = gui_attribution_test_route(false, 0);
+        let summary = summarize_gui_frame_attribution(&control, &pmu, &streamline).unwrap();
+        assert_eq!(
+            summary["control"]["presentation"]["quality_status"],
+            "failed"
+        );
+        assert_eq!(
+            summary["control"]["presentation"]["physical_repeated_vblanks"],
+            1
+        );
+        assert_eq!(summary["control"]["presentation"]["latch_drops"], 0);
+        assert_eq!(
+            summary["control"]["presentation"]["phase_outliers"][0]["physical_repeated_vblanks"],
+            1
+        );
     }
 
     #[test]

@@ -512,6 +512,34 @@ impl GuiProfilingController {
         });
     }
 
+    pub(super) fn record_presentation(
+        &mut self,
+        frame: u64,
+        telemetry: mister_magik_latch_contract::PresentationTelemetry,
+        latch_drop_count: u32,
+        active_sequence: u16,
+    ) {
+        if !self.active() {
+            return;
+        }
+        let Some(record) =
+            self.frames.iter_mut().rev().find(|record| {
+                record.get("frame").and_then(serde_json::Value::as_u64) == Some(frame)
+            })
+        else {
+            return;
+        };
+        record["presentation"] = json!({
+            "owned_vblank_count": telemetry.owned_vblank_count,
+            "presented_vblank_count": telemetry.presented_vblank_count,
+            "repeated_vblank_count": telemetry.repeated_vblank_count,
+            "ownership_loss_count": telemetry.ownership_loss_count,
+            "latch_drop_count": latch_drop_count,
+            "active_sequence": active_sequence,
+            "magik_ownership": telemetry.magik_ownership(),
+        });
+    }
+
     fn finish(&mut self) {
         self.state = GuiProfileState::Complete;
         self.deadline = None;

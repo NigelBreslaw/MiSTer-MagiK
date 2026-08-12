@@ -10592,6 +10592,12 @@ pub(super) fn run_launcher_loop(
                         pace.period_us,
                         presented_frame.main_present_drop_count.into(),
                     );
+                    gui_profiling.record_presentation(
+                        frames,
+                        telemetry,
+                        presented_frame.main_present_drop_count.into(),
+                        presented_frame.main_present_sequence,
+                    );
                 }
                 let terminal_preview =
                     matches!(preview.trace_cache_state(), "exact" | "cached" | "empty")
