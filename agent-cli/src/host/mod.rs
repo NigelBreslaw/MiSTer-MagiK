@@ -2850,6 +2850,7 @@ const EXPERIMENTAL_FPGA_METADATA_REMOTE: &str =
     "/media/fat/mister-magik-dev/fpga/menu-magik-vblank-latch.metadata.txt";
 const EXPERIMENTAL_FPGA_TRANSACTION_REMOTE: &str =
     "/media/fat/mister-magik-dev/experimental-fpga.delivery-state";
+const EXPERIMENTAL_FPGA_MENU_TARGET: &str = "/media/fat/menu.rbf";
 
 fn unique_field(text: &str, name: &str) -> Result<String> {
     let prefix = format!("{name}=");
@@ -2971,6 +2972,107 @@ fn experimental_fpga_cleanup_script() -> String {
     )
 }
 
+fn experimental_fpga_evidence_is_current(diagnostics: &Value) -> bool {
+    diagnostics.get("schema").and_then(Value::as_str)
+        == Some("mister-magik-fpga-video-diagnostics-v2")
+        && diagnostics
+            .get("diagnostic_architecture")
+            .and_then(Value::as_str)
+            == Some("hdmi-lock-evidence-v1")
+        && diagnostics.get("available").and_then(Value::as_bool) == Some(true)
+        && diagnostics.get("coherent").and_then(Value::as_bool) == Some(true)
+        && diagnostics
+            .pointer("/capabilities/physical_hdmi_pll_lock")
+            .and_then(Value::as_bool)
+            == Some(true)
+        && diagnostics
+            .pointer("/hdmi_lock/raw_words")
+            .and_then(Value::as_array)
+            .is_some_and(|words| words.len() == 4)
+}
+
+fn experimental_fpga_activation_status(session: &Session) -> Result<(u64, u64, i64)> {
+    let main_status = remote_read(session, MAIN_STATUS_REMOTE)
+        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+        .ok_or("experimental FPGA activation has no Main status")?;
+    if main_status.get("launcher_state").and_then(Value::as_str) != Some("LauncherActive")
+        || main_status.get("executable_path").and_then(Value::as_str) != Some(LOCAL_MAIN_REMOTE)
+        || main_status.get("fpga_owner").and_then(Value::as_str) != Some("magik")
+    {
+        return Err(
+            "experimental FPGA activation requires stable Dev LauncherActive ownership".into(),
+        );
+    }
+    let generation = main_status
+        .get("main_generation")
+        .and_then(Value::as_u64)
+        .ok_or("experimental FPGA activation has no Main generation")?;
+    let main_pid = main_status
+        .get("pid")
+        .and_then(Value::as_u64)
+        .filter(|pid| *pid > 0)
+        .ok_or("experimental FPGA activation has no Main pid")?;
+    let launcher_pid = main_status
+        .get("launcher_pid")
+        .and_then(Value::as_i64)
+        .filter(|pid| *pid > 0)
+        .ok_or("experimental FPGA activation has no active launcher")?;
+    Ok((generation, main_pid, launcher_pid))
+}
+
+fn activate_installed_menu_fpga(config: &NativeDeviceConfig, session: &Session) -> Result<()> {
+    let (expected_generation, expected_main_pid, previous_launcher_pid) =
+        experimental_fpga_activation_status(session)?;
+    exec_checked(
+        session,
+        "experimental FPGA Main-owned activation",
+        &acknowledged_main_command(&format!("load_core {EXPERIMENTAL_FPGA_MENU_TARGET}")),
+    )?;
+    wait_launcher_ready_after(
+        session,
+        previous_launcher_pid,
+        Instant::now(),
+        Duration::from_secs(45),
+    )?;
+    let (activated_generation, activated_main_pid, activated_launcher_pid) =
+        experimental_fpga_activation_status(session)?;
+    if activated_generation == expected_generation
+        || activated_main_pid == expected_main_pid
+        || activated_launcher_pid == previous_launcher_pid
+    {
+        return Err(
+            "experimental FPGA activation did not produce a new owned Dev Menu session".into(),
+        );
+    }
+    exec_checked(
+        session,
+        "installed Dev platform verification after FPGA activation",
+        &installed_platform_verify_command(Layout::Development),
+    )?;
+    verify_delivery_health(config).map_err(|error| format!("{error:?}"))?;
+    Ok(())
+}
+
+fn verify_experimental_fpga_evidence(config: &NativeDeviceConfig) -> Result<()> {
+    let diagnostics = agent_request_at(
+        config.agent()?,
+        "diagnostics",
+        json!({}),
+        Duration::from_secs(5),
+    )?;
+    let evidence = diagnostics
+        .response
+        .pointer("/result/fpga_video_diagnostics")
+        .ok_or("experimental FPGA activation returned no FPGA evidence")?;
+    if !experimental_fpga_evidence_is_current(evidence) {
+        return Err(format!(
+            "experimental FPGA activation did not expose coherent HDMI lock evidence: {evidence}"
+        )
+        .into());
+    }
+    Ok(())
+}
+
 fn install_experimental_fpga_transaction(
     config: &NativeDeviceConfig,
     rbf: &Path,
@@ -3001,6 +3103,7 @@ fn install_experimental_fpga_transaction(
             "experimental FPGA build is incompatible with the installed Dev platform".into(),
         );
     }
+    experimental_fpga_activation_status(&session)?;
     let manifest_text =
         experimental_fpga_manifest(&installed, &rbf_sha256, &metadata_sha256, &menu_revision)?;
     let manifest_path = env::temp_dir().join(format!(
@@ -3052,20 +3155,8 @@ fn install_experimental_fpga_transaction(
                 manifest_hash = sh(&manifest_sha256),
             ),
         )?;
-        drop(session);
-        delivery_reboot_wait(config).map_err(|error| format!("{error:?}"))?;
-        let smoke = connect_with(&config.connection, 10)?;
-        exec_checked(
-            &smoke,
-            "experimental FPGA smoke",
-            &installed_platform_verify_command(Layout::Development),
-        )?;
-        verify_delivery_health(config).map_err(|error| format!("{error:?}"))?;
-        exec_checked(
-            &smoke,
-            "experimental FPGA commit",
-            &experimental_fpga_cleanup_script(),
-        )?;
+        activate_installed_menu_fpga(config, &session)?;
+        verify_experimental_fpga_evidence(config)?;
         Ok(())
     })();
     let _ = fs::remove_file(&manifest_path);
@@ -3083,8 +3174,20 @@ fn install_experimental_fpga_transaction(
                     manifest = sh(LOCAL_MAIN_MANIFEST_REMOTE),
                 ),
             )?;
-            drop(rollback);
-            delivery_reboot_wait(config).map_err(|error| format!("{error:?}"))?;
+            if let Err(first_activation) = activate_installed_menu_fpga(config, &rollback) {
+                drop(rollback);
+                delivery_reboot_wait(config).map_err(|error| {
+                    format!(
+                        "rollback activation failed ({first_activation}); bounded recovery reboot failed ({error:?})"
+                    )
+                })?;
+                let retry = connect_with(&config.connection, 10)?;
+                activate_installed_menu_fpga(config, &retry).map_err(|error| {
+                    format!(
+                        "rollback activation failed ({first_activation}); retry after bounded recovery reboot failed ({error})"
+                    )
+                })?;
+            }
             verify_delivery_health(config).map_err(|failure| format!("{failure:?}"))?;
             let cleanup = connect_with(&config.connection, 10)?;
             exec_checked(
@@ -3104,6 +3207,17 @@ fn install_experimental_fpga_transaction(
             .into()),
         };
     }
+    let commit = connect_with(&config.connection, 10)?;
+    exec_checked(
+        &commit,
+        "experimental FPGA commit",
+        &experimental_fpga_cleanup_script(),
+    )
+    .map_err(|error| {
+        format!(
+            "experimental FPGA activation is verified but commit cleanup is incomplete; rollback was not attempted: {error}"
+        )
+    })?;
     Ok(())
 }
 
@@ -24480,6 +24594,83 @@ H: Handlers=event3 js0"#
             candidate["qualification_candidate_id"],
             local_main_candidate_id(&candidate)
         );
+    }
+
+    #[test]
+    fn experimental_fpga_activation_requires_exact_current_evidence() {
+        let current = json!({
+            "schema": "mister-magik-fpga-video-diagnostics-v2",
+            "diagnostic_architecture": "hdmi-lock-evidence-v1",
+            "available": true,
+            "coherent": true,
+            "capabilities": {"physical_hdmi_pll_lock": true},
+            "hdmi_lock": {"raw_words": [1, 7, 0, 0]},
+        });
+        assert!(experimental_fpga_evidence_is_current(&current));
+        for stale in [
+            json!({
+                "schema": "mister-magik-fpga-video-diagnostics-v1",
+                "available": true,
+                "coherent": true,
+            }),
+            json!({
+                "schema": "mister-magik-fpga-video-diagnostics-v2",
+                "diagnostic_architecture": "hdmi-lock-evidence-v1",
+                "available": false,
+                "coherent": true,
+                "capabilities": {"physical_hdmi_pll_lock": true},
+            }),
+            json!({
+                "schema": "mister-magik-fpga-video-diagnostics-v2",
+                "diagnostic_architecture": "hdmi-lock-evidence-v1",
+                "available": true,
+                "coherent": false,
+                "capabilities": {"physical_hdmi_pll_lock": true},
+            }),
+            json!({
+                "schema": "mister-magik-fpga-video-diagnostics-v2",
+                "diagnostic_architecture": "retired-wide-observer",
+                "available": true,
+                "coherent": true,
+                "capabilities": {"physical_hdmi_pll_lock": true},
+                "hdmi_lock": {"raw_words": [1, 7, 0, 0]},
+            }),
+            json!({
+                "schema": "mister-magik-fpga-video-diagnostics-v2",
+                "diagnostic_architecture": "hdmi-lock-evidence-v1",
+                "available": true,
+                "coherent": true,
+                "capabilities": {},
+                "hdmi_lock": {"raw_words": [1, 7, 0, 0]},
+            }),
+            json!({
+                "schema": "mister-magik-fpga-video-diagnostics-v2",
+                "diagnostic_architecture": "hdmi-lock-evidence-v1",
+                "available": true,
+                "coherent": true,
+                "capabilities": {"physical_hdmi_pll_lock": true},
+                "hdmi_lock": {"raw_words": [1, 7, 0]},
+            }),
+            json!({
+                "schema": "mister-magik-fpga-video-diagnostics-v2",
+                "diagnostic_architecture": "hdmi-lock-evidence-v1",
+                "available": true,
+                "coherent": true,
+                "capabilities": {"physical_hdmi_pll_lock": true},
+                "hdmi_lock": {"raw_words": [1, 7, 0, 0, 0]},
+            }),
+        ] {
+            assert!(!experimental_fpga_evidence_is_current(&stale));
+        }
+    }
+
+    #[test]
+    fn experimental_fpga_activation_uses_only_the_main_owned_menu_alias() {
+        let command =
+            acknowledged_main_command(&format!("load_core {EXPERIMENTAL_FPGA_MENU_TARGET}"));
+        assert!(command.contains("load_core /media/fat/menu.rbf"));
+        assert!(!command.contains(EXPERIMENTAL_FPGA_RBF_REMOTE));
+        assert!(!command.contains("rbf_load"));
     }
 
     #[test]
