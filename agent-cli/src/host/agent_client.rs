@@ -27,6 +27,13 @@ pub(crate) struct AgentResponse {
     pub(crate) elapsed_ms: u128,
 }
 
+#[derive(Debug)]
+pub(crate) struct AgentBinaryResponse {
+    pub(crate) response: Value,
+    pub(crate) payload: Vec<u8>,
+    pub(crate) elapsed_ms: u128,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct AgentEndpoint {
     host: String,
@@ -510,6 +517,73 @@ pub(crate) fn agent_request_at(
     let mut line = String::new();
     BufReader::new(stream).read_line(&mut line)?;
     parse_agent_response_line(line, start)
+}
+
+fn agent_binary_request_at(
+    endpoint: &AgentEndpoint,
+    cmd: &str,
+    args: Value,
+    payload_bytes_field: &str,
+    timeout: Duration,
+) -> Result<AgentBinaryResponse> {
+    let addr = format!("{}:{AGENT_PORT}", endpoint.host)
+        .to_socket_addrs()?
+        .next()
+        .ok_or("could not resolve MiSTer agent host")?;
+    let request = agent_protocol::request(&endpoint.token, 1, cmd, args);
+    let started = Instant::now();
+    let mut stream = TcpStream::connect_timeout(&addr, timeout)?;
+    stream.set_read_timeout(Some(timeout))?;
+    stream.set_write_timeout(Some(timeout))?;
+    writeln!(stream, "{request}")?;
+    stream.flush()?;
+    let mut reader = BufReader::new(stream);
+    let mut line = String::new();
+    reader.read_line(&mut line)?;
+    let header = parse_agent_response_line(line, started)?;
+    let payload_bytes = header
+        .response
+        .pointer(&format!("/result/{payload_bytes_field}"))
+        .and_then(Value::as_u64)
+        .ok_or_else(|| format!("agent {cmd} response omitted {payload_bytes_field}"))?;
+    let payload_bytes = usize::try_from(payload_bytes)
+        .map_err(|_| format!("agent {cmd} payload exceeds host address space"))?;
+    let mut payload = vec![0_u8; payload_bytes];
+    reader.read_exact(&mut payload)?;
+    Ok(AgentBinaryResponse {
+        response: header.response,
+        payload,
+        elapsed_ms: started.elapsed().as_millis(),
+    })
+}
+
+pub(crate) fn agent_framebuffer_capture_stream(
+    endpoint: &AgentEndpoint,
+    lz4: bool,
+) -> Result<AgentBinaryResponse> {
+    agent_binary_request_at(
+        endpoint,
+        if lz4 {
+            "framebuffer_capture_lz4_stream"
+        } else {
+            "framebuffer_capture_raw_stream"
+        },
+        json!({}),
+        "payload_bytes",
+        Duration::from_secs(15),
+    )
+}
+
+pub(crate) fn agent_library_snapshot_stream(
+    endpoint: &AgentEndpoint,
+) -> Result<AgentBinaryResponse> {
+    agent_binary_request_at(
+        endpoint,
+        "library_database_snapshot_lz4_stream",
+        json!({}),
+        "payload_bytes",
+        Duration::from_secs(30),
+    )
 }
 
 pub(crate) fn agent_request_with_liveness(

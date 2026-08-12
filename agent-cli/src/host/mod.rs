@@ -34,7 +34,8 @@ mod startup_particles;
 pub(crate) use startup_particles::SceneLabRequest;
 
 use agent_client::{
-    AGENT_PORT, AgentEndpoint, agent_framebuffer_stream_for_duration, agent_request,
+    AGENT_PORT, AgentEndpoint, agent_framebuffer_capture_stream,
+    agent_framebuffer_stream_for_duration, agent_library_snapshot_stream, agent_request,
     agent_request_at, agent_request_with_liveness, agent_telemetry_for_duration,
     agent_telemetry_for_duration_at_cadence, agent_telemetry_for_duration_with_mode,
     agent_telemetry_until_screensaver_profile_complete, bootstrap_agent_with,
@@ -656,6 +657,13 @@ impl NativeDevice {
         self.benchmark_profile(|config| {
             profile_installed_agent_observer_attribution(config, output_dir)
         })
+    }
+
+    pub(crate) fn profile_agent_io_attribution(
+        &mut self,
+        output_dir: &Path,
+    ) -> std::result::Result<String, DeviceFailure> {
+        self.benchmark_profile(|config| profile_installed_agent_io_attribution(config, output_dir))
     }
 
     pub(crate) fn verify_search_ui(
@@ -8448,6 +8456,13 @@ const AGENT_OBSERVER_STREAMLINE_CAPTURE: SystemWideStreamlineCaptureSpec =
         max_duration_seconds: 180,
     };
 
+const AGENT_IO_STREAMLINE_CAPTURE: SystemWideStreamlineCaptureSpec =
+    SystemWideStreamlineCaptureSpec {
+        label: "agent I/O attribution Streamline",
+        archive_file: "mister-magik-agent-io.apc.tar.gz",
+        max_duration_seconds: 180,
+    };
+
 struct SystemWideStreamlineCapture<'a> {
     session: &'a Session,
     connection: ConnectionConfig,
@@ -9720,6 +9735,421 @@ fn profile_installed_agent_observer_attribution(
             "capture": "streamline/mister-magik.apc",
             "archive": format!("streamline/{}", AGENT_OBSERVER_STREAMLINE_CAPTURE.archive_file),
             "capture_manifest": "streamline/capture-manifest.json",
+        },
+    });
+    fs::write(
+        output_dir.join("summary.json"),
+        format!("{}\n", serde_json::to_string_pretty(&summary)?),
+    )?;
+    serde_json::to_string(&summary).map_err(Into::into)
+}
+
+const AGENT_IO_DIRECTORY_CANDIDATES: [&str; 5] =
+    ["/_Arcade", "/_Console", "/_Computer", "/games", "/"];
+
+fn agent_io_result(response: Value, operation: &str) -> Result<Value> {
+    if response.get("ok").and_then(Value::as_bool) != Some(true) {
+        return Err(format!(
+            "agent {operation} failed: {}",
+            response
+                .get("error")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown error")
+        )
+        .into());
+    }
+    response
+        .get("result")
+        .cloned()
+        .ok_or_else(|| format!("agent {operation} response omitted result").into())
+}
+
+fn agent_io_list(endpoint: &AgentEndpoint, path: &str, v2: bool) -> Result<(Value, u128)> {
+    let response = agent_request_at(
+        endpoint,
+        if v2 { "sd_list_dir_v2" } else { "sd_list_dir" },
+        json!({"path": path, "show_hidden": false}),
+        Duration::from_secs(30),
+    )?;
+    let elapsed_ms = response.elapsed_ms;
+    Ok((
+        agent_io_result(response.response, "directory listing")?,
+        elapsed_ms,
+    ))
+}
+
+fn select_agent_io_directory(endpoint: &AgentEndpoint) -> Result<Value> {
+    let mut candidates = Vec::new();
+    for path in AGENT_IO_DIRECTORY_CANDIDATES {
+        match agent_io_list(endpoint, path, true) {
+            Ok((result, elapsed_ms)) => candidates.push(json!({
+                "path": path,
+                "entries": result["entries"].as_array().map_or(0, Vec::len),
+                "elapsed_ms": elapsed_ms,
+            })),
+            Err(error) => candidates.push(json!({
+                "path": path,
+                "entries": 0,
+                "unavailable": error.to_string(),
+            })),
+        }
+    }
+    let selected = selected_agent_io_directory(&candidates)
+        .ok_or("no fixed allowlisted directory is available for agent I/O attribution")?;
+    Ok(json!({
+        "selected_path": selected,
+        "selection": "largest immediate entry count among fixed allowlisted candidates",
+        "candidates": candidates,
+    }))
+}
+
+fn selected_agent_io_directory(candidates: &[Value]) -> Option<&str> {
+    candidates
+        .iter()
+        .filter(|candidate| candidate.get("unavailable").is_none())
+        .max_by_key(|candidate| candidate["entries"].as_u64().unwrap_or(0))
+        .and_then(|candidate| candidate["path"].as_str())
+}
+
+fn compact_agent_io_result(
+    mut result: Value,
+    label: &str,
+    repetition: u8,
+    host_elapsed_ms: u128,
+) -> Result<Value> {
+    let entry_count = result
+        .get("entries")
+        .and_then(Value::as_array)
+        .map(Vec::len);
+    if let Some(object) = result.as_object_mut() {
+        object.remove("png_hex");
+        object.remove("entries");
+    }
+    let evidence = result
+        .get("io_operation")
+        .ok_or_else(|| format!("{label} omitted standardized I/O evidence"))?;
+    if evidence.get("schema").and_then(Value::as_str) != Some("mister-magik-agent-io-operation-v1")
+    {
+        return Err(format!("{label} has the wrong I/O evidence schema").into());
+    }
+    let elapsed_us = evidence
+        .get("elapsed_us")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let bytes = evidence
+        .get("bytes_read")
+        .and_then(Value::as_u64)
+        .unwrap_or(0)
+        .max(
+            evidence
+                .get("bytes_written")
+                .and_then(Value::as_u64)
+                .unwrap_or(0),
+        );
+    let normalized_us_per_mib = (bytes > 0).then(|| elapsed_us as f64 * 1_048_576.0 / bytes as f64);
+    let normalized_us_per_entry = entry_count
+        .filter(|count| *count > 0)
+        .map(|count| elapsed_us as f64 / count as f64);
+    Ok(json!({
+        "label": label,
+        "repetition": repetition,
+        "host_elapsed_ms": u64::try_from(host_elapsed_ms).unwrap_or(u64::MAX),
+        "entry_count": entry_count,
+        "normalized_us_per_mib": normalized_us_per_mib,
+        "normalized_us_per_entry": normalized_us_per_entry,
+        "result": result,
+    }))
+}
+
+fn run_agent_io_capture_set(
+    endpoint: &AgentEndpoint,
+    screen: &str,
+    operations: &mut Vec<Value>,
+) -> Result<()> {
+    for repetition in 1..=2 {
+        let raw = agent_framebuffer_capture_stream(endpoint, false)?;
+        if raw.payload.len()
+            != raw.response["result"]["payload_bytes"]
+                .as_u64()
+                .unwrap_or(u64::MAX) as usize
+        {
+            return Err("raw framebuffer payload length changed in transport".into());
+        }
+        operations.push(compact_agent_io_result(
+            agent_io_result(raw.response, "raw framebuffer capture")?,
+            &format!("{screen}-raw"),
+            repetition,
+            raw.elapsed_ms,
+        )?);
+        let lz4 = agent_framebuffer_capture_stream(endpoint, true)?;
+        operations.push(compact_agent_io_result(
+            agent_io_result(lz4.response, "LZ4 framebuffer capture")?,
+            &format!("{screen}-lz4"),
+            repetition,
+            lz4.elapsed_ms,
+        )?);
+        let png = agent_request_at(
+            endpoint,
+            "framebuffer_capture",
+            json!({}),
+            Duration::from_secs(30),
+        )?;
+        operations.push(compact_agent_io_result(
+            agent_io_result(png.response, "PNG framebuffer capture")?,
+            &format!("{screen}-png"),
+            repetition,
+            png.elapsed_ms,
+        )?);
+    }
+    Ok(())
+}
+
+fn run_agent_io_operation_sequence(
+    config: &NativeDeviceConfig,
+    session: &Session,
+    directory: &str,
+) -> Result<Vec<Value>> {
+    restart_launcher_with_one_shot_env(
+        session,
+        LauncherRestartOptions {
+            env_vars: vec![
+                ("MISTER_CATALOG_REFRESH".into(), "off".into()),
+                ("MISTER_LAUNCHER_START_SCREEN".into(), "home".into()),
+            ],
+            timeout_secs: 45,
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+            ..LauncherRestartOptions::default()
+        },
+    )?;
+    let status = read_launcher_status(session)?;
+    let main_status: Value = serde_json::from_str(
+        &remote_read(session, MAIN_STATUS_REMOTE).ok_or("Main status is missing")?,
+    )?;
+    let begin = launcher_automation::begin(
+        config,
+        status["build"]["version"]
+            .as_str()
+            .ok_or("agent I/O route has no build version")?,
+        status["build"]["source_revision"]
+            .as_str()
+            .ok_or("agent I/O route has no source revision")?,
+        main_status["main_generation"]
+            .as_u64()
+            .ok_or("agent I/O route has no Main generation")?,
+        90,
+    )?;
+    let begin: Value = serde_json::from_str(&begin)?;
+    let nonce = begin["nonce"]
+        .as_str()
+        .ok_or("agent I/O route has no automation nonce")?
+        .to_owned();
+    let endpoint = config.agent()?.clone();
+    let run_result = (|| -> Result<Vec<Value>> {
+        wait_gui_profile_snapshot(
+            config,
+            &nonce,
+            |snapshot| gui_profile_effective_view(snapshot) == Some("home"),
+            "agent I/O static Home",
+        )?;
+        let mut operations = Vec::new();
+        run_agent_io_capture_set(&endpoint, "static-home", &mut operations)?;
+        modal_input_action(
+            config,
+            &nonce,
+            AutomationAction::Tap(AutomationButton::Right),
+        )?;
+        modal_input_action(
+            config,
+            &nonce,
+            AutomationAction::Tap(AutomationButton::Left),
+        )?;
+        modal_input_action(config, &nonce, AutomationAction::Tap(AutomationButton::A))?;
+        wait_gui_profile_snapshot(
+            config,
+            &nonce,
+            |snapshot| gui_profile_effective_view(snapshot) == Some("arcade"),
+            "agent I/O high-entropy Arcade",
+        )?;
+        modal_input_action(
+            config,
+            &nonce,
+            AutomationAction::Hold {
+                button: AutomationButton::Down,
+                duration_ms: 900,
+            },
+        )?;
+        modal_input_action(config, &nonce, AutomationAction::ReleaseAll)?;
+        run_agent_io_capture_set(&endpoint, "high-entropy-arcade", &mut operations)?;
+        for repetition in 1..=2 {
+            let snapshot = agent_library_snapshot_stream(&endpoint)?;
+            if snapshot.payload.len()
+                != snapshot.response["result"]["payload_bytes"]
+                    .as_u64()
+                    .unwrap_or(u64::MAX) as usize
+            {
+                return Err("library snapshot payload length changed in transport".into());
+            }
+            operations.push(compact_agent_io_result(
+                agent_io_result(snapshot.response, "library snapshot")?,
+                "library-snapshot",
+                repetition,
+                snapshot.elapsed_ms,
+            )?);
+        }
+        for v2 in [false, true] {
+            for repetition in 1..=2 {
+                let (listing, elapsed_ms) = agent_io_list(&endpoint, directory, v2)?;
+                operations.push(compact_agent_io_result(
+                    listing,
+                    if v2 { "directory-v2" } else { "directory-v1" },
+                    repetition,
+                    elapsed_ms,
+                )?);
+            }
+        }
+        Ok(operations)
+    })();
+    let end_result = launcher_automation::end(config, &nonce).map(|_| ());
+    let restore_result = launcher_restart(
+        session,
+        &LauncherRestartOptions {
+            clear_env: true,
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+            timeout_secs: 45,
+            ..LauncherRestartOptions::default()
+        },
+    );
+    match (run_result, end_result, restore_result) {
+        (Ok(operations), Ok(()), Ok(())) => Ok(operations),
+        (run, end, restore) => Err(format!(
+            "agent I/O operation route failed: run={:?}; automation_end={:?}; launcher_restore={:?}",
+            run.err(),
+            end.err(),
+            restore.err()
+        )
+        .into()),
+    }
+}
+
+fn contains_ascii(bytes: &[u8], needle: &[u8]) -> bool {
+    !needle.is_empty() && bytes.windows(needle.len()).any(|window| window == needle)
+}
+
+fn profile_installed_agent_io_attribution(
+    config: &NativeDeviceConfig,
+    output_dir: &Path,
+) -> Result<String> {
+    let gatord = streamline_gatord_path(env::var_os("MISTER_GATORD_PATH"))?;
+    let gatord_sha256 = file_sha256(gatord.clone())?;
+    fs::create_dir_all(output_dir)?;
+    let session = connect_with(&config.connection, 10)?;
+    let manifest = remote_read(&session, LOCAL_MAIN_MANIFEST_REMOTE)
+        .ok_or("development manifest is unavailable before agent I/O attribution")?;
+    let installed_identity = streamline_installed_identity(&session, &manifest)?;
+    let endpoint = config.agent()?;
+    let preflight = select_agent_io_directory(endpoint)?;
+    let directory = preflight["selected_path"]
+        .as_str()
+        .ok_or("agent I/O preflight omitted selected directory")?;
+    let symbols_dir = output_dir.join("symbols");
+    fs::create_dir_all(&symbols_dir)?;
+    let agent_symbols = symbols_dir.join("mister-magik-agent");
+    get(
+        &session,
+        "/media/fat/mister-magik-dev/mister-magik-agent",
+        &agent_symbols,
+    )?;
+    if file_sha256(agent_symbols.clone())? != installed_identity.agent_sha256 {
+        return Err("retained agent symbol image does not match installed identity".into());
+    }
+    let agent_bytes = fs::read(&agent_symbols)?;
+    for symbol in [
+        b"framebuffer_capture_raw".as_slice(),
+        b"snapshot_allowlisted_path",
+    ] {
+        if !contains_ascii(&agent_bytes, symbol) {
+            return Err(format!(
+                "installed agent does not expose expected application symbol {}",
+                String::from_utf8_lossy(symbol)
+            )
+            .into());
+        }
+    }
+    let capture = SystemWideStreamlineCapture::new(
+        &session,
+        &config.connection,
+        output_dir,
+        AGENT_IO_STREAMLINE_CAPTURE,
+    );
+    let gatord_version = capture.prepare(&gatord)?;
+    let capture_thread = capture.start();
+    let operations_result = (|| -> Result<(Vec<Value>, u64, u64)> {
+        capture.wait_ready(Duration::from_secs(10))?;
+        let started = capture.monotonic_ns("agent I/O capture start")?;
+        let operations = run_agent_io_operation_sequence(config, &session, directory)?;
+        let ended = capture.monotonic_ns("agent I/O capture end")?;
+        Ok((operations, started, ended))
+    })();
+    let capture_result = capture.stop(capture_thread);
+    capture.retain_log()?;
+    let package_result = capture_result.and_then(|()| capture.package_extract());
+    let cleanup_result = capture.cleanup();
+    let ((operations, capture_started, capture_ended), archive_sha256) =
+        match (operations_result, package_result, cleanup_result) {
+            (Ok(operations), Ok(archive), Ok(())) => (operations, archive),
+            (operations, package, cleanup) => {
+                return Err(format!(
+                "agent I/O Streamline sequence failed: operations={:?}; package={:?}; cleanup={:?}",
+                operations.err(),
+                package.err(),
+                cleanup.err()
+            )
+            .into());
+            }
+        };
+    let final_manifest = remote_read(&session, LOCAL_MAIN_MANIFEST_REMOTE)
+        .ok_or("development manifest is unavailable after agent I/O attribution")?;
+    if final_manifest != manifest
+        || streamline_installed_identity(&session, &final_manifest)? != installed_identity
+    {
+        return Err("installed identity changed during agent I/O attribution".into());
+    }
+    let capture_manifest = streamline_capture_manifest(
+        &installed_identity,
+        &gatord_version,
+        &gatord_sha256,
+        AGENT_IO_STREAMLINE_CAPTURE,
+        capture_started,
+        capture_ended,
+    );
+    fs::write(
+        output_dir.join("capture-manifest.json"),
+        format!("{}\n", serde_json::to_string_pretty(&capture_manifest)?),
+    )?;
+    fs::write(
+        output_dir.join("operations.json"),
+        format!("{}\n", serde_json::to_string_pretty(&operations)?),
+    )?;
+    let summary = json!({
+        "schema": "mister-magik-agent-io-attribution-v1",
+        "artifact_status": "passed",
+        "product_quality_status": "not-applicable-attribution-only",
+        "identity": capture_manifest,
+        "preflight": preflight,
+        "operations": operations,
+        "normalization": "whole-operation elapsed normalized by max bytes read/written or directory entries",
+        "agent_symbols": {
+            "path": "symbols/mister-magik-agent",
+            "sha256": installed_identity.agent_sha256,
+            "application_symbols_resolvable": true,
+        },
+        "streamline": {
+            "gatord_version": gatord_version,
+            "gatord_sha256": gatord_sha256,
+            "archive_sha256": archive_sha256,
+            "capture": "mister-magik.apc",
+            "archive": AGENT_IO_STREAMLINE_CAPTURE.archive_file,
+            "capture_manifest": "capture-manifest.json",
         },
     });
     fs::write(
@@ -21986,6 +22416,43 @@ mod tests {
             AGENT_OBSERVER_STREAMLINE_CAPTURE.archive_file,
             "mister-magik-agent-observer.apc.tar.gz"
         );
+    }
+
+    #[test]
+    fn agent_io_preflight_selects_largest_available_fixed_directory() {
+        let candidates = vec![
+            json!({"path": "/_Arcade", "entries": 120}),
+            json!({"path": "/games", "entries": 800}),
+            json!({"path": "/_Console", "entries": 4_000, "unavailable": "missing"}),
+        ];
+        assert_eq!(selected_agent_io_directory(&candidates), Some("/games"));
+        assert_eq!(AGENT_IO_DIRECTORY_CANDIDATES.len(), 5);
+        assert_eq!(
+            AGENT_IO_STREAMLINE_CAPTURE.archive_file,
+            "mister-magik-agent-io.apc.tar.gz"
+        );
+        assert_eq!(AGENT_IO_STREAMLINE_CAPTURE.max_duration_seconds, 180);
+    }
+
+    #[test]
+    fn agent_io_summary_normalizes_bytes_and_removes_large_payload_fields() {
+        let compact = compact_agent_io_result(
+            json!({
+                "png_hex": "001122",
+                "io_operation": {
+                    "schema": "mister-magik-agent-io-operation-v1",
+                    "elapsed_us": 1_000,
+                    "bytes_read": 1_048_576,
+                    "bytes_written": 256,
+                },
+            }),
+            "fixture",
+            1,
+            2,
+        )
+        .unwrap();
+        assert_eq!(compact["normalized_us_per_mib"], 1_000.0);
+        assert!(compact["result"].get("png_hex").is_none());
     }
 
     #[test]

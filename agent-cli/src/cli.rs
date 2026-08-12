@@ -739,6 +739,7 @@ mod tests {
             "gui-frame-attribution",
             "transition-streamline",
             "agent-observer-attribution",
+            "agent-io-attribution",
             "input-latency-lab",
             "launcher-response-streamline",
             "cold-boot",

@@ -48,6 +48,7 @@ enum BenchmarkProfile {
     GuiFrameAttribution,
     TransitionStreamline,
     AgentObserverAttribution,
+    AgentIoAttribution,
     InputLatencyLab,
     LauncherResponseStreamline,
     ColdBoot,
@@ -127,6 +128,9 @@ impl BenchmarkDevice for DeviceClient {
             }
             BenchmarkProfile::AgentObserverAttribution => {
                 device.profile_agent_observer_attribution(&output_dir)
+            }
+            BenchmarkProfile::AgentIoAttribution => {
+                device.profile_agent_io_attribution(&output_dir)
             }
             BenchmarkProfile::InputLatencyLab => device.verify_input_latency_lab(&output_dir),
             BenchmarkProfile::LauncherResponseStreamline => {
@@ -308,6 +312,15 @@ fn require_clean_installed_commit(
             BenchmarkProfile::AgentObserverAttribution,
             "agent-observer-attribution",
             "mister-magik-agent-observer-attribution-v1",
+        ),
+        BenchmarkScenario::AgentIoAttribution => execute_attribution_capture(
+            &mut device,
+            manifest,
+            output_dir,
+            reporter,
+            BenchmarkProfile::AgentIoAttribution,
+            "agent-io-attribution",
+            "mister-magik-agent-io-attribution-v1",
         ),
         BenchmarkScenario::InputLatencyLab => {
             execute_input_latency_lab(&mut device, manifest, output_dir, reporter)
@@ -706,6 +719,7 @@ fn particle_scene_lab_command(scenario: BenchmarkScenario) -> Option<&'static st
         | BenchmarkScenario::GuiFrameAttribution
         | BenchmarkScenario::TransitionStreamline
         | BenchmarkScenario::AgentObserverAttribution
+        | BenchmarkScenario::AgentIoAttribution
         | BenchmarkScenario::InputLatencyLab
         | BenchmarkScenario::LauncherResponseStreamline
         | BenchmarkScenario::NavigationTransitions
