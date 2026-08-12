@@ -7170,6 +7170,272 @@ fn wait_input_integrity_launcher(session: &Session, timeout: Duration) -> Result
     }
 }
 
+const GUI_PROFILE_REMOTE_COMPLETE: &str = "/tmp/mister-magik/gui-frame-profile.json";
+
+fn gui_profile_route_launcher_env(pmu: bool) -> Vec<(String, String)> {
+    let mut environment = vec![
+        ("MISTER_CATALOG_REFRESH".into(), "off".into()),
+        ("MISTER_LAUNCHER_START_SCREEN".into(), "settings".into()),
+        ("MISTER_GUI_FRAME_PROFILE".into(), "1".into()),
+        (
+            "MISTER_GUI_FRAME_PROFILE_COMPLETE".into(),
+            GUI_PROFILE_REMOTE_COMPLETE.into(),
+        ),
+    ];
+    if pmu {
+        environment.extend([
+            ("MISTER_GUI_FRAME_PROFILE_PMU".into(), "1".into()),
+            ("MISTER_PMU_PROFILE".into(), "1".into()),
+            ("MISTER_PMU_SAMPLE_EVERY".into(), "1".into()),
+            ("MISTER_PMU_RECORD_LIMIT".into(), "16384".into()),
+        ]);
+    }
+    environment
+}
+
+fn gui_profile_route_cleanup_command() -> String {
+    format!(
+        "set -eu; rm -f {complete}; test ! -e {complete}; test ! -e /media/fat/mister-magik/launcher.env; test ! -e /media/fat/mister-magik-dev/launcher.env; test ! -e /tmp/mister-magik/fs-fault-launcher.env; test ! -e /tmp/mister-magik/fs-fault-session; test ! -e /tmp/mister-magik/fs-fault.json; test ! -e /media/fat/mister-magik/rebuild-on-next-boot; test ! -e /media/fat/mister-magik-dev/rebuild-on-next-boot",
+        complete = sh(GUI_PROFILE_REMOTE_COMPLETE),
+    )
+}
+
+fn wait_gui_profile_snapshot(
+    config: &NativeDeviceConfig,
+    nonce: &str,
+    predicate: impl Fn(&Value) -> bool,
+    label: &str,
+) -> Result<Value> {
+    let started = Instant::now();
+    let timeout = Duration::from_secs(10);
+    loop {
+        let snapshot = launcher_automation::snapshot(config, nonce)?;
+        if predicate(&snapshot) {
+            return Ok(snapshot);
+        }
+        if started.elapsed() >= timeout {
+            return Err(format!(
+                "GUI profiling route timed out waiting for {label}; final snapshot={snapshot}"
+            )
+            .into());
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+}
+
+fn gui_profile_effective_view(snapshot: &Value) -> Option<&str> {
+    snapshot
+        .pointer("/semantic/effective_view")
+        .and_then(Value::as_str)
+}
+
+fn run_gui_frame_profile_route(
+    config: &NativeDeviceConfig,
+    session: &Session,
+    output_dir: &Path,
+    pmu: bool,
+) -> Result<Value> {
+    fs::create_dir_all(output_dir)?;
+    exec_checked(
+        session,
+        "prepare fixed GUI profiling route",
+        &gui_profile_route_cleanup_command(),
+    )?;
+    restart_launcher_with_one_shot_env(
+        session,
+        LauncherRestartOptions {
+            env_vars: gui_profile_route_launcher_env(pmu),
+            timeout_secs: 45,
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+            ..LauncherRestartOptions::default()
+        },
+    )?;
+    let status_before = read_launcher_status(session)?;
+    let main_status: Value = serde_json::from_str(
+        &remote_read(session, MAIN_STATUS_REMOTE).ok_or("Main status is missing")?,
+    )?;
+    let build_version = status_before
+        .pointer("/build/version")
+        .and_then(Value::as_str)
+        .ok_or("GUI profiling launcher status has no build version")?;
+    let source_revision = status_before
+        .pointer("/build/source_revision")
+        .and_then(Value::as_str)
+        .ok_or("GUI profiling launcher status has no source revision")?;
+    let main_generation = main_status
+        .get("main_generation")
+        .and_then(Value::as_u64)
+        .ok_or("GUI profiling Main status has no generation")?;
+    let begin =
+        launcher_automation::begin(config, build_version, source_revision, main_generation, 90)?;
+    let begin: Value = serde_json::from_str(&begin)?;
+    let nonce = begin
+        .get("nonce")
+        .and_then(Value::as_str)
+        .ok_or("GUI profiling automation has no nonce")?
+        .to_string();
+
+    let run_result = (|| -> Result<Value> {
+        let settled_settings = wait_gui_profile_snapshot(
+            config,
+            &nonce,
+            |snapshot| gui_profile_effective_view(snapshot) == Some("settings"),
+            "settled Settings",
+        )?;
+        modal_input_action(
+            config,
+            &nonce,
+            AutomationAction::Tap(AutomationButton::Home),
+        )?;
+        let settled_home = wait_gui_profile_snapshot(
+            config,
+            &nonce,
+            |snapshot| gui_profile_effective_view(snapshot) == Some("home"),
+            "Home after Settings",
+        )?;
+        let pan_right_sequence = modal_input_action(
+            config,
+            &nonce,
+            AutomationAction::Tap(AutomationButton::Right),
+        )?;
+        let pan_right = launcher_automation::snapshot(config, &nonce)?;
+        let pan_left_sequence = modal_input_action(
+            config,
+            &nonce,
+            AutomationAction::Tap(AutomationButton::Left),
+        )?;
+        let pan_left = launcher_automation::snapshot(config, &nonce)?;
+        modal_input_action(config, &nonce, AutomationAction::Tap(AutomationButton::A))?;
+        let arcade_entered = wait_gui_profile_snapshot(
+            config,
+            &nonce,
+            |snapshot| gui_profile_effective_view(snapshot) == Some("arcade"),
+            "Arcade entry",
+        )?;
+        let scroll_sequence = modal_input_action(
+            config,
+            &nonce,
+            AutomationAction::Hold {
+                button: AutomationButton::Down,
+                duration_ms: 900,
+            },
+        )?;
+        thread::sleep(Duration::from_millis(950));
+        let release_sequence = modal_input_action(config, &nonce, AutomationAction::ReleaseAll)?;
+        let settled_arcade = wait_gui_profile_snapshot(
+            config,
+            &nonce,
+            |snapshot| {
+                gui_profile_effective_view(snapshot) == Some("arcade")
+                    && matches!(
+                        snapshot
+                            .pointer("/semantic/preview_state")
+                            .and_then(Value::as_str),
+                        Some("exact" | "cached" | "empty")
+                    )
+                    && snapshot
+                        .get("presented_action_sequence")
+                        .and_then(Value::as_u64)
+                        .is_some_and(|presented| presented >= release_sequence)
+            },
+            "terminal Arcade preview",
+        )?;
+        let profile_text = wait_for_remote_text(
+            session,
+            GUI_PROFILE_REMOTE_COMPLETE,
+            Duration::from_secs(10),
+            "GUI profiling completion",
+        )?;
+        let profile: Value = serde_json::from_str(&profile_text)?;
+        validate_gui_profile_route(&profile, pmu)?;
+        get(
+            session,
+            GUI_PROFILE_REMOTE_COMPLETE,
+            &output_dir.join("profile.json"),
+        )?;
+        let status_after = read_launcher_status(session)?;
+        Ok(json!({
+            "schema": "mister-magik-gui-profile-route-v1",
+            "status": "complete",
+            "pmu_requested": pmu,
+            "actions": {
+                "pan_right_sequence": pan_right_sequence,
+                "pan_left_sequence": pan_left_sequence,
+                "scroll_sequence": scroll_sequence,
+                "release_sequence": release_sequence,
+            },
+            "settled_settings": settled_settings,
+            "settled_home": settled_home,
+            "pan_right": pan_right,
+            "pan_left": pan_left,
+            "arcade_entered": arcade_entered,
+            "settled_arcade": settled_arcade,
+            "profile": profile,
+            "status_before": status_before,
+            "status_after": status_after,
+        }))
+    })();
+    let end_result = launcher_automation::end(config, &nonce).map(|_| ());
+    match (run_result, end_result) {
+        (Ok(route), Ok(())) => Ok(route),
+        (Err(run), Ok(())) => Err(run),
+        (Ok(_), Err(end)) => Err(format!("GUI profiling automation cleanup failed: {end}").into()),
+        (Err(run), Err(end)) => {
+            Err(format!("{run}; GUI profiling automation cleanup failed: {end}").into())
+        }
+    }
+}
+
+fn wait_for_remote_text(
+    session: &Session,
+    path: &str,
+    timeout: Duration,
+    label: &str,
+) -> Result<String> {
+    let started = Instant::now();
+    loop {
+        if let Some(text) = remote_read(session, path) {
+            return Ok(text);
+        }
+        if started.elapsed() >= timeout {
+            return Err(format!("timed out waiting for {label}").into());
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+}
+
+fn validate_gui_profile_route(profile: &Value, pmu: bool) -> Result<()> {
+    if profile.get("schema").and_then(Value::as_str) != Some("mister-magik-gui-profiling-window-v1")
+        || profile.get("state").and_then(Value::as_str) != Some("complete")
+        || profile.get("pmu_requested").and_then(Value::as_bool) != Some(pmu)
+        || profile.get("pmu_valid").and_then(Value::as_bool) != Some(true)
+        || profile.get("dropped_frame_records").and_then(Value::as_u64) != Some(0)
+    {
+        return Err("GUI profiling route returned invalid window evidence".into());
+    }
+    let markers = profile
+        .get("phase_markers")
+        .and_then(Value::as_array)
+        .ok_or("GUI profiling route has no phase markers")?;
+    for phase in [
+        "settled-settings",
+        "home-pan-right",
+        "home-pan-left",
+        "arcade-scroll",
+        "settled-arcade",
+    ] {
+        for event in ["started", "presented"] {
+            if !markers.iter().any(|marker| {
+                marker.get("phase").and_then(Value::as_str) == Some(phase)
+                    && marker.get("event").and_then(Value::as_str) == Some(event)
+            }) {
+                return Err(format!("GUI profiling route is missing {phase} {event}").into());
+            }
+        }
+    }
+    Ok(())
+}
+
 fn modal_input_action(
     config: &NativeDeviceConfig,
     nonce: &str,
@@ -19903,6 +20169,72 @@ mod tests {
         assert_eq!(manifest["capture_ended_monotonic_ns"], 4_500);
         assert_eq!(manifest["capture_duration_ns"], 3_500);
         assert_eq!(manifest["capture_mode"], "system-wide-low-kernel-no-unwind");
+    }
+
+    #[test]
+    fn gui_profile_route_environment_is_fixed_and_pmu_is_independent() {
+        let control = gui_profile_route_launcher_env(false);
+        let pmu = gui_profile_route_launcher_env(true);
+        assert!(control.iter().any(|(name, value)| {
+            name == "MISTER_LAUNCHER_START_SCREEN" && value == "settings"
+        }));
+        assert!(
+            control
+                .iter()
+                .any(|(name, value)| name == "MISTER_CATALOG_REFRESH" && value == "off")
+        );
+        assert!(control.iter().all(|(name, _)| name != "MISTER_PMU_PROFILE"));
+        assert!(
+            pmu.iter()
+                .any(|(name, value)| { name == "MISTER_GUI_FRAME_PROFILE_PMU" && value == "1" })
+        );
+        assert!(
+            pmu.iter()
+                .any(|(name, value)| name == "MISTER_PMU_PROFILE" && value == "1")
+        );
+        let cleanup = gui_profile_route_cleanup_command();
+        assert!(cleanup.contains(GUI_PROFILE_REMOTE_COMPLETE));
+        for arming_path in [
+            "/media/fat/mister-magik/launcher.env",
+            "/media/fat/mister-magik-dev/launcher.env",
+            "/tmp/mister-magik/fs-fault-session",
+            "/media/fat/mister-magik/rebuild-on-next-boot",
+            "/media/fat/mister-magik-dev/rebuild-on-next-boot",
+        ] {
+            assert!(cleanup.contains(arming_path));
+        }
+    }
+
+    #[test]
+    fn gui_profile_route_requires_every_fixed_phase_marker() {
+        let phases = [
+            "settled-settings",
+            "home-pan-right",
+            "home-pan-left",
+            "arcade-scroll",
+            "settled-arcade",
+        ];
+        let markers = phases
+            .iter()
+            .flat_map(|phase| {
+                [
+                    json!({"phase": phase, "event": "started"}),
+                    json!({"phase": phase, "event": "presented"}),
+                ]
+            })
+            .collect::<Vec<_>>();
+        let passing = json!({
+            "schema": "mister-magik-gui-profiling-window-v1",
+            "state": "complete",
+            "pmu_requested": false,
+            "pmu_valid": true,
+            "dropped_frame_records": 0,
+            "phase_markers": markers,
+        });
+        validate_gui_profile_route(&passing, false).unwrap();
+        let mut missing = passing;
+        missing["phase_markers"].as_array_mut().unwrap().pop();
+        assert!(validate_gui_profile_route(&missing, false).is_err());
     }
 
     #[test]

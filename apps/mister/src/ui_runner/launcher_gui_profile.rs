@@ -7,6 +7,7 @@ use std::time::{Duration, Instant};
 
 const ENABLE_ENV: &str = "MISTER_GUI_FRAME_PROFILE";
 const COMPLETE_ENV: &str = "MISTER_GUI_FRAME_PROFILE_COMPLETE";
+const PMU_ENV: &str = "MISTER_GUI_FRAME_PROFILE_PMU";
 const PHASE_TIMEOUT: Duration = Duration::from_secs(20);
 const FRAME_LIMIT: usize = 4_096;
 
@@ -192,6 +193,8 @@ pub(super) struct GuiProfilingController {
     measurement_ended_at_us: Option<u64>,
     frames: Vec<serde_json::Value>,
     dropped_frames: u64,
+    pmu_requested: bool,
+    phase_markers: Vec<serde_json::Value>,
 }
 
 impl GuiProfilingController {
@@ -203,7 +206,13 @@ impl GuiProfilingController {
         if !enabled || completion_path.is_none() {
             return Self::dormant();
         }
-        mister_magik_perf_events::clear_process_profiles();
+        if let Some(path) = completion_path.as_deref() {
+            let _ = std::fs::remove_file(path);
+        }
+        let pmu_requested = super::launcher_env_flag(PMU_ENV);
+        if pmu_requested {
+            mister_magik_perf_events::clear_process_profiles();
+        }
         Self {
             state: GuiProfileState::Warmup,
             completion_path,
@@ -213,6 +222,8 @@ impl GuiProfilingController {
             measurement_ended_at_us: None,
             frames: Vec::with_capacity(FRAME_LIMIT),
             dropped_frames: 0,
+            pmu_requested,
+            phase_markers: Vec::with_capacity(GuiProfilePhase::ORDERED.len() * 2),
         }
     }
 
@@ -226,6 +237,8 @@ impl GuiProfilingController {
             measurement_ended_at_us: None,
             frames: Vec::new(),
             dropped_frames: 0,
+            pmu_requested: false,
+            phase_markers: Vec::new(),
         }
     }
 
@@ -240,6 +253,8 @@ impl GuiProfilingController {
             measurement_ended_at_us: None,
             frames: Vec::new(),
             dropped_frames: 0,
+            pmu_requested: false,
+            phase_markers: Vec::new(),
         }
     }
 
@@ -252,6 +267,10 @@ impl GuiProfilingController {
             self.state,
             GuiProfileState::AwaitingPresentation(_) | GuiProfileState::Measuring(_)
         )
+    }
+
+    pub(super) fn needs_presentation(&self) -> bool {
+        matches!(self.state, GuiProfileState::AwaitingPresentation(_))
     }
 
     pub(super) fn phase(&self) -> Option<GuiProfilePhase> {
@@ -285,6 +304,11 @@ impl GuiProfilingController {
             ));
         }
         self.state = GuiProfileState::AwaitingPresentation(phase);
+        self.phase_markers.push(json!({
+            "phase": phase.label(),
+            "event": "started",
+            "monotonic_us": crate::input_hub::monotonic_us(),
+        }));
         self.deadline = Some(now + PHASE_TIMEOUT);
         Ok(())
     }
@@ -303,6 +327,11 @@ impl GuiProfilingController {
         }
         self.measurement_started_at_us.get_or_insert(monotonic_us);
         self.measurement_ended_at_us = Some(monotonic_us);
+        self.phase_markers.push(json!({
+            "phase": phase.label(),
+            "event": "presented",
+            "monotonic_us": monotonic_us,
+        }));
         self.next_phase = self.next_phase.saturating_add(1);
         self.deadline = Some(now + PHASE_TIMEOUT);
         if phase == GuiProfilePhase::SettledArcade {
@@ -320,6 +349,84 @@ impl GuiProfilingController {
         self.fail("profiling route interrupted by unexpected input".into())
     }
 
+    pub(super) fn observe_route_action(
+        &mut self,
+        screen: &'static str,
+        event: crate::input_event::InputEvent,
+        now: Instant,
+    ) {
+        if !self.enabled() || event.phase != crate::input_event::InputPhase::Pressed {
+            return;
+        }
+        if event.source.kind != crate::input_event::InputSourceKind::Automation {
+            let _ = self.interrupt_input();
+            return;
+        }
+        let phase = match (screen, event.action) {
+            ("home", crate::input_event::LogicalAction::Right) => {
+                Some(GuiProfilePhase::HomePanRight)
+            }
+            ("home", crate::input_event::LogicalAction::Left) => Some(GuiProfilePhase::HomePanLeft),
+            ("arcade", crate::input_event::LogicalAction::Down) => {
+                Some(GuiProfilePhase::ArcadeScroll)
+            }
+            _ => None,
+        };
+        if let Some(phase) = phase {
+            let _ = self.request_phase(phase, now);
+        }
+    }
+
+    pub(super) fn observe_route_presentation(
+        &mut self,
+        screen: &'static str,
+        arcade_motion_active: bool,
+        terminal_preview: bool,
+        now: Instant,
+        monotonic_us: u64,
+    ) {
+        if !self.enabled() {
+            return;
+        }
+        let phase = match self.state {
+            GuiProfileState::Warmup if screen == "settings" => {
+                let _ = self.request_phase(GuiProfilePhase::SettledSettings, now);
+                Some(GuiProfilePhase::SettledSettings)
+            }
+            GuiProfileState::AwaitingPresentation(GuiProfilePhase::HomePanRight)
+                if screen == "home" =>
+            {
+                Some(GuiProfilePhase::HomePanRight)
+            }
+            GuiProfileState::AwaitingPresentation(GuiProfilePhase::HomePanLeft)
+                if screen == "home" =>
+            {
+                Some(GuiProfilePhase::HomePanLeft)
+            }
+            GuiProfileState::AwaitingPresentation(GuiProfilePhase::ArcadeScroll)
+                if screen == "arcade" && !arcade_motion_active && terminal_preview =>
+            {
+                Some(GuiProfilePhase::ArcadeScroll)
+            }
+            GuiProfileState::AwaitingPresentation(GuiProfilePhase::SettledArcade)
+                if screen == "arcade" && !arcade_motion_active && terminal_preview =>
+            {
+                Some(GuiProfilePhase::SettledArcade)
+            }
+            _ => None,
+        };
+        let Some(phase) = phase else {
+            return;
+        };
+        if self
+            .confirm_phase_presented(phase, now, monotonic_us)
+            .is_ok()
+            && phase == GuiProfilePhase::ArcadeScroll
+        {
+            let _ = self.request_phase(GuiProfilePhase::SettledArcade, now);
+        }
+    }
+
     pub(super) fn tick(&mut self, now: Instant) {
         if self.deadline.is_some_and(|deadline| now >= deadline)
             && matches!(
@@ -334,7 +441,7 @@ impl GuiProfilingController {
     }
 
     pub(super) fn span(&self, name: &'static str) -> Option<mister_magik_perf_events::SampledSpan> {
-        self.active()
+        (self.active() && self.pmu_requested)
             .then(|| mister_magik_perf_events::sampled_span(name))
             .flatten()
     }
@@ -428,18 +535,24 @@ impl GuiProfilingController {
         let ended_at_us = self.measurement_ended_at_us;
         let frames = std::mem::take(&mut self.frames);
         let dropped_frames = self.dropped_frames;
+        let pmu_requested = self.pmu_requested;
+        let phase_markers = std::mem::take(&mut self.phase_markers);
         std::thread::spawn(move || {
+            let pmu_valid = !pmu_requested
+                || (thread_profile.enabled
+                    && thread_profile.failure.is_none()
+                    && thread_profile.dropped_spans == 0
+                    && !thread_profile.records.is_empty());
             let passed = failure.is_none()
-                && thread_profile.enabled
-                && thread_profile.failure.is_none()
-                && thread_profile.dropped_spans == 0
-                && !thread_profile.records.is_empty()
+                && pmu_valid
                 && worker_profiles.dropped_profiles == 0
                 && dropped_frames == 0;
             let payload = json!({
                 "schema": "mister-magik-gui-profiling-window-v1",
                 "state": if passed { "complete" } else { "failed" },
                 "failure": failure,
+                "pmu_requested": pmu_requested,
+                "pmu_valid": pmu_valid,
                 "clock_domain": "CLOCK_MONOTONIC",
                 "measurement_started_at_us": started_at_us,
                 "measurement_ended_at_us": ended_at_us,
@@ -447,6 +560,7 @@ impl GuiProfilingController {
                 "worker_profiles": worker_profiles,
                 "frames": frames,
                 "dropped_frame_records": dropped_frames,
+                "phase_markers": phase_markers,
             });
             if let Some(parent) = path.parent() {
                 let _ = std::fs::create_dir_all(parent);
@@ -630,5 +744,39 @@ mod tests {
         assert!(!valid_volatile_profile_path(Path::new(
             "/tmp/mister-magik/../profile.json"
         )));
+    }
+
+    #[test]
+    fn route_presentations_require_terminal_arcade_preview() {
+        let now = Instant::now();
+        let mut controller = GuiProfilingController::enabled_for_test(now);
+        controller.observe_route_presentation("settings", false, true, now, 1_000);
+        assert_eq!(
+            controller.state,
+            GuiProfileState::Measuring(GuiProfilePhase::SettledSettings)
+        );
+        controller
+            .request_phase(GuiProfilePhase::HomePanRight, now)
+            .unwrap();
+        controller.observe_route_presentation("home", false, true, now, 2_000);
+        controller
+            .request_phase(GuiProfilePhase::HomePanLeft, now)
+            .unwrap();
+        controller.observe_route_presentation("home", false, true, now, 3_000);
+        controller
+            .request_phase(GuiProfilePhase::ArcadeScroll, now)
+            .unwrap();
+        controller.observe_route_presentation("arcade", false, false, now, 4_000);
+        assert_eq!(
+            controller.state,
+            GuiProfileState::AwaitingPresentation(GuiProfilePhase::ArcadeScroll)
+        );
+        controller.observe_route_presentation("arcade", false, true, now, 5_000);
+        assert_eq!(
+            controller.state,
+            GuiProfileState::AwaitingPresentation(GuiProfilePhase::SettledArcade)
+        );
+        controller.observe_route_presentation("arcade", false, true, now, 6_000);
+        assert_eq!(controller.state, GuiProfileState::Complete);
     }
 }

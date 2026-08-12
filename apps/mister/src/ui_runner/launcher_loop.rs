@@ -6867,6 +6867,9 @@ pub(super) fn run_launcher_loop(
                 incoming_input_events.push_back(event);
             }
         }
+        for event in incoming_input_events.iter().copied() {
+            gui_profiling.observe_route_action(screen_label(nav.screen), event, frame_now);
+        }
         if screensaver.active {
             while let Some(event) = incoming_input_events.pop_front() {
                 let focus = launcher_input_focus(true, true, false, false, false, false, &nav);
@@ -10589,6 +10592,19 @@ pub(super) fn run_launcher_loop(
                         pace.period_us,
                         presented_frame.main_present_drop_count.into(),
                     );
+                }
+                let terminal_preview =
+                    matches!(preview.trace_cache_state(), "exact" | "cached" | "empty")
+                        && matches!(preview.presentation_label(), "visible" | "detached");
+                gui_profiling.observe_route_presentation(
+                    screen_label(nav.screen),
+                    nav.arcade.is_scroll_active(),
+                    terminal_preview,
+                    Instant::now(),
+                    crate::input_hub::monotonic_us(),
+                );
+                if gui_profiling.needs_presentation() {
+                    request_launcher_redraw!();
                 }
                 if let Some(post) = readiness_post {
                     launcher_readiness.observe(post, lifecycle.startup_can_present_frame());
