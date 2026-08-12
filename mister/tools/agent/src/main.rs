@@ -3733,6 +3733,19 @@ mod linux {
         (changed, unverified)
     }
 
+    pub(super) fn video_diagnostics_trigger_provenance(
+        control: u16,
+        avalon: u16,
+        output: u16,
+    ) -> (bool, bool, bool) {
+        use mister_magik_video_diagnostics_contract as contract;
+        (
+            contract::control_trigger_has_valid_provenance(control),
+            contract::avalon_trigger_has_valid_provenance(avalon),
+            contract::output_trigger_has_valid_provenance(output),
+        )
+    }
+
     impl VideoDiagnosticsReadout {
         fn generations_match(&self) -> bool {
             self.control_before.generation == self.control_after.generation
@@ -3786,13 +3799,26 @@ mod linux {
                 latch_ownership_stable,
                 launcher_state_stable,
             );
+            let (
+                control_trigger_provenance_valid,
+                avalon_trigger_provenance_valid,
+                output_trigger_provenance_valid,
+            ) = video_diagnostics_trigger_provenance(
+                self.control_after.trigger,
+                self.avalon.trigger,
+                self.output.trigger,
+            );
+            let trigger_provenance_valid = control_trigger_provenance_valid
+                && avalon_trigger_provenance_valid
+                && output_trigger_provenance_valid;
             let coherent = owner_stable
                 && latch_ownership_stable == Some(true)
                 && generations_match
                 && route_epochs_match
                 && missing_domains == 0
                 && all_frozen
-                && !mailbox_overrun;
+                && !mailbox_overrun
+                && trigger_provenance_valid;
             let partial = missing_domains != 0
                 || mailbox_overrun
                 || ownership_unverified
@@ -3805,6 +3831,8 @@ mod linux {
                 "partial"
             } else if ownership_changed {
                 "control_or_clock"
+            } else if !trigger_provenance_valid {
+                "incoherent_trigger_provenance"
             } else if !coherent {
                 "unclassified"
             } else {
@@ -3846,10 +3874,12 @@ mod linux {
                     "latch_ownership_stable": latch_ownership_stable,
                     "launcher_state_stable": launcher_state_stable,
                     "ownership_check_error": ownership_check_error,
+                    "trigger_provenance_valid": trigger_provenance_valid,
                 },
                 "control": {
                     "state": video_diagnostics_state_name(self.control_after.state),
                     "trigger": self.control_after.trigger,
+                    "trigger_provenance_valid": control_trigger_provenance_valid,
                     "generation": self.control_after.generation,
                     "route_epoch": control_route_epoch,
                     "state_flags": self.control_after.words[contract::VIDEO_DIAGNOSTICS_CONTROL_STATE_FLAGS],
@@ -3870,6 +3900,7 @@ mod linux {
                 "avalon": {
                     "state": video_diagnostics_state_name(self.avalon.state),
                     "trigger": self.avalon.trigger,
+                    "trigger_provenance_valid": avalon_trigger_provenance_valid,
                     "generation": self.avalon.generation,
                     "route_epoch": avalon_route_epoch,
                     "state_flags": self.avalon.words[contract::VIDEO_DIAGNOSTICS_AVALON_STATE_FLAGS],
@@ -3883,6 +3914,7 @@ mod linux {
                 "output": {
                     "state": video_diagnostics_state_name(self.output.state),
                     "trigger": self.output.trigger,
+                    "trigger_provenance_valid": output_trigger_provenance_valid,
                     "generation": self.output.generation,
                     "route_epoch": output_route_epoch,
                     "state_flags": self.output.words[contract::VIDEO_DIAGNOSTICS_OUTPUT_STATE_FLAGS],
@@ -6325,6 +6357,20 @@ mod tests {
         assert_eq!(
             linux::video_diagnostics_ownership_state(Some(4), Some(4), None, true),
             (false, true)
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn video_diagnostics_rejects_captured_output_trigger_eight_provenance() {
+        use mister_magik_video_diagnostics_contract as contract;
+        assert_eq!(
+            linux::video_diagnostics_trigger_provenance(
+                contract::VIDEO_DIAGNOSTICS_TRIGGER_AVALON_TIMEOUT,
+                contract::VIDEO_DIAGNOSTICS_TRIGGER_NONE,
+                contract::VIDEO_DIAGNOSTICS_TRIGGER_AVALON_TIMEOUT,
+            ),
+            (true, true, false)
         );
     }
 

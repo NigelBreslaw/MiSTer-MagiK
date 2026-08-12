@@ -23,6 +23,32 @@ const LEGAL_TRIGGERS: &[u16] = &[
     VIDEO_DIAGNOSTICS_TRIGGER_FINAL_TIMING,
 ];
 
+pub fn control_trigger_has_valid_provenance(trigger: u16) -> bool {
+    LEGAL_TRIGGERS.contains(&trigger)
+}
+
+pub fn avalon_trigger_has_valid_provenance(trigger: u16) -> bool {
+    trigger == VIDEO_DIAGNOSTICS_TRIGGER_NONE
+        || matches!(
+            trigger,
+            VIDEO_DIAGNOSTICS_TRIGGER_AVALON_ADDRESS
+                | VIDEO_DIAGNOSTICS_TRIGGER_AVALON_BURST
+                | VIDEO_DIAGNOSTICS_TRIGGER_AVALON_RETURN
+                | VIDEO_DIAGNOSTICS_TRIGGER_AVALON_TIMEOUT
+                | VIDEO_DIAGNOSTICS_TRIGGER_AVALON_NO_READS
+        )
+}
+
+pub fn output_trigger_has_valid_provenance(trigger: u16) -> bool {
+    trigger == VIDEO_DIAGNOSTICS_TRIGGER_NONE
+        || matches!(
+            trigger,
+            VIDEO_DIAGNOSTICS_TRIGGER_FINAL_BLACK
+                | VIDEO_DIAGNOSTICS_TRIGGER_FINAL_WHITE
+                | VIDEO_DIAGNOSTICS_TRIGGER_FINAL_TIMING
+        )
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum VideoDiagnosticsState {
     Idle,
@@ -232,9 +258,12 @@ mod tests {
         reserved[15] = message_crc(GET_VIDEO_DIAGNOSTICS_OUTPUT, &reserved[..15]);
         assert!(decode_output(&reserved).is_err());
         reserved[1] = 0;
-        reserved[2] = VIDEO_DIAGNOSTICS_TRIGGER_AVALON_BURST;
+        reserved[2] = VIDEO_DIAGNOSTICS_TRIGGER_AVALON_TIMEOUT;
         reserved[15] = message_crc(GET_VIDEO_DIAGNOSTICS_OUTPUT, &reserved[..15]);
         assert!(decode_output(&reserved).is_ok());
+        assert!(!output_trigger_has_valid_provenance(
+            decode_output(&reserved).unwrap().trigger
+        ));
 
         reserved[2] = 0xffff;
         reserved[15] = message_crc(GET_VIDEO_DIAGNOSTICS_OUTPUT, &reserved[..15]);
@@ -267,5 +296,30 @@ mod tests {
             &words[..VIDEO_DIAGNOSTICS_CONTROL_CRC],
         );
         assert!(decode_control(&words).is_err());
+    }
+
+    #[test]
+    fn trigger_provenance_is_domain_specific() {
+        assert!(control_trigger_has_valid_provenance(
+            VIDEO_DIAGNOSTICS_TRIGGER_FINAL_BLACK
+        ));
+        assert!(avalon_trigger_has_valid_provenance(
+            VIDEO_DIAGNOSTICS_TRIGGER_NONE
+        ));
+        assert!(avalon_trigger_has_valid_provenance(
+            VIDEO_DIAGNOSTICS_TRIGGER_AVALON_TIMEOUT
+        ));
+        assert!(!avalon_trigger_has_valid_provenance(
+            VIDEO_DIAGNOSTICS_TRIGGER_FINAL_BLACK
+        ));
+        assert!(output_trigger_has_valid_provenance(
+            VIDEO_DIAGNOSTICS_TRIGGER_NONE
+        ));
+        assert!(output_trigger_has_valid_provenance(
+            VIDEO_DIAGNOSTICS_TRIGGER_FINAL_TIMING
+        ));
+        assert!(!output_trigger_has_valid_provenance(
+            VIDEO_DIAGNOSTICS_TRIGGER_AVALON_TIMEOUT
+        ));
     }
 }
