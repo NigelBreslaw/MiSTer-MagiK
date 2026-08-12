@@ -137,9 +137,7 @@ component SearchKeyboard inherits Rectangle {
 export component ArcadeListScreen inherits Rectangle {
     property <int> count: MisterBridge.active-system-count;
     property <bool> games-loading: MisterBridge.arcade-games-loading;
-    property <bool> native-static-chrome: !MisterUi.portrait-layout
-        && !MisterBridge.arcade-search-active;
-    background: native-static-chrome ? transparent : #1a1424;
+    background: #1a1424;
 
     if !MisterUi.portrait-layout : HorizontalLayout {
 
@@ -157,8 +155,9 @@ export component ArcadeListScreen inherits Rectangle {
                 y: MisterBridge.arcade-list-y * 1px;
                 width: MisterBridge.arcade-list-width * 1px;
                 height: MisterBridge.arcade-list-height * 1px;
-                background: transparent;
-                border-width: 0px;
+                background: #120d1a;
+                border-width: 1px;
+                border-color: #352848;
                 clip: true;
             }
 
@@ -194,7 +193,7 @@ export component ArcadeListScreen inherits Rectangle {
         Rectangle {
             horizontal-stretch: 1;
             vertical-stretch: 1;
-            background: root.native-static-chrome ? transparent : #000000;
+            background: #000000;
 
             if MisterBridge.arcade-search-active : Rectangle {
                 x: 0px;

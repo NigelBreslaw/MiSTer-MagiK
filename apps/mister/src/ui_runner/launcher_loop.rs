@@ -9252,16 +9252,6 @@ pub(super) fn run_launcher_loop(
         let mut full_screen_controlled_capture_rendered = false;
         let mut orientation_controlled_slint_raster_us = 0;
         let mut gui_raster_phase = GuiRasterProfilePhase::None;
-        let native_arcade_chrome_rect = (nav.screen == Screen::Arcade
-            && !nav.uses_crt_layout()
-            && !layout.is_portrait()
-            && !nav.arcade_search.is_active(&nav.arcade_filter.active)
-            && full_frame_present
-            && window.redraw_pending()
-            && !screensaver.active
-            && !startup_intro_suppress_launcher_ui
-            && !full_screen_transition_policy_before_render.snapshot_locked)
-            .then(|| layer_target.paint_hdmi_arcade_static_chrome());
         let response_raster_started_at_us = crate::input_hub::monotonic_us();
         let response_raster_started_execution = launcher_response_trace.execution_stamp();
         let raster_pmu = launcher_response_trace.input_pmu_span(
@@ -9381,10 +9371,6 @@ pub(super) fn run_launcher_loop(
                 expanded.map_or_else(DirtyRectList::new, DirtyRectList::from_one)
             };
             expanded
-        };
-        let this_rect = match (this_rect, native_arcade_chrome_rect) {
-            (Some(slint), Some(native)) => Some(slint.union(native)),
-            (slint, native) => slint.or(native),
         };
         let response_raster_completed_at_us = crate::input_hub::monotonic_us();
         let response_raster_completed_execution = launcher_response_trace.execution_stamp();
