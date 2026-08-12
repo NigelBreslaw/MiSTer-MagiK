@@ -3176,15 +3176,9 @@ fn install_experimental_fpga_transaction(
             )?;
             if let Err(first_activation) = activate_installed_menu_fpga(config, &rollback) {
                 drop(rollback);
-                delivery_reboot_wait(config).map_err(|error| {
+                one_shot_recovery_reboot_wait(config).map_err(|error| {
                     format!(
-                        "rollback activation failed ({first_activation}); bounded recovery reboot failed ({error:?})"
-                    )
-                })?;
-                let retry = connect_with(&config.connection, 10)?;
-                activate_installed_menu_fpga(config, &retry).map_err(|error| {
-                    format!(
-                        "rollback activation failed ({first_activation}); retry after bounded recovery reboot failed ({error})"
+                        "rollback activation failed ({first_activation}); one-shot recovery reboot failed ({error:?})"
                     )
                 })?;
             }
