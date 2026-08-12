@@ -4442,6 +4442,13 @@ mod linux {
         }
 
         fn cmd_capture(&mut self, cmd: u16) -> io::Result<(u16, u16)> {
+            // gp_out is synchronized into clk_sys. A bare IO_EN-low write can
+            // be missed when the next command raises IO_EN immediately, so
+            // causally acknowledge the disabled state before starting a new
+            // command. The strobe is still acknowledged while UIO is disabled,
+            // after every command parser has observed its reset condition.
+            self.disable_io();
+            self.spi_capture(0)?;
             self.enable_io();
             match self.spi_capture(cmd) {
                 Ok(res) => Ok(res),

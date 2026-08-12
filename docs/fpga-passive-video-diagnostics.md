@@ -72,6 +72,10 @@ the SSH fallback. Collection requires the agent transport, `LauncherActive`,
 active MagiK latch ownership, and stable owner epoch, launcher state, and latch
 ownership across the capture. Otherwise the bundle records the evidence as
 unavailable or incoherent rather than issuing an unowned FPGA transaction.
+Before each UIO command, the agent lowers IO enable and completes an
+acknowledged strobe while it remains disabled. That acknowledgement proves the
+disabled state crossed the HPS-to-`clk_sys` synchronizer and reset the FPGA
+command parser before the next opcode is raised.
 
 The lock-only classifications are:
 
