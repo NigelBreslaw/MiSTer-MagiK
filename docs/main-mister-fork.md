@@ -280,9 +280,11 @@ has been activated.
 The manifest is activated last. The deploy script never writes root
 `/media/fat/menu.rbf`, which remains owned by `update_all`.
 That stock path and its compatibility redirect must not be used to activate or
-verify an experimental MagiK RBF. The typed transaction uses
-`mister_magik_reload_main`, whose implementation passes the layout-selected
-`magik_latch_menu_path()` directly to the replacement Dev Main.
+verify an experimental MagiK RBF. The typed transaction sends Main-owned
+`load_core` with the exact layout-selected `magik_latch_menu_path()`. The
+`mister_magik_reload_main` command only replaces Dev Main; its absolute RBF
+argument is not handled by the startup auto-loader and therefore is not FPGA
+activation evidence.
 
 ## Sequential Release Process
 

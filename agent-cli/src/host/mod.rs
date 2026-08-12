@@ -2853,7 +2853,6 @@ const EXPERIMENTAL_FPGA_METADATA_REMOTE: &str =
     "/media/fat/mister-magik-dev/fpga/menu-magik-vblank-latch.metadata.txt";
 const EXPERIMENTAL_FPGA_TRANSACTION_REMOTE: &str =
     "/media/fat/mister-magik-dev/experimental-fpga.delivery-state";
-const EXPERIMENTAL_FPGA_RELOAD_COMMAND: &str = "mister_magik_reload_main";
 
 fn unique_field(text: &str, name: &str) -> Result<String> {
     let prefix = format!("{name}=");
@@ -3029,7 +3028,7 @@ fn activate_installed_menu_fpga(config: &NativeDeviceConfig, session: &Session) 
     exec_checked(
         session,
         "experimental FPGA Main-owned activation",
-        &acknowledged_main_command(EXPERIMENTAL_FPGA_RELOAD_COMMAND),
+        &acknowledged_main_command(&format!("load_core {EXPERIMENTAL_FPGA_RBF_REMOTE}")),
     )?;
     wait_launcher_ready_after(
         session,
@@ -24662,12 +24661,11 @@ H: Handlers=event3 js0"#
     }
 
     #[test]
-    fn experimental_fpga_activation_uses_only_the_explicit_dev_reload() {
-        let command = acknowledged_main_command(EXPERIMENTAL_FPGA_RELOAD_COMMAND);
-        assert!(command.contains("mister_magik_reload_main"));
-        assert!(!command.contains("load_core"));
+    fn experimental_fpga_activation_loads_the_exact_installed_dev_rbf() {
+        let command =
+            acknowledged_main_command(&format!("load_core {EXPERIMENTAL_FPGA_RBF_REMOTE}"));
+        assert!(command.contains(&format!("load_core {EXPERIMENTAL_FPGA_RBF_REMOTE}")));
         assert!(!command.contains("/media/fat/menu.rbf"));
-        assert!(!command.contains(EXPERIMENTAL_FPGA_RBF_REMOTE));
         assert!(!command.contains("rbf_load"));
     }
 

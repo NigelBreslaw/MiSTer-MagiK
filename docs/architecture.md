@@ -166,8 +166,9 @@ For compatibility, game returns and `load_core menu.rbf` may be redirected by
 an activation or identity-proof interface: a missing, malformed, duplicate,
 mixed-version, or hash-mismatched manifest legitimately falls back to stock
 Menu. Typed delivery and experimental FPGA transactions must instead use the
-explicit `mister_magik_reload_main` command, which restarts Dev Main with the
-layout-selected latch RBF path.
+Main-owned `load_core` command with the exact layout-selected latch RBF path.
+`mister_magik_reload_main` is a Main executable replacement operation, not an
+FPGA activation or identity proof.
 
 Each manifest binds its layout's fixed installed paths, SHA-256 hashes, Main/MagiK/Menu source
 revisions, and the framebuffer platform-contract hash for Main, the Rust
@@ -721,10 +722,11 @@ mister_magik_exit_to_menu
 mister_magik_reload_main
 ```
 
-Older fifo `load_core` flows may appear in history. Current work must use the
-explicit fork command surface when operating under `MiSTer_MagiK`. In
-particular, `/media/fat/menu.rbf` is never evidence that the MagiK latch RBF was
-configured.
+Current work must use the explicit fork command surface when operating under
+`MiSTer_MagiK`. An FPGA transaction uses `load_core` only with the exact
+layout-selected MagiK RBF path. In particular, `/media/fat/menu.rbf` is never
+evidence that the MagiK latch RBF was configured, and
+`mister_magik_reload_main` alone proves only Main replacement.
 
 Never use external `rbf_load` from Slint; that path has historically left the
 display without valid scan-out.

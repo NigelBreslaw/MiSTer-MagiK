@@ -106,11 +106,12 @@ those trees are part of the task.
   `scripts/agent device fpga install-experimental` transaction. Never copy a
   local RBF to the device directly. Local artifacts are not release-qualified;
   production and release delivery still require the GitHub platform workflow.
-  Experimental activation must use Main's explicit `mister_magik_reload_main`
-  command, which restarts Dev Main with its manifest-selected latch RBF. Never
-  use root `/media/fat/menu.rbf` or `load_core menu.rbf` to activate or verify
-  an experimental RBF; that path is stock-owned compatibility routing and may
-  legitimately fall back to stock Menu.
+  Experimental activation must use Main's `load_core` command with the exact
+  manifest-selected Dev latch RBF path. Never use root `/media/fat/menu.rbf` or
+  `load_core menu.rbf` to activate or verify an experimental RBF; that path is
+  stock-owned compatibility routing and may legitimately fall back to stock
+  Menu. `mister_magik_reload_main` restarts Dev Main but does not itself prove
+  that a replacement RBF was configured.
 - Enable `.githooks/pre-commit` with
   `git config core.hooksPath .githooks`.
 - Treat `private/magik-assets` and `private/magik-cloud` as their own

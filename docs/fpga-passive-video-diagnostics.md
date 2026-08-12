@@ -109,10 +109,11 @@ the attended rollback-capable experimental FPGA transaction. It is not release
 qualified. Production publication still requires the matched GitHub platform
 workflow and normal release qualification.
 
-The transaction activates the installed Dev latch RBF only through Main's
-explicit `mister_magik_reload_main` command. Root `/media/fat/menu.rbf` is the
-stock `update_all` artifact; neither that pathname nor its compatibility
-`load_core` redirect is valid activation evidence for an experimental RBF.
+The transaction activates the installed Dev latch RBF only through Main-owned
+`load_core` with the exact Dev manifest path. Root `/media/fat/menu.rbf` is the
+stock `update_all` artifact; neither that pathname, its compatibility redirect,
+nor a `mister_magik_reload_main` process replacement is valid activation
+evidence for an experimental RBF.
 
 Device acceptance must exercise the new RBF's v2 record, an older qualified
 schema-4 RBF's unchanged v1 fallback, and the SSH unavailable path. Each test
