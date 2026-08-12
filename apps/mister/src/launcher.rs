@@ -4782,7 +4782,10 @@ fn write_magik_command_response_with_lock(
         .map_err(|error| format!("failed to open {CMD_REPLY_FIFO}: {error}"))?;
     let mut discard = [0u8; 256];
     while reply.read(&mut discard).is_ok_and(|count| count > 0) {}
+    let fifo_pmu = mister_magik_perf_events::sampled_span("launch.fifo-request");
     write_mister_command_nonblocking(cmd)?;
+    drop(fifo_pmu);
+    let _acknowledgement_pmu = mister_magik_perf_events::sampled_span("launch.acknowledgement");
     let mut bytes = Vec::with_capacity(128);
     let mut heartbeat = main_heartbeat().unwrap_or(0);
     let mut heartbeat_seen = Instant::now();

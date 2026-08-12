@@ -162,6 +162,7 @@ fn extract_archive_member(
     member: &mister_magik_catalog::archive_member::ArchiveMemberRef,
     stage_dir: &Path,
 ) -> Result<PathBuf, LaunchPreparationError> {
+    let _pmu = mister_magik_perf_events::sampled_span("launch.archive-extraction");
     if member.uncompressed_size > MAX_ARCHIVE_MEMBER_BYTES
         || member.compressed_size > MAX_ARCHIVE_MEMBER_BYTES
     {

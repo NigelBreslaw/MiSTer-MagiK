@@ -9,6 +9,8 @@ use std::thread;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const DEFAULT_LAUNCH_HANDOFF_BENCH_DELAY: Duration = Duration::from_millis(750);
+const PMU_CAPSULE_CONSTRUCTION: &str = "launch.return-capsule-construction";
+const PMU_LAUNCH_PREPARATION: &str = "launch.preparation";
 
 #[derive(Debug)]
 struct LaunchWorkerResult {
@@ -305,6 +307,7 @@ impl LaunchHandoffSession {
         let return_catalog = return_state.as_ref().and_then(|state| {
             let durable_catalog_fingerprint = durable_catalog_fingerprint?;
             let collection_id = state.collection_id()?;
+            let _pmu = mister_magik_perf_events::sampled_span(PMU_CAPSULE_CONSTRUCTION);
             match return_catalog_capsule::prepare_return_catalog_capsule(
                 catalog,
                 collection_id,
@@ -504,7 +507,9 @@ fn spawn_launch_worker(request: LaunchWorkerRequest) -> mpsc::Receiver<LaunchWor
         .name("launch-handoff".to_string())
         .spawn(move || {
             let prep_started = Instant::now();
+            let prep_pmu = mister_magik_perf_events::sampled_span(PMU_LAUNCH_PREPARATION);
             let prepared = crate::launch_preparation::prepare_launch_target(&request.launch_target);
+            drop(prep_pmu);
             let prep_us = prep_started.elapsed().as_micros() as u64;
             let result = match prepared {
                 Ok(launch_target) if request.bench_iteration.is_some() => {
@@ -548,6 +553,7 @@ fn spawn_launch_worker(request: LaunchWorkerRequest) -> mpsc::Receiver<LaunchWor
             if result.result.is_err() {
                 crate::launch_preparation::cleanup_archive_launch_staging();
             }
+            mister_magik_perf_events::submit_thread_profile("launch-handoff-worker");
             let _ = tx.send(result);
         })
         .expect("spawn launch-handoff");
@@ -593,6 +599,17 @@ mod tests {
         launch_handoff_test_lock()
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    #[test]
+    fn launch_profile_phase_ownership_keeps_ui_and_worker_work_separate() {
+        assert_eq!(
+            PMU_CAPSULE_CONSTRUCTION,
+            "launch.return-capsule-construction"
+        );
+        assert_eq!(PMU_LAUNCH_PREPARATION, "launch.preparation");
+        assert!(PMU_CAPSULE_CONSTRUCTION.starts_with("launch.return-capsule"));
+        assert!(!PMU_LAUNCH_PREPARATION.starts_with("launch.return-capsule"));
     }
 
     #[test]

@@ -335,6 +335,7 @@ impl PreparedReturnCatalogCapsule {
 }
 
 pub fn save_return_catalog_capsule(capsule: &PreparedReturnCatalogCapsule) -> Result<(), String> {
+    let _pmu = mister_magik_perf_events::sampled_span("launch.return-capsule-save");
     save_return_catalog_capsule_at(Path::new(RETURN_CATALOG_CAPSULE_PATH), capsule)
 }
 
@@ -342,7 +343,9 @@ fn save_return_catalog_capsule_at(
     path: &Path,
     capsule: &PreparedReturnCatalogCapsule,
 ) -> Result<(), String> {
+    let encode_pmu = mister_magik_perf_events::sampled_span("launch.return-capsule-encode");
     let bytes = capsule.encode()?;
+    drop(encode_pmu);
     let parent = path
         .parent()
         .ok_or_else(|| format!("return capsule path has no parent: {}", path.display()))?;
