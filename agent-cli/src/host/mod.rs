@@ -34,8 +34,9 @@ mod startup_particles;
 pub(crate) use startup_particles::SceneLabRequest;
 
 use agent_client::{
-    AGENT_PORT, AgentEndpoint, agent_request, agent_request_at, agent_request_with_liveness,
-    agent_telemetry_for_duration, agent_telemetry_for_duration_at_cadence,
+    AGENT_PORT, AgentEndpoint, agent_framebuffer_stream_for_duration, agent_request,
+    agent_request_at, agent_request_with_liveness, agent_telemetry_for_duration,
+    agent_telemetry_for_duration_at_cadence, agent_telemetry_for_duration_with_mode,
     agent_telemetry_until_screensaver_profile_complete, bootstrap_agent_with,
 };
 use platform_deploy::*;
@@ -646,6 +647,15 @@ impl NativeDevice {
         output_dir: &Path,
     ) -> std::result::Result<String, DeviceFailure> {
         self.benchmark_profile(|config| profile_installed_transition_streamline(config, output_dir))
+    }
+
+    pub(crate) fn profile_agent_observer_attribution(
+        &mut self,
+        output_dir: &Path,
+    ) -> std::result::Result<String, DeviceFailure> {
+        self.benchmark_profile(|config| {
+            profile_installed_agent_observer_attribution(config, output_dir)
+        })
     }
 
     pub(crate) fn verify_search_ui(
@@ -8431,6 +8441,13 @@ const LAUNCH_RETURN_STREAMLINE_CAPTURE: SystemWideStreamlineCaptureSpec =
         max_duration_seconds: 180,
     };
 
+const AGENT_OBSERVER_STREAMLINE_CAPTURE: SystemWideStreamlineCaptureSpec =
+    SystemWideStreamlineCaptureSpec {
+        label: "agent observer attribution Streamline",
+        archive_file: "mister-magik-agent-observer.apc.tar.gz",
+        max_duration_seconds: 180,
+    };
+
 struct SystemWideStreamlineCapture<'a> {
     session: &'a Session,
     connection: ConnectionConfig,
@@ -9327,6 +9344,382 @@ fn profile_installed_transition_streamline(
             "capture": "mister-magik.apc",
             "archive": TRANSITION_STREAMLINE_CAPTURE.archive_file,
             "capture_manifest": "capture-manifest.json",
+        },
+    });
+    fs::write(
+        output_dir.join("summary.json"),
+        format!("{}\n", serde_json::to_string_pretty(&summary)?),
+    )?;
+    serde_json::to_string(&summary).map_err(Into::into)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum AgentObserverArm {
+    None,
+    Telemetry1000Off,
+    Telemetry1000Process,
+    Telemetry100Off,
+    Telemetry100Process,
+    FramebufferAdaptive,
+    FramebufferFull,
+}
+
+impl AgentObserverArm {
+    const ALL: [Self; 7] = [
+        Self::None,
+        Self::Telemetry1000Off,
+        Self::Telemetry1000Process,
+        Self::Telemetry100Off,
+        Self::Telemetry100Process,
+        Self::FramebufferAdaptive,
+        Self::FramebufferFull,
+    ];
+
+    const fn label(self) -> &'static str {
+        match self {
+            Self::None => "no-observer",
+            Self::Telemetry1000Off => "telemetry-1000ms-off",
+            Self::Telemetry1000Process => "telemetry-1000ms-process",
+            Self::Telemetry100Off => "telemetry-100ms-off",
+            Self::Telemetry100Process => "telemetry-100ms-process",
+            Self::FramebufferAdaptive => "framebuffer-adaptive",
+            Self::FramebufferFull => "framebuffer-full",
+        }
+    }
+
+    const fn telemetry(self) -> Option<(u64, &'static str)> {
+        match self {
+            Self::Telemetry1000Off => Some((1_000, "off")),
+            Self::Telemetry1000Process => Some((1_000, "process")),
+            Self::Telemetry100Off => Some((100, "off")),
+            Self::Telemetry100Process => Some((100, "process")),
+            _ => None,
+        }
+    }
+
+    const fn framebuffer_scale(self) -> Option<&'static str> {
+        match self {
+            Self::FramebufferAdaptive => Some("adaptive"),
+            Self::FramebufferFull => Some("full"),
+            _ => None,
+        }
+    }
+}
+
+fn agent_observer_launcher_env(arm: AgentObserverArm) -> Vec<(String, String)> {
+    let mut environment = vec![
+        ("MISTER_CATALOG_REFRESH".into(), "off".into()),
+        ("MISTER_LAUNCHER_START_SCREEN".into(), "home".into()),
+    ];
+    if let Some(scale) = arm.framebuffer_scale() {
+        environment.push(("MISTER_FRAMEBUFFER_STREAM_SCALE".into(), scale.into()));
+    }
+    environment
+}
+
+fn agent_observer_cost(observer: &Value) -> Value {
+    if let Some(samples) = observer.get("samples").and_then(Value::as_array) {
+        let phase_sum = |name: &str| {
+            samples
+                .iter()
+                .filter_map(|sample| sample.pointer(&format!("/observer/phases_us/{name}")))
+                .filter_map(Value::as_u64)
+                .sum::<u64>()
+        };
+        let agent_wall_us = [
+            "process_discovery",
+            "proc_parsing",
+            "cpu_read",
+            "network_read",
+            "disk_read",
+            "memory_read",
+            "storage_read",
+            "status_parsing",
+            "lease_publication",
+            "fpga_telemetry",
+            "json_assembly",
+            "previous_json_serialization",
+            "previous_socket_write",
+        ]
+        .iter()
+        .map(|phase| phase_sum(phase))
+        .sum::<u64>();
+        return json!({
+            "kind": "telemetry",
+            "samples": samples.len(),
+            "agent_wall_us": agent_wall_us,
+            "process_discovery_us": phase_sum("process_discovery"),
+            "proc_parsing_us": phase_sum("proc_parsing"),
+            "fpga_telemetry_us": phase_sum("fpga_telemetry"),
+            "socket_write_us": phase_sum("previous_socket_write"),
+            "agent_cpu_us": Value::Null,
+            "cpu_attribution": "system-wide Streamline matrix",
+        });
+    }
+    if observer.get("bytes").and_then(Value::as_u64).is_some() {
+        return json!({
+            "kind": "framebuffer-stream",
+            "agent_wall_us": observer["elapsed_ms"].as_u64().unwrap_or(0).saturating_mul(1_000),
+            "agent_cpu_us": Value::Null,
+            "bytes": observer["bytes"],
+            "reads": observer["reads"],
+            "cpu_attribution": "system-wide Streamline matrix",
+        });
+    }
+    json!({
+        "kind": "none",
+        "agent_wall_us": 0,
+        "agent_cpu_us": 0,
+    })
+}
+
+fn run_agent_observer_home_pan(
+    config: &NativeDeviceConfig,
+    session: &Session,
+    arm: AgentObserverArm,
+) -> Result<Value> {
+    restart_launcher_with_one_shot_env(
+        session,
+        LauncherRestartOptions {
+            env_vars: agent_observer_launcher_env(arm),
+            timeout_secs: 45,
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+            ..LauncherRestartOptions::default()
+        },
+    )?;
+    let status = read_launcher_status(session)?;
+    let main_status: Value = serde_json::from_str(
+        &remote_read(session, MAIN_STATUS_REMOTE).ok_or("Main status is missing")?,
+    )?;
+    let begin = launcher_automation::begin(
+        config,
+        status["build"]["version"]
+            .as_str()
+            .ok_or("observer route has no build version")?,
+        status["build"]["source_revision"]
+            .as_str()
+            .ok_or("observer route has no source revision")?,
+        main_status["main_generation"]
+            .as_u64()
+            .ok_or("observer route has no Main generation")?,
+        30,
+    )?;
+    let begin: Value = serde_json::from_str(&begin)?;
+    let nonce = begin["nonce"]
+        .as_str()
+        .ok_or("observer route has no automation nonce")?
+        .to_owned();
+    let route_result = (|| -> Result<Value> {
+        let settled = wait_gui_profile_snapshot(
+            config,
+            &nonce,
+            |snapshot| gui_profile_effective_view(snapshot) == Some("home"),
+            "observer Home start",
+        )?;
+        let endpoint = config.agent()?.clone();
+        let observer = if let Some((cadence, analytics)) = arm.telemetry() {
+            Some(thread::spawn(move || {
+                agent_telemetry_for_duration_with_mode(
+                    &endpoint,
+                    Duration::from_secs(3),
+                    cadence,
+                    analytics,
+                )
+                .map(|samples| json!({"samples": samples}))
+                .map_err(|error| error.to_string())
+            }))
+        } else if arm.framebuffer_scale().is_some() {
+            Some(thread::spawn(move || {
+                agent_framebuffer_stream_for_duration(&endpoint, Duration::from_secs(3))
+                    .map_err(|error| error.to_string())
+            }))
+        } else {
+            None
+        };
+        if observer.is_some() {
+            thread::sleep(Duration::from_millis(250));
+        }
+        let status_before = read_launcher_status(session)?;
+        let route_started = Instant::now();
+        let right_started = Instant::now();
+        let right_sequence = modal_input_action(
+            config,
+            &nonce,
+            AutomationAction::Tap(AutomationButton::Right),
+        )?;
+        let right_us = right_started.elapsed().as_micros() as u64;
+        let left_started = Instant::now();
+        let left_sequence = modal_input_action(
+            config,
+            &nonce,
+            AutomationAction::Tap(AutomationButton::Left),
+        )?;
+        let left_us = left_started.elapsed().as_micros() as u64;
+        let route_us = route_started.elapsed().as_micros() as u64;
+        let status_after = read_launcher_status(session)?;
+        let observer = observer
+            .map(|handle| {
+                handle
+                    .join()
+                    .map_err(|_| "agent observer thread panicked".to_string())?
+            })
+            .transpose()
+            .map_err(|error| error.to_string())?
+            .unwrap_or(Value::Null);
+        let agent_cost = agent_observer_cost(&observer);
+        let latch_before = status_before["latch_drop_count"].as_u64().unwrap_or(0);
+        let latch_after = status_after["latch_drop_count"]
+            .as_u64()
+            .unwrap_or(latch_before);
+        Ok(json!({
+            "arm": arm.label(),
+            "status": "complete",
+            "workload": "production Home pan right then left",
+            "settled": settled,
+            "right_sequence": right_sequence,
+            "left_sequence": left_sequence,
+            "right_present_us": right_us,
+            "left_present_us": left_us,
+            "route_us": route_us,
+            "latch_drop_delta": latch_after.saturating_sub(latch_before),
+            "observer": observer,
+            "agent_cost": agent_cost,
+            "status_before": status_before,
+            "status_after": status_after,
+        }))
+    })();
+    let end_result = launcher_automation::end(config, &nonce).map(|_| ());
+    let restore_result = launcher_restart(
+        session,
+        &LauncherRestartOptions {
+            clear_env: true,
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+            timeout_secs: 45,
+            ..LauncherRestartOptions::default()
+        },
+    );
+    match (route_result, end_result, restore_result) {
+        (Ok(route), Ok(()), Ok(())) => Ok(route),
+        (route, end, restore) => Err(format!(
+            "agent observer arm {} failed: route={:?}; automation_end={:?}; launcher_restore={:?}",
+            arm.label(),
+            route.err(),
+            end.err(),
+            restore.err(),
+        )
+        .into()),
+    }
+}
+
+fn run_agent_observer_matrix(
+    config: &NativeDeviceConfig,
+    session: &Session,
+    output_dir: &Path,
+) -> Result<Vec<Value>> {
+    fs::create_dir_all(output_dir)?;
+    let mut routes = Vec::with_capacity(AgentObserverArm::ALL.len());
+    for arm in AgentObserverArm::ALL {
+        let route = run_agent_observer_home_pan(config, session, arm)?;
+        fs::write(
+            output_dir.join(format!("{}.json", arm.label())),
+            format!("{}\n", serde_json::to_string_pretty(&route)?),
+        )?;
+        routes.push(route);
+    }
+    Ok(routes)
+}
+
+fn profile_installed_agent_observer_attribution(
+    config: &NativeDeviceConfig,
+    output_dir: &Path,
+) -> Result<String> {
+    let gatord = streamline_gatord_path(env::var_os("MISTER_GATORD_PATH"))?;
+    let gatord_sha256 = file_sha256(gatord.clone())?;
+    fs::create_dir_all(output_dir)?;
+    let session = connect_with(&config.connection, 10)?;
+    let manifest = remote_read(&session, LOCAL_MAIN_MANIFEST_REMOTE)
+        .ok_or("development manifest is unavailable before agent observer attribution")?;
+    let installed_identity = streamline_installed_identity(&session, &manifest)?;
+    let timing = run_agent_observer_matrix(config, &session, &output_dir.join("timing"))?;
+    let streamline_dir = output_dir.join("streamline");
+    let capture = SystemWideStreamlineCapture::new(
+        &session,
+        &config.connection,
+        &streamline_dir,
+        AGENT_OBSERVER_STREAMLINE_CAPTURE,
+    );
+    fs::create_dir_all(&streamline_dir)?;
+    let gatord_version = capture.prepare(&gatord)?;
+    let capture_thread = capture.start();
+    let matrix_result = (|| -> Result<(Vec<Value>, u64, u64)> {
+        capture.wait_ready(Duration::from_secs(10))?;
+        let started = capture.monotonic_ns("agent observer capture start")?;
+        let routes = run_agent_observer_matrix(config, &session, &streamline_dir.join("matrix"))?;
+        let ended = capture.monotonic_ns("agent observer capture end")?;
+        Ok((routes, started, ended))
+    })();
+    let capture_result = capture.stop(capture_thread);
+    capture.retain_log()?;
+    let package_result = capture_result.and_then(|()| capture.package_extract());
+    let cleanup_result = capture.cleanup();
+    let ((streamline_routes, capture_started, capture_ended), archive_sha256) =
+        match (matrix_result, package_result, cleanup_result) {
+            (Ok(matrix), Ok(archive), Ok(())) => (matrix, archive),
+            (matrix, package, cleanup) => {
+                return Err(format!(
+                "agent observer Streamline matrix failed: matrix={:?}; package={:?}; cleanup={:?}",
+                matrix.err(), package.err(), cleanup.err()
+            )
+            .into());
+            }
+        };
+    let final_manifest = remote_read(&session, LOCAL_MAIN_MANIFEST_REMOTE)
+        .ok_or("development manifest is unavailable after agent observer attribution")?;
+    if final_manifest != manifest
+        || streamline_installed_identity(&session, &final_manifest)? != installed_identity
+    {
+        return Err("installed identity changed during agent observer attribution".into());
+    }
+    let capture_manifest = streamline_capture_manifest(
+        &installed_identity,
+        &gatord_version,
+        &gatord_sha256,
+        AGENT_OBSERVER_STREAMLINE_CAPTURE,
+        capture_started,
+        capture_ended,
+    );
+    fs::write(
+        streamline_dir.join("capture-manifest.json"),
+        format!("{}\n", serde_json::to_string_pretty(&capture_manifest)?),
+    )?;
+    let control = &timing[0];
+    let observer_deltas = timing
+        .iter()
+        .map(|route| json!({
+            "arm": route["arm"],
+            "right_present_delta_us": signed_measurement_delta(route["right_present_us"].as_u64(), control["right_present_us"].as_u64()),
+            "left_present_delta_us": signed_measurement_delta(route["left_present_us"].as_u64(), control["left_present_us"].as_u64()),
+            "route_delta_us": signed_measurement_delta(route["route_us"].as_u64(), control["route_us"].as_u64()),
+            "agent_cost": route["agent_cost"],
+            "gui_latch_drop_delta": route["latch_drop_delta"],
+        }))
+        .collect::<Vec<_>>();
+    let summary = json!({
+        "schema": "mister-magik-agent-observer-attribution-v1",
+        "artifact_status": "passed",
+        "product_quality_status": if control["latch_drop_delta"].as_u64() == Some(0) { "passed" } else { "failed" },
+        "performance_authority": "unprofiled no-observer Home-pan arm",
+        "identity": capture_manifest,
+        "timing_arms": timing,
+        "observer_deltas": observer_deltas,
+        "streamline_matrix": streamline_routes,
+        "streamline": {
+            "gatord_version": gatord_version,
+            "gatord_sha256": gatord_sha256,
+            "archive_sha256": archive_sha256,
+            "capture": "streamline/mister-magik.apc",
+            "archive": format!("streamline/{}", AGENT_OBSERVER_STREAMLINE_CAPTURE.archive_file),
+            "capture_manifest": "streamline/capture-manifest.json",
         },
     });
     fs::write(
@@ -21564,6 +21957,35 @@ mod tests {
             "mister-magik-launch-return-attribution.apc.tar.gz"
         );
         assert_eq!(LAUNCH_RETURN_STREAMLINE_CAPTURE.max_duration_seconds, 180);
+    }
+
+    #[test]
+    fn agent_observer_matrix_is_fixed_and_stream_scales_are_isolated() {
+        assert_eq!(AgentObserverArm::ALL.len(), 7);
+        let adaptive = agent_observer_launcher_env(AgentObserverArm::FramebufferAdaptive);
+        let full = agent_observer_launcher_env(AgentObserverArm::FramebufferFull);
+        let telemetry = agent_observer_launcher_env(AgentObserverArm::Telemetry100Process);
+        assert!(adaptive.iter().any(|(name, value)| {
+            name == "MISTER_FRAMEBUFFER_STREAM_SCALE" && value == "adaptive"
+        }));
+        assert!(
+            full.iter().any(|(name, value)| {
+                name == "MISTER_FRAMEBUFFER_STREAM_SCALE" && value == "full"
+            })
+        );
+        assert!(
+            telemetry
+                .iter()
+                .all(|(name, _)| name != "MISTER_FRAMEBUFFER_STREAM_SCALE")
+        );
+        assert_eq!(
+            AgentObserverArm::Telemetry100Process.telemetry(),
+            Some((100, "process"))
+        );
+        assert_eq!(
+            AGENT_OBSERVER_STREAMLINE_CAPTURE.archive_file,
+            "mister-magik-agent-observer.apc.tar.gz"
+        );
     }
 
     #[test]

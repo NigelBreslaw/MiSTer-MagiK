@@ -644,6 +644,18 @@ pub(crate) fn agent_telemetry_for_duration_at_cadence(
     duration: Duration,
     cadence_ms: u64,
 ) -> Result<Vec<Value>> {
+    agent_telemetry_for_duration_with_mode(endpoint, duration, cadence_ms, "process")
+}
+
+pub(crate) fn agent_telemetry_for_duration_with_mode(
+    endpoint: &AgentEndpoint,
+    duration: Duration,
+    cadence_ms: u64,
+    analytics_mode: &str,
+) -> Result<Vec<Value>> {
+    if !matches!(analytics_mode, "off" | "process") {
+        return Err("observer attribution analytics mode must be off or process".into());
+    }
     let addr = format!("{}:{AGENT_PORT}", endpoint.host)
         .to_socket_addrs()?
         .next()
@@ -652,7 +664,7 @@ pub(crate) fn agent_telemetry_for_duration_at_cadence(
         &endpoint.token,
         1,
         "device_telemetry_stream_v2",
-        json!({"analytics_mode": "process", "cadence_ms": cadence_ms}),
+        json!({"analytics_mode": analytics_mode, "cadence_ms": cadence_ms}),
     );
     let started = Instant::now();
     let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(3))?;
@@ -686,6 +698,51 @@ pub(crate) fn agent_telemetry_for_duration_at_cadence(
         return Err("bounded device telemetry collection produced no samples".into());
     }
     Ok(samples)
+}
+
+pub(crate) fn agent_framebuffer_stream_for_duration(
+    endpoint: &AgentEndpoint,
+    duration: Duration,
+) -> Result<Value> {
+    let addr = format!("{}:{AGENT_PORT}", endpoint.host)
+        .to_socket_addrs()?
+        .next()
+        .ok_or("could not resolve MiSTer agent host")?;
+    let request = agent_protocol::request(&endpoint.token, 1, "framebuffer_stream_v1", json!({}));
+    let started = Instant::now();
+    let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(3))?;
+    stream.set_read_timeout(Some(Duration::from_millis(500)))?;
+    stream.set_write_timeout(Some(Duration::from_secs(3)))?;
+    writeln!(stream, "{request}")?;
+    stream.flush()?;
+    let mut reader = BufReader::new(stream);
+    let mut line = String::new();
+    reader.read_line(&mut line)?;
+    let handshake = parse_agent_response_line(line, started)?;
+    let mut bytes = 0_u64;
+    let mut reads = 0_u64;
+    let mut buffer = [0_u8; 64 * 1024];
+    while started.elapsed() < duration {
+        match reader.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(count) => {
+                bytes = bytes.saturating_add(count as u64);
+                reads = reads.saturating_add(1);
+            }
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Ok(json!({
+        "handshake": handshake.response,
+        "elapsed_ms": started.elapsed().as_millis() as u64,
+        "bytes": bytes,
+        "reads": reads,
+    }))
 }
 
 fn parse_device_telemetry_sample(line: &str) -> Result<Value> {

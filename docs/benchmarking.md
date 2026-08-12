@@ -35,6 +35,7 @@ Supported scenarios:
 - `gui-frame-attribution`
 - `system-entry-critical-streamline`
 - `transition-streamline`
+- `agent-observer-attribution`
 - `launcher-response-streamline`
 - `input-latency-lab`
 - `particles`
@@ -276,6 +277,14 @@ hidden-slot copy, post, and confirmation dimensions. A complete identity-bound
 capture remains a valid attribution artifact even when observer overhead makes
 an existing product gate fail; the unprofiled scenarios above remain cadence
 authority.
+
+`agent-observer-attribution` runs the same production Home pan right/left for
+no observer; telemetry at 1000 ms and 100 ms with analytics off and process;
+and adaptive and full framebuffer streams. It repeats the complete seven-arm
+matrix inside one system-wide capture. The v1 summary separates Home
+presentation deltas and latch health from agent phase wall cost, transport
+volume, and Streamline-owned CPU attribution. Every arm owns a fresh launcher
+and restores the normal launcher before the next arm.
 
 New benchmarks must add a named registry entry and a fixed typed device
 request. They may not expose arbitrary commands, duration knobs, remote paths,
