@@ -10072,7 +10072,8 @@ fn profile_installed_agent_io_attribution(
     let agent_bytes = fs::read(&agent_symbols)?;
     for symbol in [
         b"framebuffer_capture_raw".as_slice(),
-        b"snapshot_allowlisted_path",
+        b"snapshot_for_args",
+        b"list_dir_fast_at_root",
     ] {
         if !contains_ascii(&agent_bytes, symbol) {
             return Err(format!(
