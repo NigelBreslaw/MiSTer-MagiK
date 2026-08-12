@@ -509,8 +509,7 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
         status_us = status_us.saturating_add(receipt.status_us);
         self.outstanding_direct_grant = None;
         self.last_committed_buffer = Some(grant.slot_index);
-        self.latch_state
-            .mark_external_post_success(grant.slot_index);
+        self.latch_state.invalidate_all();
         self.hidden_active_verified = true;
         Ok(FpgaVblankLatchHiddenPresentStats {
             copied_bytes: 0,
