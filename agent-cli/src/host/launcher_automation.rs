@@ -23,9 +23,40 @@ const CHECKPOINT_CAPTURE_ATTEMPTS: usize = 3;
 const LAUNCH_INPUT_ATTEMPTS: usize = 3;
 const LAUNCH_START_WAIT: Duration = Duration::from_secs(2);
 const PUBLIC_MAIN_PATH: &str = "/media/fat/MiSTer_MagiK";
+const DEVELOPMENT_MAIN_PATH: &str = "/media/fat/MiSTer_MagiKDev";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum MainRoute {
+    Public,
+    Development,
+}
+
+impl MainRoute {
+    const fn executable_path(self) -> &'static str {
+        match self {
+            Self::Public => PUBLIC_MAIN_PATH,
+            Self::Development => DEVELOPMENT_MAIN_PATH,
+        }
+    }
+
+    const fn process_name(self) -> &'static str {
+        match self {
+            Self::Public => "MiSTer_MagiK",
+            Self::Development => "MiSTer_MagiKDev",
+        }
+    }
+
+    const fn other_process_name(self) -> &'static str {
+        match self {
+            Self::Public => "MiSTer_MagiKDev",
+            Self::Development => "MiSTer_MagiK",
+        }
+    }
+}
 
 #[derive(Clone, Debug)]
 struct LaunchIdentity {
+    main_route: MainRoute,
     main_generation: u64,
     main_pid: u64,
     executable_path: String,
@@ -329,6 +360,7 @@ pub(super) fn ensure_installed_alpha_launcher(
     }
 
     let identity = LaunchIdentity {
+        main_route: MainRoute::Public,
         main_generation: 0,
         main_pid: 0,
         executable_path: required_text_at(main, "/executable_path")?.to_owned(),
@@ -379,9 +411,11 @@ pub(super) fn exercise_launch_return(
         let slint = before
             .pointer("/files/slint_status")
             .ok_or("Slint status is missing before launch")?;
+        let main_pid = required_u64(main, "pid")?;
         Ok(LaunchIdentity {
+            main_route: detect_main_route(&before, main_pid)?,
             main_generation: required_u64(main, "main_generation")?,
-            main_pid: required_u64(main, "pid")?,
+            main_pid,
             executable_path: required_text_at(main, "/executable_path")?.to_owned(),
             launcher_pid: required_u64(main, "launcher_pid")?,
             build_version: required_text_at(slint, "/build/version")?.to_owned(),
@@ -807,11 +841,33 @@ fn validate_candidate_build(
 }
 
 fn is_public_main_executable(path: Option<&str>) -> bool {
-    matches!(path, Some("unknown" | PUBLIC_MAIN_PATH))
+    is_main_executable(MainRoute::Public, path)
 }
 
-fn same_public_main_executable(expected: &str, actual: Option<&str>) -> bool {
-    is_public_main_executable(Some(expected)) && is_public_main_executable(actual)
+fn is_main_executable(route: MainRoute, path: Option<&str>) -> bool {
+    matches!(path, Some("unknown")) || path == Some(route.executable_path())
+}
+
+fn route_process_is_current(status: &Value, route: MainRoute, pid: u64) -> bool {
+    status
+        .pointer(&format!("/processes/{}", route.process_name()))
+        .and_then(Value::as_array)
+        .is_some_and(|pids| pids.iter().any(|value| value.as_u64() == Some(pid)))
+        && status
+            .pointer(&format!("/processes/{}", route.other_process_name()))
+            .and_then(Value::as_array)
+            .is_none_or(|pids| pids.is_empty())
+}
+
+fn detect_main_route(status: &Value, pid: u64) -> Result<MainRoute> {
+    match (
+        route_process_is_current(status, MainRoute::Public, pid),
+        route_process_is_current(status, MainRoute::Development, pid),
+    ) {
+        (true, false) => Ok(MainRoute::Public),
+        (false, true) => Ok(MainRoute::Development),
+        _ => Err("active Main process route is ambiguous or missing".into()),
+    }
 }
 
 fn validate_pre_launch_snapshot(snapshot: &Value, expected_game_id: &str) -> Result<()> {
@@ -874,28 +930,17 @@ fn validate_handoff_status(
     }
     if handoff_main.generation == identity.main_generation
         || handoff_main.pid == identity.main_pid
-        || !same_public_main_executable(
-            &identity.executable_path,
+        || !is_main_executable(identity.main_route, Some(identity.executable_path.as_str()))
+        || !is_main_executable(
+            identity.main_route,
             main.get("executable_path").and_then(Value::as_str),
         )
         || main.get("command_channel").and_then(Value::as_str) != Some("ready")
     {
         return Err("core handoff did not create the expected replacement Main epoch".into());
     }
-    if status
-        .pointer("/processes/MiSTer_MagiK")
-        .and_then(Value::as_array)
-        .is_none_or(|pids| {
-            !pids
-                .iter()
-                .any(|pid| pid.as_u64() == Some(handoff_main.pid))
-        })
-        || status
-            .pointer("/processes/MiSTer_MagiKDev")
-            .and_then(Value::as_array)
-            .is_some_and(|pids| !pids.is_empty())
-    {
-        return Err("replacement Main is not the public alpha process".into());
+    if !route_process_is_current(status, identity.main_route, handoff_main.pid) {
+        return Err("replacement Main changed its selected process route".into());
     }
     if status
         .pointer("/processes/mister-magik-fb")
@@ -938,27 +983,16 @@ fn validate_returned_status(
     };
     if returned.main_generation == handoff_main.generation
         || returned.main_pid == handoff_main.pid
-        || main.get("executable_path").and_then(Value::as_str) != Some(PUBLIC_MAIN_PATH)
+        || main.get("executable_path").and_then(Value::as_str)
+            != Some(identity.main_route.executable_path())
         || main.get("launcher_state").and_then(Value::as_str) != Some("LauncherActive")
         || launcher_pid == 0
         || launcher_pid == identity.launcher_pid
     {
         return Err("returned launcher is not a new Main/menu epoch".into());
     }
-    if status
-        .pointer("/processes/MiSTer_MagiK")
-        .and_then(Value::as_array)
-        .is_none_or(|pids| {
-            !pids
-                .iter()
-                .any(|pid| pid.as_u64() == Some(returned.main_pid))
-        })
-        || status
-            .pointer("/processes/MiSTer_MagiKDev")
-            .and_then(Value::as_array)
-            .is_some_and(|pids| !pids.is_empty())
-    {
-        return Err("returned launcher is not owned by the public alpha Main".into());
+    if !route_process_is_current(status, identity.main_route, returned.main_pid) {
+        return Err("returned launcher changed its selected Main process route".into());
     }
     let slint = status
         .pointer("/files/slint_status")
@@ -1153,6 +1187,7 @@ mod tests {
     #[test]
     fn handoff_requires_a_successor_main_and_non_menu_core() {
         let identity = LaunchIdentity {
+            main_route: MainRoute::Public,
             main_generation: 5,
             main_pid: 9,
             executable_path: "unknown".into(),
@@ -1195,6 +1230,7 @@ mod tests {
     #[test]
     fn handoff_accepts_public_main_recreated_by_core_load() {
         let identity = LaunchIdentity {
+            main_route: MainRoute::Public,
             main_generation: 7,
             main_pid: 11,
             executable_path: "unknown".into(),
@@ -1233,8 +1269,87 @@ mod tests {
     }
 
     #[test]
+    fn handoff_and_return_preserve_development_main_route() {
+        let identity = LaunchIdentity {
+            main_route: MainRoute::Development,
+            main_generation: 7,
+            main_pid: 11,
+            executable_path: DEVELOPMENT_MAIN_PATH.into(),
+            launcher_pid: 19,
+            build_version: "0.2.4".into(),
+            source_revision: "abc".into(),
+        };
+        let handoff = json!({
+            "processes": {
+                "MiSTer_MagiK": [],
+                "MiSTer_MagiKDev": [31],
+                "mister-magik-fb": [],
+            },
+            "files": {
+                "main_status": {
+                    "main_generation": 29,
+                    "pid": 31,
+                    "executable_path": "unknown",
+                    "command_channel": "ready",
+                    "launcher_pid": 0,
+                    "launcher_state": "Unconfigured",
+                },
+                "slint_status_current": false,
+                "core_name": "1943kai",
+            }
+        });
+        assert_eq!(
+            validate_handoff_status(&handoff, &identity).unwrap(),
+            HandoffMainIdentity {
+                generation: 29,
+                pid: 31,
+            }
+        );
+
+        let returned = json!({
+            "processes": {
+                "MiSTer_MagiK": [],
+                "MiSTer_MagiKDev": [41],
+            },
+            "files": {
+                "main_status": {
+                    "main_generation": 39,
+                    "pid": 41,
+                    "executable_path": DEVELOPMENT_MAIN_PATH,
+                    "launcher_pid": 43,
+                    "launcher_state": "LauncherActive",
+                },
+                "slint_status_current": true,
+                "slint_status": {
+                    "pid": 43,
+                    "build": {"version": "0.2.4", "source_revision": "abc"},
+                    "startup_mode": "return_from_game",
+                    "input_enabled": true,
+                }
+            }
+        });
+        assert_eq!(
+            validate_returned_status(
+                &returned,
+                &identity,
+                HandoffMainIdentity {
+                    generation: 29,
+                    pid: 31,
+                },
+            )
+            .unwrap(),
+            ReturnedLauncherIdentity {
+                main_generation: 39,
+                main_pid: 41,
+                launcher_pid: 43,
+            }
+        );
+    }
+
+    #[test]
     fn return_requires_new_candidate_launcher_process() {
         let identity = LaunchIdentity {
+            main_route: MainRoute::Public,
             main_generation: 7,
             main_pid: 11,
             executable_path: "unknown".into(),
