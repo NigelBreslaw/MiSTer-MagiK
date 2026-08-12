@@ -340,14 +340,14 @@ def main() -> None:
         ]
         if mismatches:
             fail("patched production bridge binding mismatch: " + "; ".join(mismatches))
-        if not re.search(
-            r"output\s+wire\s+locked\b.*?\.locked\s*\(\s*locked\s*\)",
-            patched_pll,
-            re.S,
-        ):
-            fail("HDMI PLL wrapper does not export pll_hdmi_0002.locked")
-        if patched.count(".locked(hdmi_pll_locked)") != 1:
-            fail("sys_top does not bind the real HDMI PLL lock exactly once")
+        if not re.search(r"\.locked\s*\(\s*\)", patched_pll):
+            fail("HDMI PLL wrapper no longer terminates its redundant lock output")
+        if "locked.export" in patched_pll or ".locked(hdmi_pll_locked)" in patched:
+            fail("diagnostics must not add a second HDMI PLL lock export")
+        if patched.count("wire hdmi_pll_locked = reconfig_from_pll[16];") != 1:
+            fail("sys_top does not observe the existing real HDMI PLL lock status bit")
+        if patched.count("wire hdmi_pll_locked = 1'b0;") != 1:
+            fail("sys_top HDMI-disabled PLL status fallback is missing")
         if re.search(
             r"\b(?:LFB_|FB_|hdmi_out_|vbuf_|reset_req)[A-Za-z0-9_]*\s*"
             r"(?:<=|=)\s*magik_diag_",

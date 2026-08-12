@@ -1,26 +1,3 @@
-diff --git a/sys/pll_hdmi.v b/sys/pll_hdmi.v
-index 4094896..40b59b1 100644
---- a/sys/pll_hdmi.v
-+++ b/sys/pll_hdmi.v
-@@ -10,7 +10,8 @@ module pll_hdmi (
- 		input  wire        rst,               //             reset.reset
- 		output wire        outclk_0,          //           outclk0.clk
- 		input  wire [63:0] reconfig_to_pll,   //   reconfig_to_pll.reconfig_to_pll
--		output wire [63:0] reconfig_from_pll  // reconfig_from_pll.reconfig_from_pll
-+		output wire [63:0] reconfig_from_pll, // reconfig_from_pll.reconfig_from_pll
-+		output wire        locked             //             locked.export
- 	);
- 
- 	pll_hdmi_0002 pll_hdmi_inst (
-@@ -19,7 +20,7 @@ module pll_hdmi (
- 		.outclk_0          (outclk_0),          //           outclk0.clk
- 		.reconfig_to_pll   (reconfig_to_pll),   //   reconfig_to_pll.reconfig_to_pll
- 		.reconfig_from_pll (reconfig_from_pll), // reconfig_from_pll.reconfig_from_pll
--		.locked            ()                   //       (terminated)
-+		.locked            (locked)             //             locked.export
- 	);
- 
- endmodule
 diff --git a/sys/sys_top.v b/sys/sys_top.v
 index a416879..d05a447 100644
 --- a/sys/sys_top.v
@@ -256,11 +233,11 @@ index a416879..d05a447 100644
  wire         hdmi_vs, hdmi_hs, hdmi_de, hdmi_vbl, hdmi_brd;
  wire         freeze;
  wire         bob_deint;
-@@ -1026,15 +1212,19 @@ always @(posedge clk_pal) begin
+@@ -1026,15 +1212,18 @@ always @(posedge clk_pal) begin
  
  /////////////////////////  HDMI output  /////////////////////////////////
-+wire hdmi_pll_locked;
  `ifndef MISTER_DEBUG_NOHDMI
++	wire hdmi_pll_locked = reconfig_from_pll[16];
  	wire hdmi_clk_out;
  	pll_hdmi pll_hdmi
  	(
@@ -268,12 +245,10 @@ index a416879..d05a447 100644
  		.rst(reset_req),
  		.reconfig_to_pll(reconfig_to_pll),
  		.reconfig_from_pll(reconfig_from_pll),
--		.outclk_0(hdmi_clk_out)
-+		.outclk_0(hdmi_clk_out),
-+		.locked(hdmi_pll_locked)
+ 		.outclk_0(hdmi_clk_out)
  	);
 +`else
-+	assign hdmi_pll_locked = 1'b0;
++	wire hdmi_pll_locked = 1'b0;
  `endif
  
  //1920x1080@60 PCLK=148.5MHz CEA
