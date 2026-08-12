@@ -1482,11 +1482,32 @@ mod linux {
         let mut seq = 0_u64;
         loop {
             let sample_started = Instant::now();
+            let sample_started_monotonic_us = monotonic_us_now();
+            let lease_started = Instant::now();
             refresh_frame_analytics_lease(analytics_mode);
-            let snapshot = state.snapshot(seq, boot_id, started);
-            if writeln!(stream, "{snapshot}").is_err() || stream.flush().is_err() {
+            let lease_publication_us = lease_started.elapsed().as_micros() as u64;
+            let snapshot = state.snapshot(
+                seq,
+                boot_id,
+                started,
+                sample_started_monotonic_us,
+                lease_publication_us,
+            );
+            let serialization_started = Instant::now();
+            let encoded = snapshot.to_string();
+            let serialization_us = serialization_started.elapsed().as_micros() as u64;
+            let socket_started = Instant::now();
+            if writeln!(stream, "{encoded}").is_err() || stream.flush().is_err() {
                 break;
             }
+            let socket_write_us = socket_started.elapsed().as_micros() as u64;
+            state.complete_transport_sample(
+                serialization_us,
+                socket_write_us,
+                encoded.len() as u64 + 1,
+                sample_started.elapsed(),
+                cadence,
+            );
             seq = seq.saturating_add(1);
             let elapsed = sample_started.elapsed();
             if elapsed < cadence {
@@ -1592,14 +1613,59 @@ mod linux {
         previous_net: Option<NetSample>,
         previous_disk: Option<DiskSample>,
         fpga: Option<FpgaIo>,
+        previous_transport: Option<TelemetryTransportEvidence>,
+    }
+
+    #[derive(Clone, Copy, Debug, Default)]
+    struct TelemetryTransportEvidence {
+        json_serialization_us: u64,
+        socket_write_us: u64,
+        bytes_serialized: u64,
+        sample_deadline_overrun_us: u64,
+    }
+
+    #[derive(Clone, Copy, Debug, Default)]
+    pub(super) struct ProcessTelemetryEvidence {
+        pub(super) discovery_us: u64,
+        pub(super) proc_parse_us: u64,
+        pub(super) child_processes: u64,
+        pub(super) files_read: u64,
+    }
+
+    pub(super) fn aggregate_process_telemetry_evidence(
+        items: &[ProcessTelemetryEvidence],
+    ) -> ProcessTelemetryEvidence {
+        items
+            .iter()
+            .fold(ProcessTelemetryEvidence::default(), |mut total, item| {
+                total.discovery_us = total.discovery_us.saturating_add(item.discovery_us);
+                total.proc_parse_us = total.proc_parse_us.saturating_add(item.proc_parse_us);
+                total.child_processes = total.child_processes.saturating_add(item.child_processes);
+                total.files_read = total.files_read.saturating_add(item.files_read);
+                total
+            })
+    }
+
+    pub(super) fn telemetry_deadline_overrun_us(elapsed: Duration, cadence: Duration) -> u64 {
+        elapsed.saturating_sub(cadence).as_micros() as u64
     }
 
     impl DeviceTelemetryStreamState {
-        fn snapshot(&mut self, seq: u64, boot_id: u64, started: Instant) -> Value {
+        fn snapshot(
+            &mut self,
+            seq: u64,
+            boot_id: u64,
+            started: Instant,
+            sample_started_monotonic_us: u64,
+            lease_publication_us: u64,
+        ) -> Value {
+            let cpu_started = Instant::now();
             let cpu_times = read_cpu_times().unwrap_or_default();
             let cpu = cpu_json(self.previous_cpu.as_deref(), &cpu_times);
             self.previous_cpu = Some(cpu_times);
+            let cpu_read_us = cpu_started.elapsed().as_micros() as u64;
 
+            let network_started = Instant::now();
             let net_fields = read_netdev_stats_fields(IFACE);
             let now = Instant::now();
             let network = network_json(self.previous_net, net_fields, now);
@@ -1608,7 +1674,9 @@ mod linux {
                 tx_bytes: fields[8],
                 at: Some(now),
             });
+            let network_read_us = network_started.elapsed().as_micros() as u64;
 
+            let disk_started = Instant::now();
             let disk_device = backing_disk_for_path("/media/fat");
             let disk_counters = disk_device.as_deref().and_then(read_disk_counters);
             let disk_activity = disk_activity_json(
@@ -1625,10 +1693,17 @@ mod linux {
                         counters,
                         at: Some(now),
                     });
+            let disk_read_us = disk_started.elapsed().as_micros() as u64;
 
-            let magik = process_telemetry("mister-magik-fb");
-            let main_dev = process_telemetry("MiSTer_MagiKDev");
-            let main_public = process_telemetry("MiSTer_MagiK");
+            let (magik, magik_process) = process_telemetry("mister-magik-fb");
+            let (main_dev, main_dev_process) = process_telemetry("MiSTer_MagiKDev");
+            let (main_public, main_public_process) = process_telemetry("MiSTer_MagiK");
+            let process_evidence = aggregate_process_telemetry_evidence(&[
+                magik_process,
+                main_dev_process,
+                main_public_process,
+            ]);
+            let mut files_read = 4_u64.saturating_add(process_evidence.files_read);
             let main = if main_dev
                 .get("pids")
                 .and_then(Value::as_array)
@@ -1640,12 +1715,25 @@ mod linux {
             };
             let magik_rss_kb = magik.get("rss_kb").and_then(Value::as_u64).unwrap_or(0);
             let main_rss_kb = main.get("rss_kb").and_then(Value::as_u64).unwrap_or(0);
+            let status_started = Instant::now();
             let slint_status = read_json_value("/tmp/mister-magik/status.json");
             let ui_thread_cpu =
                 launcher_ui_pid(&slint_status, &magik["pids"]).and_then(main_thread_current_cpu);
             let slint_current = status_pid_matches(&slint_status, &magik["pids"]);
+            files_read = files_read.saturating_add(1 + u64::from(ui_thread_cpu.is_some()));
+            let status_parsing_us = status_started.elapsed().as_micros() as u64;
+            let memory_started = Instant::now();
+            let memory = memory_json(magik_rss_kb, main_rss_kb);
+            files_read = files_read.saturating_add(1);
+            let memory_read_us = memory_started.elapsed().as_micros() as u64;
+            let storage_started = Instant::now();
+            let storage = storage_json("/media/fat", disk_activity);
+            let storage_read_us = storage_started.elapsed().as_micros() as u64;
+            let fpga_started = Instant::now();
             let presentation = self.presentation_telemetry_json();
-            json!({
+            let fpga_telemetry_us = fpga_started.elapsed().as_micros() as u64;
+            let assembly_started = Instant::now();
+            let mut payload = json!({
                 "schema": "mister-magik-device-telemetry-v2",
                 "seq": seq,
                 "agent": {
@@ -1653,14 +1741,14 @@ mod linux {
                     "uptime_ms": started.elapsed().as_millis() as u64,
                 },
                 "cpu": cpu,
-                "memory": memory_json(magik_rss_kb, main_rss_kb),
+                "memory": memory,
                 "processes": {
                     "mister-magik-fb": magik,
                     "MiSTer_MagiKDev": main_dev,
                     "MiSTer_MagiK": main_public,
                 },
                 "network": network,
-                "storage": storage_json("/media/fat", disk_activity),
+                "storage": storage,
                 "presentation": presentation,
                 "launcher": {
                     "status_current": slint_current,
@@ -1691,7 +1779,54 @@ mod linux {
                     "ui_thread_cpu": ui_thread_cpu,
                     "last_error": Value::Null,
                 },
-            })
+            });
+            let json_assembly_us = assembly_started.elapsed().as_micros() as u64;
+            let previous_transport = self.previous_transport.unwrap_or_default();
+            payload["observer"] = json!({
+                "schema": "mister-magik-agent-telemetry-phase-evidence-v1",
+                "clock_domain": "CLOCK_MONOTONIC",
+                "sample_started_monotonic_us": sample_started_monotonic_us,
+                "sample_assembled_monotonic_us": monotonic_us_now(),
+                "phases_us": {
+                    "process_discovery": process_evidence.discovery_us,
+                    "proc_parsing": process_evidence.proc_parse_us,
+                    "cpu_read": cpu_read_us,
+                    "network_read": network_read_us,
+                    "disk_read": disk_read_us,
+                    "memory_read": memory_read_us,
+                    "storage_read": storage_read_us,
+                    "status_parsing": status_parsing_us,
+                    "lease_publication": lease_publication_us,
+                    "fpga_telemetry": fpga_telemetry_us,
+                    "json_assembly": json_assembly_us,
+                    "previous_json_serialization": previous_transport.json_serialization_us,
+                    "previous_socket_write": previous_transport.socket_write_us,
+                },
+                "counts": {
+                    "child_processes": process_evidence.child_processes,
+                    "files_read": files_read,
+                    "previous_bytes_serialized": previous_transport.bytes_serialized,
+                },
+                "previous_sample_deadline_overrun_us": previous_transport.sample_deadline_overrun_us,
+                "transport_is_previous_sample": self.previous_transport.is_some(),
+            });
+            payload
+        }
+
+        fn complete_transport_sample(
+            &mut self,
+            json_serialization_us: u64,
+            socket_write_us: u64,
+            bytes_serialized: u64,
+            elapsed: Duration,
+            cadence: Duration,
+        ) {
+            self.previous_transport = Some(TelemetryTransportEvidence {
+                json_serialization_us,
+                socket_write_us,
+                bytes_serialized,
+                sample_deadline_overrun_us: telemetry_deadline_overrun_us(elapsed, cadence),
+            });
         }
 
         fn presentation_telemetry_json(&mut self) -> Value {
@@ -1871,12 +2006,15 @@ mod linux {
             .find_map(|(item_key, value)| (item_key == key).then_some(*value))
     }
 
-    fn process_telemetry(name: &str) -> Value {
+    fn process_telemetry(name: &str) -> (Value, ProcessTelemetryEvidence) {
+        let discovery_started = Instant::now();
         let pids = read_pidof(name)
             .unwrap_or_default()
             .split_whitespace()
             .filter_map(|pid| pid.parse::<u64>().ok())
             .collect::<Vec<_>>();
+        let discovery_us = discovery_started.elapsed().as_micros() as u64;
+        let parse_started = Instant::now();
         let rss_kb = pids
             .iter()
             .map(|pid| proc_status_kb(*pid, "VmRSS"))
@@ -1885,11 +2023,21 @@ mod linux {
             .iter()
             .map(|pid| proc_status_number(*pid, "Threads"))
             .sum::<u64>();
-        json!({
-            "pids": pids,
-            "rss_kb": rss_kb,
-            "threads": threads,
-        })
+        let proc_parse_us = parse_started.elapsed().as_micros() as u64;
+        let files_read = (pids.len() as u64).saturating_mul(2);
+        (
+            json!({
+                "pids": pids,
+                "rss_kb": rss_kb,
+                "threads": threads,
+            }),
+            ProcessTelemetryEvidence {
+                discovery_us,
+                proc_parse_us,
+                child_processes: 1,
+                files_read,
+            },
+        )
     }
 
     fn proc_status_kb(pid: u64, key: &str) -> u64 {
@@ -5353,6 +5501,42 @@ mod tests {
             steal: 0,
         };
         assert_eq!(linux::cpu_busy_percent(previous, current), 50.0);
+    }
+
+    #[test]
+    fn telemetry_phase_aggregation_uses_fixture_counts_without_device_reads() {
+        let evidence = linux::aggregate_process_telemetry_evidence(&[
+            linux::ProcessTelemetryEvidence {
+                discovery_us: 10,
+                proc_parse_us: 20,
+                child_processes: 1,
+                files_read: 4,
+            },
+            linux::ProcessTelemetryEvidence {
+                discovery_us: 30,
+                proc_parse_us: 40,
+                child_processes: 2,
+                files_read: 6,
+            },
+        ]);
+        assert_eq!(evidence.discovery_us, 40);
+        assert_eq!(evidence.proc_parse_us, 60);
+        assert_eq!(evidence.child_processes, 3);
+        assert_eq!(evidence.files_read, 10);
+        assert_eq!(
+            linux::telemetry_deadline_overrun_us(
+                Duration::from_millis(101),
+                Duration::from_millis(100)
+            ),
+            1_000
+        );
+        assert_eq!(
+            linux::telemetry_deadline_overrun_us(
+                Duration::from_millis(99),
+                Duration::from_millis(100)
+            ),
+            0
+        );
     }
 
     #[cfg(target_os = "linux")]
