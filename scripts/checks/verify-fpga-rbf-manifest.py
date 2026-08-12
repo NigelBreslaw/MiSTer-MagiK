@@ -15,6 +15,8 @@ from pathlib import Path
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 STALE_RE = re.compile(r"mailbox|axi|acp|descriptor|ownership|fence", re.I)
+ANALYSIS_CONSTRAINT_OVERRIDE = "clock_groups_exclusive_to_asynchronous"
+ANALYSIS_CONSTRAINT_SOURCE_STATUS = " M sys/sys_top.sdc"
 
 
 def digest(path: Path) -> str:
@@ -88,7 +90,17 @@ def verify(
         raise ValueError("invalid component_input_sha256")
     if "component_revision" in fields and not COMMIT_RE.fullmatch(fields["component_revision"]):
         raise ValueError("component_revision must be a full commit SHA")
-    if any(key in fields for key in ("magik_status", "source_status")):
+    if "magik_status" in fields:
+        raise ValueError("release source tree was dirty")
+    source_status = fields.get("source_status")
+    analysis_override = fields.get("analysis_constraint_override")
+    if source_status is None:
+        if analysis_override is not None:
+            raise ValueError("analysis constraint override lacks source evidence")
+    elif (
+        source_status != ANALYSIS_CONSTRAINT_SOURCE_STATUS
+        or analysis_override != ANALYSIS_CONSTRAINT_OVERRIDE
+    ):
         raise ValueError("release source tree was dirty")
     if fields["quartus_seed"] != "1":
         raise ValueError("release seed must be 1")

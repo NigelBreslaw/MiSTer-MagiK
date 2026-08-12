@@ -686,8 +686,14 @@ jobs:
           cp build/fpga-signoff/quartus-delta-signoff.tsv build/fpga-signoff/patched/reports/quartus-delta-signoff.tsv
           delta_sha="$(shasum -a 256 build/fpga-signoff/patched/reports/quartus-delta-signoff.tsv | awk '{print $1}')"
           for flavour in stock pre-observer patched; do
-            printf 'component_input_sha256=%s\ncomponent_revision=%s\n' \
-              "$COMPONENT_ID" "$COMPONENT_REVISION" >> "build/fpga-signoff/$flavour/menu-magik-vblank-latch.metadata.txt"
+            metadata="build/fpga-signoff/$flavour/menu-magik-vblank-latch.metadata.txt"
+            if [ "$(grep -c '^source_status=' "$metadata")" != 1 ] || \
+               ! grep -Fxq 'source_status= M sys/sys_top.sdc' "$metadata"; then
+              echo "unexpected Menu source modification in $flavour metadata" >&2
+              exit 1
+            fi
+            printf 'analysis_constraint_override=clock_groups_exclusive_to_asynchronous\ncomponent_input_sha256=%s\ncomponent_revision=%s\n' \
+              "$COMPONENT_ID" "$COMPONENT_REVISION" >> "$metadata"
           done
           printf 'report_sha256.reports/quartus-delta-signoff.tsv=%s\nsignoff_valid=1\n' \
             "$delta_sha" >> build/fpga-signoff/patched/menu-magik-vblank-latch.metadata.txt
