@@ -3695,7 +3695,6 @@ fn can_preempt_home_latch_wait(
     direct_layer_state_active: bool,
     preview_commit_pending: bool,
     startup_intro_frame_posted: bool,
-    automation_active: bool,
 ) -> bool {
     screen == Screen::Home
         && !response_frame_stamped
@@ -3705,7 +3704,28 @@ fn can_preempt_home_latch_wait(
         && !direct_layer_state_active
         && !preview_commit_pending
         && !startup_intro_frame_posted
-        && !automation_active
+}
+
+fn can_preempt_disposable_home_raster(
+    screen: Screen,
+    current_batch_empty: bool,
+    latency_critical_frame_pending: bool,
+    input_changed_since_drain: bool,
+    transition_active: bool,
+    screensaver_active: bool,
+    direct_layer_state_active: bool,
+    startup_intro_active: bool,
+) -> bool {
+    screen == Screen::Home
+        && should_restart_for_urgent_input(
+            current_batch_empty,
+            latency_critical_frame_pending,
+            input_changed_since_drain,
+        )
+        && !transition_active
+        && !screensaver_active
+        && !direct_layer_state_active
+        && !startup_intro_active
 }
 
 fn should_restart_for_urgent_input(
@@ -5580,6 +5600,7 @@ pub(super) fn run_launcher_loop(
     let mut catalog_scan_blink = CatalogScanBlink::default();
     let mut navigation_source_bridge_sync_pending = false;
     let mut latency_critical_input_pending = false;
+    let mut unpublished_cached_frame_present = false;
     let mut input_observation = input_observation_probe
         .as_ref()
         .map(crate::input_hub::InputObservationProbe::observe)
@@ -8377,6 +8398,7 @@ pub(super) fn run_launcher_loop(
             bridge.set_effective_view(effective_view.label().into());
         }
         let mut full_frame_present = std::mem::take(&mut orientation_full_redraw_pending)
+            || std::mem::take(&mut unpublished_cached_frame_present)
             || display_session.should_present_full_frame(launching, route_action)
             || startup_reveal_ready;
         let wants_arcade_list = !screensaver.active
@@ -9216,6 +9238,37 @@ pub(super) fn run_launcher_loop(
         let response_raster_completed_at_us = crate::input_hub::monotonic_us();
         let response_raster_completed_execution = launcher_response_trace.execution_stamp();
         drop(raster_pmu);
+        if can_preempt_disposable_home_raster(
+            nav.screen,
+            input_batch.events.is_empty(),
+            latency_critical_input_pending,
+            input_observation_probe
+                .as_ref()
+                .is_some_and(|probe| probe.changed_since(input_observation)),
+            navigation_transition.is_active()
+                || orientation_transition.is_active()
+                || full_screen_transition.state() != FullScreenTransitionState::Live,
+            screensaver.active,
+            composition_decision.state != UiCompositionState::FullSlint
+                || composition_decision.retirement_generation.is_some(),
+            startup_intro.is_some(),
+        ) {
+            // Slint has already updated the cached RGB565 image, but this
+            // disposable frame has not reached a hidden scanout slot. Carry a
+            // full cached-frame copy into the replacement so damage consumed
+            // by this abandoned raster cannot diverge from either hidden slot.
+            unpublished_cached_frame_present = true;
+            launcher_response_trace.record_lab(Some(serde_json::json!({
+                "phase": "input-priority-restart",
+                "checkpoint": "after-slint-raster",
+                "at_us": response_raster_completed_at_us,
+                "slint_damage_rects": slint_damage.len(),
+            })));
+            let _ = launcher_response_trace
+                .record_scheduler_interval("input-priority-restart", scheduler_phase);
+            request_launcher_redraw!();
+            continue 'launcher;
+        }
         let frame_plan_pmu = launcher_response_trace.input_pmu_span(
             latency_critical_input_pending,
             "launcher-response.damage-frame-plan",
@@ -10266,7 +10319,6 @@ pub(super) fn run_launcher_loop(
                     || composition_decision.retirement_generation.is_some(),
                 preview_presentation_commit.is_some(),
                 startup_intro_frame_posted,
-                launcher_automation.active(),
             );
             let pace = match pacer.wait_interruptible(|| {
                 interruptible_home_wait
@@ -12831,10 +12883,9 @@ mod tests {
             false,
             false,
             false,
-            false,
         ));
-        for blocked in 0..8 {
-            let mut conditions = [false; 8];
+        for blocked in 0..7 {
+            let mut conditions = [false; 7];
             conditions[blocked] = true;
             assert!(!can_preempt_home_latch_wait(
                 Screen::Home,
@@ -12845,13 +12896,79 @@ mod tests {
                 conditions[4],
                 conditions[5],
                 conditions[6],
-                conditions[7],
             ));
         }
         assert!(!can_preempt_home_latch_wait(
             Screen::Settings,
             false,
             false,
+            false,
+            false,
+            false,
+            false,
+            false,
+        ));
+    }
+
+    #[test]
+    fn only_disposable_home_rasters_yield_to_new_input() {
+        assert!(can_preempt_disposable_home_raster(
+            Screen::Home,
+            true,
+            false,
+            true,
+            false,
+            false,
+            false,
+            false,
+        ));
+        for blocked in 0..4 {
+            let mut conditions = [false; 4];
+            conditions[blocked] = true;
+            assert!(!can_preempt_disposable_home_raster(
+                Screen::Home,
+                true,
+                false,
+                true,
+                conditions[0],
+                conditions[1],
+                conditions[2],
+                conditions[3],
+            ));
+        }
+        assert!(!can_preempt_disposable_home_raster(
+            Screen::Settings,
+            true,
+            false,
+            true,
+            false,
+            false,
+            false,
+            false,
+        ));
+        assert!(!can_preempt_disposable_home_raster(
+            Screen::Home,
+            false,
+            false,
+            true,
+            false,
+            false,
+            false,
+            false,
+        ));
+        assert!(!can_preempt_disposable_home_raster(
+            Screen::Home,
+            true,
+            true,
+            true,
+            false,
+            false,
+            false,
+            false,
+        ));
+        assert!(!can_preempt_disposable_home_raster(
+            Screen::Home,
+            true,
             false,
             false,
             false,
