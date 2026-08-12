@@ -78,13 +78,31 @@ module tb_mister_magik_video_diagnostics_output;
 		end
 	endtask
 
-	reg first_fault;
+	reg first_fault, fault_before;
 	reg [239:0] frozen_payload;
+	reg [15:0] frozen_route_epoch, frozen_active_seq;
+	reg [7:0] pending_flags;
+	reg [2:0] pending_source_flags;
+	reg [4:0] pending_control_flags;
 	initial begin
 		repeat(4) @(negedge clk);
 		route_toggle = ~route_toggle;
 		armed = 1'b1;
-		repeat(4) @(negedge clk);
+		// Present a stale completed frame on the exact clock that arming and VS
+		// become visible. The arm boundary must discard it rather than enqueue a
+		// native fault or preserve pre-arm source stability.
+		repeat(2) @(negedge clk);
+		dut.have_frame = 1'b1;
+		dut.reference_valid = 1'b1;
+		dut.consecutive_black = 2'd1;
+		dut.saw_de = 1'b0;
+		dut.source_stable = 1'b1;
+		vs = 1'b1;
+		@(negedge clk); vs = 1'b0;
+		repeat(2) @(negedge clk);
+		if(dut.native_fault_pending || fault || trigger != 0 ||
+		   dut.reference_valid || dut.source_stable)
+			$fatal(1, "arm/VS boundary retained a stale completed frame");
 		// Recover the newest route even when an even number of toggles was
 		// invisible while the output clock was stopped.
 		route_epoch = route_epoch + 2'd2;
@@ -102,23 +120,72 @@ module tb_mister_magik_video_diagnostics_output;
 		// Two complete frames with no DE must still diagnose a black output.
 		drive_frame_without_de();
 		drive_frame_without_de();
-		vs_pulse();
-		repeat(3) @(negedge clk);
+
+		// Make a manual request ready on the native commit edge and overflow the
+		// period counter on the selection edge. Black and timing are both true;
+		// black must retain first-fault priority and the exact completed-frame
+		// evidence must be immutable while the selected record is pending.
+		request = ~request;
+		repeat(2) @(negedge clk);
+		dut.frame_period = 24'hffffff;
+		fault_before = fault;
+		vs = 1'b1;
+		@(negedge clk); vs = 1'b0;
+		if(!dut.native_fault_pending || dut.frozen || trigger != 0 ||
+		   fault != fault_before || ack == request)
+			$fatal(1, "native selected fault did not wait for serialized commit");
+		if(!dut.request_capture_pending)
+			$fatal(1, "coincident manual request was consumed before native commit");
+		pending_flags = dut.native_fault_flags;
+		pending_source_flags = dut.snapshot_source_flags;
+		pending_control_flags = dut.snapshot_control_flags;
+		frozen_route_epoch = dut.route_epoch;
+		frozen_active_seq = dut.active_sequence;
+		route_epoch = route_epoch + 1'd1;
+		active_seq = active_seq + 1'd1;
+		route_flags = 16'h0011;
+		route_toggle = ~route_toggle;
+		mux_direct = 1'b1;
+		cfg_done = 1'b0;
+		pll_locked = 1'b0;
+		@(negedge clk);
+		if(dut.native_fault_pending || !dut.frozen || trigger != 8'd10)
+			$fatal(1, "native selected fault did not commit first");
+		if(fault != fault_before || ack == request)
+			$fatal(1, "native evidence toggled before one stable commit clock");
+		if(dut.native_fault_flags != pending_flags ||
+		   dut.snapshot_source_flags != pending_source_flags ||
+		   dut.snapshot_control_flags != pending_control_flags)
+			$fatal(1, "pending selected-frame evidence changed before commit");
+		if(dut.route_epoch != frozen_route_epoch ||
+		   dut.active_sequence != frozen_active_seq)
+			$fatal(1, "route context advanced while native evidence was pending");
+		if(word_at(3) != generation)
+			$fatal(1, "coincident manual generation was not attached at native commit");
+		frozen_payload = payload;
+		@(negedge clk);
 		if(trigger != 8'd10) $fatal(1, "black output was not classified");
+		if(fault == fault_before || ack != request)
+			$fatal(1, "serialized fault and manual acknowledgement latency mismatch");
+		if((word_at(14) & 16'h00a8) != 16'h0088 ||
+		   (word_at(14) & 16'h0020) != 0)
+			$fatal(1, "black priority or selection-edge overflow evidence mismatch");
+		if((word_at(14) & 16'h0700) != 0)
+			$fatal(1, "lower-priority timing geometry escaped black selection");
+		if(word_at(12) != 16'hffff || word_at(13) != 16'h00ff)
+			$fatal(1, "fault period did not retain the selected completed frame");
+		if(payload !== frozen_payload)
+			$fatal(1, "payload changed between commit and notification");
 		first_fault = fault;
 
 		// Frozen evidence is immutable even when the mux subsequently changes.
-		mux_direct = 1'b1;
 		drive_frame(24'hffffff);
 		if(fault != first_fault || trigger != 8'd10) $fatal(1, "first output fault changed");
 
-		request = ~request;
-		repeat(5) @(negedge clk);
-		if(ack != request) $fatal(1, "output snapshot did not acknowledge");
 		if(word_at(0) != MAGIK_VIDEO_DIAGNOSTICS_SCHEMA ||
 		   word_at(2) != 16'd10 || word_at(3) != generation)
 			$fatal(1, "output snapshot identity mismatch");
-		if(word_at(4) != route_epoch || word_at(5) != active_seq)
+		if(word_at(4) != frozen_route_epoch || word_at(5) != frozen_active_seq)
 			$fatal(1, "output route context mismatch");
 		if((word_at(14) & 16'h0008) == 0 || (word_at(14) & 16'h0001) != 0)
 			$fatal(1, "no-DE black frame evidence was not distinguished");

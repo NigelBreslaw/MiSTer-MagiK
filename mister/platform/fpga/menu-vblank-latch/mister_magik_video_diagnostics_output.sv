@@ -74,6 +74,10 @@ module mister_magik_video_diagnostics_output (
 	reg [2:0] snapshot_source_flags = 3'd0;
 	reg [4:0] snapshot_control_flags = 5'd0;
 	reg frozen = 1'b0, mailbox_overrun = 1'b0;
+	reg native_fault_pending = 1'b0;
+	reg [7:0] native_fault_trigger = 8'd0;
+	reg [7:0] native_fault_flags = 8'd0;
+	reg [2:0] native_fault_geometry = 3'd0;
 	reg freeze_request_now;
 	reg [7:0] freeze_request_trigger;
 	reg [7:0] freeze_request_flags;
@@ -83,6 +87,10 @@ module mister_magik_video_diagnostics_output (
 	wire vs_rise = hdmi_out_vs && !vs_d;
 	wire hs_rise = hdmi_out_hs && !hs_d;
 	wire de_rise = hdmi_out_de && !de_d;
+	wire arm_start = armed && !armed_d;
+	wire capture_stopped = frozen || native_fault_pending;
+	wire manual_capture_ready = request_capture_pending &&
+		(request_sync == request_seen);
 	wire [1:0] source_base_flags = {csync_sync, direct_sync};
 	wire [2:0] source_flags = {source_stable, csync_sync, direct_sync};
 	wire [4:0] live_control_flags =
@@ -106,7 +114,7 @@ module mister_magik_video_diagnostics_output (
 		input [7:0] new_flags;
 		input [2:0] new_geometry;
 		begin
-			if(armed && !frozen && !freeze_request_now) begin
+			if(armed && !capture_stopped && !freeze_request_now) begin
 				freeze_request_now = 1'b1;
 				freeze_request_trigger = new_trigger;
 				freeze_request_flags = new_flags;
@@ -167,7 +175,7 @@ module mister_magik_video_diagnostics_output (
 			snapshot_ack_toggle <= ~snapshot_ack_toggle;
 		end
 
-		if(!frozen && ((route_sync != route_seen) ||
+		if(!capture_stopped && ((route_sync != route_seen) ||
 		   (!route_capture_pending &&
 		    ({route_epoch, active_sequence, route_flags} !=
 		     {expected_route_epoch_async, expected_active_seq_async,
@@ -179,7 +187,7 @@ module mister_magik_video_diagnostics_output (
 			route_flags <= expected_route_flags_async[4:0];
 			route_capture_pending <= 1'b1;
 		end
-		else if(!frozen && route_capture_pending) begin
+		else if(!capture_stopped && route_capture_pending) begin
 			if({route_epoch, active_sequence, route_flags} ==
 			   {expected_route_epoch_async, expected_active_seq_async,
 				expected_route_flags_async[4:0]})
@@ -191,7 +199,7 @@ module mister_magik_video_diagnostics_output (
 			end
 		end
 
-		if(armed && !armed_d) begin
+		if(arm_start) begin
 			have_frame <= 1'b0;
 			reference_valid <= 1'b0;
 			consecutive_black <= 2'd0;
@@ -201,7 +209,7 @@ module mister_magik_video_diagnostics_output (
 			last_frame_source <= source_base_flags;
 		end
 
-		if(!frozen) begin
+		if(!capture_stopped) begin
 			if(frame_period != 24'hffffff) frame_period <= frame_period + 1'd1;
 			else observed_flags_now = observed_flags_now |
 				MAGIK_VIDEO_DIAGNOSTICS_OUTPUT_FAULT_FLAGS_COUNTER_OVERFLOW[7:0];
@@ -216,14 +224,14 @@ module mister_magik_video_diagnostics_output (
 
 		if(vs_rise) begin
 			heartbeat_toggle <= ~heartbeat_toggle;
-			if(!frozen) begin
+			if(!capture_stopped && !arm_start) begin
 				if(source_base_flags == last_frame_source) source_stable <= 1'b1;
 				else begin
 					source_stable <= 1'b0;
 					last_frame_source <= source_base_flags;
 				end
 			end
-			if(armed && have_frame && !frozen) begin
+			if(armed && !arm_start && have_frame && !capture_stopped) begin
 				fault_period <= frame_period;
 				snapshot_source_flags <= source_flags;
 				snapshot_control_flags <= live_control_flags;
@@ -270,7 +278,7 @@ module mister_magik_video_diagnostics_output (
 					reference_source_flags <= source_flags;
 				end
 			end
-			if(!frozen) begin
+			if(!capture_stopped && !arm_start) begin
 				have_frame <= 1'b1;
 				frame_period <= 24'd0;
 				line_count <= 12'd0;
@@ -285,7 +293,31 @@ module mister_magik_video_diagnostics_output (
 			request_seen <= request_sync;
 			request_capture_pending <= 1'b1;
 		end
-		else if(request_capture_pending) begin
+
+		// Serialize native and manual freezes. A selected native first fault owns
+		// the record even when a manual request is already waiting; that request
+		// attaches its generation and acknowledgement to the committed native
+		// evidence without recapturing later source or control state.
+		if(native_fault_pending) begin
+			native_fault_pending <= 1'b0;
+			frozen <= 1'b1;
+			fault_trigger <= native_fault_trigger;
+			fault_flags <= native_fault_flags;
+			geometry_faults <= native_fault_geometry;
+			fault_notify_pending <= 1'b1;
+			if(manual_capture_ready) begin
+				snapshot_generation <= diagnostic_generation_async;
+				request_capture_pending <= 1'b0;
+				request_ack_pending <= 1'b1;
+			end
+		end
+		else if(freeze_request_now) begin
+			native_fault_pending <= 1'b1;
+			native_fault_trigger <= freeze_request_trigger;
+			native_fault_flags <= freeze_request_flags | observed_flags_now;
+			native_fault_geometry <= freeze_request_geometry;
+		end
+		else if(manual_capture_ready) begin
 			snapshot_generation <= diagnostic_generation_async;
 			request_capture_pending <= 1'b0;
 			if(!frozen) begin
@@ -294,14 +326,8 @@ module mister_magik_video_diagnostics_output (
 				snapshot_control_flags <= live_control_flags;
 			end
 			request_ack_pending <= 1'b1;
-		end
-
-		if(freeze_request_now) begin
-			frozen <= 1'b1;
-			fault_trigger <= freeze_request_trigger;
-			fault_flags <= freeze_request_flags | observed_flags_now;
-			geometry_faults <= freeze_request_geometry;
-			fault_notify_pending <= 1'b1;
+			if(observed_flags_now != 0)
+				fault_flags <= fault_flags | observed_flags_now;
 		end
 		else if(observed_flags_now != 0)
 			fault_flags <= fault_flags | observed_flags_now;
