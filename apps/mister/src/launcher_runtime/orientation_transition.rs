@@ -1134,6 +1134,85 @@ mod tests {
     #[cfg(all(target_os = "linux", target_arch = "arm"))]
     #[test]
     fn neon_kernels_are_pixel_identical_to_scalar_fallbacks() {
+        let legs = [
+            (
+                ScreenOrientation::Normal,
+                ScreenOrientation::MonitorClockwise,
+            ),
+            (
+                ScreenOrientation::MonitorClockwise,
+                ScreenOrientation::MonitorCounterclockwise,
+            ),
+            (
+                ScreenOrientation::MonitorCounterclockwise,
+                ScreenOrientation::Normal,
+            ),
+            (
+                ScreenOrientation::Normal,
+                ScreenOrientation::MonitorCounterclockwise,
+            ),
+            (
+                ScreenOrientation::MonitorCounterclockwise,
+                ScreenOrientation::MonitorClockwise,
+            ),
+            (
+                ScreenOrientation::MonitorClockwise,
+                ScreenOrientation::Normal,
+            ),
+        ];
+        let sparse_damage = OrientationTransitionDamage {
+            rows: [0x0001, 0, 0x8040, 0, 0x0180, 0, 0x2004, 0, 0x4002],
+        };
+        for (leg_index, (from, to)) in legs.into_iter().enumerate() {
+            for (width, height) in [(160, 90), (131, 77)] {
+                let source = (0..width * height)
+                    .map(|index| {
+                        Rgb565Pixel(
+                            (index as u16)
+                                .wrapping_mul(7919)
+                                .wrapping_add(leg_index as u16),
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                let destination = (0..width * height)
+                    .map(|index| Rgb565Pixel(!(index as u16).wrapping_mul(4051)))
+                    .collect::<Vec<_>>();
+                for elapsed in [
+                    Duration::ZERO,
+                    Duration::from_millis(200),
+                    ORIENTATION_WAVE_PHASE_DURATION,
+                    ORIENTATION_WAVE_PHASE_DURATION + Duration::from_millis(200),
+                    ORIENTATION_WAVE_TOTAL_DURATION,
+                ] {
+                    let (frame, levels, _) = orientation_wave_state(
+                        OrientationTransitionEffect::BrightnessFade,
+                        &source,
+                        &destination,
+                        elapsed,
+                    );
+                    for damage in [OrientationTransitionDamage::full(), sparse_damage] {
+                        let mut scalar = vec![Rgb565Pixel(0x55aa); source.len()];
+                        let mut neon = scalar.clone();
+                        render_brightness_wave_scalar(
+                            frame,
+                            &mut scalar,
+                            width,
+                            height,
+                            &levels,
+                            damage,
+                        );
+                        assert!(render_brightness_wave_neon(
+                            frame, &mut neon, width, height, &levels, damage
+                        ));
+                        assert_eq!(
+                            neon, scalar,
+                            "fade mismatch for {from:?}->{to:?} at {elapsed:?} ({width}x{height})"
+                        );
+                    }
+                }
+            }
+        }
+
         let width = 160;
         let height = 90;
         let source = (0..width * height)
@@ -1141,17 +1220,6 @@ mod tests {
             .collect::<Vec<_>>();
         let mut scalar = vec![Rgb565Pixel(0); source.len()];
         let mut neon = scalar.clone();
-        let mut levels = [0_u8; ORIENTATION_TILE_COUNT];
-        for (index, level) in levels.iter_mut().enumerate() {
-            *level = (index % (usize::from(RGB565_OPACITY_LEVELS) + 1)) as u8;
-        }
-        let damage = OrientationTransitionDamage::full();
-        render_brightness_wave_scalar(&source, &mut scalar, width, height, &levels, damage);
-        assert!(render_brightness_wave_neon(
-            &source, &mut neon, width, height, &levels, damage
-        ));
-        assert_eq!(neon, scalar);
-
         let mut black_levels = [ORIENTATION_TILE_SKIP; ORIENTATION_TILE_COUNT];
         for (index, level) in black_levels.iter_mut().enumerate() {
             if index % 5 != 0 {
