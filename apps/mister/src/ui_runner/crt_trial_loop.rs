@@ -304,6 +304,7 @@ pub(super) fn run_crt_trial_loop(
             plan,
             hardware,
             display_session,
+            false,
             |_hidden, _plan| Ok(()),
         ) {
             Ok(stats) => stats,
