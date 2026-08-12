@@ -92,6 +92,34 @@ fn require_ok_main_reply(reply: &str) -> Result<(), String> {
 }
 
 #[cfg(any(target_os = "linux", test))]
+fn io_operation_evidence(
+    operation: &str,
+    request_received_monotonic_us: u64,
+    operation_started_monotonic_us: u64,
+    operation_ended_monotonic_us: u64,
+    bytes_read: u64,
+    bytes_written: u64,
+    peak_buffer_ownership_bytes: u64,
+    peak_rss_kb: Option<u64>,
+    phases_us: Value,
+) -> Value {
+    json!({
+        "schema": "mister-magik-agent-io-operation-v1",
+        "operation": operation,
+        "clock_domain": "CLOCK_MONOTONIC",
+        "request_received_monotonic_us": request_received_monotonic_us,
+        "operation_started_monotonic_us": operation_started_monotonic_us,
+        "operation_ended_monotonic_us": operation_ended_monotonic_us,
+        "elapsed_us": operation_ended_monotonic_us.saturating_sub(operation_started_monotonic_us),
+        "bytes_read": bytes_read,
+        "bytes_written": bytes_written,
+        "peak_buffer_ownership_bytes": peak_buffer_ownership_bytes,
+        "peak_rss_kb": peak_rss_kb,
+        "phases_us": phases_us,
+    })
+}
+
+#[cfg(any(target_os = "linux", test))]
 #[cfg_attr(all(test, not(target_os = "linux")), allow(dead_code))]
 mod sd_browse {
     use quick_xml::Reader as XmlReader;
@@ -117,6 +145,7 @@ mod sd_browse {
         let relative_path = normalize_sd_relative_path(requested_path)?;
         let host_path = checked_sd_host_path(root, &relative_path)
             .map_err(|err| format!("read_dir {relative_path}: {err}"))?;
+        let enumerate_start = Instant::now();
         let mut entries = Vec::new();
         for entry in
             fs::read_dir(&host_path).map_err(|err| format!("read_dir {relative_path}: {err}"))?
@@ -127,13 +156,31 @@ mod sd_browse {
             }
             entries.push(sd_entry_json(&relative_path, entry)?);
         }
+        let enumerate_us = enumerate_start.elapsed().as_micros() as u64;
+        let sort_start = Instant::now();
         entries.sort_by(sd_entry_value_cmp);
+        let sort_us = sort_start.elapsed().as_micros() as u64;
+        let serialization_start = Instant::now();
+        let serialized_bytes = serde_json::to_vec(&entries)
+            .map_err(|err| format!("serialize directory entries: {err}"))?
+            .len() as u64;
+        let serialization_us = serialization_start.elapsed().as_micros() as u64;
+        let entry_count = entries.len() as u64;
         Ok(json!({
             "schema": "mister-magik-sd-list-dir-v1",
             "path": relative_path,
             "show_hidden": show_hidden,
             "entries": entries,
             "elapsed_ms": start.elapsed().as_millis() as u64,
+            "io_phases_us": {
+                "directory_enumeration": enumerate_us,
+                "sort": sort_us,
+                "serialization": serialization_us,
+            },
+            "io_counts": {
+                "entries": entry_count,
+                "serialized_bytes": serialized_bytes,
+            },
         }))
     }
 
@@ -146,6 +193,7 @@ mod sd_browse {
         let relative_path = normalize_sd_relative_path(requested_path)?;
         let host_path = checked_sd_host_path(root, &relative_path)
             .map_err(|err| format!("read_dir {relative_path}: {err}"))?;
+        let enumerate_start = Instant::now();
         let mut entries = Vec::new();
         for entry in
             fs::read_dir(&host_path).map_err(|err| format!("read_dir {relative_path}: {err}"))?
@@ -156,13 +204,31 @@ mod sd_browse {
             }
             entries.push(sd_entry_fast_json(&relative_path, entry)?);
         }
+        let enumerate_us = enumerate_start.elapsed().as_micros() as u64;
+        let sort_start = Instant::now();
         entries.sort_by(sd_entry_value_cmp);
+        let sort_us = sort_start.elapsed().as_micros() as u64;
+        let serialization_start = Instant::now();
+        let serialized_bytes = serde_json::to_vec(&entries)
+            .map_err(|err| format!("serialize directory entries: {err}"))?
+            .len() as u64;
+        let serialization_us = serialization_start.elapsed().as_micros() as u64;
+        let entry_count = entries.len() as u64;
         Ok(json!({
             "schema": "mister-magik-sd-list-dir-v2",
             "path": relative_path,
             "show_hidden": show_hidden,
             "entries": entries,
             "elapsed_ms": start.elapsed().as_millis() as u64,
+            "io_phases_us": {
+                "directory_enumeration": enumerate_us,
+                "sort": sort_us,
+                "serialization": serialization_us,
+            },
+            "io_counts": {
+                "entries": entry_count,
+                "serialized_bytes": serialized_bytes,
+            },
         }))
     }
 
@@ -751,7 +817,7 @@ mod library_snapshot {
     use serde_json::{Value, json};
     use std::fs;
     use std::path::Path;
-    use std::time::UNIX_EPOCH;
+    use std::time::{Instant, UNIX_EPOCH};
 
     pub const SCHEMA: &str = "mister-magik-library-db-snapshot-v1";
     pub const LIBRARY_DB_PATH: &str = "/media/fat/mister-magik-dev/library.sqlite3";
@@ -781,14 +847,22 @@ mod library_snapshot {
         path: &Path,
         remote_path: &str,
     ) -> Result<LibraryDatabaseSnapshot, String> {
+        let metadata_start = Instant::now();
         let metadata = fs::metadata(path).map_err(|err| format!("stat {remote_path}: {err}"))?;
+        let metadata_us = metadata_start.elapsed().as_micros() as u64;
         if !metadata.is_file() {
             return Err(format!("library database is not a file: {remote_path}"));
         }
+        let read_start = Instant::now();
         let bytes = fs::read(path).map_err(|err| format!("read {remote_path}: {err}"))?;
+        let read_us = read_start.elapsed().as_micros() as u64;
         let raw_bytes = bytes.len() as u64;
+        let checksum_start = Instant::now();
         let checksum = fnv64_hex(&bytes);
+        let checksum_us = checksum_start.elapsed().as_micros() as u64;
+        let lz4_start = Instant::now();
         let payload = lz4_flex::block::compress(&bytes);
+        let lz4_us = lz4_start.elapsed().as_micros() as u64;
         let mtime_unix_ms = metadata
             .modified()
             .ok()
@@ -804,6 +878,13 @@ mod library_snapshot {
                 "encoding": "lz4-block",
                 "checksum": checksum,
                 "mtime_unix_ms": mtime_unix_ms,
+                "io_phases_us": {
+                    "metadata": metadata_us,
+                    "read": read_us,
+                    "checksum": checksum_us,
+                    "lz4": lz4_us,
+                },
+                "peak_buffer_ownership_bytes": raw_bytes.saturating_add(payload.len() as u64),
             }),
             payload,
         })
@@ -2289,6 +2370,7 @@ mod linux {
         stream: &mut TcpStream,
     ) -> bool {
         let request_received = Instant::now();
+        let request_received_monotonic_us = monotonic_us_now();
         let parsed: Value = match serde_json::from_str(line.trim()) {
             Ok(value) => value,
             Err(_) => return false,
@@ -2310,7 +2392,13 @@ mod linux {
             return true;
         }
         timeline_record_once("first_command", format!("cmd={}", cmd.unwrap_or("")));
-        match framebuffer_capture_raw(request_received, started, boot_id, lz4) {
+        match framebuffer_capture_raw(
+            request_received,
+            request_received_monotonic_us,
+            started,
+            boot_id,
+            lz4,
+        ) {
             Ok(capture) => {
                 let response = response(id, true, Some(capture.result), None);
                 let _ = writeln!(stream, "{response}");
@@ -2328,6 +2416,7 @@ mod linux {
         token: &str,
         stream: &mut TcpStream,
     ) -> bool {
+        let request_received_monotonic_us = monotonic_us_now();
         let parsed: Value = match serde_json::from_str(line.trim()) {
             Ok(value) => value,
             Err(_) => return false,
@@ -2351,8 +2440,34 @@ mod linux {
             "first_command",
             "cmd=library_database_snapshot_lz4_stream".to_string(),
         );
+        let operation_started_monotonic_us = monotonic_us_now();
         match crate::library_snapshot::snapshot_for_args(&args) {
-            Ok(snapshot) => {
+            Ok(mut snapshot) => {
+                let operation_ended_monotonic_us = monotonic_us_now();
+                let raw_bytes = snapshot.result["raw_bytes"].as_u64().unwrap_or(0);
+                let payload_bytes = snapshot.result["payload_bytes"].as_u64().unwrap_or(0);
+                let peak_buffer_ownership_bytes = snapshot.result["peak_buffer_ownership_bytes"]
+                    .as_u64()
+                    .unwrap_or_else(|| raw_bytes.saturating_add(payload_bytes));
+                let phases = snapshot
+                    .result
+                    .get("io_phases_us")
+                    .cloned()
+                    .unwrap_or_else(|| json!({}));
+                attach_io_operation_evidence(
+                    &mut snapshot.result,
+                    io_operation_evidence(
+                        "library_snapshot",
+                        request_received_monotonic_us,
+                        operation_started_monotonic_us,
+                        operation_ended_monotonic_us,
+                        raw_bytes,
+                        payload_bytes,
+                        peak_buffer_ownership_bytes,
+                        peak_rss_kb(),
+                        phases,
+                    ),
+                );
                 append_log_line(format!(
                     "library_database_snapshot_lz4_stream raw_bytes={} payload_bytes={} checksum={}",
                     snapshot.result["raw_bytes"],
@@ -2413,6 +2528,7 @@ mod linux {
 
     fn handle_control_line(line: &str, token: &str, boot_id: u64, started: Instant) -> String {
         let request_received = Instant::now();
+        let request_received_monotonic_us = monotonic_us_now();
         let request = match parse_control_request(line, token, CONTROL_AUTH_DISABLED) {
             Ok(request) => request,
             Err(error) => {
@@ -2450,11 +2566,11 @@ mod linux {
                 Ok(result) => response(id, true, Some(result), None),
                 Err(err) => response(id, false, None, Some(&err)),
             },
-            "sd_list_dir" => match sd_list_dir(args) {
+            "sd_list_dir" => match sd_list_dir(args, request_received_monotonic_us) {
                 Ok(result) => response(id, true, Some(result), None),
                 Err(err) => response(id, false, None, Some(&err)),
             },
-            "sd_list_dir_v2" => match sd_list_dir_v2(args) {
+            "sd_list_dir_v2" => match sd_list_dir_v2(args, request_received_monotonic_us) {
                 Ok(result) => response(id, true, Some(result), None),
                 Err(err) => response(id, false, None, Some(&err)),
             },
@@ -2466,10 +2582,13 @@ mod linux {
                 Ok(result) => response(id, true, Some(result), None),
                 Err(err) => response(id, false, None, Some(&err)),
             },
-            "framebuffer_capture" => match framebuffer_capture(request_received, started) {
-                Ok(result) => response(id, true, Some(result), None),
-                Err(err) => response(id, false, None, Some(&err)),
-            },
+            "framebuffer_capture" => {
+                match framebuffer_capture(request_received, request_received_monotonic_us, started)
+                {
+                    Ok(result) => response(id, true, Some(result), None),
+                    Err(err) => response(id, false, None, Some(&err)),
+                }
+            }
             "launcher_automation_begin" => match crate::launcher_automation::begin(args) {
                 Ok(result) => response(id, true, Some(result), None),
                 Err(err) => response(id, false, None, Some(&err)),
@@ -2502,6 +2621,23 @@ mod linux {
             json!({"id": id.unwrap_or(Value::Null), "ok": false, "error": error.unwrap_or("error")})
         };
         value.to_string()
+    }
+
+    fn attach_io_operation_evidence(result: &mut Value, evidence: Value) {
+        if let Some(result) = result.as_object_mut() {
+            result.insert("io_operation".to_string(), evidence);
+        }
+    }
+
+    fn peak_rss_kb() -> Option<u64> {
+        let mut usage = std::mem::MaybeUninit::<libc::rusage>::uninit();
+        // SAFETY: getrusage initializes the supplied rusage value on success.
+        if unsafe { libc::getrusage(libc::RUSAGE_SELF, usage.as_mut_ptr()) } != 0 {
+            return None;
+        }
+        // SAFETY: getrusage returned success, so usage is initialized.
+        let usage = unsafe { usage.assume_init() };
+        u64::try_from(usage.ru_maxrss).ok()
     }
 
     fn local_ipv5() -> Option<String> {
@@ -2728,7 +2864,7 @@ mod linux {
         }
     }
 
-    fn sd_list_dir(args: Value) -> Result<Value, String> {
+    fn sd_list_dir(args: Value, request_received_monotonic_us: u64) -> Result<Value, String> {
         let path = args
             .get("path")
             .and_then(Value::as_str)
@@ -2737,23 +2873,73 @@ mod linux {
             .get("show_hidden")
             .and_then(Value::as_bool)
             .unwrap_or(false);
-        crate::sd_browse::list_dir_at_root(Path::new(crate::sd_browse::SD_ROOT), path, show_hidden)
-    }
-
-    fn sd_list_dir_v2(args: Value) -> Result<Value, String> {
-        let path = args
-            .get("path")
-            .and_then(Value::as_str)
-            .unwrap_or(crate::sd_browse::ROOT_PATH);
-        let show_hidden = args
-            .get("show_hidden")
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
-        crate::sd_browse::list_dir_fast_at_root(
+        let operation_started_monotonic_us = monotonic_us_now();
+        let mut result = crate::sd_browse::list_dir_at_root(
             Path::new(crate::sd_browse::SD_ROOT),
             path,
             show_hidden,
-        )
+        )?;
+        attach_directory_io_evidence(
+            &mut result,
+            "directory_list_v1",
+            request_received_monotonic_us,
+            operation_started_monotonic_us,
+        );
+        Ok(result)
+    }
+
+    fn sd_list_dir_v2(args: Value, request_received_monotonic_us: u64) -> Result<Value, String> {
+        let path = args
+            .get("path")
+            .and_then(Value::as_str)
+            .unwrap_or(crate::sd_browse::ROOT_PATH);
+        let show_hidden = args
+            .get("show_hidden")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        let operation_started_monotonic_us = monotonic_us_now();
+        let mut result = crate::sd_browse::list_dir_fast_at_root(
+            Path::new(crate::sd_browse::SD_ROOT),
+            path,
+            show_hidden,
+        )?;
+        attach_directory_io_evidence(
+            &mut result,
+            "directory_list_v2",
+            request_received_monotonic_us,
+            operation_started_monotonic_us,
+        );
+        Ok(result)
+    }
+
+    fn attach_directory_io_evidence(
+        result: &mut Value,
+        operation: &str,
+        request_received_monotonic_us: u64,
+        operation_started_monotonic_us: u64,
+    ) {
+        let operation_ended_monotonic_us = monotonic_us_now();
+        let serialized_bytes = result["io_counts"]["serialized_bytes"]
+            .as_u64()
+            .unwrap_or(0);
+        let phases = result
+            .get("io_phases_us")
+            .cloned()
+            .unwrap_or_else(|| json!({}));
+        attach_io_operation_evidence(
+            result,
+            io_operation_evidence(
+                operation,
+                request_received_monotonic_us,
+                operation_started_monotonic_us,
+                operation_ended_monotonic_us,
+                0,
+                serialized_bytes,
+                serialized_bytes,
+                peak_rss_kb(),
+                phases,
+            ),
+        );
     }
 
     fn sd_stat_item(args: Value) -> Result<Value, String> {
@@ -2792,12 +2978,14 @@ mod linux {
     struct PngEncodeTiming {
         rgba_convert_us: u64,
         zlib_encode_us: u64,
+        crc32_us: u64,
         png_wrap_us: u64,
     }
 
     struct PngEncodeResult {
         bytes: Vec<u8>,
         timing: PngEncodeTiming,
+        workspace_peak_bytes: u64,
     }
 
     struct RawFramebufferCapture {
@@ -2880,7 +3068,12 @@ mod linux {
         }
     }
 
-    fn framebuffer_capture(request_received: Instant, started: Instant) -> Result<Value, String> {
+    fn framebuffer_capture(
+        request_received: Instant,
+        request_received_monotonic_us: u64,
+        started: Instant,
+    ) -> Result<Value, String> {
+        let operation_started_monotonic_us = monotonic_us_now();
         let start = Instant::now();
         let request_received_uptime_ms =
             request_received.duration_since(started).as_millis() as u64;
@@ -2894,7 +3087,9 @@ mod linux {
         let geometry_us = 0;
         let source_json = source.json();
         let source_label = source.label();
+        let content_scan_t = Instant::now();
         let (content_nonzero_bytes, content_varied) = framebuffer_content_stats(&raw, geometry);
+        let content_scan_us = elapsed_us(content_scan_t);
         let png_t = Instant::now();
         let png = framebuffer_png(&raw, geometry)?;
         let png_total_us = elapsed_us(png_t);
@@ -2902,7 +3097,25 @@ mod linux {
         let png_hex = encode_hex(&png.bytes);
         let hex_encode_us = elapsed_us(hex_t);
         let total_us = elapsed_us(start);
-        Ok(json!({
+        let operation_ended_monotonic_us = monotonic_us_now();
+        let raw_bytes = raw.len() as u64;
+        let png_bytes = png.bytes.len() as u64;
+        let png_hex_bytes = png_hex.len() as u64;
+        let peak_buffer_ownership_bytes = raw_bytes.saturating_add(png.workspace_peak_bytes).max(
+            raw_bytes
+                .saturating_add(png_bytes)
+                .saturating_add(png_hex_bytes),
+        );
+        let phases = json!({
+            "raw_framebuffer_capture": raw_read_us,
+            "content_scan": content_scan_us,
+            "rgb_conversion": png.timing.rgba_convert_us,
+            "zlib": png.timing.zlib_encode_us,
+            "crc": png.timing.crc32_us,
+            "png_wrap": png.timing.png_wrap_us,
+            "hex_encoding": hex_encode_us,
+        });
+        let mut result = json!({
             "schema": "mister-magik-framebuffer-capture-v2",
             "source": source_label,
             "capture_source": source_json,
@@ -2924,14 +3137,31 @@ mod linux {
                 "dispatch_us": dispatch_us,
                 "geometry_us": geometry_us,
                 "raw_read_us": raw_read_us,
+                "content_scan_us": content_scan_us,
                 "rgba_convert_us": png.timing.rgba_convert_us,
                 "zlib_encode_us": png.timing.zlib_encode_us,
+                "crc32_us": png.timing.crc32_us,
                 "png_wrap_us": png.timing.png_wrap_us,
                 "png_total_us": png_total_us,
                 "hex_encode_us": hex_encode_us,
                 "total_us": total_us,
             },
-        }))
+        });
+        attach_io_operation_evidence(
+            &mut result,
+            io_operation_evidence(
+                "framebuffer_png_capture",
+                request_received_monotonic_us,
+                operation_started_monotonic_us,
+                operation_ended_monotonic_us,
+                raw_bytes,
+                png_hex_bytes,
+                peak_buffer_ownership_bytes,
+                peak_rss_kb(),
+                phases,
+            ),
+        );
+        Ok(result)
     }
 
     fn framebuffer_content_stats(raw: &[u8], geometry: FramebufferGeometry) -> (usize, bool) {
@@ -3817,10 +4047,12 @@ mod linux {
 
     fn framebuffer_capture_raw(
         request_received: Instant,
+        request_received_monotonic_us: u64,
         started: Instant,
         boot_id: u64,
         lz4: bool,
     ) -> Result<RawFramebufferCapture, String> {
+        let operation_started_monotonic_us = monotonic_us_now();
         let start = Instant::now();
         let request_received_uptime_ms =
             request_received.duration_since(started).as_millis() as u64;
@@ -3833,7 +4065,9 @@ mod linux {
         let source_json = capture.source.json();
         let source_label = capture.source.label();
         let authoritative_scanout = capture.source.authoritative_scanout();
+        let content_scan_t = Instant::now();
         let (content_nonzero_bytes, content_varied) = framebuffer_content_stats(&raw, geometry);
+        let content_scan_us = elapsed_us(content_scan_t);
         let geometry_us = 0;
         let lz4_t = Instant::now();
         let payload = if lz4 {
@@ -3843,35 +4077,60 @@ mod linux {
         };
         let lz4_encode_us = if lz4 { elapsed_us(lz4_t) } else { 0 };
         let total_us = elapsed_us(start);
-        Ok(RawFramebufferCapture {
-            result: json!({
-                "schema": "mister-magik-framebuffer-raw-stream-v2",
-                "boot_id": boot_id,
-                "source": source_label,
-                "capture_source": source_json,
-                "authoritative_scanout": authoritative_scanout,
-                "width": geometry.width,
-                "height": geometry.height,
-                "stride": geometry.stride,
-                "bpp": geometry.bpp,
-                "format": if geometry.bpp == 16 { "rgb565-le" } else { "bgrx8888" },
-                "encoding": if lz4 { "lz4-block-size-prepended" } else { "raw" },
-                "raw_bytes": raw.len(),
-                "payload_bytes": payload.len(),
-                "content_nonzero_bytes": content_nonzero_bytes,
-                "content_varied": content_varied,
-                "elapsed_ms": total_us / 1000,
-                "timings": {
-                    "request_received_uptime_ms": request_received_uptime_ms,
-                    "dispatch_us": dispatch_us,
-                    "geometry_us": geometry_us,
-                    "raw_read_us": raw_read_us,
-                    "lz4_encode_us": lz4_encode_us,
-                    "total_us": total_us,
+        let operation_ended_monotonic_us = monotonic_us_now();
+        let raw_bytes = raw.len() as u64;
+        let payload_bytes = payload.len() as u64;
+        let phases = json!({
+            "raw_framebuffer_capture": raw_read_us,
+            "content_scan": content_scan_us,
+            "lz4": lz4_encode_us,
+        });
+        let mut result = json!({
+            "schema": "mister-magik-framebuffer-raw-stream-v2",
+            "boot_id": boot_id,
+            "source": source_label,
+            "capture_source": source_json,
+            "authoritative_scanout": authoritative_scanout,
+            "width": geometry.width,
+            "height": geometry.height,
+            "stride": geometry.stride,
+            "bpp": geometry.bpp,
+            "format": if geometry.bpp == 16 { "rgb565-le" } else { "bgrx8888" },
+            "encoding": if lz4 { "lz4-block-size-prepended" } else { "raw" },
+            "raw_bytes": raw.len(),
+            "payload_bytes": payload.len(),
+            "content_nonzero_bytes": content_nonzero_bytes,
+            "content_varied": content_varied,
+            "elapsed_ms": total_us / 1000,
+            "timings": {
+                "request_received_uptime_ms": request_received_uptime_ms,
+                "dispatch_us": dispatch_us,
+                "geometry_us": geometry_us,
+                "raw_read_us": raw_read_us,
+                "content_scan_us": content_scan_us,
+                "lz4_encode_us": lz4_encode_us,
+                "total_us": total_us,
+            },
+        });
+        attach_io_operation_evidence(
+            &mut result,
+            io_operation_evidence(
+                if lz4 {
+                    "framebuffer_lz4_capture"
+                } else {
+                    "framebuffer_raw_capture"
                 },
-            }),
-            payload,
-        })
+                request_received_monotonic_us,
+                operation_started_monotonic_us,
+                operation_ended_monotonic_us,
+                raw_bytes,
+                payload_bytes,
+                raw_bytes.saturating_add(payload_bytes),
+                peak_rss_kb(),
+                phases,
+            ),
+        );
+        Ok(RawFramebufferCapture { result, payload })
     }
 
     fn framebuffer_geometry() -> Result<FramebufferGeometry, String> {
@@ -3949,18 +4208,23 @@ mod linux {
         ihdr.extend_from_slice(&(geometry.width as u32).to_be_bytes());
         ihdr.extend_from_slice(&(geometry.height as u32).to_be_bytes());
         ihdr.extend_from_slice(&[8, 6, 0, 0, 0]);
-        png_chunk(&mut png, b"IHDR", &ihdr);
-        png_chunk(&mut png, b"IDAT", &idat);
-        png_chunk(&mut png, b"IEND", &[]);
+        let crc32_us = png_chunk(&mut png, b"IHDR", &ihdr)
+            .saturating_add(png_chunk(&mut png, b"IDAT", &idat))
+            .saturating_add(png_chunk(&mut png, b"IEND", &[]));
         let png_wrap_us = elapsed_us(wrap_t);
+        let workspace_peak_bytes = (rgba.len() as u64)
+            .saturating_add(idat.len() as u64)
+            .saturating_add(png.len() as u64);
 
         Ok(PngEncodeResult {
             bytes: png,
             timing: PngEncodeTiming {
                 rgba_convert_us,
                 zlib_encode_us,
+                crc32_us,
                 png_wrap_us,
             },
+            workspace_peak_bytes,
         })
     }
 
@@ -4021,14 +4285,16 @@ mod linux {
         encoder.finish().map_err(|err| err.to_string())
     }
 
-    fn png_chunk(out: &mut Vec<u8>, tag: &[u8; 4], data: &[u8]) {
+    fn png_chunk(out: &mut Vec<u8>, tag: &[u8; 4], data: &[u8]) -> u64 {
         out.extend_from_slice(&(data.len() as u32).to_be_bytes());
         out.extend_from_slice(tag);
         out.extend_from_slice(data);
         let mut crc_input = Vec::with_capacity(tag.len() + data.len());
         crc_input.extend_from_slice(tag);
         crc_input.extend_from_slice(data);
+        let crc_start = Instant::now();
         out.extend_from_slice(&crc32(&crc_input).to_be_bytes());
+        elapsed_us(crc_start)
     }
 
     fn crc32(data: &[u8]) -> u32 {
@@ -5735,6 +6001,29 @@ mod tests {
             linux::video_diagnostics_ownership_state(Some(4), Some(4), None, true),
             (false, true)
         );
+    }
+
+    #[test]
+    fn io_operation_evidence_uses_common_monotonic_and_capacity_fields() {
+        let evidence = io_operation_evidence(
+            "fixture_operation",
+            900,
+            1_000,
+            1_250,
+            4_096,
+            1_024,
+            5_120,
+            Some(12_345),
+            serde_json::json!({"read": 100, "serialization": 50}),
+        );
+        assert_eq!(evidence["schema"], "mister-magik-agent-io-operation-v1");
+        assert_eq!(evidence["clock_domain"], "CLOCK_MONOTONIC");
+        assert_eq!(evidence["elapsed_us"], 250);
+        assert_eq!(evidence["bytes_read"], 4_096);
+        assert_eq!(evidence["bytes_written"], 1_024);
+        assert_eq!(evidence["peak_buffer_ownership_bytes"], 5_120);
+        assert_eq!(evidence["peak_rss_kb"], 12_345);
+        assert_eq!(evidence["phases_us"]["serialization"], 50);
     }
 
     #[cfg(not(target_os = "linux"))]
