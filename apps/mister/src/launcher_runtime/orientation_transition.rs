@@ -1232,7 +1232,7 @@ mod tests {
             width,
             height,
             &black_levels,
-            damage,
+            OrientationTransitionDamage::full(),
         );
         assert!(render_center_pixel_zoom_wave_neon(
             &source,
@@ -1240,7 +1240,7 @@ mod tests {
             width,
             height,
             &black_levels,
-            damage,
+            OrientationTransitionDamage::full(),
         ));
         assert_eq!(neon, scalar);
     }
