@@ -5532,6 +5532,8 @@ mod tests {
     use std::io::Read;
     #[cfg(target_os = "linux")]
     use std::io::{BufReader, Cursor};
+    #[cfg(target_os = "linux")]
+    use std::time::Duration;
 
     fn decode_truecolor_png(png: &[u8]) -> (usize, usize, Vec<u8>) {
         assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n");
