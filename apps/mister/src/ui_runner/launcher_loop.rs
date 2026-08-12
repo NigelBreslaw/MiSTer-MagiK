@@ -106,6 +106,17 @@ fn settings_navigation_status_drain_complete(elapsed: Duration, status_current: 
         || (elapsed >= SETTINGS_NAVIGATION_STATUS_DRAIN_MIN && status_current)
 }
 
+fn settings_navigation_status_drain_plan(
+    sequence_before_frame: u64,
+    sequence_after_frame: u64,
+) -> (u64, bool) {
+    if sequence_after_frame > sequence_before_frame {
+        (sequence_before_frame, false)
+    } else {
+        (sequence_after_frame, true)
+    }
+}
+
 fn discrete_selection_feedback_target(
     nav: &LauncherNav,
     setup: &SetupNav,
@@ -10492,6 +10503,10 @@ pub(super) fn run_launcher_loop(
         let mut confirmed_direct_layer_receipt = None;
         let mut selection_feedback_confirmed_at =
             (!latch_trace_flush_deferred && visible_frame_presented).then_some(frame_t4);
+        let runtime_status_sequence_before_frame = settings_navigation_benchmark
+            .enabled()
+            .then(|| frame_accounting.runtime_status_submitted_sequence())
+            .unwrap_or_default();
         if latch_trace_flush_deferred {
             let finish_timing = frame_accounting.finish_frame_before_trace(
                 &presented_frame,
@@ -11077,8 +11092,11 @@ pub(super) fn run_launcher_loop(
                 settings_navigation_benchmark.fail("completion-write-failed");
             }
             if settings_navigation_benchmark.complete() {
-                settings_navigation_status_baseline =
-                    Some(frame_accounting.runtime_status_submitted_sequence());
+                let (status_baseline, request_status_write) = settings_navigation_status_drain_plan(
+                    runtime_status_sequence_before_frame,
+                    frame_accounting.runtime_status_submitted_sequence(),
+                );
+                settings_navigation_status_baseline = Some(status_baseline);
                 print_startup_event(
                     start,
                     "settings_navigation_benchmark_complete",
@@ -11089,8 +11107,10 @@ pub(super) fn run_launcher_loop(
                 );
                 settings_navigation_benchmark_completed_at = Some(Instant::now());
                 screensaver_cpu_profile.complete_settings_navigation_transitions(frames);
-                frame_accounting.request_status_write();
-                request_launcher_redraw!();
+                if request_status_write {
+                    frame_accounting.request_status_write();
+                    request_launcher_redraw!();
+                }
             }
         }
         if settings_navigation_benchmark_completed_at.is_some_and(|completed| {
@@ -15414,6 +15434,12 @@ mod tests {
             SETTINGS_NAVIGATION_STATUS_DRAIN_LIMIT,
             false,
         ));
+    }
+
+    #[test]
+    pub(super) fn settings_evidence_reuses_completion_frame_status_submission() {
+        assert_eq!(settings_navigation_status_drain_plan(7, 8), (7, false));
+        assert_eq!(settings_navigation_status_drain_plan(8, 8), (8, true));
     }
 
     #[test]
