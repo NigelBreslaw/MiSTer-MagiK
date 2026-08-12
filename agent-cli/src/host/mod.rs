@@ -2901,11 +2901,14 @@ fn validate_experimental_fpga_inputs(
         .skip(1)
         .filter_map(|field| field.split_once('='))
         .collect();
-    if report_fields.get("valid") != Some(&"0")
-        || report_fields.get("invalid_reason") != Some(&"logic_alms_delta")
-    {
+    let fully_valid = report_fields.get("valid") == Some(&"1")
+        && report_fields.get("invalid_reason") == Some(&"ok");
+    let otherwise_clean_alm_failure = report_fields.get("valid") == Some(&"0")
+        && report_fields.get("invalid_reason") == Some(&"logic_alms_delta");
+    if !fully_valid && !otherwise_clean_alm_failure {
         return Err(
-            "experimental FPGA install accepts only an otherwise-clean ALM-budget failure".into(),
+            "experimental FPGA install requires valid signoff or the narrow ALM-only exception"
+                .into(),
         );
     }
     for field in ["patched_setup_slack_min", "patched_hold_slack_min"] {
@@ -24394,7 +24397,7 @@ H: Handlers=event3 js0"#
     }
 
     #[test]
-    fn experimental_fpga_validation_accepts_only_clean_alm_budget_failure() {
+    fn experimental_fpga_validation_accepts_valid_or_clean_alm_only_signoff() {
         let root = temp_path("experimental-fpga");
         let patched = root.join("signoff/patched");
         fs::create_dir_all(&patched).unwrap();
@@ -24414,6 +24417,15 @@ H: Handlers=event3 js0"#
         .unwrap();
         let clean_alm_failure = "quartus_delta_signoff_tsv\tvalid=0\tinvalid_reason=logic_alms_delta\tpatched_setup_slack_min=0.331\tpatched_hold_slack_min=0.241\tpatched_tns_max_abs=0.0\tcustom_sync_seen=1\tcustom_sync_mtbf=1\n";
         fs::write(&report, clean_alm_failure).unwrap();
+        assert!(validate_experimental_fpga_inputs(&rbf, &metadata, &report).is_ok());
+
+        fs::write(
+            &report,
+            clean_alm_failure
+                .replace("valid=0", "valid=1")
+                .replace("invalid_reason=logic_alms_delta", "invalid_reason=ok"),
+        )
+        .unwrap();
         assert!(validate_experimental_fpga_inputs(&rbf, &metadata, &report).is_ok());
 
         fs::write(
