@@ -22,5 +22,24 @@
     "final_xor": 0,
     "word_byte_order": "high-low",
     "header_words": ["command", "schema", "non_crc_word_count"]
+  },
+  "output_activity": {
+    "schema": 1,
+    "command": 97,
+    "magic": 19793,
+    "word_count": 6,
+    "counter_bits": 8,
+    "flags": {
+      "frame_valid": 0,
+      "counter_collision": 1
+    },
+    "words": [
+      "schema",
+      "flags",
+      "no_de_count",
+      "de_all_zero_count",
+      "de_has_nonzero_count",
+      "crc"
+    ]
   }
 }

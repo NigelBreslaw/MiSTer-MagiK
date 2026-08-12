@@ -139,4 +139,35 @@ if hdmi_evidence["crc"] != {
     "header_words": ["command", "schema", "non_crc_word_count"],
 }:
     raise SystemExit("HDMI lock evidence CRC parameters changed unexpectedly")
+output_activity = hdmi_evidence["output_activity"]
+if output_activity != {
+    "schema": 1,
+    "command": 0x61,
+    "magic": 0x4D51,
+    "word_count": 6,
+    "counter_bits": 8,
+    "flags": {
+        "frame_valid": 0,
+        "counter_collision": 1,
+    },
+    "words": [
+        "schema",
+        "flags",
+        "no_de_count",
+        "de_all_zero_count",
+        "de_has_nonzero_count",
+        "crc",
+    ],
+}:
+    raise SystemExit("HDMI output activity v1 changed without a schema update")
+if output_activity["command"] in (
+    set(spec["commands"].values())
+    | set(video_diagnostics["commands"].values())
+    | {hdmi_evidence["command"]}
+):
+    raise SystemExit("HDMI output activity command overlaps an existing platform command")
+if output_activity["magic"] in set(video_diagnostics["magic"].values()) | {
+    hdmi_evidence["magic"]
+}:
+    raise SystemExit("HDMI output activity magic overlaps an existing diagnostics record")
 print("latch protocol contract: ok")

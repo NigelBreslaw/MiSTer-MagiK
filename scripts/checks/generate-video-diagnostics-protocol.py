@@ -129,13 +129,38 @@ def render_sv(spec: dict, hdmi_evidence: dict) -> str:
     lines.append("")
     for index, name in enumerate(hdmi_evidence["words"]):
         lines.append(f"localparam [1:0] MAGIK_HDMI_EVIDENCE_{upper(name)}_WORD = 2'd{index};")
+    activity = hdmi_evidence["output_activity"]
+    lines.extend(
+        [
+            "",
+            f"localparam [15:0] MAGIK_HDMI_OUTPUT_ACTIVITY_SCHEMA = 16'd{activity['schema']};",
+            f"localparam [7:0] MAGIK_UIO_GET_HDMI_OUTPUT_ACTIVITY = 8'h{activity['command']:02X};",
+            f"localparam [15:0] MAGIK_HDMI_OUTPUT_ACTIVITY_MAGIC = 16'h{activity['magic']:04X};",
+            f"localparam [2:0] MAGIK_HDMI_OUTPUT_ACTIVITY_WORDS = 3'd{activity['word_count']};",
+            f"localparam [15:0] MAGIK_HDMI_OUTPUT_ACTIVITY_HEADER_CRC = 16'h{hdmi_evidence_header_crc(activity, hdmi_evidence['crc']):04X};",
+            "",
+        ]
+    )
+    mask = 0
+    for name, bit in activity["flags"].items():
+        lines.append(
+            f"localparam [15:0] MAGIK_HDMI_OUTPUT_ACTIVITY_FLAG_{upper(name)} = 16'h{1 << bit:04X};"
+        )
+        mask |= 1 << bit
+    lines.append(f"localparam [15:0] MAGIK_HDMI_OUTPUT_ACTIVITY_FLAGS_MASK = 16'h{mask:04X};")
+    lines.append("")
+    for index, name in enumerate(activity["words"]):
+        lines.append(
+            f"localparam [2:0] MAGIK_HDMI_OUTPUT_ACTIVITY_{upper(name)}_WORD = 3'd{index};"
+        )
     return "\n".join(lines) + "\n"
 
 
-def hdmi_evidence_header_crc(spec: dict) -> int:
-    crc = spec["crc"]["initial"]
-    for word in (spec["command"], spec["schema"], spec["word_count"] - 1):
-        crc = crc_word(crc, word, spec["crc"]["polynomial"])
+def hdmi_evidence_header_crc(record: dict, crc_spec: dict | None = None) -> int:
+    crc_spec = record["crc"] if crc_spec is None else crc_spec
+    crc = crc_spec["initial"]
+    for word in (record["command"], record["schema"], record["word_count"] - 1):
+        crc = crc_word(crc, word, crc_spec["polynomial"])
     return crc
 
 

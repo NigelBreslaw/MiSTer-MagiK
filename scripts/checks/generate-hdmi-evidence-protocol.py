@@ -24,11 +24,10 @@ def crc_word(crc: int, word: int, polynomial: int) -> int:
     return crc
 
 
-def zero_golden_crc(spec: dict) -> int:
-    crc_spec = spec["crc"]
+def zero_golden_crc(record: dict, crc_spec: dict) -> int:
     crc = crc_spec["initial"]
-    payload = [spec["schema"], *([0] * (spec["word_count"] - 2))]
-    for word in (spec["command"], spec["schema"], len(payload), *payload):
+    payload = [record["schema"], *([0] * (record["word_count"] - 2))]
+    for word in (record["command"], record["schema"], len(payload), *payload):
         crc = crc_word(crc, word, crc_spec["polynomial"])
     return crc ^ crc_spec["final_xor"]
 
@@ -53,7 +52,32 @@ def render_rust(spec: dict) -> str:
     lines.append("")
     for index, name in enumerate(spec["words"]):
         lines.append(f"pub const HDMI_EVIDENCE_{name.upper()}_WORD: usize = {index};")
-    lines.append(f"pub const HDMI_EVIDENCE_ZERO_GOLDEN_CRC: u16 = 0x{zero_golden_crc(spec):04x};")
+    lines.append(
+        f"pub const HDMI_EVIDENCE_ZERO_GOLDEN_CRC: u16 = 0x{zero_golden_crc(spec, spec['crc']):04x};"
+    )
+    activity = spec["output_activity"]
+    lines.extend(
+        [
+            "",
+            f"pub const HDMI_OUTPUT_ACTIVITY_SCHEMA: u16 = {activity['schema']};",
+            f"pub const GET_HDMI_OUTPUT_ACTIVITY: u16 = 0x{activity['command']:02x};",
+            f"pub const HDMI_OUTPUT_ACTIVITY_MAGIC: u16 = 0x{activity['magic']:04x};",
+            f"pub const HDMI_OUTPUT_ACTIVITY_WORDS: usize = {activity['word_count']};",
+            "",
+        ]
+    )
+    mask = 0
+    for name, bit in activity["flags"].items():
+        lines.append(f"pub const HDMI_OUTPUT_ACTIVITY_FLAG_{name.upper()}: u16 = 1 << {bit};")
+        mask |= 1 << bit
+    lines.append(f"pub const HDMI_OUTPUT_ACTIVITY_FLAGS_MASK: u16 = 0x{mask:04x};")
+    lines.append("")
+    for index, name in enumerate(activity["words"]):
+        lines.append(f"pub const HDMI_OUTPUT_ACTIVITY_{name.upper()}_WORD: usize = {index};")
+    lines.append(
+        "pub const HDMI_OUTPUT_ACTIVITY_ZERO_GOLDEN_CRC: u16 = "
+        f"0x{zero_golden_crc(activity, spec['crc']):04x};"
+    )
     return "\n".join(lines) + "\n"
 
 
@@ -82,6 +106,9 @@ def main() -> None:
     spec = json.loads(SPEC_PATH.read_text())
     if len(spec["words"]) != spec["word_count"] or spec["words"][-1] != "crc":
         raise SystemExit("HDMI evidence layout must match word count and end in CRC")
+    activity = spec["output_activity"]
+    if len(activity["words"]) != activity["word_count"] or activity["words"][-1] != "crc":
+        raise SystemExit("HDMI output activity layout must match word count and end in CRC")
     write_or_check(RUST_PATH, render_rust(spec), args.check)
 
 

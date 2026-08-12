@@ -127,6 +127,29 @@ impl HdmiEvidence {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HdmiOutputActivity {
+    pub words: [u16; HDMI_OUTPUT_ACTIVITY_WORDS],
+}
+
+impl HdmiOutputActivity {
+    pub fn flags(&self) -> u16 {
+        self.words[HDMI_OUTPUT_ACTIVITY_FLAGS_WORD]
+    }
+
+    pub fn no_de_count(&self) -> u8 {
+        self.words[HDMI_OUTPUT_ACTIVITY_NO_DE_COUNT_WORD] as u8
+    }
+
+    pub fn de_all_zero_count(&self) -> u8 {
+        self.words[HDMI_OUTPUT_ACTIVITY_DE_ALL_ZERO_COUNT_WORD] as u8
+    }
+
+    pub fn de_has_nonzero_count(&self) -> u8 {
+        self.words[HDMI_OUTPUT_ACTIVITY_DE_HAS_NONZERO_COUNT_WORD] as u8
+    }
+}
+
 fn message_crc_with_schema(command: u16, schema: u16, payload: &[u16]) -> u16 {
     let mut crc = CRC_INITIAL;
     for word in [command, schema, payload.len() as u16] {
@@ -193,6 +216,56 @@ pub fn decode_hdmi_evidence(words: &[u16]) -> Result<HdmiEvidence, String> {
     let mut owned = [0; HDMI_EVIDENCE_WORDS];
     owned.copy_from_slice(words);
     Ok(HdmiEvidence { words: owned })
+}
+
+pub fn decode_hdmi_output_activity(words: &[u16]) -> Result<HdmiOutputActivity, String> {
+    if words.len() != HDMI_OUTPUT_ACTIVITY_WORDS {
+        return Err(format!(
+            "HDMI output activity command 0x{GET_HDMI_OUTPUT_ACTIVITY:02x} needs \
+             {HDMI_OUTPUT_ACTIVITY_WORDS} words, got {}",
+            words.len()
+        ));
+    }
+    if words[HDMI_OUTPUT_ACTIVITY_SCHEMA_WORD] != HDMI_OUTPUT_ACTIVITY_SCHEMA {
+        return Err(format!(
+            "unsupported HDMI output activity schema {}",
+            words[HDMI_OUTPUT_ACTIVITY_SCHEMA_WORD]
+        ));
+    }
+    let expected = words[HDMI_OUTPUT_ACTIVITY_CRC_WORD];
+    let actual = message_crc_with_schema(
+        GET_HDMI_OUTPUT_ACTIVITY,
+        HDMI_OUTPUT_ACTIVITY_SCHEMA,
+        &words[..HDMI_OUTPUT_ACTIVITY_CRC_WORD],
+    );
+    if expected != actual {
+        return Err(format!(
+            "HDMI output activity CRC mismatch expected=0x{expected:04x} actual=0x{actual:04x}"
+        ));
+    }
+    let flags = words[HDMI_OUTPUT_ACTIVITY_FLAGS_WORD];
+    if flags & !HDMI_OUTPUT_ACTIVITY_FLAGS_MASK != 0 {
+        return Err(format!(
+            "HDMI output activity flags contain reserved bits: 0x{flags:04x}"
+        ));
+    }
+    let counts = [
+        words[HDMI_OUTPUT_ACTIVITY_NO_DE_COUNT_WORD],
+        words[HDMI_OUTPUT_ACTIVITY_DE_ALL_ZERO_COUNT_WORD],
+        words[HDMI_OUTPUT_ACTIVITY_DE_HAS_NONZERO_COUNT_WORD],
+    ];
+    if counts.iter().any(|count| *count > u8::MAX.into()) {
+        return Err("HDMI output activity counter exceeds its 8-bit contract".to_string());
+    }
+    if flags & HDMI_OUTPUT_ACTIVITY_FLAG_FRAME_VALID == 0 && counts.iter().any(|count| *count != 0)
+    {
+        return Err(
+            "HDMI output activity has counters before its first completed frame".to_string(),
+        );
+    }
+    let mut owned = [0; HDMI_OUTPUT_ACTIVITY_WORDS];
+    owned.copy_from_slice(words);
+    Ok(HdmiOutputActivity { words: owned })
 }
 
 fn decode<const N: usize>(
@@ -402,6 +475,68 @@ mod tests {
             &words[..HDMI_EVIDENCE_CRC_WORD],
         );
         assert!(decode_hdmi_evidence(&words).is_err());
+    }
+
+    #[test]
+    fn hdmi_output_activity_decodes_strict_snapshot() {
+        let mut words = [0; HDMI_OUTPUT_ACTIVITY_WORDS];
+        words[HDMI_OUTPUT_ACTIVITY_SCHEMA_WORD] = HDMI_OUTPUT_ACTIVITY_SCHEMA;
+        words[HDMI_OUTPUT_ACTIVITY_FLAGS_WORD] = HDMI_OUTPUT_ACTIVITY_FLAG_FRAME_VALID;
+        words[HDMI_OUTPUT_ACTIVITY_NO_DE_COUNT_WORD] = 3;
+        words[HDMI_OUTPUT_ACTIVITY_DE_ALL_ZERO_COUNT_WORD] = 5;
+        words[HDMI_OUTPUT_ACTIVITY_DE_HAS_NONZERO_COUNT_WORD] = 7;
+        words[HDMI_OUTPUT_ACTIVITY_CRC_WORD] = message_crc_with_schema(
+            GET_HDMI_OUTPUT_ACTIVITY,
+            HDMI_OUTPUT_ACTIVITY_SCHEMA,
+            &words[..HDMI_OUTPUT_ACTIVITY_CRC_WORD],
+        );
+        let decoded = decode_hdmi_output_activity(&words).unwrap();
+        assert_eq!(decoded.flags(), HDMI_OUTPUT_ACTIVITY_FLAG_FRAME_VALID);
+        assert_eq!(decoded.no_de_count(), 3);
+        assert_eq!(decoded.de_all_zero_count(), 5);
+        assert_eq!(decoded.de_has_nonzero_count(), 7);
+    }
+
+    #[test]
+    fn hdmi_output_activity_zero_record_and_invariants_are_strict() {
+        let mut words = [0; HDMI_OUTPUT_ACTIVITY_WORDS];
+        words[HDMI_OUTPUT_ACTIVITY_SCHEMA_WORD] = HDMI_OUTPUT_ACTIVITY_SCHEMA;
+        words[HDMI_OUTPUT_ACTIVITY_CRC_WORD] = message_crc_with_schema(
+            GET_HDMI_OUTPUT_ACTIVITY,
+            HDMI_OUTPUT_ACTIVITY_SCHEMA,
+            &words[..HDMI_OUTPUT_ACTIVITY_CRC_WORD],
+        );
+        assert_eq!(
+            words[HDMI_OUTPUT_ACTIVITY_CRC_WORD],
+            HDMI_OUTPUT_ACTIVITY_ZERO_GOLDEN_CRC
+        );
+        assert!(decode_hdmi_output_activity(&words).is_ok());
+
+        words[HDMI_OUTPUT_ACTIVITY_FLAGS_WORD] = 1 << 15;
+        words[HDMI_OUTPUT_ACTIVITY_CRC_WORD] = message_crc_with_schema(
+            GET_HDMI_OUTPUT_ACTIVITY,
+            HDMI_OUTPUT_ACTIVITY_SCHEMA,
+            &words[..HDMI_OUTPUT_ACTIVITY_CRC_WORD],
+        );
+        assert!(decode_hdmi_output_activity(&words).is_err());
+
+        words[HDMI_OUTPUT_ACTIVITY_FLAGS_WORD] = 0;
+        words[HDMI_OUTPUT_ACTIVITY_NO_DE_COUNT_WORD] = 1;
+        words[HDMI_OUTPUT_ACTIVITY_CRC_WORD] = message_crc_with_schema(
+            GET_HDMI_OUTPUT_ACTIVITY,
+            HDMI_OUTPUT_ACTIVITY_SCHEMA,
+            &words[..HDMI_OUTPUT_ACTIVITY_CRC_WORD],
+        );
+        assert!(decode_hdmi_output_activity(&words).is_err());
+
+        words[HDMI_OUTPUT_ACTIVITY_FLAGS_WORD] = HDMI_OUTPUT_ACTIVITY_FLAG_FRAME_VALID;
+        words[HDMI_OUTPUT_ACTIVITY_NO_DE_COUNT_WORD] = 0x0100;
+        words[HDMI_OUTPUT_ACTIVITY_CRC_WORD] = message_crc_with_schema(
+            GET_HDMI_OUTPUT_ACTIVITY,
+            HDMI_OUTPUT_ACTIVITY_SCHEMA,
+            &words[..HDMI_OUTPUT_ACTIVITY_CRC_WORD],
+        );
+        assert!(decode_hdmi_output_activity(&words).is_err());
     }
 
     #[test]
