@@ -7402,11 +7402,6 @@ pub(super) fn run_launcher_loop(
                                     nav.screen,
                                     frames,
                                 );
-                                if settings_navigation_benchmark.enabled() {
-                                    let telemetry = f.read_magik_presentation_telemetry();
-                                    settings_navigation_benchmark
-                                        .capture_presentation_start(Instant::now(), telemetry);
-                                }
                                 pending_navigation_transition = Some(PendingNavigationTransition {
                                     event: launcher::LauncherEvent {
                                         action: LauncherAction::NavigateBack,
@@ -10656,6 +10651,13 @@ pub(super) fn run_launcher_loop(
                 confirmed_present_sequence = presented_frame.main_present_sequence;
                 let confirmed_at = pace.hit_at.unwrap_or(wait_done);
                 selection_feedback_confirmed_at = Some(confirmed_at);
+                if navigation_capture_source_carrier_rendered
+                    && settings_navigation_benchmark.enabled()
+                {
+                    let telemetry = f.read_magik_presentation_telemetry();
+                    settings_navigation_benchmark
+                        .capture_presentation_start(Instant::now(), telemetry);
+                }
                 if arcade_entry_latency.record_ready_presented_frame(
                     start,
                     confirmed_at,

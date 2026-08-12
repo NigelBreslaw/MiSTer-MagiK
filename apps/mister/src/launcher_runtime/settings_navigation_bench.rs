@@ -304,6 +304,9 @@ impl SettingsNavigationBenchmark {
         let Some(active) = self.active.as_mut() else {
             return;
         };
+        if active.presentation_start.is_some() || active.presentation_error.is_some() {
+            return;
+        }
         match telemetry {
             Ok(telemetry) => {
                 active.presentation_start = Some(SettingsNavigationPresentationCapture {
@@ -528,6 +531,26 @@ mod tests {
         assert!(record.presentation_error.is_none());
         assert_eq!(benchmark.records().len(), 1);
         assert!(!benchmark.failed());
+    }
+
+    #[test]
+    fn animation_window_keeps_the_first_confirmed_source_carrier() {
+        let mut benchmark = SettingsNavigationBenchmark::new(true);
+        let leg = SETTINGS_NAVIGATION_ROUTE[0];
+        benchmark.note_started(leg.route, leg.direction, leg.source, leg.destination, 10);
+        let first = Instant::now();
+        benchmark.capture_presentation_start(first, Ok(presentation_telemetry(10)));
+        benchmark.capture_presentation_start(
+            first + Duration::from_millis(16),
+            Ok(presentation_telemetry(11)),
+        );
+
+        let active = benchmark.active.as_ref().unwrap();
+        assert_eq!(
+            active.presentation_start.unwrap().telemetry.active_sequence,
+            10
+        );
+        assert_eq!(active.presentation_start.unwrap().captured_at, first);
     }
 
     #[test]
