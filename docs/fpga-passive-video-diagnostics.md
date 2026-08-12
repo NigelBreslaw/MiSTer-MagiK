@@ -79,7 +79,10 @@ priority, immutable latch hashes, exact pinned Menu integration, passive cone
 boundaries, and explicit synchronizer identification. The real PLL status uses
 forced first-stage identification because Quartus otherwise treats that status
 as clock-related. Its synchronized `clk_sys` value then crosses to the HDMI
-observer through the normal two-register CDC chain. Native diagnostic records
+observer through the normal two-register CDC chain. Only the asynchronous
+status path into the forced first-stage data pin is false-pathed; its settling
+path to the second register remains timed for metastability analysis. Native
+diagnostic records
 are held immutable before acknowledgement, their generation is sampled twice
 in `clk_sys`, and the complete payload is covered by a nonempty 8 ns net-delay
 constraint. The output generation, output route-context, and fault-trigger

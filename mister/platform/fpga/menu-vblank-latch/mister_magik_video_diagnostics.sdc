@@ -38,6 +38,13 @@ proc magik_require_data_pins {label register_patterns} {
 	return $pins
 }
 
+# The HDMI PLL lock output is an asynchronous status indication. Exclude only
+# its path into the forced first-stage register; the first-to-second-stage
+# settling path remains timed and reported by the metastability analysis.
+set magik_diag_pll_lock_meta_pin [magik_require_data_pins pll_lock_status [list \
+	{*mister_magik_video_diagnostics_control:magik_video_diagnostics|control_pll_lock_meta}]]
+set_false_path -to $magik_diag_pll_lock_meta_pin
+
 set magik_diag_avalon_source [magik_require_registers avalon_payload [list \
 	{*mister_magik_video_diagnostics_avalon:magik_video_diagnostics_avalon|frozen*} \
 	{*mister_magik_video_diagnostics_avalon:magik_video_diagnostics_avalon|armed*} \

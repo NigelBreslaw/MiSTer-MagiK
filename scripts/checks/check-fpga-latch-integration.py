@@ -234,6 +234,13 @@ def main() -> None:
         fail("diagnostic bundled-data skew constraint does not match the held-mailbox window")
     if "set_false_path -from" in diagnostics_sdc_text:
         fail("diagnostic false path overrides its explicit skew analysis")
+    pll_lock_false_path = "set_false_path -to $magik_diag_pll_lock_meta_pin"
+    if (
+        diagnostics_sdc_text.count("set_false_path") != 1
+        or diagnostics_sdc_text.count(pll_lock_false_path) != 1
+        or diagnostics_sdc_text.count("control_pll_lock_meta}") != 1
+    ):
+        fail("HDMI PLL lock first-stage false path is missing or ambiguous")
     if diagnostics_sdc_text.count("-exclude {ccpp}") != 1:
         fail("diagnostic skew constraint does not suppress inapplicable CCPP analysis")
     if "fault_burstcount*" in diagnostics_sdc_text:
@@ -242,7 +249,7 @@ def main() -> None:
         fail("diagnostic SDC requires the constant-folded reference-flags register")
     if diagnostics_sdc_text.count("magik_require_registers") < 8:
         fail("diagnostic CDC constraints do not reject empty node collections")
-    if diagnostics_sdc_text.count("magik_require_data_pins") < 3:
+    if diagnostics_sdc_text.count("magik_require_data_pins") < 4:
         fail("diagnostic CDC skew constraints do not reject empty data-pin collections")
     if (
         "foreach suffix [list d asdata sdata]" not in diagnostics_sdc_text
