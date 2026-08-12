@@ -4,8 +4,8 @@
 use serde_json::{Value, json};
 
 pub const PORT: u16 = 7498;
-// Version 17 streams truecolour PNG scanlines without a full RGBA workspace.
-pub const AGENT_VERSION: u64 = 17;
+// Version 18 precomputes natural-sort keys for directory enumeration.
+pub const AGENT_VERSION: u64 = 18;
 pub const PROTOCOL_VERSION: u64 = 2;
 pub const FRAMEBUFFER_CAPTURE_CAPABILITY: &str = "framebuffer-capture-v2";
 pub const DEVICE_TELEMETRY_CAPABILITY: &str = "device-telemetry-v2";
