@@ -4,8 +4,8 @@
 use serde_json::{Value, json};
 
 pub const PORT: u16 = 7498;
-// Version 19 compacts precomputed directory natural-sort keys into text runs.
-pub const AGENT_VERSION: u64 = 19;
+// Version 20 closes the unqualified directory-sort experiment while retaining PNG streaming.
+pub const AGENT_VERSION: u64 = 20;
 pub const PROTOCOL_VERSION: u64 = 2;
 pub const FRAMEBUFFER_CAPTURE_CAPABILITY: &str = "framebuffer-capture-v2";
 pub const DEVICE_TELEMETRY_CAPABILITY: &str = "device-telemetry-v2";

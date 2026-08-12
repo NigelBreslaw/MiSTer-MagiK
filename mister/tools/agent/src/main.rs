@@ -319,7 +319,6 @@ mod sd_browse {
     use quick_xml::XmlVersion;
     use quick_xml::events::{BytesStart, Event};
     use serde_json::{Value, json};
-    use std::cmp::Ordering;
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::time::{Instant, UNIX_EPOCH};
@@ -329,197 +328,6 @@ mod sd_browse {
     pub const MRA_PARSE_LIMIT_BYTES: u64 = 512 * 1024;
     pub const MRA_RAW_DISPLAY_LIMIT_BYTES: u64 = 256 * 1024;
     pub const IMAGE_PREVIEW_LIMIT_BYTES: u64 = 16 * 1024 * 1024;
-
-    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-    enum EntryKind {
-        Directory,
-        File,
-    }
-
-    impl EntryKind {
-        fn label(self) -> &'static str {
-            match self {
-                Self::Directory => "directory",
-                Self::File => "file",
-            }
-        }
-    }
-
-    #[derive(Debug, Eq, PartialEq)]
-    enum NaturalToken {
-        Text(String),
-        Number {
-            first: char,
-            significant: String,
-            raw_len: usize,
-        },
-    }
-
-    #[derive(Debug, Eq, PartialEq)]
-    struct NaturalSortKey(Vec<NaturalToken>);
-
-    impl NaturalSortKey {
-        fn new(name: &str) -> Self {
-            let mut tokens = Vec::new();
-            let mut chars = name.char_indices().peekable();
-            while let Some((start, ch)) = chars.peek().copied() {
-                if ch.is_ascii_digit() {
-                    let mut end = start;
-                    while let Some((index, digit)) = chars.peek().copied() {
-                        if !digit.is_ascii_digit() {
-                            break;
-                        }
-                        end = index + digit.len_utf8();
-                        chars.next();
-                    }
-                    let raw = &name[start..end];
-                    let trimmed = raw.trim_start_matches('0');
-                    tokens.push(NaturalToken::Number {
-                        first: ch,
-                        significant: if trimmed.is_empty() { "0" } else { trimmed }.to_string(),
-                        raw_len: raw.len(),
-                    });
-                } else {
-                    let mut text = String::new();
-                    while let Some((_, character)) = chars.peek().copied() {
-                        if character.is_ascii_digit() {
-                            break;
-                        }
-                        text.push(character.to_ascii_lowercase());
-                        chars.next();
-                    }
-                    tokens.push(NaturalToken::Text(text));
-                }
-            }
-            Self(tokens)
-        }
-
-        fn cmp(&self, other: &Self) -> Ordering {
-            let mut left_token = 0usize;
-            let mut right_token = 0usize;
-            let mut left_text_offset = 0usize;
-            let mut right_text_offset = 0usize;
-            loop {
-                while matches!(self.0.get(left_token), Some(NaturalToken::Text(text)) if left_text_offset == text.len())
-                {
-                    left_token += 1;
-                    left_text_offset = 0;
-                }
-                while matches!(other.0.get(right_token), Some(NaturalToken::Text(text)) if right_text_offset == text.len())
-                {
-                    right_token += 1;
-                    right_text_offset = 0;
-                }
-                match (self.0.get(left_token), other.0.get(right_token)) {
-                    (None, None) => return Ordering::Equal,
-                    (None, Some(_)) => return Ordering::Less,
-                    (Some(_), None) => return Ordering::Greater,
-                    (Some(NaturalToken::Text(left)), Some(NaturalToken::Text(right))) => {
-                        let left_char = left[left_text_offset..]
-                            .chars()
-                            .next()
-                            .expect("text sort token has remaining content");
-                        let right_char = right[right_text_offset..]
-                            .chars()
-                            .next()
-                            .expect("text sort token has remaining content");
-                        let ordering = left_char.cmp(&right_char);
-                        if ordering != Ordering::Equal {
-                            return ordering;
-                        }
-                        left_text_offset += left_char.len_utf8();
-                        right_text_offset += right_char.len_utf8();
-                    }
-                    (
-                        Some(NaturalToken::Number {
-                            significant: left,
-                            raw_len: left_raw_len,
-                            ..
-                        }),
-                        Some(NaturalToken::Number {
-                            significant: right,
-                            raw_len: right_raw_len,
-                            ..
-                        }),
-                    ) => {
-                        let ordering = left
-                            .len()
-                            .cmp(&right.len())
-                            .then_with(|| left.cmp(right))
-                            .then_with(|| left_raw_len.cmp(right_raw_len));
-                        if ordering != Ordering::Equal {
-                            return ordering;
-                        }
-                        left_token += 1;
-                        right_token += 1;
-                    }
-                    (Some(NaturalToken::Text(left)), Some(NaturalToken::Number { first, .. })) => {
-                        let left_char = left[left_text_offset..]
-                            .chars()
-                            .next()
-                            .expect("text sort token has remaining content");
-                        return left_char.cmp(first);
-                    }
-                    (Some(NaturalToken::Number { first, .. }), Some(NaturalToken::Text(right))) => {
-                        let right_char = right[right_text_offset..]
-                            .chars()
-                            .next()
-                            .expect("text sort token has remaining content");
-                        return first.cmp(&right_char);
-                    }
-                }
-            }
-        }
-    }
-
-    #[derive(Debug)]
-    struct EntryMetadata {
-        size: u64,
-        modified_unix_ms: u64,
-        readonly: bool,
-        hidden: bool,
-    }
-
-    #[derive(Debug)]
-    struct EntryRecord {
-        name: String,
-        path: String,
-        kind: EntryKind,
-        sort_key: NaturalSortKey,
-        metadata: Option<EntryMetadata>,
-    }
-
-    impl EntryRecord {
-        fn cmp(&self, other: &Self) -> Ordering {
-            matches!(other.kind, EntryKind::Directory)
-                .cmp(&matches!(self.kind, EntryKind::Directory))
-                .then_with(|| self.sort_key.cmp(&other.sort_key))
-                .then_with(|| self.name.cmp(&other.name))
-        }
-
-        fn into_json(self, include_metadata: bool) -> Value {
-            if include_metadata {
-                let metadata = self
-                    .metadata
-                    .expect("metadata was requested during directory enumeration");
-                json!({
-                    "name": self.name,
-                    "path": self.path,
-                    "kind": self.kind.label(),
-                    "size": metadata.size,
-                    "modified_unix_ms": metadata.modified_unix_ms,
-                    "readonly": metadata.readonly,
-                    "hidden": metadata.hidden,
-                })
-            } else {
-                json!({
-                    "name": self.name,
-                    "path": self.path,
-                    "kind": self.kind.label(),
-                })
-            }
-        }
-    }
 
     pub fn list_dir_at_root(
         root: &Path,
@@ -531,26 +339,21 @@ mod sd_browse {
         let host_path = checked_sd_host_path(root, &relative_path)
             .map_err(|err| format!("read_dir {relative_path}: {err}"))?;
         let enumerate_start = Instant::now();
-        let mut records = Vec::new();
+        let mut entries = Vec::new();
         for entry in
             fs::read_dir(&host_path).map_err(|err| format!("read_dir {relative_path}: {err}"))?
         {
             let entry = entry.map_err(|err| format!("read_dir {relative_path}: {err}"))?;
-            let name = entry.file_name().to_string_lossy().into_owned();
-            if !show_hidden && is_hidden_name(&name) {
+            if !show_hidden && is_hidden_name(&entry.file_name().to_string_lossy()) {
                 continue;
             }
-            records.push(sd_entry_record(&relative_path, name, entry, true)?);
+            entries.push(sd_entry_json(&relative_path, entry)?);
         }
         let enumerate_us = enumerate_start.elapsed().as_micros() as u64;
         let sort_start = Instant::now();
-        records.sort_by(EntryRecord::cmp);
+        entries.sort_by(sd_entry_value_cmp);
         let sort_us = sort_start.elapsed().as_micros() as u64;
         let serialization_start = Instant::now();
-        let entries = records
-            .into_iter()
-            .map(|entry| entry.into_json(true))
-            .collect::<Vec<_>>();
         let serialized_bytes = serde_json::to_vec(&entries)
             .map_err(|err| format!("serialize directory entries: {err}"))?
             .len() as u64;
@@ -584,26 +387,21 @@ mod sd_browse {
         let host_path = checked_sd_host_path(root, &relative_path)
             .map_err(|err| format!("read_dir {relative_path}: {err}"))?;
         let enumerate_start = Instant::now();
-        let mut records = Vec::new();
+        let mut entries = Vec::new();
         for entry in
             fs::read_dir(&host_path).map_err(|err| format!("read_dir {relative_path}: {err}"))?
         {
             let entry = entry.map_err(|err| format!("read_dir {relative_path}: {err}"))?;
-            let name = entry.file_name().to_string_lossy().into_owned();
-            if !show_hidden && is_hidden_name(&name) {
+            if !show_hidden && is_hidden_name(&entry.file_name().to_string_lossy()) {
                 continue;
             }
-            records.push(sd_entry_record(&relative_path, name, entry, false)?);
+            entries.push(sd_entry_fast_json(&relative_path, entry)?);
         }
         let enumerate_us = enumerate_start.elapsed().as_micros() as u64;
         let sort_start = Instant::now();
-        records.sort_by(EntryRecord::cmp);
+        entries.sort_by(sd_entry_value_cmp);
         let sort_us = sort_start.elapsed().as_micros() as u64;
         let serialization_start = Instant::now();
-        let entries = records
-            .into_iter()
-            .map(|entry| entry.into_json(false))
-            .collect::<Vec<_>>();
         let serialized_bytes = serde_json::to_vec(&entries)
             .map_err(|err| format!("serialize directory entries: {err}"))?
             .len() as u64;
@@ -808,45 +606,43 @@ mod sd_browse {
         Ok(canonical_path)
     }
 
-    fn sd_entry_record(
-        parent_path: &str,
-        name: String,
-        entry: fs::DirEntry,
-        include_metadata: bool,
-    ) -> Result<EntryRecord, String> {
+    pub fn sd_entry_json(parent_path: &str, entry: fs::DirEntry) -> Result<Value, String> {
+        let name = entry.file_name().to_string_lossy().to_string();
         let entry_path = child_sd_path(parent_path, &name);
         let file_type = entry
             .file_type()
             .map_err(|err| format!("file_type {entry_path}: {err}"))?;
+        let metadata = entry
+            .metadata()
+            .map_err(|err| format!("metadata {entry_path}: {err}"))?;
         let kind = if file_type.is_dir() {
-            EntryKind::Directory
+            "directory"
         } else {
-            EntryKind::File
+            "file"
         };
-        let metadata = if include_metadata {
-            let metadata = entry
-                .metadata()
-                .map_err(|err| format!("metadata {entry_path}: {err}"))?;
-            Some(EntryMetadata {
-                size: if file_type.is_dir() {
-                    0
-                } else {
-                    metadata.len()
-                },
-                modified_unix_ms: modified_unix_ms(&metadata),
-                readonly: metadata.permissions().readonly(),
-                hidden: is_hidden_name(&name),
-            })
-        } else {
-            None
-        };
-        Ok(EntryRecord {
-            sort_key: NaturalSortKey::new(&name),
-            name,
-            path: entry_path,
-            kind,
-            metadata,
-        })
+        let modified_unix_ms = modified_unix_ms(&metadata);
+        Ok(json!({
+            "name": name,
+            "path": entry_path,
+            "kind": kind,
+            "size": if file_type.is_dir() { 0 } else { metadata.len() },
+            "modified_unix_ms": modified_unix_ms,
+            "readonly": metadata.permissions().readonly(),
+            "hidden": is_hidden_name(&name),
+        }))
+    }
+
+    fn sd_entry_fast_json(parent_path: &str, entry: fs::DirEntry) -> Result<Value, String> {
+        let name = entry.file_name().to_string_lossy().to_string();
+        let entry_path = child_sd_path(parent_path, &name);
+        let file_type = entry
+            .file_type()
+            .map_err(|err| format!("file_type {entry_path}: {err}"))?;
+        Ok(json!({
+            "name": name,
+            "path": entry_path,
+            "kind": if file_type.is_dir() { "directory" } else { "file" },
+        }))
     }
 
     fn is_hidden_name(name: &str) -> bool {
@@ -1139,15 +935,27 @@ mod sd_browse {
         }
     }
 
-    #[cfg(test)]
-    fn natural_name_cmp_reference(a: &str, b: &str) -> Ordering {
+    pub fn sd_entry_value_cmp(a: &Value, b: &Value) -> std::cmp::Ordering {
+        let a_dir = a.get("kind").and_then(Value::as_str) == Some("directory");
+        let b_dir = b.get("kind").and_then(Value::as_str) == Some("directory");
+        b_dir
+            .cmp(&a_dir)
+            .then_with(|| natural_name_cmp(entry_name(a), entry_name(b)))
+            .then_with(|| entry_name(a).cmp(entry_name(b)))
+    }
+
+    fn entry_name(value: &Value) -> &str {
+        value.get("name").and_then(Value::as_str).unwrap_or("")
+    }
+
+    fn natural_name_cmp(a: &str, b: &str) -> std::cmp::Ordering {
         let mut a_chars = a.char_indices().peekable();
         let mut b_chars = b.char_indices().peekable();
         loop {
             match (a_chars.peek().copied(), b_chars.peek().copied()) {
-                (None, None) => return Ordering::Equal,
-                (None, Some(_)) => return Ordering::Less,
-                (Some(_), None) => return Ordering::Greater,
+                (None, None) => return std::cmp::Ordering::Equal,
+                (None, Some(_)) => return std::cmp::Ordering::Less,
+                (Some(_), None) => return std::cmp::Ordering::Greater,
                 (Some((_, ac)), Some((_, bc))) if ac.is_ascii_digit() && bc.is_ascii_digit() => {
                     let a_digits = take_ascii_digits(a, &mut a_chars);
                     let b_digits = take_ascii_digits(b, &mut b_chars);
@@ -1156,15 +964,15 @@ mod sd_browse {
                     let a_number = if a_trimmed.is_empty() { "0" } else { a_trimmed };
                     let b_number = if b_trimmed.is_empty() { "0" } else { b_trimmed };
                     let by_len = a_number.len().cmp(&b_number.len());
-                    if by_len != Ordering::Equal {
+                    if by_len != std::cmp::Ordering::Equal {
                         return by_len;
                     }
                     let by_value = a_number.cmp(b_number);
-                    if by_value != Ordering::Equal {
+                    if by_value != std::cmp::Ordering::Equal {
                         return by_value;
                     }
                     let by_raw_len = a_digits.len().cmp(&b_digits.len());
-                    if by_raw_len != Ordering::Equal {
+                    if by_raw_len != std::cmp::Ordering::Equal {
                         return by_raw_len;
                     }
                 }
@@ -1172,7 +980,7 @@ mod sd_browse {
                     a_chars.next();
                     b_chars.next();
                     let by_char = ac.to_ascii_lowercase().cmp(&bc.to_ascii_lowercase());
-                    if by_char != Ordering::Equal {
+                    if by_char != std::cmp::Ordering::Equal {
                         return by_char;
                     }
                 }
@@ -1180,19 +988,6 @@ mod sd_browse {
         }
     }
 
-    #[cfg(test)]
-    pub fn natural_sort_cmp_for_test(a: &str, b: &str) -> Ordering {
-        NaturalSortKey::new(a)
-            .cmp(&NaturalSortKey::new(b))
-            .then_with(|| a.cmp(b))
-    }
-
-    #[cfg(test)]
-    pub fn natural_reference_cmp_for_test(a: &str, b: &str) -> Ordering {
-        natural_name_cmp_reference(a, b).then_with(|| a.cmp(b))
-    }
-
-    #[cfg(test)]
     fn take_ascii_digits<'a>(
         text: &'a str,
         chars: &mut std::iter::Peekable<std::str::CharIndices<'a>>,
@@ -5909,46 +5704,6 @@ mod tests {
         assert_eq!(hidden_entry["hidden"], true);
 
         let _ = std::fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn precomputed_directory_sort_keys_preserve_legacy_natural_ordering() {
-        let names = [
-            "",
-            ".hidden",
-            "02",
-            "2",
-            "002",
-            "10",
-            "a-",
-            "a2",
-            "ab",
-            "Alpha",
-            "alpha",
-            "ALPHA2",
-            "alpha02",
-            "alpha2",
-            "alpha10",
-            "file2.rom",
-            "file02.rom",
-            "file002.rom",
-            "file10.rom",
-            "Ångström2",
-            "Ångström10",
-            "ångström2",
-            "日本語2",
-            "日本語10",
-        ];
-
-        for left in names {
-            for right in names {
-                assert_eq!(
-                    sd_browse::natural_sort_cmp_for_test(left, right),
-                    sd_browse::natural_reference_cmp_for_test(left, right),
-                    "ordering changed for {left:?} versus {right:?}"
-                );
-            }
-        }
     }
 
     #[test]
