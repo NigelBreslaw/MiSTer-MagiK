@@ -161,6 +161,16 @@ module tb_mister_magik_video_diagnostics_control;
 		close_command();
 
 		read_evidence(16'd0, 16'd0);
+
+		// A raw pulse sampled by the first stage exactly once produces one high
+		// sample at the synchronized stage. It records that lock was seen but
+		// must not arm the loss counter.
+		@(negedge clk_sys); hdmi_pll_locked = 1'b1;
+		@(negedge clk_sys); hdmi_pll_locked = 1'b0;
+		while(dut.control_pll_lock_sys !== 1'b1) @(negedge clk_sys);
+		while(dut.control_pll_lock_sys !== 1'b0) @(negedge clk_sys);
+		read_evidence(MAGIK_HDMI_EVIDENCE_FLAG_LOCK_SEEN_HIGH, 16'd0);
+
 		drive_synchronized_lock(1'b1);
 		read_evidence(armed_flags, 16'd0);
 		read_armed_snapshot_while_lock_falls();

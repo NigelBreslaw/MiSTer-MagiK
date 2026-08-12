@@ -228,20 +228,15 @@ def main() -> None:
         fail("full unconstrained-path timing report is missing or ambiguous")
     if "get_pins -nowarn -no_duplicates" not in diagnostics_sdc_text:
         fail("diagnostic SDC does not constrain direct register data pins")
-    if (
-        "set_net_delay" in diagnostics_sdc_text
-        or "set_max_skew" in diagnostics_sdc_text
-        or "set_multicycle_path" in diagnostics_sdc_text
-        or "set_false_path -from" in diagnostics_sdc_text
-    ):
-        fail("retired wide-CDC timing exception remains in lock-only SDC")
     pll_lock_false_path = "set_false_path -to $magik_hdmi_lock_meta_pin"
+    timing_commands = re.findall(
+        r"(?m)^\s*(set_[A-Za-z0-9_]+\b[^\n]*)$", diagnostics_sdc_text
+    )
     if (
-        diagnostics_sdc_text.count("set_false_path") != 1
-        or diagnostics_sdc_text.count(pll_lock_false_path) != 1
+        timing_commands != [pll_lock_false_path]
         or diagnostics_sdc_text.count("control_pll_lock_meta}") != 1
     ):
-        fail("HDMI PLL lock first-stage false path is missing or ambiguous")
+        fail("HDMI lock SDC contains more than the sole approved first-stage false path")
     if diagnostics_sdc_text.count("magik_require_data_pin") != 2:
         fail("HDMI lock constraint does not require one exact first-stage data pin")
     if (
@@ -352,18 +347,32 @@ def main() -> None:
             fail("missing minimal HDMI lock evidence binding")
         if control_binding.group(1).count(".hdmi_pll_locked(hdmi_pll_locked)") != 1:
             fail("lock evidence does not observe the real HDMI PLL lock")
-        expected_lock_ports = {
-            ".clk_sys(clk_sys)",
-            ".io_uio(io_uio)",
-            ".io_strobe(io_strobe)",
-            ".io_din(io_din)",
-            ".hdmi_pll_locked(hdmi_pll_locked)",
-            ".response_valid(magik_diag_response_valid)",
-            ".response_data(magik_diag_response_data)",
-        }
-        for port in expected_lock_ports:
-            if control_binding.group(1).count(port) != 1:
-                fail(f"minimal HDMI lock evidence port mismatch: {port}")
+        expected_lock_ports = sorted(
+            (
+                ("clk_sys", "clk_sys"),
+                ("io_uio", "io_uio"),
+                ("io_strobe", "io_strobe"),
+                ("io_din", "io_din"),
+                ("hdmi_pll_locked", "hdmi_pll_locked"),
+                ("response_valid", "magik_diag_response_valid"),
+                ("response_data", "magik_diag_response_data"),
+            )
+        )
+        actual_lock_ports = sorted(
+            re.findall(
+                r"\.([A-Za-z_][A-Za-z0-9_]*)\s*\(\s*"
+                r"([A-Za-z_][A-Za-z0-9_]*)\s*\)",
+                control_binding.group(1),
+            )
+        )
+        all_lock_port_names = re.findall(
+            r"\.([A-Za-z_][A-Za-z0-9_]*)\s*\(", control_binding.group(1)
+        )
+        if actual_lock_ports != expected_lock_ports or len(all_lock_port_names) != 7:
+            fail("minimal HDMI lock evidence port map is not exact")
+        for response_net in ("magik_diag_response_valid", "magik_diag_response_data"):
+            if len(re.findall(rf"\b{response_net}\b", patched)) != 4:
+                fail(f"HDMI lock response net use is not exact: {response_net}")
         if re.search(
             r"\.(?:hdmi_out|vbuf|reset|route|snapshot|fault|heartbeat|generation)",
             control_binding.group(1),
