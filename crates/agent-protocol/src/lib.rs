@@ -4,8 +4,8 @@
 use serde_json::{Value, json};
 
 pub const PORT: u16 = 7498;
-// Version 13 streams authoritative presentation telemetry from latch protocol v5.
-pub const AGENT_VERSION: u64 = 13;
+// Version 14 exposes passive FPGA video diagnostics in device evidence bundles.
+pub const AGENT_VERSION: u64 = 14;
 pub const PROTOCOL_VERSION: u64 = 2;
 pub const FRAMEBUFFER_CAPTURE_CAPABILITY: &str = "framebuffer-capture-v2";
 pub const DEVICE_TELEMETRY_CAPABILITY: &str = "device-telemetry-v2";
