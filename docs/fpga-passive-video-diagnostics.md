@@ -1,127 +1,118 @@
-# Passive FPGA video diagnostics
+# Passive FPGA HDMI evidence
 
-The Phase 2 recorder localizes rare black, white, corrupt-pixel, and timing
-failures without changing the framebuffer latch, scaler, SDRAM data path,
-reset path, clock selection, or final video outputs. It is evidence collection,
-not a health verdict or an automatic fix.
+The current diagnostic is a deliberately small, read-only recorder for the
+physical HDMI FPLL lock. It answers one bounded question after a rare black
+return to Menu: did the real HDMI clock PLL remain locked for the lifetime of
+the current FPGA configuration?
 
-## Checkpoints
+It does not change the framebuffer latch, scaler, SDRAM, reset, clock control,
+PLL reconfiguration, or any video output. It records evidence; it does not
+repair the black-screen fault or claim that lock is its cause.
 
-The RBF retains three independent first-fault records until the FPGA is
-reconfigured:
+## Hardware contract
 
-- `0x5D` records complete, partial, restarted, and owned legacy `0x2F`
-  transactions and the surrounding route/control state in `clk_sys`.
-- `0x5E` records accepted `vbuf_*` addresses, saturated accepted-burst and
-  returned-beat counts, timeout/reset faults, and no-read frame intervals in `clk_100m`.
-  It does not connect to `vbuf_readdata` or `vbuf_writedata`.
-- `0x5F` records frame, line, and active-line totals and all-black/all-white state
-  from the already-registered `hdmi_out_*` signals in `hdmi_tx_clk`. It does
-  not hash, copy, or modify pixels.
+UIO command `0x60` returns `hdmi-lock-evidence-v1`, a fixed four-word record:
 
-The observer arms only after an accepted MiSTer MagiK route and two owned
-vblanks. The first fault freezes its native domain and requests stable mailbox
-snapshots from the other domains. A missing clock produces a partial snapshot
-after 4,096 `clk_sys` cycles. Reads never clear or mutate evidence.
+1. schema;
+2. lock flags;
+3. saturated lock-loss count;
+4. CRC-16/CCITT-FALSE.
 
-The diagnostic ABI is separate from latch protocol v5. Existing commands
-`0x57`–`0x5C`, capability bits, responses, ownership, and apply priority remain
-unchanged. Every diagnostic response has its own magic, fixed length, schema,
-and CRC-16/CCITT-FALSE value.
+The flags report whether lock was seen high, whether two consecutive
+synchronized high samples armed the recorder, the current synchronized lock
+state, whether lock was ever lost after arming, and counter overflow. A
+one-sample high pulse records `seen_high` but does not arm or create a false
+loss. Reads snapshot the record atomically and never arm, clear, or otherwise
+mutate it.
 
-Schema 4 keeps the complete legacy payload and route geometry in a compact
-41-word control history, with compact 16-word Avalon and HDMI event records.
-The control record uses a 16-bit vblank epoch and saturating 8-bit lifetime
-event counters; host monotonic timestamps retain the wider collection timeline.
-The native records retain the first/last actual address, accepted/returned
-accounting, route generation, reference timing, and fault flags without
-carrying generic trace history or pixel-rate counters.
+Commands `0x5D`–`0x5F` belong to the retired schema-4 three-domain observer and
+are unsupported by the current FPGA. New device software probes `0x60` first
+and falls back to the old records only when `0x60` is explicitly unsupported,
+so older qualified RBFs remain diagnosable. A malformed, unknown-schema, or
+CRC-invalid `0x60` response is an error and never triggers legacy fallback.
 
-Schema 4 preserves schema 3's record sizes and layout while correcting the
-lock signal's meaning: both the control and HDMI records now observe the real
-`pll_hdmi_0002.locked` status already carried by `reconfig_from_pll[16]`, not
-the unrelated adjustment-PLL LED status. The stock `pll_hdmi` wrapper keeps its
-redundant lock output terminated. A transient unlock that clears before the
-observer arms is ignored; any unlock sampled after arming is retained as a
-control/clock fault.
+Compatibility is explicit:
 
-## Collection
+| Device agent | FPGA RBF | Result |
+| --- | --- | --- |
+| new | new lock recorder | v2 lock-evidence JSON from `0x60` |
+| new | older schema-4 observer | unchanged v1 JSON after explicit unsupported fallback |
+| old | new lock recorder | safe unavailable/unclassified result because `0x5D`–`0x5F` are unsupported |
+| old | older schema-4 observer | legacy v1 JSON |
 
-Use the authenticated support bundle after a failure, before restarting or
-reposting:
+The unavailable/architecture-unknown envelope intentionally retains schema v1
+for compatibility. Only a successfully decoded `0x60` record emits the v2
+lock-evidence shape.
+
+## Clock-domain boundary
+
+The physical status source is the existing `reconfig_from_pll[16]` signal. The
+stock `pll_hdmi` wrapper keeps its redundant lock output terminated; generated
+Intel IP is unchanged.
+
+The status has exactly one raw consumer: the first register in a two-stage
+`clk_sys` synchronizer. The only diagnostic timing exception is a false path to
+that first-stage data pin. The first-to-second-stage settling path remains
+timed and must appear in Quartus metastability analysis. All recorder state and
+readout logic are in `clk_sys`; there is no wide payload CDC, mailbox, Avalon
+observer, HDMI-pixel observer, max-skew constraint, net-delay constraint, block
+RAM, or DSP.
+
+## Collection and interpretation
+
+Collect evidence before rebooting or reconfiguring the FPGA:
 
 ```text
 scripts/agent device diagnostics --out PATH
 ```
 
-The device agent reads control → Avalon → HDMI → control while holding the
-existing FPGA UIO advisory lock. It retries the complete set once for CRC or
-generation instability, checks Main's FPGA-owner epoch before and after, and
-writes `fpga-video-diagnostics.json` beside the existing bundle members. SSH
-fallback explicitly reports the record unavailable; it never reads raw UIO.
+The authenticated device agent uses the existing UIO advisory lock and writes
+`fpga-video-diagnostics.json` into the support bundle. Raw UIO is never read by
+the SSH fallback. Collection requires the agent transport, `LauncherActive`,
+active MagiK latch ownership, and stable owner epoch, launcher state, and latch
+ownership across the capture. Otherwise the bundle records the evidence as
+unavailable or incoherent rather than issuing an unowned FPGA transaction.
 
-Do not poll these commands continuously. The Rust launcher presenter uses the
-same advisory lock for its complete latch transaction; legacy Main UIO paths
-do not. Collection is therefore restricted to a stable `LauncherActive`
-ownership interval, and owner-epoch, launcher-state, or confirmed latch-owner
-changes invalidate the snapshot.
+The lock-only classifications are:
 
-Classifications are deliberately conservative: `legacy_control`,
-`avalon_no_reads`, `avalon_stall_or_return`, `final_black`, `final_white`,
-`final_timing`, `control_or_clock`, `partial`, or `unclassified`. They identify
-where retained evidence first disagreed; they do not prove a repair, HDMI sink
-health, or SDRAM data correctness.
+- `hdmi_pll_lock_lost`: lock was lost at least once after stable arming;
+- `hdmi_pll_locked`: lock is currently high and no loss was retained;
+- `hdmi_pll_not_stably_armed`: a high sample was seen but stable arming was not;
+- `hdmi_pll_not_seen`: lock has not been sampled high in this configuration.
 
-## Release gates
+`hdmi_pll_locked` narrows the next investigation but does not prove visible
+video. It cannot distinguish a stopped raster, final registered black pixels,
+or a downstream transmitter/display problem. Final-HDMI evidence, if added,
+must use a separate versioned contract and pass its own CDC, characterization,
+and matched-signoff milestone before deployment.
 
-The FPGA fast gate checks the separate generated contract, all native-domain
-fault-injection simulations, the complete 41-word control response, final response
-priority, immutable latch hashes, exact pinned Menu integration, passive cone
-boundaries, and explicit synchronizer identification. The real PLL status uses
-forced first-stage identification because Quartus otherwise treats that status
-as clock-related. Its synchronized `clk_sys` value then crosses to the HDMI
-observer through the normal two-register CDC chain. Only the asynchronous
-status path into the forced first-stage data pin is false-pathed; its settling
-path to the second register remains timed for metastability analysis. Native
-diagnostic records
-are held immutable before acknowledgement, their generation is sampled twice
-in `clk_sys`, and the complete payload is covered by a nonempty 8 ns net-delay
-constraint. The output generation, output route-context, and fault-trigger
-bundles also have an 8 ns skew bound terminating only at their destination
-registers' data pins; clock-enable and readout logic is deliberately outside
-that coherence check. Quartus 17 reports no max-skew paths for the two Avalon
-bundles in this pinned design, so those remain guarded by the complete 8 ns
-net-delay bound plus consecutive stable-generation sampling in the receiver.
-The asynchronous clock groups exclude the bundled paths from ordinary
-functional setup/hold analysis while leaving those explicit CDC bounds
-effective. The synthesis
-workflow applies the same analysis-only exclusive-to-asynchronous clock-group
-change to stock, pre-observer, and final work trees so TimeQuest analyzes those
-skew constraints without biasing the observer delta. No generated clock or
-functional RTL is changed.
+## Qualification
 
-The matched seed-2 Quartus signoff builds stock Menu, the exact pre-observer
-latch revision pinned by `video-diagnostics-baseline.commit`, and the final
-diagnostic RBF. Functional warning, constraint-identity, and synchronizer drift
-remain stock-versus-final checks. Observer overhead is final relative to the
-pre-observer build: no added unconstrained output paths, no more than 0.15 ns
-slack degradation, no more than 1,100 ALMs or 1,500 registers, and no added DSP
-or block-memory use. The final build must also have zero TNS and at least 0.20
-ns setup and hold slack. Production deployment of a changed RBF still requires
-normal release qualification. A locally signed coherent artifact set may be
-installed only in the Dev layout through the typed attended experimental FPGA
-installer; it is neither production-deployable nor release-qualified.
+The fixed-seed-2 local signoff at synthesis commit `840605cf` and
+assurance-complete commit `23b5f5d2` passed the unchanged hard timing gates:
 
-On Apple Silicon, `scripts/agent fpga signoff` runs that same three-way build
-and unchanged checker in Apple containers. It resolves the local `main` ref in
-an isolated generated checkout and caches stock, pre-observer, and patched
-synthesis independently. Observer RTL changes rebuild only the patched variant;
-the invariant references are reused. Each replacement is built in a staging
-directory and promoted only after it completes, so cancellation or failure
-cannot destroy an existing valid cache. A failing checker report is retained
-for fast reruns. Local Rosetta synthesis is a development signoff lane only;
-GitHub still owns publishable platform RBFs.
+- setup slack: 0.474 ns;
+- hold slack: 0.247 ns;
+- total negative slack: zero;
+- unconstrained output paths: 158, equal to the pinned pre-observer build;
+- one added calculable synchronizer chain;
+- resource delta: 64 ALMs, 25 registers, no block memory, no DSP.
 
-Internal `ascal.vhd` probes, SDRAM data inspection, BRAM history, SignalTap,
-writable diagnostics, and pixel-rate CRCs are explicitly outside Phase 2. They
-require a new evidence-backed plan.
+The checker ceiling is 64 ALMs and 96 registers. Any synthesized-source change
+requires fresh empirical signoff; the exact-ceiling ALM result is not a waiver
+for future growth. Setup and hold must remain at least 0.20 ns, TNS zero, slack
+degradation no more than 0.15 ns, warnings within the pinned identity, and
+unconstrained output paths equal to the pre-observer build.
+
+A canonical local signoff set may be installed only to the Dev layout through
+the attended rollback-capable experimental FPGA transaction. It is not release
+qualified. Production publication still requires the matched GitHub platform
+workflow and normal release qualification.
+
+Device acceptance must exercise the new RBF's v2 record, an older qualified
+schema-4 RBF's unchanged v1 fallback, and the SSH unavailable path. Each test
+must verify that CRC/semantic failures never fall back and that SSH never reads
+raw UIO.
+
+The failed wide-observer attempts and their rejected RBF evidence remain in
+[`history/2026-08-12-fpga-seed-2-video-diagnostics-retirement.md`](../history/2026-08-12-fpga-seed-2-video-diagnostics-retirement.md).

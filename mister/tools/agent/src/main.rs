@@ -3699,7 +3699,7 @@ mod linux {
         Ok(raw)
     }
 
-    struct VideoDiagnosticsReadout {
+    struct LegacyVideoDiagnosticsReadout {
         control_before: mister_magik_video_diagnostics_contract::VideoDiagnosticsControlSnapshot,
         avalon: mister_magik_video_diagnostics_contract::VideoDiagnosticsAvalonSnapshot,
         output: mister_magik_video_diagnostics_contract::VideoDiagnosticsOutputSnapshot,
@@ -3716,6 +3716,52 @@ mod linux {
         latch_status_json: Option<Value>,
         capture_start_monotonic_us: u64,
         capture_end_monotonic_us: u64,
+    }
+
+    enum VideoDiagnosticsReadout {
+        HdmiLock(mister_magik_video_diagnostics_contract::HdmiEvidence),
+        Legacy(LegacyVideoDiagnosticsReadout),
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub(super) enum HdmiEvidenceProbeAction {
+        UseNew,
+        RetryNew,
+        ReadLegacy,
+        Fail,
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub(super) enum HdmiEvidenceAck {
+        Present,
+        Unsupported,
+        Invalid,
+    }
+
+    pub(super) fn classify_hdmi_evidence_ack(magic_hi: u16, magic_lo: u16) -> HdmiEvidenceAck {
+        if magic_hi == mister_magik_video_diagnostics_contract::HDMI_EVIDENCE_MAGIC
+            || magic_lo == mister_magik_video_diagnostics_contract::HDMI_EVIDENCE_MAGIC
+        {
+            HdmiEvidenceAck::Present
+        } else if magic_hi == 0 && magic_lo == 0 {
+            HdmiEvidenceAck::Unsupported
+        } else {
+            HdmiEvidenceAck::Invalid
+        }
+    }
+
+    pub(super) fn hdmi_evidence_probe_action(
+        error_kind: Option<io::ErrorKind>,
+        retry_attempted: bool,
+    ) -> HdmiEvidenceProbeAction {
+        match (error_kind, retry_attempted) {
+            (None, _) => HdmiEvidenceProbeAction::UseNew,
+            (Some(io::ErrorKind::NotFound), false) => HdmiEvidenceProbeAction::ReadLegacy,
+            (Some(io::ErrorKind::InvalidData | io::ErrorKind::TimedOut), false) => {
+                HdmiEvidenceProbeAction::RetryNew
+            }
+            _ => HdmiEvidenceProbeAction::Fail,
+        }
     }
 
     pub(super) fn video_diagnostics_ownership_state(
@@ -3746,7 +3792,70 @@ mod linux {
         )
     }
 
+    pub(super) fn hdmi_lock_classification(flags: u16) -> &'static str {
+        use mister_magik_video_diagnostics_contract as contract;
+        if flags & contract::HDMI_EVIDENCE_FLAG_LOCK_EVER_LOST != 0 {
+            "hdmi_pll_lock_lost"
+        } else if flags & contract::HDMI_EVIDENCE_FLAG_LOCK_ARMED != 0
+            && flags & contract::HDMI_EVIDENCE_FLAG_LOCK_CURRENT != 0
+        {
+            "hdmi_pll_locked"
+        } else if flags & contract::HDMI_EVIDENCE_FLAG_LOCK_SEEN_HIGH != 0 {
+            "hdmi_pll_not_stably_armed"
+        } else {
+            "hdmi_pll_not_seen"
+        }
+    }
+
     impl VideoDiagnosticsReadout {
+        fn to_json(&self, context: VideoDiagnosticsJsonContext) -> Value {
+            match self {
+                Self::HdmiLock(evidence) => {
+                    use mister_magik_video_diagnostics_contract as contract;
+                    let flags = evidence.flags();
+                    let coherent = context.owner_stable
+                        && context.latch_ownership_stable == Some(true)
+                        && context.launcher_state_stable;
+                    json!({
+                        "schema": "mister-magik-fpga-video-diagnostics-v2",
+                        "diagnostic_architecture": "hdmi-lock-evidence-v1",
+                        "available": true,
+                        "coherent": coherent,
+                        "classification": hdmi_lock_classification(flags),
+                        "capture_start_monotonic_us": context.capture_start_monotonic_us,
+                        "capture_end_monotonic_us": context.capture_end_monotonic_us,
+                        "owner_epoch_before": context.owner_epoch_before,
+                        "owner_epoch_after": context.owner_epoch_after,
+                        "latch_status": context.latch_status_json,
+                        "coherence": {
+                            "latch_ownership_stable": context.latch_ownership_stable,
+                            "launcher_state_stable": context.launcher_state_stable,
+                            "ownership_check_error": context.ownership_check_error,
+                        },
+                        "capabilities": {
+                            "physical_hdmi_pll_lock": true,
+                            "final_hdmi_output": false,
+                            "avalon_read_path": false,
+                        },
+                        "hdmi_lock": {
+                            "seen_high": flags & contract::HDMI_EVIDENCE_FLAG_LOCK_SEEN_HIGH != 0,
+                            "armed": flags & contract::HDMI_EVIDENCE_FLAG_LOCK_ARMED != 0,
+                            "current": flags & contract::HDMI_EVIDENCE_FLAG_LOCK_CURRENT != 0,
+                            "ever_lost": flags & contract::HDMI_EVIDENCE_FLAG_LOCK_EVER_LOST != 0,
+                            "loss_count": evidence.words[contract::HDMI_EVIDENCE_LOCK_LOSS_COUNT_WORD],
+                            "loss_count_overflow": flags
+                                & contract::HDMI_EVIDENCE_FLAG_LOCK_LOSS_COUNT_OVERFLOW
+                                != 0,
+                            "raw_words": evidence.words.as_slice(),
+                        },
+                    })
+                }
+                Self::Legacy(readout) => readout.to_json(context),
+            }
+        }
+    }
+
+    impl LegacyVideoDiagnosticsReadout {
         fn generations_match(&self) -> bool {
             self.control_before.generation == self.control_after.generation
                 && self.control_after.generation == self.avalon.generation
@@ -4051,20 +4160,89 @@ mod linux {
         }
 
         fn read_video_diagnostics(&mut self) -> io::Result<VideoDiagnosticsReadout> {
-            match self.read_video_diagnostics_once() {
+            match self.read_hdmi_lock_evidence() {
+                Ok(evidence) => return Ok(VideoDiagnosticsReadout::HdmiLock(evidence)),
+                Err(error)
+                    if hdmi_evidence_probe_action(Some(error.kind()), false)
+                        == HdmiEvidenceProbeAction::ReadLegacy => {}
+                Err(error) => return Err(error),
+            }
+            match self.read_legacy_video_diagnostics_once() {
                 Err(first) if first.kind() == io::ErrorKind::InvalidData => {
                     self.reset_spi_transport();
-                    self.read_video_diagnostics_once()
+                    self.read_legacy_video_diagnostics_once()
+                        .map(VideoDiagnosticsReadout::Legacy)
                 }
                 Ok(first) if !first.generations_match() => {
                     self.reset_spi_transport();
-                    self.read_video_diagnostics_once()
+                    self.read_legacy_video_diagnostics_once()
+                        .map(VideoDiagnosticsReadout::Legacy)
+                }
+                result => result.map(VideoDiagnosticsReadout::Legacy),
+            }
+        }
+
+        fn read_hdmi_lock_evidence(
+            &mut self,
+        ) -> io::Result<mister_magik_video_diagnostics_contract::HdmiEvidence> {
+            let first = self.read_hdmi_lock_evidence_once();
+            match first {
+                Err(first_error)
+                    if hdmi_evidence_probe_action(Some(first_error.kind()), false)
+                        == HdmiEvidenceProbeAction::RetryNew =>
+                {
+                    self.reset_spi_transport();
+                    self.read_hdmi_lock_evidence_once().map_err(|retry_error| {
+                        io::Error::new(
+                            first_error.kind(),
+                            format!(
+                                "HDMI lock evidence failed after retry: first={first_error}; retry={retry_error}"
+                            ),
+                        )
+                    })
                 }
                 result => result,
             }
         }
 
-        fn read_video_diagnostics_once(&mut self) -> io::Result<VideoDiagnosticsReadout> {
+        fn read_hdmi_lock_evidence_once(
+            &mut self,
+        ) -> io::Result<mister_magik_video_diagnostics_contract::HdmiEvidence> {
+            use mister_magik_video_diagnostics_contract as contract;
+            let result = (|| {
+                let (magic_hi, magic_lo) = self.cmd_capture(contract::GET_HDMI_EVIDENCE)?;
+                match classify_hdmi_evidence_ack(magic_hi, magic_lo) {
+                    HdmiEvidenceAck::Present => {}
+                    HdmiEvidenceAck::Unsupported => {
+                        return Err(io::Error::new(
+                            io::ErrorKind::NotFound,
+                            "HDMI lock evidence command 0x60 is unsupported",
+                        ));
+                    }
+                    HdmiEvidenceAck::Invalid => {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            format!(
+                                "HDMI lock evidence acknowledgement is malformed: ack_high=0x{magic_hi:04x} ack_low=0x{magic_lo:04x}"
+                            ),
+                        ));
+                    }
+                }
+                let mut words = [0u16; contract::HDMI_EVIDENCE_WORDS];
+                for word in &mut words {
+                    *word = self.spi_capture(0)?.1;
+                }
+                Ok(words)
+            })();
+            self.disable_io();
+            let words = result?;
+            contract::decode_hdmi_evidence(&words)
+                .map_err(|message| io::Error::new(io::ErrorKind::InvalidData, message))
+        }
+
+        fn read_legacy_video_diagnostics_once(
+            &mut self,
+        ) -> io::Result<LegacyVideoDiagnosticsReadout> {
             use mister_magik_video_diagnostics_contract as contract;
 
             let control_before = self
@@ -4087,7 +4265,7 @@ mod linux {
                     contract::GET_VIDEO_DIAGNOSTICS_CONTROL,
                     contract::VIDEO_DIAGNOSTICS_CONTROL_MAGIC,
                 )?;
-            Ok(VideoDiagnosticsReadout {
+            Ok(LegacyVideoDiagnosticsReadout {
                 control_before: contract::decode_control(&control_before)
                     .map_err(|message| io::Error::new(io::ErrorKind::InvalidData, message))?,
                 avalon: contract::decode_avalon(&avalon)
@@ -6371,6 +6549,78 @@ mod tests {
                 contract::VIDEO_DIAGNOSTICS_TRIGGER_AVALON_TIMEOUT,
             ),
             (true, true, false)
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn hdmi_lock_evidence_classification_prioritizes_sticky_loss() {
+        use mister_magik_video_diagnostics_contract as contract;
+        assert_eq!(linux::hdmi_lock_classification(0), "hdmi_pll_not_seen");
+        assert_eq!(
+            linux::hdmi_lock_classification(contract::HDMI_EVIDENCE_FLAG_LOCK_SEEN_HIGH),
+            "hdmi_pll_not_stably_armed"
+        );
+        let locked = contract::HDMI_EVIDENCE_FLAG_LOCK_SEEN_HIGH
+            | contract::HDMI_EVIDENCE_FLAG_LOCK_ARMED
+            | contract::HDMI_EVIDENCE_FLAG_LOCK_CURRENT;
+        assert_eq!(linux::hdmi_lock_classification(locked), "hdmi_pll_locked");
+        assert_eq!(
+            linux::hdmi_lock_classification(locked | contract::HDMI_EVIDENCE_FLAG_LOCK_EVER_LOST),
+            "hdmi_pll_lock_lost"
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn hdmi_lock_evidence_ack_and_fallback_policy_are_strict() {
+        use linux::{HdmiEvidenceAck, HdmiEvidenceProbeAction};
+        use mister_magik_video_diagnostics_contract as contract;
+        assert_eq!(
+            linux::classify_hdmi_evidence_ack(contract::HDMI_EVIDENCE_MAGIC, 0),
+            HdmiEvidenceAck::Present
+        );
+        assert_eq!(
+            linux::classify_hdmi_evidence_ack(0, contract::HDMI_EVIDENCE_MAGIC),
+            HdmiEvidenceAck::Present
+        );
+        assert_eq!(
+            linux::classify_hdmi_evidence_ack(0, 0),
+            HdmiEvidenceAck::Unsupported
+        );
+        assert_eq!(
+            linux::classify_hdmi_evidence_ack(0x1234, 0x5678),
+            HdmiEvidenceAck::Invalid
+        );
+        assert_eq!(
+            linux::classify_hdmi_evidence_ack(0, 0x5678),
+            HdmiEvidenceAck::Invalid
+        );
+
+        assert_eq!(
+            linux::hdmi_evidence_probe_action(None, false),
+            HdmiEvidenceProbeAction::UseNew
+        );
+        assert_eq!(
+            linux::hdmi_evidence_probe_action(Some(std::io::ErrorKind::NotFound), false),
+            HdmiEvidenceProbeAction::ReadLegacy
+        );
+        for kind in [
+            std::io::ErrorKind::InvalidData,
+            std::io::ErrorKind::TimedOut,
+        ] {
+            assert_eq!(
+                linux::hdmi_evidence_probe_action(Some(kind), false),
+                HdmiEvidenceProbeAction::RetryNew
+            );
+            assert_eq!(
+                linux::hdmi_evidence_probe_action(Some(kind), true),
+                HdmiEvidenceProbeAction::Fail
+            );
+        }
+        assert_eq!(
+            linux::hdmi_evidence_probe_action(Some(std::io::ErrorKind::NotFound), true),
+            HdmiEvidenceProbeAction::Fail
         );
     }
 
