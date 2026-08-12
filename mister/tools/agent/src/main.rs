@@ -2554,7 +2554,7 @@ mod linux {
             && launcher_state_stable
             && latch_ownership_stable == Some(true);
         let capture_end_monotonic_us = uptime_ms_now().saturating_mul(1_000);
-        readout.to_json(
+        readout.to_json(VideoDiagnosticsJsonContext {
             owner_stable,
             latch_ownership_stable,
             launcher_state_stable,
@@ -2564,7 +2564,7 @@ mod linux {
             latch_status_json,
             capture_start_monotonic_us,
             capture_end_monotonic_us,
-        )
+        })
     }
 
     fn magik_control(args: Value) -> Result<Value, String> {
@@ -3068,6 +3068,18 @@ mod linux {
         control_after: mister_magik_video_diagnostics_contract::VideoDiagnosticsControlSnapshot,
     }
 
+    struct VideoDiagnosticsJsonContext {
+        owner_stable: bool,
+        latch_ownership_stable: Option<bool>,
+        launcher_state_stable: bool,
+        ownership_check_error: Option<String>,
+        owner_epoch_before: Option<u64>,
+        owner_epoch_after: Option<u64>,
+        latch_status_json: Option<Value>,
+        capture_start_monotonic_us: u64,
+        capture_end_monotonic_us: u64,
+    }
+
     pub(super) fn video_diagnostics_ownership_state(
         owner_epoch_before: Option<u64>,
         owner_epoch_after: Option<u64>,
@@ -3090,18 +3102,18 @@ mod linux {
                 && self.control_after.generation == self.output.generation
         }
 
-        fn to_json(
-            &self,
-            owner_stable: bool,
-            latch_ownership_stable: Option<bool>,
-            launcher_state_stable: bool,
-            ownership_check_error: Option<String>,
-            owner_epoch_before: Option<u64>,
-            owner_epoch_after: Option<u64>,
-            latch_status: Option<Value>,
-            capture_start_monotonic_us: u64,
-            capture_end_monotonic_us: u64,
-        ) -> Value {
+        fn to_json(&self, context: VideoDiagnosticsJsonContext) -> Value {
+            let VideoDiagnosticsJsonContext {
+                owner_stable,
+                latch_ownership_stable,
+                launcher_state_stable,
+                ownership_check_error,
+                owner_epoch_before,
+                owner_epoch_after,
+                latch_status_json,
+                capture_start_monotonic_us,
+                capture_end_monotonic_us,
+            } = context;
             use mister_magik_video_diagnostics_contract as contract;
 
             let control_generation_stable =
@@ -3185,7 +3197,7 @@ mod linux {
                 "capture_end_monotonic_us": capture_end_monotonic_us,
                 "owner_epoch_before": owner_epoch_before,
                 "owner_epoch_after": owner_epoch_after,
-                "latch_status": latch_status,
+                "latch_status": latch_status_json,
                 "coherence": {
                     "control_generation_stable": control_generation_stable,
                     "generations_match": generations_match,
