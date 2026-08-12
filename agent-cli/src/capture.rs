@@ -46,6 +46,32 @@ struct EncodedFrame {
     jpeg: Vec<u8>,
     width: u32,
     height: u32,
+    luma: Option<LumaAnalysis>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CaptureVisibility {
+    Black,
+    Visible,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct LumaAnalysis {
+    minimum: u8,
+    maximum: u8,
+    mean: u8,
+    visibility: CaptureVisibility,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+pub struct AnalyzedCaptureArtifact {
+    #[serde(flatten)]
+    pub artifact: CaptureArtifact,
+    pub visibility: CaptureVisibility,
+    pub luma_minimum: u8,
+    pub luma_maximum: u8,
+    pub luma_mean: u8,
 }
 
 trait CaptureBackend {
@@ -73,6 +99,29 @@ pub fn execute(output: Option<&Path>) -> AgentResult<CaptureArtifact> {
         timestamp_ms,
         started,
     )
+}
+
+pub fn execute_analyzed(output: Option<&Path>) -> AgentResult<AnalyzedCaptureArtifact> {
+    let started = Instant::now();
+    let timestamp_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|error| classified("camera_clock_invalid", error.to_string()))?
+        .as_millis();
+    let frame = native::capture_analyzed(CAPTURE_TIMEOUT)?;
+    let luma = frame.luma.ok_or_else(|| {
+        classified(
+            "camera_analysis_unavailable",
+            "USB Video capture did not include luma analysis",
+        )
+    })?;
+    let artifact = store_frame(output, &std::env::temp_dir(), timestamp_ms, started, frame)?;
+    Ok(AnalyzedCaptureArtifact {
+        artifact,
+        visibility: luma.visibility,
+        luma_minimum: luma.minimum,
+        luma_maximum: luma.maximum,
+        luma_mean: luma.mean,
+    })
 }
 
 pub fn execute_movie(output: Option<&Path>, seconds: u64) -> AgentResult<CaptureArtifact> {
@@ -189,11 +238,21 @@ fn execute_with_backend(
     timestamp_ms: u128,
     started: Instant,
 ) -> AgentResult<CaptureArtifact> {
+    let frame = backend.capture(CAPTURE_TIMEOUT)?;
+    store_frame(output, temporary_root, timestamp_ms, started, frame)
+}
+
+fn store_frame(
+    output: Option<&Path>,
+    temporary_root: &Path,
+    timestamp_ms: u128,
+    started: Instant,
+    frame: EncodedFrame,
+) -> AgentResult<CaptureArtifact> {
     let destination = output.map(explicit_destination).transpose()?.map_or_else(
         || temporary_capture_directory(temporary_root).map(Destination::Temporary),
         |path| Ok(Destination::Explicit(path)),
     )?;
-    let frame = backend.capture(CAPTURE_TIMEOUT)?;
     if frame.width != JPEG_WIDTH || frame.height != JPEG_HEIGHT {
         return Err(classified(
             "camera_frame_invalid",
@@ -334,22 +393,51 @@ fn classified(code: &'static str, detail: impl Into<String>) -> AgentError {
 
 #[must_use]
 #[cfg(any(target_os = "macos", test))]
-fn is_nonblank_luma(luma: &[u8], width: usize, height: usize, row_bytes: usize) -> bool {
+fn analyze_luma(
+    luma: &[u8],
+    width: usize,
+    height: usize,
+    row_bytes: usize,
+) -> Option<LumaAnalysis> {
     let Some(required) = row_bytes.checked_mul(height) else {
-        return false;
+        return None;
     };
     if width == 0 || height == 0 || row_bytes < width || luma.len() < required {
-        return false;
+        return None;
     }
     let mut total = 0_u64;
     let mut samples = 0_u64;
+    let mut minimum = u8::MAX;
+    let mut maximum = u8::MIN;
     for y in (0..height).step_by(32) {
         for x in (0..width).step_by(32) {
-            total += u64::from(luma[y * row_bytes + x]);
+            let sample = luma[y * row_bytes + x];
+            total += u64::from(sample);
             samples += 1;
+            minimum = minimum.min(sample);
+            maximum = maximum.max(sample);
         }
     }
-    samples != 0 && total / samples > 8
+    if samples == 0 {
+        return None;
+    }
+    let mean = u8::try_from(total / samples).unwrap_or(u8::MAX);
+    // An all-zero plane is a missing/invalid camera sample. HDMI video-level
+    // black is normally around luma 16 and is valid evidence worth retaining.
+    if maximum <= 1 {
+        return None;
+    }
+    let visibility = if mean > 24 || maximum.saturating_sub(minimum) > 12 {
+        CaptureVisibility::Visible
+    } else {
+        CaptureVisibility::Black
+    };
+    Some(LumaAnalysis {
+        minimum,
+        maximum,
+        mean,
+        visibility,
+    })
 }
 
 #[cfg(target_os = "macos")]
@@ -366,6 +454,13 @@ mod native {
         Err(classified(
             "camera_unsupported",
             "USB Video capture is available only on macOS",
+        ))
+    }
+
+    pub(super) fn capture_analyzed(_timeout: Duration) -> AgentResult<EncodedFrame> {
+        Err(classified(
+            "camera_unsupported",
+            "USB Video still capture requires macOS",
         ))
     }
 
@@ -399,6 +494,7 @@ mod tests {
             jpeg: b"\xff\xd8fixture\xff\xd9".to_vec(),
             width: JPEG_WIDTH,
             height: JPEG_HEIGHT,
+            luma: None,
         }
     }
 
@@ -407,11 +503,26 @@ mod tests {
     }
 
     #[test]
-    fn nonblank_gate_rejects_black_truncated_and_invalid_planes() {
-        assert!(!is_nonblank_luma(&vec![0; 64 * 64], 64, 64, 64));
-        assert!(!is_nonblank_luma(&vec![32; 63 * 64], 64, 64, 64));
-        assert!(!is_nonblank_luma(&vec![32; 64 * 64], 65, 64, 64));
-        assert!(is_nonblank_luma(&vec![32; 64 * 64], 64, 64, 64));
+    fn luma_analysis_distinguishes_signal_black_and_visible_content() {
+        assert_eq!(analyze_luma(&vec![0; 64 * 64], 64, 64, 64), None);
+        assert_eq!(analyze_luma(&vec![16; 63 * 64], 64, 64, 64), None);
+        assert_eq!(analyze_luma(&vec![16; 64 * 64], 65, 64, 64), None);
+        assert_eq!(
+            analyze_luma(&vec![16; 64 * 64], 64, 64, 64)
+                .unwrap()
+                .visibility,
+            CaptureVisibility::Black
+        );
+
+        let mut padded = vec![0; 80 * 64];
+        for y in 0..64 {
+            padded[y * 80..y * 80 + 64].fill(16);
+        }
+        padded[32 * 80 + 32] = 48;
+        assert_eq!(
+            analyze_luma(&padded, 64, 64, 80).unwrap().visibility,
+            CaptureVisibility::Visible
+        );
     }
 
     #[test]
