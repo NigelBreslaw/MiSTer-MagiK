@@ -776,6 +776,13 @@ impl NativeDevice {
         })
     }
 
+    pub(crate) fn profile_launch_return_once(
+        &mut self,
+        output_dir: &Path,
+    ) -> std::result::Result<String, DeviceFailure> {
+        self.benchmark_profile(|config| profile_installed_launch_return_once(config, output_dir))
+    }
+
     pub(crate) fn profile_launch_return_attribution(
         &mut self,
         output_dir: &Path,
@@ -12394,6 +12401,7 @@ const LAUNCH_RETURN_PROFILE_REMOTE_DIR: &str = "/tmp/mister-magik/launch-return-
 const LAUNCH_RETURN_CYCLES: usize = 2;
 const LAUNCH_RETURN_BLACK_LIMIT_MS: u64 = 5_000;
 const LAUNCH_RETURN_GAME_SETTLE_SECS: u64 = 10;
+const LAUNCH_RETURN_ONCE_GAME: &str = "/media/fat/_Arcade/1943 Kai Midway Kaisen (Japan).mra";
 
 const COLD_BOOT_PROFILE_REMOTE_DIR: &str = "/tmp/mister-magik/cold-boot-profile";
 
@@ -12870,6 +12878,298 @@ fn launch_return_initial_env(arm: LaunchReturnAttributionArm) -> Vec<(String, St
         ]);
     }
     environment
+}
+
+fn launch_return_once_action(
+    config: &NativeDeviceConfig,
+    nonce: &str,
+    button: AutomationButton,
+) -> Result<u64> {
+    let detail = launcher_automation::send_action(config, nonce, &AutomationAction::Tap(button))?;
+    let value: Value = serde_json::from_str(&detail)?;
+    let sequence = value
+        .get("action_sequence")
+        .and_then(Value::as_u64)
+        .ok_or("launch-return-once action has no sequence")?;
+    launcher_automation::await_presented(config, nonce, sequence, 3_000)?;
+    Ok(sequence)
+}
+
+fn launch_return_once_initial_env() -> Vec<(String, String)> {
+    vec![
+        ("MISTER_CATALOG_REFRESH".into(), "off".into()),
+        ("MISTER_LAUNCHER_START_SCREEN".into(), "home".into()),
+        ("MISTER_ARCADE_SELECTED_INDEX".into(), "0".into()),
+    ]
+}
+
+fn launch_return_once_wait(
+    config: &NativeDeviceConfig,
+    nonce: &str,
+    predicate: impl Fn(&Value) -> bool,
+    label: &str,
+) -> Result<Value> {
+    let started = Instant::now();
+    let timeout = Duration::from_secs(10);
+    loop {
+        let snapshot = launcher_automation::snapshot(config, nonce)?;
+        if predicate(&snapshot) {
+            return Ok(snapshot);
+        }
+        if started.elapsed() >= timeout {
+            return Err(format!(
+                "launch-return-once timed out waiting for {label}; final snapshot={snapshot}"
+            )
+            .into());
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+}
+
+fn launch_return_once_select_home_arcade(config: &NativeDeviceConfig, nonce: &str) -> Result<()> {
+    let mut state = launch_return_once_wait(
+        config,
+        nonce,
+        |snapshot| {
+            modal_semantic(snapshot, "effective_view").and_then(Value::as_str) == Some("home")
+        },
+        "Home",
+    )?;
+    let count = modal_semantic(&state, "selected_count")
+        .and_then(Value::as_u64)
+        .ok_or("launch-return-once Home has no selected count")?;
+    let mut move_left = modal_semantic(&state, "selected_index")
+        .and_then(Value::as_u64)
+        .is_some_and(|index| index > 0);
+    for _ in 0..count.saturating_mul(2) {
+        if modal_semantic(&state, "selected_item_id").and_then(Value::as_str) == Some("menu:arcade")
+        {
+            return Ok(());
+        }
+        let index = modal_semantic(&state, "selected_index")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        if (move_left && index == 0) || (!move_left && index.saturating_add(1) >= count) {
+            move_left = !move_left;
+        }
+        let previous = modal_semantic(&state, "selected_item_id")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_owned();
+        launch_return_once_action(
+            config,
+            nonce,
+            if move_left {
+                AutomationButton::Left
+            } else {
+                AutomationButton::Right
+            },
+        )?;
+        state = launch_return_once_wait(
+            config,
+            nonce,
+            |snapshot| {
+                modal_semantic(snapshot, "selected_item_id").and_then(Value::as_str)
+                    != Some(previous.as_str())
+            },
+            "Home selection change",
+        )?;
+    }
+    Err("launch-return-once Home has no Arcade item".into())
+}
+
+fn launch_return_once_select_game(config: &NativeDeviceConfig, nonce: &str) -> Result<Value> {
+    let mut state = launch_return_once_wait(
+        config,
+        nonce,
+        |snapshot| {
+            modal_semantic(snapshot, "effective_view").and_then(Value::as_str) == Some("arcade")
+                && modal_semantic(snapshot, "selected_count")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0)
+                    > 0
+        },
+        "populated Arcade view",
+    )?;
+    let count = modal_semantic(&state, "selected_count")
+        .and_then(Value::as_u64)
+        .ok_or("launch-return-once Arcade has no selected count")?;
+    for index in 0..count {
+        if modal_semantic(&state, "selected_game_id").and_then(Value::as_str)
+            == Some(LAUNCH_RETURN_ONCE_GAME)
+        {
+            return Ok(state);
+        }
+        if index + 1 == count {
+            break;
+        }
+        let previous = modal_semantic(&state, "selected_game_id")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_owned();
+        launch_return_once_action(config, nonce, AutomationButton::Down)?;
+        state = launch_return_once_wait(
+            config,
+            nonce,
+            |snapshot| {
+                modal_semantic(snapshot, "selected_game_id").and_then(Value::as_str)
+                    != Some(previous.as_str())
+            },
+            "next Arcade game",
+        )?;
+    }
+    Err(format!("launch-return-once cannot find {LAUNCH_RETURN_ONCE_GAME}").into())
+}
+
+fn profile_installed_launch_return_once(
+    config: &NativeDeviceConfig,
+    output_dir: &Path,
+) -> Result<String> {
+    let session = connect_with(&config.connection, 10)?;
+    fs::create_dir_all(output_dir)?;
+    restart_launcher_with_one_shot_env(
+        &session,
+        LauncherRestartOptions {
+            env_vars: launch_return_once_initial_env(),
+            timeout_secs: 45,
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+            ..LauncherRestartOptions::default()
+        },
+    )?;
+    let status = read_launcher_status(&session)?;
+    let main_status: Value = serde_json::from_str(
+        &remote_read(&session, MAIN_STATUS_REMOTE).ok_or("Main status is missing")?,
+    )?;
+    let build_version = status
+        .pointer("/build/version")
+        .and_then(Value::as_str)
+        .ok_or("launch-return-once status has no build version")?;
+    let source_revision = status
+        .pointer("/build/source_revision")
+        .and_then(Value::as_str)
+        .ok_or("launch-return-once status has no source revision")?;
+    let main_generation = main_status
+        .get("main_generation")
+        .and_then(Value::as_u64)
+        .ok_or("launch-return-once Main status has no generation")?;
+    let begun: Value = serde_json::from_str(&launcher_automation::begin(
+        config,
+        build_version,
+        source_revision,
+        main_generation,
+        120,
+    )?)?;
+    let mut nonce = begun
+        .get("nonce")
+        .and_then(Value::as_str)
+        .ok_or("launch-return-once automation has no nonce")?
+        .to_owned();
+
+    let run_result = (|| -> Result<Value> {
+        launch_return_once_action(config, &nonce, AutomationButton::Home)?;
+        launch_return_once_select_home_arcade(config, &nonce)?;
+        launch_return_once_action(config, &nonce, AutomationButton::A)?;
+        let selected = launch_return_once_select_game(config, &nonce)?;
+        fs::write(
+            output_dir.join("pre-launch-snapshot.json"),
+            format!("{}\n", serde_json::to_string_pretty(&selected)?),
+        )?;
+
+        let returned = launcher_automation::exercise_launch_return(
+            config,
+            &nonce,
+            LAUNCH_RETURN_ONCE_GAME,
+            120,
+        )
+        .map_err(|error| format!("launch-return-once failed: {error}"))?;
+        let returned: Value = serde_json::from_str(&returned)?;
+        nonce = returned
+            .get("nonce")
+            .and_then(Value::as_str)
+            .ok_or("launch-return-once replacement session has no nonce")?
+            .to_owned();
+        let sequence = returned
+            .get("post_return_action_sequence")
+            .and_then(Value::as_u64)
+            .ok_or("launch-return-once has no returned presentation sequence")?;
+
+        let returned_status = read_launcher_status(&session)?;
+        fs::write(
+            output_dir.join("returned-status.json"),
+            format!("{}\n", serde_json::to_string_pretty(&returned_status)?),
+        )?;
+        let framebuffer: Value = serde_json::from_str(&launcher_automation::capture_checkpoint(
+            config,
+            &nonce,
+            sequence,
+            "returned-framebuffer",
+            output_dir,
+        )?)?;
+        let diagnostics_reply = agent_request_at(
+            config.agent()?,
+            "diagnostics",
+            json!({}),
+            Duration::from_secs(3),
+        )?;
+        let diagnostics = diagnostics_reply
+            .response
+            .get("result")
+            .cloned()
+            .unwrap_or(Value::Null);
+        fs::write(
+            output_dir.join("fpga-video-diagnostics.json"),
+            format!("{}\n", serde_json::to_string_pretty(&diagnostics)?),
+        )?;
+        for (remote, local) in [
+            ("/tmp/mister-magik/events.jsonl", "events.jsonl"),
+            ("/tmp/mister-magik-slint.log", "launcher.log"),
+        ] {
+            fs::write(
+                output_dir.join(local),
+                remote_read(&session, remote).ok_or_else(|| format!("missing {remote}"))?,
+            )?;
+        }
+
+        let usb =
+            crate::capture::execute_analyzed(Some(&output_dir.join("returned-usb-video.jpg")))?;
+        let usb_json = serde_json::to_value(&usb)?;
+        fs::write(
+            output_dir.join("returned-usb-video.json"),
+            format!("{}\n", serde_json::to_string_pretty(&usb_json)?),
+        )?;
+        let visible = usb.visibility == crate::capture::CaptureVisibility::Visible;
+        Ok(json!({
+            "schema": "mister-magik-launch-return-once-v1",
+            "artifact_status": if visible { "passed" } else { "failed" },
+            "game": LAUNCH_RETURN_ONCE_GAME,
+            "cycles": 1,
+            "returned": returned,
+            "returned_status": returned_status,
+            "framebuffer": framebuffer,
+            "fpga_video_diagnostics": diagnostics.get("fpga_video_diagnostics"),
+            "usb_video": usb_json,
+            "physical_video_visible": visible,
+        }))
+    })();
+
+    let end_result = launcher_automation::end(config, &nonce);
+    let summary = match (run_result, end_result) {
+        (Ok(summary), Ok(_)) => summary,
+        (Err(error), Ok(_)) => return Err(error),
+        (Ok(_), Err(error)) => {
+            return Err(format!("launch-return-once lease cleanup failed: {error}").into());
+        }
+        (Err(error), Err(cleanup)) => {
+            return Err(
+                format!("{error}; launch-return-once lease cleanup failed: {cleanup}").into(),
+            );
+        }
+    };
+    fs::write(
+        output_dir.join("summary.json"),
+        format!("{}\n", serde_json::to_string_pretty(&summary)?),
+    )?;
+    serde_json::to_string(&summary).map_err(Into::into)
 }
 
 fn profile_installed_launch_return(
@@ -22597,6 +22897,19 @@ mod tests {
             "mister-magik-launch-return-attribution.apc.tar.gz"
         );
         assert_eq!(LAUNCH_RETURN_STREAMLINE_CAPTURE.max_duration_seconds, 180);
+    }
+
+    #[test]
+    fn launch_return_once_starts_at_home_without_automatic_relaunch() {
+        let environment = launch_return_once_initial_env();
+        assert!(environment.contains(&("MISTER_LAUNCHER_START_SCREEN".into(), "home".into())));
+        assert!(environment.contains(&("MISTER_ARCADE_SELECTED_INDEX".into(), "0".into())));
+        assert!(!environment.iter().any(|(key, _)| matches!(
+            key.as_str(),
+            "MISTER_LAUNCHER_AUTO_LAUNCH_SELECTED" | "MISTER_LAUNCHER_INPUT_SCRIPT"
+        )));
+        assert!(LAUNCH_RETURN_ONCE_GAME.ends_with("1943 Kai Midway Kaisen (Japan).mra"));
+        assert_eq!(LAUNCH_RETURN_CYCLES, 2);
     }
 
     #[test]

@@ -45,6 +45,7 @@ Supported scenarios:
 - `particle-profile`
 - `catalog-lifecycle`
 - `launch-return`
+- `launch-return-once`
 - `launch-return-fallback`
 - `launch-return-attribution`
 - `modal-input`
@@ -452,6 +453,15 @@ elapsed time is recorded separately and is never counted as visible black. The
 explicit restoration/fallback boundary is five seconds. Its timing class is
 `instrumented-installed-dev-symbols`: sampling overhead is present, but the
 binary and manifest remain the exact installed pair for the entire run.
+
+`launch-return-once` is the attended incident-reproduction route. It begins at
+Home, enters Arcade through typed semantic automation, selects
+`1943 Kai Midway Kaisen (Japan).mra`, launches it once, and returns once. It
+never queues a second launch. After exact context restoration it records the
+authoritative framebuffer, passive FPGA diagnostics, Main and launcher logs,
+and an analyzed 1920x1080 USB Video frame. A video-level black frame is retained
+as evidence and fails the run; cleanup releases only the volatile automation
+lease so the returned device state is not repaired or restarted.
 
 `launch-return-attribution` repeats the same fixed two-cycle route in four
 independent launcher processes: unprofiled control, PMU, existing pprof, and

@@ -39,6 +39,7 @@ enum BenchmarkProfile {
     SystemEntryCriticalStreamline,
     SystemEntryQualification,
     LaunchReturn,
+    LaunchReturnOnce,
     LaunchReturnFallback,
     LaunchReturnAttribution,
     ModalInput,
@@ -108,6 +109,7 @@ impl BenchmarkDevice for DeviceClient {
                 device.profile_system_entry_qualification(&output_dir)
             }
             BenchmarkProfile::LaunchReturn => device.profile_launch_return(&output_dir, false),
+            BenchmarkProfile::LaunchReturnOnce => device.profile_launch_return_once(&output_dir),
             BenchmarkProfile::LaunchReturnFallback => {
                 device.profile_launch_return(&output_dir, true)
             }
@@ -268,6 +270,15 @@ fn require_clean_installed_commit(
         BenchmarkScenario::LaunchReturn => {
             execute_launch_return(&mut device, manifest, output_dir, reporter, false)
         }
+        BenchmarkScenario::LaunchReturnOnce => execute_attribution_capture(
+            &mut device,
+            manifest,
+            output_dir,
+            reporter,
+            BenchmarkProfile::LaunchReturnOnce,
+            "launch-return-once",
+            "mister-magik-launch-return-once-v1",
+        ),
         BenchmarkScenario::LaunchReturnFallback => {
             execute_launch_return(&mut device, manifest, output_dir, reporter, true)
         }
@@ -710,6 +721,7 @@ fn particle_scene_lab_command(scenario: BenchmarkScenario) -> Option<&'static st
         | BenchmarkScenario::SystemEntryCriticalStreamline
         | BenchmarkScenario::SystemEntryQualification
         | BenchmarkScenario::LaunchReturn
+        | BenchmarkScenario::LaunchReturnOnce
         | BenchmarkScenario::LaunchReturnFallback
         | BenchmarkScenario::LaunchReturnAttribution
         | BenchmarkScenario::ModalInput
@@ -1298,6 +1310,7 @@ const fn benchmark_requires_initial_health(scenario: BenchmarkScenario) -> bool 
     !matches!(
         scenario,
         BenchmarkScenario::LaunchReturn
+            | BenchmarkScenario::LaunchReturnOnce
             | BenchmarkScenario::LaunchReturnFallback
             | BenchmarkScenario::LaunchReturnAttribution
     )

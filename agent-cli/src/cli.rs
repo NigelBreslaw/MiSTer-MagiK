@@ -730,6 +730,7 @@ mod tests {
             "orientation-transition-zoom-pprof",
             "pmu-profile",
             "launch-return",
+            "launch-return-once",
             "launch-return-fallback",
             "launch-return-attribution",
             "modal-input",
