@@ -307,7 +307,7 @@ impl SystemEntryPrepareWorker {
                                 Some(reader) => prepare_system_shard(work.request, reader),
                                 None => CatalogWorkerMessage::SystemShardFailed {
                                     system_id: work.request.system_id,
-                                    error: "system-entry NavPack generation was not warmed before input"
+                                    error: "system-entry NavPack reader is not open for the active generation"
                                         .to_string(),
                                 },
                             };
@@ -634,7 +634,7 @@ impl LauncherScheduler {
         self.system_shard_attempted.contains(system_id)
     }
 
-    pub(super) fn open_system_entry_reader_before_input(&self) -> Result<u64, String> {
+    pub(super) fn open_system_entry_reader(&self) -> Result<u64, String> {
         let worker = self
             .system_entry_prepare
             .as_ref()

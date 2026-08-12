@@ -720,11 +720,23 @@ fn should_defer_or_preserve_selected_preview(
     defer_selected_preview || (navigation_transition_active && source_was_arcade)
 }
 
-fn system_entry_preview_work_allowed(
+fn preview_result_work_allowed(
     background_work_allowed: bool,
     system_entry_in_progress: bool,
+    arcade_scroll_active: bool,
+    arcade_turbo_active: bool,
 ) -> bool {
-    background_work_allowed || system_entry_in_progress
+    background_work_allowed
+        || system_entry_in_progress
+        || arcade_scroll_active
+        || arcade_turbo_active
+}
+
+fn initial_system_entry_reader_required(
+    capsule_seed_ready: bool,
+    sharded_seed_ready: bool,
+) -> bool {
+    capsule_seed_ready || sharded_seed_ready
 }
 
 fn full_screen_transition_owns_cpu1(state: FullScreenTransitionState) -> bool {
@@ -4892,8 +4904,8 @@ pub(super) fn run_launcher_loop(
     let initial_catalog_fingerprint = return_capsule_fingerprint.or(sharded_catalog_fingerprint);
     let mut catalog_generation =
         initialize_catalog_generation(&mut scheduler, initial_catalog_fingerprint);
-    if sharded_seed_ready {
-        match scheduler.open_system_entry_reader_before_input() {
+    if initial_system_entry_reader_required(capsule_seed_ready, sharded_seed_ready) {
+        match scheduler.open_system_entry_reader() {
             Ok(elapsed_us) => print_startup_event(
                 start,
                 "system_entry_reader_opened",
@@ -8038,9 +8050,11 @@ pub(super) fn run_launcher_loop(
         }
         let preview_apply_trace_start = prepare_trace_enabled.then(Instant::now);
         let mut preview_apply_trace = PreviewApplyTrace::default();
-        let preview_result_work_allowed = system_entry_preview_work_allowed(
+        let preview_result_work_allowed = preview_result_work_allowed(
             background_work_allowed,
             arcade_entry_latency.preview_adoption_in_progress(),
+            nav.screen == Screen::Arcade && nav.arcade.is_scroll_active(),
+            nav.screen == Screen::Arcade && nav.arcade.is_turbo_active(),
         );
         let preview_apply_dirty = if !launching
             && preview_result_work_allowed
@@ -11376,6 +11390,24 @@ fn apply_catalog_session_effects(
                 catalog_generation.publish(generation_fingerprint, durable);
                 if scheduler.set_system_shard_generation(catalog_generation.current.as_deref()) {
                     nav.catalog_hydration_reset();
+                    if catalog_generation.current.is_some() {
+                        match scheduler.open_system_entry_reader() {
+                            Ok(elapsed_us) => print_startup_event(
+                                start,
+                                "system_entry_reader_reopened",
+                                format!(
+                                    "generation={} elapsed_us={} cpu=0 reason=catalog-publication",
+                                    catalog_generation.current.as_deref().unwrap_or("unknown"),
+                                    elapsed_us,
+                                ),
+                            ),
+                            Err(error) => print_startup_event(
+                                start,
+                                "system_entry_reader_reopen_failed",
+                                format!("error={}", error.replace('\t', " ")),
+                            ),
+                        }
+                    }
                 }
                 if let Some(publication_ack) = publication_ack {
                     let _ = publication_ack.send(());
@@ -13223,10 +13255,19 @@ mod tests {
     }
 
     #[test]
-    fn row_ready_system_entry_can_adopt_its_preview_while_background_work_is_gated() {
-        assert!(system_entry_preview_work_allowed(false, true));
-        assert!(system_entry_preview_work_allowed(true, false));
-        assert!(!system_entry_preview_work_allowed(false, false));
+    fn selected_preview_results_remain_live_during_normal_and_turbo_scroll() {
+        assert!(preview_result_work_allowed(false, false, true, false));
+        assert!(preview_result_work_allowed(false, false, true, true));
+        assert!(preview_result_work_allowed(false, true, false, false));
+        assert!(preview_result_work_allowed(true, false, false, false));
+        assert!(!preview_result_work_allowed(false, false, false, false));
+    }
+
+    #[test]
+    fn return_capsule_seed_opens_the_generation_reader_before_input() {
+        assert!(initial_system_entry_reader_required(true, false));
+        assert!(initial_system_entry_reader_required(false, true));
+        assert!(!initial_system_entry_reader_required(false, false));
     }
 
     #[test]
