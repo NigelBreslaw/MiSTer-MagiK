@@ -111,6 +111,14 @@ impl<'a> LayerTarget<'a> {
         (slint_dirty, slint_damage, rendered)
     }
 
+    pub(super) fn paint_hdmi_arcade_static_chrome(&mut self) -> DirtyRect {
+        paint_hdmi_arcade_static_chrome(
+            self.target.cached_565_mut(),
+            self.layout.logical_w(),
+            self.layout.logical_h(),
+        )
+    }
+
     pub(super) fn render_black(&mut self) -> DirtyRect {
         self.target.cached_565_mut().fill(Rgb565Pixel(0));
         DirtyRect {
@@ -408,6 +416,80 @@ impl<'a> LayerTarget<'a> {
     }
 }
 
+const HDMI_ARCADE_BACKGROUND: Rgb565Pixel = Rgb565Pixel(0x18a4);
+const HDMI_ARCADE_PANEL: Rgb565Pixel = Rgb565Pixel(0x1063);
+
+fn paint_hdmi_arcade_static_chrome(
+    pixels: &mut [Rgb565Pixel],
+    width: usize,
+    height: usize,
+) -> DirtyRect {
+    let len = width.saturating_mul(height).min(pixels.len());
+    pixels[..len].fill(HDMI_ARCADE_BACKGROUND);
+    if width == 0 || height == 0 || len < width.saturating_mul(height) {
+        return DirtyRect {
+            x0: 0,
+            y0: 0,
+            x1: width,
+            y1: height,
+        };
+    }
+
+    let geometry = ArcadeListGeometry::NORMAL;
+    let list_y1 = geometry
+        .y
+        .saturating_add(geometry.visible_height(height))
+        .min(height);
+    fill_rgb565_rect(
+        pixels,
+        width,
+        DirtyRect {
+            x0: width / 2,
+            y0: geometry.y.min(height),
+            x1: width,
+            y1: list_y1,
+        },
+        Rgb565Pixel(0),
+    );
+    fill_rgb565_rect(
+        pixels,
+        width,
+        DirtyRect {
+            x0: geometry.x.min(width),
+            y0: geometry.y.min(height),
+            x1: geometry.x.saturating_add(geometry.width).min(width),
+            y1: list_y1,
+        },
+        HDMI_ARCADE_PANEL,
+    );
+
+    DirtyRect {
+        x0: 0,
+        y0: 0,
+        x1: width,
+        y1: height,
+    }
+}
+
+fn fill_rgb565_rect(
+    pixels: &mut [Rgb565Pixel],
+    stride: usize,
+    rect: DirtyRect,
+    color: Rgb565Pixel,
+) {
+    if stride == 0 || rect.x1 <= rect.x0 || rect.y1 <= rect.y0 || rect.x1 > stride {
+        return;
+    }
+    for y in rect.y0..rect.y1 {
+        let start = y.saturating_mul(stride).saturating_add(rect.x0);
+        let end = start.saturating_add(rect.width());
+        let Some(row) = pixels.get_mut(start..end) else {
+            return;
+        };
+        row.fill(color);
+    }
+}
+
 fn snapshot_cached_565(target: &UiFrameTarget) -> Vec<Rgb565Pixel> {
     target.cached_565().to_vec()
 }
@@ -515,5 +597,31 @@ mod tests {
                 .iter()
                 .all(|pixel| *pixel == Rgb565Pixel(0))
         );
+    }
+
+    #[test]
+    fn native_hdmi_arcade_chrome_matches_the_reserved_surface_contract() {
+        let width = 1280;
+        let height = 720;
+        let mut pixels = vec![Rgb565Pixel(0xffff); width * height];
+
+        let dirty = paint_hdmi_arcade_static_chrome(&mut pixels, width, height);
+
+        assert_eq!(
+            dirty,
+            DirtyRect {
+                x0: 0,
+                y0: 0,
+                x1: width,
+                y1: height
+            }
+        );
+        assert_eq!(pixels[0], HDMI_ARCADE_BACKGROUND);
+        assert_eq!(
+            pixels[ARCADE_LIST_Y * width + ARCADE_LIST_X],
+            HDMI_ARCADE_PANEL
+        );
+        assert_eq!(pixels[ARCADE_LIST_Y * width + width / 2], Rgb565Pixel(0));
+        assert_eq!(pixels[(height - 1) * width], HDMI_ARCADE_BACKGROUND);
     }
 }
