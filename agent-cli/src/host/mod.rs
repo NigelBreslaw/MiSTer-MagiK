@@ -7779,6 +7779,143 @@ impl StreamlineWorkload {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct SystemWideStreamlineCaptureSpec {
+    label: &'static str,
+    archive_file: &'static str,
+    max_duration_seconds: u16,
+}
+
+const LAUNCHER_RESPONSE_STREAMLINE_CAPTURE: SystemWideStreamlineCaptureSpec =
+    SystemWideStreamlineCaptureSpec {
+        label: "launcher-response Streamline",
+        archive_file: "mister-magik-launcher-response.apc.tar.gz",
+        max_duration_seconds: 120,
+    };
+
+struct SystemWideStreamlineCapture<'a> {
+    session: &'a Session,
+    connection: ConnectionConfig,
+    output_dir: &'a Path,
+    spec: SystemWideStreamlineCaptureSpec,
+}
+
+impl<'a> SystemWideStreamlineCapture<'a> {
+    fn new(
+        session: &'a Session,
+        connection: &ConnectionConfig,
+        output_dir: &'a Path,
+        spec: SystemWideStreamlineCaptureSpec,
+    ) -> Self {
+        Self {
+            session,
+            connection: connection.clone(),
+            output_dir,
+            spec,
+        }
+    }
+
+    fn prepare(&self, gatord: &Path) -> Result<String> {
+        exec_checked(
+            self.session,
+            &format!("prepare {} capture", self.spec.label),
+            &streamline_prepare_command(),
+        )?;
+        put(self.session, gatord, STREAMLINE_REMOTE_GATORD)?;
+        let version = exec(
+            self.session,
+            &format!(
+                "chmod 700 {gatord}; {gatord} --version",
+                gatord = sh(STREAMLINE_REMOTE_GATORD)
+            ),
+            true,
+        )?;
+        parse_gatord_version(&version)
+    }
+
+    fn start(&self) -> thread::JoinHandle<std::result::Result<ExecOutput, String>> {
+        let capture_connection = self.connection.clone();
+        let capture_command = streamline_system_wide_capture_command(self.spec);
+        thread::spawn(move || {
+            let capture_session = connect_with(&capture_connection, 30)
+                .map_err(|error| format!("connect Streamline capture channel: {error}"))?;
+            exec(&capture_session, &capture_command, true)
+                .map_err(|error| format!("run Streamline capture channel: {error}"))
+        })
+    }
+
+    fn wait_ready(&self, timeout: Duration) -> Result<()> {
+        wait_streamline_system_wide_ready(self.session, timeout)
+    }
+
+    fn stop(
+        &self,
+        capture_thread: thread::JoinHandle<std::result::Result<ExecOutput, String>>,
+    ) -> Result<()> {
+        let stop_result = exec_checked(
+            self.session,
+            &format!("stop {} capture", self.spec.label),
+            &streamline_system_wide_stop_command(),
+        );
+        if stop_result.is_err() {
+            return Err(format!(
+                "{} capture could not be joined after stop failure",
+                self.spec.label
+            )
+            .into());
+        }
+        let output = capture_thread
+            .join()
+            .map_err(|_| format!("{} capture thread panicked", self.spec.label))??;
+        if let Some(message) = exec_failure_message(self.spec.label, &output) {
+            return Err(message.into());
+        }
+        Ok(())
+    }
+
+    fn retain_log(&self) -> Result<()> {
+        if let Some(log) = remote_read(self.session, STREAMLINE_REMOTE_LOG) {
+            fs::write(self.output_dir.join("gatord.log"), log)?;
+        }
+        Ok(())
+    }
+
+    fn package_extract(&self) -> Result<String> {
+        exec_checked(
+            self.session,
+            &format!("package {} capture", self.spec.label),
+            &streamline_package_command(),
+        )?;
+        let archive = self.output_dir.join(self.spec.archive_file);
+        get(self.session, STREAMLINE_REMOTE_ARCHIVE, &archive)?;
+        let remote_archive_sha256 = exec_checked_output(
+            self.session,
+            &format!("hash {} capture", self.spec.label),
+            &format!(
+                "sha256sum {} | cut -d' ' -f1",
+                sh(STREAMLINE_REMOTE_ARCHIVE)
+            ),
+        )?
+        .stdout
+        .trim()
+        .to_owned();
+        let local_archive_sha256 = file_sha256(archive.clone())?;
+        if remote_archive_sha256.len() != 64 || remote_archive_sha256 != local_archive_sha256 {
+            return Err(format!("{} archive changed during transfer", self.spec.label).into());
+        }
+        extract_streamline_archive(&archive, self.output_dir)?;
+        Ok(local_archive_sha256)
+    }
+
+    fn cleanup(&self) -> Result<()> {
+        exec_checked(
+            self.session,
+            &format!("clean {} capture", self.spec.label),
+            &streamline_cleanup_command(),
+        )
+    }
+}
+
 fn profile_installed_streamline(
     config: &NativeDeviceConfig,
     output_dir: &Path,
@@ -7908,7 +8045,6 @@ fn profile_installed_launcher_response_streamline(
     }
     let gatord_sha256 = file_sha256(gatord.clone())?;
     fs::create_dir_all(output_dir)?;
-    let archive = output_dir.join("mister-magik-launcher-response.apc.tar.gz");
     let session = connect_with(&config.connection, 30)?;
     let boot_id = remote_read(&session, "/proc/sys/kernel/random/boot_id")
         .ok_or("device boot id is unavailable before launcher-response Streamline capture")?;
@@ -7939,91 +8075,27 @@ fn profile_installed_launcher_response_streamline(
         .ok_or("missing launcher-response Streamline display mode")?;
 
     apply_confirmed_display_mode(config, capture_mode, "launcher-response Streamline capture")?;
+    let capture = SystemWideStreamlineCapture::new(
+        &session,
+        &config.connection,
+        output_dir,
+        LAUNCHER_RESPONSE_STREAMLINE_CAPTURE,
+    );
     let run_result = (|| -> Result<(String, String, Value)> {
-        exec_checked(
-            &session,
-            "prepare launcher-response Streamline capture",
-            &streamline_prepare_command(),
-        )?;
-        put(&session, &gatord, STREAMLINE_REMOTE_GATORD)?;
-        let version = exec(
-            &session,
-            &format!(
-                "chmod 700 {gatord}; {gatord} --version",
-                gatord = sh(STREAMLINE_REMOTE_GATORD)
-            ),
-            true,
-        )?;
-        let gatord_version = parse_gatord_version(&version)?;
-        let capture_connection = config.connection.clone();
-        let capture_command = streamline_launcher_response_capture_command();
-        let capture_thread = thread::spawn(move || -> std::result::Result<ExecOutput, String> {
-            let capture_session = connect_with(&capture_connection, 30)
-                .map_err(|error| format!("connect Streamline capture channel: {error}"))?;
-            exec(&capture_session, &capture_command, true)
-                .map_err(|error| format!("run Streamline capture channel: {error}"))
-        });
-        wait_streamline_launcher_response_ready(&session, Duration::from_secs(10))?;
+        let gatord_version = capture.prepare(&gatord)?;
+        let capture_thread = capture.start();
+        capture.wait_ready(Duration::from_secs(10))?;
         let route_result =
             run_launcher_response_scenario(&session, "60-hz", "streamline-round-trip", "off", true);
-        let stop_result = exec_checked(
-            &session,
-            "stop launcher-response Streamline capture",
-            &streamline_launcher_response_stop_command(),
-        );
-        let capture_result: Result<()> = if stop_result.is_ok() {
-            let output = capture_thread
-                .join()
-                .map_err(|_| "launcher-response Streamline capture thread panicked")??;
-            if let Some(message) =
-                exec_failure_message("launcher-response Streamline capture", &output)
-            {
-                Err(message.into())
-            } else {
-                Ok(())
-            }
-        } else {
-            Err(
-                "launcher-response Streamline capture could not be joined after stop failure"
-                    .into(),
-            )
-        };
-        if let Some(log) = remote_read(&session, STREAMLINE_REMOTE_LOG) {
-            fs::write(output_dir.join("gatord.log"), log)?;
-        }
+        let capture_result = capture.stop(capture_thread);
+        capture.retain_log()?;
         let route = route_result?;
-        stop_result?;
         capture_result?;
-        exec_checked(
-            &session,
-            "package launcher-response Streamline capture",
-            &streamline_package_command(),
-        )?;
-        get(&session, STREAMLINE_REMOTE_ARCHIVE, &archive)?;
-        let remote_archive_sha256 = exec_checked_output(
-            &session,
-            "hash launcher-response Streamline capture",
-            &format!(
-                "sha256sum {} | cut -d' ' -f1",
-                sh(STREAMLINE_REMOTE_ARCHIVE)
-            ),
-        )?
-        .stdout
-        .trim()
-        .to_owned();
-        let local_archive_sha256 = file_sha256(archive.clone())?;
-        if remote_archive_sha256.len() != 64 || remote_archive_sha256 != local_archive_sha256 {
-            return Err("launcher-response Streamline archive changed during transfer".into());
-        }
-        extract_streamline_archive(&archive, output_dir)?;
+        let local_archive_sha256 = capture.package_extract()?;
         Ok((gatord_version, local_archive_sha256, route))
     })();
 
-    let cleanup_result = exec_checked(
-        &session,
-        "clean launcher-response Streamline capture",
-        &streamline_cleanup_command(),
-    );
+    let cleanup_result = capture.cleanup();
     let launcher_restore_result = launcher_restart(
         &session,
         &LauncherRestartOptions {
@@ -8148,11 +8220,12 @@ fn streamline_capture_command(workload: StreamlineWorkload) -> String {
     )
 }
 
-fn streamline_launcher_response_capture_command() -> String {
+fn streamline_system_wide_capture_command(spec: SystemWideStreamlineCaptureSpec) -> String {
     let invocation = format!(
-        "{gatord} --output {apc} --max-duration 120 --sample-rate low --system-wide=yes --exclude-kernel=no --call-stack-unwinding=no --capture-log",
+        "{gatord} --output {apc} --max-duration {max_duration} --sample-rate low --system-wide=yes --exclude-kernel=no --call-stack-unwinding=no --capture-log",
         gatord = sh(STREAMLINE_REMOTE_GATORD),
         apc = sh(STREAMLINE_REMOTE_APC),
+        max_duration = spec.max_duration_seconds,
     );
     format!(
         "set -eu; tracefs={tracefs}; marker={marker}; current=$(awk '$2 == \"{tracefs_path}\" && $3 == \"tracefs\" {{ print }}' /proc/mounts); if test -z \"$current\"; then mount -t tracefs tracefs \"$tracefs\"; awk '$2 == \"{tracefs_path}\" && $3 == \"tracefs\" {{ print }}' /proc/mounts > \"$marker\"; test -s \"$marker\"; fi; set +e; {invocation} >{log} 2>&1 </dev/null & pid=$!; printf '%s\\n' \"$pid\" > {pid_file}; i=0; while test \"$i\" -lt 100; do if ! kill -0 \"$pid\" 2>/dev/null; then wait \"$pid\"; rc=$?; cat {log} >&2 || true; exit \"$rc\"; fi; if test -d {apc}; then printf 'ready\\n' > {ready}; break; fi; i=$((i+1)); sleep 0.1; done; if test ! -f {ready}; then kill -TERM \"$pid\" 2>/dev/null || true; wait \"$pid\"; cat {log} >&2 || true; exit 22; fi; wait \"$pid\"; exit $?",
@@ -8167,7 +8240,7 @@ fn streamline_launcher_response_capture_command() -> String {
     )
 }
 
-fn wait_streamline_launcher_response_ready(session: &Session, timeout: Duration) -> Result<()> {
+fn wait_streamline_system_wide_ready(session: &Session, timeout: Duration) -> Result<()> {
     let started = Instant::now();
     loop {
         if remote_read(session, STREAMLINE_REMOTE_READY).as_deref() == Some("ready\n") {
@@ -8184,7 +8257,7 @@ fn wait_streamline_launcher_response_ready(session: &Session, timeout: Duration)
     }
 }
 
-fn streamline_launcher_response_stop_command() -> String {
+fn streamline_system_wide_stop_command() -> String {
     format!(
         "set -eu; pid_file={pid_file}; test -f \"$pid_file\"; pid=$(cat \"$pid_file\"); case \"$pid\" in ''|*[!0-9]*) exit 19;; esac; test \"$(readlink /proc/$pid/exe 2>/dev/null || true)\" = {gatord}; kill -INT \"$pid\"; i=0; while kill -0 \"$pid\" 2>/dev/null && test \"$i\" -lt 600; do i=$((i+1)); sleep 0.1; done; if kill -0 \"$pid\" 2>/dev/null; then kill -TERM \"$pid\"; i=0; while kill -0 \"$pid\" 2>/dev/null && test \"$i\" -lt 100; do i=$((i+1)); sleep 0.1; done; fi; ! kill -0 \"$pid\" 2>/dev/null; rm -f \"$pid_file\"; test -d {apc}",
         pid_file = sh(STREAMLINE_REMOTE_PID),
@@ -19629,8 +19702,8 @@ mod tests {
 
     #[test]
     fn launcher_response_streamline_is_system_wide_bounded_and_not_app_scoped() {
-        let start = streamline_launcher_response_capture_command();
-        let stop = streamline_launcher_response_stop_command();
+        let start = streamline_system_wide_capture_command(LAUNCHER_RESPONSE_STREAMLINE_CAPTURE);
+        let stop = streamline_system_wide_stop_command();
         assert!(start.contains("--max-duration 120"));
         assert!(start.contains("--sample-rate low"));
         assert!(start.contains("--system-wide=yes"));
@@ -19649,6 +19722,22 @@ mod tests {
         assert!(stop.contains("kill -TERM"));
         assert!(!stop.contains("kill -9"));
         assert!(stop.contains(STREAMLINE_REMOTE_APC));
+    }
+
+    #[test]
+    fn system_wide_streamline_spec_owns_fixed_archive_and_duration() {
+        assert_eq!(
+            LAUNCHER_RESPONSE_STREAMLINE_CAPTURE.archive_file,
+            "mister-magik-launcher-response.apc.tar.gz"
+        );
+        assert_eq!(
+            LAUNCHER_RESPONSE_STREAMLINE_CAPTURE.max_duration_seconds,
+            120
+        );
+        let command = streamline_system_wide_capture_command(LAUNCHER_RESPONSE_STREAMLINE_CAPTURE);
+        assert!(command.contains("--max-duration 120"));
+        assert!(command.contains(STREAMLINE_REMOTE_READY));
+        assert!(command.contains(STREAMLINE_TRACEFS_MARKER));
     }
 
     #[test]
