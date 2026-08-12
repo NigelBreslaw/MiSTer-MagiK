@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use slint::platform::software_renderer::{RepaintBufferType, SoftwareRenderer};
+use slint::platform::software_renderer::{RenderingRotation, RepaintBufferType, SoftwareRenderer};
 use slint::platform::{Platform, WindowAdapter};
 use slint::{PhysicalSize, Window};
 use std::cell::Cell;
@@ -57,6 +57,14 @@ impl MisterSoftwareWindow {
 
     pub fn set_size(&self, size: impl Into<slint::WindowSize>) {
         self.window.set_size(size);
+    }
+
+    pub fn set_rendering_rotation(&self, rotation: RenderingRotation) {
+        self.renderer.set_rendering_rotation(rotation);
+    }
+
+    pub fn rendering_rotation(&self) -> RenderingRotation {
+        self.renderer.rendering_rotation()
     }
 }
 

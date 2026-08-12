@@ -6,8 +6,8 @@ use crate::slack::PreparationSlack;
 use crate::{PARADE_SUBPIXEL_ONE, ScreenshotImage};
 use mister_magik_catalog::preview_worker::ResidentPreviewArchive;
 use mister_magik_framebuffer_scenes::{
-    FramebufferScene, Rgb565Pixel, SceneBufferId, SceneClock, SceneError, SceneGeometry,
-    SceneTarget,
+    FramebufferScene, Rgb565OutputLayout, Rgb565Pixel, SceneBufferId, SceneClock, SceneError,
+    SceneGeometry, SceneTarget,
 };
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -166,6 +166,7 @@ impl Rect {
 
 pub struct ScreenshotParade {
     geometry: SceneGeometry,
+    output_layout: Rgb565OutputLayout,
     tiles: Vec<Tile>,
     draw_order: Vec<usize>,
     visible_draw_order: Vec<usize>,
@@ -210,21 +211,39 @@ impl ScreenshotParade {
         archive: ResidentPreviewArchive,
         config: ScreenshotParadeConfig,
     ) -> Result<Self, String> {
-        Self::construct(archive, config, false)
+        let output_layout = Rgb565OutputLayout::identity(config.geometry);
+        Self::construct(archive, config, output_layout, false)
+    }
+
+    pub fn new_oriented(
+        archive: ResidentPreviewArchive,
+        config: ScreenshotParadeConfig,
+        output_layout: Rgb565OutputLayout,
+    ) -> Result<Self, String> {
+        Self::construct(archive, config, output_layout, false)
     }
 
     pub fn new_offline_prepared(
         archive: ResidentPreviewArchive,
         config: ScreenshotParadeConfig,
     ) -> Result<Self, String> {
-        Self::construct(archive, config, true)
+        let output_layout = Rgb565OutputLayout::identity(config.geometry);
+        Self::construct(archive, config, output_layout, true)
     }
 
     fn construct(
         archive: ResidentPreviewArchive,
         config: ScreenshotParadeConfig,
+        output_layout: Rgb565OutputLayout,
         offline_prepared: bool,
     ) -> Result<Self, String> {
+        if output_layout.logical_width() != config.geometry.width()
+            || output_layout.logical_height() != config.geometry.height()
+        {
+            return Err(
+                "screenshot parade output layout does not match its logical geometry".into(),
+            );
+        }
         let width = config.geometry.width();
         let height = config.geometry.height();
         let asset_keys = archive.asset_keys().to_vec();
@@ -259,6 +278,7 @@ impl ScreenshotParade {
         let layer_targets = layer_targets(width, height);
         let mut parade = Self {
             geometry: config.geometry,
+            output_layout,
             tiles: Vec::new(),
             draw_order: Vec::with_capacity(WIDE_LAYER_TARGETS.iter().sum()),
             visible_draw_order: Vec::with_capacity(WIDE_LAYER_TARGETS.iter().sum()),
@@ -385,11 +405,11 @@ impl ScreenshotParade {
         pixels: &mut [Rgb565Pixel],
         motion_ticks_fp: u64,
     ) -> Result<ScreenshotParadeStats, String> {
-        if pixels.len() != self.geometry.len() {
+        if pixels.len() != self.output_layout.len() {
             return Err(format!(
                 "screenshot parade target has {} pixels, expected {}",
                 pixels.len(),
-                self.geometry.len()
+                self.output_layout.len()
             ));
         }
         if motion_ticks_fp < self.previous_motion_ticks_fp {
@@ -398,8 +418,6 @@ impl ScreenshotParade {
         let delta = i64::try_from(motion_ticks_fp - self.previous_motion_ticks_fp)
             .map_err(|_| "screenshot parade motion clock step overflowed".to_owned())?;
         self.previous_motion_ticks_fp = motion_ticks_fp;
-        let width = self.geometry.width();
-        let height = self.geometry.height();
         let preparation_epoch_start = self.preparation_epoch.load(Ordering::Relaxed);
         let preparation_stage_start = self.preparation_stage.load(Ordering::Relaxed);
         let preparation_slack_start = self
@@ -409,7 +427,7 @@ impl ScreenshotParade {
 
         let background_start = Instant::now();
         let background_pmu = mister_magik_perf_events::sampled_span("screensaver.background");
-        render_background(pixels, width, height, motion_ticks_fp);
+        render_background(pixels, self.output_layout, motion_ticks_fp);
         drop(background_pmu);
         let background_us = background_start.elapsed().as_micros();
         let advance_pmu = mister_magik_perf_events::sampled_span("screensaver.advance");
@@ -454,8 +472,7 @@ impl ScreenshotParade {
                 let tile = &self.tiles[tile_index];
                 let blit_stats = tile.raster.blit_with_coverage_probe(
                     pixels,
-                    width,
-                    height,
+                    self.output_layout,
                     tile.x_fp,
                     tile.y,
                     base_background,
@@ -467,7 +484,8 @@ impl ScreenshotParade {
         } else {
             for &tile_index in &self.visible_draw_order {
                 let tile = &self.tiles[tile_index];
-                tile.raster.blit(pixels, width, height, tile.x_fp, tile.y);
+                tile.raster
+                    .blit(pixels, self.output_layout, tile.x_fp, tile.y);
             }
         }
         drop(tile_blit_pmu);
@@ -1047,7 +1065,7 @@ impl FramebufferScene for ScreenshotParade {
         target: SceneTarget<'_>,
         clock: SceneClock,
     ) -> Result<Self::Stats, SceneError> {
-        if target.geometry() != self.geometry {
+        if target.geometry() != self.geometry || target.output_layout() != self.output_layout {
             return Err(SceneError::Render(
                 "screenshot parade target geometry changed".to_owned(),
             ));
@@ -1182,10 +1200,11 @@ fn layer_interval_frames(
 
 fn render_background(
     pixels: &mut [Rgb565Pixel],
-    width: usize,
-    height: usize,
+    output_layout: Rgb565OutputLayout,
     motion_ticks_fp: u64,
 ) {
+    let width = output_layout.logical_width();
+    let height = output_layout.logical_height();
     pixels.fill(color565(0, 0, 10));
     for star in 0..210_usize {
         let layer = star & 3;
@@ -1196,11 +1215,12 @@ fn render_background(
             % height;
         let brightness = [70, 110, 170, 235][layer];
         let color = color565(brightness / 2, brightness, 255);
-        let row = y * width;
-        pixels[row + x] = blend_565(pixels[row + x], color, 255 - fraction);
+        let offset = output_layout.physical_offset(x, y);
+        pixels[offset] = blend_565(pixels[offset], color, 255 - fraction);
         if fraction > 0 {
             let next_x = (x + 1) % width;
-            pixels[row + next_x] = blend_565(pixels[row + next_x], color, fraction);
+            let next_offset = output_layout.physical_offset(next_x, y);
+            pixels[next_offset] = blend_565(pixels[next_offset], color, fraction);
         }
     }
 }

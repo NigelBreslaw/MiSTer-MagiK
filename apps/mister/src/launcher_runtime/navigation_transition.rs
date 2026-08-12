@@ -496,6 +496,43 @@ impl NavigationTransitionRuntime {
         Ok(started)
     }
 
+    pub fn begin_physical(
+        &mut self,
+        edge: NavigationTransitionEdge,
+        direction: NavigationTransitionDirection,
+        geometry: NavigationTransitionGeometry,
+        history_geometry: NavigationTransitionGeometry,
+        width: usize,
+        height: usize,
+        source: &[Rgb565Pixel],
+        now_us: u64,
+    ) -> Result<bool, NavigationTransitionFailure> {
+        if self.enabled && !self.is_active() {
+            self.buffers.resize(width, height);
+        }
+        let mut request = NavigationTransitionRequest::new(edge, direction, geometry);
+        if let Some(duration_us) = self.duration_override_us {
+            request.duration_us = duration_us;
+        }
+        let started = match self.begin_request(request, source, now_us, true) {
+            Ok(started) => started,
+            Err(failure) => {
+                self.buffers.resize(self.logical_width, self.logical_height);
+                return Err(failure);
+            }
+        };
+        if started {
+            self.route = Some(NavigationTransitionRoute::from_super_scaler_edge(edge));
+            self.settings_physical_space = true;
+            if direction == NavigationTransitionDirection::Forward {
+                self.geometry_history.push((edge, history_geometry));
+            }
+        } else if self.enabled && !self.is_active() {
+            self.buffers.resize(self.logical_width, self.logical_height);
+        }
+        Ok(started)
+    }
+
     pub fn begin_settings_page(
         &mut self,
         route: NavigationTransitionRoute,
@@ -1661,6 +1698,38 @@ mod tests {
                 .duration_us
                 + 1,
         );
+        assert!(runtime.complete().is_some());
+        assert!(!runtime.settings_physical_space());
+        assert_eq!(
+            (runtime.buffers.width(), runtime.buffers.height()),
+            (16, 12)
+        );
+    }
+
+    #[test]
+    fn physical_super_scaler_restores_logical_buffer_geometry() {
+        let mut runtime = NavigationTransitionRuntime::new(16, 12, true);
+        let source = vec![Rgb565Pixel(0x1111); 12 * 16];
+        let destination = vec![Rgb565Pixel(0x2222); 12 * 16];
+        runtime
+            .begin_physical(
+                NavigationTransitionEdge::HomeToConsoles,
+                NavigationTransitionDirection::Forward,
+                NavigationTransitionGeometry::default(),
+                NavigationTransitionGeometry::default(),
+                12,
+                16,
+                &source,
+                0,
+            )
+            .unwrap();
+        assert!(runtime.settings_physical_space());
+        assert_eq!(
+            (runtime.buffers.width(), runtime.buffers.height()),
+            (12, 16)
+        );
+        runtime.capture_destination(&destination, 1).unwrap();
+        runtime.tick(NavigationTransitionEdge::HomeToConsoles.duration_us() + 1);
         assert!(runtime.complete().is_some());
         assert!(!runtime.settings_physical_space());
         assert_eq!(

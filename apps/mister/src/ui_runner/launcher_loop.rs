@@ -42,6 +42,43 @@ const SQLITE_HEADER: &[u8; 16] = b"SQLite format 3\0";
 const MODAL_INPUT_TEST_ROOT: &str = "/tmp/mister-magik/modal-input-benchmark";
 const MODAL_INPUT_TEST_ENV: &str = "MISTER_MAGIK_TEST_CATALOG_RECOVERY_DIALOG";
 
+fn navigation_geometry_to_composition(
+    layout: UiLayoutGeometry,
+    mut geometry: NavigationTransitionGeometry,
+) -> NavigationTransitionGeometry {
+    fn map_rect(
+        layout: UiLayoutGeometry,
+        rect: NavigationTransitionRect,
+    ) -> NavigationTransitionRect {
+        if rect.width == 0 || rect.height == 0 {
+            return rect;
+        }
+        let mapped = layout.logical_rect_to_composition(DirtyRect {
+            x0: rect.x as usize,
+            y0: rect.y as usize,
+            x1: rect.right() as usize,
+            y1: rect.bottom() as usize,
+        });
+        NavigationTransitionRect {
+            x: mapped.x0.min(u16::MAX as usize) as u16,
+            y: mapped.y0.min(u16::MAX as usize) as u16,
+            width: mapped.width().min(u16::MAX as usize) as u16,
+            height: mapped.rows().min(u32::from(u16::MAX)) as u16,
+        }
+    }
+
+    geometry.source_card = map_rect(layout, geometry.source_card);
+    geometry.source_label = map_rect(layout, geometry.source_label);
+    geometry.source_detail = map_rect(layout, geometry.source_detail);
+    geometry.destination_title = map_rect(layout, geometry.destination_title);
+    geometry.destination_detail = map_rect(layout, geometry.destination_detail);
+    geometry.destination_list = map_rect(layout, geometry.destination_list);
+    geometry.destination_selected_row = map_rect(layout, geometry.destination_selected_row);
+    geometry.destination_preview = map_rect(layout, geometry.destination_preview);
+    geometry.destination_footer = map_rect(layout, geometry.destination_footer);
+    geometry
+}
+
 fn accepted_selection_feedback_input(event: Option<&crate::input_event::InputEvent>) -> bool {
     event.is_some_and(|event| event.phase == InputPhase::Pressed)
 }
@@ -4271,28 +4308,12 @@ fn apply_orientation_layout(
     orientation: ScreenOrientation,
     nav: &mut LauncherNav,
     layout: &mut UiLayoutGeometry,
-    portrait_target: &mut Option<UiFrameTarget>,
     navigation_transition: &mut NavigationTransitionRuntime,
 ) {
     nav.settings.screen_orientation = orientation;
     nav.sync_orientation_selection();
     *layout = UiLayoutGeometry::for_display(ui, orientation);
     nav.set_portrait_layout(layout.is_portrait());
-    if layout.is_portrait() {
-        let expected_len = layout.logical_w().saturating_mul(layout.logical_h());
-        if portrait_target
-            .as_ref()
-            .is_none_or(|target| target.cached_565().len() != expected_len)
-        {
-            *portrait_target = Some(UiFrameTarget::cached(FramebufferTargetGeometry::new(
-                layout.logical_w(),
-                layout.logical_h(),
-            )));
-        }
-    } else {
-        *portrait_target = None;
-    }
-
     let mister_ui = app.global::<slint_ui::launcher::MisterUi>();
     mister_ui.set_window_width(layout.logical_w() as i32);
     mister_ui.set_window_height(layout.logical_h() as i32);
@@ -4335,7 +4356,6 @@ fn begin_orientation_transition(
     reduce_motion: bool,
     nav: &mut LauncherNav,
     layout: &mut UiLayoutGeometry,
-    portrait_target: &mut Option<UiFrameTarget>,
     navigation_transition: &mut NavigationTransitionRuntime,
     full_screen_transition: &mut FullScreenTransitionStateChart,
     orientation_transition_generation: &mut Option<FullScreenTransitionGeneration>,
@@ -4357,16 +4377,7 @@ fn begin_orientation_transition(
     let animated = orientation_transition.start(from, to, target.cached_565(), now, reduce_motion);
     let source_snapshot_us = source_snapshot_started.elapsed().as_micros();
     let layout_started = Instant::now();
-    apply_orientation_layout(
-        app,
-        window,
-        ui,
-        to,
-        nav,
-        layout,
-        portrait_target,
-        navigation_transition,
-    );
+    apply_orientation_layout(app, window, ui, to, nav, layout, navigation_transition);
     *orientation_preparation_trace = OrientationPreparationTrace {
         begin_us: begin_started.elapsed().as_micros(),
         source_snapshot_us,
@@ -4401,17 +4412,14 @@ struct OrientationPreparationTrace {
 fn render_immediate_launcher_frame(
     window: &MisterSoftwareWindow,
     target: &mut UiFrameTarget,
-    portrait_target: &mut Option<UiFrameTarget>,
-    ui: &UiDisplay,
     layout: UiLayoutGeometry,
 ) -> Option<DirtyRect> {
-    let mut layer_target = LayerTarget::new_oriented(target, portrait_target.as_mut(), ui, layout);
+    let mut layer_target = LayerTarget::new_oriented(target, layout);
     let (dirty, mut damage) = layer_target.render_slint_base(window);
     if damage.is_empty() {
         damage.push_if_some(dirty);
     }
-    let mapped = layer_target.rotate_damage_to_composition(&damage);
-    mapped.iter().reduce(DirtyRect::union)
+    damage.iter().reduce(DirtyRect::union)
 }
 
 fn preview_archive_warm_skip_enabled() -> bool {
@@ -4587,12 +4595,6 @@ pub(super) fn run_launcher_loop(
     let mut layout = UiLayoutGeometry::for_display(ui, nav.settings.screen_orientation);
     nav.set_portrait_layout(layout.is_portrait());
     nav.sync_orientation_selection();
-    let mut portrait_target = layout.is_portrait().then(|| {
-        UiFrameTarget::cached(FramebufferTargetGeometry::new(
-            layout.logical_w(),
-            layout.logical_h(),
-        ))
-    });
     let navigation_motion_enabled =
         !nav.settings.reduce_motion || cpu_profile::navigation_transition_profile_requested();
     let mut navigation_transition = NavigationTransitionRuntime::new(
@@ -5219,7 +5221,8 @@ pub(super) fn run_launcher_loop(
     window.request_redraw();
     let startup_intro_eligible = startup_mode == StartupMode::ColdNoCatalog
         && launcher_bench_scenario.is_none()
-        && screensaver_start_mode == ScreensaverStartMode::Inactive;
+        && screensaver_start_mode == ScreensaverStartMode::Inactive
+        && !layout.is_portrait();
     let mut startup_intro = if startup_intro_eligible
         && launcher_presenter.startup_intro_native_hidden_slots_available(ui)
     {
@@ -5407,7 +5410,6 @@ pub(super) fn run_launcher_loop(
                 false,
                 &mut nav,
                 &mut layout,
-                &mut portrait_target,
                 &mut navigation_transition,
                 &mut full_screen_transition,
                 &mut orientation_transition_generation,
@@ -5473,7 +5475,6 @@ pub(super) fn run_launcher_loop(
                         nav.settings.reduce_motion,
                         &mut nav,
                         &mut layout,
-                        &mut portrait_target,
                         &mut navigation_transition,
                         &mut full_screen_transition,
                         &mut orientation_transition_generation,
@@ -6129,13 +6130,7 @@ pub(super) fn run_launcher_loop(
                         ui,
                     );
                     update_slint_animations(animation_clock);
-                    let recovery_rect = render_immediate_launcher_frame(
-                        window,
-                        target,
-                        &mut portrait_target,
-                        ui,
-                        layout,
-                    );
+                    let recovery_rect = render_immediate_launcher_frame(window, target, layout);
                     if let Some(rect) = recovery_rect {
                         let _ = copy_cached_rect_565(disp, target.cached_frame_view(), rect);
                     } else {
@@ -6841,7 +6836,6 @@ pub(super) fn run_launcher_loop(
                                 orientation,
                                 &mut nav,
                                 &mut layout,
-                                &mut portrait_target,
                                 &mut navigation_transition,
                             );
                             full_bridge_dirty = true;
@@ -7075,10 +7069,7 @@ pub(super) fn run_launcher_loop(
                                         && nav.screen == Screen::Arcade
                                         && !crt_layout
                                     {
-                                        if let Some(logical_target) = portrait_target.as_mut() {
-                                            arcade_list_renderer
-                                                .compose_layer_to_cached(logical_target, true);
-                                        } else {
+                                        if !layout.is_portrait() {
                                             arcade_list_renderer
                                                 .compose_layer_to_cached(target, true);
                                             let _ = target.compose_direct_preview_rect(
@@ -7162,22 +7153,37 @@ pub(super) fn run_launcher_loop(
                                                 }
                                             };
                                             geometry.is_some_and(|geometry| {
-                                                navigation_transition
-                                                    .begin(
+                                                let started = if layout.is_portrait() {
+                                                    navigation_transition.begin_physical(
                                                         edge,
                                                         direction,
-                                                        geometry,
-                                                        portrait_target.as_ref().map_or_else(
-                                                            || target.cached_565(),
-                                                            UiFrameTarget::cached_565,
+                                                        navigation_geometry_to_composition(
+                                                            layout, geometry,
                                                         ),
+                                                        geometry,
+                                                        layout.composition_w(),
+                                                        layout.composition_h(),
+                                                        target.cached_565(),
                                                         frame_now
                                                             .saturating_duration_since(start)
                                                             .as_micros()
                                                             .min(u64::MAX as u128)
                                                             as u64,
                                                     )
-                                                    .unwrap_or(false)
+                                                } else {
+                                                    navigation_transition.begin(
+                                                        edge,
+                                                        direction,
+                                                        geometry,
+                                                        target.cached_565(),
+                                                        frame_now
+                                                            .saturating_duration_since(start)
+                                                            .as_micros()
+                                                            .min(u64::MAX as u128)
+                                                            as u64,
+                                                    )
+                                                };
+                                                started.unwrap_or(false)
                                             })
                                         });
                                     let transition_started = navigation_runtime_started
@@ -7240,13 +7246,7 @@ pub(super) fn run_launcher_loop(
                                     );
                                     window.request_redraw();
                                     update_slint_animations(animation_clock);
-                                    let _ = render_immediate_launcher_frame(
-                                        window,
-                                        target,
-                                        &mut portrait_target,
-                                        ui,
-                                        layout,
-                                    );
+                                    let _ = render_immediate_launcher_frame(window, target, layout);
                                     let _pace = pacer.wait();
                                     copy_cached_rows_565(
                                         disp,
@@ -7308,13 +7308,7 @@ pub(super) fn run_launcher_loop(
                                     );
                                     window.request_redraw();
                                     update_slint_animations(animation_clock);
-                                    let _ = render_immediate_launcher_frame(
-                                        window,
-                                        target,
-                                        &mut portrait_target,
-                                        ui,
-                                        layout,
-                                    );
+                                    let _ = render_immediate_launcher_frame(window, target, layout);
                                     let _pace = pacer.wait();
                                     copy_cached_rows_565(
                                         disp,
@@ -7446,7 +7440,6 @@ pub(super) fn run_launcher_loop(
                                             nav.settings.reduce_motion,
                                             &mut nav,
                                             &mut layout,
-                                            &mut portrait_target,
                                             &mut navigation_transition,
                                             &mut full_screen_transition,
                                             &mut orientation_transition_generation,
@@ -7492,7 +7485,6 @@ pub(super) fn run_launcher_loop(
                                             nav.settings.reduce_motion,
                                             &mut nav,
                                             &mut layout,
-                                            &mut portrait_target,
                                             &mut navigation_transition,
                                             &mut full_screen_transition,
                                             &mut orientation_transition_generation,
@@ -7626,13 +7618,7 @@ pub(super) fn run_launcher_loop(
                                 );
                                 window.request_redraw();
                                 update_slint_animations(animation_clock);
-                                let _ = render_immediate_launcher_frame(
-                                    window,
-                                    target,
-                                    &mut portrait_target,
-                                    ui,
-                                    layout,
-                                );
+                                let _ = render_immediate_launcher_frame(window, target, layout);
                                 let _pace = pacer.wait();
                                 copy_cached_rows_565(
                                     disp,
@@ -8607,14 +8593,13 @@ pub(super) fn run_launcher_loop(
         if full_screen_transition_policy_before_render.advance_slint_timers {
             update_slint_animations(animation_clock);
         }
-        let mut layer_target =
-            LayerTarget::new_oriented(target, portrait_target.as_mut(), ui, layout);
+        let mut layer_target = LayerTarget::new_oriented(target, layout);
         let cpu_t1 = FrameAnalyticsCpuStamp::capture(frame_analytics_mode);
         let frame_t1 = Instant::now();
         retiring_screensaver_pipelines.retain_mut(|pipeline| !pipeline.poll_stopped());
         if screensaver.take_restore_full_frame() {
             if let Some(mut snapshot) = screensaver_launcher_frame.take() {
-                if !layer_target.swap_cached(&mut snapshot) {
+                if !layer_target.swap_presentation_cached(&mut snapshot) {
                     crate::ui_errln!(
                         "screensaver: launcher frame restore size mismatch snapshot={} cached={}",
                         snapshot.len(),
@@ -8640,8 +8625,7 @@ pub(super) fn run_launcher_loop(
                     );
                 }
                 screensaver_loader = Some(LauncherScreensaverLoader::start(
-                    layout.logical_w(),
-                    layout.logical_h(),
+                    layout.output_layout(),
                     screensaver_show_started,
                 ));
             }
@@ -8683,7 +8667,7 @@ pub(super) fn run_launcher_loop(
         let mut startup_intro_failure = None;
         if let Some(intro) = startup_intro.as_mut() {
             if intro.snapshot_capture_needed() && startup_intro_launcher_frame_ready {
-                let launcher_pixels = layer_target.cached_frame_view().pixels();
+                let launcher_pixels = layer_target.presentation_frame_view().pixels();
                 if let Err(error) = intro.begin_launcher_snapshot_preparation(launcher_pixels) {
                     startup_intro_failure = Some(error);
                 } else {
@@ -8750,7 +8734,7 @@ pub(super) fn run_launcher_loop(
             match render_ahead_poll {
                 RenderAheadPoll::Frame(frame) => {
                     let mut pixels = frame.pixels;
-                    if layer_target.swap_cached(&mut pixels) {
+                    if layer_target.swap_presentation_cached(&mut pixels) {
                         retain_or_defer_screensaver_buffer(
                             &mut screensaver_launcher_frame,
                             &mut screensaver_buffer_to_recycle_after_present,
@@ -8808,7 +8792,7 @@ pub(super) fn run_launcher_loop(
                     );
                     screensaver.fail_current_activation(Instant::now());
                     if let Some(mut snapshot) = screensaver_launcher_frame.take()
-                        && !layer_target.swap_cached(&mut snapshot)
+                        && !layer_target.swap_presentation_cached(&mut snapshot)
                     {
                         crate::ui_errln!(
                             "screensaver: launcher frame restore size mismatch after pipeline disconnect snapshot={} cached={}",
@@ -8874,8 +8858,8 @@ pub(super) fn run_launcher_loop(
                     Some(DirtyRect {
                         x0: 0,
                         y0: 0,
-                        x1: layout.logical_w(),
-                        y1: layout.logical_h(),
+                        x1: layout.composition_w(),
+                        y1: layout.composition_h(),
                     })
                 }
             } else {
@@ -9004,12 +8988,19 @@ pub(super) fn run_launcher_loop(
         let frame_t2 = Instant::now();
         let cpu_custom_draw_start = FrameAnalyticsCpuStamp::capture(frame_analytics_mode);
         let custom_draw_start = Instant::now();
+        let logical_slint_rect = this_rect.map(|rect| {
+            if layout.is_portrait() && !slint_damage.is_empty() {
+                layout.composition_rect_to_logical_rect(rect)
+            } else {
+                rect
+            }
+        });
         let arcade_list_update_start = Instant::now();
         let arcade_list_rect = if wants_arcade_list && composition_decision.allow_arcade_list_blit {
             configure_arcade_list_renderer_geometry(&mut arcade_list_renderer, &nav, ui);
             let force_arcade_redraw = arcade_list_needs_forced_redraw(
                 &arcade_list_renderer,
-                this_rect,
+                logical_slint_rect,
                 full_frame_present,
             );
             if nav.arcade_filter.drawer_open {
@@ -9060,7 +9051,11 @@ pub(super) fn run_launcher_loop(
             && !memory_guard.active()
             && preview.empty_base_commit_pending()
         {
-            Some(layer_target.clear_cached_preview())
+            Some(if layout.is_portrait() {
+                layer_target.clear_presentation_preview()
+            } else {
+                layer_target.clear_cached_preview()
+            })
         } else {
             None
         };
@@ -9070,7 +9065,7 @@ pub(super) fn run_launcher_loop(
                     &mut preview,
                     &mut preview_transition,
                     loop_start.duration_since(run_start),
-                    this_rect,
+                    logical_slint_rect,
                     full_frame_present,
                 )
             } else {
@@ -9101,6 +9096,7 @@ pub(super) fn run_launcher_loop(
         let navigation_transition_frame_started =
             navigation_transition_frame_active.then_some(loop_start);
         let mut navigation_transition_render_us = 0u128;
+        let mut navigation_logical_frame_rendered = false;
         if navigation_transition_composition_active {
             let navigation_transition_compositor_started = Instant::now();
             let now_us = loop_start
@@ -9130,18 +9126,28 @@ pub(super) fn run_launcher_loop(
                     );
                     let preview_surface_ready = if !preview_expected || preview.terminal_empty() {
                         if preview_snapshot_ready {
-                            let _ = layer_target.clear_cached_preview();
+                            if navigation_transition.settings_physical_space() {
+                                let _ = layer_target.clear_presentation_preview();
+                            } else {
+                                let _ = layer_target.clear_cached_preview();
+                            }
                             true
                         } else {
                             false
                         }
                     } else if preview_snapshot_ready {
-                        match layer_target.compose_exact_preview(&preview) {
-                            Some(RawPreviewPresent::Cached(_)) => true,
-                            Some(RawPreviewPresent::Direct(rect)) => {
-                                layer_target.compose_direct_preview_rect(rect) > 0
+                        if navigation_transition.settings_physical_space() {
+                            layer_target
+                                .compose_exact_preview_physical(&preview)
+                                .is_some()
+                        } else {
+                            match layer_target.compose_exact_preview(&preview) {
+                                Some(RawPreviewPresent::Cached(_)) => true,
+                                Some(RawPreviewPresent::Direct(rect)) => {
+                                    layer_target.compose_direct_preview_rect(rect) > 0
+                                }
+                                None => false,
                             }
-                            None => false,
                         }
                     } else {
                         false
@@ -9158,8 +9164,15 @@ pub(super) fn run_launcher_loop(
                             nav.arcade.visual_index,
                             true,
                         ) {
-                            let _ = layer_target
-                                .compose_arcade_list_update(&mut arcade_list_renderer, update);
+                            if navigation_transition.settings_physical_space() {
+                                let _ = layer_target
+                                    .compose_arcade_list_update(&mut arcade_list_renderer, update);
+                            } else {
+                                let _ = layer_target.compose_arcade_list_snapshot_update(
+                                    &mut arcade_list_renderer,
+                                    update,
+                                );
+                            }
                         }
                         destination_layers_ready = true;
                     }
@@ -9180,9 +9193,6 @@ pub(super) fn run_launcher_loop(
                     }
                 }
                 if destination_layers_ready {
-                    if navigation_transition.settings_physical_space() {
-                        layer_target.sync_full_portrait_composition();
-                    }
                     if let Some((waited, timed_out)) = status_quiesce {
                         navigation_transition.note_pending_status_quiesce(
                             waited.as_micros().min(u64::MAX as u128) as u64,
@@ -9253,6 +9263,7 @@ pub(super) fn run_launcher_loop(
                     }
                 } else if let Ok(frame) = navigation_transition.render() {
                     let _ = layer_target.restore_cached(frame);
+                    navigation_logical_frame_rendered = true;
                 }
             }
             full_frame_present = true;
@@ -9337,10 +9348,24 @@ pub(super) fn run_launcher_loop(
         let full_rect = DirtyRect {
             x0: 0,
             y0: 0,
-            x1: layout.logical_w(),
-            y1: layout.logical_h(),
+            x1: layout.composition_w(),
+            y1: layout.composition_h(),
         };
         let raw_preview_cached_rect = raw_preview.and_then(RawPreviewPresent::cached_rect);
+        let logical_raw_preview_rect = (!layout.is_portrait())
+            .then_some(raw_preview_cached_rect)
+            .flatten();
+        let physical_raw_preview_rect = layout
+            .is_portrait()
+            .then_some(raw_preview_cached_rect)
+            .flatten();
+        let logical_empty_preview_rect = (!layout.is_portrait())
+            .then_some(empty_base_cached_rect)
+            .flatten();
+        let physical_empty_preview_rect = layout
+            .is_portrait()
+            .then_some(empty_base_cached_rect)
+            .flatten();
         let raw_preview_direct_rect = raw_preview.and_then(RawPreviewPresent::direct_rect);
         if raw_preview_direct_rect.is_some() {
             launcher_preview_version = launcher_preview_version.wrapping_add(1).max(1);
@@ -9352,15 +9377,22 @@ pub(super) fn run_launcher_loop(
             launcher_arcade_scroll_offset =
                 launcher_arcade_scroll_offset.saturating_add(delta_y as i64);
         }
+        let mut physical_arcade_rect = None;
         let cached_arcade_rect = if crt_layout || layout.is_portrait() {
-            arcade_list_rect.map(|update| {
+            arcade_list_rect.and_then(|update| {
                 let rect = arcade_update_dirty_rect(&update);
                 let _ = layer_target.compose_arcade_list_update(&mut arcade_list_renderer, update);
-                rect
+                if layout.is_portrait() {
+                    physical_arcade_rect = Some(layout.logical_rect_to_composition(rect));
+                    None
+                } else {
+                    Some(rect)
+                }
             })
         } else {
             None
         };
+        let physical_custom_damage = accepted_screensaver_frame.then_some(this_rect).flatten();
         let preview_layer_desired = should_desire_direct_layer(
             wants_preview_layer,
             composition_decision.allow_preview_blit,
@@ -9387,31 +9419,37 @@ pub(super) fn run_launcher_loop(
         } else {
             None
         };
-        let mut cached_damage = if full_frame_present {
-            DirtyRectList::from_one(full_rect)
-        } else if slint_damage.is_empty() {
-            let mut damage = DirtyRectList::new();
-            damage.push_if_some(this_rect);
-            damage
-        } else {
-            slint_damage
-        };
-        cached_damage.push_if_some(empty_base_cached_rect);
-        cached_damage.push_if_some(raw_preview_cached_rect);
-        cached_damage.push_if_some(cached_arcade_rect);
-        let orientation_damage_rects_before = cached_damage.len() as u32;
-        let damage_rotation_started = Instant::now();
-        let mut cached_damage = if navigation_settings_physical_space {
-            DirtyRectList::from_one(DirtyRect {
+        let mut logical_custom_damage = DirtyRectList::new();
+        if navigation_logical_frame_rendered {
+            logical_custom_damage.push(DirtyRect {
                 x0: 0,
                 y0: 0,
-                x1: ui.render_w(),
-                y1: ui.render_h(),
-            })
+                x1: layout.logical_w(),
+                y1: layout.logical_h(),
+            });
+        } else if slint_damage.is_empty() && physical_custom_damage.is_none() {
+            logical_custom_damage.push_if_some(this_rect);
+        }
+        logical_custom_damage.push_if_some(logical_empty_preview_rect);
+        logical_custom_damage.push_if_some(logical_raw_preview_rect);
+        logical_custom_damage.push_if_some(cached_arcade_rect);
+        let orientation_damage_rects_before = logical_custom_damage.len() as u32;
+        debug_assert!(!layout.is_portrait() || logical_custom_damage.is_empty());
+        let mapped_custom_damage = logical_custom_damage;
+        let mut cached_damage = if full_frame_present || navigation_settings_physical_space {
+            DirtyRectList::from_one(full_rect)
         } else {
-            layer_target.rotate_damage_to_composition(&cached_damage)
+            let mut damage = slint_damage;
+            damage.extend_from(&mapped_custom_damage);
+            damage.push_if_some(physical_custom_damage);
+            damage.push_if_some(physical_arcade_rect);
+            damage.push_if_some(physical_empty_preview_rect);
+            damage.push_if_some(physical_raw_preview_rect);
+            damage
         };
-        let orientation_damage_rotation_us = damage_rotation_started.elapsed().as_micros();
+        // Retain the v1 telemetry field for schema compatibility. Native Slint
+        // and custom layer composition no longer run a post-raster rotation.
+        let orientation_damage_rotation_us = 0;
         let orientation_damage_rects_after_rotation = cached_damage.len() as u32;
         if orientation_transition.is_active() {
             let orientation_started = Instant::now();
@@ -12194,6 +12232,31 @@ fn apply_home_selected_from_env(nav: &mut LauncherNav, catalog: &ArcadeCatalog, 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn portrait_navigation_geometry_uses_physical_rectangles() {
+        let display = UiDisplay::for_framebuffer(4, 3);
+        let layout = UiLayoutGeometry::for_display(&display, ScreenOrientation::MonitorClockwise);
+        let logical_rect = NavigationTransitionRect {
+            x: 0,
+            y: 0,
+            width: 2,
+            height: 1,
+        };
+        let geometry = NavigationTransitionGeometry {
+            source_card: logical_rect,
+            destination_preview: logical_rect,
+            ..NavigationTransitionGeometry::default()
+        };
+
+        let mapped = navigation_geometry_to_composition(layout, geometry);
+
+        assert_eq!(mapped.source_card, mapped.destination_preview);
+        assert_eq!(mapped.source_card.x, 0);
+        assert_eq!(mapped.source_card.y, 1);
+        assert_eq!(mapped.source_card.width, 1);
+        assert_eq!(mapped.source_card.height, 2);
+    }
 
     #[test]
     fn system_entry_ready_marker_requires_main_active_confirmation() {

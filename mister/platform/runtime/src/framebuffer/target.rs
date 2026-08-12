@@ -310,13 +310,12 @@ impl UiFrameTarget {
         Self::cached(geometry)
     }
 
-    pub fn render(
-        &mut self,
-        renderer: &SoftwareRenderer,
-        geometry: FramebufferTargetGeometry,
-    ) -> PhysicalRegion {
-        self.cached_stride = geometry.render_w();
-        renderer.render(&mut self.cached, geometry.render_w())
+    pub fn render(&mut self, renderer: &SoftwareRenderer) -> PhysicalRegion {
+        renderer.render(&mut self.cached, self.cached_stride)
+    }
+
+    pub const fn cached_stride(&self) -> usize {
+        self.cached_stride
     }
 
     #[cfg(feature = "bench-scenes")]
@@ -393,6 +392,35 @@ impl UiFrameTarget {
             rect.x0 - backing_rect.x0,
             rect.y0 - backing_rect.y0,
         );
+        rect.rows()
+    }
+
+    pub fn compose_direct_preview_rect_mapped(
+        &mut self,
+        rect: DirtyRect,
+        mut map: impl FnMut(usize, usize) -> (usize, usize),
+    ) -> u32 {
+        let Some(backing_rect) = self.direct_preview_rect else {
+            return 0;
+        };
+        if !backing_rect.contains(rect) {
+            return 0;
+        }
+        for y in rect.y0..rect.y1 {
+            let source_row = (y - backing_rect.y0) * backing_rect.width();
+            for x in rect.x0..rect.x1 {
+                let source = source_row + x - backing_rect.x0;
+                let (target_x, target_y) = map(x, y);
+                if target_x < self.cached_stride {
+                    let target = target_y
+                        .saturating_mul(self.cached_stride)
+                        .saturating_add(target_x);
+                    if target < self.cached.len() {
+                        self.cached[target] = self.direct_preview[source];
+                    }
+                }
+            }
+        }
         rect.rows()
     }
 
@@ -534,6 +562,32 @@ mod tests {
         assert_eq!(cached[2 * 6 + 3], Rgb565Pixel(0x1004));
         assert_eq!(cached[2 * 6 + 4], Rgb565Pixel(0x1005));
         assert_eq!(cached[2 * 6 + 5], Rgb565Pixel(0x0001));
+    }
+
+    #[test]
+    fn direct_preview_can_be_composed_through_a_coordinate_map() {
+        let mut target = UiFrameTarget::cached(FramebufferTargetGeometry::new(4, 3));
+        let preview_rect = rect(0, 0, 3, 2);
+        let (preview, _) = target.direct_preview_565_rect_mut(preview_rect);
+        preview.copy_from_slice(&[
+            Rgb565Pixel(1),
+            Rgb565Pixel(2),
+            Rgb565Pixel(3),
+            Rgb565Pixel(4),
+            Rgb565Pixel(5),
+            Rgb565Pixel(6),
+        ]);
+
+        assert_eq!(
+            target.compose_direct_preview_rect_mapped(preview_rect, |x, y| (y, 2 - x)),
+            2
+        );
+        assert_eq!(target.cached_565()[2 * 4], Rgb565Pixel(1));
+        assert_eq!(target.cached_565()[1 * 4], Rgb565Pixel(2));
+        assert_eq!(target.cached_565()[0], Rgb565Pixel(3));
+        assert_eq!(target.cached_565()[2 * 4 + 1], Rgb565Pixel(4));
+        assert_eq!(target.cached_565()[1 * 4 + 1], Rgb565Pixel(5));
+        assert_eq!(target.cached_565()[1], Rgb565Pixel(6));
     }
 
     #[test]

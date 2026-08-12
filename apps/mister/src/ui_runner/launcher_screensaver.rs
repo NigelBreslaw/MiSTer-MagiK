@@ -7,7 +7,9 @@
 use super::*;
 use crate::preview_worker;
 use mister_magik_catalog::device_layout::DeviceLayout;
-use mister_magik_framebuffer_scenes::{Rgb565Pixel as SharedRgb565Pixel, SceneGeometry};
+use mister_magik_framebuffer_scenes::{
+    Rgb565OutputLayout, Rgb565Pixel as SharedRgb565Pixel, SceneGeometry,
+};
 use mister_magik_screenshot_parade::{
     LiveScreenshotConfig, LiveScreenshotParade, ScreenshotBuffer, ScreenshotParade,
     ScreenshotParadeConfig, ScreenshotParadeStats,
@@ -309,7 +311,9 @@ pub struct LauncherScreensaverLoader {
 }
 
 impl LauncherScreensaverLoader {
-    pub fn start(w: usize, h: usize, startup_started_at: Option<Instant>) -> Self {
+    pub fn start(output_layout: Rgb565OutputLayout, startup_started_at: Option<Instant>) -> Self {
+        let w = output_layout.logical_width();
+        let h = output_layout.logical_height();
         let (ready_tx, ready_rx) = mpsc::sync_channel(1);
         let cancelled = Arc::new(AtomicBool::new(false));
         let worker_cancelled = Arc::clone(&cancelled);
@@ -340,7 +344,7 @@ impl LauncherScreensaverLoader {
                     let construction_started = Instant::now();
                     let seed = random_seed();
                     let buffers = std::array::from_fn(|_| LauncherScreenshotBuffer::new(w, h));
-                    let mut runtime = LiveScreenshotParade::start(
+                    let mut runtime = LiveScreenshotParade::start_oriented(
                         archive,
                         LiveScreenshotConfig {
                             geometry: SceneGeometry::new(w, h, w)
@@ -357,6 +361,7 @@ impl LauncherScreensaverLoader {
                                 );
                             })),
                         },
+                        output_layout,
                         buffers,
                     )?;
                     runtime.wait_until_prefilled(Duration::from_secs(30))?;

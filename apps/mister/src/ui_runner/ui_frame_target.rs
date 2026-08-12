@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use super::*;
+use slint::platform::software_renderer::RenderingRotation;
 
 pub(super) fn frame_target_geometry(ui: &UiDisplay) -> FramebufferTargetGeometry {
     FramebufferTargetGeometry::new(ui.render_w(), ui.render_h())
@@ -271,7 +272,7 @@ pub(super) fn blit_raw_preview_if_needed(
     let Some(transition_frame) = transition_frame else {
         return (None, trace);
     };
-    let direct_present = allow_direct && preview_direct_present_enabled();
+    let direct_present = allow_direct;
     let raw_rect = if trace.active {
         let (raw_rect, fade) = if direct_present {
             target.blit_raw_preview_transition_direct(
@@ -376,6 +377,21 @@ pub(super) fn compose_arcade_list_update(
     }
 }
 
+pub(super) fn compose_arcade_list_update_oriented(
+    target: &mut UiFrameTarget,
+    output_layout: mister_magik_framebuffer_scenes::Rgb565OutputLayout,
+    renderer: &mut ArcadeListRenderer,
+    update: ArcadeListUpdate,
+) -> PresentCopyStats {
+    let redraw_selection_frame = matches!(update, ArcadeListUpdate::Full(_));
+    renderer.compose_layer_to_oriented_cached(target, output_layout, redraw_selection_frame);
+    PresentCopyStats {
+        rows: arcade_update_dirty_rect(&update).rows(),
+        bytes: renderer.present_pixels(&update, redraw_selection_frame)
+            * mister_magik_fb::framebuffer::format::RGB565_BYTES_PER_PIXEL,
+    }
+}
+
 pub(super) fn copy_arcade_list_update_to_hidden(
     hidden: &mut ScanoutSlotsRgb565Framebuffer,
     renderer: &mut ArcadeListRenderer,
@@ -437,10 +453,19 @@ pub(super) fn configure_window_layout(
     layout: &UiLayoutGeometry,
     window: &Rc<MisterSoftwareWindow>,
 ) {
+    window.set_rendering_rotation(slint_rendering_rotation(layout.orientation()));
     window.set_size(PhysicalSize::new(
         layout.logical_w() as u32,
         layout.logical_h() as u32,
     ));
+}
+
+pub(super) const fn slint_rendering_rotation(orientation: ScreenOrientation) -> RenderingRotation {
+    match orientation {
+        ScreenOrientation::Normal => RenderingRotation::NoRotation,
+        ScreenOrientation::MonitorClockwise => RenderingRotation::Rotate270,
+        ScreenOrientation::MonitorCounterclockwise => RenderingRotation::Rotate90,
+    }
 }
 
 #[cfg(test)]
@@ -450,6 +475,22 @@ mod tests {
 
     fn rect(x0: usize, y0: usize, x1: usize, y1: usize) -> DirtyRect {
         DirtyRect { x0, y0, x1, y1 }
+    }
+
+    #[test]
+    fn monitor_orientation_maps_to_the_inverse_slint_buffer_rotation() {
+        assert_eq!(
+            slint_rendering_rotation(ScreenOrientation::Normal),
+            RenderingRotation::NoRotation
+        );
+        assert_eq!(
+            slint_rendering_rotation(ScreenOrientation::MonitorClockwise),
+            RenderingRotation::Rotate270
+        );
+        assert_eq!(
+            slint_rendering_rotation(ScreenOrientation::MonitorCounterclockwise),
+            RenderingRotation::Rotate90
+        );
     }
 
     #[test]

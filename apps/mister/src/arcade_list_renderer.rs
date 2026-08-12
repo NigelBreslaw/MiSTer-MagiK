@@ -17,6 +17,7 @@ use crate::framebuffer::target::{DirtyRect, UiFrameTarget};
 use crate::ui_display::{
     CrtContentRect, CrtFontFamily, CrtUiMetrics, ResolvedOutputRoute, UiDisplay,
 };
+use mister_magik_framebuffer_scenes::{Rgb565OutputLayout, Rgb565SurfaceMut};
 use slint::platform::software_renderer::Rgb565Pixel;
 
 pub(crate) const ARCADE_LIST_X: usize = 8;
@@ -933,6 +934,23 @@ impl ArcadeListRenderer {
         }
     }
 
+    pub(crate) fn compose_layer_to_oriented_cached(
+        &mut self,
+        target: &mut UiFrameTarget,
+        output_layout: Rgb565OutputLayout,
+        redraw_selection_frame: bool,
+    ) {
+        self.compose_viewport_band_to_oriented_cached(
+            target.cached_565_mut(),
+            output_layout,
+            0,
+            self.visible_height,
+        );
+        if redraw_selection_frame {
+            self.compose_selection_frame_to_oriented_cached(target.cached_565_mut(), output_layout);
+        }
+    }
+
     pub(crate) fn copy_layer_to_hidden(
         &mut self,
         hidden: &mut ScanoutSlotsRgb565Framebuffer,
@@ -1155,6 +1173,55 @@ impl ArcadeListRenderer {
         );
     }
 
+    fn compose_viewport_band_to_oriented_cached(
+        &mut self,
+        target: &mut [Rgb565Pixel],
+        output_layout: Rgb565OutputLayout,
+        viewport_y: usize,
+        h: usize,
+    ) {
+        if h == 0 || viewport_y >= self.visible_height {
+            return;
+        }
+        let h = h.min(self.visible_height - viewport_y);
+        for_each_arcade_list_present_segment_with_geometry(
+            self.width,
+            viewport_y,
+            h,
+            self.selection_y(),
+            self.visible_height,
+            self.style.row_height as usize,
+            self.style.selection_frame_x,
+            self.style.selection_frame_y,
+            |kind, x, y, w, h| match kind {
+                ArcadeListPresentKind::Normal => {
+                    self.compose_surface_rect_to_oriented_cached(target, output_layout, x, y, w, h)
+                }
+                ArcadeListPresentKind::Inverted => {
+                    if self.style.crt_palette || arcade_selection_inversion_enabled() {
+                        self.compose_inverted_surface_rect_to_oriented_cached(
+                            target,
+                            output_layout,
+                            x,
+                            y,
+                            w,
+                            h,
+                        );
+                    } else {
+                        self.compose_surface_rect_to_oriented_cached(
+                            target,
+                            output_layout,
+                            x,
+                            y,
+                            w,
+                            h,
+                        );
+                    }
+                }
+            },
+        );
+    }
+
     fn copy_viewport_band_to_hidden(
         &mut self,
         hidden: &mut ScanoutSlotsRgb565Framebuffer,
@@ -1215,6 +1282,37 @@ impl ArcadeListRenderer {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
+    fn compose_surface_rect_to_oriented_cached(
+        &mut self,
+        target: &mut [Rgb565Pixel],
+        output_layout: Rgb565OutputLayout,
+        x: usize,
+        viewport_y: usize,
+        w: usize,
+        h: usize,
+    ) {
+        let mut copied = 0usize;
+        while copied < h {
+            let src_y = (self.surface_y + viewport_y + copied) % self.visible_height;
+            let copy_h = (h - copied).min(self.visible_height - src_y);
+            let mut surface = Rgb565SurfaceMut::new(target, output_layout)
+                .expect("launcher output layout matches its cached target");
+            let copied_rect = surface.copy_rect_strided(
+                self.geometry.x + x,
+                self.geometry.y + viewport_y + copied,
+                w,
+                copy_h,
+                &self.surface,
+                self.width,
+                x,
+                src_y,
+            );
+            debug_assert!(copied_rect);
+            copied += copy_h;
+        }
+    }
+
     fn copy_surface_rect_to_hidden(
         &mut self,
         hidden: &mut ScanoutSlotsRgb565Framebuffer,
@@ -1259,6 +1357,32 @@ impl ArcadeListRenderer {
             let target_y = self.geometry.y + viewport_y + copied;
             let inverted = self.prepare_inverted_surface_chunk(x, viewport_y + copied, w, copy_h);
             target.compose_rect_565(target_x, target_y, w, copy_h, inverted);
+            copied += copy_h;
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn compose_inverted_surface_rect_to_oriented_cached(
+        &mut self,
+        target: &mut [Rgb565Pixel],
+        output_layout: Rgb565OutputLayout,
+        x: usize,
+        viewport_y: usize,
+        w: usize,
+        h: usize,
+    ) {
+        let mut copied = 0usize;
+        while copied < h {
+            let src_y = (self.surface_y + viewport_y + copied) % self.visible_height;
+            let copy_h = (h - copied).min(self.visible_height - src_y);
+            let target_x = self.geometry.x + x;
+            let target_y = self.geometry.y + viewport_y + copied;
+            let inverted = self.prepare_inverted_surface_chunk(x, viewport_y + copied, w, copy_h);
+            let mut surface = Rgb565SurfaceMut::new(target, output_layout)
+                .expect("launcher output layout matches its cached target");
+            let copied_rect =
+                surface.copy_rect_strided(target_x, target_y, w, copy_h, inverted, w, 0, 0);
+            debug_assert!(copied_rect);
             copied += copy_h;
         }
     }
@@ -1319,6 +1443,65 @@ impl ArcadeListRenderer {
             thickness_x,
             h,
             &self.selection_vertical,
+        );
+    }
+
+    fn compose_selection_frame_to_oriented_cached(
+        &mut self,
+        target: &mut [Rgb565Pixel],
+        output_layout: Rgb565OutputLayout,
+    ) {
+        let rect = self.selection_rect();
+        let color = self.style.selection_frame_565;
+        let thickness_x = self.style.selection_frame_x;
+        let thickness_y = self.style.selection_frame_y;
+        let h = rect.y1.saturating_sub(rect.y0).min(ARCADE_LIST_H);
+        self.selection_horizontal
+            .resize(self.width * thickness_y, color);
+        self.selection_horizontal.fill(color);
+        let mut surface = Rgb565SurfaceMut::new(target, output_layout)
+            .expect("launcher output layout matches its cached target");
+        let _ = surface.copy_rect_strided(
+            rect.x0,
+            rect.y0,
+            self.width,
+            thickness_y,
+            &self.selection_horizontal,
+            self.width,
+            0,
+            0,
+        );
+        let _ = surface.copy_rect_strided(
+            rect.x0,
+            rect.y1.saturating_sub(thickness_y),
+            self.width,
+            thickness_y,
+            &self.selection_horizontal,
+            self.width,
+            0,
+            0,
+        );
+        self.selection_vertical.resize(thickness_x * h, color);
+        self.selection_vertical.fill(color);
+        let _ = surface.copy_rect_strided(
+            rect.x0,
+            rect.y0,
+            thickness_x,
+            h,
+            &self.selection_vertical,
+            thickness_x,
+            0,
+            0,
+        );
+        let _ = surface.copy_rect_strided(
+            rect.x1.saturating_sub(thickness_x),
+            rect.y0,
+            thickness_x,
+            h,
+            &self.selection_vertical,
+            thickness_x,
+            0,
+            0,
         );
     }
 
@@ -1988,6 +2171,7 @@ fn copy_pixel_to_rgb565_row(src: &[Pixel], dst: &mut [Rgb565Pixel]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::framebuffer::target::FramebufferTargetGeometry;
     use crate::test_support::arcade_game;
 
     fn game(system_id: &str, path: &str, title: &str) -> ArcadeGameEntry {
@@ -2023,6 +2207,56 @@ mod tests {
         )
         .expect("CRT240 display plan");
         UiDisplay::for_plan(plan)
+    }
+
+    #[test]
+    fn portrait_cached_composition_matches_logical_arcade_pixels() {
+        let mut logical_renderer = ArcadeListRenderer::new();
+        for (index, pixel) in logical_renderer.surface.iter_mut().enumerate() {
+            *pixel = Rgb565Pixel(index as u16);
+        }
+        let mut oriented_renderer = ArcadeListRenderer::new();
+        oriented_renderer
+            .surface
+            .copy_from_slice(&logical_renderer.surface);
+        let logical_layout = Rgb565OutputLayout::new(
+            540,
+            960,
+            540,
+            mister_magik_framebuffer_scenes::OutputRotation::None,
+        )
+        .unwrap();
+        let oriented_layout = Rgb565OutputLayout::new(
+            540,
+            960,
+            960,
+            mister_magik_framebuffer_scenes::OutputRotation::CounterClockwise90,
+        )
+        .unwrap();
+        let mut logical_target = UiFrameTarget::cached(FramebufferTargetGeometry::new(540, 960));
+        let mut oriented_target = UiFrameTarget::cached(FramebufferTargetGeometry::new(960, 540));
+
+        logical_renderer.compose_layer_to_oriented_cached(
+            &mut logical_target,
+            logical_layout,
+            true,
+        );
+        oriented_renderer.compose_layer_to_oriented_cached(
+            &mut oriented_target,
+            oriented_layout,
+            true,
+        );
+
+        let dirty = logical_renderer.dirty_rect();
+        for y in dirty.y0..dirty.y1 {
+            for x in dirty.x0..dirty.x1 {
+                assert_eq!(
+                    logical_target.cached_565()[logical_layout.physical_offset(x, y)],
+                    oriented_target.cached_565()[oriented_layout.physical_offset(x, y)],
+                    "logical arcade pixel ({x}, {y})"
+                );
+            }
+        }
     }
 
     fn surface_in_viewport_order(renderer: &ArcadeListRenderer) -> Vec<Rgb565Pixel> {
