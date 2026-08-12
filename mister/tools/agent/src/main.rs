@@ -3720,7 +3720,7 @@ mod linux {
 
     enum VideoDiagnosticsReadout {
         HdmiLock(mister_magik_video_diagnostics_contract::HdmiEvidence),
-        Legacy(LegacyVideoDiagnosticsReadout),
+        Legacy(Box<LegacyVideoDiagnosticsReadout>),
     }
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -4171,14 +4171,16 @@ mod linux {
                 Err(first) if first.kind() == io::ErrorKind::InvalidData => {
                     self.reset_spi_transport();
                     self.read_legacy_video_diagnostics_once()
+                        .map(Box::new)
                         .map(VideoDiagnosticsReadout::Legacy)
                 }
                 Ok(first) if !first.generations_match() => {
                     self.reset_spi_transport();
                     self.read_legacy_video_diagnostics_once()
+                        .map(Box::new)
                         .map(VideoDiagnosticsReadout::Legacy)
                 }
-                result => result.map(VideoDiagnosticsReadout::Legacy),
+                result => result.map(Box::new).map(VideoDiagnosticsReadout::Legacy),
             }
         }
 
