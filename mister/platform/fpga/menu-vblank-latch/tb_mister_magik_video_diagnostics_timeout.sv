@@ -35,6 +35,7 @@ module tb_mister_magik_video_diagnostics_timeout;
 		.output_fault_toggle_async(1'b0), .output_trigger_async(8'd0),
 		.output_snapshot_ack_async(1'b0), .output_snapshot_payload_async(240'd0),
 		.snapshot_request_toggle(request), .monitor_armed(armed),
+		.hdmi_pll_locked_sync(),
 		.diagnostic_generation(), .route_context_toggle(), .expected_base(),
 		.expected_route_epoch(), .expected_active_seq(),
 		.expected_route_flags(), .response_valid(response_valid),

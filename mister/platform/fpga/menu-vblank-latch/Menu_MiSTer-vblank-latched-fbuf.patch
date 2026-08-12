@@ -25,7 +25,7 @@ diff --git a/sys/sys_top.v b/sys/sys_top.v
 index a416879..d05a447 100644
 --- a/sys/sys_top.v
 +++ b/sys/sys_top.v
-@@ -351,6 +351,148 @@ reg [12:0] arc2x = 0;
+@@ -351,6 +351,150 @@ reg [12:0] arc2x = 0;
  reg [12:0] arc2y = 0;
  reg [15:0] io_dout_sys;
  
@@ -55,6 +55,7 @@ index a416879..d05a447 100644
 +wire [15:0] magik_diag_response_data;
 +wire        magik_diag_snapshot_request;
 +wire        magik_diag_monitor_armed;
++wire        magik_diag_hdmi_pll_locked;
 +wire [15:0] magik_diag_generation;
 +wire        magik_diag_route_context_toggle;
 +wire [31:0] magik_diag_expected_base;
@@ -161,6 +162,7 @@ index a416879..d05a447 100644
 +	.output_snapshot_payload_async(magik_diag_output_snapshot),
 +	.snapshot_request_toggle(magik_diag_snapshot_request),
 +	.monitor_armed(magik_diag_monitor_armed),
++	.hdmi_pll_locked_sync(magik_diag_hdmi_pll_locked),
 +	.diagnostic_generation(magik_diag_generation),
 +	.route_context_toggle(magik_diag_route_context_toggle),
 +	.expected_base(magik_diag_expected_base),
@@ -174,7 +176,7 @@ index a416879..d05a447 100644
  always@(posedge clk_sys) begin
  	reg  [7:0] cmd;
  	reg        has_cmd;
-@@ -360,6 +502,19 @@ always@(posedge clk_sys) begin
+@@ -360,6 +504,19 @@ always@(posedge clk_sys) begin
  	reg  [7:0] fb_crc;
  	reg  [1:0] sl_r;
  
@@ -194,7 +196,7 @@ index a416879..d05a447 100644
  	coef_wr <= 0;
  	sl_r <= FB_EN ? 2'b00 : scanlines;
  
-@@ -407,6 +562,8 @@ always@(posedge clk_sys) begin
+@@ -407,6 +564,8 @@ always@(posedge clk_sys) begin
  			if(io_din[7:0] == 'h40) io_dout_sys <= fb_crc;
  `endif
  			if(io_din[7:0] == 'h42) io_dout_sys <= {1'b1, frame_cnt};
@@ -203,7 +205,7 @@ index a416879..d05a447 100644
  			if(io_din[7:0] == 'h44) io_dout_sys <= 1;
  		end
  		else begin
-@@ -462,6 +617,8 @@ always@(posedge clk_sys) begin
+@@ -462,6 +619,8 @@ always@(posedge clk_sys) begin
  					9: LFB_STRIDE      <= io_din[13:0];
  				endcase
  			end
@@ -212,7 +214,7 @@ index a416879..d05a447 100644
  			if(cmd == 'h25) {led_overtake, led_state} <= io_din;
  			if(cmd == 'h26) vol_att <= io_din[4:0];
  			if(cmd == 'h27) VSET <= io_din[11:0];
-@@ -695,16 +854,41 @@ wire clk_pal = clk_audio;
+@@ -695,16 +856,41 @@ wire clk_pal = clk_audio;
  
  
  wire  [27:0] vbuf_address;
@@ -254,7 +256,7 @@ index a416879..d05a447 100644
  wire         hdmi_vs, hdmi_hs, hdmi_de, hdmi_vbl, hdmi_brd;
  wire         freeze;
  wire         bob_deint;
-@@ -1026,15 +1210,19 @@ always @(posedge clk_pal) begin
+@@ -1026,15 +1212,19 @@ always @(posedge clk_pal) begin
  
  /////////////////////////  HDMI output  /////////////////////////////////
 +wire hdmi_pll_locked;
@@ -275,7 +277,7 @@ index a416879..d05a447 100644
  `endif
  
  //1920x1080@60 PCLK=148.5MHz CEA
-@@ -1332,8 +1520,34 @@ always @(posedge hdmi_tx_clk) begin
+@@ -1332,8 +1522,34 @@ always @(posedge hdmi_tx_clk) begin
  end
  
 +mister_magik_video_diagnostics_output magik_video_diagnostics_output
@@ -292,7 +294,7 @@ index a416879..d05a447 100644
 +	.mux_csync_async(direct_video & csync_en),
 +	.reset_req_async(reset_req),
 +	.cfg_done_async(cfg_done),
-+	.hdmi_pll_locked_async(hdmi_pll_locked),
++	.hdmi_pll_locked_async(magik_diag_hdmi_pll_locked),
 +	.hdmi_out_d(hdmi_out_d),
 +	.hdmi_out_de(hdmi_out_de),
 +	.hdmi_out_hs(hdmi_out_hs),
@@ -310,7 +312,7 @@ index a416879..d05a447 100644
  assign HDMI_TX_D  = hdmi_out_d;
  
  /////////////////////////  VGA output  //////////////////////////////////
-@@ -1380,15 +1594,30 @@ assign HDMI_TX_D  = hdmi_out_d;
+@@ -1380,15 +1596,30 @@ assign HDMI_TX_D  = hdmi_out_d;
  
  wire [23:0] vga_data_sl;
  wire        vga_de_sl, vga_ce_sl, vga_vs_sl, vga_hs_sl;

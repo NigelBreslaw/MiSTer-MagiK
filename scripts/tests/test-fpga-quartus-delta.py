@@ -197,18 +197,11 @@ class QuartusDeltaTest(unittest.TestCase):
         self.assertEqual(payload["valid"], 1)
         self.assertEqual(payload["invalid_reason"], "ok")
 
-    def test_forced_pll_status_synchronizers_pass(self) -> None:
-        patched = CUSTOM_SYNC
-        for name in (
-            "control_pll_lock_meta",
-            "control_pll_lock_sys",
-            "pll_meta",
-            "pll_sync",
-        ):
-            patched = patched.replace(
-                f"; SYNCHRONIZER_IDENTIFICATION ; FORCED_IF_ASYNCHRONOUS ; - ; {name} ;",
-                f"; SYNCHRONIZER_IDENTIFICATION ; FORCED ; - ; {name} ;",
-            )
+    def test_forced_pll_status_first_stage_passes(self) -> None:
+        patched = CUSTOM_SYNC.replace(
+            "; SYNCHRONIZER_IDENTIFICATION ; FORCED_IF_ASYNCHRONOUS ; - ; control_pll_lock_meta ;",
+            "; SYNCHRONIZER_IDENTIFICATION ; FORCED ; - ; control_pll_lock_meta ;",
+        )
         result, payload = self.run_check(BASE, BASE + patched)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(payload["invalid_reason"], "ok")

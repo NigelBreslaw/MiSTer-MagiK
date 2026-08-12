@@ -35,6 +35,7 @@ module video_diagnostics_control_cdc_case #(
 		.output_trigger_async(8'd0), .output_snapshot_ack_async(snapshot_request),
 		.output_snapshot_payload_async(240'd0),
 		.snapshot_request_toggle(snapshot_request), .monitor_armed(),
+		.hdmi_pll_locked_sync(),
 		.diagnostic_generation(), .route_context_toggle(), .expected_base(),
 		.expected_route_epoch(), .expected_active_seq(),
 		.expected_route_flags(), .response_valid(), .response_data()

@@ -83,6 +83,7 @@ module tb_mister_magik_video_diagnostics_control;
 		.output_snapshot_ack_async(snapshot_request),
 		.output_snapshot_payload_async(output_payload),
 		.snapshot_request_toggle(snapshot_request), .monitor_armed(monitor_armed),
+		.hdmi_pll_locked_sync(),
 		.diagnostic_generation(diagnostic_generation),
 		.route_context_toggle(route_context_toggle), .expected_base(expected_base),
 		.expected_route_epoch(expected_route_epoch),

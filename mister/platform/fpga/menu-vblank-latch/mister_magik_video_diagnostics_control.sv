@@ -64,6 +64,7 @@ module mister_magik_video_diagnostics_control #(
 
 	output reg          snapshot_request_toggle = 1'b0,
 	output wire         monitor_armed,
+	output wire         hdmi_pll_locked_sync,
 	output wire [15:0]  diagnostic_generation,
 	output reg          route_context_toggle = 1'b0,
 	output reg  [31:0]  expected_base = 32'd0,
@@ -126,7 +127,10 @@ module mister_magik_video_diagnostics_control #(
 	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS" *)
 	reg control_reset_out_meta = 1'b0, control_reset_out_sys = 1'b0;
 	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED" *)
-	reg control_pll_lock_meta = 1'b0, control_pll_lock_sys = 1'b0;
+	reg control_pll_lock_meta = 1'b0;
+	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS" *)
+	reg control_pll_lock_sys = 1'b0;
+	assign hdmi_pll_locked_sync = control_pll_lock_sys;
 	reg avalon_fault_seen = 1'b0, output_fault_seen = 1'b0;
 	reg avalon_ack_seen = 1'b0, output_ack_seen = 1'b0;
 	reg heartbeat_seen = 1'b0;

@@ -16,6 +16,7 @@ module tb_mister_magik_video_diagnostics_integration;
 	reg [15:0] active_seq = 16'd22, active_route_epoch = 16'd6;
 	reg [239:0] frozen_avalon_payload, frozen_output_payload;
 	wire snapshot_request, monitor_armed, route_context;
+	wire hdmi_pll_locked_sync;
 	wire [15:0] generation, expected_route_epoch, expected_active_seq, expected_route_flags;
 	wire [31:0] expected_base;
 	wire avalon_fault, avalon_ack, output_heartbeat, output_fault, output_ack;
@@ -47,6 +48,7 @@ module tb_mister_magik_video_diagnostics_integration;
 		.output_snapshot_ack_async(output_ack),
 		.output_snapshot_payload_async(output_payload),
 		.snapshot_request_toggle(snapshot_request), .monitor_armed(monitor_armed),
+		.hdmi_pll_locked_sync(hdmi_pll_locked_sync),
 		.diagnostic_generation(generation), .route_context_toggle(route_context),
 		.expected_base(expected_base),
 		.expected_route_epoch(expected_route_epoch),
@@ -78,7 +80,7 @@ module tb_mister_magik_video_diagnostics_integration;
 		.expected_active_seq_async(expected_active_seq),
 		.expected_route_flags_async(expected_route_flags),
 		.mux_direct_async(1'b0), .mux_csync_async(1'b0), .reset_req_async(1'b0),
-		.cfg_done_async(1'b1), .hdmi_pll_locked_async(1'b1),
+		.cfg_done_async(1'b1), .hdmi_pll_locked_async(hdmi_pll_locked_sync),
 		.hdmi_out_d(24'h204080), .hdmi_out_de(1'b1), .hdmi_out_hs(1'b0),
 		.hdmi_out_vs(hdmi_vs), .heartbeat_toggle(output_heartbeat),
 		.fault_toggle(output_fault), .fault_trigger(output_trigger),
@@ -132,6 +134,9 @@ module tb_mister_magik_video_diagnostics_integration;
 			$fatal(1, "frozen domain generations do not match control");
 		if(output_payload[2*16 +: 16] != MAGIK_VIDEO_DIAGNOSTICS_TRIGGER_NONE)
 			$fatal(1, "control-origin snapshot assigned a native output trigger");
+		if((output_payload[7*16 +: 16] &
+		    MAGIK_VIDEO_DIAGNOSTICS_OUTPUT_CONTROL_FLAGS_HDMI_PLL_LOCKED) == 0)
+			$fatal(1, "synchronized HDMI PLL lock did not reach output snapshot");
 		if(avalon_payload[4*16 +: 16] != expected_route_epoch ||
 		   output_payload[4*16 +: 16] != expected_route_epoch)
 			$fatal(1, "frozen route epochs do not match");

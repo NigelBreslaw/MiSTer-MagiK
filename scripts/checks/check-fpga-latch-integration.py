@@ -161,25 +161,25 @@ def main() -> None:
     if re.search(r"\bvbuf_(?:read|write)data\b", avalon_source):
         fail("passive Avalon diagnostics source must not expose framebuffer data")
     sync_assignment = "SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS"
-    control_pll_sync = (
+    control_pll_meta = (
         '(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED" *)\n'
-        "\treg control_pll_lock_meta = 1'b0, control_pll_lock_sys = 1'b0;"
+        "\treg control_pll_lock_meta = 1'b0;"
     )
-    output_pll_sync = (
-        '(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED" *)\n'
-        "\treg pll_meta = 1'b0, pll_sync = 1'b0;"
+    control_pll_sync = (
+        '(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS" *)\n'
+        "\treg control_pll_lock_sys = 1'b0;"
     )
     if "ASYNC_REG" in avalon_source or avalon_source.count(sync_assignment) != 5:
         fail("passive Avalon diagnostics synchronizers are not explicitly identified")
     if (
         "ASYNC_REG" in output_source
-        or output_source.count(sync_assignment) != 7
-        or output_source.count(output_pll_sync) != 1
+        or output_source.count(sync_assignment) != 8
     ):
         fail("final HDMI diagnostics synchronizers are not explicitly identified")
     if (
         "ASYNC_REG" in control_source
-        or control_source.count(sync_assignment) != 8
+        or control_source.count(sync_assignment) != 9
+        or control_source.count(control_pll_meta) != 1
         or control_source.count(control_pll_sync) != 1
     ):
         fail("control diagnostics synchronizers are not explicitly identified")
@@ -192,6 +192,28 @@ def main() -> None:
     for raw_name, binding in control_cdc_bindings.items():
         if binding not in control_source or len(re.findall(rf"\b{raw_name}\b", control_source)) != 2:
             fail(f"control diagnostics consumes raw asynchronous {raw_name} outside its first stage")
+    pll_chain_bindings = {
+        "control PLL first stage": (
+            control_source,
+            "control_pll_lock_meta <= hdmi_pll_locked;",
+        ),
+        "control PLL second stage": (
+            control_source,
+            "control_pll_lock_sys <= control_pll_lock_meta;",
+        ),
+        "control PLL synchronized export": (
+            control_source,
+            "assign hdmi_pll_locked_sync = control_pll_lock_sys;",
+        ),
+        "output PLL first stage": (
+            output_source,
+            "pll_meta <= hdmi_pll_locked_async;",
+        ),
+        "output PLL second stage": (output_source, "pll_sync <= pll_meta;"),
+    }
+    for label, (source, binding) in pll_chain_bindings.items():
+        if source.count(binding) != 1:
+            fail(f"{label} binding mismatch")
     if "cfg_done_meta" in control_source or "cfg_done_sys" in control_source:
         fail("clk_sys cfg_done was unnecessarily synchronized in control diagnostics")
     diagnostics_sdc_text = diagnostics_sdc.read_text()
@@ -338,7 +360,7 @@ def main() -> None:
         if output_binding is None:
             fail("missing final registered HDMI diagnostics binding")
         for required_tap in (
-            ".hdmi_pll_locked_async(hdmi_pll_locked)",
+            ".hdmi_pll_locked_async(magik_diag_hdmi_pll_locked)",
             ".hdmi_out_d(hdmi_out_d)",
             ".hdmi_out_de(hdmi_out_de)",
             ".hdmi_out_hs(hdmi_out_hs)",
@@ -357,6 +379,15 @@ def main() -> None:
             fail("missing control diagnostics binding")
         if control_binding.group(1).count(".hdmi_pll_locked(hdmi_pll_locked)") != 1:
             fail("control diagnostics does not observe the real HDMI PLL lock")
+        if (
+            control_binding.group(1).count(
+                ".hdmi_pll_locked_sync(magik_diag_hdmi_pll_locked)"
+            )
+            != 1
+        ):
+            fail("control diagnostics does not export its synchronized HDMI PLL lock")
+        if ".hdmi_pll_locked_async(hdmi_pll_locked)" in output_binding.group(1):
+            fail("output diagnostics must not consume the raw HDMI PLL lock")
         if re.search(r"\.hdmi_pll_locked(?:_async)?\s*\(\s*led_locked\s*\)", patched):
             fail("diagnostics must not observe the adjustment-PLL LED signal")
 
