@@ -1919,6 +1919,7 @@ mod linux {
         pub(super) evidence: ProcessTelemetryEvidence,
     }
 
+    #[cfg(test)]
     pub(super) fn aggregate_process_telemetry_evidence(
         items: &[ProcessTelemetryEvidence],
     ) -> ProcessTelemetryEvidence {
