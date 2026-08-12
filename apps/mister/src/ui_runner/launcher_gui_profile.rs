@@ -8,6 +8,83 @@ use std::time::{Duration, Instant};
 const ENABLE_ENV: &str = "MISTER_GUI_FRAME_PROFILE";
 const COMPLETE_ENV: &str = "MISTER_GUI_FRAME_PROFILE_COMPLETE";
 const PHASE_TIMEOUT: Duration = Duration::from_secs(20);
+const FRAME_LIMIT: usize = 4_096;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum GuiBridgeProfilePhase {
+    None,
+    Light,
+    Full,
+}
+
+impl GuiBridgeProfilePhase {
+    pub(super) const fn span_name(self) -> Option<&'static str> {
+        match self {
+            Self::None => None,
+            Self::Light => Some("gui.bridge-sync.light"),
+            Self::Full => Some("gui.bridge-sync.full"),
+        }
+    }
+
+    pub(super) const fn label(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Light => "light",
+            Self::Full => "full",
+        }
+    }
+}
+
+pub(super) const fn gui_bridge_profile_phase(
+    full_sync: bool,
+    light_sync: bool,
+) -> GuiBridgeProfilePhase {
+    if full_sync {
+        GuiBridgeProfilePhase::Full
+    } else if light_sync {
+        GuiBridgeProfilePhase::Light
+    } else {
+        GuiBridgeProfilePhase::None
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum GuiRasterProfilePhase {
+    None,
+    Ordinary,
+    ForcedFull,
+}
+
+impl GuiRasterProfilePhase {
+    pub(super) const fn span_name(self) -> Option<&'static str> {
+        match self {
+            Self::None => None,
+            Self::Ordinary => Some("gui.slint-raster.ordinary"),
+            Self::ForcedFull => Some("gui.slint-raster.forced-full"),
+        }
+    }
+
+    pub(super) const fn label(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Ordinary => "ordinary",
+            Self::ForcedFull => "forced-full",
+        }
+    }
+}
+
+pub(super) const fn gui_raster_profile_phase(
+    rendered: bool,
+    forced_full: bool,
+) -> GuiRasterProfilePhase {
+    if !rendered {
+        GuiRasterProfilePhase::None
+    } else if forced_full {
+        GuiRasterProfilePhase::ForcedFull
+    } else {
+        GuiRasterProfilePhase::Ordinary
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum GuiProfilePhase {
@@ -55,6 +132,8 @@ pub(super) struct GuiProfilingController {
     next_phase: usize,
     measurement_started_at_us: Option<u64>,
     measurement_ended_at_us: Option<u64>,
+    frames: Vec<serde_json::Value>,
+    dropped_frames: u64,
 }
 
 impl GuiProfilingController {
@@ -74,6 +153,8 @@ impl GuiProfilingController {
             next_phase: 0,
             measurement_started_at_us: None,
             measurement_ended_at_us: None,
+            frames: Vec::with_capacity(FRAME_LIMIT),
+            dropped_frames: 0,
         }
     }
 
@@ -85,6 +166,8 @@ impl GuiProfilingController {
             next_phase: 0,
             measurement_started_at_us: None,
             measurement_ended_at_us: None,
+            frames: Vec::new(),
+            dropped_frames: 0,
         }
     }
 
@@ -97,6 +180,8 @@ impl GuiProfilingController {
             next_phase: 0,
             measurement_started_at_us: None,
             measurement_ended_at_us: None,
+            frames: Vec::new(),
+            dropped_frames: 0,
         }
     }
 
@@ -196,6 +281,41 @@ impl GuiProfilingController {
             .flatten()
     }
 
+    pub(super) fn phase_span(
+        &self,
+        name: Option<&'static str>,
+    ) -> Option<mister_magik_perf_events::SampledSpan> {
+        name.and_then(|name| self.span(name))
+    }
+
+    pub(super) fn record_frame(
+        &mut self,
+        frame: u64,
+        monotonic_us: u64,
+        logical_change_class: &'static str,
+        bridge_phase: GuiBridgeProfilePhase,
+        raster_phase: GuiRasterProfilePhase,
+        damage_rects: Vec<[usize; 4]>,
+    ) {
+        if !self.active() {
+            return;
+        }
+        self.measurement_ended_at_us = Some(monotonic_us);
+        if self.frames.len() == FRAME_LIMIT {
+            self.dropped_frames = self.dropped_frames.saturating_add(1);
+            return;
+        }
+        self.frames.push(json!({
+            "frame": frame,
+            "monotonic_us": monotonic_us,
+            "phase": self.phase().map(GuiProfilePhase::label),
+            "logical_change_class": logical_change_class,
+            "bridge_sync": bridge_phase.label(),
+            "slint_raster": raster_phase.label(),
+            "slint_damage_rects": damage_rects,
+        }));
+    }
+
     fn finish(&mut self) {
         self.state = GuiProfileState::Complete;
         self.deadline = None;
@@ -217,13 +337,16 @@ impl GuiProfilingController {
         let worker_profiles = mister_magik_perf_events::take_process_profiles();
         let started_at_us = self.measurement_started_at_us;
         let ended_at_us = self.measurement_ended_at_us;
+        let frames = std::mem::take(&mut self.frames);
+        let dropped_frames = self.dropped_frames;
         std::thread::spawn(move || {
             let passed = failure.is_none()
                 && thread_profile.enabled
                 && thread_profile.failure.is_none()
                 && thread_profile.dropped_spans == 0
                 && !thread_profile.records.is_empty()
-                && worker_profiles.dropped_profiles == 0;
+                && worker_profiles.dropped_profiles == 0
+                && dropped_frames == 0;
             let payload = json!({
                 "schema": "mister-magik-gui-profiling-window-v1",
                 "state": if passed { "complete" } else { "failed" },
@@ -233,6 +356,8 @@ impl GuiProfilingController {
                 "measurement_ended_at_us": ended_at_us,
                 "thread_profile": thread_profile,
                 "worker_profiles": worker_profiles,
+                "frames": frames,
+                "dropped_frame_records": dropped_frames,
             });
             if let Some(parent) = path.parent() {
                 let _ = std::fs::create_dir_all(parent);
@@ -306,6 +431,52 @@ mod tests {
                 .is_err()
         );
         assert!(matches!(controller.state, GuiProfileState::Failed(_)));
+    }
+
+    #[test]
+    fn bridge_and_raster_phase_names_are_disjoint() {
+        assert_eq!(
+            gui_bridge_profile_phase(false, false),
+            GuiBridgeProfilePhase::None
+        );
+        assert_eq!(
+            gui_bridge_profile_phase(false, true),
+            GuiBridgeProfilePhase::Light
+        );
+        assert_eq!(
+            gui_bridge_profile_phase(true, true),
+            GuiBridgeProfilePhase::Full
+        );
+        assert_eq!(GuiBridgeProfilePhase::None.span_name(), None);
+        assert_eq!(
+            GuiBridgeProfilePhase::Light.span_name(),
+            Some("gui.bridge-sync.light")
+        );
+        assert_eq!(
+            GuiBridgeProfilePhase::Full.span_name(),
+            Some("gui.bridge-sync.full")
+        );
+        assert_eq!(GuiRasterProfilePhase::None.span_name(), None);
+        assert_eq!(
+            GuiRasterProfilePhase::Ordinary.span_name(),
+            Some("gui.slint-raster.ordinary")
+        );
+        assert_eq!(
+            GuiRasterProfilePhase::ForcedFull.span_name(),
+            Some("gui.slint-raster.forced-full")
+        );
+        assert_eq!(
+            gui_raster_profile_phase(false, false),
+            GuiRasterProfilePhase::None
+        );
+        assert_eq!(
+            gui_raster_profile_phase(true, false),
+            GuiRasterProfilePhase::Ordinary
+        );
+        assert_eq!(
+            gui_raster_profile_phase(true, true),
+            GuiRasterProfilePhase::ForcedFull
+        );
     }
 
     #[test]

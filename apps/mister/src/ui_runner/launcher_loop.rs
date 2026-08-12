@@ -5618,6 +5618,7 @@ pub(super) fn run_launcher_loop(
         }
         let loop_start = Instant::now();
         let slint_timer_dispatch_started = Instant::now();
+        let gui_timer_dispatch_pmu = gui_profiling.span("gui.timer-dispatch");
         let full_screen_transition_policy_at_loop_start = full_screen_transition.policy();
         let full_screen_transition_owned_at_loop_start =
             full_screen_transition_owns_cpu1(full_screen_transition.state());
@@ -5649,6 +5650,7 @@ pub(super) fn run_launcher_loop(
             slint::platform::update_timers_and_animations();
         }
         let slint_timer_dispatch_us = slint_timer_dispatch_started.elapsed().as_micros();
+        drop(gui_timer_dispatch_pmu);
         if input_observation_probe
             .as_ref()
             .is_some_and(|probe| probe.changed_since(input_observation))
@@ -8100,6 +8102,11 @@ pub(super) fn run_launcher_loop(
         );
         let bridge_sync_started =
             (bridge_sync_plan != LauncherBridgeSyncPlan::None).then(Instant::now);
+        let gui_bridge_phase = gui_bridge_profile_phase(
+            bridge_sync_plan == LauncherBridgeSyncPlan::Full,
+            bridge_sync_plan == LauncherBridgeSyncPlan::Light,
+        );
+        let gui_bridge_pmu = gui_profiling.phase_span(gui_bridge_phase.span_name());
         match bridge_sync_plan {
             LauncherBridgeSyncPlan::Full => {
                 sync_bridge_launcher(
@@ -8146,6 +8153,7 @@ pub(super) fn run_launcher_loop(
             }
             LauncherBridgeSyncPlan::None => {}
         }
+        drop(gui_bridge_pmu);
         prepare_trace.bridge_sync_us = bridge_sync_started
             .map(|started| started.elapsed().as_micros())
             .unwrap_or(0);
@@ -9132,6 +9140,7 @@ pub(super) fn run_launcher_loop(
         let mut full_screen_transition_release_raster_rendered = false;
         let mut full_screen_controlled_capture_rendered = false;
         let mut orientation_controlled_slint_raster_us = 0;
+        let mut gui_raster_phase = GuiRasterProfilePhase::None;
         let response_raster_started_at_us = crate::input_hub::monotonic_us();
         let response_raster_started_execution = launcher_response_trace.execution_stamp();
         let raster_pmu = launcher_response_trace.input_pmu_span(
@@ -9170,7 +9179,10 @@ pub(super) fn run_launcher_loop(
             }
             None
         } else if full_screen_transition_policy_before_render.force_live_raster {
+            gui_raster_phase = gui_raster_profile_phase(true, true);
+            let gui_raster_pmu = gui_profiling.phase_span(gui_raster_phase.span_name());
             let (dirty, damage, rendered) = layer_target.render_slint_full(&window);
+            drop(gui_raster_pmu);
             slint_damage = damage;
             full_screen_transition_release_raster_rendered = rendered;
             dirty
@@ -9190,8 +9202,11 @@ pub(super) fn run_launcher_loop(
                     }
                 });
             if authorized {
+                gui_raster_phase = gui_raster_profile_phase(true, true);
+                let gui_raster_pmu = gui_profiling.phase_span(gui_raster_phase.span_name());
                 let controlled_raster_started = Instant::now();
                 let (dirty, damage, rendered) = layer_target.render_slint_full(&window);
+                drop(gui_raster_pmu);
                 if full_screen_transition.owner() == Some(FullScreenTransitionOwner::Orientation) {
                     orientation_controlled_slint_raster_us =
                         controlled_raster_started.elapsed().as_micros();
@@ -9216,15 +9231,24 @@ pub(super) fn run_launcher_loop(
             }
             None
         } else if composition_decision.force_full_slint_raster {
+            gui_raster_phase = gui_raster_profile_phase(true, true);
+            let gui_raster_pmu = gui_profiling.phase_span(gui_raster_phase.span_name());
             let (dirty, damage, _) = layer_target.render_slint_full(&window);
+            drop(gui_raster_pmu);
             slint_damage = damage;
             dirty
         } else if startup_intro_prepare_live_launcher {
+            gui_raster_phase = gui_raster_profile_phase(true, false);
+            let gui_raster_pmu = gui_profiling.phase_span(gui_raster_phase.span_name());
             let (dirty, damage) = layer_target.render_slint_base(&window);
+            drop(gui_raster_pmu);
             slint_damage = damage;
             dirty
         } else {
+            gui_raster_phase = gui_raster_profile_phase(true, false);
+            let gui_raster_pmu = gui_profiling.phase_span(gui_raster_phase.span_name());
             let (dirty, damage) = layer_target.render_slint_base(&window);
+            drop(gui_raster_pmu);
             let expanded = if layout.is_portrait() {
                 dirty
             } else {
@@ -9240,6 +9264,17 @@ pub(super) fn run_launcher_loop(
         let response_raster_completed_at_us = crate::input_hub::monotonic_us();
         let response_raster_completed_execution = launcher_response_trace.execution_stamp();
         drop(raster_pmu);
+        gui_profiling.record_frame(
+            frames,
+            response_raster_completed_at_us,
+            frame_production_trace.class.label(),
+            gui_bridge_phase,
+            gui_raster_phase,
+            slint_damage
+                .iter()
+                .map(|rect| [rect.x0, rect.y0, rect.x1, rect.y1])
+                .collect(),
+        );
         if can_preempt_disposable_home_raster(
             nav.screen,
             input_batch.events.is_empty(),
