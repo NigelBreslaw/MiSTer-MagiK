@@ -17,6 +17,16 @@ COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 STALE_RE = re.compile(r"mailbox|axi|acp|descriptor|ownership|fence", re.I)
 ANALYSIS_CONSTRAINT_OVERRIDE = "clock_groups_exclusive_to_asynchronous"
 ANALYSIS_CONSTRAINT_SOURCE_STATUS = " M sys/sys_top.sdc"
+CANONICAL_QUARTUS_SEED_SOURCE = (
+    Path(__file__).resolve().parents[2]
+    / "mister/platform/fpga/menu-vblank-latch/Quartus.seed"
+).read_bytes()
+if not CANONICAL_QUARTUS_SEED_SOURCE.endswith(b"\n"):
+    raise ValueError("canonical Quartus seed file must end with one newline")
+CANONICAL_QUARTUS_SEED_BYTES = CANONICAL_QUARTUS_SEED_SOURCE.removesuffix(b"\n")
+if not re.fullmatch(rb"[1-9][0-9]*", CANONICAL_QUARTUS_SEED_BYTES):
+    raise ValueError("canonical Quartus seed must be a positive integer")
+CANONICAL_QUARTUS_SEED = CANONICAL_QUARTUS_SEED_BYTES.decode("ascii")
 
 
 def digest(path: Path) -> str:
@@ -102,8 +112,9 @@ def verify(
         or analysis_override != ANALYSIS_CONSTRAINT_OVERRIDE
     ):
         raise ValueError("release source tree was dirty")
-    if fields["quartus_seed"] != "1":
-        raise ValueError("release seed must be 1")
+    expected_seed = "1" if historical_v2 else CANONICAL_QUARTUS_SEED
+    if fields["quartus_seed"] != expected_seed:
+        raise ValueError(f"release seed must be {expected_seed}")
     expected_protocol = "2" if historical_v2 else "5"
     if (
         "latch_protocol_version" in fields

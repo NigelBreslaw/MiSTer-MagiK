@@ -21,6 +21,8 @@ const SIGNOFF_FORMAT: &str = "mister-magik-local-fpga-signoff-v3";
 const VARIANT_CACHE_MARKER: &str = "local-signoff-input-v3.txt";
 const QUARTUS_IMAGE: &str = "mister-magik-quartus17-apple:ubuntu18-amd64";
 const QUARTUS_VERSION: &str = "17.0.0 Build 595";
+const QUARTUS_SEED_SOURCE: &str =
+    include_str!("../../mister/platform/fpga/menu-vblank-latch/Quartus.seed");
 const BUILD_DEADLINE: Duration = Duration::from_secs(3 * 60 * 60);
 const SETUP_DEADLINE: Duration = Duration::from_secs(2 * 60 * 60);
 
@@ -75,6 +77,7 @@ fn setup(repository: &Path, local_root: &Path, reporter: &mut Reporter<'_>) -> A
 }
 
 fn signoff(repository: &Path, rebuild: bool, reporter: &mut Reporter<'_>) -> AgentResult<()> {
+    let quartus_seed = canonical_quartus_seed()?;
     let main_revision = git::value(repository, &["rev-parse", "refs/heads/main^{commit}"])?;
     let menu_revision = git_show(
         repository,
@@ -109,14 +112,22 @@ fn signoff(repository: &Path, rebuild: bool, reporter: &mut Reporter<'_>) -> Age
     let stock_identity = synthesis_files_identity(&source_root, false, false)?;
     let baseline_identity = synthesis_files_identity(&baseline_root, true, false)?;
     let patched_identity = synthesis_files_identity(&source_root, true, true)?;
-    let stock_manifest = cache_manifest("stock", &stock_identity, &menu_revision, None);
+    let stock_manifest =
+        cache_manifest("stock", &stock_identity, &menu_revision, None, quartus_seed);
     let baseline_manifest = cache_manifest(
         "pre-observer",
         &baseline_identity,
         &menu_revision,
         Some(&baseline_revision),
+        quartus_seed,
     );
-    let patched_manifest = cache_manifest("patched", &patched_identity, &menu_revision, None);
+    let patched_manifest = cache_manifest(
+        "patched",
+        &patched_identity,
+        &menu_revision,
+        None,
+        quartus_seed,
+    );
 
     migrate_legacy_variant_cache(
         &signoff_root,
@@ -125,6 +136,7 @@ fn signoff(repository: &Path, rebuild: bool, reporter: &mut Reporter<'_>) -> Age
         &menu_revision,
         &baseline_revision,
         &baseline_manifest,
+        quartus_seed,
     )?;
 
     let stock_hit = !rebuild && variant_cache_hit(&signoff_root.join("stock"), &stock_manifest);
@@ -161,6 +173,7 @@ fn signoff(repository: &Path, rebuild: bool, reporter: &mut Reporter<'_>) -> Age
             &main_revision,
             &build_date,
             &stock_manifest,
+            quartus_seed,
             stock_hit,
             reporter,
         )?;
@@ -174,6 +187,7 @@ fn signoff(repository: &Path, rebuild: bool, reporter: &mut Reporter<'_>) -> Age
             &main_revision,
             &build_date,
             &baseline_manifest,
+            quartus_seed,
             baseline_hit,
             reporter,
         )?;
@@ -187,6 +201,7 @@ fn signoff(repository: &Path, rebuild: bool, reporter: &mut Reporter<'_>) -> Age
             &main_revision,
             &build_date,
             &patched_manifest,
+            quartus_seed,
             patched_hit,
             reporter,
         )?;
@@ -206,11 +221,26 @@ fn cache_manifest(
     synthesis_identity: &str,
     menu: &str,
     baseline: Option<&str>,
+    seed: &str,
 ) -> String {
     let baseline = baseline.unwrap_or("-");
     format!(
-        "format={SIGNOFF_FORMAT}\nflavour={flavour}\nsynthesis_input={synthesis_identity}\nmenu_revision={menu}\nbaseline_revision={baseline}\nquartus_version={QUARTUS_VERSION}\nquartus_seed=1\nparallel_synthesis=off\nmenu_clock_groups=asynchronous\n"
+        "format={SIGNOFF_FORMAT}\nflavour={flavour}\nsynthesis_input={synthesis_identity}\nmenu_revision={menu}\nbaseline_revision={baseline}\nquartus_version={QUARTUS_VERSION}\nquartus_seed={seed}\nparallel_synthesis=off\nmenu_clock_groups=asynchronous\n"
     )
+}
+
+fn canonical_quartus_seed() -> AgentResult<&'static str> {
+    let Some(seed) = QUARTUS_SEED_SOURCE.strip_suffix('\n') else {
+        return Err("canonical Quartus seed file must end with one newline".into());
+    };
+    validate_quartus_seed(seed)
+}
+
+fn validate_quartus_seed(seed: &str) -> AgentResult<&str> {
+    if seed.is_empty() || seed.starts_with('0') || !seed.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err("canonical Quartus seed must be a positive decimal integer".into());
+    }
+    Ok(seed)
 }
 
 fn synthesis_files_identity(
@@ -288,6 +318,7 @@ fn migrate_legacy_variant_cache(
     menu_revision: &str,
     baseline_revision: &str,
     new_manifest: &str,
+    quartus_seed: &str,
 ) -> AgentResult<()> {
     let output = signoff_root.join(flavour);
     let marker = output.join(VARIANT_CACHE_MARKER);
@@ -307,14 +338,14 @@ fn migrate_legacy_variant_cache(
         && manifest_value(&legacy, "menu_revision") == Some(menu_revision)
         && manifest_value(&legacy, "baseline_revision") == Some(baseline_revision)
         && manifest_value(&legacy, "quartus_version") == Some(QUARTUS_VERSION)
-        && manifest_value(&legacy, "quartus_seed") == Some("1")
+        && manifest_value(&legacy, "quartus_seed") == Some(quartus_seed)
         && manifest_value(&legacy, "parallel_synthesis") == Some("off")
         && manifest_value(&legacy, "menu_clock_groups") == Some("asynchronous");
     let metadata_matches = manifest_value(&metadata, "builder_commit") == Some(expected_builder)
         && manifest_value(&metadata, "source_commit") == Some(menu_revision)
         && manifest_value(&metadata, "apply_patch") == Some("1")
         && manifest_value(&metadata, "quartus_version") == Some(QUARTUS_VERSION)
-        && manifest_value(&metadata, "quartus_seed") == Some("1");
+        && manifest_value(&metadata, "quartus_seed") == Some(quartus_seed);
     if legacy_matches && metadata_matches {
         fs::write(&marker, new_manifest).map_err(|error| {
             format!("cannot migrate cache marker {}: {error}", marker.display())
@@ -472,6 +503,7 @@ fn build_cached_variant(
     main_revision: &str,
     build_date: &str,
     cache_manifest: &str,
+    quartus_seed: &str,
     cache_hit: bool,
     reporter: &mut Reporter<'_>,
 ) -> AgentResult<()> {
@@ -498,6 +530,7 @@ fn build_cached_variant(
         apply_patch,
         main_revision,
         build_date,
+        quartus_seed,
         reporter,
     )?;
     fs::write(staging.join(VARIANT_CACHE_MARKER), cache_manifest).map_err(|error| {
@@ -519,6 +552,7 @@ fn build_variant(
     apply_patch: bool,
     main_revision: &str,
     build_date: &str,
+    quartus_seed: &str,
     reporter: &mut Reporter<'_>,
 ) -> AgentResult<()> {
     let path = prefixed_path(wrapper_root)?;
@@ -538,7 +572,7 @@ fn build_variant(
             "MISTER_FPGA_APPLY_PATCH",
             if apply_patch { "1" } else { "0" },
         )
-        .env("MISTER_FPGA_QUARTUS_SEED", "1")
+        .env("MISTER_FPGA_QUARTUS_SEED", quartus_seed)
         .env("MISTER_FPGA_BUILD_DATE", build_date)
         .env("MISTER_FPGA_OUT_DIR", output)
         .env("MISTER_MENU_BUILD_DIR", output.join("Menu-work"))
@@ -720,27 +754,45 @@ mod tests {
 
     #[test]
     fn cache_manifest_binds_every_matched_build_input() {
+        let seed = canonical_quartus_seed().unwrap();
         let manifest = cache_manifest(
             "patched",
             &"a".repeat(64),
             &"b".repeat(40),
             Some(&"c".repeat(40)),
+            seed,
         );
         assert!(manifest.contains(&format!("format={SIGNOFF_FORMAT}")));
         assert!(manifest.contains("flavour=patched"));
         assert!(manifest.contains("synthesis_input=aaaaaaaa"));
         assert!(manifest.contains("menu_revision=bbbbbbbb"));
         assert!(manifest.contains("baseline_revision=cccccccc"));
-        assert!(manifest.contains("quartus_seed=1"));
+        assert_eq!(seed, "2");
+        assert!(manifest.contains("quartus_seed=2"));
         assert!(manifest.contains("parallel_synthesis=off"));
         assert!(manifest.contains("menu_clock_groups=asynchronous"));
     }
 
     #[test]
+    fn canonical_seed_rejects_malformed_values() {
+        for seed in ["", "0", "01", "-1", "2 3", "2\n3", "seed"] {
+            assert!(validate_quartus_seed(seed).is_err(), "accepted {seed:?}");
+        }
+        assert_eq!(validate_quartus_seed("2").unwrap(), "2");
+    }
+
+    #[test]
     fn cache_manifest_is_independent_per_variant() {
-        let stock = cache_manifest("stock", "stock-input", "menu", None);
-        let baseline = cache_manifest("pre-observer", "baseline-input", "menu", Some("baseline"));
-        let patched = cache_manifest("patched", "patched-input", "menu", None);
+        let seed = canonical_quartus_seed().unwrap();
+        let stock = cache_manifest("stock", "stock-input", "menu", None, seed);
+        let baseline = cache_manifest(
+            "pre-observer",
+            "baseline-input",
+            "menu",
+            Some("baseline"),
+            seed,
+        );
+        let patched = cache_manifest("patched", "patched-input", "menu", None, seed);
         assert_ne!(stock, baseline);
         assert_ne!(baseline, patched);
         assert_ne!(stock, patched);

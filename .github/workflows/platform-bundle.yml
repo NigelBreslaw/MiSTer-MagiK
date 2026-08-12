@@ -647,16 +647,26 @@ jobs:
             exit 1
           fi
           sed -i 's/set_clock_groups -exclusive/set_clock_groups -asynchronous/' "$menu_sdc"
-          MISTER_FPGA_APPLY_PATCH=0 MISTER_FPGA_QUARTUS_SEED=1 MISTER_FPGA_OUT_DIR="$GITHUB_WORKSPACE/build/fpga-signoff/stock" \
+          fpga_seed_file="mister/platform/fpga/menu-vblank-latch/Quartus.seed"
+          if (( $(wc -l < "$fpga_seed_file") != 1 )); then
+            echo "canonical Quartus seed file must end with one newline" >&2
+            exit 1
+          fi
+          fpga_seed="$(< "$fpga_seed_file")"
+          if [[ ! "$fpga_seed" =~ ^[1-9][0-9]*$ ]]; then
+            echo "canonical Quartus seed must be a positive integer" >&2
+            exit 1
+          fi
+          MISTER_FPGA_APPLY_PATCH=0 MISTER_FPGA_QUARTUS_SEED="$fpga_seed" MISTER_FPGA_OUT_DIR="$GITHUB_WORKSPACE/build/fpga-signoff/stock" \
             MISTER_MENU_BUILD_DIR="$GITHUB_WORKSPACE/build/fpga-signoff/stock/Menu-work" scripts/build-fpga-vblank-latch-core.sh
           baseline_root="$GITHUB_WORKSPACE/build/video-diagnostics-baseline-source"
           git worktree add --detach "$baseline_root" '${{ steps.metadata.outputs.baseline_ref }}'
           QUARTUS_HOST_INSTALL_ROOT="$GITHUB_WORKSPACE/build/quartus-lite-17.0/docker-intelFPGA_lite" \
-            MISTER_FPGA_APPLY_PATCH=1 MISTER_FPGA_QUARTUS_SEED=1 MISTER_FPGA_OUT_DIR="$GITHUB_WORKSPACE/build/fpga-signoff/pre-observer" \
+            MISTER_FPGA_APPLY_PATCH=1 MISTER_FPGA_QUARTUS_SEED="$fpga_seed" MISTER_FPGA_OUT_DIR="$GITHUB_WORKSPACE/build/fpga-signoff/pre-observer" \
             MISTER_MENU_BUILD_DIR="$GITHUB_WORKSPACE/build/fpga-signoff/pre-observer/Menu-work" \
             "$baseline_root/scripts/build-fpga-vblank-latch-core.sh"
           git worktree remove "$baseline_root"
-          MISTER_FPGA_APPLY_PATCH=1 MISTER_FPGA_QUARTUS_SEED=1 MISTER_FPGA_OUT_DIR="$GITHUB_WORKSPACE/build/fpga-signoff/patched" \
+          MISTER_FPGA_APPLY_PATCH=1 MISTER_FPGA_QUARTUS_SEED="$fpga_seed" MISTER_FPGA_OUT_DIR="$GITHUB_WORKSPACE/build/fpga-signoff/patched" \
             MISTER_MENU_BUILD_DIR="$GITHUB_WORKSPACE/build/fpga-signoff/patched/Menu-work" scripts/build-fpga-vblank-latch-core.sh
 
       - name: Preserve completed FPGA synthesis

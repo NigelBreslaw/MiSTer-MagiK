@@ -52,7 +52,7 @@ class ManifestTest(unittest.TestCase):
                 "latch_protocol_sha256=" + "7" * 64,
                 "latch_protocol_version=" + ("2" if historical_v2 else "5"),
                 *(() if historical_v2 else ("latch_capability_mask=0x03ff",)),
-                "quartus_seed=1",
+                "quartus_seed=" + ("1" if historical_v2 else "2"),
                 "quartus_version=17.0.0 Build 595",
                 "workflow_url=https://github.example/actions/runs/1",
                 "signoff_valid=1",
@@ -90,7 +90,7 @@ class ManifestTest(unittest.TestCase):
     def test_modified_or_missing_metadata_fails(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             metadata = self.fixture(Path(directory))
-            metadata.write_text(metadata.read_text().replace("quartus_seed=1", "quartus_seed=2"))
+            metadata.write_text(metadata.read_text().replace("quartus_seed=2", "quartus_seed=1"))
             self.assertNotEqual(self.run_verify(metadata).returncode, 0)
             self.assertNotEqual(self.run_verify(Path(directory) / "missing.txt").returncode, 0)
 

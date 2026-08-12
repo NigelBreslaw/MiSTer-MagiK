@@ -100,7 +100,7 @@ change to stock, pre-observer, and final work trees so TimeQuest analyzes those
 skew constraints without biasing the observer delta. No generated clock or
 functional RTL is changed.
 
-The matched seed-1 Quartus signoff builds stock Menu, the exact pre-observer
+The matched seed-2 Quartus signoff builds stock Menu, the exact pre-observer
 latch revision pinned by `video-diagnostics-baseline.commit`, and the final
 diagnostic RBF. Functional warning, constraint-identity, and synchronizer drift
 remain stock-versus-final checks. Observer overhead is final relative to the
