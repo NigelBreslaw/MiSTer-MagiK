@@ -107,8 +107,12 @@ module tb_mister_magik_video_diagnostics_integration;
 	initial begin : output_manual_latency
 		wait(snapshot_request != output_ack);
 		wait(output_observer.request_capture_pending);
+		@(negedge hdmi_clk);
 		if(output_observer.frozen)
 			$fatal(1, "output manual snapshot froze before its capture cycle");
+		if(output_payload[3*16 +: 16] != generation)
+			$fatal(1, "output generation was not sampled on synchronized request recognition payload=%h control=%h",
+				output_payload[3*16 +: 16], generation);
 		@(posedge hdmi_clk);
 		@(negedge hdmi_clk);
 		if(!output_observer.frozen || output_ack == snapshot_request)

@@ -292,6 +292,9 @@ module mister_magik_video_diagnostics_output (
 		if(request_sync != request_seen) begin
 			request_seen <= request_sync;
 			request_capture_pending <= 1'b1;
+			// The bundled generation has settled while its toggle crosses the 2FF
+			// synchronizer; capture it once, independently of freeze arbitration.
+			snapshot_generation <= diagnostic_generation_async;
 		end
 
 		// Serialize native and manual freezes. A selected native first fault owns
@@ -306,7 +309,6 @@ module mister_magik_video_diagnostics_output (
 			geometry_faults <= native_fault_geometry;
 			fault_notify_pending <= 1'b1;
 			if(manual_capture_ready) begin
-				snapshot_generation <= diagnostic_generation_async;
 				request_capture_pending <= 1'b0;
 				request_ack_pending <= 1'b1;
 			end
@@ -318,7 +320,6 @@ module mister_magik_video_diagnostics_output (
 			native_fault_geometry <= freeze_request_geometry;
 		end
 		else if(manual_capture_ready) begin
-			snapshot_generation <= diagnostic_generation_async;
 			request_capture_pending <= 1'b0;
 			if(!frozen) begin
 				frozen <= 1'b1;
