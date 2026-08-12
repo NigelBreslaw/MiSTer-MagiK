@@ -8123,12 +8123,12 @@ fn streamline_capture_command(workload: StreamlineWorkload) -> String {
 
 fn streamline_launcher_response_start_command() -> String {
     let invocation = format!(
-        "{gatord} --output {apc} --max-duration 120 --sample-rate low --system-wide yes --exclude-kernel no --call-stack-unwinding no --capture-log",
+        "{gatord} --output {apc} --max-duration 120 --sample-rate low --system-wide=yes --exclude-kernel=no --call-stack-unwinding=no --capture-log",
         gatord = sh(STREAMLINE_REMOTE_GATORD),
         apc = sh(STREAMLINE_REMOTE_APC),
     );
     format!(
-        "set -eu; nohup {invocation} >{log} 2>&1 </dev/null & pid=$!; printf '%s\\n' \"$pid\" > {pid_file}; i=0; while test \"$i\" -lt 100; do kill -0 \"$pid\" 2>/dev/null || exit 21; test -d {apc} && exit 0; i=$((i+1)); sleep 0.1; done; exit 22",
+        "set -eu; nohup {invocation} >{log} 2>&1 </dev/null & pid=$!; printf '%s\\n' \"$pid\" > {pid_file}; i=0; while test \"$i\" -lt 100; do if ! kill -0 \"$pid\" 2>/dev/null; then cat {log} >&2 || true; exit 21; fi; test -d {apc} && exit 0; i=$((i+1)); sleep 0.1; done; cat {log} >&2 || true; exit 22",
         invocation = invocation,
         log = sh(STREAMLINE_REMOTE_LOG),
         pid_file = sh(STREAMLINE_REMOTE_PID),
@@ -19568,12 +19568,13 @@ mod tests {
         let stop = streamline_launcher_response_stop_command();
         assert!(start.contains("--max-duration 120"));
         assert!(start.contains("--sample-rate low"));
-        assert!(start.contains("--system-wide yes"));
-        assert!(start.contains("--exclude-kernel no"));
-        assert!(start.contains("--call-stack-unwinding no"));
+        assert!(start.contains("--system-wide=yes"));
+        assert!(start.contains("--exclude-kernel=no"));
+        assert!(start.contains("--call-stack-unwinding=no"));
         assert!(!start.contains("--app"));
         assert!(start.contains("nohup"));
         assert!(start.contains(STREAMLINE_REMOTE_PID));
+        assert!(start.contains("cat '/tmp/mister-magik/streamline-capture/gatord.log' >&2"));
         assert!(stop.contains("/proc/$pid/exe"));
         assert!(stop.contains("kill -INT"));
         assert!(stop.contains("kill -TERM"));
