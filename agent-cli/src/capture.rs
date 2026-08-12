@@ -399,9 +399,7 @@ fn analyze_luma(
     height: usize,
     row_bytes: usize,
 ) -> Option<LumaAnalysis> {
-    let Some(required) = row_bytes.checked_mul(height) else {
-        return None;
-    };
+    let required = row_bytes.checked_mul(height)?;
     if width == 0 || height == 0 || row_bytes < width || luma.len() < required {
         return None;
     }
