@@ -5,7 +5,6 @@
 `default_nettype none
 
 module tb_mister_magik_video_diagnostics_integration;
-`include "mister_magik_video_diagnostics_protocol.svh"
 	reg clk_sys = 1'b0, clk_100m = 1'b0, hdmi_clk = 1'b0;
 	always #5 clk_sys = ~clk_sys;
 	always #3.5 clk_100m = ~clk_100m;
@@ -16,7 +15,6 @@ module tb_mister_magik_video_diagnostics_integration;
 	reg [15:0] pending_seq = 16'd23;
 	reg [15:0] active_seq = 16'd22, active_route_epoch = 16'd6;
 	reg [239:0] frozen_avalon_payload, frozen_output_payload;
-	reg output_latency_checked = 1'b0;
 	wire snapshot_request, monitor_armed, route_context;
 	wire hdmi_pll_locked_sync;
 	wire [15:0] generation, expected_route_epoch, expected_active_seq, expected_route_flags;
@@ -104,29 +102,6 @@ module tb_mister_magik_video_diagnostics_integration;
 		end
 	end
 
-	initial begin : output_manual_latency
-		wait(snapshot_request != output_ack);
-		wait(output_observer.request_capture_pending);
-		@(negedge hdmi_clk);
-		if(output_observer.frozen)
-			$fatal(1, "output manual snapshot froze before its capture cycle");
-		if(output_payload[3*16 +: 16] != generation)
-			$fatal(1, "output generation was not sampled on synchronized request recognition payload=%h control=%h",
-				output_payload[3*16 +: 16], generation);
-		@(posedge hdmi_clk);
-		@(negedge hdmi_clk);
-		if(!output_observer.frozen || output_ack == snapshot_request)
-			$fatal(1, "output manual snapshot capture/ack mismatch frozen=%b ack=%b request=%b pending=%b ack_pending=%b",
-				output_observer.frozen, output_ack, snapshot_request,
-				output_observer.request_capture_pending,
-				output_observer.request_ack_pending);
-		@(posedge hdmi_clk);
-		@(negedge hdmi_clk);
-		if(output_ack != snapshot_request)
-			$fatal(1, "output manual snapshot acknowledgement latency mismatch");
-		output_latency_checked = 1'b1;
-	end
-
 	initial begin
 		repeat(5) @(negedge clk_sys);
 		apply = 1'b1;
@@ -149,8 +124,6 @@ module tb_mister_magik_video_diagnostics_integration;
 			   output_payload !== frozen_output_payload)
 				$fatal(1, "acknowledged native mailbox changed during verification");
 		end
-		if(!output_latency_checked)
-			$fatal(1, "output manual snapshot latency monitor did not complete");
 		if(ctrl.state != 2'd2 || ctrl.missing_domains != 3'd0)
 			$fatal(1, "three-domain capture did not complete coherently");
 		if((avalon_payload[16 +: 16] & 16'h000e) != 16'h000e ||

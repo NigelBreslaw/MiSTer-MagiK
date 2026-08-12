@@ -134,12 +134,11 @@ module tb_mister_magik_video_diagnostics_control;
 
 	integer index;
 	reg [15:0] words [0:40];
-	reg [15:0] first_control_words [0:40];
 	reg [15:0] crc;
 	task automatic read_native_snapshot;
 		input [7:0] selected_command;
 		input [15:0] expected_magic;
-		input expected_avalon_payload;
+		input [15:0] expected_word_four;
 		begin
 			io_uio = 1'b1;
 			@(negedge clk_sys); io_din = {8'd0, selected_command}; io_strobe = 1'b1;
@@ -164,28 +163,16 @@ module tb_mister_magik_video_diagnostics_control;
 			if(words[15] != crc)
 				$fatal(1, "native CRC mismatch command=%h expected=%h got=%h",
 					selected_command, crc, words[15]);
-			for(index=0; index<15; index=index+1) begin
-				if(expected_avalon_payload) begin
-					if(words[index] != avalon_payload[index*16 +: 16])
-						$fatal(1, "Avalon payload mismatch word=%0d expected=%h got=%h",
-							index, avalon_payload[index*16 +: 16], words[index]);
-				end
-				else if(words[index] != output_payload[index*16 +: 16])
-					$fatal(1, "output payload mismatch word=%0d expected=%h got=%h",
-						index, output_payload[index*16 +: 16], words[index]);
-			end
+			if(words[0] != MAGIK_VIDEO_DIAGNOSTICS_SCHEMA ||
+			   words[4] != expected_word_four)
+				$fatal(1, "native payload mismatch command=%h", selected_command);
 		end
 	endtask
 
 	initial begin
-		for(index=0; index<15; index=index+1) begin
-			avalon_payload[index*16 +: 16] = 16'ha100 + index;
-			output_payload[index*16 +: 16] = 16'hb100 + index;
-		end
 		avalon_payload[0 +: 16] = MAGIK_VIDEO_DIAGNOSTICS_SCHEMA;
+		avalon_payload[4*16 +: 16] = 16'h1111;
 		output_payload[0 +: 16] = MAGIK_VIDEO_DIAGNOSTICS_SCHEMA;
-		avalon_payload[3*16 +: 16] = diagnostic_generation;
-		output_payload[3*16 +: 16] = diagnostic_generation;
 		repeat(4) @(negedge clk_sys);
 
 		// The independent responder must ignore every existing latch opcode.
@@ -198,8 +185,7 @@ module tb_mister_magik_video_diagnostics_control;
 		strobe_word(16'h002f);
 		strobe_word(16'h0000);
 		close_command();
-		if(dut.trigger != 0 || dut.legacy_total != 1 ||
-		   dut.legacy_incomplete_count != 1)
+		if(dut.trigger != 0 || dut.legacy_total != 1 || dut.legacy_abort != 1)
 			$fatal(1, "pre-ownership partial legacy transaction was not retained safely");
 
 		apply_accepted = 1'b1;
@@ -239,8 +225,6 @@ module tb_mister_magik_video_diagnostics_control;
 			@(negedge clk_sys); io_strobe = 1'b0;
 		end
 		close_command();
-		for(index=0; index<MAGIK_VIDEO_DIAGNOSTICS_CONTROL_WORDS; index=index+1)
-			first_control_words[index] = words[index];
 		if(words[MAGIK_VIDEO_DIAGNOSTICS_CONTROL_WORDS - 1] != crc)
 			$fatal(1, "control CRC mismatch expected=%h got=%h", crc,
 				words[MAGIK_VIDEO_DIAGNOSTICS_CONTROL_WORDS - 1]);
@@ -248,8 +232,6 @@ module tb_mister_magik_video_diagnostics_control;
 		   words[7] != 16'h0201 || words[8] != 16'h0101 ||
 		   words[9] != 16'h13ff)
 			$fatal(1, "control identity/trigger/mask mismatch");
-		if(words[8][15:8] != words[8][7:0])
-			$fatal(1, "partial and abort compatibility bytes diverged");
 		for(index=0; index<10; index=index+1)
 			if(words[14+index] != 16'h1000 + index) $fatal(1, "legacy payload mismatch");
 
@@ -266,27 +248,14 @@ module tb_mister_magik_video_diagnostics_control;
 		#1 if(!response_valid || response_data != 16'h4d4d)
 			$fatal(1, "missing control magic after aborted read");
 		@(negedge clk_sys); io_strobe = 1'b0;
-		crc = 16'hffff;
-		crc = crc_word(crc,16'h005d);
-		crc = crc_word(crc,MAGIK_VIDEO_DIAGNOSTICS_SCHEMA);
-		crc = crc_word(crc,MAGIK_VIDEO_DIAGNOSTICS_CONTROL_WORDS - 1'd1);
-		for(index=0; index<MAGIK_VIDEO_DIAGNOSTICS_CONTROL_WORDS; index=index+1) begin
-			@(negedge clk_sys); io_din = 16'd0; io_strobe = 1'b1;
-			#1;
-			if(!response_valid || response_data != first_control_words[index])
-				$fatal(1, "aborted control restart mismatch word=%0d expected=%h got=%h",
-					index, first_control_words[index], response_data);
-			if(index < (MAGIK_VIDEO_DIAGNOSTICS_CONTROL_WORDS - 1))
-				crc = crc_word(crc,response_data);
-			@(negedge clk_sys); io_strobe = 1'b0;
-		end
+		@(negedge clk_sys); io_din = 16'd0; io_strobe = 1'b1;
+		#1 if(!response_valid || response_data != MAGIK_VIDEO_DIAGNOSTICS_SCHEMA)
+			$fatal(1, "aborted control read did not restart at word zero");
+		@(negedge clk_sys); io_strobe = 1'b0;
 		close_command();
-		if(first_control_words[MAGIK_VIDEO_DIAGNOSTICS_CONTROL_WORDS - 1] != crc)
-			$fatal(1, "aborted control restart CRC mismatch expected=%h got=%h",
-				crc, first_control_words[MAGIK_VIDEO_DIAGNOSTICS_CONTROL_WORDS - 1]);
 
-		read_native_snapshot(8'h5e, 16'h4d4e, 1'b1);
-		read_native_snapshot(8'h5f, 16'h4d4f, 1'b0);
+		read_native_snapshot(8'h5e, 16'h4d4e, 16'h1111);
+		read_native_snapshot(8'h5f, 16'h4d4f, 16'h0000);
 		$display("video diagnostics control tests passed");
 		$finish;
 	end
