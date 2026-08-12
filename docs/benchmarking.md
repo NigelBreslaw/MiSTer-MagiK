@@ -1,5 +1,11 @@
 # Benchmarking policy
 
+The fixed attribution workloads and evidence gates for the cross-subsystem
+profiling campaign are defined in
+[Deep profiling campaign](deep-profiling-campaign.md). Those instrumented runs
+are diagnostic; the unprofiled controls and protocol-v5 presentation evidence
+remain performance and cadence authority.
+
 Input loss and latency qualification uses the typed
 `scripts/agent benchmark input-integrity` workflow described in
 [Unified input](input.md). Do not substitute raw SSH input injection: the gate
