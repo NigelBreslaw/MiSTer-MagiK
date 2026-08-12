@@ -140,10 +140,11 @@ impl OrientationTransitionBenchmark {
     }
 
     pub fn active_leg(&self) -> Option<OrientationTransitionBenchmarkLeg> {
-        matches!(
-            self.phase,
-            BenchmarkPhase::Transitioning | BenchmarkPhase::WaitingForEndpointPresentation
-        )
+        (self.presentation_start.is_some()
+            && matches!(
+                self.phase,
+                BenchmarkPhase::Transitioning | BenchmarkPhase::WaitingForEndpointPresentation
+            ))
         .then(|| self.leg(self.next_leg))
         .flatten()
     }
@@ -357,12 +358,14 @@ mod tests {
                 .unwrap();
             assert_eq!(leg.index, index);
             assert_eq!(leg.effect, effect);
+            assert_eq!(benchmark.active_leg(), None);
             assert!(benchmark.take_next_leg(pair[0], 12).is_none());
             let started_at = Instant::now();
             benchmark.capture_presentation_start(
                 started_at,
                 Ok(presentation_telemetry(index as u32 + 2)),
             );
+            assert_eq!(benchmark.active_leg(), Some(leg));
             benchmark.note_rendered_endpoint(12 + index as u64 * 3);
             let record = benchmark
                 .note_confirmed_presentation(

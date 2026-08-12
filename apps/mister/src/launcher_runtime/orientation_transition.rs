@@ -351,6 +351,24 @@ impl OrientationTransitionRuntime {
         self.destination_ready
     }
 
+    pub fn copy_source_into(&self, output: &mut [Rgb565Pixel]) -> bool {
+        if !self.active || output.len() != self.source.len() {
+            return false;
+        }
+        output.copy_from_slice(&self.source);
+        true
+    }
+
+    pub fn restart_animation(&mut self, now: Instant) -> bool {
+        if !self.active || !self.destination_ready {
+            return false;
+        }
+        self.started_at = now;
+        self.previous_levels_valid = false;
+        self.previous_revealing = false;
+        true
+    }
+
     pub fn cancel(&mut self) -> bool {
         let was_active = self.active;
         self.active = false;
@@ -1291,6 +1309,30 @@ mod tests {
             .expect("transition frame");
         assert!(done);
         assert_eq!(output, destination);
+    }
+
+    #[test]
+    fn source_carrier_is_exact_and_restart_resets_wave_progress() {
+        let start = Instant::now();
+        let source = [Rgb565Pixel(1); 12];
+        let destination = [Rgb565Pixel(2); 12];
+        let mut output = [Rgb565Pixel(0); 12];
+        let mut runtime = OrientationTransitionRuntime::new(4, 3);
+        assert!(runtime.start(
+            ScreenOrientation::Normal,
+            ScreenOrientation::MonitorClockwise,
+            &source,
+            start,
+            false,
+        ));
+        assert!(runtime.copy_source_into(&mut output));
+        assert_eq!(output, source);
+        assert!(!runtime.restart_animation(start));
+        assert!(runtime.capture_destination(&destination));
+        let restarted = start + Duration::from_millis(40);
+        assert!(runtime.restart_animation(restarted));
+        let (_, stats, _) = runtime.render_into(&mut output, restarted).unwrap();
+        assert_eq!(stats.progress_ppm, 0);
     }
 
     #[test]
