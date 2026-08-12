@@ -7762,6 +7762,7 @@ const STREAMLINE_REMOTE_ARCHIVE: &str =
     "/tmp/mister-magik/streamline-capture/mister-magik.apc.tar.gz";
 const STREAMLINE_REMOTE_PID: &str = "/tmp/mister-magik/streamline-capture/gatord.pid";
 const STREAMLINE_REMOTE_LOG: &str = "/tmp/mister-magik/streamline-capture/gatord.log";
+const STREAMLINE_REMOTE_READY: &str = "/tmp/mister-magik/streamline-capture/gatord.ready";
 const STREAMLINE_TRACEFS_MOUNT: &str = "/sys/kernel/tracing";
 const STREAMLINE_TRACEFS_MARKER: &str = "/tmp/mister-magik/streamline-capture/owned-tracefs.mount";
 
@@ -7954,11 +7955,15 @@ fn profile_installed_launcher_response_streamline(
             true,
         )?;
         let gatord_version = parse_gatord_version(&version)?;
-        exec_checked(
-            &session,
-            "start launcher-response Streamline capture",
-            &streamline_launcher_response_start_command(),
-        )?;
+        let capture_connection = config.connection.clone();
+        let capture_command = streamline_launcher_response_capture_command();
+        let capture_thread = thread::spawn(move || -> std::result::Result<ExecOutput, String> {
+            let capture_session = connect_with(&capture_connection, 30)
+                .map_err(|error| format!("connect Streamline capture channel: {error}"))?;
+            exec(&capture_session, &capture_command, true)
+                .map_err(|error| format!("run Streamline capture channel: {error}"))
+        });
+        wait_streamline_launcher_response_ready(&session, Duration::from_secs(10))?;
         let route_result =
             run_launcher_response_scenario(&session, "60-hz", "streamline-round-trip", "off", true);
         let stop_result = exec_checked(
@@ -7966,11 +7971,29 @@ fn profile_installed_launcher_response_streamline(
             "stop launcher-response Streamline capture",
             &streamline_launcher_response_stop_command(),
         );
+        let capture_result: Result<()> = if stop_result.is_ok() {
+            let output = capture_thread
+                .join()
+                .map_err(|_| "launcher-response Streamline capture thread panicked")??;
+            if let Some(message) =
+                exec_failure_message("launcher-response Streamline capture", &output)
+            {
+                Err(message.into())
+            } else {
+                Ok(())
+            }
+        } else {
+            Err(
+                "launcher-response Streamline capture could not be joined after stop failure"
+                    .into(),
+            )
+        };
         if let Some(log) = remote_read(&session, STREAMLINE_REMOTE_LOG) {
             fs::write(output_dir.join("gatord.log"), log)?;
         }
         let route = route_result?;
         stop_result?;
+        capture_result?;
         exec_checked(
             &session,
             "package launcher-response Streamline capture",
@@ -8125,14 +8148,14 @@ fn streamline_capture_command(workload: StreamlineWorkload) -> String {
     )
 }
 
-fn streamline_launcher_response_start_command() -> String {
+fn streamline_launcher_response_capture_command() -> String {
     let invocation = format!(
         "{gatord} --output {apc} --max-duration 120 --sample-rate low --system-wide=yes --exclude-kernel=no --call-stack-unwinding=no --capture-log",
         gatord = sh(STREAMLINE_REMOTE_GATORD),
         apc = sh(STREAMLINE_REMOTE_APC),
     );
     format!(
-        "set -eu; tracefs={tracefs}; marker={marker}; current=$(awk '$2 == \"{tracefs_path}\" && $3 == \"tracefs\" {{ print }}' /proc/mounts); if test -z \"$current\"; then mount -t tracefs tracefs \"$tracefs\"; awk '$2 == \"{tracefs_path}\" && $3 == \"tracefs\" {{ print }}' /proc/mounts > \"$marker\"; test -s \"$marker\"; fi; nohup {invocation} >{log} 2>&1 </dev/null & pid=$!; printf '%s\\n' \"$pid\" > {pid_file}; i=0; while test \"$i\" -lt 100; do if ! kill -0 \"$pid\" 2>/dev/null; then cat {log} >&2 || true; exit 21; fi; test -d {apc} && exit 0; i=$((i+1)); sleep 0.1; done; cat {log} >&2 || true; exit 22",
+        "set -eu; tracefs={tracefs}; marker={marker}; current=$(awk '$2 == \"{tracefs_path}\" && $3 == \"tracefs\" {{ print }}' /proc/mounts); if test -z \"$current\"; then mount -t tracefs tracefs \"$tracefs\"; awk '$2 == \"{tracefs_path}\" && $3 == \"tracefs\" {{ print }}' /proc/mounts > \"$marker\"; test -s \"$marker\"; fi; set +e; {invocation} >{log} 2>&1 </dev/null & pid=$!; printf '%s\\n' \"$pid\" > {pid_file}; i=0; while test \"$i\" -lt 100; do if ! kill -0 \"$pid\" 2>/dev/null; then wait \"$pid\"; rc=$?; cat {log} >&2 || true; exit \"$rc\"; fi; if test -d {apc}; then printf 'ready\\n' > {ready}; break; fi; i=$((i+1)); sleep 0.1; done; if test ! -f {ready}; then kill -TERM \"$pid\" 2>/dev/null || true; wait \"$pid\"; cat {log} >&2 || true; exit 22; fi; wait \"$pid\"; exit $?",
         tracefs = sh(STREAMLINE_TRACEFS_MOUNT),
         tracefs_path = STREAMLINE_TRACEFS_MOUNT,
         marker = sh(STREAMLINE_TRACEFS_MARKER),
@@ -8140,7 +8163,25 @@ fn streamline_launcher_response_start_command() -> String {
         log = sh(STREAMLINE_REMOTE_LOG),
         pid_file = sh(STREAMLINE_REMOTE_PID),
         apc = sh(STREAMLINE_REMOTE_APC),
+        ready = sh(STREAMLINE_REMOTE_READY),
     )
+}
+
+fn wait_streamline_launcher_response_ready(session: &Session, timeout: Duration) -> Result<()> {
+    let started = Instant::now();
+    loop {
+        if remote_read(session, STREAMLINE_REMOTE_READY).as_deref() == Some("ready\n") {
+            return Ok(());
+        }
+        if started.elapsed() >= timeout {
+            let log = remote_read(session, STREAMLINE_REMOTE_LOG)
+                .unwrap_or_else(|| "missing gatord log".into());
+            return Err(
+                format!("timed out waiting for Streamline capture readiness: {log}").into(),
+            );
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
 }
 
 fn streamline_launcher_response_stop_command() -> String {
@@ -19588,7 +19629,7 @@ mod tests {
 
     #[test]
     fn launcher_response_streamline_is_system_wide_bounded_and_not_app_scoped() {
-        let start = streamline_launcher_response_start_command();
+        let start = streamline_launcher_response_capture_command();
         let stop = streamline_launcher_response_stop_command();
         assert!(start.contains("--max-duration 120"));
         assert!(start.contains("--sample-rate low"));
@@ -19596,8 +19637,10 @@ mod tests {
         assert!(start.contains("--exclude-kernel=no"));
         assert!(start.contains("--call-stack-unwinding=no"));
         assert!(!start.contains("--app"));
-        assert!(start.contains("nohup"));
+        assert!(!start.contains("nohup"));
+        assert!(start.contains("wait \"$pid\""));
         assert!(start.contains(STREAMLINE_REMOTE_PID));
+        assert!(start.contains(STREAMLINE_REMOTE_READY));
         assert!(start.contains("cat '/tmp/mister-magik/streamline-capture/gatord.log' >&2"));
         assert!(start.contains("mount -t tracefs tracefs \"$tracefs\""));
         assert!(start.contains(STREAMLINE_TRACEFS_MARKER));

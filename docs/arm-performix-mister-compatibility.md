@@ -119,6 +119,9 @@ If tracefs is not already mounted, the bounded workflow mounts it at
 `/sys/kernel/tracing`, records the exact `/proc/mounts` entry it owns under the
 volatile capture root, and unmounts only while that entry still matches during
 cleanup. It never persists the mount in boot configuration.
+The host keeps the collector's SSH channel open for the capture lifetime while
+an independent channel drives the input route; `gatord` is never orphaned into
+an unowned remote session.
 
 The combined diagnostic command uses the same explicit daemon and makes this
 system timeline a required fifth arm rather than an optional add-on:
