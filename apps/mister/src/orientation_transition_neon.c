@@ -157,6 +157,14 @@ void mister_magik_orientation_zoom_neon(
     for (size_t tile_row = 0; tile_row < ORIENTATION_ROWS; tile_row++) {
         const size_t tile_y0 = tile_row * height / ORIENTATION_ROWS;
         const size_t tile_y1 = (tile_row + 1) * height / ORIENTATION_ROWS;
+        size_t active_tile_x0[ORIENTATION_COLUMNS];
+        size_t active_tile_x1[ORIENTATION_COLUMNS];
+        size_t active_black_x0[ORIENTATION_COLUMNS];
+        size_t active_black_x1[ORIENTATION_COLUMNS];
+        size_t active_black_y0[ORIENTATION_COLUMNS];
+        size_t active_black_y1[ORIENTATION_COLUMNS];
+        uint8_t active_skip[ORIENTATION_COLUMNS];
+        size_t active_columns = 0;
         for (size_t tile_column = 0; tile_column < ORIENTATION_COLUMNS; tile_column++) {
             if ((dirty_rows[tile_row] & (1u << tile_column)) == 0) {
                 continue;
@@ -164,25 +172,35 @@ void mister_magik_orientation_zoom_neon(
             const size_t tile_x0 = tile_column * width / ORIENTATION_COLUMNS;
             const size_t tile_x1 = (tile_column + 1) * width / ORIENTATION_COLUMNS;
             const uint8_t level = black_levels[tile_row * ORIENTATION_COLUMNS + tile_column];
-            if (level == ORIENTATION_SKIP) {
-                for (size_t y = tile_y0; y < tile_y1; y++) {
-                    copy_pixels(
-                        source + y * width + tile_x0,
-                        output + y * width + tile_x0,
-                        tile_x1 - tile_x0
-                    );
-                }
-                continue;
+            active_tile_x0[active_columns] = tile_x0;
+            active_tile_x1[active_columns] = tile_x1;
+            active_skip[active_columns] = level == ORIENTATION_SKIP;
+            if (level != ORIENTATION_SKIP) {
+                centered_span(
+                    tile_x0,
+                    tile_x1,
+                    level,
+                    &active_black_x0[active_columns],
+                    &active_black_x1[active_columns]
+                );
+                centered_span(
+                    tile_y0,
+                    tile_y1,
+                    level,
+                    &active_black_y0[active_columns],
+                    &active_black_y1[active_columns]
+                );
             }
-            size_t x0;
-            size_t x1;
-            size_t y0;
-            size_t y1;
-            centered_span(tile_x0, tile_x1, level, &x0, &x1);
-            centered_span(tile_y0, tile_y1, level, &y0, &y1);
-            for (size_t y = tile_y0; y < tile_y1; y++) {
-                const size_t row = y * width;
-                if (y < y0 || y >= y1) {
+            active_columns++;
+        }
+        for (size_t y = tile_y0; y < tile_y1; y++) {
+            const size_t row = y * width;
+            for (size_t active = 0; active < active_columns; active++) {
+                const size_t tile_x0 = active_tile_x0[active];
+                const size_t tile_x1 = active_tile_x1[active];
+                if (active_skip[active]
+                    || y < active_black_y0[active]
+                    || y >= active_black_y1[active]) {
                     copy_pixels(
                         source + row + tile_x0,
                         output + row + tile_x0,
@@ -190,6 +208,8 @@ void mister_magik_orientation_zoom_neon(
                     );
                     continue;
                 }
+                const size_t x0 = active_black_x0[active];
+                const size_t x1 = active_black_x1[active];
                 copy_pixels(source + row + tile_x0, output + row + tile_x0, x0 - tile_x0);
                 zero_pixels(output + row + x0, x1 - x0);
                 copy_pixels(source + row + x1, output + row + x1, tile_x1 - x1);
