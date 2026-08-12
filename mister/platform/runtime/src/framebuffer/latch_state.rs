@@ -209,6 +209,15 @@ impl TwoBufferLatchState {
         self.next_slot_index = other_slot(slot_index);
     }
 
+    pub fn mark_external_post_success(&mut self, slot_index: u8) {
+        self.base_damage.invalidate_slot(slot_index);
+        let selected = self.slot_mut(slot_index);
+        selected.preview_present = None;
+        selected.arcade_present = None;
+        selected.hardware = LatchSlotHardwareState::Unknown;
+        self.next_slot_index = other_slot(slot_index);
+    }
+
     pub fn mark_attempt_failed(&mut self, slot_index: u8) {
         self.base_damage.mark_attempt_failed(slot_index);
         let slot = self.slot_mut(slot_index);
@@ -576,6 +585,78 @@ mod tests {
         assert_eq!(
             slot1,
             parse_ppm_fixture(include_str!("../../testdata/latch_overlay_order.ppm"))
+        );
+    }
+
+    #[test]
+    fn external_write_invalidates_only_its_slot_and_preserves_other_slot_layers() {
+        let preview = rect(1, 0, 4, 2);
+        let arcade = rect(2, 1, 4, 3);
+        let preview_layer = layer(preview, 1);
+        let arcade_layer = layer(arcade, 1);
+        let mut state = TwoBufferLatchState::new(WIDTH, HEIGHT);
+
+        for expected_slot in [1, 2] {
+            all_writable(&mut state);
+            let plan = state
+                .plan_next(input(
+                    Some(full()),
+                    Some(preview_layer),
+                    Some(preview),
+                    Some(arcade_layer),
+                    Some(DirectLayerUpdate::Full(arcade)),
+                ))
+                .expect("coherent slot plan");
+            assert_eq!(plan.slot_index, expected_slot);
+            state.mark_post_success(plan);
+        }
+        assert_eq!(
+            state.restore_bytes_for_slot(1),
+            rect_bytes(preview) + rect_bytes(arcade)
+        );
+        assert_eq!(
+            state.restore_bytes_for_slot(2),
+            rect_bytes(preview) + rect_bytes(arcade)
+        );
+
+        state.mark_external_post_success(1);
+
+        assert_eq!(state.restore_bytes_for_slot(1), WIDTH * HEIGHT * 2);
+        assert_eq!(
+            state.restore_bytes_for_slot(2),
+            rect_bytes(preview) + rect_bytes(arcade)
+        );
+        all_writable(&mut state);
+        let preserved = state
+            .plan_next(input(
+                None,
+                Some(preview_layer),
+                None,
+                Some(arcade_layer),
+                None,
+            ))
+            .expect("untouched slot plan");
+        assert_eq!(preserved.slot_index, 2);
+        assert!(preserved.restore_rects.is_empty());
+        assert_eq!(preserved.preview_redraw, None);
+        assert_eq!(preserved.arcade_redraw, None);
+        state.mark_post_success(preserved);
+
+        all_writable(&mut state);
+        let invalidated = state
+            .plan_next(input(
+                None,
+                Some(preview_layer),
+                None,
+                Some(arcade_layer),
+                None,
+            ))
+            .expect("externally written slot plan");
+        assert_eq!(invalidated.slot_index, 1);
+        assert_eq!(invalidated.preview_redraw, Some(preview));
+        assert_eq!(
+            invalidated.arcade_redraw,
+            Some(DirectLayerUpdate::Full(arcade))
         );
     }
 
