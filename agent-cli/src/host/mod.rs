@@ -13500,27 +13500,70 @@ fn profile_installed_launch_return_attribution(
     let manifest = remote_read(&session, LOCAL_MAIN_MANIFEST_REMOTE)
         .ok_or("development manifest is unavailable before launch-return attribution")?;
     let installed_identity = streamline_installed_identity(&session, config.agent()?, &manifest)?;
-    let control: Value = serde_json::from_str(&profile_installed_launch_return_arm(
+    let control_dir = output_dir.join("control");
+    let control: Value = match profile_installed_launch_return_arm(
         config,
-        &output_dir.join("control"),
+        &control_dir,
         false,
         LaunchReturnAttributionArm::Control,
         false,
-    )?)?;
-    let pmu: Value = serde_json::from_str(&profile_installed_launch_return_arm(
+    ) {
+        Ok(summary) => serde_json::from_str(&summary)?,
+        Err(error) => {
+            return retain_launch_return_attribution_failure(
+                output_dir,
+                &installed_identity,
+                "control",
+                &error.to_string(),
+                json!({"control": read_json_if_present(&control_dir.join("summary.json"))}),
+            );
+        }
+    };
+    let pmu_dir = output_dir.join("pmu");
+    let pmu: Value = match profile_installed_launch_return_arm(
         config,
-        &output_dir.join("pmu"),
+        &pmu_dir,
         false,
         LaunchReturnAttributionArm::Pmu,
         false,
-    )?)?;
-    let pprof: Value = serde_json::from_str(&profile_installed_launch_return_arm(
+    ) {
+        Ok(summary) => serde_json::from_str(&summary)?,
+        Err(error) => {
+            return retain_launch_return_attribution_failure(
+                output_dir,
+                &installed_identity,
+                "pmu",
+                &error.to_string(),
+                json!({
+                    "control": control,
+                    "pmu": read_json_if_present(&pmu_dir.join("summary.json")),
+                }),
+            );
+        }
+    };
+    let pprof_dir = output_dir.join("pprof");
+    let pprof: Value = match profile_installed_launch_return_arm(
         config,
-        &output_dir.join("pprof"),
+        &pprof_dir,
         false,
         LaunchReturnAttributionArm::Pprof,
         false,
-    )?)?;
+    ) {
+        Ok(summary) => serde_json::from_str(&summary)?,
+        Err(error) => {
+            return retain_launch_return_attribution_failure(
+                output_dir,
+                &installed_identity,
+                "pprof",
+                &error.to_string(),
+                json!({
+                    "control": control,
+                    "pmu": pmu,
+                    "pprof": read_json_if_present(&pprof_dir.join("summary.json")),
+                }),
+            );
+        }
+    };
 
     let streamline_dir = output_dir.join("streamline");
     fs::create_dir_all(&streamline_dir)?;
@@ -13553,13 +13596,19 @@ fn profile_installed_launch_return_attribution(
         match (streamline_result, package_result, cleanup_result) {
             (Ok(route), Ok(archive), Ok(())) => (route, archive),
             (route, package, cleanup) => {
-                return Err(format!(
+                let error = format!(
                     "launch-return Streamline arm failed: route={:?}; package={:?}; cleanup={:?}",
                     route.err(),
                     package.err(),
                     cleanup.err(),
-                )
-                .into());
+                );
+                return retain_launch_return_attribution_failure(
+                    output_dir,
+                    &installed_identity,
+                    "streamline",
+                    &error,
+                    json!({"control": control, "pmu": pmu, "pprof": pprof}),
+                );
             }
         };
     let final_manifest = remote_read(&session, LOCAL_MAIN_MANIFEST_REMOTE)
@@ -13568,7 +13617,13 @@ fn profile_installed_launch_return_attribution(
         || streamline_installed_identity(&session, config.agent()?, &final_manifest)?
             != installed_identity
     {
-        return Err("installed identity changed during launch-return attribution".into());
+        return retain_launch_return_attribution_failure(
+            output_dir,
+            &installed_identity,
+            "identity-verification",
+            "installed identity changed during launch-return attribution",
+            json!({"control": control, "pmu": pmu, "pprof": pprof, "streamline": streamline}),
+        );
     }
     let capture_manifest = streamline_capture_manifest(
         &installed_identity,
@@ -13621,6 +13676,59 @@ fn profile_installed_launch_return_attribution(
         format!("{}\n", serde_json::to_string_pretty(&summary)?),
     )?;
     serde_json::to_string(&summary).map_err(Into::into)
+}
+
+fn read_json_if_present(path: &Path) -> Value {
+    fs::read_to_string(path)
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or(Value::Null)
+}
+
+fn retain_launch_return_attribution_failure(
+    output_dir: &Path,
+    identity: &StreamlineInstalledIdentity,
+    failed_stage: &str,
+    error: &str,
+    arms: Value,
+) -> Result<String> {
+    let summary = launch_return_attribution_failure_summary(identity, failed_stage, error, arms);
+    fs::write(
+        output_dir.join("summary.json"),
+        format!("{}\n", serde_json::to_string_pretty(&summary)?),
+    )?;
+    serde_json::to_string(&summary).map_err(Into::into)
+}
+
+fn launch_return_attribution_failure_summary(
+    identity: &StreamlineInstalledIdentity,
+    failed_stage: &str,
+    error: &str,
+    arms: Value,
+) -> Value {
+    json!({
+        "schema": "mister-magik-launch-return-attribution-v1",
+        "artifact_status": "failed",
+        "product_quality_status": "not-evaluated-incomplete-artifact",
+        "performance_authority": "unprofiled-control",
+        "product_boundary_ms": LAUNCH_RETURN_BLACK_LIMIT_MS,
+        "product_boundary_is_artifact_gate": false,
+        "failure": {
+            "stage": failed_stage,
+            "error": error,
+        },
+        "identity": {
+            "boot_id": identity.boot_id,
+            "platform_manifest_sha256": identity.platform_manifest_sha256,
+            "magik_revision": identity.magik_revision,
+            "gui_sha256": identity.gui_sha256,
+            "agent_sha256": identity.agent_sha256,
+            "agent_build_revision": format!("agent-v{}", identity.agent_version),
+            "agent_version": identity.agent_version,
+            "agent_bytes": identity.agent_bytes,
+        },
+        "arms": arms,
+    })
 }
 
 fn wait_launch_return_state(
@@ -22569,6 +22677,33 @@ mod tests {
             route(93),
             route(94),
         ]));
+    }
+
+    #[test]
+    fn launch_return_attribution_retains_control_failure_as_v1_artifact() {
+        let identity = StreamlineInstalledIdentity {
+            boot_id: "boot-id".into(),
+            platform_manifest_sha256: "manifest".into(),
+            magik_revision: "revision".into(),
+            gui_sha256: "gui".into(),
+            agent_sha256: "agent".into(),
+            agent_bytes: 123,
+            agent_version: 16,
+        };
+        let summary = launch_return_attribution_failure_summary(
+            &identity,
+            "control",
+            "return capsule timeout",
+            json!({"control": {"cycles": []}}),
+        );
+        assert_eq!(summary["artifact_status"], "failed");
+        assert_eq!(
+            summary["product_quality_status"],
+            "not-evaluated-incomplete-artifact"
+        );
+        assert_eq!(summary["failure"]["stage"], "control");
+        assert_eq!(summary["identity"]["agent_build_revision"], "agent-v16");
+        assert!(summary["arms"]["control"]["cycles"].is_array());
     }
 
     #[test]
