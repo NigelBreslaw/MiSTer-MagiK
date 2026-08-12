@@ -105,29 +105,16 @@ void mister_magik_orientation_fade_neon(
     for (size_t tile_row = 0; tile_row < ORIENTATION_ROWS; tile_row++) {
         const size_t y0 = tile_row * height / ORIENTATION_ROWS;
         const size_t y1 = (tile_row + 1) * height / ORIENTATION_ROWS;
-        const uint16_t dirty_columns = dirty_rows[tile_row];
-        size_t active_x0[ORIENTATION_COLUMNS];
-        size_t active_count[ORIENTATION_COLUMNS];
-        uint16_t active_opacity[ORIENTATION_COLUMNS];
-        size_t active_columns = 0;
-        for (size_t tile_column = 0; tile_column < ORIENTATION_COLUMNS; tile_column++) {
-            if ((dirty_columns & (1u << tile_column)) == 0) {
-                continue;
-            }
-            const size_t x0 = tile_column * width / ORIENTATION_COLUMNS;
-            const size_t x1 = (tile_column + 1) * width / ORIENTATION_COLUMNS;
-            active_x0[active_columns] = x0;
-            active_count[active_columns] = x1 - x0;
-            active_opacity[active_columns] =
-                levels[tile_row * ORIENTATION_COLUMNS + tile_column];
-            active_columns++;
-        }
         for (size_t y = y0; y < y1; y++) {
             const size_t row = y * width;
-            for (size_t active = 0; active < active_columns; active++) {
-                const size_t x0 = active_x0[active];
-                const size_t count = active_count[active];
-                const uint16_t opacity = active_opacity[active];
+            for (size_t tile_column = 0; tile_column < ORIENTATION_COLUMNS; tile_column++) {
+                if ((dirty_rows[tile_row] & (1u << tile_column)) == 0) {
+                    continue;
+                }
+                const size_t x0 = tile_column * width / ORIENTATION_COLUMNS;
+                const size_t x1 = (tile_column + 1) * width / ORIENTATION_COLUMNS;
+                const size_t count = x1 - x0;
+                const uint16_t opacity = levels[tile_row * ORIENTATION_COLUMNS + tile_column];
                 if (opacity == 0) {
                     zero_pixels(output + row + x0, count);
                 } else if (opacity >= ORIENTATION_LEVELS) {
