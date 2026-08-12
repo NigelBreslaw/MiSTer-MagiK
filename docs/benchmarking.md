@@ -100,6 +100,15 @@ Each schedule runs Acorn→Other→Acorn twice and records every capture, dispat
 and exact active-latch confirmation. The ordinary command remains the 60/50 Hz
 multi-route qualification above.
 
+Launcher-response trace schema v6 can additionally carry one-shot UI-thread
+execution attribution. When enabled by a typed diagnostic workflow, drain,
+dispatch, state projection, raster, latch post, confirmation, and retained
+scheduler intervals include thread CPU time, voluntary and involuntary context
+switch deltas, and CPU migration. These stamps classify wall-time gaps as
+on-CPU work, voluntary waiting, preemption, mixed delay, or unresolved off-CPU
+time. They are disabled for ordinary qualification because the required Linux
+syscalls would otherwise perturb the latency being qualified.
+
 `input-latency-lab` is the fixed diagnostic experiment for attributing
 intermittent launcher response, not a release qualification. It switches the
 physical display to 1920×1200p60 for the bounded run, then restores the prior

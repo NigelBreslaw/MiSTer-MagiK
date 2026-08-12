@@ -6217,8 +6217,8 @@ fn run_launcher_response_arcade_route(session: &Session, catalog_refresh: &str) 
 }
 
 fn validate_launcher_response_trace(trace: &Value) -> Result<()> {
-    if trace["schema"].as_str() != Some("mister-magik-launcher-response-trace-v5") {
-        return Err("launcher response trace is not schema v5".into());
+    if trace["schema"].as_str() != Some("mister-magik-launcher-response-trace-v6") {
+        return Err("launcher response trace is not schema v6".into());
     }
     if trace["records"].as_array().is_none()
         || trace["feedback_records"].as_array().is_none()
@@ -6229,8 +6229,9 @@ fn validate_launcher_response_trace(trace: &Value) -> Result<()> {
         || trace["catalog_phases"].as_array().is_none()
         || trace["scheduler_phases"].as_array().is_none()
         || trace["input_reader_policy"].as_object().is_none()
+        || trace["execution_attribution"].as_object().is_none()
     {
-        return Err("launcher response trace omitted required v5 evidence".into());
+        return Err("launcher response trace omitted required v6 evidence".into());
     }
     for record in launcher_response_confirmed_records(trace, None) {
         let ordered = [
@@ -6263,6 +6264,45 @@ fn validate_launcher_response_trace(trace: &Value) -> Result<()> {
                 "launcher response stage order is incomplete or invalid: {record}"
             )
             .into());
+        }
+        if trace
+            .pointer("/execution_attribution/enabled")
+            .and_then(Value::as_bool)
+            == Some(true)
+            && (record
+                .pointer("/execution/stamps/drained")
+                .and_then(Value::as_object)
+                .is_none()
+                || record
+                    .pointer("/execution/stamps/dispatched")
+                    .and_then(Value::as_object)
+                    .is_none()
+                || record
+                    .pointer("/execution/stamps/state_applied")
+                    .and_then(Value::as_object)
+                    .is_none()
+                || record
+                    .pointer("/frame/execution/stamps/projected")
+                    .and_then(Value::as_object)
+                    .is_none()
+                || record
+                    .pointer("/frame/execution/stamps/raster_started")
+                    .and_then(Value::as_object)
+                    .is_none()
+                || record
+                    .pointer("/frame/execution/stamps/raster_completed")
+                    .and_then(Value::as_object)
+                    .is_none()
+                || record
+                    .pointer("/frame/execution/stamps/post_accepted")
+                    .and_then(Value::as_object)
+                    .is_none()
+                || record
+                    .pointer("/execution/stamps/confirmed")
+                    .and_then(Value::as_object)
+                    .is_none())
+        {
+            return Err("launcher response execution attribution omitted a stage stamp".into());
         }
     }
     Ok(())
@@ -6477,7 +6517,7 @@ fn read_completed_launcher_response_trace(session: &Session, run_id: &str) -> Re
         return Err("completed launcher response trace is empty".into());
     }
     let trace: Value = serde_json::from_str(&raw)?;
-    if trace["schema"].as_str() != Some("mister-magik-launcher-response-trace-v5")
+    if trace["schema"].as_str() != Some("mister-magik-launcher-response-trace-v6")
         || trace["run_id"].as_str() != Some(run_id)
         || trace.pointer("/completion/state").and_then(Value::as_str) != Some("complete")
     {
