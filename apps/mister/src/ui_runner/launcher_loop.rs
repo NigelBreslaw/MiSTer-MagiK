@@ -10761,6 +10761,7 @@ pub(super) fn run_launcher_loop(
                             f.read_magik_presentation_telemetry(),
                         );
                     }
+                    request_launcher_redraw!();
                 }
                 if navigation_capture_source_carrier_rendered
                     && settings_navigation_benchmark.enabled()
