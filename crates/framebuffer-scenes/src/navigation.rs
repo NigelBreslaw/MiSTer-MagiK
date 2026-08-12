@@ -1451,6 +1451,7 @@ fn blit_snapshot_span(
     }
 }
 
+#[cfg(test)]
 fn blit_snapshot_y(
     output: &mut [Rgb565Pixel],
     snapshot: &[Rgb565Pixel],
@@ -1481,6 +1482,7 @@ fn blit_snapshot_y_span(
     copy_len as u64
 }
 
+#[cfg(test)]
 fn blit_snapshot_x(
     output: &mut [Rgb565Pixel],
     snapshot: &[Rgb565Pixel],
