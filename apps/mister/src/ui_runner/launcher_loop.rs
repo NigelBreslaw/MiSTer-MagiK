@@ -10007,6 +10007,7 @@ pub(super) fn run_launcher_loop(
                 stream_motion_active,
                 direct_hidden_mode: direct_hidden_present_mode,
                 completed_hidden_frame: completed_hidden_frame_for_present,
+                profile_latch_phases: gui_profiling.active(),
             },
             LauncherPresentTargets {
                 layer_target: &layer_target,
@@ -10027,6 +10028,15 @@ pub(super) fn run_launcher_loop(
             cpu_t4,
             pacing_trace,
         } = present_cycle;
+        gui_profiling.record_latch(
+            frames,
+            presentation.main_present_hidden_invalid_bytes,
+            presentation.main_present_hidden_catchup_bytes,
+            presentation.main_present_hidden_rect_count,
+            presentation.main_present_hidden_full_copy,
+            presentation.main_present_buffer,
+            presentation.main_present_copy_path,
+        );
         scheduler_phase =
             launcher_response_trace.record_scheduler_interval("raster-and-post", scheduler_phase);
         if let Some(completed_at) = frame_production_completed_at {
@@ -10405,11 +10415,13 @@ pub(super) fn run_launcher_loop(
             };
             let completion_timeout = Duration::from_micros(pacer.period_us().saturating_mul(3) / 2);
             let completion_remaining = completion_timeout.saturating_sub(wait_start.elapsed());
+            let completion_poll_pmu = gui_profiling.span("gui.latch.completion-polling");
             let completion = wait_for_latch_completion(
                 f,
                 presented_frame.main_present_sequence,
                 completion_remaining,
             );
+            drop(completion_poll_pmu);
             let wait_done = Instant::now();
             scheduler_phase = launcher_response_trace
                 .record_scheduler_interval("latch-confirmation-wait", scheduler_phase);

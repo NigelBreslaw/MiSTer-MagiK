@@ -79,6 +79,7 @@ pub(in crate::ui_runner) struct LauncherPresentFrame {
     pub(in crate::ui_runner) stream_motion_active: bool,
     pub(in crate::ui_runner) direct_hidden_mode: bool,
     pub(in crate::ui_runner) completed_hidden_frame: Option<CompletedHiddenFrame>,
+    pub(in crate::ui_runner) profile_latch_phases: bool,
 }
 
 pub(in crate::ui_runner) struct LauncherPresentTargets<'a, 'target> {
@@ -186,6 +187,7 @@ impl LauncherPresenter<FpgaVblankLatchHiddenPresenter> {
             stream_motion_active: frame.stream_motion_active,
             direct_hidden_mode: frame.direct_hidden_mode,
             completed_hidden_frame: frame.completed_hidden_frame,
+            profile_latch_phases: frame.profile_latch_phases,
         };
         if !frame.startup_can_present {
             return adapters.present_suppressed();
@@ -514,6 +516,7 @@ struct LivePresentationAdapters<'a, 'target> {
     stream_motion_active: bool,
     direct_hidden_mode: bool,
     completed_hidden_frame: Option<CompletedHiddenFrame>,
+    profile_latch_phases: bool,
 }
 
 impl LivePresentationAdapters<'_, '_> {
@@ -604,7 +607,12 @@ impl PresentationAdapters<FpgaVblankLatchHiddenPresenter> for LivePresentationAd
                     ),
                 });
             };
-            let stats = latch.present_completed_hidden_frame(completed, hardware, self.display)?;
+            let stats = latch.present_completed_hidden_frame(
+                completed,
+                hardware,
+                self.display,
+                self.profile_latch_phases,
+            )?;
             if let Some(scale) = mister_magik_fb::framebuffer::stream::configured_latch_scale(
                 self.stream_motion_active,
             ) && let Some(frame_view) = latch.committed_frame_view_if_mapped(stats.buffer_index)
@@ -633,16 +641,30 @@ impl PresentationAdapters<FpgaVblankLatchHiddenPresenter> for LivePresentationAd
             frame,
             hardware,
             self.display,
+            self.profile_latch_phases,
             |hidden, plan| {
                 preview_redraw_rect = plan.preview_redraw;
                 arcade_redraw_update = plan.arcade_redraw;
                 if let Some(rect) = plan.preview_redraw {
+                    let preview_pmu = self
+                        .profile_latch_phases
+                        .then(|| {
+                            mister_magik_perf_events::sampled_span("gui.latch.preview-overlay-copy")
+                        })
+                        .flatten();
                     let started = Instant::now();
                     direct_preview_rows =
                         layer_target.copy_direct_preview_rect_to_hidden(hidden, rect);
                     hidden_preview_compose_us = started.elapsed().as_micros();
+                    drop(preview_pmu);
                 }
                 if let Some(update) = plan.arcade_redraw {
+                    let arcade_pmu = self
+                        .profile_latch_phases
+                        .then(|| {
+                            mister_magik_perf_events::sampled_span("gui.latch.arcade-overlay-copy")
+                        })
+                        .flatten();
                     let started = Instant::now();
                     arcade_stats = layer_target.copy_arcade_list_update_to_hidden(
                         hidden,
@@ -650,6 +672,7 @@ impl PresentationAdapters<FpgaVblankLatchHiddenPresenter> for LivePresentationAd
                         update,
                     );
                     hidden_arcade_compose_us = started.elapsed().as_micros();
+                    drop(arcade_pmu);
                 }
                 Ok(())
             },

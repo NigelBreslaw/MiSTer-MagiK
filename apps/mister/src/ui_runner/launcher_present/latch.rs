@@ -456,6 +456,7 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
         completed: CompletedHiddenFrame,
         hardware: &mut H,
         _display_session: &mut LauncherDisplaySession,
+        profile_latch_phases: bool,
     ) -> Result<FpgaVblankLatchHiddenPresentStats, LatchFailure> {
         let grant = completed.grant;
         if self.outstanding_direct_grant != Some(grant) {
@@ -485,6 +486,9 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
         let mut status_us = status_started.elapsed().as_micros() as u64;
         let sequence = self.sequence;
         self.sequence = self.sequence.wrapping_add(1).max(1);
+        let post_pmu = profile_latch_phases
+            .then(|| mister_magik_perf_events::sampled_span("gui.latch.post-request"))
+            .flatten();
         let receipt = post_confirm_prepared_frame(
             hardware,
             LatchPostRequest {
@@ -497,6 +501,7 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
             },
             |hardware, budget| self.read_geometry_safe_status_with_budget(hardware, budget),
         )?;
+        drop(post_pmu);
         // Retained in the accounting schema for compatibility. Main_MiSTer
         // exclusively owns UIO_BUT_SW and the VGA framebuffer mux.
         let set_vga_fb_us = 0;
@@ -587,6 +592,7 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
         input: LauncherFramePlan,
         hardware: &mut H,
         _display_session: &mut LauncherDisplaySession,
+        profile_latch_phases: bool,
         apply_overlays: F,
     ) -> Result<FpgaVblankLatchHiddenPresentStats, LatchFailure>
     where
@@ -608,6 +614,7 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
         let mut before_status = before_sample.status;
         let mut status_us = status_start.elapsed().as_micros() as u64;
 
+        let current_damage_bytes = input.cached_damage().total_rgb565_bytes();
         let mut plan = self.latch_state.plan_next(input);
         if plan.is_none() && before_status.pending() {
             let settle_started = Instant::now();
@@ -673,6 +680,14 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
             .expect("hidden mappings must be restored before copied presentation")
             .buffer_mut(buffer_index);
         let copy_start = Instant::now();
+        let copy_pmu = profile_latch_phases
+            .then(|| {
+                mister_magik_perf_events::sampled_span(gui_latch_copy_span_name(
+                    invalid_bytes,
+                    current_damage_bytes,
+                ))
+            })
+            .flatten();
         let mut copied_bytes = 0usize;
         let mut copy_path = LatchCopyPath::IdentityFull;
         for rect in plan.restore_rects.iter() {
@@ -694,6 +709,7 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
             }
         }
         let copy_us = copy_start.elapsed().as_micros();
+        drop(copy_pmu);
         if let Err(e) = apply_overlays(buffer, plan) {
             self.latch_state.mark_attempt_failed(buffer_index);
             return Err(LatchFailure::runtime(
@@ -703,11 +719,18 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
             ));
         }
         let publish_start = Instant::now();
+        let publish_pmu = profile_latch_phases
+            .then(|| mister_magik_perf_events::sampled_span("gui.latch.store-publication"))
+            .flatten();
         B::publish_writes(buffer);
+        drop(publish_pmu);
         let publish_us = publish_start.elapsed().as_micros();
 
         let sequence = self.sequence;
         self.sequence = self.sequence.wrapping_add(1).max(1);
+        let post_pmu = profile_latch_phases
+            .then(|| mister_magik_perf_events::sampled_span("gui.latch.post-request"))
+            .flatten();
         let receipt = match post_confirm_prepared_frame(
             hardware,
             LatchPostRequest {
@@ -729,6 +752,7 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
                 return Err(failure);
             }
         };
+        drop(post_pmu);
         // Retained in the accounting schema for compatibility. Main_MiSTer
         // exclusively owns UIO_BUT_SW and the VGA framebuffer mux.
         let set_vga_fb_us = 0;
@@ -1544,6 +1568,7 @@ mod tests {
             frame_plan(),
             hardware,
             display,
+            false,
             |_, _| Ok(()),
         )
     }
@@ -1570,6 +1595,7 @@ mod tests {
                 frame_plan(),
                 &mut hardware,
                 &mut display,
+                false,
                 |_, _| {
                     events.borrow_mut().push(TestEvent::Overlay);
                     Ok(())
@@ -1623,6 +1649,7 @@ mod tests {
                 CompletedHiddenFrame { grant },
                 &mut hardware,
                 &mut display,
+                false,
             )
             .unwrap();
         assert_eq!(stats.copy_path, LatchCopyPath::ExternalDirect);
@@ -1637,6 +1664,7 @@ mod tests {
                     CompletedHiddenFrame { grant },
                     &mut hardware,
                     &mut display,
+                    false,
                 )
                 .is_err()
         );
@@ -1703,6 +1731,7 @@ mod tests {
                     CompletedHiddenFrame { grant },
                     &mut hardware,
                     &mut display,
+                    false,
                 )
                 .unwrap_err();
 
@@ -1730,6 +1759,7 @@ mod tests {
                 CompletedHiddenFrame { grant },
                 &mut hardware,
                 &mut display,
+                false,
             )
             .unwrap_err();
 
@@ -1763,6 +1793,7 @@ mod tests {
                 CompletedHiddenFrame { grant },
                 &mut hardware,
                 &mut display,
+                false,
             )
             .unwrap();
 
@@ -1794,6 +1825,7 @@ mod tests {
                 frame_plan(),
                 &mut hardware,
                 &mut display,
+                false,
                 |hidden, _| {
                     hidden.pixels[0] = Rgb565Pixel(0x5aa5);
                     Ok(())

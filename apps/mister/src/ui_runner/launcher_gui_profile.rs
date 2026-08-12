@@ -133,6 +133,17 @@ pub(super) const fn gui_custom_profile_selection(
     }
 }
 
+pub(super) const fn gui_latch_copy_span_name(
+    invalid_bytes: usize,
+    current_damage_bytes: usize,
+) -> &'static str {
+    if invalid_bytes > current_damage_bytes {
+        "gui.latch.catch-up-restoration"
+    } else {
+        "gui.latch.base-damage-copy"
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum GuiProfilePhase {
     SettledSettings,
@@ -363,6 +374,37 @@ impl GuiProfilingController {
         }));
     }
 
+    pub(super) fn record_latch(
+        &mut self,
+        frame: u64,
+        invalid_bytes: usize,
+        catchup_bytes: usize,
+        copied_rectangles: u32,
+        full_copy: bool,
+        target_slot: u8,
+        copy_path: &'static str,
+    ) {
+        if !self.active() {
+            return;
+        }
+        let Some(record) =
+            self.frames.iter_mut().rev().find(|record| {
+                record.get("frame").and_then(serde_json::Value::as_u64) == Some(frame)
+            })
+        else {
+            self.dropped_frames = self.dropped_frames.saturating_add(1);
+            return;
+        };
+        record["latch"] = json!({
+            "invalid_bytes": invalid_bytes,
+            "catchup_bytes": catchup_bytes,
+            "copied_rectangles": copied_rectangles,
+            "full_copy": full_copy,
+            "target_slot": target_slot,
+            "copy_path": copy_path,
+        });
+    }
+
     fn finish(&mut self) {
         self.state = GuiProfileState::Complete;
         self.deadline = None;
@@ -557,6 +599,26 @@ mod tests {
         assert_eq!(transitions.preview_composition, None);
         assert!(transitions.any());
         assert!(!GuiCustomProfileSelection::default().any());
+    }
+
+    #[test]
+    fn latch_copy_classification_distinguishes_base_and_stale_slot_work() {
+        assert_eq!(
+            gui_latch_copy_span_name(1280 * 720 * 2, 1280 * 720 * 2),
+            "gui.latch.base-damage-copy"
+        );
+        assert_eq!(
+            gui_latch_copy_span_name(4_096, 4_096),
+            "gui.latch.base-damage-copy"
+        );
+        assert_eq!(
+            gui_latch_copy_span_name(32_768, 4_096),
+            "gui.latch.catch-up-restoration"
+        );
+        assert_eq!(
+            gui_latch_copy_span_name(8_192, 8_192),
+            "gui.latch.base-damage-copy"
+        );
     }
 
     #[test]
