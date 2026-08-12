@@ -919,7 +919,8 @@ mod linux {
         ScanoutSlotsLayout,
     };
     use super::{
-        ControlRequest, parse_control_request, require_ok_main_reply, select_framebuffer_capture,
+        ControlRequest, io_operation_evidence, parse_control_request, require_ok_main_reply,
+        select_framebuffer_capture,
     };
     use flate2::{Compression, write::ZlibEncoder};
     use libc::{c_ulong, ioctl};
