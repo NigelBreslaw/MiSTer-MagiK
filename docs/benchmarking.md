@@ -351,6 +351,15 @@ destination-frame preparation.
 Profiled samples never determine a performance pass; the unprofiled screening
 and confirmation commands remain authoritative.
 
+`scripts/agent benchmark system-entry-critical-streamline` runs the same fixed
+direct C64 and SNES entries inside one bounded system-wide Streamline capture.
+Each entry retains its own device-monotonic start and end bracket together with
+the existing descriptor, NavPack, row projection, catalog publication, preview,
+and CPU1-adoption evidence. The APC, archive, symbols, capture identity, launcher
+log, and per-system route artifacts are one attribution set. Its artifact status
+depends on completeness and identity, not latency; unprofiled system-entry
+controls remain the performance authority.
+
 The ready trace binds the active catalog version, preview presentation
 generation and Main sequence to the confirmed list frame. Capture remains
 outside the latency interval and follows that generation-bound confirmation.

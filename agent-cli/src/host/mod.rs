@@ -691,6 +691,15 @@ impl NativeDevice {
         })
     }
 
+    pub(crate) fn profile_system_entry_critical_streamline(
+        &mut self,
+        output_dir: &Path,
+    ) -> std::result::Result<String, DeviceFailure> {
+        self.benchmark_profile(|config| {
+            profile_installed_system_entry_critical_streamline(config, output_dir)
+        })
+    }
+
     pub(crate) fn profile_system_entry_qualification(
         &mut self,
         output_dir: &Path,
@@ -8385,6 +8394,13 @@ const GUI_FRAME_STREAMLINE_CAPTURE: SystemWideStreamlineCaptureSpec =
         max_duration_seconds: 120,
     };
 
+const SYSTEM_ENTRY_STREAMLINE_CAPTURE: SystemWideStreamlineCaptureSpec =
+    SystemWideStreamlineCaptureSpec {
+        label: "system-entry critical Streamline",
+        archive_file: "mister-magik-system-entry-critical.apc.tar.gz",
+        max_duration_seconds: 120,
+    };
+
 struct SystemWideStreamlineCapture<'a> {
     session: &'a Session,
     connection: ConnectionConfig,
@@ -10092,6 +10108,195 @@ fn profile_installed_system_entry_critical_profile(
             "pmu": sample["catalog_profile"]["pmu"],
         })).collect::<Vec<_>>(),
         "samples": samples,
+    });
+    fs::write(
+        output_dir.join("summary.json"),
+        format!("{}\n", serde_json::to_string_pretty(&summary)?),
+    )?;
+    serde_json::to_string(&summary).map_err(Into::into)
+}
+
+fn profile_installed_system_entry_critical_streamline(
+    config: &NativeDeviceConfig,
+    output_dir: &Path,
+) -> Result<String> {
+    let gatord = streamline_gatord_path(env::var_os("MISTER_GATORD_PATH"))?;
+    let gatord_metadata = fs::metadata(&gatord)?;
+    if !gatord_metadata.is_file() || gatord_metadata.len() == 0 {
+        return Err("MISTER_GATORD_PATH must name a non-empty regular file".into());
+    }
+    if gatord_metadata.len() > 64 * 1024 * 1024 {
+        return Err("MISTER_GATORD_PATH exceeds the 64 MiB upload limit".into());
+    }
+    let gatord_sha256 = file_sha256(gatord.clone())?;
+    fs::create_dir_all(output_dir)?;
+    let session = connect_with(&config.connection, 10)?;
+    let manifest = remote_read(&session, "/media/fat/mister-magik-dev/platform-v3.manifest")
+        .ok_or("development manifest is unavailable before system-entry Streamline capture")?;
+    let installed_identity = streamline_installed_identity(&session, &manifest)?;
+    let original_settings = remote_read(&session, ORIENTATION_TRANSITION_SETTINGS_REMOTE);
+    let original_status = read_launcher_status(&session)?;
+    let capability = exec_checked_output(
+        &session,
+        "installed system-entry Streamline capability",
+        "/media/fat/mister-magik-dev/mister-magik-fb benchmark-capabilities",
+    )?;
+    let capability = last_json_line(&capability.stdout)
+        .ok_or("installed benchmark capability output contains no JSON report")?;
+    if capability
+        .get("system-entry-profile-v1")
+        .and_then(Value::as_bool)
+        != Some(true)
+    {
+        return Err("installed app does not support the fixed system-entry route".into());
+    }
+    let registry = exec_checked_output(
+        &session,
+        "system-entry Streamline registry report",
+        "/media/fat/mister-magik-dev/mister-magik-fb catalog-v3-registry-report",
+    )?;
+    let registry = parse_system_entry_registry(&registry.stdout)?;
+    let games_by_system = registry["systems"]
+        .as_array()
+        .ok_or("system-entry registry has no systems")?
+        .iter()
+        .filter_map(|row| {
+            Some((
+                row.get("system")?.as_str()?.to_string(),
+                row.get("games")?.as_u64()?,
+            ))
+        })
+        .collect::<BTreeMap<_, _>>();
+    let capture = SystemWideStreamlineCapture::new(
+        &session,
+        &config.connection,
+        output_dir,
+        SYSTEM_ENTRY_STREAMLINE_CAPTURE,
+    );
+    let gatord_version = capture.prepare(&gatord)?;
+    let capture_thread = capture.start();
+    let run_result = (|| -> Result<(Vec<Value>, u64, u64)> {
+        capture.wait_ready(Duration::from_secs(10))?;
+        let capture_started = capture.monotonic_ns("system-entry capture start")?;
+        let mut systems = Vec::with_capacity(2);
+        for (ordinal, system) in ["c64", "snes"].iter().enumerate() {
+            let started = capture.monotonic_ns(&format!("{system} system-entry start"))?;
+            let sample = run_system_entry_sample(
+                config,
+                &session,
+                output_dir,
+                system,
+                *games_by_system
+                    .get(*system)
+                    .ok_or_else(|| format!("Streamline target {system} is not populated"))?,
+                ordinal + 1,
+                1,
+                SystemEntryInstrumentation::Normal,
+            )?;
+            let ended = capture.monotonic_ns(&format!("{system} system-entry end"))?;
+            systems.push(json!({
+                "system": system,
+                "window_started_monotonic_ns": started,
+                "window_ended_monotonic_ns": ended,
+                "window_duration_ns": ended.saturating_sub(started),
+                "correlation_stages": sample["stage_breakdown"],
+                "sample": sample,
+            }));
+        }
+        let capture_ended = capture.monotonic_ns("system-entry capture end")?;
+        Ok((systems, capture_started, capture_ended))
+    })();
+    let capture_result = capture.stop(capture_thread);
+    capture.retain_log()?;
+    if let Some(log) = remote_read(&session, "/tmp/mister-magik-slint.log") {
+        fs::write(output_dir.join("launcher.log"), log)?;
+    }
+    let package_result = capture_result.and_then(|()| capture.package_extract());
+    let capture_cleanup = capture.cleanup();
+    let route_cleanup = exec_checked(
+        &session,
+        "system-entry Streamline route cleanup",
+        &format!(
+            "rm -f {} {} {} {} {}",
+            sh(SYSTEM_ENTRY_TRACE_REMOTE),
+            sh(SYSTEM_ENTRY_PROFILE_REMOTE),
+            sh(SYSTEM_ENTRY_PPROF_SVG_REMOTE),
+            sh(SYSTEM_ENTRY_PPROF_FOLDED_REMOTE),
+            sh(SYSTEM_ENTRY_PPROF_COMPLETE_REMOTE),
+        ),
+    );
+    let launcher_restore = launcher_restart(
+        &session,
+        &LauncherRestartOptions {
+            clear_env: true,
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+            timeout_secs: 45,
+            ..LauncherRestartOptions::default()
+        },
+    );
+    let ((systems, capture_started, capture_ended), archive_sha256) = match (
+        run_result,
+        package_result,
+        capture_cleanup,
+        route_cleanup,
+        launcher_restore,
+    ) {
+        (Ok(run), Ok(archive), Ok(()), Ok(()), Ok(())) => (run, archive),
+        (run, package, capture, route, launcher) => {
+            return Err(format!(
+                "system-entry Streamline failed: run={:?}; package={:?}; capture_cleanup={:?}; route_cleanup={:?}; launcher_restore={:?}",
+                run.err(),
+                package.err(),
+                capture.err(),
+                route.err(),
+                launcher.err(),
+            )
+            .into());
+        }
+    };
+    let final_manifest = remote_read(&session, "/media/fat/mister-magik-dev/platform-v3.manifest")
+        .ok_or("development manifest is unavailable after system-entry Streamline capture")?;
+    if final_manifest != manifest
+        || streamline_installed_identity(&session, &final_manifest)? != installed_identity
+    {
+        return Err("installed identity changed during system-entry Streamline capture".into());
+    }
+    if remote_read(&session, ORIENTATION_TRANSITION_SETTINGS_REMOTE) != original_settings {
+        return Err("system-entry Streamline capture changed settings.json".into());
+    }
+    let final_status = read_launcher_status(&session)?;
+    if final_status.get("output_route") != original_status.get("output_route") {
+        return Err("system-entry Streamline capture changed the display route".into());
+    }
+    let capture_manifest = streamline_capture_manifest(
+        &installed_identity,
+        &gatord_version,
+        &gatord_sha256,
+        SYSTEM_ENTRY_STREAMLINE_CAPTURE,
+        capture_started,
+        capture_ended,
+    );
+    fs::write(
+        output_dir.join("capture-manifest.json"),
+        format!("{}\n", serde_json::to_string_pretty(&capture_manifest)?),
+    )?;
+    let summary = json!({
+        "schema": "mister-magik-system-entry-critical-streamline-v1",
+        "artifact_status": "passed",
+        "product_quality_status": if systems.iter().all(|system| system["sample"]["status"] == "passed") { "passed" } else { "failed" },
+        "measurement": "system-wide attribution only; existing unprofiled system-entry controls remain performance authority",
+        "identity": capture_manifest,
+        "targets": ["c64", "snes"],
+        "correlation_clock": "CLOCK_MONOTONIC",
+        "systems": systems,
+        "streamline": {
+            "gatord_version": gatord_version,
+            "gatord_sha256": gatord_sha256,
+            "archive_sha256": archive_sha256,
+            "capture": "mister-magik.apc",
+            "archive": SYSTEM_ENTRY_STREAMLINE_CAPTURE.archive_file,
+            "capture_manifest": "capture-manifest.json",
+        },
     });
     fs::write(
         output_dir.join("summary.json"),
@@ -20717,6 +20922,11 @@ mod tests {
         assert!(command.contains("--max-duration 120"));
         assert!(command.contains(STREAMLINE_REMOTE_READY));
         assert!(command.contains(STREAMLINE_TRACEFS_MARKER));
+        assert_eq!(
+            SYSTEM_ENTRY_STREAMLINE_CAPTURE.archive_file,
+            "mister-magik-system-entry-critical.apc.tar.gz"
+        );
+        assert_eq!(SYSTEM_ENTRY_STREAMLINE_CAPTURE.max_duration_seconds, 120);
     }
 
     #[test]

@@ -36,6 +36,7 @@ enum BenchmarkProfile {
     SystemEntryCritical,
     SystemEntryCriticalConfirm,
     SystemEntryCriticalProfile,
+    SystemEntryCriticalStreamline,
     SystemEntryQualification,
     LaunchReturn,
     LaunchReturnFallback,
@@ -95,6 +96,9 @@ impl BenchmarkDevice for DeviceClient {
             }
             BenchmarkProfile::SystemEntryCriticalProfile => {
                 device.profile_system_entry_critical_profile(&output_dir)
+            }
+            BenchmarkProfile::SystemEntryCriticalStreamline => {
+                device.profile_system_entry_critical_streamline(&output_dir)
             }
             BenchmarkProfile::SystemEntryQualification => {
                 device.profile_system_entry_qualification(&output_dir)
@@ -226,6 +230,15 @@ fn require_clean_installed_commit(
             BenchmarkProfile::SystemEntryCriticalProfile,
             "mister-magik-system-entry-critical-profile-v1",
             "profiling isolated C64 and SNES destination preparation with pprof and per-thread PMU counters",
+        ),
+        BenchmarkScenario::SystemEntryCriticalStreamline => execute_system_entry_repeated(
+            &mut device,
+            manifest,
+            output_dir,
+            reporter,
+            BenchmarkProfile::SystemEntryCriticalStreamline,
+            "mister-magik-system-entry-critical-streamline-v1",
+            "capturing direct C64 and SNES entry inside one bounded system-wide Streamline session",
         ),
         BenchmarkScenario::SystemEntryQualification => execute_system_entry_repeated(
             &mut device,
@@ -584,6 +597,7 @@ impl BenchmarkProfile {
         match self {
             Self::SystemEntryCriticalConfirm => "system-entry-critical-confirm",
             Self::SystemEntryCriticalProfile => "system-entry-critical-profile",
+            Self::SystemEntryCriticalStreamline => "system-entry-critical-streamline",
             Self::SystemEntryQualification => "system-entry-qualification",
             _ => "system-entry benchmark",
         }
@@ -641,6 +655,7 @@ fn particle_scene_lab_command(scenario: BenchmarkScenario) -> Option<&'static st
         | BenchmarkScenario::SystemEntryCritical
         | BenchmarkScenario::SystemEntryCriticalConfirm
         | BenchmarkScenario::SystemEntryCriticalProfile
+        | BenchmarkScenario::SystemEntryCriticalStreamline
         | BenchmarkScenario::SystemEntryQualification
         | BenchmarkScenario::LaunchReturn
         | BenchmarkScenario::LaunchReturnFallback
