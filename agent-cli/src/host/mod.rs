@@ -9198,6 +9198,31 @@ fn transition_cost_report(settings: &Value, fade: &Value, zoom: &Value) -> Value
     })
 }
 
+fn transition_attribution_artifact_complete(routes: &[Value]) -> bool {
+    routes.len() == 3
+        && routes.iter().all(|route| {
+            let summary = transition_route_summary(&route["summary"]);
+            summary.pointer("/completion/state").and_then(Value::as_str) == Some("complete")
+                && summary
+                    .get("legs")
+                    .and_then(Value::as_array)
+                    .is_some_and(|legs| {
+                        !legs.is_empty()
+                            && legs.iter().all(|leg| {
+                                leg.get("frames")
+                                    .and_then(Value::as_u64)
+                                    .is_some_and(|frames| frames > 0)
+                                    && leg.get("protocol_v5").is_some_and(Value::is_object)
+                                    && leg
+                                        .get("latch_drop_delta")
+                                        .and_then(Value::as_u64)
+                                        .is_some()
+                                    && leg.get("sequence_gaps").and_then(Value::as_u64).is_some()
+                            })
+                    })
+        })
+}
+
 fn profile_installed_transition_streamline(
     config: &NativeDeviceConfig,
     output_dir: &Path,
@@ -9347,9 +9372,14 @@ fn profile_installed_transition_streamline(
     } else {
         "failed"
     };
+    let artifact_status = if transition_attribution_artifact_complete(&routes) {
+        "passed"
+    } else {
+        "failed"
+    };
     let summary = json!({
         "schema": "mister-magik-transition-streamline-v1",
-        "artifact_status": "passed",
+        "artifact_status": artifact_status,
         "product_quality_status": product_quality_status,
         "measurement": "system-wide attribution only; existing unprofiled transition scenarios remain cadence authority",
         "identity": capture_manifest,
@@ -22511,6 +22541,34 @@ mod tests {
         assert_eq!(attempt["status"], "not-applicable");
         assert_eq!(attempt["repetition"], 2);
         assert!(retired_library_snapshot_attempt("authentication failed", 1).is_none());
+    }
+
+    #[test]
+    fn transition_attribution_rejects_missing_leg_evidence_without_failing_slow_legs() {
+        let route = |frames| {
+            json!({
+                "summary": {
+                    "completion": {"state": "complete"},
+                    "qualification_passed": false,
+                    "legs": [{
+                        "frames": frames,
+                        "protocol_v5": {},
+                        "latch_drop_delta": 0,
+                        "sequence_gaps": 0,
+                    }],
+                },
+            })
+        };
+        assert!(transition_attribution_artifact_complete(&[
+            route(18),
+            route(93),
+            route(94),
+        ]));
+        assert!(!transition_attribution_artifact_complete(&[
+            route(0),
+            route(93),
+            route(94),
+        ]));
     }
 
     #[test]
