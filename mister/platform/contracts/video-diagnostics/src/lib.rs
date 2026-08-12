@@ -7,6 +7,21 @@ pub use generated::*;
 
 const CRC_POLYNOMIAL: u16 = 0x1021;
 const CRC_INITIAL: u16 = 0xffff;
+const LEGAL_TRIGGERS: &[u16] = &[
+    VIDEO_DIAGNOSTICS_TRIGGER_NONE,
+    VIDEO_DIAGNOSTICS_TRIGGER_LEGACY_OWNED,
+    VIDEO_DIAGNOSTICS_TRIGGER_ROUTE_DIVERGENCE,
+    VIDEO_DIAGNOSTICS_TRIGGER_OWNED_OSD_WRITE,
+    VIDEO_DIAGNOSTICS_TRIGGER_CONTROL_OR_CLOCK,
+    VIDEO_DIAGNOSTICS_TRIGGER_AVALON_ADDRESS,
+    VIDEO_DIAGNOSTICS_TRIGGER_AVALON_BURST,
+    VIDEO_DIAGNOSTICS_TRIGGER_AVALON_RETURN,
+    VIDEO_DIAGNOSTICS_TRIGGER_AVALON_TIMEOUT,
+    VIDEO_DIAGNOSTICS_TRIGGER_AVALON_NO_READS,
+    VIDEO_DIAGNOSTICS_TRIGGER_FINAL_BLACK,
+    VIDEO_DIAGNOSTICS_TRIGGER_FINAL_WHITE,
+    VIDEO_DIAGNOSTICS_TRIGGER_FINAL_TIMING,
+];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum VideoDiagnosticsState {
@@ -118,26 +133,7 @@ fn decode<const N: usize>(
 }
 
 pub fn decode_control(words: &[u16]) -> Result<VideoDiagnosticsControlSnapshot, String> {
-    let snapshot = decode(
-        GET_VIDEO_DIAGNOSTICS_CONTROL,
-        4,
-        &[
-            VIDEO_DIAGNOSTICS_TRIGGER_NONE,
-            VIDEO_DIAGNOSTICS_TRIGGER_LEGACY_OWNED,
-            VIDEO_DIAGNOSTICS_TRIGGER_ROUTE_DIVERGENCE,
-            VIDEO_DIAGNOSTICS_TRIGGER_OWNED_OSD_WRITE,
-            VIDEO_DIAGNOSTICS_TRIGGER_CONTROL_OR_CLOCK,
-            VIDEO_DIAGNOSTICS_TRIGGER_AVALON_ADDRESS,
-            VIDEO_DIAGNOSTICS_TRIGGER_AVALON_BURST,
-            VIDEO_DIAGNOSTICS_TRIGGER_AVALON_RETURN,
-            VIDEO_DIAGNOSTICS_TRIGGER_AVALON_TIMEOUT,
-            VIDEO_DIAGNOSTICS_TRIGGER_AVALON_NO_READS,
-            VIDEO_DIAGNOSTICS_TRIGGER_FINAL_BLACK,
-            VIDEO_DIAGNOSTICS_TRIGGER_FINAL_WHITE,
-            VIDEO_DIAGNOSTICS_TRIGGER_FINAL_TIMING,
-        ],
-        words,
-    )?;
+    let snapshot = decode(GET_VIDEO_DIAGNOSTICS_CONTROL, 4, LEGAL_TRIGGERS, words)?;
     let route_control_flags = words[VIDEO_DIAGNOSTICS_CONTROL_ROUTE_CONTROL_FLAGS];
     let legacy_mask_disposition = words[VIDEO_DIAGNOSTICS_CONTROL_LEGACY_MASK_DISPOSITION];
     if words[VIDEO_DIAGNOSTICS_CONTROL_MISSING_DOMAINS] & !0x0006 != 0
@@ -155,19 +151,7 @@ pub fn decode_control(words: &[u16]) -> Result<VideoDiagnosticsControlSnapshot, 
 }
 
 pub fn decode_avalon(words: &[u16]) -> Result<VideoDiagnosticsAvalonSnapshot, String> {
-    let snapshot = decode(
-        GET_VIDEO_DIAGNOSTICS_AVALON,
-        3,
-        &[
-            VIDEO_DIAGNOSTICS_TRIGGER_NONE,
-            VIDEO_DIAGNOSTICS_TRIGGER_AVALON_ADDRESS,
-            VIDEO_DIAGNOSTICS_TRIGGER_AVALON_BURST,
-            VIDEO_DIAGNOSTICS_TRIGGER_AVALON_RETURN,
-            VIDEO_DIAGNOSTICS_TRIGGER_AVALON_TIMEOUT,
-            VIDEO_DIAGNOSTICS_TRIGGER_AVALON_NO_READS,
-        ],
-        words,
-    )?;
+    let snapshot = decode(GET_VIDEO_DIAGNOSTICS_AVALON, 3, LEGAL_TRIGGERS, words)?;
     if words[VIDEO_DIAGNOSTICS_AVALON_ROUTE_FLAGS] & !VIDEO_DIAGNOSTICS_ROUTE_FLAGS_MASK != 0
         || words[VIDEO_DIAGNOSTICS_AVALON_FAULT_FLAGS] & !VIDEO_DIAGNOSTICS_AVALON_FAULT_FLAGS_MASK
             != 0
@@ -178,17 +162,7 @@ pub fn decode_avalon(words: &[u16]) -> Result<VideoDiagnosticsAvalonSnapshot, St
 }
 
 pub fn decode_output(words: &[u16]) -> Result<VideoDiagnosticsOutputSnapshot, String> {
-    let snapshot = decode(
-        GET_VIDEO_DIAGNOSTICS_OUTPUT,
-        3,
-        &[
-            VIDEO_DIAGNOSTICS_TRIGGER_NONE,
-            VIDEO_DIAGNOSTICS_TRIGGER_FINAL_BLACK,
-            VIDEO_DIAGNOSTICS_TRIGGER_FINAL_WHITE,
-            VIDEO_DIAGNOSTICS_TRIGGER_FINAL_TIMING,
-        ],
-        words,
-    )?;
+    let snapshot = decode(GET_VIDEO_DIAGNOSTICS_OUTPUT, 3, LEGAL_TRIGGERS, words)?;
     let fault_summary = words[VIDEO_DIAGNOSTICS_OUTPUT_FAULT_SUMMARY];
     let fault_flags = fault_summary & 0x00ff;
     let geometry_faults = (fault_summary >> 8) & 0x0007;
@@ -259,6 +233,10 @@ mod tests {
         assert!(decode_output(&reserved).is_err());
         reserved[1] = 0;
         reserved[2] = VIDEO_DIAGNOSTICS_TRIGGER_AVALON_BURST;
+        reserved[15] = message_crc(GET_VIDEO_DIAGNOSTICS_OUTPUT, &reserved[..15]);
+        assert!(decode_output(&reserved).is_ok());
+
+        reserved[2] = 0xffff;
         reserved[15] = message_crc(GET_VIDEO_DIAGNOSTICS_OUTPUT, &reserved[..15]);
         assert!(decode_output(&reserved).is_err());
 
