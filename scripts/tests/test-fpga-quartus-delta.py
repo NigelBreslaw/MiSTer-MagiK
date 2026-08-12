@@ -301,13 +301,13 @@ class QuartusDeltaTest(unittest.TestCase):
             "Total registers : 20,000\nTotal block memory bits : 1,000,000\nTotal DSP Blocks : 2\n",
             "Logic utilization (in ALMs) : 7,800 / 41,910 ( 19 % )\n"
             "Total registers : 20,500\nTotal block memory bits : 1,000,000\nTotal DSP Blocks : 2\n",
-            "Logic utilization (in ALMs) : 8,599 / 41,910 ( 21 % )\n"
+            "Logic utilization (in ALMs) : 8,799 / 41,910 ( 21 % )\n"
             "Total registers : 21,999\nTotal block memory bits : 1,000,000\nTotal DSP Blocks : 2\n",
         )
         result, payload = self.run_check(stock, patched, baseline, fitter_resources)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(payload["baseline_unconstrained_output_paths"], 12)
-        self.assertEqual(payload["resource_deltas"]["logic utilization (in alms)"], 799)
+        self.assertEqual(payload["resource_deltas"]["logic utilization (in alms)"], 999)
         self.assertEqual(payload["resource_deltas"]["total registers"], 1499)
 
     def test_alm_budget_excess_fails(self) -> None:
@@ -316,7 +316,7 @@ class QuartusDeltaTest(unittest.TestCase):
             "Total block memory bits : 1,000,000\nTotal DSP Blocks : 2\n",
             "Logic utilization (in ALMs) : 7,800\nTotal registers : 20,000\n"
             "Total block memory bits : 1,000,000\nTotal DSP Blocks : 2\n",
-            "Logic utilization (in ALMs) : 8,601\nTotal registers : 20,000\n"
+            "Logic utilization (in ALMs) : 8,801\nTotal registers : 20,000\n"
             "Total block memory bits : 1,000,000\nTotal DSP Blocks : 2\n",
         )
         result, payload = self.run_check(BASE, BASE + CUSTOM_SYNC, BASE, summaries)

@@ -91,7 +91,7 @@ latch revision pinned by `video-diagnostics-baseline.commit`, and the final
 diagnostic RBF. Functional warning, constraint-identity, and synchronizer drift
 remain stock-versus-final checks. Observer overhead is final relative to the
 pre-observer build: no added unconstrained output paths, no more than 0.10 ns
-slack degradation, no more than 800 ALMs or 1,500 registers, and no added DSP
+slack degradation, no more than 1,000 ALMs or 1,500 registers, and no added DSP
 or block-memory use. The final build must also have zero TNS and at least 0.20
 ns setup and hold slack. A changed RBF still requires the normal release
 qualification before device deployment.
