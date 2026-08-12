@@ -1907,6 +1907,18 @@ mod linux {
         pub(super) files_read: u64,
     }
 
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+    pub(super) struct ProcessStatusFields {
+        pub(super) rss_kb: u64,
+        pub(super) threads: u64,
+    }
+
+    #[derive(Debug, Default)]
+    pub(super) struct ProcessTelemetrySnapshot {
+        pub(super) processes: HashMap<&'static str, Value>,
+        pub(super) evidence: ProcessTelemetryEvidence,
+    }
+
     pub(super) fn aggregate_process_telemetry_evidence(
         items: &[ProcessTelemetryEvidence],
     ) -> ProcessTelemetryEvidence {
@@ -1970,14 +1982,23 @@ mod linux {
                     });
             let disk_read_us = disk_started.elapsed().as_micros() as u64;
 
-            let (magik, magik_process) = process_telemetry("mister-magik-fb");
-            let (main_dev, main_dev_process) = process_telemetry("MiSTer_MagiKDev");
-            let (main_public, main_public_process) = process_telemetry("MiSTer_MagiK");
-            let process_evidence = aggregate_process_telemetry_evidence(&[
-                magik_process,
-                main_dev_process,
-                main_public_process,
-            ]);
+            let process_snapshot = process_telemetry_snapshot();
+            let magik = process_snapshot
+                .processes
+                .get("mister-magik-fb")
+                .cloned()
+                .unwrap_or_else(empty_process_telemetry);
+            let main_dev = process_snapshot
+                .processes
+                .get("MiSTer_MagiKDev")
+                .cloned()
+                .unwrap_or_else(empty_process_telemetry);
+            let main_public = process_snapshot
+                .processes
+                .get("MiSTer_MagiK")
+                .cloned()
+                .unwrap_or_else(empty_process_telemetry);
+            let process_evidence = process_snapshot.evidence;
             let mut files_read = 4_u64.saturating_add(process_evidence.files_read);
             let main = if main_dev
                 .get("pids")
@@ -2281,58 +2302,102 @@ mod linux {
             .find_map(|(item_key, value)| (item_key == key).then_some(*value))
     }
 
-    fn process_telemetry(name: &str) -> (Value, ProcessTelemetryEvidence) {
+    fn process_telemetry_snapshot() -> ProcessTelemetrySnapshot {
+        process_telemetry_snapshot_at(Path::new("/proc"))
+    }
+
+    pub(super) fn process_telemetry_snapshot_at(proc_root: &Path) -> ProcessTelemetrySnapshot {
+        const TARGETS: [&str; 3] = ["mister-magik-fb", "MiSTer_MagiKDev", "MiSTer_MagiK"];
         let discovery_started = Instant::now();
-        let pids = read_pidof(name)
-            .unwrap_or_default()
-            .split_whitespace()
-            .filter_map(|pid| pid.parse::<u64>().ok())
-            .collect::<Vec<_>>();
+        let mut matched = HashMap::<&'static str, Vec<u64>>::from([
+            (TARGETS[0], Vec::new()),
+            (TARGETS[1], Vec::new()),
+            (TARGETS[2], Vec::new()),
+        ]);
+        let mut files_read = 0u64;
+        if let Ok(entries) = fs::read_dir(proc_root) {
+            for entry in entries.flatten() {
+                let Some(pid) = entry
+                    .file_name()
+                    .to_str()
+                    .and_then(|name| name.parse::<u64>().ok())
+                else {
+                    continue;
+                };
+                let Ok(comm) = fs::read_to_string(entry.path().join("comm")) else {
+                    continue;
+                };
+                files_read = files_read.saturating_add(1);
+                let name = comm.trim();
+                if let Some(pids) = matched.get_mut(name) {
+                    pids.push(pid);
+                }
+            }
+        }
+        for pids in matched.values_mut() {
+            pids.sort_unstable();
+        }
         let discovery_us = discovery_started.elapsed().as_micros() as u64;
+
         let parse_started = Instant::now();
-        let rss_kb = pids
-            .iter()
-            .map(|pid| proc_status_kb(*pid, "VmRSS"))
-            .sum::<u64>();
-        let threads = pids
-            .iter()
-            .map(|pid| proc_status_number(*pid, "Threads"))
-            .sum::<u64>();
+        let mut processes = HashMap::new();
+        for target in TARGETS {
+            let pids = &matched[target];
+            let mut rss_kb = 0u64;
+            let mut threads = 0u64;
+            for pid in pids {
+                let Ok(status) = fs::read_to_string(proc_root.join(pid.to_string()).join("status"))
+                else {
+                    continue;
+                };
+                files_read = files_read.saturating_add(1);
+                let fields = parse_process_status(&status);
+                rss_kb = rss_kb.saturating_add(fields.rss_kb);
+                threads = threads.saturating_add(fields.threads);
+            }
+            processes.insert(
+                target,
+                json!({
+                    "pids": pids,
+                    "rss_kb": rss_kb,
+                    "threads": threads,
+                }),
+            );
+        }
         let proc_parse_us = parse_started.elapsed().as_micros() as u64;
-        let files_read = (pids.len() as u64).saturating_mul(2);
-        (
-            json!({
-                "pids": pids,
-                "rss_kb": rss_kb,
-                "threads": threads,
-            }),
-            ProcessTelemetryEvidence {
+        ProcessTelemetrySnapshot {
+            processes,
+            evidence: ProcessTelemetryEvidence {
                 discovery_us,
                 proc_parse_us,
-                child_processes: 1,
+                child_processes: 0,
                 files_read,
             },
-        )
+        }
     }
 
-    fn proc_status_kb(pid: u64, key: &str) -> u64 {
-        proc_status_field(pid, key)
-            .and_then(|value| value.split_whitespace().next()?.parse::<u64>().ok())
-            .unwrap_or(0)
+    fn empty_process_telemetry() -> Value {
+        json!({"pids": [], "rss_kb": 0, "threads": 0})
     }
 
-    fn proc_status_number(pid: u64, key: &str) -> u64 {
-        proc_status_field(pid, key)
-            .and_then(|value| value.split_whitespace().next()?.parse::<u64>().ok())
-            .unwrap_or(0)
-    }
-
-    fn proc_status_field(pid: u64, key: &str) -> Option<String> {
-        let text = fs::read_to_string(format!("/proc/{pid}/status")).ok()?;
-        text.lines().find_map(|line| {
-            let (line_key, rest) = line.split_once(':')?;
-            (line_key == key).then(|| rest.trim().to_string())
-        })
+    pub(super) fn parse_process_status(text: &str) -> ProcessStatusFields {
+        let mut fields = ProcessStatusFields::default();
+        for line in text.lines() {
+            let Some((key, value)) = line.split_once(':') else {
+                continue;
+            };
+            let value = value
+                .split_whitespace()
+                .next()
+                .and_then(|value| value.parse::<u64>().ok())
+                .unwrap_or(0);
+            match key {
+                "VmRSS" => fields.rss_kb = value,
+                "Threads" => fields.threads = value,
+                _ => {}
+            }
+        }
+        fields
     }
 
     fn main_thread_current_cpu(pid: u64) -> Option<u64> {
@@ -6125,6 +6190,53 @@ mod tests {
             linux::parse_proc_stat_processor(&format!("42 (mister magik) {fields}")),
             Some(36)
         );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn telemetry_process_discovery_scans_once_and_reads_each_matching_status_once() {
+        let root = std::env::temp_dir().join(format!(
+            "mister-magik-agent-proc-fixture-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        for (pid, name, status) in [
+            (31, "mister-magik-fb", Some("VmRSS:\t120 kB\nThreads:\t3\n")),
+            (7, "mister-magik-fb", Some("Threads:\t2\nVmRSS:\t80 kB\n")),
+            (19, "MiSTer_MagiKDev", Some("VmRSS:\tbad\nThreads:\t4\n")),
+            (11, "MiSTer_MagiK", None),
+            (55, "unrelated", Some("VmRSS:\t999 kB\nThreads:\t99\n")),
+        ] {
+            let process = root.join(pid.to_string());
+            std::fs::create_dir_all(&process).unwrap();
+            std::fs::write(process.join("comm"), format!("{name}\n")).unwrap();
+            if let Some(status) = status {
+                std::fs::write(process.join("status"), status).unwrap();
+            }
+        }
+        std::fs::create_dir_all(root.join("not-a-pid")).unwrap();
+
+        let snapshot = linux::process_telemetry_snapshot_at(&root);
+
+        assert_eq!(
+            snapshot.processes["mister-magik-fb"]["pids"],
+            json!([7, 31])
+        );
+        assert_eq!(snapshot.processes["mister-magik-fb"]["rss_kb"], 200);
+        assert_eq!(snapshot.processes["mister-magik-fb"]["threads"], 5);
+        assert_eq!(snapshot.processes["MiSTer_MagiKDev"]["rss_kb"], 0);
+        assert_eq!(snapshot.processes["MiSTer_MagiKDev"]["threads"], 4);
+        assert_eq!(snapshot.processes["MiSTer_MagiK"]["pids"], json!([11]));
+        assert_eq!(snapshot.processes["MiSTer_MagiK"]["rss_kb"], 0);
+        assert_eq!(snapshot.evidence.child_processes, 0);
+        assert_eq!(snapshot.evidence.files_read, 8);
+
+        let malformed = linux::parse_process_status(
+            "VmRSS:\t4096 kB\nThreads:\tbroken\nThreads:\t7\nOther: 9\n",
+        );
+        assert_eq!(malformed.rss_kb, 4096);
+        assert_eq!(malformed.threads, 7);
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[cfg(target_os = "linux")]
