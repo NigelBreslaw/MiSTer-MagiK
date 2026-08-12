@@ -766,6 +766,11 @@ fn confirm_bridge_text(action: Option<launcher::ConfirmAction>) -> ConfirmBridge
     }
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+pub(super) struct LauncherBridgeSyncTiming {
+    pub(super) model_projection_us: u128,
+}
+
 pub(super) fn sync_bridge_launcher(
     app: &slint_ui::launcher::Launcher,
     pad: &PadPool,
@@ -779,9 +784,11 @@ pub(super) fn sync_bridge_launcher(
     models: &mut LauncherBridgeModels,
     catalog_version: usize,
     defer_selected_preview: bool,
+    measure_model_projection: bool,
     ui: &UiDisplay,
-) {
+) -> LauncherBridgeSyncTiming {
     let bridge = app.global::<slint_ui::launcher::MisterBridge>();
+    let model_started = measure_model_projection.then(Instant::now);
     models.sync(
         app,
         nav,
@@ -789,6 +796,9 @@ pub(super) fn sync_bridge_launcher(
         Some(catalog_version),
         defer_selected_preview,
     );
+    let model_projection_us = model_started
+        .map(|started| started.elapsed().as_micros())
+        .unwrap_or(0);
     bridge.set_startup_visible(false);
     sync_bridge_pad_launcher(&bridge, pad);
     bridge.set_clock_text(launcher_clock_text().into());
@@ -821,6 +831,9 @@ pub(super) fn sync_bridge_launcher(
         );
     }
     sync_setup_bridge(&bridge, pad, setup);
+    LauncherBridgeSyncTiming {
+        model_projection_us,
+    }
 }
 
 pub(super) fn sync_bridge_launcher_light(
@@ -836,9 +849,14 @@ pub(super) fn sync_bridge_launcher_light(
     preview: &mut PreviewState,
     defer_arcade_overlay_bridge: bool,
     defer_selected_preview: bool,
+    measure_model_projection: bool,
     ui: &UiDisplay,
-) {
+) -> LauncherBridgeSyncTiming {
+    let model_started = measure_model_projection.then(Instant::now);
     models.sync(app, nav, catalog, None, defer_arcade_overlay_bridge);
+    let model_projection_us = model_started
+        .map(|started| started.elapsed().as_micros())
+        .unwrap_or(0);
     let bridge = app.global::<slint_ui::launcher::MisterBridge>();
     let active_games_loading = active_system_games_loading(catalog, nav);
     set_bridge_if_changed!(
@@ -886,6 +904,9 @@ pub(super) fn sync_bridge_launcher_light(
         );
     }
     status_presenter.sync_setup_visible(setup.is_active());
+    LauncherBridgeSyncTiming {
+        model_projection_us,
+    }
 }
 
 pub(super) fn launcher_clock_text() -> String {
@@ -1534,6 +1555,7 @@ mod tests {
             &mut preview,
             false,
             false,
+            false,
             &ui,
         );
 
@@ -1611,6 +1633,7 @@ mod tests {
                     &mut models,
                     catalog_version,
                     false,
+                    false,
                     &ui,
                 );
                 sync_bridge_launcher_light(
@@ -1624,6 +1647,7 @@ mod tests {
                     &catalog,
                     None,
                     &mut preview,
+                    false,
                     false,
                     false,
                     &ui,

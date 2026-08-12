@@ -672,6 +672,64 @@ struct SystemEntryPresentationStart {
     latch_drop_count: u16,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct SystemEntryPublicationPhases {
+    bridge_model_assembly_us: u64,
+    bridge_updates_us: u64,
+    list_projection_us: u64,
+    slint_raster_us: u64,
+    overlay_composition_us: u64,
+    latch_copy_us: u64,
+    post_us: u64,
+    confirmation_wait_wall_us: u64,
+    confirmation_poll_cpu_us: u64,
+}
+
+impl SystemEntryPublicationPhases {
+    fn from_presented_frame(frame: &LauncherPresentedFrame) -> Self {
+        let bridge_total_us = u128_to_u64(frame.prepare_trace.bridge_sync_us);
+        let bridge_model_assembly_us = u128_to_u64(frame.prepare_trace.bridge_model_projection_us);
+        let list_projection_us = u128_to_u64(frame.custom_draw_trace.arcade_list_update_us);
+        let custom_draw_us = duration_us(frame.custom_draw_start, frame.custom_draw_done);
+        Self {
+            bridge_model_assembly_us,
+            bridge_updates_us: bridge_total_us.saturating_sub(bridge_model_assembly_us),
+            list_projection_us,
+            slint_raster_us: duration_us(frame.frame_t1, frame.frame_t2),
+            overlay_composition_us: custom_draw_us.saturating_sub(list_projection_us),
+            latch_copy_us: u128_to_u64(frame.main_present_hidden_copy_us),
+            post_us: u128_to_u64(frame.main_present_request_us),
+            confirmation_wait_wall_us: u128_to_u64(frame.post_present_wait_us),
+            confirmation_poll_cpu_us: frame.main_present_completion_poll_cpu_us,
+        }
+    }
+
+    fn json(self) -> serde_json::Value {
+        serde_json::json!({
+            "clock_domain": "CLOCK_MONOTONIC",
+            "bridge_model_assembly": self.bridge_model_assembly_us,
+            "bridge_updates": self.bridge_updates_us,
+            "list_projection": self.list_projection_us,
+            "slint_raster": self.slint_raster_us,
+            "overlay_composition": self.overlay_composition_us,
+            "latch_copy": self.latch_copy_us,
+            "post": self.post_us,
+            "confirmation_wait_wall": self.confirmation_wait_wall_us,
+            "confirmation_poll_cpu": self.confirmation_poll_cpu_us,
+        })
+    }
+}
+
+fn duration_us(start: Instant, end: Instant) -> u64 {
+    end.saturating_duration_since(start)
+        .as_micros()
+        .min(u128::from(u64::MAX)) as u64
+}
+
+fn u128_to_u64(value: u128) -> u64 {
+    value.min(u128::from(u64::MAX)) as u64
+}
+
 struct PendingCollectionEntry {
     collection_id: String,
     requested_at: Instant,
@@ -1440,6 +1498,7 @@ impl ArcadeEntryLatencyTracker {
         main_sequence: u16,
         presentation_end: Option<mister_magik_latch_contract::PresentationTelemetry>,
         latch_drop_count: u16,
+        publication: SystemEntryPublicationPhases,
     ) -> bool {
         if !self.destination_prepared
             || !system_entry_ready_frame_eligible(
@@ -1474,6 +1533,9 @@ impl ArcadeEntryLatencyTracker {
                     latch_drop_count.wrapping_sub(start.latch_drop_count),
                 )
             });
+        // Publish the benchmark-owned phase record before the ready marker. The host treats
+        // that marker as the point at which every correlated artifact is complete.
+        write_system_entry_publication_profile(publication);
         self.trace.record(
             start,
             "system_entry_ready_presented",
@@ -1488,7 +1550,7 @@ impl ArcadeEntryLatencyTracker {
             preview.trace_cache_state(),
             &asset_key,
             format!(
-                "copied_rows={copied_rows} confirmation=main-active-sequence selected_has_preview={} catalog_generation={} preview_generation={} main_sequence={} cadence_authoritative={} repeated_vblank_delta={} latch_drop_delta={}",
+                "copied_rows={copied_rows} confirmation=main-active-sequence selected_has_preview={} catalog_generation={} preview_generation={} main_sequence={} cadence_authoritative={} repeated_vblank_delta={} latch_drop_delta={} bridge_model_assembly_us={} bridge_updates_us={} list_projection_us={} slint_raster_us={} overlay_composition_us={} latch_copy_us={} post_us={} confirmation_wait_wall_us={} confirmation_poll_cpu_us={}",
                 u8::from(selected_has_preview),
                 catalog_generation,
                 preview.presentation_generation(),
@@ -1500,9 +1562,44 @@ impl ArcadeEntryLatencyTracker {
                 cadence
                     .map(|(_, dropped)| dropped.to_string())
                     .unwrap_or_else(|| "unavailable".to_string()),
+                publication.bridge_model_assembly_us,
+                publication.bridge_updates_us,
+                publication.list_projection_us,
+                publication.slint_raster_us,
+                publication.overlay_composition_us,
+                publication.latch_copy_us,
+                publication.post_us,
+                publication.confirmation_wait_wall_us,
+                publication.confirmation_poll_cpu_us,
             ),
         );
         true
+    }
+}
+
+fn write_system_entry_publication_profile(publication: SystemEntryPublicationPhases) {
+    let Ok(path) = std::env::var("MISTER_SYSTEM_ENTRY_PROFILE_OUT") else {
+        return;
+    };
+    if path.is_empty() {
+        return;
+    }
+    let path = std::path::Path::new(&path);
+    let Ok(raw) = std::fs::read_to_string(path) else {
+        return;
+    };
+    let Ok(mut evidence) = serde_json::from_str::<serde_json::Value>(&raw) else {
+        return;
+    };
+    evidence["first_frame_publication_us"] = publication.json();
+    if let Err(error) = std::fs::write(
+        path,
+        format!(
+            "{}\n",
+            serde_json::to_string_pretty(&evidence).unwrap_or_default()
+        ),
+    ) {
+        crate::ui_errln!("system-entry publication profile write failed: {error}");
     }
 }
 
@@ -5429,6 +5526,7 @@ pub(super) fn run_launcher_loop(
         &mut bridge_models,
         catalog_version,
         false,
+        false,
         ui,
     );
     print_startup_event(
@@ -6404,6 +6502,7 @@ pub(super) fn run_launcher_loop(
                         &mut preview,
                         &mut bridge_models,
                         catalog_version,
+                        false,
                         false,
                         ui,
                     );
@@ -7527,6 +7626,7 @@ pub(super) fn run_launcher_loop(
                                         &mut bridge_models,
                                         catalog_version,
                                         false,
+                                        false,
                                         ui,
                                     );
                                     window.request_redraw();
@@ -7588,6 +7688,7 @@ pub(super) fn run_launcher_loop(
                                         &mut preview,
                                         &mut bridge_models,
                                         catalog_version,
+                                        false,
                                         false,
                                         ui,
                                     );
@@ -7899,6 +8000,7 @@ pub(super) fn run_launcher_loop(
                                     &mut bridge_models,
                                     catalog_version,
                                     false,
+                                    false,
                                     ui,
                                 );
                                 window.request_redraw();
@@ -8110,9 +8212,10 @@ pub(super) fn run_launcher_loop(
             bridge_sync_plan == LauncherBridgeSyncPlan::Light,
         );
         let gui_bridge_pmu = gui_profiling.phase_span(gui_bridge_phase.span_name());
+        let mut bridge_model_projection_us = 0u128;
         match bridge_sync_plan {
             LauncherBridgeSyncPlan::Full => {
-                sync_bridge_launcher(
+                bridge_model_projection_us = sync_bridge_launcher(
                     &app,
                     &pad,
                     &nav,
@@ -8125,8 +8228,10 @@ pub(super) fn run_launcher_loop(
                     &mut bridge_models,
                     catalog_version,
                     defer_or_preserve_selected_preview,
+                    system_entry_cpu_profile.is_some(),
                     ui,
-                );
+                )
+                .model_projection_us;
                 preview_scheduled_this_loop = nav.screen == Screen::Arcade;
                 request_launcher_redraw!();
             }
@@ -8136,7 +8241,7 @@ pub(super) fn run_launcher_loop(
                 } else {
                     None
                 };
-                sync_bridge_launcher_light(
+                bridge_model_projection_us = sync_bridge_launcher_light(
                     &app,
                     &nav,
                     &lifecycle,
@@ -8149,8 +8254,10 @@ pub(super) fn run_launcher_loop(
                     &mut preview,
                     should_defer_arcade_overlay_bridge(dirty_opt, launching, &nav, &catalog),
                     defer_or_preserve_selected_preview,
+                    system_entry_cpu_profile.is_some(),
                     ui,
-                );
+                )
+                .model_projection_us;
                 preview_scheduled_this_loop = nav.screen == Screen::Arcade;
                 request_launcher_redraw!();
             }
@@ -8160,6 +8267,7 @@ pub(super) fn run_launcher_loop(
         prepare_trace.bridge_sync_us = bridge_sync_started
             .map(|started| started.elapsed().as_micros())
             .unwrap_or(0);
+        prepare_trace.bridge_model_projection_us = bridge_model_projection_us;
         let response_projected_at_us = crate::input_hub::monotonic_us();
         let response_projected_execution = launcher_response_trace.execution_stamp();
         drop(interaction_projection_pmu);
@@ -10517,6 +10625,7 @@ pub(super) fn run_launcher_loop(
                     confirmed_present_sequence,
                     f.read_magik_presentation_telemetry().ok(),
                     presented_frame.main_present_drop_count,
+                    SystemEntryPublicationPhases::from_presented_frame(&presented_frame),
                 ) && let Err(error) =
                     cpu_profile::finish_system_entry_async(system_entry_cpu_profile.take())
                 {
@@ -12761,6 +12870,32 @@ mod tests {
             240,
             true,
         ));
+    }
+
+    #[test]
+    fn system_entry_publication_evidence_keeps_cpu_and_confirmation_wait_distinct() {
+        let phases = SystemEntryPublicationPhases {
+            bridge_model_assembly_us: 101,
+            bridge_updates_us: 102,
+            list_projection_us: 103,
+            slint_raster_us: 104,
+            overlay_composition_us: 105,
+            latch_copy_us: 106,
+            post_us: 107,
+            confirmation_wait_wall_us: 16_667,
+            confirmation_poll_cpu_us: 108,
+        };
+
+        let evidence = phases.json();
+
+        assert_eq!(evidence["bridge_model_assembly"], 101);
+        assert_eq!(evidence["list_projection"], 103);
+        assert_eq!(evidence["slint_raster"], 104);
+        assert_eq!(evidence["overlay_composition"], 105);
+        assert_eq!(evidence["latch_copy"], 106);
+        assert_eq!(evidence["post"], 107);
+        assert_eq!(evidence["confirmation_wait_wall"], 16_667);
+        assert_eq!(evidence["confirmation_poll_cpu"], 108);
     }
 
     #[test]

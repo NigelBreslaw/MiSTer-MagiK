@@ -11806,6 +11806,17 @@ fn run_system_entry_sample(
             &trace,
             "arcade_enter_presented",
         )?)?;
+        let first_frame_publication_us = json!({
+            "bridge_model_assembly": system_entry_detail_u64(ready, "bridge_model_assembly_us")?,
+            "bridge_updates": system_entry_detail_u64(ready, "bridge_updates_us")?,
+            "list_projection": system_entry_detail_u64(ready, "list_projection_us")?,
+            "slint_raster": system_entry_detail_u64(ready, "slint_raster_us")?,
+            "overlay_composition": system_entry_detail_u64(ready, "overlay_composition_us")?,
+            "latch_copy": system_entry_detail_u64(ready, "latch_copy_us")?,
+            "post": system_entry_detail_u64(ready, "post_us")?,
+            "confirmation_wait_wall": system_entry_detail_u64(ready, "confirmation_wait_wall_us")?,
+            "confirmation_poll_cpu": system_entry_detail_u64(ready, "confirmation_poll_cpu_us")?,
+        });
         let prerequisites_ready_ms = rows_ready_ms
             .max(first_list_presented_ms)
             .max(preview_ready_ms);
@@ -11834,6 +11845,7 @@ fn run_system_entry_sample(
                 "catalog": catalog_profile,
                 "preview": preview_timing,
                 "first_list_frame_prepare_us": first_list_prepare_us,
+                "first_frame_publication_us": first_frame_publication_us,
                 "cpu1_handoff_ms": ready_presented_ms.saturating_sub(destination_prepared_ms),
                 "destination_publication_ms": ready_presented_ms.saturating_sub(prerequisites_ready_ms),
             },
@@ -22114,6 +22126,26 @@ mod tests {
             12
         );
         assert_eq!(system_entry_detail_u64(&row, "main_sequence").unwrap(), 41);
+    }
+
+    #[test]
+    fn system_entry_trace_retains_each_first_frame_publication_phase() {
+        let mut row = vec![String::new(); 13];
+        row[12] = "bridge_model_assembly_us=1 bridge_updates_us=2 list_projection_us=3 slint_raster_us=4 overlay_composition_us=5 latch_copy_us=6 post_us=7 confirmation_wait_wall_us=16667 confirmation_poll_cpu_us=8".into();
+
+        for (field, expected) in [
+            ("bridge_model_assembly_us", 1),
+            ("bridge_updates_us", 2),
+            ("list_projection_us", 3),
+            ("slint_raster_us", 4),
+            ("overlay_composition_us", 5),
+            ("latch_copy_us", 6),
+            ("post_us", 7),
+            ("confirmation_wait_wall_us", 16_667),
+            ("confirmation_poll_cpu_us", 8),
+        ] {
+            assert_eq!(system_entry_detail_u64(&row, field).unwrap(), expected);
+        }
     }
 
     #[test]
