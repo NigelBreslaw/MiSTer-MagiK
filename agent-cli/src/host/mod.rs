@@ -8100,11 +8100,10 @@ fn parse_gatord_version(output: &ExecOutput) -> Result<String> {
 
 fn streamline_prepare_command() -> String {
     format!(
-        "set -eu; marker={marker}; if test -f \"$marker\"; then current=$(awk '$2 == \"{mount_path}\" && $3 == \"tracefs\" {{ print }}' /proc/mounts); owned=$(cat \"$marker\"); test -n \"$current\"; test \"$current\" = \"$owned\"; umount {mount}; fi; rm -rf {root}; mkdir -p {root}; test ! -e /media/fat/mister-magik/launcher.env; test ! -e /media/fat/mister-magik-dev/launcher.env; test ! -e /tmp/mister-magik/fs-fault-launcher.env; test ! -e /tmp/mister-magik/fs-fault-session; test ! -e /tmp/mister-magik/fs-fault.json; test ! -e /media/fat/mister-magik/rebuild-on-next-boot; test ! -e /media/fat/mister-magik-dev/rebuild-on-next-boot",
+        "set -eu; {process_cleanup}; {tracefs_cleanup}; rm -rf {root}; mkdir -p {root}; test ! -e /media/fat/mister-magik/launcher.env; test ! -e /media/fat/mister-magik-dev/launcher.env; test ! -e /tmp/mister-magik/fs-fault-launcher.env; test ! -e /tmp/mister-magik/fs-fault-session; test ! -e /tmp/mister-magik/fs-fault.json; test ! -e /media/fat/mister-magik/rebuild-on-next-boot; test ! -e /media/fat/mister-magik-dev/rebuild-on-next-boot",
         root = sh(STREAMLINE_REMOTE_ROOT),
-        marker = sh(STREAMLINE_TRACEFS_MARKER),
-        mount = sh(STREAMLINE_TRACEFS_MOUNT),
-        mount_path = STREAMLINE_TRACEFS_MOUNT,
+        process_cleanup = streamline_owned_process_cleanup_fragment(),
+        tracefs_cleanup = streamline_owned_tracefs_cleanup_fragment(),
     )
 }
 
@@ -8146,7 +8145,7 @@ fn streamline_launcher_response_start_command() -> String {
 
 fn streamline_launcher_response_stop_command() -> String {
     format!(
-        "set -eu; pid_file={pid_file}; test -f \"$pid_file\"; pid=$(cat \"$pid_file\"); case \"$pid\" in ''|*[!0-9]*) exit 19;; esac; test \"$(readlink /proc/$pid/exe 2>/dev/null || true)\" = {gatord}; kill -INT \"$pid\"; i=0; while kill -0 \"$pid\" 2>/dev/null && test \"$i\" -lt 100; do i=$((i+1)); sleep 0.1; done; if kill -0 \"$pid\" 2>/dev/null; then kill -TERM \"$pid\"; i=0; while kill -0 \"$pid\" 2>/dev/null && test \"$i\" -lt 50; do i=$((i+1)); sleep 0.1; done; fi; ! kill -0 \"$pid\" 2>/dev/null; rm -f \"$pid_file\"; test -d {apc}",
+        "set -eu; pid_file={pid_file}; test -f \"$pid_file\"; pid=$(cat \"$pid_file\"); case \"$pid\" in ''|*[!0-9]*) exit 19;; esac; test \"$(readlink /proc/$pid/exe 2>/dev/null || true)\" = {gatord}; kill -INT \"$pid\"; i=0; while kill -0 \"$pid\" 2>/dev/null && test \"$i\" -lt 600; do i=$((i+1)); sleep 0.1; done; if kill -0 \"$pid\" 2>/dev/null; then kill -TERM \"$pid\"; i=0; while kill -0 \"$pid\" 2>/dev/null && test \"$i\" -lt 100; do i=$((i+1)); sleep 0.1; done; fi; ! kill -0 \"$pid\" 2>/dev/null; rm -f \"$pid_file\"; test -d {apc}",
         pid_file = sh(STREAMLINE_REMOTE_PID),
         gatord = sh(STREAMLINE_REMOTE_GATORD),
         apc = sh(STREAMLINE_REMOTE_APC),
@@ -8164,13 +8163,27 @@ fn streamline_package_command() -> String {
 
 fn streamline_cleanup_command() -> String {
     format!(
-        "set -eu; pid_file={pid_file}; if test -f \"$pid_file\"; then pid=$(cat \"$pid_file\"); case \"$pid\" in ''|*[!0-9]*) exit 19;; esac; if test \"$(readlink /proc/$pid/exe 2>/dev/null || true)\" = {gatord}; then kill \"$pid\"; fi; fi; marker={marker}; if test -f \"$marker\"; then current=$(awk '$2 == \"{mount_path}\" && $3 == \"tracefs\" {{ print }}' /proc/mounts); owned=$(cat \"$marker\"); test -n \"$current\"; test \"$current\" = \"$owned\"; umount {mount}; fi; rm -rf {root}; test ! -e {root}; test ! -e /media/fat/mister-magik/launcher.env; test ! -e /media/fat/mister-magik-dev/launcher.env; test ! -e /tmp/mister-magik/fs-fault-launcher.env; test ! -e /tmp/mister-magik/fs-fault-session; test ! -e /tmp/mister-magik/fs-fault.json; test ! -e /media/fat/mister-magik/rebuild-on-next-boot; test ! -e /media/fat/mister-magik-dev/rebuild-on-next-boot",
-        pid_file = sh(&format!("{STREAMLINE_REMOTE_ROOT}/gatord.pid")),
+        "set -eu; {process_cleanup}; {tracefs_cleanup}; rm -rf {root}; test ! -e {root}; test ! -e /media/fat/mister-magik/launcher.env; test ! -e /media/fat/mister-magik-dev/launcher.env; test ! -e /tmp/mister-magik/fs-fault-launcher.env; test ! -e /tmp/mister-magik/fs-fault-session; test ! -e /tmp/mister-magik/fs-fault.json; test ! -e /media/fat/mister-magik/rebuild-on-next-boot; test ! -e /media/fat/mister-magik-dev/rebuild-on-next-boot",
+        process_cleanup = streamline_owned_process_cleanup_fragment(),
+        tracefs_cleanup = streamline_owned_tracefs_cleanup_fragment(),
+        root = sh(STREAMLINE_REMOTE_ROOT),
+    )
+}
+
+fn streamline_owned_process_cleanup_fragment() -> String {
+    format!(
+        "pid_file={pid_file}; if test -f \"$pid_file\"; then pid=$(cat \"$pid_file\"); case \"$pid\" in ''|*[!0-9]*) exit 19;; esac; exe=$(readlink /proc/$pid/exe 2>/dev/null || true); if test -n \"$exe\"; then test \"$exe\" = {gatord}; kill -TERM \"$pid\"; i=0; while kill -0 \"$pid\" 2>/dev/null && test \"$i\" -lt 100; do i=$((i+1)); sleep 0.1; done; if kill -0 \"$pid\" 2>/dev/null; then kill -KILL \"$pid\"; i=0; while kill -0 \"$pid\" 2>/dev/null && test \"$i\" -lt 50; do i=$((i+1)); sleep 0.1; done; fi; ! kill -0 \"$pid\" 2>/dev/null; fi; rm -f \"$pid_file\"; fi",
+        pid_file = sh(STREAMLINE_REMOTE_PID),
         gatord = sh(STREAMLINE_REMOTE_GATORD),
+    )
+}
+
+fn streamline_owned_tracefs_cleanup_fragment() -> String {
+    format!(
+        "marker={marker}; if test -f \"$marker\"; then current=$(awk '$2 == \"{mount_path}\" && $3 == \"tracefs\" {{ print }}' /proc/mounts); owned=$(cat \"$marker\"); if test -n \"$current\"; then test \"$current\" = \"$owned\"; i=0; while ! umount {mount} 2>/dev/null && test \"$i\" -lt 50; do i=$((i+1)); sleep 0.1; done; current=$(awk '$2 == \"{mount_path}\" && $3 == \"tracefs\" {{ print }}' /proc/mounts); test -z \"$current\"; fi; fi",
         marker = sh(STREAMLINE_TRACEFS_MARKER),
         mount = sh(STREAMLINE_TRACEFS_MOUNT),
         mount_path = STREAMLINE_TRACEFS_MOUNT,
-        root = sh(STREAMLINE_REMOTE_ROOT),
     )
 }
 
