@@ -424,9 +424,8 @@ fn paint_hdmi_arcade_static_chrome(
     width: usize,
     height: usize,
 ) -> DirtyRect {
-    let len = width.saturating_mul(height).min(pixels.len());
-    pixels[..len].fill(HDMI_ARCADE_BACKGROUND);
-    if width == 0 || height == 0 || len < width.saturating_mul(height) {
+    let len = width.saturating_mul(height);
+    if width == 0 || height == 0 || pixels.len() < len {
         return DirtyRect {
             x0: 0,
             y0: 0,
@@ -440,11 +439,47 @@ fn paint_hdmi_arcade_static_chrome(
         .y
         .saturating_add(geometry.visible_height(height))
         .min(height);
+    let list_x0 = geometry.x.min(width);
+    let list_x1 = geometry.x.saturating_add(geometry.width).min(width);
+    let right_x0 = (width / 2).max(list_x1).min(width);
     fill_rgb565_rect(
         pixels,
         width,
         DirtyRect {
-            x0: width / 2,
+            x0: 0,
+            y0: 0,
+            x1: width,
+            y1: geometry.y.min(height),
+        },
+        HDMI_ARCADE_BACKGROUND,
+    );
+    fill_rgb565_rect(
+        pixels,
+        width,
+        DirtyRect {
+            x0: 0,
+            y0: geometry.y.min(height),
+            x1: list_x0,
+            y1: list_y1,
+        },
+        HDMI_ARCADE_BACKGROUND,
+    );
+    fill_rgb565_rect(
+        pixels,
+        width,
+        DirtyRect {
+            x0: list_x1,
+            y0: geometry.y.min(height),
+            x1: right_x0,
+            y1: list_y1,
+        },
+        HDMI_ARCADE_BACKGROUND,
+    );
+    fill_rgb565_rect(
+        pixels,
+        width,
+        DirtyRect {
+            x0: right_x0,
             y0: geometry.y.min(height),
             x1: width,
             y1: list_y1,
@@ -455,12 +490,23 @@ fn paint_hdmi_arcade_static_chrome(
         pixels,
         width,
         DirtyRect {
-            x0: geometry.x.min(width),
+            x0: list_x0,
             y0: geometry.y.min(height),
-            x1: geometry.x.saturating_add(geometry.width).min(width),
+            x1: list_x1,
             y1: list_y1,
         },
         HDMI_ARCADE_PANEL,
+    );
+    fill_rgb565_rect(
+        pixels,
+        width,
+        DirtyRect {
+            x0: 0,
+            y0: list_y1,
+            x1: width,
+            y1: height,
+        },
+        HDMI_ARCADE_BACKGROUND,
     );
 
     DirtyRect {
@@ -623,5 +669,6 @@ mod tests {
         );
         assert_eq!(pixels[ARCADE_LIST_Y * width + width / 2], Rgb565Pixel(0));
         assert_eq!(pixels[(height - 1) * width], HDMI_ARCADE_BACKGROUND);
+        assert!(pixels.iter().all(|pixel| *pixel != Rgb565Pixel(0xffff)));
     }
 }
