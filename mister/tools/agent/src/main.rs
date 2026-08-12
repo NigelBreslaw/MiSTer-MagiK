@@ -5365,6 +5365,7 @@ mod tests {
         }
 
         let encoded = png_capture::encode(&raw, geometry).unwrap();
+        let _timing = encoded.timing;
         let (width, height, decoded) = decode_truecolor_png(&encoded.bytes);
 
         assert_eq!((width, height), (3, 2));
