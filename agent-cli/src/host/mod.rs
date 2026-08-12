@@ -15173,7 +15173,6 @@ fn summarize_settings_navigation_qualification(
         overlay_us.sort_unstable();
         let p99_us = percentile_99(&whole_frame_work);
         let max_us = whole_frame_work.last().copied().unwrap_or(0);
-        let physical_fps = protocol["physical_fps"].as_f64().unwrap_or(0.0);
         let physical_dropped_frames = protocol["repeated_vblank_delta"]
             .as_u64()
             .unwrap_or(u64::MAX);
@@ -15183,7 +15182,6 @@ fn summarize_settings_navigation_qualification(
             && sequence_gaps == 0
             && continuous_hidden
             && synchronous_frame_production
-            && physical_fps >= 59.9
             && p99_us < 15_917
             && max_us < 16_667
             && snapshot_lock_violations == 0
@@ -26706,6 +26704,21 @@ H: Handlers=event3 js0"#
         let (telemetry, mut completion) = settings_navigation_qualification_fixture();
         completion["schema"] = json!("mister-magik-settings-navigation-transition-v3");
         assert!(summarize_settings_navigation_qualification(&telemetry, completion, None).is_err());
+    }
+
+    #[test]
+    fn settings_navigation_uses_exact_repeat_counts_over_sampled_fps() {
+        let (telemetry, mut completion) = settings_navigation_qualification_fixture();
+        let window = &mut completion["records"][11]["presentation_window"];
+        window["end"]["owned_vblank_count"] = json!(349);
+        window["end"]["presented_vblank_count"] = json!(349);
+        window["elapsed_us"] = json!(318_582);
+
+        let summary = summarize_settings_navigation_qualification(&telemetry, completion, None)
+            .expect("exact zero-repeat window should qualify");
+        assert_eq!(summary["legs"][11]["physical_dropped_frames"], 0);
+        assert!(summary["legs"][11]["protocol_v5"]["physical_fps"] < 59.9);
+        assert_eq!(summary["legs"][11]["passed"], true);
     }
 
     const MAME_1942_FIXTURE: &str = r#"<?xml version="1.0"?>
