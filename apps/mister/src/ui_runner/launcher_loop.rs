@@ -4940,6 +4940,7 @@ pub(super) fn run_launcher_loop(
     let input_observation_probe = pad.input_observation_probe();
     let mut launcher_response_trace =
         LauncherResponseTrace::from_env(&nav, input_observation_probe.clone());
+    let mut gui_profiling = GuiProfilingController::from_env();
     let mut input_latency_lab = InputLatencyLab::from_env(input_observation_probe.clone());
     let mut loading_title = String::new();
     let mut last_clock_update = Instant::now() - Duration::from_secs(2);
@@ -5608,6 +5609,7 @@ pub(super) fn run_launcher_loop(
     'launcher: while (secs == 0 || run_start.elapsed().as_secs() < secs)
         && preview_scroll_exit_at.is_none_or(|deadline| Instant::now() < deadline)
     {
+        gui_profiling.tick(Instant::now());
         let mut scheduler_phase = launcher_response_trace.scheduler_boundary();
         screensaver_cpu_profile.poll(frames);
         if catalog_publication_test.wait_for_first_frame_release(Instant::now(), start) {
