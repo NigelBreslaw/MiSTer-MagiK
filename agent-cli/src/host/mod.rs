@@ -616,6 +616,15 @@ impl NativeDevice {
         })
     }
 
+    pub(crate) fn profile_launcher_response_streamline(
+        &mut self,
+        output_dir: &Path,
+    ) -> std::result::Result<String, DeviceFailure> {
+        self.benchmark_profile(|config| {
+            profile_installed_launcher_response_streamline(config, output_dir)
+        })
+    }
+
     pub(crate) fn verify_search_ui(
         &mut self,
         output_dir: &Path,
@@ -7307,6 +7316,8 @@ const STREAMLINE_REMOTE_GATORD: &str = "/tmp/mister-magik/streamline-capture/gat
 const STREAMLINE_REMOTE_APC: &str = "/tmp/mister-magik/streamline-capture/mister-magik.apc";
 const STREAMLINE_REMOTE_ARCHIVE: &str =
     "/tmp/mister-magik/streamline-capture/mister-magik.apc.tar.gz";
+const STREAMLINE_REMOTE_PID: &str = "/tmp/mister-magik/streamline-capture/gatord.pid";
+const STREAMLINE_REMOTE_LOG: &str = "/tmp/mister-magik/streamline-capture/gatord.log";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum StreamlineWorkload {
@@ -7436,6 +7447,187 @@ fn profile_installed_streamline(
     serde_json::to_string(&summary).map_err(Into::into)
 }
 
+fn profile_installed_launcher_response_streamline(
+    config: &NativeDeviceConfig,
+    output_dir: &Path,
+) -> Result<String> {
+    let gatord = streamline_gatord_path(env::var_os("MISTER_GATORD_PATH"))?;
+    let gatord_metadata = fs::metadata(&gatord)?;
+    if !gatord_metadata.is_file() || gatord_metadata.len() == 0 {
+        return Err("MISTER_GATORD_PATH must name a non-empty regular file".into());
+    }
+    if gatord_metadata.len() > 64 * 1024 * 1024 {
+        return Err("MISTER_GATORD_PATH exceeds the 64 MiB upload limit".into());
+    }
+    let gatord_sha256 = file_sha256(gatord.clone())?;
+    fs::create_dir_all(output_dir)?;
+    let archive = output_dir.join("mister-magik-launcher-response.apc.tar.gz");
+    let session = connect_with(&config.connection, 30)?;
+    let boot_id = remote_read(&session, "/proc/sys/kernel/random/boot_id")
+        .ok_or("device boot id is unavailable before launcher-response Streamline capture")?;
+    let manifest = remote_read(&session, "/media/fat/mister-magik-dev/platform-v3.manifest")
+        .ok_or("development manifest is unavailable before launcher-response Streamline capture")?;
+    let original_reply = exec_checked_output(
+        &session,
+        "query launcher-response Streamline display mode",
+        &acknowledged_main_command("mister_magik_display_get_v1"),
+    )?;
+    if parse_display_reply_pending(original_reply.stdout.trim())?.is_some() {
+        return Err(
+            "launcher-response Streamline cannot start during a display transaction".into(),
+        );
+    }
+    let original_id = parse_display_reply_active(original_reply.stdout.trim())?;
+    let original_mode = DISPLAY_MATRIX_MODES
+        .iter()
+        .find(|mode| mode.id == original_id)
+        .copied()
+        .ok_or_else(|| {
+            format!("launcher-response Streamline cannot restore unknown mode {original_id}")
+        })?;
+    let capture_mode = DISPLAY_MATRIX_MODES
+        .iter()
+        .find(|mode| mode.id == "hdmi-1920x1200p60")
+        .copied()
+        .ok_or("missing launcher-response Streamline display mode")?;
+
+    apply_confirmed_display_mode(config, capture_mode, "launcher-response Streamline capture")?;
+    let run_result = (|| -> Result<(String, String, Value)> {
+        exec_checked(
+            &session,
+            "prepare launcher-response Streamline capture",
+            &streamline_prepare_command(),
+        )?;
+        put(&session, &gatord, STREAMLINE_REMOTE_GATORD)?;
+        let version = exec(
+            &session,
+            &format!(
+                "chmod 700 {gatord}; {gatord} --version",
+                gatord = sh(STREAMLINE_REMOTE_GATORD)
+            ),
+            true,
+        )?;
+        let gatord_version = parse_gatord_version(&version)?;
+        exec_checked(
+            &session,
+            "start launcher-response Streamline capture",
+            &streamline_launcher_response_start_command(),
+        )?;
+        let route_result =
+            run_launcher_response_scenario(&session, "60-hz", "streamline-round-trip", "off", true);
+        let stop_result = exec_checked(
+            &session,
+            "stop launcher-response Streamline capture",
+            &streamline_launcher_response_stop_command(),
+        );
+        if let Some(log) = remote_read(&session, STREAMLINE_REMOTE_LOG) {
+            fs::write(output_dir.join("gatord.log"), log)?;
+        }
+        let route = route_result?;
+        stop_result?;
+        exec_checked(
+            &session,
+            "package launcher-response Streamline capture",
+            &streamline_package_command(),
+        )?;
+        get(&session, STREAMLINE_REMOTE_ARCHIVE, &archive)?;
+        let remote_archive_sha256 = exec_checked_output(
+            &session,
+            "hash launcher-response Streamline capture",
+            &format!(
+                "sha256sum {} | cut -d' ' -f1",
+                sh(STREAMLINE_REMOTE_ARCHIVE)
+            ),
+        )?
+        .stdout
+        .trim()
+        .to_owned();
+        let local_archive_sha256 = file_sha256(archive.clone())?;
+        if remote_archive_sha256.len() != 64 || remote_archive_sha256 != local_archive_sha256 {
+            return Err("launcher-response Streamline archive changed during transfer".into());
+        }
+        extract_streamline_archive(&archive, output_dir)?;
+        Ok((gatord_version, local_archive_sha256, route))
+    })();
+
+    let cleanup_result = exec_checked(
+        &session,
+        "clean launcher-response Streamline capture",
+        &streamline_cleanup_command(),
+    );
+    let launcher_restore_result = launcher_restart(
+        &session,
+        &LauncherRestartOptions {
+            clear_env: true,
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+            timeout_secs: 45,
+            ..LauncherRestartOptions::default()
+        },
+    );
+    let display_restore_result = apply_confirmed_display_mode(
+        config,
+        original_mode,
+        "launcher-response Streamline display restoration",
+    );
+    let (gatord_version, archive_sha256, route) = match (
+        run_result,
+        cleanup_result,
+        launcher_restore_result,
+        display_restore_result,
+    ) {
+        (Ok(result), Ok(()), Ok(()), Ok(())) => result,
+        (run, cleanup, launcher, display) => {
+            return Err(format!(
+                "launcher-response Streamline failed: run={:?}; cleanup={:?}; launcher_restore={:?}; display_restore={:?}",
+                run.err(),
+                cleanup.err(),
+                launcher.err(),
+                display.err()
+            )
+            .into());
+        }
+    };
+
+    let final_boot_id = remote_read(&session, "/proc/sys/kernel/random/boot_id")
+        .ok_or("device boot id is unavailable after launcher-response Streamline capture")?;
+    if final_boot_id != boot_id {
+        return Err("device rebooted during launcher-response Streamline capture".into());
+    }
+    let final_manifest = remote_read(&session, "/media/fat/mister-magik-dev/platform-v3.manifest")
+        .ok_or("development manifest is unavailable after launcher-response Streamline capture")?;
+    if final_manifest != manifest {
+        return Err(
+            "installed platform manifest changed during launcher-response Streamline capture"
+                .into(),
+        );
+    }
+    let summary = json!({
+        "schema": "mister-magik-launcher-response-streamline-v1",
+        "artifact_status": "passed",
+        "product_quality_status": route["input_response_status"],
+        "input_integrity_status": if launcher_response_integrity_passed(&route) { "passed" } else { "failed" },
+        "gatord_version": gatord_version,
+        "gatord_sha256": gatord_sha256,
+        "archive_sha256": archive_sha256,
+        "capture": "mister-magik.apc",
+        "archive": "mister-magik-launcher-response.apc.tar.gz",
+        "display_mode": capture_mode.id,
+        "refresh_hz": 60,
+        "clock_domain": "CLOCK_MONOTONIC",
+        "max_duration_seconds": 120,
+        "sample_rate": "low",
+        "system_wide": true,
+        "exclude_kernel": false,
+        "call_stack_unwinding": false,
+        "route": route,
+    });
+    fs::write(
+        output_dir.join("summary.json"),
+        format!("{}\n", serde_json::to_string_pretty(&summary)?),
+    )?;
+    serde_json::to_string(&summary).map_err(Into::into)
+}
+
 fn streamline_gatord_path(value: Option<std::ffi::OsString>) -> Result<PathBuf> {
     let path = value.ok_or(
         "benchmark streamline requires MISTER_GATORD_PATH to an Armv7 hard-float gatord binary",
@@ -7485,6 +7677,30 @@ fn streamline_capture_command(workload: StreamlineWorkload) -> String {
     )
 }
 
+fn streamline_launcher_response_start_command() -> String {
+    let invocation = format!(
+        "{gatord} --output {apc} --max-duration 120 --sample-rate low --system-wide yes --exclude-kernel no --call-stack-unwinding no --capture-log",
+        gatord = sh(STREAMLINE_REMOTE_GATORD),
+        apc = sh(STREAMLINE_REMOTE_APC),
+    );
+    format!(
+        "set -eu; nohup {invocation} >{log} 2>&1 </dev/null & pid=$!; printf '%s\\n' \"$pid\" > {pid_file}; i=0; while test \"$i\" -lt 100; do kill -0 \"$pid\" 2>/dev/null || exit 21; test -d {apc} && exit 0; i=$((i+1)); sleep 0.1; done; exit 22",
+        invocation = invocation,
+        log = sh(STREAMLINE_REMOTE_LOG),
+        pid_file = sh(STREAMLINE_REMOTE_PID),
+        apc = sh(STREAMLINE_REMOTE_APC),
+    )
+}
+
+fn streamline_launcher_response_stop_command() -> String {
+    format!(
+        "set -eu; pid_file={pid_file}; test -f \"$pid_file\"; pid=$(cat \"$pid_file\"); case \"$pid\" in ''|*[!0-9]*) exit 19;; esac; test \"$(readlink /proc/$pid/exe 2>/dev/null || true)\" = {gatord}; kill -INT \"$pid\"; i=0; while kill -0 \"$pid\" 2>/dev/null && test \"$i\" -lt 100; do i=$((i+1)); sleep 0.1; done; if kill -0 \"$pid\" 2>/dev/null; then kill -TERM \"$pid\"; i=0; while kill -0 \"$pid\" 2>/dev/null && test \"$i\" -lt 50; do i=$((i+1)); sleep 0.1; done; fi; ! kill -0 \"$pid\" 2>/dev/null; rm -f \"$pid_file\"; test -d {apc}",
+        pid_file = sh(STREAMLINE_REMOTE_PID),
+        gatord = sh(STREAMLINE_REMOTE_GATORD),
+        apc = sh(STREAMLINE_REMOTE_APC),
+    )
+}
+
 fn streamline_package_command() -> String {
     format!(
         "set -eu; test -d {apc}; tar -czf {archive} -C {root} mister-magik.apc; test -s {archive}",
@@ -7501,6 +7717,22 @@ fn streamline_cleanup_command() -> String {
         gatord = sh(STREAMLINE_REMOTE_GATORD),
         root = sh(STREAMLINE_REMOTE_ROOT),
     )
+}
+
+fn launcher_response_integrity_passed(route: &Value) -> bool {
+    [
+        "lost_actions",
+        "duplicated_actions",
+        "coalesced_actions",
+        "reordered_actions",
+        "proxy_write_failures",
+        "journal_overflows",
+        "sequence_gaps",
+        "latch_drops",
+        "ownership_losses",
+    ]
+    .iter()
+    .all(|field| route[*field].as_u64() == Some(0))
 }
 
 fn extract_streamline_archive(archive: &Path, output_dir: &Path) -> Result<()> {
@@ -18884,6 +19116,51 @@ mod tests {
         assert!(command.contains("--stop-on-exit yes"));
         assert!(command.ends_with("exit \"$rc\""));
         assert!(command.contains("pmu-profile screensaver"));
+    }
+
+    #[test]
+    fn launcher_response_streamline_is_system_wide_bounded_and_not_app_scoped() {
+        let start = streamline_launcher_response_start_command();
+        let stop = streamline_launcher_response_stop_command();
+        assert!(start.contains("--max-duration 120"));
+        assert!(start.contains("--sample-rate low"));
+        assert!(start.contains("--system-wide yes"));
+        assert!(start.contains("--exclude-kernel no"));
+        assert!(start.contains("--call-stack-unwinding no"));
+        assert!(!start.contains("--app"));
+        assert!(start.contains("nohup"));
+        assert!(start.contains(STREAMLINE_REMOTE_PID));
+        assert!(stop.contains("/proc/$pid/exe"));
+        assert!(stop.contains("kill -INT"));
+        assert!(stop.contains("kill -TERM"));
+        assert!(!stop.contains("kill -9"));
+        assert!(stop.contains(STREAMLINE_REMOTE_APC));
+    }
+
+    #[test]
+    fn launcher_response_streamline_integrity_rejects_each_failure_counter() {
+        let fields = [
+            "lost_actions",
+            "duplicated_actions",
+            "coalesced_actions",
+            "reordered_actions",
+            "proxy_write_failures",
+            "journal_overflows",
+            "sequence_gaps",
+            "latch_drops",
+            "ownership_losses",
+        ];
+        let mut route = serde_json::Map::new();
+        for field in fields {
+            route.insert(field.to_owned(), json!(0));
+        }
+        let passing = Value::Object(route);
+        assert!(launcher_response_integrity_passed(&passing));
+        for field in fields {
+            let mut failed = passing.clone();
+            failed[field] = json!(1);
+            assert!(!launcher_response_integrity_passed(&failed), "{field}");
+        }
     }
 
     #[test]

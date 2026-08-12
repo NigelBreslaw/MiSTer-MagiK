@@ -43,6 +43,7 @@ enum BenchmarkProfile {
     InputIntegrity,
     LauncherResponse,
     InputLatencyLab,
+    LauncherResponseStreamline,
     ColdBoot,
     ColdBootPprof,
     NavigationTransitions,
@@ -104,6 +105,9 @@ impl BenchmarkDevice for DeviceClient {
             BenchmarkProfile::InputIntegrity => device.verify_input_integrity(&output_dir),
             BenchmarkProfile::LauncherResponse => device.verify_launcher_response(&output_dir),
             BenchmarkProfile::InputLatencyLab => device.verify_input_latency_lab(&output_dir),
+            BenchmarkProfile::LauncherResponseStreamline => {
+                device.profile_launcher_response_streamline(&output_dir)
+            }
             BenchmarkProfile::ColdBoot => device.profile_cold_boot(&output_dir, false),
             BenchmarkProfile::ColdBootPprof => device.profile_cold_boot(&output_dir, true),
             BenchmarkProfile::NavigationTransitions => {
@@ -242,6 +246,9 @@ fn require_clean_installed_commit(
         BenchmarkScenario::InputLatencyLab => {
             execute_input_latency_lab(&mut device, manifest, output_dir, reporter)
         }
+        BenchmarkScenario::LauncherResponseStreamline => {
+            execute_launcher_response_streamline(&mut device, manifest, output_dir, reporter)
+        }
         BenchmarkScenario::ColdBoot => {
             execute_cold_boot(&mut device, manifest, output_dir, reporter, false)
         }
@@ -329,6 +336,44 @@ fn execute_streamline(
         || summary.get("status").and_then(Value::as_str) != Some("passed")
     {
         return Err("Streamline capture is not a passing v1 report".into());
+    }
+    device.verify_health()?;
+    reporter.emit(
+        EventKind::Progress,
+        "benchmark-result",
+        &serde_json::to_string(&json!({
+            "installed_manifest": manifest,
+            "summary": summary,
+            "output_dir": output_dir,
+        }))
+        .map_err(|error| error.to_string())?,
+        Some(100),
+    )?;
+    Ok(Outcome::Passed)
+}
+
+fn execute_launcher_response_streamline(
+    device: &mut impl BenchmarkDevice,
+    manifest: String,
+    output_dir: PathBuf,
+    reporter: &mut Reporter<'_>,
+) -> AgentResult<Outcome> {
+    reporter.emit(
+        EventKind::Progress,
+        "profile",
+        "capturing the production launcher-response route in Arm Streamline",
+        Some(30),
+    )?;
+    let detail = device.profile(
+        BenchmarkProfile::LauncherResponseStreamline,
+        output_dir.clone(),
+    )?;
+    let summary: Value = serde_json::from_str(&detail).map_err(|error| error.to_string())?;
+    if summary.get("schema").and_then(Value::as_str)
+        != Some("mister-magik-launcher-response-streamline-v1")
+        || summary.get("artifact_status").and_then(Value::as_str) != Some("passed")
+    {
+        return Err("launcher-response Streamline capture is not a valid v1 artifact".into());
     }
     device.verify_health()?;
     reporter.emit(
@@ -589,6 +634,7 @@ fn particle_scene_lab_command(scenario: BenchmarkScenario) -> Option<&'static st
         | BenchmarkScenario::InputIntegrity
         | BenchmarkScenario::LauncherResponse
         | BenchmarkScenario::InputLatencyLab
+        | BenchmarkScenario::LauncherResponseStreamline
         | BenchmarkScenario::NavigationTransitions
         | BenchmarkScenario::SettingsNavigation
         | BenchmarkScenario::SettingsNavigationPprof

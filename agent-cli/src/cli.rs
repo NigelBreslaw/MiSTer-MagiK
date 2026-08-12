@@ -734,6 +734,7 @@ mod tests {
             "input-integrity",
             "launcher-response",
             "input-latency-lab",
+            "launcher-response-streamline",
             "cold-boot",
             "cold-boot-pprof",
             "search",

@@ -82,6 +82,13 @@ binary explicitly:
 MISTER_GATORD_PATH=/absolute/path/to/gatord scripts/agent benchmark streamline
 ```
 
+Arm Performance Studio's macOS installation includes a statically linked ARMv7
+target `gatord`. The workflow reads that target binary from the host
+installation, hashes it, uploads it to volatile `/tmp` storage, and executes it
+on the MiSTer. It is not part of the MagiK ARM application build. MagiK and any
+source-built `gatord` remain Apple-container builds; the supplied target daemon
+does not need recompilation.
+
 The typed workflow is Dev-only. It uploads to `/tmp`, captures the fixed
 `pmu-profile screensaver` workload for at most ten seconds, uses the low sample
 rate, includes kernel execution because this PMUv1 rejects privilege exclusion,
@@ -92,6 +99,22 @@ capture and only while `/proc/PID/exe` still resolves to the uploaded daemon.
 The orientation variant temporarily suspends the ordinary launcher, captures
 the exact installed Dev launcher running the fixed six-leg Settings route, and
 then restores the ordinary launcher while preserving the current display mode.
+
+The dedicated launcher scheduler pass is:
+
+```text
+MISTER_GATORD_PATH=/absolute/path/to/gatord scripts/agent benchmark launcher-response-streamline
+```
+
+It records the production Main proxy → launcher → kernel → latch path
+system-wide while the fixed 1920×1200p60 Computers route runs at 200, 300, 400,
+and 600 ms. App-only collection is deliberately unsuitable because the launcher
+restarts between schedules and the scheduling evidence spans more than one
+process. Capture is limited to 120 seconds, uses the low sampling rate, includes
+kernel execution, disables call-stack unwinding, and always restores the prior
+display mode and ordinary launcher. The report records the exact daemon version,
+daemon hash, archive hash, boot identity, and route results; the repository does
+not copy or redistribute the daemon.
 
 The audited source contract is Arm gator commit
 `f0774012f36dbdb543e082d3e14ca9db20d0432d` (gator 9.7.2). Its maintained

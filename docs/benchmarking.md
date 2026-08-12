@@ -25,6 +25,7 @@ Supported scenarios:
 - `cold-boot-pprof`
 - `input-integrity`
 - `launcher-response`
+- `launcher-response-streamline`
 - `input-latency-lab`
 - `particles`
 - `particle-demo-40k`
@@ -44,6 +45,7 @@ Supported scenarios:
 - `orientation-transition-zoom-pprof`
 - `pmu-profile`
 - `search`
+- `streamline`
 
 `modal-input` restarts the coherently installed Dev launcher with a one-shot,
 fixed test request and a catalog copied below
@@ -125,6 +127,16 @@ removed from memory and written after response-trace completion. Its
 `mister-magik-launcher-response-pmu-v1` artifact separates processor work from
 the execution-stamp arm's off-CPU wall time; PMU counters are never treated as
 evidence about time when the UI thread was not running.
+
+`launcher-response-streamline` records the same 1920×1200p60, catalog-off
+200/300/400/600 ms Computers round trips inside one bounded system-wide Arm
+Streamline capture. System-wide collection is intentional: the measured path
+crosses Main's input proxy, the launcher UI thread, kernel scheduling, and the
+latch driver, and the launcher is restarted between schedules. The capture uses
+the low sampling rate, includes kernel execution, disables stack unwinding, and
+has a 120-second hard limit. APC artifact validity and input integrity are
+reported separately from the existing product latency gates, so a valid capture
+is retained even when the latency result fails.
 
 `input-latency-lab` is the fixed diagnostic experiment for attributing
 intermittent launcher response, not a release qualification. It switches the
