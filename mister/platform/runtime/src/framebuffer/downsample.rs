@@ -34,13 +34,13 @@ pub fn downsample_rgb565_2x(
         .ok_or("downsampled RGB565 geometry overflows")?;
     destination.resize(output_len, Rgb565Pixel(0));
 
-    #[cfg(mister_arm_scalar_decimator)]
+    #[cfg(mister_arm_neon_decimator)]
     {
         // SAFETY: validate_source proves every selected source row contains
         // source.width pixels, and destination was resized for every output row.
-        unsafe { downsample_rgb565_2x_fixed_scalar(source, destination, geometry) };
+        unsafe { downsample_rgb565_2x_neon(source, destination, geometry) };
     }
-    #[cfg(not(mister_arm_scalar_decimator))]
+    #[cfg(not(mister_arm_neon_decimator))]
     downsample_rgb565_2x_scalar(source, destination, geometry);
 
     Ok(geometry)
@@ -60,7 +60,7 @@ fn validate_source(source: Rgb565FrameView<'_>) -> Result<(), &'static str> {
     Ok(())
 }
 
-#[cfg(not(mister_arm_scalar_decimator))]
+#[cfg(any(not(mister_arm_neon_decimator), test))]
 fn downsample_rgb565_2x_scalar(
     source: Rgb565FrameView<'_>,
     destination: &mut [Rgb565Pixel],
@@ -80,15 +80,16 @@ fn downsample_rgb565_2x_scalar(
     }
 }
 
-#[cfg(mister_arm_scalar_decimator)]
-unsafe fn downsample_rgb565_2x_fixed_scalar(
+#[cfg(mister_arm_neon_decimator)]
+unsafe fn downsample_rgb565_2x_neon(
     source: Rgb565FrameView<'_>,
     destination: &mut [Rgb565Pixel],
     geometry: DownsampledGeometry,
 ) {
     unsafe extern "C" {
-        fn mister_magik_downsample_rgb565_2x_scalar(
+        fn mister_magik_downsample_rgb565_2x_neon(
             source: *const u16,
+            source_width: usize,
             source_height: usize,
             source_stride: usize,
             destination: *mut u16,
@@ -99,13 +100,22 @@ unsafe fn downsample_rgb565_2x_fixed_scalar(
     // SAFETY: the safe caller validates the source and destination lengths,
     // strides, and fixed 2x geometry before selecting the scalar FFI path.
     unsafe {
-        mister_magik_downsample_rgb565_2x_scalar(
+        mister_magik_downsample_rgb565_2x_neon(
             source.pixels.as_ptr().cast::<u16>(),
+            source.width,
             source.height,
             source.stride_pixels,
             destination.as_mut_ptr().cast::<u16>(),
             geometry.width,
         );
+    }
+}
+
+pub const fn downsample_implementation() -> &'static str {
+    if cfg!(mister_arm_neon_decimator) {
+        "neon-even-lanes"
+    } else {
+        "scalar"
     }
 }
 
@@ -177,7 +187,7 @@ pub fn run_scalar_bench() -> bool {
     valid
 }
 
-#[cfg(feature = "bench-tools")]
+#[cfg(any(feature = "bench-tools", test))]
 fn deterministic_pixels(len: usize) -> Vec<Rgb565Pixel> {
     let mut state = 0x1234_5678u32;
     (0..len)
@@ -188,7 +198,7 @@ fn deterministic_pixels(len: usize) -> Vec<Rgb565Pixel> {
         .collect()
 }
 
-#[cfg(feature = "bench-tools")]
+#[cfg(any(feature = "bench-tools", test))]
 fn checksum_rgb565(pixels: &[Rgb565Pixel]) -> u64 {
     pixels.iter().fold(0xcbf2_9ce4_8422_2325u64, |hash, pixel| {
         let hash = hash ^ u64::from(pixel.0 & 0xff);
@@ -283,6 +293,23 @@ mod tests {
                 Rgb565Pixel(20),
             ]
         );
+    }
+
+    #[test]
+    fn downsample_checksums_match_for_packed_padded_and_odd_geometry() {
+        for (width, height, stride_pixels, expected_checksum) in [
+            (960, 540, 960, 0xf812_3960_21e9_0488),
+            (960, 540, 976, 0x5cdc_6b4d_35d5_c5f5),
+            (959, 539, 967, 0x877c_ca3e_815d_92cb),
+        ] {
+            let pixels = deterministic_pixels(stride_pixels * height);
+            let mut output = Vec::new();
+
+            downsample_rgb565_2x(view(&pixels, width, height, stride_pixels), &mut output)
+                .expect("valid deterministic geometry");
+
+            assert_eq!(checksum_rgb565(&output), expected_checksum);
+        }
     }
 
     #[test]

@@ -1,7 +1,9 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use crate::framebuffer::downsample::{Rgb565FrameView, downsample_rgb565_2x};
+use crate::framebuffer::downsample::{
+    Rgb565FrameView, downsample_implementation, downsample_rgb565_2x,
+};
 use mister_magik_framebuffer_stream::{
     FLAG_LZ4_SIZE_PREPENDED, FrameGeometry, FrameHeader, FrameKind, FrameRect, write_frame,
 };
@@ -831,7 +833,7 @@ fn report_snapshot_metrics(reason: &str) {
     crate::ui_logln!(
         "framebuffer_stream_snapshot_tsv\treason={reason}\tmode={:?}\timplementation={}\tframes={frames}\thalf_frames={}\tfull_frames={}\tsnapshot_p50_us={p50}\tsnapshot_p95_us={p95}\tsnapshot_max_us={max}\thalf_snapshot_p95_us={half_p95}\thalf_snapshot_max_us={half_max}\tfull_snapshot_p95_us={full_p95}\tfull_snapshot_max_us={full_max}\tadaptive_refinements={}\trefinement_late_p95_us={refinement_late_p95}\trefinement_late_max_us={refinement_late_max}\tlast_refinement_width={}\tlast_refinement_height={}\tavg_raw_bytes={avg_raw}\tcoalesced={coalesced}",
         configured_latch_mode(),
-        "scalar",
+        downsample_implementation(),
         metrics.half_frames,
         metrics.full_frames,
         metrics.adaptive_refinements,
