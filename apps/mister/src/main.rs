@@ -434,6 +434,7 @@ fn benchmark_capabilities() -> serde_json::Value {
         "orientation-transition-pprof-v1": cfg!(feature = "profile"),
         "settings-navigation-transition-v4": true,
         "settings-navigation-transition-pprof-v4": cfg!(feature = "profile"),
+        "launcher-response-pprof-v1": cfg!(feature = "profile"),
         "pmu-probe-v1": true,
         "pmu-profile-v1": true,
         "pmu-profile-v2": true,

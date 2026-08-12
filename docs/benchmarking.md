@@ -109,6 +109,14 @@ on-CPU work, voluntary waiting, preemption, mixed delay, or unresolved off-CPU
 time. They are disabled for ordinary qualification because the required Linux
 syscalls would otherwise perturb the latency being qualified.
 
+The dormant `launcher-response` pprof trigger starts only after the exact
+Computers/Acorn frame becomes the active latch sequence. It stops after the
+route's final acknowledgement-removal frame is physically confirmed and the
+completed response trace has been handed to its writer. Profile finalization is
+therefore outside the measured response window. The installed runtime advertises
+this support as `launcher-response-pprof-v1`; typed attribution workflows own
+the volatile trigger and artifact paths.
+
 `input-latency-lab` is the fixed diagnostic experiment for attributing
 intermittent launcher response, not a release qualification. It switches the
 physical display to 1920×1200p60 for the bounded run, then restores the prior

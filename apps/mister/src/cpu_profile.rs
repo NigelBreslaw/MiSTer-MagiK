@@ -18,6 +18,7 @@ const ORIENTATION_TRANSITION_ZOOM_TRIGGER: &str = "orientation-transition-zoom";
 const LAUNCH_RETURN_TRIGGER: &str = "launch-return";
 const COLD_BOOT_TRIGGER: &str = "cold-boot";
 const SYSTEM_ENTRY_TRIGGER: &str = "system-entry";
+const LAUNCHER_RESPONSE_TRIGGER: &str = "launcher-response";
 const DEFAULT_SCREENSAVER_PROFILE_SECS: u64 = 30;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -27,6 +28,7 @@ enum BoundedProfileTrigger {
     SettingsNavigationTransitions,
     OrientationTransitionFade,
     OrientationTransitionZoom,
+    LauncherResponse,
     LaunchReturn,
     ColdBoot,
 }
@@ -39,6 +41,7 @@ impl BoundedProfileTrigger {
             Self::SettingsNavigationTransitions => SETTINGS_NAVIGATION_TRANSITIONS_TRIGGER,
             Self::OrientationTransitionFade => ORIENTATION_TRANSITION_FADE_TRIGGER,
             Self::OrientationTransitionZoom => ORIENTATION_TRANSITION_ZOOM_TRIGGER,
+            Self::LauncherResponse => LAUNCHER_RESPONSE_TRIGGER,
             Self::LaunchReturn => LAUNCH_RETURN_TRIGGER,
             Self::ColdBoot => COLD_BOOT_TRIGGER,
         }
@@ -53,6 +56,7 @@ impl BoundedProfileTrigger {
             }
             Self::OrientationTransitionFade => "mister-magik-orientation-transition-fade-pprof-v1",
             Self::OrientationTransitionZoom => "mister-magik-orientation-transition-zoom-pprof-v1",
+            Self::LauncherResponse => "mister-magik-launcher-response-pprof-v1",
             Self::LaunchReturn => "mister-magik-launch-return-pprof-v1",
             Self::ColdBoot => "mister-magik-cold-boot-pprof-v1",
         }
@@ -163,6 +167,7 @@ fn bounded_profile_trigger_from_values(
         Some(ORIENTATION_TRANSITION_ZOOM_TRIGGER) => {
             Some(BoundedProfileTrigger::OrientationTransitionZoom)
         }
+        Some(LAUNCHER_RESPONSE_TRIGGER) => Some(BoundedProfileTrigger::LauncherResponse),
         Some(LAUNCH_RETURN_TRIGGER) => Some(BoundedProfileTrigger::LaunchReturn),
         Some(COLD_BOOT_TRIGGER) => Some(BoundedProfileTrigger::ColdBoot),
         _ => None,
@@ -568,6 +573,7 @@ mod imp {
                         | BoundedProfileTrigger::SettingsNavigationTransitions
                         | BoundedProfileTrigger::OrientationTransitionFade
                         | BoundedProfileTrigger::OrientationTransitionZoom
+                        | BoundedProfileTrigger::LauncherResponse
                 )
             ) {
                 set_screensaver_profile_state(ScreensaverProfileState::Waiting);
@@ -625,6 +631,16 @@ mod imp {
                 )
             ) {
                 self.complete(next_frame, true);
+            }
+        }
+
+        pub fn begin_launcher_response(&mut self, first_frame: u64) {
+            self.begin(BoundedProfileTrigger::LauncherResponse, first_frame);
+        }
+
+        pub fn complete_launcher_response(&mut self, next_frame: u64) {
+            if self.trigger == Some(BoundedProfileTrigger::LauncherResponse) {
+                self.complete(next_frame, false);
             }
         }
 
@@ -861,6 +877,10 @@ mod stub {
 
         pub fn complete_orientation_transitions(&mut self, _next_frame: u64) {}
 
+        pub fn begin_launcher_response(&mut self, _first_frame: u64) {}
+
+        pub fn complete_launcher_response(&mut self, _next_frame: u64) {}
+
         pub fn poll(&mut self, _next_frame: u64) {}
     }
 }
@@ -939,6 +959,10 @@ mod tests {
         assert_eq!(
             bounded_profile_trigger_from_values(Some("1"), Some("orientation-transition-zoom")),
             Some(BoundedProfileTrigger::OrientationTransitionZoom)
+        );
+        assert_eq!(
+            bounded_profile_trigger_from_values(Some("1"), Some("launcher-response")),
+            Some(BoundedProfileTrigger::LauncherResponse)
         );
         assert_eq!(
             bounded_profile_trigger_from_values(Some("0"), Some("navigation-transitions")),

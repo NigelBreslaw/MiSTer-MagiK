@@ -2434,6 +2434,23 @@ impl LauncherResponseTrace {
         std::mem::take(&mut self.frame_trace_finalize_pending)
     }
 
+    fn launcher_profile_start_ready(&self) -> bool {
+        if !self.enabled {
+            return false;
+        }
+        let mut confirmed = self
+            .records
+            .iter()
+            .filter(|record| record.disposition == "confirmed");
+        confirmed.next().is_some_and(|record| {
+            confirmed.next().is_none()
+                && record.after.as_ref().is_some_and(|state| {
+                    state.menu_id == "menu:computers"
+                        && state.selected_item_id == "menu:computers:acorn"
+                })
+        })
+    }
+
     fn observe_presentation(
         &mut self,
         telemetry: mister_magik_latch_contract::PresentationTelemetry,
@@ -10349,6 +10366,9 @@ pub(super) fn run_launcher_loop(
                     frames,
                     presented_frame.main_present_sequence,
                 );
+                if launcher_response_trace.launcher_profile_start_ready() {
+                    screensaver_cpu_profile.begin_launcher_response(frames.saturating_add(1));
+                }
                 if let Ok(telemetry) = f.read_magik_presentation_telemetry() {
                     launcher_response_trace.observe_presentation(
                         telemetry,
@@ -10539,6 +10559,7 @@ pub(super) fn run_launcher_loop(
         launcher_response_trace.flush();
         if launcher_response_trace.take_frame_trace_finalize_pending() {
             frame_accounting.finish_preview_scroll_trace();
+            screensaver_cpu_profile.complete_launcher_response(frames.saturating_add(1));
         }
         latch_v5_qualification.record_present(
             accepted_and_active_confirmed,
