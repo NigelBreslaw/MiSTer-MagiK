@@ -1299,44 +1299,156 @@ pub fn render_settings_page_transition_into(
         }
     } as isize;
     let source_travel = extent / SETTINGS_PAGE_SOURCE_TRAVEL_DIVISOR;
-    let blit = |output: &mut [Rgb565Pixel], snapshot: &[Rgb565Pixel], offset: isize| match request
-        .settings_axis
-    {
-        SettingsPageTransitionAxis::Horizontal => {
-            blit_snapshot_x(output, snapshot, buffers.width, buffers.height, offset)
-        }
-        SettingsPageTransitionAxis::Vertical => {
-            blit_snapshot_y(output, snapshot, buffers.width, buffers.height, offset)
-        }
-        SettingsPageTransitionAxis::VerticalReversed => {
-            blit_snapshot_y(output, snapshot, buffers.width, buffers.height, -offset)
-        }
-    };
     let blit_started = Instant::now();
-    match request.direction {
+    let (first, first_offset, second, second_offset) = match request.direction {
         NavigationTransitionDirection::Forward => {
             let source_x = -(source_travel * travel_q16 / PROGRESS_MAX as isize);
             let destination_x = extent - extent * travel_q16 / PROGRESS_MAX as isize;
-            stats.copied_pixels = stats
-                .copied_pixels
-                .saturating_add(blit(output, source, source_x))
-                .saturating_add(blit(output, destination, destination_x));
+            (source, source_x, destination, destination_x)
         }
         NavigationTransitionDirection::Reverse => {
             let destination_x = -source_travel + source_travel * travel_q16 / PROGRESS_MAX as isize;
             let source_x = extent * travel_q16 / PROGRESS_MAX as isize;
-            stats.copied_pixels = stats
-                .copied_pixels
-                .saturating_add(blit(output, destination, destination_x))
-                .saturating_add(blit(output, source, source_x));
+            (destination, destination_x, source, source_x)
         }
-    }
+    };
+    stats.copied_pixels = blit_settings_pair(
+        output,
+        first,
+        first_offset,
+        second,
+        second_offset,
+        buffers.width,
+        buffers.height,
+        request.settings_axis,
+    );
     stats.settings_blit_us = elapsed_us(blit_started);
     Ok(stats)
 }
 
 fn elapsed_us(started: Instant) -> u64 {
     started.elapsed().as_micros().min(u64::MAX as u128) as u64
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SnapshotBlitSpan {
+    destination_start: usize,
+    source_start: usize,
+    len: usize,
+}
+
+impl SnapshotBlitSpan {
+    fn destination_end(self) -> usize {
+        self.destination_start.saturating_add(self.len)
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn blit_settings_pair(
+    output: &mut [Rgb565Pixel],
+    first: &[Rgb565Pixel],
+    first_offset: isize,
+    second: &[Rgb565Pixel],
+    second_offset: isize,
+    width: usize,
+    height: usize,
+    axis: SettingsPageTransitionAxis,
+) -> u64 {
+    if output.len() != width.saturating_mul(height)
+        || first.len() != output.len()
+        || second.len() != output.len()
+    {
+        return 0;
+    }
+    let extent = match axis {
+        SettingsPageTransitionAxis::Horizontal => width,
+        SettingsPageTransitionAxis::Vertical | SettingsPageTransitionAxis::VerticalReversed => {
+            height
+        }
+    };
+    let transform_offset = |offset: isize| match axis {
+        SettingsPageTransitionAxis::VerticalReversed => -offset,
+        SettingsPageTransitionAxis::Horizontal | SettingsPageTransitionAxis::Vertical => offset,
+    };
+    let Some(first_span) = snapshot_blit_span(extent, transform_offset(first_offset)) else {
+        return 0;
+    };
+    let Some(second_span) = snapshot_blit_span(extent, transform_offset(second_offset)) else {
+        return blit_snapshot_span(output, first, width, height, axis, first_span);
+    };
+    let mut copied = 0_u64;
+    for span in snapshot_span_without_cover(first_span, second_span)
+        .into_iter()
+        .flatten()
+    {
+        copied =
+            copied.saturating_add(blit_snapshot_span(output, first, width, height, axis, span));
+    }
+    copied.saturating_add(blit_snapshot_span(
+        output,
+        second,
+        width,
+        height,
+        axis,
+        second_span,
+    ))
+}
+
+fn snapshot_blit_span(extent: usize, offset: isize) -> Option<SnapshotBlitSpan> {
+    let destination_start = offset.max(0) as usize;
+    let source_start = offset.saturating_neg().max(0) as usize;
+    if destination_start >= extent || source_start >= extent {
+        return None;
+    }
+    Some(SnapshotBlitSpan {
+        destination_start,
+        source_start,
+        len: (extent - destination_start).min(extent - source_start),
+    })
+}
+
+fn snapshot_span_without_cover(
+    span: SnapshotBlitSpan,
+    cover: SnapshotBlitSpan,
+) -> [Option<SnapshotBlitSpan>; 2] {
+    let overlap_start = span.destination_start.max(cover.destination_start);
+    let overlap_end = span.destination_end().min(cover.destination_end());
+    if overlap_start >= overlap_end {
+        return [Some(span), None];
+    }
+    let prefix_len = overlap_start.saturating_sub(span.destination_start);
+    let suffix_len = span.destination_end().saturating_sub(overlap_end);
+    [
+        (prefix_len > 0).then_some(SnapshotBlitSpan {
+            len: prefix_len,
+            ..span
+        }),
+        (suffix_len > 0).then_some(SnapshotBlitSpan {
+            destination_start: overlap_end,
+            source_start: span
+                .source_start
+                .saturating_add(overlap_end.saturating_sub(span.destination_start)),
+            len: suffix_len,
+        }),
+    ]
+}
+
+fn blit_snapshot_span(
+    output: &mut [Rgb565Pixel],
+    snapshot: &[Rgb565Pixel],
+    width: usize,
+    height: usize,
+    axis: SettingsPageTransitionAxis,
+    span: SnapshotBlitSpan,
+) -> u64 {
+    match axis {
+        SettingsPageTransitionAxis::Horizontal => {
+            blit_snapshot_x_span(output, snapshot, width, height, span)
+        }
+        SettingsPageTransitionAxis::Vertical | SettingsPageTransitionAxis::VerticalReversed => {
+            blit_snapshot_y_span(output, snapshot, width, span)
+        }
+    }
 }
 
 fn blit_snapshot_y(
@@ -1349,15 +1461,21 @@ fn blit_snapshot_y(
     if output.len() != width.saturating_mul(height) || snapshot.len() != output.len() {
         return 0;
     }
-    let destination_y = offset_y.max(0) as usize;
-    let source_y = offset_y.saturating_neg().max(0) as usize;
-    if destination_y >= height || source_y >= height {
+    let Some(span) = snapshot_blit_span(height, offset_y) else {
         return 0;
-    }
-    let copy_height = (height - destination_y).min(height - source_y);
-    let destination_start = destination_y * width;
-    let source_start = source_y * width;
-    let copy_len = copy_height * width;
+    };
+    blit_snapshot_y_span(output, snapshot, width, span)
+}
+
+fn blit_snapshot_y_span(
+    output: &mut [Rgb565Pixel],
+    snapshot: &[Rgb565Pixel],
+    width: usize,
+    span: SnapshotBlitSpan,
+) -> u64 {
+    let destination_start = span.destination_start * width;
+    let source_start = span.source_start * width;
+    let copy_len = span.len * width;
     output[destination_start..destination_start + copy_len]
         .copy_from_slice(&snapshot[source_start..source_start + copy_len]);
     copy_len as u64
@@ -1373,19 +1491,26 @@ fn blit_snapshot_x(
     if output.len() != width.saturating_mul(height) || snapshot.len() != output.len() {
         return 0;
     }
-    let destination_x = offset_x.max(0) as usize;
-    let source_x = offset_x.saturating_neg().max(0) as usize;
-    if destination_x >= width || source_x >= width {
+    let Some(span) = snapshot_blit_span(width, offset_x) else {
         return 0;
-    }
-    let copy_width = (width - destination_x).min(width - source_x);
+    };
+    blit_snapshot_x_span(output, snapshot, width, height, span)
+}
+
+fn blit_snapshot_x_span(
+    output: &mut [Rgb565Pixel],
+    snapshot: &[Rgb565Pixel],
+    width: usize,
+    height: usize,
+    span: SnapshotBlitSpan,
+) -> u64 {
     for y in 0..height {
-        let destination_start = y * width + destination_x;
-        let source_start = y * width + source_x;
-        output[destination_start..destination_start + copy_width]
-            .copy_from_slice(&snapshot[source_start..source_start + copy_width]);
+        let destination_start = y * width + span.destination_start;
+        let source_start = y * width + span.source_start;
+        output[destination_start..destination_start + span.len]
+            .copy_from_slice(&snapshot[source_start..source_start + span.len]);
     }
-    copy_width.saturating_mul(height) as u64
+    span.len.saturating_mul(height) as u64
 }
 
 #[allow(clippy::too_many_arguments)]

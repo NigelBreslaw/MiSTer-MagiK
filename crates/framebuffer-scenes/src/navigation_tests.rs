@@ -289,6 +289,113 @@ fn settings_page_push_moves_only_horizontally_with_clipped_row_copies() {
 }
 
 #[test]
+fn settings_page_pair_blit_matches_overdraw_reference_for_every_axis_and_direction() {
+    let width = 17;
+    let height = 11;
+    let source = (0..width * height)
+        .map(|index| Rgb565Pixel(0x1000_u16.wrapping_add(index as u16)))
+        .collect::<Vec<_>>();
+    let destination = (0..width * height)
+        .map(|index| Rgb565Pixel(0x8000_u16.wrapping_add(index as u16)))
+        .collect::<Vec<_>>();
+    let mut buffers = NavigationTransitionBuffers::new(width, height);
+    buffers.capture_source(&source).unwrap();
+    buffers.capture_destination(&destination).unwrap();
+
+    for axis in [
+        SettingsPageTransitionAxis::Horizontal,
+        SettingsPageTransitionAxis::Vertical,
+        SettingsPageTransitionAxis::VerticalReversed,
+    ] {
+        for direction in [
+            NavigationTransitionDirection::Forward,
+            NavigationTransitionDirection::Reverse,
+        ] {
+            for progress_q16 in [1, PROGRESS_MAX / 4, PROGRESS_MAX / 2, PROGRESS_MAX - 1] {
+                let request = NavigationTransitionRequest::settings_page_on_axis(direction, axis);
+                let frame = NavigationTransitionFrame {
+                    progress_q16,
+                    ..NavigationTransitionFrame::default()
+                };
+                let mut optimized = vec![Rgb565Pixel(0x55aa); width * height];
+                let stats = render_settings_page_transition_into(
+                    &buffers,
+                    request,
+                    frame,
+                    &mut optimized,
+                )
+                .unwrap();
+
+                let travel_q16 = spring_ease_q16(progress_q16) as isize;
+                let extent = match axis {
+                    SettingsPageTransitionAxis::Horizontal => width,
+                    SettingsPageTransitionAxis::Vertical
+                    | SettingsPageTransitionAxis::VerticalReversed => height,
+                } as isize;
+                let source_travel = extent / SETTINGS_PAGE_SOURCE_TRAVEL_DIVISOR;
+                let (first, first_offset, second, second_offset) = match direction {
+                    NavigationTransitionDirection::Forward => (
+                        source.as_slice(),
+                        -(source_travel * travel_q16 / PROGRESS_MAX as isize),
+                        destination.as_slice(),
+                        extent - extent * travel_q16 / PROGRESS_MAX as isize,
+                    ),
+                    NavigationTransitionDirection::Reverse => (
+                        destination.as_slice(),
+                        -source_travel + source_travel * travel_q16 / PROGRESS_MAX as isize,
+                        source.as_slice(),
+                        extent * travel_q16 / PROGRESS_MAX as isize,
+                    ),
+                };
+                let offset = |value: isize| match axis {
+                    SettingsPageTransitionAxis::VerticalReversed => -value,
+                    SettingsPageTransitionAxis::Horizontal
+                    | SettingsPageTransitionAxis::Vertical => value,
+                };
+                let mut reference = vec![Rgb565Pixel(0x55aa); width * height];
+                match axis {
+                    SettingsPageTransitionAxis::Horizontal => {
+                        blit_snapshot_x(
+                            &mut reference,
+                            first,
+                            width,
+                            height,
+                            offset(first_offset),
+                        );
+                        blit_snapshot_x(
+                            &mut reference,
+                            second,
+                            width,
+                            height,
+                            offset(second_offset),
+                        );
+                    }
+                    SettingsPageTransitionAxis::Vertical
+                    | SettingsPageTransitionAxis::VerticalReversed => {
+                        blit_snapshot_y(
+                            &mut reference,
+                            first,
+                            width,
+                            height,
+                            offset(first_offset),
+                        );
+                        blit_snapshot_y(
+                            &mut reference,
+                            second,
+                            width,
+                            height,
+                            offset(second_offset),
+                        );
+                    }
+                }
+                assert_eq!(optimized, reference, "axis={axis:?} direction={direction:?}");
+                assert!(stats.copied_pixels <= (width * height) as u64);
+            }
+        }
+    }
+}
+
+#[test]
 fn settings_page_push_moves_contiguous_rows_in_physical_portrait_space() {
     let width = 4;
     let height = 8;
