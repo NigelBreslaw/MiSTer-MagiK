@@ -733,6 +733,7 @@ mod tests {
             "modal-input",
             "input-integrity",
             "launcher-response",
+            "launcher-response-attribution",
             "input-latency-lab",
             "launcher-response-streamline",
             "cold-boot",

@@ -625,6 +625,15 @@ impl NativeDevice {
         })
     }
 
+    pub(crate) fn profile_launcher_response_attribution(
+        &mut self,
+        output_dir: &Path,
+    ) -> std::result::Result<String, DeviceFailure> {
+        self.benchmark_profile(|config| {
+            profile_installed_launcher_response_attribution(config, output_dir)
+        })
+    }
+
     pub(crate) fn verify_search_ui(
         &mut self,
         output_dir: &Path,
@@ -4821,6 +4830,190 @@ fn verify_installed_launcher_response(
     serde_json::to_string(&summary).map_err(Into::into)
 }
 
+fn profile_installed_launcher_response_attribution(
+    config: &NativeDeviceConfig,
+    output_dir: &Path,
+) -> Result<String> {
+    let gatord = streamline_gatord_path(env::var_os("MISTER_GATORD_PATH"))?;
+    let gatord_metadata = fs::metadata(gatord)?;
+    if !gatord_metadata.is_file() || gatord_metadata.len() == 0 {
+        return Err("MISTER_GATORD_PATH must name a non-empty regular file".into());
+    }
+    if gatord_metadata.len() > 64 * 1024 * 1024 {
+        return Err("MISTER_GATORD_PATH exceeds the 64 MiB upload limit".into());
+    }
+    fs::create_dir_all(output_dir)?;
+    let session = connect_with(&config.connection, 30)?;
+    let capability = exec_checked_output(
+        &session,
+        "installed launcher-response attribution capability",
+        "/media/fat/mister-magik-dev/mister-magik-fb benchmark-capabilities",
+    )?;
+    let capability = last_json_line(&capability.stdout)
+        .ok_or("installed benchmark capability output contains no JSON report")?;
+    for required in ["launcher-response-pprof-v1", "launcher-response-pmu-v1"] {
+        if capability[required].as_bool() != Some(true) {
+            return Err(format!("installed app does not support {required}").into());
+        }
+    }
+    let boot_id = remote_read(&session, "/proc/sys/kernel/random/boot_id")
+        .ok_or("device boot id is unavailable before launcher-response attribution")?;
+    let manifest = remote_read(&session, "/media/fat/mister-magik-dev/platform-v3.manifest")
+        .ok_or("development manifest is unavailable before launcher-response attribution")?;
+    let original_reply = exec_checked_output(
+        &session,
+        "query launcher-response attribution display mode",
+        &acknowledged_main_command("mister_magik_display_get_v1"),
+    )?;
+    if parse_display_reply_pending(original_reply.stdout.trim())?.is_some() {
+        return Err(
+            "launcher-response attribution cannot start during a display transaction".into(),
+        );
+    }
+    let original_id = parse_display_reply_active(original_reply.stdout.trim())?;
+    let original_mode = DISPLAY_MATRIX_MODES
+        .iter()
+        .find(|mode| mode.id == original_id)
+        .copied()
+        .ok_or_else(|| {
+            format!("launcher-response attribution cannot restore unknown mode {original_id}")
+        })?;
+    let capture_mode = DISPLAY_MATRIX_MODES
+        .iter()
+        .find(|mode| mode.id == "hdmi-1920x1200p60")
+        .copied()
+        .ok_or("missing launcher-response attribution display mode")?;
+    apply_confirmed_display_mode(
+        config,
+        capture_mode,
+        "launcher-response attribution capture",
+    )?;
+
+    let run_result = (|| -> Result<Vec<Value>> {
+        exec_checked(
+            &session,
+            "prepare launcher-response attribution",
+            &launcher_response_attribution_prepare_command(),
+        )?;
+        let mut arms = Vec::new();
+        for arm in [
+            LauncherResponseAttributionArm::Control,
+            LauncherResponseAttributionArm::Execution,
+            LauncherResponseAttributionArm::Pprof,
+            LauncherResponseAttributionArm::Pmu,
+        ] {
+            let arm_output_dir = output_dir.join(arm.label());
+            let instrumentation = LauncherResponseInstrumentation {
+                arm,
+                output_dir: &arm_output_dir,
+            };
+            let route = run_launcher_response_scenario_with_instrumentation(
+                &session,
+                "60-hz",
+                arm.label(),
+                "off",
+                true,
+                Some(&instrumentation),
+            )?;
+            validate_launcher_response_attribution_arm(arm, &route)?;
+            arms.push(json!({
+                "arm": arm.label(),
+                "artifact_status": "passed",
+                "product_quality_status": route["input_response_status"],
+                "input_integrity_status": if launcher_response_integrity_passed(&route) { "passed" } else { "failed" },
+                "route": route,
+            }));
+        }
+        let streamline_text =
+            profile_installed_launcher_response_streamline(config, &output_dir.join("streamline"))?;
+        let streamline: Value = serde_json::from_str(&streamline_text)?;
+        if streamline["artifact_status"].as_str() != Some("passed") {
+            return Err("launcher-response Streamline arm did not produce valid evidence".into());
+        }
+        arms.push(json!({
+            "arm": "streamline",
+            "artifact_status": streamline["artifact_status"],
+            "product_quality_status": streamline["product_quality_status"],
+            "input_integrity_status": streamline["input_integrity_status"],
+            "summary": streamline,
+        }));
+        Ok(arms)
+    })();
+
+    let cleanup_result = exec_checked(
+        &session,
+        "clean launcher-response attribution",
+        &launcher_response_attribution_cleanup_command(),
+    );
+    let launcher_restore_result = launcher_restart(
+        &session,
+        &LauncherRestartOptions {
+            clear_env: true,
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+            timeout_secs: 45,
+            ..LauncherRestartOptions::default()
+        },
+    );
+    let display_restore_result = apply_confirmed_display_mode(
+        config,
+        original_mode,
+        "launcher-response attribution display restoration",
+    );
+    let arms = match (
+        run_result,
+        cleanup_result,
+        launcher_restore_result,
+        display_restore_result,
+    ) {
+        (Ok(arms), Ok(()), Ok(()), Ok(())) => arms,
+        (run, cleanup, launcher, display) => {
+            return Err(format!(
+                "launcher-response attribution failed: run={:?}; cleanup={:?}; launcher_restore={:?}; display_restore={:?}",
+                run.err(),
+                cleanup.err(),
+                launcher.err(),
+                display.err()
+            )
+            .into());
+        }
+    };
+
+    let final_boot_id = remote_read(&session, "/proc/sys/kernel/random/boot_id")
+        .ok_or("device boot id is unavailable after launcher-response attribution")?;
+    if final_boot_id != boot_id {
+        return Err("device rebooted during launcher-response attribution".into());
+    }
+    let final_manifest = remote_read(&session, "/media/fat/mister-magik-dev/platform-v3.manifest")
+        .ok_or("development manifest is unavailable after launcher-response attribution")?;
+    if final_manifest != manifest {
+        return Err(
+            "installed platform manifest changed during launcher-response attribution".into(),
+        );
+    }
+    let control = arms
+        .iter()
+        .find(|arm| arm["arm"].as_str() == Some("control"))
+        .ok_or("launcher-response attribution omitted its control arm")?;
+    let observer_overhead = launcher_response_observer_overhead(&arms, control);
+    let summary = json!({
+        "schema": "mister-magik-launcher-response-attribution-v1",
+        "artifact_status": "passed",
+        "current_product_quality_status": control["product_quality_status"],
+        "input_integrity_status": if arms.iter().all(|arm| arm["input_integrity_status"].as_str() == Some("passed")) { "passed" } else { "failed" },
+        "display_mode": capture_mode.id,
+        "refresh_hz": 60,
+        "schedules_ms": [200, 300, 400, 600],
+        "round_trip_cycles": 2,
+        "observer_overhead": observer_overhead,
+        "arms": arms,
+    });
+    fs::write(
+        output_dir.join("summary.json"),
+        format!("{}\n", serde_json::to_string_pretty(&summary)?),
+    )?;
+    serde_json::to_string(&summary).map_err(Into::into)
+}
+
 #[derive(Clone, Copy)]
 struct InputLatencyLabArmSpec {
     label: &'static str,
@@ -5768,6 +5961,24 @@ fn run_launcher_response_scenario(
     catalog_refresh: &str,
     isolated_profile: bool,
 ) -> Result<Value> {
+    run_launcher_response_scenario_with_instrumentation(
+        session,
+        display_label,
+        label,
+        catalog_refresh,
+        isolated_profile,
+        None,
+    )
+}
+
+fn run_launcher_response_scenario_with_instrumentation(
+    session: &Session,
+    display_label: &str,
+    label: &str,
+    catalog_refresh: &str,
+    isolated_profile: bool,
+    instrumentation: Option<&LauncherResponseInstrumentation<'_>>,
+) -> Result<Value> {
     let main_before: Value = serde_json::from_str(
         &remote_read(session, MAIN_STATUS_REMOTE).ok_or("Main status is missing")?,
     )?;
@@ -5784,6 +5995,7 @@ fn run_launcher_response_scenario(
             interval_ms,
             start_delay_ms,
             isolated_profile,
+            instrumentation,
         )?;
         computers_sweeps.push(if isolated_profile {
             summarize_computers_round_trip(trace, interval_ms, 2)?
@@ -5925,12 +6137,228 @@ const LAUNCHER_RESPONSE_COMPUTER_IDS: [&str; 8] = [
     "menu:computers:other",
 ];
 
+const LAUNCHER_RESPONSE_ATTRIBUTION_REMOTE_ROOT: &str =
+    "/tmp/mister-magik/launcher-response-attribution";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum LauncherResponseAttributionArm {
+    Control,
+    Execution,
+    Pprof,
+    Pmu,
+}
+
+impl LauncherResponseAttributionArm {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Control => "control",
+            Self::Execution => "execution",
+            Self::Pprof => "pprof",
+            Self::Pmu => "pmu",
+        }
+    }
+}
+
+struct LauncherResponseInstrumentation<'a> {
+    arm: LauncherResponseAttributionArm,
+    output_dir: &'a Path,
+}
+
+fn launcher_response_attribution_prepare_command() -> String {
+    format!(
+        "set -eu; rm -rf {root}; mkdir -p {root}; test ! -e /media/fat/mister-magik/launcher.env; test ! -e /media/fat/mister-magik-dev/launcher.env; test ! -e /tmp/mister-magik/fs-fault-launcher.env; test ! -e /tmp/mister-magik/fs-fault-session; test ! -e /tmp/mister-magik/fs-fault.json; test ! -e /media/fat/mister-magik/rebuild-on-next-boot; test ! -e /media/fat/mister-magik-dev/rebuild-on-next-boot",
+        root = sh(LAUNCHER_RESPONSE_ATTRIBUTION_REMOTE_ROOT),
+    )
+}
+
+fn launcher_response_attribution_cleanup_command() -> String {
+    format!(
+        "set -eu; rm -rf {root}; test ! -e {root}; test ! -e /media/fat/mister-magik/launcher.env; test ! -e /media/fat/mister-magik-dev/launcher.env; test ! -e /tmp/mister-magik/fs-fault-launcher.env; test ! -e /tmp/mister-magik/fs-fault-session; test ! -e /tmp/mister-magik/fs-fault.json; test ! -e /media/fat/mister-magik/rebuild-on-next-boot; test ! -e /media/fat/mister-magik-dev/rebuild-on-next-boot",
+        root = sh(LAUNCHER_RESPONSE_ATTRIBUTION_REMOTE_ROOT),
+    )
+}
+
+fn launcher_response_attribution_env(
+    arm: LauncherResponseAttributionArm,
+    run_id: &str,
+) -> Vec<(String, String)> {
+    let prefix = format!("{LAUNCHER_RESPONSE_ATTRIBUTION_REMOTE_ROOT}/{run_id}");
+    match arm {
+        LauncherResponseAttributionArm::Control => Vec::new(),
+        LauncherResponseAttributionArm::Execution => vec![(
+            "MISTER_LAUNCHER_RESPONSE_EXECUTION_TRACE".into(),
+            "1".into(),
+        )],
+        LauncherResponseAttributionArm::Pprof => vec![
+            ("MISTER_PPROF".into(), "1".into()),
+            ("MISTER_PPROF_TRIGGER".into(), "launcher-response".into()),
+            ("MISTER_PPROF_HZ".into(), "997".into()),
+            ("MISTER_PPROF_OUT".into(), format!("{prefix}.svg")),
+            ("MISTER_PPROF_FOLDED_OUT".into(), format!("{prefix}.folded")),
+            (
+                "MISTER_PPROF_COMPLETE".into(),
+                format!("{prefix}.pprof.json"),
+            ),
+        ],
+        LauncherResponseAttributionArm::Pmu => vec![
+            ("MISTER_PMU_PROFILE".into(), "1".into()),
+            ("MISTER_PMU_SAMPLE_EVERY".into(), "1".into()),
+            ("MISTER_PMU_RECORD_LIMIT".into(), "4096".into()),
+            ("MISTER_LAUNCHER_RESPONSE_PMU".into(), "1".into()),
+            (
+                "MISTER_LAUNCHER_RESPONSE_PMU_COMPLETE".into(),
+                format!("{prefix}.pmu.json"),
+            ),
+        ],
+    }
+}
+
+fn collect_launcher_response_attribution_artifacts(
+    session: &Session,
+    instrumentation: &LauncherResponseInstrumentation<'_>,
+    interval_ms: u64,
+    run_id: &str,
+    trace: &Value,
+) -> Result<()> {
+    fs::create_dir_all(instrumentation.output_dir)?;
+    fs::write(
+        instrumentation
+            .output_dir
+            .join(format!("{interval_ms}ms-trace.json")),
+        format!("{}\n", serde_json::to_string_pretty(trace)?),
+    )?;
+    let prefix = format!("{LAUNCHER_RESPONSE_ATTRIBUTION_REMOTE_ROOT}/{run_id}");
+    match instrumentation.arm {
+        LauncherResponseAttributionArm::Control | LauncherResponseAttributionArm::Execution => {
+            Ok(())
+        }
+        LauncherResponseAttributionArm::Pprof => {
+            let profile_text = wait_launch_return_artifact(
+                session,
+                &format!("{prefix}.pprof.json"),
+                Duration::from_secs(10),
+            )?;
+            let profile: Value = serde_json::from_str(profile_text.trim())?;
+            if profile["schema"].as_str() != Some("mister-magik-launcher-response-pprof-v1")
+                || profile["state"].as_str() != Some("complete")
+                || profile["sample_hits"].as_i64().unwrap_or(0) <= 0
+            {
+                return Err(format!("launcher-response pprof is incomplete: {profile}").into());
+            }
+            let svg = remote_read(session, &format!("{prefix}.svg"))
+                .filter(|text| !text.trim().is_empty())
+                .ok_or("launcher-response pprof flamegraph is missing")?;
+            let folded = remote_read(session, &format!("{prefix}.folded"))
+                .filter(|text| !text.trim().is_empty())
+                .ok_or("launcher-response pprof folded stacks are missing")?;
+            fs::write(
+                instrumentation
+                    .output_dir
+                    .join(format!("{interval_ms}ms-profile.json")),
+                format!("{}\n", serde_json::to_string_pretty(&profile)?),
+            )?;
+            fs::write(
+                instrumentation
+                    .output_dir
+                    .join(format!("{interval_ms}ms-flamegraph.svg")),
+                svg,
+            )?;
+            fs::write(
+                instrumentation
+                    .output_dir
+                    .join(format!("{interval_ms}ms-stacks.folded")),
+                folded,
+            )?;
+            Ok(())
+        }
+        LauncherResponseAttributionArm::Pmu => {
+            let profile_text = wait_launch_return_artifact(
+                session,
+                &format!("{prefix}.pmu.json"),
+                Duration::from_secs(10),
+            )?;
+            let profile: Value = serde_json::from_str(profile_text.trim())?;
+            if profile["schema"].as_str() != Some("mister-magik-launcher-response-pmu-v1")
+                || profile["run_id"].as_str() != Some(run_id)
+                || profile["state"].as_str() != Some("complete")
+                || profile
+                    .pointer("/profile/records")
+                    .and_then(Value::as_array)
+                    .is_none_or(Vec::is_empty)
+            {
+                return Err(
+                    format!("launcher-response PMU profile is incomplete: {profile}").into(),
+                );
+            }
+            fs::write(
+                instrumentation
+                    .output_dir
+                    .join(format!("{interval_ms}ms-pmu.json")),
+                format!("{}\n", serde_json::to_string_pretty(&profile)?),
+            )?;
+            Ok(())
+        }
+    }
+}
+
+fn validate_launcher_response_attribution_arm(
+    arm: LauncherResponseAttributionArm,
+    route: &Value,
+) -> Result<()> {
+    let sweeps = route["computers_sweeps"]
+        .as_array()
+        .ok_or("launcher-response attribution arm has no Computers sweeps")?;
+    if sweeps.len() != 4 {
+        return Err("launcher-response attribution arm did not run four schedules".into());
+    }
+    let execution_expected = arm == LauncherResponseAttributionArm::Execution;
+    for sweep in sweeps {
+        let trace = &sweep["trace"];
+        if trace["attribution_arm"].as_str() != Some(arm.label())
+            || trace
+                .pointer("/execution_attribution/enabled")
+                .and_then(Value::as_bool)
+                != Some(execution_expected)
+        {
+            return Err(format!(
+                "launcher-response {} arm has mismatched trace attribution: {trace}",
+                arm.label()
+            )
+            .into());
+        }
+    }
+    Ok(())
+}
+
+fn launcher_response_observer_overhead(arms: &[Value], control: &Value) -> Vec<Value> {
+    let control_route = &control["route"];
+    arms.iter()
+        .filter_map(|arm| {
+            let route = arm.get("route").or_else(|| arm.pointer("/summary/route"))?;
+            Some(json!({
+                "arm": arm["arm"],
+                "dispatch_p95_delta_us": signed_measurement_delta(route["dispatch_p95_us"].as_u64(), control_route["dispatch_p95_us"].as_u64()),
+                "dispatch_max_delta_us": signed_measurement_delta(route["dispatch_max_us"].as_u64(), control_route["dispatch_max_us"].as_u64()),
+                "confirmed_median_delta_us": signed_measurement_delta(route["confirmed_median_us"].as_u64(), control_route["confirmed_median_us"].as_u64()),
+                "confirmed_p95_delta_us": signed_measurement_delta(route["confirmed_p95_us"].as_u64(), control_route["confirmed_p95_us"].as_u64()),
+                "confirmed_max_delta_us": signed_measurement_delta(route["confirmed_max_us"].as_u64(), control_route["confirmed_max_us"].as_u64()),
+            }))
+        })
+        .collect()
+}
+
+fn signed_measurement_delta(value: Option<u64>, baseline: Option<u64>) -> Option<i64> {
+    let delta = i128::from(value?) - i128::from(baseline?);
+    i64::try_from(delta).ok()
+}
+
 fn run_launcher_response_computers_sweep(
     session: &Session,
     catalog_refresh: &str,
     interval_ms: u64,
     start_delay_ms: u64,
     isolated_profile: bool,
+    instrumentation: Option<&LauncherResponseInstrumentation<'_>>,
 ) -> Result<Value> {
     let run_id = format!(
         "computers-{interval_ms}-{start_delay_ms}-{}",
@@ -5959,6 +6387,12 @@ fn run_launcher_response_computers_sweep(
     ];
     if isolated_profile {
         env_vars.push(("MISTER_PROFILE".into(), "full".into()));
+    }
+    if let Some(instrumentation) = instrumentation {
+        env_vars.extend(launcher_response_attribution_env(
+            instrumentation.arm,
+            &run_id,
+        ));
     }
     restart_launcher_with_one_shot_env(
         session,
@@ -5992,6 +6426,16 @@ fn run_launcher_response_computers_sweep(
         Duration::from_secs(10),
     )?;
     let mut trace = read_completed_launcher_response_trace(session, &run_id)?;
+    if let Some(instrumentation) = instrumentation {
+        collect_launcher_response_attribution_artifacts(
+            session,
+            instrumentation,
+            interval_ms,
+            &run_id,
+            &trace,
+        )?;
+        trace["attribution_arm"] = Value::String(instrumentation.arm.label().into());
+    }
     trace["installed_manifest"] = Value::String(
         remote_read(session, "/media/fat/mister-magik-dev/platform-v3.manifest")
             .ok_or("launcher response installed manifest is missing")?,
@@ -19161,6 +19605,74 @@ mod tests {
             failed[field] = json!(1);
             assert!(!launcher_response_integrity_passed(&failed), "{field}");
         }
+    }
+
+    #[test]
+    fn launcher_response_attribution_arms_enable_only_their_owned_observer() {
+        let control =
+            launcher_response_attribution_env(LauncherResponseAttributionArm::Control, "run-1");
+        let execution =
+            launcher_response_attribution_env(LauncherResponseAttributionArm::Execution, "run-1");
+        let pprof =
+            launcher_response_attribution_env(LauncherResponseAttributionArm::Pprof, "run-1");
+        let pmu = launcher_response_attribution_env(LauncherResponseAttributionArm::Pmu, "run-1");
+        assert!(control.is_empty());
+        assert_eq!(
+            execution,
+            vec![(
+                "MISTER_LAUNCHER_RESPONSE_EXECUTION_TRACE".into(),
+                "1".into()
+            )]
+        );
+        assert!(
+            pprof.iter().any(|(key, value)| {
+                key == "MISTER_PPROF_TRIGGER" && value == "launcher-response"
+            })
+        );
+        assert!(
+            pprof
+                .iter()
+                .any(|(key, value)| { key == "MISTER_PPROF_HZ" && value == "997" })
+        );
+        assert!(pprof.iter().all(|(key, _)| key != "MISTER_PMU_PROFILE"));
+        assert!(
+            pmu.iter()
+                .any(|(key, value)| { key == "MISTER_LAUNCHER_RESPONSE_PMU" && value == "1" })
+        );
+        assert!(
+            pmu.iter()
+                .any(|(key, value)| { key == "MISTER_PMU_RECORD_LIMIT" && value == "4096" })
+        );
+        assert!(pmu.iter().all(|(key, _)| key != "MISTER_PPROF"));
+    }
+
+    #[test]
+    fn launcher_response_attribution_cleanup_is_bounded_and_checks_arming_state() {
+        let prepare = launcher_response_attribution_prepare_command();
+        let cleanup = launcher_response_attribution_cleanup_command();
+        assert!(prepare.contains(LAUNCHER_RESPONSE_ATTRIBUTION_REMOTE_ROOT));
+        assert!(cleanup.contains(LAUNCHER_RESPONSE_ATTRIBUTION_REMOTE_ROOT));
+        assert!(!cleanup.contains("pidof"));
+        for arming_path in [
+            "/media/fat/mister-magik/launcher.env",
+            "/media/fat/mister-magik-dev/launcher.env",
+            "/tmp/mister-magik/fs-fault-session",
+            "/media/fat/mister-magik/rebuild-on-next-boot",
+            "/media/fat/mister-magik-dev/rebuild-on-next-boot",
+        ] {
+            assert!(prepare.contains(arming_path));
+            assert!(cleanup.contains(arming_path));
+        }
+    }
+
+    #[test]
+    fn launcher_response_observer_overhead_keeps_signed_deltas() {
+        assert_eq!(signed_measurement_delta(Some(900), Some(1_000)), Some(-100));
+        assert_eq!(
+            signed_measurement_delta(Some(1_250), Some(1_000)),
+            Some(250)
+        );
+        assert_eq!(signed_measurement_delta(None, Some(1_000)), None);
     }
 
     #[test]

@@ -25,6 +25,7 @@ Supported scenarios:
 - `cold-boot-pprof`
 - `input-integrity`
 - `launcher-response`
+- `launcher-response-attribution`
 - `launcher-response-streamline`
 - `input-latency-lab`
 - `particles`
@@ -137,6 +138,18 @@ the low sampling rate, includes kernel execution, disables stack unwinding, and
 has a 120-second hard limit. APC artifact validity and input integrity are
 reported separately from the existing product latency gates, so a valid capture
 is retained even when the latency result fails.
+
+`launcher-response-attribution` is the fixed diagnostic suite used before a
+production scheduling or rendering change. It independently restarts and runs
+the four exact round-trip schedules under a zero-observer control, execution
+stamps, 997 Hz pprof, and sampled per-thread PMU counters, then runs the required
+system-wide Streamline pass. Each arm retains its complete traces and native
+artifacts below an arm-specific directory. The report compares observer latency
+against control and separates artifact validity, input integrity, and current
+product-quality status. It therefore completes successfully when all evidence is
+valid even if the control still misses the product latency target. The command
+requires an explicit audited `MISTER_GATORD_PATH`; it never silently skips the
+system timeline.
 
 `input-latency-lab` is the fixed diagnostic experiment for attributing
 intermittent launcher response, not a release qualification. It switches the

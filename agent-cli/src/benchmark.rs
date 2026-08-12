@@ -42,6 +42,7 @@ enum BenchmarkProfile {
     ModalInput,
     InputIntegrity,
     LauncherResponse,
+    LauncherResponseAttribution,
     InputLatencyLab,
     LauncherResponseStreamline,
     ColdBoot,
@@ -104,6 +105,9 @@ impl BenchmarkDevice for DeviceClient {
             BenchmarkProfile::ModalInput => device.verify_modal_input(&output_dir),
             BenchmarkProfile::InputIntegrity => device.verify_input_integrity(&output_dir),
             BenchmarkProfile::LauncherResponse => device.verify_launcher_response(&output_dir),
+            BenchmarkProfile::LauncherResponseAttribution => {
+                device.profile_launcher_response_attribution(&output_dir)
+            }
             BenchmarkProfile::InputLatencyLab => device.verify_input_latency_lab(&output_dir),
             BenchmarkProfile::LauncherResponseStreamline => {
                 device.profile_launcher_response_streamline(&output_dir)
@@ -242,6 +246,9 @@ fn require_clean_installed_commit(
         }
         BenchmarkScenario::LauncherResponse => {
             execute_launcher_response(&mut device, manifest, output_dir, reporter)
+        }
+        BenchmarkScenario::LauncherResponseAttribution => {
+            execute_launcher_response_attribution(&mut device, manifest, output_dir, reporter)
         }
         BenchmarkScenario::InputLatencyLab => {
             execute_input_latency_lab(&mut device, manifest, output_dir, reporter)
@@ -633,6 +640,7 @@ fn particle_scene_lab_command(scenario: BenchmarkScenario) -> Option<&'static st
         | BenchmarkScenario::ModalInput
         | BenchmarkScenario::InputIntegrity
         | BenchmarkScenario::LauncherResponse
+        | BenchmarkScenario::LauncherResponseAttribution
         | BenchmarkScenario::InputLatencyLab
         | BenchmarkScenario::LauncherResponseStreamline
         | BenchmarkScenario::NavigationTransitions
@@ -827,6 +835,44 @@ fn execute_launcher_response(
     let detail = device.profile(BenchmarkProfile::LauncherResponse, output_dir.clone())?;
     let summary: Value = serde_json::from_str(&detail).map_err(|error| error.to_string())?;
     evaluate_launcher_response_summary(&summary)?;
+    device.verify_health()?;
+    reporter.emit(
+        EventKind::Progress,
+        "benchmark-result",
+        &serde_json::to_string(&json!({
+            "installed_manifest": manifest,
+            "summary": summary,
+            "output_dir": output_dir,
+        }))
+        .map_err(|error| error.to_string())?,
+        Some(100),
+    )?;
+    Ok(Outcome::Passed)
+}
+
+fn execute_launcher_response_attribution(
+    device: &mut impl BenchmarkDevice,
+    manifest: String,
+    output_dir: PathBuf,
+    reporter: &mut Reporter<'_>,
+) -> AgentResult<Outcome> {
+    reporter.emit(
+        EventKind::Progress,
+        "launcher-response-attribution",
+        "collecting control, execution, pprof, PMU, and Streamline evidence",
+        Some(35),
+    )?;
+    let detail = device.profile(
+        BenchmarkProfile::LauncherResponseAttribution,
+        output_dir.clone(),
+    )?;
+    let summary: Value = serde_json::from_str(&detail).map_err(|error| error.to_string())?;
+    if summary["schema"].as_str() != Some("mister-magik-launcher-response-attribution-v1")
+        || summary["artifact_status"].as_str() != Some("passed")
+        || summary["arms"].as_array().map(Vec::len) != Some(5)
+    {
+        return Err("launcher-response attribution did not produce complete v1 evidence".into());
+    }
     device.verify_health()?;
     reporter.emit(
         EventKind::Progress,

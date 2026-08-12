@@ -116,6 +116,13 @@ display mode and ordinary launcher. The report records the exact daemon version,
 daemon hash, archive hash, boot identity, and route results; the repository does
 not copy or redistribute the daemon.
 
+The combined diagnostic command uses the same explicit daemon and makes this
+system timeline a required fifth arm rather than an optional add-on:
+
+```text
+MISTER_GATORD_PATH=/absolute/path/to/gatord scripts/agent benchmark launcher-response-attribution
+```
+
 The audited source contract is Arm gator commit
 `f0774012f36dbdb543e082d3e14ca9db20d0432d` (gator 9.7.2). Its maintained
 `build-linux.sh -p arm-glibc` profile targets ARMv7 Linux hard-float; the
