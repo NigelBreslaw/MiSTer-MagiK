@@ -14625,56 +14625,7 @@ fn restore_installed_orientation_transition_benchmark(
     Ok(())
 }
 
-fn orientation_bracketed_presentation_window(
-    samples: &[Value],
-    first_completion_us: u64,
-    last_completion_us: u64,
-) -> Result<Value> {
-    let snapshots = samples
-        .iter()
-        .filter_map(parse_host_presentation_snapshot)
-        .filter(|snapshot| snapshot.magik_ownership)
-        .collect::<Vec<_>>();
-    let start = snapshots
-        .iter()
-        .copied()
-        .rfind(|snapshot| snapshot.captured_monotonic_us <= first_completion_us)
-        .ok_or("orientation leg has no protocol-v5 start bracket")?;
-    let end = snapshots
-        .iter()
-        .copied()
-        .find(|snapshot| snapshot.captured_monotonic_us >= last_completion_us)
-        .ok_or("orientation leg has no protocol-v5 end bracket")?;
-    let elapsed_us = end
-        .captured_monotonic_us
-        .saturating_sub(start.captured_monotonic_us);
-    if elapsed_us == 0 {
-        return Err("orientation leg protocol-v5 brackets have no elapsed time".into());
-    }
-    let presented = end
-        .presented_vblank_count
-        .wrapping_sub(start.presented_vblank_count);
-    let repeated = end
-        .repeated_vblank_count
-        .wrapping_sub(start.repeated_vblank_count);
-    let ownership_losses = end
-        .ownership_loss_count
-        .wrapping_sub(start.ownership_loss_count);
-    Ok(json!({
-        "schema": "mister-magik-frame-evidence-v6",
-        "start_captured_monotonic_us": start.captured_monotonic_us,
-        "end_captured_monotonic_us": end.captured_monotonic_us,
-        "elapsed_us": elapsed_us,
-        "presented_vblank_delta": presented,
-        "repeated_vblank_delta": repeated,
-        "ownership_loss_delta": ownership_losses,
-        "physical_fps": presented as f64 * 1_000_000.0 / elapsed_us as f64,
-    }))
-}
-
-fn settings_navigation_presentation_snapshot(
-    snapshot: &Value,
-) -> Option<HostPresentationTelemetrySnapshot> {
+fn exact_presentation_snapshot(snapshot: &Value) -> Option<HostPresentationTelemetrySnapshot> {
     Some(HostPresentationTelemetrySnapshot {
         captured_monotonic_us: 0,
         owned_vblank_count: u32::try_from(snapshot.get("owned_vblank_count")?.as_u64()?).ok()?,
@@ -14704,11 +14655,11 @@ fn settings_navigation_exact_presentation_window(record: &Value) -> Result<Value
     }
     let start = window
         .get("start")
-        .and_then(settings_navigation_presentation_snapshot)
+        .and_then(exact_presentation_snapshot)
         .ok_or("Settings navigation leg has no presentation start snapshot")?;
     let end = window
         .get("end")
-        .and_then(settings_navigation_presentation_snapshot)
+        .and_then(exact_presentation_snapshot)
         .ok_or("Settings navigation leg has no presentation end snapshot")?;
     let elapsed_us = window
         .get("elapsed_us")
@@ -14722,6 +14673,53 @@ fn settings_navigation_exact_presentation_window(record: &Value) -> Result<Value
         SETTINGS_NAVIGATION_REFRESH_PERIOD_US,
     )
     .map_err(|error| format!("Settings navigation presentation window is invalid: {error}"))?;
+    Ok(json!({
+        "schema": "mister-magik-frame-evidence-v6",
+        "source": "fpga-owned-vblank-telemetry",
+        "boundary": "transition-start-to-confirmed-endpoint",
+        "elapsed_us": delta.elapsed_us,
+        "owned_vblank_delta": delta.owned_vblank_delta,
+        "presented_vblank_delta": delta.presented_vblank_delta,
+        "repeated_vblank_delta": delta.repeated_vblank_delta,
+        "ownership_loss_delta": delta.ownership_loss_delta,
+        "physical_fps": delta.presented_vblank_delta as f64 * 1_000_000.0
+            / delta.elapsed_us as f64,
+    }))
+}
+
+fn orientation_transition_exact_presentation_window(record: &Value) -> Result<Value> {
+    let window = record
+        .get("presentation_window")
+        .ok_or("orientation transition leg has no exact presentation window")?;
+    if window.get("schema").and_then(Value::as_str)
+        != Some("mister-magik-orientation-transition-presentation-window-v1")
+        || window.get("source").and_then(Value::as_str) != Some("fpga-owned-vblank-telemetry")
+    {
+        return Err("orientation transition leg has invalid presentation-window metadata".into());
+    }
+    if let Some(error) = window.get("error").and_then(Value::as_str) {
+        return Err(format!("orientation transition presentation capture failed: {error}").into());
+    }
+    let start = window
+        .get("start")
+        .and_then(exact_presentation_snapshot)
+        .ok_or("orientation transition leg has no presentation start snapshot")?;
+    let end = window
+        .get("end")
+        .and_then(exact_presentation_snapshot)
+        .ok_or("orientation transition leg has no presentation end snapshot")?;
+    let elapsed_us = window
+        .get("elapsed_us")
+        .and_then(Value::as_u64)
+        .filter(|elapsed_us| *elapsed_us > 0)
+        .ok_or("orientation transition leg has no presentation elapsed time")?;
+    let delta = mister_magik_latch_contract::validate_presentation_telemetry_window(
+        start,
+        end,
+        elapsed_us,
+        SETTINGS_NAVIGATION_REFRESH_PERIOD_US,
+    )
+    .map_err(|error| format!("orientation transition presentation window is invalid: {error}"))?;
     Ok(json!({
         "schema": "mister-magik-frame-evidence-v6",
         "source": "fpga-owned-vblank-telemetry",
@@ -14794,9 +14792,7 @@ fn summarize_orientation_transition_qualification(
                 format!("orientation leg {leg_number} has insufficient frame telemetry").into(),
             );
         }
-        let first_us = frame_u64(selected[0], "completion_monotonic_us");
-        let last_us = frame_u64(selected[selected.len() - 1], "completion_monotonic_us");
-        let protocol = orientation_bracketed_presentation_window(telemetry, first_us, last_us)?;
+        let protocol = orientation_transition_exact_presentation_window(record)?;
         let sequence_gaps = selected
             .windows(2)
             .filter(|pair| {
@@ -26430,6 +26426,28 @@ H: Handlers=event3 js0"#
                 "rendered_endpoint_frame": index * 10 + 2,
                 "presented_endpoint_frame": index * 10 + 2,
                 "presented_sequence": sequence + 1,
+                "presentation_window": {
+                    "schema": "mister-magik-orientation-transition-presentation-window-v1",
+                    "source": "fpga-owned-vblank-telemetry",
+                    "start": {
+                        "owned_vblank_count": presented,
+                        "presented_vblank_count": presented,
+                        "repeated_vblank_count": 0,
+                        "ownership_loss_count": 0,
+                        "magik_ownership": true,
+                        "pending": false,
+                    },
+                    "end": {
+                        "owned_vblank_count": presented + 93,
+                        "presented_vblank_count": presented + 93,
+                        "repeated_vblank_count": 0,
+                        "ownership_loss_count": 0,
+                        "magik_ownership": true,
+                        "pending": false,
+                    },
+                    "elapsed_us": 1_550_000,
+                    "error": null,
+                },
             }));
         }
         (
@@ -26457,6 +26475,10 @@ H: Handlers=event3 js0"#
 
         assert_eq!(summary["status"], "passed");
         assert_eq!(
+            summary["legs"][0]["protocol_v5"]["boundary"],
+            "transition-start-to-confirmed-endpoint"
+        );
+        assert_eq!(
             summary["legs"].as_array().unwrap().len(),
             ORIENTATION_TRANSITION_LEGS_PER_EFFECT
         );
@@ -26473,6 +26495,25 @@ H: Handlers=event3 js0"#
     fn orientation_qualification_rejects_incomplete_routes() {
         let (telemetry, mut completion) = orientation_qualification_fixture();
         completion["records"].as_array_mut().unwrap().pop();
+
+        assert!(
+            summarize_orientation_transition_qualification(
+                &telemetry,
+                completion,
+                "center-pixel-zoom",
+                None,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn orientation_qualification_requires_exact_presentation_windows() {
+        let (telemetry, mut completion) = orientation_qualification_fixture();
+        completion["records"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("presentation_window");
 
         assert!(
             summarize_orientation_transition_qualification(

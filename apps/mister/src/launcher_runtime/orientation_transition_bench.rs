@@ -5,6 +5,8 @@
 
 use super::orientation_transition::OrientationTransitionEffect;
 use crate::settings::ScreenOrientation;
+use mister_magik_latch_contract::PresentationTelemetry;
+use std::time::Instant;
 
 pub const ORIENTATION_TRANSITION_BENCHMARK_ROUTE: [ScreenOrientation; 7] = [
     ScreenOrientation::Normal,
@@ -53,12 +55,22 @@ impl OrientationTransitionBenchmarkLeg {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct OrientationTransitionPresentationCapture {
+    pub telemetry: PresentationTelemetry,
+    pub captured_at: Instant,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OrientationTransitionBenchmarkRecord {
     pub leg: OrientationTransitionBenchmarkLeg,
     pub start_frame: u64,
     pub rendered_endpoint_frame: u64,
     pub presented_endpoint_frame: u64,
     pub presented_sequence: u16,
+    pub presentation_start: Option<OrientationTransitionPresentationCapture>,
+    pub presentation_end: Option<OrientationTransitionPresentationCapture>,
+    pub presentation_elapsed_us: Option<u64>,
+    pub presentation_error: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -78,6 +90,8 @@ pub struct OrientationTransitionBenchmark {
     next_leg: usize,
     start_frame: u64,
     rendered_endpoint_frame: u64,
+    presentation_start: Option<OrientationTransitionPresentationCapture>,
+    presentation_error: Option<String>,
     records: Vec<OrientationTransitionBenchmarkRecord>,
     failure: Option<&'static str>,
 }
@@ -94,6 +108,8 @@ impl OrientationTransitionBenchmark {
             next_leg: 0,
             start_frame: 0,
             rendered_endpoint_frame: 0,
+            presentation_start: None,
+            presentation_error: None,
             records: Vec::with_capacity(ORIENTATION_TRANSITION_BENCHMARK_LEGS),
             failure: None,
         }
@@ -137,6 +153,8 @@ impl OrientationTransitionBenchmark {
         orientation: ScreenOrientation,
         frame: u64,
         sequence: u16,
+        captured_at: Instant,
+        telemetry: std::io::Result<PresentationTelemetry>,
     ) -> Option<OrientationTransitionBenchmarkRecord> {
         match self.phase {
             BenchmarkPhase::WaitingForInitialPresentation => {
@@ -156,12 +174,39 @@ impl OrientationTransitionBenchmark {
                     self.fail("presented-orientation-does-not-match-leg");
                     return None;
                 }
+                let (presentation_end, presentation_elapsed_us) = match telemetry {
+                    Ok(telemetry) => {
+                        let end = OrientationTransitionPresentationCapture {
+                            telemetry,
+                            captured_at,
+                        };
+                        let elapsed_us = self.presentation_start.map(|start| {
+                            captured_at
+                                .saturating_duration_since(start.captured_at)
+                                .as_micros()
+                                .min(u128::from(u64::MAX)) as u64
+                        });
+                        if elapsed_us.is_none() && self.presentation_error.is_none() {
+                            self.presentation_error =
+                                Some("presentation telemetry start was not captured".to_string());
+                        }
+                        (Some(end), elapsed_us)
+                    }
+                    Err(error) => {
+                        self.presentation_error = Some(error.to_string());
+                        (None, None)
+                    }
+                };
                 let record = OrientationTransitionBenchmarkRecord {
                     leg,
                     start_frame: self.start_frame,
                     rendered_endpoint_frame: self.rendered_endpoint_frame,
                     presented_endpoint_frame: frame,
                     presented_sequence: sequence,
+                    presentation_start: self.presentation_start.take(),
+                    presentation_end,
+                    presentation_elapsed_us,
+                    presentation_error: self.presentation_error.take(),
                 };
                 self.records.push(record);
                 self.next_leg += 1;
@@ -194,8 +239,32 @@ impl OrientationTransitionBenchmark {
         }
         self.start_frame = frame;
         self.rendered_endpoint_frame = 0;
+        self.presentation_start = None;
+        self.presentation_error = None;
         self.phase = BenchmarkPhase::Transitioning;
         Some(leg)
+    }
+
+    pub fn capture_presentation_start(
+        &mut self,
+        captured_at: Instant,
+        telemetry: std::io::Result<PresentationTelemetry>,
+    ) {
+        if self.phase != BenchmarkPhase::Transitioning
+            || self.presentation_start.is_some()
+            || self.presentation_error.is_some()
+        {
+            return;
+        }
+        match telemetry {
+            Ok(telemetry) => {
+                self.presentation_start = Some(OrientationTransitionPresentationCapture {
+                    telemetry,
+                    captured_at,
+                });
+            }
+            Err(error) => self.presentation_error = Some(error.to_string()),
+        }
     }
 
     pub fn note_rendered_endpoint(&mut self, frame: u64) {
@@ -233,6 +302,18 @@ impl OrientationTransitionBenchmark {
 mod tests {
     use super::*;
 
+    fn presentation_telemetry(count: u32) -> PresentationTelemetry {
+        PresentationTelemetry {
+            owned_vblank_count: count,
+            presented_vblank_count: count,
+            repeated_vblank_count: 0,
+            ownership_loss_count: 0,
+            active_sequence: u16::try_from(count).unwrap_or(u16::MAX),
+            flags: 1 << 3,
+            crc: 0,
+        }
+    }
+
     #[test]
     fn route_covers_every_directed_orientation_pair_once() {
         let pairs = ORIENTATION_TRANSITION_BENCHMARK_ROUTE
@@ -259,7 +340,13 @@ mod tests {
         let mut benchmark = OrientationTransitionBenchmark::new(true, effect);
         assert!(
             benchmark
-                .note_confirmed_presentation(ScreenOrientation::Normal, 10, 1)
+                .note_confirmed_presentation(
+                    ScreenOrientation::Normal,
+                    10,
+                    1,
+                    Instant::now(),
+                    Ok(presentation_telemetry(1)),
+                )
                 .is_none()
         );
 
@@ -271,11 +358,24 @@ mod tests {
             assert_eq!(leg.index, index);
             assert_eq!(leg.effect, effect);
             assert!(benchmark.take_next_leg(pair[0], 12).is_none());
+            let started_at = Instant::now();
+            benchmark.capture_presentation_start(
+                started_at,
+                Ok(presentation_telemetry(index as u32 + 2)),
+            );
             benchmark.note_rendered_endpoint(12 + index as u64 * 3);
             let record = benchmark
-                .note_confirmed_presentation(pair[1], 13 + index as u64 * 3, index as u16 + 2)
+                .note_confirmed_presentation(
+                    pair[1],
+                    13 + index as u64 * 3,
+                    index as u16 + 2,
+                    started_at + std::time::Duration::from_millis(1_550),
+                    Ok(presentation_telemetry(index as u32 + 95)),
+                )
                 .unwrap();
             assert_eq!(record.leg, leg);
+            assert_eq!(record.presentation_elapsed_us, Some(1_550_000));
+            assert!(record.presentation_error.is_none());
         }
 
         assert!(benchmark.complete());
@@ -294,7 +394,13 @@ mod tests {
     fn mismatched_source_fails_without_starting_an_extra_leg() {
         let mut benchmark =
             OrientationTransitionBenchmark::new(true, OrientationTransitionEffect::BrightnessFade);
-        benchmark.note_confirmed_presentation(ScreenOrientation::Normal, 1, 1);
+        benchmark.note_confirmed_presentation(
+            ScreenOrientation::Normal,
+            1,
+            1,
+            Instant::now(),
+            Ok(presentation_telemetry(1)),
+        );
 
         assert!(
             benchmark
@@ -313,7 +419,13 @@ mod tests {
     fn disabled_benchmark_is_inert() {
         let mut benchmark =
             OrientationTransitionBenchmark::new(false, OrientationTransitionEffect::BrightnessFade);
-        benchmark.note_confirmed_presentation(ScreenOrientation::Normal, 1, 1);
+        benchmark.note_confirmed_presentation(
+            ScreenOrientation::Normal,
+            1,
+            1,
+            Instant::now(),
+            Ok(presentation_telemetry(1)),
+        );
         assert!(!benchmark.enabled());
         assert!(!benchmark.complete());
         assert!(

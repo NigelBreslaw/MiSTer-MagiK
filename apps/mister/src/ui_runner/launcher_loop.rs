@@ -373,6 +373,22 @@ fn settings_navigation_presentation_snapshot_json(
     })
 }
 
+fn orientation_transition_presentation_snapshot_json(
+    capture: OrientationTransitionPresentationCapture,
+) -> serde_json::Value {
+    let telemetry = capture.telemetry;
+    serde_json::json!({
+        "owned_vblank_count": telemetry.owned_vblank_count,
+        "presented_vblank_count": telemetry.presented_vblank_count,
+        "repeated_vblank_count": telemetry.repeated_vblank_count,
+        "ownership_loss_count": telemetry.ownership_loss_count,
+        "active_sequence": telemetry.active_sequence,
+        "magik_ownership": telemetry.magik_ownership(),
+        "pending": telemetry.pending(),
+        "lifetime_invariant_valid": telemetry.lifetime_invariant_valid(),
+    })
+}
+
 fn write_settings_navigation_benchmark_completion(
     directory: &Path,
     benchmark: &SettingsNavigationBenchmark,
@@ -440,6 +456,12 @@ fn write_orientation_transition_benchmark_completion(
         .records()
         .iter()
         .map(|record| {
+            let presentation_start = record
+                .presentation_start
+                .map(orientation_transition_presentation_snapshot_json);
+            let presentation_end = record
+                .presentation_end
+                .map(orientation_transition_presentation_snapshot_json);
             serde_json::json!({
                 "leg": record.leg.index + 1,
                 "effect": record.leg.effect.id(),
@@ -450,6 +472,14 @@ fn write_orientation_transition_benchmark_completion(
                 "rendered_endpoint_frame": record.rendered_endpoint_frame,
                 "presented_endpoint_frame": record.presented_endpoint_frame,
                 "presented_sequence": record.presented_sequence,
+                "presentation_window": {
+                    "schema": "mister-magik-orientation-transition-presentation-window-v1",
+                    "source": "fpga-owned-vblank-telemetry",
+                    "start": presentation_start,
+                    "end": presentation_end,
+                    "elapsed_us": record.presentation_elapsed_us,
+                    "error": record.presentation_error,
+                },
             })
         })
         .collect::<Vec<_>>();
@@ -5806,6 +5836,8 @@ pub(super) fn run_launcher_loop(
                 orientation_benchmark.fail("benchmark-effect-changed-during-transition");
                 continue;
             }
+            orientation_benchmark
+                .capture_presentation_start(Instant::now(), f.read_magik_presentation_telemetry());
             let animated = begin_orientation_transition(
                 &app,
                 window,
@@ -11007,11 +11039,14 @@ pub(super) fn run_launcher_loop(
             scheduler.catalog_worker_running(),
         );
         if accepted_and_active_confirmed
+            && orientation_benchmark.enabled()
             && full_screen_transition.state() == FullScreenTransitionState::Live
             && let Some(record) = orientation_benchmark.note_confirmed_presentation(
                 nav.settings.screen_orientation,
                 frames,
                 confirmed_present_sequence,
+                Instant::now(),
+                f.read_magik_presentation_telemetry(),
             )
         {
             print_startup_event(
