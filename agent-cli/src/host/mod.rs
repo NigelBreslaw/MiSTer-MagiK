@@ -12929,7 +12929,6 @@ fn launch_return_once_next_game(
 fn launch_return_once_initial_env() -> Vec<(String, String)> {
     vec![
         ("MISTER_CATALOG_REFRESH".into(), "off".into()),
-        ("MISTER_LAUNCHER_START_SCREEN".into(), "home".into()),
         ("MISTER_ARCADE_SELECTED_INDEX".into(), "0".into()),
     ]
 }
@@ -22924,11 +22923,12 @@ mod tests {
     #[test]
     fn launch_return_once_starts_at_home_without_automatic_relaunch() {
         let environment = launch_return_once_initial_env();
-        assert!(environment.contains(&("MISTER_LAUNCHER_START_SCREEN".into(), "home".into())));
         assert!(environment.contains(&("MISTER_ARCADE_SELECTED_INDEX".into(), "0".into())));
         assert!(!environment.iter().any(|(key, _)| matches!(
             key.as_str(),
-            "MISTER_LAUNCHER_AUTO_LAUNCH_SELECTED" | "MISTER_LAUNCHER_INPUT_SCRIPT"
+            "MISTER_LAUNCHER_START_SCREEN"
+                | "MISTER_LAUNCHER_AUTO_LAUNCH_SELECTED"
+                | "MISTER_LAUNCHER_INPUT_SCRIPT"
         )));
         assert!(LAUNCH_RETURN_ONCE_GAME.ends_with("1943 Kai Midway Kaisen (Japan).mra"));
         assert_eq!(LAUNCH_RETURN_ONCE_STEP_DEADLINE_MS, 2_000);
