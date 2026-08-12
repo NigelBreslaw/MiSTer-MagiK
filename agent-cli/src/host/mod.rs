@@ -7800,6 +7800,15 @@ struct SystemWideStreamlineCapture<'a> {
     spec: SystemWideStreamlineCaptureSpec,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct StreamlineInstalledIdentity {
+    boot_id: String,
+    platform_manifest_sha256: String,
+    magik_revision: String,
+    gui_sha256: String,
+    agent_sha256: String,
+}
+
 impl<'a> SystemWideStreamlineCapture<'a> {
     fn new(
         session: &'a Session,
@@ -7846,6 +7855,10 @@ impl<'a> SystemWideStreamlineCapture<'a> {
 
     fn wait_ready(&self, timeout: Duration) -> Result<()> {
         wait_streamline_system_wide_ready(self.session, timeout)
+    }
+
+    fn monotonic_ns(&self, phase: &str) -> Result<u64> {
+        streamline_device_monotonic_ns(self.session, phase)
     }
 
     fn stop(
@@ -8046,10 +8059,9 @@ fn profile_installed_launcher_response_streamline(
     let gatord_sha256 = file_sha256(gatord.clone())?;
     fs::create_dir_all(output_dir)?;
     let session = connect_with(&config.connection, 30)?;
-    let boot_id = remote_read(&session, "/proc/sys/kernel/random/boot_id")
-        .ok_or("device boot id is unavailable before launcher-response Streamline capture")?;
     let manifest = remote_read(&session, "/media/fat/mister-magik-dev/platform-v3.manifest")
         .ok_or("development manifest is unavailable before launcher-response Streamline capture")?;
+    let installed_identity = streamline_installed_identity(&session, &manifest)?;
     let original_reply = exec_checked_output(
         &session,
         "query launcher-response Streamline display mode",
@@ -8081,18 +8093,26 @@ fn profile_installed_launcher_response_streamline(
         output_dir,
         LAUNCHER_RESPONSE_STREAMLINE_CAPTURE,
     );
-    let run_result = (|| -> Result<(String, String, Value)> {
+    let run_result = (|| -> Result<(String, String, Value, u64, u64)> {
         let gatord_version = capture.prepare(&gatord)?;
         let capture_thread = capture.start();
         capture.wait_ready(Duration::from_secs(10))?;
+        let capture_started_monotonic_ns = capture.monotonic_ns("capture start")?;
         let route_result =
             run_launcher_response_scenario(&session, "60-hz", "streamline-round-trip", "off", true);
         let capture_result = capture.stop(capture_thread);
+        let capture_ended_monotonic_ns = capture.monotonic_ns("capture end")?;
         capture.retain_log()?;
         let route = route_result?;
         capture_result?;
         let local_archive_sha256 = capture.package_extract()?;
-        Ok((gatord_version, local_archive_sha256, route))
+        Ok((
+            gatord_version,
+            local_archive_sha256,
+            route,
+            capture_started_monotonic_ns,
+            capture_ended_monotonic_ns,
+        ))
     })();
 
     let cleanup_result = capture.cleanup();
@@ -8110,7 +8130,13 @@ fn profile_installed_launcher_response_streamline(
         original_mode,
         "launcher-response Streamline display restoration",
     );
-    let (gatord_version, archive_sha256, route) = match (
+    let (
+        gatord_version,
+        archive_sha256,
+        route,
+        capture_started_monotonic_ns,
+        capture_ended_monotonic_ns,
+    ) = match (
         run_result,
         cleanup_result,
         launcher_restore_result,
@@ -8129,11 +8155,6 @@ fn profile_installed_launcher_response_streamline(
         }
     };
 
-    let final_boot_id = remote_read(&session, "/proc/sys/kernel/random/boot_id")
-        .ok_or("device boot id is unavailable after launcher-response Streamline capture")?;
-    if final_boot_id != boot_id {
-        return Err("device rebooted during launcher-response Streamline capture".into());
-    }
     let final_manifest = remote_read(&session, "/media/fat/mister-magik-dev/platform-v3.manifest")
         .ok_or("development manifest is unavailable after launcher-response Streamline capture")?;
     if final_manifest != manifest {
@@ -8142,6 +8163,24 @@ fn profile_installed_launcher_response_streamline(
                 .into(),
         );
     }
+    let final_identity = streamline_installed_identity(&session, &final_manifest)?;
+    if final_identity != installed_identity {
+        return Err(
+            "installed identity changed during launcher-response Streamline capture".into(),
+        );
+    }
+    let capture_manifest = streamline_capture_manifest(
+        &installed_identity,
+        &gatord_version,
+        &gatord_sha256,
+        LAUNCHER_RESPONSE_STREAMLINE_CAPTURE,
+        capture_started_monotonic_ns,
+        capture_ended_monotonic_ns,
+    );
+    fs::write(
+        output_dir.join("capture-manifest.json"),
+        format!("{}\n", serde_json::to_string_pretty(&capture_manifest)?),
+    )?;
     let summary = json!({
         "schema": "mister-magik-launcher-response-streamline-v1",
         "artifact_status": "passed",
@@ -8152,6 +8191,8 @@ fn profile_installed_launcher_response_streamline(
         "archive_sha256": archive_sha256,
         "capture": "mister-magik.apc",
         "archive": "mister-magik-launcher-response.apc.tar.gz",
+        "capture_manifest": "capture-manifest.json",
+        "identity": capture_manifest,
         "display_mode": capture_mode.id,
         "refresh_hz": 60,
         "clock_domain": "CLOCK_MONOTONIC",
@@ -8167,6 +8208,101 @@ fn profile_installed_launcher_response_streamline(
         format!("{}\n", serde_json::to_string_pretty(&summary)?),
     )?;
     serde_json::to_string(&summary).map_err(Into::into)
+}
+
+fn streamline_installed_identity(
+    session: &Session,
+    platform_manifest: &str,
+) -> Result<StreamlineInstalledIdentity> {
+    let boot_id = remote_read(session, "/proc/sys/kernel/random/boot_id")
+        .ok_or("device boot id is unavailable for Streamline capture identity")?
+        .trim()
+        .to_owned();
+    if boot_id.is_empty() {
+        return Err("device boot id is empty for Streamline capture identity".into());
+    }
+    let gui_sha256 = exact_manifest_field(platform_manifest, "gui_sha256", 64)?;
+    let installed_gui_sha256 = streamline_remote_sha256(
+        session,
+        "installed GUI",
+        "/media/fat/mister-magik-dev/mister-magik-fb",
+    )?;
+    if installed_gui_sha256 != gui_sha256 {
+        return Err("installed GUI hash does not match the development manifest".into());
+    }
+    Ok(StreamlineInstalledIdentity {
+        boot_id,
+        platform_manifest_sha256: encode_hex(&Sha256::digest(platform_manifest.as_bytes())),
+        magik_revision: exact_manifest_field(platform_manifest, "magik_revision", 40)?,
+        gui_sha256,
+        agent_sha256: streamline_remote_sha256(
+            session,
+            "installed device agent",
+            "/media/fat/mister-magik-dev/mister-magik-agent",
+        )?,
+    })
+}
+
+fn streamline_remote_sha256(session: &Session, label: &str, path: &str) -> Result<String> {
+    let digest = exec_checked_output(
+        session,
+        &format!("hash {label} for Streamline identity"),
+        &format!(
+            "test -f {path}; sha256sum {path} | cut -d' ' -f1",
+            path = sh(path)
+        ),
+    )?
+    .stdout
+    .trim()
+    .to_owned();
+    if digest.len() != 64 || !digest.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(format!("{label} returned an invalid SHA-256 identity").into());
+    }
+    Ok(digest)
+}
+
+fn streamline_device_monotonic_ns(session: &Session, phase: &str) -> Result<u64> {
+    let value = exec_checked_output(
+        session,
+        &format!("read Streamline {phase} monotonic clock"),
+        "awk '{printf \"%.0f\\n\", $1 * 1000000000}' /proc/uptime",
+    )?
+    .stdout
+    .trim()
+    .parse::<u64>()?;
+    if value == 0 {
+        return Err(format!("Streamline {phase} monotonic timestamp is zero").into());
+    }
+    Ok(value)
+}
+
+fn streamline_capture_manifest(
+    identity: &StreamlineInstalledIdentity,
+    gatord_version: &str,
+    gatord_sha256: &str,
+    spec: SystemWideStreamlineCaptureSpec,
+    started_monotonic_ns: u64,
+    ended_monotonic_ns: u64,
+) -> Value {
+    json!({
+        "schema": "mister-magik-streamline-capture-manifest-v1",
+        "boot_id": identity.boot_id,
+        "platform_manifest_sha256": identity.platform_manifest_sha256,
+        "magik_revision": identity.magik_revision,
+        "gui_sha256": identity.gui_sha256,
+        "agent_sha256": identity.agent_sha256,
+        "gatord_version": gatord_version,
+        "gatord_sha256": gatord_sha256,
+        "clock_domain": "CLOCK_MONOTONIC",
+        "capture_started_monotonic_ns": started_monotonic_ns,
+        "capture_ended_monotonic_ns": ended_monotonic_ns,
+        "capture_duration_ns": ended_monotonic_ns.saturating_sub(started_monotonic_ns),
+        "capture_mode": "system-wide-low-kernel-no-unwind",
+        "max_duration_seconds": spec.max_duration_seconds,
+        "system_wide": true,
+        "exclude_kernel": false,
+        "call_stack_unwinding": false,
+    })
 }
 
 fn streamline_gatord_path(value: Option<std::ffi::OsString>) -> Result<PathBuf> {
@@ -19738,6 +19874,35 @@ mod tests {
         assert!(command.contains("--max-duration 120"));
         assert!(command.contains(STREAMLINE_REMOTE_READY));
         assert!(command.contains(STREAMLINE_TRACEFS_MARKER));
+    }
+
+    #[test]
+    fn streamline_capture_manifest_binds_identity_and_monotonic_window() {
+        let identity = StreamlineInstalledIdentity {
+            boot_id: "boot-id".into(),
+            platform_manifest_sha256: "a".repeat(64),
+            magik_revision: "b".repeat(40),
+            gui_sha256: "c".repeat(64),
+            agent_sha256: "d".repeat(64),
+        };
+        let manifest = streamline_capture_manifest(
+            &identity,
+            "Streamline Data Recorder v9.7.2 (Build oss)",
+            &"e".repeat(64),
+            LAUNCHER_RESPONSE_STREAMLINE_CAPTURE,
+            1_000,
+            4_500,
+        );
+        assert_eq!(
+            manifest["schema"],
+            "mister-magik-streamline-capture-manifest-v1"
+        );
+        assert_eq!(manifest["boot_id"], "boot-id");
+        assert_eq!(manifest["agent_sha256"], "d".repeat(64));
+        assert_eq!(manifest["capture_started_monotonic_ns"], 1_000);
+        assert_eq!(manifest["capture_ended_monotonic_ns"], 4_500);
+        assert_eq!(manifest["capture_duration_ns"], 3_500);
+        assert_eq!(manifest["capture_mode"], "system-wide-low-kernel-no-unwind");
     }
 
     #[test]
