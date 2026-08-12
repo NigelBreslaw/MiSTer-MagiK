@@ -120,6 +120,199 @@ fn io_operation_evidence(
 }
 
 #[cfg(any(target_os = "linux", test))]
+mod png_capture {
+    use flate2::{Compression, write::ZlibEncoder};
+    use std::io::Write;
+    use std::time::Instant;
+
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub struct Geometry {
+        pub width: usize,
+        pub height: usize,
+        pub stride: usize,
+        pub bpp: usize,
+    }
+
+    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+    pub struct Timing {
+        pub rgba_convert_us: u64,
+        pub zlib_encode_us: u64,
+        pub crc32_us: u64,
+        pub png_wrap_us: u64,
+    }
+
+    pub struct EncodeResult {
+        pub bytes: Vec<u8>,
+        pub timing: Timing,
+        pub workspace_peak_bytes: u64,
+    }
+
+    pub fn encode(raw: &[u8], geometry: Geometry) -> Result<EncodeResult, String> {
+        validate(raw, geometry)?;
+        let (idat, rgba_convert_us, zlib_encode_us, stream_peak_bytes) =
+            encode_scanlines(raw, geometry)?;
+
+        let wrap_t = Instant::now();
+        let mut png = Vec::new();
+        png.extend_from_slice(b"\x89PNG\r\n\x1a\n");
+        let mut ihdr = Vec::with_capacity(13);
+        ihdr.extend_from_slice(
+            &u32::try_from(geometry.width)
+                .map_err(|_| "PNG width exceeds u32".to_string())?
+                .to_be_bytes(),
+        );
+        ihdr.extend_from_slice(
+            &u32::try_from(geometry.height)
+                .map_err(|_| "PNG height exceeds u32".to_string())?
+                .to_be_bytes(),
+        );
+        // Eight-bit PNG truecolour: the source has no useful alpha channel.
+        ihdr.extend_from_slice(&[8, 2, 0, 0, 0]);
+        let crc32_us = png_chunk(&mut png, b"IHDR", &ihdr)
+            .saturating_add(png_chunk(&mut png, b"IDAT", &idat))
+            .saturating_add(png_chunk(&mut png, b"IEND", &[]));
+        let png_wrap_us = elapsed_us(wrap_t);
+        let wrap_peak_bytes = (idat.len() as u64).saturating_add(png.len() as u64);
+
+        Ok(EncodeResult {
+            bytes: png,
+            timing: Timing {
+                rgba_convert_us,
+                zlib_encode_us,
+                crc32_us,
+                png_wrap_us,
+            },
+            workspace_peak_bytes: stream_peak_bytes.max(wrap_peak_bytes),
+        })
+    }
+
+    pub fn logical_rgba_len(geometry: Geometry) -> Result<usize, String> {
+        geometry
+            .width
+            .checked_mul(4)
+            .and_then(|bytes| bytes.checked_add(1))
+            .and_then(|row| row.checked_mul(geometry.height))
+            .ok_or_else(|| "PNG image size overflow".to_string())
+    }
+
+    fn validate(raw: &[u8], geometry: Geometry) -> Result<(), String> {
+        let bytes_per_pixel = match geometry.bpp {
+            16 => 2,
+            32 => 4,
+            _ => return Err(format!("unsupported framebuffer bpp {}", geometry.bpp)),
+        };
+        let active_row_bytes = geometry
+            .width
+            .checked_mul(bytes_per_pixel)
+            .ok_or_else(|| "framebuffer row size overflow".to_string())?;
+        if geometry.stride < active_row_bytes {
+            return Err(format!(
+                "framebuffer stride {} is smaller than active row {active_row_bytes}",
+                geometry.stride
+            ));
+        }
+        let expected = geometry
+            .stride
+            .checked_mul(geometry.height)
+            .ok_or_else(|| "framebuffer byte size overflow".to_string())?;
+        if raw.len() < expected {
+            return Err(format!(
+                "raw framebuffer has {} bytes, expected at least {expected}",
+                raw.len()
+            ));
+        }
+        let _ = geometry
+            .width
+            .checked_mul(3)
+            .and_then(|bytes| bytes.checked_add(1))
+            .ok_or_else(|| "PNG scanline size overflow".to_string())?;
+        Ok(())
+    }
+
+    fn encode_scanlines(
+        raw: &[u8],
+        geometry: Geometry,
+    ) -> Result<(Vec<u8>, u64, u64, u64), String> {
+        let row_capacity = geometry
+            .width
+            .checked_mul(3)
+            .and_then(|bytes| bytes.checked_add(1))
+            .ok_or_else(|| "PNG scanline size overflow".to_string())?;
+        let mut row = Vec::with_capacity(row_capacity);
+        let mut encoder = ZlibEncoder::new(Vec::new(), Compression::fast());
+        let mut convert_us = 0u64;
+        let mut zlib_us = 0u64;
+        let mut peak_bytes = 0u64;
+
+        for y in 0..geometry.height {
+            let convert_t = Instant::now();
+            row.clear();
+            row.push(0);
+            let source_row = &raw[y * geometry.stride..(y + 1) * geometry.stride];
+            match geometry.bpp {
+                16 => {
+                    for pixel in source_row[..geometry.width * 2].chunks_exact(2) {
+                        let value = u16::from_le_bytes([pixel[0], pixel[1]]);
+                        let r5 = (value >> 11) & 0x1f;
+                        let g6 = (value >> 5) & 0x3f;
+                        let b5 = value & 0x1f;
+                        row.extend_from_slice(&[
+                            ((r5 << 3) | (r5 >> 2)) as u8,
+                            ((g6 << 2) | (g6 >> 4)) as u8,
+                            ((b5 << 3) | (b5 >> 2)) as u8,
+                        ]);
+                    }
+                }
+                32 => {
+                    for pixel in source_row[..geometry.width * 4].chunks_exact(4) {
+                        row.extend_from_slice(&[pixel[2], pixel[1], pixel[0]]);
+                    }
+                }
+                _ => unreachable!("geometry was validated"),
+            }
+            convert_us = convert_us.saturating_add(elapsed_us(convert_t));
+
+            let zlib_t = Instant::now();
+            encoder.write_all(&row).map_err(|error| error.to_string())?;
+            zlib_us = zlib_us.saturating_add(elapsed_us(zlib_t));
+            peak_bytes =
+                peak_bytes.max((row.len() as u64).saturating_add(encoder.get_ref().len() as u64));
+        }
+
+        let finish_t = Instant::now();
+        let idat = encoder.finish().map_err(|error| error.to_string())?;
+        zlib_us = zlib_us.saturating_add(elapsed_us(finish_t));
+        peak_bytes = peak_bytes.max(idat.len() as u64);
+        Ok((idat, convert_us, zlib_us, peak_bytes))
+    }
+
+    fn png_chunk(out: &mut Vec<u8>, tag: &[u8; 4], data: &[u8]) -> u64 {
+        out.extend_from_slice(&(data.len() as u32).to_be_bytes());
+        out.extend_from_slice(tag);
+        out.extend_from_slice(data);
+        let crc_start = Instant::now();
+        let crc = crc32_extend(crc32_extend(0xffff_ffff, tag), data);
+        out.extend_from_slice(&(!crc).to_be_bytes());
+        elapsed_us(crc_start)
+    }
+
+    fn crc32_extend(mut crc: u32, data: &[u8]) -> u32 {
+        for &byte in data {
+            crc ^= u32::from(byte);
+            for _ in 0..8 {
+                let mask = 0u32.wrapping_sub(crc & 1);
+                crc = (crc >> 1) ^ (0xedb8_8320 & mask);
+            }
+        }
+        crc
+    }
+
+    fn elapsed_us(start: Instant) -> u64 {
+        start.elapsed().as_micros().min(u128::from(u64::MAX)) as u64
+    }
+}
+
+#[cfg(any(target_os = "linux", test))]
 #[cfg_attr(all(test, not(target_os = "linux")), allow(dead_code))]
 mod sd_browse {
     use quick_xml::Reader as XmlReader;
@@ -914,6 +1107,7 @@ mod library_snapshot {
 
 #[cfg(target_os = "linux")]
 mod linux {
+    use super::png_capture;
     use super::scanout_slots_contract::{
         DEVICE as SCANOUT_SLOTS_DEVICE, EXPECTED_LAYOUT, GET_LAYOUT as SCANOUT_SLOTS_GET_LAYOUT,
         ScanoutSlotsLayout,
@@ -922,7 +1116,6 @@ mod linux {
         ControlRequest, io_operation_evidence, parse_control_request, require_ok_main_reply,
         select_framebuffer_capture,
     };
-    use flate2::{Compression, write::ZlibEncoder};
     use libc::{c_ulong, ioctl};
     use mister_magik_framebuffer_stream::{
         FLAG_LZ4_SIZE_PREPENDED, FrameKind, MAX_FRAME_SURFACE_BYTES,
@@ -2975,20 +3168,6 @@ mod linux {
         }
     }
 
-    #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-    struct PngEncodeTiming {
-        rgba_convert_us: u64,
-        zlib_encode_us: u64,
-        crc32_us: u64,
-        png_wrap_us: u64,
-    }
-
-    struct PngEncodeResult {
-        bytes: Vec<u8>,
-        timing: PngEncodeTiming,
-        workspace_peak_bytes: u64,
-    }
-
     struct RawFramebufferCapture {
         result: Value,
         payload: Vec<u8>,
@@ -3126,7 +3305,7 @@ mod linux {
             "stride": geometry.stride,
             "bpp": geometry.bpp,
             "raw_bytes": raw.len(),
-            "rgba_bytes": rgba_len(geometry)?,
+            "rgba_bytes": logical_rgba_len(geometry)?,
             "png_bytes": png.bytes.len(),
             "png_hex_bytes": png_hex.len(),
             "png_hex": png_hex,
@@ -4170,144 +4349,24 @@ mod linux {
         Some((width.parse().ok()?, height.parse().ok()?))
     }
 
+    fn png_geometry(geometry: FramebufferGeometry) -> png_capture::Geometry {
+        png_capture::Geometry {
+            width: geometry.width,
+            height: geometry.height,
+            stride: geometry.stride,
+            bpp: geometry.bpp,
+        }
+    }
+
     fn framebuffer_png(
         raw: &[u8],
         geometry: FramebufferGeometry,
-    ) -> Result<PngEncodeResult, String> {
-        let expected = geometry.bytes()?;
-        if raw.len() < expected {
-            return Err(format!(
-                "raw framebuffer has {} bytes, expected at least {expected}",
-                raw.len()
-            ));
-        }
-
-        let row_bytes = png_row_bytes(geometry)?;
-        let mut rgba = Vec::with_capacity(
-            row_bytes
-                .checked_mul(geometry.height)
-                .ok_or_else(|| "PNG image size overflow".to_string())?,
-        );
-        let rgba_t = Instant::now();
-        for y in 0..geometry.height {
-            rgba.push(0);
-            for x in 0..geometry.width {
-                let (r, g, b) = rgb_from_framebuffer(raw, geometry, x, y).unwrap_or((0, 0, 0));
-                rgba.extend_from_slice(&[r, g, b, 0xff]);
-            }
-        }
-        let rgba_convert_us = elapsed_us(rgba_t);
-
-        let zlib_t = Instant::now();
-        let idat = zlib_fast(&rgba)?;
-        let zlib_encode_us = elapsed_us(zlib_t);
-
-        let wrap_t = Instant::now();
-        let mut png = Vec::new();
-        png.extend_from_slice(b"\x89PNG\r\n\x1a\n");
-        let mut ihdr = Vec::new();
-        ihdr.extend_from_slice(&(geometry.width as u32).to_be_bytes());
-        ihdr.extend_from_slice(&(geometry.height as u32).to_be_bytes());
-        ihdr.extend_from_slice(&[8, 6, 0, 0, 0]);
-        let crc32_us = png_chunk(&mut png, b"IHDR", &ihdr)
-            .saturating_add(png_chunk(&mut png, b"IDAT", &idat))
-            .saturating_add(png_chunk(&mut png, b"IEND", &[]));
-        let png_wrap_us = elapsed_us(wrap_t);
-        let workspace_peak_bytes = (rgba.len() as u64)
-            .saturating_add(idat.len() as u64)
-            .saturating_add(png.len() as u64);
-
-        Ok(PngEncodeResult {
-            bytes: png,
-            timing: PngEncodeTiming {
-                rgba_convert_us,
-                zlib_encode_us,
-                crc32_us,
-                png_wrap_us,
-            },
-            workspace_peak_bytes,
-        })
+    ) -> Result<png_capture::EncodeResult, String> {
+        png_capture::encode(raw, png_geometry(geometry))
     }
 
-    fn png_row_bytes(geometry: FramebufferGeometry) -> Result<usize, String> {
-        geometry
-            .width
-            .checked_mul(4)
-            .and_then(|bytes| bytes.checked_add(1))
-            .ok_or_else(|| "PNG row size overflow".to_string())
-    }
-
-    fn rgba_len(geometry: FramebufferGeometry) -> Result<usize, String> {
-        png_row_bytes(geometry)?
-            .checked_mul(geometry.height)
-            .ok_or_else(|| "PNG image size overflow".to_string())
-    }
-
-    fn rgb_from_framebuffer(
-        raw: &[u8],
-        geometry: FramebufferGeometry,
-        x: usize,
-        y: usize,
-    ) -> Option<(u8, u8, u8)> {
-        match geometry.bpp {
-            16 => {
-                let i = y
-                    .checked_mul(geometry.stride)?
-                    .checked_add(x.checked_mul(2)?)?;
-                if i + 1 >= raw.len() {
-                    return None;
-                }
-                let v = u16::from_le_bytes([raw[i], raw[i + 1]]);
-                let r5 = (v >> 11) & 0x1f;
-                let g6 = (v >> 5) & 0x3f;
-                let b5 = v & 0x1f;
-                Some((
-                    ((r5 << 3) | (r5 >> 2)) as u8,
-                    ((g6 << 2) | (g6 >> 4)) as u8,
-                    ((b5 << 3) | (b5 >> 2)) as u8,
-                ))
-            }
-            32 => {
-                let i = y
-                    .checked_mul(geometry.stride)?
-                    .checked_add(x.checked_mul(4)?)?;
-                if i + 2 >= raw.len() {
-                    return None;
-                }
-                Some((raw[i + 2], raw[i + 1], raw[i]))
-            }
-            _ => None,
-        }
-    }
-
-    fn zlib_fast(data: &[u8]) -> Result<Vec<u8>, String> {
-        let mut encoder = ZlibEncoder::new(Vec::new(), Compression::fast());
-        encoder.write_all(data).map_err(|err| err.to_string())?;
-        encoder.finish().map_err(|err| err.to_string())
-    }
-
-    fn png_chunk(out: &mut Vec<u8>, tag: &[u8; 4], data: &[u8]) -> u64 {
-        out.extend_from_slice(&(data.len() as u32).to_be_bytes());
-        out.extend_from_slice(tag);
-        out.extend_from_slice(data);
-        let mut crc_input = Vec::with_capacity(tag.len() + data.len());
-        crc_input.extend_from_slice(tag);
-        crc_input.extend_from_slice(data);
-        let crc_start = Instant::now();
-        out.extend_from_slice(&crc32(&crc_input).to_be_bytes());
-        elapsed_us(crc_start)
-    }
-
-    fn crc32(data: &[u8]) -> u32 {
-        let mut crc = 0xffff_ffffu32;
-        for &byte in data {
-            crc ^= u32::from(byte);
-            for _ in 0..8 {
-                let mask = 0u32.wrapping_sub(crc & 1);
-                crc = (crc >> 1) ^ (0xedb8_8320 & mask);
-            }
-        }
-        !crc
+    fn logical_rgba_len(geometry: FramebufferGeometry) -> Result<usize, String> {
+        png_capture::logical_rgba_len(png_geometry(geometry))
     }
 
     fn encode_hex(bytes: &[u8]) -> String {
@@ -5170,8 +5229,141 @@ fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flate2::read::ZlibDecoder;
+    use std::io::Read;
     #[cfg(target_os = "linux")]
-    use std::io::{BufReader, Cursor, Read};
+    use std::io::{BufReader, Cursor};
+
+    fn decode_truecolor_png(png: &[u8]) -> (usize, usize, Vec<u8>) {
+        assert_eq!(&png[..8], b"\x89PNG\r\n\x1a\n");
+        let mut offset = 8usize;
+        let mut width = 0usize;
+        let mut height = 0usize;
+        let mut idat = Vec::new();
+        let mut saw_iend = false;
+        while offset < png.len() {
+            let length = u32::from_be_bytes(png[offset..offset + 4].try_into().unwrap()) as usize;
+            let tag = &png[offset + 4..offset + 8];
+            let data = &png[offset + 8..offset + 8 + length];
+            match tag {
+                b"IHDR" => {
+                    assert_eq!(length, 13);
+                    width = u32::from_be_bytes(data[..4].try_into().unwrap()) as usize;
+                    height = u32::from_be_bytes(data[4..8].try_into().unwrap()) as usize;
+                    assert_eq!(&data[8..], &[8, 2, 0, 0, 0]);
+                }
+                b"IDAT" => idat.extend_from_slice(data),
+                b"IEND" => saw_iend = true,
+                _ => {}
+            }
+            offset += 12 + length;
+        }
+        assert_eq!(offset, png.len());
+        assert!(saw_iend);
+        let mut decoded = Vec::new();
+        ZlibDecoder::new(idat.as_slice())
+            .read_to_end(&mut decoded)
+            .unwrap();
+        (width, height, decoded)
+    }
+
+    #[test]
+    fn png_capture_streams_rgb565_padded_odd_scanlines_as_truecolor() {
+        let geometry = png_capture::Geometry {
+            width: 3,
+            height: 2,
+            stride: 8,
+            bpp: 16,
+        };
+        let mut raw = vec![0xa5; geometry.stride * geometry.height];
+        let pixels = [[0xf800u16, 0x07e0, 0x001f], [0xffff, 0x0000, 0x8410]];
+        for (y, row) in pixels.iter().enumerate() {
+            for (x, pixel) in row.iter().enumerate() {
+                raw[y * geometry.stride + x * 2..y * geometry.stride + x * 2 + 2]
+                    .copy_from_slice(&pixel.to_le_bytes());
+            }
+        }
+
+        let encoded = png_capture::encode(&raw, geometry).unwrap();
+        let (width, height, decoded) = decode_truecolor_png(&encoded.bytes);
+
+        assert_eq!((width, height), (3, 2));
+        assert_eq!(
+            decoded,
+            vec![
+                0, 255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 255, 255, 255, 0, 0, 0, 132, 130, 132,
+            ]
+        );
+        assert!(encoded.workspace_peak_bytes < 256);
+        assert_eq!(png_capture::logical_rgba_len(geometry).unwrap(), 26);
+    }
+
+    #[test]
+    fn png_capture_preserves_bgrx_pixels_across_entropy_cases() {
+        for raw in [
+            vec![0u8; 16],
+            vec![
+                0, 1, 2, 3, 127, 128, 129, 130, 253, 254, 255, 17, 31, 63, 95, 127,
+            ],
+        ] {
+            let geometry = png_capture::Geometry {
+                width: 4,
+                height: 1,
+                stride: 16,
+                bpp: 32,
+            };
+            let encoded = png_capture::encode(&raw, geometry).unwrap();
+            let (_, _, decoded) = decode_truecolor_png(&encoded.bytes);
+            let mut expected = vec![0];
+            for pixel in raw.chunks_exact(4) {
+                expected.extend_from_slice(&[pixel[2], pixel[1], pixel[0]]);
+            }
+            assert_eq!(decoded, expected);
+        }
+    }
+
+    #[test]
+    fn png_capture_rejects_malformed_geometry_before_allocation() {
+        assert!(
+            png_capture::encode(
+                &[0; 4],
+                png_capture::Geometry {
+                    width: 2,
+                    height: 1,
+                    stride: 3,
+                    bpp: 16,
+                },
+            )
+            .unwrap_err()
+            .contains("stride")
+        );
+        assert!(
+            png_capture::encode(
+                &[0; 4],
+                png_capture::Geometry {
+                    width: 1,
+                    height: 2,
+                    stride: 4,
+                    bpp: 32,
+                },
+            )
+            .unwrap_err()
+            .contains("expected at least")
+        );
+        assert!(
+            png_capture::encode(
+                &[],
+                png_capture::Geometry {
+                    width: 1,
+                    height: 1,
+                    stride: 4,
+                    bpp: 24,
+                },
+            )
+            .unwrap_err()
+            .contains("unsupported")
+        );
+    }
 
     #[cfg(target_os = "linux")]
     #[test]
