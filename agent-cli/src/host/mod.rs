@@ -329,6 +329,9 @@ impl NativeDevice {
                         | LauncherCommand::CaptureSnesHub(_)
                         | LauncherCommand::ReturnToLauncher(_),
                 }
+                | DeviceCommand::Fpga {
+                    command: DeviceFpgaCommand::InstallExperimental(_),
+                }
         );
         let mutation = command.is_mutation();
         let access = match (agent, mutation) {
