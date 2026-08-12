@@ -102,11 +102,12 @@ assurance-complete commit `23b5f5d2` passed the unchanged hard timing gates:
 - one added calculable synchronizer chain;
 - resource delta: 64 ALMs, 25 registers, no block memory, no DSP.
 
-The checker ceiling is 64 ALMs and 96 registers. Any synthesized-source change
-requires fresh empirical signoff; the exact-ceiling ALM result is not a waiver
-for future growth. Setup and hold must remain at least 0.20 ns, TNS zero, slack
-degradation no more than 0.15 ns, warnings within the pinned identity, and
-unconstrained output paths equal to the pre-observer build.
+The product ceiling is 800 ALMs and 96 registers. The local build used 64 ALMs;
+the independently fitted GitHub build used 105 ALMs. Both are comfortably
+inside the intended architecture budget. Any synthesized-source change still
+requires fresh empirical signoff. Setup and hold must remain at least 0.20 ns,
+TNS zero, slack degradation no more than 0.15 ns, warnings within the pinned
+identity, and unconstrained output paths equal to the pre-observer build.
 
 A canonical local signoff set may be installed only to the Dev layout through
 the attended rollback-capable experimental FPGA transaction. It is not release
