@@ -347,38 +347,12 @@ mod sd_browse {
 
     #[derive(Debug, Eq, PartialEq)]
     enum NaturalToken {
-        Character(char),
+        Text(String),
         Number {
             first: char,
             significant: String,
             raw_len: usize,
         },
-    }
-
-    impl NaturalToken {
-        fn cmp(&self, other: &Self) -> Ordering {
-            match (self, other) {
-                (Self::Character(left), Self::Character(right)) => left.cmp(right),
-                (
-                    Self::Number {
-                        significant: left,
-                        raw_len: left_raw_len,
-                        ..
-                    },
-                    Self::Number {
-                        significant: right,
-                        raw_len: right_raw_len,
-                        ..
-                    },
-                ) => left
-                    .len()
-                    .cmp(&right.len())
-                    .then_with(|| left.cmp(right))
-                    .then_with(|| left_raw_len.cmp(right_raw_len)),
-                (Self::Character(left), Self::Number { first, .. }) => left.cmp(first),
-                (Self::Number { first, .. }, Self::Character(right)) => first.cmp(right),
-            }
-        }
     }
 
     #[derive(Debug, Eq, PartialEq)]
@@ -406,21 +380,95 @@ mod sd_browse {
                         raw_len: raw.len(),
                     });
                 } else {
-                    tokens.push(NaturalToken::Character(ch.to_ascii_lowercase()));
-                    chars.next();
+                    let mut text = String::new();
+                    while let Some((_, character)) = chars.peek().copied() {
+                        if character.is_ascii_digit() {
+                            break;
+                        }
+                        text.push(character.to_ascii_lowercase());
+                        chars.next();
+                    }
+                    tokens.push(NaturalToken::Text(text));
                 }
             }
             Self(tokens)
         }
 
         fn cmp(&self, other: &Self) -> Ordering {
-            for (left, right) in self.0.iter().zip(&other.0) {
-                let ordering = left.cmp(right);
-                if ordering != Ordering::Equal {
-                    return ordering;
+            let mut left_token = 0usize;
+            let mut right_token = 0usize;
+            let mut left_text_offset = 0usize;
+            let mut right_text_offset = 0usize;
+            loop {
+                while matches!(self.0.get(left_token), Some(NaturalToken::Text(text)) if left_text_offset == text.len())
+                {
+                    left_token += 1;
+                    left_text_offset = 0;
+                }
+                while matches!(other.0.get(right_token), Some(NaturalToken::Text(text)) if right_text_offset == text.len())
+                {
+                    right_token += 1;
+                    right_text_offset = 0;
+                }
+                match (self.0.get(left_token), other.0.get(right_token)) {
+                    (None, None) => return Ordering::Equal,
+                    (None, Some(_)) => return Ordering::Less,
+                    (Some(_), None) => return Ordering::Greater,
+                    (Some(NaturalToken::Text(left)), Some(NaturalToken::Text(right))) => {
+                        let left_char = left[left_text_offset..]
+                            .chars()
+                            .next()
+                            .expect("text sort token has remaining content");
+                        let right_char = right[right_text_offset..]
+                            .chars()
+                            .next()
+                            .expect("text sort token has remaining content");
+                        let ordering = left_char.cmp(&right_char);
+                        if ordering != Ordering::Equal {
+                            return ordering;
+                        }
+                        left_text_offset += left_char.len_utf8();
+                        right_text_offset += right_char.len_utf8();
+                    }
+                    (
+                        Some(NaturalToken::Number {
+                            significant: left,
+                            raw_len: left_raw_len,
+                            ..
+                        }),
+                        Some(NaturalToken::Number {
+                            significant: right,
+                            raw_len: right_raw_len,
+                            ..
+                        }),
+                    ) => {
+                        let ordering = left
+                            .len()
+                            .cmp(&right.len())
+                            .then_with(|| left.cmp(right))
+                            .then_with(|| left_raw_len.cmp(right_raw_len));
+                        if ordering != Ordering::Equal {
+                            return ordering;
+                        }
+                        left_token += 1;
+                        right_token += 1;
+                    }
+                    (Some(NaturalToken::Text(left)), Some(NaturalToken::Number { first, .. })) => {
+                        let left_char = left[left_text_offset..]
+                            .chars()
+                            .next()
+                            .expect("text sort token has remaining content");
+                        return left_char.cmp(first);
+                    }
+                    (Some(NaturalToken::Number { first, .. }), Some(NaturalToken::Text(right))) => {
+                        let right_char = right[right_text_offset..]
+                            .chars()
+                            .next()
+                            .expect("text sort token has remaining content");
+                        return first.cmp(&right_char);
+                    }
                 }
             }
-            self.0.len().cmp(&other.0.len())
         }
     }
 
