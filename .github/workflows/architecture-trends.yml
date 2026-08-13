@@ -1,0 +1,64 @@
+# Copyright (C) 2026 Nigel Breslaw
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+name: Architecture Trends
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  architecture-trends:
+    name: Advisory hotspot summary
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact pull request head
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - uses: ./.github/actions/setup-agent-cli
+
+      - name: Generate advisory architecture reports
+        id: report
+        continue-on-error: true
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
+            git fetch --no-tags --depth=1 origin "$BASE_SHA"
+          fi
+          git cat-file -e "${BASE_SHA}^{commit}"
+          git cat-file -e "${HEAD_SHA}^{commit}"
+          mkdir -p build/architecture-trends
+          scripts/agent architecture report \
+            --base "$BASE_SHA" \
+            --head "$HEAD_SHA" \
+            --format json \
+            --output build/architecture-trends/architecture-report.json
+          scripts/agent architecture report \
+            --base "$BASE_SHA" \
+            --head "$HEAD_SHA" \
+            --format markdown \
+            --output build/architecture-trends/architecture-report.md
+          cat build/architecture-trends/architecture-report.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Explain unavailable advisory report
+        if: steps.report.outcome == 'failure'
+        run: |
+          echo '## Architecture hotspot summary unavailable' >> "$GITHUB_STEP_SUMMARY"
+          echo 'The advisory report could not be generated. Blocking architecture checks remain independent.' >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload architecture report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: architecture-trends-${{ github.event.pull_request.number }}
+          path: build/architecture-trends/architecture-report.json
+          if-no-files-found: warn
+          retention-days: 14

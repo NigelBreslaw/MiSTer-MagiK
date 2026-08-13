@@ -141,6 +141,7 @@ pub enum BuiltinOperation {
     DistributionWorkflow,
     KernelWorkflow,
     PlatformWorkflow,
+    ArchitectureWorkflow,
     CiCache,
 }
 

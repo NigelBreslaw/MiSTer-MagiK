@@ -32,6 +32,7 @@ pub fn label(operation: BuiltinOperation) -> &'static str {
         BuiltinOperation::DistributionWorkflow => "distribution workflow",
         BuiltinOperation::KernelWorkflow => "kernel workflow",
         BuiltinOperation::PlatformWorkflow => "platform workflow",
+        BuiltinOperation::ArchitectureWorkflow => "architecture trend workflow",
         BuiltinOperation::CiCache => "CI cache policy",
     }
 }
@@ -48,6 +49,7 @@ pub fn run(operation: BuiltinOperation, repository: &Path) -> Result<(), String>
         BuiltinOperation::DistributionWorkflow => check_distribution_workflow(repository),
         BuiltinOperation::KernelWorkflow => check_kernel_workflow(repository),
         BuiltinOperation::PlatformWorkflow => check_platform_workflow(repository),
+        BuiltinOperation::ArchitectureWorkflow => check_architecture_workflow(repository),
         BuiltinOperation::CiCache => check_ci_cache(repository),
     }
 }
@@ -157,6 +159,46 @@ fn check_platform_workflow(repository: &Path) -> Result<(), String> {
         return Err("platform_workflow_contract: workflow_dispatch must occur once".into());
     }
     Ok(())
+}
+
+fn check_architecture_workflow(repository: &Path) -> Result<(), String> {
+    let workflow = read(repository, ".github/workflows/architecture-trends.yml")?;
+    require_fragments(
+        "architecture_workflow",
+        &workflow,
+        &[
+            "name: Architecture Trends",
+            "pull_request:",
+            "permissions:\n  contents: read",
+            "ref: ${{ github.event.pull_request.head.sha }}",
+            "fetch-depth: 0",
+            "BASE_SHA: ${{ github.event.pull_request.base.sha }}",
+            "HEAD_SHA: ${{ github.event.pull_request.head.sha }}",
+            "git cat-file -e \"${BASE_SHA}^{commit}\"",
+            "git fetch --no-tags --depth=1 origin \"$BASE_SHA\"",
+            "continue-on-error: true",
+            "scripts/agent architecture report",
+            "--base \"$BASE_SHA\"",
+            "--head \"$HEAD_SHA\"",
+            "$GITHUB_STEP_SUMMARY",
+            "actions/upload-artifact@v7",
+            "architecture-report.json",
+            "if-no-files-found: warn",
+        ],
+        &[
+            "push:",
+            "workflow_dispatch:",
+            "contents: write",
+            "issues: write",
+            "pull-requests: write",
+            "actions/github-script",
+            "gh pr comment",
+            "scripts/agent build",
+            "scripts/agent benchmark",
+            "scripts/agent deliver",
+            "scripts/agent device",
+        ],
+    )
 }
 
 fn check_ci_cache(repository: &Path) -> Result<(), String> {
@@ -1494,6 +1536,24 @@ latch_metadata = "{}"
             require_fragments("workflow", "alpha gamma", &["alpha"], &["gamma"]).unwrap_err(),
             "workflow_contract_forbidden: gamma"
         );
+    }
+
+    #[test]
+    fn architecture_workflow_contract_requires_deterministic_base_recovery() {
+        let root = std::env::temp_dir().join(format!(
+            "mister-magik-architecture-workflow-{}",
+            std::process::id()
+        ));
+        let workflow = root.join(".github/workflows");
+        fs::create_dir_all(&workflow).unwrap();
+        let fixture = include_str!("../../.github/workflows/architecture-trends.yml").replace(
+            "git fetch --no-tags --depth=1 origin \"$BASE_SHA\"",
+            "echo missing deterministic base recovery",
+        );
+        fs::write(workflow.join("architecture-trends.yml"), fixture).unwrap();
+        let error = check_architecture_workflow(&root).unwrap_err();
+        assert!(error.contains("git fetch --no-tags --depth=1 origin \"$BASE_SHA\""));
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

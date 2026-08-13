@@ -958,6 +958,16 @@ fn add_path_operations(
             "workflow configuration changed",
         ));
     }
+    if path == Path::new(".github/workflows/architecture-trends.yml")
+        || path == Path::new("agent-cli/src/architecture.rs")
+    {
+        add(builtin(
+            "repo.architecture-workflow",
+            "Check architecture trend workflow",
+            BuiltinOperation::ArchitectureWorkflow,
+            "architecture reporter or PR workflow changed → advisory reporting contract",
+        ));
+    }
     if path.starts_with("docs") && !path.starts_with("docs/agents") {
         add(diff_check());
     }
@@ -2280,6 +2290,27 @@ mod tests {
             .collect();
         assert_eq!(operations.len(), 1);
         assert_eq!(operations[0].id, "repo.platform-manifest-authority");
+    }
+
+    #[test]
+    fn architecture_reporter_and_workflow_select_advisory_contract_once() {
+        let plan = affected_plan(
+            AssuranceRequest::Plan {
+                scope: Scope::Paths(vec![]),
+            },
+            vec![
+                "agent-cli/src/architecture.rs".into(),
+                ".github/workflows/architecture-trends.yml".into(),
+            ],
+        )
+        .unwrap();
+        let operations: Vec<_> = plan
+            .operations
+            .iter()
+            .filter(|operation| operation.builtin == Some(BuiltinOperation::ArchitectureWorkflow))
+            .collect();
+        assert_eq!(operations.len(), 1);
+        assert_eq!(operations[0].id, "repo.architecture-workflow");
     }
 
     #[test]
