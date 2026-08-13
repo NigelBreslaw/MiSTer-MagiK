@@ -54,7 +54,6 @@ MINIMUM_SLACK_NS = 0.20
 MAXIMUM_SLACK_DEGRADATION_NS = 0.15
 MAXIMUM_LOGIC_ELEMENT_DELTA = 800
 MAXIMUM_REGISTER_DELTA = 300
-MINIMUM_OBSERVER_REPORTED_CHAINS = 4
 EXPECTED_OBSERVER_CALCULABLE_CHAINS = 4
 EXPECTED_SYNC_ASSIGNMENT_SUFFIXES = (
     "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|control_pll_lock_meta",
@@ -456,12 +455,6 @@ def compare(
         baseline_chain_counts, baseline_fractions
     )
     patched_calculable_chains = estimated_calculable_chains(chain_counts, patched_fractions)
-    chain_delta_sufficient = (
-        baseline_chain_counts
-        and chain_counts
-        and max(chain_counts)
-        >= max(baseline_chain_counts) + MINIMUM_OBSERVER_REPORTED_CHAINS
-    )
     custom_delta_calculable = (
         baseline_calculable_chains is not None
         and patched_calculable_chains is not None
@@ -470,8 +463,6 @@ def compare(
     )
     if not custom_assignment_seen:
         reasons.append("custom_synchronizer_missing")
-    if not chain_delta_sufficient:
-        reasons.append("custom_synchronizer_chain_count")
     if not custom_delta_calculable:
         reasons.append("custom_synchronizer_mtbf_missing")
 

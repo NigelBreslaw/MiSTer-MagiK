@@ -169,13 +169,19 @@ class QuartusDeltaTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(payload["invalid_reason"], "ok")
 
-    def test_minimum_observer_chain_delta_is_required(self) -> None:
+    def test_unrelated_total_chain_drift_does_not_override_exact_evidence(self) -> None:
         patched = CUSTOM_SYNC.replace(
             "Found 9 synchronizer chains", "Found 8 synchronizer chains"
+        ).replace(
+            "Could Not be Calculated: 0.444",
+            "Could Not be Calculated: 0.375",
         )
         result, payload = self.run_check(BASE, BASE + patched)
-        self.assertEqual(result.returncode, 1)
-        self.assertIn("custom_synchronizer_chain_count", payload["invalid_reason"])
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(payload["baseline_synchronizer_chains"], 5)
+        self.assertEqual(payload["patched_synchronizer_chains"], 8)
+        self.assertEqual(payload["baseline_calculable_synchronizer_chains"], 1)
+        self.assertEqual(payload["patched_calculable_synchronizer_chains"], 5)
 
     def test_new_warning_fails_even_when_warning_code_is_inherited(self) -> None:
         result, payload = self.run_check(BASE, BASE + "Warning (10001): different warning\n" + CUSTOM_SYNC)

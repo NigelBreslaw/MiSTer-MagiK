@@ -149,6 +149,12 @@ GitHub signoff with four added calculable synchronizer chains total, no new
 unconstrained output paths, and the same 800-ALM/300-register ceiling before any
 device installation.
 
+Quartus's aggregate auto-detected synchronizer count is recorded for comparison
+but is not an exact delta gate: unrelated Menu chains can be combined or split
+by fitter placement. Qualification instead requires all exact observer stage
+assignments, all named chains in the retained metastability report, and exactly
+four additional chains with calculable MTBF.
+
 A canonical local signoff set may be installed only to the Dev layout through
 the attended rollback-capable experimental FPGA transaction. It is not release
 qualified. Production publication still requires the matched GitHub platform
