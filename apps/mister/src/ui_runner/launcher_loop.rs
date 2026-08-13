@@ -8199,7 +8199,9 @@ pub(super) fn run_launcher_loop(
             "launcher-response.interaction-projection",
         );
 
-        if empty_collection_invariant_violated(&catalog, &nav) {
+        if empty_collection_invariant_violated(&catalog, &nav)
+            && !launch_return_session.protects_hydrating_collection(&nav)
+        {
             if let Some(system) = active_system(&catalog, &nav) {
                 crate::ui_errln!(
                     "catalog presentation invariant recovered: system={} registered_rows={} resident_rows=0",
@@ -11659,6 +11661,16 @@ impl LaunchReturnSession {
         self.state.is_some()
     }
 
+    fn protects_hydrating_collection(&self, nav: &LauncherNav) -> bool {
+        self.state
+            .as_ref()
+            .and_then(launcher::LaunchReturnState::collection_id)
+            .is_some_and(|collection_id| {
+                nav.active_collection_id() == Some(collection_id)
+                    && nav.catalog_system_hydration_is_loading(collection_id)
+            })
+    }
+
     fn state(&self) -> Option<&launcher::LaunchReturnState> {
         self.state.as_ref()
     }
@@ -14843,6 +14855,37 @@ mod tests {
             session.source, "sharded-registry",
             "later catalogue publications must not rewrite the restoration origin"
         );
+    }
+
+    #[test]
+    fn pending_return_shard_protects_exact_arcade_context_from_empty_list_recovery() {
+        let capsule = catalog_for_media_systems(&["c64"]);
+        let mut launched_nav = LauncherNav::new();
+        assert!(launched_nav.open_system(&capsule, "c64"));
+        let state = launcher::capture_launch_return_state(
+            &launched_nav,
+            &capsule,
+            "/media/fat/_Arcade/c64.mra",
+        )
+        .expect("return state");
+        let session = LaunchReturnSession::new(Some(state));
+        let mut restored_nav = LauncherNav::new();
+        assert!(launcher::apply_launch_return_state(
+            &mut restored_nav,
+            &capsule,
+            session.state().expect("pending return").clone(),
+        ));
+        restored_nav.catalog_system_hydration_started("c64");
+        let registry = summary_catalog_for_media_systems(&["c64"]);
+
+        assert!(empty_collection_invariant_violated(
+            &registry,
+            &restored_nav,
+        ));
+        assert!(session.protects_hydrating_collection(&restored_nav));
+
+        restored_nav.catalog_system_hydration_failed("c64");
+        assert!(!session.protects_hydrating_collection(&restored_nav));
     }
 
     #[test]

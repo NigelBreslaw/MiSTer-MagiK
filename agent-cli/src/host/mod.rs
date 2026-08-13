@@ -13124,7 +13124,11 @@ fn launch_return_once_wait(
     }
 }
 
-fn launch_return_once_select_home_arcade(config: &NativeDeviceConfig, nonce: &str) -> Result<()> {
+fn launch_return_once_select_menu_item(
+    config: &NativeDeviceConfig,
+    nonce: &str,
+    expected_item_id: &str,
+) -> Result<()> {
     let mut state = launch_return_once_wait(
         config,
         nonce,
@@ -13140,7 +13144,8 @@ fn launch_return_once_select_home_arcade(config: &NativeDeviceConfig, nonce: &st
         .and_then(Value::as_u64)
         .is_some_and(|index| index > 0);
     for _ in 0..count.saturating_mul(2) {
-        if modal_semantic(&state, "selected_item_id").and_then(Value::as_str) == Some("menu:arcade")
+        if modal_semantic(&state, "selected_item_id").and_then(Value::as_str)
+            == Some(expected_item_id)
         {
             return Ok(());
         }
@@ -13173,7 +13178,7 @@ fn launch_return_once_select_home_arcade(config: &NativeDeviceConfig, nonce: &st
             "Home selection change",
         )?;
     }
-    Err("launch-return-once Home has no Arcade item".into())
+    Err(format!("launch-return-once menu has no {expected_item_id} item").into())
 }
 
 fn launch_return_once_select_game(config: &NativeDeviceConfig, nonce: &str) -> Result<Value> {
@@ -13208,6 +13213,73 @@ fn launch_return_once_select_game(config: &NativeDeviceConfig, nonce: &str) -> R
         state = launch_return_once_next_game(config, nonce, &previous)?;
     }
     Err(format!("launch-return-once cannot find {LAUNCH_RETURN_ONCE_GAME}").into())
+}
+
+fn launch_return_once_validate_restored_selection(
+    pre_launch: &Value,
+    restored: &Value,
+) -> Result<()> {
+    for field in ["active_collection_id", "selected_game_id"] {
+        let expected = modal_semantic(pre_launch, field).and_then(Value::as_str);
+        let actual = modal_semantic(restored, field).and_then(Value::as_str);
+        if expected.is_none() || actual != expected {
+            return Err(format!(
+                "launch-return-once did not restore {field}: expected={} actual={}",
+                expected.unwrap_or("missing"),
+                actual.unwrap_or("missing")
+            )
+            .into());
+        }
+    }
+    let expected_index = modal_semantic(pre_launch, "selected_index").and_then(Value::as_u64);
+    let actual_index = modal_semantic(restored, "selected_index").and_then(Value::as_u64);
+    if expected_index.is_none() || actual_index != expected_index {
+        return Err(format!(
+            "launch-return-once did not restore selected_index: expected={} actual={}",
+            expected_index.map_or_else(|| "missing".to_string(), |value| value.to_string()),
+            actual_index.map_or_else(|| "missing".to_string(), |value| value.to_string())
+        )
+        .into());
+    }
+    for (field, expected) in [
+        ("effective_view", "arcade"),
+        ("return_screen", "arcade"),
+        ("launch_state", "idle"),
+    ] {
+        let actual = modal_semantic(restored, field).and_then(Value::as_str);
+        if actual != Some(expected) {
+            return Err(format!(
+                "launch-return-once restored the wrong view: {field} expected={expected} actual={}",
+                actual.unwrap_or("missing")
+            )
+            .into());
+        }
+    }
+    Ok(())
+}
+
+fn launch_return_once_validate_snes_view(snapshot: &Value) -> Result<()> {
+    for (field, expected) in [
+        ("effective_view", "system-hub"),
+        ("return_screen", "system-hub"),
+        ("active_collection_id", "snes"),
+        ("selected_system_id", "snes"),
+    ] {
+        let actual = modal_semantic(snapshot, field).and_then(Value::as_str);
+        if actual != Some(expected) {
+            return Err(format!(
+                "launch-return-once opened the wrong SNES view: {field} expected={expected} actual={}",
+                actual.unwrap_or("missing")
+            )
+            .into());
+        }
+    }
+    if modal_semantic(snapshot, "composition_state").and_then(Value::as_str)
+        == Some("navigation-transition")
+    {
+        return Err("launch-return-once SNES view is still in its navigation transition".into());
+    }
+    Ok(())
 }
 
 fn profile_installed_launch_return_once(
@@ -13256,7 +13328,7 @@ fn profile_installed_launch_return_once(
 
     let run_result = (|| -> Result<Value> {
         launch_return_once_action(config, &nonce, AutomationButton::Home)?;
-        launch_return_once_select_home_arcade(config, &nonce)?;
+        launch_return_once_select_menu_item(config, &nonce, "menu:arcade")?;
         launch_return_once_action(config, &nonce, AutomationButton::A)?;
         let selected = launch_return_once_select_game(config, &nonce)?;
         fs::write(
@@ -13264,7 +13336,7 @@ fn profile_installed_launch_return_once(
             format!("{}\n", serde_json::to_string_pretty(&selected)?),
         )?;
 
-        let returned = launcher_automation::exercise_launch_return_to_magik(
+        let returned = launcher_automation::exercise_launch_return(
             config,
             &nonce,
             LAUNCH_RETURN_ONCE_GAME,
@@ -13282,6 +13354,17 @@ fn profile_installed_launch_return_once(
             .and_then(Value::as_u64)
             .ok_or("launch-return-once has no returned presentation sequence")?;
 
+        // The return capsule can produce one correct frame before an
+        // authoritative catalog publication reconciles the launcher. Require
+        // the exact selection to remain intact beyond that publication edge.
+        thread::sleep(Duration::from_millis(750));
+        let restored_selection = launcher_automation::snapshot(config, &nonce)?;
+        launch_return_once_validate_restored_selection(&selected, &restored_selection)?;
+        fs::write(
+            output_dir.join("restored-selection-snapshot.json"),
+            format!("{}\n", serde_json::to_string_pretty(&restored_selection)?),
+        )?;
+
         let returned_status = read_launcher_status(&session)?;
         fs::write(
             output_dir.join("returned-status.json"),
@@ -13294,6 +13377,44 @@ fn profile_installed_launch_return_once(
             "returned-framebuffer",
             output_dir,
         )?)?;
+
+        launch_return_once_action(config, &nonce, AutomationButton::Home)?;
+        launch_return_once_wait(
+            config,
+            &nonce,
+            |snapshot| {
+                modal_semantic(snapshot, "effective_view").and_then(Value::as_str) == Some("home")
+                    && modal_semantic(snapshot, "menu_id").and_then(Value::as_str)
+                        == Some("menu:root")
+            },
+            "root launcher after Arcade return",
+        )?;
+        launch_return_once_select_menu_item(config, &nonce, "menu:consoles")?;
+        launch_return_once_action(config, &nonce, AutomationButton::A)?;
+        launch_return_once_select_menu_item(config, &nonce, "menu:consoles:nintendo")?;
+        launch_return_once_action(config, &nonce, AutomationButton::A)?;
+        launch_return_once_select_menu_item(config, &nonce, "snes")?;
+        let snes_sequence = launch_return_once_action(config, &nonce, AutomationButton::A)?;
+        let snes_view = launch_return_once_wait(
+            config,
+            &nonce,
+            |snapshot| launch_return_once_validate_snes_view(snapshot).is_ok(),
+            "settled SNES system view",
+        )?;
+        launch_return_once_validate_snes_view(&snes_view)?;
+        fs::write(
+            output_dir.join("snes-view-snapshot.json"),
+            format!("{}\n", serde_json::to_string_pretty(&snes_view)?),
+        )?;
+        let snes_framebuffer: Value =
+            serde_json::from_str(&launcher_automation::capture_checkpoint(
+                config,
+                &nonce,
+                snes_sequence,
+                "snes-view-framebuffer",
+                output_dir,
+            )?)?;
+
         let diagnostics_reply = agent_request_at(
             config.agent()?,
             "diagnostics",
@@ -13333,8 +13454,11 @@ fn profile_installed_launch_return_once(
             "game": LAUNCH_RETURN_ONCE_GAME,
             "cycles": 1,
             "returned": returned,
+            "restored_selection": restored_selection,
             "returned_status": returned_status,
             "framebuffer": framebuffer,
+            "snes_view": snes_view,
+            "snes_framebuffer": snes_framebuffer,
             "fpga_video_diagnostics": diagnostics.get("fpga_video_diagnostics"),
             "usb_video": usb_json,
             "physical_video_visible": visible,
@@ -23101,6 +23225,42 @@ mod tests {
         assert!(LAUNCH_RETURN_ONCE_GAME.ends_with("1943 Kai Midway Kaisen (Japan).mra"));
         assert_eq!(LAUNCH_RETURN_ONCE_STEP_DEADLINE_MS, 2_000);
         assert_eq!(LAUNCH_RETURN_CYCLES, 2);
+    }
+
+    #[test]
+    fn launch_return_once_requires_stable_exact_selection_and_snes_identity() {
+        let arcade = json!({
+            "semantic": {
+                "effective_view": "arcade",
+                "return_screen": "arcade",
+                "launch_state": "idle",
+                "active_collection_id": "menu:arcade",
+                "selected_game_id": LAUNCH_RETURN_ONCE_GAME,
+                "selected_index": 2,
+            }
+        });
+        launch_return_once_validate_restored_selection(&arcade, &arcade).unwrap();
+
+        let mut launcher = arcade.clone();
+        launcher["semantic"]["effective_view"] = json!("home");
+        launcher["semantic"]["return_screen"] = json!("home");
+        assert!(launch_return_once_validate_restored_selection(&arcade, &launcher).is_err());
+
+        let snes = json!({
+            "semantic": {
+                "effective_view": "system-hub",
+                "return_screen": "system-hub",
+                "active_collection_id": "snes",
+                "selected_system_id": "snes",
+                "composition_state": "full-slint",
+            }
+        });
+        launch_return_once_validate_snes_view(&snes).unwrap();
+
+        let mut arcade_list = snes;
+        arcade_list["semantic"]["effective_view"] = json!("arcade");
+        arcade_list["semantic"]["return_screen"] = json!("arcade");
+        assert!(launch_return_once_validate_snes_view(&arcade_list).is_err());
     }
 
     #[test]

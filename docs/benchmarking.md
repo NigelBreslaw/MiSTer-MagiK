@@ -457,11 +457,16 @@ binary and manifest remain the exact installed pair for the entire run.
 `launch-return-once` is the attended incident-reproduction route. It begins at
 Home, enters Arcade through typed semantic automation, selects
 `1943 Kai Midway Kaisen (Japan).mra`, launches it once, and returns once. It
-never queues a second launch. After exact context restoration it records the
-authoritative framebuffer, passive FPGA diagnostics, Main and launcher logs,
-and an analyzed 1920x1080 USB Video frame. A video-level black frame is retained
-as evidence and fails the run; cleanup releases only the volatile automation
-lease so the returned device state is not repaired or restarted.
+never queues a second launch. The route requires the exact Arcade collection,
+game, and list index to remain restored after authoritative catalog
+reconciliation. In the same automation lease it then returns to root Home,
+opens Consoles, scrolls through Nintendo to SNES, and requires the settled SNES
+system-hub identity rather than an Arcade list or another launcher view. It
+records authoritative framebuffers for both restored Arcade and SNES, passive
+FPGA diagnostics, Main and launcher logs, and an analyzed 1920x1080 USB Video
+frame. A video-level black frame is retained as evidence and fails the run;
+cleanup releases only the volatile automation lease so the final SNES state is
+not repaired or restarted.
 
 `launch-return-attribution` repeats the same fixed two-cycle route in four
 independent launcher processes: unprofiled control, PMU, existing pprof, and
