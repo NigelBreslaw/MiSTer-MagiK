@@ -6302,9 +6302,12 @@ pub(super) fn run_launcher_loop(
         {
             deferred_catalog_events.push_back(message);
         }
-        let system_entry_handoff_only = !background_work_allowed
-            && pending_collection_entry.is_some()
-            && scheduler.system_entry_prepare_active();
+        let system_entry_handoff_only = should_poll_system_entry_handoff(
+            background_work_allowed,
+            pending_collection_entry.is_some(),
+            launch_return_session.protects_hydrating_collection(&nav),
+            scheduler.system_entry_prepare_active(),
+        );
         if (background_work_allowed || system_entry_handoff_only)
             && catalog_messages_need_polling(
                 pending_catalog_ready.is_some(),
@@ -11581,6 +11584,17 @@ fn catalog_messages_need_polling(
     pending_catalog_ready || !refresh_done || worker_running
 }
 
+fn should_poll_system_entry_handoff(
+    background_work_allowed: bool,
+    collection_entry_pending: bool,
+    launch_return_hydrating: bool,
+    system_entry_prepare_active: bool,
+) -> bool {
+    !background_work_allowed
+        && system_entry_prepare_active
+        && (collection_entry_pending || launch_return_hydrating)
+}
+
 fn update_catalog_ready_stationary_edge_since(
     nav: &LauncherNav,
     current: Option<Instant>,
@@ -14884,9 +14898,21 @@ mod tests {
             &restored_nav,
         ));
         assert!(session.protects_hydrating_collection(&restored_nav));
+        assert!(should_poll_system_entry_handoff(
+            false,
+            false,
+            session.protects_hydrating_collection(&restored_nav),
+            true,
+        ));
 
         restored_nav.catalog_system_hydration_failed("arcade");
         assert!(!session.protects_hydrating_collection(&restored_nav));
+        assert!(!should_poll_system_entry_handoff(
+            false,
+            false,
+            session.protects_hydrating_collection(&restored_nav),
+            true,
+        ));
     }
 
     #[test]
