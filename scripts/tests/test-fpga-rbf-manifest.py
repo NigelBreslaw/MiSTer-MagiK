@@ -99,6 +99,7 @@ class ManifestTest(unittest.TestCase):
             metadata = self.fixture(Path(directory))
             metadata.write_text(
                 metadata.read_text()
+                + "source_status= M menu.qsf\n"
                 + "source_status= M sys/sys_top.sdc\n"
                 + "analysis_constraint_override=clock_groups_exclusive_to_asynchronous\n"
             )
@@ -112,6 +113,7 @@ class ManifestTest(unittest.TestCase):
             self.assertNotEqual(self.run_verify(metadata).returncode, 0)
             metadata.write_text(
                 valid
+                + "source_status= M menu.qsf\n"
                 + "source_status= M sys/sys_top.v\n"
                 + "analysis_constraint_override=clock_groups_exclusive_to_asynchronous\n"
             )
@@ -120,6 +122,12 @@ class ManifestTest(unittest.TestCase):
                 valid
                 + "analysis_constraint_override=clock_groups_exclusive_to_asynchronous\n"
             )
+            self.assertNotEqual(self.run_verify(metadata).returncode, 0)
+
+    def test_duplicate_nonrepeatable_metadata_key_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            metadata = self.fixture(Path(directory))
+            metadata.write_text(metadata.read_text() + "quartus_seed=2\n")
             self.assertNotEqual(self.run_verify(metadata).returncode, 0)
 
     def test_missing_or_invalid_platform_contract_fails(self) -> None:

@@ -16,7 +16,10 @@ SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 STALE_RE = re.compile(r"mailbox|axi|acp|descriptor|ownership|fence", re.I)
 ANALYSIS_CONSTRAINT_OVERRIDE = "clock_groups_exclusive_to_asynchronous"
-ANALYSIS_CONSTRAINT_SOURCE_STATUS = " M sys/sys_top.sdc"
+ANALYSIS_CONSTRAINT_SOURCE_STATUSES = (
+    " M menu.qsf",
+    " M sys/sys_top.sdc",
+)
 CANONICAL_QUARTUS_SEED_SOURCE = (
     Path(__file__).resolve().parents[2]
     / "mister/platform/fpga/menu-vblank-latch/Quartus.seed"
@@ -46,10 +49,16 @@ def verify(
     if not metadata_path.is_file():
         raise ValueError(f"missing metadata: {metadata_path}")
     fields: dict[str, str] = {}
+    source_statuses: list[str] = []
     for number, raw in enumerate(metadata_path.read_text().splitlines(), 1):
         if not raw or "=" not in raw:
             raise ValueError(f"invalid metadata line {number}")
         key, value = raw.split("=", 1)
+        if key == "source_status":
+            if STALE_RE.search(value):
+                raise ValueError(f"stale mailbox-era metadata: {key}")
+            source_statuses.append(value)
+            continue
         if key in fields:
             raise ValueError(f"duplicate metadata key: {key}")
         if STALE_RE.search(key) or STALE_RE.search(value):
@@ -102,13 +111,12 @@ def verify(
         raise ValueError("component_revision must be a full commit SHA")
     if "magik_status" in fields:
         raise ValueError("release source tree was dirty")
-    source_status = fields.get("source_status")
     analysis_override = fields.get("analysis_constraint_override")
-    if source_status is None:
+    if not source_statuses:
         if analysis_override is not None:
             raise ValueError("analysis constraint override lacks source evidence")
     elif (
-        source_status != ANALYSIS_CONSTRAINT_SOURCE_STATUS
+        tuple(source_statuses) != ANALYSIS_CONSTRAINT_SOURCE_STATUSES
         or analysis_override != ANALYSIS_CONSTRAINT_OVERRIDE
     ):
         raise ValueError("release source tree was dirty")
