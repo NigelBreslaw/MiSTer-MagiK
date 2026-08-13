@@ -3,7 +3,10 @@
 
 use crate::archive::{MemberLayout, read_zip};
 use crate::error::{AgentError, AgentResult};
-use crate::platform_manifest::{LATCH_CAPABILITY_MASK, LATCH_PROTOCOL_VERSION};
+use crate::platform_manifest::{
+    CURRENT_FPGA_SOURCE_STATUSES, LATCH_CAPABILITY_MASK, LATCH_PROTOCOL_VERSION,
+    LEGACY_FPGA_SOURCE_STATUSES,
+};
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -17,8 +20,6 @@ pub const FORMAT: &str = "mister-magik-platform-bundle-v0.2";
 pub const MANIFEST: &str = "platform-bundle-v0.2.json";
 const ORIGIN: &str = "platform-component-origin-v1.json";
 const COMPONENT_CHECKSUMS: &str = "platform-component-SHA256SUMS";
-const LEGACY_FPGA_SOURCE_STATUSES: &[&str] = &[" M sys/sys_top.sdc"];
-const CURRENT_FPGA_SOURCE_STATUSES: &[&str] = &[" M menu.qsf", " M sys/sys_top.sdc"];
 
 pub struct Create<'a> {
     pub main: &'a Path,

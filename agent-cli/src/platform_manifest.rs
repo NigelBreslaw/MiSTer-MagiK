@@ -13,6 +13,8 @@ pub const FORMAT: &str = "mister-magik-platform-v3";
 pub const FILE_NAME: &str = "platform-v3.manifest";
 pub const LATCH_PROTOCOL_VERSION: &str = "5";
 pub const LATCH_CAPABILITY_MASK: &str = "0x03ff";
+pub(crate) const LEGACY_FPGA_SOURCE_STATUSES: &[&str] = &[" M sys/sys_top.sdc"];
+pub(crate) const CURRENT_FPGA_SOURCE_STATUSES: &[&str] = &[" M menu.qsf", " M sys/sys_top.sdc"];
 pub(crate) const FIELDS: &[&str] = &[
     "format",
     "platform_release",
@@ -586,6 +588,7 @@ fn parse_text_fields(
     label: &str,
 ) -> AgentResult<BTreeMap<String, String>> {
     let mut fields = BTreeMap::new();
+    let mut source_statuses = Vec::new();
     for (index, line) in text.lines().enumerate() {
         if line.is_empty() || line.starts_with('#') {
             continue;
@@ -593,12 +596,26 @@ fn parse_text_fields(
         let (key, value) = line
             .split_once('=')
             .ok_or_else(|| format!("{label}:{}: malformed field", index + 1))?;
+        if key == "source_status" {
+            source_statuses.push(value);
+            continue;
+        }
         if key.is_empty() || value.is_empty() || fields.insert(key.into(), value.into()).is_some() {
             return classified(
                 "invalid_platform_manifest",
                 format!("{label}:{}", index + 1),
             );
         }
+    }
+    if (!source_statuses.is_empty() && exact.is_some())
+        || (!source_statuses.is_empty()
+            && source_statuses != LEGACY_FPGA_SOURCE_STATUSES
+            && source_statuses != CURRENT_FPGA_SOURCE_STATUSES)
+    {
+        return classified(
+            "invalid_platform_manifest",
+            format!("{label}: source_status"),
+        );
     }
     if let Some(exact) = exact {
         let actual: Vec<_> = fields.keys().map(String::as_str).collect();
@@ -726,6 +743,41 @@ mod tests {
         ] {
             assert!(parse_installed(&invalid, Layout::Development).is_err());
         }
+    }
+
+    #[test]
+    fn component_metadata_accepts_only_audited_repeated_source_statuses() {
+        assert!(
+            parse_text_fields(
+                "format=current\nsource_status= M menu.qsf\nsource_status= M sys/sys_top.sdc\n",
+                None,
+                "metadata",
+            )
+            .is_ok()
+        );
+        assert!(
+            parse_text_fields(
+                "format=legacy\nsource_status= M sys/sys_top.sdc\n",
+                None,
+                "metadata",
+            )
+            .is_ok()
+        );
+        for invalid in [
+            "format=missing-sdc\nsource_status= M menu.qsf\n",
+            "format=duplicate\nsource_status= M menu.qsf\nsource_status= M menu.qsf\n",
+            "format=unexpected\nsource_status= M sys/sys_top.v\n",
+        ] {
+            assert!(parse_text_fields(invalid, None, "metadata").is_err());
+        }
+        assert!(
+            parse_text_fields(
+                &format!("{}source_status= M sys/sys_top.sdc\n", canonical_manifest()),
+                Some(FIELDS),
+                "installed platform manifest",
+            )
+            .is_err()
+        );
     }
 
     #[test]
