@@ -101,30 +101,30 @@ module mister_magik_hdmi_lock_evidence (
 	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS" *)
 	reg output_de_has_nonzero_sys = 1'b0;
 
-	reg output_no_de_previous = 1'b0;
-	reg output_de_all_zero_previous = 1'b0;
-	reg output_de_has_nonzero_previous = 1'b0;
-	reg [7:0] output_no_de_count = 8'd0;
-	reg [7:0] output_de_all_zero_count = 8'd0;
-	reg [7:0] output_de_has_nonzero_count = 8'd0;
+	reg [3:0] output_no_de_count = 4'd0;
+	reg [3:0] output_de_all_zero_count = 4'd0;
+	reg [3:0] output_de_has_nonzero_count = 4'd0;
 	reg output_frame_valid = 1'b0;
 	reg output_counter_collision = 1'b0;
-	wire output_no_de_event = output_no_de_sys != output_no_de_previous;
+	// Each accepted event flips both the source toggle and the counter LSB, so
+	// the counter itself is also the last-seen token. This avoids three separate
+	// destination history registers.
+	wire output_no_de_event = output_no_de_sys != output_no_de_count[0];
 	wire output_de_all_zero_event =
-		output_de_all_zero_sys != output_de_all_zero_previous;
+		output_de_all_zero_sys != output_de_all_zero_count[0];
 	wire output_de_has_nonzero_event =
-		output_de_has_nonzero_sys != output_de_has_nonzero_previous;
+		output_de_has_nonzero_sys != output_de_has_nonzero_count[0];
 	wire output_any_event = output_no_de_event || output_de_all_zero_event ||
 		output_de_has_nonzero_event;
 	wire output_event_collision =
 		(output_no_de_event && output_de_all_zero_event) ||
 		(output_no_de_event && output_de_has_nonzero_event) ||
 		(output_de_all_zero_event && output_de_has_nonzero_event);
-	wire [7:0] output_no_de_count_next =
+	wire [3:0] output_no_de_count_next =
 		output_no_de_count + (output_no_de_event ? 1'd1 : 1'd0);
-	wire [7:0] output_de_all_zero_count_next =
+	wire [3:0] output_de_all_zero_count_next =
 		output_de_all_zero_count + (output_de_all_zero_event ? 1'd1 : 1'd0);
-	wire [7:0] output_de_has_nonzero_count_next =
+	wire [3:0] output_de_has_nonzero_count_next =
 		output_de_has_nonzero_count + (output_de_has_nonzero_event ? 1'd1 : 1'd0);
 	wire output_frame_valid_next = output_frame_valid || output_any_event;
 	wire output_counter_collision_next =
@@ -163,7 +163,6 @@ module mister_magik_hdmi_lock_evidence (
 
 	reg [4:0] snapshot_flags = 5'd0;
 	reg [15:0] snapshot_lock_loss_count = 16'd0;
-	reg [7:0] snapshot_output_nonzero_count = 8'd0;
 	reg [15:0] tx_crc = MAGIK_HDMI_EVIDENCE_HEADER_CRC;
 	reg [15:0] response_word;
 
@@ -207,13 +206,13 @@ module mister_magik_hdmi_lock_evidence (
 				MAGIK_HDMI_OUTPUT_ACTIVITY_SCHEMA_WORD:
 					response_word = MAGIK_HDMI_OUTPUT_ACTIVITY_SCHEMA;
 				MAGIK_HDMI_OUTPUT_ACTIVITY_FLAGS_WORD:
-					response_word = {11'd0, snapshot_flags};
+					response_word = {14'd0, snapshot_lock_loss_count[13:12]};
 				MAGIK_HDMI_OUTPUT_ACTIVITY_NO_DE_COUNT_WORD:
-					response_word = {8'd0, snapshot_lock_loss_count[7:0]};
+					response_word = {12'd0, snapshot_lock_loss_count[3:0]};
 				MAGIK_HDMI_OUTPUT_ACTIVITY_DE_ALL_ZERO_COUNT_WORD:
-					response_word = {8'd0, snapshot_lock_loss_count[15:8]};
+					response_word = {12'd0, snapshot_lock_loss_count[7:4]};
 				MAGIK_HDMI_OUTPUT_ACTIVITY_DE_HAS_NONZERO_COUNT_WORD:
-					response_word = {8'd0, snapshot_output_nonzero_count};
+					response_word = {12'd0, snapshot_lock_loss_count[11:8]};
 				default: response_word = tx_crc;
 			endcase
 		end
@@ -237,9 +236,6 @@ module mister_magik_hdmi_lock_evidence (
 		output_de_all_zero_sys <= output_de_all_zero_meta;
 		output_de_has_nonzero_meta <= output_de_has_nonzero_toggle;
 		output_de_has_nonzero_sys <= output_de_has_nonzero_meta;
-		output_no_de_previous <= output_no_de_sys;
-		output_de_all_zero_previous <= output_de_all_zero_sys;
-		output_de_has_nonzero_previous <= output_de_has_nonzero_sys;
 		output_no_de_count <= output_no_de_count_next;
 		output_de_all_zero_count <= output_de_all_zero_count_next;
 		output_de_has_nonzero_count <= output_de_has_nonzero_count_next;
@@ -262,11 +258,14 @@ module mister_magik_hdmi_lock_evidence (
 				tx_crc <= MAGIK_HDMI_EVIDENCE_HEADER_CRC;
 			end
 			else if(activity_start) begin
-				snapshot_flags <= {3'd0, output_counter_collision_next,
-					output_frame_valid_next};
-				snapshot_lock_loss_count <= {output_de_all_zero_count_next,
-					output_no_de_count_next};
-				snapshot_output_nonzero_count <= output_de_has_nonzero_count_next;
+				snapshot_lock_loss_count <= {
+					2'd0,
+					output_counter_collision_next,
+					output_frame_valid_next,
+					output_de_has_nonzero_count_next,
+					output_de_all_zero_count_next,
+					output_no_de_count_next
+				};
 				tx_crc <= MAGIK_HDMI_OUTPUT_ACTIVITY_HEADER_CRC;
 			end
 		end

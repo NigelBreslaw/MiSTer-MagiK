@@ -254,8 +254,13 @@ pub fn decode_hdmi_output_activity(words: &[u16]) -> Result<HdmiOutputActivity, 
         words[HDMI_OUTPUT_ACTIVITY_DE_ALL_ZERO_COUNT_WORD],
         words[HDMI_OUTPUT_ACTIVITY_DE_HAS_NONZERO_COUNT_WORD],
     ];
-    if counts.iter().any(|count| *count > u8::MAX.into()) {
-        return Err("HDMI output activity counter exceeds its 8-bit contract".to_string());
+    if counts
+        .iter()
+        .any(|count| *count > HDMI_OUTPUT_ACTIVITY_COUNTER_MASK)
+    {
+        return Err(format!(
+            "HDMI output activity counter exceeds its {HDMI_OUTPUT_ACTIVITY_COUNTER_BITS}-bit contract"
+        ));
     }
     if flags & HDMI_OUTPUT_ACTIVITY_FLAG_FRAME_VALID == 0 && counts.iter().any(|count| *count != 0)
     {
@@ -530,7 +535,7 @@ mod tests {
         assert!(decode_hdmi_output_activity(&words).is_err());
 
         words[HDMI_OUTPUT_ACTIVITY_FLAGS_WORD] = HDMI_OUTPUT_ACTIVITY_FLAG_FRAME_VALID;
-        words[HDMI_OUTPUT_ACTIVITY_NO_DE_COUNT_WORD] = 0x0100;
+        words[HDMI_OUTPUT_ACTIVITY_NO_DE_COUNT_WORD] = HDMI_OUTPUT_ACTIVITY_COUNTER_MASK + 1;
         words[HDMI_OUTPUT_ACTIVITY_CRC_WORD] = message_crc_with_schema(
             GET_HDMI_OUTPUT_ACTIVITY,
             HDMI_OUTPUT_ACTIVITY_SCHEMA,

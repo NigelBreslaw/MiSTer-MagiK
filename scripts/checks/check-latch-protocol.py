@@ -145,7 +145,7 @@ if output_activity != {
     "command": 0x61,
     "magic": 0x4D51,
     "word_count": 6,
-    "counter_bits": 8,
+    "counter_bits": 4,
     "flags": {
         "frame_valid": 0,
         "counter_collision": 1,

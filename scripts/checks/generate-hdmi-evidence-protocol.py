@@ -63,6 +63,8 @@ def render_rust(spec: dict) -> str:
             f"pub const GET_HDMI_OUTPUT_ACTIVITY: u16 = 0x{activity['command']:02x};",
             f"pub const HDMI_OUTPUT_ACTIVITY_MAGIC: u16 = 0x{activity['magic']:04x};",
             f"pub const HDMI_OUTPUT_ACTIVITY_WORDS: usize = {activity['word_count']};",
+            f"pub const HDMI_OUTPUT_ACTIVITY_COUNTER_BITS: u32 = {activity['counter_bits']};",
+            f"pub const HDMI_OUTPUT_ACTIVITY_COUNTER_MASK: u16 = 0x{(1 << activity['counter_bits']) - 1:04x};",
             "",
         ]
     )

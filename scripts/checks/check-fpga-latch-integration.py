@@ -283,6 +283,10 @@ def main() -> None:
         "output_no_de_toggle <= !output_no_de_toggle;",
         "output_de_all_zero_toggle <= !output_de_all_zero_toggle;",
         "output_de_has_nonzero_toggle <= !output_de_has_nonzero_toggle;",
+        "reg [3:0] output_no_de_count = 4'd0;",
+        "reg [3:0] output_de_all_zero_count = 4'd0;",
+        "reg [3:0] output_de_has_nonzero_count = 4'd0;",
+        "wire output_no_de_event = output_no_de_sys != output_no_de_count[0];",
         "wire activity_start = io_din[7:0] == MAGIK_UIO_GET_HDMI_OUTPUT_ACTIVITY;",
         "tx_crc <= MAGIK_HDMI_OUTPUT_ACTIVITY_HEADER_CRC;",
     )
@@ -294,6 +298,14 @@ def main() -> None:
         control_source,
     ):
         fail("HDMI evidence module drives a functional video or control signal")
+    for redundant_register in (
+        "output_no_de_previous",
+        "output_de_all_zero_previous",
+        "output_de_has_nonzero_previous",
+        "snapshot_output_nonzero_count",
+    ):
+        if redundant_register in control_source:
+            fail(f"HDMI activity recorder regained redundant state: {redundant_register}")
     diagnostics_sdc_text = diagnostics_sdc.read_text()
     timing_report_text = timing_report.read_text()
     unconstrained_report = (

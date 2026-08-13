@@ -35,7 +35,7 @@ UIO command `0x61` returns `hdmi-output-activity-v1`, a fixed six-word record:
 5. completed-frame DE-has-nonzero epoch;
 6. CRC-16/CCITT-FALSE.
 
-The three epochs are independent eight-bit modulo counters. The HDMI-domain
+The three epochs are independent four-bit modulo counters. The HDMI-domain
 classifier observes only the registered `hdmi_out_vs`, `hdmi_out_de`, and
 `hdmi_out_d` values that drive the transmitter pins. The first rising VS arms
 the classifier and discards the partial startup interval. Every later rising
@@ -106,7 +106,7 @@ The lock classifications are:
 - `hdmi_pll_not_stably_armed`: a high sample was seen but stable arming was not;
 - `hdmi_pll_not_seen`: lock has not been sampled high in this configuration.
 
-The device agent reads `0x61` twice about 100 ms apart and computes modulo
+The device agent reads `0x61` twice about 50 ms apart and computes modulo
 deltas. Its final-output classifications are:
 
 - `final_output_no_completed_frame`: no completed final-output frame crossed

@@ -314,9 +314,9 @@ module tb_mister_magik_video_diagnostics_control;
 		read_output_activity(MAGIK_HDMI_OUTPUT_ACTIVITY_FLAG_FRAME_VALID,
 			8'd2, 8'd2, 8'd2);
 
-		// Counters are explicitly modulo eight-bit epochs; wrapping remains a
+		// Counters are explicitly modulo four-bit epochs; wrapping remains a
 		// valid snapshot for host-side modular delta calculation.
-		@(negedge clk_sys); dut.output_no_de_count = 8'hff;
+		@(negedge clk_sys); dut.output_no_de_count = 4'hf;
 		complete_output_frame(1'b0, 1'b0);
 		read_output_activity(MAGIK_HDMI_OUTPUT_ACTIVITY_FLAG_FRAME_VALID,
 			8'd0, 8'd2, 8'd2);

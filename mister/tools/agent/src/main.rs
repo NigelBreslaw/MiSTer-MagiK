@@ -3854,10 +3854,11 @@ mod linux {
         second_de_all_zero: u8,
         second_de_has_nonzero: u8,
     ) -> HdmiOutputActivityDeltas {
+        let mask = mister_magik_video_diagnostics_contract::HDMI_OUTPUT_ACTIVITY_COUNTER_MASK as u8;
         HdmiOutputActivityDeltas {
-            no_de: second_no_de.wrapping_sub(first_no_de),
-            de_all_zero: second_de_all_zero.wrapping_sub(first_de_all_zero),
-            de_has_nonzero: second_de_has_nonzero.wrapping_sub(first_de_has_nonzero),
+            no_de: second_no_de.wrapping_sub(first_no_de) & mask,
+            de_all_zero: second_de_all_zero.wrapping_sub(first_de_all_zero) & mask,
+            de_has_nonzero: second_de_has_nonzero.wrapping_sub(first_de_has_nonzero) & mask,
         }
     }
 
@@ -4385,7 +4386,7 @@ mod linux {
         fn read_hdmi_output_activity_window(&mut self) -> io::Result<HdmiOutputActivityWindow> {
             let first = self.read_hdmi_output_activity()?;
             let sample_started = Instant::now();
-            thread::sleep(Duration::from_millis(100));
+            thread::sleep(Duration::from_millis(50));
             let second = self.read_hdmi_output_activity().map_err(|error| {
                 if error.kind() == io::ErrorKind::NotFound {
                     io::Error::new(
@@ -6876,7 +6877,7 @@ mod tests {
             HdmiEvidenceAck::Invalid
         );
 
-        let wrapped = linux::hdmi_output_activity_deltas(254, 3, 7, 1, 3, 9);
+        let wrapped = linux::hdmi_output_activity_deltas(14, 3, 7, 1, 3, 9);
         assert_eq!(
             wrapped,
             HdmiOutputActivityDeltas {

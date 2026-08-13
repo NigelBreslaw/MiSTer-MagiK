@@ -137,6 +137,8 @@ def render_sv(spec: dict, hdmi_evidence: dict) -> str:
             f"localparam [7:0] MAGIK_UIO_GET_HDMI_OUTPUT_ACTIVITY = 8'h{activity['command']:02X};",
             f"localparam [15:0] MAGIK_HDMI_OUTPUT_ACTIVITY_MAGIC = 16'h{activity['magic']:04X};",
             f"localparam [2:0] MAGIK_HDMI_OUTPUT_ACTIVITY_WORDS = 3'd{activity['word_count']};",
+            f"localparam [2:0] MAGIK_HDMI_OUTPUT_ACTIVITY_COUNTER_BITS = 3'd{activity['counter_bits']};",
+            f"localparam [15:0] MAGIK_HDMI_OUTPUT_ACTIVITY_COUNTER_MASK = 16'h{(1 << activity['counter_bits']) - 1:04X};",
             f"localparam [15:0] MAGIK_HDMI_OUTPUT_ACTIVITY_HEADER_CRC = 16'h{hdmi_evidence_header_crc(activity, hdmi_evidence['crc']):04X};",
             "",
         ]
