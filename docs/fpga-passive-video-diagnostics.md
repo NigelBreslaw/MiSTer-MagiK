@@ -49,9 +49,9 @@ Commands `0x62`–`0x65` add strict, CRC-protected records without changing
   black-mixed completed frames;
 - `0x63` counts no-DE, all-zero, and nonzero frames at raw scaler output;
 - `0x64` counts the same classes after OSD/shadow-mask processing;
-- `0x65` counts bounded Avalon buckets containing a read request, an accepted
-  request, or returned data. A separate bucket heartbeat makes a valid empty
-  bucket distinguishable from a stopped source clock.
+- `0x65` counts bounded Avalon buckets, plus buckets containing a read request,
+  an accepted request, or returned data. The bucket epoch makes a valid empty
+  interval distinguishable from a stopped source clock.
 
 Every record is snapshotted at command recognition and read-only. The agent
 reads each detailed record twice about 50 ms apart and computes four-bit
@@ -151,9 +151,10 @@ the fault to the direct mux selection. Black-scaled is then divided by raw and
 post-OSD activity: raw nonzero followed by post-OSD black localizes the fault to
 post-scaler processing; post-OSD nonzero followed by final black localizes it to
 final staging. Raw scaler black is combined with the Avalon bucket deltas to
-report no requests, blocked requests, stopped returns, or active returns while
-the scaler remains black. Mixed, colliding, or insufficient windows remain
-inconclusive rather than being guessed.
+report no requests, blocked requests, accepted requests without observed
+returns, or active returns while the scaler remains black. Mixed, colliding,
+nonadvancing, or insufficient windows remain inconclusive rather than being
+guessed.
 
 ## Qualification
 

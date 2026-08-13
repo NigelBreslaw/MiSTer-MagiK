@@ -3765,6 +3765,7 @@ mod linux {
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub(super) struct AvalonLivenessDeltas {
+        pub(super) bucket: u8,
         pub(super) request: u8,
         pub(super) accepted: u8,
         pub(super) returned: u8,
@@ -3967,6 +3968,7 @@ mod linux {
         second: &mister_magik_video_diagnostics_contract::HdmiAvalonLivenessActivity,
     ) -> AvalonLivenessDeltas {
         AvalonLivenessDeltas {
+            bucket: path_counter_delta(first.bucket_count(), second.bucket_count()),
             request: path_counter_delta(first.request_count(), second.request_count()),
             accepted: path_counter_delta(first.accepted_count(), second.accepted_count()),
             returned: path_counter_delta(first.returned_count(), second.returned_count()),
@@ -4016,6 +4018,8 @@ mod linux {
         let post_classes = [post_deltas.no_de, post_deltas.all_zero, post_deltas.nonzero];
         if raw_classes.iter().filter(|delta| **delta != 0).count() != 1
             || post_classes.iter().filter(|delta| **delta != 0).count() != 1
+            || raw_classes.iter().copied().max().unwrap_or(0) < 2
+            || post_classes.iter().copied().max().unwrap_or(0) < 2
         {
             return "final_output_black_scaled_path_inconclusive";
         }
@@ -4034,6 +4038,9 @@ mod linux {
         if avalon_flags & contract::HDMI_AVALON_LIVENESS_ACTIVITY_FLAG_BUCKET_VALID == 0 {
             return "scaler_raw_black_avalon_unavailable";
         }
+        if avalon_deltas.bucket == 0 {
+            return "scaler_raw_black_no_observed_avalon_bucket";
+        }
         match (
             avalon_deltas.request != 0,
             avalon_deltas.accepted != 0,
@@ -4041,7 +4048,7 @@ mod linux {
         ) {
             (false, false, false) => "scaler_raw_black_no_framebuffer_requests",
             (true, false, false) => "scaler_raw_black_framebuffer_requests_blocked",
-            (_, true, false) => "scaler_raw_black_framebuffer_returns_stopped",
+            (_, true, false) => "scaler_raw_black_accepted_without_observed_returns",
             (_, _, true) => "scaler_raw_black_with_framebuffer_returns",
             _ => "scaler_raw_black_avalon_inconclusive",
         }
@@ -4072,8 +4079,8 @@ mod linux {
                 self.post_second.de_has_nonzero_count(),
             );
             let avalon_deltas = avalon_liveness_deltas(&self.avalon_first, &self.avalon_second);
-            json!({
-                "classification": detailed_path_classification(
+            let classification = if self.sample_interval_us < 80_000 {
+                detailed_path_classification(
                     final_flags,
                     raw_flags,
                     post_flags,
@@ -4082,7 +4089,12 @@ mod linux {
                     raw_deltas,
                     post_deltas,
                     avalon_deltas,
-                ),
+                )
+            } else {
+                "video_path_sample_window_too_long"
+            };
+            json!({
+                "classification": classification,
                 "sample_interval_us": self.sample_interval_us,
                 "final": {
                     "frame_valid": final_flags
@@ -4129,6 +4141,7 @@ mod linux {
                     "bucket_valid": avalon_flags
                         & contract::HDMI_AVALON_LIVENESS_ACTIVITY_FLAG_BUCKET_VALID != 0,
                     "deltas": {
+                        "bucket": avalon_deltas.bucket,
                         "request": avalon_deltas.request,
                         "accepted": avalon_deltas.accepted,
                         "returned": avalon_deltas.returned,
@@ -7419,6 +7432,7 @@ mod tests {
         };
         let post_black = raw_black;
         let avalon_live = AvalonLivenessDeltas {
+            bucket: 9,
             request: 8,
             accepted: 8,
             returned: 8,
@@ -7486,6 +7500,43 @@ mod tests {
                 avalon_live,
             ),
             "video_path_evidence_invalid"
+        );
+
+        assert_eq!(
+            linux::detailed_path_classification(
+                0,
+                0,
+                0,
+                contract::HDMI_AVALON_LIVENESS_ACTIVITY_FLAG_BUCKET_VALID,
+                scaled_black,
+                raw_black,
+                post_black,
+                AvalonLivenessDeltas {
+                    bucket: 0,
+                    request: 0,
+                    accepted: 0,
+                    returned: 0,
+                },
+            ),
+            "scaler_raw_black_no_observed_avalon_bucket"
+        );
+
+        assert_eq!(
+            linux::detailed_path_classification(
+                0,
+                0,
+                0,
+                contract::HDMI_AVALON_LIVENESS_ACTIVITY_FLAG_BUCKET_VALID,
+                scaled_black,
+                ThreeClassDeltas {
+                    no_de: 0,
+                    all_zero: 1,
+                    nonzero: 0,
+                },
+                post_black,
+                avalon_live,
+            ),
+            "final_output_black_scaled_path_inconclusive"
         );
     }
 
