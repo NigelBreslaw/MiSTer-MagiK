@@ -54,8 +54,8 @@ Commands `0x62`–`0x66` add strict, CRC-protected records without changing
 - `0x65` counts bounded Avalon buckets, plus buckets containing a read request,
   an accepted request, or returned data. The bucket epoch makes a valid empty
   interval distinguishable from a stopped source clock;
-- `0x66` reports a frame-held scaler scheduler/copy state, completion-credit
-  recovery epochs, and full-line/full-frame two-read starvation epochs.
+- `0x66` reports completion-credit recovery epochs and full-frame two-read
+  starvation epochs. Its retired live-state word remains zero.
 
 Every record is snapshotted at command recognition and read-only. The agent
 reads each detailed record twice about 50 ms apart and computes four-bit
@@ -106,9 +106,10 @@ The scaler repair replaces the lossy return-completion toggle with a registered
 two-bit Gray completion sequence. Two forced destination synchronizer chains
 recover a modulo delta of one or two and serialize it back into the scaler's
 original one-credit pulse interface. An exact two-path net-delay constraint
-bounds only that Gray bus; there is no new false path or multicycle exception. The 0x66
-state vector is held for a complete scaler frame and double-sampled before a
-command snapshots it. The design uses no mailbox, block RAM, or DSP and never
+bounds only that Gray bus; there is no new false path or multicycle exception.
+The full-frame starvation event is derived in the scaler clock domain and only
+its event toggle crosses to `clk_sys`; no live scheduler-state bus crosses.
+The design uses no mailbox, block RAM, or DSP and never
 observes Avalon addresses or returned pixel data.
 
 ## Collection and interpretation
@@ -166,9 +167,10 @@ returns, or active returns while the scaler remains black. Mixed, colliding,
 nonadvancing, or insufficient windows remain inconclusive rather than being
 guessed.
 
-The optional scaler-fetch record is interpreted separately. A stable
-`sREAD`, read level two, copy level zero state together with complete-frame
-starvation epochs is reported as `scaler_fetch_stalled_with_two_reads`.
+The optional scaler-fetch record is interpreted separately. Its source event
+is emitted only when the scaler remains in `sREAD`, with read level two and copy
+level zero, for an entire completed frame. A nonzero epoch delta is reported as
+`scaler_fetch_stalled_with_two_reads`.
 Two-credit catch-up epochs show that the repaired crossing recovered both
 completions after a destination-clock pause. The bounded record deliberately
 does not claim to diagnose intermittent vertical bands; that would require a

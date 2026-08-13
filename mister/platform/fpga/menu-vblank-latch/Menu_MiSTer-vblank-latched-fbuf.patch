@@ -28,13 +28,16 @@ index a416879..f6a40ea 100644
 +wire [15:0] magik_lfb_drop_count;
 +wire [15:0] magik_lfb_reject_count;
 +wire [15:0] magik_lfb_active_route_epoch;
-+wire        magik_diag_response_valid;
-+wire [15:0] magik_diag_response_data;
++wire [15:0] magik_evidence_word0;
++wire [15:0] magik_evidence_word1;
++wire [15:0] magik_evidence_word2;
++wire [15:0] magik_evidence_word3;
++wire [15:0] magik_evidence_word4;
++wire  [7:0] magik_evidence_command = io_din[7:0];
 +wire [1:0]  magik_scaler_completion_gray;
 +wire        magik_scaler_completion_pulse;
 +wire        magik_scaler_completion_batch_two_toggle;
 +wire        magik_scaler_completion_starved_frame_toggle;
-+wire [7:0]  magik_scaler_completion_frame_state;
 +wire        magik_scaler_completion_snapshot_valid;
 +wire        magik_scaler_completion_delta_invalid;
 +wire        magik_scaler_completion_level_invalid;
@@ -50,6 +53,11 @@ index a416879..f6a40ea 100644
 +	.io_uio(io_uio),
 +	.io_strobe(io_strobe),
 +	.io_din(io_din),
++	.evidence_word0(magik_evidence_word0),
++	.evidence_word1(magik_evidence_word1),
++	.evidence_word2(magik_evidence_word2),
++	.evidence_word3(magik_evidence_word3),
++	.evidence_word4(magik_evidence_word4),
 +	.active_lfb_en(LFB_EN),
 +	.active_lfb_base(LFB_BASE),
 +	.active_lfb_width(LFB_WIDTH),
@@ -88,9 +96,7 @@ index a416879..f6a40ea 100644
 +	.hdmi_tx_clk(hdmi_tx_clk),
 +	.clk_hdmi(clk_hdmi),
 +	.clk_100m(clk_100m),
-+	.io_uio(io_uio),
-+	.io_strobe(io_strobe),
-+	.io_din(io_din),
++	.evidence_command(magik_evidence_command),
 +	.hdmi_pll_locked(hdmi_pll_locked),
 +	.hdmi_out_vs(hdmi_out_vs),
 +	.hdmi_out_de(hdmi_out_de),
@@ -105,14 +111,16 @@ index a416879..f6a40ea 100644
 +	.vbuf_read(vbuf_read),
 +	.vbuf_waitrequest(vbuf_waitrequest),
 +	.vbuf_readdatavalid(vbuf_readdatavalid),
-+	.scaler_fetch_state(magik_scaler_completion_frame_state),
 +	.scaler_fetch_batch_two_toggle(magik_scaler_completion_batch_two_toggle),
 +	.scaler_fetch_starved_frame_toggle(magik_scaler_completion_starved_frame_toggle),
 +	.scaler_fetch_snapshot_valid(magik_scaler_completion_snapshot_valid),
 +	.scaler_fetch_delta_invalid(magik_scaler_completion_delta_invalid),
 +	.scaler_fetch_level_invalid(magik_scaler_completion_level_invalid),
-+	.response_valid(magik_diag_response_valid),
-+	.response_data(magik_diag_response_data)
++	.evidence_word0(magik_evidence_word0),
++	.evidence_word1(magik_evidence_word1),
++	.evidence_word2(magik_evidence_word2),
++	.evidence_word3(magik_evidence_word3),
++	.evidence_word4(magik_evidence_word4)
 +);
 +
  always@(posedge clk_sys) begin
@@ -142,7 +150,6 @@ index a416879..f6a40ea 100644
  			if(io_din[7:0] == 'h40) io_dout_sys <= fb_crc;
  `endif
  			if(io_din[7:0] == 'h42) io_dout_sys <= {1'b1, frame_cnt};
-+			if(magik_diag_response_valid) io_dout_sys <= magik_diag_response_data;
 +			if(magik_response_valid) io_dout_sys <= magik_response_data;
  			if(io_din[7:0] == 'h44) io_dout_sys <= 1;
  		end
@@ -151,7 +158,6 @@ index a416879..f6a40ea 100644
  					9: LFB_STRIDE      <= io_din[13:0];
  				endcase
  			end
-+			if(magik_diag_response_valid) io_dout_sys <= magik_diag_response_data;
 +			if(magik_response_valid) io_dout_sys <= magik_response_data;
  			if(cmd == 'h25) {led_overtake, led_state} <= io_din;
  			if(cmd == 'h26) vol_att <= io_din[4:0];
@@ -396,7 +402,6 @@ index a416879..f6a40ea 100644
 +		.completion_pulse(magik_scaler_completion_pulse),
 +		.completion_batch_two_toggle(magik_scaler_completion_batch_two_toggle),
 +		.completion_starved_frame_toggle(magik_scaler_completion_starved_frame_toggle),
-+		.completion_frame_state(magik_scaler_completion_frame_state),
 +		.completion_snapshot_valid(magik_scaler_completion_snapshot_valid),
 +		.completion_delta_invalid(magik_scaler_completion_delta_invalid)
 +	);

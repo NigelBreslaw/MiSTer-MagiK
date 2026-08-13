@@ -62,7 +62,7 @@ MINIMUM_SLACK_NS = 0.20
 MAXIMUM_SLACK_DEGRADATION_NS = 0.15
 MAXIMUM_LOGIC_ELEMENT_DELTA = 800
 MAXIMUM_REGISTER_DELTA = 360
-EXPECTED_OBSERVER_CALCULABLE_CHAINS = 32
+EXPECTED_OBSERVER_CALCULABLE_CHAINS = 24
 EXPECTED_QUARTUS_POLICY = {
     "auto_parallel_synthesis": "off",
     "parallel_synthesis": "off",
@@ -101,8 +101,6 @@ EXPECTED_SYNC_ASSIGNMENT_SUFFIXES = (
     "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|avalon_accepted_sys",
     "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|avalon_returned_meta",
     "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|avalon_returned_sys",
-    "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|scaler_fetch_state_meta",
-    "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|scaler_fetch_state_sys",
     "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|scaler_fetch_batch_two_meta",
     "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|scaler_fetch_batch_two_sys",
     "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|scaler_fetch_starved_frame_meta",
@@ -128,7 +126,7 @@ DIAGNOSTIC_REPORT_NAMES = frozenset(
 )
 EXPECTED_CDC_REPORT_ANALYSES = {
     "menu.magik-diagnostic-cdc-skew.rpt": ("set_max_skew", 0),
-    "menu.magik-diagnostic-cdc-net-delay.rpt": ("set_net_delay", 2),
+    "menu.magik-diagnostic-cdc-net-delay.rpt": ("set_net_delay", 1),
 }
 
 
@@ -366,6 +364,7 @@ def validate_diagnostic_reports(
         reasons.append("diagnostic_cdc_analysis_missing")
 
     analysis_counts: dict[str, int | None] = {}
+    detailed_path_counts: dict[str, int | None] = {}
     minimum_slacks: dict[str, float | None] = {}
     for name, (command, expected_count) in EXPECTED_CDC_REPORT_ANALYSES.items():
         text = reports.get(name, "")
@@ -387,6 +386,25 @@ def validate_diagnostic_reports(
         if finite_slacks and min(finite_slacks) < 0:
             reasons.append("diagnostic_cdc_slack_negative")
 
+        if name == "menu.magik-diagnostic-cdc-net-delay.rpt":
+            detailed_rows = list(
+                re.finditer(
+                    rf"(?m)^\s*;\s*--\s*;\s*({NUMBER})\s*;[^\n]*"
+                    r"avl_completion_gray_i\[([01])\][^\n]*"
+                    r"completion_gray_meta\[\2\]",
+                    text,
+                    re.IGNORECASE,
+                )
+            )
+            detailed_path_counts[name] = len(detailed_rows)
+            if len(detailed_rows) != 2 or {row.group(2) for row in detailed_rows} != {"0", "1"}:
+                reasons.append("diagnostic_cdc_analysis_count")
+            detailed_slacks = [finite_number(row.group(1)) for row in detailed_rows]
+            if any(value is None for value in detailed_slacks):
+                reasons.append("diagnostic_cdc_slack_missing")
+            if any(value is not None and value < 0 for value in detailed_slacks):
+                reasons.append("diagnostic_cdc_slack_negative")
+
     metastability = reports.get("menu.magik-diagnostic-metastability.rpt", "")
     metastability_lower = metastability.lower()
     missing_metastability_chains = [
@@ -405,6 +423,7 @@ def validate_diagnostic_reports(
         "diagnostic_cdc_reports": sorted(reports),
         "diagnostic_cdc_analysis_labels": dict(sorted(analysis_labels.items())),
         "diagnostic_cdc_analysis_counts": analysis_counts,
+        "diagnostic_cdc_detailed_path_counts": detailed_path_counts,
         "diagnostic_cdc_minimum_slacks": minimum_slacks,
         "missing_diagnostic_metastability_chains": missing_metastability_chains,
     }

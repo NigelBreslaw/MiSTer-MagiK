@@ -20,7 +20,6 @@ module tb_mister_magik_scaler_completion_cdc;
 	wire completion_pulse;
 	wire completion_batch_two_toggle;
 	wire completion_starved_frame_toggle;
-	wire [7:0] completion_frame_state;
 	wire completion_snapshot_valid;
 	wire completion_delta_invalid;
 	reg scaler_vs = 1'b0;
@@ -47,7 +46,6 @@ module tb_mister_magik_scaler_completion_cdc;
 		.completion_pulse(completion_pulse),
 		.completion_batch_two_toggle(completion_batch_two_toggle),
 		.completion_starved_frame_toggle(completion_starved_frame_toggle),
-		.completion_frame_state(completion_frame_state),
 		.completion_snapshot_valid(completion_snapshot_valid),
 		.completion_delta_invalid(completion_delta_invalid)
 	);
@@ -184,8 +182,7 @@ module tb_mister_magik_scaler_completion_cdc;
 			$fatal(1, "intermediate Gray sampling lost a completion");
 
 		// A persistent two-read/no-copy state is counted only after complete
-		// native frame interval, while the exported live state is
-		// captured coherently on a scaler VS edge.
+		// native frame interval.
 		scaler_framebuffer_enabled = 1'b1;
 		scaler_scheduler_state = 2'd2;
 		scaler_copy_state = 2'd0;
@@ -196,9 +193,8 @@ module tb_mister_magik_scaler_completion_cdc;
 		repeat(2) @(negedge destination_clk);
 		@(negedge destination_clk); scaler_vs = 1'b1;
 		@(negedge destination_clk); scaler_vs = 1'b0;
-		if(!completion_snapshot_valid ||
-		   completion_frame_state != 8'b00_10_00_10)
-			$fatal(1, "native scaler fetch state snapshot mismatch");
+		if(!completion_snapshot_valid)
+			$fatal(1, "native scaler fetch observer did not arm");
 		if(completion_starved_frame_toggle != 1'b1)
 			$fatal(1, "persistent scaler starvation frame was not counted");
 

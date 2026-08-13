@@ -27,7 +27,6 @@ module mister_magik_sys_top_latch_path (
 	input wire vbuf_read,
 	input wire vbuf_waitrequest,
 	input wire vbuf_readdatavalid,
-	input wire [7:0] scaler_fetch_state,
 	input wire scaler_fetch_batch_two_toggle,
 	input wire scaler_fetch_starved_frame_toggle,
 	input wire scaler_fetch_snapshot_valid,
@@ -52,8 +51,12 @@ module mister_magik_sys_top_latch_path (
 
 	wire magik_response_valid;
 	wire [15:0] magik_response_data;
-	wire magik_diag_response_valid;
-	wire [15:0] magik_diag_response_data;
+	wire [15:0] magik_evidence_word0;
+	wire [15:0] magik_evidence_word1;
+	wire [15:0] magik_evidence_word2;
+	wire [15:0] magik_evidence_word3;
+	wire [15:0] magik_evidence_word4;
+	wire [7:0] magik_evidence_command = io_din[7:0];
 	wire magik_lfb_apply;
 	wire magik_lfb_apply_accepted;
 	wire legacy_lfb_write;
@@ -84,6 +87,11 @@ module mister_magik_sys_top_latch_path (
 		.io_uio(io_uio),
 		.io_strobe(io_strobe),
 		.io_din(io_din),
+		.evidence_word0(magik_evidence_word0),
+		.evidence_word1(magik_evidence_word1),
+		.evidence_word2(magik_evidence_word2),
+		.evidence_word3(magik_evidence_word3),
+		.evidence_word4(magik_evidence_word4),
 		.active_lfb_en(LFB_EN),
 		.active_lfb_base(LFB_BASE),
 		.active_lfb_width(LFB_WIDTH),
@@ -121,9 +129,7 @@ module mister_magik_sys_top_latch_path (
 		.hdmi_tx_clk(hdmi_tx_clk),
 		.clk_hdmi(clk_hdmi),
 		.clk_100m(clk_100m),
-		.io_uio(io_uio),
-		.io_strobe(io_strobe),
-		.io_din(io_din),
+		.evidence_command(magik_evidence_command),
 		.hdmi_pll_locked(hdmi_pll_locked),
 		.hdmi_out_vs(hdmi_out_vs),
 		.hdmi_out_de(hdmi_out_de),
@@ -138,14 +144,16 @@ module mister_magik_sys_top_latch_path (
 		.vbuf_read(vbuf_read),
 		.vbuf_waitrequest(vbuf_waitrequest),
 		.vbuf_readdatavalid(vbuf_readdatavalid),
-		.scaler_fetch_state(scaler_fetch_state),
 		.scaler_fetch_batch_two_toggle(scaler_fetch_batch_two_toggle),
 		.scaler_fetch_starved_frame_toggle(scaler_fetch_starved_frame_toggle),
 		.scaler_fetch_snapshot_valid(scaler_fetch_snapshot_valid),
 		.scaler_fetch_delta_invalid(scaler_fetch_delta_invalid),
 		.scaler_fetch_level_invalid(scaler_fetch_level_invalid),
-		.response_valid(magik_diag_response_valid),
-		.response_data(magik_diag_response_data)
+		.evidence_word0(magik_evidence_word0),
+		.evidence_word1(magik_evidence_word1),
+		.evidence_word2(magik_evidence_word2),
+		.evidence_word3(magik_evidence_word3),
+		.evidence_word4(magik_evidence_word4)
 	);
 
 	always @(posedge clk_sys) begin
@@ -183,8 +191,6 @@ module mister_magik_sys_top_latch_path (
 			io_dout_sys <= 16'd0;
 			if(!bridge.has_command && (io_din[7:0] == 8'h2f))
 				io_dout_sys <= 16'd1;
-			if(magik_diag_response_valid)
-				io_dout_sys <= magik_diag_response_data;
 			if(magik_response_valid)
 				io_dout_sys <= magik_response_data;
 		end
@@ -214,7 +220,6 @@ module tb_mister_magik_sys_top_integration;
 	reg test_vbuf_read = 1'b0;
 	reg test_vbuf_waitrequest = 1'b0;
 	reg test_vbuf_readdatavalid = 1'b0;
-	reg [7:0] test_scaler_fetch_state = 8'd0;
 	reg test_scaler_fetch_batch_two_toggle = 1'b0;
 	reg test_scaler_fetch_starved_frame_toggle = 1'b0;
 	reg test_scaler_fetch_snapshot_valid = 1'b0;
@@ -245,7 +250,6 @@ module tb_mister_magik_sys_top_integration;
 		.vbuf_read(test_vbuf_read),
 		.vbuf_waitrequest(test_vbuf_waitrequest),
 		.vbuf_readdatavalid(test_vbuf_readdatavalid),
-		.scaler_fetch_state(test_scaler_fetch_state),
 		.scaler_fetch_batch_two_toggle(test_scaler_fetch_batch_two_toggle),
 		.scaler_fetch_starved_frame_toggle(test_scaler_fetch_starved_frame_toggle),
 		.scaler_fetch_snapshot_valid(test_scaler_fetch_snapshot_valid),
@@ -594,7 +598,6 @@ module tb_mister_magik_sys_top_integration;
 		expect16(evidence[MAGIK_HDMI_AVALON_LIVENESS_ACTIVITY_CRC_WORD], evidence_crc,
 			"sys_top Avalon liveness CRC");
 
-		test_scaler_fetch_state = 8'b00_10_00_10;
 		test_scaler_fetch_snapshot_valid = 1'b1;
 		test_scaler_fetch_batch_two_toggle = 1'b1;
 		test_scaler_fetch_starved_frame_toggle = 1'b1;
@@ -612,7 +615,7 @@ module tb_mister_magik_sys_top_integration;
 			index = index + 1)
 			evidence_crc = crc_word(evidence_crc, evidence[index]);
 		expect16(evidence[MAGIK_HDMI_SCALER_FETCH_ACTIVITY_STATE_WORD],
-			{8'd0, test_scaler_fetch_state}, "sys_top scaler fetch state");
+			16'd0, "sys_top retired scaler fetch state");
 		expect16(evidence[MAGIK_HDMI_SCALER_FETCH_ACTIVITY_EVENTS_WORD],
 			16'h0011, "sys_top scaler fetch event epochs");
 		expect16(evidence[MAGIK_HDMI_SCALER_FETCH_ACTIVITY_FLAGS_WORD],

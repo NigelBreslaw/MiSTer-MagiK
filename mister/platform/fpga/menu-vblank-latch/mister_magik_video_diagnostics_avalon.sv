@@ -21,7 +21,6 @@ module mister_magik_scaler_completion_cdc (
 	output reg        completion_pulse = 1'b0,
 	output reg        completion_batch_two_toggle = 1'b0,
 	output reg        completion_starved_frame_toggle = 1'b0,
-	output reg  [7:0] completion_frame_state = 8'd0,
 	output reg        completion_snapshot_valid = 1'b0,
 	output reg        completion_delta_invalid = 1'b0
 );
@@ -83,7 +82,6 @@ module mister_magik_scaler_completion_cdc (
 			completion_pulse <= 1'b0;
 			completion_batch_two_toggle <= 1'b0;
 			completion_starved_frame_toggle <= 1'b0;
-			completion_frame_state <= 8'd0;
 			completion_snapshot_valid <= 1'b0;
 			completion_delta_invalid <= 1'b0;
 			scaler_vs_previous <= 1'b0;
@@ -112,12 +110,6 @@ module mister_magik_scaler_completion_cdc (
 				completion_delta_invalid <= 1'b1;
 
 			if(scaler_vs_rise) begin
-				completion_frame_state <= {
-					scaler_copy_level,
-					scaler_read_level,
-					scaler_copy_state,
-					scaler_scheduler_state
-				};
 				completion_snapshot_valid <= 1'b1;
 				if(completion_frame_armed && completion_frame_starved_now)
 					completion_starved_frame_toggle <=
@@ -126,7 +118,7 @@ module mister_magik_scaler_completion_cdc (
 				completion_frame_starved <= completion_starved_now;
 			end
 			else if(completion_frame_armed)
-				completion_frame_starved <= completion_starved_now;
+				completion_frame_starved <= completion_frame_starved_now;
 		end
 	end
 endmodule

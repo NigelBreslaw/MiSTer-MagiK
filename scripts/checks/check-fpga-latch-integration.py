@@ -35,8 +35,8 @@ COMMAND_PATTERNS = {
 }
 
 IMMUTABLE_LATCH_SHA256 = {
-    "mister_magik_vblank_latch.sv": "47def40bc8b064373efa328a56ab0396272855a2190f17d700f27b8a29382090",
-    "mister_magik_latch_sys_top_bridge.sv": "5960883a0f8740ffc18fcd63ce8c99da9a9819bcbc903ca119bfc66810fd68e9",
+    "mister_magik_vblank_latch.sv": "6fc49a047aac9e727fa0398233bffdff333db03a6b24b4128939ea299fd47e28",
+    "mister_magik_latch_sys_top_bridge.sv": "667a539da29bd3013c1d83874c904148abb9f8627c73f0a79383758af0421e7c",
     "mister_magik_latch_protocol.svh": "bc26dff578940790a70e379718f8f1b8eda7122efd267e0e5e7cc244f1347a7b",
     "latch-protocol.json": "69eef7979ad235c49989870b82534d187c9d97da40feb6e7647fd8e62adbec54",
 }
@@ -48,6 +48,11 @@ BRIDGE_MAPPING = """mister_magik_latch_sys_top_bridge magik_latch_bridge
 \t.io_uio(io_uio),
 \t.io_strobe(io_strobe),
 \t.io_din(io_din),
+\t.evidence_word0(magik_evidence_word0),
+\t.evidence_word1(magik_evidence_word1),
+\t.evidence_word2(magik_evidence_word2),
+\t.evidence_word3(magik_evidence_word3),
+\t.evidence_word4(magik_evidence_word4),
 \t.active_lfb_en(LFB_EN),
 \t.active_lfb_base(LFB_BASE),
 \t.active_lfb_width(LFB_WIDTH),
@@ -163,6 +168,8 @@ def main() -> None:
     diagnostics_sdc = source_dir / "mister_magik_video_diagnostics.sdc"
     timing_report = source_dir / "report_top_timing.tcl"
     integration_tb = source_dir / "tb_mister_magik_sys_top_integration.sv"
+    rtl_source = rtl.read_text()
+    bridge_source = bridge.read_text()
     control_source = diagnostics_control.read_text()
     avalon_source = diagnostics_avalon.read_text()
     output_source = diagnostics_output.read_text()
@@ -195,7 +202,6 @@ def main() -> None:
         "completion_pulse",
         "completion_batch_two_toggle",
         "completion_starved_frame_toggle",
-        "completion_frame_state",
         "completion_snapshot_valid",
         "completion_delta_invalid",
     ]:
@@ -213,7 +219,6 @@ def main() -> None:
         "if(completion_pending)",
         "completion_pending <= 1'b1;",
         "wire completion_starved_now =",
-        "completion_frame_state <= {",
         "if(!completion_delta_valid)",
     ):
         if avalon_source.count(fragment) != 1:
@@ -300,16 +305,6 @@ def main() -> None:
         )
         if control_source.count(declaration) != 1:
             fail(f"HDMI evidence synchronizer stage is not exact: {stage}")
-    for stage, assignment in (
-        ("scaler_fetch_state_meta", "FORCED"),
-        ("scaler_fetch_state_sys", "FORCED_IF_ASYNCHRONOUS"),
-    ):
-        declaration = (
-            f'(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION {assignment}" *)\n'
-            f"\treg [7:0] {stage} = 8'd0;"
-        )
-        if control_source.count(declaration) != 1:
-            fail(f"HDMI scaler-fetch state synchronizer is not exact: {stage}")
     if (
         control_source.count("control_pll_lock_meta <= hdmi_pll_locked;") != 1
         or len(re.findall(r"\bhdmi_pll_locked\b", control_source)) != 2
@@ -417,14 +412,6 @@ def main() -> None:
             control_source,
             "avalon_returned_sys <= avalon_returned_meta;",
         ),
-        "scaler fetch state first stage": (
-            control_source,
-            "scaler_fetch_state_meta <= scaler_fetch_state;",
-        ),
-        "scaler fetch state second stage": (
-            control_source,
-            "scaler_fetch_state_sys <= scaler_fetch_state_meta;",
-        ),
         "scaler batch-two first stage": (
             control_source,
             "scaler_fetch_batch_two_meta <= scaler_fetch_batch_two_toggle;",
@@ -488,9 +475,7 @@ def main() -> None:
         "hdmi_tx_clk",
         "clk_hdmi",
         "clk_100m",
-        "io_uio",
-        "io_strobe",
-        "io_din",
+        "evidence_command",
         "hdmi_pll_locked",
         "hdmi_out_vs",
         "hdmi_out_de",
@@ -505,14 +490,16 @@ def main() -> None:
         "vbuf_read",
         "vbuf_waitrequest",
         "vbuf_readdatavalid",
-        "scaler_fetch_state",
         "scaler_fetch_batch_two_toggle",
         "scaler_fetch_starved_frame_toggle",
         "scaler_fetch_snapshot_valid",
         "scaler_fetch_delta_invalid",
         "scaler_fetch_level_invalid",
-        "response_valid",
-        "response_data",
+        "evidence_word0",
+        "evidence_word1",
+        "evidence_word2",
+        "evidence_word3",
+        "evidence_word4",
     ]
     if module_ports != expected_module_ports:
         fail("HDMI evidence module interface is not the exact passive allowlist")
@@ -531,8 +518,7 @@ def main() -> None:
         "reg [3:0] output_black_mixed_count = 4'd0;",
         "reg [3:0] output_de_has_nonzero_count = 4'd0;",
         "wire output_no_de_event = output_no_de_sys != output_no_de_count[0];",
-        "wire activity_start = io_din[7:0] == MAGIK_UIO_GET_HDMI_OUTPUT_ACTIVITY;",
-        "tx_crc <= MAGIK_HDMI_OUTPUT_ACTIVITY_HEADER_CRC;",
+        "MAGIK_UIO_GET_HDMI_OUTPUT_ACTIVITY: begin",
         "wire raw_sample_nonzero = scaler_raw_de && (|scaler_raw_d);",
         "wire post_sample_nonzero = post_osd_de && (|post_osd_d);",
         "raw_no_de_toggle <= !raw_no_de_toggle;",
@@ -541,8 +527,8 @@ def main() -> None:
         "post_no_de_toggle <= !post_no_de_toggle;",
         "post_all_zero_toggle <= !post_all_zero_toggle;",
         "post_nonzero_toggle <= !post_nonzero_toggle;",
-        "tx_crc <= MAGIK_HDMI_SCALER_RAW_ACTIVITY_HEADER_CRC;",
-        "tx_crc <= MAGIK_HDMI_POST_OSD_ACTIVITY_HEADER_CRC;",
+        "evidence_word0 = MAGIK_HDMI_SCALER_RAW_ACTIVITY_SCHEMA;",
+        "evidence_word0 = MAGIK_HDMI_POST_OSD_ACTIVITY_SCHEMA;",
         "reg [18:0] avalon_bucket_count = 19'd0;",
         "reg [3:0] avalon_bucket_epoch = 4'd0;",
         "wire avalon_bucket_event = avalon_bucket_sys != avalon_bucket_epoch[0];",
@@ -550,20 +536,49 @@ def main() -> None:
         "(vbuf_read && !vbuf_waitrequest);",
         "wire avalon_returned_now = avalon_bucket_saw_returned || vbuf_readdatavalid;",
         "avalon_bucket_toggle <= !avalon_bucket_toggle;",
-        "tx_crc <= MAGIK_HDMI_AVALON_LIVENESS_ACTIVITY_HEADER_CRC;",
-        "wire scaler_fetch_start =",
-        "tx_crc <= MAGIK_HDMI_SCALER_FETCH_ACTIVITY_HEADER_CRC;",
+        "evidence_word0 = MAGIK_HDMI_AVALON_LIVENESS_ACTIVITY_SCHEMA;",
+        "evidence_word0 = MAGIK_HDMI_SCALER_FETCH_ACTIVITY_SCHEMA;",
         "reg [1:0] scaler_fetch_batch_two_count = 2'd0;",
         "reg [3:0] scaler_fetch_starved_frame_count = 4'd0;",
-        "wire scaler_fetch_state_coherent =",
-        "wire scaler_fetch_snapshot_ready =",
-        "if(scaler_fetch_snapshot_ready) begin",
-        "snapshot_lock_loss_count <= 16'd0;",
-        "snapshot_path_extra <= 16'd0;",
+        "if(scaler_fetch_snapshot_valid_sys)",
     )
     for fragment in required_activity_fragments:
         if control_source.count(fragment) != 1:
             fail(f"final-output evidence behavior is missing or ambiguous: {fragment}")
+    for retired_reader_fragment in (
+        "has_command",
+        "command_kind",
+        "word_count",
+        "tx_crc",
+        "response_valid",
+        "response_data",
+        "snapshot_lock_loss_count",
+        "snapshot_path_extra",
+        "scaler_fetch_state_meta",
+        "scaler_fetch_state_sys",
+    ):
+        if retired_reader_fragment in control_source:
+            fail(f"standalone diagnostic reader state remains: {retired_reader_fragment}")
+    if control_source.count("evidence_word1 = 16'd0;") != 2:
+        fail("retired scaler-fetch state word is not strict zero")
+    for fragment in (
+        "completion_frame_starved <= completion_starved_now;",
+        "completion_frame_starved <= completion_frame_starved_now;",
+    ):
+        if avalon_source.count(fragment) != 1:
+            fail(f"full-frame starvation accumulation is not exact: {fragment}")
+    for fragment in (
+        '`include "mister_magik_video_diagnostics_protocol.svh"',
+        "else if(cmd_start && evidence_command) begin",
+        "tx_crc <= evidence_header_crc;",
+        "else if(cmd_data && evidence_command) begin",
+        "else if(evidence_command && (word_index < evidence_crc_word)) begin",
+    ):
+        if rtl_source.count(fragment) != 1:
+            fail(f"shared latch evidence serializer is missing or ambiguous: {fragment}")
+    for index in range(5):
+        if bridge_source.count(f".evidence_word{index}(evidence_word{index})") != 1:
+            fail(f"shared bridge evidence word {index} is not exact")
     if re.search(
         r"\b(?:LFB_|FB_|vbuf_|reset_req|cfg_done)[A-Za-z0-9_]*\s*(?:<=|=)",
         control_source,
@@ -688,8 +703,8 @@ def main() -> None:
             "mister_magik_video_diagnostics_control magik_video_diagnostics": 0,
             "mister_magik_video_diagnostics_avalon magik_video_diagnostics_avalon": 0,
             "mister_magik_video_diagnostics_output magik_video_diagnostics_output": 0,
-            "if(magik_diag_response_valid) io_dout_sys <= magik_diag_response_data;\n"
-            "\t\t\tif(magik_response_valid) io_dout_sys <= magik_response_data;": 2,
+            "magik_diag_response_valid": 0,
+            "magik_diag_response_data": 0,
         }
         mismatches = [
             f"{fragment.splitlines()[0]!r} expected {expected}, found {patched.count(fragment)}"
@@ -772,9 +787,7 @@ def main() -> None:
                 ("hdmi_tx_clk", "hdmi_tx_clk"),
                 ("clk_hdmi", "clk_hdmi"),
                 ("clk_100m", "clk_100m"),
-                ("io_uio", "io_uio"),
-                ("io_strobe", "io_strobe"),
-                ("io_din", "io_din"),
+                ("evidence_command", "magik_evidence_command"),
                 ("hdmi_pll_locked", "hdmi_pll_locked"),
                 ("hdmi_out_vs", "hdmi_out_vs"),
                 ("hdmi_out_de", "hdmi_out_de"),
@@ -789,14 +802,16 @@ def main() -> None:
                 ("vbuf_read", "vbuf_read"),
                 ("vbuf_waitrequest", "vbuf_waitrequest"),
                 ("vbuf_readdatavalid", "vbuf_readdatavalid"),
-                ("scaler_fetch_state", "magik_scaler_completion_frame_state"),
                 ("scaler_fetch_batch_two_toggle", "magik_scaler_completion_batch_two_toggle"),
                 ("scaler_fetch_starved_frame_toggle", "magik_scaler_completion_starved_frame_toggle"),
                 ("scaler_fetch_snapshot_valid", "magik_scaler_completion_snapshot_valid"),
                 ("scaler_fetch_delta_invalid", "magik_scaler_completion_delta_invalid"),
                 ("scaler_fetch_level_invalid", "magik_scaler_completion_level_invalid"),
-                ("response_valid", "magik_diag_response_valid"),
-                ("response_data", "magik_diag_response_data"),
+                ("evidence_word0", "magik_evidence_word0"),
+                ("evidence_word1", "magik_evidence_word1"),
+                ("evidence_word2", "magik_evidence_word2"),
+                ("evidence_word3", "magik_evidence_word3"),
+                ("evidence_word4", "magik_evidence_word4"),
             )
         )
         actual_lock_ports = sorted(
@@ -811,9 +826,15 @@ def main() -> None:
         )
         if actual_lock_ports != expected_lock_ports or len(all_lock_port_names) != 29:
             fail("HDMI lock and final-output evidence port map is not exact")
-        for response_net in ("magik_diag_response_valid", "magik_diag_response_data"):
-            if len(re.findall(rf"\b{response_net}\b", patched)) != 4:
-                fail(f"HDMI lock response net use is not exact: {response_net}")
+        for evidence_net in (
+            "magik_evidence_word0",
+            "magik_evidence_word1",
+            "magik_evidence_word2",
+            "magik_evidence_word3",
+            "magik_evidence_word4",
+        ):
+            if len(re.findall(rf"\b{evidence_net}\b", patched)) != 3:
+                fail(f"HDMI evidence word net use is not exact: {evidence_net}")
         if re.search(
             r"\.(?:vbuf_(?!read\b|waitrequest\b|readdatavalid\b)|"
             r"reset|route|snapshot|fault|heartbeat|generation)",

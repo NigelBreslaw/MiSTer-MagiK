@@ -4011,12 +4011,6 @@ mod linux {
 
     pub(super) fn scaler_fetch_classification(
         flags: u16,
-        state_stable: bool,
-        scheduler_state: u8,
-        copy_state: u8,
-        read_level: u8,
-        copy_level: u8,
-        completion_pending: bool,
         deltas: ScalerFetchDeltas,
     ) -> &'static str {
         use mister_magik_video_diagnostics_contract as contract;
@@ -4028,15 +4022,7 @@ mod linux {
             "scaler_fetch_evidence_invalid"
         } else if flags & contract::HDMI_SCALER_FETCH_ACTIVITY_FLAG_SNAPSHOT_VALID == 0 {
             "scaler_fetch_snapshot_unavailable"
-        } else if !state_stable {
-            "scaler_fetch_state_changed"
-        } else if deltas.starved_frame != 0
-            && scheduler_state == 2
-            && copy_state == 0
-            && read_level == 2
-            && copy_level == 0
-            && !completion_pending
-        {
+        } else if deltas.starved_frame != 0 {
             "scaler_fetch_stalled_with_two_reads"
         } else if deltas.batch_two != 0 {
             "scaler_fetch_recovered_two_completion_batch"
@@ -4149,34 +4135,15 @@ mod linux {
                 (Some(first), Some(second)) => {
                     let flags = first.flags() | second.flags();
                     let deltas = scaler_fetch_deltas(first, second);
-                    let state_stable = first.words[contract::HDMI_SCALER_FETCH_ACTIVITY_STATE_WORD]
-                        == second.words[contract::HDMI_SCALER_FETCH_ACTIVITY_STATE_WORD];
                     json!({
-                        "classification": scaler_fetch_classification(
-                            flags,
-                            state_stable,
-                            second.scheduler_state(),
-                            second.copy_state(),
-                            second.read_level(),
-                            second.copy_level(),
-                            second.completion_pending(),
-                            deltas,
-                        ),
+                        "classification": scaler_fetch_classification(flags, deltas),
                         "snapshot_valid": flags
                             & contract::HDMI_SCALER_FETCH_ACTIVITY_FLAG_SNAPSHOT_VALID != 0,
                         "completion_delta_invalid": flags
                             & contract::HDMI_SCALER_FETCH_ACTIVITY_FLAG_COMPLETION_DELTA_INVALID != 0,
                         "completion_level_invalid": flags
                             & contract::HDMI_SCALER_FETCH_ACTIVITY_FLAG_COMPLETION_LEVEL_INVALID != 0,
-                        "state_stable": state_stable,
-                        "state": {
-                            "scheduler": second.scheduler_state(),
-                            "copy": second.copy_state(),
-                            "read_level": second.read_level(),
-                            "copy_level": second.copy_level(),
-                            "completion_pending": second.completion_pending(),
-                            "completion_delta": second.completion_delta(),
-                        },
+                        "state_retired": true,
                         "deltas": {
                             "batch_two": deltas.batch_two,
                             "starved_frame": deltas.starved_frame,
@@ -7689,39 +7656,14 @@ mod tests {
         assert_eq!(
             linux::scaler_fetch_classification(
                 contract::HDMI_SCALER_FETCH_ACTIVITY_FLAG_SNAPSHOT_VALID,
-                true,
-                2,
-                0,
-                2,
-                0,
-                false,
                 stalled,
             ),
             "scaler_fetch_stalled_with_two_reads"
         );
         assert_eq!(
             linux::scaler_fetch_classification(
-                contract::HDMI_SCALER_FETCH_ACTIVITY_FLAG_SNAPSHOT_VALID,
-                false,
-                2,
-                0,
-                2,
-                0,
-                false,
-                stalled,
-            ),
-            "scaler_fetch_state_changed"
-        );
-        assert_eq!(
-            linux::scaler_fetch_classification(
                 contract::HDMI_SCALER_FETCH_ACTIVITY_FLAG_SNAPSHOT_VALID
                     | contract::HDMI_SCALER_FETCH_ACTIVITY_FLAG_COMPLETION_DELTA_INVALID,
-                true,
-                2,
-                0,
-                2,
-                0,
-                false,
                 stalled,
             ),
             "scaler_fetch_evidence_invalid"
@@ -7729,12 +7671,6 @@ mod tests {
         assert_eq!(
             linux::scaler_fetch_classification(
                 contract::HDMI_SCALER_FETCH_ACTIVITY_FLAG_SNAPSHOT_VALID,
-                true,
-                0,
-                0,
-                0,
-                0,
-                false,
                 ScalerFetchDeltas {
                     batch_two: 1,
                     starved_frame: 0,

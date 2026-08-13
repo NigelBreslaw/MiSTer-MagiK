@@ -4,6 +4,157 @@
 `timescale 1ns/1ps
 `default_nettype none
 
+// Test-only serializer for focused recorder tests. Production uses the shared
+// latch parser/CRC bank exercised by tb_mister_magik_sys_top_integration.
+module mister_magik_hdmi_evidence_test_wrapper (
+	input wire clk_sys, input wire hdmi_tx_clk, input wire clk_hdmi,
+	input wire clk_100m, input wire io_uio, input wire io_strobe,
+	input wire [15:0] io_din, input wire hdmi_pll_locked,
+	input wire hdmi_out_vs, input wire hdmi_out_de,
+	input wire [23:0] hdmi_out_d, input wire hdmi_out_direct,
+	input wire scaler_raw_vs, input wire scaler_raw_de,
+	input wire [23:0] scaler_raw_d, input wire post_osd_vs,
+	input wire post_osd_de, input wire [23:0] post_osd_d,
+	input wire vbuf_read, input wire vbuf_waitrequest,
+	input wire vbuf_readdatavalid,
+	input wire scaler_fetch_batch_two_toggle,
+	input wire scaler_fetch_starved_frame_toggle,
+	input wire scaler_fetch_snapshot_valid,
+	input wire scaler_fetch_delta_invalid,
+	input wire scaler_fetch_level_invalid,
+	output wire response_valid, output reg [15:0] response_data
+);
+	`include "mister_magik_video_diagnostics_protocol.svh"
+
+	wire [15:0] evidence_word0;
+	wire [15:0] evidence_word1;
+	wire [15:0] evidence_word2;
+	wire [15:0] evidence_word3;
+	wire [15:0] evidence_word4;
+	reg has_command = 1'b0;
+	reg [7:0] command = 8'd0;
+	reg [2:0] word_count = 3'd0;
+	reg [15:0] snapshot [0:4];
+	reg [15:0] tx_crc = 16'd0;
+	wire command_start = io_uio && io_strobe && !has_command;
+	wire command_data = io_uio && io_strobe && has_command;
+	wire selected_start = (io_din[7:0] >= MAGIK_UIO_GET_HDMI_EVIDENCE) &&
+		(io_din[7:0] <= MAGIK_UIO_GET_HDMI_SCALER_FETCH_ACTIVITY);
+	wire selected_command = (command >= MAGIK_UIO_GET_HDMI_EVIDENCE) &&
+		(command <= MAGIK_UIO_GET_HDMI_SCALER_FETCH_ACTIVITY);
+	wire [2:0] selected_words =
+		(command == MAGIK_UIO_GET_HDMI_EVIDENCE) ? MAGIK_HDMI_EVIDENCE_WORDS :
+		(command == MAGIK_UIO_GET_HDMI_OUTPUT_ACTIVITY) ?
+			MAGIK_HDMI_OUTPUT_ACTIVITY_WORDS :
+		(command == MAGIK_UIO_GET_HDMI_FINAL_PATH_ACTIVITY) ?
+			MAGIK_HDMI_FINAL_PATH_ACTIVITY_WORDS :
+		(command == MAGIK_UIO_GET_HDMI_SCALER_RAW_ACTIVITY) ?
+			MAGIK_HDMI_SCALER_RAW_ACTIVITY_WORDS :
+		(command == MAGIK_UIO_GET_HDMI_POST_OSD_ACTIVITY) ?
+			MAGIK_HDMI_POST_OSD_ACTIVITY_WORDS :
+		(command == MAGIK_UIO_GET_HDMI_AVALON_LIVENESS_ACTIVITY) ?
+			MAGIK_HDMI_AVALON_LIVENESS_ACTIVITY_WORDS :
+		(command == MAGIK_UIO_GET_HDMI_SCALER_FETCH_ACTIVITY) ?
+			MAGIK_HDMI_SCALER_FETCH_ACTIVITY_WORDS : 3'd0;
+	wire [2:0] crc_word_index = selected_words - 1'd1;
+	assign response_valid = (command_start && selected_start) ||
+		(command_data && selected_command && (word_count < selected_words));
+
+	function automatic [15:0] crc_byte;
+		input [15:0] crc_in; input [7:0] data;
+		integer bit_index; reg [15:0] value;
+		begin
+			value = crc_in ^ {data, 8'd0};
+			for(bit_index = 0; bit_index < 8; bit_index = bit_index + 1)
+				value = value[15] ? ((value << 1) ^ 16'h1021) : value << 1;
+			crc_byte = value;
+		end
+	endfunction
+	function automatic [15:0] crc_word;
+		input [15:0] crc_in; input [15:0] data;
+		begin crc_word = crc_byte(crc_byte(crc_in, data[15:8]), data[7:0]); end
+	endfunction
+
+	mister_magik_hdmi_lock_evidence recorder (
+		.clk_sys(clk_sys), .hdmi_tx_clk(hdmi_tx_clk), .clk_hdmi(clk_hdmi),
+		.clk_100m(clk_100m), .evidence_command(io_din[7:0]),
+		.hdmi_pll_locked(hdmi_pll_locked), .hdmi_out_vs(hdmi_out_vs),
+		.hdmi_out_de(hdmi_out_de), .hdmi_out_d(hdmi_out_d),
+		.hdmi_out_direct(hdmi_out_direct), .scaler_raw_vs(scaler_raw_vs),
+		.scaler_raw_de(scaler_raw_de), .scaler_raw_d(scaler_raw_d),
+		.post_osd_vs(post_osd_vs), .post_osd_de(post_osd_de),
+		.post_osd_d(post_osd_d), .vbuf_read(vbuf_read),
+		.vbuf_waitrequest(vbuf_waitrequest),
+		.vbuf_readdatavalid(vbuf_readdatavalid),
+		.scaler_fetch_batch_two_toggle(scaler_fetch_batch_two_toggle),
+		.scaler_fetch_starved_frame_toggle(scaler_fetch_starved_frame_toggle),
+		.scaler_fetch_snapshot_valid(scaler_fetch_snapshot_valid),
+		.scaler_fetch_delta_invalid(scaler_fetch_delta_invalid),
+		.scaler_fetch_level_invalid(scaler_fetch_level_invalid),
+		.evidence_word0(evidence_word0), .evidence_word1(evidence_word1),
+		.evidence_word2(evidence_word2), .evidence_word3(evidence_word3),
+		.evidence_word4(evidence_word4)
+	);
+
+	always @(*) begin
+		response_data = 16'd0;
+		if(command_start) begin
+			case(io_din[7:0])
+				MAGIK_UIO_GET_HDMI_EVIDENCE: response_data = MAGIK_HDMI_EVIDENCE_MAGIC;
+				MAGIK_UIO_GET_HDMI_OUTPUT_ACTIVITY:
+					response_data = MAGIK_HDMI_OUTPUT_ACTIVITY_MAGIC;
+				MAGIK_UIO_GET_HDMI_FINAL_PATH_ACTIVITY:
+					response_data = MAGIK_HDMI_FINAL_PATH_ACTIVITY_MAGIC;
+				MAGIK_UIO_GET_HDMI_SCALER_RAW_ACTIVITY:
+					response_data = MAGIK_HDMI_SCALER_RAW_ACTIVITY_MAGIC;
+				MAGIK_UIO_GET_HDMI_POST_OSD_ACTIVITY:
+					response_data = MAGIK_HDMI_POST_OSD_ACTIVITY_MAGIC;
+				MAGIK_UIO_GET_HDMI_AVALON_LIVENESS_ACTIVITY:
+					response_data = MAGIK_HDMI_AVALON_LIVENESS_ACTIVITY_MAGIC;
+				MAGIK_UIO_GET_HDMI_SCALER_FETCH_ACTIVITY:
+					response_data = MAGIK_HDMI_SCALER_FETCH_ACTIVITY_MAGIC;
+				default: response_data = 16'd0;
+			endcase
+		end
+		else if(command_data && selected_command) begin
+			if(word_count < crc_word_index) response_data = snapshot[word_count];
+			else if(word_count == crc_word_index) response_data = tx_crc;
+		end
+	end
+
+	always @(posedge clk_sys) begin
+		if(!io_uio) begin
+			has_command <= 1'b0; command <= 8'd0; word_count <= 3'd0;
+		end
+		else if(command_start) begin
+			has_command <= 1'b1; command <= io_din[7:0]; word_count <= 3'd0;
+			snapshot[0] <= evidence_word0; snapshot[1] <= evidence_word1;
+			snapshot[2] <= evidence_word2; snapshot[3] <= evidence_word3;
+			snapshot[4] <= evidence_word4;
+			case(io_din[7:0])
+				MAGIK_UIO_GET_HDMI_EVIDENCE: tx_crc <= MAGIK_HDMI_EVIDENCE_HEADER_CRC;
+				MAGIK_UIO_GET_HDMI_OUTPUT_ACTIVITY:
+					tx_crc <= MAGIK_HDMI_OUTPUT_ACTIVITY_HEADER_CRC;
+				MAGIK_UIO_GET_HDMI_FINAL_PATH_ACTIVITY:
+					tx_crc <= MAGIK_HDMI_FINAL_PATH_ACTIVITY_HEADER_CRC;
+				MAGIK_UIO_GET_HDMI_SCALER_RAW_ACTIVITY:
+					tx_crc <= MAGIK_HDMI_SCALER_RAW_ACTIVITY_HEADER_CRC;
+				MAGIK_UIO_GET_HDMI_POST_OSD_ACTIVITY:
+					tx_crc <= MAGIK_HDMI_POST_OSD_ACTIVITY_HEADER_CRC;
+				MAGIK_UIO_GET_HDMI_AVALON_LIVENESS_ACTIVITY:
+					tx_crc <= MAGIK_HDMI_AVALON_LIVENESS_ACTIVITY_HEADER_CRC;
+				MAGIK_UIO_GET_HDMI_SCALER_FETCH_ACTIVITY:
+					tx_crc <= MAGIK_HDMI_SCALER_FETCH_ACTIVITY_HEADER_CRC;
+				default: tx_crc <= 16'd0;
+			endcase
+		end
+		else if(command_data && selected_command && (word_count < selected_words)) begin
+			word_count <= word_count + 1'd1;
+			if(word_count < crc_word_index) tx_crc <= crc_word(tx_crc, snapshot[word_count]);
+		end
+	end
+endmodule
+
 module tb_mister_magik_video_diagnostics_control;
 `include "mister_magik_video_diagnostics_protocol.svh"
 
@@ -33,7 +184,6 @@ module tb_mister_magik_video_diagnostics_control;
 	reg vbuf_read = 1'b0;
 	reg vbuf_waitrequest = 1'b0;
 	reg vbuf_readdatavalid = 1'b0;
-	reg [7:0] scaler_fetch_state = 8'd0;
 	reg scaler_fetch_batch_two_toggle = 1'b0;
 	reg scaler_fetch_starved_frame_toggle = 1'b0;
 	reg scaler_fetch_snapshot_valid = 1'b0;
@@ -47,7 +197,7 @@ module tb_mister_magik_video_diagnostics_control;
 	reg [15:0] armed_flags;
 	reg [15:0] lost_flags;
 
-	mister_magik_hdmi_lock_evidence dut (
+	mister_magik_hdmi_evidence_test_wrapper dut (
 		.clk_sys(clk_sys),
 		.hdmi_tx_clk(hdmi_tx_clk),
 		.clk_hdmi(clk_hdmi),
@@ -69,7 +219,6 @@ module tb_mister_magik_video_diagnostics_control;
 		.vbuf_read(vbuf_read),
 		.vbuf_waitrequest(vbuf_waitrequest),
 		.vbuf_readdatavalid(vbuf_readdatavalid),
-		.scaler_fetch_state(scaler_fetch_state),
 		.scaler_fetch_batch_two_toggle(scaler_fetch_batch_two_toggle),
 		.scaler_fetch_starved_frame_toggle(scaler_fetch_starved_frame_toggle),
 		.scaler_fetch_snapshot_valid(scaler_fetch_snapshot_valid),
@@ -297,9 +446,9 @@ module tb_mister_magik_video_diagnostics_control;
 		input value;
 		begin
 			hdmi_pll_locked = value;
-			while(dut.control_pll_lock_sys !== value) @(negedge clk_sys);
+			while(dut.recorder.control_pll_lock_sys !== value) @(negedge clk_sys);
 			if(value)
-				while(dut.lock_armed !== 1'b1) @(negedge clk_sys);
+				while(dut.recorder.lock_armed !== 1'b1) @(negedge clk_sys);
 		end
 	endtask
 
@@ -566,10 +715,10 @@ module tb_mister_magik_video_diagnostics_control;
 		// Counters are explicitly modulo four-bit epochs; wrapping remains a
 		// valid snapshot for host-side modular delta calculation.
 		@(negedge clk_sys);
-		dut.output_no_de_toggle = 1'b1;
-		dut.output_no_de_meta = 1'b1;
-		dut.output_no_de_sys = 1'b1;
-		dut.output_no_de_count = 4'hf;
+		dut.recorder.output_no_de_toggle = 1'b1;
+		dut.recorder.output_no_de_meta = 1'b1;
+		dut.recorder.output_no_de_sys = 1'b1;
+		dut.recorder.output_no_de_count = 4'hf;
 		complete_output_frame(1'b0, 1'b0, 1'b0);
 		read_output_activity(MAGIK_HDMI_OUTPUT_ACTIVITY_FLAG_FRAME_VALID,
 			8'd0, 8'd2, 8'd2);
@@ -578,8 +727,10 @@ module tb_mister_magik_video_diagnostics_control;
 		// capture nevertheless sees simultaneous channels, retain a sticky
 		// integrity flag instead of silently presenting coherent evidence.
 		@(negedge hdmi_tx_clk);
-		dut.output_black_direct_toggle = !dut.output_black_direct_toggle;
-		dut.output_de_has_nonzero_toggle = !dut.output_de_has_nonzero_toggle;
+		dut.recorder.output_black_direct_toggle =
+			!dut.recorder.output_black_direct_toggle;
+		dut.recorder.output_de_has_nonzero_toggle =
+			!dut.recorder.output_de_has_nonzero_toggle;
 		repeat(8) @(negedge clk_sys);
 		read_output_activity(
 			MAGIK_HDMI_OUTPUT_ACTIVITY_FLAG_FRAME_VALID |
@@ -624,7 +775,7 @@ module tb_mister_magik_video_diagnostics_control;
 		// second empty bucket. The heartbeat makes the empty interval valid while
 		// the category epochs correctly remain unchanged.
 		@(negedge clk_100m);
-		dut.avalon_bucket_count = 19'h7fffe;
+		dut.recorder.avalon_bucket_count = 19'h7fffe;
 		vbuf_read = 1'b1;
 		vbuf_waitrequest = 1'b0;
 		vbuf_readdatavalid = 1'b1;
@@ -636,41 +787,29 @@ module tb_mister_magik_video_diagnostics_control;
 		read_avalon_activity(
 			MAGIK_HDMI_AVALON_LIVENESS_ACTIVITY_FLAG_BUCKET_VALID,
 			4'd1, 4'd1, 4'd1, 4'd1);
-		@(negedge clk_100m); dut.avalon_bucket_count = 19'h7ffff;
+		@(negedge clk_100m); dut.recorder.avalon_bucket_count = 19'h7ffff;
 		@(posedge clk_100m);
 		repeat(8) @(negedge clk_sys);
 		read_avalon_activity(
 			MAGIK_HDMI_AVALON_LIVENESS_ACTIVITY_FLAG_BUCKET_VALID,
 			4'd2, 4'd1, 4'd1, 4'd1);
 
-		// The scaler-fetch record snapshots only frame-held native state and
-		// independent event epochs. A coherent state is required before the
-		// valid flag is published.
+		// The scaler-fetch record preserves only independently synchronized event
+		// epochs. Its retired live-state word remains strict zero.
 		scaler_fetch_batch_two_toggle = !scaler_fetch_batch_two_toggle;
 		scaler_fetch_starved_frame_toggle = !scaler_fetch_starved_frame_toggle;
 		repeat(8) @(negedge clk_sys);
 		read_scaler_fetch_activity(16'd0, 16'd0, 16'd0);
-		scaler_fetch_state = 8'b00_10_00_10;
 		scaler_fetch_snapshot_valid = 1'b1;
 		repeat(8) @(negedge clk_sys);
 		read_scaler_fetch_activity(
-			{8'd0, scaler_fetch_state}, 16'h0011,
-			MAGIK_HDMI_SCALER_FETCH_ACTIVITY_FLAG_SNAPSHOT_VALID);
-		// A command recognized while the repeated state samples disagree must
-		// publish the strict invalid zero payload, never stale state or epochs.
-		@(negedge clk_sys); scaler_fetch_state = 8'b01_10_00_10;
-		repeat(2) @(posedge clk_sys);
-		@(negedge clk_sys);
-		read_scaler_fetch_activity(16'd0, 16'd0, 16'd0);
-		repeat(8) @(negedge clk_sys);
-		read_scaler_fetch_activity(
-			{8'd0, scaler_fetch_state}, 16'h0011,
+			16'd0, 16'h0011,
 			MAGIK_HDMI_SCALER_FETCH_ACTIVITY_FLAG_SNAPSHOT_VALID);
 		scaler_fetch_delta_invalid = 1'b1;
 		scaler_fetch_level_invalid = 1'b1;
 		repeat(8) @(negedge clk_sys);
 		read_scaler_fetch_activity(
-			{8'd0, scaler_fetch_state}, 16'h0011,
+			16'd0, 16'h0011,
 			MAGIK_HDMI_SCALER_FETCH_ACTIVITY_FLAG_SNAPSHOT_VALID |
 			MAGIK_HDMI_SCALER_FETCH_ACTIVITY_FLAG_COMPLETION_DELTA_INVALID |
 			MAGIK_HDMI_SCALER_FETCH_ACTIVITY_FLAG_COMPLETION_LEVEL_INVALID);
@@ -694,8 +833,8 @@ module tb_mister_magik_video_diagnostics_control;
 		// must not arm the loss counter.
 		@(negedge clk_sys); hdmi_pll_locked = 1'b1;
 		@(negedge clk_sys); hdmi_pll_locked = 1'b0;
-		while(dut.control_pll_lock_sys !== 1'b1) @(negedge clk_sys);
-		while(dut.control_pll_lock_sys !== 1'b0) @(negedge clk_sys);
+		while(dut.recorder.control_pll_lock_sys !== 1'b1) @(negedge clk_sys);
+		while(dut.recorder.control_pll_lock_sys !== 1'b0) @(negedge clk_sys);
 		read_evidence(MAGIK_HDMI_EVIDENCE_FLAG_LOCK_SEEN_HIGH, 16'd0);
 
 		drive_synchronized_lock(1'b1);
@@ -709,7 +848,7 @@ module tb_mister_magik_video_diagnostics_control;
 		// include the same pending loss transition through *_next.
 		drive_synchronized_lock(1'b1);
 		drive_synchronized_lock(1'b0);
-		if(dut.lock_loss_event !== 1'b1)
+		if(dut.recorder.lock_loss_event !== 1'b1)
 			$fatal(1, "test missed the uncommitted synchronized loss edge");
 		read_evidence(lost_flags, 16'd2);
 
@@ -733,8 +872,8 @@ module tb_mister_magik_video_diagnostics_control;
 		// Exercise saturation without spending 65,535 simulated transitions.
 		drive_synchronized_lock(1'b1);
 		@(negedge clk_sys);
-		dut.lock_loss_count = 16'hffff;
-		dut.lock_ever_lost = 1'b1;
+		dut.recorder.lock_loss_count = 16'hffff;
+		dut.recorder.lock_ever_lost = 1'b1;
 		drive_synchronized_lock(1'b0);
 		read_evidence(lost_flags |
 			MAGIK_HDMI_EVIDENCE_FLAG_LOCK_LOSS_COUNT_OVERFLOW, 16'hffff);
