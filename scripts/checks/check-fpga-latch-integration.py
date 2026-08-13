@@ -575,18 +575,6 @@ def main() -> None:
         if control_source.count(fragment) != 1:
             fail(f"compact evidence snapshot is missing or ambiguous: {fragment}")
     for fragment in (
-        "function automatic [3:0] toggle_count4_next;",
-        "toggle_count4_next = {count[3:1] + (count[0] & ~toggle), toggle};",
-        "function automatic [1:0] toggle_count2_next;",
-        "toggle_count2_next = {count[1] + (count[0] & ~toggle), toggle};",
-    ):
-        if control_source.count(fragment) != 1:
-            fail(f"short toggle-counter carry chain is missing: {fragment}")
-    if len(re.findall(r"toggle_count4_next\(", control_source)) != 16:
-        fail("four-bit toggle-counter helper coverage is not exact")
-    if len(re.findall(r"toggle_count2_next\(", control_source)) != 1:
-        fail("two-bit toggle-counter helper coverage is not exact")
-    for fragment in (
         "completion_frame_starved <= completion_starved_now;",
         "completion_frame_starved <= completion_frame_starved_now;",
     ):

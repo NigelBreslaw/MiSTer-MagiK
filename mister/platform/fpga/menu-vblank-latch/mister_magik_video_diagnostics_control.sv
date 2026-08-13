@@ -299,22 +299,6 @@ module mister_magik_hdmi_lock_evidence (
 	// Each accepted event flips both the source toggle and the counter LSB, so
 	// the counter itself is also the last-seen token. This avoids three separate
 	// destination history registers.
-	function automatic [3:0] toggle_count4_next;
-		input [3:0] count;
-		input toggle;
-		begin
-			toggle_count4_next = {count[3:1] + (count[0] & ~toggle), toggle};
-		end
-	endfunction
-
-	function automatic [1:0] toggle_count2_next;
-		input [1:0] count;
-		input toggle;
-		begin
-			toggle_count2_next = {count[1] + (count[0] & ~toggle), toggle};
-		end
-	endfunction
-
 	wire output_no_de_event = output_no_de_sys != output_no_de_count[0];
 	wire output_de_has_nonzero_event =
 		output_de_has_nonzero_sys != output_de_has_nonzero_count[0];
@@ -339,15 +323,15 @@ module mister_magik_hdmi_lock_evidence (
 		(output_black_direct_event && output_black_mixed_event) ||
 		(output_black_scaled_event && output_black_mixed_event);
 	wire [3:0] output_no_de_count_next =
-		toggle_count4_next(output_no_de_count, output_no_de_sys);
+		output_no_de_count + (output_no_de_event ? 1'd1 : 1'd0);
 	wire [3:0] output_de_has_nonzero_count_next =
-		toggle_count4_next(output_de_has_nonzero_count, output_de_has_nonzero_sys);
+		output_de_has_nonzero_count + (output_de_has_nonzero_event ? 1'd1 : 1'd0);
 	wire [3:0] output_black_direct_count_next =
-		toggle_count4_next(output_black_direct_count, output_black_direct_sys);
+		output_black_direct_count + (output_black_direct_event ? 1'd1 : 1'd0);
 	wire [3:0] output_black_scaled_count_next =
-		toggle_count4_next(output_black_scaled_count, output_black_scaled_sys);
+		output_black_scaled_count + (output_black_scaled_event ? 1'd1 : 1'd0);
 	wire [3:0] output_black_mixed_count_next =
-		toggle_count4_next(output_black_mixed_count, output_black_mixed_sys);
+		output_black_mixed_count + (output_black_mixed_event ? 1'd1 : 1'd0);
 	wire [3:0] output_de_all_zero_count_next =
 		output_black_direct_count_next + output_black_scaled_count_next +
 		output_black_mixed_count_next;
@@ -369,11 +353,11 @@ module mister_magik_hdmi_lock_evidence (
 		(raw_no_de_event && raw_nonzero_event) ||
 		(raw_all_zero_event && raw_nonzero_event);
 	wire [3:0] raw_no_de_count_next =
-		toggle_count4_next(raw_no_de_count, raw_no_de_sys);
+		raw_no_de_count + (raw_no_de_event ? 1'd1 : 1'd0);
 	wire [3:0] raw_all_zero_count_next =
-		toggle_count4_next(raw_all_zero_count, raw_all_zero_sys);
+		raw_all_zero_count + (raw_all_zero_event ? 1'd1 : 1'd0);
 	wire [3:0] raw_nonzero_count_next =
-		toggle_count4_next(raw_nonzero_count, raw_nonzero_sys);
+		raw_nonzero_count + (raw_nonzero_event ? 1'd1 : 1'd0);
 	wire raw_frame_valid_next = raw_frame_valid || raw_any_event;
 	wire raw_counter_collision_next = raw_counter_collision || raw_event_collision;
 
@@ -392,11 +376,11 @@ module mister_magik_hdmi_lock_evidence (
 		(post_no_de_event && post_nonzero_event) ||
 		(post_all_zero_event && post_nonzero_event);
 	wire [3:0] post_no_de_count_next =
-		toggle_count4_next(post_no_de_count, post_no_de_sys);
+		post_no_de_count + (post_no_de_event ? 1'd1 : 1'd0);
 	wire [3:0] post_all_zero_count_next =
-		toggle_count4_next(post_all_zero_count, post_all_zero_sys);
+		post_all_zero_count + (post_all_zero_event ? 1'd1 : 1'd0);
 	wire [3:0] post_nonzero_count_next =
-		toggle_count4_next(post_nonzero_count, post_nonzero_sys);
+		post_nonzero_count + (post_nonzero_event ? 1'd1 : 1'd0);
 	wire post_frame_valid_next = post_frame_valid || post_any_event;
 	wire post_counter_collision_next =
 		post_counter_collision || post_event_collision;
@@ -412,13 +396,13 @@ module mister_magik_hdmi_lock_evidence (
 	wire avalon_returned_event = avalon_returned_sys != avalon_returned_count[0];
 	wire avalon_bucket_valid_next = avalon_bucket_valid || avalon_bucket_event;
 	wire [3:0] avalon_bucket_epoch_next =
-		toggle_count4_next(avalon_bucket_epoch, avalon_bucket_sys);
+		avalon_bucket_epoch + (avalon_bucket_event ? 1'd1 : 1'd0);
 	wire [3:0] avalon_request_count_next =
-		toggle_count4_next(avalon_request_count, avalon_request_sys);
+		avalon_request_count + (avalon_request_event ? 1'd1 : 1'd0);
 	wire [3:0] avalon_accepted_count_next =
-		toggle_count4_next(avalon_accepted_count, avalon_accepted_sys);
+		avalon_accepted_count + (avalon_accepted_event ? 1'd1 : 1'd0);
 	wire [3:0] avalon_returned_count_next =
-		toggle_count4_next(avalon_returned_count, avalon_returned_sys);
+		avalon_returned_count + (avalon_returned_event ? 1'd1 : 1'd0);
 
 	reg [1:0] scaler_fetch_batch_two_count = 2'd0;
 	reg [3:0] scaler_fetch_starved_frame_count = 4'd0;
@@ -427,10 +411,11 @@ module mister_magik_hdmi_lock_evidence (
 	wire scaler_fetch_starved_frame_event =
 		scaler_fetch_starved_frame_sys != scaler_fetch_starved_frame_count[0];
 	wire [1:0] scaler_fetch_batch_two_count_next =
-		toggle_count2_next(scaler_fetch_batch_two_count, scaler_fetch_batch_two_sys);
+		scaler_fetch_batch_two_count +
+		(scaler_fetch_batch_two_event ? 1'd1 : 1'd0);
 	wire [3:0] scaler_fetch_starved_frame_count_next =
-		toggle_count4_next(scaler_fetch_starved_frame_count,
-			scaler_fetch_starved_frame_sys);
+		scaler_fetch_starved_frame_count +
+		(scaler_fetch_starved_frame_event ? 1'd1 : 1'd0);
 	wire [2:0] scaler_fetch_flags_next = {
 		scaler_fetch_level_invalid_sys,
 		scaler_fetch_delta_invalid_sys,
