@@ -10,9 +10,13 @@ tools.
 - `release/` — host release-data and packaging tools
 - `tests/` — host-local contract tests
 
-Device, ARM-build, deployment, profiling, acceptance, recovery, and scene
-orchestration belongs in Rust. New shell interfaces in those categories are
-rejected by `scripts/checks/check-no-operational-shell-orchestrators.py`.
+`scripts/agent` is the sole operational and device entrypoint. Device,
+ARM-build, deployment, profiling, acceptance, recovery, and scene orchestration
+belongs behind its typed Rust operations. `apps/mister/scripts/dev-ui-mac.sh`
+is the deliberate non-operational exception: it launches only the local macOS
+UI preview and cannot contact or mutate a MiSTer. New shell interfaces in the
+operational categories are rejected by the typed
+`BuiltinOperation::ShellOwnership` assurance in `agent-cli`.
 
 Normal repository work uses bounded Rust analyzer diagnostics where applicable,
 explicit-path `git add`, ordinary `git commit`, and `git push`; the pre-commit
