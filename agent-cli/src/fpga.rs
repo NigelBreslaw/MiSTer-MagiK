@@ -8,6 +8,8 @@ use crate::git;
 use crate::process;
 use crate::progress::{EventKind, Reporter};
 use clap::Subcommand;
+use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
 use std::ffi::{OsStr, OsString};
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -17,13 +19,16 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 
 const MENU_REPOSITORY: &str = "https://github.com/MiSTer-devel/Menu_MiSTer.git";
-const SIGNOFF_FORMAT: &str = "mister-magik-local-fpga-signoff-v4";
-const VARIANT_CACHE_MARKER: &str = "local-signoff-input-v4.txt";
+const SIGNOFF_FORMAT: &str = "mister-magik-local-fpga-signoff-v5";
+const VARIANT_CACHE_MARKER: &str = "local-signoff-input-v5.txt";
+const LEGACY_SIGNOFF_FORMAT: &str = "mister-magik-local-fpga-signoff-v4";
+const LEGACY_VARIANT_CACHE_MARKER: &str = "local-signoff-input-v4.txt";
 const QUARTUS_IMAGE: &str = "mister-magik-quartus17-apple:ubuntu18-amd64";
 const QUARTUS_VERSION: &str = "17.0.0 Build 595";
 const QUARTUS_PROCESSORS: &str = "4";
 const QUARTUS_SEED_SOURCE: &str =
     include_str!("../../mister/platform/fpga/menu-vblank-latch/Quartus.seed");
+const BUILD_EPOCH_SOURCE: &str = include_str!("../../scripts/quartus/fpga-build-epoch-v1.txt");
 const BUILD_DEADLINE: Duration = Duration::from_secs(3 * 60 * 60);
 const SETUP_DEADLINE: Duration = Duration::from_secs(2 * 60 * 60);
 
@@ -31,7 +36,6 @@ struct CachePolicy<'a> {
     seed: &'a str,
     build_date: &'a str,
     preparation_identity: &'a str,
-    synthesis_component: &'a str,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Subcommand)]
@@ -106,18 +110,7 @@ fn signoff(repository: &Path, rebuild: bool, reporter: &mut Reporter<'_>) -> Age
     let source_root = local_root.join("sources/main");
     prepare_local_checkout(repository, &source_root, &main_revision)?;
     let synthesis_component = platform_component_value(&source_root, false)?;
-    let synthesis_revision = platform_component_value(&source_root, true)?;
-    require_revision("FPGA synthesis", &synthesis_revision)?;
-    let build_date = git::value(
-        &source_root,
-        &[
-            "show",
-            "-s",
-            "--format=%cd",
-            "--date=format:%y%m%d",
-            &synthesis_revision,
-        ],
-    )?;
+    let build_date = canonical_build_epoch()?;
     let baseline_root = local_root.join("sources/pre-observer");
     prepare_local_checkout(repository, &baseline_root, &baseline_revision)?;
     let stock_identity = synthesis_files_identity(&source_root, false, false)?;
@@ -129,9 +122,8 @@ fn signoff(repository: &Path, rebuild: bool, reporter: &mut Reporter<'_>) -> Age
     )?;
     let cache_policy = CachePolicy {
         seed: quartus_seed,
-        build_date: &build_date,
+        build_date,
         preparation_identity: &preparation_identity,
-        synthesis_component: &synthesis_component,
     };
     let stock_manifest = cache_manifest(
         "stock",
@@ -191,7 +183,7 @@ fn signoff(repository: &Path, rebuild: bool, reporter: &mut Reporter<'_>) -> Age
             "stock",
             false,
             &main_revision,
-            &build_date,
+            build_date,
             &synthesis_component,
             &stock_manifest,
             quartus_seed,
@@ -206,7 +198,7 @@ fn signoff(repository: &Path, rebuild: bool, reporter: &mut Reporter<'_>) -> Age
             "pre-observer",
             true,
             &main_revision,
-            &build_date,
+            build_date,
             &synthesis_component,
             &baseline_manifest,
             quartus_seed,
@@ -221,7 +213,7 @@ fn signoff(repository: &Path, rebuild: bool, reporter: &mut Reporter<'_>) -> Age
             "patched",
             true,
             &main_revision,
-            &build_date,
+            build_date,
             &synthesis_component,
             &patched_manifest,
             quartus_seed,
@@ -251,11 +243,20 @@ fn cache_manifest(
         seed,
         build_date,
         preparation_identity,
-        synthesis_component,
     } = policy;
     format!(
-        "format={SIGNOFF_FORMAT}\nflavour={flavour}\nsynthesis_input={synthesis_identity}\nsynthesis_component={synthesis_component}\nmenu_revision={menu}\nbaseline_revision={baseline}\nquartus_version={QUARTUS_VERSION}\nquartus_seed={seed}\nbuild_date={build_date}\nquartus_processors={QUARTUS_PROCESSORS}\nparallel_synthesis=off\nauto_parallel_synthesis=off\nmenu_clock_groups=asynchronous\npreparation_input={preparation_identity}\n"
+        "format={SIGNOFF_FORMAT}\nflavour={flavour}\nsynthesis_input={synthesis_identity}\nmenu_revision={menu}\nbaseline_revision={baseline}\nquartus_version={QUARTUS_VERSION}\nquartus_seed={seed}\nbuild_date={build_date}\nquartus_processors={QUARTUS_PROCESSORS}\nparallel_synthesis=off\nauto_parallel_synthesis=off\nmenu_clock_groups=asynchronous\npreparation_input={preparation_identity}\n"
     )
+}
+
+fn canonical_build_epoch() -> AgentResult<&'static str> {
+    let Some(epoch) = BUILD_EPOCH_SOURCE.strip_suffix('\n') else {
+        return Err("canonical FPGA build epoch must end with one newline".into());
+    };
+    if epoch.len() != 6 || !epoch.bytes().all(|byte| byte.is_ascii_digit()) {
+        return Err("canonical FPGA build epoch must be a six-digit YYMMDD value".into());
+    }
+    Ok(epoch)
 }
 
 fn canonical_quartus_seed() -> AgentResult<&'static str> {
@@ -328,9 +329,117 @@ fn variant_complete(root: &Path) -> bool {
 }
 
 fn variant_cache_hit(root: &Path, expected_manifest: &str) -> bool {
-    variant_complete(root)
-        && fs::read_to_string(root.join(VARIANT_CACHE_MARKER))
-            .is_ok_and(|value| value == expected_manifest)
+    if !variant_complete(root) || !variant_artifacts_match_metadata(root) {
+        return false;
+    }
+    if fs::read_to_string(root.join(VARIANT_CACHE_MARKER))
+        .is_ok_and(|value| value == expected_manifest)
+    {
+        return true;
+    }
+    let Ok(legacy) = fs::read_to_string(root.join(LEGACY_VARIANT_CACHE_MARKER)) else {
+        return false;
+    };
+    if !legacy_cache_manifest_matches(&legacy, expected_manifest) {
+        return false;
+    }
+    let temporary = root.join(format!(".{VARIANT_CACHE_MARKER}.tmp"));
+    fs::write(&temporary, expected_manifest)
+        .and_then(|()| fs::rename(&temporary, root.join(VARIANT_CACHE_MARKER)))
+        .is_ok()
+}
+
+fn parse_cache_manifest(source: &str) -> Option<BTreeMap<&str, &str>> {
+    let mut fields = BTreeMap::new();
+    for line in source.lines() {
+        let (key, value) = line.split_once('=')?;
+        if key.is_empty() || value.is_empty() || fields.insert(key, value).is_some() {
+            return None;
+        }
+    }
+    Some(fields)
+}
+
+fn legacy_cache_manifest_matches(legacy: &str, expected: &str) -> bool {
+    let (Some(mut legacy), Some(mut expected)) =
+        (parse_cache_manifest(legacy), parse_cache_manifest(expected))
+    else {
+        return false;
+    };
+    if legacy.remove("format") != Some(LEGACY_SIGNOFF_FORMAT)
+        || expected.remove("format") != Some(SIGNOFF_FORMAT)
+    {
+        return false;
+    }
+    let Some(component) = legacy.remove("synthesis_component") else {
+        return false;
+    };
+    component.len() == 64
+        && component.bytes().all(|byte| byte.is_ascii_hexdigit())
+        && legacy == expected
+}
+
+fn variant_artifacts_match_metadata(root: &Path) -> bool {
+    let Ok(metadata) = fs::read_to_string(root.join("menu-magik-vblank-latch.metadata.txt")) else {
+        return false;
+    };
+    let mut fields = BTreeMap::new();
+    for line in metadata.lines() {
+        let Some((key, value)) = line.split_once('=') else {
+            return false;
+        };
+        if key == "source_status" {
+            continue;
+        }
+        if key.is_empty() || value.is_empty() || fields.insert(key, value).is_some() {
+            return false;
+        }
+    }
+    if fields.get("build_date").copied() != canonical_build_epoch().ok()
+        || fields.get("quartus_seed").copied() != canonical_quartus_seed().ok()
+        || fields.get("quartus_version").copied() != Some(QUARTUS_VERSION)
+        || fields.get("quartus_processors").copied() != Some(QUARTUS_PROCESSORS)
+        || fields.get("parallel_synthesis").copied() != Some("off")
+        || fields.get("auto_parallel_synthesis").copied() != Some("off")
+    {
+        return false;
+    }
+    let rbf_name = fields
+        .get("rbf_file")
+        .copied()
+        .unwrap_or("menu-magik-vblank-latch.rbf");
+    if Path::new(rbf_name).components().count() != 1
+        || fields.get("rbf_sha256").copied() != digest_file(&root.join(rbf_name)).as_deref()
+    {
+        return false;
+    }
+    let reports: Vec<_> = fields
+        .iter()
+        .filter_map(|(key, value)| {
+            key.strip_prefix("report_sha256.")
+                .map(|path| (path, *value))
+        })
+        .collect();
+    !reports.is_empty()
+        && reports.into_iter().all(|(relative, expected)| {
+            relative.starts_with("reports/")
+                && !relative
+                    .split('/')
+                    .any(|part| part.is_empty() || part == "..")
+                && digest_file(&root.join(relative)).as_deref() == Some(expected)
+        })
+}
+
+fn digest_file(path: &Path) -> Option<String> {
+    let bytes = fs::read(path).ok()?;
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let digest = Sha256::digest(bytes);
+    let mut encoded = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        encoded.push(HEX[usize::from(byte >> 4)] as char);
+        encoded.push(HEX[usize::from(byte & 0x0f)] as char);
+    }
+    Some(encoded)
 }
 
 fn require_revision(label: &str, revision: &str) -> AgentResult<()> {
@@ -772,7 +881,6 @@ mod tests {
             seed,
             build_date: "260813",
             preparation_identity: &"d".repeat(40),
-            synthesis_component: &"e".repeat(64),
         };
         let manifest = cache_manifest(
             "patched",
@@ -784,7 +892,7 @@ mod tests {
         assert!(manifest.contains(&format!("format={SIGNOFF_FORMAT}")));
         assert!(manifest.contains("flavour=patched"));
         assert!(manifest.contains("synthesis_input=aaaaaaaa"));
-        assert!(manifest.contains("synthesis_component=eeeeeeee"));
+        assert!(!manifest.contains("synthesis_component="));
         assert!(manifest.contains("menu_revision=bbbbbbbb"));
         assert!(manifest.contains("baseline_revision=cccccccc"));
         assert_eq!(seed, "2");
@@ -812,7 +920,6 @@ mod tests {
             seed,
             build_date: "date",
             preparation_identity: "policy",
-            synthesis_component: "component",
         };
         let stock = cache_manifest("stock", "stock-input", "menu", None, &policy);
         let baseline = cache_manifest(
@@ -826,5 +933,35 @@ mod tests {
         assert_ne!(stock, baseline);
         assert_ne!(baseline, patched);
         assert_ne!(stock, patched);
+    }
+
+    #[test]
+    fn canonical_build_epoch_is_stable_and_well_formed() {
+        assert_eq!(canonical_build_epoch().unwrap(), "260814");
+    }
+
+    #[test]
+    fn legacy_cache_manifest_migrates_without_global_component_identity() {
+        let policy = CachePolicy {
+            seed: "2",
+            build_date: "260814",
+            preparation_identity: "preparation",
+        };
+        let expected = cache_manifest("stock", "stock-input", "menu", None, &policy);
+        let legacy = expected
+            .replace(SIGNOFF_FORMAT, LEGACY_SIGNOFF_FORMAT)
+            .replace(
+                "menu_revision=",
+                &format!("synthesis_component={}\nmenu_revision=", "e".repeat(64)),
+            );
+        assert!(legacy_cache_manifest_matches(&legacy, &expected));
+        assert!(!legacy_cache_manifest_matches(
+            &legacy.replace("build_date=260814", "build_date=260813"),
+            &expected,
+        ));
+        assert!(!legacy_cache_manifest_matches(
+            &legacy.replace(&"e".repeat(64), "not-a-hash"),
+            &expected,
+        ));
     }
 }
