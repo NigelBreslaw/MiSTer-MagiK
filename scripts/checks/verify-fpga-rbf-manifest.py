@@ -16,7 +16,8 @@ SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
 STALE_RE = re.compile(r"mailbox|axi|acp|descriptor|ownership|fence", re.I)
 ANALYSIS_CONSTRAINT_OVERRIDE = "clock_groups_exclusive_to_asynchronous"
-ANALYSIS_CONSTRAINT_SOURCE_STATUSES = (
+LEGACY_ANALYSIS_CONSTRAINT_SOURCE_STATUSES = (" M sys/sys_top.sdc",)
+CURRENT_ANALYSIS_CONSTRAINT_SOURCE_STATUSES = (
     " M menu.qsf",
     " M sys/sys_top.sdc",
 )
@@ -112,11 +113,16 @@ def verify(
     if "magik_status" in fields:
         raise ValueError("release source tree was dirty")
     analysis_override = fields.get("analysis_constraint_override")
+    expected_source_statuses = (
+        LEGACY_ANALYSIS_CONSTRAINT_SOURCE_STATUSES
+        if historical_v2
+        else CURRENT_ANALYSIS_CONSTRAINT_SOURCE_STATUSES
+    )
     if not source_statuses:
         if analysis_override is not None:
             raise ValueError("analysis constraint override lacks source evidence")
     elif (
-        tuple(source_statuses) != ANALYSIS_CONSTRAINT_SOURCE_STATUSES
+        tuple(source_statuses) != expected_source_statuses
         or analysis_override != ANALYSIS_CONSTRAINT_OVERRIDE
     ):
         raise ValueError("release source tree was dirty")

@@ -17,6 +17,8 @@ pub const FORMAT: &str = "mister-magik-platform-bundle-v0.2";
 pub const MANIFEST: &str = "platform-bundle-v0.2.json";
 const ORIGIN: &str = "platform-component-origin-v1.json";
 const COMPONENT_CHECKSUMS: &str = "platform-component-SHA256SUMS";
+const LEGACY_FPGA_SOURCE_STATUSES: &[&str] = &[" M sys/sys_top.sdc"];
+const CURRENT_FPGA_SOURCE_STATUSES: &[&str] = &[" M menu.qsf", " M sys/sys_top.sdc"];
 
 pub struct Create<'a> {
     pub main: &'a Path,
@@ -687,11 +689,22 @@ fn archive_fields(
 }
 fn parse_fields(text: &str) -> AgentResult<BTreeMap<String, String>> {
     let mut result = BTreeMap::new();
+    let mut source_statuses = Vec::new();
     for line in text.lines() {
         let (k, v) = line.split_once('=').ok_or("malformed metadata")?;
+        if k == "source_status" {
+            source_statuses.push(v);
+            continue;
+        }
         if k.is_empty() || v.is_empty() || result.insert(k.into(), v.into()).is_some() {
             return classified("malformed_metadata", line);
         }
+    }
+    if !source_statuses.is_empty()
+        && source_statuses != LEGACY_FPGA_SOURCE_STATUSES
+        && source_statuses != CURRENT_FPGA_SOURCE_STATUSES
+    {
+        return classified("malformed_metadata", source_statuses.join(","));
     }
     Ok(result)
 }
@@ -789,7 +802,7 @@ mod tests {
             fs::write(
                 directory.join("menu-magik-vblank-latch.metadata.txt"),
                 format!(
-                    "format=mister-magik-fpga-release-v2\ncomponent_input_sha256={component_id}\nplatform_contract_sha256={contract}\nlatch_protocol_sha256={}\nlatch_bridge_sha256={}\nlatch_protocol_version={LATCH_PROTOCOL_VERSION}\nlatch_capability_mask={LATCH_CAPABILITY_MASK}\nrbf_sha256={}\nreport_sha256.reports/menu.fit.rpt={}\n",
+                    "format=mister-magik-fpga-release-v2\nsource_status= M menu.qsf\nsource_status= M sys/sys_top.sdc\ncomponent_input_sha256={component_id}\nplatform_contract_sha256={contract}\nlatch_protocol_sha256={}\nlatch_bridge_sha256={}\nlatch_protocol_version={LATCH_PROTOCOL_VERSION}\nlatch_capability_mask={LATCH_CAPABILITY_MASK}\nrbf_sha256={}\nreport_sha256.reports/menu.fit.rpt={}\n",
                     "1".repeat(64),
                     "2".repeat(64),
                     digest_bytes(rbf.as_bytes()),
@@ -809,6 +822,30 @@ mod tests {
             id,
             bundle_id(&"a".repeat(64), &"b".repeat(64), &"c".repeat(64)).unwrap()
         );
+    }
+
+    #[test]
+    fn metadata_accepts_only_audited_repeated_source_statuses() {
+        assert!(
+            parse_fields(
+                "format=current\nsource_status= M menu.qsf\nsource_status= M sys/sys_top.sdc\n"
+            )
+            .is_ok()
+        );
+        assert!(parse_fields("format=legacy\nsource_status= M sys/sys_top.sdc\n").is_ok());
+        for malformed in [
+            "format=missing-sdc\nsource_status= M menu.qsf\n",
+            "format=duplicate\nsource_status= M menu.qsf\nsource_status= M menu.qsf\n",
+            "format=unexpected\nsource_status= M sys/sys_top.v\n",
+        ] {
+            assert!(matches!(
+                parse_fields(malformed),
+                Err(AgentError::Classified {
+                    code: "malformed_metadata",
+                    ..
+                })
+            ));
+        }
     }
     #[test]
     fn new_plan_is_closed() {
