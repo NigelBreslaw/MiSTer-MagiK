@@ -136,6 +136,7 @@ jobs:
             --Mdir "$build_dir/obj" \
             -Imister/platform/fpga/menu-vblank-latch \
             mister/platform/fpga/menu-vblank-latch/mister_magik_vblank_latch.sv \
+            mister/platform/fpga/menu-vblank-latch/mister_magik_video_diagnostics_control.sv \
             mister/platform/fpga/menu-vblank-latch/mister_magik_latch_sys_top_bridge.sv \
             mister/platform/fpga/menu-vblank-latch/tb_mister_magik_sys_top_integration.sv \
             "$GITHUB_WORKSPACE/mister/platform/fpga/menu-vblank-latch/verilator_sys_top_coverage_main.cpp"

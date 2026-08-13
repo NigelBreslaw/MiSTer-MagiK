@@ -3771,6 +3771,14 @@ mod linux {
         pub(super) returned: u8,
     }
 
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+    pub(super) struct PathActivityFlags {
+        pub(super) final_path: u16,
+        pub(super) scaler_raw: u16,
+        pub(super) post_osd: u16,
+        pub(super) avalon: u16,
+    }
+
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub(super) struct HdmiOutputActivityDeltas {
         pub(super) no_de: u8,
@@ -3976,19 +3984,16 @@ mod linux {
     }
 
     pub(super) fn detailed_path_classification(
-        final_flags: u16,
-        raw_flags: u16,
-        post_flags: u16,
-        avalon_flags: u16,
+        flags: PathActivityFlags,
         final_deltas: FinalPathDeltas,
         raw_deltas: ThreeClassDeltas,
         post_deltas: ThreeClassDeltas,
         avalon_deltas: AvalonLivenessDeltas,
     ) -> &'static str {
         use mister_magik_video_diagnostics_contract as contract;
-        if final_flags & contract::HDMI_FINAL_PATH_ACTIVITY_FLAG_COUNTER_COLLISION != 0
-            || raw_flags & contract::HDMI_SCALER_RAW_ACTIVITY_FLAG_COUNTER_COLLISION != 0
-            || post_flags & contract::HDMI_POST_OSD_ACTIVITY_FLAG_COUNTER_COLLISION != 0
+        if flags.final_path & contract::HDMI_FINAL_PATH_ACTIVITY_FLAG_COUNTER_COLLISION != 0
+            || flags.scaler_raw & contract::HDMI_SCALER_RAW_ACTIVITY_FLAG_COUNTER_COLLISION != 0
+            || flags.post_osd & contract::HDMI_POST_OSD_ACTIVITY_FLAG_COUNTER_COLLISION != 0
             || final_deltas.black_mixed != 0
         {
             return "video_path_evidence_invalid";
@@ -4035,7 +4040,7 @@ mod linux {
         if raw_deltas.all_zero == 0 {
             return "final_output_black_scaled_path_inconclusive";
         }
-        if avalon_flags & contract::HDMI_AVALON_LIVENESS_ACTIVITY_FLAG_BUCKET_VALID == 0 {
+        if flags.avalon & contract::HDMI_AVALON_LIVENESS_ACTIVITY_FLAG_BUCKET_VALID == 0 {
             return "scaler_raw_black_avalon_unavailable";
         }
         if avalon_deltas.bucket == 0 {
@@ -4080,10 +4085,12 @@ mod linux {
             let avalon_deltas = avalon_liveness_deltas(&self.avalon_first, &self.avalon_second);
             let classification = if self.sample_interval_us < 80_000 {
                 detailed_path_classification(
-                    final_flags,
-                    raw_flags,
-                    post_flags,
-                    avalon_flags,
+                    PathActivityFlags {
+                        final_path: final_flags,
+                        scaler_raw: raw_flags,
+                        post_osd: post_flags,
+                        avalon: avalon_flags,
+                    },
                     final_deltas,
                     raw_deltas,
                     post_deltas,
@@ -7438,10 +7445,10 @@ mod tests {
         };
         assert_eq!(
             linux::detailed_path_classification(
-                0,
-                0,
-                0,
-                contract::HDMI_AVALON_LIVENESS_ACTIVITY_FLAG_BUCKET_VALID,
+                linux::PathActivityFlags {
+                    avalon: contract::HDMI_AVALON_LIVENESS_ACTIVITY_FLAG_BUCKET_VALID,
+                    ..Default::default()
+                },
                 scaled_black,
                 raw_black,
                 post_black,
@@ -7457,10 +7464,7 @@ mod tests {
         };
         assert_eq!(
             linux::detailed_path_classification(
-                0,
-                0,
-                0,
-                0,
+                linux::PathActivityFlags::default(),
                 scaled_black,
                 raw_nonzero,
                 post_black,
@@ -7476,10 +7480,7 @@ mod tests {
         };
         assert_eq!(
             linux::detailed_path_classification(
-                0,
-                0,
-                0,
-                0,
+                linux::PathActivityFlags::default(),
                 direct_black,
                 raw_black,
                 post_black,
@@ -7489,10 +7490,10 @@ mod tests {
         );
         assert_eq!(
             linux::detailed_path_classification(
-                contract::HDMI_FINAL_PATH_ACTIVITY_FLAG_COUNTER_COLLISION,
-                0,
-                0,
-                0,
+                linux::PathActivityFlags {
+                    final_path: contract::HDMI_FINAL_PATH_ACTIVITY_FLAG_COUNTER_COLLISION,
+                    ..Default::default()
+                },
                 scaled_black,
                 raw_black,
                 post_black,
@@ -7503,10 +7504,10 @@ mod tests {
 
         assert_eq!(
             linux::detailed_path_classification(
-                0,
-                0,
-                0,
-                contract::HDMI_AVALON_LIVENESS_ACTIVITY_FLAG_BUCKET_VALID,
+                linux::PathActivityFlags {
+                    avalon: contract::HDMI_AVALON_LIVENESS_ACTIVITY_FLAG_BUCKET_VALID,
+                    ..Default::default()
+                },
                 scaled_black,
                 raw_black,
                 post_black,
@@ -7522,10 +7523,10 @@ mod tests {
 
         assert_eq!(
             linux::detailed_path_classification(
-                0,
-                0,
-                0,
-                contract::HDMI_AVALON_LIVENESS_ACTIVITY_FLAG_BUCKET_VALID,
+                linux::PathActivityFlags {
+                    avalon: contract::HDMI_AVALON_LIVENESS_ACTIVITY_FLAG_BUCKET_VALID,
+                    ..Default::default()
+                },
                 scaled_black,
                 ThreeClassDeltas {
                     no_de: 0,
