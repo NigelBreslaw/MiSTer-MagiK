@@ -216,6 +216,30 @@ if path_activity != {
             "words": ["schema", "flags", "counts", "crc"],
             "counters": {"request": 0, "accepted": 4, "returned": 8, "bucket": 12},
         },
+        "scaler_fetch": {
+            "schema": 1,
+            "command": 0x66,
+            "magic": 0x4D56,
+            "word_count": 5,
+            "flags": {
+                "snapshot_valid": 0,
+                "completion_delta_invalid": 1,
+                "completion_level_invalid": 2,
+            },
+            "words": ["schema", "state", "events", "flags", "crc"],
+            "counters": {},
+            "fields": {
+                "scheduler_state": {"word": "state", "bit": 0, "width": 2},
+                "copy_state": {"word": "state", "bit": 2, "width": 2},
+                "read_level": {"word": "state", "bit": 4, "width": 2},
+                "copy_level": {"word": "state", "bit": 6, "width": 2},
+                "completion_pending": {"word": "state", "bit": 8, "width": 1},
+                "completion_delta": {"word": "state", "bit": 9, "width": 2},
+                "batch_two_count": {"word": "events", "bit": 0, "width": 4},
+                "starved_frame_count": {"word": "events", "bit": 4, "width": 4},
+                "starved_line_count": {"word": "events", "bit": 8, "width": 8},
+            },
+        },
     },
 }:
     raise SystemExit("HDMI path activity v1 records changed without a schema update")

@@ -109,6 +109,19 @@ def render_rust(spec: dict) -> str:
             lines.append(f"pub const {prefix}_{name.upper()}_WORD: usize = {index};")
         for name, offset in record["counters"].items():
             lines.append(f"pub const {prefix}_{name.upper()}_BIT: usize = {offset};")
+        for name, field in record.get("fields", {}).items():
+            word_name = field["word"].upper()
+            word_constant = f"{prefix}_{name.upper()}_WORD"
+            word_value = f"{prefix}_{word_name}_WORD"
+            declaration = f"pub const {word_constant}: usize = {word_value};"
+            if len(declaration) > 100:
+                lines.extend((f"pub const {word_constant}: usize =", f"    {word_value};"))
+            else:
+                lines.append(declaration)
+            lines.append(f"pub const {prefix}_{name.upper()}_BIT: usize = {field['bit']};")
+            lines.append(
+                f"pub const {prefix}_{name.upper()}_MASK: u16 = 0x{((1 << field['width']) - 1):04x};"
+            )
         lines.append(
             f"pub const {prefix}_ZERO_GOLDEN_CRC: u16 = "
             f"0x{zero_golden_crc(record, spec['crc']):04x};"
@@ -157,6 +170,11 @@ def main() -> None:
         for counter, offset in record["counters"].items():
             if offset < 0 or offset + path_activity["counter_bits"] > 32:
                 raise SystemExit(f"HDMI {name} counter {counter} is outside two packed words")
+        for field_name, field in record.get("fields", {}).items():
+            if field["word"] not in record["words"]:
+                raise SystemExit(f"HDMI {name} field {field_name} names an unknown word")
+            if field["bit"] < 0 or field["width"] <= 0 or field["bit"] + field["width"] > 16:
+                raise SystemExit(f"HDMI {name} field {field_name} is outside one word")
     write_or_check(RUST_PATH, render_rust(spec), args.check)
 
 
