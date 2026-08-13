@@ -713,6 +713,52 @@ def main() -> None:
         ]
         if mismatches:
             fail("patched production bridge binding mismatch: " + "; ".join(mismatches))
+        completion_binding = re.search(
+            r"mister_magik_scaler_completion_cdc\s+magik_scaler_completion_cdc\s*"
+            r"\((.*?)\);",
+            patched,
+            re.S,
+        )
+        if completion_binding is None:
+            fail("patched scaler completion CDC binding is missing")
+        completion_connections = re.findall(
+            r"\.([A-Za-z_][A-Za-z0-9_]*)\s*\(\s*([^()]+?)\s*\)",
+            completion_binding.group(1),
+        )
+        if completion_connections != [
+            ("destination_clk", "clk_hdmi"),
+            ("reset_n", "~reset_req"),
+            ("source_completion_gray", "magik_scaler_completion_gray"),
+            ("scaler_vs", "hdmi_vs"),
+            ("scaler_framebuffer_enabled", "FB_EN"),
+            ("scaler_scheduler_state", "magik_scaler_scheduler_state"),
+            ("scaler_copy_state", "magik_scaler_copy_state"),
+            ("scaler_read_level", "magik_scaler_read_level"),
+            ("scaler_copy_level", "magik_scaler_copy_level"),
+            ("completion_pulse", "magik_scaler_completion_pulse"),
+            (
+                "completion_batch_two_toggle",
+                "magik_scaler_completion_batch_two_toggle",
+            ),
+            (
+                "completion_starved_frame_toggle",
+                "magik_scaler_completion_starved_frame_toggle",
+            ),
+            ("completion_snapshot_valid", "magik_scaler_completion_snapshot_valid"),
+            ("completion_delta_invalid", "magik_scaler_completion_delta_invalid"),
+        ]:
+            fail("patched scaler completion CDC port mapping is not exact")
+        for fragment in (
+            ".avl_completion_gray(magik_scaler_completion_gray)",
+            ".o_completion_pulse(magik_scaler_completion_pulse)",
+            ".diag_o_state(magik_scaler_scheduler_state)",
+            ".diag_o_copy(magik_scaler_copy_state)",
+            ".diag_o_readlev(magik_scaler_read_level)",
+            ".diag_o_copylev(magik_scaler_copy_level)",
+            ".diag_completion_level_invalid(magik_scaler_completion_level_invalid)",
+        ):
+            if patched.count(fragment) != 1:
+                fail(f"patched ascal completion port mapping is not exact: {fragment}")
         for fragment in (
             "avl_completion_gray: OUT   std_logic_vector(1 DOWNTO 0);",
             "o_completion_pulse : IN    std_logic :='0';",
@@ -930,6 +976,7 @@ def main() -> None:
                     str(rtl),
                     str(bridge),
                     str(diagnostics_control),
+                    str(diagnostics_avalon),
                     str(integration_tb),
                 ],
                 check=True,

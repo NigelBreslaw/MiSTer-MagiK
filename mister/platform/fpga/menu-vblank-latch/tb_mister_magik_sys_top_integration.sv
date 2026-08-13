@@ -27,10 +27,13 @@ module mister_magik_sys_top_latch_path (
 	input wire vbuf_read,
 	input wire vbuf_waitrequest,
 	input wire vbuf_readdatavalid,
-	input wire scaler_fetch_batch_two_toggle,
-	input wire scaler_fetch_starved_frame_toggle,
-	input wire scaler_fetch_snapshot_valid,
-	input wire scaler_fetch_delta_invalid,
+	input wire scaler_completion_reset_n,
+	input wire [1:0] scaler_completion_gray,
+	input wire scaler_framebuffer_enabled,
+	input wire [1:0] scaler_scheduler_state,
+	input wire [1:0] scaler_copy_state,
+	input wire [1:0] scaler_read_level,
+	input wire [1:0] scaler_copy_level,
 	input wire scaler_fetch_level_invalid,
 	input wire io_uio,
 	input wire io_strobe,
@@ -56,6 +59,11 @@ module mister_magik_sys_top_latch_path (
 	wire [15:0] magik_evidence_word2;
 	wire [15:0] magik_evidence_word3;
 	wire [15:0] magik_evidence_word4;
+	wire scaler_fetch_completion_pulse;
+	wire scaler_fetch_batch_two_toggle;
+	wire scaler_fetch_starved_frame_toggle;
+	wire scaler_fetch_snapshot_valid;
+	wire scaler_fetch_delta_invalid;
 	wire [7:0] magik_evidence_command = io_din[7:0];
 	wire magik_lfb_apply;
 	wire magik_lfb_apply_accepted;
@@ -80,6 +88,23 @@ module mister_magik_sys_top_latch_path (
 	wire [15:0] magik_lfb_drop_count;
 	wire [15:0] magik_lfb_reject_count;
 	wire [15:0] magik_lfb_active_route_epoch;
+
+	mister_magik_scaler_completion_cdc scaler_completion_cdc (
+		.destination_clk(clk_hdmi),
+		.reset_n(scaler_completion_reset_n),
+		.source_completion_gray(scaler_completion_gray),
+		.scaler_vs(scaler_raw_vs),
+		.scaler_framebuffer_enabled(scaler_framebuffer_enabled),
+		.scaler_scheduler_state(scaler_scheduler_state),
+		.scaler_copy_state(scaler_copy_state),
+		.scaler_read_level(scaler_read_level),
+		.scaler_copy_level(scaler_copy_level),
+		.completion_pulse(scaler_fetch_completion_pulse),
+		.completion_batch_two_toggle(scaler_fetch_batch_two_toggle),
+		.completion_starved_frame_toggle(scaler_fetch_starved_frame_toggle),
+		.completion_snapshot_valid(scaler_fetch_snapshot_valid),
+		.completion_delta_invalid(scaler_fetch_delta_invalid)
+	);
 
 	mister_magik_latch_sys_top_bridge bridge (
 		.clk_sys(clk_sys),
@@ -220,10 +245,13 @@ module tb_mister_magik_sys_top_integration;
 	reg test_vbuf_read = 1'b0;
 	reg test_vbuf_waitrequest = 1'b0;
 	reg test_vbuf_readdatavalid = 1'b0;
-	reg test_scaler_fetch_batch_two_toggle = 1'b0;
-	reg test_scaler_fetch_starved_frame_toggle = 1'b0;
-	reg test_scaler_fetch_snapshot_valid = 1'b0;
-	reg test_scaler_fetch_delta_invalid = 1'b0;
+	reg test_scaler_completion_reset_n = 1'b0;
+	reg [1:0] test_scaler_completion_gray = 2'd0;
+	reg test_scaler_framebuffer_enabled = 1'b0;
+	reg [1:0] test_scaler_scheduler_state = 2'd0;
+	reg [1:0] test_scaler_copy_state = 2'd0;
+	reg [1:0] test_scaler_read_level = 2'd0;
+	reg [1:0] test_scaler_copy_level = 2'd0;
 	reg test_scaler_fetch_level_invalid = 1'b0;
 	reg test_io_uio = 1'b0;
 	reg test_io_strobe = 1'b0;
@@ -250,10 +278,13 @@ module tb_mister_magik_sys_top_integration;
 		.vbuf_read(test_vbuf_read),
 		.vbuf_waitrequest(test_vbuf_waitrequest),
 		.vbuf_readdatavalid(test_vbuf_readdatavalid),
-		.scaler_fetch_batch_two_toggle(test_scaler_fetch_batch_two_toggle),
-		.scaler_fetch_starved_frame_toggle(test_scaler_fetch_starved_frame_toggle),
-		.scaler_fetch_snapshot_valid(test_scaler_fetch_snapshot_valid),
-		.scaler_fetch_delta_invalid(test_scaler_fetch_delta_invalid),
+		.scaler_completion_reset_n(test_scaler_completion_reset_n),
+		.scaler_completion_gray(test_scaler_completion_gray),
+		.scaler_framebuffer_enabled(test_scaler_framebuffer_enabled),
+		.scaler_scheduler_state(test_scaler_scheduler_state),
+		.scaler_copy_state(test_scaler_copy_state),
+		.scaler_read_level(test_scaler_read_level),
+		.scaler_copy_level(test_scaler_copy_level),
 		.scaler_fetch_level_invalid(test_scaler_fetch_level_invalid),
 		.io_uio(test_io_uio),
 		.io_strobe(test_io_strobe),
@@ -428,6 +459,9 @@ module tb_mister_magik_sys_top_integration;
 		reg [15:0] evidence [0:5];
 		reg [15:0] telemetry_crc;
 		reg [15:0] evidence_crc;
+		repeat(3) @(posedge test_scaler_clk);
+		test_scaler_completion_reset_n = 1'b1;
+		repeat(4) @(posedge test_scaler_clk);
 		repeat(3) @(posedge test_clk);
 		end_command();
 		// Exercise the production bridge's selected-but-idle parser state.
@@ -598,9 +632,22 @@ module tb_mister_magik_sys_top_integration;
 		expect16(evidence[MAGIK_HDMI_AVALON_LIVENESS_ACTIVITY_CRC_WORD], evidence_crc,
 			"sys_top Avalon liveness CRC");
 
-		test_scaler_fetch_snapshot_valid = 1'b1;
-		test_scaler_fetch_batch_two_toggle = 1'b1;
-		test_scaler_fetch_starved_frame_toggle = 1'b1;
+		// Exercise the real completion-credit CDC before reading its evidence.
+		// A settled Gray 00->11 step represents two completions while the
+		// destination clock was unable to sample the intermediate 01 state.
+		@(negedge test_scaler_clk);
+		test_scaler_completion_gray = 2'b11;
+		repeat(8) @(posedge test_scaler_clk);
+		if(dut.scaler_completion_cdc.completion_batch_two_toggle !== 1'b1)
+			fail("sys_top completion CDC did not retain a two-credit batch");
+		test_scaler_framebuffer_enabled = 1'b1;
+		test_scaler_scheduler_state = 2'd2;
+		test_scaler_copy_state = 2'd0;
+		test_scaler_read_level = 2'd2;
+		test_scaler_copy_level = 2'd0;
+		pulse_scaler_boundaries();
+		repeat(4) @(posedge test_scaler_clk);
+		pulse_scaler_boundaries();
 		repeat(8) @(posedge test_clk);
 		begin_command(MAGIK_UIO_GET_HDMI_SCALER_FETCH_ACTIVITY,
 			MAGIK_HDMI_SCALER_FETCH_ACTIVITY_MAGIC);
