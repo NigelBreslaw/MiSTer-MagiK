@@ -11662,13 +11662,12 @@ impl LaunchReturnSession {
     }
 
     fn protects_hydrating_collection(&self, nav: &LauncherNav) -> bool {
-        self.state
-            .as_ref()
-            .and_then(launcher::LaunchReturnState::collection_id)
-            .is_some_and(|collection_id| {
+        self.state.as_ref().is_some_and(|state| {
+            state.collection_id().is_some_and(|collection_id| {
                 nav.active_collection_id() == Some(collection_id)
-                    && nav.catalog_system_hydration_is_loading(collection_id)
+                    && nav.catalog_system_hydration_is_loading(state.system_id())
             })
+        })
     }
 
     fn state(&self) -> Option<&launcher::LaunchReturnState> {
@@ -14859,15 +14858,17 @@ mod tests {
 
     #[test]
     fn pending_return_shard_protects_exact_arcade_context_from_empty_list_recovery() {
-        let capsule = catalog_for_media_systems(&["c64"]);
+        let capsule = catalog_for_media_systems(&["arcade"]);
         let mut launched_nav = LauncherNav::new();
-        assert!(launched_nav.open_system(&capsule, "c64"));
+        assert!(launched_nav.open_default_arcade(&capsule));
         let state = launcher::capture_launch_return_state(
             &launched_nav,
             &capsule,
-            "/media/fat/_Arcade/c64.mra",
+            "/media/fat/_Arcade/arcade.mra",
         )
         .expect("return state");
+        assert_eq!(state.collection_id(), Some("menu:arcade"));
+        assert_eq!(state.system_id(), "arcade");
         let session = LaunchReturnSession::new(Some(state));
         let mut restored_nav = LauncherNav::new();
         assert!(launcher::apply_launch_return_state(
@@ -14875,8 +14876,8 @@ mod tests {
             &capsule,
             session.state().expect("pending return").clone(),
         ));
-        restored_nav.catalog_system_hydration_started("c64");
-        let registry = summary_catalog_for_media_systems(&["c64"]);
+        restored_nav.catalog_system_hydration_started("arcade");
+        let registry = summary_catalog_for_media_systems(&["arcade"]);
 
         assert!(empty_collection_invariant_violated(
             &registry,
@@ -14884,7 +14885,7 @@ mod tests {
         ));
         assert!(session.protects_hydrating_collection(&restored_nav));
 
-        restored_nav.catalog_system_hydration_failed("c64");
+        restored_nav.catalog_system_hydration_failed("arcade");
         assert!(!session.protects_hydrating_collection(&restored_nav));
     }
 
