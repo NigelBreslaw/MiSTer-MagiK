@@ -9,7 +9,7 @@ use crate::process;
 use crate::progress::{EventKind, Reporter};
 use clap::Subcommand;
 use std::ffi::{OsStr, OsString};
-use std::fs;
+use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -17,10 +17,11 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 
 const MENU_REPOSITORY: &str = "https://github.com/MiSTer-devel/Menu_MiSTer.git";
-const SIGNOFF_FORMAT: &str = "mister-magik-local-fpga-signoff-v3";
-const VARIANT_CACHE_MARKER: &str = "local-signoff-input-v3.txt";
+const SIGNOFF_FORMAT: &str = "mister-magik-local-fpga-signoff-v4";
+const VARIANT_CACHE_MARKER: &str = "local-signoff-input-v4.txt";
 const QUARTUS_IMAGE: &str = "mister-magik-quartus17-apple:ubuntu18-amd64";
 const QUARTUS_VERSION: &str = "17.0.0 Build 595";
+const QUARTUS_PROCESSORS: &str = "1";
 const QUARTUS_SEED_SOURCE: &str =
     include_str!("../../mister/platform/fpga/menu-vblank-latch/Quartus.seed");
 const BUILD_DEADLINE: Duration = Duration::from_secs(3 * 60 * 60);
@@ -93,33 +94,51 @@ fn signoff(repository: &Path, rebuild: bool, reporter: &mut Reporter<'_>) -> Age
     require_revision("Menu", &menu_revision)?;
     require_revision("pre-observer", &baseline_revision)?;
 
+    let local_root = local_root(repository);
+    let signoff_root = local_root.join("signoff");
+    let source_root = local_root.join("sources/main");
+    prepare_local_checkout(repository, &source_root, &main_revision)?;
+    let synthesis_component = platform_component_value(&source_root, false)?;
+    let synthesis_revision = platform_component_value(&source_root, true)?;
+    require_revision("FPGA synthesis", &synthesis_revision)?;
     let build_date = git::value(
-        repository,
+        &source_root,
         &[
             "show",
             "-s",
             "--format=%cd",
             "--date=format:%y%m%d",
-            &main_revision,
+            &synthesis_revision,
         ],
     )?;
-    let local_root = local_root(repository);
-    let signoff_root = local_root.join("signoff");
-    let source_root = local_root.join("sources/main");
-    prepare_local_checkout(repository, &source_root, &main_revision)?;
     let baseline_root = local_root.join("sources/pre-observer");
     prepare_local_checkout(repository, &baseline_root, &baseline_revision)?;
     let stock_identity = synthesis_files_identity(&source_root, false, false)?;
     let baseline_identity = synthesis_files_identity(&baseline_root, true, false)?;
     let patched_identity = synthesis_files_identity(&source_root, true, true)?;
-    let stock_manifest =
-        cache_manifest("stock", &stock_identity, &menu_revision, None, quartus_seed);
+    let preparation_identity = git::value(
+        &source_root,
+        &["rev-parse", "HEAD:scripts/prepare-fpga-menu-signoff.py"],
+    )?;
+    let stock_manifest = cache_manifest(
+        "stock",
+        &stock_identity,
+        &menu_revision,
+        None,
+        quartus_seed,
+        &build_date,
+        &preparation_identity,
+        &synthesis_component,
+    );
     let baseline_manifest = cache_manifest(
         "pre-observer",
         &baseline_identity,
         &menu_revision,
         Some(&baseline_revision),
         quartus_seed,
+        &build_date,
+        &preparation_identity,
+        &synthesis_component,
     );
     let patched_manifest = cache_manifest(
         "patched",
@@ -127,17 +146,10 @@ fn signoff(repository: &Path, rebuild: bool, reporter: &mut Reporter<'_>) -> Age
         &menu_revision,
         None,
         quartus_seed,
+        &build_date,
+        &preparation_identity,
+        &synthesis_component,
     );
-
-    migrate_legacy_variant_cache(
-        &signoff_root,
-        "pre-observer",
-        &baseline_revision,
-        &menu_revision,
-        &baseline_revision,
-        &baseline_manifest,
-        quartus_seed,
-    )?;
 
     let stock_hit = !rebuild && variant_cache_hit(&signoff_root.join("stock"), &stock_manifest);
     let baseline_hit =
@@ -160,7 +172,11 @@ fn signoff(repository: &Path, rebuild: bool, reporter: &mut Reporter<'_>) -> Age
             &format!("Building matched FPGA variants for main {main_revision}"),
             Some(10),
         )?;
-        let menu_root = prepare_menu(&local_root, &menu_revision)?;
+        let menu_root = prepare_menu(
+            &local_root,
+            &menu_revision,
+            &source_root.join("scripts/prepare-fpga-menu-signoff.py"),
+        )?;
         let wrapper_root = write_quartus_wrappers(&local_root)?;
 
         build_cached_variant(
@@ -172,6 +188,7 @@ fn signoff(repository: &Path, rebuild: bool, reporter: &mut Reporter<'_>) -> Age
             false,
             &main_revision,
             &build_date,
+            &synthesis_component,
             &stock_manifest,
             quartus_seed,
             stock_hit,
@@ -186,6 +203,7 @@ fn signoff(repository: &Path, rebuild: bool, reporter: &mut Reporter<'_>) -> Age
             true,
             &main_revision,
             &build_date,
+            &synthesis_component,
             &baseline_manifest,
             quartus_seed,
             baseline_hit,
@@ -200,6 +218,7 @@ fn signoff(repository: &Path, rebuild: bool, reporter: &mut Reporter<'_>) -> Age
             true,
             &main_revision,
             &build_date,
+            &synthesis_component,
             &patched_manifest,
             quartus_seed,
             patched_hit,
@@ -222,10 +241,13 @@ fn cache_manifest(
     menu: &str,
     baseline: Option<&str>,
     seed: &str,
+    build_date: &str,
+    preparation_identity: &str,
+    synthesis_component: &str,
 ) -> String {
     let baseline = baseline.unwrap_or("-");
     format!(
-        "format={SIGNOFF_FORMAT}\nflavour={flavour}\nsynthesis_input={synthesis_identity}\nmenu_revision={menu}\nbaseline_revision={baseline}\nquartus_version={QUARTUS_VERSION}\nquartus_seed={seed}\nparallel_synthesis=off\nmenu_clock_groups=asynchronous\n"
+        "format={SIGNOFF_FORMAT}\nflavour={flavour}\nsynthesis_input={synthesis_identity}\nsynthesis_component={synthesis_component}\nmenu_revision={menu}\nbaseline_revision={baseline}\nquartus_version={QUARTUS_VERSION}\nquartus_seed={seed}\nbuild_date={build_date}\nquartus_processors={QUARTUS_PROCESSORS}\nparallel_synthesis=off\nauto_parallel_synthesis=off\nmenu_clock_groups=asynchronous\npreparation_input={preparation_identity}\n"
     )
 }
 
@@ -304,56 +326,6 @@ fn variant_cache_hit(root: &Path, expected_manifest: &str) -> bool {
             .is_ok_and(|value| value == expected_manifest)
 }
 
-fn manifest_value<'a>(manifest: &'a str, name: &str) -> Option<&'a str> {
-    manifest.lines().find_map(|line| {
-        let (key, value) = line.split_once('=')?;
-        (key == name).then_some(value)
-    })
-}
-
-fn migrate_legacy_variant_cache(
-    signoff_root: &Path,
-    flavour: &str,
-    expected_builder: &str,
-    menu_revision: &str,
-    baseline_revision: &str,
-    new_manifest: &str,
-    quartus_seed: &str,
-) -> AgentResult<()> {
-    let output = signoff_root.join(flavour);
-    let marker = output.join(VARIANT_CACHE_MARKER);
-    if marker.exists() || !variant_complete(&output) {
-        return Ok(());
-    }
-    let legacy = match fs::read_to_string(signoff_root.join("local-signoff-input-v2.txt")) {
-        Ok(value) => value,
-        Err(_) => return Ok(()),
-    };
-    let metadata = match fs::read_to_string(output.join("menu-magik-vblank-latch.metadata.txt")) {
-        Ok(value) => value,
-        Err(_) => return Ok(()),
-    };
-    let legacy_matches = manifest_value(&legacy, "format")
-        == Some("mister-magik-local-fpga-signoff-v2")
-        && manifest_value(&legacy, "menu_revision") == Some(menu_revision)
-        && manifest_value(&legacy, "baseline_revision") == Some(baseline_revision)
-        && manifest_value(&legacy, "quartus_version") == Some(QUARTUS_VERSION)
-        && manifest_value(&legacy, "quartus_seed") == Some(quartus_seed)
-        && manifest_value(&legacy, "parallel_synthesis") == Some("off")
-        && manifest_value(&legacy, "menu_clock_groups") == Some("asynchronous");
-    let metadata_matches = manifest_value(&metadata, "builder_commit") == Some(expected_builder)
-        && manifest_value(&metadata, "source_commit") == Some(menu_revision)
-        && manifest_value(&metadata, "apply_patch") == Some("1")
-        && manifest_value(&metadata, "quartus_version") == Some(QUARTUS_VERSION)
-        && manifest_value(&metadata, "quartus_seed") == Some(quartus_seed);
-    if legacy_matches && metadata_matches {
-        fs::write(&marker, new_manifest).map_err(|error| {
-            format!("cannot migrate cache marker {}: {error}", marker.display())
-        })?;
-    }
-    Ok(())
-}
-
 fn require_revision(label: &str, revision: &str) -> AgentResult<()> {
     if revision.len() != 40 || !revision.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return Err(format!("invalid {label} revision: {revision}").into());
@@ -364,6 +336,36 @@ fn require_revision(label: &str, revision: &str) -> AgentResult<()> {
 fn git_show(repository: &Path, revision: &str, path: &str) -> AgentResult<String> {
     let object = format!("{revision}:{path}");
     git::value(repository, &["show", &object]).map_err(AgentError::from)
+}
+
+fn platform_component_value(repository: &Path, revision_only: bool) -> AgentResult<String> {
+    let script = repository.join("scripts/release/platform/platform-component-id.py");
+    let mut command = Command::new("python3");
+    command
+        .arg(script)
+        .args(["component", "fpga-synthesis"])
+        .current_dir(repository);
+    if revision_only {
+        command.arg("--revision-only");
+    }
+    let output = command
+        .output()
+        .map_err(|error| format!("cannot compute FPGA synthesis identity: {error}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "cannot compute FPGA synthesis identity: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )
+        .into());
+    }
+    let value = String::from_utf8(output.stdout)
+        .map_err(|error| format!("invalid FPGA synthesis identity output: {error}"))?;
+    let value = value.trim();
+    let expected_length = if revision_only { 40 } else { 64 };
+    if value.len() != expected_length || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(format!("invalid FPGA synthesis identity: {value}").into());
+    }
+    Ok(value.to_owned())
 }
 
 fn prepare_local_checkout(
@@ -404,7 +406,11 @@ fn prepare_local_checkout(
     )
 }
 
-fn prepare_menu(local_root: &Path, revision: &str) -> AgentResult<PathBuf> {
+fn prepare_menu(
+    local_root: &Path,
+    revision: &str,
+    preparation_script: &Path,
+) -> AgentResult<PathBuf> {
     let menu_root = local_root.join("sources/menu");
     let mirror = menu_root.join("Menu_MiSTer.git");
     let work = menu_root.join("work");
@@ -438,30 +444,11 @@ fn prepare_menu(local_root: &Path, revision: &str) -> AgentResult<PathBuf> {
             .current_dir(&work),
         "select pinned Menu revision",
     )?;
-    replace_once(
-        &work.join("sys/sys_top.sdc"),
-        "set_clock_groups -exclusive",
-        "set_clock_groups -asynchronous",
+    run_status(
+        Command::new("python3").arg(preparation_script).arg(&work),
+        "apply canonical Menu signoff settings",
     )?;
-    let qsf = work.join("menu.qsf");
-    let mut source = fs::read_to_string(&qsf)
-        .map_err(|error| format!("cannot read {}: {error}", qsf.display()))?;
-    source.push_str(
-        "\n# Apple Rosetta compatibility: Quartus synthesis helpers deadlock.\nset_global_assignment -name PARALLEL_SYNTHESIS OFF\nset_global_assignment -name AUTO_PARALLEL_SYNTHESIS OFF\n",
-    );
-    fs::write(&qsf, source).map_err(|error| format!("cannot write {}: {error}", qsf.display()))?;
     Ok(work)
-}
-
-fn replace_once(path: &Path, before: &str, after: &str) -> AgentResult<()> {
-    let source = fs::read_to_string(path)
-        .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
-    if source.matches(before).count() != 1 {
-        return Err(format!("expected exactly one {before:?} in {}", path.display()).into());
-    }
-    fs::write(path, source.replacen(before, after, 1))
-        .map_err(|error| format!("cannot write {}: {error}", path.display()))?;
-    Ok(())
 }
 
 fn write_quartus_wrappers(local_root: &Path) -> AgentResult<PathBuf> {
@@ -470,7 +457,7 @@ fn write_quartus_wrappers(local_root: &Path) -> AgentResult<PathBuf> {
         .map_err(|error| format!("cannot create {}: {error}", root.display()))?;
     let install = local_root.join("quartus-lite-17.0/apple-intelFPGA_lite");
     let shell = format!(
-        "#!/usr/bin/env bash\nset -euo pipefail\ntool=\"${{QUARTUS_APPLE_TOOL:-$(basename \"$0\")}}\"\nwork_dir=\"$(pwd -P)\"\nexec container run --arch amd64 --rm --cpus 8 --memory 12G --mount \"type=bind,source={},target=/opt/intelFPGA_lite,readonly\" --mount \"type=bind,source=${{work_dir}},target=/work\" --workdir /work {QUARTUS_IMAGE} \"$tool\" \"$@\"\n",
+        "#!/usr/bin/env bash\nset -euo pipefail\ntool=\"${{QUARTUS_APPLE_TOOL:-$(basename \"$0\")}}\"\nwork_dir=\"$(pwd -P)\"\nexec container run --arch amd64 --rm --cpus {QUARTUS_PROCESSORS} --memory 12G --mount \"type=bind,source={},target=/opt/intelFPGA_lite,readonly\" --mount \"type=bind,source=${{work_dir}},target=/work\" --workdir /work {QUARTUS_IMAGE} \"$tool\" \"$@\"\n",
         install.display()
     );
     write_executable(&root.join("quartus_sh"), &shell)?;
@@ -502,6 +489,7 @@ fn build_cached_variant(
     apply_patch: bool,
     main_revision: &str,
     build_date: &str,
+    synthesis_component: &str,
     cache_manifest: &str,
     quartus_seed: &str,
     cache_hit: bool,
@@ -530,9 +518,11 @@ fn build_cached_variant(
         apply_patch,
         main_revision,
         build_date,
+        synthesis_component,
         quartus_seed,
         reporter,
     )?;
+    append_variant_policy(&staging)?;
     fs::write(staging.join(VARIANT_CACHE_MARKER), cache_manifest).map_err(|error| {
         format!(
             "cannot write staged {flavour} cache marker {}: {error}",
@@ -540,6 +530,19 @@ fn build_cached_variant(
         )
     })?;
     promote_variant(signoff_root, flavour, &staging, &output)
+}
+
+fn append_variant_policy(output: &Path) -> AgentResult<()> {
+    let path = output.join("menu-magik-vblank-latch.metadata.txt");
+    let mut metadata = OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .map_err(|error| format!("cannot open {}: {error}", path.display()))?;
+    write!(
+        metadata,
+        "quartus_processors={QUARTUS_PROCESSORS}\nparallel_synthesis=off\nauto_parallel_synthesis=off\n"
+    )
+    .map_err(|error| format!("cannot append {}: {error}", path.display()).into())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -552,6 +555,7 @@ fn build_variant(
     apply_patch: bool,
     main_revision: &str,
     build_date: &str,
+    synthesis_component: &str,
     quartus_seed: &str,
     reporter: &mut Reporter<'_>,
 ) -> AgentResult<()> {
@@ -573,6 +577,8 @@ fn build_variant(
             if apply_patch { "1" } else { "0" },
         )
         .env("MISTER_FPGA_QUARTUS_SEED", quartus_seed)
+        .env("QUARTUS_DOCKER_CPUS", QUARTUS_PROCESSORS)
+        .env("MISTER_FPGA_SYNTHESIS_INPUT_SHA256", synthesis_component)
         .env("MISTER_FPGA_BUILD_DATE", build_date)
         .env("MISTER_FPGA_OUT_DIR", output)
         .env("MISTER_MENU_BUILD_DIR", output.join("Menu-work"))
@@ -761,16 +767,24 @@ mod tests {
             &"b".repeat(40),
             Some(&"c".repeat(40)),
             seed,
+            "260813",
+            &"d".repeat(40),
+            &"e".repeat(64),
         );
         assert!(manifest.contains(&format!("format={SIGNOFF_FORMAT}")));
         assert!(manifest.contains("flavour=patched"));
         assert!(manifest.contains("synthesis_input=aaaaaaaa"));
+        assert!(manifest.contains("synthesis_component=eeeeeeee"));
         assert!(manifest.contains("menu_revision=bbbbbbbb"));
         assert!(manifest.contains("baseline_revision=cccccccc"));
         assert_eq!(seed, "2");
         assert!(manifest.contains("quartus_seed=2"));
+        assert!(manifest.contains("build_date=260813"));
+        assert!(manifest.contains("quartus_processors=1"));
         assert!(manifest.contains("parallel_synthesis=off"));
+        assert!(manifest.contains("auto_parallel_synthesis=off"));
         assert!(manifest.contains("menu_clock_groups=asynchronous"));
+        assert!(manifest.contains("preparation_input=dddddddd"));
     }
 
     #[test]
@@ -784,15 +798,36 @@ mod tests {
     #[test]
     fn cache_manifest_is_independent_per_variant() {
         let seed = canonical_quartus_seed().unwrap();
-        let stock = cache_manifest("stock", "stock-input", "menu", None, seed);
+        let stock = cache_manifest(
+            "stock",
+            "stock-input",
+            "menu",
+            None,
+            seed,
+            "date",
+            "policy",
+            "component",
+        );
         let baseline = cache_manifest(
             "pre-observer",
             "baseline-input",
             "menu",
             Some("baseline"),
             seed,
+            "date",
+            "policy",
+            "component",
         );
-        let patched = cache_manifest("patched", "patched-input", "menu", None, seed);
+        let patched = cache_manifest(
+            "patched",
+            "patched-input",
+            "menu",
+            None,
+            seed,
+            "date",
+            "policy",
+            "component",
+        );
         assert_ne!(stock, baseline);
         assert_ne!(baseline, patched);
         assert_ne!(stock, patched);

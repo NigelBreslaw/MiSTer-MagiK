@@ -40,6 +40,14 @@ RESOURCE_RE = re.compile(
     r"^\s*;?\s*((?:Logic utilization \(in ALMs\)|Total (?:logic elements|registers|block memory bits|DSP Blocks)))\s*[:;]\s*([\d,]+)",
     re.IGNORECASE,
 )
+QUARTUS_POLICY_RE = re.compile(
+    r"^\s*;\s*(AUTO_PARALLEL_SYNTHESIS|PARALLEL_SYNTHESIS|NUM_PARALLEL_PROCESSORS)\s*;\s*([^;]+?)\s*;",
+    re.IGNORECASE,
+)
+QUARTUS_PROCESSOR_USE_RE = re.compile(
+    r"Parallel compilation is enabled and will use\s+(\d+)\s+of\s+(\d+)\s+processors detected",
+    re.IGNORECASE,
+)
 BOOTSTRAP_BLACK_LOOP_WARNING = "332125:Found combinational loop of 6 nodes"
 BOOTSTRAP_BLACK_COMBOUT_WARNING = '332126:Node "emu|random|lc0|combout"'
 BOOTSTRAP_BLACK_DATA_WARNING = '332126:Node "emu|random|lc0|data*"'
@@ -55,6 +63,11 @@ MAXIMUM_SLACK_DEGRADATION_NS = 0.15
 MAXIMUM_LOGIC_ELEMENT_DELTA = 800
 MAXIMUM_REGISTER_DELTA = 300
 EXPECTED_OBSERVER_CALCULABLE_CHAINS = 16
+EXPECTED_QUARTUS_POLICY = {
+    "auto_parallel_synthesis": "off",
+    "parallel_synthesis": "off",
+    "num_parallel_processors": "1",
+}
 EXPECTED_SYNC_ASSIGNMENT_SUFFIXES = (
     "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|control_pll_lock_meta",
     "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|control_pll_lock_sys",
@@ -180,10 +193,24 @@ def parse_report(
     diagnostic_analysis_labels: Counter[str] = Counter()
     uncalculated_fractions: list[float] = []
     unconstrained_output_paths: list[int] = []
+    quartus_policy: dict[str, Counter[str]] = {
+        name: Counter() for name in EXPECTED_QUARTUS_POLICY
+    }
+    quartus_processor_use: list[tuple[int, int]] = []
     timing_section: str | None = None
     in_tns_table = False
 
     for index, line in enumerate(lines):
+        policy = QUARTUS_POLICY_RE.match(line)
+        if policy:
+            quartus_policy[policy.group(1).lower()][normalize_space(policy.group(2)).lower()] += 1
+
+        processor_use = QUARTUS_PROCESSOR_USE_RE.search(line)
+        if processor_use:
+            quartus_processor_use.append(
+                (int(processor_use.group(1)), int(processor_use.group(2)))
+            )
+
         warning = WARNING_RE.match(line)
         if warning:
             warnings[warning_identity(warning)] += 1
@@ -271,6 +298,8 @@ def parse_report(
         "diagnostic_analysis_labels": diagnostic_analysis_labels,
         "uncalculated_fractions": uncalculated_fractions,
         "unconstrained_output_paths": unconstrained_output_paths,
+        "quartus_policy": quartus_policy,
+        "quartus_processor_use": quartus_processor_use,
     }
 
 
@@ -369,6 +398,22 @@ def compare(
     patched: dict[str, object],
 ) -> tuple[list[str], dict[str, object]]:
     reasons: list[str] = []
+    policy_details: dict[str, dict[str, dict[str, int]]] = {}
+    for flavour, report in (("stock", stock), ("baseline", baseline), ("patched", patched)):
+        policy = report["quartus_policy"]
+        assert isinstance(policy, dict)
+        policy_details[flavour] = {
+            name: dict(values) for name, values in policy.items()
+        }
+        if any(
+            policy[name] != Counter({expected: 1})
+            for name, expected in EXPECTED_QUARTUS_POLICY.items()
+        ):
+            reasons.append("quartus_policy_mismatch")
+        processor_use = report["quartus_processor_use"]
+        assert isinstance(processor_use, list)
+        if not processor_use or any(used != 1 for used, _detected in processor_use):
+            reasons.append("quartus_processor_use_mismatch")
     # Warning, constraint-identity, and CDC checks describe functional drift
     # from upstream Menu. Observer cost is the final build relative to the
     # exact patched latch build before the observer was introduced.
@@ -524,6 +569,11 @@ def compare(
         "baseline_resources": baseline_resources,
         "patched_resources": patched["resources"],
         "resource_deltas": resource_deltas,
+        "quartus_policy": policy_details,
+        "quartus_processor_use": {
+            flavour: report["quartus_processor_use"]
+            for flavour, report in (("stock", stock), ("baseline", baseline), ("patched", patched))
+        },
         **diagnostic_details,
     }
     return sorted(set(reasons)), details

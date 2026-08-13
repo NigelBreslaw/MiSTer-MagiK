@@ -7,4 +7,5 @@
 mister/platform/fpga/menu-vblank-latch
 mister/platform/kernel/scanout-slots/mister_magik_scanout_platform.h
 scripts/build-fpga-vblank-latch-core.sh
+scripts/prepare-fpga-menu-signoff.py
 scripts/install-quartus-lite-docker.sh

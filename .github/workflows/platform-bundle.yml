@@ -501,7 +501,7 @@ jobs:
       QUARTUS_CACHE_DIR: ${{ github.workspace }}/build/quartus-lite-17.0
       QUARTUS_DOCKER_BASE_IMAGE: ubuntu:18.04
       QUARTUS_DOCKER_IMAGE: mister-magik-quartus-runtime:ubuntu18-amd64
-      QUARTUS_DOCKER_CPUS: "4"
+      QUARTUS_DOCKER_CPUS: "1"
       QUARTUS_DOCKER_MEMORY: "0"
       QUARTUS_R2_ACCOUNT_ID: ${{ vars.QUARTUS_R2_ACCOUNT_ID }}
       QUARTUS_R2_BUCKET: ${{ vars.QUARTUS_R2_BUCKET || 'mister-magik-ci-cache' }}
@@ -641,12 +641,7 @@ jobs:
           QUARTUS_STRACE: "0"
         run: |
           set -euo pipefail
-          menu_sdc="$GITHUB_WORKSPACE/build/Menu_MiSTer/sys/sys_top.sdc"
-          if [ "$(grep -c 'set_clock_groups -exclusive' "$menu_sdc")" != 1 ]; then
-            echo "pinned Menu clock-group constraint changed unexpectedly" >&2
-            exit 1
-          fi
-          sed -i 's/set_clock_groups -exclusive/set_clock_groups -asynchronous/' "$menu_sdc"
+          python3 scripts/prepare-fpga-menu-signoff.py "$GITHUB_WORKSPACE/build/Menu_MiSTer"
           fpga_seed_file="mister/platform/fpga/menu-vblank-latch/Quartus.seed"
           if (( $(wc -l < "$fpga_seed_file") != 1 )); then
             echo "canonical Quartus seed file must end with one newline" >&2
@@ -697,12 +692,13 @@ jobs:
           delta_sha="$(shasum -a 256 build/fpga-signoff/patched/reports/quartus-delta-signoff.tsv | awk '{print $1}')"
           for flavour in stock pre-observer patched; do
             metadata="build/fpga-signoff/$flavour/menu-magik-vblank-latch.metadata.txt"
-            if [ "$(grep -c '^source_status=' "$metadata")" != 1 ] || \
+            if [ "$(grep -c '^source_status=' "$metadata")" != 2 ] || \
+               ! grep -Fxq 'source_status= M menu.qsf' "$metadata" || \
                ! grep -Fxq 'source_status= M sys/sys_top.sdc' "$metadata"; then
               echo "unexpected Menu source modification in $flavour metadata" >&2
               exit 1
             fi
-            printf 'analysis_constraint_override=clock_groups_exclusive_to_asynchronous\ncomponent_input_sha256=%s\ncomponent_revision=%s\n' \
+            printf 'analysis_constraint_override=clock_groups_exclusive_to_asynchronous\nquartus_processors=1\nparallel_synthesis=off\nauto_parallel_synthesis=off\ncomponent_input_sha256=%s\ncomponent_revision=%s\n' \
               "$COMPONENT_ID" "$COMPONENT_REVISION" >> "$metadata"
           done
           printf 'report_sha256.reports/quartus-delta-signoff.tsv=%s\nsignoff_valid=1\n' \

@@ -1,10 +1,15 @@
 # Menu FPGA Warning Waiver Ledger
 
 The stock and patched builds must use the same pinned Menu commit, Quartus
-17.0.0.595, canonical seed 2, project settings, and source tree. The automated
-delta gate requires their normalized warning identity multisets to match
-exactly. This is a waiver for inherited upstream warnings only; it is not
-permission to add a warning in the MagiK delta.
+17.0.0.595, canonical seed 2, build date, project settings, and source tree.
+All three matched variants use one Quartus processor with parallel synthesis
+disabled. A shared preparation script applies those settings and the required
+asynchronous clock-group correction in both local and GitHub builds. Cache
+identity binds the preparation script, build date, processor count, and full
+synthesis component identity. The automated delta gate also verifies the
+reported Quartus settings and requires the normalized warning identity
+multisets to match exactly. This is a waiver for inherited upstream warnings
+only; it is not permission to add a warning in the MagiK delta.
 
 The baseline build reports 50 warnings in its Quartus flow summary. Quartus
 emits 24 primary warning records; continuation/detail records account for the
