@@ -103,6 +103,7 @@ impl<E> MainCommandTransport<E> {
         Self { endpoint }
     }
 
+    #[cfg(test)]
     fn into_endpoint(self) -> E {
         self.endpoint
     }
