@@ -252,8 +252,7 @@ index a416879..f6a40ea 100644
 +	.de_in(magik_native_de),
  	.ce_in(ce_pix),
  
-	.dout(vga_data_sl),
-
+ 	.dout(vga_data_sl),
 diff --git a/sys/ascal.vhd b/sys/ascal.vhd
 index a735e6b..0000000 100644
 --- a/sys/ascal.vhd
@@ -334,14 +333,11 @@ index a735e6b..0000000 100644
  	avl_burstcount<=std_logic_vector(to_unsigned(BLEN,8));
  	avl_byteenable<=(OTHERS =>'1');
  
-@@ -1868,6 +1876,8 @@ ARCHITECTURE rtl OF ascal IS
- 		VARIABLE hcarry_v,vcarry_v : boolean;
- 		VARIABLE dif_v : natural RANGE 0 TO 8*OHRESH-1;
- 		VARIABLE off_v : natural RANGE 0 TO 15;
- 	BEGIN
- 		IF o_reset_na='0' THEN
+@@ -1874,3 +1893,4 @@ ARCHITECTURE rtl OF ascal IS
  			o_copy<=sWAIT;
 +			o_completion_level_invalid<='0';
+ 			o_state<=sDISP;
+ 			o_read_pre<='0';
 @@ -2023,10 +2033,6 @@ ARCHITECTURE rtl OF ascal IS
  			o_readack_sync2<=o_readack_sync;
  			o_readack<=o_readack_sync XOR o_readack_sync2;
@@ -353,10 +349,7 @@ index a735e6b..0000000 100644
  			------------------------------------------------------
  			lev_inc_v:='0';
  			lev_dec_v:='0';
-@@ -2331,11 +2337,17 @@ ARCHITECTURE rtl OF ascal IS
- 			END IF;
- 
- 			-- COPYLEV : Number of ongoing copies to line buffers
+@@ -2335,5 +2351,13 @@ ARCHITECTURE rtl OF ascal IS
 -			IF lev_dec_v='1' AND o_readdataack='0' THEN
 -				o_copylev<=o_copylev-1;
 -			ELSIF lev_dec_v='0' AND o_readdataack='1' THEN
@@ -374,9 +367,6 @@ index a735e6b..0000000 100644
 +					o_completion_level_invalid<='1';
 +				END IF;
  			END IF;
- 
-			-- FIFOs
-
 diff --git a/sys/sys_top.v b/sys/sys_top.v
 index a416879..f6a40ea 100644
 --- a/sys/sys_top.v
