@@ -1050,6 +1050,7 @@ fn check_platform_manifest_authority(repository: &Path) -> Result<(), String> {
         let relative = path.to_string_lossy();
         if relative == AUTHORITY
             || relative == SCHEMA_PATH
+            || relative.starts_with("mister/platform/contracts/manifest/")
             || relative == "agent-cli/src/checks.rs"
             || relative.starts_with("docs/")
             || relative.starts_with("history/")

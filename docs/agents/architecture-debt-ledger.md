@@ -70,6 +70,11 @@ Enforce removes each entry only when its consumer adopts the shared
 `platform-manifest-contract` authority or a generated consumer from the same
 descriptor.
 
+The additive `mister/platform/contracts/manifest` leaf crate generates its
+constants from the descriptor at build time. Its presence does not switch
+behavioral authority: that transition remains atomic with agent adoption after
+fixture and rejection-class parity is proven.
+
 | Legacy consumer | Migration owner |
 |---|---|
 | `agent-cli/src/host/mod.rs` | Enforce contract and agent adoption |

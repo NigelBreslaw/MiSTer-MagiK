@@ -1,0 +1,24 @@
+# Copyright (C) 2026 Nigel Breslaw
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+[package]
+name = "mister-magik-platform-manifest-contract"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.97.1"
+description = "Typed platform-v3 manifest and installed-layout contract for MiSTer MagiK."
+license = "GPL-3.0-or-later"
+build = "build.rs"
+
+[lints.rust]
+warnings = "deny"
+
+[lints.clippy]
+all = "deny"
+
+[dependencies]
+sha2 = "0.10"
+
+[build-dependencies]
+serde = { version = "1", features = ["derive"] }
+toml = "0.9"
