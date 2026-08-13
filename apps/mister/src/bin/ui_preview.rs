@@ -437,6 +437,20 @@ mod macos {
         }
     }
 
+    fn commit_preview_navigation_destination(
+        nav: &mut LauncherNav,
+        catalog: &ArcadeCatalog,
+        event: Option<&LauncherEvent>,
+        transition: &mut NavigationTransitionRuntime,
+        now_us: u64,
+    ) -> bool {
+        let committed = event.is_some_and(|event| nav.commit_navigation_intent(event, catalog));
+        if !committed {
+            transition.request_reverse(now_us);
+        }
+        committed
+    }
+
     impl PreviewApplication {
         fn new(
             launcher: Launcher,
@@ -1002,21 +1016,19 @@ mod macos {
                             | InputOutcome::Consumed { .. } => {}
                         }
                     }
-                    let transition_frame = self.navigation_transition.tick(now_us);
-                    if transition_frame.phase == NavigationTransitionPhase::Capture
-                        && !self.pending_navigation_committed
-                    {
-                        let committed =
-                            self.pending_navigation_event.as_ref().is_some_and(|event| {
-                                self.launcher_nav
-                                    .commit_navigation_intent(event, &self.catalog)
-                            });
+                    if !self.pending_navigation_committed {
+                        let committed = commit_preview_navigation_destination(
+                            &mut self.launcher_nav,
+                            &self.catalog,
+                            self.pending_navigation_event.as_ref(),
+                            &mut self.navigation_transition,
+                            now_us,
+                        );
                         if committed {
                             self.pending_navigation_committed = true;
-                        } else {
-                            self.navigation_transition.request_reverse(now_us);
                         }
                     }
+                    self.navigation_transition.tick(now_us);
                     self.finish_navigation_tick();
                     return;
                 }
@@ -3456,6 +3468,7 @@ mod macos {
     #[cfg(test)]
     mod tests {
         use super::*;
+        use mister_magik_fb::launcher_runtime::navigation_transition::NavigationTransitionGeometry;
 
         #[test]
         fn rgb565_primary_channels_expand_to_xrgb8888() {
@@ -3844,6 +3857,48 @@ mod macos {
             nav.sync_launcher_taxonomy(&fixtures.catalog);
             nav.catalog_build_finished(&fixtures.catalog);
             (fixtures, nav)
+        }
+
+        #[test]
+        fn forward_system_transition_commits_after_source_capture_has_advanced() {
+            let (fixtures, mut nav) = prepared_nav();
+            assert!(nav.open_menu(CONSOLES_MENU_ID));
+            let collection_id = nav
+                .current_menu_items()
+                .iter()
+                .find(|item| item.kind == LauncherMenuItemKind::Collection)
+                .map(|item| item.id.clone())
+                .expect("fixture consoles menu has a collection");
+            let event = LauncherEvent {
+                action: LauncherAction::OpenCollection,
+                path: Some(collection_id.clone()),
+                settings: None,
+            };
+            let mut transition =
+                NavigationTransitionRuntime::new(HDMI_FRAME_WIDTH, HDMI_FRAME_HEIGHT, true);
+            let source = vec![Rgb565Pixel(0); HDMI_FRAME_WIDTH * HDMI_FRAME_HEIGHT];
+            assert!(
+                transition
+                    .begin(
+                        NavigationTransitionEdge::ConsolesToSystem,
+                        NavigationTransitionDirection::Forward,
+                        NavigationTransitionGeometry::default(),
+                        &source,
+                        0,
+                    )
+                    .expect("begin transition")
+            );
+            assert_eq!(transition.frame().phase, NavigationTransitionPhase::Expand);
+
+            assert!(commit_preview_navigation_destination(
+                &mut nav,
+                &fixtures.catalog,
+                Some(&event),
+                &mut transition,
+                1,
+            ));
+            assert_eq!(nav.active_collection_id(), Some(collection_id.as_str()));
+            assert_eq!(nav.screen, Screen::Arcade);
         }
 
         fn run_home_velocity(refresh_hz: u32) -> (usize, i32) {

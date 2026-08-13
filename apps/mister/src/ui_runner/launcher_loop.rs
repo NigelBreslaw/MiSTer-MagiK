@@ -819,17 +819,6 @@ struct PendingNavigationTransition {
 
 const NAVIGATION_STATUS_QUIESCE_LIMIT: Duration = Duration::from_millis(50);
 
-fn navigation_preview_snapshot_ready(
-    preview_expected: bool,
-    terminal_empty: bool,
-    cache_state: &str,
-    frame_status: PreviewRawFrameStatus,
-) -> bool {
-    !preview_expected
-        || terminal_empty
-        || (cache_state == "exact" && frame_status == PreviewRawFrameStatus::Ready)
-}
-
 fn system_entry_preview_terminal(
     selected_has_preview: bool,
     preview_state: &str,
@@ -8653,14 +8642,10 @@ pub(super) fn run_launcher_loop(
         let navigation_destination_committed = pending_navigation_transition
             .as_ref()
             .is_some_and(|pending| pending.committed);
+        // The list is the navigation destination. Preview media is asynchronous and
+        // must never hold the full-screen transition closed after the list is ready.
         let navigation_destination_layers_ready = navigation_destination_committed
-            && (nav.screen != Screen::Arcade
-                || navigation_preview_snapshot_ready(
-                    selected_arcade_game_has_preview(&nav, &catalog),
-                    preview.terminal_empty(),
-                    preview_cache_state_before_composition,
-                    preview_frame_status,
-                ));
+            && (nav.screen != Screen::Arcade || active_arcade_games_available);
         let composition_decision = composition.tick(UiCompositionInput {
             screensaver_active: effective_view == EffectiveLauncherView::Screensaver,
             navigation_transition_active: navigation_transition.is_active(),
@@ -9752,24 +9737,11 @@ pub(super) fn run_launcher_loop(
                     destination_raster_ready && nav.screen != Screen::Arcade;
                 if destination_raster_ready && nav.screen == Screen::Arcade {
                     let preview_expected = selected_arcade_game_has_preview(&nav, &catalog);
-                    let preview_snapshot_ready = navigation_preview_snapshot_ready(
-                        preview_expected,
-                        preview.terminal_empty(),
-                        preview.trace_cache_state(),
-                        preview.raw_frame_status(),
-                    );
-                    let preview_surface_ready = if !preview_expected || preview.terminal_empty() {
-                        if preview_snapshot_ready {
-                            if navigation_transition.settings_physical_space() {
-                                let _ = layer_target.clear_presentation_preview();
-                            } else {
-                                let _ = layer_target.clear_cached_preview();
-                            }
-                            true
-                        } else {
-                            false
-                        }
-                    } else if preview_snapshot_ready {
+                    let preview_exact = preview_expected
+                        && !preview.terminal_empty()
+                        && preview.trace_cache_state() == "exact"
+                        && preview.raw_frame_status() == PreviewRawFrameStatus::Ready;
+                    let preview_surface_ready = if preview_exact {
                         if navigation_transition.settings_physical_space() {
                             layer_target
                                 .compose_exact_preview_physical(&preview)
@@ -9784,7 +9756,14 @@ pub(super) fn run_launcher_loop(
                             }
                         }
                     } else {
-                        false
+                        // Capture a clean list destination now. If an exact preview
+                        // arrives later, the normal Arcade presentation path adopts it.
+                        if navigation_transition.settings_physical_space() {
+                            let _ = layer_target.clear_presentation_preview();
+                        } else {
+                            let _ = layer_target.clear_cached_preview();
+                        }
+                        true
                     };
                     if preview_surface_ready {
                         configure_arcade_list_renderer_geometry(
@@ -14070,40 +14049,6 @@ mod tests {
             ));
             assert_eq!(nav.screen, Screen::Home);
         }
-    }
-
-    #[test]
-    fn navigation_destination_waits_for_exact_ready_preview_pixels() {
-        assert!(navigation_preview_snapshot_ready(
-            false,
-            false,
-            "empty",
-            PreviewRawFrameStatus::Empty,
-        ));
-        assert!(!navigation_preview_snapshot_ready(
-            true,
-            false,
-            "placeholder",
-            PreviewRawFrameStatus::Empty,
-        ));
-        assert!(!navigation_preview_snapshot_ready(
-            true,
-            false,
-            "exact",
-            PreviewRawFrameStatus::Empty,
-        ));
-        assert!(navigation_preview_snapshot_ready(
-            true,
-            false,
-            "exact",
-            PreviewRawFrameStatus::Ready,
-        ));
-        assert!(navigation_preview_snapshot_ready(
-            true,
-            true,
-            "empty",
-            PreviewRawFrameStatus::Empty,
-        ));
     }
 
     #[test]
