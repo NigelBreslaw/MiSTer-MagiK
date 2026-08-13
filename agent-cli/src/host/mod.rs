@@ -2975,7 +2975,7 @@ fn experimental_fpga_evidence_is_current(diagnostics: &Value) -> bool {
         && diagnostics
             .get("diagnostic_architecture")
             .and_then(Value::as_str)
-            == Some("hdmi-lock-evidence-v1")
+            == Some("video-path-evidence-v1")
         && diagnostics.get("available").and_then(Value::as_bool) == Some(true)
         && diagnostics.get("coherent").and_then(Value::as_bool) == Some(true)
         && diagnostics
@@ -2984,6 +2984,22 @@ fn experimental_fpga_evidence_is_current(diagnostics: &Value) -> bool {
             == Some(true)
         && diagnostics
             .pointer("/capabilities/final_hdmi_output")
+            .and_then(Value::as_bool)
+            == Some(true)
+        && diagnostics
+            .pointer("/capabilities/final_mux_provenance")
+            .and_then(Value::as_bool)
+            == Some(true)
+        && diagnostics
+            .pointer("/capabilities/scaler_raw_output")
+            .and_then(Value::as_bool)
+            == Some(true)
+        && diagnostics
+            .pointer("/capabilities/post_osd_output")
+            .and_then(Value::as_bool)
+            == Some(true)
+        && diagnostics
+            .pointer("/capabilities/avalon_read_path")
             .and_then(Value::as_bool)
             == Some(true)
         && diagnostics
@@ -2998,6 +3014,38 @@ fn experimental_fpga_evidence_is_current(diagnostics: &Value) -> bool {
             .pointer("/final_hdmi_output_activity/second/raw_words")
             .and_then(Value::as_array)
             .is_some_and(|words| words.len() == 6)
+        && diagnostics
+            .pointer("/video_path_activity/final/first_raw_words")
+            .and_then(Value::as_array)
+            .is_some_and(|words| words.len() == 5)
+        && diagnostics
+            .pointer("/video_path_activity/final/second_raw_words")
+            .and_then(Value::as_array)
+            .is_some_and(|words| words.len() == 5)
+        && diagnostics
+            .pointer("/video_path_activity/scaler_raw/first_raw_words")
+            .and_then(Value::as_array)
+            .is_some_and(|words| words.len() == 4)
+        && diagnostics
+            .pointer("/video_path_activity/scaler_raw/second_raw_words")
+            .and_then(Value::as_array)
+            .is_some_and(|words| words.len() == 4)
+        && diagnostics
+            .pointer("/video_path_activity/post_osd/first_raw_words")
+            .and_then(Value::as_array)
+            .is_some_and(|words| words.len() == 4)
+        && diagnostics
+            .pointer("/video_path_activity/post_osd/second_raw_words")
+            .and_then(Value::as_array)
+            .is_some_and(|words| words.len() == 4)
+        && diagnostics
+            .pointer("/video_path_activity/avalon/first_raw_words")
+            .and_then(Value::as_array)
+            .is_some_and(|words| words.len() == 4)
+        && diagnostics
+            .pointer("/video_path_activity/avalon/second_raw_words")
+            .and_then(Value::as_array)
+            .is_some_and(|words| words.len() == 4)
 }
 
 fn experimental_fpga_activation_status(session: &Session) -> Result<(u64, u64, i64)> {
@@ -24603,20 +24651,71 @@ H: Handlers=event3 js0"#
     fn experimental_fpga_activation_requires_exact_current_evidence() {
         let current = json!({
             "schema": "mister-magik-fpga-video-diagnostics-v2",
-            "diagnostic_architecture": "hdmi-lock-evidence-v1",
+            "diagnostic_architecture": "video-path-evidence-v1",
             "available": true,
             "coherent": true,
             "capabilities": {
                 "physical_hdmi_pll_lock": true,
                 "final_hdmi_output": true,
+                "final_mux_provenance": true,
+                "scaler_raw_output": true,
+                "post_osd_output": true,
+                "avalon_read_path": true,
             },
             "hdmi_lock": {"raw_words": [1, 7, 0, 0]},
             "final_hdmi_output_activity": {
                 "first": {"raw_words": [1, 1, 0, 0, 1, 0]},
                 "second": {"raw_words": [1, 1, 0, 0, 7, 0]},
             },
+            "video_path_activity": {
+                "final": {
+                    "first_raw_words": [1, 1, 0, 0, 0],
+                    "second_raw_words": [1, 1, 0, 0, 0],
+                },
+                "scaler_raw": {
+                    "first_raw_words": [1, 1, 0, 0],
+                    "second_raw_words": [1, 1, 0, 0],
+                },
+                "post_osd": {
+                    "first_raw_words": [1, 1, 0, 0],
+                    "second_raw_words": [1, 1, 0, 0],
+                },
+                "avalon": {
+                    "first_raw_words": [1, 1, 0, 0],
+                    "second_raw_words": [1, 1, 0, 0],
+                },
+            },
         });
         assert!(experimental_fpga_evidence_is_current(&current));
+        for pointer in [
+            "/capabilities/final_mux_provenance",
+            "/capabilities/scaler_raw_output",
+            "/capabilities/post_osd_output",
+            "/capabilities/avalon_read_path",
+        ] {
+            let mut missing_capability = current.clone();
+            *missing_capability.pointer_mut(pointer).unwrap() = Value::Bool(false);
+            assert!(!experimental_fpga_evidence_is_current(&missing_capability));
+        }
+        for pointer in [
+            "/video_path_activity/final/first_raw_words",
+            "/video_path_activity/final/second_raw_words",
+            "/video_path_activity/scaler_raw/first_raw_words",
+            "/video_path_activity/scaler_raw/second_raw_words",
+            "/video_path_activity/post_osd/first_raw_words",
+            "/video_path_activity/post_osd/second_raw_words",
+            "/video_path_activity/avalon/first_raw_words",
+            "/video_path_activity/avalon/second_raw_words",
+        ] {
+            let mut wrong_words = current.clone();
+            wrong_words
+                .pointer_mut(pointer)
+                .unwrap()
+                .as_array_mut()
+                .unwrap()
+                .pop();
+            assert!(!experimental_fpga_evidence_is_current(&wrong_words));
+        }
         for stale in [
             json!({
                 "schema": "mister-magik-fpga-video-diagnostics-v1",

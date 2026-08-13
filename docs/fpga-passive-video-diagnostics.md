@@ -1,10 +1,9 @@
 # Passive FPGA HDMI evidence
 
-The current diagnostic is a deliberately small, read-only recorder for the
-physical HDMI FPLL lock and activity at the final registered HDMI output. It
-answers two bounded questions after a rare black return to Menu: did the real
-HDMI clock PLL remain locked, and are completed final-output frames carrying no
-DE, only zero-valued active samples, or at least one nonzero active sample?
+The current diagnostic is a bounded, read-only recorder for the physical HDMI
+FPLL lock and four video-path boundaries. After a rare black return to Menu it
+distinguishes the final direct/scaled mux selection, raw scaler activity,
+post-OSD activity, and bounded framebuffer-read transport liveness.
 
 It does not change the framebuffer latch, scaler, SDRAM, reset, clock control,
 PLL reconfiguration, or any video output. It records evidence; it does not
@@ -43,6 +42,26 @@ VS classifies the preceding interval into exactly one category. A sticky
 collision flag makes any impossible simultaneous destination events explicit.
 Reads snapshot all counters atomically and never change the recorder.
 
+Commands `0x62`–`0x65` add strict, CRC-protected records without changing
+`0x60` or `0x61`:
+
+- `0x62` counts final-output no-DE, nonzero, black-direct, black-scaled, and
+  black-mixed completed frames;
+- `0x63` counts no-DE, all-zero, and nonzero frames at raw scaler output;
+- `0x64` counts the same classes after OSD/shadow-mask processing;
+- `0x65` counts bounded Avalon buckets containing a read request, an accepted
+  request, or returned data. A separate bucket heartbeat makes a valid empty
+  bucket distinguishable from a stopped source clock.
+
+Every record is snapshotted at command recognition and read-only. The agent
+reads each detailed record twice about 50 ms apart and computes four-bit
+modular deltas independently; it never assumes that events from different
+clock domains describe the same numbered frame.
+
+A complete producer reports diagnostic architecture `video-path-evidence-v1`.
+If `0x62` is explicitly unsupported, a new agent retains the earlier `0x60`/
+`0x61` interpretation; a partial or malformed `0x62`–`0x65` set is an error.
+
 Commands `0x5D`–`0x5F` belong to the retired schema-4 three-domain observer and
 are unsupported by the current FPGA. New device software probes `0x60` first
 and falls back to the old records only when `0x60` is explicitly unsupported,
@@ -53,7 +72,7 @@ Compatibility is explicit:
 
 | Device agent | FPGA RBF | Result |
 | --- | --- | --- |
-| new | new lock/output recorder | v2 JSON from `0x60` and `0x61` |
+| new | new path-evidence recorder | v2 JSON from `0x60`–`0x65` |
 | new | older lock-only recorder | v2 lock-evidence JSON; final-output capability unavailable |
 | new | older schema-4 observer | unchanged v1 JSON after explicit unsupported fallback |
 | old | new lock recorder | safe unavailable/unclassified result because `0x5D`–`0x5F` are unsupported |
@@ -74,11 +93,13 @@ The PLL status has exactly one raw consumer: the first register in a two-stage
 that first-stage data pin. The first-to-second-stage settling path remains
 timed and must appear in Quartus metastability analysis.
 
-The HDMI classifier emits three mutually exclusive single-bit toggles. Each
-toggle has its own forced two-stage `clk_sys` synchronizer; only synchronized
-toggle changes are counted. There is no multibit HDMI payload crossing and no
-new false-path, max-skew, net-delay, or multicycle exception. The design uses no
-mailbox, Avalon observer, block RAM, or DSP.
+The final classifier emits five mutually exclusive event toggles. Raw scaler
+and post-OSD classifiers emit three each. The Avalon recorder emits three
+liveness-category toggles plus one bucket heartbeat. Every toggle has its own
+forced two-stage `clk_sys` synchronizer; only synchronized changes are counted.
+There is no multibit payload crossing and no new false-path, max-skew,
+net-delay, or multicycle exception. The design uses no mailbox, block RAM, or
+DSP and never observes Avalon addresses or data.
 
 ## Collection and interpretation
 
@@ -124,6 +145,16 @@ HDMI transmitter, PHY, cable, capture-device, or display visibility. Likewise,
 an unchanged epoch proves no completed frame, not that the HDMI clock itself
 stopped.
 
+The detailed classification is deliberately conservative. It requires one
+stable final class across at least two completed frames. Black-direct localizes
+the fault to the direct mux selection. Black-scaled is then divided by raw and
+post-OSD activity: raw nonzero followed by post-OSD black localizes the fault to
+post-scaler processing; post-OSD nonzero followed by final black localizes it to
+final staging. Raw scaler black is combined with the Avalon bucket deltas to
+report no requests, blocked requests, stopped returns, or active returns while
+the scaler remains black. Mixed, colliding, or insufficient windows remain
+inconclusive rather than being guessed.
+
 ## Qualification
 
 The lock-only fixed-seed-2 local signoff at synthesis commit `840605cf` and
@@ -143,9 +174,9 @@ requires fresh empirical signoff. Setup and hold must remain at least 0.20 ns,
 TNS zero, slack degradation no more than 0.15 ns, warnings within the pinned
 identity, and unconstrained output paths equal to the pre-observer build.
 
-The final-output extension is a new synthesized-source change and is not
+The detailed path extension is a new synthesized-source change and is not
 qualified by those lock-only numbers. It must pass a fresh matched local and
-GitHub signoff with four added calculable synchronizer chains total, no new
+GitHub signoff with sixteen added calculable synchronizer chains total, no new
 unconstrained output paths, and the same 800-ALM/300-register ceiling before any
 device installation.
 
@@ -153,7 +184,7 @@ Quartus's aggregate auto-detected synchronizer count is recorded for comparison
 but is not an exact delta gate: unrelated Menu chains can be combined or split
 by fitter placement. Qualification instead requires all exact observer stage
 assignments, all named chains in the retained metastability report, and exactly
-four additional chains with calculable MTBF.
+sixteen additional chains with calculable MTBF.
 
 A canonical local signoff set may be installed only to the Dev layout through
 the attended rollback-capable experimental FPGA transaction. It is not release
