@@ -8,10 +8,10 @@ remain the executable containment boundary.
 
 ## P0 qualification state
 
-The nine P0 implementation commits are contiguous on the current branch, and
-the fast gate passed for commits 1–8. P0 is not formally complete until the
-full affected pre-push assurance and CI have passed for this branch. Do not use
-this ledger to waive that final condition.
+The P0 implementation commits are on the current branch, and each planned
+commit passed its fast gate. P0 is not formally complete until the full
+affected pre-push assurance and CI have passed for this branch. Do not use this
+ledger to waive that final condition.
 
 ## Main command endpoint inventory
 

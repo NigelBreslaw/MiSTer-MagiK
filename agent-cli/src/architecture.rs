@@ -144,11 +144,10 @@ pub fn report(repository: &Path, base: &str, head: &str) -> AgentResult<Architec
             direct_environment_read_count: metrics.direct_environment_read_count,
             public_module_count: metrics.public_module_count,
             changed_lines,
-            change_concentration_basis_points: if total_changed_lines == 0 {
-                0
-            } else {
-                changed_lines.saturating_mul(10_000) / total_changed_lines
-            },
+            change_concentration_basis_points: changed_lines
+                .saturating_mul(10_000)
+                .checked_div(total_changed_lines)
+                .unwrap_or(0),
         });
     }
     Ok(ArchitectureReport {
