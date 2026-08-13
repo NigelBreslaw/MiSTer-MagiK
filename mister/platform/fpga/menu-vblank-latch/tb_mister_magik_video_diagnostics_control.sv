@@ -408,7 +408,7 @@ module tb_mister_magik_video_diagnostics_control;
 	endtask
 
 	task automatic read_scaler_fetch_activity;
-		input [15:0] expected_state;
+		input [15:0] expected_reserved_state;
 		input [15:0] expected_events;
 		input [15:0] expected_flags;
 		begin
@@ -434,7 +434,8 @@ module tb_mister_magik_video_diagnostics_control;
 			close_command();
 			if(words[MAGIK_HDMI_SCALER_FETCH_ACTIVITY_SCHEMA_WORD] !=
 					MAGIK_HDMI_SCALER_FETCH_ACTIVITY_SCHEMA ||
-			   words[MAGIK_HDMI_SCALER_FETCH_ACTIVITY_STATE_WORD] != expected_state ||
+			   words[MAGIK_HDMI_SCALER_FETCH_ACTIVITY_RESERVED_STATE_WORD] !=
+					expected_reserved_state ||
 			   words[MAGIK_HDMI_SCALER_FETCH_ACTIVITY_EVENTS_WORD] != expected_events ||
 			   words[MAGIK_HDMI_SCALER_FETCH_ACTIVITY_FLAGS_WORD] != expected_flags ||
 			   words[MAGIK_HDMI_SCALER_FETCH_ACTIVITY_CRC_WORD] != crc)

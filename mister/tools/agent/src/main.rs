@@ -3997,15 +3997,17 @@ mod linux {
         first: &mister_magik_video_diagnostics_contract::HdmiScalerFetchActivity,
         second: &mister_magik_video_diagnostics_contract::HdmiScalerFetchActivity,
     ) -> ScalerFetchDeltas {
+        use mister_magik_video_diagnostics_contract as contract;
+
         ScalerFetchDeltas {
             batch_two: second
                 .batch_two_count()
                 .wrapping_sub(first.batch_two_count())
-                & 0x03,
+                & contract::HDMI_SCALER_FETCH_ACTIVITY_BATCH_TWO_COUNT_MASK as u8,
             starved_frame: second
                 .starved_frame_count()
                 .wrapping_sub(first.starved_frame_count())
-                & 0x0f,
+                & contract::HDMI_SCALER_FETCH_ACTIVITY_STARVED_FRAME_COUNT_MASK as u8,
         }
     }
 

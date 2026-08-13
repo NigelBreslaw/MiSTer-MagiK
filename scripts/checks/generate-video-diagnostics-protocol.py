@@ -182,6 +182,10 @@ def render_sv(spec: dict, hdmi_evidence: dict) -> str:
         lines.append(f"localparam [15:0] {prefix}_FLAGS_MASK = 16'h{mask:04X};")
         for index, name in enumerate(record["words"]):
             lines.append(f"localparam [2:0] {prefix}_{upper(name)}_WORD = 3'd{index};")
+        for word_name, mask in record.get("reserved_zero_masks", {}).items():
+            lines.append(
+                f"localparam [15:0] {prefix}_{upper(word_name)}_RESERVED_ZERO_MASK = 16'h{mask:04X};"
+            )
         for name, offset in record["counters"].items():
             lines.append(f"localparam [5:0] {prefix}_{upper(name)}_BIT = 6'd{offset};")
         for name, field in record.get("fields", {}).items():
@@ -222,6 +226,19 @@ def main() -> None:
             raise SystemExit(f"{group} word layout does not match word count")
         if spec[f"{group}_words"][-1] != "crc":
             raise SystemExit(f"{group} response must end in CRC")
+    for name, record in hdmi_evidence["path_activity"]["records"].items():
+        for word_name, mask in record.get("reserved_zero_masks", {}).items():
+            if word_name not in record["words"]:
+                raise SystemExit(f"HDMI {name} reserved-zero mask names an unknown word")
+            if mask < 0 or mask > 0xffff:
+                raise SystemExit(f"HDMI {name} reserved-zero mask is outside one word")
+            for field_name, field in record.get("fields", {}).items():
+                if field["word"] == word_name:
+                    field_mask = ((1 << field["width"]) - 1) << field["bit"]
+                    if field_mask & mask:
+                        raise SystemExit(
+                            f"HDMI {name} field {field_name} overlaps reserved-zero bits"
+                        )
     write_or_check(RUST_PATH, render_rust(spec), args.check)
     write_or_check(SV_PATH, render_sv(spec, hdmi_evidence), args.check)
 

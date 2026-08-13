@@ -614,7 +614,7 @@ module tb_mister_magik_sys_top_integration;
 		for(index = 0; index < MAGIK_HDMI_SCALER_FETCH_ACTIVITY_CRC_WORD;
 			index = index + 1)
 			evidence_crc = crc_word(evidence_crc, evidence[index]);
-		expect16(evidence[MAGIK_HDMI_SCALER_FETCH_ACTIVITY_STATE_WORD],
+		expect16(evidence[MAGIK_HDMI_SCALER_FETCH_ACTIVITY_RESERVED_STATE_WORD],
 			16'd0, "sys_top retired scaler fetch state");
 		expect16(evidence[MAGIK_HDMI_SCALER_FETCH_ACTIVITY_EVENTS_WORD],
 			16'h0011, "sys_top scaler fetch event epochs");

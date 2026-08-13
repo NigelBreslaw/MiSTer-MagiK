@@ -207,54 +207,6 @@ fn packed_field(word: u16, bit: usize, mask: u16) -> u8 {
 }
 
 impl HdmiScalerFetchActivity {
-    pub fn scheduler_state(&self) -> u8 {
-        packed_field(
-            self.words[HDMI_SCALER_FETCH_ACTIVITY_SCHEDULER_STATE_WORD],
-            HDMI_SCALER_FETCH_ACTIVITY_SCHEDULER_STATE_BIT,
-            HDMI_SCALER_FETCH_ACTIVITY_SCHEDULER_STATE_MASK,
-        )
-    }
-
-    pub fn copy_state(&self) -> u8 {
-        packed_field(
-            self.words[HDMI_SCALER_FETCH_ACTIVITY_COPY_STATE_WORD],
-            HDMI_SCALER_FETCH_ACTIVITY_COPY_STATE_BIT,
-            HDMI_SCALER_FETCH_ACTIVITY_COPY_STATE_MASK,
-        )
-    }
-
-    pub fn read_level(&self) -> u8 {
-        packed_field(
-            self.words[HDMI_SCALER_FETCH_ACTIVITY_READ_LEVEL_WORD],
-            HDMI_SCALER_FETCH_ACTIVITY_READ_LEVEL_BIT,
-            HDMI_SCALER_FETCH_ACTIVITY_READ_LEVEL_MASK,
-        )
-    }
-
-    pub fn copy_level(&self) -> u8 {
-        packed_field(
-            self.words[HDMI_SCALER_FETCH_ACTIVITY_COPY_LEVEL_WORD],
-            HDMI_SCALER_FETCH_ACTIVITY_COPY_LEVEL_BIT,
-            HDMI_SCALER_FETCH_ACTIVITY_COPY_LEVEL_MASK,
-        )
-    }
-
-    pub fn completion_pending(&self) -> bool {
-        packed_field(
-            self.words[HDMI_SCALER_FETCH_ACTIVITY_COMPLETION_PENDING_WORD],
-            HDMI_SCALER_FETCH_ACTIVITY_COMPLETION_PENDING_BIT,
-            HDMI_SCALER_FETCH_ACTIVITY_COMPLETION_PENDING_MASK,
-        ) != 0
-    }
-
-    pub fn completion_delta(&self) -> u8 {
-        packed_field(
-            self.words[HDMI_SCALER_FETCH_ACTIVITY_COMPLETION_DELTA_WORD],
-            HDMI_SCALER_FETCH_ACTIVITY_COMPLETION_DELTA_BIT,
-            HDMI_SCALER_FETCH_ACTIVITY_COMPLETION_DELTA_MASK,
-        )
-    }
-
     pub fn batch_two_count(&self) -> u8 {
         packed_field(
             self.words[HDMI_SCALER_FETCH_ACTIVITY_BATCH_TWO_COUNT_WORD],
@@ -268,14 +220,6 @@ impl HdmiScalerFetchActivity {
             self.words[HDMI_SCALER_FETCH_ACTIVITY_STARVED_FRAME_COUNT_WORD],
             HDMI_SCALER_FETCH_ACTIVITY_STARVED_FRAME_COUNT_BIT,
             HDMI_SCALER_FETCH_ACTIVITY_STARVED_FRAME_COUNT_MASK,
-        )
-    }
-
-    pub fn starved_line_count(&self) -> u8 {
-        packed_field(
-            self.words[HDMI_SCALER_FETCH_ACTIVITY_STARVED_LINE_COUNT_WORD],
-            HDMI_SCALER_FETCH_ACTIVITY_STARVED_LINE_COUNT_BIT,
-            HDMI_SCALER_FETCH_ACTIVITY_STARVED_LINE_COUNT_MASK,
         )
     }
 }
@@ -645,7 +589,7 @@ pub fn decode_hdmi_avalon_liveness_activity(
 }
 
 pub fn decode_hdmi_scaler_fetch_activity(words: &[u16]) -> Result<HdmiScalerFetchActivity, String> {
-    let words = decode_path_activity(
+    decode_path_activity(
         "HDMI scaler fetch activity",
         GET_HDMI_SCALER_FETCH_ACTIVITY,
         HDMI_SCALER_FETCH_ACTIVITY_SCHEMA,
@@ -656,24 +600,23 @@ pub fn decode_hdmi_scaler_fetch_activity(words: &[u16]) -> Result<HdmiScalerFetc
         ),
         (
             &[
-                HDMI_SCALER_FETCH_ACTIVITY_STATE_WORD,
+                HDMI_SCALER_FETCH_ACTIVITY_RESERVED_STATE_WORD,
                 HDMI_SCALER_FETCH_ACTIVITY_EVENTS_WORD,
             ],
             &[
-                (HDMI_SCALER_FETCH_ACTIVITY_STATE_WORD, 0x07ff),
-                (HDMI_SCALER_FETCH_ACTIVITY_EVENTS_WORD, 0xffff),
+                (
+                    HDMI_SCALER_FETCH_ACTIVITY_RESERVED_STATE_WORD,
+                    !HDMI_SCALER_FETCH_ACTIVITY_RESERVED_STATE_RESERVED_ZERO_MASK,
+                ),
+                (
+                    HDMI_SCALER_FETCH_ACTIVITY_EVENTS_WORD,
+                    !HDMI_SCALER_FETCH_ACTIVITY_EVENTS_RESERVED_ZERO_MASK,
+                ),
             ],
         ),
         words,
-    )?;
-    let activity = HdmiScalerFetchActivity { words };
-    if activity.copy_state() > 2 {
-        return Err("HDMI scaler fetch copy state is reserved".to_string());
-    }
-    if activity.read_level() > 2 || activity.copy_level() > 2 {
-        return Err("HDMI scaler fetch level exceeds the two-block pipeline".to_string());
-    }
-    Ok(activity)
+    )
+    .map(|words| HdmiScalerFetchActivity { words })
 }
 
 fn decode<const N: usize>(
@@ -1049,8 +992,8 @@ mod tests {
             fetch[HDMI_SCALER_FETCH_ACTIVITY_CRC_WORD],
             HDMI_SCALER_FETCH_ACTIVITY_ZERO_GOLDEN_CRC
         );
-        fetch[HDMI_SCALER_FETCH_ACTIVITY_STATE_WORD] = 0x065a;
-        fetch[HDMI_SCALER_FETCH_ACTIVITY_EVENTS_WORD] = 0xa321;
+        fetch[HDMI_SCALER_FETCH_ACTIVITY_RESERVED_STATE_WORD] = 0;
+        fetch[HDMI_SCALER_FETCH_ACTIVITY_EVENTS_WORD] = 0x00f3;
         fetch[HDMI_SCALER_FETCH_ACTIVITY_FLAGS_WORD] =
             HDMI_SCALER_FETCH_ACTIVITY_FLAG_SNAPSHOT_VALID;
         fetch[HDMI_SCALER_FETCH_ACTIVITY_CRC_WORD] = message_crc_with_schema(
@@ -1059,15 +1002,8 @@ mod tests {
             &fetch[..HDMI_SCALER_FETCH_ACTIVITY_CRC_WORD],
         );
         let decoded = decode_hdmi_scaler_fetch_activity(&fetch).unwrap();
-        assert_eq!(decoded.scheduler_state(), 2);
-        assert_eq!(decoded.copy_state(), 2);
-        assert_eq!(decoded.read_level(), 1);
-        assert_eq!(decoded.copy_level(), 1);
-        assert!(!decoded.completion_pending());
-        assert_eq!(decoded.completion_delta(), 3);
-        assert_eq!(decoded.batch_two_count(), 1);
-        assert_eq!(decoded.starved_frame_count(), 2);
-        assert_eq!(decoded.starved_line_count(), 0xa3);
+        assert_eq!(decoded.batch_two_count(), 3);
+        assert_eq!(decoded.starved_frame_count(), 15);
     }
 
     #[test]
@@ -1135,22 +1071,28 @@ mod tests {
             GET_HDMI_SCALER_FETCH_ACTIVITY,
             HDMI_SCALER_FETCH_ACTIVITY_SCHEMA,
         );
-        fetch[HDMI_SCALER_FETCH_ACTIVITY_STATE_WORD] = 1;
-        fetch[HDMI_SCALER_FETCH_ACTIVITY_CRC_WORD] = message_crc_with_schema(
-            GET_HDMI_SCALER_FETCH_ACTIVITY,
-            HDMI_SCALER_FETCH_ACTIVITY_SCHEMA,
-            &fetch[..HDMI_SCALER_FETCH_ACTIVITY_CRC_WORD],
-        );
-        assert!(decode_hdmi_scaler_fetch_activity(&fetch).is_err());
         fetch[HDMI_SCALER_FETCH_ACTIVITY_FLAGS_WORD] =
             HDMI_SCALER_FETCH_ACTIVITY_FLAG_SNAPSHOT_VALID;
-        fetch[HDMI_SCALER_FETCH_ACTIVITY_STATE_WORD] = 0x0800;
-        fetch[HDMI_SCALER_FETCH_ACTIVITY_CRC_WORD] = message_crc_with_schema(
-            GET_HDMI_SCALER_FETCH_ACTIVITY,
-            HDMI_SCALER_FETCH_ACTIVITY_SCHEMA,
-            &fetch[..HDMI_SCALER_FETCH_ACTIVITY_CRC_WORD],
-        );
-        assert!(decode_hdmi_scaler_fetch_activity(&fetch).is_err());
+        for bit in 0..16 {
+            fetch[HDMI_SCALER_FETCH_ACTIVITY_RESERVED_STATE_WORD] = 1 << bit;
+            fetch[HDMI_SCALER_FETCH_ACTIVITY_EVENTS_WORD] = 0;
+            fetch[HDMI_SCALER_FETCH_ACTIVITY_CRC_WORD] = message_crc_with_schema(
+                GET_HDMI_SCALER_FETCH_ACTIVITY,
+                HDMI_SCALER_FETCH_ACTIVITY_SCHEMA,
+                &fetch[..HDMI_SCALER_FETCH_ACTIVITY_CRC_WORD],
+            );
+            assert!(decode_hdmi_scaler_fetch_activity(&fetch).is_err());
+        }
+        fetch[HDMI_SCALER_FETCH_ACTIVITY_RESERVED_STATE_WORD] = 0;
+        for bit in [2, 3, 8, 9, 10, 11, 12, 13, 14, 15] {
+            fetch[HDMI_SCALER_FETCH_ACTIVITY_EVENTS_WORD] = 1 << bit;
+            fetch[HDMI_SCALER_FETCH_ACTIVITY_CRC_WORD] = message_crc_with_schema(
+                GET_HDMI_SCALER_FETCH_ACTIVITY,
+                HDMI_SCALER_FETCH_ACTIVITY_SCHEMA,
+                &fetch[..HDMI_SCALER_FETCH_ACTIVITY_CRC_WORD],
+            );
+            assert!(decode_hdmi_scaler_fetch_activity(&fetch).is_err());
+        }
     }
 
     #[test]

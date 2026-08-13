@@ -107,6 +107,10 @@ def render_rust(spec: dict) -> str:
         lines.append(f"pub const {prefix}_FLAGS_MASK: u16 = 0x{mask:04x};")
         for index, name in enumerate(record["words"]):
             lines.append(f"pub const {prefix}_{name.upper()}_WORD: usize = {index};")
+        for word_name, mask in record.get("reserved_zero_masks", {}).items():
+            lines.append(
+                f"pub const {prefix}_{word_name.upper()}_RESERVED_ZERO_MASK: u16 = 0x{mask:04x};"
+            )
         for name, offset in record["counters"].items():
             lines.append(f"pub const {prefix}_{name.upper()}_BIT: usize = {offset};")
         for name, field in record.get("fields", {}).items():
@@ -175,6 +179,18 @@ def main() -> None:
                 raise SystemExit(f"HDMI {name} field {field_name} names an unknown word")
             if field["bit"] < 0 or field["width"] <= 0 or field["bit"] + field["width"] > 16:
                 raise SystemExit(f"HDMI {name} field {field_name} is outside one word")
+        for word_name, mask in record.get("reserved_zero_masks", {}).items():
+            if word_name not in record["words"]:
+                raise SystemExit(f"HDMI {name} reserved-zero mask names an unknown word")
+            if mask < 0 or mask > 0xffff:
+                raise SystemExit(f"HDMI {name} reserved-zero mask is outside one word")
+            for field_name, field in record.get("fields", {}).items():
+                if field["word"] == word_name:
+                    field_mask = ((1 << field["width"]) - 1) << field["bit"]
+                    if field_mask & mask:
+                        raise SystemExit(
+                            f"HDMI {name} field {field_name} overlaps reserved-zero bits"
+                        )
     write_or_check(RUST_PATH, render_rust(spec), args.check)
 
 
