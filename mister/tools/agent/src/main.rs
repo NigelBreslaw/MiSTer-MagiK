@@ -4050,7 +4050,6 @@ mod linux {
             (true, false, false) => "scaler_raw_black_framebuffer_requests_blocked",
             (_, true, false) => "scaler_raw_black_accepted_without_observed_returns",
             (_, _, true) => "scaler_raw_black_with_framebuffer_returns",
-            _ => "scaler_raw_black_avalon_inconclusive",
         }
     }
 
