@@ -1712,7 +1712,7 @@ visibility = "internal runtime"
 
 [[control]]
 name = "MISTER_PROCESS_NAMES"
-owner = "apps/mister/src/launcher.rs"
+owner = "mister/platform/runtime/src/main_command.rs"
 classification = "external"
 value_shape = "string, enum, or boolean token"
 default_behavior = "site-defined fallback; unchanged in P0"

@@ -20,7 +20,7 @@ const COMMAND_FIFO: &str = "/dev/MiSTer_cmd";
 const COMMAND_REPLY_FIFO: &str = "/dev/MiSTer_cmd_reply";
 const COMMAND_OPERATION_LOCK: &str = "/tmp/mister-magik/command-operation.lock";
 const MAIN_STATUS_PATH: &str = "/tmp/mister-magik/main-status.json";
-const MAIN_PROCESS_NAMES: &[&str] = &["MiSTer_MagiKDev", "MiSTer_MagiK", "MiSTer"];
+const MISTER_PROCESS_NAMES: &[&str] = &["MiSTer_MagiKDev", "MiSTer_MagiK", "MiSTer"];
 const WRITE_TIMEOUT: Duration = Duration::from_secs(2);
 const HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -176,11 +176,11 @@ pub fn wait_for_running_main_and_fifo(
 }
 
 pub fn main_running() -> bool {
-    process_running(MAIN_PROCESS_NAMES)
+    process_running(MISTER_PROCESS_NAMES)
 }
 
 pub fn magik_main_running() -> bool {
-    process_running(MAIN_PROCESS_NAMES)
+    process_running(MISTER_PROCESS_NAMES)
 }
 
 fn process_running(names: &[&str]) -> bool {

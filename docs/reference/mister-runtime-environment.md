@@ -218,7 +218,7 @@ Registry format: `mister-magik-runtime-environment-v1`. Baseline: 394 literal oc
 | `MISTER_PREVIEW_TURBO_LOOKAHEAD` | production | string, enum, or boolean token | site-defined fallback; unchanged in P0 | internal runtime | `apps/mister/src/preview_state.rs` |
 | `MISTER_PREVIEW_TURBO_RUNWAY` | production | string, enum, or boolean token | site-defined fallback; unchanged in P0 | internal runtime | `apps/mister/src/preview_state.rs` |
 | `MISTER_PREVIEW_VISUAL_PCT` | production | bounded integer | site-defined fallback; unchanged in P0 | internal runtime | `apps/mister/src/preview_state.rs` |
-| `MISTER_PROCESS_NAMES` | external | string, enum, or boolean token | site-defined fallback; unchanged in P0 | external compatibility | `apps/mister/src/launcher.rs` |
+| `MISTER_PROCESS_NAMES` | external | string, enum, or boolean token | site-defined fallback; unchanged in P0 | external compatibility | `mister/platform/runtime/src/main_command.rs` |
 | `MISTER_PROFILE` | diagnostic | string, enum, or boolean token | site-defined fallback; unchanged in P0 | developer diagnostic | `apps/mister/src/frame_profile.rs` |
 | `MISTER_PROFILE_FILE` | diagnostic | path or path list | site-defined fallback; unchanged in P0 | developer diagnostic | `apps/mister/src/frame_profile.rs` |
 | `MISTER_PROFILE_SLOW_US` | diagnostic | bounded integer | site-defined fallback; unchanged in P0 | developer diagnostic | `apps/mister/src/frame_profile.rs` |
