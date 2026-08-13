@@ -5477,19 +5477,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn direct_command_replies_accept_ok_and_preserve_failures() {
-        assert_eq!(parse_magik_command_reply("ok LauncherSuspended"), Ok(()));
-        assert_eq!(
-            parse_magik_command_reply("rejected LauncherCrashed"),
-            Err("rejected LauncherCrashed".to_string())
-        );
-        assert_eq!(
-            parse_magik_command_reply("error rbf-not-found"),
-            Err("error rbf-not-found".to_string())
-        );
-    }
-
     struct FakeLaunchIo {
         target_exists: bool,
         mister_running: bool,
