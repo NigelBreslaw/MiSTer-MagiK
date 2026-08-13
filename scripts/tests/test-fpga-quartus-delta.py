@@ -73,6 +73,20 @@ CONTROL_SYNC_NAMES = (
     "avalon_accepted_sys",
     "avalon_returned_meta",
     "avalon_returned_sys",
+    "scaler_fetch_state_meta",
+    "scaler_fetch_state_sys",
+    "scaler_fetch_batch_two_meta",
+    "scaler_fetch_batch_two_sys",
+    "scaler_fetch_starved_frame_meta",
+    "scaler_fetch_starved_frame_sys",
+    "scaler_fetch_starved_line_meta",
+    "scaler_fetch_starved_line_sys",
+    "scaler_fetch_snapshot_valid_meta",
+    "scaler_fetch_snapshot_valid_sys",
+    "scaler_fetch_delta_invalid_meta",
+    "scaler_fetch_delta_invalid_sys",
+    "scaler_fetch_level_invalid_meta",
+    "scaler_fetch_level_invalid_sys",
 )
 SYNC_NAMES = tuple(
     f"mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|{name}"
@@ -109,8 +123,8 @@ SYNC_NAMES += tuple(
 )
 SYNC_ASSIGNMENTS = CONTROL_SYNC_ASSIGNMENTS + COMPLETION_SYNC_ASSIGNMENTS
 CUSTOM_SYNC = SYNC_ASSIGNMENTS + """\
-Info (332114): Report Metastability: Found 23 synchronizer chains.
-Info (332114): Fraction of Chains for which MTBFs Could Not be Calculated: 0.174
+Info (332114): Report Metastability: Found 40 synchronizer chains.
+Info (332114): Fraction of Chains for which MTBFs Could Not be Calculated: 0.100
 """
 
 VALID_DIAGNOSTIC_REPORTS = {
@@ -119,7 +133,7 @@ VALID_DIAGNOSTIC_REPORTS = {
     ),
     "menu.magik-diagnostic-cdc-net-delay.rpt": "No paths to report.\n",
     "menu.magik-diagnostic-metastability.rpt": (
-        "Report Metastability: Found 23 synchronizer chains.\n"
+        "Report Metastability: Found 40 synchronizer chains.\n"
         + "".join(
             f"; Synchronizer Chain ; {name} ; MTBF 1e+09 years ;\n"
             for name in SYNC_NAMES

@@ -186,9 +186,19 @@ def main() -> None:
         "destination_clk",
         "reset_n",
         "source_completion_gray",
+        "scaler_vs",
+        "scaler_de",
+        "scaler_framebuffer_enabled",
+        "scaler_scheduler_state",
+        "scaler_copy_state",
+        "scaler_read_level",
+        "scaler_copy_level",
         "completion_pulse",
-        "consumed_completion_gray",
         "completion_batch_two_toggle",
+        "completion_starved_frame_toggle",
+        "completion_starved_line_toggle",
+        "completion_frame_state",
+        "completion_snapshot_valid",
         "completion_delta_invalid",
     ]:
         fail("scaler completion bridge interface is not exact")
@@ -200,6 +210,8 @@ def main() -> None:
         "wire [1:0] completion_delta =",
         "if(completion_pending)",
         "completion_pending <= 1'b1;",
+        "wire completion_starved_now =",
+        "completion_frame_state <= {",
         "if(!completion_delta_valid)",
     ):
         if avalon_source.count(fragment) != 1:
@@ -263,10 +275,22 @@ def main() -> None:
         ("avalon_accepted_sys", "FORCED_IF_ASYNCHRONOUS"),
         ("avalon_returned_meta", "FORCED"),
         ("avalon_returned_sys", "FORCED_IF_ASYNCHRONOUS"),
+        ("scaler_fetch_batch_two_meta", "FORCED"),
+        ("scaler_fetch_batch_two_sys", "FORCED_IF_ASYNCHRONOUS"),
+        ("scaler_fetch_starved_frame_meta", "FORCED"),
+        ("scaler_fetch_starved_frame_sys", "FORCED_IF_ASYNCHRONOUS"),
+        ("scaler_fetch_starved_line_meta", "FORCED"),
+        ("scaler_fetch_starved_line_sys", "FORCED_IF_ASYNCHRONOUS"),
+        ("scaler_fetch_snapshot_valid_meta", "FORCED"),
+        ("scaler_fetch_snapshot_valid_sys", "FORCED_IF_ASYNCHRONOUS"),
+        ("scaler_fetch_delta_invalid_meta", "FORCED"),
+        ("scaler_fetch_delta_invalid_sys", "FORCED_IF_ASYNCHRONOUS"),
+        ("scaler_fetch_level_invalid_meta", "FORCED"),
+        ("scaler_fetch_level_invalid_sys", "FORCED_IF_ASYNCHRONOUS"),
     )
     if (
         "ASYNC_REG" in control_source
-        or control_source.count(sync_assignment) != 16
+        or control_source.count(sync_assignment) != 23
     ):
         fail("HDMI evidence synchronizers are not exactly identified")
     for stage, assignment in synchronizer_stages:
@@ -276,6 +300,16 @@ def main() -> None:
         )
         if control_source.count(declaration) != 1:
             fail(f"HDMI evidence synchronizer stage is not exact: {stage}")
+    for stage, assignment in (
+        ("scaler_fetch_state_meta", "FORCED"),
+        ("scaler_fetch_state_sys", "FORCED_IF_ASYNCHRONOUS"),
+    ):
+        declaration = (
+            f'(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION {assignment}" *)\n'
+            f"\treg [10:0] {stage} = 11'd0;"
+        )
+        if control_source.count(declaration) != 1:
+            fail(f"HDMI scaler-fetch state synchronizer is not exact: {stage}")
     if (
         control_source.count("control_pll_lock_meta <= hdmi_pll_locked;") != 1
         or len(re.findall(r"\bhdmi_pll_locked\b", control_source)) != 2
@@ -383,6 +417,62 @@ def main() -> None:
             control_source,
             "avalon_returned_sys <= avalon_returned_meta;",
         ),
+        "scaler fetch state first stage": (
+            control_source,
+            "scaler_fetch_state_meta <= scaler_fetch_state;",
+        ),
+        "scaler fetch state second stage": (
+            control_source,
+            "scaler_fetch_state_sys <= scaler_fetch_state_meta;",
+        ),
+        "scaler batch-two first stage": (
+            control_source,
+            "scaler_fetch_batch_two_meta <= scaler_fetch_batch_two_toggle;",
+        ),
+        "scaler batch-two second stage": (
+            control_source,
+            "scaler_fetch_batch_two_sys <= scaler_fetch_batch_two_meta;",
+        ),
+        "scaler starved-frame first stage": (
+            control_source,
+            "scaler_fetch_starved_frame_meta <= scaler_fetch_starved_frame_toggle;",
+        ),
+        "scaler starved-frame second stage": (
+            control_source,
+            "scaler_fetch_starved_frame_sys <= scaler_fetch_starved_frame_meta;",
+        ),
+        "scaler starved-line first stage": (
+            control_source,
+            "scaler_fetch_starved_line_meta <= scaler_fetch_starved_line_toggle;",
+        ),
+        "scaler starved-line second stage": (
+            control_source,
+            "scaler_fetch_starved_line_sys <= scaler_fetch_starved_line_meta;",
+        ),
+        "scaler snapshot-valid first stage": (
+            control_source,
+            "scaler_fetch_snapshot_valid_meta <= scaler_fetch_snapshot_valid;",
+        ),
+        "scaler snapshot-valid second stage": (
+            control_source,
+            "scaler_fetch_snapshot_valid_sys <= scaler_fetch_snapshot_valid_meta;",
+        ),
+        "scaler delta-invalid first stage": (
+            control_source,
+            "scaler_fetch_delta_invalid_meta <= scaler_fetch_delta_invalid;",
+        ),
+        "scaler delta-invalid second stage": (
+            control_source,
+            "scaler_fetch_delta_invalid_sys <= scaler_fetch_delta_invalid_meta;",
+        ),
+        "scaler level-invalid first stage": (
+            control_source,
+            "scaler_fetch_level_invalid_meta <= scaler_fetch_level_invalid;",
+        ),
+        "scaler level-invalid second stage": (
+            control_source,
+            "scaler_fetch_level_invalid_sys <= scaler_fetch_level_invalid_meta;",
+        ),
     }
     for label, (source, binding) in synchronizer_bindings.items():
         if source.count(binding) != 1:
@@ -423,6 +513,13 @@ def main() -> None:
         "vbuf_read",
         "vbuf_waitrequest",
         "vbuf_readdatavalid",
+        "scaler_fetch_state",
+        "scaler_fetch_batch_two_toggle",
+        "scaler_fetch_starved_frame_toggle",
+        "scaler_fetch_starved_line_toggle",
+        "scaler_fetch_snapshot_valid",
+        "scaler_fetch_delta_invalid",
+        "scaler_fetch_level_invalid",
         "response_valid",
         "response_data",
     ]
@@ -463,6 +560,12 @@ def main() -> None:
         "wire avalon_returned_now = avalon_bucket_saw_returned || vbuf_readdatavalid;",
         "avalon_bucket_toggle <= !avalon_bucket_toggle;",
         "tx_crc <= MAGIK_HDMI_AVALON_LIVENESS_ACTIVITY_HEADER_CRC;",
+        "wire scaler_fetch_start =",
+        "tx_crc <= MAGIK_HDMI_SCALER_FETCH_ACTIVITY_HEADER_CRC;",
+        "reg [3:0] scaler_fetch_batch_two_count = 4'd0;",
+        "reg [3:0] scaler_fetch_starved_frame_count = 4'd0;",
+        "reg [7:0] scaler_fetch_starved_line_count = 8'd0;",
+        "wire scaler_fetch_state_coherent =",
     )
     for fragment in required_activity_fragments:
         if control_source.count(fragment) != 1:
@@ -527,8 +630,14 @@ def main() -> None:
     with tempfile.TemporaryDirectory(prefix="mister-magik-fpga-integration-") as temporary:
         work = Path(temporary) / "Menu_MiSTer"
         shutil.copytree(menu, work, ignore=shutil.ignore_patterns(".git", "db", "output_files"))
-        subprocess.run(["git", "apply", "--check", str(patch)], cwd=work, check=True)
-        subprocess.run(["git", "apply", str(patch)], cwd=work, check=True)
+        subprocess.run(
+            ["git", "apply", "--recount", "--check", str(patch)],
+            cwd=work,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "apply", "--recount", str(patch)], cwd=work, check=True
+        )
         sys_top_sdc = work / "sys/sys_top.sdc"
         sdc_bytes = sys_top_sdc.read_bytes()
         clock_group = b"set_clock_groups -exclusive"
@@ -598,6 +707,11 @@ def main() -> None:
         for fragment in (
             "avl_completion_gray: OUT   std_logic_vector(1 DOWNTO 0);",
             "o_completion_pulse : IN    std_logic :='0';",
+            "diag_o_state       : OUT   std_logic_vector(1 DOWNTO 0);",
+            "diag_o_copy        : OUT   std_logic_vector(1 DOWNTO 0);",
+            "diag_o_readlev     : OUT   std_logic_vector(1 DOWNTO 0);",
+            "diag_o_copylev     : OUT   std_logic_vector(1 DOWNTO 0);",
+            "diag_completion_level_invalid : OUT std_logic;",
             "SIGNAL avl_completion_bin,avl_completion_gray_i : unsigned(1 DOWNTO 0);",
             "next_completion_bin_v:=avl_completion_bin+1;",
             "avl_completion_gray_i<=next_completion_bin_v(1) &",
@@ -606,6 +720,8 @@ def main() -> None:
         ):
             if patched_ascal.count(fragment) != 1:
                 fail(f"patched ascal lossless completion logic is missing: {fragment}")
+        if patched_ascal.count("o_completion_level_invalid<='1';") != 2:
+            fail("patched ascal copy-level invariant evidence is not exact")
         for retired_completion in (
             "SIGNAL avl_readdataack,avl_readack",
             "o_readdataack_sync<=avl_readdataack",
@@ -678,6 +794,13 @@ def main() -> None:
                 ("vbuf_read", "vbuf_read"),
                 ("vbuf_waitrequest", "vbuf_waitrequest"),
                 ("vbuf_readdatavalid", "vbuf_readdatavalid"),
+                ("scaler_fetch_state", "magik_scaler_completion_frame_state"),
+                ("scaler_fetch_batch_two_toggle", "magik_scaler_completion_batch_two_toggle"),
+                ("scaler_fetch_starved_frame_toggle", "magik_scaler_completion_starved_frame_toggle"),
+                ("scaler_fetch_starved_line_toggle", "magik_scaler_completion_starved_line_toggle"),
+                ("scaler_fetch_snapshot_valid", "magik_scaler_completion_snapshot_valid"),
+                ("scaler_fetch_delta_invalid", "magik_scaler_completion_delta_invalid"),
+                ("scaler_fetch_level_invalid", "magik_scaler_completion_level_invalid"),
                 ("response_valid", "magik_diag_response_valid"),
                 ("response_data", "magik_diag_response_data"),
             )
@@ -692,7 +815,7 @@ def main() -> None:
         all_lock_port_names = re.findall(
             r"\.([A-Za-z_][A-Za-z0-9_]*)\s*\(", control_binding.group(1)
         )
-        if actual_lock_ports != expected_lock_ports or len(all_lock_port_names) != 23:
+        if actual_lock_ports != expected_lock_ports or len(all_lock_port_names) != 30:
             fail("HDMI lock and final-output evidence port map is not exact")
         for response_net in ("magik_diag_response_valid", "magik_diag_response_data"):
             if len(re.findall(rf"\b{response_net}\b", patched)) != 4:

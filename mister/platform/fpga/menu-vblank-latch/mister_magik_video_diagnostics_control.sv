@@ -29,6 +29,13 @@ module mister_magik_hdmi_lock_evidence (
 	input  wire        vbuf_read,
 	input  wire        vbuf_waitrequest,
 	input  wire        vbuf_readdatavalid,
+	input  wire [10:0] scaler_fetch_state,
+	input  wire        scaler_fetch_batch_two_toggle,
+	input  wire        scaler_fetch_starved_frame_toggle,
+	input  wire        scaler_fetch_starved_line_toggle,
+	input  wire        scaler_fetch_snapshot_valid,
+	input  wire        scaler_fetch_delta_invalid,
+	input  wire        scaler_fetch_level_invalid,
 	output wire        response_valid,
 	output reg  [15:0] response_data
 );
@@ -46,8 +53,10 @@ module mister_magik_hdmi_lock_evidence (
 	wire scaler_raw_start = io_din[7:0] == MAGIK_UIO_GET_HDMI_SCALER_RAW_ACTIVITY;
 	wire post_osd_start = io_din[7:0] == MAGIK_UIO_GET_HDMI_POST_OSD_ACTIVITY;
 	wire avalon_start = io_din[7:0] == MAGIK_UIO_GET_HDMI_AVALON_LIVENESS_ACTIVITY;
+	wire scaler_fetch_start =
+		io_din[7:0] == MAGIK_UIO_GET_HDMI_SCALER_FETCH_ACTIVITY;
 	wire selected_start = lock_start || activity_start || final_path_start ||
-		scaler_raw_start || post_osd_start || avalon_start;
+		scaler_raw_start || post_osd_start || avalon_start || scaler_fetch_start;
 	wire selected_command = command_kind != 3'd0;
 	wire [2:0] selected_words =
 		(command_kind == 3'd1) ? MAGIK_HDMI_EVIDENCE_WORDS :
@@ -55,14 +64,16 @@ module mister_magik_hdmi_lock_evidence (
 		(command_kind == 3'd3) ? MAGIK_HDMI_FINAL_PATH_ACTIVITY_WORDS :
 		(command_kind == 3'd4) ? MAGIK_HDMI_SCALER_RAW_ACTIVITY_WORDS :
 		(command_kind == 3'd5) ? MAGIK_HDMI_POST_OSD_ACTIVITY_WORDS :
-		(command_kind == 3'd6) ? MAGIK_HDMI_AVALON_LIVENESS_ACTIVITY_WORDS : 3'd0;
+		(command_kind == 3'd6) ? MAGIK_HDMI_AVALON_LIVENESS_ACTIVITY_WORDS :
+		(command_kind == 3'd7) ? MAGIK_HDMI_SCALER_FETCH_ACTIVITY_WORDS : 3'd0;
 	wire [2:0] selected_crc_word =
 		(command_kind == 3'd1) ? {1'b0, MAGIK_HDMI_EVIDENCE_CRC_WORD} :
 		(command_kind == 3'd2) ? MAGIK_HDMI_OUTPUT_ACTIVITY_CRC_WORD :
 		(command_kind == 3'd3) ? MAGIK_HDMI_FINAL_PATH_ACTIVITY_CRC_WORD :
 		(command_kind == 3'd4) ? MAGIK_HDMI_SCALER_RAW_ACTIVITY_CRC_WORD :
 		(command_kind == 3'd5) ? MAGIK_HDMI_POST_OSD_ACTIVITY_CRC_WORD :
-		(command_kind == 3'd6) ? MAGIK_HDMI_AVALON_LIVENESS_ACTIVITY_CRC_WORD : 3'd0;
+		(command_kind == 3'd6) ? MAGIK_HDMI_AVALON_LIVENESS_ACTIVITY_CRC_WORD :
+		(command_kind == 3'd7) ? MAGIK_HDMI_SCALER_FETCH_ACTIVITY_CRC_WORD : 3'd0;
 
 	assign response_valid =
 		(command_start && selected_start) ||
@@ -296,6 +307,35 @@ module mister_magik_hdmi_lock_evidence (
 	reg avalon_returned_meta = 1'b0;
 	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS" *)
 	reg avalon_returned_sys = 1'b0;
+	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED" *)
+	reg [10:0] scaler_fetch_state_meta = 11'd0;
+	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS" *)
+	reg [10:0] scaler_fetch_state_sys = 11'd0;
+	reg [10:0] scaler_fetch_state_stable = 11'd0;
+	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED" *)
+	reg scaler_fetch_batch_two_meta = 1'b0;
+	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS" *)
+	reg scaler_fetch_batch_two_sys = 1'b0;
+	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED" *)
+	reg scaler_fetch_starved_frame_meta = 1'b0;
+	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS" *)
+	reg scaler_fetch_starved_frame_sys = 1'b0;
+	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED" *)
+	reg scaler_fetch_starved_line_meta = 1'b0;
+	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS" *)
+	reg scaler_fetch_starved_line_sys = 1'b0;
+	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED" *)
+	reg scaler_fetch_snapshot_valid_meta = 1'b0;
+	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS" *)
+	reg scaler_fetch_snapshot_valid_sys = 1'b0;
+	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED" *)
+	reg scaler_fetch_delta_invalid_meta = 1'b0;
+	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS" *)
+	reg scaler_fetch_delta_invalid_sys = 1'b0;
+	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED" *)
+	reg scaler_fetch_level_invalid_meta = 1'b0;
+	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS" *)
+	reg scaler_fetch_level_invalid_sys = 1'b0;
 
 	reg [3:0] output_no_de_count = 4'd0;
 	reg [3:0] output_de_has_nonzero_count = 4'd0;
@@ -411,6 +451,32 @@ module mister_magik_hdmi_lock_evidence (
 		avalon_accepted_count + (avalon_accepted_event ? 1'd1 : 1'd0);
 	wire [3:0] avalon_returned_count_next =
 		avalon_returned_count + (avalon_returned_event ? 1'd1 : 1'd0);
+
+	reg [3:0] scaler_fetch_batch_two_count = 4'd0;
+	reg [3:0] scaler_fetch_starved_frame_count = 4'd0;
+	reg [7:0] scaler_fetch_starved_line_count = 8'd0;
+	wire scaler_fetch_batch_two_event =
+		scaler_fetch_batch_two_sys != scaler_fetch_batch_two_count[0];
+	wire scaler_fetch_starved_frame_event =
+		scaler_fetch_starved_frame_sys != scaler_fetch_starved_frame_count[0];
+	wire scaler_fetch_starved_line_event =
+		scaler_fetch_starved_line_sys != scaler_fetch_starved_line_count[0];
+	wire [3:0] scaler_fetch_batch_two_count_next =
+		scaler_fetch_batch_two_count +
+		(scaler_fetch_batch_two_event ? 1'd1 : 1'd0);
+	wire [3:0] scaler_fetch_starved_frame_count_next =
+		scaler_fetch_starved_frame_count +
+		(scaler_fetch_starved_frame_event ? 1'd1 : 1'd0);
+	wire [7:0] scaler_fetch_starved_line_count_next =
+		scaler_fetch_starved_line_count +
+		(scaler_fetch_starved_line_event ? 1'd1 : 1'd0);
+	wire scaler_fetch_state_coherent =
+		scaler_fetch_state_sys == scaler_fetch_state_stable;
+	wire [2:0] scaler_fetch_flags_next = {
+		scaler_fetch_level_invalid_sys,
+		scaler_fetch_delta_invalid_sys,
+		scaler_fetch_snapshot_valid_sys && scaler_fetch_state_coherent
+	};
 
 	reg lock_previous = 1'b0;
 	reg lock_seen_high = 1'b0;
@@ -545,6 +611,19 @@ module mister_magik_hdmi_lock_evidence (
 				default: response_word = tx_crc;
 			endcase
 		end
+		else if(command_kind == 3'd7) begin
+			case(word_count)
+				MAGIK_HDMI_SCALER_FETCH_ACTIVITY_SCHEMA_WORD:
+					response_word = MAGIK_HDMI_SCALER_FETCH_ACTIVITY_SCHEMA;
+				MAGIK_HDMI_SCALER_FETCH_ACTIVITY_STATE_WORD:
+					response_word = snapshot_lock_loss_count;
+				MAGIK_HDMI_SCALER_FETCH_ACTIVITY_EVENTS_WORD:
+					response_word = snapshot_path_extra;
+				MAGIK_HDMI_SCALER_FETCH_ACTIVITY_FLAGS_WORD:
+					response_word = {13'd0, snapshot_flags[2:0]};
+				default: response_word = tx_crc;
+			endcase
+		end
 
 		response_data = 16'd0;
 		if(command_start && lock_start)
@@ -559,6 +638,8 @@ module mister_magik_hdmi_lock_evidence (
 			response_data = MAGIK_HDMI_POST_OSD_ACTIVITY_MAGIC;
 		else if(command_start && avalon_start)
 			response_data = MAGIK_HDMI_AVALON_LIVENESS_ACTIVITY_MAGIC;
+		else if(command_start && scaler_fetch_start)
+			response_data = MAGIK_HDMI_SCALER_FETCH_ACTIVITY_MAGIC;
 		else if(command_data && selected_command &&
 			(word_count < selected_words))
 			response_data = response_word;
@@ -597,6 +678,21 @@ module mister_magik_hdmi_lock_evidence (
 		avalon_accepted_sys <= avalon_accepted_meta;
 		avalon_returned_meta <= avalon_returned_toggle;
 		avalon_returned_sys <= avalon_returned_meta;
+		scaler_fetch_state_meta <= scaler_fetch_state;
+		scaler_fetch_state_sys <= scaler_fetch_state_meta;
+		scaler_fetch_state_stable <= scaler_fetch_state_sys;
+		scaler_fetch_batch_two_meta <= scaler_fetch_batch_two_toggle;
+		scaler_fetch_batch_two_sys <= scaler_fetch_batch_two_meta;
+		scaler_fetch_starved_frame_meta <= scaler_fetch_starved_frame_toggle;
+		scaler_fetch_starved_frame_sys <= scaler_fetch_starved_frame_meta;
+		scaler_fetch_starved_line_meta <= scaler_fetch_starved_line_toggle;
+		scaler_fetch_starved_line_sys <= scaler_fetch_starved_line_meta;
+		scaler_fetch_snapshot_valid_meta <= scaler_fetch_snapshot_valid;
+		scaler_fetch_snapshot_valid_sys <= scaler_fetch_snapshot_valid_meta;
+		scaler_fetch_delta_invalid_meta <= scaler_fetch_delta_invalid;
+		scaler_fetch_delta_invalid_sys <= scaler_fetch_delta_invalid_meta;
+		scaler_fetch_level_invalid_meta <= scaler_fetch_level_invalid;
+		scaler_fetch_level_invalid_sys <= scaler_fetch_level_invalid_meta;
 		output_no_de_count <= output_no_de_count_next;
 		output_de_has_nonzero_count <= output_de_has_nonzero_count_next;
 		output_black_direct_count <= output_black_direct_count_next;
@@ -619,6 +715,9 @@ module mister_magik_hdmi_lock_evidence (
 		avalon_request_count <= avalon_request_count_next;
 		avalon_accepted_count <= avalon_accepted_count_next;
 		avalon_returned_count <= avalon_returned_count_next;
+		scaler_fetch_batch_two_count <= scaler_fetch_batch_two_count_next;
+		scaler_fetch_starved_frame_count <= scaler_fetch_starved_frame_count_next;
+		scaler_fetch_starved_line_count <= scaler_fetch_starved_line_count_next;
 		lock_previous <= control_pll_lock_sys;
 		lock_seen_high <= lock_seen_high_next;
 		lock_armed <= lock_armed_next;
@@ -630,7 +729,8 @@ module mister_magik_hdmi_lock_evidence (
 			has_command <= 1'b1;
 			command_kind <= lock_start ? 3'd1 : activity_start ? 3'd2 :
 				final_path_start ? 3'd3 : scaler_raw_start ? 3'd4 :
-				post_osd_start ? 3'd5 : avalon_start ? 3'd6 : 3'd0;
+				post_osd_start ? 3'd5 : avalon_start ? 3'd6 :
+				scaler_fetch_start ? 3'd7 : 3'd0;
 			word_count <= 3'd0;
 			if(lock_start) begin
 				snapshot_flags <= evidence_flags_next[4:0];
@@ -700,6 +800,16 @@ module mister_magik_hdmi_lock_evidence (
 					avalon_request_count_next
 				};
 				tx_crc <= MAGIK_HDMI_AVALON_LIVENESS_ACTIVITY_HEADER_CRC;
+			end
+			else if(scaler_fetch_start) begin
+				snapshot_flags <= {2'd0, scaler_fetch_flags_next};
+				snapshot_lock_loss_count <= {5'd0, scaler_fetch_state_stable};
+				snapshot_path_extra <= {
+					scaler_fetch_starved_line_count_next,
+					scaler_fetch_starved_frame_count_next,
+					scaler_fetch_batch_two_count_next
+				};
+				tx_crc <= MAGIK_HDMI_SCALER_FETCH_ACTIVITY_HEADER_CRC;
 			end
 		end
 		else if(command_data && selected_command &&

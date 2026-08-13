@@ -33,6 +33,13 @@ module tb_mister_magik_video_diagnostics_control;
 	reg vbuf_read = 1'b0;
 	reg vbuf_waitrequest = 1'b0;
 	reg vbuf_readdatavalid = 1'b0;
+	reg [10:0] scaler_fetch_state = 11'd0;
+	reg scaler_fetch_batch_two_toggle = 1'b0;
+	reg scaler_fetch_starved_frame_toggle = 1'b0;
+	reg scaler_fetch_starved_line_toggle = 1'b0;
+	reg scaler_fetch_snapshot_valid = 1'b0;
+	reg scaler_fetch_delta_invalid = 1'b0;
+	reg scaler_fetch_level_invalid = 1'b0;
 	wire response_valid;
 	wire [15:0] response_data;
 	integer index;
@@ -63,6 +70,13 @@ module tb_mister_magik_video_diagnostics_control;
 		.vbuf_read(vbuf_read),
 		.vbuf_waitrequest(vbuf_waitrequest),
 		.vbuf_readdatavalid(vbuf_readdatavalid),
+		.scaler_fetch_state(scaler_fetch_state),
+		.scaler_fetch_batch_two_toggle(scaler_fetch_batch_two_toggle),
+		.scaler_fetch_starved_frame_toggle(scaler_fetch_starved_frame_toggle),
+		.scaler_fetch_starved_line_toggle(scaler_fetch_starved_line_toggle),
+		.scaler_fetch_snapshot_valid(scaler_fetch_snapshot_valid),
+		.scaler_fetch_delta_invalid(scaler_fetch_delta_invalid),
+		.scaler_fetch_level_invalid(scaler_fetch_level_invalid),
 		.response_valid(response_valid),
 		.response_data(response_data)
 	);
@@ -243,6 +257,41 @@ module tb_mister_magik_video_diagnostics_control;
 					words[MAGIK_HDMI_AVALON_LIVENESS_ACTIVITY_COUNTS_WORD],
 					{expected_bucket, expected_returned, expected_accepted,
 					 expected_request});
+		end
+	endtask
+
+	task automatic read_scaler_fetch_activity;
+		input [15:0] expected_state;
+		input [15:0] expected_events;
+		input [15:0] expected_flags;
+		begin
+			io_uio = 1'b1; io_din = 16'h0066; io_strobe = 1'b1;
+			#1 if(!response_valid ||
+				response_data != MAGIK_HDMI_SCALER_FETCH_ACTIVITY_MAGIC)
+				$fatal(1, "missing scaler fetch activity magic");
+			@(negedge clk_sys); io_strobe = 1'b0;
+			crc = MAGIK_HDMI_SCALER_FETCH_ACTIVITY_HEADER_CRC;
+			for(index = 0; index < MAGIK_HDMI_SCALER_FETCH_ACTIVITY_WORDS;
+				index = index + 1) begin
+				@(negedge clk_sys); io_din = 16'd0; io_strobe = 1'b1;
+				#1;
+				if(!response_valid) $fatal(1, "scaler fetch activity ended early");
+				words[index] = response_data;
+				if(index < MAGIK_HDMI_SCALER_FETCH_ACTIVITY_CRC_WORD)
+					crc = crc_word(crc, response_data);
+				@(negedge clk_sys); io_strobe = 1'b0;
+			end
+			@(negedge clk_sys); io_strobe = 1'b1;
+			#1 if(response_valid) $fatal(1, "scaler fetch activity exceeded word count");
+			@(negedge clk_sys); io_strobe = 1'b0;
+			close_command();
+			if(words[MAGIK_HDMI_SCALER_FETCH_ACTIVITY_SCHEMA_WORD] !=
+					MAGIK_HDMI_SCALER_FETCH_ACTIVITY_SCHEMA ||
+			   words[MAGIK_HDMI_SCALER_FETCH_ACTIVITY_STATE_WORD] != expected_state ||
+			   words[MAGIK_HDMI_SCALER_FETCH_ACTIVITY_EVENTS_WORD] != expected_events ||
+			   words[MAGIK_HDMI_SCALER_FETCH_ACTIVITY_FLAGS_WORD] != expected_flags ||
+			   words[MAGIK_HDMI_SCALER_FETCH_ACTIVITY_CRC_WORD] != crc)
+				$fatal(1, "scaler fetch activity mismatch");
 		end
 	endtask
 
@@ -449,6 +498,8 @@ module tb_mister_magik_video_diagnostics_control;
 			$fatal(1, "unexpected generated scaler activity header CRC");
 		if(MAGIK_HDMI_AVALON_LIVENESS_ACTIVITY_HEADER_CRC != 16'h33c8)
 			$fatal(1, "unexpected generated Avalon liveness header CRC");
+		if(MAGIK_HDMI_SCALER_FETCH_ACTIVITY_HEADER_CRC != 16'hadfd)
+			$fatal(1, "unexpected generated scaler fetch header CRC");
 
 		// The responder must ignore all latch-owned and retired commands.
 		for(opcode = 8'h57; opcode <= 8'h5f; opcode = opcode + 1) begin
@@ -462,7 +513,7 @@ module tb_mister_magik_video_diagnostics_control;
 		@(negedge clk_sys); io_strobe = 1'b0;
 
 		// A different command cannot become selected by changing io_din later.
-		io_uio = 1'b1; io_din = 16'h0066; io_strobe = 1'b1;
+		io_uio = 1'b1; io_din = 16'h0067; io_strobe = 1'b1;
 		#1 if(response_valid) $fatal(1, "unknown command unexpectedly selected");
 		@(negedge clk_sys); io_strobe = 1'b0;
 		@(negedge clk_sys); io_din = 16'h0060; io_strobe = 1'b1;
@@ -593,6 +644,31 @@ module tb_mister_magik_video_diagnostics_control;
 		read_avalon_activity(
 			MAGIK_HDMI_AVALON_LIVENESS_ACTIVITY_FLAG_BUCKET_VALID,
 			4'd2, 4'd1, 4'd1, 4'd1);
+
+		// The scaler-fetch record snapshots only frame-held native state and
+		// independent event epochs. A coherent state is required before the
+		// valid flag is published.
+		scaler_fetch_state = 11'b00_0_00_10_00_10;
+		scaler_fetch_snapshot_valid = 1'b1;
+		repeat(8) @(negedge clk_sys);
+		read_scaler_fetch_activity(
+			{5'd0, scaler_fetch_state}, 16'd0,
+			MAGIK_HDMI_SCALER_FETCH_ACTIVITY_FLAG_SNAPSHOT_VALID);
+		scaler_fetch_batch_two_toggle = !scaler_fetch_batch_two_toggle;
+		scaler_fetch_starved_frame_toggle = !scaler_fetch_starved_frame_toggle;
+		scaler_fetch_starved_line_toggle = !scaler_fetch_starved_line_toggle;
+		repeat(8) @(negedge clk_sys);
+		read_scaler_fetch_activity(
+			{5'd0, scaler_fetch_state}, 16'h0111,
+			MAGIK_HDMI_SCALER_FETCH_ACTIVITY_FLAG_SNAPSHOT_VALID);
+		scaler_fetch_delta_invalid = 1'b1;
+		scaler_fetch_level_invalid = 1'b1;
+		repeat(8) @(negedge clk_sys);
+		read_scaler_fetch_activity(
+			{5'd0, scaler_fetch_state}, 16'h0111,
+			MAGIK_HDMI_SCALER_FETCH_ACTIVITY_FLAG_SNAPSHOT_VALID |
+			MAGIK_HDMI_SCALER_FETCH_ACTIVITY_FLAG_COMPLETION_DELTA_INVALID |
+			MAGIK_HDMI_SCALER_FETCH_ACTIVITY_FLAG_COMPLETION_LEVEL_INVALID);
 
 		// An aborted activity transaction restarts from its own schema and CRC
 		// seed without perturbing the permanent 0x60 lock record.

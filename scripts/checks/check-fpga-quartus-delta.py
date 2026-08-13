@@ -62,7 +62,7 @@ MINIMUM_SLACK_NS = 0.20
 MAXIMUM_SLACK_DEGRADATION_NS = 0.15
 MAXIMUM_LOGIC_ELEMENT_DELTA = 800
 MAXIMUM_REGISTER_DELTA = 300
-EXPECTED_OBSERVER_CALCULABLE_CHAINS = 18
+EXPECTED_OBSERVER_CALCULABLE_CHAINS = 35
 EXPECTED_QUARTUS_POLICY = {
     "auto_parallel_synthesis": "off",
     "parallel_synthesis": "off",
@@ -101,6 +101,20 @@ EXPECTED_SYNC_ASSIGNMENT_SUFFIXES = (
     "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|avalon_accepted_sys",
     "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|avalon_returned_meta",
     "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|avalon_returned_sys",
+    "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|scaler_fetch_state_meta",
+    "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|scaler_fetch_state_sys",
+    "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|scaler_fetch_batch_two_meta",
+    "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|scaler_fetch_batch_two_sys",
+    "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|scaler_fetch_starved_frame_meta",
+    "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|scaler_fetch_starved_frame_sys",
+    "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|scaler_fetch_starved_line_meta",
+    "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|scaler_fetch_starved_line_sys",
+    "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|scaler_fetch_snapshot_valid_meta",
+    "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|scaler_fetch_snapshot_valid_sys",
+    "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|scaler_fetch_delta_invalid_meta",
+    "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|scaler_fetch_delta_invalid_sys",
+    "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|scaler_fetch_level_invalid_meta",
+    "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|scaler_fetch_level_invalid_sys",
     "mister_magik_scaler_completion_cdc:magik_scaler_completion_cdc|completion_gray_meta",
     "mister_magik_scaler_completion_cdc:magik_scaler_completion_cdc|completion_gray_sync",
 )

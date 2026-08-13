@@ -27,6 +27,13 @@ module mister_magik_sys_top_latch_path (
 	input wire vbuf_read,
 	input wire vbuf_waitrequest,
 	input wire vbuf_readdatavalid,
+	input wire [10:0] scaler_fetch_state,
+	input wire scaler_fetch_batch_two_toggle,
+	input wire scaler_fetch_starved_frame_toggle,
+	input wire scaler_fetch_starved_line_toggle,
+	input wire scaler_fetch_snapshot_valid,
+	input wire scaler_fetch_delta_invalid,
+	input wire scaler_fetch_level_invalid,
 	input wire io_uio,
 	input wire io_strobe,
 	input wire [15:0] io_din
@@ -132,6 +139,13 @@ module mister_magik_sys_top_latch_path (
 		.vbuf_read(vbuf_read),
 		.vbuf_waitrequest(vbuf_waitrequest),
 		.vbuf_readdatavalid(vbuf_readdatavalid),
+		.scaler_fetch_state(scaler_fetch_state),
+		.scaler_fetch_batch_two_toggle(scaler_fetch_batch_two_toggle),
+		.scaler_fetch_starved_frame_toggle(scaler_fetch_starved_frame_toggle),
+		.scaler_fetch_starved_line_toggle(scaler_fetch_starved_line_toggle),
+		.scaler_fetch_snapshot_valid(scaler_fetch_snapshot_valid),
+		.scaler_fetch_delta_invalid(scaler_fetch_delta_invalid),
+		.scaler_fetch_level_invalid(scaler_fetch_level_invalid),
 		.response_valid(magik_diag_response_valid),
 		.response_data(magik_diag_response_data)
 	);
@@ -202,6 +216,13 @@ module tb_mister_magik_sys_top_integration;
 	reg test_vbuf_read = 1'b0;
 	reg test_vbuf_waitrequest = 1'b0;
 	reg test_vbuf_readdatavalid = 1'b0;
+	reg [10:0] test_scaler_fetch_state = 11'd0;
+	reg test_scaler_fetch_batch_two_toggle = 1'b0;
+	reg test_scaler_fetch_starved_frame_toggle = 1'b0;
+	reg test_scaler_fetch_starved_line_toggle = 1'b0;
+	reg test_scaler_fetch_snapshot_valid = 1'b0;
+	reg test_scaler_fetch_delta_invalid = 1'b0;
+	reg test_scaler_fetch_level_invalid = 1'b0;
 	reg test_io_uio = 1'b0;
 	reg test_io_strobe = 1'b0;
 	reg [15:0] test_io_din = 16'd0;
@@ -227,6 +248,13 @@ module tb_mister_magik_sys_top_integration;
 		.vbuf_read(test_vbuf_read),
 		.vbuf_waitrequest(test_vbuf_waitrequest),
 		.vbuf_readdatavalid(test_vbuf_readdatavalid),
+		.scaler_fetch_state(test_scaler_fetch_state),
+		.scaler_fetch_batch_two_toggle(test_scaler_fetch_batch_two_toggle),
+		.scaler_fetch_starved_frame_toggle(test_scaler_fetch_starved_frame_toggle),
+		.scaler_fetch_starved_line_toggle(test_scaler_fetch_starved_line_toggle),
+		.scaler_fetch_snapshot_valid(test_scaler_fetch_snapshot_valid),
+		.scaler_fetch_delta_invalid(test_scaler_fetch_delta_invalid),
+		.scaler_fetch_level_invalid(test_scaler_fetch_level_invalid),
 		.io_uio(test_io_uio),
 		.io_strobe(test_io_strobe),
 		.io_din(test_io_din)
@@ -569,6 +597,34 @@ module tb_mister_magik_sys_top_integration;
 			16'h1111, "sys_top Avalon liveness counts");
 		expect16(evidence[MAGIK_HDMI_AVALON_LIVENESS_ACTIVITY_CRC_WORD], evidence_crc,
 			"sys_top Avalon liveness CRC");
+
+		test_scaler_fetch_state = 11'b00_0_00_10_00_10;
+		test_scaler_fetch_snapshot_valid = 1'b1;
+		test_scaler_fetch_batch_two_toggle = 1'b1;
+		test_scaler_fetch_starved_frame_toggle = 1'b1;
+		test_scaler_fetch_starved_line_toggle = 1'b1;
+		repeat(8) @(posedge test_clk);
+		begin_command(MAGIK_UIO_GET_HDMI_SCALER_FETCH_ACTIVITY,
+			MAGIK_HDMI_SCALER_FETCH_ACTIVITY_MAGIC);
+		for(index = 0; index < MAGIK_HDMI_SCALER_FETCH_ACTIVITY_WORDS;
+			index = index + 1)
+			transfer_word(16'd0, evidence[index]);
+		transfer_word(16'd0, response);
+		expect16(response, 16'd0, "sys_top scaler fetch overlong word");
+		end_command();
+		evidence_crc = MAGIK_HDMI_SCALER_FETCH_ACTIVITY_HEADER_CRC;
+		for(index = 0; index < MAGIK_HDMI_SCALER_FETCH_ACTIVITY_CRC_WORD;
+			index = index + 1)
+			evidence_crc = crc_word(evidence_crc, evidence[index]);
+		expect16(evidence[MAGIK_HDMI_SCALER_FETCH_ACTIVITY_STATE_WORD],
+			{5'd0, test_scaler_fetch_state}, "sys_top scaler fetch state");
+		expect16(evidence[MAGIK_HDMI_SCALER_FETCH_ACTIVITY_EVENTS_WORD],
+			16'h0111, "sys_top scaler fetch event epochs");
+		expect16(evidence[MAGIK_HDMI_SCALER_FETCH_ACTIVITY_FLAGS_WORD],
+			MAGIK_HDMI_SCALER_FETCH_ACTIVITY_FLAG_SNAPSHOT_VALID,
+			"sys_top scaler fetch flags");
+		expect16(evidence[MAGIK_HDMI_SCALER_FETCH_ACTIVITY_CRC_WORD], evidence_crc,
+			"sys_top scaler fetch CRC");
 
 		// Post another route, then collide its vblank apply with a real 0x2f
 		// payload edge. The production legacy-write expression must win.

@@ -12,9 +12,19 @@ module mister_magik_scaler_completion_cdc (
 	input  wire       destination_clk,
 	input  wire       reset_n,
 	input  wire [1:0] source_completion_gray,
+	input  wire       scaler_vs,
+	input  wire       scaler_de,
+	input  wire       scaler_framebuffer_enabled,
+	input  wire [1:0] scaler_scheduler_state,
+	input  wire [1:0] scaler_copy_state,
+	input  wire [1:0] scaler_read_level,
+	input  wire [1:0] scaler_copy_level,
 	output reg        completion_pulse = 1'b0,
-	output wire [1:0] consumed_completion_gray,
 	output reg        completion_batch_two_toggle = 1'b0,
+	output reg        completion_starved_frame_toggle = 1'b0,
+	output reg        completion_starved_line_toggle = 1'b0,
+	output reg  [10:0] completion_frame_state = 11'd0,
+	output reg        completion_snapshot_valid = 1'b0,
 	output reg        completion_delta_invalid = 1'b0
 );
 	reg [1:0] destination_reset_release = 2'd0;
@@ -24,6 +34,12 @@ module mister_magik_scaler_completion_cdc (
 	reg [1:0] completion_gray_sync = 2'd0;
 	reg [1:0] completion_seen_binary = 2'd0;
 	reg completion_pending = 1'b0;
+	reg scaler_vs_previous = 1'b0;
+	reg scaler_de_previous = 1'b0;
+	reg completion_frame_armed = 1'b0;
+	reg completion_frame_starved = 1'b0;
+	reg completion_line_armed = 1'b0;
+	reg completion_line_starved = 1'b0;
 	wire destination_reset_n = destination_reset_release[1];
 
 	always @(posedge destination_clk or negedge reset_n) begin
@@ -40,19 +56,24 @@ module mister_magik_scaler_completion_cdc (
 		end
 	endfunction
 
-	function automatic [1:0] binary_to_gray;
-		input [1:0] binary;
-		begin
-			binary_to_gray = binary ^ (binary >> 1);
-		end
-	endfunction
-
 	wire [1:0] synchronized_completion_binary =
 		gray_to_binary(completion_gray_sync);
 	wire [1:0] completion_delta =
 		synchronized_completion_binary - completion_seen_binary;
 	wire completion_delta_valid = completion_delta != 2'd3;
-	assign consumed_completion_gray = binary_to_gray(completion_seen_binary);
+	wire scaler_vs_rise = scaler_vs && !scaler_vs_previous;
+	wire scaler_de_rise = scaler_de && !scaler_de_previous;
+	wire completion_starved_now =
+		scaler_framebuffer_enabled &&
+		(scaler_scheduler_state == 2'd2) &&
+		(scaler_copy_state == 2'd0) &&
+		(scaler_read_level == 2'd2) &&
+		(scaler_copy_level == 2'd0) &&
+		!completion_pending && !completion_pulse;
+	wire completion_frame_starved_now =
+		completion_frame_starved && completion_starved_now;
+	wire completion_line_starved_now =
+		completion_line_starved && completion_starved_now;
 
 	always @(posedge destination_clk or negedge destination_reset_n) begin
 		if(!destination_reset_n) begin
@@ -62,11 +83,23 @@ module mister_magik_scaler_completion_cdc (
 			completion_pending <= 1'b0;
 			completion_pulse <= 1'b0;
 			completion_batch_two_toggle <= 1'b0;
+			completion_starved_frame_toggle <= 1'b0;
+			completion_starved_line_toggle <= 1'b0;
+			completion_frame_state <= 11'd0;
+			completion_snapshot_valid <= 1'b0;
 			completion_delta_invalid <= 1'b0;
+			scaler_vs_previous <= 1'b0;
+			scaler_de_previous <= 1'b0;
+			completion_frame_armed <= 1'b0;
+			completion_frame_starved <= 1'b0;
+			completion_line_armed <= 1'b0;
+			completion_line_starved <= 1'b0;
 		end
 		else begin
 			completion_gray_meta <= source_completion_gray;
 			completion_gray_sync <= completion_gray_meta;
+			scaler_vs_previous <= scaler_vs;
+			scaler_de_previous <= scaler_de;
 			completion_pulse <= 1'b0;
 			if(completion_pending) begin
 				completion_pulse <= 1'b1;
@@ -83,6 +116,38 @@ module mister_magik_scaler_completion_cdc (
 			end
 			if(!completion_delta_valid)
 				completion_delta_invalid <= 1'b1;
+
+			if(scaler_vs_rise) begin
+				completion_frame_state <= {
+					completion_delta,
+					completion_pending,
+					scaler_copy_level,
+					scaler_read_level,
+					scaler_copy_state,
+					scaler_scheduler_state
+				};
+				completion_snapshot_valid <= 1'b1;
+				if(completion_frame_armed && completion_frame_starved_now)
+					completion_starved_frame_toggle <=
+						!completion_starved_frame_toggle;
+				completion_frame_armed <= 1'b1;
+				completion_frame_starved <= completion_starved_now;
+				completion_line_armed <= 1'b0;
+				completion_line_starved <= 1'b0;
+			end
+			else begin
+				if(completion_frame_armed)
+					completion_frame_starved <= completion_frame_starved_now;
+				if(scaler_de_rise) begin
+					if(completion_line_armed && completion_line_starved_now)
+						completion_starved_line_toggle <=
+							!completion_starved_line_toggle;
+					completion_line_armed <= 1'b1;
+					completion_line_starved <= completion_starved_now;
+				end
+				else if(completion_line_armed)
+					completion_line_starved <= completion_line_starved_now;
+			end
 		end
 	end
 endmodule

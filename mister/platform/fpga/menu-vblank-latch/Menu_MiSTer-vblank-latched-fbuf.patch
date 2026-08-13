@@ -30,6 +30,19 @@ index a416879..f6a40ea 100644
 +wire [15:0] magik_lfb_active_route_epoch;
 +wire        magik_diag_response_valid;
 +wire [15:0] magik_diag_response_data;
++wire [1:0]  magik_scaler_completion_gray;
++wire        magik_scaler_completion_pulse;
++wire        magik_scaler_completion_batch_two_toggle;
++wire        magik_scaler_completion_starved_frame_toggle;
++wire        magik_scaler_completion_starved_line_toggle;
++wire [10:0] magik_scaler_completion_frame_state;
++wire        magik_scaler_completion_snapshot_valid;
++wire        magik_scaler_completion_delta_invalid;
++wire        magik_scaler_completion_level_invalid;
++wire [1:0]  magik_scaler_scheduler_state;
++wire [1:0]  magik_scaler_copy_state;
++wire [1:0]  magik_scaler_read_level;
++wire [1:0]  magik_scaler_copy_level;
 +
 +mister_magik_latch_sys_top_bridge magik_latch_bridge
 +(
@@ -93,6 +106,13 @@ index a416879..f6a40ea 100644
 +	.vbuf_read(vbuf_read),
 +	.vbuf_waitrequest(vbuf_waitrequest),
 +	.vbuf_readdatavalid(vbuf_readdatavalid),
++	.scaler_fetch_state(magik_scaler_completion_frame_state),
++	.scaler_fetch_batch_two_toggle(magik_scaler_completion_batch_two_toggle),
++	.scaler_fetch_starved_frame_toggle(magik_scaler_completion_starved_frame_toggle),
++	.scaler_fetch_starved_line_toggle(magik_scaler_completion_starved_line_toggle),
++	.scaler_fetch_snapshot_valid(magik_scaler_completion_snapshot_valid),
++	.scaler_fetch_delta_invalid(magik_scaler_completion_delta_invalid),
++	.scaler_fetch_level_invalid(magik_scaler_completion_level_invalid),
 +	.response_valid(magik_diag_response_valid),
 +	.response_data(magik_diag_response_data)
 +);
@@ -244,6 +264,11 @@ index a735e6b..0000000 100644
  		avl_read           : OUT   std_logic;
 +		avl_completion_gray: OUT   std_logic_vector(1 DOWNTO 0);
 +		o_completion_pulse : IN    std_logic :='0';
++		diag_o_state       : OUT   std_logic_vector(1 DOWNTO 0);
++		diag_o_copy        : OUT   std_logic_vector(1 DOWNTO 0);
++		diag_o_readlev     : OUT   std_logic_vector(1 DOWNTO 0);
++		diag_o_copylev     : OUT   std_logic_vector(1 DOWNTO 0);
++		diag_completion_level_invalid : OUT std_logic;
  		avl_byteenable     : OUT   std_logic_vector(N_DW/8-1 DOWNTO 0);
  
  		------------------------------------
@@ -263,6 +288,7 @@ index a735e6b..0000000 100644
  	SIGNAL o_pshift : natural RANGE 0 TO 15;
  	SIGNAL o_readack,o_readack_sync,o_readack_sync2 : std_logic;
 -	SIGNAL o_readdataack,o_readdataack_sync,o_readdataack_sync2 : std_logic;
++	SIGNAL o_completion_level_invalid : std_logic;
  	SIGNAL o_copyv : unsigned(0 TO 14);
  	SIGNAL o_adrs : unsigned(31 DOWNTO 0); -- Avalon address
  	SIGNAL o_adrs_pre : natural RANGE 0 TO 2**24-1;
@@ -300,6 +326,11 @@ index a735e6b..0000000 100644
  	avl_write<=avl_write_i;
  	avl_writedata<=std_logic_vector(swap(avl_dr));
 +	avl_completion_gray<=std_logic_vector(avl_completion_gray_i);
++	diag_o_state<=std_logic_vector(to_unsigned(enum_o_state'pos(o_state),2));
++	diag_o_copy<=std_logic_vector(to_unsigned(enum_o_copy'pos(o_copy),2));
++	diag_o_readlev<=std_logic_vector(to_unsigned(o_readlev,2));
++	diag_o_copylev<=std_logic_vector(to_unsigned(o_copylev,2));
++	diag_completion_level_invalid<=o_completion_level_invalid;
  	avl_burstcount<=std_logic_vector(to_unsigned(BLEN,8));
  	avl_byteenable<=(OTHERS =>'1');
  
@@ -310,6 +341,7 @@ index a735e6b..0000000 100644
  	BEGIN
  		IF o_reset_na='0' THEN
  			o_copy<=sWAIT;
++			o_completion_level_invalid<='0';
 @@ -2023,10 +2033,6 @@ ARCHITECTURE rtl OF ascal IS
  			o_readack_sync2<=o_readack_sync;
  			o_readack<=o_readack_sync XOR o_readack_sync2;
@@ -332,10 +364,14 @@ index a735e6b..0000000 100644
 +			IF lev_dec_v='1' AND o_completion_pulse='0' THEN
 +				IF o_copylev>0 THEN
 +					o_copylev<=o_copylev-1;
++				ELSE
++					o_completion_level_invalid<='1';
 +				END IF;
 +			ELSIF lev_dec_v='0' AND o_completion_pulse='1' THEN
 +				IF o_copylev<2 THEN
 +					o_copylev<=o_copylev+1;
++				ELSE
++					o_completion_level_invalid<='1';
 +				END IF;
  			END IF;
  
@@ -349,20 +385,25 @@ index a416879..f6a40ea 100644
  
  `ifndef MISTER_DEBUG_NOHDMI
  	wire clk_hdmi  = hdmi_clk_out;
-+	wire [1:0] magik_scaler_completion_gray;
-+	wire magik_scaler_completion_pulse;
-+	wire [1:0] magik_scaler_completion_consumed_gray;
-+	wire magik_scaler_completion_batch_two_toggle;
-+	wire magik_scaler_completion_delta_invalid;
 +
 +	mister_magik_scaler_completion_cdc magik_scaler_completion_cdc
 +	(
 +		.destination_clk(clk_hdmi),
 +		.reset_n(~reset_req),
 +		.source_completion_gray(magik_scaler_completion_gray),
++		.scaler_vs(hdmi_vs),
++		.scaler_de(hdmi_de),
++		.scaler_framebuffer_enabled(FB_EN),
++		.scaler_scheduler_state(magik_scaler_scheduler_state),
++		.scaler_copy_state(magik_scaler_copy_state),
++		.scaler_read_level(magik_scaler_read_level),
++		.scaler_copy_level(magik_scaler_copy_level),
 +		.completion_pulse(magik_scaler_completion_pulse),
-+		.consumed_completion_gray(magik_scaler_completion_consumed_gray),
 +		.completion_batch_two_toggle(magik_scaler_completion_batch_two_toggle),
++		.completion_starved_frame_toggle(magik_scaler_completion_starved_frame_toggle),
++		.completion_starved_line_toggle(magik_scaler_completion_starved_line_toggle),
++		.completion_frame_state(magik_scaler_completion_frame_state),
++		.completion_snapshot_valid(magik_scaler_completion_snapshot_valid),
 +		.completion_delta_invalid(magik_scaler_completion_delta_invalid)
 +	);
  
@@ -374,6 +415,11 @@ index a416879..f6a40ea 100644
  		.avl_read         (vbuf_read),
 +		.avl_completion_gray(magik_scaler_completion_gray),
 +		.o_completion_pulse(magik_scaler_completion_pulse),
++		.diag_o_state(magik_scaler_scheduler_state),
++		.diag_o_copy(magik_scaler_copy_state),
++		.diag_o_readlev(magik_scaler_read_level),
++		.diag_o_copylev(magik_scaler_copy_level),
++		.diag_completion_level_invalid(magik_scaler_completion_level_invalid),
  		.avl_byteenable   (vbuf_byteenable)
  	);
  `endif
