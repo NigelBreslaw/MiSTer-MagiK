@@ -1128,6 +1128,9 @@ fn platform_manifest_structural_duplicate(
     public: &PlatformManifestLayout,
     dev: &PlatformManifestLayout,
 ) -> bool {
+    if source.contains("mister_magik_platform_manifest_contract::parse(") {
+        return false;
+    }
     let field_count = schema
         .fields
         .iter()
@@ -1543,6 +1546,19 @@ latch_metadata = "{}"
         let error = check_platform_manifest_authority(&root).unwrap_err();
         assert!(error.contains("platform_manifest_duplicate_outside_ledger"));
         assert!(error.contains("apps/mister/src/new_manifest.rs"));
+        fs::write(
+            root.join("apps/mister/src/new_manifest.rs"),
+            "use mister_magik_platform_manifest_contract::ValidationProfile;\nconst FORMAT: &str = \"mister-magik-platform-v3\";\n",
+        )
+        .unwrap();
+        let error = check_platform_manifest_authority(&root).unwrap_err();
+        assert!(error.contains("apps/mister/src/new_manifest.rs"));
+        fs::write(
+            root.join("apps/mister/src/new_manifest.rs"),
+            "fn parse(text: &str) { let _ = mister_magik_platform_manifest_contract::parse(text, layout, profile); }\nconst FORMAT: &str = \"mister-magik-platform-v3\";\n",
+        )
+        .unwrap();
+        assert!(check_platform_manifest_authority(&root).is_ok());
         fs::remove_file(root.join("apps/mister/src/new_manifest.rs")).unwrap();
         fs::write(
             root.join("apps/mister/src/media_manifest.rs"),
