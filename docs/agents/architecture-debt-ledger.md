@@ -26,6 +26,27 @@ path is not a migration strategy.
 | `mister/tools/agent/src/main.rs` | P1 Enforce device-service boundary | This is a distinct attended device-service capability, not production app transport. Keep the entry only while this file performs that service operation; if it moves, update the inventory atomically after zero old references. |
 | `agent-cli/src/host/remote.rs` | P1 Enforce host boundary | This constructs bounded host commands and is not production app transport. Keep the entry only while this file owns that construction; if it moves, update the inventory atomically after zero old references. |
 
+## Launcher platform-effect characterization
+
+P1 Enforce begins from these direct effect families in
+`apps/mister/src/launcher.rs`. The named production symbols and their observable
+ordering are characterization inputs; moving a row must preserve its behavior
+or record an explicit behavior change.
+
+| Capability | Current direct effect owners |
+|---|---|
+| Main command transport | `wait_for_fifo`, `wait_for_mister_and_fifo`, `write_mister_command_nonblocking`, `write_magik_command_response_with_lock` |
+| Launch handoff and recovery | `SystemLaunchIo`, `execute_game_launch_with`, `spawn_mister`, `reboot_mister_with`, `exit_to_mister` |
+| Display control | `display_state`, `try_display_state`, `apply_display_resolution`, `confirm_display_resolution_and_wait`, `cancel_display_resolution` |
+| Runtime state and process inspection | `main_heartbeat`, `mister_running`, `mister_running_arcade_core` |
+| Launcher persistence | launch-return state helpers, input-policy/button-profile helpers, rebuild-marker helpers, screenshot-pack cleanup, and menu-wallpaper restoration |
+
+The launch fake freezes preparation, override, marker, command, and recovery
+ordering. Main reply association remains serialized by the command-operation
+lock and has no request identifiers or absolute reply deadline: it waits while
+Main is alive and its heartbeat advances, and fails on channel closure,
+oversized/malformed reply, process exit, or stopped heartbeat.
+
 ## Runtime configuration containment
 
 `apps/mister/config/runtime-environment.toml` is the sole registry for the 272

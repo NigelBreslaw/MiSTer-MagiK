@@ -5672,11 +5672,15 @@ mod tests {
         started_ready: bool,
         fifo_ready: bool,
         write_result: Result<(), String>,
+        prepare_result: Result<(), String>,
+        input_policy_result: Result<(), String>,
+        button_override_result: Result<(), String>,
         start_calls: usize,
         prepare_simple_input_profile_calls: usize,
         input_policy_markers: Vec<bool>,
         button_override_writes: Vec<String>,
         commands: Vec<String>,
+        effects: Vec<String>,
     }
 
     impl LaunchIo for FakeLaunchIo {
@@ -5698,11 +5702,13 @@ mod tests {
 
         fn prepare_simple_input_profiles(&mut self) -> Result<(), String> {
             self.prepare_simple_input_profile_calls += 1;
-            Ok(())
+            self.effects.push("prepare-input-profiles".to_string());
+            self.prepare_result.clone()
         }
 
         fn start_mister(&mut self) -> Result<(), String> {
             self.start_calls += 1;
+            self.effects.push("start-main".to_string());
             self.start_result.clone()
         }
 
@@ -5719,7 +5725,9 @@ mod tests {
             simple_joystick_handling: bool,
         ) -> Result<(), String> {
             self.input_policy_markers.push(simple_joystick_handling);
-            Ok(())
+            self.effects
+                .push(format!("input-policy:{simple_joystick_handling}"));
+            self.input_policy_result.clone()
         }
 
         fn write_button_overrides(
@@ -5734,11 +5742,18 @@ mod tests {
                 _ => "remove".to_string(),
             };
             self.button_override_writes.push(action);
-            Ok(())
+            self.effects.push(format!(
+                "button-overrides:{}",
+                self.button_override_writes
+                    .last()
+                    .expect("button override action was recorded")
+            ));
+            self.button_override_result.clone()
         }
 
         fn write_mister_command(&mut self, cmd: &str) -> Result<(), String> {
             self.commands.push(cmd.to_string());
+            self.effects.push(format!("main-command:{cmd}"));
             self.write_result.clone()
         }
     }
@@ -5753,11 +5768,15 @@ mod tests {
             started_ready: true,
             fifo_ready: true,
             write_result: Ok(()),
+            prepare_result: Ok(()),
+            input_policy_result: Ok(()),
+            button_override_result: Ok(()),
             start_calls: 0,
             prepare_simple_input_profile_calls: 0,
             input_policy_markers: Vec::new(),
             button_override_writes: Vec::new(),
             commands: Vec::new(),
+            effects: Vec::new(),
         }
     }
 
@@ -9154,6 +9173,89 @@ mod tests {
             vec!["mister_magik_launch /media/fat/_Arcade/test.mra\n"]
         );
         assert_eq!(err.to_string(), "fifo write failed");
+        assert!(!launch_in_progress());
+    }
+
+    #[test]
+    fn magik_launch_effect_order_is_characterized() {
+        let _guard = LAUNCH_TEST_LOCK.lock().unwrap();
+        reset_launch();
+        let mut io = launch_io();
+        io.simple_joystick_handling = true;
+
+        execute_game_launch_with(&path_target("/media/fat/_Arcade/test.mra"), &mut io)
+            .expect("launch succeeds");
+
+        assert_eq!(
+            io.effects,
+            [
+                "prepare-input-profiles",
+                "button-overrides:write:/media/fat/_Arcade/test.mra",
+                "input-policy:true",
+                "main-command:mister_magik_launch /media/fat/_Arcade/test.mra\n",
+            ]
+        );
+        reset_launch();
+    }
+
+    #[test]
+    fn magik_launch_rejection_restores_stock_input_policy_after_command() {
+        let _guard = LAUNCH_TEST_LOCK.lock().unwrap();
+        reset_launch();
+        let mut io = launch_io();
+        io.write_result = Err("rejected LauncherCrashed".to_string());
+
+        let error = execute_game_launch_with(&path_target("/media/fat/_Arcade/test.mra"), &mut io)
+            .expect_err("Main rejection fails launch");
+
+        assert_eq!(error.kind(), LaunchFailureKind::HandoffRejected);
+        assert_eq!(error.to_string(), "rejected LauncherCrashed");
+        assert_eq!(
+            io.effects,
+            [
+                "button-overrides:remove",
+                "input-policy:false",
+                "main-command:mister_magik_launch /media/fat/_Arcade/test.mra\n",
+                "input-policy:false",
+            ]
+        );
+        assert!(!launch_in_progress());
+    }
+
+    #[test]
+    fn launch_fifo_unavailable_with_existing_main_does_not_require_recovery() {
+        let _guard = LAUNCH_TEST_LOCK.lock().unwrap();
+        reset_launch();
+        let mut io = launch_io();
+        io.fifo_ready = false;
+
+        let error = execute_game_launch_with(&path_target("/media/fat/_Arcade/test.mra"), &mut io)
+            .expect_err("missing FIFO fails launch");
+
+        assert!(!error.spawned_mister());
+        assert_eq!(error.kind(), LaunchFailureKind::HandoffRejected);
+        assert_eq!(error.to_string(), "timed out waiting for /dev/MiSTer_cmd");
+        assert!(io.effects.is_empty());
+        assert!(!launch_in_progress());
+    }
+
+    #[test]
+    fn launch_start_failure_preserves_text_without_recovery_flag() {
+        let _guard = LAUNCH_TEST_LOCK.lock().unwrap();
+        reset_launch();
+        let mut io = launch_io();
+        io.mister_running = false;
+        io.start_result = Err("failed to spawn MiSTer_MagiKDev: permission denied".to_string());
+
+        let error = execute_game_launch_with(&path_target("/media/fat/_Arcade/test.mra"), &mut io)
+            .expect_err("Main start failure fails launch");
+
+        assert!(!error.spawned_mister());
+        assert_eq!(
+            error.to_string(),
+            "failed to spawn MiSTer_MagiKDev: permission denied"
+        );
+        assert_eq!(io.effects, ["start-main"]);
         assert!(!launch_in_progress());
     }
 
