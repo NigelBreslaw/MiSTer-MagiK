@@ -722,7 +722,8 @@ def main() -> None:
             "diag_completion_level_invalid : OUT std_logic;",
             "SIGNAL avl_completion_bin,avl_completion_gray_i : unsigned(1 DOWNTO 0);",
             "next_completion_bin_v:=avl_completion_bin+1;",
-            "avl_completion_gray_i<=next_completion_bin_v(1) &",
+        "avl_completion_gray_i<=next_completion_bin_v(1) &",
+		"ATTRIBUTE preserve OF avl_completion_gray_i : SIGNAL IS true;",
             "IF lev_dec_v='1' AND o_completion_pulse='0' THEN",
             "ELSIF lev_dec_v='0' AND o_completion_pulse='1' THEN",
         ):

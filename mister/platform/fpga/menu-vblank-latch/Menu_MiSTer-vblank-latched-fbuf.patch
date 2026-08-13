@@ -257,7 +257,7 @@ diff --git a/sys/ascal.vhd b/sys/ascal.vhd
 index a735e6b..0000000 100644
 --- a/sys/ascal.vhd
 +++ b/sys/ascal.vhd
-@@ -250,6 +250,8 @@ ENTITY ascal IS
+@@ -250,6 +250,13 @@ ENTITY ascal IS
  		avl_address        : OUT   std_logic_vector(N_AW-1 DOWNTO 0);
  		avl_write          : OUT   std_logic;
  		avl_read           : OUT   std_logic;
@@ -271,13 +271,21 @@ index a735e6b..0000000 100644
  		avl_byteenable     : OUT   std_logic_vector(N_DW/8-1 DOWNTO 0);
  
  		------------------------------------
-@@ -418,7 +420,8 @@ ARCHITECTURE rtl OF ascal IS
+@@ -337,6 +344,7 @@ ARCHITECTURE rtl OF ascal IS
+ 	TYPE arr_pixq IS ARRAY(natural RANGE <>) OF arr_pix(0 TO 3);
+ 	ATTRIBUTE ramstyle : string;
++	ATTRIBUTE preserve : boolean;
+ 
+ 	SUBTYPE uint12 IS natural RANGE 0 TO 4095;
+ 	SUBTYPE uint13 IS natural RANGE 0 TO 8191;
+@@ -418,7 +421,9 @@ ARCHITECTURE rtl OF ascal IS
  	SIGNAL avl_walt,avl_wline,avl_rline : std_logic;
  	SIGNAL avl_dw,avl_dr : unsigned(N_DW-1 DOWNTO 0);
  	SIGNAL avl_wr : std_logic;
 -	SIGNAL avl_readdataack,avl_readack : std_logic;
 +	SIGNAL avl_readack : std_logic;
 +	SIGNAL avl_completion_bin,avl_completion_gray_i : unsigned(1 DOWNTO 0);
++	ATTRIBUTE preserve OF avl_completion_gray_i : SIGNAL IS true;
  	SIGNAL avl_radrs,avl_wadrs : unsigned(31 DOWNTO 0);
  	SIGNAL avl_i_offset0,avl_o_offset0 : unsigned(31 DOWNTO 0);
  	SIGNAL avl_i_offset1,avl_o_offset1 : unsigned(31 DOWNTO 0);
