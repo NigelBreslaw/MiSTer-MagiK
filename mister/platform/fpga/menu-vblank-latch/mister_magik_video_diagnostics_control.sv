@@ -12,7 +12,8 @@ module mister_magik_hdmi_lock_evidence (
 	input  wire        hdmi_tx_clk,
 	input  wire        clk_hdmi,
 	input  wire        clk_100m,
-	input  wire [7:0]  evidence_command,
+	input  wire        evidence_valid,
+	input  wire [2:0]  evidence_selector,
 	input  wire        evidence_snapshot,
 	input  wire [3:0]  evidence_word_index,
 	input  wire        hdmi_pll_locked,
@@ -454,85 +455,53 @@ module mister_magik_hdmi_lock_evidence (
 	reg [4:0] evidence_snapshot_flags = 5'd0;
 	reg [15:0] evidence_snapshot_counts = 16'd0;
 	reg [15:0] evidence_snapshot_extra = 16'd0;
+	localparam [2:0] EVIDENCE_LOCK = 3'd0;
+	localparam [2:0] EVIDENCE_OUTPUT = 3'd1;
+	localparam [2:0] EVIDENCE_FINAL = 3'd2;
+	localparam [2:0] EVIDENCE_RAW = 3'd3;
+	localparam [2:0] EVIDENCE_POST = 3'd4;
+	localparam [2:0] EVIDENCE_AVALON = 3'd5;
+	localparam [2:0] EVIDENCE_FETCH = 3'd6;
 
 	always @(*) begin
 		evidence_word = 16'd0;
-		case(evidence_command)
-			MAGIK_UIO_GET_HDMI_EVIDENCE: begin
-				case(evidence_word_index)
-					4'd0: evidence_word = MAGIK_HDMI_EVIDENCE_SCHEMA;
-					4'd1: evidence_word = {11'd0, evidence_snapshot_flags};
-					4'd2: evidence_word = evidence_snapshot_counts;
-					default: evidence_word = 16'd0;
-				endcase
-			end
-			MAGIK_UIO_GET_HDMI_OUTPUT_ACTIVITY: begin
-				case(evidence_word_index)
-					4'd0: evidence_word = MAGIK_HDMI_OUTPUT_ACTIVITY_SCHEMA;
-					4'd1: evidence_word = {11'd0, evidence_snapshot_flags};
-					4'd2: evidence_word = {12'd0, evidence_snapshot_counts[3:0]};
-					4'd3: evidence_word = {12'd0, evidence_snapshot_counts[7:4]};
-					4'd4: evidence_word = {12'd0, evidence_snapshot_extra[3:0]};
-					default: evidence_word = 16'd0;
-				endcase
-			end
-			MAGIK_UIO_GET_HDMI_FINAL_PATH_ACTIVITY: begin
-				case(evidence_word_index)
-					4'd0: evidence_word = MAGIK_HDMI_FINAL_PATH_ACTIVITY_SCHEMA;
-					4'd1: evidence_word = {11'd0, evidence_snapshot_flags};
-					4'd2: evidence_word = evidence_snapshot_counts;
-					4'd3: evidence_word = evidence_snapshot_extra;
-					default: evidence_word = 16'd0;
-				endcase
-			end
-			MAGIK_UIO_GET_HDMI_SCALER_RAW_ACTIVITY: begin
-				case(evidence_word_index)
-					4'd0: evidence_word = MAGIK_HDMI_SCALER_RAW_ACTIVITY_SCHEMA;
-					4'd1: evidence_word = {11'd0, evidence_snapshot_flags};
-					4'd2: evidence_word = evidence_snapshot_counts;
-					default: evidence_word = 16'd0;
-				endcase
-			end
-			MAGIK_UIO_GET_HDMI_POST_OSD_ACTIVITY: begin
-				case(evidence_word_index)
-					4'd0: evidence_word = MAGIK_HDMI_POST_OSD_ACTIVITY_SCHEMA;
-					4'd1: evidence_word = {11'd0, evidence_snapshot_flags};
-					4'd2: evidence_word = evidence_snapshot_counts;
-					default: evidence_word = 16'd0;
-				endcase
-			end
-			MAGIK_UIO_GET_HDMI_AVALON_LIVENESS_ACTIVITY: begin
-				case(evidence_word_index)
-					4'd0: evidence_word = MAGIK_HDMI_AVALON_LIVENESS_ACTIVITY_SCHEMA;
-					4'd1: evidence_word = {11'd0, evidence_snapshot_flags};
-					4'd2: evidence_word = evidence_snapshot_counts;
-					default: evidence_word = 16'd0;
-				endcase
-			end
-			MAGIK_UIO_GET_HDMI_SCALER_FETCH_ACTIVITY: begin
-				case(evidence_word_index)
-					4'd0: evidence_word = MAGIK_HDMI_SCALER_FETCH_ACTIVITY_SCHEMA;
-					4'd1: evidence_word = 16'd0;
-					4'd2: evidence_word = evidence_snapshot_counts;
-					4'd3: evidence_word = {11'd0, evidence_snapshot_flags};
-					default: evidence_word = 16'd0;
-				endcase
-			end
-			default: begin end
-		endcase
+		if(evidence_valid) begin
+			case(evidence_word_index)
+				4'd0: evidence_word = 16'd1;
+				4'd1: evidence_word = (evidence_selector == EVIDENCE_FETCH) ?
+					16'd0 : {11'd0, evidence_snapshot_flags};
+				4'd2: evidence_word = (evidence_selector == EVIDENCE_OUTPUT) ?
+					{12'd0, evidence_snapshot_counts[3:0]} : evidence_snapshot_counts;
+				4'd3: begin
+					case(evidence_selector)
+						EVIDENCE_OUTPUT:
+							evidence_word = {12'd0, evidence_snapshot_counts[7:4]};
+						EVIDENCE_FINAL: evidence_word = evidence_snapshot_extra;
+						EVIDENCE_FETCH:
+							evidence_word = {11'd0, evidence_snapshot_flags};
+						default: evidence_word = 16'd0;
+					endcase
+				end
+				4'd4: begin
+					if(evidence_selector == EVIDENCE_OUTPUT)
+						evidence_word = {12'd0, evidence_snapshot_extra[3:0]};
+				end
+				default: evidence_word = 16'd0;
+			endcase
+		end
 	end
 
 	always @(posedge clk_sys) begin
-		if(evidence_snapshot) begin
+		if(evidence_snapshot && evidence_valid) begin
 			evidence_snapshot_flags <= 5'd0;
 			evidence_snapshot_counts <= 16'd0;
 			evidence_snapshot_extra <= 16'd0;
-			case(evidence_command)
-				MAGIK_UIO_GET_HDMI_EVIDENCE: begin
+			case(evidence_selector)
+				EVIDENCE_LOCK: begin
 					evidence_snapshot_flags <= evidence_flags_next[4:0];
 					evidence_snapshot_counts <= lock_loss_count_next;
 				end
-				MAGIK_UIO_GET_HDMI_OUTPUT_ACTIVITY: begin
+				EVIDENCE_OUTPUT: begin
 					evidence_snapshot_flags <= {3'd0,
 						output_counter_collision_next, output_frame_valid_next};
 					evidence_snapshot_counts <= {8'd0,
@@ -540,7 +509,7 @@ module mister_magik_hdmi_lock_evidence (
 					evidence_snapshot_extra <= {12'd0,
 						output_de_has_nonzero_count_next};
 				end
-				MAGIK_UIO_GET_HDMI_FINAL_PATH_ACTIVITY: begin
+				EVIDENCE_FINAL: begin
 					evidence_snapshot_flags <= {3'd0,
 						output_counter_collision_next, output_frame_valid_next};
 					evidence_snapshot_counts <= {output_de_has_nonzero_count_next,
@@ -548,25 +517,25 @@ module mister_magik_hdmi_lock_evidence (
 						output_black_direct_count_next};
 					evidence_snapshot_extra <= {12'd0, output_no_de_count_next};
 				end
-				MAGIK_UIO_GET_HDMI_SCALER_RAW_ACTIVITY: begin
+				EVIDENCE_RAW: begin
 					evidence_snapshot_flags <= {3'd0,
 						raw_counter_collision_next, raw_frame_valid_next};
 					evidence_snapshot_counts <= {4'd0, raw_nonzero_count_next,
 						raw_all_zero_count_next, raw_no_de_count_next};
 				end
-				MAGIK_UIO_GET_HDMI_POST_OSD_ACTIVITY: begin
+				EVIDENCE_POST: begin
 					evidence_snapshot_flags <= {3'd0,
 						post_counter_collision_next, post_frame_valid_next};
 					evidence_snapshot_counts <= {4'd0, post_nonzero_count_next,
 						post_all_zero_count_next, post_no_de_count_next};
 				end
-				MAGIK_UIO_GET_HDMI_AVALON_LIVENESS_ACTIVITY: begin
+				EVIDENCE_AVALON: begin
 					evidence_snapshot_flags <= {4'd0, avalon_bucket_valid_next};
 					evidence_snapshot_counts <= {avalon_bucket_epoch_next,
 						avalon_returned_count_next, avalon_accepted_count_next,
 						avalon_request_count_next};
 				end
-				MAGIK_UIO_GET_HDMI_SCALER_FETCH_ACTIVITY: begin
+				EVIDENCE_FETCH: begin
 					evidence_snapshot_flags <= {2'd0, scaler_fetch_flags_next};
 					if(scaler_fetch_snapshot_valid_sys)
 						evidence_snapshot_counts <= {8'd0,

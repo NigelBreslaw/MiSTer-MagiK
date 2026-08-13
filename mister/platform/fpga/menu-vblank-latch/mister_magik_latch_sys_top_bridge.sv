@@ -27,7 +27,8 @@ module mister_magik_latch_sys_top_bridge (
 	output wire        apply_accepted,
 	output wire        legacy_write,
 	output wire [3:0]  active_word_index,
-	output wire [7:0]  evidence_command,
+	output wire        evidence_valid,
+	output wire [2:0]  evidence_selector,
 	output wire        evidence_snapshot,
 
 	output wire        route_en,
@@ -60,8 +61,10 @@ module mister_magik_latch_sys_top_bridge (
 	wire command_data = io_uio && io_strobe && has_command;
 	wire [7:0] command_id = has_command ? command : io_din[7:0];
 	assign active_word_index = word_count[3:0];
-	assign evidence_command = command_id;
-	assign evidence_snapshot = command_start;
+	assign evidence_selector = command_id[2:0];
+	assign evidence_valid = (command_id[7:3] == 5'b01100) &&
+		(evidence_selector != 3'b111);
+	assign evidence_snapshot = command_start && evidence_valid;
 	assign legacy_write =
 		command_data && (command == 8'h2f) && (word_count < 8'd10);
 	assign apply_accepted = apply && !legacy_write;

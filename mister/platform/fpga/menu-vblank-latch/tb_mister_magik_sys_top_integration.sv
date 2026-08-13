@@ -60,7 +60,8 @@ module mister_magik_sys_top_latch_path (
 	wire scaler_fetch_starved_frame_toggle;
 	wire scaler_fetch_snapshot_valid;
 	wire scaler_fetch_delta_invalid;
-	wire [7:0] magik_evidence_command;
+	wire magik_evidence_valid;
+	wire [2:0] magik_evidence_selector;
 	wire magik_evidence_snapshot;
 	wire magik_lfb_apply;
 	wire magik_lfb_apply_accepted;
@@ -121,7 +122,8 @@ module mister_magik_sys_top_latch_path (
 		.apply_accepted(magik_lfb_apply_accepted),
 		.legacy_write(legacy_lfb_write),
 		.active_word_index(active_word_index),
-		.evidence_command(magik_evidence_command),
+		.evidence_valid(magik_evidence_valid),
+		.evidence_selector(magik_evidence_selector),
 		.evidence_snapshot(magik_evidence_snapshot),
 		.route_en(magik_lfb_en),
 		.route_flt(magik_lfb_flt),
@@ -149,7 +151,8 @@ module mister_magik_sys_top_latch_path (
 		.hdmi_tx_clk(hdmi_tx_clk),
 		.clk_hdmi(clk_hdmi),
 		.clk_100m(clk_100m),
-		.evidence_command(magik_evidence_command),
+		.evidence_valid(magik_evidence_valid),
+		.evidence_selector(magik_evidence_selector),
 		.evidence_snapshot(magik_evidence_snapshot),
 		.evidence_word_index(active_word_index),
 		.hdmi_pll_locked(hdmi_pll_locked),

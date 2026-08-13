@@ -29,7 +29,8 @@ index a416879..f6a40ea 100644
 +wire [15:0] magik_lfb_reject_count;
 +wire [15:0] magik_lfb_active_route_epoch;
 +wire [15:0] magik_evidence_word;
-+wire  [7:0] magik_evidence_command;
++wire        magik_evidence_valid;
++wire  [2:0] magik_evidence_selector;
 +wire        magik_evidence_snapshot;
 +wire  [3:0] magik_evidence_word_index;
 +wire [1:0]  magik_scaler_completion_gray;
@@ -63,7 +64,8 @@ index a416879..f6a40ea 100644
 +	.apply_accepted(magik_lfb_apply_accepted),
 +	.legacy_write(),
 +	.active_word_index(magik_evidence_word_index),
-+	.evidence_command(magik_evidence_command),
++	.evidence_valid(magik_evidence_valid),
++	.evidence_selector(magik_evidence_selector),
 +	.evidence_snapshot(magik_evidence_snapshot),
 +	.route_en(magik_lfb_en),
 +	.route_flt(magik_lfb_flt),
@@ -92,7 +94,8 @@ index a416879..f6a40ea 100644
 +	.hdmi_tx_clk(hdmi_tx_clk),
 +	.clk_hdmi(clk_hdmi),
 +	.clk_100m(clk_100m),
-+	.evidence_command(magik_evidence_command),
++	.evidence_valid(magik_evidence_valid),
++	.evidence_selector(magik_evidence_selector),
 +	.evidence_snapshot(magik_evidence_snapshot),
 +	.evidence_word_index(magik_evidence_word_index),
 +	.hdmi_pll_locked(hdmi_pll_locked),

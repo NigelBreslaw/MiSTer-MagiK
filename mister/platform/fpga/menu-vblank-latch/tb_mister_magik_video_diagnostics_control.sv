@@ -33,27 +33,36 @@ module mister_magik_hdmi_evidence_test_wrapper (
 	reg [15:0] tx_crc = 16'd0;
 	wire command_start = io_uio && io_strobe && !has_command;
 	wire command_data = io_uio && io_strobe && has_command;
-	wire selected_start = (io_din[7:0] >= MAGIK_UIO_GET_HDMI_EVIDENCE) &&
-		(io_din[7:0] <= MAGIK_UIO_GET_HDMI_SCALER_FETCH_ACTIVITY);
-	wire selected_command = (command >= MAGIK_UIO_GET_HDMI_EVIDENCE) &&
-		(command <= MAGIK_UIO_GET_HDMI_SCALER_FETCH_ACTIVITY);
-	wire [2:0] selected_words =
-		(command == MAGIK_UIO_GET_HDMI_EVIDENCE) ? MAGIK_HDMI_EVIDENCE_WORDS :
-		(command == MAGIK_UIO_GET_HDMI_OUTPUT_ACTIVITY) ?
-			MAGIK_HDMI_OUTPUT_ACTIVITY_WORDS :
-		(command == MAGIK_UIO_GET_HDMI_FINAL_PATH_ACTIVITY) ?
-			MAGIK_HDMI_FINAL_PATH_ACTIVITY_WORDS :
-		(command == MAGIK_UIO_GET_HDMI_SCALER_RAW_ACTIVITY) ?
-			MAGIK_HDMI_SCALER_RAW_ACTIVITY_WORDS :
-		(command == MAGIK_UIO_GET_HDMI_POST_OSD_ACTIVITY) ?
-			MAGIK_HDMI_POST_OSD_ACTIVITY_WORDS :
-		(command == MAGIK_UIO_GET_HDMI_AVALON_LIVENESS_ACTIVITY) ?
-			MAGIK_HDMI_AVALON_LIVENESS_ACTIVITY_WORDS :
-		(command == MAGIK_UIO_GET_HDMI_SCALER_FETCH_ACTIVITY) ?
-			MAGIK_HDMI_SCALER_FETCH_ACTIVITY_WORDS : 3'd0;
+	wire [7:0] selected_id = has_command ? command : io_din[7:0];
+	wire [2:0] selected_selector = selected_id[2:0];
+	wire selected_valid = (selected_id[7:3] == 5'b01100) &&
+		(selected_selector != 3'b111);
+	reg [2:0] selected_words;
+	reg [15:0] selected_header_crc;
+	always @(*) begin
+		selected_words = 3'd0;
+		selected_header_crc = 16'd0;
+		case(selected_selector)
+			3'd0: begin selected_words = MAGIK_HDMI_EVIDENCE_WORDS;
+				selected_header_crc = MAGIK_HDMI_EVIDENCE_HEADER_CRC; end
+			3'd1: begin selected_words = MAGIK_HDMI_OUTPUT_ACTIVITY_WORDS;
+				selected_header_crc = MAGIK_HDMI_OUTPUT_ACTIVITY_HEADER_CRC; end
+			3'd2: begin selected_words = MAGIK_HDMI_FINAL_PATH_ACTIVITY_WORDS;
+				selected_header_crc = MAGIK_HDMI_FINAL_PATH_ACTIVITY_HEADER_CRC; end
+			3'd3: begin selected_words = MAGIK_HDMI_SCALER_RAW_ACTIVITY_WORDS;
+				selected_header_crc = MAGIK_HDMI_SCALER_RAW_ACTIVITY_HEADER_CRC; end
+			3'd4: begin selected_words = MAGIK_HDMI_POST_OSD_ACTIVITY_WORDS;
+				selected_header_crc = MAGIK_HDMI_POST_OSD_ACTIVITY_HEADER_CRC; end
+			3'd5: begin selected_words = MAGIK_HDMI_AVALON_LIVENESS_ACTIVITY_WORDS;
+				selected_header_crc = MAGIK_HDMI_AVALON_LIVENESS_ACTIVITY_HEADER_CRC; end
+			3'd6: begin selected_words = MAGIK_HDMI_SCALER_FETCH_ACTIVITY_WORDS;
+				selected_header_crc = MAGIK_HDMI_SCALER_FETCH_ACTIVITY_HEADER_CRC; end
+			default: begin end
+		endcase
+	end
 	wire [2:0] crc_word_index = selected_words - 1'd1;
-	assign response_valid = (command_start && selected_start) ||
-		(command_data && selected_command && (word_count < selected_words));
+	assign response_valid = (command_start && selected_valid) ||
+		(command_data && selected_valid && (word_count < selected_words));
 
 	function automatic [15:0] crc_byte;
 		input [15:0] crc_in; input [7:0] data;
@@ -73,8 +82,9 @@ module mister_magik_hdmi_evidence_test_wrapper (
 	mister_magik_hdmi_lock_evidence recorder (
 		.clk_sys(clk_sys), .hdmi_tx_clk(hdmi_tx_clk), .clk_hdmi(clk_hdmi),
 		.clk_100m(clk_100m),
-		.evidence_command(has_command ? command : io_din[7:0]),
-		.evidence_snapshot(command_start), .evidence_word_index({1'b0, word_count}),
+		.evidence_valid(selected_valid), .evidence_selector(selected_selector),
+		.evidence_snapshot(command_start && selected_valid),
+		.evidence_word_index({1'b0, word_count}),
 		.hdmi_pll_locked(hdmi_pll_locked), .hdmi_out_vs(hdmi_out_vs),
 		.hdmi_out_de(hdmi_out_de), .hdmi_out_d(hdmi_out_d),
 		.hdmi_out_direct(hdmi_out_direct), .scaler_raw_vs(scaler_raw_vs),
@@ -93,25 +103,10 @@ module mister_magik_hdmi_evidence_test_wrapper (
 
 	always @(*) begin
 		response_data = 16'd0;
-		if(command_start) begin
-			case(io_din[7:0])
-				MAGIK_UIO_GET_HDMI_EVIDENCE: response_data = MAGIK_HDMI_EVIDENCE_MAGIC;
-				MAGIK_UIO_GET_HDMI_OUTPUT_ACTIVITY:
-					response_data = MAGIK_HDMI_OUTPUT_ACTIVITY_MAGIC;
-				MAGIK_UIO_GET_HDMI_FINAL_PATH_ACTIVITY:
-					response_data = MAGIK_HDMI_FINAL_PATH_ACTIVITY_MAGIC;
-				MAGIK_UIO_GET_HDMI_SCALER_RAW_ACTIVITY:
-					response_data = MAGIK_HDMI_SCALER_RAW_ACTIVITY_MAGIC;
-				MAGIK_UIO_GET_HDMI_POST_OSD_ACTIVITY:
-					response_data = MAGIK_HDMI_POST_OSD_ACTIVITY_MAGIC;
-				MAGIK_UIO_GET_HDMI_AVALON_LIVENESS_ACTIVITY:
-					response_data = MAGIK_HDMI_AVALON_LIVENESS_ACTIVITY_MAGIC;
-				MAGIK_UIO_GET_HDMI_SCALER_FETCH_ACTIVITY:
-					response_data = MAGIK_HDMI_SCALER_FETCH_ACTIVITY_MAGIC;
-				default: response_data = 16'd0;
-			endcase
+		if(command_start && selected_valid) begin
+			response_data = {8'h4d, 5'b01010, selected_selector};
 		end
-		else if(command_data && selected_command) begin
+		else if(command_data && selected_valid) begin
 			if(word_count < crc_word_index) response_data = evidence_word;
 			else if(word_count == crc_word_index) response_data = tx_crc;
 		end
@@ -123,24 +118,9 @@ module mister_magik_hdmi_evidence_test_wrapper (
 		end
 		else if(command_start) begin
 			has_command <= 1'b1; command <= io_din[7:0]; word_count <= 3'd0;
-			case(io_din[7:0])
-				MAGIK_UIO_GET_HDMI_EVIDENCE: tx_crc <= MAGIK_HDMI_EVIDENCE_HEADER_CRC;
-				MAGIK_UIO_GET_HDMI_OUTPUT_ACTIVITY:
-					tx_crc <= MAGIK_HDMI_OUTPUT_ACTIVITY_HEADER_CRC;
-				MAGIK_UIO_GET_HDMI_FINAL_PATH_ACTIVITY:
-					tx_crc <= MAGIK_HDMI_FINAL_PATH_ACTIVITY_HEADER_CRC;
-				MAGIK_UIO_GET_HDMI_SCALER_RAW_ACTIVITY:
-					tx_crc <= MAGIK_HDMI_SCALER_RAW_ACTIVITY_HEADER_CRC;
-				MAGIK_UIO_GET_HDMI_POST_OSD_ACTIVITY:
-					tx_crc <= MAGIK_HDMI_POST_OSD_ACTIVITY_HEADER_CRC;
-				MAGIK_UIO_GET_HDMI_AVALON_LIVENESS_ACTIVITY:
-					tx_crc <= MAGIK_HDMI_AVALON_LIVENESS_ACTIVITY_HEADER_CRC;
-				MAGIK_UIO_GET_HDMI_SCALER_FETCH_ACTIVITY:
-					tx_crc <= MAGIK_HDMI_SCALER_FETCH_ACTIVITY_HEADER_CRC;
-				default: tx_crc <= 16'd0;
-			endcase
+			tx_crc <= selected_valid ? selected_header_crc : 16'd0;
 		end
-		else if(command_data && selected_command && (word_count < selected_words)) begin
+		else if(command_data && selected_valid && (word_count < selected_words)) begin
 			word_count <= word_count + 1'd1;
 			if(word_count < crc_word_index) tx_crc <= crc_word(tx_crc, evidence_word);
 		end
@@ -643,6 +623,12 @@ module tb_mister_magik_video_diagnostics_control;
 
 		// The responder must ignore all latch-owned and retired commands.
 		for(opcode = 8'h57; opcode <= 8'h5f; opcode = opcode + 1) begin
+			io_uio = 1'b1;
+			io_din = opcode[15:0]; io_strobe = 1'b1;
+			#1 if(response_valid) $fatal(1, "lock evidence responded to opcode %h", opcode);
+			close_command();
+		end
+		for(opcode = 8'h67; opcode <= 8'h68; opcode = opcode + 1) begin
 			io_uio = 1'b1;
 			io_din = opcode[15:0]; io_strobe = 1'b1;
 			#1 if(response_valid) $fatal(1, "lock evidence responded to opcode %h", opcode);

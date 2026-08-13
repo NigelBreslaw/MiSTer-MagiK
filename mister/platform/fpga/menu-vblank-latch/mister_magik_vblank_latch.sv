@@ -145,61 +145,43 @@ module mister_magik_vblank_latch (
 		(pending ? (16'd1 << MAGIK_STATUS_PENDING) : 16'd0) |
 		(magik_ownership ? (16'd1 << MAGIK_STATUS_MAGIK_OWNERSHIP) : 16'd0);
 
-	wire evidence_command =
-		(cmd_id == MAGIK_UIO_GET_HDMI_EVIDENCE) ||
-		(cmd_id == MAGIK_UIO_GET_HDMI_OUTPUT_ACTIVITY) ||
-		(cmd_id == MAGIK_UIO_GET_HDMI_FINAL_PATH_ACTIVITY) ||
-		(cmd_id == MAGIK_UIO_GET_HDMI_SCALER_RAW_ACTIVITY) ||
-		(cmd_id == MAGIK_UIO_GET_HDMI_POST_OSD_ACTIVITY) ||
-		(cmd_id == MAGIK_UIO_GET_HDMI_AVALON_LIVENESS_ACTIVITY) ||
-		(cmd_id == MAGIK_UIO_GET_HDMI_SCALER_FETCH_ACTIVITY);
-	wire [2:0] evidence_words =
-		(cmd_id == MAGIK_UIO_GET_HDMI_EVIDENCE) ? MAGIK_HDMI_EVIDENCE_WORDS :
-		(cmd_id == MAGIK_UIO_GET_HDMI_OUTPUT_ACTIVITY) ?
-			MAGIK_HDMI_OUTPUT_ACTIVITY_WORDS :
-		(cmd_id == MAGIK_UIO_GET_HDMI_FINAL_PATH_ACTIVITY) ?
-			MAGIK_HDMI_FINAL_PATH_ACTIVITY_WORDS :
-		(cmd_id == MAGIK_UIO_GET_HDMI_SCALER_RAW_ACTIVITY) ?
-			MAGIK_HDMI_SCALER_RAW_ACTIVITY_WORDS :
-		(cmd_id == MAGIK_UIO_GET_HDMI_POST_OSD_ACTIVITY) ?
-			MAGIK_HDMI_POST_OSD_ACTIVITY_WORDS :
-		(cmd_id == MAGIK_UIO_GET_HDMI_AVALON_LIVENESS_ACTIVITY) ?
-			MAGIK_HDMI_AVALON_LIVENESS_ACTIVITY_WORDS :
-		(cmd_id == MAGIK_UIO_GET_HDMI_SCALER_FETCH_ACTIVITY) ?
-			MAGIK_HDMI_SCALER_FETCH_ACTIVITY_WORDS : 3'd0;
+	wire [2:0] evidence_selector = cmd_id[2:0];
+	wire evidence_command = (cmd_id[7:3] == 5'b01100) &&
+		(evidence_selector != 3'b111);
+	reg [2:0] evidence_words;
 	wire [2:0] evidence_crc_word = evidence_words - 1'd1;
-	reg [15:0] evidence_magic;
+	wire [15:0] evidence_magic = {8'h4d, 5'b01010, evidence_selector};
 	reg [15:0] evidence_header_crc;
 	always @(*) begin
-		evidence_magic = 16'd0;
+		evidence_words = 3'd0;
 		evidence_header_crc = 16'd0;
-		case(cmd_id)
-			MAGIK_UIO_GET_HDMI_EVIDENCE: begin
-				evidence_magic = MAGIK_HDMI_EVIDENCE_MAGIC;
+		case(evidence_selector)
+			3'd0: begin
+				evidence_words = MAGIK_HDMI_EVIDENCE_WORDS;
 				evidence_header_crc = MAGIK_HDMI_EVIDENCE_HEADER_CRC;
 			end
-			MAGIK_UIO_GET_HDMI_OUTPUT_ACTIVITY: begin
-				evidence_magic = MAGIK_HDMI_OUTPUT_ACTIVITY_MAGIC;
+			3'd1: begin
+				evidence_words = MAGIK_HDMI_OUTPUT_ACTIVITY_WORDS;
 				evidence_header_crc = MAGIK_HDMI_OUTPUT_ACTIVITY_HEADER_CRC;
 			end
-			MAGIK_UIO_GET_HDMI_FINAL_PATH_ACTIVITY: begin
-				evidence_magic = MAGIK_HDMI_FINAL_PATH_ACTIVITY_MAGIC;
+			3'd2: begin
+				evidence_words = MAGIK_HDMI_FINAL_PATH_ACTIVITY_WORDS;
 				evidence_header_crc = MAGIK_HDMI_FINAL_PATH_ACTIVITY_HEADER_CRC;
 			end
-			MAGIK_UIO_GET_HDMI_SCALER_RAW_ACTIVITY: begin
-				evidence_magic = MAGIK_HDMI_SCALER_RAW_ACTIVITY_MAGIC;
+			3'd3: begin
+				evidence_words = MAGIK_HDMI_SCALER_RAW_ACTIVITY_WORDS;
 				evidence_header_crc = MAGIK_HDMI_SCALER_RAW_ACTIVITY_HEADER_CRC;
 			end
-			MAGIK_UIO_GET_HDMI_POST_OSD_ACTIVITY: begin
-				evidence_magic = MAGIK_HDMI_POST_OSD_ACTIVITY_MAGIC;
+			3'd4: begin
+				evidence_words = MAGIK_HDMI_POST_OSD_ACTIVITY_WORDS;
 				evidence_header_crc = MAGIK_HDMI_POST_OSD_ACTIVITY_HEADER_CRC;
 			end
-			MAGIK_UIO_GET_HDMI_AVALON_LIVENESS_ACTIVITY: begin
-				evidence_magic = MAGIK_HDMI_AVALON_LIVENESS_ACTIVITY_MAGIC;
+			3'd5: begin
+				evidence_words = MAGIK_HDMI_AVALON_LIVENESS_ACTIVITY_WORDS;
 				evidence_header_crc = MAGIK_HDMI_AVALON_LIVENESS_ACTIVITY_HEADER_CRC;
 			end
-			MAGIK_UIO_GET_HDMI_SCALER_FETCH_ACTIVITY: begin
-				evidence_magic = MAGIK_HDMI_SCALER_FETCH_ACTIVITY_MAGIC;
+			3'd6: begin
+				evidence_words = MAGIK_HDMI_SCALER_FETCH_ACTIVITY_WORDS;
 				evidence_header_crc = MAGIK_HDMI_SCALER_FETCH_ACTIVITY_HEADER_CRC;
 			end
 			default: begin end
@@ -274,7 +256,10 @@ module mister_magik_vblank_latch (
 
 	always @(*) begin
 		response_data = 16'd0;
-		if(cmd_start) begin
+		if(cmd_start && evidence_command) begin
+			response_data = evidence_magic;
+		end
+		else if(cmd_start) begin
 			case(cmd_id)
 				MAGIK_UIO_SET_FBUF_LATCH: response_data = MAGIK_FBUF_LATCH_MAGIC;
 				MAGIK_UIO_GET_FBUF_LATCH: response_data = MAGIK_FBUF_STATUS_MAGIC;
@@ -285,14 +270,6 @@ module mister_magik_vblank_latch (
 					response_data = MAGIK_FBUF_RECEIPT_MAGIC;
 				MAGIK_UIO_GET_FBUF_PRESENTATION_TELEMETRY:
 					response_data = MAGIK_FBUF_PRESENTATION_TELEMETRY_MAGIC;
-				MAGIK_UIO_GET_HDMI_EVIDENCE,
-				MAGIK_UIO_GET_HDMI_OUTPUT_ACTIVITY,
-				MAGIK_UIO_GET_HDMI_FINAL_PATH_ACTIVITY,
-				MAGIK_UIO_GET_HDMI_SCALER_RAW_ACTIVITY,
-				MAGIK_UIO_GET_HDMI_POST_OSD_ACTIVITY,
-				MAGIK_UIO_GET_HDMI_AVALON_LIVENESS_ACTIVITY,
-				MAGIK_UIO_GET_HDMI_SCALER_FETCH_ACTIVITY:
-					response_data = evidence_magic;
 				default: response_data = 16'd0;
 			endcase
 		end
