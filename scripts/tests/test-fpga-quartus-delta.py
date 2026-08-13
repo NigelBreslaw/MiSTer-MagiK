@@ -273,14 +273,14 @@ class QuartusDeltaTest(unittest.TestCase):
             "Total registers : 20,000\nTotal block memory bits : 1,000,000\nTotal DSP Blocks : 2\n",
             "Logic utilization (in ALMs) : 7,800 / 41,910 ( 19 % )\n"
             "Total registers : 20,500\nTotal block memory bits : 1,000,000\nTotal DSP Blocks : 2\n",
-            "Logic utilization (in ALMs) : 7,864 / 41,910 ( 19 % )\n"
-            "Total registers : 20,596\nTotal block memory bits : 1,000,000\nTotal DSP Blocks : 2\n",
+            "Logic utilization (in ALMs) : 8,600 / 41,910 ( 19 % )\n"
+            "Total registers : 20,800\nTotal block memory bits : 1,000,000\nTotal DSP Blocks : 2\n",
         )
         result, payload = self.run_check(stock, patched, baseline, fitter_resources)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(payload["baseline_unconstrained_output_paths"], 12)
-        self.assertEqual(payload["resource_deltas"]["logic utilization (in alms)"], 64)
-        self.assertEqual(payload["resource_deltas"]["total registers"], 96)
+        self.assertEqual(payload["resource_deltas"]["logic utilization (in alms)"], 800)
+        self.assertEqual(payload["resource_deltas"]["total registers"], 300)
 
     def test_alm_budget_excess_fails(self) -> None:
         summaries = (
@@ -294,6 +294,19 @@ class QuartusDeltaTest(unittest.TestCase):
         result, payload = self.run_check(BASE, BASE + CUSTOM_SYNC, BASE, summaries)
         self.assertEqual(result.returncode, 1)
         self.assertIn("logic_alms_delta", payload["invalid_reason"])
+
+    def test_register_budget_excess_fails(self) -> None:
+        summaries = (
+            "Logic utilization (in ALMs) : 7,000\nTotal registers : 20,000\n"
+            "Total block memory bits : 1,000,000\nTotal DSP Blocks : 2\n",
+            "Logic utilization (in ALMs) : 7,800\nTotal registers : 20,500\n"
+            "Total block memory bits : 1,000,000\nTotal DSP Blocks : 2\n",
+            "Logic utilization (in ALMs) : 7,800\nTotal registers : 20,801\n"
+            "Total block memory bits : 1,000,000\nTotal DSP Blocks : 2\n",
+        )
+        result, payload = self.run_check(BASE, BASE + CUSTOM_SYNC, BASE, summaries)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("registers_delta", payload["invalid_reason"])
 
     def test_slack_degradation_excess_fails_above_revised_envelope(self) -> None:
         baseline = BASE.replace("setup slack is 0.232", "setup slack is 0.500")

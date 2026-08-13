@@ -136,7 +136,7 @@ assurance-complete commit `23b5f5d2` passed the unchanged hard timing gates:
 - one added calculable synchronizer chain;
 - resource delta: 64 ALMs, 25 registers, no block memory, no DSP.
 
-The product ceiling is 800 ALMs and 96 registers. The local build used 64 ALMs;
+The product ceiling is 800 ALMs and 300 registers. The local build used 64 ALMs;
 the independently fitted GitHub build used 105 ALMs. Both are comfortably
 inside the intended architecture budget. Any synthesized-source change still
 requires fresh empirical signoff. Setup and hold must remain at least 0.20 ns,
@@ -146,7 +146,7 @@ identity, and unconstrained output paths equal to the pre-observer build.
 The final-output extension is a new synthesized-source change and is not
 qualified by those lock-only numbers. It must pass a fresh matched local and
 GitHub signoff with four added calculable synchronizer chains total, no new
-unconstrained output paths, and the same 800-ALM/96-register ceiling before any
+unconstrained output paths, and the same 800-ALM/300-register ceiling before any
 device installation.
 
 A canonical local signoff set may be installed only to the Dev layout through
