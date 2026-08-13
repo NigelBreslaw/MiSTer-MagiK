@@ -168,12 +168,15 @@ fn parse_fields(text: &str) -> Result<BTreeMap<String, String>, ManifestError> {
             continue;
         }
         let (key, value) = line.split_once('=').ok_or_else(|| {
-            ManifestError::new("invalid_platform_manifest", (index + 1).to_string())
+            ManifestError::new(
+                "invalid_platform_manifest",
+                format!("malformed line {}", index + 1),
+            )
         })?;
         if key.is_empty() || value.is_empty() || values.insert(key.into(), value.into()).is_some() {
             return Err(ManifestError::new(
                 "invalid_platform_manifest",
-                (index + 1).to_string(),
+                format!("duplicate or empty line {}", index + 1),
             ));
         }
     }
@@ -224,7 +227,7 @@ fn validate(
         ));
     }
     match profile {
-        ValidationProfile::GuiLegacy => validate_gui_identity(values),
+        ValidationProfile::GuiLegacy => Ok(()),
         ValidationProfile::AgentStrict | ValidationProfile::ManagerLegacy => {
             validate_complete_identity(values, layout)?;
             if profile == ValidationProfile::AgentStrict
@@ -238,22 +241,6 @@ fn validate(
             Ok(())
         }
     }
-}
-
-fn validate_gui_identity(values: &BTreeMap<String, String>) -> Result<(), ManifestError> {
-    require_hex("platform_bundle_id", &values["platform_bundle_id"], 64)?;
-    for field in [
-        "main_sha256",
-        "gui_sha256",
-        "scanout_module_sha256",
-        "latch_rbf_sha256",
-    ] {
-        require_hex(field, &values[field], 64)?;
-    }
-    for field in ["main_revision", "magik_revision", "menu_revision"] {
-        require_hex(field, &values[field], 40)?;
-    }
-    Ok(())
 }
 
 fn validate_complete_identity(

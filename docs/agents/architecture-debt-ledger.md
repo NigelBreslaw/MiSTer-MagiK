@@ -88,7 +88,6 @@ not removed by this core adoption alone.
 | `agent-cli/src/host/platform_deploy.rs` | Enforce contract and agent adoption |
 | `agent-cli/src/deploy.rs` | Enforce contract and agent adoption |
 | `agent-cli/src/local_main_delivery.rs` | Enforce contract and agent adoption |
-| `apps/mister/src/diagnostic_identity.rs` | Enforce GUI adoption |
 | `mister/tools/manager/src/main.rs` | Enforce manager adoption |
 | `crates/catalog/src/device_layout.rs` | Enforce installed-layout adoption, before Type path overrides |
 | `scripts/MiSTer-MagiK.sh` | Enforce generated non-Rust consumers |

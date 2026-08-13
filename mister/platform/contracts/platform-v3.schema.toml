@@ -77,11 +77,6 @@ role = "local Main overlay fixture"
 markers = ["mister-magik-platform-v3", "latch_capability_mask"]
 
 [[legacy_consumer]]
-path = "apps/mister/src/diagnostic_identity.rs"
-role = "GUI diagnostic platform identity"
-markers = ["mister-magik-platform-v3", "platform-v3.manifest", "qualification_candidate_id"]
-
-[[legacy_consumer]]
 path = "mister/tools/manager/src/main.rs"
 role = "installer manager public-layout verification"
 markers = ["mister-magik-platform-v3", "platform_release_number", "/media/fat/mister-magik/mister-magik-manager"]

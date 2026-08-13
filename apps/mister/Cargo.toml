@@ -49,6 +49,7 @@ mister-magik-framebuffer-scenes = { path = "../../crates/framebuffer-scenes" }
 mister-magik-scanout-contract = { path = "../../mister/platform/contracts/scanout" }
 mister-magik-media-contract = { path = "../../crates/media-contract", default-features = false }
 mister-magik-latch-contract = { path = "../../mister/platform/contracts/latch" }
+mister-magik-platform-manifest-contract = { path = "../../mister/platform/contracts/manifest" }
 # The runtime owns scanout-slot copy fast paths and their geometry fallbacks.
 mister-magik-mister-runtime = { path = "../../mister/platform/runtime", default-features = false, features = ["app-runtime"] }
 mister-magik-particles = { path = "../../crates/particles" }

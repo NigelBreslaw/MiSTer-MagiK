@@ -3,16 +3,15 @@
 
 //! Immutable installed-platform identity attached to operational evidence.
 
+use mister_magik_platform_manifest_contract::{
+    Layout, ManifestError, ParsedManifest, ValidationProfile,
+};
 use serde::Serialize;
-use std::collections::BTreeMap;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
 use std::time::{SystemTime, UNIX_EPOCH};
-
-const MANIFEST_FORMAT: &str = "mister-magik-platform-v3";
-const MANIFEST_FILE: &str = "platform-v3.manifest";
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -115,7 +114,9 @@ fn load_current() -> DiagnosticIdentity {
         source_dirty: build.source_dirty,
         binary_sha256,
     };
-    let manifest_path = mister_magik_catalog::device_layout::current_app_path(MANIFEST_FILE);
+    let manifest_path = mister_magik_catalog::device_layout::current_app_path(
+        mister_magik_platform_manifest_contract::FILE_NAME,
+    );
     match load_platform(&manifest_path, &runtime) {
         Ok(platform) => DiagnosticIdentity {
             classification: IdentityClassification::Candidate,
@@ -148,7 +149,13 @@ fn load_platform(
         .map_err(|error| (format!("manifest unavailable: {error}"), None))?;
     let manifest_sha256 =
         digest(manifest_path).map_err(|error| (format!("manifest hash failed: {error}"), None))?;
-    let values = parse_fields(&text).map_err(|error| (error, None))?;
+    let layout = match mister_magik_catalog::device_layout::DeviceLayout::current() {
+        mister_magik_catalog::device_layout::DeviceLayout::Public => Layout::Public,
+        mister_magik_catalog::device_layout::DeviceLayout::Dev => Layout::Development,
+    };
+    let values =
+        mister_magik_platform_manifest_contract::parse(&text, layout, ValidationProfile::GuiLegacy)
+            .map_err(|error| (legacy_parse_error(&error), None))?;
     let platform = PlatformIdentity {
         release_tag: required(&values, "platform_release")?.to_owned(),
         release_number: required(&values, "platform_release_number")?
@@ -169,11 +176,7 @@ fn load_platform(
             .map_err(|_| ("invalid latch protocol version".to_owned(), None))?,
         latch_capability_mask: required(&values, "latch_capability_mask")?.to_owned(),
     };
-    let invalid = values.get("format").map(String::as_str) != Some(MANIFEST_FORMAT)
-        || platform.release_tag != format!("platform-v0.{}", platform.release_number)
-        || platform.latch_protocol_version != 5
-        || platform.latch_capability_mask != "0x03ff"
-        || runtime.binary_sha256.as_ref() != Some(&platform.runtime_sha256)
+    let invalid = runtime.binary_sha256.as_ref() != Some(&platform.runtime_sha256)
         || runtime.source_revision != platform.magik_revision;
     if invalid {
         return Err((
@@ -198,27 +201,20 @@ fn load_platform(
     Ok(platform)
 }
 
-fn parse_fields(text: &str) -> Result<BTreeMap<String, String>, String> {
-    let mut values = BTreeMap::new();
-    for line in text.lines().filter(|line| !line.is_empty()) {
-        let (key, value) = line
-            .split_once('=')
-            .ok_or_else(|| "malformed platform manifest".to_owned())?;
-        if key.is_empty() || value.is_empty() || values.insert(key.into(), value.into()).is_some() {
-            return Err("duplicate or empty platform manifest field".to_owned());
-        }
-    }
-    Ok(values)
-}
-
-fn required<'a>(
-    values: &'a BTreeMap<String, String>,
-    field: &str,
-) -> Result<&'a str, IdentityLoadError> {
+fn required<'a>(values: &'a ParsedManifest, field: &str) -> Result<&'a str, IdentityLoadError> {
     values
         .get(field)
-        .map(String::as_str)
         .ok_or_else(|| (format!("platform manifest missing {field}"), None))
+}
+
+fn legacy_parse_error(error: &ManifestError) -> String {
+    if error.detail().starts_with("duplicate or empty") {
+        "duplicate or empty platform manifest field".to_owned()
+    } else if error.code() == "invalid_platform_manifest" {
+        "malformed platform manifest".to_owned()
+    } else {
+        "installed tuple does not match its v3 manifest".to_owned()
+    }
 }
 
 fn digest(path: &Path) -> io::Result<String> {
