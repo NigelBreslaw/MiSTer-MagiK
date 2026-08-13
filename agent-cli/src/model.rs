@@ -137,6 +137,7 @@ pub enum BuiltinOperation {
     LicenseHeaders,
     ShellOwnership,
     RuntimeEnvironment,
+    PlatformManifestAuthority,
     DistributionWorkflow,
     KernelWorkflow,
     PlatformWorkflow,

@@ -1,0 +1,117 @@
+# Copyright (C) 2026 Nigel Breslaw
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+format = "mister-magik-platform-v3-schema-v1"
+manifest_format = "mister-magik-platform-v3"
+file_name = "platform-v3.manifest"
+latch_protocol_version = "5"
+latch_capability_mask = "0x03ff"
+future_contract_crate = "platform-manifest-contract"
+behavioral_authority = "agent-cli/src/platform_manifest.rs"
+fields = [
+  "format",
+  "platform_release",
+  "platform_release_number",
+  "platform_bundle_id",
+  "qualification_candidate_id",
+  "latch_protocol_version",
+  "latch_capability_mask",
+  "main_path",
+  "gui_path",
+  "manager_path",
+  "scanout_module_path",
+  "scanout_metadata_path",
+  "latch_rbf_path",
+  "latch_metadata_path",
+  "main_sha256",
+  "gui_sha256",
+  "manager_sha256",
+  "scanout_module_sha256",
+  "scanout_metadata_sha256",
+  "latch_rbf_sha256",
+  "latch_metadata_sha256",
+  "platform_contract_sha256",
+  "main_revision",
+  "magik_revision",
+  "menu_revision",
+]
+
+[layouts.public]
+root = "/media/fat/mister-magik"
+main = "/media/fat/MiSTer_MagiK"
+gui = "/media/fat/mister-magik/mister-magik-fb"
+manager = "/media/fat/mister-magik/mister-magik-manager"
+scanout_module = "/media/fat/mister-magik/mister_magik_scanout_slots.ko"
+scanout_metadata = "/media/fat/mister-magik/mister_magik_scanout_slots.metadata.txt"
+latch_rbf = "/media/fat/mister-magik/fpga/menu-magik-vblank-latch.rbf"
+latch_metadata = "/media/fat/mister-magik/fpga/menu-magik-vblank-latch.metadata.txt"
+
+[layouts.dev]
+root = "/media/fat/mister-magik-dev"
+main = "/media/fat/MiSTer_MagiKDev"
+gui = "/media/fat/mister-magik-dev/mister-magik-fb"
+manager = "/media/fat/mister-magik-dev/mister-magik-manager"
+scanout_module = "/media/fat/mister-magik-dev/mister_magik_scanout_slots.ko"
+scanout_metadata = "/media/fat/mister-magik-dev/mister_magik_scanout_slots.metadata.txt"
+latch_rbf = "/media/fat/mister-magik-dev/fpga/menu-magik-vblank-latch.rbf"
+latch_metadata = "/media/fat/mister-magik-dev/fpga/menu-magik-vblank-latch.metadata.txt"
+
+[[legacy_consumer]]
+path = "agent-cli/src/host/mod.rs"
+role = "host runtime parsing and Dev transaction paths"
+markers = ["mister-magik-platform-v3", "platform_release_number", "/media/fat/mister-magik-dev/platform-v3.manifest"]
+
+[[legacy_consumer]]
+path = "agent-cli/src/host/platform_deploy.rs"
+role = "deployment verifier and staged Dev paths"
+markers = ["mister-magik-platform-v3", "main_sha256", "/media/fat/mister-magik-dev/mister-magik-fb"]
+
+[[legacy_consumer]]
+path = "agent-cli/src/deploy.rs"
+role = "deployment fixtures pending shared contract adoption"
+markers = ["mister-magik-platform-v3", "qualification_candidate_id"]
+
+[[legacy_consumer]]
+path = "agent-cli/src/local_main_delivery.rs"
+role = "local Main overlay fixture"
+markers = ["mister-magik-platform-v3", "latch_capability_mask"]
+
+[[legacy_consumer]]
+path = "apps/mister/src/diagnostic_identity.rs"
+role = "GUI diagnostic platform identity"
+markers = ["mister-magik-platform-v3", "platform-v3.manifest", "qualification_candidate_id"]
+
+[[legacy_consumer]]
+path = "mister/tools/manager/src/main.rs"
+role = "installer manager public-layout verification"
+markers = ["mister-magik-platform-v3", "platform_release_number", "/media/fat/mister-magik/mister-magik-manager"]
+
+[[legacy_consumer]]
+path = "crates/catalog/src/device_layout.rs"
+role = "catalog public and Dev installed-root selection"
+markers = ["/media/fat/mister-magik", "/media/fat/mister-magik-dev", "/media/fat/MiSTer_MagiK", "/media/fat/MiSTer_MagiKDev"]
+
+[[legacy_consumer]]
+path = "scripts/MiSTer-MagiK.sh"
+role = "stable installer entrypoint manager verification"
+markers = ["platform-v3.manifest", "manager_path", "manager_sha256"]
+
+[[legacy_consumer]]
+path = "scripts/package-distribution.sh"
+role = "public distribution package layout"
+markers = ["mister-magik/platform-v3.manifest", "--platform-manifest"]
+
+[[legacy_consumer]]
+path = "scripts/release/check-host.sh"
+role = "release package fixture"
+markers = ["platform-v3.manifest", "manager_path", "/media/fat/mister-magik/mister-magik-manager"]
+
+[[legacy_consumer]]
+path = ".github/workflows/distribution.yml"
+role = "release manifest generation and verification"
+markers = ["build/platform-v3.manifest", "--platform-manifest"]
+
+[[legacy_consumer]]
+path = "scripts/tests/test-embedded-catalog-release.py"
+role = "release fixture asserting the canonical manifest format"
+markers = ["mister-magik-platform-v3", "platform-v3.manifest"]

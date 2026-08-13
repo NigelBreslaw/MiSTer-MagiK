@@ -242,6 +242,19 @@ fn add_path_operations(
             "runtime environment source or registry changed → control growth contract",
         ));
     }
+    if path == Path::new("mister/platform/contracts/platform-v3.schema.toml")
+        || path == Path::new("mister/platform/fpga/menu-vblank-latch/latch-protocol.json")
+        || path.extension().and_then(|extension| extension.to_str()) == Some("rs")
+        || path.starts_with("scripts")
+        || path.starts_with(".github/workflows")
+    {
+        add(builtin(
+            "repo.platform-manifest-authority",
+            "Check platform manifest authority",
+            BuiltinOperation::PlatformManifestAuthority,
+            "platform contract or maintained consumer changed → platform-v3 duplication guard",
+        ));
+    }
     if path.file_name().and_then(|name| name.to_str()) == Some("AGENTS.md")
         || path.starts_with("docs/agents")
     {
@@ -2244,6 +2257,29 @@ mod tests {
             .collect();
         assert_eq!(operations.len(), 1);
         assert_eq!(operations[0].id, "repo.runtime-environment");
+    }
+
+    #[test]
+    fn platform_consumers_and_descriptor_select_authority_guard_once() {
+        let plan = affected_plan(
+            AssuranceRequest::Plan {
+                scope: Scope::Paths(vec![]),
+            },
+            vec![
+                "apps/mister/src/diagnostic_identity.rs".into(),
+                "mister/platform/contracts/platform-v3.schema.toml".into(),
+            ],
+        )
+        .unwrap();
+        let operations: Vec<_> = plan
+            .operations
+            .iter()
+            .filter(|operation| {
+                operation.builtin == Some(BuiltinOperation::PlatformManifestAuthority)
+            })
+            .collect();
+        assert_eq!(operations.len(), 1);
+        assert_eq!(operations[0].id, "repo.platform-manifest-authority");
     }
 
     #[test]
