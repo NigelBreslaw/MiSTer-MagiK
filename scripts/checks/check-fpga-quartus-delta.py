@@ -66,7 +66,7 @@ EXPECTED_OBSERVER_CALCULABLE_CHAINS = 16
 EXPECTED_QUARTUS_POLICY = {
     "auto_parallel_synthesis": "off",
     "parallel_synthesis": "off",
-    "num_parallel_processors": "1",
+    "num_parallel_processors": "4",
 }
 EXPECTED_SYNC_ASSIGNMENT_SUFFIXES = (
     "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|control_pll_lock_meta",
@@ -412,7 +412,7 @@ def compare(
             reasons.append("quartus_policy_mismatch")
         processor_use = report["quartus_processor_use"]
         assert isinstance(processor_use, list)
-        if not processor_use or any(used != 1 for used, _detected in processor_use):
+        if not processor_use or any(used != 4 for used, _detected in processor_use):
             reasons.append("quartus_processor_use_mismatch")
     # Warning, constraint-identity, and CDC checks describe functional drift
     # from upstream Menu. Observer cost is the final build relative to the

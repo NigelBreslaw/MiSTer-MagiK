@@ -15,7 +15,7 @@ parallel-synthesis defaults enabled and exposed four processors. The seed and
 source hashes therefore did not describe all implementation inputs.
 
 The correction makes one tracked preparation script authoritative for local
-and GitHub Menu checkouts, fixes `NUM_PARALLEL_PROCESSORS` to one, disables both
+and GitHub Menu checkouts, fixes `NUM_PARALLEL_PROCESSORS` to four, disables both
 parallel-synthesis settings, and binds the synthesis revision date,
 preparation-script blob, processor count, and complete synthesis component ID
 into the local per-variant cache marker. The delta checker requires the same

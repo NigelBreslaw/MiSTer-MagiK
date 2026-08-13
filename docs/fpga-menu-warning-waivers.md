@@ -2,7 +2,7 @@
 
 The stock and patched builds must use the same pinned Menu commit, Quartus
 17.0.0.595, canonical seed 2, build date, project settings, and source tree.
-All three matched variants use one Quartus processor with parallel synthesis
+All three matched variants use four Quartus processors with parallel synthesis
 disabled. A shared preparation script applies those settings and the required
 asynchronous clock-group correction in both local and GitHub builds. Cache
 identity binds the preparation script, build date, processor count, and full

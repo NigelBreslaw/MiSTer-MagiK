@@ -501,7 +501,7 @@ jobs:
       QUARTUS_CACHE_DIR: ${{ github.workspace }}/build/quartus-lite-17.0
       QUARTUS_DOCKER_BASE_IMAGE: ubuntu:18.04
       QUARTUS_DOCKER_IMAGE: mister-magik-quartus-runtime:ubuntu18-amd64
-      QUARTUS_DOCKER_CPUS: "1"
+      QUARTUS_DOCKER_CPUS: "4"
       QUARTUS_DOCKER_MEMORY: "0"
       QUARTUS_R2_ACCOUNT_ID: ${{ vars.QUARTUS_R2_ACCOUNT_ID }}
       QUARTUS_R2_BUCKET: ${{ vars.QUARTUS_R2_BUCKET || 'mister-magik-ci-cache' }}
@@ -698,7 +698,7 @@ jobs:
               echo "unexpected Menu source modification in $flavour metadata" >&2
               exit 1
             fi
-            printf 'analysis_constraint_override=clock_groups_exclusive_to_asynchronous\nquartus_processors=1\nparallel_synthesis=off\nauto_parallel_synthesis=off\ncomponent_input_sha256=%s\ncomponent_revision=%s\n' \
+            printf 'analysis_constraint_override=clock_groups_exclusive_to_asynchronous\nquartus_processors=4\nparallel_synthesis=off\nauto_parallel_synthesis=off\ncomponent_input_sha256=%s\ncomponent_revision=%s\n' \
               "$COMPONENT_ID" "$COMPONENT_REVISION" >> "$metadata"
           done
           printf 'report_sha256.reports/quartus-delta-signoff.tsv=%s\nsignoff_valid=1\n' \

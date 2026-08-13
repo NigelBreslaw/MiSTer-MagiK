@@ -36,7 +36,7 @@ def main() -> int:
     replace_exactly_once(
         qsf,
         "set_global_assignment -name NUM_PARALLEL_PROCESSORS ALL",
-        "set_global_assignment -name NUM_PARALLEL_PROCESSORS 1",
+        "set_global_assignment -name NUM_PARALLEL_PROCESSORS 4",
     )
 
     source = qsf.read_text(encoding="utf-8")

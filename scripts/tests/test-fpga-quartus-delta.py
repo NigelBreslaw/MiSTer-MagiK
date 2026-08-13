@@ -35,9 +35,9 @@ Total registers: 20,000
 Total block memory bits: 1,000,000
 Total DSP Blocks: 2
 ; AUTO_PARALLEL_SYNTHESIS ; Off ; On ; -- ; -- ;
-; NUM_PARALLEL_PROCESSORS ; 1 ; -- ; -- ; -- ;
+; NUM_PARALLEL_PROCESSORS ; 4 ; -- ; -- ; -- ;
 ; PARALLEL_SYNTHESIS ; Off ; On ; -- ; -- ;
-Info (20030): Parallel compilation is enabled and will use 1 of the 4 processors detected
+Info (20030): Parallel compilation is enabled and will use 4 of the 4 processors detected
 """
 
 CONTROL_SYNC_NAMES = (
@@ -190,8 +190,8 @@ class QuartusDeltaTest(unittest.TestCase):
 
     def test_quartus_policy_mismatch_fails(self) -> None:
         patched = (BASE + CUSTOM_SYNC).replace(
-            "; NUM_PARALLEL_PROCESSORS ; 1 ;",
             "; NUM_PARALLEL_PROCESSORS ; 4 ;",
+            "; NUM_PARALLEL_PROCESSORS ; 9 ;",
         )
         result, payload = self.run_check(BASE, patched)
         self.assertEqual(result.returncode, 1)
@@ -199,8 +199,8 @@ class QuartusDeltaTest(unittest.TestCase):
 
     def test_quartus_processor_use_mismatch_fails(self) -> None:
         patched = (BASE + CUSTOM_SYNC).replace(
-            "will use 1 of the 4 processors detected",
             "will use 4 of the 4 processors detected",
+            "will use 9 of the 9 processors detected",
         )
         result, payload = self.run_check(BASE, patched)
         self.assertEqual(result.returncode, 1)

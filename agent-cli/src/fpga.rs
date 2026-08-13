@@ -21,7 +21,7 @@ const SIGNOFF_FORMAT: &str = "mister-magik-local-fpga-signoff-v4";
 const VARIANT_CACHE_MARKER: &str = "local-signoff-input-v4.txt";
 const QUARTUS_IMAGE: &str = "mister-magik-quartus17-apple:ubuntu18-amd64";
 const QUARTUS_VERSION: &str = "17.0.0 Build 595";
-const QUARTUS_PROCESSORS: &str = "1";
+const QUARTUS_PROCESSORS: &str = "4";
 const QUARTUS_SEED_SOURCE: &str =
     include_str!("../../mister/platform/fpga/menu-vblank-latch/Quartus.seed");
 const BUILD_DEADLINE: Duration = Duration::from_secs(3 * 60 * 60);
@@ -780,7 +780,7 @@ mod tests {
         assert_eq!(seed, "2");
         assert!(manifest.contains("quartus_seed=2"));
         assert!(manifest.contains("build_date=260813"));
-        assert!(manifest.contains("quartus_processors=1"));
+        assert!(manifest.contains("quartus_processors=4"));
         assert!(manifest.contains("parallel_synthesis=off"));
         assert!(manifest.contains("auto_parallel_synthesis=off"));
         assert!(manifest.contains("menu_clock_groups=asynchronous"));
