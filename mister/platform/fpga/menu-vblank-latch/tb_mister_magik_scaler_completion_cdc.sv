@@ -17,18 +17,22 @@ module tb_mister_magik_scaler_completion_cdc;
 	reg legacy_sync_previous = 1'b0;
 	integer legacy_completion_count = 0;
 	integer recovered_completion_count = 0;
-	wire [1:0] completion_count;
+	wire completion_pulse;
 	wire [1:0] consumed_completion_gray;
-	wire [1:0] maximum_completion_batch;
+	wire completion_batch_two_toggle;
 	wire completion_delta_invalid;
+	reg batch_two_previous = 1'b0;
+	integer batch_two_count = 0;
+	reg lev_dec = 1'b0;
+	integer modeled_copy_level = 0;
 
 	mister_magik_scaler_completion_cdc dut (
 		.destination_clk(destination_clk),
 		.reset_n(reset_n),
 		.source_completion_gray(source_completion_gray),
-		.completion_count(completion_count),
+		.completion_pulse(completion_pulse),
 		.consumed_completion_gray(consumed_completion_gray),
-		.maximum_completion_batch(maximum_completion_batch),
+		.completion_batch_two_toggle(completion_batch_two_toggle),
 		.completion_delta_invalid(completion_delta_invalid)
 	);
 
@@ -54,12 +58,33 @@ module tb_mister_magik_scaler_completion_cdc;
 		end
 	end
 
+	// Faithful model of the restored legacy ascal COPYLEV truth table.
 	always @(posedge destination_clk or negedge reset_n) begin
 		if(!reset_n)
+			modeled_copy_level <= 0;
+		else if(lev_dec && !completion_pulse) begin
+			if(modeled_copy_level > 0)
+				modeled_copy_level <= modeled_copy_level - 1;
+		end
+		else if(!lev_dec && completion_pulse) begin
+			if(modeled_copy_level < 2)
+				modeled_copy_level <= modeled_copy_level + 1;
+		end
+	end
+
+	always @(posedge destination_clk or negedge reset_n) begin
+		if(!reset_n) begin
 			recovered_completion_count <= 0;
-		else
+			batch_two_previous <= 1'b0;
+			batch_two_count <= 0;
+		end
+		else begin
 			recovered_completion_count <=
-				recovered_completion_count + completion_count;
+				recovered_completion_count + completion_pulse;
+			batch_two_previous <= completion_batch_two_toggle;
+			if(completion_batch_two_toggle != batch_two_previous)
+				batch_two_count <= batch_two_count + 1;
+		end
 	end
 
 	task automatic source_completion;
@@ -93,10 +118,23 @@ module tb_mister_magik_scaler_completion_cdc;
 		if(recovered_completion_count != 2)
 			$fatal(1, "Gray transport recovered %0d completions, expected 2",
 				recovered_completion_count);
-		if(maximum_completion_batch != 2)
-			$fatal(1, "maximum batch %0d, expected skip-by-two", maximum_completion_batch);
+		if(batch_two_count != 1)
+			$fatal(1, "batch-two evidence count %0d, expected 1", batch_two_count);
 		if(completion_delta_invalid)
 			$fatal(1, "valid skip-by-two was classified as invalid");
+		if(modeled_copy_level != 2)
+			$fatal(1, "serialized recovered credits did not fill both copy slots");
+
+		// A copy finishing while a new completion pulse is sampled is net zero,
+		// exactly matching the legacy scaler behavior.
+		source_completion();
+		wait(completion_pulse == 1'b1);
+		@(negedge destination_clk);
+		lev_dec = 1'b1;
+		@(negedge destination_clk);
+		lev_dec = 1'b0;
+		if(modeled_copy_level != 2)
+			$fatal(1, "simultaneous completion/copy did not hold copy level");
 
 		// A single completion while stopped remains an ordinary delta of one.
 		destination_clock_enabled = 1'b0;
@@ -104,8 +142,30 @@ module tb_mister_magik_scaler_completion_cdc;
 		repeat(8) @(posedge source_clk);
 		destination_clock_enabled = 1'b1;
 		repeat(8) @(posedge destination_clk);
-		if(recovered_completion_count != 3)
+		if(recovered_completion_count != 4)
 			$fatal(1, "single stopped-clock completion was not retained");
+
+		// Source is now at binary 0. Advance once with normal sampling, then
+		// stop across two completions to exercise modulo wrap 1 -> 3.
+		source_completion();
+		repeat(8) @(posedge destination_clk);
+		destination_clock_enabled = 1'b0;
+		source_completion();
+		repeat(128) @(posedge source_clk);
+		source_completion();
+		destination_clock_enabled = 1'b1;
+		repeat(10) @(posedge destination_clk);
+		if(recovered_completion_count != 7)
+			$fatal(1, "modulo-wrap completion recovery failed");
+
+		// When a destination sample occurs between completions, the same pair
+		// arrives as two ordinary delta-one observations rather than one batch.
+		source_completion();
+		repeat(5) @(posedge destination_clk);
+		source_completion();
+		repeat(8) @(posedge destination_clk);
+		if(recovered_completion_count != 9)
+			$fatal(1, "intermediate Gray sampling lost a completion");
 
 		// Reset both domains while the destination clock is stopped. No stale
 		// source sequence may emerge as a phantom completion on restart.
@@ -119,8 +179,19 @@ module tb_mister_magik_scaler_completion_cdc;
 		repeat(2) @(posedge destination_clk);
 		reset_n = 1'b1;
 		repeat(6) @(posedge destination_clk);
-		if(recovered_completion_count != 0 || completion_count != 0)
+		if(recovered_completion_count != 0 || completion_pulse != 0)
 			$fatal(1, "reset created a phantom completion");
+
+		// Delta three is outside the structural two-outstanding bound. It must
+		// latch evidence and never fabricate a completion pulse.
+		destination_clock_enabled = 1'b0;
+		source_completion();
+		source_completion();
+		source_completion();
+		destination_clock_enabled = 1'b1;
+		repeat(8) @(posedge destination_clk);
+		if(!completion_delta_invalid || recovered_completion_count != 0)
+			$fatal(1, "invalid delta three was not rejected");
 
 		$display("PASS: reproduced parity loss and retained completion credits");
 		$finish;

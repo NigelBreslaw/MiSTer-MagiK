@@ -31,6 +31,7 @@ COMMAND_PATTERNS = {
     "0x63": re.compile(r"(?:cmd|io_din\s*\[\s*7\s*:\s*0\s*\])\s*==\s*(?:8\s*'h|')63", re.I),
     "0x64": re.compile(r"(?:cmd|io_din\s*\[\s*7\s*:\s*0\s*\])\s*==\s*(?:8\s*'h|')64", re.I),
     "0x65": re.compile(r"(?:cmd|io_din\s*\[\s*7\s*:\s*0\s*\])\s*==\s*(?:8\s*'h|')65", re.I),
+    "0x66": re.compile(r"(?:cmd|io_din\s*\[\s*7\s*:\s*0\s*\])\s*==\s*(?:8\s*'h|')66", re.I),
 }
 
 IMMUTABLE_LATCH_SHA256 = {
@@ -185,9 +186,9 @@ def main() -> None:
         "destination_clk",
         "reset_n",
         "source_completion_gray",
-        "completion_count",
+        "completion_pulse",
         "consumed_completion_gray",
-        "maximum_completion_batch",
+        "completion_batch_two_toggle",
         "completion_delta_invalid",
     ]:
         fail("scaler completion bridge interface is not exact")
@@ -197,11 +198,14 @@ def main() -> None:
         "completion_gray_meta <= source_completion_gray;",
         "completion_gray_sync <= completion_gray_meta;",
         "wire [1:0] completion_delta =",
-        "completion_delta_valid ? completion_delta : 2'd0",
+        "if(completion_pending)",
+        "completion_pending <= 1'b1;",
         "if(!completion_delta_valid)",
     ):
         if avalon_source.count(fragment) != 1:
             fail(f"scaler completion bridge behavior is missing: {fragment}")
+    if avalon_source.count("completion_pulse <= 1'b1;") != 2:
+        fail("scaler completion bridge must serialize one or two completion pulses")
     if avalon_source.count("SYNCHRONIZER_IDENTIFICATION FORCED\"") != 1 or avalon_source.count(
         "SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS\""
     ) != 1:
@@ -493,10 +497,22 @@ def main() -> None:
         r"(?m)^\s*(set_[A-Za-z0-9_]+\b[^\n]*)$", diagnostics_sdc_text
     )
     if (
-        timing_commands != [pll_lock_false_path]
+        timing_commands != [
+            pll_lock_false_path,
+            "set_max_skew 10.0 \\",
+        ]
         or diagnostics_sdc_text.count("control_pll_lock_meta}") != 1
     ):
         fail("HDMI lock SDC contains more than the sole approved first-stage false path")
+    for fragment in (
+        "{*ascal:ascal|avl_completion_gray_i[*]} 2",
+        "{*mister_magik_scaler_completion_cdc:magik_scaler_completion_cdc|completion_gray_meta[*]} 2",
+        "-from $magik_scaler_completion_gray_source",
+        "-to $magik_scaler_completion_gray_meta",
+        "MagiK diagnostics CDC analysis applied: scaler_completion_gray",
+    ):
+        if diagnostics_sdc_text.count(fragment) != 1:
+            fail(f"scaler completion Gray constraint is missing or ambiguous: {fragment}")
     if diagnostics_sdc_text.count("magik_require_data_pin") != 2:
         fail("HDMI lock constraint does not require one exact first-stage data pin")
     if (
@@ -581,12 +597,12 @@ def main() -> None:
             fail("patched production bridge binding mismatch: " + "; ".join(mismatches))
         for fragment in (
             "avl_completion_gray: OUT   std_logic_vector(1 DOWNTO 0);",
-            "o_completion_count : IN    std_logic_vector(1 DOWNTO 0) := \"00\";",
+            "o_completion_pulse : IN    std_logic :='0';",
             "SIGNAL avl_completion_bin,avl_completion_gray_i : unsigned(1 DOWNTO 0);",
             "next_completion_bin_v:=avl_completion_bin+1;",
             "avl_completion_gray_i<=next_completion_bin_v(1) &",
-            "completion_count_v:=to_integer(unsigned(o_completion_count));",
-            "copy_level_v:=o_copylev+completion_count_v;",
+            "IF lev_dec_v='1' AND o_completion_pulse='0' THEN",
+            "ELSIF lev_dec_v='0' AND o_completion_pulse='1' THEN",
         ):
             if patched_ascal.count(fragment) != 1:
                 fail(f"patched ascal lossless completion logic is missing: {fragment}")

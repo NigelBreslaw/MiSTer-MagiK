@@ -12,16 +12,26 @@ module mister_magik_scaler_completion_cdc (
 	input  wire       destination_clk,
 	input  wire       reset_n,
 	input  wire [1:0] source_completion_gray,
-	output wire [1:0] completion_count,
+	output reg        completion_pulse = 1'b0,
 	output wire [1:0] consumed_completion_gray,
-	output reg  [1:0] maximum_completion_batch = 2'd0,
+	output reg        completion_batch_two_toggle = 1'b0,
 	output reg        completion_delta_invalid = 1'b0
 );
+	reg [1:0] destination_reset_release = 2'd0;
 	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED" *)
 	reg [1:0] completion_gray_meta = 2'd0;
 	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS" *)
 	reg [1:0] completion_gray_sync = 2'd0;
 	reg [1:0] completion_seen_binary = 2'd0;
+	reg completion_pending = 1'b0;
+	wire destination_reset_n = destination_reset_release[1];
+
+	always @(posedge destination_clk or negedge reset_n) begin
+		if(!reset_n)
+			destination_reset_release <= 2'd0;
+		else
+			destination_reset_release <= {destination_reset_release[0], 1'b1};
+	end
 
 	function automatic [1:0] gray_to_binary;
 		input [1:0] gray;
@@ -42,25 +52,34 @@ module mister_magik_scaler_completion_cdc (
 	wire [1:0] completion_delta =
 		synchronized_completion_binary - completion_seen_binary;
 	wire completion_delta_valid = completion_delta != 2'd3;
-
-	assign completion_count = completion_delta_valid ? completion_delta : 2'd0;
 	assign consumed_completion_gray = binary_to_gray(completion_seen_binary);
 
-	always @(posedge destination_clk or negedge reset_n) begin
-		if(!reset_n) begin
+	always @(posedge destination_clk or negedge destination_reset_n) begin
+		if(!destination_reset_n) begin
 			completion_gray_meta <= 2'd0;
 			completion_gray_sync <= 2'd0;
 			completion_seen_binary <= 2'd0;
-			maximum_completion_batch <= 2'd0;
+			completion_pending <= 1'b0;
+			completion_pulse <= 1'b0;
+			completion_batch_two_toggle <= 1'b0;
 			completion_delta_invalid <= 1'b0;
 		end
 		else begin
 			completion_gray_meta <= source_completion_gray;
 			completion_gray_sync <= completion_gray_meta;
-			if(completion_delta_valid && completion_delta != 2'd0) begin
-				completion_seen_binary <= synchronized_completion_binary;
-				if(completion_delta > maximum_completion_batch)
-					maximum_completion_batch <= completion_delta;
+			completion_pulse <= 1'b0;
+			if(completion_pending) begin
+				completion_pulse <= 1'b1;
+				completion_pending <= 1'b0;
+				completion_seen_binary <= completion_seen_binary + 1'd1;
+			end
+			else if(completion_delta_valid && completion_delta != 2'd0) begin
+				completion_pulse <= 1'b1;
+				completion_seen_binary <= completion_seen_binary + 1'd1;
+				if(completion_delta == 2'd2) begin
+					completion_pending <= 1'b1;
+					completion_batch_two_toggle <= !completion_batch_two_toggle;
+				end
 			end
 			if(!completion_delta_valid)
 				completion_delta_invalid <= 1'b1;

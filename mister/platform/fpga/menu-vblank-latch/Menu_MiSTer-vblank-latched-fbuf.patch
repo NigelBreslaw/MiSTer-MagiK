@@ -243,7 +243,7 @@ index a735e6b..0000000 100644
  		avl_write          : OUT   std_logic;
  		avl_read           : OUT   std_logic;
 +		avl_completion_gray: OUT   std_logic_vector(1 DOWNTO 0);
-+		o_completion_count : IN    std_logic_vector(1 DOWNTO 0) := "00";
++		o_completion_pulse : IN    std_logic :='0';
  		avl_byteenable     : OUT   std_logic_vector(N_DW/8-1 DOWNTO 0);
  
  		------------------------------------
@@ -307,8 +307,6 @@ index a735e6b..0000000 100644
  		VARIABLE hcarry_v,vcarry_v : boolean;
  		VARIABLE dif_v : natural RANGE 0 TO 8*OHRESH-1;
  		VARIABLE off_v : natural RANGE 0 TO 15;
-+		VARIABLE completion_count_v : natural RANGE 0 TO 3;
-+		VARIABLE copy_level_v : integer RANGE -1 TO 5;
  	BEGIN
  		IF o_reset_na='0' THEN
  			o_copy<=sWAIT;
@@ -331,17 +329,14 @@ index a735e6b..0000000 100644
 -				o_copylev<=o_copylev-1;
 -			ELSIF lev_dec_v='0' AND o_readdataack='1' THEN
 -				o_copylev<=o_copylev+1;
-+			completion_count_v:=to_integer(unsigned(o_completion_count));
-+			copy_level_v:=o_copylev+completion_count_v;
-+			IF lev_dec_v='1' THEN
-+				copy_level_v:=copy_level_v-1;
-+			END IF;
-+			ASSERT completion_count_v<=2
-+				REPORT "invalid ascal completion credit count" SEVERITY failure;
-+			ASSERT copy_level_v>=0 AND copy_level_v<=2
-+				REPORT "invalid ascal copy level" SEVERITY failure;
-+			IF completion_count_v<=2 AND copy_level_v>=0 AND copy_level_v<=2 THEN
-+				o_copylev<=copy_level_v;
++			IF lev_dec_v='1' AND o_completion_pulse='0' THEN
++				IF o_copylev>0 THEN
++					o_copylev<=o_copylev-1;
++				END IF;
++			ELSIF lev_dec_v='0' AND o_completion_pulse='1' THEN
++				IF o_copylev<2 THEN
++					o_copylev<=o_copylev+1;
++				END IF;
  			END IF;
  
 			-- FIFOs
@@ -355,9 +350,9 @@ index a416879..f6a40ea 100644
  `ifndef MISTER_DEBUG_NOHDMI
  	wire clk_hdmi  = hdmi_clk_out;
 +	wire [1:0] magik_scaler_completion_gray;
-+	wire [1:0] magik_scaler_completion_count;
++	wire magik_scaler_completion_pulse;
 +	wire [1:0] magik_scaler_completion_consumed_gray;
-+	wire [1:0] magik_scaler_completion_maximum_batch;
++	wire magik_scaler_completion_batch_two_toggle;
 +	wire magik_scaler_completion_delta_invalid;
 +
 +	mister_magik_scaler_completion_cdc magik_scaler_completion_cdc
@@ -365,9 +360,9 @@ index a416879..f6a40ea 100644
 +		.destination_clk(clk_hdmi),
 +		.reset_n(~reset_req),
 +		.source_completion_gray(magik_scaler_completion_gray),
-+		.completion_count(magik_scaler_completion_count),
++		.completion_pulse(magik_scaler_completion_pulse),
 +		.consumed_completion_gray(magik_scaler_completion_consumed_gray),
-+		.maximum_completion_batch(magik_scaler_completion_maximum_batch),
++		.completion_batch_two_toggle(magik_scaler_completion_batch_two_toggle),
 +		.completion_delta_invalid(magik_scaler_completion_delta_invalid)
 +	);
  
@@ -378,7 +373,7 @@ index a416879..f6a40ea 100644
  		.avl_write        (vbuf_write),
  		.avl_read         (vbuf_read),
 +		.avl_completion_gray(magik_scaler_completion_gray),
-+		.o_completion_count(magik_scaler_completion_count),
++		.o_completion_pulse(magik_scaler_completion_pulse),
  		.avl_byteenable   (vbuf_byteenable)
  	);
  `endif

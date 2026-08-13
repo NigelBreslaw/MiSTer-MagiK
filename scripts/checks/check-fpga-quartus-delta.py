@@ -62,7 +62,7 @@ MINIMUM_SLACK_NS = 0.20
 MAXIMUM_SLACK_DEGRADATION_NS = 0.15
 MAXIMUM_LOGIC_ELEMENT_DELTA = 800
 MAXIMUM_REGISTER_DELTA = 300
-EXPECTED_OBSERVER_CALCULABLE_CHAINS = 16
+EXPECTED_OBSERVER_CALCULABLE_CHAINS = 18
 EXPECTED_QUARTUS_POLICY = {
     "auto_parallel_synthesis": "off",
     "parallel_synthesis": "off",
@@ -101,8 +101,10 @@ EXPECTED_SYNC_ASSIGNMENT_SUFFIXES = (
     "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|avalon_accepted_sys",
     "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|avalon_returned_meta",
     "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|avalon_returned_sys",
+    "mister_magik_scaler_completion_cdc:magik_scaler_completion_cdc|completion_gray_meta",
+    "mister_magik_scaler_completion_cdc:magik_scaler_completion_cdc|completion_gray_sync",
 )
-EXPECTED_CDC_ANALYSIS_LABELS: frozenset[str] = frozenset()
+EXPECTED_CDC_ANALYSIS_LABELS: frozenset[str] = frozenset({"scaler_completion_gray"})
 DIAGNOSTIC_REPORT_NAMES = frozenset(
     {
         "menu.magik-diagnostic-cdc-skew.rpt",
@@ -111,8 +113,8 @@ DIAGNOSTIC_REPORT_NAMES = frozenset(
     }
 )
 EXPECTED_CDC_REPORT_ANALYSES = {
-    "menu.magik-diagnostic-cdc-skew.rpt": "set_max_skew",
-    "menu.magik-diagnostic-cdc-net-delay.rpt": "set_net_delay",
+    "menu.magik-diagnostic-cdc-skew.rpt": ("set_max_skew", 1),
+    "menu.magik-diagnostic-cdc-net-delay.rpt": ("set_net_delay", 0),
 }
 
 
@@ -343,17 +345,16 @@ def validate_diagnostic_reports(
     if missing_reports or unexpected_reports:
         reasons.append("diagnostic_cdc_report_missing")
 
-    labels_valid = set(analysis_labels) == EXPECTED_CDC_ANALYSIS_LABELS
+    labels_valid = set(analysis_labels) == EXPECTED_CDC_ANALYSIS_LABELS and all(
+        analysis_labels[label] >= 1 for label in EXPECTED_CDC_ANALYSIS_LABELS
+    )
     if not labels_valid:
         reasons.append("diagnostic_cdc_analysis_missing")
 
     analysis_counts: dict[str, int | None] = {}
     minimum_slacks: dict[str, float | None] = {}
-    for name, command in EXPECTED_CDC_REPORT_ANALYSES.items():
+    for name, (command, expected_count) in EXPECTED_CDC_REPORT_ANALYSES.items():
         text = reports.get(name, "")
-        # Lock-only v1 deliberately has no bundled-data CDC assignment. Keep
-        # the legacy report files for cache identity and prove they contain no
-        # applied max-skew/net-delay rows.
         summary_rows = list(
             re.finditer(
                 rf"(?m)^\s*;\s*{command}\s*;\s*({NUMBER})\s*;",
@@ -362,13 +363,15 @@ def validate_diagnostic_reports(
             )
         )
         analysis_counts[name] = len(summary_rows)
-        if summary_rows:
+        if len(summary_rows) != expected_count:
             reasons.append("diagnostic_cdc_analysis_count")
         slacks = [finite_number(row.group(1)) for row in summary_rows]
         finite_slacks = [value for value in slacks if value is not None]
         if len(finite_slacks) != len(summary_rows):
             reasons.append("diagnostic_cdc_slack_missing")
         minimum_slacks[name] = min(finite_slacks, default=None)
+        if finite_slacks and min(finite_slacks) < 0:
+            reasons.append("diagnostic_cdc_slack_negative")
 
     metastability = reports.get("menu.magik-diagnostic-metastability.rpt", "")
     metastability_lower = metastability.lower()

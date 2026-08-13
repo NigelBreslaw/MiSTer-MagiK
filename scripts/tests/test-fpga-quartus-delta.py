@@ -95,17 +95,31 @@ CONTROL_SYNC_ASSIGNMENTS = quartus_assignment_section(
     "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence",
     CONTROL_SYNC_NAMES,
 )
-SYNC_ASSIGNMENTS = CONTROL_SYNC_ASSIGNMENTS
+COMPLETION_SYNC_NAMES = (
+    "completion_gray_meta",
+    "completion_gray_sync",
+)
+COMPLETION_SYNC_ASSIGNMENTS = quartus_assignment_section(
+    "mister_magik_scaler_completion_cdc:magik_scaler_completion_cdc",
+    COMPLETION_SYNC_NAMES,
+)
+SYNC_NAMES += tuple(
+    f"mister_magik_scaler_completion_cdc:magik_scaler_completion_cdc|{name}"
+    for name in COMPLETION_SYNC_NAMES
+)
+SYNC_ASSIGNMENTS = CONTROL_SYNC_ASSIGNMENTS + COMPLETION_SYNC_ASSIGNMENTS
 CUSTOM_SYNC = SYNC_ASSIGNMENTS + """\
-Info (332114): Report Metastability: Found 21 synchronizer chains.
-Info (332114): Fraction of Chains for which MTBFs Could Not be Calculated: 0.190
+Info (332114): Report Metastability: Found 23 synchronizer chains.
+Info (332114): Fraction of Chains for which MTBFs Could Not be Calculated: 0.174
 """
 
 VALID_DIAGNOSTIC_REPORTS = {
-    "menu.magik-diagnostic-cdc-skew.rpt": "No paths to report.\n",
+    "menu.magik-diagnostic-cdc-skew.rpt": (
+        "; set_max_skew ; 1.500 ; 10.000 ; 8.500 ; from ; to ;\n"
+    ),
     "menu.magik-diagnostic-cdc-net-delay.rpt": "No paths to report.\n",
     "menu.magik-diagnostic-metastability.rpt": (
-        "Report Metastability: Found 21 synchronizer chains.\n"
+        "Report Metastability: Found 23 synchronizer chains.\n"
         + "".join(
             f"; Synchronizer Chain ; {name} ; MTBF 1e+09 years ;\n"
             for name in SYNC_NAMES
@@ -439,6 +453,7 @@ class QuartusDeltaTest(unittest.TestCase):
         reports = dict(VALID_DIAGNOSTIC_REPORTS)
         reports["menu.magik-diagnostic-cdc-skew.rpt"] = (
             "; set_max_skew ; 1.500 ; 8.000 ; 6.500 ; from ; to ;\n"
+            "; set_max_skew ; 1.250 ; 8.000 ; 6.750 ; from2 ; to2 ;\n"
             "; set_max_skew path detail Slack 1.500\n"
         )
         result, payload = self.run_check(BASE, BASE + CUSTOM_SYNC, diagnostic_reports=reports)
@@ -468,9 +483,9 @@ class QuartusDeltaTest(unittest.TestCase):
             SCRIPT.parents[2]
             / "mister/platform/fpga/menu-vblank-latch/mister_magik_video_diagnostics.sdc"
         ).read_text(encoding="utf-8")
-        self.assertNotIn("get_registers", sdc)
+        self.assertIn("get_registers -nowarn -no_duplicates", sdc)
         self.assertIn("get_pins -nowarn -no_duplicates", sdc)
-        self.assertNotIn("set_max_skew", sdc)
+        self.assertIn("set_max_skew 10.0", sdc)
         self.assertNotIn("set_net_delay", sdc)
 
 
