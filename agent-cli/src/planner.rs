@@ -244,6 +244,7 @@ fn add_path_operations(
         ));
     }
     if path == Path::new("mister/platform/contracts/platform-v3.schema.toml")
+        || path.starts_with("mister/platform/contracts/manifest")
         || path == Path::new("mister/platform/fpga/menu-vblank-latch/latch-protocol.json")
         || path.extension().and_then(|extension| extension.to_str()) == Some("rs")
         || path.starts_with("scripts")
@@ -1085,6 +1086,12 @@ fn add_path_operations(
         "video-diagnostics-contract",
         out,
     );
+    add_crate(
+        path,
+        "mister/platform/contracts/manifest",
+        "platform-manifest-contract",
+        out,
+    );
     add_crate(path, "mister/tools/agent", "mister-agent", out);
     add_crate(path, "mister/tools/manager", "mister-manager", out);
 }
@@ -1621,6 +1628,33 @@ mod tests {
             "video-diagnostics-contract.format",
             "video-diagnostics-contract.tests",
             "video-diagnostics-contract.clippy",
+        ] {
+            assert!(ids.contains(id), "missing {id}");
+        }
+    }
+
+    #[test]
+    fn platform_manifest_contract_changes_select_crate_and_authority_assurance() {
+        let plan = affected_plan(
+            AssuranceRequest::Plan {
+                scope: Scope::Paths(vec![]),
+            },
+            vec![
+                "mister/platform/contracts/manifest/Cargo.lock".into(),
+                "mister/platform/contracts/manifest/src/lib.rs".into(),
+            ],
+        )
+        .unwrap();
+        let ids: BTreeSet<_> = plan
+            .operations
+            .iter()
+            .map(|operation| operation.id.as_str())
+            .collect();
+        for id in [
+            "platform-manifest-contract.format",
+            "platform-manifest-contract.tests",
+            "platform-manifest-contract.clippy",
+            "repo.platform-manifest-authority",
         ] {
             assert!(ids.contains(id), "missing {id}");
         }
