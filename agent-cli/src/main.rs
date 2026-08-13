@@ -372,7 +372,7 @@ fn dispatch(
                     )?,
                     main_revision,
                     magik_revision,
-                    agent_cli::platform_manifest::Layout::parse(layout)?,
+                    agent_cli::platform_manifest::parse_layout(layout)?,
                 )?;
                 return Ok(Outcome::Passed);
             }
@@ -393,7 +393,7 @@ fn dispatch(
                 agent_cli::platform_manifest::verify(
                     manifest,
                     root.as_deref(),
-                    agent_cli::platform_manifest::Layout::parse(layout)?,
+                    agent_cli::platform_manifest::parse_layout(layout)?,
                 )?;
                 return Ok(Outcome::Passed);
             }

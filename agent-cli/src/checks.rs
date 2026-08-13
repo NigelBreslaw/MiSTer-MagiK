@@ -974,33 +974,49 @@ fn check_platform_manifest_authority(repository: &Path) -> Result<(), String> {
         return Err("platform_manifest_schema_identity_invalid".into());
     }
     let authority = read(repository, AUTHORITY)?;
-    for (constant, expected) in [
-        ("FORMAT", schema.manifest_format.as_str()),
-        ("FILE_NAME", schema.file_name.as_str()),
-        (
-            "LATCH_PROTOCOL_VERSION",
-            schema.latch_protocol_version.as_str(),
-        ),
-        (
-            "LATCH_CAPABILITY_MASK",
-            schema.latch_capability_mask.as_str(),
-        ),
-    ] {
-        if rust_string_constant(&authority, constant) != Some(expected) {
-            return Err(format!(
-                "platform_manifest_authority_drift: {AUTHORITY} {constant}"
-            ));
+    if authority.contains("mister_magik_platform_manifest_contract") {
+        let contract_manifest = read(repository, "mister/platform/contracts/manifest/Cargo.toml")?;
+        let contract_build = read(repository, "mister/platform/contracts/manifest/build.rs")?;
+        let contract_api = read(repository, "mister/platform/contracts/manifest/src/lib.rs")?;
+        if !contract_manifest.contains("mister-magik-platform-manifest-contract")
+            || !contract_build.contains("../platform-v3.schema.toml")
+            || !contract_build.contains("pub const FIELDS")
+            || !contract_build.contains("pub const PUBLIC_PATHS")
+            || !contract_build.contains("pub const DEVELOPMENT_PATHS")
+            || !contract_api.contains("ValidationProfile")
+            || !contract_api.contains("qualification_candidate_id")
+        {
+            return Err("platform_manifest_contract_delegation_invalid".into());
         }
-    }
-    let authority_fields = rust_string_array(&authority, "pub(crate) const FIELDS")
-        .ok_or("platform_manifest_authority_fields_missing")?;
-    if authority_fields != schema.fields {
-        return Err("platform_manifest_authority_field_order_drift".into());
-    }
-    for layout in schema.layouts.values() {
-        for value in layout.values() {
-            if !authority.contains(value) {
-                return Err(format!("platform_manifest_authority_path_drift: {value}"));
+    } else {
+        for (constant, expected) in [
+            ("FORMAT", schema.manifest_format.as_str()),
+            ("FILE_NAME", schema.file_name.as_str()),
+            (
+                "LATCH_PROTOCOL_VERSION",
+                schema.latch_protocol_version.as_str(),
+            ),
+            (
+                "LATCH_CAPABILITY_MASK",
+                schema.latch_capability_mask.as_str(),
+            ),
+        ] {
+            if rust_string_constant(&authority, constant) != Some(expected) {
+                return Err(format!(
+                    "platform_manifest_authority_drift: {AUTHORITY} {constant}"
+                ));
+            }
+        }
+        let authority_fields = rust_string_array(&authority, "pub(crate) const FIELDS")
+            .ok_or("platform_manifest_authority_fields_missing")?;
+        if authority_fields != schema.fields {
+            return Err("platform_manifest_authority_field_order_drift".into());
+        }
+        for layout in schema.layouts.values() {
+            for value in layout.values() {
+                if !authority.contains(value) {
+                    return Err(format!("platform_manifest_authority_path_drift: {value}"));
+                }
             }
         }
     }

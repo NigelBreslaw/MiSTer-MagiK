@@ -2,6 +2,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use crate::error::{AgentError, AgentResult};
+use mister_magik_platform_manifest_contract::{self as contract, ValidationProfile};
+pub use mister_magik_platform_manifest_contract::{
+    FILE_NAME, FORMAT, LATCH_CAPABILITY_MASK, LATCH_PROTOCOL_VERSION, Layout,
+};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -9,116 +13,10 @@ use std::fs::{self, File};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-pub const FORMAT: &str = "mister-magik-platform-v3";
-pub const FILE_NAME: &str = "platform-v3.manifest";
-pub const LATCH_PROTOCOL_VERSION: &str = "5";
-pub const LATCH_CAPABILITY_MASK: &str = "0x03ff";
 pub(crate) const LEGACY_FPGA_SOURCE_STATUSES: &[&str] = &[" M sys/sys_top.sdc"];
 pub(crate) const CURRENT_FPGA_SOURCE_STATUSES: &[&str] = &[" M menu.qsf", " M sys/sys_top.sdc"];
-pub(crate) const FIELDS: &[&str] = &[
-    "format",
-    "platform_release",
-    "platform_release_number",
-    "platform_bundle_id",
-    "qualification_candidate_id",
-    "latch_protocol_version",
-    "latch_capability_mask",
-    "main_path",
-    "gui_path",
-    "manager_path",
-    "scanout_module_path",
-    "scanout_metadata_path",
-    "latch_rbf_path",
-    "latch_metadata_path",
-    "main_sha256",
-    "gui_sha256",
-    "manager_sha256",
-    "scanout_module_sha256",
-    "scanout_metadata_sha256",
-    "latch_rbf_sha256",
-    "latch_metadata_sha256",
-    "platform_contract_sha256",
-    "main_revision",
-    "magik_revision",
-    "menu_revision",
-];
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum Layout {
-    Public,
-    Development,
-}
-
-impl Layout {
-    pub fn parse(value: &str) -> AgentResult<Self> {
-        match value {
-            "public" => Ok(Self::Public),
-            "dev" => Ok(Self::Development),
-            _ => Err(AgentError::Classified {
-                code: "invalid_platform_layout",
-                detail: value.into(),
-            }),
-        }
-    }
-
-    pub(crate) fn paths(self) -> [(&'static str, &'static str); 7] {
-        let main = match self {
-            Self::Public => "/media/fat/MiSTer_MagiK",
-            Self::Development => "/media/fat/MiSTer_MagiKDev",
-        };
-        [
-            ("main", main),
-            (
-                "gui",
-                if self == Self::Public {
-                    "/media/fat/mister-magik/mister-magik-fb"
-                } else {
-                    "/media/fat/mister-magik-dev/mister-magik-fb"
-                },
-            ),
-            (
-                "manager",
-                if self == Self::Public {
-                    "/media/fat/mister-magik/mister-magik-manager"
-                } else {
-                    "/media/fat/mister-magik-dev/mister-magik-manager"
-                },
-            ),
-            (
-                "scanout_module",
-                if self == Self::Public {
-                    "/media/fat/mister-magik/mister_magik_scanout_slots.ko"
-                } else {
-                    "/media/fat/mister-magik-dev/mister_magik_scanout_slots.ko"
-                },
-            ),
-            (
-                "scanout_metadata",
-                if self == Self::Public {
-                    "/media/fat/mister-magik/mister_magik_scanout_slots.metadata.txt"
-                } else {
-                    "/media/fat/mister-magik-dev/mister_magik_scanout_slots.metadata.txt"
-                },
-            ),
-            (
-                "latch_rbf",
-                if self == Self::Public {
-                    "/media/fat/mister-magik/fpga/menu-magik-vblank-latch.rbf"
-                } else {
-                    "/media/fat/mister-magik-dev/fpga/menu-magik-vblank-latch.rbf"
-                },
-            ),
-            (
-                "latch_metadata",
-                if self == Self::Public {
-                    "/media/fat/mister-magik/fpga/menu-magik-vblank-latch.metadata.txt"
-                } else {
-                    "/media/fat/mister-magik-dev/fpga/menu-magik-vblank-latch.metadata.txt"
-                },
-            ),
-        ]
-    }
-}
+#[cfg(test)]
+pub(crate) const FIELDS: &[&str] = contract::FIELDS;
 
 pub struct Artifacts {
     pub main: PathBuf,
@@ -243,9 +141,14 @@ impl InstalledManifest {
 }
 
 pub fn parse_installed(text: &str, layout: Layout) -> AgentResult<InstalledManifest> {
-    let values = parse_text_fields(text, Some(FIELDS), "installed platform manifest")?;
-    validate_manifest_fields(&values, layout)?;
+    let values = contract::parse(text, layout, ValidationProfile::AgentStrict)
+        .map_err(contract_error)?
+        .into_values();
     Ok(InstalledManifest { values })
+}
+
+pub fn parse_layout(value: &str) -> AgentResult<Layout> {
+    Layout::parse(value).map_err(contract_error)
 }
 
 pub fn write_local_main_overlay(
@@ -282,10 +185,7 @@ pub fn write_local_main_overlay(
         "qualification_candidate_id".into(),
         qualification_candidate_id(&values),
     );
-    let text = FIELDS
-        .iter()
-        .map(|field| format!("{field}={}\n", values[*field]))
-        .collect::<String>();
+    let text = contract::serialize(&values).map_err(contract_error)?;
     if let Some(parent) = output.parent() {
         fs::create_dir_all(parent)
             .map_err(|error| format!("cannot create {}: {error}", parent.display()))?;
@@ -320,10 +220,7 @@ pub fn update_runtime(
         "qualification_candidate_id".into(),
         qualification_candidate_id(&values),
     );
-    let text = FIELDS
-        .iter()
-        .map(|field| format!("{field}={}\n", values[*field]))
-        .collect::<String>();
+    let text = contract::serialize(&values).map_err(contract_error)?;
     if let Some(parent) = output.parent() {
         fs::create_dir_all(parent)
             .map_err(|error| format!("cannot create {}: {error}", parent.display()))?;
@@ -379,7 +276,7 @@ pub fn generate(
         LATCH_PROTOCOL_VERSION.into(),
     );
     values.insert("latch_capability_mask".into(), LATCH_CAPABILITY_MASK.into());
-    for (name, path) in layout.paths() {
+    for (name, path) in layout.paths().components() {
         values.insert(format!("{name}_path"), path.to_owned());
     }
     for (name, path) in artifacts.values() {
@@ -393,10 +290,7 @@ pub fn generate(
         "qualification_candidate_id".into(),
         qualification_candidate_id(&values),
     );
-    let text = FIELDS
-        .iter()
-        .map(|field| format!("{field}={}\n", values[*field]))
-        .collect::<String>();
+    let text = contract::serialize(&values).map_err(contract_error)?;
     if let Some(parent) = output.parent() {
         fs::create_dir_all(parent)
             .map_err(|error| format!("cannot create {}: {error}", parent.display()))?;
@@ -407,73 +301,15 @@ pub fn generate(
 }
 
 pub fn verify(manifest: &Path, artifact_root: Option<&Path>, layout: Layout) -> AgentResult<()> {
-    let fields = parse_fields(manifest, Some(FIELDS))?;
-    validate_manifest_fields(&fields, layout)?;
+    let text = fs::read_to_string(manifest)
+        .map_err(|error| format!("cannot read {}: {error}", manifest.display()))?;
+    let fields = contract::parse(&text, layout, ValidationProfile::AgentStrict)
+        .map_err(contract_error)?
+        .into_values();
     let Some(root) = artifact_root else {
         return Ok(());
     };
     verify_artifacts(&fields, root, layout)
-}
-
-fn validate_manifest_fields(fields: &BTreeMap<String, String>, layout: Layout) -> AgentResult<()> {
-    if fields["format"] != FORMAT {
-        return classified("unsupported_platform_manifest", fields["format"].clone());
-    }
-    let release_number = fields["platform_release_number"]
-        .parse::<u64>()
-        .map_err(|_| AgentError::Classified {
-            code: "invalid_platform_release",
-            detail: fields["platform_release_number"].clone(),
-        })?;
-    if release_number == 0 || fields["platform_release"] != format!("platform-v0.{release_number}")
-    {
-        return classified(
-            "invalid_platform_release",
-            fields["platform_release"].clone(),
-        );
-    }
-    require_hex("platform_bundle_id", &fields["platform_bundle_id"], 64)?;
-    require_hex(
-        "qualification_candidate_id",
-        &fields["qualification_candidate_id"],
-        64,
-    )?;
-    if fields["latch_protocol_version"] != LATCH_PROTOCOL_VERSION
-        || fields["latch_capability_mask"] != LATCH_CAPABILITY_MASK
-    {
-        return classified(
-            "unsupported_latch_protocol",
-            format!(
-                "version={} capabilities={}",
-                fields["latch_protocol_version"], fields["latch_capability_mask"]
-            ),
-        );
-    }
-    for (name, expected) in layout.paths() {
-        if fields[&format!("{name}_path")] != expected {
-            return classified("platform_path_mismatch", name);
-        }
-        require_hex(
-            &format!("{name}_sha256"),
-            &fields[&format!("{name}_sha256")],
-            64,
-        )?;
-    }
-    require_hex(
-        "platform_contract_sha256",
-        &fields["platform_contract_sha256"],
-        64,
-    )?;
-    for name in ["main_revision", "magik_revision", "menu_revision"] {
-        require_hex(name, &fields[name], 40)?;
-    }
-    if fields["qualification_candidate_id"] != qualification_candidate_id(fields) {
-        return classified(
-            "platform_candidate_identity_mismatch",
-            fields["qualification_candidate_id"].clone(),
-        );
-    }
-    Ok(())
 }
 
 fn verify_artifacts(
@@ -481,7 +317,7 @@ fn verify_artifacts(
     root: &Path,
     layout: Layout,
 ) -> AgentResult<()> {
-    let paths = layout.paths();
+    let paths = layout.paths().components();
     let artifact = |name: &str| -> AgentResult<PathBuf> {
         let device = paths.iter().find(|(field, _)| *field == name).unwrap().1;
         let relative = device
@@ -558,22 +394,7 @@ fn validate_metadata(artifacts: &Artifacts) -> AgentResult<(String, String)> {
 }
 
 pub(crate) fn qualification_candidate_id(values: &BTreeMap<String, String>) -> String {
-    let mut hash = Sha256::new();
-    for field in FIELDS {
-        if *field == "qualification_candidate_id" {
-            continue;
-        }
-        if let Some(value) = values.get(*field) {
-            hash.update(field.as_bytes());
-            hash.update(b"=");
-            hash.update(value.as_bytes());
-            hash.update(b"\n");
-        }
-    }
-    hash.finalize()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
+    contract::qualification_candidate_id(values)
 }
 
 fn parse_fields(path: &Path, exact: Option<&[&str]>) -> AgentResult<BTreeMap<String, String>> {
@@ -666,6 +487,13 @@ fn classified<T>(code: &'static str, detail: impl Into<String>) -> AgentResult<T
     })
 }
 
+fn contract_error(error: contract::ManifestError) -> AgentError {
+    AgentError::Classified {
+        code: error.code(),
+        detail: error.detail().to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -684,7 +512,7 @@ mod tests {
             "latch_capability_mask".to_owned(),
             LATCH_CAPABILITY_MASK.to_owned(),
         );
-        for (name, path) in Layout::Development.paths() {
+        for (name, path) in Layout::Development.paths().components() {
             values.insert(format!("{name}_path"), path.into());
         }
         for name in [
@@ -714,10 +542,13 @@ mod tests {
 
     #[test]
     fn layouts_are_closed_and_use_canonical_paths() {
-        assert_eq!(Layout::parse("public").unwrap(), Layout::Public);
-        assert_eq!(Layout::parse("dev").unwrap(), Layout::Development);
-        assert!(Layout::parse("custom").is_err());
-        assert_eq!(Layout::Public.paths()[0].1, "/media/fat/MiSTer_MagiK");
+        assert_eq!(parse_layout("public").unwrap(), Layout::Public);
+        assert_eq!(parse_layout("dev").unwrap(), Layout::Development);
+        assert!(parse_layout("custom").is_err());
+        assert_eq!(
+            Layout::Public.paths().components()[0].1,
+            "/media/fat/MiSTer_MagiK"
+        );
     }
 
     #[test]

@@ -25,6 +25,7 @@ flate2 = "1"
 libc = "0.2"
 lz4_flex = "0.14.0"
 mister-magik-agent-protocol = { path = "../crates/agent-protocol" }
+mister-magik-platform-manifest-contract = { path = "../mister/platform/contracts/manifest" }
 mister-magik-catalog = { path = "../crates/catalog" }
 mister-magik-ini = { path = "../crates/mister-ini" }
 mister-magik-latch-contract = { path = "../mister/platform/contracts/latch" }

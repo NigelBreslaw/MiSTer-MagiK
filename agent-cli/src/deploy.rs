@@ -426,7 +426,7 @@ mod tests {
         values.insert("platform_bundle_id".into(), "e".repeat(64));
         values.insert("latch_protocol_version".into(), "5".to_owned());
         values.insert("latch_capability_mask".into(), "0x03ff".to_owned());
-        for (name, path) in Layout::Development.paths() {
+        for (name, path) in Layout::Development.paths().components() {
             values.insert(format!("{name}_path"), path.to_owned());
         }
         for name in [

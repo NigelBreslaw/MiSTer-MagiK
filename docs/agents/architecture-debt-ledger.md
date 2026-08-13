@@ -75,6 +75,13 @@ constants from the descriptor at build time. Its presence does not switch
 behavioral authority: that transition remains atomic with agent adoption after
 fixture and rejection-class parity is proven.
 
+`agent-cli/src/platform_manifest.rs` now delegates structural parsing,
+serialization, layout paths, and candidate identity to that crate while
+retaining artifact hashing and file orchestration. The descriptor continues to
+name this thin module as the compatibility-window behavioral authority until
+the remaining named consumers move; its direct host-file ledger entries are
+not removed by this core adoption alone.
+
 | Legacy consumer | Migration owner |
 |---|---|
 | `agent-cli/src/host/mod.rs` | Enforce contract and agent adoption |

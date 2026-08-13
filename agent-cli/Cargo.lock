@@ -23,6 +23,7 @@ dependencies = [
  "mister-magik-ini",
  "mister-magik-latch-contract",
  "mister-magik-media-contract",
+ "mister-magik-platform-manifest-contract",
  "objc2",
  "objc2-av-foundation",
  "objc2-core-graphics",
@@ -593,6 +594,15 @@ version = "0.1.0"
 dependencies = [
  "libc",
  "serde",
+]
+
+[[package]]
+name = "mister-magik-platform-manifest-contract"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "sha2 0.10.9",
+ "toml",
 ]
 
 [[package]]
