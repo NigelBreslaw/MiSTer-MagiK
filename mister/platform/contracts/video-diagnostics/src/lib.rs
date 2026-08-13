@@ -433,13 +433,12 @@ fn decode_path_activity<const N: usize>(
     label: &str,
     command: u16,
     schema: u16,
-    flags_word: usize,
-    flags_mask: u16,
-    valid_flag: u16,
-    packed_words: &[usize],
-    packed_masks: &[(usize, u16)],
+    flags_contract: (usize, u16, u16),
+    packed_contract: (&[usize], &[(usize, u16)]),
     words: &[u16],
 ) -> Result<[u16; N], String> {
+    let (flags_word, flags_mask, valid_flag) = flags_contract;
+    let (packed_words, packed_masks) = packed_contract;
     if words.len() != N {
         return Err(format!(
             "{label} command 0x{command:02x} needs {N} words, got {}",
@@ -483,17 +482,21 @@ pub fn decode_hdmi_final_path_activity(words: &[u16]) -> Result<HdmiFinalPathAct
         "HDMI final path activity",
         GET_HDMI_FINAL_PATH_ACTIVITY,
         HDMI_FINAL_PATH_ACTIVITY_SCHEMA,
-        HDMI_FINAL_PATH_ACTIVITY_FLAGS_WORD,
-        HDMI_FINAL_PATH_ACTIVITY_FLAGS_MASK,
-        HDMI_FINAL_PATH_ACTIVITY_FLAG_FRAME_VALID,
-        &[
-            HDMI_FINAL_PATH_ACTIVITY_BLACK_COUNTS_WORD,
-            HDMI_FINAL_PATH_ACTIVITY_ACTIVITY_COUNTS_WORD,
-        ],
-        &[
-            (HDMI_FINAL_PATH_ACTIVITY_BLACK_COUNTS_WORD, 0xffff),
-            (HDMI_FINAL_PATH_ACTIVITY_ACTIVITY_COUNTS_WORD, 0x000f),
-        ],
+        (
+            HDMI_FINAL_PATH_ACTIVITY_FLAGS_WORD,
+            HDMI_FINAL_PATH_ACTIVITY_FLAGS_MASK,
+            HDMI_FINAL_PATH_ACTIVITY_FLAG_FRAME_VALID,
+        ),
+        (
+            &[
+                HDMI_FINAL_PATH_ACTIVITY_BLACK_COUNTS_WORD,
+                HDMI_FINAL_PATH_ACTIVITY_ACTIVITY_COUNTS_WORD,
+            ],
+            &[
+                (HDMI_FINAL_PATH_ACTIVITY_BLACK_COUNTS_WORD, 0xffff),
+                (HDMI_FINAL_PATH_ACTIVITY_ACTIVITY_COUNTS_WORD, 0x000f),
+            ],
+        ),
         words,
     )
     .map(|words| HdmiFinalPathActivity { words })
@@ -504,11 +507,15 @@ pub fn decode_hdmi_scaler_raw_activity(words: &[u16]) -> Result<HdmiScalerRawAct
         "HDMI raw scaler activity",
         GET_HDMI_SCALER_RAW_ACTIVITY,
         HDMI_SCALER_RAW_ACTIVITY_SCHEMA,
-        HDMI_SCALER_RAW_ACTIVITY_FLAGS_WORD,
-        HDMI_SCALER_RAW_ACTIVITY_FLAGS_MASK,
-        HDMI_SCALER_RAW_ACTIVITY_FLAG_FRAME_VALID,
-        &[HDMI_SCALER_RAW_ACTIVITY_COUNTS_WORD],
-        &[(HDMI_SCALER_RAW_ACTIVITY_COUNTS_WORD, 0x0fff)],
+        (
+            HDMI_SCALER_RAW_ACTIVITY_FLAGS_WORD,
+            HDMI_SCALER_RAW_ACTIVITY_FLAGS_MASK,
+            HDMI_SCALER_RAW_ACTIVITY_FLAG_FRAME_VALID,
+        ),
+        (
+            &[HDMI_SCALER_RAW_ACTIVITY_COUNTS_WORD],
+            &[(HDMI_SCALER_RAW_ACTIVITY_COUNTS_WORD, 0x0fff)],
+        ),
         words,
     )
     .map(|words| HdmiScalerRawActivity { words })
@@ -519,11 +526,15 @@ pub fn decode_hdmi_post_osd_activity(words: &[u16]) -> Result<HdmiPostOsdActivit
         "HDMI post-OSD activity",
         GET_HDMI_POST_OSD_ACTIVITY,
         HDMI_POST_OSD_ACTIVITY_SCHEMA,
-        HDMI_POST_OSD_ACTIVITY_FLAGS_WORD,
-        HDMI_POST_OSD_ACTIVITY_FLAGS_MASK,
-        HDMI_POST_OSD_ACTIVITY_FLAG_FRAME_VALID,
-        &[HDMI_POST_OSD_ACTIVITY_COUNTS_WORD],
-        &[(HDMI_POST_OSD_ACTIVITY_COUNTS_WORD, 0x0fff)],
+        (
+            HDMI_POST_OSD_ACTIVITY_FLAGS_WORD,
+            HDMI_POST_OSD_ACTIVITY_FLAGS_MASK,
+            HDMI_POST_OSD_ACTIVITY_FLAG_FRAME_VALID,
+        ),
+        (
+            &[HDMI_POST_OSD_ACTIVITY_COUNTS_WORD],
+            &[(HDMI_POST_OSD_ACTIVITY_COUNTS_WORD, 0x0fff)],
+        ),
         words,
     )
     .map(|words| HdmiPostOsdActivity { words })
@@ -536,11 +547,15 @@ pub fn decode_hdmi_avalon_liveness_activity(
         "HDMI Avalon liveness activity",
         GET_HDMI_AVALON_LIVENESS_ACTIVITY,
         HDMI_AVALON_LIVENESS_ACTIVITY_SCHEMA,
-        HDMI_AVALON_LIVENESS_ACTIVITY_FLAGS_WORD,
-        HDMI_AVALON_LIVENESS_ACTIVITY_FLAGS_MASK,
-        HDMI_AVALON_LIVENESS_ACTIVITY_FLAG_BUCKET_VALID,
-        &[HDMI_AVALON_LIVENESS_ACTIVITY_COUNTS_WORD],
-        &[(HDMI_AVALON_LIVENESS_ACTIVITY_COUNTS_WORD, 0xffff)],
+        (
+            HDMI_AVALON_LIVENESS_ACTIVITY_FLAGS_WORD,
+            HDMI_AVALON_LIVENESS_ACTIVITY_FLAGS_MASK,
+            HDMI_AVALON_LIVENESS_ACTIVITY_FLAG_BUCKET_VALID,
+        ),
+        (
+            &[HDMI_AVALON_LIVENESS_ACTIVITY_COUNTS_WORD],
+            &[(HDMI_AVALON_LIVENESS_ACTIVITY_COUNTS_WORD, 0xffff)],
+        ),
         words,
     )
     .map(|words| HdmiAvalonLivenessActivity { words })
