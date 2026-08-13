@@ -15,6 +15,7 @@ module mister_magik_sys_top_latch_path (
 	input wire hdmi_out_vs,
 	input wire hdmi_out_de,
 	input wire [23:0] hdmi_out_d,
+	input wire hdmi_out_direct,
 	input wire io_uio,
 	input wire io_strobe,
 	input wire [15:0] io_din
@@ -108,6 +109,7 @@ module mister_magik_sys_top_latch_path (
 		.hdmi_out_vs(hdmi_out_vs),
 		.hdmi_out_de(hdmi_out_de),
 		.hdmi_out_d(hdmi_out_d),
+		.hdmi_out_direct(hdmi_out_direct),
 		.response_valid(magik_diag_response_valid),
 		.response_data(magik_diag_response_data)
 	);
@@ -166,6 +168,7 @@ module tb_mister_magik_sys_top_integration;
 	reg test_hdmi_out_vs = 1'b0;
 	reg test_hdmi_out_de = 1'b0;
 	reg [23:0] test_hdmi_out_d = 24'd0;
+	reg test_hdmi_out_direct = 1'b0;
 	reg test_io_uio = 1'b0;
 	reg test_io_strobe = 1'b0;
 	reg [15:0] test_io_din = 16'd0;
@@ -179,6 +182,7 @@ module tb_mister_magik_sys_top_integration;
 		.hdmi_out_vs(test_hdmi_out_vs),
 		.hdmi_out_de(test_hdmi_out_de),
 		.hdmi_out_d(test_hdmi_out_d),
+		.hdmi_out_direct(test_hdmi_out_direct),
 		.io_uio(test_io_uio),
 		.io_strobe(test_io_strobe),
 		.io_din(test_io_din)
@@ -414,6 +418,24 @@ module tb_mister_magik_sys_top_integration;
 			16'd1, "sys_top output nonzero count");
 		expect16(evidence[MAGIK_HDMI_OUTPUT_ACTIVITY_CRC_WORD], evidence_crc,
 			"sys_top output activity CRC");
+
+		begin_command(MAGIK_UIO_GET_HDMI_FINAL_PATH_ACTIVITY,
+			MAGIK_HDMI_FINAL_PATH_ACTIVITY_MAGIC);
+		for(index = 0; index < MAGIK_HDMI_FINAL_PATH_ACTIVITY_WORDS;
+			index = index + 1)
+			transfer_word(16'd0, evidence[index]);
+		end_command();
+		evidence_crc = MAGIK_HDMI_FINAL_PATH_ACTIVITY_HEADER_CRC;
+		for(index = 0; index < MAGIK_HDMI_FINAL_PATH_ACTIVITY_CRC_WORD;
+			index = index + 1)
+			evidence_crc = crc_word(evidence_crc, evidence[index]);
+		expect16(evidence[MAGIK_HDMI_FINAL_PATH_ACTIVITY_FLAGS_WORD],
+			MAGIK_HDMI_FINAL_PATH_ACTIVITY_FLAG_FRAME_VALID,
+			"sys_top final-path activity flags");
+		expect16(evidence[MAGIK_HDMI_FINAL_PATH_ACTIVITY_BLACK_COUNTS_WORD],
+			16'h1000, "sys_top final-path nonzero count");
+		expect16(evidence[MAGIK_HDMI_FINAL_PATH_ACTIVITY_CRC_WORD], evidence_crc,
+			"sys_top final-path activity CRC");
 
 		// Post another route, then collide its vblank apply with a real 0x2f
 		// payload edge. The production legacy-write expression must win.

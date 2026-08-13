@@ -19,8 +19,14 @@ module tb_mister_magik_video_diagnostics_control;
 	reg hdmi_out_vs = 1'b0;
 	reg hdmi_out_de = 1'b0;
 	reg [23:0] hdmi_out_d = 24'd0;
+	reg hdmi_out_direct = 1'b0;
 	wire response_valid;
 	wire [15:0] response_data;
+	integer index;
+	reg [15:0] words [0:5];
+	reg [15:0] crc;
+	reg [15:0] armed_flags;
+	reg [15:0] lost_flags;
 
 	mister_magik_hdmi_lock_evidence dut (
 		.clk_sys(clk_sys),
@@ -32,6 +38,7 @@ module tb_mister_magik_video_diagnostics_control;
 		.hdmi_out_vs(hdmi_out_vs),
 		.hdmi_out_de(hdmi_out_de),
 		.hdmi_out_d(hdmi_out_d),
+		.hdmi_out_direct(hdmi_out_direct),
 		.response_valid(response_valid),
 		.response_data(response_data)
 	);
@@ -75,7 +82,7 @@ module tb_mister_magik_video_diagnostics_control;
 			#1 if(!response_valid || response_data != MAGIK_HDMI_OUTPUT_ACTIVITY_MAGIC)
 				$fatal(1, "missing activity magic before concurrent frame");
 			@(negedge clk_sys); io_strobe = 1'b0;
-			complete_output_frame(1'b1, 1'b1);
+			complete_output_frame(1'b1, 1'b1, 1'b0);
 			crc = MAGIK_HDMI_OUTPUT_ACTIVITY_HEADER_CRC;
 			for(index = 0; index < MAGIK_HDMI_OUTPUT_ACTIVITY_WORDS; index = index + 1) begin
 				@(negedge clk_sys); io_strobe = 1'b1;
@@ -116,11 +123,13 @@ module tb_mister_magik_video_diagnostics_control;
 	task automatic complete_output_frame;
 		input saw_de;
 		input saw_nonzero;
+		input selected_direct;
 		begin
 			@(negedge hdmi_tx_clk);
 			hdmi_out_vs = 1'b0;
 			hdmi_out_de = saw_de;
 			hdmi_out_d = saw_nonzero ? 24'h010203 : 24'd0;
+			hdmi_out_direct = selected_direct;
 			@(negedge hdmi_tx_clk);
 			hdmi_out_de = 1'b0;
 			hdmi_out_d = 24'd0;
@@ -129,11 +138,50 @@ module tb_mister_magik_video_diagnostics_control;
 		end
 	endtask
 
-	integer index;
-	reg [15:0] words [0:5];
-	reg [15:0] crc;
-	reg [15:0] armed_flags;
-	reg [15:0] lost_flags;
+	task automatic read_final_path_activity;
+		input [15:0] expected_flags;
+		input [3:0] expected_direct_black;
+		input [3:0] expected_scaled_black;
+		input [3:0] expected_mixed_black;
+		input [3:0] expected_nonzero;
+		input [3:0] expected_no_de;
+		begin
+			io_uio = 1'b1;
+			io_din = 16'h0062; io_strobe = 1'b1;
+			#1 if(!response_valid ||
+				response_data != MAGIK_HDMI_FINAL_PATH_ACTIVITY_MAGIC)
+				$fatal(1, "missing HDMI final-path activity magic");
+			@(negedge clk_sys); io_strobe = 1'b0;
+			crc = MAGIK_HDMI_FINAL_PATH_ACTIVITY_HEADER_CRC;
+			for(index = 0; index < MAGIK_HDMI_FINAL_PATH_ACTIVITY_WORDS;
+				index = index + 1) begin
+				@(negedge clk_sys); io_din = 16'd0; io_strobe = 1'b1;
+				#1;
+				if(!response_valid)
+					$fatal(1, "final-path activity ended at word %0d", index);
+				words[index] = response_data;
+				if(index < MAGIK_HDMI_FINAL_PATH_ACTIVITY_CRC_WORD)
+					crc = crc_word(crc, response_data);
+				@(negedge clk_sys); io_strobe = 1'b0;
+			end
+			@(negedge clk_sys); io_strobe = 1'b1;
+			#1 if(response_valid)
+				$fatal(1, "final-path activity exceeded fixed word count");
+			@(negedge clk_sys); io_strobe = 1'b0;
+			close_command();
+			if(words[MAGIK_HDMI_FINAL_PATH_ACTIVITY_SCHEMA_WORD] !=
+					MAGIK_HDMI_FINAL_PATH_ACTIVITY_SCHEMA ||
+			   words[MAGIK_HDMI_FINAL_PATH_ACTIVITY_FLAGS_WORD] != expected_flags ||
+			   words[MAGIK_HDMI_FINAL_PATH_ACTIVITY_BLACK_COUNTS_WORD] !=
+					{expected_nonzero, expected_mixed_black,
+					 expected_scaled_black, expected_direct_black} ||
+			   words[MAGIK_HDMI_FINAL_PATH_ACTIVITY_ACTIVITY_COUNTS_WORD] !=
+					{12'd0, expected_no_de} ||
+			   words[MAGIK_HDMI_FINAL_PATH_ACTIVITY_CRC_WORD] != crc)
+				$fatal(1, "HDMI final-path activity mismatch");
+		end
+	endtask
+
 	task automatic read_evidence;
 		input [15:0] expected_flags;
 		input [15:0] expected_loss_count;
@@ -251,6 +299,8 @@ module tb_mister_magik_video_diagnostics_control;
 			$fatal(1, "unexpected generated HDMI evidence header CRC");
 		if(MAGIK_HDMI_OUTPUT_ACTIVITY_HEADER_CRC != 16'hda08)
 			$fatal(1, "unexpected generated HDMI output activity header CRC");
+		if(MAGIK_HDMI_FINAL_PATH_ACTIVITY_HEADER_CRC != 16'h24fb)
+			$fatal(1, "unexpected generated HDMI final-path header CRC");
 
 		// The responder must ignore all latch-owned and retired commands.
 		for(opcode = 8'h57; opcode <= 8'h5f; opcode = opcode + 1) begin
@@ -264,7 +314,7 @@ module tb_mister_magik_video_diagnostics_control;
 		@(negedge clk_sys); io_strobe = 1'b0;
 
 		// A different command cannot become selected by changing io_din later.
-		io_uio = 1'b1; io_din = 16'h0062; io_strobe = 1'b1;
+		io_uio = 1'b1; io_din = 16'h0066; io_strobe = 1'b1;
 		#1 if(response_valid) $fatal(1, "unknown command unexpectedly selected");
 		@(negedge clk_sys); io_strobe = 1'b0;
 		@(negedge clk_sys); io_din = 16'h0060; io_strobe = 1'b1;
@@ -279,15 +329,17 @@ module tb_mister_magik_video_diagnostics_control;
 		repeat(8) @(negedge clk_sys);
 		read_output_activity(16'd0, 8'd0, 8'd0, 8'd0);
 
-		complete_output_frame(1'b0, 1'b0);
+		complete_output_frame(1'b0, 1'b0, 1'b0);
 		read_output_activity(MAGIK_HDMI_OUTPUT_ACTIVITY_FLAG_FRAME_VALID,
 			8'd1, 8'd0, 8'd0);
-		complete_output_frame(1'b1, 1'b0);
+		complete_output_frame(1'b1, 1'b0, 1'b0);
 		read_output_activity(MAGIK_HDMI_OUTPUT_ACTIVITY_FLAG_FRAME_VALID,
 			8'd1, 8'd1, 8'd0);
-		complete_output_frame(1'b1, 1'b1);
+		complete_output_frame(1'b1, 1'b1, 1'b0);
 		read_output_activity(MAGIK_HDMI_OUTPUT_ACTIVITY_FLAG_FRAME_VALID,
 			8'd1, 8'd1, 8'd1);
+		read_final_path_activity(MAGIK_HDMI_FINAL_PATH_ACTIVITY_FLAG_FRAME_VALID,
+			4'd0, 4'd1, 4'd0, 4'd1, 4'd1);
 
 		// Nonzero RGB outside DE must not be reported as active nonzero video.
 		@(negedge hdmi_tx_clk); hdmi_out_d = 24'hffffff;
@@ -316,8 +368,12 @@ module tb_mister_magik_video_diagnostics_control;
 
 		// Counters are explicitly modulo four-bit epochs; wrapping remains a
 		// valid snapshot for host-side modular delta calculation.
-		@(negedge clk_sys); dut.output_no_de_count = 4'hf;
-		complete_output_frame(1'b0, 1'b0);
+		@(negedge clk_sys);
+		dut.output_no_de_toggle = 1'b1;
+		dut.output_no_de_meta = 1'b1;
+		dut.output_no_de_sys = 1'b1;
+		dut.output_no_de_count = 4'hf;
+		complete_output_frame(1'b0, 1'b0, 1'b0);
 		read_output_activity(MAGIK_HDMI_OUTPUT_ACTIVITY_FLAG_FRAME_VALID,
 			8'd0, 8'd2, 8'd2);
 
@@ -325,13 +381,29 @@ module tb_mister_magik_video_diagnostics_control;
 		// capture nevertheless sees simultaneous channels, retain a sticky
 		// integrity flag instead of silently presenting coherent evidence.
 		@(negedge hdmi_tx_clk);
-		dut.output_de_all_zero_toggle = !dut.output_de_all_zero_toggle;
+		dut.output_black_direct_toggle = !dut.output_black_direct_toggle;
 		dut.output_de_has_nonzero_toggle = !dut.output_de_has_nonzero_toggle;
 		repeat(8) @(negedge clk_sys);
 		read_output_activity(
 			MAGIK_HDMI_OUTPUT_ACTIVITY_FLAG_FRAME_VALID |
 			MAGIK_HDMI_OUTPUT_ACTIVITY_FLAG_COUNTER_COLLISION,
 			8'd0, 8'd3, 8'd3);
+
+		// Provenance is sampled only during DE. A fully black frame can be
+		// direct-only, scaled-only, or mixed if the functional mux changes
+		// during active video; it must never be guessed from a later live bit.
+		complete_output_frame(1'b1, 1'b0, 1'b1);
+		@(negedge hdmi_tx_clk);
+		hdmi_out_vs = 1'b0; hdmi_out_de = 1'b1;
+		hdmi_out_d = 24'd0; hdmi_out_direct = 1'b1;
+		@(negedge hdmi_tx_clk); hdmi_out_direct = 1'b0;
+		@(negedge hdmi_tx_clk); hdmi_out_de = 1'b0;
+		pulse_output_vs();
+		repeat(8) @(negedge clk_sys);
+		read_final_path_activity(
+			MAGIK_HDMI_FINAL_PATH_ACTIVITY_FLAG_FRAME_VALID |
+			MAGIK_HDMI_FINAL_PATH_ACTIVITY_FLAG_COUNTER_COLLISION,
+			4'd2, 4'd2, 4'd1, 4'd3, 4'd0);
 
 		// An aborted activity transaction restarts from its own schema and CRC
 		// seed without perturbing the permanent 0x60 lock record.
@@ -345,7 +417,7 @@ module tb_mister_magik_video_diagnostics_control;
 		read_output_activity(
 			MAGIK_HDMI_OUTPUT_ACTIVITY_FLAG_FRAME_VALID |
 			MAGIK_HDMI_OUTPUT_ACTIVITY_FLAG_COUNTER_COLLISION,
-			8'd0, 8'd3, 8'd3);
+			8'd0, 8'd5, 8'd3);
 
 		// A raw pulse sampled by the first stage exactly once produces one high
 		// sample at the synchronized stage. It records that lock was seen but

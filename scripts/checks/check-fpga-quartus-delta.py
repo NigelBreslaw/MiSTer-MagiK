@@ -54,14 +54,18 @@ MINIMUM_SLACK_NS = 0.20
 MAXIMUM_SLACK_DEGRADATION_NS = 0.15
 MAXIMUM_LOGIC_ELEMENT_DELTA = 800
 MAXIMUM_REGISTER_DELTA = 300
-EXPECTED_OBSERVER_CALCULABLE_CHAINS = 4
+EXPECTED_OBSERVER_CALCULABLE_CHAINS = 6
 EXPECTED_SYNC_ASSIGNMENT_SUFFIXES = (
     "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|control_pll_lock_meta",
     "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|control_pll_lock_sys",
     "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|output_no_de_meta",
     "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|output_no_de_sys",
-    "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|output_de_all_zero_meta",
-    "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|output_de_all_zero_sys",
+    "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|output_black_direct_meta",
+    "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|output_black_direct_sys",
+    "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|output_black_scaled_meta",
+    "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|output_black_scaled_sys",
+    "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|output_black_mixed_meta",
+    "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|output_black_mixed_sys",
     "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|output_de_has_nonzero_meta",
     "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|output_de_has_nonzero_sys",
 )

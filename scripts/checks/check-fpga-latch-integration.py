@@ -192,14 +192,18 @@ def main() -> None:
         ("control_pll_lock_sys", "FORCED_IF_ASYNCHRONOUS"),
         ("output_no_de_meta", "FORCED"),
         ("output_no_de_sys", "FORCED_IF_ASYNCHRONOUS"),
-        ("output_de_all_zero_meta", "FORCED"),
-        ("output_de_all_zero_sys", "FORCED_IF_ASYNCHRONOUS"),
+        ("output_black_direct_meta", "FORCED"),
+        ("output_black_direct_sys", "FORCED_IF_ASYNCHRONOUS"),
+        ("output_black_scaled_meta", "FORCED"),
+        ("output_black_scaled_sys", "FORCED_IF_ASYNCHRONOUS"),
+        ("output_black_mixed_meta", "FORCED"),
+        ("output_black_mixed_sys", "FORCED_IF_ASYNCHRONOUS"),
         ("output_de_has_nonzero_meta", "FORCED"),
         ("output_de_has_nonzero_sys", "FORCED_IF_ASYNCHRONOUS"),
     )
     if (
         "ASYNC_REG" in control_source
-        or control_source.count(sync_assignment) != 4
+        or control_source.count(sync_assignment) != 6
     ):
         fail("HDMI evidence synchronizers are not exactly identified")
     for stage, assignment in synchronizer_stages:
@@ -231,13 +235,29 @@ def main() -> None:
             control_source,
             "output_no_de_sys <= output_no_de_meta;",
         ),
-        "all-zero first stage": (
+        "direct-black first stage": (
             control_source,
-            "output_de_all_zero_meta <= output_de_all_zero_toggle;",
+            "output_black_direct_meta <= output_black_direct_toggle;",
         ),
-        "all-zero second stage": (
+        "direct-black second stage": (
             control_source,
-            "output_de_all_zero_sys <= output_de_all_zero_meta;",
+            "output_black_direct_sys <= output_black_direct_meta;",
+        ),
+        "scaled-black first stage": (
+            control_source,
+            "output_black_scaled_meta <= output_black_scaled_toggle;",
+        ),
+        "scaled-black second stage": (
+            control_source,
+            "output_black_scaled_sys <= output_black_scaled_meta;",
+        ),
+        "mixed-black first stage": (
+            control_source,
+            "output_black_mixed_meta <= output_black_mixed_toggle;",
+        ),
+        "mixed-black second stage": (
+            control_source,
+            "output_black_mixed_sys <= output_black_mixed_meta;",
         ),
         "nonzero first stage": (
             control_source,
@@ -275,6 +295,7 @@ def main() -> None:
         "hdmi_out_vs",
         "hdmi_out_de",
         "hdmi_out_d",
+        "hdmi_out_direct",
         "response_valid",
         "response_data",
     ]
@@ -283,12 +304,16 @@ def main() -> None:
     required_activity_fragments = (
         "wire output_sample_nonzero = hdmi_out_de && (|hdmi_out_d);",
         "if(!output_frame_saw_de_now)",
-        "else if(!output_frame_saw_nonzero_now)",
+        "else if(output_frame_saw_nonzero_now)",
         "output_no_de_toggle <= !output_no_de_toggle;",
-        "output_de_all_zero_toggle <= !output_de_all_zero_toggle;",
+        "output_black_direct_toggle <= !output_black_direct_toggle;",
+        "output_black_scaled_toggle <= !output_black_scaled_toggle;",
+        "output_black_mixed_toggle <= !output_black_mixed_toggle;",
         "output_de_has_nonzero_toggle <= !output_de_has_nonzero_toggle;",
         "reg [3:0] output_no_de_count = 4'd0;",
-        "reg [3:0] output_de_all_zero_count = 4'd0;",
+        "reg [3:0] output_black_direct_count = 4'd0;",
+        "reg [3:0] output_black_scaled_count = 4'd0;",
+        "reg [3:0] output_black_mixed_count = 4'd0;",
         "reg [3:0] output_de_has_nonzero_count = 4'd0;",
         "wire output_no_de_event = output_no_de_sys != output_no_de_count[0];",
         "wire activity_start = io_din[7:0] == MAGIK_UIO_GET_HDMI_OUTPUT_ACTIVITY;",
@@ -304,7 +329,9 @@ def main() -> None:
         fail("HDMI evidence module drives a functional video or control signal")
     for redundant_register in (
         "output_no_de_previous",
-        "output_de_all_zero_previous",
+        "output_black_direct_previous",
+        "output_black_scaled_previous",
+        "output_black_mixed_previous",
         "output_de_has_nonzero_previous",
         "snapshot_output_nonzero_count",
     ):
@@ -417,6 +444,18 @@ def main() -> None:
             fail("sys_top does not observe the existing real HDMI PLL lock status bit")
         if patched.count("wire hdmi_pll_locked = 1'b0;") != 1:
             fail("sys_top HDMI-disabled PLL status fallback is missing")
+        if patched.count("reg magik_selected_direct;") != 1 or patched.count(
+            "reg hdmi_out_direct;"
+        ) != 1:
+            fail("final mux provenance registers are missing or ambiguous")
+        if patched.count(
+            "magik_selected_direct <= ~vga_fb & direct_video;"
+        ) != 1 or patched.count(
+            "hdmi_out_direct <= magik_selected_direct;"
+        ) != 1:
+            fail("final mux provenance is not aligned through two HDMI output stages")
+        if len(re.findall(r"\bhdmi_out_direct\b", patched)) != 4:
+            fail("final mux provenance tag has unexpected fanout")
         if re.search(
             r"\b(?:LFB_|FB_|hdmi_out_|vbuf_|reset_req)[A-Za-z0-9_]*\s*"
             r"(?:<=|=)\s*magik_diag_",
@@ -450,6 +489,7 @@ def main() -> None:
                 ("hdmi_out_vs", "hdmi_out_vs"),
                 ("hdmi_out_de", "hdmi_out_de"),
                 ("hdmi_out_d", "hdmi_out_d"),
+                ("hdmi_out_direct", "hdmi_out_direct"),
                 ("response_valid", "magik_diag_response_valid"),
                 ("response_data", "magik_diag_response_data"),
             )
@@ -464,7 +504,7 @@ def main() -> None:
         all_lock_port_names = re.findall(
             r"\.([A-Za-z_][A-Za-z0-9_]*)\s*\(", control_binding.group(1)
         )
-        if actual_lock_ports != expected_lock_ports or len(all_lock_port_names) != 11:
+        if actual_lock_ports != expected_lock_ports or len(all_lock_port_names) != 12:
             fail("HDMI lock and final-output evidence port map is not exact")
         for response_net in ("magik_diag_response_valid", "magik_diag_response_data"):
             if len(re.findall(rf"\b{response_net}\b", patched)) != 4:
