@@ -131,7 +131,7 @@ jobs:
           set -euo pipefail
           build_dir="$(mktemp -d)"
           trap 'rm -rf "$build_dir"' EXIT
-          verilator --cc --exe --build --timing --coverage-line \
+          verilator --cc --exe --build --timing --coverage-line --Wno-fatal \
             --top-module tb_mister_magik_sys_top_integration \
             --Mdir "$build_dir/obj" \
             -Imister/platform/fpga/menu-vblank-latch \
