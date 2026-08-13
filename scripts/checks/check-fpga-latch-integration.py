@@ -200,10 +200,22 @@ def main() -> None:
         ("output_black_mixed_sys", "FORCED_IF_ASYNCHRONOUS"),
         ("output_de_has_nonzero_meta", "FORCED"),
         ("output_de_has_nonzero_sys", "FORCED_IF_ASYNCHRONOUS"),
+        ("raw_no_de_meta", "FORCED"),
+        ("raw_no_de_sys", "FORCED_IF_ASYNCHRONOUS"),
+        ("raw_all_zero_meta", "FORCED"),
+        ("raw_all_zero_sys", "FORCED_IF_ASYNCHRONOUS"),
+        ("raw_nonzero_meta", "FORCED"),
+        ("raw_nonzero_sys", "FORCED_IF_ASYNCHRONOUS"),
+        ("post_no_de_meta", "FORCED"),
+        ("post_no_de_sys", "FORCED_IF_ASYNCHRONOUS"),
+        ("post_all_zero_meta", "FORCED"),
+        ("post_all_zero_sys", "FORCED_IF_ASYNCHRONOUS"),
+        ("post_nonzero_meta", "FORCED"),
+        ("post_nonzero_sys", "FORCED_IF_ASYNCHRONOUS"),
     )
     if (
         "ASYNC_REG" in control_source
-        or control_source.count(sync_assignment) != 6
+        or control_source.count(sync_assignment) != 12
     ):
         fail("HDMI evidence synchronizers are not exactly identified")
     for stage, assignment in synchronizer_stages:
@@ -267,6 +279,27 @@ def main() -> None:
             control_source,
             "output_de_has_nonzero_sys <= output_de_has_nonzero_meta;",
         ),
+        "raw no-DE first stage": (control_source, "raw_no_de_meta <= raw_no_de_toggle;"),
+        "raw no-DE second stage": (control_source, "raw_no_de_sys <= raw_no_de_meta;"),
+        "raw black first stage": (
+            control_source,
+            "raw_all_zero_meta <= raw_all_zero_toggle;",
+        ),
+        "raw black second stage": (control_source, "raw_all_zero_sys <= raw_all_zero_meta;"),
+        "raw nonzero first stage": (control_source, "raw_nonzero_meta <= raw_nonzero_toggle;"),
+        "raw nonzero second stage": (control_source, "raw_nonzero_sys <= raw_nonzero_meta;"),
+        "post no-DE first stage": (control_source, "post_no_de_meta <= post_no_de_toggle;"),
+        "post no-DE second stage": (control_source, "post_no_de_sys <= post_no_de_meta;"),
+        "post black first stage": (
+            control_source,
+            "post_all_zero_meta <= post_all_zero_toggle;",
+        ),
+        "post black second stage": (
+            control_source,
+            "post_all_zero_sys <= post_all_zero_meta;",
+        ),
+        "post nonzero first stage": (control_source, "post_nonzero_meta <= post_nonzero_toggle;"),
+        "post nonzero second stage": (control_source, "post_nonzero_sys <= post_nonzero_meta;"),
     }
     for label, (source, binding) in synchronizer_bindings.items():
         if source.count(binding) != 1:
@@ -288,6 +321,7 @@ def main() -> None:
     expected_module_ports = [
         "clk_sys",
         "hdmi_tx_clk",
+        "clk_hdmi",
         "io_uio",
         "io_strobe",
         "io_din",
@@ -296,6 +330,12 @@ def main() -> None:
         "hdmi_out_de",
         "hdmi_out_d",
         "hdmi_out_direct",
+        "scaler_raw_vs",
+        "scaler_raw_de",
+        "scaler_raw_d",
+        "post_osd_vs",
+        "post_osd_de",
+        "post_osd_d",
         "response_valid",
         "response_data",
     ]
@@ -318,6 +358,16 @@ def main() -> None:
         "wire output_no_de_event = output_no_de_sys != output_no_de_count[0];",
         "wire activity_start = io_din[7:0] == MAGIK_UIO_GET_HDMI_OUTPUT_ACTIVITY;",
         "tx_crc <= MAGIK_HDMI_OUTPUT_ACTIVITY_HEADER_CRC;",
+        "wire raw_sample_nonzero = scaler_raw_de && (|scaler_raw_d);",
+        "wire post_sample_nonzero = post_osd_de && (|post_osd_d);",
+        "raw_no_de_toggle <= !raw_no_de_toggle;",
+        "raw_all_zero_toggle <= !raw_all_zero_toggle;",
+        "raw_nonzero_toggle <= !raw_nonzero_toggle;",
+        "post_no_de_toggle <= !post_no_de_toggle;",
+        "post_all_zero_toggle <= !post_all_zero_toggle;",
+        "post_nonzero_toggle <= !post_nonzero_toggle;",
+        "tx_crc <= MAGIK_HDMI_SCALER_RAW_ACTIVITY_HEADER_CRC;",
+        "tx_crc <= MAGIK_HDMI_POST_OSD_ACTIVITY_HEADER_CRC;",
     )
     for fragment in required_activity_fragments:
         if control_source.count(fragment) != 1:
@@ -482,6 +532,7 @@ def main() -> None:
             (
                 ("clk_sys", "clk_sys"),
                 ("hdmi_tx_clk", "hdmi_tx_clk"),
+                ("clk_hdmi", "clk_hdmi"),
                 ("io_uio", "io_uio"),
                 ("io_strobe", "io_strobe"),
                 ("io_din", "io_din"),
@@ -490,6 +541,12 @@ def main() -> None:
                 ("hdmi_out_de", "hdmi_out_de"),
                 ("hdmi_out_d", "hdmi_out_d"),
                 ("hdmi_out_direct", "hdmi_out_direct"),
+                ("scaler_raw_vs", "hdmi_vs"),
+                ("scaler_raw_de", "hdmi_de"),
+                ("scaler_raw_d", "hdmi_data"),
+                ("post_osd_vs", "hdmi_vs_osd"),
+                ("post_osd_de", "hdmi_de_osd"),
+                ("post_osd_d", "hdmi_data_osd"),
                 ("response_valid", "magik_diag_response_valid"),
                 ("response_data", "magik_diag_response_data"),
             )
@@ -504,7 +561,7 @@ def main() -> None:
         all_lock_port_names = re.findall(
             r"\.([A-Za-z_][A-Za-z0-9_]*)\s*\(", control_binding.group(1)
         )
-        if actual_lock_ports != expected_lock_ports or len(all_lock_port_names) != 12:
+        if actual_lock_ports != expected_lock_ports or len(all_lock_port_names) != 19:
             fail("HDMI lock and final-output evidence port map is not exact")
         for response_net in ("magik_diag_response_valid", "magik_diag_response_data"):
             if len(re.findall(rf"\b{response_net}\b", patched)) != 4:

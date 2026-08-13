@@ -10,12 +10,19 @@
 module mister_magik_sys_top_latch_path (
 	input wire clk_sys,
 	input wire hdmi_tx_clk,
+	input wire clk_hdmi,
 	input wire hdmi_vbl,
 	input wire hdmi_pll_locked,
 	input wire hdmi_out_vs,
 	input wire hdmi_out_de,
 	input wire [23:0] hdmi_out_d,
 	input wire hdmi_out_direct,
+	input wire scaler_raw_vs,
+	input wire scaler_raw_de,
+	input wire [23:0] scaler_raw_d,
+	input wire post_osd_vs,
+	input wire post_osd_de,
+	input wire [23:0] post_osd_d,
 	input wire io_uio,
 	input wire io_strobe,
 	input wire [15:0] io_din
@@ -102,6 +109,7 @@ module mister_magik_sys_top_latch_path (
 	mister_magik_hdmi_lock_evidence magik_hdmi_lock_evidence (
 		.clk_sys(clk_sys),
 		.hdmi_tx_clk(hdmi_tx_clk),
+		.clk_hdmi(clk_hdmi),
 		.io_uio(io_uio),
 		.io_strobe(io_strobe),
 		.io_din(io_din),
@@ -110,6 +118,12 @@ module mister_magik_sys_top_latch_path (
 		.hdmi_out_de(hdmi_out_de),
 		.hdmi_out_d(hdmi_out_d),
 		.hdmi_out_direct(hdmi_out_direct),
+		.scaler_raw_vs(scaler_raw_vs),
+		.scaler_raw_de(scaler_raw_de),
+		.scaler_raw_d(scaler_raw_d),
+		.post_osd_vs(post_osd_vs),
+		.post_osd_de(post_osd_de),
+		.post_osd_d(post_osd_d),
 		.response_valid(magik_diag_response_valid),
 		.response_data(magik_diag_response_data)
 	);
@@ -163,12 +177,19 @@ module tb_mister_magik_sys_top_integration;
 
 	reg test_clk = 1'b0;
 	reg test_hdmi_clk = 1'b0;
+	reg test_scaler_clk = 1'b0;
 	reg test_vblank = 1'b0;
 	reg test_hdmi_pll_locked = 1'b0;
 	reg test_hdmi_out_vs = 1'b0;
 	reg test_hdmi_out_de = 1'b0;
 	reg [23:0] test_hdmi_out_d = 24'd0;
 	reg test_hdmi_out_direct = 1'b0;
+	reg test_scaler_raw_vs = 1'b0;
+	reg test_scaler_raw_de = 1'b0;
+	reg [23:0] test_scaler_raw_d = 24'd0;
+	reg test_post_osd_vs = 1'b0;
+	reg test_post_osd_de = 1'b0;
+	reg [23:0] test_post_osd_d = 24'd0;
 	reg test_io_uio = 1'b0;
 	reg test_io_strobe = 1'b0;
 	reg [15:0] test_io_din = 16'd0;
@@ -177,12 +198,19 @@ module tb_mister_magik_sys_top_integration;
 	mister_magik_sys_top_latch_path dut (
 		.clk_sys(test_clk),
 		.hdmi_tx_clk(test_hdmi_clk),
+		.clk_hdmi(test_scaler_clk),
 		.hdmi_vbl(test_vblank),
 		.hdmi_pll_locked(test_hdmi_pll_locked),
 		.hdmi_out_vs(test_hdmi_out_vs),
 		.hdmi_out_de(test_hdmi_out_de),
 		.hdmi_out_d(test_hdmi_out_d),
 		.hdmi_out_direct(test_hdmi_out_direct),
+		.scaler_raw_vs(test_scaler_raw_vs),
+		.scaler_raw_de(test_scaler_raw_de),
+		.scaler_raw_d(test_scaler_raw_d),
+		.post_osd_vs(test_post_osd_vs),
+		.post_osd_de(test_post_osd_de),
+		.post_osd_d(test_post_osd_d),
 		.io_uio(test_io_uio),
 		.io_strobe(test_io_strobe),
 		.io_din(test_io_din)
@@ -190,6 +218,7 @@ module tb_mister_magik_sys_top_integration;
 
 	always #5 test_clk = ~test_clk;
 	always #7 test_hdmi_clk = ~test_hdmi_clk;
+	always #11 test_scaler_clk = ~test_scaler_clk;
 
 	task automatic fail(input [8*96-1:0] message);
 		begin
@@ -320,6 +349,34 @@ module tb_mister_magik_sys_top_integration;
 		end
 	endtask
 
+	task automatic pulse_scaler_boundaries;
+		begin
+			@(negedge test_scaler_clk);
+			test_scaler_raw_vs = 1'b1;
+			test_post_osd_vs = 1'b1;
+			@(negedge test_scaler_clk);
+			test_scaler_raw_vs = 1'b0;
+			test_post_osd_vs = 1'b0;
+		end
+	endtask
+
+	task automatic complete_scaler_nonzero_frame;
+		begin
+			@(negedge test_scaler_clk);
+			test_scaler_raw_de = 1'b1;
+			test_scaler_raw_d = 24'h112233;
+			test_post_osd_de = 1'b1;
+			test_post_osd_d = 24'h445566;
+			@(negedge test_scaler_clk);
+			test_scaler_raw_de = 1'b0;
+			test_scaler_raw_d = 24'd0;
+			test_post_osd_de = 1'b0;
+			test_post_osd_d = 24'd0;
+			pulse_scaler_boundaries();
+			repeat(8) @(posedge test_clk);
+		end
+	endtask
+
 	initial begin
 		reg [15:0] response;
 		reg [15:0] telemetry [0:10];
@@ -436,6 +493,38 @@ module tb_mister_magik_sys_top_integration;
 			16'h1000, "sys_top final-path nonzero count");
 		expect16(evidence[MAGIK_HDMI_FINAL_PATH_ACTIVITY_CRC_WORD], evidence_crc,
 			"sys_top final-path activity CRC");
+
+		pulse_scaler_boundaries();
+		complete_scaler_nonzero_frame();
+		begin_command(MAGIK_UIO_GET_HDMI_SCALER_RAW_ACTIVITY,
+			MAGIK_HDMI_SCALER_RAW_ACTIVITY_MAGIC);
+		for(index = 0; index < MAGIK_HDMI_SCALER_RAW_ACTIVITY_WORDS;
+			index = index + 1)
+			transfer_word(16'd0, evidence[index]);
+		end_command();
+		evidence_crc = MAGIK_HDMI_SCALER_RAW_ACTIVITY_HEADER_CRC;
+		for(index = 0; index < MAGIK_HDMI_SCALER_RAW_ACTIVITY_CRC_WORD;
+			index = index + 1)
+			evidence_crc = crc_word(evidence_crc, evidence[index]);
+		expect16(evidence[MAGIK_HDMI_SCALER_RAW_ACTIVITY_COUNTS_WORD],
+			16'h0100, "sys_top raw scaler nonzero count");
+		expect16(evidence[MAGIK_HDMI_SCALER_RAW_ACTIVITY_CRC_WORD], evidence_crc,
+			"sys_top raw scaler activity CRC");
+
+		begin_command(MAGIK_UIO_GET_HDMI_POST_OSD_ACTIVITY,
+			MAGIK_HDMI_POST_OSD_ACTIVITY_MAGIC);
+		for(index = 0; index < MAGIK_HDMI_POST_OSD_ACTIVITY_WORDS;
+			index = index + 1)
+			transfer_word(16'd0, evidence[index]);
+		end_command();
+		evidence_crc = MAGIK_HDMI_POST_OSD_ACTIVITY_HEADER_CRC;
+		for(index = 0; index < MAGIK_HDMI_POST_OSD_ACTIVITY_CRC_WORD;
+			index = index + 1)
+			evidence_crc = crc_word(evidence_crc, evidence[index]);
+		expect16(evidence[MAGIK_HDMI_POST_OSD_ACTIVITY_COUNTS_WORD],
+			16'h0100, "sys_top post-OSD nonzero count");
+		expect16(evidence[MAGIK_HDMI_POST_OSD_ACTIVITY_CRC_WORD], evidence_crc,
+			"sys_top post-OSD activity CRC");
 
 		// Post another route, then collide its vblank apply with a real 0x2f
 		// payload edge. The production legacy-write expression must win.

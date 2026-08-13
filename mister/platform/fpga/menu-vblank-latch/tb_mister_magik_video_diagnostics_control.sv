@@ -11,6 +11,8 @@ module tb_mister_magik_video_diagnostics_control;
 	always #5 clk_sys = ~clk_sys;
 	reg hdmi_tx_clk = 1'b0;
 	always #7 hdmi_tx_clk = ~hdmi_tx_clk;
+	reg clk_hdmi = 1'b0;
+	always #11 clk_hdmi = ~clk_hdmi;
 
 	reg io_uio = 1'b0;
 	reg io_strobe = 1'b0;
@@ -20,6 +22,12 @@ module tb_mister_magik_video_diagnostics_control;
 	reg hdmi_out_de = 1'b0;
 	reg [23:0] hdmi_out_d = 24'd0;
 	reg hdmi_out_direct = 1'b0;
+	reg scaler_raw_vs = 1'b0;
+	reg scaler_raw_de = 1'b0;
+	reg [23:0] scaler_raw_d = 24'd0;
+	reg post_osd_vs = 1'b0;
+	reg post_osd_de = 1'b0;
+	reg [23:0] post_osd_d = 24'd0;
 	wire response_valid;
 	wire [15:0] response_data;
 	integer index;
@@ -31,6 +39,7 @@ module tb_mister_magik_video_diagnostics_control;
 	mister_magik_hdmi_lock_evidence dut (
 		.clk_sys(clk_sys),
 		.hdmi_tx_clk(hdmi_tx_clk),
+		.clk_hdmi(clk_hdmi),
 		.io_uio(io_uio),
 		.io_strobe(io_strobe),
 		.io_din(io_din),
@@ -39,6 +48,12 @@ module tb_mister_magik_video_diagnostics_control;
 		.hdmi_out_de(hdmi_out_de),
 		.hdmi_out_d(hdmi_out_d),
 		.hdmi_out_direct(hdmi_out_direct),
+		.scaler_raw_vs(scaler_raw_vs),
+		.scaler_raw_de(scaler_raw_de),
+		.scaler_raw_d(scaler_raw_d),
+		.post_osd_vs(post_osd_vs),
+		.post_osd_de(post_osd_de),
+		.post_osd_d(post_osd_d),
 		.response_valid(response_valid),
 		.response_data(response_data)
 	);
@@ -100,6 +115,85 @@ module tb_mister_magik_video_diagnostics_control;
 					{8'd0, expected_nonzero} ||
 			   words[MAGIK_HDMI_OUTPUT_ACTIVITY_CRC_WORD] != crc)
 				$fatal(1, "activity command-start snapshot changed mid-read");
+		end
+	endtask
+
+	task automatic pulse_scaler_vs;
+		input raw_path;
+		begin
+			@(negedge clk_hdmi);
+			if(raw_path) scaler_raw_vs = 1'b1;
+			else post_osd_vs = 1'b1;
+			@(negedge clk_hdmi);
+			if(raw_path) scaler_raw_vs = 1'b0;
+			else post_osd_vs = 1'b0;
+		end
+	endtask
+
+	task automatic complete_scaler_frame;
+		input raw_path;
+		input saw_de;
+		input saw_nonzero;
+		begin
+			@(negedge clk_hdmi);
+			if(raw_path) begin
+				scaler_raw_de = saw_de;
+				scaler_raw_d = saw_nonzero ? 24'h112233 : 24'd0;
+			end
+			else begin
+				post_osd_de = saw_de;
+				post_osd_d = saw_nonzero ? 24'h445566 : 24'd0;
+			end
+			@(negedge clk_hdmi);
+			if(raw_path) begin
+				scaler_raw_de = 1'b0;
+				scaler_raw_d = 24'd0;
+			end
+			else begin
+				post_osd_de = 1'b0;
+				post_osd_d = 24'd0;
+			end
+			pulse_scaler_vs(raw_path);
+			repeat(8) @(negedge clk_sys);
+		end
+	endtask
+
+	task automatic read_scaler_activity;
+		input raw_path;
+		input [15:0] expected_flags;
+		input [3:0] expected_no_de;
+		input [3:0] expected_all_zero;
+		input [3:0] expected_nonzero;
+		reg [15:0] expected_magic;
+		reg [15:0] header_crc;
+		begin
+			expected_magic = raw_path ? MAGIK_HDMI_SCALER_RAW_ACTIVITY_MAGIC :
+				MAGIK_HDMI_POST_OSD_ACTIVITY_MAGIC;
+			header_crc = raw_path ? MAGIK_HDMI_SCALER_RAW_ACTIVITY_HEADER_CRC :
+				MAGIK_HDMI_POST_OSD_ACTIVITY_HEADER_CRC;
+			io_uio = 1'b1;
+			io_din = raw_path ? 16'h0063 : 16'h0064;
+			io_strobe = 1'b1;
+			#1 if(!response_valid || response_data != expected_magic)
+				$fatal(1, "missing scaler activity magic");
+			@(negedge clk_sys); io_strobe = 1'b0;
+			crc = header_crc;
+			for(index = 0; index < 4; index = index + 1) begin
+				@(negedge clk_sys); io_din = 16'd0; io_strobe = 1'b1;
+				#1;
+				if(!response_valid) $fatal(1, "scaler activity ended early");
+				words[index] = response_data;
+				if(index < 3) crc = crc_word(crc, response_data);
+				@(negedge clk_sys); io_strobe = 1'b0;
+			end
+			@(negedge clk_sys); io_strobe = 1'b1;
+			#1 if(response_valid) $fatal(1, "scaler activity exceeded word count");
+			@(negedge clk_sys); io_strobe = 1'b0;
+			close_command();
+			if(words[0] != 16'd1 || words[1] != expected_flags ||
+			   words[2] != {4'd0, expected_nonzero, expected_all_zero,
+					expected_no_de} || words[3] != crc)
+				$fatal(1, "scaler activity mismatch raw=%0d", raw_path);
 		end
 	endtask
 
@@ -301,6 +395,9 @@ module tb_mister_magik_video_diagnostics_control;
 			$fatal(1, "unexpected generated HDMI output activity header CRC");
 		if(MAGIK_HDMI_FINAL_PATH_ACTIVITY_HEADER_CRC != 16'h24fb)
 			$fatal(1, "unexpected generated HDMI final-path header CRC");
+		if(MAGIK_HDMI_SCALER_RAW_ACTIVITY_HEADER_CRC != 16'hfe4d ||
+		   MAGIK_HDMI_POST_OSD_ACTIVITY_HEADER_CRC != 16'h9999)
+			$fatal(1, "unexpected generated scaler activity header CRC");
 
 		// The responder must ignore all latch-owned and retired commands.
 		for(opcode = 8'h57; opcode <= 8'h5f; opcode = opcode + 1) begin
@@ -404,6 +501,24 @@ module tb_mister_magik_video_diagnostics_control;
 			MAGIK_HDMI_FINAL_PATH_ACTIVITY_FLAG_FRAME_VALID |
 			MAGIK_HDMI_FINAL_PATH_ACTIVITY_FLAG_COUNTER_COLLISION,
 			4'd2, 4'd2, 4'd1, 4'd3, 4'd0);
+
+		// The raw scaler and post-OSD classifiers are independent even though
+		// they share clk_hdmi. Each discards its first partial frame and then
+		// reports the same three exhaustive activity classes.
+		pulse_scaler_vs(1'b1);
+		pulse_scaler_vs(1'b0);
+		complete_scaler_frame(1'b1, 1'b0, 1'b0);
+		complete_scaler_frame(1'b1, 1'b1, 1'b0);
+		complete_scaler_frame(1'b1, 1'b1, 1'b1);
+		read_scaler_activity(1'b1,
+			MAGIK_HDMI_SCALER_RAW_ACTIVITY_FLAG_FRAME_VALID,
+			4'd1, 4'd1, 4'd1);
+		complete_scaler_frame(1'b0, 1'b1, 1'b0);
+		complete_scaler_frame(1'b0, 1'b1, 1'b1);
+		complete_scaler_frame(1'b0, 1'b0, 1'b0);
+		read_scaler_activity(1'b0,
+			MAGIK_HDMI_POST_OSD_ACTIVITY_FLAG_FRAME_VALID,
+			4'd1, 4'd1, 4'd1);
 
 		// An aborted activity transaction restarts from its own schema and CRC
 		// seed without perturbing the permanent 0x60 lock record.

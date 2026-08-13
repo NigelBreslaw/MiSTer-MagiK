@@ -10,6 +10,7 @@
 module mister_magik_hdmi_lock_evidence (
 	input  wire        clk_sys,
 	input  wire        hdmi_tx_clk,
+	input  wire        clk_hdmi,
 	input  wire        io_uio,
 	input  wire        io_strobe,
 	input  wire [15:0] io_din,
@@ -18,6 +19,12 @@ module mister_magik_hdmi_lock_evidence (
 	input  wire        hdmi_out_de,
 	input  wire [23:0] hdmi_out_d,
 	input  wire        hdmi_out_direct,
+	input  wire        scaler_raw_vs,
+	input  wire        scaler_raw_de,
+	input  wire [23:0] scaler_raw_d,
+	input  wire        post_osd_vs,
+	input  wire        post_osd_de,
+	input  wire [23:0] post_osd_d,
 	output wire        response_valid,
 	output reg  [15:0] response_data
 );
@@ -25,23 +32,30 @@ module mister_magik_hdmi_lock_evidence (
 `include "mister_magik_video_diagnostics_protocol.svh"
 
 	reg       has_command = 1'b0;
-	reg [1:0] command_kind = 2'd0;
+	reg [2:0] command_kind = 3'd0;
 	reg [2:0] word_count = 3'd0;
 	wire command_start = io_uio && io_strobe && !has_command;
 	wire command_data = io_uio && io_strobe && has_command;
 	wire lock_start = io_din[7:0] == MAGIK_UIO_GET_HDMI_EVIDENCE;
 	wire activity_start = io_din[7:0] == MAGIK_UIO_GET_HDMI_OUTPUT_ACTIVITY;
 	wire final_path_start = io_din[7:0] == MAGIK_UIO_GET_HDMI_FINAL_PATH_ACTIVITY;
-	wire selected_start = lock_start || activity_start || final_path_start;
-	wire selected_command = command_kind != 2'd0;
+	wire scaler_raw_start = io_din[7:0] == MAGIK_UIO_GET_HDMI_SCALER_RAW_ACTIVITY;
+	wire post_osd_start = io_din[7:0] == MAGIK_UIO_GET_HDMI_POST_OSD_ACTIVITY;
+	wire selected_start = lock_start || activity_start || final_path_start ||
+		scaler_raw_start || post_osd_start;
+	wire selected_command = command_kind != 3'd0;
 	wire [2:0] selected_words =
-		(command_kind == 2'd1) ? MAGIK_HDMI_EVIDENCE_WORDS :
-		(command_kind == 2'd2) ? MAGIK_HDMI_OUTPUT_ACTIVITY_WORDS :
-		(command_kind == 2'd3) ? MAGIK_HDMI_FINAL_PATH_ACTIVITY_WORDS : 3'd0;
+		(command_kind == 3'd1) ? MAGIK_HDMI_EVIDENCE_WORDS :
+		(command_kind == 3'd2) ? MAGIK_HDMI_OUTPUT_ACTIVITY_WORDS :
+		(command_kind == 3'd3) ? MAGIK_HDMI_FINAL_PATH_ACTIVITY_WORDS :
+		(command_kind == 3'd4) ? MAGIK_HDMI_SCALER_RAW_ACTIVITY_WORDS :
+		(command_kind == 3'd5) ? MAGIK_HDMI_POST_OSD_ACTIVITY_WORDS : 3'd0;
 	wire [2:0] selected_crc_word =
-		(command_kind == 2'd1) ? {1'b0, MAGIK_HDMI_EVIDENCE_CRC_WORD} :
-		(command_kind == 2'd2) ? MAGIK_HDMI_OUTPUT_ACTIVITY_CRC_WORD :
-		(command_kind == 2'd3) ? MAGIK_HDMI_FINAL_PATH_ACTIVITY_CRC_WORD : 3'd0;
+		(command_kind == 3'd1) ? {1'b0, MAGIK_HDMI_EVIDENCE_CRC_WORD} :
+		(command_kind == 3'd2) ? MAGIK_HDMI_OUTPUT_ACTIVITY_CRC_WORD :
+		(command_kind == 3'd3) ? MAGIK_HDMI_FINAL_PATH_ACTIVITY_CRC_WORD :
+		(command_kind == 3'd4) ? MAGIK_HDMI_SCALER_RAW_ACTIVITY_CRC_WORD :
+		(command_kind == 3'd5) ? MAGIK_HDMI_POST_OSD_ACTIVITY_CRC_WORD : 3'd0;
 
 	assign response_valid =
 		(command_start && selected_start) ||
@@ -101,6 +115,75 @@ module mister_magik_hdmi_lock_evidence (
 		end
 	end
 
+	// Independently classify the raw scaler output and the post-OSD scaler
+	// branch in their native clk_hdmi domain. These classifiers never exchange
+	// payloads with clk_sys; only their mutually exclusive event toggles cross.
+	reg raw_vs_previous = 1'b0;
+	reg raw_frame_armed = 1'b0;
+	reg raw_frame_saw_de = 1'b0;
+	reg raw_frame_saw_nonzero = 1'b0;
+	reg raw_no_de_toggle = 1'b0;
+	reg raw_all_zero_toggle = 1'b0;
+	reg raw_nonzero_toggle = 1'b0;
+	wire raw_vs_rise = scaler_raw_vs && !raw_vs_previous;
+	wire raw_sample_nonzero = scaler_raw_de && (|scaler_raw_d);
+	wire raw_frame_saw_de_now = raw_frame_saw_de || scaler_raw_de;
+	wire raw_frame_saw_nonzero_now = raw_frame_saw_nonzero || raw_sample_nonzero;
+
+	always @(posedge clk_hdmi) begin
+		raw_vs_previous <= scaler_raw_vs;
+		if(raw_vs_rise) begin
+			if(raw_frame_armed) begin
+				if(!raw_frame_saw_de_now)
+					raw_no_de_toggle <= !raw_no_de_toggle;
+				else if(raw_frame_saw_nonzero_now)
+					raw_nonzero_toggle <= !raw_nonzero_toggle;
+				else
+					raw_all_zero_toggle <= !raw_all_zero_toggle;
+			end
+			raw_frame_armed <= 1'b1;
+			raw_frame_saw_de <= 1'b0;
+			raw_frame_saw_nonzero <= 1'b0;
+		end
+		else begin
+			raw_frame_saw_de <= raw_frame_saw_de_now;
+			raw_frame_saw_nonzero <= raw_frame_saw_nonzero_now;
+		end
+	end
+
+	reg post_vs_previous = 1'b0;
+	reg post_frame_armed = 1'b0;
+	reg post_frame_saw_de = 1'b0;
+	reg post_frame_saw_nonzero = 1'b0;
+	reg post_no_de_toggle = 1'b0;
+	reg post_all_zero_toggle = 1'b0;
+	reg post_nonzero_toggle = 1'b0;
+	wire post_vs_rise = post_osd_vs && !post_vs_previous;
+	wire post_sample_nonzero = post_osd_de && (|post_osd_d);
+	wire post_frame_saw_de_now = post_frame_saw_de || post_osd_de;
+	wire post_frame_saw_nonzero_now = post_frame_saw_nonzero || post_sample_nonzero;
+
+	always @(posedge clk_hdmi) begin
+		post_vs_previous <= post_osd_vs;
+		if(post_vs_rise) begin
+			if(post_frame_armed) begin
+				if(!post_frame_saw_de_now)
+					post_no_de_toggle <= !post_no_de_toggle;
+				else if(post_frame_saw_nonzero_now)
+					post_nonzero_toggle <= !post_nonzero_toggle;
+				else
+					post_all_zero_toggle <= !post_all_zero_toggle;
+			end
+			post_frame_armed <= 1'b1;
+			post_frame_saw_de <= 1'b0;
+			post_frame_saw_nonzero <= 1'b0;
+		end
+		else begin
+			post_frame_saw_de <= post_frame_saw_de_now;
+			post_frame_saw_nonzero <= post_frame_saw_nonzero_now;
+		end
+	end
+
 	// Preserve these exact named stages. The raw status path is excluded only
 	// into the first stage; the first-to-second settling path remains timed.
 	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED" *)
@@ -128,6 +211,30 @@ module mister_magik_hdmi_lock_evidence (
 	reg output_de_has_nonzero_meta = 1'b0;
 	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS" *)
 	reg output_de_has_nonzero_sys = 1'b0;
+	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED" *)
+	reg raw_no_de_meta = 1'b0;
+	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS" *)
+	reg raw_no_de_sys = 1'b0;
+	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED" *)
+	reg raw_all_zero_meta = 1'b0;
+	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS" *)
+	reg raw_all_zero_sys = 1'b0;
+	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED" *)
+	reg raw_nonzero_meta = 1'b0;
+	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS" *)
+	reg raw_nonzero_sys = 1'b0;
+	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED" *)
+	reg post_no_de_meta = 1'b0;
+	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS" *)
+	reg post_no_de_sys = 1'b0;
+	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED" *)
+	reg post_all_zero_meta = 1'b0;
+	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS" *)
+	reg post_all_zero_sys = 1'b0;
+	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED" *)
+	reg post_nonzero_meta = 1'b0;
+	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS" *)
+	reg post_nonzero_sys = 1'b0;
 
 	reg [3:0] output_no_de_count = 4'd0;
 	reg [3:0] output_de_has_nonzero_count = 4'd0;
@@ -178,6 +285,52 @@ module mister_magik_hdmi_lock_evidence (
 	wire output_frame_valid_next = output_frame_valid || output_any_event;
 	wire output_counter_collision_next =
 		output_counter_collision || output_event_collision;
+
+	reg [3:0] raw_no_de_count = 4'd0;
+	reg [3:0] raw_all_zero_count = 4'd0;
+	reg [3:0] raw_nonzero_count = 4'd0;
+	reg raw_frame_valid = 1'b0;
+	reg raw_counter_collision = 1'b0;
+	wire raw_no_de_event = raw_no_de_sys != raw_no_de_count[0];
+	wire raw_all_zero_event = raw_all_zero_sys != raw_all_zero_count[0];
+	wire raw_nonzero_event = raw_nonzero_sys != raw_nonzero_count[0];
+	wire raw_any_event = raw_no_de_event || raw_all_zero_event || raw_nonzero_event;
+	wire raw_event_collision =
+		(raw_no_de_event && raw_all_zero_event) ||
+		(raw_no_de_event && raw_nonzero_event) ||
+		(raw_all_zero_event && raw_nonzero_event);
+	wire [3:0] raw_no_de_count_next =
+		raw_no_de_count + (raw_no_de_event ? 1'd1 : 1'd0);
+	wire [3:0] raw_all_zero_count_next =
+		raw_all_zero_count + (raw_all_zero_event ? 1'd1 : 1'd0);
+	wire [3:0] raw_nonzero_count_next =
+		raw_nonzero_count + (raw_nonzero_event ? 1'd1 : 1'd0);
+	wire raw_frame_valid_next = raw_frame_valid || raw_any_event;
+	wire raw_counter_collision_next = raw_counter_collision || raw_event_collision;
+
+	reg [3:0] post_no_de_count = 4'd0;
+	reg [3:0] post_all_zero_count = 4'd0;
+	reg [3:0] post_nonzero_count = 4'd0;
+	reg post_frame_valid = 1'b0;
+	reg post_counter_collision = 1'b0;
+	wire post_no_de_event = post_no_de_sys != post_no_de_count[0];
+	wire post_all_zero_event = post_all_zero_sys != post_all_zero_count[0];
+	wire post_nonzero_event = post_nonzero_sys != post_nonzero_count[0];
+	wire post_any_event =
+		post_no_de_event || post_all_zero_event || post_nonzero_event;
+	wire post_event_collision =
+		(post_no_de_event && post_all_zero_event) ||
+		(post_no_de_event && post_nonzero_event) ||
+		(post_all_zero_event && post_nonzero_event);
+	wire [3:0] post_no_de_count_next =
+		post_no_de_count + (post_no_de_event ? 1'd1 : 1'd0);
+	wire [3:0] post_all_zero_count_next =
+		post_all_zero_count + (post_all_zero_event ? 1'd1 : 1'd0);
+	wire [3:0] post_nonzero_count_next =
+		post_nonzero_count + (post_nonzero_event ? 1'd1 : 1'd0);
+	wire post_frame_valid_next = post_frame_valid || post_any_event;
+	wire post_counter_collision_next =
+		post_counter_collision || post_event_collision;
 
 	reg lock_previous = 1'b0;
 	reg lock_seen_high = 1'b0;
@@ -240,7 +393,7 @@ module mister_magik_hdmi_lock_evidence (
 
 	always @(*) begin
 		response_word = tx_crc;
-		if(command_kind == 2'd1) begin
+		if(command_kind == 3'd1) begin
 			case(word_count)
 				MAGIK_HDMI_EVIDENCE_SCHEMA_WORD:
 					response_word = MAGIK_HDMI_EVIDENCE_SCHEMA;
@@ -251,7 +404,7 @@ module mister_magik_hdmi_lock_evidence (
 				default: response_word = tx_crc;
 			endcase
 		end
-		else if(command_kind == 2'd2) begin
+		else if(command_kind == 3'd2) begin
 			case(word_count)
 				MAGIK_HDMI_OUTPUT_ACTIVITY_SCHEMA_WORD:
 					response_word = MAGIK_HDMI_OUTPUT_ACTIVITY_SCHEMA;
@@ -266,7 +419,7 @@ module mister_magik_hdmi_lock_evidence (
 				default: response_word = tx_crc;
 			endcase
 		end
-		else if(command_kind == 2'd3) begin
+		else if(command_kind == 3'd3) begin
 			case(word_count)
 				MAGIK_HDMI_FINAL_PATH_ACTIVITY_SCHEMA_WORD:
 					response_word = MAGIK_HDMI_FINAL_PATH_ACTIVITY_SCHEMA;
@@ -279,6 +432,28 @@ module mister_magik_hdmi_lock_evidence (
 				default: response_word = tx_crc;
 			endcase
 		end
+		else if(command_kind == 3'd4) begin
+			case(word_count)
+				MAGIK_HDMI_SCALER_RAW_ACTIVITY_SCHEMA_WORD:
+					response_word = MAGIK_HDMI_SCALER_RAW_ACTIVITY_SCHEMA;
+				MAGIK_HDMI_SCALER_RAW_ACTIVITY_FLAGS_WORD:
+					response_word = {11'd0, snapshot_flags};
+				MAGIK_HDMI_SCALER_RAW_ACTIVITY_COUNTS_WORD:
+					response_word = snapshot_lock_loss_count;
+				default: response_word = tx_crc;
+			endcase
+		end
+		else if(command_kind == 3'd5) begin
+			case(word_count)
+				MAGIK_HDMI_POST_OSD_ACTIVITY_SCHEMA_WORD:
+					response_word = MAGIK_HDMI_POST_OSD_ACTIVITY_SCHEMA;
+				MAGIK_HDMI_POST_OSD_ACTIVITY_FLAGS_WORD:
+					response_word = {11'd0, snapshot_flags};
+				MAGIK_HDMI_POST_OSD_ACTIVITY_COUNTS_WORD:
+					response_word = snapshot_lock_loss_count;
+				default: response_word = tx_crc;
+			endcase
+		end
 
 		response_data = 16'd0;
 		if(command_start && lock_start)
@@ -287,6 +462,10 @@ module mister_magik_hdmi_lock_evidence (
 			response_data = MAGIK_HDMI_OUTPUT_ACTIVITY_MAGIC;
 		else if(command_start && final_path_start)
 			response_data = MAGIK_HDMI_FINAL_PATH_ACTIVITY_MAGIC;
+		else if(command_start && scaler_raw_start)
+			response_data = MAGIK_HDMI_SCALER_RAW_ACTIVITY_MAGIC;
+		else if(command_start && post_osd_start)
+			response_data = MAGIK_HDMI_POST_OSD_ACTIVITY_MAGIC;
 		else if(command_data && selected_command &&
 			(word_count < selected_words))
 			response_data = response_word;
@@ -305,6 +484,18 @@ module mister_magik_hdmi_lock_evidence (
 		output_black_mixed_sys <= output_black_mixed_meta;
 		output_de_has_nonzero_meta <= output_de_has_nonzero_toggle;
 		output_de_has_nonzero_sys <= output_de_has_nonzero_meta;
+		raw_no_de_meta <= raw_no_de_toggle;
+		raw_no_de_sys <= raw_no_de_meta;
+		raw_all_zero_meta <= raw_all_zero_toggle;
+		raw_all_zero_sys <= raw_all_zero_meta;
+		raw_nonzero_meta <= raw_nonzero_toggle;
+		raw_nonzero_sys <= raw_nonzero_meta;
+		post_no_de_meta <= post_no_de_toggle;
+		post_no_de_sys <= post_no_de_meta;
+		post_all_zero_meta <= post_all_zero_toggle;
+		post_all_zero_sys <= post_all_zero_meta;
+		post_nonzero_meta <= post_nonzero_toggle;
+		post_nonzero_sys <= post_nonzero_meta;
 		output_no_de_count <= output_no_de_count_next;
 		output_de_has_nonzero_count <= output_de_has_nonzero_count_next;
 		output_black_direct_count <= output_black_direct_count_next;
@@ -312,6 +503,16 @@ module mister_magik_hdmi_lock_evidence (
 		output_black_mixed_count <= output_black_mixed_count_next;
 		output_frame_valid <= output_frame_valid_next;
 		output_counter_collision <= output_counter_collision_next;
+		raw_no_de_count <= raw_no_de_count_next;
+		raw_all_zero_count <= raw_all_zero_count_next;
+		raw_nonzero_count <= raw_nonzero_count_next;
+		raw_frame_valid <= raw_frame_valid_next;
+		raw_counter_collision <= raw_counter_collision_next;
+		post_no_de_count <= post_no_de_count_next;
+		post_all_zero_count <= post_all_zero_count_next;
+		post_nonzero_count <= post_nonzero_count_next;
+		post_frame_valid <= post_frame_valid_next;
+		post_counter_collision <= post_counter_collision_next;
 		lock_previous <= control_pll_lock_sys;
 		lock_seen_high <= lock_seen_high_next;
 		lock_armed <= lock_armed_next;
@@ -321,8 +522,9 @@ module mister_magik_hdmi_lock_evidence (
 
 		if(command_start) begin
 			has_command <= 1'b1;
-			command_kind <= lock_start ? 2'd1 : activity_start ? 2'd2 :
-				final_path_start ? 2'd3 : 2'd0;
+			command_kind <= lock_start ? 3'd1 : activity_start ? 3'd2 :
+				final_path_start ? 3'd3 : scaler_raw_start ? 3'd4 :
+				post_osd_start ? 3'd5 : 3'd0;
 			word_count <= 3'd0;
 			if(lock_start) begin
 				snapshot_flags <= evidence_flags_next[4:0];
@@ -355,6 +557,34 @@ module mister_magik_hdmi_lock_evidence (
 				snapshot_path_extra <= {12'd0, output_no_de_count_next};
 				tx_crc <= MAGIK_HDMI_FINAL_PATH_ACTIVITY_HEADER_CRC;
 			end
+			else if(scaler_raw_start) begin
+				snapshot_flags <= {
+					3'd0,
+					raw_counter_collision_next,
+					raw_frame_valid_next
+				};
+				snapshot_lock_loss_count <= {
+					4'd0,
+					raw_nonzero_count_next,
+					raw_all_zero_count_next,
+					raw_no_de_count_next
+				};
+				tx_crc <= MAGIK_HDMI_SCALER_RAW_ACTIVITY_HEADER_CRC;
+			end
+			else if(post_osd_start) begin
+				snapshot_flags <= {
+					3'd0,
+					post_counter_collision_next,
+					post_frame_valid_next
+				};
+				snapshot_lock_loss_count <= {
+					4'd0,
+					post_nonzero_count_next,
+					post_all_zero_count_next,
+					post_no_de_count_next
+				};
+				tx_crc <= MAGIK_HDMI_POST_OSD_ACTIVITY_HEADER_CRC;
+			end
 		end
 		else if(command_data && selected_command &&
 			(word_count < selected_words)) begin
@@ -365,7 +595,7 @@ module mister_magik_hdmi_lock_evidence (
 
 		if(!io_uio && has_command) begin
 			has_command <= 1'b0;
-			command_kind <= 2'd0;
+			command_kind <= 3'd0;
 			word_count <= 3'd0;
 		end
 	end
