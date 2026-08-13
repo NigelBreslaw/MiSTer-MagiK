@@ -244,7 +244,7 @@ def main() -> None:
         "altsyncram",
         "M10K",
     ):
-        if retired_fragment in compiled_diagnostics:
+        if re.search(rf"\b{re.escape(retired_fragment)}\b", compiled_diagnostics):
             fail(f"retired wide diagnostic fragment remains in lock recorder: {retired_fragment}")
     sync_assignment = "SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS"
     synchronizer_stages = (
@@ -535,7 +535,7 @@ def main() -> None:
         "4'd0: evidence_word = MAGIK_HDMI_SCALER_FETCH_ACTIVITY_SCHEMA;",
         "reg [1:0] scaler_fetch_batch_two_count = 2'd0;",
         "reg [3:0] scaler_fetch_starved_frame_count = 4'd0;",
-        "if(scaler_fetch_snapshot_valid_sys)",
+        "scaler_fetch_snapshot_valid_sys ?",
     )
     for fragment in required_activity_fragments:
         if control_source.count(fragment) != 1:
@@ -551,17 +551,21 @@ def main() -> None:
         "response_data",
         "snapshot_lock_loss_count",
         "snapshot_path_extra",
+        "evidence_snapshot_flags",
+        "evidence_snapshot_counts",
+        "evidence_snapshot_extra",
         "scaler_fetch_state_meta",
         "scaler_fetch_state_sys",
     ):
-        if retired_reader_fragment in control_source:
+        if re.search(
+            rf"\b{re.escape(retired_reader_fragment)}\b", control_source
+        ):
             fail(f"standalone diagnostic reader state remains: {retired_reader_fragment}")
     if control_source.count("4'd1: evidence_word = 16'd0;") != 1:
         fail("retired scaler-fetch state word is not strict zero")
     for fragment in (
-        "reg [4:0] evidence_snapshot_flags = 5'd0;",
-        "reg [15:0] evidence_snapshot_counts = 16'd0;",
-        "reg [15:0] evidence_snapshot_extra = 16'd0;",
+        "reg [21:0] evidence_snapshot_payload = 22'd0;",
+        "evidence_snapshot_payload <= 22'd0;",
         "if(evidence_snapshot) begin",
     ):
         if control_source.count(fragment) != 1:
