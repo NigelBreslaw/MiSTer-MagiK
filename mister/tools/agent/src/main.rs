@@ -3726,12 +3726,48 @@ mod linux {
     struct HdmiLockDiagnosticsReadout {
         lock: mister_magik_video_diagnostics_contract::HdmiEvidence,
         output_activity: Option<HdmiOutputActivityWindow>,
+        path_activity: Option<HdmiPathActivityWindow>,
     }
 
     struct HdmiOutputActivityWindow {
         first: mister_magik_video_diagnostics_contract::HdmiOutputActivity,
         second: mister_magik_video_diagnostics_contract::HdmiOutputActivity,
         sample_interval_us: u64,
+    }
+
+    struct HdmiPathActivityWindow {
+        final_first: mister_magik_video_diagnostics_contract::HdmiFinalPathActivity,
+        final_second: mister_magik_video_diagnostics_contract::HdmiFinalPathActivity,
+        raw_first: mister_magik_video_diagnostics_contract::HdmiScalerRawActivity,
+        raw_second: mister_magik_video_diagnostics_contract::HdmiScalerRawActivity,
+        post_first: mister_magik_video_diagnostics_contract::HdmiPostOsdActivity,
+        post_second: mister_magik_video_diagnostics_contract::HdmiPostOsdActivity,
+        avalon_first: mister_magik_video_diagnostics_contract::HdmiAvalonLivenessActivity,
+        avalon_second: mister_magik_video_diagnostics_contract::HdmiAvalonLivenessActivity,
+        sample_interval_us: u64,
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub(super) struct ThreeClassDeltas {
+        pub(super) no_de: u8,
+        pub(super) all_zero: u8,
+        pub(super) nonzero: u8,
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub(super) struct FinalPathDeltas {
+        pub(super) no_de: u8,
+        pub(super) black_direct: u8,
+        pub(super) black_scaled: u8,
+        pub(super) black_mixed: u8,
+        pub(super) nonzero: u8,
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub(super) struct AvalonLivenessDeltas {
+        pub(super) request: u8,
+        pub(super) accepted: u8,
+        pub(super) returned: u8,
     }
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -3884,6 +3920,226 @@ mod linux {
         }
     }
 
+    fn path_counter_delta(first: u8, second: u8) -> u8 {
+        let mask = mister_magik_video_diagnostics_contract::HDMI_PATH_ACTIVITY_COUNTER_MASK as u8;
+        second.wrapping_sub(first) & mask
+    }
+
+    fn three_class_deltas(
+        first_no_de: u8,
+        first_zero: u8,
+        first_nonzero: u8,
+        second_no_de: u8,
+        second_zero: u8,
+        second_nonzero: u8,
+    ) -> ThreeClassDeltas {
+        ThreeClassDeltas {
+            no_de: path_counter_delta(first_no_de, second_no_de),
+            all_zero: path_counter_delta(first_zero, second_zero),
+            nonzero: path_counter_delta(first_nonzero, second_nonzero),
+        }
+    }
+
+    fn final_path_deltas(
+        first: &mister_magik_video_diagnostics_contract::HdmiFinalPathActivity,
+        second: &mister_magik_video_diagnostics_contract::HdmiFinalPathActivity,
+    ) -> FinalPathDeltas {
+        FinalPathDeltas {
+            no_de: path_counter_delta(first.no_de_count(), second.no_de_count()),
+            black_direct: path_counter_delta(
+                first.black_direct_count(),
+                second.black_direct_count(),
+            ),
+            black_scaled: path_counter_delta(
+                first.black_scaled_count(),
+                second.black_scaled_count(),
+            ),
+            black_mixed: path_counter_delta(first.black_mixed_count(), second.black_mixed_count()),
+            nonzero: path_counter_delta(
+                first.de_has_nonzero_count(),
+                second.de_has_nonzero_count(),
+            ),
+        }
+    }
+
+    fn avalon_liveness_deltas(
+        first: &mister_magik_video_diagnostics_contract::HdmiAvalonLivenessActivity,
+        second: &mister_magik_video_diagnostics_contract::HdmiAvalonLivenessActivity,
+    ) -> AvalonLivenessDeltas {
+        AvalonLivenessDeltas {
+            request: path_counter_delta(first.request_count(), second.request_count()),
+            accepted: path_counter_delta(first.accepted_count(), second.accepted_count()),
+            returned: path_counter_delta(first.returned_count(), second.returned_count()),
+        }
+    }
+
+    pub(super) fn detailed_path_classification(
+        final_flags: u16,
+        raw_flags: u16,
+        post_flags: u16,
+        avalon_flags: u16,
+        final_deltas: FinalPathDeltas,
+        raw_deltas: ThreeClassDeltas,
+        post_deltas: ThreeClassDeltas,
+        avalon_deltas: AvalonLivenessDeltas,
+    ) -> &'static str {
+        use mister_magik_video_diagnostics_contract as contract;
+        if final_flags & contract::HDMI_FINAL_PATH_ACTIVITY_FLAG_COUNTER_COLLISION != 0
+            || raw_flags & contract::HDMI_SCALER_RAW_ACTIVITY_FLAG_COUNTER_COLLISION != 0
+            || post_flags & contract::HDMI_POST_OSD_ACTIVITY_FLAG_COUNTER_COLLISION != 0
+            || final_deltas.black_mixed != 0
+        {
+            return "video_path_evidence_invalid";
+        }
+        let final_classes = [
+            final_deltas.no_de,
+            final_deltas.black_direct,
+            final_deltas.black_scaled,
+            final_deltas.nonzero,
+        ];
+        if final_classes.iter().filter(|delta| **delta != 0).count() != 1
+            || final_classes.iter().copied().max().unwrap_or(0) < 2
+        {
+            return "video_path_inconclusive";
+        }
+        if final_deltas.nonzero >= 2 {
+            return "final_output_de_has_nonzero";
+        }
+        if final_deltas.no_de >= 2 {
+            return "final_output_no_de";
+        }
+        if final_deltas.black_direct >= 2 {
+            return "final_output_black_direct_path";
+        }
+
+        let raw_classes = [raw_deltas.no_de, raw_deltas.all_zero, raw_deltas.nonzero];
+        let post_classes = [post_deltas.no_de, post_deltas.all_zero, post_deltas.nonzero];
+        if raw_classes.iter().filter(|delta| **delta != 0).count() != 1
+            || post_classes.iter().filter(|delta| **delta != 0).count() != 1
+        {
+            return "final_output_black_scaled_path_inconclusive";
+        }
+        if raw_deltas.nonzero != 0 && post_deltas.all_zero != 0 {
+            return "post_scaler_processing_blacked_video";
+        }
+        if post_deltas.nonzero != 0 {
+            return "final_output_staging_blacked_video";
+        }
+        if raw_deltas.no_de != 0 {
+            return "scaler_raster_missing_de";
+        }
+        if raw_deltas.all_zero == 0 {
+            return "final_output_black_scaled_path_inconclusive";
+        }
+        if avalon_flags & contract::HDMI_AVALON_LIVENESS_ACTIVITY_FLAG_BUCKET_VALID == 0 {
+            return "scaler_raw_black_avalon_unavailable";
+        }
+        match (
+            avalon_deltas.request != 0,
+            avalon_deltas.accepted != 0,
+            avalon_deltas.returned != 0,
+        ) {
+            (false, false, false) => "scaler_raw_black_no_framebuffer_requests",
+            (true, false, false) => "scaler_raw_black_framebuffer_requests_blocked",
+            (_, true, false) => "scaler_raw_black_framebuffer_returns_stopped",
+            (_, _, true) => "scaler_raw_black_with_framebuffer_returns",
+            _ => "scaler_raw_black_avalon_inconclusive",
+        }
+    }
+
+    impl HdmiPathActivityWindow {
+        fn to_json(&self) -> Value {
+            use mister_magik_video_diagnostics_contract as contract;
+            let final_flags = self.final_first.flags() | self.final_second.flags();
+            let raw_flags = self.raw_first.flags() | self.raw_second.flags();
+            let post_flags = self.post_first.flags() | self.post_second.flags();
+            let avalon_flags = self.avalon_first.flags() | self.avalon_second.flags();
+            let final_deltas = final_path_deltas(&self.final_first, &self.final_second);
+            let raw_deltas = three_class_deltas(
+                self.raw_first.no_de_count(),
+                self.raw_first.de_all_zero_count(),
+                self.raw_first.de_has_nonzero_count(),
+                self.raw_second.no_de_count(),
+                self.raw_second.de_all_zero_count(),
+                self.raw_second.de_has_nonzero_count(),
+            );
+            let post_deltas = three_class_deltas(
+                self.post_first.no_de_count(),
+                self.post_first.de_all_zero_count(),
+                self.post_first.de_has_nonzero_count(),
+                self.post_second.no_de_count(),
+                self.post_second.de_all_zero_count(),
+                self.post_second.de_has_nonzero_count(),
+            );
+            let avalon_deltas = avalon_liveness_deltas(&self.avalon_first, &self.avalon_second);
+            json!({
+                "classification": detailed_path_classification(
+                    final_flags,
+                    raw_flags,
+                    post_flags,
+                    avalon_flags,
+                    final_deltas,
+                    raw_deltas,
+                    post_deltas,
+                    avalon_deltas,
+                ),
+                "sample_interval_us": self.sample_interval_us,
+                "final": {
+                    "frame_valid": final_flags
+                        & contract::HDMI_FINAL_PATH_ACTIVITY_FLAG_FRAME_VALID != 0,
+                    "counter_collision": final_flags
+                        & contract::HDMI_FINAL_PATH_ACTIVITY_FLAG_COUNTER_COLLISION != 0,
+                    "deltas": {
+                        "no_de": final_deltas.no_de,
+                        "black_direct": final_deltas.black_direct,
+                        "black_scaled": final_deltas.black_scaled,
+                        "black_mixed": final_deltas.black_mixed,
+                        "nonzero": final_deltas.nonzero,
+                    },
+                    "first_raw_words": self.final_first.words.as_slice(),
+                    "second_raw_words": self.final_second.words.as_slice(),
+                },
+                "scaler_raw": {
+                    "frame_valid": raw_flags
+                        & contract::HDMI_SCALER_RAW_ACTIVITY_FLAG_FRAME_VALID != 0,
+                    "counter_collision": raw_flags
+                        & contract::HDMI_SCALER_RAW_ACTIVITY_FLAG_COUNTER_COLLISION != 0,
+                    "deltas": {
+                        "no_de": raw_deltas.no_de,
+                        "all_zero": raw_deltas.all_zero,
+                        "nonzero": raw_deltas.nonzero,
+                    },
+                    "first_raw_words": self.raw_first.words.as_slice(),
+                    "second_raw_words": self.raw_second.words.as_slice(),
+                },
+                "post_osd": {
+                    "frame_valid": post_flags
+                        & contract::HDMI_POST_OSD_ACTIVITY_FLAG_FRAME_VALID != 0,
+                    "counter_collision": post_flags
+                        & contract::HDMI_POST_OSD_ACTIVITY_FLAG_COUNTER_COLLISION != 0,
+                    "deltas": {
+                        "no_de": post_deltas.no_de,
+                        "all_zero": post_deltas.all_zero,
+                        "nonzero": post_deltas.nonzero,
+                    },
+                    "first_raw_words": self.post_first.words.as_slice(),
+                    "second_raw_words": self.post_second.words.as_slice(),
+                },
+                "avalon": {
+                    "bucket_valid": avalon_flags
+                        & contract::HDMI_AVALON_LIVENESS_ACTIVITY_FLAG_BUCKET_VALID != 0,
+                    "deltas": {
+                        "request": avalon_deltas.request,
+                        "accepted": avalon_deltas.accepted,
+                        "returned": avalon_deltas.returned,
+                    },
+                    "first_raw_words": self.avalon_first.words.as_slice(),
+                    "second_raw_words": self.avalon_second.words.as_slice(),
+                },
+            })
+        }
+    }
+
     impl VideoDiagnosticsReadout {
         fn to_json(&self, context: VideoDiagnosticsJsonContext) -> Value {
             match self {
@@ -3939,14 +4195,24 @@ mod linux {
                             },
                         })
                     });
-                    let classification = output_activity
+                    let path_activity = readout
+                        .path_activity
+                        .as_ref()
+                        .map(HdmiPathActivityWindow::to_json);
+                    let classification = path_activity
                         .as_ref()
                         .and_then(|value| value.get("classification"))
                         .and_then(Value::as_str)
+                        .or_else(|| {
+                            output_activity
+                                .as_ref()
+                                .and_then(|value| value.get("classification"))
+                                .and_then(Value::as_str)
+                        })
                         .unwrap_or_else(|| hdmi_lock_classification(flags));
                     json!({
                         "schema": "mister-magik-fpga-video-diagnostics-v2",
-                        "diagnostic_architecture": "hdmi-lock-evidence-v1",
+                        "diagnostic_architecture": "video-path-evidence-v1",
                         "available": true,
                         "coherent": coherent,
                         "classification": classification,
@@ -3963,7 +4229,10 @@ mod linux {
                         "capabilities": {
                             "physical_hdmi_pll_lock": true,
                             "final_hdmi_output": output_activity.is_some(),
-                            "avalon_read_path": false,
+                            "final_mux_provenance": path_activity.is_some(),
+                            "scaler_raw_output": path_activity.is_some(),
+                            "post_osd_output": path_activity.is_some(),
+                            "avalon_read_path": path_activity.is_some(),
                         },
                         "hdmi_lock": {
                             "seen_high": flags & contract::HDMI_EVIDENCE_FLAG_LOCK_SEEN_HIGH != 0,
@@ -3977,6 +4246,7 @@ mod linux {
                             "raw_words": evidence.words.as_slice(),
                         },
                         "final_hdmi_output_activity": output_activity,
+                        "video_path_activity": path_activity,
                     })
                 }
                 Self::Legacy(readout) => readout.to_json(context),
@@ -4296,10 +4566,16 @@ mod linux {
                         Err(error) if error.kind() == io::ErrorKind::NotFound => None,
                         Err(error) => return Err(error),
                     };
+                    let path_activity = match self.read_hdmi_path_activity_window() {
+                        Ok(window) => Some(window),
+                        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+                        Err(error) => return Err(error),
+                    };
                     return Ok(VideoDiagnosticsReadout::HdmiLock(
                         HdmiLockDiagnosticsReadout {
                             lock,
                             output_activity,
+                            path_activity,
                         },
                     ));
                 }
@@ -4463,6 +4739,177 @@ mod linux {
             let words = result?;
             contract::decode_hdmi_output_activity(&words)
                 .map_err(|message| io::Error::new(io::ErrorKind::InvalidData, message))
+        }
+
+        fn read_diagnostic_words<const N: usize>(
+            &mut self,
+            command: u16,
+            magic: u16,
+            label: &str,
+        ) -> io::Result<[u16; N]> {
+            let first = self.read_diagnostic_words_once(command, magic, label);
+            match first {
+                Err(first_error)
+                    if hdmi_evidence_probe_action(Some(first_error.kind()), false)
+                        == HdmiEvidenceProbeAction::RetryNew =>
+                {
+                    self.reset_spi_transport();
+                    self.read_diagnostic_words_once(command, magic, label)
+                        .map_err(|retry_error| {
+                            io::Error::new(
+                                first_error.kind(),
+                                format!(
+                                    "{label} failed after retry: first={first_error}; retry={retry_error}"
+                                ),
+                            )
+                        })
+                }
+                result => result,
+            }
+        }
+
+        fn read_diagnostic_words_once<const N: usize>(
+            &mut self,
+            command: u16,
+            magic: u16,
+            label: &str,
+        ) -> io::Result<[u16; N]> {
+            let result = (|| {
+                let (magic_hi, magic_lo) = self.cmd_capture(command)?;
+                match classify_diagnostic_ack(magic_hi, magic_lo, magic) {
+                    HdmiEvidenceAck::Present => {}
+                    HdmiEvidenceAck::Unsupported => {
+                        return Err(io::Error::new(
+                            io::ErrorKind::NotFound,
+                            format!("{label} command 0x{command:02x} is unsupported"),
+                        ));
+                    }
+                    HdmiEvidenceAck::Invalid => {
+                        return Err(io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            format!(
+                                "{label} acknowledgement is malformed: ack_high=0x{magic_hi:04x} ack_low=0x{magic_lo:04x}"
+                            ),
+                        ));
+                    }
+                }
+                let mut words = [0u16; N];
+                for word in &mut words {
+                    *word = self.spi_capture(0)?.1;
+                }
+                Ok(words)
+            })();
+            self.disable_io();
+            result
+        }
+
+        fn read_required_diagnostic_words<const N: usize>(
+            &mut self,
+            command: u16,
+            magic: u16,
+            label: &str,
+        ) -> io::Result<[u16; N]> {
+            self.read_diagnostic_words(command, magic, label)
+                .map_err(|error| {
+                    if error.kind() == io::ErrorKind::NotFound {
+                        io::Error::new(
+                            io::ErrorKind::InvalidData,
+                            format!("{label} disappeared from a supported video-path record set"),
+                        )
+                    } else {
+                        error
+                    }
+                })
+        }
+
+        fn read_hdmi_path_activity_window(&mut self) -> io::Result<HdmiPathActivityWindow> {
+            use mister_magik_video_diagnostics_contract as contract;
+            let final_first =
+                contract::decode_hdmi_final_path_activity(&self.read_diagnostic_words::<{
+                    contract::HDMI_FINAL_PATH_ACTIVITY_WORDS
+                }>(
+                    contract::GET_HDMI_FINAL_PATH_ACTIVITY,
+                    contract::HDMI_FINAL_PATH_ACTIVITY_MAGIC,
+                    "HDMI final path activity",
+                )?)
+                .map_err(|message| io::Error::new(io::ErrorKind::InvalidData, message))?;
+            let raw_first = contract::decode_hdmi_scaler_raw_activity(
+                &self
+                    .read_required_diagnostic_words::<{ contract::HDMI_SCALER_RAW_ACTIVITY_WORDS }>(
+                        contract::GET_HDMI_SCALER_RAW_ACTIVITY,
+                        contract::HDMI_SCALER_RAW_ACTIVITY_MAGIC,
+                        "HDMI raw scaler activity",
+                    )?,
+            )
+            .map_err(|message| io::Error::new(io::ErrorKind::InvalidData, message))?;
+            let post_first =
+                contract::decode_hdmi_post_osd_activity(&self.read_required_diagnostic_words::<{
+                    contract::HDMI_POST_OSD_ACTIVITY_WORDS
+                }>(
+                    contract::GET_HDMI_POST_OSD_ACTIVITY,
+                    contract::HDMI_POST_OSD_ACTIVITY_MAGIC,
+                    "HDMI post-OSD activity",
+                )?)
+                .map_err(|message| io::Error::new(io::ErrorKind::InvalidData, message))?;
+            let avalon_first = contract::decode_hdmi_avalon_liveness_activity(
+                &self.read_required_diagnostic_words::<{ contract::HDMI_AVALON_LIVENESS_ACTIVITY_WORDS }>(
+                    contract::GET_HDMI_AVALON_LIVENESS_ACTIVITY,
+                    contract::HDMI_AVALON_LIVENESS_ACTIVITY_MAGIC,
+                    "HDMI Avalon liveness activity",
+                )?,
+            )
+            .map_err(|message| io::Error::new(io::ErrorKind::InvalidData, message))?;
+
+            let sample_started = Instant::now();
+            thread::sleep(Duration::from_millis(50));
+
+            let final_second = contract::decode_hdmi_final_path_activity(
+                &self
+                    .read_required_diagnostic_words::<{ contract::HDMI_FINAL_PATH_ACTIVITY_WORDS }>(
+                        contract::GET_HDMI_FINAL_PATH_ACTIVITY,
+                        contract::HDMI_FINAL_PATH_ACTIVITY_MAGIC,
+                        "HDMI final path activity",
+                    )?,
+            )
+            .map_err(|message| io::Error::new(io::ErrorKind::InvalidData, message))?;
+            let raw_second = contract::decode_hdmi_scaler_raw_activity(
+                &self
+                    .read_required_diagnostic_words::<{ contract::HDMI_SCALER_RAW_ACTIVITY_WORDS }>(
+                        contract::GET_HDMI_SCALER_RAW_ACTIVITY,
+                        contract::HDMI_SCALER_RAW_ACTIVITY_MAGIC,
+                        "HDMI raw scaler activity",
+                    )?,
+            )
+            .map_err(|message| io::Error::new(io::ErrorKind::InvalidData, message))?;
+            let post_second =
+                contract::decode_hdmi_post_osd_activity(&self.read_required_diagnostic_words::<{
+                    contract::HDMI_POST_OSD_ACTIVITY_WORDS
+                }>(
+                    contract::GET_HDMI_POST_OSD_ACTIVITY,
+                    contract::HDMI_POST_OSD_ACTIVITY_MAGIC,
+                    "HDMI post-OSD activity",
+                )?)
+                .map_err(|message| io::Error::new(io::ErrorKind::InvalidData, message))?;
+            let avalon_second = contract::decode_hdmi_avalon_liveness_activity(
+                &self.read_required_diagnostic_words::<{ contract::HDMI_AVALON_LIVENESS_ACTIVITY_WORDS }>(
+                    contract::GET_HDMI_AVALON_LIVENESS_ACTIVITY,
+                    contract::HDMI_AVALON_LIVENESS_ACTIVITY_MAGIC,
+                    "HDMI Avalon liveness activity",
+                )?,
+            )
+            .map_err(|message| io::Error::new(io::ErrorKind::InvalidData, message))?;
+
+            Ok(HdmiPathActivityWindow {
+                final_first,
+                final_second,
+                raw_first,
+                raw_second,
+                post_first,
+                post_second,
+                avalon_first,
+                avalon_second,
+                sample_interval_us: sample_started.elapsed().as_micros() as u64,
+            })
         }
 
         fn read_legacy_video_diagnostics_once(
@@ -6949,6 +7396,96 @@ mod tests {
                 },
             ),
             "final_output_activity_invalid"
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn detailed_video_path_classification_is_conservative_and_decisive() {
+        use linux::{AvalonLivenessDeltas, FinalPathDeltas, ThreeClassDeltas};
+        use mister_magik_video_diagnostics_contract as contract;
+
+        let scaled_black = FinalPathDeltas {
+            no_de: 0,
+            black_direct: 0,
+            black_scaled: 3,
+            black_mixed: 0,
+            nonzero: 0,
+        };
+        let raw_black = ThreeClassDeltas {
+            no_de: 0,
+            all_zero: 3,
+            nonzero: 0,
+        };
+        let post_black = raw_black;
+        let avalon_live = AvalonLivenessDeltas {
+            request: 8,
+            accepted: 8,
+            returned: 8,
+        };
+        assert_eq!(
+            linux::detailed_path_classification(
+                0,
+                0,
+                0,
+                contract::HDMI_AVALON_LIVENESS_ACTIVITY_FLAG_BUCKET_VALID,
+                scaled_black,
+                raw_black,
+                post_black,
+                avalon_live,
+            ),
+            "scaler_raw_black_with_framebuffer_returns"
+        );
+
+        let raw_nonzero = ThreeClassDeltas {
+            no_de: 0,
+            all_zero: 0,
+            nonzero: 3,
+        };
+        assert_eq!(
+            linux::detailed_path_classification(
+                0,
+                0,
+                0,
+                0,
+                scaled_black,
+                raw_nonzero,
+                post_black,
+                avalon_live,
+            ),
+            "post_scaler_processing_blacked_video"
+        );
+
+        let direct_black = FinalPathDeltas {
+            black_direct: 3,
+            black_scaled: 0,
+            ..scaled_black
+        };
+        assert_eq!(
+            linux::detailed_path_classification(
+                0,
+                0,
+                0,
+                0,
+                direct_black,
+                raw_black,
+                post_black,
+                avalon_live,
+            ),
+            "final_output_black_direct_path"
+        );
+        assert_eq!(
+            linux::detailed_path_classification(
+                contract::HDMI_FINAL_PATH_ACTIVITY_FLAG_COUNTER_COLLISION,
+                0,
+                0,
+                0,
+                scaled_black,
+                raw_black,
+                post_black,
+                avalon_live,
+            ),
+            "video_path_evidence_invalid"
         );
     }
 
