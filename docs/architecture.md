@@ -69,6 +69,21 @@ flowchart LR
 it provides authenticated, fixed protocol operations and is not a second host
 CLI or a GUI process.
 
+### Advisory architecture trends
+
+`scripts/agent architecture report --base COMMIT --head COMMIT` compares two
+explicit repository trees without contacting the MiSTer. Its stable JSON
+schema reports file and largest-function size, mutable bindings, direct
+environment reads, public modules, and changed-line concentration for named
+owner hotspots. `--format markdown` produces the review summary, and
+`--output PATH` writes either format to an explicit artifact path.
+
+Generated code, history, reference clones, vendored sources, and build output
+are excluded from concentration totals. The report is informational: a lower
+line count without clearer ownership or dependency direction is not success.
+Stable owner IDs keep moved or temporarily absent hotspot paths visible rather
+than silently treating them as resolved.
+
 ## Boot And Process Model
 
 Production boot stays compatible with stock MiSTer:

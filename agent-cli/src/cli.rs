@@ -1,6 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+use crate::architecture::ArchitectureCommand;
 use crate::build::BuildCommand;
 use crate::commands::device::DeviceCommand;
 use crate::compile_time::CompileTimeCommand;
@@ -40,6 +41,10 @@ pub enum Command {
         remote: String,
     },
     Plan(ScopeArgs),
+    Architecture {
+        #[command(subcommand)]
+        command: ArchitectureCommand,
+    },
     #[command(hide = true)]
     Run {
         #[command(subcommand)]
@@ -1007,6 +1012,29 @@ mod tests {
                 &magik_revision,
             ])
             .is_ok()
+        );
+    }
+
+    #[test]
+    fn architecture_report_requires_explicit_trees_and_accepts_both_formats() {
+        for format in ["json", "markdown"] {
+            assert!(
+                Cli::try_parse_from([
+                    "agent-cli",
+                    "architecture",
+                    "report",
+                    "--base",
+                    "base",
+                    "--head",
+                    "head",
+                    "--format",
+                    format,
+                ])
+                .is_ok()
+            );
+        }
+        assert!(
+            Cli::try_parse_from(["agent-cli", "architecture", "report", "--head", "head"]).is_err()
         );
     }
 }

@@ -4,6 +4,7 @@
 #![recursion_limit = "256"]
 
 pub mod alpha;
+pub mod architecture;
 mod archive;
 pub mod benchmark;
 pub mod build;
