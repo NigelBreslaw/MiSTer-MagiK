@@ -27,6 +27,13 @@ const QUARTUS_SEED_SOURCE: &str =
 const BUILD_DEADLINE: Duration = Duration::from_secs(3 * 60 * 60);
 const SETUP_DEADLINE: Duration = Duration::from_secs(2 * 60 * 60);
 
+struct CachePolicy<'a> {
+    seed: &'a str,
+    build_date: &'a str,
+    preparation_identity: &'a str,
+    synthesis_component: &'a str,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Subcommand)]
 pub enum FpgaCommand {
     /// Install or verify the pinned Quartus Apple Container runtime.
@@ -120,35 +127,32 @@ fn signoff(repository: &Path, rebuild: bool, reporter: &mut Reporter<'_>) -> Age
         &source_root,
         &["rev-parse", "HEAD:scripts/prepare-fpga-menu-signoff.py"],
     )?;
+    let cache_policy = CachePolicy {
+        seed: quartus_seed,
+        build_date: &build_date,
+        preparation_identity: &preparation_identity,
+        synthesis_component: &synthesis_component,
+    };
     let stock_manifest = cache_manifest(
         "stock",
         &stock_identity,
         &menu_revision,
         None,
-        quartus_seed,
-        &build_date,
-        &preparation_identity,
-        &synthesis_component,
+        &cache_policy,
     );
     let baseline_manifest = cache_manifest(
         "pre-observer",
         &baseline_identity,
         &menu_revision,
         Some(&baseline_revision),
-        quartus_seed,
-        &build_date,
-        &preparation_identity,
-        &synthesis_component,
+        &cache_policy,
     );
     let patched_manifest = cache_manifest(
         "patched",
         &patched_identity,
         &menu_revision,
         None,
-        quartus_seed,
-        &build_date,
-        &preparation_identity,
-        &synthesis_component,
+        &cache_policy,
     );
 
     let stock_hit = !rebuild && variant_cache_hit(&signoff_root.join("stock"), &stock_manifest);
@@ -240,12 +244,15 @@ fn cache_manifest(
     synthesis_identity: &str,
     menu: &str,
     baseline: Option<&str>,
-    seed: &str,
-    build_date: &str,
-    preparation_identity: &str,
-    synthesis_component: &str,
+    policy: &CachePolicy<'_>,
 ) -> String {
     let baseline = baseline.unwrap_or("-");
+    let CachePolicy {
+        seed,
+        build_date,
+        preparation_identity,
+        synthesis_component,
+    } = policy;
     format!(
         "format={SIGNOFF_FORMAT}\nflavour={flavour}\nsynthesis_input={synthesis_identity}\nsynthesis_component={synthesis_component}\nmenu_revision={menu}\nbaseline_revision={baseline}\nquartus_version={QUARTUS_VERSION}\nquartus_seed={seed}\nbuild_date={build_date}\nquartus_processors={QUARTUS_PROCESSORS}\nparallel_synthesis=off\nauto_parallel_synthesis=off\nmenu_clock_groups=asynchronous\npreparation_input={preparation_identity}\n"
     )
@@ -761,15 +768,18 @@ mod tests {
     #[test]
     fn cache_manifest_binds_every_matched_build_input() {
         let seed = canonical_quartus_seed().unwrap();
+        let policy = CachePolicy {
+            seed,
+            build_date: "260813",
+            preparation_identity: &"d".repeat(40),
+            synthesis_component: &"e".repeat(64),
+        };
         let manifest = cache_manifest(
             "patched",
             &"a".repeat(64),
             &"b".repeat(40),
             Some(&"c".repeat(40)),
-            seed,
-            "260813",
-            &"d".repeat(40),
-            &"e".repeat(64),
+            &policy,
         );
         assert!(manifest.contains(&format!("format={SIGNOFF_FORMAT}")));
         assert!(manifest.contains("flavour=patched"));
@@ -798,36 +808,21 @@ mod tests {
     #[test]
     fn cache_manifest_is_independent_per_variant() {
         let seed = canonical_quartus_seed().unwrap();
-        let stock = cache_manifest(
-            "stock",
-            "stock-input",
-            "menu",
-            None,
+        let policy = CachePolicy {
             seed,
-            "date",
-            "policy",
-            "component",
-        );
+            build_date: "date",
+            preparation_identity: "policy",
+            synthesis_component: "component",
+        };
+        let stock = cache_manifest("stock", "stock-input", "menu", None, &policy);
         let baseline = cache_manifest(
             "pre-observer",
             "baseline-input",
             "menu",
             Some("baseline"),
-            seed,
-            "date",
-            "policy",
-            "component",
+            &policy,
         );
-        let patched = cache_manifest(
-            "patched",
-            "patched-input",
-            "menu",
-            None,
-            seed,
-            "date",
-            "policy",
-            "component",
-        );
+        let patched = cache_manifest("patched", "patched-input", "menu", None, &policy);
         assert_ne!(stock, baseline);
         assert_ne!(baseline, patched);
         assert_ne!(stock, patched);
