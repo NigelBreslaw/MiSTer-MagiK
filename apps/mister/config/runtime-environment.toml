@@ -1,0 +1,2191 @@
+# Copyright (C) 2026 Nigel Breslaw
+# SPDX-License-Identifier: GPL-3.0-or-later
+
+format = "mister-magik-runtime-environment-v1"
+source_roots = [
+  "apps/mister/src",
+  "mister/platform/runtime/src",
+  "crates/catalog/src",
+  "crates/particles/src",
+  "crates/perf-events/src",
+]
+
+[baseline]
+literal_occurrences = 394
+unique_names = 272
+external_build_names = 11
+
+[[control]]
+name = "MISTER_7ZA"
+owner = "crates/catalog/src/media_metadata.rs"
+classification = "external"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "external compatibility"
+
+[[control]]
+name = "MISTER_7ZA_TIMEOUT_SECS"
+owner = "crates/catalog/src/media_metadata.rs"
+classification = "external"
+value_shape = "bounded integer"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "external compatibility"
+
+[[control]]
+name = "MISTER_AMIGA_PREVIEW_ARCHIVE"
+owner = "crates/catalog/src/preview_worker.rs"
+classification = "production"
+value_shape = "path or path list"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+[[control]]
+name = "MISTER_ANIMATION_CLOCK"
+owner = "apps/mister/src/visual_platform.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_ARCADE_BOOTSTRAP_INDEX"
+owner = "apps/mister/src/pmu_profile.rs"
+classification = "production"
+value_shape = "bounded integer"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_ARCADE_ENTRY_RUN_ID"
+owner = "apps/mister/src/ui_runner/launcher_loop.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_ARCADE_ENTRY_TRACE"
+owner = "apps/mister/src/ui_runner/launcher_loop.rs"
+classification = "diagnostic"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "developer diagnostic"
+
+[[control]]
+name = "MISTER_ARCADE_ROOT"
+owner = "apps/mister/src/ui_runner/experiments/effects/effect_loop_support.rs"
+classification = "production"
+value_shape = "path or path list"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_ARCADE_SCROLL_SPEED_DIV"
+owner = "apps/mister/src/launcher.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_ARCADE_SELECTED_INDEX"
+owner = "apps/mister/src/ui_runner/ui_frame_target.rs"
+classification = "production"
+value_shape = "bounded integer"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_ARCADE_SELECTION_INVERT"
+owner = "apps/mister/src/arcade_list_renderer.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_BACKGROUND_AFFINITY"
+owner = "crates/catalog/src/runtime_thread.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_BOOT_ANALYTICS"
+owner = "mister/platform/runtime/src/boot_analytics.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_BOOT_BLACK_SETTLE_FRAMES"
+owner = "apps/mister/src/ui_runner/ui_boot.rs"
+classification = "production"
+value_shape = "bounded integer"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_BOOT_FRAME_PROFILE_FILE"
+owner = "mister/platform/runtime/src/boot_analytics.rs"
+classification = "diagnostic"
+value_shape = "path or path list"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "developer diagnostic"
+
+[[control]]
+name = "MISTER_BOOT_FRAME_PROFILE_FRAMES"
+owner = "mister/platform/runtime/src/boot_analytics.rs"
+classification = "diagnostic"
+value_shape = "bounded integer"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "developer diagnostic"
+
+[[control]]
+name = "MISTER_CAMERA_EFFECTS"
+owner = "apps/mister/src/ui_runner/experiments/effects/camera_effects_loop.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_CAMERA_EFFECTS_AUTO"
+owner = "apps/mister/src/ui_runner/experiments/effects/camera_effects_loop.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_CAMERA_EFFECTS_CACHE_CAP"
+owner = "apps/mister/src/ui_runner/experiments/effects/camera_effects_loop.rs"
+classification = "production"
+value_shape = "bounded integer"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_CAMERA_EFFECTS_HUD"
+owner = "apps/mister/src/ui_runner/experiments/effects/camera_effects_loop.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_CAMERA_EFFECTS_SEGMENT_SECS"
+owner = "apps/mister/src/ui_runner/experiments/effects/camera_effects_loop.rs"
+classification = "production"
+value_shape = "bounded integer"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_CAMERA_EFFECTS_TRACE"
+owner = "apps/mister/src/ui_runner/experiments/effects/camera_effects_loop.rs"
+classification = "diagnostic"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "developer diagnostic"
+
+[[control]]
+name = "MISTER_CATALOG_BACKGROUND_DELAY_MS"
+owner = "apps/mister/src/ui_runner/launcher_loop.rs"
+classification = "production"
+value_shape = "bounded integer"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_CATALOG_BUILDER_LOCK"
+owner = "apps/mister/src/pmu_profile.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_CATALOG_CONTENTION_QUIET_PREVIEWS"
+owner = "apps/mister/src/ui_runner/launcher_loop.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_CATALOG_DIAGNOSTICS_DIR"
+owner = "apps/mister/src/catalog_progress_report.rs"
+classification = "diagnostic"
+value_shape = "path or path list"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "developer diagnostic"
+
+[[control]]
+name = "MISTER_CATALOG_DURABLE_RESUME"
+owner = "crates/catalog/src/library_indexer.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_CATALOG_PROTOCOL_STDOUT"
+owner = "crates/catalog/src/bin/catalog_builder.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_CATALOG_READY_SNAPSHOT"
+owner = "apps/mister/src/pmu_profile.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_CATALOG_REFRESH"
+owner = "apps/mister/src/ui_runner/ui_frame_target.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_CATALOG_TRACE"
+owner = "crates/catalog/src/catalog_checkpoint.rs"
+classification = "diagnostic"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "developer diagnostic"
+
+[[control]]
+name = "MISTER_CLOUD"
+owner = "crates/particles/src/intro.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_CMD"
+owner = "crates/catalog/src/fs_fault.rs"
+classification = "external"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "external compatibility"
+
+[[control]]
+name = "MISTER_CRASH_BACKTRACE"
+owner = "apps/mister/src/crash_report.rs"
+classification = "diagnostic"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "developer diagnostic"
+
+[[control]]
+name = "MISTER_CRT_PROBE_PATTERN"
+owner = "apps/mister/src/ui_runner/crt_trial_loop.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_CRT_TRIAL_CONTENT_BOUNDS"
+owner = "apps/mister/src/ui_runner/crt_trial_loop.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_DIRTY_RECT_BROAD_PCT"
+owner = "mister/platform/runtime/src/framebuffer/target.rs"
+classification = "production"
+value_shape = "path or path list"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_DISPLAY_OWNER_LOCK"
+owner = "mister/platform/runtime/src/framebuffer/ownership.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_EFFECT_BENCH_LABEL"
+owner = "apps/mister/src/ui_effect_bench.rs"
+classification = "benchmark"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "benchmark only"
+
+[[control]]
+name = "MISTER_FB_DIAGNOSTIC_RECT"
+owner = "mister/platform/runtime/src/fpga.rs"
+classification = "diagnostic"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "developer diagnostic"
+
+[[control]]
+name = "MISTER_FB_MAP_BANDWIDTH_FRAMES"
+owner = "apps/mister/src/main.rs"
+classification = "production"
+value_shape = "bounded integer"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_FB_MAP_BANDWIDTH_H"
+owner = "apps/mister/src/main.rs"
+classification = "production"
+value_shape = "bounded integer"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_FB_MAP_BANDWIDTH_W"
+owner = "apps/mister/src/main.rs"
+classification = "production"
+value_shape = "bounded integer"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_FB_MAP_REPORT_H"
+owner = "apps/mister/src/main.rs"
+classification = "production"
+value_shape = "bounded integer"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_FB_MAP_REPORT_W"
+owner = "apps/mister/src/main.rs"
+classification = "production"
+value_shape = "bounded integer"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_FB_PRESENT_DELAY_US"
+owner = "apps/mister/src/visual_platform.rs"
+classification = "production"
+value_shape = "bounded integer"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_FB_RIGHT_GUARD_COLS"
+owner = "apps/mister/src/ui_runner/launcher_present/latch.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_FB_ROUTE_REASSERT_FRAMES"
+owner = "mister/platform/runtime/src/framebuffer/ownership.rs"
+classification = "production"
+value_shape = "bounded integer"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_FPGA_LATCH_PATTERN_FRAMES"
+owner = "apps/mister/src/main.rs"
+classification = "production"
+value_shape = "bounded integer"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_FPGA_LATCH_PATTERN_PERIOD_US"
+owner = "apps/mister/src/main.rs"
+classification = "production"
+value_shape = "bounded integer"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_FRAMEBUFFER_STREAM_SCALE"
+owner = "mister/platform/runtime/src/framebuffer/stream.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_FRAME_ORDER"
+owner = "apps/mister/src/ui_runner/video_loop.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_FS_FAULT_ACTION"
+owner = "crates/catalog/src/fs_fault.rs"
+classification = "fault"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "destructive test only"
+
+[[control]]
+name = "MISTER_FS_FAULT_DELAY_MS"
+owner = "crates/catalog/src/fs_fault.rs"
+classification = "fault"
+value_shape = "bounded integer"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "destructive test only"
+
+[[control]]
+name = "MISTER_FS_FAULT_POINT"
+owner = "crates/catalog/src/fs_fault.rs"
+classification = "fault"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "destructive test only"
+
+[[control]]
+name = "MISTER_FS_FAULT_SESSION"
+owner = "crates/catalog/src/fs_fault.rs"
+classification = "fault"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "destructive test only"
+
+[[control]]
+name = "MISTER_GLYPH_ALPHA_THRESHOLD"
+owner = "mister/platform/runtime/src/framebuffer/mapped.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_GROUPS"
+owner = "crates/particles/src/intro.rs"
+classification = "external"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "external compatibility"
+
+[[control]]
+name = "MISTER_GUI_FRAME_PROFILE"
+owner = "apps/mister/src/ui_runner/launcher_gui_profile.rs"
+classification = "diagnostic"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "developer diagnostic"
+
+[[control]]
+name = "MISTER_GUI_FRAME_PROFILE_COMPLETE"
+owner = "apps/mister/src/ui_runner/launcher_gui_profile.rs"
+classification = "diagnostic"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "developer diagnostic"
+
+[[control]]
+name = "MISTER_GUI_FRAME_PROFILE_PMU"
+owner = "apps/mister/src/ui_runner/launcher_gui_profile.rs"
+classification = "diagnostic"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "developer diagnostic"
+
+[[control]]
+name = "MISTER_HBMAME_SQLITE"
+owner = "crates/catalog/src/catalog_config.rs"
+classification = "production"
+value_shape = "path or path list"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_HOME_SELECTED_INDEX"
+owner = "apps/mister/src/ui_runner/launcher_loop.rs"
+classification = "production"
+value_shape = "bounded integer"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_HUMAN_TURBO_IDLE_FRAMES"
+owner = "apps/mister/src/ui_runner/launcher_bench.rs"
+classification = "production"
+value_shape = "bounded integer"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_HUMAN_TURBO_NORMAL_FRAMES"
+owner = "apps/mister/src/ui_runner/launcher_bench.rs"
+classification = "production"
+value_shape = "bounded integer"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_HUMAN_TURBO_PAUSE_FRAMES"
+owner = "apps/mister/src/ui_runner/launcher_bench.rs"
+classification = "production"
+value_shape = "bounded integer"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_INI_PATH"
+owner = "apps/mister/src/ui_display.rs"
+classification = "production"
+value_shape = "path or path list"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_INPUT_INTEGRITY_STALL_MS"
+owner = "apps/mister/src/ui_runner/launcher_loop.rs"
+classification = "production"
+value_shape = "bounded integer"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_INPUT_INTEGRITY_TRACE"
+owner = "apps/mister/src/ui_runner/launcher_loop.rs"
+classification = "diagnostic"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "developer diagnostic"
+
+[[control]]
+name = "MISTER_INPUT_LATENCY_LAB_ARM"
+owner = "apps/mister/src/ui_runner/launcher_input_latency_lab.rs"
+classification = "diagnostic"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "developer diagnostic"
+
+[[control]]
+name = "MISTER_INPUT_LATENCY_LAB_READER_POLICY"
+owner = "apps/mister/src/input_hub.rs"
+classification = "diagnostic"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "developer diagnostic"
+
+[[control]]
+name = "MISTER_INPUT_LATENCY_LAB_READER_SCHEDSTAT"
+owner = "apps/mister/src/input_hub.rs"
+classification = "diagnostic"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "developer diagnostic"
+
+[[control]]
+name = "MISTER_INPUT_LATENCY_LAB_SESSION"
+owner = "apps/mister/src/input_hub.rs"
+classification = "diagnostic"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "developer diagnostic"
+
+[[control]]
+name = "MISTER_LATCH_V5_QUALIFICATION"
+owner = "apps/mister/src/ui_runner/latch_v5_qualification.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_LAUNCHER_AUTO_LAUNCH_SELECTED"
+owner = "apps/mister/src/ui_runner/launcher_loop.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_LAUNCHER_BENCH_AFTER_INPUT_SCRIPT"
+owner = "apps/mister/src/ui_runner/launcher_bench.rs"
+classification = "benchmark"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "benchmark only"
+
+[[control]]
+name = "MISTER_LAUNCHER_BENCH_SCENARIO"
+owner = "apps/mister/src/ui_runner/launcher_bench.rs"
+classification = "benchmark"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "benchmark only"
+
+[[control]]
+name = "MISTER_LAUNCHER_DIRTY_OPT"
+owner = "apps/mister/src/ui_runner/ui_frame_target.rs"
+classification = "production"
+value_shape = "path or path list"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_LAUNCHER_INPUT_SCRIPT"
+owner = "apps/mister/src/ui_runner/launcher_loop.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_LAUNCHER_INPUT_SCRIPT_WAIT_FRAMES"
+owner = "apps/mister/src/ui_runner/launcher_loop.rs"
+classification = "production"
+value_shape = "bounded integer"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_LAUNCHER_LOCK_SCREEN"
+owner = "apps/mister/src/ui_runner/launcher_bench.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_LAUNCHER_RESPONSE_COMPLETE"
+owner = "apps/mister/src/ui_runner/launcher_loop.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_LAUNCHER_RESPONSE_EXECUTION_TRACE"
+owner = "apps/mister/src/ui_runner/launcher_loop.rs"
+classification = "diagnostic"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "developer diagnostic"
+
+[[control]]
+name = "MISTER_LAUNCHER_RESPONSE_EXPECTED_CONFIRMED"
+owner = "apps/mister/src/ui_runner/launcher_loop.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_LAUNCHER_RESPONSE_EXPECTED_FEEDBACK_HIDDEN"
+owner = "apps/mister/src/ui_runner/launcher_loop.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_LAUNCHER_RESPONSE_FRAME_COMPLETE"
+owner = "apps/mister/src/ui_runner/launcher_loop.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_LAUNCHER_RESPONSE_PMU"
+owner = "apps/mister/src/ui_runner/launcher_loop.rs"
+classification = "diagnostic"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "developer diagnostic"
+
+[[control]]
+name = "MISTER_LAUNCHER_RESPONSE_PMU_COMPLETE"
+owner = "apps/mister/src/ui_runner/launcher_loop.rs"
+classification = "diagnostic"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "developer diagnostic"
+
+[[control]]
+name = "MISTER_LAUNCHER_RESPONSE_RUN_ID"
+owner = "apps/mister/src/ui_runner/launcher_loop.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_LAUNCHER_RESPONSE_TRACE"
+owner = "apps/mister/src/ui_runner/launcher_loop.rs"
+classification = "diagnostic"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "developer diagnostic"
+
+[[control]]
+name = "MISTER_LAUNCHER_START_MENU"
+owner = "apps/mister/src/ui_runner/launcher_bench.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_LAUNCHER_START_SCREEN"
+owner = "apps/mister/src/ui_runner/launcher_bench.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_LAUNCHER_START_SYSTEM"
+owner = "apps/mister/src/ui_runner/launcher_bench.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_LAUNCH_HANDOFF_DELAY_MS"
+owner = "apps/mister/src/ui_runner/launch_handoff_session.rs"
+classification = "production"
+value_shape = "bounded integer"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_LAUNCH_HANDOFF_ITERATIONS"
+owner = "apps/mister/src/ui_runner/launch_handoff_session.rs"
+classification = "production"
+value_shape = "bounded integer"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_LAUNCH_HANDOFF_LABEL"
+owner = "apps/mister/src/ui_runner/launch_handoff_session.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_LAUNCH_HANDOFF_MODE"
+owner = "apps/mister/src/ui_runner/launch_handoff_session.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_LAUNCH_HANDOFF_TRACE"
+owner = "apps/mister/src/ui_runner/launch_handoff_session.rs"
+classification = "diagnostic"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "developer diagnostic"
+
+[[control]]
+name = "MISTER_LAUNCH_PREP_AMIGAVISION_LIMIT"
+owner = "apps/mister/src/launch_preparation.rs"
+classification = "production"
+value_shape = "bounded integer"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_LAUNCH_PREP_ITERATIONS"
+owner = "apps/mister/src/launch_preparation.rs"
+classification = "production"
+value_shape = "bounded integer"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_LAUNCH_PREP_LABEL"
+owner = "apps/mister/src/launch_preparation.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_LAUNCH_PREP_REFS"
+owner = "apps/mister/src/launch_preparation.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_LAUNCH_PREP_VIRTUAL_LIMIT"
+owner = "apps/mister/src/launch_preparation.rs"
+classification = "production"
+value_shape = "bounded integer"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_LAUNCH_PREP_VIRTUAL_SYSTEMS"
+owner = "apps/mister/src/launch_preparation.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_LAUNCH_RETURN_PMU_HANDOFF_OUT"
+owner = "apps/mister/src/ui_runner/launch_handoff_session.rs"
+classification = "diagnostic"
+value_shape = "path or path list"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "developer diagnostic"
+
+[[control]]
+name = "MISTER_LIBRARY_BENCH_FORCE_REBUILD"
+owner = "crates/catalog/src/library_cli.rs"
+classification = "benchmark"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "benchmark only"
+
+[[control]]
+name = "MISTER_LIBRARY_BENCH_ITERATIONS"
+owner = "crates/catalog/src/library_cli.rs"
+classification = "benchmark"
+value_shape = "bounded integer"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "benchmark only"
+
+[[control]]
+name = "MISTER_LIBRARY_BENCH_LABEL"
+owner = "crates/catalog/src/library_cli.rs"
+classification = "benchmark"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "benchmark only"
+
+[[control]]
+name = "MISTER_LIBRARY_BENCH_PRECOUNT"
+owner = "crates/catalog/src/library_cli.rs"
+classification = "benchmark"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "benchmark only"
+
+[[control]]
+name = "MISTER_LIBRARY_BENCH_SQLITE"
+owner = "crates/catalog/src/device_layout.rs"
+classification = "benchmark"
+value_shape = "path or path list"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "benchmark only"
+
+[[control]]
+name = "MISTER_LIBRARY_NAMESPACE_BACKEND"
+owner = "crates/catalog/src/namespace_walk.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_LIBRARY_PATH_MAP"
+owner = "crates/catalog/src/catalog_config.rs"
+classification = "production"
+value_shape = "path or path list"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_LIBRARY_REFRESH_LOCK"
+owner = "apps/mister/src/main.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_LIBRARY_ROOTS"
+owner = "apps/mister/src/pmu_profile.rs"
+classification = "production"
+value_shape = "path or path list"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_LIBRARY_SOFTWARE_HASH"
+owner = "crates/catalog/src/software_identity.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_LIBRARY_SQLITE"
+owner = "apps/mister/src/pmu_profile.rs"
+classification = "production"
+value_shape = "path or path list"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_LIBRARY_SQLITE_BUILD_DIR"
+owner = "apps/mister/src/pmu_profile.rs"
+classification = "production"
+value_shape = "path or path list"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_LOW_MEMORY_AVAILABLE_KIB"
+owner = "apps/mister/src/memory_pressure.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_MAGIK_BUILD_NUMBER"
+owner = "apps/mister/src/build_identity.rs"
+classification = "build-time"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "build pipeline"
+
+[[control]]
+name = "MISTER_MAGIK_BUILD_TIME"
+owner = "apps/mister/src/build_identity.rs"
+classification = "build-time"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "build pipeline"
+
+[[control]]
+name = "MISTER_MAGIK_CRT_TRIAL"
+owner = "mister/platform/runtime/src/fpga.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_MAGIK_DEV_LATCH_POST_SKIP_WORD_INDEX"
+owner = "apps/mister/src/ui_runner/launcher_present/latch.rs"
+classification = "production"
+value_shape = "bounded integer"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_MAGIK_DEV_LATCH_STATUS_TIMEOUT_AT"
+owner = "apps/mister/src/ui_runner/launcher_present/latch.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_MAGIK_DISPLAY_CONFIRM_UI"
+owner = "apps/mister/src/ui_runner/launcher_loop.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_MAGIK_DOWNLOADER_INI"
+owner = "apps/mister/src/ui_runner/update_checker.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_MAGIK_HOT_JOURNAL_DB"
+owner = "crates/catalog/src/sqlite_catalog.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_MAGIK_INPUT_PROXY"
+owner = "apps/mister/src/input_hub.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_MAGIK_INPUT_PROXY_PROTOCOL"
+owner = "apps/mister/src/input_hub.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_MAGIK_PARENT"
+owner = "apps/mister/src/ui_runner/launcher_loop.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_MAGIK_PROCESS_LOCK"
+owner = "apps/mister/src/main.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_MAGIK_READY_FIFO"
+owner = "apps/mister/src/ui_runner/launcher_readiness.rs"
+classification = "production"
+value_shape = "path or path list"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_MAGIK_RELEASE_MARKER"
+owner = "apps/mister/src/ui_runner/update_checker.rs"
+classification = "production"
+value_shape = "path or path list"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_MAGIK_RETURN_TO_LAUNCHER"
+owner = "apps/mister/src/ui_runner/launcher_loop.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_MAGIK_RUNTIME_DISPLAY_V1"
+owner = "apps/mister/src/ui_display.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_MAGIK_RUNTIME_SETTINGS_V1"
+owner = "apps/mister/src/ui_display.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_MAGIK_SOURCE_DIRTY"
+owner = "apps/mister/src/build_identity.rs"
+classification = "build-time"
+value_shape = "path or path list"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "build pipeline"
+
+[[control]]
+name = "MISTER_MAGIK_SOURCE_REVISION"
+owner = "apps/mister/src/build_identity.rs"
+classification = "build-time"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "build pipeline"
+
+[[control]]
+name = "MISTER_MAGIK_STARTUP_TOKEN"
+owner = "apps/mister/src/ui_runner/launcher_readiness.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_MAGIK_TEST_AUTO_LAUNCH_GATE"
+owner = "apps/mister/src/ui_runner/launcher_loop.rs"
+classification = "test"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "test only"
+
+[[control]]
+name = "MISTER_MAGIK_TEST_CATALOG_PUBLICATION_GATE"
+owner = "apps/mister/src/ui_runner/launcher_catalog_publication_test.rs"
+classification = "test"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "test only"
+
+[[control]]
+name = "MISTER_MAGIK_TEST_CATALOG_PUBLICATION_SESSION"
+owner = "apps/mister/src/ui_runner/launcher_catalog_publication_test.rs"
+classification = "test"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "test only"
+
+[[control]]
+name = "MISTER_MAGIK_TEST_CATALOG_RECOVERY_DIALOG"
+owner = "apps/mister/src/ui_runner/launcher_loop.rs"
+classification = "test"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "test only"
+
+[[control]]
+name = "MISTER_MAGIK_TEST_FIRST_FRAME_RELEASE_GATE"
+owner = "apps/mister/src/ui_runner/launcher_catalog_publication_test.rs"
+classification = "test"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "test only"
+
+[[control]]
+name = "MISTER_MAGIK_TEST_LIBRARY_CHANGED_DIALOG_CHOICE"
+owner = "apps/mister/src/launcher.rs"
+classification = "test"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "test only"
+
+[[control]]
+name = "MISTER_MAGIK_VERSION"
+owner = "apps/mister/src/build_identity.rs"
+classification = "build-time"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "build pipeline"
+
+[[control]]
+name = "MISTER_MAME_SQLITE"
+owner = "crates/catalog/src/catalog_config.rs"
+classification = "production"
+value_shape = "path or path list"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_MEDIA_ASSET_DIR"
+owner = "apps/mister/src/launcher.rs"
+classification = "production"
+value_shape = "path or path list"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_MEDIA_BENCH_CONTENTION"
+owner = "apps/mister/src/launcher_runtime/media.rs"
+classification = "benchmark"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "benchmark only"
+
+[[control]]
+name = "MISTER_MEDIA_CONCURRENCY"
+owner = "apps/mister/src/launcher_runtime/media.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_MEDIA_MANIFEST_URL"
+owner = "apps/mister/src/launcher_runtime/media.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_MEDIA_SIZE"
+owner = "apps/mister/src/launcher_runtime/media.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_MEDIA_UPDATE"
+owner = "apps/mister/src/launcher_runtime/media.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_MEGADRIVE_PREVIEW_ARCHIVE"
+owner = "crates/catalog/src/preview_worker.rs"
+classification = "production"
+value_shape = "path or path list"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_MODE_FORMAT"
+owner = "mister/platform/runtime/src/framebuffer/format.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_N64_PREVIEW_ARCHIVE"
+owner = "crates/catalog/src/preview_worker.rs"
+classification = "production"
+value_shape = "path or path list"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_NAMESPACE_BACKEND"
+owner = "crates/catalog/src/library_indexer.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_NEOGEO_PREVIEW_ARCHIVE"
+owner = "crates/catalog/src/preview_worker.rs"
+classification = "production"
+value_shape = "path or path list"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_NES_PREVIEW_ARCHIVE"
+owner = "crates/catalog/src/preview_worker.rs"
+classification = "production"
+value_shape = "path or path list"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_ORIENTATION_PMU_COMPLETE"
+owner = "apps/mister/src/ui_runner/launcher_loop.rs"
+classification = "diagnostic"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "developer diagnostic"
+
+[[control]]
+name = "MISTER_ORIENTATION_SIMD"
+owner = "apps/mister/src/launcher_runtime/orientation_transition.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_ORIENTATION_TRANSITIONS_BENCHMARK"
+owner = "apps/mister/src/ui_runner.rs"
+classification = "benchmark"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "benchmark only"
+
+[[control]]
+name = "MISTER_ORIENTATION_TRANSITIONS_EVIDENCE_DIR"
+owner = "apps/mister/src/ui_runner/launcher_loop.rs"
+classification = "production"
+value_shape = "path or path list"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_ORIENTATION_TRANSITIONS_REQUIRE_ANALYTICS"
+owner = "apps/mister/src/ui_runner/launcher_loop.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_ORIENTATION_TRANSITION_EFFECT"
+owner = "apps/mister/src/ui_runner/launcher_loop.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_PARTICLE_COHORTS"
+owner = "crates/particles/src/engine.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_PARTICLE_COMMAND_ORDER"
+owner = "apps/mister/src/particle_renderer.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_PARTICLE_PMU"
+owner = "apps/mister/src/particle_renderer.rs"
+classification = "diagnostic"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "developer diagnostic"
+
+[[control]]
+name = "MISTER_PARTICLE_PROJECTION"
+owner = "crates/particles/src/engine.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_PARTICLE_PROJECTION_VALIDATE"
+owner = "crates/particles/src/engine.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_PARTICLE_SIMD"
+owner = "crates/particles/src/engine.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_PMU_PROFILE"
+owner = "crates/perf-events/src/lib.rs"
+classification = "diagnostic"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "developer diagnostic"
+
+[[control]]
+name = "MISTER_PMU_RECORD_LIMIT"
+owner = "crates/perf-events/src/lib.rs"
+classification = "diagnostic"
+value_shape = "bounded integer"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "developer diagnostic"
+
+[[control]]
+name = "MISTER_PMU_SAMPLE_EVERY"
+owner = "crates/perf-events/src/lib.rs"
+classification = "diagnostic"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "developer diagnostic"
+
+[[control]]
+name = "MISTER_PPROF"
+owner = "apps/mister/src/cpu_profile.rs"
+classification = "diagnostic"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "developer diagnostic"
+
+[[control]]
+name = "MISTER_PPROF_COMPLETE"
+owner = "apps/mister/src/cpu_profile.rs"
+classification = "diagnostic"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "developer diagnostic"
+
+[[control]]
+name = "MISTER_PPROF_DURATION_SECS"
+owner = "apps/mister/src/cpu_profile.rs"
+classification = "diagnostic"
+value_shape = "bounded integer"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "developer diagnostic"
+
+[[control]]
+name = "MISTER_PPROF_FOLDED_OUT"
+owner = "apps/mister/src/cpu_profile.rs"
+classification = "diagnostic"
+value_shape = "path or path list"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "developer diagnostic"
+
+[[control]]
+name = "MISTER_PPROF_HZ"
+owner = "apps/mister/src/cpu_profile.rs"
+classification = "diagnostic"
+value_shape = "bounded integer"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "developer diagnostic"
+
+[[control]]
+name = "MISTER_PPROF_OUT"
+owner = "apps/mister/src/cpu_profile.rs"
+classification = "diagnostic"
+value_shape = "path or path list"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "developer diagnostic"
+
+[[control]]
+name = "MISTER_PPROF_TRIGGER"
+owner = "apps/mister/src/cpu_profile.rs"
+classification = "diagnostic"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "developer diagnostic"
+
+[[control]]
+name = "MISTER_PPROF_WARMUP_SECS"
+owner = "apps/mister/src/cpu_profile.rs"
+classification = "diagnostic"
+value_shape = "bounded integer"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "developer diagnostic"
+
+[[control]]
+name = "MISTER_PRESENT_BACKEND"
+owner = "apps/mister/src/ui_runner/launcher_loop.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_PREVIEW_ARCHIVE"
+owner = "crates/catalog/src/preview_worker.rs"
+classification = "production"
+value_shape = "path or path list"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_PREVIEW_ARCHIVES"
+owner = "crates/catalog/src/preview_worker.rs"
+classification = "production"
+value_shape = "path or path list"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_PREVIEW_ARCHIVE_AUTO"
+owner = "crates/catalog/src/preview_worker.rs"
+classification = "production"
+value_shape = "path or path list"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_PREVIEW_ARCHIVE_BACKGROUND_WARM"
+owner = "crates/catalog/src/preview_worker.rs"
+classification = "production"
+value_shape = "path or path list"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_PREVIEW_ARCHIVE_MEM_PRIMARY"
+owner = "crates/catalog/src/preview_worker.rs"
+classification = "production"
+value_shape = "path or path list"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_PREVIEW_ARCHIVE_MEM_WARM"
+owner = "crates/catalog/src/preview_worker.rs"
+classification = "production"
+value_shape = "path or path list"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_PREVIEW_CACHE_DIR"
+owner = "crates/catalog/src/device_layout.rs"
+classification = "production"
+value_shape = "path or path list"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_PREVIEW_DECODED_CACHE_CAP"
+owner = "crates/catalog/src/preview_worker.rs"
+classification = "production"
+value_shape = "bounded integer"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_PREVIEW_DIRECT_PRESENT"
+owner = "apps/mister/src/ui_runner/ui_frame_target.rs"
+classification = "production"
+value_shape = "path or path list"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_PREVIEW_FADE_P02"
+owner = "apps/mister/src/ui_runner/raw565_preview_renderer.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_PREVIEW_FORCE_ARCHIVE_MEM"
+owner = "crates/catalog/src/preview_worker.rs"
+classification = "production"
+value_shape = "path or path list"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_PREVIEW_LOADING"
+owner = "apps/mister/src/preview_state.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_PREVIEW_RESIZE"
+owner = "crates/catalog/src/preview_worker.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_PREVIEW_RESIZE_FILTER"
+owner = "crates/catalog/src/preview_worker.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_PREVIEW_RESIZE_MAX"
+owner = "crates/catalog/src/preview_worker.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_PREVIEW_RUN_LABEL"
+owner = "apps/mister/src/ui_runner/ui_frame_target.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_PREVIEW_SCROLL_EXIT_AFTER_TRACE"
+owner = "apps/mister/src/ui_runner/launcher_loop.rs"
+classification = "diagnostic"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "developer diagnostic"
+
+[[control]]
+name = "MISTER_PREVIEW_SCROLL_SKIP_ARCHIVE_WARM"
+owner = "apps/mister/src/ui_runner/launcher_loop.rs"
+classification = "production"
+value_shape = "path or path list"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_PREVIEW_SCROLL_TRACE"
+owner = "apps/mister/src/ui_runner/launcher_frame_accounting.rs"
+classification = "diagnostic"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "developer diagnostic"
+
+[[control]]
+name = "MISTER_PREVIEW_SCROLL_TRACE_COMPLETE"
+owner = "apps/mister/src/ui_runner/launcher_frame_accounting.rs"
+classification = "diagnostic"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "developer diagnostic"
+
+[[control]]
+name = "MISTER_PREVIEW_SCROLL_TRACE_SECS"
+owner = "apps/mister/src/ui_runner/launcher_frame_accounting.rs"
+classification = "diagnostic"
+value_shape = "bounded integer"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "developer diagnostic"
+
+[[control]]
+name = "MISTER_PREVIEW_STEP_HOLD_SECS"
+owner = "apps/mister/src/ui_runner/launcher_bench.rs"
+classification = "production"
+value_shape = "bounded integer"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_PREVIEW_TRACE"
+owner = "apps/mister/src/preview_state.rs"
+classification = "diagnostic"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "developer diagnostic"
+
+[[control]]
+name = "MISTER_PREVIEW_TRANSITION"
+owner = "apps/mister/src/screenshot_transitions.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_PREVIEW_TRANSITION_MS"
+owner = "apps/mister/src/screenshot_transitions.rs"
+classification = "production"
+value_shape = "bounded integer"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_PREVIEW_TRANSITION_PICKER"
+owner = "apps/mister/src/screenshot_transitions.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_PREVIEW_TRANSITION_SEGMENT_SECS"
+owner = "apps/mister/src/screenshot_transitions.rs"
+classification = "production"
+value_shape = "bounded integer"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_PREVIEW_TURBO_LOOKAHEAD"
+owner = "apps/mister/src/preview_state.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_PREVIEW_TURBO_RUNWAY"
+owner = "apps/mister/src/preview_state.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_PREVIEW_VISUAL_PCT"
+owner = "apps/mister/src/preview_state.rs"
+classification = "production"
+value_shape = "bounded integer"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_PROCESS_NAMES"
+owner = "apps/mister/src/launcher.rs"
+classification = "external"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "external compatibility"
+
+[[control]]
+name = "MISTER_PROFILE"
+owner = "apps/mister/src/frame_profile.rs"
+classification = "diagnostic"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "developer diagnostic"
+
+[[control]]
+name = "MISTER_PROFILE_FILE"
+owner = "apps/mister/src/frame_profile.rs"
+classification = "diagnostic"
+value_shape = "path or path list"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "developer diagnostic"
+
+[[control]]
+name = "MISTER_PROFILE_SLOW_US"
+owner = "apps/mister/src/frame_profile.rs"
+classification = "diagnostic"
+value_shape = "bounded integer"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "developer diagnostic"
+
+[[control]]
+name = "MISTER_RASTER_EFFECTS"
+owner = "apps/mister/src/ui_runner/experiments/effects/raster_effects_loop.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_RASTER_EFFECTS_AUTO"
+owner = "apps/mister/src/ui_runner/experiments/effects/raster_effects_loop.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_RASTER_EFFECTS_CACHE_CAP"
+owner = "apps/mister/src/ui_runner/experiments/effects/raster_effects_loop.rs"
+classification = "production"
+value_shape = "bounded integer"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_RASTER_EFFECTS_HUD"
+owner = "apps/mister/src/ui_runner/experiments/effects/raster_effects_loop.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_RASTER_EFFECTS_SEGMENT_SECS"
+owner = "apps/mister/src/ui_runner/experiments/effects/raster_effects_loop.rs"
+classification = "production"
+value_shape = "bounded integer"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_RASTER_EFFECTS_TRACE"
+owner = "apps/mister/src/ui_runner/experiments/effects/raster_effects_loop.rs"
+classification = "diagnostic"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "developer diagnostic"
+
+[[control]]
+name = "MISTER_ROOT"
+owner = "apps/mister/src/macos_preview_content.rs"
+classification = "external"
+value_shape = "path or path list"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "external compatibility"
+
+[[control]]
+name = "MISTER_SATURN_PREVIEW_ARCHIVE"
+owner = "crates/catalog/src/preview_worker.rs"
+classification = "production"
+value_shape = "path or path list"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_SCREENSAVER_SEED"
+owner = "apps/mister/src/ui_runner/launcher_screensaver.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_SCREENSAVER_START_ACTIVE"
+owner = "apps/mister/src/ui_runner/launcher_loop.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_SCREENSAVER_START_IDLE_WHEN_READY"
+owner = "apps/mister/src/ui_runner/launcher_loop.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_SCREENSAVER_START_PREVIEW_AFTER_ANALYTICS"
+owner = "apps/mister/src/ui_runner/launcher_loop.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_SCREENSAVER_START_PREVIEW_WHEN_READY"
+owner = "apps/mister/src/ui_runner/launcher_loop.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_SETTINGS_NAVIGATION_BENCHMARK"
+owner = "apps/mister/src/ui_runner.rs"
+classification = "benchmark"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "benchmark only"
+
+[[control]]
+name = "MISTER_SETTINGS_NAVIGATION_EVIDENCE_DIR"
+owner = "apps/mister/src/ui_runner/launcher_loop.rs"
+classification = "production"
+value_shape = "path or path list"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_SHARDED_CATALOG_DIR"
+owner = "apps/mister/src/pmu_profile.rs"
+classification = "production"
+value_shape = "path or path list"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_SMS_PREVIEW_ARCHIVE"
+owner = "crates/catalog/src/preview_worker.rs"
+classification = "production"
+value_shape = "path or path list"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_SNES_PREVIEW_ARCHIVE"
+owner = "crates/catalog/src/preview_worker.rs"
+classification = "production"
+value_shape = "path or path list"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_SPRITE_EFFECTS"
+owner = "apps/mister/src/ui_runner/experiments/effects/sprite_effects_loop.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_SPRITE_EFFECTS_AUTO"
+owner = "apps/mister/src/ui_runner/experiments/effects/sprite_effects_loop.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_SPRITE_EFFECTS_CACHE_CAP"
+owner = "apps/mister/src/ui_runner/experiments/effects/sprite_effects_loop.rs"
+classification = "production"
+value_shape = "bounded integer"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_SPRITE_EFFECTS_HUD"
+owner = "apps/mister/src/ui_runner/experiments/effects/sprite_effects_loop.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_SPRITE_EFFECTS_SEGMENT_SECS"
+owner = "apps/mister/src/ui_runner/experiments/effects/sprite_effects_loop.rs"
+classification = "production"
+value_shape = "bounded integer"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_SPRITE_EFFECTS_TRACE"
+owner = "apps/mister/src/ui_runner/experiments/effects/sprite_effects_loop.rs"
+classification = "diagnostic"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "developer diagnostic"
+
+[[control]]
+name = "MISTER_START_TIMEOUT"
+owner = "apps/mister/src/launcher.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_STREAM_SCALAR_BENCH_SAMPLES"
+owner = "mister/platform/runtime/src/framebuffer/downsample.rs"
+classification = "benchmark"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "benchmark only"
+
+[[control]]
+name = "MISTER_SYSTEM_ENTRY_BENCHMARK_SYSTEM"
+owner = "apps/mister/src/ui_runner/launcher_bench.rs"
+classification = "benchmark"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "benchmark only"
+
+[[control]]
+name = "MISTER_SYSTEM_ENTRY_PROFILE_OUT"
+owner = "apps/mister/src/ui_runner/launcher_loop.rs"
+classification = "diagnostic"
+value_shape = "path or path list"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "developer diagnostic"
+
+[[control]]
+name = "MISTER_SYSTEM_ENTRY_RUN_ID"
+owner = "apps/mister/src/ui_runner/launcher_loop.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_SYSTEM_ENTRY_TRACE"
+owner = "apps/mister/src/ui_runner/launcher_loop.rs"
+classification = "diagnostic"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "developer diagnostic"
+
+[[control]]
+name = "MISTER_TEST_EFFECTS_UNSET"
+owner = "apps/mister/src/ui_runner/experiments/effects/effect_loop_support.rs"
+classification = "test"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "test only"
+
+[[control]]
+name = "MISTER_TEXT_EFFECTS"
+owner = "apps/mister/src/ui_runner/experiments/effects/text_effects_loop.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_TEXT_EFFECTS_AUTO"
+owner = "apps/mister/src/ui_runner/experiments/effects/text_effects_loop.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_TEXT_EFFECTS_CACHE_CAP"
+owner = "apps/mister/src/ui_runner/experiments/effects/text_effects_loop.rs"
+classification = "production"
+value_shape = "bounded integer"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_TEXT_EFFECTS_HUD"
+owner = "apps/mister/src/ui_runner/experiments/effects/text_effects_loop.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_TEXT_EFFECTS_SEGMENT_SECS"
+owner = "apps/mister/src/ui_runner/experiments/effects/text_effects_loop.rs"
+classification = "production"
+value_shape = "bounded integer"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_TEXT_EFFECTS_TRACE"
+owner = "apps/mister/src/ui_runner/experiments/effects/text_effects_loop.rs"
+classification = "diagnostic"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "developer diagnostic"
+
+[[control]]
+name = "MISTER_THREAD_POLICY"
+owner = "crates/catalog/src/runtime_thread.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_TRACE_FILE"
+owner = "apps/mister/src/frame_profile.rs"
+classification = "diagnostic"
+value_shape = "path or path list"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "developer diagnostic"
+
+[[control]]
+name = "MISTER_TRANSITION_EFFECTS"
+owner = "apps/mister/src/ui_runner/experiments/effects/transition_effects_loop.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_TRANSITION_EFFECTS_AUTO"
+owner = "apps/mister/src/ui_runner/experiments/effects/transition_effects_loop.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_TRANSITION_EFFECTS_CACHE_CAP"
+owner = "apps/mister/src/ui_runner/experiments/effects/transition_effects_loop.rs"
+classification = "production"
+value_shape = "bounded integer"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_TRANSITION_EFFECTS_HUD"
+owner = "apps/mister/src/ui_runner/experiments/effects/transition_effects_loop.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_TRANSITION_EFFECTS_SEGMENT_SECS"
+owner = "apps/mister/src/ui_runner/experiments/effects/transition_effects_loop.rs"
+classification = "production"
+value_shape = "bounded integer"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_TRANSITION_EFFECTS_TRACE"
+owner = "apps/mister/src/ui_runner/experiments/effects/transition_effects_loop.rs"
+classification = "diagnostic"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "developer diagnostic"
+
+[[control]]
+name = "MISTER_UI_FB_SIZE"
+owner = "apps/mister/src/ui_display.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_USER_STATE_SQLITE"
+owner = "crates/catalog/src/catalog_config.rs"
+classification = "production"
+value_shape = "path or path list"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_VIDEO_AUTO_TOGGLE_MS"
+owner = "apps/mister/src/ui_runner/video_loop.rs"
+classification = "production"
+value_shape = "bounded integer"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_VIDEO_DIR"
+owner = "apps/mister/src/video_player.rs"
+classification = "production"
+value_shape = "path or path list"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_VIDEO_PATH"
+owner = "apps/mister/src/video_player.rs"
+classification = "production"
+value_shape = "path or path list"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_VIDEO_PROFILE"
+owner = "apps/mister/src/frame_profile.rs"
+classification = "diagnostic"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "developer diagnostic"
+
+[[control]]
+name = "MISTER_VIDEO_SCALE"
+owner = "apps/mister/src/ui_runner/video_loop.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_VSYNC_DEGRADED_MISSES"
+owner = "mister/platform/runtime/src/framebuffer/vsync.rs"
+classification = "production"
+value_shape = "string, enum, or boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_VSYNC_DIRECT_WAIT"
+owner = "mister/platform/runtime/src/framebuffer/vsync.rs"
+classification = "production"
+value_shape = "path or path list"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_VSYNC_FALLBACK_HZ"
+owner = "mister/platform/runtime/src/framebuffer/vsync.rs"
+classification = "production"
+value_shape = "bounded integer"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_VSYNC_FRESH_HIT_MAX_AGE_US"
+owner = "mister/platform/runtime/src/framebuffer/vsync.rs"
+classification = "production"
+value_shape = "bounded integer"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"

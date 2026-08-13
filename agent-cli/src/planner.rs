@@ -226,6 +226,22 @@ fn add_path_operations(
             "maintained Rust or shell source changed → command ownership contract",
         ));
     }
+    if path == Path::new("apps/mister/config/runtime-environment.toml")
+        || path == Path::new("docs/reference/mister-runtime-environment.md")
+        || path == Path::new("scripts/checks/generate-runtime-environment-reference.py")
+        || path.starts_with("apps/mister/src")
+        || path.starts_with("mister/platform/runtime/src")
+        || path.starts_with("crates/catalog/src")
+        || path.starts_with("crates/particles/src")
+        || path.starts_with("crates/perf-events/src")
+    {
+        add(builtin(
+            "repo.runtime-environment",
+            "Check runtime environment ownership",
+            BuiltinOperation::RuntimeEnvironment,
+            "runtime environment source or registry changed → control growth contract",
+        ));
+    }
     if path.file_name().and_then(|name| name.to_str()) == Some("AGENTS.md")
         || path.starts_with("docs/agents")
     {
@@ -2207,6 +2223,27 @@ mod tests {
             .collect();
         assert_eq!(operations.len(), 1);
         assert_eq!(operations[0].id, "repo.shell-ownership");
+    }
+
+    #[test]
+    fn runtime_sources_and_registry_select_environment_ownership_once() {
+        let plan = affected_plan(
+            AssuranceRequest::Plan {
+                scope: Scope::Paths(vec![]),
+            },
+            vec![
+                "apps/mister/src/config.rs".into(),
+                "apps/mister/config/runtime-environment.toml".into(),
+            ],
+        )
+        .unwrap();
+        let operations: Vec<_> = plan
+            .operations
+            .iter()
+            .filter(|operation| operation.builtin == Some(BuiltinOperation::RuntimeEnvironment))
+            .collect();
+        assert_eq!(operations.len(), 1);
+        assert_eq!(operations[0].id, "repo.runtime-environment");
     }
 
     #[test]

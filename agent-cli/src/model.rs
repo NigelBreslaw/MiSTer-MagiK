@@ -136,6 +136,7 @@ pub enum BuiltinOperation {
     AgentGuidance,
     LicenseHeaders,
     ShellOwnership,
+    RuntimeEnvironment,
     DistributionWorkflow,
     KernelWorkflow,
     PlatformWorkflow,

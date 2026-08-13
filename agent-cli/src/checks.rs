@@ -27,6 +27,7 @@ pub fn label(operation: BuiltinOperation) -> &'static str {
         BuiltinOperation::AgentGuidance => "agent guidance",
         BuiltinOperation::LicenseHeaders => "license headers",
         BuiltinOperation::ShellOwnership => "shell ownership",
+        BuiltinOperation::RuntimeEnvironment => "runtime environment ownership",
         BuiltinOperation::DistributionWorkflow => "distribution workflow",
         BuiltinOperation::KernelWorkflow => "kernel workflow",
         BuiltinOperation::PlatformWorkflow => "platform workflow",
@@ -39,6 +40,7 @@ pub fn run(operation: BuiltinOperation, repository: &Path) -> Result<(), String>
         BuiltinOperation::AgentGuidance => check_agent_guidance(repository),
         BuiltinOperation::LicenseHeaders => check_license_headers(repository),
         BuiltinOperation::ShellOwnership => check_shell_ownership(repository),
+        BuiltinOperation::RuntimeEnvironment => check_runtime_environment(repository),
         BuiltinOperation::DistributionWorkflow => check_distribution_workflow(repository),
         BuiltinOperation::KernelWorkflow => check_kernel_workflow(repository),
         BuiltinOperation::PlatformWorkflow => check_platform_workflow(repository),
@@ -629,6 +631,234 @@ fn check_shell_ownership(repository: &Path) -> Result<(), String> {
     Ok(())
 }
 
+#[derive(serde::Deserialize)]
+struct RuntimeEnvironmentRegistry {
+    format: String,
+    source_roots: Vec<String>,
+    baseline: RuntimeEnvironmentBaseline,
+    #[serde(default)]
+    dynamic_prefix: Vec<RuntimeEnvironmentPrefix>,
+    control: Vec<RuntimeEnvironmentControl>,
+}
+
+#[derive(serde::Deserialize)]
+struct RuntimeEnvironmentBaseline {
+    literal_occurrences: usize,
+    unique_names: usize,
+    external_build_names: usize,
+}
+
+#[derive(serde::Deserialize)]
+struct RuntimeEnvironmentPrefix {
+    prefix: String,
+    owner: String,
+    max_suffix_length: usize,
+}
+
+#[derive(Clone, serde::Deserialize)]
+struct RuntimeEnvironmentControl {
+    name: String,
+    owner: String,
+    classification: String,
+    value_shape: String,
+    default_behavior: String,
+    visibility: String,
+}
+
+fn check_runtime_environment(repository: &Path) -> Result<(), String> {
+    const REGISTRY_PATH: &str = "apps/mister/config/runtime-environment.toml";
+    const REFERENCE_PATH: &str = "docs/reference/mister-runtime-environment.md";
+    const FORMAT: &str = "mister-magik-runtime-environment-v1";
+    const SOURCE_ROOTS: &[&str] = &[
+        "apps/mister/src",
+        "mister/platform/runtime/src",
+        "crates/catalog/src",
+        "crates/particles/src",
+        "crates/perf-events/src",
+    ];
+    let text = read(repository, REGISTRY_PATH)?;
+    let mut registry: RuntimeEnvironmentRegistry = toml::from_str(&text)
+        .map_err(|error| format!("runtime_environment_registry_invalid: {error}"))?;
+    if registry.format != FORMAT {
+        return Err(format!(
+            "runtime_environment_format_invalid: expected {FORMAT}"
+        ));
+    }
+    if registry.source_roots != SOURCE_ROOTS {
+        return Err("runtime_environment_source_roots_invalid".into());
+    }
+    let files = repository_files(repository)?;
+    let mut actual = BTreeSet::new();
+    let mut literal_occurrences = 0;
+    for path in files.iter().filter(|path| {
+        path.extension().and_then(|extension| extension.to_str()) == Some("rs")
+            && SOURCE_ROOTS.iter().any(|root| path.starts_with(root))
+    }) {
+        let source = fs::read_to_string(repository.join(path))
+            .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
+        let names = mister_environment_names(&source);
+        literal_occurrences += names.len();
+        actual.extend(names);
+    }
+    let mut registered = BTreeSet::new();
+    for control in &registry.control {
+        if !valid_environment_name(&control.name)
+            || !registered.insert(control.name.clone())
+            || !SOURCE_ROOTS
+                .iter()
+                .any(|root| control.owner.starts_with(root))
+            || !repository.join(&control.owner).is_file()
+            || ![
+                "production",
+                "diagnostic",
+                "benchmark",
+                "preview",
+                "test",
+                "fault",
+                "build-time",
+                "deprecated",
+                "external",
+            ]
+            .contains(&control.classification.as_str())
+            || control.value_shape.is_empty()
+            || control.default_behavior.is_empty()
+            || control.visibility.is_empty()
+        {
+            return Err(format!(
+                "runtime_environment_control_invalid: {}",
+                control.name
+            ));
+        }
+    }
+    for prefix in &registry.dynamic_prefix {
+        if !prefix.prefix.starts_with("MISTER_")
+            || !prefix.prefix.ends_with('_')
+            || prefix.max_suffix_length == 0
+            || prefix.max_suffix_length > 64
+            || !repository.join(&prefix.owner).is_file()
+        {
+            return Err(format!(
+                "runtime_environment_prefix_invalid: {}",
+                prefix.prefix
+            ));
+        }
+    }
+    let unregistered: Vec<_> = actual
+        .difference(&registered)
+        .filter(|name| !registered_by_prefix(name, &registry.dynamic_prefix))
+        .cloned()
+        .collect();
+    if !unregistered.is_empty() {
+        return Err(format!(
+            "runtime_environment_unregistered: {}; register each control with its owning module in {REGISTRY_PATH}",
+            unregistered.join(",")
+        ));
+    }
+    let stale: Vec<_> = registered.difference(&actual).cloned().collect();
+    if !stale.is_empty() {
+        return Err(format!(
+            "runtime_environment_stale_registry: {}",
+            stale.join(",")
+        ));
+    }
+    let external_build_names = registry
+        .control
+        .iter()
+        .filter(|control| matches!(control.classification.as_str(), "external" | "build-time"))
+        .count();
+    if registry.baseline.literal_occurrences != literal_occurrences
+        || registry.baseline.unique_names != actual.len()
+        || registry.baseline.external_build_names != external_build_names
+    {
+        return Err(format!(
+            "runtime_environment_baseline_drift: occurrences={literal_occurrences} names={} external_build={external_build_names}",
+            actual.len()
+        ));
+    }
+    registry
+        .control
+        .sort_by(|left, right| left.name.cmp(&right.name));
+    let expected = render_runtime_environment_reference(&registry);
+    let reference = read(repository, REFERENCE_PATH)?;
+    if reference != expected {
+        return Err(format!(
+            "runtime_environment_reference_stale: regenerate {REFERENCE_PATH} from {REGISTRY_PATH}"
+        ));
+    }
+    Ok(())
+}
+
+fn mister_environment_names(text: &str) -> Vec<String> {
+    let bytes = text.as_bytes();
+    let mut names = Vec::new();
+    let mut offset = 0;
+    while offset + 7 < bytes.len() {
+        if &bytes[offset..offset + 7] != b"MISTER_" {
+            offset += 1;
+            continue;
+        }
+        let start = offset;
+        offset += 7;
+        while offset < bytes.len()
+            && (bytes[offset].is_ascii_uppercase()
+                || bytes[offset].is_ascii_digit()
+                || bytes[offset] == b'_')
+        {
+            offset += 1;
+        }
+        if offset > start + 7 {
+            names.push(String::from_utf8_lossy(&bytes[start..offset]).into_owned());
+        }
+    }
+    names
+}
+
+fn valid_environment_name(name: &str) -> bool {
+    name.starts_with("MISTER_")
+        && name.len() > 7
+        && name[7..]
+            .bytes()
+            .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'_')
+}
+
+fn registered_by_prefix(name: &str, prefixes: &[RuntimeEnvironmentPrefix]) -> bool {
+    prefixes.iter().any(|entry| {
+        name.strip_prefix(&entry.prefix).is_some_and(|suffix| {
+            !suffix.is_empty()
+                && suffix.len() <= entry.max_suffix_length
+                && suffix
+                    .bytes()
+                    .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'_')
+        })
+    })
+}
+
+fn render_runtime_environment_reference(registry: &RuntimeEnvironmentRegistry) -> String {
+    let mut output = String::from(
+        "# MiSTer runtime environment reference\n\n<!-- Generated from apps/mister/config/runtime-environment.toml. Do not edit. -->\n\n",
+    );
+    output.push_str(&format!(
+        "Registry format: `{}`. Baseline: {} literal occurrences, {} owned names, {} external/build-time names.\n\n",
+        registry.format,
+        registry.baseline.literal_occurrences,
+        registry.baseline.unique_names,
+        registry.baseline.external_build_names
+    ));
+    output.push_str("| Name | Classification | Shape | Default behavior | Visibility | Owner |\n|---|---|---|---|---|---|\n");
+    for control in &registry.control {
+        output.push_str(&format!(
+            "| `{}` | {} | {} | {} | {} | `{}` |\n",
+            control.name,
+            control.classification,
+            control.value_shape,
+            control.default_behavior.replace('|', "\\|"),
+            control.visibility,
+            control.owner
+        ));
+    }
+    output
+}
+
 fn main_fifo_source(path: &Path) -> bool {
     path.extension().and_then(|extension| extension.to_str()) == Some("rs")
         || path.starts_with("scripts")
@@ -829,6 +1059,78 @@ mod tests {
         fs::remove_file(root.join("docs/contract.md")).unwrap();
         fs::write(root.join("history/evidence.md"), "scripts/run-rust.sh\n").unwrap();
         assert!(check_shell_ownership(&root).is_ok());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn runtime_environment_registry_blocks_unregistered_controls() {
+        let root = std::env::temp_dir().join(format!(
+            "agent-cli-runtime-environment-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(root.join("apps/mister/src")).unwrap();
+        fs::create_dir_all(root.join("apps/mister/config")).unwrap();
+        fs::create_dir_all(root.join("docs/reference")).unwrap();
+        assert!(
+            Command::new("git")
+                .args(["init", "-q"])
+                .current_dir(&root)
+                .status()
+                .unwrap()
+                .success()
+        );
+        let source = root.join("apps/mister/src/config.rs");
+        fs::write(&source, "std::env::var(\"MISTER_ONE\");\n").unwrap();
+        let registry_text = r#"format = "mister-magik-runtime-environment-v1"
+source_roots = [
+  "apps/mister/src",
+  "mister/platform/runtime/src",
+  "crates/catalog/src",
+  "crates/particles/src",
+  "crates/perf-events/src",
+]
+
+[baseline]
+literal_occurrences = 1
+unique_names = 1
+external_build_names = 0
+
+[[control]]
+name = "MISTER_ONE"
+owner = "apps/mister/src/config.rs"
+classification = "production"
+value_shape = "string"
+default_behavior = "disabled"
+visibility = "internal runtime"
+"#;
+        fs::write(
+            root.join("apps/mister/config/runtime-environment.toml"),
+            registry_text,
+        )
+        .unwrap();
+        let mut registry: RuntimeEnvironmentRegistry = toml::from_str(registry_text).unwrap();
+        registry
+            .control
+            .sort_by(|left, right| left.name.cmp(&right.name));
+        fs::write(
+            root.join("docs/reference/mister-runtime-environment.md"),
+            render_runtime_environment_reference(&registry),
+        )
+        .unwrap();
+        assert!(check_runtime_environment(&root).is_ok());
+
+        fs::write(
+            &source,
+            "std::env::var(\"MISTER_ONE\");\nstd::env::var(\"MISTER_TWO\");\n",
+        )
+        .unwrap();
+        let error = check_runtime_environment(&root).unwrap_err();
+        assert!(error.contains("runtime_environment_unregistered: MISTER_TWO"));
+        assert!(error.contains("owning module"));
         fs::remove_dir_all(root).unwrap();
     }
 
