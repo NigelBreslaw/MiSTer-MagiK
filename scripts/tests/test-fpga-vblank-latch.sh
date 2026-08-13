@@ -32,6 +32,7 @@ vvp "$build_dir/tb_mister_magik_video_diagnostics_control.vvp"
 iverilog -g2012 -Wall -Wimplicit -I "$rtl_dir" \
 	-s tb_mister_magik_scaler_completion_cdc \
 	-o "$build_dir/tb_mister_magik_scaler_completion_cdc.vvp" \
+	"$rtl_dir/mister_magik_video_diagnostics_avalon.sv" \
 	"$rtl_dir/tb_mister_magik_scaler_completion_cdc.sv"
 
 vvp "$build_dir/tb_mister_magik_scaler_completion_cdc.vvp"

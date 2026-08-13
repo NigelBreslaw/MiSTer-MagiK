@@ -165,8 +165,47 @@ def main() -> None:
     control_source = diagnostics_control.read_text()
     avalon_source = diagnostics_avalon.read_text()
     output_source = diagnostics_output.read_text()
-    if re.search(r"\bmodule\b", avalon_source) or re.search(r"\bmodule\b", output_source):
-        fail("retired native-domain diagnostic source unexpectedly defines logic")
+    if re.search(r"\bmodule\b", output_source):
+        fail("retired output-domain diagnostic source unexpectedly defines logic")
+    if avalon_source.count("module mister_magik_scaler_completion_cdc") != 1:
+        fail("lossless scaler completion bridge is missing or ambiguous")
+    completion_module = re.search(
+        r"module\s+mister_magik_scaler_completion_cdc\s*\((.*?)\);",
+        avalon_source,
+        re.S,
+    )
+    if completion_module is None:
+        fail("scaler completion bridge interface is missing")
+    completion_ports = re.findall(
+        r"\b(?:input|output)\s+(?:wire|reg)\s+(?:\[[^\]]+\]\s+)?"
+        r"([A-Za-z_][A-Za-z0-9_]*)",
+        completion_module.group(1),
+    )
+    if completion_ports != [
+        "destination_clk",
+        "reset_n",
+        "source_completion_gray",
+        "completion_count",
+        "consumed_completion_gray",
+        "maximum_completion_batch",
+        "completion_delta_invalid",
+    ]:
+        fail("scaler completion bridge interface is not exact")
+    for fragment in (
+        "reg [1:0] completion_gray_meta = 2'd0;",
+        "reg [1:0] completion_gray_sync = 2'd0;",
+        "completion_gray_meta <= source_completion_gray;",
+        "completion_gray_sync <= completion_gray_meta;",
+        "wire [1:0] completion_delta =",
+        "completion_delta_valid ? completion_delta : 2'd0",
+        "if(!completion_delta_valid)",
+    ):
+        if avalon_source.count(fragment) != 1:
+            fail(f"scaler completion bridge behavior is missing: {fragment}")
+    if avalon_source.count("SYNCHRONIZER_IDENTIFICATION FORCED\"") != 1 or avalon_source.count(
+        "SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS\""
+    ) != 1:
+        fail("scaler completion Gray synchronizers are not exactly identified")
     compiled_diagnostics = control_source + avalon_source + output_source
     for retired_fragment in (
         "snapshot_payload",
@@ -519,12 +558,14 @@ def main() -> None:
             )
 
         patched = (work / "sys/sys_top.v").read_text()
+        patched_ascal = (work / "sys/ascal.vhd").read_text()
         patched_pll = (work / "sys/pll_hdmi.v").read_text()
         required_counts = {
             BRIDGE_MAPPING: 1,
             APPLY_BUNDLE: 1,
             "if(magik_response_valid) io_dout_sys <= magik_response_data;": 2,
             "mister_magik_hdmi_lock_evidence magik_hdmi_lock_evidence": 1,
+            "mister_magik_scaler_completion_cdc magik_scaler_completion_cdc": 1,
             "mister_magik_video_diagnostics_control magik_video_diagnostics": 0,
             "mister_magik_video_diagnostics_avalon magik_video_diagnostics_avalon": 0,
             "mister_magik_video_diagnostics_output magik_video_diagnostics_output": 0,
@@ -538,6 +579,24 @@ def main() -> None:
         ]
         if mismatches:
             fail("patched production bridge binding mismatch: " + "; ".join(mismatches))
+        for fragment in (
+            "avl_completion_gray: OUT   std_logic_vector(1 DOWNTO 0);",
+            "o_completion_count : IN    std_logic_vector(1 DOWNTO 0) := \"00\";",
+            "SIGNAL avl_completion_bin,avl_completion_gray_i : unsigned(1 DOWNTO 0);",
+            "next_completion_bin_v:=avl_completion_bin+1;",
+            "avl_completion_gray_i<=next_completion_bin_v(1) &",
+            "completion_count_v:=to_integer(unsigned(o_completion_count));",
+            "copy_level_v:=o_copylev+completion_count_v;",
+        ):
+            if patched_ascal.count(fragment) != 1:
+                fail(f"patched ascal lossless completion logic is missing: {fragment}")
+        for retired_completion in (
+            "SIGNAL avl_readdataack,avl_readack",
+            "o_readdataack_sync<=avl_readdataack",
+            "o_readdataack_sync2<=o_readdataack_sync",
+        ):
+            if retired_completion in patched_ascal:
+                fail(f"lossy scaler completion toggle remains: {retired_completion}")
         if not re.search(r"\.locked\s*\(\s*\)", patched_pll):
             fail("HDMI PLL wrapper no longer terminates its redundant lock output")
         if "locked.export" in patched_pll or ".locked(hdmi_pll_locked)" in patched:

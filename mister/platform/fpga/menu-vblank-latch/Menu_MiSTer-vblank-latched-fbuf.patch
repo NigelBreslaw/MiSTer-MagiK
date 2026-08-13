@@ -232,4 +232,153 @@ index a416879..f6a40ea 100644
 +	.de_in(magik_native_de),
  	.ce_in(ce_pix),
  
- 	.dout(vga_data_sl),
+	.dout(vga_data_sl),
+
+diff --git a/sys/ascal.vhd b/sys/ascal.vhd
+index a735e6b..0000000 100644
+--- a/sys/ascal.vhd
++++ b/sys/ascal.vhd
+@@ -250,6 +250,8 @@ ENTITY ascal IS
+ 		avl_address        : OUT   std_logic_vector(N_AW-1 DOWNTO 0);
+ 		avl_write          : OUT   std_logic;
+ 		avl_read           : OUT   std_logic;
++		avl_completion_gray: OUT   std_logic_vector(1 DOWNTO 0);
++		o_completion_count : IN    std_logic_vector(1 DOWNTO 0) := "00";
+ 		avl_byteenable     : OUT   std_logic_vector(N_DW/8-1 DOWNTO 0);
+ 
+ 		------------------------------------
+@@ -418,7 +420,8 @@ ARCHITECTURE rtl OF ascal IS
+ 	SIGNAL avl_walt,avl_wline,avl_rline : std_logic;
+ 	SIGNAL avl_dw,avl_dr : unsigned(N_DW-1 DOWNTO 0);
+ 	SIGNAL avl_wr : std_logic;
+-	SIGNAL avl_readdataack,avl_readack : std_logic;
++	SIGNAL avl_readack : std_logic;
++	SIGNAL avl_completion_bin,avl_completion_gray_i : unsigned(1 DOWNTO 0);
+ 	SIGNAL avl_radrs,avl_wadrs : unsigned(31 DOWNTO 0);
+ 	SIGNAL avl_i_offset0,avl_o_offset0 : unsigned(31 DOWNTO 0);
+ 	SIGNAL avl_i_offset1,avl_o_offset1 : unsigned(31 DOWNTO 0);
+@@ -480,7 +483,6 @@ ARCHITECTURE rtl OF ascal IS
+ 	TYPE enum_o_copy IS (sWAIT,sSHIFT,sCOPY);
+ 	SIGNAL o_copy : enum_o_copy;
+ 	SIGNAL o_pshift : natural RANGE 0 TO 15;
+ 	SIGNAL o_readack,o_readack_sync,o_readack_sync2 : std_logic;
+-	SIGNAL o_readdataack,o_readdataack_sync,o_readdataack_sync2 : std_logic;
+ 	SIGNAL o_copyv : unsigned(0 TO 14);
+ 	SIGNAL o_adrs : unsigned(31 DOWNTO 0); -- Avalon address
+ 	SIGNAL o_adrs_pre : natural RANGE 0 TO 2**24-1;
+@@ -1671,13 +1673,15 @@ ARCHITECTURE rtl OF ascal IS
+ 	-----------------------------------------------------------------------------
+ 	-- AVALON interface
+ 	Avaloir:PROCESS(avl_clk,avl_reset_na) IS
+ 		VARIABLE adr_v : unsigned(31 DOWNTO 0);
++		VARIABLE next_completion_bin_v : unsigned(1 DOWNTO 0);
+ 	BEGIN
+ 		IF avl_reset_na='0' THEN
+ 			avl_state<=sIDLE;
+ 			avl_write_sr<='0';
+ 			avl_read_sr<='0';
+-			avl_readdataack<='0';
++			avl_completion_bin<=(OTHERS =>'0');
++			avl_completion_gray_i<=(OTHERS =>'0');
+ 			avl_readack<='0';
+ 
+ 		ELSIF rising_edge(avl_clk) THEN
+@@ -1789,7 +1793,10 @@ ARCHITECTURE rtl OF ascal IS
+ 				avl_wr<='1';
+ 				avl_wad<=(avl_wad+1) MOD (2*BLEN);
+ 				IF (avl_wad MOD BLEN)=BLEN-2 THEN
+-					avl_readdataack<=NOT avl_readdataack;
++					next_completion_bin_v:=avl_completion_bin+1;
++					avl_completion_bin<=next_completion_bin_v;
++					avl_completion_gray_i<=next_completion_bin_v(1) &
++						(next_completion_bin_v(1) XOR next_completion_bin_v(0));
+ 				END IF;
+ 			END IF;
+ 
+@@ -1804,6 +1811,7 @@ ARCHITECTURE rtl OF ascal IS
+ 	avl_read<=avl_read_i;
+ 	avl_write<=avl_write_i;
+ 	avl_writedata<=std_logic_vector(swap(avl_dr));
++	avl_completion_gray<=std_logic_vector(avl_completion_gray_i);
+ 	avl_burstcount<=std_logic_vector(to_unsigned(BLEN,8));
+ 	avl_byteenable<=(OTHERS =>'1');
+ 
+@@ -1868,6 +1876,8 @@ ARCHITECTURE rtl OF ascal IS
+ 		VARIABLE hcarry_v,vcarry_v : boolean;
+ 		VARIABLE dif_v : natural RANGE 0 TO 8*OHRESH-1;
+ 		VARIABLE off_v : natural RANGE 0 TO 15;
++		VARIABLE completion_count_v : natural RANGE 0 TO 3;
++		VARIABLE copy_level_v : integer RANGE -1 TO 5;
+ 	BEGIN
+ 		IF o_reset_na='0' THEN
+ 			o_copy<=sWAIT;
+@@ -2023,10 +2033,6 @@ ARCHITECTURE rtl OF ascal IS
+ 			o_readack_sync2<=o_readack_sync;
+ 			o_readack<=o_readack_sync XOR o_readack_sync2;
+ 
+-			o_readdataack_sync<=avl_readdataack; -- <ASYNC>
+-			o_readdataack_sync2<=o_readdataack_sync;
+-			o_readdataack<=o_readdataack_sync XOR o_readdataack_sync2;
+-
+ 			------------------------------------------------------
+ 			lev_inc_v:='0';
+ 			lev_dec_v:='0';
+@@ -2331,11 +2337,17 @@ ARCHITECTURE rtl OF ascal IS
+ 			END IF;
+ 
+ 			-- COPYLEV : Number of ongoing copies to line buffers
+-			IF lev_dec_v='1' AND o_readdataack='0' THEN
+-				o_copylev<=o_copylev-1;
+-			ELSIF lev_dec_v='0' AND o_readdataack='1' THEN
+-				o_copylev<=o_copylev+1;
++			completion_count_v:=to_integer(unsigned(o_completion_count));
++			copy_level_v:=o_copylev+completion_count_v;
++			IF lev_dec_v='1' THEN
++				copy_level_v:=copy_level_v-1;
++			END IF;
++			ASSERT completion_count_v<=2
++				REPORT "invalid ascal completion credit count" SEVERITY failure;
++			ASSERT copy_level_v>=0 AND copy_level_v<=2
++				REPORT "invalid ascal copy level" SEVERITY failure;
++			IF completion_count_v<=2 AND copy_level_v>=0 AND copy_level_v<=2 THEN
++				o_copylev<=copy_level_v;
+ 			END IF;
+ 
+			-- FIFOs
+
+diff --git a/sys/sys_top.v b/sys/sys_top.v
+index a416879..f6a40ea 100644
+--- a/sys/sys_top.v
++++ b/sys/sys_top.v
+@@ -818,6 +818,25 @@ wire         bob_deint;
+ 
+ `ifndef MISTER_DEBUG_NOHDMI
+ 	wire clk_hdmi  = hdmi_clk_out;
++	wire [1:0] magik_scaler_completion_gray;
++	wire [1:0] magik_scaler_completion_count;
++	wire [1:0] magik_scaler_completion_consumed_gray;
++	wire [1:0] magik_scaler_completion_maximum_batch;
++	wire magik_scaler_completion_delta_invalid;
++
++	mister_magik_scaler_completion_cdc magik_scaler_completion_cdc
++	(
++		.destination_clk(clk_hdmi),
++		.reset_n(~reset_req),
++		.source_completion_gray(magik_scaler_completion_gray),
++		.completion_count(magik_scaler_completion_count),
++		.consumed_completion_gray(magik_scaler_completion_consumed_gray),
++		.maximum_completion_batch(magik_scaler_completion_maximum_batch),
++		.completion_delta_invalid(magik_scaler_completion_delta_invalid)
++	);
+ 
+ 	ascal 
+ 	#(
+@@ -928,6 +947,8 @@ wire         bob_deint;
+ 		.avl_address      (vbuf_address),
+ 		.avl_write        (vbuf_write),
+ 		.avl_read         (vbuf_read),
++		.avl_completion_gray(magik_scaler_completion_gray),
++		.o_completion_count(magik_scaler_completion_count),
+ 		.avl_byteenable   (vbuf_byteenable)
+ 	);
+ `endif
