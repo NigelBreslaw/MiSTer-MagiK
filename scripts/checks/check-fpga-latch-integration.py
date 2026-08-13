@@ -576,9 +576,9 @@ def main() -> None:
             fail(f"compact evidence snapshot is missing or ambiguous: {fragment}")
     for fragment in (
         "function automatic [3:0] toggle_count4_next;",
-        "count[3:1] + (count[0] & ~toggle & event_detected), toggle};",
+        "toggle_count4_next = {count[3:1] + (count[0] & ~toggle), toggle};",
         "function automatic [1:0] toggle_count2_next;",
-        "count[1] + (count[0] & ~toggle & event_detected), toggle};",
+        "toggle_count2_next = {count[1] + (count[0] & ~toggle), toggle};",
     ):
         if control_source.count(fragment) != 1:
             fail(f"short toggle-counter carry chain is missing: {fragment}")
