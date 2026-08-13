@@ -598,6 +598,8 @@ module tb_mister_magik_video_diagnostics_control;
 	endtask
 
 	integer opcode;
+	integer count_value;
+	integer toggle_value;
 	initial begin
 		armed_flags = MAGIK_HDMI_EVIDENCE_FLAG_LOCK_SEEN_HIGH |
 			MAGIK_HDMI_EVIDENCE_FLAG_LOCK_ARMED |
@@ -607,6 +609,21 @@ module tb_mister_magik_video_diagnostics_control;
 			MAGIK_HDMI_EVIDENCE_FLAG_LOCK_EVER_LOST;
 
 		repeat(4) @(negedge clk_sys);
+		for(count_value = 0; count_value < 16; count_value = count_value + 1) begin
+			for(toggle_value = 0; toggle_value < 2; toggle_value = toggle_value + 1) begin
+				if(dut.recorder.toggle_count4_next(count_value[3:0], toggle_value[0]) !==
+						(count_value[3:0] +
+						 ((toggle_value[0] != count_value[0]) ? 4'd1 : 4'd0)))
+					$fatal(1, "four-bit toggle counter mismatch count=%0d toggle=%0d",
+						count_value, toggle_value);
+				if((count_value < 4) &&
+				   (dut.recorder.toggle_count2_next(count_value[1:0], toggle_value[0]) !==
+						(count_value[1:0] +
+						 ((toggle_value[0] != count_value[0]) ? 2'd1 : 2'd0))))
+					$fatal(1, "two-bit toggle counter mismatch count=%0d toggle=%0d",
+						count_value, toggle_value);
+			end
+		end
 		if(MAGIK_HDMI_EVIDENCE_HEADER_CRC != 16'h109f)
 			$fatal(1, "unexpected generated HDMI evidence header CRC");
 		if(MAGIK_HDMI_OUTPUT_ACTIVITY_HEADER_CRC != 16'hda08)
