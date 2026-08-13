@@ -120,6 +120,7 @@ fn normalize_operations(operations: Vec<Operation>) -> Vec<Operation> {
             existing.program == operation.program
                 && existing.args == operation.args
                 && existing.action == operation.action
+                && existing.builtin == operation.builtin
                 && existing.risk == operation.risk
                 && existing.workflow_phase() == operation.workflow_phase()
         }) {
@@ -1341,7 +1342,9 @@ mod tests {
                 "repo.diff-check",
                 "framebuffer-lab.clippy",
                 "framebuffer-lab.format",
-                "framebuffer-lab.tests"
+                "framebuffer-lab.tests",
+                "repo.platform-manifest-authority",
+                "repo.shell-ownership"
             ]
         );
         assert!(plan.operations.iter().all(|operation| {
@@ -1372,7 +1375,9 @@ mod tests {
                 "repo.diff-check",
                 "framebuffer-scene-lab.clippy",
                 "framebuffer-scene-lab.format",
-                "framebuffer-scene-lab.tests"
+                "framebuffer-scene-lab.tests",
+                "repo.platform-manifest-authority",
+                "repo.shell-ownership"
             ]
         );
         assert!(plan.operations.iter().all(|operation| {
@@ -1403,7 +1408,9 @@ mod tests {
                 "repo.diff-check",
                 "framebuffer-scene-lab.clippy",
                 "framebuffer-scene-lab.format",
-                "framebuffer-scene-lab.tests"
+                "framebuffer-scene-lab.tests",
+                "repo.platform-manifest-authority",
+                "repo.shell-ownership"
             ]
         );
         assert!(plan.operations.iter().all(|operation| {
@@ -1430,7 +1437,14 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(
             ids,
-            ["particles.clippy", "particles.format", "particles.tests"]
+            [
+                "particles.clippy",
+                "particles.format",
+                "particles.tests",
+                "repo.platform-manifest-authority",
+                "repo.runtime-environment",
+                "repo.shell-ownership"
+            ]
         );
         assert!(plan.operations.iter().all(|operation| {
             !operation
@@ -1459,7 +1473,10 @@ mod tests {
             [
                 "perf-events.clippy",
                 "perf-events.format",
-                "perf-events.tests"
+                "perf-events.tests",
+                "repo.platform-manifest-authority",
+                "repo.runtime-environment",
+                "repo.shell-ownership"
             ]
         );
     }
@@ -1483,7 +1500,9 @@ mod tests {
             [
                 "framebuffer-scenes.clippy",
                 "framebuffer-scenes.format",
-                "framebuffer-scenes.tests"
+                "framebuffer-scenes.tests",
+                "repo.platform-manifest-authority",
+                "repo.shell-ownership"
             ]
         );
         assert!(plan.operations.iter().all(|operation| {
@@ -1552,7 +1571,10 @@ mod tests {
                 "catalog.builder-tests",
                 "catalog.clippy",
                 "catalog.format",
-                "catalog.reader-check"
+                "catalog.reader-check",
+                "repo.platform-manifest-authority",
+                "repo.runtime-environment",
+                "repo.shell-ownership"
             ]
         );
         assert!(plan.operations[0].args.contains(&"builder".into()));
@@ -2174,6 +2196,24 @@ mod tests {
         assert_eq!(normalized[0].inputs, ["one", "two"]);
         assert!(normalized[0].reason.contains("first reason"));
         assert!(normalized[0].reason.contains("second reason"));
+    }
+
+    #[test]
+    fn distinct_builtin_checks_never_share_an_execution() {
+        let shell = builtin(
+            "shell",
+            "Shell",
+            BuiltinOperation::ShellOwnership,
+            "shell reason",
+        );
+        let environment = builtin(
+            "environment",
+            "Environment",
+            BuiltinOperation::RuntimeEnvironment,
+            "environment reason",
+        );
+        let normalized = normalize_operations(vec![shell, environment]);
+        assert_eq!(normalized.len(), 2);
     }
 
     #[test]
