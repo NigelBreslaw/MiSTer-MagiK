@@ -112,6 +112,8 @@ CONTROL_SYNC_ASSIGNMENTS = quartus_assignment_section(
 COMPLETION_SYNC_NAMES = (
     "completion_gray_meta",
     "completion_gray_sync",
+    "destination_reset_meta",
+    "destination_reset_sync",
 )
 COMPLETION_SYNC_ASSIGNMENTS = quartus_assignment_section(
     "mister_magik_scaler_completion_cdc:magik_scaler_completion_cdc",
@@ -123,7 +125,7 @@ SYNC_NAMES += tuple(
 )
 SYNC_ASSIGNMENTS = CONTROL_SYNC_ASSIGNMENTS + COMPLETION_SYNC_ASSIGNMENTS
 CUSTOM_SYNC = SYNC_ASSIGNMENTS + """\
-Info (332114): Report Metastability: Found 40 synchronizer chains.
+Info (332114): Report Metastability: Found 41 synchronizer chains.
 Info (332114): Fraction of Chains for which MTBFs Could Not be Calculated: 0.100
 """
 

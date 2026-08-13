@@ -27,7 +27,10 @@ module mister_magik_scaler_completion_cdc (
 	output reg        completion_snapshot_valid = 1'b0,
 	output reg        completion_delta_invalid = 1'b0
 );
-	reg [1:0] destination_reset_release = 2'd0;
+	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED" *)
+	reg destination_reset_meta = 1'b0;
+	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS" *)
+	reg destination_reset_sync = 1'b0;
 	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED" *)
 	reg [1:0] completion_gray_meta = 2'd0;
 	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS" *)
@@ -40,13 +43,17 @@ module mister_magik_scaler_completion_cdc (
 	reg completion_frame_starved = 1'b0;
 	reg completion_line_armed = 1'b0;
 	reg completion_line_starved = 1'b0;
-	wire destination_reset_n = destination_reset_release[1];
+	wire destination_reset_n = destination_reset_sync;
 
 	always @(posedge destination_clk or negedge reset_n) begin
-		if(!reset_n)
-			destination_reset_release <= 2'd0;
-		else
-			destination_reset_release <= {destination_reset_release[0], 1'b1};
+		if(!reset_n) begin
+			destination_reset_meta <= 1'b0;
+			destination_reset_sync <= 1'b0;
+		end
+		else begin
+			destination_reset_meta <= 1'b1;
+			destination_reset_sync <= destination_reset_meta;
+		end
 	end
 
 	function automatic [1:0] gray_to_binary;

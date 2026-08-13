@@ -648,15 +648,23 @@ module tb_mister_magik_video_diagnostics_control;
 		// The scaler-fetch record snapshots only frame-held native state and
 		// independent event epochs. A coherent state is required before the
 		// valid flag is published.
+		scaler_fetch_batch_two_toggle = !scaler_fetch_batch_two_toggle;
+		scaler_fetch_starved_frame_toggle = !scaler_fetch_starved_frame_toggle;
+		scaler_fetch_starved_line_toggle = !scaler_fetch_starved_line_toggle;
+		repeat(8) @(negedge clk_sys);
+		read_scaler_fetch_activity(16'd0, 16'd0, 16'd0);
 		scaler_fetch_state = 11'b00_0_00_10_00_10;
 		scaler_fetch_snapshot_valid = 1'b1;
 		repeat(8) @(negedge clk_sys);
 		read_scaler_fetch_activity(
-			{5'd0, scaler_fetch_state}, 16'd0,
+			{5'd0, scaler_fetch_state}, 16'h0111,
 			MAGIK_HDMI_SCALER_FETCH_ACTIVITY_FLAG_SNAPSHOT_VALID);
-		scaler_fetch_batch_two_toggle = !scaler_fetch_batch_two_toggle;
-		scaler_fetch_starved_frame_toggle = !scaler_fetch_starved_frame_toggle;
-		scaler_fetch_starved_line_toggle = !scaler_fetch_starved_line_toggle;
+		// A command recognized while the repeated state samples disagree must
+		// publish the strict invalid zero payload, never stale state or epochs.
+		@(negedge clk_sys); scaler_fetch_state = 11'b00_0_01_10_00_10;
+		repeat(2) @(posedge clk_sys);
+		@(negedge clk_sys);
+		read_scaler_fetch_activity(16'd0, 16'd0, 16'd0);
 		repeat(8) @(negedge clk_sys);
 		read_scaler_fetch_activity(
 			{5'd0, scaler_fetch_state}, 16'h0111,

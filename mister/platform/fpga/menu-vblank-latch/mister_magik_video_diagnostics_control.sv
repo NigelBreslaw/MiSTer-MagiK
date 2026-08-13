@@ -472,10 +472,12 @@ module mister_magik_hdmi_lock_evidence (
 		(scaler_fetch_starved_line_event ? 1'd1 : 1'd0);
 	wire scaler_fetch_state_coherent =
 		scaler_fetch_state_sys == scaler_fetch_state_stable;
+	wire scaler_fetch_snapshot_ready =
+		scaler_fetch_snapshot_valid_sys && scaler_fetch_state_coherent;
 	wire [2:0] scaler_fetch_flags_next = {
 		scaler_fetch_level_invalid_sys,
 		scaler_fetch_delta_invalid_sys,
-		scaler_fetch_snapshot_valid_sys && scaler_fetch_state_coherent
+		scaler_fetch_snapshot_ready
 	};
 
 	reg lock_previous = 1'b0;
@@ -803,12 +805,18 @@ module mister_magik_hdmi_lock_evidence (
 			end
 			else if(scaler_fetch_start) begin
 				snapshot_flags <= {2'd0, scaler_fetch_flags_next};
-				snapshot_lock_loss_count <= {5'd0, scaler_fetch_state_stable};
-				snapshot_path_extra <= {
-					scaler_fetch_starved_line_count_next,
-					scaler_fetch_starved_frame_count_next,
-					scaler_fetch_batch_two_count_next
-				};
+				if(scaler_fetch_snapshot_ready) begin
+					snapshot_lock_loss_count <= {5'd0, scaler_fetch_state_stable};
+					snapshot_path_extra <= {
+						scaler_fetch_starved_line_count_next,
+						scaler_fetch_starved_frame_count_next,
+						scaler_fetch_batch_two_count_next
+					};
+				end
+				else begin
+					snapshot_lock_loss_count <= 16'd0;
+					snapshot_path_extra <= 16'd0;
+				end
 				tx_crc <= MAGIK_HDMI_SCALER_FETCH_ACTIVITY_HEADER_CRC;
 			end
 		end

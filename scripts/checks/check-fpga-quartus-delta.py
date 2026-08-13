@@ -62,7 +62,7 @@ MINIMUM_SLACK_NS = 0.20
 MAXIMUM_SLACK_DEGRADATION_NS = 0.15
 MAXIMUM_LOGIC_ELEMENT_DELTA = 800
 MAXIMUM_REGISTER_DELTA = 360
-EXPECTED_OBSERVER_CALCULABLE_CHAINS = 35
+EXPECTED_OBSERVER_CALCULABLE_CHAINS = 36
 EXPECTED_QUARTUS_POLICY = {
     "auto_parallel_synthesis": "off",
     "parallel_synthesis": "off",
@@ -117,6 +117,8 @@ EXPECTED_SYNC_ASSIGNMENT_SUFFIXES = (
     "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|scaler_fetch_level_invalid_sys",
     "mister_magik_scaler_completion_cdc:magik_scaler_completion_cdc|completion_gray_meta",
     "mister_magik_scaler_completion_cdc:magik_scaler_completion_cdc|completion_gray_sync",
+    "mister_magik_scaler_completion_cdc:magik_scaler_completion_cdc|destination_reset_meta",
+    "mister_magik_scaler_completion_cdc:magik_scaler_completion_cdc|destination_reset_sync",
 )
 EXPECTED_CDC_ANALYSIS_LABELS: frozenset[str] = frozenset({"scaler_completion_gray"})
 DIAGNOSTIC_REPORT_NAMES = frozenset(

@@ -203,6 +203,10 @@ def main() -> None:
     ]:
         fail("scaler completion bridge interface is not exact")
     for fragment in (
+        "reg destination_reset_meta = 1'b0;",
+        "reg destination_reset_sync = 1'b0;",
+        "destination_reset_meta <= 1'b1;",
+        "destination_reset_sync <= destination_reset_meta;",
         "reg [1:0] completion_gray_meta = 2'd0;",
         "reg [1:0] completion_gray_sync = 2'd0;",
         "completion_gray_meta <= source_completion_gray;",
@@ -218,10 +222,10 @@ def main() -> None:
             fail(f"scaler completion bridge behavior is missing: {fragment}")
     if avalon_source.count("completion_pulse <= 1'b1;") != 2:
         fail("scaler completion bridge must serialize one or two completion pulses")
-    if avalon_source.count("SYNCHRONIZER_IDENTIFICATION FORCED\"") != 1 or avalon_source.count(
+    if avalon_source.count("SYNCHRONIZER_IDENTIFICATION FORCED\"") != 2 or avalon_source.count(
         "SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS\""
-    ) != 1:
-        fail("scaler completion Gray synchronizers are not exactly identified")
+    ) != 2:
+        fail("scaler completion Gray and reset-release synchronizers are not exact")
     compiled_diagnostics = control_source + avalon_source + output_source
     for retired_fragment in (
         "snapshot_payload",
@@ -566,6 +570,10 @@ def main() -> None:
         "reg [3:0] scaler_fetch_starved_frame_count = 4'd0;",
         "reg [7:0] scaler_fetch_starved_line_count = 8'd0;",
         "wire scaler_fetch_state_coherent =",
+        "wire scaler_fetch_snapshot_ready =",
+        "if(scaler_fetch_snapshot_ready) begin",
+        "snapshot_lock_loss_count <= 16'd0;",
+        "snapshot_path_extra <= 16'd0;",
     )
     for fragment in required_activity_fragments:
         if control_source.count(fragment) != 1:
