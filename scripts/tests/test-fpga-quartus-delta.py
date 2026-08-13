@@ -61,6 +61,14 @@ CONTROL_SYNC_NAMES = (
     "post_all_zero_sys",
     "post_nonzero_meta",
     "post_nonzero_sys",
+    "avalon_bucket_meta",
+    "avalon_bucket_sys",
+    "avalon_request_meta",
+    "avalon_request_sys",
+    "avalon_accepted_meta",
+    "avalon_accepted_sys",
+    "avalon_returned_meta",
+    "avalon_returned_sys",
 )
 SYNC_NAMES = tuple(
     f"mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|{name}"
@@ -85,15 +93,15 @@ CONTROL_SYNC_ASSIGNMENTS = quartus_assignment_section(
 )
 SYNC_ASSIGNMENTS = CONTROL_SYNC_ASSIGNMENTS
 CUSTOM_SYNC = SYNC_ASSIGNMENTS + """\
-Info (332114): Report Metastability: Found 17 synchronizer chains.
-Info (332114): Fraction of Chains for which MTBFs Could Not be Calculated: 0.235
+Info (332114): Report Metastability: Found 21 synchronizer chains.
+Info (332114): Fraction of Chains for which MTBFs Could Not be Calculated: 0.190
 """
 
 VALID_DIAGNOSTIC_REPORTS = {
     "menu.magik-diagnostic-cdc-skew.rpt": "No paths to report.\n",
     "menu.magik-diagnostic-cdc-net-delay.rpt": "No paths to report.\n",
     "menu.magik-diagnostic-metastability.rpt": (
-        "Report Metastability: Found 17 synchronizer chains.\n"
+        "Report Metastability: Found 21 synchronizer chains.\n"
         + "".join(
             f"; Synchronizer Chain ; {name} ; MTBF 1e+09 years ;\n"
             for name in SYNC_NAMES
@@ -187,17 +195,17 @@ class QuartusDeltaTest(unittest.TestCase):
 
     def test_unrelated_total_chain_drift_does_not_override_exact_evidence(self) -> None:
         patched = CUSTOM_SYNC.replace(
-            "Found 17 synchronizer chains", "Found 16 synchronizer chains"
+            "Found 21 synchronizer chains", "Found 20 synchronizer chains"
         ).replace(
-            "Could Not be Calculated: 0.235",
-            "Could Not be Calculated: 0.188",
+            "Could Not be Calculated: 0.190",
+            "Could Not be Calculated: 0.150",
         )
         result, payload = self.run_check(BASE, BASE + patched)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(payload["baseline_synchronizer_chains"], 5)
-        self.assertEqual(payload["patched_synchronizer_chains"], 16)
+        self.assertEqual(payload["patched_synchronizer_chains"], 20)
         self.assertEqual(payload["baseline_calculable_synchronizer_chains"], 1)
-        self.assertEqual(payload["patched_calculable_synchronizer_chains"], 13)
+        self.assertEqual(payload["patched_calculable_synchronizer_chains"], 17)
 
     def test_new_warning_fails_even_when_warning_code_is_inherited(self) -> None:
         result, payload = self.run_check(BASE, BASE + "Warning (10001): different warning\n" + CUSTOM_SYNC)

@@ -54,7 +54,7 @@ MINIMUM_SLACK_NS = 0.20
 MAXIMUM_SLACK_DEGRADATION_NS = 0.15
 MAXIMUM_LOGIC_ELEMENT_DELTA = 800
 MAXIMUM_REGISTER_DELTA = 300
-EXPECTED_OBSERVER_CALCULABLE_CHAINS = 12
+EXPECTED_OBSERVER_CALCULABLE_CHAINS = 16
 EXPECTED_SYNC_ASSIGNMENT_SUFFIXES = (
     "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|control_pll_lock_meta",
     "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|control_pll_lock_sys",
@@ -80,6 +80,14 @@ EXPECTED_SYNC_ASSIGNMENT_SUFFIXES = (
     "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|post_all_zero_sys",
     "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|post_nonzero_meta",
     "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|post_nonzero_sys",
+    "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|avalon_bucket_meta",
+    "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|avalon_bucket_sys",
+    "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|avalon_request_meta",
+    "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|avalon_request_sys",
+    "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|avalon_accepted_meta",
+    "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|avalon_accepted_sys",
+    "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|avalon_returned_meta",
+    "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|avalon_returned_sys",
 )
 EXPECTED_CDC_ANALYSIS_LABELS: frozenset[str] = frozenset()
 DIAGNOSTIC_REPORT_NAMES = frozenset(

@@ -11,6 +11,7 @@ module mister_magik_sys_top_latch_path (
 	input wire clk_sys,
 	input wire hdmi_tx_clk,
 	input wire clk_hdmi,
+	input wire clk_100m,
 	input wire hdmi_vbl,
 	input wire hdmi_pll_locked,
 	input wire hdmi_out_vs,
@@ -23,6 +24,9 @@ module mister_magik_sys_top_latch_path (
 	input wire post_osd_vs,
 	input wire post_osd_de,
 	input wire [23:0] post_osd_d,
+	input wire vbuf_read,
+	input wire vbuf_waitrequest,
+	input wire vbuf_readdatavalid,
 	input wire io_uio,
 	input wire io_strobe,
 	input wire [15:0] io_din
@@ -110,6 +114,7 @@ module mister_magik_sys_top_latch_path (
 		.clk_sys(clk_sys),
 		.hdmi_tx_clk(hdmi_tx_clk),
 		.clk_hdmi(clk_hdmi),
+		.clk_100m(clk_100m),
 		.io_uio(io_uio),
 		.io_strobe(io_strobe),
 		.io_din(io_din),
@@ -124,6 +129,9 @@ module mister_magik_sys_top_latch_path (
 		.post_osd_vs(post_osd_vs),
 		.post_osd_de(post_osd_de),
 		.post_osd_d(post_osd_d),
+		.vbuf_read(vbuf_read),
+		.vbuf_waitrequest(vbuf_waitrequest),
+		.vbuf_readdatavalid(vbuf_readdatavalid),
 		.response_valid(magik_diag_response_valid),
 		.response_data(magik_diag_response_data)
 	);
@@ -178,6 +186,7 @@ module tb_mister_magik_sys_top_integration;
 	reg test_clk = 1'b0;
 	reg test_hdmi_clk = 1'b0;
 	reg test_scaler_clk = 1'b0;
+	reg test_avalon_clk = 1'b0;
 	reg test_vblank = 1'b0;
 	reg test_hdmi_pll_locked = 1'b0;
 	reg test_hdmi_out_vs = 1'b0;
@@ -190,6 +199,9 @@ module tb_mister_magik_sys_top_integration;
 	reg test_post_osd_vs = 1'b0;
 	reg test_post_osd_de = 1'b0;
 	reg [23:0] test_post_osd_d = 24'd0;
+	reg test_vbuf_read = 1'b0;
+	reg test_vbuf_waitrequest = 1'b0;
+	reg test_vbuf_readdatavalid = 1'b0;
 	reg test_io_uio = 1'b0;
 	reg test_io_strobe = 1'b0;
 	reg [15:0] test_io_din = 16'd0;
@@ -199,6 +211,7 @@ module tb_mister_magik_sys_top_integration;
 		.clk_sys(test_clk),
 		.hdmi_tx_clk(test_hdmi_clk),
 		.clk_hdmi(test_scaler_clk),
+		.clk_100m(test_avalon_clk),
 		.hdmi_vbl(test_vblank),
 		.hdmi_pll_locked(test_hdmi_pll_locked),
 		.hdmi_out_vs(test_hdmi_out_vs),
@@ -211,6 +224,9 @@ module tb_mister_magik_sys_top_integration;
 		.post_osd_vs(test_post_osd_vs),
 		.post_osd_de(test_post_osd_de),
 		.post_osd_d(test_post_osd_d),
+		.vbuf_read(test_vbuf_read),
+		.vbuf_waitrequest(test_vbuf_waitrequest),
+		.vbuf_readdatavalid(test_vbuf_readdatavalid),
 		.io_uio(test_io_uio),
 		.io_strobe(test_io_strobe),
 		.io_din(test_io_din)
@@ -219,6 +235,7 @@ module tb_mister_magik_sys_top_integration;
 	always #5 test_clk = ~test_clk;
 	always #7 test_hdmi_clk = ~test_hdmi_clk;
 	always #11 test_scaler_clk = ~test_scaler_clk;
+	always #4 test_avalon_clk = ~test_avalon_clk;
 
 	task automatic fail(input [8*96-1:0] message);
 		begin
@@ -525,6 +542,33 @@ module tb_mister_magik_sys_top_integration;
 			16'h0100, "sys_top post-OSD nonzero count");
 		expect16(evidence[MAGIK_HDMI_POST_OSD_ACTIVITY_CRC_WORD], evidence_crc,
 			"sys_top post-OSD activity CRC");
+
+		@(negedge test_avalon_clk);
+		dut.magik_hdmi_lock_evidence.avalon_bucket_count = 19'h7fffe;
+		test_vbuf_read = 1'b1;
+		test_vbuf_readdatavalid = 1'b1;
+		repeat(2) @(posedge test_avalon_clk);
+		@(negedge test_avalon_clk);
+		test_vbuf_read = 1'b0;
+		test_vbuf_readdatavalid = 1'b0;
+		repeat(8) @(posedge test_clk);
+		begin_command(MAGIK_UIO_GET_HDMI_AVALON_LIVENESS_ACTIVITY,
+			MAGIK_HDMI_AVALON_LIVENESS_ACTIVITY_MAGIC);
+		for(index = 0; index < MAGIK_HDMI_AVALON_LIVENESS_ACTIVITY_WORDS;
+			index = index + 1)
+			transfer_word(16'd0, evidence[index]);
+		end_command();
+		evidence_crc = MAGIK_HDMI_AVALON_LIVENESS_ACTIVITY_HEADER_CRC;
+		for(index = 0; index < MAGIK_HDMI_AVALON_LIVENESS_ACTIVITY_CRC_WORD;
+			index = index + 1)
+			evidence_crc = crc_word(evidence_crc, evidence[index]);
+		expect16(evidence[MAGIK_HDMI_AVALON_LIVENESS_ACTIVITY_FLAGS_WORD],
+			MAGIK_HDMI_AVALON_LIVENESS_ACTIVITY_FLAG_BUCKET_VALID,
+			"sys_top Avalon bucket valid");
+		expect16(evidence[MAGIK_HDMI_AVALON_LIVENESS_ACTIVITY_COUNTS_WORD],
+			16'h0111, "sys_top Avalon liveness counts");
+		expect16(evidence[MAGIK_HDMI_AVALON_LIVENESS_ACTIVITY_CRC_WORD], evidence_crc,
+			"sys_top Avalon liveness CRC");
 
 		// Post another route, then collide its vblank apply with a real 0x2f
 		// payload edge. The production legacy-write expression must win.

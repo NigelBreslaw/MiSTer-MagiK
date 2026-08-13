@@ -212,10 +212,18 @@ def main() -> None:
         ("post_all_zero_sys", "FORCED_IF_ASYNCHRONOUS"),
         ("post_nonzero_meta", "FORCED"),
         ("post_nonzero_sys", "FORCED_IF_ASYNCHRONOUS"),
+        ("avalon_bucket_meta", "FORCED"),
+        ("avalon_bucket_sys", "FORCED_IF_ASYNCHRONOUS"),
+        ("avalon_request_meta", "FORCED"),
+        ("avalon_request_sys", "FORCED_IF_ASYNCHRONOUS"),
+        ("avalon_accepted_meta", "FORCED"),
+        ("avalon_accepted_sys", "FORCED_IF_ASYNCHRONOUS"),
+        ("avalon_returned_meta", "FORCED"),
+        ("avalon_returned_sys", "FORCED_IF_ASYNCHRONOUS"),
     )
     if (
         "ASYNC_REG" in control_source
-        or control_source.count(sync_assignment) != 12
+        or control_source.count(sync_assignment) != 16
     ):
         fail("HDMI evidence synchronizers are not exactly identified")
     for stage, assignment in synchronizer_stages:
@@ -300,6 +308,38 @@ def main() -> None:
         ),
         "post nonzero first stage": (control_source, "post_nonzero_meta <= post_nonzero_toggle;"),
         "post nonzero second stage": (control_source, "post_nonzero_sys <= post_nonzero_meta;"),
+        "Avalon bucket first stage": (
+            control_source,
+            "avalon_bucket_meta <= avalon_bucket_toggle;",
+        ),
+        "Avalon bucket second stage": (
+            control_source,
+            "avalon_bucket_sys <= avalon_bucket_meta;",
+        ),
+        "Avalon request first stage": (
+            control_source,
+            "avalon_request_meta <= avalon_request_toggle;",
+        ),
+        "Avalon request second stage": (
+            control_source,
+            "avalon_request_sys <= avalon_request_meta;",
+        ),
+        "Avalon accepted first stage": (
+            control_source,
+            "avalon_accepted_meta <= avalon_accepted_toggle;",
+        ),
+        "Avalon accepted second stage": (
+            control_source,
+            "avalon_accepted_sys <= avalon_accepted_meta;",
+        ),
+        "Avalon returned first stage": (
+            control_source,
+            "avalon_returned_meta <= avalon_returned_toggle;",
+        ),
+        "Avalon returned second stage": (
+            control_source,
+            "avalon_returned_sys <= avalon_returned_meta;",
+        ),
     }
     for label, (source, binding) in synchronizer_bindings.items():
         if source.count(binding) != 1:
@@ -322,6 +362,7 @@ def main() -> None:
         "clk_sys",
         "hdmi_tx_clk",
         "clk_hdmi",
+        "clk_100m",
         "io_uio",
         "io_strobe",
         "io_din",
@@ -336,6 +377,9 @@ def main() -> None:
         "post_osd_vs",
         "post_osd_de",
         "post_osd_d",
+        "vbuf_read",
+        "vbuf_waitrequest",
+        "vbuf_readdatavalid",
         "response_valid",
         "response_data",
     ]
@@ -368,6 +412,12 @@ def main() -> None:
         "post_nonzero_toggle <= !post_nonzero_toggle;",
         "tx_crc <= MAGIK_HDMI_SCALER_RAW_ACTIVITY_HEADER_CRC;",
         "tx_crc <= MAGIK_HDMI_POST_OSD_ACTIVITY_HEADER_CRC;",
+        "reg [18:0] avalon_bucket_count = 19'd0;",
+        "wire avalon_accepted_now = avalon_bucket_saw_accepted ||",
+        "(vbuf_read && !vbuf_waitrequest);",
+        "wire avalon_returned_now = avalon_bucket_saw_returned || vbuf_readdatavalid;",
+        "avalon_bucket_toggle <= !avalon_bucket_toggle;",
+        "tx_crc <= MAGIK_HDMI_AVALON_LIVENESS_ACTIVITY_HEADER_CRC;",
     )
     for fragment in required_activity_fragments:
         if control_source.count(fragment) != 1:
@@ -533,6 +583,7 @@ def main() -> None:
                 ("clk_sys", "clk_sys"),
                 ("hdmi_tx_clk", "hdmi_tx_clk"),
                 ("clk_hdmi", "clk_hdmi"),
+                ("clk_100m", "clk_100m"),
                 ("io_uio", "io_uio"),
                 ("io_strobe", "io_strobe"),
                 ("io_din", "io_din"),
@@ -547,6 +598,9 @@ def main() -> None:
                 ("post_osd_vs", "hdmi_vs_osd"),
                 ("post_osd_de", "hdmi_de_osd"),
                 ("post_osd_d", "hdmi_data_osd"),
+                ("vbuf_read", "vbuf_read"),
+                ("vbuf_waitrequest", "vbuf_waitrequest"),
+                ("vbuf_readdatavalid", "vbuf_readdatavalid"),
                 ("response_valid", "magik_diag_response_valid"),
                 ("response_data", "magik_diag_response_data"),
             )
@@ -561,13 +615,14 @@ def main() -> None:
         all_lock_port_names = re.findall(
             r"\.([A-Za-z_][A-Za-z0-9_]*)\s*\(", control_binding.group(1)
         )
-        if actual_lock_ports != expected_lock_ports or len(all_lock_port_names) != 19:
+        if actual_lock_ports != expected_lock_ports or len(all_lock_port_names) != 23:
             fail("HDMI lock and final-output evidence port map is not exact")
         for response_net in ("magik_diag_response_valid", "magik_diag_response_data"):
             if len(re.findall(rf"\b{response_net}\b", patched)) != 4:
                 fail(f"HDMI lock response net use is not exact: {response_net}")
         if re.search(
-            r"\.(?:vbuf|reset|route|snapshot|fault|heartbeat|generation)",
+            r"\.(?:vbuf_(?!read\b|waitrequest\b|readdatavalid\b)|"
+            r"reset|route|snapshot|fault|heartbeat|generation)",
             control_binding.group(1),
         ):
             fail("HDMI evidence binding regained a retired observer input")

@@ -13,6 +13,8 @@ module tb_mister_magik_video_diagnostics_control;
 	always #7 hdmi_tx_clk = ~hdmi_tx_clk;
 	reg clk_hdmi = 1'b0;
 	always #11 clk_hdmi = ~clk_hdmi;
+	reg clk_100m = 1'b0;
+	always #4 clk_100m = ~clk_100m;
 
 	reg io_uio = 1'b0;
 	reg io_strobe = 1'b0;
@@ -28,6 +30,9 @@ module tb_mister_magik_video_diagnostics_control;
 	reg post_osd_vs = 1'b0;
 	reg post_osd_de = 1'b0;
 	reg [23:0] post_osd_d = 24'd0;
+	reg vbuf_read = 1'b0;
+	reg vbuf_waitrequest = 1'b0;
+	reg vbuf_readdatavalid = 1'b0;
 	wire response_valid;
 	wire [15:0] response_data;
 	integer index;
@@ -40,6 +45,7 @@ module tb_mister_magik_video_diagnostics_control;
 		.clk_sys(clk_sys),
 		.hdmi_tx_clk(hdmi_tx_clk),
 		.clk_hdmi(clk_hdmi),
+		.clk_100m(clk_100m),
 		.io_uio(io_uio),
 		.io_strobe(io_strobe),
 		.io_din(io_din),
@@ -54,6 +60,9 @@ module tb_mister_magik_video_diagnostics_control;
 		.post_osd_vs(post_osd_vs),
 		.post_osd_de(post_osd_de),
 		.post_osd_d(post_osd_d),
+		.vbuf_read(vbuf_read),
+		.vbuf_waitrequest(vbuf_waitrequest),
+		.vbuf_readdatavalid(vbuf_readdatavalid),
 		.response_valid(response_valid),
 		.response_data(response_data)
 	);
@@ -194,6 +203,40 @@ module tb_mister_magik_video_diagnostics_control;
 			   words[2] != {4'd0, expected_nonzero, expected_all_zero,
 					expected_no_de} || words[3] != crc)
 				$fatal(1, "scaler activity mismatch raw=%0d", raw_path);
+		end
+	endtask
+
+	task automatic read_avalon_activity;
+		input [15:0] expected_flags;
+		input [3:0] expected_request;
+		input [3:0] expected_accepted;
+		input [3:0] expected_returned;
+		begin
+			io_uio = 1'b1; io_din = 16'h0065; io_strobe = 1'b1;
+			#1 if(!response_valid ||
+				response_data != MAGIK_HDMI_AVALON_LIVENESS_ACTIVITY_MAGIC)
+				$fatal(1, "missing Avalon liveness magic");
+			@(negedge clk_sys); io_strobe = 1'b0;
+			crc = MAGIK_HDMI_AVALON_LIVENESS_ACTIVITY_HEADER_CRC;
+			for(index = 0; index < MAGIK_HDMI_AVALON_LIVENESS_ACTIVITY_WORDS;
+				index = index + 1) begin
+				@(negedge clk_sys); io_din = 16'd0; io_strobe = 1'b1;
+				#1;
+				if(!response_valid) $fatal(1, "Avalon liveness ended early");
+				words[index] = response_data;
+				if(index < MAGIK_HDMI_AVALON_LIVENESS_ACTIVITY_CRC_WORD)
+					crc = crc_word(crc, response_data);
+				@(negedge clk_sys); io_strobe = 1'b0;
+			end
+			close_command();
+			if(words[MAGIK_HDMI_AVALON_LIVENESS_ACTIVITY_SCHEMA_WORD] !=
+					MAGIK_HDMI_AVALON_LIVENESS_ACTIVITY_SCHEMA ||
+			   words[MAGIK_HDMI_AVALON_LIVENESS_ACTIVITY_FLAGS_WORD] !=
+					expected_flags ||
+			   words[MAGIK_HDMI_AVALON_LIVENESS_ACTIVITY_COUNTS_WORD] !=
+					{4'd0, expected_returned, expected_accepted, expected_request} ||
+			   words[MAGIK_HDMI_AVALON_LIVENESS_ACTIVITY_CRC_WORD] != crc)
+				$fatal(1, "Avalon liveness mismatch");
 		end
 	endtask
 
@@ -398,6 +441,8 @@ module tb_mister_magik_video_diagnostics_control;
 		if(MAGIK_HDMI_SCALER_RAW_ACTIVITY_HEADER_CRC != 16'hfe4d ||
 		   MAGIK_HDMI_POST_OSD_ACTIVITY_HEADER_CRC != 16'h9999)
 			$fatal(1, "unexpected generated scaler activity header CRC");
+		if(MAGIK_HDMI_AVALON_LIVENESS_ACTIVITY_HEADER_CRC != 16'h33c8)
+			$fatal(1, "unexpected generated Avalon liveness header CRC");
 
 		// The responder must ignore all latch-owned and retired commands.
 		for(opcode = 8'h57; opcode <= 8'h5f; opcode = opcode + 1) begin
@@ -518,6 +563,29 @@ module tb_mister_magik_video_diagnostics_control;
 		complete_scaler_frame(1'b0, 1'b0, 1'b0);
 		read_scaler_activity(1'b0,
 			MAGIK_HDMI_POST_OSD_ACTIVITY_FLAG_FRAME_VALID,
+			4'd1, 4'd1, 4'd1);
+
+		// Close a bounded Avalon bucket with all three liveness facts, then a
+		// second empty bucket. The heartbeat makes the empty interval valid while
+		// the category epochs correctly remain unchanged.
+		@(negedge clk_100m);
+		dut.avalon_bucket_count = 19'h7fffe;
+		vbuf_read = 1'b1;
+		vbuf_waitrequest = 1'b0;
+		vbuf_readdatavalid = 1'b1;
+		repeat(2) @(posedge clk_100m);
+		@(negedge clk_100m);
+		vbuf_read = 1'b0;
+		vbuf_readdatavalid = 1'b0;
+		repeat(8) @(negedge clk_sys);
+		read_avalon_activity(
+			MAGIK_HDMI_AVALON_LIVENESS_ACTIVITY_FLAG_BUCKET_VALID,
+			4'd1, 4'd1, 4'd1);
+		@(negedge clk_100m); dut.avalon_bucket_count = 19'h7ffff;
+		@(posedge clk_100m);
+		repeat(8) @(negedge clk_sys);
+		read_avalon_activity(
+			MAGIK_HDMI_AVALON_LIVENESS_ACTIVITY_FLAG_BUCKET_VALID,
 			4'd1, 4'd1, 4'd1);
 
 		// An aborted activity transaction restarts from its own schema and CRC
