@@ -170,4 +170,69 @@ if output_activity["magic"] in set(video_diagnostics["magic"].values()) | {
     hdmi_evidence["magic"]
 }:
     raise SystemExit("HDMI output activity magic overlaps an existing diagnostics record")
+path_activity = hdmi_evidence["path_activity"]
+if path_activity != {
+    "counter_bits": 4,
+    "records": {
+        "final_path": {
+            "schema": 1,
+            "command": 0x62,
+            "magic": 0x4D52,
+            "word_count": 5,
+            "flags": {"frame_valid": 0, "counter_collision": 1},
+            "words": ["schema", "flags", "black_counts", "activity_counts", "crc"],
+            "counters": {
+                "black_direct": 0,
+                "black_scaled": 4,
+                "black_mixed": 8,
+                "de_has_nonzero": 12,
+                "no_de": 16,
+            },
+        },
+        "scaler_raw": {
+            "schema": 1,
+            "command": 0x63,
+            "magic": 0x4D53,
+            "word_count": 4,
+            "flags": {"frame_valid": 0, "counter_collision": 1},
+            "words": ["schema", "flags", "counts", "crc"],
+            "counters": {"no_de": 0, "de_all_zero": 4, "de_has_nonzero": 8},
+        },
+        "post_osd": {
+            "schema": 1,
+            "command": 0x64,
+            "magic": 0x4D54,
+            "word_count": 4,
+            "flags": {"frame_valid": 0, "counter_collision": 1},
+            "words": ["schema", "flags", "counts", "crc"],
+            "counters": {"no_de": 0, "de_all_zero": 4, "de_has_nonzero": 8},
+        },
+        "avalon_liveness": {
+            "schema": 1,
+            "command": 0x65,
+            "magic": 0x4D55,
+            "word_count": 4,
+            "flags": {"bucket_valid": 0},
+            "words": ["schema", "flags", "counts", "crc"],
+            "counters": {"request": 0, "accepted": 4, "returned": 8},
+        },
+    },
+}:
+    raise SystemExit("HDMI path activity v1 records changed without a schema update")
+platform_commands = (
+    set(spec["commands"].values())
+    | set(video_diagnostics["commands"].values())
+    | {hdmi_evidence["command"], output_activity["command"]}
+)
+platform_magics = set(video_diagnostics["magic"].values()) | {
+    hdmi_evidence["magic"],
+    output_activity["magic"],
+}
+for name, record in path_activity["records"].items():
+    if record["command"] in platform_commands:
+        raise SystemExit(f"HDMI {name} command overlaps an existing platform command")
+    if record["magic"] in platform_magics:
+        raise SystemExit(f"HDMI {name} magic overlaps an existing diagnostics record")
+    platform_commands.add(record["command"])
+    platform_magics.add(record["magic"])
 print("latch protocol contract: ok")

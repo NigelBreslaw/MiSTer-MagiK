@@ -155,6 +155,35 @@ def render_sv(spec: dict, hdmi_evidence: dict) -> str:
         lines.append(
             f"localparam [2:0] MAGIK_HDMI_OUTPUT_ACTIVITY_{upper(name)}_WORD = 3'd{index};"
         )
+    path_activity = hdmi_evidence["path_activity"]
+    lines.extend(
+        [
+            "",
+            f"localparam [2:0] MAGIK_HDMI_PATH_ACTIVITY_COUNTER_BITS = 3'd{path_activity['counter_bits']};",
+            f"localparam [15:0] MAGIK_HDMI_PATH_ACTIVITY_COUNTER_MASK = 16'h{(1 << path_activity['counter_bits']) - 1:04X};",
+        ]
+    )
+    for record_name, record in path_activity["records"].items():
+        prefix = f"MAGIK_HDMI_{upper(record_name)}_ACTIVITY"
+        lines.extend(
+            [
+                "",
+                f"localparam [15:0] {prefix}_SCHEMA = 16'd{record['schema']};",
+                f"localparam [7:0] MAGIK_UIO_GET_HDMI_{upper(record_name)}_ACTIVITY = 8'h{record['command']:02X};",
+                f"localparam [15:0] {prefix}_MAGIC = 16'h{record['magic']:04X};",
+                f"localparam [2:0] {prefix}_WORDS = 3'd{record['word_count']};",
+                f"localparam [15:0] {prefix}_HEADER_CRC = 16'h{hdmi_evidence_header_crc(record, hdmi_evidence['crc']):04X};",
+            ]
+        )
+        mask = 0
+        for name, bit in record["flags"].items():
+            lines.append(f"localparam [15:0] {prefix}_FLAG_{upper(name)} = 16'h{1 << bit:04X};")
+            mask |= 1 << bit
+        lines.append(f"localparam [15:0] {prefix}_FLAGS_MASK = 16'h{mask:04X};")
+        for index, name in enumerate(record["words"]):
+            lines.append(f"localparam [2:0] {prefix}_{upper(name)}_WORD = 3'd{index};")
+        for name, offset in record["counters"].items():
+            lines.append(f"localparam [5:0] {prefix}_{upper(name)}_BIT = 6'd{offset};")
     return "\n".join(lines) + "\n"
 
 

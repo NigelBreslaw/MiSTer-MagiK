@@ -80,6 +80,39 @@ def render_rust(spec: dict) -> str:
         "pub const HDMI_OUTPUT_ACTIVITY_ZERO_GOLDEN_CRC: u16 = "
         f"0x{zero_golden_crc(activity, spec['crc']):04x};"
     )
+    path_activity = spec["path_activity"]
+    lines.extend(
+        [
+            "",
+            f"pub const HDMI_PATH_ACTIVITY_COUNTER_BITS: u32 = {path_activity['counter_bits']};",
+            f"pub const HDMI_PATH_ACTIVITY_COUNTER_MASK: u16 = 0x{(1 << path_activity['counter_bits']) - 1:04x};",
+        ]
+    )
+    for record_name, record in path_activity["records"].items():
+        prefix = f"HDMI_{record_name.upper()}_ACTIVITY"
+        command_name = f"GET_HDMI_{record_name.upper()}_ACTIVITY"
+        lines.extend(
+            [
+                "",
+                f"pub const {prefix}_SCHEMA: u16 = {record['schema']};",
+                f"pub const {command_name}: u16 = 0x{record['command']:02x};",
+                f"pub const {prefix}_MAGIC: u16 = 0x{record['magic']:04x};",
+                f"pub const {prefix}_WORDS: usize = {record['word_count']};",
+            ]
+        )
+        mask = 0
+        for name, bit in record["flags"].items():
+            lines.append(f"pub const {prefix}_FLAG_{name.upper()}: u16 = 1 << {bit};")
+            mask |= 1 << bit
+        lines.append(f"pub const {prefix}_FLAGS_MASK: u16 = 0x{mask:04x};")
+        for index, name in enumerate(record["words"]):
+            lines.append(f"pub const {prefix}_{name.upper()}_WORD: usize = {index};")
+        for name, offset in record["counters"].items():
+            lines.append(f"pub const {prefix}_{name.upper()}_BIT: usize = {offset};")
+        lines.append(
+            f"pub const {prefix}_ZERO_GOLDEN_CRC: u16 = "
+            f"0x{zero_golden_crc(record, spec['crc']):04x};"
+        )
     return "\n".join(lines) + "\n"
 
 
@@ -111,6 +144,19 @@ def main() -> None:
     activity = spec["output_activity"]
     if len(activity["words"]) != activity["word_count"] or activity["words"][-1] != "crc":
         raise SystemExit("HDMI output activity layout must match word count and end in CRC")
+    path_activity = spec["path_activity"]
+    commands = {spec["command"], activity["command"]}
+    magics = {spec["magic"], activity["magic"]}
+    for name, record in path_activity["records"].items():
+        if len(record["words"]) != record["word_count"] or record["words"][-1] != "crc":
+            raise SystemExit(f"HDMI {name} layout must match word count and end in CRC")
+        if record["command"] in commands or record["magic"] in magics:
+            raise SystemExit(f"HDMI {name} command or magic overlaps another record")
+        commands.add(record["command"])
+        magics.add(record["magic"])
+        for counter, offset in record["counters"].items():
+            if offset < 0 or offset + path_activity["counter_bits"] > 32:
+                raise SystemExit(f"HDMI {name} counter {counter} is outside two packed words")
     write_or_check(RUST_PATH, render_rust(spec), args.check)
 
 

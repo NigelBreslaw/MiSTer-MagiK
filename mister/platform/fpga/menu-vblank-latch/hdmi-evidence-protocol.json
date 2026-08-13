@@ -41,5 +41,96 @@
       "de_has_nonzero_count",
       "crc"
     ]
+  },
+  "path_activity": {
+    "counter_bits": 4,
+    "records": {
+      "final_path": {
+        "schema": 1,
+        "command": 98,
+        "magic": 19794,
+        "word_count": 5,
+        "flags": {
+          "frame_valid": 0,
+          "counter_collision": 1
+        },
+        "words": [
+          "schema",
+          "flags",
+          "black_counts",
+          "activity_counts",
+          "crc"
+        ],
+        "counters": {
+          "black_direct": 0,
+          "black_scaled": 4,
+          "black_mixed": 8,
+          "de_has_nonzero": 12,
+          "no_de": 16
+        }
+      },
+      "scaler_raw": {
+        "schema": 1,
+        "command": 99,
+        "magic": 19795,
+        "word_count": 4,
+        "flags": {
+          "frame_valid": 0,
+          "counter_collision": 1
+        },
+        "words": [
+          "schema",
+          "flags",
+          "counts",
+          "crc"
+        ],
+        "counters": {
+          "no_de": 0,
+          "de_all_zero": 4,
+          "de_has_nonzero": 8
+        }
+      },
+      "post_osd": {
+        "schema": 1,
+        "command": 100,
+        "magic": 19796,
+        "word_count": 4,
+        "flags": {
+          "frame_valid": 0,
+          "counter_collision": 1
+        },
+        "words": [
+          "schema",
+          "flags",
+          "counts",
+          "crc"
+        ],
+        "counters": {
+          "no_de": 0,
+          "de_all_zero": 4,
+          "de_has_nonzero": 8
+        }
+      },
+      "avalon_liveness": {
+        "schema": 1,
+        "command": 101,
+        "magic": 19797,
+        "word_count": 4,
+        "flags": {
+          "bucket_valid": 0
+        },
+        "words": [
+          "schema",
+          "flags",
+          "counts",
+          "crc"
+        ],
+        "counters": {
+          "request": 0,
+          "accepted": 4,
+          "returned": 8
+        }
+      }
+    }
   }
 }
