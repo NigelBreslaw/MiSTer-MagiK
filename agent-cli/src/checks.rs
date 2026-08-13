@@ -587,8 +587,8 @@ fn has_license_header(path: &Path, text: &str) -> bool {
 fn check_shell_ownership(repository: &Path) -> Result<(), String> {
     const MAIN_FIFO_OWNERS: &[(&str, &str)] = &[
         (
-            "apps/mister/src/launcher.rs",
-            "temporary production app writer; migrate to mister/platform/runtime",
+            "mister/platform/runtime/src/main_command.rs",
+            "production app command transport",
         ),
         (
             "crates/catalog/src/fs_fault.rs",
@@ -1282,8 +1282,9 @@ mod tests {
             "const MAIN_COMMAND_ENDPOINT: &str = \"/dev/MiSTer_cmd\";\nenum Command { Launch }\n",
         )
         .unwrap();
+        fs::create_dir_all(root.join("mister/platform/runtime/src")).unwrap();
         fs::write(
-            root.join("apps/mister/src/launcher.rs"),
+            root.join("mister/platform/runtime/src/main_command.rs"),
             "const CMD_FIFO: &str = \"/dev/MiSTer_cmd\";\nfn send() { OpenOptions::new().write(true).open(CMD_FIFO); }\n",
         )
         .unwrap();
@@ -1294,6 +1295,15 @@ mod tests {
         )
         .unwrap();
         assert!(check_shell_ownership(&root).is_ok());
+
+        fs::write(
+            root.join("apps/mister/src/launcher.rs"),
+            "fn send() { OpenOptions::new().write(true).open(\"/dev/MiSTer_cmd\"); }\n",
+        )
+        .unwrap();
+        let error = check_shell_ownership(&root).unwrap_err();
+        assert!(error.contains("apps/mister/src/launcher.rs"));
+        fs::remove_file(root.join("apps/mister/src/launcher.rs")).unwrap();
 
         fs::write(
             root.join("apps/mister/src/new_transport.rs"),

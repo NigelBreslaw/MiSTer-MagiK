@@ -21,7 +21,7 @@ path is not a migration strategy.
 
 | Current path | Capability owner | Destination and removal condition |
 |---|---|---|
-| `apps/mister/src/launcher.rs` | P1 Enforce | Move production command open/write/reply mechanics to a typed module under `mister/platform/runtime`; remove this exception when the app has no direct endpoint access. |
+| `mister/platform/runtime/src/main_command.rs` | P1 Enforce | Sole production-app command transport. Keep wire spelling, serialized reply association, bounded FIFO writes, and endpoint paths private to this typed module. |
 | `crates/catalog/src/fs_fault.rs` | P1 Type then P1 Enforce, serially | Type first captures compatible `FaultConfig` parsing and arming policy. Enforce then injects and moves command transport. Remove the exception after the typed config feeds the runtime-owned effect and the catalog file performs no endpoint I/O. |
 | `mister/tools/agent/src/main.rs` | P1 Enforce device-service boundary | This is a distinct attended device-service capability, not production app transport. Keep the entry only while this file performs that service operation; if it moves, update the inventory atomically after zero old references. |
 | `agent-cli/src/host/remote.rs` | P1 Enforce host boundary | This constructs bounded host commands and is not production app transport. Keep the entry only while this file owns that construction; if it moves, update the inventory atomically after zero old references. |
@@ -35,7 +35,7 @@ or record an explicit behavior change.
 
 | Capability | Current direct effect owners |
 |---|---|
-| Main command transport | `wait_for_fifo`, `wait_for_mister_and_fifo`, `write_mister_command_nonblocking`, `write_magik_command_response_with_lock` |
+| Main command transport | `mister/platform/runtime/src/main_command.rs`; launcher callers use typed `MainCommand` variants and have no endpoint access |
 | Launch handoff and recovery | `SystemLaunchIo`, `execute_game_launch_with`, `spawn_mister`, `reboot_mister_with`, `exit_to_mister` |
 | Display control | `display_state`, `try_display_state`, `apply_display_resolution`, `confirm_display_resolution_and_wait`, `cancel_display_resolution` |
 | Runtime state and process inspection | `main_heartbeat`, `mister_running`, `mister_running_arcade_core` |

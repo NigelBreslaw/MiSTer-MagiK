@@ -22,13 +22,11 @@ use crate::settings::{MagikSettings, ScreenOrientation};
 use crate::spring_animation::{SpringAnimation, SpringConfiguration};
 use mister_magik_catalog::media_identity::screenshot_reset_deletes_filename;
 use mister_magik_mister_runtime::display_resolution::{DISPLAY_RESOLUTIONS, DisplayResolution};
+use mister_magik_mister_runtime::main_command::{self, MainCommand};
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::fs;
-use std::io::{Read, Write};
-use std::os::fd::AsRawFd;
-use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
@@ -40,10 +38,6 @@ const HOME_SCROLL_HOLD_DELAY: Duration = Duration::from_millis(200);
 const HOME_SCROLL_SPEED_PX_PER_SECOND: f64 = 1440.0;
 const HOME_SCROLL_ACCELERATION_PX_PER_SECOND_SQUARED: f64 = 6000.0;
 
-const CMD_FIFO: &str = "/dev/MiSTer_cmd";
-const CMD_REPLY_FIFO: &str = "/dev/MiSTer_cmd_reply";
-const MISTER_PROCESS_NAMES: &[&str] = &["MiSTer_MagiKDev", "MiSTer_MagiK", "MiSTer"];
-const MAIN_STATUS_PATH: &str = "/tmp/mister-magik/main-status.json";
 const INPUT_POLICY_MARKER_PATH: &str = "/tmp/mister-magik/input-policy";
 
 fn mister_bin() -> &'static str {
@@ -64,7 +58,6 @@ const ARCADE_TURBO_PX_PER_SECOND: f64 = 720.0;
 const ARCADE_QUICK_TAP_MAX: Duration = Duration::from_millis(220);
 const ARCADE_TURBO_REPRESS_WINDOW: Duration = Duration::from_millis(350);
 const FIFO_WAIT_TIMEOUT: Duration = Duration::from_secs(5);
-const FIFO_WRITE_TIMEOUT: Duration = Duration::from_secs(2);
 const MISTER_START_TIMEOUT: Duration = Duration::from_secs(15);
 pub const DISPLAY_CONFIRM_SECONDS: u8 = 20;
 pub const LAUNCH_RETURN_STATE_PATH: &str = "/tmp/mister-magik/launcher-return-state.json";
@@ -4681,154 +4674,23 @@ pub fn game_title(catalog: &ArcadeCatalog, mra_path: &str) -> String {
     catalog.title_for_path(mra_path).to_string()
 }
 
-fn wait_until(timeout: Duration, mut ready: impl FnMut() -> bool) -> bool {
-    let start = Instant::now();
-    while start.elapsed() < timeout {
-        if ready() {
-            return true;
-        }
-        thread::sleep(Duration::from_millis(100));
-    }
-    ready()
-}
-
-fn wait_for_fifo() -> bool {
-    wait_until(FIFO_WAIT_TIMEOUT, || Path::new(CMD_FIFO).exists())
-}
-
-fn wait_for_mister_and_fifo() -> bool {
-    wait_until(MISTER_START_TIMEOUT, || {
-        Path::new(CMD_FIFO).exists() && mister_running()
-    })
-}
-
-fn write_mister_command_nonblocking(cmd: &str) -> Result<(), String> {
-    let start = Instant::now();
-    let mut last_error = None;
-    while start.elapsed() < FIFO_WRITE_TIMEOUT {
-        match std::fs::OpenOptions::new()
-            .write(true)
-            .custom_flags(libc::O_NONBLOCK)
-            .open(CMD_FIFO)
-        {
-            Ok(mut f) => {
-                let bytes = cmd.as_bytes();
-                let mut written = 0usize;
-                while written < bytes.len() && start.elapsed() < FIFO_WRITE_TIMEOUT {
-                    match f.write(&bytes[written..]) {
-                        Ok(0) => {
-                            last_error = Some("zero-length FIFO write".to_string());
-                            break;
-                        }
-                        Ok(n) => written += n,
-                        Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                            last_error = Some(e.to_string());
-                            thread::sleep(Duration::from_millis(10));
-                        }
-                        Err(e) => {
-                            return Err(format!("failed to write {CMD_FIFO}: {e}"));
-                        }
-                    }
-                }
-                if written == bytes.len() {
-                    return Ok(());
-                }
-            }
-            Err(e)
-                if e.kind() == std::io::ErrorKind::WouldBlock
-                    || e.raw_os_error() == Some(libc::ENXIO) =>
-            {
-                last_error = Some(e.to_string());
-            }
-            Err(e) => return Err(format!("failed to open {CMD_FIFO}: {e}")),
-        }
-        thread::sleep(Duration::from_millis(20));
-    }
-    Err(format!(
-        "timed out writing {CMD_FIFO}: {}",
-        last_error.unwrap_or_else(|| "no reader".to_string())
-    ))
-}
-
 pub fn request_supervised_launcher_restart() -> Result<(), String> {
     static REQUESTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
     if REQUESTED.swap(true, Ordering::AcqRel) {
         return Err("supervised launcher restart already requested".to_string());
     }
-    write_mister_command_nonblocking("mister_magik_supervised_restart_launcher\n")
+    execute_main_command(&MainCommand::SupervisedLauncherRestart).map(|_| ())
 }
 
-fn write_magik_command_response_with_lock(
-    cmd: &str,
-    lock_nonblocking: bool,
-) -> Result<String, String> {
-    let command_lock = std::fs::OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .write(true)
-        .open("/tmp/mister-magik/command-operation.lock")
-        .map_err(|error| format!("failed to open command lock: {error}"))?;
-    let lock_operation = libc::LOCK_EX | if lock_nonblocking { libc::LOCK_NB } else { 0 };
-    if unsafe { libc::flock(command_lock.as_raw_fd(), lock_operation) } != 0 {
-        return Err(format!(
-            "failed to lock command channel: {}",
-            std::io::Error::last_os_error()
-        ));
-    }
-    let mut reply = std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NONBLOCK | libc::O_CLOEXEC)
-        .open(CMD_REPLY_FIFO)
-        .map_err(|error| format!("failed to open {CMD_REPLY_FIFO}: {error}"))?;
-    let mut discard = [0u8; 256];
-    while reply.read(&mut discard).is_ok_and(|count| count > 0) {}
+fn execute_main_command(command: &MainCommand) -> Result<Option<String>, String> {
     let fifo_pmu = mister_magik_perf_events::sampled_span("launch.fifo-request");
-    write_mister_command_nonblocking(cmd)?;
+    let result = main_command::execute(command).map_err(|error| error.to_string());
     drop(fifo_pmu);
-    let _acknowledgement_pmu = mister_magik_perf_events::sampled_span("launch.acknowledgement");
-    let mut bytes = Vec::with_capacity(128);
-    let mut heartbeat = main_heartbeat().unwrap_or(0);
-    let mut heartbeat_seen = Instant::now();
-    loop {
-        let mut chunk = [0u8; 128];
-        match reply.read(&mut chunk) {
-            Ok(0) => return Err("MiSTer command channel closed".to_string()),
-            Ok(count) => {
-                bytes.extend_from_slice(&chunk[..count]);
-                if let Some(end) = bytes.iter().position(|byte| *byte == b'\n') {
-                    let response = String::from_utf8_lossy(&bytes[..end]);
-                    if response == "ok" || response.starts_with("ok ") {
-                        return Ok(response.into_owned());
-                    }
-                    return Err(response.into_owned());
-                }
-                if bytes.len() > 512 {
-                    return Err("MiSTer command reply too long".to_string());
-                }
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
-            Err(error) => return Err(format!("failed to read {CMD_REPLY_FIFO}: {error}")),
-        }
-        if !mister_running() {
-            return Err("MiSTer command channel closed".to_string());
-        }
-        let current_heartbeat = main_heartbeat().unwrap_or(heartbeat);
-        if current_heartbeat != heartbeat {
-            heartbeat = current_heartbeat;
-            heartbeat_seen = Instant::now();
-        } else if heartbeat_seen.elapsed() >= Duration::from_secs(10) {
-            return Err("MiSTer Main heartbeat stopped".to_string());
-        }
-        thread::sleep(Duration::from_millis(10));
-    }
+    result
 }
 
-fn write_magik_command_response(cmd: &str) -> Result<String, String> {
-    write_magik_command_response_with_lock(cmd, false)
-}
-
-fn write_magik_command_acknowledged(cmd: &str) -> Result<(), String> {
-    write_magik_command_response(cmd).map(|_| ())
+fn execute_main_command_try(command: &MainCommand) -> Result<Option<String>, String> {
+    main_command::try_execute(command).map_err(|error| error.to_string())
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -4851,12 +4713,14 @@ pub enum DisplayTransactionPhase {
 }
 
 pub fn display_state() -> Result<DisplayCommandState, String> {
-    let response = write_magik_command_response("mister_magik_display_get_v1\n")?;
+    let response = execute_main_command(&MainCommand::DisplayState)?
+        .ok_or_else(|| "MiSTer display command returned no reply".to_string())?;
     parse_display_state_response(&response)
 }
 
 pub fn try_display_state() -> Result<DisplayCommandState, String> {
-    let response = write_magik_command_response_with_lock("mister_magik_display_get_v1\n", true)?;
+    let response = execute_main_command_try(&MainCommand::DisplayState)?
+        .ok_or_else(|| "MiSTer display command returned no reply".to_string())?;
     parse_display_state_response(&response)
 }
 
@@ -4927,11 +4791,14 @@ pub fn apply_display_resolution(id: &str) -> Result<(), String> {
     if mister_magik_mister_runtime::display_resolution::find(id).is_none() {
         return Err("unsupported display mode".into());
     }
-    write_magik_command_acknowledged(&format!("mister_magik_display_apply_v1 mode={id}\n"))
+    execute_main_command(&MainCommand::DisplayApply {
+        mode: id.to_string(),
+    })
+    .map(|_| ())
 }
 
 pub fn confirm_display_resolution() -> Result<(), String> {
-    write_magik_command_acknowledged("mister_magik_display_confirm_v1\n")
+    execute_main_command(&MainCommand::DisplayConfirm).map(|_| ())
 }
 
 pub fn confirm_display_resolution_and_wait(
@@ -4954,24 +4821,7 @@ pub fn confirm_display_resolution_and_wait(
 }
 
 pub fn cancel_display_resolution() -> Result<(), String> {
-    write_magik_command_acknowledged("mister_magik_display_cancel_v1\n")
-}
-
-#[cfg(test)]
-fn parse_magik_command_reply(response: &str) -> Result<(), String> {
-    if response == "ok" || response.starts_with("ok ") {
-        Ok(())
-    } else {
-        Err(response.to_string())
-    }
-}
-
-fn main_heartbeat() -> Option<u64> {
-    let text = fs::read_to_string(MAIN_STATUS_PATH).ok()?;
-    serde_json::from_str::<serde_json::Value>(&text)
-        .ok()?
-        .get("ts_boot_ms")
-        .and_then(serde_json::Value::as_u64)
+    execute_main_command(&MainCommand::DisplayCancel).map(|_| ())
 }
 
 trait LaunchIo {
@@ -4981,15 +4831,15 @@ trait LaunchIo {
     fn simple_joystick_handling(&mut self) -> bool;
     fn prepare_simple_input_profiles(&mut self) -> Result<(), String>;
     fn start_mister(&mut self) -> Result<(), String>;
-    fn wait_for_started_mister(&mut self) -> bool;
-    fn wait_for_command_fifo(&mut self) -> bool;
+    fn wait_for_started_mister(&mut self) -> Result<(), String>;
+    fn wait_for_command_fifo(&mut self) -> Result<(), String>;
     fn write_input_policy_marker(&mut self, simple_joystick_handling: bool) -> Result<(), String>;
     fn write_button_overrides(
         &mut self,
         launch_target: &LaunchTarget,
         simple_joystick_handling: bool,
     ) -> Result<(), String>;
-    fn write_mister_command(&mut self, cmd: &str) -> Result<(), String>;
+    fn write_mister_command(&mut self, command: &MainCommand) -> Result<(), String>;
 }
 
 struct SystemLaunchIo;
@@ -5004,13 +4854,7 @@ impl LaunchIo for SystemLaunchIo {
     }
 
     fn magik_running(&mut self) -> bool {
-        MISTER_PROCESS_NAMES.iter().copied().any(|name| {
-            Command::new("pidof")
-                .arg(name)
-                .output()
-                .map(|o| o.status.success())
-                .unwrap_or(false)
-        })
+        main_command::magik_main_running()
     }
 
     fn simple_joystick_handling(&mut self) -> bool {
@@ -5028,12 +4872,13 @@ impl LaunchIo for SystemLaunchIo {
             .map_err(|e| format!("failed to spawn {}: {e}", mister_bin()))
     }
 
-    fn wait_for_started_mister(&mut self) -> bool {
-        wait_for_mister_and_fifo()
+    fn wait_for_started_mister(&mut self) -> Result<(), String> {
+        main_command::wait_for_running_main_and_fifo(mister_bin(), MISTER_START_TIMEOUT)
+            .map_err(|error| error.to_string())
     }
 
-    fn wait_for_command_fifo(&mut self) -> bool {
-        wait_for_fifo()
+    fn wait_for_command_fifo(&mut self) -> Result<(), String> {
+        main_command::wait_for_command_fifo(FIFO_WAIT_TIMEOUT).map_err(|error| error.to_string())
     }
 
     fn write_input_policy_marker(&mut self, simple_joystick_handling: bool) -> Result<(), String> {
@@ -5048,23 +4893,13 @@ impl LaunchIo for SystemLaunchIo {
         write_button_overrides_for_launch(launch_target, simple_joystick_handling)
     }
 
-    fn write_mister_command(&mut self, cmd: &str) -> Result<(), String> {
-        if cmd.starts_with("mister_magik_") {
-            write_magik_command_acknowledged(cmd)
-        } else {
-            write_mister_command_nonblocking(cmd)
-        }
+    fn write_mister_command(&mut self, command: &MainCommand) -> Result<(), String> {
+        execute_main_command(command).map(|_| ())
     }
 }
 
 fn mister_running() -> bool {
-    MISTER_PROCESS_NAMES.iter().any(|name| {
-        Command::new("pidof")
-            .arg(name)
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
-    })
+    main_command::main_running()
 }
 
 /// Main owns HDMI/OSD/input state; do not kill it from Slint.
@@ -5077,14 +4912,9 @@ pub fn stop_mister() {
 fn spawn_mister() -> Result<(), String> {
     let mut io = SystemLaunchIo;
     io.start_mister()?;
-    if io.wait_for_started_mister() {
-        thread::sleep(Duration::from_millis(200));
-        return Ok(());
-    }
-    Err(format!(
-        "timed out waiting for {} + {CMD_FIFO}",
-        mister_bin()
-    ))
+    io.wait_for_started_mister()?;
+    thread::sleep(Duration::from_millis(200));
+    Ok(())
 }
 
 fn restore_menu_wallpaper() {
@@ -5250,10 +5080,9 @@ pub fn exit_to_mister() -> Result<(), String> {
     restore_menu_wallpaper();
 
     if mister_running() {
-        if !wait_for_fifo() {
-            return Err(format!("timed out waiting for {CMD_FIFO}"));
-        }
-        write_magik_command_acknowledged("mister_magik_exit_to_menu\n")?;
+        main_command::wait_for_command_fifo(FIFO_WAIT_TIMEOUT)
+            .map_err(|error| error.to_string())?;
+        execute_main_command(&MainCommand::ExitToMenu)?;
     } else {
         spawn_mister()?;
     }
@@ -5346,17 +5175,21 @@ pub fn execute_game_launch_handoff_bench(
             Ok(())
         }
 
-        fn wait_for_started_mister(&mut self) -> bool {
-            true
+        fn wait_for_started_mister(&mut self) -> Result<(), String> {
+            Ok(())
         }
 
-        fn wait_for_command_fifo(&mut self) -> bool {
+        fn wait_for_command_fifo(&mut self) -> Result<(), String> {
             let start = Instant::now();
             thread::sleep(self.fifo_delay);
             self.handoff_us = self
                 .handoff_us
                 .saturating_add(start.elapsed().as_micros() as u64);
-            self.mode == LaunchHandoffBenchMode::Success
+            if self.mode == LaunchHandoffBenchMode::Success {
+                Ok(())
+            } else {
+                Err("benchmark command FIFO timeout".to_string())
+            }
         }
 
         fn write_input_policy_marker(
@@ -5374,7 +5207,7 @@ pub fn execute_game_launch_handoff_bench(
             Ok(())
         }
 
-        fn write_mister_command(&mut self, _cmd: &str) -> Result<(), String> {
+        fn write_mister_command(&mut self, _command: &MainCommand) -> Result<(), String> {
             if self.mode == LaunchHandoffBenchMode::Success {
                 Ok(())
             } else {
@@ -5430,21 +5263,13 @@ fn execute_game_launch_with(
     } else {
         crate::ui_logln!("launch: starting {} for load_core", mister_bin());
         io.start_mister().map_err(|e| LaunchError::new(e, false))?;
-        if !io.wait_for_started_mister() {
-            return Err(LaunchError::new(
-                format!("timed out waiting for {} + {CMD_FIFO}", mister_bin()),
-                true,
-            ));
-        }
+        io.wait_for_started_mister()
+            .map_err(|error| LaunchError::new(error, true))?;
         true
     };
 
-    if !io.wait_for_command_fifo() {
-        return Err(LaunchError::new(
-            format!("timed out waiting for {CMD_FIFO}"),
-            spawned,
-        ));
-    }
+    io.wait_for_command_fifo()
+        .map_err(|error| LaunchError::new(error, spawned))?;
 
     let magik_running = io.magik_running();
     if magik_running {
@@ -5458,11 +5283,13 @@ fn execute_game_launch_with(
         io.write_input_policy_marker(simple_joystick_handling)
             .map_err(|e| LaunchError::new(e, spawned))?;
     }
-    let cmd = match (magik_running, launch_target) {
-        (true, LaunchTarget::Path(path)) => format!("mister_magik_launch {path}\n"),
-        (true, LaunchTarget::Structured(plan)) => {
-            format!("mister_magik_launch_plan_v1 {}\n", encode_launch_plan(plan))
-        }
+    let command = match (magik_running, launch_target) {
+        (true, LaunchTarget::Path(path)) => MainCommand::LaunchPath {
+            target: path.to_string(),
+        },
+        (true, LaunchTarget::Structured(plan)) => MainCommand::StructuredLaunch {
+            fields: encode_launch_plan(plan),
+        },
         (true, LaunchTarget::Prepared(selection)) => {
             return Err(LaunchError::new(
                 format!("prepared launch unresolved: {}", selection.launch_ref),
@@ -5475,7 +5302,9 @@ fn execute_game_launch_with(
                 spawned,
             ));
         }
-        (false, LaunchTarget::Path(path)) => format!("load_core {path}\n"),
+        (false, LaunchTarget::Path(path)) => MainCommand::LoadCore {
+            target: path.to_string(),
+        },
         (false, LaunchTarget::Structured(_)) => {
             return Err(LaunchError::new(
                 "structured launch plan requires MiSTer_MagiK".to_string(),
@@ -5495,8 +5324,8 @@ fn execute_game_launch_with(
             ));
         }
     };
-    crate::ui_logln!("launch: {}", cmd.trim_end());
-    if let Err(e) = io.write_mister_command(&cmd) {
+    crate::ui_logln!("launch: {command:?}");
+    if let Err(e) = io.write_mister_command(&command) {
         if magik_running {
             let _ = io.write_input_policy_marker(false);
         }
@@ -5619,10 +5448,8 @@ fn reboot_mister_with(io: &mut impl LaunchIo) -> Result<(), String> {
     if !io.magik_running() {
         return Err("MiSTer_MagiK is not running; refusing raw reboot from Slint".into());
     }
-    if !io.wait_for_command_fifo() {
-        return Err(format!("timed out waiting for {CMD_FIFO}"));
-    }
-    io.write_mister_command("mister_magik_reboot\n")
+    io.wait_for_command_fifo()?;
+    io.write_mister_command(&MainCommand::Reboot)
 }
 
 pub fn reboot_mister() -> Result<(), String> {
@@ -5679,7 +5506,7 @@ mod tests {
         prepare_simple_input_profile_calls: usize,
         input_policy_markers: Vec<bool>,
         button_override_writes: Vec<String>,
-        commands: Vec<String>,
+        commands: Vec<MainCommand>,
         effects: Vec<String>,
     }
 
@@ -5712,12 +5539,23 @@ mod tests {
             self.start_result.clone()
         }
 
-        fn wait_for_started_mister(&mut self) -> bool {
-            self.started_ready
+        fn wait_for_started_mister(&mut self) -> Result<(), String> {
+            if self.started_ready {
+                Ok(())
+            } else {
+                Err(format!(
+                    "timed out waiting for {} + /dev/MiSTer_cmd",
+                    mister_bin()
+                ))
+            }
         }
 
-        fn wait_for_command_fifo(&mut self) -> bool {
-            self.fifo_ready
+        fn wait_for_command_fifo(&mut self) -> Result<(), String> {
+            if self.fifo_ready {
+                Ok(())
+            } else {
+                Err("timed out waiting for /dev/MiSTer_cmd".to_string())
+            }
         }
 
         fn write_input_policy_marker(
@@ -5751,9 +5589,16 @@ mod tests {
             self.button_override_result.clone()
         }
 
-        fn write_mister_command(&mut self, cmd: &str) -> Result<(), String> {
-            self.commands.push(cmd.to_string());
-            self.effects.push(format!("main-command:{cmd}"));
+        fn write_mister_command(&mut self, command: &MainCommand) -> Result<(), String> {
+            self.commands.push(command.clone());
+            let effect = match command {
+                MainCommand::LaunchPath { target } => format!("main-command:launch:{target}"),
+                MainCommand::StructuredLaunch { .. } => "main-command:structured".to_string(),
+                MainCommand::LoadCore { target } => format!("main-command:load-core:{target}"),
+                MainCommand::Reboot => "main-command:reboot".to_string(),
+                command => format!("main-command:{command:?}"),
+            };
+            self.effects.push(effect);
             self.write_result.clone()
         }
     }
@@ -9170,7 +9015,9 @@ mod tests {
         assert_eq!(io.start_calls, 1);
         assert_eq!(
             io.commands,
-            vec!["mister_magik_launch /media/fat/_Arcade/test.mra\n"]
+            [MainCommand::LaunchPath {
+                target: "/media/fat/_Arcade/test.mra".to_string(),
+            }]
         );
         assert_eq!(err.to_string(), "fifo write failed");
         assert!(!launch_in_progress());
@@ -9192,7 +9039,7 @@ mod tests {
                 "prepare-input-profiles",
                 "button-overrides:write:/media/fat/_Arcade/test.mra",
                 "input-policy:true",
-                "main-command:mister_magik_launch /media/fat/_Arcade/test.mra\n",
+                "main-command:launch:/media/fat/_Arcade/test.mra",
             ]
         );
         reset_launch();
@@ -9215,7 +9062,7 @@ mod tests {
             [
                 "button-overrides:remove",
                 "input-policy:false",
-                "main-command:mister_magik_launch /media/fat/_Arcade/test.mra\n",
+                "main-command:launch:/media/fat/_Arcade/test.mra",
                 "input-policy:false",
             ]
         );
@@ -9272,7 +9119,12 @@ mod tests {
 
         assert!(!spawned);
         assert_eq!(io.start_calls, 0);
-        assert_eq!(io.commands, vec!["load_core /media/fat/_Arcade/test.mra\n"]);
+        assert_eq!(
+            io.commands,
+            [MainCommand::LoadCore {
+                target: "/media/fat/_Arcade/test.mra".to_string(),
+            }]
+        );
         assert!(launch_in_progress());
         reset_launch();
     }
@@ -9283,7 +9135,7 @@ mod tests {
 
         reboot_mister_with(&mut io).unwrap();
 
-        assert_eq!(io.commands, vec!["mister_magik_reboot\n"]);
+        assert_eq!(io.commands, [MainCommand::Reboot]);
     }
 
     #[test]
@@ -9304,7 +9156,7 @@ mod tests {
 
         let err = reboot_mister_with(&mut io).unwrap_err();
 
-        assert!(err.contains(CMD_FIFO));
+        assert!(err.contains("/dev/MiSTer_cmd"));
         assert!(io.commands.is_empty());
     }
 
@@ -9321,9 +9173,9 @@ mod tests {
         assert_eq!(io.start_calls, 0);
         assert_eq!(
             io.commands,
-            vec![
-                "mister_magik_launch_plan_v1 schema=1&launch_ref=magik-plan:test%20game&title=Test%20Game&system_id=neogeo&core_path=NeoGeo&payload_path=/media/fat/games/NEOGEO/Test%20Game.neo&mount_kind=mount-image&mount_index=0&delay_secs=1\n"
-            ]
+            [MainCommand::StructuredLaunch {
+                fields: "schema=1&launch_ref=magik-plan:test%20game&title=Test%20Game&system_id=neogeo&core_path=NeoGeo&payload_path=/media/fat/games/NEOGEO/Test%20Game.neo&mount_kind=mount-image&mount_index=0&delay_secs=1".to_string(),
+            }]
         );
         reset_launch();
     }
@@ -9375,7 +9227,9 @@ mod tests {
 
         assert_eq!(
             io.commands,
-            vec!["mister_magik_launch /media/fat/_Arcade/test.mra\n"]
+            [MainCommand::LaunchPath {
+                target: "/media/fat/_Arcade/test.mra".to_string(),
+            }]
         );
         assert!(err.to_string().contains("rejected LauncherCrashed"));
         assert_eq!(io.input_policy_markers, vec![false, false]);
@@ -9392,7 +9246,12 @@ mod tests {
         execute_game_launch_with(&path_target("/media/fat/_Arcade/test.mra"), &mut io)
             .expect("stock Main launch does not use MagiK status ack");
 
-        assert_eq!(io.commands, vec!["load_core /media/fat/_Arcade/test.mra\n"]);
+        assert_eq!(
+            io.commands,
+            [MainCommand::LoadCore {
+                target: "/media/fat/_Arcade/test.mra".to_string(),
+            }]
+        );
         assert!(launch_in_progress());
         reset_launch();
     }
