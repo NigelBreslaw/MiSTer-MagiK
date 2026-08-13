@@ -202,6 +202,16 @@ module tb_mister_magik_scaler_completion_cdc;
 		if(completion_starved_frame_toggle != 1'b1)
 			$fatal(1, "persistent scaler starvation frame was not counted");
 
+		// A non-starved sample inside the following frame must clear the
+		// accumulator, so the next VS cannot fabricate another epoch.
+		scaler_read_level = 2'd1;
+		repeat(2) @(negedge destination_clk);
+		scaler_read_level = 2'd2;
+		@(negedge destination_clk); scaler_vs = 1'b1;
+		@(negedge destination_clk); scaler_vs = 1'b0;
+		if(completion_starved_frame_toggle != 1'b1)
+			$fatal(1, "non-starved frame incorrectly advanced starvation evidence");
+
 		// Reset both domains while the destination clock is stopped. No stale
 		// source sequence may emerge as a phantom completion on restart.
 		destination_clock_enabled = 1'b0;

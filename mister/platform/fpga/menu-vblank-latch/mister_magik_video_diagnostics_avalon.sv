@@ -126,7 +126,7 @@ module mister_magik_scaler_completion_cdc (
 				completion_frame_starved <= completion_starved_now;
 			end
 			else if(completion_frame_armed)
-				completion_frame_starved <= completion_frame_starved_now;
+				completion_frame_starved <= completion_starved_now;
 		end
 	end
 endmodule
