@@ -242,7 +242,12 @@ fn validate(
 
 fn validate_gui_identity(values: &BTreeMap<String, String>) -> Result<(), ManifestError> {
     require_hex("platform_bundle_id", &values["platform_bundle_id"], 64)?;
-    for field in ["main_sha256", "gui_sha256", "scanout_module_sha256", "latch_rbf_sha256"] {
+    for field in [
+        "main_sha256",
+        "gui_sha256",
+        "scanout_module_sha256",
+        "latch_rbf_sha256",
+    ] {
         require_hex(field, &values[field], 64)?;
     }
     for field in ["main_revision", "magik_revision", "menu_revision"] {
@@ -346,8 +351,14 @@ mod tests {
         values.insert("platform_release".to_string(), "platform-v0.16".to_string());
         values.insert("platform_release_number".to_string(), "16".to_string());
         values.insert("platform_bundle_id".to_string(), "c".repeat(64));
-        values.insert("latch_protocol_version".to_string(), LATCH_PROTOCOL_VERSION.to_string());
-        values.insert("latch_capability_mask".to_string(), LATCH_CAPABILITY_MASK.to_string());
+        values.insert(
+            "latch_protocol_version".to_string(),
+            LATCH_PROTOCOL_VERSION.to_string(),
+        );
+        values.insert(
+            "latch_capability_mask".to_string(),
+            LATCH_CAPABILITY_MASK.to_string(),
+        );
         for (name, path) in layout.paths().components() {
             values.insert(format!("{name}_path"), path.to_string());
             values.insert(format!("{name}_sha256"), "a".repeat(64));
@@ -388,7 +399,10 @@ mod tests {
                 valid.lines().skip(1).collect::<Vec<_>>().join("\n"),
                 "invalid_platform_manifest_fields",
             ),
-            (format!("{valid}format={FORMAT}\n"), "invalid_platform_manifest"),
+            (
+                format!("{valid}format={FORMAT}\n"),
+                "invalid_platform_manifest",
+            ),
             (
                 format!("{valid}unexpected=value\n"),
                 "invalid_platform_manifest_fields",
@@ -426,23 +440,15 @@ mod tests {
             candidate,
             &format!("qualification_candidate_id={}", "f".repeat(64)),
         );
-        assert!(parse(
-            &forged,
-            Layout::Development,
-            ValidationProfile::AgentStrict
-        )
-        .is_err());
-        assert!(parse(
-            &forged,
-            Layout::Development,
-            ValidationProfile::ManagerLegacy
-        )
-        .is_ok());
-        assert!(parse(
-            &forged,
-            Layout::Development,
-            ValidationProfile::GuiLegacy
-        )
-        .is_ok());
+        assert!(parse(&forged, Layout::Development, ValidationProfile::AgentStrict).is_err());
+        assert!(
+            parse(
+                &forged,
+                Layout::Development,
+                ValidationProfile::ManagerLegacy
+            )
+            .is_ok()
+        );
+        assert!(parse(&forged, Layout::Development, ValidationProfile::GuiLegacy).is_ok());
     }
 }
