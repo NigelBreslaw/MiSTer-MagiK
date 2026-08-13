@@ -1090,7 +1090,8 @@ fn rust_string_array(text: &str, marker: &str) -> Option<Vec<String>> {
     let start = text.find(marker)?;
     let values = &text[start..];
     let start = values.find("= &[")? + 4;
-    let values = &values[start..values[start..].find("];")?];
+    let end = start + values[start..].find("];")?;
+    let values = &values[start..end];
     Some(
         values
             .lines()
