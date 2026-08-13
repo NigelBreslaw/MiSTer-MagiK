@@ -13069,11 +13069,29 @@ fn launch_return_once_next_game(
     nonce: &str,
     previous: &str,
 ) -> Result<Value> {
+    launch_return_once_hold_until_selection_changes(
+        config,
+        nonce,
+        AutomationButton::Down,
+        "selected_game_id",
+        previous,
+        "next Arcade game",
+    )
+}
+
+fn launch_return_once_hold_until_selection_changes(
+    config: &NativeDeviceConfig,
+    nonce: &str,
+    button: AutomationButton,
+    semantic_field: &str,
+    previous: &str,
+    label: &str,
+) -> Result<Value> {
     launcher_automation::send_action(
         config,
         nonce,
         &AutomationAction::Hold {
-            button: AutomationButton::Down,
+            button,
             duration_ms: LAUNCH_RETURN_ONCE_STEP_DEADLINE_MS,
         },
     )?;
@@ -13081,9 +13099,9 @@ fn launch_return_once_next_game(
         config,
         nonce,
         |snapshot| {
-            modal_semantic(snapshot, "selected_game_id").and_then(Value::as_str) != Some(previous)
+            modal_semantic(snapshot, semantic_field).and_then(Value::as_str) != Some(previous)
         },
-        "next Arcade game",
+        label,
     );
     let released = launcher_automation::send_action(config, nonce, &AutomationAction::ReleaseAll);
     match (changed, released) {
@@ -13159,7 +13177,7 @@ fn launch_return_once_select_menu_item(
             .and_then(Value::as_str)
             .unwrap_or("")
             .to_owned();
-        launch_return_once_action(
+        state = launch_return_once_hold_until_selection_changes(
             config,
             nonce,
             if move_left {
@@ -13167,14 +13185,8 @@ fn launch_return_once_select_menu_item(
             } else {
                 AutomationButton::Right
             },
-        )?;
-        state = launch_return_once_wait(
-            config,
-            nonce,
-            |snapshot| {
-                modal_semantic(snapshot, "selected_item_id").and_then(Value::as_str)
-                    != Some(previous.as_str())
-            },
+            "selected_item_id",
+            &previous,
             "Home selection change",
         )?;
     }
