@@ -597,6 +597,11 @@ pub(super) fn start_library_catalog_worker(
                 return;
             }
             let plan = catalog_worker_plan(cache_state, request);
+            let dispatch = catalog_worker_dispatch(
+                plan,
+                execution_mode,
+                cached_catalog_published,
+            );
             let foreground_exclusive =
                 matches!(
                     plan,
@@ -616,7 +621,7 @@ pub(super) fn start_library_catalog_worker(
                     execution_mode.label()
                 ),
             });
-            if cached_catalog_published && plan == CatalogWorkerPlan::CheckStamp {
+            if dispatch.deferred_cached_validation {
                 repair_navigation_projection_cache_after_ready(
                     &root,
                     projection_repair_catalog.as_ref(),
@@ -632,35 +637,22 @@ pub(super) fn start_library_catalog_worker(
                 });
                 return;
             }
-            match plan {
-                CatalogWorkerPlan::LoadOnly => {
-                    let _ = tx.send(CatalogWorkerMessage::Done);
-                    return;
-                }
-                CatalogWorkerPlan::CheckStamp => {}
-                CatalogWorkerPlan::InitialBuild
-                | CatalogWorkerPlan::RECONCILE_CHANGED_INPUTS
-                | CatalogWorkerPlan::RECONCILE_ALL_SYSTEMS => {
-                    send_catalog_progress(
-                        &tx,
-                        library_db::CatalogProgress::indexing_building_catalog(),
-                    );
-                }
-                CatalogWorkerPlan::FreshBuild => {}
+            if dispatch.completes_without_builder {
+                let _ = tx.send(CatalogWorkerMessage::Done);
+                return;
             }
-            if matches!(
-                plan,
-                CatalogWorkerPlan::CheckStamp
-                    | CatalogWorkerPlan::InitialBuild
-                    | CatalogWorkerPlan::RECONCILE_CHANGED_INPUTS
-                    | CatalogWorkerPlan::RECONCILE_ALL_SYSTEMS
-                    | CatalogWorkerPlan::FreshBuild
-            ) {
+            if dispatch.sends_initial_progress {
+                send_catalog_progress(
+                    &tx,
+                    library_db::CatalogProgress::indexing_building_catalog(),
+                );
+            }
+            if let Some(builder_execution_mode) = dispatch.builder_execution_mode {
                 drop(progress);
                 run_catalog_builder_in_process(
                     &root,
                     plan,
-                    execution_mode,
+                    builder_execution_mode,
                     &tx,
                     &mut progress_coalescer,
                 );
@@ -1337,6 +1329,40 @@ enum CatalogWorkerPlan {
     InitialBuild,
     Reconcile { scope: CatalogReconcileScope },
     FreshBuild,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct CatalogWorkerDispatch {
+    completes_without_builder: bool,
+    deferred_cached_validation: bool,
+    builder_execution_mode: Option<CatalogExecutionMode>,
+    sends_initial_progress: bool,
+}
+
+fn catalog_worker_dispatch(
+    plan: CatalogWorkerPlan,
+    execution_mode: CatalogExecutionMode,
+    cached_catalog_published: bool,
+) -> CatalogWorkerDispatch {
+    if cached_catalog_published && plan == CatalogWorkerPlan::CheckStamp {
+        return CatalogWorkerDispatch {
+            completes_without_builder: false,
+            deferred_cached_validation: true,
+            builder_execution_mode: None,
+            sends_initial_progress: false,
+        };
+    }
+    CatalogWorkerDispatch {
+        completes_without_builder: plan == CatalogWorkerPlan::LoadOnly,
+        deferred_cached_validation: false,
+        builder_execution_mode: (plan != CatalogWorkerPlan::LoadOnly).then_some(execution_mode),
+        sends_initial_progress: matches!(
+            plan,
+            CatalogWorkerPlan::InitialBuild
+                | CatalogWorkerPlan::RECONCILE_CHANGED_INPUTS
+                | CatalogWorkerPlan::RECONCILE_ALL_SYSTEMS
+        ),
+    }
 }
 
 impl CatalogWorkerPlan {
@@ -2287,6 +2313,108 @@ mod tests {
             ),
             None
         );
+    }
+
+    #[test]
+    fn catalog_worker_dispatches_every_plan_without_changing_progress_semantics() {
+        use CatalogExecutionMode::{BackgroundInteractive, ForegroundExclusive};
+        let cases = [
+            (
+                CatalogWorkerPlan::LoadOnly,
+                BackgroundInteractive,
+                false,
+                true,
+                false,
+                None,
+                false,
+            ),
+            (
+                CatalogWorkerPlan::CheckStamp,
+                BackgroundInteractive,
+                false,
+                false,
+                false,
+                Some(BackgroundInteractive),
+                false,
+            ),
+            (
+                CatalogWorkerPlan::CheckStamp,
+                BackgroundInteractive,
+                true,
+                false,
+                true,
+                None,
+                false,
+            ),
+            (
+                CatalogWorkerPlan::InitialBuild,
+                ForegroundExclusive,
+                false,
+                false,
+                false,
+                Some(ForegroundExclusive),
+                true,
+            ),
+            (
+                CatalogWorkerPlan::RECONCILE_CHANGED_INPUTS,
+                ForegroundExclusive,
+                false,
+                false,
+                false,
+                Some(ForegroundExclusive),
+                true,
+            ),
+            (
+                CatalogWorkerPlan::RECONCILE_CHANGED_INPUTS,
+                BackgroundInteractive,
+                false,
+                false,
+                false,
+                Some(BackgroundInteractive),
+                true,
+            ),
+            (
+                CatalogWorkerPlan::RECONCILE_ALL_SYSTEMS,
+                BackgroundInteractive,
+                false,
+                false,
+                false,
+                Some(BackgroundInteractive),
+                true,
+            ),
+            (
+                CatalogWorkerPlan::FreshBuild,
+                ForegroundExclusive,
+                false,
+                false,
+                false,
+                Some(ForegroundExclusive),
+                false,
+            ),
+        ];
+
+        for (
+            plan,
+            execution_mode,
+            cached_catalog_published,
+            completes_without_builder,
+            deferred_cached_validation,
+            builder_execution_mode,
+            sends_initial_progress,
+        ) in cases
+        {
+            assert_eq!(
+                catalog_worker_dispatch(plan, execution_mode, cached_catalog_published),
+                CatalogWorkerDispatch {
+                    completes_without_builder,
+                    deferred_cached_validation,
+                    builder_execution_mode,
+                    sends_initial_progress,
+                },
+                "{}",
+                plan.label()
+            );
+        }
     }
 
     #[test]
