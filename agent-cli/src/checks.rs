@@ -537,6 +537,21 @@ fn has_license_header(path: &Path, text: &str) -> bool {
 }
 
 fn check_shell_ownership(repository: &Path) -> Result<(), String> {
+    const MAIN_FIFO_OWNERS: &[(&str, &str)] = &[
+        (
+            "apps/mister/src/launcher.rs",
+            "temporary production app writer; migrate to mister/platform/runtime",
+        ),
+        (
+            "crates/catalog/src/fs_fault.rs",
+            "catalog destructive-fault capability",
+        ),
+        (
+            "mister/tools/agent/src/main.rs",
+            "device-service command capability",
+        ),
+        ("agent-cli/src/host/remote.rs", "host command construction"),
+    ];
     const RETIRED: &[&str] = &[
         "scripts/magik-mode.sh",
         "scripts/run-rust.sh",
@@ -597,8 +612,96 @@ fn check_shell_ownership(repository: &Path) -> Result<(), String> {
                 ));
             }
         }
+        if main_fifo_source(&path)
+            && source_may_access_main_fifo(&text)
+            && !MAIN_FIFO_OWNERS.iter().any(|(owner, _)| relative == *owner)
+        {
+            let owners = MAIN_FIFO_OWNERS
+                .iter()
+                .map(|(path, role)| format!("{path} ({role})"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            return Err(format!(
+                "main_fifo_writer_outside_owner: {relative}; production app command transport targets mister/platform/runtime; approved temporary owners: {owners}"
+            ));
+        }
     }
     Ok(())
+}
+
+fn main_fifo_source(path: &Path) -> bool {
+    path.extension().and_then(|extension| extension.to_str()) == Some("rs")
+        || path.starts_with("scripts")
+        || path.starts_with("apps/mister/scripts")
+        || path.starts_with(".github/workflows")
+}
+
+fn source_may_access_main_fifo(text: &str) -> bool {
+    const ENDPOINTS: &[&str] = &["/dev/MiSTer_cmd", "/dev/MiSTer_cmd_reply"];
+    let mut endpoint_names = Vec::new();
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("//") || trimmed.starts_with('#') {
+            continue;
+        }
+        if ENDPOINTS.iter().any(|endpoint| line.contains(endpoint)) {
+            if let Some(rest) = trimmed
+                .strip_prefix("const ")
+                .or_else(|| trimmed.strip_prefix("static "))
+                && let Some((name, _)) = rest.split_once(':')
+            {
+                endpoint_names.push(name.trim().to_owned());
+                continue;
+            }
+            if let Some((name, _)) = trimmed.split_once('=')
+                && name
+                    .chars()
+                    .all(|character| character == '_' || character.is_ascii_alphanumeric())
+            {
+                endpoint_names.push(name.trim().to_owned());
+                continue;
+            }
+            if trimmed.contains("assert") || trimmed.contains("debug_assert") {
+                continue;
+            }
+            if [
+                "> /dev/MiSTer_cmd",
+                ">/dev/MiSTer_cmd",
+                "<>/dev/MiSTer_cmd",
+                "< /dev/MiSTer_cmd",
+                "</dev/MiSTer_cmd",
+                "tee /dev/MiSTer_cmd",
+                "of=/dev/MiSTer_cmd",
+                ".open(\"/dev/MiSTer_cmd",
+                "File::open(\"/dev/MiSTer_cmd",
+                "File::create(\"/dev/MiSTer_cmd",
+                "fs::write(\"/dev/MiSTer_cmd",
+            ]
+            .iter()
+            .any(|pattern| line.contains(pattern))
+            {
+                return true;
+            }
+        }
+    }
+    endpoint_names.into_iter().any(|name| {
+        [
+            format!(".open({name})"),
+            format!("File::open({name})"),
+            format!("File::create({name})"),
+            format!("fs::write({name}"),
+            format!("std::fs::write({name}"),
+            format!("send_mister_command({name}"),
+            format!("> ${name}"),
+            format!("> \"${name}\""),
+            format!("> \"${{{name}}}\""),
+            format!("tee ${name}"),
+            format!("tee \"${name}\""),
+            format!("of=${name}"),
+        ]
+        .iter()
+        .any(|pattern| text.contains(pattern))
+    })
 }
 
 fn repository_files(repository: &Path) -> Result<Vec<PathBuf>, String> {
@@ -677,6 +780,45 @@ mod tests {
                 .success()
         );
         assert!(check_shell_ownership(&root).is_ok());
+
+        fs::create_dir_all(root.join("apps/mister/src")).unwrap();
+        fs::write(
+            root.join("apps/mister/src/contract.rs"),
+            "const MAIN_COMMAND_ENDPOINT: &str = \"/dev/MiSTer_cmd\";\nenum Command { Launch }\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("apps/mister/src/launcher.rs"),
+            "const CMD_FIFO: &str = \"/dev/MiSTer_cmd\";\nfn send() { OpenOptions::new().write(true).open(CMD_FIFO); }\n",
+        )
+        .unwrap();
+        fs::create_dir_all(root.join("agent-cli/src/host")).unwrap();
+        fs::write(
+            root.join("agent-cli/src/host/remote.rs"),
+            "const COMMAND: &str = \"printf '%s\\n' command > /dev/MiSTer_cmd\";\n",
+        )
+        .unwrap();
+        assert!(check_shell_ownership(&root).is_ok());
+
+        fs::write(
+            root.join("apps/mister/src/new_transport.rs"),
+            "fn send() { OpenOptions::new().write(true).open(\"/dev/MiSTer_cmd\"); }\n",
+        )
+        .unwrap();
+        let error = check_shell_ownership(&root).unwrap_err();
+        assert!(error.contains("main_fifo_writer_outside_owner"));
+        assert!(error.contains("mister/platform/runtime"));
+        fs::remove_file(root.join("apps/mister/src/new_transport.rs")).unwrap();
+
+        fs::create_dir_all(root.join("scripts")).unwrap();
+        fs::write(
+            root.join("scripts/new-writer.sh"),
+            "MAIN_FIFO=/dev/MiSTer_cmd\nprintf '%s\\n' command > \"$MAIN_FIFO\"\n",
+        )
+        .unwrap();
+        let error = check_shell_ownership(&root).unwrap_err();
+        assert!(error.contains("scripts/new-writer.sh"));
+        fs::remove_file(root.join("scripts/new-writer.sh")).unwrap();
 
         fs::create_dir_all(root.join("docs")).unwrap();
         fs::write(root.join("docs/contract.md"), "scripts/run-rust.sh\n").unwrap();

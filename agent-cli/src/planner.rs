@@ -214,6 +214,18 @@ fn add_path_operations(
         }
         merge_operation(out, operation, conflicts);
     };
+    if path.extension().and_then(|extension| extension.to_str()) == Some("rs")
+        || path.starts_with("scripts")
+        || path.starts_with("apps/mister/scripts")
+        || path.starts_with(".github/workflows")
+    {
+        add(builtin(
+            "repo.shell-ownership",
+            "Check shell and Main FIFO ownership",
+            BuiltinOperation::ShellOwnership,
+            "maintained Rust or shell source changed → command ownership contract",
+        ));
+    }
     if path.file_name().and_then(|name| name.to_str()) == Some("AGENTS.md")
         || path.starts_with("docs/agents")
     {
@@ -1095,12 +1107,6 @@ fn add_script_operations(repository: &Path, path: &Path, add: &mut impl FnMut(Op
             "changed shell script → syntax",
         ));
     }
-    add(builtin(
-        "scripts.no-orchestrator-regrowth",
-        "Check operational shell boundaries",
-        BuiltinOperation::ShellOwnership,
-        "script source → orchestration ownership contract",
-    ));
     if text.contains("platform-bundle") {
         add(builtin(
             "scripts.platform-workflow",
@@ -2180,6 +2186,27 @@ mod tests {
         );
         let operations = subsume_cargo(vec![check, clippy.clone()]);
         assert_eq!(operations, [clippy]);
+    }
+
+    #[test]
+    fn maintained_rust_and_shell_changes_select_main_fifo_ownership_once() {
+        let plan = affected_plan(
+            AssuranceRequest::Plan {
+                scope: Scope::Paths(vec![]),
+            },
+            vec![
+                "apps/mister/src/new_module.rs".into(),
+                "scripts/new-check.sh".into(),
+            ],
+        )
+        .unwrap();
+        let operations: Vec<_> = plan
+            .operations
+            .iter()
+            .filter(|operation| operation.builtin == Some(BuiltinOperation::ShellOwnership))
+            .collect();
+        assert_eq!(operations.len(), 1);
+        assert_eq!(operations[0].id, "repo.shell-ownership");
     }
 
     #[test]
