@@ -214,7 +214,7 @@ if path_activity != {
             "word_count": 4,
             "flags": {"bucket_valid": 0},
             "words": ["schema", "flags", "counts", "crc"],
-            "counters": {"request": 0, "accepted": 4, "returned": 8},
+            "counters": {"request": 0, "accepted": 4, "returned": 8, "bucket": 12},
         },
     },
 }:

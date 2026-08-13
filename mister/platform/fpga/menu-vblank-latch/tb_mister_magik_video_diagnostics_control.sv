@@ -208,6 +208,7 @@ module tb_mister_magik_video_diagnostics_control;
 
 	task automatic read_avalon_activity;
 		input [15:0] expected_flags;
+		input [3:0] expected_bucket;
 		input [3:0] expected_request;
 		input [3:0] expected_accepted;
 		input [3:0] expected_returned;
@@ -234,9 +235,14 @@ module tb_mister_magik_video_diagnostics_control;
 			   words[MAGIK_HDMI_AVALON_LIVENESS_ACTIVITY_FLAGS_WORD] !=
 					expected_flags ||
 			   words[MAGIK_HDMI_AVALON_LIVENESS_ACTIVITY_COUNTS_WORD] !=
-					{4'd0, expected_returned, expected_accepted, expected_request} ||
+					{expected_bucket, expected_returned, expected_accepted,
+					 expected_request} ||
 			   words[MAGIK_HDMI_AVALON_LIVENESS_ACTIVITY_CRC_WORD] != crc)
-				$fatal(1, "Avalon liveness mismatch");
+				$fatal(1, "Avalon liveness mismatch flags=%h counts=%h expected=%h",
+					words[MAGIK_HDMI_AVALON_LIVENESS_ACTIVITY_FLAGS_WORD],
+					words[MAGIK_HDMI_AVALON_LIVENESS_ACTIVITY_COUNTS_WORD],
+					{expected_bucket, expected_returned, expected_accepted,
+					 expected_request});
 		end
 	endtask
 
@@ -580,13 +586,13 @@ module tb_mister_magik_video_diagnostics_control;
 		repeat(8) @(negedge clk_sys);
 		read_avalon_activity(
 			MAGIK_HDMI_AVALON_LIVENESS_ACTIVITY_FLAG_BUCKET_VALID,
-			4'd1, 4'd1, 4'd1);
+			4'd1, 4'd1, 4'd1, 4'd1);
 		@(negedge clk_100m); dut.avalon_bucket_count = 19'h7ffff;
 		@(posedge clk_100m);
 		repeat(8) @(negedge clk_sys);
 		read_avalon_activity(
 			MAGIK_HDMI_AVALON_LIVENESS_ACTIVITY_FLAG_BUCKET_VALID,
-			4'd1, 4'd1, 4'd1);
+			4'd2, 4'd1, 4'd1, 4'd1);
 
 		// An aborted activity transaction restarts from its own schema and CRC
 		// seed without perturbing the permanent 0x60 lock record.

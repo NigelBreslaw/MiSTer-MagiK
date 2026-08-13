@@ -273,6 +273,14 @@ frame_activity_accessors!(
 );
 
 impl HdmiAvalonLivenessActivity {
+    pub fn bucket_count(&self) -> u8 {
+        packed_counter(
+            &self.words,
+            HDMI_AVALON_LIVENESS_ACTIVITY_COUNTS_WORD,
+            HDMI_AVALON_LIVENESS_ACTIVITY_BUCKET_BIT,
+        )
+    }
+
     pub fn request_count(&self) -> u8 {
         packed_counter(
             &self.words,
@@ -429,6 +437,7 @@ fn decode_path_activity<const N: usize>(
     flags_mask: u16,
     valid_flag: u16,
     packed_words: &[usize],
+    packed_masks: &[(usize, u16)],
     words: &[u16],
 ) -> Result<[u16; N], String> {
     if words.len() != N {
@@ -456,6 +465,14 @@ fn decode_path_activity<const N: usize>(
     if flags & valid_flag == 0 && packed_words.iter().any(|index| words[*index] != 0) {
         return Err(format!("{label} has counters before becoming valid"));
     }
+    for (index, mask) in packed_masks {
+        if words[*index] & !mask != 0 {
+            return Err(format!(
+                "{label} packed counters contain reserved bits: 0x{:04x}",
+                words[*index]
+            ));
+        }
+    }
     let mut owned = [0; N];
     owned.copy_from_slice(words);
     Ok(owned)
@@ -473,6 +490,10 @@ pub fn decode_hdmi_final_path_activity(words: &[u16]) -> Result<HdmiFinalPathAct
             HDMI_FINAL_PATH_ACTIVITY_BLACK_COUNTS_WORD,
             HDMI_FINAL_PATH_ACTIVITY_ACTIVITY_COUNTS_WORD,
         ],
+        &[
+            (HDMI_FINAL_PATH_ACTIVITY_BLACK_COUNTS_WORD, 0xffff),
+            (HDMI_FINAL_PATH_ACTIVITY_ACTIVITY_COUNTS_WORD, 0x000f),
+        ],
         words,
     )
     .map(|words| HdmiFinalPathActivity { words })
@@ -487,6 +508,7 @@ pub fn decode_hdmi_scaler_raw_activity(words: &[u16]) -> Result<HdmiScalerRawAct
         HDMI_SCALER_RAW_ACTIVITY_FLAGS_MASK,
         HDMI_SCALER_RAW_ACTIVITY_FLAG_FRAME_VALID,
         &[HDMI_SCALER_RAW_ACTIVITY_COUNTS_WORD],
+        &[(HDMI_SCALER_RAW_ACTIVITY_COUNTS_WORD, 0x0fff)],
         words,
     )
     .map(|words| HdmiScalerRawActivity { words })
@@ -501,6 +523,7 @@ pub fn decode_hdmi_post_osd_activity(words: &[u16]) -> Result<HdmiPostOsdActivit
         HDMI_POST_OSD_ACTIVITY_FLAGS_MASK,
         HDMI_POST_OSD_ACTIVITY_FLAG_FRAME_VALID,
         &[HDMI_POST_OSD_ACTIVITY_COUNTS_WORD],
+        &[(HDMI_POST_OSD_ACTIVITY_COUNTS_WORD, 0x0fff)],
         words,
     )
     .map(|words| HdmiPostOsdActivity { words })
@@ -517,6 +540,7 @@ pub fn decode_hdmi_avalon_liveness_activity(
         HDMI_AVALON_LIVENESS_ACTIVITY_FLAGS_MASK,
         HDMI_AVALON_LIVENESS_ACTIVITY_FLAG_BUCKET_VALID,
         &[HDMI_AVALON_LIVENESS_ACTIVITY_COUNTS_WORD],
+        &[(HDMI_AVALON_LIVENESS_ACTIVITY_COUNTS_WORD, 0xffff)],
         words,
     )
     .map(|words| HdmiAvalonLivenessActivity { words })
@@ -875,13 +899,14 @@ mod tests {
         );
         avalon[HDMI_AVALON_LIVENESS_ACTIVITY_FLAGS_WORD] =
             HDMI_AVALON_LIVENESS_ACTIVITY_FLAG_BUCKET_VALID;
-        avalon[HDMI_AVALON_LIVENESS_ACTIVITY_COUNTS_WORD] = 0x0987;
+        avalon[HDMI_AVALON_LIVENESS_ACTIVITY_COUNTS_WORD] = 0xa987;
         avalon[HDMI_AVALON_LIVENESS_ACTIVITY_CRC_WORD] = message_crc_with_schema(
             GET_HDMI_AVALON_LIVENESS_ACTIVITY,
             HDMI_AVALON_LIVENESS_ACTIVITY_SCHEMA,
             &avalon[..HDMI_AVALON_LIVENESS_ACTIVITY_CRC_WORD],
         );
         let decoded = decode_hdmi_avalon_liveness_activity(&avalon).unwrap();
+        assert_eq!(decoded.bucket_count(), 10);
         assert_eq!(decoded.request_count(), 7);
         assert_eq!(decoded.accepted_count(), 8);
         assert_eq!(decoded.returned_count(), 9);
@@ -900,6 +925,28 @@ mod tests {
             &final_path[..HDMI_FINAL_PATH_ACTIVITY_CRC_WORD],
         );
         assert!(decode_hdmi_final_path_activity(&final_path).is_err());
+
+        final_path[HDMI_FINAL_PATH_ACTIVITY_FLAGS_WORD] = HDMI_FINAL_PATH_ACTIVITY_FLAG_FRAME_VALID;
+        final_path[HDMI_FINAL_PATH_ACTIVITY_ACTIVITY_COUNTS_WORD] = 0x0010;
+        final_path[HDMI_FINAL_PATH_ACTIVITY_CRC_WORD] = message_crc_with_schema(
+            GET_HDMI_FINAL_PATH_ACTIVITY,
+            HDMI_FINAL_PATH_ACTIVITY_SCHEMA,
+            &final_path[..HDMI_FINAL_PATH_ACTIVITY_CRC_WORD],
+        );
+        assert!(decode_hdmi_final_path_activity(&final_path).is_err());
+
+        let mut scaler = zero_hdmi_words::<HDMI_SCALER_RAW_ACTIVITY_WORDS>(
+            GET_HDMI_SCALER_RAW_ACTIVITY,
+            HDMI_SCALER_RAW_ACTIVITY_SCHEMA,
+        );
+        scaler[HDMI_SCALER_RAW_ACTIVITY_FLAGS_WORD] = HDMI_SCALER_RAW_ACTIVITY_FLAG_FRAME_VALID;
+        scaler[HDMI_SCALER_RAW_ACTIVITY_COUNTS_WORD] = 0x1000;
+        scaler[HDMI_SCALER_RAW_ACTIVITY_CRC_WORD] = message_crc_with_schema(
+            GET_HDMI_SCALER_RAW_ACTIVITY,
+            HDMI_SCALER_RAW_ACTIVITY_SCHEMA,
+            &scaler[..HDMI_SCALER_RAW_ACTIVITY_CRC_WORD],
+        );
+        assert!(decode_hdmi_scaler_raw_activity(&scaler).is_err());
 
         final_path[HDMI_FINAL_PATH_ACTIVITY_FLAGS_WORD] = 0x8000;
         final_path[HDMI_FINAL_PATH_ACTIVITY_BLACK_COUNTS_WORD] = 0;

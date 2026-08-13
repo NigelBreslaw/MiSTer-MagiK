@@ -128,7 +128,8 @@
         "counters": {
           "request": 0,
           "accepted": 4,
-          "returned": 8
+          "returned": 8,
+          "bucket": 12
         }
       }
     }

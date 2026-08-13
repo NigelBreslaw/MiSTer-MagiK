@@ -566,7 +566,7 @@ module tb_mister_magik_sys_top_integration;
 			MAGIK_HDMI_AVALON_LIVENESS_ACTIVITY_FLAG_BUCKET_VALID,
 			"sys_top Avalon bucket valid");
 		expect16(evidence[MAGIK_HDMI_AVALON_LIVENESS_ACTIVITY_COUNTS_WORD],
-			16'h0111, "sys_top Avalon liveness counts");
+			16'h1111, "sys_top Avalon liveness counts");
 		expect16(evidence[MAGIK_HDMI_AVALON_LIVENESS_ACTIVITY_CRC_WORD], evidence_crc,
 			"sys_top Avalon liveness CRC");
 

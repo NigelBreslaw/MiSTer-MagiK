@@ -393,16 +393,18 @@ module mister_magik_hdmi_lock_evidence (
 	wire post_counter_collision_next =
 		post_counter_collision || post_event_collision;
 
-	reg avalon_bucket_seen = 1'b0;
+	reg [3:0] avalon_bucket_epoch = 4'd0;
 	reg avalon_bucket_valid = 1'b0;
 	reg [3:0] avalon_request_count = 4'd0;
 	reg [3:0] avalon_accepted_count = 4'd0;
 	reg [3:0] avalon_returned_count = 4'd0;
-	wire avalon_bucket_event = avalon_bucket_sys != avalon_bucket_seen;
+	wire avalon_bucket_event = avalon_bucket_sys != avalon_bucket_epoch[0];
 	wire avalon_request_event = avalon_request_sys != avalon_request_count[0];
 	wire avalon_accepted_event = avalon_accepted_sys != avalon_accepted_count[0];
 	wire avalon_returned_event = avalon_returned_sys != avalon_returned_count[0];
 	wire avalon_bucket_valid_next = avalon_bucket_valid || avalon_bucket_event;
+	wire [3:0] avalon_bucket_epoch_next =
+		avalon_bucket_epoch + (avalon_bucket_event ? 1'd1 : 1'd0);
 	wire [3:0] avalon_request_count_next =
 		avalon_request_count + (avalon_request_event ? 1'd1 : 1'd0);
 	wire [3:0] avalon_accepted_count_next =
@@ -612,7 +614,7 @@ module mister_magik_hdmi_lock_evidence (
 		post_nonzero_count <= post_nonzero_count_next;
 		post_frame_valid <= post_frame_valid_next;
 		post_counter_collision <= post_counter_collision_next;
-		avalon_bucket_seen <= avalon_bucket_sys;
+		avalon_bucket_epoch <= avalon_bucket_epoch_next;
 		avalon_bucket_valid <= avalon_bucket_valid_next;
 		avalon_request_count <= avalon_request_count_next;
 		avalon_accepted_count <= avalon_accepted_count_next;
@@ -692,7 +694,7 @@ module mister_magik_hdmi_lock_evidence (
 			else if(avalon_start) begin
 				snapshot_flags <= {4'd0, avalon_bucket_valid_next};
 				snapshot_lock_loss_count <= {
-					4'd0,
+					avalon_bucket_epoch_next,
 					avalon_returned_count_next,
 					avalon_accepted_count_next,
 					avalon_request_count_next

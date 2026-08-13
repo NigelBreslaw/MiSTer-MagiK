@@ -413,6 +413,8 @@ def main() -> None:
         "tx_crc <= MAGIK_HDMI_SCALER_RAW_ACTIVITY_HEADER_CRC;",
         "tx_crc <= MAGIK_HDMI_POST_OSD_ACTIVITY_HEADER_CRC;",
         "reg [18:0] avalon_bucket_count = 19'd0;",
+        "reg [3:0] avalon_bucket_epoch = 4'd0;",
+        "wire avalon_bucket_event = avalon_bucket_sys != avalon_bucket_epoch[0];",
         "wire avalon_accepted_now = avalon_bucket_saw_accepted ||",
         "(vbuf_read && !vbuf_waitrequest);",
         "wire avalon_returned_now = avalon_bucket_saw_returned || vbuf_readdatavalid;",
