@@ -5,9 +5,11 @@ FPLL lock and four video-path boundaries. After a rare black return to Menu it
 distinguishes the final direct/scaled mux selection, raw scaler activity,
 post-OSD activity, and bounded framebuffer-read transport liveness.
 
-It does not change the framebuffer latch, scaler, SDRAM, reset, clock control,
-PLL reconfiguration, or any video output. It records evidence; it does not
-repair the black-screen fault or claim that lock is its cause.
+The video recorders remain passive. The current candidate also repairs one
+specific scaler CDC defect: two completed Avalon return blocks can no longer
+cancel while the dynamically generated HDMI clock is stopped. It does not
+change the framebuffer latch, SDRAM interface, reset, PLL reconfiguration, or
+pixel algorithms.
 
 ## Hardware contract
 
@@ -42,7 +44,7 @@ VS classifies the preceding interval into exactly one category. A sticky
 collision flag makes any impossible simultaneous destination events explicit.
 Reads snapshot all counters atomically and never change the recorder.
 
-Commands `0x62`–`0x65` add strict, CRC-protected records without changing
+Commands `0x62`–`0x66` add strict, CRC-protected records without changing
 `0x60` or `0x61`:
 
 - `0x62` counts final-output no-DE, nonzero, black-direct, black-scaled, and
@@ -51,7 +53,9 @@ Commands `0x62`–`0x65` add strict, CRC-protected records without changing
 - `0x64` counts the same classes after OSD/shadow-mask processing;
 - `0x65` counts bounded Avalon buckets, plus buckets containing a read request,
   an accepted request, or returned data. The bucket epoch makes a valid empty
-  interval distinguishable from a stopped source clock.
+  interval distinguishable from a stopped source clock;
+- `0x66` reports a frame-held scaler scheduler/copy state, completion-credit
+  recovery epochs, and full-line/full-frame two-read starvation epochs.
 
 Every record is snapshotted at command recognition and read-only. The agent
 reads each detailed record twice about 50 ms apart and computes four-bit
@@ -60,7 +64,8 @@ clock domains describe the same numbered frame.
 
 A complete producer reports diagnostic architecture `video-path-evidence-v1`.
 If `0x62` is explicitly unsupported, a new agent retains the earlier `0x60`/
-`0x61` interpretation; a partial or malformed `0x62`–`0x65` set is an error.
+`0x61` interpretation; `0x66` is optional for older path-evidence RBFs, while a
+malformed supported record is always an error.
 
 Commands `0x5D`–`0x5F` belong to the retired schema-4 three-domain observer and
 are unsupported by the current FPGA. New device software probes `0x60` first
@@ -72,7 +77,7 @@ Compatibility is explicit:
 
 | Device agent | FPGA RBF | Result |
 | --- | --- | --- |
-| new | new path-evidence recorder | v2 JSON from `0x60`–`0x65` |
+| new | new path-evidence recorder | v2 JSON from `0x60`–`0x66` |
 | new | older lock-only recorder | v2 lock-evidence JSON; final-output capability unavailable |
 | new | older schema-4 observer | unchanged v1 JSON after explicit unsupported fallback |
 | old | new lock recorder | safe unavailable/unclassified result because `0x5D`–`0x5F` are unsupported |
@@ -97,9 +102,14 @@ The final classifier emits five mutually exclusive event toggles. Raw scaler
 and post-OSD classifiers emit three each. The Avalon recorder emits three
 liveness-category toggles plus one bucket heartbeat. Every toggle has its own
 forced two-stage `clk_sys` synchronizer; only synchronized changes are counted.
-There is no multibit payload crossing and no new false-path, max-skew,
-net-delay, or multicycle exception. The design uses no mailbox, block RAM, or
-DSP and never observes Avalon addresses or data.
+The scaler repair replaces the lossy return-completion toggle with a registered
+two-bit Gray completion sequence. Two forced destination synchronizer chains
+recover a modulo delta of one or two and serialize it back into the scaler's
+original one-credit pulse interface. A two-bit max-skew constraint bounds only
+that Gray bus; there is no new false path or multicycle exception. The 0x66
+state vector is held for a complete scaler frame and double-sampled before a
+command snapshots it. The design uses no mailbox, block RAM, or DSP and never
+observes Avalon addresses or returned pixel data.
 
 ## Collection and interpretation
 
@@ -156,6 +166,14 @@ returns, or active returns while the scaler remains black. Mixed, colliding,
 nonadvancing, or insufficient windows remain inconclusive rather than being
 guessed.
 
+The optional scaler-fetch record is interpreted separately. A stable
+`sREAD`, read level two, copy level zero state together with complete-frame
+starvation epochs is reported as `scaler_fetch_stalled_with_two_reads`.
+Two-credit catch-up epochs show that the repaired crossing recovered both
+completions after a destination-clock pause. Full-line starvation is reported
+observationally and may help correlate intermittent vertical bands; it is not
+by itself a claim that those bands share the black-screen cause.
+
 ## Qualification
 
 The lock-only fixed-seed-2 local signoff at synthesis commit `840605cf` and
@@ -168,7 +186,9 @@ assurance-complete commit `23b5f5d2` passed the unchanged hard timing gates:
 - one added calculable synchronizer chain;
 - resource delta: 64 ALMs, 25 registers, no block memory, no DSP.
 
-The product ceiling is 800 ALMs and 300 registers. The local build used 64 ALMs;
+The product ceiling remains 800 ALMs. The register design target is 300 and the
+predeclared hard ceiling for the repair plus coherent 0x66 evidence is 360.
+The lock-only local build used 64 ALMs;
 the independently fitted GitHub build used 105 ALMs. Both are comfortably
 inside the intended architecture budget. Any synthesized-source change still
 requires fresh empirical signoff. Setup and hold must remain at least 0.20 ns,
@@ -177,15 +197,16 @@ identity, and unconstrained output paths equal to the pre-observer build.
 
 The detailed path extension is a new synthesized-source change and is not
 qualified by those lock-only numbers. It must pass a fresh matched local and
-GitHub signoff with sixteen added calculable synchronizer chains total, no new
-unconstrained output paths, and the same 800-ALM/300-register ceiling before any
-device installation.
+GitHub signoff with the exact declared synchronizer inventory, no new
+unconstrained output paths, and the 800-ALM/360-register hard ceiling before any
+device installation. A result above 300 registers requires fitted hierarchy
+attribution to this repair/evidence scope rather than unexplained duplication.
 
 Quartus's aggregate auto-detected synchronizer count is recorded for comparison
 but is not an exact delta gate: unrelated Menu chains can be combined or split
 by fitter placement. Qualification instead requires all exact observer stage
 assignments, all named chains in the retained metastability report, and exactly
-sixteen additional chains with calculable MTBF.
+the predeclared additional chains with calculable MTBF.
 
 A canonical local signoff set may be installed only to the Dev layout through
 the attended rollback-capable experimental FPGA transaction. It is not release

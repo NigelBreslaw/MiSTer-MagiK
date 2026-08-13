@@ -3744,6 +3744,10 @@ mod linux {
         post_second: mister_magik_video_diagnostics_contract::HdmiPostOsdActivity,
         avalon_first: mister_magik_video_diagnostics_contract::HdmiAvalonLivenessActivity,
         avalon_second: mister_magik_video_diagnostics_contract::HdmiAvalonLivenessActivity,
+        scaler_fetch_first:
+            Option<mister_magik_video_diagnostics_contract::HdmiScalerFetchActivity>,
+        scaler_fetch_second:
+            Option<mister_magik_video_diagnostics_contract::HdmiScalerFetchActivity>,
         sample_interval_us: u64,
     }
 
@@ -3769,6 +3773,13 @@ mod linux {
         pub(super) request: u8,
         pub(super) accepted: u8,
         pub(super) returned: u8,
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub(super) struct ScalerFetchDeltas {
+        pub(super) batch_two: u8,
+        pub(super) starved_frame: u8,
+        pub(super) starved_line: u8,
     }
 
     #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -3983,6 +3994,63 @@ mod linux {
         }
     }
 
+    fn scaler_fetch_deltas(
+        first: &mister_magik_video_diagnostics_contract::HdmiScalerFetchActivity,
+        second: &mister_magik_video_diagnostics_contract::HdmiScalerFetchActivity,
+    ) -> ScalerFetchDeltas {
+        ScalerFetchDeltas {
+            batch_two: second
+                .batch_two_count()
+                .wrapping_sub(first.batch_two_count())
+                & 0x0f,
+            starved_frame: second
+                .starved_frame_count()
+                .wrapping_sub(first.starved_frame_count())
+                & 0x0f,
+            starved_line: second
+                .starved_line_count()
+                .wrapping_sub(first.starved_line_count()),
+        }
+    }
+
+    pub(super) fn scaler_fetch_classification(
+        flags: u16,
+        state_stable: bool,
+        scheduler_state: u8,
+        copy_state: u8,
+        read_level: u8,
+        copy_level: u8,
+        completion_pending: bool,
+        deltas: ScalerFetchDeltas,
+    ) -> &'static str {
+        use mister_magik_video_diagnostics_contract as contract;
+        if flags
+            & (contract::HDMI_SCALER_FETCH_ACTIVITY_FLAG_COMPLETION_DELTA_INVALID
+                | contract::HDMI_SCALER_FETCH_ACTIVITY_FLAG_COMPLETION_LEVEL_INVALID)
+            != 0
+        {
+            "scaler_fetch_evidence_invalid"
+        } else if flags & contract::HDMI_SCALER_FETCH_ACTIVITY_FLAG_SNAPSHOT_VALID == 0 {
+            "scaler_fetch_snapshot_unavailable"
+        } else if !state_stable {
+            "scaler_fetch_state_changed"
+        } else if deltas.starved_frame != 0
+            && scheduler_state == 2
+            && copy_state == 0
+            && read_level == 2
+            && copy_level == 0
+            && !completion_pending
+        {
+            "scaler_fetch_stalled_with_two_reads"
+        } else if deltas.starved_line != 0 {
+            "scaler_fetch_line_starvation_observed"
+        } else if deltas.batch_two != 0 {
+            "scaler_fetch_recovered_two_completion_batch"
+        } else {
+            "scaler_fetch_no_fault_observed"
+        }
+    }
+
     pub(super) fn detailed_path_classification(
         flags: PathActivityFlags,
         final_deltas: FinalPathDeltas,
@@ -4083,6 +4151,49 @@ mod linux {
                 self.post_second.de_has_nonzero_count(),
             );
             let avalon_deltas = avalon_liveness_deltas(&self.avalon_first, &self.avalon_second);
+            let scaler_fetch = match (&self.scaler_fetch_first, &self.scaler_fetch_second) {
+                (Some(first), Some(second)) => {
+                    let flags = first.flags() | second.flags();
+                    let deltas = scaler_fetch_deltas(first, second);
+                    let state_stable = first.words[contract::HDMI_SCALER_FETCH_ACTIVITY_STATE_WORD]
+                        == second.words[contract::HDMI_SCALER_FETCH_ACTIVITY_STATE_WORD];
+                    json!({
+                        "classification": scaler_fetch_classification(
+                            flags,
+                            state_stable,
+                            second.scheduler_state(),
+                            second.copy_state(),
+                            second.read_level(),
+                            second.copy_level(),
+                            second.completion_pending(),
+                            deltas,
+                        ),
+                        "snapshot_valid": flags
+                            & contract::HDMI_SCALER_FETCH_ACTIVITY_FLAG_SNAPSHOT_VALID != 0,
+                        "completion_delta_invalid": flags
+                            & contract::HDMI_SCALER_FETCH_ACTIVITY_FLAG_COMPLETION_DELTA_INVALID != 0,
+                        "completion_level_invalid": flags
+                            & contract::HDMI_SCALER_FETCH_ACTIVITY_FLAG_COMPLETION_LEVEL_INVALID != 0,
+                        "state_stable": state_stable,
+                        "state": {
+                            "scheduler": second.scheduler_state(),
+                            "copy": second.copy_state(),
+                            "read_level": second.read_level(),
+                            "copy_level": second.copy_level(),
+                            "completion_pending": second.completion_pending(),
+                            "completion_delta": second.completion_delta(),
+                        },
+                        "deltas": {
+                            "batch_two": deltas.batch_two,
+                            "starved_frame": deltas.starved_frame,
+                            "starved_line": deltas.starved_line,
+                        },
+                        "first_raw_words": first.words.as_slice(),
+                        "second_raw_words": second.words.as_slice(),
+                    })
+                }
+                _ => Value::Null,
+            };
             let classification = if self.sample_interval_us < 80_000 {
                 detailed_path_classification(
                     PathActivityFlags {
@@ -4155,6 +4266,7 @@ mod linux {
                     "first_raw_words": self.avalon_first.words.as_slice(),
                     "second_raw_words": self.avalon_second.words.as_slice(),
                 },
+                "scaler_fetch": scaler_fetch,
             })
         }
     }
@@ -4878,6 +4990,19 @@ mod linux {
                 )?,
             )
             .map_err(|message| io::Error::new(io::ErrorKind::InvalidData, message))?;
+            let scaler_fetch_first = match self
+                .read_diagnostic_words::<{ contract::HDMI_SCALER_FETCH_ACTIVITY_WORDS }>(
+                    contract::GET_HDMI_SCALER_FETCH_ACTIVITY,
+                    contract::HDMI_SCALER_FETCH_ACTIVITY_MAGIC,
+                    "HDMI scaler fetch activity",
+                ) {
+                Ok(words) => Some(
+                    contract::decode_hdmi_scaler_fetch_activity(&words)
+                        .map_err(|message| io::Error::new(io::ErrorKind::InvalidData, message))?,
+                ),
+                Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+                Err(error) => return Err(error),
+            };
 
             let sample_started = Instant::now();
             thread::sleep(Duration::from_millis(50));
@@ -4917,6 +5042,22 @@ mod linux {
                 )?,
             )
             .map_err(|message| io::Error::new(io::ErrorKind::InvalidData, message))?;
+            let scaler_fetch_second = if scaler_fetch_first.is_some() {
+                Some(
+                    contract::decode_hdmi_scaler_fetch_activity(
+                        &self.read_required_diagnostic_words::<{
+                            contract::HDMI_SCALER_FETCH_ACTIVITY_WORDS
+                        }>(
+                            contract::GET_HDMI_SCALER_FETCH_ACTIVITY,
+                            contract::HDMI_SCALER_FETCH_ACTIVITY_MAGIC,
+                            "HDMI scaler fetch activity",
+                        )?,
+                    )
+                    .map_err(|message| io::Error::new(io::ErrorKind::InvalidData, message))?,
+                )
+            } else {
+                None
+            };
 
             Ok(HdmiPathActivityWindow {
                 final_first,
@@ -4927,6 +5068,8 @@ mod linux {
                 post_second,
                 avalon_first,
                 avalon_second,
+                scaler_fetch_first,
+                scaler_fetch_second,
                 sample_interval_us: sample_started.elapsed().as_micros() as u64,
             })
         }
@@ -7537,6 +7680,76 @@ mod tests {
                 avalon_live,
             ),
             "final_output_black_scaled_path_inconclusive"
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn scaler_fetch_classification_is_observational_and_strict() {
+        use linux::ScalerFetchDeltas;
+        use mister_magik_video_diagnostics_contract as contract;
+
+        let stalled = ScalerFetchDeltas {
+            batch_two: 0,
+            starved_frame: 2,
+            starved_line: 40,
+        };
+        assert_eq!(
+            linux::scaler_fetch_classification(
+                contract::HDMI_SCALER_FETCH_ACTIVITY_FLAG_SNAPSHOT_VALID,
+                true,
+                2,
+                0,
+                2,
+                0,
+                false,
+                stalled,
+            ),
+            "scaler_fetch_stalled_with_two_reads"
+        );
+        assert_eq!(
+            linux::scaler_fetch_classification(
+                contract::HDMI_SCALER_FETCH_ACTIVITY_FLAG_SNAPSHOT_VALID,
+                false,
+                2,
+                0,
+                2,
+                0,
+                false,
+                stalled,
+            ),
+            "scaler_fetch_state_changed"
+        );
+        assert_eq!(
+            linux::scaler_fetch_classification(
+                contract::HDMI_SCALER_FETCH_ACTIVITY_FLAG_SNAPSHOT_VALID
+                    | contract::HDMI_SCALER_FETCH_ACTIVITY_FLAG_COMPLETION_DELTA_INVALID,
+                true,
+                2,
+                0,
+                2,
+                0,
+                false,
+                stalled,
+            ),
+            "scaler_fetch_evidence_invalid"
+        );
+        assert_eq!(
+            linux::scaler_fetch_classification(
+                contract::HDMI_SCALER_FETCH_ACTIVITY_FLAG_SNAPSHOT_VALID,
+                true,
+                0,
+                0,
+                0,
+                0,
+                false,
+                ScalerFetchDeltas {
+                    batch_two: 1,
+                    starved_frame: 0,
+                    starved_line: 0,
+                },
+            ),
+            "scaler_fetch_recovered_two_completion_batch"
         );
     }
 
