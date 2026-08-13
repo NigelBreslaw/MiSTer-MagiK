@@ -45,7 +45,7 @@ QUARTUS_POLICY_RE = re.compile(
     re.IGNORECASE,
 )
 QUARTUS_PROCESSOR_USE_RE = re.compile(
-    r"Parallel compilation is enabled and will use\s+(\d+)\s+of\s+(\d+)\s+processors detected",
+    r"Parallel compilation is enabled and will use(?: up to)?\s+(\d+)(?:\s+of\s+(\d+)\s+processors detected|\s+processors)",
     re.IGNORECASE,
 )
 BOOTSTRAP_BLACK_LOOP_WARNING = "332125:Found combinational loop of 6 nodes"
@@ -207,8 +207,9 @@ def parse_report(
 
         processor_use = QUARTUS_PROCESSOR_USE_RE.search(line)
         if processor_use:
+            used = int(processor_use.group(1))
             quartus_processor_use.append(
-                (int(processor_use.group(1)), int(processor_use.group(2)))
+                (used, int(processor_use.group(2)) if processor_use.group(2) else used)
             )
 
         warning = WARNING_RE.match(line)
