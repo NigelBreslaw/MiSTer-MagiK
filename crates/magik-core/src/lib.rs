@@ -12,4 +12,5 @@ pub mod input_event;
 pub mod input_info;
 pub mod input_repeat;
 pub mod input_state;
+pub mod launcher_effects;
 pub mod platform;
