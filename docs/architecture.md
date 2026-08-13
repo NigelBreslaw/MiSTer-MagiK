@@ -84,6 +84,11 @@ line count without clearer ownership or dependency direction is not success.
 Stable owner IDs keep moved or temporarily absent hotspot paths visible rather
 than silently treating them as resolved.
 
+The current exception inventory, P1 migration owners, removal conditions, and
+exclusive edit seams are recorded in
+`docs/agents/architecture-debt-ledger.md`. That ledger governs sequencing; the
+report remains evidence only.
+
 ## Boot And Process Model
 
 Production boot stays compatible with stock MiSTer:

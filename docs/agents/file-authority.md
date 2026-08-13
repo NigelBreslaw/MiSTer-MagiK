@@ -4,6 +4,7 @@ Consult this table before editing or staging an unfamiliar file.
 
 | Path pattern | Classification | Authoritative input | Regeneration command | Staging policy | Validation |
 |---|---|---|---|---|---|
+| `docs/agents/architecture-debt-ledger.md` | Hand-edited current P0/P1 ownership ledger | The ledger plus executable inventories in `agent-cli/src/checks.rs` and `mister/platform/contracts/platform-v3.schema.toml` | None | Update an exception in the same migration commit that moves or removes its implementation | Agent-guidance check, typed ownership checks, pre-push, and CI |
 | `apps/**/src/**/*.rs`, `crates/**/src/**/*.rs`, `mister/{platform/runtime,tools}/**/*.rs` | Hand-edited Rust | The file itself | None | Stage intentional source edits | Rust analyzer during editing; pre-push and CI for full assurance |
 | `apps/mister/src/launcher_runtime/lifecycle.rs`, `apps/mister/src/ui_runner/{launcher_bridge.rs,launcher_scheduler.rs,*_session.rs,launcher_loop.rs}` | Hand-edited launcher lifecycle and device adapters | Host-neutral lifecycle policy in `launcher_runtime/lifecycle.rs`; each UI-runner adapter owns its named effect boundary | None | Stage lifecycle policy with focused adapter/sequence evidence; do not generate or mirror it | Rust analyzer during editing; pre-push and CI select launcher and ARM assurance |
 | `crates/catalog/src/**/*.rs` | Hand-edited catalog Rust | The file itself | None | Stage intentional source edits | Catalog tests plus consumer checks selected by validation |
