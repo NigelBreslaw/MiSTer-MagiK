@@ -62,7 +62,7 @@ MINIMUM_SLACK_NS = 0.20
 MAXIMUM_SLACK_DEGRADATION_NS = 0.15
 MAXIMUM_LOGIC_ELEMENT_DELTA = 800
 MAXIMUM_REGISTER_DELTA = 360
-EXPECTED_OBSERVER_CALCULABLE_CHAINS = 36
+EXPECTED_OBSERVER_CALCULABLE_CHAINS = 32
 EXPECTED_QUARTUS_POLICY = {
     "auto_parallel_synthesis": "off",
     "parallel_synthesis": "off",
@@ -107,8 +107,6 @@ EXPECTED_SYNC_ASSIGNMENT_SUFFIXES = (
     "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|scaler_fetch_batch_two_sys",
     "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|scaler_fetch_starved_frame_meta",
     "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|scaler_fetch_starved_frame_sys",
-    "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|scaler_fetch_starved_line_meta",
-    "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|scaler_fetch_starved_line_sys",
     "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|scaler_fetch_snapshot_valid_meta",
     "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|scaler_fetch_snapshot_valid_sys",
     "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|scaler_fetch_delta_invalid_meta",
@@ -129,8 +127,8 @@ DIAGNOSTIC_REPORT_NAMES = frozenset(
     }
 )
 EXPECTED_CDC_REPORT_ANALYSES = {
-    "menu.magik-diagnostic-cdc-skew.rpt": ("set_max_skew", 1),
-    "menu.magik-diagnostic-cdc-net-delay.rpt": ("set_net_delay", 0),
+    "menu.magik-diagnostic-cdc-skew.rpt": ("set_max_skew", 0),
+    "menu.magik-diagnostic-cdc-net-delay.rpt": ("set_net_delay", 2),
 }
 
 
@@ -534,7 +532,10 @@ def compare(
     missing_sync_assignments = [
         suffix
         for suffix in EXPECTED_SYNC_ASSIGNMENT_SUFFIXES
-        if not any(assignment.endswith(suffix) for assignment in sync_assignments)
+        if not any(
+            assignment.endswith(suffix) or f"{suffix}[" in assignment
+            for assignment in sync_assignments
+        )
     ]
     custom_assignment_seen = not missing_sync_assignments
     baseline_fractions = baseline["uncalculated_fractions"]

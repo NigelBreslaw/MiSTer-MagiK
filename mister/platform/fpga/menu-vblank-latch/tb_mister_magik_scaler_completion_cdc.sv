@@ -20,12 +20,10 @@ module tb_mister_magik_scaler_completion_cdc;
 	wire completion_pulse;
 	wire completion_batch_two_toggle;
 	wire completion_starved_frame_toggle;
-	wire completion_starved_line_toggle;
-	wire [10:0] completion_frame_state;
+	wire [7:0] completion_frame_state;
 	wire completion_snapshot_valid;
 	wire completion_delta_invalid;
 	reg scaler_vs = 1'b0;
-	reg scaler_de = 1'b0;
 	reg scaler_framebuffer_enabled = 1'b0;
 	reg [1:0] scaler_scheduler_state = 2'd0;
 	reg [1:0] scaler_copy_state = 2'd0;
@@ -41,7 +39,6 @@ module tb_mister_magik_scaler_completion_cdc;
 		.reset_n(reset_n),
 		.source_completion_gray(source_completion_gray),
 		.scaler_vs(scaler_vs),
-		.scaler_de(scaler_de),
 		.scaler_framebuffer_enabled(scaler_framebuffer_enabled),
 		.scaler_scheduler_state(scaler_scheduler_state),
 		.scaler_copy_state(scaler_copy_state),
@@ -50,7 +47,6 @@ module tb_mister_magik_scaler_completion_cdc;
 		.completion_pulse(completion_pulse),
 		.completion_batch_two_toggle(completion_batch_two_toggle),
 		.completion_starved_frame_toggle(completion_starved_frame_toggle),
-		.completion_starved_line_toggle(completion_starved_line_toggle),
 		.completion_frame_state(completion_frame_state),
 		.completion_snapshot_valid(completion_snapshot_valid),
 		.completion_delta_invalid(completion_delta_invalid)
@@ -188,7 +184,7 @@ module tb_mister_magik_scaler_completion_cdc;
 			$fatal(1, "intermediate Gray sampling lost a completion");
 
 		// A persistent two-read/no-copy state is counted only after complete
-		// native frame and line intervals, while the exported live state is
+		// native frame interval, while the exported live state is
 		// captured coherently on a scaler VS edge.
 		scaler_framebuffer_enabled = 1'b1;
 		scaler_scheduler_state = 2'd2;
@@ -197,19 +193,14 @@ module tb_mister_magik_scaler_completion_cdc;
 		scaler_copy_level = 2'd0;
 		@(negedge destination_clk); scaler_vs = 1'b1;
 		@(negedge destination_clk); scaler_vs = 1'b0;
-		@(negedge destination_clk); scaler_de = 1'b1;
-		@(negedge destination_clk); scaler_de = 1'b0;
 		repeat(2) @(negedge destination_clk);
-		@(negedge destination_clk); scaler_de = 1'b1;
-		@(negedge destination_clk); scaler_de = 1'b0;
 		@(negedge destination_clk); scaler_vs = 1'b1;
 		@(negedge destination_clk); scaler_vs = 1'b0;
 		if(!completion_snapshot_valid ||
-		   completion_frame_state != 11'b00_0_00_10_00_10)
+		   completion_frame_state != 8'b00_10_00_10)
 			$fatal(1, "native scaler fetch state snapshot mismatch");
-		if(completion_starved_frame_toggle != 1'b1 ||
-		   completion_starved_line_toggle != 1'b1)
-			$fatal(1, "persistent scaler starvation interval was not counted");
+		if(completion_starved_frame_toggle != 1'b1)
+			$fatal(1, "persistent scaler starvation frame was not counted");
 
 		// Reset both domains while the destination clock is stopped. No stale
 		// source sequence may emerge as a phantom completion on restart.

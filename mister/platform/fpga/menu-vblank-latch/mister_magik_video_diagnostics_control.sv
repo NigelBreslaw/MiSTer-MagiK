@@ -29,10 +29,9 @@ module mister_magik_hdmi_lock_evidence (
 	input  wire        vbuf_read,
 	input  wire        vbuf_waitrequest,
 	input  wire        vbuf_readdatavalid,
-	input  wire [10:0] scaler_fetch_state,
+	input  wire [7:0]  scaler_fetch_state,
 	input  wire        scaler_fetch_batch_two_toggle,
 	input  wire        scaler_fetch_starved_frame_toggle,
-	input  wire        scaler_fetch_starved_line_toggle,
 	input  wire        scaler_fetch_snapshot_valid,
 	input  wire        scaler_fetch_delta_invalid,
 	input  wire        scaler_fetch_level_invalid,
@@ -308,10 +307,10 @@ module mister_magik_hdmi_lock_evidence (
 	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS" *)
 	reg avalon_returned_sys = 1'b0;
 	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED" *)
-	reg [10:0] scaler_fetch_state_meta = 11'd0;
+	reg [7:0] scaler_fetch_state_meta = 8'd0;
 	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS" *)
-	reg [10:0] scaler_fetch_state_sys = 11'd0;
-	reg [10:0] scaler_fetch_state_stable = 11'd0;
+	reg [7:0] scaler_fetch_state_sys = 8'd0;
+	reg [7:0] scaler_fetch_state_stable = 8'd0;
 	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED" *)
 	reg scaler_fetch_batch_two_meta = 1'b0;
 	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS" *)
@@ -321,9 +320,6 @@ module mister_magik_hdmi_lock_evidence (
 	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS" *)
 	reg scaler_fetch_starved_frame_sys = 1'b0;
 	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED" *)
-	reg scaler_fetch_starved_line_meta = 1'b0;
-	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS" *)
-	reg scaler_fetch_starved_line_sys = 1'b0;
 	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED" *)
 	reg scaler_fetch_snapshot_valid_meta = 1'b0;
 	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS" *)
@@ -452,24 +448,18 @@ module mister_magik_hdmi_lock_evidence (
 	wire [3:0] avalon_returned_count_next =
 		avalon_returned_count + (avalon_returned_event ? 1'd1 : 1'd0);
 
-	reg [3:0] scaler_fetch_batch_two_count = 4'd0;
+	reg [1:0] scaler_fetch_batch_two_count = 2'd0;
 	reg [3:0] scaler_fetch_starved_frame_count = 4'd0;
-	reg [7:0] scaler_fetch_starved_line_count = 8'd0;
 	wire scaler_fetch_batch_two_event =
 		scaler_fetch_batch_two_sys != scaler_fetch_batch_two_count[0];
 	wire scaler_fetch_starved_frame_event =
 		scaler_fetch_starved_frame_sys != scaler_fetch_starved_frame_count[0];
-	wire scaler_fetch_starved_line_event =
-		scaler_fetch_starved_line_sys != scaler_fetch_starved_line_count[0];
-	wire [3:0] scaler_fetch_batch_two_count_next =
+	wire [1:0] scaler_fetch_batch_two_count_next =
 		scaler_fetch_batch_two_count +
 		(scaler_fetch_batch_two_event ? 1'd1 : 1'd0);
 	wire [3:0] scaler_fetch_starved_frame_count_next =
 		scaler_fetch_starved_frame_count +
 		(scaler_fetch_starved_frame_event ? 1'd1 : 1'd0);
-	wire [7:0] scaler_fetch_starved_line_count_next =
-		scaler_fetch_starved_line_count +
-		(scaler_fetch_starved_line_event ? 1'd1 : 1'd0);
 	wire scaler_fetch_state_coherent =
 		scaler_fetch_state_sys == scaler_fetch_state_stable;
 	wire scaler_fetch_snapshot_ready =
@@ -687,8 +677,6 @@ module mister_magik_hdmi_lock_evidence (
 		scaler_fetch_batch_two_sys <= scaler_fetch_batch_two_meta;
 		scaler_fetch_starved_frame_meta <= scaler_fetch_starved_frame_toggle;
 		scaler_fetch_starved_frame_sys <= scaler_fetch_starved_frame_meta;
-		scaler_fetch_starved_line_meta <= scaler_fetch_starved_line_toggle;
-		scaler_fetch_starved_line_sys <= scaler_fetch_starved_line_meta;
 		scaler_fetch_snapshot_valid_meta <= scaler_fetch_snapshot_valid;
 		scaler_fetch_snapshot_valid_sys <= scaler_fetch_snapshot_valid_meta;
 		scaler_fetch_delta_invalid_meta <= scaler_fetch_delta_invalid;
@@ -719,7 +707,6 @@ module mister_magik_hdmi_lock_evidence (
 		avalon_returned_count <= avalon_returned_count_next;
 		scaler_fetch_batch_two_count <= scaler_fetch_batch_two_count_next;
 		scaler_fetch_starved_frame_count <= scaler_fetch_starved_frame_count_next;
-		scaler_fetch_starved_line_count <= scaler_fetch_starved_line_count_next;
 		lock_previous <= control_pll_lock_sys;
 		lock_seen_high <= lock_seen_high_next;
 		lock_armed <= lock_armed_next;
@@ -806,10 +793,11 @@ module mister_magik_hdmi_lock_evidence (
 			else if(scaler_fetch_start) begin
 				snapshot_flags <= {2'd0, scaler_fetch_flags_next};
 				if(scaler_fetch_snapshot_ready) begin
-					snapshot_lock_loss_count <= {5'd0, scaler_fetch_state_stable};
+					snapshot_lock_loss_count <= {8'd0, scaler_fetch_state_stable};
 					snapshot_path_extra <= {
-						scaler_fetch_starved_line_count_next,
+						8'd0,
 						scaler_fetch_starved_frame_count_next,
+						2'd0,
 						scaler_fetch_batch_two_count_next
 					};
 				end

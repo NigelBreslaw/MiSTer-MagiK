@@ -33,10 +33,9 @@ module tb_mister_magik_video_diagnostics_control;
 	reg vbuf_read = 1'b0;
 	reg vbuf_waitrequest = 1'b0;
 	reg vbuf_readdatavalid = 1'b0;
-	reg [10:0] scaler_fetch_state = 11'd0;
+	reg [7:0] scaler_fetch_state = 8'd0;
 	reg scaler_fetch_batch_two_toggle = 1'b0;
 	reg scaler_fetch_starved_frame_toggle = 1'b0;
-	reg scaler_fetch_starved_line_toggle = 1'b0;
 	reg scaler_fetch_snapshot_valid = 1'b0;
 	reg scaler_fetch_delta_invalid = 1'b0;
 	reg scaler_fetch_level_invalid = 1'b0;
@@ -73,7 +72,6 @@ module tb_mister_magik_video_diagnostics_control;
 		.scaler_fetch_state(scaler_fetch_state),
 		.scaler_fetch_batch_two_toggle(scaler_fetch_batch_two_toggle),
 		.scaler_fetch_starved_frame_toggle(scaler_fetch_starved_frame_toggle),
-		.scaler_fetch_starved_line_toggle(scaler_fetch_starved_line_toggle),
 		.scaler_fetch_snapshot_valid(scaler_fetch_snapshot_valid),
 		.scaler_fetch_delta_invalid(scaler_fetch_delta_invalid),
 		.scaler_fetch_level_invalid(scaler_fetch_level_invalid),
@@ -650,30 +648,29 @@ module tb_mister_magik_video_diagnostics_control;
 		// valid flag is published.
 		scaler_fetch_batch_two_toggle = !scaler_fetch_batch_two_toggle;
 		scaler_fetch_starved_frame_toggle = !scaler_fetch_starved_frame_toggle;
-		scaler_fetch_starved_line_toggle = !scaler_fetch_starved_line_toggle;
 		repeat(8) @(negedge clk_sys);
 		read_scaler_fetch_activity(16'd0, 16'd0, 16'd0);
-		scaler_fetch_state = 11'b00_0_00_10_00_10;
+		scaler_fetch_state = 8'b00_10_00_10;
 		scaler_fetch_snapshot_valid = 1'b1;
 		repeat(8) @(negedge clk_sys);
 		read_scaler_fetch_activity(
-			{5'd0, scaler_fetch_state}, 16'h0111,
+			{8'd0, scaler_fetch_state}, 16'h0011,
 			MAGIK_HDMI_SCALER_FETCH_ACTIVITY_FLAG_SNAPSHOT_VALID);
 		// A command recognized while the repeated state samples disagree must
 		// publish the strict invalid zero payload, never stale state or epochs.
-		@(negedge clk_sys); scaler_fetch_state = 11'b00_0_01_10_00_10;
+		@(negedge clk_sys); scaler_fetch_state = 8'b01_10_00_10;
 		repeat(2) @(posedge clk_sys);
 		@(negedge clk_sys);
 		read_scaler_fetch_activity(16'd0, 16'd0, 16'd0);
 		repeat(8) @(negedge clk_sys);
 		read_scaler_fetch_activity(
-			{5'd0, scaler_fetch_state}, 16'h0111,
+			{8'd0, scaler_fetch_state}, 16'h0011,
 			MAGIK_HDMI_SCALER_FETCH_ACTIVITY_FLAG_SNAPSHOT_VALID);
 		scaler_fetch_delta_invalid = 1'b1;
 		scaler_fetch_level_invalid = 1'b1;
 		repeat(8) @(negedge clk_sys);
 		read_scaler_fetch_activity(
-			{5'd0, scaler_fetch_state}, 16'h0111,
+			{8'd0, scaler_fetch_state}, 16'h0011,
 			MAGIK_HDMI_SCALER_FETCH_ACTIVITY_FLAG_SNAPSHOT_VALID |
 			MAGIK_HDMI_SCALER_FETCH_ACTIVITY_FLAG_COMPLETION_DELTA_INVALID |
 			MAGIK_HDMI_SCALER_FETCH_ACTIVITY_FLAG_COMPLETION_LEVEL_INVALID);

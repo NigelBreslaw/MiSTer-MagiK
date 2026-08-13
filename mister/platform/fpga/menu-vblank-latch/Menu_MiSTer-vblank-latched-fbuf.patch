@@ -34,8 +34,7 @@ index a416879..f6a40ea 100644
 +wire        magik_scaler_completion_pulse;
 +wire        magik_scaler_completion_batch_two_toggle;
 +wire        magik_scaler_completion_starved_frame_toggle;
-+wire        magik_scaler_completion_starved_line_toggle;
-+wire [10:0] magik_scaler_completion_frame_state;
++wire [7:0]  magik_scaler_completion_frame_state;
 +wire        magik_scaler_completion_snapshot_valid;
 +wire        magik_scaler_completion_delta_invalid;
 +wire        magik_scaler_completion_level_invalid;
@@ -109,7 +108,6 @@ index a416879..f6a40ea 100644
 +	.scaler_fetch_state(magik_scaler_completion_frame_state),
 +	.scaler_fetch_batch_two_toggle(magik_scaler_completion_batch_two_toggle),
 +	.scaler_fetch_starved_frame_toggle(magik_scaler_completion_starved_frame_toggle),
-+	.scaler_fetch_starved_line_toggle(magik_scaler_completion_starved_line_toggle),
 +	.scaler_fetch_snapshot_valid(magik_scaler_completion_snapshot_valid),
 +	.scaler_fetch_delta_invalid(magik_scaler_completion_delta_invalid),
 +	.scaler_fetch_level_invalid(magik_scaler_completion_level_invalid),
@@ -390,7 +388,6 @@ index a416879..f6a40ea 100644
 +		.reset_n(~reset_req),
 +		.source_completion_gray(magik_scaler_completion_gray),
 +		.scaler_vs(hdmi_vs),
-+		.scaler_de(hdmi_de),
 +		.scaler_framebuffer_enabled(FB_EN),
 +		.scaler_scheduler_state(magik_scaler_scheduler_state),
 +		.scaler_copy_state(magik_scaler_copy_state),
@@ -399,7 +396,6 @@ index a416879..f6a40ea 100644
 +		.completion_pulse(magik_scaler_completion_pulse),
 +		.completion_batch_two_toggle(magik_scaler_completion_batch_two_toggle),
 +		.completion_starved_frame_toggle(magik_scaler_completion_starved_frame_toggle),
-+		.completion_starved_line_toggle(magik_scaler_completion_starved_line_toggle),
 +		.completion_frame_state(magik_scaler_completion_frame_state),
 +		.completion_snapshot_valid(magik_scaler_completion_snapshot_valid),
 +		.completion_delta_invalid(magik_scaler_completion_delta_invalid)

@@ -79,8 +79,6 @@ CONTROL_SYNC_NAMES = (
     "scaler_fetch_batch_two_sys",
     "scaler_fetch_starved_frame_meta",
     "scaler_fetch_starved_frame_sys",
-    "scaler_fetch_starved_line_meta",
-    "scaler_fetch_starved_line_sys",
     "scaler_fetch_snapshot_valid_meta",
     "scaler_fetch_snapshot_valid_sys",
     "scaler_fetch_delta_invalid_meta",
@@ -125,15 +123,16 @@ SYNC_NAMES += tuple(
 )
 SYNC_ASSIGNMENTS = CONTROL_SYNC_ASSIGNMENTS + COMPLETION_SYNC_ASSIGNMENTS
 CUSTOM_SYNC = SYNC_ASSIGNMENTS + """\
-Info (332114): Report Metastability: Found 41 synchronizer chains.
+Info (332114): Report Metastability: Found 37 synchronizer chains.
 Info (332114): Fraction of Chains for which MTBFs Could Not be Calculated: 0.100
 """
 
 VALID_DIAGNOSTIC_REPORTS = {
-    "menu.magik-diagnostic-cdc-skew.rpt": (
-        "; set_max_skew ; 1.500 ; 10.000 ; 8.500 ; from ; to ;\n"
+    "menu.magik-diagnostic-cdc-skew.rpt": "No paths to report.\n",
+    "menu.magik-diagnostic-cdc-net-delay.rpt": (
+        "; set_net_delay ; 1.500 ; 10.000 ; 8.500 ; from0 ; to0 ;\n"
+        "; set_net_delay ; 1.250 ; 10.000 ; 8.750 ; from1 ; to1 ;\n"
     ),
-    "menu.magik-diagnostic-cdc-net-delay.rpt": "No paths to report.\n",
     "menu.magik-diagnostic-metastability.rpt": (
         "Report Metastability: Found 40 synchronizer chains.\n"
         + "".join(
@@ -467,10 +466,8 @@ class QuartusDeltaTest(unittest.TestCase):
 
     def test_incomplete_or_negative_cdc_analysis_fails(self) -> None:
         reports = dict(VALID_DIAGNOSTIC_REPORTS)
-        reports["menu.magik-diagnostic-cdc-skew.rpt"] = (
-            "; set_max_skew ; 1.500 ; 8.000 ; 6.500 ; from ; to ;\n"
-            "; set_max_skew ; 1.250 ; 8.000 ; 6.750 ; from2 ; to2 ;\n"
-            "; set_max_skew path detail Slack 1.500\n"
+        reports["menu.magik-diagnostic-cdc-net-delay.rpt"] = (
+            "; set_net_delay ; 1.500 ; 8.000 ; 6.500 ; from ; to ;\n"
         )
         result, payload = self.run_check(BASE, BASE + CUSTOM_SYNC, diagnostic_reports=reports)
         self.assertEqual(result.returncode, 1)
@@ -501,8 +498,8 @@ class QuartusDeltaTest(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertIn("get_registers -nowarn -no_duplicates", sdc)
         self.assertIn("get_pins -nowarn -no_duplicates", sdc)
-        self.assertIn("set_max_skew 10.0", sdc)
-        self.assertNotIn("set_net_delay", sdc)
+        self.assertIn("set_net_delay -max 10.0", sdc)
+        self.assertNotIn("set_max_skew", sdc)
 
 
 if __name__ == "__main__":

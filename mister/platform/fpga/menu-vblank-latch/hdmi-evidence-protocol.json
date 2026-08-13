@@ -157,7 +157,7 @@
           "copy_level": {"word": "state", "bit": 6, "width": 2},
           "completion_pending": {"word": "state", "bit": 8, "width": 1},
           "completion_delta": {"word": "state", "bit": 9, "width": 2},
-          "batch_two_count": {"word": "events", "bit": 0, "width": 4},
+          "batch_two_count": {"word": "events", "bit": 0, "width": 2},
           "starved_frame_count": {"word": "events", "bit": 4, "width": 4},
           "starved_line_count": {"word": "events", "bit": 8, "width": 8}
         }

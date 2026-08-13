@@ -187,7 +187,6 @@ def main() -> None:
         "reset_n",
         "source_completion_gray",
         "scaler_vs",
-        "scaler_de",
         "scaler_framebuffer_enabled",
         "scaler_scheduler_state",
         "scaler_copy_state",
@@ -196,7 +195,6 @@ def main() -> None:
         "completion_pulse",
         "completion_batch_two_toggle",
         "completion_starved_frame_toggle",
-        "completion_starved_line_toggle",
         "completion_frame_state",
         "completion_snapshot_valid",
         "completion_delta_invalid",
@@ -283,8 +281,6 @@ def main() -> None:
         ("scaler_fetch_batch_two_sys", "FORCED_IF_ASYNCHRONOUS"),
         ("scaler_fetch_starved_frame_meta", "FORCED"),
         ("scaler_fetch_starved_frame_sys", "FORCED_IF_ASYNCHRONOUS"),
-        ("scaler_fetch_starved_line_meta", "FORCED"),
-        ("scaler_fetch_starved_line_sys", "FORCED_IF_ASYNCHRONOUS"),
         ("scaler_fetch_snapshot_valid_meta", "FORCED"),
         ("scaler_fetch_snapshot_valid_sys", "FORCED_IF_ASYNCHRONOUS"),
         ("scaler_fetch_delta_invalid_meta", "FORCED"),
@@ -294,7 +290,7 @@ def main() -> None:
     )
     if (
         "ASYNC_REG" in control_source
-        or control_source.count(sync_assignment) != 23
+        or control_source.count(sync_assignment) != 21
     ):
         fail("HDMI evidence synchronizers are not exactly identified")
     for stage, assignment in synchronizer_stages:
@@ -310,7 +306,7 @@ def main() -> None:
     ):
         declaration = (
             f'(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION {assignment}" *)\n'
-            f"\treg [10:0] {stage} = 11'd0;"
+            f"\treg [7:0] {stage} = 8'd0;"
         )
         if control_source.count(declaration) != 1:
             fail(f"HDMI scaler-fetch state synchronizer is not exact: {stage}")
@@ -445,14 +441,6 @@ def main() -> None:
             control_source,
             "scaler_fetch_starved_frame_sys <= scaler_fetch_starved_frame_meta;",
         ),
-        "scaler starved-line first stage": (
-            control_source,
-            "scaler_fetch_starved_line_meta <= scaler_fetch_starved_line_toggle;",
-        ),
-        "scaler starved-line second stage": (
-            control_source,
-            "scaler_fetch_starved_line_sys <= scaler_fetch_starved_line_meta;",
-        ),
         "scaler snapshot-valid first stage": (
             control_source,
             "scaler_fetch_snapshot_valid_meta <= scaler_fetch_snapshot_valid;",
@@ -520,7 +508,6 @@ def main() -> None:
         "scaler_fetch_state",
         "scaler_fetch_batch_two_toggle",
         "scaler_fetch_starved_frame_toggle",
-        "scaler_fetch_starved_line_toggle",
         "scaler_fetch_snapshot_valid",
         "scaler_fetch_delta_invalid",
         "scaler_fetch_level_invalid",
@@ -566,9 +553,8 @@ def main() -> None:
         "tx_crc <= MAGIK_HDMI_AVALON_LIVENESS_ACTIVITY_HEADER_CRC;",
         "wire scaler_fetch_start =",
         "tx_crc <= MAGIK_HDMI_SCALER_FETCH_ACTIVITY_HEADER_CRC;",
-        "reg [3:0] scaler_fetch_batch_two_count = 4'd0;",
+        "reg [1:0] scaler_fetch_batch_two_count = 2'd0;",
         "reg [3:0] scaler_fetch_starved_frame_count = 4'd0;",
-        "reg [7:0] scaler_fetch_starved_line_count = 8'd0;",
         "wire scaler_fetch_state_coherent =",
         "wire scaler_fetch_snapshot_ready =",
         "if(scaler_fetch_snapshot_ready) begin",
@@ -610,7 +596,7 @@ def main() -> None:
     if (
         timing_commands != [
             pll_lock_false_path,
-            "set_max_skew 10.0 \\",
+            "set_net_delay -max 10.0 \\",
         ]
         or diagnostics_sdc_text.count("control_pll_lock_meta}") != 1
     ):
@@ -806,7 +792,6 @@ def main() -> None:
                 ("scaler_fetch_state", "magik_scaler_completion_frame_state"),
                 ("scaler_fetch_batch_two_toggle", "magik_scaler_completion_batch_two_toggle"),
                 ("scaler_fetch_starved_frame_toggle", "magik_scaler_completion_starved_frame_toggle"),
-                ("scaler_fetch_starved_line_toggle", "magik_scaler_completion_starved_line_toggle"),
                 ("scaler_fetch_snapshot_valid", "magik_scaler_completion_snapshot_valid"),
                 ("scaler_fetch_delta_invalid", "magik_scaler_completion_delta_invalid"),
                 ("scaler_fetch_level_invalid", "magik_scaler_completion_level_invalid"),
@@ -824,7 +809,7 @@ def main() -> None:
         all_lock_port_names = re.findall(
             r"\.([A-Za-z_][A-Za-z0-9_]*)\s*\(", control_binding.group(1)
         )
-        if actual_lock_ports != expected_lock_ports or len(all_lock_port_names) != 30:
+        if actual_lock_ports != expected_lock_ports or len(all_lock_port_names) != 29:
             fail("HDMI lock and final-output evidence port map is not exact")
         for response_net in ("magik_diag_response_valid", "magik_diag_response_data"):
             if len(re.findall(rf"\b{response_net}\b", patched)) != 4:

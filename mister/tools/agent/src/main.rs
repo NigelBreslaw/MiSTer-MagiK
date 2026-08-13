@@ -3779,7 +3779,6 @@ mod linux {
     pub(super) struct ScalerFetchDeltas {
         pub(super) batch_two: u8,
         pub(super) starved_frame: u8,
-        pub(super) starved_line: u8,
     }
 
     #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -4002,14 +4001,11 @@ mod linux {
             batch_two: second
                 .batch_two_count()
                 .wrapping_sub(first.batch_two_count())
-                & 0x0f,
+                & 0x03,
             starved_frame: second
                 .starved_frame_count()
                 .wrapping_sub(first.starved_frame_count())
                 & 0x0f,
-            starved_line: second
-                .starved_line_count()
-                .wrapping_sub(first.starved_line_count()),
         }
     }
 
@@ -4042,8 +4038,6 @@ mod linux {
             && !completion_pending
         {
             "scaler_fetch_stalled_with_two_reads"
-        } else if deltas.starved_line != 0 {
-            "scaler_fetch_line_starvation_observed"
         } else if deltas.batch_two != 0 {
             "scaler_fetch_recovered_two_completion_batch"
         } else {
@@ -4186,7 +4180,6 @@ mod linux {
                         "deltas": {
                             "batch_two": deltas.batch_two,
                             "starved_frame": deltas.starved_frame,
-                            "starved_line": deltas.starved_line,
                         },
                         "first_raw_words": first.words.as_slice(),
                         "second_raw_words": second.words.as_slice(),
@@ -7692,7 +7685,6 @@ mod tests {
         let stalled = ScalerFetchDeltas {
             batch_two: 0,
             starved_frame: 2,
-            starved_line: 40,
         };
         assert_eq!(
             linux::scaler_fetch_classification(
@@ -7746,7 +7738,6 @@ mod tests {
                 ScalerFetchDeltas {
                     batch_two: 1,
                     starved_frame: 0,
-                    starved_line: 0,
                 },
             ),
             "scaler_fetch_recovered_two_completion_batch"

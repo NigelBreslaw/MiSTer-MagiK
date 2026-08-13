@@ -105,8 +105,8 @@ forced two-stage `clk_sys` synchronizer; only synchronized changes are counted.
 The scaler repair replaces the lossy return-completion toggle with a registered
 two-bit Gray completion sequence. Two forced destination synchronizer chains
 recover a modulo delta of one or two and serialize it back into the scaler's
-original one-credit pulse interface. A two-bit max-skew constraint bounds only
-that Gray bus; there is no new false path or multicycle exception. The 0x66
+original one-credit pulse interface. An exact two-path net-delay constraint
+bounds only that Gray bus; there is no new false path or multicycle exception. The 0x66
 state vector is held for a complete scaler frame and double-sampled before a
 command snapshots it. The design uses no mailbox, block RAM, or DSP and never
 observes Avalon addresses or returned pixel data.
@@ -170,9 +170,9 @@ The optional scaler-fetch record is interpreted separately. A stable
 `sREAD`, read level two, copy level zero state together with complete-frame
 starvation epochs is reported as `scaler_fetch_stalled_with_two_reads`.
 Two-credit catch-up epochs show that the repaired crossing recovered both
-completions after a destination-clock pause. Full-line starvation is reported
-observationally and may help correlate intermittent vertical bands; it is not
-by itself a claim that those bands share the black-screen cause.
+completions after a destination-clock pause. The bounded record deliberately
+does not claim to diagnose intermittent vertical bands; that would require a
+separately justified pixel-underflow instrument.
 
 ## Qualification
 

@@ -27,10 +27,9 @@ module mister_magik_sys_top_latch_path (
 	input wire vbuf_read,
 	input wire vbuf_waitrequest,
 	input wire vbuf_readdatavalid,
-	input wire [10:0] scaler_fetch_state,
+	input wire [7:0] scaler_fetch_state,
 	input wire scaler_fetch_batch_two_toggle,
 	input wire scaler_fetch_starved_frame_toggle,
-	input wire scaler_fetch_starved_line_toggle,
 	input wire scaler_fetch_snapshot_valid,
 	input wire scaler_fetch_delta_invalid,
 	input wire scaler_fetch_level_invalid,
@@ -142,7 +141,6 @@ module mister_magik_sys_top_latch_path (
 		.scaler_fetch_state(scaler_fetch_state),
 		.scaler_fetch_batch_two_toggle(scaler_fetch_batch_two_toggle),
 		.scaler_fetch_starved_frame_toggle(scaler_fetch_starved_frame_toggle),
-		.scaler_fetch_starved_line_toggle(scaler_fetch_starved_line_toggle),
 		.scaler_fetch_snapshot_valid(scaler_fetch_snapshot_valid),
 		.scaler_fetch_delta_invalid(scaler_fetch_delta_invalid),
 		.scaler_fetch_level_invalid(scaler_fetch_level_invalid),
@@ -216,10 +214,9 @@ module tb_mister_magik_sys_top_integration;
 	reg test_vbuf_read = 1'b0;
 	reg test_vbuf_waitrequest = 1'b0;
 	reg test_vbuf_readdatavalid = 1'b0;
-	reg [10:0] test_scaler_fetch_state = 11'd0;
+	reg [7:0] test_scaler_fetch_state = 8'd0;
 	reg test_scaler_fetch_batch_two_toggle = 1'b0;
 	reg test_scaler_fetch_starved_frame_toggle = 1'b0;
-	reg test_scaler_fetch_starved_line_toggle = 1'b0;
 	reg test_scaler_fetch_snapshot_valid = 1'b0;
 	reg test_scaler_fetch_delta_invalid = 1'b0;
 	reg test_scaler_fetch_level_invalid = 1'b0;
@@ -251,7 +248,6 @@ module tb_mister_magik_sys_top_integration;
 		.scaler_fetch_state(test_scaler_fetch_state),
 		.scaler_fetch_batch_two_toggle(test_scaler_fetch_batch_two_toggle),
 		.scaler_fetch_starved_frame_toggle(test_scaler_fetch_starved_frame_toggle),
-		.scaler_fetch_starved_line_toggle(test_scaler_fetch_starved_line_toggle),
 		.scaler_fetch_snapshot_valid(test_scaler_fetch_snapshot_valid),
 		.scaler_fetch_delta_invalid(test_scaler_fetch_delta_invalid),
 		.scaler_fetch_level_invalid(test_scaler_fetch_level_invalid),
@@ -598,11 +594,10 @@ module tb_mister_magik_sys_top_integration;
 		expect16(evidence[MAGIK_HDMI_AVALON_LIVENESS_ACTIVITY_CRC_WORD], evidence_crc,
 			"sys_top Avalon liveness CRC");
 
-		test_scaler_fetch_state = 11'b00_0_00_10_00_10;
+		test_scaler_fetch_state = 8'b00_10_00_10;
 		test_scaler_fetch_snapshot_valid = 1'b1;
 		test_scaler_fetch_batch_two_toggle = 1'b1;
 		test_scaler_fetch_starved_frame_toggle = 1'b1;
-		test_scaler_fetch_starved_line_toggle = 1'b1;
 		repeat(8) @(posedge test_clk);
 		begin_command(MAGIK_UIO_GET_HDMI_SCALER_FETCH_ACTIVITY,
 			MAGIK_HDMI_SCALER_FETCH_ACTIVITY_MAGIC);
@@ -617,9 +612,9 @@ module tb_mister_magik_sys_top_integration;
 			index = index + 1)
 			evidence_crc = crc_word(evidence_crc, evidence[index]);
 		expect16(evidence[MAGIK_HDMI_SCALER_FETCH_ACTIVITY_STATE_WORD],
-			{5'd0, test_scaler_fetch_state}, "sys_top scaler fetch state");
+			{8'd0, test_scaler_fetch_state}, "sys_top scaler fetch state");
 		expect16(evidence[MAGIK_HDMI_SCALER_FETCH_ACTIVITY_EVENTS_WORD],
-			16'h0111, "sys_top scaler fetch event epochs");
+			16'h0011, "sys_top scaler fetch event epochs");
 		expect16(evidence[MAGIK_HDMI_SCALER_FETCH_ACTIVITY_FLAGS_WORD],
 			MAGIK_HDMI_SCALER_FETCH_ACTIVITY_FLAG_SNAPSHOT_VALID,
 			"sys_top scaler fetch flags");
