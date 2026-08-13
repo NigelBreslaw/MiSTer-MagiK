@@ -534,10 +534,18 @@ jobs:
           git cat-file -e "$baseline_ref^{commit}"
           git merge-base --is-ancestor "$baseline_ref" "$GITHUB_SHA"
           component_revision="$(python3 scripts/release/platform/platform-component-id.py component fpga --revision-only)"
-          synthesis_revision="$(python3 scripts/release/platform/platform-component-id.py component fpga-synthesis --revision-only)"
-          build_date="$(git show -s --format=%cd --date=format:%y%m%d "$synthesis_revision")"
-          printf 'menu_ref=%s\nbaseline_ref=%s\ncomponent_revision=%s\nsynthesis_revision=%s\nbuild_date=%s\n' \
-            "$menu_ref" "$baseline_ref" "$component_revision" "$synthesis_revision" "$build_date" >> "$GITHUB_OUTPUT"
+          build_epoch_file="scripts/quartus/fpga-build-epoch-v1.txt"
+          if (( $(wc -l < "$build_epoch_file") != 1 )); then
+            echo "canonical FPGA build epoch file must end with one newline" >&2
+            exit 1
+          fi
+          build_date="$(< "$build_epoch_file")"
+          if [[ ! "$build_date" =~ ^[0-9]{6}$ ]]; then
+            echo "canonical FPGA build epoch must be a six-digit YYMMDD value" >&2
+            exit 1
+          fi
+          printf 'menu_ref=%s\nbaseline_ref=%s\ncomponent_revision=%s\nbuild_date=%s\n' \
+            "$menu_ref" "$baseline_ref" "$component_revision" "$build_date" >> "$GITHUB_OUTPUT"
 
       - name: Restore completed FPGA synthesis
         id: fpga-synthesis-cache
@@ -552,6 +560,7 @@ jobs:
         if: steps.fpga-synthesis-cache.outputs.cache-hit == 'true'
         env:
           SYNTHESIS_ID: ${{ needs.plan.outputs.fpga-synthesis-id }}
+          BUILD_DATE: ${{ steps.metadata.outputs.build_date }}
         run: |
           set -euo pipefail
           for flavour in stock pre-observer patched; do
@@ -560,6 +569,8 @@ jobs:
             test -f "$root/menu-magik-vblank-latch.build.log"
             test -d "$root/reports"
             grep -Fx "synthesis_input_sha256=$SYNTHESIS_ID" \
+              "$root/menu-magik-vblank-latch.metadata.txt"
+            grep -Fx "build_date=$BUILD_DATE" \
               "$root/menu-magik-vblank-latch.metadata.txt"
           done
           echo "Reusing completed Quartus synthesis; all FPGA validation will run again." >> "$GITHUB_STEP_SUMMARY"
