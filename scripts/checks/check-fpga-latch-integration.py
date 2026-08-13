@@ -35,8 +35,8 @@ COMMAND_PATTERNS = {
 }
 
 IMMUTABLE_LATCH_SHA256 = {
-    "mister_magik_vblank_latch.sv": "6fc49a047aac9e727fa0398233bffdff333db03a6b24b4128939ea299fd47e28",
-    "mister_magik_latch_sys_top_bridge.sv": "667a539da29bd3013c1d83874c904148abb9f8627c73f0a79383758af0421e7c",
+    "mister_magik_vblank_latch.sv": "327969f8740321ef2f522855c1ec2f815fb2a47032ded8c437b8e024011110a7",
+    "mister_magik_latch_sys_top_bridge.sv": "37b0c57cfb5596cc12ddb41a3b586e516dedeeeadf8d45cbb9e47804a17db59f",
     "mister_magik_latch_protocol.svh": "bc26dff578940790a70e379718f8f1b8eda7122efd267e0e5e7cc244f1347a7b",
     "latch-protocol.json": "69eef7979ad235c49989870b82534d187c9d97da40feb6e7647fd8e62adbec54",
 }
@@ -48,11 +48,7 @@ BRIDGE_MAPPING = """mister_magik_latch_sys_top_bridge magik_latch_bridge
 \t.io_uio(io_uio),
 \t.io_strobe(io_strobe),
 \t.io_din(io_din),
-\t.evidence_word0(magik_evidence_word0),
-\t.evidence_word1(magik_evidence_word1),
-\t.evidence_word2(magik_evidence_word2),
-\t.evidence_word3(magik_evidence_word3),
-\t.evidence_word4(magik_evidence_word4),
+\t.evidence_word(magik_evidence_word),
 \t.active_lfb_en(LFB_EN),
 \t.active_lfb_base(LFB_BASE),
 \t.active_lfb_width(LFB_WIDTH),
@@ -63,7 +59,9 @@ BRIDGE_MAPPING = """mister_magik_latch_sys_top_bridge magik_latch_bridge
 \t.apply(),
 \t.apply_accepted(magik_lfb_apply_accepted),
 \t.legacy_write(),
-\t.active_word_index(),
+\t.active_word_index(magik_evidence_word_index),
+\t.evidence_command(magik_evidence_command),
+\t.evidence_snapshot(magik_evidence_snapshot),
 \t.route_en(magik_lfb_en),
 \t.route_flt(magik_lfb_flt),
 \t.route_fmt(magik_lfb_fmt),
@@ -476,6 +474,8 @@ def main() -> None:
         "clk_hdmi",
         "clk_100m",
         "evidence_command",
+        "evidence_snapshot",
+        "evidence_word_index",
         "hdmi_pll_locked",
         "hdmi_out_vs",
         "hdmi_out_de",
@@ -495,11 +495,7 @@ def main() -> None:
         "scaler_fetch_snapshot_valid",
         "scaler_fetch_delta_invalid",
         "scaler_fetch_level_invalid",
-        "evidence_word0",
-        "evidence_word1",
-        "evidence_word2",
-        "evidence_word3",
-        "evidence_word4",
+        "evidence_word",
     ]
     if module_ports != expected_module_ports:
         fail("HDMI evidence module interface is not the exact passive allowlist")
@@ -518,7 +514,6 @@ def main() -> None:
         "reg [3:0] output_black_mixed_count = 4'd0;",
         "reg [3:0] output_de_has_nonzero_count = 4'd0;",
         "wire output_no_de_event = output_no_de_sys != output_no_de_count[0];",
-        "MAGIK_UIO_GET_HDMI_OUTPUT_ACTIVITY: begin",
         "wire raw_sample_nonzero = scaler_raw_de && (|scaler_raw_d);",
         "wire post_sample_nonzero = post_osd_de && (|post_osd_d);",
         "raw_no_de_toggle <= !raw_no_de_toggle;",
@@ -527,8 +522,8 @@ def main() -> None:
         "post_no_de_toggle <= !post_no_de_toggle;",
         "post_all_zero_toggle <= !post_all_zero_toggle;",
         "post_nonzero_toggle <= !post_nonzero_toggle;",
-        "evidence_word0 = MAGIK_HDMI_SCALER_RAW_ACTIVITY_SCHEMA;",
-        "evidence_word0 = MAGIK_HDMI_POST_OSD_ACTIVITY_SCHEMA;",
+        "4'd0: evidence_word = MAGIK_HDMI_SCALER_RAW_ACTIVITY_SCHEMA;",
+        "4'd0: evidence_word = MAGIK_HDMI_POST_OSD_ACTIVITY_SCHEMA;",
         "reg [18:0] avalon_bucket_count = 19'd0;",
         "reg [3:0] avalon_bucket_epoch = 4'd0;",
         "wire avalon_bucket_event = avalon_bucket_sys != avalon_bucket_epoch[0];",
@@ -536,8 +531,8 @@ def main() -> None:
         "(vbuf_read && !vbuf_waitrequest);",
         "wire avalon_returned_now = avalon_bucket_saw_returned || vbuf_readdatavalid;",
         "avalon_bucket_toggle <= !avalon_bucket_toggle;",
-        "evidence_word0 = MAGIK_HDMI_AVALON_LIVENESS_ACTIVITY_SCHEMA;",
-        "evidence_word0 = MAGIK_HDMI_SCALER_FETCH_ACTIVITY_SCHEMA;",
+        "4'd0: evidence_word = MAGIK_HDMI_AVALON_LIVENESS_ACTIVITY_SCHEMA;",
+        "4'd0: evidence_word = MAGIK_HDMI_SCALER_FETCH_ACTIVITY_SCHEMA;",
         "reg [1:0] scaler_fetch_batch_two_count = 2'd0;",
         "reg [3:0] scaler_fetch_starved_frame_count = 4'd0;",
         "if(scaler_fetch_snapshot_valid_sys)",
@@ -545,6 +540,8 @@ def main() -> None:
     for fragment in required_activity_fragments:
         if control_source.count(fragment) != 1:
             fail(f"final-output evidence behavior is missing or ambiguous: {fragment}")
+    if control_source.count("MAGIK_UIO_GET_HDMI_OUTPUT_ACTIVITY: begin") != 2:
+        fail("output activity snapshot/read selection is not exact")
     for retired_reader_fragment in (
         "has_command",
         "command_kind",
@@ -559,8 +556,16 @@ def main() -> None:
     ):
         if retired_reader_fragment in control_source:
             fail(f"standalone diagnostic reader state remains: {retired_reader_fragment}")
-    if control_source.count("evidence_word1 = 16'd0;") != 2:
+    if control_source.count("4'd1: evidence_word = 16'd0;") != 1:
         fail("retired scaler-fetch state word is not strict zero")
+    for fragment in (
+        "reg [4:0] evidence_snapshot_flags = 5'd0;",
+        "reg [15:0] evidence_snapshot_counts = 16'd0;",
+        "reg [15:0] evidence_snapshot_extra = 16'd0;",
+        "if(evidence_snapshot) begin",
+    ):
+        if control_source.count(fragment) != 1:
+            fail(f"compact evidence snapshot is missing or ambiguous: {fragment}")
     for fragment in (
         "completion_frame_starved <= completion_starved_now;",
         "completion_frame_starved <= completion_frame_starved_now;",
@@ -573,12 +578,22 @@ def main() -> None:
         "tx_crc <= evidence_header_crc;",
         "else if(cmd_data && evidence_command) begin",
         "else if(evidence_command && (word_index < evidence_crc_word)) begin",
+        "tx_crc <= crc_word(tx_crc, evidence_word);",
     ):
         if rtl_source.count(fragment) != 1:
             fail(f"shared latch evidence serializer is missing or ambiguous: {fragment}")
-    for index in range(5):
-        if bridge_source.count(f".evidence_word{index}(evidence_word{index})") != 1:
-            fail(f"shared bridge evidence word {index} is not exact")
+    for fragment in (
+        ".evidence_word(evidence_word)",
+        "assign evidence_command = command_id;",
+        "assign evidence_snapshot = command_start;",
+    ):
+        if bridge_source.count(fragment) != 1:
+            fail(f"shared bridge evidence selection is not exact: {fragment}")
+    evidence_response_arm = rtl_source.split(
+        "else if(cmd_data && evidence_command) begin", 1
+    )[1].split("end", 1)[0]
+    if "response_snapshot" in evidence_response_arm:
+        fail("evidence data still traverses the large latch snapshot bank")
     if re.search(
         r"\b(?:LFB_|FB_|vbuf_|reset_req|cfg_done)[A-Za-z0-9_]*\s*(?:<=|=)",
         control_source,
@@ -834,6 +849,8 @@ def main() -> None:
                 ("clk_hdmi", "clk_hdmi"),
                 ("clk_100m", "clk_100m"),
                 ("evidence_command", "magik_evidence_command"),
+                ("evidence_snapshot", "magik_evidence_snapshot"),
+                ("evidence_word_index", "magik_evidence_word_index"),
                 ("hdmi_pll_locked", "hdmi_pll_locked"),
                 ("hdmi_out_vs", "hdmi_out_vs"),
                 ("hdmi_out_de", "hdmi_out_de"),
@@ -853,11 +870,7 @@ def main() -> None:
                 ("scaler_fetch_snapshot_valid", "magik_scaler_completion_snapshot_valid"),
                 ("scaler_fetch_delta_invalid", "magik_scaler_completion_delta_invalid"),
                 ("scaler_fetch_level_invalid", "magik_scaler_completion_level_invalid"),
-                ("evidence_word0", "magik_evidence_word0"),
-                ("evidence_word1", "magik_evidence_word1"),
-                ("evidence_word2", "magik_evidence_word2"),
-                ("evidence_word3", "magik_evidence_word3"),
-                ("evidence_word4", "magik_evidence_word4"),
+                ("evidence_word", "magik_evidence_word"),
             )
         )
         actual_lock_ports = sorted(
@@ -870,17 +883,16 @@ def main() -> None:
         all_lock_port_names = re.findall(
             r"\.([A-Za-z_][A-Za-z0-9_]*)\s*\(", control_binding.group(1)
         )
-        if actual_lock_ports != expected_lock_ports or len(all_lock_port_names) != 29:
+        if actual_lock_ports != expected_lock_ports or len(all_lock_port_names) != 27:
             fail("HDMI lock and final-output evidence port map is not exact")
         for evidence_net in (
-            "magik_evidence_word0",
-            "magik_evidence_word1",
-            "magik_evidence_word2",
-            "magik_evidence_word3",
-            "magik_evidence_word4",
+            "magik_evidence_word",
+            "magik_evidence_command",
+            "magik_evidence_snapshot",
+            "magik_evidence_word_index",
         ):
             if len(re.findall(rf"\b{evidence_net}\b", patched)) != 3:
-                fail(f"HDMI evidence word net use is not exact: {evidence_net}")
+                fail(f"HDMI evidence selection net use is not exact: {evidence_net}")
         if re.search(
             r"\.(?:vbuf_(?!read\b|waitrequest\b|readdatavalid\b)|"
             r"reset|route|snapshot|fault|heartbeat|generation)",

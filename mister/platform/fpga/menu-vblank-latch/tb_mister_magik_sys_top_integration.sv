@@ -54,17 +54,14 @@ module mister_magik_sys_top_latch_path (
 
 	wire magik_response_valid;
 	wire [15:0] magik_response_data;
-	wire [15:0] magik_evidence_word0;
-	wire [15:0] magik_evidence_word1;
-	wire [15:0] magik_evidence_word2;
-	wire [15:0] magik_evidence_word3;
-	wire [15:0] magik_evidence_word4;
+	wire [15:0] magik_evidence_word;
 	wire scaler_fetch_completion_pulse;
 	wire scaler_fetch_batch_two_toggle;
 	wire scaler_fetch_starved_frame_toggle;
 	wire scaler_fetch_snapshot_valid;
 	wire scaler_fetch_delta_invalid;
-	wire [7:0] magik_evidence_command = io_din[7:0];
+	wire [7:0] magik_evidence_command;
+	wire magik_evidence_snapshot;
 	wire magik_lfb_apply;
 	wire magik_lfb_apply_accepted;
 	wire legacy_lfb_write;
@@ -112,11 +109,7 @@ module mister_magik_sys_top_latch_path (
 		.io_uio(io_uio),
 		.io_strobe(io_strobe),
 		.io_din(io_din),
-		.evidence_word0(magik_evidence_word0),
-		.evidence_word1(magik_evidence_word1),
-		.evidence_word2(magik_evidence_word2),
-		.evidence_word3(magik_evidence_word3),
-		.evidence_word4(magik_evidence_word4),
+		.evidence_word(magik_evidence_word),
 		.active_lfb_en(LFB_EN),
 		.active_lfb_base(LFB_BASE),
 		.active_lfb_width(LFB_WIDTH),
@@ -128,6 +121,8 @@ module mister_magik_sys_top_latch_path (
 		.apply_accepted(magik_lfb_apply_accepted),
 		.legacy_write(legacy_lfb_write),
 		.active_word_index(active_word_index),
+		.evidence_command(magik_evidence_command),
+		.evidence_snapshot(magik_evidence_snapshot),
 		.route_en(magik_lfb_en),
 		.route_flt(magik_lfb_flt),
 		.route_fmt(magik_lfb_fmt),
@@ -155,6 +150,8 @@ module mister_magik_sys_top_latch_path (
 		.clk_hdmi(clk_hdmi),
 		.clk_100m(clk_100m),
 		.evidence_command(magik_evidence_command),
+		.evidence_snapshot(magik_evidence_snapshot),
+		.evidence_word_index(active_word_index),
 		.hdmi_pll_locked(hdmi_pll_locked),
 		.hdmi_out_vs(hdmi_out_vs),
 		.hdmi_out_de(hdmi_out_de),
@@ -174,11 +171,7 @@ module mister_magik_sys_top_latch_path (
 		.scaler_fetch_snapshot_valid(scaler_fetch_snapshot_valid),
 		.scaler_fetch_delta_invalid(scaler_fetch_delta_invalid),
 		.scaler_fetch_level_invalid(scaler_fetch_level_invalid),
-		.evidence_word0(magik_evidence_word0),
-		.evidence_word1(magik_evidence_word1),
-		.evidence_word2(magik_evidence_word2),
-		.evidence_word3(magik_evidence_word3),
-		.evidence_word4(magik_evidence_word4)
+		.evidence_word(magik_evidence_word)
 	);
 
 	always @(posedge clk_sys) begin

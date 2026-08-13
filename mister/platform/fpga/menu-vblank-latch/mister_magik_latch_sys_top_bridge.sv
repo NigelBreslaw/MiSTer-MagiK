@@ -13,11 +13,7 @@ module mister_magik_latch_sys_top_bridge (
 	input  wire        io_uio,
 	input  wire        io_strobe,
 	input  wire [15:0] io_din,
-	input  wire [15:0] evidence_word0,
-	input  wire [15:0] evidence_word1,
-	input  wire [15:0] evidence_word2,
-	input  wire [15:0] evidence_word3,
-	input  wire [15:0] evidence_word4,
+	input  wire [15:0] evidence_word,
 
 	input  wire        active_lfb_en,
 	input  wire [31:0] active_lfb_base,
@@ -31,6 +27,8 @@ module mister_magik_latch_sys_top_bridge (
 	output wire        apply_accepted,
 	output wire        legacy_write,
 	output wire [3:0]  active_word_index,
+	output wire [7:0]  evidence_command,
+	output wire        evidence_snapshot,
 
 	output wire        route_en,
 	output wire        route_flt,
@@ -62,6 +60,8 @@ module mister_magik_latch_sys_top_bridge (
 	wire command_data = io_uio && io_strobe && has_command;
 	wire [7:0] command_id = has_command ? command : io_din[7:0];
 	assign active_word_index = word_count[3:0];
+	assign evidence_command = command_id;
+	assign evidence_snapshot = command_start;
 	assign legacy_write =
 		command_data && (command == 8'h2f) && (word_count < 8'd10);
 	assign apply_accepted = apply && !legacy_write;
@@ -92,11 +92,7 @@ module mister_magik_latch_sys_top_bridge (
 		.cmd_id(command_id),
 		.word_index(active_word_index),
 		.data_in(io_din),
-		.evidence_word0(evidence_word0),
-		.evidence_word1(evidence_word1),
-		.evidence_word2(evidence_word2),
-		.evidence_word3(evidence_word3),
-		.evidence_word4(evidence_word4),
+		.evidence_word(evidence_word),
 		.active_lfb_en(active_lfb_en),
 		.active_lfb_base(active_lfb_base),
 		.active_lfb_width(active_lfb_width),

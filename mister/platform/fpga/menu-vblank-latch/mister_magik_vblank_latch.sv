@@ -12,11 +12,7 @@ module mister_magik_vblank_latch (
 	input  wire [7:0]  cmd_id,
 	input  wire [3:0]  word_index,
 	input  wire [15:0] data_in,
-	input  wire [15:0] evidence_word0,
-	input  wire [15:0] evidence_word1,
-	input  wire [15:0] evidence_word2,
-	input  wire [15:0] evidence_word3,
-	input  wire [15:0] evidence_word4,
+	input  wire [15:0] evidence_word,
 
 	input  wire        active_lfb_en,
 	input  wire [31:0] active_lfb_base,
@@ -333,7 +329,7 @@ module mister_magik_vblank_latch (
 		end
 		else if(cmd_data && evidence_command) begin
 			if(word_index < evidence_crc_word)
-				response_data = response_snapshot[word_index];
+				response_data = evidence_word;
 			else if(word_index == evidence_crc_word)
 				response_data = tx_crc ^ MAGIK_CRC_FINAL_XOR;
 		end
@@ -414,11 +410,6 @@ module mister_magik_vblank_latch (
 			tx_command <= MAGIK_UIO_GET_FBUF_PRESENTATION_TELEMETRY;
 		end
 		else if(cmd_start && evidence_command) begin
-			response_snapshot[0] <= evidence_word0;
-			response_snapshot[1] <= evidence_word1;
-			response_snapshot[2] <= evidence_word2;
-			response_snapshot[3] <= evidence_word3;
-			response_snapshot[4] <= evidence_word4;
 			tx_crc <= evidence_header_crc;
 			tx_expected <= 4'd0;
 			tx_command <= cmd_id;
@@ -460,7 +451,7 @@ module mister_magik_vblank_latch (
 					tx_expected <= tx_expected + 1'd1;
 				end
 				else if(evidence_command && (word_index < evidence_crc_word)) begin
-					tx_crc <= crc_word(tx_crc, response_snapshot[word_index]);
+					tx_crc <= crc_word(tx_crc, evidence_word);
 					tx_expected <= tx_expected + 1'd1;
 				end
 			end

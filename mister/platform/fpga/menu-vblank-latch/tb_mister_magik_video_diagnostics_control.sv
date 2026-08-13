@@ -26,15 +26,10 @@ module mister_magik_hdmi_evidence_test_wrapper (
 );
 	`include "mister_magik_video_diagnostics_protocol.svh"
 
-	wire [15:0] evidence_word0;
-	wire [15:0] evidence_word1;
-	wire [15:0] evidence_word2;
-	wire [15:0] evidence_word3;
-	wire [15:0] evidence_word4;
+	wire [15:0] evidence_word;
 	reg has_command = 1'b0;
 	reg [7:0] command = 8'd0;
 	reg [2:0] word_count = 3'd0;
-	reg [15:0] snapshot [0:4];
 	reg [15:0] tx_crc = 16'd0;
 	wire command_start = io_uio && io_strobe && !has_command;
 	wire command_data = io_uio && io_strobe && has_command;
@@ -77,7 +72,9 @@ module mister_magik_hdmi_evidence_test_wrapper (
 
 	mister_magik_hdmi_lock_evidence recorder (
 		.clk_sys(clk_sys), .hdmi_tx_clk(hdmi_tx_clk), .clk_hdmi(clk_hdmi),
-		.clk_100m(clk_100m), .evidence_command(io_din[7:0]),
+		.clk_100m(clk_100m),
+		.evidence_command(has_command ? command : io_din[7:0]),
+		.evidence_snapshot(command_start), .evidence_word_index({1'b0, word_count}),
 		.hdmi_pll_locked(hdmi_pll_locked), .hdmi_out_vs(hdmi_out_vs),
 		.hdmi_out_de(hdmi_out_de), .hdmi_out_d(hdmi_out_d),
 		.hdmi_out_direct(hdmi_out_direct), .scaler_raw_vs(scaler_raw_vs),
@@ -91,9 +88,7 @@ module mister_magik_hdmi_evidence_test_wrapper (
 		.scaler_fetch_snapshot_valid(scaler_fetch_snapshot_valid),
 		.scaler_fetch_delta_invalid(scaler_fetch_delta_invalid),
 		.scaler_fetch_level_invalid(scaler_fetch_level_invalid),
-		.evidence_word0(evidence_word0), .evidence_word1(evidence_word1),
-		.evidence_word2(evidence_word2), .evidence_word3(evidence_word3),
-		.evidence_word4(evidence_word4)
+		.evidence_word(evidence_word)
 	);
 
 	always @(*) begin
@@ -117,7 +112,7 @@ module mister_magik_hdmi_evidence_test_wrapper (
 			endcase
 		end
 		else if(command_data && selected_command) begin
-			if(word_count < crc_word_index) response_data = snapshot[word_count];
+			if(word_count < crc_word_index) response_data = evidence_word;
 			else if(word_count == crc_word_index) response_data = tx_crc;
 		end
 	end
@@ -128,9 +123,6 @@ module mister_magik_hdmi_evidence_test_wrapper (
 		end
 		else if(command_start) begin
 			has_command <= 1'b1; command <= io_din[7:0]; word_count <= 3'd0;
-			snapshot[0] <= evidence_word0; snapshot[1] <= evidence_word1;
-			snapshot[2] <= evidence_word2; snapshot[3] <= evidence_word3;
-			snapshot[4] <= evidence_word4;
 			case(io_din[7:0])
 				MAGIK_UIO_GET_HDMI_EVIDENCE: tx_crc <= MAGIK_HDMI_EVIDENCE_HEADER_CRC;
 				MAGIK_UIO_GET_HDMI_OUTPUT_ACTIVITY:
@@ -150,7 +142,7 @@ module mister_magik_hdmi_evidence_test_wrapper (
 		end
 		else if(command_data && selected_command && (word_count < selected_words)) begin
 			word_count <= word_count + 1'd1;
-			if(word_count < crc_word_index) tx_crc <= crc_word(tx_crc, snapshot[word_count]);
+			if(word_count < crc_word_index) tx_crc <= crc_word(tx_crc, evidence_word);
 		end
 	end
 endmodule
