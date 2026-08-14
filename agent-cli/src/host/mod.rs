@@ -472,6 +472,7 @@ impl NativeDevice {
                         &args.sql,
                     ])),
                     CatalogCommand::Cores => core_list(),
+                    CatalogCommand::Purge(_) => purge_development_library_data_and_reboot(),
                 },
                 DeviceCommand::Media { command } => match command {
                     MediaCommand::Check(args) => {
@@ -22197,6 +22198,62 @@ fn run_catalog_inspect(sess: &Session, args: &[String]) -> Result<()> {
         return Err(error.into());
     }
     Ok(())
+}
+
+fn purge_development_library_data_and_reboot() -> Result<()> {
+    let session = connect(10)?;
+    exec_checked(
+        &session,
+        "Dev library purge preflight",
+        "set -eu; pidof MiSTer_MagiKDev >/dev/null; test -x /media/fat/mister-magik-dev/mister-magik-fb; test ! -e /tmp/mister-magik/reboot-unstable; test ! -e /media/fat/mister-magik/launcher.env; test ! -e /media/fat/mister-magik-dev/launcher.env; test ! -e /tmp/mister-magik/fs-fault-launcher.env; test ! -e /tmp/mister-magik/fs-fault-session; test ! -e /tmp/mister-magik/fs-fault.json; test ! -e /media/fat/mister-magik/rebuild-on-next-boot; test ! -e /media/fat/mister-magik-dev/rebuild-on-next-boot",
+    )?;
+    exec_checked(
+        &session,
+        "Dev library purge suspend",
+        &acknowledged_main_command("mister_magik_suspend"),
+    )?;
+    let purge = exec_checked_output(
+        &session,
+        "Dev catalog and screenshot purge",
+        "/media/fat/mister-magik-dev/mister-magik-fb purge-library-data --confirm",
+    );
+    let purge = match purge {
+        Ok(output) => output,
+        Err(error) => {
+            let resume = exec_checked(
+                &session,
+                "Dev library purge recovery resume",
+                &acknowledged_main_command("mister_magik_resume"),
+            );
+            return match resume {
+                Ok(()) => Err(error),
+                Err(resume) => Err(format!(
+                    "Dev library purge failed ({error}); launcher recovery also failed ({resume})"
+                )
+                .into()),
+            };
+        }
+    };
+    let summary = purge.stdout.trim();
+    if !summary.lines().any(|line| {
+        line.starts_with("purge_library_data\tdone\tcatalog_removed=")
+            && line.contains("\tscreenshot_removed=")
+    }) {
+        let resume = exec_checked(
+            &session,
+            "Dev library purge invalid-output recovery resume",
+            &acknowledged_main_command("mister_magik_resume"),
+        );
+        let error = "Dev library purge did not report its guarded completion marker";
+        return match resume {
+            Ok(()) => Err(error.into()),
+            Err(resume) => Err(format!("{error}; launcher recovery also failed ({resume})").into()),
+        };
+    }
+    println!("{summary}");
+    exec_checked(&session, "sync Dev library purge", "sync")?;
+    drop(session);
+    agent_reboot_wait(&[])
 }
 
 fn catalog_query(args: &[String]) -> Result<()> {

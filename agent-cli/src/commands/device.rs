@@ -297,6 +297,8 @@ pub enum CatalogCommand {
     Inspect,
     Query(CatalogQueryArgs),
     Cores,
+    /// Delete the Dev catalog and screenshot packs, then perform one supervised reboot.
+    Purge(CatalogPurgeArgs),
 }
 
 #[derive(Debug, Args)]
@@ -305,6 +307,14 @@ pub struct CatalogQueryArgs {
     pub(crate) database: String,
     #[arg(long)]
     pub(crate) sql: String,
+}
+
+#[derive(Debug, Args)]
+pub struct CatalogPurgeArgs {
+    #[arg(long, required = true)]
+    attended: bool,
+    #[arg(long, required = true)]
+    reboot: bool,
 }
 
 #[derive(Debug, Subcommand)]
@@ -425,7 +435,7 @@ impl DeviceCommand {
             Self::Display { command } => !matches!(command, DisplayCommand::RouteStatus),
             Self::Crt { .. } => true,
             Self::Launcher { command } => !matches!(command, LauncherCommand::Status),
-            Self::Catalog { .. } => false,
+            Self::Catalog { command } => matches!(command, CatalogCommand::Purge(_)),
             Self::Media { command } => matches!(command, MediaCommand::Download(_)),
             Self::Fpga { .. } => true,
         }
@@ -487,6 +497,9 @@ mod tests {
     fn mutations_require_attendance_during_parsing() {
         assert!(TestCli::try_parse_from(["test", "mode", "set", "dev"]).is_err());
         assert!(TestCli::try_parse_from(["test", "reboot"]).is_err());
+        assert!(TestCli::try_parse_from(["test", "catalog", "purge"]).is_err());
+        assert!(TestCli::try_parse_from(["test", "catalog", "purge", "--attended"]).is_err());
+        assert!(TestCli::try_parse_from(["test", "catalog", "purge", "--reboot"]).is_err());
         assert!(
             TestCli::try_parse_from([
                 "test",
@@ -502,6 +515,10 @@ mod tests {
             .is_err()
         );
         assert!(TestCli::try_parse_from(["test", "mode", "set", "dev", "--attended"]).is_ok());
+        assert!(
+            TestCli::try_parse_from(["test", "catalog", "purge", "--attended", "--reboot",])
+                .is_ok()
+        );
         assert!(
             TestCli::try_parse_from([
                 "test",
@@ -534,5 +551,8 @@ mod tests {
         assert!(!route_status.command.is_mutation());
         let reboot = TestCli::try_parse_from(["test", "reboot", "--attended"]).unwrap();
         assert!(reboot.command.is_mutation());
+        let purge = TestCli::try_parse_from(["test", "catalog", "purge", "--attended", "--reboot"])
+            .unwrap();
+        assert!(purge.command.is_mutation());
     }
 }
