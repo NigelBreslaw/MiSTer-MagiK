@@ -9,11 +9,8 @@
 // mapping, response routing, and authoritative LFB apply bundle.
 module mister_magik_sys_top_latch_path (
 	input wire clk_sys,
-	input wire clk_hdmi,
 	input wire hdmi_vbl,
 	input wire hdmi_pll_locked,
-	input wire scaler_completion_reset_n,
-	input wire [1:0] scaler_completion_gray,
 	input wire io_uio,
 	input wire io_strobe,
 	input wire [15:0] io_din
@@ -35,7 +32,6 @@ module mister_magik_sys_top_latch_path (
 	wire [15:0] magik_response_data;
 	wire magik_diag_response_valid;
 	wire [15:0] magik_diag_response_data;
-	wire scaler_fetch_completion_pulse;
 	wire magik_lfb_apply;
 	wire magik_lfb_apply_accepted;
 	wire legacy_lfb_write;
@@ -59,13 +55,6 @@ module mister_magik_sys_top_latch_path (
 	wire [15:0] magik_lfb_drop_count;
 	wire [15:0] magik_lfb_reject_count;
 	wire [15:0] magik_lfb_active_route_epoch;
-
-	mister_magik_scaler_completion_cdc scaler_completion_cdc (
-		.destination_clk(clk_hdmi),
-		.reset_n(scaler_completion_reset_n),
-		.source_completion_gray(scaler_completion_gray),
-		.completion_pulse(scaler_fetch_completion_pulse)
-	);
 
 	mister_magik_latch_sys_top_bridge bridge (
 		.clk_sys(clk_sys),
@@ -163,37 +152,23 @@ module tb_mister_magik_sys_top_integration;
 	`include "mister_magik_video_diagnostics_protocol.svh"
 
 	reg test_clk = 1'b0;
-	reg test_scaler_clk = 1'b0;
 	reg test_vblank = 1'b0;
 	reg test_hdmi_pll_locked = 1'b0;
-	reg test_scaler_completion_reset_n = 1'b0;
-	reg [1:0] test_scaler_completion_gray = 2'd0;
 	reg test_io_uio = 1'b0;
 	reg test_io_strobe = 1'b0;
 	reg [15:0] test_io_din = 16'd0;
 	integer index;
-	integer recovered_completion_pulses = 0;
 
 	mister_magik_sys_top_latch_path dut (
 		.clk_sys(test_clk),
-		.clk_hdmi(test_scaler_clk),
 		.hdmi_vbl(test_vblank),
 		.hdmi_pll_locked(test_hdmi_pll_locked),
-		.scaler_completion_reset_n(test_scaler_completion_reset_n),
-		.scaler_completion_gray(test_scaler_completion_gray),
 		.io_uio(test_io_uio),
 		.io_strobe(test_io_strobe),
 		.io_din(test_io_din)
 	);
 
 	always #5 test_clk = ~test_clk;
-	always #11 test_scaler_clk = ~test_scaler_clk;
-	always @(posedge test_scaler_clk) begin
-		if(!test_scaler_completion_reset_n)
-			recovered_completion_pulses <= 0;
-		else if(dut.scaler_fetch_completion_pulse)
-			recovered_completion_pulses <= recovered_completion_pulses + 1;
-	end
 
 	task automatic fail(input [8*96-1:0] message);
 		begin
@@ -310,9 +285,6 @@ module tb_mister_magik_sys_top_integration;
 		reg [15:0] evidence [0:5];
 		reg [15:0] telemetry_crc;
 		reg [15:0] evidence_crc;
-		repeat(3) @(posedge test_scaler_clk);
-		test_scaler_completion_reset_n = 1'b1;
-		repeat(4) @(posedge test_scaler_clk);
 		repeat(3) @(posedge test_clk);
 		end_command();
 		// Exercise the production bridge's selected-but-idle parser state.
@@ -389,15 +361,6 @@ module tb_mister_magik_sys_top_integration;
 			begin_command(index[7:0], 16'd0);
 			end_command();
 		end
-
-		// Exercise the actual production repair instance. A settled Gray 00->11
-		// step represents two completions while clk_hdmi missed the intermediate
-		// 01 state; the bridge must emit two legacy-compatible pulses.
-		@(negedge test_scaler_clk);
-		test_scaler_completion_gray = 2'b11;
-		repeat(8) @(posedge test_scaler_clk);
-		if(recovered_completion_pulses != 2)
-			fail("sys_top completion CDC did not retain two credits");
 
 		// Post another route, then collide its vblank apply with a real 0x2f
 		// payload edge. The production legacy-write expression must win.

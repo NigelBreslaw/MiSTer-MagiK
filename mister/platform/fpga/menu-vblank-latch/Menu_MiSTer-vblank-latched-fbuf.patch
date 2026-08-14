@@ -30,8 +30,6 @@ index a416879..f6a40ea 100644
 +wire [15:0] magik_lfb_active_route_epoch;
 +wire        magik_diag_response_valid;
 +wire [15:0] magik_diag_response_data;
-+wire [1:0]  magik_scaler_completion_gray;
-+wire        magik_scaler_completion_pulse;
 +
 +mister_magik_latch_sys_top_bridge magik_latch_bridge
 +(
@@ -180,19 +178,17 @@ diff --git a/sys/ascal.vhd b/sys/ascal.vhd
 index a735e6b..0000000 100644
 --- a/sys/ascal.vhd
 +++ b/sys/ascal.vhd
-@@ -250,6 +250,13 @@ ENTITY ascal IS
- 		avl_address        : OUT   std_logic_vector(N_AW-1 DOWNTO 0);
- 		avl_write          : OUT   std_logic;
- 		avl_read           : OUT   std_logic;
-+		avl_completion_gray: OUT   std_logic_vector(1 DOWNTO 0);
-+		o_completion_pulse : IN    std_logic :='0';
- 		avl_byteenable     : OUT   std_logic_vector(N_DW/8-1 DOWNTO 0);
- 
- 		------------------------------------
-@@ -337,6 +344,7 @@ ARCHITECTURE rtl OF ascal IS
+@@ -337,6 +337,17 @@ ARCHITECTURE rtl OF ascal IS
  	TYPE arr_pixq IS ARRAY(natural RANGE <>) OF arr_pix(0 TO 3);
  	ATTRIBUTE ramstyle : string;
 +	ATTRIBUTE preserve : boolean;
++	ATTRIBUTE altera_attribute : string;
++
++	FUNCTION completion_gray_next(value : unsigned(1 DOWNTO 0))
++		RETURN unsigned IS
++	BEGIN
++		RETURN value(0) & NOT value(1);
++	END FUNCTION;
  
  	SUBTYPE uint12 IS natural RANGE 0 TO 4095;
  	SUBTYPE uint13 IS natural RANGE 0 TO 8191;
@@ -202,7 +198,7 @@ index a735e6b..0000000 100644
  	SIGNAL avl_wr : std_logic;
 -	SIGNAL avl_readdataack,avl_readack : std_logic;
 +	SIGNAL avl_readack : std_logic;
-+	SIGNAL avl_completion_bin,avl_completion_gray_i : unsigned(1 DOWNTO 0);
++	SIGNAL avl_completion_gray_i : unsigned(1 DOWNTO 0);
 +	ATTRIBUTE preserve OF avl_completion_gray_i : SIGNAL IS true;
  	SIGNAL avl_radrs,avl_wadrs : unsigned(31 DOWNTO 0);
  	SIGNAL avl_i_offset0,avl_o_offset0 : unsigned(31 DOWNTO 0);
@@ -213,6 +209,12 @@ index a735e6b..0000000 100644
  	SIGNAL o_pshift : natural RANGE 0 TO 15;
  	SIGNAL o_readack,o_readack_sync,o_readack_sync2 : std_logic;
 -	SIGNAL o_readdataack,o_readdataack_sync,o_readdataack_sync2 : std_logic;
++	SIGNAL o_completion_gray_meta,o_completion_gray_sync : unsigned(1 DOWNTO 0);
++	SIGNAL o_completion_seen : unsigned(1 DOWNTO 0);
++	ATTRIBUTE altera_attribute OF o_completion_gray_meta : SIGNAL IS
++		"-name SYNCHRONIZER_IDENTIFICATION FORCED";
++	ATTRIBUTE altera_attribute OF o_completion_gray_sync : SIGNAL IS
++		"-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS";
  	SIGNAL o_copyv : unsigned(0 TO 14);
  	SIGNAL o_adrs : unsigned(31 DOWNTO 0); -- Avalon address
  	SIGNAL o_adrs_pre : natural RANGE 0 TO 2**24-1;
@@ -221,14 +223,12 @@ index a735e6b..0000000 100644
  	-- AVALON interface
  	Avaloir:PROCESS(avl_clk,avl_reset_na) IS
  		VARIABLE adr_v : unsigned(31 DOWNTO 0);
-+		VARIABLE next_completion_bin_v : unsigned(1 DOWNTO 0);
  	BEGIN
  		IF avl_reset_na='0' THEN
  			avl_state<=sIDLE;
  			avl_write_sr<='0';
  			avl_read_sr<='0';
 -			avl_readdataack<='0';
-+			avl_completion_bin<=(OTHERS =>'0');
 +			avl_completion_gray_i<=(OTHERS =>'0');
  			avl_readack<='0';
  
@@ -238,20 +238,37 @@ index a735e6b..0000000 100644
  				avl_wad<=(avl_wad+1) MOD (2*BLEN);
  				IF (avl_wad MOD BLEN)=BLEN-2 THEN
 -					avl_readdataack<=NOT avl_readdataack;
-+					next_completion_bin_v:=avl_completion_bin+1;
-+					avl_completion_bin<=next_completion_bin_v;
-+					avl_completion_gray_i<=next_completion_bin_v(1) &
-+						(next_completion_bin_v(1) XOR next_completion_bin_v(0));
++					avl_completion_gray_i<=completion_gray_next(avl_completion_gray_i);
  				END IF;
  			END IF;
  
-@@ -1804,6 +1811,7 @@ ARCHITECTURE rtl OF ascal IS
- 	avl_read<=avl_read_i;
- 	avl_write<=avl_write_i;
- 	avl_writedata<=std_logic_vector(swap(avl_dr));
-+	avl_completion_gray<=std_logic_vector(avl_completion_gray_i);
- 	avl_burstcount<=std_logic_vector(to_unsigned(BLEN,8));
- 	avl_byteenable<=(OTHERS =>'1');
+@@ -1864,6 +1868,7 @@ ARCHITECTURE rtl OF ascal IS
+ 	Scalaire:PROCESS (o_clk,o_reset_na) IS
+ 		VARIABLE lev_inc_v,lev_dec_v : std_logic;
++		VARIABLE completion_event_v : std_logic;
+ 		VARIABLE prim_v,last_v,bib_v : std_logic;
+ 		VARIABLE shift_v : unsigned(0 TO N_DW+15);
+ 		VARIABLE hpix_v : type_pix;
+@@ -1877,8 +1882,16 @@ ARCHITECTURE rtl OF ascal IS
+ 			o_readlev<=0;
+ 			o_copylev<=0;
+ 			o_hsp<='0';
++			o_completion_gray_meta<=(OTHERS =>'0');
++			o_completion_gray_sync<=(OTHERS =>'0');
++			o_completion_seen<=(OTHERS =>'0');
+ 
+ 		ELSIF rising_edge(o_clk) THEN
++			completion_event_v:='0';
++			o_completion_gray_meta<=avl_completion_gray_i; -- <ASYNC>
++			o_completion_gray_sync<=o_completion_gray_meta;
++			IF o_completion_gray_sync=completion_gray_next(o_completion_seen) OR
++			   o_completion_gray_sync=NOT o_completion_seen THEN
++				completion_event_v:='1';
++				o_completion_seen<=completion_gray_next(o_completion_seen);
++			END IF;
+ 			------------------------------------------------------
+ 			o_mode   <=mode; -- <ASYNC> ?
+ 			o_format <="0001" & format; -- <ASYNC> ?
  
 @@ -2023,10 +2033,6 @@ ARCHITECTURE rtl OF ascal IS
  			o_readack_sync2<=o_readack_sync;
@@ -264,45 +281,13 @@ index a735e6b..0000000 100644
  			------------------------------------------------------
  			lev_inc_v:='0';
  			lev_dec_v:='0';
-@@ -2335,5 +2351,13 @@ ARCHITECTURE rtl OF ascal IS
+@@ -2335,5 +2351,5 @@ ARCHITECTURE rtl OF ascal IS
 -			IF lev_dec_v='1' AND o_readdataack='0' THEN
 -				o_copylev<=o_copylev-1;
 -			ELSIF lev_dec_v='0' AND o_readdataack='1' THEN
 -				o_copylev<=o_copylev+1;
-+			IF lev_dec_v='1' AND o_completion_pulse='0' THEN
-+				IF o_copylev>0 THEN
-+					o_copylev<=o_copylev-1;
-+				END IF;
-+			ELSIF lev_dec_v='0' AND o_completion_pulse='1' THEN
-+				IF o_copylev<2 THEN
-+					o_copylev<=o_copylev+1;
-+				END IF;
++			IF lev_dec_v='1' AND completion_event_v='0' THEN
++				o_copylev<=o_copylev-1;
++			ELSIF lev_dec_v='0' AND completion_event_v='1' THEN
++				o_copylev<=o_copylev+1;
  			END IF;
-diff --git a/sys/sys_top.v b/sys/sys_top.v
-index a416879..f6a40ea 100644
---- a/sys/sys_top.v
-+++ b/sys/sys_top.v
-@@ -818,6 +818,25 @@ wire         bob_deint;
- 
- `ifndef MISTER_DEBUG_NOHDMI
- 	wire clk_hdmi  = hdmi_clk_out;
-+
-+	mister_magik_scaler_completion_cdc magik_scaler_completion_cdc
-+	(
-+		.destination_clk(clk_hdmi),
-+		.reset_n(~reset_req),
-+		.source_completion_gray(magik_scaler_completion_gray),
-+		.completion_pulse(magik_scaler_completion_pulse)
-+	);
- 
- 	ascal 
- 	#(
-@@ -928,6 +947,8 @@ wire         bob_deint;
- 		.avl_address      (vbuf_address),
- 		.avl_write        (vbuf_write),
- 		.avl_read         (vbuf_read),
-+		.avl_completion_gray(magik_scaler_completion_gray),
-+		.o_completion_pulse(magik_scaler_completion_pulse),
- 		.avl_byteenable   (vbuf_byteenable)
- 	);
- `endif

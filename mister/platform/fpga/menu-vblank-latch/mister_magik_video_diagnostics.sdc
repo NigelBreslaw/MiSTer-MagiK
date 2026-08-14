@@ -35,7 +35,7 @@ proc magik_require_registers {label register_pattern expected_count} {
 set magik_scaler_completion_gray_source [magik_require_registers gray_source \
 	{*ascal:ascal|avl_completion_gray_i[*]} 2]
 set magik_scaler_completion_gray_meta [magik_require_registers gray_meta \
-	{*mister_magik_scaler_completion_cdc:magik_scaler_completion_cdc|completion_gray_meta[*]} 2]
+	{*ascal:ascal|o_completion_gray_meta[*]} 2]
 set_net_delay -max 10.0 \
 	-from $magik_scaler_completion_gray_source \
 	-to $magik_scaler_completion_gray_meta

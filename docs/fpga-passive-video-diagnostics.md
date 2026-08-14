@@ -53,9 +53,11 @@ Milestone A replaces only that completion crossing:
 
 - the source registers a two-bit modulo-4 Gray completion pointer at the
   existing completed-block point;
-- each Gray bit crosses through its own forced two-stage synchronizer;
-- the destination computes a legal delta of zero, one, or two;
-- a delta of two is serialized into two ordinary one-credit pulses; and
+- both the pointer and its two forced destination synchronizers remain inside
+  `ascal`, without a `sys_top` round trip;
+- the destination recognizes a legal delta of zero, one, or two;
+- a delta of two is consumed as two ordinary one-credit events on consecutive
+  scaler-clock edges; and
 - the scaler retains its original copy-level update truth table and metadata
   ordering.
 
@@ -77,11 +79,11 @@ Its only raw diagnostic consumer is the first stage of a two-register
 data pin; the second stage remains timed and must appear in metastability
 analysis.
 
-Apart from the two-bit Gray completion pointer, Milestone A has no diagnostic
-payload crossing and no pixel, Avalon, or live scaler-state taps. It uses no
-mailbox, block RAM, DSP, added PLL output, placement directive, or functional
-timing exception. Observer outputs can reach only the read-only UIO response
-mux.
+The completion pointer is wholly internal functional state, not a diagnostic
+payload exported through `sys_top`. Milestone A has no pixel, Avalon, or live
+scaler-state diagnostic taps. It uses no mailbox, block RAM, DSP, added PLL
+output, placement directive, or functional timing exception. Observer outputs
+can reach only the read-only UIO response mux.
 
 ## Collection and compatibility
 
@@ -124,7 +126,7 @@ must also satisfy:
 - hold slack at least 0.200 ns;
 - zero total negative slack;
 - exactly 158 unconstrained output paths, equal to the baseline;
-- the exact lock, reset-release, and two Gray synchronizer chains;
+- the exact lock and two internal Gray synchronizer chains;
 - exactly two applied Gray net-delay rows with nonnegative slack; and
 - no RAM, DSP, PLL, warning-identity, passivity, or functional-cone regression.
 

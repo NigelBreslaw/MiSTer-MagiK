@@ -66,23 +66,21 @@ CONTROL_SYNC_ASSIGNMENTS = quartus_assignment_section(
     CONTROL_SYNC_NAMES,
 )
 COMPLETION_SYNC_NAMES = (
-    "completion_gray_meta",
-    "completion_gray_sync",
-    "destination_reset_meta",
-    "destination_reset_sync",
+    "o_completion_gray_meta",
+    "o_completion_gray_sync",
 )
 COMPLETION_SYNC_ASSIGNMENTS = quartus_assignment_section(
-    "mister_magik_scaler_completion_cdc:magik_scaler_completion_cdc",
+    "ascal:ascal",
     COMPLETION_SYNC_NAMES,
 )
 SYNC_NAMES += tuple(
-    f"mister_magik_scaler_completion_cdc:magik_scaler_completion_cdc|{name}"
+    f"ascal:ascal|{name}"
     for name in COMPLETION_SYNC_NAMES
 )
 SYNC_ASSIGNMENTS = CONTROL_SYNC_ASSIGNMENTS + COMPLETION_SYNC_ASSIGNMENTS
 CUSTOM_SYNC = SYNC_ASSIGNMENTS + """\
 Info (332114): Report Metastability: Found 8 synchronizer chains.
-Info (332114): Fraction of Chains for which MTBFs Could Not be Calculated: 0.375
+Info (332114): Fraction of Chains for which MTBFs Could Not be Calculated: 0.500
 Info: MagiK diagnostics CDC analysis applied: scaler_completion_gray
 """
 
@@ -91,9 +89,9 @@ VALID_DIAGNOSTIC_REPORTS = {
     "menu.magik-diagnostic-cdc-net-delay.rpt": (
         "; set_net_delay ; 1.250 ; 10.000 ; 8.750 ; sources ; destinations ; max ;\n"
         "; -- ; 1.500 ; 10.000 ; 8.500 ; ascal:ascal|avl_completion_gray_i[0] ; "
-        "mister_magik_scaler_completion_cdc:magik_scaler_completion_cdc|completion_gray_meta[0] ; max ;\n"
+        "ascal:ascal|o_completion_gray_meta[0] ; max ;\n"
         "; -- ; 1.250 ; 10.000 ; 8.750 ; ascal:ascal|avl_completion_gray_i[1] ; "
-        "mister_magik_scaler_completion_cdc:magik_scaler_completion_cdc|completion_gray_meta[1] ; max ;\n"
+        "ascal:ascal|o_completion_gray_meta[1] ; max ;\n"
     ),
     "menu.magik-diagnostic-metastability.rpt": (
         "Report Metastability: Found 40 synchronizer chains.\n"
@@ -210,15 +208,15 @@ class QuartusDeltaTest(unittest.TestCase):
         patched = CUSTOM_SYNC.replace(
             "Found 8 synchronizer chains", "Found 10 synchronizer chains"
         ).replace(
-            "Could Not be Calculated: 0.375",
             "Could Not be Calculated: 0.500",
+            "Could Not be Calculated: 0.600",
         )
         result, payload = self.run_check(BASE, BASE + patched)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(payload["baseline_synchronizer_chains"], 5)
         self.assertEqual(payload["patched_synchronizer_chains"], 10)
         self.assertEqual(payload["baseline_calculable_synchronizer_chains"], 1)
-        self.assertEqual(payload["patched_calculable_synchronizer_chains"], 5)
+        self.assertEqual(payload["patched_calculable_synchronizer_chains"], 4)
 
     def test_new_warning_fails_even_when_warning_code_is_inherited(self) -> None:
         result, payload = self.run_check(BASE, BASE + "Warning (10001): different warning\n" + CUSTOM_SYNC)

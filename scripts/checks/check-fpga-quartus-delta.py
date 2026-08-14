@@ -62,7 +62,7 @@ MINIMUM_SLACK_NS = 0.20
 MAXIMUM_SLACK_DEGRADATION_NS = 0.15
 MAXIMUM_LOGIC_ELEMENT_DELTA = 150
 MAXIMUM_REGISTER_DELTA = 96
-EXPECTED_OBSERVER_CALCULABLE_CHAINS = 4
+EXPECTED_OBSERVER_CALCULABLE_CHAINS = 3
 EXPECTED_QUARTUS_POLICY = {
     "auto_parallel_synthesis": "off",
     "parallel_synthesis": "off",
@@ -71,58 +71,8 @@ EXPECTED_QUARTUS_POLICY = {
 EXPECTED_SYNC_ASSIGNMENT_SUFFIXES = (
     "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|control_pll_lock_meta",
     "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|control_pll_lock_sys",
-    "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|output_no_de_meta",
-    "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|output_no_de_sys",
-    "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|output_black_direct_meta",
-    "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|output_black_direct_sys",
-    "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|output_black_scaled_meta",
-    "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|output_black_scaled_sys",
-    "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|output_black_mixed_meta",
-    "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|output_black_mixed_sys",
-    "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|output_de_has_nonzero_meta",
-    "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|output_de_has_nonzero_sys",
-    "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|raw_no_de_meta",
-    "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|raw_no_de_sys",
-    "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|raw_all_zero_meta",
-    "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|raw_all_zero_sys",
-    "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|raw_nonzero_meta",
-    "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|raw_nonzero_sys",
-    "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|post_no_de_meta",
-    "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|post_no_de_sys",
-    "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|post_all_zero_meta",
-    "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|post_all_zero_sys",
-    "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|post_nonzero_meta",
-    "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|post_nonzero_sys",
-    "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|avalon_bucket_meta",
-    "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|avalon_bucket_sys",
-    "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|avalon_request_meta",
-    "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|avalon_request_sys",
-    "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|avalon_accepted_meta",
-    "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|avalon_accepted_sys",
-    "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|avalon_returned_meta",
-    "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|avalon_returned_sys",
-    "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|scaler_fetch_batch_two_meta",
-    "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|scaler_fetch_batch_two_sys",
-    "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|scaler_fetch_starved_frame_meta",
-    "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|scaler_fetch_starved_frame_sys",
-    "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|scaler_fetch_snapshot_valid_meta",
-    "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|scaler_fetch_snapshot_valid_sys",
-    "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|scaler_fetch_delta_invalid_meta",
-    "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|scaler_fetch_delta_invalid_sys",
-    "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|scaler_fetch_level_invalid_meta",
-    "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|scaler_fetch_level_invalid_sys",
-    "mister_magik_scaler_completion_cdc:magik_scaler_completion_cdc|completion_gray_meta",
-    "mister_magik_scaler_completion_cdc:magik_scaler_completion_cdc|completion_gray_sync",
-    "mister_magik_scaler_completion_cdc:magik_scaler_completion_cdc|destination_reset_meta",
-    "mister_magik_scaler_completion_cdc:magik_scaler_completion_cdc|destination_reset_sync",
-)
-EXPECTED_SYNC_ASSIGNMENT_SUFFIXES = (
-    "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|control_pll_lock_meta",
-    "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|control_pll_lock_sys",
-    "mister_magik_scaler_completion_cdc:magik_scaler_completion_cdc|completion_gray_meta",
-    "mister_magik_scaler_completion_cdc:magik_scaler_completion_cdc|completion_gray_sync",
-    "mister_magik_scaler_completion_cdc:magik_scaler_completion_cdc|destination_reset_meta",
-    "mister_magik_scaler_completion_cdc:magik_scaler_completion_cdc|destination_reset_sync",
+    "ascal:ascal|o_completion_gray_meta",
+    "ascal:ascal|o_completion_gray_sync",
 )
 EXPECTED_CDC_ANALYSIS_LABELS: frozenset[str] = frozenset({"scaler_completion_gray"})
 DIAGNOSTIC_REPORT_NAMES = frozenset(
