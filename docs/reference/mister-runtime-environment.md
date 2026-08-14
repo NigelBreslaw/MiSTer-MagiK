@@ -2,7 +2,7 @@
 
 <!-- Generated from apps/mister/config/runtime-environment.toml. Do not edit. -->
 
-Registry format: `mister-magik-runtime-environment-v1`. Baseline: 394 literal occurrences, 272 owned names, 11 external/build-time names.
+Registry format: `mister-magik-runtime-environment-v1`. Baseline: 397 literal occurrences, 275 owned names, 11 external/build-time names.
 
 | Name | Classification | Shape | Default behavior | Visibility | Owner |
 |---|---|---|---|---|---|
@@ -134,6 +134,9 @@ Registry format: `mister-magik-runtime-environment-v1`. Baseline: 394 literal oc
 | `MISTER_MAGIK_HOT_JOURNAL_DB` | production | string, enum, or boolean token | site-defined fallback; unchanged in P0 | internal runtime | `crates/catalog/src/sqlite_catalog.rs` |
 | `MISTER_MAGIK_INPUT_PROXY` | production | string, enum, or boolean token | site-defined fallback; unchanged in P0 | internal runtime | `apps/mister/src/input_hub.rs` |
 | `MISTER_MAGIK_INPUT_PROXY_PROTOCOL` | production | string, enum, or boolean token | site-defined fallback; unchanged in P0 | internal runtime | `apps/mister/src/input_hub.rs` |
+| `MISTER_MAGIK_MAIN_GENERATION` | production | bounded integer | missing or invalid disables supervised readiness acknowledgement | internal runtime | `apps/mister/src/ui_runner/launcher_readiness.rs` |
+| `MISTER_MAGIK_MAIN_PID` | production | bounded integer | missing or invalid disables supervised readiness acknowledgement | internal runtime | `apps/mister/src/ui_runner/launcher_readiness.rs` |
+| `MISTER_MAGIK_OWNER_EPOCH` | production | bounded integer | missing or invalid disables supervised readiness acknowledgement | internal runtime | `apps/mister/src/ui_runner/launcher_readiness.rs` |
 | `MISTER_MAGIK_PARENT` | production | string, enum, or boolean token | site-defined fallback; unchanged in P0 | internal runtime | `apps/mister/src/ui_runner/launcher_loop.rs` |
 | `MISTER_MAGIK_PROCESS_LOCK` | production | string, enum, or boolean token | site-defined fallback; unchanged in P0 | internal runtime | `apps/mister/src/main.rs` |
 | `MISTER_MAGIK_READY_FIFO` | production | path or path list | site-defined fallback; unchanged in P0 | internal runtime | `apps/mister/src/ui_runner/launcher_readiness.rs` |
