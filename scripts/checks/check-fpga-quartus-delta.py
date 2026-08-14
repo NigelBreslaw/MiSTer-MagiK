@@ -37,7 +37,11 @@ SOURCE_ASSIGNMENTS_RE = re.compile(
     re.IGNORECASE,
 )
 RESOURCE_RE = re.compile(
-    r"^\s*;?\s*((?:Logic utilization \(in ALMs\)|Total (?:logic elements|registers|block memory bits|DSP Blocks)))\s*[:;]\s*([\d,]+)",
+    r"^\s*;?\s*((?:Logic utilization \(in ALMs\)|Total (?:logic elements|registers|block memory bits|DSP Blocks|PLLs)))\s*[:;]\s*([\d,]+)",
+    re.IGNORECASE,
+)
+PLL_IDENTITY_RE = re.compile(
+    r"^\s*;\s*([^;\n]*(?:~FRACTIONAL_PLL|\|fpll))\s*;\s*;\s*$",
     re.IGNORECASE,
 )
 QUARTUS_POLICY_RE = re.compile(
@@ -65,7 +69,7 @@ MAXIMUM_REGISTER_DELTA = 96
 EXPECTED_UNCONSTRAINED_OUTPUT_PATHS = 158
 MINIMUM_CUSTOM_MTBF_DEVICE_HOURS = 1.0e12
 MINIMUM_CUSTOM_MTBF_YEARS = MINIMUM_CUSTOM_MTBF_DEVICE_HOURS / (24.0 * 365.25)
-EXPECTED_OBSERVER_CALCULABLE_CHAINS = 1
+EXPECTED_ADDED_COMPLETION_SYNCHRONIZER_CHAINS = 1
 EXPECTED_QUARTUS_POLICY = {
     "auto_parallel_synthesis": "off",
     "parallel_synthesis": "off",
@@ -90,6 +94,14 @@ DIAGNOSTIC_REPORT_NAMES = frozenset(
 EXPECTED_CDC_REPORT_ANALYSES = {
     "menu.magik-diagnostic-cdc-skew.rpt": ("set_max_skew", 0),
     "menu.magik-diagnostic-cdc-net-delay.rpt": ("set_net_delay", 2),
+}
+EXPECTED_NET_DELAY_PATHS = {
+    "completion_request": re.compile(
+        r"avl_readdataack[^\n]*o_readdataack_sync", re.IGNORECASE
+    ),
+    "completion_ack": re.compile(
+        r"o_readdataack_sync2[^\n]*avl_completion_ack_meta", re.IGNORECASE
+    ),
 }
 
 
@@ -166,6 +178,7 @@ def parse_report(
     custom_sync_lines: list[int] = []
     custom_sync_mtbf = False
     resources: dict[str, int] = {}
+    pll_identities: Counter[str] = Counter()
     sync_assignments = parse_sync_assignments(lines)
     diagnostic_analysis_labels: Counter[str] = Counter()
     uncalculated_fractions: list[float] = []
@@ -245,6 +258,10 @@ def parse_report(
             if value is not None:
                 uncalculated_fractions.append(value)
 
+        pll_identity = PLL_IDENTITY_RE.match(line)
+        if pll_identity:
+            pll_identities[normalize_space(pll_identity.group(1)).lower()] += 1
+
     # Aggregated inputs also contain Analysis & Synthesis estimates. Resource
     # budgets must use the final fitter summary when Quartus emitted one.
     for line in (fitter_summary or text).splitlines():
@@ -272,6 +289,7 @@ def parse_report(
         "custom_sync_seen": bool(custom_sync_lines),
         "custom_sync_mtbf": custom_sync_mtbf,
         "resources": resources,
+        "pll_identities": pll_identities,
         "sync_assignments": sync_assignments,
         "diagnostic_analysis_labels": diagnostic_analysis_labels,
         "uncalculated_fractions": uncalculated_fractions,
@@ -352,9 +370,7 @@ def validate_diagnostic_reports(
         if name == "menu.magik-diagnostic-cdc-net-delay.rpt":
             detailed_rows = list(
                 re.finditer(
-                    rf"(?m)^\s*;\s*--\s*;\s*({NUMBER})\s*;[^\n]*"
-                    r"(?:avl_readdataack[^\n]*o_readdataack_sync|"
-                    r"o_readdataack_sync2[^\n]*avl_completion_ack_meta)",
+                    rf"(?m)^\s*;\s*--\s*;\s*({NUMBER})\s*;[^\n]*$",
                     text,
                     re.IGNORECASE,
                 )
@@ -362,6 +378,20 @@ def validate_diagnostic_reports(
             detailed_path_counts[name] = len(detailed_rows)
             if len(detailed_rows) != 2:
                 reasons.append("diagnostic_cdc_analysis_count")
+            detailed_path_identities = {
+                label: sum(
+                    1 for row in detailed_rows if pattern.search(row.group(0))
+                )
+                for label, pattern in EXPECTED_NET_DELAY_PATHS.items()
+            }
+            detailed_path_counts.update(
+                {
+                    f"{name}:{label}": count
+                    for label, count in detailed_path_identities.items()
+                }
+            )
+            if any(count != 1 for count in detailed_path_identities.values()):
+                reasons.append("diagnostic_cdc_path_identity_mismatch")
             detailed_slacks = [finite_number(row.group(1)) for row in detailed_rows]
             if any(value is None for value in detailed_slacks):
                 reasons.append("diagnostic_cdc_slack_missing")
@@ -445,8 +475,8 @@ def compare(
         if not processor_use or any(used != 4 for used, _detected in processor_use):
             reasons.append("quartus_processor_use_mismatch")
     # Warning, constraint-identity, and CDC checks describe functional drift
-    # from upstream Menu. Observer cost is the final build relative to the
-    # exact patched latch build before the observer was introduced.
+    # from upstream Menu. Repair cost is the final build relative to the exact
+    # patched latch build before the retired observer was introduced.
     stock_warnings = stock["warnings"]
     patched_warnings = patched["warnings"]
     assert isinstance(stock_warnings, Counter) and isinstance(patched_warnings, Counter)
@@ -512,6 +542,7 @@ def compare(
         "total registers": MAXIMUM_REGISTER_DELTA,
         "total block memory bits": 0,
         "total dsp blocks": 0,
+        "total plls": 0,
     }
     resource_deltas: dict[str, int | None] = {}
     for resource, limit in resource_limits.items():
@@ -528,6 +559,29 @@ def compare(
                 else resource.replace("total ", "").replace(" ", "_") + "_delta"
             )
 
+    baseline_pll_count = baseline_resources.get("total plls")
+    patched_pll_count = patched_resources.get("total plls")
+    if (
+        baseline_pll_count is not None
+        and patched_pll_count is not None
+        and patched_pll_count != baseline_pll_count
+    ):
+        reasons.append("pll_count_mismatch")
+    baseline_pll_identities = baseline["pll_identities"]
+    patched_pll_identities = patched["pll_identities"]
+    assert isinstance(baseline_pll_identities, Counter)
+    assert isinstance(patched_pll_identities, Counter)
+    if not baseline_pll_identities or not patched_pll_identities:
+        reasons.append("pll_identity_missing")
+    elif baseline_pll_identities != patched_pll_identities:
+        reasons.append("pll_identity_mismatch")
+    for count, identities in (
+        (baseline_pll_count, baseline_pll_identities),
+        (patched_pll_count, patched_pll_identities),
+    ):
+        if count is not None and count != sum(identities.values()):
+            reasons.append("pll_identity_count_mismatch")
+
     tns = patched["tns"]
     assert isinstance(tns, list)
     if not tns:
@@ -541,6 +595,15 @@ def compare(
         reasons.append("synchronizer_report_missing")
     baseline_chain_counts = baseline["chain_counts"]
     assert isinstance(baseline_chain_counts, list)
+    exact_added_chain_seen = (
+        bool(baseline_chain_counts)
+        and bool(chain_counts)
+        and max(chain_counts)
+        == max(baseline_chain_counts)
+        + EXPECTED_ADDED_COMPLETION_SYNCHRONIZER_CHAINS
+    )
+    if not exact_added_chain_seen:
+        reasons.append("synchronizer_chain_count_mismatch")
     sync_assignments = patched["sync_assignments"]
     assert isinstance(sync_assignments, set)
     missing_sync_assignments = [
@@ -559,15 +622,16 @@ def compare(
         baseline_chain_counts, baseline_fractions
     )
     patched_calculable_chains = estimated_calculable_chains(chain_counts, patched_fractions)
-    custom_delta_calculable = (
+    completion_delta_calculable = (
         baseline_calculable_chains is not None
         and patched_calculable_chains is not None
         and patched_calculable_chains
-        == baseline_calculable_chains + EXPECTED_OBSERVER_CALCULABLE_CHAINS
+        == baseline_calculable_chains
+        + EXPECTED_ADDED_COMPLETION_SYNCHRONIZER_CHAINS
     )
     if not custom_assignment_seen:
         reasons.append("custom_synchronizer_missing")
-    if not custom_delta_calculable:
+    if not completion_delta_calculable:
         reasons.append("custom_synchronizer_mtbf_missing")
 
     analysis_labels = patched["diagnostic_analysis_labels"]
@@ -596,7 +660,8 @@ def compare(
         "patched_calculable_synchronizer_chains": patched_calculable_chains,
         "missing_sync_assignments": missing_sync_assignments,
         "custom_sync_seen": custom_assignment_seen,
-        "custom_sync_mtbf": custom_delta_calculable,
+        "exact_added_completion_synchronizer_seen": exact_added_chain_seen,
+        "custom_sync_mtbf": completion_delta_calculable,
         "stock_unconstrained_output_paths": max(stock_output_paths, default=None),
         "baseline_unconstrained_output_paths": max(baseline_output_paths, default=None),
         "patched_unconstrained_output_paths": max(patched_output_paths, default=None),
@@ -604,6 +669,8 @@ def compare(
         "baseline_resources": baseline_resources,
         "patched_resources": patched["resources"],
         "resource_deltas": resource_deltas,
+        "baseline_pll_identities": dict(sorted(baseline_pll_identities.items())),
+        "patched_pll_identities": dict(sorted(patched_pll_identities.items())),
         "quartus_policy": policy_details,
         "quartus_processor_use": {
             flavour: report["quartus_processor_use"]
@@ -631,7 +698,7 @@ def main(argv: list[str] | None = None) -> int:
         action="append",
         type=Path,
         required=True,
-        help="exact pre-observer patched log/report; repeatable",
+        help="exact pinned pre-observer baseline log/report; repeatable",
     )
     parser.add_argument(
         "--synchronizer-regex",

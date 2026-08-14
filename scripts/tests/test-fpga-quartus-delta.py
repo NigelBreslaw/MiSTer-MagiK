@@ -34,6 +34,11 @@ Total logic elements: 10,000
 Total registers: 20,000
 Total block memory bits: 1,000,000
 Total DSP Blocks: 2
+Total PLLs: 3 / 6 ( 50 % )
+; PLL Usage Summary ;
+; pll_hdmi:pll_hdmi|pll_hdmi_0002:pll_hdmi_inst|altera_pll:altera_pll_i|altera_cyclonev_pll:cyclonev_pll|altera_cyclonev_pll_base:fpll_0|fpll ; ;
+; pll_audio:pll_audio|pll_audio_0002:pll_audio_inst|altera_pll:altera_pll_i|general[0].gpll~FRACTIONAL_PLL ; ;
+; emu:emu|pll:pll|pll_0002:pll_inst|altera_pll:altera_pll_i|general[0].gpll~FRACTIONAL_PLL ; ;
 ; AUTO_PARALLEL_SYNTHESIS ; Off ; On ; -- ; -- ;
 ; NUM_PARALLEL_PROCESSORS ; 4 ; -- ; -- ; -- ;
 ; PARALLEL_SYNTHESIS ; Off ; On ; -- ; -- ;
@@ -184,7 +189,7 @@ class QuartusDeltaTest(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertIn("quartus_processor_use_mismatch", payload["invalid_reason"])
 
-    def test_unrelated_total_chain_drift_does_not_override_exact_evidence(self) -> None:
+    def test_unrelated_total_chain_drift_fails(self) -> None:
         patched = CUSTOM_SYNC.replace(
             "Found 6 synchronizer chains", "Found 10 synchronizer chains"
         ).replace(
@@ -192,7 +197,8 @@ class QuartusDeltaTest(unittest.TestCase):
             "Could Not be Calculated: 0.800",
         )
         result, payload = self.run_check(BASE, BASE + patched)
-        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("synchronizer_chain_count_mismatch", payload["invalid_reason"])
         self.assertEqual(payload["baseline_synchronizer_chains"], 5)
         self.assertEqual(payload["patched_synchronizer_chains"], 10)
         self.assertEqual(payload["baseline_calculable_synchronizer_chains"], 1)
@@ -291,7 +297,7 @@ class QuartusDeltaTest(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertIn("unconstrained_output_paths_mismatch", payload["invalid_reason"])
 
-    def test_observer_budgets_are_relative_to_pre_observer_build(self) -> None:
+    def test_repair_budgets_are_relative_to_pre_observer_build(self) -> None:
         stock = BASE.replace("setup slack is 0.500", "setup slack is 0.600")
         baseline = stock.replace("setup slack is 0.400", "setup slack is 0.300").replace(
             "; Unconstrained Output Port Paths ; 158 ; 158 ;",
@@ -300,11 +306,11 @@ class QuartusDeltaTest(unittest.TestCase):
         patched = baseline.replace("setup slack is 0.600", "setup slack is 0.451") + CUSTOM_SYNC
         fitter_resources = (
             "Logic utilization (in ALMs) : 7,000 / 41,910 ( 17 % )\n"
-            "Total registers : 20,000\nTotal block memory bits : 1,000,000\nTotal DSP Blocks : 2\n",
+            "Total registers : 20,000\nTotal block memory bits : 1,000,000\nTotal DSP Blocks : 2\nTotal PLLs : 3 / 6\n",
             "Logic utilization (in ALMs) : 7,800 / 41,910 ( 19 % )\n"
-            "Total registers : 20,500\nTotal block memory bits : 1,000,000\nTotal DSP Blocks : 2\n",
+            "Total registers : 20,500\nTotal block memory bits : 1,000,000\nTotal DSP Blocks : 2\nTotal PLLs : 3 / 6\n",
             "Logic utilization (in ALMs) : 7,950 / 41,910 ( 19 % )\n"
-            "Total registers : 20,596\nTotal block memory bits : 1,000,000\nTotal DSP Blocks : 2\n",
+            "Total registers : 20,596\nTotal block memory bits : 1,000,000\nTotal DSP Blocks : 2\nTotal PLLs : 3 / 6\n",
         )
         result, payload = self.run_check(stock, patched, baseline, fitter_resources)
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -315,11 +321,11 @@ class QuartusDeltaTest(unittest.TestCase):
     def test_alm_budget_excess_fails(self) -> None:
         summaries = (
             "Logic utilization (in ALMs) : 7,000\nTotal registers : 20,000\n"
-            "Total block memory bits : 1,000,000\nTotal DSP Blocks : 2\n",
+            "Total block memory bits : 1,000,000\nTotal DSP Blocks : 2\nTotal PLLs : 3 / 6\n",
             "Logic utilization (in ALMs) : 7,800\nTotal registers : 20,000\n"
-            "Total block memory bits : 1,000,000\nTotal DSP Blocks : 2\n",
+            "Total block memory bits : 1,000,000\nTotal DSP Blocks : 2\nTotal PLLs : 3 / 6\n",
             "Logic utilization (in ALMs) : 7,951\nTotal registers : 20,000\n"
-            "Total block memory bits : 1,000,000\nTotal DSP Blocks : 2\n",
+            "Total block memory bits : 1,000,000\nTotal DSP Blocks : 2\nTotal PLLs : 3 / 6\n",
         )
         result, payload = self.run_check(BASE, BASE + CUSTOM_SYNC, BASE, summaries)
         self.assertEqual(result.returncode, 1)
@@ -328,11 +334,11 @@ class QuartusDeltaTest(unittest.TestCase):
     def test_register_budget_excess_fails(self) -> None:
         summaries = (
             "Logic utilization (in ALMs) : 7,000\nTotal registers : 20,000\n"
-            "Total block memory bits : 1,000,000\nTotal DSP Blocks : 2\n",
+            "Total block memory bits : 1,000,000\nTotal DSP Blocks : 2\nTotal PLLs : 3 / 6\n",
             "Logic utilization (in ALMs) : 7,800\nTotal registers : 20,500\n"
-            "Total block memory bits : 1,000,000\nTotal DSP Blocks : 2\n",
+            "Total block memory bits : 1,000,000\nTotal DSP Blocks : 2\nTotal PLLs : 3 / 6\n",
             "Logic utilization (in ALMs) : 7,800\nTotal registers : 20,597\n"
-            "Total block memory bits : 1,000,000\nTotal DSP Blocks : 2\n",
+            "Total block memory bits : 1,000,000\nTotal DSP Blocks : 2\nTotal PLLs : 3 / 6\n",
         )
         result, payload = self.run_check(BASE, BASE + CUSTOM_SYNC, BASE, summaries)
         self.assertEqual(result.returncode, 1)
@@ -357,7 +363,7 @@ class QuartusDeltaTest(unittest.TestCase):
         self.assertIn("baseline_setup_slack_missing", payload["invalid_reason"])
 
     def test_functional_delta_remains_stock_to_final(self) -> None:
-        baseline_warning = "Warning (20002): baseline-only observer precursor\n"
+        baseline_warning = "Warning (20002): baseline-only repair precursor\n"
         result, _ = self.run_check(BASE, BASE + CUSTOM_SYNC, BASE + baseline_warning)
         self.assertEqual(result.returncode, 0, result.stderr)
 
@@ -412,6 +418,56 @@ class QuartusDeltaTest(unittest.TestCase):
         result, payload = self.run_check(BASE, BASE + CUSTOM_SYNC, diagnostic_reports=reports)
         self.assertEqual(result.returncode, 1)
         self.assertIn("diagnostic_cdc_analysis_count", payload["invalid_reason"])
+
+    def test_duplicate_forward_net_delay_path_fails(self) -> None:
+        reports = dict(VALID_DIAGNOSTIC_REPORTS)
+        reports["menu.magik-diagnostic-cdc-net-delay.rpt"] = reports[
+            "menu.magik-diagnostic-cdc-net-delay.rpt"
+        ].replace(
+            "ascal:ascal|o_readdataack_sync2 ; ascal:ascal|avl_completion_ack_meta",
+            "ascal:ascal|avl_readdataack ; ascal:ascal|o_readdataack_sync",
+        )
+        result, payload = self.run_check(
+            BASE, BASE + CUSTOM_SYNC, diagnostic_reports=reports
+        )
+        self.assertEqual(result.returncode, 1)
+        self.assertIn(
+            "diagnostic_cdc_path_identity_mismatch", payload["invalid_reason"]
+        )
+
+    def test_duplicate_reverse_net_delay_path_fails(self) -> None:
+        reports = dict(VALID_DIAGNOSTIC_REPORTS)
+        reports["menu.magik-diagnostic-cdc-net-delay.rpt"] = reports[
+            "menu.magik-diagnostic-cdc-net-delay.rpt"
+        ].replace(
+            "ascal:ascal|avl_readdataack ; ascal:ascal|o_readdataack_sync",
+            "ascal:ascal|o_readdataack_sync2 ; ascal:ascal|avl_completion_ack_meta",
+        )
+        result, payload = self.run_check(
+            BASE, BASE + CUSTOM_SYNC, diagnostic_reports=reports
+        )
+        self.assertEqual(result.returncode, 1)
+        self.assertIn(
+            "diagnostic_cdc_path_identity_mismatch", payload["invalid_reason"]
+        )
+
+    def test_pll_count_drift_fails(self) -> None:
+        patched = (BASE + CUSTOM_SYNC).replace(
+            "Total PLLs: 3 / 6", "Total PLLs: 4 / 6"
+        )
+        result, payload = self.run_check(BASE, patched)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("pll_count_mismatch", payload["invalid_reason"])
+        self.assertIn("pll_identity_count_mismatch", payload["invalid_reason"])
+
+    def test_pll_identity_drift_fails(self) -> None:
+        patched = (BASE + CUSTOM_SYNC).replace(
+            "pll_audio:pll_audio|pll_audio_0002:pll_audio_inst",
+            "pll_extra:pll_extra|pll_extra_0002:pll_extra_inst",
+        )
+        result, payload = self.run_check(BASE, patched)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("pll_identity_mismatch", payload["invalid_reason"])
 
     def test_completion_chain_mtbf_below_device_hour_gate_fails(self) -> None:
         reports = dict(VALID_DIAGNOSTIC_REPORTS)
