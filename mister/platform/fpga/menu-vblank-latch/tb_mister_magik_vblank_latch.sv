@@ -58,7 +58,6 @@ module tb_mister_magik_vblank_latch;
 		.cmd_id(cmd_id),
 		.word_index(word_index),
 		.data_in(data_in),
-		.evidence_word(16'd0),
 		.active_lfb_en(active_lfb_en),
 		.active_lfb_base(active_lfb_base),
 		.active_lfb_width(active_lfb_width),

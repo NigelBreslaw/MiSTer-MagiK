@@ -35,8 +35,8 @@ COMMAND_PATTERNS = {
 }
 
 IMMUTABLE_LATCH_SHA256 = {
-    "mister_magik_vblank_latch.sv": "327969f8740321ef2f522855c1ec2f815fb2a47032ded8c437b8e024011110a7",
-    "mister_magik_latch_sys_top_bridge.sv": "37b0c57cfb5596cc12ddb41a3b586e516dedeeeadf8d45cbb9e47804a17db59f",
+    "mister_magik_vblank_latch.sv": "47def40bc8b064373efa328a56ab0396272855a2190f17d700f27b8a29382090",
+    "mister_magik_latch_sys_top_bridge.sv": "5960883a0f8740ffc18fcd63ce8c99da9a9819bcbc903ca119bfc66810fd68e9",
     "mister_magik_latch_protocol.svh": "bc26dff578940790a70e379718f8f1b8eda7122efd267e0e5e7cc244f1347a7b",
     "latch-protocol.json": "69eef7979ad235c49989870b82534d187c9d97da40feb6e7647fd8e62adbec54",
 }
@@ -48,7 +48,6 @@ BRIDGE_MAPPING = """mister_magik_latch_sys_top_bridge magik_latch_bridge
 \t.io_uio(io_uio),
 \t.io_strobe(io_strobe),
 \t.io_din(io_din),
-\t.evidence_word(magik_evidence_word),
 \t.active_lfb_en(LFB_EN),
 \t.active_lfb_base(LFB_BASE),
 \t.active_lfb_width(LFB_WIDTH),
@@ -59,9 +58,7 @@ BRIDGE_MAPPING = """mister_magik_latch_sys_top_bridge magik_latch_bridge
 \t.apply(),
 \t.apply_accepted(magik_lfb_apply_accepted),
 \t.legacy_write(),
-\t.active_word_index(magik_evidence_word_index),
-\t.evidence_command(magik_evidence_command),
-\t.evidence_snapshot(magik_evidence_snapshot),
+\t.active_word_index(),
 \t.route_en(magik_lfb_en),
 \t.route_flt(magik_lfb_flt),
 \t.route_fmt(magik_lfb_fmt),
@@ -191,17 +188,7 @@ def main() -> None:
         "destination_clk",
         "reset_n",
         "source_completion_gray",
-        "scaler_vs",
-        "scaler_framebuffer_enabled",
-        "scaler_scheduler_state",
-        "scaler_copy_state",
-        "scaler_read_level",
-        "scaler_copy_level",
         "completion_pulse",
-        "completion_batch_two_toggle",
-        "completion_starved_frame_toggle",
-        "completion_snapshot_valid",
-        "completion_delta_invalid",
     ]:
         fail("scaler completion bridge interface is not exact")
     for fragment in (
@@ -216,8 +203,6 @@ def main() -> None:
         "wire [1:0] completion_delta =",
         "if(completion_pending)",
         "completion_pending <= 1'b1;",
-        "wire completion_starved_now =",
-        "if(!completion_delta_valid)",
     ):
         if avalon_source.count(fragment) != 1:
             fail(f"scaler completion bridge behavior is missing: {fragment}")
@@ -247,53 +232,15 @@ def main() -> None:
         if retired_fragment in compiled_diagnostics:
             fail(f"retired wide diagnostic fragment remains in lock recorder: {retired_fragment}")
     sync_assignment = "SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS"
+    # Milestone A retains only the independently qualified physical-lock chain;
+    # scaler completion Gray/reset chains live in the dedicated repair module.
     synchronizer_stages = (
         ("control_pll_lock_meta", "FORCED"),
         ("control_pll_lock_sys", "FORCED_IF_ASYNCHRONOUS"),
-        ("output_no_de_meta", "FORCED"),
-        ("output_no_de_sys", "FORCED_IF_ASYNCHRONOUS"),
-        ("output_black_direct_meta", "FORCED"),
-        ("output_black_direct_sys", "FORCED_IF_ASYNCHRONOUS"),
-        ("output_black_scaled_meta", "FORCED"),
-        ("output_black_scaled_sys", "FORCED_IF_ASYNCHRONOUS"),
-        ("output_black_mixed_meta", "FORCED"),
-        ("output_black_mixed_sys", "FORCED_IF_ASYNCHRONOUS"),
-        ("output_de_has_nonzero_meta", "FORCED"),
-        ("output_de_has_nonzero_sys", "FORCED_IF_ASYNCHRONOUS"),
-        ("raw_no_de_meta", "FORCED"),
-        ("raw_no_de_sys", "FORCED_IF_ASYNCHRONOUS"),
-        ("raw_all_zero_meta", "FORCED"),
-        ("raw_all_zero_sys", "FORCED_IF_ASYNCHRONOUS"),
-        ("raw_nonzero_meta", "FORCED"),
-        ("raw_nonzero_sys", "FORCED_IF_ASYNCHRONOUS"),
-        ("post_no_de_meta", "FORCED"),
-        ("post_no_de_sys", "FORCED_IF_ASYNCHRONOUS"),
-        ("post_all_zero_meta", "FORCED"),
-        ("post_all_zero_sys", "FORCED_IF_ASYNCHRONOUS"),
-        ("post_nonzero_meta", "FORCED"),
-        ("post_nonzero_sys", "FORCED_IF_ASYNCHRONOUS"),
-        ("avalon_bucket_meta", "FORCED"),
-        ("avalon_bucket_sys", "FORCED_IF_ASYNCHRONOUS"),
-        ("avalon_request_meta", "FORCED"),
-        ("avalon_request_sys", "FORCED_IF_ASYNCHRONOUS"),
-        ("avalon_accepted_meta", "FORCED"),
-        ("avalon_accepted_sys", "FORCED_IF_ASYNCHRONOUS"),
-        ("avalon_returned_meta", "FORCED"),
-        ("avalon_returned_sys", "FORCED_IF_ASYNCHRONOUS"),
-        ("scaler_fetch_batch_two_meta", "FORCED"),
-        ("scaler_fetch_batch_two_sys", "FORCED_IF_ASYNCHRONOUS"),
-        ("scaler_fetch_starved_frame_meta", "FORCED"),
-        ("scaler_fetch_starved_frame_sys", "FORCED_IF_ASYNCHRONOUS"),
-        ("scaler_fetch_snapshot_valid_meta", "FORCED"),
-        ("scaler_fetch_snapshot_valid_sys", "FORCED_IF_ASYNCHRONOUS"),
-        ("scaler_fetch_delta_invalid_meta", "FORCED"),
-        ("scaler_fetch_delta_invalid_sys", "FORCED_IF_ASYNCHRONOUS"),
-        ("scaler_fetch_level_invalid_meta", "FORCED"),
-        ("scaler_fetch_level_invalid_sys", "FORCED_IF_ASYNCHRONOUS"),
     )
     if (
         "ASYNC_REG" in control_source
-        or control_source.count(sync_assignment) != 21
+        or control_source.count(sync_assignment) != 1
     ):
         fail("HDMI evidence synchronizers are not exactly identified")
     for stage, assignment in synchronizer_stages:
@@ -317,139 +264,6 @@ def main() -> None:
             control_source,
             "control_pll_lock_sys <= control_pll_lock_meta;",
         ),
-        "no-DE first stage": (
-            control_source,
-            "output_no_de_meta <= output_no_de_toggle;",
-        ),
-        "no-DE second stage": (
-            control_source,
-            "output_no_de_sys <= output_no_de_meta;",
-        ),
-        "direct-black first stage": (
-            control_source,
-            "output_black_direct_meta <= output_black_direct_toggle;",
-        ),
-        "direct-black second stage": (
-            control_source,
-            "output_black_direct_sys <= output_black_direct_meta;",
-        ),
-        "scaled-black first stage": (
-            control_source,
-            "output_black_scaled_meta <= output_black_scaled_toggle;",
-        ),
-        "scaled-black second stage": (
-            control_source,
-            "output_black_scaled_sys <= output_black_scaled_meta;",
-        ),
-        "mixed-black first stage": (
-            control_source,
-            "output_black_mixed_meta <= output_black_mixed_toggle;",
-        ),
-        "mixed-black second stage": (
-            control_source,
-            "output_black_mixed_sys <= output_black_mixed_meta;",
-        ),
-        "nonzero first stage": (
-            control_source,
-            "output_de_has_nonzero_meta <= output_de_has_nonzero_toggle;",
-        ),
-        "nonzero second stage": (
-            control_source,
-            "output_de_has_nonzero_sys <= output_de_has_nonzero_meta;",
-        ),
-        "raw no-DE first stage": (control_source, "raw_no_de_meta <= raw_no_de_toggle;"),
-        "raw no-DE second stage": (control_source, "raw_no_de_sys <= raw_no_de_meta;"),
-        "raw black first stage": (
-            control_source,
-            "raw_all_zero_meta <= raw_all_zero_toggle;",
-        ),
-        "raw black second stage": (control_source, "raw_all_zero_sys <= raw_all_zero_meta;"),
-        "raw nonzero first stage": (control_source, "raw_nonzero_meta <= raw_nonzero_toggle;"),
-        "raw nonzero second stage": (control_source, "raw_nonzero_sys <= raw_nonzero_meta;"),
-        "post no-DE first stage": (control_source, "post_no_de_meta <= post_no_de_toggle;"),
-        "post no-DE second stage": (control_source, "post_no_de_sys <= post_no_de_meta;"),
-        "post black first stage": (
-            control_source,
-            "post_all_zero_meta <= post_all_zero_toggle;",
-        ),
-        "post black second stage": (
-            control_source,
-            "post_all_zero_sys <= post_all_zero_meta;",
-        ),
-        "post nonzero first stage": (control_source, "post_nonzero_meta <= post_nonzero_toggle;"),
-        "post nonzero second stage": (control_source, "post_nonzero_sys <= post_nonzero_meta;"),
-        "Avalon bucket first stage": (
-            control_source,
-            "avalon_bucket_meta <= avalon_bucket_toggle;",
-        ),
-        "Avalon bucket second stage": (
-            control_source,
-            "avalon_bucket_sys <= avalon_bucket_meta;",
-        ),
-        "Avalon request first stage": (
-            control_source,
-            "avalon_request_meta <= avalon_request_toggle;",
-        ),
-        "Avalon request second stage": (
-            control_source,
-            "avalon_request_sys <= avalon_request_meta;",
-        ),
-        "Avalon accepted first stage": (
-            control_source,
-            "avalon_accepted_meta <= avalon_accepted_toggle;",
-        ),
-        "Avalon accepted second stage": (
-            control_source,
-            "avalon_accepted_sys <= avalon_accepted_meta;",
-        ),
-        "Avalon returned first stage": (
-            control_source,
-            "avalon_returned_meta <= avalon_returned_toggle;",
-        ),
-        "Avalon returned second stage": (
-            control_source,
-            "avalon_returned_sys <= avalon_returned_meta;",
-        ),
-        "scaler batch-two first stage": (
-            control_source,
-            "scaler_fetch_batch_two_meta <= scaler_fetch_batch_two_toggle;",
-        ),
-        "scaler batch-two second stage": (
-            control_source,
-            "scaler_fetch_batch_two_sys <= scaler_fetch_batch_two_meta;",
-        ),
-        "scaler starved-frame first stage": (
-            control_source,
-            "scaler_fetch_starved_frame_meta <= scaler_fetch_starved_frame_toggle;",
-        ),
-        "scaler starved-frame second stage": (
-            control_source,
-            "scaler_fetch_starved_frame_sys <= scaler_fetch_starved_frame_meta;",
-        ),
-        "scaler snapshot-valid first stage": (
-            control_source,
-            "scaler_fetch_snapshot_valid_meta <= scaler_fetch_snapshot_valid;",
-        ),
-        "scaler snapshot-valid second stage": (
-            control_source,
-            "scaler_fetch_snapshot_valid_sys <= scaler_fetch_snapshot_valid_meta;",
-        ),
-        "scaler delta-invalid first stage": (
-            control_source,
-            "scaler_fetch_delta_invalid_meta <= scaler_fetch_delta_invalid;",
-        ),
-        "scaler delta-invalid second stage": (
-            control_source,
-            "scaler_fetch_delta_invalid_sys <= scaler_fetch_delta_invalid_meta;",
-        ),
-        "scaler level-invalid first stage": (
-            control_source,
-            "scaler_fetch_level_invalid_meta <= scaler_fetch_level_invalid;",
-        ),
-        "scaler level-invalid second stage": (
-            control_source,
-            "scaler_fetch_level_invalid_sys <= scaler_fetch_level_invalid_meta;",
-        ),
     }
     for label, (source, binding) in synchronizer_bindings.items():
         if source.count(binding) != 1:
@@ -470,108 +284,44 @@ def main() -> None:
     )
     expected_module_ports = [
         "clk_sys",
-        "hdmi_tx_clk",
-        "clk_hdmi",
-        "clk_100m",
-        "evidence_command",
-        "evidence_snapshot",
-        "evidence_word_index",
+        "io_uio",
+        "io_strobe",
+        "io_din",
         "hdmi_pll_locked",
-        "hdmi_out_vs",
-        "hdmi_out_de",
-        "hdmi_out_d",
-        "hdmi_out_direct",
-        "scaler_raw_vs",
-        "scaler_raw_de",
-        "scaler_raw_d",
-        "post_osd_vs",
-        "post_osd_de",
-        "post_osd_d",
-        "vbuf_read",
-        "vbuf_waitrequest",
-        "vbuf_readdatavalid",
-        "scaler_fetch_batch_two_toggle",
-        "scaler_fetch_starved_frame_toggle",
-        "scaler_fetch_snapshot_valid",
-        "scaler_fetch_delta_invalid",
-        "scaler_fetch_level_invalid",
-        "evidence_word",
+        "response_valid",
+        "response_data",
     ]
     if module_ports != expected_module_ports:
         fail("HDMI evidence module interface is not the exact passive allowlist")
-    required_activity_fragments = (
-        "wire output_sample_nonzero = hdmi_out_de && (|hdmi_out_d);",
-        "if(!output_frame_saw_de_now)",
-        "else if(output_frame_saw_nonzero_now)",
-        "output_no_de_toggle <= !output_no_de_toggle;",
-        "output_black_direct_toggle <= !output_black_direct_toggle;",
-        "output_black_scaled_toggle <= !output_black_scaled_toggle;",
-        "output_black_mixed_toggle <= !output_black_mixed_toggle;",
-        "output_de_has_nonzero_toggle <= !output_de_has_nonzero_toggle;",
-        "reg [3:0] output_no_de_count = 4'd0;",
-        "reg [3:0] output_black_direct_count = 4'd0;",
-        "reg [3:0] output_black_scaled_count = 4'd0;",
-        "reg [3:0] output_black_mixed_count = 4'd0;",
-        "reg [3:0] output_de_has_nonzero_count = 4'd0;",
-        "wire output_no_de_event = output_no_de_sys != output_no_de_count[0];",
-        "wire raw_sample_nonzero = scaler_raw_de && (|scaler_raw_d);",
-        "wire post_sample_nonzero = post_osd_de && (|post_osd_d);",
-        "raw_no_de_toggle <= !raw_no_de_toggle;",
-        "raw_all_zero_toggle <= !raw_all_zero_toggle;",
-        "raw_nonzero_toggle <= !raw_nonzero_toggle;",
-        "post_no_de_toggle <= !post_no_de_toggle;",
-        "post_all_zero_toggle <= !post_all_zero_toggle;",
-        "post_nonzero_toggle <= !post_nonzero_toggle;",
-        "4'd0: evidence_word = MAGIK_HDMI_SCALER_RAW_ACTIVITY_SCHEMA;",
-        "4'd0: evidence_word = MAGIK_HDMI_POST_OSD_ACTIVITY_SCHEMA;",
-        "reg [18:0] avalon_bucket_count = 19'd0;",
-        "reg [3:0] avalon_bucket_epoch = 4'd0;",
-        "wire avalon_bucket_event = avalon_bucket_sys != avalon_bucket_epoch[0];",
-        "wire avalon_accepted_now = avalon_bucket_saw_accepted ||",
-        "(vbuf_read && !vbuf_waitrequest);",
-        "wire avalon_returned_now = avalon_bucket_saw_returned || vbuf_readdatavalid;",
-        "avalon_bucket_toggle <= !avalon_bucket_toggle;",
-        "4'd0: evidence_word = MAGIK_HDMI_AVALON_LIVENESS_ACTIVITY_SCHEMA;",
-        "4'd0: evidence_word = MAGIK_HDMI_SCALER_FETCH_ACTIVITY_SCHEMA;",
-        "reg [1:0] scaler_fetch_batch_two_count = 2'd0;",
-        "reg [3:0] scaler_fetch_starved_frame_count = 4'd0;",
-        "if(scaler_fetch_snapshot_valid_sys)",
-    )
-    for fragment in required_activity_fragments:
+    for fragment in (
+        "wire selected_start = io_din[7:0] == MAGIK_UIO_GET_HDMI_EVIDENCE;",
+        "reg [4:0] snapshot_flags = 5'd0;",
+        "reg [15:0] snapshot_lock_loss_count = 16'd0;",
+        "tx_crc <= MAGIK_HDMI_EVIDENCE_HEADER_CRC;",
+    ):
         if control_source.count(fragment) != 1:
-            fail(f"final-output evidence behavior is missing or ambiguous: {fragment}")
-    if control_source.count("MAGIK_UIO_GET_HDMI_OUTPUT_ACTIVITY: begin") != 2:
-        fail("output activity snapshot/read selection is not exact")
+            fail(f"independent 0x60 lock responder is not exact: {fragment}")
     for retired_reader_fragment in (
-        "has_command",
         "command_kind",
-        "word_count",
-        "tx_crc",
-        "response_valid",
-        "response_data",
-        "snapshot_lock_loss_count",
         "snapshot_path_extra",
         "scaler_fetch_state_meta",
         "scaler_fetch_state_sys",
+        "output_no_de_toggle",
+        "raw_no_de_toggle",
+        "post_no_de_toggle",
+        "avalon_bucket_toggle",
     ):
         if retired_reader_fragment in control_source:
-            fail(f"standalone diagnostic reader state remains: {retired_reader_fragment}")
-    if control_source.count("4'd1: evidence_word = 16'd0;") != 1:
-        fail("retired scaler-fetch state word is not strict zero")
+            fail(f"retired broad observer remains: {retired_reader_fragment}")
+    if "evidence_word" in control_source:
+        fail("independent lock responder regained the shared evidence word")
     for fragment in (
-        "reg [4:0] evidence_snapshot_flags = 5'd0;",
-        "reg [15:0] evidence_snapshot_counts = 16'd0;",
-        "reg [15:0] evidence_snapshot_extra = 16'd0;",
-        "if(evidence_snapshot) begin",
+        "reg [4:0] snapshot_flags = 5'd0;",
+        "reg [15:0] snapshot_lock_loss_count = 16'd0;",
+        "if(selected_start) begin",
     ):
         if control_source.count(fragment) != 1:
-            fail(f"compact evidence snapshot is missing or ambiguous: {fragment}")
-    for fragment in (
-        "completion_frame_starved <= completion_starved_now;",
-        "completion_frame_starved <= completion_frame_starved_now;",
-    ):
-        if avalon_source.count(fragment) != 1:
-            fail(f"full-frame starvation accumulation is not exact: {fragment}")
+            fail(f"lock evidence snapshot is missing or ambiguous: {fragment}")
     for fragment in (
         '`include "mister_magik_video_diagnostics_protocol.svh"',
         "else if(cmd_start && evidence_command) begin",
@@ -580,20 +330,15 @@ def main() -> None:
         "else if(evidence_command && (word_index < evidence_crc_word)) begin",
         "tx_crc <= crc_word(tx_crc, evidence_word);",
     ):
-        if rtl_source.count(fragment) != 1:
-            fail(f"shared latch evidence serializer is missing or ambiguous: {fragment}")
+        if fragment in rtl_source:
+            fail(f"diagnostic serializer remains in the latch: {fragment}")
     for fragment in (
         ".evidence_word(evidence_word)",
         "assign evidence_command = command_id;",
         "assign evidence_snapshot = command_start;",
     ):
-        if bridge_source.count(fragment) != 1:
-            fail(f"shared bridge evidence selection is not exact: {fragment}")
-    evidence_response_arm = rtl_source.split(
-        "else if(cmd_data && evidence_command) begin", 1
-    )[1].split("end", 1)[0]
-    if "response_snapshot" in evidence_response_arm:
-        fail("evidence data still traverses the large latch snapshot bank")
+        if fragment in bridge_source:
+            fail(f"diagnostic selection remains in the latch bridge: {fragment}")
     if re.search(
         r"\b(?:LFB_|FB_|vbuf_|reset_req|cfg_done)[A-Za-z0-9_]*\s*(?:<=|=)",
         control_source,
@@ -718,8 +463,8 @@ def main() -> None:
             "mister_magik_video_diagnostics_control magik_video_diagnostics": 0,
             "mister_magik_video_diagnostics_avalon magik_video_diagnostics_avalon": 0,
             "mister_magik_video_diagnostics_output magik_video_diagnostics_output": 0,
-            "magik_diag_response_valid": 0,
-            "magik_diag_response_data": 0,
+            "magik_diag_response_valid": 4,
+            "magik_diag_response_data": 4,
         }
         mismatches = [
             f"{fragment.splitlines()[0]!r} expected {expected}, found {patched.count(fragment)}"
@@ -744,44 +489,18 @@ def main() -> None:
             ("destination_clk", "clk_hdmi"),
             ("reset_n", "~reset_req"),
             ("source_completion_gray", "magik_scaler_completion_gray"),
-            ("scaler_vs", "hdmi_vs"),
-            ("scaler_framebuffer_enabled", "FB_EN"),
-            ("scaler_scheduler_state", "magik_scaler_scheduler_state"),
-            ("scaler_copy_state", "magik_scaler_copy_state"),
-            ("scaler_read_level", "magik_scaler_read_level"),
-            ("scaler_copy_level", "magik_scaler_copy_level"),
             ("completion_pulse", "magik_scaler_completion_pulse"),
-            (
-                "completion_batch_two_toggle",
-                "magik_scaler_completion_batch_two_toggle",
-            ),
-            (
-                "completion_starved_frame_toggle",
-                "magik_scaler_completion_starved_frame_toggle",
-            ),
-            ("completion_snapshot_valid", "magik_scaler_completion_snapshot_valid"),
-            ("completion_delta_invalid", "magik_scaler_completion_delta_invalid"),
         ]:
             fail("patched scaler completion CDC port mapping is not exact")
         for fragment in (
             ".avl_completion_gray(magik_scaler_completion_gray)",
             ".o_completion_pulse(magik_scaler_completion_pulse)",
-            ".diag_o_state(magik_scaler_scheduler_state)",
-            ".diag_o_copy(magik_scaler_copy_state)",
-            ".diag_o_readlev(magik_scaler_read_level)",
-            ".diag_o_copylev(magik_scaler_copy_level)",
-            ".diag_completion_level_invalid(magik_scaler_completion_level_invalid)",
         ):
             if patched.count(fragment) != 1:
                 fail(f"patched ascal completion port mapping is not exact: {fragment}")
         for fragment in (
             "avl_completion_gray: OUT   std_logic_vector(1 DOWNTO 0);",
             "o_completion_pulse : IN    std_logic :='0';",
-            "diag_o_state       : OUT   std_logic_vector(1 DOWNTO 0);",
-            "diag_o_copy        : OUT   std_logic_vector(1 DOWNTO 0);",
-            "diag_o_readlev     : OUT   std_logic_vector(1 DOWNTO 0);",
-            "diag_o_copylev     : OUT   std_logic_vector(1 DOWNTO 0);",
-            "diag_completion_level_invalid : OUT std_logic;",
             "SIGNAL avl_completion_bin,avl_completion_gray_i : unsigned(1 DOWNTO 0);",
             "next_completion_bin_v:=avl_completion_bin+1;",
         "avl_completion_gray_i<=next_completion_bin_v(1) &",
@@ -791,8 +510,6 @@ def main() -> None:
         ):
             if patched_ascal.count(fragment) != 1:
                 fail(f"patched ascal lossless completion logic is missing: {fragment}")
-        if patched_ascal.count("o_completion_level_invalid<='1';") != 2:
-            fail("patched ascal copy-level invariant evidence is not exact")
         for retired_completion in (
             "SIGNAL avl_readdataack,avl_readack",
             "o_readdataack_sync<=avl_readdataack",
@@ -808,18 +525,8 @@ def main() -> None:
             fail("sys_top does not observe the existing real HDMI PLL lock status bit")
         if patched.count("wire hdmi_pll_locked = 1'b0;") != 1:
             fail("sys_top HDMI-disabled PLL status fallback is missing")
-        if patched.count("reg magik_selected_direct;") != 1 or patched.count(
-            "reg hdmi_out_direct;"
-        ) != 1:
-            fail("final mux provenance registers are missing or ambiguous")
-        if patched.count(
-            "magik_selected_direct <= ~vga_fb & direct_video;"
-        ) != 1 or patched.count(
-            "hdmi_out_direct <= magik_selected_direct;"
-        ) != 1:
-            fail("final mux provenance is not aligned through two HDMI output stages")
-        if len(re.findall(r"\bhdmi_out_direct\b", patched)) != 4:
-            fail("final mux provenance tag has unexpected fanout")
+        if "magik_selected_direct" in patched or "hdmi_out_direct" in patched:
+            fail("retired final-mux diagnostic provenance remains")
         if re.search(
             r"\b(?:LFB_|FB_|hdmi_out_|vbuf_|reset_req)[A-Za-z0-9_]*\s*"
             r"(?:<=|=)\s*magik_diag_",
@@ -845,32 +552,12 @@ def main() -> None:
         expected_lock_ports = sorted(
             (
                 ("clk_sys", "clk_sys"),
-                ("hdmi_tx_clk", "hdmi_tx_clk"),
-                ("clk_hdmi", "clk_hdmi"),
-                ("clk_100m", "clk_100m"),
-                ("evidence_command", "magik_evidence_command"),
-                ("evidence_snapshot", "magik_evidence_snapshot"),
-                ("evidence_word_index", "magik_evidence_word_index"),
+                ("io_uio", "io_uio"),
+                ("io_strobe", "io_strobe"),
+                ("io_din", "io_din"),
                 ("hdmi_pll_locked", "hdmi_pll_locked"),
-                ("hdmi_out_vs", "hdmi_out_vs"),
-                ("hdmi_out_de", "hdmi_out_de"),
-                ("hdmi_out_d", "hdmi_out_d"),
-                ("hdmi_out_direct", "hdmi_out_direct"),
-                ("scaler_raw_vs", "hdmi_vs"),
-                ("scaler_raw_de", "hdmi_de"),
-                ("scaler_raw_d", "hdmi_data"),
-                ("post_osd_vs", "hdmi_vs_osd"),
-                ("post_osd_de", "hdmi_de_osd"),
-                ("post_osd_d", "hdmi_data_osd"),
-                ("vbuf_read", "vbuf_read"),
-                ("vbuf_waitrequest", "vbuf_waitrequest"),
-                ("vbuf_readdatavalid", "vbuf_readdatavalid"),
-                ("scaler_fetch_batch_two_toggle", "magik_scaler_completion_batch_two_toggle"),
-                ("scaler_fetch_starved_frame_toggle", "magik_scaler_completion_starved_frame_toggle"),
-                ("scaler_fetch_snapshot_valid", "magik_scaler_completion_snapshot_valid"),
-                ("scaler_fetch_delta_invalid", "magik_scaler_completion_delta_invalid"),
-                ("scaler_fetch_level_invalid", "magik_scaler_completion_level_invalid"),
-                ("evidence_word", "magik_evidence_word"),
+                ("response_valid", "magik_diag_response_valid"),
+                ("response_data", "magik_diag_response_data"),
             )
         )
         actual_lock_ports = sorted(
@@ -883,16 +570,16 @@ def main() -> None:
         all_lock_port_names = re.findall(
             r"\.([A-Za-z_][A-Za-z0-9_]*)\s*\(", control_binding.group(1)
         )
-        if actual_lock_ports != expected_lock_ports or len(all_lock_port_names) != 27:
-            fail("HDMI lock and final-output evidence port map is not exact")
+        if actual_lock_ports != expected_lock_ports or len(all_lock_port_names) != 7:
+            fail("independent HDMI lock evidence port map is not exact")
         for evidence_net in (
             "magik_evidence_word",
             "magik_evidence_command",
             "magik_evidence_snapshot",
             "magik_evidence_word_index",
         ):
-            if len(re.findall(rf"\b{evidence_net}\b", patched)) != 3:
-                fail(f"HDMI evidence selection net use is not exact: {evidence_net}")
+            if re.search(rf"\b{evidence_net}\b", patched):
+                fail(f"retired shared evidence net remains: {evidence_net}")
         if re.search(
             r"\.(?:vbuf_(?!read\b|waitrequest\b|readdatavalid\b)|"
             r"reset|route|snapshot|fault|heartbeat|generation)",

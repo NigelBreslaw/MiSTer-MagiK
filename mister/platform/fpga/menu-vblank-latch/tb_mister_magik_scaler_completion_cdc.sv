@@ -18,18 +18,6 @@ module tb_mister_magik_scaler_completion_cdc;
 	integer legacy_completion_count = 0;
 	integer recovered_completion_count = 0;
 	wire completion_pulse;
-	wire completion_batch_two_toggle;
-	wire completion_starved_frame_toggle;
-	wire completion_snapshot_valid;
-	wire completion_delta_invalid;
-	reg scaler_vs = 1'b0;
-	reg scaler_framebuffer_enabled = 1'b0;
-	reg [1:0] scaler_scheduler_state = 2'd0;
-	reg [1:0] scaler_copy_state = 2'd0;
-	reg [1:0] scaler_read_level = 2'd0;
-	reg [1:0] scaler_copy_level = 2'd0;
-	reg batch_two_previous = 1'b0;
-	integer batch_two_count = 0;
 	reg lev_dec = 1'b0;
 	integer modeled_copy_level = 0;
 
@@ -37,17 +25,7 @@ module tb_mister_magik_scaler_completion_cdc;
 		.destination_clk(destination_clk),
 		.reset_n(reset_n),
 		.source_completion_gray(source_completion_gray),
-		.scaler_vs(scaler_vs),
-		.scaler_framebuffer_enabled(scaler_framebuffer_enabled),
-		.scaler_scheduler_state(scaler_scheduler_state),
-		.scaler_copy_state(scaler_copy_state),
-		.scaler_read_level(scaler_read_level),
-		.scaler_copy_level(scaler_copy_level),
-		.completion_pulse(completion_pulse),
-		.completion_batch_two_toggle(completion_batch_two_toggle),
-		.completion_starved_frame_toggle(completion_starved_frame_toggle),
-		.completion_snapshot_valid(completion_snapshot_valid),
-		.completion_delta_invalid(completion_delta_invalid)
+		.completion_pulse(completion_pulse)
 	);
 
 	always #5 source_clk = !source_clk;
@@ -87,18 +65,11 @@ module tb_mister_magik_scaler_completion_cdc;
 	end
 
 	always @(posedge destination_clk or negedge reset_n) begin
-		if(!reset_n) begin
+		if(!reset_n)
 			recovered_completion_count <= 0;
-			batch_two_previous <= 1'b0;
-			batch_two_count <= 0;
-		end
-		else begin
+		else
 			recovered_completion_count <=
 				recovered_completion_count + completion_pulse;
-			batch_two_previous <= completion_batch_two_toggle;
-			if(completion_batch_two_toggle != batch_two_previous)
-				batch_two_count <= batch_two_count + 1;
-		end
 	end
 
 	task automatic source_completion;
@@ -132,10 +103,6 @@ module tb_mister_magik_scaler_completion_cdc;
 		if(recovered_completion_count != 2)
 			$fatal(1, "Gray transport recovered %0d completions, expected 2",
 				recovered_completion_count);
-		if(batch_two_count != 1)
-			$fatal(1, "batch-two evidence count %0d, expected 1", batch_two_count);
-		if(completion_delta_invalid)
-			$fatal(1, "valid skip-by-two was classified as invalid");
 		if(modeled_copy_level != 2)
 			$fatal(1, "serialized recovered credits did not fill both copy slots");
 
@@ -181,33 +148,6 @@ module tb_mister_magik_scaler_completion_cdc;
 		if(recovered_completion_count != 9)
 			$fatal(1, "intermediate Gray sampling lost a completion");
 
-		// A persistent two-read/no-copy state is counted only after complete
-		// native frame interval.
-		scaler_framebuffer_enabled = 1'b1;
-		scaler_scheduler_state = 2'd2;
-		scaler_copy_state = 2'd0;
-		scaler_read_level = 2'd2;
-		scaler_copy_level = 2'd0;
-		@(negedge destination_clk); scaler_vs = 1'b1;
-		@(negedge destination_clk); scaler_vs = 1'b0;
-		repeat(2) @(negedge destination_clk);
-		@(negedge destination_clk); scaler_vs = 1'b1;
-		@(negedge destination_clk); scaler_vs = 1'b0;
-		if(!completion_snapshot_valid)
-			$fatal(1, "native scaler fetch observer did not arm");
-		if(completion_starved_frame_toggle != 1'b1)
-			$fatal(1, "persistent scaler starvation frame was not counted");
-
-		// A non-starved sample inside the following frame must clear the
-		// accumulator, so the next VS cannot fabricate another epoch.
-		scaler_read_level = 2'd1;
-		repeat(2) @(negedge destination_clk);
-		scaler_read_level = 2'd2;
-		@(negedge destination_clk); scaler_vs = 1'b1;
-		@(negedge destination_clk); scaler_vs = 1'b0;
-		if(completion_starved_frame_toggle != 1'b1)
-			$fatal(1, "non-starved frame incorrectly advanced starvation evidence");
-
 		// Reset both domains while the destination clock is stopped. No stale
 		// source sequence may emerge as a phantom completion on restart.
 		destination_clock_enabled = 1'b0;
@@ -231,7 +171,7 @@ module tb_mister_magik_scaler_completion_cdc;
 		source_completion();
 		destination_clock_enabled = 1'b1;
 		repeat(8) @(posedge destination_clk);
-		if(!completion_delta_invalid || recovered_completion_count != 0)
+		if(dut.completion_delta_valid || recovered_completion_count != 0)
 			$fatal(1, "invalid delta three was not rejected");
 
 		$display("PASS: reproduced parity loss and retained completion credits");

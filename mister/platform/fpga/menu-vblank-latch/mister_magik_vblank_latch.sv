@@ -12,7 +12,6 @@ module mister_magik_vblank_latch (
 	input  wire [7:0]  cmd_id,
 	input  wire [3:0]  word_index,
 	input  wire [15:0] data_in,
-	input  wire [15:0] evidence_word,
 
 	input  wire        active_lfb_en,
 	input  wire [31:0] active_lfb_base,
@@ -49,7 +48,6 @@ module mister_magik_vblank_latch (
 );
 
 	`include "mister_magik_latch_protocol.svh"
-	`include "mister_magik_video_diagnostics_protocol.svh"
 
 	function automatic [15:0] crc_byte;
 		input [15:0] current;
@@ -145,67 +143,6 @@ module mister_magik_vblank_latch (
 		(pending ? (16'd1 << MAGIK_STATUS_PENDING) : 16'd0) |
 		(magik_ownership ? (16'd1 << MAGIK_STATUS_MAGIK_OWNERSHIP) : 16'd0);
 
-	wire evidence_command =
-		(cmd_id == MAGIK_UIO_GET_HDMI_EVIDENCE) ||
-		(cmd_id == MAGIK_UIO_GET_HDMI_OUTPUT_ACTIVITY) ||
-		(cmd_id == MAGIK_UIO_GET_HDMI_FINAL_PATH_ACTIVITY) ||
-		(cmd_id == MAGIK_UIO_GET_HDMI_SCALER_RAW_ACTIVITY) ||
-		(cmd_id == MAGIK_UIO_GET_HDMI_POST_OSD_ACTIVITY) ||
-		(cmd_id == MAGIK_UIO_GET_HDMI_AVALON_LIVENESS_ACTIVITY) ||
-		(cmd_id == MAGIK_UIO_GET_HDMI_SCALER_FETCH_ACTIVITY);
-	wire [2:0] evidence_words =
-		(cmd_id == MAGIK_UIO_GET_HDMI_EVIDENCE) ? MAGIK_HDMI_EVIDENCE_WORDS :
-		(cmd_id == MAGIK_UIO_GET_HDMI_OUTPUT_ACTIVITY) ?
-			MAGIK_HDMI_OUTPUT_ACTIVITY_WORDS :
-		(cmd_id == MAGIK_UIO_GET_HDMI_FINAL_PATH_ACTIVITY) ?
-			MAGIK_HDMI_FINAL_PATH_ACTIVITY_WORDS :
-		(cmd_id == MAGIK_UIO_GET_HDMI_SCALER_RAW_ACTIVITY) ?
-			MAGIK_HDMI_SCALER_RAW_ACTIVITY_WORDS :
-		(cmd_id == MAGIK_UIO_GET_HDMI_POST_OSD_ACTIVITY) ?
-			MAGIK_HDMI_POST_OSD_ACTIVITY_WORDS :
-		(cmd_id == MAGIK_UIO_GET_HDMI_AVALON_LIVENESS_ACTIVITY) ?
-			MAGIK_HDMI_AVALON_LIVENESS_ACTIVITY_WORDS :
-		(cmd_id == MAGIK_UIO_GET_HDMI_SCALER_FETCH_ACTIVITY) ?
-			MAGIK_HDMI_SCALER_FETCH_ACTIVITY_WORDS : 3'd0;
-	wire [2:0] evidence_crc_word = evidence_words - 1'd1;
-	reg [15:0] evidence_magic;
-	reg [15:0] evidence_header_crc;
-	always @(*) begin
-		evidence_magic = 16'd0;
-		evidence_header_crc = 16'd0;
-		case(cmd_id)
-			MAGIK_UIO_GET_HDMI_EVIDENCE: begin
-				evidence_magic = MAGIK_HDMI_EVIDENCE_MAGIC;
-				evidence_header_crc = MAGIK_HDMI_EVIDENCE_HEADER_CRC;
-			end
-			MAGIK_UIO_GET_HDMI_OUTPUT_ACTIVITY: begin
-				evidence_magic = MAGIK_HDMI_OUTPUT_ACTIVITY_MAGIC;
-				evidence_header_crc = MAGIK_HDMI_OUTPUT_ACTIVITY_HEADER_CRC;
-			end
-			MAGIK_UIO_GET_HDMI_FINAL_PATH_ACTIVITY: begin
-				evidence_magic = MAGIK_HDMI_FINAL_PATH_ACTIVITY_MAGIC;
-				evidence_header_crc = MAGIK_HDMI_FINAL_PATH_ACTIVITY_HEADER_CRC;
-			end
-			MAGIK_UIO_GET_HDMI_SCALER_RAW_ACTIVITY: begin
-				evidence_magic = MAGIK_HDMI_SCALER_RAW_ACTIVITY_MAGIC;
-				evidence_header_crc = MAGIK_HDMI_SCALER_RAW_ACTIVITY_HEADER_CRC;
-			end
-			MAGIK_UIO_GET_HDMI_POST_OSD_ACTIVITY: begin
-				evidence_magic = MAGIK_HDMI_POST_OSD_ACTIVITY_MAGIC;
-				evidence_header_crc = MAGIK_HDMI_POST_OSD_ACTIVITY_HEADER_CRC;
-			end
-			MAGIK_UIO_GET_HDMI_AVALON_LIVENESS_ACTIVITY: begin
-				evidence_magic = MAGIK_HDMI_AVALON_LIVENESS_ACTIVITY_MAGIC;
-				evidence_header_crc = MAGIK_HDMI_AVALON_LIVENESS_ACTIVITY_HEADER_CRC;
-			end
-			MAGIK_UIO_GET_HDMI_SCALER_FETCH_ACTIVITY: begin
-				evidence_magic = MAGIK_HDMI_SCALER_FETCH_ACTIVITY_MAGIC;
-				evidence_header_crc = MAGIK_HDMI_SCALER_FETCH_ACTIVITY_HEADER_CRC;
-			end
-			default: begin end
-		endcase
-	end
-
 	wire rx_reserved_fields =
 		(|rx_width_word[15:12]) || (|rx_height_word[15:12]) ||
 		(|rx_hmin_word[15:12]) || (|rx_hmax_word[15:12]) ||
@@ -263,14 +200,12 @@ module mister_magik_vblank_latch (
 		               (cmd_id == MAGIK_UIO_GET_FBUF_LATCH_CAPS) ||
 		               (cmd_id == MAGIK_UIO_GET_FBUF_LATCH_DIAGNOSTICS) ||
 		               (cmd_id == MAGIK_UIO_GET_FBUF_LATCH_RECEIPT) ||
-		               (cmd_id == MAGIK_UIO_GET_FBUF_PRESENTATION_TELEMETRY) ||
-		               evidence_command)) ||
+		               (cmd_id == MAGIK_UIO_GET_FBUF_PRESENTATION_TELEMETRY))) ||
 		(cmd_data && ((cmd_id == MAGIK_UIO_GET_FBUF_LATCH) ||
 		              (cmd_id == MAGIK_UIO_GET_FBUF_LATCH_CAPS) ||
 		              (cmd_id == MAGIK_UIO_GET_FBUF_LATCH_DIAGNOSTICS) ||
 		              (cmd_id == MAGIK_UIO_GET_FBUF_LATCH_RECEIPT) ||
-		              (cmd_id == MAGIK_UIO_GET_FBUF_PRESENTATION_TELEMETRY) ||
-		              (evidence_command && (word_index < evidence_words))));
+		              (cmd_id == MAGIK_UIO_GET_FBUF_PRESENTATION_TELEMETRY)));
 
 	always @(*) begin
 		response_data = 16'd0;
@@ -285,14 +220,6 @@ module mister_magik_vblank_latch (
 					response_data = MAGIK_FBUF_RECEIPT_MAGIC;
 				MAGIK_UIO_GET_FBUF_PRESENTATION_TELEMETRY:
 					response_data = MAGIK_FBUF_PRESENTATION_TELEMETRY_MAGIC;
-				MAGIK_UIO_GET_HDMI_EVIDENCE,
-				MAGIK_UIO_GET_HDMI_OUTPUT_ACTIVITY,
-				MAGIK_UIO_GET_HDMI_FINAL_PATH_ACTIVITY,
-				MAGIK_UIO_GET_HDMI_SCALER_RAW_ACTIVITY,
-				MAGIK_UIO_GET_HDMI_POST_OSD_ACTIVITY,
-				MAGIK_UIO_GET_HDMI_AVALON_LIVENESS_ACTIVITY,
-				MAGIK_UIO_GET_HDMI_SCALER_FETCH_ACTIVITY:
-					response_data = evidence_magic;
 				default: response_data = 16'd0;
 			endcase
 		end
@@ -325,12 +252,6 @@ module mister_magik_vblank_latch (
 		else if(cmd_data && (cmd_id == MAGIK_UIO_GET_FBUF_PRESENTATION_TELEMETRY)) begin
 			if(word_index < 4'd10) response_data = response_snapshot[word_index];
 			else if(word_index == 4'd10)
-				response_data = tx_crc ^ MAGIK_CRC_FINAL_XOR;
-		end
-		else if(cmd_data && evidence_command) begin
-			if(word_index < evidence_crc_word)
-				response_data = evidence_word;
-			else if(word_index == evidence_crc_word)
 				response_data = tx_crc ^ MAGIK_CRC_FINAL_XOR;
 		end
 	end
@@ -409,11 +330,6 @@ module mister_magik_vblank_latch (
 			tx_expected <= 4'd0;
 			tx_command <= MAGIK_UIO_GET_FBUF_PRESENTATION_TELEMETRY;
 		end
-		else if(cmd_start && evidence_command) begin
-			tx_crc <= evidence_header_crc;
-			tx_expected <= 4'd0;
-			tx_command <= cmd_id;
-		end
 		else if(cmd_data && (cmd_id == tx_command) &&
 		        (word_index == tx_expected)) begin
 			if((tx_command == MAGIK_UIO_GET_FBUF_LATCH) && (word_index < 4'd15)) begin
@@ -448,10 +364,6 @@ module mister_magik_vblank_latch (
 				else if((tx_command == MAGIK_UIO_GET_FBUF_PRESENTATION_TELEMETRY) &&
 				        (word_index < 4'd10)) begin
 					tx_crc <= crc_word(tx_crc, response_snapshot[word_index]);
-					tx_expected <= tx_expected + 1'd1;
-				end
-				else if(evidence_command && (word_index < evidence_crc_word)) begin
-					tx_crc <= crc_word(tx_crc, evidence_word);
 					tx_expected <= tx_expected + 1'd1;
 				end
 			end

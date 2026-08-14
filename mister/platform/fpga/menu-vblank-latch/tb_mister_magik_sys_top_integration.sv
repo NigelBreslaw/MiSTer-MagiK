@@ -9,32 +9,11 @@
 // mapping, response routing, and authoritative LFB apply bundle.
 module mister_magik_sys_top_latch_path (
 	input wire clk_sys,
-	input wire hdmi_tx_clk,
 	input wire clk_hdmi,
-	input wire clk_100m,
 	input wire hdmi_vbl,
 	input wire hdmi_pll_locked,
-	input wire hdmi_out_vs,
-	input wire hdmi_out_de,
-	input wire [23:0] hdmi_out_d,
-	input wire hdmi_out_direct,
-	input wire scaler_raw_vs,
-	input wire scaler_raw_de,
-	input wire [23:0] scaler_raw_d,
-	input wire post_osd_vs,
-	input wire post_osd_de,
-	input wire [23:0] post_osd_d,
-	input wire vbuf_read,
-	input wire vbuf_waitrequest,
-	input wire vbuf_readdatavalid,
 	input wire scaler_completion_reset_n,
 	input wire [1:0] scaler_completion_gray,
-	input wire scaler_framebuffer_enabled,
-	input wire [1:0] scaler_scheduler_state,
-	input wire [1:0] scaler_copy_state,
-	input wire [1:0] scaler_read_level,
-	input wire [1:0] scaler_copy_level,
-	input wire scaler_fetch_level_invalid,
 	input wire io_uio,
 	input wire io_strobe,
 	input wire [15:0] io_din
@@ -54,14 +33,9 @@ module mister_magik_sys_top_latch_path (
 
 	wire magik_response_valid;
 	wire [15:0] magik_response_data;
-	wire [15:0] magik_evidence_word;
+	wire magik_diag_response_valid;
+	wire [15:0] magik_diag_response_data;
 	wire scaler_fetch_completion_pulse;
-	wire scaler_fetch_batch_two_toggle;
-	wire scaler_fetch_starved_frame_toggle;
-	wire scaler_fetch_snapshot_valid;
-	wire scaler_fetch_delta_invalid;
-	wire [7:0] magik_evidence_command;
-	wire magik_evidence_snapshot;
 	wire magik_lfb_apply;
 	wire magik_lfb_apply_accepted;
 	wire legacy_lfb_write;
@@ -90,17 +64,7 @@ module mister_magik_sys_top_latch_path (
 		.destination_clk(clk_hdmi),
 		.reset_n(scaler_completion_reset_n),
 		.source_completion_gray(scaler_completion_gray),
-		.scaler_vs(scaler_raw_vs),
-		.scaler_framebuffer_enabled(scaler_framebuffer_enabled),
-		.scaler_scheduler_state(scaler_scheduler_state),
-		.scaler_copy_state(scaler_copy_state),
-		.scaler_read_level(scaler_read_level),
-		.scaler_copy_level(scaler_copy_level),
-		.completion_pulse(scaler_fetch_completion_pulse),
-		.completion_batch_two_toggle(scaler_fetch_batch_two_toggle),
-		.completion_starved_frame_toggle(scaler_fetch_starved_frame_toggle),
-		.completion_snapshot_valid(scaler_fetch_snapshot_valid),
-		.completion_delta_invalid(scaler_fetch_delta_invalid)
+		.completion_pulse(scaler_fetch_completion_pulse)
 	);
 
 	mister_magik_latch_sys_top_bridge bridge (
@@ -109,7 +73,6 @@ module mister_magik_sys_top_latch_path (
 		.io_uio(io_uio),
 		.io_strobe(io_strobe),
 		.io_din(io_din),
-		.evidence_word(magik_evidence_word),
 		.active_lfb_en(LFB_EN),
 		.active_lfb_base(LFB_BASE),
 		.active_lfb_width(LFB_WIDTH),
@@ -121,8 +84,6 @@ module mister_magik_sys_top_latch_path (
 		.apply_accepted(magik_lfb_apply_accepted),
 		.legacy_write(legacy_lfb_write),
 		.active_word_index(active_word_index),
-		.evidence_command(magik_evidence_command),
-		.evidence_snapshot(magik_evidence_snapshot),
 		.route_en(magik_lfb_en),
 		.route_flt(magik_lfb_flt),
 		.route_fmt(magik_lfb_fmt),
@@ -146,32 +107,12 @@ module mister_magik_sys_top_latch_path (
 
 	mister_magik_hdmi_lock_evidence magik_hdmi_lock_evidence (
 		.clk_sys(clk_sys),
-		.hdmi_tx_clk(hdmi_tx_clk),
-		.clk_hdmi(clk_hdmi),
-		.clk_100m(clk_100m),
-		.evidence_command(magik_evidence_command),
-		.evidence_snapshot(magik_evidence_snapshot),
-		.evidence_word_index(active_word_index),
+		.io_uio(io_uio),
+		.io_strobe(io_strobe),
+		.io_din(io_din),
 		.hdmi_pll_locked(hdmi_pll_locked),
-		.hdmi_out_vs(hdmi_out_vs),
-		.hdmi_out_de(hdmi_out_de),
-		.hdmi_out_d(hdmi_out_d),
-		.hdmi_out_direct(hdmi_out_direct),
-		.scaler_raw_vs(scaler_raw_vs),
-		.scaler_raw_de(scaler_raw_de),
-		.scaler_raw_d(scaler_raw_d),
-		.post_osd_vs(post_osd_vs),
-		.post_osd_de(post_osd_de),
-		.post_osd_d(post_osd_d),
-		.vbuf_read(vbuf_read),
-		.vbuf_waitrequest(vbuf_waitrequest),
-		.vbuf_readdatavalid(vbuf_readdatavalid),
-		.scaler_fetch_batch_two_toggle(scaler_fetch_batch_two_toggle),
-		.scaler_fetch_starved_frame_toggle(scaler_fetch_starved_frame_toggle),
-		.scaler_fetch_snapshot_valid(scaler_fetch_snapshot_valid),
-		.scaler_fetch_delta_invalid(scaler_fetch_delta_invalid),
-		.scaler_fetch_level_invalid(scaler_fetch_level_invalid),
-		.evidence_word(magik_evidence_word)
+		.response_valid(magik_diag_response_valid),
+		.response_data(magik_diag_response_data)
 	);
 
 	always @(posedge clk_sys) begin
@@ -209,6 +150,8 @@ module mister_magik_sys_top_latch_path (
 			io_dout_sys <= 16'd0;
 			if(!bridge.has_command && (io_din[7:0] == 8'h2f))
 				io_dout_sys <= 16'd1;
+			if(magik_diag_response_valid)
+				io_dout_sys <= magik_diag_response_data;
 			if(magik_response_valid)
 				io_dout_sys <= magik_response_data;
 		end
@@ -220,74 +163,37 @@ module tb_mister_magik_sys_top_integration;
 	`include "mister_magik_video_diagnostics_protocol.svh"
 
 	reg test_clk = 1'b0;
-	reg test_hdmi_clk = 1'b0;
 	reg test_scaler_clk = 1'b0;
-	reg test_avalon_clk = 1'b0;
 	reg test_vblank = 1'b0;
 	reg test_hdmi_pll_locked = 1'b0;
-	reg test_hdmi_out_vs = 1'b0;
-	reg test_hdmi_out_de = 1'b0;
-	reg [23:0] test_hdmi_out_d = 24'd0;
-	reg test_hdmi_out_direct = 1'b0;
-	reg test_scaler_raw_vs = 1'b0;
-	reg test_scaler_raw_de = 1'b0;
-	reg [23:0] test_scaler_raw_d = 24'd0;
-	reg test_post_osd_vs = 1'b0;
-	reg test_post_osd_de = 1'b0;
-	reg [23:0] test_post_osd_d = 24'd0;
-	reg test_vbuf_read = 1'b0;
-	reg test_vbuf_waitrequest = 1'b0;
-	reg test_vbuf_readdatavalid = 1'b0;
 	reg test_scaler_completion_reset_n = 1'b0;
 	reg [1:0] test_scaler_completion_gray = 2'd0;
-	reg test_scaler_framebuffer_enabled = 1'b0;
-	reg [1:0] test_scaler_scheduler_state = 2'd0;
-	reg [1:0] test_scaler_copy_state = 2'd0;
-	reg [1:0] test_scaler_read_level = 2'd0;
-	reg [1:0] test_scaler_copy_level = 2'd0;
-	reg test_scaler_fetch_level_invalid = 1'b0;
 	reg test_io_uio = 1'b0;
 	reg test_io_strobe = 1'b0;
 	reg [15:0] test_io_din = 16'd0;
 	integer index;
+	integer recovered_completion_pulses = 0;
 
 	mister_magik_sys_top_latch_path dut (
 		.clk_sys(test_clk),
-		.hdmi_tx_clk(test_hdmi_clk),
 		.clk_hdmi(test_scaler_clk),
-		.clk_100m(test_avalon_clk),
 		.hdmi_vbl(test_vblank),
 		.hdmi_pll_locked(test_hdmi_pll_locked),
-		.hdmi_out_vs(test_hdmi_out_vs),
-		.hdmi_out_de(test_hdmi_out_de),
-		.hdmi_out_d(test_hdmi_out_d),
-		.hdmi_out_direct(test_hdmi_out_direct),
-		.scaler_raw_vs(test_scaler_raw_vs),
-		.scaler_raw_de(test_scaler_raw_de),
-		.scaler_raw_d(test_scaler_raw_d),
-		.post_osd_vs(test_post_osd_vs),
-		.post_osd_de(test_post_osd_de),
-		.post_osd_d(test_post_osd_d),
-		.vbuf_read(test_vbuf_read),
-		.vbuf_waitrequest(test_vbuf_waitrequest),
-		.vbuf_readdatavalid(test_vbuf_readdatavalid),
 		.scaler_completion_reset_n(test_scaler_completion_reset_n),
 		.scaler_completion_gray(test_scaler_completion_gray),
-		.scaler_framebuffer_enabled(test_scaler_framebuffer_enabled),
-		.scaler_scheduler_state(test_scaler_scheduler_state),
-		.scaler_copy_state(test_scaler_copy_state),
-		.scaler_read_level(test_scaler_read_level),
-		.scaler_copy_level(test_scaler_copy_level),
-		.scaler_fetch_level_invalid(test_scaler_fetch_level_invalid),
 		.io_uio(test_io_uio),
 		.io_strobe(test_io_strobe),
 		.io_din(test_io_din)
 	);
 
 	always #5 test_clk = ~test_clk;
-	always #7 test_hdmi_clk = ~test_hdmi_clk;
 	always #11 test_scaler_clk = ~test_scaler_clk;
-	always #4 test_avalon_clk = ~test_avalon_clk;
+	always @(posedge test_scaler_clk) begin
+		if(!test_scaler_completion_reset_n)
+			recovered_completion_pulses <= 0;
+		else if(dut.scaler_fetch_completion_pulse)
+			recovered_completion_pulses <= recovered_completion_pulses + 1;
+	end
 
 	task automatic fail(input [8*96-1:0] message);
 		begin
@@ -398,54 +304,6 @@ module tb_mister_magik_sys_top_integration;
 		end
 	endtask
 
-	task automatic pulse_output_vs;
-		begin
-			@(negedge test_hdmi_clk); test_hdmi_out_vs = 1'b1;
-			@(negedge test_hdmi_clk); test_hdmi_out_vs = 1'b0;
-		end
-	endtask
-
-	task automatic complete_nonzero_output_frame;
-		begin
-			@(negedge test_hdmi_clk);
-			test_hdmi_out_de = 1'b1;
-			test_hdmi_out_d = 24'h102030;
-			@(negedge test_hdmi_clk);
-			test_hdmi_out_de = 1'b0;
-			test_hdmi_out_d = 24'd0;
-			pulse_output_vs();
-			repeat(8) @(posedge test_clk);
-		end
-	endtask
-
-	task automatic pulse_scaler_boundaries;
-		begin
-			@(negedge test_scaler_clk);
-			test_scaler_raw_vs = 1'b1;
-			test_post_osd_vs = 1'b1;
-			@(negedge test_scaler_clk);
-			test_scaler_raw_vs = 1'b0;
-			test_post_osd_vs = 1'b0;
-		end
-	endtask
-
-	task automatic complete_scaler_nonzero_frame;
-		begin
-			@(negedge test_scaler_clk);
-			test_scaler_raw_de = 1'b1;
-			test_scaler_raw_d = 24'h112233;
-			test_post_osd_de = 1'b1;
-			test_post_osd_d = 24'h445566;
-			@(negedge test_scaler_clk);
-			test_scaler_raw_de = 1'b0;
-			test_scaler_raw_d = 24'd0;
-			test_post_osd_de = 1'b0;
-			test_post_osd_d = 24'd0;
-			pulse_scaler_boundaries();
-			repeat(8) @(posedge test_clk);
-		end
-	endtask
-
 	initial begin
 		reg [15:0] response;
 		reg [15:0] telemetry [0:10];
@@ -526,143 +384,20 @@ module tb_mister_magik_sys_top_integration;
 		expect16(evidence[MAGIK_HDMI_EVIDENCE_CRC_WORD], evidence_crc,
 			"sys_top HDMI lock CRC");
 
-		pulse_output_vs();
-		complete_nonzero_output_frame();
-		begin_command(MAGIK_UIO_GET_HDMI_OUTPUT_ACTIVITY,
-			MAGIK_HDMI_OUTPUT_ACTIVITY_MAGIC);
-		for(index = 0; index < MAGIK_HDMI_OUTPUT_ACTIVITY_WORDS; index = index + 1)
-			transfer_word(16'd0, evidence[index]);
-		transfer_word(16'd0, response);
-		expect16(response, 16'd0, "sys_top activity overlong word");
-		end_command();
-		evidence_crc = MAGIK_HDMI_OUTPUT_ACTIVITY_HEADER_CRC;
-		for(index = 0; index < MAGIK_HDMI_OUTPUT_ACTIVITY_CRC_WORD; index = index + 1)
-			evidence_crc = crc_word(evidence_crc, evidence[index]);
-		expect16(evidence[MAGIK_HDMI_OUTPUT_ACTIVITY_SCHEMA_WORD],
-			MAGIK_HDMI_OUTPUT_ACTIVITY_SCHEMA, "sys_top output activity schema");
-		expect16(evidence[MAGIK_HDMI_OUTPUT_ACTIVITY_FLAGS_WORD],
-			MAGIK_HDMI_OUTPUT_ACTIVITY_FLAG_FRAME_VALID,
-			"sys_top output activity flags");
-		expect16(evidence[MAGIK_HDMI_OUTPUT_ACTIVITY_DE_HAS_NONZERO_COUNT_WORD],
-			16'd1, "sys_top output nonzero count");
-		expect16(evidence[MAGIK_HDMI_OUTPUT_ACTIVITY_CRC_WORD], evidence_crc,
-			"sys_top output activity CRC");
+		// Every retired evidence opcode is explicitly unsupported in Milestone A.
+		for(index = 8'h61; index <= 8'h67; index = index + 1) begin
+			begin_command(index[7:0], 16'd0);
+			end_command();
+		end
 
-		begin_command(MAGIK_UIO_GET_HDMI_FINAL_PATH_ACTIVITY,
-			MAGIK_HDMI_FINAL_PATH_ACTIVITY_MAGIC);
-		for(index = 0; index < MAGIK_HDMI_FINAL_PATH_ACTIVITY_WORDS;
-			index = index + 1)
-			transfer_word(16'd0, evidence[index]);
-		end_command();
-		evidence_crc = MAGIK_HDMI_FINAL_PATH_ACTIVITY_HEADER_CRC;
-		for(index = 0; index < MAGIK_HDMI_FINAL_PATH_ACTIVITY_CRC_WORD;
-			index = index + 1)
-			evidence_crc = crc_word(evidence_crc, evidence[index]);
-		expect16(evidence[MAGIK_HDMI_FINAL_PATH_ACTIVITY_FLAGS_WORD],
-			MAGIK_HDMI_FINAL_PATH_ACTIVITY_FLAG_FRAME_VALID,
-			"sys_top final-path activity flags");
-		expect16(evidence[MAGIK_HDMI_FINAL_PATH_ACTIVITY_BLACK_COUNTS_WORD],
-			16'h1000, "sys_top final-path nonzero count");
-		expect16(evidence[MAGIK_HDMI_FINAL_PATH_ACTIVITY_CRC_WORD], evidence_crc,
-			"sys_top final-path activity CRC");
-
-		pulse_scaler_boundaries();
-		complete_scaler_nonzero_frame();
-		begin_command(MAGIK_UIO_GET_HDMI_SCALER_RAW_ACTIVITY,
-			MAGIK_HDMI_SCALER_RAW_ACTIVITY_MAGIC);
-		for(index = 0; index < MAGIK_HDMI_SCALER_RAW_ACTIVITY_WORDS;
-			index = index + 1)
-			transfer_word(16'd0, evidence[index]);
-		end_command();
-		evidence_crc = MAGIK_HDMI_SCALER_RAW_ACTIVITY_HEADER_CRC;
-		for(index = 0; index < MAGIK_HDMI_SCALER_RAW_ACTIVITY_CRC_WORD;
-			index = index + 1)
-			evidence_crc = crc_word(evidence_crc, evidence[index]);
-		expect16(evidence[MAGIK_HDMI_SCALER_RAW_ACTIVITY_COUNTS_WORD],
-			16'h0100, "sys_top raw scaler nonzero count");
-		expect16(evidence[MAGIK_HDMI_SCALER_RAW_ACTIVITY_CRC_WORD], evidence_crc,
-			"sys_top raw scaler activity CRC");
-
-		begin_command(MAGIK_UIO_GET_HDMI_POST_OSD_ACTIVITY,
-			MAGIK_HDMI_POST_OSD_ACTIVITY_MAGIC);
-		for(index = 0; index < MAGIK_HDMI_POST_OSD_ACTIVITY_WORDS;
-			index = index + 1)
-			transfer_word(16'd0, evidence[index]);
-		end_command();
-		evidence_crc = MAGIK_HDMI_POST_OSD_ACTIVITY_HEADER_CRC;
-		for(index = 0; index < MAGIK_HDMI_POST_OSD_ACTIVITY_CRC_WORD;
-			index = index + 1)
-			evidence_crc = crc_word(evidence_crc, evidence[index]);
-		expect16(evidence[MAGIK_HDMI_POST_OSD_ACTIVITY_COUNTS_WORD],
-			16'h0100, "sys_top post-OSD nonzero count");
-		expect16(evidence[MAGIK_HDMI_POST_OSD_ACTIVITY_CRC_WORD], evidence_crc,
-			"sys_top post-OSD activity CRC");
-
-		@(negedge test_avalon_clk);
-		dut.magik_hdmi_lock_evidence.avalon_bucket_count = 19'h7fffe;
-		test_vbuf_read = 1'b1;
-		test_vbuf_readdatavalid = 1'b1;
-		repeat(2) @(posedge test_avalon_clk);
-		@(negedge test_avalon_clk);
-		test_vbuf_read = 1'b0;
-		test_vbuf_readdatavalid = 1'b0;
-		repeat(8) @(posedge test_clk);
-		begin_command(MAGIK_UIO_GET_HDMI_AVALON_LIVENESS_ACTIVITY,
-			MAGIK_HDMI_AVALON_LIVENESS_ACTIVITY_MAGIC);
-		for(index = 0; index < MAGIK_HDMI_AVALON_LIVENESS_ACTIVITY_WORDS;
-			index = index + 1)
-			transfer_word(16'd0, evidence[index]);
-		end_command();
-		evidence_crc = MAGIK_HDMI_AVALON_LIVENESS_ACTIVITY_HEADER_CRC;
-		for(index = 0; index < MAGIK_HDMI_AVALON_LIVENESS_ACTIVITY_CRC_WORD;
-			index = index + 1)
-			evidence_crc = crc_word(evidence_crc, evidence[index]);
-		expect16(evidence[MAGIK_HDMI_AVALON_LIVENESS_ACTIVITY_FLAGS_WORD],
-			MAGIK_HDMI_AVALON_LIVENESS_ACTIVITY_FLAG_BUCKET_VALID,
-			"sys_top Avalon bucket valid");
-		expect16(evidence[MAGIK_HDMI_AVALON_LIVENESS_ACTIVITY_COUNTS_WORD],
-			16'h1111, "sys_top Avalon liveness counts");
-		expect16(evidence[MAGIK_HDMI_AVALON_LIVENESS_ACTIVITY_CRC_WORD], evidence_crc,
-			"sys_top Avalon liveness CRC");
-
-		// Exercise the real completion-credit CDC before reading its evidence.
-		// A settled Gray 00->11 step represents two completions while the
-		// destination clock was unable to sample the intermediate 01 state.
+		// Exercise the actual production repair instance. A settled Gray 00->11
+		// step represents two completions while clk_hdmi missed the intermediate
+		// 01 state; the bridge must emit two legacy-compatible pulses.
 		@(negedge test_scaler_clk);
 		test_scaler_completion_gray = 2'b11;
 		repeat(8) @(posedge test_scaler_clk);
-		if(dut.scaler_completion_cdc.completion_batch_two_toggle !== 1'b1)
-			fail("sys_top completion CDC did not retain a two-credit batch");
-		test_scaler_framebuffer_enabled = 1'b1;
-		test_scaler_scheduler_state = 2'd2;
-		test_scaler_copy_state = 2'd0;
-		test_scaler_read_level = 2'd2;
-		test_scaler_copy_level = 2'd0;
-		pulse_scaler_boundaries();
-		repeat(4) @(posedge test_scaler_clk);
-		pulse_scaler_boundaries();
-		repeat(8) @(posedge test_clk);
-		begin_command(MAGIK_UIO_GET_HDMI_SCALER_FETCH_ACTIVITY,
-			MAGIK_HDMI_SCALER_FETCH_ACTIVITY_MAGIC);
-		for(index = 0; index < MAGIK_HDMI_SCALER_FETCH_ACTIVITY_WORDS;
-			index = index + 1)
-			transfer_word(16'd0, evidence[index]);
-		transfer_word(16'd0, response);
-		expect16(response, 16'd0, "sys_top scaler fetch overlong word");
-		end_command();
-		evidence_crc = MAGIK_HDMI_SCALER_FETCH_ACTIVITY_HEADER_CRC;
-		for(index = 0; index < MAGIK_HDMI_SCALER_FETCH_ACTIVITY_CRC_WORD;
-			index = index + 1)
-			evidence_crc = crc_word(evidence_crc, evidence[index]);
-		expect16(evidence[MAGIK_HDMI_SCALER_FETCH_ACTIVITY_RESERVED_STATE_WORD],
-			16'd0, "sys_top retired scaler fetch state");
-		expect16(evidence[MAGIK_HDMI_SCALER_FETCH_ACTIVITY_EVENTS_WORD],
-			16'h0011, "sys_top scaler fetch event epochs");
-		expect16(evidence[MAGIK_HDMI_SCALER_FETCH_ACTIVITY_FLAGS_WORD],
-			MAGIK_HDMI_SCALER_FETCH_ACTIVITY_FLAG_SNAPSHOT_VALID,
-			"sys_top scaler fetch flags");
-		expect16(evidence[MAGIK_HDMI_SCALER_FETCH_ACTIVITY_CRC_WORD], evidence_crc,
-			"sys_top scaler fetch CRC");
+		if(recovered_completion_pulses != 2)
+			fail("sys_top completion CDC did not retain two credits");
 
 		// Post another route, then collide its vblank apply with a real 0x2f
 		// payload edge. The production legacy-write expression must win.

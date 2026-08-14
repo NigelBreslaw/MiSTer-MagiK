@@ -43,46 +43,6 @@ Info (20032): Parallel compilation is enabled and will use up to 4 processors
 CONTROL_SYNC_NAMES = (
     "control_pll_lock_meta",
     "control_pll_lock_sys",
-    "output_no_de_meta",
-    "output_no_de_sys",
-    "output_black_direct_meta",
-    "output_black_direct_sys",
-    "output_black_scaled_meta",
-    "output_black_scaled_sys",
-    "output_black_mixed_meta",
-    "output_black_mixed_sys",
-    "output_de_has_nonzero_meta",
-    "output_de_has_nonzero_sys",
-    "raw_no_de_meta",
-    "raw_no_de_sys",
-    "raw_all_zero_meta",
-    "raw_all_zero_sys",
-    "raw_nonzero_meta",
-    "raw_nonzero_sys",
-    "post_no_de_meta",
-    "post_no_de_sys",
-    "post_all_zero_meta",
-    "post_all_zero_sys",
-    "post_nonzero_meta",
-    "post_nonzero_sys",
-    "avalon_bucket_meta",
-    "avalon_bucket_sys",
-    "avalon_request_meta",
-    "avalon_request_sys",
-    "avalon_accepted_meta",
-    "avalon_accepted_sys",
-    "avalon_returned_meta",
-    "avalon_returned_sys",
-    "scaler_fetch_batch_two_meta",
-    "scaler_fetch_batch_two_sys",
-    "scaler_fetch_starved_frame_meta",
-    "scaler_fetch_starved_frame_sys",
-    "scaler_fetch_snapshot_valid_meta",
-    "scaler_fetch_snapshot_valid_sys",
-    "scaler_fetch_delta_invalid_meta",
-    "scaler_fetch_delta_invalid_sys",
-    "scaler_fetch_level_invalid_meta",
-    "scaler_fetch_level_invalid_sys",
 )
 SYNC_NAMES = tuple(
     f"mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|{name}"
@@ -121,8 +81,8 @@ SYNC_NAMES += tuple(
 )
 SYNC_ASSIGNMENTS = CONTROL_SYNC_ASSIGNMENTS + COMPLETION_SYNC_ASSIGNMENTS
 CUSTOM_SYNC = SYNC_ASSIGNMENTS + """\
-Info (332114): Report Metastability: Found 28 synchronizer chains.
-Info (332114): Fraction of Chains for which MTBFs Could Not be Calculated: 0.100
+Info (332114): Report Metastability: Found 8 synchronizer chains.
+Info (332114): Fraction of Chains for which MTBFs Could Not be Calculated: 0.375
 Info: MagiK diagnostics CDC analysis applied: scaler_completion_gray
 """
 
@@ -248,17 +208,17 @@ class QuartusDeltaTest(unittest.TestCase):
 
     def test_unrelated_total_chain_drift_does_not_override_exact_evidence(self) -> None:
         patched = CUSTOM_SYNC.replace(
-            "Found 28 synchronizer chains", "Found 30 synchronizer chains"
+            "Found 8 synchronizer chains", "Found 10 synchronizer chains"
         ).replace(
-            "Could Not be Calculated: 0.100",
-            "Could Not be Calculated: 0.160",
+            "Could Not be Calculated: 0.375",
+            "Could Not be Calculated: 0.500",
         )
         result, payload = self.run_check(BASE, BASE + patched)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(payload["baseline_synchronizer_chains"], 5)
-        self.assertEqual(payload["patched_synchronizer_chains"], 30)
+        self.assertEqual(payload["patched_synchronizer_chains"], 10)
         self.assertEqual(payload["baseline_calculable_synchronizer_chains"], 1)
-        self.assertEqual(payload["patched_calculable_synchronizer_chains"], 25)
+        self.assertEqual(payload["patched_calculable_synchronizer_chains"], 5)
 
     def test_new_warning_fails_even_when_warning_code_is_inherited(self) -> None:
         result, payload = self.run_check(BASE, BASE + "Warning (10001): different warning\n" + CUSTOM_SYNC)
@@ -365,14 +325,14 @@ class QuartusDeltaTest(unittest.TestCase):
             "Total registers : 20,000\nTotal block memory bits : 1,000,000\nTotal DSP Blocks : 2\n",
             "Logic utilization (in ALMs) : 7,800 / 41,910 ( 19 % )\n"
             "Total registers : 20,500\nTotal block memory bits : 1,000,000\nTotal DSP Blocks : 2\n",
-            "Logic utilization (in ALMs) : 8,600 / 41,910 ( 19 % )\n"
-            "Total registers : 20,860\nTotal block memory bits : 1,000,000\nTotal DSP Blocks : 2\n",
+            "Logic utilization (in ALMs) : 7,950 / 41,910 ( 19 % )\n"
+            "Total registers : 20,596\nTotal block memory bits : 1,000,000\nTotal DSP Blocks : 2\n",
         )
         result, payload = self.run_check(stock, patched, baseline, fitter_resources)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(payload["baseline_unconstrained_output_paths"], 12)
-        self.assertEqual(payload["resource_deltas"]["logic utilization (in alms)"], 800)
-        self.assertEqual(payload["resource_deltas"]["total registers"], 360)
+        self.assertEqual(payload["resource_deltas"]["logic utilization (in alms)"], 150)
+        self.assertEqual(payload["resource_deltas"]["total registers"], 96)
 
     def test_alm_budget_excess_fails(self) -> None:
         summaries = (
@@ -380,7 +340,7 @@ class QuartusDeltaTest(unittest.TestCase):
             "Total block memory bits : 1,000,000\nTotal DSP Blocks : 2\n",
             "Logic utilization (in ALMs) : 7,800\nTotal registers : 20,000\n"
             "Total block memory bits : 1,000,000\nTotal DSP Blocks : 2\n",
-            "Logic utilization (in ALMs) : 8,601\nTotal registers : 20,000\n"
+            "Logic utilization (in ALMs) : 7,951\nTotal registers : 20,000\n"
             "Total block memory bits : 1,000,000\nTotal DSP Blocks : 2\n",
         )
         result, payload = self.run_check(BASE, BASE + CUSTOM_SYNC, BASE, summaries)
@@ -393,7 +353,7 @@ class QuartusDeltaTest(unittest.TestCase):
             "Total block memory bits : 1,000,000\nTotal DSP Blocks : 2\n",
             "Logic utilization (in ALMs) : 7,800\nTotal registers : 20,500\n"
             "Total block memory bits : 1,000,000\nTotal DSP Blocks : 2\n",
-            "Logic utilization (in ALMs) : 7,800\nTotal registers : 20,861\n"
+            "Logic utilization (in ALMs) : 7,800\nTotal registers : 20,597\n"
             "Total block memory bits : 1,000,000\nTotal DSP Blocks : 2\n",
         )
         result, payload = self.run_check(BASE, BASE + CUSTOM_SYNC, BASE, summaries)

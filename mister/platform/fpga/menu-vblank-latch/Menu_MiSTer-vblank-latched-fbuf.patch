@@ -28,21 +28,10 @@ index a416879..f6a40ea 100644
 +wire [15:0] magik_lfb_drop_count;
 +wire [15:0] magik_lfb_reject_count;
 +wire [15:0] magik_lfb_active_route_epoch;
-+wire [15:0] magik_evidence_word;
-+wire  [7:0] magik_evidence_command;
-+wire        magik_evidence_snapshot;
-+wire  [3:0] magik_evidence_word_index;
++wire        magik_diag_response_valid;
++wire [15:0] magik_diag_response_data;
 +wire [1:0]  magik_scaler_completion_gray;
 +wire        magik_scaler_completion_pulse;
-+wire        magik_scaler_completion_batch_two_toggle;
-+wire        magik_scaler_completion_starved_frame_toggle;
-+wire        magik_scaler_completion_snapshot_valid;
-+wire        magik_scaler_completion_delta_invalid;
-+wire        magik_scaler_completion_level_invalid;
-+wire [1:0]  magik_scaler_scheduler_state;
-+wire [1:0]  magik_scaler_copy_state;
-+wire [1:0]  magik_scaler_read_level;
-+wire [1:0]  magik_scaler_copy_level;
 +
 +mister_magik_latch_sys_top_bridge magik_latch_bridge
 +(
@@ -51,7 +40,6 @@ index a416879..f6a40ea 100644
 +	.io_uio(io_uio),
 +	.io_strobe(io_strobe),
 +	.io_din(io_din),
-+	.evidence_word(magik_evidence_word),
 +	.active_lfb_en(LFB_EN),
 +	.active_lfb_base(LFB_BASE),
 +	.active_lfb_width(LFB_WIDTH),
@@ -62,9 +50,7 @@ index a416879..f6a40ea 100644
 +	.apply(),
 +	.apply_accepted(magik_lfb_apply_accepted),
 +	.legacy_write(),
-+	.active_word_index(magik_evidence_word_index),
-+	.evidence_command(magik_evidence_command),
-+	.evidence_snapshot(magik_evidence_snapshot),
++	.active_word_index(),
 +	.route_en(magik_lfb_en),
 +	.route_flt(magik_lfb_flt),
 +	.route_fmt(magik_lfb_fmt),
@@ -89,32 +75,12 @@ index a416879..f6a40ea 100644
 +mister_magik_hdmi_lock_evidence magik_hdmi_lock_evidence
 +(
 +	.clk_sys(clk_sys),
-+	.hdmi_tx_clk(hdmi_tx_clk),
-+	.clk_hdmi(clk_hdmi),
-+	.clk_100m(clk_100m),
-+	.evidence_command(magik_evidence_command),
-+	.evidence_snapshot(magik_evidence_snapshot),
-+	.evidence_word_index(magik_evidence_word_index),
++	.io_uio(io_uio),
++	.io_strobe(io_strobe),
++	.io_din(io_din),
 +	.hdmi_pll_locked(hdmi_pll_locked),
-+	.hdmi_out_vs(hdmi_out_vs),
-+	.hdmi_out_de(hdmi_out_de),
-+	.hdmi_out_d(hdmi_out_d),
-+	.hdmi_out_direct(hdmi_out_direct),
-+	.scaler_raw_vs(hdmi_vs),
-+	.scaler_raw_de(hdmi_de),
-+	.scaler_raw_d(hdmi_data),
-+	.post_osd_vs(hdmi_vs_osd),
-+	.post_osd_de(hdmi_de_osd),
-+	.post_osd_d(hdmi_data_osd),
-+	.vbuf_read(vbuf_read),
-+	.vbuf_waitrequest(vbuf_waitrequest),
-+	.vbuf_readdatavalid(vbuf_readdatavalid),
-+	.scaler_fetch_batch_two_toggle(magik_scaler_completion_batch_two_toggle),
-+	.scaler_fetch_starved_frame_toggle(magik_scaler_completion_starved_frame_toggle),
-+	.scaler_fetch_snapshot_valid(magik_scaler_completion_snapshot_valid),
-+	.scaler_fetch_delta_invalid(magik_scaler_completion_delta_invalid),
-+	.scaler_fetch_level_invalid(magik_scaler_completion_level_invalid),
-+	.evidence_word(magik_evidence_word)
++	.response_valid(magik_diag_response_valid),
++	.response_data(magik_diag_response_data)
 +);
 +
  always@(posedge clk_sys) begin
@@ -144,6 +110,7 @@ index a416879..f6a40ea 100644
  			if(io_din[7:0] == 'h40) io_dout_sys <= fb_crc;
  `endif
  			if(io_din[7:0] == 'h42) io_dout_sys <= {1'b1, frame_cnt};
++			if(magik_diag_response_valid) io_dout_sys <= magik_diag_response_data;
 +			if(magik_response_valid) io_dout_sys <= magik_response_data;
  			if(io_din[7:0] == 'h44) io_dout_sys <= 1;
  		end
@@ -152,6 +119,7 @@ index a416879..f6a40ea 100644
  					9: LFB_STRIDE      <= io_din[13:0];
  				endcase
  			end
++			if(magik_diag_response_valid) io_dout_sys <= magik_diag_response_data;
 +			if(magik_response_valid) io_dout_sys <= magik_response_data;
  			if(cmd == 'h25) {led_overtake, led_state} <= io_din;
  			if(cmd == 'h26) vol_att <= io_din[4:0];
@@ -173,49 +141,6 @@ index a416879..f6a40ea 100644
  `endif
  
  //1920x1080@60 PCLK=148.5MHz CEA
-@@ -1299,38 +1406,42 @@ reg hdmi_out_hs;
- reg hdmi_out_hs;
- reg hdmi_out_vs;
- reg hdmi_out_de;
- reg [23:0] hdmi_out_d;
-+reg magik_selected_direct;
-+reg hdmi_out_direct;
- 
- always @(posedge hdmi_tx_clk) begin
- 	reg [23:0] hdmi_dv_data;
- 	reg        hdmi_dv_hs, hdmi_dv_vs, hdmi_dv_de;
- 
- 	reg hs,vs,de;
- 	reg [23:0] d;
- 	
- 	hdmi_dv_data <= dv_data;
- 	hdmi_dv_hs   <= dv_hs;
- 	hdmi_dv_vs   <= dv_vs;
- 	hdmi_dv_de   <= dv_de;
- 	
- `ifndef MISTER_DEBUG_NOHDMI
- 	hs <= (~vga_fb & direct_video) ? hdmi_dv_hs   : (direct_video & csync_en) ? hdmi_cs_osd : hdmi_hs_osd;
- 	vs <= (~vga_fb & direct_video) ? hdmi_dv_vs   : hdmi_vs_osd;
- 	de <= (~vga_fb & direct_video) ? hdmi_dv_de   : hdmi_de_osd;
- 	d  <= (~vga_fb & direct_video) ? hdmi_dv_data : hdmi_data_osd;
- `else
- 	hs <= hdmi_dv_hs;
- 	vs <= hdmi_dv_vs;
- 	de <= hdmi_dv_de;
- 	d  <= hdmi_dv_data;
- `endif
- 
-+	magik_selected_direct <= ~vga_fb & direct_video;
- 	hdmi_out_hs <= hs;
- 	hdmi_out_vs <= vs;
- 	hdmi_out_de <= de;
- 	hdmi_out_d  <= d;
-+	hdmi_out_direct <= magik_selected_direct;
- end
- 
- assign HDMI_TX_HS = hdmi_out_hs;
- assign HDMI_TX_VS = hdmi_out_vs;
- assign HDMI_TX_DE = hdmi_out_de;
 @@ -1380,15 +1491,30 @@ assign HDMI_TX_D  = hdmi_out_d;
  
  wire [23:0] vga_data_sl;
@@ -261,11 +186,6 @@ index a735e6b..0000000 100644
  		avl_read           : OUT   std_logic;
 +		avl_completion_gray: OUT   std_logic_vector(1 DOWNTO 0);
 +		o_completion_pulse : IN    std_logic :='0';
-+		diag_o_state       : OUT   std_logic_vector(1 DOWNTO 0);
-+		diag_o_copy        : OUT   std_logic_vector(1 DOWNTO 0);
-+		diag_o_readlev     : OUT   std_logic_vector(1 DOWNTO 0);
-+		diag_o_copylev     : OUT   std_logic_vector(1 DOWNTO 0);
-+		diag_completion_level_invalid : OUT std_logic;
  		avl_byteenable     : OUT   std_logic_vector(N_DW/8-1 DOWNTO 0);
  
  		------------------------------------
@@ -293,7 +213,6 @@ index a735e6b..0000000 100644
  	SIGNAL o_pshift : natural RANGE 0 TO 15;
  	SIGNAL o_readack,o_readack_sync,o_readack_sync2 : std_logic;
 -	SIGNAL o_readdataack,o_readdataack_sync,o_readdataack_sync2 : std_logic;
-+	SIGNAL o_completion_level_invalid : std_logic;
  	SIGNAL o_copyv : unsigned(0 TO 14);
  	SIGNAL o_adrs : unsigned(31 DOWNTO 0); -- Avalon address
  	SIGNAL o_adrs_pre : natural RANGE 0 TO 2**24-1;
@@ -331,19 +250,9 @@ index a735e6b..0000000 100644
  	avl_write<=avl_write_i;
  	avl_writedata<=std_logic_vector(swap(avl_dr));
 +	avl_completion_gray<=std_logic_vector(avl_completion_gray_i);
-+	diag_o_state<=std_logic_vector(to_unsigned(enum_o_state'pos(o_state),2));
-+	diag_o_copy<=std_logic_vector(to_unsigned(enum_o_copy'pos(o_copy),2));
-+	diag_o_readlev<=std_logic_vector(to_unsigned(o_readlev,2));
-+	diag_o_copylev<=std_logic_vector(to_unsigned(o_copylev,2));
-+	diag_completion_level_invalid<=o_completion_level_invalid;
  	avl_burstcount<=std_logic_vector(to_unsigned(BLEN,8));
  	avl_byteenable<=(OTHERS =>'1');
  
-@@ -1874,3 +1893,4 @@ ARCHITECTURE rtl OF ascal IS
- 			o_copy<=sWAIT;
-+			o_completion_level_invalid<='0';
- 			o_state<=sDISP;
- 			o_read_pre<='0';
 @@ -2023,10 +2033,6 @@ ARCHITECTURE rtl OF ascal IS
  			o_readack_sync2<=o_readack_sync;
  			o_readack<=o_readack_sync XOR o_readack_sync2;
@@ -363,14 +272,10 @@ index a735e6b..0000000 100644
 +			IF lev_dec_v='1' AND o_completion_pulse='0' THEN
 +				IF o_copylev>0 THEN
 +					o_copylev<=o_copylev-1;
-+				ELSE
-+					o_completion_level_invalid<='1';
 +				END IF;
 +			ELSIF lev_dec_v='0' AND o_completion_pulse='1' THEN
 +				IF o_copylev<2 THEN
 +					o_copylev<=o_copylev+1;
-+				ELSE
-+					o_completion_level_invalid<='1';
 +				END IF;
  			END IF;
 diff --git a/sys/sys_top.v b/sys/sys_top.v
@@ -387,17 +292,7 @@ index a416879..f6a40ea 100644
 +		.destination_clk(clk_hdmi),
 +		.reset_n(~reset_req),
 +		.source_completion_gray(magik_scaler_completion_gray),
-+		.scaler_vs(hdmi_vs),
-+		.scaler_framebuffer_enabled(FB_EN),
-+		.scaler_scheduler_state(magik_scaler_scheduler_state),
-+		.scaler_copy_state(magik_scaler_copy_state),
-+		.scaler_read_level(magik_scaler_read_level),
-+		.scaler_copy_level(magik_scaler_copy_level),
-+		.completion_pulse(magik_scaler_completion_pulse),
-+		.completion_batch_two_toggle(magik_scaler_completion_batch_two_toggle),
-+		.completion_starved_frame_toggle(magik_scaler_completion_starved_frame_toggle),
-+		.completion_snapshot_valid(magik_scaler_completion_snapshot_valid),
-+		.completion_delta_invalid(magik_scaler_completion_delta_invalid)
++		.completion_pulse(magik_scaler_completion_pulse)
 +	);
  
  	ascal 
@@ -408,11 +303,6 @@ index a416879..f6a40ea 100644
  		.avl_read         (vbuf_read),
 +		.avl_completion_gray(magik_scaler_completion_gray),
 +		.o_completion_pulse(magik_scaler_completion_pulse),
-+		.diag_o_state(magik_scaler_scheduler_state),
-+		.diag_o_copy(magik_scaler_copy_state),
-+		.diag_o_readlev(magik_scaler_read_level),
-+		.diag_o_copylev(magik_scaler_copy_level),
-+		.diag_completion_level_invalid(magik_scaler_completion_level_invalid),
  		.avl_byteenable   (vbuf_byteenable)
  	);
  `endif

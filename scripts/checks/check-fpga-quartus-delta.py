@@ -60,9 +60,9 @@ EXPECTED_BOOTSTRAP_BLACK_REMOVED_WARNING_IDENTITIES = frozenset(
 )
 MINIMUM_SLACK_NS = 0.20
 MAXIMUM_SLACK_DEGRADATION_NS = 0.15
-MAXIMUM_LOGIC_ELEMENT_DELTA = 800
-MAXIMUM_REGISTER_DELTA = 360
-EXPECTED_OBSERVER_CALCULABLE_CHAINS = 24
+MAXIMUM_LOGIC_ELEMENT_DELTA = 150
+MAXIMUM_REGISTER_DELTA = 96
+EXPECTED_OBSERVER_CALCULABLE_CHAINS = 4
 EXPECTED_QUARTUS_POLICY = {
     "auto_parallel_synthesis": "off",
     "parallel_synthesis": "off",
@@ -111,6 +111,14 @@ EXPECTED_SYNC_ASSIGNMENT_SUFFIXES = (
     "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|scaler_fetch_delta_invalid_sys",
     "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|scaler_fetch_level_invalid_meta",
     "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|scaler_fetch_level_invalid_sys",
+    "mister_magik_scaler_completion_cdc:magik_scaler_completion_cdc|completion_gray_meta",
+    "mister_magik_scaler_completion_cdc:magik_scaler_completion_cdc|completion_gray_sync",
+    "mister_magik_scaler_completion_cdc:magik_scaler_completion_cdc|destination_reset_meta",
+    "mister_magik_scaler_completion_cdc:magik_scaler_completion_cdc|destination_reset_sync",
+)
+EXPECTED_SYNC_ASSIGNMENT_SUFFIXES = (
+    "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|control_pll_lock_meta",
+    "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|control_pll_lock_sys",
     "mister_magik_scaler_completion_cdc:magik_scaler_completion_cdc|completion_gray_meta",
     "mister_magik_scaler_completion_cdc:magik_scaler_completion_cdc|completion_gray_sync",
     "mister_magik_scaler_completion_cdc:magik_scaler_completion_cdc|destination_reset_meta",
