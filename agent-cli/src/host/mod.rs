@@ -7623,8 +7623,20 @@ fn run_gui_frame_profile_route(
         let arcade_entered = wait_gui_profile_snapshot(
             config,
             &nonce,
-            |snapshot| gui_profile_effective_view(snapshot) == Some("arcade"),
-            "Arcade entry",
+            |snapshot| {
+                gui_profile_effective_view(snapshot) == Some("arcade")
+                    && snapshot
+                        .pointer("/semantic/navigation_transition_active")
+                        .and_then(Value::as_bool)
+                        == Some(false)
+                    && matches!(
+                        snapshot
+                            .pointer("/semantic/preview_state")
+                            .and_then(Value::as_str),
+                        Some("exact" | "cached" | "empty")
+                    )
+            },
+            "settled Arcade entry",
         )?;
         let scroll_sequence = modal_input_action(
             config,
@@ -7635,8 +7647,12 @@ fn run_gui_frame_profile_route(
             },
         )?;
         let hold_started = Instant::now();
+        let mut scroll_snapshots = Vec::new();
         while hold_started.elapsed() < Duration::from_millis(scroll_duration_ms) {
-            let _ = launcher_automation::snapshot(config, &nonce)?;
+            let mut snapshot = launcher_automation::snapshot(config, &nonce)?;
+            snapshot["host_elapsed_ms"] =
+                json!(hold_started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64);
+            scroll_snapshots.push(snapshot);
             thread::sleep(Duration::from_millis(250).min(
                 Duration::from_millis(scroll_duration_ms).saturating_sub(hold_started.elapsed()),
             ));
@@ -7702,6 +7718,7 @@ fn run_gui_frame_profile_route(
             "pan_right": pan_right,
             "pan_left": pan_left,
             "arcade_entered": arcade_entered,
+            "scroll_snapshots": scroll_snapshots,
             "settled_arcade": settled_arcade,
             "terminal_checkpoint": terminal_checkpoint,
             "profile": profile,
@@ -7986,12 +8003,34 @@ fn summarize_arcade_velocity_scroll(
         .unwrap_or(u64::MAX);
     let frame_work_p99_us = percentile_99(&frame_work);
     let frame_work_max_us = frame_work.last().copied().unwrap_or(0);
-    let first_selected = frame_u64(frames[0], "selected");
-    let final_selected = frame_u64(frames[frames.len() - 1], "selected");
-    let motion_frames = frames
+    let selection_indices = route
+        .get("scroll_snapshots")
+        .and_then(Value::as_array)
         .iter()
-        .filter(|frame| frame_u64(frame, "arcade_list_update_us") > 0)
+        .flatten()
+        .filter_map(|snapshot| {
+            snapshot
+                .pointer("/semantic/selected_index")
+                .and_then(Value::as_u64)
+        })
+        .collect::<Vec<_>>();
+    let first_selected = route
+        .pointer("/arcade_entered/semantic/selected_index")
+        .and_then(Value::as_u64)
+        .or_else(|| selection_indices.first().copied())
+        .unwrap_or(u64::MAX);
+    let final_selected = route
+        .pointer("/settled_arcade/semantic/selected_index")
+        .and_then(Value::as_u64)
+        .or_else(|| selection_indices.last().copied())
+        .unwrap_or(u64::MAX);
+    let selection_changes = selection_indices
+        .windows(2)
+        .filter(|pair| pair[0] != pair[1])
         .count();
+    let mut distinct_selections = selection_indices.clone();
+    distinct_selections.sort_unstable();
+    distinct_selections.dedup();
     let scroll_profile_frames = profile
         .get("frames")
         .and_then(Value::as_array)
@@ -8024,7 +8063,7 @@ fn summarize_arcade_velocity_scroll(
     if frame_work_max_us >= 16_667 {
         quality_failures.push("frame-work-max-over-budget");
     }
-    if final_selected <= first_selected || motion_frames == 0 {
+    if selection_changes == 0 || distinct_selections.len() < 2 {
         quality_failures.push("arcade-selection-did-not-advance");
     }
     let quality_status = if quality_failures.is_empty() {
@@ -8048,8 +8087,9 @@ fn summarize_arcade_velocity_scroll(
         "selection": {
             "first": first_selected,
             "final": final_selected,
-            "advanced_by": final_selected.saturating_sub(first_selected),
-            "motion_frames": motion_frames,
+            "changes": selection_changes,
+            "distinct": distinct_selections.len(),
+            "snapshots": selection_indices.len(),
             "profile_records": scroll_profile_frames,
         },
         "completion_intervals_us": {
@@ -8064,14 +8104,15 @@ fn summarize_arcade_velocity_scroll(
         "phase_timing": {
             "frame_start": normalized_frame_timing(&frames, "frame_start_phase_us"),
             "prepare": normalized_frame_timing(&frames, "prepare_us"),
+            "bridge_sync": normalized_frame_timing(&frames, "bridge_sync_us"),
+            "unattributed_prepare": normalized_frame_timing(&frames, "unattributed_prepare_us"),
             "slint_render": normalized_frame_timing(&frames, "render_us"),
             "custom_draw": normalized_frame_timing(&frames, "custom_draw_us"),
-            "arcade_list_update": normalized_frame_timing(&frames, "arcade_list_update_us"),
-            "preview_blit": normalized_frame_timing(&frames, "preview_blit_us"),
             "hidden_copy": normalized_frame_timing(&frames, "main_present_hidden_copy_us"),
             "present": normalized_frame_timing(&frames, "present_us"),
             "vsync_wait": normalized_frame_timing(&frames, "vsync_us"),
             "process_cpu": normalized_frame_timing(&frames, "process_cpu_us"),
+            "wall": normalized_frame_timing(&frames, "wall_us"),
         },
         "frame_production": frame_production_summary(&frames),
         "status_publishing": status_publishing_summary(&frames, &sample_refs),
@@ -8104,24 +8145,21 @@ fn summarize_arcade_velocity_scroll(
         report,
         "- Frame-work p99 / max: {frame_work_p99_us} / {frame_work_max_us} us"
     )?;
-    writeln!(
-        report,
-        "- Selected index advance: {}\n",
-        final_selected.saturating_sub(first_selected)
-    )?;
+    writeln!(report, "- Selection changes: {selection_changes}\n")?;
     writeln!(report, "| Phase | Average | P99 | Max |")?;
     writeln!(report, "|---|---:|---:|---:|")?;
     for (label, key) in [
         ("Frame start", "frame_start"),
         ("Prepare", "prepare"),
+        ("Bridge sync", "bridge_sync"),
+        ("Unattributed prepare", "unattributed_prepare"),
         ("Slint render", "slint_render"),
         ("Custom draw", "custom_draw"),
-        ("Arcade list", "arcade_list_update"),
-        ("Preview blit", "preview_blit"),
         ("Hidden copy", "hidden_copy"),
         ("Present", "present"),
         ("Vsync wait", "vsync_wait"),
         ("Process CPU", "process_cpu"),
+        ("Frame wall", "wall"),
     ] {
         let timing = &summary["phase_timing"][key];
         writeln!(

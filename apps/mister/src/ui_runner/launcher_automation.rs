@@ -77,6 +77,7 @@ pub(super) struct AutomationSemanticState {
     pub(super) settings_selected: usize,
     pub(super) composition_state: String,
     pub(super) composition_recovery_count: u64,
+    pub(super) navigation_transition_active: bool,
     pub(super) input_enabled: bool,
 }
 

@@ -8759,6 +8759,7 @@ pub(super) fn run_launcher_loop(
                 settings_selected: nav.settings_selected,
                 composition_state: composition_status.state.to_string(),
                 composition_recovery_count: composition_status.recovery_count,
+                navigation_transition_active: navigation_transition.is_active(),
                 input_enabled: startup_status.input_enabled,
             })
         } else {
