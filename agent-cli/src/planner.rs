@@ -837,6 +837,24 @@ fn add_path_operations(
             "kernel source → workflow contract",
         ));
     }
+    if matches!(
+        path.to_str(),
+        Some("scripts/codex-context-report.py" | "scripts/tests/test-codex-context-report.py")
+    ) {
+        add(with_inputs(
+            op(
+                "scripts.codex-context-report",
+                "Test the Codex context report",
+                "python3",
+                &["scripts/tests/test-codex-context-report.py"],
+                "Codex context reporting changed",
+            ),
+            &[
+                "scripts/codex-context-report.py",
+                "scripts/tests/test-codex-context-report.py",
+            ],
+        ));
+    }
     if path.starts_with("mister/platform/fpga") {
         add(builtin(
             "fpga.workflow-contract",
@@ -1518,6 +1536,32 @@ mod tests {
                 .iter()
                 .any(|argument| argument.contains("apps/mister/Cargo.toml"))
         }));
+    }
+
+    #[test]
+    fn codex_context_report_changes_select_focused_contract() {
+        for path in [
+            "scripts/codex-context-report.py",
+            "scripts/tests/test-codex-context-report.py",
+        ] {
+            let plan = affected_plan(
+                AssuranceRequest::Plan {
+                    scope: Scope::Paths(vec![]),
+                },
+                vec![path.into()],
+            )
+            .unwrap();
+            let operation = plan
+                .operations
+                .iter()
+                .find(|operation| operation.id == "scripts.codex-context-report")
+                .expect("focused context report contract");
+            assert_eq!(operation.command, "python3");
+            assert_eq!(
+                operation.args,
+                ["scripts/tests/test-codex-context-report.py"]
+            );
+        }
     }
 
     #[test]
