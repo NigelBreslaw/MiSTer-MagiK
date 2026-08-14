@@ -175,7 +175,7 @@ impl FrameClassifications {
             self.corrupt,
         ]
         .into_iter()
-        .try_fold(0_u64, |total, count| checked_add(total, count))
+        .try_fold(0_u64, checked_add)
     }
 }
 
