@@ -8006,7 +8006,7 @@ fn summarize_arcade_velocity_scroll(
     let selection_indices = route
         .get("scroll_snapshots")
         .and_then(Value::as_array)
-        .iter()
+        .into_iter()
         .flatten()
         .filter_map(|snapshot| {
             snapshot
