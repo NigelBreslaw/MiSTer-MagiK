@@ -48,7 +48,7 @@ impl SourceFrameEvidence {
             }
         }
         Some(Self {
-            sha256: format!("{:x}", digest.finalize()),
+            sha256: encode_hex(&digest.finalize()),
             nonzero_pixels,
         })
     }
@@ -61,6 +61,17 @@ impl SourceFrameEvidence {
                 .bytes()
                 .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
     }
+}
+
+fn encode_hex(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+
+    let mut encoded = String::with_capacity(bytes.len() * 2);
+    for &byte in bytes {
+        encoded.push(char::from(HEX[usize::from(byte >> 4)]));
+        encoded.push(char::from(HEX[usize::from(byte & 0x0f)]));
+    }
+    encoded
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

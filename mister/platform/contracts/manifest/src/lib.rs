@@ -158,7 +158,18 @@ pub fn qualification_candidate_id(values: &BTreeMap<String, String>) -> String {
             hash.update(b"\n");
         }
     }
-    format!("{:x}", hash.finalize())
+    encode_hex(&hash.finalize())
+}
+
+fn encode_hex(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+
+    let mut encoded = String::with_capacity(bytes.len() * 2);
+    for &byte in bytes {
+        encoded.push(char::from(HEX[usize::from(byte >> 4)]));
+        encoded.push(char::from(HEX[usize::from(byte & 0x0f)]));
+    }
+    encoded
 }
 
 fn parse_fields(text: &str) -> Result<BTreeMap<String, String>, ManifestError> {

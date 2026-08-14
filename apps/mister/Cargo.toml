@@ -63,7 +63,7 @@ mister-magik-screenshot-parade = { path = "../../crates/screenshot-parade" }
 # support assumes it, but non-macOS/device targets keep the embedded setup.
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-sha2 = "0.10"
+sha2 = "0.11"
 quick-xml = "0.41"
 swash = { version = "0.2.7", features = ["scale", "render"] }
 pprof = { git = "https://github.com/NigelBreslaw/pprof-rs", branch = "armv7-itimer-abi", optional = true, default-features = false, features = ["flamegraph"] }
@@ -79,7 +79,7 @@ winit = { version = "0.30.13", optional = true }
 slint = { version = "=1.17.1", optional = true, default-features = false, features = ["compat-1-2", "renderer-software", "unsafe-single-threaded", "libm"] }
 
 [target.'cfg(all(target_os = "linux", target_arch = "arm"))'.dependencies]
-ffmpeg-next = { version = "8.1", optional = true, default-features = false, features = ["codec", "format", "software-resampling", "static"] }
+ffmpeg-next = { version = "9.0", optional = true, default-features = false, features = ["codec", "format", "software-resampling", "static"] }
 
 [build-dependencies]
 cc = "1.4.2"
