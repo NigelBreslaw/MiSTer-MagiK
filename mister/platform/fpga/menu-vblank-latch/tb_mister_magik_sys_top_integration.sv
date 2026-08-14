@@ -10,7 +10,6 @@
 module mister_magik_sys_top_latch_path (
 	input wire clk_sys,
 	input wire hdmi_vbl,
-	input wire hdmi_pll_locked,
 	input wire io_uio,
 	input wire io_strobe,
 	input wire [15:0] io_din
@@ -30,8 +29,6 @@ module mister_magik_sys_top_latch_path (
 
 	wire magik_response_valid;
 	wire [15:0] magik_response_data;
-	wire magik_diag_response_valid;
-	wire [15:0] magik_diag_response_data;
 	wire magik_lfb_apply;
 	wire magik_lfb_apply_accepted;
 	wire legacy_lfb_write;
@@ -94,16 +91,6 @@ module mister_magik_sys_top_latch_path (
 		.active_route_epoch(magik_lfb_active_route_epoch)
 	);
 
-	mister_magik_hdmi_lock_evidence magik_hdmi_lock_evidence (
-		.clk_sys(clk_sys),
-		.io_uio(io_uio),
-		.io_strobe(io_strobe),
-		.io_din(io_din),
-		.hdmi_pll_locked(hdmi_pll_locked),
-		.response_valid(magik_diag_response_valid),
-		.response_data(magik_diag_response_data)
-	);
-
 	always @(posedge clk_sys) begin
 		if(magik_lfb_apply_accepted) begin
 			LFB_EN <= magik_lfb_en;
@@ -139,8 +126,6 @@ module mister_magik_sys_top_latch_path (
 			io_dout_sys <= 16'd0;
 			if(!bridge.has_command && (io_din[7:0] == 8'h2f))
 				io_dout_sys <= 16'd1;
-			if(magik_diag_response_valid)
-				io_dout_sys <= magik_diag_response_data;
 			if(magik_response_valid)
 				io_dout_sys <= magik_response_data;
 		end
@@ -153,7 +138,6 @@ module tb_mister_magik_sys_top_integration;
 
 	reg test_clk = 1'b0;
 	reg test_vblank = 1'b0;
-	reg test_hdmi_pll_locked = 1'b0;
 	reg test_io_uio = 1'b0;
 	reg test_io_strobe = 1'b0;
 	reg [15:0] test_io_din = 16'd0;
@@ -162,7 +146,6 @@ module tb_mister_magik_sys_top_integration;
 	mister_magik_sys_top_latch_path dut (
 		.clk_sys(test_clk),
 		.hdmi_vbl(test_vblank),
-		.hdmi_pll_locked(test_hdmi_pll_locked),
 		.io_uio(test_io_uio),
 		.io_strobe(test_io_strobe),
 		.io_din(test_io_din)
@@ -282,9 +265,7 @@ module tb_mister_magik_sys_top_integration;
 	initial begin
 		reg [15:0] response;
 		reg [15:0] telemetry [0:10];
-		reg [15:0] evidence [0:5];
 		reg [15:0] telemetry_crc;
-		reg [15:0] evidence_crc;
 		repeat(3) @(posedge test_clk);
 		end_command();
 		// Exercise the production bridge's selected-but-idle parser state.
@@ -342,22 +323,8 @@ module tb_mister_magik_sys_top_integration;
 			telemetry_crc = crc_word(telemetry_crc, telemetry[index]);
 		expect16(telemetry[10], telemetry_crc, "sys_top telemetry CRC");
 
-		// The actual production response mux must carry the independent passive
-		// evidence responder after an acknowledged UIO-low command boundary.
-		begin_command(MAGIK_UIO_GET_HDMI_EVIDENCE, MAGIK_HDMI_EVIDENCE_MAGIC);
-		for(index = 0; index < MAGIK_HDMI_EVIDENCE_WORDS; index = index + 1)
-			transfer_word(16'd0, evidence[index]);
-		end_command();
-		evidence_crc = MAGIK_HDMI_EVIDENCE_HEADER_CRC;
-		for(index = 0; index < MAGIK_HDMI_EVIDENCE_CRC_WORD; index = index + 1)
-			evidence_crc = crc_word(evidence_crc, evidence[index]);
-		expect16(evidence[MAGIK_HDMI_EVIDENCE_SCHEMA_WORD],
-			MAGIK_HDMI_EVIDENCE_SCHEMA, "sys_top HDMI lock schema");
-		expect16(evidence[MAGIK_HDMI_EVIDENCE_CRC_WORD], evidence_crc,
-			"sys_top HDMI lock CRC");
-
-		// Every retired evidence opcode is explicitly unsupported in Milestone A.
-		for(index = 8'h61; index <= 8'h67; index = index + 1) begin
+		// The repair-only candidate exposes no FPGA diagnostic command.
+		for(index = 8'h60; index <= 8'h67; index = index + 1) begin
 			begin_command(index[7:0], 16'd0);
 			end_command();
 		end

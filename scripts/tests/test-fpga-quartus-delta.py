@@ -40,16 +40,6 @@ Total DSP Blocks: 2
 Info (20032): Parallel compilation is enabled and will use up to 4 processors
 """
 
-CONTROL_SYNC_NAMES = (
-    "control_pll_lock_meta",
-    "control_pll_lock_sys",
-)
-SYNC_NAMES = tuple(
-    f"mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|{name}"
-    for name in CONTROL_SYNC_NAMES
-)
-
-
 def quartus_assignment_section(hierarchy: str, names: tuple[str, ...]) -> str:
     return (
         f"; Source assignments for {hierarchy} ;\n"
@@ -61,10 +51,6 @@ def quartus_assignment_section(hierarchy: str, names: tuple[str, ...]) -> str:
     )
 
 
-CONTROL_SYNC_ASSIGNMENTS = quartus_assignment_section(
-    "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence",
-    CONTROL_SYNC_NAMES,
-)
 COMPLETION_SYNC_NAMES = (
     "o_completion_gray_meta",
     "o_completion_gray_sync",
@@ -73,14 +59,14 @@ COMPLETION_SYNC_ASSIGNMENTS = quartus_assignment_section(
     "ascal:ascal",
     COMPLETION_SYNC_NAMES,
 )
-SYNC_NAMES += tuple(
+SYNC_NAMES = tuple(
     f"ascal:ascal|{name}"
     for name in COMPLETION_SYNC_NAMES
 )
-SYNC_ASSIGNMENTS = CONTROL_SYNC_ASSIGNMENTS + COMPLETION_SYNC_ASSIGNMENTS
+SYNC_ASSIGNMENTS = COMPLETION_SYNC_ASSIGNMENTS
 CUSTOM_SYNC = SYNC_ASSIGNMENTS + """\
 Info (332114): Report Metastability: Found 8 synchronizer chains.
-Info (332114): Fraction of Chains for which MTBFs Could Not be Calculated: 0.500
+Info (332114): Fraction of Chains for which MTBFs Could Not be Calculated: 0.625
 Info: MagiK diagnostics CDC analysis applied: scaler_completion_gray
 """
 
@@ -195,28 +181,19 @@ class QuartusDeltaTest(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertIn("quartus_processor_use_mismatch", payload["invalid_reason"])
 
-    def test_forced_pll_status_first_stage_passes(self) -> None:
-        patched = CUSTOM_SYNC.replace(
-            "; SYNCHRONIZER_IDENTIFICATION ; FORCED_IF_ASYNCHRONOUS ; - ; control_pll_lock_meta ;",
-            "; SYNCHRONIZER_IDENTIFICATION ; FORCED ; - ; control_pll_lock_meta ;",
-        )
-        result, payload = self.run_check(BASE, BASE + patched)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(payload["invalid_reason"], "ok")
-
     def test_unrelated_total_chain_drift_does_not_override_exact_evidence(self) -> None:
         patched = CUSTOM_SYNC.replace(
             "Found 8 synchronizer chains", "Found 10 synchronizer chains"
         ).replace(
-            "Could Not be Calculated: 0.500",
-            "Could Not be Calculated: 0.600",
+            "Could Not be Calculated: 0.625",
+            "Could Not be Calculated: 0.700",
         )
         result, payload = self.run_check(BASE, BASE + patched)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(payload["baseline_synchronizer_chains"], 5)
         self.assertEqual(payload["patched_synchronizer_chains"], 10)
         self.assertEqual(payload["baseline_calculable_synchronizer_chains"], 1)
-        self.assertEqual(payload["patched_calculable_synchronizer_chains"], 4)
+        self.assertEqual(payload["patched_calculable_synchronizer_chains"], 3)
 
     def test_new_warning_fails_even_when_warning_code_is_inherited(self) -> None:
         result, payload = self.run_check(BASE, BASE + "Warning (10001): different warning\n" + CUSTOM_SYNC)
@@ -435,17 +412,17 @@ class QuartusDeltaTest(unittest.TestCase):
 
     def test_synchronizer_hierarchy_is_required(self) -> None:
         wrong = CUSTOM_SYNC.replace(
-            "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence",
-            "mister_magik_hdmi_lock_evidence:wrong_observer",
+            "ascal:ascal",
+            "ascal:wrong_ascal",
             1,
         )
         result, payload = self.run_check(BASE, BASE + wrong)
         self.assertEqual(result.returncode, 1)
         self.assertIn("custom_synchronizer_missing", payload["invalid_reason"])
 
-    def test_second_lock_synchronizer_stage_is_required(self) -> None:
+    def test_second_completion_synchronizer_stage_is_required(self) -> None:
         wrong = CUSTOM_SYNC.replace(
-            "; control_pll_lock_sys ;", "; unrelated_lock_sys ;", 1
+            "; o_completion_gray_sync ;", "; unrelated_completion_sync ;", 1
         )
         result, payload = self.run_check(BASE, BASE + wrong)
         self.assertEqual(result.returncode, 1)
@@ -457,9 +434,9 @@ class QuartusDeltaTest(unittest.TestCase):
             / "mister/platform/fpga/menu-vblank-latch/mister_magik_video_diagnostics.sdc"
         ).read_text(encoding="utf-8")
         self.assertIn("get_registers -nowarn -no_duplicates", sdc)
-        self.assertIn("get_pins -nowarn -no_duplicates", sdc)
         self.assertIn("set_net_delay -max 10.0", sdc)
         self.assertNotIn("set_max_skew", sdc)
+        self.assertNotIn("set_false_path", sdc)
 
 
 if __name__ == "__main__":

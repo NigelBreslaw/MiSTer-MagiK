@@ -32,6 +32,7 @@ COMMAND_PATTERNS = {
     "0x64": re.compile(r"(?:cmd|io_din\s*\[\s*7\s*:\s*0\s*\])\s*==\s*(?:8\s*'h|')64", re.I),
     "0x65": re.compile(r"(?:cmd|io_din\s*\[\s*7\s*:\s*0\s*\])\s*==\s*(?:8\s*'h|')65", re.I),
     "0x66": re.compile(r"(?:cmd|io_din\s*\[\s*7\s*:\s*0\s*\])\s*==\s*(?:8\s*'h|')66", re.I),
+    "0x67": re.compile(r"(?:cmd|io_din\s*\[\s*7\s*:\s*0\s*\])\s*==\s*(?:8\s*'h|')67", re.I),
 }
 
 IMMUTABLE_LATCH_SHA256 = {
@@ -168,8 +169,8 @@ def main() -> None:
     control_source = diagnostics_control.read_text()
     avalon_source = diagnostics_avalon.read_text()
     output_source = diagnostics_output.read_text()
-    if re.search(r"\bmodule\b", avalon_source + output_source):
-        fail("retired external diagnostic compatibility source defines logic")
+    if re.search(r"\bmodule\b", control_source + avalon_source + output_source):
+        fail("retired diagnostic compatibility source defines logic")
     compiled_diagnostics = control_source + avalon_source + output_source
     for retired_fragment in (
         "snapshot_payload",
@@ -188,77 +189,7 @@ def main() -> None:
         "M10K",
     ):
         if retired_fragment in compiled_diagnostics:
-            fail(f"retired wide diagnostic fragment remains in lock recorder: {retired_fragment}")
-    sync_assignment = "SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS"
-    # Milestone A retains only the independently qualified physical-lock chain;
-    # scaler completion Gray/reset chains live in the dedicated repair module.
-    synchronizer_stages = (
-        ("control_pll_lock_meta", "FORCED"),
-        ("control_pll_lock_sys", "FORCED_IF_ASYNCHRONOUS"),
-    )
-    if (
-        "ASYNC_REG" in control_source
-        or control_source.count(sync_assignment) != 1
-    ):
-        fail("HDMI evidence synchronizers are not exactly identified")
-    for stage, assignment in synchronizer_stages:
-        declaration = (
-            f'(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION {assignment}" *)\n'
-            f"\treg {stage} = 1'b0;"
-        )
-        if control_source.count(declaration) != 1:
-            fail(f"HDMI evidence synchronizer stage is not exact: {stage}")
-    if (
-        control_source.count("control_pll_lock_meta <= hdmi_pll_locked;") != 1
-        or len(re.findall(r"\bhdmi_pll_locked\b", control_source)) != 2
-    ):
-        fail("lock recorder consumes raw HDMI PLL status outside its first stage")
-    synchronizer_bindings = {
-        "control PLL first stage": (
-            control_source,
-            "control_pll_lock_meta <= hdmi_pll_locked;",
-        ),
-        "control PLL second stage": (
-            control_source,
-            "control_pll_lock_sys <= control_pll_lock_meta;",
-        ),
-    }
-    for label, (source, binding) in synchronizer_bindings.items():
-        if source.count(binding) != 1:
-            fail(f"{label} binding mismatch")
-    if control_source.count("module mister_magik_hdmi_lock_evidence") != 1:
-        fail("HDMI lock and output evidence module is missing or ambiguous")
-    module_match = re.search(
-        r"module\s+mister_magik_hdmi_lock_evidence\s*\((.*?)\);",
-        control_source,
-        re.S,
-    )
-    if module_match is None:
-        fail("HDMI evidence module interface is missing")
-    module_ports = re.findall(
-        r"\b(?:input|output)\s+(?:wire|reg)\s+(?:\[[^\]]+\]\s+)?"
-        r"([A-Za-z_][A-Za-z0-9_]*)",
-        module_match.group(1),
-    )
-    expected_module_ports = [
-        "clk_sys",
-        "io_uio",
-        "io_strobe",
-        "io_din",
-        "hdmi_pll_locked",
-        "response_valid",
-        "response_data",
-    ]
-    if module_ports != expected_module_ports:
-        fail("HDMI evidence module interface is not the exact passive allowlist")
-    for fragment in (
-        "wire selected_start = io_din[7:0] == MAGIK_UIO_GET_HDMI_EVIDENCE;",
-        "reg [4:0] snapshot_flags = 5'd0;",
-        "reg [15:0] snapshot_lock_loss_count = 16'd0;",
-        "tx_crc <= MAGIK_HDMI_EVIDENCE_HEADER_CRC;",
-    ):
-        if control_source.count(fragment) != 1:
-            fail(f"independent 0x60 lock responder is not exact: {fragment}")
+            fail(f"retired wide diagnostic fragment remains: {retired_fragment}")
     for retired_reader_fragment in (
         "command_kind",
         "snapshot_path_extra",
@@ -271,15 +202,6 @@ def main() -> None:
     ):
         if retired_reader_fragment in control_source:
             fail(f"retired broad observer remains: {retired_reader_fragment}")
-    if "evidence_word" in control_source:
-        fail("independent lock responder regained the shared evidence word")
-    for fragment in (
-        "reg [4:0] snapshot_flags = 5'd0;",
-        "reg [15:0] snapshot_lock_loss_count = 16'd0;",
-        "if(selected_start) begin",
-    ):
-        if control_source.count(fragment) != 1:
-            fail(f"lock evidence snapshot is missing or ambiguous: {fragment}")
     for fragment in (
         '`include "mister_magik_video_diagnostics_protocol.svh"',
         "else if(cmd_start && evidence_command) begin",
@@ -297,11 +219,6 @@ def main() -> None:
     ):
         if fragment in bridge_source:
             fail(f"diagnostic selection remains in the latch bridge: {fragment}")
-    if re.search(
-        r"\b(?:LFB_|FB_|vbuf_|reset_req|cfg_done)[A-Za-z0-9_]*\s*(?:<=|=)",
-        control_source,
-    ):
-        fail("HDMI evidence module drives a functional video or control signal")
     for redundant_register in (
         "output_no_de_previous",
         "output_black_direct_previous",
@@ -311,7 +228,7 @@ def main() -> None:
         "snapshot_output_nonzero_count",
     ):
         if redundant_register in control_source:
-            fail(f"HDMI activity recorder regained redundant state: {redundant_register}")
+            fail(f"retired diagnostic state remains: {redundant_register}")
     diagnostics_sdc_text = diagnostics_sdc.read_text()
     timing_report_text = timing_report.read_text()
     unconstrained_report = (
@@ -320,20 +237,11 @@ def main() -> None:
     )
     if timing_report_text.count(unconstrained_report) != 1:
         fail("full unconstrained-path timing report is missing or ambiguous")
-    if "get_pins -nowarn -no_duplicates" not in diagnostics_sdc_text:
-        fail("diagnostic SDC does not constrain direct register data pins")
-    pll_lock_false_path = "set_false_path -to $magik_hdmi_lock_meta_pin"
     timing_commands = re.findall(
         r"(?m)^\s*(set_[A-Za-z0-9_]+\b[^\n]*)$", diagnostics_sdc_text
     )
-    if (
-        timing_commands != [
-            pll_lock_false_path,
-            "set_net_delay -max 10.0 \\",
-        ]
-        or diagnostics_sdc_text.count("control_pll_lock_meta}") != 1
-    ):
-        fail("HDMI lock SDC contains more than the sole approved first-stage false path")
+    if timing_commands != ["set_net_delay -max 10.0 \\"]:
+        fail("repair SDC contains a timing command beyond the exact Gray net-delay bound")
     for fragment in (
         "{*ascal:ascal|avl_completion_gray_i[*]} 2",
         "{*ascal:ascal|o_completion_gray_meta[*]} 2",
@@ -343,17 +251,9 @@ def main() -> None:
     ):
         if diagnostics_sdc_text.count(fragment) != 1:
             fail(f"scaler completion Gray constraint is missing or ambiguous: {fragment}")
-    if diagnostics_sdc_text.count("magik_require_data_pin") != 2:
-        fail("HDMI lock constraint does not require one exact first-stage data pin")
-    if (
-        "foreach suffix [list d asdata sdata]" not in diagnostics_sdc_text
-        or '"${register_pattern}|${suffix}"' not in diagnostics_sdc_text
-    ):
-        fail("HDMI lock constraint omits a legal direct register data pin")
-    if diagnostics_sdc_text.count(
-        "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|"
-    ) != 1:
-        fail("HDMI lock SDC does not use the exact synthesized hierarchy")
+    for forbidden_sdc in ("set_false_path", "magik_require_data_pin", "control_pll_lock"):
+        if forbidden_sdc in diagnostics_sdc_text:
+            fail(f"retired HDMI lock constraint remains: {forbidden_sdc}")
     with tempfile.TemporaryDirectory(prefix="mister-magik-fpga-integration-") as temporary:
         work = Path(temporary) / "Menu_MiSTer"
         shutil.copytree(menu, work, ignore=shutil.ignore_patterns(".git", "db", "output_files"))
@@ -416,13 +316,13 @@ def main() -> None:
             BRIDGE_MAPPING: 1,
             APPLY_BUNDLE: 1,
             "if(magik_response_valid) io_dout_sys <= magik_response_data;": 2,
-            "mister_magik_hdmi_lock_evidence magik_hdmi_lock_evidence": 1,
+            "mister_magik_hdmi_lock_evidence magik_hdmi_lock_evidence": 0,
             "mister_magik_scaler_completion_cdc magik_scaler_completion_cdc": 0,
             "mister_magik_video_diagnostics_control magik_video_diagnostics": 0,
             "mister_magik_video_diagnostics_avalon magik_video_diagnostics_avalon": 0,
             "mister_magik_video_diagnostics_output magik_video_diagnostics_output": 0,
-            "magik_diag_response_valid": 4,
-            "magik_diag_response_data": 4,
+            "magik_diag_response_valid": 0,
+            "magik_diag_response_data": 0,
         }
         mismatches = [
             f"{fragment.splitlines()[0]!r} expected {expected}, found {patched.count(fragment)}"
@@ -480,10 +380,8 @@ def main() -> None:
             fail("HDMI PLL wrapper no longer terminates its redundant lock output")
         if "locked.export" in patched_pll or ".locked(hdmi_pll_locked)" in patched:
             fail("diagnostics must not add a second HDMI PLL lock export")
-        if patched.count("wire hdmi_pll_locked = reconfig_from_pll[16];") != 1:
-            fail("sys_top does not observe the existing real HDMI PLL lock status bit")
-        if patched.count("wire hdmi_pll_locked = 1'b0;") != 1:
-            fail("sys_top HDMI-disabled PLL status fallback is missing")
+        if "wire hdmi_pll_locked" in patched:
+            fail("repair-only sys_top retains the retired HDMI PLL diagnostic tap")
         if "magik_selected_direct" in patched or "hdmi_out_direct" in patched:
             fail("retired final-mux diagnostic provenance remains")
         if re.search(
@@ -498,39 +396,6 @@ def main() -> None:
         ):
             fail("retired wide diagnostic wiring remains in patched sys_top")
 
-        control_binding = re.search(
-            r"mister_magik_hdmi_lock_evidence\s+"
-            r"magik_hdmi_lock_evidence\s*\((.*?)\);",
-            patched,
-            re.S,
-        )
-        if control_binding is None:
-            fail("missing minimal HDMI lock evidence binding")
-        if control_binding.group(1).count(".hdmi_pll_locked(hdmi_pll_locked)") != 1:
-            fail("lock evidence does not observe the real HDMI PLL lock")
-        expected_lock_ports = sorted(
-            (
-                ("clk_sys", "clk_sys"),
-                ("io_uio", "io_uio"),
-                ("io_strobe", "io_strobe"),
-                ("io_din", "io_din"),
-                ("hdmi_pll_locked", "hdmi_pll_locked"),
-                ("response_valid", "magik_diag_response_valid"),
-                ("response_data", "magik_diag_response_data"),
-            )
-        )
-        actual_lock_ports = sorted(
-            re.findall(
-                r"\.([A-Za-z_][A-Za-z0-9_]*)\s*\(\s*"
-                r"([A-Za-z_][A-Za-z0-9_]*)\s*\)",
-                control_binding.group(1),
-            )
-        )
-        all_lock_port_names = re.findall(
-            r"\.([A-Za-z_][A-Za-z0-9_]*)\s*\(", control_binding.group(1)
-        )
-        if actual_lock_ports != expected_lock_ports or len(all_lock_port_names) != 7:
-            fail("independent HDMI lock evidence port map is not exact")
         for evidence_net in (
             "magik_evidence_word",
             "magik_evidence_command",
@@ -539,12 +404,6 @@ def main() -> None:
         ):
             if re.search(rf"\b{evidence_net}\b", patched):
                 fail(f"retired shared evidence net remains: {evidence_net}")
-        if re.search(
-            r"\.(?:vbuf_(?!read\b|waitrequest\b|readdatavalid\b)|"
-            r"reset|route|snapshot|fault|heartbeat|generation)",
-            control_binding.group(1),
-        ):
-            fail("HDMI evidence binding regained a retired observer input")
         if re.search(r"\.hdmi_pll_locked(?:_async)?\s*\(\s*led_locked\s*\)", patched):
             fail("diagnostics must not observe the adjustment-PLL LED signal")
 

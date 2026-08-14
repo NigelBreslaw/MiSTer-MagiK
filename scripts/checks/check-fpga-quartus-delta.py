@@ -62,15 +62,13 @@ MINIMUM_SLACK_NS = 0.20
 MAXIMUM_SLACK_DEGRADATION_NS = 0.15
 MAXIMUM_LOGIC_ELEMENT_DELTA = 150
 MAXIMUM_REGISTER_DELTA = 96
-EXPECTED_OBSERVER_CALCULABLE_CHAINS = 3
+EXPECTED_OBSERVER_CALCULABLE_CHAINS = 2
 EXPECTED_QUARTUS_POLICY = {
     "auto_parallel_synthesis": "off",
     "parallel_synthesis": "off",
     "num_parallel_processors": "4",
 }
 EXPECTED_SYNC_ASSIGNMENT_SUFFIXES = (
-    "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|control_pll_lock_meta",
-    "mister_magik_hdmi_lock_evidence:magik_hdmi_lock_evidence|control_pll_lock_sys",
     "ascal:ascal|o_completion_gray_meta",
     "ascal:ascal|o_completion_gray_sync",
 )

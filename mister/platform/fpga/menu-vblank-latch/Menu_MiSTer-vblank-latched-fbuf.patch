@@ -28,8 +28,6 @@ index a416879..f6a40ea 100644
 +wire [15:0] magik_lfb_drop_count;
 +wire [15:0] magik_lfb_reject_count;
 +wire [15:0] magik_lfb_active_route_epoch;
-+wire        magik_diag_response_valid;
-+wire [15:0] magik_diag_response_data;
 +
 +mister_magik_latch_sys_top_bridge magik_latch_bridge
 +(
@@ -70,17 +68,6 @@ index a416879..f6a40ea 100644
 +	.active_route_epoch(magik_lfb_active_route_epoch)
 +);
 +
-+mister_magik_hdmi_lock_evidence magik_hdmi_lock_evidence
-+(
-+	.clk_sys(clk_sys),
-+	.io_uio(io_uio),
-+	.io_strobe(io_strobe),
-+	.io_din(io_din),
-+	.hdmi_pll_locked(hdmi_pll_locked),
-+	.response_valid(magik_diag_response_valid),
-+	.response_data(magik_diag_response_data)
-+);
-+
  always@(posedge clk_sys) begin
  	reg  [7:0] cmd;
  	reg        has_cmd;
@@ -108,7 +95,6 @@ index a416879..f6a40ea 100644
  			if(io_din[7:0] == 'h40) io_dout_sys <= fb_crc;
  `endif
  			if(io_din[7:0] == 'h42) io_dout_sys <= {1'b1, frame_cnt};
-+			if(magik_diag_response_valid) io_dout_sys <= magik_diag_response_data;
 +			if(magik_response_valid) io_dout_sys <= magik_response_data;
  			if(io_din[7:0] == 'h44) io_dout_sys <= 1;
  		end
@@ -117,28 +103,10 @@ index a416879..f6a40ea 100644
  					9: LFB_STRIDE      <= io_din[13:0];
  				endcase
  			end
-+			if(magik_diag_response_valid) io_dout_sys <= magik_diag_response_data;
 +			if(magik_response_valid) io_dout_sys <= magik_response_data;
  			if(cmd == 'h25) {led_overtake, led_state} <= io_din;
  			if(cmd == 'h26) vol_att <= io_din[4:0];
  			if(cmd == 'h27) VSET <= io_din[11:0];
-@@ -1038,6 +1142,7 @@ end
- 
- /////////////////////////  HDMI output  /////////////////////////////////
- `ifndef MISTER_DEBUG_NOHDMI
-+	wire hdmi_pll_locked = reconfig_from_pll[16];
- 	wire hdmi_clk_out;
- 	pll_hdmi pll_hdmi
- 	(
-@@ -1047,6 +1152,8 @@ end
- 		.reconfig_from_pll(reconfig_from_pll),
- 		.outclk_0(hdmi_clk_out)
- 	);
-+`else
-+	wire hdmi_pll_locked = 1'b0;
- `endif
- 
- //1920x1080@60 PCLK=148.5MHz CEA
 @@ -1380,15 +1491,30 @@ assign HDMI_TX_D  = hdmi_out_d;
  
  wire [23:0] vga_data_sl;

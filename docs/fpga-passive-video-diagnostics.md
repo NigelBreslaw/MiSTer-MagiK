@@ -1,44 +1,24 @@
 # Passive FPGA HDMI evidence
 
-The current development candidate deliberately returns to a small, staged
-architecture. Milestone A contains only:
-
-- the previously qualified, independent physical HDMI FPLL-lock recorder; and
-- the lossless scaler completion-credit repair.
+The current development candidate deliberately contains only the lossless
+scaler completion-credit repair. It exposes no FPGA diagnostic command.
 
 It removes the broad pixel-path classifiers, Avalon activity recorder, live
 scaler-state export, and diagnostic extensions to the framebuffer latch. Those
 features made the dense legacy scaler placement sensitive even when their own
-timing paths were safe. Milestone B may add compact repair evidence only after
-Milestone A independently passes fixed-seed qualification.
+timing paths were safe.
 
 ## Milestone A hardware contract
 
-UIO command `0x60` returns the unchanged `hdmi-lock-evidence-v1` four-word
-record:
-
-1. schema;
-2. lock flags;
-3. saturated lock-loss count;
-4. CRC-16/CCITT-FALSE.
-
-The flags report whether lock was seen high, whether two consecutive
-synchronized high samples armed the recorder, the current synchronized lock
-state, whether lock was ever lost after arming, and counter overflow. Reads
-snapshot the record atomically and never arm, clear, reset, or otherwise mutate
-the recorder.
-
-Commands `0x61` through `0x67` are explicitly unsupported by Milestone A.
-The device agent treats unsupported richer evidence as lock-only capability; a
-malformed, wrong-schema, or CRC-invalid supported record remains an error.
-The canonical decoders for older qualified path-evidence and schema-4 RBFs are
-retained solely for rollback compatibility and do not describe Milestone A
-hardware.
+Commands `0x60` through `0x67` are explicitly unsupported. Canonical decoders
+remain in the device agent solely for older qualified RBFs and rollback
+compatibility; they do not describe this hardware.
 
 The framebuffer latch and bridge are source-identical to the known qualified
 split-responder implementation. They contain no diagnostic opcode decode,
-snapshot bank, evidence CRC, or diagnostic port. The `0x60` recorder is an
-independent top-level read-only responder with a statically disjoint opcode.
+snapshot bank, evidence CRC, or diagnostic port. The compatibility source paths
+remain in the build input list but define no design unit, preserving invariant
+cache identities without retaining hardware.
 
 ## Lossless completion repair
 
@@ -73,21 +53,15 @@ bound. No new false path or multicycle exception is introduced.
 
 ## Clock-domain and passivity rules
 
-The lock source is the existing physical `reconfig_from_pll[16]` status bit.
-Its only raw diagnostic consumer is the first stage of a two-register
-`clk_sys` synchronizer. The sole diagnostic false path ends at that first-stage
-data pin; the second stage remains timed and must appear in metastability
-analysis.
-
 The completion pointer is wholly internal functional state, not a diagnostic
-payload exported through `sys_top`. Milestone A has no pixel, Avalon, or live
-scaler-state diagnostic taps. It uses no mailbox, block RAM, DSP, added PLL
-output, placement directive, or functional timing exception. Observer outputs
-can reach only the read-only UIO response mux.
+payload exported through `sys_top`. Milestone A has no PLL-lock, pixel, Avalon,
+or live scaler-state diagnostic taps. It uses no mailbox, block RAM, DSP, added
+PLL output, placement directive, or functional timing exception.
 
 ## Collection and compatibility
 
-Collect evidence before rebooting or reconfiguring the FPGA:
+Older qualified diagnostic RBFs can still be queried before rebooting or
+reconfiguring the FPGA:
 
 ```text
 scripts/agent device diagnostics --out PATH
@@ -99,21 +73,14 @@ capture. Raw UIO is never read by the SSH fallback. Before every command the
 agent completes an acknowledged strobe while IO enable is low, proving that
 the FPGA command parser observed the transaction boundary.
 
-The lock classifications remain:
-
-- `hdmi_pll_lock_lost`;
-- `hdmi_pll_locked`;
-- `hdmi_pll_not_stably_armed`; and
-- `hdmi_pll_not_seen`.
-
 Compatibility is explicit:
 
 | Device agent | FPGA RBF | Result |
 | --- | --- | --- |
-| new | Milestone A | v2 lock-only JSON from `0x60` |
+| new | repair-only Milestone A | safe unavailable/unclassified result |
 | new | older path-evidence recorder | existing detailed v2 JSON |
 | new | older schema-4 observer | unchanged v1 fallback after explicit unsupported `0x60` |
-| old | Milestone A | safe unavailable/unclassified result |
+| old | repair-only Milestone A | safe unavailable/unclassified result |
 | old | older schema-4 observer | legacy v1 JSON |
 
 ## Qualification sequence
@@ -126,7 +93,7 @@ must also satisfy:
 - hold slack at least 0.200 ns;
 - zero total negative slack;
 - exactly 158 unconstrained output paths, equal to the baseline;
-- the exact lock and two internal Gray synchronizer chains;
+- exactly the two internal Gray synchronizer chains;
 - exactly two applied Gray net-delay rows with nonnegative slack; and
 - no RAM, DSP, PLL, warning-identity, passivity, or functional-cone regression.
 
@@ -135,17 +102,12 @@ run must report both as cache hits and synthesize only the patched variant.
 Failure of any Milestone A gate stops the staged redesign; Milestone B is not
 built.
 
-If Milestone A passes, Milestone B may add a second independent sidecar for
-compact completion-repair evidence. It must not modify the qualified `0x60`
-recorder or latch/bridge, restore pixel/Avalon classifiers, or export a live
-scaler-state bus. Milestone B receives its own simulation, structural review,
-commit, and single fixed-seed signoff. A Milestone B failure leaves the
-qualified Milestone A repair as the fallback.
-
 The known lock-only implementation at synthesis commit `840605cf` passed with
 0.474 ns setup, 0.247 ns hold, zero TNS, 158 unconstrained outputs, and a delta
-of 64 ALMs and 25 registers. Those numbers justify the split boundary but do
-not qualify the new scaler repair; only the new matched signoff can do that.
+of 64 ALMs and 25 registers. Subsequent fit evidence showed that even this
+independent responder materially amplified global fitted-register duplication
+when combined with the repair, so it is deliberately absent here. Only the new
+matched signoff can qualify the scaler repair.
 
 A canonical local signoff may be installed only to the Dev layout through the
 attended rollback-capable experimental FPGA transaction. It is not release
