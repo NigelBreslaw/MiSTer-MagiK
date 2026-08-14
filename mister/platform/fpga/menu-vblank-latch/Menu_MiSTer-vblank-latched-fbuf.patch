@@ -1,8 +1,8 @@
 diff --git a/sys/ascal.vhd b/sys/ascal.vhd
-index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..4e877124b61e8149be7955d2fcd142cbbe0fc257 100644
+index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..b1c2581d8665d3db4f4042ed668ee71169a28b0c 100644
 --- a/sys/ascal.vhd
 +++ b/sys/ascal.vhd
-@@ -75,6 +75,126 @@ LIBRARY ieee;
+@@ -75,6 +75,174 @@ LIBRARY ieee;
  USE ieee.std_logic_1164.ALL;
  USE ieee.numeric_std.ALL;
  
@@ -36,6 +36,22 @@ index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..4e877124b61e8149be7955d2fcd142cb
 +		read_state    : boolean;
 +		return_drain  : std_logic;
 +		read_asserted : std_logic)
++		RETURN boolean;
++	FUNCTION return_write_phase_next(
++		phase        : natural;
++		returned     : std_logic;
++		return_drain : std_logic;
++		ring_size    : natural)
++		RETURN natural;
++	FUNCTION return_block_complete(
++		phase        : natural;
++		returned     : std_logic;
++		return_drain : std_logic;
++		burst_len    : natural)
++		RETURN boolean;
++	FUNCTION return_drain_ready(
++		outstanding : natural;
++		aligned     : std_logic)
 +		RETURN boolean;
 +END PACKAGE mister_magik_scaler_completion_queue;
 +
@@ -119,6 +135,38 @@ index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..4e877124b61e8149be7955d2fcd142cb
 +	BEGIN
 +		RETURN read_state AND return_drain='0' AND read_asserted='0';
 +	END FUNCTION read_obligation_issue;
++
++	FUNCTION return_write_phase_next(
++		phase        : natural;
++		returned     : std_logic;
++		return_drain : std_logic;
++		ring_size    : natural)
++		RETURN natural IS
++	BEGIN
++		IF returned='1' AND return_drain='0' THEN
++			RETURN (phase+1) MOD ring_size;
++		END IF;
++		RETURN phase;
++	END FUNCTION return_write_phase_next;
++
++	FUNCTION return_block_complete(
++		phase        : natural;
++		returned     : std_logic;
++		return_drain : std_logic;
++		burst_len    : natural)
++		RETURN boolean IS
++	BEGIN
++		RETURN returned='1' AND return_drain='0' AND
++			(phase MOD burst_len)=burst_len-2;
++	END FUNCTION return_block_complete;
++
++	FUNCTION return_drain_ready(
++		outstanding : natural;
++		aligned     : std_logic)
++		RETURN boolean IS
++	BEGIN
++		RETURN outstanding=0 AND aligned='1';
++	END FUNCTION return_drain_ready;
 +END PACKAGE BODY mister_magik_scaler_completion_queue;
 +
 +LIBRARY ieee;
@@ -129,7 +177,7 @@ index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..4e877124b61e8149be7955d2fcd142cb
  -- MODE[2:0]
  -- 000 : Nearest
  -- 001 : Bilinear
-@@ -335,6 +455,8 @@ ARCHITECTURE rtl OF ascal IS
+@@ -335,6 +503,8 @@ ARCHITECTURE rtl OF ascal IS
  	TYPE arr_pix IS ARRAY (natural RANGE <>) OF type_pix;
  	TYPE arr_pixq IS ARRAY(natural RANGE <>) OF arr_pix(0 TO 3);
  	ATTRIBUTE ramstyle : string;
@@ -138,7 +186,7 @@ index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..4e877124b61e8149be7955d2fcd142cb
  
  	SUBTYPE uint12 IS natural RANGE 0 TO 4095;
  	SUBTYPE uint13 IS natural RANGE 0 TO 8191;
-@@ -418,7 +540,16 @@ ARCHITECTURE rtl OF ascal IS
+@@ -418,7 +588,17 @@ ARCHITECTURE rtl OF ascal IS
  	SIGNAL avl_walt,avl_wline,avl_rline : std_logic;
  	SIGNAL avl_dw,avl_dr : unsigned(N_DW-1 DOWNTO 0);
  	SIGNAL avl_wr : std_logic;
@@ -146,6 +194,7 @@ index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..4e877124b61e8149be7955d2fcd142cb
 +	SIGNAL avl_readdataack,avl_completion_pending : std_logic;
 +	SIGNAL avl_completion_ack_meta,avl_completion_ack_sync : std_logic;
 +	SIGNAL avl_return_drain : std_logic:='1';
++	SIGNAL avl_return_aligned : std_logic:='0';
 +	SIGNAL avl_outstanding_returns : natural RANGE 0 TO 2*BLEN:=0;
 +	SIGNAL avl_readack : std_logic;
 +	ATTRIBUTE preserve OF avl_readdataack : SIGNAL IS true;
@@ -156,7 +205,7 @@ index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..4e877124b61e8149be7955d2fcd142cb
  	SIGNAL avl_radrs,avl_wadrs : unsigned(31 DOWNTO 0);
  	SIGNAL avl_i_offset0,avl_o_offset0 : unsigned(31 DOWNTO 0);
  	SIGNAL avl_i_offset1,avl_o_offset1 : unsigned(31 DOWNTO 0);
-@@ -481,6 +612,10 @@ ARCHITECTURE rtl OF ascal IS
+@@ -481,6 +661,10 @@ ARCHITECTURE rtl OF ascal IS
  	SIGNAL o_pshift : natural RANGE 0 TO 15;
  	SIGNAL o_readack,o_readack_sync,o_readack_sync2 : std_logic;
  	SIGNAL o_readdataack,o_readdataack_sync,o_readdataack_sync2 : std_logic;
@@ -167,7 +216,7 @@ index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..4e877124b61e8149be7955d2fcd142cb
  	SIGNAL o_copyv : unsigned(0 TO 14);
  	SIGNAL o_adrs : unsigned(31 DOWNTO 0); -- Avalon address
  	SIGNAL o_adrs_pre : natural RANGE 0 TO 2**24-1;
-@@ -1160,6 +1295,29 @@ BEGIN
+@@ -1160,6 +1344,29 @@ BEGIN
  	o_reset_na<='0'   WHEN reset_na='0' ELSE '1' WHEN rising_edge(o_clk);
  	avl_reset_na<='0' WHEN reset_na='0' ELSE '1' WHEN rising_edge(avl_clk);
  
@@ -197,7 +246,7 @@ index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..4e877124b61e8149be7955d2fcd142cb
  	-----------------------------------------------------------------------------
  	-- Input pixels FIFO and shreg
  	InAT:PROCESS(i_clk,i_reset_na) IS
-@@ -1672,15 +1830,27 @@ BEGIN
+@@ -1672,15 +1879,29 @@ BEGIN
  	-- AVALON interface
  	Avaloir:PROCESS(avl_clk,avl_reset_na) IS
  		VARIABLE adr_v : unsigned(31 DOWNTO 0);
@@ -213,11 +262,13 @@ index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..4e877124b61e8149be7955d2fcd142cb
 +			avl_completion_ack_meta<='0';
 +			avl_completion_ack_sync<='0';
 +			avl_return_drain<='1';
++			avl_return_aligned<='0';
  			avl_readack<='0';
  
  		ELSIF rising_edge(avl_clk) THEN
 +			completion_v:='0';
-+			IF avl_outstanding_returns=0 THEN
++			IF return_drain_ready(
++				avl_outstanding_returns,avl_return_aligned) THEN
 +				avl_return_drain<='0';
 +			END IF;
 +			avl_completion_ack_meta<=o_readdataack_sync2; -- <ASYNC>
@@ -225,7 +276,7 @@ index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..4e877124b61e8149be7955d2fcd142cb
  			----------------------------------
  			avl_write_sync<=i_write; -- <ASYNC>
  			avl_write_sync2<=avl_write_sync;
-@@ -1774,22 +1944,24 @@ BEGIN
+@@ -1774,29 +1995,50 @@ BEGIN
  					END IF;
  					avl_address<=std_logic_vector(adr_v(N_AW+NB_LA-1 DOWNTO NB_LA));
  
@@ -250,15 +301,20 @@ index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..4e877124b61e8149be7955d2fcd142cb
 -			IF avl_readdatavalid='1' THEN
 +			IF avl_readdatavalid='1' AND avl_return_drain='0' THEN
  				avl_wr<='1';
- 				avl_wad<=(avl_wad+1) MOD (2*BLEN);
- 				IF (avl_wad MOD BLEN)=BLEN-2 THEN
+-				avl_wad<=(avl_wad+1) MOD (2*BLEN);
+-				IF (avl_wad MOD BLEN)=BLEN-2 THEN
 -					avl_readdataack<=NOT avl_readdataack;
++				avl_wad<=return_write_phase_next(
++					avl_wad,avl_readdatavalid,avl_return_drain,2*BLEN);
++				IF return_block_complete(
++					avl_wad,avl_readdatavalid,avl_return_drain,BLEN) THEN
 +					completion_v:='1';
  				END IF;
  			END IF;
  
-@@ -1797,6 +1969,22 @@ BEGIN
+ 			IF avl_o_vs_sync='0' AND avl_o_vs='1' THEN
  				avl_wad<=2*BLEN-1;
++				avl_return_aligned<='1';
  			END IF;
  
 +			completion_state_v:=completion_queue_next(
@@ -280,7 +336,7 @@ index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..4e877124b61e8149be7955d2fcd142cb
  			--------------------------------------------
  		END IF;
  	END PROCESS Avaloir;
-@@ -1877,6 +2065,9 @@ BEGIN
+@@ -1877,6 +2119,9 @@ BEGIN
  			o_readlev<=0;
  			o_copylev<=0;
  			o_hsp<='0';

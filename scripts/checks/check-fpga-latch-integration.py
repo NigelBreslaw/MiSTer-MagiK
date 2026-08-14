@@ -355,12 +355,16 @@ def main() -> None:
             "FUNCTION outstanding_returns_next(": 2,
             "FUNCTION outstanding_returns_invalid(": 2,
             "FUNCTION read_obligation_issue(": 2,
+            "FUNCTION return_write_phase_next(": 2,
+            "FUNCTION return_block_complete(": 2,
+            "FUNCTION return_drain_ready(": 2,
             "state_v:=request_toggle & completion_pending;": 1,
             "state_v(0):=completion;": 1,
             "RETURN request_toggle/=completion_ack AND": 1,
             "SIGNAL avl_readdataack,avl_completion_pending : std_logic;": 1,
             "SIGNAL avl_completion_ack_meta,avl_completion_ack_sync : std_logic;": 1,
             "SIGNAL avl_return_drain : std_logic:='1';": 1,
+            "SIGNAL avl_return_aligned : std_logic:='0';": 1,
             "SIGNAL avl_outstanding_returns : natural RANGE 0 TO 2*BLEN:=0;": 1,
             "ATTRIBUTE preserve OF avl_readdataack : SIGNAL IS true;": 1,
             "SIGNAL o_readdataack,o_readdataack_sync,o_readdataack_sync2 : std_logic;": 1,
@@ -375,9 +379,13 @@ def main() -> None:
             "ASSERT NOT outstanding_returns_invalid(": 1,
             "avl_outstanding_returns<=outstanding_returns_next(": 1,
             "avl_return_drain<='1';": 1,
-            "IF avl_outstanding_returns=0 THEN": 1,
+            "IF return_drain_ready(": 1,
+            "avl_outstanding_returns,avl_return_aligned) THEN": 1,
             "IF avl_return_drain='0' THEN": 1,
             "IF avl_readdatavalid='1' AND avl_return_drain='0' THEN": 1,
+            "avl_wad<=return_write_phase_next(": 1,
+            "IF return_block_complete(": 1,
+            "avl_return_aligned<='1';": 1,
             "completion_v:='1';": 1,
             "completion_state_v:=completion_queue_next(": 1,
             "avl_readdataack<=completion_state_v(1);": 1,
@@ -412,12 +420,26 @@ def main() -> None:
             "avl_completion_pending<='0';",
             "avl_completion_ack_meta<='0';",
             "avl_completion_ack_sync<='0';",
+            "avl_return_aligned<='0';",
             "o_readdataack<='0';",
             "o_readdataack_sync<='0';",
             "o_readdataack_sync2<='0';",
         ):
             if patched_ascal.count(reset_fragment) != 1:
                 fail(f"completion transport reset is missing or ambiguous: {reset_fragment}")
+        if patched_ascal.count("avl_wad<=2*BLEN-1;") != 1:
+            fail("Avalon write phase must align exactly once at vertical sync")
+        avalon_reset = re.search(
+            r"IF avl_reset_na='0' THEN(?P<body>.*?)ELSIF rising_edge\(avl_clk\) THEN",
+            patched_ascal,
+            re.S,
+        )
+        if avalon_reset is None:
+            fail("Avalon reset branch is missing")
+        if "avl_wad<=2*BLEN-1;" in avalon_reset.group("body"):
+            fail("Avalon write phase must not use a nonzero asynchronous reset preset")
+        if avalon_reset.group("body").count("avl_return_aligned<='0';") != 1:
+            fail("Avalon reset branch does not clear the VS alignment proof bit")
         for topology_fragment, topology_source in (
             (".reset_core_req(reset_req)", patched),
             (".reset_na   (~reset_req)", patched),

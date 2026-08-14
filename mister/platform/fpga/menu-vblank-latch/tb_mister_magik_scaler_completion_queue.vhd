@@ -83,6 +83,9 @@ BEGIN
 		VARIABLE issued_v,returned_v : boolean;
 		VARIABLE drain_v : boolean;
 		VARIABLE visible_returns_v : natural;
+		VARIABLE write_phase_v : natural;
+		VARIABLE block_complete_v : boolean;
+		VARIABLE aligned_v : std_logic;
 		PROCEDURE produce IS
 		BEGIN
 			WAIT UNTIL falling_edge(source_clk);
@@ -212,6 +215,48 @@ BEGIN
 		drain_v:=false;
 		ASSERT outstanding_returns_next(outstanding_v,true,false,128)=128
 			REPORT "new epoch did not start from empty return accounting" SEVERITY failure;
+
+		-- Reset clears the alignment proof while leaving the multi-bit phase free
+		-- of a nonzero asynchronous preset. Discarded old beats cannot alter an
+		-- arbitrary stale phase, and an empty obligation alone cannot open drain.
+		write_phase_v:=37;
+		aligned_v:='0';
+		FOR stale_beat IN 1 TO 128 LOOP
+			ASSERT NOT return_block_complete(write_phase_v,'1','1',128)
+				REPORT "discarded stale beat produced a completion" SEVERITY failure;
+			write_phase_v:=return_write_phase_next(
+				write_phase_v,'1','1',256);
+		END LOOP;
+		ASSERT write_phase_v=37
+			REPORT "discarded stale beats changed the unaligned write phase"
+			SEVERITY failure;
+		ASSERT NOT return_drain_ready(0,aligned_v)
+			REPORT "empty obligations opened drain before post-reset VS"
+			SEVERITY failure;
+
+		-- The existing synchronized VS edge establishes phase 2*BLEN-1 and the
+		-- one-bit proof. Only then can drain open. The first admitted new burst
+		-- completes on exactly beat BLEN, never one beat early or late.
+		write_phase_v:=255;
+		aligned_v:='1';
+		ASSERT return_drain_ready(0,aligned_v)
+			REPORT "post-reset VS alignment did not release empty drain"
+			SEVERITY failure;
+		FOR new_beat IN 1 TO 128 LOOP
+			block_complete_v:=return_block_complete(
+				write_phase_v,'1','0',128);
+			IF new_beat<128 THEN
+				ASSERT NOT block_complete_v
+					REPORT "first new burst completed before beat BLEN" SEVERITY failure;
+			ELSE
+				ASSERT block_complete_v
+					REPORT "first new burst did not complete on beat BLEN" SEVERITY failure;
+			END IF;
+			write_phase_v:=return_write_phase_next(
+				write_phase_v,'1','0',256);
+		END LOOP;
+		ASSERT write_phase_v=127
+			REPORT "first new burst ended at the wrong write phase" SEVERITY failure;
 
 		WAIT FOR 30 ns;
 		reset_n<='1';
