@@ -354,6 +354,7 @@ def main() -> None:
             "FUNCTION completion_queue_overflow(": 2,
             "FUNCTION outstanding_returns_next(": 2,
             "FUNCTION outstanding_returns_invalid(": 2,
+            "FUNCTION read_obligation_issue(": 2,
             "state_v:=request_toggle & completion_pending;": 1,
             "state_v(0):=completion;": 1,
             "RETURN request_toggle/=completion_ack AND": 1,
@@ -368,7 +369,8 @@ def main() -> None:
             "avl_completion_ack_meta<=o_readdataack_sync2; -- <ASYNC>": 1,
             "avl_completion_ack_sync<=avl_completion_ack_meta;": 1,
             "AvalonReturnAccounting:PROCESS(avl_clk) IS": 1,
-            "accepted_v:=avl_read_i='1' AND avl_waitrequest='0';": 1,
+            "issued_v:=read_obligation_issue(": 1,
+            "avl_state=sREAD,avl_return_drain,avl_read_i);": 1,
             "returned_v:=avl_readdatavalid='1';": 1,
             "ASSERT NOT outstanding_returns_invalid(": 1,
             "avl_outstanding_returns<=outstanding_returns_next(": 1,
@@ -424,6 +426,9 @@ def main() -> None:
             ("vbuf_reset_0 <= reset_out;", patched_sysmem),
             ("vbuf_reset_1 <= vbuf_reset_0;", patched_sysmem),
             (".readdatavalid_slave      (vbuf_readdatavalid)", patched_sysmem),
+            ("else if (read_slave && waitrequest_master) begin", patched_terminator),
+            ("read_terminating           <= 1;", patched_terminator),
+            ("read_master       = read_terminating;", patched_terminator),
             ("assign readdatavalid_slave = readdatavalid_master;", patched_terminator),
         ):
             if topology_source.count(topology_fragment) != 1:

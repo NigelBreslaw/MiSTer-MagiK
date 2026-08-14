@@ -80,7 +80,7 @@ BEGIN
 		VARIABLE state_v : std_logic_vector(1 DOWNTO 0);
 		VARIABLE request_v,pending_v,ack_v,event_v : std_logic;
 		VARIABLE outstanding_v,next_outstanding_v : natural;
-		VARIABLE accepted_v,returned_v : boolean;
+		VARIABLE issued_v,returned_v : boolean;
 		VARIABLE drain_v : boolean;
 		VARIABLE visible_returns_v : natural;
 		PROCEDURE produce IS
@@ -128,22 +128,22 @@ BEGIN
 		-- Exhaust every legal state of the exact production return-accounting
 		-- function. Invalid underflow/overflow combinations must be rejected.
 		FOR outstanding_i IN 0 TO 256 LOOP
-			FOR accepted_i IN 0 TO 1 LOOP
+			FOR issued_i IN 0 TO 1 LOOP
 				FOR returned_i IN 0 TO 1 LOOP
-					accepted_v:=accepted_i=1;
+					issued_v:=issued_i=1;
 					returned_v:=returned_i=1;
 					IF NOT outstanding_returns_invalid(
-						outstanding_i,accepted_v,returned_v,128,256) THEN
+						outstanding_i,issued_v,returned_v,128,256) THEN
 						next_outstanding_v:=outstanding_returns_next(
-							outstanding_i,accepted_v,returned_v,128);
+							outstanding_i,issued_v,returned_v,128);
 						ASSERT next_outstanding_v<=256
 							REPORT "return accounting exceeded capacity" SEVERITY failure;
-						IF accepted_v AND returned_v THEN
+						IF issued_v AND returned_v THEN
 							ASSERT next_outstanding_v=outstanding_i+127
-								REPORT "simultaneous accept/return mismatch" SEVERITY failure;
-						ELSIF accepted_v THEN
+								REPORT "simultaneous issue/return mismatch" SEVERITY failure;
+						ELSIF issued_v THEN
 							ASSERT next_outstanding_v=outstanding_i+128
-								REPORT "accepted burst accounting mismatch" SEVERITY failure;
+								REPORT "issued burst accounting mismatch" SEVERITY failure;
 						ELSIF returned_v THEN
 							ASSERT next_outstanding_v=outstanding_i-1
 								REPORT "returned beat accounting mismatch" SEVERITY failure;
@@ -155,6 +155,35 @@ BEGIN
 				END LOOP;
 			END LOOP;
 		END LOOP;
+
+		-- The obligation is charged only on the edge that first asserts read.
+		-- Neither a wait-stalled high read nor the reset-held high legacy signal
+		-- can charge the burst again, regardless of waitrequest state.
+		ASSERT read_obligation_issue(true,'0','0')
+			REPORT "initial read assertion was not charged" SEVERITY failure;
+		ASSERT NOT read_obligation_issue(true,'0','1')
+			REPORT "wait-stalled high read was charged again" SEVERITY failure;
+		ASSERT NOT read_obligation_issue(false,'1','1')
+			REPORT "reset-held high read was charged with waitrequest low" SEVERITY failure;
+		ASSERT NOT read_obligation_issue(false,'1','1')
+			REPORT "reset-held high read was charged with waitrequest high" SEVERITY failure;
+		outstanding_v:=outstanding_returns_next(0,true,false,128);
+		FOR reset_cycle IN 0 TO 7 LOOP
+			ASSERT NOT read_obligation_issue(false,'1','1')
+				REPORT "read obligation recounted during reset" SEVERITY failure;
+			outstanding_v:=outstanding_returns_next(
+				outstanding_v,false,false,128);
+		END LOOP;
+		ASSERT outstanding_v=128
+			REPORT "wait-high reset did not retain exactly one read obligation"
+			SEVERITY failure;
+		FOR beat IN 0 TO 127 LOOP
+			outstanding_v:=outstanding_returns_next(
+				outstanding_v,false,true,128);
+		END LOOP;
+		ASSERT outstanding_v=0
+			REPORT "wait-low terminator completion did not drain one obligation"
+			SEVERITY failure;
 
 		-- Counterexample to the old reset assumption: half of an accepted burst
 		-- may arrive during reset and half after release. The retained counter

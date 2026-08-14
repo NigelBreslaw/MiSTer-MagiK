@@ -1,8 +1,8 @@
 diff --git a/sys/ascal.vhd b/sys/ascal.vhd
-index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..395af883d595fe741aa67c4bb07b195435d32911 100644
+index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..4e877124b61e8149be7955d2fcd142cbbe0fc257 100644
 --- a/sys/ascal.vhd
 +++ b/sys/ascal.vhd
-@@ -75,6 +75,112 @@ LIBRARY ieee;
+@@ -75,6 +75,126 @@ LIBRARY ieee;
  USE ieee.std_logic_1164.ALL;
  USE ieee.numeric_std.ALL;
  
@@ -21,16 +21,21 @@ index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..395af883d595fe741aa67c4bb07b1954
 +		RETURN boolean;
 +	FUNCTION outstanding_returns_next(
 +		outstanding : natural;
-+		accepted    : boolean;
++		issued      : boolean;
 +		returned    : boolean;
 +		burst_len   : natural)
 +		RETURN natural;
 +	FUNCTION outstanding_returns_invalid(
 +		outstanding : natural;
-+		accepted    : boolean;
++		issued      : boolean;
 +		returned    : boolean;
 +		burst_len   : natural;
 +		maximum     : natural)
++		RETURN boolean;
++	FUNCTION read_obligation_issue(
++		read_state    : boolean;
++		return_drain  : std_logic;
++		read_asserted : std_logic)
 +		RETURN boolean;
 +END PACKAGE mister_magik_scaler_completion_queue;
 +
@@ -73,14 +78,14 @@ index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..395af883d595fe741aa67c4bb07b1954
 +
 +	FUNCTION outstanding_returns_next(
 +		outstanding : natural;
-+		accepted    : boolean;
++		issued      : boolean;
 +		returned    : boolean;
 +		burst_len   : natural)
 +		RETURN natural IS
 +	BEGIN
-+		IF accepted AND returned THEN
++		IF issued AND returned THEN
 +			RETURN outstanding+burst_len-1;
-+		ELSIF accepted THEN
++		ELSIF issued THEN
 +			RETURN outstanding+burst_len;
 +		ELSIF returned AND outstanding>0 THEN
 +			RETURN outstanding-1;
@@ -90,21 +95,30 @@ index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..395af883d595fe741aa67c4bb07b1954
 +
 +	FUNCTION outstanding_returns_invalid(
 +		outstanding : natural;
-+		accepted    : boolean;
++		issued      : boolean;
 +		returned    : boolean;
 +		burst_len   : natural;
 +		maximum     : natural)
 +		RETURN boolean IS
 +	BEGIN
-+		IF returned AND NOT accepted AND outstanding=0 THEN
++		IF returned AND NOT issued AND outstanding=0 THEN
 +			RETURN true;
-+		ELSIF accepted AND returned THEN
++		ELSIF issued AND returned THEN
 +			RETURN outstanding+burst_len-1>maximum;
-+		ELSIF accepted THEN
++		ELSIF issued THEN
 +			RETURN outstanding+burst_len>maximum;
 +		END IF;
 +		RETURN false;
 +	END FUNCTION outstanding_returns_invalid;
++
++	FUNCTION read_obligation_issue(
++		read_state    : boolean;
++		return_drain  : std_logic;
++		read_asserted : std_logic)
++		RETURN boolean IS
++	BEGIN
++		RETURN read_state AND return_drain='0' AND read_asserted='0';
++	END FUNCTION read_obligation_issue;
 +END PACKAGE BODY mister_magik_scaler_completion_queue;
 +
 +LIBRARY ieee;
@@ -115,7 +129,7 @@ index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..395af883d595fe741aa67c4bb07b1954
  -- MODE[2:0]
  -- 000 : Nearest
  -- 001 : Bilinear
-@@ -335,6 +441,8 @@ ARCHITECTURE rtl OF ascal IS
+@@ -335,6 +455,8 @@ ARCHITECTURE rtl OF ascal IS
  	TYPE arr_pix IS ARRAY (natural RANGE <>) OF type_pix;
  	TYPE arr_pixq IS ARRAY(natural RANGE <>) OF arr_pix(0 TO 3);
  	ATTRIBUTE ramstyle : string;
@@ -124,7 +138,7 @@ index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..395af883d595fe741aa67c4bb07b1954
  
  	SUBTYPE uint12 IS natural RANGE 0 TO 4095;
  	SUBTYPE uint13 IS natural RANGE 0 TO 8191;
-@@ -418,7 +526,16 @@ ARCHITECTURE rtl OF ascal IS
+@@ -418,7 +540,16 @@ ARCHITECTURE rtl OF ascal IS
  	SIGNAL avl_walt,avl_wline,avl_rline : std_logic;
  	SIGNAL avl_dw,avl_dr : unsigned(N_DW-1 DOWNTO 0);
  	SIGNAL avl_wr : std_logic;
@@ -142,7 +156,7 @@ index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..395af883d595fe741aa67c4bb07b1954
  	SIGNAL avl_radrs,avl_wadrs : unsigned(31 DOWNTO 0);
  	SIGNAL avl_i_offset0,avl_o_offset0 : unsigned(31 DOWNTO 0);
  	SIGNAL avl_i_offset1,avl_o_offset1 : unsigned(31 DOWNTO 0);
-@@ -481,6 +598,10 @@ ARCHITECTURE rtl OF ascal IS
+@@ -481,6 +612,10 @@ ARCHITECTURE rtl OF ascal IS
  	SIGNAL o_pshift : natural RANGE 0 TO 15;
  	SIGNAL o_readack,o_readack_sync,o_readack_sync2 : std_logic;
  	SIGNAL o_readdataack,o_readdataack_sync,o_readdataack_sync2 : std_logic;
@@ -153,33 +167,37 @@ index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..395af883d595fe741aa67c4bb07b1954
  	SIGNAL o_copyv : unsigned(0 TO 14);
  	SIGNAL o_adrs : unsigned(31 DOWNTO 0); -- Avalon address
  	SIGNAL o_adrs_pre : natural RANGE 0 TO 2**24-1;
-@@ -1160,6 +1281,25 @@ BEGIN
+@@ -1160,6 +1295,29 @@ BEGIN
  	o_reset_na<='0'   WHEN reset_na='0' ELSE '1' WHEN rising_edge(o_clk);
  	avl_reset_na<='0' WHEN reset_na='0' ELSE '1' WHEN rising_edge(avl_clk);
  
 +	-- This counter deliberately has no core-reset branch. The HPS f2sdram port
 +	-- does not tag or cancel an accepted read when reset_req is asserted, so
-+	-- pre-reset returns must remain accounted until every beat has drained.
++	-- pre-reset returns must remain accounted until every beat has drained. A
++	-- read is charged exactly once when ascal first asserts avl_read_i, before
++	-- waitrequest acceptance. The safe terminator retains a wait-stalled request
++	-- across reset and therefore guarantees that charged burst eventually ends.
 +	AvalonReturnAccounting:PROCESS(avl_clk) IS
-+		VARIABLE accepted_v,returned_v : boolean;
++		VARIABLE issued_v,returned_v : boolean;
 +	BEGIN
 +		IF rising_edge(avl_clk) THEN
-+			accepted_v:=avl_read_i='1' AND avl_waitrequest='0';
++			issued_v:=read_obligation_issue(
++				avl_state=sREAD,avl_return_drain,avl_read_i);
 +			returned_v:=avl_readdatavalid='1';
 +			-- synthesis translate_off
 +			ASSERT NOT outstanding_returns_invalid(
-+				avl_outstanding_returns,accepted_v,returned_v,BLEN,2*BLEN)
++				avl_outstanding_returns,issued_v,returned_v,BLEN,2*BLEN)
 +				REPORT "scaler Avalon return accounting violated" SEVERITY failure;
 +			-- synthesis translate_on
 +			avl_outstanding_returns<=outstanding_returns_next(
-+				avl_outstanding_returns,accepted_v,returned_v,BLEN);
++				avl_outstanding_returns,issued_v,returned_v,BLEN);
 +		END IF;
 +	END PROCESS AvalonReturnAccounting;
 +
  	-----------------------------------------------------------------------------
  	-- Input pixels FIFO and shreg
  	InAT:PROCESS(i_clk,i_reset_na) IS
-@@ -1672,15 +1812,27 @@ BEGIN
+@@ -1672,15 +1830,27 @@ BEGIN
  	-- AVALON interface
  	Avaloir:PROCESS(avl_clk,avl_reset_na) IS
  		VARIABLE adr_v : unsigned(31 DOWNTO 0);
@@ -207,7 +225,7 @@ index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..395af883d595fe741aa67c4bb07b1954
  			----------------------------------
  			avl_write_sync<=i_write; -- <ASYNC>
  			avl_write_sync2<=avl_write_sync;
-@@ -1774,22 +1926,24 @@ BEGIN
+@@ -1774,22 +1944,24 @@ BEGIN
  					END IF;
  					avl_address<=std_logic_vector(adr_v(N_AW+NB_LA-1 DOWNTO NB_LA));
  
@@ -239,7 +257,7 @@ index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..395af883d595fe741aa67c4bb07b1954
  				END IF;
  			END IF;
  
-@@ -1797,6 +1951,22 @@ BEGIN
+@@ -1797,6 +1969,22 @@ BEGIN
  				avl_wad<=2*BLEN-1;
  			END IF;
  
@@ -262,7 +280,7 @@ index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..395af883d595fe741aa67c4bb07b1954
  			--------------------------------------------
  		END IF;
  	END PROCESS Avaloir;
-@@ -1877,6 +2047,9 @@ BEGIN
+@@ -1877,6 +2065,9 @@ BEGIN
  			o_readlev<=0;
  			o_copylev<=0;
  			o_hsp<='0';
