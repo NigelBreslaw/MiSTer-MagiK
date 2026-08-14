@@ -3098,6 +3098,7 @@ mod tests {
                 main_present_post_pending: frame.main_present_post_pending,
                 main_present_flip_count: frame.main_present_flip_count,
                 main_present_drop_count: frame.main_present_drop_count,
+                main_present_receipt_crc: 0,
                 arcade_update_label: frame.arcade_update_label,
             },
             status: LauncherFrameStatusData {

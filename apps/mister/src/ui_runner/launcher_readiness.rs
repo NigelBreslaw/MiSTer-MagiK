@@ -6,31 +6,101 @@ use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::PathBuf;
 
+use sha2::{Digest, Sha256};
+use slint::platform::software_renderer::Rgb565Pixel;
+
+const LATCH_PROTOCOL: u16 = 5;
+const LATCH_CAPABILITIES: u16 = 0x03ff;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct ReadyContext {
+    main_pid: u32,
+    main_generation: u64,
+    owner_epoch: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct SourceFrameEvidence {
+    sha256: String,
+    nonzero_pixels: u32,
+}
+
+impl SourceFrameEvidence {
+    pub(super) fn from_rgb565_rows(
+        pixels: &[Rgb565Pixel],
+        width: usize,
+        height: usize,
+        stride_pixels: usize,
+    ) -> Option<Self> {
+        if width == 0
+            || height == 0
+            || stride_pixels < width
+            || stride_pixels.checked_mul(height)? > pixels.len()
+        {
+            return None;
+        }
+        let mut digest = Sha256::new();
+        let mut nonzero_pixels = 0u32;
+        for row in pixels.chunks_exact(stride_pixels).take(height) {
+            for pixel in &row[..width] {
+                digest.update(pixel.0.to_le_bytes());
+                nonzero_pixels = nonzero_pixels.saturating_add(u32::from(pixel.0 != 0));
+            }
+        }
+        Some(Self {
+            sha256: format!("{:x}", digest.finalize()),
+            nonzero_pixels,
+        })
+    }
+
+    fn valid(&self) -> bool {
+        self.nonzero_pixels != 0
+            && self.sha256.len() == 64
+            && self
+                .sha256
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) struct ConfirmedLatchPost {
     pub(super) sequence: u16,
     pub(super) route_epoch: u16,
     pub(super) slot: u8,
+    pub(super) receipt_crc: u16,
+    pub(super) active_base: u32,
+    pub(super) width: u16,
+    pub(super) height: u16,
+    pub(super) stride: u16,
 }
 
 impl ConfirmedLatchPost {
     fn valid(self) -> bool {
         matches!(self.slot, 1 | 2)
+            && self.active_base != 0
+            && self.width != 0
+            && self.height != 0
+            && usize::from(self.stride) >= usize::from(self.width) * 2
     }
 
     fn advances_and_alternates(self, previous: Self) -> bool {
         advances(self.sequence, previous.sequence)
             && advances(self.route_epoch, previous.route_epoch)
             && self.slot != previous.slot
+            && self.active_base != previous.active_base
+            && self.width == previous.width
+            && self.height == previous.height
+            && self.stride == previous.stride
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 enum ReadyPhase {
     Disabled,
     AwaitingFirst,
-    AwaitingSecond(ConfirmedLatchPost),
-    PendingSend,
+    AwaitingSecond(ConfirmedLatchPost, SourceFrameEvidence),
+    PendingSend(ConfirmedLatchPost, ConfirmedLatchPost, SourceFrameEvidence),
     Sent,
 }
 
@@ -39,21 +109,33 @@ pub(super) struct LauncherReadiness {
     token: String,
     fifo: PathBuf,
     pid: u32,
+    context: ReadyContext,
 }
 
 impl LauncherReadiness {
     pub(super) fn from_env() -> Self {
+        let context = ReadyContext {
+            main_pid: env_u32("MISTER_MAGIK_MAIN_PID"),
+            main_generation: env_u64("MISTER_MAGIK_MAIN_GENERATION"),
+            owner_epoch: env_u64("MISTER_MAGIK_OWNER_EPOCH"),
+        };
         Self::from_config(
             std::env::var("MISTER_MAGIK_STARTUP_TOKEN").unwrap_or_default(),
             std::env::var_os("MISTER_MAGIK_READY_FIFO")
                 .map(PathBuf::from)
                 .unwrap_or_default(),
             std::process::id(),
+            context,
         )
     }
 
-    fn from_config(token: String, fifo: PathBuf, pid: u32) -> Self {
-        let configured = valid_token(&token) && !fifo.as_os_str().is_empty() && pid != 0;
+    fn from_config(token: String, fifo: PathBuf, pid: u32, context: ReadyContext) -> Self {
+        let configured = valid_token(&token)
+            && !fifo.as_os_str().is_empty()
+            && pid != 0
+            && context.main_pid != 0
+            && context.main_generation != 0
+            && context.owner_epoch != 0;
         Self {
             phase: if configured {
                 ReadyPhase::AwaitingFirst
@@ -63,39 +145,75 @@ impl LauncherReadiness {
             token,
             fifo,
             pid,
+            context,
         }
     }
 
     pub(super) fn needs_full_present(&self) -> bool {
-        matches!(self.phase, ReadyPhase::AwaitingSecond(_))
+        matches!(self.phase, ReadyPhase::AwaitingSecond(_, _))
     }
 
     pub(super) fn poll(&mut self) {
-        if self.phase == ReadyPhase::PendingSend {
+        if matches!(self.phase, ReadyPhase::PendingSend(..)) {
             self.try_send();
         }
     }
 
-    pub(super) fn observe(&mut self, post: ConfirmedLatchPost, intended_for_display: bool) {
-        if !intended_for_display || !post.valid() {
+    pub(super) fn observe(
+        &mut self,
+        post: ConfirmedLatchPost,
+        source: SourceFrameEvidence,
+        intended_for_display: bool,
+    ) {
+        if !intended_for_display || !post.valid() || !source.valid() {
             return;
         }
-        match self.phase {
-            ReadyPhase::AwaitingFirst => self.phase = ReadyPhase::AwaitingSecond(post),
-            ReadyPhase::AwaitingSecond(previous) => {
+        match self.phase.clone() {
+            ReadyPhase::AwaitingFirst => self.phase = ReadyPhase::AwaitingSecond(post, source),
+            ReadyPhase::AwaitingSecond(previous, _) => {
                 if post.advances_and_alternates(previous) {
-                    self.phase = ReadyPhase::PendingSend;
+                    self.phase = ReadyPhase::PendingSend(previous, post, source);
                     self.try_send();
                 } else {
-                    self.phase = ReadyPhase::AwaitingSecond(post);
+                    self.phase = ReadyPhase::AwaitingSecond(post, source);
                 }
             }
-            ReadyPhase::Disabled | ReadyPhase::PendingSend | ReadyPhase::Sent => {}
+            ReadyPhase::Disabled | ReadyPhase::PendingSend(..) | ReadyPhase::Sent => {}
         }
     }
 
     fn try_send(&mut self) {
-        let line = format!("ready-v1 token={} pid={}\n", self.token, self.pid);
+        let ReadyPhase::PendingSend(first, second, source) = &self.phase else {
+            return;
+        };
+        let line = format!(
+            "ready-v2 token={} pid={} main_pid={} main_generation={} owner_epoch={} protocol={} capabilities={:04x} base={:08x} width={} height={} stride={} first_sequence={} first_route_epoch={} first_slot={} first_receipt_crc={:04x} second_sequence={} second_route_epoch={} second_slot={} second_receipt_crc={:04x} source_sha256={} source_nonzero={}\n",
+            self.token,
+            self.pid,
+            self.context.main_pid,
+            self.context.main_generation,
+            self.context.owner_epoch,
+            LATCH_PROTOCOL,
+            LATCH_CAPABILITIES,
+            second.active_base,
+            second.width,
+            second.height,
+            second.stride,
+            first.sequence,
+            first.route_epoch,
+            first.slot,
+            first.receipt_crc,
+            second.sequence,
+            second.route_epoch,
+            second.slot,
+            second.receipt_crc,
+            source.sha256,
+            source.nonzero_pixels,
+        );
+        if line.len() > 1024 {
+            self.phase = ReadyPhase::Disabled;
+            return;
+        }
         let sent = OpenOptions::new()
             .write(true)
             .custom_flags(libc::O_NONBLOCK | libc::O_CLOEXEC)
@@ -106,6 +224,20 @@ impl LauncherReadiness {
             self.phase = ReadyPhase::Sent;
         }
     }
+}
+
+fn env_u32(name: &str) -> u32 {
+    std::env::var(name)
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(0)
+}
+
+fn env_u64(name: &str) -> u64 {
+    std::env::var(name)
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(0)
 }
 
 fn valid_token(token: &str) -> bool {
@@ -152,7 +284,16 @@ mod tests {
         }
 
         fn controller(&self) -> LauncherReadiness {
-            LauncherReadiness::from_config(TOKEN.into(), self.0.clone(), 42)
+            LauncherReadiness::from_config(
+                TOKEN.into(),
+                self.0.clone(),
+                42,
+                ReadyContext {
+                    main_pid: 7,
+                    main_generation: 11,
+                    owner_epoch: 13,
+                },
+            )
         }
 
         fn reader(&self) -> fs::File {
@@ -175,7 +316,16 @@ mod tests {
             sequence,
             route_epoch,
             slot,
+            receipt_crc: sequence.max(1),
+            active_base: if slot == 1 { 0x227e_9000 } else { 0x229e_9000 },
+            width: 960,
+            height: 540,
+            stride: 1920,
         }
+    }
+
+    fn evidence() -> SourceFrameEvidence {
+        SourceFrameEvidence::from_rgb565_rows(&[Rgb565Pixel(0x1234); 4], 2, 2, 2).unwrap()
     }
 
     fn read_message(reader: &mut fs::File) -> String {
@@ -188,35 +338,72 @@ mod tests {
     fn absent_reader_keeps_ready_message_pending_for_retry() {
         let fifo = TestFifo::new();
         let mut readiness = fifo.controller();
-        readiness.observe(post(1, 1, 1), true);
-        readiness.observe(post(2, 2, 2), true);
-        assert_eq!(readiness.phase, ReadyPhase::PendingSend);
+        readiness.observe(post(1, 1, 1), evidence(), true);
+        readiness.observe(post(2, 2, 2), evidence(), true);
+        assert!(matches!(readiness.phase, ReadyPhase::PendingSend(..)));
 
         let mut reader = fifo.reader();
         readiness.poll();
         assert_eq!(readiness.phase, ReadyPhase::Sent);
-        assert_eq!(
-            read_message(&mut reader),
-            "ready-v1 token=0123456789abcdef0123456789abcdef pid=42\n"
-        );
+        let message = read_message(&mut reader);
+        assert!(message.starts_with("ready-v2 token=0123456789abcdef0123456789abcdef pid=42 main_pid=7 main_generation=11 owner_epoch=13 protocol=5 capabilities=03ff "));
+        assert!(message.contains("source_nonzero=4\n"));
     }
 
     #[test]
     fn invalid_or_stale_token_configuration_is_disabled() {
         let fifo = TestFifo::new();
-        let mut readiness = LauncherReadiness::from_config("stale".into(), fifo.0.clone(), 42);
-        readiness.observe(post(1, 1, 1), true);
-        readiness.observe(post(2, 2, 2), true);
+        let mut readiness = LauncherReadiness::from_config(
+            "stale".into(),
+            fifo.0.clone(),
+            42,
+            ReadyContext {
+                main_pid: 7,
+                main_generation: 11,
+                owner_epoch: 13,
+            },
+        );
+        readiness.observe(post(1, 1, 1), evidence(), true);
+        readiness.observe(post(2, 2, 2), evidence(), true);
         assert_eq!(readiness.phase, ReadyPhase::Disabled);
+    }
+
+    #[test]
+    fn missing_spawn_context_disables_readiness() {
+        let fifo = TestFifo::new();
+        let mut readiness = LauncherReadiness::from_config(
+            TOKEN.into(),
+            fifo.0.clone(),
+            42,
+            ReadyContext {
+                main_pid: 7,
+                main_generation: 0,
+                owner_epoch: 13,
+            },
+        );
+        readiness.observe(post(1, 1, 1), evidence(), true);
+        assert_eq!(readiness.phase, ReadyPhase::Disabled);
+    }
+
+    #[test]
+    fn blank_source_frame_cannot_complete_readiness() {
+        let fifo = TestFifo::new();
+        let mut readiness = fifo.controller();
+        let blank = SourceFrameEvidence::from_rgb565_rows(&[Rgb565Pixel(0); 4], 2, 2, 2).unwrap();
+        readiness.observe(post(1, 1, 1), blank.clone(), true);
+        readiness.observe(post(2, 2, 2), blank, true);
+        assert_eq!(readiness.phase, ReadyPhase::AwaitingFirst);
     }
 
     #[test]
     fn duplicate_posts_do_not_complete_readiness() {
         let fifo = TestFifo::new();
         let mut readiness = fifo.controller();
-        readiness.observe(post(7, 9, 1), true);
-        readiness.observe(post(7, 9, 1), true);
-        assert_eq!(readiness.phase, ReadyPhase::AwaitingSecond(post(7, 9, 1)));
+        readiness.observe(post(7, 9, 1), evidence(), true);
+        readiness.observe(post(7, 9, 1), evidence(), true);
+        assert!(
+            matches!(readiness.phase, ReadyPhase::AwaitingSecond(current, _) if current == post(7, 9, 1))
+        );
         assert!(readiness.needs_full_present());
     }
 
@@ -225,10 +412,12 @@ mod tests {
         let fifo = TestFifo::new();
         let mut reader = fifo.reader();
         let mut readiness = fifo.controller();
-        readiness.observe(post(1, 1, 1), true);
-        readiness.observe(post(2, 2, 1), true);
-        assert_eq!(readiness.phase, ReadyPhase::AwaitingSecond(post(2, 2, 1)));
-        readiness.observe(post(3, 3, 2), true);
+        readiness.observe(post(1, 1, 1), evidence(), true);
+        readiness.observe(post(2, 2, 1), evidence(), true);
+        assert!(
+            matches!(readiness.phase, ReadyPhase::AwaitingSecond(current, _) if current == post(2, 2, 1))
+        );
+        readiness.observe(post(3, 3, 2), evidence(), true);
         assert_eq!(readiness.phase, ReadyPhase::Sent);
         assert!(!read_message(&mut reader).is_empty());
     }
@@ -238,8 +427,8 @@ mod tests {
         let fifo = TestFifo::new();
         let mut reader = fifo.reader();
         let mut readiness = fifo.controller();
-        readiness.observe(post(u16::MAX, u16::MAX, 1), true);
-        readiness.observe(post(1, 0, 2), true);
+        readiness.observe(post(u16::MAX, u16::MAX, 1), evidence(), true);
+        readiness.observe(post(1, 0, 2), evidence(), true);
         assert_eq!(readiness.phase, ReadyPhase::Sent);
         assert!(!read_message(&mut reader).is_empty());
     }
@@ -249,18 +438,18 @@ mod tests {
         let fifo = TestFifo::new();
         let mut reader = fifo.reader();
         let mut readiness = fifo.controller();
-        readiness.observe(post(1, 1, 1), false);
+        readiness.observe(post(1, 1, 1), evidence(), false);
         assert_eq!(readiness.phase, ReadyPhase::AwaitingFirst);
-        readiness.observe(post(1, 1, 1), true);
+        readiness.observe(post(1, 1, 1), evidence(), true);
         assert!(readiness.needs_full_present());
-        readiness.observe(post(2, 2, 2), true);
+        readiness.observe(post(2, 2, 2), evidence(), true);
         assert_eq!(readiness.phase, ReadyPhase::Sent);
         let first = read_message(&mut reader);
         readiness.poll();
-        readiness.observe(post(3, 3, 1), true);
+        readiness.observe(post(3, 3, 1), evidence(), true);
         let mut extra = [0u8; 1];
         let second = reader.read(&mut extra);
-        assert_eq!(first.matches("ready-v1").count(), 1);
+        assert_eq!(first.matches("ready-v2").count(), 1);
         match second {
             Ok(0) => {}
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}

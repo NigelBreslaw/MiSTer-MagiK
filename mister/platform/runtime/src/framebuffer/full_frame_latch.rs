@@ -242,6 +242,7 @@ pub struct LatchPostReceipt {
     pub status_wire_attempts: u8,
     pub set_supported: bool,
     pub status_supported: bool,
+    pub receipt_crc: u16,
 }
 
 pub struct LogicalStatusReadBudget {
@@ -394,6 +395,7 @@ where
         status_wire_attempts,
         set_supported,
         status_supported,
+        receipt_crc: post.diagnostics.receipt_crc,
     })
 }
 

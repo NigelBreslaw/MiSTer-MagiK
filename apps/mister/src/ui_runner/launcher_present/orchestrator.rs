@@ -772,6 +772,7 @@ fn fb0_present_result(stats: Fb0DirtyPresentStats) -> LauncherPresentResult {
         main_present_post_pending: false,
         main_present_flip_count: 0,
         main_present_drop_count: 0,
+        main_present_receipt_crc: 0,
         arcade_update_label: stats.arcade_update_label,
     }
 }
@@ -843,6 +844,7 @@ fn latch_present_result(
         main_present_post_pending: stats.post_pending,
         main_present_flip_count: stats.flip_count,
         main_present_drop_count: stats.drop_count,
+        main_present_receipt_crc: stats.receipt_crc,
         arcade_update_label: ArcadeUpdateTrace::from_update(arcade_redraw_update.as_ref()),
     }
 }
@@ -880,6 +882,7 @@ fn empty_present_result() -> LauncherPresentResult {
         main_present_post_pending: false,
         main_present_flip_count: 0,
         main_present_drop_count: 0,
+        main_present_receipt_crc: 0,
         arcade_update_label: ArcadeUpdateTrace::None,
     }
 }

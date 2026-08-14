@@ -10700,6 +10700,11 @@ pub(super) fn run_launcher_loop(
                         sequence: status.active_sequence,
                         route_epoch: status.active_route_epoch,
                         slot: presented_frame.main_present_buffer,
+                        receipt_crc: presented_frame.main_present_receipt_crc,
+                        active_base: status.active_base,
+                        width: status.active_width,
+                        height: status.active_height,
+                        stride: status.active_stride,
                     });
                     presented_frame.main_present_active_sequence = status.active_sequence;
                     presented_frame.main_present_pending = status.pending();
@@ -10879,7 +10884,20 @@ pub(super) fn run_launcher_loop(
                     request_launcher_redraw!();
                 }
                 if let Some(post) = readiness_post {
-                    launcher_readiness.observe(post, lifecycle.startup_can_present_frame());
+                    if let Some(source) =
+                        super::launcher_readiness::SourceFrameEvidence::from_rgb565_rows(
+                            target.cached_565(),
+                            ui.render_w(),
+                            ui.render_h(),
+                            target.cached_stride(),
+                        )
+                    {
+                        launcher_readiness.observe(
+                            post,
+                            source,
+                            lifecycle.startup_can_present_frame(),
+                        );
+                    }
                     if launcher_readiness.needs_full_present() {
                         request_launcher_redraw!();
                     }

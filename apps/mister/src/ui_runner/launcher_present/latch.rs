@@ -255,6 +255,7 @@ pub(in crate::ui_runner) struct FpgaVblankLatchHiddenPresentStats {
     pub(in crate::ui_runner) post_status_wire_attempts: u8,
     pub(in crate::ui_runner) flip_count: u16,
     pub(in crate::ui_runner) drop_count: u16,
+    pub(in crate::ui_runner) receipt_crc: u16,
 }
 
 impl FpgaVblankLatchHiddenPresenter<PluginLatchFrameBuffers> {
@@ -535,6 +536,7 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
             post_status_wire_attempts: receipt.status_wire_attempts,
             flip_count: after_status.flip_count,
             drop_count: after_status.drop_count,
+            receipt_crc: receipt.receipt_crc,
         })
     }
 
@@ -787,6 +789,7 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
             post_status_wire_attempts: receipt.status_wire_attempts,
             flip_count,
             drop_count,
+            receipt_crc: receipt.receipt_crc,
         })
     }
 

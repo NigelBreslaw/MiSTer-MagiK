@@ -2841,6 +2841,7 @@ dependencies = [
  "quick-xml 0.41.0",
  "serde",
  "serde_json",
+ "sha2",
  "slint",
  "softbuffer",
  "swash",
