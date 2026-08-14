@@ -164,6 +164,7 @@ pub(super) struct LauncherPresentedFrame {
     pub(super) main_present_completion_poll_cpu_us: u64,
     pub(super) main_present_flip_count: u16,
     pub(super) main_present_drop_count: u16,
+    pub(super) main_present_receipt_crc: u16,
     pub(super) vsync_source: Option<VsyncPaceSource>,
     pub(super) vsync_period_us: u64,
     pub(super) vsync_miss_streak: u32,
@@ -385,6 +386,7 @@ impl LauncherFrameSnapshotBuilder {
             main_present_completion_poll_cpu_us: 0,
             main_present_flip_count: self.presentation.main_present_flip_count,
             main_present_drop_count: self.presentation.main_present_drop_count,
+            main_present_receipt_crc: self.presentation.main_present_receipt_crc,
             vsync_source: self.pacing.vsync_source,
             vsync_period_us: self.pacing.vsync_period_us,
             vsync_miss_streak: self.pacing.vsync_miss_streak,
@@ -2976,6 +2978,7 @@ mod tests {
             main_present_completion_poll_cpu_us: 0,
             main_present_flip_count: 0,
             main_present_drop_count: 0,
+            main_present_receipt_crc: 0,
             vsync_source: Some(VsyncPaceSource::Timeout),
             vsync_period_us: 16_667,
             vsync_miss_streak: 3,
@@ -3098,7 +3101,7 @@ mod tests {
                 main_present_post_pending: frame.main_present_post_pending,
                 main_present_flip_count: frame.main_present_flip_count,
                 main_present_drop_count: frame.main_present_drop_count,
-                main_present_receipt_crc: 0,
+                main_present_receipt_crc: frame.main_present_receipt_crc,
                 arcade_update_label: frame.arcade_update_label,
             },
             status: LauncherFrameStatusData {
@@ -3142,7 +3145,8 @@ mod tests {
     #[test]
     fn frame_snapshot_builder_populates_existing_fields() {
         let start = Instant::now();
-        let expected = presented_frame(42, start, 21_000);
+        let mut expected = presented_frame(42, start, 21_000);
+        expected.main_present_receipt_crc = 0x5a3c;
 
         let built = builder_from_frame(&expected).build();
 
@@ -3157,6 +3161,7 @@ mod tests {
         assert_eq!(built.vsync_source, Some(VsyncPaceSource::Timeout));
         assert_eq!(built.vsync_miss_streak, 3);
         assert_eq!(built.frame_start_phase_us, 8_000);
+        assert_eq!(built.main_present_receipt_crc, 0x5a3c);
         assert_eq!(built.preview_cache_state, "exact");
         assert_eq!(built.status_string_copy_bytes, 128);
     }
