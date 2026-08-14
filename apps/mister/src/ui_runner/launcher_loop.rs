@@ -5786,7 +5786,8 @@ pub(super) fn run_launcher_loop(
         let directional_input_held = current_pad_state.dpad_up
             || current_pad_state.dpad_down
             || current_pad_state.dpad_left
-            || current_pad_state.dpad_right;
+            || current_pad_state.dpad_right
+            || launcher_automation.directional_input_held();
         let input_pending_before_route = input_observation_probe
             .as_ref()
             .is_some_and(|probe| probe.changed_since(input_observation));
