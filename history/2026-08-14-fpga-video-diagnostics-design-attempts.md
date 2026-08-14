@@ -1,4 +1,4 @@
-# FPGA video diagnostics: two attempted designs and their retirement
+# FPGA video diagnostics and scaler-return recovery design history
 
 Date: 2026-08-14
 
@@ -9,8 +9,10 @@ the rare Arcade-to-MiSTer-MagiK return failures:
 - a separate vertical-colour-band failure.
 
 It records the aims, architecture, incremental corrections, measured results,
-and the evidence-led reasons neither design is a releasable final solution.
-It is history, not current implementation policy.
+and the evidence-led reasons neither diagnostic design was a releasable final
+solution. It also records the subsequent repair-only architecture that passed
+the local RTL, formal, CDC, timing, and resource gates. It is history, not
+current implementation policy.
 
 The two designs are:
 
@@ -18,6 +20,10 @@ The two designs are:
 2. the replacement staged observer, which began with the small `0x60` lock
    recorder, expanded through final/scaler/Avalon evidence, and ultimately
    incorporated a lossless scaler-completion repair.
+
+The successful follow-on repair is recorded separately as Design 3 because it
+retired the Gray counter and all production observer opcodes rather than
+continuing either diagnostic architecture.
 
 ## Common constraints and acceptance policy
 
@@ -551,6 +557,240 @@ The final repair-only RBF is invalid and must not be installed or published.
 
 ---
 
+## Design 3: queued one-bit completion transport with reset-safe returns
+
+### Selection and scope
+
+The post-retirement review compared the failed two-bit Gray counter, a
+reset/quiesce controller, per-slot completion toggles, and a queued one-bit
+request/acknowledgement transport. The queued transport was selected because
+it kept the established destination-domain completion pulse, copy-level truth
+table, metadata order, and single-bit forward crossing while moving the new
+queue work into the Avalon clock domain.
+
+The design deliberately introduced no production video observer, new UIO
+opcode, PLL controller, framebuffer route, pixel-output cone, or reset-only
+recovery transaction. Commands `0x60–0x67` remain unsupported in the
+repair-only RBF. Physical HDMI visibility therefore remains an external
+qualification responsibility rather than an FPGA self-report.
+
+The implementation began at `edf2cff6` and was completed by the forward
+corrections through `a524d551`. The proof integration was completed by
+`621c8af2` and `a0768d04`. No rejected Gray commit was amended or rewritten.
+
+### Queued completion request/acknowledgement
+
+The source side retains the legacy one-bit completion request toggle and adds:
+
+- `completion_pending`, a capacity-one queued event behind the active toggle;
+- `completion_ack_meta`, the first reverse acknowledgement synchronizer stage;
+  and
+- `completion_ack_sync`, the second reverse acknowledgement synchronizer stage.
+
+Together, the active request and pending bit preserve the two completions that
+the scheduler can legally have outstanding. The exact source transition is:
+
+```text
+completion = one complete BLEN block returned
+idle       = request_toggle == synchronized_destination_seen
+
+if idle and pending:
+    toggle request
+    pending = completion
+else if completion:
+    if idle:
+        toggle request
+    else if not pending:
+        pending = 1
+    else:
+        assert unreachable queue overflow
+```
+
+A completion coincident with acknowledgement and pending forwarding therefore
+replaces the forwarded pending event rather than being lost. The HDMI domain
+retains the registered `sync XOR sync2` pulse and the established `o_copylev`
+update truth table. The reverse acknowledgement observes the stable
+destination-seen toggle only after destination accounting.
+
+### Reset-era Avalon return protection
+
+Review then proved that the completion handshake alone was insufficient across
+reset. `ascal` observes `reset_req` before the system-memory terminator has
+finished its synchronized reset transition, and the terminator forwards
+eventual `readdatavalid` beats without cancellation or an epoch tag. A response
+accepted before reset could therefore arrive after the scaler state had been
+cleared.
+
+The first retained-return implementation counted remaining return words. It
+was corrected in forward commits after review exposed three separate issues:
+
+1. charging at request assertion or inferred acceptance could create an
+   obligation for a request that was later cancelled;
+2. an `avl_read_i` held through reset could be accepted repeatedly while the
+   memory-side reset was still propagating, or accepted as an orphan immediately
+   after scaler reset release; and
+3. unconditional VS phase realignment could reset `avl_wad` while a legal
+   accepted burst was still returning, producing an early or late completion.
+
+The final implementation uses retained radix accounting:
+
+- return credits in the range `0..2` count accepted BLEN bursts;
+- a phase in `0..BLEN-1` counts returned beats within those credits;
+- the pair is retained through scaler reset;
+- old returned beats reduce the retained obligation while drain is closed, but
+  cannot write scaler RAM or create completion credits; and
+- the drain opens only on a later synchronized VS after the retained credit and
+  phase are both empty.
+
+The retained `avl_read_accepted` guard charges the accounting only on the first
+actual eligible Avalon handshake. Public request and acceptance share the exact
+eligibility condition:
+
+```text
+avl_read_i
+and not avl_read_accepted
+and (reset active or scheduler state is sREAD)
+```
+
+The guard is not cleared by scaler reset while `avl_read_i` may remain high. It
+suppresses repeated acceptance during reset and clears only after the internal
+request drops. Once reset releases into `sIDLE`, the scheduler-state condition
+immediately blocks an unaccepted orphan before it can handshake.
+
+VS phase realignment is likewise permitted only when retained return accounting
+is empty. A VS coincident with the final old beat waits for the next VS. This is
+fail-closed: no HDMI clock or VS means the new epoch is not exposed.
+
+### Exact-source verification
+
+The production patch contains the shared queue, return-accounting, phase, and
+drain transition functions used by synthesis and GHDL verification. Structural
+checks bind the exact patch locations, reset topology, synchronizer stages,
+Avalon eligibility, accepted-read guard, drain masking, and VS guard. A mirrored
+SystemVerilog implementation or source-text match alone is not accepted as the
+proof.
+
+The final narrow proof model reproduces production asynchronous reset assertion
+and synchronous per-domain release. Its responder is independent of the DUT
+credit counter: it creates obligations only from actual accepted requests,
+allows arbitrary waitrequest and return stalls, retains old obligations across
+reset, and forbids only a zero-latency first DDR response when no command was
+outstanding. That restriction is derived from the exact HPS F2SDRAM topology;
+there is no combinational path from a newly accepted read to
+`readdatavalid`.
+
+Fixed-cycle formal guides were replaced with event-driven witnesses based on
+actual acceptance, return, reset, acknowledgement, and VS events. The final
+gate passed:
+
+- exact production patch/source binding;
+- GHDL analysis, elaboration, testbench execution, and synthesis;
+- reset-reachable bounded model checking through 24 global interleavings;
+- all nine required non-vacuity covers;
+- stopped HDMI clock with two completions and ordered delivery;
+- coincident acknowledgement and completion;
+- final and subsequent old return beats during reset/drain;
+- VS-only drain release and first correctly phased post-drain completion;
+- active-credit VS, issue plus empty VS, and final-return plus VS races; and
+- temporal induction with a maximum depth of 32, closing at induction length
+  10.
+
+The induction strengthening consists of asserted production-derived range and
+two-flop pipeline coherence invariants. They are proved properties, not free
+environment assumptions. The final proof used the patched production
+`ascal.vhd` SHA-256
+`aa9fb1353652aef34dabc7f9f614539fabd2e6228b35352aa28c1905f6d41cab`.
+
+### Physical closure evolution
+
+The first queued-handshake/reset-drain implementation built successfully but
+was rejected:
+
+| Measurement | First queued candidate | Gate |
+| --- | ---: | ---: |
+| Setup slack | -0.352 ns | at least 0.428 ns |
+| TNS magnitude | 0.697 ns | 0 |
+| Resource delta | +162 ALMs | at most +150 |
+
+The failing setup path was unrelated SDRAM data-to-configuration placement.
+No timing waiver, seed sweep, false path, placement directive, or fitter-setting
+change was accepted. The retained return counter was instead compacted from a
+monolithic word count to credits plus phase, the separate alignment bit was
+removed, direct legacy write/completion expressions were restored, and three
+empty observer QSF assignments were removed. The functional reset and
+completion protections remained intact.
+
+The canonical local Apple-container signoff then passed on root `621c8af2`
+using Quartus Prime Lite 17.0.0 Build 595, seed 2:
+
+| Measurement | Final queued candidate | Gate |
+| --- | ---: | ---: |
+| Setup slack | **0.580 ns** | at least 0.428 ns |
+| Hold slack | **0.249 ns** | at least 0.200 ns |
+| TNS | **0** | 0 |
+| Unconstrained outputs | **158 / 158** | equal to baseline |
+| Resource delta | **+132 ALMs / -10 registers** | at most +150 / +96 |
+| Block memory / DSP / PLL delta | **0 / 0 / 0** | unchanged |
+| Recognized synchronizer chains | baseline 377, patched 379 | exact +2 |
+| Calculable synchronizer chains | baseline 5, patched 7 | exact +2 |
+| Forward/reverse net-delay rows | **1 / 1** | exactly one each |
+
+Quartus reports the pre-existing forward crossing and the new reverse crossing
+at greater than one billion years MTBF each. Combining their failure rates
+conservatively gives approximately 500 million years, above the required
+`10^12` device-hours. The checker was corrected to understand Quartus's capped
+`Greater than 1 Billion` wording and the fact that explicit attributes made the
+existing forward crossing newly calculable; this changed evidence parsing, not
+the MTBF or topology requirement.
+
+The matched local RBF SHA-256 is
+`7484e004b3c6e089d9d377658633e435703bc1a224943b06215df9a9bccef4e7`.
+Its metadata SHA-256 is
+`3e439a664e15ef48ef69f1663a818ca052e223ce0e22444a6b249a1dd70ebc39`,
+and the valid Quartus delta report SHA-256 is
+`38c2bac69ad98c151fd7da11b971bb3db082d9ee6fc21fb1d6fb7bc195306b70`.
+Later proof-only commits do not alter the production patch or RBF inputs.
+
+### Main/runtime fail-closed integration
+
+The repair is functional FPGA logic; software readiness is not presented as a
+substitute. The associated root runtime and maintained Main fork changes close
+activation, ownership, false-ready, and recovery paths around the repaired RBF:
+
+- repair-only activation accepts explicitly unsupported retired observer
+  commands only with exact latch-v5 protocol/capability and platform identity;
+- `ready-v2` binds child token/PID, Main PID/generation, UIO owner epoch, route,
+  geometry, two advancing completed posts, alternating slots, receipt CRCs,
+  visible-row RGB565 SHA-256, and nonzero-pixel count;
+- Main rejects stale identities, routes, epochs, duplicate/same-slot posts,
+  malformed records, and invalid latch evidence;
+- the first failure records an incident and permits exactly one fresh-child
+  retry after ownership recovery;
+- the second failure restores stable stock UI and input rather than looping,
+  resetting the core, reloading the RBF, or cycling HDMI; and
+- terminal fallback rearms readiness only after recovery, so a later independent
+  launch again receives its own bounded retry.
+
+The relevant root commits are `de1ad382` and `d23770f1`. The maintained Main
+fork changes are `7c050d1` and `4566825`. Source-frame digest and completed
+latch posts prove software/transport coherence, not physical HDMI visibility.
+
+### Qualification disposition
+
+Design 3 is the selected black-screen repair and has passed local RTL, exact
+formal, CDC, timing, hold, TNS, resource, clock-relationship, and MTBF gates.
+Unlike Designs 1 and 2, its matched local RBF is eligible for the attended,
+rollback-capable Dev installation transaction.
+
+It is not yet a commercial release solely from those results. Release still
+requires output-rate lossless HDMI/CRT capture, bounded Dev smoke, the declared
+three-board/two-chipset/300,000-transition campaign, the long frame/latch gate,
+and canary evidence on one unchanged production tuple. Any physical black,
+stale, partial, corrupted, or vertically banded frame rejects the candidate.
+The vertical-band symptom is not declared fixed by the completion CDC proof.
+
+---
+
 ## Facts established despite the failed implementations
 
 The work was not diagnostically empty. It established the following facts:
@@ -568,9 +808,12 @@ The work was not diagnostically empty. It established the following facts:
    `clk_hdmi` is stopped, leaving the two-entry read scheduler permanently
    saturated.
 9. The two-bit registered Gray repair behaves correctly in focused simulation,
-   but the present FPGA integration cannot be qualified under the fixed-seed
-   physical gates.
-10. The vertical-colour-band occurrence may involve partial line integrity or
+   but it cannot be qualified under the fixed-seed physical gates and is
+   retired.
+10. The queued one-bit request/acknowledgement repair preserves both legal
+    outstanding completions, drains accepted pre-reset returns, and passed the
+    exact-source formal and canonical local physical gates.
+11. The vertical-colour-band occurrence may involve partial line integrity or
     fetch starvation, but the captured evidence and attempted diagnostics did
     not prove that it shares the black-screen mechanism.
 
@@ -581,7 +824,11 @@ The work was not diagnostically empty. It established the following facts:
 - Design 2's old software decoders remain only for already-qualified rollback
   RBFs. The repair-only candidate intentionally implements none of
   `0x60–0x67`.
-- No rejected RBF in this history is release-qualified.
+- Design 3 is the selected implementation. Preserve its queued one-bit
+  completion transport, accepted-read guard, retained reset-return accounting,
+  VS guard, and exact formal/Quartus gates as one qualification boundary.
+- No rejected RBF in this history is release-qualified. The passing Design 3
+  local RBF remains Dev-only until physical qualification completes.
 - Do not continue with seed sweeps, timing waivers, placement directives,
   selector reshaping, snapshot packing, or unrelated legacy-path edits.
 - Any future attempt needs a new architectural boundary and its own predeclared
@@ -596,3 +843,5 @@ Related retained evidence:
 - [Final-output activity signoff](2026-08-13-fpga-final-output-activity-signoff.md)
 - [Build-identity correction](2026-08-13-fpga-signoff-build-identity.md)
 - [Decode timing experiment](2026-08-14-fpga-diagnostic-decode-timing-experiment.md)
+- [Current scaler-return recovery design](../docs/fpga-scaler-return-recovery.md)
+- [Current physical return qualification](../docs/return-video-qualification.md)
