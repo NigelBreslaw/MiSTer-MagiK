@@ -6258,12 +6258,11 @@ pub(super) fn run_launcher_loop(
         }
         // System entry is the only foreground CPU0 lease. Validation and
         // indexing resume as soon as its terminal result has been adopted.
+        let catalog_worker_work_allowed = !scheduler.system_entry_prepare_active();
         mister_magik_catalog::builder_service::set_background_heavy_work_allowed(
-            !scheduler.system_entry_prepare_active(),
+            catalog_worker_work_allowed,
         );
-        if background_work_allowed {
-            scheduler.tick_catalog_progress(true, loop_start);
-        }
+        scheduler.tick_catalog_progress(catalog_worker_work_allowed, loop_start);
         if background_work_allowed
             && let Some(request) = nav.take_arcade_search_request(&catalog, catalog_version)
         {
@@ -6309,19 +6308,20 @@ pub(super) fn run_launcher_loop(
             launch_return_session.protects_hydrating_collection(&nav),
             scheduler.system_entry_prepare_active(),
         );
-        if (background_work_allowed || system_entry_handoff_only)
+        let catalog_poll_scope = catalog_poll_scope(
+            background_work_allowed,
+            full_screen_transition_owned_at_loop_start,
+            system_entry_handoff_only,
+        );
+        if let Some(catalog_poll_scope) = catalog_poll_scope
             && catalog_messages_need_polling(
                 pending_catalog_ready.is_some(),
                 catalog_session.refresh_done(),
                 scheduler.catalog_messages_running() || !deferred_catalog_events.is_empty(),
             )
         {
-            let catalog_disconnected = if system_entry_handoff_only {
-                scheduler.poll_system_entry(&mut catalog_events);
-                false
-            } else {
-                scheduler.poll_catalog(&mut catalog_events)
-            };
+            let catalog_disconnected =
+                scheduler.poll_catalog(&mut catalog_events, catalog_poll_scope);
             deferred_catalog_events.extend(catalog_events.drain());
 
             let mut catalog_messages_processed = 0usize;
@@ -11605,6 +11605,23 @@ fn catalog_messages_need_polling(
     pending_catalog_ready || !refresh_done || worker_running
 }
 
+fn catalog_poll_scope(
+    background_work_allowed: bool,
+    full_screen_transition_owned: bool,
+    system_entry_handoff_only: bool,
+) -> Option<CatalogPollScope> {
+    if full_screen_transition_owned {
+        return system_entry_handoff_only.then_some(CatalogPollScope::TransitionHandoff);
+    }
+    if background_work_allowed {
+        Some(CatalogPollScope::Idle)
+    } else {
+        Some(CatalogPollScope::Interactive {
+            system_entry_handoff: system_entry_handoff_only,
+        })
+    }
+}
+
 fn should_poll_system_entry_handoff(
     background_work_allowed: bool,
     collection_entry_pending: bool,
@@ -13297,6 +13314,32 @@ mod tests {
         assert!(should_defer_launcher_background_work(0, true, false, false));
         assert!(should_defer_launcher_background_work(0, false, true, false));
         assert!(should_defer_launcher_background_work(0, false, false, true));
+    }
+
+    #[test]
+    fn catalog_poll_scope_preserves_control_liveness_across_launcher_states() {
+        let scopes = [
+            catalog_poll_scope(true, false, false),
+            catalog_poll_scope(false, false, false),
+            catalog_poll_scope(false, false, true),
+            catalog_poll_scope(false, true, true),
+            catalog_poll_scope(false, true, false),
+        ];
+
+        assert_eq!(
+            scopes,
+            [
+                Some(CatalogPollScope::Idle),
+                Some(CatalogPollScope::Interactive {
+                    system_entry_handoff: false,
+                }),
+                Some(CatalogPollScope::Interactive {
+                    system_entry_handoff: true,
+                }),
+                Some(CatalogPollScope::TransitionHandoff),
+                None,
+            ]
+        );
     }
 
     #[test]

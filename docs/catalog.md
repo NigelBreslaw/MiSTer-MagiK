@@ -230,6 +230,14 @@ Checks occur at bounded batches rather than by polling an atomic for every
 file. A checkpoint must not hold a filesystem iterator borrow, database
 transaction, publication lock, or UI lock.
 
+The launcher also services the catalog worker's ordered control channel with a
+fixed per-frame budget while ordinary input or navigation suppresses optional
+background work. Progress, publication `Ready`, persistence, and terminal
+messages therefore cannot be starved behind search, media, preview, or input
+gates. A full-screen transition that exclusively owns CPU1 remains quiescent;
+only its foreground system-entry handoff is eligible until the transition
+returns to the live launcher.
+
 The embedded launcher applies CPU0 confinement at the builder-start boundary;
 it does not depend on successful first-visible publication to make that
 transition. Standalone administrative builds remain all-core and normal
