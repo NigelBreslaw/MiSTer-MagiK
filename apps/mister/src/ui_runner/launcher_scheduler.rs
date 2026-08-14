@@ -65,6 +65,16 @@ fn elapsed_us(started: Instant) -> u64 {
 pub(super) const CATALOG_MESSAGES_PER_FRAME: usize = 2;
 pub(super) const MEDIA_MESSAGES_PER_FRAME: usize = 2;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum CatalogPollScope {
+    /// Drain every catalog-adjacent result while the launcher is idle.
+    Idle,
+    /// Keep the primary catalog control channel live during ordinary input and navigation.
+    Interactive { system_entry_handoff: bool },
+    /// A full-screen transition owns CPU1; only its foreground entry may complete.
+    TransitionHandoff,
+}
+
 #[derive(Default)]
 pub(super) struct CatalogJobEventBuf {
     events: Vec<CatalogWorkerMessage>,
@@ -875,10 +885,27 @@ impl LauncherScheduler {
         ));
     }
 
-    pub(super) fn poll_catalog(&mut self, out: &mut CatalogJobEventBuf) -> bool {
+    pub(super) fn poll_catalog(
+        &mut self,
+        out: &mut CatalogJobEventBuf,
+        scope: CatalogPollScope,
+    ) -> bool {
         out.clear();
+        if matches!(
+            scope,
+            CatalogPollScope::Interactive {
+                system_entry_handoff: true
+            } | CatalogPollScope::TransitionHandoff
+        ) {
+            self.poll_system_entry_into(out);
+        }
+
+        if scope == CatalogPollScope::TransitionHandoff {
+            return false;
+        }
+
         let mut disconnected = false;
-        for _ in 0..CATALOG_MESSAGES_PER_FRAME {
+        while out.events.len() < CATALOG_MESSAGES_PER_FRAME {
             let received = match &self.catalog {
                 CatalogJobState::Running(rx) => rx.try_recv(),
                 CatalogJobState::Idle => break,
@@ -902,6 +929,10 @@ impl LauncherScheduler {
                 "catalog worker channel disconnected without a terminal message",
             );
         }
+        if scope != CatalogPollScope::Idle {
+            return disconnected;
+        }
+
         let mut search_query_terminal = false;
         if let SearchQueryJobState::Running(rx) = &self.search_query {
             while out.events.len() < CATALOG_MESSAGES_PER_FRAME {
@@ -931,16 +962,6 @@ impl LauncherScheduler {
         }
         self.poll_system_entry_into(out);
         disconnected
-    }
-
-    /// Poll only the foreground system-entry handoff.
-    ///
-    /// This is the sole scheduler acknowledgement allowed while a full-screen
-    /// transition owns CPU1. It never waits for the CPU0 worker and never
-    /// drains catalog validation or search results.
-    pub(super) fn poll_system_entry(&mut self, out: &mut CatalogJobEventBuf) {
-        out.clear();
-        self.poll_system_entry_into(out);
     }
 
     fn poll_system_entry_into(&mut self, out: &mut CatalogJobEventBuf) {
@@ -1690,7 +1711,7 @@ mod tests {
         }));
         let mut events = CatalogJobEventBuf::new();
 
-        scheduler.poll_catalog(&mut events);
+        scheduler.poll_catalog(&mut events, CatalogPollScope::Idle);
 
         assert!(events.events.is_empty());
         assert!(!scheduler.system_shard_loading("c64"));
@@ -1726,7 +1747,7 @@ mod tests {
         }));
         let mut events = CatalogJobEventBuf::new();
 
-        scheduler.poll_catalog(&mut events);
+        scheduler.poll_catalog(&mut events, CatalogPollScope::Idle);
 
         assert!(!scheduler.system_shard_loading("c64"));
         assert!(scheduler.retry_system_shard(
@@ -1752,11 +1773,133 @@ mod tests {
         scheduler.catalog = CatalogJobState::Running(rx);
         let mut events = CatalogJobEventBuf::new();
 
-        scheduler.poll_catalog(&mut events);
+        scheduler.poll_catalog(&mut events, CatalogPollScope::Idle);
         assert_eq!(events.len(), CATALOG_MESSAGES_PER_FRAME);
 
-        scheduler.poll_catalog(&mut events);
+        scheduler.poll_catalog(&mut events, CatalogPollScope::Idle);
         assert_eq!(events.len(), 1);
+    }
+
+    #[test]
+    fn interactive_catalog_poll_drains_primary_sequence_without_search_results() {
+        let (catalog_tx, catalog_rx) = mpsc::channel();
+        catalog_tx
+            .send(CatalogWorkerMessage::Timing {
+                name: "progress".to_string(),
+                detail: String::new(),
+            })
+            .unwrap();
+        catalog_tx
+            .send(CatalogWorkerMessage::Ready {
+                catalog: empty_arcade_catalog("/tmp"),
+                summary: None,
+                load_us: 1,
+                source: CatalogSource::FreshBuild,
+                durable_save_pending: true,
+                generation_fingerprint: None,
+                publication_ack: None,
+            })
+            .unwrap();
+        catalog_tx.send(CatalogWorkerMessage::Done).unwrap();
+        let (search_tx, search_rx) = mpsc::channel();
+        search_tx
+            .send(CatalogWorkerMessage::SearchQueryFailed {
+                request: launcher::ArcadeSearchRequest {
+                    request_id: 1,
+                    catalog_version: 1,
+                    collection_id: "arcade".to_string(),
+                    system_ids: vec!["arcade".to_string()],
+                    query: "fixture".to_string(),
+                },
+                error: "deferred".to_string(),
+            })
+            .unwrap();
+        let mut scheduler = LauncherScheduler::new(false);
+        scheduler.catalog = CatalogJobState::Running(catalog_rx);
+        scheduler.search_query = SearchQueryJobState::Running(search_rx);
+        let mut events = CatalogJobEventBuf::new();
+
+        scheduler.poll_catalog(
+            &mut events,
+            CatalogPollScope::Interactive {
+                system_entry_handoff: false,
+            },
+        );
+        assert!(matches!(
+            events.events.as_slice(),
+            [
+                CatalogWorkerMessage::Timing { name, .. },
+                CatalogWorkerMessage::Ready { .. }
+            ] if name == "progress"
+        ));
+        assert!(matches!(
+            scheduler.search_query,
+            SearchQueryJobState::Running(_)
+        ));
+
+        scheduler.poll_catalog(
+            &mut events,
+            CatalogPollScope::Interactive {
+                system_entry_handoff: false,
+            },
+        );
+        assert!(matches!(
+            events.events.as_slice(),
+            [CatalogWorkerMessage::Done]
+        ));
+        assert!(matches!(
+            scheduler.search_query,
+            SearchQueryJobState::Running(_)
+        ));
+    }
+
+    #[test]
+    fn interactive_catalog_poll_prioritizes_foreground_system_entry() {
+        let (catalog_tx, catalog_rx) = mpsc::channel();
+        catalog_tx
+            .send(CatalogWorkerMessage::Timing {
+                name: "primary".to_string(),
+                detail: String::new(),
+            })
+            .unwrap();
+        let results = Arc::new(PreparedSystemEntryMailbox::default());
+        let (requests, _request_rx) = mpsc::channel();
+        let (_liveness_tx, liveness) = mpsc::channel();
+        let mut scheduler = LauncherScheduler::new(false);
+        scheduler.catalog = CatalogJobState::Running(catalog_rx);
+        scheduler.system_entry_prepare = Some(SystemEntryPrepareWorker {
+            requests,
+            results: Arc::clone(&results),
+            liveness,
+        });
+        scheduler.system_shard_generation = Some("generation-a".to_string());
+        scheduler.system_shard = SystemShardJobState::Running {
+            system_id: "c64".to_string(),
+            generation: Some("generation-a".to_string()),
+            sequence: 12,
+        };
+        results.publish(SystemEntryPrepareOutcome::Failed(FailedSystemEntry {
+            sequence: 12,
+            generation: Some("generation-a".to_string()),
+            system_id: "c64".to_string(),
+            error: "terminal".to_string(),
+        }));
+        let mut events = CatalogJobEventBuf::new();
+
+        scheduler.poll_catalog(
+            &mut events,
+            CatalogPollScope::Interactive {
+                system_entry_handoff: true,
+            },
+        );
+
+        assert!(matches!(
+            events.events.as_slice(),
+            [
+                CatalogWorkerMessage::SystemShardFailed { system_id, .. },
+                CatalogWorkerMessage::Timing { name, .. }
+            ] if system_id == "c64" && name == "primary"
+        ));
     }
 
     #[test]
@@ -1792,7 +1935,7 @@ mod tests {
         }));
         let mut events = CatalogJobEventBuf::new();
 
-        scheduler.poll_system_entry(&mut events);
+        scheduler.poll_catalog(&mut events, CatalogPollScope::TransitionHandoff);
 
         assert_eq!(events.len(), 1);
         assert!(matches!(
@@ -1803,7 +1946,7 @@ mod tests {
             catalog_tx.send(CatalogWorkerMessage::Done),
             Ok(())
         ));
-        scheduler.poll_catalog(&mut events);
+        scheduler.poll_catalog(&mut events, CatalogPollScope::Idle);
         assert!(matches!(
             events.events.first(),
             Some(CatalogWorkerMessage::Timing { name, .. }) if name == "background"
@@ -1819,7 +1962,7 @@ mod tests {
         scheduler.catalog = CatalogJobState::Running(rx);
         let mut events = CatalogJobEventBuf::new();
 
-        scheduler.poll_catalog(&mut events);
+        scheduler.poll_catalog(&mut events, CatalogPollScope::Idle);
         assert_eq!(events.len(), 1);
         assert!(!scheduler.catalog_worker_running());
     }
