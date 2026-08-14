@@ -3018,86 +3018,111 @@ fn experimental_fpga_evidence_is_current(diagnostics: &Value) -> bool {
         && diagnostics
             .get("diagnostic_architecture")
             .and_then(Value::as_str)
-            == Some("video-path-evidence-v1")
+            == Some("scaler-completion-repair-v1")
         && diagnostics.get("available").and_then(Value::as_bool) == Some(true)
         && diagnostics.get("coherent").and_then(Value::as_bool) == Some(true)
+        && diagnostics.get("classification").and_then(Value::as_str)
+            == Some("repair_transport_ready")
+        && diagnostics.get("sink_visibility").and_then(Value::as_str) == Some("unobserved")
         && diagnostics
-            .pointer("/capabilities/physical_hdmi_pll_lock")
+            .pointer("/capabilities/passive_video_observer")
+            .and_then(Value::as_bool)
+            == Some(false)
+        && diagnostics
+            .pointer("/capabilities/protocol_version")
+            .and_then(Value::as_u64)
+            == Some(5)
+        && diagnostics
+            .pointer("/capabilities/flags")
+            .and_then(Value::as_u64)
+            == Some(0x03ff)
+        && diagnostics
+            .pointer("/capabilities/crc")
+            .and_then(Value::as_u64)
+            .is_some()
+        && diagnostics
+            .pointer("/coherence/latch_ownership_stable")
             .and_then(Value::as_bool)
             == Some(true)
         && diagnostics
-            .pointer("/capabilities/final_hdmi_output")
+            .pointer("/coherence/launcher_state_stable")
             .and_then(Value::as_bool)
             == Some(true)
         && diagnostics
-            .pointer("/capabilities/final_mux_provenance")
+            .pointer("/coherence/ownership_check_error")
+            .is_some_and(Value::is_null)
+        && diagnostics
+            .get("owner_epoch_before")
+            .and_then(Value::as_u64)
+            .is_some_and(|before| {
+                before > 0
+                    && diagnostics.get("owner_epoch_after").and_then(Value::as_u64) == Some(before)
+            })
+        && diagnostics
+            .pointer("/latch_status/flags")
+            .and_then(Value::as_u64)
+            .is_some_and(|flags| {
+                flags & (1 << mister_magik_latch_contract::STATUS_MAGIK_OWNERSHIP) != 0
+            })
+        && diagnostics
+            .pointer("/latch_status/active_width")
+            .and_then(Value::as_u64)
+            .is_some_and(|width| width > 0)
+        && diagnostics
+            .pointer("/latch_status/active_height")
+            .and_then(Value::as_u64)
+            .is_some_and(|height| height > 0)
+        && diagnostics
+            .pointer("/latch_status/active_stride")
+            .and_then(Value::as_u64)
+            .is_some_and(|stride| {
+                diagnostics
+                    .pointer("/latch_status/active_width")
+                    .and_then(Value::as_u64)
+                    .is_some_and(|width| stride >= width.saturating_mul(2))
+            })
+        && diagnostics
+            .pointer("/latch_status/crc")
+            .and_then(Value::as_u64)
+            .is_some()
+        && diagnostics
+            .pointer("/presentation_telemetry/magik_ownership")
             .and_then(Value::as_bool)
             == Some(true)
         && diagnostics
-            .pointer("/capabilities/scaler_raw_output")
+            .pointer("/presentation_telemetry/lifetime_invariant_valid")
             .and_then(Value::as_bool)
             == Some(true)
         && diagnostics
-            .pointer("/capabilities/post_osd_output")
-            .and_then(Value::as_bool)
-            == Some(true)
+            .pointer("/presentation_telemetry/presented_vblank_count")
+            .and_then(Value::as_u64)
+            .is_some_and(|count| count >= 2)
         && diagnostics
-            .pointer("/capabilities/avalon_read_path")
-            .and_then(Value::as_bool)
-            == Some(true)
+            .pointer("/presentation_telemetry/active_sequence")
+            .and_then(Value::as_u64)
+            .is_some_and(|sequence| {
+                diagnostics
+                    .pointer("/latch_status/active_sequence")
+                    .and_then(Value::as_u64)
+                    == Some(sequence)
+            })
         && diagnostics
-            .pointer("/hdmi_lock/raw_words")
-            .and_then(Value::as_array)
-            .is_some_and(|words| words.len() == 4)
-        && diagnostics
-            .pointer("/final_hdmi_output_activity/first/raw_words")
-            .and_then(Value::as_array)
-            .is_some_and(|words| words.len() == 6)
-        && diagnostics
-            .pointer("/final_hdmi_output_activity/second/raw_words")
-            .and_then(Value::as_array)
-            .is_some_and(|words| words.len() == 6)
-        && diagnostics
-            .pointer("/video_path_activity/final/first_raw_words")
-            .and_then(Value::as_array)
-            .is_some_and(|words| words.len() == 5)
-        && diagnostics
-            .pointer("/video_path_activity/final/second_raw_words")
-            .and_then(Value::as_array)
-            .is_some_and(|words| words.len() == 5)
-        && diagnostics
-            .pointer("/video_path_activity/scaler_raw/first_raw_words")
-            .and_then(Value::as_array)
-            .is_some_and(|words| words.len() == 4)
-        && diagnostics
-            .pointer("/video_path_activity/scaler_raw/second_raw_words")
-            .and_then(Value::as_array)
-            .is_some_and(|words| words.len() == 4)
-        && diagnostics
-            .pointer("/video_path_activity/post_osd/first_raw_words")
-            .and_then(Value::as_array)
-            .is_some_and(|words| words.len() == 4)
-        && diagnostics
-            .pointer("/video_path_activity/post_osd/second_raw_words")
-            .and_then(Value::as_array)
-            .is_some_and(|words| words.len() == 4)
-        && diagnostics
-            .pointer("/video_path_activity/avalon/first_raw_words")
-            .and_then(Value::as_array)
-            .is_some_and(|words| words.len() == 4)
-        && diagnostics
-            .pointer("/video_path_activity/avalon/second_raw_words")
-            .and_then(Value::as_array)
-            .is_some_and(|words| words.len() == 4)
+            .pointer("/presentation_telemetry/crc")
+            .and_then(Value::as_u64)
+            .is_some()
 }
 
-fn experimental_fpga_activation_status(session: &Session) -> Result<(u64, u64, i64)> {
+fn experimental_fpga_activation_status(session: &Session) -> Result<(u64, u64, i64, u64)> {
     let main_status = remote_read(session, MAIN_STATUS_REMOTE)
         .and_then(|text| serde_json::from_str::<Value>(&text).ok())
         .ok_or("experimental FPGA activation has no Main status")?;
     if main_status.get("launcher_state").and_then(Value::as_str) != Some("LauncherActive")
         || main_status.get("executable_path").and_then(Value::as_str) != Some(LOCAL_MAIN_REMOTE)
         || main_status.get("fpga_owner").and_then(Value::as_str) != Some("magik")
+        || main_status
+            .get("launcher_ready_phase")
+            .and_then(Value::as_str)
+            != Some("ready")
     {
         return Err(
             "experimental FPGA activation requires stable Dev LauncherActive ownership".into(),
@@ -3117,11 +3142,16 @@ fn experimental_fpga_activation_status(session: &Session) -> Result<(u64, u64, i
         .and_then(Value::as_i64)
         .filter(|pid| *pid > 0)
         .ok_or("experimental FPGA activation has no active launcher")?;
-    Ok((generation, main_pid, launcher_pid))
+    let owner_epoch = main_status
+        .get("fpga_owner_epoch")
+        .and_then(Value::as_u64)
+        .filter(|epoch| *epoch > 0)
+        .ok_or("experimental FPGA activation has no FPGA owner epoch")?;
+    Ok((generation, main_pid, launcher_pid, owner_epoch))
 }
 
 fn activate_installed_menu_fpga(config: &NativeDeviceConfig, session: &Session) -> Result<()> {
-    let (expected_generation, expected_main_pid, previous_launcher_pid) =
+    let (expected_generation, expected_main_pid, previous_launcher_pid, _) =
         experimental_fpga_activation_status(session)?;
     exec_checked(
         session,
@@ -3134,7 +3164,7 @@ fn activate_installed_menu_fpga(config: &NativeDeviceConfig, session: &Session) 
         Instant::now(),
         Duration::from_secs(45),
     )?;
-    let (activated_generation, activated_main_pid, activated_launcher_pid) =
+    let (activated_generation, activated_main_pid, activated_launcher_pid, _) =
         experimental_fpga_activation_status(session)?;
     if activated_generation == expected_generation
         || activated_main_pid == expected_main_pid
@@ -3166,7 +3196,7 @@ fn verify_experimental_fpga_evidence(config: &NativeDeviceConfig) -> Result<()> 
         .ok_or("experimental FPGA activation returned no FPGA evidence")?;
     if !experimental_fpga_evidence_is_current(evidence) {
         return Err(format!(
-            "experimental FPGA activation did not expose coherent HDMI lock evidence: {evidence}"
+            "experimental FPGA activation did not expose coherent repair-only latch evidence: {evidence}"
         )
         .into());
     }
@@ -24866,70 +24896,64 @@ H: Handlers=event3 js0"#
     fn experimental_fpga_activation_requires_exact_current_evidence() {
         let current = json!({
             "schema": "mister-magik-fpga-video-diagnostics-v2",
-            "diagnostic_architecture": "video-path-evidence-v1",
+            "diagnostic_architecture": "scaler-completion-repair-v1",
             "available": true,
             "coherent": true,
+            "classification": "repair_transport_ready",
+            "sink_visibility": "unobserved",
+            "owner_epoch_before": 13,
+            "owner_epoch_after": 13,
+            "coherence": {
+                "latch_ownership_stable": true,
+                "launcher_state_stable": true,
+                "ownership_check_error": null,
+            },
             "capabilities": {
-                "physical_hdmi_pll_lock": true,
-                "final_hdmi_output": true,
-                "final_mux_provenance": true,
-                "scaler_raw_output": true,
-                "post_osd_output": true,
-                "avalon_read_path": true,
+                "passive_video_observer": false,
+                "protocol_version": 5,
+                "flags": 0x03ff,
+                "crc": 0,
             },
-            "hdmi_lock": {"raw_words": [1, 7, 0, 0]},
-            "final_hdmi_output_activity": {
-                "first": {"raw_words": [1, 1, 0, 0, 1, 0]},
-                "second": {"raw_words": [1, 1, 0, 0, 7, 0]},
+            "latch_status": {
+                "active_sequence": 7,
+                "flags": 1 << mister_magik_latch_contract::STATUS_MAGIK_OWNERSHIP,
+                "active_width": 960,
+                "active_height": 540,
+                "active_stride": 1920,
+                "crc": 0,
             },
-            "video_path_activity": {
-                "final": {
-                    "first_raw_words": [1, 1, 0, 0, 0],
-                    "second_raw_words": [1, 1, 0, 0, 0],
-                },
-                "scaler_raw": {
-                    "first_raw_words": [1, 1, 0, 0],
-                    "second_raw_words": [1, 1, 0, 0],
-                },
-                "post_osd": {
-                    "first_raw_words": [1, 1, 0, 0],
-                    "second_raw_words": [1, 1, 0, 0],
-                },
-                "avalon": {
-                    "first_raw_words": [1, 1, 0, 0],
-                    "second_raw_words": [1, 1, 0, 0],
-                },
+            "presentation_telemetry": {
+                "presented_vblank_count": 2,
+                "active_sequence": 7,
+                "magik_ownership": true,
+                "lifetime_invariant_valid": true,
+                "crc": 0,
             },
         });
         assert!(experimental_fpga_evidence_is_current(&current));
         for pointer in [
-            "/capabilities/final_mux_provenance",
-            "/capabilities/scaler_raw_output",
-            "/capabilities/post_osd_output",
-            "/capabilities/avalon_read_path",
+            "/coherence/latch_ownership_stable",
+            "/coherence/launcher_state_stable",
+            "/presentation_telemetry/magik_ownership",
+            "/presentation_telemetry/lifetime_invariant_valid",
         ] {
             let mut missing_capability = current.clone();
             *missing_capability.pointer_mut(pointer).unwrap() = Value::Bool(false);
             assert!(!experimental_fpga_evidence_is_current(&missing_capability));
         }
-        for pointer in [
-            "/video_path_activity/final/first_raw_words",
-            "/video_path_activity/final/second_raw_words",
-            "/video_path_activity/scaler_raw/first_raw_words",
-            "/video_path_activity/scaler_raw/second_raw_words",
-            "/video_path_activity/post_osd/first_raw_words",
-            "/video_path_activity/post_osd/second_raw_words",
-            "/video_path_activity/avalon/first_raw_words",
-            "/video_path_activity/avalon/second_raw_words",
+        for (pointer, value) in [
+            ("/capabilities/passive_video_observer", json!(true)),
+            ("/capabilities/protocol_version", json!(4)),
+            ("/capabilities/flags", json!(0x01ff)),
+            ("/latch_status/active_stride", json!(1919)),
+            ("/presentation_telemetry/presented_vblank_count", json!(1)),
+            ("/presentation_telemetry/active_sequence", json!(8)),
+            ("/owner_epoch_after", json!(14)),
+            ("/sink_visibility", json!("observed")),
         ] {
-            let mut wrong_words = current.clone();
-            wrong_words
-                .pointer_mut(pointer)
-                .unwrap()
-                .as_array_mut()
-                .unwrap()
-                .pop();
-            assert!(!experimental_fpga_evidence_is_current(&wrong_words));
+            let mut invalid = current.clone();
+            *invalid.pointer_mut(pointer).unwrap() = value;
+            assert!(!experimental_fpga_evidence_is_current(&invalid));
         }
         for stale in [
             json!({

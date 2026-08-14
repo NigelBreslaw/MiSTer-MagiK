@@ -3073,6 +3073,11 @@ mod linux {
                 ));
             }
         };
+        let Some(latch_capabilities) = fpga.latch_capabilities else {
+            return fpga_video_diagnostics_unavailable(
+                "latch capabilities were not retained after status negotiation",
+            );
+        };
         let latch_status_json = Some(json!({
             "active_sequence": latch_status.active_sequence,
             "pending_sequence": latch_status.pending_sequence,
@@ -3084,14 +3089,34 @@ mod linux {
             "active_width": latch_status.active_width,
             "active_height": latch_status.active_height,
             "active_stride": latch_status.active_stride,
+            "reject_count": latch_status.reject_count,
+            "active_route_epoch": latch_status.active_route_epoch,
+            "accepted_sequence": latch_status.accepted_sequence,
+            "active_transaction": latch_status.active_transaction,
+            "pending_transaction": latch_status.pending_transaction,
+            "accepted_transaction": latch_status.accepted_transaction,
+            "crc": latch_status.crc,
         }));
         let readout = match fpga.read_video_diagnostics() {
-            Ok(readout) => readout,
+            Ok(readout) => Some(readout),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => None,
             Err(error) => {
                 return fpga_video_diagnostics_unavailable(format!(
                     "read passive FPGA video diagnostics: {error}"
                 ));
             }
+        };
+        let repair_telemetry = if readout.is_none() {
+            match fpga.read_presentation_telemetry() {
+                Ok(telemetry) => Some(telemetry),
+                Err(error) => {
+                    return fpga_video_diagnostics_unavailable(format!(
+                        "read repair-only latch telemetry: {error}"
+                    ));
+                }
+            }
+        } else {
+            None
         };
         let main_after = read_json_value("/tmp/mister-magik/main-status.json");
         let owner_epoch_after = main_after.get("fpga_owner_epoch").and_then(Value::as_u64);
@@ -3112,17 +3137,69 @@ mod linux {
             && launcher_state_stable
             && latch_ownership_stable == Some(true);
         let capture_end_monotonic_us = uptime_ms_now().saturating_mul(1_000);
-        readout.to_json(VideoDiagnosticsJsonContext {
-            owner_stable,
-            latch_ownership_stable,
-            launcher_state_stable,
-            ownership_check_error,
-            owner_epoch_before,
-            owner_epoch_after,
-            latch_status_json,
-            capture_start_monotonic_us,
-            capture_end_monotonic_us,
-        })
+        match (readout, repair_telemetry) {
+            (Some(readout), _) => readout.to_json(VideoDiagnosticsJsonContext {
+                owner_stable,
+                latch_ownership_stable,
+                launcher_state_stable,
+                ownership_check_error,
+                owner_epoch_before,
+                owner_epoch_after,
+                latch_status_json,
+                capture_start_monotonic_us,
+                capture_end_monotonic_us,
+            }),
+            (None, Some(telemetry)) => {
+                let coherent = owner_stable
+                    && telemetry.magik_ownership()
+                    && telemetry.lifetime_invariant_valid();
+                json!({
+                    "schema": "mister-magik-fpga-video-diagnostics-v2",
+                    "diagnostic_architecture": "scaler-completion-repair-v1",
+                    "available": true,
+                    "coherent": coherent,
+                    "classification": if coherent {
+                        "repair_transport_ready"
+                    } else {
+                        "repair_transport_incoherent"
+                    },
+                    "sink_visibility": "unobserved",
+                    "capture_start_monotonic_us": capture_start_monotonic_us,
+                    "capture_end_monotonic_us": capture_end_monotonic_us,
+                    "owner_epoch_before": owner_epoch_before,
+                    "owner_epoch_after": owner_epoch_after,
+                    "coherence": {
+                        "latch_ownership_stable": latch_ownership_stable,
+                        "launcher_state_stable": launcher_state_stable,
+                        "ownership_check_error": ownership_check_error,
+                    },
+                    "capabilities": {
+                        "passive_video_observer": false,
+                        "protocol_version": latch_capabilities.protocol_version,
+                        "flags": latch_capabilities.flags,
+                        "max_width": latch_capabilities.max_width,
+                        "max_height": latch_capabilities.max_height,
+                        "max_stride_bytes": latch_capabilities.max_stride_bytes,
+                        "crc": latch_capabilities.crc,
+                    },
+                    "latch_status": latch_status_json,
+                    "presentation_telemetry": {
+                        "owned_vblank_count": telemetry.owned_vblank_count,
+                        "presented_vblank_count": telemetry.presented_vblank_count,
+                        "repeated_vblank_count": telemetry.repeated_vblank_count,
+                        "ownership_loss_count": telemetry.ownership_loss_count,
+                        "active_sequence": telemetry.active_sequence,
+                        "flags": telemetry.flags,
+                        "magik_ownership": telemetry.magik_ownership(),
+                        "lifetime_invariant_valid": telemetry.lifetime_invariant_valid(),
+                        "crc": telemetry.crc,
+                    },
+                })
+            }
+            (None, None) => fpga_video_diagnostics_unavailable(
+                "repair-only diagnostics did not produce presentation telemetry",
+            ),
+        }
     }
 
     fn magik_control(args: Value) -> Result<Value, String> {
@@ -3556,6 +3633,13 @@ mod linux {
         active_width: u16,
         active_height: u16,
         active_stride: u16,
+        reject_count: u16,
+        active_route_epoch: u16,
+        accepted_sequence: u16,
+        active_transaction: u16,
+        pending_transaction: u16,
+        accepted_transaction: u16,
+        crc: Option<u16>,
     }
 
     impl LatchedFbufStatus {
@@ -4535,6 +4619,7 @@ mod linux {
         uio_lock: File,
         gpo: u32,
         latch_protocol: Option<mister_magik_latch_contract::LatchProtocol>,
+        latch_capabilities: Option<mister_magik_latch_contract::LatchCapabilities>,
     }
 
     struct FpgaUioGuard {
@@ -4605,6 +4690,7 @@ mod linux {
                 uio_lock,
                 gpo: FPGA_BIT31,
                 latch_protocol: None,
+                latch_capabilities: None,
             })
         }
 
@@ -5160,6 +5246,13 @@ mod linux {
                     active_width: decoded.width,
                     active_height: decoded.height,
                     active_stride: decoded.stride,
+                    reject_count: decoded.reject_count,
+                    active_route_epoch: decoded.active_route_epoch,
+                    accepted_sequence: decoded.accepted_seq,
+                    active_transaction: decoded.active_transaction,
+                    pending_transaction: decoded.pending_transaction,
+                    accepted_transaction: decoded.accepted_transaction,
+                    crc: decoded.crc,
                 })
             })();
             self.disable_io();
@@ -5170,6 +5263,7 @@ mod linux {
             &mut self,
         ) -> io::Result<mister_magik_latch_contract::LatchProtocol> {
             self.latch_protocol = None;
+            self.latch_capabilities = None;
             let result = match self.read_latch_capabilities_once() {
                 Err((first, Some(mister_magik_latch_contract::LatchProtocol::V5)))
                     if first.kind() == io::ErrorKind::InvalidData =>
@@ -5182,6 +5276,7 @@ mod linux {
             };
             let capabilities = result?;
             self.latch_protocol = Some(capabilities.protocol);
+            self.latch_capabilities = Some(capabilities);
             Ok(capabilities.protocol)
         }
 
