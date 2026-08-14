@@ -71,8 +71,8 @@ pub(super) enum CatalogPollScope {
     Idle,
     /// Keep the primary catalog control channel live during ordinary input and navigation.
     Interactive { system_entry_handoff: bool },
-    /// A full-screen transition owns CPU1; only its foreground entry may complete.
-    TransitionHandoff,
+    /// Keep only catalog control and an optional foreground entry live while CPU1 is owned.
+    Transition { system_entry_handoff: bool },
 }
 
 #[derive(Default)]
@@ -895,13 +895,11 @@ impl LauncherScheduler {
             scope,
             CatalogPollScope::Interactive {
                 system_entry_handoff: true
-            } | CatalogPollScope::TransitionHandoff
+            } | CatalogPollScope::Transition {
+                system_entry_handoff: true
+            }
         ) {
             self.poll_system_entry_into(out);
-        }
-
-        if scope == CatalogPollScope::TransitionHandoff {
-            return false;
         }
 
         let mut disconnected = false;
@@ -1903,7 +1901,7 @@ mod tests {
     }
 
     #[test]
-    fn transition_entry_poll_does_not_drain_general_catalog_work() {
+    fn transition_poll_prioritizes_entry_then_drains_catalog_control() {
         let (catalog_tx, catalog_rx) = mpsc::channel();
         catalog_tx
             .send(CatalogWorkerMessage::Timing {
@@ -1935,21 +1933,28 @@ mod tests {
         }));
         let mut events = CatalogJobEventBuf::new();
 
-        scheduler.poll_catalog(&mut events, CatalogPollScope::TransitionHandoff);
+        scheduler.poll_catalog(
+            &mut events,
+            CatalogPollScope::Transition {
+                system_entry_handoff: true,
+            },
+        );
 
-        assert_eq!(events.len(), 1);
+        assert_eq!(events.len(), CATALOG_MESSAGES_PER_FRAME);
         assert!(matches!(
             events.events.first(),
             Some(CatalogWorkerMessage::SystemShardFailed { system_id, .. }) if system_id == "c64"
         ));
         assert!(matches!(
+            events.events.as_slice(),
+            [
+                CatalogWorkerMessage::SystemShardFailed { system_id, .. },
+                CatalogWorkerMessage::Timing { name, .. }
+            ] if system_id == "c64" && name == "background"
+        ));
+        assert!(matches!(
             catalog_tx.send(CatalogWorkerMessage::Done),
             Ok(())
-        ));
-        scheduler.poll_catalog(&mut events, CatalogPollScope::Idle);
-        assert!(matches!(
-            events.events.first(),
-            Some(CatalogWorkerMessage::Timing { name, .. }) if name == "background"
         ));
     }
 

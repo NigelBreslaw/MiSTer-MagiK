@@ -456,13 +456,15 @@ Latch acceptance is not a release acknowledgement: the chart returns to
 refresh.
 
 Every non-`Live` state owns CPU1. Slint timers, runtime-status serialization,
-catalog/search polling, media maintenance, update checks, and other launcher
-background work remain quiescent for the complete ownership interval. A cold
-system entry has one exception: CPU1 may perform one non-blocking newest-result
-acknowledgement per frame. That path cannot drain general catalog or search
-queues, and a contended mailbox defers acknowledgement instead of waiting.
-Selected-preview adoption may also finish the exact generation-bound entry
-preview; ordinary scrolling prefetch remains disabled.
+search polling, media maintenance, update checks, and other launcher background
+work remain quiescent for the complete ownership interval. The primary catalog
+worker control channel retains its fixed two-message per-frame service so
+publication acknowledgements and terminal state cannot deadlock behind the
+transition. A cold system entry is prioritized within that same budget and may
+perform one non-blocking newest-result acknowledgement per frame; a contended
+mailbox defers acknowledgement instead of waiting. Selected-preview adoption
+may also finish the exact generation-bound entry preview; ordinary scrolling
+prefetch remains disabled.
 
 Screenshot presentation and direct-layer retirement are parallel state-chart
 regions. Preview demand (`Empty` or `Image`) is independent from route
