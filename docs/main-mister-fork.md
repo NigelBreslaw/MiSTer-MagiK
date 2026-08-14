@@ -95,18 +95,25 @@ child.
 The one-way ready report uses one mode-0600 FIFO under `/tmp/mister-magik`; it
 does not share `/dev/MiSTer_cmd`, whose host operation lock may be held while
 waiting for launcher activation. Each spawn receives a new 32-hex token. Rust
-writes exactly `ready-v1 token=<token> pid=<supervised-pid>` after the two-post
-condition, retrying a temporarily unavailable nonblocking FIFO until Main's
-deadline. Main rejects malformed reports and reports from an old child or
-spawn. There is no acknowledgement channel, framebuffer-content test, or
-route lease.
+writes one canonical `ready-v2` record after the two-post condition. The record
+binds the token and supervised PID to Main's PID and generation, the FPGA owner
+epoch, latch protocol-v5 identity, route geometry, both advancing alternating
+post receipts, and a SHA-256/nonzero-pixel summary of the active RGB565 source
+rows. A temporarily unavailable nonblocking FIFO is retried until Main's
+deadline. Main rejects noncanonical fields, stale process or ownership context,
+invalid geometry, blank source evidence, and a changed current FPGA owner. This
+is source and latch readiness, not proof of sink-visible pixels.
 
 Main waits eight seconds per attempt. It stops and reaps the first failed child
 and retries the complete supervised start once. A second failure stops the
 child and restores stable stock Menu. If a display change is provisional,
 Main restores the previous timing before enabling stock Menu and does not
-restart MagiK. This is internal readiness only and does not prove physical
-HDMI or CRT visibility; attended USB-video testing owns that claim.
+restart MagiK. Before recovery begins, Main atomically writes a bounded
+`mister-magik-return-incident-v1` record with the failed process/ownership
+context and `sink_visibility: unobserved`; persistence failure never blocks
+stock recovery. This is internal readiness only and does not prove physical
+HDMI or CRT visibility; output-rate physical capture owns that claim, while
+the 30 fps USB-video path remains supporting evidence only.
 
 When the supervised launcher child exits unexpectedly, the fork records a local
 crash report under `/media/fat/mister-magik/crashes/`, updates
