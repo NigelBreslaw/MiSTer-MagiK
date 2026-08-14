@@ -304,12 +304,6 @@ def main() -> None:
                 "sys/mister_magik_latch_sys_top_bridge.sv\n"
                 "set_global_assignment -name SYSTEMVERILOG_FILE "
                 "sys/mister_magik_bootstrap_black.sv\n"
-                "set_global_assignment -name SYSTEMVERILOG_FILE "
-                "sys/mister_magik_video_diagnostics_control.sv\n"
-                "set_global_assignment -name SYSTEMVERILOG_FILE "
-                "sys/mister_magik_video_diagnostics_avalon.sv\n"
-                "set_global_assignment -name SYSTEMVERILOG_FILE "
-                "sys/mister_magik_video_diagnostics_output.sv\n"
                 "set_global_assignment -name SDC_FILE "
                 "sys/mister_magik_video_diagnostics.sdc\n"
             )
@@ -352,11 +346,11 @@ def main() -> None:
             "USE work.mister_magik_scaler_completion_queue.ALL;": 1,
             "FUNCTION completion_queue_next(": 2,
             "FUNCTION completion_queue_overflow(": 2,
-            "FUNCTION outstanding_returns_next(": 2,
-            "FUNCTION outstanding_returns_invalid(": 2,
+            "FUNCTION return_credits_next(": 2,
+            "FUNCTION return_phase_next(": 2,
+            "FUNCTION return_words_remaining(": 2,
+            "FUNCTION return_accounting_invalid(": 2,
             "FUNCTION read_obligation_issue(": 2,
-            "FUNCTION return_write_phase_next(": 2,
-            "FUNCTION return_block_complete(": 2,
             "FUNCTION return_drain_ready(": 2,
             "state_v:=request_toggle & completion_pending;": 1,
             "state_v(0):=completion;": 1,
@@ -364,8 +358,8 @@ def main() -> None:
             "SIGNAL avl_readdataack,avl_completion_pending : std_logic;": 1,
             "SIGNAL avl_completion_ack_meta,avl_completion_ack_sync : std_logic;": 1,
             "SIGNAL avl_return_drain : std_logic:='1';": 1,
-            "SIGNAL avl_return_aligned : std_logic:='0';": 1,
-            "SIGNAL avl_outstanding_returns : natural RANGE 0 TO 2*BLEN:=0;": 1,
+            "SIGNAL avl_return_credits : natural RANGE 0 TO 2:=0;": 1,
+            "SIGNAL avl_return_phase : natural RANGE 0 TO BLEN-1:=0;": 1,
             "ATTRIBUTE preserve OF avl_readdataack : SIGNAL IS true;": 1,
             "SIGNAL o_readdataack,o_readdataack_sync,o_readdataack_sync2 : std_logic;": 1,
             "SYNCHRONIZER_IDENTIFICATION FORCED\";": 2,
@@ -376,16 +370,16 @@ def main() -> None:
             "issued_v:=read_obligation_issue(": 1,
             "avl_state=sREAD,avl_return_drain,avl_read_i);": 1,
             "returned_v:=avl_readdatavalid='1';": 1,
-            "ASSERT NOT outstanding_returns_invalid(": 1,
-            "avl_outstanding_returns<=outstanding_returns_next(": 1,
+            "ASSERT NOT return_accounting_invalid(": 1,
+            "avl_return_credits<=return_credits_next(": 1,
+            "avl_return_phase<=return_phase_next(": 1,
             "avl_return_drain<='1';": 1,
             "IF return_drain_ready(": 1,
-            "avl_outstanding_returns,avl_return_aligned) THEN": 1,
+            "avl_return_credits,avl_return_phase) THEN": 1,
             "IF avl_return_drain='0' THEN": 1,
             "IF avl_readdatavalid='1' AND avl_return_drain='0' THEN": 1,
-            "avl_wad<=return_write_phase_next(": 1,
-            "IF return_block_complete(": 1,
-            "avl_return_aligned<='1';": 1,
+            "avl_wad<=(avl_wad+1) MOD (2*BLEN);": 1,
+            "IF (avl_wad MOD BLEN)=BLEN-2 THEN": 1,
             "completion_v:='1';": 1,
             "completion_state_v:=completion_queue_next(": 1,
             "avl_readdataack<=completion_state_v(1);": 1,
@@ -410,6 +404,12 @@ def main() -> None:
             "completion_gray",
             "o_completion_seen",
             "o_completion_pulse",
+            "avl_outstanding_returns",
+            "avl_return_aligned",
+            "outstanding_returns_next",
+            "outstanding_returns_invalid",
+            "return_write_phase_next",
+            "return_block_complete",
             "IF o_copylev>0 THEN",
             "IF o_copylev<2 THEN",
         ):
@@ -420,7 +420,6 @@ def main() -> None:
             "avl_completion_pending<='0';",
             "avl_completion_ack_meta<='0';",
             "avl_completion_ack_sync<='0';",
-            "avl_return_aligned<='0';",
             "o_readdataack<='0';",
             "o_readdataack_sync<='0';",
             "o_readdataack_sync2<='0';",
@@ -438,8 +437,22 @@ def main() -> None:
             fail("Avalon reset branch is missing")
         if "avl_wad<=2*BLEN-1;" in avalon_reset.group("body"):
             fail("Avalon write phase must not use a nonzero asynchronous reset preset")
-        if avalon_reset.group("body").count("avl_return_aligned<='0';") != 1:
-            fail("Avalon reset branch does not clear the VS alignment proof bit")
+        for retained_accounting in ("avl_return_credits", "avl_return_phase"):
+            if retained_accounting in avalon_reset.group("body"):
+                fail(
+                    "Avalon reset branch must retain return accounting: "
+                    f"{retained_accounting}"
+                )
+        vs_release = re.search(
+            r"IF avl_o_vs_sync='0' AND avl_o_vs='1' THEN\s*"
+            r"avl_wad<=2\*BLEN-1;\s*"
+            r"IF return_drain_ready\(\s*"
+            r"avl_return_credits,avl_return_phase\) THEN\s*"
+            r"avl_return_drain<='0';\s*END IF;\s*END IF;",
+            patched_ascal,
+        )
+        if vs_release is None:
+            fail("return drain release is not contained by the post-drain VS edge")
         for topology_fragment, topology_source in (
             (".reset_core_req(reset_req)", patched),
             (".reset_na   (~reset_req)", patched),
@@ -547,9 +560,6 @@ def main() -> None:
             "SYSTEMVERILOG_FILE sys/mister_magik_vblank_latch.sv",
             "SYSTEMVERILOG_FILE sys/mister_magik_latch_sys_top_bridge.sv",
             "SYSTEMVERILOG_FILE sys/mister_magik_bootstrap_black.sv",
-            "SYSTEMVERILOG_FILE sys/mister_magik_video_diagnostics_control.sv",
-            "SYSTEMVERILOG_FILE sys/mister_magik_video_diagnostics_avalon.sv",
-            "SYSTEMVERILOG_FILE sys/mister_magik_video_diagnostics_output.sv",
             "SDC_FILE sys/mister_magik_video_diagnostics.sdc",
         )
         bad_assignments = [
@@ -557,6 +567,13 @@ def main() -> None:
         ]
         if bad_assignments:
             fail("generated QSF assignment mismatch: " + ", ".join(bad_assignments))
+        for retired_assignment in (
+            "SYSTEMVERILOG_FILE sys/mister_magik_video_diagnostics_control.sv",
+            "SYSTEMVERILOG_FILE sys/mister_magik_video_diagnostics_avalon.sv",
+            "SYSTEMVERILOG_FILE sys/mister_magik_video_diagnostics_output.sv",
+        ):
+            if retired_assignment in qsf_text:
+                fail("retired empty source remains compiled: " + retired_assignment)
 
         if args.simulate:
             ghdl_work = Path(temporary) / "ghdl-work"

@@ -165,9 +165,6 @@ case "$APPLY_PATCH" in
     cp "$VIDEO_DIAGNOSTICS_PROTOCOL" "$WORK_DIR/sys/mister_magik_video_diagnostics_protocol.svh"
 	cp "$VIDEO_DIAGNOSTICS_SDC" "$WORK_DIR/sys/mister_magik_video_diagnostics.sdc"
     printf '\nset_global_assignment -name SYSTEMVERILOG_FILE sys/mister_magik_vblank_latch.sv\nset_global_assignment -name SYSTEMVERILOG_FILE sys/mister_magik_latch_sys_top_bridge.sv\nset_global_assignment -name SYSTEMVERILOG_FILE sys/mister_magik_bootstrap_black.sv\n' >> "$WORK_DIR/menu.qsf"
-    printf 'set_global_assignment -name SYSTEMVERILOG_FILE sys/mister_magik_video_diagnostics_control.sv\n' >> "$WORK_DIR/menu.qsf"
-    printf 'set_global_assignment -name SYSTEMVERILOG_FILE sys/mister_magik_video_diagnostics_avalon.sv\n' >> "$WORK_DIR/menu.qsf"
-    printf 'set_global_assignment -name SYSTEMVERILOG_FILE sys/mister_magik_video_diagnostics_output.sv\n' >> "$WORK_DIR/menu.qsf"
 	printf 'set_global_assignment -name SDC_FILE sys/mister_magik_video_diagnostics.sdc\n' >> "$WORK_DIR/menu.qsf"
     ;;
 esac

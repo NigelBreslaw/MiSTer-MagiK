@@ -19,39 +19,39 @@ index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..b1c2581d8665d3db4f4042ed668ee711
 +		completion_ack     : std_logic;
 +		completion         : std_logic)
 +		RETURN boolean;
-+	FUNCTION outstanding_returns_next(
-+		outstanding : natural;
-+		issued      : boolean;
-+		returned    : boolean;
-+		burst_len   : natural)
++	FUNCTION return_credits_next(
++		credits   : natural;
++		phase     : natural;
++		issued    : boolean;
++		returned  : boolean;
++		burst_len : natural)
 +		RETURN natural;
-+	FUNCTION outstanding_returns_invalid(
-+		outstanding : natural;
-+		issued      : boolean;
-+		returned    : boolean;
-+		burst_len   : natural;
-+		maximum     : natural)
++	FUNCTION return_phase_next(
++		phase     : natural;
++		returned  : boolean;
++		burst_len : natural)
++		RETURN natural;
++	FUNCTION return_words_remaining(
++		credits   : natural;
++		phase     : natural;
++		burst_len : natural)
++		RETURN natural;
++	FUNCTION return_accounting_invalid(
++		credits   : natural;
++		phase     : natural;
++		issued    : boolean;
++		returned  : boolean;
++		burst_len : natural;
++		maximum   : natural)
 +		RETURN boolean;
 +	FUNCTION read_obligation_issue(
 +		read_state    : boolean;
 +		return_drain  : std_logic;
 +		read_asserted : std_logic)
 +		RETURN boolean;
-+	FUNCTION return_write_phase_next(
-+		phase        : natural;
-+		returned     : std_logic;
-+		return_drain : std_logic;
-+		ring_size    : natural)
-+		RETURN natural;
-+	FUNCTION return_block_complete(
-+		phase        : natural;
-+		returned     : std_logic;
-+		return_drain : std_logic;
-+		burst_len    : natural)
-+		RETURN boolean;
 +	FUNCTION return_drain_ready(
-+		outstanding : natural;
-+		aligned     : std_logic)
++		credits : natural;
++		phase   : natural)
 +		RETURN boolean;
 +END PACKAGE mister_magik_scaler_completion_queue;
 +
@@ -92,40 +92,72 @@ index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..b1c2581d8665d3db4f4042ed668ee711
 +			completion_pending='1' AND completion='1';
 +	END FUNCTION completion_queue_overflow;
 +
-+	FUNCTION outstanding_returns_next(
-+		outstanding : natural;
-+		issued      : boolean;
-+		returned    : boolean;
-+		burst_len   : natural)
++	FUNCTION return_credits_next(
++		credits   : natural;
++		phase     : natural;
++		issued    : boolean;
++		returned  : boolean;
++		burst_len : natural)
++		RETURN natural IS
++		VARIABLE credits_v : natural;
++	BEGIN
++		credits_v:=credits;
++		IF returned AND phase=burst_len-1 AND credits_v>0 THEN
++			credits_v:=credits_v-1;
++		END IF;
++		IF issued THEN
++			credits_v:=credits_v+1;
++		END IF;
++		RETURN credits_v;
++	END FUNCTION return_credits_next;
++
++	FUNCTION return_phase_next(
++		phase     : natural;
++		returned  : boolean;
++		burst_len : natural)
 +		RETURN natural IS
 +	BEGIN
-+		IF issued AND returned THEN
-+			RETURN outstanding+burst_len-1;
-+		ELSIF issued THEN
-+			RETURN outstanding+burst_len;
-+		ELSIF returned AND outstanding>0 THEN
-+			RETURN outstanding-1;
++		IF returned THEN
++			RETURN (phase+1) MOD burst_len;
 +		END IF;
-+		RETURN outstanding;
-+	END FUNCTION outstanding_returns_next;
++		RETURN phase;
++	END FUNCTION return_phase_next;
 +
-+	FUNCTION outstanding_returns_invalid(
-+		outstanding : natural;
-+		issued      : boolean;
-+		returned    : boolean;
-+		burst_len   : natural;
-+		maximum     : natural)
-+		RETURN boolean IS
++	FUNCTION return_words_remaining(
++		credits   : natural;
++		phase     : natural;
++		burst_len : natural)
++		RETURN natural IS
 +	BEGIN
-+		IF returned AND NOT issued AND outstanding=0 THEN
++		IF credits=0 THEN
++			RETURN 0;
++		END IF;
++		RETURN credits*burst_len-phase;
++	END FUNCTION return_words_remaining;
++
++	FUNCTION return_accounting_invalid(
++		credits   : natural;
++		phase     : natural;
++		issued    : boolean;
++		returned  : boolean;
++		burst_len : natural;
++		maximum   : natural)
++		RETURN boolean IS
++		VARIABLE remaining_v : natural;
++	BEGIN
++		IF burst_len=0 OR phase>=burst_len OR (credits=0 AND phase/=0) THEN
++			RETURN true;
++		END IF;
++		remaining_v:=return_words_remaining(credits,phase,burst_len);
++		IF returned AND NOT issued AND remaining_v=0 THEN
 +			RETURN true;
 +		ELSIF issued AND returned THEN
-+			RETURN outstanding+burst_len-1>maximum;
++			RETURN remaining_v+burst_len-1>maximum;
 +		ELSIF issued THEN
-+			RETURN outstanding+burst_len>maximum;
++			RETURN remaining_v+burst_len>maximum;
 +		END IF;
 +		RETURN false;
-+	END FUNCTION outstanding_returns_invalid;
++	END FUNCTION return_accounting_invalid;
 +
 +	FUNCTION read_obligation_issue(
 +		read_state    : boolean;
@@ -136,36 +168,12 @@ index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..b1c2581d8665d3db4f4042ed668ee711
 +		RETURN read_state AND return_drain='0' AND read_asserted='0';
 +	END FUNCTION read_obligation_issue;
 +
-+	FUNCTION return_write_phase_next(
-+		phase        : natural;
-+		returned     : std_logic;
-+		return_drain : std_logic;
-+		ring_size    : natural)
-+		RETURN natural IS
-+	BEGIN
-+		IF returned='1' AND return_drain='0' THEN
-+			RETURN (phase+1) MOD ring_size;
-+		END IF;
-+		RETURN phase;
-+	END FUNCTION return_write_phase_next;
-+
-+	FUNCTION return_block_complete(
-+		phase        : natural;
-+		returned     : std_logic;
-+		return_drain : std_logic;
-+		burst_len    : natural)
-+		RETURN boolean IS
-+	BEGIN
-+		RETURN returned='1' AND return_drain='0' AND
-+			(phase MOD burst_len)=burst_len-2;
-+	END FUNCTION return_block_complete;
-+
 +	FUNCTION return_drain_ready(
-+		outstanding : natural;
-+		aligned     : std_logic)
++		credits : natural;
++		phase   : natural)
 +		RETURN boolean IS
 +	BEGIN
-+		RETURN outstanding=0 AND aligned='1';
++		RETURN credits=0 AND phase=0;
 +	END FUNCTION return_drain_ready;
 +END PACKAGE BODY mister_magik_scaler_completion_queue;
 +
@@ -194,8 +202,8 @@ index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..b1c2581d8665d3db4f4042ed668ee711
 +	SIGNAL avl_readdataack,avl_completion_pending : std_logic;
 +	SIGNAL avl_completion_ack_meta,avl_completion_ack_sync : std_logic;
 +	SIGNAL avl_return_drain : std_logic:='1';
-+	SIGNAL avl_return_aligned : std_logic:='0';
-+	SIGNAL avl_outstanding_returns : natural RANGE 0 TO 2*BLEN:=0;
++	SIGNAL avl_return_credits : natural RANGE 0 TO 2:=0;
++	SIGNAL avl_return_phase : natural RANGE 0 TO BLEN-1:=0;
 +	SIGNAL avl_readack : std_logic;
 +	ATTRIBUTE preserve OF avl_readdataack : SIGNAL IS true;
 +	ATTRIBUTE altera_attribute OF avl_completion_ack_meta : SIGNAL IS
@@ -220,7 +228,8 @@ index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..b1c2581d8665d3db4f4042ed668ee711
  	o_reset_na<='0'   WHEN reset_na='0' ELSE '1' WHEN rising_edge(o_clk);
  	avl_reset_na<='0' WHEN reset_na='0' ELSE '1' WHEN rising_edge(avl_clk);
  
-+	-- This counter deliberately has no core-reset branch. The HPS f2sdram port
++	-- These radix-BLEN accounting fields deliberately have no core-reset branch.
++	-- Together they encode remaining words as credits*BLEN-phase. The HPS port
 +	-- does not tag or cancel an accepted read when reset_req is asserted, so
 +	-- pre-reset returns must remain accounted until every beat has drained. A
 +	-- read is charged exactly once when ascal first asserts avl_read_i, before
@@ -234,12 +243,16 @@ index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..b1c2581d8665d3db4f4042ed668ee711
 +				avl_state=sREAD,avl_return_drain,avl_read_i);
 +			returned_v:=avl_readdatavalid='1';
 +			-- synthesis translate_off
-+			ASSERT NOT outstanding_returns_invalid(
-+				avl_outstanding_returns,issued_v,returned_v,BLEN,2*BLEN)
++			ASSERT NOT return_accounting_invalid(
++				avl_return_credits,avl_return_phase,
++				issued_v,returned_v,BLEN,2*BLEN)
 +				REPORT "scaler Avalon return accounting violated" SEVERITY failure;
 +			-- synthesis translate_on
-+			avl_outstanding_returns<=outstanding_returns_next(
-+				avl_outstanding_returns,issued_v,returned_v,BLEN);
++			avl_return_credits<=return_credits_next(
++				avl_return_credits,avl_return_phase,
++				issued_v,returned_v,BLEN);
++			avl_return_phase<=return_phase_next(
++				avl_return_phase,returned_v,BLEN);
 +		END IF;
 +	END PROCESS AvalonReturnAccounting;
 +
@@ -262,15 +275,10 @@ index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..b1c2581d8665d3db4f4042ed668ee711
 +			avl_completion_ack_meta<='0';
 +			avl_completion_ack_sync<='0';
 +			avl_return_drain<='1';
-+			avl_return_aligned<='0';
  			avl_readack<='0';
  
  		ELSIF rising_edge(avl_clk) THEN
 +			completion_v:='0';
-+			IF return_drain_ready(
-+				avl_outstanding_returns,avl_return_aligned) THEN
-+				avl_return_drain<='0';
-+			END IF;
 +			avl_completion_ack_meta<=o_readdataack_sync2; -- <ASYNC>
 +			avl_completion_ack_sync<=avl_completion_ack_meta;
  			----------------------------------
@@ -304,17 +312,18 @@ index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..b1c2581d8665d3db4f4042ed668ee711
 -				avl_wad<=(avl_wad+1) MOD (2*BLEN);
 -				IF (avl_wad MOD BLEN)=BLEN-2 THEN
 -					avl_readdataack<=NOT avl_readdataack;
-+				avl_wad<=return_write_phase_next(
-+					avl_wad,avl_readdatavalid,avl_return_drain,2*BLEN);
-+				IF return_block_complete(
-+					avl_wad,avl_readdatavalid,avl_return_drain,BLEN) THEN
++				avl_wad<=(avl_wad+1) MOD (2*BLEN);
++				IF (avl_wad MOD BLEN)=BLEN-2 THEN
 +					completion_v:='1';
  				END IF;
  			END IF;
  
  			IF avl_o_vs_sync='0' AND avl_o_vs='1' THEN
  				avl_wad<=2*BLEN-1;
-+				avl_return_aligned<='1';
++				IF return_drain_ready(
++					avl_return_credits,avl_return_phase) THEN
++					avl_return_drain<='0';
++				END IF;
  			END IF;
  
 +			completion_state_v:=completion_queue_next(
