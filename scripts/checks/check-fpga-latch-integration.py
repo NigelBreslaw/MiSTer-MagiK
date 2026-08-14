@@ -316,6 +316,8 @@ def main() -> None:
 
         patched = (work / "sys/sys_top.v").read_text()
         patched_ascal = (work / "sys/ascal.vhd").read_text()
+        patched_sysmem = (work / "sys/sysmem.sv").read_text()
+        patched_terminator = (work / "sys/f2sdram_safe_terminator.sv").read_text()
         patched_pll = (work / "sys/pll_hdmi.v").read_text()
         required_counts = {
             BRIDGE_MAPPING: 1,
@@ -350,17 +352,30 @@ def main() -> None:
             "USE work.mister_magik_scaler_completion_queue.ALL;": 1,
             "FUNCTION completion_queue_next(": 2,
             "FUNCTION completion_queue_overflow(": 2,
+            "FUNCTION outstanding_returns_next(": 2,
+            "FUNCTION outstanding_returns_invalid(": 2,
             "state_v:=request_toggle & completion_pending;": 1,
             "state_v(0):=completion;": 1,
             "RETURN request_toggle/=completion_ack AND": 1,
             "SIGNAL avl_readdataack,avl_completion_pending : std_logic;": 1,
             "SIGNAL avl_completion_ack_meta,avl_completion_ack_sync : std_logic;": 1,
+            "SIGNAL avl_return_drain : std_logic:='1';": 1,
+            "SIGNAL avl_outstanding_returns : natural RANGE 0 TO 2*BLEN:=0;": 1,
             "ATTRIBUTE preserve OF avl_readdataack : SIGNAL IS true;": 1,
             "SIGNAL o_readdataack,o_readdataack_sync,o_readdataack_sync2 : std_logic;": 1,
             "SYNCHRONIZER_IDENTIFICATION FORCED\";": 2,
             "SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS\";": 2,
             "avl_completion_ack_meta<=o_readdataack_sync2; -- <ASYNC>": 1,
             "avl_completion_ack_sync<=avl_completion_ack_meta;": 1,
+            "AvalonReturnAccounting:PROCESS(avl_clk) IS": 1,
+            "accepted_v:=avl_read_i='1' AND avl_waitrequest='0';": 1,
+            "returned_v:=avl_readdatavalid='1';": 1,
+            "ASSERT NOT outstanding_returns_invalid(": 1,
+            "avl_outstanding_returns<=outstanding_returns_next(": 1,
+            "avl_return_drain<='1';": 1,
+            "IF avl_outstanding_returns=0 THEN": 1,
+            "IF avl_return_drain='0' THEN": 1,
+            "IF avl_readdatavalid='1' AND avl_return_drain='0' THEN": 1,
             "completion_v:='1';": 1,
             "completion_state_v:=completion_queue_next(": 1,
             "avl_readdataack<=completion_state_v(1);": 1,
@@ -401,6 +416,21 @@ def main() -> None:
         ):
             if patched_ascal.count(reset_fragment) != 1:
                 fail(f"completion transport reset is missing or ambiguous: {reset_fragment}")
+        for topology_fragment, topology_source in (
+            (".reset_core_req(reset_req)", patched),
+            (".reset_na   (~reset_req)", patched),
+            (".avl_readdatavalid(vbuf_readdatavalid)", patched),
+            ("assign reset_out = ~init_reset_n | ~hps_h2f_reset_n | reset_core_req;", patched_sysmem),
+            ("vbuf_reset_0 <= reset_out;", patched_sysmem),
+            ("vbuf_reset_1 <= vbuf_reset_0;", patched_sysmem),
+            (".readdatavalid_slave      (vbuf_readdatavalid)", patched_sysmem),
+            ("assign readdatavalid_slave = readdatavalid_master;", patched_terminator),
+        ):
+            if topology_source.count(topology_fragment) != 1:
+                fail(
+                    "exact reset/return topology changed or is ambiguous: "
+                    f"{topology_fragment}"
+                )
         if not re.search(r"\.locked\s*\(\s*\)", patched_pll):
             fail("HDMI PLL wrapper no longer terminates its redundant lock output")
         if "locked.export" in patched_pll or ".locked(hdmi_pll_locked)" in patched:

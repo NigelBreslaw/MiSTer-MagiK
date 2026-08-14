@@ -79,6 +79,10 @@ BEGIN
 	Stimulus:PROCESS IS
 		VARIABLE state_v : std_logic_vector(1 DOWNTO 0);
 		VARIABLE request_v,pending_v,ack_v,event_v : std_logic;
+		VARIABLE outstanding_v,next_outstanding_v : natural;
+		VARIABLE accepted_v,returned_v : boolean;
+		VARIABLE drain_v : boolean;
+		VARIABLE visible_returns_v : natural;
 		PROCEDURE produce IS
 		BEGIN
 			WAIT UNTIL falling_edge(source_clk);
@@ -120,6 +124,65 @@ BEGIN
 				END LOOP;
 			END LOOP;
 		END LOOP;
+
+		-- Exhaust every legal state of the exact production return-accounting
+		-- function. Invalid underflow/overflow combinations must be rejected.
+		FOR outstanding_i IN 0 TO 256 LOOP
+			FOR accepted_i IN 0 TO 1 LOOP
+				FOR returned_i IN 0 TO 1 LOOP
+					accepted_v:=accepted_i=1;
+					returned_v:=returned_i=1;
+					IF NOT outstanding_returns_invalid(
+						outstanding_i,accepted_v,returned_v,128,256) THEN
+						next_outstanding_v:=outstanding_returns_next(
+							outstanding_i,accepted_v,returned_v,128);
+						ASSERT next_outstanding_v<=256
+							REPORT "return accounting exceeded capacity" SEVERITY failure;
+						IF accepted_v AND returned_v THEN
+							ASSERT next_outstanding_v=outstanding_i+127
+								REPORT "simultaneous accept/return mismatch" SEVERITY failure;
+						ELSIF accepted_v THEN
+							ASSERT next_outstanding_v=outstanding_i+128
+								REPORT "accepted burst accounting mismatch" SEVERITY failure;
+						ELSIF returned_v THEN
+							ASSERT next_outstanding_v=outstanding_i-1
+								REPORT "returned beat accounting mismatch" SEVERITY failure;
+						ELSE
+							ASSERT next_outstanding_v=outstanding_i
+								REPORT "idle return accounting mismatch" SEVERITY failure;
+						END IF;
+					END IF;
+				END LOOP;
+			END LOOP;
+		END LOOP;
+
+		-- Counterexample to the old reset assumption: half of an accepted burst
+		-- may arrive during reset and half after release. The retained counter
+		-- keeps the post-reset drain barrier closed until all 128 beats retire.
+		outstanding_v:=outstanding_returns_next(0,true,false,128);
+		drain_v:=true;
+		visible_returns_v:=0;
+		FOR beat IN 0 TO 63 LOOP
+			outstanding_v:=outstanding_returns_next(
+				outstanding_v,false,true,128);
+			IF NOT drain_v THEN
+				visible_returns_v:=visible_returns_v+1;
+			END IF;
+		END LOOP;
+		ASSERT outstanding_v=64 AND visible_returns_v=0
+			REPORT "reset-time stale returns were not retained for drain" SEVERITY failure;
+		FOR beat IN 0 TO 63 LOOP
+			outstanding_v:=outstanding_returns_next(
+				outstanding_v,false,true,128);
+			IF NOT drain_v THEN
+				visible_returns_v:=visible_returns_v+1;
+			END IF;
+		END LOOP;
+		ASSERT outstanding_v=0 AND visible_returns_v=0
+			REPORT "post-reset stale returns escaped the drain barrier" SEVERITY failure;
+		drain_v:=false;
+		ASSERT outstanding_returns_next(outstanding_v,true,false,128)=128
+			REPORT "new epoch did not start from empty return accounting" SEVERITY failure;
 
 		WAIT FOR 30 ns;
 		reset_n<='1';

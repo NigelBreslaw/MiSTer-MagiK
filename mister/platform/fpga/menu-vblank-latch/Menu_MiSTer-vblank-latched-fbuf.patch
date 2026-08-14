@@ -1,8 +1,8 @@
 diff --git a/sys/ascal.vhd b/sys/ascal.vhd
-index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..82ec67f79eaf58b30946909fe43d359e7a79fdd9 100644
+index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..395af883d595fe741aa67c4bb07b195435d32911 100644
 --- a/sys/ascal.vhd
 +++ b/sys/ascal.vhd
-@@ -75,6 +75,64 @@ LIBRARY ieee;
+@@ -75,6 +75,112 @@ LIBRARY ieee;
  USE ieee.std_logic_1164.ALL;
  USE ieee.numeric_std.ALL;
  
@@ -18,6 +18,19 @@ index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..82ec67f79eaf58b30946909fe43d359e
 +		completion_pending : std_logic;
 +		completion_ack     : std_logic;
 +		completion         : std_logic)
++		RETURN boolean;
++	FUNCTION outstanding_returns_next(
++		outstanding : natural;
++		accepted    : boolean;
++		returned    : boolean;
++		burst_len   : natural)
++		RETURN natural;
++	FUNCTION outstanding_returns_invalid(
++		outstanding : natural;
++		accepted    : boolean;
++		returned    : boolean;
++		burst_len   : natural;
++		maximum     : natural)
 +		RETURN boolean;
 +END PACKAGE mister_magik_scaler_completion_queue;
 +
@@ -57,6 +70,41 @@ index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..82ec67f79eaf58b30946909fe43d359e
 +		RETURN request_toggle/=completion_ack AND
 +			completion_pending='1' AND completion='1';
 +	END FUNCTION completion_queue_overflow;
++
++	FUNCTION outstanding_returns_next(
++		outstanding : natural;
++		accepted    : boolean;
++		returned    : boolean;
++		burst_len   : natural)
++		RETURN natural IS
++	BEGIN
++		IF accepted AND returned THEN
++			RETURN outstanding+burst_len-1;
++		ELSIF accepted THEN
++			RETURN outstanding+burst_len;
++		ELSIF returned AND outstanding>0 THEN
++			RETURN outstanding-1;
++		END IF;
++		RETURN outstanding;
++	END FUNCTION outstanding_returns_next;
++
++	FUNCTION outstanding_returns_invalid(
++		outstanding : natural;
++		accepted    : boolean;
++		returned    : boolean;
++		burst_len   : natural;
++		maximum     : natural)
++		RETURN boolean IS
++	BEGIN
++		IF returned AND NOT accepted AND outstanding=0 THEN
++			RETURN true;
++		ELSIF accepted AND returned THEN
++			RETURN outstanding+burst_len-1>maximum;
++		ELSIF accepted THEN
++			RETURN outstanding+burst_len>maximum;
++		END IF;
++		RETURN false;
++	END FUNCTION outstanding_returns_invalid;
 +END PACKAGE BODY mister_magik_scaler_completion_queue;
 +
 +LIBRARY ieee;
@@ -67,7 +115,7 @@ index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..82ec67f79eaf58b30946909fe43d359e
  -- MODE[2:0]
  -- 000 : Nearest
  -- 001 : Bilinear
-@@ -335,6 +393,8 @@ ARCHITECTURE rtl OF ascal IS
+@@ -335,6 +441,8 @@ ARCHITECTURE rtl OF ascal IS
  	TYPE arr_pix IS ARRAY (natural RANGE <>) OF type_pix;
  	TYPE arr_pixq IS ARRAY(natural RANGE <>) OF arr_pix(0 TO 3);
  	ATTRIBUTE ramstyle : string;
@@ -76,13 +124,15 @@ index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..82ec67f79eaf58b30946909fe43d359e
  
  	SUBTYPE uint12 IS natural RANGE 0 TO 4095;
  	SUBTYPE uint13 IS natural RANGE 0 TO 8191;
-@@ -418,7 +478,14 @@ ARCHITECTURE rtl OF ascal IS
+@@ -418,7 +526,16 @@ ARCHITECTURE rtl OF ascal IS
  	SIGNAL avl_walt,avl_wline,avl_rline : std_logic;
  	SIGNAL avl_dw,avl_dr : unsigned(N_DW-1 DOWNTO 0);
  	SIGNAL avl_wr : std_logic;
 -	SIGNAL avl_readdataack,avl_readack : std_logic;
 +	SIGNAL avl_readdataack,avl_completion_pending : std_logic;
 +	SIGNAL avl_completion_ack_meta,avl_completion_ack_sync : std_logic;
++	SIGNAL avl_return_drain : std_logic:='1';
++	SIGNAL avl_outstanding_returns : natural RANGE 0 TO 2*BLEN:=0;
 +	SIGNAL avl_readack : std_logic;
 +	ATTRIBUTE preserve OF avl_readdataack : SIGNAL IS true;
 +	ATTRIBUTE altera_attribute OF avl_completion_ack_meta : SIGNAL IS
@@ -92,7 +142,7 @@ index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..82ec67f79eaf58b30946909fe43d359e
  	SIGNAL avl_radrs,avl_wadrs : unsigned(31 DOWNTO 0);
  	SIGNAL avl_i_offset0,avl_o_offset0 : unsigned(31 DOWNTO 0);
  	SIGNAL avl_i_offset1,avl_o_offset1 : unsigned(31 DOWNTO 0);
-@@ -481,6 +548,10 @@ ARCHITECTURE rtl OF ascal IS
+@@ -481,6 +598,10 @@ ARCHITECTURE rtl OF ascal IS
  	SIGNAL o_pshift : natural RANGE 0 TO 15;
  	SIGNAL o_readack,o_readack_sync,o_readack_sync2 : std_logic;
  	SIGNAL o_readdataack,o_readdataack_sync,o_readdataack_sync2 : std_logic;
@@ -103,7 +153,33 @@ index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..82ec67f79eaf58b30946909fe43d359e
  	SIGNAL o_copyv : unsigned(0 TO 14);
  	SIGNAL o_adrs : unsigned(31 DOWNTO 0); -- Avalon address
  	SIGNAL o_adrs_pre : natural RANGE 0 TO 2**24-1;
-@@ -1672,15 +1743,23 @@ BEGIN
+@@ -1160,6 +1281,25 @@ BEGIN
+ 	o_reset_na<='0'   WHEN reset_na='0' ELSE '1' WHEN rising_edge(o_clk);
+ 	avl_reset_na<='0' WHEN reset_na='0' ELSE '1' WHEN rising_edge(avl_clk);
+ 
++	-- This counter deliberately has no core-reset branch. The HPS f2sdram port
++	-- does not tag or cancel an accepted read when reset_req is asserted, so
++	-- pre-reset returns must remain accounted until every beat has drained.
++	AvalonReturnAccounting:PROCESS(avl_clk) IS
++		VARIABLE accepted_v,returned_v : boolean;
++	BEGIN
++		IF rising_edge(avl_clk) THEN
++			accepted_v:=avl_read_i='1' AND avl_waitrequest='0';
++			returned_v:=avl_readdatavalid='1';
++			-- synthesis translate_off
++			ASSERT NOT outstanding_returns_invalid(
++				avl_outstanding_returns,accepted_v,returned_v,BLEN,2*BLEN)
++				REPORT "scaler Avalon return accounting violated" SEVERITY failure;
++			-- synthesis translate_on
++			avl_outstanding_returns<=outstanding_returns_next(
++				avl_outstanding_returns,accepted_v,returned_v,BLEN);
++		END IF;
++	END PROCESS AvalonReturnAccounting;
++
+ 	-----------------------------------------------------------------------------
+ 	-- Input pixels FIFO and shreg
+ 	InAT:PROCESS(i_clk,i_reset_na) IS
+@@ -1672,15 +1812,27 @@ BEGIN
  	-- AVALON interface
  	Avaloir:PROCESS(avl_clk,avl_reset_na) IS
  		VARIABLE adr_v : unsigned(31 DOWNTO 0);
@@ -118,16 +194,43 @@ index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..82ec67f79eaf58b30946909fe43d359e
 +			avl_completion_pending<='0';
 +			avl_completion_ack_meta<='0';
 +			avl_completion_ack_sync<='0';
++			avl_return_drain<='1';
  			avl_readack<='0';
  
  		ELSIF rising_edge(avl_clk) THEN
 +			completion_v:='0';
++			IF avl_outstanding_returns=0 THEN
++				avl_return_drain<='0';
++			END IF;
 +			avl_completion_ack_meta<=o_readdataack_sync2; -- <ASYNC>
 +			avl_completion_ack_sync<=avl_completion_ack_meta;
  			----------------------------------
  			avl_write_sync<=i_write; -- <ASYNC>
  			avl_write_sync2<=avl_write_sync;
-@@ -1789,7 +1868,7 @@ BEGIN
+@@ -1774,22 +1926,24 @@ BEGIN
+ 					END IF;
+ 					avl_address<=std_logic_vector(adr_v(N_AW+NB_LA-1 DOWNTO NB_LA));
+ 
+-					avl_read_i<='1';
+-					IF avl_read_i='1' AND avl_waitrequest='0' THEN
+-						avl_state<=sIDLE;
+-						avl_read_i<='0';
+-						avl_readack<=NOT avl_readack;
++					IF avl_return_drain='0' THEN
++						avl_read_i<='1';
++						IF avl_read_i='1' AND avl_waitrequest='0' THEN
++							avl_state<=sIDLE;
++							avl_read_i<='0';
++							avl_readack<=NOT avl_readack;
++						END IF;
+ 					END IF;
+ 			END CASE;
+ 
+ 			--------------------------------------------
+ 			-- Pipelined data read
+ 			avl_wr<='0';
+-			IF avl_readdatavalid='1' THEN
++			IF avl_readdatavalid='1' AND avl_return_drain='0' THEN
  				avl_wr<='1';
  				avl_wad<=(avl_wad+1) MOD (2*BLEN);
  				IF (avl_wad MOD BLEN)=BLEN-2 THEN
@@ -136,7 +239,7 @@ index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..82ec67f79eaf58b30946909fe43d359e
  				END IF;
  			END IF;
  
-@@ -1797,6 +1876,22 @@ BEGIN
+@@ -1797,6 +1951,22 @@ BEGIN
  				avl_wad<=2*BLEN-1;
  			END IF;
  
@@ -159,7 +262,7 @@ index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..82ec67f79eaf58b30946909fe43d359e
  			--------------------------------------------
  		END IF;
  	END PROCESS Avaloir;
-@@ -1877,6 +1972,9 @@ BEGIN
+@@ -1877,6 +2047,9 @@ BEGIN
  			o_readlev<=0;
  			o_copylev<=0;
  			o_hsp<='0';
