@@ -513,6 +513,7 @@ def main() -> None:
                     str(work / "sys/ascal.vhd"),
                     str(completion_queue_tb),
                 ],
+                cwd=ghdl_work,
                 check=True,
             )
             subprocess.run(
@@ -523,6 +524,7 @@ def main() -> None:
                     f"--workdir={ghdl_work}",
                     "tb_mister_magik_scaler_completion_queue",
                 ],
+                cwd=ghdl_work,
                 check=True,
             )
             subprocess.run(
@@ -534,6 +536,7 @@ def main() -> None:
                     "tb_mister_magik_scaler_completion_queue",
                     "--assert-level=error",
                 ],
+                cwd=ghdl_work,
                 check=True,
             )
             simulation = Path(temporary) / "sys-top-integration.vvp"
