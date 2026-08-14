@@ -3,6 +3,7 @@
 
 use super::super::*;
 use crate::ui_runner::launcher_pacing::LauncherPacingTrace;
+use crate::ui_runner::launcher_readiness::{PostedSourceFrameEvidence, SourceFrameEvidence};
 use mister_magik_fb::framebuffer::vsync::VsyncPace;
 use mister_magik_fb::latch_readiness::{LatchFailure, LatchFailureReason, LatchFailureStage};
 
@@ -79,6 +80,7 @@ pub(in crate::ui_runner) struct LauncherPresentFrame {
     pub(in crate::ui_runner) stream_motion_active: bool,
     pub(in crate::ui_runner) direct_hidden_mode: bool,
     pub(in crate::ui_runner) completed_hidden_frame: Option<CompletedHiddenFrame>,
+    pub(in crate::ui_runner) capture_readiness_source: bool,
     pub(in crate::ui_runner) profile_latch_phases: bool,
 }
 
@@ -187,6 +189,7 @@ impl LauncherPresenter<FpgaVblankLatchHiddenPresenter> {
             stream_motion_active: frame.stream_motion_active,
             direct_hidden_mode: frame.direct_hidden_mode,
             completed_hidden_frame: frame.completed_hidden_frame,
+            capture_readiness_source: frame.capture_readiness_source,
             profile_latch_phases: frame.profile_latch_phases,
         };
         if !frame.startup_can_present {
@@ -516,6 +519,7 @@ struct LivePresentationAdapters<'a, 'target> {
     stream_motion_active: bool,
     direct_hidden_mode: bool,
     completed_hidden_frame: Option<CompletedHiddenFrame>,
+    capture_readiness_source: bool,
     profile_latch_phases: bool,
 }
 
@@ -607,6 +611,7 @@ impl PresentationAdapters<FpgaVblankLatchHiddenPresenter> for LivePresentationAd
                     ),
                 });
             };
+            let source_evidence = completed.source_evidence.clone();
             let stats = latch.present_completed_hidden_frame(
                 completed,
                 hardware,
@@ -620,8 +625,16 @@ impl PresentationAdapters<FpgaVblankLatchHiddenPresenter> for LivePresentationAd
                 let _ =
                     mister_magik_fb::framebuffer::stream::publish_latch_snapshot(frame_view, scale);
             }
-            let presentation =
-                latch_present_result(stats, 0, 0, 0, PresentCopyStats::default(), None, None);
+            let presentation = latch_present_result(
+                stats,
+                source_evidence,
+                0,
+                0,
+                0,
+                PresentCopyStats::default(),
+                None,
+                None,
+            );
             return Ok(LauncherPresentCycle {
                 presentation,
                 frame_t3,
@@ -683,8 +696,21 @@ impl PresentationAdapters<FpgaVblankLatchHiddenPresenter> for LivePresentationAd
             let frame_view = latch.committed_frame_view(stats.buffer_index);
             let _ = mister_magik_fb::framebuffer::stream::publish_latch_snapshot(frame_view, scale);
         }
+        let source_evidence = self
+            .capture_readiness_source
+            .then(|| {
+                let frame = latch.committed_frame_view(stats.buffer_index);
+                SourceFrameEvidence::from_rgb565_rows(
+                    frame.pixels,
+                    frame.width,
+                    frame.height,
+                    frame.stride_pixels,
+                )
+            })
+            .flatten();
         let presentation = latch_present_result(
             stats,
+            source_evidence,
             hidden_preview_compose_us,
             hidden_arcade_compose_us,
             direct_preview_rows,
@@ -741,6 +767,7 @@ impl PresentationAdapters<FpgaVblankLatchHiddenPresenter> for LivePresentationAd
 
 fn fb0_present_result(stats: Fb0DirtyPresentStats) -> LauncherPresentResult {
     LauncherPresentResult {
+        readiness_source_evidence: None,
         copied_rows: stats.copied_rows,
         direct_preview_rows: stats.direct_preview_rows,
         present_bytes: stats.present_bytes,
@@ -789,6 +816,7 @@ fn frozen_present_result() -> LauncherPresentResult {
 
 fn latch_present_result(
     stats: FpgaVblankLatchHiddenPresentStats,
+    source_evidence: Option<SourceFrameEvidence>,
     hidden_preview_compose_us: u128,
     hidden_arcade_compose_us: u128,
     direct_preview_rows: u32,
@@ -809,6 +837,9 @@ fn latch_present_result(
         })
         .unwrap_or(0);
     LauncherPresentResult {
+        readiness_source_evidence: source_evidence.map(|source| {
+            PostedSourceFrameEvidence::new(stats.posted_sequence, stats.buffer_index, source)
+        }),
         copied_rows: stats.copied_rows + direct_preview_rows + arcade_stats.rows,
         direct_preview_rows,
         present_bytes: stats.copied_bytes + preview_present_bytes + arcade_stats.bytes,
@@ -851,6 +882,7 @@ fn latch_present_result(
 
 fn empty_present_result() -> LauncherPresentResult {
     LauncherPresentResult {
+        readiness_source_evidence: None,
         copied_rows: 0,
         direct_preview_rows: 0,
         present_bytes: 0,

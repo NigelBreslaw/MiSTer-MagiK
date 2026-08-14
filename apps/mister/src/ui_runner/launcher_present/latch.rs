@@ -16,6 +16,7 @@
 //! `diagnostics/latch/latest.json` under the active MagiK installation.
 
 use super::super::*;
+use crate::ui_runner::launcher_readiness::SourceFrameEvidence;
 use mister_magik_fb::framebuffer::downsample::Rgb565FrameView;
 use mister_magik_fb::framebuffer::full_frame_latch::{
     LatchCompletion, LatchCopyResult, LatchPostRequest, LogicalStatusReadBudget,
@@ -43,9 +44,10 @@ pub(crate) struct HiddenSlotRenderGrant {
     pub(crate) stride_pixels: usize,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct CompletedHiddenFrame {
     pub(crate) grant: HiddenSlotRenderGrant,
+    pub(crate) source_evidence: Option<SourceFrameEvidence>,
 }
 
 pub(in crate::ui_runner) struct PluginLatchFrameBuffers {
@@ -321,7 +323,10 @@ impl FpgaVblankLatchHiddenPresenter<PluginLatchFrameBuffers> {
             return Ok(None);
         }
         buffer.publish_writes();
-        Ok(Some(CompletedHiddenFrame { grant }))
+        Ok(Some(CompletedHiddenFrame {
+            grant,
+            source_evidence: None,
+        }))
     }
 
     pub(in crate::ui_runner) fn restore_direct_frame_buffers(
@@ -1649,7 +1654,10 @@ mod tests {
 
         let stats = presenter
             .present_completed_hidden_frame(
-                CompletedHiddenFrame { grant },
+                CompletedHiddenFrame {
+                    grant,
+                    source_evidence: None,
+                },
                 &mut hardware,
                 &mut display,
                 false,
@@ -1664,7 +1672,10 @@ mod tests {
         assert!(
             presenter
                 .present_completed_hidden_frame(
-                    CompletedHiddenFrame { grant },
+                    CompletedHiddenFrame {
+                        grant,
+                        source_evidence: None,
+                    },
                     &mut hardware,
                     &mut display,
                     false,
@@ -1731,7 +1742,10 @@ mod tests {
 
             let failure = presenter
                 .present_completed_hidden_frame(
-                    CompletedHiddenFrame { grant },
+                    CompletedHiddenFrame {
+                        grant,
+                        source_evidence: None,
+                    },
                     &mut hardware,
                     &mut display,
                     false,
@@ -1759,7 +1773,10 @@ mod tests {
         presenter.invalidate_external_mode();
         let failure = presenter
             .present_completed_hidden_frame(
-                CompletedHiddenFrame { grant },
+                CompletedHiddenFrame {
+                    grant,
+                    source_evidence: None,
+                },
                 &mut hardware,
                 &mut display,
                 false,
@@ -1793,7 +1810,10 @@ mod tests {
 
         let stats = presenter
             .present_completed_hidden_frame(
-                CompletedHiddenFrame { grant },
+                CompletedHiddenFrame {
+                    grant,
+                    source_evidence: None,
+                },
                 &mut hardware,
                 &mut display,
                 false,

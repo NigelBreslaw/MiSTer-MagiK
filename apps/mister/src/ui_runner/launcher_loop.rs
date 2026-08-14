@@ -10241,6 +10241,7 @@ pub(super) fn run_launcher_loop(
                 stream_motion_active,
                 direct_hidden_mode: direct_hidden_present_mode,
                 completed_hidden_frame: completed_hidden_frame_for_present,
+                capture_readiness_source: launcher_readiness.needs_source_evidence(),
                 profile_latch_phases: gui_profiling.active(),
             },
             LauncherPresentTargets {

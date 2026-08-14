@@ -269,7 +269,10 @@ impl StartupIntroSession {
         }
         self.last_render_waiting = waiting_for_launcher;
         buffer.publish_writes();
-        Ok(CompletedHiddenFrame { grant })
+        Ok(CompletedHiddenFrame {
+            grant,
+            source_evidence: None,
+        })
     }
 
     /// Advances only after the latch reports this sequence active at the

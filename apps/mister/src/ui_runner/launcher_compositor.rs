@@ -422,6 +422,8 @@ fn restore_cached_565(target: &mut UiFrameTarget, snapshot: &[Rgb565Pixel]) -> b
 }
 
 pub(super) struct LauncherPresentResult {
+    pub(super) readiness_source_evidence:
+        Option<super::launcher_readiness::PostedSourceFrameEvidence>,
     pub(super) copied_rows: u32,
     pub(super) direct_preview_rows: u32,
     pub(super) present_bytes: usize,

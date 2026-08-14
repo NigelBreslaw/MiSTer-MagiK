@@ -3070,6 +3070,7 @@ mod tests {
                 present_phase_us: frame.present_phase_us,
             },
             presentation: LauncherPresentResult {
+                readiness_source_evidence: None,
                 copied_rows: frame.copied_rows,
                 direct_preview_rows: frame.direct_preview_rows,
                 present_bytes: frame.present_bytes,

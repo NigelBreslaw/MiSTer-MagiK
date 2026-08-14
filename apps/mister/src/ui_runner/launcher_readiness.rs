@@ -63,6 +63,31 @@ impl SourceFrameEvidence {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct PostedSourceFrameEvidence {
+    sequence: u16,
+    slot: u8,
+    source: SourceFrameEvidence,
+}
+
+impl PostedSourceFrameEvidence {
+    pub(super) fn new(sequence: u16, slot: u8, source: SourceFrameEvidence) -> Self {
+        Self {
+            sequence,
+            slot,
+            source,
+        }
+    }
+
+    pub(super) fn matches(&self, post: ConfirmedLatchPost) -> bool {
+        self.sequence == post.sequence && self.slot == post.slot
+    }
+
+    pub(super) fn into_source(self) -> SourceFrameEvidence {
+        self.source
+    }
+}
+
 fn encode_hex(bytes: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
 
@@ -415,6 +440,16 @@ mod tests {
         readiness.observe(post(1, 1, 1), blank.clone(), true);
         readiness.observe(post(2, 2, 2), blank, true);
         assert_eq!(readiness.phase, ReadyPhase::AwaitingFirst);
+    }
+
+    #[test]
+    fn posted_source_evidence_is_bound_to_sequence_and_slot() {
+        let expected = post(7, 9, 1);
+        let source = PostedSourceFrameEvidence::new(7, 1, evidence());
+
+        assert!(source.matches(expected));
+        assert!(!source.matches(post(8, 10, 1)));
+        assert!(!source.matches(post(7, 10, 2)));
     }
 
     #[test]
