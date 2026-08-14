@@ -17,6 +17,18 @@ pub(super) enum LauncherWorkerUiIntent {
     },
 }
 
+impl LauncherWorkerUiIntent {
+    pub(super) fn is_catalog_presentation(&self) -> bool {
+        matches!(
+            self,
+            Self::CatalogScan(_)
+                | Self::ClearCatalogScan
+                | Self::ShowCatalogBackgroundScan
+                | Self::HideCatalogBackgroundScan
+        )
+    }
+}
+
 pub(super) fn apply_launcher_worker_ui_intent(
     app: &slint_ui::launcher::Launcher,
     intent: LauncherWorkerUiIntent,

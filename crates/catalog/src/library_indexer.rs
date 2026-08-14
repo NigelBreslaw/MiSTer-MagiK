@@ -731,9 +731,10 @@ fn scan_library_with_progress_and_events(
                             ignored_files = ignored_files.saturating_add(output.ignored_files);
                             discoveries.extend(output.discoveries);
                             profiles = plan.finalize_profiles(&game_dir_facts);
-                            report_new_discovered_systems(
+                            report_resumed_systems(
                                 &discoveries[first..],
                                 &mut discovered_systems,
+                                &mut scanning_systems,
                                 &mut scan_events,
                             );
                             skip_target = true;
@@ -1206,6 +1207,16 @@ fn report_new_scanning_systems(
     }
 }
 
+fn report_resumed_systems(
+    discoveries: &[GameDiscovery],
+    discovered_systems: &mut BTreeSet<String>,
+    scanning_systems: &mut BTreeSet<String>,
+    scan_events: &mut ScanEventCallback<'_>,
+) {
+    report_new_discovered_systems(discoveries, discovered_systems, scan_events);
+    report_new_scanning_systems(discoveries, scanning_systems, scan_events);
+}
+
 fn is_reportable_catalog_system_id(system_id: &str) -> bool {
     system_id != "unknown"
 }
@@ -1313,6 +1324,31 @@ mod timing_tests {
     fn catalog_progress_reports_valid_systems_but_not_the_unknown_sentinel() {
         assert!(is_reportable_catalog_system_id("gba"));
         assert!(!is_reportable_catalog_system_id("unknown"));
+    }
+
+    #[test]
+    fn resumed_discoveries_republish_scanning_presentation() {
+        let discoveries = vec![crate::test_support::mra_discovery(1, "Robotron")];
+        let mut discovered_systems = BTreeSet::new();
+        let mut scanning_systems = BTreeSet::new();
+        let mut events = Vec::new();
+        let mut report = |event| events.push(event);
+        let mut scan_events: ScanEventCallback<'_> = Some(&mut report);
+
+        report_resumed_systems(
+            &discoveries,
+            &mut discovered_systems,
+            &mut scanning_systems,
+            &mut scan_events,
+        );
+
+        assert!(matches!(
+            events.as_slice(),
+            [
+                LibraryScanEvent::SystemDiscovered { system_id: discovered },
+                LibraryScanEvent::SystemScanning { system_id: scanning },
+            ] if discovered == "arcade" && scanning == "arcade"
+        ));
     }
 
     #[test]

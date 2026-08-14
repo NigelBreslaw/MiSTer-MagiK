@@ -13,7 +13,9 @@ use super::launcher_pacing::{
     LauncherPhaseAlignment,
 };
 use super::launcher_screensaver::ScreensaverRenderTrace;
-use super::launcher_worker_intents::{apply_launcher_worker_ui_intent, catalog_scan_message};
+use super::launcher_worker_intents::{
+    LauncherWorkerUiIntent, apply_launcher_worker_ui_intent, catalog_scan_message,
+};
 #[cfg(test)]
 use super::launcher_worker_intents::{
     catalog_background_scan_progress_visible, catalog_scan_progress_visible,
@@ -5694,6 +5696,8 @@ pub(super) fn run_launcher_loop(
     // exactly one off-screen launcher frame for the live morph target.
     let mut startup_intro_launcher_frame_ready = false;
     let mut startup_intro_bridge_dirty_pending = false;
+    let mut startup_intro_catalog_ui_replay = None;
+    let mut startup_intro_catalog_shells_pending = false;
     if startup_intro.is_some()
         && let Some(worker) = catalog_session.maybe_start_deferred_worker(
             scheduler.catalog_worker_running(),
@@ -5819,6 +5823,23 @@ pub(super) fn run_launcher_loop(
         }
         let mut full_bridge_dirty = std::mem::take(&mut navigation_source_bridge_sync_pending)
             || std::mem::take(&mut modal_input_test_bridge_sync_pending);
+        if startup_intro.is_none() {
+            if std::mem::take(&mut startup_intro_catalog_shells_pending) {
+                catalog = nav.catalog_with_build_shells(catalog.clone());
+                catalog_version = catalog_version.wrapping_add(1);
+                nav.sync_launcher_taxonomy(&catalog);
+                let _ = reapply_pending_launch_return_state(
+                    &mut nav,
+                    &catalog,
+                    &mut launch_return_session,
+                );
+                full_bridge_dirty = true;
+            }
+            if let Some(intent) = startup_intro_catalog_ui_replay.take() {
+                apply_launcher_worker_ui_intent(&app, intent, &mut full_bridge_dirty);
+                window.request_redraw();
+            }
+        }
         let current_feedback_target = discrete_selection_feedback_target(&nav, &setup, &lifecycle);
         if bridge_models.sync_selection_feedback_surface(current_feedback_target.as_ref()) {
             full_bridge_dirty = true;
@@ -6370,6 +6391,8 @@ pub(super) fn run_launcher_loop(
                         &mut lifecycle,
                         &mut lifecycle_effects,
                         &mut full_bridge_dirty,
+                        &mut startup_intro_catalog_ui_replay,
+                        &mut startup_intro_catalog_shells_pending,
                         startup_intro.is_some(),
                         start,
                     );
@@ -6430,6 +6453,8 @@ pub(super) fn run_launcher_loop(
                     &mut lifecycle,
                     &mut lifecycle_effects,
                     &mut full_bridge_dirty,
+                    &mut startup_intro_catalog_ui_replay,
+                    &mut startup_intro_catalog_shells_pending,
                     startup_intro.is_some(),
                     start,
                 );
@@ -6469,6 +6494,8 @@ pub(super) fn run_launcher_loop(
                     &mut lifecycle,
                     &mut lifecycle_effects,
                     &mut full_bridge_dirty,
+                    &mut startup_intro_catalog_ui_replay,
+                    &mut startup_intro_catalog_shells_pending,
                     startup_intro.is_some(),
                     start,
                 );
@@ -6783,6 +6810,8 @@ pub(super) fn run_launcher_loop(
                 &mut lifecycle,
                 &mut lifecycle_effects,
                 &mut full_bridge_dirty,
+                &mut startup_intro_catalog_ui_replay,
+                &mut startup_intro_catalog_shells_pending,
                 false,
                 loop_start,
                 start,
@@ -7714,6 +7743,8 @@ pub(super) fn run_launcher_loop(
                                         &mut lifecycle,
                                         &mut lifecycle_effects,
                                         &mut full_bridge_dirty,
+                                        &mut startup_intro_catalog_ui_replay,
+                                        &mut startup_intro_catalog_shells_pending,
                                         false,
                                         loop_start,
                                         start,
@@ -7777,6 +7808,8 @@ pub(super) fn run_launcher_loop(
                                         &mut lifecycle,
                                         &mut lifecycle_effects,
                                         &mut full_bridge_dirty,
+                                        &mut startup_intro_catalog_ui_replay,
+                                        &mut startup_intro_catalog_shells_pending,
                                         false,
                                         loop_start,
                                         start,
@@ -7804,6 +7837,8 @@ pub(super) fn run_launcher_loop(
                                         &mut lifecycle,
                                         &mut lifecycle_effects,
                                         &mut full_bridge_dirty,
+                                        &mut startup_intro_catalog_ui_replay,
+                                        &mut startup_intro_catalog_shells_pending,
                                         false,
                                         loop_start,
                                         start,
@@ -11444,6 +11479,29 @@ fn benchmark_media_interaction_gate_active(
     benchmark_active && !media_benchmark_contention
 }
 
+fn apply_catalog_system_scanning_presentation(
+    nav: &mut LauncherNav,
+    catalog: &mut ArcadeCatalog,
+    system_id: &str,
+    defer_bridge_ui: bool,
+) -> bool {
+    nav.catalog_system_scanning(system_id);
+    if defer_bridge_ui {
+        return false;
+    }
+    *catalog = catalog.with_system_placeholder(system_id);
+    true
+}
+
+fn retain_startup_intro_catalog_ui_intent(
+    replay: &mut Option<LauncherWorkerUiIntent>,
+    intent: LauncherWorkerUiIntent,
+) {
+    if intent.is_catalog_presentation() {
+        *replay = Some(intent);
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn process_catalog_worker_message(
     message: CatalogWorkerMessage,
@@ -11469,6 +11527,8 @@ fn process_catalog_worker_message(
     lifecycle: &mut LauncherLifecycle,
     lifecycle_effects: &mut LifecycleEffects,
     full_bridge_dirty: &mut bool,
+    startup_intro_catalog_ui_replay: &mut Option<LauncherWorkerUiIntent>,
+    startup_intro_catalog_shells_pending: &mut bool,
     defer_bridge_ui: bool,
     start: Instant,
 ) {
@@ -11529,6 +11589,8 @@ fn process_catalog_worker_message(
         lifecycle,
         lifecycle_effects,
         full_bridge_dirty,
+        startup_intro_catalog_ui_replay,
+        startup_intro_catalog_shells_pending,
         defer_bridge_ui,
         loop_start,
         start,
@@ -12109,6 +12171,8 @@ fn apply_catalog_session_effects(
     lifecycle: &mut LauncherLifecycle,
     lifecycle_effects: &mut LifecycleEffects,
     full_bridge_dirty: &mut bool,
+    startup_intro_catalog_ui_replay: &mut Option<LauncherWorkerUiIntent>,
+    startup_intro_catalog_shells_pending: &mut bool,
     defer_bridge_ui: bool,
     now: Instant,
     start: Instant,
@@ -12291,10 +12355,11 @@ fn apply_catalog_session_effects(
                 *full_bridge_dirty = true;
             }
             CatalogSessionEffect::CatalogBuildStarted => {
+                nav.catalog_build_started();
                 if defer_bridge_ui {
+                    *startup_intro_catalog_shells_pending = true;
                     continue;
                 }
-                nav.catalog_build_started();
                 *catalog_version = (*catalog_version).wrapping_add(1);
                 nav.sync_launcher_taxonomy(catalog);
                 let _ = reapply_pending_launch_return_state(nav, catalog, launch_return_session);
@@ -12310,10 +12375,11 @@ fn apply_catalog_session_effects(
                 // CPU1 once per scan milestone, despite the launcher being
                 // dormant. The final published catalog will install the same
                 // taxonomy authoritatively.
+                nav.catalog_reconciliation_plan(catalog, &system_ids, all_published_systems);
                 if defer_bridge_ui {
+                    *startup_intro_catalog_shells_pending = true;
                     continue;
                 }
-                nav.catalog_reconciliation_plan(catalog, &system_ids, all_published_systems);
                 *catalog = nav.catalog_with_build_shells(catalog.clone());
                 *catalog_version = (*catalog_version).wrapping_add(1);
                 nav.sync_launcher_taxonomy(catalog);
@@ -12322,11 +12388,15 @@ fn apply_catalog_session_effects(
             }
             CatalogSessionEffect::CatalogSystemDiscovered { .. } => {}
             CatalogSessionEffect::CatalogSystemScanning { system_id } => {
-                if defer_bridge_ui {
+                if !apply_catalog_system_scanning_presentation(
+                    nav,
+                    catalog,
+                    &system_id,
+                    defer_bridge_ui,
+                ) {
+                    *startup_intro_catalog_shells_pending = true;
                     continue;
                 }
-                nav.catalog_system_scanning(&system_id);
-                *catalog = catalog.with_system_placeholder(&system_id);
                 *catalog_version = (*catalog_version).wrapping_add(1);
                 nav.sync_launcher_taxonomy(catalog);
                 let _ = reapply_pending_launch_return_state(nav, catalog, launch_return_session);
@@ -12336,8 +12406,10 @@ fn apply_catalog_session_effects(
                 system_id,
                 generation,
             } => {
-                if !defer_bridge_ui {
-                    nav.catalog_system_prepared(&system_id);
+                nav.catalog_system_prepared(&system_id);
+                if defer_bridge_ui {
+                    *startup_intro_catalog_shells_pending = true;
+                } else {
                     *catalog_version = (*catalog_version).wrapping_add(1);
                     *full_bridge_dirty = true;
                 }
@@ -12442,6 +12514,7 @@ fn apply_catalog_session_effects(
             }
             CatalogSessionEffect::Ui(intent) => {
                 if defer_bridge_ui {
+                    retain_startup_intro_catalog_ui_intent(startup_intro_catalog_ui_replay, intent);
                     *full_bridge_dirty = true;
                 } else {
                     apply_launcher_worker_ui_intent(app, intent, full_bridge_dirty);
@@ -15115,6 +15188,50 @@ mod tests {
             catalog_for_ready_source(&mut nav, bootstrap, CatalogSource::NavigationProjection);
 
         assert!(catalog.systems.iter().any(|system| system.id == "snes"));
+    }
+
+    #[test]
+    fn intro_deferred_scanning_replays_one_system_shell_after_handoff() {
+        let mut nav = LauncherNav::new();
+        let mut catalog = catalog_for_media_systems(&["arcade"]);
+
+        assert!(!apply_catalog_system_scanning_presentation(
+            &mut nav,
+            &mut catalog,
+            "snes",
+            true,
+        ));
+        assert!(catalog.systems.iter().all(|system| system.id != "snes"));
+
+        catalog = nav.catalog_with_build_shells(catalog);
+        nav.sync_launcher_taxonomy(&catalog);
+
+        assert!(catalog.systems.iter().any(|system| system.id == "snes"));
+        assert!(nav.open_menu(crate::launcher_taxonomy::CONSOLES_MENU_ID));
+        assert!(
+            nav.current_menu_items()
+                .iter()
+                .any(|item| item.id == "snes")
+        );
+    }
+
+    #[test]
+    fn intro_catalog_ui_replay_retains_the_latest_presentation() {
+        let mut replay = None;
+
+        retain_startup_intro_catalog_ui_intent(
+            &mut replay,
+            LauncherWorkerUiIntent::ShowCatalogBackgroundScan,
+        );
+        retain_startup_intro_catalog_ui_intent(
+            &mut replay,
+            LauncherWorkerUiIntent::HideCatalogBackgroundScan,
+        );
+
+        assert!(matches!(
+            replay,
+            Some(LauncherWorkerUiIntent::HideCatalogBackgroundScan)
+        ));
     }
 
     fn summary_catalog_for_media_systems(system_ids: &[&str]) -> ArcadeCatalog {
