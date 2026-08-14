@@ -13,7 +13,7 @@ module mister_magik_ascal_completion_formal;
 	reg formal_clk = 1'b0;
 	reg past_valid = 1'b0;
 	reg [8:0] reference_words = 9'd0;
-	reg [2:0] unseen_completions = 3'd0;
+	reg [2:0] unseen_completions_state = 3'd0;
 	reg [6:0] visible_beat = 7'd0;
 	reg first_post_drain_active = 1'b0;
 	reg [1:0] stopped_completion_count = 2'd0;
@@ -21,6 +21,7 @@ module mister_magik_ascal_completion_formal;
 	reg saw_two_stopped = 1'b0;
 	reg saw_reset_obligation = 1'b0;
 	reg [9:0] witness_cycle = 10'd0;
+	reg [3:0] witness_phase = 4'd0;
 
 	reg cover_two_stopped_delivered = 1'b0;
 	reg cover_coincident_ack_completion = 1'b0;
@@ -77,6 +78,8 @@ module mister_magik_ascal_completion_formal;
 	wire [1:0] unseen_queue_depth =
 		{1'b0, request_toggle != request_sync} +
 		{1'b0, completion_pending};
+	wire [2:0] unseen_completions =
+		(!avl_reset_n || !o_reset_n) ? 3'd0 : unseen_completions_state;
 	wire [3:0] scheduler_obligations =
 		{2'b00, return_credits} +
 		{2'b00, unseen_queue_depth} +
@@ -142,6 +145,20 @@ module mister_magik_ascal_completion_formal;
 		assert(words_remaining == reference_words);
 		assert(words_remaining <= MAX_WORDS);
 		assert(return_credits <= 2);
+		assert(return_phase < BLEN);
+		assert(write_phase < MAX_WORDS);
+		assert(readlev <= 2);
+		assert(copylev <= 2);
+		assert(read_pending <= 2);
+		assert(read_pending <= readlev);
+		if (request_toggle == request_sync)
+			assert(request_meta == request_sync);
+		if (completion_pulse)
+			assert(request_meta == request_sync);
+		if (request_sync == ack_sync)
+			assert(ack_meta == ack_sync);
+		if (request_toggle == ack_sync)
+			assert(request_sync == request_toggle);
 		if (return_credits == 0)
 			assert(return_phase == 0);
 		assert(unseen_completions ==
@@ -168,6 +185,7 @@ module mister_magik_ascal_completion_formal;
 			assert(unseen_completions == 0);
 		if (return_drain) begin
 			assert(unseen_completions == 0);
+			assert(!read_active);
 			assert(!request_toggle && !completion_pending);
 			assert(!request_meta && !request_sync && !completion_pulse);
 			assert(copylev == 0);
@@ -197,64 +215,101 @@ module mister_magik_ascal_completion_formal;
 			assume(return_valid ==
 				(witness_cycle >= 5 && witness_cycle <= 260));
 `elsif COVER_WITNESS_FINAL_RESET
-			witness_cycle <= witness_cycle + 1'b1;
-			assume(reset_n ==
-				(witness_cycle != 0 &&
-				 !(witness_cycle >= 4 && witness_cycle <= 132)));
+			assume(reset_n == (witness_phase != 0 && witness_phase != 4));
 			assume(avl_step && o_step && !waitrequest && !request_copy_retire);
-			assume(vs_edge == (witness_cycle == 2));
-			assume(schedule_read == (witness_cycle == 2));
+			assume(vs_edge == (witness_phase == 1 && avl_reset_n &&
+				return_drain && reference_words == 0));
+			assume(schedule_read == (witness_phase == 2));
 			assume(return_valid ==
-				(witness_cycle >= 5 && witness_cycle <= 132));
+				(witness_phase == 4 && reference_words != 0));
+			case (witness_phase)
+				0: witness_phase <= 1;
+				1: if (release_event) witness_phase <= 2;
+				2: if (read_start_event) witness_phase <= 3;
+				3: if (issue_event) witness_phase <= 4;
+			endcase
 `elsif COVER_WITNESS_OLD_POST_RESET
-			witness_cycle <= witness_cycle + 1'b1;
-			assume(reset_n ==
-				(witness_cycle != 0 && witness_cycle != 5));
+			assume(reset_n == (witness_phase != 0 && witness_phase != 4));
 			assume(avl_step && o_step && !waitrequest && !request_copy_retire);
-			assume(vs_edge == (witness_cycle == 2));
-			assume(schedule_read == (witness_cycle == 2));
-			assume(return_valid ==
-				(witness_cycle == 5 || witness_cycle == 7));
+			assume(vs_edge == (witness_phase == 1 && avl_reset_n &&
+				return_drain && reference_words == 0));
+			assume(schedule_read == (witness_phase == 2));
+			assume(return_valid == (witness_phase == 5));
+			case (witness_phase)
+				0: witness_phase <= 1;
+				1: if (release_event) witness_phase <= 2;
+				2: if (read_start_event) witness_phase <= 3;
+				3: if (issue_event) witness_phase <= 4;
+				4: witness_phase <= 5;
+			endcase
 `elsif COVER_WITNESS_VS_ALIGN
-			witness_cycle <= witness_cycle + 1'b1;
-			assume(reset_n == (witness_cycle != 0));
+			assume(reset_n == (witness_phase != 0));
 			assume(avl_step && o_step && !waitrequest && !return_valid);
 			assume(!schedule_read && !request_copy_retire);
-			assume(vs_edge == (witness_cycle == 2));
+			assume(vs_edge == (witness_phase == 1 && avl_reset_n &&
+				return_drain && reference_words == 0));
+			case (witness_phase)
+				0: witness_phase <= 1;
+				1: if (release_event) witness_phase <= 2;
+			endcase
 `elsif COVER_WITNESS_FIRST_COMPLETION
-			witness_cycle <= witness_cycle + 1'b1;
-			assume(reset_n == (witness_cycle != 0));
+			assume(reset_n == (witness_phase != 0));
 			assume(avl_step && o_step && !waitrequest && !request_copy_retire);
-			assume(vs_edge == (witness_cycle == 2));
-			assume(schedule_read == (witness_cycle == 2));
+			assume(vs_edge == (witness_phase == 1 && avl_reset_n &&
+				return_drain && reference_words == 0));
+			assume(schedule_read == (witness_phase == 2));
 			assume(return_valid ==
-				(witness_cycle >= 5 && witness_cycle <= 132));
+				(witness_phase == 4 && reference_words != 0));
+			case (witness_phase)
+				0: witness_phase <= 1;
+				1: if (release_event) witness_phase <= 2;
+				2: if (read_start_event) witness_phase <= 3;
+				3: if (issue_event) witness_phase <= 4;
+			endcase
 `elsif COVER_WITNESS_ACTIVE_CREDIT_VS
-			witness_cycle <= witness_cycle + 1'b1;
-			assume(reset_n == (witness_cycle != 0));
+			assume(reset_n == (witness_phase != 0));
 			assume(avl_step && o_step && !waitrequest && !return_valid);
 			assume(!request_copy_retire);
-			assume(schedule_read == (witness_cycle == 2));
-			assume(vs_edge ==
-				(witness_cycle == 2 || witness_cycle == 5));
+			assume(schedule_read == (witness_phase == 2));
+			assume(vs_edge == ((witness_phase == 1 && avl_reset_n &&
+				return_drain && reference_words == 0) ||
+				(witness_phase == 4 && reference_words != 0)));
+			case (witness_phase)
+				0: witness_phase <= 1;
+				1: if (release_event) witness_phase <= 2;
+				2: if (read_start_event) witness_phase <= 3;
+				3: if (issue_event) witness_phase <= 4;
+			endcase
 `elsif COVER_WITNESS_ISSUE_EMPTY_VS
-			witness_cycle <= witness_cycle + 1'b1;
-			assume(reset_n == (witness_cycle != 0));
-			assume(avl_step && o_step && !waitrequest && !return_valid);
+			assume(reset_n == (witness_phase != 0));
+			assume(avl_step && o_step && !return_valid);
+			assume(waitrequest == (witness_phase == 3));
 			assume(!request_copy_retire);
-			assume(schedule_read == (witness_cycle == 2));
-			assume(vs_edge ==
-				(witness_cycle == 2 || witness_cycle == 4));
+			assume(schedule_read == (witness_phase == 2));
+			assume(vs_edge == ((witness_phase == 1 && avl_reset_n &&
+				return_drain && reference_words == 0) || witness_phase == 4));
+			case (witness_phase)
+				0: witness_phase <= 1;
+				1: if (release_event) witness_phase <= 2;
+				2: if (read_start_event) witness_phase <= 3;
+				3: if (read_active) witness_phase <= 4;
+			endcase
 `elsif COVER_WITNESS_FINAL_RETURN_VS_WAIT
-			witness_cycle <= witness_cycle + 1'b1;
-			assume(reset_n ==
-				(witness_cycle != 0 && witness_cycle != 4));
+			assume(reset_n == (witness_phase != 0 && witness_phase != 4));
 			assume(avl_step && o_step && !waitrequest && !request_copy_retire);
-			assume(schedule_read == (witness_cycle == 2));
+			assume(schedule_read == (witness_phase == 2));
 			assume(return_valid ==
-				(witness_cycle >= 5 && witness_cycle <= 132));
-			assume(vs_edge ==
-				(witness_cycle == 2 || witness_cycle == 132));
+				(witness_phase == 5 && reference_words != 0));
+			assume(vs_edge == ((witness_phase == 1 && avl_reset_n &&
+				return_drain && reference_words == 0) ||
+				(witness_phase == 5 && reference_words == 1)));
+			case (witness_phase)
+				0: witness_phase <= 1;
+				1: if (release_event) witness_phase <= 2;
+				2: if (read_start_event) witness_phase <= 3;
+				3: if (issue_event) witness_phase <= 4;
+				4: witness_phase <= 5;
+			endcase
 `endif
 			// Independent ordered DDR responder. A charged request creates exactly
 			// BLEN return obligations, regardless of reset or waitrequest. The HPS
@@ -294,12 +349,12 @@ module mister_magik_ascal_completion_formal;
 				assert(unseen_completions != 0);
 
 			if (!avl_reset_n || !o_reset_n) begin
-				unseen_completions <= 0;
+				unseen_completions_state <= 0;
 			end else begin
 				case ({completion_event, completion_seen})
-					2'b10: unseen_completions <= unseen_completions + 1'b1;
-					2'b01: unseen_completions <= unseen_completions - 1'b1;
-					default: unseen_completions <= unseen_completions;
+					2'b10: unseen_completions_state <= unseen_completions + 1'b1;
+					2'b01: unseen_completions_state <= unseen_completions - 1'b1;
+					default: unseen_completions_state <= unseen_completions;
 				endcase
 				assert(unseen_completions <= 2);
 			end

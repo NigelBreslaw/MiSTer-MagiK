@@ -137,6 +137,33 @@ def main() -> None:
     if missing:
         fail("missing proof input: " + ", ".join(missing))
 
+    formal_dut_source = formal_dut.read_text()
+    for fragment in (
+        "avl_reset_n<='0' WHEN reset_n='0' ELSE",
+        "o_reset_n<='0' WHEN reset_n='0' ELSE",
+        "request_meta<=request_toggle;",
+        "request_sync<=request_meta;",
+        "completion_pulse<=request_meta XOR request_sync;",
+        "ack_meta<=request_sync;",
+        "ack_sync<=ack_meta;",
+    ):
+        if fragment not in formal_dut_source:
+            fail(f"formal DUT pipeline binding is missing: {fragment}")
+    formal_wrapper_source = formal_wrapper.read_text()
+    for fragment in (
+        "assert(return_phase < BLEN);",
+        "assert(write_phase < MAX_WORDS);",
+        "if (request_toggle == request_sync)",
+        "assert(request_meta == request_sync);",
+        "if (completion_pulse)",
+        "if (request_sync == ack_sync)",
+        "assert(ack_meta == ack_sync);",
+        "if (request_toggle == ack_sync)",
+        "assert(request_sync == request_toggle);",
+    ):
+        if fragment not in formal_wrapper_source:
+            fail(f"formal pipeline invariant binding is missing: {fragment}")
+
     with tempfile.TemporaryDirectory(prefix="mister-magik-scaler-formal-") as temp:
         temporary = Path(temp)
         work = temporary / "Menu_MiSTer"
@@ -281,7 +308,13 @@ def main() -> None:
                 cwd=root,
                 log_path=artifacts / "induction.log" if artifacts else None,
             )
-            if "Temporal induction proof finished - no model found" not in safety_log:
+            if not any(
+                marker in safety_log
+                for marker in (
+                    "Temporal induction proof finished - no model found",
+                    "Induction step proven: SUCCESS!",
+                )
+            ):
                 fail("Yosys did not report a completed temporal induction proof")
 
         cover_witnesses = {

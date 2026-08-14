@@ -89,6 +89,10 @@ BEGIN
 	-- first formal step in each production clock domain.
 	avl_reset_n_o<=avl_reset_n;
 	o_reset_n_o<=o_reset_n;
+	avl_reset_n<='0' WHEN reset_n='0' ELSE
+		'1' WHEN rising_edge(clk) AND avl_step='1';
+	o_reset_n<='0' WHEN reset_n='0' ELSE
+		'1' WHEN rising_edge(clk) AND o_step='1';
 
 	read_start_event<='1' WHEN o_step='1' AND o_reset_n='1' AND
 		schedule_read='1' AND readlev<2 ELSE '0';
@@ -149,13 +153,15 @@ BEGIN
 	readlev_o<=readlev;
 	copylev_o<=copylev;
 
-	Scheduler:PROCESS(clk) IS
+	Scheduler:PROCESS(clk,reset_n) IS
 		VARIABLE queue_state_v : std_logic_vector(1 DOWNTO 0);
 		VARIABLE next_pending_v : integer RANGE 0 TO 2;
 		VARIABLE next_readlev_v,next_copylev_v : integer RANGE 0 TO 2;
 	BEGIN
+		-- Return accounting and its one-shot acceptance guard are deliberately
+		-- retained across reset, exactly as in production. Raw reset assertion
+		-- therefore cannot suppress an already ordered Avalon return beat.
 		IF rising_edge(clk) THEN
-			-- The retained accounting process has no core-reset branch.
 			IF avl_step='1' THEN
 				return_credits<=return_credits_next(
 					return_credits,return_phase,issue_event='1',
@@ -168,21 +174,27 @@ BEGIN
 					read_accepted<='1';
 				END IF;
 			END IF;
+		END IF;
 
-			IF reset_n='0' THEN
-				avl_reset_n<='0';
-				o_reset_n<='0';
-			ELSE
-				IF avl_step='1' THEN
-					avl_reset_n<='1';
-				END IF;
-				IF o_step='1' THEN
-					o_reset_n<='1';
-				END IF;
-			END IF;
-
+		-- Production domain state has asynchronous assertion through reset_na and
+		-- synchronous release through its independently stepped domain clock.
+		IF reset_n='0' THEN
+				request_meta<='0';
+				request_sync<='0';
+				completion_pulse<='0';
+				readlev<=0;
+				copylev<=0;
+				read_pending<=0;
+				return_drain<='1';
+				request_toggle<='0';
+				completion_pending<='0';
+				ack_meta<='0';
+				ack_sync<='0';
+				read_reset_seen<='1';
+				read_active<='0';
+		ELSIF rising_edge(clk) THEN
 			-- Destination-domain scheduler and exact legacy credit truth tables.
-			IF reset_n='0' OR o_reset_n='0' THEN
+			IF o_reset_n='0' THEN
 				request_meta<='0';
 				request_sync<='0';
 				completion_pulse<='0';
@@ -216,7 +228,7 @@ BEGIN
 			-- production source-domain request assertion. Both sides are updated
 			-- in this one formal process so arbitrary clock ordering is retained
 			-- without a multi-driver proof model.
-			IF reset_n='0' OR o_reset_n='0' THEN
+			IF o_reset_n='0' THEN
 				read_pending<=0;
 			ELSE
 				next_pending_v:=read_pending;
@@ -230,13 +242,14 @@ BEGIN
 			END IF;
 
 			-- Source-domain request, return drain, and Avalon request hold.
-			IF reset_n='0' OR avl_reset_n='0' THEN
+			IF avl_reset_n='0' THEN
 				return_drain<='1';
 				request_toggle<='0';
 				completion_pending<='0';
 				ack_meta<='0';
 				ack_sync<='0';
 				read_reset_seen<='1';
+				read_active<='0';
 			ELSIF avl_step='1' THEN
 				ack_meta<=request_sync;
 				ack_sync<=ack_meta;
