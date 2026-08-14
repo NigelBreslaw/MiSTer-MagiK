@@ -36,6 +36,7 @@ ENTITY mister_magik_scaler_completion_formal_dut IS
 		return_event_o       : OUT std_logic;
 		write_event_o        : OUT std_logic;
 		completion_event_o   : OUT std_logic;
+		align_event_o        : OUT std_logic;
 		release_event_o      : OUT std_logic;
 		read_start_event_o   : OUT std_logic;
 		copy_retire_event_o  : OUT std_logic;
@@ -57,6 +58,7 @@ ENTITY mister_magik_scaler_completion_formal_dut IS
 		ack_sync_o           : OUT std_logic;
 		read_pending_o       : OUT natural RANGE 0 TO 2;
 		read_active_o        : OUT std_logic;
+		read_accepted_o      : OUT std_logic;
 		readlev_o            : OUT natural RANGE 0 TO 2;
 		copylev_o            : OUT natural RANGE 0 TO 2
 	);
@@ -73,10 +75,13 @@ ARCHITECTURE rtl OF mister_magik_scaler_completion_formal_dut IS
 	SIGNAL ack_meta,ack_sync : std_logic:='0';
 	SIGNAL read_pending : natural RANGE 0 TO 2:=0;
 	SIGNAL read_active : std_logic:='0';
+	SIGNAL read_accepted,read_reset_seen : std_logic:='0';
 	SIGNAL readlev,copylev : natural RANGE 0 TO 2:=0;
 
 	SIGNAL issue_event,return_event,write_event,completion_event : std_logic;
+	SIGNAL align_event : std_logic;
 	SIGNAL release_event,read_start_event,copy_retire_event : std_logic;
+	SIGNAL request_start_event : std_logic;
 	SIGNAL completion_seen,queue_overflow,accounting_invalid : std_logic;
 BEGIN
 	-- Reset assertion is common. Release is independently synchronized by the
@@ -89,18 +94,23 @@ BEGIN
 	copy_retire_event<='1' WHEN reset_n='1' AND o_step='1' AND o_reset_n='1' AND
 		request_copy_retire='1' AND readlev>0 AND copylev>0 ELSE '0';
 
-	-- A read obligation is charged on the edge that first asserts the Avalon
-	-- request. waitrequest may then hold read_active for an arbitrary duration;
-	-- it cannot charge the request twice.
-	issue_event<='1' WHEN reset_n='1' AND avl_step='1' AND avl_reset_n='1' AND
-		return_drain='0' AND read_active='0' AND read_pending>0 ELSE '0';
+	-- A read obligation is charged on its first actual Avalon acceptance.
+	-- waitrequest may hold read_active through reset; the retained one-shot and
+	-- reset-epoch eligibility prevent both duplicate and orphan acceptance.
+	request_start_event<='1' WHEN reset_n='1' AND avl_step='1' AND
+		avl_reset_n='1' AND return_drain='0' AND read_active='0' AND
+		read_pending>0 ELSE '0';
+	issue_event<='1' WHEN avl_step='1' AND read_active='1' AND
+		read_accepted='0' AND waitrequest='0' AND
+		(avl_reset_n='0' OR read_reset_seen='0') ELSE '0';
 	return_event<=avl_step AND return_valid;
 	write_event<=return_event AND reset_n AND avl_reset_n AND NOT return_drain;
 	completion_event<='1' WHEN write_event='1' AND
 		(write_phase MOD BLEN)=BLEN-2 ELSE '0';
-	release_event<='1' WHEN reset_n='1' AND avl_step='1' AND avl_reset_n='1' AND
-		return_drain='1' AND vs_edge='1' AND
+	align_event<='1' WHEN reset_n='1' AND avl_step='1' AND avl_reset_n='1' AND
+		vs_edge='1' AND
 		return_drain_ready(return_credits,return_phase) ELSE '0';
+	release_event<=align_event AND return_drain;
 	completion_seen<=reset_n AND o_step AND o_reset_n AND completion_pulse;
 	queue_overflow<='1' WHEN completion_queue_overflow(
 		request_toggle,completion_pending,ack_sync,completion_event) ELSE '0';
@@ -112,6 +122,7 @@ BEGIN
 	return_event_o<=return_event;
 	write_event_o<=write_event;
 	completion_event_o<=completion_event;
+	align_event_o<=align_event;
 	release_event_o<=release_event;
 	read_start_event_o<=read_start_event;
 	copy_retire_event_o<=copy_retire_event;
@@ -132,6 +143,7 @@ BEGIN
 	ack_sync_o<=ack_sync;
 	read_pending_o<=read_pending;
 	read_active_o<=read_active;
+	read_accepted_o<=read_accepted;
 	readlev_o<=readlev;
 	copylev_o<=copylev;
 
@@ -204,7 +216,7 @@ BEGIN
 				IF read_start_event='1' THEN
 					next_pending_v:=next_pending_v+1;
 				END IF;
-				IF issue_event='1' THEN
+				IF request_start_event='1' THEN
 					next_pending_v:=next_pending_v-1;
 				END IF;
 				read_pending<=next_pending_v;
@@ -217,14 +229,16 @@ BEGIN
 				completion_pending<='0';
 				ack_meta<='0';
 				ack_sync<='0';
-				read_active<='0';
+				read_reset_seen<='1';
 			ELSIF avl_step='1' THEN
 				ack_meta<=request_sync;
 				ack_sync<=ack_meta;
 
-				IF release_event='1' THEN
-					return_drain<='0';
+				IF align_event='1' THEN
 					write_phase<=2*BLEN-1;
+					IF return_drain='1' THEN
+						return_drain<='0';
+					END IF;
 				ELSIF write_event='1' THEN
 					write_phase<=(write_phase+1) MOD (2*BLEN);
 				END IF;
@@ -234,10 +248,23 @@ BEGIN
 				request_toggle<=queue_state_v(1);
 				completion_pending<=queue_state_v(0);
 
-				IF issue_event='1' THEN
-					read_active<='1';
-				ELSIF read_active='1' AND waitrequest='0' THEN
+				IF read_reset_seen='1' THEN
 					read_active<='0';
+					read_reset_seen<='0';
+				ELSIF request_start_event='1' THEN
+					read_active<='1';
+				ELSIF issue_event='1' THEN
+					read_active<='0';
+				END IF;
+			END IF;
+
+			-- Retained one-shot acceptance guard. It deliberately continues to
+			-- observe the independent slave handshake throughout core reset.
+			IF avl_step='1' THEN
+				IF read_active='0' THEN
+					read_accepted<='0';
+				ELSIF issue_event='1' THEN
+					read_accepted<='1';
 				END IF;
 			END IF;
 		END IF;

@@ -44,10 +44,11 @@ index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..b1c2581d8665d3db4f4042ed668ee711
 +		burst_len : natural;
 +		maximum   : natural)
 +		RETURN boolean;
-+	FUNCTION read_obligation_issue(
-+		read_state    : boolean;
-+		return_drain  : std_logic;
-+		read_asserted : std_logic)
++	FUNCTION read_obligation_accept(
++		read_asserted : std_logic;
++		read_accepted : std_logic;
++		waitrequest   : std_logic;
++		eligible      : boolean)
 +		RETURN boolean;
 +	FUNCTION return_drain_ready(
 +		credits : natural;
@@ -159,14 +160,16 @@ index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..b1c2581d8665d3db4f4042ed668ee711
 +		RETURN false;
 +	END FUNCTION return_accounting_invalid;
 +
-+	FUNCTION read_obligation_issue(
-+		read_state    : boolean;
-+		return_drain  : std_logic;
-+		read_asserted : std_logic)
++	FUNCTION read_obligation_accept(
++		read_asserted : std_logic;
++		read_accepted : std_logic;
++		waitrequest   : std_logic;
++		eligible      : boolean)
 +		RETURN boolean IS
 +	BEGIN
-+		RETURN read_state AND return_drain='0' AND read_asserted='0';
-+	END FUNCTION read_obligation_issue;
++		RETURN read_asserted='1' AND read_accepted='0' AND waitrequest='0' AND
++			eligible;
++	END FUNCTION read_obligation_accept;
 +
 +	FUNCTION return_drain_ready(
 +		credits : natural;
@@ -204,6 +207,7 @@ index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..b1c2581d8665d3db4f4042ed668ee711
 +	SIGNAL avl_return_drain : std_logic:='1';
 +	SIGNAL avl_return_credits : natural RANGE 0 TO 2:=0;
 +	SIGNAL avl_return_phase : natural RANGE 0 TO BLEN-1:=0;
++	SIGNAL avl_read_accepted : std_logic:='0';
 +	SIGNAL avl_readack : std_logic;
 +	ATTRIBUTE preserve OF avl_readdataack : SIGNAL IS true;
 +	ATTRIBUTE altera_attribute OF avl_completion_ack_meta : SIGNAL IS
@@ -232,15 +236,18 @@ index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..b1c2581d8665d3db4f4042ed668ee711
 +	-- Together they encode remaining words as credits*BLEN-phase. The HPS port
 +	-- does not tag or cancel an accepted read when reset_req is asserted, so
 +	-- pre-reset returns must remain accounted until every beat has drained. A
-+	-- read is charged exactly once when ascal first asserts avl_read_i, before
-+	-- waitrequest acceptance. The safe terminator retains a wait-stalled request
-+	-- across reset and therefore guarantees that charged burst eventually ends.
++	-- read is charged exactly once on its actual Avalon acceptance. The retained
++	-- one-shot guard deasserts the external request after that edge even while
++	-- core reset is active and the safe terminator reset is still synchronizing.
++	-- A wait-stalled request remains asserted until it is accepted or canceled
++	-- uncharged when normal scheduler execution resumes after reset.
 +	AvalonReturnAccounting:PROCESS(avl_clk) IS
 +		VARIABLE issued_v,returned_v : boolean;
 +	BEGIN
 +		IF rising_edge(avl_clk) THEN
-+			issued_v:=read_obligation_issue(
-+				avl_state=sREAD,avl_return_drain,avl_read_i);
++			issued_v:=read_obligation_accept(
++				avl_read_i,avl_read_accepted,avl_waitrequest,
++				avl_reset_na='0' OR avl_state=sREAD);
 +			returned_v:=avl_readdatavalid='1';
 +			-- synthesis translate_off
 +			ASSERT NOT return_accounting_invalid(
@@ -253,6 +260,11 @@ index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..b1c2581d8665d3db4f4042ed668ee711
 +				issued_v,returned_v,BLEN);
 +			avl_return_phase<=return_phase_next(
 +				avl_return_phase,returned_v,BLEN);
++			IF avl_read_i='0' THEN
++				avl_read_accepted<='0';
++			ELSIF issued_v THEN
++				avl_read_accepted<='1';
++			END IF;
 +		END IF;
 +	END PROCESS AvalonReturnAccounting;
 +
@@ -295,7 +307,8 @@ index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..b1c2581d8665d3db4f4042ed668ee711
 -						avl_readack<=NOT avl_readack;
 +					IF avl_return_drain='0' THEN
 +						avl_read_i<='1';
-+						IF avl_read_i='1' AND avl_waitrequest='0' THEN
++						IF avl_read_i='1' AND avl_read_accepted='0' AND
++							avl_waitrequest='0' THEN
 +							avl_state<=sIDLE;
 +							avl_read_i<='0';
 +							avl_readack<=NOT avl_readack;
@@ -319,9 +332,10 @@ index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..b1c2581d8665d3db4f4042ed668ee711
  			END IF;
  
  			IF avl_o_vs_sync='0' AND avl_o_vs='1' THEN
- 				avl_wad<=2*BLEN-1;
+-				avl_wad<=2*BLEN-1;
 +				IF return_drain_ready(
 +					avl_return_credits,avl_return_phase) THEN
++					avl_wad<=2*BLEN-1;
 +					avl_return_drain<='0';
 +				END IF;
  			END IF;
@@ -345,6 +359,11 @@ index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..b1c2581d8665d3db4f4042ed668ee711
  			--------------------------------------------
  		END IF;
  	END PROCESS Avaloir;
+ 
+-	avl_read<=avl_read_i;
++	avl_read<=avl_read_i AND NOT avl_read_accepted
++		WHEN avl_reset_na='0' OR avl_state=sREAD ELSE '0';
+ 	avl_write<=avl_write_i;
 @@ -1877,6 +2119,9 @@ BEGIN
  			o_readlev<=0;
  			o_copylev<=0;

@@ -44,6 +44,7 @@ module mister_magik_ascal_completion_formal;
 	wire return_event;
 	wire write_event;
 	wire completion_event;
+	wire align_event;
 	wire release_event;
 	wire read_start_event;
 	wire copy_retire_event;
@@ -64,6 +65,7 @@ module mister_magik_ascal_completion_formal;
 	wire ack_sync;
 	wire [1:0] read_pending;
 	wire read_active;
+	wire read_accepted;
 	wire [1:0] readlev;
 	wire [1:0] copylev;
 
@@ -95,6 +97,7 @@ module mister_magik_ascal_completion_formal;
 		.return_event_o(return_event),
 		.write_event_o(write_event),
 		.completion_event_o(completion_event),
+		.align_event_o(align_event),
 		.release_event_o(release_event),
 		.read_start_event_o(read_start_event),
 		.copy_retire_event_o(copy_retire_event),
@@ -115,6 +118,7 @@ module mister_magik_ascal_completion_formal;
 		.ack_sync_o(ack_sync),
 		.read_pending_o(read_pending),
 		.read_active_o(read_active),
+		.read_accepted_o(read_accepted),
 		.readlev_o(readlev),
 		.copylev_o(copylev)
 	);
@@ -161,12 +165,12 @@ module mister_magik_ascal_completion_formal;
 `elsif COVER_WITNESS_OLD_POST_RESET
 			witness_cycle <= witness_cycle + 1'b1;
 			assume(reset_n ==
-				(witness_cycle != 0 && witness_cycle != 4));
+				(witness_cycle != 0 && witness_cycle != 5));
 			assume(avl_step && o_step && !waitrequest && !request_copy_retire);
 			assume(vs_edge == (witness_cycle == 2));
 			assume(schedule_read == (witness_cycle == 2));
 			assume(return_valid ==
-				(witness_cycle == 4 || witness_cycle == 6));
+				(witness_cycle == 5 || witness_cycle == 7));
 `elsif COVER_WITNESS_VS_ALIGN
 			witness_cycle <= witness_cycle + 1'b1;
 			assume(reset_n == (witness_cycle != 0));
@@ -208,6 +212,8 @@ module mister_magik_ascal_completion_formal;
 			assert(readlev <= 2);
 			assert(copylev <= 2);
 			assert(read_pending <= 2);
+			if (read_accepted)
+				assert(!issue_event);
 			assert(output_obligations <= {1'b0, readlev});
 			if (!return_drain)
 				assert(scheduler_obligations <= {2'b00, readlev});
@@ -228,16 +234,19 @@ module mister_magik_ascal_completion_formal;
 			if (return_drain) begin
 				assert(!write_event);
 				assert(!completion_event);
-				assert(!issue_event);
 			end
-			if (release_event) begin
-				assert(return_drain);
+			if (align_event) begin
 				assert(avl_step && avl_reset_n && vs_edge);
 				assert(reference_words == 0);
 				assert(return_credits == 0 && return_phase == 0);
 				visible_beat <= 0;
-				first_post_drain_active <= 1'b1;
-				cover_vs_alignment_during_drain <= 1'b1;
+				if (release_event) begin
+					assert(return_drain);
+					first_post_drain_active <= 1'b1;
+					cover_vs_alignment_during_drain <= 1'b1;
+				end else begin
+					assert(!return_drain);
+				end
 			end else if (write_event) begin
 				assert(completion_event == (visible_beat == BLEN-1));
 				visible_beat <= visible_beat + 1'b1;
@@ -280,9 +289,18 @@ module mister_magik_ascal_completion_formal;
 			end
 		end
 
-		if (past_valid && $past(proof_edge && release_event)) begin
+		if (past_valid && $past(proof_edge && align_event)) begin
 			assert(write_phase == 2*BLEN-1);
-			assert(!return_drain);
+			if ($past(release_event))
+				assert(!return_drain);
+		end
+		if (past_valid && $past(proof_edge && avl_step && avl_reset_n &&
+			vs_edge && words_remaining != 0)) begin
+			assert(!$past(align_event));
+			if ($past(write_event))
+				assert(write_phase == (($past(write_phase) + 1) % (2*BLEN)));
+			else
+				assert(write_phase == $past(write_phase));
 		end
 		if (past_valid && $past(proof_edge && return_drain && return_event &&
 			!release_event))

@@ -193,6 +193,12 @@ def main() -> None:
         "return_drain_ready(",
         "completion_queue_next(",
         "completion_queue_overflow(",
+        "align_event<='1' WHEN",
+        "release_event<=align_event AND return_drain;",
+        "IF align_event='1' THEN",
+        "read_accepted='0' AND waitrequest='0' AND",
+        "(avl_reset_n='0' OR read_reset_seen='0')",
+        "ELSIF issue_event='1' THEN",
     ):
         if fragment not in formal_dut_source:
             fail(f"formal DUT is detached from production transition: {fragment}")
@@ -205,6 +211,8 @@ def main() -> None:
         "cover_first_post_drain_completion",
         "reference_words",
         "(* anyseq *) wire waitrequest;",
+        "if (align_event) begin",
+        "vs_edge && words_remaining != 0",
     ):
         if fragment not in formal_wrapper_source:
             fail(f"formal environment obligation is missing: {fragment}")
@@ -402,7 +410,7 @@ def main() -> None:
             "FUNCTION return_phase_next(": 2,
             "FUNCTION return_words_remaining(": 2,
             "FUNCTION return_accounting_invalid(": 2,
-            "FUNCTION read_obligation_issue(": 2,
+            "FUNCTION read_obligation_accept(": 2,
             "FUNCTION return_drain_ready(": 2,
             "state_v:=request_toggle & completion_pending;": 1,
             "state_v(0):=completion;": 1,
@@ -412,6 +420,7 @@ def main() -> None:
             "SIGNAL avl_return_drain : std_logic:='1';": 1,
             "SIGNAL avl_return_credits : natural RANGE 0 TO 2:=0;": 1,
             "SIGNAL avl_return_phase : natural RANGE 0 TO BLEN-1:=0;": 1,
+            "SIGNAL avl_read_accepted : std_logic:='0';": 1,
             "ATTRIBUTE preserve OF avl_readdataack : SIGNAL IS true;": 1,
             "SIGNAL o_readdataack,o_readdataack_sync,o_readdataack_sync2 : std_logic;": 1,
             "SYNCHRONIZER_IDENTIFICATION FORCED\";": 2,
@@ -419,16 +428,24 @@ def main() -> None:
             "avl_completion_ack_meta<=o_readdataack_sync2; -- <ASYNC>": 1,
             "avl_completion_ack_sync<=avl_completion_ack_meta;": 1,
             "AvalonReturnAccounting:PROCESS(avl_clk) IS": 1,
-            "issued_v:=read_obligation_issue(": 1,
-            "avl_state=sREAD,avl_return_drain,avl_read_i);": 1,
+            "issued_v:=read_obligation_accept(": 1,
+            "avl_read_i,avl_read_accepted,avl_waitrequest,": 1,
+            "avl_reset_na='0' OR avl_state=sREAD);": 1,
             "returned_v:=avl_readdatavalid='1';": 1,
             "ASSERT NOT return_accounting_invalid(": 1,
             "avl_return_credits<=return_credits_next(": 1,
             "avl_return_phase<=return_phase_next(": 1,
+            "IF avl_read_i='0' THEN": 1,
+            "avl_read_accepted<='0';": 1,
+            "ELSIF issued_v THEN": 1,
+            "avl_read_accepted<='1';": 1,
             "avl_return_drain<='1';": 1,
             "IF return_drain_ready(": 1,
             "avl_return_credits,avl_return_phase) THEN": 1,
             "IF avl_return_drain='0' THEN": 1,
+            "IF avl_read_i='1' AND avl_read_accepted='0' AND": 1,
+            "avl_read<=avl_read_i AND NOT avl_read_accepted": 1,
+            "WHEN avl_reset_na='0' OR avl_state=sREAD ELSE '0';": 1,
             "IF avl_readdatavalid='1' AND avl_return_drain='0' THEN": 1,
             "avl_wad<=(avl_wad+1) MOD (2*BLEN);": 1,
             "IF (avl_wad MOD BLEN)=BLEN-2 THEN": 1,
@@ -462,6 +479,7 @@ def main() -> None:
             "outstanding_returns_invalid",
             "return_write_phase_next",
             "return_block_complete",
+            "read_obligation_issue",
             "IF o_copylev>0 THEN",
             "IF o_copylev<2 THEN",
         ):
@@ -489,7 +507,11 @@ def main() -> None:
             fail("Avalon reset branch is missing")
         if "avl_wad<=2*BLEN-1;" in avalon_reset.group("body"):
             fail("Avalon write phase must not use a nonzero asynchronous reset preset")
-        for retained_accounting in ("avl_return_credits", "avl_return_phase"):
+        for retained_accounting in (
+            "avl_return_credits",
+            "avl_return_phase",
+            "avl_read_accepted",
+        ):
             if retained_accounting in avalon_reset.group("body"):
                 fail(
                     "Avalon reset branch must retain return accounting: "
@@ -497,14 +519,14 @@ def main() -> None:
                 )
         vs_release = re.search(
             r"IF avl_o_vs_sync='0' AND avl_o_vs='1' THEN\s*"
-            r"avl_wad<=2\*BLEN-1;\s*"
             r"IF return_drain_ready\(\s*"
             r"avl_return_credits,avl_return_phase\) THEN\s*"
+            r"avl_wad<=2\*BLEN-1;\s*"
             r"avl_return_drain<='0';\s*END IF;\s*END IF;",
             patched_ascal,
         )
         if vs_release is None:
-            fail("return drain release is not contained by the post-drain VS edge")
+            fail("VS phase alignment and drain release are not guarded by empty accounting")
         for topology_fragment, topology_source in (
             (".reset_core_req(reset_req)", patched),
             (".reset_na   (~reset_req)", patched),

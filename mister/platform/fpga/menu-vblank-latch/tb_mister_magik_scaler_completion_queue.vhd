@@ -88,6 +88,8 @@ BEGIN
 		VARIABLE write_phase_v : natural;
 		VARIABLE block_complete_v : boolean;
 		VARIABLE vs_edge_v : boolean;
+		VARIABLE read_asserted_v,read_accepted_v,waitrequest_v : std_logic;
+		VARIABLE acceptance_count_v : natural;
 		PROCEDURE produce IS
 		BEGIN
 			WAIT UNTIL falling_edge(source_clk);
@@ -181,29 +183,35 @@ BEGIN
 			REPORT "simultaneous issue/final return transition mismatch"
 			SEVERITY failure;
 
-		-- The obligation is charged only on the edge that first asserts read.
-		-- Neither a wait-stalled high read nor the reset-held high legacy signal
-		-- can charge the burst again, regardless of waitrequest state.
-		ASSERT read_obligation_issue(true,'0','0')
-			REPORT "initial read assertion was not charged" SEVERITY failure;
-		ASSERT NOT read_obligation_issue(true,'0','1')
-			REPORT "wait-stalled high read was charged again" SEVERITY failure;
-		FOR waitrequest_i IN 0 TO 1 LOOP
-			ASSERT NOT read_obligation_issue(false,'1','1')
-				REPORT "reset-held high read was charged for a waitrequest state"
+		-- A wait-stalled request is charged only on its first actual acceptance.
+		-- The retained guard suppresses repeated low-waitrequest reset cycles.
+		read_asserted_v:='1';
+		read_accepted_v:='0';
+		waitrequest_v:='1';
+		acceptance_count_v:=0;
+		credits_v:=0;
+		phase_v:=0;
+		ASSERT NOT read_obligation_accept(
+			read_asserted_v,read_accepted_v,waitrequest_v,true)
+			REPORT "wait-stalled request was charged before acceptance" SEVERITY failure;
+		waitrequest_v:='0';
+		ASSERT read_obligation_accept(
+			read_asserted_v,read_accepted_v,waitrequest_v,true)
+			REPORT "reset assertion acceptance edge was not charged" SEVERITY failure;
+		credits_v:=return_credits_next(credits_v,phase_v,true,false,128);
+		read_accepted_v:='1';
+		acceptance_count_v:=acceptance_count_v+1;
+		FOR reset_cycle IN 0 TO 7 LOOP
+			ASSERT NOT read_obligation_accept(
+				read_asserted_v,read_accepted_v,waitrequest_v,true)
+				REPORT "retained request was accepted more than once during reset"
 				SEVERITY failure;
 		END LOOP;
-		credits_v:=return_credits_next(0,0,true,false,128);
-		phase_v:=return_phase_next(0,false,128);
-		FOR reset_cycle IN 0 TO 7 LOOP
-			ASSERT NOT read_obligation_issue(false,'1','1')
-				REPORT "read obligation recounted during reset" SEVERITY failure;
-			credits_v:=return_credits_next(
-				credits_v,phase_v,false,false,128);
-			phase_v:=return_phase_next(phase_v,false,128);
-		END LOOP;
+		ASSERT acceptance_count_v=1
+			REPORT "reset-held request did not have exactly one acceptance"
+			SEVERITY failure;
 		ASSERT return_words_remaining(credits_v,phase_v,128)=128
-			REPORT "wait-high reset did not retain exactly one read obligation"
+			REPORT "accepted reset request did not retain exactly one obligation"
 			SEVERITY failure;
 		FOR beat IN 0 TO 127 LOOP
 			next_credits_v:=return_credits_next(
@@ -213,6 +221,30 @@ BEGIN
 		END LOOP;
 		ASSERT credits_v=0 AND phase_v=0
 			REPORT "wait-low terminator completion did not drain one obligation"
+			SEVERITY failure;
+
+		-- If reset releases before a stalled request is ever accepted, normal
+		-- scheduler execution cancels it and no retained credit is created.
+		read_asserted_v:='1';
+		read_accepted_v:='0';
+		waitrequest_v:='1';
+		credits_v:=0;
+		phase_v:=0;
+		FOR reset_cycle IN 0 TO 3 LOOP
+			ASSERT NOT read_obligation_accept(
+				read_asserted_v,read_accepted_v,waitrequest_v,true)
+				REPORT "unaccepted stalled request created a credit" SEVERITY failure;
+		END LOOP;
+		-- Reset has synchronously released into sIDLE before waitrequest drops.
+		-- The stale retained read is immediately ineligible and cannot be accepted.
+		waitrequest_v:='0';
+		ASSERT NOT read_obligation_accept(
+			read_asserted_v,read_accepted_v,waitrequest_v,false)
+			REPORT "reset-release waitrequest drop accepted an orphan request"
+			SEVERITY failure;
+		read_asserted_v:='0';
+		ASSERT return_words_remaining(credits_v,phase_v,128)=0
+			REPORT "release-before-accept cancellation retained an obligation"
 			SEVERITY failure;
 
 		-- Counterexample to the old reset assumption: half of an accepted burst
@@ -267,9 +299,13 @@ BEGIN
 		-- phase 2*BLEN-1 for the first admitted burst.
 		credits_v:=1;
 		phase_v:=127;
+		write_phase_v:=37;
 		vs_edge_v:=true;
 		ASSERT NOT return_drain_ready(credits_v,phase_v)
 			REPORT "VS released drain before the final old return" SEVERITY failure;
+		ASSERT write_phase_v=37 AND drain_v
+			REPORT "active old credit allowed coincident VS to align or release"
+			SEVERITY failure;
 		next_credits_v:=return_credits_next(
 			credits_v,phase_v,false,true,128);
 		next_phase_v:=return_phase_next(phase_v,true,128);
@@ -284,13 +320,32 @@ BEGIN
 		ASSERT vs_edge_v AND return_drain_ready(credits_v,phase_v)
 			REPORT "first post-drain VS did not release empty accounting"
 			SEVERITY failure;
+		write_phase_v:=255;
 		drain_v:=false;
+		ASSERT write_phase_v=255 AND NOT drain_v
+			REPORT "empty next VS did not align and release drain" SEVERITY failure;
 		ASSERT return_words_remaining(
 			return_credits_next(credits_v,phase_v,true,false,128),
 			return_phase_next(phase_v,false,128),128)=128
 			REPORT "new epoch did not start from empty return accounting" SEVERITY failure;
 
+		-- An issue coincident with an empty-accounting VS observes the pre-edge
+		-- empty state, aligns phase, and charges the new burst on the same edge.
+		write_phase_v:=91;
+		vs_edge_v:=true;
+		ASSERT return_drain_ready(credits_v,phase_v)
+			REPORT "empty issue/VS edge was not eligible to align" SEVERITY failure;
 		write_phase_v:=255;
+		next_credits_v:=return_credits_next(
+			credits_v,phase_v,true,false,128);
+		next_phase_v:=return_phase_next(phase_v,false,128);
+		credits_v:=next_credits_v;
+		phase_v:=next_phase_v;
+		ASSERT credits_v=1 AND phase_v=0 AND write_phase_v=255
+			REPORT "issue coincident empty VS did not start aligned" SEVERITY failure;
+
+		-- The active burst straddles another VS. Because its retained credit is
+		-- nonempty, that edge cannot move write phase; completion remains beat BLEN.
 		FOR new_beat IN 1 TO 128 LOOP
 			block_complete_v:=(write_phase_v MOD 128)=126;
 			IF new_beat<128 THEN
@@ -300,9 +355,24 @@ BEGIN
 				ASSERT block_complete_v
 					REPORT "first new burst did not complete on beat BLEN" SEVERITY failure;
 			END IF;
+			IF new_beat=64 THEN
+				vs_edge_v:=true;
+				ASSERT NOT return_drain_ready(credits_v,phase_v)
+					REPORT "active burst was empty at straddling VS" SEVERITY failure;
+			ELSE
+				vs_edge_v:=false;
+			END IF;
 			write_phase_v:=(write_phase_v+1) MOD 256;
+			next_credits_v:=return_credits_next(
+				credits_v,phase_v,false,true,128);
+			phase_v:=return_phase_next(phase_v,true,128);
+			credits_v:=next_credits_v;
+			IF new_beat=64 THEN
+				ASSERT write_phase_v=63
+					REPORT "active burst VS changed the write phase" SEVERITY failure;
+			END IF;
 		END LOOP;
-		ASSERT write_phase_v=127
+		ASSERT write_phase_v=127 AND credits_v=0 AND phase_v=0
 			REPORT "first new burst ended at the wrong write phase" SEVERITY failure;
 
 		WAIT FOR 30 ns;
