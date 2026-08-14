@@ -109,10 +109,6 @@ pub enum InputOutcome {
         event: InputEvent,
         context: ContextId,
     },
-    TransitionControl {
-        event: InputEvent,
-        context: ContextId,
-    },
     Released {
         event: InputEvent,
         press_id: PressId,
@@ -323,11 +319,6 @@ impl InputRouter {
                 reason: ConsumedReason::InputDisabled,
             },
             InputContextKind::Screensaver => InputOutcome::WakeScreensaver { event, context },
-            InputContextKind::Transition
-                if matches!(event.action, LogicalAction::Back | LogicalAction::Home) =>
-            {
-                InputOutcome::TransitionControl { event, context }
-            }
             InputContextKind::Transition => InputOutcome::Consumed {
                 press_id: event.press_id,
                 reason: ConsumedReason::TransitionActive,
@@ -622,37 +613,19 @@ mod tests {
     }
 
     #[test]
-    fn transition_swallows_commands_but_back_controls_immediately() {
+    fn transition_swallows_every_pressed_action() {
         let transition = request(InputContextKind::Transition, 9, DirectionalPolicy::EdgeOnly);
-        let mut router = InputRouter::new(transition);
         let now = Instant::now();
-        assert!(matches!(
-            router.route_event(
-                event(1, LogicalAction::Activate, InputPhase::Pressed),
-                transition,
-                now
-            ),
-            InputOutcome::Consumed {
-                reason: ConsumedReason::TransitionActive,
-                ..
-            }
-        ));
-        assert!(matches!(
-            router.route_event(
-                event(3, LogicalAction::Back, InputPhase::Pressed),
-                transition,
-                now
-            ),
-            InputOutcome::TransitionControl { .. }
-        ));
-        assert!(matches!(
-            router.route_event(
-                event(5, LogicalAction::Home, InputPhase::Pressed),
-                transition,
-                now
-            ),
-            InputOutcome::TransitionControl { .. }
-        ));
+        for action in LogicalAction::ALL {
+            let mut router = InputRouter::new(transition);
+            assert!(matches!(
+                router.route_event(event(1, action, InputPhase::Pressed), transition, now),
+                InputOutcome::Consumed {
+                    reason: ConsumedReason::TransitionActive,
+                    ..
+                }
+            ));
+        }
     }
 
     #[test]
@@ -683,24 +656,19 @@ mod tests {
     fn held_transition_input_does_not_leak_into_the_destination() {
         let transition = request(InputContextKind::Transition, 9, DirectionalPolicy::EdgeOnly);
         let screen = request(InputContextKind::Screen, 2, DirectionalPolicy::MenuRepeat);
-        let mut router = InputRouter::new(transition);
         let now = Instant::now();
-        router.route_event(
-            event(1, LogicalAction::Down, InputPhase::Pressed),
-            transition,
-            now,
-        );
-        router.set_focus(screen);
-        assert!(!router.action_held(LogicalAction::Down));
-        assert!(router.tick_repeat(now + Duration::from_secs(1)).is_none());
-        assert!(matches!(
-            router.route_event(
-                event(2, LogicalAction::Down, InputPhase::Released),
-                screen,
-                now
-            ),
-            InputOutcome::Released { context, .. } if context.target.kind == InputContextKind::Transition
-        ));
+        for action in LogicalAction::ALL {
+            let mut router = InputRouter::new(transition);
+            router.route_event(event(1, action, InputPhase::Pressed), transition, now);
+            router.set_focus(screen);
+            assert!(!router.action_held(action));
+            assert!(router.tick_repeat(now + Duration::from_secs(1)).is_none());
+            assert!(matches!(
+                router.route_event(event(2, action, InputPhase::Released), screen, now),
+                InputOutcome::Released { context, .. }
+                    if context.target.kind == InputContextKind::Transition
+            ));
+        }
     }
 
     #[test]
