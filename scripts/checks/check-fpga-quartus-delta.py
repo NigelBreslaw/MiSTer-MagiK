@@ -58,21 +58,28 @@ EXPECTED_BOOTSTRAP_BLACK_REMOVED_WARNING_IDENTITIES = frozenset(
         BOOTSTRAP_BLACK_DATA_WARNING,
     )
 )
-MINIMUM_SLACK_NS = 0.20
+MINIMUM_SLACK_NS = {"setup": 0.428, "hold": 0.200}
 MAXIMUM_SLACK_DEGRADATION_NS = 0.15
 MAXIMUM_LOGIC_ELEMENT_DELTA = 150
 MAXIMUM_REGISTER_DELTA = 96
-EXPECTED_OBSERVER_CALCULABLE_CHAINS = 2
+EXPECTED_UNCONSTRAINED_OUTPUT_PATHS = 158
+MINIMUM_CUSTOM_MTBF_DEVICE_HOURS = 1.0e12
+MINIMUM_CUSTOM_MTBF_YEARS = MINIMUM_CUSTOM_MTBF_DEVICE_HOURS / (24.0 * 365.25)
+EXPECTED_OBSERVER_CALCULABLE_CHAINS = 1
 EXPECTED_QUARTUS_POLICY = {
     "auto_parallel_synthesis": "off",
     "parallel_synthesis": "off",
     "num_parallel_processors": "4",
 }
 EXPECTED_SYNC_ASSIGNMENT_SUFFIXES = (
-    "ascal:ascal|o_completion_gray_meta",
-    "ascal:ascal|o_completion_gray_sync",
+    "ascal:ascal|o_readdataack_sync",
+    "ascal:ascal|o_readdataack_sync2",
+    "ascal:ascal|avl_completion_ack_meta",
+    "ascal:ascal|avl_completion_ack_sync",
 )
-EXPECTED_CDC_ANALYSIS_LABELS: frozenset[str] = frozenset({"scaler_completion_gray"})
+EXPECTED_CDC_ANALYSIS_LABELS: frozenset[str] = frozenset(
+    {"scaler_completion_request_ack"}
+)
 DIAGNOSTIC_REPORT_NAMES = frozenset(
     {
         "menu.magik-diagnostic-cdc-skew.rpt",
@@ -82,7 +89,7 @@ DIAGNOSTIC_REPORT_NAMES = frozenset(
 )
 EXPECTED_CDC_REPORT_ANALYSES = {
     "menu.magik-diagnostic-cdc-skew.rpt": ("set_max_skew", 0),
-    "menu.magik-diagnostic-cdc-net-delay.rpt": ("set_net_delay", 1),
+    "menu.magik-diagnostic-cdc-net-delay.rpt": ("set_net_delay", 2),
 }
 
 
@@ -346,14 +353,14 @@ def validate_diagnostic_reports(
             detailed_rows = list(
                 re.finditer(
                     rf"(?m)^\s*;\s*--\s*;\s*({NUMBER})\s*;[^\n]*"
-                    r"avl_completion_gray_i\[([01])\][^\n]*"
-                    r"completion_gray_meta\[\2\]",
+                    r"(?:avl_readdataack[^\n]*o_readdataack_sync|"
+                    r"o_readdataack_sync2[^\n]*avl_completion_ack_meta)",
                     text,
                     re.IGNORECASE,
                 )
             )
             detailed_path_counts[name] = len(detailed_rows)
-            if len(detailed_rows) != 2 or {row.group(2) for row in detailed_rows} != {"0", "1"}:
+            if len(detailed_rows) != 2:
                 reasons.append("diagnostic_cdc_analysis_count")
             detailed_slacks = [finite_number(row.group(1)) for row in detailed_rows]
             if any(value is None for value in detailed_slacks):
@@ -375,6 +382,34 @@ def validate_diagnostic_reports(
     elif missing_metastability_chains:
         reasons.append("diagnostic_metastability_chain_missing")
 
+    custom_mtbf_years: dict[str, float | None] = {}
+    for suffix in EXPECTED_SYNC_ASSIGNMENT_SUFFIXES:
+        suffix_match = re.search(
+            rf"(?is){re.escape(suffix)}.{{0,400}}?"
+            rf"(?:MTBF|Mean Time Between Failures).*?({NUMBER})\s*(years?|seconds?|s)\b",
+            metastability,
+        )
+        if suffix_match is None:
+            custom_mtbf_years[suffix] = None
+            continue
+        value = finite_number(suffix_match.group(1))
+        if value is None:
+            custom_mtbf_years[suffix] = None
+            continue
+        unit = suffix_match.group(2).lower()
+        custom_mtbf_years[suffix] = (
+            value
+            if unit.startswith("year")
+            else value / (365.25 * 24.0 * 3600.0)
+        )
+    if any(value is None for value in custom_mtbf_years.values()):
+        reasons.append("diagnostic_metastability_mtbf_missing")
+    elif any(
+        value is not None and value < MINIMUM_CUSTOM_MTBF_YEARS
+        for value in custom_mtbf_years.values()
+    ):
+        reasons.append("diagnostic_metastability_mtbf_below_minimum")
+
     return sorted(set(reasons)), {
         "diagnostic_cdc_reports": sorted(reports),
         "diagnostic_cdc_analysis_labels": dict(sorted(analysis_labels.items())),
@@ -382,6 +417,8 @@ def validate_diagnostic_reports(
         "diagnostic_cdc_detailed_path_counts": detailed_path_counts,
         "diagnostic_cdc_minimum_slacks": minimum_slacks,
         "missing_diagnostic_metastability_chains": missing_metastability_chains,
+        "diagnostic_metastability_mtbf_years": custom_mtbf_years,
+        "minimum_custom_mtbf_device_hours": MINIMUM_CUSTOM_MTBF_DEVICE_HOURS,
     }
 
 
@@ -437,6 +474,8 @@ def compare(
         reasons.append("unconstrained_output_summary_missing")
     elif max(patched_output_paths) != max(baseline_output_paths):
         reasons.append("unconstrained_output_paths_mismatch")
+    elif max(patched_output_paths) != EXPECTED_UNCONSTRAINED_OUTPUT_PATHS:
+        reasons.append("unconstrained_output_paths_not_canonical")
 
     slacks = patched["slacks"]
     baseline_slacks = baseline["slacks"]
@@ -451,7 +490,7 @@ def compare(
             reasons.append(f"{kind}_slack_missing")
         else:
             patched_min = min(values)
-            if patched_min < MINIMUM_SLACK_NS:
+            if patched_min < MINIMUM_SLACK_NS[kind]:
                 reasons.append(f"{kind}_slack_below_minimum")
             if (
                 baseline_values

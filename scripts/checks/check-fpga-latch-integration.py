@@ -164,6 +164,7 @@ def main() -> None:
     diagnostics_sdc = source_dir / "mister_magik_video_diagnostics.sdc"
     timing_report = source_dir / "report_top_timing.tcl"
     integration_tb = source_dir / "tb_mister_magik_sys_top_integration.sv"
+    completion_queue_tb = source_dir / "tb_mister_magik_scaler_completion_queue.vhd"
     rtl_source = rtl.read_text()
     bridge_source = bridge.read_text()
     control_source = diagnostics_control.read_text()
@@ -240,17 +241,21 @@ def main() -> None:
     timing_commands = re.findall(
         r"(?m)^\s*(set_[A-Za-z0-9_]+\b[^\n]*)$", diagnostics_sdc_text
     )
-    if timing_commands != ["set_net_delay -max 10.0 \\"]:
-        fail("repair SDC contains a timing command beyond the exact Gray net-delay bound")
+    if timing_commands != ["set_net_delay -max 10.0 \\"] * 2:
+        fail("repair SDC must contain only the exact request and acknowledgement bounds")
     for fragment in (
-        "{*ascal:ascal|avl_completion_gray_i[*]} 2",
-        "{*ascal:ascal|o_completion_gray_meta[*]} 2",
-        "-from $magik_scaler_completion_gray_source",
-        "-to $magik_scaler_completion_gray_meta",
-        "MagiK diagnostics CDC analysis applied: scaler_completion_gray",
+        "{*ascal:ascal|avl_readdataack} 1",
+        "{*ascal:ascal|o_readdataack_sync} 1",
+        "{*ascal:ascal|o_readdataack_sync2} 1",
+        "{*ascal:ascal|avl_completion_ack_meta} 1",
+        "-from $magik_scaler_completion_request",
+        "-to $magik_scaler_completion_request_meta",
+        "-from $magik_scaler_completion_ack",
+        "-to $magik_scaler_completion_ack_meta",
+        "MagiK diagnostics CDC analysis applied: scaler_completion_request_ack",
     ):
         if diagnostics_sdc_text.count(fragment) != 1:
-            fail(f"scaler completion Gray constraint is missing or ambiguous: {fragment}")
+            fail(f"scaler completion request/ack constraint is missing or ambiguous: {fragment}")
     for forbidden_sdc in ("set_false_path", "magik_require_data_pin", "control_pll_lock"):
         if forbidden_sdc in diagnostics_sdc_text:
             fail(f"retired HDMI lock constraint remains: {forbidden_sdc}")
@@ -339,43 +344,63 @@ def main() -> None:
         ):
             if fragment in patched:
                 fail(f"external scaler completion round trip remains: {fragment}")
-        for fragment in (
-            "FUNCTION completion_gray_next(value : unsigned(1 DOWNTO 0))",
-            "RETURN value(0) & NOT value(1);",
-            "SIGNAL avl_completion_gray_i : unsigned(1 DOWNTO 0);",
-            "ATTRIBUTE preserve OF avl_completion_gray_i : SIGNAL IS true;",
-            "SIGNAL o_completion_gray_meta,o_completion_gray_sync : unsigned(1 DOWNTO 0);",
-            "SIGNAL o_completion_seen : unsigned(1 DOWNTO 0);",
-            "SYNCHRONIZER_IDENTIFICATION FORCED\";",
-            "SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS\";",
-            "avl_completion_gray_i<=completion_gray_next(avl_completion_gray_i);",
-            "o_completion_gray_meta<=avl_completion_gray_i; -- <ASYNC>",
-            "o_completion_gray_sync<=o_completion_gray_meta;",
-            "IF o_completion_gray_sync=completion_gray_next(o_completion_seen) OR",
-            "o_completion_gray_sync=NOT o_completion_seen THEN",
-            "completion_event_v:='1';",
-            "o_completion_seen<=completion_gray_next(o_completion_seen);",
-            "IF lev_dec_v='1' AND completion_event_v='0' THEN",
-            "ELSIF lev_dec_v='0' AND completion_event_v='1' THEN",
-        ):
-            if patched_ascal.count(fragment) != 1:
-                fail(f"patched ascal lossless completion logic is missing: {fragment}")
+        required_completion_counts = {
+            "PACKAGE mister_magik_scaler_completion_queue IS": 1,
+            "PACKAGE BODY mister_magik_scaler_completion_queue IS": 1,
+            "USE work.mister_magik_scaler_completion_queue.ALL;": 1,
+            "FUNCTION completion_queue_next(": 2,
+            "FUNCTION completion_queue_overflow(": 2,
+            "state_v:=request_toggle & completion_pending;": 1,
+            "state_v(0):=completion;": 1,
+            "RETURN request_toggle/=completion_ack AND": 1,
+            "SIGNAL avl_readdataack,avl_completion_pending : std_logic;": 1,
+            "SIGNAL avl_completion_ack_meta,avl_completion_ack_sync : std_logic;": 1,
+            "ATTRIBUTE preserve OF avl_readdataack : SIGNAL IS true;": 1,
+            "SIGNAL o_readdataack,o_readdataack_sync,o_readdataack_sync2 : std_logic;": 1,
+            "SYNCHRONIZER_IDENTIFICATION FORCED\";": 2,
+            "SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS\";": 2,
+            "avl_completion_ack_meta<=o_readdataack_sync2; -- <ASYNC>": 1,
+            "avl_completion_ack_sync<=avl_completion_ack_meta;": 1,
+            "completion_v:='1';": 1,
+            "completion_state_v:=completion_queue_next(": 1,
+            "avl_readdataack<=completion_state_v(1);": 1,
+            "avl_completion_pending<=completion_state_v(0);": 1,
+            "ASSERT NOT completion_queue_overflow(": 1,
+            'REPORT "scaler completion queue overflow" SEVERITY failure;': 1,
+            "o_readdataack_sync<=avl_readdataack; -- <ASYNC>": 1,
+            "o_readdataack_sync2<=o_readdataack_sync;": 1,
+            "o_readdataack<=o_readdataack_sync XOR o_readdataack_sync2;": 1,
+            "IF lev_dec_v='1' AND o_readdataack='0' THEN": 1,
+            "ELSIF lev_dec_v='0' AND o_readdataack='1' THEN": 1,
+        }
+        for fragment, expected_count in required_completion_counts.items():
+            if patched_ascal.count(fragment) != expected_count:
+                fail(
+                    "patched ascal lossless completion logic count mismatch: "
+                    f"{fragment} expected {expected_count}, "
+                    f"found {patched_ascal.count(fragment)}"
+                )
         for forbidden_repair in (
             "avl_completion_bin",
-            "completion_pending",
+            "completion_gray",
+            "o_completion_seen",
             "o_completion_pulse",
             "IF o_copylev>0 THEN",
             "IF o_copylev<2 THEN",
         ):
             if forbidden_repair in patched_ascal:
                 fail(f"superseded completion repair state remains: {forbidden_repair}")
-        for retired_completion in (
-            "SIGNAL avl_readdataack,avl_readack",
-            "o_readdataack_sync<=avl_readdataack",
-            "o_readdataack_sync2<=o_readdataack_sync",
+        for reset_fragment in (
+            "avl_readdataack<='0';",
+            "avl_completion_pending<='0';",
+            "avl_completion_ack_meta<='0';",
+            "avl_completion_ack_sync<='0';",
+            "o_readdataack<='0';",
+            "o_readdataack_sync<='0';",
+            "o_readdataack_sync2<='0';",
         ):
-            if retired_completion in patched_ascal:
-                fail(f"lossy scaler completion toggle remains: {retired_completion}")
+            if patched_ascal.count(reset_fragment) != 1:
+                fail(f"completion transport reset is missing or ambiguous: {reset_fragment}")
         if not re.search(r"\.locked\s*\(\s*\)", patched_pll):
             fail("HDMI PLL wrapper no longer terminates its redundant lock output")
         if "locked.export" in patched_pll or ".locked(hdmi_pll_locked)" in patched:
@@ -477,6 +502,40 @@ def main() -> None:
             fail("generated QSF assignment mismatch: " + ", ".join(bad_assignments))
 
         if args.simulate:
+            ghdl_work = Path(temporary) / "ghdl-work"
+            ghdl_work.mkdir()
+            subprocess.run(
+                [
+                    "ghdl",
+                    "-a",
+                    "--std=08",
+                    f"--workdir={ghdl_work}",
+                    str(work / "sys/ascal.vhd"),
+                    str(completion_queue_tb),
+                ],
+                check=True,
+            )
+            subprocess.run(
+                [
+                    "ghdl",
+                    "-e",
+                    "--std=08",
+                    f"--workdir={ghdl_work}",
+                    "tb_mister_magik_scaler_completion_queue",
+                ],
+                check=True,
+            )
+            subprocess.run(
+                [
+                    "ghdl",
+                    "-r",
+                    "--std=08",
+                    f"--workdir={ghdl_work}",
+                    "tb_mister_magik_scaler_completion_queue",
+                    "--assert-level=error",
+                ],
+                check=True,
+            )
             simulation = Path(temporary) / "sys-top-integration.vvp"
             subprocess.run(
                 [

@@ -4,43 +4,59 @@
 `timescale 1ns/1ps
 `default_nettype none
 
-// Executable model of the completion transport embedded in ascal.vhd. The
-// production structural checker separately pins the corresponding VHDL text.
-module ascal_completion_credit_model (
-	input  wire       destination_clk,
-	input  wire       reset_n,
-	input  wire [1:0] source_completion_gray,
-	output wire       completion_event,
-	output wire       completion_delta_valid
+// Cycle-accurate executable model of the request/pending/ack transport embedded
+// in ascal.vhd. The GHDL gate exercises the exact VHDL transition function.
+module ascal_completion_queue_model (
+	input  wire source_clk,
+	input  wire destination_clk,
+	input  wire reset_n,
+	input  wire completion,
+	output reg  request_toggle,
+	output reg  completion_pending,
+	output reg  completion_pulse,
+	output wire overflow
 );
-	reg [1:0] completion_gray_meta = 2'd0;
-	reg [1:0] completion_gray_sync = 2'd0;
-	reg [1:0] completion_seen = 2'd0;
+	reg request_meta;
+	reg request_sync;
+	reg completion_ack_meta;
+	reg completion_ack_sync;
 
-	function automatic [1:0] gray_next;
-		input [1:0] value;
-		begin
-			gray_next = {value[0], !value[1]};
+	assign overflow = request_toggle != completion_ack_sync &&
+		completion_pending && completion;
+
+	always @(posedge source_clk or negedge reset_n) begin
+		if(!reset_n) begin
+			request_toggle <= 1'b0;
+			completion_pending <= 1'b0;
+			completion_ack_meta <= 1'b0;
+			completion_ack_sync <= 1'b0;
 		end
-	endfunction
-
-	wire delta_one = completion_gray_sync == gray_next(completion_seen);
-	wire delta_two = completion_gray_sync == ~completion_seen;
-	assign completion_event = delta_one || delta_two;
-	assign completion_delta_valid =
-		completion_gray_sync == completion_seen || delta_one || delta_two;
+		else begin
+			completion_ack_meta <= request_sync;
+			completion_ack_sync <= completion_ack_meta;
+			if(request_toggle == completion_ack_sync) begin
+				if(completion_pending) begin
+					request_toggle <= !request_toggle;
+					completion_pending <= completion;
+				end
+				else if(completion)
+					request_toggle <= !request_toggle;
+			end
+			else if(completion && !completion_pending)
+				completion_pending <= 1'b1;
+		end
+	end
 
 	always @(posedge destination_clk or negedge reset_n) begin
 		if(!reset_n) begin
-			completion_gray_meta <= 2'd0;
-			completion_gray_sync <= 2'd0;
-			completion_seen <= 2'd0;
+			request_meta <= 1'b0;
+			request_sync <= 1'b0;
+			completion_pulse <= 1'b0;
 		end
 		else begin
-			completion_gray_meta <= source_completion_gray;
-			completion_gray_sync <= completion_gray_meta;
-			if(completion_event)
-				completion_seen <= gray_next(completion_seen);
+			request_meta <= request_toggle;
+			request_sync <= request_meta;
+			completion_pulse <= request_meta ^ request_sync;
 		end
 	end
 endmodule
@@ -50,25 +66,25 @@ module tb_mister_magik_scaler_completion_cdc;
 	reg destination_clk = 1'b0;
 	reg destination_clock_enabled = 1'b1;
 	reg reset_n = 1'b0;
-	reg legacy_source_toggle = 1'b0;
-	reg [1:0] source_completion_gray = 2'd0;
-	reg legacy_meta = 1'b0;
-	reg legacy_sync = 1'b0;
-	reg legacy_sync_previous = 1'b0;
-	integer legacy_completion_count = 0;
-	integer recovered_completion_count = 0;
-	wire completion_event;
-	wire completion_delta_valid;
-	reg lev_dec = 1'b0;
-	integer modeled_copy_level = 0;
-	integer start_steps;
+	reg completion = 1'b0;
+	wire request_toggle;
+	wire completion_pending;
+	wire completion_pulse;
+	wire overflow;
+	integer produced = 0;
+	integer consumed = 0;
+	integer phase;
+	integer spacing;
 
-	ascal_completion_credit_model dut (
+	ascal_completion_queue_model dut (
+		.source_clk(source_clk),
 		.destination_clk(destination_clk),
 		.reset_n(reset_n),
-		.source_completion_gray(source_completion_gray),
-		.completion_event(completion_event),
-		.completion_delta_valid(completion_delta_valid)
+		.completion(completion),
+		.request_toggle(request_toggle),
+		.completion_pending(completion_pending),
+		.completion_pulse(completion_pulse),
+		.overflow(overflow)
 	);
 
 	always #5 source_clk = !source_clk;
@@ -77,152 +93,98 @@ module tb_mister_magik_scaler_completion_cdc;
 			destination_clk = !destination_clk;
 	end
 
-	function automatic [1:0] gray_next;
-		input [1:0] value;
-		begin
-			gray_next = {value[0], !value[1]};
-		end
-	endfunction
-
-	always @(posedge destination_clk or negedge reset_n) begin
-		if(!reset_n) begin
-			legacy_meta <= 1'b0;
-			legacy_sync <= 1'b0;
-			legacy_sync_previous <= 1'b0;
-			legacy_completion_count <= 0;
-		end
-		else begin
-			legacy_meta <= legacy_source_toggle;
-			legacy_sync <= legacy_meta;
-			legacy_sync_previous <= legacy_sync;
-			if(legacy_sync != legacy_sync_previous)
-				legacy_completion_count <= legacy_completion_count + 1;
-		end
-	end
-
-	// Exact legacy COPYLEV truth table, with the internal event substituted for
-	// the retired one-bit completion pulse.
 	always @(posedge destination_clk or negedge reset_n) begin
 		if(!reset_n)
-			modeled_copy_level <= 0;
-		else if(lev_dec && !completion_event)
-			modeled_copy_level <= modeled_copy_level - 1;
-		else if(!lev_dec && completion_event)
-			modeled_copy_level <= modeled_copy_level + 1;
+			consumed <= 0;
+		else if(completion_pulse)
+			consumed <= consumed + 1;
 	end
-
-	always @(posedge destination_clk or negedge reset_n) begin
-		if(!reset_n)
-			recovered_completion_count <= 0;
-		else
-			recovered_completion_count <= recovered_completion_count + completion_event;
-	end
-
-	task automatic source_completion;
-		reg [1:0] previous;
-		begin
-			@(negedge source_clk);
-			legacy_source_toggle = !legacy_source_toggle;
-			previous = source_completion_gray;
-			source_completion_gray = gray_next(source_completion_gray);
-			if(!$onehot(previous ^ source_completion_gray))
-				$fatal(1, "source Gray ring changed other than one bit");
-		end
-	endtask
 
 	task automatic reset_model;
 		begin
-			destination_clock_enabled = 1'b0;
 			reset_n = 1'b0;
-			source_completion_gray = 2'd0;
-			legacy_source_toggle = 1'b0;
-			repeat(2) @(posedge source_clk);
+			completion = 1'b0;
 			destination_clock_enabled = 1'b1;
-			repeat(2) @(posedge destination_clk);
+			produced = 0;
+			repeat(3) @(posedge source_clk);
 			reset_n = 1'b1;
-			repeat(5) @(posedge destination_clk);
+			repeat(4) @(posedge source_clk);
 		end
 	endtask
 
-	task automatic complete_and_retire_one;
+	task automatic produce_completion;
 		begin
-			source_completion();
-			wait(completion_event);
-			lev_dec = 1'b1;
-			@(posedge destination_clk);
+			@(negedge source_clk);
+			completion = 1'b1;
+			@(negedge source_clk);
+			completion = 1'b0;
+			produced = produced + 1;
 			#1;
-			lev_dec = 1'b0;
-			repeat(3) @(posedge destination_clk);
+			if(overflow)
+				$fatal(1, "legal two-credit schedule overflowed");
+		end
+	endtask
+
+	task automatic await_conservation;
+		integer timeout;
+		begin
+			timeout = 0;
+			while(consumed != produced && timeout < 100) begin
+				@(posedge source_clk);
+				timeout = timeout + 1;
+			end
+			if(consumed != produced)
+				$fatal(1, "completion conservation timeout produced=%0d consumed=%0d",
+					produced, consumed);
 		end
 	endtask
 
 	initial begin
-		// Two completions while clk_hdmi is stopped cancel in the legacy
-		// crossing. Prove recovery from every Gray starting state, including
-		// both modulo wraps.
-		for(start_steps = 0; start_steps < 4; start_steps = start_steps + 1) begin
-			reset_model();
-			repeat(start_steps)
-				complete_and_retire_one();
-			destination_clock_enabled = 1'b0;
-			source_completion();
-			repeat(128) @(posedge source_clk);
-			source_completion();
-			destination_clock_enabled = 1'b1;
-			repeat(8) @(posedge destination_clk);
-			if(legacy_completion_count != start_steps ||
-			   recovered_completion_count != start_steps + 2)
-				$fatal(1, "two-credit stopped-clock recovery failed");
-			if(modeled_copy_level != 2)
-				$fatal(1, "two recovered credits did not fill both copy slots");
+		// Sweep the destination stop point across both clock phases and vary the
+		// true 128-beat-or-greater completion spacing.
+		for(phase = 0; phase < 6; phase = phase + 1) begin
+			for(spacing = 128; spacing <= 132; spacing = spacing + 2) begin
+				reset_model();
+				repeat(phase) #1;
+				destination_clock_enabled = 1'b0;
+				produce_completion();
+				repeat(spacing) @(posedge source_clk);
+				produce_completion();
+				if(!completion_pending)
+					$fatal(1, "second completion was not queued");
+				destination_clock_enabled = 1'b1;
+				await_conservation();
+				if(completion_pending)
+					$fatal(1, "pending completion did not drain");
+			end
 		end
 
-		// A simultaneous completed copy and new credit is net zero.
+		// A completion coincident with acknowledgement forwarding must remain
+		// pending and appear as the next destination pulse.
 		reset_model();
 		destination_clock_enabled = 1'b0;
-		source_completion();
-		source_completion();
+		produce_completion();
+		produce_completion();
 		destination_clock_enabled = 1'b1;
-		repeat(8) @(posedge destination_clk);
-		source_completion();
-		wait(completion_event);
-		lev_dec = 1'b1;
-		@(posedge destination_clk);
-		#1;
-		lev_dec = 1'b0;
-		if(modeled_copy_level != 2)
-			$fatal(1, "simultaneous completion/copy did not hold copy level");
+		wait(request_toggle == dut.completion_ack_sync && completion_pending);
+		produce_completion();
+		await_conservation();
 
-		// Exercise every Gray starting state and both modulo wraps with normal
-		// delta-one observations, retiring each credit to preserve occupancy.
+		// Common reset at every queued phase clears both domains without a
+		// phantom destination pulse.
 		reset_model();
-		repeat(7) begin
-			complete_and_retire_one();
-		end
-		if(recovered_completion_count != 7 || modeled_copy_level != 0)
-			$fatal(1, "delta-one Gray sequence or wrap lost a completion");
-
-		// Sampling between a pair produces two ordinary delta-one credits.
-		complete_and_retire_one();
-		complete_and_retire_one();
-		if(recovered_completion_count != 9 || modeled_copy_level != 0)
-			$fatal(1, "intermediate sampling lost a completion");
-
-		// Reset while the destination is stopped must not create a phantom.
-		reset_model();
-		if(recovered_completion_count != 0 || completion_event)
-			$fatal(1, "reset created a phantom completion");
-
-		// Delta three is outside the two-outstanding invariant and must not be
-		// converted into any credit.
 		destination_clock_enabled = 1'b0;
-		repeat(3) source_completion();
+		produce_completion();
+		produce_completion();
+		reset_n = 1'b0;
+		repeat(3) @(posedge source_clk);
 		destination_clock_enabled = 1'b1;
+		reset_n = 1'b1;
 		repeat(8) @(posedge destination_clk);
-		if(completion_delta_valid || recovered_completion_count != 0)
-			$fatal(1, "invalid delta three fabricated a completion");
+		if(completion_pulse || request_toggle || completion_pending || consumed)
+			$fatal(1, "reset left stale completion state");
 
-		$display("PASS: reproduced parity loss and retained internal completion credits");
+		$display("PASS: queued one-bit completion request survives stopped destination clock");
 		$finish;
 	end
 endmodule

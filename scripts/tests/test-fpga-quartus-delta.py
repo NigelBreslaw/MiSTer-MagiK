@@ -17,17 +17,17 @@ SCRIPT = Path(__file__).resolve().parents[1] / "checks/check-fpga-quartus-delta.
 
 BASE = """\
 Warning (10001): inherited warning File: /work/sys/top.v Line: 7
-Info (332146): Worst-case setup slack is 0.232
+Info (332146): Worst-case setup slack is 0.500
     Info (332119):     Slack       End Point TNS Clock
     Info (332119): ========= =================== =====================
-    Info (332119):     0.232               0.000 clk_sys
+    Info (332119):     0.500               0.000 clk_sys
 Info (332146): Worst-case hold slack is 0.249
     Info (332119):     Slack       End Point TNS Clock
     Info (332119): ========= =================== =====================
     Info (332119):     0.249               0.000 clk_sys
 Info (332114): Report Metastability: Found 5 synchronizer chains.
 Info (332114): Fraction of Chains for which MTBFs Could Not be Calculated: 0.800
-; Unconstrained Output Port Paths ; 10 ; 10 ;
+; Unconstrained Output Port Paths ; 158 ; 158 ;
 Info (332102): Design is not fully constrained for setup requirements
 Info (332102): Design is not fully constrained for hold requirements
 Total logic elements: 10,000
@@ -52,8 +52,10 @@ def quartus_assignment_section(hierarchy: str, names: tuple[str, ...]) -> str:
 
 
 COMPLETION_SYNC_NAMES = (
-    "o_completion_gray_meta",
-    "o_completion_gray_sync",
+    "o_readdataack_sync",
+    "o_readdataack_sync2",
+    "avl_completion_ack_meta",
+    "avl_completion_ack_sync",
 )
 COMPLETION_SYNC_ASSIGNMENTS = quartus_assignment_section(
     "ascal:ascal",
@@ -65,19 +67,20 @@ SYNC_NAMES = tuple(
 )
 SYNC_ASSIGNMENTS = COMPLETION_SYNC_ASSIGNMENTS
 CUSTOM_SYNC = SYNC_ASSIGNMENTS + """\
-Info (332114): Report Metastability: Found 8 synchronizer chains.
-Info (332114): Fraction of Chains for which MTBFs Could Not be Calculated: 0.625
-Info: MagiK diagnostics CDC analysis applied: scaler_completion_gray
+Info (332114): Report Metastability: Found 6 synchronizer chains.
+Info (332114): Fraction of Chains for which MTBFs Could Not be Calculated: 0.666667
+Info: MagiK diagnostics CDC analysis applied: scaler_completion_request_ack
 """
 
 VALID_DIAGNOSTIC_REPORTS = {
     "menu.magik-diagnostic-cdc-skew.rpt": "No paths to report.\n",
     "menu.magik-diagnostic-cdc-net-delay.rpt": (
         "; set_net_delay ; 1.250 ; 10.000 ; 8.750 ; sources ; destinations ; max ;\n"
-        "; -- ; 1.500 ; 10.000 ; 8.500 ; ascal:ascal|avl_completion_gray_i[0] ; "
-        "ascal:ascal|o_completion_gray_meta[0] ; max ;\n"
-        "; -- ; 1.250 ; 10.000 ; 8.750 ; ascal:ascal|avl_completion_gray_i[1] ; "
-        "ascal:ascal|o_completion_gray_meta[1] ; max ;\n"
+        "; set_net_delay ; 1.150 ; 10.000 ; 8.850 ; sources ; destinations ; max ;\n"
+        "; -- ; 1.500 ; 10.000 ; 8.500 ; ascal:ascal|avl_readdataack ; "
+        "ascal:ascal|o_readdataack_sync ; max ;\n"
+        "; -- ; 1.250 ; 10.000 ; 8.750 ; ascal:ascal|o_readdataack_sync2 ; "
+        "ascal:ascal|avl_completion_ack_meta ; max ;\n"
     ),
     "menu.magik-diagnostic-metastability.rpt": (
         "Report Metastability: Found 40 synchronizer chains.\n"
@@ -183,17 +186,17 @@ class QuartusDeltaTest(unittest.TestCase):
 
     def test_unrelated_total_chain_drift_does_not_override_exact_evidence(self) -> None:
         patched = CUSTOM_SYNC.replace(
-            "Found 8 synchronizer chains", "Found 10 synchronizer chains"
+            "Found 6 synchronizer chains", "Found 10 synchronizer chains"
         ).replace(
-            "Could Not be Calculated: 0.625",
-            "Could Not be Calculated: 0.700",
+            "Could Not be Calculated: 0.666667",
+            "Could Not be Calculated: 0.800",
         )
         result, payload = self.run_check(BASE, BASE + patched)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(payload["baseline_synchronizer_chains"], 5)
         self.assertEqual(payload["patched_synchronizer_chains"], 10)
         self.assertEqual(payload["baseline_calculable_synchronizer_chains"], 1)
-        self.assertEqual(payload["patched_calculable_synchronizer_chains"], 3)
+        self.assertEqual(payload["patched_calculable_synchronizer_chains"], 2)
 
     def test_new_warning_fails_even_when_warning_code_is_inherited(self) -> None:
         result, payload = self.run_check(BASE, BASE + "Warning (10001): different warning\n" + CUSTOM_SYNC)
@@ -259,7 +262,7 @@ class QuartusDeltaTest(unittest.TestCase):
         self.assertIn("warning_baseline_mismatch", payload["invalid_reason"])
 
     def test_negative_slack_and_nonzero_tns_fail(self) -> None:
-        patched = (BASE + CUSTOM_SYNC).replace("setup slack is 0.232", "setup slack is -0.001").replace("0.232               0.000", "-0.001              -0.010")
+        patched = (BASE + CUSTOM_SYNC).replace("setup slack is 0.500", "setup slack is -0.001").replace("0.500               0.000", "-0.001              -0.010")
         result, payload = self.run_check(BASE, patched)
         self.assertEqual(result.returncode, 1)
         self.assertIn("setup_slack_below_minimum", payload["invalid_reason"])
@@ -272,7 +275,7 @@ class QuartusDeltaTest(unittest.TestCase):
 
     def test_more_paths_to_the_same_unconstrained_ports_fails(self) -> None:
         patched = BASE.replace(
-            "; Unconstrained Output Port Paths ; 10 ; 10 ;",
+            "; Unconstrained Output Port Paths ; 158 ; 158 ;",
             "; Unconstrained Output Port Paths ; 12 ; 12 ;",
         ) + CUSTOM_SYNC
         result, payload = self.run_check(BASE, patched)
@@ -281,7 +284,7 @@ class QuartusDeltaTest(unittest.TestCase):
 
     def test_fewer_paths_to_the_same_unconstrained_ports_fails(self) -> None:
         patched = BASE.replace(
-            "; Unconstrained Output Port Paths ; 10 ; 10 ;",
+            "; Unconstrained Output Port Paths ; 158 ; 158 ;",
             "; Unconstrained Output Port Paths ; 8 ; 8 ;",
         ) + CUSTOM_SYNC
         result, payload = self.run_check(BASE, patched)
@@ -289,12 +292,12 @@ class QuartusDeltaTest(unittest.TestCase):
         self.assertIn("unconstrained_output_paths_mismatch", payload["invalid_reason"])
 
     def test_observer_budgets_are_relative_to_pre_observer_build(self) -> None:
-        stock = BASE.replace("setup slack is 0.232", "setup slack is 0.400")
+        stock = BASE.replace("setup slack is 0.500", "setup slack is 0.600")
         baseline = stock.replace("setup slack is 0.400", "setup slack is 0.300").replace(
-            "; Unconstrained Output Port Paths ; 10 ; 10 ;",
-            "; Unconstrained Output Port Paths ; 12 ; 12 ;",
+            "; Unconstrained Output Port Paths ; 158 ; 158 ;",
+            "; Unconstrained Output Port Paths ; 158 ; 158 ;",
         )
-        patched = baseline.replace("setup slack is 0.300", "setup slack is 0.201") + CUSTOM_SYNC
+        patched = baseline.replace("setup slack is 0.600", "setup slack is 0.451") + CUSTOM_SYNC
         fitter_resources = (
             "Logic utilization (in ALMs) : 7,000 / 41,910 ( 17 % )\n"
             "Total registers : 20,000\nTotal block memory bits : 1,000,000\nTotal DSP Blocks : 2\n",
@@ -305,7 +308,7 @@ class QuartusDeltaTest(unittest.TestCase):
         )
         result, payload = self.run_check(stock, patched, baseline, fitter_resources)
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(payload["baseline_unconstrained_output_paths"], 12)
+        self.assertEqual(payload["baseline_unconstrained_output_paths"], 158)
         self.assertEqual(payload["resource_deltas"]["logic utilization (in alms)"], 150)
         self.assertEqual(payload["resource_deltas"]["total registers"], 96)
 
@@ -336,9 +339,9 @@ class QuartusDeltaTest(unittest.TestCase):
         self.assertIn("registers_delta", payload["invalid_reason"])
 
     def test_slack_degradation_excess_fails_above_revised_envelope(self) -> None:
-        baseline = BASE.replace("setup slack is 0.232", "setup slack is 0.500")
+        baseline = BASE.replace("setup slack is 0.500", "setup slack is 0.600")
         patched = (
-            baseline.replace("setup slack is 0.500", "setup slack is 0.349")
+            baseline.replace("setup slack is 0.600", "setup slack is 0.449")
             + CUSTOM_SYNC
         )
         result, payload = self.run_check(BASE, patched, baseline)
@@ -347,7 +350,7 @@ class QuartusDeltaTest(unittest.TestCase):
 
     def test_missing_baseline_timing_fails(self) -> None:
         baseline = BASE.replace(
-            "Info (332146): Worst-case setup slack is 0.232\n", ""
+            "Info (332146): Worst-case setup slack is 0.500\n", ""
         )
         result, payload = self.run_check(BASE, BASE + CUSTOM_SYNC, baseline)
         self.assertEqual(result.returncode, 1)
@@ -410,6 +413,20 @@ class QuartusDeltaTest(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertIn("diagnostic_cdc_analysis_count", payload["invalid_reason"])
 
+    def test_completion_chain_mtbf_below_device_hour_gate_fails(self) -> None:
+        reports = dict(VALID_DIAGNOSTIC_REPORTS)
+        reports["menu.magik-diagnostic-metastability.rpt"] = reports[
+            "menu.magik-diagnostic-metastability.rpt"
+        ].replace("1e+09 years", "1e+08 years", 1)
+        result, payload = self.run_check(
+            BASE, BASE + CUSTOM_SYNC, diagnostic_reports=reports
+        )
+        self.assertEqual(result.returncode, 1)
+        self.assertIn(
+            "diagnostic_metastability_mtbf_below_minimum",
+            payload["invalid_reason"],
+        )
+
     def test_synchronizer_hierarchy_is_required(self) -> None:
         wrong = CUSTOM_SYNC.replace(
             "ascal:ascal",
@@ -422,7 +439,7 @@ class QuartusDeltaTest(unittest.TestCase):
 
     def test_second_completion_synchronizer_stage_is_required(self) -> None:
         wrong = CUSTOM_SYNC.replace(
-            "; o_completion_gray_sync ;", "; unrelated_completion_sync ;", 1
+            "; o_readdataack_sync2 ;", "; unrelated_completion_sync ;", 1
         )
         result, payload = self.run_check(BASE, BASE + wrong)
         self.assertEqual(result.returncode, 1)
@@ -434,7 +451,7 @@ class QuartusDeltaTest(unittest.TestCase):
             / "mister/platform/fpga/menu-vblank-latch/mister_magik_video_diagnostics.sdc"
         ).read_text(encoding="utf-8")
         self.assertIn("get_registers -nowarn -no_duplicates", sdc)
-        self.assertIn("set_net_delay -max 10.0", sdc)
+        self.assertEqual(sdc.count("set_net_delay -max 10.0"), 2)
         self.assertNotIn("set_max_skew", sdc)
         self.assertNotIn("set_false_path", sdc)
 

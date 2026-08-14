@@ -1,7 +1,9 @@
-# A registered two-bit Gray sequence carries scaler completion credits from
-# clk_100m into clk_hdmi. Normal setup/hold is cut by the existing asynchronous
-# clock groups, so explicitly bound both source-to-first-stage routes to one
-# source period. The true source event spacing is a full 128-beat burst.
+# The scaler completion request crosses from clk_100m into clk_hdmi and the
+# stable destination observation returns as its acknowledgement. Normal
+# setup/hold is cut by the existing asynchronous clock groups, so explicitly
+# bound each source-to-first-stage route to one clk_100m period. The request
+# changes only after a full 128-beat return; the acknowledgement changes only
+# after the destination's second synchronizer stage observes that request.
 proc magik_require_registers {label register_pattern expected_count} {
 	set registers [get_registers -nowarn -no_duplicates $register_pattern]
 	if {[get_collection_size $registers] != $expected_count} {
@@ -11,11 +13,19 @@ proc magik_require_registers {label register_pattern expected_count} {
 	return $registers
 }
 
-set magik_scaler_completion_gray_source [magik_require_registers gray_source \
-	{*ascal:ascal|avl_completion_gray_i[*]} 2]
-set magik_scaler_completion_gray_meta [magik_require_registers gray_meta \
-	{*ascal:ascal|o_completion_gray_meta[*]} 2]
+set magik_scaler_completion_request [magik_require_registers request_source \
+	{*ascal:ascal|avl_readdataack} 1]
+set magik_scaler_completion_request_meta [magik_require_registers request_meta \
+	{*ascal:ascal|o_readdataack_sync} 1]
 set_net_delay -max 10.0 \
-	-from $magik_scaler_completion_gray_source \
-	-to $magik_scaler_completion_gray_meta
-post_message -type info "MagiK diagnostics CDC analysis applied: scaler_completion_gray"
+	-from $magik_scaler_completion_request \
+	-to $magik_scaler_completion_request_meta
+
+set magik_scaler_completion_ack [magik_require_registers ack_source \
+	{*ascal:ascal|o_readdataack_sync2} 1]
+set magik_scaler_completion_ack_meta [magik_require_registers ack_meta \
+	{*ascal:ascal|avl_completion_ack_meta} 1]
+set_net_delay -max 10.0 \
+	-from $magik_scaler_completion_ack \
+	-to $magik_scaler_completion_ack_meta
+post_message -type info "MagiK diagnostics CDC analysis applied: scaler_completion_request_ack"

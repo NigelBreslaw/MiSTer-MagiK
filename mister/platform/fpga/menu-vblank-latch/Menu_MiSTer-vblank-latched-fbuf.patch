@@ -1,8 +1,179 @@
+diff --git a/sys/ascal.vhd b/sys/ascal.vhd
+index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..82ec67f79eaf58b30946909fe43d359e7a79fdd9 100644
+--- a/sys/ascal.vhd
++++ b/sys/ascal.vhd
+@@ -75,6 +75,64 @@ LIBRARY ieee;
+ USE ieee.std_logic_1164.ALL;
+ USE ieee.numeric_std.ALL;
+ 
++PACKAGE mister_magik_scaler_completion_queue IS
++	FUNCTION completion_queue_next(
++		request_toggle     : std_logic;
++		completion_pending : std_logic;
++		completion_ack     : std_logic;
++		completion         : std_logic)
++		RETURN std_logic_vector;
++	FUNCTION completion_queue_overflow(
++		request_toggle     : std_logic;
++		completion_pending : std_logic;
++		completion_ack     : std_logic;
++		completion         : std_logic)
++		RETURN boolean;
++END PACKAGE mister_magik_scaler_completion_queue;
++
++LIBRARY ieee;
++USE ieee.std_logic_1164.ALL;
++
++PACKAGE BODY mister_magik_scaler_completion_queue IS
++	FUNCTION completion_queue_next(
++		request_toggle     : std_logic;
++		completion_pending : std_logic;
++		completion_ack     : std_logic;
++		completion         : std_logic)
++		RETURN std_logic_vector IS
++		VARIABLE state_v : std_logic_vector(1 DOWNTO 0);
++	BEGIN
++		state_v:=request_toggle & completion_pending;
++		IF request_toggle=completion_ack THEN
++			IF completion_pending='1' THEN
++				state_v(1):=NOT request_toggle;
++				state_v(0):=completion;
++			ELSIF completion='1' THEN
++				state_v(1):=NOT request_toggle;
++			END IF;
++		ELSIF completion='1' AND completion_pending='0' THEN
++			state_v(0):='1';
++		END IF;
++		RETURN state_v;
++	END FUNCTION completion_queue_next;
++
++	FUNCTION completion_queue_overflow(
++		request_toggle     : std_logic;
++		completion_pending : std_logic;
++		completion_ack     : std_logic;
++		completion         : std_logic)
++		RETURN boolean IS
++	BEGIN
++		RETURN request_toggle/=completion_ack AND
++			completion_pending='1' AND completion='1';
++	END FUNCTION completion_queue_overflow;
++END PACKAGE BODY mister_magik_scaler_completion_queue;
++
++LIBRARY ieee;
++USE ieee.std_logic_1164.ALL;
++USE ieee.numeric_std.ALL;
++USE work.mister_magik_scaler_completion_queue.ALL;
++
+ -- MODE[2:0]
+ -- 000 : Nearest
+ -- 001 : Bilinear
+@@ -335,6 +393,8 @@ ARCHITECTURE rtl OF ascal IS
+ 	TYPE arr_pix IS ARRAY (natural RANGE <>) OF type_pix;
+ 	TYPE arr_pixq IS ARRAY(natural RANGE <>) OF arr_pix(0 TO 3);
+ 	ATTRIBUTE ramstyle : string;
++	ATTRIBUTE preserve : boolean;
++	ATTRIBUTE altera_attribute : string;
+ 
+ 	SUBTYPE uint12 IS natural RANGE 0 TO 4095;
+ 	SUBTYPE uint13 IS natural RANGE 0 TO 8191;
+@@ -418,7 +478,14 @@ ARCHITECTURE rtl OF ascal IS
+ 	SIGNAL avl_walt,avl_wline,avl_rline : std_logic;
+ 	SIGNAL avl_dw,avl_dr : unsigned(N_DW-1 DOWNTO 0);
+ 	SIGNAL avl_wr : std_logic;
+-	SIGNAL avl_readdataack,avl_readack : std_logic;
++	SIGNAL avl_readdataack,avl_completion_pending : std_logic;
++	SIGNAL avl_completion_ack_meta,avl_completion_ack_sync : std_logic;
++	SIGNAL avl_readack : std_logic;
++	ATTRIBUTE preserve OF avl_readdataack : SIGNAL IS true;
++	ATTRIBUTE altera_attribute OF avl_completion_ack_meta : SIGNAL IS
++		"-name SYNCHRONIZER_IDENTIFICATION FORCED";
++	ATTRIBUTE altera_attribute OF avl_completion_ack_sync : SIGNAL IS
++		"-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS";
+ 	SIGNAL avl_radrs,avl_wadrs : unsigned(31 DOWNTO 0);
+ 	SIGNAL avl_i_offset0,avl_o_offset0 : unsigned(31 DOWNTO 0);
+ 	SIGNAL avl_i_offset1,avl_o_offset1 : unsigned(31 DOWNTO 0);
+@@ -481,6 +548,10 @@ ARCHITECTURE rtl OF ascal IS
+ 	SIGNAL o_pshift : natural RANGE 0 TO 15;
+ 	SIGNAL o_readack,o_readack_sync,o_readack_sync2 : std_logic;
+ 	SIGNAL o_readdataack,o_readdataack_sync,o_readdataack_sync2 : std_logic;
++	ATTRIBUTE altera_attribute OF o_readdataack_sync : SIGNAL IS
++		"-name SYNCHRONIZER_IDENTIFICATION FORCED";
++	ATTRIBUTE altera_attribute OF o_readdataack_sync2 : SIGNAL IS
++		"-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS";
+ 	SIGNAL o_copyv : unsigned(0 TO 14);
+ 	SIGNAL o_adrs : unsigned(31 DOWNTO 0); -- Avalon address
+ 	SIGNAL o_adrs_pre : natural RANGE 0 TO 2**24-1;
+@@ -1672,15 +1743,23 @@ BEGIN
+ 	-- AVALON interface
+ 	Avaloir:PROCESS(avl_clk,avl_reset_na) IS
+ 		VARIABLE adr_v : unsigned(31 DOWNTO 0);
++		VARIABLE completion_v : std_logic;
++		VARIABLE completion_state_v : std_logic_vector(1 DOWNTO 0);
+ 	BEGIN
+ 		IF avl_reset_na='0' THEN
+ 			avl_state<=sIDLE;
+ 			avl_write_sr<='0';
+ 			avl_read_sr<='0';
+ 			avl_readdataack<='0';
++			avl_completion_pending<='0';
++			avl_completion_ack_meta<='0';
++			avl_completion_ack_sync<='0';
+ 			avl_readack<='0';
+ 
+ 		ELSIF rising_edge(avl_clk) THEN
++			completion_v:='0';
++			avl_completion_ack_meta<=o_readdataack_sync2; -- <ASYNC>
++			avl_completion_ack_sync<=avl_completion_ack_meta;
+ 			----------------------------------
+ 			avl_write_sync<=i_write; -- <ASYNC>
+ 			avl_write_sync2<=avl_write_sync;
+@@ -1789,7 +1868,7 @@ BEGIN
+ 				avl_wr<='1';
+ 				avl_wad<=(avl_wad+1) MOD (2*BLEN);
+ 				IF (avl_wad MOD BLEN)=BLEN-2 THEN
+-					avl_readdataack<=NOT avl_readdataack;
++					completion_v:='1';
+ 				END IF;
+ 			END IF;
+ 
+@@ -1797,6 +1876,22 @@ BEGIN
+ 				avl_wad<=2*BLEN-1;
+ 			END IF;
+ 
++			completion_state_v:=completion_queue_next(
++				avl_readdataack,
++				avl_completion_pending,
++				avl_completion_ack_sync,
++				completion_v);
++			avl_readdataack<=completion_state_v(1);
++			avl_completion_pending<=completion_state_v(0);
++			-- synthesis translate_off
++			ASSERT NOT completion_queue_overflow(
++				avl_readdataack,
++				avl_completion_pending,
++				avl_completion_ack_sync,
++				completion_v)
++				REPORT "scaler completion queue overflow" SEVERITY failure;
++			-- synthesis translate_on
++
+ 			--------------------------------------------
+ 		END IF;
+ 	END PROCESS Avaloir;
+@@ -1877,6 +1972,9 @@ BEGIN
+ 			o_readlev<=0;
+ 			o_copylev<=0;
+ 			o_hsp<='0';
++			o_readdataack<='0';
++			o_readdataack_sync<='0';
++			o_readdataack_sync2<='0';
+ 
+ 		ELSIF rising_edge(o_clk) THEN
+ 			------------------------------------------------------
 diff --git a/sys/sys_top.v b/sys/sys_top.v
-index a416879..f6a40ea 100644
+index a4168795b68bed4b655b00cb7ced5cf5b4f32741..4d81fc6df5732b81d71a78ad650f41ed1e49087d 100644
 --- a/sys/sys_top.v
 +++ b/sys/sys_top.v
-@@ -351,6 +351,97 @@ reg [12:0] arc2x = 0;
+@@ -351,6 +351,68 @@ reg [12:0] arc2x = 0;
  reg [12:0] arc2y = 0;
  reg [15:0] io_dout_sys;
  
@@ -71,7 +242,7 @@ index a416879..f6a40ea 100644
  always@(posedge clk_sys) begin
  	reg  [7:0] cmd;
  	reg        has_cmd;
-@@ -360,6 +447,19 @@ always@(posedge clk_sys) begin
+@@ -360,6 +422,19 @@ always@(posedge clk_sys) begin
  	reg  [7:0] fb_crc;
  	reg  [1:0] sl_r;
  
@@ -91,7 +262,7 @@ index a416879..f6a40ea 100644
  	coef_wr <= 0;
  	sl_r <= FB_EN ? 2'b00 : scanlines;
  
-@@ -407,6 +507,8 @@ always@(posedge clk_sys) begin
+@@ -407,6 +482,7 @@ always@(posedge clk_sys) begin
  			if(io_din[7:0] == 'h40) io_dout_sys <= fb_crc;
  `endif
  			if(io_din[7:0] == 'h42) io_dout_sys <= {1'b1, frame_cnt};
@@ -99,7 +270,7 @@ index a416879..f6a40ea 100644
  			if(io_din[7:0] == 'h44) io_dout_sys <= 1;
  		end
  		else begin
-@@ -462,6 +564,8 @@ always@(posedge clk_sys) begin
+@@ -462,6 +538,7 @@ always@(posedge clk_sys) begin
  					9: LFB_STRIDE      <= io_din[13:0];
  				endcase
  			end
@@ -107,7 +278,7 @@ index a416879..f6a40ea 100644
  			if(cmd == 'h25) {led_overtake, led_state} <= io_din;
  			if(cmd == 'h26) vol_att <= io_din[4:0];
  			if(cmd == 'h27) VSET <= io_din[11:0];
-@@ -1380,15 +1491,30 @@ assign HDMI_TX_D  = hdmi_out_d;
+@@ -1380,15 +1457,30 @@ assign HDMI_TX_D  = hdmi_out_d;
  
  wire [23:0] vga_data_sl;
  wire        vga_de_sl, vga_ce_sl, vga_vs_sl, vga_hs_sl;
@@ -142,120 +313,3 @@ index a416879..f6a40ea 100644
  	.ce_in(ce_pix),
  
  	.dout(vga_data_sl),
-diff --git a/sys/ascal.vhd b/sys/ascal.vhd
-index a735e6b..0000000 100644
---- a/sys/ascal.vhd
-+++ b/sys/ascal.vhd
-@@ -337,6 +337,17 @@ ARCHITECTURE rtl OF ascal IS
- 	TYPE arr_pixq IS ARRAY(natural RANGE <>) OF arr_pix(0 TO 3);
- 	ATTRIBUTE ramstyle : string;
-+	ATTRIBUTE preserve : boolean;
-+	ATTRIBUTE altera_attribute : string;
-+
-+	FUNCTION completion_gray_next(value : unsigned(1 DOWNTO 0))
-+		RETURN unsigned IS
-+	BEGIN
-+		RETURN value(0) & NOT value(1);
-+	END FUNCTION;
- 
- 	SUBTYPE uint12 IS natural RANGE 0 TO 4095;
- 	SUBTYPE uint13 IS natural RANGE 0 TO 8191;
-@@ -418,7 +421,9 @@ ARCHITECTURE rtl OF ascal IS
- 	SIGNAL avl_walt,avl_wline,avl_rline : std_logic;
- 	SIGNAL avl_dw,avl_dr : unsigned(N_DW-1 DOWNTO 0);
- 	SIGNAL avl_wr : std_logic;
--	SIGNAL avl_readdataack,avl_readack : std_logic;
-+	SIGNAL avl_readack : std_logic;
-+	SIGNAL avl_completion_gray_i : unsigned(1 DOWNTO 0);
-+	ATTRIBUTE preserve OF avl_completion_gray_i : SIGNAL IS true;
- 	SIGNAL avl_radrs,avl_wadrs : unsigned(31 DOWNTO 0);
- 	SIGNAL avl_i_offset0,avl_o_offset0 : unsigned(31 DOWNTO 0);
- 	SIGNAL avl_i_offset1,avl_o_offset1 : unsigned(31 DOWNTO 0);
-@@ -480,7 +483,6 @@ ARCHITECTURE rtl OF ascal IS
- 	TYPE enum_o_copy IS (sWAIT,sSHIFT,sCOPY);
- 	SIGNAL o_copy : enum_o_copy;
- 	SIGNAL o_pshift : natural RANGE 0 TO 15;
- 	SIGNAL o_readack,o_readack_sync,o_readack_sync2 : std_logic;
--	SIGNAL o_readdataack,o_readdataack_sync,o_readdataack_sync2 : std_logic;
-+	SIGNAL o_completion_gray_meta,o_completion_gray_sync : unsigned(1 DOWNTO 0);
-+	SIGNAL o_completion_seen : unsigned(1 DOWNTO 0);
-+	ATTRIBUTE altera_attribute OF o_completion_gray_meta : SIGNAL IS
-+		"-name SYNCHRONIZER_IDENTIFICATION FORCED";
-+	ATTRIBUTE altera_attribute OF o_completion_gray_sync : SIGNAL IS
-+		"-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS";
- 	SIGNAL o_copyv : unsigned(0 TO 14);
- 	SIGNAL o_adrs : unsigned(31 DOWNTO 0); -- Avalon address
- 	SIGNAL o_adrs_pre : natural RANGE 0 TO 2**24-1;
-@@ -1671,13 +1673,15 @@ ARCHITECTURE rtl OF ascal IS
- 	-----------------------------------------------------------------------------
- 	-- AVALON interface
- 	Avaloir:PROCESS(avl_clk,avl_reset_na) IS
- 		VARIABLE adr_v : unsigned(31 DOWNTO 0);
- 	BEGIN
- 		IF avl_reset_na='0' THEN
- 			avl_state<=sIDLE;
- 			avl_write_sr<='0';
- 			avl_read_sr<='0';
--			avl_readdataack<='0';
-+			avl_completion_gray_i<=(OTHERS =>'0');
- 			avl_readack<='0';
- 
- 		ELSIF rising_edge(avl_clk) THEN
-@@ -1789,7 +1793,10 @@ ARCHITECTURE rtl OF ascal IS
- 				avl_wr<='1';
- 				avl_wad<=(avl_wad+1) MOD (2*BLEN);
- 				IF (avl_wad MOD BLEN)=BLEN-2 THEN
--					avl_readdataack<=NOT avl_readdataack;
-+					avl_completion_gray_i<=completion_gray_next(avl_completion_gray_i);
- 				END IF;
- 			END IF;
- 
-@@ -1864,6 +1868,7 @@ ARCHITECTURE rtl OF ascal IS
- 	Scalaire:PROCESS (o_clk,o_reset_na) IS
- 		VARIABLE lev_inc_v,lev_dec_v : std_logic;
-+		VARIABLE completion_event_v : std_logic;
- 		VARIABLE prim_v,last_v,bib_v : std_logic;
- 		VARIABLE shift_v : unsigned(0 TO N_DW+15);
- 		VARIABLE hpix_v : type_pix;
-@@ -1877,8 +1882,16 @@ ARCHITECTURE rtl OF ascal IS
- 			o_readlev<=0;
- 			o_copylev<=0;
- 			o_hsp<='0';
-+			o_completion_gray_meta<=(OTHERS =>'0');
-+			o_completion_gray_sync<=(OTHERS =>'0');
-+			o_completion_seen<=(OTHERS =>'0');
- 
- 		ELSIF rising_edge(o_clk) THEN
-+			completion_event_v:='0';
-+			o_completion_gray_meta<=avl_completion_gray_i; -- <ASYNC>
-+			o_completion_gray_sync<=o_completion_gray_meta;
-+			IF o_completion_gray_sync=completion_gray_next(o_completion_seen) OR
-+			   o_completion_gray_sync=NOT o_completion_seen THEN
-+				completion_event_v:='1';
-+				o_completion_seen<=completion_gray_next(o_completion_seen);
-+			END IF;
- 			------------------------------------------------------
- 			o_mode   <=mode; -- <ASYNC> ?
- 			o_format <="0001" & format; -- <ASYNC> ?
- 
-@@ -2023,10 +2033,6 @@ ARCHITECTURE rtl OF ascal IS
- 			o_readack_sync2<=o_readack_sync;
- 			o_readack<=o_readack_sync XOR o_readack_sync2;
- 
--			o_readdataack_sync<=avl_readdataack; -- <ASYNC>
--			o_readdataack_sync2<=o_readdataack_sync;
--			o_readdataack<=o_readdataack_sync XOR o_readdataack_sync2;
--
- 			------------------------------------------------------
- 			lev_inc_v:='0';
- 			lev_dec_v:='0';
-@@ -2335,5 +2351,5 @@ ARCHITECTURE rtl OF ascal IS
--			IF lev_dec_v='1' AND o_readdataack='0' THEN
--				o_copylev<=o_copylev-1;
--			ELSIF lev_dec_v='0' AND o_readdataack='1' THEN
--				o_copylev<=o_copylev+1;
-+			IF lev_dec_v='1' AND completion_event_v='0' THEN
-+				o_copylev<=o_copylev-1;
-+			ELSIF lev_dec_v='0' AND completion_event_v='1' THEN
-+				o_copylev<=o_copylev+1;
- 			END IF;
