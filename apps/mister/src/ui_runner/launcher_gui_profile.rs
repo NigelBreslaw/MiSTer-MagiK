@@ -9,6 +9,7 @@ const ENABLE_ENV: &str = "MISTER_GUI_FRAME_PROFILE";
 const COMPLETE_ENV: &str = "MISTER_GUI_FRAME_PROFILE_COMPLETE";
 const PMU_ENV: &str = "MISTER_GUI_FRAME_PROFILE_PMU";
 const PHASE_TIMEOUT: Duration = Duration::from_secs(20);
+const ARCADE_SCROLL_PHASE_TIMEOUT: Duration = Duration::from_secs(30);
 const FRAME_LIMIT: usize = 4_096;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -172,6 +173,13 @@ impl GuiProfilePhase {
             Self::SettledArcade => "settled-arcade",
         }
     }
+
+    const fn timeout(self) -> Duration {
+        match self {
+            Self::ArcadeScroll => ARCADE_SCROLL_PHASE_TIMEOUT,
+            _ => PHASE_TIMEOUT,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -309,7 +317,7 @@ impl GuiProfilingController {
             "event": "started",
             "monotonic_us": crate::input_hub::monotonic_us(),
         }));
-        self.deadline = Some(now + PHASE_TIMEOUT);
+        self.deadline = Some(now + phase.timeout());
         Ok(())
     }
 
@@ -641,6 +649,31 @@ mod tests {
             .request_phase(GuiProfilePhase::SettledSettings, now)
             .unwrap();
         controller.tick(now + PHASE_TIMEOUT);
+        assert!(matches!(controller.state, GuiProfileState::Failed(_)));
+    }
+
+    #[test]
+    fn arcade_scroll_allows_the_fixed_twenty_second_hold() {
+        let now = Instant::now();
+        let mut controller = GuiProfilingController::enabled_for_test(now);
+        complete_through(
+            &mut controller,
+            &[
+                GuiProfilePhase::SettledSettings,
+                GuiProfilePhase::HomePanRight,
+                GuiProfilePhase::HomePanLeft,
+            ],
+        );
+        let phase_start = now + Duration::from_millis(3);
+        controller
+            .request_phase(GuiProfilePhase::ArcadeScroll, phase_start)
+            .unwrap();
+        controller.tick(phase_start + Duration::from_secs(20));
+        assert_eq!(
+            controller.state,
+            GuiProfileState::AwaitingPresentation(GuiProfilePhase::ArcadeScroll)
+        );
+        controller.tick(phase_start + ARCADE_SCROLL_PHASE_TIMEOUT);
         assert!(matches!(controller.state, GuiProfileState::Failed(_)));
     }
 

@@ -860,6 +860,7 @@ mod tests {
             "launcher-response",
             "launcher-response-attribution",
             "gui-frame-attribution",
+            "arcade-velocity-scroll",
             "transition-streamline",
             "agent-observer-attribution",
             "agent-io-attribution",

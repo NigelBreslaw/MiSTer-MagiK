@@ -26,7 +26,6 @@ const DEFAULT_DESCRIPTOR_PATH: &str = "/tmp/mister-magik/ui-automation-session.j
 const DEFAULT_SOCKET_PATH: &str = "/tmp/mister-magik/ui-automation.sock";
 const MAX_SESSION_AGE: Duration = Duration::from_secs(120);
 const REQUEST_LEASE: Duration = Duration::from_secs(5);
-const MAX_HOLD: Duration = Duration::from_secs(2);
 const CLOCK_SKEW: Duration = Duration::from_secs(10);
 
 #[derive(Clone, Debug, Deserialize)]
@@ -410,7 +409,9 @@ impl LauncherAutomation {
                 duration_ms,
             } => {
                 self.require_input_enabled(input_enabled)?;
-                if duration_ms == 0 || duration_ms > MAX_HOLD.as_millis() as u64 {
+                if duration_ms == 0
+                    || duration_ms > mister_magik_agent_protocol::LAUNCHER_AUTOMATION_MAX_HOLD_MS
+                {
                     return Err("hold_duration_out_of_range".to_string());
                 }
                 let session = self.session.as_mut().ok_or("session_ended")?;

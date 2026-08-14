@@ -441,6 +441,7 @@ fn benchmark_capabilities() -> serde_json::Value {
         "pmu-profile-v2": true,
         "persisted-search-v1": true,
         "input-integrity-driver-v1": true,
+        "arcade-velocity-scroll-v1": true,
         "system-entry-v1": true,
         "system-entry-profile-v1": cfg!(feature = "profile"),
     });

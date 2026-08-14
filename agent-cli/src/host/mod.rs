@@ -651,6 +651,15 @@ impl NativeDevice {
         self.benchmark_profile(|config| profile_installed_gui_frame_attribution(config, output_dir))
     }
 
+    pub(crate) fn profile_arcade_velocity_scroll(
+        &mut self,
+        output_dir: &Path,
+    ) -> std::result::Result<String, DeviceFailure> {
+        self.benchmark_profile(|config| {
+            profile_installed_arcade_velocity_scroll(config, output_dir)
+        })
+    }
+
     pub(crate) fn profile_transition_streamline(
         &mut self,
         output_dir: &Path,
@@ -7469,6 +7478,9 @@ fn wait_input_integrity_launcher(session: &Session, timeout: Duration) -> Result
 }
 
 const GUI_PROFILE_REMOTE_COMPLETE: &str = "/tmp/mister-magik/gui-frame-profile.json";
+const GUI_PROFILE_DEFAULT_SCROLL_MS: u64 = 900;
+const ARCADE_VELOCITY_SCROLL_DURATION_MS: u64 = 20_000;
+const ARCADE_VELOCITY_SCROLL_TELEMETRY_SECS: u64 = 35;
 
 fn gui_profile_route_launcher_env(pmu: bool) -> Vec<(String, String)> {
     let mut environment = vec![
@@ -7532,6 +7544,8 @@ fn run_gui_frame_profile_route(
     session: &Session,
     output_dir: &Path,
     pmu: bool,
+    scroll_duration_ms: u64,
+    terminal_checkpoint: Option<&str>,
 ) -> Result<Value> {
     fs::create_dir_all(output_dir)?;
     exec_checked(
@@ -7617,10 +7631,16 @@ fn run_gui_frame_profile_route(
             &nonce,
             AutomationAction::Hold {
                 button: AutomationButton::Down,
-                duration_ms: 900,
+                duration_ms: scroll_duration_ms,
             },
         )?;
-        thread::sleep(Duration::from_millis(950));
+        let hold_started = Instant::now();
+        while hold_started.elapsed() < Duration::from_millis(scroll_duration_ms) {
+            let _ = launcher_automation::snapshot(config, &nonce)?;
+            thread::sleep(Duration::from_millis(250).min(
+                Duration::from_millis(scroll_duration_ms).saturating_sub(hold_started.elapsed()),
+            ));
+        }
         let release_sequence = modal_input_action(config, &nonce, AutomationAction::ReleaseAll)?;
         let settled_arcade = wait_gui_profile_snapshot(
             config,
@@ -7640,6 +7660,19 @@ fn run_gui_frame_profile_route(
             },
             "terminal Arcade preview",
         )?;
+        let terminal_checkpoint = terminal_checkpoint
+            .map(|label| {
+                launcher_automation::capture_checkpoint(
+                    config,
+                    &nonce,
+                    release_sequence,
+                    label,
+                    output_dir,
+                )
+            })
+            .transpose()?
+            .map(|checkpoint| serde_json::from_str::<Value>(&checkpoint))
+            .transpose()?;
         let profile_text = wait_for_remote_text(
             session,
             GUI_PROFILE_REMOTE_COMPLETE,
@@ -7670,6 +7703,7 @@ fn run_gui_frame_profile_route(
             "pan_left": pan_left,
             "arcade_entered": arcade_entered,
             "settled_arcade": settled_arcade,
+            "terminal_checkpoint": terminal_checkpoint,
             "profile": profile,
             "status_before": status_before,
             "status_after": status_after,
@@ -7684,6 +7718,432 @@ fn run_gui_frame_profile_route(
             Err(format!("{run}; GUI profiling automation cleanup failed: {end}").into())
         }
     }
+}
+
+fn arcade_velocity_scroll_cleanup_command() -> String {
+    format!(
+        "{}; rm -f /tmp/mister-magik/realtime-frame-analytics; test ! -e /tmp/mister-magik/realtime-frame-analytics",
+        gui_profile_route_cleanup_command()
+    )
+}
+
+fn profile_installed_arcade_velocity_scroll(
+    config: &NativeDeviceConfig,
+    output_dir: &Path,
+) -> Result<String> {
+    let session = connect_with(&config.connection, 10)?;
+    let capability = exec_checked_output(
+        &session,
+        "installed Arcade velocity-scroll capability",
+        "/media/fat/mister-magik-dev/mister-magik-fb benchmark-capabilities",
+    )?;
+    let capability = last_json_line(&capability.stdout)
+        .ok_or("installed benchmark capability output contains no JSON report")?;
+    if capability
+        .get("arcade-velocity-scroll-v1")
+        .and_then(Value::as_bool)
+        != Some(true)
+    {
+        return Err("installed app does not support arcade-velocity-scroll-v1".into());
+    }
+    let initial_status = read_launcher_status(&session)?;
+    if initial_status.get("catalog_ready").and_then(Value::as_bool) != Some(true)
+        || initial_status
+            .get("catalog_games")
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+            == 0
+    {
+        return Err("Arcade velocity-scroll benchmark requires a usable cached catalog".into());
+    }
+    let manifest = remote_read(&session, "/media/fat/mister-magik-dev/platform-v3.manifest")
+        .ok_or("development platform manifest is missing")?;
+    let boot_id = remote_read(&session, "/proc/sys/kernel/random/boot_id")
+        .ok_or("device boot id is unavailable")?;
+    let original_display = exec_checked_output(
+        &session,
+        "query Arcade velocity-scroll display mode",
+        &acknowledged_main_command("mister_magik_display_get_v1"),
+    )?;
+    if parse_display_reply_pending(original_display.stdout.trim())?.is_some() {
+        return Err(
+            "Arcade velocity-scroll benchmark cannot start during a display transaction".into(),
+        );
+    }
+    let display_mode = parse_display_reply_active(original_display.stdout.trim())?;
+    if !display_mode.ends_with("p60") {
+        return Err(format!(
+            "Arcade velocity-scroll benchmark requires an active 60 Hz mode, found {display_mode}"
+        )
+        .into());
+    }
+    fs::create_dir_all(output_dir)?;
+
+    let telemetry_endpoint = config.agent()?.clone();
+    let telemetry_thread = thread::spawn(move || {
+        agent_telemetry_for_duration_at_cadence(
+            &telemetry_endpoint,
+            Duration::from_secs(ARCADE_VELOCITY_SCROLL_TELEMETRY_SECS),
+            100,
+        )
+        .map_err(|error| error.to_string())
+    });
+    let analytics_started = Instant::now();
+    let analytics_result: Result<()> = loop {
+        if remote_read(&session, "/tmp/mister-magik/realtime-frame-analytics").as_deref()
+            == Some("process\n")
+        {
+            break Ok(());
+        }
+        if analytics_started.elapsed() >= Duration::from_secs(3) {
+            break Err("Arcade velocity-scroll analytics lease did not become ready".into());
+        }
+        thread::sleep(Duration::from_millis(20));
+    };
+    let route_result = analytics_result.and_then(|()| {
+        run_gui_frame_profile_route(
+            config,
+            &session,
+            output_dir,
+            false,
+            ARCADE_VELOCITY_SCROLL_DURATION_MS,
+            Some("terminal-arcade"),
+        )
+    });
+    let telemetry_result: Result<Vec<Value>> = match telemetry_thread.join() {
+        Ok(Ok(telemetry)) => Ok(telemetry),
+        Ok(Err(error)) => Err(error.into()),
+        Err(_) => Err("Arcade velocity-scroll telemetry collector panicked".into()),
+    };
+    let run_result = match (route_result, telemetry_result) {
+        (Ok(route), Ok(telemetry)) => {
+            let telemetry_text = telemetry
+                .iter()
+                .map(serde_json::to_string)
+                .collect::<std::result::Result<Vec<_>, _>>()?
+                .join("\n");
+            fs::write(
+                output_dir.join("telemetry.jsonl"),
+                format!("{telemetry_text}\n"),
+            )?;
+            summarize_arcade_velocity_scroll(output_dir, &route, &telemetry, &display_mode)
+        }
+        (Err(route), Ok(_)) => Err(route),
+        (Ok(_), Err(telemetry)) => Err(telemetry),
+        (Err(route), Err(telemetry)) => {
+            Err(format!("{route}; telemetry collection failed: {telemetry}").into())
+        }
+    };
+
+    let launcher_restore = launcher_restart(
+        &session,
+        &LauncherRestartOptions {
+            clear_env: true,
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+            timeout_secs: 45,
+            ..LauncherRestartOptions::default()
+        },
+    );
+    let cleanup = exec_checked(
+        &session,
+        "clean Arcade velocity-scroll benchmark state",
+        &arcade_velocity_scroll_cleanup_command(),
+    );
+    let summary = match (run_result, launcher_restore, cleanup) {
+        (Ok(summary), Ok(()), Ok(())) => summary,
+        (run, launcher, cleanup) => {
+            return Err(format!(
+                "Arcade velocity-scroll benchmark failed: run={:?}; launcher_restore={:?}; cleanup={:?}",
+                run.err(),
+                launcher.err(),
+                cleanup.err()
+            )
+            .into());
+        }
+    };
+
+    let final_manifest = remote_read(&session, "/media/fat/mister-magik-dev/platform-v3.manifest")
+        .ok_or("development platform manifest is missing after Arcade velocity scroll")?;
+    if final_manifest != manifest {
+        return Err("installed platform manifest changed during Arcade velocity scroll".into());
+    }
+    let final_boot_id = remote_read(&session, "/proc/sys/kernel/random/boot_id")
+        .ok_or("device boot id is unavailable after Arcade velocity scroll")?;
+    if final_boot_id != boot_id {
+        return Err("device rebooted during Arcade velocity scroll".into());
+    }
+    let final_display = exec_checked_output(
+        &session,
+        "verify Arcade velocity-scroll display mode",
+        &acknowledged_main_command("mister_magik_display_get_v1"),
+    )?;
+    if parse_display_reply_pending(final_display.stdout.trim())?.is_some()
+        || parse_display_reply_active(final_display.stdout.trim())? != display_mode
+    {
+        return Err("display mode changed during Arcade velocity scroll".into());
+    }
+    serde_json::to_string(&summary).map_err(Into::into)
+}
+
+fn gui_profile_phase_marker_us(profile: &Value, phase: &str, event: &str) -> Result<u64> {
+    profile
+        .get("phase_markers")
+        .and_then(Value::as_array)
+        .and_then(|markers| {
+            markers.iter().find_map(|marker| {
+                (marker.get("phase").and_then(Value::as_str) == Some(phase)
+                    && marker.get("event").and_then(Value::as_str) == Some(event))
+                .then(|| marker.get("monotonic_us").and_then(Value::as_u64))
+                .flatten()
+            })
+        })
+        .ok_or_else(|| format!("GUI profile is missing {phase} {event}").into())
+}
+
+fn summarize_arcade_velocity_scroll(
+    output_dir: &Path,
+    route: &Value,
+    telemetry: &[Value],
+    display_mode: &str,
+) -> Result<Value> {
+    use std::fmt::Write as _;
+
+    let profile = gui_profile_payload(route)?;
+    let phase_started_us = gui_profile_phase_marker_us(profile, "arcade-scroll", "started")?;
+    let phase_presented_us = gui_profile_phase_marker_us(profile, "arcade-scroll", "presented")?;
+    let phase_duration_us = phase_presented_us
+        .checked_sub(phase_started_us)
+        .filter(|duration| *duration > 0)
+        .ok_or("Arcade velocity-scroll phase timestamps are not increasing")?;
+    let mut frame_map = BTreeMap::<u64, Value>::new();
+    for sample in telemetry {
+        let Some(recent) = sample
+            .pointer("/launcher/frame_budget/recent_frames")
+            .and_then(Value::as_array)
+        else {
+            continue;
+        };
+        for frame in recent {
+            let frame_id = frame_u64(frame, "frame");
+            let completed_us = frame_u64(frame, "completion_monotonic_us");
+            if frame_id > 0
+                && completed_us >= phase_started_us
+                && completed_us <= phase_presented_us
+            {
+                frame_map.insert(frame_id, frame.clone());
+            }
+        }
+    }
+    let frames = frame_map.values().collect::<Vec<_>>();
+    if frames.len() < 2 {
+        return Err("Arcade velocity-scroll telemetry contains fewer than two frames".into());
+    }
+    let mut refresh_periods = frames
+        .iter()
+        .map(|frame| frame_u64(frame, "vsync_period_us"))
+        .filter(|period| *period > 0)
+        .collect::<Vec<_>>();
+    refresh_periods.sort_unstable();
+    let refresh_period_us = median_u64(&refresh_periods)
+        .ok_or("Arcade velocity-scroll telemetry has no refresh period")?;
+    let physical_refresh =
+        authoritative_physical_refresh(1, telemetry, &frames, refresh_period_us)?;
+    let completion_times = frames
+        .iter()
+        .map(|frame| frame_u64(frame, "completion_monotonic_us"))
+        .collect::<Vec<_>>();
+    let completion_elapsed_us = completion_times
+        .last()
+        .copied()
+        .unwrap_or(0)
+        .saturating_sub(completion_times[0]);
+    let mut completion_intervals = completion_times
+        .windows(2)
+        .map(|pair| pair[1].saturating_sub(pair[0]))
+        .collect::<Vec<_>>();
+    completion_intervals.sort_unstable();
+    let mut frame_work = frames
+        .iter()
+        .map(|frame| frame_work_us(frame))
+        .collect::<Vec<_>>();
+    frame_work.sort_unstable();
+    let sequence_gaps = frames
+        .windows(2)
+        .filter(|pair| {
+            let previous = frame_u16(pair[0], "main_present_sequence");
+            let current = frame_u16(pair[1], "main_present_sequence");
+            previous == 0 || current == 0 || !presentation_sequence_is_contiguous(previous, current)
+        })
+        .count();
+    let latch_drop_delta = frame_u16(frames[frames.len() - 1], "main_present_drop_count")
+        .wrapping_sub(frame_u16(frames[0], "main_present_drop_count"));
+    let submitted_fps = if completion_elapsed_us == 0 {
+        0.0
+    } else {
+        frames.len().saturating_sub(1) as f64 * 1_000_000.0 / completion_elapsed_us as f64
+    };
+    let physical_fps = physical_refresh
+        .get("unique_fps")
+        .and_then(Value::as_f64)
+        .unwrap_or(0.0);
+    let dropped_frames = physical_refresh
+        .get("dropped_frames")
+        .and_then(Value::as_u64)
+        .unwrap_or(u64::MAX);
+    let ownership_losses = physical_refresh
+        .pointer("/presentation_telemetry/ownership_loss_delta")
+        .and_then(Value::as_u64)
+        .unwrap_or(u64::MAX);
+    let frame_work_p99_us = percentile_99(&frame_work);
+    let frame_work_max_us = frame_work.last().copied().unwrap_or(0);
+    let first_selected = frame_u64(frames[0], "selected");
+    let final_selected = frame_u64(frames[frames.len() - 1], "selected");
+    let motion_frames = frames
+        .iter()
+        .filter(|frame| frame_u64(frame, "arcade_list_update_us") > 0)
+        .count();
+    let scroll_profile_frames = profile
+        .get("frames")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|frame| frame.get("phase").and_then(Value::as_str) == Some("arcade-scroll"))
+        .count();
+    let mut quality_failures = Vec::new();
+    if phase_duration_us < ARCADE_VELOCITY_SCROLL_DURATION_MS * 1_000 {
+        quality_failures.push("scroll-window-shorter-than-20-seconds");
+    }
+    if physical_fps < 59.9 {
+        quality_failures.push("physical-fps-below-59.9");
+    }
+    if dropped_frames != 0 {
+        quality_failures.push("physical-dropped-frames");
+    }
+    if ownership_losses != 0 {
+        quality_failures.push("presentation-ownership-loss");
+    }
+    if latch_drop_delta != 0 {
+        quality_failures.push("latch-drops");
+    }
+    if sequence_gaps != 0 {
+        quality_failures.push("presentation-sequence-gaps");
+    }
+    if frame_work_p99_us >= 15_917 {
+        quality_failures.push("frame-work-p99-over-budget");
+    }
+    if frame_work_max_us >= 16_667 {
+        quality_failures.push("frame-work-max-over-budget");
+    }
+    if final_selected <= first_selected || motion_frames == 0 {
+        quality_failures.push("arcade-selection-did-not-advance");
+    }
+    let quality_status = if quality_failures.is_empty() {
+        "passed"
+    } else {
+        "failed"
+    };
+    let sample_refs = telemetry.iter().collect::<Vec<_>>();
+    let summary = json!({
+        "schema": "mister-magik-arcade-velocity-scroll-v1",
+        "quality_status": quality_status,
+        "quality_failures": quality_failures,
+        "display_mode": display_mode,
+        "hold_duration_ms": ARCADE_VELOCITY_SCROLL_DURATION_MS,
+        "phase_duration_us": phase_duration_us,
+        "frames": frames.len(),
+        "submitted_fps": submitted_fps,
+        "physical_refresh": physical_refresh,
+        "latch_drop_delta": latch_drop_delta,
+        "sequence_gaps": sequence_gaps,
+        "selection": {
+            "first": first_selected,
+            "final": final_selected,
+            "advanced_by": final_selected.saturating_sub(first_selected),
+            "motion_frames": motion_frames,
+            "profile_records": scroll_profile_frames,
+        },
+        "completion_intervals_us": {
+            "median": median_u64(&completion_intervals).unwrap_or(0),
+            "p99": percentile_99(&completion_intervals),
+            "max": completion_intervals.last().copied().unwrap_or(0),
+        },
+        "frame_work_us": {
+            "p99": frame_work_p99_us,
+            "max": frame_work_max_us,
+        },
+        "phase_timing": {
+            "frame_start": normalized_frame_timing(&frames, "frame_start_phase_us"),
+            "prepare": normalized_frame_timing(&frames, "prepare_us"),
+            "slint_render": normalized_frame_timing(&frames, "render_us"),
+            "custom_draw": normalized_frame_timing(&frames, "custom_draw_us"),
+            "arcade_list_update": normalized_frame_timing(&frames, "arcade_list_update_us"),
+            "preview_blit": normalized_frame_timing(&frames, "preview_blit_us"),
+            "hidden_copy": normalized_frame_timing(&frames, "main_present_hidden_copy_us"),
+            "present": normalized_frame_timing(&frames, "present_us"),
+            "vsync_wait": normalized_frame_timing(&frames, "vsync_us"),
+            "process_cpu": normalized_frame_timing(&frames, "process_cpu_us"),
+        },
+        "frame_production": frame_production_summary(&frames),
+        "status_publishing": status_publishing_summary(&frames, &sample_refs),
+        "terminal_checkpoint": route.get("terminal_checkpoint").cloned().unwrap_or(Value::Null),
+        "artifacts": {
+            "telemetry": "telemetry.jsonl",
+            "profile": "profile.json",
+            "terminal_png": "terminal-arcade.png",
+            "terminal_metadata": "terminal-arcade.json",
+        },
+    });
+    fs::write(
+        output_dir.join("summary.json"),
+        format!("{}\n", serde_json::to_string_pretty(&summary)?),
+    )?;
+    let mut report = String::from("# Arcade velocity-scroll benchmark\n\n");
+    writeln!(report, "Quality: **{}**\n", quality_status)?;
+    writeln!(report, "- Active mode: `{display_mode}`")?;
+    writeln!(
+        report,
+        "- Fixed hold: {} ms",
+        ARCADE_VELOCITY_SCROLL_DURATION_MS
+    )?;
+    writeln!(report, "- Physical FPS: {:.3}", physical_fps)?;
+    writeln!(report, "- Physical dropped frames: {dropped_frames}")?;
+    writeln!(report, "- Latch drops: {latch_drop_delta}")?;
+    writeln!(report, "- Sequence gaps: {sequence_gaps}")?;
+    writeln!(report, "- Submitted FPS: {:.3}", submitted_fps)?;
+    writeln!(
+        report,
+        "- Frame-work p99 / max: {frame_work_p99_us} / {frame_work_max_us} us"
+    )?;
+    writeln!(
+        report,
+        "- Selected index advance: {}\n",
+        final_selected.saturating_sub(first_selected)
+    )?;
+    writeln!(report, "| Phase | Average | P99 | Max |")?;
+    writeln!(report, "|---|---:|---:|---:|")?;
+    for (label, key) in [
+        ("Frame start", "frame_start"),
+        ("Prepare", "prepare"),
+        ("Slint render", "slint_render"),
+        ("Custom draw", "custom_draw"),
+        ("Arcade list", "arcade_list_update"),
+        ("Preview blit", "preview_blit"),
+        ("Hidden copy", "hidden_copy"),
+        ("Present", "present"),
+        ("Vsync wait", "vsync_wait"),
+        ("Process CPU", "process_cpu"),
+    ] {
+        let timing = &summary["phase_timing"][key];
+        writeln!(
+            report,
+            "| {label} | {:.1} us | {} us | {} us |",
+            timing["average_us"].as_f64().unwrap_or(0.0),
+            timing["p99_us"].as_u64().unwrap_or(0),
+            timing["max_us"].as_u64().unwrap_or(0),
+        )?;
+    }
+    fs::write(output_dir.join("report.md"), report)?;
+    Ok(summary)
 }
 
 fn wait_for_remote_text(
@@ -9289,7 +9749,14 @@ fn run_gui_frame_profile_arm(
     output_dir: &Path,
     pmu: bool,
 ) -> Result<Value> {
-    let run_result = run_gui_frame_profile_route(config, session, output_dir, pmu);
+    let run_result = run_gui_frame_profile_route(
+        config,
+        session,
+        output_dir,
+        pmu,
+        GUI_PROFILE_DEFAULT_SCROLL_MS,
+        None,
+    );
     if let Some(log) = remote_read(session, "/tmp/mister-magik-slint.log") {
         fs::write(output_dir.join("launcher.log"), log)?;
     }
@@ -9337,7 +9804,14 @@ fn run_gui_frame_streamline_arm(
         let capture_thread = capture.start();
         capture.wait_ready(Duration::from_secs(10))?;
         let capture_started_monotonic_ns = capture.monotonic_ns("GUI frame capture start")?;
-        let route_result = run_gui_frame_profile_route(config, session, output_dir, false);
+        let route_result = run_gui_frame_profile_route(
+            config,
+            session,
+            output_dir,
+            false,
+            GUI_PROFILE_DEFAULT_SCROLL_MS,
+            None,
+        );
         let capture_result = capture.stop(capture_thread);
         let capture_ended_monotonic_ns = capture.monotonic_ns("GUI frame capture end")?;
         capture.retain_log()?;
