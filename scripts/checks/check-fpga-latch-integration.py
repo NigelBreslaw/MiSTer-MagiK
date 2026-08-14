@@ -165,6 +165,58 @@ def main() -> None:
     timing_report = source_dir / "report_top_timing.tcl"
     integration_tb = source_dir / "tb_mister_magik_sys_top_integration.sv"
     completion_queue_tb = source_dir / "tb_mister_magik_scaler_completion_queue.vhd"
+    completion_formal_dut = (
+        source_dir / "mister_magik_scaler_completion_formal_dut.vhd"
+    )
+    completion_formal_wrapper = (
+        source_dir / "mister_magik_ascal_completion_formal.sv"
+    )
+    completion_formal_check = (
+        root / "scripts/checks/check-fpga-scaler-completion-formal.py"
+    )
+    for formal_input in (
+        completion_formal_dut,
+        completion_formal_wrapper,
+        completion_formal_check,
+    ):
+        if not formal_input.is_file():
+            fail(f"scaler completion formal input is missing: {formal_input}")
+    formal_dut_source = completion_formal_dut.read_text()
+    formal_wrapper_source = completion_formal_wrapper.read_text()
+    formal_check_source = completion_formal_check.read_text()
+    for fragment in (
+        "USE work.mister_magik_scaler_completion_queue.ALL;",
+        "return_credits_next(",
+        "return_phase_next(",
+        "return_words_remaining(",
+        "return_accounting_invalid(",
+        "return_drain_ready(",
+        "completion_queue_next(",
+        "completion_queue_overflow(",
+    ):
+        if fragment not in formal_dut_source:
+            fail(f"formal DUT is detached from production transition: {fragment}")
+    for fragment in (
+        "cover_two_stopped_delivered",
+        "cover_coincident_ack_completion",
+        "cover_final_old_beat_during_reset",
+        "cover_old_beat_after_reset",
+        "cover_vs_alignment_during_drain",
+        "cover_first_post_drain_completion",
+        "reference_words",
+        "(* anyseq *) wire waitrequest;",
+    ):
+        if fragment not in formal_wrapper_source:
+            fail(f"formal environment obligation is missing: {fragment}")
+    for fragment in (
+        'run(["git", "apply", "--recount", str(patch)]',
+        '"ghdl",\n                "synth",',
+        "-tempinduct",
+        '"patched_ascal_sha256"',
+        '"ghdl_netlist_sha256"',
+    ):
+        if fragment not in formal_check_source:
+            fail(f"formal checker source binding is missing: {fragment}")
     rtl_source = rtl.read_text()
     bridge_source = bridge.read_text()
     control_source = diagnostics_control.read_text()
