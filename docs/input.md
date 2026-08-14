@@ -40,9 +40,11 @@ physically confirmed. Re-entering a destination rearms it, while releases,
 boundaries, swallowed input, asynchronous state changes, and Arcade's
 fixed-selector velocity list do not create acknowledgements.
 
-Launcher navigation transitions are 300 ms. Back and Home reverse an active
-transition immediately. Every other press received while a transition owns
-focus is consumed; it is never cached or replayed on the destination screen.
+Launcher navigation transitions are 300 ms. Every press received while a
+transition owns focus is consumed, including Back and Home; it is never cached
+or replayed on the destination screen. Matching releases remain captured by
+the transition and cannot leak into the destination. Transition reversal is
+reserved for internal rollback after preparation failure or cancellation.
 
 Events are routed and applied one at a time. Focus is recomputed after each
 event, so a modal opened by one event can receive the next event from the same
