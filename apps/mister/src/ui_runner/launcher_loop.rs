@@ -10884,12 +10884,13 @@ pub(super) fn run_launcher_loop(
                     request_launcher_redraw!();
                 }
                 if let Some(post) = readiness_post {
+                    let cached_frame = layer_target.cached_frame_view();
                     if let Some(source) =
                         super::launcher_readiness::SourceFrameEvidence::from_rgb565_rows(
-                            target.cached_565(),
+                            cached_frame.pixels(),
                             ui.render_w(),
                             ui.render_h(),
-                            target.cached_stride(),
+                            cached_frame.stride(),
                         )
                     {
                         launcher_readiness.observe(
