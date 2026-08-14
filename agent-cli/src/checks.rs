@@ -411,7 +411,48 @@ fn check_agent_guidance(repository: &Path) -> Result<(), String> {
             return Err(format!("root_workflow_missing: {expected}"));
         }
     }
+    check_codex_config(repository)?;
     check_retired_validation_call_sites(repository)
+}
+
+fn check_codex_config(repository: &Path) -> Result<(), String> {
+    let text = read(repository, ".codex/config.toml")?;
+    let config: toml::Value =
+        toml::from_str(&text).map_err(|error| format!("codex_config_invalid: {error}"))?;
+    let table = config
+        .as_table()
+        .ok_or_else(|| "codex_config_invalid: root must be a table".to_string())?;
+    let required = [
+        ("allow_login_shell", toml::Value::Boolean(false)),
+        ("tool_output_token_limit", toml::Value::Integer(3000)),
+        (
+            "model_auto_compact_token_limit_scope",
+            toml::Value::String("body_after_prefix".into()),
+        ),
+        ("model_reasoning_effort", toml::Value::String("high".into())),
+        (
+            "model_reasoning_summary",
+            toml::Value::String("concise".into()),
+        ),
+        ("model_verbosity", toml::Value::String("low".into())),
+    ];
+    for (key, expected) in required {
+        let Some(actual) = table.get(key) else {
+            return Err(format!("codex_config_missing: {key}"));
+        };
+        if std::mem::discriminant(actual) != std::mem::discriminant(&expected) {
+            return Err(format!("codex_config_type: {key}"));
+        }
+        if actual != &expected {
+            return Err(format!("codex_config_value: {key}"));
+        }
+    }
+    for forbidden in ["model_context_window", "model_auto_compact_token_limit"] {
+        if table.contains_key(forbidden) {
+            return Err(format!("codex_config_forbidden: {forbidden}"));
+        }
+    }
+    Ok(())
 }
 
 fn check_retired_validation_call_sites(repository: &Path) -> Result<(), String> {
@@ -1271,6 +1312,85 @@ mod tests {
             Path::new("mister/platform/kernel/scanout-slots/a.c"),
             "// SPDX-License-Identifier: GPL-3.0-or-later\n// Copyright (C) 2026 Nigel Breslaw\n"
         ));
+    }
+
+    #[test]
+    fn codex_config_contract_accepts_required_defaults_and_unrelated_tables() {
+        let root = temporary_root("codex-config-valid");
+        fs::create_dir_all(root.join(".codex")).unwrap();
+        fs::write(
+            root.join(".codex/config.toml"),
+            concat!(
+                "allow_login_shell = false\n",
+                "tool_output_token_limit = 3000\n",
+                "model_auto_compact_token_limit_scope = \"body_after_prefix\"\n",
+                "model_reasoning_effort = \"high\"\n",
+                "model_reasoning_summary = \"concise\"\n",
+                "model_verbosity = \"low\"\n",
+                "[mcp_servers.fixture]\n",
+                "command = \"fixture\"\n",
+            ),
+        )
+        .unwrap();
+        assert!(check_codex_config(&root).is_ok());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn codex_config_contract_rejects_missing_typed_valued_and_forbidden_keys() {
+        let valid = concat!(
+            "allow_login_shell = false\n",
+            "tool_output_token_limit = 3000\n",
+            "model_auto_compact_token_limit_scope = \"body_after_prefix\"\n",
+            "model_reasoning_effort = \"high\"\n",
+            "model_reasoning_summary = \"concise\"\n",
+            "model_verbosity = \"low\"\n",
+        );
+        for (label, fixture, expected) in [
+            (
+                "missing",
+                valid.replace("model_verbosity = \"low\"\n", ""),
+                "codex_config_missing: model_verbosity",
+            ),
+            (
+                "type",
+                valid.replace(
+                    "tool_output_token_limit = 3000",
+                    "tool_output_token_limit = \"3000\"",
+                ),
+                "codex_config_type: tool_output_token_limit",
+            ),
+            (
+                "value",
+                valid.replace(
+                    "model_reasoning_effort = \"high\"",
+                    "model_reasoning_effort = \"medium\"",
+                ),
+                "codex_config_value: model_reasoning_effort",
+            ),
+            (
+                "forbidden",
+                format!("{valid}model_context_window = 1050000\n"),
+                "codex_config_forbidden: model_context_window",
+            ),
+        ] {
+            let root = temporary_root(&format!("codex-config-{label}"));
+            fs::create_dir_all(root.join(".codex")).unwrap();
+            fs::write(root.join(".codex/config.toml"), fixture).unwrap();
+            assert_eq!(check_codex_config(&root).unwrap_err(), expected);
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    fn temporary_root(label: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "agent-cli-{label}-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ))
     }
 
     #[test]

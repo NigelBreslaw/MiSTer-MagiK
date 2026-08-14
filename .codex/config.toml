@@ -1,6 +1,13 @@
 # Copyright (C) 2026 Nigel Breslaw
 # SPDX-License-Identifier: GPL-3.0-or-later
 
+allow_login_shell = false
+tool_output_token_limit = 3000
+model_auto_compact_token_limit_scope = "body_after_prefix"
+model_reasoning_effort = "high"
+model_reasoning_summary = "concise"
+model_verbosity = "low"
+
 [mcp_servers.magik-rust-lsp]
 command = "cargo"
 args = [

@@ -259,6 +259,7 @@ fn add_path_operations(
     }
     if path.file_name().and_then(|name| name.to_str()) == Some("AGENTS.md")
         || path.starts_with("docs/agents")
+        || path == Path::new(".codex/config.toml")
     {
         add(builtin(
             "repo.guidance",
@@ -2028,6 +2029,22 @@ mod tests {
                 "missing doctor contract for {path}"
             );
         }
+    }
+
+    #[test]
+    fn codex_config_changes_select_guidance_contract() {
+        let plan = affected_plan(
+            AssuranceRequest::Plan {
+                scope: Scope::Paths(vec![]),
+            },
+            vec![".codex/config.toml".into()],
+        )
+        .unwrap();
+        assert!(
+            plan.operations
+                .iter()
+                .any(|operation| operation.id == "repo.guidance")
+        );
     }
 
     #[test]
