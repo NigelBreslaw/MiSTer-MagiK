@@ -7746,16 +7746,6 @@ fn profile_installed_arcade_velocity_scroll(
     {
         return Err("installed app does not support arcade-velocity-scroll-v1".into());
     }
-    let initial_status = read_launcher_status(&session)?;
-    if initial_status.get("catalog_ready").and_then(Value::as_bool) != Some(true)
-        || initial_status
-            .get("catalog_games")
-            .and_then(Value::as_u64)
-            .unwrap_or(0)
-            == 0
-    {
-        return Err("Arcade velocity-scroll benchmark requires a usable cached catalog".into());
-    }
     let manifest = remote_read(&session, "/media/fat/mister-magik-dev/platform-v3.manifest")
         .ok_or("development platform manifest is missing")?;
     let boot_id = remote_read(&session, "/proc/sys/kernel/random/boot_id")
