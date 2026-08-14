@@ -1007,9 +1007,6 @@ mod macos {
                     self.input_router.set_focus(request);
                     while let Some(event) = self.launcher_input_events.pop_front() {
                         match self.input_router.route_event(event, request, frame_now) {
-                            InputOutcome::TransitionControl { .. } => {
-                                self.navigation_transition.request_reverse(now_us);
-                            }
                             InputOutcome::Dispatch { .. }
                             | InputOutcome::Released { .. }
                             | InputOutcome::WakeScreensaver { .. }
@@ -1043,10 +1040,6 @@ mod macos {
                             if context == self.input_router.context() =>
                         {
                             Some(event)
-                        }
-                        InputOutcome::TransitionControl { .. } => {
-                            self.navigation_transition.request_reverse(now_us);
-                            None
                         }
                         InputOutcome::Released { .. }
                         | InputOutcome::WakeScreensaver { .. }

@@ -2257,7 +2257,6 @@ impl LauncherResponseTrace {
         let dispatch_execution = self.execution_stamp();
         let (trigger, disposition) = match outcome {
             InputOutcome::Dispatch { kind, .. } => (kind, "dispatched"),
-            InputOutcome::TransitionControl { .. } => (DispatchKind::Initial, "transition-control"),
             InputOutcome::Consumed {
                 reason: ConsumedReason::TransitionActive,
                 ..
@@ -7138,9 +7137,7 @@ pub(super) fn run_launcher_loop(
                         launcher_response_trace.record_route(event, outcome);
                         latency_critical_input_pending |= matches!(
                             outcome,
-                            InputOutcome::Dispatch { .. }
-                                | InputOutcome::TransitionControl { .. }
-                                | InputOutcome::WakeScreensaver { .. }
+                            InputOutcome::Dispatch { .. } | InputOutcome::WakeScreensaver { .. }
                         );
                         match outcome {
                             InputOutcome::Dispatch { event, .. } => Some(event),
@@ -7150,17 +7147,6 @@ pub(super) fn run_launcher_loop(
                                 Some(event)
                             }
                             InputOutcome::Released { .. } => None,
-                            InputOutcome::TransitionControl { .. } => {
-                                if navigation_transition.is_active() {
-                                    let now_us = frame_now
-                                        .saturating_duration_since(start)
-                                        .as_micros()
-                                        .min(u64::MAX as u128)
-                                        as u64;
-                                    navigation_transition.request_reverse(now_us);
-                                }
-                                None
-                            }
                             InputOutcome::WakeScreensaver { .. }
                             | InputOutcome::Consumed { .. } => None,
                         }
@@ -14126,6 +14112,123 @@ mod tests {
                 .is_none()
         );
         assert_eq!(nav.confirm_selected, 1);
+    }
+
+    #[test]
+    fn rapid_second_back_is_swallowed_after_settings_exit() {
+        let catalog = empty_arcade_catalog("/tmp");
+        let mut nav = LauncherNav::new();
+        nav.screen = Screen::Settings;
+        let settings_focus = launcher_screen_input_focus(&nav);
+        let mut router = InputRouter::new(settings_focus);
+        let now = Instant::now();
+
+        let first_back = normalized_test_press(LogicalAction::Back);
+        let InputOutcome::Dispatch { event, .. } =
+            router.route_event(first_back, settings_focus, now)
+        else {
+            panic!("the first Back should leave Settings");
+        };
+        assert!(
+            nav.handle_action_with_navigation_intents(&event, now, &catalog)
+                .is_none()
+        );
+        assert_eq!(nav.screen, Screen::Home);
+        assert!(settings_page_transition(Screen::Settings, nav.screen).is_some());
+
+        let transition_focus = launcher_input_focus(true, false, false, false, false, true, &nav);
+        let mut first_release = first_back;
+        first_release.sequence = 2;
+        first_release.phase = InputPhase::Released;
+        assert!(matches!(
+            router.route_event(first_release, transition_focus, now),
+            InputOutcome::Released { context, .. } if context.target == settings_focus.target
+        ));
+
+        let mut second_back = normalized_test_press(LogicalAction::Back);
+        second_back.sequence = 3;
+        second_back.press_id = crate::input_event::PressId(2);
+        assert!(matches!(
+            router.route_event(second_back, transition_focus, now),
+            InputOutcome::Consumed {
+                reason: ConsumedReason::TransitionActive,
+                ..
+            }
+        ));
+
+        let destination_focus = launcher_screen_input_focus(&nav);
+        router.set_focus(destination_focus);
+        assert!(!router.action_held(LogicalAction::Back));
+        assert!(router.tick_repeat(now + Duration::from_secs(1)).is_none());
+        let mut second_release = second_back;
+        second_release.sequence = 4;
+        second_release.phase = InputPhase::Released;
+        assert!(matches!(
+            router.route_event(second_release, destination_focus, now),
+            InputOutcome::Released { context, .. }
+                if context.target.kind == InputContextKind::Transition
+        ));
+        assert_eq!(nav.screen, Screen::Home);
+    }
+
+    #[test]
+    fn rapid_second_back_is_swallowed_after_arcade_exit() {
+        let catalog = catalog_for_media_systems(&["arcade"]);
+        let mut nav = LauncherNav::new();
+        nav.sync_launcher_taxonomy(&catalog);
+        assert!(nav.open_default_arcade(&catalog));
+        let arcade_focus = launcher_screen_input_focus(&nav);
+        let mut router = InputRouter::new(arcade_focus);
+        let now = Instant::now();
+
+        let first_back = normalized_test_press(LogicalAction::Back);
+        let InputOutcome::Dispatch { event, .. } =
+            router.route_event(first_back, arcade_focus, now)
+        else {
+            panic!("the first Back should leave Arcade");
+        };
+        let navigation = nav
+            .handle_action_with_navigation_intents(&event, now, &catalog)
+            .expect("Arcade Back should produce a navigation intent");
+        assert_eq!(navigation.action, LauncherAction::NavigateBack);
+        assert!(navigation_transition_for_intent(&nav, &navigation).is_some());
+        assert!(nav.commit_navigation_intent(&navigation, &catalog));
+        let destination_screen = nav.screen;
+        assert_ne!(destination_screen, Screen::Arcade);
+
+        let transition_focus = launcher_input_focus(true, false, false, false, false, true, &nav);
+        let mut first_release = first_back;
+        first_release.sequence = 2;
+        first_release.phase = InputPhase::Released;
+        assert!(matches!(
+            router.route_event(first_release, transition_focus, now),
+            InputOutcome::Released { context, .. } if context.target == arcade_focus.target
+        ));
+
+        let mut second_back = normalized_test_press(LogicalAction::Back);
+        second_back.sequence = 3;
+        second_back.press_id = crate::input_event::PressId(2);
+        assert!(matches!(
+            router.route_event(second_back, transition_focus, now),
+            InputOutcome::Consumed {
+                reason: ConsumedReason::TransitionActive,
+                ..
+            }
+        ));
+
+        let destination_focus = launcher_screen_input_focus(&nav);
+        router.set_focus(destination_focus);
+        assert!(!router.action_held(LogicalAction::Back));
+        assert!(router.tick_repeat(now + Duration::from_secs(1)).is_none());
+        let mut second_release = second_back;
+        second_release.sequence = 4;
+        second_release.phase = InputPhase::Released;
+        assert!(matches!(
+            router.route_event(second_release, destination_focus, now),
+            InputOutcome::Released { context, .. }
+                if context.target.kind == InputContextKind::Transition
+        ));
+        assert_eq!(nav.screen, destination_screen);
     }
 
     #[test]

@@ -1314,7 +1314,7 @@ mod tests {
     }
 
     #[test]
-    fn back_during_motion_reverses_without_progress_jump() {
+    fn explicit_reverse_during_motion_preserves_progress() {
         let mut controller = NavigationTransitionController::default();
         controller.begin(request(), 0);
         controller.captured(0, 0);
