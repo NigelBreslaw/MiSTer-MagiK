@@ -7788,35 +7788,22 @@ fn profile_installed_arcade_velocity_scroll(
 
     let telemetry_endpoint = config.agent()?.clone();
     let telemetry_thread = thread::spawn(move || {
-        agent_telemetry_for_duration_at_cadence(
+        agent_telemetry_for_duration_with_mode(
             &telemetry_endpoint,
             Duration::from_secs(ARCADE_VELOCITY_SCROLL_TELEMETRY_SECS),
             100,
+            "off",
         )
         .map_err(|error| error.to_string())
     });
-    let analytics_started = Instant::now();
-    let analytics_result: Result<()> = loop {
-        if remote_read(&session, "/tmp/mister-magik/realtime-frame-analytics").as_deref()
-            == Some("process\n")
-        {
-            break Ok(());
-        }
-        if analytics_started.elapsed() >= Duration::from_secs(3) {
-            break Err("Arcade velocity-scroll analytics lease did not become ready".into());
-        }
-        thread::sleep(Duration::from_millis(20));
-    };
-    let route_result = analytics_result.and_then(|()| {
-        run_gui_frame_profile_route(
-            config,
-            &session,
-            output_dir,
-            false,
-            ARCADE_VELOCITY_SCROLL_DURATION_MS,
-            Some("terminal-arcade"),
-        )
-    });
+    let route_result = run_gui_frame_profile_route(
+        config,
+        &session,
+        output_dir,
+        false,
+        ARCADE_VELOCITY_SCROLL_DURATION_MS,
+        Some("terminal-arcade"),
+    );
     let telemetry_result: Result<Vec<Value>> = match telemetry_thread.join() {
         Ok(Ok(telemetry)) => Ok(telemetry),
         Ok(Err(error)) => Err(error.into()),
@@ -7922,37 +7909,62 @@ fn summarize_arcade_velocity_scroll(
         .checked_sub(phase_started_us)
         .filter(|duration| *duration > 0)
         .ok_or("Arcade velocity-scroll phase timestamps are not increasing")?;
-    let mut frame_map = BTreeMap::<u64, Value>::new();
-    for sample in telemetry {
-        let Some(recent) = sample
-            .pointer("/launcher/frame_budget/recent_frames")
-            .and_then(Value::as_array)
-        else {
-            continue;
-        };
-        for frame in recent {
-            let frame_id = frame_u64(frame, "frame");
-            let completed_us = frame_u64(frame, "completion_monotonic_us");
-            if frame_id > 0
-                && completed_us >= phase_started_us
-                && completed_us <= phase_presented_us
-            {
-                frame_map.insert(frame_id, frame.clone());
-            }
-        }
-    }
-    let frames = frame_map.values().collect::<Vec<_>>();
-    if frames.len() < 2 {
-        return Err("Arcade velocity-scroll telemetry contains fewer than two frames".into());
-    }
-    let mut refresh_periods = frames
-        .iter()
-        .map(|frame| frame_u64(frame, "vsync_period_us"))
-        .filter(|period| *period > 0)
+    let scroll_profile_frames = profile
+        .get("frames")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|frame| {
+            frame.get("phase").and_then(Value::as_str) == Some("arcade-scroll")
+                && frame
+                    .get("monotonic_us")
+                    .and_then(Value::as_u64)
+                    .is_some_and(|timestamp| {
+                        timestamp >= phase_started_us && timestamp <= phase_presented_us
+                    })
+                && frame.pointer("/presentation/active_sequence").is_some()
+        })
         .collect::<Vec<_>>();
-    refresh_periods.sort_unstable();
-    let refresh_period_us = median_u64(&refresh_periods)
-        .ok_or("Arcade velocity-scroll telemetry has no refresh period")?;
+    if scroll_profile_frames.len() < 2 {
+        return Err("Arcade velocity-scroll profile contains fewer than two frames".into());
+    }
+    let first_profile_frame = scroll_profile_frames[0];
+    let last_profile_frame = scroll_profile_frames[scroll_profile_frames.len() - 1];
+    let profile_elapsed_us = last_profile_frame["monotonic_us"]
+        .as_u64()
+        .unwrap_or(0)
+        .saturating_sub(first_profile_frame["monotonic_us"].as_u64().unwrap_or(0));
+    let first_owned = u32::try_from(
+        first_profile_frame["presentation"]["owned_vblank_count"]
+            .as_u64()
+            .unwrap_or(0),
+    )
+    .unwrap_or(0);
+    let last_owned = u32::try_from(
+        last_profile_frame["presentation"]["owned_vblank_count"]
+            .as_u64()
+            .unwrap_or(0),
+    )
+    .unwrap_or(0);
+    let owned_delta = u64::from(last_owned.wrapping_sub(first_owned));
+    let refresh_period_us = profile_elapsed_us
+        .checked_add(owned_delta / 2)
+        .and_then(|elapsed| elapsed.checked_div(owned_delta))
+        .filter(|period| *period > 0)
+        .ok_or("Arcade velocity-scroll profile has no physical refresh period")?;
+    let frame_values = scroll_profile_frames
+        .iter()
+        .map(|frame| {
+            json!({
+                "frame": frame["frame"],
+                "completion_monotonic_us": frame["monotonic_us"],
+                "vsync_period_us": refresh_period_us,
+                "main_present_sequence": frame["presentation"]["active_sequence"],
+                "main_present_drop_count": frame["presentation"]["latch_drop_count"],
+            })
+        })
+        .collect::<Vec<_>>();
+    let frames = frame_values.iter().collect::<Vec<_>>();
     let physical_refresh =
         authoritative_physical_refresh(1, telemetry, &frames, refresh_period_us)?;
     let completion_times = frames
@@ -7969,11 +7981,6 @@ fn summarize_arcade_velocity_scroll(
         .map(|pair| pair[1].saturating_sub(pair[0]))
         .collect::<Vec<_>>();
     completion_intervals.sort_unstable();
-    let mut frame_work = frames
-        .iter()
-        .map(|frame| frame_work_us(frame))
-        .collect::<Vec<_>>();
-    frame_work.sort_unstable();
     let sequence_gaps = frames
         .windows(2)
         .filter(|pair| {
@@ -8001,8 +8008,6 @@ fn summarize_arcade_velocity_scroll(
         .pointer("/presentation_telemetry/ownership_loss_delta")
         .and_then(Value::as_u64)
         .unwrap_or(u64::MAX);
-    let frame_work_p99_us = percentile_99(&frame_work);
-    let frame_work_max_us = frame_work.last().copied().unwrap_or(0);
     let selection_indices = route
         .get("scroll_snapshots")
         .and_then(Value::as_array)
@@ -8031,13 +8036,6 @@ fn summarize_arcade_velocity_scroll(
     let mut distinct_selections = selection_indices.clone();
     distinct_selections.sort_unstable();
     distinct_selections.dedup();
-    let scroll_profile_frames = profile
-        .get("frames")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter(|frame| frame.get("phase").and_then(Value::as_str) == Some("arcade-scroll"))
-        .count();
     let mut quality_failures = Vec::new();
     if phase_duration_us < ARCADE_VELOCITY_SCROLL_DURATION_MS * 1_000 {
         quality_failures.push("scroll-window-shorter-than-20-seconds");
@@ -8056,12 +8054,6 @@ fn summarize_arcade_velocity_scroll(
     }
     if sequence_gaps != 0 {
         quality_failures.push("presentation-sequence-gaps");
-    }
-    if frame_work_p99_us >= 15_917 {
-        quality_failures.push("frame-work-p99-over-budget");
-    }
-    if frame_work_max_us >= 16_667 {
-        quality_failures.push("frame-work-max-over-budget");
     }
     if selection_changes == 0 || distinct_selections.len() < 2 {
         quality_failures.push("arcade-selection-did-not-advance");
@@ -8090,32 +8082,20 @@ fn summarize_arcade_velocity_scroll(
             "changes": selection_changes,
             "distinct": distinct_selections.len(),
             "snapshots": selection_indices.len(),
-            "profile_records": scroll_profile_frames,
+            "profile_records": scroll_profile_frames.len(),
         },
         "completion_intervals_us": {
             "median": median_u64(&completion_intervals).unwrap_or(0),
             "p99": percentile_99(&completion_intervals),
             "max": completion_intervals.last().copied().unwrap_or(0),
         },
-        "frame_work_us": {
-            "p99": frame_work_p99_us,
-            "max": frame_work_max_us,
+        "measurement": {
+            "telemetry_analytics_mode": "off",
+            "software_cadence_source": "gui-presentation-stamps",
+            "physical_cadence_source": "fpga-owned-vblank-telemetry",
+            "foreground_phase_timing": "not-collected-to-avoid-observer-effect",
         },
-        "phase_timing": {
-            "frame_start": normalized_frame_timing(&frames, "frame_start_phase_us"),
-            "prepare": normalized_frame_timing(&frames, "prepare_us"),
-            "bridge_sync": normalized_frame_timing(&frames, "bridge_sync_us"),
-            "unattributed_prepare": normalized_frame_timing(&frames, "unattributed_prepare_us"),
-            "slint_render": normalized_frame_timing(&frames, "render_us"),
-            "custom_draw": normalized_frame_timing(&frames, "custom_draw_us"),
-            "hidden_copy": normalized_frame_timing(&frames, "main_present_hidden_copy_us"),
-            "present": normalized_frame_timing(&frames, "present_us"),
-            "vsync_wait": normalized_frame_timing(&frames, "vsync_us"),
-            "process_cpu": normalized_frame_timing(&frames, "process_cpu_us"),
-            "wall": normalized_frame_timing(&frames, "wall_us"),
-        },
-        "frame_production": frame_production_summary(&frames),
-        "status_publishing": status_publishing_summary(&frames, &sample_refs),
+        "status_publishing": status_publishing_summary(&[], &sample_refs),
         "terminal_checkpoint": route.get("terminal_checkpoint").cloned().unwrap_or(Value::Null),
         "artifacts": {
             "telemetry": "telemetry.jsonl",
@@ -8141,35 +8121,8 @@ fn summarize_arcade_velocity_scroll(
     writeln!(report, "- Latch drops: {latch_drop_delta}")?;
     writeln!(report, "- Sequence gaps: {sequence_gaps}")?;
     writeln!(report, "- Submitted FPS: {:.3}", submitted_fps)?;
-    writeln!(
-        report,
-        "- Frame-work p99 / max: {frame_work_p99_us} / {frame_work_max_us} us"
-    )?;
+    writeln!(report, "- Telemetry analytics: off (observer-free)")?;
     writeln!(report, "- Selection changes: {selection_changes}\n")?;
-    writeln!(report, "| Phase | Average | P99 | Max |")?;
-    writeln!(report, "|---|---:|---:|---:|")?;
-    for (label, key) in [
-        ("Frame start", "frame_start"),
-        ("Prepare", "prepare"),
-        ("Bridge sync", "bridge_sync"),
-        ("Unattributed prepare", "unattributed_prepare"),
-        ("Slint render", "slint_render"),
-        ("Custom draw", "custom_draw"),
-        ("Hidden copy", "hidden_copy"),
-        ("Present", "present"),
-        ("Vsync wait", "vsync_wait"),
-        ("Process CPU", "process_cpu"),
-        ("Frame wall", "wall"),
-    ] {
-        let timing = &summary["phase_timing"][key];
-        writeln!(
-            report,
-            "| {label} | {:.1} us | {} us | {} us |",
-            timing["average_us"].as_f64().unwrap_or(0.0),
-            timing["p99_us"].as_u64().unwrap_or(0),
-            timing["max_us"].as_u64().unwrap_or(0),
-        )?;
-    }
     fs::write(output_dir.join("report.md"), report)?;
     Ok(summary)
 }
