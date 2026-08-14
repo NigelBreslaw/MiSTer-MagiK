@@ -386,6 +386,53 @@ pub enum PlatformManifestCommand {
 #[derive(Debug, Subcommand)]
 pub enum ReleaseCommand {
     Qualify,
+    FrameEvidence {
+        #[command(subcommand)]
+        command: FrameEvidenceCommand,
+    },
+    ReturnQualification {
+        #[command(subcommand)]
+        command: ReturnQualificationCommand,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum FrameEvidenceCommand {
+    Verify { evidence: PathBuf },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum ReturnQualificationCommand {
+    RecordBoard {
+        #[arg(long)]
+        candidate: PathBuf,
+        #[arg(long, default_value = "public")]
+        layout: String,
+        #[arg(long, value_name = "PATH", num_args = 1.., required = true)]
+        frame_evidence: Vec<PathBuf>,
+        #[arg(long)]
+        output: PathBuf,
+        #[arg(long, action = clap::ArgAction::SetTrue, required = true)]
+        attended: bool,
+    },
+    Aggregate {
+        #[arg(long)]
+        candidate: PathBuf,
+        #[arg(long, default_value = "public")]
+        layout: String,
+        #[arg(long, value_name = "PATH", num_args = 1.., required = true)]
+        board_evidence: Vec<PathBuf>,
+        #[arg(long, default_value = crate::return_qualification::DEFAULT_AGGREGATE_CERTIFICATE)]
+        output: PathBuf,
+    },
+    VerifyAggregate {
+        #[arg(long)]
+        candidate: PathBuf,
+        #[arg(long, default_value = "public")]
+        layout: String,
+        #[arg(long, default_value = crate::return_qualification::DEFAULT_AGGREGATE_CERTIFICATE)]
+        certificate: PathBuf,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -451,6 +498,76 @@ mod tests {
     #[test]
     fn bare_invocation_displays_help_instead_of_creating_an_intent() {
         assert!(Cli::try_parse_from(["agent-cli"]).is_err());
+    }
+
+    #[test]
+    fn return_qualification_commands_are_closed_and_typed() {
+        assert!(
+            Cli::try_parse_from([
+                "agent-cli",
+                "release",
+                "frame-evidence",
+                "verify",
+                "/tmp/frame.json",
+            ])
+            .is_ok()
+        );
+        assert!(
+            Cli::try_parse_from([
+                "agent-cli",
+                "release",
+                "return-qualification",
+                "record-board",
+                "--candidate",
+                "/tmp/platform-v3.manifest",
+                "--frame-evidence",
+                "/tmp/frame.json",
+                "--output",
+                "/tmp/board.json",
+                "--attended",
+            ])
+            .is_ok()
+        );
+        assert!(
+            Cli::try_parse_from([
+                "agent-cli",
+                "release",
+                "return-qualification",
+                "record-board",
+                "--candidate",
+                "/tmp/platform-v3.manifest",
+                "--frame-evidence",
+                "/tmp/frame.json",
+                "--output",
+                "/tmp/board.json",
+            ])
+            .is_err()
+        );
+        assert!(
+            Cli::try_parse_from([
+                "agent-cli",
+                "release",
+                "return-qualification",
+                "aggregate",
+                "--candidate",
+                "/tmp/platform-v3.manifest",
+                "--board-evidence",
+                "/tmp/board-1.json",
+                "/tmp/board-2.json",
+            ])
+            .is_ok()
+        );
+        assert!(
+            Cli::try_parse_from([
+                "agent-cli",
+                "release",
+                "return-qualification",
+                "aggregate",
+                "--candidate",
+                "/tmp/platform-v3.manifest",
+            ])
+            .is_err()
+        );
     }
 
     #[test]

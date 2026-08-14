@@ -3,7 +3,8 @@
 
 use agent_cli::cli::{
     AlphaCommand, CaptureCommand, CiCommand, Cli, Command as CliCommand, DbCommand, DeliverTarget,
-    OutputFormat, PlatformManifestCommand, ReleaseCommand, RunCommand,
+    FrameEvidenceCommand, OutputFormat, PlatformManifestCommand, ReleaseCommand,
+    ReturnQualificationCommand, RunCommand,
 };
 use agent_cli::error::AgentResult;
 use agent_cli::evidence::Evidence;
@@ -210,7 +211,96 @@ fn dispatch(
         CliCommand::Release {
             command: ReleaseCommand::Qualify,
         } => {
-            return agent_cli::release::execute(reporter);
+            return agent_cli::release::execute(repository, reporter);
+        }
+        CliCommand::Release {
+            command:
+                ReleaseCommand::FrameEvidence {
+                    command: FrameEvidenceCommand::Verify { evidence },
+                },
+        } => {
+            let verified = agent_cli::return_qualification::read_frame_evidence(evidence)?;
+            println!(
+                "frame-evidence=valid capture={} board={} transitions={}",
+                verified.capture_id, verified.board_id, verified.transitions_observed
+            );
+            return Ok(Outcome::Passed);
+        }
+        CliCommand::Release {
+            command:
+                ReleaseCommand::ReturnQualification {
+                    command:
+                        ReturnQualificationCommand::RecordBoard {
+                            candidate,
+                            layout,
+                            frame_evidence,
+                            output,
+                            attended,
+                        },
+                },
+        } => {
+            let manifest = std::fs::read_to_string(candidate)
+                .map_err(|error| format!("cannot read {}: {error}", candidate.display()))?;
+            let certificate = agent_cli::return_qualification::create_board_certificate(
+                &manifest,
+                agent_cli::platform_manifest::parse_layout(layout)?,
+                *attended,
+                frame_evidence,
+            )?;
+            agent_cli::return_qualification::write_json(output, &certificate)?;
+            println!("{}", output.display());
+            return Ok(Outcome::Passed);
+        }
+        CliCommand::Release {
+            command:
+                ReleaseCommand::ReturnQualification {
+                    command:
+                        ReturnQualificationCommand::Aggregate {
+                            candidate,
+                            layout,
+                            board_evidence,
+                            output,
+                        },
+                },
+        } => {
+            let manifest = std::fs::read_to_string(candidate)
+                .map_err(|error| format!("cannot read {}: {error}", candidate.display()))?;
+            let certificate = agent_cli::return_qualification::create_aggregate_certificate(
+                &manifest,
+                agent_cli::platform_manifest::parse_layout(layout)?,
+                board_evidence,
+            )?;
+            agent_cli::return_qualification::write_json(output, &certificate)?;
+            println!("{}", output.display());
+            return Ok(Outcome::Passed);
+        }
+        CliCommand::Release {
+            command:
+                ReleaseCommand::ReturnQualification {
+                    command:
+                        ReturnQualificationCommand::VerifyAggregate {
+                            candidate,
+                            layout,
+                            certificate,
+                        },
+                },
+        } => {
+            let manifest = std::fs::read_to_string(candidate)
+                .map_err(|error| format!("cannot read {}: {error}", candidate.display()))?;
+            let verified = agent_cli::return_qualification::verify_aggregate_for_manifest(
+                certificate,
+                &manifest,
+                agent_cli::platform_manifest::parse_layout(layout)?,
+            )?;
+            println!(
+                "return-qualification=valid candidate={} boards={} sinks={} sink_chipsets={} transitions={}",
+                verified.candidate.qualification_candidate_id,
+                verified.distinct_boards,
+                verified.distinct_sinks,
+                verified.distinct_sink_chipsets,
+                verified.total_transitions
+            );
+            return Ok(Outcome::Passed);
         }
         CliCommand::Alpha {
             command:

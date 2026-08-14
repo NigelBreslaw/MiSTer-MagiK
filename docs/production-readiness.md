@@ -16,6 +16,9 @@ chart covers runtime health, catalog validity, input and game handoff/return,
 display evidence, recovery capability, and restoration. It refuses non-terminal
 execution and requires the operator to confirm continuous attendance plus a
 non-network recovery path before creating its volatile session token.
+It also requires the exact-candidate physical return-video aggregate described
+in `docs/return-video-qualification.md` before it creates that token or performs
+any device mutation.
 
 When Main or the MagiK Menu RBF changes, the same candidate must first satisfy
 `docs/bootstrap-black-qualification.md`; then the full latch/platform release

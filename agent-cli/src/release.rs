@@ -6,10 +6,12 @@ use crate::error::AgentResult;
 use crate::model::Outcome;
 use crate::progress::{EventKind, Reporter};
 use std::io::{self, IsTerminal, Write};
+use std::path::{Path, PathBuf};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Phase {
     ConfirmAttendance,
+    ReturnEvidencePreflight,
     RecoveryPreflight,
     Runtime,
     Catalog,
@@ -24,6 +26,7 @@ impl Phase {
     fn label(self) -> &'static str {
         match self {
             Self::ConfirmAttendance => "confirm-attendance",
+            Self::ReturnEvidencePreflight => "return-evidence-preflight",
             Self::RecoveryPreflight => "recovery-preflight",
             Self::Runtime => "runtime",
             Self::Catalog => "catalog",
@@ -43,6 +46,7 @@ pub trait ReleaseActions {
 }
 
 trait ReleaseDevice {
+    fn require_return_evidence(&mut self, certificate: &Path) -> AgentResult<()>;
     fn begin(&mut self) -> AgentResult<()>;
     fn qualify_runtime(&mut self) -> AgentResult<()>;
     fn qualify_catalog(&mut self) -> AgentResult<()>;
@@ -54,6 +58,10 @@ trait ReleaseDevice {
 }
 
 impl ReleaseDevice for DeviceClient {
+    fn require_return_evidence(&mut self, certificate: &Path) -> AgentResult<()> {
+        self.read(|device| device.verify_release_return_qualification(certificate))
+    }
+
     fn begin(&mut self) -> AgentResult<()> {
         self.mutate(crate::NativeDevice::begin_release_qualification)
     }
@@ -93,6 +101,7 @@ pub fn run_workflow(
 ) -> AgentResult<()> {
     const PHASES: &[(Phase, u8)] = &[
         (Phase::ConfirmAttendance, 2),
+        (Phase::ReturnEvidencePreflight, 7),
         (Phase::RecoveryPreflight, 10),
         (Phase::Runtime, 25),
         (Phase::Catalog, 40),
@@ -115,9 +124,10 @@ pub fn run_workflow(
     )
 }
 
-pub fn execute(reporter: &mut Reporter<'_>) -> AgentResult<Outcome> {
+pub fn execute(repository: &Path, reporter: &mut Reporter<'_>) -> AgentResult<Outcome> {
     let mut actions = ProcessActions {
         device: DeviceClient::default(),
+        certificate: repository.join(crate::return_qualification::DEFAULT_AGGREGATE_CERTIFICATE),
         confirmed: false,
         armed: false,
     };
@@ -134,6 +144,7 @@ pub fn execute(reporter: &mut Reporter<'_>) -> AgentResult<Outcome> {
 
 struct ProcessActions<D = DeviceClient> {
     device: D,
+    certificate: PathBuf,
     confirmed: bool,
     armed: bool,
 }
@@ -161,6 +172,12 @@ impl<D: ReleaseDevice> ReleaseActions for ProcessActions<D> {
     fn run(&mut self, phase: Phase) -> AgentResult<()> {
         match phase {
             Phase::ConfirmAttendance => self.confirm_attendance(),
+            Phase::ReturnEvidencePreflight => {
+                if !self.confirmed {
+                    return Err("attendance was not confirmed".into());
+                }
+                self.device.require_return_evidence(&self.certificate)
+            }
             Phase::RecoveryPreflight => {
                 if !self.confirmed {
                     return Err("attendance was not confirmed".into());
@@ -239,6 +256,17 @@ mod tests {
     fn attendance_refusal_never_arms_or_restores() {
         let mut actions = FakeActions {
             refuse: true,
+            ..FakeActions::default()
+        };
+        assert!(run_workflow(&mut actions, &mut |_, _| Ok(())).is_err());
+        assert!(!actions.armed);
+        assert_eq!(actions.restored, 0);
+    }
+
+    #[test]
+    fn return_evidence_failure_never_arms_or_restores() {
+        let mut actions = FakeActions {
+            fail_at: Some(Phase::ReturnEvidencePreflight),
             ..FakeActions::default()
         };
         assert!(run_workflow(&mut actions, &mut |_, _| Ok(())).is_err());

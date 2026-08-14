@@ -44,6 +44,7 @@ pub mod progress;
 pub mod redact;
 pub mod release;
 pub mod request;
+pub mod return_qualification;
 pub mod scope;
 mod shell;
 pub mod startup_particles;

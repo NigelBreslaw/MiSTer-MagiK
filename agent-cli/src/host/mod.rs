@@ -132,6 +132,11 @@ impl ActiveRuntime {
             && self.launcher_state.as_deref() == Some("LauncherActive")
     }
 
+    pub(crate) fn is_public_launcher(&self) -> bool {
+        self.executable_path.as_deref() == Some("/media/fat/MiSTer_MagiK")
+            && self.launcher_state.as_deref() == Some("LauncherActive")
+    }
+
     pub(crate) fn description(&self) -> String {
         format!(
             "executable_path={} launcher_state={}",
@@ -852,6 +857,44 @@ impl NativeDevice {
 }
 
 impl NativeDevice {
+    pub(crate) fn verify_release_return_qualification(
+        &mut self,
+        certificate: &Path,
+    ) -> std::result::Result<(), DeviceFailure> {
+        let prepared = self.prepare(DeviceAccess::SSH_READ)?;
+        let session = connect_with(&prepared.config.connection, 10).map_err(device_failure)?;
+        let result = (|| -> Result<()> {
+            let active =
+                parse_active_runtime_status(remote_read(&session, MAIN_STATUS_REMOTE).as_deref());
+            let (layout, manifest_remote) = if active.is_development_launcher() {
+                (
+                    crate::platform_manifest::Layout::Development,
+                    "/media/fat/mister-magik-dev/platform-v3.manifest",
+                )
+            } else if active.is_public_launcher() {
+                (
+                    crate::platform_manifest::Layout::Public,
+                    "/media/fat/mister-magik/platform-v3.manifest",
+                )
+            } else {
+                return Err(format!(
+                    "release return evidence requires an active coherent launcher, found {}",
+                    active.description()
+                )
+                .into());
+            };
+            let manifest = remote_read(&session, manifest_remote)
+                .ok_or_else(|| format!("installed manifest is missing: {manifest_remote}"))?;
+            crate::return_qualification::verify_aggregate_for_manifest(
+                certificate,
+                &manifest,
+                layout,
+            )?;
+            Ok(())
+        })();
+        result.map_err(device_failure)
+    }
+
     fn release_ssh_mutation(
         &mut self,
         operation: impl FnOnce(&NativeDeviceConfig) -> Result<()>,
@@ -26258,11 +26301,15 @@ H: Handlers=event3 js0"#
             r#"{"executable_path":"/media/fat/MiSTer_MagiKDev","launcher_state":"LauncherActive"}"#,
         ));
         assert!(development.is_development_launcher());
+        assert!(!development.is_public_launcher());
+
+        let public = parse_active_runtime_status(Some(
+            r#"{"executable_path":"/media/fat/MiSTer_MagiK","launcher_state":"LauncherActive"}"#,
+        ));
+        assert!(public.is_public_launcher());
+        assert!(!public.is_development_launcher());
 
         for status in [
-            Some(
-                r#"{"executable_path":"/media/fat/MiSTer_MagiK","launcher_state":"LauncherActive"}"#,
-            ),
             Some(
                 r#"{"executable_path":"/media/fat/MiSTer_MagiKDev","launcher_state":"LauncherSuspended"}"#,
             ),
@@ -26270,7 +26317,9 @@ H: Handlers=event3 js0"#
             Some("invalid"),
             None,
         ] {
-            assert!(!parse_active_runtime_status(status).is_development_launcher());
+            let active = parse_active_runtime_status(status);
+            assert!(!active.is_development_launcher());
+            assert!(!active.is_public_launcher());
         }
         assert_eq!(
             parse_active_runtime_status(None).description(),
