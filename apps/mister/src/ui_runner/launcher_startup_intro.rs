@@ -4,6 +4,7 @@
 //! First-run startup intro presentation over the production hidden-slot latch.
 
 use super::*;
+use crate::ui_runner::launcher_readiness::SourceFrameEvidence;
 use mister_magik_catalog::runtime_thread::{RuntimeThreadRole, apply_runtime_thread_policy};
 use mister_magik_fb::framebuffer::vertical_scale::{
     Rgb565FrameView, VerticalRect, VerticalRgb565Transform,
@@ -202,6 +203,7 @@ impl StartupIntroSession {
     pub(super) fn render_grant(
         &mut self,
         grant: HiddenSlotRenderGrant,
+        capture_readiness_source: bool,
     ) -> Result<CompletedHiddenFrame, String> {
         if self.completed {
             return Err("startup intro rendered after completion".into());
@@ -268,10 +270,12 @@ impl StartupIntroSession {
                 .map_err(|error| error.to_string())?;
         }
         self.last_render_waiting = waiting_for_launcher;
+        let source_evidence =
+            hidden_frame_source_evidence(buffer.pixels(), grant, capture_readiness_source);
         buffer.publish_writes();
         Ok(CompletedHiddenFrame {
             grant,
-            source_evidence: None,
+            source_evidence,
         })
     }
 
@@ -433,6 +437,23 @@ impl StartupIntroSession {
     pub(super) fn elapsed(&self) -> Duration {
         self.elapsed
     }
+}
+
+fn hidden_frame_source_evidence(
+    pixels: &[Rgb565Pixel],
+    grant: HiddenSlotRenderGrant,
+    requested: bool,
+) -> Option<SourceFrameEvidence> {
+    requested
+        .then(|| {
+            SourceFrameEvidence::from_rgb565_rows(
+                pixels,
+                grant.width,
+                grant.height,
+                grant.stride_pixels,
+            )
+        })
+        .flatten()
 }
 
 fn snapshot_status(
@@ -659,6 +680,21 @@ mod tests {
         );
         assert_eq!(session.handoff_snapshot, original);
         assert!(session.snapshot_capture_needed());
+    }
+
+    #[test]
+    fn intro_source_evidence_is_captured_only_when_readiness_requests_it() {
+        let grant = HiddenSlotRenderGrant {
+            slot_index: 1,
+            generation: 1,
+            width: 2,
+            height: 2,
+            stride_pixels: 2,
+        };
+        let pixels = [Rgb565Pixel(0x1234); 4];
+
+        assert!(hidden_frame_source_evidence(&pixels, grant, false).is_none());
+        assert!(hidden_frame_source_evidence(&pixels, grant, true).is_some());
     }
 
     #[test]

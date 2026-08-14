@@ -9220,7 +9220,9 @@ pub(super) fn run_launcher_loop(
                 match launcher_presenter
                     .try_issue_startup_intro_hidden_slot_render_grant(f, display_session)
                 {
-                    Ok(Some(grant)) => match intro.render_grant(grant) {
+                    Ok(Some(grant)) => match intro
+                        .render_grant(grant, launcher_readiness.needs_source_evidence())
+                    {
                         Ok(completed) => {
                             completed_hidden_frame_for_present = Some(completed);
                             accepted_startup_intro_frame = true;
@@ -10263,6 +10265,7 @@ pub(super) fn run_launcher_loop(
             cpu_t4,
             pacing_trace,
         } = present_cycle;
+        let readiness_source_evidence = presentation.readiness_source_evidence.clone();
         gui_profiling.record_latch(
             frames,
             presentation.main_present_hidden_invalid_bytes,
@@ -10875,18 +10878,9 @@ pub(super) fn run_launcher_loop(
                 if let Some(post) = readiness_post {
                     if launcher_readiness.needs_source_evidence()
                         && lifecycle.startup_can_present_frame()
+                        && let Some(source) = readiness_source_evidence
                     {
-                        let cached_frame = layer_target.cached_frame_view();
-                        if let Some(source) =
-                            super::launcher_readiness::SourceFrameEvidence::from_rgb565_rows(
-                                cached_frame.pixels(),
-                                ui.render_w(),
-                                ui.render_h(),
-                                cached_frame.stride(),
-                            )
-                        {
-                            launcher_readiness.observe(post, source, true);
-                        }
+                        launcher_readiness.observe_posted(post, source, true);
                     }
                     if launcher_readiness.needs_full_present() {
                         request_launcher_redraw!();

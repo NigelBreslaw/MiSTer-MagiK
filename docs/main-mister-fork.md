@@ -99,8 +99,10 @@ writes one canonical `ready-v2` record after the two-post condition. The record
 binds the token and supervised PID to Main's PID and generation, the FPGA owner
 epoch, latch protocol-v5 identity, route geometry, both advancing alternating
 post receipts, and a SHA-256/nonzero-pixel summary of the active RGB565 source
-rows. A temporarily unavailable nonblocking FIFO is retried until Main's
-deadline. Main rejects noncanonical fields, stale process or ownership context,
+rows. Rust derives that summary from the exact final committed hidden slot,
+whether the frame was composed from cached Slint layers or rendered directly
+by the startup intro. A temporarily unavailable nonblocking FIFO is retried
+until Main's deadline. Main rejects noncanonical fields, stale process or ownership context,
 invalid geometry, blank source evidence, and a changed current FPGA owner. This
 is source and latch readiness, not proof of sink-visible pixels.
 

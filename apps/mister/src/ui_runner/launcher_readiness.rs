@@ -202,6 +202,18 @@ impl LauncherReadiness {
         }
     }
 
+    pub(super) fn observe_posted(
+        &mut self,
+        post: ConfirmedLatchPost,
+        source: PostedSourceFrameEvidence,
+        intended_for_display: bool,
+    ) {
+        if !source.matches(post) {
+            return;
+        }
+        self.observe(post, source.into_source(), intended_for_display);
+    }
+
     pub(super) fn observe(
         &mut self,
         post: ConfirmedLatchPost,
@@ -450,6 +462,44 @@ mod tests {
         assert!(source.matches(expected));
         assert!(!source.matches(post(8, 10, 1)));
         assert!(!source.matches(post(7, 10, 2)));
+    }
+
+    #[test]
+    fn mismatched_posted_source_cannot_advance_readiness() {
+        let fifo = TestFifo::new();
+        let mut readiness = fifo.controller();
+        let post = post(7, 9, 1);
+
+        readiness.observe_posted(post, PostedSourceFrameEvidence::new(8, 1, evidence()), true);
+        readiness.observe_posted(post, PostedSourceFrameEvidence::new(7, 2, evidence()), true);
+
+        assert_eq!(readiness.phase, ReadyPhase::AwaitingFirst);
+    }
+
+    #[test]
+    fn posted_intro_sources_complete_readiness_while_cached_source_is_blank() {
+        let fifo = TestFifo::new();
+        let mut reader = fifo.reader();
+        let mut readiness = fifo.controller();
+        let blank_cached =
+            SourceFrameEvidence::from_rgb565_rows(&[Rgb565Pixel(0); 4], 2, 2, 2).unwrap();
+        assert!(!blank_cached.valid());
+        let first = post(1, 1, 1);
+        let second = post(2, 2, 2);
+
+        readiness.observe_posted(
+            first,
+            PostedSourceFrameEvidence::new(1, 1, evidence()),
+            true,
+        );
+        readiness.observe_posted(
+            second,
+            PostedSourceFrameEvidence::new(2, 2, evidence()),
+            true,
+        );
+
+        assert_eq!(readiness.phase, ReadyPhase::Sent);
+        assert_eq!(read_message(&mut reader).matches("ready-v2").count(), 1);
     }
 
     #[test]
