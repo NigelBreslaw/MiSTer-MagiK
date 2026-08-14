@@ -11611,7 +11611,9 @@ fn catalog_poll_scope(
     system_entry_handoff_only: bool,
 ) -> Option<CatalogPollScope> {
     if full_screen_transition_owned {
-        return system_entry_handoff_only.then_some(CatalogPollScope::TransitionHandoff);
+        return Some(CatalogPollScope::Transition {
+            system_entry_handoff: system_entry_handoff_only,
+        });
     }
     if background_work_allowed {
         Some(CatalogPollScope::Idle)
@@ -13336,8 +13338,12 @@ mod tests {
                 Some(CatalogPollScope::Interactive {
                     system_entry_handoff: true,
                 }),
-                Some(CatalogPollScope::TransitionHandoff),
-                None,
+                Some(CatalogPollScope::Transition {
+                    system_entry_handoff: true,
+                }),
+                Some(CatalogPollScope::Transition {
+                    system_entry_handoff: false,
+                }),
             ]
         );
     }
