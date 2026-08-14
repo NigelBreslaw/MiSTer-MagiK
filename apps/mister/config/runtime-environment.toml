@@ -11,8 +11,8 @@ source_roots = [
 ]
 
 [baseline]
-literal_occurrences = 394
-unique_names = 272
+literal_occurrences = 397
+unique_names = 275
 external_build_names = 11
 
 [[control]]
@@ -1036,6 +1036,30 @@ owner = "apps/mister/src/input_hub.rs"
 classification = "production"
 value_shape = "string, enum, or boolean token"
 default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_MAGIK_MAIN_GENERATION"
+owner = "apps/mister/src/ui_runner/launcher_readiness.rs"
+classification = "production"
+value_shape = "bounded integer"
+default_behavior = "missing or invalid disables supervised readiness acknowledgement"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_MAGIK_MAIN_PID"
+owner = "apps/mister/src/ui_runner/launcher_readiness.rs"
+classification = "production"
+value_shape = "bounded integer"
+default_behavior = "missing or invalid disables supervised readiness acknowledgement"
+visibility = "internal runtime"
+
+[[control]]
+name = "MISTER_MAGIK_OWNER_EPOCH"
+owner = "apps/mister/src/ui_runner/launcher_readiness.rs"
+classification = "production"
+value_shape = "bounded integer"
+default_behavior = "missing or invalid disables supervised readiness acknowledgement"
 visibility = "internal runtime"
 
 [[control]]
