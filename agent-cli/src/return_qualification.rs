@@ -4,7 +4,7 @@
 //! Canonical physical-frame evidence and return-qualification aggregation.
 
 use crate::error::{AgentError, AgentResult};
-use crate::platform_manifest::{self, Layout};
+use mister_magik_platform_manifest_contract::{Layout, ManifestError, ValidationProfile};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -58,19 +58,30 @@ pub struct CandidateIdentity {
 
 impl CandidateIdentity {
     pub fn from_manifest(text: &str, layout: Layout) -> AgentResult<Self> {
-        let manifest = platform_manifest::parse_installed(text, layout)?;
+        let manifest = mister_magik_platform_manifest_contract::parse(
+            text,
+            layout,
+            ValidationProfile::AgentStrict,
+        )
+        .map_err(contract_error)?;
+        let required = |field| {
+            manifest
+                .required(field)
+                .map(str::to_owned)
+                .map_err(contract_error)
+        };
         Ok(Self {
-            qualification_candidate_id: manifest.qualification_candidate_id().into(),
-            platform_bundle_id: manifest.platform_bundle_id().into(),
-            main_sha256: manifest.main_sha256().into(),
-            gui_sha256: manifest.gui_sha256().into(),
-            manager_sha256: manifest.manager_sha256().into(),
-            scanout_module_sha256: manifest.scanout_module_sha256().into(),
-            scanout_metadata_sha256: manifest.scanout_metadata_sha256().into(),
-            latch_rbf_sha256: manifest.latch_rbf_sha256().into(),
-            latch_metadata_sha256: manifest.latch_metadata_sha256().into(),
-            main_revision: manifest.main_revision().into(),
-            magik_revision: manifest.magik_revision().into(),
+            qualification_candidate_id: required("qualification_candidate_id")?,
+            platform_bundle_id: required("platform_bundle_id")?,
+            main_sha256: required("main_sha256")?,
+            gui_sha256: required("gui_sha256")?,
+            manager_sha256: required("manager_sha256")?,
+            scanout_module_sha256: required("scanout_module_sha256")?,
+            scanout_metadata_sha256: required("scanout_metadata_sha256")?,
+            latch_rbf_sha256: required("latch_rbf_sha256")?,
+            latch_metadata_sha256: required("latch_metadata_sha256")?,
+            main_revision: required("main_revision")?,
+            magik_revision: required("magik_revision")?,
         })
     }
 
@@ -107,6 +118,13 @@ impl CandidateIdentity {
             require_hex(name, value, length)?;
         }
         Ok(())
+    }
+}
+
+fn contract_error(error: ManifestError) -> AgentError {
+    AgentError::Classified {
+        code: error.code(),
+        detail: error.detail().to_owned(),
     }
 }
 
