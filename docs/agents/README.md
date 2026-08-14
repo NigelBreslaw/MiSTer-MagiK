@@ -6,6 +6,8 @@ Use these documents to reduce repository-wide exploration:
   owns common work.
 - [`file-authority.md`](file-authority.md) — whether a file is hand-edited,
   generated, private, or device-owned.
+- [`ai-efficiency.md`](ai-efficiency.md) — bounded inspection, tool-output
+  reduction, and privacy-safe context measurement.
 
 Universal safety and workflow rules remain in the root `AGENTS.md`; the nearest
 scoped `AGENTS.md` adds subsystem rules.

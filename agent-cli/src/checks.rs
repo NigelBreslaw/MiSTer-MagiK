@@ -335,6 +335,7 @@ fn check_agent_guidance(repository: &Path) -> Result<(), String> {
         "docs/agents/README.md",
         "docs/agents/task-map.md",
         "docs/agents/file-authority.md",
+        "docs/agents/ai-efficiency.md",
         "apps/mister/AGENTS.md",
         "apps/mister/src/ui_runner/AGENTS.md",
         "mister/tools/agent/AGENTS.md",
@@ -409,6 +410,20 @@ fn check_agent_guidance(repository: &Path) -> Result<(), String> {
     ] {
         if !root.contains(expected) {
             return Err(format!("root_workflow_missing: {expected}"));
+        }
+    }
+    let efficiency = read(repository, "docs/agents/ai-efficiency.md")?;
+    for expected in [
+        "1,200 tokens",
+        "3,000-token",
+        "$magik-rust-lsp",
+        "150 lines",
+        "100 matches",
+        "Never forward unconditional broad `r.output`",
+        "scripts/codex-context-report.py",
+    ] {
+        if !efficiency.contains(expected) {
+            return Err(format!("ai_efficiency_guidance_missing: {expected}"));
         }
     }
     check_codex_config(repository)?;
