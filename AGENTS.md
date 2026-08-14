@@ -130,10 +130,10 @@ commands. Dependency changes use the canonical sync command and commit only the
 owning manifest plus adjacent lockfile.
 
 `scripts/agent plan` previews assurance without execution. The pre-commit hook
-is the index-only gate, the pre-push hook owns full local assurance, and native
-Linux CI owns Linux Rust/Clippy behavior. Never construct hook or CI assurance
-commands. Report only running, passed, or failed with actionable detail. Use
-`scripts/agent db report`, never ad-hoc SQL, for workflow evidence.
+is the index-only gate, and the pre-push hook owns full local assurance. The
+native Linux CI owns Linux Rust/Clippy behavior. Never construct hook or CI
+assurance commands. Report only running, passed, or failed with actionable
+detail. Use `scripts/agent db report`, never ad-hoc SQL, for workflow evidence.
 
 Enable hooks with `git config core.hooksPath .githooks`. Git's index is the only
 commit-scope authority: use explicit `git add -- PATH...`. Run `git add`,

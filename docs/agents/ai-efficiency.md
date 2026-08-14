@@ -18,8 +18,8 @@ settings follow OpenAI's current model guidance:
 2. For Rust or Cargo work, use `$magik-rust-lsp` semantic navigation before
    broad shell exploration. Keep broad semantic results to 20 entries without
    snippets unless the skill requires otherwise.
-3. Limit an initial file read to 150 lines and a broad text search to 100
-   matches. Narrow by path, symbol, file type, or exact pattern before reading
+3. Limit initial file reads to 150 lines and broad text searches to 100 matches.
+   Narrow by path, symbol, file type, or exact pattern before reading
    more.
 4. Reduce output at its source. Prefer bounded `rg` matches, narrow `sed`
    windows, structured `jq`, counts, selected fields, and summaries.
