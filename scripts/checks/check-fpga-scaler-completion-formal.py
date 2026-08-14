@@ -148,6 +148,44 @@ def main() -> None:
         run(["git", "apply", "--recount", "--check", str(patch)], cwd=work)
         run(["git", "apply", "--recount", str(patch)], cwd=work)
         patched_ascal = work / "sys/ascal.vhd"
+        patched_source = patched_ascal.read_text()
+        for fragment in (
+            "FUNCTION read_obligation_accept(",
+            "issued_v:=read_obligation_accept(",
+            "avl_read_i,avl_read_accepted,avl_waitrequest,",
+            "avl_reset_na='0' OR avl_state=sREAD);",
+            "IF avl_read_i='0' THEN",
+            "ELSIF issued_v THEN",
+            "avl_read<=avl_read_i AND NOT avl_read_accepted",
+            "WHEN avl_reset_na='0' OR avl_state=sREAD ELSE '0';",
+            "IF avl_readdatavalid='1' AND avl_return_drain='0' THEN",
+        ):
+            if fragment not in patched_source:
+                fail(f"patched production scheduler binding is missing: {fragment}")
+        avalon_reset = re.search(
+            r"IF avl_reset_na='0' THEN(?P<body>.*?)ELSIF rising_edge\(avl_clk\) THEN",
+            patched_source,
+            re.S,
+        )
+        if avalon_reset is None:
+            fail("patched production Avalon reset branch is missing")
+        for retained in (
+            "avl_return_credits",
+            "avl_return_phase",
+            "avl_read_accepted",
+        ):
+            if retained in avalon_reset.group("body"):
+                fail(f"production reset does not retain {retained}")
+        guarded_vs = re.search(
+            r"IF avl_o_vs_sync='0' AND avl_o_vs='1' THEN\s*"
+            r"IF return_drain_ready\(\s*"
+            r"avl_return_credits,avl_return_phase\) THEN\s*"
+            r"avl_wad<=2\*BLEN-1;\s*"
+            r"avl_return_drain<='0';\s*END IF;\s*END IF;",
+            patched_source,
+        )
+        if guarded_vs is None:
+            fail("production VS alignment is not guarded by empty accounting")
 
         ghdl_work = temporary / "ghdl-work"
         ghdl_work.mkdir()
@@ -234,6 +272,10 @@ def main() -> None:
                 + f" -maxsteps {args.safety_maxsteps}"
                 + f" -timeout {args.solver_timeout}"
             )
+            if artifacts is not None:
+                safety_command += (
+                    f" -dump_vcd {artifacts / 'induction.vcd'} -show-public"
+                )
             safety_log = run_solver(
                 [yosys, "-Q", "-p", safety_command],
                 cwd=root,
@@ -250,6 +292,12 @@ def main() -> None:
             "cover_vs_alignment_during_drain": ("COVER_WITNESS_VS_ALIGN", 10),
             "cover_first_post_drain_completion": (
                 "COVER_WITNESS_FIRST_COMPLETION",
+                270,
+            ),
+            "cover_active_credit_vs": ("COVER_WITNESS_ACTIVE_CREDIT_VS", 20),
+            "cover_issue_empty_vs": ("COVER_WITNESS_ISSUE_EMPTY_VS", 20),
+            "cover_final_return_vs_wait": (
+                "COVER_WITNESS_FINAL_RETURN_VS_WAIT",
                 270,
             ),
         }

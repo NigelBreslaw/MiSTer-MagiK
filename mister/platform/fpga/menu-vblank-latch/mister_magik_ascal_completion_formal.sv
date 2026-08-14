@@ -28,6 +28,9 @@ module mister_magik_ascal_completion_formal;
 	reg cover_old_beat_after_reset = 1'b0;
 	reg cover_vs_alignment_during_drain = 1'b0;
 	reg cover_first_post_drain_completion = 1'b0;
+	reg cover_active_credit_vs = 1'b0;
+	reg cover_issue_empty_vs = 1'b0;
+	reg cover_final_return_vs_wait = 1'b0;
 
 	(* anyseq *) wire reset_n;
 	(* anyseq *) wire avl_step;
@@ -41,6 +44,7 @@ module mister_magik_ascal_completion_formal;
 	wire avl_reset_n;
 	wire o_reset_n;
 	wire issue_event;
+	wire read_assert_event;
 	wire return_event;
 	wire write_event;
 	wire completion_event;
@@ -77,7 +81,9 @@ module mister_magik_ascal_completion_formal;
 		{2'b00, return_credits} +
 		{2'b00, unseen_queue_depth} +
 		{3'b000, completion_pulse} +
-		{2'b00, copylev};
+		{2'b00, copylev} +
+		{2'b00, read_pending} +
+		{3'b000, read_active && !read_accepted};
 	wire [2:0] output_obligations =
 		{2'b00, completion_pulse} + {1'b0, copylev};
 
@@ -94,6 +100,7 @@ module mister_magik_ascal_completion_formal;
 		.avl_reset_n_o(avl_reset_n),
 		.o_reset_n_o(o_reset_n),
 		.issue_event_o(issue_event),
+		.read_assert_event_o(read_assert_event),
 		.return_event_o(return_event),
 		.write_event_o(write_event),
 		.completion_event_o(completion_event),
@@ -129,6 +136,43 @@ module mister_magik_ascal_completion_formal;
 		if (!past_valid)
 			assume(!reset_n);
 
+		// These are state invariants, so constrain both half-cycles used to
+		// encode the formal clock. This gives induction the same production
+		// conservation facts that hold between real rising edges.
+		assert(words_remaining == reference_words);
+		assert(words_remaining <= MAX_WORDS);
+		assert(return_credits <= 2);
+		if (return_credits == 0)
+			assert(return_phase == 0);
+		assert(unseen_completions ==
+			{1'b0, unseen_queue_depth} +
+			{2'b00, completion_pulse});
+		if (o_reset_n)
+			assert(output_obligations <= {1'b0, readlev});
+		if (avl_reset_n && o_reset_n && !return_drain)
+			assert(scheduler_obligations <= {2'b00, readlev});
+		if (avl_reset_n && !return_drain) begin
+			assert(write_phase[6:0] + 1'b1 == return_phase);
+			assert(visible_beat == return_phase);
+		end
+		if (!avl_reset_n) begin
+			assert(!request_toggle && !completion_pending);
+			assert(!ack_meta && !ack_sync);
+			assert(return_drain);
+		end
+		if (!o_reset_n) begin
+			assert(!request_meta && !request_sync && !completion_pulse);
+			assert(readlev == 0 && copylev == 0 && read_pending == 0);
+		end
+		if (!avl_reset_n || !o_reset_n)
+			assert(unseen_completions == 0);
+		if (return_drain) begin
+			assert(unseen_completions == 0);
+			assert(!request_toggle && !completion_pending);
+			assert(!request_meta && !request_sync && !completion_pulse);
+			assert(copylev == 0);
+		end
+
 		if (proof_edge) begin
 			// Cover-only builds select one deterministic legal witness. These
 			// assumptions are never compiled into the safety proof.
@@ -140,9 +184,9 @@ module mister_magik_ascal_completion_formal;
 			assume(schedule_read ==
 				(witness_cycle == 2 || witness_cycle == 3));
 			assume(return_valid ==
-				(witness_cycle >= 4 && witness_cycle <= 259));
+				(witness_cycle >= 5 && witness_cycle <= 260));
 			assume(o_step ==
-				!(witness_cycle >= 4 && witness_cycle <= 259));
+				!(witness_cycle >= 5 && witness_cycle <= 260));
 `elsif COVER_WITNESS_COINCIDENT
 			witness_cycle <= witness_cycle + 1'b1;
 			assume(reset_n == (witness_cycle != 0));
@@ -151,17 +195,17 @@ module mister_magik_ascal_completion_formal;
 			assume(schedule_read ==
 				(witness_cycle == 2 || witness_cycle == 3));
 			assume(return_valid ==
-				(witness_cycle >= 4 && witness_cycle <= 259));
+				(witness_cycle >= 5 && witness_cycle <= 260));
 `elsif COVER_WITNESS_FINAL_RESET
 			witness_cycle <= witness_cycle + 1'b1;
 			assume(reset_n ==
 				(witness_cycle != 0 &&
-				 !(witness_cycle >= 4 && witness_cycle <= 131)));
+				 !(witness_cycle >= 4 && witness_cycle <= 132)));
 			assume(avl_step && o_step && !waitrequest && !request_copy_retire);
 			assume(vs_edge == (witness_cycle == 2));
 			assume(schedule_read == (witness_cycle == 2));
 			assume(return_valid ==
-				(witness_cycle >= 4 && witness_cycle <= 131));
+				(witness_cycle >= 5 && witness_cycle <= 132));
 `elsif COVER_WITNESS_OLD_POST_RESET
 			witness_cycle <= witness_cycle + 1'b1;
 			assume(reset_n ==
@@ -184,12 +228,40 @@ module mister_magik_ascal_completion_formal;
 			assume(vs_edge == (witness_cycle == 2));
 			assume(schedule_read == (witness_cycle == 2));
 			assume(return_valid ==
-				(witness_cycle >= 4 && witness_cycle <= 131));
+				(witness_cycle >= 5 && witness_cycle <= 132));
+`elsif COVER_WITNESS_ACTIVE_CREDIT_VS
+			witness_cycle <= witness_cycle + 1'b1;
+			assume(reset_n == (witness_cycle != 0));
+			assume(avl_step && o_step && !waitrequest && !return_valid);
+			assume(!request_copy_retire);
+			assume(schedule_read == (witness_cycle == 2));
+			assume(vs_edge ==
+				(witness_cycle == 2 || witness_cycle == 5));
+`elsif COVER_WITNESS_ISSUE_EMPTY_VS
+			witness_cycle <= witness_cycle + 1'b1;
+			assume(reset_n == (witness_cycle != 0));
+			assume(avl_step && o_step && !waitrequest && !return_valid);
+			assume(!request_copy_retire);
+			assume(schedule_read == (witness_cycle == 2));
+			assume(vs_edge ==
+				(witness_cycle == 2 || witness_cycle == 4));
+`elsif COVER_WITNESS_FINAL_RETURN_VS_WAIT
+			witness_cycle <= witness_cycle + 1'b1;
+			assume(reset_n ==
+				(witness_cycle != 0 && witness_cycle != 4));
+			assume(avl_step && o_step && !waitrequest && !request_copy_retire);
+			assume(schedule_read == (witness_cycle == 2));
+			assume(return_valid ==
+				(witness_cycle >= 5 && witness_cycle <= 132));
+			assume(vs_edge ==
+				(witness_cycle == 2 || witness_cycle == 132));
 `endif
-			// Independent ordered responder. A charged request creates exactly
-			// BLEN return obligations, regardless of reset or waitrequest.
+			// Independent ordered DDR responder. A charged request creates exactly
+			// BLEN return obligations, regardless of reset or waitrequest. The HPS
+			// F2SDRAM path has nonzero response latency, so a beat must retire a
+			// pre-edge obligation; issue+return remains legal for an older burst.
 			if (return_event)
-				assume(reference_words != 0 || issue_event);
+				assume(reference_words != 0);
 			if (issue_event && !return_event)
 				assert(reference_words <= BLEN);
 			if (issue_event && return_event)
@@ -200,13 +272,14 @@ module mister_magik_ascal_completion_formal;
 				2'b11: reference_words <= reference_words + BLEN - 1'b1;
 				default: reference_words <= reference_words;
 			endcase
+			if (issue_event) begin
+				assert(avl_step && read_active && !read_accepted);
+				assert(!waitrequest);
+			end
+			if (read_assert_event)
+				assert(read_pending != 0 && !read_active && !return_drain);
 
-			assert(words_remaining == reference_words);
-			assert(words_remaining <= MAX_WORDS);
 			assert(!accounting_invalid);
-			assert(return_credits <= 2);
-			if (return_credits == 0)
-				assert(return_phase == 0);
 
 			assert(!queue_overflow);
 			assert(readlev <= 2);
@@ -217,10 +290,10 @@ module mister_magik_ascal_completion_formal;
 			assert(output_obligations <= {1'b0, readlev});
 			if (!return_drain)
 				assert(scheduler_obligations <= {2'b00, readlev});
-			if (completion_seen && reset_n)
+			if (completion_seen)
 				assert(unseen_completions != 0);
 
-			if (!reset_n) begin
+			if (!avl_reset_n || !o_reset_n) begin
 				unseen_completions <= 0;
 			end else begin
 				case ({completion_event, completion_seen})
@@ -255,8 +328,20 @@ module mister_magik_ascal_completion_formal;
 					cover_first_post_drain_completion <= 1'b1;
 				end
 			end
+			if (vs_edge && avl_step && avl_reset_n && reset_n &&
+				reference_words != 0) begin
+				assert(!align_event);
+				cover_active_credit_vs <= 1'b1;
+			end
+			if (align_event && issue_event && reference_words == 0)
+				cover_issue_empty_vs <= 1'b1;
+			if (vs_edge && return_drain && return_event &&
+				reference_words == 1) begin
+				assert(!release_event && !align_event);
+				cover_final_return_vs_wait <= 1'b1;
+			end
 
-			if (!reset_n && reference_words != 0)
+			if (!reset_n && (reference_words != 0 || issue_event))
 				saw_reset_obligation <= 1'b1;
 			if (!reset_n && return_event && reference_words == 1)
 				cover_final_old_beat_during_reset <= 1'b1;
@@ -289,12 +374,14 @@ module mister_magik_ascal_completion_formal;
 			end
 		end
 
-		if (past_valid && $past(proof_edge && align_event)) begin
+		if (past_valid && avl_reset_n &&
+			$past(proof_edge && align_event)) begin
 			assert(write_phase == 2*BLEN-1);
 			if ($past(release_event))
 				assert(!return_drain);
 		end
-		if (past_valid && $past(proof_edge && avl_step && avl_reset_n &&
+		if (past_valid && avl_reset_n &&
+			$past(proof_edge && avl_step && avl_reset_n &&
 			vs_edge && words_remaining != 0)) begin
 			assert(!$past(align_event));
 			if ($past(write_event))
@@ -303,7 +390,7 @@ module mister_magik_ascal_completion_formal;
 				assert(write_phase == $past(write_phase));
 		end
 		if (past_valid && $past(proof_edge && return_drain && return_event &&
-			!release_event))
+			!release_event && !vs_edge))
 			assert(write_phase == $past(write_phase));
 
 		cover(cover_two_stopped_delivered);
@@ -312,5 +399,8 @@ module mister_magik_ascal_completion_formal;
 		cover(cover_old_beat_after_reset);
 		cover(cover_vs_alignment_during_drain);
 		cover(cover_first_post_drain_completion);
+		cover(cover_active_credit_vs);
+		cover(cover_issue_empty_vs);
+		cover(cover_final_return_vs_wait);
 	end
 endmodule

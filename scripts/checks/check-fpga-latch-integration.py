@@ -196,8 +196,8 @@ def main() -> None:
         "align_event<='1' WHEN",
         "release_event<=align_event AND return_drain;",
         "IF align_event='1' THEN",
-        "read_accepted='0' AND waitrequest='0' AND",
-        "(avl_reset_n='0' OR read_reset_seen='0')",
+        "read_obligation_accept(",
+        "avl_reset_n='0' OR read_reset_seen='0')",
         "ELSIF issue_event='1' THEN",
     ):
         if fragment not in formal_dut_source:
@@ -209,6 +209,9 @@ def main() -> None:
         "cover_old_beat_after_reset",
         "cover_vs_alignment_during_drain",
         "cover_first_post_drain_completion",
+        "cover_active_credit_vs",
+        "cover_issue_empty_vs",
+        "cover_final_return_vs_wait",
         "reference_words",
         "(* anyseq *) wire waitrequest;",
         "if (align_event) begin",
