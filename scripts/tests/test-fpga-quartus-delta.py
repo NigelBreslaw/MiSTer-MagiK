@@ -72,8 +72,8 @@ SYNC_NAMES = tuple(
 )
 SYNC_ASSIGNMENTS = COMPLETION_SYNC_ASSIGNMENTS
 CUSTOM_SYNC = SYNC_ASSIGNMENTS + """\
-Info (332114): Report Metastability: Found 6 synchronizer chains.
-Info (332114): Fraction of Chains for which MTBFs Could Not be Calculated: 0.666667
+Info (332114): Report Metastability: Found 7 synchronizer chains.
+Info (332114): Fraction of Chains for which MTBFs Could Not be Calculated: 0.571429
 Info: MagiK diagnostics CDC analysis applied: scaler_completion_request_ack
 """
 
@@ -89,10 +89,19 @@ VALID_DIAGNOSTIC_REPORTS = {
     ),
     "menu.magik-diagnostic-metastability.rpt": (
         "Report Metastability: Found 40 synchronizer chains.\n"
-        + "".join(
-            f"; Synchronizer Chain ; {name} ; MTBF 1e+09 years ;\n"
-            for name in SYNC_NAMES
-        )
+        "Synchronizer Chain #1: Worst-Case MTBF is Greater than 1 Billion Years\n"
+        "; Source Node ; ascal:ascal|avl_readdataack ;\n"
+        "; Synchronization Node ; ascal:ascal|o_readdataack_sync ;\n"
+        "; Worst-Case MTBF (years) ; Greater than 1 Billion ;\n"
+        "; Synchronization Registers ; ;\n"
+        "; ascal:ascal|o_readdataack_sync ; ;\n"
+        "Synchronizer Chain #2: Worst-Case MTBF is Greater than 1 Billion Years\n"
+        "; Source Node ; ascal:ascal|o_readdataack_sync2 ;\n"
+        "; Synchronization Node ; ascal:ascal|avl_completion_ack_meta ;\n"
+        "; Worst-Case MTBF (years) ; Greater than 1 Billion ;\n"
+        "; Synchronization Registers ; ;\n"
+        "; ascal:ascal|avl_completion_ack_meta ; ;\n"
+        "; ascal:ascal|avl_completion_ack_sync ; ;\n"
     ),
 }
 
@@ -191,9 +200,9 @@ class QuartusDeltaTest(unittest.TestCase):
 
     def test_unrelated_total_chain_drift_fails(self) -> None:
         patched = CUSTOM_SYNC.replace(
-            "Found 6 synchronizer chains", "Found 10 synchronizer chains"
+            "Found 7 synchronizer chains", "Found 10 synchronizer chains"
         ).replace(
-            "Could Not be Calculated: 0.666667",
+            "Could Not be Calculated: 0.571429",
             "Could Not be Calculated: 0.800",
         )
         result, payload = self.run_check(BASE, BASE + patched)
@@ -473,7 +482,11 @@ class QuartusDeltaTest(unittest.TestCase):
         reports = dict(VALID_DIAGNOSTIC_REPORTS)
         reports["menu.magik-diagnostic-metastability.rpt"] = reports[
             "menu.magik-diagnostic-metastability.rpt"
-        ].replace("1e+09 years", "1e+08 years", 1)
+        ].replace(
+            "; Worst-Case MTBF (years) ; Greater than 1 Billion ;",
+            "; Worst-Case MTBF (years) ; 1e+08 ;",
+            1,
+        )
         result, payload = self.run_check(
             BASE, BASE + CUSTOM_SYNC, diagnostic_reports=reports
         )
@@ -481,6 +494,36 @@ class QuartusDeltaTest(unittest.TestCase):
         self.assertIn(
             "diagnostic_metastability_mtbf_below_minimum",
             payload["invalid_reason"],
+        )
+
+    def test_reverse_chain_requires_both_synchronization_registers(self) -> None:
+        reports = dict(VALID_DIAGNOSTIC_REPORTS)
+        reports["menu.magik-diagnostic-metastability.rpt"] = reports[
+            "menu.magik-diagnostic-metastability.rpt"
+        ].replace("; ascal:ascal|avl_completion_ack_sync ; ;\n", "", 1)
+        result, payload = self.run_check(
+            BASE, BASE + CUSTOM_SYNC, diagnostic_reports=reports
+        )
+        self.assertEqual(result.returncode, 1)
+        self.assertIn(
+            "diagnostic_metastability_chain_missing", payload["invalid_reason"]
+        )
+
+    def test_similarly_named_chain_is_not_completion_evidence(self) -> None:
+        reports = dict(VALID_DIAGNOSTIC_REPORTS)
+        reports["menu.magik-diagnostic-metastability.rpt"] = reports[
+            "menu.magik-diagnostic-metastability.rpt"
+        ].replace(
+            "; Source Node ; ascal:ascal|o_readdataack_sync2 ;",
+            "; Source Node ; ascal:ascal|unrelated_readdataack_sync2 ;",
+            1,
+        )
+        result, payload = self.run_check(
+            BASE, BASE + CUSTOM_SYNC, diagnostic_reports=reports
+        )
+        self.assertEqual(result.returncode, 1)
+        self.assertIn(
+            "diagnostic_metastability_chain_missing", payload["invalid_reason"]
         )
 
     def test_synchronizer_hierarchy_is_required(self) -> None:

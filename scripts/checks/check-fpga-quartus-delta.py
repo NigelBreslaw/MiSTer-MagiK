@@ -69,7 +69,7 @@ MAXIMUM_REGISTER_DELTA = 96
 EXPECTED_UNCONSTRAINED_OUTPUT_PATHS = 158
 MINIMUM_CUSTOM_MTBF_DEVICE_HOURS = 1.0e12
 MINIMUM_CUSTOM_MTBF_YEARS = MINIMUM_CUSTOM_MTBF_DEVICE_HOURS / (24.0 * 365.25)
-EXPECTED_ADDED_COMPLETION_SYNCHRONIZER_CHAINS = 1
+EXPECTED_ADDED_RECOGNIZED_COMPLETION_SYNCHRONIZER_CHAINS = 2
 EXPECTED_QUARTUS_POLICY = {
     "auto_parallel_synthesis": "off",
     "parallel_synthesis": "off",
@@ -81,6 +81,21 @@ EXPECTED_SYNC_ASSIGNMENT_SUFFIXES = (
     "ascal:ascal|avl_completion_ack_meta",
     "ascal:ascal|avl_completion_ack_sync",
 )
+EXPECTED_METASTABILITY_CHAINS = {
+    "completion_request": {
+        "source": "ascal:ascal|avl_readdataack",
+        "synchronization_node": "ascal:ascal|o_readdataack_sync",
+        "registers": ("ascal:ascal|o_readdataack_sync",),
+    },
+    "completion_ack": {
+        "source": "ascal:ascal|o_readdataack_sync2",
+        "synchronization_node": "ascal:ascal|avl_completion_ack_meta",
+        "registers": (
+            "ascal:ascal|avl_completion_ack_meta",
+            "ascal:ascal|avl_completion_ack_sync",
+        ),
+    },
+}
 EXPECTED_CDC_ANALYSIS_LABELS: frozenset[str] = frozenset(
     {"scaler_completion_request_ack"}
 )
@@ -162,6 +177,70 @@ def finite_number(value: str) -> float | None:
     except ValueError:
         return None
     return parsed if math.isfinite(parsed) else None
+
+
+def parse_mtbf_years(value: str) -> float | None:
+    """Parse Quartus numeric or capped lower-bound MTBF text in years."""
+    normalized = normalize_space(value)
+    capped = re.fullmatch(
+        rf"Greater than\s+({NUMBER})\s+(Billion|Million)",
+        normalized,
+        re.IGNORECASE,
+    )
+    if capped:
+        amount = finite_number(capped.group(1))
+        if amount is None or amount <= 0:
+            return None
+        multiplier = 1.0e9 if capped.group(2).lower() == "billion" else 1.0e6
+        return amount * multiplier
+    numeric = re.fullmatch(rf"({NUMBER})(?:\s+years?)?", normalized, re.IGNORECASE)
+    if numeric:
+        amount = finite_number(numeric.group(1))
+        return amount if amount is not None and amount > 0 else None
+    return None
+
+
+def parse_expected_metastability_chains(
+    report: str,
+) -> tuple[dict[str, float | None], list[str]]:
+    """Read exact completion-chain summaries and their synchronization registers."""
+    blocks = re.split(r"(?=Synchronizer Chain #\d+:)", report)
+    mtbf_years: dict[str, float | None] = {}
+    missing: list[str] = []
+    for label, expected in EXPECTED_METASTABILITY_CHAINS.items():
+        source = str(expected["source"])
+        synchronization_node = str(expected["synchronization_node"])
+        block = next(
+            (
+                candidate
+                for candidate in blocks
+                if re.search(
+                    rf";\s*Source Node\s*;\s*{re.escape(source)}\s*;",
+                    candidate,
+                    re.IGNORECASE,
+                )
+                and re.search(
+                    rf";\s*Synchronization Node\s*;\s*{re.escape(synchronization_node)}\s*;",
+                    candidate,
+                    re.IGNORECASE,
+                )
+            ),
+            None,
+        )
+        if block is None:
+            missing.append(label)
+            mtbf_years[label] = None
+            continue
+        required_registers = tuple(expected["registers"])
+        if any(register not in block for register in required_registers):
+            missing.append(label)
+        mtbf = re.search(
+            r";\s*Worst-Case MTBF \(years\)\s*;\s*([^;\n]+?)\s*;",
+            block,
+            re.IGNORECASE,
+        )
+        mtbf_years[label] = parse_mtbf_years(mtbf.group(1)) if mtbf else None
+    return mtbf_years, sorted(set(missing))
 
 
 def parse_report(
@@ -399,12 +478,9 @@ def validate_diagnostic_reports(
                 reasons.append("diagnostic_cdc_slack_negative")
 
     metastability = reports.get("menu.magik-diagnostic-metastability.rpt", "")
-    metastability_lower = metastability.lower()
-    missing_metastability_chains = [
-        suffix
-        for suffix in EXPECTED_SYNC_ASSIGNMENT_SUFFIXES
-        if suffix not in metastability_lower
-    ]
+    custom_mtbf_years, missing_metastability_chains = (
+        parse_expected_metastability_chains(metastability)
+    )
     if not metastability.strip() or re.search(
         r"\bno (?:valid )?(?:chains?|results?)\b", metastability, re.IGNORECASE
     ):
@@ -412,33 +488,21 @@ def validate_diagnostic_reports(
     elif missing_metastability_chains:
         reasons.append("diagnostic_metastability_chain_missing")
 
-    custom_mtbf_years: dict[str, float | None] = {}
-    for suffix in EXPECTED_SYNC_ASSIGNMENT_SUFFIXES:
-        suffix_match = re.search(
-            rf"(?is){re.escape(suffix)}.{{0,400}}?"
-            rf"(?:MTBF|Mean Time Between Failures).*?({NUMBER})\s*(years?|seconds?|s)\b",
-            metastability,
-        )
-        if suffix_match is None:
-            custom_mtbf_years[suffix] = None
-            continue
-        value = finite_number(suffix_match.group(1))
-        if value is None:
-            custom_mtbf_years[suffix] = None
-            continue
-        unit = suffix_match.group(2).lower()
-        custom_mtbf_years[suffix] = (
-            value
-            if unit.startswith("year")
-            else value / (365.25 * 24.0 * 3600.0)
-        )
     if any(value is None for value in custom_mtbf_years.values()):
         reasons.append("diagnostic_metastability_mtbf_missing")
-    elif any(
-        value is not None and value < MINIMUM_CUSTOM_MTBF_YEARS
-        for value in custom_mtbf_years.values()
-    ):
-        reasons.append("diagnostic_metastability_mtbf_below_minimum")
+        combined_mtbf_years = None
+    else:
+        failure_rate = sum(
+            1.0 / value
+            for value in custom_mtbf_years.values()
+            if value is not None
+        )
+        combined_mtbf_years = 1.0 / failure_rate if failure_rate > 0 else None
+        if (
+            combined_mtbf_years is None
+            or combined_mtbf_years < MINIMUM_CUSTOM_MTBF_YEARS
+        ):
+            reasons.append("diagnostic_metastability_mtbf_below_minimum")
 
     return sorted(set(reasons)), {
         "diagnostic_cdc_reports": sorted(reports),
@@ -448,6 +512,7 @@ def validate_diagnostic_reports(
         "diagnostic_cdc_minimum_slacks": minimum_slacks,
         "missing_diagnostic_metastability_chains": missing_metastability_chains,
         "diagnostic_metastability_mtbf_years": custom_mtbf_years,
+        "diagnostic_metastability_combined_mtbf_years": combined_mtbf_years,
         "minimum_custom_mtbf_device_hours": MINIMUM_CUSTOM_MTBF_DEVICE_HOURS,
     }
 
@@ -600,7 +665,7 @@ def compare(
         and bool(chain_counts)
         and max(chain_counts)
         == max(baseline_chain_counts)
-        + EXPECTED_ADDED_COMPLETION_SYNCHRONIZER_CHAINS
+        + EXPECTED_ADDED_RECOGNIZED_COMPLETION_SYNCHRONIZER_CHAINS
     )
     if not exact_added_chain_seen:
         reasons.append("synchronizer_chain_count_mismatch")
@@ -627,7 +692,7 @@ def compare(
         and patched_calculable_chains is not None
         and patched_calculable_chains
         == baseline_calculable_chains
-        + EXPECTED_ADDED_COMPLETION_SYNCHRONIZER_CHAINS
+        + EXPECTED_ADDED_RECOGNIZED_COMPLETION_SYNCHRONIZER_CHAINS
     )
     if not custom_assignment_seen:
         reasons.append("custom_synchronizer_missing")
