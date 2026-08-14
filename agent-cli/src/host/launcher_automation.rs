@@ -157,8 +157,14 @@ pub(super) fn send_action(
             button,
             duration_ms,
         } => {
-            if *duration_ms == 0 || *duration_ms > 2_000 {
-                return Err("launcher automation hold must be in 1..=2000 milliseconds".into());
+            if *duration_ms == 0
+                || *duration_ms > mister_magik_agent_protocol::LAUNCHER_AUTOMATION_MAX_HOLD_MS
+            {
+                return Err(format!(
+                    "launcher automation hold must be in 1..={} milliseconds",
+                    mister_magik_agent_protocol::LAUNCHER_AUTOMATION_MAX_HOLD_MS
+                )
+                .into());
             }
             action_args(nonce, "hold", Some(*button), Some(*duration_ms))
         }

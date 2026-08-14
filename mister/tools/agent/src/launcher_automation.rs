@@ -19,7 +19,6 @@ const SOCKET_PATH: &str = "/tmp/mister-magik/ui-automation.sock";
 const STATUS_PATH: &str = "/tmp/mister-magik/status.json";
 const MAIN_STATUS_PATH: &str = "/tmp/mister-magik/main-status.json";
 const MAX_SESSION_SECONDS: u64 = 120;
-const MAX_HOLD_MS: u64 = 2_000;
 static CLIENT_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
 pub(crate) fn begin(args: Value) -> Result<Value, String> {
@@ -109,8 +108,13 @@ fn validated_command(args: &Value) -> Result<Value, String> {
             let button = required_text(args, "button")?;
             validate_button(button)?;
             let duration_ms = required_u64(args, "duration_ms")?;
-            if duration_ms == 0 || duration_ms > MAX_HOLD_MS {
-                return Err("automation hold must be in 1..=2000 milliseconds".to_string());
+            if duration_ms == 0
+                || duration_ms > mister_magik_agent_protocol::LAUNCHER_AUTOMATION_MAX_HOLD_MS
+            {
+                return Err(format!(
+                    "automation hold must be in 1..={} milliseconds",
+                    mister_magik_agent_protocol::LAUNCHER_AUTOMATION_MAX_HOLD_MS
+                ));
             }
             Ok(json!({"kind":kind,"button":button,"duration_ms":duration_ms}))
         }
@@ -273,7 +277,20 @@ mod tests {
         );
         assert!(validated_command(&json!({"kind":"tap","button":"start"})).is_err());
         assert!(
-            validated_command(&json!({"kind":"hold","button":"down","duration_ms":2001})).is_err()
+            validated_command(&json!({
+                "kind":"hold",
+                "button":"down",
+                "duration_ms":mister_magik_agent_protocol::LAUNCHER_AUTOMATION_MAX_HOLD_MS
+            }))
+            .is_ok()
+        );
+        assert!(
+            validated_command(&json!({
+                "kind":"hold",
+                "button":"down",
+                "duration_ms":mister_magik_agent_protocol::LAUNCHER_AUTOMATION_MAX_HOLD_MS + 1
+            }))
+            .is_err()
         );
         assert!(validated_command(&json!({"kind":"shell","button":"a"})).is_err());
     }
