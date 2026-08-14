@@ -10886,20 +10886,20 @@ pub(super) fn run_launcher_loop(
                     request_launcher_redraw!();
                 }
                 if let Some(post) = readiness_post {
-                    let cached_frame = layer_target.cached_frame_view();
-                    if let Some(source) =
-                        super::launcher_readiness::SourceFrameEvidence::from_rgb565_rows(
-                            cached_frame.pixels(),
-                            ui.render_w(),
-                            ui.render_h(),
-                            cached_frame.stride(),
-                        )
+                    if launcher_readiness.needs_source_evidence()
+                        && lifecycle.startup_can_present_frame()
                     {
-                        launcher_readiness.observe(
-                            post,
-                            source,
-                            lifecycle.startup_can_present_frame(),
-                        );
+                        let cached_frame = layer_target.cached_frame_view();
+                        if let Some(source) =
+                            super::launcher_readiness::SourceFrameEvidence::from_rgb565_rows(
+                                cached_frame.pixels(),
+                                ui.render_w(),
+                                ui.render_h(),
+                                cached_frame.stride(),
+                            )
+                        {
+                            launcher_readiness.observe(post, source, true);
+                        }
                     }
                     if launcher_readiness.needs_full_present() {
                         request_launcher_redraw!();

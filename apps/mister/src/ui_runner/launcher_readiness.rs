@@ -164,6 +164,13 @@ impl LauncherReadiness {
         matches!(self.phase, ReadyPhase::AwaitingSecond(_, _))
     }
 
+    pub(super) fn needs_source_evidence(&self) -> bool {
+        matches!(
+            self.phase,
+            ReadyPhase::AwaitingFirst | ReadyPhase::AwaitingSecond(_, _)
+        )
+    }
+
     pub(super) fn poll(&mut self) {
         if matches!(self.phase, ReadyPhase::PendingSend(..)) {
             self.try_send();
@@ -349,13 +356,17 @@ mod tests {
     fn absent_reader_keeps_ready_message_pending_for_retry() {
         let fifo = TestFifo::new();
         let mut readiness = fifo.controller();
+        assert!(readiness.needs_source_evidence());
         readiness.observe(post(1, 1, 1), evidence(), true);
+        assert!(readiness.needs_source_evidence());
         readiness.observe(post(2, 2, 2), evidence(), true);
         assert!(matches!(readiness.phase, ReadyPhase::PendingSend(..)));
+        assert!(!readiness.needs_source_evidence());
 
         let mut reader = fifo.reader();
         readiness.poll();
         assert_eq!(readiness.phase, ReadyPhase::Sent);
+        assert!(!readiness.needs_source_evidence());
         let message = read_message(&mut reader);
         assert!(message.starts_with("ready-v2 token=0123456789abcdef0123456789abcdef pid=42 main_pid=7 main_generation=11 owner_epoch=13 protocol=5 capabilities=03ff "));
         assert!(message.contains("source_nonzero=4\n"));
