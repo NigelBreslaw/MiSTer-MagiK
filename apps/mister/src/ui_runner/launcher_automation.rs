@@ -193,6 +193,15 @@ impl LauncherAutomation {
         self.session.is_some()
     }
 
+    pub(super) fn directional_input_held(&self) -> bool {
+        self.session.as_ref().is_some_and(|session| {
+            session.logical_state.dpad_up
+                || session.logical_state.dpad_down
+                || session.logical_state.dpad_left
+                || session.logical_state.dpad_right
+        })
+    }
+
     pub(super) fn poll_events(
         &mut self,
         physical: &PadState,
@@ -781,5 +790,36 @@ mod tests {
         let first = automation.observe_state(state.clone());
         let second = automation.observe_state(state);
         assert_eq!(first.state_revision, second.state_revision);
+    }
+
+    #[test]
+    fn held_automation_direction_defers_launcher_background_work() {
+        let mut automation = LauncherAutomation::with_paths("missing".into(), "missing".into());
+        automation.session = Some(ActiveSession {
+            descriptor: AutomationSessionDescriptor {
+                schema: SESSION_SCHEMA.to_string(),
+                nonce: "d".repeat(32),
+                expected_build_version: "test".to_string(),
+                expected_source_revision: "test".to_string(),
+                launcher_pid: std::process::id(),
+                main_generation: 1,
+                created_unix_ms: 1,
+                expires_unix_ms: 2,
+            },
+            socket: UnixDatagram::unbound().unwrap(),
+            last_request: Instant::now(),
+            logical_state: button_state(AutomationButton::Down),
+            press: None,
+            action_sequence: 0,
+            adopted_action_sequence: 0,
+            source_epoch: SourceEpoch(1),
+            next_event_sequence: 0,
+            next_press_id: 0,
+            events: VecDeque::new(),
+        });
+
+        assert!(automation.directional_input_held());
+        automation.session.as_mut().unwrap().logical_state = button_state(AutomationButton::A);
+        assert!(!automation.directional_input_held());
     }
 }
