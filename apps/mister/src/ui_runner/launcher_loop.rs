@@ -4859,15 +4859,6 @@ fn render_immediate_launcher_frame(
     damage.iter().reduce(DirtyRect::union)
 }
 
-fn preview_archive_warm_skip_enabled() -> bool {
-    matches!(
-        std::env::var("MISTER_PREVIEW_SCROLL_SKIP_ARCHIVE_WARM")
-            .ok()
-            .as_deref(),
-        Some("1") | Some("on") | Some("true") | Some("yes")
-    )
-}
-
 pub(super) fn run_launcher_loop(
     secs: u64,
     ui: &UiDisplay,
@@ -4938,10 +4929,11 @@ pub(super) fn run_launcher_loop(
         launcher_bench_scenario.is_some() && launcher_bench_after_input_script_enabled();
     let launcher_bench_launch_handoff =
         launcher_bench_scenario == Some(LauncherBenchScenario::LaunchHandoff);
-    let mut scheduler = LauncherScheduler::with_catalog_config(
+    let mut scheduler = LauncherScheduler::with_runtime_config(
         launcher_bench_launch_handoff,
         launcher_config.catalog_paths().clone(),
         launcher_config.archive_cache().clone(),
+        launcher_config.media_worker().clone(),
     );
     let mut catalog_events = CatalogJobEventBuf::new();
     let mut deferred_catalog_events: VecDeque<CatalogWorkerMessage> = VecDeque::new();
@@ -5189,10 +5181,11 @@ pub(super) fn run_launcher_loop(
     let present_timing = PresentTiming::from_env();
     if preview_route.allows_preview_work()
         && launcher_bench_scenario.is_some()
-        && !preview_archive_warm_skip_enabled()
+        && !launcher_config.preview().archive_warm_skipped()
     {
         let warm_t = Instant::now();
-        match preview_worker::warm_preview_archives_from_env() {
+        match preview_worker::warm_preview_archives_with_config(launcher_config.preview().worker())
+        {
             Ok(loaded) => print_startup_event(
                 start,
                 "preview_archive_warm",
@@ -5211,11 +5204,11 @@ pub(super) fn run_launcher_loop(
     } else if preview_route.allows_preview_work() && launcher_bench_scenario.is_some() {
         print_startup_event(start, "preview_archive_warm_skipped", "env=1");
     }
-    let mut preview = PreviewState::new_with_trace_start(start);
+    let mut preview = PreviewState::new_with_config(start, launcher_config.preview().clone());
     let mut launcher_bench_waiting_for_initial_preview = launcher_bench_scenario
         .is_some_and(|scenario| scenario.starts_on_arcade() && !launcher_bench_after_input_script);
     let mut preview_transition = if preview_route.allows_preview_work() {
-        PreviewTransitionDemo::from_env()
+        PreviewTransitionDemo::from_config(launcher_config.preview_transition().clone())
     } else {
         PreviewTransitionDemo::disabled()
     };
@@ -5247,7 +5240,7 @@ pub(super) fn run_launcher_loop(
         .unwrap_or_else(|_| arcade_catalog::DEFAULT_ARCADE_ROOT.to_string());
     crate::ui_logln!(
         "preview_visual_pct={} preview_blitter=raw",
-        preview_visual_pct()
+        launcher_config.preview().visual_pct()
     );
     crate::ui_logln!(
         "preview_transition={} segment_secs={} duration_ms={}",

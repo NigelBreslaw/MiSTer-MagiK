@@ -3,6 +3,12 @@
 
 //! Immutable process-boundary configuration capture.
 
+#[cfg(feature = "ui")]
+use crate::launcher_runtime::media::MediaWorkerConfig;
+#[cfg(feature = "ui")]
+use crate::preview_state::PreviewStateConfig;
+#[cfg(feature = "ui")]
+use crate::screenshot_transitions::PreviewTransitionConfig;
 use mister_magik_catalog::catalog_config::ArchiveCacheConfig;
 use mister_magik_catalog::device_layout::{CatalogPathOverrides, CatalogPaths, DevicePaths};
 use mister_magik_catalog::fs_fault::FaultConfig;
@@ -102,6 +108,12 @@ pub struct LauncherProcessConfig {
     device_paths: DevicePaths,
     catalog_paths: CatalogPaths,
     archive_cache: ArchiveCacheConfig,
+    #[cfg(feature = "ui")]
+    preview: PreviewStateConfig,
+    #[cfg(feature = "ui")]
+    preview_transition: PreviewTransitionConfig,
+    #[cfg(feature = "ui")]
+    media_worker: Result<MediaWorkerConfig, String>,
 }
 
 impl LauncherProcessConfig {
@@ -119,6 +131,21 @@ impl LauncherProcessConfig {
 
     pub fn archive_cache(&self) -> &ArchiveCacheConfig {
         &self.archive_cache
+    }
+
+    #[cfg(feature = "ui")]
+    pub fn preview(&self) -> &PreviewStateConfig {
+        &self.preview
+    }
+
+    #[cfg(feature = "ui")]
+    pub fn preview_transition(&self) -> &PreviewTransitionConfig {
+        &self.preview_transition
+    }
+
+    #[cfg(feature = "ui")]
+    pub fn media_worker(&self) -> &Result<MediaWorkerConfig, String> {
+        &self.media_worker
     }
 }
 
@@ -217,6 +244,14 @@ impl ProcessConfig {
             device_paths: device_paths.clone(),
             catalog_paths: catalog_paths.clone(),
             archive_cache: archive_cache.clone(),
+            #[cfg(feature = "ui")]
+            preview: PreviewStateConfig::capture_with(|name| environment.get(name)),
+            #[cfg(feature = "ui")]
+            preview_transition: PreviewTransitionConfig::capture_with(|name| environment.get(name)),
+            #[cfg(feature = "ui")]
+            media_worker: MediaWorkerConfig::capture_with(&catalog_paths, |name| {
+                environment.get(name)
+            }),
         });
         // Fault capture deliberately remains an early, compatibility-preserving
         // process boundary until C19 applies command and feature gates.
@@ -441,5 +476,37 @@ mod tests {
             config.archive_cache().sqlite_build_dir(),
             config.catalog_paths().library_sqlite_build_dir()
         );
+    }
+
+    #[test]
+    #[cfg(feature = "ui")]
+    fn launcher_captures_preview_media_and_transition_settings_once() {
+        let environment = EnvironmentSnapshot::from_values([
+            ("MISTER_PREVIEW_LOADING", "off"),
+            ("MISTER_PREVIEW_TURBO_LOOKAHEAD", "999"),
+            ("MISTER_PREVIEW_VISUAL_PCT", "5"),
+            ("MISTER_PREVIEW_ARCHIVES", "/tmp/a.mmlz4b:/tmp/b.mmlz4b"),
+            ("MISTER_PREVIEW_TRANSITION", "fade,slide-left"),
+            ("MISTER_PREVIEW_TRANSITION_MS", "9999"),
+            ("MISTER_MEDIA_UPDATE", "off"),
+            ("MISTER_MEDIA_SIZE", "320x320"),
+        ]);
+        let config = ProcessConfig::from_snapshot(
+            &["mister-magik-fb".into(), "ui".into()],
+            "ui",
+            &environment,
+        );
+        let launcher = config.launcher().expect("ui captures launcher settings");
+
+        assert_eq!(launcher.preview().visual_pct(), 10);
+        assert_eq!(
+            launcher.preview().worker().archive_paths(),
+            &["/tmp/a.mmlz4b".to_string(), "/tmp/b.mmlz4b".to_string()]
+        );
+        assert_eq!(
+            launcher.preview_transition(),
+            &PreviewTransitionConfig::capture_with(|name| environment.get(name))
+        );
+        assert!(launcher.media_worker().is_ok());
     }
 }

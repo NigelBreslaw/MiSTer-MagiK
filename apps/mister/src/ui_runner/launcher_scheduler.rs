@@ -576,6 +576,7 @@ enum MediaJobState {
 pub(super) struct LauncherScheduler {
     catalog_paths: mister_magik_catalog::device_layout::CatalogPaths,
     archive_cache: mister_magik_catalog::catalog_config::ArchiveCacheConfig,
+    media_config: Result<MediaWorkerConfig, String>,
     catalog: CatalogJobState,
     catalog_progress: crate::catalog_progress_report::CatalogProgressMonitor,
     search_query: SearchQueryJobState,
@@ -611,10 +612,26 @@ impl LauncherScheduler {
         catalog_paths: mister_magik_catalog::device_layout::CatalogPaths,
         archive_cache: mister_magik_catalog::catalog_config::ArchiveCacheConfig,
     ) -> Self {
+        let media_config = MediaWorkerConfig::capture_process(&catalog_paths);
+        Self::with_runtime_config(
+            launch_handoff_bench_enabled,
+            catalog_paths,
+            archive_cache,
+            media_config,
+        )
+    }
+
+    pub(super) fn with_runtime_config(
+        launch_handoff_bench_enabled: bool,
+        catalog_paths: mister_magik_catalog::device_layout::CatalogPaths,
+        archive_cache: mister_magik_catalog::catalog_config::ArchiveCacheConfig,
+        media_config: Result<MediaWorkerConfig, String>,
+    ) -> Self {
         let now = Instant::now();
         Self {
             catalog_paths: catalog_paths.clone(),
             archive_cache,
+            media_config,
             catalog: CatalogJobState::Idle,
             catalog_progress: crate::catalog_progress_report::CatalogProgressMonitor::new(now),
             search_query: SearchQueryJobState::Idle,
@@ -1257,7 +1274,7 @@ impl LauncherScheduler {
         if !matches!(self.media, MediaJobState::Idle) {
             return;
         }
-        match start_screenshot_media_worker_with_paths(&self.catalog_paths) {
+        match start_screenshot_media_worker_with_captured(self.media_config.clone()) {
             Some(handle) => {
                 self.media = MediaJobState::Running(handle);
                 print_startup_event(

@@ -76,7 +76,13 @@ pub fn start_screenshot_media_worker() -> Option<MediaWorkerHandle> {
 pub fn start_screenshot_media_worker_with_paths(
     paths: &mister_magik_catalog::device_layout::CatalogPaths,
 ) -> Option<MediaWorkerHandle> {
-    let config = match MediaWorkerConfig::from_env_with_paths(paths) {
+    start_screenshot_media_worker_with_captured(MediaWorkerConfig::capture_process(paths))
+}
+
+pub fn start_screenshot_media_worker_with_captured(
+    captured: Result<MediaWorkerConfig, String>,
+) -> Option<MediaWorkerHandle> {
+    let config = match captured {
         Ok(config) => config,
         Err(error) => {
             crate::ui_errln!("screenshot media worker disabled: {error}");
@@ -1653,18 +1659,20 @@ pub struct MediaWorkerConfig {
 }
 
 impl MediaWorkerConfig {
-    fn from_env_with_paths(
+    pub fn capture_with<'a>(
         paths: &mister_magik_catalog::device_layout::CatalogPaths,
+        mut get: impl FnMut(&str) -> Option<&'a str>,
     ) -> Result<Self, String> {
-        let policy =
-            MediaUpdatePolicy::parse(std::env::var("MISTER_MEDIA_UPDATE").ok().as_deref())?;
-        let image_size =
-            std::env::var("MISTER_MEDIA_SIZE").unwrap_or_else(|_| DEFAULT_IMAGE_SIZE.to_string());
+        let policy = MediaUpdatePolicy::parse(get("MISTER_MEDIA_UPDATE"))?;
+        let image_size = get("MISTER_MEDIA_SIZE")
+            .unwrap_or(DEFAULT_IMAGE_SIZE)
+            .to_owned();
         if !valid_image_size(&image_size) {
             return Err(format!("invalid MISTER_MEDIA_SIZE: {image_size}"));
         }
-        let manifest_url = std::env::var("MISTER_MEDIA_MANIFEST_URL")
-            .unwrap_or_else(|_| DEFAULT_MANIFEST_URL.to_string());
+        let manifest_url = get("MISTER_MEDIA_MANIFEST_URL")
+            .unwrap_or(DEFAULT_MANIFEST_URL)
+            .to_owned();
         mister_magik_media_contract::validate_https_manifest_url(&manifest_url)?;
         Ok(Self {
             policy,
@@ -1672,9 +1680,20 @@ impl MediaWorkerConfig {
             image_size,
             asset_dir: paths.media_asset_dir().to_path_buf(),
             catalog_root: paths.sharded_catalog_dir().to_path_buf(),
-            max_concurrent_downloads: media_download_concurrency_from_env(),
-            benchmark_auto_finish: media_benchmark_auto_finish_enabled(),
+            max_concurrent_downloads: media_download_concurrency_from_value(get(
+                "MISTER_MEDIA_CONCURRENCY",
+            )),
+            benchmark_auto_finish: media_benchmark_auto_finish_from_value(get(
+                "MISTER_MEDIA_BENCH_CONTENTION",
+            )),
         })
+    }
+
+    pub fn capture_process(
+        paths: &mister_magik_catalog::device_layout::CatalogPaths,
+    ) -> Result<Self, String> {
+        let values = std::env::vars().collect::<BTreeMap<_, _>>();
+        Self::capture_with(paths, |name| values.get(name).map(String::as_str))
     }
 
     pub fn for_host(asset_dir: PathBuf, catalog_root: PathBuf) -> Result<Self, String> {
@@ -1693,20 +1712,13 @@ impl MediaWorkerConfig {
 }
 
 #[cfg(feature = "bench-tools")]
-fn media_benchmark_auto_finish_enabled() -> bool {
-    matches!(
-        std::env::var("MISTER_MEDIA_BENCH_CONTENTION").as_deref(),
-        Ok("1" | "true" | "yes" | "on")
-    )
+fn media_benchmark_auto_finish_from_value(value: Option<&str>) -> bool {
+    matches!(value, Some("1" | "true" | "yes" | "on"))
 }
 
 #[cfg(not(feature = "bench-tools"))]
-fn media_benchmark_auto_finish_enabled() -> bool {
+fn media_benchmark_auto_finish_from_value(_value: Option<&str>) -> bool {
     false
-}
-
-fn media_download_concurrency_from_env() -> usize {
-    media_download_concurrency_from_value(std::env::var("MISTER_MEDIA_CONCURRENCY").ok().as_deref())
 }
 
 fn media_download_concurrency_from_value(_value: Option<&str>) -> usize {
@@ -1972,6 +1984,28 @@ fn send_progress(tx: &mpsc::Sender<MediaWorkerMessage>, event: MediaProgressEven
 mod tests {
     use super::*;
     use crate::media_update::parse_manifest_json;
+
+    #[test]
+    fn media_config_capture_validates_before_worker_construction() {
+        let device = mister_magik_catalog::device_layout::DevicePaths::for_layout(
+            mister_magik_platform_manifest_contract::Layout::Public,
+        );
+        let paths = mister_magik_catalog::device_layout::CatalogPaths::derive(
+            &device,
+            mister_magik_catalog::device_layout::CatalogPathOverrides::default(),
+        );
+        let values = BTreeMap::from([
+            ("MISTER_MEDIA_UPDATE", "off"),
+            ("MISTER_MEDIA_SIZE", "320x320"),
+            ("MISTER_MEDIA_MANIFEST_URL", DEFAULT_MANIFEST_URL),
+        ]);
+        let config = MediaWorkerConfig::capture_with(&paths, |name| values.get(name).copied())
+            .expect("valid media configuration");
+
+        assert_eq!(config.policy, MediaUpdatePolicy::Off);
+        assert_eq!(config.image_size, "320x320");
+        assert_eq!(config.asset_dir, paths.media_asset_dir());
+    }
 
     const SHA: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
@@ -2569,5 +2603,5 @@ mod tests {
 #[cfg(not(feature = "bench-tools"))]
 #[test]
 fn production_build_cannot_enable_media_benchmark_auto_finish() {
-    assert!(!media_benchmark_auto_finish_enabled());
+    assert!(!media_benchmark_auto_finish_from_value(Some("1")));
 }

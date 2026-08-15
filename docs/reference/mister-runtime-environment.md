@@ -2,7 +2,7 @@
 
 <!-- Generated from apps/mister/config/runtime-environment.toml. Do not edit. -->
 
-Registry format: `mister-magik-runtime-environment-v2`. Baseline: 373 literal occurrences, 267 owned names, 7 external/build-time names.
+Registry format: `mister-magik-runtime-environment-v2`. Baseline: 405 literal occurrences, 267 owned names, 7 external/build-time names.
 
 | Name | Classification | Shape | Default behavior | Parser | Typed default | Scope | Conflicts | Sensitivity | Aliases | Documentation | Visibility | Owner |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
@@ -203,7 +203,7 @@ Registry format: `mister-magik-runtime-environment-v2`. Baseline: 373 literal oc
 | `MISTER_PREVIEW_RESIZE_MAX` | production | string, enum, or boolean token | uses the owner-defined value or disabled state when unset | string | — | command | — | public | — | Controls preview resize max behavior; value policy: document | internal runtime | `crates/catalog/src/preview_worker.rs` |
 | `MISTER_PREVIEW_RUN_LABEL` | production | string, enum, or boolean token | uses the owner-defined value or disabled state when unset | string | — | command | — | public | — | Controls preview run label behavior; value policy: document | internal runtime | `apps/mister/src/ui_runner/ui_frame_target.rs` |
 | `MISTER_PREVIEW_SCROLL_EXIT_AFTER_TRACE` | diagnostic | boolean token | uses the owner-defined enabled or disabled default when unset or unrecognized | bool | — | instrumentation | — | public | — | Controls preview scroll exit after trace behavior; value policy: document | developer diagnostic | `apps/mister/src/ui_runner/launcher_loop.rs` |
-| `MISTER_PREVIEW_SCROLL_SKIP_ARCHIVE_WARM` | production | path or path list | uses the owner-defined installed-layout path or disabled state when unset | path | — | command | — | path | — | Controls preview scroll skip archive warm behavior; value policy: document | internal runtime | `apps/mister/src/ui_runner/launcher_loop.rs` |
+| `MISTER_PREVIEW_SCROLL_SKIP_ARCHIVE_WARM` | production | boolean token | defaults to archive warming enabled when unset or unrecognized | bool | — | command | — | public | — | Skips preview archive warming during scroll benchmarks; values: 1, on, true, yes; value policy: document | internal runtime | `crates/catalog/src/preview_worker.rs` |
 | `MISTER_PREVIEW_SCROLL_TRACE` | diagnostic | string, enum, or boolean token | uses the owner-defined value or disabled state when unset | string | — | instrumentation | — | public | — | Controls preview scroll trace behavior; value policy: document | developer diagnostic | `apps/mister/src/ui_runner/launcher_frame_accounting.rs` |
 | `MISTER_PREVIEW_SCROLL_TRACE_COMPLETE` | diagnostic | string, enum, or boolean token | uses the owner-defined value or disabled state when unset | string | — | instrumentation | — | public | — | Controls preview scroll trace complete behavior; value policy: document | developer diagnostic | `apps/mister/src/ui_runner/launcher_frame_accounting.rs` |
 | `MISTER_PREVIEW_SCROLL_TRACE_SECS` | diagnostic | bounded integer | uses the owner-defined bounded numeric default when unset or invalid | u64 | — | instrumentation | — | public | — | Controls preview scroll trace secs behavior; value policy: document | developer diagnostic | `apps/mister/src/ui_runner/launcher_frame_accounting.rs` |

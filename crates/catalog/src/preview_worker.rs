@@ -218,18 +218,22 @@ impl PreviewResizeSpec {
     }
 
     pub fn from_env() -> Self {
-        let filter = std::env::var("MISTER_PREVIEW_RESIZE_FILTER")
-            .or_else(|_| std::env::var("MISTER_PREVIEW_RESIZE"))
-            .ok()
-            .map(|s| PreviewResizeFilter::from_label(&s))
+        PreviewWorkerConfig::capture_process().resize()
+    }
+
+    pub fn from_values(
+        filter: Option<&str>,
+        legacy_filter: Option<&str>,
+        max: Option<&str>,
+    ) -> Self {
+        let filter = filter
+            .or(legacy_filter)
+            .map(PreviewResizeFilter::from_label)
             .unwrap_or(PreviewResizeFilter::Hybrid);
         if filter == PreviewResizeFilter::Off {
             return Self::off();
         }
-        let (max_w, max_h) = std::env::var("MISTER_PREVIEW_RESIZE_MAX")
-            .ok()
-            .and_then(|s| parse_size(&s))
-            .unwrap_or((320, 320));
+        let (max_w, max_h) = max.and_then(parse_size).unwrap_or((320, 320));
         Self {
             filter,
             max_w: max_w.max(1),
@@ -240,6 +244,109 @@ impl PreviewResizeSpec {
     pub fn cache_label(self) -> String {
         format!("{}-{}x{}", self.filter.label(), self.max_w, self.max_h)
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PreviewWorkerConfig {
+    resize: PreviewResizeSpec,
+    storage_format: PreviewStorageFormat,
+    decoded_cache_cap: usize,
+    archive_mem_primary: bool,
+    archive_mem_warm: bool,
+    archive_background_warm: bool,
+    archive_warm_skipped: bool,
+    archive_paths: Vec<String>,
+}
+
+impl Default for PreviewWorkerConfig {
+    fn default() -> Self {
+        Self {
+            resize: PreviewResizeSpec {
+                filter: PreviewResizeFilter::Hybrid,
+                max_w: 320,
+                max_h: 320,
+            },
+            storage_format: PreviewStorageFormat::RawRgb565,
+            decoded_cache_cap: TURBO_PREVIEW_DECODED_CACHE_CAP,
+            archive_mem_primary: false,
+            archive_mem_warm: false,
+            archive_background_warm: false,
+            archive_warm_skipped: false,
+            archive_paths: Vec::new(),
+        }
+    }
+}
+
+impl PreviewWorkerConfig {
+    pub fn capture_with<'a>(mut get: impl FnMut(&str) -> Option<&'a str>) -> Self {
+        let resize = PreviewResizeSpec::from_values(
+            get("MISTER_PREVIEW_RESIZE_FILTER"),
+            get("MISTER_PREVIEW_RESIZE"),
+            get("MISTER_PREVIEW_RESIZE_MAX"),
+        );
+        let decoded_cache_cap = get("MISTER_PREVIEW_DECODED_CACHE_CAP")
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(TURBO_PREVIEW_DECODED_CACHE_CAP);
+        let archive_mem_primary = env_value_truthy(get("MISTER_PREVIEW_ARCHIVE_MEM_PRIMARY"))
+            || env_value_truthy(get("MISTER_PREVIEW_FORCE_ARCHIVE_MEM"));
+        let archive_mem_warm = archive_mem_primary
+            || env_value_truthy(get("MISTER_PREVIEW_ARCHIVE_MEM_WARM"))
+            || env_value_truthy(get("MISTER_PREVIEW_ARCHIVE_BACKGROUND_WARM"));
+        let archive_warm_skipped = env_value_truthy(get("MISTER_PREVIEW_SCROLL_SKIP_ARCHIVE_WARM"));
+        let archive_background_warm = archive_mem_warm && !archive_warm_skipped;
+        let archive_paths = preview_archive_paths_from_values(resize, &mut get);
+        Self {
+            resize,
+            storage_format: PreviewStorageFormat::RawRgb565,
+            decoded_cache_cap,
+            archive_mem_primary,
+            archive_mem_warm,
+            archive_background_warm,
+            archive_warm_skipped,
+            archive_paths,
+        }
+    }
+
+    pub fn capture_process() -> Self {
+        let values = std::env::vars().collect::<HashMap<_, _>>();
+        Self::capture_with(|name| values.get(name).map(String::as_str))
+    }
+
+    pub fn resize(&self) -> PreviewResizeSpec {
+        self.resize
+    }
+
+    pub fn storage_format(&self) -> PreviewStorageFormat {
+        self.storage_format
+    }
+
+    pub fn decoded_cache_cap(&self) -> usize {
+        self.decoded_cache_cap
+    }
+
+    pub fn archive_mem_primary(&self) -> bool {
+        self.archive_mem_primary
+    }
+
+    pub fn archive_mem_warm(&self) -> bool {
+        self.archive_mem_warm
+    }
+
+    pub fn archive_background_warm(&self) -> bool {
+        self.archive_background_warm
+    }
+
+    pub fn archive_warm_skipped(&self) -> bool {
+        self.archive_warm_skipped
+    }
+
+    pub fn archive_paths(&self) -> &[String] {
+        &self.archive_paths
+    }
+}
+
+fn env_value_truthy(value: Option<&str>) -> bool {
+    matches!(value, Some("1") | Some("on") | Some("true") | Some("yes"))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -415,6 +522,7 @@ pub struct PreviewWorker {
     decoded_cache: SharedPreviewDecodedCache,
     trace_start: Instant,
     next_generation: Arc<AtomicU64>,
+    config: PreviewWorkerConfig,
 }
 
 #[derive(Clone)]
@@ -460,17 +568,22 @@ impl PreviewWorker {
     }
 
     pub fn new_with_trace_start(trace_start: Instant) -> Self {
+        Self::new_with_config(trace_start, PreviewWorkerConfig::capture_process())
+    }
+
+    pub fn new_with_config(trace_start: Instant, config: PreviewWorkerConfig) -> Self {
         let selected_tx = Arc::new(LatestMailbox::new());
         let (prefetch_tx, prefetch_rx) = mpsc::sync_channel::<PreviewRequest>(PREFETCH_REQUEST_CAP);
         let selected_rx = Arc::new(LatestMailbox::new());
         let (prefetch_result_tx, prefetch_result_rx) =
             mpsc::sync_channel::<PreviewResult>(PREFETCH_RESULT_CAP);
         let decoded_cache = Arc::new(Mutex::new(PreviewDecodedCache::new(
-            preview_decoded_cache_cap(),
+            config.decoded_cache_cap(),
         )));
         let selected_cache = Arc::clone(&decoded_cache);
         let selected_request_rx = Arc::clone(&selected_tx);
         let selected_result_tx = Arc::clone(&selected_rx);
+        let selected_config = config.clone();
         std::thread::Builder::new()
             .name("preview-selected-loader".to_string())
             .spawn(move || {
@@ -479,11 +592,13 @@ impl PreviewWorker {
                     selected_result_tx,
                     selected_cache,
                     trace_start,
+                    selected_config,
                 )
             })
             .expect("spawn preview-selected-loader");
         let prefetch_trace_start = trace_start;
         let prefetch_cache = Arc::clone(&decoded_cache);
+        let prefetch_config = config.clone();
         std::thread::Builder::new()
             .name("preview-prefetch-loader".to_string())
             .spawn(move || {
@@ -492,6 +607,7 @@ impl PreviewWorker {
                     prefetch_result_tx,
                     prefetch_cache,
                     prefetch_trace_start,
+                    prefetch_config,
                 )
             })
             .expect("spawn preview-prefetch-loader");
@@ -503,6 +619,7 @@ impl PreviewWorker {
             decoded_cache,
             trace_start,
             next_generation: Arc::new(AtomicU64::new(1)),
+            config,
         }
     }
 
@@ -566,8 +683,7 @@ impl PreviewWorker {
         preview_archive_path: &str,
         preview_asset_key: &str,
     ) -> Option<LoadedPreviewAsset> {
-        static RESIZE: OnceLock<PreviewResizeSpec> = OnceLock::new();
-        let resize = *RESIZE.get_or_init(PreviewResizeSpec::from_env);
+        let resize = self.config.resize();
         let direct_cache_key = preview_cache_key(preview_archive_path, preview_asset_key, resize);
         let loaded = decoded_cache_get(&self.decoded_cache, &direct_cache_key).or_else(|| {
             let resolved_archive_path = resolve_preview_archive_path(preview_archive_path);
@@ -588,7 +704,7 @@ impl PreviewWorker {
             total_us: loaded.timing.total_us,
             encoded_bytes: loaded.timing.encoded_bytes,
             load_source: loaded.timing.load_source,
-            storage_format: PreviewStorageFormat::from_env(),
+            storage_format: self.config.storage_format(),
             resize_filter: resize.filter,
         })
     }
@@ -640,12 +756,13 @@ fn preview_selected_thread(
     tx: Arc<LatestMailbox<PreviewResult>>,
     decoded_cache: SharedPreviewDecodedCache,
     trace_start: Instant,
+    config: PreviewWorkerConfig,
 ) {
     apply_runtime_thread_policy(RuntimeThreadRole::PreviewSelected);
     let mut scratch = PreviewArchiveScratch::default();
     while let Some(req) = rx.take_blocking() {
         let _lease = work_coordinator::foreground("selected-preview");
-        let result = load_preview(req, &decoded_cache, &mut scratch, trace_start);
+        let result = load_preview(req, &decoded_cache, &mut scratch, trace_start, &config);
         if !tx.publish(result) {
             break;
         }
@@ -657,6 +774,7 @@ fn preview_prefetch_thread(
     tx: mpsc::SyncSender<PreviewResult>,
     decoded_cache: SharedPreviewDecodedCache,
     trace_start: Instant,
+    config: PreviewWorkerConfig,
 ) {
     apply_runtime_thread_policy(RuntimeThreadRole::PreviewPrefetch);
     let lease = work_coordinator::background("preview-prefetch");
@@ -680,7 +798,7 @@ fn preview_prefetch_thread(
         prune_stale_prefetch_requests(&mut queue, newest_generation);
         if let Some(req) = pop_next_preview_request(&mut queue) {
             let _ = lease.cooperate();
-            let result = load_preview(req, &decoded_cache, &mut scratch, trace_start);
+            let result = load_preview(req, &decoded_cache, &mut scratch, trace_start, &config);
             match tx.try_send(result) {
                 Ok(()) | Err(mpsc::TrySendError::Full(_)) => {}
                 Err(mpsc::TrySendError::Disconnected(_)) => break,
@@ -739,42 +857,6 @@ impl PreviewDecodedCache {
             self.entries.remove(0);
         }
     }
-}
-
-fn preview_decoded_cache_cap() -> usize {
-    static CAP: OnceLock<usize> = OnceLock::new();
-    *CAP.get_or_init(|| {
-        std::env::var("MISTER_PREVIEW_DECODED_CACHE_CAP")
-            .ok()
-            .and_then(|s| s.parse::<usize>().ok())
-            .unwrap_or(TURBO_PREVIEW_DECODED_CACHE_CAP)
-    })
-}
-
-fn preview_env_truthy(name: &str) -> bool {
-    matches!(
-        std::env::var(name).as_deref(),
-        Ok("1") | Ok("on") | Ok("true") | Ok("yes")
-    )
-}
-
-fn preview_archive_mem_primary_enabled() -> bool {
-    preview_env_truthy("MISTER_PREVIEW_ARCHIVE_MEM_PRIMARY")
-        || preview_env_truthy("MISTER_PREVIEW_FORCE_ARCHIVE_MEM")
-}
-
-fn preview_archive_mem_warm_enabled() -> bool {
-    preview_archive_mem_primary_enabled()
-        || preview_env_truthy("MISTER_PREVIEW_ARCHIVE_MEM_WARM")
-        || preview_env_truthy("MISTER_PREVIEW_ARCHIVE_BACKGROUND_WARM")
-}
-
-fn preview_archive_background_warm_enabled() -> bool {
-    static VALUE: OnceLock<bool> = OnceLock::new();
-    *VALUE.get_or_init(|| {
-        preview_archive_mem_warm_enabled()
-            && !preview_env_truthy("MISTER_PREVIEW_SCROLL_SKIP_ARCHIVE_WARM")
-    })
 }
 
 fn pop_next_preview_request(queue: &mut Vec<PreviewRequest>) -> Option<PreviewRequest> {
@@ -840,9 +922,10 @@ fn load_preview(
     decoded_cache: &SharedPreviewDecodedCache,
     scratch: &mut PreviewArchiveScratch,
     trace_start: Instant,
+    config: &PreviewWorkerConfig,
 ) -> PreviewResult {
-    let resize = PreviewResizeSpec::from_env();
-    let storage = PreviewStorageFormat::from_env();
+    let resize = config.resize();
+    let storage = config.storage_format();
     let resolved_archive_path = resolve_preview_archive_path(&req.preview_archive_path);
     let cache_key = preview_cache_key(&resolved_archive_path, &req.preview_asset_key, resize);
     let mut cache_hit = false;
@@ -851,11 +934,12 @@ fn load_preview(
         cache_hit = true;
         Ok(loaded)
     } else {
-        load_preview_pixels(
+        load_preview_pixels_with_config(
             &resolved_archive_path,
             &req.preview_asset_key,
             scratch,
             resize,
+            config,
         )
         .inspect(|loaded| {
             decoded_cache_insert(decoded_cache, cache_key, loaded);
@@ -985,8 +1069,31 @@ fn load_preview_pixels(
     scratch: &mut PreviewArchiveScratch,
     resize: PreviewResizeSpec,
 ) -> Result<LoadedPreviewPixels, String> {
+    let config = PreviewWorkerConfig::capture_process();
+    load_preview_pixels_with_config(
+        preview_archive_path,
+        preview_asset_key,
+        scratch,
+        resize,
+        &config,
+    )
+}
+
+fn load_preview_pixels_with_config(
+    preview_archive_path: &str,
+    preview_asset_key: &str,
+    scratch: &mut PreviewArchiveScratch,
+    resize: PreviewResizeSpec,
+    config: &PreviewWorkerConfig,
+) -> Result<LoadedPreviewPixels, String> {
     let _ = resize;
-    load_raw565_preview_asset_timed(preview_archive_path, preview_asset_key, scratch)
+    load_raw565_preview_asset_timed(
+        preview_archive_path,
+        preview_asset_key,
+        scratch,
+        config.archive_mem_primary(),
+        config.archive_background_warm(),
+    )
 }
 
 pub fn load_preview_asset_pixels(
@@ -995,8 +1102,15 @@ pub fn load_preview_asset_pixels(
 ) -> Result<PreviewPixels, String> {
     let mut scratch = PreviewArchiveScratch::default();
     let resolved_archive_path = resolve_preview_archive_path(preview_archive_path);
-    load_raw565_preview_asset_timed(&resolved_archive_path, preview_asset_key, &mut scratch)
-        .map(|loaded| loaded.image)
+    let config = PreviewWorkerConfig::capture_process();
+    load_raw565_preview_asset_timed(
+        &resolved_archive_path,
+        preview_asset_key,
+        &mut scratch,
+        config.archive_mem_primary(),
+        config.archive_background_warm(),
+    )
+    .map(|loaded| loaded.image)
 }
 
 pub fn load_preview_asset_pixels_timed(
@@ -1039,6 +1153,8 @@ fn load_raw565_preview_asset_timed(
     preview_archive_path: &str,
     preview_asset_key: &str,
     scratch: &mut PreviewArchiveScratch,
+    archive_mem_primary: bool,
+    archive_background_warm: bool,
 ) -> Result<LoadedPreviewPixels, String> {
     let archive_path = preview_archive_path.trim();
     let asset_key = preview_asset_key.trim();
@@ -1046,7 +1162,7 @@ fn load_raw565_preview_asset_timed(
         return Err("preview asset missing archive path or key".to_string());
     }
     let entry_name = format!("{asset_key}.rgb565");
-    if preview_archive_mem_primary_enabled()
+    if archive_mem_primary
         && let Some(loaded) =
             load_raw565_preview_asset_from_archive_mem(archive_path, &entry_name, scratch)?
     {
@@ -1057,7 +1173,7 @@ fn load_raw565_preview_asset_timed(
     {
         match loaded {
             PreviewIndexLoad::Loaded(loaded) => {
-                if preview_archive_background_warm_enabled() {
+                if archive_background_warm {
                     start_background_preview_archive_load(archive_path.to_string());
                 }
                 return Ok(loaded);
@@ -1189,22 +1305,23 @@ struct MissingPreviewArchive {
     error: String,
 }
 
-fn preview_archives() -> Result<Option<Arc<Vec<PreviewArchive>>>, String> {
-    preview_archives_for_paths(preview_archive_paths_from_env())
-}
-
 /// Open and cache configured preview archives before latency-sensitive work starts.
 pub fn warm_preview_archives_from_env() -> Result<bool, String> {
-    if preview_archive_mem_warm_enabled() {
-        return preview_archives().map(|archives| archives.is_some());
-    }
-    warm_preview_sidecar_indexes_from_env()
+    warm_preview_archives_with_config(&PreviewWorkerConfig::capture_process())
 }
 
-fn warm_preview_sidecar_indexes_from_env() -> Result<bool, String> {
+pub fn warm_preview_archives_with_config(config: &PreviewWorkerConfig) -> Result<bool, String> {
+    if config.archive_mem_warm() {
+        return preview_archives_for_paths(config.archive_paths().to_vec())
+            .map(|archives| archives.is_some());
+    }
+    warm_preview_sidecar_indexes(config.archive_paths())
+}
+
+fn warm_preview_sidecar_indexes(paths: &[String]) -> Result<bool, String> {
     let mut warmed = false;
-    for path in preview_archive_paths_from_env() {
-        let resolved_path = resolve_preview_archive_path(&path);
+    for path in paths {
+        let resolved_path = resolve_preview_archive_path(path);
         match preview_archive_sidecar_lookup(Path::new(&resolved_path)) {
             Ok(Some(_)) => warmed = true,
             Ok(None) => {}
@@ -1220,6 +1337,57 @@ fn warm_preview_sidecar_indexes_from_env() -> Result<bool, String> {
         }
     }
     Ok(warmed)
+}
+
+fn preview_archive_paths_from_values<'a>(
+    resize: PreviewResizeSpec,
+    mut get: impl FnMut(&str) -> Option<&'a str>,
+) -> Vec<String> {
+    let root = get("MISTER_PREVIEW_CACHE_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(default_screenshot_asset_dir);
+    let auto_enabled = !matches!(
+        get("MISTER_PREVIEW_ARCHIVE_AUTO"),
+        Some("0") | Some("off") | Some("false") | Some("no")
+    );
+    let mut paths = Vec::new();
+    if let Some(value) = get("MISTER_PREVIEW_ARCHIVES") {
+        paths.extend(
+            value
+                .split(':')
+                .map(str::trim)
+                .filter(|path| !path.is_empty())
+                .map(str::to_owned),
+        );
+    }
+    if let Some(path) = get("MISTER_PREVIEW_ARCHIVE").filter(|path| !path.is_empty()) {
+        paths.push(path.to_owned());
+    } else if auto_enabled && let Some(path) = auto_preview_archive_path_in_root(&root, resize) {
+        paths.push(path);
+    }
+    if let Some(path) = get("MISTER_NEOGEO_PREVIEW_ARCHIVE").filter(|path| !path.is_empty()) {
+        paths.push(path.to_owned());
+    } else if auto_enabled && let Some(path) = auto_archive_path_for_system(&root, "neogeo") {
+        paths.push(path);
+    }
+    for (system, name) in [
+        ("nes", "MISTER_NES_PREVIEW_ARCHIVE"),
+        ("snes", "MISTER_SNES_PREVIEW_ARCHIVE"),
+        ("n64", "MISTER_N64_PREVIEW_ARCHIVE"),
+        ("sms", "MISTER_SMS_PREVIEW_ARCHIVE"),
+        ("megadrive", "MISTER_MEGADRIVE_PREVIEW_ARCHIVE"),
+        ("saturn", "MISTER_SATURN_PREVIEW_ARCHIVE"),
+        ("amiga", "MISTER_AMIGA_PREVIEW_ARCHIVE"),
+    ] {
+        if let Some(path) = get(name).filter(|path| !path.is_empty()) {
+            paths.push(path.to_owned());
+        } else if auto_enabled && let Some(path) = auto_archive_path_for_system(&root, system) {
+            paths.push(path);
+        }
+    }
+    let mut seen = HashSet::new();
+    paths.retain(|path| seen.insert(path.clone()));
+    paths
 }
 
 pub fn invalidate_preview_archive_metadata_cache(reason: &str) {
@@ -2582,6 +2750,26 @@ mod tests {
     use super::*;
 
     #[test]
+    fn worker_config_captures_clamped_settings_and_deduplicated_archives() {
+        let values = HashMap::from([
+            ("MISTER_PREVIEW_RESIZE_FILTER", "nearest"),
+            ("MISTER_PREVIEW_RESIZE_MAX", "640x480"),
+            ("MISTER_PREVIEW_DECODED_CACHE_CAP", "7"),
+            ("MISTER_PREVIEW_ARCHIVE_MEM_PRIMARY", "true"),
+            ("MISTER_PREVIEW_ARCHIVES", "/tmp/a:/tmp/a:/tmp/b"),
+            ("MISTER_PREVIEW_ARCHIVE_AUTO", "off"),
+        ]);
+        let config = PreviewWorkerConfig::capture_with(|name| values.get(name).copied());
+
+        assert_eq!(config.resize().filter, PreviewResizeFilter::Nearest);
+        assert_eq!((config.resize().max_w, config.resize().max_h), (640, 480));
+        assert_eq!(config.decoded_cache_cap(), 7);
+        assert!(config.archive_mem_primary());
+        assert!(config.archive_mem_warm());
+        assert_eq!(config.archive_paths(), &["/tmp/a", "/tmp/b"]);
+    }
+
+    #[test]
     fn preview_window_orders_selected_then_nearby() {
         assert_eq!(
             preview_window_indices(20, 10, 5),
@@ -2860,7 +3048,13 @@ mod tests {
         let cache = Arc::new(Mutex::new(PreviewDecodedCache::new(2)));
         let mut scratch = PreviewArchiveScratch::default();
 
-        let result = load_preview(req, &cache, &mut scratch, Instant::now());
+        let result = load_preview(
+            req,
+            &cache,
+            &mut scratch,
+            Instant::now(),
+            &PreviewWorkerConfig::default(),
+        );
 
         assert_eq!(result.generation, 77);
         assert_eq!(result.title, "Missing");
@@ -3449,7 +3643,13 @@ mod tests {
         )));
         let mut scratch = PreviewArchiveScratch::default();
 
-        let result = load_preview(request, &cache, &mut scratch, Instant::now());
+        let result = load_preview(
+            request,
+            &cache,
+            &mut scratch,
+            Instant::now(),
+            &PreviewWorkerConfig::default(),
+        );
 
         assert!(result.image.is_some());
         assert_eq!(result.preview_archive_path, legacy.display().to_string());
@@ -3809,7 +4009,13 @@ mod tests {
         );
         let cache = Arc::new(Mutex::new(PreviewDecodedCache::new(2)));
         let mut scratch = PreviewArchiveScratch::default();
-        let result = load_preview(req, &cache, &mut scratch, Instant::now());
+        let result = load_preview(
+            req,
+            &cache,
+            &mut scratch,
+            Instant::now(),
+            &PreviewWorkerConfig::default(),
+        );
 
         assert_eq!(result.generation, 88);
         assert_eq!(result.title, "Tiny");

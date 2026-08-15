@@ -14,7 +14,7 @@ use crate::arcade_catalog::{ArcadeGameEntry, ArcadeGameView};
 use crate::preview_worker::{
     DEFAULT_PREVIEW_CACHE_CAP, DEFAULT_PREVIEW_RADIUS, PreviewLoadSource, PreviewPixels,
     PreviewPriority, PreviewResult, PreviewSelectedRequestHandle, PreviewWorker,
-    preview_asset_cache_key, preview_window_indices,
+    PreviewWorkerConfig, preview_asset_cache_key, preview_window_indices,
 };
 use crate::ui_display::{UI_FB_H, UI_FB_W};
 
@@ -47,50 +47,70 @@ fn preview_startup_trace_enabled() -> bool {
     preview_trace_enabled()
 }
 
-fn preview_loading_enabled() -> bool {
-    static VALUE: OnceLock<bool> = OnceLock::new();
-    *VALUE.get_or_init(|| {
-        !matches!(
-            std::env::var("MISTER_PREVIEW_LOADING").as_deref(),
-            Ok("0") | Ok("off") | Ok("false") | Ok("no")
-        )
-    })
-}
-
-fn preview_turbo_runway_enabled() -> bool {
-    static VALUE: OnceLock<bool> = OnceLock::new();
-    *VALUE.get_or_init(|| {
-        !matches!(
-            std::env::var("MISTER_PREVIEW_TURBO_RUNWAY").as_deref(),
-            Ok("0") | Ok("off") | Ok("false") | Ok("no")
-        )
-    })
-}
-
-fn preview_turbo_lookahead() -> usize {
-    static VALUE: OnceLock<usize> = OnceLock::new();
-    *VALUE.get_or_init(|| {
-        std::env::var("MISTER_PREVIEW_TURBO_LOOKAHEAD")
-            .ok()
-            .and_then(|s| s.parse::<usize>().ok())
-            .unwrap_or(DEFAULT_TURBO_PREVIEW_LOOKAHEAD)
-            .clamp(DEFAULT_PREVIEW_RADIUS, MAX_TURBO_PREVIEW_LOOKAHEAD)
-    })
-}
-
+#[cfg(test)]
 fn preview_prefetch_allowed(scroll_active: bool) -> bool {
-    !scroll_active || preview_turbo_runway_enabled()
+    let config = PreviewStateConfig::default();
+    !scroll_active || config.turbo_runway_enabled
 }
 
-pub fn preview_visual_pct() -> u32 {
-    static VALUE: OnceLock<u32> = OnceLock::new();
-    *VALUE.get_or_init(|| {
-        std::env::var("MISTER_PREVIEW_VISUAL_PCT")
-            .ok()
-            .and_then(|s| s.parse::<u32>().ok())
-            .unwrap_or(100)
-            .clamp(10, 100)
-    })
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PreviewStateConfig {
+    worker: PreviewWorkerConfig,
+    loading_enabled: bool,
+    turbo_runway_enabled: bool,
+    turbo_lookahead: usize,
+    visual_pct: u32,
+}
+
+impl Default for PreviewStateConfig {
+    fn default() -> Self {
+        Self {
+            worker: PreviewWorkerConfig::default(),
+            loading_enabled: true,
+            turbo_runway_enabled: true,
+            turbo_lookahead: DEFAULT_TURBO_PREVIEW_LOOKAHEAD,
+            visual_pct: 100,
+        }
+    }
+}
+
+impl PreviewStateConfig {
+    pub fn capture_with<'a>(mut get: impl FnMut(&str) -> Option<&'a str>) -> Self {
+        let worker = PreviewWorkerConfig::capture_with(&mut get);
+        let enabled = |value: Option<&str>| {
+            !matches!(value, Some("0") | Some("off") | Some("false") | Some("no"))
+        };
+        Self {
+            worker,
+            loading_enabled: enabled(get("MISTER_PREVIEW_LOADING")),
+            turbo_runway_enabled: enabled(get("MISTER_PREVIEW_TURBO_RUNWAY")),
+            turbo_lookahead: get("MISTER_PREVIEW_TURBO_LOOKAHEAD")
+                .and_then(|value| value.parse::<usize>().ok())
+                .unwrap_or(DEFAULT_TURBO_PREVIEW_LOOKAHEAD)
+                .clamp(DEFAULT_PREVIEW_RADIUS, MAX_TURBO_PREVIEW_LOOKAHEAD),
+            visual_pct: get("MISTER_PREVIEW_VISUAL_PCT")
+                .and_then(|value| value.parse::<u32>().ok())
+                .unwrap_or(100)
+                .clamp(10, 100),
+        }
+    }
+
+    pub fn capture_process() -> Self {
+        let values = std::env::vars().collect::<std::collections::HashMap<_, _>>();
+        Self::capture_with(|name| values.get(name).map(String::as_str))
+    }
+
+    pub fn visual_pct(&self) -> u32 {
+        self.visual_pct
+    }
+
+    pub fn worker(&self) -> &PreviewWorkerConfig {
+        &self.worker
+    }
+
+    pub fn archive_warm_skipped(&self) -> bool {
+        self.worker.archive_warm_skipped()
+    }
 }
 
 struct PreviewImage {
@@ -238,18 +258,19 @@ struct PreviewDisplaySize {
     h: u32,
 }
 
-fn preview_display_size(
+fn preview_display_size_with_pct(
     source_w: u32,
     source_h: u32,
     pane_w: u32,
     pane_h: u32,
+    visual_pct: u32,
 ) -> PreviewDisplaySize {
     if source_w == 0 || source_h == 0 || pane_w == 0 || pane_h == 0 {
         return PreviewDisplaySize { w: 0, h: 0 };
     }
 
     let max_area = PREVIEW_MAX_AREA.min(pane_w.saturating_mul(pane_h)).max(1);
-    let max_area = (max_area.saturating_mul(preview_visual_pct()) / 100).max(1);
+    let max_area = (max_area.saturating_mul(visual_pct) / 100).max(1);
 
     let integer_upscale = (pane_w / source_w).min(pane_h / source_h).max(1);
     let area_upscale = ((max_area as f64) / (source_w.saturating_mul(source_h).max(1) as f64))
@@ -260,6 +281,16 @@ fn preview_display_size(
         w: source_w.saturating_mul(scale),
         h: source_h.saturating_mul(scale),
     }
+}
+
+#[cfg(test)]
+fn preview_display_size(
+    source_w: u32,
+    source_h: u32,
+    pane_w: u32,
+    pane_h: u32,
+) -> PreviewDisplaySize {
+    preview_display_size_with_pct(source_w, source_h, pane_w, pane_h, 100)
 }
 
 fn apply_preview_image_bridge(
@@ -280,14 +311,15 @@ fn clear_preview_image_bridge(bridge: &slint_ui::launcher::MisterBridge) {
     bridge.set_arcade_preview_display_height(0);
 }
 
-fn preview_image_from_pixels(pixels: PreviewPixels) -> PreviewImage {
+fn preview_image_from_pixels(pixels: PreviewPixels, visual_pct: u32) -> PreviewImage {
     let source_w = pixels.width();
     let source_h = pixels.height();
-    let display = preview_display_size(
+    let display = preview_display_size_with_pct(
         source_w,
         source_h,
         ARCADE_PREVIEW_BOX_W,
         ARCADE_PREVIEW_BOX_H,
+        visual_pct,
     );
     let pixels = match pixels {
         PreviewPixels::Rgb565 {
@@ -310,6 +342,7 @@ fn preview_image_from_pixels(pixels: PreviewPixels) -> PreviewImage {
 
 pub struct PreviewState {
     worker: PreviewWorker,
+    config: PreviewStateConfig,
     trace_start: Instant,
     selected_mra_path: Option<String>,
     selected_preview_key: Option<String>,
@@ -597,8 +630,13 @@ impl PreviewState {
     }
 
     pub fn new_with_trace_start(trace_start: Instant) -> Self {
+        Self::new_with_config(trace_start, PreviewStateConfig::capture_process())
+    }
+
+    pub fn new_with_config(trace_start: Instant, config: PreviewStateConfig) -> Self {
         Self {
-            worker: PreviewWorker::new_with_trace_start(trace_start),
+            worker: PreviewWorker::new_with_config(trace_start, config.worker.clone()),
+            config,
             trace_start,
             selected_mra_path: None,
             selected_preview_key: None,
@@ -1380,7 +1418,7 @@ pub fn request_arcade_preview_window(
     scroll_active: bool,
     turbo_active: bool,
 ) -> bool {
-    if !preview_loading_enabled() {
+    if !preview.config.loading_enabled {
         preview.clear(bridge);
         return false;
     }
@@ -1402,9 +1440,9 @@ pub fn request_arcade_preview_window(
     };
     bridge.set_arcade_preview_placeholder_visible(true);
 
-    let turbo_runway_active = turbo_active && preview_turbo_runway_enabled();
+    let turbo_runway_active = turbo_active && preview.config.turbo_runway_enabled;
     let prefetch_radius = if turbo_runway_active {
-        preview_turbo_lookahead()
+        preview.config.turbo_lookahead
     } else {
         DEFAULT_PREVIEW_RADIUS
     };
@@ -1665,7 +1703,10 @@ pub fn request_arcade_preview_window(
                     age_us
                 );
             }
-            let loaded_image = Arc::new(preview_image_from_pixels(loaded.pixels));
+            let loaded_image = Arc::new(preview_image_from_pixels(
+                loaded.pixels,
+                preview.config.visual_pct,
+            ));
             preview.frame_cache_evictions += preview.cache.insert(
                 preview_key.clone(),
                 Arc::clone(&loaded_image),
@@ -1769,7 +1810,7 @@ fn request_preview_prefetches_if_allowed(
     scroll_active: bool,
     turbo_active: bool,
 ) {
-    if preview_prefetch_allowed(scroll_active) {
+    if !scroll_active || preview.config.turbo_runway_enabled {
         request_preview_prefetches(games, selected, preview, turbo_active);
     }
 }
@@ -1780,7 +1821,7 @@ fn request_preview_prefetches(
     preview: &mut PreviewState,
     turbo_active: bool,
 ) {
-    let turbo_runway_for_prefetch = turbo_active && preview_turbo_runway_enabled();
+    let turbo_runway_for_prefetch = turbo_active && preview.config.turbo_runway_enabled;
     let turbo_active = turbo_runway_for_prefetch;
     let selected_changed = preview
         .last_prefetch_selected
@@ -1816,7 +1857,7 @@ fn request_preview_prefetches(
         games.len(),
         selected,
         if turbo_active {
-            preview_turbo_lookahead()
+            preview.config.turbo_lookahead
         } else {
             DEFAULT_PREVIEW_RADIUS
         },
@@ -1875,7 +1916,7 @@ fn prune_pending_prefetch_keys_for_turbo(
     let keep: HashSet<String> = direction_aware_prefetch_indices(
         games.len(),
         selected,
-        preview_turbo_lookahead(),
+        preview.config.turbo_lookahead,
         preview.prefetch_direction,
         TURBO_PREVIEW_BACKTAIL,
     )
@@ -1934,7 +1975,7 @@ fn prefetch_window_is_covered(
         games.len(),
         selected,
         if turbo_active {
-            preview_turbo_lookahead()
+            preview.config.turbo_lookahead
         } else {
             DEFAULT_PREVIEW_RADIUS
         },
@@ -2033,7 +2074,7 @@ pub fn schedule_arcade_preview_window(
     scroll_active: bool,
     turbo_active: bool,
 ) -> bool {
-    if !preview_loading_enabled() {
+    if !preview.config.loading_enabled {
         preview.clear(bridge);
         return false;
     }
@@ -2084,7 +2125,7 @@ pub fn apply_ready_preview(
     turbo_active: bool,
 ) -> bool {
     preview.last_apply_trace = PreviewApplyTrace::default();
-    if !preview_loading_enabled() {
+    if !preview.config.loading_enabled {
         preview.worker.discard_ready_results();
         preview.deferred_selected_result = None;
         return false;
@@ -2216,7 +2257,7 @@ pub fn apply_ready_preview(
                     result.preview_asset_key
                 );
             }
-            let image = Arc::new(preview_image_from_pixels(image));
+            let image = Arc::new(preview_image_from_pixels(image, preview.config.visual_pct));
             preview.last_apply_trace.cache_inserts += 1;
             let cache_evictions = preview.cache.insert(
                 result_preview_key.clone(),

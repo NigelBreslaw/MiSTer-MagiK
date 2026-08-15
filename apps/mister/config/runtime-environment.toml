@@ -11,7 +11,7 @@ source_roots = [
 ]
 
 [baseline]
-literal_occurrences = 373
+literal_occurrences = 405
 unique_names = 267
 external_build_names = 7
 
@@ -2776,17 +2776,17 @@ documentation = { summary = "Controls preview scroll exit after trace behavior",
 
 [[control]]
 name = "MISTER_PREVIEW_SCROLL_SKIP_ARCHIVE_WARM"
-owner = "apps/mister/src/ui_runner/launcher_loop.rs"
+owner = "crates/catalog/src/preview_worker.rs"
 classification = "production"
-value_shape = "path or path list"
-default_behavior = "uses the owner-defined installed-layout path or disabled state when unset"
+value_shape = "boolean token"
+default_behavior = "defaults to archive warming enabled when unset or unrecognized"
 visibility = "internal runtime"
-parser = "path"
+parser = "bool"
 scope = "command"
 conflicts = []
-sensitivity = "path"
+sensitivity = "public"
 aliases = []
-documentation = { summary = "Controls preview scroll skip archive warm behavior", accepted_values = [], value_policy = "document" }
+documentation = { summary = "Skips preview archive warming during scroll benchmarks", accepted_values = ["1", "on", "true", "yes"], value_policy = "document" }
 
 [[control]]
 name = "MISTER_PREVIEW_SCROLL_TRACE"

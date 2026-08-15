@@ -206,6 +206,40 @@ pub struct PreviewTransitionDemo {
     label_overlay: bool,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PreviewTransitionConfig {
+    spec: String,
+    picker_enabled: bool,
+    segment_secs: u64,
+    duration_ms: u64,
+}
+
+impl PreviewTransitionConfig {
+    pub fn capture_with<'a>(mut get: impl FnMut(&str) -> Option<&'a str>) -> Self {
+        Self {
+            spec: get("MISTER_PREVIEW_TRANSITION")
+                .unwrap_or_default()
+                .to_owned(),
+            picker_enabled: transition_picker_enabled_from_value(get(
+                "MISTER_PREVIEW_TRANSITION_PICKER",
+            )),
+            segment_secs: get("MISTER_PREVIEW_TRANSITION_SEGMENT_SECS")
+                .and_then(|value| value.parse::<u64>().ok())
+                .unwrap_or(5)
+                .max(1),
+            duration_ms: get("MISTER_PREVIEW_TRANSITION_MS")
+                .and_then(|value| value.parse::<u64>().ok())
+                .unwrap_or(DEFAULT_PREVIEW_TRANSITION_MS)
+                .clamp(1, 2_000),
+        }
+    }
+
+    pub fn capture_process() -> Self {
+        let values = std::env::vars().collect::<std::collections::HashMap<_, _>>();
+        Self::capture_with(|name| values.get(name).map(String::as_str))
+    }
+}
+
 impl PreviewTransitionDemo {
     pub fn disabled() -> Self {
         Self {
@@ -219,10 +253,14 @@ impl PreviewTransitionDemo {
     }
 
     pub fn from_env() -> Self {
-        let spec = std::env::var("MISTER_PREVIEW_TRANSITION").unwrap_or_default();
+        Self::from_config(PreviewTransitionConfig::capture_process())
+    }
+
+    pub fn from_config(config: PreviewTransitionConfig) -> Self {
+        let spec = config.spec;
         let mut effects = Vec::new();
         let trimmed = spec.trim();
-        let picker_enabled = transition_picker_enabled();
+        let picker_enabled = config.picker_enabled;
         let label_overlay = picker_enabled || !trimmed.is_empty();
         let use_all = picker_enabled && trimmed.is_empty();
         #[cfg(mister_experiments)]
@@ -256,21 +294,11 @@ impl PreviewTransitionDemo {
                 .position(|effect| *effect == PreviewTransitionEffect::Fade)
                 .unwrap_or(0),
         );
-        let segment_secs = std::env::var("MISTER_PREVIEW_TRANSITION_SEGMENT_SECS")
-            .ok()
-            .and_then(|s| s.parse::<u64>().ok())
-            .unwrap_or(5)
-            .max(1);
-        let duration_ms = std::env::var("MISTER_PREVIEW_TRANSITION_MS")
-            .ok()
-            .and_then(|s| s.parse::<u64>().ok())
-            .unwrap_or(DEFAULT_PREVIEW_TRANSITION_MS)
-            .clamp(1, 2_000);
         Self {
             effects,
             picker_index,
-            segment: Duration::from_secs(segment_secs),
-            duration: Duration::from_millis(duration_ms),
+            segment: Duration::from_secs(config.segment_secs),
+            duration: Duration::from_millis(config.duration_ms),
             timeline: PreviewTransitionController::default(),
             label_overlay,
         }
@@ -354,8 +382,8 @@ impl PreviewTransitionDemo {
     }
 }
 
-fn transition_picker_enabled() -> bool {
-    std::env::var("MISTER_PREVIEW_TRANSITION_PICKER")
+fn transition_picker_enabled_from_value(value: Option<&str>) -> bool {
+    value
         .map(|value| {
             matches!(
                 value.trim().to_ascii_lowercase().as_str(),
@@ -369,6 +397,22 @@ fn transition_picker_enabled() -> bool {
 mod tests {
     use super::*;
     use crate::preview_state::{PreviewRawFrame, PreviewRawPixels};
+
+    #[test]
+    fn transition_config_clamps_timing_and_preserves_picker_input() {
+        let values = std::collections::HashMap::from([
+            ("MISTER_PREVIEW_TRANSITION", "fade,slide-left"),
+            ("MISTER_PREVIEW_TRANSITION_PICKER", "yes"),
+            ("MISTER_PREVIEW_TRANSITION_SEGMENT_SECS", "0"),
+            ("MISTER_PREVIEW_TRANSITION_MS", "9999"),
+        ]);
+        let config = PreviewTransitionConfig::capture_with(|name| values.get(name).copied());
+        let demo = PreviewTransitionDemo::from_config(config);
+
+        assert!(demo.picker_enabled());
+        assert_eq!(demo.segment, Duration::from_secs(1));
+        assert_eq!(demo.duration, Duration::from_millis(2_000));
+    }
 
     fn transition_demo(duration: Duration) -> PreviewTransitionDemo {
         PreviewTransitionDemo {
