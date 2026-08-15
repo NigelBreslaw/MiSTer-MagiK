@@ -12,7 +12,8 @@ extern crate self as mister_magik_fb;
 pub mod arcade_button_overrides;
 #[cfg(any(feature = "ui", feature = "ui-preview"))]
 #[allow(dead_code)]
-mod arcade_list_renderer;
+#[doc(hidden)]
+pub mod arcade_list_renderer;
 #[cfg(any(feature = "ui", feature = "ui-preview"))]
 #[allow(dead_code)]
 #[doc(hidden)]
@@ -21,7 +22,8 @@ pub use mister_magik_mister_runtime::boot_analytics;
 pub mod bitmap_font_resource;
 #[cfg(any(feature = "ui", feature = "ui-preview"))]
 #[allow(dead_code)]
-mod bitmap_text;
+#[doc(hidden)]
+pub mod bitmap_text;
 pub mod build_identity;
 pub mod catalog_failure_report;
 pub mod catalog_progress_report;

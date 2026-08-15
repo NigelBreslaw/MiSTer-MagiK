@@ -960,12 +960,9 @@ fn render_runtime_environment_reference(registry: &RuntimeEnvironmentRegistry) -
 }
 
 fn check_device_crate_root_ownership(repository: &Path) -> Result<(), String> {
-    const EXPECTED: [(&str, &str); 5] = [
-        ("arcade_list_renderer", "20c-rendering-display"),
-        ("bitmap_text", "20c-rendering-display"),
+    const EXPECTED: [(&str, &str); 2] = [
         ("experiments/effects", "20d-cfg-test"),
         ("test_support", "20d-cfg-test"),
-        ("ui_display", "20c-rendering-display"),
     ];
     let main = read(repository, "apps/mister/src/main.rs")?;
     let library = read(repository, "apps/mister/src/lib.rs")?;
@@ -1674,12 +1671,7 @@ visibility = "internal runtime"
                 .as_nanos()
         ));
         fs::create_dir_all(root.join("apps/mister/src/experiments")).unwrap();
-        let direct = [
-            "arcade_list_renderer",
-            "bitmap_text",
-            "test_support",
-            "ui_display",
-        ];
+        let direct = ["test_support"];
         let declarations = direct
             .iter()
             .map(|module| format!("mod {module};\n"))

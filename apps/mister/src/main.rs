@@ -99,8 +99,6 @@ pub(crate) fn process_start_monotonic_us() -> u64 {
 }
 
 mod allocation_metrics;
-mod arcade_list_renderer;
-mod bitmap_text;
 pub use mister_magik_fb::build_identity;
 use mister_magik_mister_runtime::boot_analytics;
 mod cpu_profile;
@@ -130,7 +128,6 @@ mod search_bench;
 use mister_magik_mister_runtime::settings;
 #[cfg(test)]
 mod test_support;
-mod ui_display;
 #[cfg(mister_experiments)]
 mod ui_effect_bench;
 mod ui_runner;
@@ -145,8 +142,9 @@ pub use mister_magik_fb::{
     return_catalog_capsule, setup_nav, spring_animation, ui_errln, ui_log, ui_logln,
 };
 use mister_magik_fb::{
-    artifact_publish, catalog_failure_report, catalog_progress_report, diagnostic_identity,
-    latch_failure_report, media_http, media_pack_save, video_i420,
+    arcade_list_renderer, artifact_publish, bitmap_text, catalog_failure_report,
+    catalog_progress_report, diagnostic_identity, latch_failure_report, media_http,
+    media_pack_save, ui_display, video_i420,
 };
 
 #[cfg(all(feature = "diagnostics", feature = "ui"))]

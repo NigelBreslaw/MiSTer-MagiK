@@ -133,7 +133,7 @@ preserving `MISTER_MAGIK_FAT` test/install-root remapping.
 
 ## Device crate-root migration inventory
 
-The device application now has 5 shared source owners compiled through
+The device application now has 2 shared source owners compiled through
 both the library and binary roots. The static device crate-root ownership check
 rejects any addition or unrecorded removal. Migration is library-authoritative:
 each batch adds the required library visibility, changes binary consumers to
@@ -142,7 +142,6 @@ The binary must not become an import authority for the library.
 
 | Batch | Current duplicate source owners | Classification |
 |---|---|---|
-| `20c-rendering-display` | `arcade_list_renderer`, `bitmap_text`, `ui_display` | Shared rendering/display leaves |
 | `20d-cfg-test` | `experiments/effects`, `test_support` | cfg/test-only owners |
 
 After each batch, remove exactly its names from the check inventory. Runtime
@@ -153,7 +152,9 @@ the `ready-v2` posted-frame contract do not change in this track.
 
 Completed: `20a-reporting-identity` moved `artifact_publish`, catalog/latch
 reports, `diagnostic_identity`, and `fallible_log`; `20b-media` moved
-`media_http`, `media_pack_save`, and `video_i420` to library authority.
+`media_http`, `media_pack_save`, and `video_i420`; `20c-rendering-display`
+moved `arcade_list_renderer`, `bitmap_text`, and `ui_display` to library
+authority.
 
 ## Hotspot ownership
 

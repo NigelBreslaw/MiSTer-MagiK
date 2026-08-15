@@ -25,22 +25,22 @@ struct ConsoleGradientGlyph {
     mask: Vec<bool>,
 }
 
-pub(crate) struct TextAlphaMask {
-    pub(crate) width: usize,
-    pub(crate) height: usize,
-    pub(crate) stride: usize,
-    pub(crate) alpha: Vec<u8>,
+pub struct TextAlphaMask {
+    pub width: usize,
+    pub height: usize,
+    pub stride: usize,
+    pub alpha: Vec<u8>,
 }
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
-pub(crate) struct TextGradient {
+pub struct TextGradient {
     top: u32,
     mid: u32,
     bottom: u32,
 }
 
 impl TextGradient {
-    pub(crate) const fn new(top: Pixel, mid: Pixel, bottom: Pixel) -> Self {
+    pub const fn new(top: Pixel, mid: Pixel, bottom: Pixel) -> Self {
         Self {
             top: top.0,
             mid: mid.0,
@@ -63,7 +63,7 @@ impl TextGradient {
     }
 }
 
-pub(crate) struct ConsoleFont {
+pub struct ConsoleFont {
     font: Option<swash::FontRef<'static>>,
     scale_context: swash::scale::ScaleContext,
     glyphs: HashMap<char, ConsoleGlyph>,
@@ -75,17 +75,17 @@ pub(crate) struct ConsoleFont {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ConsoleTypeface {
+pub enum ConsoleTypeface {
     PressStart2P,
     Nocive15,
 }
 
 impl ConsoleFont {
-    pub(crate) fn new(pixel_size: f32) -> Self {
+    pub fn new(pixel_size: f32) -> Self {
         Self::new_with_typeface(pixel_size, ConsoleTypeface::PressStart2P)
     }
 
-    pub(crate) fn new_with_typeface(pixel_size: f32, typeface: ConsoleTypeface) -> Self {
+    pub fn new_with_typeface(pixel_size: f32, typeface: ConsoleTypeface) -> Self {
         if typeface == ConsoleTypeface::Nocive15 {
             assert_eq!(pixel_size, 16.0, "Nocive 15 has one exact renderer size");
             let bitmap = mister_magik_fb::bitmap_font_resource::nocive_15_console_bitmap_font()
@@ -142,7 +142,7 @@ impl ConsoleFont {
         }
     }
 
-    pub(crate) fn clipped_text<'a>(&mut self, text: &'a str, max_width: usize) -> Cow<'a, str> {
+    pub fn clipped_text<'a>(&mut self, text: &'a str, max_width: usize) -> Cow<'a, str> {
         if self.text_width(text) <= max_width {
             return Cow::Borrowed(text);
         }
@@ -179,7 +179,7 @@ impl ConsoleFont {
         Cow::Owned(clipped)
     }
 
-    pub(crate) fn centered_text_baseline(
+    pub fn centered_text_baseline(
         &mut self,
         text: &str,
         container_y: usize,
@@ -224,7 +224,7 @@ impl ConsoleFont {
         width
     }
 
-    pub(crate) fn rasterize_alpha_mask(&mut self, text: &str) -> Option<TextAlphaMask> {
+    pub fn rasterize_alpha_mask(&mut self, text: &str) -> Option<TextAlphaMask> {
         let mut pen_x = 0i32;
         let mut bounds: Option<(i32, i32, i32, i32)> = None;
         for ch in text.chars() {
@@ -358,7 +358,7 @@ impl ConsoleFont {
         self.gradient_glyphs.get(&key)
     }
 
-    pub(crate) fn draw_text_clipped(
+    pub fn draw_text_clipped(
         &mut self,
         dst: &mut [Pixel],
         stride: usize,
@@ -397,7 +397,7 @@ impl ConsoleFont {
         }
     }
 
-    pub(crate) fn draw_text_clipped_gradient(
+    pub fn draw_text_clipped_gradient(
         &mut self,
         dst: &mut [Pixel],
         stride: usize,
