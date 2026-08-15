@@ -883,6 +883,7 @@ fn parse_agent_response_line(line: String, start: Instant) -> Result<AgentRespon
             elapsed_ms: start.elapsed().as_millis(),
         }),
         ResponseEnvelope::Error(error) => Err(error.into()),
+        ResponseEnvelope::ErrorWithFailure { error, .. } => Err(error.into()),
     }
 }
 

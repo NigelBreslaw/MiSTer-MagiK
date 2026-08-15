@@ -187,6 +187,16 @@ move. The crate-root check rejects its return in either executable edge. The
 remaining leaf `#[allow(dead_code)]` annotations in `lib.rs` are cfg-local to
 shared rendering helpers that are intentionally partial in host/preview graphs.
 
+## Executable failure boundary
+
+Agent protocol v2 retains its legacy `error` string and framing. An optional
+`failure` sibling now carries stable code, detail, phase, retry policy, and
+recovery-required fields. Protocol parsing preserves unknown future enum values
+and falls back to the legacy string when the sibling is absent or malformed.
+Host classification, device family emission, and CLI evidence propagation are
+ratcheted in the following commits; the wire addition alone changes no exit
+code or human-facing first line.
+
 ## Hotspot ownership
 
 The PR advisory report uses stable owner IDs so moves do not erase history.
