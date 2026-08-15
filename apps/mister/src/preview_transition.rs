@@ -139,19 +139,24 @@ fn transition_progress(elapsed: Duration, duration: Duration) -> f32 {
 
 #[inline(always)]
 pub fn blend_rgb565_bucket(from: Rgb565Pixel, to: Rgb565Pixel, alpha_bucket: u16) -> Rgb565Pixel {
-    let from = u32::from(from.0);
-    let to = u32::from(to.0);
-    let alpha = u32::from(alpha_bucket.min(32));
+    let alpha = alpha_bucket.min(32);
     if alpha == 0 {
-        return Rgb565Pixel(from as u16);
+        return from;
     }
     if alpha >= 32 {
-        return Rgb565Pixel(to as u16);
+        return to;
     }
+    Rgb565Pixel(blend_rgb565_channels(from.0, to.0, u32::from(alpha)))
+}
+
+#[inline(always)]
+fn blend_rgb565_channels(from: u16, to: u16, alpha: u32) -> u16 {
     let inverse = 32 - alpha;
-    let red_blue = (((from & 0xf81f) * inverse + (to & 0xf81f) * alpha) >> 5) & 0xf81f;
-    let green = (((from & 0x07e0) * inverse + (to & 0x07e0) * alpha) >> 5) & 0x07e0;
-    Rgb565Pixel((red_blue | green) as u16)
+    let red_blue =
+        (((u32::from(from & 0xf81f) * inverse) + (u32::from(to & 0xf81f) * alpha)) >> 5) & 0xf81f;
+    let green =
+        (((u32::from(from & 0x07e0) * inverse) + (u32::from(to & 0x07e0) * alpha)) >> 5) & 0x07e0;
+    (red_blue | green) as u16
 }
 
 pub fn blend_rgb565_rows_bucketed(
@@ -171,8 +176,13 @@ pub fn blend_rgb565_rows_bucketed(
         destination.copy_from_slice(&current[..destination.len()]);
         return;
     }
+    let alpha = u32::from(alpha);
     for index in 0..destination.len() {
-        destination[index] = blend_rgb565_bucket(previous[index], current[index], alpha);
+        destination[index] = Rgb565Pixel(blend_rgb565_channels(
+            previous[index].0,
+            current[index].0,
+            alpha,
+        ));
     }
 }
 
