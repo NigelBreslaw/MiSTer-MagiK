@@ -33,6 +33,7 @@ arbitrary command, environment, path, or duration parameters.
 
 | Scenario | Control and instrumented arms | Fixed workload | Retained evidence |
 | --- | --- | --- | --- |
+| `arcade-velocity-scroll-attribution` | unprofiled control, 999 Hz pprof, per-frame Cortex-A9 PMU, and system-wide Streamline arms | fixed 20-second Arcade velocity hold with screenshot backdrop changes on the active route, including CRT 240p | control cadence summary, flamegraph and folded stacks, per-span PMU JSON, APC/archive, shared correlation manifest |
 | `gui-frame-attribution` | independent control, PMU, and system-wide Streamline arms | settled Settings; Home pan right and left; held Arcade scroll with preview changes; settled Arcade at confirmed 1280x720p60 | per-frame TSV, PMU JSON, APC and archive, launcher log, status and presentation snapshots |
 | `system-entry-critical-streamline` | one bounded system-wide Streamline arm | existing direct C64 and SNES entry routes with separate monotonic windows | APC and archive, phase evidence, catalog and presentation snapshots |
 | `transition-streamline` | one bounded system-wide Streamline arm | existing Settings route plus fade and zoom orientation routes in landscape and portrait | APC and archive, per-effect and per-orientation frame evidence |
@@ -45,6 +46,11 @@ Every arm restores the normal launcher whether it succeeds or fails. Benchmark
 preflight and cleanup retain the boot identity, installed manifest, settings,
 display mode, and launcher state, remove temporary state, and assert that every
 boot-loop arming path remains absent.
+
+The Arcade profiling arms never apply a display transaction. The active route is
+queried before each arm and verified unchanged afterward. Only the unprofiled
+control owns cadence gates; the profiler arms exist to rank list overlay, blend,
+copy, and snapshot hotspots for a subsequent optimization experiment.
 
 ## Artifact ownership and identity
 

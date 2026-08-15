@@ -33,6 +33,11 @@ Supported scenarios:
 - `launcher-response`
 - `launcher-response-attribution`
 - `gui-frame-attribution`
+- `arcade-velocity-scroll`
+- `arcade-velocity-scroll-pprof`
+- `arcade-velocity-scroll-pmu`
+- `arcade-velocity-scroll-streamline`
+- `arcade-velocity-scroll-attribution`
 - `system-entry-critical-streamline`
 - `transition-streamline`
 - `agent-observer-attribution`
@@ -59,6 +64,13 @@ Supported scenarios:
 - `pmu-profile`
 - `search`
 - `streamline`
+
+The Arcade velocity-scroll profiling scenarios preserve the active display
+route, including CRT 240p. The unprofiled `arcade-velocity-scroll` run owns
+physical cadence and repeated-vblank qualification. The `-pprof`, `-pmu`, and
+`-streamline` runs are attribution-only; `-attribution` executes control,
+pprof, PMU, and Streamline sequentially and writes one correlation manifest.
+None of these scenarios changes the display mode or restores a different mode.
 
 `modal-input` restarts the coherently installed Dev launcher with a one-shot,
 fixed test request and a catalog copied below

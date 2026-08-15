@@ -714,6 +714,15 @@ impl NativeDevice {
         })
     }
 
+    pub(crate) fn profile_arcade_velocity_scroll_attribution(
+        &mut self,
+        output_dir: &Path,
+    ) -> std::result::Result<String, DeviceFailure> {
+        self.benchmark_profile(|config| {
+            profile_installed_arcade_velocity_scroll_attribution(config, output_dir)
+        })
+    }
+
     pub(crate) fn profile_transition_streamline(
         &mut self,
         output_dir: &Path,
@@ -8506,6 +8515,69 @@ fn profile_installed_arcade_velocity_scroll_streamline(
         output_dir.join("summary.json"),
         format!("{}\n", serde_json::to_string_pretty(&summary)?),
     )?;
+    serde_json::to_string(&summary).map_err(Into::into)
+}
+
+fn profile_installed_arcade_velocity_scroll_attribution(
+    config: &NativeDeviceConfig,
+    output_dir: &Path,
+) -> Result<String> {
+    fs::create_dir_all(output_dir)?;
+    let control_text =
+        profile_installed_arcade_velocity_scroll(config, &output_dir.join("control"))?;
+    let pprof_text =
+        profile_installed_arcade_velocity_scroll_pprof(config, &output_dir.join("pprof"))?;
+    let pmu_text = profile_installed_arcade_velocity_scroll_pmu(config, &output_dir.join("pmu"))?;
+    let streamline_text = profile_installed_arcade_velocity_scroll_streamline(
+        config,
+        &output_dir.join("streamline"),
+    )?;
+    let control: Value = serde_json::from_str(&control_text)?;
+    let pprof: Value = serde_json::from_str(&pprof_text)?;
+    let pmu: Value = serde_json::from_str(&pmu_text)?;
+    let streamline: Value = serde_json::from_str(&streamline_text)?;
+    let summary = json!({
+        "schema": "mister-magik-arcade-velocity-scroll-attribution-v1",
+        "artifact_status": "passed",
+        "performance_authority": "control",
+        "display_route_policy": "preserve-active-route",
+        "arms": {
+            "control": control,
+            "pprof": pprof,
+            "pmu": pmu,
+            "streamline": streamline,
+        },
+        "correlation": {
+            "clock_domain": "CLOCK_MONOTONIC",
+            "candidate_order": [
+                "crt_backdrop_list_overlay",
+                "crt_backdrop_blend",
+                "crt_backdrop_copy",
+                "crt_backdrop_snapshot",
+            ],
+            "selection_rule": "advance only when a hotspot accounts for >=10% of cycles, >=1ms of frame time, or measurable repeated-vblank reduction",
+            "cadence_rule": "unprofiled control owns physical cadence and repeated-vblank gates",
+        },
+    });
+    fs::write(
+        output_dir.join("summary.json"),
+        format!("{}\n", serde_json::to_string_pretty(&summary)?),
+    )?;
+    let mut report = String::from("# Arcade velocity-scroll profiling correlation\n\n");
+    report.push_str(
+        "The control arm is the only cadence authority; profiler arms are attribution-only.\n\n",
+    );
+    for arm in ["control", "pprof", "pmu", "streamline"] {
+        let arm_summary = &summary["arms"][arm];
+        report.push_str(&format!(
+            "- {arm}: schema `{}`\n",
+            arm_summary["schema"].as_str().unwrap_or("unknown")
+        ));
+    }
+    report.push_str(
+        "\nInitial hotspot order is list overlay, blend, copy, then snapshot; advance only after the correlation thresholds in summary.json are met.\n",
+    );
+    fs::write(output_dir.join("report.md"), report)?;
     serde_json::to_string(&summary).map_err(Into::into)
 }
 

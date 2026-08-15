@@ -51,6 +51,7 @@ enum BenchmarkProfile {
     ArcadeVelocityScrollPprof,
     ArcadeVelocityScrollPmu,
     ArcadeVelocityScrollStreamline,
+    ArcadeVelocityScrollAttribution,
     TransitionStreamline,
     AgentObserverAttribution,
     AgentIoAttribution,
@@ -140,6 +141,9 @@ impl BenchmarkDevice for DeviceClient {
             }
             BenchmarkProfile::ArcadeVelocityScrollStreamline => {
                 device.profile_arcade_velocity_scroll_streamline(&output_dir)
+            }
+            BenchmarkProfile::ArcadeVelocityScrollAttribution => {
+                device.profile_arcade_velocity_scroll_attribution(&output_dir)
             }
             BenchmarkProfile::TransitionStreamline => {
                 device.profile_transition_streamline(&output_dir)
@@ -333,6 +337,9 @@ fn require_clean_installed_commit(
         }
         BenchmarkScenario::ArcadeVelocityScrollStreamline => {
             execute_arcade_velocity_scroll_streamline(&mut device, manifest, output_dir, reporter)
+        }
+        BenchmarkScenario::ArcadeVelocityScrollAttribution => {
+            execute_arcade_velocity_scroll_attribution(&mut device, manifest, output_dir, reporter)
         }
         BenchmarkScenario::TransitionStreamline => execute_attribution_capture(
             &mut device,
@@ -761,6 +768,7 @@ fn particle_scene_lab_command(scenario: BenchmarkScenario) -> Option<&'static st
         | BenchmarkScenario::ArcadeVelocityScrollPprof
         | BenchmarkScenario::ArcadeVelocityScrollPmu
         | BenchmarkScenario::ArcadeVelocityScrollStreamline
+        | BenchmarkScenario::ArcadeVelocityScrollAttribution
         | BenchmarkScenario::TransitionStreamline
         | BenchmarkScenario::AgentObserverAttribution
         | BenchmarkScenario::AgentIoAttribution
@@ -1222,6 +1230,48 @@ fn execute_arcade_velocity_scroll_streamline(
             "summary": summary,
             "output_dir": output_dir,
             "performance_authority": "unprofiled arcade-velocity-scroll control",
+        }))
+        .map_err(|error| error.to_string())?,
+        Some(100),
+    )?;
+    Ok(Outcome::Passed)
+}
+
+fn execute_arcade_velocity_scroll_attribution(
+    device: &mut impl BenchmarkDevice,
+    manifest: String,
+    output_dir: PathBuf,
+    reporter: &mut Reporter<'_>,
+) -> AgentResult<Outcome> {
+    reporter.emit(
+        EventKind::Progress,
+        "arcade-velocity-scroll-attribution",
+        "collecting control, pprof, PMU, and Streamline evidence without changing the active route",
+        Some(25),
+    )?;
+    let detail = device.profile(
+        BenchmarkProfile::ArcadeVelocityScrollAttribution,
+        output_dir.clone(),
+    )?;
+    let summary: Value = serde_json::from_str(&detail).map_err(|error| error.to_string())?;
+    if summary.get("schema").and_then(Value::as_str)
+        != Some("mister-magik-arcade-velocity-scroll-attribution-v1")
+        || summary.get("artifact_status").and_then(Value::as_str) != Some("passed")
+        || !matches!(summary.get("arms"), Some(Value::Object(arms)) if arms.len() == 4)
+    {
+        return Err(
+            "Arcade velocity-scroll attribution did not produce complete v1 evidence".into(),
+        );
+    }
+    device.verify_health()?;
+    reporter.emit(
+        EventKind::Progress,
+        "benchmark-result",
+        &serde_json::to_string(&json!({
+            "installed_manifest": manifest,
+            "summary": summary,
+            "output_dir": output_dir,
+            "performance_authority": "unprofiled control arm only",
         }))
         .map_err(|error| error.to_string())?,
         Some(100),
