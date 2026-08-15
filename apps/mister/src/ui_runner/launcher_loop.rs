@@ -9552,7 +9552,7 @@ pub(super) fn run_launcher_loop(
             && crt_backdrop_was_eligible
             && !crt_backdrop_leaving
             && !full_frame_present
-            && nav.arcade.is_scroll_active()
+            && (nav.arcade.is_scroll_active() || crt_backdrop_work_trace.active)
         {
             // The CRT Arcade compositor owns the changing screenshot, list,
             // and chrome cache while motion or the 130 ms fade is active.
