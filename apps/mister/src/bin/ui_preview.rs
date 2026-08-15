@@ -3090,10 +3090,14 @@ mod macos {
             hasher.update((bytes.len() as u64).to_be_bytes());
             hasher.update(bytes);
         }
-        sha256_hex(&hasher.finalize())
+        hex_bytes(&hasher.finalize())
     }
 
     fn sha256_hex(bytes: &[u8]) -> String {
+        hex_bytes(&Sha256::digest(bytes))
+    }
+
+    fn hex_bytes(bytes: &[u8]) -> String {
         const HEX: &[u8; 16] = b"0123456789abcdef";
         let mut encoded = String::with_capacity(bytes.len().saturating_mul(2));
         for &byte in bytes {
@@ -4183,6 +4187,7 @@ mod macos {
 
             assert_eq!(base.encoded().unwrap(), repeated.encoded().unwrap());
             assert_eq!(base.identity().unwrap(), repeated.identity().unwrap());
+            assert_eq!(base.identity().unwrap().len(), 64);
             assert_eq!(base.scene_seed.as_deref(), Some("0000004d6167694b"));
             let json = String::from_utf8(base.encoded().unwrap()).unwrap();
             assert!(!json.contains("/tmp/capture.png"));
