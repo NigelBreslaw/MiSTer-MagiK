@@ -1224,7 +1224,7 @@ fn add_script_operations(repository: &Path, path: &Path, add: &mut impl FnMut(Op
         ));
     }
     if text.ends_with("MiSTer-MagiK.sh") || text.ends_with("test-mister-magik-installer.sh") {
-        add(with_inputs(
+        let mut manager_fixture = with_inputs(
             cargo(
                 "mister-manager.host-binary",
                 "Build host installer manager fixture",
@@ -1238,7 +1238,9 @@ fn add_script_operations(repository: &Path, path: &Path, add: &mut impl FnMut(Op
                 "installer lifecycle fixture requires the host manager binary",
             ),
             &["mister/tools/manager"],
-        ));
+        );
+        manager_fixture.risk = Risk::LocalWrite;
+        add(manager_fixture);
         let mut lifecycle = with_inputs(
             op_owned(
                 "scripts.installer-lifecycle",
@@ -2283,6 +2285,29 @@ mod tests {
                 .iter()
                 .any(|arg| arg == "ui,signed-media-manifests")
         );
+    }
+
+    #[test]
+    fn installer_lifecycle_always_materializes_its_manager_fixture() {
+        let plan = affected_plan(
+            AssuranceRequest::Plan {
+                scope: Scope::Paths(vec![]),
+            },
+            vec!["scripts/tests/test-mister-magik-installer.sh".into()],
+        )
+        .unwrap();
+        let manager = plan
+            .operations
+            .iter()
+            .find(|operation| operation.id == "mister-manager.host-binary")
+            .unwrap();
+        let lifecycle = plan
+            .operations
+            .iter()
+            .find(|operation| operation.id == "scripts.installer-lifecycle")
+            .unwrap();
+        assert_eq!(manager.risk, Risk::LocalWrite);
+        assert!(manager.workflow_phase() < lifecycle.workflow_phase());
     }
 
     #[test]

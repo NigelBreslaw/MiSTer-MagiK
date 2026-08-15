@@ -280,6 +280,8 @@ environment reads belong only to the separately sequenced Type lane.
 Shared assurance leases are reclaimed as soon as their owner request completes,
 or their bounded expiry passes; both claim and ownership polling reap inactive
 owners. A failed builtin batch releases every lease it claimed before returning.
+The installer lifecycle's manager-fixture build is a non-cacheable local write,
+so a clean target directory cannot reuse evidence without materializing its input.
 
 ## Hotspot ownership
 
