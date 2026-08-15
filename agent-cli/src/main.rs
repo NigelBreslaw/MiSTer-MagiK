@@ -6,7 +6,7 @@ use agent_cli::cli::{
     FrameEvidenceCommand, OutputFormat, PlatformManifestCommand, ReleaseCommand,
     ReturnQualificationCommand, RunCommand,
 };
-use agent_cli::error::AgentResult;
+use agent_cli::error::{AgentError, AgentResult};
 use agent_cli::evidence::Evidence;
 use agent_cli::executor;
 use agent_cli::model::{AssuranceRequest, Outcome};
@@ -24,13 +24,17 @@ fn main() -> ExitCode {
     match run() {
         Ok(code) => code,
         Err(error) => {
-            eprintln!("agent-cli: {error}");
+            eprintln!("{}", fatal_error_line(&error));
             ExitCode::from(70)
         }
     }
 }
 
-fn run() -> Result<ExitCode, String> {
+fn fatal_error_line(error: &AgentError) -> String {
+    format!("agent-cli: {error}")
+}
+
+fn run() -> AgentResult<ExitCode> {
     let args: Vec<_> = std::env::args_os().collect();
     let cli = match Cli::try_parse_from(args) {
         Ok(cli) => cli,
@@ -72,21 +76,17 @@ fn run() -> Result<ExitCode, String> {
     ) {
         Ok(outcome) => outcome,
         Err(error) => {
-            reporter
-                .emit(EventKind::Failed, "request", &error.to_string(), None)
-                .map_err(|error| error.to_string())?;
+            reporter.emit(EventKind::Failed, "request", &error.to_string(), None)?;
             context.evidence.finish(&raw.id, Outcome::Failed)?;
             return Ok(ExitCode::FAILURE);
         }
     };
-    reporter
-        .emit(
-            EventKind::Completed,
-            "request",
-            "Request complete",
-            Some(100),
-        )
-        .map_err(|error| error.to_string())?;
+    reporter.emit(
+        EventKind::Completed,
+        "request",
+        "Request complete",
+        Some(100),
+    )?;
     context.evidence.finish(&raw.id, outcome)?;
     if outcome == Outcome::ExternalRequired {
         return Ok(ExitCode::from(3));
@@ -100,7 +100,7 @@ struct RepoContext {
 }
 
 impl RepoContext {
-    fn open() -> Result<Self, String> {
+    fn open() -> AgentResult<Self> {
         let repository = std::env::current_dir().map_err(|error| error.to_string())?;
         let evidence = Evidence::open_for_repository(&repository)?;
         Ok(Self {
@@ -1066,6 +1066,31 @@ mod tests {
                 .unwrap_err()
                 .to_string(),
             "write failed"
+        );
+    }
+
+    #[test]
+    fn fatal_error_first_line_remains_compatible() {
+        let error = AgentError::phase(
+            "install",
+            AgentError::structured_device(
+                "installed hash mismatch",
+                mister_magik_agent_protocol::FailureMetadata {
+                    code: mister_magik_agent_protocol::FailureCode::ArtifactMismatch,
+                    detail: "installed hash mismatch".to_string(),
+                    phase: mister_magik_agent_protocol::FailurePhase::Artifact,
+                    retry_policy: mister_magik_agent_protocol::RetryPolicy::ReconcileThenRetry,
+                    recovery_required: false,
+                },
+            ),
+        );
+        assert_eq!(
+            fatal_error_line(&error),
+            "agent-cli: install: installed hash mismatch"
+        );
+        assert_eq!(
+            error.structured_failure().unwrap().code,
+            mister_magik_agent_protocol::FailureCode::ArtifactMismatch
         );
     }
 

@@ -231,6 +231,13 @@ Downloader configuration restore emits `recovery_required=true` with an
 operator-required retry policy; transaction order and legacy text are
 unchanged.
 
+The repository-aware CLI executable and context constructor now retain
+`AgentResult` through the reporting boundary, and reporter/evidence storage
+errors convert there without an intermediate string-returning `run`. Fatal and
+request-failure first-line text and all exit-code decisions remain unchanged;
+the next projection step may therefore record structured metadata without
+reconstructing it from display strings.
+
 ## Hotspot ownership
 
 The PR advisory report uses stable owner IDs so moves do not erase history.
