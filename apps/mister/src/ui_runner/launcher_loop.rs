@@ -5185,7 +5185,6 @@ pub(super) fn run_launcher_loop(
     let mut crt_backdrop = CrtBackdropState::for_display(ui);
     let mut crt_backdrop_selection = None;
     let mut crt_backdrop_transition_id = None;
-    let mut crt_backdrop_prepared_revision = 0_u64;
     let mut crt_backdrop_was_eligible = false;
     let mut crt_backdrop_chrome = Vec::new();
     let mut launcher_preview_version = 1u64;
@@ -8660,10 +8659,6 @@ pub(super) fn run_launcher_loop(
             && presentation_route == PreviewRoute::Eligible
             && wants_arcade_list
             && !nav.arcade_filter.drawer_open;
-        // Target preparation is a bounded, non-blocking worker hand-off.  It
-        // is polled before composition so a completed target can be adopted
-        // on this frame without doing any scaling on the UI thread.
-        preview.poll_backdrop_preparations();
         let crt_backdrop_leaving = crt_backdrop_was_eligible && !crt_backdrop_eligible;
         if crt_backdrop_leaving {
             full_frame_present = true;
@@ -9797,45 +9792,36 @@ pub(super) fn run_launcher_loop(
                 .min(u128::from(u64::MAX)) as u64;
             crt_backdrop_snapshot_pixels = crt_backdrop_chrome.len().min(u32::MAX as usize) as u32;
             let selected_changed = crt_backdrop_selection != Some(nav.arcade.selected);
-            let transition_id = preview
-                .raw_transition_frame()
-                .as_ref()
-                .map(|frame| frame.transition_id);
+            let raw_transition = preview.raw_transition_frame();
+            let transition_id = raw_transition.as_ref().map(|frame| frame.transition_id);
             let transition_changed = transition_id != crt_backdrop_transition_id;
-            let prepared_revision = preview.backdrop_prepare_revision();
-            let prepared_changed = prepared_revision != crt_backdrop_prepared_revision;
             let exact = preview_cache_state_before_composition == "exact";
-            if selected_changed
-                || transition_changed
-                || prepared_changed
-                || !crt_backdrop_was_eligible
-            {
+            if selected_changed || transition_changed || !crt_backdrop_was_eligible {
                 if let Some(backdrop) = crt_backdrop.as_mut() {
                     if exact {
-                        let now = loop_start.saturating_duration_since(run_start);
-                        preview.request_backdrop_prepare(
-                            backdrop.width(),
-                            backdrop.physical_height(),
-                            backdrop.height(),
-                        );
-                        let prepared = preview.prepared_backdrop(
-                            backdrop.width(),
-                            backdrop.physical_height(),
-                            backdrop.height(),
-                        );
-                        backdrop.retarget_prepared(prepared, now);
+                        let frame = raw_transition
+                            .as_ref()
+                            .map(|frame| &frame.current)
+                            .filter(|frame| frame.status() == PreviewRawFrameStatus::Ready)
+                            .map(preview_frame_from_raw);
+                        if let Some(frame) = frame {
+                            backdrop.retarget(
+                                Some(frame),
+                                loop_start.saturating_duration_since(run_start),
+                            );
+                        } else {
+                            backdrop.clear_plain();
+                        }
                     } else {
                         backdrop.clear_plain();
                     }
                 }
                 crt_backdrop_selection = Some(nav.arcade.selected);
                 crt_backdrop_transition_id = transition_id;
-                crt_backdrop_prepared_revision = prepared_revision;
             }
             if let Some(backdrop) = crt_backdrop.as_mut() {
                 let compose_full = selected_changed
                     || transition_changed
-                    || prepared_changed
                     || !crt_backdrop_was_eligible
                     || backdrop.is_transitioning();
                 if compose_full {
@@ -9863,7 +9849,6 @@ pub(super) fn run_launcher_loop(
         } else {
             crt_backdrop_selection = None;
             crt_backdrop_transition_id = None;
-            crt_backdrop_prepared_revision = preview.backdrop_prepare_revision();
         }
         let navigation_transition_composition_active = navigation_transition.is_active();
         let navigation_settings_physical_space = navigation_transition.settings_physical_space();

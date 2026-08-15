@@ -9,17 +9,6 @@ use crate::visual_composition::{PreviewFrame, PreviewPixels};
 use slint::platform::software_renderer::Rgb565Pixel;
 use std::time::{Duration, Instant};
 
-/// A prepared, dimmed RGB565 target produced away from the launcher render
-/// thread.  The pixel and row-repeat buffers are immutable so adopting a
-/// target only clones two `Arc`s; the UI never rescales or copies the source
-/// image on the selection-change path.
-#[derive(Clone)]
-pub(crate) struct PreparedCrtBackdrop {
-    pub(crate) pixels: std::sync::Arc<[Rgb565Pixel]>,
-    pub(crate) row_repeats: std::sync::Arc<[bool]>,
-    pub(crate) is_plain: bool,
-}
-
 pub const CRT_BACKDROP_FADE_DURATION: Duration = Duration::from_millis(130);
 pub const CRT_BACKDROP_DARK_RETAIN_PERCENT: u8 = 40;
 pub const CRT_BACKDROP_BACKGROUND: Rgb565Pixel = rgb565_from_rgb888(0x02, 0x08, 0x17);
@@ -39,13 +28,13 @@ pub struct CrtBackdropState {
     height: usize,
     physical_height: usize,
     source: Vec<Rgb565Pixel>,
-    target: std::sync::Arc<[Rgb565Pixel]>,
+    target: Vec<Rgb565Pixel>,
     retarget: Vec<Rgb565Pixel>,
     logical_retarget: Vec<Rgb565Pixel>,
     x_map: Vec<usize>,
     y_map: Vec<usize>,
     source_row_repeats: Vec<bool>,
-    target_row_repeats: std::sync::Arc<[bool]>,
+    target_row_repeats: Vec<bool>,
     retarget_row_repeats: Vec<bool>,
     target_is_plain: bool,
     retarget_is_plain: bool,
@@ -81,13 +70,13 @@ impl CrtBackdropState {
             height,
             physical_height,
             source: vec![CRT_BACKDROP_BACKGROUND; len],
-            target: std::sync::Arc::from(vec![CRT_BACKDROP_BACKGROUND; len]),
+            target: vec![CRT_BACKDROP_BACKGROUND; len],
             retarget: vec![CRT_BACKDROP_BACKGROUND; len],
             logical_retarget: vec![CRT_BACKDROP_BACKGROUND; logical_len],
             x_map: vec![0; width],
             y_map: vec![0; physical_height],
             source_row_repeats: plain_row_repeats(physical_height),
-            target_row_repeats: std::sync::Arc::from(plain_row_repeats(physical_height)),
+            target_row_repeats: plain_row_repeats(physical_height),
             retarget_row_repeats: plain_row_repeats(physical_height),
             target_is_plain: true,
             retarget_is_plain: true,
@@ -129,11 +118,11 @@ impl CrtBackdropState {
         }
         let prepare_start = Instant::now();
         self.source.fill(CRT_BACKDROP_BACKGROUND);
-        self.target = std::sync::Arc::from(vec![CRT_BACKDROP_BACKGROUND; self.target.len()]);
+        self.target.fill(CRT_BACKDROP_BACKGROUND);
         self.retarget.fill(CRT_BACKDROP_BACKGROUND);
         self.logical_retarget.fill(CRT_BACKDROP_BACKGROUND);
         self.source_row_repeats.fill(true);
-        self.target_row_repeats = std::sync::Arc::from(vec![true; self.physical_height]);
+        self.target_row_repeats.fill(true);
         self.retarget_row_repeats.fill(true);
         self.target_is_plain = true;
         self.retarget_is_plain = true;
@@ -149,67 +138,30 @@ impl CrtBackdropState {
             .copy_from_slice(&self.retarget_row_repeats);
 
         let prepare_start = Instant::now();
-        let mut prepared = vec![CRT_BACKDROP_BACKGROUND; self.target.len()];
-        let mut prepared_rows = vec![true; self.physical_height];
         self.target_is_plain = match frame {
             Some(frame)
                 if scale_dimmed_center_crop_mapped_with_logical_height(
-                    &mut prepared,
+                    &mut self.target,
                     self.width,
                     self.physical_height,
                     self.height,
                     frame,
                     &mut self.x_map,
                     &mut self.y_map,
-                    &mut prepared_rows,
+                    &mut self.target_row_repeats,
                 ) =>
             {
                 false
             }
-            _ => true,
+            _ => {
+                self.target.fill(CRT_BACKDROP_BACKGROUND);
+                self.target_row_repeats.fill(true);
+                true
+            }
         };
-        self.target = std::sync::Arc::from(prepared);
-        self.target_row_repeats = std::sync::Arc::from(prepared_rows);
         self.pending_prepare_us = duration_us(prepare_start.elapsed());
         self.pending_prepare_pixels = self.target.len().min(u32::MAX as usize) as u32;
-        self.transition_started = (self.source.as_slice() != self.target.as_ref()).then_some(now);
-        if self.transition_started.is_none() {
-            self.retarget.copy_from_slice(&self.target);
-            self.retarget_row_repeats
-                .copy_from_slice(&self.target_row_repeats);
-            self.retarget_is_plain = self.target_is_plain;
-            self.expand_to_logical();
-        }
-    }
-
-    /// Adopt an immutable target prepared by the background lane.  This is
-    /// intentionally separate from `retarget`, whose compatibility path still
-    /// performs scaling synchronously for host tests and non-Arcade callers.
-    pub(crate) fn retarget_prepared(
-        &mut self,
-        prepared: Option<PreparedCrtBackdrop>,
-        now: Duration,
-    ) {
-        self.resolve_current(now);
-        self.source.copy_from_slice(&self.retarget);
-        self.source_row_repeats
-            .copy_from_slice(&self.retarget_row_repeats);
-        let Some(prepared) = prepared else {
-            self.target = std::sync::Arc::from(vec![CRT_BACKDROP_BACKGROUND; self.target.len()]);
-            self.target_row_repeats = std::sync::Arc::from(vec![true; self.physical_height]);
-            self.target_is_plain = true;
-            self.pending_prepare_us = 0;
-            self.pending_prepare_pixels = 0;
-            self.transition_started =
-                (self.source.as_slice() != self.target.as_ref()).then_some(now);
-            return;
-        };
-        self.target = prepared.pixels;
-        self.target_row_repeats = prepared.row_repeats;
-        self.target_is_plain = prepared.is_plain;
-        self.pending_prepare_us = 0;
-        self.pending_prepare_pixels = 0;
-        self.transition_started = (self.source != self.target.as_ref()).then_some(now);
+        self.transition_started = (self.source != self.target).then_some(now);
         if self.transition_started.is_none() {
             self.retarget.copy_from_slice(&self.target);
             self.retarget_row_repeats
@@ -460,53 +412,6 @@ fn scale_dimmed_center_crop_mapped_with_logical_height(
         }
     }
     true
-}
-
-/// Prepare one RGB565 screenshot for the low-resolution CRT backdrop.  This
-/// helper is deliberately allocation-owned by its caller so it can run on a
-/// worker lane and hand the resulting buffers to `CrtBackdropState` by `Arc`.
-pub(crate) fn prepare_dimmed_rgb565_target(
-    source: &[Rgb565Pixel],
-    source_width: usize,
-    source_height: usize,
-    source_stride_pixels: usize,
-    destination_width: usize,
-    destination_physical_height: usize,
-    logical_destination_height: usize,
-) -> Option<(Vec<Rgb565Pixel>, Vec<bool>)> {
-    if source_width == 0
-        || source_height == 0
-        || source_stride_pixels < source_width
-        || source.len() < source_stride_pixels.saturating_mul(source_height)
-    {
-        return None;
-    }
-    let mut pixels = vec![
-        CRT_BACKDROP_BACKGROUND;
-        destination_width.saturating_mul(destination_physical_height)
-    ];
-    let mut row_repeats = vec![false; destination_physical_height];
-    let frame = PreviewFrame {
-        pixels: PreviewPixels::Rgb565 {
-            pixels: source,
-            stride_pixels: source_stride_pixels,
-        },
-        source_width,
-        source_height,
-        display_width: source_width,
-        display_height: source_height,
-    };
-    scale_dimmed_center_crop_mapped_with_logical_height(
-        &mut pixels,
-        destination_width,
-        destination_physical_height,
-        logical_destination_height,
-        frame,
-        &mut vec![0; destination_width],
-        &mut vec![0; destination_physical_height],
-        &mut row_repeats,
-    )
-    .then_some((pixels, row_repeats))
 }
 
 fn center_crop_4_3(width: usize, height: usize) -> (usize, usize, usize, usize) {
