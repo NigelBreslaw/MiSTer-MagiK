@@ -106,7 +106,6 @@ manager, scanout module and metadata, and latch RBF and metadata.
 | `agent-cli/src/host/platform_deploy.rs` | Enforce contract and agent adoption |
 | `agent-cli/src/deploy.rs` | Enforce contract and agent adoption |
 | `agent-cli/src/local_main_delivery.rs` | Enforce contract and agent adoption |
-| `crates/catalog/src/device_layout.rs` | Enforce installed-layout adoption, before Type path overrides |
 | `scripts/MiSTer-MagiK.sh` | Enforce generated non-Rust consumers |
 | `scripts/package-distribution.sh` | Enforce generated non-Rust consumers |
 | `scripts/release/check-host.sh` | Enforce generated non-Rust consumers |
@@ -118,6 +117,10 @@ The descriptor remains canonical after the migration. Remove the temporary
 and development fixtures, all current rejection classes, and every named
 consumer have moved. Public and development installed roots must remain
 distinct throughout.
+
+`crates/catalog/src/device_layout.rs` now preserves its existing public API and
+executable-relative selection semantics while sourcing both installed roots,
+Main paths, and component paths from the shared generated layout contract.
 
 ## Hotspot ownership
 

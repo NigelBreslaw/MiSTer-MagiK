@@ -564,6 +564,7 @@ dependencies = [
  "lz4_flex",
  "memmap2",
  "mister-magik-perf-events",
+ "mister-magik-platform-manifest-contract",
  "quick-xml",
  "rusqlite",
  "serde",
