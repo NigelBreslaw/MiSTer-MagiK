@@ -1013,6 +1013,20 @@ mod tests {
             "6".repeat(40),
             "2".repeat(40)
         ));
+        let values = manifest
+            .lines()
+            .map(|line| {
+                let (field, value) = line.split_once('=').unwrap();
+                (field.to_owned(), value.to_owned())
+            })
+            .collect();
+        manifest = manifest.replace(
+            &format!("qualification_candidate_id={}", "4".repeat(64)),
+            &format!(
+                "qualification_candidate_id={}",
+                mister_magik_platform_manifest_contract::qualification_candidate_id(&values)
+            ),
+        );
         fs::write(&paths.manifest, manifest).unwrap();
     }
 
@@ -1361,6 +1375,25 @@ mod tests {
         assert_eq!(
             parse_manifest(&paths.manifest).unwrap_err().to_string(),
             format!("invalid platform_bundle_id: {}", "A".repeat(64))
+        );
+
+        write_valid_platform(&paths);
+        let manifest = fs::read_to_string(&paths.manifest).unwrap();
+        let candidate = manifest
+            .lines()
+            .find(|line| line.starts_with("qualification_candidate_id="))
+            .unwrap();
+        fs::write(
+            &paths.manifest,
+            manifest.replace(
+                candidate,
+                &format!("qualification_candidate_id={}", "f".repeat(64)),
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            parse_manifest(&paths.manifest).unwrap_err().to_string(),
+            format!("platform_candidate_identity_mismatch: {}", "f".repeat(64))
         );
         fs::remove_dir_all(root).unwrap();
     }

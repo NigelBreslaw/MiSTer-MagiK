@@ -237,18 +237,16 @@ fn validate(
             ),
         ));
     }
+    if values["qualification_candidate_id"] != qualification_candidate_id(values) {
+        return Err(ManifestError::new(
+            "platform_candidate_identity_mismatch",
+            values["qualification_candidate_id"].clone(),
+        ));
+    }
     match profile {
         ValidationProfile::GuiLegacy => Ok(()),
         ValidationProfile::AgentStrict | ValidationProfile::ManagerLegacy => {
             validate_complete_identity(values, layout)?;
-            if profile == ValidationProfile::AgentStrict
-                && values["qualification_candidate_id"] != qualification_candidate_id(values)
-            {
-                return Err(ManifestError::new(
-                    "platform_candidate_identity_mismatch",
-                    values["qualification_candidate_id"].clone(),
-                ));
-            }
             Ok(())
         }
     }
@@ -428,7 +426,7 @@ mod tests {
     }
 
     #[test]
-    fn legacy_profiles_do_not_tighten_candidate_identity_yet() {
+    fn every_profile_rejects_forged_candidate_identity() {
         let valid = canonical(Layout::Development);
         let candidate = valid
             .lines()
@@ -439,14 +437,12 @@ mod tests {
             &format!("qualification_candidate_id={}", "f".repeat(64)),
         );
         assert!(parse(&forged, Layout::Development, ValidationProfile::AgentStrict).is_err());
-        assert!(
-            parse(
-                &forged,
-                Layout::Development,
-                ValidationProfile::ManagerLegacy
-            )
-            .is_ok()
-        );
-        assert!(parse(&forged, Layout::Development, ValidationProfile::GuiLegacy).is_ok());
+        assert!(parse(
+            &forged,
+            Layout::Development,
+            ValidationProfile::ManagerLegacy
+        )
+        .is_err());
+        assert!(parse(&forged, Layout::Development, ValidationProfile::GuiLegacy).is_err());
     }
 }

@@ -93,8 +93,9 @@ not removed by this core adoption alone.
 `mister/tools/manager/src/main.rs` now delegates manifest structure, public
 layout, and legacy-compatible identity validation to the shared contract's
 `ManagerLegacy` profile while retaining manager-owned filesystem hashing,
-metadata checks, and error presentation. Candidate-ID recomputation remains a
-named hardening step before the manager profile is fully strict.
+metadata checks, and error presentation. All migrated validation profiles now
+recompute the qualification candidate identity and reject forged lower-case
+hex values.
 
 | Legacy consumer | Migration owner |
 |---|---|
