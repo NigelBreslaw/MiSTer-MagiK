@@ -26,9 +26,11 @@ pub struct CrtBackdropWorkTrace {
 pub struct CrtBackdropState {
     width: usize,
     height: usize,
+    physical_height: usize,
     source: Vec<Rgb565Pixel>,
     target: Vec<Rgb565Pixel>,
     retarget: Vec<Rgb565Pixel>,
+    logical_retarget: Vec<Rgb565Pixel>,
     x_map: Vec<usize>,
     y_map: Vec<usize>,
     source_row_repeats: Vec<bool>,
@@ -43,26 +45,39 @@ pub struct CrtBackdropState {
 
 impl CrtBackdropState {
     pub fn for_display(display: &UiDisplay) -> Option<Self> {
-        matches!(
-            display.output_route(),
-            ResolvedOutputRoute::Crt240p60 | ResolvedOutputRoute::Crt288p50
-        )
-        .then(|| Self::new(display.render_w(), display.render_h()))
+        match display.output_route() {
+            ResolvedOutputRoute::Crt240p60 => Some(Self::new_with_heights(
+                display.render_w(),
+                display.render_h(),
+                display.output_h() as usize,
+            )),
+            ResolvedOutputRoute::Crt288p50 => {
+                Some(Self::new(display.render_w(), display.render_h()))
+            }
+            _ => None,
+        }
     }
 
     pub fn new(width: usize, height: usize) -> Self {
-        let len = width.saturating_mul(height);
+        Self::new_with_heights(width, height, height)
+    }
+
+    fn new_with_heights(width: usize, height: usize, physical_height: usize) -> Self {
+        let len = width.saturating_mul(physical_height);
+        let logical_len = width.saturating_mul(height);
         Self {
             width,
             height,
+            physical_height,
             source: vec![CRT_BACKDROP_BACKGROUND; len],
             target: vec![CRT_BACKDROP_BACKGROUND; len],
             retarget: vec![CRT_BACKDROP_BACKGROUND; len],
+            logical_retarget: vec![CRT_BACKDROP_BACKGROUND; logical_len],
             x_map: vec![0; width],
-            y_map: vec![0; height],
-            source_row_repeats: plain_row_repeats(height),
-            target_row_repeats: plain_row_repeats(height),
-            retarget_row_repeats: plain_row_repeats(height),
+            y_map: vec![0; physical_height],
+            source_row_repeats: plain_row_repeats(physical_height),
+            target_row_repeats: plain_row_repeats(physical_height),
+            retarget_row_repeats: plain_row_repeats(physical_height),
             target_is_plain: true,
             retarget_is_plain: true,
             transition_started: None,
@@ -79,8 +94,12 @@ impl CrtBackdropState {
         self.height
     }
 
+    pub fn physical_height(&self) -> usize {
+        self.physical_height
+    }
+
     pub fn pixels(&self) -> &[Rgb565Pixel] {
-        &self.retarget
+        &self.logical_retarget
     }
 
     pub fn is_transitioning(&self) -> bool {
@@ -101,6 +120,7 @@ impl CrtBackdropState {
         self.source.fill(CRT_BACKDROP_BACKGROUND);
         self.target.fill(CRT_BACKDROP_BACKGROUND);
         self.retarget.fill(CRT_BACKDROP_BACKGROUND);
+        self.logical_retarget.fill(CRT_BACKDROP_BACKGROUND);
         self.source_row_repeats.fill(true);
         self.target_row_repeats.fill(true);
         self.retarget_row_repeats.fill(true);
@@ -120,9 +140,10 @@ impl CrtBackdropState {
         let prepare_start = Instant::now();
         self.target_is_plain = match frame {
             Some(frame)
-                if scale_dimmed_center_crop_mapped(
+                if scale_dimmed_center_crop_mapped_with_logical_height(
                     &mut self.target,
                     self.width,
+                    self.physical_height,
                     self.height,
                     frame,
                     &mut self.x_map,
@@ -146,6 +167,7 @@ impl CrtBackdropState {
             self.retarget_row_repeats
                 .copy_from_slice(&self.target_row_repeats);
             self.retarget_is_plain = self.target_is_plain;
+            self.expand_to_logical();
         }
     }
 
@@ -167,7 +189,7 @@ impl CrtBackdropState {
         let alpha_bucket = ((numerator * 32 + denominator / 2) / denominator) as u16;
         let blend_start = Instant::now();
         let row_width = self.width.max(1);
-        for row in 0..self.height {
+        for row in 0..self.physical_height {
             let start = row.saturating_mul(row_width);
             let end = start.saturating_add(row_width).min(self.retarget.len());
             if row > 0 && self.source_row_repeats[row] && self.target_row_repeats[row] {
@@ -205,7 +227,7 @@ impl CrtBackdropState {
                 previous_current = current[index];
             }
         }
-        for row in 0..self.height {
+        for row in 0..self.physical_height {
             self.retarget_row_repeats[row] =
                 row > 0 && self.source_row_repeats[row] && self.target_row_repeats[row];
         }
@@ -219,7 +241,26 @@ impl CrtBackdropState {
         } else {
             self.retarget_is_plain = false;
         }
+        self.expand_to_logical();
         trace
+    }
+
+    fn expand_to_logical(&mut self) {
+        if self.height == self.physical_height {
+            self.logical_retarget.copy_from_slice(&self.retarget);
+            return;
+        }
+        for logical_y in 0..self.height {
+            let physical_y = logical_y
+                .saturating_mul(self.physical_height)
+                .checked_div(self.height)
+                .unwrap_or(0)
+                .min(self.physical_height.saturating_sub(1));
+            let logical_start = logical_y * self.width;
+            let physical_start = physical_y * self.width;
+            self.logical_retarget[logical_start..logical_start + self.width]
+                .copy_from_slice(&self.retarget[physical_start..physical_start + self.width]);
+        }
     }
 
     fn resolve_current(&mut self, now: Duration) {
@@ -254,6 +295,28 @@ fn scale_dimmed_center_crop_mapped(
     destination: &mut [Rgb565Pixel],
     destination_width: usize,
     destination_height: usize,
+    frame: PreviewFrame<'_>,
+    x_map: &mut [usize],
+    y_map: &mut [usize],
+    row_repeats: &mut [bool],
+) -> bool {
+    scale_dimmed_center_crop_mapped_with_logical_height(
+        destination,
+        destination_width,
+        destination_height,
+        destination_height,
+        frame,
+        x_map,
+        y_map,
+        row_repeats,
+    )
+}
+
+fn scale_dimmed_center_crop_mapped_with_logical_height(
+    destination: &mut [Rgb565Pixel],
+    destination_width: usize,
+    destination_height: usize,
+    logical_destination_height: usize,
     frame: PreviewFrame<'_>,
     x_map: &mut [usize],
     y_map: &mut [usize],
@@ -303,8 +366,18 @@ fn scale_dimmed_center_crop_mapped(
             + (destination_x.saturating_mul(crop_width) / destination_width).min(crop_width - 1);
     }
     for destination_y in 0..destination_height {
+        let logical_y = if logical_destination_height == destination_height {
+            destination_y
+        } else {
+            destination_y
+                .saturating_mul(2)
+                .saturating_add(1)
+                .saturating_mul(logical_destination_height)
+                / destination_height.saturating_mul(2).max(1)
+        };
         let source_y = crop_y
-            + (destination_y.saturating_mul(crop_height) / destination_height).min(crop_height - 1);
+            + (logical_y.saturating_mul(crop_height) / logical_destination_height.max(1))
+                .min(crop_height - 1);
         y_map[destination_y] = source_y;
         row_repeats[destination_y] = destination_y > 0 && y_map[destination_y - 1] == source_y;
         let destination_start = destination_y * destination_width;
@@ -501,7 +574,37 @@ mod tests {
             let display = UiDisplay::for_plan(plan);
             let backdrop = CrtBackdropState::for_display(&display).unwrap();
             assert_eq!((backdrop.width(), backdrop.height()), expected);
+            assert_eq!(
+                backdrop.physical_height(),
+                if matches!(route, ResolvedOutputRoute::Crt240p60) {
+                    240
+                } else {
+                    288
+                }
+            );
             assert_eq!(backdrop.pixels().len(), expected.0 * expected.1);
+        }
+    }
+
+    #[test]
+    fn physical_240p_rows_match_the_reference_vertical_transform() {
+        let source = (0..480)
+            .map(|row| Rgb565Pixel((row as u16) & 0x1f))
+            .collect::<Vec<_>>();
+        let mut reference = vec![Rgb565Pixel(0); 480];
+        assert!(scale_dimmed_center_crop(
+            &mut reference,
+            1,
+            480,
+            frame(&source, 1, 480)
+        ));
+
+        let mut backdrop = CrtBackdropState::new_with_heights(1, 480, 240);
+        backdrop.retarget(Some(frame(&source, 1, 480)), Duration::ZERO);
+        let _ = backdrop.compose(Duration::ZERO);
+        let logical = backdrop.pixels();
+        for physical_y in 0..240 {
+            assert_eq!(logical[physical_y * 2 + 1], reference[physical_y * 2 + 1]);
         }
     }
 
