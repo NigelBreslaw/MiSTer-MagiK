@@ -17,7 +17,7 @@ use crate::framebuffer::target::{DirtyRect, UiFrameTarget};
 use crate::ui_display::{
     CrtContentRect, CrtFontFamily, CrtUiMetrics, ResolvedOutputRoute, UiDisplay,
 };
-use mister_magik_framebuffer_scenes::{OutputRotation, Rgb565OutputLayout, Rgb565SurfaceMut};
+use mister_magik_framebuffer_scenes::{Rgb565OutputLayout, Rgb565SurfaceMut};
 use slint::platform::software_renderer::Rgb565Pixel;
 
 pub const ARCADE_LIST_X: usize = 8;
@@ -958,47 +958,6 @@ impl ArcadeListRenderer {
         let selection_y = self.selection_y();
         let selection_bottom = selection_y + self.style.row_height.max(1) as usize;
         let cached = target.cached_565_mut();
-        let identity_layout = matches!(output_layout.rotation(), OutputRotation::None)
-            && output_layout.physical_stride() == output_layout.logical_width();
-        if identity_layout {
-            // The 240p CRT route is an upright contiguous surface. Most list
-            // rows contain only the normal/alternate fill; restore those rows
-            // with one slice copy and reserve per-pixel work for glyph rows.
-            for viewport_y in 0..self.visible_height {
-                let source_y = (self.surface_y + viewport_y) % self.visible_height;
-                let source_start = source_y * self.width;
-                let destination_start = (self.geometry.y + viewport_y)
-                    * output_layout.physical_stride()
-                    + self.geometry.x;
-                let destination = &mut cached[destination_start..destination_start + self.width];
-                let selected = viewport_y >= selection_y && viewport_y < selection_bottom;
-                let surface_row = &self.surface[source_start..source_start + self.width];
-                if !selected
-                    && surface_row
-                        .iter()
-                        .all(|pixel| is_arcade_unselected_fill_pixel_with_style(*pixel, self.style))
-                {
-                    destination.copy_from_slice(
-                        &backdrop[destination_start..destination_start + self.width],
-                    );
-                    continue;
-                }
-                for x in 0..self.width {
-                    let pixel = surface_row[x];
-                    destination[x] = if selected {
-                        selected_aperture_pixel_with_style(pixel, self.style)
-                    } else if is_arcade_unselected_fill_pixel_with_style(pixel, self.style) {
-                        backdrop[destination_start + x]
-                    } else {
-                        pixel
-                    };
-                }
-            }
-            if redraw_selection_frame {
-                self.compose_selection_frame_to_oriented_cached(cached, output_layout);
-            }
-            return true;
-        }
         for viewport_y in 0..self.visible_height {
             let source_y = (self.surface_y + viewport_y) % self.visible_height;
             let source_row = source_y * self.width;
