@@ -13,7 +13,7 @@ use mister_magik_fb::preview_transition::{PreviewTransitionController, transitio
 const DEFAULT_PREVIEW_TRANSITION_MS: u64 = 130;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum PreviewTransitionEffect {
+pub enum PreviewTransitionEffect {
     Fade,
     #[cfg(mister_experiments)]
     Wipe,
@@ -83,9 +83,9 @@ pub(crate) enum PreviewTransitionEffect {
 
 impl PreviewTransitionEffect {
     #[cfg(not(mister_experiments))]
-    pub(crate) const PRODUCTION: [Self; 1] = [Self::Fade];
+    pub const PRODUCTION: [Self; 1] = [Self::Fade];
 
-    pub(crate) fn all() -> &'static [Self] {
+    pub fn all() -> &'static [Self] {
         #[cfg(mister_experiments)]
         {
             experiment_preview_transitions::all()
@@ -96,7 +96,7 @@ impl PreviewTransitionEffect {
         }
     }
 
-    pub(crate) fn label(self) -> &'static str {
+    pub fn label(self) -> &'static str {
         match self {
             Self::Fade => "fade",
             #[cfg(mister_experiments)]
@@ -104,7 +104,7 @@ impl PreviewTransitionEffect {
         }
     }
 
-    pub(crate) fn parse(value: &str) -> Option<Self> {
+    pub fn parse(value: &str) -> Option<Self> {
         match value.to_ascii_lowercase().replace('_', "-").as_str() {
             "fade" | "crossfade" | "cross-fade" => Some(Self::Fade),
             #[cfg(mister_experiments)]
@@ -115,7 +115,7 @@ impl PreviewTransitionEffect {
     }
 
     #[cfg_attr(not(mister_experiments), allow(dead_code))]
-    pub(crate) fn labels() -> String {
+    pub fn labels() -> String {
         Self::all()
             .iter()
             .map(|effect| effect.label())
@@ -125,11 +125,11 @@ impl PreviewTransitionEffect {
 }
 
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct PreviewTransitionTrace {
-    pub(crate) effect: PreviewTransitionEffect,
-    pub(crate) progress: f32,
-    pub(crate) active: bool,
-    pub(crate) fade: PreviewFadeTrace,
+pub struct PreviewTransitionTrace {
+    pub effect: PreviewTransitionEffect,
+    pub progress: f32,
+    pub active: bool,
+    pub fade: PreviewFadeTrace,
 }
 
 impl Default for PreviewTransitionTrace {
@@ -144,13 +144,13 @@ impl Default for PreviewTransitionTrace {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct PreviewFadeTrace {
-    pub(crate) wall_us: u64,
-    pub(crate) cpu_us: u64,
-    pub(crate) pixels: u32,
-    pub(crate) rows: u32,
-    pub(crate) path: PreviewFadePath,
-    pub(crate) alpha_bucket: u8,
+pub struct PreviewFadeTrace {
+    pub wall_us: u64,
+    pub cpu_us: u64,
+    pub pixels: u32,
+    pub rows: u32,
+    pub path: PreviewFadePath,
+    pub alpha_bucket: u8,
 }
 
 impl Default for PreviewFadeTrace {
@@ -167,13 +167,13 @@ impl Default for PreviewFadeTrace {
 }
 
 impl PreviewFadeTrace {
-    pub(crate) fn label(self) -> &'static str {
+    pub fn label(self) -> &'static str {
         self.path.label()
     }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum PreviewFadePath {
+pub enum PreviewFadePath {
     None,
     Cut,
     SameGeometry,
@@ -184,7 +184,7 @@ pub(crate) enum PreviewFadePath {
 }
 
 impl PreviewFadePath {
-    pub(crate) fn label(self) -> &'static str {
+    pub fn label(self) -> &'static str {
         match self {
             Self::None => "none",
             Self::Cut => "cut",
@@ -197,17 +197,17 @@ impl PreviewFadePath {
     }
 }
 
-pub(crate) struct PreviewTransitionDemo {
+pub struct PreviewTransitionDemo {
     effects: Vec<PreviewTransitionEffect>,
     picker_index: Option<usize>,
-    pub(crate) segment: Duration,
-    pub(crate) duration: Duration,
+    pub segment: Duration,
+    pub duration: Duration,
     timeline: PreviewTransitionController<PreviewTransitionEffect>,
     label_overlay: bool,
 }
 
 impl PreviewTransitionDemo {
-    pub(crate) fn disabled() -> Self {
+    pub fn disabled() -> Self {
         Self {
             effects: vec![PreviewTransitionEffect::Fade],
             picker_index: None,
@@ -218,7 +218,7 @@ impl PreviewTransitionDemo {
         }
     }
 
-    pub(crate) fn from_env() -> Self {
+    pub fn from_env() -> Self {
         let spec = std::env::var("MISTER_PREVIEW_TRANSITION").unwrap_or_default();
         let mut effects = Vec::new();
         let trimmed = spec.trim();
@@ -276,7 +276,7 @@ impl PreviewTransitionDemo {
         }
     }
 
-    pub(crate) fn labels(&self) -> String {
+    pub fn labels(&self) -> String {
         self.effects
             .iter()
             .map(|effect| effect.label())
@@ -296,15 +296,15 @@ impl PreviewTransitionDemo {
         self.effects[idx]
     }
 
-    pub(crate) fn picker_enabled(&self) -> bool {
+    pub fn picker_enabled(&self) -> bool {
         self.picker_index.is_some()
     }
 
-    pub(crate) fn current_label(&self, elapsed: Duration) -> &'static str {
+    pub fn current_label(&self, elapsed: Duration) -> &'static str {
         self.current_effect(elapsed).label()
     }
 
-    pub(crate) fn cycle_picker(&mut self, delta: isize) -> bool {
+    pub fn cycle_picker(&mut self, delta: isize) -> bool {
         let Some(idx) = self.picker_index else {
             return false;
         };
@@ -321,11 +321,11 @@ impl PreviewTransitionDemo {
         true
     }
 
-    pub(crate) fn label_overlay_enabled(&self) -> bool {
+    pub fn label_overlay_enabled(&self) -> bool {
         self.label_overlay
     }
 
-    pub(crate) fn update(
+    pub fn update(
         &mut self,
         frame: Option<&PreviewRawTransitionFrame<'_>>,
         elapsed: Duration,

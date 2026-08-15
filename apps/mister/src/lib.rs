@@ -67,6 +67,12 @@ pub mod launcher_taxonomy;
 pub mod licenses;
 #[cfg(all(feature = "ui-preview", target_os = "macos"))]
 pub mod macos_preview_content;
+#[cfg(all(feature = "ui", feature = "bench-tools"))]
+#[doc(hidden)]
+pub mod media_bench_download;
+#[cfg(all(feature = "ui", feature = "bench-tools"))]
+#[doc(hidden)]
+pub mod media_bench_save;
 #[cfg(any(feature = "ui", feature = "ui-preview"))]
 #[doc(hidden)]
 pub mod media_http;
@@ -74,6 +80,9 @@ pub mod media_http;
 #[doc(hidden)]
 pub mod media_pack_save;
 pub mod media_update;
+#[cfg(all(feature = "ui", target_os = "linux", target_arch = "arm"))]
+#[doc(hidden)]
+pub mod mr_audio;
 pub mod particle_engine;
 #[cfg(any(feature = "ui", feature = "ui-preview"))]
 pub mod particle_renderer;
@@ -86,6 +95,9 @@ pub mod pmu_profile;
 #[cfg(all(feature = "ui", any(feature = "bench-tools", feature = "diagnostics")))]
 #[doc(hidden)]
 pub mod preview_pack_bench;
+#[cfg(feature = "ui")]
+#[doc(hidden)]
+pub mod preview_state;
 #[cfg(any(feature = "ui", feature = "ui-preview"))]
 pub mod preview_transition;
 pub mod process_config;
@@ -94,6 +106,9 @@ pub mod process_config;
 pub mod production_launcher_screensaver;
 pub mod raw565;
 pub mod return_catalog_capsule;
+#[cfg(feature = "ui")]
+#[doc(hidden)]
+pub mod screenshot_transitions;
 #[cfg(feature = "ui")]
 #[doc(hidden)]
 pub mod search_bench;
@@ -119,10 +134,15 @@ pub mod visual_platform;
 #[cfg(mister_experiments)]
 pub mod experiments {
     pub mod effects;
+    #[doc(hidden)]
+    pub mod preview_transitions;
 }
 #[cfg(any(feature = "ui", feature = "ui-preview", test))]
 #[doc(hidden)]
 pub mod video_i420;
+#[cfg(all(feature = "ui", target_os = "linux", target_arch = "arm"))]
+#[doc(hidden)]
+pub mod video_player;
 
 pub use mister_magik_catalog::{
     arcade_catalog, library_bench, library_db, media_identity, preview_worker,

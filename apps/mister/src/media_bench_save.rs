@@ -67,7 +67,7 @@ impl BenchArtifact {
     }
 }
 
-pub(crate) fn run() {
+pub fn run() {
     match run_inner(std::env::args().skip(2)) {
         Ok(()) => {}
         Err(error) => {

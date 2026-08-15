@@ -162,6 +162,11 @@ benchmark support behind library feature cfgs. `ui_effect_bench` remains in the
 binary until `21d` because it imports `ui_runner` platform types; moving it
 earlier would invert the intended library ownership direction.
 
+Runtime batch `21c` moved media benchmarks, preview state/transitions, and the
+ARM video/audio runtime behind library cfgs. The transition experiment leaf
+also moved under the library's existing experiments namespace so
+`screenshot_transitions` retains its internal import direction.
+
 ## Hotspot ownership
 
 The PR advisory report uses stable owner IDs so moves do not erase history.

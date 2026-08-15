@@ -104,21 +104,12 @@ use mister_magik_mister_runtime::boot_analytics;
 #[cfg(mister_experiments)]
 mod experiments;
 use mister_magik_mister_runtime::fpga;
-#[cfg(feature = "bench-tools")]
-mod media_bench_download;
-#[cfg(feature = "bench-tools")]
-mod media_bench_save;
 mod memory_pressure;
-mod mr_audio;
-mod preview_state;
 use mister_magik_mister_runtime::runtime_status;
-mod screenshot_transitions;
 use mister_magik_mister_runtime::settings;
 #[cfg(mister_experiments)]
 mod ui_effect_bench;
 mod ui_runner;
-#[cfg(all(target_os = "linux", target_arch = "arm"))]
-mod video_player;
 use mister_magik_mister_runtime::vt;
 
 #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
@@ -135,8 +126,13 @@ use mister_magik_fb::{
     arcade_list_renderer, artifact_publish, bitmap_text, catalog_failure_report,
     catalog_progress_report, cpu_profile, diagnostic_identity, display_config, frame_profile,
     input, input_hub, input_integrity_driver, latch_failure_report, media_http, media_pack_save,
-    pmu_probe, pmu_profile, search_bench, ui_display, video_i420,
+    pmu_probe, pmu_profile, preview_state, screenshot_transitions, search_bench, ui_display,
+    video_i420,
 };
+#[cfg(feature = "bench-tools")]
+use mister_magik_fb::{media_bench_download, media_bench_save};
+#[cfg(all(target_os = "linux", target_arch = "arm"))]
+use mister_magik_fb::{mr_audio, video_player};
 
 #[cfg(all(feature = "diagnostics", feature = "ui"))]
 use fpga::LatchedFbufGeometry;
