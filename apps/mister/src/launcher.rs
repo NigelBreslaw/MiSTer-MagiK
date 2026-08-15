@@ -4,9 +4,11 @@
 //! Launcher navigation and arcade game launch.
 
 use crate::arcade_button_overrides::{remove_button_overrides, write_button_overrides_for_mra};
+#[cfg(test)]
+use crate::arcade_catalog::StructuredLaunchPlan;
 use crate::arcade_catalog::{
     ARCADE_ROW_HEIGHT, ArcadeCatalog, ArcadeFilter, ArcadeFilterOption, HOME_LIST_VISIBLE_W,
-    HOME_TILE_GAP, HOME_TILE_WIDTH, LaunchTarget, StructuredLaunchPlan,
+    HOME_TILE_GAP, HOME_TILE_WIDTH, LaunchTarget,
 };
 use crate::input_event::{InputEvent, InputPhase};
 #[cfg(test)]
