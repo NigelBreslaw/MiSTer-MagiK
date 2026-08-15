@@ -757,7 +757,7 @@ fn parse_input_event(bytes: &[u8; INPUT_EVENT_SIZE]) -> (u64, u16, u16, i32) {
     )
 }
 
-pub(crate) fn monotonic_us() -> u64 {
+pub fn monotonic_us() -> u64 {
     let mut value = libc::timespec {
         tv_sec: 0,
         tv_nsec: 0,

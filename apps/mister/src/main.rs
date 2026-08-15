@@ -102,15 +102,9 @@ mod allocation_metrics;
 pub use mister_magik_fb::build_identity;
 use mister_magik_mister_runtime::boot_analytics;
 mod cpu_profile;
-mod display_config;
 #[cfg(mister_experiments)]
 mod experiments;
 use mister_magik_mister_runtime::fpga;
-#[cfg(feature = "ui")]
-mod frame_profile;
-mod input;
-mod input_hub;
-mod input_integrity_driver;
 #[cfg(feature = "bench-tools")]
 mod media_bench_download;
 #[cfg(feature = "bench-tools")]
@@ -143,8 +137,9 @@ pub use mister_magik_fb::{
 };
 use mister_magik_fb::{
     arcade_list_renderer, artifact_publish, bitmap_text, catalog_failure_report,
-    catalog_progress_report, diagnostic_identity, latch_failure_report, media_http,
-    media_pack_save, ui_display, video_i420,
+    catalog_progress_report, diagnostic_identity, display_config, frame_profile, input, input_hub,
+    input_integrity_driver, latch_failure_report, media_http, media_pack_save, ui_display,
+    video_i420,
 };
 
 #[cfg(all(feature = "diagnostics", feature = "ui"))]

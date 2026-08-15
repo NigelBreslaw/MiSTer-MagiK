@@ -152,6 +152,11 @@ moved `arcade_list_renderer`, `bitmap_text`, and `ui_display` to library
 authority; `20d-cfg-test` moved `experiments/effects` and `test_support` to
 library authority.
 
+Runtime batch `21a` moved device input, input-hub/integrity, display detection,
+and frame-profile modules behind the library's existing `ui` feature. Binary
+children retain their `crate::...` paths through root imports; the source files
+now compile under only the library namespace.
+
 ## Hotspot ownership
 
 The PR advisory report uses stable owner IDs so moves do not erase history.

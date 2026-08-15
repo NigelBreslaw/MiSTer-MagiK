@@ -31,10 +31,27 @@ pub mod command_args;
 pub mod controller_db;
 pub mod crash_report;
 pub mod diagnostic_identity;
+#[cfg(feature = "ui")]
+#[doc(hidden)]
+pub mod display_config;
 #[doc(hidden)]
 pub mod fallible_log;
 pub use mister_magik_core::{input_event, input_info, input_repeat, input_state};
+#[cfg(feature = "ui")]
+pub use mister_magik_mister_runtime::fpga;
 pub use mister_magik_mister_runtime::framebuffer;
+#[cfg(feature = "ui")]
+#[doc(hidden)]
+pub mod frame_profile;
+#[cfg(feature = "ui")]
+#[doc(hidden)]
+pub mod input;
+#[cfg(feature = "ui")]
+#[doc(hidden)]
+pub mod input_hub;
+#[cfg(feature = "ui")]
+#[doc(hidden)]
+pub mod input_integrity_driver;
 pub use mister_magik_mister_runtime::latch_readiness;
 pub mod latch_failure_report;
 pub mod launch_preparation;

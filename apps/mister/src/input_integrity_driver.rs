@@ -188,7 +188,7 @@ fn parse_bounded(
         .ok_or_else(|| format!("{label} must be {minimum}..={maximum}"))
 }
 
-pub(crate) fn run(args: &[String]) {
+pub fn run(args: &[String]) {
     let plan = match DriverPlan::parse(args) {
         Ok(plan) => plan,
         Err(error) => {
