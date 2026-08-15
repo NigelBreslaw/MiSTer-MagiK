@@ -9548,18 +9548,6 @@ pub(super) fn run_launcher_loop(
                 let _ = full_screen_transition.retain_redraw(generation);
             }
             None
-        } else if crt_backdrop_eligible
-            && crt_backdrop_was_eligible
-            && !crt_backdrop_leaving
-            && !full_frame_present
-            && (nav.arcade.is_scroll_active() || crt_backdrop_work_trace.active)
-        {
-            // The CRT Arcade compositor owns the changing screenshot, list,
-            // and chrome cache while motion or the 130 ms fade is active.
-            // Keep the redraw cadence alive explicitly; settled frames and
-            // all state transitions still use normal Slint rasterization.
-            request_launcher_redraw!();
-            None
         } else if composition_decision.force_full_slint_raster || crt_backdrop_leaving {
             gui_raster_phase = gui_raster_profile_phase(true, true);
             let gui_raster_pmu = gui_profiling.phase_span(gui_raster_phase.span_name());
