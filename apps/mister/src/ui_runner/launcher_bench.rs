@@ -17,6 +17,8 @@ const HUMAN_TURBO_NORMAL_FRAMES: &str = "MISTER_HUMAN_TURBO_NORMAL_FRAMES";
 const HUMAN_TURBO_PAUSE_FRAMES: &str = "MISTER_HUMAN_TURBO_PAUSE_FRAMES";
 const HOME_SELECTED_INDEX: &str = "MISTER_HOME_SELECTED_INDEX";
 const AUTO_LAUNCH_SELECTED: &str = "MISTER_LAUNCHER_AUTO_LAUNCH_SELECTED";
+const ORIENTATION_PMU_COMPLETE: &str = "MISTER_ORIENTATION_PMU_COMPLETE";
+const LAUNCH_RETURN_PMU_HANDOFF_OUT: &str = "MISTER_LAUNCH_RETURN_PMU_HANDOFF_OUT";
 
 #[derive(Clone, Debug)]
 pub struct LauncherBenchmarkConfig {
@@ -33,6 +35,8 @@ pub struct LauncherBenchmarkConfig {
     human_turbo_pause_frames: usize,
     home_selected: Option<Result<usize, String>>,
     auto_launch_selected: bool,
+    orientation_pmu_completion: Option<String>,
+    launch_return_pmu_handoff_out: Option<String>,
 }
 
 impl Default for LauncherBenchmarkConfig {
@@ -51,6 +55,8 @@ impl Default for LauncherBenchmarkConfig {
             human_turbo_pause_frames: 30,
             home_selected: None,
             auto_launch_selected: false,
+            orientation_pmu_completion: None,
+            launch_return_pmu_handoff_out: None,
         }
     }
 }
@@ -84,6 +90,8 @@ impl LauncherBenchmarkConfig {
             home_selected: get(HOME_SELECTED_INDEX)
                 .map(|value| value.parse::<usize>().map_err(|_| value.to_owned())),
             auto_launch_selected: get(AUTO_LAUNCH_SELECTED).is_some_and(benchmark_flag),
+            orientation_pmu_completion: get(ORIENTATION_PMU_COMPLETE).map(str::to_owned),
+            launch_return_pmu_handoff_out: get(LAUNCH_RETURN_PMU_HANDOFF_OUT).map(str::to_owned),
         }
     }
 
@@ -113,6 +121,12 @@ impl LauncherBenchmarkConfig {
     }
     pub(super) fn auto_launch_selected(&self) -> bool {
         self.auto_launch_selected
+    }
+    pub(super) fn orientation_pmu_completion(&self) -> Option<&str> {
+        self.orientation_pmu_completion.as_deref()
+    }
+    pub(super) fn launch_return_pmu_handoff_out(&self) -> Option<&str> {
+        self.launch_return_pmu_handoff_out.as_deref()
     }
 }
 

@@ -11,7 +11,7 @@ source_roots = [
 ]
 
 [baseline]
-literal_occurrences = 396
+literal_occurrences = 395
 unique_names = 267
 external_build_names = 7
 
@@ -1418,7 +1418,7 @@ documentation = { summary = "Controls launch prep virtual systems behavior", acc
 
 [[control]]
 name = "MISTER_LAUNCH_RETURN_PMU_HANDOFF_OUT"
-owner = "apps/mister/src/ui_runner/launch_handoff_session.rs"
+owner = "apps/mister/src/ui_runner/launcher_bench.rs"
 classification = "diagnostic"
 value_shape = "path or path list"
 default_behavior = "uses the owner-defined output, fixture, or disabled path when unset"
@@ -2202,7 +2202,7 @@ documentation = { summary = "Controls nes preview archive behavior", accepted_va
 
 [[control]]
 name = "MISTER_ORIENTATION_PMU_COMPLETE"
-owner = "apps/mister/src/ui_runner/launcher_loop.rs"
+owner = "apps/mister/src/ui_runner/launcher_bench.rs"
 classification = "diagnostic"
 value_shape = "string, enum, or boolean token"
 default_behavior = "uses the owner-defined value or disabled state when unset"

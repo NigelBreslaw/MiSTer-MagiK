@@ -30,6 +30,8 @@ use mister_magik_mister_runtime::framebuffer::ownership::FramebufferRouteConfig;
 use mister_magik_mister_runtime::framebuffer::target::DirtyRegionConfig;
 #[cfg(feature = "ui")]
 use mister_magik_mister_runtime::framebuffer::vsync::VsyncPacerConfig;
+#[cfg(feature = "ui")]
+use mister_magik_perf_events::PmuProfileConfig;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
@@ -237,6 +239,7 @@ pub struct ProfileProcessConfig {
     frame: FrameProfilerConfig,
     cpu: CpuProfileConfig,
     gui: GuiProfileConfig,
+    pmu: PmuProfileConfig,
 }
 
 #[cfg(feature = "ui")]
@@ -246,6 +249,7 @@ impl ProfileProcessConfig {
             frame: FrameProfilerConfig::capture_with(|name| environment.get(name)),
             cpu: CpuProfileConfig::capture_with(|name| environment.get(name)),
             gui: GuiProfileConfig::capture_with(|name| environment.get(name)),
+            pmu: PmuProfileConfig::capture_with(|name| environment.get(name)),
         }
     }
 
@@ -259,6 +263,10 @@ impl ProfileProcessConfig {
 
     pub(crate) fn gui(&self) -> &GuiProfileConfig {
         &self.gui
+    }
+
+    pub fn pmu(&self) -> PmuProfileConfig {
+        self.pmu
     }
 }
 

@@ -163,6 +163,13 @@ pub fn run() {
 
     let cmd = command_args::resolve_command(&args);
     let process_config = mister_magik_fb::process_config::ProcessConfig::capture(&args, &cmd);
+    if let Some(config) = process_config.launcher()
+        && let Err(error) =
+            mister_magik_perf_events::install_process_config(config.profiles().pmu())
+    {
+        crate::ui_errln!("PMU configuration initialization failed: {error}");
+        std::process::exit(1);
+    }
     let process_entry_cpu_profile = process_config
         .launcher()
         .and_then(|config| cpu_profile::start_process_entry(config.profiles().cpu()));

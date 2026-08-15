@@ -618,6 +618,7 @@ impl LauncherScheduler {
             catalog_paths,
             archive_cache,
             media_config,
+            None,
         )
     }
 
@@ -626,6 +627,7 @@ impl LauncherScheduler {
         catalog_paths: mister_magik_catalog::device_layout::CatalogPaths,
         archive_cache: mister_magik_catalog::catalog_config::ArchiveCacheConfig,
         media_config: Result<MediaWorkerConfig, String>,
+        launch_return_pmu_handoff_out: Option<String>,
     ) -> Self {
         let now = Instant::now();
         Self {
@@ -644,7 +646,10 @@ impl LauncherScheduler {
             next_system_entry_sequence: 1,
             system_entry_prepare: SystemEntryPrepareWorker::start(catalog_paths),
             media: MediaJobState::Idle,
-            launch_handoff: LaunchHandoffSession::from_env(launch_handoff_bench_enabled),
+            launch_handoff: LaunchHandoffSession::from_env(
+                launch_handoff_bench_enabled,
+                launch_return_pmu_handoff_out.as_deref(),
+            ),
         }
     }
 

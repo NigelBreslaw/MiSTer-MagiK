@@ -520,9 +520,10 @@ fn write_orientation_transition_benchmark_completion(
 }
 
 fn write_orientation_transition_pmu_completion(
+    path: Option<&str>,
     effect: OrientationTransitionEffect,
 ) -> std::io::Result<()> {
-    let Some(path) = std::env::var_os("MISTER_ORIENTATION_PMU_COMPLETE") else {
+    let Some(path) = path else {
         return Ok(());
     };
     let path = std::path::PathBuf::from(path);
@@ -4890,6 +4891,9 @@ pub(super) fn run_launcher_loop(
         launcher_config.catalog_paths().clone(),
         launcher_config.archive_cache().clone(),
         launcher_config.media_worker().clone(),
+        benchmark_config
+            .launch_return_pmu_handoff_out()
+            .map(str::to_owned),
     );
     let mut catalog_events = CatalogJobEventBuf::new();
     let mut deferred_catalog_events: VecDeque<CatalogWorkerMessage> = VecDeque::new();
@@ -11320,9 +11324,10 @@ pub(super) fn run_launcher_loop(
                 );
                 orientation_benchmark_completed_at = Some(Instant::now());
                 screensaver_cpu_profile.complete_orientation_transitions(frames);
-                if let Err(error) =
-                    write_orientation_transition_pmu_completion(orientation_benchmark.effect())
-                {
+                if let Err(error) = write_orientation_transition_pmu_completion(
+                    benchmark_config.orientation_pmu_completion(),
+                    orientation_benchmark.effect(),
+                ) {
                     crate::ui_errln!(
                         "orientation_transition_benchmark_pmu_write_failed error={error}"
                     );

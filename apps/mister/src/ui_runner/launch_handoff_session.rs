@@ -11,7 +11,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 const DEFAULT_LAUNCH_HANDOFF_BENCH_DELAY: Duration = Duration::from_millis(750);
 const PMU_CAPSULE_CONSTRUCTION: &str = "launch.return-capsule-construction";
 const PMU_LAUNCH_PREPARATION: &str = "launch.preparation";
-const LAUNCH_RETURN_PMU_HANDOFF_ENV: &str = "MISTER_LAUNCH_RETURN_PMU_HANDOFF_OUT";
 
 #[derive(Debug)]
 struct LaunchWorkerResult {
@@ -216,10 +215,11 @@ pub(super) struct LaunchHandoffSession {
     pending_bench_sample: Option<LaunchHandoffBenchSample>,
     spawn_worker: LaunchWorkerSpawner,
     arcade_core_running: ArcadeCoreProbe,
+    pmu_completion_path: Option<std::path::PathBuf>,
 }
 
 impl LaunchHandoffSession {
-    pub(super) fn from_env(bench_enabled: bool) -> Self {
+    pub(super) fn from_env(bench_enabled: bool, pmu_completion_path: Option<&str>) -> Self {
         Self {
             pending: None,
             staged: None,
@@ -230,6 +230,7 @@ impl LaunchHandoffSession {
             pending_bench_sample: None,
             spawn_worker: spawn_launch_worker,
             arcade_core_running: launcher::mister_running_arcade_core,
+            pmu_completion_path: pmu_completion_path.and_then(valid_launch_return_pmu_path),
         }
     }
 
@@ -393,7 +394,7 @@ impl LaunchHandoffSession {
             },
         };
         let pending = self.pending.take().expect("pending launch result");
-        finish_launch_return_handoff_pmu_async();
+        finish_launch_return_handoff_pmu_async(self.pmu_completion_path.clone());
         match worker_result.result {
             Ok(spawned) => {
                 self.launch_started = result_received;
@@ -486,7 +487,7 @@ impl LaunchHandoffSession {
 
     #[cfg(test)]
     fn with_worker_for_test(spawn_worker: LaunchWorkerSpawner, bench_enabled: bool) -> Self {
-        let mut session = Self::from_env(bench_enabled);
+        let mut session = Self::from_env(bench_enabled, None);
         session.spawn_worker = spawn_worker;
         session
     }
@@ -503,22 +504,23 @@ impl LaunchHandoffSession {
     }
 }
 
-fn finish_launch_return_handoff_pmu_async() {
-    let Some(path) = std::env::var_os(LAUNCH_RETURN_PMU_HANDOFF_ENV).map(std::path::PathBuf::from)
-    else {
-        return;
-    };
-    if !path.is_absolute()
-        || !path.starts_with("/tmp/mister-magik")
-        || path.components().any(|component| {
+fn valid_launch_return_pmu_path(path: &str) -> Option<std::path::PathBuf> {
+    let path = std::path::PathBuf::from(path);
+    (path.is_absolute()
+        && path.starts_with("/tmp/mister-magik")
+        && !path.components().any(|component| {
             matches!(
                 component,
                 std::path::Component::ParentDir | std::path::Component::CurDir
             )
-        })
-    {
+        }))
+    .then_some(path)
+}
+
+fn finish_launch_return_handoff_pmu_async(path: Option<std::path::PathBuf>) {
+    let Some(path) = path else {
         return;
-    }
+    };
     let ui_profile = mister_magik_perf_events::take_thread_profile();
     let worker_profiles = mister_magik_perf_events::take_process_profiles();
     std::thread::spawn(move || {
@@ -659,10 +661,9 @@ mod tests {
 
     #[test]
     fn launch_return_pmu_handoff_path_is_fixed_to_volatile_state() {
-        assert_eq!(
-            LAUNCH_RETURN_PMU_HANDOFF_ENV,
-            "MISTER_LAUNCH_RETURN_PMU_HANDOFF_OUT"
-        );
+        assert!(valid_launch_return_pmu_path("/tmp/mister-magik/handoff.json").is_some());
+        assert!(valid_launch_return_pmu_path("/tmp/handoff.json").is_none());
+        assert!(valid_launch_return_pmu_path("/tmp/mister-magik/../handoff.json").is_none());
     }
 
     #[test]

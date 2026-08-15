@@ -369,6 +369,39 @@ impl ProcessCollector {
 }
 
 static PROCESS_COLLECTOR: OnceLock<Mutex<ProcessCollector>> = OnceLock::new();
+static PROCESS_CONFIG: OnceLock<PmuProfileConfig> = OnceLock::new();
+
+const PMU_PROFILE: &str = "MISTER_PMU_PROFILE";
+const PMU_SAMPLE_EVERY: &str = "MISTER_PMU_SAMPLE_EVERY";
+const PMU_RECORD_LIMIT: &str = "MISTER_PMU_RECORD_LIMIT";
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PmuProfileConfig {
+    enabled: bool,
+    sample_every: u64,
+    record_limit: usize,
+}
+
+impl PmuProfileConfig {
+    pub fn capture_with<'a>(mut get: impl FnMut(&str) -> Option<&'a str>) -> Self {
+        Self {
+            enabled: get(PMU_PROFILE) == Some("1"),
+            sample_every: bounded_value(get(PMU_SAMPLE_EVERY), DEFAULT_SAMPLE_EVERY, 1, 10_000),
+            record_limit: bounded_value(
+                get(PMU_RECORD_LIMIT),
+                DEFAULT_RECORD_LIMIT as u64,
+                1,
+                65_536,
+            ) as usize,
+        }
+    }
+}
+
+pub fn install_process_config(config: PmuProfileConfig) -> Result<(), &'static str> {
+    PROCESS_CONFIG
+        .set(config)
+        .map_err(|_| "PMU process configuration was already installed")
+}
 
 fn process_collector() -> MutexGuard<'static, ProcessCollector> {
     PROCESS_COLLECTOR
@@ -392,17 +425,12 @@ struct ThreadCollector {
 }
 
 impl ThreadCollector {
-    fn from_env() -> Self {
-        let enabled = std::env::var_os("MISTER_PMU_PROFILE").is_some_and(|value| value == "1");
-        let sample_every =
-            bounded_env_u64("MISTER_PMU_SAMPLE_EVERY", DEFAULT_SAMPLE_EVERY, 1, 10_000);
-        let record_limit = bounded_env_u64(
-            "MISTER_PMU_RECORD_LIMIT",
-            DEFAULT_RECORD_LIMIT as u64,
-            1,
-            65_536,
-        ) as usize;
-        Self::new(enabled, sample_every, record_limit)
+    fn from_process_config() -> Self {
+        let config = PROCESS_CONFIG.get().copied().unwrap_or_else(|| {
+            let values: std::collections::BTreeMap<String, String> = std::env::vars().collect();
+            PmuProfileConfig::capture_with(|name| values.get(name).map(String::as_str))
+        });
+        Self::new(config.enabled, config.sample_every, config.record_limit)
     }
 
     fn new(enabled: bool, sample_every: u64, record_limit: usize) -> Self {
@@ -497,15 +525,14 @@ impl ThreadCollector {
     }
 }
 
-fn bounded_env_u64(name: &str, default: u64, minimum: u64, maximum: u64) -> u64 {
-    std::env::var(name)
-        .ok()
+fn bounded_value(value: Option<&str>, default: u64, minimum: u64, maximum: u64) -> u64 {
+    value
         .and_then(|value| value.parse().ok())
         .map_or(default, |value: u64| value.clamp(minimum, maximum))
 }
 
 thread_local! {
-    static THREAD_COLLECTOR: RefCell<ThreadCollector> = RefCell::new(ThreadCollector::from_env());
+    static THREAD_COLLECTOR: RefCell<ThreadCollector> = RefCell::new(ThreadCollector::from_process_config());
 }
 
 /// Starts a sampled span on the calling thread when `MISTER_PMU_PROFILE=1`.
@@ -1209,6 +1236,21 @@ mod linux {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn typed_profile_config_preserves_bounds_and_disabled_defaults() {
+        let values = std::collections::BTreeMap::from([
+            (PMU_PROFILE, "1"),
+            (PMU_SAMPLE_EVERY, "0"),
+            (PMU_RECORD_LIMIT, "999999"),
+        ]);
+        let config = PmuProfileConfig::capture_with(|name| values.get(name).copied());
+
+        assert!(config.enabled);
+        assert_eq!(config.sample_every, 1);
+        assert_eq!(config.record_limit, 65_536);
+        assert!(!PmuProfileConfig::capture_with(|_| None).enabled);
+    }
     use std::sync::Mutex;
 
     static PROCESS_TEST_LOCK: Mutex<()> = Mutex::new(());
