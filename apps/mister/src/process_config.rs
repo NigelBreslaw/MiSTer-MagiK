@@ -83,8 +83,8 @@ impl LauncherReadinessConfig {
                 .to_owned(),
             ready_fifo: environment
                 .get_path(READY_FIFO)
-                .unwrap_or_default()
-                .to_owned(),
+                .map(Path::to_path_buf)
+                .unwrap_or_default(),
             main_pid: parse_u32(environment.get(MAIN_PID)),
             main_generation: parse_u64(environment.get(MAIN_GENERATION)),
             owner_epoch: parse_u64(environment.get(OWNER_EPOCH)),

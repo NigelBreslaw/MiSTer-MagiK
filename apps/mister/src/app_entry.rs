@@ -95,14 +95,12 @@ pub(crate) fn process_start_monotonic_us() -> u64 {
 pub use mister_magik_fb::build_identity;
 use mister_magik_mister_runtime::boot_analytics;
 use mister_magik_mister_runtime::fpga;
-use mister_magik_mister_runtime::runtime_status;
 use mister_magik_mister_runtime::settings;
-use mister_magik_mister_runtime::vt;
 
 #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
 use mister_magik_fb::preview_pack_bench;
-#[cfg(test)]
-use mister_magik_fb::test_support;
+#[cfg(mister_experiments)]
+use mister_magik_fb::screenshot_transitions;
 #[cfg(mister_experiments)]
 use mister_magik_fb::ui_effect_bench;
 pub use mister_magik_fb::{
@@ -112,16 +110,11 @@ pub use mister_magik_fb::{
     return_catalog_capsule, setup_nav, spring_animation, ui_errln, ui_log, ui_logln,
 };
 use mister_magik_fb::{
-    arcade_list_renderer, artifact_publish, bitmap_text, catalog_failure_report,
-    catalog_progress_report, cpu_profile, diagnostic_identity, display_config, frame_profile,
-    input, input_hub, input_integrity_driver, latch_failure_report, media_http, media_pack_save,
-    pmu_probe, pmu_profile, preview_state, screenshot_transitions, search_bench, ui_display,
-    ui_runner, video_i420,
+    cpu_profile, input, input_integrity_driver, pmu_probe, pmu_profile, search_bench, ui_display,
+    ui_runner,
 };
 #[cfg(feature = "bench-tools")]
 use mister_magik_fb::{media_bench_download, media_bench_save};
-#[cfg(all(target_os = "linux", target_arch = "arm"))]
-use mister_magik_fb::{mr_audio, video_player};
 
 #[cfg(all(feature = "diagnostics", feature = "ui"))]
 use fpga::LatchedFbufGeometry;

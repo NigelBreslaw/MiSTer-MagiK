@@ -186,6 +186,9 @@ The former application-wide dead-code allowance was removed with the entrypoint
 move. The crate-root check rejects its return in either executable edge. The
 remaining leaf `#[allow(dead_code)]` annotations in `lib.rs` are cfg-local to
 shared rendering helpers that are intentionally partial in host/preview graphs.
+The full feature matrix also proves `app_entry` imports only library modules it
+uses under the selected cfg, while typed ready-FIFO capture retains the legacy
+empty `PathBuf` fallback.
 
 ## Executable failure boundary
 
