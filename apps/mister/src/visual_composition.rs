@@ -81,6 +81,25 @@ impl ArcadeVisualLayer {
         Some(rect)
     }
 
+    pub fn compose_over_backdrop(
+        &mut self,
+        target: &mut UiFrameTarget,
+        backdrop: &[Rgb565Pixel],
+        output_layout: mister_magik_framebuffer_scenes::Rgb565OutputLayout,
+        games: ArcadeGameView<'_>,
+        selected: usize,
+        visual_index: f32,
+        force: bool,
+    ) -> Option<DirtyRect> {
+        let update = self.renderer.draw(games, selected, visual_index, force)?;
+        let rect = match update {
+            ArcadeListUpdate::Full(rect) | ArcadeListUpdate::Scroll { rect, .. } => rect,
+        };
+        self.renderer
+            .compose_layer_over_backdrop_to_oriented_cached(target, backdrop, output_layout, true)
+            .then_some(rect)
+    }
+
     pub fn dirty_rect(&self) -> DirtyRect {
         self.renderer.dirty_rect()
     }

@@ -25,6 +25,7 @@ mod macos {
     use mister_magik_fb::arcade_catalog::{
         ArcadeCatalog, ArcadeFilter, ArcadeGameEntry, MENU_ARCADE_SYSTEM_ID,
     };
+    use mister_magik_fb::crt_backdrop::{CRT_BACKDROP_FADE_DURATION, CrtBackdropState};
     use mister_magik_fb::framebuffer::target::{FramebufferTargetGeometry, UiFrameTarget};
     use mister_magik_fb::input_event::{
         InputEvent, InputPhase, InputSourceId, InputSourceKind, LogicalAction, PressId, SourceEpoch,
@@ -443,6 +444,9 @@ mod macos {
         download_media_configured: bool,
         download_media: bool,
         arcade_layer: ArcadeVisualLayer,
+        crt_backdrop: Option<CrtBackdropState>,
+        crt_backdrop_target_key: Option<Option<String>>,
+        crt_chrome: Vec<Rgb565Pixel>,
         preview_transition: PreviewTransitionController<()>,
         preview_compositor: Rgb565PreviewTransitionCompositor,
         preview_previous_index: Option<usize>,
@@ -638,6 +642,9 @@ mod macos {
                 download_media_configured: download_media && !headless,
                 download_media: download_media && !headless,
                 arcade_layer: ArcadeVisualLayer::new(frame_width, frame_height),
+                crt_backdrop: CrtBackdropState::for_display(&display),
+                crt_backdrop_target_key: None,
+                crt_chrome: vec![Rgb565Pixel(0); frame_width.saturating_mul(frame_height)],
                 preview_transition: PreviewTransitionController::default(),
                 preview_compositor: Rgb565PreviewTransitionCompositor::new(
                     frame_width,
@@ -770,6 +777,7 @@ mod macos {
                 self.orientation,
                 matches!(scenario, Scenario::ArcadeSearch),
             );
+            self.prime_crt_backdrop(scenario);
             if let Some(window) = self.native_window.as_ref() {
                 window.set_title(&self.window_title());
                 window.request_redraw();
@@ -1490,6 +1498,19 @@ mod macos {
                 self.scenario,
                 Scenario::Arcade | Scenario::ArcadeSearch | Scenario::ArcadeCrossfade
             ) {
+                let low_resolution_backdrop = self.crt_backdrop.is_some()
+                    && matches!(self.scenario, Scenario::Arcade | Scenario::ArcadeCrossfade);
+                if low_resolution_backdrop {
+                    self.sync_crt_backdrop_target(false);
+                    self.crt_chrome
+                        .copy_from_slice(self.frame_target.cached_565());
+                    if let Some(backdrop) = self.crt_backdrop.as_mut() {
+                        let _ = backdrop.compose(self.fixed_time.get());
+                        self.frame_target
+                            .cached_565_mut()
+                            .copy_from_slice(backdrop.pixels());
+                    }
+                }
                 let games = self
                     .launcher_nav
                     .active_collection_id()
@@ -1498,13 +1519,32 @@ mod macos {
                             .active_arcade_game_view(&self.catalog, collection)
                     })
                     .unwrap_or_else(mister_magik_fb::arcade_catalog::ArcadeGameView::empty);
-                self.arcade_layer.compose(
-                    &mut self.frame_target,
-                    games,
-                    self.launcher_nav.arcade.selected,
-                    self.launcher_nav.arcade.visual_index,
-                    true,
-                );
+                if let Some(backdrop) = self.crt_backdrop.as_ref().filter(|_| {
+                    matches!(self.scenario, Scenario::Arcade | Scenario::ArcadeCrossfade)
+                }) {
+                    let layout = UiLayoutGeometry::for_display(
+                        &self.display_profile.display(),
+                        self.orientation,
+                    );
+                    self.arcade_layer.compose_over_backdrop(
+                        &mut self.frame_target,
+                        backdrop.pixels(),
+                        layout.output_layout(),
+                        games,
+                        self.launcher_nav.arcade.selected,
+                        self.launcher_nav.arcade.visual_index,
+                        true,
+                    );
+                    self.restore_crt_arcade_chrome(layout);
+                } else {
+                    self.arcade_layer.compose(
+                        &mut self.frame_target,
+                        games,
+                        self.launcher_nav.arcade.selected,
+                        self.launcher_nav.arcade.visual_index,
+                        true,
+                    );
+                }
                 if matches!(self.scenario, Scenario::Arcade | Scenario::ArcadeCrossfade)
                     && !self.display_profile.is_crt()
                 {
@@ -1591,6 +1631,117 @@ mod macos {
             }
             self.compose_navigation_transition();
             self.fixed_time.set(self.fixed_time.get() + frame_delta);
+        }
+
+        fn prime_crt_backdrop(&mut self, scenario: Scenario) {
+            if self.crt_backdrop.is_none() {
+                return;
+            }
+            self.crt_backdrop_target_key = None;
+            let now = self.fixed_time.get();
+            if scenario == Scenario::ArcadeCrossfade {
+                let current = self.preview_current_index;
+                self.preview_current_index = self.preview_previous_index;
+                self.sync_crt_backdrop_target(true);
+                self.preview_current_index = current;
+                self.crt_backdrop_target_key = None;
+                self.sync_crt_backdrop_target(false);
+            } else if scenario == Scenario::Arcade {
+                self.sync_crt_backdrop_target(true);
+            } else if let Some(backdrop) = self.crt_backdrop.as_mut() {
+                backdrop.retarget_plain(now);
+                let _ = backdrop.compose(now + CRT_BACKDROP_FADE_DURATION);
+                self.crt_backdrop_target_key = Some(None);
+            }
+        }
+
+        fn sync_crt_backdrop_target(&mut self, settle: bool) {
+            let Some(index) = self
+                .preview_current_index
+                .or(Some(self.launcher_nav.arcade.selected))
+            else {
+                return;
+            };
+            let use_fixtures = matches!(self.content, PreviewContent::Fixtures);
+            let screenshot = preview_game(&self.launcher_nav, &self.catalog, index)
+                .and_then(|game| {
+                    preview_screenshot(
+                        game,
+                        &self.loaded_screenshots,
+                        &self.fixture_screenshots,
+                        use_fixtures,
+                    )
+                })
+                .or_else(|| {
+                    use_fixtures
+                        .then(|| self.fixture_screenshots.first())
+                        .flatten()
+                });
+            let target_key = screenshot.map(|screenshot| screenshot.key.to_string());
+            if self.crt_backdrop_target_key.as_ref() == Some(&target_key) {
+                return;
+            }
+            let now = self.fixed_time.get();
+            let Some(backdrop) = self.crt_backdrop.as_mut() else {
+                return;
+            };
+            if let Some(screenshot) = screenshot {
+                backdrop.retarget(Some(fixture_preview_frame(screenshot)), now);
+            } else {
+                backdrop.retarget_plain(now);
+            }
+            if settle {
+                let _ = backdrop.compose(now + CRT_BACKDROP_FADE_DURATION);
+            }
+            self.crt_backdrop_target_key = Some(target_key);
+        }
+
+        fn restore_crt_arcade_chrome(&mut self, layout: UiLayoutGeometry) {
+            let display = self.display_profile.display();
+            let metrics = CrtUiMetrics::for_display(&display);
+            let content = layout.content_rect();
+            let header = mister_magik_fb::framebuffer::target::DirtyRect {
+                x0: content.x + metrics.grid_x.max(1) as usize * 2,
+                y0: content.y + metrics.grid_y.max(1) as usize * 2,
+                x1: content.x + content.width - metrics.grid_x.max(1) as usize * 2,
+                y1: content.y
+                    + metrics.grid_y.max(1) as usize * 2
+                    + metrics.header_height.max(1) as usize,
+            };
+            let footer = mister_magik_fb::framebuffer::target::DirtyRect {
+                x0: header.x0,
+                y0: content.y + content.height
+                    - metrics.footer_height.max(1) as usize
+                    - metrics.grid_y.max(1) as usize * 2,
+                x1: header.x1,
+                y1: content.y + content.height - metrics.grid_y.max(1) as usize * 2,
+            };
+            copy_logical_rect(
+                self.frame_target.cached_565_mut(),
+                &self.crt_chrome,
+                layout.output_layout(),
+                header,
+            );
+            copy_logical_rect(
+                self.frame_target.cached_565_mut(),
+                &self.crt_chrome,
+                layout.output_layout(),
+                footer,
+            );
+            let list = self.arcade_layer.dirty_rect();
+            let scrollbar_width = metrics.grid_x.max(1) as usize;
+            let scrollbar = mister_magik_fb::framebuffer::target::DirtyRect {
+                x0: list.x1.saturating_sub(scrollbar_width),
+                y0: list.y0,
+                x1: list.x1,
+                y1: list.y1,
+            };
+            copy_logical_rect(
+                self.frame_target.cached_565_mut(),
+                &self.crt_chrome,
+                layout.output_layout(),
+                scrollbar,
+            );
         }
 
         fn request_selected_preview(&mut self) {
@@ -3795,6 +3946,22 @@ mod macos {
             source_height: screenshot.height,
             display_width: 320,
             display_height: 240,
+        }
+    }
+
+    fn copy_logical_rect(
+        destination: &mut [Rgb565Pixel],
+        source: &[Rgb565Pixel],
+        layout: mister_magik_framebuffer_scenes::Rgb565OutputLayout,
+        rect: mister_magik_fb::framebuffer::target::DirtyRect,
+    ) {
+        for y in rect.y0.min(layout.logical_height())..rect.y1.min(layout.logical_height()) {
+            for x in rect.x0.min(layout.logical_width())..rect.x1.min(layout.logical_width()) {
+                let offset = layout.physical_offset(x, y);
+                if offset < destination.len() && offset < source.len() {
+                    destination[offset] = source[offset];
+                }
+            }
         }
     }
 
