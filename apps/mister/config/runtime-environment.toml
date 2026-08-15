@@ -11,7 +11,7 @@ source_roots = [
 ]
 
 [baseline]
-literal_occurrences = 405
+literal_occurrences = 404
 unique_names = 267
 external_build_names = 7
 
@@ -900,13 +900,13 @@ documentation = { summary = "Controls human turbo pause frames behavior", accept
 
 [[control]]
 name = "MISTER_INPUT_INTEGRITY_STALL_MS"
-owner = "apps/mister/src/ui_runner/launcher_loop.rs"
-classification = "production"
+owner = "apps/mister/src/process_config.rs"
+classification = "diagnostic"
 value_shape = "bounded integer"
 default_behavior = "uses the owner-defined bounded numeric default when unset or invalid"
-visibility = "internal runtime"
+visibility = "developer diagnostic"
 parser = "u64"
-scope = "command"
+scope = "instrumentation"
 conflicts = []
 sensitivity = "public"
 aliases = []
@@ -914,12 +914,12 @@ documentation = { summary = "Controls input integrity stall ms behavior", accept
 
 [[control]]
 name = "MISTER_INPUT_INTEGRITY_TRACE"
-owner = "apps/mister/src/ui_runner/launcher_loop.rs"
+owner = "apps/mister/src/process_config.rs"
 classification = "diagnostic"
-value_shape = "string, enum, or boolean token"
-default_behavior = "uses the owner-defined value or disabled state when unset"
+value_shape = "boolean token"
+default_behavior = "defaults to disabled when unset or unrecognized"
 visibility = "developer diagnostic"
-parser = "string"
+parser = "bool"
 scope = "instrumentation"
 conflicts = []
 sensitivity = "public"
@@ -1054,13 +1054,13 @@ documentation = { summary = "Controls launcher dirty opt behavior", accepted_val
 
 [[control]]
 name = "MISTER_LAUNCHER_INPUT_SCRIPT"
-owner = "apps/mister/src/ui_runner/launcher_loop.rs"
-classification = "production"
+owner = "apps/mister/src/process_config.rs"
+classification = "benchmark"
 value_shape = "string, enum, or boolean token"
 default_behavior = "uses the owner-defined value or disabled state when unset"
-visibility = "internal runtime"
+visibility = "developer diagnostic"
 parser = "string"
-scope = "command"
+scope = "instrumentation"
 conflicts = []
 sensitivity = "public"
 aliases = []
@@ -1068,13 +1068,13 @@ documentation = { summary = "Controls launcher input script behavior", accepted_
 
 [[control]]
 name = "MISTER_LAUNCHER_INPUT_SCRIPT_WAIT_FRAMES"
-owner = "apps/mister/src/ui_runner/launcher_loop.rs"
-classification = "production"
+owner = "apps/mister/src/process_config.rs"
+classification = "benchmark"
 value_shape = "bounded integer"
 default_behavior = "uses the owner-defined bounded numeric default when unset or invalid"
-visibility = "internal runtime"
+visibility = "developer diagnostic"
 parser = "u64"
-scope = "command"
+scope = "instrumentation"
 conflicts = []
 sensitivity = "public"
 aliases = []
@@ -3098,7 +3098,7 @@ documentation = { summary = "Controls saturn preview archive behavior", accepted
 
 [[control]]
 name = "MISTER_SCREENSAVER_SEED"
-owner = "apps/mister/src/ui_runner/launcher_screensaver.rs"
+owner = "apps/mister/src/process_config.rs"
 classification = "production"
 value_shape = "bounded integer"
 default_behavior = "uses the owner-defined bounded numeric default when unset or invalid"
@@ -3112,7 +3112,7 @@ documentation = { summary = "Controls screensaver seed behavior", accepted_value
 
 [[control]]
 name = "MISTER_SCREENSAVER_START_ACTIVE"
-owner = "apps/mister/src/ui_runner/launcher_loop.rs"
+owner = "apps/mister/src/process_config.rs"
 classification = "production"
 value_shape = "boolean token"
 default_behavior = "uses the owner-defined enabled or disabled default when unset or unrecognized"
@@ -3126,7 +3126,7 @@ documentation = { summary = "Controls screensaver start active behavior", accept
 
 [[control]]
 name = "MISTER_SCREENSAVER_START_IDLE_WHEN_READY"
-owner = "apps/mister/src/ui_runner/launcher_loop.rs"
+owner = "apps/mister/src/process_config.rs"
 classification = "production"
 value_shape = "boolean token"
 default_behavior = "uses the owner-defined enabled or disabled default when unset or unrecognized"
@@ -3140,7 +3140,7 @@ documentation = { summary = "Controls screensaver start idle when ready behavior
 
 [[control]]
 name = "MISTER_SCREENSAVER_START_PREVIEW_AFTER_ANALYTICS"
-owner = "apps/mister/src/ui_runner/launcher_loop.rs"
+owner = "apps/mister/src/process_config.rs"
 classification = "production"
 value_shape = "boolean token"
 default_behavior = "uses the owner-defined enabled or disabled default when unset or unrecognized"
@@ -3154,7 +3154,7 @@ documentation = { summary = "Controls screensaver start preview after analytics 
 
 [[control]]
 name = "MISTER_SCREENSAVER_START_PREVIEW_WHEN_READY"
-owner = "apps/mister/src/ui_runner/launcher_loop.rs"
+owner = "apps/mister/src/process_config.rs"
 classification = "production"
 value_shape = "boolean token"
 default_behavior = "uses the owner-defined enabled or disabled default when unset or unrecognized"

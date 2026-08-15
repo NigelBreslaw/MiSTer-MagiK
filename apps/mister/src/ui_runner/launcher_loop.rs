@@ -30,6 +30,7 @@ use crate::preview_state::PreviewApplyTrace;
 use crate::preview_worker;
 #[cfg(test)]
 use mister_magik_catalog::catalog_summary;
+use mister_magik_fb::process_config::{ScreensaverStartMode, ScriptedInputConfig};
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::io::{Read, Write};
 use std::path::Path;
@@ -38,7 +39,6 @@ use std::sync::mpsc::{Sender, channel};
 const DEFAULT_CATALOG_BACKGROUND_VALIDATION_DELAY: Duration = Duration::from_secs(2);
 const CATALOG_READY_STATIONARY_EDGE_SETTLE: Duration = Duration::from_millis(250);
 const LIBRARY_CHANGED_TEST_ACTION_SETTLE: Duration = Duration::from_millis(1200);
-const LAUNCHER_INPUT_SCRIPT_DEFAULT_WAIT_FRAMES: usize = 60;
 const LAUNCHER_INPUT_SCRIPT_PRESS_FRAMES: usize = 2;
 const LAUNCHER_INPUT_SCRIPT_RELEASE_FRAMES: usize = 6;
 const SYSTEM_ENTRY_BENCHMARK_SETTLE_MS: u64 = 2_000;
@@ -614,17 +614,6 @@ fn present_mode_label_for_backend_status(
         (_, LauncherPresentStatus::Frozen) => "Mode=output frozen",
         _ => "Mode=/dev/fb0 diagnostic",
     }
-}
-
-fn launcher_input_script_wait_frames() -> usize {
-    static VALUE: OnceLock<usize> = OnceLock::new();
-    *VALUE.get_or_init(|| {
-        std::env::var("MISTER_LAUNCHER_INPUT_SCRIPT_WAIT_FRAMES")
-            .ok()
-            .and_then(|value| value.parse::<usize>().ok())
-            .unwrap_or(LAUNCHER_INPUT_SCRIPT_DEFAULT_WAIT_FRAMES)
-            .min(600)
-    })
 }
 
 struct ArcadeEntryLatencyTrace {
@@ -3140,8 +3129,7 @@ fn spawn_launcher_response_trace_writer(
 }
 
 impl InputIntegrityTrace {
-    fn from_env(now: Instant) -> Self {
-        let enabled = launcher_env_flag("MISTER_INPUT_INTEGRITY_TRACE");
+    fn new(enabled: bool, now: Instant) -> Self {
         if enabled {
             let _ = std::fs::remove_file(INPUT_INTEGRITY_TRACE_PATH);
         }
@@ -3463,14 +3451,19 @@ struct LauncherInputScriptDriver {
 }
 
 impl LauncherInputScriptDriver {
-    fn from_env(start: Instant) -> Self {
-        match std::env::var("MISTER_LAUNCHER_INPUT_SCRIPT") {
-            Ok(value) => Self::from_script(&value, start),
-            Err(_) => Self::empty(),
+    fn from_config(config: &ScriptedInputConfig, start: Instant) -> Self {
+        match config.script() {
+            Some(value) => Self::from_script_with_wait_frames(value, start, config.wait_frames()),
+            None => Self::empty(),
         }
     }
 
+    #[cfg(test)]
     fn from_script(value: &str, start: Instant) -> Self {
+        Self::from_script_with_wait_frames(value, start, 60)
+    }
+
+    fn from_script_with_wait_frames(value: &str, start: Instant, wait_frames: usize) -> Self {
         let mut steps = Vec::new();
         for token in value.split([',', ';', ' ']) {
             let token = token.trim();
@@ -3502,7 +3495,7 @@ impl LauncherInputScriptDriver {
             steps,
             step_idx: 0,
             frame_in_step: 0,
-            wait_frames: launcher_input_script_wait_frames(),
+            wait_frames,
             event_sequence: 0,
             press_sequence: 0,
             active_press: None,
@@ -4536,13 +4529,7 @@ impl EffectiveLauncherView {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ScreensaverStartMode {
-    Inactive,
-    IdleWhenReady,
-    PreviewWhenReady,
-}
-
+#[cfg(test)]
 fn screensaver_start_mode(
     idle_when_ready: bool,
     preview_when_ready: bool,
@@ -4876,13 +4863,9 @@ pub(super) fn run_launcher_loop(
     let start = Instant::now();
     let startup_monotonic_us = monotonic_clock_us().unwrap_or(0);
     let mut frames = 0u64;
-    let screensaver_start_mode = screensaver_start_mode(
-        launcher_env_flag("MISTER_SCREENSAVER_START_IDLE_WHEN_READY"),
-        launcher_env_flag("MISTER_SCREENSAVER_START_PREVIEW_WHEN_READY"),
-        launcher_env_flag("MISTER_SCREENSAVER_START_ACTIVE"),
-    );
+    let screensaver_start_mode = launcher_config.screensaver().start_mode();
     let screensaver_preview_waits_for_analytics =
-        launcher_env_flag("MISTER_SCREENSAVER_START_PREVIEW_AFTER_ANALYTICS");
+        launcher_config.screensaver().preview_waits_for_analytics();
     let mut screensaver = ScreensaverControl::new(Instant::now(), screensaver_start_mode);
     let mut screensaver_pipeline: Option<ScreensaverRenderAhead> = None;
     let mut retiring_screensaver_pipelines: Vec<ScreensaverRenderAhead> = Vec::new();
@@ -5095,11 +5078,9 @@ pub(super) fn run_launcher_loop(
     ));
     let mut input_fault_notice: Option<&'static str>;
     let mut setup_disconnect_notice = false;
-    let mut input_integrity_stall = std::env::var("MISTER_INPUT_INTEGRITY_STALL_MS")
-        .ok()
-        .and_then(|value| value.parse::<u64>().ok())
-        .filter(|value| (1..=1_000).contains(value));
-    let mut input_integrity_trace = InputIntegrityTrace::from_env(Instant::now());
+    let mut input_integrity_stall = launcher_config.input().integrity_stall_ms();
+    let mut input_integrity_trace =
+        InputIntegrityTrace::new(launcher_config.input().integrity_trace(), Instant::now());
     let input_observation_probe = pad.input_observation_probe();
     let mut launcher_response_trace =
         LauncherResponseTrace::from_env(&nav, input_observation_probe.clone());
@@ -5315,7 +5296,8 @@ pub(super) fn run_launcher_loop(
     let mut catalog_publication_test = CatalogPublicationTestDriver::from_env(start);
     let mut media_session = ScreenshotMediaUpdateSession::default();
     let mut library_changed_dialog_test = LibraryChangedDialogTestDriver::from_env(start);
-    let mut launcher_input_script = LauncherInputScriptDriver::from_env(start);
+    let mut launcher_input_script =
+        LauncherInputScriptDriver::from_config(launcher_config.input().scripted(), start);
     let mut launcher_automation = LauncherAutomation::new();
     let sqlite_path = mister_magik_catalog::catalog_state::path_for_root(
         launcher_config.catalog_paths().sharded_catalog_dir(),
@@ -9153,6 +9135,11 @@ pub(super) fn run_launcher_loop(
                 screensaver_loader = Some(LauncherScreensaverLoader::start(
                     layout.output_layout(),
                     screensaver_show_started,
+                    launcher_config
+                        .catalog_paths()
+                        .media_asset_dir()
+                        .join("arcade-screenshots-320x320.mmlz4b"),
+                    launcher_config.screensaver().seed(),
                 ));
             }
             let loader = screensaver_loader.as_ref().expect("created above");

@@ -21,6 +21,18 @@ const READY_FIFO: &str = "MISTER_MAGIK_READY_FIFO";
 const MAIN_PID: &str = "MISTER_MAGIK_MAIN_PID";
 const MAIN_GENERATION: &str = "MISTER_MAGIK_MAIN_GENERATION";
 const OWNER_EPOCH: &str = "MISTER_MAGIK_OWNER_EPOCH";
+const INPUT_INTEGRITY_STALL_MS: &str = "MISTER_INPUT_INTEGRITY_STALL_MS";
+const INPUT_INTEGRITY_TRACE: &str = "MISTER_INPUT_INTEGRITY_TRACE";
+#[cfg(any(feature = "bench-tools", test))]
+const LAUNCHER_INPUT_SCRIPT: &str = "MISTER_LAUNCHER_INPUT_SCRIPT";
+#[cfg(any(feature = "bench-tools", test))]
+const LAUNCHER_INPUT_SCRIPT_WAIT_FRAMES: &str = "MISTER_LAUNCHER_INPUT_SCRIPT_WAIT_FRAMES";
+const SCREENSAVER_SEED: &str = "MISTER_SCREENSAVER_SEED";
+const SCREENSAVER_START_ACTIVE: &str = "MISTER_SCREENSAVER_START_ACTIVE";
+const SCREENSAVER_START_IDLE_WHEN_READY: &str = "MISTER_SCREENSAVER_START_IDLE_WHEN_READY";
+const SCREENSAVER_START_PREVIEW_AFTER_ANALYTICS: &str =
+    "MISTER_SCREENSAVER_START_PREVIEW_AFTER_ANALYTICS";
+const SCREENSAVER_START_PREVIEW_WHEN_READY: &str = "MISTER_SCREENSAVER_START_PREVIEW_WHEN_READY";
 
 #[derive(Clone, Default)]
 pub struct EnvironmentSnapshot {
@@ -114,6 +126,8 @@ pub struct LauncherProcessConfig {
     preview_transition: PreviewTransitionConfig,
     #[cfg(feature = "ui")]
     media_worker: Result<MediaWorkerConfig, String>,
+    screensaver: ScreensaverProcessConfig,
+    input: InputProcessConfig,
 }
 
 impl LauncherProcessConfig {
@@ -146,6 +160,127 @@ impl LauncherProcessConfig {
     #[cfg(feature = "ui")]
     pub fn media_worker(&self) -> &Result<MediaWorkerConfig, String> {
         &self.media_worker
+    }
+
+    pub fn screensaver(&self) -> &ScreensaverProcessConfig {
+        &self.screensaver
+    }
+
+    pub fn input(&self) -> &InputProcessConfig {
+        &self.input
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ScreensaverStartMode {
+    Inactive,
+    IdleWhenReady,
+    PreviewWhenReady,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ScreensaverProcessConfig {
+    start_mode: ScreensaverStartMode,
+    preview_waits_for_analytics: bool,
+    seed: Option<u64>,
+}
+
+impl ScreensaverProcessConfig {
+    fn capture(environment: &EnvironmentSnapshot) -> Self {
+        let idle_when_ready = environment_flag(environment, SCREENSAVER_START_IDLE_WHEN_READY);
+        let preview_when_ready =
+            environment_flag(environment, SCREENSAVER_START_PREVIEW_WHEN_READY);
+        let legacy_start_active = environment_flag(environment, SCREENSAVER_START_ACTIVE);
+        let start_mode = if preview_when_ready {
+            ScreensaverStartMode::PreviewWhenReady
+        } else if idle_when_ready {
+            ScreensaverStartMode::IdleWhenReady
+        } else if legacy_start_active {
+            ScreensaverStartMode::PreviewWhenReady
+        } else {
+            ScreensaverStartMode::Inactive
+        };
+        Self {
+            start_mode,
+            preview_waits_for_analytics: environment_flag(
+                environment,
+                SCREENSAVER_START_PREVIEW_AFTER_ANALYTICS,
+            ),
+            seed: environment
+                .get(SCREENSAVER_SEED)
+                .and_then(parse_screensaver_seed),
+        }
+    }
+
+    pub fn start_mode(&self) -> ScreensaverStartMode {
+        self.start_mode
+    }
+
+    pub fn preview_waits_for_analytics(&self) -> bool {
+        self.preview_waits_for_analytics
+    }
+
+    pub fn seed(&self) -> Option<u64> {
+        self.seed
+    }
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ScriptedInputConfig {
+    script: Option<String>,
+    wait_frames: usize,
+}
+
+impl ScriptedInputConfig {
+    pub fn script(&self) -> Option<&str> {
+        self.script.as_deref()
+    }
+
+    pub fn wait_frames(&self) -> usize {
+        self.wait_frames
+    }
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct InputProcessConfig {
+    integrity_trace: bool,
+    integrity_stall_ms: Option<u64>,
+    scripted: ScriptedInputConfig,
+}
+
+impl InputProcessConfig {
+    fn capture(environment: &EnvironmentSnapshot) -> Self {
+        #[cfg(feature = "bench-tools")]
+        let scripted = ScriptedInputConfig {
+            script: environment.get(LAUNCHER_INPUT_SCRIPT).map(str::to_owned),
+            wait_frames: environment
+                .get(LAUNCHER_INPUT_SCRIPT_WAIT_FRAMES)
+                .and_then(|value| value.parse::<usize>().ok())
+                .unwrap_or(60)
+                .min(600),
+        };
+        #[cfg(not(feature = "bench-tools"))]
+        let scripted = ScriptedInputConfig::default();
+        Self {
+            integrity_trace: environment_flag(environment, INPUT_INTEGRITY_TRACE),
+            integrity_stall_ms: environment
+                .get(INPUT_INTEGRITY_STALL_MS)
+                .and_then(|value| value.parse::<u64>().ok())
+                .filter(|value| (1..=1_000).contains(value)),
+            scripted,
+        }
+    }
+
+    pub fn integrity_trace(&self) -> bool {
+        self.integrity_trace
+    }
+
+    pub fn integrity_stall_ms(&self) -> Option<u64> {
+        self.integrity_stall_ms
+    }
+
+    pub fn scripted(&self) -> &ScriptedInputConfig {
+        &self.scripted
     }
 }
 
@@ -252,6 +387,8 @@ impl ProcessConfig {
             media_worker: MediaWorkerConfig::capture_with(&catalog_paths, |name| {
                 environment.get(name)
             }),
+            screensaver: ScreensaverProcessConfig::capture(environment),
+            input: InputProcessConfig::capture(environment),
         });
         // Fault capture deliberately remains an early, compatibility-preserving
         // process boundary until C19 applies command and feature gates.
@@ -300,6 +437,19 @@ impl ProcessConfig {
     pub fn fault(&self) -> Option<&FaultConfig> {
         self.fault.as_ref()
     }
+}
+
+fn environment_flag(environment: &EnvironmentSnapshot, name: &str) -> bool {
+    matches!(environment.get(name), Some("1" | "on" | "true" | "yes"))
+}
+
+fn parse_screensaver_seed(value: &str) -> Option<u64> {
+    let value = value.trim();
+    value
+        .strip_prefix("0x")
+        .or_else(|| value.strip_prefix("0X"))
+        .map(|digits| u64::from_str_radix(digits, 16).ok())
+        .unwrap_or_else(|| value.parse::<u64>().ok())
 }
 
 fn parse_u32(value: Option<&str>) -> u32 {
@@ -508,5 +658,54 @@ mod tests {
             &PreviewTransitionConfig::capture_with(|name| environment.get(name))
         );
         assert!(launcher.media_worker().is_ok());
+    }
+
+    #[test]
+    fn launcher_captures_screensaver_and_input_integrity_settings_once() {
+        let environment = EnvironmentSnapshot::from_values([
+            (SCREENSAVER_START_ACTIVE, "true"),
+            (SCREENSAVER_START_IDLE_WHEN_READY, "true"),
+            (SCREENSAVER_START_PREVIEW_WHEN_READY, "true"),
+            (SCREENSAVER_START_PREVIEW_AFTER_ANALYTICS, "yes"),
+            (SCREENSAVER_SEED, "0x2a"),
+            (INPUT_INTEGRITY_TRACE, "on"),
+            (INPUT_INTEGRITY_STALL_MS, "1001"),
+        ]);
+        let config = ProcessConfig::from_snapshot(
+            &["mister-magik-fb".into(), "ui".into()],
+            "ui",
+            &environment,
+        );
+        let launcher = config.launcher().expect("ui captures launcher settings");
+
+        assert_eq!(
+            launcher.screensaver().start_mode(),
+            ScreensaverStartMode::PreviewWhenReady
+        );
+        assert!(launcher.screensaver().preview_waits_for_analytics());
+        assert_eq!(launcher.screensaver().seed(), Some(42));
+        assert!(launcher.input().integrity_trace());
+        assert_eq!(launcher.input().integrity_stall_ms(), None);
+    }
+
+    #[test]
+    #[cfg(not(feature = "bench-tools"))]
+    fn production_configuration_cannot_arm_scripted_input() {
+        let environment = EnvironmentSnapshot::from_values([
+            (LAUNCHER_INPUT_SCRIPT, "left,a"),
+            (LAUNCHER_INPUT_SCRIPT_WAIT_FRAMES, "1"),
+        ]);
+        let config = ProcessConfig::from_snapshot(
+            &["mister-magik-fb".into(), "ui".into()],
+            "ui",
+            &environment,
+        );
+        let scripted = config
+            .launcher()
+            .expect("ui captures launcher settings")
+            .input()
+            .scripted();
+
+        assert_eq!(scripted, &ScriptedInputConfig::default());
     }
 }

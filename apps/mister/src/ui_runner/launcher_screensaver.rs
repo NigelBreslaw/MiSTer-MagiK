@@ -6,6 +6,7 @@
 #[cfg(not(target_os = "macos"))]
 use super::*;
 use crate::preview_worker;
+#[cfg(test)]
 use mister_magik_catalog::device_layout::DeviceLayout;
 use mister_magik_framebuffer_scenes::{
     Rgb565OutputLayout, Rgb565Pixel as SharedRgb565Pixel, SceneGeometry,
@@ -16,6 +17,7 @@ use mister_magik_screenshot_parade::{
 };
 #[cfg(target_os = "macos")]
 use slint::platform::software_renderer::Rgb565Pixel;
+#[cfg(test)]
 use std::ffi::OsStr;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -311,7 +313,12 @@ pub struct LauncherScreensaverLoader {
 }
 
 impl LauncherScreensaverLoader {
-    pub fn start(output_layout: Rgb565OutputLayout, startup_started_at: Option<Instant>) -> Self {
+    pub fn start(
+        output_layout: Rgb565OutputLayout,
+        startup_started_at: Option<Instant>,
+        archive_path: PathBuf,
+        configured_seed: Option<u64>,
+    ) -> Self {
         let w = output_layout.logical_width();
         let h = output_layout.logical_height();
         let (ready_tx, ready_rx) = mpsc::sync_channel(1);
@@ -324,10 +331,7 @@ impl LauncherScreensaverLoader {
                     mister_magik_catalog::runtime_thread::RuntimeThreadRole::ScreensaverLoader,
                 );
                 let started = Instant::now();
-                let path = screensaver_archive_path(
-                    std::env::var_os("MISTER_MEDIA_ASSET_DIR").as_deref(),
-                    DeviceLayout::current(),
-                );
+                let path = archive_path;
                 let result: Result<Option<LauncherScreenshotRuntime>, String> = (|| {
                     let archive = preview_worker::ResidentPreviewArchive::open(&path)
                         .map_err(|error| format!("path={} error={error}", path.display()))?;
@@ -342,7 +346,7 @@ impl LauncherScreensaverLoader {
                         archive.asset_keys().len()
                     );
                     let construction_started = Instant::now();
-                    let seed = random_seed();
+                    let seed = random_seed(configured_seed);
                     let buffers = std::array::from_fn(|_| LauncherScreenshotBuffer::new(w, h));
                     let mut runtime = LiveScreenshotParade::start_oriented(
                         archive,
@@ -407,6 +411,7 @@ impl Drop for LauncherScreensaverLoader {
     }
 }
 
+#[cfg(test)]
 fn screensaver_archive_path(asset_dir: Option<&OsStr>, layout: DeviceLayout) -> PathBuf {
     asset_dir
         .map(PathBuf::from)
@@ -414,12 +419,8 @@ fn screensaver_archive_path(asset_dir: Option<&OsStr>, layout: DeviceLayout) -> 
         .join("arcade-screenshots-320x320.mmlz4b")
 }
 
-fn random_seed() -> u64 {
-    if let Some(seed) = std::env::var("MISTER_SCREENSAVER_SEED")
-        .ok()
-        .as_deref()
-        .and_then(parse_screensaver_seed)
-    {
+fn random_seed(configured: Option<u64>) -> u64 {
+    if let Some(seed) = configured {
         return seed;
     }
     let time = std::time::SystemTime::now()
@@ -427,15 +428,6 @@ fn random_seed() -> u64 {
         .unwrap_or_default()
         .as_nanos() as u64;
     time ^ (std::process::id() as u64).rotate_left(17) ^ 0x9e37_79b9_7f4a_7c15
-}
-
-fn parse_screensaver_seed(value: &str) -> Option<u64> {
-    let value = value.trim();
-    value
-        .strip_prefix("0x")
-        .or_else(|| value.strip_prefix("0X"))
-        .map(|digits| u64::from_str_radix(digits, 16).ok())
-        .unwrap_or_else(|| value.parse::<u64>().ok())
 }
 
 #[cfg(test)]
@@ -507,14 +499,5 @@ mod tests {
         bytes.extend_from_slice(name);
         bytes.extend_from_slice(&pixels);
         std::fs::write(path, bytes).expect("write production screensaver archive fixture");
-    }
-
-    #[test]
-    fn benchmark_seed_accepts_decimal_and_hex_without_fallback_guessing() {
-        assert_eq!(parse_screensaver_seed("42"), Some(42));
-        assert_eq!(parse_screensaver_seed(" 0x2a "), Some(42));
-        assert_eq!(parse_screensaver_seed("0X2A"), Some(42));
-        assert_eq!(parse_screensaver_seed(""), None);
-        assert_eq!(parse_screensaver_seed("seed"), None);
     }
 }
