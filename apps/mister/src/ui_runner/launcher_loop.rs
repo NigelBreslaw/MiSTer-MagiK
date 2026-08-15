@@ -7,6 +7,8 @@ use super::launcher_frame_accounting::{
     LauncherFrameCpuTrace, LauncherFrameIdentity, LauncherFrameRenderData,
     LauncherFrameSnapshotBuilder, LauncherFrameStatusData, LauncherFrameTiming,
 };
+#[cfg(test)]
+use super::launcher_frame_pipeline::{LauncherFramePhase, LauncherFramePhaseObserver};
 use super::launcher_pacing::{
     FB0_LATE_FRAME_START_HEADROOM_US, FrameProductionClass, FrameProductionTrace,
     LauncherFramePacingInput, LauncherFramePacingPolicy, LauncherPacingTrace,
@@ -5772,9 +5774,18 @@ pub(super) fn run_launcher_loop(
         .as_ref()
         .map(crate::input_hub::InputObservationProbe::observe)
         .unwrap_or_default();
+    #[cfg(test)]
+    let mut launcher_frame_phase_observer = LauncherFramePhaseObserver::default();
+    macro_rules! record_launcher_frame_phase {
+        ($phase:expr) => {{
+            #[cfg(test)]
+            launcher_frame_phase_observer.record($phase);
+        }};
+    }
     'launcher: while (secs == 0 || run_start.elapsed().as_secs() < secs)
         && preview_scroll_exit_at.is_none_or(|deadline| Instant::now() < deadline)
     {
+        record_launcher_frame_phase!(LauncherFramePhase::Begin);
         gui_profiling.tick(Instant::now());
         let mut scheduler_phase = launcher_response_trace.scheduler_boundary();
         screensaver_cpu_profile.poll(frames);
@@ -5827,6 +5838,10 @@ pub(super) fn run_launcher_loop(
         let mut full_bridge_dirty = std::mem::take(&mut navigation_source_bridge_sync_pending)
             || std::mem::take(&mut modal_input_test_bridge_sync_pending);
         if startup_intro.is_none() {
+            #[cfg(test)]
+            if startup_intro_catalog_shells_pending || startup_intro_catalog_ui_replay.is_some() {
+                record_launcher_frame_phase!(LauncherFramePhase::StartupCatalogReplay);
+            }
             if std::mem::take(&mut startup_intro_catalog_shells_pending) {
                 catalog = nav.catalog_with_build_shells(catalog.clone());
                 catalog_version = catalog_version.wrapping_add(1);
@@ -6613,6 +6628,7 @@ pub(super) fn run_launcher_loop(
                     scheduler.finish_launch_failure_recovery(recovery_presented);
                     lifecycle.recovery_frame_presented(recovery_presented, &mut lifecycle_effects);
                     apply_lifecycle_effects(&mut lifecycle_effects, &mut scheduler, start);
+                    record_launcher_frame_phase!(LauncherFramePhase::LaunchRecoveryApplied);
                     crate::ui_errln!("game launch failed: {error}");
                 }
             }
@@ -6993,9 +7009,11 @@ pub(super) fn run_launcher_loop(
 
         scheduler_phase = launcher_response_trace
             .record_scheduler_interval("pre-input-view-housekeeping", scheduler_phase);
+        record_launcher_frame_phase!(LauncherFramePhase::PreInputMaintenance);
         // Drain immediately before routing so catalog, timer, lifecycle, and
         // bridge housekeeping cannot sit between capture and dispatch.
         let drained_input = pad.drain_input_batch();
+        record_launcher_frame_phase!(LauncherFramePhase::InputCaptured);
         input_observation = drained_input.observation;
         launcher_response_trace.observe_drained_input(&drained_input);
         let input_batch = drained_input.batch;
@@ -7128,7 +7146,9 @@ pub(super) fn run_launcher_loop(
                 screensaver_input_held,
                 raw_screensaver_input_activity,
             ) {
+                record_launcher_frame_phase!(LauncherFramePhase::InputConsumed);
                 request_launcher_redraw!();
+                record_launcher_frame_phase!(LauncherFramePhase::Yielded);
                 continue;
             }
             let active_device = pad.active_device();
@@ -8220,6 +8240,7 @@ pub(super) fn run_launcher_loop(
 
         launcher_response_trace.record_lab(input_latency_lab.arm_if_computers_ready(&nav));
         drop(input_route_pmu);
+        record_launcher_frame_phase!(LauncherFramePhase::InputRouted);
         scheduler_phase =
             launcher_response_trace.record_scheduler_interval("input-route", scheduler_phase);
         let interaction_projection_pmu = launcher_response_trace.input_pmu_span(
@@ -8994,6 +9015,7 @@ pub(super) fn run_launcher_loop(
             );
             scheduler_phase = launcher_response_trace
                 .record_scheduler_interval("idle-accounting", scheduler_phase);
+            record_launcher_frame_phase!(LauncherFramePhase::IdleWait);
             let idle_sleep = input_latency_lab.time_until_next_work().map_or_else(
                 || launcher_idle_sleep_duration(&pacer),
                 |lab| launcher_idle_sleep_duration(&pacer).min(lab),
@@ -9004,6 +9026,7 @@ pub(super) fn run_launcher_loop(
             let _ = pad.wait_for_input(input_observation, idle_sleep);
             let _ = launcher_response_trace
                 .record_scheduler_interval("idle-input-wait", scheduler_phase);
+            record_launcher_frame_phase!(LauncherFramePhase::Yielded);
             continue;
         }
 
@@ -10248,6 +10271,9 @@ pub(super) fn run_launcher_loop(
             empty_base_cached_rect.is_some() || cached_empty_target_presented,
         );
         drop(gui_custom_generation_pmu);
+        if full_screen_transition.state() != FullScreenTransitionState::Live {
+            record_launcher_frame_phase!(LauncherFramePhase::FullScreenTransition);
+        }
         let frame_plan = LauncherFramePlan::new(
             cached_damage,
             preview_desired,
@@ -10259,6 +10285,7 @@ pub(super) fn run_launcher_loop(
                 arcade_list_rect
             },
         );
+        record_launcher_frame_phase!(LauncherFramePhase::FramePlanned);
         let startup_can_present = lifecycle.startup_can_present_frame();
         let stream_motion_active = stream_motion_before_render
             || preview_transition_trace.active
@@ -10303,6 +10330,7 @@ pub(super) fn run_launcher_loop(
             cpu_t4,
             pacing_trace,
         } = present_cycle;
+        record_launcher_frame_phase!(LauncherFramePhase::FrameSubmitted);
         let readiness_source_evidence = presentation.readiness_source_evidence.clone();
         gui_profiling.record_latch(
             frames,
@@ -10376,6 +10404,9 @@ pub(super) fn run_launcher_loop(
             0
         };
         let latch_trace_flush_deferred = presentation.main_present_backend.is_latch();
+        if !latch_trace_flush_deferred {
+            record_launcher_frame_phase!(LauncherFramePhase::CompatibilityResolved);
+        }
         if !first_vsync_logged && pacing_trace.vsync_source == Some(VsyncPaceSource::Vsync) {
             first_vsync_logged = true;
             boot_analytics::event("first_vsync", format!("frame={frames}"));
@@ -10652,6 +10683,7 @@ pub(super) fn run_launcher_loop(
                 lifecycle.startup_status(),
                 &launch_return_session,
             );
+            record_launcher_frame_phase!(LauncherFramePhase::PostSubmitAccounted);
             // Latch mode posts the hidden buffer first, then spends the slack before
             // vblank on normal per-frame accounting. The final wait is only the
             // pacing boundary for the next frame.
@@ -10689,7 +10721,9 @@ pub(super) fn run_launcher_loop(
                         "latch-confirmation-wait-interrupted",
                         scheduler_phase,
                     );
+                    record_launcher_frame_phase!(LauncherFramePhase::ConfirmationInterrupted);
                     request_launcher_redraw!();
+                    record_launcher_frame_phase!(LauncherFramePhase::Yielded);
                     continue 'launcher;
                 }
             };
@@ -10768,6 +10802,7 @@ pub(super) fn run_launcher_loop(
                 && !presented_frame.main_present_pending
                 && launcher_presenter.latch_failure().is_none();
             if accepted_and_active_confirmed {
+                record_launcher_frame_phase!(LauncherFramePhase::ActiveConfirmed);
                 confirmed_present_sequence = presented_frame.main_present_sequence;
                 let confirmed_at = pace.hit_at.unwrap_or(wait_done);
                 selection_feedback_confirmed_at = Some(confirmed_at);
@@ -10919,6 +10954,9 @@ pub(super) fn run_launcher_loop(
                         && let Some(source) = readiness_source_evidence
                     {
                         launcher_readiness.observe_posted(post, source, true);
+                        record_launcher_frame_phase!(
+                            LauncherFramePhase::ReadinessSourceAcknowledged
+                        );
                     }
                     if launcher_readiness.needs_full_present() {
                         request_launcher_redraw!();
@@ -11150,6 +11188,7 @@ pub(super) fn run_launcher_loop(
                 ),
             );
         }
+        record_launcher_frame_phase!(LauncherFramePhase::FrameAccounted);
         let preview_present_confirmed = if latch_trace_flush_deferred {
             accepted_and_active_confirmed
         } else {
@@ -11180,6 +11219,7 @@ pub(super) fn run_launcher_loop(
                 preview.confirm_retirement(generation);
             }
         }
+        record_launcher_frame_phase!(LauncherFramePhase::PresentationAcknowledged);
         if preview.frame_intent().is_actionable() {
             request_launcher_redraw!();
         }
@@ -11330,6 +11370,7 @@ pub(super) fn run_launcher_loop(
             .record_lab(input_latency_lab.cooperative_quantum(input_observation));
         drop(frame_tail_pmu);
         let _ = launcher_response_trace.record_scheduler_interval("frame-tail", scheduler_phase);
+        record_launcher_frame_phase!(LauncherFramePhase::FrameFinished);
     }
     if let Some(mut intro) = startup_intro.take() {
         let returned = intro.take_buffers();

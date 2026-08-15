@@ -147,6 +147,8 @@ pub mod launcher_display_session;
 mod launcher_execution_trace;
 #[allow(dead_code)]
 mod launcher_frame_accounting;
+#[cfg(test)]
+mod launcher_frame_pipeline;
 mod launcher_gui_profile;
 mod launcher_input_latency_lab;
 #[allow(dead_code)]
