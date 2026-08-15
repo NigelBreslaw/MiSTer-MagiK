@@ -208,6 +208,11 @@ requests, missing commands, and oversized/non-UTF-8 request headers now emit
 `unknown_command` or `invalid_request` metadata while retaining their exact
 legacy error strings.
 
+All authenticated control and binary-stream endpoints now emit
+`authentication_required` metadata for the existing `unauthorized` response.
+Authentication text, logging, and connection behavior are unchanged; no token
+value enters the structured sibling.
+
 ## Hotspot ownership
 
 The PR advisory report uses stable owner IDs so moves do not erase history.

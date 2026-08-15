@@ -1660,11 +1660,7 @@ mod linux {
         let id = parsed.get("id").cloned();
         if !CONTROL_AUTH_DISABLED && parsed.get("token").and_then(Value::as_str) != Some(token) {
             append_log_line("control_auth_failed".to_string());
-            let _ = writeln!(
-                stream,
-                "{}",
-                response(id, false, None, Some("unauthorized"))
-            );
+            let _ = writeln!(stream, "{}", authentication_failure_response(id));
             return true;
         }
         let Some(_guard) = ActiveFramebufferStream::claim() else {
@@ -1745,11 +1741,7 @@ mod linux {
         let id = parsed.get("id").cloned();
         if !CONTROL_AUTH_DISABLED && parsed.get("token").and_then(Value::as_str) != Some(token) {
             append_log_line("control_auth_failed".to_string());
-            let _ = writeln!(
-                stream,
-                "{}",
-                response(id, false, None, Some("unauthorized"))
-            );
+            let _ = writeln!(stream, "{}", authentication_failure_response(id));
             return true;
         }
         let analytics_mode = parsed
@@ -2673,11 +2665,7 @@ mod linux {
         let id = parsed.get("id").cloned();
         if !CONTROL_AUTH_DISABLED && parsed.get("token").and_then(Value::as_str) != Some(token) {
             append_log_line("control_auth_failed".to_string());
-            let _ = writeln!(
-                stream,
-                "{}",
-                response(id, false, None, Some("unauthorized"))
-            );
+            let _ = writeln!(stream, "{}", authentication_failure_response(id));
             return true;
         }
         timeline_record_once("first_command", format!("cmd={}", cmd.unwrap_or("")));
@@ -2717,11 +2705,7 @@ mod linux {
         let id = parsed.get("id").cloned();
         if !CONTROL_AUTH_DISABLED && parsed.get("token").and_then(Value::as_str) != Some(token) {
             append_log_line("control_auth_failed".to_string());
-            let _ = writeln!(
-                stream,
-                "{}",
-                response(id, false, None, Some("unauthorized"))
-            );
+            let _ = writeln!(stream, "{}", authentication_failure_response(id));
             return true;
         }
         let args = parsed.get("args").cloned().unwrap_or_else(|| json!({}));
@@ -2789,11 +2773,7 @@ mod linux {
         let id = parsed.get("id").cloned();
         if !CONTROL_AUTH_DISABLED && parsed.get("token").and_then(Value::as_str) != Some(token) {
             append_log_line("control_auth_failed".to_string());
-            let _ = writeln!(
-                stream,
-                "{}",
-                response(id, false, None, Some("unauthorized"))
-            );
+            let _ = writeln!(stream, "{}", authentication_failure_response(id));
             return true;
         }
         let args = parsed.get("args").cloned().unwrap_or_else(|| json!({}));
@@ -2825,7 +2805,7 @@ mod linux {
                     append_log_line("control_auth_failed".to_string());
                 }
                 if error.message == "unauthorized" {
-                    return response(error.id, false, None, Some(&error.message));
+                    return authentication_failure_response(error.id);
                 }
                 return failure_response(
                     error.id,
@@ -2951,6 +2931,17 @@ mod linux {
             "failure": failure.to_value(),
         })
         .to_string()
+    }
+
+    pub(super) fn authentication_failure_response(id: Option<Value>) -> String {
+        failure_response(
+            id,
+            "unauthorized",
+            mister_magik_agent_protocol::FailureCode::AuthenticationRequired,
+            mister_magik_agent_protocol::FailurePhase::Authentication,
+            mister_magik_agent_protocol::RetryPolicy::Never,
+            false,
+        )
     }
 
     fn attach_io_operation_evidence(result: &mut Value, evidence: Value) {
@@ -6825,6 +6816,12 @@ mod tests {
         assert_eq!(value["failure"]["code"], "invalid_request");
         assert_eq!(value["failure"]["phase"], "request");
         assert_eq!(mister_magik_agent_protocol::PROTOCOL_VERSION, 2);
+
+        let auth: Value =
+            serde_json::from_str(&linux::authentication_failure_response(Some(json!(10)))).unwrap();
+        assert_eq!(auth["error"], "unauthorized");
+        assert_eq!(auth["failure"]["code"], "authentication_required");
+        assert_eq!(auth["failure"]["phase"], "authentication");
     }
 
     #[test]
