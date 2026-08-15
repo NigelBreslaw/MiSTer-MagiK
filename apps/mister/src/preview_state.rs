@@ -125,8 +125,6 @@ struct PreviewImage {
 
 const CRT_PREPARE_QUEUE_CAP: usize = 2;
 const CRT_PREPARED_CACHE_BYTES: usize = 16 * 1024 * 1024;
-const CRT_PREPARE_WIDTH: usize = 640;
-const CRT_PREPARE_PHYSICAL_HEIGHT: usize = 240;
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq)]
 struct PreparedBackdropIdentity {
@@ -2012,7 +2010,7 @@ impl PreviewState {
         }
     }
 
-    pub fn prepared_backdrop(
+    pub(crate) fn prepared_backdrop(
         &mut self,
         width: usize,
         physical_height: usize,
