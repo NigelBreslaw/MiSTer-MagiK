@@ -97,6 +97,7 @@ fn write_report_value(dir: &Path, report_id: &str, report: &Value) -> io::Result
     )
 }
 
+#[cfg(test)]
 fn write_report_value_with(
     report_io: &impl ReportIo,
     dir: &Path,

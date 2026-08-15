@@ -111,6 +111,7 @@ pub fn prepare_launch_target_with_fault_control(
     prepare_launch_target_with_roots_and_fault_control(launch_target, &roots, fault_control)
 }
 
+#[cfg(test)]
 fn prepare_launch_target_with_roots(
     launch_target: &LaunchTarget,
     roots: &[String],
@@ -379,6 +380,7 @@ fn damaged_archive(
     )
 }
 
+#[cfg(test)]
 fn prepare_launch_ref_with_roots(launch_ref: &str, roots: &[String]) -> Result<String, String> {
     let mut fault_control = mister_magik_catalog::fs_fault::NoopDirectResetFaultControl;
     prepare_launch_ref_with_roots_and_fault_control(launch_ref, roots, &mut fault_control)

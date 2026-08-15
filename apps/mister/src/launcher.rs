@@ -4400,10 +4400,8 @@ pub fn take_launch_return_state() -> Option<LaunchReturnState> {
         &state,
         Err(failure) if failure.kind() == LauncherEffectFailureKind::Unavailable
     );
-    if should_clear {
-        if let Err(failure) = persistence.clear_return_state() {
-            crate::ui_errln!("{}", failure.detail());
-        }
+    if should_clear && let Err(failure) = persistence.clear_return_state() {
+        crate::ui_errln!("{}", failure.detail());
     }
     match state {
         Ok(state) => state,
@@ -4844,6 +4842,7 @@ pub fn try_display_state() -> Result<DisplayCommandState, String> {
         .map_err(|failure| failure.detail().to_string())
 }
 
+#[cfg(test)]
 fn parse_display_state_response(response: &str) -> Result<DisplayCommandState, String> {
     mister_magik_mister_runtime::display_control::parse_state_response(response)
         .map(DisplayCommandState::from)
