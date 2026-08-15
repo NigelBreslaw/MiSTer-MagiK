@@ -89,7 +89,7 @@ cp "$TMP/manifest.good" "$APP/platform-v3.manifest"
 
 # The bootstrap reports a missing hashing tool and refuses to run the manager.
 mkdir "$TMP/bootstrap-bin"
-for tool in grep sed awk chmod env; do
+for tool in dirname grep sed awk chmod env; do
   ln -s "$(command -v "$tool")" "$TMP/bootstrap-bin/$tool"
 done
 if PATH="$TMP/bootstrap-bin" MISTER_MAGIK_TEST_KEYS=down run_manager install >"$TMP/missing-tool.log" 2>&1; then
