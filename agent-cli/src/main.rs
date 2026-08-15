@@ -76,7 +76,7 @@ fn run() -> AgentResult<ExitCode> {
     ) {
         Ok(outcome) => outcome,
         Err(error) => {
-            reporter.emit(EventKind::Failed, "request", &error.to_string(), None)?;
+            reporter.emit_failure("request", &error)?;
             context.evidence.finish(&raw.id, Outcome::Failed)?;
             return Ok(ExitCode::FAILURE);
         }

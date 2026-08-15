@@ -238,6 +238,12 @@ request-failure first-line text and all exit-code decisions remain unchanged;
 the next projection step may therefore record structured metadata without
 reconstructing it from display strings.
 
+Failed progress events and SQLite evidence now retain a redacted structured
+projection (`code`, `phase`, `retry_policy`, and `recovery_required`) through
+nested `AgentError` phases. Human message rendering is unchanged. The nullable
+v12 evidence column leaves old records compatible and intentionally avoids a
+second structured copy of device detail or credentials.
+
 ## Hotspot ownership
 
 The PR advisory report uses stable owner IDs so moves do not erase history.
