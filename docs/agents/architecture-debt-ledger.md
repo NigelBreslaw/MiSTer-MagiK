@@ -174,6 +174,12 @@ module. This was an ownership-only move: launcher frame phases, scheduling,
 presentation, readiness, and posted-frame evidence were not decomposed or
 redesigned.
 
+`app_entry::run` now owns monotonic process state, CPU-profile startup, argument
+capture, panic/identity analytics, command resolution, locks, device effects,
+dispatch, and shutdown behavior. The binary bootstrap retains the allocator
+and the required first-operation installed-layout initialization before calling
+the library entrypoint. The characterized startup order is unchanged.
+
 ## Hotspot ownership
 
 The PR advisory report uses stable owner IDs so moves do not erase history.
@@ -208,6 +214,7 @@ are serialized in this order:
 The following are no-concurrent-edit seams regardless of worktree separation:
 
 - `apps/mister/src/main.rs`
+- `apps/mister/src/app_entry.rs`
 - `apps/mister/src/lib.rs`
 - `apps/mister/src/launcher.rs`
 - `apps/mister/src/ui_runner/launcher_loop.rs`

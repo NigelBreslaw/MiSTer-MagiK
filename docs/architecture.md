@@ -973,9 +973,12 @@ Relevant docs:
 
 ## Build And Module Boundaries
 
-`apps/mister/src/lib.rs` holds host-testable logic without the Slint/UI feature.
-The binary target in `apps/mister/src/main.rs` owns device-only work: FPGA,
-framebuffer, VT, input, audio, and the Slint runtime.
+`apps/mister/src/lib.rs` is the single application module root. Host-testable
+logic remains available without the Slint/UI feature; device-only FPGA,
+framebuffer, VT, input, audio, and Slint modules are library-owned behind their
+existing cfgs. `apps/mister/src/app_entry.rs` owns process state and command
+dispatch. The binary target in `apps/mister/src/main.rs` is only the allocator,
+earliest installed-layout initialization, and the call to `app_entry::run`.
 
 Use `apps/mister/BUILD.md` for build profiles, cross-compilation, FFmpeg, size
 tracking, and CI details. Do not duplicate those details here.

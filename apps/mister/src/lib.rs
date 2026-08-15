@@ -12,6 +12,11 @@ extern crate self as mister_magik_fb;
 #[cfg(feature = "ui")]
 #[doc(hidden)]
 pub mod allocation_metrics;
+#[cfg(feature = "ui")]
+#[doc(hidden)]
+pub mod app_entry;
+#[cfg(feature = "ui")]
+pub(crate) use app_entry::process_start_monotonic_us;
 pub mod arcade_button_overrides;
 #[cfg(any(feature = "ui", feature = "ui-preview"))]
 #[allow(dead_code)]
