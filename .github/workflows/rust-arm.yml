@@ -83,6 +83,34 @@ jobs:
           GROUP_RESULT: ${{ needs.host-dev-group.result }}
         run: test "$GROUP_RESULT" = success
 
+  launcher-visual-matrix:
+    name: launcher-visual-matrix
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - uses: ./.github/actions/setup-agent-cli
+
+      - name: Select application Rust toolchain
+        run: |
+          toolchain="$(sed -n 's/^channel = "\([^"]*\)"/\1/p' apps/mister/rust-toolchain.toml)"
+          test -n "$toolchain"
+          rustup default "$toolchain"
+
+      - name: Compare launcher visual matrix
+        run: scripts/agent ci host-assurance --paths apps/mister/tests/visual-baselines/launcher
+
+      - name: Upload launcher visual mismatches
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: launcher-visual-mismatch-${{ github.run_id }}-${{ github.run_attempt }}
+          path: outputs/launcher-visual-check-*/mismatch/*.png
+          if-no-files-found: ignore
+          retention-days: 14
+
   arm-build:
     name: arm-ci-fast
     # Dependabot PRs cannot access the private build-assets key. Their public
