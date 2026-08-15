@@ -153,6 +153,7 @@ pub mod visual_platform;
 #[cfg(mister_experiments)]
 pub mod experiments {
     pub mod effects;
+    #[cfg(feature = "ui")]
     #[doc(hidden)]
     pub mod preview_transitions;
 }
