@@ -4880,7 +4880,8 @@ pub(super) fn run_launcher_loop(
     let mut orientation_benchmark_completed_at = None;
     let orientation_benchmark_requires_analytics =
         launcher_env_flag("MISTER_ORIENTATION_TRANSITIONS_REQUIRE_ANALYTICS");
-    let mut latch_v5_qualification = LatchV5Qualification::from_env(start);
+    let mut latch_v5_qualification =
+        LatchV5Qualification::from_config(start, launcher_config.qualification());
     let mut latch_v5_bench_state = LauncherBenchState::default();
     let launcher_bench_after_input_script =
         launcher_bench_scenario.is_some() && benchmark_config.after_input_script();

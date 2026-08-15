@@ -127,7 +127,7 @@ mod controller_setup_input_session;
 mod crt_trial_loop;
 #[cfg(mister_experiments)]
 mod experiments;
-mod latch_v5_qualification;
+pub(crate) mod latch_v5_qualification;
 #[allow(dead_code)]
 mod launch_handoff_session;
 mod launcher_automation;

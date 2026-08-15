@@ -11,6 +11,21 @@ pub(super) const CONTROL_PATH: &str = "/tmp/mister-magik/latch-v5-qualification-
 pub(super) const STATE_PATH: &str = "/tmp/mister-magik/latch-v5-qualification-state.json";
 const CONTROL_POLL_INTERVAL: Duration = Duration::from_secs(1);
 const STATE_WRITE_INTERVAL: Duration = Duration::from_secs(1);
+const LATCH_V5_QUALIFICATION: &str = "MISTER_LATCH_V5_QUALIFICATION";
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct QualificationConfig {
+    latch_v5_enabled: bool,
+}
+
+impl QualificationConfig {
+    pub fn capture_with<'a>(mut get: impl FnMut(&str) -> Option<&'a str>) -> Self {
+        Self {
+            latch_v5_enabled: get(LATCH_V5_QUALIFICATION)
+                .is_some_and(|value| matches!(value, "1" | "on" | "true" | "yes")),
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -91,15 +106,9 @@ pub(super) struct LatchV5Qualification {
 }
 
 impl LatchV5Qualification {
-    pub(super) fn from_env(now: Instant) -> Self {
-        let enabled = matches!(
-            std::env::var("MISTER_LATCH_V5_QUALIFICATION")
-                .ok()
-                .as_deref(),
-            Some("1") | Some("on") | Some("true") | Some("yes")
-        );
+    pub(super) fn from_config(now: Instant, config: QualificationConfig) -> Self {
         Self {
-            enabled,
+            enabled: config.latch_v5_enabled,
             started: now,
             stress_class: LatchV5StressClass::Particles,
             catalog_request: 0,
@@ -274,11 +283,24 @@ mod tests {
     use super::*;
 
     #[test]
+    fn qualification_is_armed_only_by_accepted_tokens() {
+        for value in ["1", "on", "true", "yes"] {
+            assert!(
+                QualificationConfig::capture_with(|name| {
+                    (name == LATCH_V5_QUALIFICATION).then_some(value)
+                })
+                .latch_v5_enabled
+            );
+        }
+        assert!(!QualificationConfig::capture_with(|_| Some("invalid")).latch_v5_enabled);
+    }
+
+    #[test]
     fn control_requires_exact_schema_class_and_generation() {
         let now = Instant::now();
         let mut qualification = LatchV5Qualification {
             enabled: true,
-            ..LatchV5Qualification::from_env(now)
+            ..LatchV5Qualification::from_config(now, QualificationConfig::default())
         };
         qualification
             .apply_control(
@@ -304,7 +326,7 @@ mod tests {
         let mut qualification = LatchV5Qualification {
             enabled: true,
             catalog_request: 2,
-            ..LatchV5Qualification::from_env(now)
+            ..LatchV5Qualification::from_config(now, QualificationConfig::default())
         };
         assert!(qualification.take_catalog_request(false));
         assert!(!qualification.take_catalog_request(false));
@@ -320,7 +342,7 @@ mod tests {
         let mut qualification = LatchV5Qualification {
             enabled: true,
             stress_class: LatchV5StressClass::Transitions,
-            ..LatchV5Qualification::from_env(now)
+            ..LatchV5Qualification::from_config(now, QualificationConfig::default())
         };
         qualification.record_present(false, true);
         qualification.record_present(true, true);
