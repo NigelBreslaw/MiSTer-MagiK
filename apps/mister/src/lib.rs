@@ -72,8 +72,9 @@ pub mod snes_artwork;
 pub mod spring_animation;
 #[cfg(any(feature = "ui", feature = "ui-preview"))]
 pub mod startup_particles;
-#[cfg(test)]
-mod test_support;
+#[cfg(any(feature = "ui", test))]
+#[doc(hidden)]
+pub mod test_support;
 #[cfg(any(feature = "ui", feature = "ui-preview"))]
 #[allow(dead_code)]
 pub mod ui_display;

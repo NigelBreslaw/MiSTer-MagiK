@@ -960,10 +960,7 @@ fn render_runtime_environment_reference(registry: &RuntimeEnvironmentRegistry) -
 }
 
 fn check_device_crate_root_ownership(repository: &Path) -> Result<(), String> {
-    const EXPECTED: [(&str, &str); 2] = [
-        ("experiments/effects", "20d-cfg-test"),
-        ("test_support", "20d-cfg-test"),
-    ];
+    const EXPECTED: [(&str, &str); 0] = [];
     let main = read(repository, "apps/mister/src/main.rs")?;
     let library = read(repository, "apps/mister/src/lib.rs")?;
     let experiments = read(repository, "apps/mister/src/experiments/mod.rs")?;
@@ -1671,37 +1668,22 @@ visibility = "internal runtime"
                 .as_nanos()
         ));
         fs::create_dir_all(root.join("apps/mister/src/experiments")).unwrap();
-        let direct = ["test_support"];
-        let declarations = direct
-            .iter()
-            .map(|module| format!("mod {module};\n"))
-            .collect::<String>();
-        fs::write(
-            root.join("apps/mister/src/main.rs"),
-            format!("{declarations}mod experiments;\n"),
-        )
-        .unwrap();
+        fs::write(root.join("apps/mister/src/main.rs"), "mod binary_only;\n").unwrap();
         fs::write(
             root.join("apps/mister/src/lib.rs"),
-            format!("{declarations}pub mod experiments {{\n    pub mod effects;\n}}\n"),
+            "pub mod library_only;\n",
         )
         .unwrap();
-        fs::write(
-            root.join("apps/mister/src/experiments/mod.rs"),
-            "pub(crate) mod effects;\n",
-        )
-        .unwrap();
+        fs::write(root.join("apps/mister/src/experiments/mod.rs"), "").unwrap();
         assert!(check_device_crate_root_ownership(&root).is_ok());
         fs::write(
             root.join("apps/mister/src/main.rs"),
-            format!("{declarations}mod experiments;\nmod unplanned;\n"),
+            "mod binary_only;\nmod unplanned;\n",
         )
         .unwrap();
         fs::write(
             root.join("apps/mister/src/lib.rs"),
-            format!(
-                "{declarations}mod unplanned;\npub mod experiments {{\n    pub mod effects;\n}}\n"
-            ),
+            "pub mod library_only;\nmod unplanned;\n",
         )
         .unwrap();
         let error = check_device_crate_root_ownership(&root).unwrap_err();

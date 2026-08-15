@@ -133,19 +133,14 @@ preserving `MISTER_MAGIK_FAT` test/install-root remapping.
 
 ## Device crate-root migration inventory
 
-The device application now has 2 shared source owners compiled through
-both the library and binary roots. The static device crate-root ownership check
-rejects any addition or unrecorded removal. Migration is library-authoritative:
-each batch adds the required library visibility, changes binary consumers to
-`mister_magik_fb::...`, and removes the binary declaration in the same commit.
-The binary must not become an import authority for the library.
+The device application has zero shared source owners compiled through both the
+library and binary roots. The static device crate-root ownership check rejects
+any new bin/lib redeclaration. Migration is library-authoritative: the binary
+imports shared owners through `mister_magik_fb::...`; it must not become an
+import authority for the library.
 
-| Batch | Current duplicate source owners | Classification |
-|---|---|---|
-| `20d-cfg-test` | `experiments/effects`, `test_support` | cfg/test-only owners |
-
-After each batch, remove exactly its names from the check inventory. Runtime
-modules are migrated only after typed process configuration is captured and
+The inventory was ratcheted after each batch. Runtime modules are migrated only
+after typed process configuration is captured and
 passed through the existing composition root. `ui_runner` remains an
 ownership-only move: readiness, scheduling, frame phases, presentation, and
 the `ready-v2` posted-frame contract do not change in this track.
@@ -154,7 +149,8 @@ Completed: `20a-reporting-identity` moved `artifact_publish`, catalog/latch
 reports, `diagnostic_identity`, and `fallible_log`; `20b-media` moved
 `media_http`, `media_pack_save`, and `video_i420`; `20c-rendering-display`
 moved `arcade_list_renderer`, `bitmap_text`, and `ui_display` to library
-authority.
+authority; `20d-cfg-test` moved `experiments/effects` and `test_support` to
+library authority.
 
 ## Hotspot ownership
 

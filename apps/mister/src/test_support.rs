@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use crate::arcade_catalog::{ArcadeCatalog, ArcadeGameEntry, DEFAULT_ARCADE_ROOT, GameSystemEntry};
 
-pub(crate) struct ArcadeGameFixture {
+pub struct ArcadeGameFixture {
     title: String,
     mra_path: String,
     preview_archive_path: String,
@@ -20,44 +20,44 @@ pub(crate) struct ArcadeGameFixture {
 }
 
 impl ArcadeGameFixture {
-    pub(crate) fn path(mut self, path: impl Into<String>) -> Self {
+    pub fn path(mut self, path: impl Into<String>) -> Self {
         self.mra_path = path.into();
         self
     }
 
-    pub(crate) fn preview(mut self, asset_key: impl Into<String>) -> Self {
+    pub fn preview(mut self, asset_key: impl Into<String>) -> Self {
         self.preview_archive_path =
             "/media/fat/mister-magik/assets/arcade-screenshots.mmlz4b".to_string();
         self.preview_asset_key = asset_key.into();
         self
     }
 
-    pub(crate) fn system_id(mut self, system_id: impl Into<String>) -> Self {
+    pub fn system_id(mut self, system_id: impl Into<String>) -> Self {
         self.system_id = system_id.into();
         self
     }
 
-    pub(crate) fn year(mut self, year: u16) -> Self {
+    pub fn year(mut self, year: u16) -> Self {
         self.year = Some(year);
         self
     }
 
-    pub(crate) fn manufacturer(mut self, manufacturer: impl Into<String>) -> Self {
+    pub fn manufacturer(mut self, manufacturer: impl Into<String>) -> Self {
         self.manufacturer = manufacturer.into();
         self
     }
 
-    pub(crate) fn players(mut self, players: u8) -> Self {
+    pub fn players(mut self, players: u8) -> Self {
         self.players = Some(players);
         self
     }
 
-    pub(crate) fn control(mut self, control: impl Into<String>) -> Self {
+    pub fn control(mut self, control: impl Into<String>) -> Self {
         self.control = control.into();
         self
     }
 
-    pub(crate) fn build(self) -> ArcadeGameEntry {
+    pub fn build(self) -> ArcadeGameEntry {
         let has_preview =
             !self.preview_archive_path.is_empty() && !self.preview_asset_key.is_empty();
         ArcadeGameEntry {
@@ -77,7 +77,7 @@ impl ArcadeGameFixture {
     }
 }
 
-pub(crate) fn arcade_game(title: impl Into<String>) -> ArcadeGameFixture {
+pub fn arcade_game(title: impl Into<String>) -> ArcadeGameFixture {
     let title = title.into();
     let mra_path = format!("{DEFAULT_ARCADE_ROOT}/{title}.mra");
     ArcadeGameFixture {
@@ -95,7 +95,7 @@ pub(crate) fn arcade_game(title: impl Into<String>) -> ArcadeGameFixture {
     }
 }
 
-pub(crate) fn arcade_system(id: impl Into<String>, count: usize) -> GameSystemEntry {
+pub fn arcade_system(id: impl Into<String>, count: usize) -> GameSystemEntry {
     let id = id.into();
     GameSystemEntry {
         title: system_title(&id),
@@ -104,10 +104,7 @@ pub(crate) fn arcade_system(id: impl Into<String>, count: usize) -> GameSystemEn
     }
 }
 
-pub(crate) fn arcade_catalog(
-    games: Vec<ArcadeGameEntry>,
-    systems: Vec<GameSystemEntry>,
-) -> ArcadeCatalog {
+pub fn arcade_catalog(games: Vec<ArcadeGameEntry>, systems: Vec<GameSystemEntry>) -> ArcadeCatalog {
     ArcadeCatalog::new(PathBuf::from(DEFAULT_ARCADE_ROOT), games, systems)
 }
 

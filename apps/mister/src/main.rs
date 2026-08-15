@@ -126,8 +126,6 @@ use mister_magik_mister_runtime::runtime_status;
 mod screenshot_transitions;
 mod search_bench;
 use mister_magik_mister_runtime::settings;
-#[cfg(test)]
-mod test_support;
 #[cfg(mister_experiments)]
 mod ui_effect_bench;
 mod ui_runner;
@@ -135,6 +133,8 @@ mod ui_runner;
 mod video_player;
 use mister_magik_mister_runtime::vt;
 
+#[cfg(test)]
+use mister_magik_fb::test_support;
 pub use mister_magik_fb::{
     arcade_button_overrides, arcade_catalog, command_args, controller_db, framebuffer, input_event,
     input_repeat, input_state, launch_preparation, launcher, launcher_presentation,
