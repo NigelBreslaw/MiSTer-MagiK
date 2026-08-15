@@ -71,18 +71,21 @@ pub fn run(
     emit: impl FnMut(CatalogBuilderEvent),
 ) -> Result<(), String> {
     let paths = CatalogPaths::capture_process();
-    run_with_paths(operation, &paths, emit)
+    let archive_cache = crate::catalog_config::ArchiveCacheConfig::capture_process(&paths);
+    run_with_paths(operation, &paths, &archive_cache, emit)
 }
 
 pub fn run_with_paths(
     operation: BuilderOperation,
     paths: &CatalogPaths,
+    archive_cache: &crate::catalog_config::ArchiveCacheConfig,
     emit: impl FnMut(CatalogBuilderEvent),
 ) -> Result<(), String> {
     run_with_execution_policy_and_paths(
         operation,
         BuilderExecutionPolicy::ForegroundUntilFirstVisible,
         paths,
+        archive_cache,
         emit,
     )
 }
@@ -91,6 +94,7 @@ pub fn run_with_execution_policy_and_paths(
     operation: BuilderOperation,
     execution_policy: BuilderExecutionPolicy,
     paths: &CatalogPaths,
+    archive_cache: &crate::catalog_config::ArchiveCacheConfig,
     emit: impl FnMut(CatalogBuilderEvent),
 ) -> Result<(), String> {
     run_with_execution_policy_and_fault_control_and_paths(
@@ -98,6 +102,7 @@ pub fn run_with_execution_policy_and_paths(
         execution_policy,
         Box::new(crate::fs_fault::NoopDirectResetFaultControl),
         paths,
+        archive_cache,
         emit,
     )
 }
@@ -108,7 +113,8 @@ pub fn run_with_execution_policy(
     emit: impl FnMut(CatalogBuilderEvent),
 ) -> Result<(), String> {
     let paths = CatalogPaths::capture_process();
-    run_with_execution_policy_and_paths(operation, execution_policy, &paths, emit)
+    let archive_cache = crate::catalog_config::ArchiveCacheConfig::capture_process(&paths);
+    run_with_execution_policy_and_paths(operation, execution_policy, &paths, &archive_cache, emit)
 }
 
 pub fn run_with_execution_policy_and_fault_control(
@@ -118,11 +124,13 @@ pub fn run_with_execution_policy_and_fault_control(
     emit: impl FnMut(CatalogBuilderEvent),
 ) -> Result<(), String> {
     let paths = CatalogPaths::capture_process();
+    let archive_cache = crate::catalog_config::ArchiveCacheConfig::capture_process(&paths);
     run_with_execution_policy_and_fault_control_and_paths(
         operation,
         execution_policy,
         fault_control,
         &paths,
+        &archive_cache,
         emit,
     )
 }
@@ -132,6 +140,7 @@ pub fn run_with_execution_policy_and_fault_control_and_paths(
     execution_policy: BuilderExecutionPolicy,
     fault_control: Box<dyn crate::fs_fault::DirectResetFaultControl + Send>,
     paths: &CatalogPaths,
+    archive_cache: &crate::catalog_config::ArchiveCacheConfig,
     mut emit: impl FnMut(CatalogBuilderEvent),
 ) -> Result<(), String> {
     let mut backend = SystemBuilderBackend {
@@ -145,6 +154,7 @@ pub fn run_with_execution_policy_and_fault_control_and_paths(
         arcade_bootstrap_scan: None,
         fault_control,
         paths: paths.clone(),
+        archive_cache: archive_cache.clone(),
     };
     run_with_backend_policy(
         operation,
@@ -869,6 +879,7 @@ struct SystemBuilderBackend {
     arcade_bootstrap_scan: Option<library_db::LibraryRamScanArtifact>,
     fault_control: Box<dyn crate::fs_fault::DirectResetFaultControl + Send>,
     paths: CatalogPaths,
+    archive_cache: crate::catalog_config::ArchiveCacheConfig,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -935,16 +946,18 @@ fn inspect_v3_before_source_check(storage: &Path) -> Result<ProductionRepairStat
 /// republished.
 pub fn remove_default_production_catalog_artifacts() -> Result<usize, String> {
     let paths = CatalogPaths::capture_process();
-    remove_production_catalog_artifacts_with_paths(&paths)
+    let archive_cache = crate::catalog_config::ArchiveCacheConfig::capture_process(&paths);
+    remove_production_catalog_artifacts_with_config(&paths, &archive_cache)
 }
 
-pub fn remove_production_catalog_artifacts_with_paths(
+pub fn remove_production_catalog_artifacts_with_config(
     paths: &CatalogPaths,
+    archive_cache: &crate::catalog_config::ArchiveCacheConfig,
 ) -> Result<usize, String> {
     let storage = paths.sharded_catalog_dir();
     let bootstrap_index = crate::arcade_bootstrap_index::default_path();
     validate_v3_catalog_storage_path(storage)?;
-    let mut removed = library_db::remove_default_catalog_artifacts()?;
+    let mut removed = library_db::remove_catalog_artifacts_with_config(paths, archive_cache)?;
     removed = removed.saturating_add(remove_v3_and_bootstrap_artifacts_at(
         storage,
         &bootstrap_index,
@@ -995,7 +1008,7 @@ impl BuilderBackend for SystemBuilderBackend {
     type Prepared = PreparedBuild;
 
     fn fresh_cleanup(&mut self) -> Result<usize, String> {
-        remove_production_catalog_artifacts_with_paths(&self.paths)
+        remove_production_catalog_artifacts_with_config(&self.paths, &self.archive_cache)
     }
 
     fn set_post_reveal_background(&mut self, background: bool) {
@@ -1136,12 +1149,14 @@ impl BuilderBackend for SystemBuilderBackend {
         let scanned = if self.post_reveal_background {
             library_db::scan_arcade_bootstrap_ram_background_with_paths(
                 &self.paths,
+                &self.archive_cache,
                 Some(progress),
                 Some(&mut scan_events),
             )?
         } else {
             library_db::scan_arcade_bootstrap_ram_foreground_with_paths(
                 &self.paths,
+                &self.archive_cache,
                 Some(progress),
                 Some(&mut scan_events),
             )?
@@ -1204,6 +1219,7 @@ impl BuilderBackend for SystemBuilderBackend {
         let scanned = if background_full_build {
             library_db::scan_library_ram_background_with_paths(
                 &self.paths,
+                &self.archive_cache,
                 Some(progress),
                 Some(&mut scan_events),
                 self.durable_resume,
@@ -1211,6 +1227,7 @@ impl BuilderBackend for SystemBuilderBackend {
         } else {
             library_db::scan_library_ram_foreground_with_paths(
                 &self.paths,
+                &self.archive_cache,
                 Some(progress),
                 Some(&mut scan_events),
                 self.durable_resume,

@@ -3,6 +3,7 @@
 
 //! Immutable process-boundary configuration capture.
 
+use mister_magik_catalog::catalog_config::ArchiveCacheConfig;
 use mister_magik_catalog::device_layout::{CatalogPathOverrides, CatalogPaths, DevicePaths};
 use mister_magik_catalog::fs_fault::FaultConfig;
 use std::collections::{BTreeMap, BTreeSet};
@@ -100,6 +101,7 @@ pub struct LauncherProcessConfig {
     readiness: LauncherReadinessConfig,
     device_paths: DevicePaths,
     catalog_paths: CatalogPaths,
+    archive_cache: ArchiveCacheConfig,
 }
 
 impl LauncherProcessConfig {
@@ -113,6 +115,10 @@ impl LauncherProcessConfig {
 
     pub fn catalog_paths(&self) -> &CatalogPaths {
         &self.catalog_paths
+    }
+
+    pub fn archive_cache(&self) -> &ArchiveCacheConfig {
+        &self.archive_cache
     }
 }
 
@@ -163,6 +169,7 @@ pub struct ProcessConfig {
     command: CommandMode,
     device_paths: DevicePaths,
     catalog_paths: CatalogPaths,
+    archive_cache: ArchiveCacheConfig,
     launcher: Option<LauncherProcessConfig>,
     instrumentation: InstrumentationModifiers,
     fault: Option<FaultConfig>,
@@ -200,10 +207,16 @@ impl ProcessConfig {
             &device_paths,
             CatalogPathOverrides::capture_with(|name| environment.get_path(name)),
         );
+        let archive_cache = ArchiveCacheConfig::capture_with(
+            &catalog_paths,
+            |name| environment.get_path(name),
+            |name| environment.get(name),
+        );
         let launcher = command.captures_launcher().then(|| LauncherProcessConfig {
             readiness: LauncherReadinessConfig::from_snapshot(environment),
             device_paths: device_paths.clone(),
             catalog_paths: catalog_paths.clone(),
+            archive_cache: archive_cache.clone(),
         });
         // Fault capture deliberately remains an early, compatibility-preserving
         // process boundary until C19 applies command and feature gates.
@@ -212,6 +225,7 @@ impl ProcessConfig {
             command,
             device_paths,
             catalog_paths,
+            archive_cache,
             launcher,
             instrumentation,
             fault,
@@ -228,6 +242,10 @@ impl ProcessConfig {
 
     pub fn catalog_paths(&self) -> &CatalogPaths {
         &self.catalog_paths
+    }
+
+    pub fn archive_cache(&self) -> &ArchiveCacheConfig {
+        &self.archive_cache
     }
 
     pub fn launcher(&self) -> Option<&LauncherProcessConfig> {
@@ -373,6 +391,7 @@ mod tests {
                 .expect("ui captures launcher configuration");
             assert_eq!(launcher.device_paths(), config.device_paths());
             assert_eq!(launcher.catalog_paths(), config.catalog_paths());
+            assert_eq!(launcher.archive_cache(), config.archive_cache());
             assert_eq!(launcher.device_paths().main_path(), remap(installed.main));
             assert_eq!(
                 launcher.device_paths().app_path("settings.json"),
@@ -413,6 +432,14 @@ mod tests {
         assert_eq!(
             config.catalog_paths().media_asset_dir(),
             config.device_paths().app_path("assets")
+        );
+        assert_eq!(
+            config.archive_cache().preview_cache_dir(),
+            config.catalog_paths().preview_cache_dir()
+        );
+        assert_eq!(
+            config.archive_cache().sqlite_build_dir(),
+            config.catalog_paths().library_sqlite_build_dir()
         );
     }
 }

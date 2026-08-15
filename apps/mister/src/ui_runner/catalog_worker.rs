@@ -205,6 +205,7 @@ pub(super) fn start_library_catalog_worker(
     initial_cache: CatalogWorkerInitialCache,
     execution_mode: CatalogExecutionMode,
     catalog_paths: mister_magik_catalog::device_layout::CatalogPaths,
+    archive_cache: mister_magik_catalog::catalog_config::ArchiveCacheConfig,
 ) -> mpsc::Receiver<CatalogWorkerMessage> {
     let (tx, rx) = mpsc::channel();
     std::thread::Builder::new()
@@ -587,6 +588,7 @@ pub(super) fn start_library_catalog_worker(
                     plan,
                     builder_execution_mode,
                     &catalog_paths,
+                    &archive_cache,
                     &tx,
                     &mut progress_coalescer,
                 );
@@ -602,6 +604,7 @@ fn run_catalog_builder_in_process(
     plan: CatalogWorkerPlan,
     execution_mode: CatalogExecutionMode,
     catalog_paths: &mister_magik_catalog::device_layout::CatalogPaths,
+    archive_cache: &mister_magik_catalog::catalog_config::ArchiveCacheConfig,
     tx: &mpsc::Sender<CatalogWorkerMessage>,
     progress_coalescer: &mut CatalogProgressCoalescer,
 ) {
@@ -622,6 +625,7 @@ fn run_catalog_builder_in_process(
         execution_policy,
         Box::new(mister_magik_mister_runtime::direct_reset_fault::process_fault_control()),
         catalog_paths,
+        archive_cache,
         |event| {
             handle_embedded_builder_event_with_paths(
                 root,

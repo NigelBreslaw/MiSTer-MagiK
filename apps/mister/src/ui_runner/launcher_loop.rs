@@ -4938,9 +4938,10 @@ pub(super) fn run_launcher_loop(
         launcher_bench_scenario.is_some() && launcher_bench_after_input_script_enabled();
     let launcher_bench_launch_handoff =
         launcher_bench_scenario == Some(LauncherBenchScenario::LaunchHandoff);
-    let mut scheduler = LauncherScheduler::with_catalog_paths(
+    let mut scheduler = LauncherScheduler::with_catalog_config(
         launcher_bench_launch_handoff,
         launcher_config.catalog_paths().clone(),
+        launcher_config.archive_cache().clone(),
     );
     let mut catalog_events = CatalogJobEventBuf::new();
     let mut deferred_catalog_events: VecDeque<CatalogWorkerMessage> = VecDeque::new();

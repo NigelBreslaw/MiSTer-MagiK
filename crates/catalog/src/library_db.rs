@@ -760,12 +760,11 @@ pub(crate) struct LibraryPayloadFile {
     pub(crate) path: String,
 }
 
-pub fn run_scan_bench() {
-    crate::library_cli::run_scan_bench();
-}
-
-pub fn run_scan_bench_with_paths(paths: &crate::device_layout::CatalogPaths) {
-    crate::library_cli::run_scan_bench_with_paths(paths);
+pub fn run_scan_bench_with_config(
+    paths: &crate::device_layout::CatalogPaths,
+    archive_cache: &crate::catalog_config::ArchiveCacheConfig,
+) {
+    crate::library_cli::run_scan_bench_with_config(paths, archive_cache);
 }
 
 pub fn run_sqlite_inspect_cli(args: &[String]) -> Result<String, String> {
@@ -796,6 +795,17 @@ pub fn remove_default_sqlite_database() -> Result<(), String> {
 
 pub fn remove_default_catalog_artifacts() -> Result<usize, String> {
     sqlite_catalog::remove_default_catalog_artifacts()
+}
+
+#[cfg(feature = "builder")]
+pub(crate) fn remove_catalog_artifacts_with_config(
+    paths: &crate::device_layout::CatalogPaths,
+    archive_cache: &crate::catalog_config::ArchiveCacheConfig,
+) -> Result<usize, String> {
+    sqlite_catalog::remove_catalog_artifacts_with_cache_paths(
+        paths.library_sqlite(),
+        archive_cache.sqlite_build_dir(),
+    )
 }
 
 pub fn load_virtual_launch_plans_for_system(
@@ -1034,17 +1044,20 @@ pub fn scan_default_library_ram_foreground_with_events(
 #[cfg(feature = "builder")]
 pub(crate) fn scan_library_ram_foreground_with_paths(
     paths: &crate::device_layout::CatalogPaths,
+    archive_cache: &crate::catalog_config::ArchiveCacheConfig,
     progress: ProgressCallback<'_>,
     scan_events: ScanEventCallback<'_>,
     durable_resume: bool,
 ) -> Result<LibraryRamScanArtifact, String> {
     let cfg = BenchConfig::production_with_paths(paths);
-    Ok(CatalogRefreshPipeline::new(&cfg)
-        .scan_ram_artifact_foreground_with_events_and_durable_resume(
-            progress,
-            scan_events,
-            durable_resume,
-        ))
+    Ok(
+        CatalogRefreshPipeline::with_archive_cache(&cfg, archive_cache)
+            .scan_ram_artifact_foreground_with_events_and_durable_resume(
+                progress,
+                scan_events,
+                durable_resume,
+            ),
+    )
 }
 
 pub fn scan_library_ram_foreground_with_roots(
@@ -1087,6 +1100,7 @@ pub fn scan_arcade_bootstrap_ram_foreground_with_events(
 #[cfg(feature = "builder")]
 pub(crate) fn scan_arcade_bootstrap_ram_foreground_with_paths(
     paths: &crate::device_layout::CatalogPaths,
+    archive_cache: &crate::catalog_config::ArchiveCacheConfig,
     progress: ProgressCallback<'_>,
     scan_events: ScanEventCallback<'_>,
 ) -> Result<LibraryRamScanArtifact, String> {
@@ -1094,8 +1108,10 @@ pub(crate) fn scan_arcade_bootstrap_ram_foreground_with_paths(
         roots: vec![crate::arcade_catalog::DEFAULT_ARCADE_ROOT.to_string()],
         sqlite_path: paths.library_sqlite().to_path_buf(),
     };
-    Ok(CatalogRefreshPipeline::new(&cfg)
-        .scan_ram_artifact_foreground_with_events(progress, scan_events))
+    Ok(
+        CatalogRefreshPipeline::with_archive_cache(&cfg, archive_cache)
+            .scan_ram_artifact_foreground_with_events(progress, scan_events),
+    )
 }
 
 /// CPU0-confined variant used while the first-run animation owns CPU1.
@@ -1119,6 +1135,7 @@ pub fn scan_arcade_bootstrap_ram_background_with_events(
 #[cfg(feature = "builder")]
 pub(crate) fn scan_arcade_bootstrap_ram_background_with_paths(
     paths: &crate::device_layout::CatalogPaths,
+    archive_cache: &crate::catalog_config::ArchiveCacheConfig,
     progress: ProgressCallback<'_>,
     scan_events: ScanEventCallback<'_>,
 ) -> Result<LibraryRamScanArtifact, String> {
@@ -1127,11 +1144,8 @@ pub(crate) fn scan_arcade_bootstrap_ram_background_with_paths(
         sqlite_path: paths.library_sqlite().to_path_buf(),
     };
     Ok(
-        CatalogRefreshPipeline::new(&cfg).scan_ram_artifact_with_events_and_durable_resume(
-            progress,
-            scan_events,
-            false,
-        ),
+        CatalogRefreshPipeline::with_archive_cache(&cfg, archive_cache)
+            .scan_ram_artifact_with_events_and_durable_resume(progress, scan_events, false),
     )
 }
 
@@ -1153,17 +1167,19 @@ pub fn scan_default_library_ram_background_with_events(
 #[cfg(feature = "builder")]
 pub(crate) fn scan_library_ram_background_with_paths(
     paths: &crate::device_layout::CatalogPaths,
+    archive_cache: &crate::catalog_config::ArchiveCacheConfig,
     progress: ProgressCallback<'_>,
     scan_events: ScanEventCallback<'_>,
     durable_resume: bool,
 ) -> Result<LibraryRamScanArtifact, String> {
     let cfg = BenchConfig::production_with_paths(paths);
     Ok(
-        CatalogRefreshPipeline::new(&cfg).scan_ram_artifact_with_events_and_durable_resume(
-            progress,
-            scan_events,
-            durable_resume,
-        ),
+        CatalogRefreshPipeline::with_archive_cache(&cfg, archive_cache)
+            .scan_ram_artifact_with_events_and_durable_resume(
+                progress,
+                scan_events,
+                durable_resume,
+            ),
     )
 }
 
@@ -1343,11 +1359,13 @@ pub(crate) fn sharded_cached_summary(
     })
 }
 
-pub(crate) fn rebuild_sqlite_database(
+pub(crate) fn rebuild_sqlite_database_with_archive_config(
     cfg: &BenchConfig,
+    archive_cache: &crate::catalog_config::ArchiveCacheConfig,
     progress: ProgressCallback<'_>,
 ) -> Result<LibraryRefreshSummary, String> {
-    rebuild_sqlite_database_with_events(cfg, progress, None)
+    CatalogRefreshPipeline::with_archive_cache(cfg, archive_cache)
+        .rebuild_with_events(progress, None)
 }
 
 pub(crate) fn rebuild_sqlite_database_with_events(
@@ -1421,11 +1439,20 @@ pub(crate) fn scan_library(cfg: &BenchConfig) -> LibraryScan {
     LibraryIndexer::new(cfg).scan()
 }
 
+#[cfg(any(test, feature = "builder"))]
 pub(crate) fn scan_library_artifact(
     cfg: &BenchConfig,
     progress: ProgressCallback<'_>,
 ) -> LibraryScanArtifact {
     CatalogRefreshPipeline::new(cfg).scan_artifact(progress)
+}
+
+pub(crate) fn scan_library_artifact_with_archive_config(
+    cfg: &BenchConfig,
+    archive_cache: &crate::catalog_config::ArchiveCacheConfig,
+    progress: ProgressCallback<'_>,
+) -> LibraryScanArtifact {
+    CatalogRefreshPipeline::with_archive_cache(cfg, archive_cache).scan_artifact(progress)
 }
 
 pub(crate) fn scan_library_artifact_with_events(

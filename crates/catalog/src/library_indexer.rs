@@ -31,22 +31,35 @@ const SCAN_PROGRESS_CANDIDATE_BATCH: usize = 50;
 const BOOTSTRAP_PROGRESS_BATCH: usize = 50;
 pub(crate) struct LibraryIndexer<'a> {
     cfg: &'a BenchConfig,
+    archive_reader: crate::catalog_config::ArchiveReaderConfig,
     priority: LibraryScanPriority,
     durable_resume: bool,
 }
 
 impl<'a> LibraryIndexer<'a> {
     pub(crate) fn new(cfg: &'a BenchConfig) -> Self {
+        Self::with_archive_reader(cfg, crate::catalog_config::ArchiveReaderConfig::default())
+    }
+
+    pub(crate) fn with_archive_reader(
+        cfg: &'a BenchConfig,
+        archive_reader: crate::catalog_config::ArchiveReaderConfig,
+    ) -> Self {
         Self {
             cfg,
+            archive_reader,
             priority: LibraryScanPriority::Background,
             durable_resume: library_db::env_bool("MISTER_CATALOG_DURABLE_RESUME"),
         }
     }
 
-    pub(crate) fn foreground(cfg: &'a BenchConfig) -> Self {
+    pub(crate) fn foreground_with_archive_reader(
+        cfg: &'a BenchConfig,
+        archive_reader: crate::catalog_config::ArchiveReaderConfig,
+    ) -> Self {
         Self {
             cfg,
+            archive_reader,
             priority: LibraryScanPriority::Foreground,
             durable_resume: library_db::env_bool("MISTER_CATALOG_DURABLE_RESUME"),
         }
@@ -68,13 +81,16 @@ impl<'a> LibraryIndexer<'a> {
         scan_events: ScanEventCallback<'_>,
     ) -> LibraryScan {
         scan_library_with_progress_and_events(
-            self.cfg,
-            self.priority,
-            CoverageAuditMode::Inline,
+            LibraryScanExecution {
+                cfg: self.cfg,
+                archive_reader: &self.archive_reader,
+                priority: self.priority,
+                audit_mode: CoverageAuditMode::Inline,
+                durable_resume: self.durable_resume,
+            },
             progress,
             scan_events,
             Vec::new(),
-            self.durable_resume,
         )
     }
 
@@ -97,13 +113,16 @@ impl<'a> LibraryIndexer<'a> {
         excluded_targets: Vec<PathBuf>,
     ) -> LibraryScan {
         scan_library_with_progress_and_events(
-            self.cfg,
-            self.priority,
-            CoverageAuditMode::Deferred,
+            LibraryScanExecution {
+                cfg: self.cfg,
+                archive_reader: &self.archive_reader,
+                priority: self.priority,
+                audit_mode: CoverageAuditMode::Deferred,
+                durable_resume: self.durable_resume,
+            },
             progress,
             scan_events,
             excluded_targets,
-            self.durable_resume,
         )
     }
 
@@ -584,15 +603,27 @@ fn file_discovery_source_class(extension: &str) -> &'static str {
     }
 }
 
-fn scan_library_with_progress_and_events(
-    cfg: &BenchConfig,
+struct LibraryScanExecution<'a> {
+    cfg: &'a BenchConfig,
+    archive_reader: &'a crate::catalog_config::ArchiveReaderConfig,
     priority: LibraryScanPriority,
     audit_mode: CoverageAuditMode,
+    durable_resume: bool,
+}
+
+fn scan_library_with_progress_and_events(
+    execution: LibraryScanExecution<'_>,
     mut progress: ProgressCallback<'_>,
     mut scan_events: ScanEventCallback<'_>,
     excluded_targets: Vec<PathBuf>,
-    durable_resume: bool,
 ) -> LibraryScan {
+    let LibraryScanExecution {
+        cfg,
+        archive_reader,
+        priority,
+        audit_mode,
+        durable_resume,
+    } = execution;
     crate::cooperative_work::checkpoint();
     let discover_t = Instant::now();
     let plan_t = Instant::now();
@@ -975,7 +1006,10 @@ fn scan_library_with_progress_and_events(
                     }
                     let collection_t = Instant::now();
                     discoveries.extend(media_metadata::collection_discoveries_from_container(
-                        &f, profile, &rule,
+                        &f,
+                        profile,
+                        &rule,
+                        archive_reader,
                     ));
                     timing.collection_listing_us += collection_t.elapsed().as_micros() as u64;
                     timing.collection_listing_count += 1;

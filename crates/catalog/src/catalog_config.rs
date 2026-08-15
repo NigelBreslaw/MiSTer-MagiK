@@ -3,9 +3,123 @@
 
 //! Catalog source, metadata, and V3 storage path configuration.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 
-use crate::device_layout::current_app_path;
+use crate::device_layout::{CatalogPaths, current_app_path};
+
+const ARCHIVE_READER_ENV: &str = "MISTER_7ZA";
+const ARCHIVE_READER_TIMEOUT_ENV: &str = "MISTER_7ZA_TIMEOUT_SECS";
+const SQLITE_BUILD_DIR_ENV: &str = "MISTER_LIBRARY_SQLITE_BUILD_DIR";
+const DEFAULT_ARCHIVE_READER: &str = "/media/fat/linux/7za";
+const DEFAULT_ARCHIVE_READER_TIMEOUT_SECS: u64 = 1;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ArchiveReaderConfig {
+    archive_reader: PathBuf,
+    archive_reader_timeout: Duration,
+}
+
+impl Default for ArchiveReaderConfig {
+    fn default() -> Self {
+        Self {
+            archive_reader: PathBuf::from(DEFAULT_ARCHIVE_READER),
+            archive_reader_timeout: Duration::from_secs(DEFAULT_ARCHIVE_READER_TIMEOUT_SECS),
+        }
+    }
+}
+
+impl ArchiveReaderConfig {
+    pub fn executable(&self) -> &Path {
+        &self.archive_reader
+    }
+
+    pub fn timeout(&self) -> Duration {
+        self.archive_reader_timeout
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ArchiveCacheConfig {
+    archive_reader: ArchiveReaderConfig,
+    preview_cache_dir: PathBuf,
+    sqlite_build_dir: PathBuf,
+    sqlite_build_dir_override: Option<PathBuf>,
+}
+
+impl ArchiveCacheConfig {
+    pub fn capture_process(paths: &CatalogPaths) -> Self {
+        let archive_reader = std::env::var_os(ARCHIVE_READER_ENV);
+        let archive_reader_timeout = std::env::var(ARCHIVE_READER_TIMEOUT_ENV).ok();
+        let sqlite_build_dir_override = std::env::var_os(SQLITE_BUILD_DIR_ENV);
+        Self::from_values(
+            paths,
+            archive_reader.as_deref().map(Path::new),
+            archive_reader_timeout.as_deref(),
+            sqlite_build_dir_override.as_deref().map(Path::new),
+        )
+    }
+
+    pub fn capture_with<'a>(
+        paths: &CatalogPaths,
+        mut get_path: impl FnMut(&str) -> Option<&'a Path>,
+        mut get: impl FnMut(&str) -> Option<&'a str>,
+    ) -> Self {
+        Self::from_values(
+            paths,
+            get_path(ARCHIVE_READER_ENV),
+            get(ARCHIVE_READER_TIMEOUT_ENV),
+            get_path(SQLITE_BUILD_DIR_ENV),
+        )
+    }
+
+    pub fn from_values(
+        paths: &CatalogPaths,
+        archive_reader: Option<&Path>,
+        archive_reader_timeout: Option<&str>,
+        sqlite_build_dir_override: Option<&Path>,
+    ) -> Self {
+        let timeout_secs = archive_reader_timeout
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(DEFAULT_ARCHIVE_READER_TIMEOUT_SECS)
+            .clamp(1, 120);
+        Self {
+            archive_reader: ArchiveReaderConfig {
+                archive_reader: archive_reader
+                    .map(Path::to_path_buf)
+                    .unwrap_or_else(|| PathBuf::from(DEFAULT_ARCHIVE_READER)),
+                archive_reader_timeout: Duration::from_secs(timeout_secs),
+            },
+            preview_cache_dir: paths.preview_cache_dir().to_path_buf(),
+            sqlite_build_dir: paths.library_sqlite_build_dir().to_path_buf(),
+            sqlite_build_dir_override: sqlite_build_dir_override.map(Path::to_path_buf),
+        }
+    }
+
+    pub fn archive_reader(&self) -> &Path {
+        self.archive_reader.executable()
+    }
+
+    pub fn archive_reader_timeout(&self) -> Duration {
+        self.archive_reader.timeout()
+    }
+
+    pub fn archive_reader_config(&self) -> &ArchiveReaderConfig {
+        &self.archive_reader
+    }
+
+    pub fn preview_cache_dir(&self) -> &Path {
+        &self.preview_cache_dir
+    }
+
+    pub fn sqlite_build_dir(&self) -> &Path {
+        &self.sqlite_build_dir
+    }
+
+    pub fn sqlite_build_dir_override(&self) -> Option<&Path> {
+        self.sqlite_build_dir_override.as_deref()
+    }
+}
 
 pub const DEFAULT_ROOTS: &[&str] = &[
     "/media/fat/_Arcade",
@@ -148,6 +262,53 @@ fn trim_trailing_slash(value: &str) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn catalog_paths() -> CatalogPaths {
+        CatalogPaths::derive(
+            &crate::device_layout::DevicePaths::remapped(
+                mister_magik_platform_manifest_contract::Layout::Public,
+                "/tmp/card",
+            ),
+            crate::device_layout::CatalogPathOverrides::default(),
+        )
+    }
+
+    #[test]
+    fn archive_cache_config_preserves_defaults_overrides_and_timeout_clamping() {
+        let paths = catalog_paths();
+        let defaults = ArchiveCacheConfig::from_values(&paths, None, None, None);
+        assert_eq!(defaults.archive_reader(), Path::new(DEFAULT_ARCHIVE_READER));
+        assert_eq!(
+            defaults.archive_reader_timeout(),
+            Duration::from_secs(DEFAULT_ARCHIVE_READER_TIMEOUT_SECS)
+        );
+        assert_eq!(defaults.preview_cache_dir(), paths.preview_cache_dir());
+        assert_eq!(
+            defaults.sqlite_build_dir(),
+            paths.library_sqlite_build_dir()
+        );
+
+        let configured = ArchiveCacheConfig::from_values(
+            &paths,
+            Some(Path::new("/tmp/7za")),
+            Some("999"),
+            Some(Path::new("/tmp/sqlite-build")),
+        );
+        assert_eq!(configured.archive_reader(), Path::new("/tmp/7za"));
+        assert_eq!(
+            configured.archive_reader_timeout(),
+            Duration::from_secs(120)
+        );
+        assert_eq!(
+            configured.sqlite_build_dir_override(),
+            Some(Path::new("/tmp/sqlite-build"))
+        );
+        let invalid = ArchiveCacheConfig::from_values(&paths, None, Some("invalid"), None);
+        assert_eq!(
+            invalid.archive_reader_timeout(),
+            Duration::from_secs(DEFAULT_ARCHIVE_READER_TIMEOUT_SECS)
+        );
+    }
 
     #[test]
     fn catalog_paths_use_env_overrides_and_defaults() {

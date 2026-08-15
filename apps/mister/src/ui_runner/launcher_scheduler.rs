@@ -575,6 +575,7 @@ enum MediaJobState {
 
 pub(super) struct LauncherScheduler {
     catalog_paths: mister_magik_catalog::device_layout::CatalogPaths,
+    archive_cache: mister_magik_catalog::catalog_config::ArchiveCacheConfig,
     catalog: CatalogJobState,
     catalog_progress: crate::catalog_progress_report::CatalogProgressMonitor,
     search_query: SearchQueryJobState,
@@ -599,19 +600,21 @@ pub(super) struct LauncherScheduler {
 
 impl LauncherScheduler {
     pub(super) fn new(launch_handoff_bench_enabled: bool) -> Self {
-        Self::with_catalog_paths(
-            launch_handoff_bench_enabled,
-            mister_magik_catalog::device_layout::CatalogPaths::capture_process(),
-        )
+        let paths = mister_magik_catalog::device_layout::CatalogPaths::capture_process();
+        let archive_cache =
+            mister_magik_catalog::catalog_config::ArchiveCacheConfig::capture_process(&paths);
+        Self::with_catalog_config(launch_handoff_bench_enabled, paths, archive_cache)
     }
 
-    pub(super) fn with_catalog_paths(
+    pub(super) fn with_catalog_config(
         launch_handoff_bench_enabled: bool,
         catalog_paths: mister_magik_catalog::device_layout::CatalogPaths,
+        archive_cache: mister_magik_catalog::catalog_config::ArchiveCacheConfig,
     ) -> Self {
         let now = Instant::now();
         Self {
             catalog_paths: catalog_paths.clone(),
+            archive_cache,
             catalog: CatalogJobState::Idle,
             catalog_progress: crate::catalog_progress_report::CatalogProgressMonitor::new(now),
             search_query: SearchQueryJobState::Idle,
@@ -895,6 +898,7 @@ impl LauncherScheduler {
             initial_cache,
             execution_mode,
             self.catalog_paths.clone(),
+            self.archive_cache.clone(),
         ));
     }
 

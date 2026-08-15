@@ -20,20 +20,20 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-const DEFAULT_COLLECTION_LISTING_TIMEOUT_SECS: u64 = 1;
 const MGL_PREFIX_BYTES: usize = 32 * 1024;
 
 pub(crate) fn collection_discoveries_from_container(
     file: &FoundFile,
     profile: &LaunchProfile,
     rule: &CollectionRule,
+    archive_reader: &crate::catalog_config::ArchiveReaderConfig,
 ) -> Vec<GameDiscovery> {
     if is_amigavision_archive_path(&file.path.display().to_string()) {
         return Vec::new();
     }
     let mut out = Vec::new();
     for listing in &rule.listings {
-        let text = match collection_listing_text(file, listing) {
+        let text = match collection_listing_text(file, listing, archive_reader) {
             Some(text) => text,
             None => continue,
         };
@@ -130,23 +130,17 @@ fn amigavision_launcher_discovery(file: &FoundFile, profile: &LaunchProfile) -> 
     }
 }
 
-fn collection_listing_text(file: &FoundFile, listing: &CollectionListing) -> Option<String> {
-    let tool = std::env::var("MISTER_7ZA").unwrap_or_else(|_| "/media/fat/linux/7za".to_string());
+fn collection_listing_text(
+    file: &FoundFile,
+    listing: &CollectionListing,
+    archive_reader: &crate::catalog_config::ArchiveReaderConfig,
+) -> Option<String> {
     collection_listing_text_with_tool(
         file,
         listing,
-        Path::new(&tool),
-        collection_listing_timeout(),
+        archive_reader.executable(),
+        archive_reader.timeout(),
     )
-}
-
-fn collection_listing_timeout() -> Duration {
-    let secs = std::env::var("MISTER_7ZA_TIMEOUT_SECS")
-        .ok()
-        .and_then(|value| value.parse::<u64>().ok())
-        .unwrap_or(DEFAULT_COLLECTION_LISTING_TIMEOUT_SECS)
-        .clamp(1, 120);
-    Duration::from_secs(secs)
 }
 
 pub(crate) fn collection_listing_text_with_tool(
@@ -1230,8 +1224,12 @@ mod tests {
             mtime_secs: 1,
         };
 
-        let discoveries =
-            collection_discoveries_from_container(&file, profile, &profile.collection_rules[0]);
+        let discoveries = collection_discoveries_from_container(
+            &file,
+            profile,
+            &profile.collection_rules[0],
+            &crate::catalog_config::ArchiveReaderConfig::default(),
+        );
 
         assert!(discoveries.is_empty());
     }

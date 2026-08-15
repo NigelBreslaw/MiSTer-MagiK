@@ -366,13 +366,17 @@ pub(crate) fn remove_default_sqlite_database() -> Result<(), String> {
 
 pub(crate) fn remove_default_catalog_artifacts() -> Result<usize, String> {
     let sqlite_path = default_sqlite_path();
-    let build_dir = std::env::var_os("MISTER_LIBRARY_SQLITE_BUILD_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(DEFAULT_SQLITE_BUILD_DIR));
+    remove_catalog_artifacts_with_cache_paths(&sqlite_path, Path::new(DEFAULT_SQLITE_BUILD_DIR))
+}
+
+pub(crate) fn remove_catalog_artifacts_with_cache_paths(
+    sqlite_path: &Path,
+    build_dir: &Path,
+) -> Result<usize, String> {
     let snapshot_path = std::env::var_os("MISTER_CATALOG_READY_SNAPSHOT").map(PathBuf::from);
     remove_catalog_artifacts_at(
-        &sqlite_path,
-        &build_dir,
+        sqlite_path,
+        build_dir,
         snapshot_path.as_deref(),
         Path::new("/tmp/mister-magik"),
         &crate::device_layout::current_app_path("rebuild-on-next-boot"),
@@ -1671,35 +1675,24 @@ pub(crate) fn save_sqlite_scan_with_progress_and_stamp_and_projections(
     progress: ProgressCallback<'_>,
 ) -> Result<u64, String> {
     save_sqlite_scan_with_progress_and_stamp_and_projections_with_bench_iteration(
-        path, scan, stamp, root, progress, None,
-    )
-}
-
-pub(crate) fn save_sqlite_scan_with_progress_and_stamp_and_projections_for_bench(
-    path: &Path,
-    scan: &LibraryScan,
-    stamp: &catalog_stamp::CatalogStamp,
-    root: &Path,
-    progress: ProgressCallback<'_>,
-    iteration: usize,
-) -> Result<u64, String> {
-    save_sqlite_scan_with_progress_and_stamp_and_projections_with_bench_iteration(
         path,
         scan,
         stamp,
         root,
         progress,
-        Some(iteration),
+        None,
+        sqlite_build_temp_plan(path),
     )
 }
 
-fn save_sqlite_scan_with_progress_and_stamp_and_projections_with_bench_iteration(
+pub(crate) fn save_sqlite_scan_with_progress_and_stamp_and_projections_with_bench_iteration(
     path: &Path,
     scan: &LibraryScan,
     stamp: &catalog_stamp::CatalogStamp,
     root: &Path,
     progress: ProgressCallback<'_>,
     bench_iteration: Option<usize>,
+    initial_plan: SqliteBuildTempPlan,
 ) -> Result<u64, String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("create sqlite dir: {e}"))?;
@@ -1732,7 +1725,7 @@ fn save_sqlite_scan_with_progress_and_stamp_and_projections_with_bench_iteration
             path,
             scan,
             progress,
-            sqlite_build_temp_plan(path),
+            initial_plan,
             &mut writer,
             bench_iteration,
             &mut fault_control,
@@ -2075,12 +2068,7 @@ pub(crate) fn sqlite_build_error_should_retry_beside_final(error: &str) -> bool 
 }
 
 pub(crate) fn sqlite_build_temp_plan(path: &Path) -> SqliteBuildTempPlan {
-    sqlite_build_temp_plan_for(
-        path,
-        std::env::var_os("MISTER_LIBRARY_SQLITE_BUILD_DIR")
-            .map(PathBuf::from)
-            .as_deref(),
-    )
+    sqlite_build_temp_plan_for(path, None)
 }
 
 pub(crate) fn sqlite_build_temp_plan_for(

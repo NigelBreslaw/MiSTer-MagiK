@@ -353,7 +353,10 @@ fn dispatch_pre_fpga(
         "fb-map-bandwidth" => run_fb_map_bandwidth(),
         #[cfg(feature = "diagnostics")]
         "scanout-slots-map-report" => run_scanout_slots_map_report(),
-        "library-refresh" => run_library_refresh(process_config.catalog_paths()),
+        "library-refresh" => run_library_refresh(
+            process_config.catalog_paths(),
+            process_config.archive_cache(),
+        ),
         "request-library-rebuild" => run_request_library_rebuild(),
         "toggle-simple-joystick-setting" => run_toggle_simple_joystick_setting(),
         "display-persist" => run_display_persist(args),
@@ -496,9 +499,10 @@ fn dispatch_fpga(
         #[cfg(all(feature = "diagnostics", feature = "ui"))]
         "fpga-latch-pattern" => run_fpga_latch_pattern(f),
         #[cfg(feature = "diagnostics")]
-        "library-scan-bench" => {
-            library_db::run_scan_bench_with_paths(process_config.catalog_paths())
-        }
+        "library-scan-bench" => library_db::run_scan_bench_with_config(
+            process_config.catalog_paths(),
+            process_config.archive_cache(),
+        ),
         other => unknown_command(other),
     }
 }
@@ -542,12 +546,16 @@ fn print_experiment_capabilities() {
     }
 }
 
-fn run_library_refresh(paths: &mister_magik_catalog::device_layout::CatalogPaths) {
+fn run_library_refresh(
+    paths: &mister_magik_catalog::device_layout::CatalogPaths,
+    archive_cache: &mister_magik_catalog::catalog_config::ArchiveCacheConfig,
+) {
     let result = mister_magik_catalog::builder_service::run_with_execution_policy_and_fault_control_and_paths(
         mister_magik_catalog::builder_service::BuilderOperation::Rebuild,
         mister_magik_catalog::builder_service::BuilderExecutionPolicy::ForegroundUntilFirstVisible,
         Box::new(mister_magik_mister_runtime::direct_reset_fault::process_fault_control()),
         paths,
+        archive_cache,
         |event| crate::ui_logln!("{}", serde_json::to_string(&event).unwrap_or_default()),
     );
     if let Err(error) = result {

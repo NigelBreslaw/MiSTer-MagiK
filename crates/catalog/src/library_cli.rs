@@ -14,16 +14,17 @@ use rusqlite::Connection;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-pub(crate) fn run_scan_bench() {
-    let cfg = BenchConfig::from_env();
-    run_scan_bench_with_config(cfg);
+pub(crate) fn run_scan_bench_with_config(
+    paths: &crate::device_layout::CatalogPaths,
+    archive_cache: &crate::catalog_config::ArchiveCacheConfig,
+) {
+    run_scan_bench_with_config_values(BenchConfig::from_paths(paths), archive_cache);
 }
 
-pub(crate) fn run_scan_bench_with_paths(paths: &crate::device_layout::CatalogPaths) {
-    run_scan_bench_with_config(BenchConfig::from_paths(paths));
-}
-
-fn run_scan_bench_with_config(cfg: BenchConfig) {
+fn run_scan_bench_with_config_values(
+    cfg: BenchConfig,
+    archive_cache: &crate::catalog_config::ArchiveCacheConfig,
+) {
     let label =
         std::env::var("MISTER_LIBRARY_BENCH_LABEL").unwrap_or_else(|_| "LIB-BENCH".to_string());
     let iterations = std::env::var("MISTER_LIBRARY_BENCH_ITERATIONS")
@@ -55,7 +56,8 @@ fn run_scan_bench_with_config(cfg: BenchConfig) {
         }
 
         let build_t = Instant::now();
-        let artifact = library_db::scan_library_artifact(&cfg, None);
+        let artifact =
+            library_db::scan_library_artifact_with_archive_config(&cfg, archive_cache, None);
         let stats = artifact.stats().clone();
         let build_us = build_t.elapsed().as_micros() as u64;
 
@@ -105,7 +107,8 @@ fn run_scan_bench_with_config(cfg: BenchConfig) {
                 );
             }
             let force_rebuild_t = Instant::now();
-            let summary = library_db::rebuild_sqlite_database(&cfg, None);
+            let summary =
+                library_db::rebuild_sqlite_database_with_archive_config(&cfg, archive_cache, None);
             Some((force_rebuild_t.elapsed().as_micros() as u64, summary))
         } else {
             None

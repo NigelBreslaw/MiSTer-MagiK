@@ -22,11 +22,30 @@ use std::time::Instant;
 
 pub(crate) struct CatalogRefreshPipeline<'a> {
     cfg: &'a BenchConfig,
+    archive_reader: crate::catalog_config::ArchiveReaderConfig,
+    sqlite_build_dir_override: Option<PathBuf>,
 }
 
 impl<'a> CatalogRefreshPipeline<'a> {
     pub(crate) fn new(cfg: &'a BenchConfig) -> Self {
-        Self { cfg }
+        Self {
+            cfg,
+            archive_reader: crate::catalog_config::ArchiveReaderConfig::default(),
+            sqlite_build_dir_override: None,
+        }
+    }
+
+    pub(crate) fn with_archive_cache(
+        cfg: &'a BenchConfig,
+        archive_cache: &crate::catalog_config::ArchiveCacheConfig,
+    ) -> Self {
+        Self {
+            cfg,
+            archive_reader: archive_cache.archive_reader_config().clone(),
+            sqlite_build_dir_override: archive_cache
+                .sqlite_build_dir_override()
+                .map(Path::to_path_buf),
+        }
     }
 
     pub(crate) fn rebuild_with_events(
@@ -76,7 +95,11 @@ impl<'a> CatalogRefreshPipeline<'a> {
         progress: ProgressCallback<'_>,
         scan_events: ScanEventCallback<'_>,
     ) -> LibraryScanArtifact {
-        self.scan_artifact_with_events_using(LibraryIndexer::new(self.cfg), progress, scan_events)
+        self.scan_artifact_with_events_using(
+            LibraryIndexer::with_archive_reader(self.cfg, self.archive_reader.clone()),
+            progress,
+            scan_events,
+        )
     }
 
     pub(crate) fn scan_artifact_foreground_with_events(
@@ -85,7 +108,7 @@ impl<'a> CatalogRefreshPipeline<'a> {
         scan_events: ScanEventCallback<'_>,
     ) -> LibraryScanArtifact {
         self.scan_artifact_with_events_using(
-            LibraryIndexer::foreground(self.cfg),
+            LibraryIndexer::foreground_with_archive_reader(self.cfg, self.archive_reader.clone()),
             progress,
             scan_events,
         )
@@ -97,7 +120,7 @@ impl<'a> CatalogRefreshPipeline<'a> {
         scan_events: ScanEventCallback<'_>,
     ) -> LibraryRamScanArtifact {
         self.scan_ram_artifact_with_events_using(
-            LibraryIndexer::foreground(self.cfg),
+            LibraryIndexer::foreground_with_archive_reader(self.cfg, self.archive_reader.clone()),
             progress,
             scan_events,
         )
@@ -110,7 +133,8 @@ impl<'a> CatalogRefreshPipeline<'a> {
         durable_resume: bool,
     ) -> LibraryRamScanArtifact {
         self.scan_ram_artifact_with_events_using(
-            LibraryIndexer::foreground(self.cfg).with_durable_resume(durable_resume),
+            LibraryIndexer::foreground_with_archive_reader(self.cfg, self.archive_reader.clone())
+                .with_durable_resume(durable_resume),
             progress,
             scan_events,
         )
@@ -123,7 +147,8 @@ impl<'a> CatalogRefreshPipeline<'a> {
         durable_resume: bool,
     ) -> LibraryRamScanArtifact {
         self.scan_ram_artifact_with_events_using(
-            LibraryIndexer::new(self.cfg).with_durable_resume(durable_resume),
+            LibraryIndexer::with_archive_reader(self.cfg, self.archive_reader.clone())
+                .with_durable_resume(durable_resume),
             progress,
             scan_events,
         )
@@ -137,7 +162,7 @@ impl<'a> CatalogRefreshPipeline<'a> {
         scan_events: ScanEventCallback<'_>,
     ) -> LibraryRamScanArtifact {
         self.scan_ram_artifact_with_reused_prefix_using(
-            LibraryIndexer::new(self.cfg),
+            LibraryIndexer::with_archive_reader(self.cfg, self.archive_reader.clone()),
             reused,
             excluded_targets,
             progress,
@@ -153,7 +178,7 @@ impl<'a> CatalogRefreshPipeline<'a> {
         scan_events: ScanEventCallback<'_>,
     ) -> LibraryRamScanArtifact {
         self.scan_ram_artifact_with_reused_prefix_using(
-            LibraryIndexer::foreground(self.cfg),
+            LibraryIndexer::foreground_with_archive_reader(self.cfg, self.archive_reader.clone()),
             reused,
             excluded_targets,
             progress,
@@ -281,25 +306,19 @@ impl<'a> CatalogRefreshPipeline<'a> {
             catalog_t,
             format!("rows={}", catalog.len()),
         );
-        let bytes = match bench_iteration {
-            Some(iteration) => {
-                sqlite_catalog::save_sqlite_scan_with_progress_and_stamp_and_projections_for_bench(
-                    &self.cfg.sqlite_path,
-                    &artifact.scan,
-                    artifact.stamp(),
-                    root,
-                    progress,
-                    iteration,
-                )
-            }
-            None => sqlite_catalog::save_sqlite_scan_with_progress_and_stamp_and_projections(
+        let build_plan = sqlite_catalog::sqlite_build_temp_plan_for(
+            &self.cfg.sqlite_path,
+            self.sqlite_build_dir_override.as_deref(),
+        );
+        let bytes = sqlite_catalog::save_sqlite_scan_with_progress_and_stamp_and_projections_with_bench_iteration(
                 &self.cfg.sqlite_path,
                 &artifact.scan,
                 artifact.stamp(),
                 root,
                 progress,
-            ),
-        }?;
+                bench_iteration,
+                build_plan,
+            )?;
         let import_us = import_t.elapsed().as_micros() as u64;
         Ok(LibraryRefreshCatalog {
             summary: LibraryRefreshSummary {
