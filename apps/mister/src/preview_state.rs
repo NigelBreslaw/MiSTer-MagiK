@@ -158,8 +158,8 @@ struct BackdropPrepareWorker {
 
 impl BackdropPrepareWorker {
     fn new() -> Self {
-        let (tx, requests) = sync_channel(CRT_PREPARE_QUEUE_CAP);
-        let (results, rx) = sync_channel(CRT_PREPARE_QUEUE_CAP);
+        let (tx, requests) = sync_channel::<BackdropPrepareRequest>(CRT_PREPARE_QUEUE_CAP);
+        let (results, rx) = sync_channel::<BackdropPrepareResult>(CRT_PREPARE_QUEUE_CAP);
         std::thread::Builder::new()
             .name("crt-backdrop-preparer".to_string())
             .spawn(move || {
@@ -170,10 +170,10 @@ impl BackdropPrepareWorker {
                             words,
                             stride_pixels,
                         } => prepare_dimmed_rgb565_target(
-                            rgb565_words_as_pixels(words),
+                            rgb565_words_as_pixels(&words),
                             request.image.source_w as usize,
                             request.image.source_h as usize,
-                            *stride_pixels,
+                            stride_pixels,
                             request.identity.width,
                             request.identity.physical_height,
                             request.identity.logical_height,

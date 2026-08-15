@@ -172,7 +172,7 @@ impl CrtBackdropState {
         self.target_row_repeats = std::sync::Arc::from(prepared_rows);
         self.pending_prepare_us = duration_us(prepare_start.elapsed());
         self.pending_prepare_pixels = self.target.len().min(u32::MAX as usize) as u32;
-        self.transition_started = (self.source != self.target).then_some(now);
+        self.transition_started = (self.source.as_slice() != self.target.as_ref()).then_some(now);
         if self.transition_started.is_none() {
             self.retarget.copy_from_slice(&self.target);
             self.retarget_row_repeats
@@ -200,7 +200,8 @@ impl CrtBackdropState {
             self.target_is_plain = true;
             self.pending_prepare_us = 0;
             self.pending_prepare_pixels = 0;
-            self.transition_started = (self.source != self.target).then_some(now);
+            self.transition_started =
+                (self.source.as_slice() != self.target.as_ref()).then_some(now);
             return;
         };
         self.target = prepared.pixels;
