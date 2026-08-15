@@ -4787,10 +4787,6 @@ fn execute_main_command(command: &MainCommand) -> Result<Option<String>, String>
     result
 }
 
-fn execute_main_command_try(command: &MainCommand) -> Result<Option<String>, String> {
-    main_command::try_execute(command).map_err(|error| error.to_string())
-}
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DisplayCommandState {
     pub active: String,
@@ -4821,17 +4817,6 @@ impl From<EffectDisplayTransactionPhase> for DisplayTransactionPhase {
     }
 }
 
-impl From<DisplayTransactionPhase> for EffectDisplayTransactionPhase {
-    fn from(phase: DisplayTransactionPhase) -> Self {
-        match phase {
-            DisplayTransactionPhase::Idle => Self::Idle,
-            DisplayTransactionPhase::Provisional => Self::Provisional,
-            DisplayTransactionPhase::Persisting => Self::Persisting,
-            DisplayTransactionPhase::Failed => Self::Failed,
-        }
-    }
-}
-
 impl From<EffectDisplayState> for DisplayCommandState {
     fn from(state: EffectDisplayState) -> Self {
         Self {
@@ -4845,156 +4830,33 @@ impl From<EffectDisplayState> for DisplayCommandState {
     }
 }
 
-impl From<DisplayCommandState> for EffectDisplayState {
-    fn from(state: DisplayCommandState) -> Self {
-        Self {
-            active_mode: state.active,
-            pending_mode: state.pending,
-            remaining_secs: state.remaining,
-            phase: state.phase.into(),
-            error: state.error,
-            return_to_settings: state.return_to_settings,
-        }
-    }
-}
-
-struct LauncherDisplayControl;
-
-impl LauncherDisplayControl {
-    fn command_failure(detail: impl Into<String>) -> LauncherEffectFailure {
-        LauncherEffectFailure::new(LauncherEffectFailureKind::Unavailable, detail)
-    }
-
-    fn response_failure(detail: impl Into<String>) -> LauncherEffectFailure {
-        LauncherEffectFailure::new(LauncherEffectFailureKind::MalformedResponse, detail)
-    }
-}
-
-impl DisplayControl for LauncherDisplayControl {
-    fn state(
-        &mut self,
-        read: DisplayStateRead,
-    ) -> Result<EffectDisplayState, LauncherEffectFailure> {
-        let response = match read {
-            DisplayStateRead::Wait => execute_main_command(&MainCommand::DisplayState),
-            DisplayStateRead::Try => execute_main_command_try(&MainCommand::DisplayState),
-        }
-        .map_err(Self::command_failure)?
-        .ok_or_else(|| Self::response_failure("MiSTer display command returned no reply"))?;
-        parse_display_state_response(&response)
-            .map(EffectDisplayState::from)
-            .map_err(Self::response_failure)
-    }
-
-    fn apply(&mut self, mode: &str) -> Result<(), LauncherEffectFailure> {
-        if mister_magik_mister_runtime::display_resolution::find(mode).is_none() {
-            return Err(Self::response_failure("unsupported display mode"));
-        }
-        execute_main_command(&MainCommand::DisplayApply {
-            mode: mode.to_string(),
-        })
-        .map(|_| ())
-        .map_err(Self::command_failure)
-    }
-
-    fn confirm(&mut self) -> Result<(), LauncherEffectFailure> {
-        execute_main_command(&MainCommand::DisplayConfirm)
-            .map(|_| ())
-            .map_err(Self::command_failure)
-    }
-
-    fn cancel(&mut self) -> Result<(), LauncherEffectFailure> {
-        execute_main_command(&MainCommand::DisplayCancel)
-            .map(|_| ())
-            .map_err(Self::command_failure)
-    }
-}
-
 pub fn display_state() -> Result<DisplayCommandState, String> {
-    LauncherDisplayControl
+    mister_magik_mister_runtime::display_control::MainDisplayControl
         .state(DisplayStateRead::Wait)
         .map(DisplayCommandState::from)
         .map_err(|failure| failure.detail().to_string())
 }
 
 pub fn try_display_state() -> Result<DisplayCommandState, String> {
-    LauncherDisplayControl
+    mister_magik_mister_runtime::display_control::MainDisplayControl
         .state(DisplayStateRead::Try)
         .map(DisplayCommandState::from)
         .map_err(|failure| failure.detail().to_string())
 }
 
 fn parse_display_state_response(response: &str) -> Result<DisplayCommandState, String> {
-    let mut active = None;
-    let mut pending = None;
-    let mut remaining = 0;
-    let mut schema = None;
-    let mut phase = DisplayTransactionPhase::Idle;
-    let mut error = None;
-    let mut return_to_settings = false;
-    for field in response.split_whitespace() {
-        if let Some(value) = field.strip_prefix("schema=") {
-            schema = Some(value);
-        }
-        if let Some(value) = field.strip_prefix("active=") {
-            active = Some(value.to_owned());
-        }
-        if let Some(value) = field.strip_prefix("pending=") {
-            pending = (value != "none").then(|| value.to_owned());
-        }
-        if let Some(value) = field.strip_prefix("remaining=") {
-            remaining = value
-                .parse::<u8>()
-                .unwrap_or(0)
-                .min(DISPLAY_CONFIRM_SECONDS);
-        }
-        if let Some(value) = field.strip_prefix("phase=") {
-            phase = match value {
-                "idle" => DisplayTransactionPhase::Idle,
-                "provisional" => DisplayTransactionPhase::Provisional,
-                "persisting" => DisplayTransactionPhase::Persisting,
-                "failed" => DisplayTransactionPhase::Failed,
-                _ => return Err("display state has unsupported phase".into()),
-            };
-        }
-        if let Some(value) = field.strip_prefix("error=") {
-            error = (value != "none").then(|| value.to_owned());
-        }
-        if let Some(value) = field.strip_prefix("return=") {
-            return_to_settings = match value {
-                "none" => false,
-                "settings" => true,
-                _ => return Err("display state has unsupported return screen".into()),
-            };
-        }
-    }
-    if schema != Some("1") {
-        return Err("display state has unsupported schema".into());
-    }
-    if pending
-        .as_deref()
-        .is_some_and(|id| mister_magik_mister_runtime::display_resolution::find(id).is_none())
-    {
-        return Err("display state has unsupported pending mode".into());
-    }
-    Ok(DisplayCommandState {
-        active: active.ok_or("display state missing active mode")?,
-        pending,
-        remaining,
-        phase,
-        error,
-        return_to_settings,
-    })
+    mister_magik_mister_runtime::display_control::parse_state_response(response)
+        .map(DisplayCommandState::from)
 }
 
 pub fn apply_display_resolution(id: &str) -> Result<(), String> {
-    LauncherDisplayControl
+    mister_magik_mister_runtime::display_control::MainDisplayControl
         .apply(id)
         .map_err(|failure| failure.detail().to_string())
 }
 
 pub fn confirm_display_resolution() -> Result<(), String> {
-    LauncherDisplayControl
+    mister_magik_mister_runtime::display_control::MainDisplayControl
         .confirm()
         .map_err(|failure| failure.detail().to_string())
 }
@@ -5002,7 +4864,7 @@ pub fn confirm_display_resolution() -> Result<(), String> {
 pub fn confirm_display_resolution_and_wait(
     timeout: Duration,
 ) -> Result<DisplayCommandState, String> {
-    let mut display = LauncherDisplayControl;
+    let mut display = mister_magik_mister_runtime::display_control::MainDisplayControl;
     display
         .confirm()
         .map_err(|failure| failure.detail().to_string())?;
@@ -5025,7 +4887,7 @@ pub fn confirm_display_resolution_and_wait(
 }
 
 pub fn cancel_display_resolution() -> Result<(), String> {
-    LauncherDisplayControl
+    mister_magik_mister_runtime::display_control::MainDisplayControl
         .cancel()
         .map_err(|failure| failure.detail().to_string())
 }
