@@ -22,9 +22,10 @@ use crate::settings::{MagikSettings, ScreenOrientation};
 use crate::spring_animation::{SpringAnimation, SpringConfiguration};
 use mister_magik_catalog::media_identity::screenshot_reset_deletes_filename;
 use mister_magik_core::launcher_effects::{
-    LaunchHandoff, LaunchHandoffOutcome, LaunchHandoffRequest,
-    LaunchSelection as EffectLaunchSelection, LauncherEffectFailure, LauncherEffectFailureKind,
-    StructuredLaunchSelection as EffectStructuredLaunchSelection,
+    DisplayControl, DisplayState as EffectDisplayState, DisplayStateRead,
+    DisplayTransactionPhase as EffectDisplayTransactionPhase, LaunchHandoff, LaunchHandoffOutcome,
+    LaunchHandoffRequest, LaunchSelection as EffectLaunchSelection, LauncherEffectFailure,
+    LauncherEffectFailureKind, StructuredLaunchSelection as EffectStructuredLaunchSelection,
 };
 use mister_magik_mister_runtime::display_resolution::{DISPLAY_RESOLUTIONS, DisplayResolution};
 use mister_magik_mister_runtime::main_command::{self, MainCommand};
@@ -4717,16 +4718,118 @@ pub enum DisplayTransactionPhase {
     Failed,
 }
 
+impl From<EffectDisplayTransactionPhase> for DisplayTransactionPhase {
+    fn from(phase: EffectDisplayTransactionPhase) -> Self {
+        match phase {
+            EffectDisplayTransactionPhase::Idle => Self::Idle,
+            EffectDisplayTransactionPhase::Provisional => Self::Provisional,
+            EffectDisplayTransactionPhase::Persisting => Self::Persisting,
+            EffectDisplayTransactionPhase::Failed => Self::Failed,
+        }
+    }
+}
+
+impl From<DisplayTransactionPhase> for EffectDisplayTransactionPhase {
+    fn from(phase: DisplayTransactionPhase) -> Self {
+        match phase {
+            DisplayTransactionPhase::Idle => Self::Idle,
+            DisplayTransactionPhase::Provisional => Self::Provisional,
+            DisplayTransactionPhase::Persisting => Self::Persisting,
+            DisplayTransactionPhase::Failed => Self::Failed,
+        }
+    }
+}
+
+impl From<EffectDisplayState> for DisplayCommandState {
+    fn from(state: EffectDisplayState) -> Self {
+        Self {
+            active: state.active_mode,
+            pending: state.pending_mode,
+            remaining: state.remaining_secs,
+            phase: state.phase.into(),
+            error: state.error,
+            return_to_settings: state.return_to_settings,
+        }
+    }
+}
+
+impl From<DisplayCommandState> for EffectDisplayState {
+    fn from(state: DisplayCommandState) -> Self {
+        Self {
+            active_mode: state.active,
+            pending_mode: state.pending,
+            remaining_secs: state.remaining,
+            phase: state.phase.into(),
+            error: state.error,
+            return_to_settings: state.return_to_settings,
+        }
+    }
+}
+
+struct LauncherDisplayControl;
+
+impl LauncherDisplayControl {
+    fn command_failure(detail: impl Into<String>) -> LauncherEffectFailure {
+        LauncherEffectFailure::new(LauncherEffectFailureKind::Unavailable, detail)
+    }
+
+    fn response_failure(detail: impl Into<String>) -> LauncherEffectFailure {
+        LauncherEffectFailure::new(LauncherEffectFailureKind::MalformedResponse, detail)
+    }
+}
+
+impl DisplayControl for LauncherDisplayControl {
+    fn state(
+        &mut self,
+        read: DisplayStateRead,
+    ) -> Result<EffectDisplayState, LauncherEffectFailure> {
+        let response = match read {
+            DisplayStateRead::Wait => execute_main_command(&MainCommand::DisplayState),
+            DisplayStateRead::Try => execute_main_command_try(&MainCommand::DisplayState),
+        }
+        .map_err(Self::command_failure)?
+        .ok_or_else(|| Self::response_failure("MiSTer display command returned no reply"))?;
+        parse_display_state_response(&response)
+            .map(EffectDisplayState::from)
+            .map_err(Self::response_failure)
+    }
+
+    fn apply(&mut self, mode: &str) -> Result<(), LauncherEffectFailure> {
+        if mister_magik_mister_runtime::display_resolution::find(mode).is_none() {
+            return Err(Self::response_failure("unsupported display mode"));
+        }
+        execute_main_command(&MainCommand::DisplayApply {
+            mode: mode.to_string(),
+        })
+        .map(|_| ())
+        .map_err(Self::command_failure)
+    }
+
+    fn confirm(&mut self) -> Result<(), LauncherEffectFailure> {
+        execute_main_command(&MainCommand::DisplayConfirm)
+            .map(|_| ())
+            .map_err(Self::command_failure)
+    }
+
+    fn cancel(&mut self) -> Result<(), LauncherEffectFailure> {
+        execute_main_command(&MainCommand::DisplayCancel)
+            .map(|_| ())
+            .map_err(Self::command_failure)
+    }
+}
+
 pub fn display_state() -> Result<DisplayCommandState, String> {
-    let response = execute_main_command(&MainCommand::DisplayState)?
-        .ok_or_else(|| "MiSTer display command returned no reply".to_string())?;
-    parse_display_state_response(&response)
+    LauncherDisplayControl
+        .state(DisplayStateRead::Wait)
+        .map(DisplayCommandState::from)
+        .map_err(|failure| failure.detail().to_string())
 }
 
 pub fn try_display_state() -> Result<DisplayCommandState, String> {
-    let response = execute_main_command_try(&MainCommand::DisplayState)?
-        .ok_or_else(|| "MiSTer display command returned no reply".to_string())?;
-    parse_display_state_response(&response)
+    LauncherDisplayControl
+        .state(DisplayStateRead::Try)
+        .map(DisplayCommandState::from)
+        .map_err(|failure| failure.detail().to_string())
 }
 
 fn parse_display_state_response(response: &str) -> Result<DisplayCommandState, String> {
@@ -4793,26 +4896,30 @@ fn parse_display_state_response(response: &str) -> Result<DisplayCommandState, S
 }
 
 pub fn apply_display_resolution(id: &str) -> Result<(), String> {
-    if mister_magik_mister_runtime::display_resolution::find(id).is_none() {
-        return Err("unsupported display mode".into());
-    }
-    execute_main_command(&MainCommand::DisplayApply {
-        mode: id.to_string(),
-    })
-    .map(|_| ())
+    LauncherDisplayControl
+        .apply(id)
+        .map_err(|failure| failure.detail().to_string())
 }
 
 pub fn confirm_display_resolution() -> Result<(), String> {
-    execute_main_command(&MainCommand::DisplayConfirm).map(|_| ())
+    LauncherDisplayControl
+        .confirm()
+        .map_err(|failure| failure.detail().to_string())
 }
 
 pub fn confirm_display_resolution_and_wait(
     timeout: Duration,
 ) -> Result<DisplayCommandState, String> {
-    confirm_display_resolution()?;
+    let mut display = LauncherDisplayControl;
+    display
+        .confirm()
+        .map_err(|failure| failure.detail().to_string())?;
     let started = Instant::now();
     while started.elapsed() < timeout {
-        let state = display_state()?;
+        let state = display
+            .state(DisplayStateRead::Wait)
+            .map(DisplayCommandState::from)
+            .map_err(|failure| failure.detail().to_string())?;
         match state.phase {
             DisplayTransactionPhase::Idle if state.pending.is_none() => return Ok(state),
             DisplayTransactionPhase::Failed => return Ok(state),
@@ -4826,7 +4933,9 @@ pub fn confirm_display_resolution_and_wait(
 }
 
 pub fn cancel_display_resolution() -> Result<(), String> {
-    execute_main_command(&MainCommand::DisplayCancel).map(|_| ())
+    LauncherDisplayControl
+        .cancel()
+        .map_err(|failure| failure.detail().to_string())
 }
 
 trait LaunchIo {
