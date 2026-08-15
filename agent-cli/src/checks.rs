@@ -765,12 +765,37 @@ struct RuntimeEnvironmentControl {
     value_shape: String,
     default_behavior: String,
     visibility: String,
+    #[serde(default)]
+    parser: Option<String>,
+    #[serde(default)]
+    typed_default: Option<toml::Value>,
+    #[serde(default)]
+    scope: Option<String>,
+    #[serde(default)]
+    conflicts: Vec<String>,
+    #[serde(default)]
+    sensitivity: Option<String>,
+    #[serde(default)]
+    aliases: Vec<String>,
+    #[serde(default)]
+    documentation: Option<RuntimeEnvironmentDocumentation>,
+}
+
+#[derive(Clone, serde::Deserialize)]
+struct RuntimeEnvironmentDocumentation {
+    summary: String,
+    #[serde(default)]
+    accepted_values: Vec<String>,
+    value_policy: String,
 }
 
 fn check_runtime_environment(repository: &Path) -> Result<(), String> {
     const REGISTRY_PATH: &str = "apps/mister/config/runtime-environment.toml";
     const REFERENCE_PATH: &str = "docs/reference/mister-runtime-environment.md";
-    const FORMAT: &str = "mister-magik-runtime-environment-v1";
+    const FORMATS: &[&str] = &[
+        "mister-magik-runtime-environment-v1",
+        "mister-magik-runtime-environment-v2",
+    ];
     const SOURCE_ROOTS: &[&str] = &[
         "apps/mister/src",
         "mister/platform/runtime/src",
@@ -781,9 +806,10 @@ fn check_runtime_environment(repository: &Path) -> Result<(), String> {
     let text = read(repository, REGISTRY_PATH)?;
     let mut registry: RuntimeEnvironmentRegistry = toml::from_str(&text)
         .map_err(|error| format!("runtime_environment_registry_invalid: {error}"))?;
-    if registry.format != FORMAT {
+    if !FORMATS.contains(&registry.format.as_str()) {
         return Err(format!(
-            "runtime_environment_format_invalid: expected {FORMAT}"
+            "runtime_environment_format_invalid: expected {}",
+            FORMATS.join(" or ")
         ));
     }
     if registry.source_roots != SOURCE_ROOTS {
@@ -825,9 +851,33 @@ fn check_runtime_environment(repository: &Path) -> Result<(), String> {
             || control.value_shape.is_empty()
             || control.default_behavior.is_empty()
             || control.visibility.is_empty()
+            || validate_runtime_environment_metadata(control).is_err()
         {
             return Err(format!(
                 "runtime_environment_control_invalid: {}",
+                control.name
+            ));
+        }
+    }
+    let mut accepted_names = registered.clone();
+    for control in &registry.control {
+        for alias in &control.aliases {
+            if !valid_environment_name(alias) || !accepted_names.insert(alias.clone()) {
+                return Err(format!(
+                    "runtime_environment_alias_invalid: {} alias {}",
+                    control.name, alias
+                ));
+            }
+        }
+    }
+    for control in &registry.control {
+        if control
+            .conflicts
+            .iter()
+            .any(|conflict| conflict == &control.name || !accepted_names.contains(conflict))
+        {
+            return Err(format!(
+                "runtime_environment_conflict_invalid: {}",
                 control.name
             ));
         }
@@ -846,7 +896,8 @@ fn check_runtime_environment(repository: &Path) -> Result<(), String> {
         }
     }
     let unregistered: Vec<_> = actual
-        .difference(&registered)
+        .iter()
+        .filter(|name| !accepted_names.contains(*name))
         .filter(|name| !registered_by_prefix(name, &registry.dynamic_prefix))
         .cloned()
         .collect();
@@ -888,6 +939,72 @@ fn check_runtime_environment(repository: &Path) -> Result<(), String> {
         ));
     }
     Ok(())
+}
+
+fn validate_runtime_environment_metadata(control: &RuntimeEnvironmentControl) -> Result<(), ()> {
+    const PARSERS: &[&str] = &[
+        "bool",
+        "i64",
+        "u64",
+        "f64",
+        "string",
+        "path",
+        "path-list",
+        "enum",
+    ];
+    const SCOPES: &[&str] = &["process", "command", "instrumentation", "external", "build"];
+    const SENSITIVITY: &[&str] = &["public", "path", "secret", "volatile-token"];
+    if control
+        .parser
+        .as_deref()
+        .is_some_and(|parser| !PARSERS.contains(&parser))
+        || control
+            .scope
+            .as_deref()
+            .is_some_and(|scope| !SCOPES.contains(&scope))
+        || control
+            .sensitivity
+            .as_deref()
+            .is_some_and(|value| !SENSITIVITY.contains(&value))
+        || control
+            .typed_default
+            .as_ref()
+            .is_some_and(|value| !typed_default_matches(control.parser.as_deref(), value))
+        || control.typed_default.is_some() && control.parser.is_none()
+    {
+        return Err(());
+    }
+    if control.documentation.as_ref().is_some_and(|documentation| {
+        documentation.summary.trim().is_empty()
+            || !["document", "redact", "omit"].contains(&documentation.value_policy.as_str())
+            || documentation
+                .accepted_values
+                .iter()
+                .any(|value| value.trim().is_empty())
+            || documentation
+                .accepted_values
+                .iter()
+                .collect::<BTreeSet<_>>()
+                .len()
+                != documentation.accepted_values.len()
+    }) {
+        return Err(());
+    }
+    Ok(())
+}
+
+fn typed_default_matches(parser: Option<&str>, value: &toml::Value) -> bool {
+    match parser {
+        Some("bool") => value.is_bool(),
+        Some("i64") => value.is_integer(),
+        Some("u64") => value.as_integer().is_some_and(|value| value >= 0),
+        Some("f64") => value.is_float(),
+        Some("string" | "path" | "enum") => value.is_str(),
+        Some("path-list") => value
+            .as_array()
+            .is_some_and(|values| values.iter().all(toml::Value::is_str)),
+        _ => false,
+    }
 }
 
 fn mister_environment_names(text: &str) -> Vec<String> {
@@ -946,19 +1063,54 @@ fn render_runtime_environment_reference(registry: &RuntimeEnvironmentRegistry) -
         registry.baseline.unique_names,
         registry.baseline.external_build_names
     ));
-    output.push_str("| Name | Classification | Shape | Default behavior | Visibility | Owner |\n|---|---|---|---|---|---|\n");
+    output.push_str("| Name | Classification | Shape | Default behavior | Parser | Typed default | Scope | Conflicts | Sensitivity | Aliases | Documentation | Visibility | Owner |\n|---|---|---|---|---|---|---|---|---|---|---|---|---|\n");
     for control in &registry.control {
+        let documentation = control
+            .documentation
+            .as_ref()
+            .map(|documentation| {
+                let accepted = if documentation.accepted_values.is_empty() {
+                    String::new()
+                } else {
+                    format!("; values: {}", documentation.accepted_values.join(", "))
+                };
+                format!(
+                    "{}{}; value policy: {}",
+                    documentation.summary, accepted, documentation.value_policy
+                )
+            })
+            .unwrap_or_else(|| "—".into());
         output.push_str(&format!(
-            "| `{}` | {} | {} | {} | {} | `{}` |\n",
+            "| `{}` | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | `{}` |\n",
             control.name,
             control.classification,
             control.value_shape,
             control.default_behavior.replace('|', "\\|"),
+            control.parser.as_deref().unwrap_or("—"),
+            control
+                .typed_default
+                .as_ref()
+                .map(ToString::to_string)
+                .unwrap_or_else(|| "—".into())
+                .replace('|', "\\|"),
+            control.scope.as_deref().unwrap_or("—"),
+            metadata_list(&control.conflicts),
+            control.sensitivity.as_deref().unwrap_or("—"),
+            metadata_list(&control.aliases),
+            documentation.replace('|', "\\|"),
             control.visibility,
             control.owner
         ));
     }
     output
+}
+
+fn metadata_list(values: &[String]) -> String {
+    if values.is_empty() {
+        "—".into()
+    } else {
+        values.join(", ")
+    }
 }
 
 fn check_device_crate_root_ownership(repository: &Path) -> Result<(), String> {
@@ -1832,6 +1984,58 @@ visibility = "internal runtime"
         assert!(error.contains("runtime_environment_unregistered: MISTER_TWO"));
         assert!(error.contains("owning module"));
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn runtime_environment_v2_accepts_every_parser_and_scope() {
+        let fixtures = [
+            ("bool", "true", "process"),
+            ("i64", "-2", "command"),
+            ("u64", "2", "instrumentation"),
+            ("f64", "1.5", "external"),
+            ("string", "\"value\"", "build"),
+            ("path", "\"/tmp/value\"", "process"),
+            ("path-list", "[\"/tmp/one\", \"/tmp/two\"]", "command"),
+            ("enum", "\"auto\"", "instrumentation"),
+        ];
+        for (parser, default, scope) in fixtures {
+            let fixture = format!(
+                r#"name = "MISTER_FIXTURE"
+owner = "apps/mister/src/config.rs"
+classification = "test"
+value_shape = "fixture"
+default_behavior = "fixture"
+visibility = "fixture"
+parser = "{parser}"
+typed_default = {default}
+scope = "{scope}"
+conflicts = ["MISTER_OTHER"]
+sensitivity = "public"
+aliases = ["MISTER_FIXTURE_ALIAS"]
+documentation = {{ summary = "Fixture metadata", accepted_values = ["one", "two"], value_policy = "document" }}
+"#
+            );
+            let control: RuntimeEnvironmentControl = toml::from_str(&fixture).unwrap();
+            assert!(
+                validate_runtime_environment_metadata(&control).is_ok(),
+                "metadata fixture rejected for parser={parser} scope={scope}"
+            );
+        }
+
+        let invalid: RuntimeEnvironmentControl = toml::from_str(
+            r#"name = "MISTER_FIXTURE"
+owner = "apps/mister/src/config.rs"
+classification = "test"
+value_shape = "fixture"
+default_behavior = "fixture"
+visibility = "fixture"
+parser = "bool"
+typed_default = "not-a-bool"
+scope = "process"
+"#,
+        )
+        .unwrap();
+        assert!(validate_runtime_environment_metadata(&invalid).is_err());
     }
 
     #[test]

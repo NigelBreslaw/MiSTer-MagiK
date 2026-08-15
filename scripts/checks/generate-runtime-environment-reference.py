@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 import argparse
+import json
 from pathlib import Path
 import sys
 import tomllib
@@ -11,6 +12,31 @@ import tomllib
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_REGISTRY = ROOT / "apps/mister/config/runtime-environment.toml"
 DEFAULT_OUTPUT = ROOT / "docs/reference/mister-runtime-environment.md"
+
+
+def typed_default(value: object) -> str:
+    if value is None:
+        return "—"
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (str, list)):
+        return json.dumps(value, ensure_ascii=False)
+    return str(value)
+
+
+def metadata_list(values: list[str] | None) -> str:
+    return ", ".join(values) if values else "—"
+
+
+def documentation_text(documentation: dict | None) -> str:
+    if not documentation:
+        return "—"
+    accepted = documentation.get("accepted_values", [])
+    values = f"; values: {', '.join(accepted)}" if accepted else ""
+    return (
+        f"{documentation['summary']}{values}; "
+        f"value policy: {documentation['value_policy']}"
+    )
 
 
 def render(registry: dict) -> str:
@@ -27,14 +53,23 @@ def render(registry: dict) -> str:
             f"{baseline['external_build_names']} external/build-time names."
         ),
         "",
-        "| Name | Classification | Shape | Default behavior | Visibility | Owner |",
-        "|---|---|---|---|---|---|",
+        "| Name | Classification | Shape | Default behavior | Parser | Typed default | Scope | Conflicts | Sensitivity | Aliases | Documentation | Visibility | Owner |",
+        "|---|---|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     for control in sorted(registry["control"], key=lambda value: value["name"]):
         default = control["default_behavior"].replace("|", "\\|")
+        typed = typed_default(control.get("typed_default")).replace("|", "\\|")
+        documentation = documentation_text(control.get("documentation")).replace(
+            "|", "\\|"
+        )
         lines.append(
             f"| `{control['name']}` | {control['classification']} | "
-            f"{control['value_shape']} | {default} | {control['visibility']} | "
+            f"{control['value_shape']} | {default} | {control.get('parser', '—')} | "
+            f"{typed} | {control.get('scope', '—')} | "
+            f"{metadata_list(control.get('conflicts'))} | "
+            f"{control.get('sensitivity', '—')} | "
+            f"{metadata_list(control.get('aliases'))} | {documentation} | "
+            f"{control['visibility']} | "
             f"`{control['owner']}` |"
         )
     return "\n".join(lines) + "\n"

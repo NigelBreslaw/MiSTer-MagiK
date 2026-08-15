@@ -1,7 +1,7 @@
 # Copyright (C) 2026 Nigel Breslaw
 # SPDX-License-Identifier: GPL-3.0-or-later
 
-format = "mister-magik-runtime-environment-v1"
+format = "mister-magik-runtime-environment-v2"
 source_roots = [
   "apps/mister/src",
   "mister/platform/runtime/src",
