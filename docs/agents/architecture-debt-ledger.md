@@ -78,6 +78,8 @@ acceptance, posted-frame evidence, retry, or send behavior. Compatible fault
 configuration is also derived from the same snapshot through the catalog-owned
 redacting parser. Remaining registered controls retain their temporary direct
 read sites until their named Type-A migration batches land.
+The retired catalog-owned `MISTER_CMD` fault command is no longer registered;
+typed runtime fault control owns reset execution without an environment command.
 
 ## Platform-v3 authority
 

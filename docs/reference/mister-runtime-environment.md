@@ -2,7 +2,7 @@
 
 <!-- Generated from apps/mister/config/runtime-environment.toml. Do not edit. -->
 
-Registry format: `mister-magik-runtime-environment-v1`. Baseline: 397 literal occurrences, 275 owned names, 11 external/build-time names.
+Registry format: `mister-magik-runtime-environment-v1`. Baseline: 396 literal occurrences, 274 owned names, 10 external/build-time names.
 
 | Name | Classification | Shape | Default behavior | Visibility | Owner |
 |---|---|---|---|---|---|
@@ -38,7 +38,6 @@ Registry format: `mister-magik-runtime-environment-v1`. Baseline: 397 literal oc
 | `MISTER_CATALOG_REFRESH` | production | string, enum, or boolean token | site-defined fallback; unchanged in P0 | internal runtime | `apps/mister/src/ui_runner/ui_frame_target.rs` |
 | `MISTER_CATALOG_TRACE` | diagnostic | string, enum, or boolean token | site-defined fallback; unchanged in P0 | developer diagnostic | `crates/catalog/src/catalog_checkpoint.rs` |
 | `MISTER_CLOUD` | production | string, enum, or boolean token | site-defined fallback; unchanged in P0 | internal runtime | `crates/particles/src/intro.rs` |
-| `MISTER_CMD` | external | string, enum, or boolean token | site-defined fallback; unchanged in P0 | external compatibility | `crates/catalog/src/fs_fault.rs` |
 | `MISTER_CRASH_BACKTRACE` | diagnostic | string, enum, or boolean token | site-defined fallback; unchanged in P0 | developer diagnostic | `apps/mister/src/crash_report.rs` |
 | `MISTER_CRT_PROBE_PATTERN` | production | string, enum, or boolean token | site-defined fallback; unchanged in P0 | internal runtime | `apps/mister/src/ui_runner/crt_trial_loop.rs` |
 | `MISTER_CRT_TRIAL_CONTENT_BOUNDS` | production | string, enum, or boolean token | site-defined fallback; unchanged in P0 | internal runtime | `apps/mister/src/ui_runner/crt_trial_loop.rs` |

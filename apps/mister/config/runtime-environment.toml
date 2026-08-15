@@ -11,9 +11,9 @@ source_roots = [
 ]
 
 [baseline]
-literal_occurrences = 397
-unique_names = 275
-external_build_names = 11
+literal_occurrences = 396
+unique_names = 274
+external_build_names = 10
 
 [[control]]
 name = "MISTER_7ZA"
@@ -269,14 +269,6 @@ classification = "production"
 value_shape = "string, enum, or boolean token"
 default_behavior = "site-defined fallback; unchanged in P0"
 visibility = "internal runtime"
-
-[[control]]
-name = "MISTER_CMD"
-owner = "crates/catalog/src/fs_fault.rs"
-classification = "external"
-value_shape = "string, enum, or boolean token"
-default_behavior = "site-defined fallback; unchanged in P0"
-visibility = "external compatibility"
 
 [[control]]
 name = "MISTER_CRASH_BACKTRACE"
