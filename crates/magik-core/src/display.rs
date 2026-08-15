@@ -82,11 +82,17 @@ impl ResolvedOutputRoute {
 
     pub const fn content_insets(self) -> ContentInsets {
         match self {
+            Self::Crt240p60 => ContentInsets {
+                left: 32,
+                top: 24,
+                right: 32,
+                bottom: 24,
+            },
             Self::Crt288p50 => ContentInsets {
+                left: 32,
                 top: 20,
-                bottom: 13,
-                left: 0,
-                right: 0,
+                right: 32,
+                bottom: 15,
             },
             Self::Crt576p50 => ContentInsets {
                 right: 64,

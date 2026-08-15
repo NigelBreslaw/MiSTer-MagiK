@@ -1523,20 +1523,20 @@ mod tests {
             (
                 ResolvedOutputRoute::Crt240p60,
                 CrtContentRect {
-                    x: 0,
-                    y: 0,
-                    width: 640,
-                    height: 480,
+                    x: 32,
+                    y: 24,
+                    width: 576,
+                    height: 432,
                 },
                 (8, 8, 2, 2, 16, 32, 24, 16, 32, 80, 40),
             ),
             (
                 ResolvedOutputRoute::Crt288p50,
                 CrtContentRect {
-                    x: 0,
+                    x: 32,
                     y: 20,
-                    width: 640,
-                    height: 255,
+                    width: 576,
+                    height: 253,
                 },
                 (8, 5, 2, 1, 16, 32, 24, 16, 19, 56, 24),
             ),
@@ -1588,6 +1588,44 @@ mod tests {
                 expected_metrics
             );
             assert_eq!(metrics.font_family, CrtFontFamily::PressStart2P);
+        }
+    }
+
+    #[test]
+    fn low_resolution_crt_safe_area_survives_rotation_in_physical_space() {
+        for route in [
+            ResolvedOutputRoute::Crt240p60,
+            ResolvedOutputRoute::Crt288p50,
+        ] {
+            let plan = UiDisplayPlan::from_geometry_with_route(
+                route.progressive_geometry().unwrap(),
+                route,
+                "test-low-resolution-safe-area",
+                UiFramebufferSizePolicy::Auto,
+            );
+            let display = UiDisplay::for_plan(plan);
+            let normal = display.content_rect();
+
+            assert!(normal.x * 20 >= display.render_w());
+            assert!((display.render_w() - normal.x - normal.width) * 20 >= display.render_w());
+            assert!(normal.y * 20 >= display.render_h());
+            assert!((display.render_h() - normal.y - normal.height) * 20 >= display.render_h());
+
+            for orientation in [
+                ScreenOrientation::MonitorClockwise,
+                ScreenOrientation::MonitorCounterclockwise,
+            ] {
+                let rotated = UiLayoutGeometry::for_display(&display, orientation);
+                let content = rotated.content_rect();
+                assert!(content.x * 20 >= rotated.logical_w());
+                assert!(
+                    (rotated.logical_w() - content.x - content.width) * 20 >= rotated.logical_w()
+                );
+                assert!(content.y * 20 >= rotated.logical_h());
+                assert!(
+                    (rotated.logical_h() - content.y - content.height) * 20 >= rotated.logical_h()
+                );
+            }
         }
     }
 
