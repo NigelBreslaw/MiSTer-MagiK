@@ -31,6 +31,66 @@ pub const DIRECT_RESET_CLEANUP_ARTIFACTS: [&str; 7] = [
     "/media/fat/mister-magik-dev/rebuild-on-next-boot",
 ];
 
+/// Evidence describing a publication point that may trigger the attended
+/// direct-reset fault. The target is diagnostic context only; implementations
+/// own every control endpoint and command spelling.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DirectResetFaultRequest {
+    point: String,
+    target: String,
+}
+
+impl DirectResetFaultRequest {
+    pub fn new(point: impl Into<String>, target: &Path) -> Self {
+        Self {
+            point: point.into(),
+            target: target.display().to_string(),
+        }
+    }
+
+    pub fn point(&self) -> &str {
+        &self.point
+    }
+
+    pub fn target(&self) -> &str {
+        &self.target
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum DirectResetFaultOutcome {
+    #[default]
+    Noop,
+    PointMismatch,
+    NotArmed,
+    UnsupportedAction,
+    ResetRequested,
+}
+
+/// Narrow destructive-fault capability.
+///
+/// Callers provide only typed event evidence. Implementations own arming,
+/// marker/session paths, Main transport, reset command spelling, delay, and
+/// cleanup.
+pub trait DirectResetFaultControl {
+    fn request_direct_reset(
+        &mut self,
+        request: &DirectResetFaultRequest,
+    ) -> DirectResetFaultOutcome;
+}
+
+#[derive(Default)]
+pub struct NoopDirectResetFaultControl;
+
+impl DirectResetFaultControl for NoopDirectResetFaultControl {
+    fn request_direct_reset(
+        &mut self,
+        _request: &DirectResetFaultRequest,
+    ) -> DirectResetFaultOutcome {
+        DirectResetFaultOutcome::Noop
+    }
+}
+
 #[derive(Clone, PartialEq, Eq)]
 pub struct FaultConfig {
     point: String,
@@ -211,6 +271,22 @@ mod tests {
     use std::path::PathBuf;
 
     #[derive(Default)]
+    struct RecordingFaultControl {
+        requests: Vec<DirectResetFaultRequest>,
+        outcome: DirectResetFaultOutcome,
+    }
+
+    impl DirectResetFaultControl for RecordingFaultControl {
+        fn request_direct_reset(
+            &mut self,
+            request: &DirectResetFaultRequest,
+        ) -> DirectResetFaultOutcome {
+            self.requests.push(request.clone());
+            self.outcome
+        }
+    }
+
+    #[derive(Default)]
     struct FakeRuntime {
         session: Option<String>,
         marker: Option<(String, String)>,
@@ -243,6 +319,28 @@ mod tests {
     #[test]
     fn config_is_absent_without_point_env() {
         assert!(FaultConfig::from_values(None, None, None, None).is_none());
+    }
+
+    #[test]
+    fn portable_fault_control_is_effect_free_by_default_and_fake_is_deterministic() {
+        let request = DirectResetFaultRequest::new(
+            "catalog.sqlite.after_final_temp_sync",
+            Path::new("/media/fat/mister-magik/library.sqlite3"),
+        );
+        assert_eq!(
+            NoopDirectResetFaultControl.request_direct_reset(&request),
+            DirectResetFaultOutcome::Noop
+        );
+
+        let mut fake = RecordingFaultControl {
+            outcome: DirectResetFaultOutcome::ResetRequested,
+            ..RecordingFaultControl::default()
+        };
+        assert_eq!(
+            fake.request_direct_reset(&request),
+            DirectResetFaultOutcome::ResetRequested
+        );
+        assert_eq!(fake.requests, vec![request]);
     }
 
     #[test]
