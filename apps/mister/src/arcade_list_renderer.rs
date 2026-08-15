@@ -958,22 +958,47 @@ impl ArcadeListRenderer {
         let selection_y = self.selection_y();
         let selection_bottom = selection_y + self.style.row_height.max(1) as usize;
         let cached = target.cached_565_mut();
-        for viewport_y in 0..self.visible_height {
-            let source_y = (self.surface_y + viewport_y) % self.visible_height;
-            let source_row = source_y * self.width;
-            let selected = viewport_y >= selection_y && viewport_y < selection_bottom;
-            for x in 0..self.width {
-                let logical_x = self.geometry.x + x;
-                let logical_y = self.geometry.y + viewport_y;
-                let offset = output_layout.physical_offset(logical_x, logical_y);
-                let pixel = self.surface[source_row + x];
-                cached[offset] = if selected {
-                    selected_aperture_pixel_with_style(pixel, self.style)
-                } else if is_arcade_unselected_fill_pixel_with_style(pixel, self.style) {
-                    backdrop[offset]
-                } else {
-                    pixel
-                };
+        if output_layout.is_identity() {
+            // CRT240p uses an upright contiguous logical surface.  Keep the
+            // exact pixel rules but remove the physical-coordinate transform
+            // from every pixel in the scrolling viewport.
+            for viewport_y in 0..self.visible_height {
+                let source_y = (self.surface_y + viewport_y) % self.visible_height;
+                let source_row = source_y * self.width;
+                let selected = viewport_y >= selection_y && viewport_y < selection_bottom;
+                let destination_start =
+                    (self.geometry.y + viewport_y) * self.width + self.geometry.x;
+                let destination = &mut cached[destination_start..destination_start + self.width];
+                let backdrop_start = destination_start;
+                for x in 0..self.width {
+                    let pixel = self.surface[source_row + x];
+                    destination[x] = if selected {
+                        selected_aperture_pixel_with_style(pixel, self.style)
+                    } else if is_arcade_unselected_fill_pixel_with_style(pixel, self.style) {
+                        backdrop[backdrop_start + x]
+                    } else {
+                        pixel
+                    };
+                }
+            }
+        } else {
+            for viewport_y in 0..self.visible_height {
+                let source_y = (self.surface_y + viewport_y) % self.visible_height;
+                let source_row = source_y * self.width;
+                let selected = viewport_y >= selection_y && viewport_y < selection_bottom;
+                for x in 0..self.width {
+                    let logical_x = self.geometry.x + x;
+                    let logical_y = self.geometry.y + viewport_y;
+                    let offset = output_layout.physical_offset(logical_x, logical_y);
+                    let pixel = self.surface[source_row + x];
+                    cached[offset] = if selected {
+                        selected_aperture_pixel_with_style(pixel, self.style)
+                    } else if is_arcade_unselected_fill_pixel_with_style(pixel, self.style) {
+                        backdrop[offset]
+                    } else {
+                        pixel
+                    };
+                }
             }
         }
         if redraw_selection_frame {

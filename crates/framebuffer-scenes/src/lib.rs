@@ -212,6 +212,17 @@ impl Rgb565OutputLayout {
         let (physical_x, physical_y) = self.logical_to_physical(logical_x, logical_y);
         physical_y * self.physical_stride + physical_x
     }
+
+    /// True when logical rows are stored as contiguous, unrotated RGB565
+    /// rows.  CRT list composition uses this to avoid a per-pixel coordinate
+    /// transform on the hot path while retaining the general rotated path.
+    #[must_use]
+    pub const fn is_identity(self) -> bool {
+        matches!(self.rotation, OutputRotation::None)
+            && self.logical_width == self.physical_width
+            && self.logical_height == self.physical_height
+            && self.physical_stride == self.logical_width
+    }
 }
 
 /// Mutable pixel access in logical coordinates backed by a physically
@@ -579,6 +590,7 @@ mod tests {
             target.output_layout(),
             Rgb565OutputLayout::identity(geometry)
         );
+        assert!(target.output_layout().is_identity());
         assert_eq!(target.buffer_id(), id);
     }
 
@@ -586,6 +598,7 @@ mod tests {
     fn oriented_scene_target_separates_logical_and_physical_geometry() {
         let geometry = SceneGeometry::new(2, 3, 2).unwrap();
         let output = Rgb565OutputLayout::new(2, 3, 4, OutputRotation::Clockwise90).unwrap();
+        assert!(!output.is_identity());
         let id = SceneBufferId::new(0, 2).unwrap();
         let mut pixels = [Rgb565Pixel(0); 8];
         let mut target = SceneTarget::new_oriented(&mut pixels, geometry, output, id).unwrap();
