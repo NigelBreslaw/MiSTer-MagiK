@@ -6,10 +6,15 @@
 mod ui_preview_scene_manifest;
 
 #[cfg(target_os = "macos")]
+#[path = "ui_preview/visual_compare.rs"]
+mod ui_preview_visual_compare;
+
+#[cfg(target_os = "macos")]
 mod macos {
     use super::ui_preview_scene_manifest::{
         LauncherScene, SceneProfile, SceneScenario, SceneTransitionEdge, launcher_scene_manifest,
     };
+    use super::ui_preview_visual_compare::{compare_launcher_matrix, validate_comparison_paths};
     use mister_magik_catalog::portable_catalog_builder::{
         PortableCatalogBuild, publish_portable_catalog,
     };
@@ -119,7 +124,25 @@ mod macos {
             return Ok(());
         }
         if let Some(output_dir) = options.matrix_output.as_deref() {
+            if let (Some(expected_dir), Some(mismatch_dir)) = (
+                options.expected_matrix.as_deref(),
+                options.mismatch_output.as_deref(),
+            ) {
+                validate_comparison_paths(expected_dir, output_dir, mismatch_dir)?;
+            }
             run_scene_matrix(output_dir)?;
+            if let (Some(expected_dir), Some(mismatch_dir)) = (
+                options.expected_matrix.as_deref(),
+                options.mismatch_output.as_deref(),
+            ) {
+                let scene_ids = launcher_scene_manifest()?
+                    .scenes
+                    .into_iter()
+                    .map(|scene| scene.id)
+                    .collect::<Vec<_>>();
+                compare_launcher_matrix(expected_dir, output_dir, mismatch_dir, &scene_ids)?;
+                println!("comparison=passed scenes={}", scene_ids.len());
+            }
             return Ok(());
         }
         let headless = options.output.is_some();
@@ -2695,6 +2718,8 @@ mod macos {
         navigation_transition_duration_ms: Option<u64>,
         list_scenes: bool,
         matrix_output: Option<PathBuf>,
+        expected_matrix: Option<PathBuf>,
+        mismatch_output: Option<PathBuf>,
     }
 
     impl PreviewOptions {
@@ -2717,6 +2742,8 @@ mod macos {
             let mut navigation_transition_duration_ms = None;
             let mut list_scenes = false;
             let mut matrix_output = None;
+            let mut expected_matrix = None;
+            let mut mismatch_output = None;
             let mut arguments = arguments.into_iter();
             while let Some(argument) = arguments.next() {
                 match argument.as_str() {
@@ -2806,6 +2833,20 @@ mod macos {
                                 .ok_or("--matrix-output requires a directory")?,
                         ));
                     }
+                    "--expected-matrix" => {
+                        expected_matrix = Some(PathBuf::from(
+                            arguments
+                                .next()
+                                .ok_or("--expected-matrix requires a directory")?,
+                        ));
+                    }
+                    "--mismatch-output" => {
+                        mismatch_output = Some(PathBuf::from(
+                            arguments
+                                .next()
+                                .ok_or("--mismatch-output requires a directory")?,
+                        ));
+                    }
                     "--display-profile" => {
                         let value = arguments
                             .next()
@@ -2826,7 +2867,7 @@ mod macos {
                     }
                     "--help" | "-h" => {
                         return Err(
-                            "usage: mister-magik-ui-preview [--list-scenes] [--matrix-output DIR] [--content auto|fixtures|card] [--sd-root PATH] [--cache-root PATH] [--no-scan] [--no-download] [--navigation-transition-duration-ms 100..10000] [--navigation-transition-demo home-consoles|home-arcade|consoles-system] [--settings-page-transition-demo] [--navigation-transition-demo-reverse] [--display-profile hdmi|crt-240p|crt-288p|crt-480p|crt-576p] [--orientation normal|monitor-clockwise|monitor-counterclockwise] [--scenario NAME] [--refresh-rate auto|60|120] [--frame N] [--output FILE.ppm|FILE.png] [--provenance-output FILE.json]"
+                            "usage: mister-magik-ui-preview [--list-scenes] [--matrix-output DIR [--expected-matrix DIR --mismatch-output DIR]] [--content auto|fixtures|card] [--sd-root PATH] [--cache-root PATH] [--no-scan] [--no-download] [--navigation-transition-duration-ms 100..10000] [--navigation-transition-demo home-consoles|home-arcade|consoles-system] [--settings-page-transition-demo] [--navigation-transition-demo-reverse] [--display-profile hdmi|crt-240p|crt-288p|crt-480p|crt-576p] [--orientation normal|monitor-clockwise|monitor-counterclockwise] [--scenario NAME] [--refresh-rate auto|60|120] [--frame N] [--output FILE.ppm|FILE.png] [--provenance-output FILE.json]"
                                 .into(),
                         );
                     }
@@ -2841,6 +2882,14 @@ mod macos {
             }
             if provenance_output == output && output.is_some() {
                 return Err("--provenance-output must differ from --output".into());
+            }
+            if expected_matrix.is_some() != mismatch_output.is_some() {
+                return Err(
+                    "--expected-matrix and --mismatch-output must be provided together".into(),
+                );
+            }
+            if expected_matrix.is_some() && matrix_output.is_none() {
+                return Err("--expected-matrix requires --matrix-output".into());
             }
             if navigation_transition_demo_reverse
                 && navigation_transition_demo.is_none()
@@ -2870,6 +2919,8 @@ mod macos {
                 navigation_transition_duration_ms,
                 list_scenes,
                 matrix_output,
+                expected_matrix,
+                mismatch_output,
             })
         }
     }
@@ -4187,6 +4238,47 @@ mod macos {
             assert_eq!(
                 options.provenance_output,
                 Some(PathBuf::from("/tmp/capture.json"))
+            );
+        }
+
+        #[test]
+        fn matrix_comparison_requires_all_three_explicit_paths() {
+            assert!(
+                PreviewOptions::parse(["--expected-matrix", "/tmp/expected"].map(String::from))
+                    .is_err()
+            );
+            assert!(
+                PreviewOptions::parse(
+                    [
+                        "--expected-matrix",
+                        "/tmp/expected",
+                        "--mismatch-output",
+                        "/tmp/mismatch",
+                    ]
+                    .map(String::from)
+                )
+                .is_err()
+            );
+            let options = PreviewOptions::parse(
+                [
+                    "--matrix-output",
+                    "/tmp/actual",
+                    "--expected-matrix",
+                    "/tmp/expected",
+                    "--mismatch-output",
+                    "/tmp/mismatch",
+                ]
+                .map(String::from),
+            )
+            .expect("complete matrix comparison paths");
+            assert_eq!(options.matrix_output, Some(PathBuf::from("/tmp/actual")));
+            assert_eq!(
+                options.expected_matrix,
+                Some(PathBuf::from("/tmp/expected"))
+            );
+            assert_eq!(
+                options.mismatch_output,
+                Some(PathBuf::from("/tmp/mismatch"))
             );
         }
 
