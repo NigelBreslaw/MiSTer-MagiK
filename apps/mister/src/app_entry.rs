@@ -469,7 +469,10 @@ fn dispatch_fpga(
         "ui" => ui_runner::run_ui(
             f,
             process_entry_cpu_profile,
-            process_config.launcher().clone(),
+            process_config
+                .launcher()
+                .expect("ui command captures launcher process configuration")
+                .clone(),
         ),
         #[cfg(mister_bench_scenes)]
         "scenes" => ui_runner::print_scenes(),

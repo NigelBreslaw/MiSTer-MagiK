@@ -4,7 +4,7 @@
 //! Immutable process-boundary configuration capture.
 
 use mister_magik_catalog::fs_fault::FaultConfig;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 
@@ -52,6 +52,46 @@ pub enum CommandMode {
     Ui,
     LatchReadinessReport,
     Other(String),
+}
+
+impl CommandMode {
+    fn from_name(command: &str) -> Self {
+        match command {
+            "ui" => Self::Ui,
+            "latch-readiness-report" => Self::LatchReadinessReport,
+            other => Self::Other(other.to_owned()),
+        }
+    }
+
+    fn captures_launcher(&self) -> bool {
+        matches!(self, Self::Ui)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum InstrumentationModifier {
+    Json,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct InstrumentationModifiers {
+    enabled: BTreeSet<InstrumentationModifier>,
+}
+
+impl InstrumentationModifiers {
+    fn from_args(command: &CommandMode, args: &[String]) -> Self {
+        let mut enabled = BTreeSet::new();
+        if matches!(command, CommandMode::LatchReadinessReport)
+            && args.iter().any(|arg| arg == "--json")
+        {
+            enabled.insert(InstrumentationModifier::Json);
+        }
+        Self { enabled }
+    }
+
+    pub fn contains(&self, modifier: InstrumentationModifier) -> bool {
+        self.enabled.contains(&modifier)
+    }
 }
 
 #[derive(Clone)]
@@ -110,8 +150,8 @@ pub struct DiagnosticConfig {
 #[derive(Clone)]
 pub struct ProcessConfig {
     command: CommandMode,
-    launcher: LauncherProcessConfig,
-    diagnostics: DiagnosticConfig,
+    launcher: Option<LauncherProcessConfig>,
+    instrumentation: InstrumentationModifiers,
     fault: Option<FaultConfig>,
 }
 
@@ -121,22 +161,18 @@ impl ProcessConfig {
     }
 
     fn from_snapshot(args: &[String], command: &str, environment: &EnvironmentSnapshot) -> Self {
-        let command = match command {
-            "ui" => CommandMode::Ui,
-            "latch-readiness-report" => CommandMode::LatchReadinessReport,
-            other => CommandMode::Other(other.to_owned()),
-        };
-        let diagnostics = DiagnosticConfig {
-            latch_readiness_json: matches!(command, CommandMode::LatchReadinessReport)
-                && args.iter().any(|arg| arg == "--json"),
-        };
+        let command = CommandMode::from_name(command);
+        let instrumentation = InstrumentationModifiers::from_args(&command, args);
+        let launcher = command.captures_launcher().then(|| LauncherProcessConfig {
+            readiness: LauncherReadinessConfig::from_snapshot(environment),
+        });
+        // Fault capture deliberately remains an early, compatibility-preserving
+        // process boundary until C19 applies command and feature gates.
         let fault = FaultConfig::capture_with(|name| environment.get(name));
         Self {
             command,
-            launcher: LauncherProcessConfig {
-                readiness: LauncherReadinessConfig::from_snapshot(environment),
-            },
-            diagnostics,
+            launcher,
+            instrumentation,
             fault,
         }
     }
@@ -145,12 +181,18 @@ impl ProcessConfig {
         &self.command
     }
 
-    pub fn launcher(&self) -> &LauncherProcessConfig {
-        &self.launcher
+    pub fn launcher(&self) -> Option<&LauncherProcessConfig> {
+        self.launcher.as_ref()
+    }
+
+    pub fn instrumentation(&self) -> &InstrumentationModifiers {
+        &self.instrumentation
     }
 
     pub fn diagnostics(&self) -> DiagnosticConfig {
-        self.diagnostics
+        DiagnosticConfig {
+            latch_readiness_json: self.instrumentation.contains(InstrumentationModifier::Json),
+        }
     }
 
     pub fn fault(&self) -> Option<&FaultConfig> {
@@ -186,7 +228,12 @@ mod tests {
         );
         assert_eq!(config.command(), &CommandMode::Ui);
         assert_eq!(
-            config.launcher().readiness().clone().into_parts(),
+            config
+                .launcher()
+                .expect("ui captures launcher configuration")
+                .readiness()
+                .clone()
+                .into_parts(),
             (
                 "0123456789abcdef0123456789abcdef".into(),
                 PathBuf::from("/tmp/ready"),
@@ -199,14 +246,50 @@ mod tests {
 
     #[test]
     fn diagnostic_modifier_is_scoped_to_the_readiness_command() {
-        let args = vec!["mister-magik-fb".into(), "ui".into(), "--json".into()];
+        let args = vec![
+            "mister-magik-fb".into(),
+            "ui".into(),
+            "--json".into(),
+            "--json".into(),
+        ];
         let ui = ProcessConfig::from_snapshot(&args, "ui", &EnvironmentSnapshot::default());
         assert!(!ui.diagnostics().latch_readiness_json);
+        assert!(ui.launcher().is_some());
         let report = ProcessConfig::from_snapshot(
             &args,
             "latch-readiness-report",
             &EnvironmentSnapshot::default(),
         );
         assert!(report.diagnostics().latch_readiness_json);
+        assert!(report.launcher().is_none());
+        assert!(
+            report
+                .instrumentation()
+                .contains(InstrumentationModifier::Json)
+        );
+    }
+
+    #[test]
+    fn unrelated_commands_do_not_capture_launcher_or_readiness_settings() {
+        let environment = EnvironmentSnapshot::from_values([
+            (STARTUP_TOKEN, "secret"),
+            (READY_FIFO, "/tmp/ready"),
+            (MAIN_PID, "7"),
+        ]);
+        let config = ProcessConfig::from_snapshot(
+            &["mister-magik-fb".into(), "catalog-v3-inspect".into()],
+            "catalog-v3-inspect",
+            &environment,
+        );
+
+        assert_eq!(
+            config.command(),
+            &CommandMode::Other("catalog-v3-inspect".into())
+        );
+        assert!(config.launcher().is_none());
+        assert_eq!(
+            config.instrumentation(),
+            &InstrumentationModifiers::default()
+        );
     }
 }
