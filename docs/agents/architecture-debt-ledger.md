@@ -219,6 +219,11 @@ connection failure, and control transport setup/read failure now emit
 Their legacy strings and connection behavior are unchanged, and both families
 advertise only the existing bounded retry behavior.
 
+Ordinary command, capture, snapshot, preview, launcher-automation, and reboot
+failures now emit `operation_failed` metadata in the `operation` phase. Their
+legacy strings remain authoritative for humans, and the metadata deliberately
+does not authorize blind replay of either read or mutation requests.
+
 ## Hotspot ownership
 
 The PR advisory report uses stable owner IDs so moves do not erase history.

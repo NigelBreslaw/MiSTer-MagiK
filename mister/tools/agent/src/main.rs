@@ -2675,7 +2675,7 @@ mod linux {
                 let _ = stream.write_all(&capture.payload);
             }
             Err(err) => {
-                let _ = writeln!(stream, "{}", response(id, false, None, Some(&err)));
+                let _ = writeln!(stream, "{}", operation_failure_response(id, &err));
             }
         }
         true
@@ -2745,7 +2745,7 @@ mod linux {
                 let _ = stream.write_all(&snapshot.payload);
             }
             Err(err) => {
-                let _ = writeln!(stream, "{}", response(id, false, None, Some(&err)));
+                let _ = writeln!(stream, "{}", operation_failure_response(id, &err));
             }
         }
         true
@@ -2782,7 +2782,7 @@ mod linux {
                 let _ = stream.write_all(&preview.payload);
             }
             Err(err) => {
-                let _ = writeln!(stream, "{}", response(id, false, None, Some(&err)));
+                let _ = writeln!(stream, "{}", operation_failure_response(id, &err));
             }
         }
         true
@@ -2836,38 +2836,38 @@ mod linux {
             "diagnostics" => response(id, true, Some(diagnostics_json(boot_id, started)), None),
             "magik" => match magik_control(args) {
                 Ok(result) => response(id, true, Some(result), None),
-                Err(err) => response(id, false, None, Some(&err)),
+                Err(err) => operation_failure_response(id, &err),
             },
             "sd_list_dir" => match sd_list_dir(args, request_received_monotonic_us) {
                 Ok(result) => response(id, true, Some(result), None),
-                Err(err) => response(id, false, None, Some(&err)),
+                Err(err) => operation_failure_response(id, &err),
             },
             "sd_list_dir_v2" => match sd_list_dir_v2(args, request_received_monotonic_us) {
                 Ok(result) => response(id, true, Some(result), None),
-                Err(err) => response(id, false, None, Some(&err)),
+                Err(err) => operation_failure_response(id, &err),
             },
             "sd_stat_item_v1" => match sd_stat_item(args) {
                 Ok(result) => response(id, true, Some(result), None),
-                Err(err) => response(id, false, None, Some(&err)),
+                Err(err) => operation_failure_response(id, &err),
             },
             "sd_parse_mra_v1" => match sd_parse_mra(args) {
                 Ok(result) => response(id, true, Some(result), None),
-                Err(err) => response(id, false, None, Some(&err)),
+                Err(err) => operation_failure_response(id, &err),
             },
             "framebuffer_capture" => {
                 match framebuffer_capture(request_received, request_received_monotonic_us, started)
                 {
                     Ok(result) => response(id, true, Some(result), None),
-                    Err(err) => response(id, false, None, Some(&err)),
+                    Err(err) => operation_failure_response(id, &err),
                 }
             }
             "launcher_automation_begin" => match crate::launcher_automation::begin(args) {
                 Ok(result) => response(id, true, Some(result), None),
-                Err(err) => response(id, false, None, Some(&err)),
+                Err(err) => operation_failure_response(id, &err),
             },
             "launcher_automation_request" => match crate::launcher_automation::request(args) {
                 Ok(result) => response(id, true, Some(result), None),
-                Err(err) => response(id, false, None, Some(&err)),
+                Err(err) => operation_failure_response(id, &err),
             },
             "alpha_candidate_install" => match crate::alpha_candidate::install(args) {
                 Ok(result) => response(id, true, Some(result), None),
@@ -2880,7 +2880,7 @@ mod linux {
                     Some(json!({"scheduled": true, "mode": mode})),
                     None,
                 ),
-                Err(err) => response(id, false, None, Some(&err)),
+                Err(err) => operation_failure_response(id, &err),
             },
             _ => failure_response(
                 id,
@@ -2955,6 +2955,17 @@ mod linux {
             mister_magik_agent_protocol::FailureCode::DeviceUnavailable,
             mister_magik_agent_protocol::FailurePhase::Availability,
             mister_magik_agent_protocol::RetryPolicy::Retry,
+            false,
+        )
+    }
+
+    pub(super) fn operation_failure_response(id: Option<Value>, error: &str) -> String {
+        failure_response(
+            id,
+            error,
+            mister_magik_agent_protocol::FailureCode::OperationFailed,
+            mister_magik_agent_protocol::FailurePhase::Operation,
+            mister_magik_agent_protocol::RetryPolicy::Never,
             false,
         )
     }
@@ -6854,6 +6865,16 @@ mod tests {
         assert_eq!(unavailable["failure"]["code"], "device_unavailable");
         assert_eq!(unavailable["failure"]["phase"], "availability");
         assert_eq!(unavailable["failure"]["retry_policy"], "retry");
+
+        let operation: Value = serde_json::from_str(&linux::operation_failure_response(
+            Some(json!(12)),
+            "capture failed",
+        ))
+        .unwrap();
+        assert_eq!(operation["error"], "capture failed");
+        assert_eq!(operation["failure"]["code"], "operation_failed");
+        assert_eq!(operation["failure"]["phase"], "operation");
+        assert_eq!(operation["failure"]["retry_policy"], "never");
     }
 
     #[test]
