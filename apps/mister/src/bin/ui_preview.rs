@@ -247,7 +247,7 @@ mod macos {
                 application.settle_headless_production_screensaver()?;
             }
             let capture = oriented_capture(application.frame_target.cached_565(), layout);
-            write_ppm(
+            write_capture(
                 &output,
                 &capture,
                 layout.composition_w(),
@@ -2629,7 +2629,7 @@ mod macos {
                     }
                     "--help" | "-h" => {
                         return Err(
-                            "usage: mister-magik-ui-preview [--content auto|fixtures|card] [--sd-root PATH] [--cache-root PATH] [--no-scan] [--no-download] [--navigation-transition-duration-ms 100..10000] [--navigation-transition-demo home-consoles|home-arcade|consoles-system] [--settings-page-transition-demo] [--navigation-transition-demo-reverse] [--display-profile hdmi|crt-240p|crt-288p|crt-480p|crt-576p] [--orientation normal|monitor-clockwise|monitor-counterclockwise] [--scenario NAME] [--refresh-rate auto|60|120] [--frame N] [--output FILE.ppm]"
+                            "usage: mister-magik-ui-preview [--content auto|fixtures|card] [--sd-root PATH] [--cache-root PATH] [--no-scan] [--no-download] [--navigation-transition-duration-ms 100..10000] [--navigation-transition-demo home-consoles|home-arcade|consoles-system] [--settings-page-transition-demo] [--navigation-transition-demo-reverse] [--display-profile hdmi|crt-240p|crt-288p|crt-480p|crt-576p] [--orientation normal|monitor-clockwise|monitor-counterclockwise] [--scenario NAME] [--refresh-rate auto|60|120] [--frame N] [--output FILE.ppm|FILE.png]"
                                 .into(),
                         );
                     }
@@ -2897,6 +2897,104 @@ mod macos {
             .unwrap_or(0)
             .min(u128::from(u64::MAX));
         Duration::from_nanos(nanos as u64)
+    }
+
+    fn write_capture(
+        path: &Path,
+        pixels: &[Rgb565Pixel],
+        width: usize,
+        height: usize,
+    ) -> Result<(), Box<dyn Error>> {
+        if path
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("png"))
+        {
+            write_png(path, pixels, width, height)
+        } else {
+            write_ppm(path, pixels, width, height)
+        }
+    }
+
+    fn write_png(
+        path: &Path,
+        pixels: &[Rgb565Pixel],
+        width: usize,
+        height: usize,
+    ) -> Result<(), Box<dyn Error>> {
+        let encoded = encode_png(pixels, width, height)?;
+        let mut file = OpenOptions::new().write(true).create_new(true).open(path)?;
+        file.write_all(&encoded)?;
+        Ok(())
+    }
+
+    fn encode_png(
+        pixels: &[Rgb565Pixel],
+        width: usize,
+        height: usize,
+    ) -> Result<Vec<u8>, Box<dyn Error>> {
+        let pixel_count = width
+            .checked_mul(height)
+            .ok_or("capture dimensions overflow")?;
+        if pixels.len() != pixel_count {
+            return Err("capture pixel count does not match dimensions".into());
+        }
+        if width == 0 || height == 0 {
+            return Err("PNG capture dimensions must be non-zero".into());
+        }
+        let png_width = u32::try_from(width).map_err(|_| "capture width exceeds PNG limits")?;
+        let png_height = u32::try_from(height).map_err(|_| "capture height exceeds PNG limits")?;
+        let row_len = width
+            .checked_mul(3)
+            .and_then(|len| len.checked_add(1))
+            .ok_or("PNG scanline length overflow")?;
+        let raw_len = row_len
+            .checked_mul(height)
+            .ok_or("PNG capture length overflow")?;
+        let mut raw = Vec::with_capacity(raw_len);
+        for row in pixels.chunks_exact(width) {
+            raw.push(0);
+            for &pixel in row {
+                let color = rgb565_to_xrgb8888(pixel);
+                raw.extend_from_slice(&[
+                    ((color >> 16) & 0xff) as u8,
+                    ((color >> 8) & 0xff) as u8,
+                    (color & 0xff) as u8,
+                ]);
+            }
+        }
+
+        let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::best());
+        encoder.write_all(&raw)?;
+        let compressed = encoder.finish()?;
+
+        let mut encoded = Vec::with_capacity(compressed.len().saturating_add(57));
+        encoded.extend_from_slice(b"\x89PNG\r\n\x1a\n");
+        let mut header = [0u8; 13];
+        header[..4].copy_from_slice(&png_width.to_be_bytes());
+        header[4..8].copy_from_slice(&png_height.to_be_bytes());
+        header[8] = 8;
+        header[9] = 2;
+        append_png_chunk(&mut encoded, *b"IHDR", &header)?;
+        append_png_chunk(&mut encoded, *b"IDAT", &compressed)?;
+        append_png_chunk(&mut encoded, *b"IEND", &[])?;
+        Ok(encoded)
+    }
+
+    fn append_png_chunk(
+        encoded: &mut Vec<u8>,
+        kind: [u8; 4],
+        data: &[u8],
+    ) -> Result<(), Box<dyn Error>> {
+        let length = u32::try_from(data.len()).map_err(|_| "PNG chunk exceeds format limits")?;
+        encoded.extend_from_slice(&length.to_be_bytes());
+        encoded.extend_from_slice(&kind);
+        encoded.extend_from_slice(data);
+        let mut crc = crc32fast::Hasher::new();
+        crc.update(&kind);
+        crc.update(data);
+        encoded.extend_from_slice(&crc.finalize().to_be_bytes());
+        Ok(())
     }
 
     fn write_ppm(
@@ -3462,6 +3560,9 @@ mod macos {
     mod tests {
         use super::*;
         use mister_magik_fb::launcher_runtime::navigation_transition::NavigationTransitionGeometry;
+        use std::sync::atomic::AtomicU64;
+
+        static NEXT_CAPTURE_PATH: AtomicU64 = AtomicU64::new(0);
 
         #[test]
         fn rgb565_primary_channels_expand_to_xrgb8888() {
@@ -3784,6 +3885,57 @@ mod macos {
                 frame_hash(&[Rgb565Pixel(0x1234), Rgb565Pixel(0xabcd)]),
                 0x462038d925b18c13
             );
+        }
+
+        #[test]
+        fn png_capture_is_deterministic_rgb_with_pinned_dimensions() {
+            let pixels = [
+                Rgb565Pixel(0xf800),
+                Rgb565Pixel(0x07e0),
+                Rgb565Pixel(0x001f),
+                Rgb565Pixel(0xffff),
+            ];
+
+            let first = encode_png(&pixels, 2, 2).expect("encode first PNG");
+            let second = encode_png(&pixels, 2, 2).expect("encode second PNG");
+
+            assert_eq!(first, second);
+            assert_eq!(&first[..8], b"\x89PNG\r\n\x1a\n");
+            assert_eq!(&first[12..16], b"IHDR");
+            assert_eq!(u32::from_be_bytes(first[16..20].try_into().unwrap()), 2);
+            assert_eq!(u32::from_be_bytes(first[20..24].try_into().unwrap()), 2);
+            assert_eq!(first[24], 8);
+            assert_eq!(first[25], 2);
+        }
+
+        #[test]
+        fn capture_writer_preserves_ppm_and_refuses_overwrite() {
+            let suffix = NEXT_CAPTURE_PATH.fetch_add(1, Ordering::Relaxed);
+            let root = std::env::temp_dir();
+            let png = root.join(format!(
+                "mister-magik-ui-preview-{}-{suffix}.png",
+                std::process::id()
+            ));
+            let ppm = root.join(format!(
+                "mister-magik-ui-preview-{}-{suffix}.ppm",
+                std::process::id()
+            ));
+            let pixels = [Rgb565Pixel(0xf800), Rgb565Pixel(0x07e0)];
+
+            write_capture(&png, &pixels, 2, 1).expect("write PNG capture");
+            let png_bytes = std::fs::read(&png).expect("read PNG capture");
+            assert_eq!(&png_bytes[..8], b"\x89PNG\r\n\x1a\n");
+            assert!(write_capture(&png, &pixels, 2, 1).is_err());
+            assert_eq!(std::fs::read(&png).unwrap(), png_bytes);
+
+            write_capture(&ppm, &pixels, 2, 1).expect("write PPM capture");
+            let ppm_bytes = std::fs::read(&ppm).expect("read PPM capture");
+            assert!(ppm_bytes.starts_with(b"P6\n2 1\n255\n"));
+            assert!(write_capture(&ppm, &pixels, 2, 1).is_err());
+            assert_eq!(std::fs::read(&ppm).unwrap(), ppm_bytes);
+
+            let _ = std::fs::remove_file(png);
+            let _ = std::fs::remove_file(ppm);
         }
 
         #[test]
