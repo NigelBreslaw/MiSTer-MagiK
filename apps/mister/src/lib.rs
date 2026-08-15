@@ -15,7 +15,8 @@ pub mod arcade_button_overrides;
 mod arcade_list_renderer;
 #[cfg(any(feature = "ui", feature = "ui-preview"))]
 #[allow(dead_code)]
-mod artifact_publish;
+#[doc(hidden)]
+pub mod artifact_publish;
 pub use mister_magik_mister_runtime::boot_analytics;
 pub mod bitmap_font_resource;
 #[cfg(any(feature = "ui", feature = "ui-preview"))]
@@ -28,7 +29,8 @@ pub mod command_args;
 pub mod controller_db;
 pub mod crash_report;
 pub mod diagnostic_identity;
-mod fallible_log;
+#[doc(hidden)]
+pub mod fallible_log;
 pub use mister_magik_core::{input_event, input_info, input_repeat, input_state};
 pub use mister_magik_mister_runtime::framebuffer;
 pub use mister_magik_mister_runtime::latch_readiness;

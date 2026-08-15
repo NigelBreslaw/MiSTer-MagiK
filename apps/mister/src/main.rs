@@ -100,25 +100,19 @@ pub(crate) fn process_start_monotonic_us() -> u64 {
 
 mod allocation_metrics;
 mod arcade_list_renderer;
-mod artifact_publish;
 mod bitmap_text;
 pub use mister_magik_fb::build_identity;
 use mister_magik_mister_runtime::boot_analytics;
-mod catalog_failure_report;
-mod catalog_progress_report;
 mod cpu_profile;
-mod diagnostic_identity;
 mod display_config;
 #[cfg(mister_experiments)]
 mod experiments;
-mod fallible_log;
 use mister_magik_mister_runtime::fpga;
 #[cfg(feature = "ui")]
 mod frame_profile;
 mod input;
 mod input_hub;
 mod input_integrity_driver;
-mod latch_failure_report;
 #[cfg(feature = "bench-tools")]
 mod media_bench_download;
 #[cfg(feature = "bench-tools")]
@@ -151,7 +145,11 @@ pub use mister_magik_fb::{
     arcade_button_overrides, arcade_catalog, command_args, controller_db, framebuffer, input_event,
     input_repeat, input_state, launch_preparation, launcher, launcher_presentation,
     launcher_taxonomy, library_db, licenses, media_update, particle_engine, preview_worker,
-    return_catalog_capsule, setup_nav, spring_animation,
+    return_catalog_capsule, setup_nav, spring_animation, ui_errln, ui_log, ui_logln,
+};
+use mister_magik_fb::{
+    artifact_publish, catalog_failure_report, catalog_progress_report, diagnostic_identity,
+    latch_failure_report,
 };
 
 #[cfg(all(feature = "diagnostics", feature = "ui"))]

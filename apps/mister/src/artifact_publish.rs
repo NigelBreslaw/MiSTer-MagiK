@@ -6,32 +6,32 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 #[derive(Clone, Copy, Debug)]
-pub(crate) struct ArtifactPublishLabels<'a> {
-    pub(crate) destination: &'a str,
-    pub(crate) parent: &'a str,
+pub struct ArtifactPublishLabels<'a> {
+    pub destination: &'a str,
+    pub parent: &'a str,
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct ArtifactPublishPlan {
+pub struct ArtifactPublishPlan {
     final_path: PathBuf,
     temp_path: PathBuf,
     parent: PathBuf,
 }
 
 impl ArtifactPublishPlan {
-    pub(crate) fn temp_path(&self) -> &Path {
+    pub fn temp_path(&self) -> &Path {
         &self.temp_path
     }
 
-    pub(crate) fn parent(&self) -> &Path {
+    pub fn parent(&self) -> &Path {
         &self.parent
     }
 
-    pub(crate) fn cleanup_temp(&self) {
+    pub fn cleanup_temp(&self) {
         let _ = fs::remove_file(&self.temp_path);
     }
 
-    pub(crate) fn install_temp(&self, rename_context: Option<&str>) -> Result<(), String> {
+    pub fn install_temp(&self, rename_context: Option<&str>) -> Result<(), String> {
         fs::rename(&self.temp_path, &self.final_path).map_err(|e| {
             self.cleanup_temp();
             match rename_context {
@@ -50,7 +50,7 @@ impl ArtifactPublishPlan {
     }
 }
 
-pub(crate) fn prepare_artifact_publish(
+pub fn prepare_artifact_publish(
     final_path: &Path,
     temp_path: PathBuf,
     labels: ArtifactPublishLabels<'_>,
@@ -72,11 +72,11 @@ pub(crate) fn prepare_artifact_publish(
     })
 }
 
-pub(crate) fn static_temp_path_for(final_path: &Path, fallback_name: &str) -> PathBuf {
+pub fn static_temp_path_for(final_path: &Path, fallback_name: &str) -> PathBuf {
     final_path.with_file_name(format!("{}.tmp", file_name_or(final_path, fallback_name)))
 }
 
-pub(crate) fn timestamped_temp_path_for(
+pub fn timestamped_temp_path_for(
     final_path: &Path,
     fallback_name: &str,
     stamp: impl std::fmt::Display,
@@ -87,18 +87,14 @@ pub(crate) fn timestamped_temp_path_for(
     ))
 }
 
-pub(crate) fn hidden_bench_temp_path_for(
-    final_path: &Path,
-    fallback_name: &str,
-    stamp: &str,
-) -> PathBuf {
+pub fn hidden_bench_temp_path_for(final_path: &Path, fallback_name: &str, stamp: &str) -> PathBuf {
     final_path.with_file_name(format!(
         ".{}.bench-{stamp}.tmp",
         file_name_or(final_path, fallback_name)
     ))
 }
 
-pub(crate) fn hidden_timestamped_temp_path_for(
+pub fn hidden_timestamped_temp_path_for(
     final_path: &Path,
     fallback_name: &str,
     stamp: impl std::fmt::Display,
@@ -109,7 +105,7 @@ pub(crate) fn hidden_timestamped_temp_path_for(
     ))
 }
 
-pub(crate) fn cleanup_static_and_timestamped_temps(final_path: &Path, fallback_name: &str) {
+pub fn cleanup_static_and_timestamped_temps(final_path: &Path, fallback_name: &str) {
     let _ = fs::remove_file(static_temp_path_for(final_path, fallback_name));
     let Some(parent) = final_path.parent() else {
         return;
@@ -131,7 +127,7 @@ pub(crate) fn cleanup_static_and_timestamped_temps(final_path: &Path, fallback_n
     }
 }
 
-pub(crate) fn sync_path_rust_best_effort(path: &Path) {
+pub fn sync_path_rust_best_effort(path: &Path) {
     let _ = sync_path_rust(path);
 }
 

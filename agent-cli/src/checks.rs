@@ -960,16 +960,10 @@ fn render_runtime_environment_reference(registry: &RuntimeEnvironmentRegistry) -
 }
 
 fn check_device_crate_root_ownership(repository: &Path) -> Result<(), String> {
-    const EXPECTED: [(&str, &str); 14] = [
+    const EXPECTED: [(&str, &str); 8] = [
         ("arcade_list_renderer", "20c-rendering-display"),
-        ("artifact_publish", "20a-reporting-identity"),
         ("bitmap_text", "20c-rendering-display"),
-        ("catalog_failure_report", "20a-reporting-identity"),
-        ("catalog_progress_report", "20a-reporting-identity"),
-        ("diagnostic_identity", "20a-reporting-identity"),
         ("experiments/effects", "20d-cfg-test"),
-        ("fallible_log", "20a-reporting-identity"),
-        ("latch_failure_report", "20a-reporting-identity"),
         ("media_http", "20b-media"),
         ("media_pack_save", "20b-media"),
         ("test_support", "20d-cfg-test"),
@@ -1685,13 +1679,7 @@ visibility = "internal runtime"
         fs::create_dir_all(root.join("apps/mister/src/experiments")).unwrap();
         let direct = [
             "arcade_list_renderer",
-            "artifact_publish",
             "bitmap_text",
-            "catalog_failure_report",
-            "catalog_progress_report",
-            "diagnostic_identity",
-            "fallible_log",
-            "latch_failure_report",
             "media_http",
             "media_pack_save",
             "test_support",
