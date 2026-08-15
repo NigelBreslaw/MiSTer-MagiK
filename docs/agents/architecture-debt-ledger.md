@@ -90,13 +90,18 @@ name this thin module as the compatibility-window behavioral authority until
 the remaining named consumers move; its direct host-file ledger entries are
 not removed by this core adoption alone.
 
+`mister/tools/manager/src/main.rs` now delegates manifest structure, public
+layout, and legacy-compatible identity validation to the shared contract's
+`ManagerLegacy` profile while retaining manager-owned filesystem hashing,
+metadata checks, and error presentation. Candidate-ID recomputation remains a
+named hardening step before the manager profile is fully strict.
+
 | Legacy consumer | Migration owner |
 |---|---|
 | `agent-cli/src/host/mod.rs` | Enforce contract and agent adoption |
 | `agent-cli/src/host/platform_deploy.rs` | Enforce contract and agent adoption |
 | `agent-cli/src/deploy.rs` | Enforce contract and agent adoption |
 | `agent-cli/src/local_main_delivery.rs` | Enforce contract and agent adoption |
-| `mister/tools/manager/src/main.rs` | Enforce manager adoption |
 | `crates/catalog/src/device_layout.rs` | Enforce installed-layout adoption, before Type path overrides |
 | `scripts/MiSTer-MagiK.sh` | Enforce generated non-Rust consumers |
 | `scripts/package-distribution.sh` | Enforce generated non-Rust consumers |
