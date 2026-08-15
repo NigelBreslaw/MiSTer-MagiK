@@ -8493,7 +8493,9 @@ fn profile_installed_arcade_velocity_scroll_streamline(
         );
     }
     let final_boot_id = remote_read(&session, "/proc/sys/kernel/random/boot_id")
-        .ok_or("device boot id is unavailable after Arcade velocity-scroll Streamline")?;
+        .ok_or("device boot id is unavailable after Arcade velocity-scroll Streamline")?
+        .trim()
+        .to_owned();
     if final_boot_id != boot_id {
         return Err("device rebooted during Arcade velocity-scroll Streamline".into());
     }
