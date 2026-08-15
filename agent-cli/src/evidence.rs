@@ -80,6 +80,17 @@ CREATE TABLE IF NOT EXISTS operation_leases (
 PRAGMA user_version = 12;
 "#;
 
+const RECLAIM_INACTIVE_VALIDATION_LEASE: &str = "DELETE FROM operation_leases
+     WHERE operation_id=?1 AND fingerprint=?2
+       AND (
+           expires_ms<?3
+           OR EXISTS (
+               SELECT 1 FROM requests
+               WHERE requests.id=operation_leases.owner_request_id
+                 AND requests.completed_ms IS NOT NULL
+           )
+       )";
+
 #[derive(Debug)]
 pub struct Evidence {
     connection: Connection,
@@ -328,16 +339,7 @@ impl Evidence {
             .map_err(|error| error.to_string())?;
         transaction
             .execute(
-                "DELETE FROM operation_leases
-                 WHERE operation_id=?1 AND fingerprint=?2
-                   AND (
-                       expires_ms<?3
-                       OR EXISTS (
-                           SELECT 1 FROM requests
-                           WHERE requests.id=operation_leases.owner_request_id
-                             AND requests.completed_ms IS NOT NULL
-                       )
-                   )",
+                RECLAIM_INACTIVE_VALIDATION_LEASE,
                 params![operation_id, fingerprint, now],
             )
             .map_err(|error| error.to_string())?;
@@ -356,6 +358,12 @@ impl Evidence {
         operation_id: &str,
         fingerprint: &str,
     ) -> Result<Option<String>, String> {
+        self.connection
+            .execute(
+                RECLAIM_INACTIVE_VALIDATION_LEASE,
+                params![operation_id, fingerprint, now_ms()],
+            )
+            .map_err(|error| error.to_string())?;
         self.connection
             .query_row(
                 "SELECT owner_request_id FROM operation_leases WHERE operation_id=?1 AND fingerprint=?2",
@@ -1287,6 +1295,12 @@ mod tests {
                 .unwrap()
         );
         evidence.finish(&owner.id, Outcome::Failed).unwrap();
+        assert_eq!(
+            evidence
+                .validation_owner("check.one", "fingerprint")
+                .unwrap(),
+            None
+        );
         assert!(
             evidence
                 .claim_validation("check.one", "fingerprint", &waiter.id)
