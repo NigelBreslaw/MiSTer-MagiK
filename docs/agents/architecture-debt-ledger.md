@@ -191,7 +191,8 @@ test-only dead-code allowances because bench-scene tests deliberately compile
 partial UI feature graphs; production builds retain full dead-code enforcement.
 The full feature matrix also proves `app_entry` imports only library modules it
 uses under the selected cfg, while typed ready-FIFO capture retains the legacy
-empty `PathBuf` fallback.
+empty `PathBuf` fallback. Feature-specific application tests now target that
+owning library root instead of rebuilding the retired binary module graph.
 
 ## Executable failure boundary
 

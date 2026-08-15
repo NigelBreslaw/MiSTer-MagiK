@@ -589,8 +589,7 @@ fn add_path_operations(
                         "test",
                         "--manifest-path",
                         "apps/mister/Cargo.toml",
-                        "--bin",
-                        "mister-magik-fb",
+                        "--lib",
                         "--no-default-features",
                         "--features",
                         features,
@@ -2287,6 +2286,8 @@ mod tests {
             .iter()
             .find(|operation| operation.id == "app.media-http-signed-tests")
             .unwrap();
+        assert!(signed_app.args.iter().any(|arg| arg == "--lib"));
+        assert!(!signed_app.args.iter().any(|arg| arg == "--bin"));
         assert!(
             signed_app
                 .args
