@@ -175,11 +175,7 @@ pub fn wait_for_running_main_and_fifo(
     })
 }
 
-pub fn main_running() -> bool {
-    process_running(MISTER_PROCESS_NAMES)
-}
-
-pub fn magik_main_running() -> bool {
+fn main_running() -> bool {
     process_running(MISTER_PROCESS_NAMES)
 }
 

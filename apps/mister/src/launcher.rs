@@ -25,10 +25,12 @@ use mister_magik_core::launcher_effects::{
     DisplayControl, DisplayState as EffectDisplayState, DisplayStateRead,
     DisplayTransactionPhase as EffectDisplayTransactionPhase, LaunchHandoff, LaunchHandoffOutcome,
     LaunchHandoffRequest, LaunchSelection as EffectLaunchSelection, LauncherEffectFailure,
-    LauncherEffectFailureKind, StructuredLaunchSelection as EffectStructuredLaunchSelection,
+    LauncherEffectFailureKind, RuntimeState,
+    StructuredLaunchSelection as EffectStructuredLaunchSelection,
 };
 use mister_magik_mister_runtime::display_resolution::{DISPLAY_RESOLUTIONS, DisplayResolution};
 use mister_magik_mister_runtime::main_command::{self, MainCommand};
+use mister_magik_mister_runtime::runtime_state::SystemRuntimeState;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -4968,7 +4970,9 @@ impl LaunchIo for SystemLaunchIo {
     }
 
     fn magik_running(&mut self) -> bool {
-        main_command::magik_main_running()
+        SystemRuntimeState
+            .main_state()
+            .is_ok_and(|state| state.magik_owned)
     }
 
     fn simple_joystick_handling(&mut self) -> bool {
@@ -5013,7 +5017,9 @@ impl LaunchIo for SystemLaunchIo {
 }
 
 fn mister_running() -> bool {
-    main_command::main_running()
+    SystemRuntimeState
+        .main_state()
+        .is_ok_and(|state| state.running)
 }
 
 /// Main owns HDMI/OSD/input state; do not kill it from Slint.
@@ -5255,20 +5261,9 @@ pub fn mark_launch_sent_for_test() {
 
 /// Main is running an arcade core (argv contains `.rbf`, not `menu.rbf`).
 pub fn mister_running_arcade_core() -> bool {
-    let output = Command::new("sh")
-        .arg("-c")
-        .arg(
-            "pid=$(pidof MiSTer_MagiKDev 2>/dev/null || pidof MiSTer_MagiK 2>/dev/null || pidof MiSTer 2>/dev/null); [ -n \"$pid\" ] && tr '\\0' ' ' < /proc/$pid/cmdline",
-        )
-        .output();
-    let Ok(output) = output else {
-        return false;
-    };
-    if !output.status.success() {
-        return false;
-    }
-    let cmdline = String::from_utf8_lossy(&output.stdout);
-    cmdline.contains(".rbf") && !cmdline.contains("menu.rbf")
+    SystemRuntimeState
+        .main_state()
+        .is_ok_and(|state| state.arcade_core)
 }
 
 /// Launch via fifo. Prefer the Magik-aware Main command when the fork owns the device.

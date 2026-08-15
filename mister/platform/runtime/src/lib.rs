@@ -24,6 +24,8 @@ pub mod latch_readiness;
 #[cfg(feature = "app-runtime")]
 pub mod main_command;
 #[cfg(feature = "app-runtime")]
+pub mod runtime_state;
+#[cfg(feature = "app-runtime")]
 pub mod runtime_status;
 #[cfg(feature = "app-runtime")]
 pub mod settings;
