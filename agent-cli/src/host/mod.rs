@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use crate::transport::{AutomationAction, AutomationButton, DeviceFailure, Layout};
+use mister_magik_platform_manifest_contract as platform_manifest_contract;
 use quick_xml::Reader;
 use quick_xml::events::{BytesStart, Event};
 use rusqlite::backup::Backup;
@@ -87,12 +88,6 @@ const PUBLIC_MANIFEST_REMOTE: &str = mister_magik_platform_manifest_contract::PU
 const PUBLIC_GUI_REMOTE: &str = mister_magik_platform_manifest_contract::PUBLIC_PATHS.gui;
 const PUBLIC_MAIN_REMOTE: &str = mister_magik_platform_manifest_contract::PUBLIC_PATHS.main;
 const DEVELOPMENT_GUI_REMOTE: &str = mister_magik_platform_manifest_contract::DEVELOPMENT_PATHS.gui;
-const DEVELOPMENT_MANAGER_REMOTE: &str =
-    mister_magik_platform_manifest_contract::DEVELOPMENT_PATHS.manager;
-const DEVELOPMENT_SCANOUT_MODULE_REMOTE: &str =
-    mister_magik_platform_manifest_contract::DEVELOPMENT_PATHS.scanout_module;
-const DEVELOPMENT_SCANOUT_METADATA_REMOTE: &str =
-    mister_magik_platform_manifest_contract::DEVELOPMENT_PATHS.scanout_metadata;
 
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
@@ -2735,52 +2730,13 @@ fn parse_local_main_manifest(path: &Path) -> Result<BTreeMap<String, String>> {
 }
 
 fn parse_local_main_manifest_text(text: &str) -> Result<BTreeMap<String, String>> {
-    let mut fields: BTreeMap<String, String> = BTreeMap::new();
-    for line in text.lines() {
-        let (key, value) = line
-            .split_once('=')
-            .ok_or("local Main manifest contains a malformed line")?;
-        if value.is_empty()
-            || !RUNTIME_MANIFEST_FIELDS.contains(&key)
-            || fields.insert(key.into(), value.into()).is_some()
-        {
-            return Err(format!("local Main manifest has an invalid field: {key}").into());
-        }
-    }
-    if fields.len() != RUNTIME_MANIFEST_FIELDS.len()
-        || RUNTIME_MANIFEST_FIELDS
-            .iter()
-            .any(|field| !fields.contains_key(*field))
-    {
-        return Err("local Main manifest does not have the exact canonical field set".into());
-    }
-    for field in [
-        "platform_bundle_id",
-        "qualification_candidate_id",
-        "main_sha256",
-        "gui_sha256",
-        "manager_sha256",
-        "scanout_module_sha256",
-        "scanout_metadata_sha256",
-        "latch_rbf_sha256",
-        "latch_metadata_sha256",
-        "platform_contract_sha256",
-    ] {
-        require_local_main_hex(field, &fields[field], 64)?;
-    }
-    for field in ["main_revision", "magik_revision", "menu_revision"] {
-        require_local_main_hex(field, &fields[field], 40)?;
-    }
-    if fields["format"] != "mister-magik-platform-v3"
-        || fields["main_path"] != LOCAL_MAIN_REMOTE
-        || fields["gui_path"] != DEVELOPMENT_GUI_REMOTE
-    {
-        return Err("local Main manifest has a non-Dev platform identity".into());
-    }
-    if fields["qualification_candidate_id"] != local_main_candidate_id(&fields) {
-        return Err("local Main manifest candidate identity is inconsistent".into());
-    }
-    Ok(fields)
+    platform_manifest_contract::parse(
+        text,
+        platform_manifest_contract::Layout::Development,
+        platform_manifest_contract::ValidationProfile::AgentStrict,
+    )
+    .map(platform_manifest_contract::ParsedManifest::into_values)
+    .map_err(|error| format!("local Main manifest is invalid: {error}").into())
 }
 
 fn validate_local_main_overlay_preserves_installed(
@@ -2804,17 +2760,7 @@ fn validate_local_main_overlay_preserves_installed(
 }
 
 fn local_main_candidate_id(fields: &BTreeMap<String, String>) -> String {
-    let mut hash = Sha256::new();
-    for field in RUNTIME_MANIFEST_FIELDS {
-        if *field == "qualification_candidate_id" {
-            continue;
-        }
-        hash.update(field.as_bytes());
-        hash.update(b"=");
-        hash.update(fields[*field].as_bytes());
-        hash.update(b"\n");
-    }
-    encode_hex(&hash.finalize())
+    platform_manifest_contract::qualification_candidate_id(fields)
 }
 
 fn require_local_main_hex(name: &str, value: &str, length: usize) -> Result<()> {
@@ -20521,33 +20467,7 @@ struct MagikDeployTransaction {
     manifest: ManifestDeploy,
 }
 
-const RUNTIME_MANIFEST_FIELDS: &[&str] = &[
-    "format",
-    "platform_release",
-    "platform_release_number",
-    "platform_bundle_id",
-    "qualification_candidate_id",
-    "latch_protocol_version",
-    "latch_capability_mask",
-    "main_path",
-    "gui_path",
-    "manager_path",
-    "scanout_module_path",
-    "scanout_metadata_path",
-    "latch_rbf_path",
-    "latch_metadata_path",
-    "main_sha256",
-    "gui_sha256",
-    "manager_sha256",
-    "scanout_module_sha256",
-    "scanout_metadata_sha256",
-    "latch_rbf_sha256",
-    "latch_metadata_sha256",
-    "platform_contract_sha256",
-    "main_revision",
-    "magik_revision",
-    "menu_revision",
-];
+const RUNTIME_MANIFEST_FIELDS: &[&str] = platform_manifest_contract::FIELDS;
 
 fn validate_runtime_bundle_identity(
     local: &Path,
@@ -20569,43 +20489,14 @@ fn validate_runtime_bundle_identity(
         .into());
     }
     let text = fs::read_to_string(manifest_local)?;
-    let mut fields = BTreeMap::new();
-    for line in text.lines() {
-        let (key, value) = line
-            .split_once('=')
-            .ok_or("runtime manifest contains a malformed line")?;
-        if value.is_empty()
-            || !RUNTIME_MANIFEST_FIELDS.contains(&key)
-            || fields.insert(key, value).is_some()
-        {
-            return Err(
-                format!("runtime manifest has an invalid or duplicate field: {key}").into(),
-            );
-        }
-    }
-    if fields.len() != RUNTIME_MANIFEST_FIELDS.len()
-        || RUNTIME_MANIFEST_FIELDS
-            .iter()
-            .any(|field| !fields.contains_key(field))
-    {
-        return Err("runtime manifest does not have the exact canonical field set".into());
-    }
-    for (key, expected) in [
-        ("format", "mister-magik-platform-v3"),
-        ("latch_protocol_version", "5"),
-        ("latch_capability_mask", "0x03ff"),
-        ("main_path", LOCAL_MAIN_REMOTE),
-        ("gui_path", DEVELOPMENT_GUI_REMOTE),
-        ("manager_path", DEVELOPMENT_MANAGER_REMOTE),
-        ("scanout_module_path", DEVELOPMENT_SCANOUT_MODULE_REMOTE),
-        ("scanout_metadata_path", DEVELOPMENT_SCANOUT_METADATA_REMOTE),
-        ("latch_rbf_path", EXPERIMENTAL_FPGA_RBF_REMOTE),
-        ("latch_metadata_path", EXPERIMENTAL_FPGA_METADATA_REMOTE),
-        ("gui_sha256", expected_sha256),
-    ] {
-        if fields.get(key).copied() != Some(expected) {
-            return Err(format!("runtime manifest field {key} is not canonical").into());
-        }
+    let manifest = platform_manifest_contract::parse(
+        &text,
+        platform_manifest_contract::Layout::Development,
+        platform_manifest_contract::ValidationProfile::AgentStrict,
+    )
+    .map_err(|error| format!("runtime manifest is invalid: {error}"))?;
+    if manifest.get("gui_sha256") != Some(expected_sha256) {
+        return Err("runtime manifest field gui_sha256 is not canonical".into());
     }
     file_sha256(manifest_local.to_path_buf())
 }

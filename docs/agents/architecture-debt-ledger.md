@@ -85,7 +85,10 @@ read sites until their named Type-A migration batches land.
 descriptor and `mister/platform/contracts/manifest` is the behavioral parser,
 serializer, validation-profile, installed-layout, and candidate-identity
 authority. `agent-cli/src/platform_manifest.rs` retains only agent-owned
-artifact hashing and file orchestration around that contract.
+artifact hashing and file orchestration around that contract. Host runtime and
+local-Main delivery validation use the shared strict parser, field order, and
+candidate computation; the remote installed-platform verifier interpolates the
+contract format constant instead of owning a second schema literal.
 
 Checked-in shell constants and byte-stable public/development fixtures under
 `mister/platform/contracts/generated/` are generated from the descriptor by

@@ -257,7 +257,10 @@ fn test_manifest(magik_revision: &str) -> String {
 
     let fields = crate::platform_manifest::FIELDS;
     let mut values = BTreeMap::new();
-    values.insert("format".to_owned(), "mister-magik-platform-v3".to_owned());
+    values.insert(
+        "format".to_owned(),
+        crate::platform_manifest::FORMAT.to_owned(),
+    );
     values.insert("platform_release".to_owned(), "platform-v0.16".to_owned());
     values.insert("platform_release_number".to_owned(), "16".to_owned());
     values.insert("platform_bundle_id".to_owned(), "c".repeat(64));

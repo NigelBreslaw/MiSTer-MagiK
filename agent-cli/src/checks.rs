@@ -1447,6 +1447,10 @@ fn platform_manifest_structural_duplicate(
     dev: &PlatformManifestLayout,
 ) -> bool {
     if source.contains("mister_magik_platform_manifest_contract::parse(")
+        || (source.contains("mister_magik_platform_manifest_contract")
+            && source.contains("platform_manifest_contract::parse("))
+        || (source.contains("mister_magik_platform_manifest_contract")
+            && source.contains("contract::parse("))
         || source.contains("mister/platform/contracts/generated/")
         || source.contains("generate-platform-v3-consumers.py")
     {
