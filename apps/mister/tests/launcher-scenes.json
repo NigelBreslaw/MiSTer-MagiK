@@ -1,0 +1,155 @@
+{
+  "schema": "mister-magik-launcher-scenes-v1",
+  "scenes": [
+    {
+      "id": "crt-arcade",
+      "profile": "crt-480p",
+      "scenario": "arcade",
+      "content": "fixtures",
+      "orientation": "normal",
+      "refresh_hz": 60,
+      "frame": 0,
+      "scan": false,
+      "download": false,
+      "transition": null
+    },
+    {
+      "id": "crt-catalog-scan",
+      "profile": "crt-480p",
+      "scenario": "catalog-scan",
+      "content": "fixtures",
+      "orientation": "normal",
+      "refresh_hz": 60,
+      "frame": 0,
+      "scan": false,
+      "download": false,
+      "transition": null
+    },
+    {
+      "id": "crt-controller-setup",
+      "profile": "crt-480p",
+      "scenario": "controller-setup",
+      "content": "fixtures",
+      "orientation": "normal",
+      "refresh_hz": 60,
+      "frame": 0,
+      "scan": false,
+      "download": false,
+      "transition": null
+    },
+    {
+      "id": "crt-home",
+      "profile": "crt-480p",
+      "scenario": "home",
+      "content": "fixtures",
+      "orientation": "normal",
+      "refresh_hz": 60,
+      "frame": 0,
+      "scan": false,
+      "download": false,
+      "transition": null
+    },
+    {
+      "id": "crt-navigation-transition-midpoint",
+      "profile": "crt-480p",
+      "scenario": "navigation-transition-midpoint",
+      "content": "fixtures",
+      "orientation": "normal",
+      "refresh_hz": 60,
+      "frame": 17,
+      "scan": false,
+      "download": false,
+      "transition": {
+        "edge": "home-arcade",
+        "duration_ms": 600
+      }
+    },
+    {
+      "id": "crt-settings",
+      "profile": "crt-480p",
+      "scenario": "settings",
+      "content": "fixtures",
+      "orientation": "normal",
+      "refresh_hz": 60,
+      "frame": 0,
+      "scan": false,
+      "download": false,
+      "transition": null
+    },
+    {
+      "id": "hdmi-arcade",
+      "profile": "hdmi",
+      "scenario": "arcade",
+      "content": "fixtures",
+      "orientation": "normal",
+      "refresh_hz": 60,
+      "frame": 0,
+      "scan": false,
+      "download": false,
+      "transition": null
+    },
+    {
+      "id": "hdmi-catalog-scan",
+      "profile": "hdmi",
+      "scenario": "catalog-scan",
+      "content": "fixtures",
+      "orientation": "normal",
+      "refresh_hz": 60,
+      "frame": 0,
+      "scan": false,
+      "download": false,
+      "transition": null
+    },
+    {
+      "id": "hdmi-controller-setup",
+      "profile": "hdmi",
+      "scenario": "controller-setup",
+      "content": "fixtures",
+      "orientation": "normal",
+      "refresh_hz": 60,
+      "frame": 0,
+      "scan": false,
+      "download": false,
+      "transition": null
+    },
+    {
+      "id": "hdmi-home",
+      "profile": "hdmi",
+      "scenario": "home",
+      "content": "fixtures",
+      "orientation": "normal",
+      "refresh_hz": 60,
+      "frame": 0,
+      "scan": false,
+      "download": false,
+      "transition": null
+    },
+    {
+      "id": "hdmi-navigation-transition-midpoint",
+      "profile": "hdmi",
+      "scenario": "navigation-transition-midpoint",
+      "content": "fixtures",
+      "orientation": "normal",
+      "refresh_hz": 60,
+      "frame": 17,
+      "scan": false,
+      "download": false,
+      "transition": {
+        "edge": "home-arcade",
+        "duration_ms": 600
+      }
+    },
+    {
+      "id": "hdmi-settings",
+      "profile": "hdmi",
+      "scenario": "settings",
+      "content": "fixtures",
+      "orientation": "normal",
+      "refresh_hz": 60,
+      "frame": 0,
+      "scan": false,
+      "download": false,
+      "transition": null
+    }
+  ]
+}

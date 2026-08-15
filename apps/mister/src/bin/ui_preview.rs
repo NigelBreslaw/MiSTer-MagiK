@@ -2,7 +2,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #[cfg(target_os = "macos")]
+#[path = "ui_preview/scene_manifest.rs"]
+mod ui_preview_scene_manifest;
+
+#[cfg(target_os = "macos")]
 mod macos {
+    use super::ui_preview_scene_manifest::launcher_scene_manifest;
     use mister_magik_catalog::portable_catalog_builder::{
         PortableCatalogBuild, publish_portable_catalog,
     };
@@ -103,6 +108,13 @@ mod macos {
 
     pub fn run() -> Result<(), Box<dyn Error>> {
         let options = PreviewOptions::parse(std::env::args().skip(1))?;
+        if options.list_scenes {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&launcher_scene_manifest()?)?
+            );
+            return Ok(());
+        }
         let headless = options.output.is_some();
         let display = options.display_profile.display();
         let layout = UiLayoutGeometry::for_display(&display, options.orientation);
@@ -2574,6 +2586,7 @@ mod macos {
         settings_page_transition_demo: bool,
         navigation_transition_demo_reverse: bool,
         navigation_transition_duration_ms: Option<u64>,
+        list_scenes: bool,
     }
 
     impl PreviewOptions {
@@ -2594,6 +2607,7 @@ mod macos {
             let mut settings_page_transition_demo = false;
             let mut navigation_transition_demo_reverse = false;
             let mut navigation_transition_duration_ms = None;
+            let mut list_scenes = false;
             let mut arguments = arguments.into_iter();
             while let Some(argument) = arguments.next() {
                 match argument.as_str() {
@@ -2675,6 +2689,7 @@ mod macos {
                     "--navigation-transition-demo-reverse" => {
                         navigation_transition_demo_reverse = true;
                     }
+                    "--list-scenes" => list_scenes = true,
                     "--display-profile" => {
                         let value = arguments
                             .next()
@@ -2695,7 +2710,7 @@ mod macos {
                     }
                     "--help" | "-h" => {
                         return Err(
-                            "usage: mister-magik-ui-preview [--content auto|fixtures|card] [--sd-root PATH] [--cache-root PATH] [--no-scan] [--no-download] [--navigation-transition-duration-ms 100..10000] [--navigation-transition-demo home-consoles|home-arcade|consoles-system] [--settings-page-transition-demo] [--navigation-transition-demo-reverse] [--display-profile hdmi|crt-240p|crt-288p|crt-480p|crt-576p] [--orientation normal|monitor-clockwise|monitor-counterclockwise] [--scenario NAME] [--refresh-rate auto|60|120] [--frame N] [--output FILE.ppm|FILE.png] [--provenance-output FILE.json]"
+                            "usage: mister-magik-ui-preview [--list-scenes] [--content auto|fixtures|card] [--sd-root PATH] [--cache-root PATH] [--no-scan] [--no-download] [--navigation-transition-duration-ms 100..10000] [--navigation-transition-demo home-consoles|home-arcade|consoles-system] [--settings-page-transition-demo] [--navigation-transition-demo-reverse] [--display-profile hdmi|crt-240p|crt-288p|crt-480p|crt-576p] [--orientation normal|monitor-clockwise|monitor-counterclockwise] [--scenario NAME] [--refresh-rate auto|60|120] [--frame N] [--output FILE.ppm|FILE.png] [--provenance-output FILE.json]"
                                 .into(),
                         );
                     }
@@ -2737,6 +2752,7 @@ mod macos {
                 settings_page_transition_demo,
                 navigation_transition_demo_reverse,
                 navigation_transition_duration_ms,
+                list_scenes,
             })
         }
     }
