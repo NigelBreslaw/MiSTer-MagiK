@@ -2,7 +2,7 @@
 
 <!-- Generated from apps/mister/config/runtime-environment.toml. Do not edit. -->
 
-Registry format: `mister-magik-runtime-environment-v1`. Baseline: 396 literal occurrences, 274 owned names, 10 external/build-time names.
+Registry format: `mister-magik-runtime-environment-v1`. Baseline: 395 literal occurrences, 274 owned names, 10 external/build-time names.
 
 | Name | Classification | Shape | Default behavior | Visibility | Owner |
 |---|---|---|---|---|---|
