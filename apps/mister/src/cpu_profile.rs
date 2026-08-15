@@ -206,6 +206,7 @@ fn bounded_profile_trigger_from_values(
             Some(BoundedProfileTrigger::OrientationTransitionZoom)
         }
         Some(LAUNCHER_RESPONSE_TRIGGER) => Some(BoundedProfileTrigger::LauncherResponse),
+        Some(ARCADE_VELOCITY_SCROLL_TRIGGER) => Some(BoundedProfileTrigger::ArcadeVelocityScroll),
         Some(LAUNCH_RETURN_TRIGGER) => Some(BoundedProfileTrigger::LaunchReturn),
         Some(COLD_BOOT_TRIGGER) => Some(BoundedProfileTrigger::ColdBoot),
         _ => None,
