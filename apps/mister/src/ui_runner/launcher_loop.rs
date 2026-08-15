@@ -9548,16 +9548,6 @@ pub(super) fn run_launcher_loop(
                 let _ = full_screen_transition.retain_redraw(generation);
             }
             None
-        } else if crt_backdrop_eligible
-            && crt_backdrop_was_eligible
-            && !crt_backdrop_leaving
-            && !full_frame_present
-        {
-            // The CRT Arcade compositor owns the changing screenshot, list,
-            // and chrome cache after the initial eligible frame. Reuse that
-            // stable Slint base while velocity scrolling or fading; entering,
-            // leaving, and any full-frame invalidation still raster normally.
-            None
         } else if composition_decision.force_full_slint_raster || crt_backdrop_leaving {
             gui_raster_phase = gui_raster_profile_phase(true, true);
             let gui_raster_pmu = gui_profiling.phase_span(gui_raster_phase.span_name());
