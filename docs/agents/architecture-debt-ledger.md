@@ -96,7 +96,9 @@ layout, and legacy-compatible identity validation to the shared contract's
 metadata checks, and error presentation. All migrated validation profiles now
 recompute the qualification candidate identity and reject forged lower-case
 hex values. The GUI profile also rejects both missing and additional fields,
-using the schema-generated exact platform-v3 field set.
+using the schema-generated exact platform-v3 field set. GUI identity validation
+hashes all seven installed artifacts: the running GUI executable plus Main,
+manager, scanout module and metadata, and latch RBF and metadata.
 
 | Legacy consumer | Migration owner |
 |---|---|

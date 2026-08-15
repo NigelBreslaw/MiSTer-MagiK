@@ -65,6 +65,17 @@ pub struct PlatformIdentity {
 static IDENTITY: OnceLock<DiagnosticIdentity> = OnceLock::new();
 type IdentityLoadError = (String, Option<Box<PlatformIdentity>>);
 
+// The running executable supplies the GUI artifact check. These are the six
+// remaining platform-v3 artifacts that must also match before identity is valid.
+const INSTALLED_ARTIFACT_FIELDS: [(&str, &str); 6] = [
+    ("main_path", "main_sha256"),
+    ("manager_path", "manager_sha256"),
+    ("scanout_module_path", "scanout_module_sha256"),
+    ("scanout_metadata_path", "scanout_metadata_sha256"),
+    ("latch_rbf_path", "latch_rbf_sha256"),
+    ("latch_metadata_path", "latch_metadata_sha256"),
+];
+
 pub fn current() -> &'static DiagnosticIdentity {
     IDENTITY.get_or_init(load_current)
 }
@@ -184,11 +195,7 @@ fn load_platform(
             Some(Box::new(platform)),
         ));
     }
-    for (path_field, hash_field) in [
-        ("main_path", "main_sha256"),
-        ("scanout_module_path", "scanout_module_sha256"),
-        ("latch_rbf_path", "latch_rbf_sha256"),
-    ] {
+    for (path_field, hash_field) in INSTALLED_ARTIFACT_FIELDS {
         let path = PathBuf::from(required(&values, path_field)?);
         let expected = required(&values, hash_field)?;
         if digest(&path).ok().as_deref() != Some(expected) {
@@ -258,4 +265,24 @@ fn safe_component(value: &str) -> String {
 
 fn short_component(value: &str) -> String {
     safe_component(value).chars().take(16).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::INSTALLED_ARTIFACT_FIELDS;
+
+    #[test]
+    fn installed_identity_checks_every_non_gui_platform_artifact() {
+        assert_eq!(
+            INSTALLED_ARTIFACT_FIELDS,
+            [
+                ("main_path", "main_sha256"),
+                ("manager_path", "manager_sha256"),
+                ("scanout_module_path", "scanout_module_sha256"),
+                ("scanout_metadata_path", "scanout_metadata_sha256"),
+                ("latch_rbf_path", "latch_rbf_sha256"),
+                ("latch_metadata_path", "latch_metadata_sha256"),
+            ]
+        );
+    }
 }
