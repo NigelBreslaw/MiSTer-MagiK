@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
 pub(super) const LAUNCHER_SCENE_MANIFEST_JSON: &str =
-    include_str!("../../tests/launcher-scenes.json");
+    include_str!("../../../tests/launcher-scenes.json");
 
 const SCHEMA: &str = "mister-magik-launcher-scenes-v1";
 const EXPECTED_SCENE_COUNT: usize = 12;
