@@ -1548,7 +1548,14 @@ mod linux {
             stream.set_read_timeout(Some(remaining))
         });
         let response = match read_result {
-            Ok(line) if line.is_empty() => response(None, false, None, Some("empty request")),
+            Ok(line) if line.is_empty() => failure_response(
+                None,
+                "empty request",
+                mister_magik_agent_protocol::FailureCode::InvalidRequest,
+                mister_magik_agent_protocol::FailurePhase::Request,
+                mister_magik_agent_protocol::RetryPolicy::Never,
+                false,
+            ),
             Ok(line) => {
                 if maybe_handle_framebuffer_stream_v1(&line, &token, &mut stream) {
                     return;
@@ -1574,6 +1581,14 @@ mod linux {
                 }
                 handle_control_line(&line, &token, boot_id, started)
             }
+            Err(err) if err.kind() == io::ErrorKind::InvalidData => failure_response(
+                None,
+                &format!("read error: {err}"),
+                mister_magik_agent_protocol::FailureCode::InvalidRequest,
+                mister_magik_agent_protocol::FailurePhase::Request,
+                mister_magik_agent_protocol::RetryPolicy::Never,
+                false,
+            ),
             Err(err) => response(None, false, None, Some(&format!("read error: {err}"))),
         };
         let _ = writeln!(stream, "{response}");
@@ -2809,7 +2824,17 @@ mod linux {
                 if error.message == "unauthorized" {
                     append_log_line("control_auth_failed".to_string());
                 }
-                return response(error.id, false, None, Some(&error.message));
+                if error.message == "unauthorized" {
+                    return response(error.id, false, None, Some(&error.message));
+                }
+                return failure_response(
+                    error.id,
+                    &error.message,
+                    mister_magik_agent_protocol::FailureCode::InvalidRequest,
+                    mister_magik_agent_protocol::FailurePhase::Request,
+                    mister_magik_agent_protocol::RetryPolicy::Never,
+                    false,
+                );
             }
         };
         let ControlRequest { id, cmd, args } = request;
@@ -2884,7 +2909,14 @@ mod linux {
                 ),
                 Err(err) => response(id, false, None, Some(&err)),
             },
-            _ => response(id, false, None, Some("unknown cmd")),
+            _ => failure_response(
+                id,
+                "unknown cmd",
+                mister_magik_agent_protocol::FailureCode::UnknownCommand,
+                mister_magik_agent_protocol::FailurePhase::Request,
+                mister_magik_agent_protocol::RetryPolicy::Never,
+                false,
+            ),
         }
     }
 
@@ -2895,6 +2927,30 @@ mod linux {
             json!({"id": id.unwrap_or(Value::Null), "ok": false, "error": error.unwrap_or("error")})
         };
         value.to_string()
+    }
+
+    pub(super) fn failure_response(
+        id: Option<Value>,
+        error: &str,
+        code: mister_magik_agent_protocol::FailureCode,
+        phase: mister_magik_agent_protocol::FailurePhase,
+        retry_policy: mister_magik_agent_protocol::RetryPolicy,
+        recovery_required: bool,
+    ) -> String {
+        let failure = mister_magik_agent_protocol::FailureMetadata {
+            code,
+            detail: error.to_owned(),
+            phase,
+            retry_policy,
+            recovery_required,
+        };
+        json!({
+            "id": id.unwrap_or(Value::Null),
+            "ok": false,
+            "error": error,
+            "failure": failure.to_value(),
+        })
+        .to_string()
     }
 
     fn attach_io_operation_evidence(result: &mut Value, evidence: Value) {
@@ -6751,6 +6807,24 @@ mod tests {
                 args: json!({}),
             }
         );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn invalid_request_failure_retains_legacy_text_and_protocol_version() {
+        let line = linux::failure_response(
+            Some(json!(9)),
+            "missing cmd",
+            mister_magik_agent_protocol::FailureCode::InvalidRequest,
+            mister_magik_agent_protocol::FailurePhase::Request,
+            mister_magik_agent_protocol::RetryPolicy::Never,
+            false,
+        );
+        let value: Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(value["error"], "missing cmd");
+        assert_eq!(value["failure"]["code"], "invalid_request");
+        assert_eq!(value["failure"]["phase"], "request");
+        assert_eq!(mister_magik_agent_protocol::PROTOCOL_VERSION, 2);
     }
 
     #[test]

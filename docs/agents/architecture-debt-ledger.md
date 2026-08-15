@@ -203,6 +203,11 @@ unknown future values, phase, retry policy, and recovery flag—while exposing a
 compatible `DeviceFailure` mapping and keeping the legacy error as its display
 text.
 
+Device emission is ratcheted by family. Unknown commands, empty/malformed
+requests, missing commands, and oversized/non-UTF-8 request headers now emit
+`unknown_command` or `invalid_request` metadata while retaining their exact
+legacy error strings.
+
 ## Hotspot ownership
 
 The PR advisory report uses stable owner IDs so moves do not erase history.
