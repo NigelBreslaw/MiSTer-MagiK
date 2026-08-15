@@ -354,6 +354,28 @@ mod tests {
     }
 
     #[test]
+    fn checked_in_non_rust_fixtures_match_the_typed_contract() {
+        for (text, layout) in [
+            (
+                include_str!("../../generated/platform-v3.public.fixture"),
+                Layout::Public,
+            ),
+            (
+                include_str!("../../generated/platform-v3.development.fixture"),
+                Layout::Development,
+            ),
+        ] {
+            assert_eq!(
+                parse(text, layout, ValidationProfile::AgentStrict)
+                    .unwrap()
+                    .serialize()
+                    .unwrap(),
+                text
+            );
+        }
+    }
+
+    #[test]
     fn strict_profile_preserves_current_rejection_classes() {
         let valid = canonical(Layout::Development);
         let cases = [

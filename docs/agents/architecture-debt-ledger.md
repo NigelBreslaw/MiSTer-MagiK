@@ -69,26 +69,22 @@ removed only when each process has one named parse site, registered aliases and
 external inputs remain explicit, and the negative fixtures reject downstream
 reads. No other P1 stream may create a competing registry or config vocabulary.
 
-## Platform-v3 legacy consumers
+## Platform-v3 authority
 
-`mister/platform/contracts/platform-v3.schema.toml` is the neutral structural
-descriptor. `agent-cli/src/platform_manifest.rs` is the temporary behavioral
-parser and serializer authority. The following legacy entries are exact; P1
-Enforce removes each entry only when its consumer adopts the shared
-`platform-manifest-contract` authority or a generated consumer from the same
-descriptor.
+`mister/platform/contracts/platform-v3.schema.toml` is the canonical neutral
+descriptor and `mister/platform/contracts/manifest` is the behavioral parser,
+serializer, validation-profile, installed-layout, and candidate-identity
+authority. `agent-cli/src/platform_manifest.rs` retains only agent-owned
+artifact hashing and file orchestration around that contract.
 
-The additive `mister/platform/contracts/manifest` leaf crate generates its
-constants from the descriptor at build time. Its presence does not switch
-behavioral authority: that transition remains atomic with agent adoption after
-fixture and rejection-class parity is proven.
-
-`agent-cli/src/platform_manifest.rs` now delegates structural parsing,
-serialization, layout paths, and candidate identity to that crate while
-retaining artifact hashing and file orchestration. The descriptor continues to
-name this thin module as the compatibility-window behavioral authority until
-the remaining named consumers move; its direct host-file ledger entries are
-not removed by this core adoption alone.
+Checked-in shell constants and byte-stable public/development fixtures under
+`mister/platform/contracts/generated/` are generated from the descriptor by
+`scripts/checks/generate-platform-v3-consumers.py`. The typed repository check
+requires exact generated constants, strict round-trip fixture validity, and no
+structural duplicate outside the contract. The installer, packaging, release
+fixture, distribution workflow, and embedded-catalog release fixture now
+consume or check those outputs; the temporary legacy-consumer ledger and
+agent behavioral-authority designation are closed.
 
 `mister/tools/manager/src/main.rs` now delegates manifest structure, public
 layout, and legacy-compatible identity validation to the shared contract's
@@ -100,19 +96,9 @@ using the schema-generated exact platform-v3 field set. GUI identity validation
 hashes all seven installed artifacts: the running GUI executable plus Main,
 manager, scanout module and metadata, and latch RBF and metadata.
 
-| Legacy consumer | Migration owner |
-|---|---|
-| `scripts/MiSTer-MagiK.sh` | Enforce generated non-Rust consumers |
-| `scripts/package-distribution.sh` | Enforce generated non-Rust consumers |
-| `scripts/release/check-host.sh` | Enforce generated non-Rust consumers |
-| `.github/workflows/distribution.yml` | Enforce generated non-Rust consumers |
-| `scripts/tests/test-embedded-catalog-release.py` | Enforce generated non-Rust fixtures |
-
-The descriptor remains canonical after the migration. Remove the temporary
-`agent-cli` behavioral-authority designation only after byte-identical public
-and development fixtures, all current rejection classes, and every named
-consumer have moved. Public and development installed roots must remain
-distinct throughout.
+Public and development installed roots remain distinct. Platform-v3 bytes,
+field order, and accepted installed layouts are unchanged; video diagnostics
+and HDMI evidence remain separate contracts.
 
 `crates/catalog/src/device_layout.rs` now preserves its existing public API and
 executable-relative selection semantics while sourcing both installed roots,

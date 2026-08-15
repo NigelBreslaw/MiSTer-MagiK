@@ -184,6 +184,7 @@ struct Paths {
     app: PathBuf,
     manifest: PathBuf,
     script: PathBuf,
+    script_constants: PathBuf,
     test_mode: bool,
     test_keys: RefCell<VecDeque<InputEvent>>,
 }
@@ -206,6 +207,7 @@ impl Paths {
             backup: fat.join("MiSTer.ini.bak.before-magik"),
             manifest: app.join(mister_magik_platform_manifest_contract::FILE_NAME),
             script: fat.join("Scripts/MiSTer-MagiK.sh"),
+            script_constants: fat.join("Scripts/MiSTer-MagiK.platform-v3.constants.sh"),
             test_mode: env::var("MISTER_MAGIK_TEST_MODE").as_deref() == Ok("1"),
             test_keys: RefCell::new(
                 env::var("MISTER_MAGIK_TEST_KEYS")
@@ -832,10 +834,13 @@ fn remove_owned(paths: &Paths) -> Result<()> {
     if paths.script.is_file() {
         fs::remove_file(&paths.script)?;
     }
+    if paths.script_constants.is_file() {
+        fs::remove_file(&paths.script_constants)?;
+    }
     let residue: Vec<_> = files
         .iter()
         .chain(stale.iter())
-        .chain([&paths.app, &paths.script])
+        .chain([&paths.app, &paths.script, &paths.script_constants])
         .filter(|path| path.exists())
         .collect();
     if residue.is_empty() {
@@ -919,6 +924,7 @@ mod tests {
             app: root.join("mister-magik"),
             manifest: root.join("manifest"),
             script: root.join("script"),
+            script_constants: root.join("script.constants"),
             test_mode: true,
             test_keys: RefCell::default(),
         }
@@ -1303,11 +1309,13 @@ mod tests {
         fs::write(root.join("unowned.txt"), b"keep").unwrap();
         fs::create_dir_all(root.join("Scripts")).unwrap();
         fs::write(&paths.script, b"owned").unwrap();
+        fs::write(&paths.script_constants, b"owned").unwrap();
         queue(&paths, [InputEvent::Down]);
         uninstall(&paths).unwrap();
         assert!(!paths.app.exists());
         assert!(!paths.backup.exists());
         assert!(!paths.script.exists());
+        assert!(!paths.script_constants.exists());
         assert_eq!(fs::read(root.join("unowned.txt")).unwrap(), b"keep");
         validate_stock(&paths).unwrap();
         fs::remove_dir_all(root).unwrap();

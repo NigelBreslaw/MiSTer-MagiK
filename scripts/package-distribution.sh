@@ -6,6 +6,24 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PLATFORM_CONSTANTS="$ROOT/mister/platform/contracts/generated/platform-v3.constants.sh"
+# shellcheck source=/dev/null
+source "$PLATFORM_CONSTANTS"
+installed_relative() {
+  if [[ "$1" != /media/fat/* ]]; then
+    echo "ERROR: generated public path is outside /media/fat: $1" >&2
+    exit 1
+  fi
+  printf '%s\n' "${1#/media/fat/}"
+}
+PUBLIC_ROOT_RELATIVE="$(installed_relative "$PLATFORM_V3_PUBLIC_ROOT")"
+PUBLIC_MAIN_RELATIVE="$(installed_relative "$PLATFORM_V3_PUBLIC_MAIN")"
+PUBLIC_GUI_RELATIVE="$(installed_relative "$PLATFORM_V3_PUBLIC_GUI")"
+PUBLIC_MANAGER_RELATIVE="$(installed_relative "$PLATFORM_V3_PUBLIC_MANAGER")"
+PUBLIC_SCANOUT_MODULE_RELATIVE="$(installed_relative "$PLATFORM_V3_PUBLIC_SCANOUT_MODULE")"
+PUBLIC_SCANOUT_METADATA_RELATIVE="$(installed_relative "$PLATFORM_V3_PUBLIC_SCANOUT_METADATA")"
+PUBLIC_LATCH_RBF_RELATIVE="$(installed_relative "$PLATFORM_V3_PUBLIC_LATCH_RBF")"
+PUBLIC_LATCH_METADATA_RELATIVE="$(installed_relative "$PLATFORM_V3_PUBLIC_LATCH_METADATA")"
 DEFAULT_BIN="$ROOT/apps/mister/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb"
 DEFAULT_INSTALLER="$ROOT/scripts/MiSTer-MagiK.sh"
 DEFAULT_MANAGER="$ROOT/mister/tools/manager/target/armv7-unknown-linux-gnueabihf/release/mister-magik-manager"
@@ -76,23 +94,23 @@ Options:
 
 The zip is laid out relative to the MiSTer SD-card root:
   Scripts/MiSTer-MagiK.sh
-  mister-magik/mister-magik-fb
-  mister-magik/mister-magik-manager
-  mister-magik/mame.sqlite3
-  mister-magik/hbmame.sqlite3
-  mister-magik/assets/...     when --asset-pack is provided
-  MiSTer_MagiK
-  mister-magik/platform-v3.manifest
-  mister-magik/platform-bundle-v0.1.json or platform-bundle-v0.2.json
-  mister-magik/game-databases-manifest.json
-  mister-magik/mister_magik_scanout_slots.ko
-  mister-magik/mister_magik_scanout_slots.metadata.txt
-  mister-magik/fpga/menu-magik-vblank-latch.rbf
-  mister-magik/fpga/menu-magik-vblank-latch.metadata.txt
-  mister-magik/licenses/...   GPL, LGPL, OFL, CC BY-NC, and Rust notices
-  mister-magik/THIRD-PARTY-NOTICES.txt
+  $PUBLIC_GUI_RELATIVE
+  $PUBLIC_MANAGER_RELATIVE
+  $PUBLIC_ROOT_RELATIVE/mame.sqlite3
+  $PUBLIC_ROOT_RELATIVE/hbmame.sqlite3
+  $PUBLIC_ROOT_RELATIVE/assets/...     when --asset-pack is provided
+  $PUBLIC_MAIN_RELATIVE
+  $PUBLIC_ROOT_RELATIVE/$PLATFORM_V3_FILE_NAME
+  $PUBLIC_ROOT_RELATIVE/platform-bundle-v0.1.json or platform-bundle-v0.2.json
+  $PUBLIC_ROOT_RELATIVE/game-databases-manifest.json
+  $PUBLIC_SCANOUT_MODULE_RELATIVE
+  $PUBLIC_SCANOUT_METADATA_RELATIVE
+  $PUBLIC_LATCH_RBF_RELATIVE
+  $PUBLIC_LATCH_METADATA_RELATIVE
+  $PUBLIC_ROOT_RELATIVE/licenses/...   GPL, LGPL, OFL, CC BY-NC, and Rust notices
+  $PUBLIC_ROOT_RELATIVE/THIRD-PARTY-NOTICES.txt
                               Metadata and bundled-component provenance
-  mister-magik/SOURCE-OFFER.txt
+  $PUBLIC_ROOT_RELATIVE/SOURCE-OFFER.txt
                               Exact corresponding-source locations and revisions
 EOF
 }
@@ -323,16 +341,19 @@ mkdir -p "$OUT_DIR"
 STAGE="$(mktemp -d "${TMPDIR:-/tmp}/mister-magik-dist.XXXXXX")"
 trap 'rm -rf "$STAGE" "$DATABASE_TMP"' EXIT
 
-mkdir -p "$STAGE/Scripts" "$STAGE/mister-magik/fpga" "$STAGE/mister-magik/licenses"
+mkdir -p "$STAGE/Scripts" "$(dirname "$STAGE/$PUBLIC_LATCH_RBF_RELATIVE")" \
+  "$STAGE/$PUBLIC_ROOT_RELATIVE/licenses"
 cp "$INSTALLER" "$STAGE/Scripts/MiSTer-MagiK.sh"
+cp "$PLATFORM_CONSTANTS" \
+  "$STAGE/Scripts/MiSTer-MagiK.platform-v3.constants.sh"
 chmod 755 "$STAGE/Scripts/MiSTer-MagiK.sh"
-cp "$BIN" "$STAGE/mister-magik/mister-magik-fb"
-chmod 755 "$STAGE/mister-magik/mister-magik-fb"
-cp "$MANAGER" "$STAGE/mister-magik/mister-magik-manager"
-chmod 755 "$STAGE/mister-magik/mister-magik-manager"
-cp "$MAME_SQLITE" "$STAGE/mister-magik/mame.sqlite3"
+cp "$BIN" "$STAGE/$PUBLIC_GUI_RELATIVE"
+chmod 755 "$STAGE/$PUBLIC_GUI_RELATIVE"
+cp "$MANAGER" "$STAGE/$PUBLIC_MANAGER_RELATIVE"
+chmod 755 "$STAGE/$PUBLIC_MANAGER_RELATIVE"
+cp "$MAME_SQLITE" "$STAGE/$PUBLIC_ROOT_RELATIVE/mame.sqlite3"
 if [[ -n "$HBMAME_SQLITE" ]]; then
-  cp "$HBMAME_SQLITE" "$STAGE/mister-magik/hbmame.sqlite3"
+  cp "$HBMAME_SQLITE" "$STAGE/$PUBLIC_ROOT_RELATIVE/hbmame.sqlite3"
 fi
 
 ACTUAL_SNES_ARTWORK_SHA256="$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' "$SNES_ARTWORK")"
@@ -340,24 +361,24 @@ if [[ "$ACTUAL_SNES_ARTWORK_SHA256" != "$SNES_ARTWORK_SHA256" ]]; then
   echo "ERROR: SNES artwork checksum mismatch." >&2
   exit 1
 fi
-mkdir -p "$STAGE/mister-magik/assets/snes"
-cp "$SNES_ARTWORK" "$STAGE/mister-magik/assets/snes/snes-small-v1.rgb565a"
+mkdir -p "$STAGE/$PUBLIC_ROOT_RELATIVE/assets/snes"
+cp "$SNES_ARTWORK" "$STAGE/$PUBLIC_ROOT_RELATIVE/assets/snes/snes-small-v1.rgb565a"
 
 if [[ -n "$ASSET_PACK" ]]; then
-  mkdir -p "$STAGE/mister-magik/assets"
-  cp "$ASSET_PACK" "$STAGE/mister-magik/assets/$(basename "$ASSET_PACK")"
+  mkdir -p "$STAGE/$PUBLIC_ROOT_RELATIVE/assets"
+  cp "$ASSET_PACK" "$STAGE/$PUBLIC_ROOT_RELATIVE/assets/$(basename "$ASSET_PACK")"
 fi
 
-cp "$MAIN_BIN" "$STAGE/MiSTer_MagiK"
-cp "$SCANOUT_MODULE" "$STAGE/mister-magik/mister_magik_scanout_slots.ko"
-cp "$SCANOUT_METADATA" "$STAGE/mister-magik/mister_magik_scanout_slots.metadata.txt"
-cp "$LATCH_RBF" "$STAGE/mister-magik/fpga/menu-magik-vblank-latch.rbf"
-cp "$LATCH_METADATA" "$STAGE/mister-magik/fpga/menu-magik-vblank-latch.metadata.txt"
-cp "$PLATFORM_MANIFEST" "$STAGE/mister-magik/platform-v3.manifest"
-cp "$PLATFORM_BUNDLE_MANIFEST" "$STAGE/mister-magik/$PLATFORM_BUNDLE_BASENAME"
-cp "$GAME_DATABASES_MANIFEST" "$STAGE/mister-magik/game-databases-manifest.json"
+cp "$MAIN_BIN" "$STAGE/$PUBLIC_MAIN_RELATIVE"
+cp "$SCANOUT_MODULE" "$STAGE/$PUBLIC_SCANOUT_MODULE_RELATIVE"
+cp "$SCANOUT_METADATA" "$STAGE/$PUBLIC_SCANOUT_METADATA_RELATIVE"
+cp "$LATCH_RBF" "$STAGE/$PUBLIC_LATCH_RBF_RELATIVE"
+cp "$LATCH_METADATA" "$STAGE/$PUBLIC_LATCH_METADATA_RELATIVE"
+cp "$PLATFORM_MANIFEST" "$STAGE/$PUBLIC_ROOT_RELATIVE/$PLATFORM_V3_FILE_NAME"
+cp "$PLATFORM_BUNDLE_MANIFEST" "$STAGE/$PUBLIC_ROOT_RELATIVE/$PLATFORM_BUNDLE_BASENAME"
+cp "$GAME_DATABASES_MANIFEST" "$STAGE/$PUBLIC_ROOT_RELATIVE/game-databases-manifest.json"
 MAIN_SHA256="$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' "$MAIN_BIN")"
-cat >"$STAGE/mister-magik/release-v1.txt" <<EOF
+cat >"$STAGE/$PUBLIC_ROOT_RELATIVE/release-v1.txt" <<EOF
 format=mister-magik-release-v1
 version=$VERSION
 build_number=$BUILD_NUMBER
@@ -368,9 +389,9 @@ features=$BIN_FEATURES
 platform_bundle_id=$PLATFORM_BUNDLE_ID
 game_database_version=$GAME_DATABASE_VERSION
 EOF
-chmod 755 "$STAGE/MiSTer_MagiK"
+chmod 755 "$STAGE/$PUBLIC_MAIN_RELATIVE"
 "$ROOT/scripts/agent" ci platform-manifest verify \
-  "$STAGE/mister-magik/platform-v3.manifest" --root "$STAGE" --layout public >/dev/null
+  "$STAGE/$PUBLIC_ROOT_RELATIVE/$PLATFORM_V3_FILE_NAME" --root "$STAGE" --layout public >/dev/null
 if find "$STAGE" -type f \( -path '*/experiments/*' -o -name menu.rbf \) -print -quit | grep -q .; then
   echo "ERROR: production package contains experiments/ or root menu.rbf" >&2
   exit 1
@@ -378,17 +399,17 @@ fi
 
 # Keep every binary distribution self-describing. These are copied rather than
 # merely linked so an extracted SD-card package retains the notices.
-cp "$ROOT/LICENSE" "$STAGE/mister-magik/licenses/MiSTer-MagiK-GPL-3.0-or-later.txt"
-cp "$ROOT/apps/mister/licenses/RUST-LIBRARIES.txt" "$STAGE/mister-magik/licenses/RUST-LIBRARIES.txt"
-cp "$ROOT/apps/mister/licenses/FFMPEG.txt" "$STAGE/mister-magik/licenses/FFMPEG-LGPL-2.1-or-later.txt"
-cp "$ROOT/apps/mister/licenses/PRESS-START-2P.txt" "$STAGE/mister-magik/licenses/PRESS-START-2P-OFL-1.1.txt"
-cp "$ROOT/apps/mister/licenses/COMMERCIAL-FONTS.txt" "$STAGE/mister-magik/licenses/COMMERCIAL-FONTS.txt"
+cp "$ROOT/LICENSE" "$STAGE/$PUBLIC_ROOT_RELATIVE/licenses/MiSTer-MagiK-GPL-3.0-or-later.txt"
+cp "$ROOT/apps/mister/licenses/RUST-LIBRARIES.txt" "$STAGE/$PUBLIC_ROOT_RELATIVE/licenses/RUST-LIBRARIES.txt"
+cp "$ROOT/apps/mister/licenses/FFMPEG.txt" "$STAGE/$PUBLIC_ROOT_RELATIVE/licenses/FFMPEG-LGPL-2.1-or-later.txt"
+cp "$ROOT/apps/mister/licenses/PRESS-START-2P.txt" "$STAGE/$PUBLIC_ROOT_RELATIVE/licenses/PRESS-START-2P-OFL-1.1.txt"
+cp "$ROOT/apps/mister/licenses/COMMERCIAL-FONTS.txt" "$STAGE/$PUBLIC_ROOT_RELATIVE/licenses/COMMERCIAL-FONTS.txt"
 cp "$ROOT/crates/particles/assets/cabinet/arcade-cabinet.LICENSE.txt" \
-  "$STAGE/mister-magik/licenses/ARCADE-CABINET-CC-BY-NC-4.0.txt"
-mkdir -p "$STAGE/mister-magik/licenses/ArcadeDatabase_MiSTer"
-cp "$ARCADE_DATABASE_CSV" "$STAGE/mister-magik/licenses/ArcadeDatabase_MiSTer/ArcadeDatabase.csv"
-cp "$ARCADE_DATABASE_LICENSE" "$STAGE/mister-magik/licenses/ArcadeDatabase_MiSTer/LICENSE.txt"
-cat > "$STAGE/mister-magik/THIRD-PARTY-NOTICES.txt" <<EOF
+  "$STAGE/$PUBLIC_ROOT_RELATIVE/licenses/ARCADE-CABINET-CC-BY-NC-4.0.txt"
+mkdir -p "$STAGE/$PUBLIC_ROOT_RELATIVE/licenses/ArcadeDatabase_MiSTer"
+cp "$ARCADE_DATABASE_CSV" "$STAGE/$PUBLIC_ROOT_RELATIVE/licenses/ArcadeDatabase_MiSTer/ArcadeDatabase.csv"
+cp "$ARCADE_DATABASE_LICENSE" "$STAGE/$PUBLIC_ROOT_RELATIVE/licenses/ArcadeDatabase_MiSTer/LICENSE.txt"
+cat > "$STAGE/$PUBLIC_ROOT_RELATIVE/THIRD-PARTY-NOTICES.txt" <<EOF
 MiSTer MagiK distribution notices
 ==================================
 
@@ -427,7 +448,7 @@ The exact CSV and GPL-3.0 license are included under:
   mister-magik/licenses/ArcadeDatabase_MiSTer/
 EOF
 if [[ -n "$HBMAME_SQLITE" ]]; then
-  cat >> "$STAGE/mister-magik/THIRD-PARTY-NOTICES.txt" <<EOF
+  cat >> "$STAGE/$PUBLIC_ROOT_RELATIVE/THIRD-PARTY-NOTICES.txt" <<EOF
 
 hbmame.sqlite3 is generated metadata, not ROM, BIOS, firmware, or game media.
 It is derived from HBMAME listxml at revision:
@@ -436,7 +457,7 @@ HBMAME source and license:
   https://github.com/Robbbert/hbmame/tree/$HBMAME_SOURCE_REVISION
 EOF
 fi
-cat > "$STAGE/mister-magik/SOURCE-OFFER.txt" <<EOF
+cat > "$STAGE/$PUBLIC_ROOT_RELATIVE/SOURCE-OFFER.txt" <<EOF
 Corresponding source and relinking instructions
 ===============================================
 
@@ -459,7 +480,7 @@ at the MiSTer MagiK source revision above.
 The MiSTer MagiK source, Cargo.lock, and build scripts are the complete source
 needed to rebuild the application and relink it with a modified FFmpeg build.
 EOF
-cat >> "$STAGE/mister-magik/SOURCE-OFFER.txt" <<EOF
+cat >> "$STAGE/$PUBLIC_ROOT_RELATIVE/SOURCE-OFFER.txt" <<EOF
 
 MiSTer_MagiK Main fork source:
   https://github.com/NigelBreslaw/Main_MiSTer/tree/$MAIN_SOURCE_REVISION

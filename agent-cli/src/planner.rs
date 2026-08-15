@@ -245,6 +245,7 @@ fn add_path_operations(
     }
     if path == Path::new("mister/platform/contracts/platform-v3.schema.toml")
         || path.starts_with("mister/platform/contracts/manifest")
+        || path.starts_with("mister/platform/contracts/generated")
         || path == Path::new("mister/platform/fpga/menu-vblank-latch/latch-protocol.json")
         || path.extension().and_then(|extension| extension.to_str()) == Some("rs")
         || path.starts_with("scripts")

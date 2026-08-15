@@ -38,6 +38,8 @@ printf '{"format":"mister-magik-platform-bundle-v0.2","release_version":16,"bund
   --main-revision "$(printf %040d 2)" --magik-revision "$(printf %040d 1)" >/dev/null
 
 cp "$ROOT/scripts/MiSTer-MagiK.sh" "$FAT/Scripts/MiSTer-MagiK.sh"
+cp "$ROOT/mister/platform/contracts/generated/platform-v3.constants.sh" \
+  "$FAT/Scripts/MiSTer-MagiK.platform-v3.constants.sh"
 chmod 755 "$FAT/Scripts/MiSTer-MagiK.sh"
 printf '::sysinit:/media/fat/MiSTer &\n' >"$TMP/inittab"
 printf '[MiSTer]\r\nmain=MiSTer\r\nmain=Other ; retain\r\n[Menu]\r\ndirect_video=9\r\ndirect_video=8 ; retain\r\nmenu_pal=9\r\nforced_scandoubler=9\r\nvideo_mode=8\r\nuser=keep\r\n' >"$FAT/MiSTer.ini"
@@ -186,6 +188,7 @@ MISTER_MAGIK_TEST_KEYS=down run_manager uninstall >"$TMP/uninstall.log"
 grep -q 'fully uninstalled' "$TMP/uninstall.log"
 test ! -e "$APP"
 test ! -e "$FAT/Scripts/MiSTer-MagiK.sh"
+test ! -e "$FAT/Scripts/MiSTer-MagiK.platform-v3.constants.sh"
 for owned in \
   THIRD-PARTY-NOTICES.txt SOURCE-OFFER.txt \
   licenses/MiSTer-MagiK-GPL-3.0-or-later.txt \
