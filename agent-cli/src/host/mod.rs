@@ -696,6 +696,15 @@ impl NativeDevice {
         })
     }
 
+    pub(crate) fn profile_arcade_velocity_scroll_pmu(
+        &mut self,
+        output_dir: &Path,
+    ) -> std::result::Result<String, DeviceFailure> {
+        self.benchmark_profile(|config| {
+            profile_installed_arcade_velocity_scroll_pmu(config, output_dir)
+        })
+    }
+
     pub(crate) fn profile_transition_streamline(
         &mut self,
         output_dir: &Path,
@@ -8174,6 +8183,158 @@ fn profile_installed_arcade_velocity_scroll_pprof(
         || parse_display_reply_active(final_display.stdout.trim())? != display_mode
     {
         return Err("display mode changed during Arcade velocity-scroll pprof".into());
+    }
+    fs::write(
+        output_dir.join("summary.json"),
+        format!("{}\n", serde_json::to_string_pretty(&summary)?),
+    )?;
+    serde_json::to_string(&summary).map_err(Into::into)
+}
+
+fn profile_installed_arcade_velocity_scroll_pmu(
+    config: &NativeDeviceConfig,
+    output_dir: &Path,
+) -> Result<String> {
+    let session = connect_with(&config.connection, 10)?;
+    let capability = exec_checked_output(
+        &session,
+        "installed Arcade velocity-scroll PMU capability",
+        DEVELOPMENT_BENCHMARK_CAPABILITIES_COMMAND.as_str(),
+    )?;
+    let capability = last_json_line(&capability.stdout)
+        .ok_or("installed benchmark capability output contains no JSON report")?;
+    if capability
+        .get("arcade-velocity-scroll-pmu-v1")
+        .and_then(Value::as_bool)
+        != Some(true)
+    {
+        return Err("installed app does not support arcade-velocity-scroll-pmu-v1".into());
+    }
+    let manifest = remote_read(&session, LOCAL_MAIN_MANIFEST_REMOTE)
+        .ok_or("development platform manifest is missing")?;
+    let boot_id = remote_read(&session, "/proc/sys/kernel/random/boot_id")
+        .ok_or("device boot id is unavailable")?;
+    let original_display = exec_checked_output(
+        &session,
+        "query Arcade velocity-scroll PMU display mode",
+        &acknowledged_main_command("mister_magik_display_get_v1"),
+    )?;
+    if parse_display_reply_pending(original_display.stdout.trim())?.is_some() {
+        return Err("Arcade velocity-scroll PMU cannot start during a display transaction".into());
+    }
+    let display_mode = parse_display_reply_active(original_display.stdout.trim())?;
+    let _ = arcade_velocity_scroll_minimum_fps(&display_mode)?;
+    fs::create_dir_all(output_dir)?;
+
+    let telemetry_endpoint = config.agent()?.clone();
+    let telemetry_thread = thread::spawn(move || {
+        agent_telemetry_for_duration_with_mode(
+            &telemetry_endpoint,
+            Duration::from_secs(ARCADE_VELOCITY_SCROLL_TELEMETRY_SECS),
+            100,
+            "off",
+        )
+        .map_err(|error| error.to_string())
+    });
+    let route_result = run_gui_frame_profile_route(
+        config,
+        &session,
+        output_dir,
+        true,
+        ARCADE_VELOCITY_SCROLL_DURATION_MS,
+        Some("terminal-arcade"),
+    );
+    let telemetry_result: Result<Vec<Value>> = match telemetry_thread.join() {
+        Ok(Ok(telemetry)) => Ok(telemetry),
+        Ok(Err(error)) => Err(error.into()),
+        Err(_) => Err("Arcade velocity-scroll PMU telemetry collector panicked".into()),
+    };
+    let run_result = match (route_result, telemetry_result) {
+        (Ok(route), Ok(telemetry)) => {
+            let telemetry_text = telemetry
+                .iter()
+                .map(serde_json::to_string)
+                .collect::<std::result::Result<Vec<_>, _>>()?
+                .join("\n");
+            fs::write(
+                output_dir.join("telemetry.jsonl"),
+                format!("{telemetry_text}\n"),
+            )?;
+            let pmu = route
+                .pointer("/profile/thread_profile")
+                .cloned()
+                .ok_or("Arcade velocity-scroll PMU profile is missing thread_profile")?;
+            if pmu.get("enabled").and_then(Value::as_bool) != Some(true)
+                || pmu.get("failure").is_some_and(|failure| !failure.is_null())
+                || pmu.get("dropped_spans").and_then(Value::as_u64) != Some(0)
+                || pmu
+                    .get("records")
+                    .and_then(Value::as_array)
+                    .is_none_or(Vec::is_empty)
+            {
+                return Err("Arcade velocity-scroll PMU profile is incomplete".into());
+            }
+            let route_summary =
+                summarize_arcade_velocity_scroll(output_dir, &route, &telemetry, &display_mode)?;
+            Ok(json!({
+                "schema": "mister-magik-arcade-velocity-scroll-pmu-v1",
+                "artifact_status": "passed",
+                "display_mode": display_mode,
+                "route": route_summary,
+                "pmu": pmu,
+            }))
+        }
+        (Err(route), Ok(_)) => Err(route),
+        (Ok(_), Err(telemetry)) => Err(telemetry),
+        (Err(route), Err(telemetry)) => {
+            Err(format!("{route}; telemetry collection failed: {telemetry}").into())
+        }
+    };
+    let launcher_restore = launcher_restart(
+        &session,
+        &LauncherRestartOptions {
+            clear_env: true,
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str().into(),
+            timeout_secs: 45,
+            ..LauncherRestartOptions::default()
+        },
+    );
+    let cleanup = exec_checked(
+        &session,
+        "clean Arcade velocity-scroll PMU state",
+        &arcade_velocity_scroll_cleanup_command(),
+    );
+    let summary = match (run_result, launcher_restore, cleanup) {
+        (Ok(summary), Ok(()), Ok(())) => summary,
+        (run, launcher, cleanup) => {
+            return Err(format!(
+                "Arcade velocity-scroll PMU failed: run={:?}; launcher_restore={:?}; cleanup={:?}",
+                run.err(),
+                launcher.err(),
+                cleanup.err()
+            )
+            .into());
+        }
+    };
+    let final_manifest = remote_read(&session, LOCAL_MAIN_MANIFEST_REMOTE)
+        .ok_or("development platform manifest is missing after Arcade velocity-scroll PMU")?;
+    if final_manifest != manifest {
+        return Err("installed platform manifest changed during Arcade velocity-scroll PMU".into());
+    }
+    let final_boot_id = remote_read(&session, "/proc/sys/kernel/random/boot_id")
+        .ok_or("device boot id is unavailable after Arcade velocity-scroll PMU")?;
+    if final_boot_id != boot_id {
+        return Err("device rebooted during Arcade velocity-scroll PMU".into());
+    }
+    let final_display = exec_checked_output(
+        &session,
+        "verify Arcade velocity-scroll PMU display mode",
+        &acknowledged_main_command("mister_magik_display_get_v1"),
+    )?;
+    if parse_display_reply_pending(final_display.stdout.trim())?.is_some()
+        || parse_display_reply_active(final_display.stdout.trim())? != display_mode
+    {
+        return Err("display mode changed during Arcade velocity-scroll PMU".into());
     }
     fs::write(
         output_dir.join("summary.json"),
