@@ -231,6 +231,10 @@ Downloader configuration restore emits `recovery_required=true` with an
 operator-required retry policy; transaction order and legacy text are
 unchanged.
 
+Its attended public-layout verification also derives the manifest and complete
+component set from `Layout::Public`; no device-agent copy of platform-v3
+installed paths remains.
+
 The repository-aware CLI executable and context constructor now retain
 `AgentResult` through the reporting boundary, and reporter/evidence storage
 errors convert there without an intermediate string-returning `run`. Fatal and

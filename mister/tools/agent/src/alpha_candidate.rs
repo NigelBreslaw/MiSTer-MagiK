@@ -3,6 +3,7 @@
 
 //! Closed MiSTer Downloader transaction for the rolling alpha release.
 
+use mister_magik_platform_manifest_contract::Layout;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::fs::{self, OpenOptions};
@@ -18,28 +19,6 @@ const DOWNLOADER_ROOT: &str = "/media/fat";
 const MAX_CONFIG_BYTES: u64 = 64 * 1024;
 const DOWNLOADER_TIMEOUT: Duration = Duration::from_secs(240);
 const DATABASE_ID: &str = "mister_magik";
-
-const INSTALLED_FILES: &[(&str, &str)] = &[
-    ("main", "/media/fat/MiSTer_MagiK"),
-    ("gui", "/media/fat/mister-magik/mister-magik-fb"),
-    ("manager", "/media/fat/mister-magik/mister-magik-manager"),
-    (
-        "scanout_module",
-        "/media/fat/mister-magik/mister_magik_scanout_slots.ko",
-    ),
-    (
-        "scanout_metadata",
-        "/media/fat/mister-magik/mister_magik_scanout_slots.metadata.txt",
-    ),
-    (
-        "latch_rbf",
-        "/media/fat/mister-magik/fpga/menu-magik-vblank-latch.rbf",
-    ),
-    (
-        "latch_metadata",
-        "/media/fat/mister-magik/fpga/menu-magik-vblank-latch.metadata.txt",
-    ),
-];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum InstallFailureKind {
@@ -120,14 +99,15 @@ pub(crate) fn install(args: Value) -> Result<Value, InstallFailure> {
         (Ok(()), Ok(())) => {}
     }
 
-    let manifest_path = Path::new("/media/fat/mister-magik/platform-v3.manifest");
+    let installed = Layout::Public.paths();
+    let manifest_path = Path::new(installed.manifest);
     require_hash(manifest_path, &request.platform_manifest).map_err(InstallFailure::artifact)?;
-    for (name, path) in INSTALLED_FILES {
+    for (name, path) in installed.components() {
         require_hash(
             Path::new(path),
             request
                 .components
-                .get(*name)
+                .get(name)
                 .ok_or_else(|| format!("missing expected {name} hash"))
                 .map_err(InstallFailure::artifact)?,
         )
@@ -171,13 +151,14 @@ impl Request {
             .get("component_sha256")
             .and_then(Value::as_object)
             .ok_or("component hashes are missing")?;
-        if components.len() != INSTALLED_FILES.len() {
+        let installed = Layout::Public.paths().components();
+        if components.len() != installed.len() {
             return Err("component hash set is incomplete".to_string());
         }
         let components = components
             .iter()
             .map(|(name, value)| {
-                if !INSTALLED_FILES.iter().any(|(expected, _)| name == expected) {
+                if !installed.iter().any(|(expected, _)| name == expected) {
                     return Err(format!("unsupported component hash: {name}"));
                 }
                 let hash = value
