@@ -146,14 +146,15 @@ fn send_persisted_catalog(
     tx: &mpsc::Sender<CatalogWorkerMessage>,
     root: &str,
     summary: BuilderSummary,
+    catalog_paths: &mister_magik_catalog::device_layout::CatalogPaths,
 ) {
-    let storage = mister_magik_catalog::catalog_config::default_sharded_catalog_path();
+    let storage = catalog_paths.sharded_catalog_dir();
     send_persisted_catalog_at(
         tx,
         root,
         summary,
-        &storage,
-        &mister_magik_catalog::catalog_state::path_for_root(&storage),
+        storage,
+        &mister_magik_catalog::catalog_state::path_for_root(storage),
     );
 }
 
@@ -203,6 +204,7 @@ pub(super) fn start_library_catalog_worker(
     request: CatalogWorkerRequest,
     initial_cache: CatalogWorkerInitialCache,
     execution_mode: CatalogExecutionMode,
+    catalog_paths: mister_magik_catalog::device_layout::CatalogPaths,
 ) -> mpsc::Receiver<CatalogWorkerMessage> {
     let (tx, rx) = mpsc::channel();
     std::thread::Builder::new()
@@ -234,7 +236,10 @@ pub(super) fn start_library_catalog_worker(
             match initial_cache {
                 #[cfg(test)]
                 CatalogWorkerInitialCache::ProbeNavigationThenSqlite => {
-                    match load_navigation_projection_cache(&root) {
+                    match load_navigation_projection_cache(
+                        &root,
+                        catalog_paths.library_sqlite(),
+                    ) {
                         Ok(Some(loaded)) => {
                             send_catalog_load_timing(
                                 &tx,
@@ -519,9 +524,11 @@ pub(super) fn start_library_catalog_worker(
                 }
             }
             if request == CatalogWorkerRequest::StrictLoad {
-                let storage =
-                    mister_magik_catalog::catalog_config::default_sharded_catalog_path();
-                match publish_strict_registry_seed_at(&tx, &root, &storage) {
+                match publish_strict_registry_seed_at(
+                    &tx,
+                    &root,
+                    catalog_paths.sharded_catalog_dir(),
+                ) {
                     Ok(()) => {
                         let _ = tx.send(CatalogWorkerMessage::Done);
                     }
@@ -552,6 +559,7 @@ pub(super) fn start_library_catalog_worker(
                     &root,
                     projection_repair_catalog.as_ref(),
                     projection_repair_allowed,
+                    catalog_paths.library_sqlite(),
                     &tx,
                 );
                 let _ = tx.send(CatalogWorkerMessage::Timing {
@@ -578,6 +586,7 @@ pub(super) fn start_library_catalog_worker(
                     &root,
                     plan,
                     builder_execution_mode,
+                    &catalog_paths,
                     &tx,
                     &mut progress_coalescer,
                 );
@@ -592,6 +601,7 @@ fn run_catalog_builder_in_process(
     root: &str,
     plan: CatalogWorkerPlan,
     execution_mode: CatalogExecutionMode,
+    catalog_paths: &mister_magik_catalog::device_layout::CatalogPaths,
     tx: &mpsc::Sender<CatalogWorkerMessage>,
     progress_coalescer: &mut CatalogProgressCoalescer,
 ) {
@@ -607,16 +617,18 @@ fn run_catalog_builder_in_process(
             builder_service::BuilderExecutionPolicy::BackgroundContinuous
         }
     };
-    let result = builder_service::run_with_execution_policy_and_fault_control(
+    let result = builder_service::run_with_execution_policy_and_fault_control_and_paths(
         operation,
         execution_policy,
         Box::new(mister_magik_mister_runtime::direct_reset_fault::process_fault_control()),
+        catalog_paths,
         |event| {
-            handle_embedded_builder_event(
+            handle_embedded_builder_event_with_paths(
                 root,
                 plan,
                 operation_label,
                 event,
+                catalog_paths,
                 tx,
                 progress_coalescer,
                 &mut state,
@@ -656,11 +668,12 @@ struct EmbeddedBuilderEventState {
     catalog_ready_seen: bool,
 }
 
-fn handle_embedded_builder_event(
+fn handle_embedded_builder_event_with_paths(
     root: &str,
     plan: CatalogWorkerPlan,
     expected_operation: &str,
     event: CatalogBuilderEvent,
+    catalog_paths: &mister_magik_catalog::device_layout::CatalogPaths,
     tx: &mpsc::Sender<CatalogWorkerMessage>,
     progress_coalescer: &mut CatalogProgressCoalescer,
     state: &mut EmbeddedBuilderEventState,
@@ -810,7 +823,7 @@ fn handle_embedded_builder_event(
             }
         }
         CatalogBuilderEvent::Persisted { summary, .. } => {
-            send_persisted_catalog(tx, root, summary);
+            send_persisted_catalog(tx, root, summary, catalog_paths);
         }
         CatalogBuilderEvent::Unchanged { summary, .. } => {
             let _ = tx.send(CatalogWorkerMessage::Unchanged {
@@ -837,6 +850,29 @@ fn handle_embedded_builder_event(
             let _ = tx.send(CatalogWorkerMessage::Done);
         }
     }
+}
+
+#[cfg(test)]
+fn handle_embedded_builder_event(
+    root: &str,
+    plan: CatalogWorkerPlan,
+    expected_operation: &str,
+    event: CatalogBuilderEvent,
+    tx: &mpsc::Sender<CatalogWorkerMessage>,
+    progress_coalescer: &mut CatalogProgressCoalescer,
+    state: &mut EmbeddedBuilderEventState,
+) {
+    let paths = mister_magik_catalog::device_layout::CatalogPaths::capture_process();
+    handle_embedded_builder_event_with_paths(
+        root,
+        plan,
+        expected_operation,
+        event,
+        &paths,
+        tx,
+        progress_coalescer,
+        state,
+    );
 }
 
 fn catalog_builder_operation(
@@ -1293,12 +1329,13 @@ fn repair_navigation_projection_cache_after_ready(
     root: &str,
     loaded_catalog: Option<&(ArcadeCatalog, catalog_stamp::CatalogStamp)>,
     fallback_repair_allowed: bool,
+    sqlite_path: &Path,
     tx: &mpsc::Sender<CatalogWorkerMessage>,
 ) {
     if let Some((catalog, stamp)) = loaded_catalog {
-        repair_navigation_projection_cache_for_catalog(catalog, stamp, tx);
+        repair_navigation_projection_cache_for_catalog(catalog, stamp, sqlite_path, tx);
     } else if fallback_repair_allowed {
-        repair_navigation_projection_cache(root, tx);
+        repair_navigation_projection_cache(root, sqlite_path, tx);
     } else {
         let _ = tx.send(CatalogWorkerMessage::Timing {
             name: "catalog_navigation_repair_tsv".to_string(),
@@ -1310,13 +1347,13 @@ fn repair_navigation_projection_cache_after_ready(
 fn repair_navigation_projection_cache_for_catalog(
     catalog: &ArcadeCatalog,
     stamp: &catalog_stamp::CatalogStamp,
+    sqlite_path: &Path,
     tx: &mpsc::Sender<CatalogWorkerMessage>,
 ) {
     let started = Instant::now();
-    let sqlite_path = library_db::default_sqlite_path();
-    match library_db::catalog_projection_pair_current(&sqlite_path, stamp) {
+    match library_db::catalog_projection_pair_current(sqlite_path, stamp) {
         Ok(true) => {
-            match library_db::catalog_projection_filter_mismatches(&sqlite_path, catalog, stamp) {
+            match library_db::catalog_projection_filter_mismatches(sqlite_path, catalog, stamp) {
                 Ok(mismatches) if mismatches.is_empty() => {
                     let _ = tx.send(CatalogWorkerMessage::Timing {
                         name: "catalog_navigation_repair_tsv".to_string(),
@@ -1363,7 +1400,7 @@ fn repair_navigation_projection_cache_for_catalog(
     if !loaded_catalog_stamp_still_current(&sqlite_path, stamp, started, tx) {
         return;
     }
-    match library_db::repair_catalog_projections_for_catalog(&sqlite_path, catalog, stamp) {
+    match library_db::repair_catalog_projections_for_catalog(sqlite_path, catalog, stamp) {
         Ok(()) => {
             let _ = tx.send(CatalogWorkerMessage::Timing {
                 name: "catalog_navigation_repair_tsv".to_string(),
@@ -1388,10 +1425,13 @@ fn repair_navigation_projection_cache_for_catalog(
     }
 }
 
-fn repair_navigation_projection_cache(root: &str, tx: &mpsc::Sender<CatalogWorkerMessage>) {
+fn repair_navigation_projection_cache(
+    root: &str,
+    sqlite_path: &Path,
+    tx: &mpsc::Sender<CatalogWorkerMessage>,
+) {
     let started = Instant::now();
-    let sqlite_path = library_db::default_sqlite_path();
-    let Some(stamp) = (match library_db::read_sqlite_catalog_stamp(&sqlite_path) {
+    let Some(stamp) = (match library_db::read_sqlite_catalog_stamp(sqlite_path) {
         Ok(stamp) => stamp,
         Err(e) => {
             let _ = tx.send(CatalogWorkerMessage::Timing {
@@ -1413,7 +1453,7 @@ fn repair_navigation_projection_cache(root: &str, tx: &mpsc::Sender<CatalogWorke
         });
         return;
     };
-    match library_db::catalog_projection_pair_current(&sqlite_path, &stamp) {
+    match library_db::catalog_projection_pair_current(sqlite_path, &stamp) {
         Ok(true) | Ok(false) => {}
         Err(e) => {
             let _ = tx.send(CatalogWorkerMessage::Timing {
@@ -1427,19 +1467,20 @@ fn repair_navigation_projection_cache(root: &str, tx: &mpsc::Sender<CatalogWorke
     }
 
     let load_t = Instant::now();
-    let loaded = match library_db::load_arcade_catalog_from_materialized_sqlite(root) {
-        Ok(loaded) => loaded,
-        Err(e) => {
-            let _ = tx.send(CatalogWorkerMessage::Timing {
-                name: "catalog_navigation_repair_tsv".to_string(),
-                detail: format!(
-                    "status=load_failed elapsed_us={} error={e}",
-                    started.elapsed().as_micros()
-                ),
-            });
-            return;
-        }
-    };
+    let loaded =
+        match library_db::load_arcade_catalog_from_materialized_sqlite_at(root, sqlite_path) {
+            Ok(loaded) => loaded,
+            Err(e) => {
+                let _ = tx.send(CatalogWorkerMessage::Timing {
+                    name: "catalog_navigation_repair_tsv".to_string(),
+                    detail: format!(
+                        "status=load_failed elapsed_us={} error={e}",
+                        started.elapsed().as_micros()
+                    ),
+                });
+                return;
+            }
+        };
     let load_us = load_t.elapsed().as_micros();
     if !loaded.projection_repair_safe {
         let _ = tx.send(CatalogWorkerMessage::Timing {
@@ -1462,7 +1503,7 @@ fn repair_navigation_projection_cache(root: &str, tx: &mpsc::Sender<CatalogWorke
         });
         return;
     };
-    if !loaded_catalog_stamp_still_current(&sqlite_path, loaded_stamp, started, tx) {
+    if !loaded_catalog_stamp_still_current(sqlite_path, loaded_stamp, started, tx) {
         return;
     }
     let _ = tx.send(CatalogWorkerMessage::Timing {
@@ -1476,7 +1517,7 @@ fn repair_navigation_projection_cache(root: &str, tx: &mpsc::Sender<CatalogWorke
                 .filter_option_count_detail(arcade_catalog::MENU_ARCADE_SYSTEM_ID)
         ),
     });
-    repair_navigation_projection_cache_for_catalog(&loaded.catalog, loaded_stamp, tx);
+    repair_navigation_projection_cache_for_catalog(&loaded.catalog, loaded_stamp, sqlite_path, tx);
 }
 
 fn loaded_catalog_stamp_still_current(
@@ -1524,16 +1565,16 @@ fn loaded_catalog_stamp_still_current(
 
 fn load_navigation_projection_cache(
     root: &str,
+    sqlite_path: &Path,
 ) -> Result<Option<library_db::LibraryCatalogLoad>, String> {
-    let sqlite_path = library_db::default_sqlite_path();
-    let summary_path = catalog_summary::summary_path_for_sqlite(&sqlite_path);
+    let summary_path = catalog_summary::summary_path_for_sqlite(sqlite_path);
     let summary_stamp = catalog_summary::read_catalog_summary(&summary_path)?
         .map(|summary| catalog_stamp::CatalogStamp::from_lines(summary.catalog_stamp_lines));
-    let stored_stamp = library_db::read_sqlite_catalog_stamp(&sqlite_path)?;
+    let stored_stamp = library_db::read_sqlite_catalog_stamp(sqlite_path)?;
     let Some(stamp) = navigation_projection_stamp(summary_stamp, stored_stamp) else {
         return Ok(None);
     };
-    library_db::load_arcade_catalog_from_navigation_projection(root, &sqlite_path, &stamp)
+    library_db::load_arcade_catalog_from_navigation_projection(root, sqlite_path, &stamp)
 }
 
 fn navigation_projection_stamp(

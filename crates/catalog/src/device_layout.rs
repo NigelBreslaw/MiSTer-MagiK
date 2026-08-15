@@ -144,6 +144,21 @@ pub struct CatalogPathOverrides {
 }
 
 impl CatalogPathOverrides {
+    pub fn capture_process() -> Self {
+        Self {
+            library_sqlite: std::env::var_os(LIBRARY_SQLITE_ENV).map(PathBuf::from),
+            mame_sqlite: std::env::var_os(MAME_SQLITE_ENV).map(PathBuf::from),
+            hbmame_sqlite: std::env::var_os(HBMAME_SQLITE_ENV).map(PathBuf::from),
+            preview_cache_dir: std::env::var_os(PREVIEW_CACHE_DIR_ENV).map(PathBuf::from),
+            media_asset_dir: std::env::var_os(MEDIA_ASSET_DIR_ENV).map(PathBuf::from),
+            user_state_sqlite: std::env::var_os(USER_STATE_SQLITE_ENV).map(PathBuf::from),
+            library_bench_sqlite: std::env::var_os(LIBRARY_BENCH_SQLITE_ENV).map(PathBuf::from),
+            library_sqlite_build_dir: std::env::var_os(LIBRARY_SQLITE_BUILD_DIR_ENV)
+                .map(PathBuf::from),
+            sharded_catalog_dir: std::env::var_os(SHARDED_CATALOG_DIR_ENV).map(PathBuf::from),
+        }
+    }
+
     pub fn capture_with<'a>(mut get: impl FnMut(&str) -> Option<&'a Path>) -> Self {
         Self {
             library_sqlite: get(LIBRARY_SQLITE_ENV).map(Path::to_path_buf),
@@ -173,6 +188,14 @@ pub struct CatalogPaths {
 }
 
 impl CatalogPaths {
+    /// Capture catalog path inputs once at a standalone process boundary.
+    pub fn capture_process() -> Self {
+        Self::derive(
+            &DevicePaths::current(),
+            CatalogPathOverrides::capture_process(),
+        )
+    }
+
     pub fn derive(device: &DevicePaths, overrides: CatalogPathOverrides) -> Self {
         Self {
             library_sqlite: overrides

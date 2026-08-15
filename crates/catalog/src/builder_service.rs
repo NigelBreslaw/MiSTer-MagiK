@@ -9,6 +9,7 @@ use crate::builder_protocol::{
 };
 use crate::catalog_build_record;
 use crate::catalog_navigation::write_catalog_navigation_snapshot_with_timing_and_fault_control;
+use crate::device_layout::CatalogPaths;
 use crate::library_db;
 use crate::runtime_thread::{RuntimeThreadRole, apply_runtime_thread_policy};
 use std::cell::RefCell;
@@ -69,9 +70,34 @@ pub fn run(
     operation: BuilderOperation,
     emit: impl FnMut(CatalogBuilderEvent),
 ) -> Result<(), String> {
-    run_with_execution_policy(
+    let paths = CatalogPaths::capture_process();
+    run_with_paths(operation, &paths, emit)
+}
+
+pub fn run_with_paths(
+    operation: BuilderOperation,
+    paths: &CatalogPaths,
+    emit: impl FnMut(CatalogBuilderEvent),
+) -> Result<(), String> {
+    run_with_execution_policy_and_paths(
         operation,
         BuilderExecutionPolicy::ForegroundUntilFirstVisible,
+        paths,
+        emit,
+    )
+}
+
+pub fn run_with_execution_policy_and_paths(
+    operation: BuilderOperation,
+    execution_policy: BuilderExecutionPolicy,
+    paths: &CatalogPaths,
+    emit: impl FnMut(CatalogBuilderEvent),
+) -> Result<(), String> {
+    run_with_execution_policy_and_fault_control_and_paths(
+        operation,
+        execution_policy,
+        Box::new(crate::fs_fault::NoopDirectResetFaultControl),
+        paths,
         emit,
     )
 }
@@ -81,18 +107,31 @@ pub fn run_with_execution_policy(
     execution_policy: BuilderExecutionPolicy,
     emit: impl FnMut(CatalogBuilderEvent),
 ) -> Result<(), String> {
-    run_with_execution_policy_and_fault_control(
-        operation,
-        execution_policy,
-        Box::new(crate::fs_fault::NoopDirectResetFaultControl),
-        emit,
-    )
+    let paths = CatalogPaths::capture_process();
+    run_with_execution_policy_and_paths(operation, execution_policy, &paths, emit)
 }
 
 pub fn run_with_execution_policy_and_fault_control(
     operation: BuilderOperation,
     execution_policy: BuilderExecutionPolicy,
     fault_control: Box<dyn crate::fs_fault::DirectResetFaultControl + Send>,
+    emit: impl FnMut(CatalogBuilderEvent),
+) -> Result<(), String> {
+    let paths = CatalogPaths::capture_process();
+    run_with_execution_policy_and_fault_control_and_paths(
+        operation,
+        execution_policy,
+        fault_control,
+        &paths,
+        emit,
+    )
+}
+
+pub fn run_with_execution_policy_and_fault_control_and_paths(
+    operation: BuilderOperation,
+    execution_policy: BuilderExecutionPolicy,
+    fault_control: Box<dyn crate::fs_fault::DirectResetFaultControl + Send>,
+    paths: &CatalogPaths,
     mut emit: impl FnMut(CatalogBuilderEvent),
 ) -> Result<(), String> {
     let mut backend = SystemBuilderBackend {
@@ -105,11 +144,12 @@ pub fn run_with_execution_policy_and_fault_control(
         force_all_systems: operation == BuilderOperation::RebuildAll,
         arcade_bootstrap_scan: None,
         fault_control,
+        paths: paths.clone(),
     };
     run_with_backend_policy(
         operation,
         execution_policy,
-        BuilderConfig::production(),
+        BuilderConfig::production(paths),
         &mut backend,
         &mut emit,
     )
@@ -120,11 +160,12 @@ struct BuilderConfig {
     lock_path: PathBuf,
     snapshot_path: PathBuf,
     sqlite_path: PathBuf,
+    sharded_catalog_dir: PathBuf,
     run_id: String,
 }
 
 impl BuilderConfig {
-    fn production() -> Self {
+    fn production(paths: &CatalogPaths) -> Self {
         Self {
             lock_path: std::env::var_os("MISTER_CATALOG_BUILDER_LOCK")
                 .map(PathBuf::from)
@@ -132,7 +173,8 @@ impl BuilderConfig {
                     PathBuf::from(crate::builder_protocol::DEFAULT_CATALOG_BUILDER_LOCK_PATH)
                 }),
             snapshot_path: snapshot_path(),
-            sqlite_path: crate::catalog_state::default_path(),
+            sqlite_path: crate::catalog_state::path_for_root(paths.sharded_catalog_dir()),
+            sharded_catalog_dir: paths.sharded_catalog_dir().to_path_buf(),
             run_id: format!(
                 "{}-{}",
                 std::process::id(),
@@ -254,6 +296,7 @@ fn run_with_backend_policy<B: BuilderBackend>(
     emit: &mut impl FnMut(CatalogBuilderEvent),
 ) -> Result<(), String> {
     let run_started = Instant::now();
+    let sharded_catalog_dir = config.sharded_catalog_dir.clone();
     let protocol = CATALOG_BUILDER_PROTOCOL_VERSION;
     emit(CatalogBuilderEvent::Handshake {
         protocol,
@@ -340,6 +383,7 @@ fn run_with_backend_policy<B: BuilderBackend>(
                 protocol,
                 operation,
                 event,
+                &sharded_catalog_dir,
                 &mut *protocol_output.borrow_mut(),
             );
         })
@@ -431,6 +475,7 @@ fn run_with_backend_policy<B: BuilderBackend>(
                 protocol,
                 operation,
                 event,
+                &sharded_catalog_dir,
                 &mut *protocol_output.borrow_mut(),
             );
         })
@@ -639,6 +684,7 @@ fn emit_scan_event(
     protocol: u32,
     operation: BuilderOperation,
     event: crate::library_db::LibraryScanEvent,
+    sharded_catalog_dir: &Path,
     emit: &mut dyn FnMut(CatalogBuilderEvent),
 ) {
     match event {
@@ -651,7 +697,7 @@ fn emit_scan_event(
             let mut system_ids = system_ids;
             if all_published_systems
                 && let Ok(manifest) = crate::shard_registry::read_latest_manifest_lazy(
-                    &crate::catalog_config::default_sharded_catalog_path(),
+                    sharded_catalog_dir,
                     crate::shard_registry::production_registry_limits(),
                 )
             {
@@ -822,6 +868,7 @@ struct SystemBuilderBackend {
     force_all_systems: bool,
     arcade_bootstrap_scan: Option<library_db::LibraryRamScanArtifact>,
     fault_control: Box<dyn crate::fs_fault::DirectResetFaultControl + Send>,
+    paths: CatalogPaths,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -841,15 +888,14 @@ impl ProductionRepairStatus {
     }
 }
 
-fn inspect_v3_before_source_check() -> Result<ProductionRepairStatus, String> {
+fn inspect_v3_before_source_check(storage: &Path) -> Result<ProductionRepairStatus, String> {
     let started = Instant::now();
-    let storage = crate::catalog_config::default_sharded_catalog_path();
     let limits = crate::production_sharded_projection::production_registry_limits();
-    let generation = crate::shard_registry::read_latest_manifest_lazy(&storage, limits)
+    let generation = crate::shard_registry::read_latest_manifest_lazy(storage, limits)
         .ok()
         .map(|manifest| manifest.generation);
     if let Some(generation) = generation {
-        match crate::production_sharded_projection::inspect_production_binding(&storage, generation)
+        match crate::production_sharded_projection::inspect_production_binding(storage, generation)
         {
             Ok(crate::production_sharded_projection::ProductionBindingStatus::Current {
                 ..
@@ -888,12 +934,19 @@ fn inspect_v3_before_source_check() -> Result<ProductionRepairStatus, String> {
 /// V3 build. Legacy files are removed as hygiene, but are never read or
 /// republished.
 pub fn remove_default_production_catalog_artifacts() -> Result<usize, String> {
-    let storage = crate::catalog_config::default_sharded_catalog_path();
+    let paths = CatalogPaths::capture_process();
+    remove_production_catalog_artifacts_with_paths(&paths)
+}
+
+pub fn remove_production_catalog_artifacts_with_paths(
+    paths: &CatalogPaths,
+) -> Result<usize, String> {
+    let storage = paths.sharded_catalog_dir();
     let bootstrap_index = crate::arcade_bootstrap_index::default_path();
-    validate_v3_catalog_storage_path(&storage)?;
+    validate_v3_catalog_storage_path(storage)?;
     let mut removed = library_db::remove_default_catalog_artifacts()?;
     removed = removed.saturating_add(remove_v3_and_bootstrap_artifacts_at(
-        &storage,
+        storage,
         &bootstrap_index,
     )?);
     Ok(removed)
@@ -942,7 +995,7 @@ impl BuilderBackend for SystemBuilderBackend {
     type Prepared = PreparedBuild;
 
     fn fresh_cleanup(&mut self) -> Result<usize, String> {
-        remove_default_production_catalog_artifacts()
+        remove_production_catalog_artifacts_with_paths(&self.paths)
     }
 
     fn set_post_reveal_background(&mut self, background: bool) {
@@ -950,9 +1003,9 @@ impl BuilderBackend for SystemBuilderBackend {
     }
 
     fn check(&mut self) -> Result<CheckOutput, StageFailure> {
-        let v3_repair = inspect_v3_before_source_check()
+        let v3_repair = inspect_v3_before_source_check(self.paths.sharded_catalog_dir())
             .map_err(|error| StageFailure::new("check-format", error))?;
-        let check = library_db::default_sqlite_catalog_stamp_check()
+        let check = library_db::sqlite_catalog_stamp_check_with_paths(&self.paths)
             .map_err(|error| StageFailure::new("check", error))?;
         let timing_detail = format!(
             "unchanged={} check_us={} compute_us={} open_us={} read_us={} checkpoint_read_us={} compare_us={} checkpoint_compare_us={} stored={} current={} stored_checkpoint={} current_checkpoint={} stored_lines={} current_lines={} stored_checkpoint_lines={} current_checkpoint_lines={} drift_detail={} v3_repair={}",
@@ -993,7 +1046,10 @@ impl BuilderBackend for SystemBuilderBackend {
             },
             ProductionRepairStatus::Current if check.unchanged => {
                 CheckDecision::Unchanged(BuilderSummary::from(
-                    library_db::default_sharded_cached_summary(check.check_us)
+                    library_db::sharded_cached_summary(
+                        self.paths.sharded_catalog_dir(),
+                        check.check_us,
+                    )
                         .map_err(|error| StageFailure::new("summary", error))?,
                 ))
             }
@@ -1078,12 +1134,14 @@ impl BuilderBackend for SystemBuilderBackend {
         progress("Indexing library", "Scanning Arcade first…");
         let mut scan_events = |event: library_db::LibraryScanEvent| scan_event(event);
         let scanned = if self.post_reveal_background {
-            library_db::scan_arcade_bootstrap_ram_background_with_events(
+            library_db::scan_arcade_bootstrap_ram_background_with_paths(
+                &self.paths,
                 Some(progress),
                 Some(&mut scan_events),
             )?
         } else {
-            library_db::scan_arcade_bootstrap_ram_foreground_with_events(
+            library_db::scan_arcade_bootstrap_ram_foreground_with_paths(
+                &self.paths,
                 Some(progress),
                 Some(&mut scan_events),
             )?
@@ -1144,13 +1202,15 @@ impl BuilderBackend for SystemBuilderBackend {
         self.arcade_bootstrap_scan.take();
         let background_full_build = self.post_reveal_background;
         let scanned = if background_full_build {
-            library_db::scan_default_library_ram_background_with_events(
+            library_db::scan_library_ram_background_with_paths(
+                &self.paths,
                 Some(progress),
                 Some(&mut scan_events),
                 self.durable_resume,
             )?
         } else {
-            library_db::scan_default_library_ram_foreground_with_events(
+            library_db::scan_library_ram_foreground_with_paths(
+                &self.paths,
                 Some(progress),
                 Some(&mut scan_events),
                 self.durable_resume,
@@ -1367,7 +1427,7 @@ impl BuilderBackend for SystemBuilderBackend {
         let projection_started = Instant::now();
         let outcome =
             crate::production_sharded_projection::publish_bound_production_projection_with_events(
-                &crate::catalog_config::default_sharded_catalog_path(),
+                self.paths.sharded_catalog_dir(),
                 &catalog,
                 &catalog_fingerprint,
                 crate::production_sharded_projection::production_registry_limits(),
@@ -1381,8 +1441,10 @@ impl BuilderBackend for SystemBuilderBackend {
         report_catalog_memory("shards-complete");
         progress("Indexing library", "Saving scanner cache…");
         let scanner_cache_stage_started = Instant::now();
-        let staged_scanner_cache =
-            crate::scanner_cache::stage(&crate::scanner_cache::default_path(), &scanner_cache)?;
+        let staged_scanner_cache = crate::scanner_cache::stage(
+            &crate::scanner_cache::path_for_root(self.paths.sharded_catalog_dir()),
+            &scanner_cache,
+        )?;
         let scanner_cache_stage_us = scanner_cache_stage_started.elapsed().as_micros();
         drop(scanner_cache);
         let scanner_cache_publish_started = Instant::now();
@@ -1393,13 +1455,17 @@ impl BuilderBackend for SystemBuilderBackend {
         // Catalog state is the acceptance marker. Publishing it last ensures
         // an interrupted shard/cache write is detected and rebuilt.
         let catalog_state_started = Instant::now();
-        crate::catalog_state::write(&crate::catalog_state::default_path(), &catalog_state)?;
+        crate::catalog_state::write(
+            &crate::catalog_state::path_for_root(self.paths.sharded_catalog_dir()),
+            &catalog_state,
+        )?;
         let catalog_state_us = catalog_state_started.elapsed().as_micros();
         report_catalog_memory("catalog-state-complete");
-        let build_progress_path = crate::catalog_config::default_build_progress_path();
+        let build_progress_path =
+            crate::build_progress::path_for_root(self.paths.sharded_catalog_dir());
         crate::build_progress::commit_successful_state(
             &build_progress_path,
-            &crate::catalog_config::default_builder_state_path(),
+            &crate::build_progress::committed_path_for_root(self.paths.sharded_catalog_dir()),
             outcome.generation,
         )?;
         crate::build_progress::remove(&build_progress_path)?;
@@ -1414,7 +1480,10 @@ impl BuilderBackend for SystemBuilderBackend {
             import_us
         );
         let summary_started = Instant::now();
-        let mut summary = crate::library_db::default_sharded_cached_summary(scan_stats.scan_us)?;
+        let mut summary = crate::library_db::sharded_cached_summary(
+            self.paths.sharded_catalog_dir(),
+            scan_stats.scan_us,
+        )?;
         crate::catalog_logln!(
             "catalog_v3_persist_phases_tsv\tprojection_us={}\tscanner_cache_us={}\tscanner_cache_stage_us={}\tscanner_cache_publish_us={}\tcatalog_state_us={}\tsummary_us={}",
             projection_us,
@@ -1912,6 +1981,7 @@ mod tests {
             lock_path: root.join("builder.lock"),
             snapshot_path: root.join("ready.nav.lz4b"),
             sqlite_path: root.join("library.sqlite3"),
+            sharded_catalog_dir: root.join("catalog-v3"),
             run_id: format!("fixture-{id}"),
         }
     }

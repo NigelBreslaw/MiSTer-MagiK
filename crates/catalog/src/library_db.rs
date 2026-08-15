@@ -764,8 +764,22 @@ pub fn run_scan_bench() {
     crate::library_cli::run_scan_bench();
 }
 
+pub fn run_scan_bench_with_paths(paths: &crate::device_layout::CatalogPaths) {
+    crate::library_cli::run_scan_bench_with_paths(paths);
+}
+
 pub fn run_sqlite_inspect_cli(args: &[String]) -> Result<String, String> {
     crate::library_cli::run_sqlite_inspect_cli(args)
+}
+
+pub fn run_sqlite_inspect_cli_with_paths(
+    args: &[String],
+    paths: &crate::device_layout::CatalogPaths,
+) -> Result<String, String> {
+    crate::library_cli::run_sqlite_inspect_cli_with_default(
+        args,
+        paths.library_sqlite().to_path_buf(),
+    )
 }
 
 pub use sqlite_catalog::{PREVIEW_INDEX_REFRESH_TSV_HEADER, PreviewIndexRefreshRow};
@@ -807,6 +821,13 @@ pub fn load_arcade_catalog_from_materialized_sqlite(
     root: impl AsRef<Path>,
 ) -> Result<LibraryCatalogLoad, String> {
     sqlite_catalog::load_arcade_catalog_from_materialized_sqlite(root)
+}
+
+pub fn load_arcade_catalog_from_materialized_sqlite_at(
+    root: impl AsRef<Path>,
+    sqlite_path: &Path,
+) -> Result<LibraryCatalogLoad, String> {
+    sqlite_catalog::load_arcade_catalog_from_materialized_sqlite_at(root, sqlite_path)
 }
 
 pub fn repair_catalog_projections_for_catalog(
@@ -1010,6 +1031,22 @@ pub fn scan_default_library_ram_foreground_with_events(
         ))
 }
 
+#[cfg(feature = "builder")]
+pub(crate) fn scan_library_ram_foreground_with_paths(
+    paths: &crate::device_layout::CatalogPaths,
+    progress: ProgressCallback<'_>,
+    scan_events: ScanEventCallback<'_>,
+    durable_resume: bool,
+) -> Result<LibraryRamScanArtifact, String> {
+    let cfg = BenchConfig::production_with_paths(paths);
+    Ok(CatalogRefreshPipeline::new(&cfg)
+        .scan_ram_artifact_foreground_with_events_and_durable_resume(
+            progress,
+            scan_events,
+            durable_resume,
+        ))
+}
+
 pub fn scan_library_ram_foreground_with_roots(
     roots: Vec<PathBuf>,
     progress: ProgressCallback<'_>,
@@ -1047,6 +1084,20 @@ pub fn scan_arcade_bootstrap_ram_foreground_with_events(
         .scan_ram_artifact_foreground_with_events(progress, scan_events))
 }
 
+#[cfg(feature = "builder")]
+pub(crate) fn scan_arcade_bootstrap_ram_foreground_with_paths(
+    paths: &crate::device_layout::CatalogPaths,
+    progress: ProgressCallback<'_>,
+    scan_events: ScanEventCallback<'_>,
+) -> Result<LibraryRamScanArtifact, String> {
+    let cfg = BenchConfig {
+        roots: vec![crate::arcade_catalog::DEFAULT_ARCADE_ROOT.to_string()],
+        sqlite_path: paths.library_sqlite().to_path_buf(),
+    };
+    Ok(CatalogRefreshPipeline::new(&cfg)
+        .scan_ram_artifact_foreground_with_events(progress, scan_events))
+}
+
 /// CPU0-confined variant used while the first-run animation owns CPU1.
 pub fn scan_arcade_bootstrap_ram_background_with_events(
     progress: ProgressCallback<'_>,
@@ -1065,12 +1116,48 @@ pub fn scan_arcade_bootstrap_ram_background_with_events(
     )
 }
 
+#[cfg(feature = "builder")]
+pub(crate) fn scan_arcade_bootstrap_ram_background_with_paths(
+    paths: &crate::device_layout::CatalogPaths,
+    progress: ProgressCallback<'_>,
+    scan_events: ScanEventCallback<'_>,
+) -> Result<LibraryRamScanArtifact, String> {
+    let cfg = BenchConfig {
+        roots: vec![crate::arcade_catalog::DEFAULT_ARCADE_ROOT.to_string()],
+        sqlite_path: paths.library_sqlite().to_path_buf(),
+    };
+    Ok(
+        CatalogRefreshPipeline::new(&cfg).scan_ram_artifact_with_events_and_durable_resume(
+            progress,
+            scan_events,
+            false,
+        ),
+    )
+}
+
 pub fn scan_default_library_ram_background_with_events(
     progress: ProgressCallback<'_>,
     scan_events: ScanEventCallback<'_>,
     durable_resume: bool,
 ) -> Result<LibraryRamScanArtifact, String> {
     let cfg = BenchConfig::production();
+    Ok(
+        CatalogRefreshPipeline::new(&cfg).scan_ram_artifact_with_events_and_durable_resume(
+            progress,
+            scan_events,
+            durable_resume,
+        ),
+    )
+}
+
+#[cfg(feature = "builder")]
+pub(crate) fn scan_library_ram_background_with_paths(
+    paths: &crate::device_layout::CatalogPaths,
+    progress: ProgressCallback<'_>,
+    scan_events: ScanEventCallback<'_>,
+    durable_resume: bool,
+) -> Result<LibraryRamScanArtifact, String> {
+    let cfg = BenchConfig::production_with_paths(paths);
     Ok(
         CatalogRefreshPipeline::new(&cfg).scan_ram_artifact_with_events_and_durable_resume(
             progress,
@@ -1203,6 +1290,15 @@ pub fn default_sqlite_catalog_stamp_check() -> Result<CatalogStampCheckSummary, 
     sqlite_catalog::catalog_state_stamp_check(&cfg, &state_path)
 }
 
+#[cfg(feature = "builder")]
+pub(crate) fn sqlite_catalog_stamp_check_with_paths(
+    paths: &crate::device_layout::CatalogPaths,
+) -> Result<CatalogStampCheckSummary, String> {
+    let cfg = BenchConfig::production_with_paths(paths);
+    let state_path = crate::catalog_state::path_for_root(paths.sharded_catalog_dir());
+    sqlite_catalog::catalog_state_stamp_check(&cfg, &state_path)
+}
+
 pub fn default_sqlite_cached_summary(scan_us: u64) -> Result<LibraryRefreshSummary, String> {
     sqlite_cached_summary(&default_sqlite_path(), scan_us)
 }
@@ -1287,10 +1383,25 @@ impl BenchConfig {
         Self { roots, sqlite_path }
     }
 
+    pub(crate) fn from_paths(paths: &crate::device_layout::CatalogPaths) -> Self {
+        Self {
+            roots: catalog_config::library_roots_from_env(),
+            sqlite_path: paths.library_bench_sqlite().to_path_buf(),
+        }
+    }
+
     fn production() -> Self {
         let mut cfg = Self::from_env();
         cfg.sqlite_path = default_sqlite_path();
         cfg
+    }
+
+    #[cfg(feature = "builder")]
+    fn production_with_paths(paths: &crate::device_layout::CatalogPaths) -> Self {
+        Self {
+            roots: catalog_config::library_roots_from_env(),
+            sqlite_path: paths.library_sqlite().to_path_buf(),
+        }
     }
 }
 

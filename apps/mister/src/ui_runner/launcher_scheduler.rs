@@ -288,7 +288,7 @@ struct SystemEntryPrepareWorker {
 }
 
 impl SystemEntryPrepareWorker {
-    fn start() -> Option<Self> {
+    fn start(catalog_paths: mister_magik_catalog::device_layout::CatalogPaths) -> Option<Self> {
         let (request_tx, request_rx) = mpsc::channel::<SystemEntryPrepareCommand>();
         let results = Arc::new(PreparedSystemEntryMailbox::default());
         let worker_results = Arc::clone(&results);
@@ -332,7 +332,7 @@ impl SystemEntryPrepareWorker {
                         SystemEntryPrepareCommand::OpenGeneration { generation, reply } => {
                             let started = Instant::now();
                             let result = mister_magik_catalog::lazy_sharded_reader::LazyShardedCatalogReader::open(
-                                &mister_magik_catalog::catalog_config::default_sharded_catalog_path(),
+                                catalog_paths.sharded_catalog_dir(),
                                 mister_magik_catalog::production_sharded_projection::production_registry_limits(),
                             )
                             .map_err(|error| error.to_string())
@@ -574,6 +574,7 @@ enum MediaJobState {
 }
 
 pub(super) struct LauncherScheduler {
+    catalog_paths: mister_magik_catalog::device_layout::CatalogPaths,
     catalog: CatalogJobState,
     catalog_progress: crate::catalog_progress_report::CatalogProgressMonitor,
     search_query: SearchQueryJobState,
@@ -598,8 +599,19 @@ pub(super) struct LauncherScheduler {
 
 impl LauncherScheduler {
     pub(super) fn new(launch_handoff_bench_enabled: bool) -> Self {
+        Self::with_catalog_paths(
+            launch_handoff_bench_enabled,
+            mister_magik_catalog::device_layout::CatalogPaths::capture_process(),
+        )
+    }
+
+    pub(super) fn with_catalog_paths(
+        launch_handoff_bench_enabled: bool,
+        catalog_paths: mister_magik_catalog::device_layout::CatalogPaths,
+    ) -> Self {
         let now = Instant::now();
         Self {
+            catalog_paths: catalog_paths.clone(),
             catalog: CatalogJobState::Idle,
             catalog_progress: crate::catalog_progress_report::CatalogProgressMonitor::new(now),
             search_query: SearchQueryJobState::Idle,
@@ -610,7 +622,7 @@ impl LauncherScheduler {
             system_shard_queue: VecDeque::new(),
             system_shard_generation: None,
             next_system_entry_sequence: 1,
-            system_entry_prepare: SystemEntryPrepareWorker::start(),
+            system_entry_prepare: SystemEntryPrepareWorker::start(catalog_paths),
             media: MediaJobState::Idle,
             launch_handoff: LaunchHandoffSession::from_env(launch_handoff_bench_enabled),
         }
@@ -826,6 +838,7 @@ impl LauncherScheduler {
         };
         let worker_request = request.clone();
         let search_catalog = Arc::clone(&self.search_catalog);
+        let storage = self.catalog_paths.sharded_catalog_dir().to_path_buf();
         let (tx, rx) = mpsc::channel();
         self.search_query = SearchQueryJobState::Running(rx);
         if std::thread::Builder::new()
@@ -834,7 +847,6 @@ impl LauncherScheduler {
                 mister_magik_catalog::runtime_thread::apply_runtime_thread_policy(
                     mister_magik_catalog::runtime_thread::RuntimeThreadRole::CatalogWorker,
                 );
-                let storage = mister_magik_catalog::catalog_config::default_sharded_catalog_path();
                 let result = cached_search_catalog(
                     &search_catalog,
                     worker_request.catalog_version,
@@ -882,6 +894,7 @@ impl LauncherScheduler {
             request,
             initial_cache,
             execution_mode,
+            self.catalog_paths.clone(),
         ));
     }
 
@@ -1240,7 +1253,7 @@ impl LauncherScheduler {
         if !matches!(self.media, MediaJobState::Idle) {
             return;
         }
-        match start_screenshot_media_worker() {
+        match start_screenshot_media_worker_with_paths(&self.catalog_paths) {
             Some(handle) => {
                 self.media = MediaJobState::Running(handle);
                 print_startup_event(

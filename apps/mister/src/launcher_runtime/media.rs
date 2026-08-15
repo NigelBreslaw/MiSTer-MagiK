@@ -6,8 +6,8 @@ use crate::artifact_publish::{
     sync_path_rust_best_effort, timestamped_temp_path_for,
 };
 use crate::media_update::{
-    DEFAULT_ASSET_DIR, DEFAULT_IMAGE_SIZE, DEFAULT_MANIFEST_URL, LocalPackStatus, MediaIndex,
-    MediaPack, MediaUpdatePolicy, MediaVariant, index_path_for_pack_path, pack_status_from_state,
+    DEFAULT_IMAGE_SIZE, DEFAULT_MANIFEST_URL, LocalPackStatus, MediaIndex, MediaPack,
+    MediaUpdatePolicy, MediaVariant, index_path_for_pack_path, pack_status_from_state,
     parse_manifest_json, size_qualified_pack_path, state_path, valid_image_size,
 };
 use mister_magik_catalog::media_identity::preferred_screenshot_image_size;
@@ -69,7 +69,14 @@ impl MediaWorkerHandle {
 }
 
 pub fn start_screenshot_media_worker() -> Option<MediaWorkerHandle> {
-    let config = match MediaWorkerConfig::from_env() {
+    let paths = mister_magik_catalog::device_layout::CatalogPaths::capture_process();
+    start_screenshot_media_worker_with_paths(&paths)
+}
+
+pub fn start_screenshot_media_worker_with_paths(
+    paths: &mister_magik_catalog::device_layout::CatalogPaths,
+) -> Option<MediaWorkerHandle> {
+    let config = match MediaWorkerConfig::from_env_with_paths(paths) {
         Ok(config) => config,
         Err(error) => {
             crate::ui_errln!("screenshot media worker disabled: {error}");
@@ -1646,7 +1653,9 @@ pub struct MediaWorkerConfig {
 }
 
 impl MediaWorkerConfig {
-    fn from_env() -> Result<Self, String> {
+    fn from_env_with_paths(
+        paths: &mister_magik_catalog::device_layout::CatalogPaths,
+    ) -> Result<Self, String> {
         let policy =
             MediaUpdatePolicy::parse(std::env::var("MISTER_MEDIA_UPDATE").ok().as_deref())?;
         let image_size =
@@ -1661,11 +1670,8 @@ impl MediaWorkerConfig {
             policy,
             manifest_url,
             image_size,
-            asset_dir: PathBuf::from(
-                std::env::var("MISTER_MEDIA_ASSET_DIR")
-                    .unwrap_or_else(|_| DEFAULT_ASSET_DIR.to_string()),
-            ),
-            catalog_root: mister_magik_catalog::catalog_config::default_sharded_catalog_path(),
+            asset_dir: paths.media_asset_dir().to_path_buf(),
+            catalog_root: paths.sharded_catalog_dir().to_path_buf(),
             max_concurrent_downloads: media_download_concurrency_from_env(),
             benchmark_auto_finish: media_benchmark_auto_finish_enabled(),
         })

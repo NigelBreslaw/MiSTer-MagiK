@@ -3,7 +3,7 @@
 
 //! Immutable process-boundary configuration capture.
 
-use mister_magik_catalog::device_layout::DevicePaths;
+use mister_magik_catalog::device_layout::{CatalogPathOverrides, CatalogPaths, DevicePaths};
 use mister_magik_catalog::fs_fault::FaultConfig;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{OsStr, OsString};
@@ -99,6 +99,7 @@ impl InstrumentationModifiers {
 pub struct LauncherProcessConfig {
     readiness: LauncherReadinessConfig,
     device_paths: DevicePaths,
+    catalog_paths: CatalogPaths,
 }
 
 impl LauncherProcessConfig {
@@ -108,6 +109,10 @@ impl LauncherProcessConfig {
 
     pub fn device_paths(&self) -> &DevicePaths {
         &self.device_paths
+    }
+
+    pub fn catalog_paths(&self) -> &CatalogPaths {
+        &self.catalog_paths
     }
 }
 
@@ -157,6 +162,7 @@ pub struct DiagnosticConfig {
 pub struct ProcessConfig {
     command: CommandMode,
     device_paths: DevicePaths,
+    catalog_paths: CatalogPaths,
     launcher: Option<LauncherProcessConfig>,
     instrumentation: InstrumentationModifiers,
     fault: Option<FaultConfig>,
@@ -190,9 +196,14 @@ impl ProcessConfig {
     ) -> Self {
         let command = CommandMode::from_name(command);
         let instrumentation = InstrumentationModifiers::from_args(&command, args);
+        let catalog_paths = CatalogPaths::derive(
+            &device_paths,
+            CatalogPathOverrides::capture_with(|name| environment.get_path(name)),
+        );
         let launcher = command.captures_launcher().then(|| LauncherProcessConfig {
             readiness: LauncherReadinessConfig::from_snapshot(environment),
             device_paths: device_paths.clone(),
+            catalog_paths: catalog_paths.clone(),
         });
         // Fault capture deliberately remains an early, compatibility-preserving
         // process boundary until C19 applies command and feature gates.
@@ -200,6 +211,7 @@ impl ProcessConfig {
         Self {
             command,
             device_paths,
+            catalog_paths,
             launcher,
             instrumentation,
             fault,
@@ -212,6 +224,10 @@ impl ProcessConfig {
 
     pub fn device_paths(&self) -> &DevicePaths {
         &self.device_paths
+    }
+
+    pub fn catalog_paths(&self) -> &CatalogPaths {
+        &self.catalog_paths
     }
 
     pub fn launcher(&self) -> Option<&LauncherProcessConfig> {
@@ -356,11 +372,47 @@ mod tests {
                 .launcher()
                 .expect("ui captures launcher configuration");
             assert_eq!(launcher.device_paths(), config.device_paths());
+            assert_eq!(launcher.catalog_paths(), config.catalog_paths());
             assert_eq!(launcher.device_paths().main_path(), remap(installed.main));
             assert_eq!(
                 launcher.device_paths().app_path("settings.json"),
                 remap(installed.root).join("settings.json")
             );
         }
+    }
+
+    #[test]
+    fn catalog_paths_capture_overrides_once_at_the_command_boundary() {
+        let environment = EnvironmentSnapshot::from_values([
+            ("MISTER_LIBRARY_SQLITE", "/tmp/catalog/library.sqlite3"),
+            ("MISTER_PREVIEW_CACHE_DIR", "/tmp/catalog/previews"),
+            ("MISTER_SHARDED_CATALOG_DIR", "/tmp/catalog/v3"),
+        ]);
+        let config = ProcessConfig::from_snapshot_with_device_paths(
+            &["mister-magik-fb".into(), "ui".into()],
+            "ui",
+            &environment,
+            DevicePaths::remapped(
+                mister_magik_platform_manifest_contract::Layout::Development,
+                "/tmp/card",
+            ),
+        );
+
+        assert_eq!(
+            config.catalog_paths().library_sqlite(),
+            Path::new("/tmp/catalog/library.sqlite3")
+        );
+        assert_eq!(
+            config.catalog_paths().preview_cache_dir(),
+            Path::new("/tmp/catalog/previews")
+        );
+        assert_eq!(
+            config.catalog_paths().sharded_catalog_dir(),
+            Path::new("/tmp/catalog/v3")
+        );
+        assert_eq!(
+            config.catalog_paths().media_asset_dir(),
+            config.device_paths().app_path("assets")
+        );
     }
 }

@@ -16,6 +16,14 @@ use std::time::Instant;
 
 pub(crate) fn run_scan_bench() {
     let cfg = BenchConfig::from_env();
+    run_scan_bench_with_config(cfg);
+}
+
+pub(crate) fn run_scan_bench_with_paths(paths: &crate::device_layout::CatalogPaths) {
+    run_scan_bench_with_config(BenchConfig::from_paths(paths));
+}
+
+fn run_scan_bench_with_config(cfg: BenchConfig) {
     let label =
         std::env::var("MISTER_LIBRARY_BENCH_LABEL").unwrap_or_else(|_| "LIB-BENCH".to_string());
     let iterations = std::env::var("MISTER_LIBRARY_BENCH_ITERATIONS")
@@ -167,7 +175,13 @@ pub(crate) fn run_scan_bench() {
 }
 
 pub(crate) fn run_sqlite_inspect_cli(args: &[String]) -> Result<String, String> {
-    let mut path = default_sqlite_path();
+    run_sqlite_inspect_cli_with_default(args, default_sqlite_path())
+}
+
+pub(crate) fn run_sqlite_inspect_cli_with_default(
+    args: &[String],
+    mut path: PathBuf,
+) -> Result<String, String> {
     let mut query_parts = Vec::new();
     let mut queries = Vec::new();
     let mut i = 0usize;

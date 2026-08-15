@@ -4040,10 +4040,13 @@ fn catalog_from_sharded_registry_and_summary(
     )
 }
 
-fn read_sharded_registry_seed(root: &str, start: Instant) -> Option<ShardedCatalogSeed> {
+fn read_sharded_registry_seed(
+    root: &str,
+    storage: &Path,
+    start: Instant,
+) -> Option<ShardedCatalogSeed> {
     let load_started = Instant::now();
-    let storage = mister_magik_catalog::catalog_config::default_sharded_catalog_path();
-    match load_sharded_registry_seed(root) {
+    match load_sharded_registry_seed_at(root, storage) {
         Ok(seed) => {
             print_startup_event(
                 start,
@@ -4935,7 +4938,10 @@ pub(super) fn run_launcher_loop(
         launcher_bench_scenario.is_some() && launcher_bench_after_input_script_enabled();
     let launcher_bench_launch_handoff =
         launcher_bench_scenario == Some(LauncherBenchScenario::LaunchHandoff);
-    let mut scheduler = LauncherScheduler::new(launcher_bench_launch_handoff);
+    let mut scheduler = LauncherScheduler::with_catalog_paths(
+        launcher_bench_launch_handoff,
+        launcher_config.catalog_paths().clone(),
+    );
     let mut catalog_events = CatalogJobEventBuf::new();
     let mut deferred_catalog_events: VecDeque<CatalogWorkerMessage> = VecDeque::new();
     let mut pending_catalog_ready: Option<CatalogWorkerMessage> = None;
@@ -5229,7 +5235,10 @@ pub(super) fn run_launcher_loop(
     let mut bridge_models = LauncherBridgeModels::default();
     let mut catalog_version = 0usize;
     let user_state_session = UserStateSession::start(
-        mister_magik_catalog::catalog_config::default_user_state_path(),
+        launcher_config
+            .catalog_paths()
+            .user_state_sqlite()
+            .to_path_buf(),
         PathBuf::from("/media/fat"),
     );
     let mut user_state_catalog_version = None;
@@ -5314,10 +5323,18 @@ pub(super) fn run_launcher_loop(
     let mut library_changed_dialog_test = LibraryChangedDialogTestDriver::from_env(start);
     let mut launcher_input_script = LauncherInputScriptDriver::from_env(start);
     let mut launcher_automation = LauncherAutomation::new();
-    let sqlite_path = mister_magik_catalog::catalog_state::default_path();
+    let sqlite_path = mister_magik_catalog::catalog_state::path_for_root(
+        launcher_config.catalog_paths().sharded_catalog_dir(),
+    );
     let capsule_seed_ready = catalog_ready;
     let sharded_seed = (!capsule_seed_ready)
-        .then(|| read_sharded_registry_seed(&arcade_root, start))
+        .then(|| {
+            read_sharded_registry_seed(
+                &arcade_root,
+                launcher_config.catalog_paths().sharded_catalog_dir(),
+                start,
+            )
+        })
         .flatten();
     let sharded_seed_ready = sharded_seed.is_some();
     let sharded_catalog_fingerprint = sharded_seed

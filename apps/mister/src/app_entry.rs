@@ -207,7 +207,7 @@ pub fn run() {
         command.kind,
         command_args::CommandKind::PreFpga | command_args::CommandKind::ListOnly
     ) {
-        dispatch_pre_fpga(&cmd, &args, fault_config.as_ref());
+        dispatch_pre_fpga(&cmd, &args, fault_config.as_ref(), &process_config);
         return;
     }
 
@@ -340,6 +340,7 @@ fn dispatch_pre_fpga(
     cmd: &str,
     args: &[String],
     _fault_config: Option<&mister_magik_catalog::fs_fault::FaultConfig>,
+    process_config: &mister_magik_fb::process_config::ProcessConfig,
 ) {
     match cmd {
         #[cfg(feature = "diagnostics")]
@@ -352,7 +353,7 @@ fn dispatch_pre_fpga(
         "fb-map-bandwidth" => run_fb_map_bandwidth(),
         #[cfg(feature = "diagnostics")]
         "scanout-slots-map-report" => run_scanout_slots_map_report(),
-        "library-refresh" => run_library_refresh(),
+        "library-refresh" => run_library_refresh(process_config.catalog_paths()),
         "request-library-rebuild" => run_request_library_rebuild(),
         "toggle-simple-joystick-setting" => run_toggle_simple_joystick_setting(),
         "display-persist" => run_display_persist(args),
@@ -371,8 +372,12 @@ fn dispatch_pre_fpga(
         "preview-pack-bench" => preview_pack_bench::run(),
         #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
         "preview-index-refresh-bench" => run_preview_index_refresh_bench(),
-        command_args::CATALOG_INSPECT_COMMAND => run_catalog_v3_inspect(),
-        command_args::CATALOG_REGISTRY_REPORT_COMMAND => run_catalog_v3_registry_report(),
+        command_args::CATALOG_INSPECT_COMMAND => {
+            run_catalog_v3_inspect(process_config.catalog_paths())
+        }
+        command_args::CATALOG_REGISTRY_REPORT_COMMAND => {
+            run_catalog_v3_registry_report(process_config.catalog_paths())
+        }
         #[cfg(feature = "diagnostics")]
         "hbmame-metadata-from-library" => run_hbmame_metadata_from_library(),
         #[cfg(feature = "bench-tools")]
@@ -436,8 +441,8 @@ fn benchmark_capabilities() -> serde_json::Value {
     capabilities
 }
 
-fn run_catalog_v3_inspect() {
-    match mister_magik_catalog::catalog_acceptance::inspect_production_catalog() {
+fn run_catalog_v3_inspect(paths: &mister_magik_catalog::device_layout::CatalogPaths) {
+    match mister_magik_catalog::catalog_acceptance::inspect_catalog(paths.sharded_catalog_dir()) {
         Ok(report) => crate::ui_log!("{report}"),
         Err(error) => {
             crate::ui_errln!("catalog_v3_summary_tsv\tvalid=0\terror={error}");
@@ -446,8 +451,8 @@ fn run_catalog_v3_inspect() {
     }
 }
 
-fn run_catalog_v3_registry_report() {
-    match mister_magik_catalog::catalog_acceptance::inspect_production_registry() {
+fn run_catalog_v3_registry_report(paths: &mister_magik_catalog::device_layout::CatalogPaths) {
+    match mister_magik_catalog::catalog_acceptance::inspect_registry(paths.sharded_catalog_dir()) {
         Ok(report) => crate::ui_log!("{report}"),
         Err(error) => {
             crate::ui_errln!("catalog_v3_registry_summary_tsv\tvalid=0\terror={error}");
@@ -491,7 +496,9 @@ fn dispatch_fpga(
         #[cfg(all(feature = "diagnostics", feature = "ui"))]
         "fpga-latch-pattern" => run_fpga_latch_pattern(f),
         #[cfg(feature = "diagnostics")]
-        "library-scan-bench" => library_db::run_scan_bench(),
+        "library-scan-bench" => {
+            library_db::run_scan_bench_with_paths(process_config.catalog_paths())
+        }
         other => unknown_command(other),
     }
 }
@@ -535,11 +542,12 @@ fn print_experiment_capabilities() {
     }
 }
 
-fn run_library_refresh() {
-    let result = mister_magik_catalog::builder_service::run_with_execution_policy_and_fault_control(
+fn run_library_refresh(paths: &mister_magik_catalog::device_layout::CatalogPaths) {
+    let result = mister_magik_catalog::builder_service::run_with_execution_policy_and_fault_control_and_paths(
         mister_magik_catalog::builder_service::BuilderOperation::Rebuild,
         mister_magik_catalog::builder_service::BuilderExecutionPolicy::ForegroundUntilFirstVisible,
         Box::new(mister_magik_mister_runtime::direct_reset_fault::process_fault_control()),
+        paths,
         |event| crate::ui_logln!("{}", serde_json::to_string(&event).unwrap_or_default()),
     );
     if let Err(error) = result {
