@@ -6,6 +6,11 @@ it is not an acceptance target based on file length. The typed checks in
 `agent-cli/src/checks.rs` and their selection in `agent-cli/src/planner.rs`
 remain the executable containment boundary.
 
+The post-FPGA baseline and completed Enforce runtime comparison is recorded in
+`history/2026-08-15-p1-enforce-acceptance.md`. The two pre-existing incomplete
+benchmark routes remain performance/qualification debt rather than boundary
+exceptions.
+
 ## P0 qualification state
 
 The P0 implementation commits are on the current branch, and each planned
