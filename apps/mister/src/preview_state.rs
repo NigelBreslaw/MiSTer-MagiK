@@ -173,7 +173,7 @@ impl BackdropPrepareWorker {
                             rgb565_words_as_pixels(&words),
                             request.image.source_w as usize,
                             request.image.source_h as usize,
-                            stride_pixels,
+                            *stride_pixels,
                             request.identity.width,
                             request.identity.physical_height,
                             request.identity.logical_height,
