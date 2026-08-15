@@ -3,6 +3,7 @@
 
 //! Immutable process-boundary configuration capture.
 
+use mister_magik_catalog::device_layout::DevicePaths;
 use mister_magik_catalog::fs_fault::FaultConfig;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{OsStr, OsString};
@@ -97,11 +98,16 @@ impl InstrumentationModifiers {
 #[derive(Clone)]
 pub struct LauncherProcessConfig {
     readiness: LauncherReadinessConfig,
+    device_paths: DevicePaths,
 }
 
 impl LauncherProcessConfig {
     pub fn readiness(&self) -> &LauncherReadinessConfig {
         &self.readiness
+    }
+
+    pub fn device_paths(&self) -> &DevicePaths {
+        &self.device_paths
     }
 }
 
@@ -150,6 +156,7 @@ pub struct DiagnosticConfig {
 #[derive(Clone)]
 pub struct ProcessConfig {
     command: CommandMode,
+    device_paths: DevicePaths,
     launcher: Option<LauncherProcessConfig>,
     instrumentation: InstrumentationModifiers,
     fault: Option<FaultConfig>,
@@ -157,20 +164,42 @@ pub struct ProcessConfig {
 
 impl ProcessConfig {
     pub fn capture(args: &[String], command: &str) -> Self {
-        Self::from_snapshot(args, command, &EnvironmentSnapshot::capture_process())
+        Self::from_snapshot_with_device_paths(
+            args,
+            command,
+            &EnvironmentSnapshot::capture_process(),
+            DevicePaths::current(),
+        )
     }
 
+    #[cfg(test)]
     fn from_snapshot(args: &[String], command: &str, environment: &EnvironmentSnapshot) -> Self {
+        Self::from_snapshot_with_device_paths(
+            args,
+            command,
+            environment,
+            DevicePaths::for_layout(mister_magik_platform_manifest_contract::Layout::Public),
+        )
+    }
+
+    fn from_snapshot_with_device_paths(
+        args: &[String],
+        command: &str,
+        environment: &EnvironmentSnapshot,
+        device_paths: DevicePaths,
+    ) -> Self {
         let command = CommandMode::from_name(command);
         let instrumentation = InstrumentationModifiers::from_args(&command, args);
         let launcher = command.captures_launcher().then(|| LauncherProcessConfig {
             readiness: LauncherReadinessConfig::from_snapshot(environment),
+            device_paths: device_paths.clone(),
         });
         // Fault capture deliberately remains an early, compatibility-preserving
         // process boundary until C19 applies command and feature gates.
         let fault = FaultConfig::capture_with(|name| environment.get(name));
         Self {
             command,
+            device_paths,
             launcher,
             instrumentation,
             fault,
@@ -179,6 +208,10 @@ impl ProcessConfig {
 
     pub fn command(&self) -> &CommandMode {
         &self.command
+    }
+
+    pub fn device_paths(&self) -> &DevicePaths {
+        &self.device_paths
     }
 
     pub fn launcher(&self) -> Option<&LauncherProcessConfig> {
@@ -291,5 +324,43 @@ mod tests {
             config.instrumentation(),
             &InstrumentationModifiers::default()
         );
+    }
+
+    #[test]
+    fn launcher_paths_preserve_executable_layout_and_root_remapping() {
+        use mister_magik_platform_manifest_contract::Layout;
+
+        for (layout, root) in [
+            (Layout::Public, Path::new("/media/fat")),
+            (Layout::Development, Path::new("/media/fat")),
+            (Layout::Development, Path::new("/tmp/card")),
+        ] {
+            let installed = layout.paths();
+            let canonical_root = Path::new(installed.root)
+                .parent()
+                .expect("installed app root has a device parent");
+            let remap = |canonical: &str| {
+                root.join(
+                    Path::new(canonical)
+                        .strip_prefix(canonical_root)
+                        .expect("installed path remains under the device root"),
+                )
+            };
+            let config = ProcessConfig::from_snapshot_with_device_paths(
+                &["mister-magik-fb".into(), "ui".into()],
+                "ui",
+                &EnvironmentSnapshot::default(),
+                DevicePaths::remapped(layout, root),
+            );
+            let launcher = config
+                .launcher()
+                .expect("ui captures launcher configuration");
+            assert_eq!(launcher.device_paths(), config.device_paths());
+            assert_eq!(launcher.device_paths().main_path(), remap(installed.main));
+            assert_eq!(
+                launcher.device_paths().app_path("settings.json"),
+                remap(installed.root).join("settings.json")
+            );
+        }
     }
 }

@@ -5018,9 +5018,8 @@ pub(super) fn run_launcher_loop(
     let preview_route = PreviewRoutePolicy::new(crt_layout);
     let mut nav =
         LauncherNav::for_crt_layout_with_row_height(crt_layout, crt_metrics.game_row_height);
-    let settings_store = FileSettingsStore::new(
-        mister_magik_catalog::device_layout::current_app_path("settings.json"),
-    );
+    let settings_store =
+        FileSettingsStore::new(launcher_config.device_paths().app_path("settings.json"));
     nav.settings = settings_store.load();
     if orientation_benchmark.enabled() {
         nav.settings.screen_orientation = ScreenOrientation::Normal;
