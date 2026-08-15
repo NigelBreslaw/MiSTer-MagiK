@@ -8097,6 +8097,36 @@ fn summarize_arcade_velocity_scroll(
     let mut distinct_selections = selection_indices.clone();
     distinct_selections.sort_unstable();
     distinct_selections.dedup();
+    let profile_selection_indices = scroll_profile_frames
+        .iter()
+        .filter_map(|frame| frame.get("crt_backdrop_selected").and_then(Value::as_u64))
+        .collect::<Vec<_>>();
+    let profile_selection_changes = profile_selection_indices
+        .windows(2)
+        .filter(|pair| pair[0] != pair[1])
+        .count();
+    let mut distinct_profile_selections = profile_selection_indices.clone();
+    distinct_profile_selections.sort_unstable();
+    distinct_profile_selections.dedup();
+    let exact_cache_frames = scroll_profile_frames
+        .iter()
+        .filter(|frame| {
+            frame
+                .get("crt_backdrop_cache_state")
+                .and_then(Value::as_str)
+                == Some("exact")
+        })
+        .count();
+    let distinct_transition_ids = scroll_profile_frames
+        .iter()
+        .filter_map(|frame| {
+            frame
+                .get("crt_backdrop_transition_id")
+                .and_then(Value::as_u64)
+        })
+        .filter(|id| *id != 0)
+        .collect::<std::collections::BTreeSet<_>>()
+        .len();
     let mut foreground_work_us = scroll_profile_frames
         .iter()
         .map(|frame| frame_u64(frame, "wall_us").saturating_sub(frame_u64(frame, "vsync_us")))
@@ -8226,6 +8256,10 @@ fn summarize_arcade_velocity_scroll(
             "distinct": distinct_selections.len(),
             "snapshots": selection_indices.len(),
             "profile_records": scroll_profile_frames.len(),
+            "profile_changes": profile_selection_changes,
+            "profile_distinct": distinct_profile_selections.len(),
+            "exact_cache_frames": exact_cache_frames,
+            "distinct_backdrop_transitions": distinct_transition_ids,
         },
         "completion_intervals_us": {
             "median": median_u64(&completion_intervals).unwrap_or(0),
@@ -8295,7 +8329,11 @@ fn summarize_arcade_velocity_scroll(
     )?;
     writeln!(report, "- Submitted FPS: {:.3}", submitted_fps)?;
     writeln!(report, "- Telemetry analytics: off (observer-free)")?;
-    writeln!(report, "- Selection changes: {selection_changes}\n")?;
+    writeln!(
+        report,
+        "- Selection changes: {selection_changes}; profile changes: {profile_selection_changes}; profile distinct: {}; exact-cache frames: {exact_cache_frames}; backdrop transitions: {distinct_transition_ids}\n",
+        distinct_profile_selections.len(),
+    )?;
     writeln!(
         report,
         "- Foreground work (p95 / p99 / max): {} / {} / {} us",

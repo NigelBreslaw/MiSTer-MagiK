@@ -10104,6 +10104,9 @@ pub(super) fn run_launcher_loop(
             crt_backdrop_chrome_restore_pixels,
             crt_backdrop_alpha_bucket: crt_backdrop_work_trace.alpha_bucket,
             crt_backdrop_active: crt_backdrop_work_trace.active,
+            crt_backdrop_selected: nav.arcade.selected,
+            crt_backdrop_transition_id: crt_backdrop_transition_id.unwrap_or(0),
+            crt_backdrop_cache_state: preview_cache_state_before_composition,
             effect_label_us,
             navigation_transition_base_copy_us: navigation_transition
                 .last_render_stats()
@@ -10793,6 +10796,9 @@ pub(super) fn run_launcher_loop(
                 .crt_backdrop_chrome_restore_pixels,
             presented_frame.custom_draw_trace.crt_backdrop_alpha_bucket,
             presented_frame.custom_draw_trace.crt_backdrop_active,
+            presented_frame.custom_draw_trace.crt_backdrop_selected,
+            presented_frame.custom_draw_trace.crt_backdrop_transition_id,
+            presented_frame.custom_draw_trace.crt_backdrop_cache_state,
         );
         let launcher_response_present_receipt = LauncherResponsePresentReceipt {
             post_accepted_at_us: crate::input_hub::monotonic_us(),
