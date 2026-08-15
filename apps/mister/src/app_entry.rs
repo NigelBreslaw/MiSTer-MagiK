@@ -97,6 +97,8 @@ use mister_magik_mister_runtime::boot_analytics;
 use mister_magik_mister_runtime::fpga;
 use mister_magik_mister_runtime::settings;
 
+#[cfg(feature = "diagnostics")]
+use mister_magik_fb::input;
 #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
 use mister_magik_fb::preview_pack_bench;
 #[cfg(mister_experiments)]
@@ -110,7 +112,7 @@ pub use mister_magik_fb::{
     return_catalog_capsule, setup_nav, spring_animation, ui_errln, ui_log, ui_logln,
 };
 use mister_magik_fb::{
-    cpu_profile, input, input_integrity_driver, pmu_probe, pmu_profile, search_bench, ui_display,
+    cpu_profile, input_integrity_driver, pmu_probe, pmu_profile, search_bench, ui_display,
     ui_runner,
 };
 #[cfg(feature = "bench-tools")]
@@ -129,6 +131,7 @@ use mister_magik_fb::framebuffer::scanout_slots::{
     HiddenRgb565BufferIndex, SCANOUT_SLOTS_DEVICE, ScanoutSlotsRgb565Framebuffer,
     read_scanout_slots_layout,
 };
+#[cfg(feature = "diagnostics")]
 use mister_magik_fb::framebuffer::vsync::{VsyncPacer, VsyncWaitStatus};
 use ui_display::{UiDisplay, UiDisplayPlan};
 use ui_runner::launcher_display_session::LauncherDisplaySession;

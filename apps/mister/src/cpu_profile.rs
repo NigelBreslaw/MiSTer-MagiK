@@ -8,6 +8,7 @@
 //! built with `scripts/agent build runtime-analysis`; benchmarks profile the installed runtime.
 
 use std::sync::atomic::{AtomicU8, Ordering};
+#[cfg(any(feature = "profile", test))]
 use std::time::Duration;
 
 const SCREENSAVER_TRIGGER: &str = "screensaver";
