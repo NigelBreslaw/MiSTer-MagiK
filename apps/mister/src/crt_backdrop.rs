@@ -291,6 +291,7 @@ fn scale_dimmed_center_crop(
     )
 }
 
+#[cfg(test)]
 fn scale_dimmed_center_crop_mapped(
     destination: &mut [Rgb565Pixel],
     destination_width: usize,
