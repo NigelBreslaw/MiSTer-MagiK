@@ -844,7 +844,7 @@ documentation = { summary = "Controls hbmame sqlite behavior", accepted_values =
 
 [[control]]
 name = "MISTER_HOME_SELECTED_INDEX"
-owner = "apps/mister/src/ui_runner/launcher_loop.rs"
+owner = "apps/mister/src/ui_runner/launcher_bench.rs"
 classification = "production"
 value_shape = "bounded integer"
 default_behavior = "uses the owner-defined bounded numeric default when unset or invalid"
@@ -998,7 +998,7 @@ documentation = { summary = "Controls latch v5 qualification behavior", accepted
 
 [[control]]
 name = "MISTER_LAUNCHER_AUTO_LAUNCH_SELECTED"
-owner = "apps/mister/src/ui_runner/launcher_loop.rs"
+owner = "apps/mister/src/ui_runner/launcher_bench.rs"
 classification = "production"
 value_shape = "boolean token"
 default_behavior = "uses the owner-defined enabled or disabled default when unset or unrecognized"

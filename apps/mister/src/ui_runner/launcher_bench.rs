@@ -4,6 +4,135 @@
 use super::*;
 use crate::input_state::PadState;
 
+const BENCH_SCENARIO: &str = "MISTER_LAUNCHER_BENCH_SCENARIO";
+const START_SCREEN: &str = "MISTER_LAUNCHER_START_SCREEN";
+const START_SYSTEM: &str = "MISTER_LAUNCHER_START_SYSTEM";
+const SYSTEM_ENTRY_BENCHMARK_SYSTEM: &str = "MISTER_SYSTEM_ENTRY_BENCHMARK_SYSTEM";
+const START_MENU: &str = "MISTER_LAUNCHER_START_MENU";
+const LOCK_SCREEN: &str = "MISTER_LAUNCHER_LOCK_SCREEN";
+const BENCH_AFTER_INPUT_SCRIPT: &str = "MISTER_LAUNCHER_BENCH_AFTER_INPUT_SCRIPT";
+const PREVIEW_STEP_HOLD_SECS: &str = "MISTER_PREVIEW_STEP_HOLD_SECS";
+const HUMAN_TURBO_IDLE_FRAMES: &str = "MISTER_HUMAN_TURBO_IDLE_FRAMES";
+const HUMAN_TURBO_NORMAL_FRAMES: &str = "MISTER_HUMAN_TURBO_NORMAL_FRAMES";
+const HUMAN_TURBO_PAUSE_FRAMES: &str = "MISTER_HUMAN_TURBO_PAUSE_FRAMES";
+const HOME_SELECTED_INDEX: &str = "MISTER_HOME_SELECTED_INDEX";
+const AUTO_LAUNCH_SELECTED: &str = "MISTER_LAUNCHER_AUTO_LAUNCH_SELECTED";
+
+#[derive(Clone, Debug)]
+pub struct LauncherBenchmarkConfig {
+    scenario: Option<LauncherBenchScenario>,
+    start_screen: Option<Screen>,
+    start_system: Option<String>,
+    system_entry_system: Option<String>,
+    start_menu: Option<String>,
+    lock_screen: Option<Screen>,
+    after_input_script: bool,
+    preview_step_hold_frames: usize,
+    human_turbo_idle_frames: usize,
+    human_turbo_normal_frames: usize,
+    human_turbo_pause_frames: usize,
+    home_selected: Option<Result<usize, String>>,
+    auto_launch_selected: bool,
+}
+
+impl Default for LauncherBenchmarkConfig {
+    fn default() -> Self {
+        Self {
+            scenario: None,
+            start_screen: None,
+            start_system: None,
+            system_entry_system: None,
+            start_menu: None,
+            lock_screen: None,
+            after_input_script: false,
+            preview_step_hold_frames: 300,
+            human_turbo_idle_frames: 30,
+            human_turbo_normal_frames: 30,
+            human_turbo_pause_frames: 30,
+            home_selected: None,
+            auto_launch_selected: false,
+        }
+    }
+}
+
+impl LauncherBenchmarkConfig {
+    pub fn capture_with<'a>(mut get: impl FnMut(&str) -> Option<&'a str>) -> Self {
+        let scenario = LauncherBenchScenario::from_value(get(BENCH_SCENARIO));
+        Self {
+            scenario,
+            start_screen: launcher_screen_from_value(get(START_SCREEN)),
+            start_system: normalized_nonempty(get(START_SYSTEM)),
+            system_entry_system: normalized_nonempty(get(SYSTEM_ENTRY_BENCHMARK_SYSTEM)),
+            start_menu: normalized_nonempty(get(START_MENU)).filter(|value| {
+                matches!(
+                    value.as_str(),
+                    "consoles" | "handhelds" | "computers" | "snk-neogeo"
+                )
+            }),
+            lock_screen: launcher_screen_from_value(get(LOCK_SCREEN)),
+            after_input_script: scenario.is_some()
+                && get(BENCH_AFTER_INPUT_SCRIPT).is_some_and(benchmark_flag),
+            preview_step_hold_frames: get(PREVIEW_STEP_HOLD_SECS)
+                .and_then(|value| value.parse::<usize>().ok())
+                .unwrap_or(5)
+                .clamp(1, 60)
+                .saturating_mul(60)
+                .max(1),
+            human_turbo_idle_frames: bounded_frames(get(HUMAN_TURBO_IDLE_FRAMES), 30, 180),
+            human_turbo_normal_frames: bounded_frames(get(HUMAN_TURBO_NORMAL_FRAMES), 30, 300),
+            human_turbo_pause_frames: bounded_frames(get(HUMAN_TURBO_PAUSE_FRAMES), 30, 300),
+            home_selected: get(HOME_SELECTED_INDEX)
+                .map(|value| value.parse::<usize>().map_err(|_| value.to_owned())),
+            auto_launch_selected: get(AUTO_LAUNCH_SELECTED).is_some_and(benchmark_flag),
+        }
+    }
+
+    pub(super) fn scenario(&self) -> Option<LauncherBenchScenario> {
+        self.scenario
+    }
+    pub(super) fn start_screen(&self) -> Option<Screen> {
+        self.start_screen
+    }
+    pub(super) fn start_system(&self) -> Option<&str> {
+        self.start_system.as_deref()
+    }
+    pub(super) fn system_entry_system(&self) -> Option<&str> {
+        self.system_entry_system.as_deref()
+    }
+    pub(super) fn start_menu(&self) -> Option<&str> {
+        self.start_menu.as_deref()
+    }
+    pub(super) fn lock_screen(&self) -> Option<Screen> {
+        self.lock_screen
+    }
+    pub(super) fn after_input_script(&self) -> bool {
+        self.after_input_script
+    }
+    pub(super) fn home_selected(&self) -> Option<&Result<usize, String>> {
+        self.home_selected.as_ref()
+    }
+    pub(super) fn auto_launch_selected(&self) -> bool {
+        self.auto_launch_selected
+    }
+}
+
+fn normalized_nonempty(value: Option<&str>) -> Option<String> {
+    value
+        .map(|value| value.trim().to_ascii_lowercase())
+        .filter(|value| !value.is_empty())
+}
+
+fn bounded_frames(value: Option<&str>, default: usize, maximum: usize) -> usize {
+    value
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(default)
+        .min(maximum)
+}
+
+fn benchmark_flag(value: &str) -> bool {
+    matches!(value, "1" | "on" | "true" | "yes")
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum LauncherBenchScenario {
     Idle,
@@ -22,18 +151,15 @@ pub(super) enum LauncherBenchScenario {
 }
 
 impl LauncherBenchScenario {
-    pub(super) fn from_env() -> Option<Self> {
+    fn from_value(value: Option<&str>) -> Option<Self> {
         #[cfg(not(feature = "bench-tools"))]
         {
+            let _ = value;
             None
         }
         #[cfg(feature = "bench-tools")]
         {
-            match std::env::var("MISTER_LAUNCHER_BENCH_SCENARIO")
-                .ok()?
-                .to_ascii_lowercase()
-                .as_str()
-            {
+            match value?.to_ascii_lowercase().as_str() {
                 "idle" => Some(Self::Idle),
                 "preview-idle" | "preview_idle" => Some(Self::PreviewIdle),
                 "home-nav" | "home_nav" => Some(Self::HomeNav),
@@ -108,51 +234,8 @@ impl LauncherBenchScenario {
     }
 }
 
-pub(super) fn launcher_start_screen_from_env() -> Option<Screen> {
-    launcher_screen_from_env("MISTER_LAUNCHER_START_SCREEN")
-}
-
-pub(super) fn launcher_start_system_from_env() -> Option<String> {
-    std::env::var("MISTER_LAUNCHER_START_SYSTEM")
-        .ok()
-        .map(|value| value.trim().to_ascii_lowercase())
-        .filter(|value| !value.is_empty())
-}
-
-pub(super) fn launcher_system_entry_benchmark_system_from_env() -> Option<String> {
-    std::env::var("MISTER_SYSTEM_ENTRY_BENCHMARK_SYSTEM")
-        .ok()
-        .map(|value| value.trim().to_ascii_lowercase())
-        .filter(|value| !value.is_empty())
-}
-
-pub(super) fn launcher_start_menu_from_env() -> Option<String> {
-    std::env::var("MISTER_LAUNCHER_START_MENU")
-        .ok()
-        .map(|value| value.trim().to_ascii_lowercase())
-        .filter(|value| {
-            matches!(
-                value.as_str(),
-                "consoles" | "handhelds" | "computers" | "snk-neogeo"
-            )
-        })
-}
-
-pub(super) fn launcher_lock_screen_from_env() -> Option<Screen> {
-    launcher_screen_from_env("MISTER_LAUNCHER_LOCK_SCREEN")
-}
-
-pub(super) fn launcher_bench_after_input_script_enabled() -> bool {
-    matches!(
-        std::env::var("MISTER_LAUNCHER_BENCH_AFTER_INPUT_SCRIPT")
-            .ok()
-            .as_deref(),
-        Some("1") | Some("on") | Some("true") | Some("yes")
-    )
-}
-
-fn launcher_screen_from_env(name: &str) -> Option<Screen> {
-    match std::env::var(name).ok()?.to_ascii_lowercase().as_str() {
+fn launcher_screen_from_value(value: Option<&str>) -> Option<Screen> {
+    match value?.to_ascii_lowercase().as_str() {
         "home" => Some(Screen::Home),
         "system-hub" | "snes-hub" => Some(Screen::SystemHub),
         "arcade" => Some(Screen::Arcade),
@@ -164,51 +247,6 @@ fn launcher_screen_from_env(name: &str) -> Option<Screen> {
         "screensaver" | "screensaver-settings" => Some(Screen::Screensaver),
         _ => None,
     }
-}
-
-pub(super) fn preview_step_hold_frames() -> usize {
-    static VALUE: OnceLock<usize> = OnceLock::new();
-    *VALUE.get_or_init(|| {
-        let secs = std::env::var("MISTER_PREVIEW_STEP_HOLD_SECS")
-            .ok()
-            .and_then(|value| value.parse::<usize>().ok())
-            .unwrap_or(5)
-            .clamp(1, 60);
-        secs.saturating_mul(60).max(1)
-    })
-}
-
-fn human_turbo_idle_frames() -> usize {
-    static VALUE: OnceLock<usize> = OnceLock::new();
-    *VALUE.get_or_init(|| {
-        std::env::var("MISTER_HUMAN_TURBO_IDLE_FRAMES")
-            .ok()
-            .and_then(|value| value.parse::<usize>().ok())
-            .unwrap_or(30)
-            .min(180)
-    })
-}
-
-fn human_turbo_normal_frames() -> usize {
-    static VALUE: OnceLock<usize> = OnceLock::new();
-    *VALUE.get_or_init(|| {
-        std::env::var("MISTER_HUMAN_TURBO_NORMAL_FRAMES")
-            .ok()
-            .and_then(|value| value.parse::<usize>().ok())
-            .unwrap_or(30)
-            .min(300)
-    })
-}
-
-fn human_turbo_pause_frames() -> usize {
-    static VALUE: OnceLock<usize> = OnceLock::new();
-    *VALUE.get_or_init(|| {
-        std::env::var("MISTER_HUMAN_TURBO_PAUSE_FRAMES")
-            .ok()
-            .and_then(|value| value.parse::<usize>().ok())
-            .unwrap_or(30)
-            .min(300)
-    })
 }
 
 #[derive(Clone, Debug)]
@@ -236,6 +274,7 @@ impl LauncherBenchState {
 
 pub(super) fn launcher_bench_step(
     scenario: LauncherBenchScenario,
+    config: &LauncherBenchmarkConfig,
     nav: &mut LauncherNav,
     catalog: &ArcadeCatalog,
     active_game_count: Option<usize>,
@@ -344,9 +383,9 @@ pub(super) fn launcher_bench_step(
                 return false;
             }
             nav.screen = Screen::Arcade;
-            let idle_frames = human_turbo_idle_frames();
-            let normal_frames = human_turbo_normal_frames();
-            let pause_frames = human_turbo_pause_frames();
+            let idle_frames = config.human_turbo_idle_frames;
+            let normal_frames = config.human_turbo_normal_frames;
+            let pause_frames = config.human_turbo_pause_frames;
             if state.step < idle_frames {
                 nav.arcade.bench_direction_tick(0, 0, count, now);
             } else if state.step < idle_frames.saturating_add(normal_frames) {
@@ -377,7 +416,7 @@ pub(super) fn launcher_bench_step(
                 return false;
             }
             nav.screen = Screen::Arcade;
-            if state.step % preview_step_hold_frames() == 0 {
+            if state.step % config.preview_step_hold_frames == 0 {
                 nav.arcade.handle_direction_input(1, 0, now, count);
             }
             nav.arcade.tick(count, now);
@@ -678,6 +717,39 @@ pub(super) fn sync_device_info_launcher(
 mod tests {
     use super::*;
 
+    #[test]
+    fn benchmark_config_captures_start_state_and_bounded_timing() {
+        let values = std::collections::BTreeMap::from([
+            (START_SCREEN, "system-hub"),
+            (START_SYSTEM, "  NeoGeo  "),
+            (START_MENU, "consoles"),
+            (LOCK_SCREEN, "arcade"),
+            (PREVIEW_STEP_HOLD_SECS, "999"),
+            (HUMAN_TURBO_IDLE_FRAMES, "999"),
+            (HOME_SELECTED_INDEX, "7"),
+            (AUTO_LAUNCH_SELECTED, "yes"),
+        ]);
+        let config = LauncherBenchmarkConfig::capture_with(|name| values.get(name).copied());
+
+        assert_eq!(config.start_screen(), Some(Screen::SystemHub));
+        assert_eq!(config.start_system(), Some("neogeo"));
+        assert_eq!(config.start_menu(), Some("consoles"));
+        assert_eq!(config.lock_screen(), Some(Screen::Arcade));
+        assert_eq!(config.preview_step_hold_frames, 3_600);
+        assert_eq!(config.human_turbo_idle_frames, 180);
+        assert_eq!(config.home_selected(), Some(&Ok(7)));
+        assert!(config.auto_launch_selected());
+    }
+
+    #[test]
+    #[cfg(not(feature = "bench-tools"))]
+    fn production_config_cannot_arm_a_benchmark_scenario() {
+        let values = std::collections::BTreeMap::from([(BENCH_SCENARIO, "rapid-taps")]);
+        let config = LauncherBenchmarkConfig::capture_with(|name| values.get(name).copied());
+
+        assert_eq!(config.scenario(), None);
+    }
+
     fn empty_catalog() -> ArcadeCatalog {
         ArcadeCatalog::new(PathBuf::from("/media/fat/_Arcade"), Vec::new(), Vec::new())
     }
@@ -699,6 +771,7 @@ mod tests {
 
         let ran_without_rows = launcher_bench_step(
             LauncherBenchScenario::HeldScroll,
+            &LauncherBenchmarkConfig::default(),
             &mut nav,
             &catalog,
             Some(0),
@@ -714,6 +787,7 @@ mod tests {
 
         let ran_with_rows = launcher_bench_step(
             LauncherBenchScenario::HeldScroll,
+            &LauncherBenchmarkConfig::default(),
             &mut nav,
             &catalog,
             Some(10),
@@ -741,6 +815,7 @@ mod tests {
 
         let ran = launcher_bench_step(
             LauncherBenchScenario::HomeRepeatHold,
+            &LauncherBenchmarkConfig::default(),
             &mut nav,
             &catalog,
             None,
@@ -758,6 +833,7 @@ mod tests {
             let previous_selected = nav.selected;
             let ran = launcher_bench_step(
                 LauncherBenchScenario::HomeRepeatHold,
+                &LauncherBenchmarkConfig::default(),
                 &mut nav,
                 &catalog,
                 None,
@@ -785,6 +861,7 @@ mod tests {
         let mut state = LauncherBenchState::default();
         let ran = launcher_bench_step(
             LauncherBenchScenario::PreviewIdle,
+            &LauncherBenchmarkConfig::default(),
             &mut nav,
             &catalog,
             Some(10),

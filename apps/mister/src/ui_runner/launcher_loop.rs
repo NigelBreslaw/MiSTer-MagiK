@@ -4832,6 +4832,7 @@ pub(super) fn run_launcher_loop(
     let startup_monotonic_us = monotonic_clock_us().unwrap_or(0);
     let mut frames = 0u64;
     let profile_config = launcher_config.profiles().clone();
+    let benchmark_config = launcher_config.benchmark().clone();
     let screensaver_start_mode = launcher_config.screensaver().start_mode();
     let screensaver_preview_waits_for_analytics =
         launcher_config.screensaver().preview_waits_for_analytics();
@@ -4855,7 +4856,7 @@ pub(super) fn run_launcher_loop(
     let mut launcher_readiness = super::launcher_readiness::LauncherReadiness::from_process_config(
         launcher_config.readiness().clone(),
     );
-    let launcher_bench_scenario = LauncherBenchScenario::from_env();
+    let launcher_bench_scenario = benchmark_config.scenario();
     let orientation_benchmark_enabled =
         launcher_env_flag("MISTER_ORIENTATION_TRANSITIONS_BENCHMARK");
     let settings_navigation_benchmark_enabled =
@@ -4881,7 +4882,7 @@ pub(super) fn run_launcher_loop(
     let mut latch_v5_qualification = LatchV5Qualification::from_env(start);
     let mut latch_v5_bench_state = LauncherBenchState::default();
     let launcher_bench_after_input_script =
-        launcher_bench_scenario.is_some() && launcher_bench_after_input_script_enabled();
+        launcher_bench_scenario.is_some() && benchmark_config.after_input_script();
     let launcher_bench_launch_handoff =
         launcher_bench_scenario == Some(LauncherBenchScenario::LaunchHandoff);
     let mut scheduler = LauncherScheduler::with_runtime_config(
@@ -4911,16 +4912,16 @@ pub(super) fn run_launcher_loop(
             || settings_navigation_benchmark.enabled(),
         media_benchmark_contention,
     );
-    let env_start_screen = launcher_start_screen_from_env();
-    let env_start_system = launcher_start_system_from_env();
-    let system_entry_benchmark_system = launcher_system_entry_benchmark_system_from_env();
+    let env_start_screen = benchmark_config.start_screen();
+    let env_start_system = benchmark_config.start_system().map(str::to_owned);
+    let system_entry_benchmark_system = benchmark_config.system_entry_system().map(str::to_owned);
     let mut pending_system_entry_benchmark = system_entry_benchmark_system
         .as_deref()
         .map(system_entry_collection_id)
         .map(str::to_string);
     let env_start_menu = launcher_bench_scenario
         .is_some()
-        .then(launcher_start_menu_from_env)
+        .then(|| benchmark_config.start_menu().map(str::to_owned))
         .flatten();
     let start_screen = orientation_benchmark
         .enabled()
@@ -4936,7 +4937,8 @@ pub(super) fn run_launcher_loop(
         .or_else(|| env_start_system.as_ref().map(|_| Screen::Arcade))
         .or_else(|| bench_starts_on_arcade.then_some(Screen::Arcade))
         .unwrap_or(Screen::Home);
-    let lock_screen = launcher_lock_screen_from_env()
+    let lock_screen = benchmark_config
+        .lock_screen()
         .or_else(|| {
             env_start_system.as_ref().map(|_| {
                 env_start_screen
@@ -5069,7 +5071,7 @@ pub(super) fn run_launcher_loop(
     let mut launcher_bench_state = LauncherBenchState::default();
     let mut launcher_bench_active =
         launcher_bench_scenario.is_some() && !launcher_bench_after_input_script;
-    let auto_launch_selected = launcher_auto_launch_selected_enabled();
+    let auto_launch_selected = benchmark_config.auto_launch_selected();
     let mut auto_launch_selected_done = false;
     let dirty_opt = launcher_dirty_opt_enabled();
     let label = if secs == 0 {
@@ -5492,7 +5494,7 @@ pub(super) fn run_launcher_loop(
     }
     nav.set_arcade_exit_locked(return_capsule_active);
     let bridge = app.global::<slint_ui::launcher::MisterBridge>();
-    apply_home_selected_from_env(&mut nav, &catalog, start);
+    apply_home_selected(&mut nav, &catalog, benchmark_config.home_selected(), start);
     let bridge_systems_t = Instant::now();
     let mut arcade_screen_pending = (start_screen == Screen::Arcade
         || lock_screen == Some(Screen::Arcade))
@@ -6825,6 +6827,7 @@ pub(super) fn run_launcher_loop(
             let before = LauncherBridgeKey::from_nav(&nav);
             if launcher_bench_step(
                 scenario,
+                &benchmark_config,
                 &mut nav,
                 &catalog,
                 None,
@@ -6910,6 +6913,7 @@ pub(super) fn run_launcher_loop(
                 let before = LauncherBridgeKey::from_nav(&nav);
                 let bench_step_ran = launcher_bench_step(
                     scenario,
+                    &benchmark_config,
                     &mut nav,
                     &catalog,
                     None,
@@ -11722,15 +11726,6 @@ fn update_catalog_ready_stationary_edge_since(
     .then_some(current.unwrap_or(now))
 }
 
-fn launcher_auto_launch_selected_enabled() -> bool {
-    matches!(
-        std::env::var("MISTER_LAUNCHER_AUTO_LAUNCH_SELECTED")
-            .ok()
-            .as_deref(),
-        Some("1") | Some("true") | Some("yes")
-    )
-}
-
 fn launcher_auto_launch_gate_ready() -> bool {
     let value = std::env::var("MISTER_MAGIK_TEST_AUTO_LAUNCH_GATE").ok();
     launcher_auto_launch_gate_ready_from_value(value.as_deref())
@@ -13089,17 +13084,25 @@ fn apply_start_system_from_env(
     true
 }
 
-fn apply_home_selected_from_env(nav: &mut LauncherNav, catalog: &ArcadeCatalog, start: Instant) {
-    let Ok(value) = std::env::var("MISTER_HOME_SELECTED_INDEX") else {
+fn apply_home_selected(
+    nav: &mut LauncherNav,
+    catalog: &ArcadeCatalog,
+    selected: Option<&Result<usize, String>>,
+    start: Instant,
+) {
+    let Some(selected) = selected else {
         return;
     };
-    let Ok(selected) = value.parse::<usize>() else {
-        print_startup_event(
-            start,
-            "launcher_home_selected_index_invalid",
-            format!("value={value}"),
-        );
-        return;
+    let selected = match selected {
+        Ok(selected) => *selected,
+        Err(value) => {
+            print_startup_event(
+                start,
+                "launcher_home_selected_index_invalid",
+                format!("value={value}"),
+            );
+            return;
+        }
     };
     nav.sync_launcher_taxonomy(catalog);
     let item_count = nav.current_menu_count();

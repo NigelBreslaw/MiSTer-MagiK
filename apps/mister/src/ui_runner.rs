@@ -132,7 +132,7 @@ mod latch_v5_qualification;
 mod launch_handoff_session;
 mod launcher_automation;
 #[allow(dead_code)]
-mod launcher_bench;
+pub(crate) mod launcher_bench;
 #[allow(dead_code)]
 mod launcher_bridge;
 mod launcher_catalog_publication_test;

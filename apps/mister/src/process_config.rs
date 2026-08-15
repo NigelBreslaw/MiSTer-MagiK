@@ -16,6 +16,8 @@ use crate::screenshot_transitions::PreviewTransitionConfig;
 #[cfg(feature = "ui")]
 use crate::ui_display::UiDisplayInputs;
 #[cfg(feature = "ui")]
+use crate::ui_runner::launcher_bench::LauncherBenchmarkConfig;
+#[cfg(feature = "ui")]
 use crate::ui_runner::launcher_gui_profile::GuiProfileConfig;
 #[cfg(feature = "ui")]
 use crate::visual_platform::{AnimationClockConfig, PresentTiming};
@@ -164,6 +166,8 @@ pub struct LauncherProcessConfig {
     display_pacing: DisplayPacingConfig,
     #[cfg(feature = "ui")]
     profiles: ProfileProcessConfig,
+    #[cfg(feature = "ui")]
+    benchmark: LauncherBenchmarkConfig,
     presentation_backend: PresentBackendConfig,
 }
 
@@ -215,6 +219,11 @@ impl LauncherProcessConfig {
     #[cfg(feature = "ui")]
     pub fn profiles(&self) -> &ProfileProcessConfig {
         &self.profiles
+    }
+
+    #[cfg(feature = "ui")]
+    pub fn benchmark(&self) -> &LauncherBenchmarkConfig {
+        &self.benchmark
     }
 
     pub fn presentation_backend(&self) -> &PresentBackendConfig {
@@ -695,6 +704,8 @@ impl ProcessConfig {
             display_pacing: DisplayPacingConfig::capture(environment),
             #[cfg(feature = "ui")]
             profiles: ProfileProcessConfig::capture(environment),
+            #[cfg(feature = "ui")]
+            benchmark: LauncherBenchmarkConfig::capture_with(|name| environment.get(name)),
             presentation_backend: PresentBackendConfig::capture(environment),
         });
         // Fault capture deliberately remains an early, compatibility-preserving
