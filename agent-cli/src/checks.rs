@@ -1082,7 +1082,7 @@ fn check_executable_boundaries(repository: &Path) -> Result<(), String> {
         "launcher_effect_composition",
         &launcher,
         &[
-            "impl LaunchHandoff for LaunchIoHandoff",
+            "LaunchHandoff for LaunchIoHandoff",
             "impl LauncherPersistence for SystemLauncherPersistence",
             "SystemRuntimeState",
             "display_control::MainDisplayControl",
