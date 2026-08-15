@@ -57,26 +57,6 @@ latch_rbf = "/media/fat/mister-magik-dev/fpga/menu-magik-vblank-latch.rbf"
 latch_metadata = "/media/fat/mister-magik-dev/fpga/menu-magik-vblank-latch.metadata.txt"
 
 [[legacy_consumer]]
-path = "agent-cli/src/host/mod.rs"
-role = "host runtime parsing and Dev transaction paths"
-markers = ["mister-magik-platform-v3", "platform_release_number", "/media/fat/mister-magik-dev/platform-v3.manifest"]
-
-[[legacy_consumer]]
-path = "agent-cli/src/host/platform_deploy.rs"
-role = "deployment verifier and staged Dev paths"
-markers = ["mister-magik-platform-v3", "main_sha256", "/media/fat/mister-magik-dev/mister-magik-fb"]
-
-[[legacy_consumer]]
-path = "agent-cli/src/deploy.rs"
-role = "deployment fixtures pending shared contract adoption"
-markers = ["mister-magik-platform-v3", "qualification_candidate_id"]
-
-[[legacy_consumer]]
-path = "agent-cli/src/local_main_delivery.rs"
-role = "local Main overlay fixture"
-markers = ["mister-magik-platform-v3", "latch_capability_mask"]
-
-[[legacy_consumer]]
 path = "mister/tools/manager/src/main.rs"
 role = "installer manager public-layout verification"
 markers = ["mister-magik-platform-v3", "platform_release_number", "/media/fat/mister-magik/mister-magik-manager"]

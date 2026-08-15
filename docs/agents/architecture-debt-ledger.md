@@ -102,10 +102,6 @@ manager, scanout module and metadata, and latch RBF and metadata.
 
 | Legacy consumer | Migration owner |
 |---|---|
-| `agent-cli/src/host/mod.rs` | Enforce contract and agent adoption |
-| `agent-cli/src/host/platform_deploy.rs` | Enforce contract and agent adoption |
-| `agent-cli/src/deploy.rs` | Enforce contract and agent adoption |
-| `agent-cli/src/local_main_delivery.rs` | Enforce contract and agent adoption |
 | `scripts/MiSTer-MagiK.sh` | Enforce generated non-Rust consumers |
 | `scripts/package-distribution.sh` | Enforce generated non-Rust consumers |
 | `scripts/release/check-host.sh` | Enforce generated non-Rust consumers |
@@ -121,6 +117,14 @@ distinct throughout.
 `crates/catalog/src/device_layout.rs` now preserves its existing public API and
 executable-relative selection semantics while sourcing both installed roots,
 Main paths, and component paths from the shared generated layout contract.
+
+The agent host now maps its public/development transport layout to the shared
+generated roots and component paths. Host-only subpaths are traversal-checked
+relative paths, while `/tmp` operation state remains host-owned. This includes
+platform deployment, attended catalog purge, readiness and return
+qualification, diagnostics, and platform-repair safety paths; manifest
+fixtures in deploy and local-Main delivery are generated from the same typed
+contract.
 
 ## Hotspot ownership
 

@@ -5,9 +5,10 @@
 
 use super::remote::{connect_with, put, shell_quote as sh};
 use super::{
-    AttendedOperationSignalGuard, DeviceAccess, DeviceFailure, NativeDevice, Result,
+    AttendedOperationSignalGuard, DeviceAccess, DeviceFailure, Layout, NativeDevice, Result,
     acknowledged_main_command, attended_operation_interrupted, device_failure, exec_checked,
-    file_sha256, install_prepared_device_environment, remote_read, wait_launcher_ready,
+    file_sha256, install_prepared_device_environment, installed_layout, remote_read,
+    wait_launcher_ready,
 };
 use serde_json::Value;
 use serde_json::json;
@@ -15,6 +16,7 @@ use ssh2::{ExtendedData, Session};
 use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -22,8 +24,13 @@ use std::time::{Duration, Instant};
 const REMOTE_DIR: &str = "/tmp/mister-magik/startup-particles";
 const REMOTE_BINARY: &str =
     "/tmp/mister-magik/startup-particles/mister-magik-framebuffer-scene-lab";
-const DEV_SCREENSHOT_ARCHIVE: &str =
-    "/media/fat/mister-magik-dev/assets/arcade-screenshots-320x320.mmlz4b";
+static DEV_SCREENSHOT_ARCHIVE: LazyLock<String> = LazyLock::new(|| {
+    installed_layout::app_path(
+        Layout::Development,
+        "assets/arcade-screenshots-320x320.mmlz4b",
+    )
+    .expect("static installed path")
+});
 const REMOTE_LAB_RECIPE: &str = "/tmp/mister-magik/startup-particles/recipe.json";
 const REMOTE_STATUS: &str = "/tmp/mister-magik/startup-particles/status.json";
 const REMOTE_SCENE_EVIDENCE_DIR: &str = "/tmp/mister-magik/scene-lab-evidence";
@@ -149,7 +156,7 @@ fn run_lab(prepared: &super::PreparedDevice, request: SceneLabRequest<'_>) -> Re
     let screenshot = if scene == "screenshot-screensaver" {
         let fingerprint = validate_installed_screenshot_archive(&session)?;
         Some(RemoteScreenshotArgs {
-            archive: DEV_SCREENSHOT_ARCHIVE,
+            archive: DEV_SCREENSHOT_ARCHIVE.as_str(),
             seed: seed.unwrap_or(0x4d61_6769_4b54_696c),
             fingerprint,
         })
@@ -396,12 +403,12 @@ fn validate_installed_screenshot_archive(session: &Session) -> Result<String> {
         "validate installed Dev screenshot archive",
         &format!(
             "set -eu; test -f {path}; test -r {path}; bytes=$(wc -c < {path}); hash=$(sha256sum {path} | awk '{{print $1}}'); test \"$bytes\" -gt 0; printf 'bytes=%s sha256=%s\\n' \"$bytes\" \"$hash\"",
-            path = sh(DEV_SCREENSHOT_ARCHIVE),
+            path = sh(DEV_SCREENSHOT_ARCHIVE.as_str()),
         ),
     )?;
     println!(
         "installed screenshot archive path={} {}",
-        DEV_SCREENSHOT_ARCHIVE,
+        DEV_SCREENSHOT_ARCHIVE.as_str(),
         reply.stdout.trim()
     );
     Ok(reply.stdout.trim().to_owned())
@@ -1616,7 +1623,15 @@ fn lab_preflight_command() -> String {
 }
 
 fn safety_clear_checks() -> &'static str {
-    "for path in /media/fat/mister-magik/launcher.env /media/fat/mister-magik-dev/launcher.env /tmp/mister-magik/fs-fault-launcher.env /tmp/mister-magik/fs-fault-session /tmp/mister-magik/fs-fault.json /media/fat/mister-magik/rebuild-on-next-boot /media/fat/mister-magik-dev/rebuild-on-next-boot; do test ! -e \"$path\"; done"
+    static CHECKS: LazyLock<String> = LazyLock::new(|| {
+        let paths = installed_layout::arming_paths()
+            .iter()
+            .map(|path| sh(path))
+            .collect::<Vec<_>>()
+            .join(" ");
+        format!("for path in {paths}; do test ! -e \"$path\"; done")
+    });
+    CHECKS.as_str()
 }
 
 fn verify_safety_clear(session: &Session) -> Result<()> {
@@ -1944,7 +1959,7 @@ mod tests {
     #[test]
     fn screenshot_lab_uses_installed_pack_and_seed() {
         let screenshot = RemoteScreenshotArgs {
-            archive: DEV_SCREENSHOT_ARCHIVE,
+            archive: DEV_SCREENSHOT_ARCHIVE.as_str(),
             seed: 0x1234,
             fingerprint: "bytes=1 sha256=test".into(),
         };
@@ -1963,7 +1978,10 @@ mod tests {
             false,
             false,
         );
-        assert!(run.contains(&format!("--archive {}", sh(DEV_SCREENSHOT_ARCHIVE))));
+        assert!(run.contains(&format!(
+            "--archive {}",
+            sh(DEV_SCREENSHOT_ARCHIVE.as_str())
+        )));
         assert!(run.contains("--seed 4660"));
         assert!(!run.contains("--replacement-mode"));
         assert!(!run.contains("--recipe"));
@@ -1974,7 +1992,7 @@ mod tests {
     #[test]
     fn screenshot_pmu_lab_is_fixed_and_does_not_install_runtime() {
         let screenshot = RemoteScreenshotArgs {
-            archive: DEV_SCREENSHOT_ARCHIVE,
+            archive: DEV_SCREENSHOT_ARCHIVE.as_str(),
             seed: 0x1234,
             fingerprint: "bytes=1 sha256=test".into(),
         };
@@ -2046,7 +2064,7 @@ mod tests {
         assert!(navigation.contains("--assessment-pass cadence"));
 
         let screenshot = RemoteScreenshotArgs {
-            archive: DEV_SCREENSHOT_ARCHIVE,
+            archive: DEV_SCREENSHOT_ARCHIVE.as_str(),
             seed: 7,
             fingerprint: "bytes=1 sha256=test".into(),
         };

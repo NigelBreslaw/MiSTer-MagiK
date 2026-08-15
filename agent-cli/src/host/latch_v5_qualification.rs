@@ -46,14 +46,14 @@ pub(super) fn run(config: &NativeDeviceConfig) -> Result<String> {
     )?
     .rc == 0;
     let root = if development {
-        "/media/fat/mister-magik-dev"
+        installed_layout::paths(Layout::Development).root
     } else {
-        "/media/fat/mister-magik"
+        installed_layout::paths(Layout::Public).root
     };
     let remote_env = if development {
-        DEVELOPMENT_LAUNCHER_ENV_REMOTE
+        DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str()
     } else {
-        DEFAULT_LAUNCHER_ENV_REMOTE
+        DEFAULT_LAUNCHER_ENV_REMOTE.as_str()
     };
     let qualification_env = qualification_launcher_env();
     put_bytes(

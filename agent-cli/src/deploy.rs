@@ -367,10 +367,7 @@ mod tests {
             ),
             format!("{}magik_revision={revision}\n", manifest(&revision, &main)),
             format!("{}extra=value\n", manifest(&revision, &main)),
-            manifest(&revision, &main).replace(
-                "/media/fat/mister-magik-dev/mister-magik-manager",
-                "/tmp/manager",
-            ),
+            manifest(&revision, &main).replace(Layout::Development.paths().manager, "/tmp/manager"),
         ] {
             assert_eq!(
                 reconcile(Path::new("."), &manifest, &revision).decision,

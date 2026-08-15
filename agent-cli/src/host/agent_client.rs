@@ -9,17 +9,23 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::LazyLock;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use super::Result;
 use super::discovery::{secure_write, token_path};
 use super::remote::{ConnectionConfig, connect_with, exec, host, put, put_bytes};
+use super::{Layout, Result, installed_layout};
 
 pub(crate) const AGENT_PORT: u16 = agent_protocol::PORT;
-const REMOTE_AGENT: &str = "/media/fat/mister-magik-dev/mister-magik-agent";
+static REMOTE_AGENT: LazyLock<String> = LazyLock::new(|| {
+    installed_layout::app_path(Layout::Development, "mister-magik-agent")
+        .expect("static installed path")
+});
 const REMOTE_INIT: &str = "/etc/init.d/S00magik-agent";
-const REMOTE_TOKEN: &str = "/media/fat/mister-magik-dev/agent.token";
+static REMOTE_TOKEN: LazyLock<String> = LazyLock::new(|| {
+    installed_layout::app_path(Layout::Development, "agent.token").expect("static installed path")
+});
 
 #[derive(Debug)]
 pub(crate) struct AgentResponse {
@@ -101,7 +107,7 @@ pub(crate) fn bootstrap_agent_with(
     } else {
         let remote = exec(
             &session,
-            "cat /media/fat/mister-magik-dev/agent.token 2>/dev/null || true",
+            &format!("cat {} 2>/dev/null || true", REMOTE_TOKEN.as_str()),
             true,
         )?
         .stdout
@@ -394,8 +400,9 @@ fn run_agent_build_bounded(command: &mut Command) -> Result<()> {
 
 fn install_agent(session: &ssh2::Session, token: &str) -> Result<()> {
     let binary = build_agent()?;
-    let init = br#"#!/bin/sh
-stop_agent() {
+    let init = format!(
+        r#"#!/bin/sh
+stop_agent() {{
   pids="$(pidof mister-magik-agent 2>/dev/null || true)"
   [ -z "$pids" ] && return 0
   kill $pids 2>/dev/null || true
@@ -406,29 +413,42 @@ stop_agent() {
     i=$((i + 1))
   done
   kill -9 $(pidof mister-magik-agent 2>/dev/null || true) 2>/dev/null || true
-}
+}}
 case "$1" in
-  start) /media/fat/mister-magik-dev/mister-magik-agent net-boot >/tmp/mister-magik-agent.boot.out 2>&1 & ;;
+  start) {agent} net-boot >/tmp/mister-magik-agent.boot.out 2>&1 & ;;
   stop) stop_agent ;;
-  restart) stop_agent; /media/fat/mister-magik-dev/mister-magik-agent net-boot >/tmp/mister-magik-agent.boot.out 2>&1 & ;;
+  restart) stop_agent; {agent} net-boot >/tmp/mister-magik-agent.boot.out 2>&1 & ;;
   *) exit 2 ;;
 esac
-"#;
+"#,
+        agent = REMOTE_AGENT.as_str()
+    );
     reconcile_interrupted_agent_transaction(session)?;
-    exec(session, "mkdir -p /media/fat/mister-magik-dev", true)?;
-    put(session, Path::new(&binary), &format!("{REMOTE_AGENT}.new"))?;
-    let staged_init = "/media/fat/mister-magik-dev/S00magik-agent.new";
-    put_bytes(session, staged_init, init)?;
+    exec(
+        session,
+        &format!(
+            "mkdir -p {}",
+            installed_layout::paths(Layout::Development).root
+        ),
+        true,
+    )?;
+    put(
+        session,
+        Path::new(&binary),
+        &format!("{}.new", REMOTE_AGENT.as_str()),
+    )?;
+    let staged_init = installed_layout::app_path(Layout::Development, "S00magik-agent.new")?;
+    put_bytes(session, &staged_init, init.as_bytes())?;
     put_bytes(
         session,
-        &format!("{REMOTE_TOKEN}.new"),
+        &format!("{}.new", REMOTE_TOKEN.as_str()),
         format!("{token}\n").as_bytes(),
     )?;
     let command = format!(
         "set -eu; mount -o remount,rw /; {init} stop 2>/dev/null || true; if [ -f {agent} ]; then cp -p {agent} {agent}.prev; else : > {agent}.prev-missing; fi; if [ -f {init} ]; then cp -p {init} {init}.prev; else : > {init}.prev-missing; fi; if [ -f {token} ]; then cp -p {token} {token}.prev; else : > {token}.prev-missing; fi; mv {agent}.new {agent}; mv {staged_init} {init}; mv {token}.new {token}; chmod 755 {agent} {init}; chmod 600 {token}; {init} start; sync; mount -o remount,ro / || true",
-        agent = REMOTE_AGENT,
+        agent = REMOTE_AGENT.as_str(),
         init = REMOTE_INIT,
-        token = REMOTE_TOKEN,
+        token = REMOTE_TOKEN.as_str(),
         staged_init = staged_init,
     );
     let output = exec(session, &command, true)?;
@@ -451,7 +471,7 @@ fn reconcile_interrupted_agent_transaction(session: &ssh2::Session) -> Result<()
 }
 
 fn interrupted_agent_transaction_command() -> String {
-    let artifacts = [REMOTE_AGENT, REMOTE_INIT, REMOTE_TOKEN]
+    let artifacts = [REMOTE_AGENT.as_str(), REMOTE_INIT, REMOTE_TOKEN.as_str()]
         .into_iter()
         .flat_map(|path| [format!("{path}.prev"), format!("{path}.prev-missing")])
         .collect::<Vec<_>>();
@@ -473,9 +493,9 @@ fn rollback_agent(session: &ssh2::Session) -> Result<()> {
 fn rollback_agent_command() -> String {
     format!(
         "mount -o remount,rw /; {init} stop 2>/dev/null || true; if [ -f {agent}.prev ]; then mv {agent}.prev {agent}; elif [ -f {agent}.prev-missing ]; then rm -f {agent}; fi; if [ -f {init}.prev ]; then mv {init}.prev {init}; elif [ -f {init}.prev-missing ]; then rm -f {init}; fi; if [ -f {token}.prev ]; then mv {token}.prev {token}; elif [ -f {token}.prev-missing ]; then rm -f {token}; fi; rm -f {agent}.prev-missing {init}.prev-missing {token}.prev-missing; {init} start 2>/dev/null || true; sync; mount -o remount,ro / || true",
-        agent = REMOTE_AGENT,
+        agent = REMOTE_AGENT.as_str(),
         init = REMOTE_INIT,
-        token = REMOTE_TOKEN,
+        token = REMOTE_TOKEN.as_str(),
     )
 }
 
@@ -487,9 +507,9 @@ fn cleanup_agent_backup(session: &ssh2::Session) -> Result<()> {
 fn cleanup_agent_backup_command() -> String {
     format!(
         "mount -o remount,rw /; rm -f {agent}.prev {init}.prev {token}.prev {agent}.prev-missing {init}.prev-missing {token}.prev-missing; sync; mount -o remount,ro / || true",
-        agent = REMOTE_AGENT,
+        agent = REMOTE_AGENT.as_str(),
         init = REMOTE_INIT,
-        token = REMOTE_TOKEN,
+        token = REMOTE_TOKEN.as_str(),
     )
 }
 
@@ -1052,7 +1072,7 @@ mod tests {
         let rollback = rollback_agent_command();
         let cleanup = cleanup_agent_backup_command();
         let interrupted = interrupted_agent_transaction_command();
-        for path in [REMOTE_AGENT, REMOTE_INIT, REMOTE_TOKEN] {
+        for path in [REMOTE_AGENT.as_str(), REMOTE_INIT, REMOTE_TOKEN.as_str()] {
             assert!(rollback.contains(path));
             assert!(rollback.contains(&format!("{path}.prev")));
             assert!(rollback.contains(&format!("{path}.prev-missing")));

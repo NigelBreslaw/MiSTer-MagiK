@@ -13,6 +13,7 @@ use std::fmt;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct InstalledPaths {
     pub root: &'static str,
+    pub manifest: &'static str,
     pub main: &'static str,
     pub gui: &'static str,
     pub manager: &'static str,
@@ -402,12 +403,14 @@ mod tests {
             &format!("qualification_candidate_id={}", "f".repeat(64)),
         );
         assert!(parse(&forged, Layout::Development, ValidationProfile::AgentStrict).is_err());
-        assert!(parse(
-            &forged,
-            Layout::Development,
-            ValidationProfile::ManagerLegacy
-        )
-        .is_err());
+        assert!(
+            parse(
+                &forged,
+                Layout::Development,
+                ValidationProfile::ManagerLegacy
+            )
+            .is_err()
+        );
         assert!(parse(&forged, Layout::Development, ValidationProfile::GuiLegacy).is_err());
     }
 
