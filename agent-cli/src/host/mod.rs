@@ -27042,7 +27042,7 @@ H: Handlers=event3 js0"#
         assert!(!rearm.contains(RELEASE_SNAPSHOT.as_str()));
         let catalog = release_catalog_command();
         assert!(catalog.contains("pidof MiSTer_MagiKDev"));
-        assert!(catalog.contains("root=/media/fat/mister-magik-dev"));
+        assert!(catalog.contains("root='/media/fat/mister-magik-dev'"));
         let recovery = release_recovery_command();
         assert!(recovery.contains(RELEASE_TOKEN));
         assert!(recovery.contains("attended-non-network-recovery-confirmed"));
@@ -27105,7 +27105,7 @@ H: Handlers=event3 js0"#
         assert!(repair.contains("agent-benchmark.tsv"));
         assert!(repair.contains("realtime-frame-analytics"));
         assert!(repair.contains("screensaver-profile"));
-        assert!(repair.contains("rm -f /media/fat/mister-magik/launcher.env"));
+        assert!(repair.contains("rm -f '/media/fat/mister-magik/launcher.env'"));
         assert!(repair.contains("/media/fat/mister-magik-dev/launcher.env"));
         assert!(repair.contains("/media/fat/mister-magik-dev/rebuild-on-next-boot"));
     }
@@ -27114,7 +27114,7 @@ H: Handlers=event3 js0"#
     fn one_shot_recovery_clears_arming_and_refuses_known_reboot_instability() {
         let preflight = one_shot_recovery_preflight_command();
         assert!(preflight.contains("test ! -e /tmp/mister-magik/reboot-unstable"));
-        assert!(preflight.contains("rm -f /media/fat/mister-magik/launcher.env"));
+        assert!(preflight.contains("rm -f '/media/fat/mister-magik/launcher.env'"));
         assert!(preflight.contains("/media/fat/mister-magik-dev/launcher.env"));
         assert!(preflight.contains("/tmp/mister-magik/fs-fault-session"));
         assert!(preflight.ends_with("sync"));
