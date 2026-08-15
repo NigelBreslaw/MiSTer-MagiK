@@ -43,6 +43,7 @@ const SCREENSAVER_START_IDLE_WHEN_READY: &str = "MISTER_SCREENSAVER_START_IDLE_W
 const SCREENSAVER_START_PREVIEW_AFTER_ANALYTICS: &str =
     "MISTER_SCREENSAVER_START_PREVIEW_AFTER_ANALYTICS";
 const SCREENSAVER_START_PREVIEW_WHEN_READY: &str = "MISTER_SCREENSAVER_START_PREVIEW_WHEN_READY";
+const PRESENT_BACKEND: &str = "MISTER_PRESENT_BACKEND";
 
 #[derive(Clone, Default)]
 pub struct EnvironmentSnapshot {
@@ -140,6 +141,7 @@ pub struct LauncherProcessConfig {
     input: InputProcessConfig,
     #[cfg(feature = "ui")]
     display_pacing: DisplayPacingConfig,
+    presentation_backend: PresentBackendConfig,
 }
 
 impl LauncherProcessConfig {
@@ -186,6 +188,35 @@ impl LauncherProcessConfig {
     pub fn display_pacing(&self) -> &DisplayPacingConfig {
         &self.display_pacing
     }
+
+    pub fn presentation_backend(&self) -> &PresentBackendConfig {
+        &self.presentation_backend
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum PresentBackendConfig {
+    FpgaVblankLatchHidden,
+    Fb0Dirty,
+    Retired(String),
+    Invalid(String),
+}
+
+impl PresentBackendConfig {
+    fn capture(environment: &EnvironmentSnapshot) -> Self {
+        match environment.get(PRESENT_BACKEND) {
+            None | Some("") | Some("fpga-vblank-latch-hidden") => Self::FpgaVblankLatchHidden,
+            Some("fb0-dirty") => Self::Fb0Dirty,
+            Some(value) if present_backend_is_retired(value) => Self::Retired(value.to_owned()),
+            Some(value) => Self::Invalid(value.to_owned()),
+        }
+    }
+}
+
+fn present_backend_is_retired(value: &str) -> bool {
+    value == ["main", "flip-v1"].join("-")
+        || value == ["main", "vsync-hidden"].join("-")
+        || value == ["plugin", "main", "vsync-hidden"].join("-")
 }
 
 #[cfg(feature = "ui")]
@@ -459,6 +490,7 @@ impl ProcessConfig {
             input: InputProcessConfig::capture(environment),
             #[cfg(feature = "ui")]
             display_pacing: DisplayPacingConfig::capture(environment),
+            presentation_backend: PresentBackendConfig::capture(environment),
         });
         // Fault capture deliberately remains an early, compatibility-preserving
         // process boundary until C19 applies command and feature gates.
@@ -777,5 +809,28 @@ mod tests {
             .scripted();
 
         assert_eq!(scripted, &ScriptedInputConfig::default());
+    }
+
+    #[test]
+    fn presentation_backend_is_validated_at_capture_boundary() {
+        for (value, expected) in [
+            ("", PresentBackendConfig::FpgaVblankLatchHidden),
+            ("fb0-dirty", PresentBackendConfig::Fb0Dirty),
+            (
+                "fpga-vblank-latch-hidden",
+                PresentBackendConfig::FpgaVblankLatchHidden,
+            ),
+            (
+                "main-flip-v1",
+                PresentBackendConfig::Retired("main-flip-v1".to_owned()),
+            ),
+            (
+                "unknown",
+                PresentBackendConfig::Invalid("unknown".to_owned()),
+            ),
+        ] {
+            let environment = EnvironmentSnapshot::from_values([(PRESENT_BACKEND, value)]);
+            assert_eq!(PresentBackendConfig::capture(&environment), expected);
+        }
     }
 }

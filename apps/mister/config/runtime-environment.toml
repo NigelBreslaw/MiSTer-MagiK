@@ -2524,17 +2524,17 @@ documentation = { summary = "Controls pprof warmup secs behavior", accepted_valu
 
 [[control]]
 name = "MISTER_PRESENT_BACKEND"
-owner = "apps/mister/src/ui_runner/launcher_loop.rs"
-classification = "production"
+owner = "apps/mister/src/process_config.rs"
+classification = "diagnostic"
 value_shape = "enum token"
 default_behavior = "uses the owner-defined mode when unset or unrecognized"
-visibility = "internal runtime"
+visibility = "developer diagnostic"
 parser = "enum"
-scope = "command"
+scope = "instrumentation"
 conflicts = []
 sensitivity = "public"
 aliases = []
-documentation = { summary = "Controls present backend behavior", accepted_values = [], value_policy = "document" }
+documentation = { summary = "Selects the diagnostic launcher presentation backend", accepted_values = ["fpga-vblank-latch-hidden", "fb0-dirty"], value_policy = "document" }
 
 [[control]]
 name = "MISTER_PREVIEW_ARCHIVE"

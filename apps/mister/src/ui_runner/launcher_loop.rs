@@ -551,12 +551,12 @@ fn write_orientation_transition_pmu_completion(
 }
 
 impl LauncherPresentBackend {
-    fn from_env_values(backend: Option<&str>) -> Self {
-        match backend {
-            None | Some("") => Self::FpgaVblankLatchHidden,
-            Some("fb0-dirty") => Self::Fb0Dirty,
-            Some("fpga-vblank-latch-hidden") => Self::FpgaVblankLatchHidden,
-            Some(retired) if is_retired_present_backend(retired) => {
+    fn from_config(config: &mister_magik_fb::process_config::PresentBackendConfig) -> Self {
+        use mister_magik_fb::process_config::PresentBackendConfig;
+        match config {
+            PresentBackendConfig::FpgaVblankLatchHidden => Self::FpgaVblankLatchHidden,
+            PresentBackendConfig::Fb0Dirty => Self::Fb0Dirty,
+            PresentBackendConfig::Retired(retired) => {
                 crate::ui_errln!(
                     "launcher_present_backend_retired value={retired}; using required latch backend"
                 );
@@ -566,17 +566,13 @@ impl LauncherPresentBackend {
                 );
                 Self::FpgaVblankLatchHidden
             }
-            Some(invalid) => {
+            PresentBackendConfig::Invalid(invalid) => {
                 crate::ui_errln!(
                     "launcher_present_backend_invalid value={invalid}; using required latch backend"
                 );
                 Self::FpgaVblankLatchHidden
             }
         }
-    }
-
-    fn from_env() -> Self {
-        Self::from_env_values(std::env::var("MISTER_PRESENT_BACKEND").ok().as_deref())
     }
 
     fn log_if_experimental(self) {
@@ -588,21 +584,6 @@ impl LauncherPresentBackend {
             }
         }
     }
-}
-
-fn is_retired_present_backend(value: &str) -> bool {
-    value == ["main", "flip-v1"].join("-")
-        || value == ["main", "vsync-hidden"].join("-")
-        || value == ["plugin", "main", "vsync-hidden"].join("-")
-}
-
-pub(super) fn launcher_present_backend() -> LauncherPresentBackend {
-    static VALUE: OnceLock<LauncherPresentBackend> = OnceLock::new();
-    *VALUE.get_or_init(|| {
-        let backend = LauncherPresentBackend::from_env();
-        backend.log_if_experimental();
-        backend
-    })
 }
 
 fn present_mode_label_for_backend_status(
@@ -4879,7 +4860,10 @@ pub(super) fn run_launcher_loop(
     let mut screensaver_first_render_logged = false;
     let mut screensaver_first_present_logged = false;
     let mut screensaver_first_card_present_logged = false;
-    let mut launcher_presenter = LauncherPresenter::new(ui);
+    let present_backend =
+        LauncherPresentBackend::from_config(launcher_config.presentation_backend());
+    present_backend.log_if_experimental();
+    let mut launcher_presenter = LauncherPresenter::new(ui, present_backend);
     let mut launcher_readiness = super::launcher_readiness::LauncherReadiness::from_process_config(
         launcher_config.readiness().clone(),
     );
@@ -15944,38 +15928,40 @@ mod tests {
 
     #[test]
     pub(super) fn launcher_present_backend_defaults_to_fpga_latch() {
+        use mister_magik_fb::process_config::PresentBackendConfig;
         assert_eq!(
-            LauncherPresentBackend::from_env_values(None),
+            LauncherPresentBackend::from_config(&PresentBackendConfig::FpgaVblankLatchHidden),
             LauncherPresentBackend::FpgaVblankLatchHidden
         );
         assert_eq!(
-            LauncherPresentBackend::from_env_values(Some("")),
-            LauncherPresentBackend::FpgaVblankLatchHidden
-        );
-        assert_eq!(
-            LauncherPresentBackend::from_env_values(Some("fb0-dirty")),
+            LauncherPresentBackend::from_config(&PresentBackendConfig::Fb0Dirty),
             LauncherPresentBackend::Fb0Dirty
         );
     }
 
     #[test]
     pub(super) fn launcher_present_backend_retired_values_use_required_latch_backend() {
+        use mister_magik_fb::process_config::PresentBackendConfig;
         assert_eq!(
-            LauncherPresentBackend::from_env_values(Some(&["main", "flip-v1"].join("-"))),
-            LauncherPresentBackend::FpgaVblankLatchHidden
-        );
-        assert_eq!(
-            LauncherPresentBackend::from_env_values(Some(&["main", "vsync-hidden"].join("-"))),
-            LauncherPresentBackend::FpgaVblankLatchHidden
-        );
-        assert_eq!(
-            LauncherPresentBackend::from_env_values(Some(
-                &["plugin", "main", "vsync-hidden"].join("-")
+            LauncherPresentBackend::from_config(&PresentBackendConfig::Retired(
+                ["main", "flip-v1"].join("-")
             )),
             LauncherPresentBackend::FpgaVblankLatchHidden
         );
         assert_eq!(
-            LauncherPresentBackend::from_env_values(Some("fpga-vblank-latch-hidden")),
+            LauncherPresentBackend::from_config(&PresentBackendConfig::Retired(
+                ["main", "vsync-hidden"].join("-")
+            )),
+            LauncherPresentBackend::FpgaVblankLatchHidden
+        );
+        assert_eq!(
+            LauncherPresentBackend::from_config(&PresentBackendConfig::Retired(
+                ["plugin", "main", "vsync-hidden"].join("-")
+            )),
+            LauncherPresentBackend::FpgaVblankLatchHidden
+        );
+        assert_eq!(
+            LauncherPresentBackend::from_config(&PresentBackendConfig::FpgaVblankLatchHidden),
             LauncherPresentBackend::FpgaVblankLatchHidden
         );
     }

@@ -117,13 +117,16 @@ trait PresentationAdapters<L> {
 }
 
 impl LauncherPresenter<FpgaVblankLatchHiddenPresenter> {
-    pub(in crate::ui_runner) fn new(ui: &UiDisplay) -> Self {
+    pub(in crate::ui_runner) fn new(
+        ui: &UiDisplay,
+        present_backend: LauncherPresentBackend,
+    ) -> Self {
         let mut first_failure = None;
         let mut latest_failure = None;
         let mut failure_history = Vec::new();
         let mut auto_retry = LatchAutoRetryState::Disabled;
         let mut recovery_state = "not-needed";
-        let state = match launcher_present_backend() {
+        let state = match present_backend {
             LauncherPresentBackend::FpgaVblankLatchHidden => {
                 match FpgaVblankLatchHiddenPresenter::open(ui) {
                     Ok(presenter) => LauncherPresenterState::Latch(presenter),
