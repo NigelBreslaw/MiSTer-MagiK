@@ -9,7 +9,7 @@ use std::fs;
 use std::process::Command;
 
 const MAIN_STATUS_PATH: &str = "/tmp/mister-magik/main-status.json";
-const MISTER_PROCESS_NAMES: &[&str] = &["MiSTer_MagiKDev", "MiSTer_MagiK", "MiSTer"];
+const MAIN_PROCESS_NAMES: &[&str] = &["MiSTer_MagiKDev", "MiSTer_MagiK", "MiSTer"];
 
 #[derive(Default)]
 pub struct SystemRuntimeState;
@@ -30,7 +30,7 @@ impl RuntimeState for SystemRuntimeState {
 }
 
 fn running_main_cmdline() -> Option<Vec<u8>> {
-    for name in MISTER_PROCESS_NAMES {
+    for name in MAIN_PROCESS_NAMES {
         let output = Command::new("pidof").arg(name).output().ok()?;
         if !output.status.success() {
             continue;

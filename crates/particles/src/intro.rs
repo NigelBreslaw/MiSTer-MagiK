@@ -17,8 +17,8 @@ use mister_magik_framebuffer_scenes::{
 };
 use std::time::{Duration, Instant};
 
-const MISTER_CLOUD: &[u8] = include_bytes!("../assets/intro/mister.pcloud");
-const MISTER_GROUPS: &[u8] = include_bytes!("../assets/intro/mister.pgroup");
+const INTRO_WORDMARK_CLOUD: &[u8] = include_bytes!("../assets/intro/mister.pcloud");
+const INTRO_WORDMARK_GROUPS: &[u8] = include_bytes!("../assets/intro/mister.pgroup");
 const MAGIK_CLOUD: &[u8] = include_bytes!("../assets/intro/magik.pcloud");
 const MAGIK_GROUPS: &[u8] = include_bytes!("../assets/intro/magik.pgroup");
 const CABINET_CLOUD: &[u8] = include_bytes!("../assets/cabinet/arcade-cabinet.pcloud");
@@ -233,7 +233,11 @@ impl IntroScene {
         let initial_particle_count = recipe.initial_particle_count / divisor;
         let steady_particle_count = recipe.steady_particle_count / divisor;
         let mister = thin_grouped_target(
-            decode_target(MISTER_CLOUD, Some((MISTER_GROUPS, 6)), TargetScale::Text)?,
+            decode_target(
+                INTRO_WORDMARK_CLOUD,
+                Some((INTRO_WORDMARK_GROUPS, 6)),
+                TargetScale::Text,
+            )?,
             divisor,
         )?;
         let magik = thin_grouped_target(

@@ -3,7 +3,7 @@
 
 pub const RGB565_BYTES_PER_PIXEL: usize = 2;
 pub const RGB565_BITS_PER_PIXEL: u32 = 16;
-pub const RGB565_MISTER_MODE_FORMAT: u16 = 565;
+pub const RGB565_MODE_FORMAT: u16 = 565;
 pub const RGB565_ROUTE_RB: bool = true;
 
 pub const FB_FMT_565: u16 = 0b00100;
@@ -25,7 +25,7 @@ pub fn rgb565_mode_line(width: usize, height: usize, stride_bytes: usize) -> Str
     };
     format!(
         "{} {} {} {} {}",
-        RGB565_MISTER_MODE_FORMAT,
+        RGB565_MODE_FORMAT,
         if RGB565_ROUTE_RB { 1 } else { 0 },
         width,
         height,
@@ -51,7 +51,7 @@ pub fn restore_mode_line(
 
 pub const fn fb_mode_format_from_bits_per_pixel(bits_per_pixel: u32) -> u16 {
     if bits_per_pixel == RGB565_BITS_PER_PIXEL {
-        RGB565_MISTER_MODE_FORMAT
+        RGB565_MODE_FORMAT
     } else {
         bits_per_pixel as u16
     }

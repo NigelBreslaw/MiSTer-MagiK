@@ -21,7 +21,7 @@ use mister_magik_framebuffer_scenes::{OutputRotation, Rgb565OutputLayout, Rgb565
 use mister_magik_mister_runtime::framebuffer::damage::DirtyRect;
 pub use mister_magik_mister_runtime::settings::ScreenOrientation;
 
-const MISTER_INI_PATH: &str = "/media/fat/MiSTer.ini";
+const DEVICE_INI_PATH: &str = "/media/fat/MiSTer.ini";
 const UI_FB_SIZE_ENV: &str = "MISTER_UI_FB_SIZE";
 const RUNTIME_SETTINGS_ENV: &str = "MISTER_MAGIK_RUNTIME_SETTINGS_V1";
 const RUNTIME_DISPLAY_ENV: &str = "MISTER_MAGIK_RUNTIME_DISPLAY_V1";
@@ -429,7 +429,7 @@ impl UiDisplayPlan {
     }
 
     pub fn from_runtime_or_mister_ini_file(runtime: Option<RuntimeDisplayGeometry>) -> Self {
-        let ini = std::fs::read_to_string(MISTER_INI_PATH).ok();
+        let ini = std::fs::read_to_string(DEVICE_INI_PATH).ok();
         let fb_policy = UiFramebufferSizePolicy::from_env();
         let resolved_route = std::env::var(RUNTIME_SETTINGS_ENV)
             .ok()
