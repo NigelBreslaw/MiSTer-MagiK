@@ -9797,12 +9797,17 @@ pub(super) fn run_launcher_loop(
         let mut crt_backdrop_chrome_restore_pixels = 0_u32;
         if crt_backdrop_eligible {
             let snapshot_start = Instant::now();
-            layer_target.copy_cached_into(&mut crt_backdrop_chrome);
+            let chrome_pixels = layer_target.snapshot_crt_arcade_chrome(
+                &mut crt_backdrop_chrome,
+                layout.content_rect(),
+                crt_metrics,
+                arcade_list_renderer.dirty_rect(),
+            );
             crt_backdrop_snapshot_us = snapshot_start
                 .elapsed()
                 .as_micros()
                 .min(u128::from(u64::MAX)) as u64;
-            crt_backdrop_snapshot_pixels = crt_backdrop_chrome.len().min(u32::MAX as usize) as u32;
+            crt_backdrop_snapshot_pixels = chrome_pixels;
             let selected_changed = crt_backdrop_selection != Some(nav.arcade.selected);
             let transition_id = preview
                 .raw_transition_frame()
