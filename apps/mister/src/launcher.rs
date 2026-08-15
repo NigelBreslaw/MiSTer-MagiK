@@ -5676,6 +5676,14 @@ pub fn delete_screenshot_packs() -> Result<usize, String> {
 }
 
 fn delete_screenshot_packs_at(asset_dir: &Path) -> Result<usize, String> {
+    let mut fault_control = mister_magik_catalog::fs_fault::NoopDirectResetFaultControl;
+    delete_screenshot_packs_at_with_fault_control(asset_dir, &mut fault_control)
+}
+
+fn delete_screenshot_packs_at_with_fault_control(
+    asset_dir: &Path,
+    fault_control: &mut dyn mister_magik_catalog::fs_fault::DirectResetFaultControl,
+) -> Result<usize, String> {
     let entries = match fs::read_dir(asset_dir) {
         Ok(entries) => entries,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(0),
@@ -5703,9 +5711,10 @@ fn delete_screenshot_packs_at(asset_dir: &Path) -> Result<usize, String> {
         if screenshot_reset_deletes_file(name) {
             fs::remove_file(&path)
                 .map_err(|e| format!("delete screenshot asset {}: {e}", path.display()))?;
-            mister_magik_catalog::fs_fault::maybe_fault(
+            mister_magik_catalog::fs_fault::maybe_fault_with_control(
                 "reset_delete.screenshot_asset.after_remove",
                 &path,
+                fault_control,
             );
             removed += 1;
         }
@@ -5734,11 +5743,23 @@ pub fn consume_library_rebuild_on_next_boot() -> Result<bool, String> {
 }
 
 fn request_library_rebuild_on_next_boot_at(path: &Path) -> Result<(), String> {
+    let mut fault_control = mister_magik_catalog::fs_fault::NoopDirectResetFaultControl;
+    request_library_rebuild_on_next_boot_at_with_fault_control(path, &mut fault_control)
+}
+
+fn request_library_rebuild_on_next_boot_at_with_fault_control(
+    path: &Path,
+    fault_control: &mut dyn mister_magik_catalog::fs_fault::DirectResetFaultControl,
+) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("create rebuild marker dir: {e}"))?;
     }
     fs::write(path, b"rebuild\n").map_err(|e| format!("write rebuild marker: {e}"))?;
-    mister_magik_catalog::fs_fault::maybe_fault("launcher.rebuild_marker.after_write", path);
+    mister_magik_catalog::fs_fault::maybe_fault_with_control(
+        "launcher.rebuild_marker.after_write",
+        path,
+        fault_control,
+    );
     Ok(())
 }
 
@@ -5770,6 +5791,21 @@ mod tests {
     use std::sync::Mutex;
 
     static LAUNCH_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    #[derive(Default)]
+    struct RecordingFaultControl {
+        points: Vec<String>,
+    }
+
+    impl mister_magik_catalog::fs_fault::DirectResetFaultControl for RecordingFaultControl {
+        fn request_direct_reset(
+            &mut self,
+            request: &mister_magik_catalog::fs_fault::DirectResetFaultRequest,
+        ) -> mister_magik_catalog::fs_fault::DirectResetFaultOutcome {
+            self.points.push(request.point().to_string());
+            mister_magik_catalog::fs_fault::DirectResetFaultOutcome::Noop
+        }
+    }
 
     fn catalog_presentation(
         status: CatalogMenuItemStatus,
@@ -8811,8 +8847,14 @@ mod tests {
         let path = root.join("nested/rebuild-on-next-boot");
 
         assert!(!consume_library_rebuild_on_next_boot_at(&path).expect("missing marker"));
-        request_library_rebuild_on_next_boot_at(&path).expect("write marker");
+        let mut fault_control = RecordingFaultControl::default();
+        request_library_rebuild_on_next_boot_at_with_fault_control(&path, &mut fault_control)
+            .expect("write marker");
         assert!(path.exists());
+        assert_eq!(
+            fault_control.points,
+            vec!["launcher.rebuild_marker.after_write"]
+        );
         assert!(consume_library_rebuild_on_next_boot_at(&path).expect("consume marker"));
         assert!(!path.exists());
         assert!(!consume_library_rebuild_on_next_boot_at(&path).expect("consume absent marker"));
@@ -8875,7 +8917,9 @@ mod tests {
         std::fs::create_dir(root.join("arcade-screenshots-320x320.mmlz4b.dir"))
             .expect("write retained directory");
 
-        let removed = delete_screenshot_packs_at(&root).expect("delete screenshot packs");
+        let mut fault_control = RecordingFaultControl::default();
+        let removed = delete_screenshot_packs_at_with_fault_control(&root, &mut fault_control)
+            .expect("delete screenshot packs");
 
         assert_eq!(removed, 6);
         assert!(!root.join("arcade-screenshots-320x320.mmlz4b").exists());
@@ -8888,6 +8932,10 @@ mod tests {
         assert!(root.join("arcade-screenshots-large.mmlz4b").exists());
         assert!(root.join("manual.pdf").exists());
         assert!(root.join("arcade-screenshots-320x320.mmlz4b.dir").exists());
+        assert_eq!(
+            fault_control.points,
+            vec!["reset_delete.screenshot_asset.after_remove"; 6]
+        );
 
         let _ = std::fs::remove_dir_all(root);
     }

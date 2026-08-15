@@ -34,17 +34,37 @@ pub fn button_overrides_for_mra(path: &Path) -> Result<Vec<ButtonOverride>, Stri
 }
 
 pub fn write_button_overrides_for_mra(path: &Path) -> Result<(), String> {
+    let mut fault_control = mister_magik_catalog::fs_fault::NoopDirectResetFaultControl;
+    write_button_overrides_for_mra_with_fault_control(path, &mut fault_control)
+}
+
+pub fn write_button_overrides_for_mra_with_fault_control(
+    path: &Path,
+    fault_control: &mut dyn mister_magik_catalog::fs_fault::DirectResetFaultControl,
+) -> Result<(), String> {
     let overrides = button_overrides_for_mra(path)?;
-    write_button_overrides(&overrides)
+    write_button_overrides_with_fault_control(&overrides, fault_control)
 }
 
 pub fn write_button_overrides(overrides: &[ButtonOverride]) -> Result<(), String> {
-    write_button_overrides_to_path(overrides, Path::new(BUTTON_OVERRIDES_PATH))
+    let mut fault_control = mister_magik_catalog::fs_fault::NoopDirectResetFaultControl;
+    write_button_overrides_with_fault_control(overrides, &mut fault_control)
 }
 
-fn write_button_overrides_to_path(overrides: &[ButtonOverride], path: &Path) -> Result<(), String> {
+pub fn write_button_overrides_with_fault_control(
+    overrides: &[ButtonOverride],
+    fault_control: &mut dyn mister_magik_catalog::fs_fault::DirectResetFaultControl,
+) -> Result<(), String> {
+    write_button_overrides_to_path(overrides, Path::new(BUTTON_OVERRIDES_PATH), fault_control)
+}
+
+fn write_button_overrides_to_path(
+    overrides: &[ButtonOverride],
+    path: &Path,
+    fault_control: &mut dyn mister_magik_catalog::fs_fault::DirectResetFaultControl,
+) -> Result<(), String> {
     if overrides.is_empty() {
-        remove_button_overrides_at(path)?;
+        remove_button_overrides_at(path, fault_control)?;
         return Ok(());
     }
 
@@ -69,10 +89,18 @@ fn write_button_overrides_to_path(overrides: &[ButtonOverride], path: &Path) -> 
         writeln!(file, "{}={value}", override_entry.index)
             .map_err(|e| format!("failed to write {}: {e}", tmp.display()))?;
     }
-    mister_magik_catalog::fs_fault::maybe_fault("button_overrides.after_temp_write", path);
+    mister_magik_catalog::fs_fault::maybe_fault_with_control(
+        "button_overrides.after_temp_write",
+        path,
+        fault_control,
+    );
     file.sync_all()
         .map_err(|e| format!("failed to sync {}: {e}", tmp.display()))?;
-    mister_magik_catalog::fs_fault::maybe_fault("button_overrides.after_temp_sync", path);
+    mister_magik_catalog::fs_fault::maybe_fault_with_control(
+        "button_overrides.after_temp_sync",
+        path,
+        fault_control,
+    );
     drop(file);
     fs::rename(&tmp, path).map_err(|e| {
         format!(
@@ -81,18 +109,36 @@ fn write_button_overrides_to_path(overrides: &[ButtonOverride], path: &Path) -> 
             path.display()
         )
     })?;
-    mister_magik_catalog::fs_fault::maybe_fault("button_overrides.after_rename", path);
+    mister_magik_catalog::fs_fault::maybe_fault_with_control(
+        "button_overrides.after_rename",
+        path,
+        fault_control,
+    );
     Ok(())
 }
 
 pub fn remove_button_overrides() -> Result<(), String> {
-    remove_button_overrides_at(Path::new(BUTTON_OVERRIDES_PATH))
+    let mut fault_control = mister_magik_catalog::fs_fault::NoopDirectResetFaultControl;
+    remove_button_overrides_with_fault_control(&mut fault_control)
 }
 
-fn remove_button_overrides_at(path: &Path) -> Result<(), String> {
+pub fn remove_button_overrides_with_fault_control(
+    fault_control: &mut dyn mister_magik_catalog::fs_fault::DirectResetFaultControl,
+) -> Result<(), String> {
+    remove_button_overrides_at(Path::new(BUTTON_OVERRIDES_PATH), fault_control)
+}
+
+fn remove_button_overrides_at(
+    path: &Path,
+    fault_control: &mut dyn mister_magik_catalog::fs_fault::DirectResetFaultControl,
+) -> Result<(), String> {
     match fs::remove_file(path) {
         Ok(()) => {
-            mister_magik_catalog::fs_fault::maybe_fault("button_overrides.after_remove", path);
+            mister_magik_catalog::fs_fault::maybe_fault_with_control(
+                "button_overrides.after_remove",
+                path,
+                fault_control,
+            );
             Ok(())
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -319,6 +365,21 @@ mod tests {
     use super::*;
     use std::time::{SystemTime, UNIX_EPOCH};
 
+    #[derive(Default)]
+    struct RecordingFaultControl {
+        points: Vec<String>,
+    }
+
+    impl mister_magik_catalog::fs_fault::DirectResetFaultControl for RecordingFaultControl {
+        fn request_direct_reset(
+            &mut self,
+            request: &mister_magik_catalog::fs_fault::DirectResetFaultRequest,
+        ) -> mister_magik_catalog::fs_fault::DirectResetFaultOutcome {
+            self.points.push(request.point().to_string());
+            mister_magik_catalog::fs_fault::DirectResetFaultOutcome::Noop
+        }
+    }
+
     fn overrides(names: &str, defaults: &str) -> Vec<ButtonOverride> {
         button_overrides_from_mra_text(&format!(
             r#"<misterromdescription><buttons names="{names}" default="{defaults}" /></misterromdescription>"#
@@ -421,7 +482,9 @@ mod tests {
         .expect("write mra fixture");
 
         let overrides = button_overrides_for_mra(&mra).expect("parse mra overrides");
-        write_button_overrides_to_path(&overrides, &output).expect("write overrides");
+        let mut fault_control = RecordingFaultControl::default();
+        write_button_overrides_to_path(&overrides, &output, &mut fault_control)
+            .expect("write overrides");
 
         assert_eq!(
             fs::read_to_string(&output).expect("read override file"),
@@ -430,6 +493,14 @@ mod tests {
         assert!(
             !temp_path(&output).exists(),
             "temporary override file should be atomically renamed away"
+        );
+        assert_eq!(
+            fault_control.points,
+            vec![
+                "button_overrides.after_temp_write",
+                "button_overrides.after_temp_sync",
+                "button_overrides.after_rename",
+            ]
         );
 
         fs::remove_dir_all(dir).expect("remove temp test dir");
@@ -441,9 +512,12 @@ mod tests {
         let output = dir.join("button-overrides");
         fs::write(&output, "schema=1\n0=Start\n").expect("write stale override file");
 
-        write_button_overrides_to_path(&[], &output).expect("remove stale overrides");
+        let mut fault_control = RecordingFaultControl::default();
+        write_button_overrides_to_path(&[], &output, &mut fault_control)
+            .expect("remove stale overrides");
 
         assert!(!output.exists());
+        assert_eq!(fault_control.points, vec!["button_overrides.after_remove"]);
 
         fs::remove_dir_all(dir).expect("remove temp test dir");
     }
