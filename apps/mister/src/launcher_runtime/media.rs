@@ -1217,6 +1217,34 @@ fn install_streamed_object(
     tx: &mpsc::Sender<MediaWorkerMessage>,
     emit_progress: bool,
 ) -> Result<(), String> {
+    let mut fault_control = mister_magik_catalog::fs_fault::NoopDirectResetFaultControl;
+    install_streamed_object_with_fault_control(
+        publish,
+        streamed,
+        pack,
+        progress_variant,
+        install_label,
+        pack_index,
+        pack_count,
+        tx,
+        emit_progress,
+        &mut fault_control,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn install_streamed_object_with_fault_control(
+    publish: &crate::artifact_publish::ArtifactPublishPlan,
+    streamed: &StreamedPackDownload,
+    pack: &MediaPack,
+    progress_variant: &str,
+    install_label: &str,
+    pack_index: usize,
+    pack_count: usize,
+    tx: &mpsc::Sender<MediaWorkerMessage>,
+    emit_progress: bool,
+    fault_control: &mut dyn mister_magik_catalog::fs_fault::DirectResetFaultControl,
+) -> Result<(), String> {
     let bytes = publish
         .temp_path()
         .metadata()
@@ -1234,9 +1262,10 @@ fn install_streamed_object(
         ));
     }
     if progress_variant == "index" {
-        mister_magik_catalog::fs_fault::maybe_fault(
+        mister_magik_catalog::fs_fault::maybe_fault_with_control(
             "media.index.after_temp_write",
             publish.temp_path(),
+            fault_control,
         );
     }
     if emit_progress {
@@ -1264,9 +1293,10 @@ fn install_streamed_object(
         )
     })?;
     if progress_variant == "index" {
-        mister_magik_catalog::fs_fault::maybe_fault(
+        mister_magik_catalog::fs_fault::maybe_fault_with_control(
             "media.index.after_temp_sync",
             publish.temp_path(),
+            fault_control,
         );
     }
     if emit_progress {
@@ -1278,9 +1308,10 @@ fn install_streamed_object(
     }
     publish.install_temp(Some(install_label))?;
     if progress_variant == "index" {
-        mister_magik_catalog::fs_fault::maybe_fault(
+        mister_magik_catalog::fs_fault::maybe_fault_with_control(
             "media.index.after_rename_before_parent_sync",
             publish.temp_path(),
+            fault_control,
         );
     }
     invalidate_preview_archive_metadata_cache("media_pack_published");
@@ -1413,6 +1444,15 @@ fn cache_metadata_json(metadata: &HttpCacheMetadata) -> Value {
 }
 
 fn write_json_atomic(path: &Path, value: &Value) -> Result<(), String> {
+    let mut fault_control = mister_magik_catalog::fs_fault::NoopDirectResetFaultControl;
+    write_json_atomic_with_fault_control(path, value, &mut fault_control)
+}
+
+fn write_json_atomic_with_fault_control(
+    path: &Path,
+    value: &Value,
+    fault_control: &mut dyn mister_magik_catalog::fs_fault::DirectResetFaultControl,
+) -> Result<(), String> {
     let publish = prepare_artifact_publish(
         path,
         timestamped_temp_path_for(path, "media-state", unix_ms_now()),
@@ -1432,14 +1472,23 @@ fn write_json_atomic(path: &Path, value: &Value) -> Result<(), String> {
     file.write_all(text.as_bytes())
         .and_then(|()| file.write_all(b"\n"))
         .map_err(|e| format!("write media state {}: {e}", publish.temp_path().display()))?;
-    mister_magik_catalog::fs_fault::maybe_fault("media.state.after_temp_write", path);
+    mister_magik_catalog::fs_fault::maybe_fault_with_control(
+        "media.state.after_temp_write",
+        path,
+        fault_control,
+    );
     file.sync_all()
         .map_err(|e| format!("sync media state {}: {e}", publish.temp_path().display()))?;
-    mister_magik_catalog::fs_fault::maybe_fault("media.state.after_temp_sync", path);
+    mister_magik_catalog::fs_fault::maybe_fault_with_control(
+        "media.state.after_temp_sync",
+        path,
+        fault_control,
+    );
     publish.install_temp(Some("media state"))?;
-    mister_magik_catalog::fs_fault::maybe_fault(
+    mister_magik_catalog::fs_fault::maybe_fault_with_control(
         "media.state.after_rename_before_parent_sync",
         path,
+        fault_control,
     );
     invalidate_preview_archive_metadata_cache("media_state_published");
     sync_path_rust_best_effort(publish.parent());
@@ -1918,6 +1967,21 @@ mod tests {
 
     const SHA: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
+    #[derive(Default)]
+    struct RecordingFaultControl {
+        points: Vec<String>,
+    }
+
+    impl mister_magik_catalog::fs_fault::DirectResetFaultControl for RecordingFaultControl {
+        fn request_direct_reset(
+            &mut self,
+            request: &mister_magik_catalog::fs_fault::DirectResetFaultRequest,
+        ) -> mister_magik_catalog::fs_fault::DirectResetFaultOutcome {
+            self.points.push(request.point().to_string());
+            mister_magik_catalog::fs_fault::DirectResetFaultOutcome::Noop
+        }
+    }
+
     fn temp_dir(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("{name}-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
@@ -1946,6 +2010,30 @@ mod tests {
             .unwrap()
             .packs
             .remove(0)
+    }
+
+    #[test]
+    fn media_state_fault_hook_preserves_atomic_publication_order() {
+        let dir = temp_dir("mister-magik-media-state-fault-hook");
+        let path = dir.join("state.json");
+        let mut fault_control = RecordingFaultControl::default();
+
+        write_json_atomic_with_fault_control(
+            &path,
+            &serde_json::json!({"schema": 1}),
+            &mut fault_control,
+        )
+        .expect("write media state");
+
+        assert_eq!(
+            fault_control.points,
+            vec![
+                "media.state.after_temp_write",
+                "media.state.after_temp_sync",
+                "media.state.after_rename_before_parent_sync",
+            ]
+        );
+        let _ = fs::remove_dir_all(dir);
     }
 
     fn indexed_pack_fixture() -> MediaPack {
