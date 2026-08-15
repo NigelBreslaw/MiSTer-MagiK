@@ -129,6 +129,49 @@ pub fn transition_duration_ratio(duration: Duration, numerator: u32, denominator
     Duration::from_micros(micros.min(u64::MAX as u128) as u64)
 }
 
+const BLEND_BUCKETS: usize = 33;
+const BLEND_5_PAIRS: usize = 32 * 32;
+const BLEND_6_PAIRS: usize = 64 * 64;
+
+const fn blend_table_5() -> [[u16; BLEND_5_PAIRS]; BLEND_BUCKETS] {
+    let mut table = [[0; BLEND_5_PAIRS]; BLEND_BUCKETS];
+    let mut alpha = 0;
+    while alpha < BLEND_BUCKETS {
+        let mut from = 0;
+        while from < 32 {
+            let mut to = 0;
+            while to < 32 {
+                table[alpha][from * 32 + to] = ((from * (32 - alpha) + to * alpha) >> 5) as u16;
+                to += 1;
+            }
+            from += 1;
+        }
+        alpha += 1;
+    }
+    table
+}
+
+const fn blend_table_6() -> [[u16; BLEND_6_PAIRS]; BLEND_BUCKETS] {
+    let mut table = [[0; BLEND_6_PAIRS]; BLEND_BUCKETS];
+    let mut alpha = 0;
+    while alpha < BLEND_BUCKETS {
+        let mut from = 0;
+        while from < 64 {
+            let mut to = 0;
+            while to < 64 {
+                table[alpha][from * 64 + to] = ((from * (32 - alpha) + to * alpha) >> 5) as u16;
+                to += 1;
+            }
+            from += 1;
+        }
+        alpha += 1;
+    }
+    table
+}
+
+const BLEND_TABLE_5: [[u16; BLEND_5_PAIRS]; BLEND_BUCKETS] = blend_table_5();
+const BLEND_TABLE_6: [[u16; BLEND_6_PAIRS]; BLEND_BUCKETS] = blend_table_6();
+
 fn transition_progress(elapsed: Duration, duration: Duration) -> f32 {
     let denominator = duration.as_secs_f32();
     if denominator <= 0.0 {
@@ -139,19 +182,20 @@ fn transition_progress(elapsed: Duration, duration: Duration) -> f32 {
 
 #[inline(always)]
 pub fn blend_rgb565_bucket(from: Rgb565Pixel, to: Rgb565Pixel, alpha_bucket: u16) -> Rgb565Pixel {
-    let from = u32::from(from.0);
-    let to = u32::from(to.0);
-    let alpha = u32::from(alpha_bucket.min(32));
+    let from = from.0;
+    let to = to.0;
+    let alpha = usize::from(alpha_bucket.min(32));
     if alpha == 0 {
-        return Rgb565Pixel(from as u16);
+        return Rgb565Pixel(from);
     }
     if alpha >= 32 {
-        return Rgb565Pixel(to as u16);
+        return Rgb565Pixel(to);
     }
-    let inverse = 32 - alpha;
-    let red_blue = (((from & 0xf81f) * inverse + (to & 0xf81f) * alpha) >> 5) & 0xf81f;
-    let green = (((from & 0x07e0) * inverse + (to & 0x07e0) * alpha) >> 5) & 0x07e0;
-    Rgb565Pixel((red_blue | green) as u16)
+    let red = BLEND_TABLE_5[alpha][usize::from(from >> 11) * 32 + usize::from(to >> 11)];
+    let green =
+        BLEND_TABLE_6[alpha][usize::from((from >> 5) & 0x3f) * 64 + usize::from((to >> 5) & 0x3f)];
+    let blue = BLEND_TABLE_5[alpha][usize::from(from & 0x1f) * 32 + usize::from(to & 0x1f)];
+    Rgb565Pixel((red << 11) | (green << 5) | blue)
 }
 
 pub fn blend_rgb565_rows_bucketed(
