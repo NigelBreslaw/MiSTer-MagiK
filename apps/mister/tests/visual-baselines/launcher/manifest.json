@@ -1,0 +1,156 @@
+{
+  "schema": "mister-magik-launcher-visual-baseline-v1",
+  "source_commit": "f9093bea1995ac16dac7b89aaa92e506e74d2fc3",
+  "scene_manifest_sha256": "b3522b84ac02c691086951c1954f2da70277fc46fa556d27674369e6d6fd5a45",
+  "review": {
+    "owner": "Codex (visual review delegated by Nigel Breslaw)",
+    "result": "accepted",
+    "scope": "12 launcher PNGs: HDMI and CRT steady states plus navigation-transition midpoints"
+  },
+  "shared_provenance": {
+    "capture_schema": "mister-magik-launcher-capture-v1",
+    "orientation": "normal",
+    "refresh_hz": 60,
+    "rgb565_conversion": "rgb565-le-expand-v1",
+    "renderer": "slint-software-rgb565-reused-buffer",
+    "slint_version": "1.17.1",
+    "png_encoder": "png-rgb8-filter-none-zlib-best-v1",
+    "fixture_sha256": "9998b71830e02db4348dfa4c53684251bc9a25a39b2a094d46e851c70783c37a",
+    "asset_bundle_sha256": "8d705597b5a46293a1a83269313653d9660c904c09be7197823fb02601c8f67c",
+    "font_bundle_sha256": "359d9077b71eec53c02ff5362f983c7f793808c4062a59957446169fe89e9aa9"
+  },
+  "scenes": [
+    {
+      "id": "crt-arcade",
+      "rgb565_hash": "c9d6cfe5cf5e5327",
+      "provenance_sha256": "e5d4f3a4fea47e595456b00251b87be29347792306edd17c2d1653f359f4f601",
+      "scenario": "arcade",
+      "frame": 0,
+      "fixed_time_us": 16666,
+      "width": 640,
+      "height": 480,
+      "display_profile": "crt-480p"
+    },
+    {
+      "id": "crt-catalog-scan",
+      "rgb565_hash": "7e50418399ddeeb8",
+      "provenance_sha256": "f42dc4c62dc451c22508d11f306af73371bf55d435482a5aefc3e53adf23aeca",
+      "scenario": "catalog-scan",
+      "frame": 0,
+      "fixed_time_us": 16666,
+      "width": 640,
+      "height": 480,
+      "display_profile": "crt-480p"
+    },
+    {
+      "id": "crt-controller-setup",
+      "rgb565_hash": "c846779340c2a17a",
+      "provenance_sha256": "02eb03b7fa4574942082170494bcbff24dbd3f18eda323c4a467c7d978b82b55",
+      "scenario": "controller-setup",
+      "frame": 0,
+      "fixed_time_us": 16666,
+      "width": 640,
+      "height": 480,
+      "display_profile": "crt-480p"
+    },
+    {
+      "id": "crt-home",
+      "rgb565_hash": "2c078b4093645eb8",
+      "provenance_sha256": "4de22a68d83fe206987992895ae0a8a78d5328aa57e67c14fec01e6628a2b93a",
+      "scenario": "home",
+      "frame": 0,
+      "fixed_time_us": 16666,
+      "width": 640,
+      "height": 480,
+      "display_profile": "crt-480p"
+    },
+    {
+      "id": "crt-navigation-transition-midpoint",
+      "rgb565_hash": "b4a4945e0d23f76a",
+      "provenance_sha256": "b84830187aeb5075d5740066c931f0c64fccc27a6690da6ffa3080539028ab91",
+      "scenario": "home",
+      "frame": 17,
+      "fixed_time_us": 900000,
+      "width": 640,
+      "height": 480,
+      "display_profile": "crt-480p"
+    },
+    {
+      "id": "crt-settings",
+      "rgb565_hash": "4728489017fe1a8f",
+      "provenance_sha256": "7d095db88aa30d176f32a396c8ab78506d3e4a4e788e615aa1645f32b5c8f85a",
+      "scenario": "settings",
+      "frame": 0,
+      "fixed_time_us": 16666,
+      "width": 640,
+      "height": 480,
+      "display_profile": "crt-480p"
+    },
+    {
+      "id": "hdmi-arcade",
+      "rgb565_hash": "15df72d3c5536af0",
+      "provenance_sha256": "7cb7293434f6f5b0eca6bd3d2bb0bf3bf3e4c02b76c091b6e9615515434eac85",
+      "scenario": "arcade",
+      "frame": 0,
+      "fixed_time_us": 16666,
+      "width": 960,
+      "height": 540,
+      "display_profile": "hdmi"
+    },
+    {
+      "id": "hdmi-catalog-scan",
+      "rgb565_hash": "4736aa42538b234e",
+      "provenance_sha256": "442fc94bf66d2dd86113b5fbd4a6c7acd98f7c173aede9b406d00bfad5647eb8",
+      "scenario": "catalog-scan",
+      "frame": 0,
+      "fixed_time_us": 16666,
+      "width": 960,
+      "height": 540,
+      "display_profile": "hdmi"
+    },
+    {
+      "id": "hdmi-controller-setup",
+      "rgb565_hash": "15e0e4f43ae6f06e",
+      "provenance_sha256": "e62c67b30446a94474e5cf97a32deecc2e65436b1f5eef82887f4f7fc9bd9171",
+      "scenario": "controller-setup",
+      "frame": 0,
+      "fixed_time_us": 16666,
+      "width": 960,
+      "height": 540,
+      "display_profile": "hdmi"
+    },
+    {
+      "id": "hdmi-home",
+      "rgb565_hash": "277037909826edc1",
+      "provenance_sha256": "114178b74cb9fff16c2e6f8b941484ce8678115328d708a62a1c4e459401a081",
+      "scenario": "home",
+      "frame": 0,
+      "fixed_time_us": 16666,
+      "width": 960,
+      "height": 540,
+      "display_profile": "hdmi"
+    },
+    {
+      "id": "hdmi-navigation-transition-midpoint",
+      "rgb565_hash": "3c377789b019d492",
+      "provenance_sha256": "f95d1440f7c90fd4ea8b2a14879cd971dfe6b52b78a922b75d9384e72ea420b3",
+      "scenario": "home",
+      "frame": 17,
+      "fixed_time_us": 900000,
+      "width": 960,
+      "height": 540,
+      "display_profile": "hdmi"
+    },
+    {
+      "id": "hdmi-settings",
+      "rgb565_hash": "6a256562878a0fea",
+      "provenance_sha256": "b5983ee64a059d0d0fee6e7883355beb74542edf3602b83f75effebda9fd6f21",
+      "scenario": "settings",
+      "frame": 0,
+      "fixed_time_us": 16666,
+      "width": 960,
+      "height": 540,
+      "display_profile": "hdmi"
+    }
+  ]
+}
