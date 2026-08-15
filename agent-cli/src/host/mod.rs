@@ -705,6 +705,15 @@ impl NativeDevice {
         })
     }
 
+    pub(crate) fn profile_arcade_velocity_scroll_streamline(
+        &mut self,
+        output_dir: &Path,
+    ) -> std::result::Result<String, DeviceFailure> {
+        self.benchmark_profile(|config| {
+            profile_installed_arcade_velocity_scroll_streamline(config, output_dir)
+        })
+    }
+
     pub(crate) fn profile_transition_streamline(
         &mut self,
         output_dir: &Path,
@@ -8343,6 +8352,163 @@ fn profile_installed_arcade_velocity_scroll_pmu(
     serde_json::to_string(&summary).map_err(Into::into)
 }
 
+fn profile_installed_arcade_velocity_scroll_streamline(
+    config: &NativeDeviceConfig,
+    output_dir: &Path,
+) -> Result<String> {
+    let gatord = streamline_gatord_path(env::var_os("MISTER_GATORD_PATH"))?;
+    let gatord_metadata = fs::metadata(&gatord)?;
+    if !gatord_metadata.is_file() || gatord_metadata.len() == 0 {
+        return Err("MISTER_GATORD_PATH must name a non-empty regular file".into());
+    }
+    if gatord_metadata.len() > 64 * 1024 * 1024 {
+        return Err("MISTER_GATORD_PATH exceeds the 64 MiB upload limit".into());
+    }
+    let gatord_sha256 = file_sha256(gatord.clone())?;
+    fs::create_dir_all(output_dir)?;
+    let session = connect_with(&config.connection, 30)?;
+    let capability = exec_checked_output(
+        &session,
+        "installed Arcade velocity-scroll Streamline capability",
+        DEVELOPMENT_BENCHMARK_CAPABILITIES_COMMAND.as_str(),
+    )?;
+    let capability = last_json_line(&capability.stdout)
+        .ok_or("installed benchmark capability output contains no JSON report")?;
+    if capability
+        .get("arcade-velocity-scroll-streamline-v1")
+        .and_then(Value::as_bool)
+        != Some(true)
+    {
+        return Err("installed app does not support arcade-velocity-scroll-streamline-v1".into());
+    }
+    let manifest = remote_read(&session, LOCAL_MAIN_MANIFEST_REMOTE)
+        .ok_or("development platform manifest is missing")?;
+    let installed_identity = streamline_installed_identity(&session, config.agent()?, &manifest)?;
+    let boot_id = installed_identity.boot_id.clone();
+    let original_display = exec_checked_output(
+        &session,
+        "query Arcade velocity-scroll Streamline display mode",
+        &acknowledged_main_command("mister_magik_display_get_v1"),
+    )?;
+    if parse_display_reply_pending(original_display.stdout.trim())?.is_some() {
+        return Err(
+            "Arcade velocity-scroll Streamline cannot start during a display transaction".into(),
+        );
+    }
+    let display_mode = parse_display_reply_active(original_display.stdout.trim())?;
+    let _ = arcade_velocity_scroll_minimum_fps(&display_mode)?;
+    let route_dir = output_dir.join("route");
+    let streamline_dir = output_dir.join("streamline");
+    fs::create_dir_all(&route_dir)?;
+    fs::create_dir_all(&streamline_dir)?;
+
+    let telemetry_endpoint = config.agent()?.clone();
+    let telemetry_thread = thread::spawn(move || {
+        agent_telemetry_for_duration_with_mode(
+            &telemetry_endpoint,
+            Duration::from_secs(ARCADE_VELOCITY_SCROLL_TELEMETRY_SECS),
+            100,
+            "off",
+        )
+        .map_err(|error| error.to_string())
+    });
+    let streamline_result = run_gui_frame_streamline_arm_with_options(
+        config,
+        &session,
+        &gatord,
+        &route_dir,
+        ARCADE_VELOCITY_SCROLL_DURATION_MS,
+        ARCADE_VELOCITY_SCROLL_STREAMLINE_CAPTURE,
+    );
+    let telemetry_result: Result<Vec<Value>> = match telemetry_thread.join() {
+        Ok(Ok(telemetry)) => Ok(telemetry),
+        Ok(Err(error)) => Err(error.into()),
+        Err(_) => Err("Arcade velocity-scroll Streamline telemetry collector panicked".into()),
+    };
+    let (streamline_arm, telemetry) = match (streamline_result, telemetry_result) {
+        (Ok(arm), Ok(telemetry)) => (arm, telemetry),
+        (Err(streamline), Ok(_)) => return Err(streamline),
+        (Ok(_), Err(telemetry)) => return Err(telemetry),
+        (Err(streamline), Err(telemetry)) => {
+            return Err(format!(
+                "Arcade velocity-scroll Streamline failed: {streamline}; telemetry collection failed: {telemetry}"
+            )
+            .into());
+        }
+    };
+    let telemetry_text = telemetry
+        .iter()
+        .map(serde_json::to_string)
+        .collect::<std::result::Result<Vec<_>, _>>()?
+        .join("\n");
+    fs::write(
+        route_dir.join("telemetry.jsonl"),
+        format!("{telemetry_text}\n"),
+    )?;
+    let route_summary = summarize_arcade_velocity_scroll(
+        &route_dir,
+        &streamline_arm.route,
+        &telemetry,
+        &display_mode,
+    )?;
+    let capture_manifest = streamline_capture_manifest(
+        &installed_identity,
+        &streamline_arm.gatord_version,
+        &gatord_sha256,
+        ARCADE_VELOCITY_SCROLL_STREAMLINE_CAPTURE,
+        streamline_arm.capture_started_monotonic_ns,
+        streamline_arm.capture_ended_monotonic_ns,
+    );
+    fs::write(
+        streamline_dir.join("capture-manifest.json"),
+        format!("{}\n", serde_json::to_string_pretty(&capture_manifest)?),
+    )?;
+    let summary = json!({
+        "schema": "mister-magik-arcade-velocity-scroll-streamline-v1",
+        "artifact_status": "passed",
+        "display_mode": display_mode,
+        "route": route_summary,
+        "streamline": {
+            "gatord_version": streamline_arm.gatord_version,
+            "gatord_sha256": gatord_sha256,
+            "archive_sha256": streamline_arm.archive_sha256,
+            "capture": "streamline/mister-magik.apc",
+            "archive": format!("streamline/{}", ARCADE_VELOCITY_SCROLL_STREAMLINE_CAPTURE.archive_file),
+            "capture_manifest": "streamline/capture-manifest.json",
+            "system_wide": true,
+            "correlation_clock": "CLOCK_MONOTONIC",
+        },
+    });
+    let final_manifest = remote_read(&session, LOCAL_MAIN_MANIFEST_REMOTE).ok_or(
+        "development platform manifest is missing after Arcade velocity-scroll Streamline",
+    )?;
+    if final_manifest != manifest {
+        return Err(
+            "installed platform manifest changed during Arcade velocity-scroll Streamline".into(),
+        );
+    }
+    let final_boot_id = remote_read(&session, "/proc/sys/kernel/random/boot_id")
+        .ok_or("device boot id is unavailable after Arcade velocity-scroll Streamline")?;
+    if final_boot_id != boot_id {
+        return Err("device rebooted during Arcade velocity-scroll Streamline".into());
+    }
+    let final_display = exec_checked_output(
+        &session,
+        "verify Arcade velocity-scroll Streamline display mode",
+        &acknowledged_main_command("mister_magik_display_get_v1"),
+    )?;
+    if parse_display_reply_pending(final_display.stdout.trim())?.is_some()
+        || parse_display_reply_active(final_display.stdout.trim())? != display_mode
+    {
+        return Err("display mode changed during Arcade velocity-scroll Streamline".into());
+    }
+    fs::write(
+        output_dir.join("summary.json"),
+        format!("{}\n", serde_json::to_string_pretty(&summary)?),
+    )?;
+    serde_json::to_string(&summary).map_err(Into::into)
+}
+
 fn gui_profile_phase_marker_us(profile: &Value, phase: &str, event: &str) -> Result<u64> {
     profile
         .get("phase_markers")
@@ -9838,6 +10004,13 @@ const GUI_FRAME_STREAMLINE_CAPTURE: SystemWideStreamlineCaptureSpec =
         max_duration_seconds: 120,
     };
 
+const ARCADE_VELOCITY_SCROLL_STREAMLINE_CAPTURE: SystemWideStreamlineCaptureSpec =
+    SystemWideStreamlineCaptureSpec {
+        label: "Arcade velocity-scroll Streamline",
+        archive_file: "mister-magik-arcade-velocity-scroll.apc.tar.gz",
+        max_duration_seconds: 120,
+    };
+
 const SYSTEM_ENTRY_STREAMLINE_CAPTURE: SystemWideStreamlineCaptureSpec =
     SystemWideStreamlineCaptureSpec {
         label: "system-entry critical Streamline",
@@ -10492,13 +10665,27 @@ fn run_gui_frame_streamline_arm(
     gatord: &Path,
     output_dir: &Path,
 ) -> Result<GuiFrameStreamlineArm> {
-    fs::create_dir_all(output_dir)?;
-    let capture = SystemWideStreamlineCapture::new(
+    run_gui_frame_streamline_arm_with_options(
+        config,
         session,
-        &config.connection,
+        gatord,
         output_dir,
+        GUI_PROFILE_DEFAULT_SCROLL_MS,
         GUI_FRAME_STREAMLINE_CAPTURE,
-    );
+    )
+}
+
+fn run_gui_frame_streamline_arm_with_options(
+    config: &NativeDeviceConfig,
+    session: &Session,
+    gatord: &Path,
+    output_dir: &Path,
+    scroll_duration_ms: u64,
+    capture_spec: SystemWideStreamlineCaptureSpec,
+) -> Result<GuiFrameStreamlineArm> {
+    fs::create_dir_all(output_dir)?;
+    let capture =
+        SystemWideStreamlineCapture::new(session, &config.connection, output_dir, capture_spec);
     let run_result = (|| -> Result<GuiFrameStreamlineArm> {
         let gatord_version = capture.prepare(gatord)?;
         let capture_thread = capture.start();
@@ -10509,7 +10696,7 @@ fn run_gui_frame_streamline_arm(
             session,
             output_dir,
             false,
-            GUI_PROFILE_DEFAULT_SCROLL_MS,
+            scroll_duration_ms,
             None,
         );
         let capture_result = capture.stop(capture_thread);

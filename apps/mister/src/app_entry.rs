@@ -442,6 +442,7 @@ fn benchmark_capabilities() -> serde_json::Value {
         "arcade-velocity-scroll-v1": true,
         "arcade-velocity-scroll-pprof-v1": cfg!(feature = "profile"),
         "arcade-velocity-scroll-pmu-v1": true,
+        "arcade-velocity-scroll-streamline-v1": true,
         "system-entry-v1": true,
         "system-entry-profile-v1": cfg!(feature = "profile"),
     });
@@ -2980,5 +2981,6 @@ mod tests {
             cfg!(feature = "profile")
         );
         assert_eq!(capabilities["arcade-velocity-scroll-pmu-v1"], true);
+        assert_eq!(capabilities["arcade-velocity-scroll-streamline-v1"], true);
     }
 }
