@@ -101,8 +101,9 @@ layout, and legacy-compatible identity validation to the shared contract's
 `ManagerLegacy` profile while retaining manager-owned filesystem hashing,
 metadata checks, and error presentation. All migrated validation profiles now
 recompute the qualification candidate identity and reject forged lower-case
-hex values. Canonical lower-case identity encoding is validated before candidate
-recomputation, preserving the malformed-identity rejection class. The GUI
+hex values. Canonical lower-case identity encoding is validated before strict
+layout paths and candidate recomputation, preserving both malformed-identity
+and layout-path rejection classes. The GUI
 profile also rejects both missing and additional fields,
 using the schema-generated exact platform-v3 field set. GUI identity validation
 hashes all seven installed artifacts: the running GUI executable plus Main,

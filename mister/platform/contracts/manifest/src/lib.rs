@@ -234,19 +234,19 @@ fn validate(
         ));
     }
     validate_identity_encoding(values)?;
+    if matches!(
+        profile,
+        ValidationProfile::AgentStrict | ValidationProfile::ManagerLegacy
+    ) {
+        validate_layout_paths(values, layout)?;
+    }
     if values["qualification_candidate_id"] != qualification_candidate_id(values) {
         return Err(ManifestError::new(
             "platform_candidate_identity_mismatch",
             values["qualification_candidate_id"].clone(),
         ));
     }
-    match profile {
-        ValidationProfile::GuiLegacy => Ok(()),
-        ValidationProfile::AgentStrict | ValidationProfile::ManagerLegacy => {
-            validate_layout_paths(values, layout)?;
-            Ok(())
-        }
-    }
+    Ok(())
 }
 
 fn validate_identity_encoding(values: &BTreeMap<String, String>) -> Result<(), ManifestError> {
