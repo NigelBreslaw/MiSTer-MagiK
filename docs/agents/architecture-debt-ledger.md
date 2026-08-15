@@ -201,6 +201,11 @@ those builds deliberately compile partial UI graphs. Full-scope Linux/ARM
 production builds retain dead-code enforcement.
 Experiment, diagnostic, profiler, and test-only helpers are cfg-gated at their
 owning items, so release builds do not depend on a library-wide suppression.
+The full device graph also retains narrowly scoped module-declaration
+allowances on `ui_runner` leaves that own alternate benchmark, recovery,
+presentation, and diagnostic routes. Those routes remain compiled so the P1
+ownership move does not change runtime selection or readiness behavior; the
+allowance does not extend to the `ui_runner` root or either executable edge.
 The full feature matrix also proves `app_entry` imports only library modules it
 uses under the selected cfg, while typed ready-FIFO capture retains the legacy
 empty `PathBuf` fallback. Feature-specific application tests now target that
