@@ -208,7 +208,7 @@ impl CrtBackdropState {
                         previous_pair[1] == previous_pair[0] && current_pair[1] == current_pair[0]
                     });
             if !has_horizontal_repeat {
-                blend_rgb565_rows_bucketed(destination, previous, current, alpha_bucket);
+                blend_rgb565_rows_accelerated(destination, previous, current, alpha_bucket);
                 continue;
             }
             let mut previous_source = Rgb565Pixel(u16::MAX);
@@ -268,6 +268,62 @@ impl CrtBackdropState {
             let _ = self.compose(now);
         }
     }
+}
+
+fn blend_rgb565_rows_accelerated(
+    destination: &mut [Rgb565Pixel],
+    previous: &[Rgb565Pixel],
+    current: &[Rgb565Pixel],
+    alpha_bucket: u16,
+) {
+    debug_assert!(previous.len() >= destination.len());
+    debug_assert!(current.len() >= destination.len());
+    let alpha_bucket = alpha_bucket.min(32);
+    if alpha_bucket == 0 {
+        destination.copy_from_slice(&previous[..destination.len()]);
+        return;
+    }
+    if alpha_bucket >= 32 {
+        destination.copy_from_slice(&current[..destination.len()]);
+        return;
+    }
+    #[cfg(all(target_os = "linux", target_arch = "arm"))]
+    if crt_backdrop_neon_enabled() {
+        // SAFETY: all three slices are valid RGB565 spans and the C kernel
+        // handles complete four-pixel vectors plus its scalar tail.
+        unsafe {
+            mister_magik_crt_backdrop_blend_neon(
+                previous.as_ptr().cast(),
+                current.as_ptr().cast(),
+                destination.as_mut_ptr().cast(),
+                destination.len(),
+                u32::from(alpha_bucket),
+            );
+        }
+        return;
+    }
+    blend_rgb565_rows_bucketed(destination, previous, current, alpha_bucket);
+}
+
+#[cfg(all(target_os = "linux", target_arch = "arm"))]
+fn crt_backdrop_neon_enabled() -> bool {
+    static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        std::env::var("MISTER_CRT_BACKDROP_SIMD")
+            .ok()
+            .is_none_or(|value| !value.trim().eq_ignore_ascii_case("scalar"))
+    })
+}
+
+#[cfg(all(target_os = "linux", target_arch = "arm"))]
+unsafe extern "C" {
+    fn mister_magik_crt_backdrop_blend_neon(
+        from: *const u16,
+        to: *const u16,
+        destination: *mut u16,
+        length: usize,
+        alpha_bucket: u32,
+    );
 }
 
 #[cfg(test)]
@@ -503,6 +559,25 @@ mod tests {
             frame(&source, 1, 1)
         ));
         assert_eq!(output[0], Rgb565Pixel((12 << 11) | (25 << 5) | 12));
+    }
+
+    #[test]
+    fn accelerated_blend_matches_scalar_for_all_buckets_and_tails() {
+        for length in 0..19 {
+            let previous = (0..length)
+                .map(|index| Rgb565Pixel((index as u16).wrapping_mul(7919)))
+                .collect::<Vec<_>>();
+            let current = (0..length)
+                .map(|index| Rgb565Pixel((index as u16).wrapping_mul(3571)))
+                .collect::<Vec<_>>();
+            for alpha in 0..=32 {
+                let mut scalar = vec![Rgb565Pixel(0); length];
+                let mut accelerated = vec![Rgb565Pixel(0); length];
+                blend_rgb565_rows_bucketed(&mut scalar, &previous, &current, alpha);
+                blend_rgb565_rows_accelerated(&mut accelerated, &previous, &current, alpha);
+                assert_eq!(accelerated, scalar, "length={length} alpha={alpha}");
+            }
+        }
     }
 
     #[test]
