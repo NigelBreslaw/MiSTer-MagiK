@@ -7583,10 +7583,6 @@ const ARCADE_VELOCITY_SCROLL_TELEMETRY_SECS: u64 = 35;
 const ARCADE_VELOCITY_SCROLL_PPROF_REMOTE_DIR: &str =
     "/tmp/mister-magik/arcade-velocity-scroll-pprof";
 
-fn gui_profile_route_launcher_env(pmu: bool) -> Vec<(String, String)> {
-    gui_profile_route_launcher_env_with_pprof(pmu, None)
-}
-
 fn gui_profile_route_launcher_env_with_pprof(
     pmu: bool,
     pprof_remote_dir: Option<&str>,
@@ -24694,8 +24690,8 @@ mod tests {
 
     #[test]
     fn gui_profile_route_environment_is_fixed_and_pmu_is_independent() {
-        let control = gui_profile_route_launcher_env(false);
-        let pmu = gui_profile_route_launcher_env(true);
+        let control = gui_profile_route_launcher_env_with_pprof(false, None);
+        let pmu = gui_profile_route_launcher_env_with_pprof(true, None);
         assert!(control.iter().any(|(name, value)| {
             name == "MISTER_LAUNCHER_START_SCREEN" && value == "settings"
         }));
