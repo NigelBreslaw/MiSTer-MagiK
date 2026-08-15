@@ -95,7 +95,8 @@ layout, and legacy-compatible identity validation to the shared contract's
 `ManagerLegacy` profile while retaining manager-owned filesystem hashing,
 metadata checks, and error presentation. All migrated validation profiles now
 recompute the qualification candidate identity and reject forged lower-case
-hex values.
+hex values. The GUI profile also rejects both missing and additional fields,
+using the schema-generated exact platform-v3 field set.
 
 | Legacy consumer | Migration owner |
 |---|---|

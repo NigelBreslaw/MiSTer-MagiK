@@ -199,12 +199,7 @@ fn validate(
     layout: Layout,
     profile: ValidationProfile,
 ) -> Result<(), ManifestError> {
-    match profile {
-        ValidationProfile::AgentStrict | ValidationProfile::ManagerLegacy => {
-            require_exact_fields(values)?;
-        }
-        ValidationProfile::GuiLegacy => require_gui_fields(values)?,
-    }
+    require_exact_fields(values)?;
     if values["format"] != FORMAT {
         return Err(ManifestError::new(
             "unsupported_platform_manifest",
@@ -288,36 +283,6 @@ fn require_exact_fields(values: &BTreeMap<String, String>) -> Result<(), Manifes
         Err(ManifestError::new(
             "invalid_platform_manifest_fields",
             values.keys().cloned().collect::<Vec<_>>().join(","),
-        ))
-    }
-}
-
-fn require_gui_fields(values: &BTreeMap<String, String>) -> Result<(), ManifestError> {
-    const GUI_FIELDS: &[&str] = &[
-        "format",
-        "platform_release",
-        "platform_release_number",
-        "platform_bundle_id",
-        "qualification_candidate_id",
-        "latch_protocol_version",
-        "latch_capability_mask",
-        "main_path",
-        "main_sha256",
-        "gui_sha256",
-        "scanout_module_path",
-        "scanout_module_sha256",
-        "latch_rbf_path",
-        "latch_rbf_sha256",
-        "main_revision",
-        "magik_revision",
-        "menu_revision",
-    ];
-    if GUI_FIELDS.iter().all(|field| values.contains_key(*field)) {
-        Ok(())
-    } else {
-        Err(ManifestError::new(
-            "invalid_platform_manifest_fields",
-            "GUI legacy required fields",
         ))
     }
 }
@@ -444,5 +409,24 @@ mod tests {
         )
         .is_err());
         assert!(parse(&forged, Layout::Development, ValidationProfile::GuiLegacy).is_err());
+    }
+
+    #[test]
+    fn gui_profile_rejects_missing_and_additional_fields() {
+        let valid = canonical(Layout::Development);
+        let missing = valid
+            .lines()
+            .filter(|line| !line.starts_with("manager_sha256="))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let additional = format!("{valid}unexpected=value\n");
+        for text in [missing, additional] {
+            assert_eq!(
+                parse(&text, Layout::Development, ValidationProfile::GuiLegacy)
+                    .unwrap_err()
+                    .code(),
+                "invalid_platform_manifest_fields"
+            );
+        }
     }
 }
