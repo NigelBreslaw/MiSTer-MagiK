@@ -1200,15 +1200,15 @@ fn check_device_crate_root_ownership(repository: &Path) -> Result<(), String> {
     }
     if main.lines().count() > 24
         || !main.contains("#[global_allocator]")
-        || !main.contains("device_layout::initialize_process_env()")
         || !main.contains("app_entry::run()")
+        || main.contains("initialize_process_env")
         || !main_modules.is_empty()
         || main.contains("std::env::args")
         || main.contains("#![allow(dead_code)]")
         || app_entry.contains("#![allow(dead_code)]")
     {
         return Err(
-            "device_binary_bootstrap_drift: main.rs owns only allocator, earliest layout initialization, and app_entry::run"
+            "device_binary_bootstrap_drift: main.rs owns only the allocator and app_entry::run; process-environment path seeding is forbidden"
                 .into(),
         );
     }
@@ -2251,7 +2251,7 @@ documentation = { summary = "Volatile fixture token", accepted_values = ["do-not
         fs::create_dir_all(root.join("apps/mister/src/experiments")).unwrap();
         fs::write(
             root.join("apps/mister/src/main.rs"),
-            "#[global_allocator]\nstatic ALLOC: Alloc = Alloc;\nfn main() { unsafe { device_layout::initialize_process_env() }; app_entry::run(); }\n",
+            "#[global_allocator]\nstatic ALLOC: Alloc = Alloc;\nfn main() { app_entry::run(); }\n",
         )
         .unwrap();
         fs::write(
@@ -2268,7 +2268,14 @@ documentation = { summary = "Volatile fixture token", accepted_values = ["do-not
         assert!(check_device_crate_root_ownership(&root).is_ok());
         fs::write(
             root.join("apps/mister/src/main.rs"),
-            "#[global_allocator]\nstatic ALLOC: Alloc = Alloc;\nmod unplanned;\nfn main() { unsafe { device_layout::initialize_process_env() }; app_entry::run(); }\n",
+            "#[global_allocator]\nstatic ALLOC: Alloc = Alloc;\nfn main() { unsafe { device_layout::initialize_process_env() }; app_entry::run(); }\n",
+        )
+        .unwrap();
+        let error = check_device_crate_root_ownership(&root).unwrap_err();
+        assert!(error.contains("process-environment path seeding is forbidden"));
+        fs::write(
+            root.join("apps/mister/src/main.rs"),
+            "#[global_allocator]\nstatic ALLOC: Alloc = Alloc;\nmod unplanned;\nfn main() { app_entry::run(); }\n",
         )
         .unwrap();
         fs::write(

@@ -263,18 +263,6 @@ impl CatalogPaths {
     pub fn sharded_catalog_dir(&self) -> &Path {
         &self.sharded_catalog_dir
     }
-
-    fn environment_defaults(&self) -> [(&'static str, &Path); 7] {
-        [
-            (LIBRARY_SQLITE_ENV, self.library_sqlite()),
-            (MAME_SQLITE_ENV, self.mame_sqlite()),
-            (HBMAME_SQLITE_ENV, self.hbmame_sqlite()),
-            (PREVIEW_CACHE_DIR_ENV, self.preview_cache_dir()),
-            (MEDIA_ASSET_DIR_ENV, self.media_asset_dir()),
-            (USER_STATE_SQLITE_ENV, self.user_state_sqlite()),
-            (LIBRARY_BENCH_SQLITE_ENV, self.library_bench_sqlite()),
-        ]
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -330,43 +318,10 @@ pub fn current_app_path(relative: &str) -> PathBuf {
     DevicePaths::current().app_path(relative)
 }
 
-/// Seed existing path override interfaces from the executable's fixed layout.
-/// Explicit benchmark/test overrides retain precedence.
-///
-/// # Safety
-///
-/// The caller must ensure no other thread can read or write the process
-/// environment for the duration of this call.
-pub unsafe fn initialize_process_env() {
-    let layout = DeviceLayout::current();
-    initialize_process_env_with(
-        layout,
-        |name| std::env::var_os(name).is_some(),
-        |name, value| {
-            // SAFETY: upheld by initialize_process_env's caller.
-            unsafe { std::env::set_var(name, value) };
-        },
-    );
-}
-
-fn initialize_process_env_with(
-    layout: DeviceLayout,
-    mut is_set: impl FnMut(&str) -> bool,
-    mut set: impl FnMut(&str, PathBuf),
-) {
-    let device = DevicePaths::for_layout(layout.installed_layout());
-    let catalog = CatalogPaths::derive(&device, CatalogPathOverrides::default());
-    for (name, value) in catalog.environment_defaults() {
-        if !is_set(name) {
-            set(name, value.to_path_buf());
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::{BTreeMap, BTreeSet};
+    use std::collections::BTreeMap;
 
     #[test]
     fn resolves_fixed_layout_from_executable_parent() {
@@ -497,32 +452,5 @@ mod tests {
             paths.sharded_catalog_dir(),
             Path::new("/tmp/override/catalog-v3")
         );
-    }
-
-    #[test]
-    fn process_environment_defaults_preserve_explicit_overrides() {
-        let existing = BTreeSet::from(["MISTER_LIBRARY_SQLITE"]);
-        let mut seeded = BTreeMap::new();
-
-        initialize_process_env_with(
-            DeviceLayout::Dev,
-            |name| existing.contains(name),
-            |name, value| {
-                seeded.insert(name.to_string(), value);
-            },
-        );
-
-        assert!(!seeded.contains_key("MISTER_LIBRARY_SQLITE"));
-        assert_eq!(
-            seeded.get("MISTER_MEDIA_ASSET_DIR"),
-            Some(&PathBuf::from("/media/fat/mister-magik-dev/assets"))
-        );
-        assert_eq!(
-            seeded.get("MISTER_USER_STATE_SQLITE"),
-            Some(&PathBuf::from(
-                "/media/fat/mister-magik-dev/user-state.sqlite3"
-            ))
-        );
-        assert_eq!(seeded.len(), 6);
     }
 }
