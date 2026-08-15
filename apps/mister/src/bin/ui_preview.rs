@@ -7,7 +7,9 @@ mod ui_preview_scene_manifest;
 
 #[cfg(target_os = "macos")]
 mod macos {
-    use super::ui_preview_scene_manifest::launcher_scene_manifest;
+    use super::ui_preview_scene_manifest::{
+        LauncherScene, SceneProfile, SceneScenario, SceneTransitionEdge, launcher_scene_manifest,
+    };
     use mister_magik_catalog::portable_catalog_builder::{
         PortableCatalogBuild, publish_portable_catalog,
     };
@@ -81,6 +83,7 @@ mod macos {
     use std::io::Write;
     use std::num::NonZeroU32;
     use std::path::{Path, PathBuf};
+    use std::process::Command;
     use std::rc::Rc;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Arc, mpsc};
@@ -113,6 +116,10 @@ mod macos {
                 "{}",
                 serde_json::to_string_pretty(&launcher_scene_manifest()?)?
             );
+            return Ok(());
+        }
+        if let Some(output_dir) = options.matrix_output.as_deref() {
+            run_scene_matrix(output_dir)?;
             return Ok(());
         }
         let headless = options.output.is_some();
@@ -2569,6 +2576,106 @@ mod macos {
         }
     }
 
+    fn run_scene_matrix(output_dir: &Path) -> Result<(), Box<dyn Error>> {
+        std::fs::create_dir(output_dir)?;
+        let executable = std::env::current_exe()?;
+        let manifest = launcher_scene_manifest()?;
+        for scene in &manifest.scenes {
+            let output = Command::new(&executable)
+                .args(scene_arguments(scene, output_dir))
+                .output()?;
+            if !output.status.success() {
+                return Err(format!(
+                    "launcher scene {:?} failed: {}",
+                    scene.id,
+                    String::from_utf8_lossy(&output.stderr).trim()
+                )
+                .into());
+            }
+            let provenance_path = output_dir.join(format!("{}.json", scene.id));
+            let provenance: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(&provenance_path)?)?;
+            let (expected_width, expected_height) = match scene.profile {
+                SceneProfile::Hdmi => (HDMI_FRAME_WIDTH as u64, HDMI_FRAME_HEIGHT as u64),
+                SceneProfile::Crt480p => (640, 480),
+            };
+            if provenance.get("width").and_then(serde_json::Value::as_u64) != Some(expected_width)
+                || provenance.get("height").and_then(serde_json::Value::as_u64)
+                    != Some(expected_height)
+            {
+                return Err(
+                    format!("launcher scene {:?} produced unexpected geometry", scene.id).into(),
+                );
+            }
+            let image_path = output_dir.join(format!("{}.png", scene.id));
+            if !image_path.is_file() {
+                return Err(format!("launcher scene {:?} produced no PNG", scene.id).into());
+            }
+            let rgb565_hash = provenance
+                .get("rgb565_hash")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| format!("launcher scene {:?} has no RGB565 hash", scene.id))?;
+            println!("scene={} status=passed hash={rgb565_hash}", scene.id);
+        }
+        println!("matrix=passed scenes={}", manifest.scenes.len());
+        Ok(())
+    }
+
+    fn scene_arguments(scene: &LauncherScene, output_dir: &Path) -> Vec<std::ffi::OsString> {
+        let scenario = match scene.scenario {
+            SceneScenario::Home | SceneScenario::NavigationTransitionMidpoint => "home",
+            SceneScenario::Arcade => "arcade",
+            SceneScenario::Settings => "settings",
+            SceneScenario::ControllerSetup => "controller-setup",
+            SceneScenario::CatalogScan => "catalog-scan",
+        };
+        let profile = match scene.profile {
+            SceneProfile::Hdmi => "hdmi",
+            SceneProfile::Crt480p => "crt-480p",
+        };
+        let mut arguments = [
+            "--content",
+            "fixtures",
+            "--no-scan",
+            "--no-download",
+            "--scenario",
+            scenario,
+            "--display-profile",
+            profile,
+            "--orientation",
+            "normal",
+            "--refresh-rate",
+            "60",
+            "--frame",
+        ]
+        .map(std::ffi::OsString::from)
+        .to_vec();
+        arguments.push(scene.frame.to_string().into());
+        arguments.push("--output".into());
+        arguments.push(
+            output_dir
+                .join(format!("{}.png", scene.id))
+                .into_os_string(),
+        );
+        arguments.push("--provenance-output".into());
+        arguments.push(
+            output_dir
+                .join(format!("{}.json", scene.id))
+                .into_os_string(),
+        );
+        if let Some(transition) = &scene.transition {
+            match transition.edge {
+                SceneTransitionEdge::HomeArcade => {
+                    arguments.push("--navigation-transition-demo".into());
+                    arguments.push("home-arcade".into());
+                }
+            }
+            arguments.push("--navigation-transition-duration-ms".into());
+            arguments.push(transition.duration_ms.to_string().into());
+        }
+        arguments
+    }
+
     struct PreviewOptions {
         scenario: Scenario,
         frame: u64,
@@ -2587,6 +2694,7 @@ mod macos {
         navigation_transition_demo_reverse: bool,
         navigation_transition_duration_ms: Option<u64>,
         list_scenes: bool,
+        matrix_output: Option<PathBuf>,
     }
 
     impl PreviewOptions {
@@ -2608,6 +2716,7 @@ mod macos {
             let mut navigation_transition_demo_reverse = false;
             let mut navigation_transition_duration_ms = None;
             let mut list_scenes = false;
+            let mut matrix_output = None;
             let mut arguments = arguments.into_iter();
             while let Some(argument) = arguments.next() {
                 match argument.as_str() {
@@ -2690,6 +2799,13 @@ mod macos {
                         navigation_transition_demo_reverse = true;
                     }
                     "--list-scenes" => list_scenes = true,
+                    "--matrix-output" => {
+                        matrix_output = Some(PathBuf::from(
+                            arguments
+                                .next()
+                                .ok_or("--matrix-output requires a directory")?,
+                        ));
+                    }
                     "--display-profile" => {
                         let value = arguments
                             .next()
@@ -2710,7 +2826,7 @@ mod macos {
                     }
                     "--help" | "-h" => {
                         return Err(
-                            "usage: mister-magik-ui-preview [--list-scenes] [--content auto|fixtures|card] [--sd-root PATH] [--cache-root PATH] [--no-scan] [--no-download] [--navigation-transition-duration-ms 100..10000] [--navigation-transition-demo home-consoles|home-arcade|consoles-system] [--settings-page-transition-demo] [--navigation-transition-demo-reverse] [--display-profile hdmi|crt-240p|crt-288p|crt-480p|crt-576p] [--orientation normal|monitor-clockwise|monitor-counterclockwise] [--scenario NAME] [--refresh-rate auto|60|120] [--frame N] [--output FILE.ppm|FILE.png] [--provenance-output FILE.json]"
+                            "usage: mister-magik-ui-preview [--list-scenes] [--matrix-output DIR] [--content auto|fixtures|card] [--sd-root PATH] [--cache-root PATH] [--no-scan] [--no-download] [--navigation-transition-duration-ms 100..10000] [--navigation-transition-demo home-consoles|home-arcade|consoles-system] [--settings-page-transition-demo] [--navigation-transition-demo-reverse] [--display-profile hdmi|crt-240p|crt-288p|crt-480p|crt-576p] [--orientation normal|monitor-clockwise|monitor-counterclockwise] [--scenario NAME] [--refresh-rate auto|60|120] [--frame N] [--output FILE.ppm|FILE.png] [--provenance-output FILE.json]"
                                 .into(),
                         );
                     }
@@ -2753,6 +2869,7 @@ mod macos {
                 navigation_transition_demo_reverse,
                 navigation_transition_duration_ms,
                 list_scenes,
+                matrix_output,
             })
         }
     }
@@ -4071,6 +4188,35 @@ mod macos {
                 options.provenance_output,
                 Some(PathBuf::from("/tmp/capture.json"))
             );
+        }
+
+        #[test]
+        fn matrix_runner_maps_every_manifest_scene_to_explicit_outputs() {
+            let manifest = launcher_scene_manifest().unwrap();
+            for scene in &manifest.scenes {
+                let arguments = scene_arguments(scene, Path::new("/tmp/matrix"))
+                    .into_iter()
+                    .map(|argument| argument.to_string_lossy().into_owned())
+                    .collect::<Vec<_>>();
+                assert!(
+                    arguments
+                        .windows(2)
+                        .any(|pair| pair == ["--content", "fixtures"])
+                );
+                assert!(arguments.contains(&"--no-scan".to_owned()));
+                assert!(arguments.contains(&"--no-download".to_owned()));
+                assert!(arguments.contains(&format!("/tmp/matrix/{}.png", scene.id)));
+                assert!(arguments.contains(&format!("/tmp/matrix/{}.json", scene.id)));
+                assert_eq!(
+                    arguments.contains(&"--navigation-transition-demo".to_owned()),
+                    scene.scenario == SceneScenario::NavigationTransitionMidpoint
+                );
+            }
+
+            let options =
+                PreviewOptions::parse(["--matrix-output", "/tmp/matrix"].map(String::from))
+                    .unwrap();
+            assert_eq!(options.matrix_output, Some(PathBuf::from("/tmp/matrix")));
         }
 
         #[test]
