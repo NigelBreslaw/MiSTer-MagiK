@@ -936,6 +936,52 @@ impl ArcadeListRenderer {
         }
     }
 
+    /// Restores the complete viewport from a stationary physical backdrop,
+    /// then draws the CRT list's non-fill pixels over it. This intentionally
+    /// rewrites every viewport pixel so glyphs from a preceding scroll
+    /// position cannot survive in newly exposed row fill.
+    pub fn compose_layer_over_backdrop_to_oriented_cached(
+        &mut self,
+        target: &mut UiFrameTarget,
+        backdrop: &[Rgb565Pixel],
+        output_layout: Rgb565OutputLayout,
+        redraw_selection_frame: bool,
+    ) -> bool {
+        if backdrop.len() < output_layout.len()
+            || target.cached_565().len() < output_layout.len()
+            || self.geometry.x.saturating_add(self.width) > output_layout.logical_width()
+            || self.geometry.y.saturating_add(self.visible_height) > output_layout.logical_height()
+        {
+            return false;
+        }
+
+        let selection_y = self.selection_y();
+        let selection_bottom = selection_y + self.style.row_height.max(1) as usize;
+        let cached = target.cached_565_mut();
+        for viewport_y in 0..self.visible_height {
+            let source_y = (self.surface_y + viewport_y) % self.visible_height;
+            let source_row = source_y * self.width;
+            let selected = viewport_y >= selection_y && viewport_y < selection_bottom;
+            for x in 0..self.width {
+                let logical_x = self.geometry.x + x;
+                let logical_y = self.geometry.y + viewport_y;
+                let offset = output_layout.physical_offset(logical_x, logical_y);
+                let pixel = self.surface[source_row + x];
+                cached[offset] = if selected {
+                    selected_aperture_pixel_with_style(pixel, self.style)
+                } else if is_arcade_unselected_fill_pixel_with_style(pixel, self.style) {
+                    backdrop[offset]
+                } else {
+                    pixel
+                };
+            }
+        }
+        if redraw_selection_frame {
+            self.compose_selection_frame_to_oriented_cached(cached, output_layout);
+        }
+        true
+    }
+
     pub fn copy_layer_to_hidden(
         &mut self,
         hidden: &mut ScanoutSlotsRgb565Framebuffer,
@@ -2132,6 +2178,10 @@ fn is_arcade_row_background_pixel_with_style(pixel: Rgb565Pixel, style: ArcadeLi
     )
 }
 
+fn is_arcade_unselected_fill_pixel_with_style(pixel: Rgb565Pixel, style: ArcadeListStyle) -> bool {
+    pixel == style.background_565 || pixel == style.alternate_background_565
+}
+
 fn arcade_selection_inversion_enabled() -> bool {
     static VALUE: OnceLock<bool> = OnceLock::new();
     *VALUE.get_or_init(|| {
@@ -2242,6 +2292,64 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn backdrop_composition_restores_every_unselected_viewport_pixel() {
+        let display = crt_240_display();
+        let metrics = CrtUiMetrics::for_display(&display);
+        let mut renderer = ArcadeListRenderer::new_for_crt_display(metrics, &display);
+        let geometry = ArcadeListGeometry::crt_for_content(display.content_rect(), metrics, false);
+        renderer.set_geometry_for_render_h(geometry, display.content_rect().bottom());
+        let games = games("arcade", 24);
+        renderer.draw(ArcadeGameView::contiguous(&games), 0, 0.0, true);
+
+        let layout = crate::ui_display::UiLayoutGeometry::for_display(
+            &display,
+            crate::ui_display::ScreenOrientation::Normal,
+        )
+        .output_layout();
+        let sentinel = Rgb565Pixel(0xdead);
+        let backdrop = (0..layout.len())
+            .map(|index| Rgb565Pixel((index as u16).wrapping_mul(17)))
+            .collect::<Vec<_>>();
+        let mut target = UiFrameTarget::cached(FramebufferTargetGeometry::new(640, 480));
+        target.cached_565_mut().fill(sentinel);
+        assert!(renderer.compose_layer_over_backdrop_to_oriented_cached(
+            &mut target,
+            &backdrop,
+            layout,
+            true,
+        ));
+
+        renderer.draw(
+            ArcadeGameView::contiguous(&games),
+            1,
+            metrics.game_row_height as f32,
+            false,
+        );
+        target.cached_565_mut().fill(sentinel);
+        assert!(renderer.compose_layer_over_backdrop_to_oriented_cached(
+            &mut target,
+            &backdrop,
+            layout,
+            true,
+        ));
+
+        let dirty = renderer.dirty_rect();
+        for y in dirty.y0..dirty.y1 {
+            for x in dirty.x0..dirty.x1 {
+                assert_ne!(
+                    target.cached_565()[layout.physical_offset(x, y)],
+                    sentinel,
+                    "viewport pixel ({x}, {y}) was not restored"
+                );
+            }
+        }
+        let unselected_y = dirty.y0 + metrics.game_row_height as usize * 4 + 2;
+        let unselected_x = dirty.x0 + 2;
+        let offset = layout.physical_offset(unselected_x, unselected_y);
+        assert_eq!(target.cached_565()[offset], backdrop[offset]);
     }
 
     fn surface_in_viewport_order(renderer: &ArcadeListRenderer) -> Vec<Rgb565Pixel> {
