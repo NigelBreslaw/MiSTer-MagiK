@@ -580,6 +580,7 @@ mod imp {
 
     pub struct ScreensaverProfiler {
         state: State,
+        config: CpuProfileConfig,
         trigger: Option<BoundedProfileTrigger>,
         warmup: Duration,
         duration: Duration,
@@ -608,6 +609,7 @@ mod imp {
             };
             Self {
                 state,
+                config: config.clone(),
                 trigger,
                 warmup: config.warmup,
                 duration: config.duration,
@@ -682,7 +684,7 @@ mod imp {
         }
 
         fn start(&mut self, first_frame: u64) {
-            match start_enabled() {
+            match start_enabled(&self.config) {
                 Some(profiler) => {
                     self.state = State::Active {
                         profiler,

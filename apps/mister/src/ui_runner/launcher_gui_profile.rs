@@ -512,6 +512,35 @@ impl GuiProfilingController {
         }));
     }
 
+    pub(super) fn record_frame_work(
+        &mut self,
+        frame: u64,
+        wall_us: u128,
+        vsync_us: u128,
+        crt_backdrop_prepare_us: u64,
+        crt_backdrop_prepare_pixels: u32,
+        crt_backdrop_blend_us: u64,
+        crt_backdrop_blend_pixels: u32,
+    ) {
+        if !self.active() {
+            return;
+        }
+        let Some(record) =
+            self.frames.iter_mut().rev().find(|record| {
+                record.get("frame").and_then(serde_json::Value::as_u64) == Some(frame)
+            })
+        else {
+            self.dropped_frames = self.dropped_frames.saturating_add(1);
+            return;
+        };
+        record["wall_us"] = json!(wall_us.min(u128::from(u64::MAX)) as u64);
+        record["vsync_us"] = json!(vsync_us.min(u128::from(u64::MAX)) as u64);
+        record["crt_backdrop_prepare_us"] = json!(crt_backdrop_prepare_us);
+        record["crt_backdrop_prepare_pixels"] = json!(crt_backdrop_prepare_pixels);
+        record["crt_backdrop_blend_us"] = json!(crt_backdrop_blend_us);
+        record["crt_backdrop_blend_pixels"] = json!(crt_backdrop_blend_pixels);
+    }
+
     pub(super) fn record_latch(
         &mut self,
         frame: u64,
@@ -673,6 +702,33 @@ mod tests {
             .unwrap();
         controller.tick(now + PHASE_TIMEOUT);
         assert!(matches!(controller.state, GuiProfileState::Failed(_)));
+    }
+
+    #[test]
+    fn frame_work_records_foreground_and_crt_backdrop_costs() {
+        let now = Instant::now();
+        let mut controller = GuiProfilingController::enabled_for_test(now);
+        controller
+            .request_phase(GuiProfilePhase::SettledSettings, now)
+            .unwrap();
+        controller
+            .confirm_phase_presented(GuiProfilePhase::SettledSettings, now, 1_000)
+            .unwrap();
+        controller.record_frame(
+            7,
+            2_000,
+            "event-driven",
+            GuiBridgeProfilePhase::None,
+            GuiRasterProfilePhase::Ordinary,
+            Vec::new(),
+        );
+        controller.record_frame_work(7, 8_500, 3_000, 220, 307_200, 180, 307_200);
+        assert_eq!(controller.frames[0]["wall_us"], 8_500);
+        assert_eq!(controller.frames[0]["vsync_us"], 3_000);
+        assert_eq!(controller.frames[0]["crt_backdrop_prepare_us"], 220);
+        assert_eq!(controller.frames[0]["crt_backdrop_prepare_pixels"], 307_200);
+        assert_eq!(controller.frames[0]["crt_backdrop_blend_us"], 180);
+        assert_eq!(controller.frames[0]["crt_backdrop_blend_pixels"], 307_200);
     }
 
     #[test]

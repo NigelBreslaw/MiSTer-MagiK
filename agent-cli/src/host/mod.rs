@@ -7761,12 +7761,12 @@ fn run_gui_frame_profile_route(
             "GUI profiling completion",
         )?;
         let profile: Value = serde_json::from_str(&profile_text)?;
-        validate_gui_profile_route(&profile, pmu)?;
         get(
             session,
             GUI_PROFILE_REMOTE_COMPLETE,
             &output_dir.join("profile.json"),
         )?;
+        validate_gui_profile_route(&profile, pmu)?;
         let status_after = read_launcher_status(session)?;
         Ok(json!({
             "schema": "mister-magik-gui-profile-route-v1",
@@ -7843,12 +7843,7 @@ fn profile_installed_arcade_velocity_scroll(
         );
     }
     let display_mode = parse_display_reply_active(original_display.stdout.trim())?;
-    if !display_mode.ends_with("p60") {
-        return Err(format!(
-            "Arcade velocity-scroll benchmark requires an active 60 Hz mode, found {display_mode}"
-        )
-        .into());
-    }
+    let _ = arcade_velocity_scroll_minimum_fps(&display_mode)?;
     fs::create_dir_all(output_dir)?;
 
     let telemetry_endpoint = config.agent()?.clone();
@@ -7968,6 +7963,7 @@ fn summarize_arcade_velocity_scroll(
     use std::fmt::Write as _;
 
     let profile = gui_profile_payload(route)?;
+    let minimum_physical_fps = arcade_velocity_scroll_minimum_fps(display_mode)?;
     let phase_started_us = gui_profile_phase_marker_us(profile, "arcade-scroll", "started")?;
     let phase_presented_us = gui_profile_phase_marker_us(profile, "arcade-scroll", "presented")?;
     let phase_duration_us = phase_presented_us
@@ -8101,12 +8097,50 @@ fn summarize_arcade_velocity_scroll(
     let mut distinct_selections = selection_indices.clone();
     distinct_selections.sort_unstable();
     distinct_selections.dedup();
+    let mut foreground_work_us = scroll_profile_frames
+        .iter()
+        .map(|frame| frame_u64(frame, "wall_us").saturating_sub(frame_u64(frame, "vsync_us")))
+        .collect::<Vec<_>>();
+    foreground_work_us.sort_unstable();
+    let mut backdrop_prepare_us = scroll_profile_frames
+        .iter()
+        .map(|frame| frame_u64(frame, "crt_backdrop_prepare_us"))
+        .collect::<Vec<_>>();
+    backdrop_prepare_us.sort_unstable();
+    let mut backdrop_blend_us = scroll_profile_frames
+        .iter()
+        .map(|frame| frame_u64(frame, "crt_backdrop_blend_us"))
+        .collect::<Vec<_>>();
+    backdrop_blend_us.sort_unstable();
+    let backdrop_prepare_pixels = scroll_profile_frames
+        .iter()
+        .map(|frame| frame_u64(frame, "crt_backdrop_prepare_pixels"))
+        .max()
+        .unwrap_or(0);
+    let backdrop_blend_pixels = scroll_profile_frames
+        .iter()
+        .map(|frame| frame_u64(frame, "crt_backdrop_blend_pixels"))
+        .max()
+        .unwrap_or(0);
+    let dropped_profile_frame_records = profile
+        .get("dropped_frame_records")
+        .and_then(Value::as_u64)
+        .unwrap_or(u64::MAX);
+    let dropped_worker_profiles = profile
+        .pointer("/worker_profiles/dropped_profiles")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
     let mut quality_failures = Vec::new();
     if phase_duration_us < ARCADE_VELOCITY_SCROLL_DURATION_MS * 1_000 {
         quality_failures.push("scroll-window-shorter-than-20-seconds");
     }
-    if physical_fps < 59.9 {
-        quality_failures.push("physical-fps-below-59.9");
+    if physical_fps < minimum_physical_fps {
+        quality_failures.push(arcade_velocity_scroll_fps_failure(minimum_physical_fps));
+    }
+    if let Some(limit_us) = arcade_velocity_scroll_foreground_p99_limit_us(display_mode)
+        && percentile_99(&foreground_work_us) >= limit_us
+    {
+        quality_failures.push("foreground-work-p99-over-route-budget");
     }
     if dropped_frames != 0 {
         quality_failures.push("physical-dropped-frames");
@@ -8119,6 +8153,12 @@ fn summarize_arcade_velocity_scroll(
     }
     if sequence_gaps != 0 {
         quality_failures.push("presentation-sequence-gaps");
+    }
+    if dropped_profile_frame_records != 0 {
+        quality_failures.push("profile-frame-records-dropped");
+    }
+    if dropped_worker_profiles != 0 {
+        quality_failures.push("worker-profile-records-dropped");
     }
     if selection_changes == 0 || distinct_selections.len() < 2 {
         quality_failures.push("arcade-selection-did-not-advance");
@@ -8138,9 +8178,14 @@ fn summarize_arcade_velocity_scroll(
         "phase_duration_us": phase_duration_us,
         "frames": frames.len(),
         "submitted_fps": submitted_fps,
+        "minimum_physical_fps": minimum_physical_fps,
         "physical_refresh": physical_refresh,
         "latch_drop_delta": latch_drop_delta,
         "sequence_gaps": sequence_gaps,
+        "profiling_record_loss": {
+            "frame_records": dropped_profile_frame_records,
+            "worker_profiles": dropped_worker_profiles,
+        },
         "selection": {
             "first": first_selected,
             "final": final_selected,
@@ -8153,6 +8198,15 @@ fn summarize_arcade_velocity_scroll(
             "median": median_u64(&completion_intervals).unwrap_or(0),
             "p99": percentile_99(&completion_intervals),
             "max": completion_intervals.last().copied().unwrap_or(0),
+        },
+        "foreground_work_us": percentile_summary(&foreground_work_us),
+        "crt_backdrop_prepare": {
+            "timing_us": percentile_summary(&backdrop_prepare_us),
+            "max_pixels": backdrop_prepare_pixels,
+        },
+        "crt_backdrop_blend": {
+            "timing_us": percentile_summary(&backdrop_blend_us),
+            "max_pixels": backdrop_blend_pixels,
         },
         "measurement": {
             "telemetry_analytics_mode": "off",
@@ -8182,14 +8236,79 @@ fn summarize_arcade_velocity_scroll(
         ARCADE_VELOCITY_SCROLL_DURATION_MS
     )?;
     writeln!(report, "- Physical FPS: {:.3}", physical_fps)?;
+    writeln!(report, "- Minimum physical FPS: {minimum_physical_fps:.1}")?;
     writeln!(report, "- Physical dropped frames: {dropped_frames}")?;
     writeln!(report, "- Latch drops: {latch_drop_delta}")?;
     writeln!(report, "- Sequence gaps: {sequence_gaps}")?;
+    writeln!(
+        report,
+        "- Profiling record loss (frames / workers): {dropped_profile_frame_records} / {dropped_worker_profiles}"
+    )?;
     writeln!(report, "- Submitted FPS: {:.3}", submitted_fps)?;
     writeln!(report, "- Telemetry analytics: off (observer-free)")?;
     writeln!(report, "- Selection changes: {selection_changes}\n")?;
+    writeln!(
+        report,
+        "- Foreground work (p95 / p99 / max): {} / {} / {} us",
+        percentile_95(&foreground_work_us),
+        percentile_99(&foreground_work_us),
+        foreground_work_us.last().copied().unwrap_or(0),
+    )?;
+    writeln!(
+        report,
+        "- Backdrop prepare (p95 / p99 / max): {} / {} / {} us; max pixels {}",
+        percentile_95(&backdrop_prepare_us),
+        percentile_99(&backdrop_prepare_us),
+        backdrop_prepare_us.last().copied().unwrap_or(0),
+        backdrop_prepare_pixels,
+    )?;
+    writeln!(
+        report,
+        "- Backdrop blend (p95 / p99 / max): {} / {} / {} us; max pixels {}",
+        percentile_95(&backdrop_blend_us),
+        percentile_99(&backdrop_blend_us),
+        backdrop_blend_us.last().copied().unwrap_or(0),
+        backdrop_blend_pixels,
+    )?;
     fs::write(output_dir.join("report.md"), report)?;
     Ok(summary)
+}
+
+fn arcade_velocity_scroll_minimum_fps(display_mode: &str) -> Result<f64> {
+    if display_mode.ends_with("p60") {
+        Ok(59.9)
+    } else if display_mode.ends_with("p50") {
+        Ok(49.9)
+    } else {
+        Err(format!(
+            "Arcade velocity-scroll benchmark requires a resolved p50 or p60 mode, found {display_mode}"
+        )
+        .into())
+    }
+}
+
+fn arcade_velocity_scroll_fps_failure(minimum_physical_fps: f64) -> &'static str {
+    if minimum_physical_fps < 59.0 {
+        "physical-fps-below-49.9"
+    } else {
+        "physical-fps-below-59.9"
+    }
+}
+
+fn arcade_velocity_scroll_foreground_p99_limit_us(display_mode: &str) -> Option<u64> {
+    match display_mode {
+        "crt-240p60" => Some(13_300),
+        "crt-288p50" => Some(15_900),
+        _ => None,
+    }
+}
+
+fn percentile_summary(values: &[u64]) -> Value {
+    json!({
+        "p95": percentile_95(values),
+        "p99": percentile_99(values),
+        "max": values.last().copied().unwrap_or(0),
+    })
 }
 
 fn wait_for_remote_text(
@@ -8212,10 +8331,13 @@ fn wait_for_remote_text(
 
 fn validate_gui_profile_route(profile: &Value, pmu: bool) -> Result<()> {
     if profile.get("schema").and_then(Value::as_str) != Some("mister-magik-gui-profiling-window-v1")
-        || profile.get("state").and_then(Value::as_str) != Some("complete")
+        || !matches!(
+            profile.get("state").and_then(Value::as_str),
+            Some("complete" | "failed")
+        )
+        || !profile.get("failure").is_none_or(Value::is_null)
         || profile.get("pmu_requested").and_then(Value::as_bool) != Some(pmu)
         || profile.get("pmu_valid").and_then(Value::as_bool) != Some(true)
-        || profile.get("dropped_frame_records").and_then(Value::as_u64) != Some(0)
     {
         return Err("GUI profiling route returned invalid window evidence".into());
     }
@@ -19713,6 +19835,13 @@ fn percentile_99(values: &[u64]) -> u64 {
     values[(values.len() * 99).div_ceil(100).saturating_sub(1)]
 }
 
+fn percentile_95(values: &[u64]) -> u64 {
+    if values.is_empty() {
+        return 0;
+    }
+    values[(values.len() * 95).div_ceil(100).saturating_sub(1)]
+}
+
 fn reboot_remote_command(mode: RebootMode) -> String {
     match mode {
         RebootMode::Supervised => acknowledged_main_command("mister_magik_reboot"),
@@ -24047,6 +24176,13 @@ mod tests {
             "phase_markers": markers,
         });
         validate_gui_profile_route(&passing, false).unwrap();
+        let mut quality_failed = passing.clone();
+        quality_failed["state"] = json!("failed");
+        quality_failed["failure"] = Value::Null;
+        quality_failed["dropped_frame_records"] = json!(3);
+        validate_gui_profile_route(&quality_failed, false).unwrap();
+        quality_failed["failure"] = json!("profiling route timed out");
+        assert!(validate_gui_profile_route(&quality_failed, false).is_err());
         let mut missing = passing;
         missing["phase_markers"].as_array_mut().unwrap().pop();
         assert!(validate_gui_profile_route(&missing, false).is_err());
@@ -28243,6 +28379,48 @@ H: Handlers=event3 js0"#
                 < 59.9
         );
         assert_eq!(summary["legs"][11]["passed"], true);
+    }
+
+    #[test]
+    fn arcade_velocity_scroll_accepts_p50_and_p60_with_route_thresholds() {
+        assert_eq!(
+            arcade_velocity_scroll_minimum_fps("crt-240p60").unwrap(),
+            59.9
+        );
+        assert_eq!(
+            arcade_velocity_scroll_minimum_fps("crt-288p50").unwrap(),
+            49.9
+        );
+        assert_eq!(
+            arcade_velocity_scroll_minimum_fps("hdmi-1920x1080p60").unwrap(),
+            59.9
+        );
+        assert!(arcade_velocity_scroll_minimum_fps("custom").is_err());
+        assert_eq!(
+            arcade_velocity_scroll_fps_failure(49.9),
+            "physical-fps-below-49.9"
+        );
+        assert_eq!(
+            arcade_velocity_scroll_fps_failure(59.9),
+            "physical-fps-below-59.9"
+        );
+    }
+
+    #[test]
+    fn arcade_velocity_scroll_applies_only_low_resolution_crt_work_budgets() {
+        assert_eq!(
+            arcade_velocity_scroll_foreground_p99_limit_us("crt-240p60"),
+            Some(13_300)
+        );
+        assert_eq!(
+            arcade_velocity_scroll_foreground_p99_limit_us("crt-288p50"),
+            Some(15_900)
+        );
+        assert_eq!(
+            arcade_velocity_scroll_foreground_p99_limit_us("hdmi-1920x1080p60"),
+            None
+        );
+        assert_eq!(percentile_summary(&[1, 2, 3, 4, 5])["max"], 5);
     }
 
     const MAME_1942_FIXTURE: &str = r#"<?xml version="1.0"?>

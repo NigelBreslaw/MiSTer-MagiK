@@ -9814,7 +9814,12 @@ pub(super) fn run_launcher_loop(
                     crt_backdrop_work_trace =
                         backdrop.compose(loop_start.saturating_duration_since(run_start));
                     if layer_target.compose_crt_backdrop(backdrop.pixels()) {
-                        crt_backdrop_full_damage = Some(full_rect);
+                        crt_backdrop_full_damage = Some(DirtyRect {
+                            x0: 0,
+                            y0: 0,
+                            x1: layout.composition_w(),
+                            y1: layout.composition_h(),
+                        });
                     }
                     if crt_backdrop_work_trace.active {
                         request_launcher_redraw!();
@@ -10065,6 +10070,10 @@ pub(super) fn run_launcher_loop(
         let mut custom_draw_trace = LauncherCustomDrawTrace {
             arcade_list_update_us,
             preview_blit_us,
+            crt_backdrop_prepare_us: crt_backdrop_work_trace.prepare_us,
+            crt_backdrop_prepare_pixels: crt_backdrop_work_trace.prepare_pixels,
+            crt_backdrop_blend_us: crt_backdrop_work_trace.blend_us,
+            crt_backdrop_blend_pixels: crt_backdrop_work_trace.blend_pixels,
             effect_label_us,
             navigation_transition_base_copy_us: navigation_transition
                 .last_render_stats()
@@ -10700,6 +10709,19 @@ pub(super) fn run_launcher_loop(
             },
         }
         .build();
+        gui_profiling.record_frame_work(
+            frames,
+            (presented_frame.frame_t4 - presented_frame.loop_start).as_micros(),
+            presented_frame.vsync_us_override.unwrap_or_else(|| {
+                (presented_frame.frame_t3 - presented_frame.custom_draw_done).as_micros()
+            }),
+            presented_frame.custom_draw_trace.crt_backdrop_prepare_us,
+            presented_frame
+                .custom_draw_trace
+                .crt_backdrop_prepare_pixels,
+            presented_frame.custom_draw_trace.crt_backdrop_blend_us,
+            presented_frame.custom_draw_trace.crt_backdrop_blend_pixels,
+        );
         let launcher_response_present_receipt = LauncherResponsePresentReceipt {
             post_accepted_at_us: crate::input_hub::monotonic_us(),
             post_accepted_execution: launcher_response_trace.execution_stamp(),

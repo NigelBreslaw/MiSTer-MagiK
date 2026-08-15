@@ -567,6 +567,10 @@ struct PreviewScrollTraceRow {
     custom_draw_us: u128,
     arcade_list_update_us: u128,
     preview_blit_us: u128,
+    crt_backdrop_prepare_us: u64,
+    crt_backdrop_prepare_pixels: u32,
+    crt_backdrop_blend_us: u64,
+    crt_backdrop_blend_pixels: u32,
     preview_fade_wall_us: u64,
     preview_fade_cpu_us: u64,
     preview_fade_pixels: u32,
@@ -764,7 +768,7 @@ impl PreviewScrollTraceRow {
         out.pop();
         let _ = writeln!(
             out,
-            "\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            "\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             self.frame_finish_us,
             self.post_finish_tail_us,
             self.screensaver_active,
@@ -780,7 +784,11 @@ impl PreviewScrollTraceRow {
             self.screensaver_cards_culled,
             self.search_index_state,
             self.startup_elapsed_us,
-            self.monotonic_us
+            self.monotonic_us,
+            self.crt_backdrop_prepare_us,
+            self.crt_backdrop_prepare_pixels,
+            self.crt_backdrop_blend_us,
+            self.crt_backdrop_blend_pixels
         );
     }
 }
@@ -831,6 +839,10 @@ fn preview_scroll_trace_row_from_frame(
         custom_draw_us: (frame.custom_draw_done - frame.custom_draw_start).as_micros(),
         arcade_list_update_us: frame.custom_draw_trace.arcade_list_update_us,
         preview_blit_us: frame.custom_draw_trace.preview_blit_us,
+        crt_backdrop_prepare_us: frame.custom_draw_trace.crt_backdrop_prepare_us,
+        crt_backdrop_prepare_pixels: frame.custom_draw_trace.crt_backdrop_prepare_pixels,
+        crt_backdrop_blend_us: frame.custom_draw_trace.crt_backdrop_blend_us,
+        crt_backdrop_blend_pixels: frame.custom_draw_trace.crt_backdrop_blend_pixels,
         preview_fade_wall_us: frame.preview_transition.fade.wall_us,
         preview_fade_cpu_us: frame.preview_transition.fade.cpu_us,
         preview_fade_pixels: frame.preview_transition.fade.pixels,
@@ -950,6 +962,10 @@ impl LauncherFrameAccounting {
 pub(super) struct LauncherCustomDrawTrace {
     pub(super) arcade_list_update_us: u128,
     pub(super) preview_blit_us: u128,
+    pub(super) crt_backdrop_prepare_us: u64,
+    pub(super) crt_backdrop_prepare_pixels: u32,
+    pub(super) crt_backdrop_blend_us: u64,
+    pub(super) crt_backdrop_blend_pixels: u32,
     pub(super) effect_label_us: u128,
     pub(super) navigation_transition_base_copy_us: u128,
     pub(super) navigation_transition_settings_blit_us: u128,
@@ -2049,6 +2065,10 @@ impl LauncherFrameAccounting {
                     .custom_draw_trace
                     .orientation_transition_stats
                     .progress_ppm,
+                crt_backdrop_prepare_us: frame.custom_draw_trace.crt_backdrop_prepare_us,
+                crt_backdrop_prepare_pixels: frame.custom_draw_trace.crt_backdrop_prepare_pixels,
+                crt_backdrop_blend_us: frame.custom_draw_trace.crt_backdrop_blend_us,
+                crt_backdrop_blend_pixels: frame.custom_draw_trace.crt_backdrop_blend_pixels,
                 wall_us,
                 prepare_us,
                 slint_timer_dispatch_us: u128_to_u64_saturating(
@@ -3509,7 +3529,7 @@ fn open_preview_scroll_trace() -> Option<PreviewScrollTrace> {
                 .ok()?;
             let mut file = BufWriter::with_capacity(64 * 1024, file);
             file.write_all(
-                b"frame\telapsed_us\tloop_delta_us\tselected\tvisual_index\thome_screen\thome_menu_token\thome_selected_token\thome_selected_index\thome_scroll_x\thome_scroll_max\tcache_state\ttransition_effect\ttransition_progress\tarcade_update\trows\tdirect_preview_rows\tpresent_bytes\twasted_present_bytes\tprepare_us\tcatalog_worker_us\tcatalog_message_count\tcatalog_backlog\tcatalog_ready_deferred\tcatalog_ready_deferred_age_us\tmedia_worker_us\tmedia_gate_us\tpreview_schedule_us\tpreview_apply_us\tslint_render_us\tcustom_draw_us\tarcade_list_update_us\tpreview_blit_us\tpreview_fade_wall_us\tpreview_fade_cpu_us\tpreview_fade_pixels\tpreview_fade_rows\tpreview_fade_path\tpreview_fade_alpha_bucket\teffect_label_us\tpre_render_wait_us\tpost_present_wait_us\tpost_frame_tail_us\tvsync_us\tfb_present_us\tcached_present_us\thidden_compose_us\thidden_preview_compose_us\thidden_arcade_compose_us\tdirect_preview_present_us\tarcade_list_present_us\tmain_present_backend\tmain_present_status\tmain_present_buffer\tmain_present_hidden_copy_us\tmain_present_hidden_invalid_bytes\tmain_present_hidden_rect_count\tmain_present_hidden_catchup_bytes\tmain_present_hidden_full_copy\tmain_present_request_us\tmain_present_set_vga_fb_us\tmain_present_wait_us\tmain_present_sequence\tmain_present_flip_count\tmain_present_drop_count\tvsync_source\tvsync_period_us\tvsync_miss_streak\tvsync_stale_hits\tvsync_wait_start_age_us\tvsync_accepted_hit_age_us\tframe_start_phase_us\tpresent_phase_us\thome_pan_present_active\thome_horizontal_input_held\tredraw_pending\twake_reasons_bits\tdirty_y0\tdirty_y1\tstatus_write_due\truntime_status_write_deferred\tframe_tail_slack_us\tstatus_string_copy_us\tstatus_string_copy_bytes\truntime_status_write_us\tstatus_write_duration_us\twall_us\tframe_finish_us\tpost_finish_tail_us\tscreensaver_active\tscreensaver_active_cards\tscreensaver_archive_poll_us\tscreensaver_card_adopt_us\tscreensaver_cards_adopted\tscreensaver_parade_advance_us\tscreensaver_background_us\tscreensaver_draw_order_us\tscreensaver_tile_blit_us\tscreensaver_cards_drawn\tscreensaver_cards_culled\tsearch_index_state\tstartup_elapsed_us\tmonotonic_us\n",
+                b"frame\telapsed_us\tloop_delta_us\tselected\tvisual_index\thome_screen\thome_menu_token\thome_selected_token\thome_selected_index\thome_scroll_x\thome_scroll_max\tcache_state\ttransition_effect\ttransition_progress\tarcade_update\trows\tdirect_preview_rows\tpresent_bytes\twasted_present_bytes\tprepare_us\tcatalog_worker_us\tcatalog_message_count\tcatalog_backlog\tcatalog_ready_deferred\tcatalog_ready_deferred_age_us\tmedia_worker_us\tmedia_gate_us\tpreview_schedule_us\tpreview_apply_us\tslint_render_us\tcustom_draw_us\tarcade_list_update_us\tpreview_blit_us\tpreview_fade_wall_us\tpreview_fade_cpu_us\tpreview_fade_pixels\tpreview_fade_rows\tpreview_fade_path\tpreview_fade_alpha_bucket\teffect_label_us\tpre_render_wait_us\tpost_present_wait_us\tpost_frame_tail_us\tvsync_us\tfb_present_us\tcached_present_us\thidden_compose_us\thidden_preview_compose_us\thidden_arcade_compose_us\tdirect_preview_present_us\tarcade_list_present_us\tmain_present_backend\tmain_present_status\tmain_present_buffer\tmain_present_hidden_copy_us\tmain_present_hidden_invalid_bytes\tmain_present_hidden_rect_count\tmain_present_hidden_catchup_bytes\tmain_present_hidden_full_copy\tmain_present_request_us\tmain_present_set_vga_fb_us\tmain_present_wait_us\tmain_present_sequence\tmain_present_flip_count\tmain_present_drop_count\tvsync_source\tvsync_period_us\tvsync_miss_streak\tvsync_stale_hits\tvsync_wait_start_age_us\tvsync_accepted_hit_age_us\tframe_start_phase_us\tpresent_phase_us\thome_pan_present_active\thome_horizontal_input_held\tredraw_pending\twake_reasons_bits\tdirty_y0\tdirty_y1\tstatus_write_due\truntime_status_write_deferred\tframe_tail_slack_us\tstatus_string_copy_us\tstatus_string_copy_bytes\truntime_status_write_us\tstatus_write_duration_us\twall_us\tframe_finish_us\tpost_finish_tail_us\tscreensaver_active\tscreensaver_active_cards\tscreensaver_archive_poll_us\tscreensaver_card_adopt_us\tscreensaver_cards_adopted\tscreensaver_parade_advance_us\tscreensaver_background_us\tscreensaver_draw_order_us\tscreensaver_tile_blit_us\tscreensaver_cards_drawn\tscreensaver_cards_culled\tsearch_index_state\tstartup_elapsed_us\tmonotonic_us\tcrt_backdrop_prepare_us\tcrt_backdrop_prepare_pixels\tcrt_backdrop_blend_us\tcrt_backdrop_blend_pixels\n",
             )
             .map_err(|e| crate::ui_errln!("preview scroll trace: header write failed: {e}"))
             .ok()?;
