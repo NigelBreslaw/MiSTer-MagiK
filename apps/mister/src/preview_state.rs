@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use std::collections::{HashSet, VecDeque};
+use std::sync::mpsc::{Receiver, SyncSender, TrySendError, sync_channel};
 use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -11,6 +12,7 @@ use slint::platform::software_renderer::Rgb565Pixel;
 use slint_ui::launcher::PreviewStatus;
 
 use crate::arcade_catalog::{ArcadeGameEntry, ArcadeGameView};
+use crate::crt_backdrop::{PreparedCrtBackdrop, prepare_dimmed_rgb565_target};
 use crate::preview_worker::{
     DEFAULT_PREVIEW_CACHE_CAP, DEFAULT_PREVIEW_RADIUS, PreviewLoadSource, PreviewPixels,
     PreviewPriority, PreviewResult, PreviewSelectedRequestHandle, PreviewWorker,
@@ -119,6 +121,93 @@ struct PreviewImage {
     source_h: u32,
     display_w: u32,
     display_h: u32,
+}
+
+const CRT_PREPARE_QUEUE_CAP: usize = 2;
+const CRT_PREPARED_CACHE_BYTES: usize = 16 * 1024 * 1024;
+const CRT_PREPARE_WIDTH: usize = 640;
+const CRT_PREPARE_PHYSICAL_HEIGHT: usize = 240;
+
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+struct PreparedBackdropIdentity {
+    key: String,
+    epoch: u64,
+    width: usize,
+    physical_height: usize,
+    logical_height: usize,
+}
+
+struct BackdropPrepareRequest {
+    identity: PreparedBackdropIdentity,
+    queued_at: Instant,
+    image: Arc<PreviewImage>,
+}
+
+struct BackdropPrepareResult {
+    identity: PreparedBackdropIdentity,
+    queued_us: u64,
+    prepare_us: u64,
+    pixels: Arc<[Rgb565Pixel]>,
+    row_repeats: Arc<[bool]>,
+}
+
+struct BackdropPrepareWorker {
+    tx: SyncSender<BackdropPrepareRequest>,
+    rx: Receiver<BackdropPrepareResult>,
+}
+
+impl BackdropPrepareWorker {
+    fn new() -> Self {
+        let (tx, requests) = sync_channel(CRT_PREPARE_QUEUE_CAP);
+        let (results, rx) = sync_channel(CRT_PREPARE_QUEUE_CAP);
+        std::thread::Builder::new()
+            .name("crt-backdrop-preparer".to_string())
+            .spawn(move || {
+                while let Ok(request) = requests.recv() {
+                    let started = Instant::now();
+                    let Some((pixels, row_repeats)) = (match &request.image.pixels {
+                        PreviewImagePixels::Rgb565 {
+                            words,
+                            stride_pixels,
+                        } => prepare_dimmed_rgb565_target(
+                            rgb565_words_as_pixels(words),
+                            request.image.source_w as usize,
+                            request.image.source_h as usize,
+                            *stride_pixels,
+                            request.identity.width,
+                            request.identity.physical_height,
+                            request.identity.logical_height,
+                        ),
+                    }) else {
+                        continue;
+                    };
+                    let result = BackdropPrepareResult {
+                        identity: request.identity,
+                        queued_us: request
+                            .queued_at
+                            .elapsed()
+                            .as_micros()
+                            .min(u128::from(u64::MAX)) as u64,
+                        prepare_us: started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64,
+                        pixels: Arc::from(pixels),
+                        row_repeats: Arc::from(row_repeats),
+                    };
+                    if results.send(result).is_err() {
+                        break;
+                    }
+                }
+            })
+            .expect("spawn crt-backdrop-preparer");
+        Self { tx, rx }
+    }
+}
+
+#[derive(Clone)]
+struct PreparedBackdropCacheEntry {
+    identity: PreparedBackdropIdentity,
+    pixels: Arc<[Rgb565Pixel]>,
+    row_repeats: Arc<[bool]>,
+    bytes: usize,
 }
 
 enum PreviewImagePixels {
@@ -375,6 +464,16 @@ pub struct PreviewState {
     last_apply_trace: PreviewApplyTrace,
     last_selected_timing: SelectedPreviewTiming,
     frame_cache_evictions: u32,
+    backdrop_prepare_worker: BackdropPrepareWorker,
+    backdrop_cache: VecDeque<PreparedBackdropCacheEntry>,
+    backdrop_cache_bytes: usize,
+    backdrop_pending: HashSet<PreparedBackdropIdentity>,
+    backdrop_epoch: u64,
+    backdrop_revision: u64,
+    backdrop_prepare_queue_us: u64,
+    backdrop_prepare_us: u64,
+    backdrop_prepare_cancellations: u32,
+    backdrop_prepare_evictions: u32,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -669,6 +768,16 @@ impl PreviewState {
             last_apply_trace: PreviewApplyTrace::default(),
             last_selected_timing: SelectedPreviewTiming::default(),
             frame_cache_evictions: 0,
+            backdrop_prepare_worker: BackdropPrepareWorker::new(),
+            backdrop_cache: VecDeque::new(),
+            backdrop_cache_bytes: 0,
+            backdrop_pending: HashSet::new(),
+            backdrop_epoch: 1,
+            backdrop_revision: 0,
+            backdrop_prepare_queue_us: 0,
+            backdrop_prepare_us: 0,
+            backdrop_prepare_cancellations: 0,
+            backdrop_prepare_evictions: 0,
         }
     }
 
@@ -733,6 +842,11 @@ impl PreviewState {
         self.prefetch_direction = 0;
         self.last_prefetch_window = None;
         self.prefetch_throttle_until = None;
+        self.backdrop_epoch = self.backdrop_epoch.wrapping_add(1).max(1);
+        self.backdrop_pending.clear();
+        self.backdrop_cache.clear();
+        self.backdrop_cache_bytes = 0;
+        self.backdrop_revision = self.backdrop_revision.wrapping_add(1).max(1);
         bridge.set_arcade_preview_placeholder_visible(true);
         bridge.set_arcade_preview_status(PreviewStatus::Empty);
         bridge.set_arcade_preview_title("".into());
@@ -1800,6 +1914,139 @@ impl PreviewState {
         let evictions = self.frame_cache_evictions;
         self.frame_cache_evictions = 0;
         evictions
+    }
+
+    /// Drain completed target preparations without ever waiting on the worker.
+    /// Results from an exited route or an older selection epoch are discarded
+    /// before they can enter the bounded LRU.
+    pub fn poll_backdrop_preparations(&mut self) {
+        while let Ok(result) = self.backdrop_prepare_worker.rx.try_recv() {
+            self.backdrop_pending.remove(&result.identity);
+            self.backdrop_prepare_queue_us = result.queued_us;
+            self.backdrop_prepare_us = result.prepare_us;
+            if result.identity.epoch != self.backdrop_epoch {
+                self.backdrop_prepare_cancellations =
+                    self.backdrop_prepare_cancellations.saturating_add(1);
+                continue;
+            }
+            let bytes = result
+                .pixels
+                .len()
+                .saturating_mul(std::mem::size_of::<Rgb565Pixel>())
+                .saturating_add(result.row_repeats.len());
+            if bytes > CRT_PREPARED_CACHE_BYTES {
+                self.backdrop_prepare_cancellations =
+                    self.backdrop_prepare_cancellations.saturating_add(1);
+                continue;
+            }
+            if let Some(index) = self
+                .backdrop_cache
+                .iter()
+                .position(|entry| entry.identity == result.identity)
+            {
+                self.backdrop_cache_bytes = self
+                    .backdrop_cache_bytes
+                    .saturating_sub(self.backdrop_cache[index].bytes);
+                self.backdrop_cache.remove(index);
+            }
+            self.backdrop_cache.push_back(PreparedBackdropCacheEntry {
+                identity: result.identity,
+                pixels: result.pixels,
+                row_repeats: result.row_repeats,
+                bytes,
+            });
+            self.backdrop_cache_bytes = self.backdrop_cache_bytes.saturating_add(bytes);
+            self.backdrop_revision = self.backdrop_revision.wrapping_add(1).max(1);
+            while self.backdrop_cache_bytes > CRT_PREPARED_CACHE_BYTES {
+                let Some(evicted) = self.backdrop_cache.pop_front() else {
+                    break;
+                };
+                self.backdrop_cache_bytes = self.backdrop_cache_bytes.saturating_sub(evicted.bytes);
+                self.backdrop_prepare_evictions = self.backdrop_prepare_evictions.saturating_add(1);
+            }
+        }
+    }
+
+    /// Queue preparation for the currently selected decoded image.  The
+    /// bounded channel and identity set make this non-blocking even during a
+    /// long-press selection burst.
+    pub fn request_backdrop_prepare(
+        &mut self,
+        width: usize,
+        physical_height: usize,
+        logical_height: usize,
+    ) {
+        let Some(key) = self.selected_preview_key.clone() else {
+            return;
+        };
+        let Some(image) = self.cache.peek_shared(&key).cloned() else {
+            return;
+        };
+        let identity = PreparedBackdropIdentity {
+            key,
+            epoch: self.backdrop_epoch,
+            width,
+            physical_height,
+            logical_height,
+        };
+        if self
+            .backdrop_cache
+            .iter()
+            .any(|entry| entry.identity == identity)
+            || !self.backdrop_pending.insert(identity.clone())
+        {
+            return;
+        }
+        let request = BackdropPrepareRequest {
+            identity: identity.clone(),
+            queued_at: Instant::now(),
+            image,
+        };
+        match self.backdrop_prepare_worker.tx.try_send(request) {
+            Ok(()) => {}
+            Err(TrySendError::Full(_)) | Err(TrySendError::Disconnected(_)) => {
+                self.backdrop_pending.remove(&identity);
+                self.backdrop_prepare_cancellations =
+                    self.backdrop_prepare_cancellations.saturating_add(1);
+            }
+        }
+    }
+
+    pub fn prepared_backdrop(
+        &mut self,
+        width: usize,
+        physical_height: usize,
+        logical_height: usize,
+    ) -> Option<PreparedCrtBackdrop> {
+        let key = self.selected_preview_key.as_deref()?;
+        let index = self.backdrop_cache.iter().position(|entry| {
+            entry.identity.epoch == self.backdrop_epoch
+                && entry.identity.key == key
+                && entry.identity.width == width
+                && entry.identity.physical_height == physical_height
+                && entry.identity.logical_height == logical_height
+        })?;
+        let entry = self.backdrop_cache.remove(index)?;
+        let prepared = PreparedCrtBackdrop {
+            pixels: Arc::clone(&entry.pixels),
+            row_repeats: Arc::clone(&entry.row_repeats),
+            is_plain: false,
+        };
+        self.backdrop_cache.push_back(entry);
+        Some(prepared)
+    }
+
+    pub fn backdrop_prepare_revision(&self) -> u64 {
+        self.backdrop_revision
+    }
+
+    pub fn backdrop_prepare_stats(&self) -> (u64, u64, u32, u32) {
+        (
+            self.backdrop_prepare_queue_us,
+            self.backdrop_prepare_us,
+            self.backdrop_prepare_cancellations,
+            self.backdrop_prepare_evictions,
+        )
     }
 }
 
