@@ -125,14 +125,44 @@ pub struct AnimationClock {
     fixed_step: Duration,
 }
 
+const ANIMATION_CLOCK_ENV: &str = "MISTER_ANIMATION_CLOCK";
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AnimationClockConfig {
+    mode: Option<String>,
+}
+
+impl AnimationClockConfig {
+    pub fn capture_with(value: Option<&str>) -> Self {
+        Self {
+            mode: value.map(str::to_owned),
+        }
+    }
+
+    pub fn capture_environment_with<'a>(mut get: impl FnMut(&str) -> Option<&'a str>) -> Self {
+        Self::capture_with(get(ANIMATION_CLOCK_ENV))
+    }
+}
+
 impl AnimationClock {
     pub fn from_env() -> Self {
         Self::from_env_with_fixed_step(Duration::from_nanos(16_666_667))
     }
 
     pub fn from_env_with_fixed_step(fixed_step: Duration) -> Self {
-        match std::env::var("MISTER_ANIMATION_CLOCK")
-            .ok()
+        Self::from_config_with_fixed_step(
+            &AnimationClockConfig::capture_with(std::env::var(ANIMATION_CLOCK_ENV).ok().as_deref()),
+            fixed_step,
+        )
+    }
+
+    pub fn from_config_with_fixed_step(
+        config: &AnimationClockConfig,
+        fixed_step: Duration,
+    ) -> Self {
+        match config
+            .mode
+            .as_deref()
             .map(|s| s.to_ascii_lowercase().replace('_', "-"))
             .as_deref()
         {
@@ -223,12 +253,18 @@ pub struct PresentTiming {
 
 impl PresentTiming {
     pub fn from_env() -> Self {
-        let delay_us = std::env::var(PRESENT_DELAY_ENV)
-            .ok()
-            .and_then(|value| present_delay_from_value(&value));
+        Self::from_value(std::env::var(PRESENT_DELAY_ENV).ok().as_deref())
+    }
+
+    pub fn from_value(value: Option<&str>) -> Self {
+        let delay_us = value.and_then(present_delay_from_value);
         Self {
             delay_us: delay_us.unwrap_or(0),
         }
+    }
+
+    pub fn capture_with<'a>(mut get: impl FnMut(&str) -> Option<&'a str>) -> Self {
+        Self::from_value(get(PRESENT_DELAY_ENV))
     }
 
     pub fn delay_us(self) -> u64 {

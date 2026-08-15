@@ -7,6 +7,27 @@ use slint::platform::software_renderer::{PhysicalRegion, Rgb565Pixel, SoftwareRe
 use std::sync::OnceLock;
 
 const DEFAULT_DIRTY_RECT_BROAD_PCT: usize = 85;
+static DIRTY_RECT_BROAD_PCT: OnceLock<usize> = OnceLock::new();
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DirtyRegionConfig {
+    broad_pct: usize,
+}
+
+impl DirtyRegionConfig {
+    pub fn capture_with<'a>(mut get: impl FnMut(&str) -> Option<&'a str>) -> Self {
+        Self {
+            broad_pct: get("MISTER_DIRTY_RECT_BROAD_PCT")
+                .and_then(|value| value.parse::<usize>().ok())
+                .map(|value| value.clamp(1, 100))
+                .unwrap_or(DEFAULT_DIRTY_RECT_BROAD_PCT),
+        }
+    }
+
+    pub fn broad_pct(self) -> usize {
+        self.broad_pct
+    }
+}
 
 pub fn build_launcher_present_plan(
     base: Option<DirtyRect>,
@@ -43,14 +64,14 @@ pub fn build_launcher_present_plan_from_layers(
 }
 
 pub fn dirty_rect_broad_pct() -> usize {
-    static VALUE: OnceLock<usize> = OnceLock::new();
-    *VALUE.get_or_init(|| {
-        std::env::var("MISTER_DIRTY_RECT_BROAD_PCT")
-            .ok()
-            .and_then(|value| value.parse::<usize>().ok())
-            .map(|value| value.clamp(1, 100))
-            .unwrap_or(DEFAULT_DIRTY_RECT_BROAD_PCT)
+    *DIRTY_RECT_BROAD_PCT.get_or_init(|| {
+        let values = std::env::vars().collect::<std::collections::HashMap<_, _>>();
+        DirtyRegionConfig::capture_with(|name| values.get(name).map(String::as_str)).broad_pct()
     })
+}
+
+pub fn configure_dirty_rect_broad_pct(value: usize) {
+    let _ = DIRTY_RECT_BROAD_PCT.set(value.clamp(1, 100));
 }
 
 pub fn dirty_rect_is_broad(rect: DirtyRect, render_w: usize) -> bool {

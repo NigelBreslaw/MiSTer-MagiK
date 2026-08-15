@@ -15,9 +15,15 @@ pub struct UiBootFramebufferSession {
 }
 
 impl UiBootFramebufferSession {
-    pub fn start_ui_or_exit(f: &mut Fpga) -> Self {
+    pub fn start_ui_or_exit(
+        f: &mut Fpga,
+        config: &mister_magik_fb::process_config::DisplayPacingConfig,
+    ) -> Self {
         let runtime_geometry = detect_runtime_display_geometry_for_plan(f, "ui");
-        let display_plan = UiDisplayPlan::from_runtime_or_mister_ini_file(runtime_geometry);
+        let display_plan = UiDisplayPlan::from_runtime_or_mister_ini_file_with_inputs(
+            runtime_geometry,
+            config.display_inputs(),
+        );
         crate::ui_logln!("{}", display_plan.log_line());
         if display_plan.fallback {
             boot_analytics::event("display_plan_fallback", display_plan.log_line());
@@ -94,7 +100,12 @@ impl UiBootFramebufferSession {
             crate::ui_logln!("MiSTer_MagiK parent detected; Slint reasserting framebuffer route");
         }
 
-        let mut display_session = LauncherDisplaySession::new(&ui);
+        let mut display_session = LauncherDisplaySession::with_guard(
+            &ui,
+            mister_magik_fb::framebuffer::ownership::FramebufferRouteGuard::new(
+                config.route_reassert_frames(),
+            ),
+        );
         let route = display_session.route();
         boot_analytics::event(
             "initial_fb_enable_direct_attempt",

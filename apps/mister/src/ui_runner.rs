@@ -394,6 +394,9 @@ pub fn run_ui(
     process_entry_cpu_profile: Option<cpu_profile::CpuProfiler>,
     launcher_config: mister_magik_fb::process_config::LauncherProcessConfig,
 ) {
+    mister_magik_fb::framebuffer::target::configure_dirty_rect_broad_pct(
+        launcher_config.display_pacing().dirty_rect_broad_pct(),
+    );
     crate::launch_preparation::cleanup_archive_launch_staging();
     let (scene, secs) = parse_ui_args();
     boot_analytics::event("run_ui_start", format!("scene={scene} secs={secs}"));
@@ -411,7 +414,7 @@ pub fn run_ui(
         mut disp,
         mut display_session,
         _fb_mode_guard,
-    } = UiBootFramebufferSession::start_ui_or_exit(f);
+    } = UiBootFramebufferSession::start_ui_or_exit(f, launcher_config.display_pacing());
 
     match f.set_audio_volume(0) {
         Ok(()) => boot_analytics::event("set_audio_volume", "attenuation=0"),
@@ -461,7 +464,8 @@ pub fn run_ui(
     }
 
     let window = MisterSoftwareWindow::new(RepaintBufferType::ReusedBuffer);
-    let animation_clock = AnimationClock::from_env_with_fixed_step(
+    let animation_clock = AnimationClock::from_config_with_fixed_step(
+        launcher_config.display_pacing().animation_clock(),
         ui.output_route()
             .nominal_period_us()
             .map(Duration::from_micros)

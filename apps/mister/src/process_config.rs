@@ -9,9 +9,19 @@ use crate::launcher_runtime::media::MediaWorkerConfig;
 use crate::preview_state::PreviewStateConfig;
 #[cfg(feature = "ui")]
 use crate::screenshot_transitions::PreviewTransitionConfig;
+#[cfg(feature = "ui")]
+use crate::ui_display::UiDisplayInputs;
+#[cfg(feature = "ui")]
+use crate::visual_platform::{AnimationClockConfig, PresentTiming};
 use mister_magik_catalog::catalog_config::ArchiveCacheConfig;
 use mister_magik_catalog::device_layout::{CatalogPathOverrides, CatalogPaths, DevicePaths};
 use mister_magik_catalog::fs_fault::FaultConfig;
+#[cfg(feature = "ui")]
+use mister_magik_mister_runtime::framebuffer::ownership::FramebufferRouteConfig;
+#[cfg(feature = "ui")]
+use mister_magik_mister_runtime::framebuffer::target::DirtyRegionConfig;
+#[cfg(feature = "ui")]
+use mister_magik_mister_runtime::framebuffer::vsync::VsyncPacerConfig;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
@@ -128,6 +138,8 @@ pub struct LauncherProcessConfig {
     media_worker: Result<MediaWorkerConfig, String>,
     screensaver: ScreensaverProcessConfig,
     input: InputProcessConfig,
+    #[cfg(feature = "ui")]
+    display_pacing: DisplayPacingConfig,
 }
 
 impl LauncherProcessConfig {
@@ -168,6 +180,62 @@ impl LauncherProcessConfig {
 
     pub fn input(&self) -> &InputProcessConfig {
         &self.input
+    }
+
+    #[cfg(feature = "ui")]
+    pub fn display_pacing(&self) -> &DisplayPacingConfig {
+        &self.display_pacing
+    }
+}
+
+#[cfg(feature = "ui")]
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DisplayPacingConfig {
+    display_inputs: UiDisplayInputs,
+    animation_clock: AnimationClockConfig,
+    present_timing: PresentTiming,
+    vsync: VsyncPacerConfig,
+    dirty_region: DirtyRegionConfig,
+    route: FramebufferRouteConfig,
+}
+
+#[cfg(feature = "ui")]
+impl DisplayPacingConfig {
+    fn capture(environment: &EnvironmentSnapshot) -> Self {
+        Self {
+            display_inputs: UiDisplayInputs::capture_with(|name| environment.get(name)),
+            animation_clock: AnimationClockConfig::capture_environment_with(|name| {
+                environment.get(name)
+            }),
+            present_timing: PresentTiming::capture_with(|name| environment.get(name)),
+            vsync: VsyncPacerConfig::capture_with(|name| environment.get(name)),
+            dirty_region: DirtyRegionConfig::capture_with(|name| environment.get(name)),
+            route: FramebufferRouteConfig::capture_with(|name| environment.get(name)),
+        }
+    }
+
+    pub fn display_inputs(&self) -> &UiDisplayInputs {
+        &self.display_inputs
+    }
+
+    pub fn animation_clock(&self) -> &AnimationClockConfig {
+        &self.animation_clock
+    }
+
+    pub fn present_timing(&self) -> PresentTiming {
+        self.present_timing
+    }
+
+    pub fn vsync(&self) -> &VsyncPacerConfig {
+        &self.vsync
+    }
+
+    pub fn dirty_rect_broad_pct(&self) -> usize {
+        self.dirty_region.broad_pct()
+    }
+
+    pub fn route_reassert_frames(&self) -> u64 {
+        self.route.reassert_interval_frames()
     }
 }
 
@@ -389,6 +457,8 @@ impl ProcessConfig {
             }),
             screensaver: ScreensaverProcessConfig::capture(environment),
             input: InputProcessConfig::capture(environment),
+            #[cfg(feature = "ui")]
+            display_pacing: DisplayPacingConfig::capture(environment),
         });
         // Fault capture deliberately remains an early, compatibility-preserving
         // process boundary until C19 applies command and feature gates.

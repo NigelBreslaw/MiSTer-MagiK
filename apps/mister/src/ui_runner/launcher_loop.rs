@@ -5155,11 +5155,16 @@ pub(super) fn run_launcher_loop(
     let mut pacer = ui
         .output_route()
         .nominal_period_us()
-        .map(VsyncPacer::from_env_with_default_period)
-        .unwrap_or_else(VsyncPacer::from_env);
+        .map(|period| {
+            VsyncPacer::from_config_with_default_period(
+                launcher_config.display_pacing().vsync(),
+                period,
+            )
+        })
+        .unwrap_or_else(|| VsyncPacer::from_config(launcher_config.display_pacing().vsync()));
     let pacing_policy = LauncherFramePacingPolicy::default();
     let mut phase_alignment = LauncherPhaseAlignment::default();
-    let present_timing = PresentTiming::from_env();
+    let present_timing = launcher_config.display_pacing().present_timing();
     if preview_route.allows_preview_work()
         && launcher_bench_scenario.is_some()
         && !launcher_config.preview().archive_warm_skipped()

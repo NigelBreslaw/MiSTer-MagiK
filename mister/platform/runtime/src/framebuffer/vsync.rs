@@ -157,6 +157,34 @@ pub struct VsyncPacer {
     fresh_hit_max_age_us: u64,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct VsyncPacerConfig {
+    fallback_hz: Option<String>,
+    degraded_threshold: u32,
+    direct_wait: bool,
+    fresh_hit_max_age_us: u64,
+}
+
+impl VsyncPacerConfig {
+    pub fn capture_with<'a>(mut get: impl FnMut(&str) -> Option<&'a str>) -> Self {
+        Self {
+            fallback_hz: get("MISTER_VSYNC_FALLBACK_HZ").map(str::to_owned),
+            degraded_threshold: get("MISTER_VSYNC_DEGRADED_MISSES")
+                .and_then(|value| value.parse().ok())
+                .unwrap_or(3),
+            direct_wait: direct_wait_enabled_from(get("MISTER_VSYNC_DIRECT_WAIT")),
+            fresh_hit_max_age_us: fresh_hit_max_age_us_from(get(
+                "MISTER_VSYNC_FRESH_HIT_MAX_AGE_US",
+            )),
+        }
+    }
+
+    pub fn capture_process() -> Self {
+        let values = std::env::vars().collect::<std::collections::HashMap<_, _>>();
+        Self::capture_with(|name| values.get(name).map(String::as_str))
+    }
+}
+
 pub fn wait_vsync_fd(fd: std::os::unix::io::RawFd) -> VsyncWaitStatus {
     let arg: u32 = 0;
     let start = Instant::now();
@@ -185,13 +213,29 @@ impl VsyncPacer {
         Self::from_env_with_default_period(configured_fallback_period_us())
     }
 
+    pub fn from_config(config: &VsyncPacerConfig) -> Self {
+        let default_period_us = if mister_ini_menu_pal_enabled() {
+            PAL_VSYNC_FALLBACK_US
+        } else {
+            DEFAULT_VSYNC_FALLBACK_US
+        };
+        Self::from_config_with_default_period(config, default_period_us)
+    }
+
     pub fn from_env_with_default_period(default_period_us: u64) -> Self {
-        let period_us = configured_fallback_period_us_with_default(default_period_us);
-        let degraded_threshold = std::env::var("MISTER_VSYNC_DEGRADED_MISSES")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(3);
-        let direct_fb = if configured_direct_wait_enabled() {
+        Self::from_config_with_default_period(
+            &VsyncPacerConfig::capture_process(),
+            default_period_us,
+        )
+    }
+
+    pub fn from_config_with_default_period(
+        config: &VsyncPacerConfig,
+        default_period_us: u64,
+    ) -> Self {
+        let period_us =
+            fallback_period_us_from_default(config.fallback_hz.as_deref(), default_period_us);
+        let direct_fb = if config.direct_wait {
             match OpenOptions::new().read(true).write(true).open("/dev/fb0") {
                 Ok(file) => Some(file),
                 Err(e) => {
@@ -218,13 +262,13 @@ impl VsyncPacer {
             last_hit_at: None,
             last_frame_at: Instant::now(),
             miss_streak: 0,
-            degraded_threshold,
+            degraded_threshold: config.degraded_threshold,
             observed_max_miss_streak: 0,
             hits: 0,
             timeouts: 0,
             errors: 0,
             fallback_frames: 0,
-            fresh_hit_max_age_us: configured_fresh_hit_max_age_us(),
+            fresh_hit_max_age_us: config.fresh_hit_max_age_us,
         }
     }
 
@@ -553,7 +597,7 @@ fn configured_fallback_period_us() -> u64 {
 
 fn configured_fallback_period_us_with_default(default_period_us: u64) -> u64 {
     fallback_period_us_from_default(
-        std::env::var("MISTER_VSYNC_FALLBACK_HZ").ok().as_deref(),
+        VsyncPacerConfig::capture_process().fallback_hz.as_deref(),
         default_period_us,
     )
 }
@@ -581,23 +625,11 @@ fn fallback_period_us_from_default(hz: Option<&str>, default_period_us: u64) -> 
     default_period_us
 }
 
-fn configured_fresh_hit_max_age_us() -> u64 {
-    fresh_hit_max_age_us_from(
-        std::env::var("MISTER_VSYNC_FRESH_HIT_MAX_AGE_US")
-            .ok()
-            .as_deref(),
-    )
-}
-
 fn fresh_hit_max_age_us_from(value: Option<&str>) -> u64 {
     value
         .and_then(|text| text.parse::<u64>().ok())
         .unwrap_or(DEFAULT_FRESH_HIT_MAX_AGE_US)
         .min(10_000)
-}
-
-fn configured_direct_wait_enabled() -> bool {
-    direct_wait_enabled_from(std::env::var("MISTER_VSYNC_DIRECT_WAIT").ok().as_deref())
 }
 
 fn direct_wait_enabled_from(value: Option<&str>) -> bool {

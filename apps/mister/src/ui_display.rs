@@ -26,6 +26,30 @@ const UI_FB_SIZE_ENV: &str = "MISTER_UI_FB_SIZE";
 const RUNTIME_SETTINGS_ENV: &str = "MISTER_MAGIK_RUNTIME_SETTINGS_V1";
 const RUNTIME_DISPLAY_ENV: &str = "MISTER_MAGIK_RUNTIME_DISPLAY_V1";
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UiDisplayInputs {
+    fb_policy: UiFramebufferSizePolicy,
+    runtime_settings: Option<String>,
+    runtime_display: Option<String>,
+}
+
+impl UiDisplayInputs {
+    pub fn capture_with<'a>(mut get: impl FnMut(&str) -> Option<&'a str>) -> Self {
+        Self {
+            fb_policy: get(UI_FB_SIZE_ENV)
+                .and_then(UiFramebufferSizePolicy::parse)
+                .unwrap_or(UiFramebufferSizePolicy::Auto),
+            runtime_settings: get(RUNTIME_SETTINGS_ENV).map(str::to_owned),
+            runtime_display: get(RUNTIME_DISPLAY_ENV).map(str::to_owned),
+        }
+    }
+
+    pub fn capture_process() -> Self {
+        let values = std::env::vars().collect::<std::collections::HashMap<_, _>>();
+        Self::capture_with(|name| values.get(name).map(String::as_str))
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CrtFontFamily {
     PressStart2P,
@@ -429,10 +453,20 @@ impl UiDisplayPlan {
     }
 
     pub fn from_runtime_or_mister_ini_file(runtime: Option<RuntimeDisplayGeometry>) -> Self {
+        Self::from_runtime_or_mister_ini_file_with_inputs(
+            runtime,
+            &UiDisplayInputs::capture_process(),
+        )
+    }
+
+    pub fn from_runtime_or_mister_ini_file_with_inputs(
+        runtime: Option<RuntimeDisplayGeometry>,
+        inputs: &UiDisplayInputs,
+    ) -> Self {
         let ini = std::fs::read_to_string(DEVICE_INI_PATH).ok();
-        let fb_policy = UiFramebufferSizePolicy::from_env();
-        let resolved_route = std::env::var(RUNTIME_SETTINGS_ENV)
-            .ok()
+        let fb_policy = inputs.fb_policy;
+        let resolved_route = inputs
+            .runtime_settings
             .as_deref()
             .and_then(ResolvedOutputRoute::from_runtime_settings_v1)
             .unwrap_or(ResolvedOutputRoute::Hdmi);
@@ -444,8 +478,8 @@ impl UiDisplayPlan {
                 UiFramebufferSizePolicy::Auto,
             );
         }
-        if let Some(geometry) = std::env::var(RUNTIME_DISPLAY_ENV)
-            .ok()
+        if let Some(geometry) = inputs
+            .runtime_display
             .as_deref()
             .and_then(runtime_display_geometry_v1)
         {

@@ -15,6 +15,25 @@ pub const DEFAULT_REASSERT_FRAMES: u64 = 0;
 pub const DEFAULT_DISPLAY_OWNER_LOCK_PATH: &str = "/tmp/mister-magik/display-owner.lock";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FramebufferRouteConfig {
+    reassert_interval_frames: u64,
+}
+
+impl FramebufferRouteConfig {
+    pub fn capture_with<'a>(mut get: impl FnMut(&str) -> Option<&'a str>) -> Self {
+        Self {
+            reassert_interval_frames: get("MISTER_FB_ROUTE_REASSERT_FRAMES")
+                .and_then(|value| value.parse::<u64>().ok())
+                .unwrap_or(DEFAULT_REASSERT_FRAMES),
+        }
+    }
+
+    pub fn reassert_interval_frames(self) -> u64 {
+        self.reassert_interval_frames
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FramebufferRouteAction {
     pub reassert_route: bool,
     pub force_full_present: bool,
@@ -62,10 +81,9 @@ impl FramebufferRouteGuard {
 }
 
 pub fn reassert_interval_frames_from_env() -> u64 {
-    std::env::var("MISTER_FB_ROUTE_REASSERT_FRAMES")
-        .ok()
-        .and_then(|value| value.parse::<u64>().ok())
-        .unwrap_or(DEFAULT_REASSERT_FRAMES)
+    let values = std::env::vars().collect::<std::collections::HashMap<_, _>>();
+    FramebufferRouteConfig::capture_with(|name| values.get(name).map(String::as_str))
+        .reassert_interval_frames()
 }
 
 pub fn reassert_interval_duration(frames: u64, refresh_hz: u64) -> Option<Duration> {
