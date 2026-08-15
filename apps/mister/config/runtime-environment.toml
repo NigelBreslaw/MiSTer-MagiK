@@ -88,7 +88,7 @@ documentation = { summary = "Controls arcade bootstrap index behavior", accepted
 
 [[control]]
 name = "MISTER_ARCADE_ENTRY_RUN_ID"
-owner = "apps/mister/src/ui_runner/launcher_loop.rs"
+owner = "apps/mister/src/process_config.rs"
 classification = "production"
 value_shape = "string, enum, or boolean token"
 default_behavior = "uses the owner-defined value or disabled state when unset"
@@ -102,7 +102,7 @@ documentation = { summary = "Controls arcade entry run id behavior", accepted_va
 
 [[control]]
 name = "MISTER_ARCADE_ENTRY_TRACE"
-owner = "apps/mister/src/ui_runner/launcher_loop.rs"
+owner = "apps/mister/src/process_config.rs"
 classification = "diagnostic"
 value_shape = "string, enum, or boolean token"
 default_behavior = "uses the owner-defined value or disabled state when unset"
@@ -1096,7 +1096,7 @@ documentation = { summary = "Controls launcher lock screen behavior", accepted_v
 
 [[control]]
 name = "MISTER_LAUNCHER_RESPONSE_COMPLETE"
-owner = "apps/mister/src/ui_runner/launcher_loop.rs"
+owner = "apps/mister/src/process_config.rs"
 classification = "production"
 value_shape = "string, enum, or boolean token"
 default_behavior = "uses the owner-defined value or disabled state when unset"
@@ -1110,7 +1110,7 @@ documentation = { summary = "Controls launcher response complete behavior", acce
 
 [[control]]
 name = "MISTER_LAUNCHER_RESPONSE_EXECUTION_TRACE"
-owner = "apps/mister/src/ui_runner/launcher_loop.rs"
+owner = "apps/mister/src/process_config.rs"
 classification = "diagnostic"
 value_shape = "string, enum, or boolean token"
 default_behavior = "uses the owner-defined value or disabled state when unset"
@@ -1124,7 +1124,7 @@ documentation = { summary = "Controls launcher response execution trace behavior
 
 [[control]]
 name = "MISTER_LAUNCHER_RESPONSE_EXPECTED_CONFIRMED"
-owner = "apps/mister/src/ui_runner/launcher_loop.rs"
+owner = "apps/mister/src/process_config.rs"
 classification = "production"
 value_shape = "string, enum, or boolean token"
 default_behavior = "uses the owner-defined value or disabled state when unset"
@@ -1138,7 +1138,7 @@ documentation = { summary = "Controls launcher response expected confirmed behav
 
 [[control]]
 name = "MISTER_LAUNCHER_RESPONSE_EXPECTED_FEEDBACK_HIDDEN"
-owner = "apps/mister/src/ui_runner/launcher_loop.rs"
+owner = "apps/mister/src/process_config.rs"
 classification = "production"
 value_shape = "string, enum, or boolean token"
 default_behavior = "uses the owner-defined value or disabled state when unset"
@@ -1152,7 +1152,7 @@ documentation = { summary = "Controls launcher response expected feedback hidden
 
 [[control]]
 name = "MISTER_LAUNCHER_RESPONSE_FRAME_COMPLETE"
-owner = "apps/mister/src/ui_runner/launcher_loop.rs"
+owner = "apps/mister/src/process_config.rs"
 classification = "production"
 value_shape = "string, enum, or boolean token"
 default_behavior = "uses the owner-defined value or disabled state when unset"
@@ -1166,7 +1166,7 @@ documentation = { summary = "Controls launcher response frame complete behavior"
 
 [[control]]
 name = "MISTER_LAUNCHER_RESPONSE_PMU"
-owner = "apps/mister/src/ui_runner/launcher_loop.rs"
+owner = "apps/mister/src/process_config.rs"
 classification = "diagnostic"
 value_shape = "enum token"
 default_behavior = "uses the owner-defined mode when unset or unrecognized"
@@ -1180,7 +1180,7 @@ documentation = { summary = "Controls launcher response pmu behavior", accepted_
 
 [[control]]
 name = "MISTER_LAUNCHER_RESPONSE_PMU_COMPLETE"
-owner = "apps/mister/src/ui_runner/launcher_loop.rs"
+owner = "apps/mister/src/process_config.rs"
 classification = "diagnostic"
 value_shape = "string, enum, or boolean token"
 default_behavior = "uses the owner-defined value or disabled state when unset"
@@ -1194,7 +1194,7 @@ documentation = { summary = "Controls launcher response pmu complete behavior", 
 
 [[control]]
 name = "MISTER_LAUNCHER_RESPONSE_RUN_ID"
-owner = "apps/mister/src/ui_runner/launcher_loop.rs"
+owner = "apps/mister/src/process_config.rs"
 classification = "production"
 value_shape = "string, enum, or boolean token"
 default_behavior = "uses the owner-defined value or disabled state when unset"
@@ -1208,7 +1208,7 @@ documentation = { summary = "Controls launcher response run id behavior", accept
 
 [[control]]
 name = "MISTER_LAUNCHER_RESPONSE_TRACE"
-owner = "apps/mister/src/ui_runner/launcher_loop.rs"
+owner = "apps/mister/src/process_config.rs"
 classification = "diagnostic"
 value_shape = "string, enum, or boolean token"
 default_behavior = "uses the owner-defined value or disabled state when unset"
@@ -3350,7 +3350,7 @@ documentation = { summary = "Controls system entry benchmark system behavior", a
 
 [[control]]
 name = "MISTER_SYSTEM_ENTRY_PROFILE_OUT"
-owner = "apps/mister/src/ui_runner/launcher_loop.rs"
+owner = "apps/mister/src/process_config.rs"
 classification = "diagnostic"
 value_shape = "path or path list"
 default_behavior = "uses the owner-defined output, fixture, or disabled path when unset"
@@ -3364,7 +3364,7 @@ documentation = { summary = "Controls system entry profile out behavior", accept
 
 [[control]]
 name = "MISTER_SYSTEM_ENTRY_RUN_ID"
-owner = "apps/mister/src/ui_runner/launcher_loop.rs"
+owner = "apps/mister/src/process_config.rs"
 classification = "production"
 value_shape = "string, enum, or boolean token"
 default_behavior = "uses the owner-defined value or disabled state when unset"
@@ -3378,7 +3378,7 @@ documentation = { summary = "Controls system entry run id behavior", accepted_va
 
 [[control]]
 name = "MISTER_SYSTEM_ENTRY_TRACE"
-owner = "apps/mister/src/ui_runner/launcher_loop.rs"
+owner = "apps/mister/src/process_config.rs"
 classification = "diagnostic"
 value_shape = "string, enum, or boolean token"
 default_behavior = "uses the owner-defined value or disabled state when unset"

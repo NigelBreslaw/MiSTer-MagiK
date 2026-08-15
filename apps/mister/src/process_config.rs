@@ -37,6 +37,21 @@ const READY_FIFO: &str = "MISTER_MAGIK_READY_FIFO";
 const MAIN_PID: &str = "MISTER_MAGIK_MAIN_PID";
 const MAIN_GENERATION: &str = "MISTER_MAGIK_MAIN_GENERATION";
 const OWNER_EPOCH: &str = "MISTER_MAGIK_OWNER_EPOCH";
+const LAUNCHER_RESPONSE_TRACE: &str = "MISTER_LAUNCHER_RESPONSE_TRACE";
+const LAUNCHER_RESPONSE_EXECUTION_TRACE: &str = "MISTER_LAUNCHER_RESPONSE_EXECUTION_TRACE";
+const LAUNCHER_RESPONSE_PMU: &str = "MISTER_LAUNCHER_RESPONSE_PMU";
+const LAUNCHER_RESPONSE_COMPLETE: &str = "MISTER_LAUNCHER_RESPONSE_COMPLETE";
+const LAUNCHER_RESPONSE_FRAME_COMPLETE: &str = "MISTER_LAUNCHER_RESPONSE_FRAME_COMPLETE";
+const LAUNCHER_RESPONSE_PMU_COMPLETE: &str = "MISTER_LAUNCHER_RESPONSE_PMU_COMPLETE";
+const LAUNCHER_RESPONSE_RUN_ID: &str = "MISTER_LAUNCHER_RESPONSE_RUN_ID";
+const LAUNCHER_RESPONSE_EXPECTED_CONFIRMED: &str = "MISTER_LAUNCHER_RESPONSE_EXPECTED_CONFIRMED";
+const LAUNCHER_RESPONSE_EXPECTED_FEEDBACK_HIDDEN: &str =
+    "MISTER_LAUNCHER_RESPONSE_EXPECTED_FEEDBACK_HIDDEN";
+const SYSTEM_ENTRY_RUN_ID: &str = "MISTER_SYSTEM_ENTRY_RUN_ID";
+const ARCADE_ENTRY_RUN_ID: &str = "MISTER_ARCADE_ENTRY_RUN_ID";
+const SYSTEM_ENTRY_TRACE: &str = "MISTER_SYSTEM_ENTRY_TRACE";
+const ARCADE_ENTRY_TRACE: &str = "MISTER_ARCADE_ENTRY_TRACE";
+const SYSTEM_ENTRY_PROFILE_OUT: &str = "MISTER_SYSTEM_ENTRY_PROFILE_OUT";
 const INPUT_INTEGRITY_STALL_MS: &str = "MISTER_INPUT_INTEGRITY_STALL_MS";
 const INPUT_INTEGRITY_TRACE: &str = "MISTER_INPUT_INTEGRITY_TRACE";
 #[cfg(any(feature = "bench-tools", test))]
@@ -434,6 +449,8 @@ pub struct LauncherReadinessConfig {
     main_pid: u32,
     main_generation: u64,
     owner_epoch: u64,
+    response_trace: LauncherResponseTraceConfig,
+    entry_trace: LauncherEntryTraceConfig,
 }
 
 impl LauncherReadinessConfig {
@@ -450,7 +467,17 @@ impl LauncherReadinessConfig {
             main_pid: parse_u32(environment.get(MAIN_PID)),
             main_generation: parse_u64(environment.get(MAIN_GENERATION)),
             owner_epoch: parse_u64(environment.get(OWNER_EPOCH)),
+            response_trace: LauncherResponseTraceConfig::capture(environment),
+            entry_trace: LauncherEntryTraceConfig::capture(environment),
         }
+    }
+
+    pub fn response_trace(&self) -> &LauncherResponseTraceConfig {
+        &self.response_trace
+    }
+
+    pub fn entry_trace(&self) -> &LauncherEntryTraceConfig {
+        &self.entry_trace
     }
 
     pub fn into_parts(self) -> (String, PathBuf, u32, u64, u64) {
@@ -461,6 +488,138 @@ impl LauncherReadinessConfig {
             self.main_generation,
             self.owner_epoch,
         )
+    }
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct LauncherResponseTraceConfig {
+    enabled: bool,
+    execution_enabled: bool,
+    pmu_enabled: bool,
+    completion_path: Option<String>,
+    frame_completion_path: Option<String>,
+    pmu_completion_path: Option<String>,
+    run_id: String,
+    expected_confirmed: usize,
+    expected_feedback_hidden: usize,
+}
+
+impl LauncherResponseTraceConfig {
+    fn capture(environment: &EnvironmentSnapshot) -> Self {
+        let enabled = environment_flag(environment, LAUNCHER_RESPONSE_TRACE);
+        Self {
+            enabled,
+            execution_enabled: enabled
+                && environment_flag(environment, LAUNCHER_RESPONSE_EXECUTION_TRACE),
+            pmu_enabled: enabled && environment_flag(environment, LAUNCHER_RESPONSE_PMU),
+            completion_path: environment
+                .get(LAUNCHER_RESPONSE_COMPLETE)
+                .map(str::to_owned),
+            frame_completion_path: environment
+                .get(LAUNCHER_RESPONSE_FRAME_COMPLETE)
+                .map(str::to_owned),
+            pmu_completion_path: environment
+                .get(LAUNCHER_RESPONSE_PMU_COMPLETE)
+                .map(str::to_owned),
+            run_id: environment
+                .get(LAUNCHER_RESPONSE_RUN_ID)
+                .unwrap_or_default()
+                .to_owned(),
+            expected_confirmed: response_expected_count(
+                environment.get(LAUNCHER_RESPONSE_EXPECTED_CONFIRMED),
+                enabled,
+            ),
+            expected_feedback_hidden: response_expected_count(
+                environment.get(LAUNCHER_RESPONSE_EXPECTED_FEEDBACK_HIDDEN),
+                enabled,
+            ),
+        }
+    }
+
+    pub fn enabled(&self) -> bool {
+        self.enabled
+    }
+
+    pub fn execution_enabled(&self) -> bool {
+        self.execution_enabled
+    }
+
+    pub fn pmu_enabled(&self) -> bool {
+        self.pmu_enabled
+    }
+
+    pub fn completion_path(&self) -> Option<&str> {
+        self.completion_path.as_deref()
+    }
+
+    pub fn frame_completion_path(&self) -> Option<&str> {
+        self.frame_completion_path.as_deref()
+    }
+
+    pub fn pmu_completion_path(&self) -> Option<&str> {
+        self.pmu_completion_path.as_deref()
+    }
+
+    pub fn run_id(&self) -> &str {
+        &self.run_id
+    }
+
+    pub fn expected_confirmed(&self) -> usize {
+        self.expected_confirmed
+    }
+
+    pub fn expected_feedback_hidden(&self) -> usize {
+        self.expected_feedback_hidden
+    }
+}
+
+fn response_expected_count(value: Option<&str>, enabled: bool) -> usize {
+    if !enabled {
+        return 0;
+    }
+    value
+        .and_then(|value| value.parse::<usize>().ok())
+        .filter(|count| *count <= 256)
+        .unwrap_or(0)
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct LauncherEntryTraceConfig {
+    run_id: String,
+    trace_path: Option<String>,
+    profile_path: Option<String>,
+}
+
+impl LauncherEntryTraceConfig {
+    fn capture(environment: &EnvironmentSnapshot) -> Self {
+        Self {
+            run_id: environment
+                .get(SYSTEM_ENTRY_RUN_ID)
+                .or_else(|| environment.get(ARCADE_ENTRY_RUN_ID))
+                .unwrap_or_default()
+                .to_owned(),
+            trace_path: environment
+                .get(SYSTEM_ENTRY_TRACE)
+                .or_else(|| environment.get(ARCADE_ENTRY_TRACE))
+                .filter(|path| !path.is_empty())
+                .map(str::to_owned),
+            profile_path: environment
+                .get(SYSTEM_ENTRY_PROFILE_OUT)
+                .filter(|path| !path.is_empty())
+                .map(str::to_owned),
+        }
+    }
+
+    pub fn run_id(&self) -> &str {
+        &self.run_id
+    }
+
+    pub fn trace_path(&self) -> Option<&str> {
+        self.trace_path.as_deref()
+    }
+
+    pub fn profile_path(&self) -> Option<&str> {
+        self.profile_path.as_deref()
     }
 }
 
@@ -878,5 +1037,43 @@ mod tests {
             let environment = EnvironmentSnapshot::from_values([(PRESENT_BACKEND, value)]);
             assert_eq!(PresentBackendConfig::capture(&environment), expected);
         }
+    }
+
+    #[test]
+    fn launcher_captures_trace_and_readiness_evidence_once() {
+        let environment = EnvironmentSnapshot::from_values([
+            (LAUNCHER_RESPONSE_TRACE, "1"),
+            (LAUNCHER_RESPONSE_EXECUTION_TRACE, "yes"),
+            (LAUNCHER_RESPONSE_COMPLETE, "/tmp/response.json"),
+            (LAUNCHER_RESPONSE_EXPECTED_CONFIRMED, "17"),
+            (LAUNCHER_RESPONSE_EXPECTED_FEEDBACK_HIDDEN, "999"),
+            (SYSTEM_ENTRY_RUN_ID, "system-run"),
+            (ARCADE_ENTRY_RUN_ID, "legacy-run"),
+            (SYSTEM_ENTRY_TRACE, "/tmp/system-entry.tsv"),
+            (SYSTEM_ENTRY_PROFILE_OUT, "/tmp/system-entry.json"),
+        ]);
+        let config = ProcessConfig::from_snapshot(
+            &["mister-magik-fb".into(), "ui".into()],
+            "ui",
+            &environment,
+        );
+        let readiness = config
+            .launcher()
+            .expect("ui captures launcher settings")
+            .readiness();
+
+        assert!(readiness.response_trace().enabled());
+        assert!(readiness.response_trace().execution_enabled());
+        assert_eq!(readiness.response_trace().expected_confirmed(), 17);
+        assert_eq!(readiness.response_trace().expected_feedback_hidden(), 0);
+        assert_eq!(readiness.entry_trace().run_id(), "system-run");
+        assert_eq!(
+            readiness.entry_trace().trace_path(),
+            Some("/tmp/system-entry.tsv")
+        );
+        assert_eq!(
+            readiness.entry_trace().profile_path(),
+            Some("/tmp/system-entry.json")
+        );
     }
 }

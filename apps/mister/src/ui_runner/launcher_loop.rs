@@ -600,18 +600,16 @@ fn present_mode_label_for_backend_status(
 struct ArcadeEntryLatencyTrace {
     writer: Option<std::io::BufWriter<std::fs::File>>,
     run_id: String,
+    profile_path: Option<String>,
 }
 
 impl ArcadeEntryLatencyTrace {
-    fn from_env() -> Self {
-        let run_id = std::env::var("MISTER_SYSTEM_ENTRY_RUN_ID")
-            .or_else(|_| std::env::var("MISTER_ARCADE_ENTRY_RUN_ID"))
-            .unwrap_or_default();
-        let writer = std::env::var("MISTER_SYSTEM_ENTRY_TRACE")
-            .or_else(|_| std::env::var("MISTER_ARCADE_ENTRY_TRACE"))
-            .ok()
+    fn from_config(config: &mister_magik_fb::process_config::LauncherEntryTraceConfig) -> Self {
+        let run_id = config.run_id().to_owned();
+        let writer = config
+            .trace_path()
             .and_then(|path| {
-                let file = std::fs::File::create(&path)
+                let file = std::fs::File::create(path)
                     .map_err(|e| crate::ui_errln!("arcade entry trace: create {path} failed: {e}"))
                     .ok()?;
                 let mut writer = std::io::BufWriter::with_capacity(16 * 1024, file);
@@ -624,7 +622,11 @@ impl ArcadeEntryLatencyTrace {
                 crate::ui_logln!("arcade_entry_trace={path} run_id={run_id}");
                 Some(writer)
             });
-        Self { writer, run_id }
+        Self {
+            writer,
+            run_id,
+            profile_path: config.profile_path().map(str::to_owned),
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1157,9 +1159,9 @@ fn cancel_pending_collection_entry_for_input(
 }
 
 impl ArcadeEntryLatencyTracker {
-    fn from_env() -> Self {
+    fn from_config(config: &mister_magik_fb::process_config::LauncherEntryTraceConfig) -> Self {
         Self {
-            trace: ArcadeEntryLatencyTrace::from_env(),
+            trace: ArcadeEntryLatencyTrace::from_config(config),
             enter_input_at: None,
             destination_prepared: false,
             enter_presented: false,
@@ -1570,7 +1572,7 @@ impl ArcadeEntryLatencyTracker {
             });
         // Publish the benchmark-owned phase record before the ready marker. The host treats
         // that marker as the point at which every correlated artifact is complete.
-        write_system_entry_publication_profile(publication);
+        write_system_entry_publication_profile(self.trace.profile_path.as_deref(), publication);
         self.trace.record(
             start,
             "system_entry_ready_presented",
@@ -1612,14 +1614,14 @@ impl ArcadeEntryLatencyTracker {
     }
 }
 
-fn write_system_entry_publication_profile(publication: SystemEntryPublicationPhases) {
-    let Ok(path) = std::env::var("MISTER_SYSTEM_ENTRY_PROFILE_OUT") else {
+fn write_system_entry_publication_profile(
+    path: Option<&str>,
+    publication: SystemEntryPublicationPhases,
+) {
+    let Some(path) = path else {
         return;
     };
-    if path.is_empty() {
-        return;
-    }
-    let path = std::path::Path::new(&path);
+    let path = std::path::Path::new(path);
     let Ok(raw) = std::fs::read_to_string(path) else {
         return;
     };
@@ -1746,14 +1748,6 @@ const INPUT_INTEGRITY_TRACE_LIMIT: usize = 512;
 const LAUNCHER_RESPONSE_TRACE_PATH: &str = "/tmp/mister-magik/launcher-response-trace.json";
 const LAUNCHER_RESPONSE_PARTIAL_FLUSH_INTERVAL: Duration = Duration::from_secs(1);
 const LAUNCHER_RESPONSE_TRACE_LIMIT: usize = 256;
-const LAUNCHER_RESPONSE_COMPLETE_ENV: &str = "MISTER_LAUNCHER_RESPONSE_COMPLETE";
-const LAUNCHER_RESPONSE_FRAME_COMPLETE_ENV: &str = "MISTER_LAUNCHER_RESPONSE_FRAME_COMPLETE";
-const LAUNCHER_RESPONSE_RUN_ID_ENV: &str = "MISTER_LAUNCHER_RESPONSE_RUN_ID";
-const LAUNCHER_RESPONSE_EXPECTED_CONFIRMED_ENV: &str =
-    "MISTER_LAUNCHER_RESPONSE_EXPECTED_CONFIRMED";
-const LAUNCHER_RESPONSE_EXPECTED_FEEDBACK_HIDDEN_ENV: &str =
-    "MISTER_LAUNCHER_RESPONSE_EXPECTED_FEEDBACK_HIDDEN";
-const LAUNCHER_RESPONSE_PMU_COMPLETE_ENV: &str = "MISTER_LAUNCHER_RESPONSE_PMU_COMPLETE";
 
 struct InputIntegrityTrace {
     enabled: bool,
@@ -1948,7 +1942,9 @@ struct LauncherResponseTrace {
     execution_enabled: bool,
     pmu_enabled: bool,
     pmu_active: bool,
+    completion_path: Option<String>,
     pmu_completion_path: Option<String>,
+    system_entry_profile_path: Option<String>,
     records: Vec<LauncherResponseRecord>,
     feedback_records: Vec<LauncherResponseFeedbackRecord>,
     pending_dispatches: VecDeque<usize>,
@@ -2040,29 +2036,28 @@ struct LauncherResponseSchedulerBoundary {
 }
 
 impl LauncherResponseTrace {
-    fn from_env(
+    fn from_config(
+        config: &mister_magik_fb::process_config::LauncherResponseTraceConfig,
+        entry_config: &mister_magik_fb::process_config::LauncherEntryTraceConfig,
         nav: &LauncherNav,
         input_probe: Option<crate::input_hub::InputObservationProbe>,
     ) -> Self {
-        let enabled = launcher_env_flag("MISTER_LAUNCHER_RESPONSE_TRACE");
-        let execution_enabled =
-            enabled && launcher_env_flag("MISTER_LAUNCHER_RESPONSE_EXECUTION_TRACE");
-        let pmu_enabled = enabled && launcher_env_flag("MISTER_LAUNCHER_RESPONSE_PMU");
-        let pmu_completion_path = response_trace_volatile_path(LAUNCHER_RESPONSE_PMU_COMPLETE_ENV);
-        let run_id = std::env::var(LAUNCHER_RESPONSE_RUN_ID_ENV).unwrap_or_default();
-        let expected_confirmed =
-            response_trace_expected_count(LAUNCHER_RESPONSE_EXPECTED_CONFIRMED_ENV, enabled);
-        let expected_feedback_hidden =
-            response_trace_expected_count(LAUNCHER_RESPONSE_EXPECTED_FEEDBACK_HIDDEN_ENV, enabled);
-        let completion_path = response_trace_volatile_path(LAUNCHER_RESPONSE_COMPLETE_ENV);
+        let enabled = config.enabled();
+        let execution_enabled = config.execution_enabled();
+        let pmu_enabled = config.pmu_enabled();
+        let pmu_completion_path = response_trace_volatile_path(config.pmu_completion_path());
+        let run_id = config.run_id().to_owned();
+        let expected_confirmed = config.expected_confirmed();
+        let expected_feedback_hidden = config.expected_feedback_hidden();
+        let completion_path = response_trace_volatile_path(config.completion_path());
         if enabled {
             let _ = std::fs::remove_file(LAUNCHER_RESPONSE_TRACE_PATH);
-            for name in [
-                LAUNCHER_RESPONSE_COMPLETE_ENV,
-                LAUNCHER_RESPONSE_FRAME_COMPLETE_ENV,
-                LAUNCHER_RESPONSE_PMU_COMPLETE_ENV,
+            for path in [
+                config.completion_path(),
+                config.frame_completion_path(),
+                config.pmu_completion_path(),
             ] {
-                if let Some(path) = response_trace_volatile_path(name) {
+                if let Some(path) = response_trace_volatile_path(path) {
                     let _ = std::fs::remove_file(path);
                 }
             }
@@ -2070,13 +2065,15 @@ impl LauncherResponseTrace {
         if pmu_enabled {
             mister_magik_perf_events::clear_process_profiles();
         }
-        let writer = enabled.then(|| spawn_launcher_response_trace_writer(completion_path));
+        let writer = enabled.then(|| spawn_launcher_response_trace_writer(completion_path.clone()));
         Self {
             enabled,
             execution_enabled,
             pmu_enabled,
             pmu_active: false,
+            completion_path,
             pmu_completion_path,
+            system_entry_profile_path: entry_config.profile_path().map(str::to_owned),
             records: Vec::with_capacity(LAUNCHER_RESPONSE_TRACE_LIMIT),
             feedback_records: Vec::with_capacity(LAUNCHER_RESPONSE_TRACE_LIMIT),
             pending_dispatches: VecDeque::new(),
@@ -2119,7 +2116,9 @@ impl LauncherResponseTrace {
             execution_enabled: false,
             pmu_enabled: false,
             pmu_active: false,
+            completion_path: None,
             pmu_completion_path: None,
+            system_entry_profile_path: None,
             records: Vec::with_capacity(LAUNCHER_RESPONSE_TRACE_LIMIT),
             feedback_records: Vec::with_capacity(LAUNCHER_RESPONSE_TRACE_LIMIT),
             pending_dispatches: VecDeque::new(),
@@ -2633,7 +2632,7 @@ impl LauncherResponseTrace {
         let path = self
             .pmu_completion_path
             .as_deref()
-            .ok_or_else(|| format!("{LAUNCHER_RESPONSE_PMU_COMPLETE_ENV} is missing"))?;
+            .ok_or_else(|| "MISTER_LAUNCHER_RESPONSE_PMU_COMPLETE is missing".to_owned())?;
         if let Some(parent) = std::path::Path::new(path).parent() {
             std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
         }
@@ -2758,7 +2757,7 @@ impl LauncherResponseTrace {
             writer
                 .send(LauncherResponseTraceWrite {
                     snapshot,
-                    completion_path: response_trace_volatile_path(LAUNCHER_RESPONSE_COMPLETE_ENV),
+                    completion_path: self.completion_path.clone(),
                 })
                 .is_ok()
         }) || self.writer.is_none()
@@ -3047,21 +3046,9 @@ impl LauncherResponseTraceSnapshot {
     }
 }
 
-fn response_trace_expected_count(name: &str, enabled: bool) -> usize {
-    if !enabled {
-        return 0;
-    }
-    std::env::var(name)
-        .ok()
-        .and_then(|value| value.parse::<usize>().ok())
-        .filter(|count| *count <= LAUNCHER_RESPONSE_TRACE_LIMIT)
-        .unwrap_or(0)
-}
-
-fn response_trace_volatile_path(name: &str) -> Option<String> {
-    std::env::var(name)
-        .ok()
-        .filter(|path| path.starts_with("/tmp/") && path.len() > "/tmp/".len())
+fn response_trace_volatile_path(path: Option<&str>) -> Option<String> {
+    path.filter(|path| path.starts_with("/tmp/") && path.len() > "/tmp/".len())
+        .map(str::to_owned)
 }
 
 fn spawn_launcher_response_trace_writer(
@@ -5067,8 +5054,12 @@ pub(super) fn run_launcher_loop(
     let mut input_integrity_trace =
         InputIntegrityTrace::new(launcher_config.input().integrity_trace(), Instant::now());
     let input_observation_probe = pad.input_observation_probe();
-    let mut launcher_response_trace =
-        LauncherResponseTrace::from_env(&nav, input_observation_probe.clone());
+    let mut launcher_response_trace = LauncherResponseTrace::from_config(
+        launcher_config.readiness().response_trace(),
+        launcher_config.readiness().entry_trace(),
+        &nav,
+        input_observation_probe.clone(),
+    );
     let mut gui_profiling = GuiProfilingController::from_config(profile_config.gui().clone());
     let mut input_latency_lab = InputLatencyLab::from_env(input_observation_probe.clone());
     let mut loading_title = String::new();
@@ -5744,7 +5735,8 @@ pub(super) fn run_launcher_loop(
         // Activation below replaces accounting and opens the measured trace.
         frame_accounting.close_preview_scroll_trace_for_restart();
     }
-    let mut arcade_entry_latency = ArcadeEntryLatencyTracker::from_env();
+    let mut arcade_entry_latency =
+        ArcadeEntryLatencyTracker::from_config(launcher_config.readiness().entry_trace());
     let mut memory_guard = crate::memory_pressure::MemoryPressureGuard::from_env();
     let catalog_contention_quiet_previews = matches!(
         std::env::var("MISTER_CATALOG_CONTENTION_QUIET_PREVIEWS")
@@ -12660,10 +12652,8 @@ fn apply_catalog_session_effects(
                 *full_bridge_dirty = true;
                 launcher_response_trace.end_catalog_phase(phase);
                 let adoption_us = adoption_started.elapsed().as_micros();
-                if let Ok(path) = std::env::var("MISTER_SYSTEM_ENTRY_PROFILE_OUT")
-                    && !path.is_empty()
-                {
-                    let path = std::path::Path::new(&path);
+                if let Some(path) = launcher_response_trace.system_entry_profile_path.as_deref() {
+                    let path = std::path::Path::new(path);
                     if let Some(parent) = path.parent() {
                         let _ = std::fs::create_dir_all(parent);
                     }
