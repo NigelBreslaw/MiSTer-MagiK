@@ -169,8 +169,8 @@ also moved under the library's existing experiments namespace so
 
 Runtime batch `21d` moved allocation/memory support, `ui_runner`, and the
 deferred effect benchmark behind library cfgs. The binary now declares no
-application source modules; its only local `mod` is the inline binary test
-module. This was an ownership-only move: launcher frame phases, scheduling,
+application source modules. Its former inline tests moved with `app_entry` in
+the following extraction. This was an ownership-only move: launcher frame phases, scheduling,
 presentation, readiness, and posted-frame evidence were not decomposed or
 redesigned.
 
@@ -178,7 +178,9 @@ redesigned.
 capture, panic/identity analytics, command resolution, locks, device effects,
 dispatch, and shutdown behavior. The binary bootstrap retains the allocator
 and the required first-operation installed-layout initialization before calling
-the library entrypoint. The characterized startup order is unchanged.
+the library entrypoint. The characterized startup order is unchanged. The
+crate-root check also enforces that narrow binary shape and rejects any new
+module declaration or command/config parsing in `main.rs`.
 
 ## Hotspot ownership
 

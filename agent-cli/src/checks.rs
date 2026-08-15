@@ -991,6 +991,18 @@ fn check_device_crate_root_ownership(repository: &Path) -> Result<(), String> {
             missing.join(",")
         ));
     }
+    if main.lines().count() > 24
+        || !main.contains("#[global_allocator]")
+        || !main.contains("device_layout::initialize_process_env()")
+        || !main.contains("app_entry::run()")
+        || !main_modules.is_empty()
+        || main.contains("std::env::args")
+    {
+        return Err(
+            "device_binary_bootstrap_drift: main.rs owns only allocator, earliest layout initialization, and app_entry::run"
+                .into(),
+        );
+    }
     Ok(())
 }
 
@@ -1669,7 +1681,11 @@ visibility = "internal runtime"
                 .as_nanos()
         ));
         fs::create_dir_all(root.join("apps/mister/src/experiments")).unwrap();
-        fs::write(root.join("apps/mister/src/main.rs"), "mod binary_only;\n").unwrap();
+        fs::write(
+            root.join("apps/mister/src/main.rs"),
+            "#[global_allocator]\nstatic ALLOC: Alloc = Alloc;\nfn main() { unsafe { device_layout::initialize_process_env() }; app_entry::run(); }\n",
+        )
+        .unwrap();
         fs::write(
             root.join("apps/mister/src/lib.rs"),
             "pub mod library_only;\n",
@@ -1679,7 +1695,7 @@ visibility = "internal runtime"
         assert!(check_device_crate_root_ownership(&root).is_ok());
         fs::write(
             root.join("apps/mister/src/main.rs"),
-            "mod binary_only;\nmod unplanned;\n",
+            "#[global_allocator]\nstatic ALLOC: Alloc = Alloc;\nmod unplanned;\nfn main() { unsafe { device_layout::initialize_process_env() }; app_entry::run(); }\n",
         )
         .unwrap();
         fs::write(
