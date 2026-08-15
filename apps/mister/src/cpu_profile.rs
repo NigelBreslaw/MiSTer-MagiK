@@ -169,6 +169,7 @@ impl CpuProfileConfig {
         self.trigger == Some(BoundedProfileTrigger::ColdBoot)
     }
 
+    #[cfg(feature = "profile")]
     fn ordinary_requested(&self) -> bool {
         self.enabled && self.trigger.is_none() && !self.system_entry
     }
