@@ -311,6 +311,11 @@ fn run_builtin_batch(
             }
         }
         if let Some(error) = first_error {
+            for (operation, _, cache) in &pending {
+                if let Some(fingerprint) = cache {
+                    evidence.release_validation(&operation.id, fingerprint, request_id)?;
+                }
+            }
             return Err(error);
         }
     }

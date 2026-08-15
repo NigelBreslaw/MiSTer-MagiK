@@ -328,7 +328,16 @@ impl Evidence {
             .map_err(|error| error.to_string())?;
         transaction
             .execute(
-                "DELETE FROM operation_leases WHERE operation_id=?1 AND fingerprint=?2 AND expires_ms<?3",
+                "DELETE FROM operation_leases
+                 WHERE operation_id=?1 AND fingerprint=?2
+                   AND (
+                       expires_ms<?3
+                       OR EXISTS (
+                           SELECT 1 FROM requests
+                           WHERE requests.id=operation_leases.owner_request_id
+                             AND requests.completed_ms IS NOT NULL
+                       )
+                   )",
                 params![operation_id, fingerprint, now],
             )
             .map_err(|error| error.to_string())?;
@@ -1254,6 +1263,33 @@ mod tests {
         assert!(
             second
                 .has_cached_validation_success("check.one", "fingerprint")
+                .unwrap()
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn completed_request_leases_are_reclaimed_immediately() {
+        let root = temporary_root("completed-request-lease");
+        let evidence = Evidence::open_at(&root).unwrap();
+        let owner = RawRequest::capture([OsString::from("agent-cli"), OsString::from("check")]);
+        let waiter = RawRequest::capture([OsString::from("agent-cli"), OsString::from("check")]);
+        evidence.begin_request(&owner).unwrap();
+        evidence.begin_request(&waiter).unwrap();
+        assert!(
+            evidence
+                .claim_validation("check.one", "fingerprint", &owner.id)
+                .unwrap()
+        );
+        assert!(
+            !evidence
+                .claim_validation("check.one", "fingerprint", &waiter.id)
+                .unwrap()
+        );
+        evidence.finish(&owner.id, Outcome::Failed).unwrap();
+        assert!(
+            evidence
+                .claim_validation("check.one", "fingerprint", &waiter.id)
                 .unwrap()
         );
         fs::remove_dir_all(root).unwrap();

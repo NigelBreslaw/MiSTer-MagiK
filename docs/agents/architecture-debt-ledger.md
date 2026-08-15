@@ -274,6 +274,8 @@ component paths, duplicate binary/library module roots, and string-flattened
 device or CLI failure edges. There is no temporary P1 Enforce exception or P0
 error-boundary exception left in this ledger; the remaining temporary runtime
 environment reads belong only to the separately sequenced Type lane.
+Shared assurance leases are reclaimed as soon as their owner request completes,
+and a failed builtin batch releases every lease it claimed before returning.
 
 ## Hotspot ownership
 
