@@ -167,6 +167,13 @@ ARM video/audio runtime behind library cfgs. The transition experiment leaf
 also moved under the library's existing experiments namespace so
 `screenshot_transitions` retains its internal import direction.
 
+Runtime batch `21d` moved allocation/memory support, `ui_runner`, and the
+deferred effect benchmark behind library cfgs. The binary now declares no
+application source modules; its only local `mod` is the inline binary test
+module. This was an ownership-only move: launcher frame phases, scheduling,
+presentation, readiness, and posted-frame evidence were not decomposed or
+redesigned.
+
 ## Hotspot ownership
 
 The PR advisory report uses stable owner IDs so moves do not erase history.

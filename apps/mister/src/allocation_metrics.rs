@@ -6,7 +6,7 @@
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 
-pub(crate) struct TrackingAllocator;
+pub struct TrackingAllocator;
 
 thread_local! {
     static ACTIVE: Cell<bool> = const { Cell::new(false) };
@@ -15,18 +15,18 @@ thread_local! {
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub(crate) struct AllocationMetrics {
-    pub(crate) allocations: u64,
-    pub(crate) bytes: u64,
+pub struct AllocationMetrics {
+    pub allocations: u64,
+    pub bytes: u64,
 }
 
-pub(crate) fn begin() {
+pub fn begin() {
     ALLOCATIONS.set(0);
     BYTES.set(0);
     ACTIVE.set(true);
 }
 
-pub(crate) fn finish() -> AllocationMetrics {
+pub fn finish() -> AllocationMetrics {
     ACTIVE.set(false);
     AllocationMetrics {
         allocations: ALLOCATIONS.get(),

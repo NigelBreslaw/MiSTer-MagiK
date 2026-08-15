@@ -125,7 +125,8 @@ mod launcher_bridge;
 mod launcher_catalog_publication_test;
 mod launcher_catalog_session;
 mod launcher_compositor;
-pub(crate) mod launcher_display_session;
+#[doc(hidden)]
+pub mod launcher_display_session;
 mod launcher_execution_trace;
 mod launcher_frame_accounting;
 mod launcher_gui_profile;
@@ -142,7 +143,8 @@ mod launcher_worker_intents;
 mod raw565_preview_renderer;
 mod screenshot_media_update_session;
 mod tear_pattern_loop;
-pub(crate) mod ui_boot;
+#[doc(hidden)]
+pub mod ui_boot;
 pub(crate) mod ui_frame_target;
 pub(crate) mod ui_platform;
 mod update_checker;

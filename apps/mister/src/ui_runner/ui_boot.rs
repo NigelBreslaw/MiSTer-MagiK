@@ -7,15 +7,15 @@ use mister_magik_fb::framebuffer::mode::{FbModeAction, FbModeGuard, fb_mode_acti
 const DEFAULT_BOOT_BLACK_SETTLE_FRAMES: u32 = 4;
 const MAX_BOOT_BLACK_SETTLE_FRAMES: u32 = 60;
 
-pub(crate) struct UiBootFramebufferSession {
-    pub(crate) ui: UiDisplay,
-    pub(crate) disp: MappedRgb565Framebuffer,
-    pub(crate) display_session: LauncherDisplaySession,
-    pub(crate) _fb_mode_guard: Option<FbModeGuard>,
+pub struct UiBootFramebufferSession {
+    pub ui: UiDisplay,
+    pub disp: MappedRgb565Framebuffer,
+    pub display_session: LauncherDisplaySession,
+    pub _fb_mode_guard: Option<FbModeGuard>,
 }
 
 impl UiBootFramebufferSession {
-    pub(crate) fn start_ui_or_exit(f: &mut Fpga) -> Self {
+    pub fn start_ui_or_exit(f: &mut Fpga) -> Self {
         let runtime_geometry = detect_runtime_display_geometry_for_plan(f, "ui");
         let display_plan = UiDisplayPlan::from_runtime_or_mister_ini_file(runtime_geometry);
         crate::ui_logln!("{}", display_plan.log_line());
@@ -148,7 +148,7 @@ impl UiBootFramebufferSession {
     }
 }
 
-pub(crate) fn settle_boot_black_frame(
+pub fn settle_boot_black_frame(
     label: &str,
     disp: &mut MappedRgb565Framebuffer,
     f: &mut Fpga,
@@ -199,7 +199,7 @@ pub(crate) fn settle_boot_black_frame(
     );
 }
 
-pub(crate) fn detect_runtime_display_geometry_for_plan(
+pub fn detect_runtime_display_geometry_for_plan(
     f: &mut Fpga,
     label: &str,
 ) -> Option<RuntimeDisplayGeometry> {

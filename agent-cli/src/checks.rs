@@ -963,7 +963,8 @@ fn check_device_crate_root_ownership(repository: &Path) -> Result<(), String> {
     const EXPECTED: [(&str, &str); 0] = [];
     let main = read(repository, "apps/mister/src/main.rs")?;
     let library = read(repository, "apps/mister/src/lib.rs")?;
-    let experiments = read(repository, "apps/mister/src/experiments/mod.rs")?;
+    let experiments = fs::read_to_string(repository.join("apps/mister/src/experiments/mod.rs"))
+        .unwrap_or_default();
     let main_modules = rust_module_declarations(&main);
     let library_modules = rust_module_declarations(&library);
     let mut actual: BTreeSet<String> = main_modules

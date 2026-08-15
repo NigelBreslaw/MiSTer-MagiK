@@ -98,36 +98,31 @@ pub(crate) fn process_start_monotonic_us() -> u64 {
     *PROCESS_START_MONOTONIC_US.get_or_init(device_monotonic_us)
 }
 
-mod allocation_metrics;
 pub use mister_magik_fb::build_identity;
 use mister_magik_mister_runtime::boot_analytics;
-#[cfg(mister_experiments)]
-mod experiments;
 use mister_magik_mister_runtime::fpga;
-mod memory_pressure;
 use mister_magik_mister_runtime::runtime_status;
 use mister_magik_mister_runtime::settings;
-#[cfg(mister_experiments)]
-mod ui_effect_bench;
-mod ui_runner;
 use mister_magik_mister_runtime::vt;
 
 #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
 use mister_magik_fb::preview_pack_bench;
 #[cfg(test)]
 use mister_magik_fb::test_support;
+#[cfg(mister_experiments)]
+use mister_magik_fb::ui_effect_bench;
+use mister_magik_fb::{
+    allocation_metrics, arcade_list_renderer, artifact_publish, bitmap_text,
+    catalog_failure_report, catalog_progress_report, cpu_profile, diagnostic_identity,
+    display_config, frame_profile, input, input_hub, input_integrity_driver, latch_failure_report,
+    media_http, media_pack_save, pmu_probe, pmu_profile, preview_state, screenshot_transitions,
+    search_bench, ui_display, ui_runner, video_i420,
+};
 pub use mister_magik_fb::{
     arcade_button_overrides, arcade_catalog, command_args, controller_db, framebuffer, input_event,
     input_repeat, input_state, launch_preparation, launcher, launcher_presentation,
     launcher_taxonomy, library_db, licenses, media_update, particle_engine, preview_worker,
     return_catalog_capsule, setup_nav, spring_animation, ui_errln, ui_log, ui_logln,
-};
-use mister_magik_fb::{
-    arcade_list_renderer, artifact_publish, bitmap_text, catalog_failure_report,
-    catalog_progress_report, cpu_profile, diagnostic_identity, display_config, frame_profile,
-    input, input_hub, input_integrity_driver, latch_failure_report, media_http, media_pack_save,
-    pmu_probe, pmu_profile, preview_state, screenshot_transitions, search_bench, ui_display,
-    video_i420,
 };
 #[cfg(feature = "bench-tools")]
 use mister_magik_fb::{media_bench_download, media_bench_save};

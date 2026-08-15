@@ -9,6 +9,9 @@
 
 extern crate self as mister_magik_fb;
 
+#[cfg(feature = "ui")]
+#[doc(hidden)]
+pub mod allocation_metrics;
 pub mod arcade_button_overrides;
 #[cfg(any(feature = "ui", feature = "ui-preview"))]
 #[allow(dead_code)]
@@ -80,6 +83,8 @@ pub mod media_http;
 #[doc(hidden)]
 pub mod media_pack_save;
 pub mod media_update;
+#[cfg(feature = "ui")]
+mod memory_pressure;
 #[cfg(all(feature = "ui", target_os = "linux", target_arch = "arm"))]
 #[doc(hidden)]
 pub mod mr_audio;
@@ -125,8 +130,14 @@ pub mod test_support;
 #[cfg(any(feature = "ui", feature = "ui-preview"))]
 #[allow(dead_code)]
 pub mod ui_display;
+#[cfg(all(feature = "ui", mister_experiments))]
+#[doc(hidden)]
+pub mod ui_effect_bench;
 #[cfg(all(feature = "ui-preview", target_os = "macos"))]
 pub mod ui_preview_fixtures;
+#[cfg(feature = "ui")]
+#[doc(hidden)]
+pub mod ui_runner;
 #[cfg(any(feature = "ui", feature = "ui-preview"))]
 pub mod visual_composition;
 #[cfg(any(feature = "ui", feature = "ui-preview"))]
@@ -143,6 +154,8 @@ pub mod video_i420;
 #[cfg(all(feature = "ui", target_os = "linux", target_arch = "arm"))]
 #[doc(hidden)]
 pub mod video_player;
+#[cfg(feature = "ui")]
+pub use mister_magik_mister_runtime::vt;
 
 pub use mister_magik_catalog::{
     arcade_catalog, library_bench, library_db, media_identity, preview_worker,
