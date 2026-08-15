@@ -68,7 +68,7 @@ const ARCADE_TURBO_PX_PER_SECOND: f64 = 720.0;
 const ARCADE_QUICK_TAP_MAX: Duration = Duration::from_millis(220);
 const ARCADE_TURBO_REPRESS_WINDOW: Duration = Duration::from_millis(350);
 const FIFO_WAIT_TIMEOUT: Duration = Duration::from_secs(5);
-const MISTER_START_TIMEOUT: Duration = Duration::from_secs(15);
+const MAIN_START_TIMEOUT: Duration = Duration::from_secs(15);
 pub const DISPLAY_CONFIRM_SECONDS: u8 = 20;
 pub const LAUNCH_RETURN_STATE_PATH: &str = "/tmp/mister-magik/launcher-return-state.json";
 const LAUNCH_RETURN_STATE_SCHEMA: u32 = 3;
@@ -4945,7 +4945,7 @@ impl LaunchIo for SystemLaunchIo {
     }
 
     fn wait_for_started_mister(&mut self) -> Result<(), String> {
-        main_command::wait_for_running_main_and_fifo(mister_bin(), MISTER_START_TIMEOUT)
+        main_command::wait_for_running_main_and_fifo(mister_bin(), MAIN_START_TIMEOUT)
             .map_err(|error| error.to_string())
     }
 

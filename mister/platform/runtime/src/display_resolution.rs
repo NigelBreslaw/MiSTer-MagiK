@@ -9,14 +9,14 @@ use std::path::Path;
 
 pub use mister_magik_core::display::{DISPLAY_RESOLUTIONS, DisplayResolution};
 
-pub const MISTER_INI_PATH: &str = "/media/fat/MiSTer.ini";
+pub const DEVICE_INI_PATH: &str = "/media/fat/MiSTer.ini";
 
 pub fn find(id: &str) -> Option<&'static DisplayResolution> {
     mister_magik_core::display::find_display_resolution(id)
 }
 
 pub fn persist(id: &str) -> io::Result<()> {
-    persist_to(MISTER_INI_PATH, id)
+    persist_to(DEVICE_INI_PATH, id)
 }
 
 pub fn persist_to(path: impl AsRef<Path>, id: &str) -> io::Result<()> {

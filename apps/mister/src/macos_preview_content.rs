@@ -8,7 +8,7 @@ use std::ffi::{OsStr, OsString};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
-const CANONICAL_MISTER_ROOT: &str = "/media/fat";
+const CANONICAL_DEVICE_ROOT: &str = "/media/fat";
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ContentMode {
@@ -101,14 +101,14 @@ impl HostContentLayout {
                 self.card_root.display()
             )
         })?;
-        Ok(Path::new(CANONICAL_MISTER_ROOT).join(relative))
+        Ok(Path::new(CANONICAL_DEVICE_ROOT).join(relative))
     }
 
     pub fn to_card_path(&self, canonical: impl AsRef<Path>) -> Result<PathBuf, String> {
         let canonical = normalize_without_parent_components(canonical.as_ref())?;
-        let relative = canonical.strip_prefix(CANONICAL_MISTER_ROOT).map_err(|_| {
+        let relative = canonical.strip_prefix(CANONICAL_DEVICE_ROOT).map_err(|_| {
             format!(
-                "{} is not beneath {CANONICAL_MISTER_ROOT}",
+                "{} is not beneath {CANONICAL_DEVICE_ROOT}",
                 canonical.display()
             )
         })?;

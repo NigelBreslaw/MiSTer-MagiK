@@ -818,6 +818,7 @@ fn check_runtime_environment(repository: &Path) -> Result<(), String> {
     let files = repository_files(repository)?;
     let mut actual = BTreeSet::new();
     let mut literal_occurrences = 0;
+    let mut source_texts = BTreeMap::new();
     for path in files.iter().filter(|path| {
         path.extension().and_then(|extension| extension.to_str()) == Some("rs")
             && SOURCE_ROOTS.iter().any(|root| path.starts_with(root))
@@ -827,6 +828,7 @@ fn check_runtime_environment(repository: &Path) -> Result<(), String> {
         let names = mister_environment_names(&source);
         literal_occurrences += names.len();
         actual.extend(names);
+        source_texts.insert(path.clone(), source);
     }
     let mut registered = BTreeSet::new();
     for control in &registry.control {
@@ -836,6 +838,9 @@ fn check_runtime_environment(repository: &Path) -> Result<(), String> {
                 .iter()
                 .any(|root| control.owner.starts_with(root))
             || !repository.join(&control.owner).is_file()
+            || !source_texts
+                .get(Path::new(&control.owner))
+                .is_some_and(|source| source.contains(&format!("\"{}\"", control.name)))
             || ![
                 "production",
                 "diagnostic",
@@ -852,6 +857,9 @@ fn check_runtime_environment(repository: &Path) -> Result<(), String> {
             || control.default_behavior.is_empty()
             || control.visibility.is_empty()
             || validate_runtime_environment_metadata(control).is_err()
+            || registry.format == "mister-magik-runtime-environment-v2"
+                && requires_complete_runtime_metadata(control)
+                && !has_complete_runtime_metadata(control)
         {
             return Err(format!(
                 "runtime_environment_control_invalid: {}",
@@ -991,6 +999,30 @@ fn validate_runtime_environment_metadata(control: &RuntimeEnvironmentControl) ->
         return Err(());
     }
     Ok(())
+}
+
+fn requires_complete_runtime_metadata(control: &RuntimeEnvironmentControl) -> bool {
+    matches!(
+        control.classification.as_str(),
+        "production" | "external" | "build-time"
+    )
+}
+
+fn has_complete_runtime_metadata(control: &RuntimeEnvironmentControl) -> bool {
+    let expected_scope = match control.classification.as_str() {
+        "external" => ["external"].as_slice(),
+        "build-time" => ["build"].as_slice(),
+        "production" => ["process", "command"].as_slice(),
+        _ => return true,
+    };
+    control.parser.is_some()
+        && control
+            .scope
+            .as_deref()
+            .is_some_and(|scope| expected_scope.contains(&scope))
+        && control.sensitivity.is_some()
+        && control.documentation.is_some()
+        && control.default_behavior != "site-defined fallback; unchanged in P0"
 }
 
 fn typed_default_matches(parser: Option<&str>, value: &toml::Value) -> bool {
@@ -1975,6 +2007,10 @@ visibility = "internal runtime"
         .unwrap();
         assert!(check_runtime_environment(&root).is_ok());
 
+        fs::write(&source, "const MISTER_ONE: &str = \"not-an-input\";\n").unwrap();
+        let error = check_runtime_environment(&root).unwrap_err();
+        assert!(error.contains("runtime_environment_control_invalid: MISTER_ONE"));
+
         fs::write(
             &source,
             "std::env::var(\"MISTER_ONE\");\nstd::env::var(\"MISTER_TWO\");\n",
@@ -2036,6 +2072,37 @@ scope = "process"
         )
         .unwrap();
         assert!(validate_runtime_environment_metadata(&invalid).is_err());
+
+        let complete: RuntimeEnvironmentControl = toml::from_str(
+            r#"name = "MISTER_FIXTURE"
+owner = "apps/mister/src/config.rs"
+classification = "production"
+value_shape = "boolean token"
+default_behavior = "defaults to false"
+visibility = "internal runtime"
+parser = "bool"
+typed_default = false
+scope = "command"
+conflicts = []
+sensitivity = "public"
+aliases = []
+documentation = { summary = "Fixture metadata", accepted_values = ["0", "1"], value_policy = "document" }
+"#,
+        )
+        .unwrap();
+        assert!(has_complete_runtime_metadata(&complete));
+
+        let incomplete: RuntimeEnvironmentControl = toml::from_str(
+            r#"name = "MISTER_FIXTURE"
+owner = "apps/mister/src/config.rs"
+classification = "production"
+value_shape = "boolean token"
+default_behavior = "site-defined fallback; unchanged in P0"
+visibility = "internal runtime"
+"#,
+        )
+        .unwrap();
+        assert!(!has_complete_runtime_metadata(&incomplete));
     }
 
     #[test]
