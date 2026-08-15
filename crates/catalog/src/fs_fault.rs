@@ -86,11 +86,22 @@ impl FaultConfig {
     ///
     /// The session token remains volatile and is never serialized by this type.
     pub fn capture_from_process() -> Option<Self> {
+        let values =
+            [POINT_ENV, ACTION_ENV, DELAY_ENV, SESSION_ENV].map(|name| std::env::var(name).ok());
         Self::from_compatible_values(
-            std::env::var(POINT_ENV).ok().as_deref(),
-            std::env::var(ACTION_ENV).ok().as_deref(),
-            std::env::var(DELAY_ENV).ok().as_deref(),
-            std::env::var(SESSION_ENV).ok().as_deref(),
+            values[0].as_deref(),
+            values[1].as_deref(),
+            values[2].as_deref(),
+            values[3].as_deref(),
+        )
+    }
+
+    pub fn capture_with<'a>(mut get: impl FnMut(&str) -> Option<&'a str>) -> Option<Self> {
+        Self::from_compatible_values(
+            get(POINT_ENV),
+            get(ACTION_ENV),
+            get(DELAY_ENV),
+            get(SESSION_ENV),
         )
     }
 

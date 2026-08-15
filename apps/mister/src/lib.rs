@@ -53,6 +53,7 @@ pub mod particle_engine;
 pub mod particle_renderer;
 #[cfg(any(feature = "ui", feature = "ui-preview"))]
 pub mod preview_transition;
+pub mod process_config;
 #[cfg(all(feature = "ui-preview", target_os = "macos"))]
 #[path = "ui_runner/launcher_screensaver.rs"]
 pub mod production_launcher_screensaver;

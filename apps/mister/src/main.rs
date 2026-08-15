@@ -201,7 +201,8 @@ fn main() {
     }
 
     let cmd = command_args::resolve_command(&args);
-    let fault_config = mister_magik_catalog::fs_fault::FaultConfig::capture_from_process();
+    let process_config = mister_magik_fb::process_config::ProcessConfig::capture(&args, &cmd);
+    let fault_config = process_config.fault().cloned();
     if let Err(error) =
         mister_magik_mister_runtime::direct_reset_fault::install_process_fault_config(
             fault_config.clone(),
@@ -211,8 +212,7 @@ fn main() {
         std::process::exit(1);
     }
 
-    let latch_readiness_json =
-        cmd == "latch-readiness-report" && args.iter().any(|arg| arg == "--json");
+    let latch_readiness_json = process_config.diagnostics().latch_readiness_json;
     if cmd != command_args::CATALOG_INSPECT_COMMAND && !latch_readiness_json {
         crate::ui_logln!("mister-magik-fb [{cmd}] ({})", build_identity.log_detail());
     }
@@ -274,10 +274,10 @@ fn main() {
 
     dispatch_fpga(
         &cmd,
-        &args,
         &mut f,
         process_entry_cpu_profile,
         fault_config.as_ref(),
+        &process_config,
     );
 }
 
@@ -496,15 +496,19 @@ fn run_catalog_v3_registry_report() {
 
 fn dispatch_fpga(
     cmd: &str,
-    args: &[String],
     f: &mut Fpga,
     process_entry_cpu_profile: Option<cpu_profile::CpuProfiler>,
     _fault_config: Option<&mister_magik_catalog::fs_fault::FaultConfig>,
+    process_config: &mister_magik_fb::process_config::ProcessConfig,
 ) {
     match cmd {
         "read" => read_mode(f),
         "early-black" => early_black_route(f),
-        "ui" => ui_runner::run_ui(f, process_entry_cpu_profile),
+        "ui" => ui_runner::run_ui(
+            f,
+            process_entry_cpu_profile,
+            process_config.launcher().clone(),
+        ),
         #[cfg(mister_bench_scenes)]
         "scenes" => ui_runner::print_scenes(),
         #[cfg(mister_experiments)]
@@ -515,7 +519,7 @@ fn dispatch_fpga(
         "input" => run_input(),
         "fpga-latch-report" => run_fpga_latch_report(),
         "latch-readiness-report" => {
-            run_latch_readiness_report(f, args.iter().any(|arg| arg == "--json"))
+            run_latch_readiness_report(f, process_config.diagnostics().latch_readiness_json)
         }
         #[cfg(all(feature = "diagnostics", feature = "ui"))]
         "fpga-latch-post-report" => run_fpga_latch_post_report(f),

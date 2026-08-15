@@ -4875,6 +4875,7 @@ pub(super) fn run_launcher_loop(
     app: slint_ui::launcher::Launcher,
     animation_clock: &AnimationClock,
     process_entry_cpu_profile: Option<cpu_profile::CpuProfiler>,
+    launcher_config: mister_magik_fb::process_config::LauncherProcessConfig,
 ) {
     let start = Instant::now();
     let startup_monotonic_us = monotonic_clock_us().unwrap_or(0);
@@ -4900,7 +4901,9 @@ pub(super) fn run_launcher_loop(
     let mut screensaver_first_present_logged = false;
     let mut screensaver_first_card_present_logged = false;
     let mut launcher_presenter = LauncherPresenter::new(ui);
-    let mut launcher_readiness = super::launcher_readiness::LauncherReadiness::from_env();
+    let mut launcher_readiness = super::launcher_readiness::LauncherReadiness::from_process_config(
+        launcher_config.readiness().clone(),
+    );
     let launcher_bench_scenario = LauncherBenchScenario::from_env();
     let orientation_benchmark_enabled =
         launcher_env_flag("MISTER_ORIENTATION_TRANSITIONS_BENCHMARK");

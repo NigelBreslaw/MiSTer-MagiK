@@ -360,7 +360,11 @@ macro_rules! with_scene_app {
     }};
 }
 
-pub fn run_ui(f: &mut Fpga, process_entry_cpu_profile: Option<cpu_profile::CpuProfiler>) {
+pub fn run_ui(
+    f: &mut Fpga,
+    process_entry_cpu_profile: Option<cpu_profile::CpuProfiler>,
+    launcher_config: mister_magik_fb::process_config::LauncherProcessConfig,
+) {
     crate::launch_preparation::cleanup_archive_launch_staging();
     let (scene, secs) = parse_ui_args();
     boot_analytics::event("run_ui_start", format!("scene={scene} secs={secs}"));
@@ -497,6 +501,7 @@ pub fn run_ui(f: &mut Fpga, process_entry_cpu_profile: Option<cpu_profile::CpuPr
                     app,
                     &animation_clock,
                     process_entry_cpu_profile,
+                    launcher_config,
                 );
             });
         }

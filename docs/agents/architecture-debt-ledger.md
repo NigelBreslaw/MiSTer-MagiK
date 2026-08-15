@@ -69,6 +69,16 @@ removed only when each process has one named parse site, registered aliases and
 external inputs remain explicit, and the negative fixtures reject downstream
 reads. No other P1 stream may create a competing registry or config vocabulary.
 
+The application process boundary now captures one immutable environment
+snapshot after command resolution. Its typed launcher-readiness section owns
+the startup token, ready FIFO, Main PID/generation, and owner epoch; the
+diagnostic section captures the readiness-report JSON modifier. The existing
+`ready-v2` state machine consumes that typed section without changing token
+acceptance, posted-frame evidence, retry, or send behavior. Compatible fault
+configuration is also derived from the same snapshot through the catalog-owned
+redacting parser. Remaining registered controls retain their temporary direct
+read sites until their named Type-A migration batches land.
+
 ## Platform-v3 authority
 
 `mister/platform/contracts/platform-v3.schema.toml` is the canonical neutral

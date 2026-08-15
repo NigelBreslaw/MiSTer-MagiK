@@ -1040,7 +1040,7 @@ visibility = "internal runtime"
 
 [[control]]
 name = "MISTER_MAGIK_MAIN_GENERATION"
-owner = "apps/mister/src/ui_runner/launcher_readiness.rs"
+owner = "apps/mister/src/process_config.rs"
 classification = "production"
 value_shape = "bounded integer"
 default_behavior = "missing or invalid disables supervised readiness acknowledgement"
@@ -1048,7 +1048,7 @@ visibility = "internal runtime"
 
 [[control]]
 name = "MISTER_MAGIK_MAIN_PID"
-owner = "apps/mister/src/ui_runner/launcher_readiness.rs"
+owner = "apps/mister/src/process_config.rs"
 classification = "production"
 value_shape = "bounded integer"
 default_behavior = "missing or invalid disables supervised readiness acknowledgement"
@@ -1056,7 +1056,7 @@ visibility = "internal runtime"
 
 [[control]]
 name = "MISTER_MAGIK_OWNER_EPOCH"
-owner = "apps/mister/src/ui_runner/launcher_readiness.rs"
+owner = "apps/mister/src/process_config.rs"
 classification = "production"
 value_shape = "bounded integer"
 default_behavior = "missing or invalid disables supervised readiness acknowledgement"
@@ -1080,7 +1080,7 @@ visibility = "internal runtime"
 
 [[control]]
 name = "MISTER_MAGIK_READY_FIFO"
-owner = "apps/mister/src/ui_runner/launcher_readiness.rs"
+owner = "apps/mister/src/process_config.rs"
 classification = "production"
 value_shape = "path or path list"
 default_behavior = "site-defined fallback; unchanged in P0"
@@ -1136,7 +1136,7 @@ visibility = "build pipeline"
 
 [[control]]
 name = "MISTER_MAGIK_STARTUP_TOKEN"
-owner = "apps/mister/src/ui_runner/launcher_readiness.rs"
+owner = "apps/mister/src/process_config.rs"
 classification = "production"
 value_shape = "string, enum, or boolean token"
 default_behavior = "site-defined fallback; unchanged in P0"

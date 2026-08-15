@@ -149,20 +149,16 @@ pub(super) struct LauncherReadiness {
 }
 
 impl LauncherReadiness {
-    pub(super) fn from_env() -> Self {
+    pub(super) fn from_process_config(
+        config: mister_magik_fb::process_config::LauncherReadinessConfig,
+    ) -> Self {
+        let (token, fifo, main_pid, main_generation, owner_epoch) = config.into_parts();
         let context = ReadyContext {
-            main_pid: env_u32("MISTER_MAGIK_MAIN_PID"),
-            main_generation: env_u64("MISTER_MAGIK_MAIN_GENERATION"),
-            owner_epoch: env_u64("MISTER_MAGIK_OWNER_EPOCH"),
+            main_pid,
+            main_generation,
+            owner_epoch,
         };
-        Self::from_config(
-            std::env::var("MISTER_MAGIK_STARTUP_TOKEN").unwrap_or_default(),
-            std::env::var_os("MISTER_MAGIK_READY_FIFO")
-                .map(PathBuf::from)
-                .unwrap_or_default(),
-            std::process::id(),
-            context,
-        )
+        Self::from_config(token, fifo, std::process::id(), context)
     }
 
     fn from_config(token: String, fifo: PathBuf, pid: u32, context: ReadyContext) -> Self {
@@ -279,20 +275,6 @@ impl LauncherReadiness {
             self.phase = ReadyPhase::Sent;
         }
     }
-}
-
-fn env_u32(name: &str) -> u32 {
-    std::env::var(name)
-        .ok()
-        .and_then(|value| value.parse().ok())
-        .unwrap_or(0)
-}
-
-fn env_u64(name: &str) -> u64 {
-    std::env::var(name)
-        .ok()
-        .and_then(|value| value.parse().ok())
-        .unwrap_or(0)
 }
 
 fn valid_token(token: &str) -> bool {
