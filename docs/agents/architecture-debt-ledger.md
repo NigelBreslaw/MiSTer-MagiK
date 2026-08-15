@@ -199,6 +199,8 @@ roots use module-scoped dead-code allowances for tests and non-device host
 targets, plus the explicitly launcher-scoped ARM validation graph, because
 those builds deliberately compile partial UI graphs. Full-scope Linux/ARM
 production builds retain dead-code enforcement.
+Experiment, diagnostic, profiler, and test-only helpers are cfg-gated at their
+owning items, so release builds do not depend on a library-wide suppression.
 The full feature matrix also proves `app_entry` imports only library modules it
 uses under the selected cfg, while typed ready-FIFO capture retains the legacy
 empty `PathBuf` fallback. Feature-specific application tests now target that

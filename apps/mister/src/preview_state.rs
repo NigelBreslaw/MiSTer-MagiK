@@ -1164,6 +1164,7 @@ struct PreviewCandidate<'a> {
     preview_key: String,
 }
 
+#[cfg(test)]
 fn first_preview_candidate(
     games: ArcadeGameView<'_>,
     selected: usize,

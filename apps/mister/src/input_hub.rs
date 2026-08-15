@@ -108,6 +108,7 @@ impl MailboxState {
         self.wake_generation = self.wake_generation.wrapping_add(1);
     }
 
+    #[cfg(test)]
     fn publish(&mut self, pending: crate::input_event::PendingInputEvent) -> bool {
         self.publish_proxy(pending, ProxyEventMetadata::default())
     }

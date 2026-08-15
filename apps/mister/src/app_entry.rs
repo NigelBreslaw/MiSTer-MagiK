@@ -513,6 +513,7 @@ fn print_preview_transitions() {
     );
 }
 
+#[cfg(mister_experiments)]
 fn print_experiment_capabilities() {
     #[cfg(mister_experiments)]
     {
@@ -642,30 +643,36 @@ fn run_reset_delete_screenshot_packs(args: &[String]) {
     }
 }
 
+#[cfg(test)]
 const DEFAULT_LIBRARY_REFRESH_LOCK_PATH: &str = "/tmp/mister-magik/library-refresh.lock";
 
+#[cfg(test)]
 fn usable_library_database_exists(path: &Path) -> bool {
     std::fs::metadata(path)
         .map(|metadata| metadata.is_file() && metadata.len() > 0)
         .unwrap_or(false)
 }
 
+#[cfg(test)]
 fn library_refresh_lock_path() -> PathBuf {
     std::env::var("MISTER_LIBRARY_REFRESH_LOCK")
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from(DEFAULT_LIBRARY_REFRESH_LOCK_PATH))
 }
 
+#[cfg(test)]
 enum RefreshLockState {
     Acquired(LibraryRefreshLock),
     Active { pid: u32 },
 }
 
+#[cfg(test)]
 struct LibraryRefreshLock {
     path: PathBuf,
     pid: u32,
 }
 
+#[cfg(test)]
 impl LibraryRefreshLock {
     fn acquire(path: &Path) -> Result<RefreshLockState, String> {
         let pid = std::process::id();
@@ -680,6 +687,7 @@ impl LibraryRefreshLock {
     }
 }
 
+#[cfg(test)]
 impl Drop for LibraryRefreshLock {
     fn drop(&mut self) {
         remove_pid_lock_if_owner(&self.path, self.pid);
@@ -687,11 +695,13 @@ impl Drop for LibraryRefreshLock {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg(test)]
 enum RefreshLockDecision {
     Acquired,
     Active { pid: u32 },
 }
 
+#[cfg(test)]
 fn acquire_library_refresh_lock<F>(
     path: &Path,
     pid: u32,
@@ -718,6 +728,7 @@ fn read_lock_pid(path: &Path) -> Option<u32> {
     text.trim().parse::<u32>().ok()
 }
 
+#[cfg(test)]
 fn process_is_library_refresh(pid: u32) -> bool {
     process_cmdline_parts(pid).is_some_and(|parts| {
         parts.iter().any(|part| part.ends_with("mister-magik-fb"))
@@ -742,6 +753,7 @@ fn process_cmdline_parts(pid: u32) -> Option<Vec<String>> {
     )
 }
 
+#[cfg(test)]
 fn should_defer_parent_boot_library_refresh(
     parent_boot: bool,
     database_exists: bool,
@@ -750,6 +762,7 @@ fn should_defer_parent_boot_library_refresh(
     parent_boot && !database_exists && !force_foreground
 }
 
+#[cfg(test)]
 fn run_library_sql() {
     let args: Vec<String> = std::env::args().skip(2).collect();
     match library_db::run_sqlite_inspect_cli(&args) {
@@ -766,6 +779,7 @@ fn run_library_sql() {
     }
 }
 
+#[cfg(test)]
 fn run_catalog_inspect() {
     use mister_magik_catalog::arcade_catalog::{DEFAULT_ARCADE_ROOT, LaunchTarget};
 
@@ -912,6 +926,7 @@ fn run_catalog_inspect() {
     }
 }
 
+#[cfg(test)]
 fn catalog_filter_inspection_tsv(
     source: &str,
     collection_id: &str,
@@ -950,10 +965,12 @@ fn catalog_filter_inspection_tsv(
     out
 }
 
+#[cfg(test)]
 fn sanitize_tsv_field(value: &str) -> String {
     value.replace(['\t', '\r', '\n'], " ")
 }
 
+#[cfg(feature = "diagnostics")]
 fn run_hbmame_metadata_from_library() {
     match library_db::write_default_hbmame_metadata_from_library() {
         Ok(summary) => {
@@ -990,6 +1007,7 @@ fn run_preview_index_refresh_bench() {
     }
 }
 
+#[cfg(feature = "diagnostics")]
 fn run_cpu_profile_smoke() {
     let secs = std::env::args()
         .nth(2)
@@ -2343,6 +2361,7 @@ fn elapsed_thread_cpu_us(start: Option<u64>) -> u64 {
         .unwrap_or_default()
 }
 
+#[cfg(feature = "diagnostics")]
 fn run_vsync_probe() {
     let args: Vec<String> = std::env::args().skip(2).collect();
     let frames = args
@@ -2395,6 +2414,7 @@ fn run_vsync_probe() {
     }
 }
 
+#[cfg(feature = "diagnostics")]
 fn run_direct_vsync_probe(frames: u64, work_us: u64) {
     let disp = match MappedRgb565Framebuffer::open_current_rgb565() {
         Ok(d) => d,
@@ -2634,6 +2654,7 @@ fn print_word(label: &str, w: (u16, u16)) {
     );
 }
 
+#[cfg(feature = "diagnostics")]
 fn run_input() {
     let args: Vec<String> = std::env::args().skip(2).collect();
     let sub = args.first().map(|s| s.as_str()).unwrap_or("log");
@@ -2669,6 +2690,7 @@ fn run_input() {
     }
 }
 
+#[cfg(feature = "diagnostics")]
 fn parse_input_log_args(args: &[String]) -> (Option<&str>, u64) {
     match args.len() {
         0 => (None, 120),
