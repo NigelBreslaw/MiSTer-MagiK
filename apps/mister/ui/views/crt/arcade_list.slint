@@ -122,13 +122,8 @@ export component ArcadeListScreen inherits Rectangle {
         y: MisterBridge.arcade-list-y * 1px;
         width: MisterBridge.arcade-list-width * 1px;
         height: MisterBridge.arcade-list-height * 1px;
-        // Rust owns the normal game-list viewport (including its backdrop,
-        // fill, text, and selection). Avoid rasterizing a large opaque panel
-        // that is overwritten immediately; retain it for search/loading UI.
-        background: (MisterBridge.arcade-search-active || MisterBridge.arcade-games-loading)
-            ? CrtTheme.panel-alt : transparent;
-        border-width: (MisterBridge.arcade-search-active || MisterBridge.arcade-games-loading)
-            ? MisterUi.border : 0px;
+        background: CrtTheme.panel-alt;
+        border-width: MisterUi.border;
         border-color: MisterBridge.arcade-search-pane == 1 ? CrtTheme.accent : CrtTheme.border;
         clip: true;
 
