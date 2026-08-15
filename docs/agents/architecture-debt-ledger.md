@@ -197,6 +197,12 @@ Host classification, device family emission, and CLI evidence propagation are
 ratcheted in the following commits; the wire addition alone changes no exit
 code or human-facing first line.
 
+The host agent client now prefers valid structured metadata and falls back to
+the legacy string. `AgentError` retains the full wire classification—including
+unknown future values, phase, retry policy, and recovery flag—while exposing a
+compatible `DeviceFailure` mapping and keeping the legacy error as its display
+text.
+
 ## Hotspot ownership
 
 The PR advisory report uses stable owner IDs so moves do not erase history.

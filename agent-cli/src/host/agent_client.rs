@@ -16,6 +16,7 @@ use std::time::{Duration, Instant};
 use super::discovery::{secure_write, token_path};
 use super::remote::{ConnectionConfig, connect_with, exec, host, put, put_bytes};
 use super::{Layout, Result, installed_layout};
+use crate::error::AgentError;
 
 pub(crate) const AGENT_PORT: u16 = agent_protocol::PORT;
 static REMOTE_AGENT: LazyLock<String> = LazyLock::new(|| {
@@ -883,7 +884,9 @@ fn parse_agent_response_line(line: String, start: Instant) -> Result<AgentRespon
             elapsed_ms: start.elapsed().as_millis(),
         }),
         ResponseEnvelope::Error(error) => Err(error.into()),
-        ResponseEnvelope::ErrorWithFailure { error, .. } => Err(error.into()),
+        ResponseEnvelope::ErrorWithFailure { error, failure } => {
+            Err(AgentError::structured_device(error, failure).into())
+        }
     }
 }
 
@@ -943,6 +946,30 @@ mod tests {
         .expect("success response");
 
         assert_eq!(response.response["result"]["value"], 42);
+    }
+
+    #[test]
+    fn enriched_agent_failure_preserves_classification_with_legacy_display() {
+        let error = parse_agent_response_line(
+            "{\"ok\":false,\"error\":\"device is busy\",\"failure\":{\"code\":\"device_busy\",\"detail\":\"operation active\",\"phase\":\"availability\",\"retry_policy\":\"retry\",\"recovery_required\":false}}\n".to_owned(),
+            Instant::now(),
+        )
+        .expect_err("enriched response should fail");
+        assert_eq!(error.to_string(), "device is busy");
+        let error = error
+            .downcast_ref::<AgentError>()
+            .expect("typed agent error");
+        let failure = error.structured_failure().expect("structured failure");
+        assert_eq!(failure.code, agent_protocol::FailureCode::DeviceBusy);
+        assert_eq!(failure.phase, agent_protocol::FailurePhase::Availability);
+        assert_eq!(failure.retry_policy, agent_protocol::RetryPolicy::Retry);
+        assert!(!failure.recovery_required);
+        assert_eq!(
+            error.device_failure(),
+            Some(crate::transport::DeviceFailure::Busy(
+                "operation active".into()
+            ))
+        );
     }
 
     #[test]

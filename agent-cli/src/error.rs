@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use crate::transport::DeviceFailure;
+use mister_magik_agent_protocol::{FailureCode, FailureMetadata};
 use thiserror::Error;
 
 pub type AgentResult<T> = Result<T, AgentError>;
@@ -22,6 +23,11 @@ pub enum AgentError {
     Cancelled(Box<Self>),
     #[error("recovery_required: {message}")]
     RecoveryRequired { message: String },
+    #[error("{message}")]
+    StructuredDevice {
+        message: String,
+        failure: FailureMetadata,
+    },
 }
 
 impl AgentError {
@@ -46,9 +52,53 @@ impl AgentError {
     }
 
     #[must_use]
+    pub fn structured_device(message: impl Into<String>, failure: FailureMetadata) -> Self {
+        Self::StructuredDevice {
+            message: message.into(),
+            failure,
+        }
+    }
+
+    #[must_use]
+    pub fn structured_failure(&self) -> Option<&FailureMetadata> {
+        match self {
+            Self::StructuredDevice { failure, .. } => Some(failure),
+            Self::Phase { source, .. } | Self::Cancelled(source) => source.structured_failure(),
+            Self::Message(_) | Self::Classified { .. } | Self::RecoveryRequired { .. } => None,
+        }
+    }
+
+    #[must_use]
+    pub fn device_failure(&self) -> Option<DeviceFailure> {
+        let failure = self.structured_failure()?;
+        let detail = failure.detail.clone();
+        Some(
+            if failure.recovery_required || failure.code == FailureCode::RecoveryRequired {
+                DeviceFailure::RecoveryRequired(detail)
+            } else {
+                match &failure.code {
+                    FailureCode::DeviceBusy => DeviceFailure::Busy(detail),
+                    FailureCode::AccessDenied => DeviceFailure::AccessDenied(detail),
+                    FailureCode::DeviceUnavailable => DeviceFailure::Unavailable(detail),
+                    FailureCode::AuthenticationRequired => DeviceFailure::Authentication(detail),
+                    FailureCode::UnknownCommand | FailureCode::InvalidRequest => {
+                        DeviceFailure::InvalidRequest(detail)
+                    }
+                    FailureCode::ArtifactMismatch => DeviceFailure::ArtifactMismatch(detail),
+                    FailureCode::OperationFailed
+                    | FailureCode::Cancelled
+                    | FailureCode::Unknown(_)
+                    | FailureCode::RecoveryRequired => DeviceFailure::OperationFailed(detail),
+                }
+            },
+        )
+    }
+
+    #[must_use]
     pub fn is_recovery_required(&self) -> bool {
         match self {
             Self::RecoveryRequired { .. } => true,
+            Self::StructuredDevice { failure, .. } => failure.recovery_required,
             Self::Phase { source, .. } | Self::Cancelled(source) => source.is_recovery_required(),
             Self::Message(_) | Self::Classified { .. } => false,
         }

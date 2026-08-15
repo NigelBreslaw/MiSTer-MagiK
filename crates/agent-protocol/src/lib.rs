@@ -43,6 +43,7 @@ pub enum FailureCode {
     DeviceUnavailable,
     ArtifactMismatch,
     OperationFailed,
+    Cancelled,
     RecoveryRequired,
     Unknown(String),
 }
@@ -105,6 +106,7 @@ wire_enum!(FailureCode {
     DeviceUnavailable => "device_unavailable",
     ArtifactMismatch => "artifact_mismatch",
     OperationFailed => "operation_failed",
+    Cancelled => "cancelled",
     RecoveryRequired => "recovery_required",
 });
 wire_enum!(FailurePhase {
