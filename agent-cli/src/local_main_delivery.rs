@@ -252,10 +252,8 @@ fn run_bounded(repository: &Path, program: &str, args: &[&str]) -> AgentResult<(
 
 #[cfg(test)]
 fn test_manifest(magik_revision: &str) -> String {
-    use sha2::{Digest, Sha256};
     use std::collections::BTreeMap;
 
-    let fields = crate::platform_manifest::FIELDS;
     let mut values = BTreeMap::new();
     values.insert(
         "format".to_owned(),
@@ -287,26 +285,11 @@ fn test_manifest(magik_revision: &str) -> String {
     values.insert("main_revision".to_owned(), "e".repeat(40));
     values.insert("magik_revision".to_owned(), magik_revision.into());
     values.insert("menu_revision".to_owned(), "f".repeat(40));
-    let mut hash = Sha256::new();
-    for field in fields {
-        if *field != "qualification_candidate_id" {
-            hash.update(field.as_bytes());
-            hash.update(b"=");
-            hash.update(values[*field].as_bytes());
-            hash.update(b"\n");
-        }
-    }
     values.insert(
         "qualification_candidate_id".to_owned(),
-        hash.finalize()
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect(),
+        mister_magik_platform_manifest_contract::qualification_candidate_id(&values),
     );
-    fields
-        .iter()
-        .map(|field| format!("{field}={}\n", values[*field]))
-        .collect()
+    mister_magik_platform_manifest_contract::serialize(&values).unwrap()
 }
 
 #[cfg(test)]

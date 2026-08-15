@@ -1447,6 +1447,7 @@ fn platform_manifest_structural_duplicate(
     dev: &PlatformManifestLayout,
 ) -> bool {
     if source.contains("mister_magik_platform_manifest_contract::parse(")
+        || source.contains("mister_magik_platform_manifest_contract::serialize(")
         || (source.contains("mister_magik_platform_manifest_contract")
             && source.contains("platform_manifest_contract::parse("))
         || (source.contains("mister_magik_platform_manifest_contract")
@@ -1885,6 +1886,12 @@ visibility = "internal runtime"
         fs::write(
             root.join("apps/mister/src/new_manifest.rs"),
             "fn parse(text: &str) { let _ = mister_magik_platform_manifest_contract::parse(text, layout, profile); }\nconst FORMAT: &str = \"mister-magik-platform-v3\";\n",
+        )
+        .unwrap();
+        assert!(check_platform_manifest_authority(&root).is_ok());
+        fs::write(
+            root.join("apps/mister/src/new_manifest.rs"),
+            "fn fixture(values: &Values) { let _ = mister_magik_platform_manifest_contract::serialize(values); }\nconst FORMAT: &str = \"mister-magik-platform-v3\";\n",
         )
         .unwrap();
         assert!(check_platform_manifest_authority(&root).is_ok());

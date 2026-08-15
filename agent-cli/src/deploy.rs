@@ -446,10 +446,7 @@ mod tests {
             "qualification_candidate_id".into(),
             platform_manifest::qualification_candidate_id(&values),
         );
-        platform_manifest::FIELDS
-            .iter()
-            .map(|field| format!("{field}={}\n", values[*field]))
-            .collect()
+        mister_magik_platform_manifest_contract::serialize(&values).unwrap()
     }
 
     fn git(repository: &Path, args: &[&str]) {
