@@ -29,6 +29,9 @@ pub mod catalog_failure_report;
 pub mod catalog_progress_report;
 pub mod command_args;
 pub mod controller_db;
+#[cfg(feature = "ui")]
+#[doc(hidden)]
+pub mod cpu_profile;
 pub mod crash_report;
 pub mod diagnostic_identity;
 #[cfg(feature = "ui")]
@@ -74,6 +77,15 @@ pub mod media_update;
 pub mod particle_engine;
 #[cfg(any(feature = "ui", feature = "ui-preview"))]
 pub mod particle_renderer;
+#[cfg(feature = "ui")]
+#[doc(hidden)]
+pub mod pmu_probe;
+#[cfg(feature = "ui")]
+#[doc(hidden)]
+pub mod pmu_profile;
+#[cfg(all(feature = "ui", any(feature = "bench-tools", feature = "diagnostics")))]
+#[doc(hidden)]
+pub mod preview_pack_bench;
 #[cfg(any(feature = "ui", feature = "ui-preview"))]
 pub mod preview_transition;
 pub mod process_config;
@@ -82,6 +94,9 @@ pub mod process_config;
 pub mod production_launcher_screensaver;
 pub mod raw565;
 pub mod return_catalog_capsule;
+#[cfg(feature = "ui")]
+#[doc(hidden)]
+pub mod search_bench;
 pub use mister_magik_mister_runtime::runtime_status;
 pub use mister_magik_mister_runtime::settings;
 pub mod setup_nav;

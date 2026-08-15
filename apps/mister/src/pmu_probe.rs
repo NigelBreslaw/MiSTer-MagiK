@@ -17,7 +17,7 @@ pub fn run() {
     }
 }
 
-pub(crate) fn probe() -> Value {
+pub fn probe() -> Value {
     let (group, diagnostics) = CounterGroup::open_with_diagnostics();
     match measure_probe(group) {
         Ok((delta, checksum, read_format, scope)) if valid_probe(delta) => json!({

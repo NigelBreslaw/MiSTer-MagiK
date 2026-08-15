@@ -101,7 +101,6 @@ pub(crate) fn process_start_monotonic_us() -> u64 {
 mod allocation_metrics;
 pub use mister_magik_fb::build_identity;
 use mister_magik_mister_runtime::boot_analytics;
-mod cpu_profile;
 #[cfg(mister_experiments)]
 mod experiments;
 use mister_magik_mister_runtime::fpga;
@@ -111,14 +110,9 @@ mod media_bench_download;
 mod media_bench_save;
 mod memory_pressure;
 mod mr_audio;
-mod pmu_probe;
-mod pmu_profile;
-#[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
-mod preview_pack_bench;
 mod preview_state;
 use mister_magik_mister_runtime::runtime_status;
 mod screenshot_transitions;
-mod search_bench;
 use mister_magik_mister_runtime::settings;
 #[cfg(mister_experiments)]
 mod ui_effect_bench;
@@ -127,6 +121,8 @@ mod ui_runner;
 mod video_player;
 use mister_magik_mister_runtime::vt;
 
+#[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
+use mister_magik_fb::preview_pack_bench;
 #[cfg(test)]
 use mister_magik_fb::test_support;
 pub use mister_magik_fb::{
@@ -137,9 +133,9 @@ pub use mister_magik_fb::{
 };
 use mister_magik_fb::{
     arcade_list_renderer, artifact_publish, bitmap_text, catalog_failure_report,
-    catalog_progress_report, diagnostic_identity, display_config, frame_profile, input, input_hub,
-    input_integrity_driver, latch_failure_report, media_http, media_pack_save, ui_display,
-    video_i420,
+    catalog_progress_report, cpu_profile, diagnostic_identity, display_config, frame_profile,
+    input, input_hub, input_integrity_driver, latch_failure_report, media_http, media_pack_save,
+    pmu_probe, pmu_profile, search_bench, ui_display, video_i420,
 };
 
 #[cfg(all(feature = "diagnostics", feature = "ui"))]

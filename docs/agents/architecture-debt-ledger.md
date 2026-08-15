@@ -157,6 +157,11 @@ and frame-profile modules behind the library's existing `ui` feature. Binary
 children retain their `crate::...` paths through root imports; the source files
 now compile under only the library namespace.
 
+Runtime batch `21b` moved CPU/PMU profiling, preview-pack benchmark, and search
+benchmark support behind library feature cfgs. `ui_effect_bench` remains in the
+binary until `21d` because it imports `ui_runner` platform types; moving it
+earlier would invert the intended library ownership direction.
+
 ## Hotspot ownership
 
 The PR advisory report uses stable owner IDs so moves do not erase history.
