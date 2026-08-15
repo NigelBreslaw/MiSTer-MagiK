@@ -26672,7 +26672,7 @@ H: Handlers=event3 js0"#
     #[test]
     fn platform_deploy_validates_every_required_file_and_publishes_manifest_last() {
         let stage = temp_path("platform-stage");
-        for (relative, _) in PLATFORM_DEPLOY_FILES {
+        for (relative, _) in platform_deploy_files() {
             let path = stage.join(relative);
             fs::create_dir_all(path.parent().unwrap()).unwrap();
             fs::write(path, relative.as_bytes()).unwrap();
@@ -26775,7 +26775,7 @@ H: Handlers=event3 js0"#
 
     fn platform_stage(label: &str) -> (PathBuf, PlatformDeployTransaction) {
         let stage = temp_path(label);
-        for (relative, _) in PLATFORM_DEPLOY_FILES {
+        for (relative, _) in platform_deploy_files() {
             let path = stage.join(relative);
             fs::create_dir_all(path.parent().unwrap()).unwrap();
             fs::write(path, relative.as_bytes()).unwrap();
@@ -26822,7 +26822,7 @@ H: Handlers=event3 js0"#
         let report = transaction.run_with(&remote).unwrap();
 
         assert_eq!(report.changed_files, 0);
-        assert_eq!(report.skipped_files, PLATFORM_DEPLOY_FILES.len());
+        assert_eq!(report.skipped_files, platform_deploy_files().len());
         assert_eq!(report.transferred_bytes, 0);
         assert_eq!(remote.events().len(), 1, "only inventory should run");
         fs::remove_dir_all(stage).unwrap();

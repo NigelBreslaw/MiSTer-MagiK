@@ -201,7 +201,8 @@ The host agent client now prefers valid structured metadata and falls back to
 the legacy string. `AgentError` retains the full wire classification—including
 unknown future values, phase, retry policy, and recovery flag—while exposing a
 compatible `DeviceFailure` mapping and keeping the legacy error as its display
-text.
+text. The metadata payload is boxed internally so the typed error remains below
+the repository's small-error lint without changing its accessors or semantics.
 
 Device emission is ratcheted by family. Unknown commands, empty/malformed
 requests, missing commands, and oversized/non-UTF-8 request headers now emit

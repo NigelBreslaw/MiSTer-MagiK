@@ -1594,7 +1594,7 @@ mod tests {
                 .iter()
                 .find(|operation| operation.id == "scripts.codex-context-report")
                 .expect("focused context report contract");
-            assert_eq!(operation.command, "python3");
+            assert_eq!(operation.program, "python3");
             assert_eq!(
                 operation.args,
                 ["scripts/tests/test-codex-context-report.py"]

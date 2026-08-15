@@ -26,7 +26,7 @@ pub enum AgentError {
     #[error("{message}")]
     StructuredDevice {
         message: String,
-        failure: FailureMetadata,
+        failure: Box<FailureMetadata>,
     },
 }
 
@@ -55,14 +55,14 @@ impl AgentError {
     pub fn structured_device(message: impl Into<String>, failure: FailureMetadata) -> Self {
         Self::StructuredDevice {
             message: message.into(),
-            failure,
+            failure: Box::new(failure),
         }
     }
 
     #[must_use]
     pub fn structured_failure(&self) -> Option<&FailureMetadata> {
         match self {
-            Self::StructuredDevice { failure, .. } => Some(failure),
+            Self::StructuredDevice { failure, .. } => Some(failure.as_ref()),
             Self::Phase { source, .. } | Self::Cancelled(source) => source.structured_failure(),
             Self::Message(_) | Self::Classified { .. } | Self::RecoveryRequired { .. } => None,
         }
