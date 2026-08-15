@@ -148,7 +148,7 @@ mod launcher_execution_trace;
 mod launcher_frame_accounting;
 #[cfg(test)]
 mod launcher_frame_pipeline;
-mod launcher_gui_profile;
+pub(crate) mod launcher_gui_profile;
 mod launcher_input_latency_lab;
 #[allow(dead_code)]
 mod launcher_loop;
@@ -485,7 +485,16 @@ pub fn run_ui(
             with_scene_app!(video_playback::VideoPlayback, &ui, &window, app, {
                 app.show().expect("show");
                 window.request_redraw();
-                run_video_playback_loop(secs, &ui, &mut disp, &window, pad, app, &animation_clock);
+                run_video_playback_loop(
+                    secs,
+                    &ui,
+                    &mut disp,
+                    &window,
+                    pad,
+                    app,
+                    &animation_clock,
+                    launcher_config.profiles(),
+                );
             });
         }
         "controller_test" => {
@@ -501,7 +510,14 @@ pub fn run_ui(
             with_scene_app!(tear_pattern::TearPattern, &ui, &window, app, {
                 app.show().expect("show");
                 window.request_redraw();
-                run_tear_pattern_loop(secs, &ui, &mut disp, &window, &animation_clock);
+                run_tear_pattern_loop(
+                    secs,
+                    &ui,
+                    &mut disp,
+                    &window,
+                    &animation_clock,
+                    launcher_config.profiles(),
+                );
             });
         }
         "launcher" => {

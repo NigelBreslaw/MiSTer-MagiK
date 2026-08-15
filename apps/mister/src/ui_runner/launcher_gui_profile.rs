@@ -12,6 +12,29 @@ const PHASE_TIMEOUT: Duration = Duration::from_secs(20);
 const ARCADE_SCROLL_PHASE_TIMEOUT: Duration = Duration::from_secs(30);
 const FRAME_LIMIT: usize = 4_096;
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct GuiProfileConfig {
+    enabled: bool,
+    completion_path: Option<PathBuf>,
+    pmu_requested: bool,
+}
+
+impl GuiProfileConfig {
+    pub(crate) fn capture_with<'a>(mut get: impl FnMut(&str) -> Option<&'a str>) -> Self {
+        Self {
+            enabled: get(ENABLE_ENV).is_some_and(profile_flag_is_true),
+            completion_path: get(COMPLETE_ENV)
+                .map(PathBuf::from)
+                .filter(|path| valid_volatile_profile_path(path)),
+            pmu_requested: get(PMU_ENV).is_some_and(profile_flag_is_true),
+        }
+    }
+}
+
+fn profile_flag_is_true(value: &str) -> bool {
+    matches!(value, "1" | "on" | "true" | "yes")
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum GuiBridgeProfilePhase {
     None,
@@ -206,18 +229,18 @@ pub(super) struct GuiProfilingController {
 }
 
 impl GuiProfilingController {
-    pub(super) fn from_env() -> Self {
-        let enabled = super::launcher_env_flag(ENABLE_ENV);
-        let completion_path = std::env::var_os(COMPLETE_ENV)
-            .map(PathBuf::from)
-            .filter(|path| valid_volatile_profile_path(path));
+    pub(super) fn from_config(config: GuiProfileConfig) -> Self {
+        let GuiProfileConfig {
+            enabled,
+            completion_path,
+            pmu_requested,
+        } = config;
         if !enabled || completion_path.is_none() {
             return Self::dormant();
         }
         if let Some(path) = completion_path.as_deref() {
             let _ = std::fs::remove_file(path);
         }
-        let pmu_requested = super::launcher_env_flag(PMU_ENV);
         if pmu_requested {
             mister_magik_perf_events::clear_process_profiles();
         }

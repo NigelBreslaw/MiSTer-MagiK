@@ -436,6 +436,7 @@ pub(super) fn run_video_playback_loop(
     mut pad: PadPool,
     _app: slint_ui::video_playback::VideoPlayback,
     animation_clock: &AnimationClock,
+    profiles: &mister_magik_fb::process_config::ProfileProcessConfig,
 ) {
     let initial_doubled = match crate::video_player::video_starts_doubled_from_env() {
         Ok(doubled) => doubled,
@@ -476,8 +477,8 @@ pub(super) fn run_video_playback_loop(
     let mut next_video_at = Duration::ZERO;
     let frame_interval = frame_worker.frame_interval();
     let mut frames = 0u64;
-    let mut profiler = FrameProfiler::from_env();
-    let cpu = cpu_profile::start();
+    let mut profiler = FrameProfiler::from_config(profiles.frame().clone());
+    let cpu = cpu_profile::start(profiles.cpu());
     let profile_on = profiler.enabled();
     let frame_order = if std::env::var_os("MISTER_FRAME_ORDER").is_some() {
         FrameOrder::from_env()

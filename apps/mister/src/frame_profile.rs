@@ -13,6 +13,11 @@ use std::time::Instant;
 use mister_magik_fb::framebuffer::{format::RGB565_BYTES_PER_PIXEL, vsync::VsyncPaceSource};
 
 const FRAME_BUDGET_US: u64 = 16_667; // 60 Hz
+const PROFILE: &str = "MISTER_PROFILE";
+const VIDEO_PROFILE: &str = "MISTER_VIDEO_PROFILE";
+const PROFILE_SLOW_US: &str = "MISTER_PROFILE_SLOW_US";
+const PROFILE_FILE: &str = "MISTER_PROFILE_FILE";
+const TRACE_FILE: &str = "MISTER_TRACE_FILE";
 
 #[derive(Clone, Copy, Debug)]
 pub struct FrameRect {
@@ -152,10 +157,9 @@ pub enum ProfileMode {
 }
 
 impl ProfileMode {
-    pub fn from_env() -> Self {
-        match std::env::var("MISTER_PROFILE")
-            .ok()
-            .or_else(|| std::env::var("MISTER_VIDEO_PROFILE").ok())
+    fn from_values(profile: Option<&str>, video_profile: Option<&str>) -> Self {
+        match profile
+            .or(video_profile)
             .map(|s| s.to_ascii_lowercase())
             .as_deref()
         {
@@ -171,6 +175,42 @@ impl ProfileMode {
                 Self::Summary
             }
         }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FrameProfilerConfig {
+    mode: ProfileMode,
+    slow_threshold_us: u64,
+    out_path: Option<String>,
+    trace_path: Option<String>,
+}
+
+impl FrameProfilerConfig {
+    pub fn capture_with<'a>(mut get: impl FnMut(&str) -> Option<&'a str>) -> Self {
+        let mode = ProfileMode::from_values(get(PROFILE), get(VIDEO_PROFILE));
+        let slow_threshold_us = get(PROFILE_SLOW_US)
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(FRAME_BUDGET_US);
+        let out_path = get(PROFILE_FILE)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned);
+        let trace_path = get(TRACE_FILE)
+            .filter(|value| !value.is_empty())
+            .map(str::to_owned)
+            .or_else(|| {
+                (mode == ProfileMode::Trace).then(|| "/tmp/mister-frame-trace.json".to_owned())
+            });
+        Self {
+            mode,
+            slow_threshold_us,
+            out_path,
+            trace_path,
+        }
+    }
+
+    pub fn fps_log_enabled(&self) -> bool {
+        self.mode != ProfileMode::Off
     }
 }
 
@@ -210,21 +250,13 @@ pub struct FrameProfiler {
 }
 
 impl FrameProfiler {
-    pub fn from_env() -> Self {
-        let mode = ProfileMode::from_env();
-        let slow_threshold_us = std::env::var("MISTER_PROFILE_SLOW_US")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(FRAME_BUDGET_US);
-        let out_path = std::env::var("MISTER_PROFILE_FILE")
-            .ok()
-            .filter(|s| !s.is_empty());
-        let trace_path = std::env::var("MISTER_TRACE_FILE")
-            .ok()
-            .filter(|s| !s.is_empty())
-            .or_else(|| {
-                (mode == ProfileMode::Trace).then(|| "/tmp/mister-frame-trace.json".to_string())
-            });
+    pub fn from_config(config: FrameProfilerConfig) -> Self {
+        let FrameProfilerConfig {
+            mode,
+            slow_threshold_us,
+            out_path,
+            trace_path,
+        } = config;
         if mode != ProfileMode::Off {
             crate::ui_logln!(
                 "frame_profile: mode={:?} slow_threshold_us={slow_threshold_us}{}{}",
@@ -933,5 +965,24 @@ mod tests {
 
         assert_eq!(rect.pixels(), 12);
         assert_eq!(present_bytes_for_pixels(rect.pixels()), 24);
+    }
+
+    #[test]
+    fn profiler_config_owns_captured_values() {
+        let mut values = std::collections::BTreeMap::from([
+            (PROFILE, "trace"),
+            (PROFILE_SLOW_US, "12345"),
+            (PROFILE_FILE, "/tmp/frame-profile.json"),
+        ]);
+        let config = FrameProfilerConfig::capture_with(|name| values.get(name).copied());
+        values.insert(PROFILE, "off");
+
+        assert_eq!(config.mode, ProfileMode::Trace);
+        assert_eq!(config.slow_threshold_us, 12_345);
+        assert_eq!(config.out_path.as_deref(), Some("/tmp/frame-profile.json"));
+        assert_eq!(
+            config.trace_path.as_deref(),
+            Some("/tmp/mister-frame-trace.json")
+        );
     }
 }

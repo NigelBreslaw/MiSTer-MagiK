@@ -9,6 +9,7 @@ pub(super) fn run_tear_pattern_loop(
     disp: &mut MappedRgb565Framebuffer,
     window: &Rc<MisterSoftwareWindow>,
     animation_clock: &AnimationClock,
+    profiles: &mister_magik_fb::process_config::ProfileProcessConfig,
 ) {
     let mut cached = vec![Rgb565Pixel(0); ui.render_w() * ui.render_h()];
     let start = Instant::now();
@@ -16,7 +17,7 @@ pub(super) fn run_tear_pattern_loop(
     let mut pacer = VsyncPacer::from_env();
     let frame_order = FrameOrder::from_env();
     let present_timing = PresentTiming::from_env();
-    let mut profiler = FrameProfiler::from_env();
+    let mut profiler = FrameProfiler::from_config(profiles.frame().clone());
     let profile_on = profiler.enabled();
     let mut fps_window_start = Instant::now();
     let mut fps_frames = 0u64;

@@ -8,7 +8,6 @@
 //! built with `scripts/agent build runtime-analysis`; benchmarks profile the installed runtime.
 
 use std::sync::atomic::{AtomicU8, Ordering};
-#[cfg(any(feature = "profile", test))]
 use std::time::Duration;
 
 const SCREENSAVER_TRIGGER: &str = "screensaver";
@@ -20,7 +19,14 @@ const LAUNCH_RETURN_TRIGGER: &str = "launch-return";
 const COLD_BOOT_TRIGGER: &str = "cold-boot";
 const SYSTEM_ENTRY_TRIGGER: &str = "system-entry";
 const LAUNCHER_RESPONSE_TRIGGER: &str = "launcher-response";
-#[cfg(any(feature = "profile", test))]
+const PPROF: &str = "MISTER_PPROF";
+const PPROF_TRIGGER: &str = "MISTER_PPROF_TRIGGER";
+const PPROF_DURATION_SECS: &str = "MISTER_PPROF_DURATION_SECS";
+const PPROF_WARMUP_SECS: &str = "MISTER_PPROF_WARMUP_SECS";
+const PPROF_HZ: &str = "MISTER_PPROF_HZ";
+const PPROF_OUT: &str = "MISTER_PPROF_OUT";
+const PPROF_FOLDED_OUT: &str = "MISTER_PPROF_FOLDED_OUT";
+const PPROF_COMPLETE: &str = "MISTER_PPROF_COMPLETE";
 const DEFAULT_SCREENSAVER_PROFILE_SECS: u64 = 30;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -113,36 +119,59 @@ pub fn screensaver_profile_state() -> &'static str {
     }
 }
 
-fn bounded_profile_trigger() -> Option<BoundedProfileTrigger> {
-    bounded_profile_trigger_from_values(
-        std::env::var("MISTER_PPROF").ok().as_deref(),
-        std::env::var("MISTER_PPROF_TRIGGER").ok().as_deref(),
-    )
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CpuProfileConfig {
+    enabled: bool,
+    trigger: Option<BoundedProfileTrigger>,
+    system_entry: bool,
+    duration: Duration,
+    warmup: Duration,
+    hz: i32,
+    out_path: String,
+    folded_out_path: Option<String>,
+    complete_path: Option<String>,
 }
 
-pub fn navigation_transition_profile_requested() -> bool {
-    matches!(
-        bounded_profile_trigger(),
-        Some(
-            BoundedProfileTrigger::NavigationTransitions
-                | BoundedProfileTrigger::SettingsNavigationTransitions
+impl CpuProfileConfig {
+    pub fn capture_with<'a>(mut get: impl FnMut(&str) -> Option<&'a str>) -> Self {
+        let enabled_value = get(PPROF);
+        let trigger_value = get(PPROF_TRIGGER);
+        Self {
+            enabled: enabled_value == Some("1"),
+            trigger: bounded_profile_trigger_from_values(enabled_value, trigger_value),
+            system_entry: system_entry_profile_requested_from_values(enabled_value, trigger_value),
+            duration: screensaver_profile_duration_from_value(get(PPROF_DURATION_SECS)),
+            warmup: screensaver_profile_warmup_from_value(get(PPROF_WARMUP_SECS)),
+            hz: get(PPROF_HZ)
+                .and_then(|value| value.parse().ok())
+                .unwrap_or(99),
+            out_path: get(PPROF_OUT).unwrap_or("/tmp/mister-pprof.svg").to_owned(),
+            folded_out_path: get(PPROF_FOLDED_OUT).map(str::to_owned),
+            complete_path: get(PPROF_COMPLETE).map(str::to_owned),
+        }
+    }
+
+    pub fn navigation_transition_requested(&self) -> bool {
+        matches!(
+            self.trigger,
+            Some(
+                BoundedProfileTrigger::NavigationTransitions
+                    | BoundedProfileTrigger::SettingsNavigationTransitions
+            )
         )
-    )
-}
+    }
 
-pub fn launch_return_profile_requested() -> bool {
-    bounded_profile_trigger() == Some(BoundedProfileTrigger::LaunchReturn)
-}
+    pub fn launch_return_requested(&self) -> bool {
+        self.trigger == Some(BoundedProfileTrigger::LaunchReturn)
+    }
 
-pub fn cold_boot_profile_requested() -> bool {
-    bounded_profile_trigger() == Some(BoundedProfileTrigger::ColdBoot)
-}
+    pub fn cold_boot_requested(&self) -> bool {
+        self.trigger == Some(BoundedProfileTrigger::ColdBoot)
+    }
 
-pub fn system_entry_profile_requested() -> bool {
-    system_entry_profile_requested_from_values(
-        std::env::var("MISTER_PPROF").ok().as_deref(),
-        std::env::var("MISTER_PPROF_TRIGGER").ok().as_deref(),
-    )
+    fn ordinary_requested(&self) -> bool {
+        self.enabled && self.trigger.is_none() && !self.system_entry
+    }
 }
 
 fn system_entry_profile_requested_from_values(
@@ -178,19 +207,6 @@ fn bounded_profile_trigger_from_values(
     }
 }
 
-#[cfg(any(feature = "profile", test))]
-fn screensaver_profile_duration() -> Duration {
-    screensaver_profile_duration_from_value(
-        std::env::var("MISTER_PPROF_DURATION_SECS").ok().as_deref(),
-    )
-}
-
-#[cfg(any(feature = "profile", test))]
-fn screensaver_profile_warmup() -> Duration {
-    screensaver_profile_warmup_from_value(std::env::var("MISTER_PPROF_WARMUP_SECS").ok().as_deref())
-}
-
-#[cfg(any(feature = "profile", test))]
 fn screensaver_profile_warmup_from_value(value: Option<&str>) -> Duration {
     Duration::from_secs(
         value
@@ -200,7 +216,6 @@ fn screensaver_profile_warmup_from_value(value: Option<&str>) -> Duration {
     )
 }
 
-#[cfg(any(feature = "profile", test))]
 fn screensaver_profile_duration_from_value(value: Option<&str>) -> Duration {
     Duration::from_secs(
         value
@@ -228,9 +243,8 @@ pub struct CpuProfileSummary {
 #[cfg(feature = "profile")]
 mod imp {
     use super::{
-        BoundedProfileTrigger, CpuProfileSummary, ScreensaverProfileState, bounded_profile_trigger,
-        screensaver_profile_duration, screensaver_profile_frame_bounds, screensaver_profile_warmup,
-        set_screensaver_profile_state, system_entry_profile_requested,
+        BoundedProfileTrigger, CpuProfileConfig, CpuProfileSummary, ScreensaverProfileState,
+        screensaver_profile_frame_bounds, set_screensaver_profile_state,
     };
     use serde_json::json;
     use std::fs;
@@ -243,35 +257,27 @@ mod imp {
         folded_out_path: Option<String>,
     }
 
-    pub fn start() -> Option<CpuProfiler> {
-        if std::env::var("MISTER_PPROF").ok().as_deref() != Some("1") {
-            return None;
-        }
-        if bounded_profile_trigger().is_some() {
-            return None;
-        }
-        if system_entry_profile_requested() {
-            return None;
-        }
-        start_enabled()
-    }
-
-    pub fn start_system_entry() -> Option<CpuProfiler> {
-        system_entry_profile_requested()
-            .then(start_enabled)
+    pub fn start(config: &CpuProfileConfig) -> Option<CpuProfiler> {
+        config
+            .ordinary_requested()
+            .then(|| start_enabled(config))
             .flatten()
     }
 
-    pub fn start_process_entry() -> Option<CpuProfiler> {
+    pub fn start_system_entry(config: &CpuProfileConfig) -> Option<CpuProfiler> {
+        config.system_entry.then(|| start_enabled(config)).flatten()
+    }
+
+    pub fn start_process_entry(config: &CpuProfileConfig) -> Option<CpuProfiler> {
         matches!(
-            bounded_profile_trigger(),
+            config.trigger,
             Some(BoundedProfileTrigger::LaunchReturn | BoundedProfileTrigger::ColdBoot)
         )
-        .then(start_enabled)
+        .then(|| start_enabled(config))
         .flatten()
     }
 
-    fn start_enabled() -> Option<CpuProfiler> {
+    fn start_enabled(config: &CpuProfileConfig) -> Option<CpuProfiler> {
         // pprof restores the signal disposition it observed here after stopping its
         // ITIMER_PROF timer.  A final SIGPROF can already be pending at that point,
         // especially at the 999 Hz launch-return sampling rate.  Leaving SIGPROF at
@@ -289,13 +295,9 @@ mod imp {
             );
             return None;
         }
-        let hz = std::env::var("MISTER_PPROF_HZ")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(99);
-        let out_path =
-            std::env::var("MISTER_PPROF_OUT").unwrap_or_else(|_| "/tmp/mister-pprof.svg".into());
-        let folded_out_path = std::env::var("MISTER_PPROF_FOLDED_OUT").ok();
+        let hz = config.hz;
+        let out_path = config.out_path.clone();
+        let folded_out_path = config.folded_out_path.clone();
         for path in std::iter::once(out_path.as_str()).chain(folded_out_path.as_deref()) {
             if let Some(parent) = std::path::Path::new(path).parent()
                 && let Err(error) = fs::create_dir_all(parent)
@@ -374,6 +376,7 @@ mod imp {
 
     pub fn finish_launch_return(
         profiler: Option<CpuProfiler>,
+        complete_path: Option<&str>,
     ) -> Result<Option<CpuProfileSummary>, String> {
         let result = finish(profiler);
         let metadata = match &result {
@@ -398,8 +401,7 @@ mod imp {
                 "error": error,
             }),
         };
-        let path = std::env::var("MISTER_PPROF_COMPLETE")
-            .map_err(|_| "MISTER_PPROF_COMPLETE is missing".to_string())?;
+        let path = complete_path.ok_or_else(|| "MISTER_PPROF_COMPLETE is missing".to_string())?;
         if let Some(parent) = std::path::Path::new(&path).parent() {
             fs::create_dir_all(parent).map_err(|error| error.to_string())?;
         }
@@ -407,14 +409,18 @@ mod imp {
         result
     }
 
-    pub fn finish_launch_return_async(profiler: Option<CpuProfiler>) -> Result<(), String> {
+    pub fn finish_launch_return_async(
+        profiler: Option<CpuProfiler>,
+        config: &CpuProfileConfig,
+    ) -> Result<(), String> {
         let Some(profiler) = profiler else {
             return Ok(());
         };
+        let complete_path = config.complete_path.clone();
         std::thread::Builder::new()
             .name("launch-return-profile".into())
             .spawn(move || {
-                if let Err(error) = finish_launch_return(Some(profiler)) {
+                if let Err(error) = finish_launch_return(Some(profiler), complete_path.as_deref()) {
                     crate::ui_errln!("launch-return cpu profile failed: {error}");
                 }
             })
@@ -422,10 +428,14 @@ mod imp {
             .map_err(|error| format!("launch-return cpu profile worker spawn failed: {error}"))
     }
 
-    pub fn finish_cold_boot_async(profiler: Option<CpuProfiler>) -> Result<(), String> {
+    pub fn finish_cold_boot_async(
+        profiler: Option<CpuProfiler>,
+        config: &CpuProfileConfig,
+    ) -> Result<(), String> {
         let Some(profiler) = profiler else {
             return Ok(());
         };
+        let complete_path = config.complete_path.clone();
         std::thread::Builder::new()
             .name("cold-boot-profile".into())
             .spawn(move || {
@@ -452,7 +462,7 @@ mod imp {
                         "error": error,
                     }),
                 };
-                if let Ok(path) = std::env::var("MISTER_PPROF_COMPLETE") {
+                if let Some(path) = complete_path {
                     if let Some(parent) = std::path::Path::new(&path).parent() {
                         let _ = fs::create_dir_all(parent);
                     }
@@ -466,10 +476,14 @@ mod imp {
             .map_err(|error| format!("cold-boot cpu profile worker spawn failed: {error}"))
     }
 
-    pub fn finish_system_entry_async(profiler: Option<CpuProfiler>) -> Result<(), String> {
+    pub fn finish_system_entry_async(
+        profiler: Option<CpuProfiler>,
+        config: &CpuProfileConfig,
+    ) -> Result<(), String> {
         let Some(profiler) = profiler else {
             return Ok(());
         };
+        let complete_path = config.complete_path.clone();
         std::thread::Builder::new()
             .name("system-entry-profile".into())
             .spawn(move || {
@@ -496,7 +510,7 @@ mod imp {
                         "error": error,
                     }),
                 };
-                if let Ok(path) = std::env::var("MISTER_PPROF_COMPLETE") {
+                if let Some(path) = complete_path {
                     if let Some(parent) = std::path::Path::new(&path).parent() {
                         let _ = fs::create_dir_all(parent);
                     }
@@ -572,8 +586,8 @@ mod imp {
     }
 
     impl ScreensaverProfiler {
-        pub fn from_env() -> Self {
-            let trigger = bounded_profile_trigger();
+        pub fn from_config(config: &CpuProfileConfig) -> Self {
+            let trigger = config.trigger;
             let state = if matches!(
                 trigger,
                 Some(
@@ -594,9 +608,9 @@ mod imp {
             Self {
                 state,
                 trigger,
-                warmup: screensaver_profile_warmup(),
-                duration: screensaver_profile_duration(),
-                complete_path: std::env::var("MISTER_PPROF_COMPLETE").ok(),
+                warmup: config.warmup,
+                duration: config.duration,
+                complete_path: config.complete_path.clone(),
             }
         }
 
@@ -801,14 +815,14 @@ pub use imp::{
 #[cfg(not(feature = "profile"))]
 mod stub {
     use super::{
-        BoundedProfileTrigger, CpuProfileSummary, ScreensaverProfileState, bounded_profile_trigger,
+        BoundedProfileTrigger, CpuProfileConfig, CpuProfileSummary, ScreensaverProfileState,
         set_screensaver_profile_state,
     };
 
     pub struct CpuProfiler;
 
-    pub fn start() -> Option<CpuProfiler> {
-        if std::env::var("MISTER_PPROF").ok().as_deref() == Some("1") {
+    pub fn start(config: &CpuProfileConfig) -> Option<CpuProfiler> {
+        if config.enabled {
             crate::ui_errln!(
                 "cpu_profile: MISTER_PPROF=1 ignored — the runtime lacks the `profile` feature; \
                  install the canonical device runtime with `scripts/agent deliver`"
@@ -817,9 +831,9 @@ mod stub {
         None
     }
 
-    pub fn start_process_entry() -> Option<CpuProfiler> {
+    pub fn start_process_entry(config: &CpuProfileConfig) -> Option<CpuProfiler> {
         if matches!(
-            bounded_profile_trigger(),
+            config.trigger,
             Some(BoundedProfileTrigger::LaunchReturn | BoundedProfileTrigger::ColdBoot)
         ) {
             set_screensaver_profile_state(ScreensaverProfileState::Failed);
@@ -827,7 +841,7 @@ mod stub {
         None
     }
 
-    pub fn start_system_entry() -> Option<CpuProfiler> {
+    pub fn start_system_entry(_config: &CpuProfileConfig) -> Option<CpuProfiler> {
         None
     }
 
@@ -837,25 +851,35 @@ mod stub {
 
     pub fn finish_launch_return(
         profiler: Option<CpuProfiler>,
+        _complete_path: Option<&str>,
     ) -> Result<Option<CpuProfileSummary>, String> {
         finish(profiler)
     }
 
-    pub fn finish_launch_return_async(profiler: Option<CpuProfiler>) -> Result<(), String> {
+    pub fn finish_launch_return_async(
+        profiler: Option<CpuProfiler>,
+        config: &CpuProfileConfig,
+    ) -> Result<(), String> {
         let Some(profiler) = profiler else {
             return Ok(());
         };
-        finish_launch_return(Some(profiler)).map(|_| ())
+        finish_launch_return(Some(profiler), config.complete_path.as_deref()).map(|_| ())
     }
 
-    pub fn finish_cold_boot_async(profiler: Option<CpuProfiler>) -> Result<(), String> {
+    pub fn finish_cold_boot_async(
+        profiler: Option<CpuProfiler>,
+        _config: &CpuProfileConfig,
+    ) -> Result<(), String> {
         let Some(profiler) = profiler else {
             return Ok(());
         };
         finish(Some(profiler)).map(|_| ())
     }
 
-    pub fn finish_system_entry_async(profiler: Option<CpuProfiler>) -> Result<(), String> {
+    pub fn finish_system_entry_async(
+        profiler: Option<CpuProfiler>,
+        _config: &CpuProfileConfig,
+    ) -> Result<(), String> {
         let Some(profiler) = profiler else {
             return Ok(());
         };
@@ -865,8 +889,8 @@ mod stub {
     pub struct ScreensaverProfiler;
 
     impl ScreensaverProfiler {
-        pub fn from_env() -> Self {
-            set_screensaver_profile_state(if bounded_profile_trigger().is_some() {
+        pub fn from_config(config: &CpuProfileConfig) -> Self {
+            set_screensaver_profile_state(if config.trigger.is_some() {
                 ScreensaverProfileState::Failed
             } else {
                 ScreensaverProfileState::Disabled
@@ -899,6 +923,13 @@ pub use stub::{
     CpuProfiler, ScreensaverProfiler, finish, finish_cold_boot_async, finish_launch_return_async,
     finish_system_entry_async, start, start_process_entry, start_system_entry,
 };
+
+#[cfg(feature = "diagnostics")]
+pub fn start_from_env() -> Option<CpuProfiler> {
+    let values: std::collections::BTreeMap<String, String> = std::env::vars().collect();
+    let config = CpuProfileConfig::capture_with(|name| values.get(name).map(String::as_str));
+    start(&config)
+}
 
 #[cfg(test)]
 mod tests {
@@ -997,5 +1028,26 @@ mod tests {
             Some("1"),
             Some("screensaver")
         ));
+    }
+
+    #[test]
+    fn cpu_profile_config_preserves_captured_outputs_and_modes() {
+        let values = std::collections::BTreeMap::from([
+            (PPROF, "1"),
+            (PPROF_TRIGGER, "launch-return"),
+            (PPROF_HZ, "999"),
+            (PPROF_OUT, "/tmp/profile.svg"),
+            (PPROF_COMPLETE, "/tmp/profile-complete.json"),
+        ]);
+        let config = CpuProfileConfig::capture_with(|name| values.get(name).copied());
+
+        assert!(config.launch_return_requested());
+        assert!(!config.cold_boot_requested());
+        assert_eq!(config.hz, 999);
+        assert_eq!(config.out_path, "/tmp/profile.svg");
+        assert_eq!(
+            config.complete_path.as_deref(),
+            Some("/tmp/profile-complete.json")
+        );
     }
 }

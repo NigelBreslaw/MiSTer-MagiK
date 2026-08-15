@@ -4844,6 +4844,7 @@ pub(super) fn run_launcher_loop(
     let start = Instant::now();
     let startup_monotonic_us = monotonic_clock_us().unwrap_or(0);
     let mut frames = 0u64;
+    let profile_config = launcher_config.profiles().clone();
     let screensaver_start_mode = launcher_config.screensaver().start_mode();
     let screensaver_preview_waits_for_analytics =
         launcher_config.screensaver().preview_waits_for_analytics();
@@ -4999,7 +5000,7 @@ pub(super) fn run_launcher_loop(
     nav.set_portrait_layout(layout.is_portrait());
     nav.sync_orientation_selection();
     let navigation_motion_enabled =
-        !nav.settings.reduce_motion || cpu_profile::navigation_transition_profile_requested();
+        !nav.settings.reduce_motion || profile_config.cpu().navigation_transition_requested();
     let mut navigation_transition = NavigationTransitionRuntime::new(
         layout.logical_w(),
         layout.logical_h(),
@@ -5068,7 +5069,7 @@ pub(super) fn run_launcher_loop(
     let input_observation_probe = pad.input_observation_probe();
     let mut launcher_response_trace =
         LauncherResponseTrace::from_env(&nav, input_observation_probe.clone());
-    let mut gui_profiling = GuiProfilingController::from_env();
+    let mut gui_profiling = GuiProfilingController::from_config(profile_config.gui().clone());
     let mut input_latency_lab = InputLatencyLab::from_env(input_observation_probe.clone());
     let mut loading_title = String::new();
     let mut last_clock_update = Instant::now() - Duration::from_secs(2);
@@ -5193,9 +5194,10 @@ pub(super) fn run_launcher_loop(
     let mut launcher_arcade_scroll_offset = 0i64;
     let mut arcade_drawer_view_cache = ArcadeDrawerViewCache::default();
     let mut composition = UiCompositionController::new();
-    let mut cpu = process_entry_cpu_profile.or_else(cpu_profile::start);
+    let mut cpu = process_entry_cpu_profile.or_else(|| cpu_profile::start(profile_config.cpu()));
     let mut system_entry_cpu_profile = None;
-    let mut screensaver_cpu_profile = cpu_profile::ScreensaverProfiler::from_env();
+    let mut screensaver_cpu_profile =
+        cpu_profile::ScreensaverProfiler::from_config(profile_config.cpu());
     let mut bridge_models = LauncherBridgeModels::default();
     let mut catalog_version = 0usize;
     let user_state_session = UserStateSession::start(
@@ -5728,8 +5730,13 @@ pub(super) fn run_launcher_loop(
     let mut first_render_logged = false;
     let mut first_vsync_logged = false;
     let mut first_launcher_frame_logged = false;
-    let mut frame_accounting =
-        LauncherFrameAccounting::new(run_start, ui.output_route().label(), ui.fb_w(), ui.fb_h());
+    let mut frame_accounting = LauncherFrameAccounting::new(
+        run_start,
+        ui.output_route().label(),
+        ui.fb_w(),
+        ui.fb_h(),
+        profile_config.frame().fps_log_enabled(),
+    );
     if let Some(failure) = launcher_presenter.latch_failure() {
         frame_accounting.record_latch_failure(failure);
     }
@@ -6115,7 +6122,7 @@ pub(super) fn run_launcher_loop(
         {
             let requested_at = Instant::now();
             mister_magik_perf_events::clear_process_profiles();
-            system_entry_cpu_profile = cpu_profile::start_system_entry();
+            system_entry_cpu_profile = cpu_profile::start_system_entry(profile_config.cpu());
             arcade_entry_latency.capture_presentation_start(
                 f.read_magik_presentation_telemetry().ok(),
                 frame_accounting.last_latch_drop_count(),
@@ -6865,6 +6872,7 @@ pub(super) fn run_launcher_loop(
                     ui.output_route().label(),
                     ui.fb_w(),
                     ui.fb_h(),
+                    profile_config.frame().fps_log_enabled(),
                 );
                 launcher_bench_active = true;
                 launcher_bench_waiting_for_initial_preview = false;
@@ -10462,9 +10470,10 @@ pub(super) fn run_launcher_loop(
             lifecycle.note_startup_frame_presented(frames, frame_t4, &mut lifecycle_effects);
             if first_launcher_frame_logged
                 && lifecycle.startup_status().input_enabled
-                && cpu_profile::cold_boot_profile_requested()
+                && profile_config.cpu().cold_boot_requested()
                 && cpu.is_some()
-                && let Err(error) = cpu_profile::finish_cold_boot_async(cpu.take())
+                && let Err(error) =
+                    cpu_profile::finish_cold_boot_async(cpu.take(), profile_config.cpu())
             {
                 crate::ui_errln!("cold-boot cpu profile finalization failed: {error}");
             }
@@ -10473,9 +10482,10 @@ pub(super) fn run_launcher_loop(
             {
                 launch_return_session.mark_correct_present(&nav, &catalog);
                 if launch_return_session.first_correct_present_monotonic_us != 0
-                    && cpu_profile::launch_return_profile_requested()
+                    && profile_config.cpu().launch_return_requested()
                     && cpu.is_some()
-                    && let Err(error) = cpu_profile::finish_launch_return_async(cpu.take())
+                    && let Err(error) =
+                        cpu_profile::finish_launch_return_async(cpu.take(), profile_config.cpu())
                 {
                     crate::ui_errln!("launch-return cpu profile finalization failed: {error}");
                 }
@@ -10826,9 +10836,10 @@ pub(super) fn run_launcher_loop(
                     f.read_magik_presentation_telemetry().ok(),
                     presented_frame.main_present_drop_count,
                     SystemEntryPublicationPhases::from_presented_frame(&presented_frame),
-                ) && let Err(error) =
-                    cpu_profile::finish_system_entry_async(system_entry_cpu_profile.take())
-                {
+                ) && let Err(error) = cpu_profile::finish_system_entry_async(
+                    system_entry_cpu_profile.take(),
+                    profile_config.cpu(),
+                ) {
                     crate::ui_errln!("system-entry cpu profile finish failed: {error}");
                 }
                 settings_navigation_benchmark

@@ -31,6 +31,7 @@ pub(super) struct LauncherFrameAccounting {
     output_route: &'static str,
     framebuffer_width: usize,
     framebuffer_height: usize,
+    fps_log_enabled: bool,
     fps_window_start: Instant,
     fps_frames: u64,
     prepare_us: u128,
@@ -1096,11 +1097,14 @@ impl LauncherFrameAccounting {
         output_route: &'static str,
         framebuffer_width: usize,
         framebuffer_height: usize,
+        profile_fps_log_enabled: bool,
     ) -> Self {
         Self {
             output_route,
             framebuffer_width,
             framebuffer_height,
+            fps_log_enabled: cfg!(any(feature = "bench-tools", feature = "diagnostics"))
+                || profile_fps_log_enabled,
             fps_window_start: run_start,
             fps_frames: 0,
             prepare_us: 0,
@@ -1792,7 +1796,7 @@ impl LauncherFrameAccounting {
             self.last_rolling_vsync_us = (self.vsync_us / n) as u64;
             self.last_rolling_present_us = (self.copy_us / n) as u64;
             self.last_rolling_rows = (self.rows / n) as u64;
-            if launcher_fps_log_enabled() {
+            if self.fps_log_enabled {
                 crate::ui_logln!(
                     "launcher fps ~ {} prepare {}us slint-render {}us custom-draw {}us vsync-wait {}us fb-present {}us cached-present {}us hidden-compose {}us direct-preview-present {}us arcade-list-present {}us ({} rows avg)",
                     self.fps_frames,
@@ -2689,25 +2693,6 @@ fn launcher_frame_was_presented(frame: &LauncherPresentedFrame) -> bool {
             && !frame.main_present_pending)
 }
 
-fn launcher_fps_log_enabled() -> bool {
-    #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
-    {
-        true
-    }
-    #[cfg(not(any(feature = "bench-tools", feature = "diagnostics")))]
-    {
-        static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-        *ENABLED.get_or_init(|| {
-            std::env::var("MISTER_PROFILE")
-                .map(|value| {
-                    let value = value.trim();
-                    !value.is_empty() && !matches!(value, "0" | "off" | "false")
-                })
-                .unwrap_or(false)
-        })
-    }
-}
-
 fn cpu_delta(start: FrameAnalyticsCpuStamp, end: FrameAnalyticsCpuStamp) -> u64 {
     end.thread_us.saturating_sub(start.thread_us)
 }
@@ -3363,7 +3348,7 @@ mod tests {
     #[test]
     fn completed_latch_frames_preserve_pacing_and_maintenance_evidence() {
         let start = Instant::now();
-        let mut accounting = LauncherFrameAccounting::new(start, "hdmi", 960, 540);
+        let mut accounting = LauncherFrameAccounting::new(start, "hdmi", 960, 540, false);
         accounting.frame_analytics_mode = FrameAnalyticsMode::Process;
         let mut frame = presented_frame(49, start, 16_667);
         frame.screensaver_active = true;
@@ -3456,7 +3441,7 @@ mod tests {
     #[test]
     fn slow_frame_samples_are_bounded_and_survive_recent_frame_clears() {
         let start = Instant::now();
-        let mut accounting = LauncherFrameAccounting::new(start, "crt-576p50", 640, 576);
+        let mut accounting = LauncherFrameAccounting::new(start, "crt-576p50", 640, 576, false);
         for frame in 0..40 {
             accounting.accumulate_frame_budget(
                 &presented_frame(frame, start + Duration::from_micros(frame * 25_000), 22_000),
@@ -3493,7 +3478,7 @@ mod tests {
     #[test]
     fn cadence_warning_samples_are_retained_before_budget_overrun() {
         let start = Instant::now();
-        let mut accounting = LauncherFrameAccounting::new(start, "crt-576p50", 640, 576);
+        let mut accounting = LauncherFrameAccounting::new(start, "crt-576p50", 640, 576, false);
         accounting.accumulate_frame_budget(&presented_frame(7, start, FRAME_CADENCE_WARNING_US), 0);
 
         let status = accounting.current_frame_budget_status();

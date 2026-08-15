@@ -4,6 +4,10 @@
 //! Immutable process-boundary configuration capture.
 
 #[cfg(feature = "ui")]
+use crate::cpu_profile::CpuProfileConfig;
+#[cfg(feature = "ui")]
+use crate::frame_profile::FrameProfilerConfig;
+#[cfg(feature = "ui")]
 use crate::launcher_runtime::media::MediaWorkerConfig;
 #[cfg(feature = "ui")]
 use crate::preview_state::PreviewStateConfig;
@@ -11,6 +15,8 @@ use crate::preview_state::PreviewStateConfig;
 use crate::screenshot_transitions::PreviewTransitionConfig;
 #[cfg(feature = "ui")]
 use crate::ui_display::UiDisplayInputs;
+#[cfg(feature = "ui")]
+use crate::ui_runner::launcher_gui_profile::GuiProfileConfig;
 #[cfg(feature = "ui")]
 use crate::visual_platform::{AnimationClockConfig, PresentTiming};
 use mister_magik_catalog::catalog_config::ArchiveCacheConfig;
@@ -141,6 +147,8 @@ pub struct LauncherProcessConfig {
     input: InputProcessConfig,
     #[cfg(feature = "ui")]
     display_pacing: DisplayPacingConfig,
+    #[cfg(feature = "ui")]
+    profiles: ProfileProcessConfig,
     presentation_backend: PresentBackendConfig,
 }
 
@@ -189,8 +197,44 @@ impl LauncherProcessConfig {
         &self.display_pacing
     }
 
+    #[cfg(feature = "ui")]
+    pub fn profiles(&self) -> &ProfileProcessConfig {
+        &self.profiles
+    }
+
     pub fn presentation_backend(&self) -> &PresentBackendConfig {
         &self.presentation_backend
+    }
+}
+
+#[cfg(feature = "ui")]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ProfileProcessConfig {
+    frame: FrameProfilerConfig,
+    cpu: CpuProfileConfig,
+    gui: GuiProfileConfig,
+}
+
+#[cfg(feature = "ui")]
+impl ProfileProcessConfig {
+    fn capture(environment: &EnvironmentSnapshot) -> Self {
+        Self {
+            frame: FrameProfilerConfig::capture_with(|name| environment.get(name)),
+            cpu: CpuProfileConfig::capture_with(|name| environment.get(name)),
+            gui: GuiProfileConfig::capture_with(|name| environment.get(name)),
+        }
+    }
+
+    pub fn frame(&self) -> &FrameProfilerConfig {
+        &self.frame
+    }
+
+    pub fn cpu(&self) -> &CpuProfileConfig {
+        &self.cpu
+    }
+
+    pub(crate) fn gui(&self) -> &GuiProfileConfig {
+        &self.gui
     }
 }
 
@@ -490,6 +534,8 @@ impl ProcessConfig {
             input: InputProcessConfig::capture(environment),
             #[cfg(feature = "ui")]
             display_pacing: DisplayPacingConfig::capture(environment),
+            #[cfg(feature = "ui")]
+            profiles: ProfileProcessConfig::capture(environment),
             presentation_backend: PresentBackendConfig::capture(environment),
         });
         // Fault capture deliberately remains an early, compatibility-preserving

@@ -11,7 +11,7 @@ source_roots = [
 ]
 
 [baseline]
-literal_occurrences = 404
+literal_occurrences = 396
 unique_names = 267
 external_build_names = 7
 

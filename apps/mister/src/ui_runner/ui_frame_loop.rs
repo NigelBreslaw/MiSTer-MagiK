@@ -114,11 +114,12 @@ pub(super) fn run_frame_loop(
     window: &Rc<MisterSoftwareWindow>,
     target: &mut UiFrameTarget,
     animation_clock: &AnimationClock,
+    profiles: &mister_magik_fb::process_config::ProfileProcessConfig,
 ) {
     let start = Instant::now();
     let mut frames = 0u64;
-    let mut profiler = FrameProfiler::from_env();
-    let cpu = cpu_profile::start();
+    let mut profiler = FrameProfiler::from_config(profiles.frame().clone());
+    let cpu = cpu_profile::start(profiles.cpu());
     let profile_on = profiler.enabled();
 
     // Legacy 1 Hz line (no anim column) when frame profiling is disabled.

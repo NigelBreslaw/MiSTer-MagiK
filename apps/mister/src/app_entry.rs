@@ -140,7 +140,6 @@ use ui_runner::ui_boot::{detect_runtime_display_geometry_for_plan, settle_boot_b
 const DEFAULT_PROCESS_LOCK_PATH: &str = "/tmp/mister-magik/process.lock";
 pub fn run() {
     let _ = process_start_monotonic_us();
-    let process_entry_cpu_profile = cpu_profile::start_process_entry();
     let args: Vec<String> = std::env::args().collect();
     mister_magik_fb::crash_report::install_panic_hook(args.clone());
     let build_identity = build_identity::BuildIdentity::current();
@@ -164,6 +163,9 @@ pub fn run() {
 
     let cmd = command_args::resolve_command(&args);
     let process_config = mister_magik_fb::process_config::ProcessConfig::capture(&args, &cmd);
+    let process_entry_cpu_profile = process_config
+        .launcher()
+        .and_then(|config| cpu_profile::start_process_entry(config.profiles().cpu()));
     let fault_config = process_config.fault().cloned();
     if let Err(error) =
         mister_magik_mister_runtime::direct_reset_fault::install_process_fault_config(
@@ -1040,7 +1042,7 @@ fn run_cpu_profile_smoke() {
         std::process::exit(2);
     }
     crate::ui_logln!("cpu_profile_smoke: burning CPU for {secs}s");
-    let cpu = cpu_profile::start();
+    let cpu = cpu_profile::start_from_env();
     if cpu.is_none() {
         crate::ui_errln!("cpu_profile_smoke: profiler did not start");
         std::process::exit(1);
