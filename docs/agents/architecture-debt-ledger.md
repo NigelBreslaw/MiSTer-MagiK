@@ -224,6 +224,13 @@ failures now emit `operation_failed` metadata in the `operation` phase. Their
 legacy strings remain authoritative for humans, and the metadata deliberately
 does not authorize blind replay of either read or mutation requests.
 
+The alpha-candidate transaction now retains typed validation, operation,
+artifact-verification, and configuration-recovery outcomes until device
+emission. Hash mismatches require reconciliation before retry. Only a failed
+Downloader configuration restore emits `recovery_required=true` with an
+operator-required retry policy; transaction order and legacy text are
+unchanged.
+
 ## Hotspot ownership
 
 The PR advisory report uses stable owner IDs so moves do not erase history.

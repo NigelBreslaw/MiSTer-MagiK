@@ -41,44 +41,97 @@ const INSTALLED_FILES: &[(&str, &str)] = &[
     ),
 ];
 
-pub(crate) fn install(args: Value) -> Result<Value, String> {
-    let request = Request::parse(&args)?;
-    require_single_canonical_section()?;
-    let entrypoint = select_downloader()?;
-    let mut config = ConfigTransaction::begin(Path::new(CONFIG_PATH))?;
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum InstallFailureKind {
+    InvalidRequest,
+    OperationFailed,
+    ArtifactMismatch,
+    RecoveryRequired,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct InstallFailure {
+    pub(crate) kind: InstallFailureKind,
+    pub(crate) detail: String,
+}
+
+impl InstallFailure {
+    fn invalid_request(detail: String) -> Self {
+        Self {
+            kind: InstallFailureKind::InvalidRequest,
+            detail,
+        }
+    }
+
+    fn operation(detail: String) -> Self {
+        Self {
+            kind: InstallFailureKind::OperationFailed,
+            detail,
+        }
+    }
+
+    fn artifact(detail: String) -> Self {
+        Self {
+            kind: InstallFailureKind::ArtifactMismatch,
+            detail,
+        }
+    }
+
+    fn recovery(detail: String) -> Self {
+        Self {
+            kind: InstallFailureKind::RecoveryRequired,
+            detail,
+        }
+    }
+}
+
+pub(crate) fn install(args: Value) -> Result<Value, InstallFailure> {
+    let request = Request::parse(&args).map_err(InstallFailure::invalid_request)?;
+    require_single_canonical_section().map_err(InstallFailure::operation)?;
+    let entrypoint = select_downloader().map_err(InstallFailure::operation)?;
+    let mut config =
+        ConfigTransaction::begin(Path::new(CONFIG_PATH)).map_err(InstallFailure::operation)?;
     let candidate_url = format!(
         "https://github.com/NigelBreslaw/MiSTer-MagiK/releases/download/{}/mister-magik-alpha-db.json.zip",
         request.tag
     );
     let install = (|| {
-        config.replace(format!("[{DATABASE_ID}]\ndb_url = {candidate_url}\n").as_bytes())?;
-        run_downloader(&entrypoint)?;
-        Ok(())
+        config
+            .replace(format!("[{DATABASE_ID}]\ndb_url = {candidate_url}\n").as_bytes())
+            .map_err(InstallFailure::operation)?;
+        run_downloader(&entrypoint).map_err(InstallFailure::operation)?;
+        Ok::<(), InstallFailure>(())
     })();
-    let restored = config.restore();
+    let restored = config.restore().map_err(InstallFailure::recovery);
     match (install, restored) {
         (Err(error), Ok(())) => return Err(error),
         (Ok(()), Err(error)) => {
-            return Err(format!(
-                "candidate installed but config restore failed: {error}"
-            ));
+            return Err(InstallFailure::recovery(format!(
+                "candidate installed but config restore failed: {}",
+                error.detail
+            )));
         }
         (Err(error), Err(restore)) => {
-            return Err(format!("{error}; config restore also failed: {restore}"));
+            return Err(InstallFailure::recovery(format!(
+                "{}; config restore also failed: {}",
+                error.detail, restore.detail
+            )));
         }
         (Ok(()), Ok(())) => {}
     }
 
     let manifest_path = Path::new("/media/fat/mister-magik/platform-v3.manifest");
-    require_hash(manifest_path, &request.platform_manifest)?;
+    require_hash(manifest_path, &request.platform_manifest).map_err(InstallFailure::artifact)?;
     for (name, path) in INSTALLED_FILES {
         require_hash(
             Path::new(path),
             request
                 .components
                 .get(*name)
-                .ok_or_else(|| format!("missing expected {name} hash"))?,
-        )?;
+                .ok_or_else(|| format!("missing expected {name} hash"))
+                .map_err(InstallFailure::artifact)?,
+        )
+        .map_err(InstallFailure::artifact)?;
     }
     Ok(json!({
         "schema": "mister-magik-alpha-candidate-install-v1",
