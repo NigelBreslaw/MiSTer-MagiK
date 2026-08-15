@@ -123,6 +123,10 @@ mod macos {
             );
             return Ok(());
         }
+        if let Some(expected_dir) = options.check_baselines.as_deref() {
+            run_baseline_check(expected_dir)?;
+            return Ok(());
+        }
         if let Some(output_dir) = options.matrix_output.as_deref() {
             if let (Some(expected_dir), Some(mismatch_dir)) = (
                 options.expected_matrix.as_deref(),
@@ -2644,6 +2648,37 @@ mod macos {
         Ok(())
     }
 
+    fn run_baseline_check(expected_dir: &Path) -> Result<(), Box<dyn Error>> {
+        let check_root =
+            PathBuf::from("outputs").join(format!("launcher-visual-check-{}", std::process::id()));
+        let actual_dir = check_root.join("actual");
+        let mismatch_dir = check_root.join("mismatch");
+        if check_root.exists() {
+            return Err(format!(
+                "launcher visual check directory already exists: {}",
+                check_root.display()
+            )
+            .into());
+        }
+        std::fs::create_dir_all(&check_root)?;
+        let result = run_scene_matrix(&actual_dir).and_then(|()| {
+            let scene_ids = launcher_scene_manifest()?
+                .scenes
+                .into_iter()
+                .map(|scene| scene.id)
+                .collect::<Vec<_>>();
+            compare_launcher_matrix(expected_dir, &actual_dir, &mismatch_dir, &scene_ids)?;
+            println!("comparison=passed scenes={}", scene_ids.len());
+            Ok(())
+        });
+        if result.is_ok() {
+            std::fs::remove_dir_all(&check_root)?;
+        } else {
+            eprintln!("visual_artifacts={}", check_root.display());
+        }
+        result
+    }
+
     fn scene_arguments(scene: &LauncherScene, output_dir: &Path) -> Vec<std::ffi::OsString> {
         let scenario = match scene.scenario {
             SceneScenario::Home | SceneScenario::NavigationTransitionMidpoint => "home",
@@ -2720,6 +2755,7 @@ mod macos {
         matrix_output: Option<PathBuf>,
         expected_matrix: Option<PathBuf>,
         mismatch_output: Option<PathBuf>,
+        check_baselines: Option<PathBuf>,
     }
 
     impl PreviewOptions {
@@ -2744,6 +2780,7 @@ mod macos {
             let mut matrix_output = None;
             let mut expected_matrix = None;
             let mut mismatch_output = None;
+            let mut check_baselines = None;
             let mut arguments = arguments.into_iter();
             while let Some(argument) = arguments.next() {
                 match argument.as_str() {
@@ -2847,6 +2884,13 @@ mod macos {
                                 .ok_or("--mismatch-output requires a directory")?,
                         ));
                     }
+                    "--check-baselines" => {
+                        check_baselines = Some(PathBuf::from(
+                            arguments
+                                .next()
+                                .ok_or("--check-baselines requires a directory")?,
+                        ));
+                    }
                     "--display-profile" => {
                         let value = arguments
                             .next()
@@ -2867,7 +2911,7 @@ mod macos {
                     }
                     "--help" | "-h" => {
                         return Err(
-                            "usage: mister-magik-ui-preview [--list-scenes] [--matrix-output DIR [--expected-matrix DIR --mismatch-output DIR]] [--content auto|fixtures|card] [--sd-root PATH] [--cache-root PATH] [--no-scan] [--no-download] [--navigation-transition-duration-ms 100..10000] [--navigation-transition-demo home-consoles|home-arcade|consoles-system] [--settings-page-transition-demo] [--navigation-transition-demo-reverse] [--display-profile hdmi|crt-240p|crt-288p|crt-480p|crt-576p] [--orientation normal|monitor-clockwise|monitor-counterclockwise] [--scenario NAME] [--refresh-rate auto|60|120] [--frame N] [--output FILE.ppm|FILE.png] [--provenance-output FILE.json]"
+                            "usage: mister-magik-ui-preview [--list-scenes] [--check-baselines DIR | --matrix-output DIR [--expected-matrix DIR --mismatch-output DIR]] [--content auto|fixtures|card] [--sd-root PATH] [--cache-root PATH] [--no-scan] [--no-download] [--navigation-transition-duration-ms 100..10000] [--navigation-transition-demo home-consoles|home-arcade|consoles-system] [--settings-page-transition-demo] [--navigation-transition-demo-reverse] [--display-profile hdmi|crt-240p|crt-288p|crt-480p|crt-576p] [--orientation normal|monitor-clockwise|monitor-counterclockwise] [--scenario NAME] [--refresh-rate auto|60|120] [--frame N] [--output FILE.ppm|FILE.png] [--provenance-output FILE.json]"
                                 .into(),
                         );
                     }
@@ -2890,6 +2934,17 @@ mod macos {
             }
             if expected_matrix.is_some() && matrix_output.is_none() {
                 return Err("--expected-matrix requires --matrix-output".into());
+            }
+            if check_baselines.is_some()
+                && (matrix_output.is_some()
+                    || output.is_some()
+                    || provenance_output.is_some()
+                    || list_scenes)
+            {
+                return Err(
+                    "--check-baselines is a read-only command and cannot be combined with output modes"
+                        .into(),
+                );
             }
             if navigation_transition_demo_reverse
                 && navigation_transition_demo.is_none()
@@ -2921,6 +2976,7 @@ mod macos {
                 matrix_output,
                 expected_matrix,
                 mismatch_output,
+                check_baselines,
             })
         }
     }
@@ -4279,6 +4335,46 @@ mod macos {
             assert_eq!(
                 options.mismatch_output,
                 Some(PathBuf::from("/tmp/mismatch"))
+            );
+        }
+
+        #[test]
+        fn baseline_check_is_separate_from_generation_and_capture() {
+            let options = PreviewOptions::parse(
+                [
+                    "--check-baselines",
+                    "apps/mister/tests/visual-baselines/launcher",
+                ]
+                .map(String::from),
+            )
+            .expect("read-only baseline check");
+            assert_eq!(
+                options.check_baselines,
+                Some(PathBuf::from("apps/mister/tests/visual-baselines/launcher"))
+            );
+            assert!(
+                PreviewOptions::parse(
+                    [
+                        "--check-baselines",
+                        "/tmp/expected",
+                        "--matrix-output",
+                        "/tmp/actual",
+                    ]
+                    .map(String::from)
+                )
+                .is_err()
+            );
+            assert!(
+                PreviewOptions::parse(
+                    [
+                        "--check-baselines",
+                        "/tmp/expected",
+                        "--output",
+                        "/tmp/capture.png",
+                    ]
+                    .map(String::from)
+                )
+                .is_err()
             );
         }
 

@@ -724,6 +724,7 @@ fn is_offline_cache_miss(output: &str) -> bool {
         || lower.contains("no matching package named") && lower.contains("offline mode")
         || lower.contains("failed to select a version") && lower.contains("offline mode")
         || lower.contains("failed to download") && lower.contains("offline")
+        || lower.contains("can't checkout from") && lower.contains("offline mode")
 }
 
 fn failure_classification(operation: &Operation, code: i32, output: &str) -> &'static str {
@@ -1093,6 +1094,15 @@ mod tests {
     #[test]
     fn offline_version_selection_miss_retries_online() {
         let script = "#!/bin/sh\ncase \" $* \" in\n  *\" --offline \"*) echo 'error: failed to select a version for cc; candidate versions found which did not match; note: offline mode can sometimes cause surprising resolution failures' >&2; exit 101;;\n  *) exit 0;;\nesac\n";
+        let (result, detail, log) = execute_fake_cargo(script);
+        assert_eq!(result.unwrap(), Outcome::Passed);
+        assert_eq!(detail.commands.len(), 2);
+        assert!(log.contains("=== agent-cli attempt: network-fallback ==="));
+    }
+
+    #[test]
+    fn offline_git_checkout_miss_retries_online() {
+        let script = "#!/bin/sh\ncase \" $* \" in\n  *\" --offline \"*) echo \"failed to load source for dependency 'pprof'; can't checkout from 'https://example.invalid/pprof': you are in the offline mode (--offline)\" >&2; exit 101;;\n  *) exit 0;;\nesac\n";
         let (result, detail, log) = execute_fake_cargo(script);
         assert_eq!(result.unwrap(), Outcome::Passed);
         assert_eq!(detail.commands.len(), 2);

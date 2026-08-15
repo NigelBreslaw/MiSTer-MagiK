@@ -186,6 +186,26 @@ fn classified(path: &Path) -> bool {
     crate::components::classify(path).is_some()
 }
 
+fn launcher_visual_matrix_affected(path: &Path) -> bool {
+    path.starts_with("apps/mister/ui")
+        || path.starts_with("apps/mister/ui-generated")
+        || path == Path::new("apps/mister/src/bin/ui_preview.rs")
+        || path.starts_with("apps/mister/src/bin/ui_preview")
+        || path.starts_with("apps/mister/src/ui_runner")
+        || path.starts_with("apps/mister/tests/visual-baselines/launcher")
+        || path == Path::new("apps/mister/tests/launcher-scenes.json")
+        || matches!(
+            path.to_str(),
+            Some(
+                "apps/mister/Cargo.toml"
+                    | "apps/mister/src/launcher_presentation.rs"
+                    | "apps/mister/src/macos_preview_content.rs"
+                    | "apps/mister/src/preview_state.rs"
+                    | "apps/mister/src/visual_composition.rs"
+            )
+        )
+}
+
 fn is_root_file(path: &Path) -> bool {
     path.parent()
         .is_some_and(|parent| parent.as_os_str().is_empty())
@@ -603,6 +623,7 @@ fn add_path_operations(
     }
     if path == Path::new("apps/mister/Cargo.toml")
         || path == Path::new("apps/mister/src/bin/ui_preview.rs")
+        || path.starts_with("apps/mister/src/bin/ui_preview")
         || path == Path::new("apps/mister/src/preview_state.rs")
         || path == Path::new("apps/mister/src/visual_composition.rs")
         || path == Path::new("apps/mister/src/ui_runner/launcher_screensaver.rs")
@@ -665,6 +686,32 @@ fn add_path_operations(
                 MISTER_APP_COMPILED_INPUTS,
             ));
         }
+    }
+    if launcher_visual_matrix_affected(path) {
+        let mut matrix = with_inputs(
+            cargo(
+                "app.launcher-visual-matrix",
+                "Check launcher visual matrix",
+                &[
+                    "run",
+                    "--manifest-path",
+                    "apps/mister/Cargo.toml",
+                    "--bin",
+                    "mister-magik-ui-preview",
+                    "--no-default-features",
+                    "--features",
+                    "ui-preview",
+                    "--",
+                    "--check-baselines",
+                    "apps/mister/tests/visual-baselines/launcher",
+                ],
+                "Slint, presenter, preview, or composition source → deterministic launcher matrix",
+            ),
+            MISTER_APP_COMPILED_INPUTS,
+        );
+        matrix.risk = Risk::LocalWrite;
+        matrix.phase = WorkflowPhase::Expensive;
+        add(matrix);
     }
     if path.file_name().and_then(|name| name.to_str()) != Some("AGENTS.md")
         && (path.starts_with("apps/mister/src")
@@ -1916,6 +1963,43 @@ mod tests {
                 .unwrap_or_else(|| panic!("missing {id}"));
             assert!(operation.args.contains(&"ui-preview".into()));
             assert_eq!(operation.inputs, MISTER_APP_COMPILED_INPUTS);
+        }
+        let matrix = plan
+            .operations
+            .iter()
+            .find(|operation| operation.id == "app.launcher-visual-matrix")
+            .expect("preview changes select visual matrix");
+        assert_eq!(matrix.phase, WorkflowPhase::Expensive);
+        assert_eq!(matrix.risk, Risk::LocalWrite);
+        assert!(matrix.args.contains(&"--check-baselines".into()));
+        assert!(!matrix.args.iter().any(|arg| arg.contains("update")));
+        assert_eq!(matrix.inputs, MISTER_APP_COMPILED_INPUTS);
+    }
+
+    #[test]
+    fn launcher_visual_matrix_covers_every_owned_seam() {
+        for path in [
+            "apps/mister/ui/launcher.slint",
+            "apps/mister/src/launcher_presentation.rs",
+            "apps/mister/src/ui_runner/launcher_bridge.rs",
+            "apps/mister/src/preview_state.rs",
+            "apps/mister/src/visual_composition.rs",
+            "apps/mister/tests/launcher-scenes.json",
+            "apps/mister/tests/visual-baselines/launcher/manifest.json",
+        ] {
+            let plan = affected_plan(
+                AssuranceRequest::Plan {
+                    scope: Scope::Paths(vec![]),
+                },
+                vec![path.into()],
+            )
+            .unwrap_or_else(|error| panic!("cannot plan {path}: {error}"));
+            assert!(
+                plan.operations
+                    .iter()
+                    .any(|operation| operation.id == "app.launcher-visual-matrix"),
+                "missing launcher matrix for {path}"
+            );
         }
     }
 
