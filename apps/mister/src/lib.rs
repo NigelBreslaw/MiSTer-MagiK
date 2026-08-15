@@ -14,7 +14,11 @@ extern crate self as mister_magik_fb;
 pub mod allocation_metrics;
 #[cfg(feature = "ui")]
 #[cfg_attr(
-    any(test, not(all(target_os = "linux", target_arch = "arm"))),
+    any(
+        test,
+        mister_ui_scope_launcher,
+        not(all(target_os = "linux", target_arch = "arm"))
+    ),
     allow(dead_code)
 )]
 #[doc(hidden)]
@@ -43,7 +47,11 @@ pub mod command_args;
 pub mod controller_db;
 #[cfg(feature = "ui")]
 #[cfg_attr(
-    any(test, not(all(target_os = "linux", target_arch = "arm"))),
+    any(
+        test,
+        mister_ui_scope_launcher,
+        not(all(target_os = "linux", target_arch = "arm"))
+    ),
     allow(dead_code)
 )]
 #[doc(hidden)]
@@ -66,7 +74,13 @@ pub mod frame_profile;
 #[doc(hidden)]
 pub mod input;
 #[cfg(feature = "ui")]
-#[cfg_attr(not(all(target_os = "linux", target_arch = "arm")), allow(dead_code))]
+#[cfg_attr(
+    any(
+        mister_ui_scope_launcher,
+        not(all(target_os = "linux", target_arch = "arm"))
+    ),
+    allow(dead_code)
+)]
 #[doc(hidden)]
 pub mod input_hub;
 #[cfg(feature = "ui")]
@@ -115,7 +129,13 @@ pub mod pmu_profile;
 #[doc(hidden)]
 pub mod preview_pack_bench;
 #[cfg(feature = "ui")]
-#[cfg_attr(not(all(target_os = "linux", target_arch = "arm")), allow(dead_code))]
+#[cfg_attr(
+    any(
+        mister_ui_scope_launcher,
+        not(all(target_os = "linux", target_arch = "arm"))
+    ),
+    allow(dead_code)
+)]
 #[doc(hidden)]
 pub mod preview_state;
 #[cfg(any(feature = "ui", feature = "ui-preview"))]
@@ -152,7 +172,11 @@ pub mod ui_effect_bench;
 pub mod ui_preview_fixtures;
 #[cfg(feature = "ui")]
 #[cfg_attr(
-    any(test, not(all(target_os = "linux", target_arch = "arm"))),
+    any(
+        test,
+        mister_ui_scope_launcher,
+        not(all(target_os = "linux", target_arch = "arm"))
+    ),
     allow(dead_code)
 )]
 #[doc(hidden)]

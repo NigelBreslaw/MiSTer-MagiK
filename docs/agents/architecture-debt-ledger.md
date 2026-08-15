@@ -196,8 +196,9 @@ remaining leaf `#[allow(dead_code)]` annotations in `lib.rs` are cfg-local to
 shared rendering helpers that are intentionally partial in host/preview graphs.
 The `app_entry`, `cpu_profile`, `input_hub`, `preview_state`, and `ui_runner`
 roots use module-scoped dead-code allowances for tests and non-device host
-targets because those builds deliberately compile partial UI graphs. Linux/ARM
-production builds retain full dead-code enforcement.
+targets, plus the explicitly launcher-scoped ARM validation graph, because
+those builds deliberately compile partial UI graphs. Full-scope Linux/ARM
+production builds retain dead-code enforcement.
 The full feature matrix also proves `app_entry` imports only library modules it
 uses under the selected cfg, while typed ready-FIFO capture retains the legacy
 empty `PathBuf` fallback. Feature-specific application tests now target that
