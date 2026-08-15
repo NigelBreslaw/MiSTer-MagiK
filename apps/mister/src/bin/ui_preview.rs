@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #[cfg(target_os = "macos")]
+#[path = "ui_preview/scene_manifest.rs"]
 mod ui_preview_scene_manifest;
 
 #[cfg(target_os = "macos")]
