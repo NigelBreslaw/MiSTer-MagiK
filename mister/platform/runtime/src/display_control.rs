@@ -30,7 +30,7 @@ impl DisplayControl for MainDisplayControl {
             DisplayStateRead::Wait => main_command::execute(&MainCommand::DisplayState),
             DisplayStateRead::Try => main_command::try_execute(&MainCommand::DisplayState),
         }
-        .map_err(Self::command_failure)?
+        .map_err(|error| Self::command_failure(error.to_string()))?
         .ok_or_else(|| Self::response_failure("MiSTer display command returned no reply"))?;
         parse_state_response(&response).map_err(Self::response_failure)
     }
@@ -43,19 +43,19 @@ impl DisplayControl for MainDisplayControl {
             mode: mode.to_string(),
         })
         .map(|_| ())
-        .map_err(Self::command_failure)
+        .map_err(|error| Self::command_failure(error.to_string()))
     }
 
     fn confirm(&mut self) -> Result<(), LauncherEffectFailure> {
         main_command::execute(&MainCommand::DisplayConfirm)
             .map(|_| ())
-            .map_err(Self::command_failure)
+            .map_err(|error| Self::command_failure(error.to_string()))
     }
 
     fn cancel(&mut self) -> Result<(), LauncherEffectFailure> {
         main_command::execute(&MainCommand::DisplayCancel)
             .map(|_| ())
-            .map_err(Self::command_failure)
+            .map_err(|error| Self::command_failure(error.to_string()))
     }
 }
 
