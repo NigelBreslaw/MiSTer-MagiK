@@ -6,13 +6,25 @@
 set -eu
 
 FAT="${MISTER_MAGIK_FAT:-/media/fat}"
-MANIFEST="$FAT/mister-magik/platform-v3.manifest"
-MANAGER="$FAT/mister-magik/mister-magik-manager"
 
 fail() {
   echo "MiSTer MagiK: ERROR: $*" >&2
   exit 1
 }
+
+SCRIPT_DIR="$(CDPATH= cd "$(dirname "$0")" && pwd)"
+CONSTANTS="$SCRIPT_DIR/MiSTer-MagiK.platform-v3.constants.sh"
+[ -r "$CONSTANTS" ] || fail "missing $CONSTANTS"
+# shellcheck source=/dev/null
+. "$CONSTANTS"
+
+public_root="${PLATFORM_V3_PUBLIC_ROOT#/media/fat/}"
+manager_relative="${PLATFORM_V3_PUBLIC_MANAGER#/media/fat/}"
+[ "$public_root" != "$PLATFORM_V3_PUBLIC_ROOT" ] || fail "public root is outside /media/fat"
+[ "$manager_relative" != "$PLATFORM_V3_PUBLIC_MANAGER" ] || \
+  fail "public manager is outside /media/fat"
+MANIFEST="$FAT/$public_root/$PLATFORM_V3_FILE_NAME"
+MANAGER="$FAT/$manager_relative"
 
 [ -r "$MANIFEST" ] || fail "missing $MANIFEST"
 [ -f "$MANAGER" ] || fail "missing $MANAGER"
@@ -27,8 +39,17 @@ manifest_value() {
   sed -n "s/^$key=//p" "$MANIFEST"
 }
 
+expected_fields=0
+for key in $PLATFORM_V3_FIELD_NAMES; do
+  manifest_value "$key" >/dev/null || fail "manifest has no unique $key"
+  expected_fields=$((expected_fields + 1))
+done
+actual_fields="$(awk 'NF && substr($0,1,1) != "#" { if (index($0,"=") == 0) exit 2; count++ } END { print count + 0 }' "$MANIFEST")" || \
+  fail "manifest contains a malformed field"
+[ "$actual_fields" = "$expected_fields" ] || fail "manifest field set is not canonical"
+
 manager_path="$(manifest_value manager_path)" || fail "manifest has no unique manager_path"
-[ "$manager_path" = /media/fat/mister-magik/mister-magik-manager ] || \
+[ "$manager_path" = "$PLATFORM_V3_PUBLIC_MANAGER" ] || \
   fail "manifest manager_path is not canonical"
 expected="$(manifest_value manager_sha256)" || fail "manifest has no unique manager_sha256"
 case "$expected" in

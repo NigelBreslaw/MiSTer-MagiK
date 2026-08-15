@@ -4,9 +4,11 @@
 //! Launcher navigation and arcade game launch.
 
 use crate::arcade_button_overrides::{remove_button_overrides, write_button_overrides_for_mra};
+#[cfg(test)]
+use crate::arcade_catalog::StructuredLaunchPlan;
 use crate::arcade_catalog::{
     ARCADE_ROW_HEIGHT, ArcadeCatalog, ArcadeFilter, ArcadeFilterOption, HOME_LIST_VISIBLE_W,
-    HOME_TILE_GAP, HOME_TILE_WIDTH, LaunchTarget, StructuredLaunchPlan,
+    HOME_TILE_GAP, HOME_TILE_WIDTH, LaunchTarget,
 };
 use crate::input_event::{InputEvent, InputPhase};
 #[cfg(test)]
@@ -21,8 +23,16 @@ use crate::library_db;
 use crate::settings::{MagikSettings, ScreenOrientation};
 use crate::spring_animation::{SpringAnimation, SpringConfiguration};
 use mister_magik_catalog::media_identity::screenshot_reset_deletes_filename;
+use mister_magik_core::launcher_effects::{
+    DisplayControl, DisplayState as EffectDisplayState, DisplayStateRead,
+    DisplayTransactionPhase as EffectDisplayTransactionPhase, InputPolicy, LaunchHandoff,
+    LaunchHandoffOutcome, LaunchHandoffRequest, LaunchSelection as EffectLaunchSelection,
+    LauncherEffectFailure, LauncherEffectFailureKind, LauncherPersistence, RuntimeState,
+    StructuredLaunchSelection as EffectStructuredLaunchSelection,
+};
 use mister_magik_mister_runtime::display_resolution::{DISPLAY_RESOLUTIONS, DisplayResolution};
 use mister_magik_mister_runtime::main_command::{self, MainCommand};
+use mister_magik_mister_runtime::runtime_state::SystemRuntimeState;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -4359,7 +4369,9 @@ pub fn capture_launch_return_state(
 }
 
 pub fn save_launch_return_state(state: &LaunchReturnState) -> Result<(), String> {
-    save_launch_return_state_at(Path::new(LAUNCH_RETURN_STATE_PATH), state)
+    SystemLauncherPersistence
+        .save_return_state(state)
+        .map_err(|failure| failure.detail().to_string())
 }
 
 fn save_launch_return_state_at(path: &Path, state: &LaunchReturnState) -> Result<(), String> {
@@ -4376,39 +4388,123 @@ fn save_launch_return_state_at(path: &Path, state: &LaunchReturnState) -> Result
 }
 
 pub fn remove_launch_return_state() {
-    remove_launch_return_state_at(Path::new(LAUNCH_RETURN_STATE_PATH));
-}
-
-fn remove_launch_return_state_at(path: &Path) {
-    match fs::remove_file(path) {
-        Ok(()) => {}
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-        Err(e) => crate::ui_errln!(
-            "failed to remove launch return state {}: {e}",
-            path.display()
-        ),
+    if let Err(failure) = SystemLauncherPersistence.clear_return_state() {
+        crate::ui_errln!("{}", failure.detail());
     }
 }
 
 pub fn take_launch_return_state() -> Option<LaunchReturnState> {
-    take_launch_return_state_at(Path::new(LAUNCH_RETURN_STATE_PATH))
-}
-
-fn take_launch_return_state_at(path: &Path) -> Option<LaunchReturnState> {
-    let text = fs::read_to_string(path).ok()?;
-    remove_launch_return_state_at(path);
-    match serde_json::from_str::<LaunchReturnState>(&text) {
-        Ok(state)
-            if (1..=LAUNCH_RETURN_STATE_SCHEMA).contains(&state.schema_version)
-                && state.screen == "arcade" =>
-        {
-            Some(state)
-        }
-        Ok(_) => None,
-        Err(e) => {
-            crate::ui_errln!("invalid launch return state {}: {e}", path.display());
+    let mut persistence = SystemLauncherPersistence;
+    let state = persistence.load_return_state();
+    let should_clear = !matches!(
+        &state,
+        Err(failure) if failure.kind() == LauncherEffectFailureKind::Unavailable
+    );
+    if should_clear && let Err(failure) = persistence.clear_return_state() {
+        crate::ui_errln!("{}", failure.detail());
+    }
+    match state {
+        Ok(state) => state,
+        Err(failure) => {
+            crate::ui_errln!("{}", failure.detail());
             None
         }
+    }
+}
+
+struct SystemLauncherPersistence;
+
+impl SystemLauncherPersistence {
+    fn unavailable(detail: impl Into<String>) -> LauncherEffectFailure {
+        LauncherEffectFailure::new(LauncherEffectFailureKind::Unavailable, detail)
+    }
+
+    fn load_return_state_at(
+        path: &Path,
+    ) -> Result<Option<LaunchReturnState>, LauncherEffectFailure> {
+        let text = match fs::read_to_string(path) {
+            Ok(text) => text,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => {
+                return Err(Self::unavailable(format!(
+                    "read launch return state {}: {error}",
+                    path.display()
+                )));
+            }
+        };
+        match serde_json::from_str::<LaunchReturnState>(&text) {
+            Ok(state)
+                if (1..=LAUNCH_RETURN_STATE_SCHEMA).contains(&state.schema_version)
+                    && state.screen == "arcade" =>
+            {
+                Ok(Some(state))
+            }
+            Ok(_) => Ok(None),
+            Err(error) => Err(LauncherEffectFailure::new(
+                LauncherEffectFailureKind::MalformedResponse,
+                format!("invalid launch return state {}: {error}", path.display()),
+            )),
+        }
+    }
+
+    fn clear_return_state_at(path: &Path) -> Result<(), LauncherEffectFailure> {
+        match fs::remove_file(path) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(Self::unavailable(format!(
+                "failed to remove launch return state {}: {error}",
+                path.display()
+            ))),
+        }
+    }
+
+    fn library_rebuild_pending(&self) -> bool {
+        library_rebuild_on_next_boot_path().exists()
+    }
+}
+
+impl LauncherPersistence for SystemLauncherPersistence {
+    type ReturnState = LaunchReturnState;
+    type Settings = MagikSettings;
+
+    fn load_return_state(&mut self) -> Result<Option<Self::ReturnState>, LauncherEffectFailure> {
+        Self::load_return_state_at(Path::new(LAUNCH_RETURN_STATE_PATH))
+    }
+
+    fn save_return_state(
+        &mut self,
+        state: &Self::ReturnState,
+    ) -> Result<(), LauncherEffectFailure> {
+        save_launch_return_state_at(Path::new(LAUNCH_RETURN_STATE_PATH), state)
+            .map_err(Self::unavailable)
+    }
+
+    fn clear_return_state(&mut self) -> Result<(), LauncherEffectFailure> {
+        Self::clear_return_state_at(Path::new(LAUNCH_RETURN_STATE_PATH))
+    }
+
+    fn load_settings(&mut self) -> Result<Self::Settings, LauncherEffectFailure> {
+        Ok(MagikSettings::load())
+    }
+
+    fn save_settings(&mut self, settings: &Self::Settings) -> Result<(), LauncherEffectFailure> {
+        settings
+            .save()
+            .map_err(|error| Self::unavailable(format!("save launcher settings: {error}")))
+    }
+
+    fn set_input_policy(&mut self, policy: InputPolicy) -> Result<(), LauncherEffectFailure> {
+        write_input_policy_marker(matches!(policy, InputPolicy::Simple)).map_err(Self::unavailable)
+    }
+
+    fn request_library_rebuild(&mut self) -> Result<(), LauncherEffectFailure> {
+        request_library_rebuild_on_next_boot_at(&library_rebuild_on_next_boot_path())
+            .map_err(Self::unavailable)
+    }
+
+    fn consume_library_rebuild(&mut self) -> Result<bool, LauncherEffectFailure> {
+        consume_library_rebuild_on_next_boot_at(&library_rebuild_on_next_boot_path())
+            .map_err(Self::unavailable)
     }
 }
 
@@ -4689,10 +4785,6 @@ fn execute_main_command(command: &MainCommand) -> Result<Option<String>, String>
     result
 }
 
-fn execute_main_command_try(command: &MainCommand) -> Result<Option<String>, String> {
-    main_command::try_execute(command).map_err(|error| error.to_string())
-}
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DisplayCommandState {
     pub active: String,
@@ -4712,102 +4804,75 @@ pub enum DisplayTransactionPhase {
     Failed,
 }
 
+impl From<EffectDisplayTransactionPhase> for DisplayTransactionPhase {
+    fn from(phase: EffectDisplayTransactionPhase) -> Self {
+        match phase {
+            EffectDisplayTransactionPhase::Idle => Self::Idle,
+            EffectDisplayTransactionPhase::Provisional => Self::Provisional,
+            EffectDisplayTransactionPhase::Persisting => Self::Persisting,
+            EffectDisplayTransactionPhase::Failed => Self::Failed,
+        }
+    }
+}
+
+impl From<EffectDisplayState> for DisplayCommandState {
+    fn from(state: EffectDisplayState) -> Self {
+        Self {
+            active: state.active_mode,
+            pending: state.pending_mode,
+            remaining: state.remaining_secs,
+            phase: state.phase.into(),
+            error: state.error,
+            return_to_settings: state.return_to_settings,
+        }
+    }
+}
+
 pub fn display_state() -> Result<DisplayCommandState, String> {
-    let response = execute_main_command(&MainCommand::DisplayState)?
-        .ok_or_else(|| "MiSTer display command returned no reply".to_string())?;
-    parse_display_state_response(&response)
+    mister_magik_mister_runtime::display_control::MainDisplayControl
+        .state(DisplayStateRead::Wait)
+        .map(DisplayCommandState::from)
+        .map_err(|failure| failure.detail().to_string())
 }
 
 pub fn try_display_state() -> Result<DisplayCommandState, String> {
-    let response = execute_main_command_try(&MainCommand::DisplayState)?
-        .ok_or_else(|| "MiSTer display command returned no reply".to_string())?;
-    parse_display_state_response(&response)
+    mister_magik_mister_runtime::display_control::MainDisplayControl
+        .state(DisplayStateRead::Try)
+        .map(DisplayCommandState::from)
+        .map_err(|failure| failure.detail().to_string())
 }
 
+#[cfg(test)]
 fn parse_display_state_response(response: &str) -> Result<DisplayCommandState, String> {
-    let mut active = None;
-    let mut pending = None;
-    let mut remaining = 0;
-    let mut schema = None;
-    let mut phase = DisplayTransactionPhase::Idle;
-    let mut error = None;
-    let mut return_to_settings = false;
-    for field in response.split_whitespace() {
-        if let Some(value) = field.strip_prefix("schema=") {
-            schema = Some(value);
-        }
-        if let Some(value) = field.strip_prefix("active=") {
-            active = Some(value.to_owned());
-        }
-        if let Some(value) = field.strip_prefix("pending=") {
-            pending = (value != "none").then(|| value.to_owned());
-        }
-        if let Some(value) = field.strip_prefix("remaining=") {
-            remaining = value
-                .parse::<u8>()
-                .unwrap_or(0)
-                .min(DISPLAY_CONFIRM_SECONDS);
-        }
-        if let Some(value) = field.strip_prefix("phase=") {
-            phase = match value {
-                "idle" => DisplayTransactionPhase::Idle,
-                "provisional" => DisplayTransactionPhase::Provisional,
-                "persisting" => DisplayTransactionPhase::Persisting,
-                "failed" => DisplayTransactionPhase::Failed,
-                _ => return Err("display state has unsupported phase".into()),
-            };
-        }
-        if let Some(value) = field.strip_prefix("error=") {
-            error = (value != "none").then(|| value.to_owned());
-        }
-        if let Some(value) = field.strip_prefix("return=") {
-            return_to_settings = match value {
-                "none" => false,
-                "settings" => true,
-                _ => return Err("display state has unsupported return screen".into()),
-            };
-        }
-    }
-    if schema != Some("1") {
-        return Err("display state has unsupported schema".into());
-    }
-    if pending
-        .as_deref()
-        .is_some_and(|id| mister_magik_mister_runtime::display_resolution::find(id).is_none())
-    {
-        return Err("display state has unsupported pending mode".into());
-    }
-    Ok(DisplayCommandState {
-        active: active.ok_or("display state missing active mode")?,
-        pending,
-        remaining,
-        phase,
-        error,
-        return_to_settings,
-    })
+    mister_magik_mister_runtime::display_control::parse_state_response(response)
+        .map(DisplayCommandState::from)
 }
 
 pub fn apply_display_resolution(id: &str) -> Result<(), String> {
-    if mister_magik_mister_runtime::display_resolution::find(id).is_none() {
-        return Err("unsupported display mode".into());
-    }
-    execute_main_command(&MainCommand::DisplayApply {
-        mode: id.to_string(),
-    })
-    .map(|_| ())
+    mister_magik_mister_runtime::display_control::MainDisplayControl
+        .apply(id)
+        .map_err(|failure| failure.detail().to_string())
 }
 
 pub fn confirm_display_resolution() -> Result<(), String> {
-    execute_main_command(&MainCommand::DisplayConfirm).map(|_| ())
+    mister_magik_mister_runtime::display_control::MainDisplayControl
+        .confirm()
+        .map_err(|failure| failure.detail().to_string())
 }
 
 pub fn confirm_display_resolution_and_wait(
     timeout: Duration,
 ) -> Result<DisplayCommandState, String> {
-    confirm_display_resolution()?;
+    let mut display = mister_magik_mister_runtime::display_control::MainDisplayControl;
+    display
+        .confirm()
+        .map_err(|failure| failure.detail().to_string())?;
     let started = Instant::now();
     while started.elapsed() < timeout {
-        let state = display_state()?;
+        let state = display
+            .state(DisplayStateRead::Wait)
+            .map(DisplayCommandState::from)
+            .map_err(|failure| failure.detail().to_string())?;
         match state.phase {
             DisplayTransactionPhase::Idle if state.pending.is_none() => return Ok(state),
             DisplayTransactionPhase::Failed => return Ok(state),
@@ -4821,7 +4886,9 @@ pub fn confirm_display_resolution_and_wait(
 }
 
 pub fn cancel_display_resolution() -> Result<(), String> {
-    execute_main_command(&MainCommand::DisplayCancel).map(|_| ())
+    mister_magik_mister_runtime::display_control::MainDisplayControl
+        .cancel()
+        .map_err(|failure| failure.detail().to_string())
 }
 
 trait LaunchIo {
@@ -4836,7 +4903,7 @@ trait LaunchIo {
     fn write_input_policy_marker(&mut self, simple_joystick_handling: bool) -> Result<(), String>;
     fn write_button_overrides(
         &mut self,
-        launch_target: &LaunchTarget,
+        selection: &EffectLaunchSelection,
         simple_joystick_handling: bool,
     ) -> Result<(), String>;
     fn write_mister_command(&mut self, command: &MainCommand) -> Result<(), String>;
@@ -4854,11 +4921,16 @@ impl LaunchIo for SystemLaunchIo {
     }
 
     fn magik_running(&mut self) -> bool {
-        main_command::magik_main_running()
+        SystemRuntimeState
+            .main_state()
+            .is_ok_and(|state| state.magik_owned)
     }
 
     fn simple_joystick_handling(&mut self) -> bool {
-        MagikSettings::load().simple_joystick_handling
+        SystemLauncherPersistence
+            .load_settings()
+            .map(|settings| settings.simple_joystick_handling)
+            .unwrap_or(false)
     }
 
     fn prepare_simple_input_profiles(&mut self) -> Result<(), String> {
@@ -4882,15 +4954,21 @@ impl LaunchIo for SystemLaunchIo {
     }
 
     fn write_input_policy_marker(&mut self, simple_joystick_handling: bool) -> Result<(), String> {
-        write_input_policy_marker(simple_joystick_handling)
+        SystemLauncherPersistence
+            .set_input_policy(if simple_joystick_handling {
+                InputPolicy::Simple
+            } else {
+                InputPolicy::Stock
+            })
+            .map_err(|failure| failure.detail().to_string())
     }
 
     fn write_button_overrides(
         &mut self,
-        launch_target: &LaunchTarget,
+        selection: &EffectLaunchSelection,
         simple_joystick_handling: bool,
     ) -> Result<(), String> {
-        write_button_overrides_for_launch(launch_target, simple_joystick_handling)
+        write_button_overrides_for_launch(selection, simple_joystick_handling)
     }
 
     fn write_mister_command(&mut self, command: &MainCommand) -> Result<(), String> {
@@ -4899,7 +4977,9 @@ impl LaunchIo for SystemLaunchIo {
 }
 
 fn mister_running() -> bool {
-    main_command::main_running()
+    SystemRuntimeState
+        .main_state()
+        .is_ok_and(|state| state.running)
 }
 
 /// Main owns HDMI/OSD/input state; do not kill it from Slint.
@@ -4952,16 +5032,18 @@ fn write_input_policy_marker(simple_joystick_handling: bool) -> Result<(), Strin
 }
 
 fn write_button_overrides_for_launch(
-    launch_target: &LaunchTarget,
+    selection: &EffectLaunchSelection,
     simple_joystick_handling: bool,
 ) -> Result<(), String> {
     if !simple_joystick_handling {
         return remove_button_overrides();
     }
 
-    match launch_target {
-        LaunchTarget::Path(path) if path.to_ascii_lowercase().ends_with(".mra") => {
-            write_button_overrides_for_mra(Path::new(path.as_ref()))
+    match selection {
+        EffectLaunchSelection::CatalogPath { target }
+            if target.to_ascii_lowercase().ends_with(".mra") =>
+        {
+            write_button_overrides_for_mra(Path::new(target))
         }
         _ => remove_button_overrides(),
     }
@@ -5022,18 +5104,55 @@ fn write_simple_input_profile(name: &str, map: &[u32; 32]) -> Result<(), String>
     fs::rename(&tmp, &path).map_err(|e| format!("failed to install {}: {e}", path.display()))
 }
 
+#[cfg(test)]
 fn encode_launch_plan(plan: &StructuredLaunchPlan) -> String {
-    let mount_index = plan.mount_index.to_string();
-    let delay_secs = plan.delay_secs.to_string();
-    let core_path = logical_core_path(plan.core_path.as_ref());
+    encode_launch_fields(
+        plan.launch_ref.as_ref(),
+        plan.title.as_ref(),
+        plan.system_id.as_ref(),
+        plan.core_path.as_ref(),
+        plan.payload_path.as_ref(),
+        plan.mount_kind.as_ref(),
+        plan.mount_index,
+        plan.delay_secs,
+    )
+}
+
+fn encode_effect_launch_plan(plan: &EffectStructuredLaunchSelection) -> String {
+    encode_launch_fields(
+        &plan.launch_ref,
+        &plan.title,
+        &plan.system_id,
+        &plan.core,
+        &plan.payload,
+        &plan.mount_kind,
+        plan.mount_index,
+        plan.delay_secs,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn encode_launch_fields(
+    launch_ref: &str,
+    title: &str,
+    system_id: &str,
+    core_path: &str,
+    payload_path: &str,
+    mount_kind: &str,
+    mount_index: u8,
+    delay_secs: u8,
+) -> String {
+    let mount_index = mount_index.to_string();
+    let delay_secs = delay_secs.to_string();
+    let core_path = logical_core_path(core_path);
     let fields = [
         ("schema", "1"),
-        ("launch_ref", plan.launch_ref.as_ref()),
-        ("title", plan.title.as_ref()),
-        ("system_id", plan.system_id.as_ref()),
+        ("launch_ref", launch_ref),
+        ("title", title),
+        ("system_id", system_id),
         ("core_path", core_path),
-        ("payload_path", plan.payload_path.as_ref()),
-        ("mount_kind", plan.mount_kind.as_ref()),
+        ("payload_path", payload_path),
+        ("mount_kind", mount_kind),
         ("mount_index", mount_index.as_str()),
         ("delay_secs", delay_secs.as_str()),
     ];
@@ -5103,20 +5222,9 @@ pub fn mark_launch_sent_for_test() {
 
 /// Main is running an arcade core (argv contains `.rbf`, not `menu.rbf`).
 pub fn mister_running_arcade_core() -> bool {
-    let output = Command::new("sh")
-        .arg("-c")
-        .arg(
-            "pid=$(pidof MiSTer_MagiKDev 2>/dev/null || pidof MiSTer_MagiK 2>/dev/null || pidof MiSTer 2>/dev/null); [ -n \"$pid\" ] && tr '\\0' ' ' < /proc/$pid/cmdline",
-        )
-        .output();
-    let Ok(output) = output else {
-        return false;
-    };
-    if !output.status.success() {
-        return false;
-    }
-    let cmdline = String::from_utf8_lossy(&output.stdout);
-    cmdline.contains(".rbf") && !cmdline.contains("menu.rbf")
+    SystemRuntimeState
+        .main_state()
+        .is_ok_and(|state| state.arcade_core)
 }
 
 /// Launch via fifo. Prefer the Magik-aware Main command when the fork owns the device.
@@ -5201,7 +5309,7 @@ pub fn execute_game_launch_handoff_bench(
 
         fn write_button_overrides(
             &mut self,
-            _launch_target: &LaunchTarget,
+            _selection: &EffectLaunchSelection,
             _simple_joystick_handling: bool,
         ) -> Result<(), String> {
             Ok(())
@@ -5228,6 +5336,108 @@ pub fn execute_game_launch_handoff_bench(
         prepare_us: prepare.elapsed().as_micros() as u64,
         handoff_us: io.handoff_us,
     }
+}
+
+fn effect_selection_from_launch_target(
+    launch_target: &LaunchTarget,
+) -> Result<EffectLaunchSelection, LaunchError> {
+    match launch_target {
+        LaunchTarget::Path(path) => Ok(EffectLaunchSelection::CatalogPath {
+            target: path.to_string(),
+        }),
+        LaunchTarget::Structured(plan) => Ok(EffectLaunchSelection::Structured(
+            EffectStructuredLaunchSelection {
+                launch_ref: plan.launch_ref.to_string(),
+                title: plan.title.to_string(),
+                system_id: plan.system_id.to_string(),
+                core: plan.core_path.to_string(),
+                payload: plan.payload_path.to_string(),
+                mount_kind: plan.mount_kind.to_string(),
+                mount_index: plan.mount_index,
+                delay_secs: plan.delay_secs,
+            },
+        )),
+        LaunchTarget::Prepared(selection) => Err(LaunchError::new(
+            format!(
+                "prepared {} launch must be resolved before Main handoff: {}",
+                selection.collection_id, selection.launch_ref
+            ),
+            false,
+        )),
+        LaunchTarget::MissingStructured(launch_ref) => Err(LaunchError::new(
+            format!("structured launch plan missing from catalog: {launch_ref}"),
+            false,
+        )),
+    }
+}
+
+struct LaunchIoHandoff<'a, I> {
+    io: &'a mut I,
+    magik_running: bool,
+    started_main: bool,
+}
+
+impl<I: LaunchIo> LaunchIoHandoff<'_, I> {
+    fn failure(
+        &self,
+        kind: LauncherEffectFailureKind,
+        detail: impl Into<String>,
+    ) -> LauncherEffectFailure {
+        LauncherEffectFailure::new(kind, detail).with_recovery_required(self.started_main)
+    }
+}
+
+impl<I: LaunchIo> LaunchHandoff for LaunchIoHandoff<'_, I> {
+    fn handoff(
+        &mut self,
+        request: &LaunchHandoffRequest,
+    ) -> Result<LaunchHandoffOutcome, LauncherEffectFailure> {
+        if self.magik_running {
+            if request.simple_joystick_handling {
+                self.io
+                    .prepare_simple_input_profiles()
+                    .map_err(|error| self.failure(LauncherEffectFailureKind::Unavailable, error))?;
+            }
+            self.io
+                .write_button_overrides(&request.selection, request.simple_joystick_handling)
+                .map_err(|error| self.failure(LauncherEffectFailureKind::Unavailable, error))?;
+            self.io
+                .write_input_policy_marker(request.simple_joystick_handling)
+                .map_err(|error| self.failure(LauncherEffectFailureKind::Unavailable, error))?;
+        }
+
+        let command = match (&request.selection, self.magik_running) {
+            (EffectLaunchSelection::CatalogPath { target }, true) => MainCommand::LaunchPath {
+                target: target.clone(),
+            },
+            (EffectLaunchSelection::CatalogPath { target }, false) => MainCommand::LoadCore {
+                target: target.clone(),
+            },
+            (EffectLaunchSelection::Structured(plan), true) => MainCommand::StructuredLaunch {
+                fields: encode_effect_launch_plan(plan),
+            },
+            (EffectLaunchSelection::Structured(_), false) => {
+                return Err(self.failure(
+                    LauncherEffectFailureKind::Rejected,
+                    "structured launch plan requires MiSTer_MagiK",
+                ));
+            }
+        };
+        crate::ui_logln!("launch: {command:?}");
+        if let Err(error) = self.io.write_mister_command(&command) {
+            if self.magik_running {
+                let _ = self.io.write_input_policy_marker(false);
+            }
+            return Err(self.failure(LauncherEffectFailureKind::Rejected, error));
+        }
+        Ok(LaunchHandoffOutcome {
+            started_main: self.started_main,
+        })
+    }
+}
+
+fn launch_error_from_effect(failure: LauncherEffectFailure) -> LaunchError {
+    LaunchError::new(failure.detail(), failure.recovery_required())
 }
 
 fn execute_game_launch_with(
@@ -5272,67 +5482,20 @@ fn execute_game_launch_with(
         .map_err(|error| LaunchError::new(error, spawned))?;
 
     let magik_running = io.magik_running();
-    if magik_running {
-        let simple_joystick_handling = io.simple_joystick_handling();
-        if simple_joystick_handling {
-            io.prepare_simple_input_profiles()
-                .map_err(|e| LaunchError::new(e, spawned))?;
-        }
-        io.write_button_overrides(launch_target, simple_joystick_handling)
-            .map_err(|e| LaunchError::new(e, spawned))?;
-        io.write_input_policy_marker(simple_joystick_handling)
-            .map_err(|e| LaunchError::new(e, spawned))?;
-    }
-    let command = match (magik_running, launch_target) {
-        (true, LaunchTarget::Path(path)) => MainCommand::LaunchPath {
-            target: path.to_string(),
-        },
-        (true, LaunchTarget::Structured(plan)) => MainCommand::StructuredLaunch {
-            fields: encode_launch_plan(plan),
-        },
-        (true, LaunchTarget::Prepared(selection)) => {
-            return Err(LaunchError::new(
-                format!("prepared launch unresolved: {}", selection.launch_ref),
-                spawned,
-            ));
-        }
-        (true, LaunchTarget::MissingStructured(launch_ref)) => {
-            return Err(LaunchError::new(
-                format!("structured launch plan missing from catalog: {launch_ref}"),
-                spawned,
-            ));
-        }
-        (false, LaunchTarget::Path(path)) => MainCommand::LoadCore {
-            target: path.to_string(),
-        },
-        (false, LaunchTarget::Structured(_)) => {
-            return Err(LaunchError::new(
-                "structured launch plan requires MiSTer_MagiK".to_string(),
-                spawned,
-            ));
-        }
-        (false, LaunchTarget::Prepared(selection)) => {
-            return Err(LaunchError::new(
-                format!("prepared launch unresolved: {}", selection.launch_ref),
-                spawned,
-            ));
-        }
-        (false, LaunchTarget::MissingStructured(launch_ref)) => {
-            return Err(LaunchError::new(
-                format!("structured launch plan missing from catalog: {launch_ref}"),
-                spawned,
-            ));
-        }
+    let request = LaunchHandoffRequest {
+        selection: effect_selection_from_launch_target(launch_target)?,
+        simple_joystick_handling: magik_running && io.simple_joystick_handling(),
     };
-    crate::ui_logln!("launch: {command:?}");
-    if let Err(e) = io.write_mister_command(&command) {
-        if magik_running {
-            let _ = io.write_input_policy_marker(false);
-        }
-        return Err(LaunchError::new(e, spawned));
-    }
+    let mut handoff = LaunchIoHandoff {
+        io,
+        magik_running,
+        started_main: spawned,
+    };
+    let outcome = handoff
+        .handoff(&request)
+        .map_err(launch_error_from_effect)?;
     LAUNCH_STATE.store(LAUNCH_SENT, Ordering::Release);
-    Ok(spawned)
+    Ok(outcome.started_main)
 }
 
 pub fn reset_launch() {
@@ -5374,6 +5537,15 @@ pub fn delete_screenshot_packs() -> Result<usize, String> {
 }
 
 fn delete_screenshot_packs_at(asset_dir: &Path) -> Result<usize, String> {
+    let mut fault_control =
+        mister_magik_mister_runtime::direct_reset_fault::process_fault_control();
+    delete_screenshot_packs_at_with_fault_control(asset_dir, &mut fault_control)
+}
+
+fn delete_screenshot_packs_at_with_fault_control(
+    asset_dir: &Path,
+    fault_control: &mut dyn mister_magik_catalog::fs_fault::DirectResetFaultControl,
+) -> Result<usize, String> {
     let entries = match fs::read_dir(asset_dir) {
         Ok(entries) => entries,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(0),
@@ -5401,9 +5573,10 @@ fn delete_screenshot_packs_at(asset_dir: &Path) -> Result<usize, String> {
         if screenshot_reset_deletes_file(name) {
             fs::remove_file(&path)
                 .map_err(|e| format!("delete screenshot asset {}: {e}", path.display()))?;
-            mister_magik_catalog::fs_fault::maybe_fault(
+            mister_magik_catalog::fs_fault::maybe_fault_with_control(
                 "reset_delete.screenshot_asset.after_remove",
                 &path,
+                fault_control,
             );
             removed += 1;
         }
@@ -5416,23 +5589,40 @@ fn screenshot_reset_deletes_file(name: &str) -> bool {
 }
 
 pub fn library_rebuild_on_next_boot_pending() -> bool {
-    library_rebuild_on_next_boot_path().exists()
+    SystemLauncherPersistence.library_rebuild_pending()
 }
 
 pub fn request_library_rebuild_on_next_boot() -> Result<(), String> {
-    request_library_rebuild_on_next_boot_at(&library_rebuild_on_next_boot_path())
+    SystemLauncherPersistence
+        .request_library_rebuild()
+        .map_err(|failure| failure.detail().to_string())
 }
 
 pub fn consume_library_rebuild_on_next_boot() -> Result<bool, String> {
-    consume_library_rebuild_on_next_boot_at(&library_rebuild_on_next_boot_path())
+    SystemLauncherPersistence
+        .consume_library_rebuild()
+        .map_err(|failure| failure.detail().to_string())
 }
 
 fn request_library_rebuild_on_next_boot_at(path: &Path) -> Result<(), String> {
+    let mut fault_control =
+        mister_magik_mister_runtime::direct_reset_fault::process_fault_control();
+    request_library_rebuild_on_next_boot_at_with_fault_control(path, &mut fault_control)
+}
+
+fn request_library_rebuild_on_next_boot_at_with_fault_control(
+    path: &Path,
+    fault_control: &mut dyn mister_magik_catalog::fs_fault::DirectResetFaultControl,
+) -> Result<(), String> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent).map_err(|e| format!("create rebuild marker dir: {e}"))?;
     }
     fs::write(path, b"rebuild\n").map_err(|e| format!("write rebuild marker: {e}"))?;
-    mister_magik_catalog::fs_fault::maybe_fault("launcher.rebuild_marker.after_write", path);
+    mister_magik_catalog::fs_fault::maybe_fault_with_control(
+        "launcher.rebuild_marker.after_write",
+        path,
+        fault_control,
+    );
     Ok(())
 }
 
@@ -5464,6 +5654,21 @@ mod tests {
     use std::sync::Mutex;
 
     static LAUNCH_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    #[derive(Default)]
+    struct RecordingFaultControl {
+        points: Vec<String>,
+    }
+
+    impl mister_magik_catalog::fs_fault::DirectResetFaultControl for RecordingFaultControl {
+        fn request_direct_reset(
+            &mut self,
+            request: &mister_magik_catalog::fs_fault::DirectResetFaultRequest,
+        ) -> mister_magik_catalog::fs_fault::DirectResetFaultOutcome {
+            self.points.push(request.point().to_string());
+            mister_magik_catalog::fs_fault::DirectResetFaultOutcome::Noop
+        }
+    }
 
     fn catalog_presentation(
         status: CatalogMenuItemStatus,
@@ -5557,12 +5762,14 @@ mod tests {
 
         fn write_button_overrides(
             &mut self,
-            launch_target: &LaunchTarget,
+            selection: &EffectLaunchSelection,
             simple_joystick_handling: bool,
         ) -> Result<(), String> {
-            let action = match (simple_joystick_handling, launch_target) {
-                (true, LaunchTarget::Path(path)) if path.to_ascii_lowercase().ends_with(".mra") => {
-                    format!("write:{path}")
+            let action = match (simple_joystick_handling, selection) {
+                (true, EffectLaunchSelection::CatalogPath { target })
+                    if target.to_ascii_lowercase().ends_with(".mra") =>
+                {
+                    format!("write:{target}")
                 }
                 _ => "remove".to_string(),
             };
@@ -8079,11 +8286,21 @@ mod tests {
         };
 
         save_launch_return_state_at(&path, &state).expect("save return state");
-        assert_eq!(take_launch_return_state_at(&path), Some(state));
+        assert_eq!(
+            SystemLauncherPersistence::load_return_state_at(&path).expect("load return state"),
+            Some(state)
+        );
+        SystemLauncherPersistence::clear_return_state_at(&path).expect("clear return state");
         assert!(!path.exists());
 
         std::fs::write(&path, "{not-json").expect("write invalid state");
-        assert_eq!(take_launch_return_state_at(&path), None);
+        assert_eq!(
+            SystemLauncherPersistence::load_return_state_at(&path)
+                .expect_err("invalid return state")
+                .kind(),
+            LauncherEffectFailureKind::MalformedResponse
+        );
+        SystemLauncherPersistence::clear_return_state_at(&path).expect("clear invalid state");
         assert!(!path.exists());
         let _ = std::fs::remove_dir_all(root);
     }
@@ -8108,7 +8325,7 @@ mod tests {
 
         save_launch_return_state_at(&path, &state).expect("save return state");
         assert!(path.exists());
-        remove_launch_return_state_at(&path);
+        SystemLauncherPersistence::clear_return_state_at(&path).expect("clear return state");
 
         assert!(!path.exists());
         let _ = std::fs::remove_dir_all(root);
@@ -8493,8 +8710,14 @@ mod tests {
         let path = root.join("nested/rebuild-on-next-boot");
 
         assert!(!consume_library_rebuild_on_next_boot_at(&path).expect("missing marker"));
-        request_library_rebuild_on_next_boot_at(&path).expect("write marker");
+        let mut fault_control = RecordingFaultControl::default();
+        request_library_rebuild_on_next_boot_at_with_fault_control(&path, &mut fault_control)
+            .expect("write marker");
         assert!(path.exists());
+        assert_eq!(
+            fault_control.points,
+            vec!["launcher.rebuild_marker.after_write"]
+        );
         assert!(consume_library_rebuild_on_next_boot_at(&path).expect("consume marker"));
         assert!(!path.exists());
         assert!(!consume_library_rebuild_on_next_boot_at(&path).expect("consume absent marker"));
@@ -8557,7 +8780,9 @@ mod tests {
         std::fs::create_dir(root.join("arcade-screenshots-320x320.mmlz4b.dir"))
             .expect("write retained directory");
 
-        let removed = delete_screenshot_packs_at(&root).expect("delete screenshot packs");
+        let mut fault_control = RecordingFaultControl::default();
+        let removed = delete_screenshot_packs_at_with_fault_control(&root, &mut fault_control)
+            .expect("delete screenshot packs");
 
         assert_eq!(removed, 6);
         assert!(!root.join("arcade-screenshots-320x320.mmlz4b").exists());
@@ -8570,6 +8795,10 @@ mod tests {
         assert!(root.join("arcade-screenshots-large.mmlz4b").exists());
         assert!(root.join("manual.pdf").exists());
         assert!(root.join("arcade-screenshots-320x320.mmlz4b.dir").exists());
+        assert_eq!(
+            fault_control.points,
+            vec!["reset_delete.screenshot_asset.after_remove"; 6]
+        );
 
         let _ = std::fs::remove_dir_all(root);
     }

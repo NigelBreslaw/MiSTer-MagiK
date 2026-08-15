@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use crate::model::Outcome;
-use crate::progress::ProgressEvent;
+use crate::progress::{FailureEvidence, ProgressEvent};
 use crate::request::RawRequest;
 use rusqlite::backup::Backup;
 use rusqlite::{Connection, OptionalExtension, params};
@@ -57,6 +57,7 @@ CREATE TABLE IF NOT EXISTS events (
     phase TEXT NOT NULL,
     message TEXT NOT NULL,
     percent INTEGER,
+    failure_json TEXT,
     PRIMARY KEY (request_id, sequence)
 );
 CREATE TABLE IF NOT EXISTS validation_results (
@@ -76,8 +77,19 @@ CREATE TABLE IF NOT EXISTS operation_leases (
     expires_ms INTEGER NOT NULL,
     PRIMARY KEY (operation_id, fingerprint)
 );
-PRAGMA user_version = 11;
+PRAGMA user_version = 12;
 "#;
+
+const RECLAIM_INACTIVE_VALIDATION_LEASE: &str = "DELETE FROM operation_leases
+     WHERE operation_id=?1 AND fingerprint=?2
+       AND (
+           expires_ms<?3
+           OR EXISTS (
+               SELECT 1 FROM requests
+               WHERE requests.id=operation_leases.owner_request_id
+                 AND requests.completed_ms IS NOT NULL
+           )
+       )";
 
 #[derive(Debug)]
 pub struct Evidence {
@@ -127,6 +139,8 @@ pub struct EventDetail {
     pub phase: String,
     pub message: String,
     pub percent: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failure: Option<FailureEvidence>,
 }
 
 impl Evidence {
@@ -160,11 +174,15 @@ impl Evidence {
             0 => connection
                 .execute_batch(SCHEMA)
                 .map_err(|error| format!("cannot initialize audit database: {error}"))?,
-            10 => migrate_v10_to_v11(&connection, root)?,
-            11 => {}
+            10 => {
+                migrate_v10_to_v11(&connection, root)?;
+                migrate_v11_to_v12(&connection)?;
+            }
+            11 => migrate_v11_to_v12(&connection)?,
+            12 => {}
             unknown => {
                 return Err(format!(
-                    "unsupported audit schema version {unknown}; expected 10 or 11"
+                    "unsupported audit schema version {unknown}; expected 10, 11, or 12"
                 ));
             }
         }
@@ -246,10 +264,16 @@ impl Evidence {
             .unchecked_transaction()
             .map_err(|error| format!("cannot begin progress transaction: {error}"))?;
         for event in events {
+            let failure = event
+                .failure
+                .as_ref()
+                .map(serde_json::to_string)
+                .transpose()
+                .map_err(|error| format!("cannot serialize progress failure: {error}"))?;
             transaction
                 .execute(
-                "INSERT INTO events (request_id, sequence, elapsed_ms, kind, phase, message, percent) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-                params![event.run, i64::from(event.seq), i64::try_from(event.elapsed_ms).unwrap_or(i64::MAX), event.kind.as_str(), event.phase, event.message, event.percent.map(i64::from)],
+                    "INSERT INTO events (request_id, sequence, elapsed_ms, kind, phase, message, percent, failure_json) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![event.run, i64::from(event.seq), i64::try_from(event.elapsed_ms).unwrap_or(i64::MAX), event.kind.as_str(), event.phase, event.message, event.percent.map(i64::from), failure],
             )
             .map_err(|error| format!("cannot record progress event: {error}"))?;
         }
@@ -315,7 +339,7 @@ impl Evidence {
             .map_err(|error| error.to_string())?;
         transaction
             .execute(
-                "DELETE FROM operation_leases WHERE operation_id=?1 AND fingerprint=?2 AND expires_ms<?3",
+                RECLAIM_INACTIVE_VALIDATION_LEASE,
                 params![operation_id, fingerprint, now],
             )
             .map_err(|error| error.to_string())?;
@@ -334,6 +358,12 @@ impl Evidence {
         operation_id: &str,
         fingerprint: &str,
     ) -> Result<Option<String>, String> {
+        self.connection
+            .execute(
+                RECLAIM_INACTIVE_VALIDATION_LEASE,
+                params![operation_id, fingerprint, now_ms()],
+            )
+            .map_err(|error| error.to_string())?;
         self.connection
             .query_row(
                 "SELECT owner_request_id FROM operation_leases WHERE operation_id=?1 AND fingerprint=?2",
@@ -562,7 +592,7 @@ impl Evidence {
                 .map_err(|error| error.to_string())?;
             let mut events = self
                 .connection
-                .prepare("SELECT sequence, elapsed_ms, kind, phase, message, percent FROM events WHERE request_id = ?1 ORDER BY sequence")
+                .prepare("SELECT sequence, elapsed_ms, kind, phase, message, percent, failure_json FROM events WHERE request_id = ?1 ORDER BY sequence")
                 .map_err(|error| error.to_string())?;
             value.events = events
                 .query_map([id], |row| {
@@ -573,6 +603,9 @@ impl Evidence {
                         phase: row.get(3)?,
                         message: row.get(4)?,
                         percent: row.get(5)?,
+                        failure: row
+                            .get::<_, Option<String>>(6)?
+                            .and_then(|value| serde_json::from_str(&value).ok()),
                     })
                 })
                 .map_err(|error| error.to_string())?
@@ -631,6 +664,33 @@ fn migrate_v10_to_v11(connection: &Connection, root: &Path) -> Result<(), String
     if let Err(error) = migration {
         let _ = connection.execute_batch("ROLLBACK;");
         return Err(format!("cannot migrate evidence database to v11: {error}"));
+    }
+    Ok(())
+}
+
+fn migrate_v11_to_v12(connection: &Connection) -> Result<(), String> {
+    let has_failure_json = connection
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('events') WHERE name = 'failure_json')",
+            [],
+            |row| row.get::<_, bool>(0),
+        )
+        .map_err(|error| format!("cannot inspect v11 evidence events: {error}"))?;
+    if has_failure_json {
+        connection
+            .pragma_update(None, "user_version", 12)
+            .map_err(|error| format!("cannot finalize evidence database v12: {error}"))?;
+        return Ok(());
+    }
+    let migration = connection.execute_batch(
+        "BEGIN IMMEDIATE;
+         ALTER TABLE events ADD COLUMN failure_json TEXT;
+         PRAGMA user_version = 12;
+         COMMIT;",
+    );
+    if let Err(error) = migration {
+        let _ = connection.execute_batch("ROLLBACK;");
+        return Err(format!("cannot migrate evidence database to v12: {error}"));
     }
     Ok(())
 }
@@ -936,7 +996,7 @@ mod tests {
                 .connection
                 .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
                 .unwrap(),
-            11
+            12
         );
         assert_eq!(
             migrated
@@ -980,6 +1040,39 @@ mod tests {
                 .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
                 .unwrap(),
             10
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn migrates_v11_events_to_nullable_structured_failures() {
+        let root = temporary_root("v11-migration");
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let connection = Connection::open(root.join("agent.sqlite3")).unwrap();
+        let legacy_schema = SCHEMA
+            .replace("    failure_json TEXT,\n", "")
+            .replace("PRAGMA user_version = 12;", "PRAGMA user_version = 11;");
+        connection.execute_batch(&legacy_schema).unwrap();
+        drop(connection);
+
+        let migrated = Evidence::open_at(&root).unwrap();
+        assert_eq!(
+            migrated
+                .connection
+                .query_row("PRAGMA user_version", [], |row| row.get::<_, i64>(0))
+                .unwrap(),
+            12
+        );
+        assert!(
+            migrated
+                .connection
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM pragma_table_info('events') WHERE name = 'failure_json')",
+                    [],
+                    |row| row.get::<_, bool>(0),
+                )
+                .unwrap()
         );
         fs::remove_dir_all(root).unwrap();
     }
@@ -1096,6 +1189,12 @@ mod tests {
                 phase: "done".into(),
                 message: "Passed".into(),
                 percent: Some(100),
+                failure: Some(FailureEvidence {
+                    code: "artifact_mismatch".into(),
+                    phase: "artifact".into(),
+                    retry_policy: "reconcile_then_retry".into(),
+                    recovery_required: false,
+                }),
             })
             .unwrap();
 
@@ -1104,6 +1203,10 @@ mod tests {
         assert_eq!(detail.commands[0].duration_ms, Some(0));
         assert_eq!(detail.events.len(), 1);
         assert_eq!(detail.events[0].message, "Passed");
+        assert_eq!(
+            detail.events[0].failure.as_ref().unwrap().code,
+            "artifact_mismatch"
+        );
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -1168,6 +1271,39 @@ mod tests {
         assert!(
             second
                 .has_cached_validation_success("check.one", "fingerprint")
+                .unwrap()
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn completed_request_leases_are_reclaimed_immediately() {
+        let root = temporary_root("completed-request-lease");
+        let evidence = Evidence::open_at(&root).unwrap();
+        let owner = RawRequest::capture([OsString::from("agent-cli"), OsString::from("check")]);
+        let waiter = RawRequest::capture([OsString::from("agent-cli"), OsString::from("check")]);
+        evidence.begin_request(&owner).unwrap();
+        evidence.begin_request(&waiter).unwrap();
+        assert!(
+            evidence
+                .claim_validation("check.one", "fingerprint", &owner.id)
+                .unwrap()
+        );
+        assert!(
+            !evidence
+                .claim_validation("check.one", "fingerprint", &waiter.id)
+                .unwrap()
+        );
+        evidence.finish(&owner.id, Outcome::Failed).unwrap();
+        assert_eq!(
+            evidence
+                .validation_owner("check.one", "fingerprint")
+                .unwrap(),
+            None
+        );
+        assert!(
+            evidence
+                .claim_validation("check.one", "fingerprint", &waiter.id)
                 .unwrap()
         );
         fs::remove_dir_all(root).unwrap();

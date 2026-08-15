@@ -1505,7 +1505,7 @@ mod linux {
                             let _ = writeln!(
                                 stream,
                                 "{}",
-                                response(None, false, None, Some("agent is busy"))
+                                busy_failure_response(None, "agent is busy")
                             );
                             continue;
                         };
@@ -1539,7 +1539,7 @@ mod linux {
         let mut reader = match stream.try_clone() {
             Ok(cloned) => BufReader::new(cloned),
             Err(err) => {
-                let response = response(None, false, None, Some(&format!("clone error: {err}")));
+                let response = unavailable_failure_response(None, &format!("clone error: {err}"));
                 let _ = writeln!(stream, "{response}");
                 return;
             }
@@ -1548,7 +1548,14 @@ mod linux {
             stream.set_read_timeout(Some(remaining))
         });
         let response = match read_result {
-            Ok(line) if line.is_empty() => response(None, false, None, Some("empty request")),
+            Ok(line) if line.is_empty() => failure_response(
+                None,
+                "empty request",
+                mister_magik_agent_protocol::FailureCode::InvalidRequest,
+                mister_magik_agent_protocol::FailurePhase::Request,
+                mister_magik_agent_protocol::RetryPolicy::Never,
+                false,
+            ),
             Ok(line) => {
                 if maybe_handle_framebuffer_stream_v1(&line, &token, &mut stream) {
                     return;
@@ -1574,7 +1581,15 @@ mod linux {
                 }
                 handle_control_line(&line, &token, boot_id, started)
             }
-            Err(err) => response(None, false, None, Some(&format!("read error: {err}"))),
+            Err(err) if err.kind() == io::ErrorKind::InvalidData => failure_response(
+                None,
+                &format!("read error: {err}"),
+                mister_magik_agent_protocol::FailureCode::InvalidRequest,
+                mister_magik_agent_protocol::FailurePhase::Request,
+                mister_magik_agent_protocol::RetryPolicy::Never,
+                false,
+            ),
+            Err(err) => unavailable_failure_response(None, &format!("read error: {err}")),
         };
         let _ = writeln!(stream, "{response}");
     }
@@ -1645,23 +1660,14 @@ mod linux {
         let id = parsed.get("id").cloned();
         if !CONTROL_AUTH_DISABLED && parsed.get("token").and_then(Value::as_str) != Some(token) {
             append_log_line("control_auth_failed".to_string());
-            let _ = writeln!(
-                stream,
-                "{}",
-                response(id, false, None, Some("unauthorized"))
-            );
+            let _ = writeln!(stream, "{}", authentication_failure_response(id));
             return true;
         }
         let Some(_guard) = ActiveFramebufferStream::claim() else {
             let _ = writeln!(
                 stream,
                 "{}",
-                response(
-                    id,
-                    false,
-                    None,
-                    Some("framebuffer stream already has a desktop consumer")
-                )
+                busy_failure_response(id, "framebuffer stream already has a desktop consumer",)
             );
             return true;
         };
@@ -1671,11 +1677,9 @@ mod linux {
                 let _ = writeln!(
                     stream,
                     "{}",
-                    response(
+                    unavailable_failure_response(
                         id,
-                        false,
-                        None,
-                        Some(&format!("producer stream unavailable: {err}"))
+                        &format!("producer stream unavailable: {err}"),
                     )
                 );
                 return true;
@@ -1730,11 +1734,7 @@ mod linux {
         let id = parsed.get("id").cloned();
         if !CONTROL_AUTH_DISABLED && parsed.get("token").and_then(Value::as_str) != Some(token) {
             append_log_line("control_auth_failed".to_string());
-            let _ = writeln!(
-                stream,
-                "{}",
-                response(id, false, None, Some("unauthorized"))
-            );
+            let _ = writeln!(stream, "{}", authentication_failure_response(id));
             return true;
         }
         let analytics_mode = parsed
@@ -2658,11 +2658,7 @@ mod linux {
         let id = parsed.get("id").cloned();
         if !CONTROL_AUTH_DISABLED && parsed.get("token").and_then(Value::as_str) != Some(token) {
             append_log_line("control_auth_failed".to_string());
-            let _ = writeln!(
-                stream,
-                "{}",
-                response(id, false, None, Some("unauthorized"))
-            );
+            let _ = writeln!(stream, "{}", authentication_failure_response(id));
             return true;
         }
         timeline_record_once("first_command", format!("cmd={}", cmd.unwrap_or("")));
@@ -2679,7 +2675,7 @@ mod linux {
                 let _ = stream.write_all(&capture.payload);
             }
             Err(err) => {
-                let _ = writeln!(stream, "{}", response(id, false, None, Some(&err)));
+                let _ = writeln!(stream, "{}", operation_failure_response(id, &err));
             }
         }
         true
@@ -2702,11 +2698,7 @@ mod linux {
         let id = parsed.get("id").cloned();
         if !CONTROL_AUTH_DISABLED && parsed.get("token").and_then(Value::as_str) != Some(token) {
             append_log_line("control_auth_failed".to_string());
-            let _ = writeln!(
-                stream,
-                "{}",
-                response(id, false, None, Some("unauthorized"))
-            );
+            let _ = writeln!(stream, "{}", authentication_failure_response(id));
             return true;
         }
         let args = parsed.get("args").cloned().unwrap_or_else(|| json!({}));
@@ -2753,7 +2745,7 @@ mod linux {
                 let _ = stream.write_all(&snapshot.payload);
             }
             Err(err) => {
-                let _ = writeln!(stream, "{}", response(id, false, None, Some(&err)));
+                let _ = writeln!(stream, "{}", operation_failure_response(id, &err));
             }
         }
         true
@@ -2774,11 +2766,7 @@ mod linux {
         let id = parsed.get("id").cloned();
         if !CONTROL_AUTH_DISABLED && parsed.get("token").and_then(Value::as_str) != Some(token) {
             append_log_line("control_auth_failed".to_string());
-            let _ = writeln!(
-                stream,
-                "{}",
-                response(id, false, None, Some("unauthorized"))
-            );
+            let _ = writeln!(stream, "{}", authentication_failure_response(id));
             return true;
         }
         let args = parsed.get("args").cloned().unwrap_or_else(|| json!({}));
@@ -2794,7 +2782,7 @@ mod linux {
                 let _ = stream.write_all(&preview.payload);
             }
             Err(err) => {
-                let _ = writeln!(stream, "{}", response(id, false, None, Some(&err)));
+                let _ = writeln!(stream, "{}", operation_failure_response(id, &err));
             }
         }
         true
@@ -2809,7 +2797,17 @@ mod linux {
                 if error.message == "unauthorized" {
                     append_log_line("control_auth_failed".to_string());
                 }
-                return response(error.id, false, None, Some(&error.message));
+                if error.message == "unauthorized" {
+                    return authentication_failure_response(error.id);
+                }
+                return failure_response(
+                    error.id,
+                    &error.message,
+                    mister_magik_agent_protocol::FailureCode::InvalidRequest,
+                    mister_magik_agent_protocol::FailurePhase::Request,
+                    mister_magik_agent_protocol::RetryPolicy::Never,
+                    false,
+                );
             }
         };
         let ControlRequest { id, cmd, args } = request;
@@ -2838,42 +2836,42 @@ mod linux {
             "diagnostics" => response(id, true, Some(diagnostics_json(boot_id, started)), None),
             "magik" => match magik_control(args) {
                 Ok(result) => response(id, true, Some(result), None),
-                Err(err) => response(id, false, None, Some(&err)),
+                Err(err) => operation_failure_response(id, &err),
             },
             "sd_list_dir" => match sd_list_dir(args, request_received_monotonic_us) {
                 Ok(result) => response(id, true, Some(result), None),
-                Err(err) => response(id, false, None, Some(&err)),
+                Err(err) => operation_failure_response(id, &err),
             },
             "sd_list_dir_v2" => match sd_list_dir_v2(args, request_received_monotonic_us) {
                 Ok(result) => response(id, true, Some(result), None),
-                Err(err) => response(id, false, None, Some(&err)),
+                Err(err) => operation_failure_response(id, &err),
             },
             "sd_stat_item_v1" => match sd_stat_item(args) {
                 Ok(result) => response(id, true, Some(result), None),
-                Err(err) => response(id, false, None, Some(&err)),
+                Err(err) => operation_failure_response(id, &err),
             },
             "sd_parse_mra_v1" => match sd_parse_mra(args) {
                 Ok(result) => response(id, true, Some(result), None),
-                Err(err) => response(id, false, None, Some(&err)),
+                Err(err) => operation_failure_response(id, &err),
             },
             "framebuffer_capture" => {
                 match framebuffer_capture(request_received, request_received_monotonic_us, started)
                 {
                     Ok(result) => response(id, true, Some(result), None),
-                    Err(err) => response(id, false, None, Some(&err)),
+                    Err(err) => operation_failure_response(id, &err),
                 }
             }
             "launcher_automation_begin" => match crate::launcher_automation::begin(args) {
                 Ok(result) => response(id, true, Some(result), None),
-                Err(err) => response(id, false, None, Some(&err)),
+                Err(err) => operation_failure_response(id, &err),
             },
             "launcher_automation_request" => match crate::launcher_automation::request(args) {
                 Ok(result) => response(id, true, Some(result), None),
-                Err(err) => response(id, false, None, Some(&err)),
+                Err(err) => operation_failure_response(id, &err),
             },
             "alpha_candidate_install" => match crate::alpha_candidate::install(args) {
                 Ok(result) => response(id, true, Some(result), None),
-                Err(err) => response(id, false, None, Some(&err)),
+                Err(err) => alpha_candidate_failure_response(id, &err),
             },
             "reboot" => match schedule_reboot(args) {
                 Ok(mode) => response(
@@ -2882,9 +2880,16 @@ mod linux {
                     Some(json!({"scheduled": true, "mode": mode})),
                     None,
                 ),
-                Err(err) => response(id, false, None, Some(&err)),
+                Err(err) => operation_failure_response(id, &err),
             },
-            _ => response(id, false, None, Some("unknown cmd")),
+            _ => failure_response(
+                id,
+                "unknown cmd",
+                mister_magik_agent_protocol::FailureCode::UnknownCommand,
+                mister_magik_agent_protocol::FailurePhase::Request,
+                mister_magik_agent_protocol::RetryPolicy::Never,
+                false,
+            ),
         }
     }
 
@@ -2895,6 +2900,115 @@ mod linux {
             json!({"id": id.unwrap_or(Value::Null), "ok": false, "error": error.unwrap_or("error")})
         };
         value.to_string()
+    }
+
+    pub(super) fn failure_response(
+        id: Option<Value>,
+        error: &str,
+        code: mister_magik_agent_protocol::FailureCode,
+        phase: mister_magik_agent_protocol::FailurePhase,
+        retry_policy: mister_magik_agent_protocol::RetryPolicy,
+        recovery_required: bool,
+    ) -> String {
+        let failure = mister_magik_agent_protocol::FailureMetadata {
+            code,
+            detail: error.to_owned(),
+            phase,
+            retry_policy,
+            recovery_required,
+        };
+        json!({
+            "id": id.unwrap_or(Value::Null),
+            "ok": false,
+            "error": error,
+            "failure": failure.to_value(),
+        })
+        .to_string()
+    }
+
+    pub(super) fn authentication_failure_response(id: Option<Value>) -> String {
+        failure_response(
+            id,
+            "unauthorized",
+            mister_magik_agent_protocol::FailureCode::AuthenticationRequired,
+            mister_magik_agent_protocol::FailurePhase::Authentication,
+            mister_magik_agent_protocol::RetryPolicy::Never,
+            false,
+        )
+    }
+
+    pub(super) fn busy_failure_response(id: Option<Value>, error: &str) -> String {
+        failure_response(
+            id,
+            error,
+            mister_magik_agent_protocol::FailureCode::DeviceBusy,
+            mister_magik_agent_protocol::FailurePhase::Availability,
+            mister_magik_agent_protocol::RetryPolicy::Retry,
+            false,
+        )
+    }
+
+    pub(super) fn unavailable_failure_response(id: Option<Value>, error: &str) -> String {
+        failure_response(
+            id,
+            error,
+            mister_magik_agent_protocol::FailureCode::DeviceUnavailable,
+            mister_magik_agent_protocol::FailurePhase::Availability,
+            mister_magik_agent_protocol::RetryPolicy::Retry,
+            false,
+        )
+    }
+
+    pub(super) fn operation_failure_response(id: Option<Value>, error: &str) -> String {
+        failure_response(
+            id,
+            error,
+            mister_magik_agent_protocol::FailureCode::OperationFailed,
+            mister_magik_agent_protocol::FailurePhase::Operation,
+            mister_magik_agent_protocol::RetryPolicy::Never,
+            false,
+        )
+    }
+
+    pub(super) fn alpha_candidate_failure_response(
+        id: Option<Value>,
+        error: &crate::alpha_candidate::InstallFailure,
+    ) -> String {
+        use crate::alpha_candidate::InstallFailureKind;
+        let (code, phase, retry_policy, recovery_required) = match error.kind {
+            InstallFailureKind::InvalidRequest => (
+                mister_magik_agent_protocol::FailureCode::InvalidRequest,
+                mister_magik_agent_protocol::FailurePhase::Request,
+                mister_magik_agent_protocol::RetryPolicy::Never,
+                false,
+            ),
+            InstallFailureKind::OperationFailed => (
+                mister_magik_agent_protocol::FailureCode::OperationFailed,
+                mister_magik_agent_protocol::FailurePhase::Operation,
+                mister_magik_agent_protocol::RetryPolicy::Never,
+                false,
+            ),
+            InstallFailureKind::ArtifactMismatch => (
+                mister_magik_agent_protocol::FailureCode::ArtifactMismatch,
+                mister_magik_agent_protocol::FailurePhase::Artifact,
+                mister_magik_agent_protocol::RetryPolicy::ReconcileThenRetry,
+                false,
+            ),
+            InstallFailureKind::RecoveryRequired => (
+                mister_magik_agent_protocol::FailureCode::RecoveryRequired,
+                mister_magik_agent_protocol::FailurePhase::Recovery,
+                mister_magik_agent_protocol::RetryPolicy::OperatorRequired,
+                true,
+            ),
+        };
+        failure_response(
+            id,
+            &error.detail,
+            code,
+            phase,
+            retry_policy,
+            recovery_required,
+        )
     }
 
     fn attach_io_operation_evidence(result: &mut Value, evidence: Value) {
@@ -6751,6 +6865,86 @@ mod tests {
                 args: json!({}),
             }
         );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn invalid_request_failure_retains_legacy_text_and_protocol_version() {
+        let line = linux::failure_response(
+            Some(json!(9)),
+            "missing cmd",
+            mister_magik_agent_protocol::FailureCode::InvalidRequest,
+            mister_magik_agent_protocol::FailurePhase::Request,
+            mister_magik_agent_protocol::RetryPolicy::Never,
+            false,
+        );
+        let value: Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(value["error"], "missing cmd");
+        assert_eq!(value["failure"]["code"], "invalid_request");
+        assert_eq!(value["failure"]["phase"], "request");
+        assert_eq!(mister_magik_agent_protocol::PROTOCOL_VERSION, 2);
+
+        let auth: Value =
+            serde_json::from_str(&linux::authentication_failure_response(Some(json!(10)))).unwrap();
+        assert_eq!(auth["error"], "unauthorized");
+        assert_eq!(auth["failure"]["code"], "authentication_required");
+        assert_eq!(auth["failure"]["phase"], "authentication");
+
+        let busy: Value =
+            serde_json::from_str(&linux::busy_failure_response(None, "agent is busy")).unwrap();
+        assert_eq!(busy["error"], "agent is busy");
+        assert_eq!(busy["failure"]["code"], "device_busy");
+        assert_eq!(busy["failure"]["phase"], "availability");
+        assert_eq!(busy["failure"]["retry_policy"], "retry");
+
+        let unavailable: Value = serde_json::from_str(&linux::unavailable_failure_response(
+            Some(json!(11)),
+            "producer stream unavailable",
+        ))
+        .unwrap();
+        assert_eq!(unavailable["error"], "producer stream unavailable");
+        assert_eq!(unavailable["failure"]["code"], "device_unavailable");
+        assert_eq!(unavailable["failure"]["phase"], "availability");
+        assert_eq!(unavailable["failure"]["retry_policy"], "retry");
+
+        let operation: Value = serde_json::from_str(&linux::operation_failure_response(
+            Some(json!(12)),
+            "capture failed",
+        ))
+        .unwrap();
+        assert_eq!(operation["error"], "capture failed");
+        assert_eq!(operation["failure"]["code"], "operation_failed");
+        assert_eq!(operation["failure"]["phase"], "operation");
+        assert_eq!(operation["failure"]["retry_policy"], "never");
+
+        let artifact = crate::alpha_candidate::InstallFailure {
+            kind: crate::alpha_candidate::InstallFailureKind::ArtifactMismatch,
+            detail: "installed hash mismatch".to_string(),
+        };
+        let artifact: Value = serde_json::from_str(&linux::alpha_candidate_failure_response(
+            Some(json!(13)),
+            &artifact,
+        ))
+        .unwrap();
+        assert_eq!(artifact["error"], "installed hash mismatch");
+        assert_eq!(artifact["failure"]["code"], "artifact_mismatch");
+        assert_eq!(artifact["failure"]["phase"], "artifact");
+        assert_eq!(artifact["failure"]["retry_policy"], "reconcile_then_retry");
+
+        let recovery = crate::alpha_candidate::InstallFailure {
+            kind: crate::alpha_candidate::InstallFailureKind::RecoveryRequired,
+            detail: "config restore failed".to_string(),
+        };
+        let recovery: Value = serde_json::from_str(&linux::alpha_candidate_failure_response(
+            Some(json!(14)),
+            &recovery,
+        ))
+        .unwrap();
+        assert_eq!(recovery["error"], "config restore failed");
+        assert_eq!(recovery["failure"]["code"], "recovery_required");
+        assert_eq!(recovery["failure"]["phase"], "recovery");
+        assert_eq!(recovery["failure"]["retry_policy"], "operator_required");
+        assert_eq!(recovery["failure"]["recovery_required"], true);
     }
 
     #[test]

@@ -288,9 +288,10 @@ fn profile_catalog_operation(
     mister_magik_perf_events::clear_process_profiles();
     let started = Instant::now();
     let mut events = CatalogEventCapture::default();
-    let result = mister_magik_catalog::builder_service::run_with_execution_policy(
+    let result = mister_magik_catalog::builder_service::run_with_execution_policy_and_fault_control(
         operation,
         mister_magik_catalog::builder_service::BuilderExecutionPolicy::BackgroundContinuous,
+        Box::new(mister_magik_mister_runtime::direct_reset_fault::process_fault_control()),
         |event| events.observe(event),
     );
     mister_magik_perf_events::submit_thread_profile("catalog-builder");

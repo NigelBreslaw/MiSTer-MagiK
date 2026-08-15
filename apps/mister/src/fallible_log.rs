@@ -11,7 +11,8 @@ use std::fmt;
 use std::io::{self, Write};
 use std::sync::{Mutex, OnceLock};
 
-pub(crate) fn stdout_line(args: fmt::Arguments<'_>) -> io::Result<()> {
+#[doc(hidden)]
+pub fn stdout_line(args: fmt::Arguments<'_>) -> io::Result<()> {
     let _guard = log_line_lock()
         .lock()
         .unwrap_or_else(|error| error.into_inner());
@@ -20,7 +21,8 @@ pub(crate) fn stdout_line(args: fmt::Arguments<'_>) -> io::Result<()> {
 }
 
 #[allow(dead_code)]
-pub(crate) fn stdout(args: fmt::Arguments<'_>) -> io::Result<()> {
+#[doc(hidden)]
+pub fn stdout(args: fmt::Arguments<'_>) -> io::Result<()> {
     let _guard = log_line_lock()
         .lock()
         .unwrap_or_else(|error| error.into_inner());
@@ -31,7 +33,8 @@ pub(crate) fn stdout(args: fmt::Arguments<'_>) -> io::Result<()> {
     result
 }
 
-pub(crate) fn stderr_line(args: fmt::Arguments<'_>) -> io::Result<()> {
+#[doc(hidden)]
+pub fn stderr_line(args: fmt::Arguments<'_>) -> io::Result<()> {
     let _guard = log_line_lock()
         .lock()
         .unwrap_or_else(|error| error.into_inner());

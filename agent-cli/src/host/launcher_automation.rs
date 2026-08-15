@@ -22,8 +22,8 @@ const RETURN_WAIT: Duration = Duration::from_secs(12);
 const CHECKPOINT_CAPTURE_ATTEMPTS: usize = 3;
 const LAUNCH_INPUT_ATTEMPTS: usize = 3;
 const LAUNCH_START_WAIT: Duration = Duration::from_secs(2);
-const PUBLIC_MAIN_PATH: &str = "/media/fat/MiSTer_MagiK";
-const DEVELOPMENT_MAIN_PATH: &str = "/media/fat/MiSTer_MagiKDev";
+const PUBLIC_MAIN_PATH: &str = mister_magik_platform_manifest_contract::PUBLIC_PATHS.main;
+const DEVELOPMENT_MAIN_PATH: &str = mister_magik_platform_manifest_contract::DEVELOPMENT_PATHS.main;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum MainRoute {

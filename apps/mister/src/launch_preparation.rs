@@ -81,27 +81,59 @@ thread_local! {
 }
 
 pub fn prepare_launch_ref(launch_ref: &str) -> Result<String, String> {
+    let mut fault_control =
+        mister_magik_mister_runtime::direct_reset_fault::process_fault_control();
+    prepare_launch_ref_with_fault_control(launch_ref, &mut fault_control)
+}
+
+pub fn prepare_launch_ref_with_fault_control(
+    launch_ref: &str,
+    fault_control: &mut dyn mister_magik_catalog::fs_fault::DirectResetFaultControl,
+) -> Result<String, String> {
     let roots = mister_magik_catalog::catalog_config::library_roots_from_env();
-    prepare_launch_ref_with_roots(launch_ref, &roots)
+    prepare_launch_ref_with_roots_and_fault_control(launch_ref, &roots, fault_control)
 }
 
 pub fn prepare_launch_target(
     launch_target: &LaunchTarget,
 ) -> Result<LaunchTarget, LaunchPreparationError> {
-    let _lease = mister_magik_catalog::work_coordinator::foreground("launch-preparation");
-    let roots = mister_magik_catalog::catalog_config::library_roots_from_env();
-    prepare_launch_target_with_roots(launch_target, &roots)
+    let mut fault_control =
+        mister_magik_mister_runtime::direct_reset_fault::process_fault_control();
+    prepare_launch_target_with_fault_control(launch_target, &mut fault_control)
 }
 
+pub fn prepare_launch_target_with_fault_control(
+    launch_target: &LaunchTarget,
+    fault_control: &mut dyn mister_magik_catalog::fs_fault::DirectResetFaultControl,
+) -> Result<LaunchTarget, LaunchPreparationError> {
+    let _lease = mister_magik_catalog::work_coordinator::foreground("launch-preparation");
+    let roots = mister_magik_catalog::catalog_config::library_roots_from_env();
+    prepare_launch_target_with_roots_and_fault_control(launch_target, &roots, fault_control)
+}
+
+#[cfg(test)]
 fn prepare_launch_target_with_roots(
     launch_target: &LaunchTarget,
     roots: &[String],
 ) -> Result<LaunchTarget, LaunchPreparationError> {
+    let mut fault_control = mister_magik_catalog::fs_fault::NoopDirectResetFaultControl;
+    prepare_launch_target_with_roots_and_fault_control(launch_target, roots, &mut fault_control)
+}
+
+fn prepare_launch_target_with_roots_and_fault_control(
+    launch_target: &LaunchTarget,
+    roots: &[String],
+    fault_control: &mut dyn mister_magik_catalog::fs_fault::DirectResetFaultControl,
+) -> Result<LaunchTarget, LaunchPreparationError> {
     match launch_target {
         LaunchTarget::Prepared(selection) => Ok(LaunchTarget::Path(
-            prepare_launch_ref_with_roots(&selection.launch_ref, roots)
-                .map_err(unreadable_payload_error)?
-                .into(),
+            prepare_launch_ref_with_roots_and_fault_control(
+                &selection.launch_ref,
+                roots,
+                fault_control,
+            )
+            .map_err(unreadable_payload_error)?
+            .into(),
         )),
         LaunchTarget::Path(path) => {
             mister_magik_catalog::prepared_collections::validate_prepared_launch_path(Path::new(
@@ -348,13 +380,23 @@ fn damaged_archive(
     )
 }
 
+#[cfg(test)]
 fn prepare_launch_ref_with_roots(launch_ref: &str, roots: &[String]) -> Result<String, String> {
+    let mut fault_control = mister_magik_catalog::fs_fault::NoopDirectResetFaultControl;
+    prepare_launch_ref_with_roots_and_fault_control(launch_ref, roots, &mut fault_control)
+}
+
+fn prepare_launch_ref_with_roots_and_fault_control(
+    launch_ref: &str,
+    roots: &[String],
+    fault_control: &mut dyn mister_magik_catalog::fs_fault::DirectResetFaultControl,
+) -> Result<String, String> {
     if launch_ref.starts_with(VIRTUAL_LAUNCH_PREFIX) {
         Err(format!(
             "structured launch ref must be resolved from catalog before launch: {launch_ref}"
         ))
     } else if launch_ref.starts_with(AMIGAVISION_GAME_LAUNCH_PREFIX) {
-        materialize_amigavision_game_launch_ref(launch_ref, roots)
+        materialize_amigavision_game_launch_ref(launch_ref, roots, fault_control)
     } else if launch_ref == AMIGAVISION_LAUNCHER_REF {
         materialize_amigavision_launcher_ref(roots)
     } else {
@@ -375,6 +417,7 @@ fn materialize_amigavision_launcher_ref(roots: &[String]) -> Result<String, Stri
 fn materialize_amigavision_game_launch_ref(
     launch_ref: &str,
     roots: &[String],
+    fault_control: &mut dyn mister_magik_catalog::fs_fault::DirectResetFaultControl,
 ) -> Result<String, String> {
     let selection = launch_ref
         .strip_prefix(AMIGAVISION_GAME_LAUNCH_PREFIX)
@@ -394,12 +437,13 @@ fn materialize_amigavision_game_launch_ref(
             "AmigaVision selection is no longer installed: {title}"
         ));
     }
-    materialize_amigavision_game_launch_ref_at(
+    materialize_amigavision_game_launch_ref_at_with_fault_control(
         &title,
         &install.mgl_path,
         &install.hdf_path,
         &install.shared_dir,
         &install.ags_boot_path,
+        fault_control,
     )
 }
 
@@ -468,12 +512,32 @@ fn materialize_amigavision_launcher_ref_at(
     Ok(mgl_path.display().to_string())
 }
 
+#[cfg(test)]
 fn materialize_amigavision_game_launch_ref_at(
     title: &str,
     mgl_path: &Path,
     hdf_path: &Path,
     shared_dir: &Path,
     ags_boot_path: &Path,
+) -> Result<String, String> {
+    let mut fault_control = mister_magik_catalog::fs_fault::NoopDirectResetFaultControl;
+    materialize_amigavision_game_launch_ref_at_with_fault_control(
+        title,
+        mgl_path,
+        hdf_path,
+        shared_dir,
+        ags_boot_path,
+        &mut fault_control,
+    )
+}
+
+fn materialize_amigavision_game_launch_ref_at_with_fault_control(
+    title: &str,
+    mgl_path: &Path,
+    hdf_path: &Path,
+    shared_dir: &Path,
+    ags_boot_path: &Path,
+    fault_control: &mut dyn mister_magik_catalog::fs_fault::DirectResetFaultControl,
 ) -> Result<String, String> {
     validate_amigavision_install(mgl_path, hdf_path)?;
     if !shared_dir.is_dir() {
@@ -489,13 +553,17 @@ fn materialize_amigavision_game_launch_ref_at(
     {
         record_descriptor_skipped();
     } else {
-        write_descriptor_atomically(ags_boot_path, content.as_bytes())?;
+        write_descriptor_atomically(ags_boot_path, content.as_bytes(), fault_control)?;
         record_descriptor_written(content.len() as u64);
     }
     Ok(mgl_path.display().to_string())
 }
 
-fn write_descriptor_atomically(path: &Path, bytes: &[u8]) -> Result<(), String> {
+fn write_descriptor_atomically(
+    path: &Path,
+    bytes: &[u8],
+    fault_control: &mut dyn mister_magik_catalog::fs_fault::DirectResetFaultControl,
+) -> Result<(), String> {
     let parent = path
         .parent()
         .ok_or_else(|| format!("AmigaVision descriptor has no parent: {}", path.display()))?;
@@ -511,10 +579,18 @@ fn write_descriptor_atomically(path: &Path, bytes: &[u8]) -> Result<(), String> 
         File::create(&temp_path).map_err(|e| format!("create AmigaVision descriptor temp: {e}"))?;
     file.write_all(bytes)
         .map_err(|e| format!("write AmigaVision descriptor temp: {e}"))?;
-    mister_magik_catalog::fs_fault::maybe_fault("amigavision_descriptor.after_temp_write", path);
+    mister_magik_catalog::fs_fault::maybe_fault_with_control(
+        "amigavision_descriptor.after_temp_write",
+        path,
+        fault_control,
+    );
     file.sync_all()
         .map_err(|e| format!("sync AmigaVision descriptor temp: {e}"))?;
-    mister_magik_catalog::fs_fault::maybe_fault("amigavision_descriptor.after_temp_sync", path);
+    mister_magik_catalog::fs_fault::maybe_fault_with_control(
+        "amigavision_descriptor.after_temp_sync",
+        path,
+        fault_control,
+    );
     drop(file);
     fs::rename(&temp_path, path).map_err(|e| {
         let _ = fs::remove_file(&temp_path);
@@ -524,9 +600,10 @@ fn write_descriptor_atomically(path: &Path, bytes: &[u8]) -> Result<(), String> 
             path.display()
         )
     })?;
-    mister_magik_catalog::fs_fault::maybe_fault(
+    mister_magik_catalog::fs_fault::maybe_fault_with_control(
         "amigavision_descriptor.after_rename_before_parent_sync",
         path,
+        fault_control,
     );
     sync_path_best_effort(parent);
     Ok(())
@@ -960,6 +1037,21 @@ fn percentile_sample(sorted: &[u64], percentile: f64) -> u64 {
 mod tests {
     use super::*;
 
+    #[derive(Default)]
+    struct RecordingFaultControl {
+        points: Vec<String>,
+    }
+
+    impl mister_magik_catalog::fs_fault::DirectResetFaultControl for RecordingFaultControl {
+        fn request_direct_reset(
+            &mut self,
+            request: &mister_magik_catalog::fs_fault::DirectResetFaultRequest,
+        ) -> mister_magik_catalog::fs_fault::DirectResetFaultOutcome {
+            self.points.push(request.point().to_string());
+            mister_magik_catalog::fs_fault::DirectResetFaultOutcome::Noop
+        }
+    }
+
     fn minimig_mgl(hdf_name: &str) -> String {
         format!(
             "<mistergamedescription><rbf>_computer/minimig</rbf><file path=\"../games/Amiga/{hdf_name}\" index=\"0\"/></mistergamedescription>"
@@ -1148,12 +1240,14 @@ mod tests {
         std::fs::write(&mgl, minimig_mgl("AmigaVision.hdf")).expect("write mgl");
         std::fs::write(&hdf, "hdf").expect("write hdf");
 
-        let target = materialize_amigavision_game_launch_ref_at(
+        let mut fault_control = RecordingFaultControl::default();
+        let target = materialize_amigavision_game_launch_ref_at_with_fault_control(
             "4th & Inches (OCS)[en]",
             &mgl,
             &hdf,
             &shared,
             &ags_boot,
+            &mut fault_control,
         )
         .expect("materialize AmigaVision game");
 
@@ -1169,6 +1263,14 @@ mod tests {
                 skipped: 0,
                 bytes: "4th & Inches (OCS)[en]\n".len() as u64,
             }
+        );
+        assert_eq!(
+            fault_control.points,
+            vec![
+                "amigavision_descriptor.after_temp_write",
+                "amigavision_descriptor.after_temp_sync",
+                "amigavision_descriptor.after_rename_before_parent_sync",
+            ]
         );
         assert!(
             std::fs::read_dir(&shared)

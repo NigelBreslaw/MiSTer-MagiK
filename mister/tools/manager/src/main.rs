@@ -2,6 +2,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use mister_magik_ini::{Document, apply_install, apply_restore};
+use mister_magik_platform_manifest_contract::{
+    Layout as ManifestLayout, ParsedManifest, ValidationProfile,
+};
 use std::cell::RefCell;
 use std::collections::{BTreeMap, VecDeque};
 use std::env;
@@ -15,34 +18,6 @@ use std::process::{self, Command};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
-
-const MANIFEST_FIELDS: &[&str] = &[
-    "format",
-    "platform_release",
-    "platform_release_number",
-    "platform_bundle_id",
-    "qualification_candidate_id",
-    "latch_protocol_version",
-    "latch_capability_mask",
-    "main_path",
-    "gui_path",
-    "manager_path",
-    "scanout_module_path",
-    "scanout_metadata_path",
-    "latch_rbf_path",
-    "latch_metadata_path",
-    "main_sha256",
-    "gui_sha256",
-    "manager_sha256",
-    "scanout_module_sha256",
-    "scanout_metadata_sha256",
-    "latch_rbf_sha256",
-    "latch_metadata_sha256",
-    "platform_contract_sha256",
-    "main_revision",
-    "magik_revision",
-    "menu_revision",
-];
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum InputEvent {
@@ -209,6 +184,7 @@ struct Paths {
     app: PathBuf,
     manifest: PathBuf,
     script: PathBuf,
+    script_constants: PathBuf,
     test_mode: bool,
     test_keys: RefCell<VecDeque<InputEvent>>,
 }
@@ -217,15 +193,21 @@ impl Paths {
     fn from_environment() -> Self {
         let fat =
             PathBuf::from(env::var_os("MISTER_MAGIK_FAT").unwrap_or_else(|| "/media/fat".into()));
-        let app = fat.join("mister-magik");
+        let public = ManifestLayout::Public.paths();
+        let app = fat.join(
+            Path::new(public.root)
+                .strip_prefix("/media/fat")
+                .expect("public app root is below /media/fat"),
+        );
         Self {
             inittab: PathBuf::from(
                 env::var_os("MISTER_MAGIK_INITTAB").unwrap_or_else(|| "/etc/inittab".into()),
             ),
             ini: fat.join("MiSTer.ini"),
             backup: fat.join("MiSTer.ini.bak.before-magik"),
-            manifest: app.join("platform-v3.manifest"),
+            manifest: app.join(mister_magik_platform_manifest_contract::FILE_NAME),
             script: fat.join("Scripts/MiSTer-MagiK.sh"),
+            script_constants: fat.join("Scripts/MiSTer-MagiK.platform-v3.constants.sh"),
             test_mode: env::var("MISTER_MAGIK_TEST_MODE").as_deref() == Ok("1"),
             test_keys: RefCell::new(
                 env::var("MISTER_MAGIK_TEST_KEYS")
@@ -562,6 +544,7 @@ fn prepare_stock_inittab(path: &Path) -> Result<Vec<u8>> {
     let newline = if input.contains("\r\n") { "\r\n" } else { "\n" };
     let mut output = Vec::new();
     let mut wrote = false;
+    let (magik_main, magik_boot) = magik_inittab_prefixes();
     for raw in input.lines() {
         let line = raw.strip_suffix('\r').unwrap_or(raw);
         if line.starts_with("::sysinit:/media/fat/MiSTer ") && line.ends_with('&') {
@@ -569,9 +552,7 @@ fn prepare_stock_inittab(path: &Path) -> Result<Vec<u8>> {
                 output.push("::sysinit:/media/fat/MiSTer &");
                 wrote = true;
             }
-        } else if !line.starts_with("::sysinit:/media/fat/MiSTer_MagiK")
-            && !line.starts_with("::sysinit:/media/fat/mister-magik/boot.sh")
-        {
+        } else if !line.starts_with(&magik_main) && !line.starts_with(&magik_boot) {
             output.push(line);
         }
     }
@@ -581,6 +562,14 @@ fn prepare_stock_inittab(path: &Path) -> Result<Vec<u8>> {
     let mut bytes = output.join(newline).into_bytes();
     bytes.extend_from_slice(newline.as_bytes());
     Ok(bytes)
+}
+
+fn magik_inittab_prefixes() -> (String, String) {
+    let public = ManifestLayout::Public.paths();
+    (
+        format!("::sysinit:{}", public.main),
+        format!("::sysinit:{}/boot.sh", public.root),
+    )
 }
 
 fn remount_root_writable(paths: &Paths) -> Result<()> {
@@ -619,15 +608,15 @@ fn validate_stock(paths: &Paths) -> Result<()> {
 
 fn verify_stock_inittab(path: &Path) -> Result<()> {
     let text = fs::read_to_string(path)?;
+    let (magik_main, magik_boot) = magik_inittab_prefixes();
     let stock = text
         .lines()
         .filter(|line| line.trim_end_matches('\r') == "::sysinit:/media/fat/MiSTer &")
         .count();
     if stock != 1
-        || text.lines().any(|line| {
-            line.starts_with("::sysinit:/media/fat/MiSTer_MagiK")
-                || line.starts_with("::sysinit:/media/fat/mister-magik/boot.sh")
-        })
+        || text
+            .lines()
+            .any(|line| line.starts_with(&magik_main) || line.starts_with(&magik_boot))
     {
         return Err("inittab is not in verified stock state".into());
     }
@@ -635,66 +624,9 @@ fn verify_stock_inittab(path: &Path) -> Result<()> {
 }
 
 fn verify_platform(paths: &Paths) -> Result<()> {
-    let fields = parse_manifest(&paths.manifest)?;
-    if fields.len() != MANIFEST_FIELDS.len()
-        || MANIFEST_FIELDS
-            .iter()
-            .any(|field| !fields.contains_key(*field))
-    {
-        return Err("platform manifest has unexpected fields".into());
-    }
-    if fields["format"] != "mister-magik-platform-v3" {
-        return Err("unsupported platform manifest".into());
-    }
-    let release_number = fields["platform_release_number"].parse::<u64>()?;
-    if release_number == 0 || fields["platform_release"] != format!("platform-v0.{release_number}")
-    {
-        return Err("invalid platform release identity".into());
-    }
-    require_lower_hex("platform_bundle_id", &fields["platform_bundle_id"], 64)?;
-    require_lower_hex(
-        "qualification_candidate_id",
-        &fields["qualification_candidate_id"],
-        64,
-    )?;
-    if fields["latch_protocol_version"] != "5" || fields["latch_capability_mask"] != "0x03ff" {
-        return Err("platform does not provide the required latch v5 contract".into());
-    }
-    for name in ["main_revision", "magik_revision", "menu_revision"] {
-        require_lower_hex(name, &fields[name], 40)?;
-    }
-    require_lower_hex(
-        "platform_contract_sha256",
-        &fields["platform_contract_sha256"],
-        64,
-    )?;
-    for name in [
-        "main",
-        "gui",
-        "manager",
-        "scanout_module",
-        "scanout_metadata",
-        "latch_rbf",
-        "latch_metadata",
-    ] {
-        let expected = match name {
-            "main" => "/media/fat/MiSTer_MagiK",
-            "gui" => "/media/fat/mister-magik/mister-magik-fb",
-            "manager" => "/media/fat/mister-magik/mister-magik-manager",
-            "scanout_module" => "/media/fat/mister-magik/mister_magik_scanout_slots.ko",
-            "scanout_metadata" => "/media/fat/mister-magik/mister_magik_scanout_slots.metadata.txt",
-            "latch_rbf" => "/media/fat/mister-magik/fpga/menu-magik-vblank-latch.rbf",
-            "latch_metadata" => "/media/fat/mister-magik/fpga/menu-magik-vblank-latch.metadata.txt",
-            _ => unreachable!(),
-        };
-        if fields[&format!("{name}_path")] != expected {
-            return Err(format!("invalid {name}_path").into());
-        }
-        require_lower_hex(
-            &format!("{name}_sha256"),
-            &fields[&format!("{name}_sha256")],
-            64,
-        )?;
+    let manifest = parse_manifest(&paths.manifest)?;
+    let fields = manifest.values();
+    for (name, expected) in ManifestLayout::Public.paths().components() {
         let local = paths.fat.join(expected.trim_start_matches("/media/fat/"));
         if digest(&local)? != fields[&format!("{name}_sha256")] {
             return Err(format!("hash mismatch for {}", local.display()).into());
@@ -736,8 +668,34 @@ fn verify_platform(paths: &Paths) -> Result<()> {
     Ok(())
 }
 
-fn parse_manifest(path: &Path) -> Result<BTreeMap<String, String>> {
-    parse_key_values(path)
+fn parse_manifest(path: &Path) -> Result<ParsedManifest> {
+    let text = fs::read_to_string(path)?;
+    mister_magik_platform_manifest_contract::parse(
+        &text,
+        ManifestLayout::Public,
+        ValidationProfile::ManagerLegacy,
+    )
+    .map_err(|error| manager_manifest_error(&error).into())
+}
+
+fn manager_manifest_error(
+    error: &mister_magik_platform_manifest_contract::ManifestError,
+) -> String {
+    match error.code() {
+        "invalid_platform_manifest" if error.detail().starts_with("malformed line") => {
+            "malformed platform manifest".to_string()
+        }
+        "invalid_platform_manifest" => "invalid platform manifest".to_string(),
+        "invalid_platform_manifest_fields" => "platform manifest has unexpected fields".to_string(),
+        "unsupported_platform_manifest" => "unsupported platform manifest".to_string(),
+        "invalid_platform_release" => "invalid platform release identity".to_string(),
+        "unsupported_latch_protocol" => {
+            "platform does not provide the required latch v5 contract".to_string()
+        }
+        "platform_path_mismatch" => format!("invalid {}_path", error.detail()),
+        "invalid_platform_identity" => format!("invalid {}", error.detail()),
+        _ => error.to_string(),
+    }
 }
 
 fn parse_key_values(path: &Path) -> Result<BTreeMap<String, String>> {
@@ -752,18 +710,6 @@ fn parse_key_values(path: &Path) -> Result<BTreeMap<String, String>> {
         }
     }
     Ok(fields)
-}
-
-fn require_lower_hex(name: &str, value: &str, length: usize) -> Result<()> {
-    if value.len() == length
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
-    {
-        Ok(())
-    } else {
-        Err(format!("invalid {name}: {value}").into())
-    }
 }
 
 fn digest(path: &Path) -> Result<String> {
@@ -888,10 +834,13 @@ fn remove_owned(paths: &Paths) -> Result<()> {
     if paths.script.is_file() {
         fs::remove_file(&paths.script)?;
     }
+    if paths.script_constants.is_file() {
+        fs::remove_file(&paths.script_constants)?;
+    }
     let residue: Vec<_> = files
         .iter()
         .chain(stale.iter())
-        .chain([&paths.app, &paths.script])
+        .chain([&paths.app, &paths.script, &paths.script_constants])
         .filter(|path| path.exists())
         .collect();
     if residue.is_empty() {
@@ -975,6 +924,7 @@ mod tests {
             app: root.join("mister-magik"),
             manifest: root.join("manifest"),
             script: root.join("script"),
+            script_constants: root.join("script.constants"),
             test_mode: true,
             test_keys: RefCell::default(),
         }
@@ -1029,49 +979,15 @@ mod tests {
         )
         .unwrap();
 
-        let paths_and_hashes = [
-            (
-                "main",
-                "/media/fat/MiSTer_MagiK",
-                paths.fat.join("MiSTer_MagiK"),
-            ),
-            (
-                "gui",
-                "/media/fat/mister-magik/mister-magik-fb",
-                app.join("mister-magik-fb"),
-            ),
-            (
-                "manager",
-                "/media/fat/mister-magik/mister-magik-manager",
-                app.join("mister-magik-manager"),
-            ),
-            (
-                "scanout_module",
-                "/media/fat/mister-magik/mister_magik_scanout_slots.ko",
-                app.join("mister_magik_scanout_slots.ko"),
-            ),
-            (
-                "scanout_metadata",
-                "/media/fat/mister-magik/mister_magik_scanout_slots.metadata.txt",
-                app.join("mister_magik_scanout_slots.metadata.txt"),
-            ),
-            (
-                "latch_rbf",
-                "/media/fat/mister-magik/fpga/menu-magik-vblank-latch.rbf",
-                fpga.join("menu-magik-vblank-latch.rbf"),
-            ),
-            (
-                "latch_metadata",
-                "/media/fat/mister-magik/fpga/menu-magik-vblank-latch.metadata.txt",
-                fpga.join("menu-magik-vblank-latch.metadata.txt"),
-            ),
-        ];
         let mut manifest = format!(
             "format=mister-magik-platform-v3\nplatform_release=platform-v0.7\nplatform_release_number=7\nplatform_bundle_id={}\nqualification_candidate_id={}\nlatch_protocol_version=5\nlatch_capability_mask=0x03ff\n",
             "3".repeat(64),
             "4".repeat(64)
         );
-        for (name, installed_path, local_path) in paths_and_hashes {
+        for (name, installed_path) in ManifestLayout::Public.paths().components() {
+            let local_path = paths
+                .fat
+                .join(installed_path.trim_start_matches("/media/fat/"));
             manifest.push_str(&format!("{name}_path={installed_path}\n"));
             manifest.push_str(&format!("{name}_sha256={}\n", digest(&local_path).unwrap()));
         }
@@ -1081,6 +997,20 @@ mod tests {
             "6".repeat(40),
             "2".repeat(40)
         ));
+        let values = manifest
+            .lines()
+            .map(|line| {
+                let (field, value) = line.split_once('=').unwrap();
+                (field.to_owned(), value.to_owned())
+            })
+            .collect();
+        manifest = manifest.replace(
+            &format!("qualification_candidate_id={}", "4".repeat(64)),
+            &format!(
+                "qualification_candidate_id={}",
+                mister_magik_platform_manifest_contract::qualification_candidate_id(&values)
+            ),
+        );
         fs::write(&paths.manifest, manifest).unwrap();
     }
 
@@ -1379,11 +1309,13 @@ mod tests {
         fs::write(root.join("unowned.txt"), b"keep").unwrap();
         fs::create_dir_all(root.join("Scripts")).unwrap();
         fs::write(&paths.script, b"owned").unwrap();
+        fs::write(&paths.script_constants, b"owned").unwrap();
         queue(&paths, [InputEvent::Down]);
         uninstall(&paths).unwrap();
         assert!(!paths.app.exists());
         assert!(!paths.backup.exists());
         assert!(!paths.script.exists());
+        assert!(!paths.script_constants.exists());
         assert_eq!(fs::read(root.join("unowned.txt")).unwrap(), b"keep");
         validate_stock(&paths).unwrap();
         fs::remove_dir_all(root).unwrap();
@@ -1413,18 +1345,41 @@ mod tests {
     #[test]
     fn manifest_validation_rejects_malformed_and_noncanonical_hex() {
         let root = fixture_root("manifest-errors");
-        let manifest = root.join("manifest");
-        fs::write(&manifest, b"missing-separator\n").unwrap();
+        let paths = fixture_paths(&root);
+        fs::write(&paths.manifest, b"missing-separator\n").unwrap();
         assert_eq!(
-            parse_manifest(&manifest).unwrap_err().to_string(),
+            parse_manifest(&paths.manifest).unwrap_err().to_string(),
             "malformed platform manifest"
         );
-        assert!(require_lower_hex("digest", &"a".repeat(64), 64).is_ok());
+
+        write_valid_platform(&paths);
+        let manifest = fs::read_to_string(&paths.manifest).unwrap().replace(
+            &format!("platform_bundle_id={}", "3".repeat(64)),
+            &format!("platform_bundle_id={}", "A".repeat(64)),
+        );
+        fs::write(&paths.manifest, manifest).unwrap();
         assert_eq!(
-            require_lower_hex("digest", &"A".repeat(64), 64)
-                .unwrap_err()
-                .to_string(),
-            format!("invalid digest: {}", "A".repeat(64))
+            parse_manifest(&paths.manifest).unwrap_err().to_string(),
+            format!("invalid platform_bundle_id: {}", "A".repeat(64))
+        );
+
+        write_valid_platform(&paths);
+        let manifest = fs::read_to_string(&paths.manifest).unwrap();
+        let candidate = manifest
+            .lines()
+            .find(|line| line.starts_with("qualification_candidate_id="))
+            .unwrap();
+        fs::write(
+            &paths.manifest,
+            manifest.replace(
+                candidate,
+                &format!("qualification_candidate_id={}", "f".repeat(64)),
+            ),
+        )
+        .unwrap();
+        assert_eq!(
+            parse_manifest(&paths.manifest).unwrap_err().to_string(),
+            format!("platform_candidate_identity_mismatch: {}", "f".repeat(64))
         );
         fs::remove_dir_all(root).unwrap();
     }

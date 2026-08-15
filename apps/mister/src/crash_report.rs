@@ -86,14 +86,34 @@ fn panic_report_value(
 }
 
 fn write_report_value(dir: &Path, report_id: &str, report: &Value) -> io::Result<PathBuf> {
-    write_report_value_with(&SystemReportIo, dir, report_id, report)
+    let mut fault_control =
+        mister_magik_mister_runtime::direct_reset_fault::process_fault_control();
+    write_report_value_with_fault_control(
+        &SystemReportIo,
+        dir,
+        report_id,
+        report,
+        &mut fault_control,
+    )
 }
 
+#[cfg(test)]
 fn write_report_value_with(
     report_io: &impl ReportIo,
     dir: &Path,
     report_id: &str,
     report: &Value,
+) -> io::Result<PathBuf> {
+    let mut fault_control = mister_magik_catalog::fs_fault::NoopDirectResetFaultControl;
+    write_report_value_with_fault_control(report_io, dir, report_id, report, &mut fault_control)
+}
+
+fn write_report_value_with_fault_control(
+    report_io: &impl ReportIo,
+    dir: &Path,
+    report_id: &str,
+    report: &Value,
+    fault_control: &mut dyn mister_magik_catalog::fs_fault::DirectResetFaultControl,
 ) -> io::Result<PathBuf> {
     report_io.create_dir_all(dir)?;
     let path = dir.join(format!("{report_id}.json"));
@@ -104,16 +124,29 @@ fn write_report_value_with(
     bytes.push(b'\n');
 
     report_io.write_file_sync(&tmp_path, &bytes)?;
-    mister_magik_catalog::fs_fault::maybe_fault("crash_report.report.after_temp_sync", &path);
+    mister_magik_catalog::fs_fault::maybe_fault_with_control(
+        "crash_report.report.after_temp_sync",
+        &path,
+        fault_control,
+    );
     report_io.rename(&tmp_path, &path)?;
-    mister_magik_catalog::fs_fault::maybe_fault("crash_report.report.after_rename", &path);
+    mister_magik_catalog::fs_fault::maybe_fault_with_control(
+        "crash_report.report.after_rename",
+        &path,
+        fault_control,
+    );
     report_io.write_file_sync(&latest_tmp_path, &bytes)?;
-    mister_magik_catalog::fs_fault::maybe_fault(
+    mister_magik_catalog::fs_fault::maybe_fault_with_control(
         "crash_report.latest.after_temp_sync",
         &latest_path,
+        fault_control,
     );
     report_io.rename(&latest_tmp_path, &latest_path)?;
-    mister_magik_catalog::fs_fault::maybe_fault("crash_report.latest.after_rename", &latest_path);
+    mister_magik_catalog::fs_fault::maybe_fault_with_control(
+        "crash_report.latest.after_rename",
+        &latest_path,
+        fault_control,
+    );
     Ok(path)
 }
 
@@ -197,6 +230,21 @@ mod tests {
 
     static TEMP_DIR_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+    #[derive(Default)]
+    struct RecordingFaultControl {
+        points: Vec<String>,
+    }
+
+    impl mister_magik_catalog::fs_fault::DirectResetFaultControl for RecordingFaultControl {
+        fn request_direct_reset(
+            &mut self,
+            request: &mister_magik_catalog::fs_fault::DirectResetFaultRequest,
+        ) -> mister_magik_catalog::fs_fault::DirectResetFaultOutcome {
+            self.points.push(request.point().to_string());
+            mister_magik_catalog::fs_fault::DirectResetFaultOutcome::Noop
+        }
+    }
+
     struct ScriptedReportIo {
         events: RefCell<Vec<String>>,
         fail_at: Option<usize>,
@@ -249,7 +297,15 @@ mod tests {
             "report_id": "report-slint-123-45",
         });
 
-        let path = write_report_value(&dir, "report-slint-123-45", &report).expect("write report");
+        let mut fault_control = RecordingFaultControl::default();
+        let path = write_report_value_with_fault_control(
+            &SystemReportIo,
+            &dir,
+            "report-slint-123-45",
+            &report,
+            &mut fault_control,
+        )
+        .expect("write report");
         let latest = fs::read_to_string(dir.join("latest.json")).expect("latest");
         let written = fs::read_to_string(path).expect("report");
 
@@ -257,6 +313,15 @@ mod tests {
         assert_eq!(
             serde_json::from_str::<Value>(&latest).expect("json")["schema"],
             "mister-magik-crash-report-v1"
+        );
+        assert_eq!(
+            fault_control.points,
+            vec![
+                "crash_report.report.after_temp_sync",
+                "crash_report.report.after_rename",
+                "crash_report.latest.after_temp_sync",
+                "crash_report.latest.after_rename",
+            ]
         );
         let _ = fs::remove_dir_all(dir);
     }

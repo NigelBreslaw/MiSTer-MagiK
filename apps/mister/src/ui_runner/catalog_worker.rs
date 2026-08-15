@@ -607,17 +607,22 @@ fn run_catalog_builder_in_process(
             builder_service::BuilderExecutionPolicy::BackgroundContinuous
         }
     };
-    let result = builder_service::run_with_execution_policy(operation, execution_policy, |event| {
-        handle_embedded_builder_event(
-            root,
-            plan,
-            operation_label,
-            event,
-            tx,
-            progress_coalescer,
-            &mut state,
-        );
-    });
+    let result = builder_service::run_with_execution_policy_and_fault_control(
+        operation,
+        execution_policy,
+        Box::new(mister_magik_mister_runtime::direct_reset_fault::process_fault_control()),
+        |event| {
+            handle_embedded_builder_event(
+                root,
+                plan,
+                operation_label,
+                event,
+                tx,
+                progress_coalescer,
+                &mut state,
+            );
+        },
+    );
     mister_magik_perf_events::submit_thread_profile("catalog-builder");
     match result {
         Ok(()) if state.handshake_seen && state.terminal_seen => {}

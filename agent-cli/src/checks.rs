@@ -29,6 +29,8 @@ pub fn label(operation: BuiltinOperation) -> &'static str {
         BuiltinOperation::ShellOwnership => "shell ownership",
         BuiltinOperation::RuntimeEnvironment => "runtime environment ownership",
         BuiltinOperation::PlatformManifestAuthority => "platform manifest authority",
+        BuiltinOperation::DeviceCrateRootOwnership => "device crate-root ownership",
+        BuiltinOperation::ExecutableBoundaries => "executable boundary ownership",
         BuiltinOperation::DistributionWorkflow => "distribution workflow",
         BuiltinOperation::KernelWorkflow => "kernel workflow",
         BuiltinOperation::PlatformWorkflow => "platform workflow",
@@ -46,6 +48,8 @@ pub fn run(operation: BuiltinOperation, repository: &Path) -> Result<(), String>
         BuiltinOperation::PlatformManifestAuthority => {
             check_platform_manifest_authority(repository)
         }
+        BuiltinOperation::DeviceCrateRootOwnership => check_device_crate_root_ownership(repository),
+        BuiltinOperation::ExecutableBoundaries => check_executable_boundaries(repository),
         BuiltinOperation::DistributionWorkflow => check_distribution_workflow(repository),
         BuiltinOperation::KernelWorkflow => check_kernel_workflow(repository),
         BuiltinOperation::PlatformWorkflow => check_platform_workflow(repository),
@@ -647,10 +651,6 @@ fn check_shell_ownership(repository: &Path) -> Result<(), String> {
             "production app command transport",
         ),
         (
-            "crates/catalog/src/fs_fault.rs",
-            "catalog destructive-fault capability",
-        ),
-        (
             "mister/tools/agent/src/main.rs",
             "device-service command capability",
         ),
@@ -726,7 +726,7 @@ fn check_shell_ownership(repository: &Path) -> Result<(), String> {
                 .collect::<Vec<_>>()
                 .join(", ");
             return Err(format!(
-                "main_fifo_writer_outside_owner: {relative}; production app command transport targets mister/platform/runtime; approved temporary owners: {owners}"
+                "main_fifo_writer_outside_owner: {relative}; production app command transport targets mister/platform/runtime; approved boundary owners: {owners}"
             ));
         }
     }
@@ -961,6 +961,252 @@ fn render_runtime_environment_reference(registry: &RuntimeEnvironmentRegistry) -
     output
 }
 
+fn check_device_crate_root_ownership(repository: &Path) -> Result<(), String> {
+    const EXPECTED: [(&str, &str); 0] = [];
+    let main = read(repository, "apps/mister/src/main.rs")?;
+    let app_entry = read(repository, "apps/mister/src/app_entry.rs")?;
+    let library = read(repository, "apps/mister/src/lib.rs")?;
+    let experiments = fs::read_to_string(repository.join("apps/mister/src/experiments/mod.rs"))
+        .unwrap_or_default();
+    let main_modules = rust_module_declarations(&main);
+    let library_modules = rust_module_declarations(&library);
+    let mut actual: BTreeSet<String> = main_modules
+        .intersection(&library_modules)
+        .cloned()
+        .collect();
+    if main_modules.contains("experiments")
+        && library.contains("pub mod experiments {")
+        && library.contains("pub mod effects;")
+        && experiments.contains("mod effects;")
+    {
+        actual.insert("experiments/effects".into());
+    }
+    let expected: BTreeSet<String> = EXPECTED
+        .iter()
+        .map(|(module, _batch)| (*module).to_owned())
+        .collect();
+    if actual != expected {
+        let unexpected = actual.difference(&expected).cloned().collect::<Vec<_>>();
+        let missing = expected.difference(&actual).cloned().collect::<Vec<_>>();
+        return Err(format!(
+            "device_crate_root_inventory_drift: unexpected={} missing={}; migrate through the recorded 20a-20d batches",
+            unexpected.join(","),
+            missing.join(",")
+        ));
+    }
+    if main.lines().count() > 24
+        || !main.contains("#[global_allocator]")
+        || !main.contains("device_layout::initialize_process_env()")
+        || !main.contains("app_entry::run()")
+        || !main_modules.is_empty()
+        || main.contains("std::env::args")
+        || main.contains("#![allow(dead_code)]")
+        || app_entry.contains("#![allow(dead_code)]")
+    {
+        return Err(
+            "device_binary_bootstrap_drift: main.rs owns only allocator, earliest layout initialization, and app_entry::run"
+                .into(),
+        );
+    }
+    Ok(())
+}
+
+fn check_executable_boundaries(repository: &Path) -> Result<(), String> {
+    let portable = read(repository, "crates/magik-core/src/launcher_effects.rs")?;
+    require_fragments(
+        "portable_launcher_effects",
+        &portable,
+        &[
+            "pub trait LaunchHandoff",
+            "pub trait DisplayControl",
+            "pub trait RuntimeState",
+            "pub trait LauncherPersistence",
+        ],
+        &[
+            "std::fs",
+            "std::path",
+            "std::process",
+            "slint::",
+            "/dev/",
+            "MainCommand",
+        ],
+    )?;
+
+    let runtime = read(repository, "mister/platform/runtime/src/lib.rs")?;
+    require_fragments(
+        "platform_runtime_effects",
+        &runtime,
+        &[
+            "pub mod display_control;",
+            "pub mod direct_reset_fault;",
+            "pub mod main_command;",
+            "pub mod runtime_state;",
+        ],
+        &[],
+    )?;
+    require_fragments(
+        "platform_display_control",
+        &read(repository, "mister/platform/runtime/src/display_control.rs")?,
+        &[
+            "pub struct MainDisplayControl",
+            "impl DisplayControl for MainDisplayControl",
+            "main_command::execute(&MainCommand::DisplayApply",
+            "pub fn parse_state_response",
+        ],
+        &[],
+    )?;
+    require_fragments(
+        "platform_runtime_state",
+        &read(repository, "mister/platform/runtime/src/runtime_state.rs")?,
+        &[
+            "pub struct SystemRuntimeState",
+            "impl RuntimeState for SystemRuntimeState",
+        ],
+        &[],
+    )?;
+    require_fragments(
+        "platform_direct_reset",
+        &read(
+            repository,
+            "mister/platform/runtime/src/direct_reset_fault.rs",
+        )?,
+        &[
+            "pub struct SystemDirectResetFaultControl",
+            "impl DirectResetFaultControl for SystemDirectResetFaultControl",
+        ],
+        &[],
+    )?;
+
+    let launcher = read(repository, "apps/mister/src/launcher.rs")?;
+    require_fragments(
+        "launcher_effect_composition",
+        &launcher,
+        &[
+            "LaunchHandoff for LaunchIoHandoff",
+            "impl LauncherPersistence for SystemLauncherPersistence",
+            "SystemRuntimeState",
+            "display_control::MainDisplayControl",
+        ],
+        &[
+            "LauncherDisplayControl",
+            "MagikPlatform",
+            "MisterRuntimeBackend",
+            "MisterRuntime",
+        ],
+    )?;
+
+    let device_agent = read(repository, "mister/tools/agent/src/main.rs")?;
+    let cli = read(repository, "agent-cli/src/main.rs")?;
+    if executable_error_flattening_returned(&device_agent, &cli) {
+        return Err("executable_error_string_flattening_returned".into());
+    }
+    require_fragments(
+        "device_failure_emission",
+        &device_agent,
+        &[
+            "fn failure_response(",
+            "fn authentication_failure_response(",
+            "fn busy_failure_response(",
+            "fn unavailable_failure_response(",
+            "fn operation_failure_response(",
+            "fn alpha_candidate_failure_response(",
+        ],
+        &[],
+    )?;
+    let error = read(repository, "agent-cli/src/error.rs")?;
+    require_fragments(
+        "agent_error_structure",
+        &error,
+        &[
+            "StructuredDevice",
+            "pub fn structured_failure(&self)",
+            "Self::Phase { source, .. } | Self::Cancelled(source) => source.structured_failure()",
+        ],
+        &[],
+    )?;
+    require_fragments(
+        "agent_cli_error_boundary",
+        &cli,
+        &[
+            "fn run() -> AgentResult<ExitCode>",
+            "fn open() -> AgentResult<Self>",
+            "reporter.emit_failure(\"request\", &error)",
+            "ExitCode::from(70)",
+            "ExitCode::FAILURE",
+            "ExitCode::from(3)",
+        ],
+        &[
+            "fn run() -> Result<ExitCode, String>",
+            "reporter.emit(EventKind::Failed, \"request\", &error.to_string(), None)",
+        ],
+    )?;
+    let progress = read(repository, "agent-cli/src/progress.rs")?;
+    require_fragments(
+        "agent_failure_projection",
+        &progress,
+        &[
+            "pub struct FailureEvidence",
+            "pub code: String",
+            "pub phase: String",
+            "pub retry_policy: String",
+            "pub recovery_required: bool",
+            "pub fn emit_failure(",
+        ],
+        &[],
+    )?;
+    let failure_projection = progress
+        .split_once("pub struct FailureEvidence")
+        .and_then(|(_, tail)| tail.split_once('}'))
+        .map(|(body, _)| body)
+        .ok_or("agent_failure_projection_missing")?;
+    if failure_projection.contains("detail") {
+        return Err("agent_failure_projection_must_redact_detail".into());
+    }
+    require_fragments(
+        "agent_failure_evidence",
+        &read(repository, "agent-cli/src/evidence.rs")?,
+        &[
+            "failure_json TEXT",
+            "PRAGMA user_version = 12",
+            "pub failure: Option<FailureEvidence>",
+            "fn migrate_v11_to_v12",
+        ],
+        &[],
+    )?;
+    Ok(())
+}
+
+fn executable_error_flattening_returned(device_agent: &str, cli: &str) -> bool {
+    let device_agent = device_agent.split_whitespace().collect::<String>();
+    let cli = cli.split_whitespace().collect::<String>();
+    device_agent.contains("response(id,false")
+        || device_agent.contains("response(None,false")
+        || cli.contains("fnrun()->Result<ExitCode,String>")
+        || cli.contains("reporter.emit(EventKind::Failed,\"request\",&error.to_string(),None)")
+}
+
+fn rust_module_declarations(source: &str) -> BTreeSet<String> {
+    source
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            let declaration = line
+                .strip_prefix("mod ")
+                .or_else(|| line.strip_prefix("pub mod "))
+                .or_else(|| line.strip_prefix("pub(crate) mod "))?;
+            declaration
+                .strip_suffix(';')
+                .filter(|name| {
+                    !name.is_empty()
+                        && name
+                            .bytes()
+                            .all(|byte| byte == b'_' || byte.is_ascii_alphanumeric())
+                })
+                .map(str::to_owned)
+        })
+        .collect()
+}
+
 #[derive(serde::Deserialize)]
 struct PlatformManifestSchema {
     format: String,
@@ -968,12 +1214,10 @@ struct PlatformManifestSchema {
     file_name: String,
     latch_protocol_version: String,
     latch_capability_mask: String,
-    future_contract_crate: String,
+    contract_crate: String,
     behavioral_authority: String,
     fields: Vec<String>,
     layouts: BTreeMap<String, PlatformManifestLayout>,
-    #[serde(default)]
-    legacy_consumer: Vec<PlatformManifestLegacyConsumer>,
 }
 
 #[derive(serde::Deserialize)]
@@ -988,38 +1232,16 @@ struct PlatformManifestLayout {
     latch_metadata: String,
 }
 
-impl PlatformManifestLayout {
-    fn values(&self) -> [&str; 8] {
-        [
-            &self.root,
-            &self.main,
-            &self.gui,
-            &self.manager,
-            &self.scanout_module,
-            &self.scanout_metadata,
-            &self.latch_rbf,
-            &self.latch_metadata,
-        ]
-    }
-}
-
-#[derive(serde::Deserialize)]
-struct PlatformManifestLegacyConsumer {
-    path: String,
-    role: String,
-    markers: Vec<String>,
-}
-
 fn check_platform_manifest_authority(repository: &Path) -> Result<(), String> {
     const SCHEMA_PATH: &str = "mister/platform/contracts/platform-v3.schema.toml";
     const SCHEMA_FORMAT: &str = "mister-magik-platform-v3-schema-v1";
-    const AUTHORITY: &str = "agent-cli/src/platform_manifest.rs";
+    const AUTHORITY: &str = "mister/platform/contracts/manifest/src/lib.rs";
     let text = read(repository, SCHEMA_PATH)?;
     let schema: PlatformManifestSchema = toml::from_str(&text)
         .map_err(|error| format!("platform_manifest_schema_invalid: {error}"))?;
     if schema.format != SCHEMA_FORMAT
         || schema.behavioral_authority != AUTHORITY
-        || schema.future_contract_crate != "platform-manifest-contract"
+        || schema.contract_crate != "platform-manifest-contract"
         || schema
             .layouts
             .keys()
@@ -1029,52 +1251,18 @@ fn check_platform_manifest_authority(repository: &Path) -> Result<(), String> {
     {
         return Err("platform_manifest_schema_identity_invalid".into());
     }
-    let authority = read(repository, AUTHORITY)?;
-    if authority.contains("mister_magik_platform_manifest_contract") {
-        let contract_manifest = read(repository, "mister/platform/contracts/manifest/Cargo.toml")?;
-        let contract_build = read(repository, "mister/platform/contracts/manifest/build.rs")?;
-        let contract_api = read(repository, "mister/platform/contracts/manifest/src/lib.rs")?;
-        if !contract_manifest.contains("mister-magik-platform-manifest-contract")
-            || !contract_build.contains("../platform-v3.schema.toml")
-            || !contract_build.contains("pub const FIELDS")
-            || !contract_build.contains("pub const PUBLIC_PATHS")
-            || !contract_build.contains("pub const DEVELOPMENT_PATHS")
-            || !contract_api.contains("ValidationProfile")
-            || !contract_api.contains("qualification_candidate_id")
-        {
-            return Err("platform_manifest_contract_delegation_invalid".into());
-        }
-    } else {
-        for (constant, expected) in [
-            ("FORMAT", schema.manifest_format.as_str()),
-            ("FILE_NAME", schema.file_name.as_str()),
-            (
-                "LATCH_PROTOCOL_VERSION",
-                schema.latch_protocol_version.as_str(),
-            ),
-            (
-                "LATCH_CAPABILITY_MASK",
-                schema.latch_capability_mask.as_str(),
-            ),
-        ] {
-            if rust_string_constant(&authority, constant) != Some(expected) {
-                return Err(format!(
-                    "platform_manifest_authority_drift: {AUTHORITY} {constant}"
-                ));
-            }
-        }
-        let authority_fields = rust_string_array(&authority, "pub(crate) const FIELDS")
-            .ok_or("platform_manifest_authority_fields_missing")?;
-        if authority_fields != schema.fields {
-            return Err("platform_manifest_authority_field_order_drift".into());
-        }
-        for layout in schema.layouts.values() {
-            for value in layout.values() {
-                if !authority.contains(value) {
-                    return Err(format!("platform_manifest_authority_path_drift: {value}"));
-                }
-            }
-        }
+    let contract_manifest = read(repository, "mister/platform/contracts/manifest/Cargo.toml")?;
+    let contract_build = read(repository, "mister/platform/contracts/manifest/build.rs")?;
+    let contract_api = read(repository, AUTHORITY)?;
+    if !contract_manifest.contains("mister-magik-platform-manifest-contract")
+        || !contract_build.contains("../platform-v3.schema.toml")
+        || !contract_build.contains("pub const FIELDS")
+        || !contract_build.contains("pub const PUBLIC_PATHS")
+        || !contract_build.contains("pub const DEVELOPMENT_PATHS")
+        || !contract_api.contains("ValidationProfile")
+        || !contract_api.contains("qualification_candidate_id")
+    {
+        return Err("platform_manifest_contract_authority_invalid".into());
     }
     let latch: serde_json::Value = serde_json::from_str(&read(
         repository,
@@ -1093,36 +1281,18 @@ fn check_platform_manifest_authority(repository: &Path) -> Result<(), String> {
         return Err("platform_manifest_latch_contract_drift".into());
     }
 
-    let mut ledger = BTreeSet::new();
-    for consumer in &schema.legacy_consumer {
-        if consumer.role.is_empty()
-            || consumer.markers.is_empty()
-            || !ledger.insert(consumer.path.clone())
-        {
-            return Err(format!(
-                "platform_manifest_legacy_consumer_invalid: {}",
-                consumer.path
-            ));
-        }
-        let source = read(repository, &consumer.path)?;
-        for marker in &consumer.markers {
-            if !source.contains(marker) {
-                return Err(format!(
-                    "platform_manifest_legacy_marker_drift: {} missing {marker}",
-                    consumer.path
-                ));
-            }
-        }
-    }
+    check_generated_platform_manifest_consumers(repository, &schema)?;
     let public = &schema.layouts["public"];
     let dev = &schema.layouts["dev"];
     let files = repository_files(repository)?;
     let mut unledgered = Vec::new();
+    let mut installed_path_duplicates = Vec::new();
     for path in files {
         let relative = path.to_string_lossy();
         if relative == AUTHORITY
             || relative == SCHEMA_PATH
             || relative.starts_with("mister/platform/contracts/manifest/")
+            || relative.starts_with("mister/platform/contracts/generated/")
             || relative == "agent-cli/src/checks.rs"
             || relative.starts_with("docs/")
             || relative.starts_with("history/")
@@ -1137,45 +1307,137 @@ fn check_platform_manifest_authority(repository: &Path) -> Result<(), String> {
         let Ok(source) = fs::read_to_string(repository.join(&path)) else {
             continue;
         };
-        if platform_manifest_structural_duplicate(&source, &schema, public, dev)
-            && !ledger.contains(relative.as_ref())
+        if extension == Some("rs")
+            && platform_installed_path_duplicate(&source, &schema, public, dev)
         {
+            installed_path_duplicates.push(relative.clone().into_owned());
+        }
+        if platform_manifest_structural_duplicate(&source, &schema, public, dev) {
             unledgered.push(relative.into_owned());
         }
+    }
+    if !installed_path_duplicates.is_empty() {
+        installed_path_duplicates.sort();
+        return Err(format!(
+            "platform_installed_path_duplicate_outside_contract: {}; use Layout::paths()",
+            installed_path_duplicates.join(",")
+        ));
     }
     if !unledgered.is_empty() {
         unledgered.sort();
         return Err(format!(
-            "platform_manifest_duplicate_outside_ledger: {}; adopt mister/platform/contracts/platform-v3.schema.toml or register the temporary consumer for P1 removal",
+            "platform_manifest_duplicate_outside_contract: {}; adopt mister/platform/contracts/platform-v3.schema.toml",
             unledgered.join(",")
         ));
     }
     Ok(())
 }
 
-fn rust_string_constant<'a>(text: &'a str, name: &str) -> Option<&'a str> {
-    let marker = format!("const {name}: &str = \"");
-    let start = text.find(&marker)? + marker.len();
-    Some(&text[start..start + text[start..].find('"')?])
+fn platform_installed_path_duplicate(
+    source: &str,
+    schema: &PlatformManifestSchema,
+    public: &PlatformManifestLayout,
+    dev: &PlatformManifestLayout,
+) -> bool {
+    let production = source.split("#[cfg(test)]").next().unwrap_or(source);
+    let public_manifest = format!("{}/{}", public.root, schema.file_name);
+    let dev_manifest = format!("{}/{}", dev.root, schema.file_name);
+    [
+        public_manifest.as_str(),
+        dev_manifest.as_str(),
+        &public.main,
+        &public.gui,
+        &public.manager,
+        &public.scanout_module,
+        &public.scanout_metadata,
+        &public.latch_rbf,
+        &public.latch_metadata,
+        &dev.main,
+        &dev.gui,
+        &dev.manager,
+        &dev.scanout_module,
+        &dev.scanout_metadata,
+        &dev.latch_rbf,
+        &dev.latch_metadata,
+    ]
+    .iter()
+    .any(|path| production.contains(*path))
 }
 
-fn rust_string_array(text: &str, marker: &str) -> Option<Vec<String>> {
-    let start = text.find(marker)?;
-    let values = &text[start..];
-    let start = values.find("= &[")? + 4;
-    let end = start + values[start..].find("];")?;
-    let values = &values[start..end];
-    Some(
-        values
-            .lines()
-            .filter_map(|line| {
-                let line = line.trim().trim_end_matches(',');
-                line.strip_prefix('"')
-                    .and_then(|line| line.strip_suffix('"'))
-                    .map(str::to_owned)
-            })
-            .collect(),
-    )
+fn check_generated_platform_manifest_consumers(
+    repository: &Path,
+    schema: &PlatformManifestSchema,
+) -> Result<(), String> {
+    const GENERATED_ROOT: &str = "mister/platform/contracts/generated";
+    type PlatformPathSelector = fn(&PlatformManifestLayout) -> &str;
+    const COMPONENTS: [(&str, PlatformPathSelector); 8] = [
+        ("ROOT", |layout| &layout.root),
+        ("MAIN", |layout| &layout.main),
+        ("GUI", |layout| &layout.gui),
+        ("MANAGER", |layout| &layout.manager),
+        ("SCANOUT_MODULE", |layout| &layout.scanout_module),
+        ("SCANOUT_METADATA", |layout| &layout.scanout_metadata),
+        ("LATCH_RBF", |layout| &layout.latch_rbf),
+        ("LATCH_METADATA", |layout| &layout.latch_metadata),
+    ];
+    let quote = |value: &str| format!("'{}'", value.replace('\'', "'\"'\"'"));
+    let mut expected = String::from(
+        "# Copyright (C) 2026 Nigel Breslaw\n# SPDX-License-Identifier: GPL-3.0-or-later\n\n# @generated by scripts/checks/generate-platform-v3-consumers.py; do not edit.\n",
+    );
+    for (name, value) in [
+        ("FORMAT", schema.manifest_format.as_str()),
+        ("FILE_NAME", schema.file_name.as_str()),
+    ] {
+        expected.push_str(&format!("PLATFORM_V3_{name}={}\n", quote(value)));
+    }
+    expected.push_str(&format!(
+        "PLATFORM_V3_FIELD_NAMES={}\n",
+        quote(&schema.fields.join(" "))
+    ));
+    for (name, layout) in [
+        ("PUBLIC", &schema.layouts["public"]),
+        ("DEV", &schema.layouts["dev"]),
+    ] {
+        for (component, value) in COMPONENTS {
+            expected.push_str(&format!(
+                "PLATFORM_V3_{name}_{component}={}\n",
+                quote(value(layout))
+            ));
+        }
+    }
+    let constants = read(
+        repository,
+        &format!("{GENERATED_ROOT}/platform-v3.constants.sh"),
+    )?;
+    if constants != expected {
+        return Err("platform_manifest_generated_constants_stale".into());
+    }
+
+    for (file, layout) in [
+        (
+            "platform-v3.public.fixture",
+            mister_magik_platform_manifest_contract::Layout::Public,
+        ),
+        (
+            "platform-v3.development.fixture",
+            mister_magik_platform_manifest_contract::Layout::Development,
+        ),
+    ] {
+        let fixture = read(repository, &format!("{GENERATED_ROOT}/{file}"))?;
+        let parsed = mister_magik_platform_manifest_contract::parse(
+            &fixture,
+            layout,
+            mister_magik_platform_manifest_contract::ValidationProfile::AgentStrict,
+        )
+        .map_err(|error| format!("platform_manifest_generated_fixture_invalid: {file}: {error}"))?;
+        if mister_magik_platform_manifest_contract::serialize(parsed.values()).map_err(|error| {
+            format!("platform_manifest_generated_fixture_invalid: {file}: {error}")
+        })? != fixture
+        {
+            return Err(format!("platform_manifest_generated_fixture_stale: {file}"));
+        }
+    }
+    Ok(())
 }
 
 fn platform_manifest_structural_duplicate(
@@ -1184,7 +1446,15 @@ fn platform_manifest_structural_duplicate(
     public: &PlatformManifestLayout,
     dev: &PlatformManifestLayout,
 ) -> bool {
-    if source.contains("mister_magik_platform_manifest_contract::parse(") {
+    if source.contains("mister_magik_platform_manifest_contract::parse(")
+        || source.contains("mister_magik_platform_manifest_contract::serialize(")
+        || (source.contains("mister_magik_platform_manifest_contract")
+            && source.contains("platform_manifest_contract::parse("))
+        || (source.contains("mister_magik_platform_manifest_contract")
+            && source.contains("contract::parse("))
+        || source.contains("mister/platform/contracts/generated/")
+        || source.contains("generate-platform-v3-consumers.py")
+    {
         return false;
     }
     let field_count = schema
@@ -1574,14 +1844,7 @@ visibility = "internal runtime"
                 .unwrap()
                 .as_nanos()
         ));
-        for directory in [
-            "agent-cli/src",
-            "mister/platform/contracts",
-            "mister/platform/fpga/menu-vblank-latch",
-            "apps/mister/src",
-        ] {
-            fs::create_dir_all(root.join(directory)).unwrap();
-        }
+        fs::create_dir_all(root.join("apps/mister/src")).unwrap();
         assert!(
             Command::new("git")
                 .args(["init", "-q"])
@@ -1590,96 +1853,28 @@ visibility = "internal runtime"
                 .unwrap()
                 .success()
         );
-        let public = [
-            "/public",
-            "/public/main",
-            "/public/gui",
-            "/public/manager",
-            "/public/module",
-            "/public/module-meta",
-            "/public/latch",
-            "/public/latch-meta",
-        ];
-        let dev = [
-            "/dev-root",
-            "/dev-root/main",
-            "/dev-root/gui",
-            "/dev-root/manager",
-            "/dev-root/module",
-            "/dev-root/module-meta",
-            "/dev-root/latch",
-            "/dev-root/latch-meta",
-        ];
-        let schema = format!(
-            r#"format = "mister-magik-platform-v3-schema-v1"
-manifest_format = "mister-magik-platform-v3"
-file_name = "platform-v3.manifest"
-latch_protocol_version = "5"
-latch_capability_mask = "0x03ff"
-future_contract_crate = "platform-manifest-contract"
-behavioral_authority = "agent-cli/src/platform_manifest.rs"
-fields = ["format", "main_path"]
-[layouts.public]
-root = "{}"
-main = "{}"
-gui = "{}"
-manager = "{}"
-scanout_module = "{}"
-scanout_metadata = "{}"
-latch_rbf = "{}"
-latch_metadata = "{}"
-[layouts.dev]
-root = "{}"
-main = "{}"
-gui = "{}"
-manager = "{}"
-scanout_module = "{}"
-scanout_metadata = "{}"
-latch_rbf = "{}"
-latch_metadata = "{}"
-"#,
-            public[0],
-            public[1],
-            public[2],
-            public[3],
-            public[4],
-            public[5],
-            public[6],
-            public[7],
-            dev[0],
-            dev[1],
-            dev[2],
-            dev[3],
-            dev[4],
-            dev[5],
-            dev[6],
-            dev[7]
-        );
-        fs::write(
-            root.join("mister/platform/contracts/platform-v3.schema.toml"),
-            schema,
-        )
-        .unwrap();
-        fs::write(
-            root.join("agent-cli/src/platform_manifest.rs"),
-            format!(
-                "pub const FORMAT: &str = \"mister-magik-platform-v3\";\npub const FILE_NAME: &str = \"platform-v3.manifest\";\npub const LATCH_PROTOCOL_VERSION: &str = \"5\";\npub const LATCH_CAPABILITY_MASK: &str = \"0x03ff\";\npub(crate) const FIELDS: &[&str] = &[\n    \"format\",\n    \"main_path\",\n];\nconst PATHS: &[&str] = &{paths:?};\n",
-                paths = public.into_iter().chain(dev).collect::<Vec<_>>()
-            ),
-        )
-        .unwrap();
-        fs::write(
-            root.join("mister/platform/fpga/menu-vblank-latch/latch-protocol.json"),
-            r#"{"active_protocol_version":5,"protocols":{"5":{"flags":1023}}}"#,
-        )
-        .unwrap();
+        let repository = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+        for relative in [
+            "mister/platform/contracts/platform-v3.schema.toml",
+            "mister/platform/contracts/manifest/Cargo.toml",
+            "mister/platform/contracts/manifest/build.rs",
+            "mister/platform/contracts/manifest/src/lib.rs",
+            "mister/platform/contracts/generated/platform-v3.constants.sh",
+            "mister/platform/contracts/generated/platform-v3.public.fixture",
+            "mister/platform/contracts/generated/platform-v3.development.fixture",
+            "mister/platform/fpga/menu-vblank-latch/latch-protocol.json",
+        ] {
+            let destination = root.join(relative);
+            fs::create_dir_all(destination.parent().unwrap()).unwrap();
+            fs::copy(repository.join(relative), destination).unwrap();
+        }
         fs::write(
             root.join("apps/mister/src/new_manifest.rs"),
             "const FORMAT: &str = \"mister-magik-platform-v3\";\n",
         )
         .unwrap();
         let error = check_platform_manifest_authority(&root).unwrap_err();
-        assert!(error.contains("platform_manifest_duplicate_outside_ledger"));
+        assert!(error.contains("platform_manifest_duplicate_outside_contract"));
         assert!(error.contains("apps/mister/src/new_manifest.rs"));
         fs::write(
             root.join("apps/mister/src/new_manifest.rs"),
@@ -1694,6 +1889,12 @@ latch_metadata = "{}"
         )
         .unwrap();
         assert!(check_platform_manifest_authority(&root).is_ok());
+        fs::write(
+            root.join("apps/mister/src/new_manifest.rs"),
+            "fn fixture(values: &Values) { let _ = mister_magik_platform_manifest_contract::serialize(values); }\nconst FORMAT: &str = \"mister-magik-platform-v3\";\n",
+        )
+        .unwrap();
+        assert!(check_platform_manifest_authority(&root).is_ok());
         fs::remove_file(root.join("apps/mister/src/new_manifest.rs")).unwrap();
         fs::write(
             root.join("apps/mister/src/media_manifest.rs"),
@@ -1701,7 +1902,75 @@ latch_metadata = "{}"
         )
         .unwrap();
         assert!(check_platform_manifest_authority(&root).is_ok());
+        fs::remove_file(root.join("apps/mister/src/media_manifest.rs")).unwrap();
+        fs::write(
+            root.join("apps/mister/src/copied_layout.rs"),
+            "const GUI: &str = \"/media/fat/mister-magik/mister-magik-fb\";\n",
+        )
+        .unwrap();
+        let error = check_platform_manifest_authority(&root).unwrap_err();
+        assert!(error.contains("platform_installed_path_duplicate_outside_contract"));
+        assert!(error.contains("apps/mister/src/copied_layout.rs"));
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn device_crate_root_guard_rejects_a_duplicate_outside_the_inventory() {
+        let root = std::env::temp_dir().join(format!(
+            "agent-cli-device-root-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(root.join("apps/mister/src/experiments")).unwrap();
+        fs::write(
+            root.join("apps/mister/src/main.rs"),
+            "#[global_allocator]\nstatic ALLOC: Alloc = Alloc;\nfn main() { unsafe { device_layout::initialize_process_env() }; app_entry::run(); }\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("apps/mister/src/lib.rs"),
+            "pub mod library_only;\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("apps/mister/src/app_entry.rs"),
+            "pub fn run() {}\n",
+        )
+        .unwrap();
+        fs::write(root.join("apps/mister/src/experiments/mod.rs"), "").unwrap();
+        assert!(check_device_crate_root_ownership(&root).is_ok());
+        fs::write(
+            root.join("apps/mister/src/main.rs"),
+            "#[global_allocator]\nstatic ALLOC: Alloc = Alloc;\nmod unplanned;\nfn main() { unsafe { device_layout::initialize_process_env() }; app_entry::run(); }\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("apps/mister/src/lib.rs"),
+            "pub mod library_only;\nmod unplanned;\n",
+        )
+        .unwrap();
+        let error = check_device_crate_root_ownership(&root).unwrap_err();
+        assert!(error.contains("unexpected=unplanned"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn executable_error_guard_rejects_legacy_string_edges() {
+        assert!(!executable_error_flattening_returned(
+            "failure_response(id, error)",
+            "fn run() -> AgentResult<ExitCode> { reporter.emit_failure(\"request\", &error); }",
+        ));
+        assert!(executable_error_flattening_returned(
+            "response(id, false, None, Some(error))",
+            "fn run() -> AgentResult<ExitCode> { Ok(ExitCode::SUCCESS) }",
+        ));
+        assert!(executable_error_flattening_returned(
+            "failure_response(id, error)",
+            "fn run() -> Result<ExitCode, String> { reporter.emit(EventKind::Failed, \"request\", &error.to_string(), None); }",
+        ));
     }
 
     #[test]

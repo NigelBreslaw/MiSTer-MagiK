@@ -307,6 +307,7 @@ jobs:
           fi
           test -f "$rbf" && test -f "$rbf_meta" && test -f "$module" && test -f "$module_meta"
           test -f "$main_bin" && [[ "$main_revision" =~ ^[0-9a-f]{40}$ ]]
+          python3 scripts/checks/generate-platform-v3-consumers.py --check
           scripts/agent build manager-device
           scripts/agent ci platform-manifest generate \
             --output build/platform-v3.manifest \
@@ -360,6 +361,9 @@ jobs:
           RELEASE_TAG: ${{ needs.release-metadata.outputs.tag }}
           RELEASE_CHANNEL: ${{ github.event.inputs.release_channel }}
         run: |
+          source mister/platform/contracts/generated/platform-v3.constants.sh
+          export PUBLIC_ROOT_RELATIVE="${PLATFORM_V3_PUBLIC_ROOT#/media/fat/}"
+          export PUBLIC_GUI_RELATIVE="${PLATFORM_V3_PUBLIC_GUI#/media/fat/}"
           python3 - <<'PY'
           import json, os, zipfile
           from pathlib import Path
@@ -372,16 +376,18 @@ jobs:
           channel = os.environ["RELEASE_CHANNEL"]
           assert receipt["version"] == version == f"0.2.{build}"
           expected_tag = channel if channel in {"alpha", "beta"} else f"v{version}"
+          installed_root = os.environ["PUBLIC_ROOT_RELATIVE"]
+          installed_gui = os.environ["PUBLIC_GUI_RELATIVE"]
           assert tag == expected_tag
           assert receipt["archive"] == f"mister-magik-{version}.zip"
           with zipfile.ZipFile(root / receipt["archive"]) as package:
               release = dict(
                   line.split("=", 1)
-                  for line in package.read("mister-magik/release-v1.txt").decode().splitlines()
+                  for line in package.read(f"{installed_root}/release-v1.txt").decode().splitlines()
               )
-              assert version.encode() in package.read("mister-magik/mister-magik-fb")
+              assert version.encode() in package.read(installed_gui)
               game_databases = json.loads(
-                  package.read("mister-magik/game-databases-manifest.json")
+                  package.read(f"{installed_root}/game-databases-manifest.json")
               )
           assert release["version"] == version
           assert int(release["build_number"]) == build

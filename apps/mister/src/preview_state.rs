@@ -28,10 +28,10 @@ const TURBO_PREVIEW_CACHE_CAP: usize = 512;
 const TURBO_PREVIEW_TRANSITION_DURATION_NUMERATOR: u32 = 63;
 const TURBO_PREVIEW_TRANSITION_DURATION_DENOMINATOR: u32 = 130;
 const PREFETCH_SCROLL_SETTLE: Duration = Duration::from_millis(40);
-pub(crate) const ARCADE_PREVIEW_BOX_X: usize = 8;
-pub(crate) const ARCADE_PREVIEW_BOX_Y: usize = 92;
-pub(crate) const ARCADE_PREVIEW_BOX_W: u32 = 320;
-pub(crate) const ARCADE_PREVIEW_BOX_H: u32 = 320;
+pub const ARCADE_PREVIEW_BOX_X: usize = 8;
+pub const ARCADE_PREVIEW_BOX_Y: usize = 92;
+pub const ARCADE_PREVIEW_BOX_W: u32 = 320;
+pub const ARCADE_PREVIEW_BOX_H: u32 = 320;
 
 fn preview_trace_enabled() -> bool {
     static VALUE: OnceLock<bool> = OnceLock::new();
@@ -82,7 +82,7 @@ fn preview_prefetch_allowed(scroll_active: bool) -> bool {
     !scroll_active || preview_turbo_runway_enabled()
 }
 
-pub(crate) fn preview_visual_pct() -> u32 {
+pub fn preview_visual_pct() -> u32 {
     static VALUE: OnceLock<u32> = OnceLock::new();
     *VALUE.get_or_init(|| {
         std::env::var("MISTER_PREVIEW_VISUAL_PCT")
@@ -308,7 +308,7 @@ fn preview_image_from_pixels(pixels: PreviewPixels) -> PreviewImage {
     }
 }
 
-pub(crate) struct PreviewState {
+pub struct PreviewState {
     worker: PreviewWorker,
     trace_start: Instant,
     selected_mra_path: Option<String>,
@@ -345,11 +345,11 @@ pub(crate) struct PreviewState {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct SystemEntryPreviewPrelude {
-    pub(crate) generation: u64,
-    pub(crate) title: String,
-    pub(crate) preview_archive_path: String,
-    pub(crate) preview_asset_key: String,
+pub struct SystemEntryPreviewPrelude {
+    pub generation: u64,
+    pub title: String,
+    pub preview_archive_path: String,
+    pub preview_asset_key: String,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -360,13 +360,13 @@ enum PreviewSelectionTransition {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum PreviewPresentationTarget {
+pub enum PreviewPresentationTarget {
     Image,
     Empty,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum PreviewPresentationState {
+pub enum PreviewPresentationState {
     Detached,
     Loading {
         generation: u64,
@@ -385,7 +385,7 @@ pub(crate) enum PreviewPresentationState {
 }
 
 impl PreviewPresentationState {
-    pub(crate) const fn owns_direct_layer(self) -> bool {
+    pub const fn owns_direct_layer(self) -> bool {
         matches!(
             self,
             Self::Visible { .. }
@@ -400,14 +400,14 @@ impl PreviewPresentationState {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) enum PreviewDemand {
+pub enum PreviewDemand {
     #[default]
     Empty,
     Image,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) enum PreviewRoute {
+pub enum PreviewRoute {
     Eligible,
     Occluded,
     #[default]
@@ -415,7 +415,7 @@ pub(crate) enum PreviewRoute {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) enum PreviewFrameIntent {
+pub enum PreviewFrameIntent {
     #[default]
     None,
     Present {
@@ -424,13 +424,13 @@ pub(crate) enum PreviewFrameIntent {
 }
 
 impl PreviewFrameIntent {
-    pub(crate) const fn is_actionable(self) -> bool {
+    pub const fn is_actionable(self) -> bool {
         matches!(self, Self::Present { .. })
     }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct PreviewPresentationCommit {
+pub struct PreviewPresentationCommit {
     generation: u64,
     transition_id: u64,
     final_target_presented: bool,
@@ -438,28 +438,28 @@ pub(crate) struct PreviewPresentationCommit {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) struct PreviewApplyTrace {
-    pub(crate) worker_drained: u32,
-    pub(crate) ready_processed: u32,
-    pub(crate) selected_processed: u32,
-    pub(crate) prefetch_processed: u32,
-    pub(crate) stale_results: u32,
-    pub(crate) cache_inserts: u32,
-    pub(crate) cache_evictions: u32,
-    pub(crate) failed_results: u32,
-    pub(crate) backlog_len: u32,
+pub struct PreviewApplyTrace {
+    pub worker_drained: u32,
+    pub ready_processed: u32,
+    pub selected_processed: u32,
+    pub prefetch_processed: u32,
+    pub stale_results: u32,
+    pub cache_inserts: u32,
+    pub cache_evictions: u32,
+    pub failed_results: u32,
+    pub backlog_len: u32,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) struct SelectedPreviewTiming {
-    pub(crate) request_age_us: u64,
-    pub(crate) read_us: u64,
-    pub(crate) decode_us: u64,
-    pub(crate) raw565_parse_us: u64,
-    pub(crate) resize_us: u64,
-    pub(crate) total_us: u64,
-    pub(crate) encoded_bytes: u64,
-    pub(crate) decoded_bytes: u64,
+pub struct SelectedPreviewTiming {
+    pub request_age_us: u64,
+    pub read_us: u64,
+    pub decode_us: u64,
+    pub raw565_parse_us: u64,
+    pub resize_us: u64,
+    pub total_us: u64,
+    pub encoded_bytes: u64,
+    pub decoded_bytes: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -478,23 +478,23 @@ struct PreviewPrefetchWindow {
     turbo_active: bool,
 }
 
-pub(crate) struct PreviewRawFrame<'a> {
-    pub(crate) pixels: PreviewRawPixels<'a>,
-    pub(crate) source_w: u32,
-    pub(crate) source_h: u32,
-    pub(crate) display_w: u32,
-    pub(crate) display_h: u32,
+pub struct PreviewRawFrame<'a> {
+    pub pixels: PreviewRawPixels<'a>,
+    pub source_w: u32,
+    pub source_h: u32,
+    pub display_w: u32,
+    pub display_h: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum PreviewRawFrameStatus {
+pub enum PreviewRawFrameStatus {
     Empty,
     Ready,
     Invalid,
 }
 
 impl<'a> PreviewRawFrame<'a> {
-    pub(crate) fn status(&self) -> PreviewRawFrameStatus {
+    pub fn status(&self) -> PreviewRawFrameStatus {
         if matches!(self.pixels, PreviewRawPixels::Empty) {
             return PreviewRawFrameStatus::Empty;
         }
@@ -528,12 +528,12 @@ impl<'a> PreviewRawFrame<'a> {
     }
 }
 
-pub(crate) struct PreviewRawTransitionFrame<'a> {
-    pub(crate) previous: Option<PreviewRawFrame<'a>>,
-    pub(crate) current: PreviewRawFrame<'a>,
-    pub(crate) transition_id: u64,
-    pub(crate) duration_numerator: u32,
-    pub(crate) duration_denominator: u32,
+pub struct PreviewRawTransitionFrame<'a> {
+    pub previous: Option<PreviewRawFrame<'a>>,
+    pub current: PreviewRawFrame<'a>,
+    pub transition_id: u64,
+    pub duration_numerator: u32,
+    pub duration_denominator: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -563,7 +563,7 @@ fn preview_transition_pace(turbo_active: bool) -> PreviewTransitionPace {
 }
 
 #[derive(Clone, Copy)]
-pub(crate) enum PreviewRawPixels<'a> {
+pub enum PreviewRawPixels<'a> {
     Empty,
     #[allow(dead_code)]
     Rgb8(&'a [u8]),
@@ -592,11 +592,11 @@ fn raw_frame_stride_len_is_valid(len: usize, stride_pixels: usize, source_h: usi
 }
 
 impl PreviewState {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self::new_with_trace_start(Instant::now())
     }
 
-    pub(crate) fn new_with_trace_start(trace_start: Instant) -> Self {
+    pub fn new_with_trace_start(trace_start: Instant) -> Self {
         Self {
             worker: PreviewWorker::new_with_trace_start(trace_start),
             trace_start,
@@ -634,7 +634,7 @@ impl PreviewState {
         }
     }
 
-    pub(crate) fn reserve_system_entry_preview(&mut self) -> (PreviewSelectedRequestHandle, u64) {
+    pub fn reserve_system_entry_preview(&mut self) -> (PreviewSelectedRequestHandle, u64) {
         let requests = self.worker.selected_request_handle();
         let generation = requests.reserve_generation();
         self.current_generation = generation;
@@ -643,7 +643,7 @@ impl PreviewState {
         (requests, generation)
     }
 
-    pub(crate) fn adopt_system_entry_preview(
+    pub fn adopt_system_entry_preview(
         &mut self,
         game: &ArcadeGameEntry,
         prelude: SystemEntryPreviewPrelude,
@@ -664,7 +664,7 @@ impl PreviewState {
         self.terminal_empty = false;
     }
 
-    pub(crate) fn cancel_system_entry_preview(&mut self) {
+    pub fn cancel_system_entry_preview(&mut self) {
         self.current_generation = 0;
         self.selected_mra_path = None;
         self.selected_preview_key = None;
@@ -672,7 +672,7 @@ impl PreviewState {
         self.demand_empty(PreviewTransitionPace::Normal);
     }
 
-    pub(crate) fn clear(&mut self, bridge: &slint_ui::launcher::MisterBridge) {
+    pub fn clear(&mut self, bridge: &slint_ui::launcher::MisterBridge) {
         if self.presentation_state == PreviewPresentationState::Detached
             && self.selected_mra_path.is_none()
             && self.current_generation == 0
@@ -701,7 +701,7 @@ impl PreviewState {
         clear_preview_image_bridge(bridge);
     }
 
-    pub(crate) fn trace_cache_state(&self) -> &'static str {
+    pub fn trace_cache_state(&self) -> &'static str {
         self.selected_preview_key
             .as_deref()
             .map(|path| {
@@ -718,21 +718,21 @@ impl PreviewState {
             .unwrap_or("empty")
     }
 
-    pub(crate) const fn visible_preview_load_source(&self) -> &'static str {
+    pub const fn visible_preview_load_source(&self) -> &'static str {
         self.visible_preview_load_source
     }
 
-    pub(crate) const fn selected_preview_timing(&self) -> SelectedPreviewTiming {
+    pub const fn selected_preview_timing(&self) -> SelectedPreviewTiming {
         self.last_selected_timing
     }
 
-    pub(crate) fn take_raw_dirty(&mut self) -> bool {
+    pub fn take_raw_dirty(&mut self) -> bool {
         let dirty = self.raw_dirty;
         self.raw_dirty = false;
         dirty
     }
 
-    pub(crate) fn raw_dirty(&self) -> bool {
+    pub fn raw_dirty(&self) -> bool {
         self.raw_dirty
     }
 
@@ -820,7 +820,7 @@ impl PreviewState {
         self.demand_empty(pace);
     }
 
-    pub(crate) const fn terminal_empty(&self) -> bool {
+    pub const fn terminal_empty(&self) -> bool {
         self.terminal_empty
     }
 
@@ -874,11 +874,11 @@ impl PreviewState {
         }
     }
 
-    pub(crate) const fn presentation_state(&self) -> PreviewPresentationState {
+    pub const fn presentation_state(&self) -> PreviewPresentationState {
         self.presentation_state
     }
 
-    pub(crate) fn set_route(&mut self, route: PreviewRoute) {
+    pub fn set_route(&mut self, route: PreviewRoute) {
         if self.route == route {
             return;
         }
@@ -928,7 +928,7 @@ impl PreviewState {
         }
     }
 
-    pub(crate) fn direct_layer_desired(&self) -> bool {
+    pub fn direct_layer_desired(&self) -> bool {
         self.route == PreviewRoute::Eligible
             && self.demand == PreviewDemand::Image
             && matches!(
@@ -942,18 +942,18 @@ impl PreviewState {
             )
     }
 
-    pub(crate) const fn retirement_generation(&self) -> Option<u64> {
+    pub const fn retirement_generation(&self) -> Option<u64> {
         match self.presentation_state {
             PreviewPresentationState::RetirementPending { generation } => Some(generation),
             _ => None,
         }
     }
 
-    pub(crate) const fn presentation_generation(&self) -> u64 {
+    pub const fn presentation_generation(&self) -> u64 {
         self.presentation_generation
     }
 
-    pub(crate) const fn presentation_label(&self) -> &'static str {
+    pub const fn presentation_label(&self) -> &'static str {
         match self.presentation_state {
             PreviewPresentationState::Detached => "detached",
             PreviewPresentationState::Loading { .. } => "loading",
@@ -963,7 +963,7 @@ impl PreviewState {
         }
     }
 
-    pub(crate) const fn frame_intent(&self) -> PreviewFrameIntent {
+    pub const fn frame_intent(&self) -> PreviewFrameIntent {
         match (self.route, self.presentation_state) {
             (PreviewRoute::Eligible, PreviewPresentationState::Animating { generation, .. }) => {
                 PreviewFrameIntent::Present { generation }
@@ -972,15 +972,15 @@ impl PreviewState {
         }
     }
 
-    pub(crate) const fn presentation_requires_present(&self) -> bool {
+    pub const fn presentation_requires_present(&self) -> bool {
         matches!(self.frame_intent(), PreviewFrameIntent::Present { .. })
     }
 
-    pub(crate) const fn empty_base_commit_pending(&self) -> bool {
+    pub const fn empty_base_commit_pending(&self) -> bool {
         self.empty_base_commit_pending
     }
 
-    pub(crate) fn presentation_commit(
+    pub fn presentation_commit(
         &self,
         final_target_presented: bool,
         empty_base_committed: bool,
@@ -993,7 +993,7 @@ impl PreviewState {
         })
     }
 
-    pub(crate) fn confirm_presentation(&mut self, commit: PreviewPresentationCommit) {
+    pub fn confirm_presentation(&mut self, commit: PreviewPresentationCommit) {
         if commit.generation != self.presentation_generation
             || commit.transition_id != self.raw_transition_id
         {
@@ -1021,13 +1021,13 @@ impl PreviewState {
         }
     }
 
-    pub(crate) fn confirm_retirement(&mut self, generation: u64) {
+    pub fn confirm_retirement(&mut self, generation: u64) {
         if self.presentation_state == (PreviewPresentationState::RetirementPending { generation }) {
             self.presentation_state = PreviewPresentationState::Detached;
         }
     }
 
-    pub(crate) fn raw_frame(&self) -> Option<PreviewRawFrame<'_>> {
+    pub fn raw_frame(&self) -> Option<PreviewRawFrame<'_>> {
         if !self.has_visible_preview {
             return None;
         }
@@ -1035,13 +1035,13 @@ impl PreviewState {
         Some(Self::raw_frame_from_image(image))
     }
 
-    pub(crate) fn raw_frame_status(&self) -> PreviewRawFrameStatus {
+    pub fn raw_frame_status(&self) -> PreviewRawFrameStatus {
         self.raw_frame()
             .map(|frame| frame.status())
             .unwrap_or(PreviewRawFrameStatus::Empty)
     }
 
-    pub(crate) fn raw_transition_frame(&self) -> Option<PreviewRawTransitionFrame<'_>> {
+    pub fn raw_transition_frame(&self) -> Option<PreviewRawTransitionFrame<'_>> {
         let current = if self.has_visible_preview {
             self.raw_frame()?
         } else if self.previous_image.is_some() || self.raw_dirty {
@@ -1164,6 +1164,7 @@ struct PreviewCandidate<'a> {
     preview_key: String,
 }
 
+#[cfg(test)]
 fn first_preview_candidate(
     games: ArcadeGameView<'_>,
     selected: usize,
@@ -1370,7 +1371,7 @@ fn next_ready_result_index(
     (prefetch_results < MAX_PREFETCH_RESULTS_PER_FRAME).then_some(0)
 }
 
-pub(crate) fn request_arcade_preview_window(
+pub fn request_arcade_preview_window(
     bridge: &slint_ui::launcher::MisterBridge,
     games: ArcadeGameView<'_>,
     selected: usize,
@@ -1746,15 +1747,15 @@ impl PreviewState {
         self.trace_start.elapsed().as_millis() as u64
     }
 
-    pub(crate) fn clear_failed_preview_cache(&mut self) {
+    pub fn clear_failed_preview_cache(&mut self) {
         self.cache.clear_failed();
     }
 
-    pub(crate) fn last_apply_trace(&self) -> PreviewApplyTrace {
+    pub fn last_apply_trace(&self) -> PreviewApplyTrace {
         self.last_apply_trace
     }
 
-    pub(crate) fn take_frame_cache_evictions(&mut self) -> u32 {
+    pub fn take_frame_cache_evictions(&mut self) -> u32 {
         let evictions = self.frame_cache_evictions;
         self.frame_cache_evictions = 0;
         evictions
@@ -2023,7 +2024,7 @@ fn same_selected_preview_needs_request(
     !defer_selected_application && deferred_selected_preview_is_ready(preview)
 }
 
-pub(crate) fn schedule_arcade_preview_window(
+pub fn schedule_arcade_preview_window(
     bridge: &slint_ui::launcher::MisterBridge,
     games: ArcadeGameView<'_>,
     selected: usize,
@@ -2076,7 +2077,7 @@ pub(crate) fn schedule_arcade_preview_window(
     )
 }
 
-pub(crate) fn apply_ready_preview(
+pub fn apply_ready_preview(
     app: &slint_ui::launcher::Launcher,
     preview: &mut PreviewState,
     defer_selected_result: bool,

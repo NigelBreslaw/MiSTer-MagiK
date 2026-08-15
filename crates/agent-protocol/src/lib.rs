@@ -22,8 +22,128 @@ pub fn request(token: &str, id: u64, command: &str, args: Value) -> Value {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum ResponseEnvelope {
-    Ok { full: Value, result: Value },
+    Ok {
+        full: Value,
+        result: Value,
+    },
     Error(String),
+    ErrorWithFailure {
+        error: String,
+        failure: FailureMetadata,
+    },
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum FailureCode {
+    UnknownCommand,
+    InvalidRequest,
+    AuthenticationRequired,
+    AccessDenied,
+    DeviceBusy,
+    DeviceUnavailable,
+    ArtifactMismatch,
+    OperationFailed,
+    Cancelled,
+    RecoveryRequired,
+    Unknown(String),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum FailurePhase {
+    Request,
+    Authentication,
+    Availability,
+    Artifact,
+    Operation,
+    Recovery,
+    Unknown(String),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum RetryPolicy {
+    Never,
+    Retry,
+    ReconcileThenRetry,
+    OperatorRequired,
+    Unknown(String),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FailureMetadata {
+    pub code: FailureCode,
+    pub detail: String,
+    pub phase: FailurePhase,
+    pub retry_policy: RetryPolicy,
+    pub recovery_required: bool,
+}
+
+macro_rules! wire_enum {
+    ($name:ident { $($variant:ident => $value:literal),+ $(,)? }) => {
+        impl $name {
+            pub fn parse(value: &str) -> Self {
+                match value {
+                    $($value => Self::$variant,)+
+                    other => Self::Unknown(other.to_owned()),
+                }
+            }
+
+            pub fn as_str(&self) -> &str {
+                match self {
+                    $(Self::$variant => $value,)+
+                    Self::Unknown(value) => value,
+                }
+            }
+        }
+    };
+}
+
+wire_enum!(FailureCode {
+    UnknownCommand => "unknown_command",
+    InvalidRequest => "invalid_request",
+    AuthenticationRequired => "authentication_required",
+    AccessDenied => "access_denied",
+    DeviceBusy => "device_busy",
+    DeviceUnavailable => "device_unavailable",
+    ArtifactMismatch => "artifact_mismatch",
+    OperationFailed => "operation_failed",
+    Cancelled => "cancelled",
+    RecoveryRequired => "recovery_required",
+});
+wire_enum!(FailurePhase {
+    Request => "request",
+    Authentication => "authentication",
+    Availability => "availability",
+    Artifact => "artifact",
+    Operation => "operation",
+    Recovery => "recovery",
+});
+wire_enum!(RetryPolicy {
+    Never => "never",
+    Retry => "retry",
+    ReconcileThenRetry => "reconcile_then_retry",
+    OperatorRequired => "operator_required",
+});
+
+impl FailureMetadata {
+    pub fn from_value(value: &Value) -> Option<Self> {
+        Some(Self {
+            code: FailureCode::parse(value.get("code")?.as_str()?),
+            detail: value.get("detail")?.as_str()?.to_owned(),
+            phase: FailurePhase::parse(value.get("phase")?.as_str()?),
+            retry_policy: RetryPolicy::parse(value.get("retry_policy")?.as_str()?),
+            recovery_required: value.get("recovery_required")?.as_bool()?,
+        })
+    }
+
+    pub fn to_value(&self) -> Value {
+        json!({
+            "code": self.code.as_str(),
+            "detail": self.detail,
+            "phase": self.phase.as_str(),
+            "retry_policy": self.retry_policy.as_str(),
+            "recovery_required": self.recovery_required,
+        })
+    }
 }
 
 pub fn parse_response_line(line: &str) -> Result<ResponseEnvelope, String> {
@@ -36,12 +156,17 @@ pub fn parse_response_line(line: &str) -> Result<ResponseEnvelope, String> {
         let result = full.get("result").cloned().unwrap_or(Value::Null);
         Ok(ResponseEnvelope::Ok { full, result })
     } else {
-        Ok(ResponseEnvelope::Error(
-            full.get("error")
-                .and_then(Value::as_str)
-                .unwrap_or("agent command failed")
-                .to_string(),
-        ))
+        let error = full
+            .get("error")
+            .and_then(Value::as_str)
+            .unwrap_or("agent command failed")
+            .to_string();
+        Ok(
+            match full.get("failure").and_then(FailureMetadata::from_value) {
+                Some(failure) => ResponseEnvelope::ErrorWithFailure { error, failure },
+                None => ResponseEnvelope::Error(error),
+            },
+        )
     }
 }
 
@@ -125,6 +250,31 @@ mod tests {
             parse_response_line(r#"{"ok":false}"#).unwrap(),
             ResponseEnvelope::Error("agent command failed".to_string())
         );
+        let enriched = parse_response_line(
+            r#"{"ok":false,"error":"busy","failure":{"code":"device_busy","detail":"operation active","phase":"availability","retry_policy":"retry","recovery_required":false}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            enriched,
+            ResponseEnvelope::ErrorWithFailure {
+                error: "busy".into(),
+                failure: FailureMetadata {
+                    code: FailureCode::DeviceBusy,
+                    detail: "operation active".into(),
+                    phase: FailurePhase::Availability,
+                    retry_policy: RetryPolicy::Retry,
+                    recovery_required: false,
+                },
+            }
+        );
+        let ResponseEnvelope::ErrorWithFailure { failure, .. } = enriched else {
+            unreachable!()
+        };
+        assert_eq!(
+            FailureMetadata::from_value(&failure.to_value()),
+            Some(failure)
+        );
+        assert_eq!(PROTOCOL_VERSION, 2);
         assert!(parse_response_line("").is_err());
         assert!(parse_response_line("  \n\t").is_err());
         assert!(parse_response_line("{").is_err());

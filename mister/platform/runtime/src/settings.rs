@@ -165,12 +165,30 @@ impl MagikSettings {
     }
 
     pub fn save(&self) -> io::Result<()> {
-        self.save_to(mister_magik_catalog::device_layout::current_app_path(
-            "settings.json",
-        ))
+        let mut fault_control = crate::direct_reset_fault::process_fault_control();
+        self.save_with_fault_control(&mut fault_control)
+    }
+
+    pub fn save_with_fault_control(
+        &self,
+        fault_control: &mut dyn mister_magik_catalog::fs_fault::DirectResetFaultControl,
+    ) -> io::Result<()> {
+        self.save_to_with_fault_control(
+            mister_magik_catalog::device_layout::current_app_path("settings.json"),
+            fault_control,
+        )
     }
 
     pub fn save_to(&self, path: impl AsRef<Path>) -> io::Result<()> {
+        let mut fault_control = crate::direct_reset_fault::process_fault_control();
+        self.save_to_with_fault_control(path, &mut fault_control)
+    }
+
+    pub fn save_to_with_fault_control(
+        &self,
+        path: impl AsRef<Path>,
+        fault_control: &mut dyn mister_magik_catalog::fs_fault::DirectResetFaultControl,
+    ) -> io::Result<()> {
         let path = path.as_ref();
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
@@ -179,9 +197,17 @@ impl MagikSettings {
         let text = serde_json::to_string_pretty(self)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
         fs::write(&tmp, text)?;
-        mister_magik_catalog::fs_fault::maybe_fault("settings.after_temp_write", path);
+        mister_magik_catalog::fs_fault::maybe_fault_with_control(
+            "settings.after_temp_write",
+            path,
+            fault_control,
+        );
         fs::rename(&tmp, path)?;
-        mister_magik_catalog::fs_fault::maybe_fault("settings.after_rename", path);
+        mister_magik_catalog::fs_fault::maybe_fault_with_control(
+            "settings.after_rename",
+            path,
+            fault_control,
+        );
         Ok(())
     }
 }
@@ -200,6 +226,21 @@ fn temp_path(path: &Path) -> PathBuf {
 mod tests {
     use super::*;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[derive(Default)]
+    struct RecordingFaultControl {
+        points: Vec<String>,
+    }
+
+    impl mister_magik_catalog::fs_fault::DirectResetFaultControl for RecordingFaultControl {
+        fn request_direct_reset(
+            &mut self,
+            request: &mister_magik_catalog::fs_fault::DirectResetFaultRequest,
+        ) -> mister_magik_catalog::fs_fault::DirectResetFaultOutcome {
+            self.points.push(request.point().to_string());
+            mister_magik_catalog::fs_fault::DirectResetFaultOutcome::Noop
+        }
+    }
 
     fn temp_settings_path(label: &str) -> PathBuf {
         let nanos = SystemTime::now()
@@ -269,6 +310,23 @@ mod tests {
 
         assert_eq!(loaded, settings);
         assert!(!path.with_file_name("settings.json.tmp").exists());
+    }
+
+    #[test]
+    fn settings_fault_hook_preserves_publication_order() {
+        let path = temp_settings_path("fault-hook");
+        let settings = MagikSettings::default();
+        let mut control = RecordingFaultControl::default();
+
+        settings
+            .save_to_with_fault_control(&path, &mut control)
+            .expect("save settings");
+
+        assert_eq!(
+            control.points,
+            vec!["settings.after_temp_write", "settings.after_rename"]
+        );
+        let _ = fs::remove_dir_all(path.parent().expect("settings parent"));
     }
 
     #[test]

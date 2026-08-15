@@ -53,17 +53,19 @@ fn main() {
         latch_version = schema.latch_protocol_version,
         latch_mask = schema.latch_capability_mask,
         fields = schema.fields,
-        public = rust_layout(public),
-        development = rust_layout(development),
+        public = rust_layout(public, &schema.file_name),
+        development = rust_layout(development, &schema.file_name),
     );
     let output = PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR")).join("generated.rs");
     fs::write(output, generated).expect("write generated platform-v3 constants");
 }
 
-fn rust_layout(layout: &Layout) -> String {
+fn rust_layout(layout: &Layout, file_name: &str) -> String {
+    let manifest = format!("{}/{file_name}", layout.root);
     format!(
-        "InstalledPaths {{ root: {root:?}, main: {main:?}, gui: {gui:?}, manager: {manager:?}, scanout_module: {module:?}, scanout_metadata: {module_metadata:?}, latch_rbf: {rbf:?}, latch_metadata: {rbf_metadata:?} }}",
+        "InstalledPaths {{ root: {root:?}, manifest: {manifest:?}, main: {main:?}, gui: {gui:?}, manager: {manager:?}, scanout_module: {module:?}, scanout_metadata: {module_metadata:?}, latch_rbf: {rbf:?}, latch_metadata: {rbf_metadata:?} }}",
         root = layout.root,
+        manifest = manifest,
         main = layout.main,
         gui = layout.gui,
         manager = layout.manager,

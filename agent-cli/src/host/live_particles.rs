@@ -9,7 +9,8 @@
 use super::remote::{connect_with, put, shell_quote as sh};
 use super::{
     DeviceAccess, DeviceFailure, NativeDevice, Result, acknowledged_main_command, device_failure,
-    exec_checked, file_sha256, install_prepared_device_environment, wait_launcher_ready,
+    exec_checked, file_sha256, install_prepared_device_environment, platform_safety_script,
+    wait_launcher_ready,
 };
 use ssh2::{ExtendedData, Session};
 use std::io::{Read, Write};
@@ -191,7 +192,8 @@ fn stream_exec(session: &Session, command: &str) -> Result<()> {
 
 fn remote_preflight_command() -> String {
     format!(
-        "set -eu; test \"$(cat /sys/class/graphics/fb0/bits_per_pixel)\" = 16; ! pidof mister-magik-particle-lab >/dev/null 2>&1; for path in /media/fat/mister-magik/launcher.env /media/fat/mister-magik-dev/launcher.env /tmp/mister-magik/fs-fault-launcher.env /tmp/mister-magik/fs-fault-session /tmp/mister-magik/fs-fault.json /media/fat/mister-magik/rebuild-on-next-boot /media/fat/mister-magik-dev/rebuild-on-next-boot; do test ! -e \"$path\"; done; rm -rf {}; mkdir -p {}",
+        "set -eu; test \"$(cat /sys/class/graphics/fb0/bits_per_pixel)\" = 16; ! pidof mister-magik-particle-lab >/dev/null 2>&1; {}; rm -rf {}; mkdir -p {}",
+        platform_safety_script(),
         sh(REMOTE_DIR),
         sh(REMOTE_DIR)
     )

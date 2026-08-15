@@ -1,6 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+use super::installed_layout::{app_path, arming_paths, paths};
 use super::{
     DeployRemote, ExecOutput, Layout, Path, PathBuf, Result, Session, SshDeployRemote,
     exec_failure_message, file_sha256, fs, sh, shell_sequence,
@@ -10,63 +11,66 @@ const SNES_ARTWORK_SHA256: &str =
     "7a76993e7e1b0063832b94e9d2ad588549587cf09a14ac2ced72d349ed12f766";
 
 pub(super) fn installed_platform_verify_command(layout: Layout) -> String {
-    let (root, main) = match layout {
-        Layout::Development => ("/media/fat/mister-magik-dev", "/media/fat/MiSTer_MagiKDev"),
-        Layout::Public => ("/media/fat/mister-magik", "/media/fat/MiSTer_MagiK"),
-    };
+    let installed = paths(layout);
+    let root = installed.root;
+    let main = installed.main;
     format!(
-        "set -eu; root={root}; manifest=$root/platform-v3.manifest; test -s \"$manifest\"; test -x {main}; test -x \"$root/mister-magik-fb\"; test -x \"$root/mister-magik-manager\"; test -r \"$root/mister_magik_scanout_slots.ko\"; test -r \"$root/fpga/menu-magik-vblank-latch.rbf\"; test -r \"$root/assets/snes/snes-small-v1.rgb565a\"; grep -qx 'format=mister-magik-platform-v3' \"$manifest\"; get() {{ sed -n \"s/^$1=//p\" \"$manifest\"; }}; test \"$(sha256sum {main} | awk '{{print $1}}')\" = \"$(get main_sha256)\"; test \"$(sha256sum \"$root/mister-magik-fb\" | awk '{{print $1}}')\" = \"$(get gui_sha256)\"; test \"$(sha256sum \"$root/mister-magik-manager\" | awk '{{print $1}}')\" = \"$(get manager_sha256)\"; test \"$(sha256sum \"$root/mister_magik_scanout_slots.ko\" | awk '{{print $1}}')\" = \"$(get scanout_module_sha256)\"; test \"$(sha256sum \"$root/fpga/menu-magik-vblank-latch.rbf\" | awk '{{print $1}}')\" = \"$(get latch_rbf_sha256)\"; test \"$(sha256sum \"$root/assets/snes/snes-small-v1.rgb565a\" | awk '{{print $1}}')\" = {SNES_ARTWORK_SHA256}"
+        "set -eu; root={root}; manifest=$root/platform-v3.manifest; test -s \"$manifest\"; test -x {main}; test -x \"$root/mister-magik-fb\"; test -x \"$root/mister-magik-manager\"; test -r \"$root/mister_magik_scanout_slots.ko\"; test -r \"$root/fpga/menu-magik-vblank-latch.rbf\"; test -r \"$root/assets/snes/snes-small-v1.rgb565a\"; grep -qx 'format={manifest_format}' \"$manifest\"; get() {{ sed -n \"s/^$1=//p\" \"$manifest\"; }}; test \"$(sha256sum {main} | awk '{{print $1}}')\" = \"$(get main_sha256)\"; test \"$(sha256sum \"$root/mister-magik-fb\" | awk '{{print $1}}')\" = \"$(get gui_sha256)\"; test \"$(sha256sum \"$root/mister-magik-manager\" | awk '{{print $1}}')\" = \"$(get manager_sha256)\"; test \"$(sha256sum \"$root/mister_magik_scanout_slots.ko\" | awk '{{print $1}}')\" = \"$(get scanout_module_sha256)\"; test \"$(sha256sum \"$root/fpga/menu-magik-vblank-latch.rbf\" | awk '{{print $1}}')\" = \"$(get latch_rbf_sha256)\"; test \"$(sha256sum \"$root/assets/snes/snes-small-v1.rgb565a\" | awk '{{print $1}}')\" = {SNES_ARTWORK_SHA256}",
+        manifest_format = crate::platform_manifest::FORMAT,
     )
 }
 
-pub(super) const PLATFORM_DEPLOY_FILES: &[(&str, &str)] = &[
-    (
-        "mister-magik-fb",
-        "/media/fat/mister-magik-dev/mister-magik-fb",
-    ),
-    (
-        "mister-magik-manager",
-        "/media/fat/mister-magik-dev/mister-magik-manager",
-    ),
-    ("MiSTer_MagiKDev", "/media/fat/MiSTer_MagiKDev"),
-    (
-        "mister_magik_scanout_slots.ko",
-        "/media/fat/mister-magik-dev/mister_magik_scanout_slots.ko",
-    ),
-    (
-        "mister_magik_scanout_slots.metadata.txt",
-        "/media/fat/mister-magik-dev/mister_magik_scanout_slots.metadata.txt",
-    ),
-    (
-        "fpga/menu-magik-vblank-latch.rbf",
-        "/media/fat/mister-magik-dev/fpga/menu-magik-vblank-latch.rbf",
-    ),
-    (
-        "fpga/menu-magik-vblank-latch.metadata.txt",
-        "/media/fat/mister-magik-dev/fpga/menu-magik-vblank-latch.metadata.txt",
-    ),
-    ("mame.sqlite3", "/media/fat/mister-magik-dev/mame.sqlite3"),
-    (
-        "hbmame.sqlite3",
-        "/media/fat/mister-magik-dev/hbmame.sqlite3",
-    ),
-    (
-        "game-databases-manifest.json",
-        "/media/fat/mister-magik-dev/game-databases-manifest.json",
-    ),
-    (
-        "game-databases-SHA256SUMS",
-        "/media/fat/mister-magik-dev/game-databases-SHA256SUMS",
-    ),
-    (
-        "assets/snes/snes-small-v1.rgb565a",
-        "/media/fat/mister-magik-dev/assets/snes/snes-small-v1.rgb565a",
-    ),
-    (
-        "platform-v3.manifest",
-        "/media/fat/mister-magik-dev/platform-v3.manifest",
-    ),
-];
+pub(super) fn platform_deploy_files() -> Vec<(&'static str, String)> {
+    let installed = paths(Layout::Development);
+    vec![
+        ("mister-magik-fb", installed.gui.to_owned()),
+        ("mister-magik-manager", installed.manager.to_owned()),
+        ("MiSTer_MagiKDev", installed.main.to_owned()),
+        (
+            "mister_magik_scanout_slots.ko",
+            installed.scanout_module.to_owned(),
+        ),
+        (
+            "mister_magik_scanout_slots.metadata.txt",
+            installed.scanout_metadata.to_owned(),
+        ),
+        (
+            "fpga/menu-magik-vblank-latch.rbf",
+            installed.latch_rbf.to_owned(),
+        ),
+        (
+            "fpga/menu-magik-vblank-latch.metadata.txt",
+            installed.latch_metadata.to_owned(),
+        ),
+        (
+            "mame.sqlite3",
+            app_path(Layout::Development, "mame.sqlite3").expect("static installed path"),
+        ),
+        (
+            "hbmame.sqlite3",
+            app_path(Layout::Development, "hbmame.sqlite3").expect("static installed path"),
+        ),
+        (
+            "game-databases-manifest.json",
+            app_path(Layout::Development, "game-databases-manifest.json")
+                .expect("static installed path"),
+        ),
+        (
+            "game-databases-SHA256SUMS",
+            app_path(Layout::Development, "game-databases-SHA256SUMS")
+                .expect("static installed path"),
+        ),
+        (
+            "assets/snes/snes-small-v1.rgb565a",
+            app_path(Layout::Development, "assets/snes/snes-small-v1.rgb565a")
+                .expect("static installed path"),
+        ),
+        (
+            "platform-v3.manifest",
+            app_path(Layout::Development, "platform-v3.manifest").expect("static installed path"),
+        ),
+    ]
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct PlatformDeployTransaction {
@@ -95,7 +99,7 @@ impl PlatformDeployTransaction {
             return Err(format!("platform stage is missing: {}", stage.display()).into());
         }
         let mut files = Vec::new();
-        for (relative, remote) in PLATFORM_DEPLOY_FILES {
+        for (relative, remote) in platform_deploy_files() {
             let local = stage.join(relative);
             if !local.is_file() {
                 return Err(format!("platform stage is missing {relative}").into());
@@ -104,7 +108,7 @@ impl PlatformDeployTransaction {
                 bytes: fs::metadata(&local)?.len(),
                 sha256: file_sha256(local.clone())?,
                 local,
-                remote: (*remote).into(),
+                remote,
             });
         }
         Ok(Self {
@@ -145,8 +149,10 @@ impl PlatformDeployTransaction {
             return Ok(report);
         }
 
+        let fpga = app_path(Layout::Development, "fpga").expect("static installed path");
+        let snapshots = app_path(Layout::Development, "snapshots").expect("static installed path");
         remote
-            .exec("mkdir -p /media/fat/mister-magik-dev/fpga /media/fat/mister-magik-dev/snapshots")
+            .exec(&format!("mkdir -p {} {}", sh(&fpga), sh(&snapshots)))
             .and_then(|output| checked_deploy_output("platform prepare", output))?;
         for file in &changed {
             remote.put(&file.local, &format!("{}.upload", file.remote))?;
@@ -180,8 +186,11 @@ impl PlatformDeployTransaction {
                     )
                 })
             {
+                let sums = app_path(Layout::Development, "game-databases-SHA256SUMS")
+                    .expect("static installed path");
                 command.push_str(&format!(
-                    "sum=$(awk '$2 == \"{name}\" {{print $1}}' /media/fat/mister-magik-dev/game-databases-SHA256SUMS 2>/dev/null || true); if test -n \"$sum\"; then printf '%s  {path}\\n' \"$sum\"; else printf 'missing  {path}\\n'; fi; ",
+                    "sum=$(awk '$2 == \"{name}\" {{print $1}}' {sums} 2>/dev/null || true); if test -n \"$sum\"; then printf '%s  {path}\\n' \"$sum\"; else printf 'missing  {path}\\n'; fi; ",
+                    sums = sh(&sums),
                     path = file.remote,
                 ));
                 continue;
@@ -276,7 +285,7 @@ impl PlatformDeployTransaction {
         for file in changed.iter().filter(|file| {
             file.remote.ends_with("/mister-magik-fb")
                 || file.remote.ends_with("/mister-magik-manager")
-                || file.remote == "/media/fat/MiSTer_MagiKDev"
+                || file.remote == paths(Layout::Development).main
         }) {
             chmod.push_str(&format!("chmod 755 {}; ", sh(&file.remote)));
         }
@@ -299,10 +308,10 @@ fn checked_deploy_output(label: &str, output: ExecOutput) -> Result<ExecOutput> 
 
 pub(super) fn platform_rollback_script() -> String {
     let mut rollback = String::from("set -eu; ");
-    for (_, remote) in PLATFORM_DEPLOY_FILES {
+    for (_, remote) in platform_deploy_files() {
         rollback.push_str(&format!(
             "if [ -e {backup} ]; then mv -f {backup} {path}; elif [ -e {missing} ]; then rm -f {path} {missing}; fi; ",
-            path = sh(remote), backup = sh(&format!("{remote}.rollback")),
+            path = sh(&remote), backup = sh(&format!("{remote}.rollback")),
             missing = sh(&format!("{remote}.rollback-missing"))
         ));
     }
@@ -317,8 +326,8 @@ pub(super) fn platform_snapshot_script() -> String {
     let safety = platform_safety_script();
     let mut cleanup = String::from("rm -f /media/fat/MiSTer.ini.platform-rollback; ");
     let mut snapshot = String::new();
-    for (_, remote) in PLATFORM_DEPLOY_FILES {
-        let parent = Path::new(remote)
+    for (_, remote) in platform_deploy_files() {
+        let parent = Path::new(&remote)
             .parent()
             .expect("platform deploy path must have a parent");
         cleanup.push_str(&format!(
@@ -328,7 +337,7 @@ pub(super) fn platform_snapshot_script() -> String {
         ));
         snapshot.push_str(&format!(
             "if [ -e {path} ]; then cp -p {path} {backup}; else mkdir -p {parent}; : > {missing}; fi; ",
-            path = sh(remote),
+            path = sh(&remote),
             backup = sh(&format!("{remote}.rollback")),
             missing = sh(&format!("{remote}.rollback-missing")),
             parent = sh(&parent.to_string_lossy())
@@ -341,7 +350,7 @@ pub(super) fn platform_snapshot_script() -> String {
 
 pub(super) fn platform_cleanup_script() -> String {
     let mut commands = vec!["set -eu".to_string(), platform_safety_script()];
-    for (_, remote) in PLATFORM_DEPLOY_FILES {
+    for (_, remote) in platform_deploy_files() {
         commands.push(format!(
             "rm -f {} {}",
             sh(&format!("{remote}.rollback")),
@@ -354,5 +363,12 @@ pub(super) fn platform_cleanup_script() -> String {
 }
 
 pub(super) fn platform_safety_script() -> String {
-    "for path in /media/fat/mister-magik/launcher.env /media/fat/mister-magik-dev/launcher.env /tmp/mister-magik/fs-fault-launcher.env /tmp/mister-magik/fs-fault-session /tmp/mister-magik/fs-fault.json /media/fat/mister-magik/rebuild-on-next-boot /media/fat/mister-magik-dev/rebuild-on-next-boot; do if test -e \"$path\"; then printf 'platform safety blocked: %s\\n' \"$path\" >&2; exit 1; fi; done".into()
+    let paths = arming_paths()
+        .iter()
+        .map(|path| sh(path))
+        .collect::<Vec<_>>()
+        .join(" ");
+    format!(
+        "for path in {paths}; do if test -e \"$path\"; then printf 'platform safety blocked: %s\\n' \"$path\" >&2; exit 1; fi; done",
+    )
 }

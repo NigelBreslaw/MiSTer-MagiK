@@ -20,26 +20,26 @@ use crate::ui_display::{
 use mister_magik_framebuffer_scenes::{Rgb565OutputLayout, Rgb565SurfaceMut};
 use slint::platform::software_renderer::Rgb565Pixel;
 
-pub(crate) const ARCADE_LIST_X: usize = 8;
-pub(crate) const ARCADE_LIST_Y: usize = 56;
+pub const ARCADE_LIST_X: usize = 8;
+pub const ARCADE_LIST_Y: usize = 56;
 // Wider than the half-screen pane on purpose: the list can borrow boundary
 // space while the preview stays centered in the remaining black area.
-pub(crate) const ARCADE_LIST_W: usize = 510;
-pub(crate) const ARCADE_SEARCH_LIST_W: usize = 464;
-pub(crate) const ARCADE_LIST_H: usize = ARCADE_LIST_VISIBLE_H as usize;
-pub(crate) const ARCADE_SEARCH_LIST_Y: usize = 56;
-pub(crate) const ARCADE_LIST_FONT_PX: f32 = 16.0;
-pub(crate) const ARCADE_LIST_META_FONT_PX: f32 = 8.0;
-pub(crate) const ARCADE_LIST_BG_COLOR: Pixel = Pixel(0x001a1424);
-pub(crate) const ARCADE_LIST_BG_COLOR_565: Rgb565Pixel = rgb565_from_rgb888(0x1a, 0x14, 0x24);
+pub const ARCADE_LIST_W: usize = 510;
+pub const ARCADE_SEARCH_LIST_W: usize = 464;
+pub const ARCADE_LIST_H: usize = ARCADE_LIST_VISIBLE_H as usize;
+pub const ARCADE_SEARCH_LIST_Y: usize = 56;
+pub const ARCADE_LIST_FONT_PX: f32 = 16.0;
+pub const ARCADE_LIST_META_FONT_PX: f32 = 8.0;
+pub const ARCADE_LIST_BG_COLOR: Pixel = Pixel(0x001a1424);
+pub const ARCADE_LIST_BG_COLOR_565: Rgb565Pixel = rgb565_from_rgb888(0x1a, 0x14, 0x24);
 const ARCADE_LIST_ALT_BG_COLOR_565: Rgb565Pixel = rgb565_from_rgb888(0x15, 0x0f, 0x20);
 const ARCADE_LIST_ROW_BORDER_COLOR_565: Rgb565Pixel = rgb565_from_rgb888(0x25, 0x1c, 0x34);
 const ARCADE_SELECTION_FILL_COLOR_565: Rgb565Pixel = rgb565_from_rgb888(0xe7, 0xe3, 0xec);
-pub(crate) const ARCADE_TITLE_GRADIENT: TextGradient =
+pub const ARCADE_TITLE_GRADIENT: TextGradient =
     TextGradient::new(Pixel(0x00fff6ff), Pixel(0x00dbd1e6), Pixel(0x00938a9b));
-pub(crate) const ARCADE_FILTER_ACTIVE_GRADIENT: TextGradient =
+pub const ARCADE_FILTER_ACTIVE_GRADIENT: TextGradient =
     TextGradient::new(Pixel(0x0006d6a0), Pixel(0x0005b98a), Pixel(0x00047764));
-pub(crate) const ARCADE_ROW_CACHE_MAX: usize = 128;
+pub const ARCADE_ROW_CACHE_MAX: usize = 128;
 const ARCADE_ROW_CACHE_PRUNE_TO: usize = 96;
 const ARCADE_ROW_FINGERPRINT_CACHE_MAX: usize = 512;
 const ARCADE_ROW_FINGERPRINT_CACHE_PRUNE_TO: usize = 384;
@@ -180,20 +180,20 @@ impl ArcadeListStyle {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct ArcadeListGeometry {
-    pub(crate) x: usize,
-    pub(crate) y: usize,
-    pub(crate) width: usize,
+pub struct ArcadeListGeometry {
+    pub x: usize,
+    pub y: usize,
+    pub width: usize,
 }
 
 impl ArcadeListGeometry {
-    pub(crate) const NORMAL: Self = Self {
+    pub const NORMAL: Self = Self {
         x: ARCADE_LIST_X,
         y: ARCADE_LIST_Y,
         width: ARCADE_LIST_W,
     };
 
-    pub(crate) fn search_for_render_w(render_w: usize) -> Self {
+    pub fn search_for_render_w(render_w: usize) -> Self {
         let x = if render_w <= 640 {
             render_w * 2 / 5 + ARCADE_LIST_X * 2
         } else {
@@ -207,7 +207,7 @@ impl ArcadeListGeometry {
         }
     }
 
-    pub(crate) fn normal_for_render_w(render_w: usize) -> Self {
+    pub fn normal_for_render_w(render_w: usize) -> Self {
         Self {
             x: ARCADE_LIST_X,
             y: ARCADE_LIST_Y,
@@ -215,7 +215,7 @@ impl ArcadeListGeometry {
         }
     }
 
-    pub(crate) fn portrait(render_w: usize, render_h: usize, search: bool) -> Self {
+    pub fn portrait(render_w: usize, render_h: usize, search: bool) -> Self {
         let margin = ARCADE_LIST_X * 2;
         let y = if search {
             56
@@ -229,11 +229,7 @@ impl ArcadeListGeometry {
         }
     }
 
-    pub(crate) fn crt_for_content(
-        content: CrtContentRect,
-        metrics: CrtUiMetrics,
-        search: bool,
-    ) -> Self {
+    pub fn crt_for_content(content: CrtContentRect, metrics: CrtUiMetrics, search: bool) -> Self {
         let grid_x = metrics.grid_x.max(1) as usize;
         let grid_y = metrics.grid_y.max(1) as usize;
         let margin = grid_x * 2;
@@ -250,7 +246,7 @@ impl ArcadeListGeometry {
         }
     }
 
-    pub(crate) fn dirty_rect(self) -> DirtyRect {
+    pub fn dirty_rect(self) -> DirtyRect {
         DirtyRect {
             x0: self.x,
             y0: self.y,
@@ -259,11 +255,11 @@ impl ArcadeListGeometry {
         }
     }
 
-    pub(crate) fn visible_height(self, render_h: usize) -> usize {
+    pub fn visible_height(self, render_h: usize) -> usize {
         self.visible_height_with_metrics(render_h, None)
     }
 
-    pub(crate) fn visible_height_with_metrics(
+    pub fn visible_height_with_metrics(
         self,
         render_h: usize,
         metrics: Option<CrtUiMetrics>,
@@ -281,7 +277,7 @@ impl ArcadeListGeometry {
     }
 }
 
-pub(crate) struct ArcadeListRenderer {
+pub struct ArcadeListRenderer {
     title_font: ConsoleFont,
     meta_font: ConsoleFont,
     row_cache: HashMap<usize, CachedArcadeRow>,
@@ -305,12 +301,12 @@ pub(crate) struct ArcadeListRenderer {
     crt_metrics: Option<CrtUiMetrics>,
 }
 
-pub(crate) struct CachedArcadeRow {
-    pub(crate) title: Arc<str>,
-    pub(crate) is_new: bool,
-    pub(crate) is_favourite: bool,
-    pub(crate) pixels: Vec<Rgb565Pixel>,
-    pub(crate) last_used: u64,
+pub struct CachedArcadeRow {
+    pub title: Arc<str>,
+    pub is_new: bool,
+    pub is_favourite: bool,
+    pub pixels: Vec<Rgb565Pixel>,
+    pub last_used: u64,
 }
 
 struct CachedArcadeRowFingerprint {
@@ -335,10 +331,10 @@ struct ArcadeListDrawKey {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct ArcadeListItem {
-    pub(crate) title: String,
-    pub(crate) count: Option<usize>,
-    pub(crate) active: bool,
+pub struct ArcadeListItem {
+    pub title: String,
+    pub count: Option<usize>,
+    pub active: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -349,26 +345,26 @@ struct ArcadeFilterListDrawKey {
     visible_hash: u64,
 }
 
-pub(crate) use mister_magik_mister_runtime::framebuffer::latch_state::DirectLayerUpdate as ArcadeListUpdate;
+pub use mister_magik_mister_runtime::framebuffer::latch_state::DirectLayerUpdate as ArcadeListUpdate;
 
 impl ArcadeListRenderer {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Self::new_with_style(ArcadeListStyle::hdmi(), None)
     }
 
-    pub(crate) fn new_for_crt(row_height: i32) -> Self {
+    pub fn new_for_crt(row_height: i32) -> Self {
         let mut metrics = CrtUiMetrics::for_framebuffer(640, 480);
         metrics.game_row_height = row_height.max(1);
         Self::new_for_crt_metrics(metrics)
     }
 
     /// Uses the same route-owned metrics and font as the Slint CRT layer.
-    pub(crate) fn new_for_crt_metrics(metrics: CrtUiMetrics) -> Self {
+    pub fn new_for_crt_metrics(metrics: CrtUiMetrics) -> Self {
         Self::new_with_style(ArcadeListStyle::crt(metrics), Some(metrics))
     }
 
     /// Uses route-owned row metrics plus the physical scanline contract.
-    pub(crate) fn new_for_crt_display(metrics: CrtUiMetrics, display: &UiDisplay) -> Self {
+    pub fn new_for_crt_display(metrics: CrtUiMetrics, display: &UiDisplay) -> Self {
         Self::new_with_style(
             ArcadeListStyle::crt_for_display(metrics, display),
             Some(metrics),
@@ -404,25 +400,21 @@ impl ArcadeListRenderer {
         }
     }
 
-    pub(crate) fn dirty_rect(&self) -> DirtyRect {
+    pub fn dirty_rect(&self) -> DirtyRect {
         let mut rect = self.geometry.dirty_rect();
         rect.y1 = rect.y0 + self.visible_height;
         rect
     }
 
-    pub(crate) fn set_filter_acknowledged_indices(&mut self, indices: Vec<usize>) {
+    pub fn set_filter_acknowledged_indices(&mut self, indices: Vec<usize>) {
         self.filter_acknowledged_indices = indices;
     }
 
-    pub(crate) fn width(&self) -> usize {
+    pub fn width(&self) -> usize {
         self.width
     }
 
-    pub(crate) fn present_pixels(
-        &self,
-        update: &ArcadeListUpdate,
-        redraw_selection_frame: bool,
-    ) -> usize {
+    pub fn present_pixels(&self, update: &ArcadeListUpdate, redraw_selection_frame: bool) -> usize {
         arcade_list_present_pixels_with_geometry(
             update,
             self.width,
@@ -435,15 +427,11 @@ impl ArcadeListRenderer {
         )
     }
 
-    pub(crate) fn set_geometry(&mut self, geometry: ArcadeListGeometry) {
+    pub fn set_geometry(&mut self, geometry: ArcadeListGeometry) {
         self.set_geometry_for_render_h(geometry, ARCADE_LIST_Y + ARCADE_LIST_H);
     }
 
-    pub(crate) fn set_geometry_for_render_h(
-        &mut self,
-        geometry: ArcadeListGeometry,
-        render_h: usize,
-    ) {
+    pub fn set_geometry_for_render_h(&mut self, geometry: ArcadeListGeometry, render_h: usize) {
         self.visible_height = geometry.visible_height_with_metrics(render_h, self.crt_metrics);
         if self.geometry != geometry {
             if self.width != geometry.width {
@@ -459,16 +447,13 @@ impl ArcadeListRenderer {
         }
     }
 
-    pub(crate) fn invalidate_presented_layer(&mut self) {
+    pub fn invalidate_presented_layer(&mut self) {
         self.last_draw = None;
         self.last_filter_draw = None;
         self.surface_y = 0;
     }
 
-    pub(crate) fn set_favourite_launch_refs<'a>(
-        &mut self,
-        refs: impl IntoIterator<Item = &'a str>,
-    ) {
+    pub fn set_favourite_launch_refs<'a>(&mut self, refs: impl IntoIterator<Item = &'a str>) {
         let refs = refs.into_iter().map(str::to_owned).collect();
         if self.favourite_launch_refs != refs {
             self.favourite_launch_refs = refs;
@@ -478,7 +463,7 @@ impl ArcadeListRenderer {
         }
     }
 
-    pub(crate) fn draw(
+    pub fn draw(
         &mut self,
         games: ArcadeGameView<'_>,
         _selected: usize,
@@ -567,7 +552,7 @@ impl ArcadeListRenderer {
         })
     }
 
-    pub(crate) fn draw_filter_items(
+    pub fn draw_filter_items(
         &mut self,
         items: &[ArcadeListItem],
         _selected: usize,
@@ -635,7 +620,7 @@ impl ArcadeListRenderer {
         })
     }
 
-    pub(crate) fn selection_rect(&self) -> DirtyRect {
+    pub fn selection_rect(&self) -> DirtyRect {
         let y = self.selection_y();
         DirtyRect {
             x0: self.geometry.x,
@@ -912,7 +897,7 @@ impl ArcadeListRenderer {
         }
     }
 
-    pub(crate) fn copy_layer_to_fb0(
+    pub fn copy_layer_to_fb0(
         &mut self,
         disp: &mut MappedRgb565Framebuffer,
         redraw_selection_frame: bool,
@@ -923,7 +908,7 @@ impl ArcadeListRenderer {
         }
     }
 
-    pub(crate) fn compose_layer_to_cached(
+    pub fn compose_layer_to_cached(
         &mut self,
         target: &mut UiFrameTarget,
         redraw_selection_frame: bool,
@@ -934,7 +919,7 @@ impl ArcadeListRenderer {
         }
     }
 
-    pub(crate) fn compose_layer_to_oriented_cached(
+    pub fn compose_layer_to_oriented_cached(
         &mut self,
         target: &mut UiFrameTarget,
         output_layout: Rgb565OutputLayout,
@@ -951,7 +936,7 @@ impl ArcadeListRenderer {
         }
     }
 
-    pub(crate) fn copy_layer_to_hidden(
+    pub fn copy_layer_to_hidden(
         &mut self,
         hidden: &mut ScanoutSlotsRgb565Framebuffer,
         redraw_selection_frame: bool,
@@ -1692,11 +1677,11 @@ impl ArcadeListRenderer {
     }
 }
 
-pub(crate) fn rendered_filter_content_hash() -> u64 {
+pub fn rendered_filter_content_hash() -> u64 {
     RENDERED_FILTER_CONTENT_HASH.load(Ordering::Relaxed)
 }
 
-pub(crate) fn requested_filter_content_hash() -> u64 {
+pub fn requested_filter_content_hash() -> u64 {
     REQUESTED_FILTER_CONTENT_HASH.load(Ordering::Relaxed)
 }
 
@@ -1745,13 +1730,13 @@ fn draw_new_badge(
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ArcadeListPresentKind {
+pub enum ArcadeListPresentKind {
     Normal,
     Inverted,
 }
 
 #[cfg(test)]
-pub(crate) fn for_each_arcade_list_present_segment(
+pub fn for_each_arcade_list_present_segment(
     width: usize,
     viewport_y: usize,
     h: usize,
@@ -1819,7 +1804,7 @@ fn for_each_arcade_list_present_segment_with_geometry(
 }
 
 #[cfg(test)]
-pub(crate) fn arcade_list_present_pixels(
+pub fn arcade_list_present_pixels(
     update: &ArcadeListUpdate,
     width: usize,
     redraw_selection_frame: bool,
@@ -1887,7 +1872,7 @@ fn emit_row_overlap(
     }
 }
 
-pub(crate) fn prune_arcade_row_cache(row_cache: &mut HashMap<usize, CachedArcadeRow>) {
+pub fn prune_arcade_row_cache(row_cache: &mut HashMap<usize, CachedArcadeRow>) {
     if row_cache.len() < ARCADE_ROW_CACHE_MAX {
         return;
     }
@@ -2080,7 +2065,7 @@ fn arc_str_eq(left: &Arc<str>, right: &Arc<str>) -> bool {
     Arc::ptr_eq(left, right) || left.as_ref() == right.as_ref()
 }
 
-pub(crate) fn draw_arcade_row_background(row: &mut [Pixel], width: usize, idx: usize) {
+pub fn draw_arcade_row_background(row: &mut [Pixel], width: usize, idx: usize) {
     draw_arcade_row_background_with_style(row, width, idx, ArcadeListStyle::hdmi());
 }
 

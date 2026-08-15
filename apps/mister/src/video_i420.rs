@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-pub(crate) fn convert_i420_to_rgb565(
+pub fn convert_i420_to_rgb565(
     src_y: &[u8],
     src_stride_y: usize,
     src_u: &[u8],
@@ -40,7 +40,7 @@ pub(crate) fn convert_i420_to_rgb565(
     Ok(())
 }
 
-pub(crate) fn convert_i420_to_rgb565_2x_rust_optimized(
+pub fn convert_i420_to_rgb565_2x_rust_optimized(
     src_y: &[u8],
     src_stride_y: usize,
     src_u: &[u8],

@@ -2,7 +2,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Shared vsync render loop and Slint bench scene dispatch.
-#![cfg_attr(mister_ui_scope_launcher, allow(dead_code))]
+#![cfg_attr(
+    any(
+        test,
+        mister_ui_scope_launcher,
+        not(all(target_os = "linux", target_arch = "arm"))
+    ),
+    allow(dead_code)
+)]
 
 use crate::fpga::Fpga;
 use crate::vt::VtGraphicsGuard;
@@ -110,6 +117,10 @@ fn launcher_startup_orientation(
 }
 
 mod arcade_drawer;
+// These leaf modules retain alternate benchmark, recovery, and diagnostic
+// routes that are deliberately compiled into the full device graph. Keep the
+// lint exception at the ownership leaf instead of the application root.
+#[allow(dead_code)]
 mod catalog_worker;
 mod controller_loop;
 #[cfg(test)]
@@ -118,31 +129,48 @@ mod crt_trial_loop;
 #[cfg(mister_experiments)]
 mod experiments;
 mod latch_v5_qualification;
+#[allow(dead_code)]
 mod launch_handoff_session;
 mod launcher_automation;
+#[allow(dead_code)]
 mod launcher_bench;
+#[allow(dead_code)]
 mod launcher_bridge;
 mod launcher_catalog_publication_test;
+#[allow(dead_code)]
 mod launcher_catalog_session;
+#[allow(dead_code)]
 mod launcher_compositor;
-pub(crate) mod launcher_display_session;
+#[doc(hidden)]
+#[allow(dead_code)]
+pub mod launcher_display_session;
 mod launcher_execution_trace;
+#[allow(dead_code)]
 mod launcher_frame_accounting;
 mod launcher_gui_profile;
 mod launcher_input_latency_lab;
+#[allow(dead_code)]
 mod launcher_loop;
 mod launcher_pacing;
 mod launcher_present;
 mod launcher_readiness;
+#[allow(dead_code)]
 mod launcher_scheduler;
+#[allow(dead_code)]
 mod launcher_screensaver;
+#[allow(dead_code)]
 mod launcher_screensaver_pipeline;
 mod launcher_startup_intro;
+#[allow(dead_code)]
 mod launcher_worker_intents;
+#[allow(dead_code)]
 mod raw565_preview_renderer;
+#[allow(dead_code)]
 mod screenshot_media_update_session;
 mod tear_pattern_loop;
-pub(crate) mod ui_boot;
+#[doc(hidden)]
+pub mod ui_boot;
+#[allow(dead_code)]
 pub(crate) mod ui_frame_target;
 pub(crate) mod ui_platform;
 mod update_checker;
@@ -360,7 +388,11 @@ macro_rules! with_scene_app {
     }};
 }
 
-pub fn run_ui(f: &mut Fpga, process_entry_cpu_profile: Option<cpu_profile::CpuProfiler>) {
+pub fn run_ui(
+    f: &mut Fpga,
+    process_entry_cpu_profile: Option<cpu_profile::CpuProfiler>,
+    launcher_config: mister_magik_fb::process_config::LauncherProcessConfig,
+) {
     crate::launch_preparation::cleanup_archive_launch_staging();
     let (scene, secs) = parse_ui_args();
     boot_analytics::event("run_ui_start", format!("scene={scene} secs={secs}"));
@@ -497,6 +529,7 @@ pub fn run_ui(f: &mut Fpga, process_entry_cpu_profile: Option<cpu_profile::CpuPr
                     app,
                     &animation_clock,
                     process_entry_cpu_profile,
+                    launcher_config,
                 );
             });
         }

@@ -27,8 +27,6 @@ use mister_magik_catalog::runtime_thread::{RuntimeThreadRole, apply_runtime_thre
 
 use crate::video_i420::{convert_i420_to_rgb565, convert_i420_to_rgb565_2x_rust_optimized};
 
-pub const DEFAULT_VIDEO_PATH: &str = "/media/fat/mister-magik/mslug3.mov";
-pub const DEFAULT_VIDEO_DIR: &str = "/media/fat/mister-magik/video-snaps/neogeo";
 const DEFAULT_VIDEO_MAX_W: u32 = 640;
 const DEFAULT_VIDEO_MAX_H: u32 = 480;
 pub const CANONICAL_VIDEO_WIDTH: u32 = 320;

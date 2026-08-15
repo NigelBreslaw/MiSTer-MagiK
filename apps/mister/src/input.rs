@@ -220,7 +220,7 @@ impl PadPool {
     }
 
     #[cfg(test)]
-    pub(crate) fn device_at(&self, idx: usize) -> Option<DeviceInstanceId> {
+    pub fn device_at(&self, idx: usize) -> Option<DeviceInstanceId> {
         self.pads.get(idx).and_then(|pad| pad.device.clone())
     }
 
@@ -581,7 +581,7 @@ impl PadPool {
     }
 
     #[cfg(test)]
-    pub(crate) fn from_test_states(states: Vec<PadState>) -> Self {
+    pub fn from_test_states(states: Vec<PadState>) -> Self {
         let mut pool = Self {
             pads: states
                 .into_iter()
@@ -617,7 +617,7 @@ impl PadPool {
     }
 
     #[cfg(test)]
-    pub(crate) fn set_test_keyboard_state(&mut self, state: PadState) {
+    pub fn set_test_keyboard_state(&mut self, state: PadState) {
         self.keyboards = vec![KeyboardReader {
             file: File::open("/dev/null").expect("open /dev/null"),
             path: "test-keyboard".into(),

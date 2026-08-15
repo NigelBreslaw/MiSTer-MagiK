@@ -120,6 +120,21 @@ pub(crate) fn write_catalog_navigation_snapshot_with_timing(
     catalog: &ArcadeCatalog,
     stamp: &CatalogStamp,
 ) -> Result<NavigationSnapshotWriteTiming, String> {
+    let mut fault_control = crate::fs_fault::NoopDirectResetFaultControl;
+    write_catalog_navigation_snapshot_with_timing_and_fault_control(
+        path,
+        catalog,
+        stamp,
+        &mut fault_control,
+    )
+}
+
+pub(crate) fn write_catalog_navigation_snapshot_with_timing_and_fault_control(
+    path: &Path,
+    catalog: &ArcadeCatalog,
+    stamp: &CatalogStamp,
+    fault_control: &mut dyn crate::fs_fault::DirectResetFaultControl,
+) -> Result<NavigationSnapshotWriteTiming, String> {
     let total_started = std::time::Instant::now();
     let conversion_started = std::time::Instant::now();
     let projection = CatalogNavigationProjection::from_catalog(catalog, stamp);
@@ -136,7 +151,7 @@ pub(crate) fn write_catalog_navigation_snapshot_with_timing(
     let compressed_bytes = compressed.len();
 
     let write_started = std::time::Instant::now();
-    write_bytes_atomically(path, &compressed)?;
+    write_bytes_atomically_with_fault_control(path, &compressed, fault_control)?;
     let write_us = write_started.elapsed().as_micros() as u64;
 
     Ok(NavigationSnapshotWriteTiming {
@@ -1089,11 +1104,21 @@ impl<'a> NavigationBinaryReader<'a> {
 }
 
 fn write_bytes_atomically(final_path: &Path, bytes: &[u8]) -> Result<(), String> {
-    crate::atomic_publish::write_atomically(
+    let mut fault_control = crate::fs_fault::NoopDirectResetFaultControl;
+    write_bytes_atomically_with_fault_control(final_path, bytes, &mut fault_control)
+}
+
+fn write_bytes_atomically_with_fault_control(
+    final_path: &Path,
+    bytes: &[u8],
+    fault_control: &mut dyn crate::fs_fault::DirectResetFaultControl,
+) -> Result<(), String> {
+    crate::atomic_publish::write_atomically_with_fault_control(
         final_path,
         "catalog navigation",
         "catalog.nav.lz4b",
         Some("catalog.navigation"),
+        fault_control,
         |file| file.write_all(bytes),
     )
 }

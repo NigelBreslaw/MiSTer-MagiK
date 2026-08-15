@@ -33,6 +33,7 @@ pub enum MainCommand {
     DisplayCancel,
     ExitToMenu,
     Reboot,
+    DirectResetNoSync,
     LaunchPath { target: String },
     StructuredLaunch { fields: String },
     LoadCore { target: String },
@@ -52,6 +53,7 @@ impl MainCommand {
             Self::DisplayCancel => "mister_magik_display_cancel_v1\n".to_string(),
             Self::ExitToMenu => "mister_magik_exit_to_menu\n".to_string(),
             Self::Reboot => "mister_magik_reboot\n".to_string(),
+            Self::DirectResetNoSync => "mister_magik_direct_reset_no_sync\n".to_string(),
             Self::LaunchPath { target } => format!("mister_magik_launch {target}\n"),
             Self::StructuredLaunch { fields } => {
                 format!("mister_magik_launch_plan_v1 {fields}\n")
@@ -63,7 +65,7 @@ impl MainCommand {
     fn expects_reply(&self) -> bool {
         !matches!(
             self,
-            Self::SupervisedLauncherRestart | Self::LoadCore { .. }
+            Self::SupervisedLauncherRestart | Self::DirectResetNoSync | Self::LoadCore { .. }
         )
     }
 }
@@ -175,11 +177,7 @@ pub fn wait_for_running_main_and_fifo(
     })
 }
 
-pub fn main_running() -> bool {
-    process_running(MISTER_PROCESS_NAMES)
-}
-
-pub fn magik_main_running() -> bool {
+fn main_running() -> bool {
     process_running(MISTER_PROCESS_NAMES)
 }
 
@@ -395,6 +393,7 @@ mod tests {
         transport.execute(&MainCommand::DisplayCancel).unwrap();
         transport.execute(&MainCommand::ExitToMenu).unwrap();
         transport.execute(&MainCommand::Reboot).unwrap();
+        transport.execute(&MainCommand::DirectResetNoSync).unwrap();
         transport
             .execute(&MainCommand::StructuredLaunch {
                 fields: "schema=1&launch_ref=test".to_string(),
@@ -429,6 +428,11 @@ mod tests {
                 ("mister_magik_display_cancel_v1\n".to_string(), true, false),
                 ("mister_magik_exit_to_menu\n".to_string(), true, false),
                 ("mister_magik_reboot\n".to_string(), true, false),
+                (
+                    "mister_magik_direct_reset_no_sync\n".to_string(),
+                    false,
+                    false,
+                ),
                 (
                     "mister_magik_launch_plan_v1 schema=1&launch_ref=test\n".to_string(),
                     true,

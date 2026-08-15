@@ -8,14 +8,24 @@ use std::env;
 use std::io::{Read, Write};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
+use std::sync::LazyLock;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
-const DEFAULT_REMOTE_ASSET_DIR: &str = "/media/fat/mister-magik/assets";
+static DEFAULT_REMOTE_ASSET_DIR: LazyLock<String> = LazyLock::new(|| {
+    format!(
+        "{}/assets",
+        mister_magik_platform_manifest_contract::PUBLIC_PATHS.root
+    )
+});
 #[cfg(test)]
-const DEFAULT_ARCADE_ARCHIVE_PATH: &str =
-    "/media/fat/mister-magik/assets/arcade-screenshots.mmlz4b";
+static DEFAULT_ARCADE_ARCHIVE_PATH: LazyLock<String> = LazyLock::new(|| {
+    format!(
+        "{}/arcade-screenshots.mmlz4b",
+        DEFAULT_REMOTE_ASSET_DIR.as_str()
+    )
+});
 const DEFAULT_IMAGE_SIZE: &str = "320x320";
 const DEFAULT_MANIFEST_URL: &str = mister_magik_media_contract::DEFAULT_MANIFEST_URL;
 const OFFICIAL_ASSET_HTTPS_ORIGIN: &str = mister_magik_media_contract::OFFICIAL_ASSET_HTTPS_ORIGIN;
@@ -31,8 +41,7 @@ fn remote_state_path() -> String {
 }
 
 fn layout_local_path(path: &str) -> String {
-    let public_prefix = "/media/fat/mister-magik/assets";
-    if let Some(suffix) = path.strip_prefix(public_prefix) {
+    if let Some(suffix) = path.strip_prefix(DEFAULT_REMOTE_ASSET_DIR.as_str()) {
         format!("{}{suffix}", remote_asset_dir())
     } else {
         path.to_string()
@@ -1340,7 +1349,10 @@ mod tests {
         assert_eq!(manifest.packs[0].system, "arcade");
         assert_eq!(manifest.packs[0].version, "2026.06.22");
         assert_eq!(manifest.packs[0].image_size, "320x320");
-        assert_eq!(manifest.packs[0].local_path, DEFAULT_ARCADE_ARCHIVE_PATH);
+        assert_eq!(
+            manifest.packs[0].local_path,
+            DEFAULT_ARCADE_ARCHIVE_PATH.as_str()
+        );
         assert_eq!(
             manifest_url_for_pack(&manifest, &manifest.packs[0]),
             format!(
@@ -1352,7 +1364,7 @@ mod tests {
         assert_eq!(index.sha256, idx_sha);
         assert_eq!(
             local_index_path_for_pack(&manifest.packs[0]),
-            format!("{DEFAULT_ARCADE_ARCHIVE_PATH}.idx")
+            format!("{}.idx", DEFAULT_ARCADE_ARCHIVE_PATH.as_str())
         );
         let expected_index_url = format!(
             "http://assets.mistermagik.com/mister-magik/v1/packs/arcade/2026.06.22/{idx_sha}.mmlz4b.idx"

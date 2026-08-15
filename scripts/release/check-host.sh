@@ -4,6 +4,15 @@
 
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# shellcheck source=/dev/null
+source "$ROOT/mister/platform/contracts/generated/platform-v3.constants.sh"
+PUBLIC_ROOT_RELATIVE="${PLATFORM_V3_PUBLIC_ROOT#/media/fat/}"
+PUBLIC_MAIN_RELATIVE="${PLATFORM_V3_PUBLIC_MAIN#/media/fat/}"
+PUBLIC_GUI_RELATIVE="${PLATFORM_V3_PUBLIC_GUI#/media/fat/}"
+PUBLIC_MANAGER_RELATIVE="${PLATFORM_V3_PUBLIC_MANAGER#/media/fat/}"
+PUBLIC_SCANOUT_MODULE_RELATIVE="${PLATFORM_V3_PUBLIC_SCANOUT_MODULE#/media/fat/}"
+PUBLIC_LATCH_RBF_RELATIVE="${PLATFORM_V3_PUBLIC_LATCH_RBF#/media/fat/}"
+DEV_ROOT_RELATIVE="${PLATFORM_V3_DEV_ROOT#/media/fat/}"
 BIN="$ROOT/apps/mister/target/armv7-unknown-linux-gnueabihf/release-device/mister-magik-fb"
 MANAGER="$ROOT/mister/tools/manager/target/armv7-unknown-linux-gnueabihf/release/mister-magik-manager"
 WORK="$ROOT/build/release-check-host"
@@ -174,37 +183,54 @@ ZIP="$(scripts/package-distribution.sh \
   --platform-manifest "$WORK/platform-v3.manifest" \
   --platform-bundle-manifest "$WORK/platform-bundle-v0.2.json")"
 
-ZIP="$ZIP" python3 - <<'PY'
+ZIP="$ZIP" \
+PUBLIC_ROOT_RELATIVE="$PUBLIC_ROOT_RELATIVE" \
+PUBLIC_MAIN_RELATIVE="$PUBLIC_MAIN_RELATIVE" \
+PUBLIC_GUI_RELATIVE="$PUBLIC_GUI_RELATIVE" \
+PUBLIC_MANAGER_RELATIVE="$PUBLIC_MANAGER_RELATIVE" \
+PUBLIC_SCANOUT_MODULE_RELATIVE="$PUBLIC_SCANOUT_MODULE_RELATIVE" \
+PUBLIC_LATCH_RBF_RELATIVE="$PUBLIC_LATCH_RBF_RELATIVE" \
+PUBLIC_MANAGER_PATH="$PLATFORM_V3_PUBLIC_MANAGER" \
+PLATFORM_V3_FILE_NAME="$PLATFORM_V3_FILE_NAME" \
+DEV_ROOT_RELATIVE="$DEV_ROOT_RELATIVE" \
+DEV_MAIN_RELATIVE="${PLATFORM_V3_DEV_MAIN#/media/fat/}" \
+python3 - <<'PY'
 import hashlib
 import os
 import sys
 import zipfile
 
+root = os.environ["PUBLIC_ROOT_RELATIVE"]
+main = os.environ["PUBLIC_MAIN_RELATIVE"]
+gui = os.environ["PUBLIC_GUI_RELATIVE"]
+manager_path = os.environ["PUBLIC_MANAGER_RELATIVE"]
+manifest_path = f"{root}/{os.environ['PLATFORM_V3_FILE_NAME']}"
 required = {
     "Scripts/MiSTer-MagiK.sh",
-    "MiSTer_MagiK",
-    "mister-magik/mister-magik-fb",
-    "mister-magik/mister-magik-manager",
-    "mister-magik/mame.sqlite3",
-    "mister-magik/hbmame.sqlite3",
-    "mister-magik/assets/snes/snes-small-v1.rgb565a",
-    "mister-magik/platform-v3.manifest",
-    "mister-magik/platform-bundle-v0.2.json",
-    "mister-magik/game-databases-manifest.json",
-    "mister-magik/mister_magik_scanout_slots.ko",
-    "mister-magik/fpga/menu-magik-vblank-latch.rbf",
-    "mister-magik/THIRD-PARTY-NOTICES.txt",
-    "mister-magik/licenses/COMMERCIAL-FONTS.txt",
-    "mister-magik/SOURCE-OFFER.txt",
+    "Scripts/MiSTer-MagiK.platform-v3.constants.sh",
+    main,
+    gui,
+    manager_path,
+    f"{root}/mame.sqlite3",
+    f"{root}/hbmame.sqlite3",
+    f"{root}/assets/snes/snes-small-v1.rgb565a",
+    manifest_path,
+    f"{root}/platform-bundle-v0.2.json",
+    f"{root}/game-databases-manifest.json",
+    os.environ["PUBLIC_SCANOUT_MODULE_RELATIVE"],
+    os.environ["PUBLIC_LATCH_RBF_RELATIVE"],
+    f"{root}/THIRD-PARTY-NOTICES.txt",
+    f"{root}/licenses/COMMERCIAL-FONTS.txt",
+    f"{root}/SOURCE-OFFER.txt",
 }
 with zipfile.ZipFile(os.environ["ZIP"]) as archive:
     names = set(archive.namelist())
-    manager = archive.read("mister-magik/mister-magik-manager")
-    snes_artwork = archive.read("mister-magik/assets/snes/snes-small-v1.rgb565a")
-    manager_mode = archive.getinfo("mister-magik/mister-magik-manager").external_attr >> 16
+    manager = archive.read(manager_path)
+    snes_artwork = archive.read(f"{root}/assets/snes/snes-small-v1.rgb565a")
+    manager_mode = archive.getinfo(manager_path).external_attr >> 16
     manifest = dict(
         line.split("=", 1)
-        for line in archive.read("mister-magik/platform-v3.manifest").decode().splitlines()
+        for line in archive.read(manifest_path).decode().splitlines()
         if line and not line.startswith("#")
     )
 missing = sorted(required - names)
@@ -214,7 +240,7 @@ if missing:
 if manager_mode & 0o111 == 0:
     print("package validation failed: manager is not executable", file=sys.stderr)
     raise SystemExit(1)
-if manifest.get("manager_path") != "/media/fat/mister-magik/mister-magik-manager":
+if manifest.get("manager_path") != os.environ["PUBLIC_MANAGER_PATH"]:
     print("package validation failed: manager path is not canonical", file=sys.stderr)
     raise SystemExit(1)
 if hashlib.sha256(manager).hexdigest() != manifest.get("manager_sha256"):
@@ -225,7 +251,9 @@ if hashlib.sha256(snes_artwork).hexdigest() != "7a76993e7e1b0063832b94e9d2ad5885
     raise SystemExit(1)
 forbidden = sorted(
     name for name in names
-    if "mister-magik-agent" in name or "mister-magik-dev/" in name or "MiSTer_MagiKDev" in name
+    if "mister-magik-agent" in name
+    or f"{os.environ['DEV_ROOT_RELATIVE']}/" in name
+    or name == os.environ["DEV_MAIN_RELATIVE"]
 )
 if forbidden:
     print(f"package validation failed: development payload present: {', '.join(forbidden)}", file=sys.stderr)

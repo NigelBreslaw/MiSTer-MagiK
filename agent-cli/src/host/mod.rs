@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use crate::transport::{AutomationAction, AutomationButton, DeviceFailure, Layout};
+use mister_magik_platform_manifest_contract as platform_manifest_contract;
 use quick_xml::Reader;
 use quick_xml::events::{BytesStart, Event};
 use rusqlite::backup::Backup;
@@ -16,6 +17,7 @@ use std::io::{self, IsTerminal, Read, Write};
 use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::LazyLock;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -23,6 +25,7 @@ mod agent_client;
 mod arcade_database;
 mod crt_qualification;
 mod discovery;
+mod installed_layout;
 mod latch_v5_qualification;
 mod launcher_automation;
 mod live_particles;
@@ -56,18 +59,44 @@ const DEFAULT_FB_H: usize = 1080;
 const DEFAULT_FB_BPP: usize = 32;
 const RAW_REBOOT_REMOTE_CMD: &str = "nohup /sbin/reboot >/dev/null 2>&1 & echo raw";
 #[cfg(test)]
-const DEFAULT_REMOTE_LIBRARY_DB: &str = "/media/fat/mister-magik/library.sqlite3";
-const DEFAULT_LAUNCHER_ENV_REMOTE: &str = "/media/fat/mister-magik/launcher.env";
-const DEVELOPMENT_LAUNCHER_ENV_REMOTE: &str = "/media/fat/mister-magik-dev/launcher.env";
+static DEFAULT_REMOTE_LIBRARY_DB: LazyLock<String> = LazyLock::new(|| {
+    installed_layout::app_path(Layout::Public, "library.sqlite3").expect("static installed path")
+});
+static DEFAULT_LAUNCHER_ENV_REMOTE: LazyLock<String> = LazyLock::new(|| {
+    installed_layout::app_path(Layout::Public, "launcher.env").expect("static installed path")
+});
+static DEVELOPMENT_LAUNCHER_ENV_REMOTE: LazyLock<String> = LazyLock::new(|| {
+    installed_layout::app_path(Layout::Development, "launcher.env").expect("static installed path")
+});
+static DEVELOPMENT_ARTWORK_REMOTE: LazyLock<String> = LazyLock::new(|| {
+    installed_layout::app_path(Layout::Development, "assets/snes/snes-small-v1.rgb565a")
+        .expect("static installed path")
+});
+static DEVELOPMENT_AGENT_REMOTE: LazyLock<String> = LazyLock::new(|| {
+    installed_layout::app_path(Layout::Development, "mister-magik-agent")
+        .expect("static installed path")
+});
+static DEVELOPMENT_BENCHMARK_CAPABILITIES_COMMAND: LazyLock<String> =
+    LazyLock::new(|| development_gui_command("benchmark-capabilities"));
+static DEVELOPMENT_CATALOG_REGISTRY_REPORT_COMMAND: LazyLock<String> =
+    LazyLock::new(|| development_gui_command("catalog-v3-registry-report"));
 const RETURN_CATALOG_CAPSULE_REMOTE: &str = "/tmp/mister-magik/launcher-return-catalog.json";
 const MAIN_STATUS_REMOTE: &str = "/tmp/mister-magik/main-status.json";
 const SLINT_STATUS_REMOTE: &str = "/tmp/mister-magik/status.json";
 const LATCH_FAILURE_REMOTE: &str = "/tmp/mister-magik/latch-failure.json";
+const PUBLIC_MANIFEST_REMOTE: &str = mister_magik_platform_manifest_contract::PUBLIC_PATHS.manifest;
+const PUBLIC_GUI_REMOTE: &str = mister_magik_platform_manifest_contract::PUBLIC_PATHS.gui;
+const PUBLIC_MAIN_REMOTE: &str = mister_magik_platform_manifest_contract::PUBLIC_PATHS.main;
+const DEVELOPMENT_GUI_REMOTE: &str = mister_magik_platform_manifest_contract::DEVELOPMENT_PATHS.gui;
 
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
 fn configured_remote_path(name: &str, fallback: &str) -> String {
     std::env::var(name).unwrap_or_else(|_| fallback.to_string())
+}
+
+fn development_gui_command(subcommand: &str) -> String {
+    format!("{DEVELOPMENT_GUI_REMOTE} {subcommand}")
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -128,12 +157,12 @@ impl ActiveRuntime {
     }
 
     pub(crate) fn is_development_launcher(&self) -> bool {
-        self.executable_path.as_deref() == Some("/media/fat/MiSTer_MagiKDev")
+        self.executable_path.as_deref() == Some(installed_layout::paths(Layout::Development).main)
             && self.launcher_state.as_deref() == Some("LauncherActive")
     }
 
     pub(crate) fn is_public_launcher(&self) -> bool {
-        self.executable_path.as_deref() == Some("/media/fat/MiSTer_MagiK")
+        self.executable_path.as_deref() == Some(installed_layout::paths(Layout::Public).main)
             && self.launcher_state.as_deref() == Some("LauncherActive")
     }
 
@@ -510,10 +539,7 @@ impl NativeDevice {
     ) -> std::result::Result<String, DeviceFailure> {
         let prepared = self.prepare(DeviceAccess::SSH_READ)?;
         let session = connect_with(&prepared.config.connection, 10).map_err(device_failure)?;
-        Ok(
-            remote_read(&session, "/media/fat/mister-magik-dev/platform-v3.manifest")
-                .unwrap_or_default(),
-        )
+        Ok(remote_read(&session, LOCAL_MAIN_MANIFEST_REMOTE).unwrap_or_default())
     }
 
     pub(crate) fn read_active_runtime(
@@ -550,12 +576,12 @@ impl NativeDevice {
             &prepared.config,
             RuntimeDeliveryBundle {
                 local,
-                remote: "/media/fat/mister-magik-dev/mister-magik-fb",
+                remote: DEVELOPMENT_GUI_REMOTE,
                 manifest_local,
-                manifest_remote: "/media/fat/mister-magik-dev/platform-v3.manifest",
+                manifest_remote: LOCAL_MAIN_MANIFEST_REMOTE,
                 expected_sha256,
                 artwork_local,
-                artwork_remote: "/media/fat/mister-magik-dev/assets/snes/snes-small-v1.rgb565a",
+                artwork_remote: DEVELOPMENT_ARTWORK_REMOTE.as_str(),
                 artwork_expected_sha256,
             },
         )
@@ -879,12 +905,12 @@ impl NativeDevice {
             let (layout, manifest_remote) = if active.is_development_launcher() {
                 (
                     crate::platform_manifest::Layout::Development,
-                    "/media/fat/mister-magik-dev/platform-v3.manifest",
+                    LOCAL_MAIN_MANIFEST_REMOTE,
                 )
             } else if active.is_public_launcher() {
                 (
                     crate::platform_manifest::Layout::Public,
-                    "/media/fat/mister-magik/platform-v3.manifest",
+                    PUBLIC_MANIFEST_REMOTE,
                 )
             } else {
                 return Err(format!(
@@ -1176,7 +1202,7 @@ impl NativeDevice {
         let session = connect_with(&prepared.config.connection, 10).map_err(device_failure)?;
         let inspect = exec(
             &session,
-            "/media/fat/mister-magik/mister-magik-fb catalog-v3-inspect",
+            &format!("{PUBLIC_GUI_REMOTE} catalog-v3-inspect"),
             true,
         )
         .map_err(device_failure)?;
@@ -1835,11 +1861,11 @@ fn retain_diagnostic_evidence(session: &Session, facts: &Value) -> Result<PathBu
             "latch-failure.json".to_string(),
         ),
         (
-            "/media/fat/mister-magik-dev/launcher.env".to_string(),
+            DEVELOPMENT_LAUNCHER_ENV_REMOTE.to_string(),
             "launcher.env".to_string(),
         ),
         (
-            "/media/fat/mister-magik-dev/platform-v3.manifest".to_string(),
+            LOCAL_MAIN_MANIFEST_REMOTE.to_string(),
             "platform-v3.manifest".to_string(),
         ),
     ];
@@ -2248,9 +2274,7 @@ fn deliver_runtime_transaction(
     require_delivery_sha256(artwork_expected_sha256)?;
     validate_delivery_remote(remote).map_err(device_failure)?;
     validate_runtime_manifest_remote(manifest_remote).map_err(device_failure)?;
-    if artwork_remote != "/media/fat/mister-magik-dev/assets/snes/snes-small-v1.rgb565a"
-        || !artwork_local.is_file()
-    {
+    if artwork_remote != DEVELOPMENT_ARTWORK_REMOTE.as_str() || !artwork_local.is_file() {
         return Err(DeviceFailure::ArtifactMismatch(
             "runtime delivery requires the canonical external SNES artwork".into(),
         ));
@@ -2389,9 +2413,14 @@ fn deliver_platform_transaction(
     )
 }
 
-const LOCAL_MAIN_REMOTE: &str = "/media/fat/MiSTer_MagiKDev";
-const LOCAL_MAIN_MANIFEST_REMOTE: &str = "/media/fat/mister-magik-dev/platform-v3.manifest";
-const LOCAL_MAIN_TRANSACTION_REMOTE: &str = "/media/fat/mister-magik-dev/local-main.delivery-state";
+const LOCAL_MAIN_REMOTE: &str = mister_magik_platform_manifest_contract::DEVELOPMENT_PATHS.main;
+const LOCAL_MAIN_MANIFEST_REMOTE: &str =
+    mister_magik_platform_manifest_contract::DEVELOPMENT_PATHS.manifest;
+
+fn local_main_transaction_remote() -> String {
+    installed_layout::app_path(Layout::Development, "local-main.delivery-state")
+        .expect("static installed path")
+}
 
 static LOCAL_MAIN_DELIVERY_INTERRUPTED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
@@ -2686,7 +2715,7 @@ fn validate_local_main_bundle_identity(
         ("main_sha256", expected_main_sha256),
         ("gui_sha256", expected_gui_sha256),
         ("main_path", LOCAL_MAIN_REMOTE),
-        ("gui_path", "/media/fat/mister-magik-dev/mister-magik-fb"),
+        ("gui_path", DEVELOPMENT_GUI_REMOTE),
     ] {
         if fields.get(field).map(String::as_str) != Some(expected) {
             return Err(format!("local Main manifest field {field} is not canonical").into());
@@ -2701,52 +2730,13 @@ fn parse_local_main_manifest(path: &Path) -> Result<BTreeMap<String, String>> {
 }
 
 fn parse_local_main_manifest_text(text: &str) -> Result<BTreeMap<String, String>> {
-    let mut fields: BTreeMap<String, String> = BTreeMap::new();
-    for line in text.lines() {
-        let (key, value) = line
-            .split_once('=')
-            .ok_or("local Main manifest contains a malformed line")?;
-        if value.is_empty()
-            || !RUNTIME_MANIFEST_FIELDS.contains(&key)
-            || fields.insert(key.into(), value.into()).is_some()
-        {
-            return Err(format!("local Main manifest has an invalid field: {key}").into());
-        }
-    }
-    if fields.len() != RUNTIME_MANIFEST_FIELDS.len()
-        || RUNTIME_MANIFEST_FIELDS
-            .iter()
-            .any(|field| !fields.contains_key(*field))
-    {
-        return Err("local Main manifest does not have the exact canonical field set".into());
-    }
-    for field in [
-        "platform_bundle_id",
-        "qualification_candidate_id",
-        "main_sha256",
-        "gui_sha256",
-        "manager_sha256",
-        "scanout_module_sha256",
-        "scanout_metadata_sha256",
-        "latch_rbf_sha256",
-        "latch_metadata_sha256",
-        "platform_contract_sha256",
-    ] {
-        require_local_main_hex(field, &fields[field], 64)?;
-    }
-    for field in ["main_revision", "magik_revision", "menu_revision"] {
-        require_local_main_hex(field, &fields[field], 40)?;
-    }
-    if fields["format"] != "mister-magik-platform-v3"
-        || fields["main_path"] != LOCAL_MAIN_REMOTE
-        || fields["gui_path"] != "/media/fat/mister-magik-dev/mister-magik-fb"
-    {
-        return Err("local Main manifest has a non-Dev platform identity".into());
-    }
-    if fields["qualification_candidate_id"] != local_main_candidate_id(&fields) {
-        return Err("local Main manifest candidate identity is inconsistent".into());
-    }
-    Ok(fields)
+    platform_manifest_contract::parse(
+        text,
+        platform_manifest_contract::Layout::Development,
+        platform_manifest_contract::ValidationProfile::AgentStrict,
+    )
+    .map(platform_manifest_contract::ParsedManifest::into_values)
+    .map_err(|error| format!("local Main manifest is invalid: {error}").into())
 }
 
 fn validate_local_main_overlay_preserves_installed(
@@ -2770,17 +2760,7 @@ fn validate_local_main_overlay_preserves_installed(
 }
 
 fn local_main_candidate_id(fields: &BTreeMap<String, String>) -> String {
-    let mut hash = Sha256::new();
-    for field in RUNTIME_MANIFEST_FIELDS {
-        if *field == "qualification_candidate_id" {
-            continue;
-        }
-        hash.update(field.as_bytes());
-        hash.update(b"=");
-        hash.update(fields[*field].as_bytes());
-        hash.update(b"\n");
-    }
-    encode_hex(&hash.finalize())
+    platform_manifest_contract::qualification_candidate_id(fields)
 }
 
 fn require_local_main_hex(name: &str, value: &str, length: usize) -> Result<()> {
@@ -2801,7 +2781,7 @@ fn local_main_snapshot_script() -> String {
         "set -eu; {safety}; test ! -e {transaction}; test ! -e {main}.delivery-rollback; test ! -e {manifest}.delivery-rollback; rm -f {main}.upload {manifest}.upload; cp -p {main} {main}.delivery-rollback.tmp; mv -f {main}.delivery-rollback.tmp {main}.delivery-rollback; cp -p {manifest} {manifest}.delivery-rollback.tmp; mv -f {manifest}.delivery-rollback.tmp {manifest}.delivery-rollback; printf 'snapshot\\n' > {transaction}.tmp; mv -f {transaction}.tmp {transaction}; sync",
         main = sh(LOCAL_MAIN_REMOTE),
         manifest = sh(LOCAL_MAIN_MANIFEST_REMOTE),
-        transaction = sh(LOCAL_MAIN_TRANSACTION_REMOTE),
+        transaction = sh(&local_main_transaction_remote()),
     )
 }
 
@@ -2810,7 +2790,7 @@ fn local_main_reconcile_script() -> String {
         "set -eu; state=none; test ! -f {transaction} || state=$(cat {transaction}); if test \"$state\" = validated; then rm -f {main}.delivery-rollback {manifest}.delivery-rollback {main}.upload {manifest}.upload {transaction}; sync; printf 'local-main-reconcile=validated\\n'; elif test -f {transaction}; then test -f {main}.delivery-rollback; test -f {manifest}.delivery-rollback; cp -p {main}.delivery-rollback {main}; chmod 755 {main}; cp -p {manifest}.delivery-rollback {manifest}; sync; rm -f {transaction}; rm -f {main}.delivery-rollback {manifest}.delivery-rollback {main}.upload {manifest}.upload; sync; printf 'local-main-reconcile=%s\\n' \"$state\"; elif test -f {main}.delivery-rollback && test -f {manifest}.delivery-rollback; then cp -p {main}.delivery-rollback {main}; chmod 755 {main}; cp -p {manifest}.delivery-rollback {manifest}; sync; rm -f {main}.delivery-rollback {manifest}.delivery-rollback {main}.upload {manifest}.upload; sync; printf 'local-main-reconcile=orphan\\n'; else rm -f {main}.delivery-rollback {manifest}.delivery-rollback {main}.upload {manifest}.upload; printf 'local-main-reconcile=none\\n'; fi",
         main = sh(LOCAL_MAIN_REMOTE),
         manifest = sh(LOCAL_MAIN_MANIFEST_REMOTE),
-        transaction = sh(LOCAL_MAIN_TRANSACTION_REMOTE),
+        transaction = sh(&local_main_transaction_remote()),
     )
 }
 
@@ -2828,7 +2808,7 @@ fn local_main_swap_script(expected_main_sha256: &str, expected_manifest_sha256: 
         manifest = sh(LOCAL_MAIN_MANIFEST_REMOTE),
         main_hash = sh(expected_main_sha256),
         manifest_hash = sh(expected_manifest_sha256),
-        transaction = sh(LOCAL_MAIN_TRANSACTION_REMOTE),
+        transaction = sh(&local_main_transaction_remote()),
     )
 }
 
@@ -2837,7 +2817,7 @@ fn local_main_rollback_script() -> String {
         "set -eu; test -f {transaction}; test -f {main}.delivery-rollback; test -f {manifest}.delivery-rollback; cp -p {main}.delivery-rollback {main}; chmod 755 {main}; cp -p {manifest}.delivery-rollback {manifest}; printf 'rolled-back\\n' > {transaction}.tmp; mv -f {transaction}.tmp {transaction}; rm -f {main}.upload {manifest}.upload; sync",
         main = sh(LOCAL_MAIN_REMOTE),
         manifest = sh(LOCAL_MAIN_MANIFEST_REMOTE),
-        transaction = sh(LOCAL_MAIN_TRANSACTION_REMOTE),
+        transaction = sh(&local_main_transaction_remote()),
     )
 }
 
@@ -2846,7 +2826,7 @@ fn local_main_cleanup_script() -> String {
         "set -eu; test -f {transaction}; printf 'validated\\n' > {transaction}.tmp; mv -f {transaction}.tmp {transaction}; sync; rm -f {main}.delivery-rollback {manifest}.delivery-rollback {main}.upload {manifest}.upload; rm -f {transaction}; sync",
         main = sh(LOCAL_MAIN_REMOTE),
         manifest = sh(LOCAL_MAIN_MANIFEST_REMOTE),
-        transaction = sh(LOCAL_MAIN_TRANSACTION_REMOTE),
+        transaction = sh(&local_main_transaction_remote()),
     )
 }
 
@@ -2855,7 +2835,7 @@ fn local_main_rollback_cleanup_script() -> String {
         "set -eu; test \"$(cat {transaction})\" = rolled-back; rm -f {main}.delivery-rollback {manifest}.delivery-rollback {main}.upload {manifest}.upload; rm -f {transaction}; sync",
         main = sh(LOCAL_MAIN_REMOTE),
         manifest = sh(LOCAL_MAIN_MANIFEST_REMOTE),
-        transaction = sh(LOCAL_MAIN_TRANSACTION_REMOTE),
+        transaction = sh(&local_main_transaction_remote()),
     )
 }
 
@@ -2901,11 +2881,14 @@ fn deliver_local_main_transaction(
 }
 
 const EXPERIMENTAL_FPGA_RBF_REMOTE: &str =
-    "/media/fat/mister-magik-dev/fpga/menu-magik-vblank-latch.rbf";
+    mister_magik_platform_manifest_contract::DEVELOPMENT_PATHS.latch_rbf;
 const EXPERIMENTAL_FPGA_METADATA_REMOTE: &str =
-    "/media/fat/mister-magik-dev/fpga/menu-magik-vblank-latch.metadata.txt";
-const EXPERIMENTAL_FPGA_TRANSACTION_REMOTE: &str =
-    "/media/fat/mister-magik-dev/experimental-fpga.delivery-state";
+    mister_magik_platform_manifest_contract::DEVELOPMENT_PATHS.latch_metadata;
+
+fn experimental_fpga_transaction_remote() -> String {
+    installed_layout::app_path(Layout::Development, "experimental-fpga.delivery-state")
+        .expect("static installed path")
+}
 
 fn unique_field(text: &str, name: &str) -> Result<String> {
     let prefix = format!("{name}=");
@@ -3018,7 +3001,7 @@ fn experimental_fpga_cleanup_script() -> String {
         rbf = sh(EXPERIMENTAL_FPGA_RBF_REMOTE),
         metadata = sh(EXPERIMENTAL_FPGA_METADATA_REMOTE),
         manifest = sh(LOCAL_MAIN_MANIFEST_REMOTE),
-        transaction = sh(EXPERIMENTAL_FPGA_TRANSACTION_REMOTE),
+        transaction = sh(&experimental_fpga_transaction_remote()),
     )
 }
 
@@ -3256,7 +3239,7 @@ fn install_experimental_fpga_transaction(
     let safety = platform_safety_script();
     let snapshot = format!(
         "set -eu; {safety}; test ! -e {transaction}; test ! -e {rbf}.delivery-rollback; test ! -e {metadata}.delivery-rollback; test ! -e {manifest}.delivery-rollback; rm -f {rbf}.upload {metadata}.upload {manifest}.upload; cp -p {rbf} {rbf}.delivery-rollback; cp -p {metadata} {metadata}.delivery-rollback; cp -p {manifest} {manifest}.delivery-rollback; printf 'snapshot\\n' > {transaction}; sync",
-        transaction = sh(EXPERIMENTAL_FPGA_TRANSACTION_REMOTE),
+        transaction = sh(&experimental_fpga_transaction_remote()),
         rbf = sh(EXPERIMENTAL_FPGA_RBF_REMOTE),
         metadata = sh(EXPERIMENTAL_FPGA_METADATA_REMOTE),
         manifest = sh(LOCAL_MAIN_MANIFEST_REMOTE),
@@ -3286,7 +3269,7 @@ fn install_experimental_fpga_transaction(
             "experimental FPGA activation",
             &format!(
                 "set -eu; test \"$(sha256sum {rbf}.upload | awk '{{print $1}}')\" = {rbf_hash}; test \"$(sha256sum {metadata}.upload | awk '{{print $1}}')\" = {metadata_hash}; test \"$(sha256sum {manifest}.upload | awk '{{print $1}}')\" = {manifest_hash}; printf 'activating\\n' > {transaction}; mv -f {rbf}.upload {rbf}; mv -f {metadata}.upload {metadata}; mv -f {manifest}.upload {manifest}; sync",
-                transaction = sh(EXPERIMENTAL_FPGA_TRANSACTION_REMOTE),
+                transaction = sh(&experimental_fpga_transaction_remote()),
                 rbf = sh(EXPERIMENTAL_FPGA_RBF_REMOTE),
                 metadata = sh(EXPERIMENTAL_FPGA_METADATA_REMOTE),
                 manifest = sh(LOCAL_MAIN_MANIFEST_REMOTE),
@@ -3308,7 +3291,7 @@ fn install_experimental_fpga_transaction(
                 "experimental FPGA rollback",
                 &format!(
                     "set -eu; test -f {rbf}.delivery-rollback; test -f {metadata}.delivery-rollback; test -f {manifest}.delivery-rollback; cp -p {rbf}.delivery-rollback {rbf}; cp -p {metadata}.delivery-rollback {metadata}; cp -p {manifest}.delivery-rollback {manifest}; printf 'rolled-back\\n' > {transaction}; sync",
-                    transaction = sh(EXPERIMENTAL_FPGA_TRANSACTION_REMOTE),
+                    transaction = sh(&experimental_fpga_transaction_remote()),
                     rbf = sh(EXPERIMENTAL_FPGA_RBF_REMOTE),
                     metadata = sh(EXPERIMENTAL_FPGA_METADATA_REMOTE),
                     manifest = sh(LOCAL_MAIN_MANIFEST_REMOTE),
@@ -4261,16 +4244,41 @@ fn parse_geometry_token(text: &str, prefix: &str) -> Result<(usize, usize)> {
     Ok((width.parse()?, height.parse()?))
 }
 
+fn main_process_name(layout: Layout) -> &'static str {
+    Path::new(installed_layout::paths(layout).main)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .expect("schema-owned Main path has a file name")
+}
+
+fn active_installed_root_assignment() -> String {
+    format!(
+        "if pidof {development_main} >/dev/null 2>&1; then root={development_root}; else root={public_root}; fi",
+        development_main = main_process_name(Layout::Development),
+        development_root = sh(installed_layout::paths(Layout::Development).root),
+        public_root = sh(installed_layout::paths(Layout::Public).root),
+    )
+}
+
+fn named_installed_layout(layout: &str) -> Result<(Layout, &'static str)> {
+    let layout = match layout {
+        "dev" => Layout::Development,
+        "public" => Layout::Public,
+        _ => return Err(format!("unsupported delivery layout: {layout}").into()),
+    };
+    Ok((layout, main_process_name(layout)))
+}
+
 fn release_display_mode_command_for_runtime() -> String {
-    "set -eu; if pidof MiSTer_MagiKDev >/dev/null 2>&1; then root=/media/fat/mister-magik-dev; else root=/media/fat/mister-magik; fi; report=$(\"$root/mister-magik-fb\" latch-readiness-report --json); printf '%s\\n' \"$report\" | grep -Eq '\"state\"[[:space:]]*:[[:space:]]*\"ready\"'; plan=$(grep '^display-plan:' /tmp/mister-magik-slint.log | tail -n 1); before=$(sed -n 's/.*\"frames\":[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p' /tmp/mister-magik/status.json); idle=$(sed -n 's/.*\"idle\":[[:space:]]*\\(true\\|false\\).*/\\1/p' /tmp/mister-magik/status.json); test -n \"$before\"; test -n \"$idle\"; after=$before; attempts=0; if test \"$idle\" != true; then while test \"$after\" -le \"$before\" && test \"$attempts\" -lt 10; do sleep 1; after=$(sed -n 's/.*\"frames\":[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p' /tmp/mister-magik/status.json); test -n \"$after\"; attempts=$((attempts+1)); done; test \"$after\" -gt \"$before\"; fi; printf 'plan\\t%s\\nframes\\t%s\\t%s\\nidle\\t%s\\nreadiness\\t%s\\n' \"$plan\" \"$before\" \"$after\" \"$idle\" \"$report\"".to_string()
+    format!(
+        "set -eu; {active}; report=$(\"$root/mister-magik-fb\" latch-readiness-report --json); printf '%s\\n' \"$report\" | grep -Eq '\"state\"[[:space:]]*:[[:space:]]*\"ready\"'; plan=$(grep '^display-plan:' /tmp/mister-magik-slint.log | tail -n 1); before=$(sed -n 's/.*\"frames\":[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p' /tmp/mister-magik/status.json); idle=$(sed -n 's/.*\"idle\":[[:space:]]*\\(true\\|false\\).*/\\1/p' /tmp/mister-magik/status.json); test -n \"$before\"; test -n \"$idle\"; after=$before; attempts=0; if test \"$idle\" != true; then while test \"$after\" -le \"$before\" && test \"$attempts\" -lt 10; do sleep 1; after=$(sed -n 's/.*\"frames\":[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p' /tmp/mister-magik/status.json); test -n \"$after\"; attempts=$((attempts+1)); done; test \"$after\" -gt \"$before\"; fi; printf 'plan\\t%s\\nframes\\t%s\\t%s\\nidle\\t%s\\nreadiness\\t%s\\n' \"$plan\" \"$before\" \"$after\" \"$idle\" \"$report\"",
+        active = active_installed_root_assignment(),
+    )
 }
 
 fn delivery_health_command(layout: &str) -> Result<String> {
-    let (main, directory) = match layout {
-        "dev" => ("MiSTer_MagiKDev", "/media/fat/mister-magik-dev"),
-        "public" => ("MiSTer_MagiK", "/media/fat/mister-magik"),
-        _ => return Err(format!("unsupported delivery layout: {layout}").into()),
-    };
+    let (layout, main) = named_installed_layout(layout)?;
+    let directory = installed_layout::paths(layout).root;
     Ok(format!(
         "set -eu; health_check=initializing; trap 'rc=$?; if test \"$rc\" -ne 0; then printf \"delivery_health_failure_tsv\\tcheck=%s\\trc=%s\\n\" \"$health_check\" \"$rc\" >&2; fi' EXIT; health_check=main-process; pidof {main} >/dev/null; health_check=launcher-process; pidof mister-magik-fb >/dev/null; health_check=scanout-module; grep -q '^mister_magik_scanout_slots ' /proc/modules; health_check=scanout-device; test -c /dev/mister-magik-scanout-slots; health_check=latch-readiness; report=$({directory}/mister-magik-fb latch-readiness-report); printf '%s\\n' \"$report\" | grep -Eq 'latch_readiness_tsv[[:space:]]+valid=1[[:space:]]+state=ready'; health_check=launcher-env-clear; test ! -e {directory}/launcher.env; health_check=rebuild-clear; test ! -e {directory}/rebuild-on-next-boot; health_check=fault-launcher-env-clear; test ! -e /tmp/mister-magik/fs-fault-launcher.env; health_check=fault-session-clear; test ! -e /tmp/mister-magik/fs-fault-session; health_check=fault-json-clear; test ! -e /tmp/mister-magik/fs-fault.json; health_check=complete; trap - EXIT; printf 'delivery_health_tsv\\tvalid=1\\n'"
     ))
@@ -4313,10 +4321,7 @@ fn wait_delivery_health(session: &Session, layout: &str, timeout: Duration) -> R
 }
 
 fn validate_delivery_remote(remote: &str) -> Result<()> {
-    if matches!(
-        remote,
-        "/media/fat/mister-magik/mister-magik-fb" | "/media/fat/mister-magik-dev/mister-magik-fb"
-    ) {
+    if matches!(remote, PUBLIC_GUI_REMOTE | DEVELOPMENT_GUI_REMOTE) {
         Ok(())
     } else {
         Err(format!("unsupported delivery remote: {remote}").into())
@@ -4324,7 +4329,7 @@ fn validate_delivery_remote(remote: &str) -> Result<()> {
 }
 
 fn validate_runtime_manifest_remote(remote: &str) -> Result<()> {
-    if remote == "/media/fat/mister-magik-dev/platform-v3.manifest" {
+    if remote == LOCAL_MAIN_MANIFEST_REMOTE {
         Ok(())
     } else {
         Err(format!("unsupported runtime manifest remote: {remote}").into())
@@ -4332,14 +4337,15 @@ fn validate_runtime_manifest_remote(remote: &str) -> Result<()> {
 }
 
 fn delivery_smoke_command(layout: &str, expected_sha256: &str) -> Result<String> {
-    let (main, directory) = match layout {
-        "dev" => ("MiSTer_MagiKDev", "/media/fat/mister-magik-dev"),
-        "public" => ("MiSTer_MagiK", "/media/fat/mister-magik"),
-        _ => return Err(format!("unsupported delivery layout: {layout}").into()),
-    };
+    let (layout, main) = named_installed_layout(layout)?;
+    let directory = installed_layout::paths(layout).root;
     Ok(format!(
-        "set -eu; smoke_check=initializing; status=/tmp/mister-magik/status.json; pid_before=; pid_after=; sequence_before=; sequence_after=; heartbeat_attempts=0; trap 'rc=$?; if test \"$rc\" -ne 0; then printf \"delivery_smoke_failure_tsv\\tcheck=%s\\trc=%s\\tpid_before=%s\\tpid_after=%s\\tsequence_before=%s\\tsequence_after=%s\\tattempts=%s\\n\" \"$smoke_check\" \"$rc\" \"$pid_before\" \"$pid_after\" \"$sequence_before\" \"$sequence_after\" \"$heartbeat_attempts\" >&2; fi' EXIT; smoke_check=artifact-sha256; test \"$(sha256sum {directory}/mister-magik-fb | awk '{{print $1}}')\" = '{expected_sha256}'; smoke_check=main-process; pidof {main} >/dev/null; smoke_check=launcher-process; pidof mister-magik-fb >/dev/null; {}; smoke_check=heartbeat-initial-pid; test -n \"$pid_before\"; smoke_check=heartbeat-initial-sequence; test -n \"$sequence_before\"; smoke_check=heartbeat-advance; while test \"$heartbeat_attempts\" -lt 10; do sleep 1; heartbeat_attempts=$((heartbeat_attempts+1)); candidate_pid=$(sed -n 's/.*\"pid\":[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p' \"$status\"); candidate_sequence=$(sed -n 's/.*\"status_sequence\":[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p' \"$status\"); if test -z \"$candidate_pid\" || test -z \"$candidate_sequence\"; then continue; fi; pid_after=$candidate_pid; sequence_after=$candidate_sequence; if test \"$pid_after\" != \"$pid_before\"; then smoke_check=launcher-pid-stable; false; fi; if test \"$sequence_after\" -gt \"$sequence_before\"; then break; fi; done; smoke_check=heartbeat-final-pid; test -n \"$pid_after\"; smoke_check=heartbeat-final-sequence; test -n \"$sequence_after\"; smoke_check=heartbeat-advance; test \"$sequence_after\" -gt \"$sequence_before\"; smoke_check=launcher-scene; grep -Eq '\"scene\"[[:space:]]*:[[:space:]]*\"launcher\"' \"$status\"; smoke_check=effective-view; grep -Eq '\"effective_view\"[[:space:]]*:[[:space:]]*\"[^\"]+\"' \"$status\"; smoke_check=return-screen; grep -Eq '\"return_screen\"[[:space:]]*:[[:space:]]*\"[^\"]+\"' \"$status\"; smoke_check=rgb565; test \"$(cat /sys/class/graphics/fb0/bits_per_pixel)\" = 16; smoke_check=production-launcher-env-clear; test ! -e /media/fat/mister-magik/launcher.env; smoke_check=development-launcher-env-clear; test ! -e /media/fat/mister-magik-dev/launcher.env; smoke_check=production-rebuild-clear; test ! -e /media/fat/mister-magik/rebuild-on-next-boot; smoke_check=development-rebuild-clear; test ! -e /media/fat/mister-magik-dev/rebuild-on-next-boot; smoke_check=fault-launcher-env-clear; test ! -e /tmp/mister-magik/fs-fault-launcher.env; smoke_check=fault-session-clear; test ! -e /tmp/mister-magik/fs-fault-session; smoke_check=fault-json-clear; test ! -e /tmp/mister-magik/fs-fault.json; smoke_check=analytics-lease-clear; test ! -e /tmp/mister-magik/realtime-frame-analytics; smoke_check=screensaver-profile-clear; test ! -e /tmp/mister-magik/screensaver-profile; smoke_check=complete; trap - EXIT; printf 'delivery_smoke_tsv\\tvalid=1\\tpid=%s\\tsequence_before=%s\\tsequence_after=%s\\tattempts=%s\\n' \"$pid_after\" \"$sequence_before\" \"$sequence_after\" \"$heartbeat_attempts\"",
-        launcher_heartbeat_initial_sample_command()
+        "set -eu; smoke_check=initializing; status=/tmp/mister-magik/status.json; pid_before=; pid_after=; sequence_before=; sequence_after=; heartbeat_attempts=0; trap 'rc=$?; if test \"$rc\" -ne 0; then printf \"delivery_smoke_failure_tsv\\tcheck=%s\\trc=%s\\tpid_before=%s\\tpid_after=%s\\tsequence_before=%s\\tsequence_after=%s\\tattempts=%s\\n\" \"$smoke_check\" \"$rc\" \"$pid_before\" \"$pid_after\" \"$sequence_before\" \"$sequence_after\" \"$heartbeat_attempts\" >&2; fi' EXIT; smoke_check=artifact-sha256; test \"$(sha256sum {directory}/mister-magik-fb | awk '{{print $1}}')\" = '{expected_sha256}'; smoke_check=main-process; pidof {main} >/dev/null; smoke_check=launcher-process; pidof mister-magik-fb >/dev/null; {}; smoke_check=heartbeat-initial-pid; test -n \"$pid_before\"; smoke_check=heartbeat-initial-sequence; test -n \"$sequence_before\"; smoke_check=heartbeat-advance; while test \"$heartbeat_attempts\" -lt 10; do sleep 1; heartbeat_attempts=$((heartbeat_attempts+1)); candidate_pid=$(sed -n 's/.*\"pid\":[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p' \"$status\"); candidate_sequence=$(sed -n 's/.*\"status_sequence\":[[:space:]]*\\([0-9][0-9]*\\).*/\\1/p' \"$status\"); if test -z \"$candidate_pid\" || test -z \"$candidate_sequence\"; then continue; fi; pid_after=$candidate_pid; sequence_after=$candidate_sequence; if test \"$pid_after\" != \"$pid_before\"; then smoke_check=launcher-pid-stable; false; fi; if test \"$sequence_after\" -gt \"$sequence_before\"; then break; fi; done; smoke_check=heartbeat-final-pid; test -n \"$pid_after\"; smoke_check=heartbeat-final-sequence; test -n \"$sequence_after\"; smoke_check=heartbeat-advance; test \"$sequence_after\" -gt \"$sequence_before\"; smoke_check=launcher-scene; grep -Eq '\"scene\"[[:space:]]*:[[:space:]]*\"launcher\"' \"$status\"; smoke_check=effective-view; grep -Eq '\"effective_view\"[[:space:]]*:[[:space:]]*\"[^\"]+\"' \"$status\"; smoke_check=return-screen; grep -Eq '\"return_screen\"[[:space:]]*:[[:space:]]*\"[^\"]+\"' \"$status\"; smoke_check=rgb565; test \"$(cat /sys/class/graphics/fb0/bits_per_pixel)\" = 16; smoke_check=production-launcher-env-clear; test ! -e {public_launcher}; smoke_check=development-launcher-env-clear; test ! -e {development_launcher}; smoke_check=production-rebuild-clear; test ! -e {public_rebuild}; smoke_check=development-rebuild-clear; test ! -e {development_rebuild}; smoke_check=fault-launcher-env-clear; test ! -e /tmp/mister-magik/fs-fault-launcher.env; smoke_check=fault-session-clear; test ! -e /tmp/mister-magik/fs-fault-session; smoke_check=fault-json-clear; test ! -e /tmp/mister-magik/fs-fault.json; smoke_check=analytics-lease-clear; test ! -e /tmp/mister-magik/realtime-frame-analytics; smoke_check=screensaver-profile-clear; test ! -e /tmp/mister-magik/screensaver-profile; smoke_check=complete; trap - EXIT; printf 'delivery_smoke_tsv\\tvalid=1\\tpid=%s\\tsequence_before=%s\\tsequence_after=%s\\tattempts=%s\\n' \"$pid_after\" \"$sequence_before\" \"$sequence_after\" \"$heartbeat_attempts\"",
+        launcher_heartbeat_initial_sample_command(),
+        public_launcher = sh(&installed_layout::arming_paths()[0]),
+        development_launcher = sh(&installed_layout::arming_paths()[1]),
+        public_rebuild = sh(&installed_layout::arming_paths()[5]),
+        development_rebuild = sh(&installed_layout::arming_paths()[6]),
     ))
 }
 
@@ -4352,7 +4358,10 @@ fn launcher_heartbeat_sample_command() -> &'static str {
 }
 
 const RELEASE_TOKEN: &str = "/tmp/mister-magik/release-qualification-session";
-const RELEASE_SNAPSHOT: &str = "/media/fat/mister-magik/release-qualification-snapshot";
+static RELEASE_SNAPSHOT: LazyLock<String> = LazyLock::new(|| {
+    installed_layout::app_path(Layout::Public, "release-qualification-snapshot")
+        .expect("static installed path")
+});
 
 fn release_rearm_token_command() -> String {
     format!(
@@ -4361,13 +4370,27 @@ fn release_rearm_token_command() -> String {
 }
 
 fn release_arming_cleanup_command() -> &'static str {
-    "rm -f /media/fat/mister-magik/launcher.env /media/fat/mister-magik-dev/launcher.env /tmp/mister-magik/fs-fault-launcher.env /tmp/mister-magik/fs-fault-session /tmp/mister-magik/fs-fault.json /tmp/mister-magik/latch-v5-qualification-control.tsv /tmp/mister-magik/latch-v5-qualification-control.tsv.tmp /tmp/mister-magik/latch-v5-qualification-state.json /media/fat/mister-magik/rebuild-on-next-boot /media/fat/mister-magik-dev/rebuild-on-next-boot; rm -rf /tmp/mister-magik/latch-v5-catalog"
+    static COMMAND: LazyLock<String> = LazyLock::new(|| {
+        let paths = installed_layout::arming_paths();
+        format!(
+            "rm -f {} {} {} {} {} /tmp/mister-magik/latch-v5-qualification-control.tsv /tmp/mister-magik/latch-v5-qualification-control.tsv.tmp /tmp/mister-magik/latch-v5-qualification-state.json {} {}; rm -rf /tmp/mister-magik/latch-v5-catalog",
+            sh(&paths[0]),
+            sh(&paths[1]),
+            sh(&paths[2]),
+            sh(&paths[3]),
+            sh(&paths[4]),
+            sh(&paths[5]),
+            sh(&paths[6]),
+        )
+    });
+    COMMAND.as_str()
 }
 
 fn release_begin_command() -> String {
     let safety = platform_safety_script();
     let snapshot = format!(
-        "snap={RELEASE_SNAPSHOT}; rm -rf \"$snap\"; mkdir -p \"$snap\"; if test -e /media/fat/MiSTer.ini; then cp -a /media/fat/MiSTer.ini \"$snap/MiSTer.ini\"; fi; printf '%s\\n' attended-non-network-recovery-confirmed >{RELEASE_TOKEN}; test -s {RELEASE_TOKEN}"
+        "snap={snapshot}; rm -rf \"$snap\"; mkdir -p \"$snap\"; if test -e /media/fat/MiSTer.ini; then cp -a /media/fat/MiSTer.ini \"$snap/MiSTer.ini\"; fi; printf '%s\\n' attended-non-network-recovery-confirmed >{RELEASE_TOKEN}; test -s {RELEASE_TOKEN}",
+        snapshot = sh(RELEASE_SNAPSHOT.as_str()),
     );
     shell_sequence([
         "set -eu",
@@ -4379,7 +4402,8 @@ fn release_begin_command() -> String {
 
 fn release_catalog_command() -> String {
     format!(
-        "set -eu; test -s {RELEASE_TOKEN}; if pidof MiSTer_MagiKDev >/dev/null 2>&1; then root=/media/fat/mister-magik-dev; else root=/media/fat/mister-magik; fi; report=$(\"$root/mister-magik-fb\" catalog-v3-inspect); printf '%s\\n' \"$report\" | grep -Eq 'catalog_v3_summary_tsv[[:space:]]+valid=1'"
+        "set -eu; test -s {RELEASE_TOKEN}; {active}; report=$(\"$root/mister-magik-fb\" catalog-v3-inspect); printf '%s\\n' \"$report\" | grep -Eq 'catalog_v3_summary_tsv[[:space:]]+valid=1'",
+        active = active_installed_root_assignment(),
     )
 }
 
@@ -4445,7 +4469,8 @@ const RELEASE_DISPLAY_MODES: [ReleaseDisplayMode; 6] = [
 
 fn release_display_mode_command(mode: ReleaseDisplayMode) -> String {
     format!(
-        "set -eu; test -s {RELEASE_TOKEN}; if pidof MiSTer_MagiKDev >/dev/null 2>&1; then root=/media/fat/mister-magik-dev; else root=/media/fat/mister-magik; fi; bin=\"$root/mister-magik-fb\"; test -x \"$bin\"; report=$(\"$bin\" latch-readiness-report --json); plan=$(grep '^display-plan:' /tmp/mister-magik-slint.log | tail -n 1 || true); latch=$(\"$bin\" fpga-latch-report); bpp=$(cat /sys/class/graphics/fb0/bits_per_pixel); printf 'release_display_readiness_json\\t%s\\n' \"$report\"; printf 'release_display_plan\\t%s\\n' \"$plan\"; printf 'release_display_latch\\t%s\\n' \"$latch\"; printf 'release_display_bpp\\t%s\\n' \"$bpp\"; printf '%s\\n' \"$report\" | grep -Eq '\"state\":\"ready\"'; printf '%s\\n' \"$report\" | grep -Eq '\"scanout_abi_version\":3'; printf '%s\\n' \"$report\" | grep -Eq '\"scanout_slot_capacity_bytes\":2101248'; printf '%s\\n' \"$report\" | grep -Eq '\"latch_max_width\":1366'; printf '%s\\n' \"$report\" | grep -Eq '\"latch_max_height\":768'; printf '%s\\n' \"$report\" | grep -Eq '\"latch_max_stride_bytes\":2736'; printf '%s\\n' \"$plan\" | grep -Eq '^display-plan: .*output={output} .*fb={framebuffer} '; printf '%s\\n' \"$latch\" | grep -q 'supported=1'; printf '%s\\n' \"$latch\" | grep -q 'drop_count=0'; test \"$bpp\" = 16; printf 'display_qualification_tsv\\tlabel={label}\\tvideo_mode={video_mode}\\toutput={output}\\tfb={framebuffer}\\tstride={stride}\\n'",
+        "set -eu; test -s {RELEASE_TOKEN}; {active}; bin=\"$root/mister-magik-fb\"; test -x \"$bin\"; report=$(\"$bin\" latch-readiness-report --json); plan=$(grep '^display-plan:' /tmp/mister-magik-slint.log | tail -n 1 || true); latch=$(\"$bin\" fpga-latch-report); bpp=$(cat /sys/class/graphics/fb0/bits_per_pixel); printf 'release_display_readiness_json\\t%s\\n' \"$report\"; printf 'release_display_plan\\t%s\\n' \"$plan\"; printf 'release_display_latch\\t%s\\n' \"$latch\"; printf 'release_display_bpp\\t%s\\n' \"$bpp\"; printf '%s\\n' \"$report\" | grep -Eq '\"state\":\"ready\"'; printf '%s\\n' \"$report\" | grep -Eq '\"scanout_abi_version\":3'; printf '%s\\n' \"$report\" | grep -Eq '\"scanout_slot_capacity_bytes\":2101248'; printf '%s\\n' \"$report\" | grep -Eq '\"latch_max_width\":1366'; printf '%s\\n' \"$report\" | grep -Eq '\"latch_max_height\":768'; printf '%s\\n' \"$report\" | grep -Eq '\"latch_max_stride_bytes\":2736'; printf '%s\\n' \"$plan\" | grep -Eq '^display-plan: .*output={output} .*fb={framebuffer} '; printf '%s\\n' \"$latch\" | grep -q 'supported=1'; printf '%s\\n' \"$latch\" | grep -q 'drop_count=0'; test \"$bpp\" = 16; printf 'display_qualification_tsv\\tlabel={label}\\tvideo_mode={video_mode}\\toutput={output}\\tfb={framebuffer}\\tstride={stride}\\n'",
+        active = active_installed_root_assignment(),
         label = mode.label,
         video_mode = mode.video_mode,
         output = mode.output,
@@ -4513,8 +4538,9 @@ fn release_recovery_command() -> String {
 
 fn release_restore_command() -> String {
     let snapshot = format!(
-        "snap={RELEASE_SNAPSHOT}; {}; if test -s \"$snap/MiSTer.ini\"; then cp -a \"$snap/MiSTer.ini\" /media/fat/MiSTer.ini; fi; rm -f {RELEASE_TOKEN}; rm -rf \"$snap\"",
-        release_arming_cleanup_command()
+        "snap={snapshot}; {}; if test -s \"$snap/MiSTer.ini\"; then cp -a \"$snap/MiSTer.ini\" /media/fat/MiSTer.ini; fi; rm -f {RELEASE_TOKEN}; rm -rf \"$snap\"",
+        release_arming_cleanup_command(),
+        snapshot = sh(RELEASE_SNAPSHOT.as_str()),
     );
     let safety = platform_safety_script();
     let verify = format!("test ! -e {RELEASE_TOKEN}");
@@ -4527,16 +4553,32 @@ fn release_restore_command() -> String {
 }
 
 fn diagnostic_facts_command() -> String {
+    let agent_token = installed_layout::app_path(Layout::Development, "agent.token")
+        .expect("static installed path");
+    let arming_paths = installed_layout::arming_paths()
+        .iter()
+        .map(|path| sh(path))
+        .collect::<Vec<_>>()
+        .join(" ");
     format!(
-        "set -eu; main=false; launcher=false; agent=false; credentials=false; scanout=false; firmware=false; latch=false; unstable=false; temporary=false; launcher_heartbeat_advancing=false; {{ pidof MiSTer_MagiKDev >/dev/null 2>&1 || pidof MiSTer_MagiK >/dev/null 2>&1; }} && main=true; pidof mister-magik-fb >/dev/null 2>&1 && launcher=true; pidof mister-magik-agent >/dev/null 2>&1 && agent=true; test -s /media/fat/mister-magik-dev/agent.token && credentials=true; {{ grep -q '^mister_magik_scanout_slots ' /proc/modules 2>/dev/null && test -c /dev/mister-magik-scanout-slots; }} && scanout=true; \"$scanout\" && firmware=true; if pidof MiSTer_MagiKDev >/dev/null 2>&1; then root=/media/fat/mister-magik-dev; else root=/media/fat/mister-magik; fi; if test -x \"$root/mister-magik-fb\"; then latch_report=$(\"$root/mister-magik-fb\" latch-readiness-report 2>/dev/null || true); printf '%s\\n' \"$latch_report\" | grep -Eq 'latch_readiness_tsv[[:space:]]+valid=1[[:space:]]+state=ready' && latch=true; fi; {}; if test -n \"$pid_before\" && test \"$pid_before\" = \"$pid_after\" && test -n \"$sequence_before\" && test -n \"$sequence_after\" && test \"$sequence_after\" -gt \"$sequence_before\"; then launcher_heartbeat_advancing=true; fi; test -e /tmp/mister-magik/reboot-unstable && unstable=true; arming=0; for path in /media/fat/mister-magik/launcher.env /media/fat/mister-magik-dev/launcher.env /tmp/mister-magik/fs-fault-launcher.env /tmp/mister-magik/fs-fault-session /tmp/mister-magik/fs-fault.json /media/fat/mister-magik/rebuild-on-next-boot /media/fat/mister-magik-dev/rebuild-on-next-boot; do test ! -e \"$path\" || arming=$((arming + 1)); done; for path in /tmp/mister-magik/agent-benchmark.tsv /tmp/mister-magik/agent-benchmark-warmup.tsv /tmp/mister-magik/agent-cold-benchmark.out /tmp/mister-magik/stale-launcher-return-state.json /tmp/mister-magik/realtime-frame-analytics /tmp/mister-magik/screensaver-profile; do test ! -e \"$path\" || temporary=true; done; printf '{{\"main_running\":%s,\"launcher_running\":%s,\"agent_running\":%s,\"credentials_ready\":%s,\"firmware_compatible\":%s,\"scanout_ready\":%s,\"latch_ready\":%s,\"reboot_unstable\":%s,\"arming_files\":%s,\"temporary_state\":%s,\"launcher_heartbeat_advancing\":%s}}\\n' \"$main\" \"$launcher\" \"$agent\" \"$credentials\" \"$firmware\" \"$scanout\" \"$latch\" \"$unstable\" \"$arming\" \"$temporary\" \"$launcher_heartbeat_advancing\"",
-        launcher_heartbeat_sample_command()
+        "set -eu; main=false; launcher=false; agent=false; credentials=false; scanout=false; firmware=false; latch=false; unstable=false; temporary=false; launcher_heartbeat_advancing=false; {{ pidof MiSTer_MagiKDev >/dev/null 2>&1 || pidof MiSTer_MagiK >/dev/null 2>&1; }} && main=true; pidof mister-magik-fb >/dev/null 2>&1 && launcher=true; pidof mister-magik-agent >/dev/null 2>&1 && agent=true; test -s {agent_token} && credentials=true; {{ grep -q '^mister_magik_scanout_slots ' /proc/modules 2>/dev/null && test -c /dev/mister-magik-scanout-slots; }} && scanout=true; \"$scanout\" && firmware=true; {active}; if test -x \"$root/mister-magik-fb\"; then latch_report=$(\"$root/mister-magik-fb\" latch-readiness-report 2>/dev/null || true); printf '%s\\n' \"$latch_report\" | grep -Eq 'latch_readiness_tsv[[:space:]]+valid=1[[:space:]]+state=ready' && latch=true; fi; {}; if test -n \"$pid_before\" && test \"$pid_before\" = \"$pid_after\" && test -n \"$sequence_before\" && test -n \"$sequence_after\" && test \"$sequence_after\" -gt \"$sequence_before\"; then launcher_heartbeat_advancing=true; fi; test -e /tmp/mister-magik/reboot-unstable && unstable=true; arming=0; for path in {arming_paths}; do test ! -e \"$path\" || arming=$((arming + 1)); done; for path in /tmp/mister-magik/agent-benchmark.tsv /tmp/mister-magik/agent-benchmark-warmup.tsv /tmp/mister-magik/agent-cold-benchmark.out /tmp/mister-magik/stale-launcher-return-state.json /tmp/mister-magik/realtime-frame-analytics /tmp/mister-magik/screensaver-profile; do test ! -e \"$path\" || temporary=true; done; printf '{{\"main_running\":%s,\"launcher_running\":%s,\"agent_running\":%s,\"credentials_ready\":%s,\"firmware_compatible\":%s,\"scanout_ready\":%s,\"latch_ready\":%s,\"reboot_unstable\":%s,\"arming_files\":%s,\"temporary_state\":%s,\"launcher_heartbeat_advancing\":%s}}\\n' \"$main\" \"$launcher\" \"$agent\" \"$credentials\" \"$firmware\" \"$scanout\" \"$latch\" \"$unstable\" \"$arming\" \"$temporary\" \"$launcher_heartbeat_advancing\"",
+        launcher_heartbeat_sample_command(),
+        agent_token = sh(&agent_token),
+        active = active_installed_root_assignment(),
+        arming_paths = arming_paths,
     )
 }
 
 fn is_safe_crash_report_path(path: &str) -> bool {
     [
-        "/media/fat/mister-magik/crashes/report-",
-        "/media/fat/mister-magik-dev/crashes/report-",
+        format!(
+            "{}/crashes/report-",
+            installed_layout::paths(Layout::Public).root
+        ),
+        format!(
+            "{}/crashes/report-",
+            installed_layout::paths(Layout::Development).root
+        ),
     ]
     .iter()
     .any(|prefix| path.starts_with(prefix))
@@ -4557,8 +4599,15 @@ fn safe_repair_command() -> String {
 
 fn arming_status() -> Result<()> {
     let session = connect(10)?;
-    let command = "set -eu; found=0; for path in /media/fat/mister-magik/launcher.env /media/fat/mister-magik-dev/launcher.env /tmp/mister-magik/fs-fault-launcher.env /tmp/mister-magik/fs-fault-session /tmp/mister-magik/fs-fault.json /media/fat/mister-magik/rebuild-on-next-boot /media/fat/mister-magik-dev/rebuild-on-next-boot; do if test -e \"$path\"; then printf 'armed=%s\\n' \"$path\"; found=1; fi; done; test \"$found\" = 1 || echo arming=clear";
-    let output = exec(&session, command, false)?;
+    let paths = installed_layout::arming_paths()
+        .iter()
+        .map(|path| sh(path))
+        .collect::<Vec<_>>()
+        .join(" ");
+    let command = format!(
+        "set -eu; found=0; for path in {paths}; do if test -e \"$path\"; then printf 'armed=%s\\n' \"$path\"; found=1; fi; done; test \"$found\" = 1 || echo arming=clear"
+    );
+    let output = exec(&session, &command, false)?;
     if let Some(message) = exec_failure_message("arming status", &output) {
         return Err(message.into());
     }
@@ -4680,7 +4729,8 @@ fn scene_cli(args: &[String]) -> Result<()> {
         crt_trial_run_command(runtime_settings, None)
     } else {
         format!(
-            "set -eu; test -x /media/fat/mister-magik-dev/mister-magik-fb; /media/fat/mister-magik-dev/mister-magik-fb ui {scene} {seconds} >/tmp/mister-magik-{scene}.log 2>&1"
+            "set -eu; test -x {gui}; {gui} ui {scene} {seconds} >/tmp/mister-magik-{scene}.log 2>&1",
+            gui = sh(DEVELOPMENT_GUI_REMOTE),
         )
     };
     let run = exec_checked(&session, "operator scene", &run_command);
@@ -4735,8 +4785,9 @@ fn crt_trial_run_command(runtime_settings: &str, rectangle: Option<[u16; 4]>) ->
         }
     });
     format!(
-        "cleanup() {{ trap - EXIT HUP INT TERM; {resume}; }}; trap cleanup EXIT HUP INT TERM; set -eu; test -x /media/fat/mister-magik-dev/mister-magik-fb; {diagnostic}MISTER_MAGIK_RUNTIME_SETTINGS_V1={} /media/fat/mister-magik-dev/mister-magik-fb ui crt_trial 30 >/tmp/mister-magik-crt_trial.log 2>&1",
+        "cleanup() {{ trap - EXIT HUP INT TERM; {resume}; }}; trap cleanup EXIT HUP INT TERM; set -eu; test -x {gui}; {diagnostic}MISTER_MAGIK_RUNTIME_SETTINGS_V1={} {gui} ui crt_trial 30 >/tmp/mister-magik-crt_trial.log 2>&1",
         sh(runtime_settings),
+        gui = sh(DEVELOPMENT_GUI_REMOTE),
     )
 }
 
@@ -4838,8 +4889,6 @@ const SYSTEM_ENTRY_PPROF_FOLDED_REMOTE: &str = "/tmp/mister-magik/system-entry-p
 const SYSTEM_ENTRY_PPROF_COMPLETE_REMOTE: &str =
     "/tmp/mister-magik/system-entry-pprof-complete.json";
 const MODAL_INPUT_REMOTE_DIR: &str = "/tmp/mister-magik/modal-input-benchmark";
-const INPUT_INTEGRITY_DRIVER: &str =
-    "/media/fat/mister-magik-dev/mister-magik-fb input-integrity-driver";
 const INPUT_INTEGRITY_TRACE_REMOTE: &str = "/tmp/mister-magik/input-integrity-trace.json";
 const LAUNCHER_RESPONSE_TRACE_REMOTE: &str = "/tmp/mister-magik/launcher-response-trace.json";
 const LAUNCHER_RESPONSE_COMPLETE_REMOTE: &str = "/tmp/mister-magik/launcher-response-complete";
@@ -4924,7 +4973,7 @@ fn verify_installed_input_integrity(
         &session,
         &LauncherRestartOptions {
             clear_env: true,
-            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str().into(),
             timeout_secs: 45,
             ..LauncherRestartOptions::default()
         },
@@ -5130,7 +5179,7 @@ fn verify_installed_launcher_response(
         &session,
         &LauncherRestartOptions {
             clear_env: true,
-            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str().into(),
             timeout_secs: 45,
             ..LauncherRestartOptions::default()
         },
@@ -5155,7 +5204,7 @@ fn profile_installed_launcher_response_attribution(
     let capability = exec_checked_output(
         &session,
         "installed launcher-response attribution capability",
-        "/media/fat/mister-magik-dev/mister-magik-fb benchmark-capabilities",
+        DEVELOPMENT_BENCHMARK_CAPABILITIES_COMMAND.as_str(),
     )?;
     let capability = last_json_line(&capability.stdout)
         .ok_or("installed benchmark capability output contains no JSON report")?;
@@ -5166,7 +5215,7 @@ fn profile_installed_launcher_response_attribution(
     }
     let boot_id = remote_read(&session, "/proc/sys/kernel/random/boot_id")
         .ok_or("device boot id is unavailable before launcher-response attribution")?;
-    let manifest = remote_read(&session, "/media/fat/mister-magik-dev/platform-v3.manifest")
+    let manifest = remote_read(&session, LOCAL_MAIN_MANIFEST_REMOTE)
         .ok_or("development manifest is unavailable before launcher-response attribution")?;
     let original_reply = exec_checked_output(
         &session,
@@ -5257,7 +5306,7 @@ fn profile_installed_launcher_response_attribution(
         &session,
         &LauncherRestartOptions {
             clear_env: true,
-            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str().into(),
             timeout_secs: 45,
             ..LauncherRestartOptions::default()
         },
@@ -5291,7 +5340,7 @@ fn profile_installed_launcher_response_attribution(
     if final_boot_id != boot_id {
         return Err("device rebooted during launcher-response attribution".into());
     }
-    let final_manifest = remote_read(&session, "/media/fat/mister-magik-dev/platform-v3.manifest")
+    let final_manifest = remote_read(&session, LOCAL_MAIN_MANIFEST_REMOTE)
         .ok_or("development manifest is unavailable after launcher-response attribution")?;
     if final_manifest != manifest {
         return Err(
@@ -5606,7 +5655,7 @@ fn run_input_latency_lab_arm(
                 ),
             ],
             timeout_secs: 45,
-            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str().into(),
             ..LauncherRestartOptions::default()
         },
     )?;
@@ -5658,7 +5707,7 @@ fn run_input_latency_lab_arm(
         &remote_read(session, MAIN_STATUS_REMOTE).ok_or("Main status is missing after arm")?,
     )?;
     trace["installed_manifest"] = Value::String(
-        remote_read(session, "/media/fat/mister-magik-dev/platform-v3.manifest")
+        remote_read(session, LOCAL_MAIN_MANIFEST_REMOTE)
             .ok_or("input latency laboratory installed manifest is missing")?,
     );
     trace["input_proxy_protocol"] = main_after["input_proxy_protocol"].clone();
@@ -5745,7 +5794,10 @@ fn run_launcher_response_driver_evidence(session: &Session, arguments: &str) -> 
     let output = exec_checked_output(
         session,
         "input latency laboratory driver",
-        &format!("{INPUT_INTEGRITY_DRIVER} {arguments}"),
+        &format!(
+            "{} {arguments}",
+            development_gui_command("input-integrity-driver")
+        ),
     )?;
     output
         .stdout
@@ -6248,14 +6300,14 @@ fn cleanup_input_latency_lab(config: &NativeDeviceConfig) -> Result<()> {
             LAUNCHER_RESPONSE_TRACE_REMOTE,
             LAUNCHER_RESPONSE_COMPLETE_REMOTE,
             MAIN_INPUT_LATENCY_TRACE_REMOTE,
-            DEVELOPMENT_LAUNCHER_ENV_REMOTE,
+            DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str(),
         ]),
     )?;
     launcher_restart(
         &session,
         &LauncherRestartOptions {
             clear_env: true,
-            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str().into(),
             timeout_secs: 45,
             ..LauncherRestartOptions::default()
         },
@@ -6473,16 +6525,20 @@ struct LauncherResponseInstrumentation<'a> {
 }
 
 fn launcher_response_attribution_prepare_command() -> String {
+    let safety = platform_safety_script();
     format!(
-        "set -eu; rm -rf {root}; mkdir -p {root}; test ! -e /media/fat/mister-magik/launcher.env; test ! -e /media/fat/mister-magik-dev/launcher.env; test ! -e /tmp/mister-magik/fs-fault-launcher.env; test ! -e /tmp/mister-magik/fs-fault-session; test ! -e /tmp/mister-magik/fs-fault.json; test ! -e /media/fat/mister-magik/rebuild-on-next-boot; test ! -e /media/fat/mister-magik-dev/rebuild-on-next-boot",
+        "set -eu; rm -rf {root}; mkdir -p {root}; {safety}",
         root = sh(LAUNCHER_RESPONSE_ATTRIBUTION_REMOTE_ROOT),
+        safety = safety,
     )
 }
 
 fn launcher_response_attribution_cleanup_command() -> String {
+    let safety = platform_safety_script();
     format!(
-        "set -eu; rm -rf {root}; test ! -e {root}; test ! -e /media/fat/mister-magik/launcher.env; test ! -e /media/fat/mister-magik-dev/launcher.env; test ! -e /tmp/mister-magik/fs-fault-launcher.env; test ! -e /tmp/mister-magik/fs-fault-session; test ! -e /tmp/mister-magik/fs-fault.json; test ! -e /media/fat/mister-magik/rebuild-on-next-boot; test ! -e /media/fat/mister-magik-dev/rebuild-on-next-boot",
+        "set -eu; rm -rf {root}; test ! -e {root}; {safety}",
         root = sh(LAUNCHER_RESPONSE_ATTRIBUTION_REMOTE_ROOT),
+        safety = safety,
     )
 }
 
@@ -6707,7 +6763,7 @@ fn run_launcher_response_computers_sweep(
         LauncherRestartOptions {
             env_vars,
             timeout_secs: 45,
-            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str().into(),
             ..LauncherRestartOptions::default()
         },
     )?;
@@ -6745,7 +6801,7 @@ fn run_launcher_response_computers_sweep(
         trace["attribution_arm"] = Value::String(instrumentation.arm.label().into());
     }
     trace["installed_manifest"] = Value::String(
-        remote_read(session, "/media/fat/mister-magik-dev/platform-v3.manifest")
+        remote_read(session, LOCAL_MAIN_MANIFEST_REMOTE)
             .ok_or("launcher response installed manifest is missing")?,
     );
     trace["input_proxy_protocol"] = serde_json::from_str::<Value>(
@@ -6883,7 +6939,7 @@ fn run_launcher_response_focus_route(
         LauncherRestartOptions {
             env_vars,
             timeout_secs: 45,
-            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str().into(),
             ..LauncherRestartOptions::default()
         },
     )?;
@@ -6945,7 +7001,7 @@ fn run_launcher_response_arcade_route(session: &Session, catalog_refresh: &str) 
                 ),
             ],
             timeout_secs: 45,
-            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str().into(),
             ..LauncherRestartOptions::default()
         },
     )?;
@@ -7223,7 +7279,10 @@ fn run_launcher_response_driver(session: &Session, arguments: &str) -> Result<()
     exec_checked(
         session,
         "launcher response input",
-        &format!("{INPUT_INTEGRITY_DRIVER} {arguments}"),
+        &format!(
+            "{} {arguments}",
+            development_gui_command("input-integrity-driver")
+        ),
     )?;
     Ok(())
 }
@@ -7312,7 +7371,10 @@ fn run_input_integrity_driver(session: &Session, load: bool) -> Result<()> {
     exec_checked(
         session,
         "input integrity sequence",
-        &format!("{INPUT_INTEGRITY_DRIVER} {mode}"),
+        &format!(
+            "{} {mode}",
+            development_gui_command("input-integrity-driver")
+        ),
     )
 }
 
@@ -7339,7 +7401,7 @@ fn run_input_integrity_scenario(
         LauncherRestartOptions {
             env_vars,
             timeout_secs: 45,
-            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str().into(),
             ..LauncherRestartOptions::default()
         },
     )?;
@@ -7505,9 +7567,11 @@ fn gui_profile_route_launcher_env(pmu: bool) -> Vec<(String, String)> {
 }
 
 fn gui_profile_route_cleanup_command() -> String {
+    let safety = platform_safety_script();
     format!(
-        "set -eu; rm -f {complete}; test ! -e {complete}; test ! -e /media/fat/mister-magik/launcher.env; test ! -e /media/fat/mister-magik-dev/launcher.env; test ! -e /tmp/mister-magik/fs-fault-launcher.env; test ! -e /tmp/mister-magik/fs-fault-session; test ! -e /tmp/mister-magik/fs-fault.json; test ! -e /media/fat/mister-magik/rebuild-on-next-boot; test ! -e /media/fat/mister-magik-dev/rebuild-on-next-boot",
+        "set -eu; rm -f {complete}; test ! -e {complete}; {safety}",
         complete = sh(GUI_PROFILE_REMOTE_COMPLETE),
+        safety = safety,
     )
 }
 
@@ -7559,7 +7623,7 @@ fn run_gui_frame_profile_route(
         LauncherRestartOptions {
             env_vars: gui_profile_route_launcher_env(pmu),
             timeout_secs: 45,
-            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str().into(),
             ..LauncherRestartOptions::default()
         },
     )?;
@@ -7753,7 +7817,7 @@ fn profile_installed_arcade_velocity_scroll(
     let capability = exec_checked_output(
         &session,
         "installed Arcade velocity-scroll capability",
-        "/media/fat/mister-magik-dev/mister-magik-fb benchmark-capabilities",
+        DEVELOPMENT_BENCHMARK_CAPABILITIES_COMMAND.as_str(),
     )?;
     let capability = last_json_line(&capability.stdout)
         .ok_or("installed benchmark capability output contains no JSON report")?;
@@ -7764,7 +7828,7 @@ fn profile_installed_arcade_velocity_scroll(
     {
         return Err("installed app does not support arcade-velocity-scroll-v1".into());
     }
-    let manifest = remote_read(&session, "/media/fat/mister-magik-dev/platform-v3.manifest")
+    let manifest = remote_read(&session, LOCAL_MAIN_MANIFEST_REMOTE)
         .ok_or("development platform manifest is missing")?;
     let boot_id = remote_read(&session, "/proc/sys/kernel/random/boot_id")
         .ok_or("device boot id is unavailable")?;
@@ -7834,7 +7898,7 @@ fn profile_installed_arcade_velocity_scroll(
         &session,
         &LauncherRestartOptions {
             clear_env: true,
-            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str().into(),
             timeout_secs: 45,
             ..LauncherRestartOptions::default()
         },
@@ -7857,7 +7921,7 @@ fn profile_installed_arcade_velocity_scroll(
         }
     };
 
-    let final_manifest = remote_read(&session, "/media/fat/mister-magik-dev/platform-v3.manifest")
+    let final_manifest = remote_read(&session, LOCAL_MAIN_MANIFEST_REMOTE)
         .ok_or("development platform manifest is missing after Arcade velocity scroll")?;
     if final_manifest != manifest {
         return Err("installed platform manifest changed during Arcade velocity scroll".into());
@@ -8535,7 +8599,7 @@ fn modal_semantic<'a>(snapshot: &'a Value, field: &str) -> Option<&'a Value> {
 fn verify_installed_modal_input(config: &NativeDeviceConfig, output_dir: &Path) -> Result<String> {
     let session = connect_with(&config.connection, 10)?;
     fs::create_dir_all(output_dir)?;
-    let manifest = remote_read(&session, "/media/fat/mister-magik-dev/platform-v3.manifest")
+    let manifest = remote_read(&session, LOCAL_MAIN_MANIFEST_REMOTE)
         .ok_or("development platform manifest is missing")?;
     let boot_id = remote_read(&session, "/proc/sys/kernel/random/boot_id")
         .ok_or("device boot id is unavailable")?
@@ -8553,7 +8617,7 @@ fn verify_installed_modal_input(config: &NativeDeviceConfig, output_dir: &Path) 
             LauncherRestartOptions {
                 env_vars: modal_input_launcher_env(),
                 timeout_secs: 45,
-                remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+                remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str().into(),
                 ..LauncherRestartOptions::default()
             },
         )?;
@@ -8720,7 +8784,7 @@ fn verify_installed_modal_input(config: &NativeDeviceConfig, output_dir: &Path) 
         &session,
         &LauncherRestartOptions {
             clear_env: true,
-            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str().into(),
             timeout_secs: 45,
             ..LauncherRestartOptions::default()
         },
@@ -8739,7 +8803,7 @@ fn verify_installed_modal_input(config: &NativeDeviceConfig, output_dir: &Path) 
     if final_boot_id.trim() != boot_id {
         return Err("device rebooted during modal input verification".into());
     }
-    let final_manifest = remote_read(&session, "/media/fat/mister-magik-dev/platform-v3.manifest")
+    let final_manifest = remote_read(&session, LOCAL_MAIN_MANIFEST_REMOTE)
         .ok_or("development manifest is missing after modal input verification")?;
     if final_manifest != manifest {
         return Err("installed platform manifest changed during modal input verification".into());
@@ -8772,9 +8836,14 @@ fn require_modal_home_state(snapshot: &Value, label: &str) -> Result<()> {
 }
 
 fn modal_input_prepare_command() -> String {
+    let source = installed_layout::app_path(Layout::Development, "catalog-v3")
+        .expect("static installed path");
+    let safety = platform_safety_script();
     format!(
-        "set -eu; root={root}; source=/media/fat/mister-magik-dev/catalog-v3; rm -rf \"$root\"; mkdir -p \"$root\"; test -d \"$source\"; cp -a \"$source\" \"$root/catalog-v3\"; test -d \"$root/catalog-v3\"; test ! -e /media/fat/mister-magik/launcher.env; test ! -e /media/fat/mister-magik-dev/launcher.env; test ! -e /tmp/mister-magik/fs-fault-launcher.env; test ! -e /tmp/mister-magik/fs-fault-session; test ! -e /tmp/mister-magik/fs-fault.json; test ! -e /media/fat/mister-magik/rebuild-on-next-boot; test ! -e /media/fat/mister-magik-dev/rebuild-on-next-boot",
+        "set -eu; root={root}; source={source}; rm -rf \"$root\"; mkdir -p \"$root\"; test -d \"$source\"; cp -a \"$source\" \"$root/catalog-v3\"; test -d \"$root/catalog-v3\"; {safety}",
         root = sh(MODAL_INPUT_REMOTE_DIR),
+        source = sh(&source),
+        safety = safety,
     )
 }
 
@@ -8818,9 +8887,11 @@ fn modal_input_launcher_env() -> Vec<(String, String)> {
 }
 
 fn modal_input_cleanup_command() -> String {
+    let safety = platform_safety_script();
     format!(
-        "set -eu; rm -rf {root}; test ! -e {root}; test ! -e /media/fat/mister-magik/launcher.env; test ! -e /media/fat/mister-magik-dev/launcher.env; test ! -e /tmp/mister-magik/fs-fault-launcher.env; test ! -e /tmp/mister-magik/fs-fault-session; test ! -e /tmp/mister-magik/fs-fault.json; test ! -e /media/fat/mister-magik/rebuild-on-next-boot; test ! -e /media/fat/mister-magik-dev/rebuild-on-next-boot",
+        "set -eu; rm -rf {root}; test ! -e {root}; {safety}",
         root = sh(MODAL_INPUT_REMOTE_DIR),
+        safety = safety,
     )
 }
 
@@ -8837,11 +8908,7 @@ fn profile_installed_search(config: &NativeDeviceConfig, output_dir: &Path) -> R
     let started = Instant::now();
     let mut log = String::new();
     let output = loop {
-        let output = exec(
-            &session,
-            "/media/fat/mister-magik-dev/mister-magik-fb search-bench",
-            true,
-        )?;
+        let output = exec(&session, &development_gui_command("search-bench"), true)?;
         log.push_str(&output.stdout);
         log.push_str(&output.stderr);
         if exec_failure_message("installed search benchmark", &output).is_none() {
@@ -8876,13 +8943,13 @@ fn profile_installed_pmu(config: &NativeDeviceConfig, output_dir: &Path) -> Resu
     const WORKLOADS: [&str; 4] = ["probe", "screensaver", "search", "catalog"];
     let session = connect_with(&config.connection, 10)?;
     fs::create_dir_all(output_dir)?;
-    let manifest = remote_read(&session, "/media/fat/mister-magik-dev/platform-v3.manifest")
+    let manifest = remote_read(&session, LOCAL_MAIN_MANIFEST_REMOTE)
         .ok_or("development manifest is missing before PMU profiling")?;
     let installed_identity = pmu_installed_identity(&manifest)?;
     let capability = exec_checked_output(
         &session,
         "installed benchmark capability",
-        "/media/fat/mister-magik-dev/mister-magik-fb benchmark-capabilities",
+        DEVELOPMENT_BENCHMARK_CAPABILITIES_COMMAND.as_str(),
     )?;
     let capability = last_json_line(&capability.stdout)
         .ok_or("installed benchmark capability output contains no JSON report")?;
@@ -8900,8 +8967,9 @@ fn profile_installed_pmu(config: &NativeDeviceConfig, output_dir: &Path) -> Resu
         let mut summaries = Vec::with_capacity(WORKLOADS.len());
         for workload in WORKLOADS {
             let command = format!(
-                "MISTER_PMU_PROFILE=1 MISTER_PMU_SAMPLE_EVERY=1 MISTER_PMU_RECORD_LIMIT=4096 /media/fat/mister-magik-dev/mister-magik-fb pmu-profile {}",
-                sh(workload)
+                "MISTER_PMU_PROFILE=1 MISTER_PMU_SAMPLE_EVERY=1 MISTER_PMU_RECORD_LIMIT=4096 {gui} pmu-profile {}",
+                sh(workload),
+                gui = sh(DEVELOPMENT_GUI_REMOTE)
             );
             let output = exec(&session, &command, true)?;
             let mut log = output.stdout.clone();
@@ -8935,7 +9003,7 @@ fn profile_installed_pmu(config: &NativeDeviceConfig, output_dir: &Path) -> Resu
     );
     let suite = run_result?;
     cleanup_result?;
-    let final_manifest = remote_read(&session, "/media/fat/mister-magik-dev/platform-v3.manifest")
+    let final_manifest = remote_read(&session, LOCAL_MAIN_MANIFEST_REMOTE)
         .ok_or("development manifest is missing after PMU profiling")?;
     if final_manifest != manifest {
         return Err("installed platform manifest changed during PMU profiling".into());
@@ -9062,16 +9130,20 @@ fn validate_catalog_pmu_workload(summary: &Value) -> Result<()> {
 }
 
 fn catalog_pmu_prepare_command() -> String {
+    let safety = platform_safety_script();
     format!(
-        "set -eu; root={root}; rm -rf \"$root\"; mkdir -p \"$root\"; test ! -e /media/fat/mister-magik/launcher.env; test ! -e /media/fat/mister-magik-dev/launcher.env; test ! -e /tmp/mister-magik/fs-fault-launcher.env; test ! -e /tmp/mister-magik/fs-fault-session; test ! -e /tmp/mister-magik/fs-fault.json; test ! -e /media/fat/mister-magik/rebuild-on-next-boot; test ! -e /media/fat/mister-magik-dev/rebuild-on-next-boot",
+        "set -eu; root={root}; rm -rf \"$root\"; mkdir -p \"$root\"; {safety}",
         root = sh(CATALOG_PMU_REMOTE_DIR),
+        safety = safety,
     )
 }
 
 fn catalog_pmu_cleanup_command() -> String {
+    let safety = platform_safety_script();
     format!(
-        "set -eu; root={root}; rm -rf \"$root\"; test ! -e \"$root\"; test ! -e /media/fat/mister-magik/launcher.env; test ! -e /media/fat/mister-magik-dev/launcher.env; test ! -e /tmp/mister-magik/fs-fault-launcher.env; test ! -e /tmp/mister-magik/fs-fault-session; test ! -e /tmp/mister-magik/fs-fault.json; test ! -e /media/fat/mister-magik/rebuild-on-next-boot; test ! -e /media/fat/mister-magik-dev/rebuild-on-next-boot",
+        "set -eu; root={root}; rm -rf \"$root\"; test ! -e \"$root\"; {safety}",
         root = sh(CATALOG_PMU_REMOTE_DIR),
+        safety = safety,
     )
 }
 
@@ -9312,7 +9384,7 @@ fn profile_installed_streamline(
     let session = connect_with(&config.connection, 30)?;
     let boot_id = remote_read(&session, "/proc/sys/kernel/random/boot_id")
         .ok_or("device boot id is unavailable before Streamline capture")?;
-    let manifest = remote_read(&session, "/media/fat/mister-magik-dev/platform-v3.manifest")
+    let manifest = remote_read(&session, LOCAL_MAIN_MANIFEST_REMOTE)
         .ok_or("development manifest is unavailable before Streamline capture")?;
 
     exec_checked(
@@ -9382,7 +9454,7 @@ fn profile_installed_streamline(
     if final_boot_id != boot_id {
         return Err("device rebooted during Streamline capture".into());
     }
-    let final_manifest = remote_read(&session, "/media/fat/mister-magik-dev/platform-v3.manifest")
+    let final_manifest = remote_read(&session, LOCAL_MAIN_MANIFEST_REMOTE)
         .ok_or("development manifest is unavailable after Streamline capture")?;
     if final_manifest != manifest {
         return Err("installed platform manifest changed during Streamline capture".into());
@@ -9423,7 +9495,7 @@ fn profile_installed_launcher_response_streamline(
     let gatord_sha256 = file_sha256(gatord.clone())?;
     fs::create_dir_all(output_dir)?;
     let session = connect_with(&config.connection, 30)?;
-    let manifest = remote_read(&session, "/media/fat/mister-magik-dev/platform-v3.manifest")
+    let manifest = remote_read(&session, LOCAL_MAIN_MANIFEST_REMOTE)
         .ok_or("development manifest is unavailable before launcher-response Streamline capture")?;
     let installed_identity = streamline_installed_identity(&session, config.agent()?, &manifest)?;
     let original_reply = exec_checked_output(
@@ -9484,7 +9556,7 @@ fn profile_installed_launcher_response_streamline(
         &session,
         &LauncherRestartOptions {
             clear_env: true,
-            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str().into(),
             timeout_secs: 45,
             ..LauncherRestartOptions::default()
         },
@@ -9519,7 +9591,7 @@ fn profile_installed_launcher_response_streamline(
         }
     };
 
-    let final_manifest = remote_read(&session, "/media/fat/mister-magik-dev/platform-v3.manifest")
+    let final_manifest = remote_read(&session, LOCAL_MAIN_MANIFEST_REMOTE)
         .ok_or("development manifest is unavailable after launcher-response Streamline capture")?;
     if final_manifest != manifest {
         return Err(
@@ -9597,7 +9669,7 @@ fn profile_installed_gui_frame_attribution(
     let gatord_sha256 = file_sha256(gatord.clone())?;
     fs::create_dir_all(output_dir)?;
     let session = connect_with(&config.connection, 30)?;
-    let manifest = remote_read(&session, "/media/fat/mister-magik-dev/platform-v3.manifest")
+    let manifest = remote_read(&session, LOCAL_MAIN_MANIFEST_REMOTE)
         .ok_or("development manifest is unavailable before GUI frame attribution")?;
     let installed_identity = streamline_installed_identity(&session, config.agent()?, &manifest)?;
     let original_reply = exec_checked_output(
@@ -9640,7 +9712,7 @@ fn profile_installed_gui_frame_attribution(
         &session,
         &LauncherRestartOptions {
             clear_env: true,
-            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str().into(),
             timeout_secs: 45,
             ..LauncherRestartOptions::default()
         },
@@ -9674,7 +9746,7 @@ fn profile_installed_gui_frame_attribution(
         }
     };
 
-    let final_manifest = remote_read(&session, "/media/fat/mister-magik-dev/platform-v3.manifest")
+    let final_manifest = remote_read(&session, LOCAL_MAIN_MANIFEST_REMOTE)
         .ok_or("development manifest is unavailable after GUI frame attribution")?;
     if final_manifest != manifest {
         return Err("installed platform manifest changed during GUI frame attribution".into());
@@ -9746,7 +9818,7 @@ fn run_gui_frame_profile_arm(
         session,
         &LauncherRestartOptions {
             clear_env: true,
-            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str().into(),
             timeout_secs: 45,
             ..LauncherRestartOptions::default()
         },
@@ -9816,7 +9888,7 @@ fn run_gui_frame_streamline_arm(
         session,
         &LauncherRestartOptions {
             clear_env: true,
-            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str().into(),
             timeout_secs: 45,
             ..LauncherRestartOptions::default()
         },
@@ -9948,10 +10020,10 @@ fn profile_installed_transition_streamline(
     fs::create_dir_all(&fade_dir)?;
     fs::create_dir_all(&zoom_dir)?;
     let session = connect_with(&config.connection, 10)?;
-    let manifest = remote_read(&session, "/media/fat/mister-magik-dev/platform-v3.manifest")
+    let manifest = remote_read(&session, LOCAL_MAIN_MANIFEST_REMOTE)
         .ok_or("development manifest is unavailable before transition Streamline capture")?;
     let installed_identity = streamline_installed_identity(&session, config.agent()?, &manifest)?;
-    let original_settings = remote_read(&session, ORIENTATION_TRANSITION_SETTINGS_REMOTE);
+    let original_settings = remote_read(&session, ORIENTATION_TRANSITION_SETTINGS_REMOTE.as_str());
     let original_status = read_launcher_status(&session)?;
     let capture = SystemWideStreamlineCapture::new(
         &session,
@@ -10014,7 +10086,7 @@ fn profile_installed_transition_streamline(
         &session,
         &LauncherRestartOptions {
             clear_env: true,
-            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str().into(),
             timeout_secs: 45,
             ..LauncherRestartOptions::default()
         },
@@ -10037,7 +10109,7 @@ fn profile_installed_transition_streamline(
                 .into());
         }
     };
-    let final_manifest = remote_read(&session, "/media/fat/mister-magik-dev/platform-v3.manifest")
+    let final_manifest = remote_read(&session, LOCAL_MAIN_MANIFEST_REMOTE)
         .ok_or("development manifest is unavailable after transition Streamline capture")?;
     if final_manifest != manifest
         || streamline_installed_identity(&session, config.agent()?, &final_manifest)?
@@ -10045,7 +10117,7 @@ fn profile_installed_transition_streamline(
     {
         return Err("installed identity changed during transition Streamline capture".into());
     }
-    if remote_read(&session, ORIENTATION_TRANSITION_SETTINGS_REMOTE) != original_settings {
+    if remote_read(&session, ORIENTATION_TRANSITION_SETTINGS_REMOTE.as_str()) != original_settings {
         return Err("transition Streamline capture changed settings.json".into());
     }
     let final_status = read_launcher_status(&session)?;
@@ -10236,7 +10308,7 @@ fn run_agent_observer_home_pan(
         LauncherRestartOptions {
             env_vars: agent_observer_launcher_env(arm),
             timeout_secs: 45,
-            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str().into(),
             ..LauncherRestartOptions::default()
         },
     )?;
@@ -10346,7 +10418,7 @@ fn run_agent_observer_home_pan(
         session,
         &LauncherRestartOptions {
             clear_env: true,
-            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str().into(),
             timeout_secs: 45,
             ..LauncherRestartOptions::default()
         },
@@ -10601,9 +10673,9 @@ fn compact_agent_io_result(
 }
 
 fn retired_library_snapshot_attempt(error: &str, repetition: u8) -> Option<Value> {
-    (error.contains("/media/fat/mister-magik-dev/library.sqlite3")
-        && error.contains("No such file or directory"))
-    .then(|| {
+    let retired = installed_layout::app_path(Layout::Development, "library.sqlite3")
+        .expect("static installed path");
+    (error.contains(&retired) && error.contains("No such file or directory")).then(|| {
         json!({
             "label": "library-snapshot",
             "repetition": repetition,
@@ -10669,7 +10741,7 @@ fn run_agent_io_operation_sequence(
                 ("MISTER_LAUNCHER_START_SCREEN".into(), "home".into()),
             ],
             timeout_secs: 45,
-            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str().into(),
             ..LauncherRestartOptions::default()
         },
     )?;
@@ -10778,7 +10850,7 @@ fn run_agent_io_operation_sequence(
         session,
         &LauncherRestartOptions {
             clear_env: true,
-            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str().into(),
             timeout_secs: 45,
             ..LauncherRestartOptions::default()
         },
@@ -10818,11 +10890,7 @@ fn profile_installed_agent_io_attribution(
     let symbols_dir = output_dir.join("symbols");
     fs::create_dir_all(&symbols_dir)?;
     let agent_symbols = symbols_dir.join("mister-magik-agent");
-    get(
-        &session,
-        "/media/fat/mister-magik-dev/mister-magik-agent",
-        &agent_symbols,
-    )?;
+    get(&session, DEVELOPMENT_AGENT_REMOTE.as_str(), &agent_symbols)?;
     if file_sha256(agent_symbols.clone())? != installed_identity.agent_sha256 {
         return Err("retained agent symbol image does not match installed identity".into());
     }
@@ -10938,11 +11006,8 @@ fn streamline_installed_identity(
         return Err("device boot id is empty for Streamline capture identity".into());
     }
     let gui_sha256 = exact_manifest_field(platform_manifest, "gui_sha256", 64)?;
-    let installed_gui_sha256 = streamline_remote_sha256(
-        session,
-        "installed GUI",
-        "/media/fat/mister-magik-dev/mister-magik-fb",
-    )?;
+    let installed_gui_sha256 =
+        streamline_remote_sha256(session, "installed GUI", DEVELOPMENT_GUI_REMOTE)?;
     if installed_gui_sha256 != gui_sha256 {
         return Err("installed GUI hash does not match the development manifest".into());
     }
@@ -10960,12 +11025,12 @@ fn streamline_installed_identity(
         agent_sha256: streamline_remote_sha256(
             session,
             "installed device agent",
-            "/media/fat/mister-magik-dev/mister-magik-agent",
+            DEVELOPMENT_AGENT_REMOTE.as_str(),
         )?,
         agent_bytes: streamline_remote_size(
             session,
             "installed device agent",
-            "/media/fat/mister-magik-dev/mister-magik-agent",
+            DEVELOPMENT_AGENT_REMOTE.as_str(),
         )?,
         agent_version,
     })
@@ -11074,19 +11139,19 @@ fn parse_gatord_version(output: &ExecOutput) -> Result<String> {
 }
 
 fn streamline_prepare_command() -> String {
+    let safety = platform_safety_script();
     format!(
-        "set -eu; {process_cleanup}; {tracefs_cleanup}; rm -rf {root}; mkdir -p {root}; test ! -e /media/fat/mister-magik/launcher.env; test ! -e /media/fat/mister-magik-dev/launcher.env; test ! -e /tmp/mister-magik/fs-fault-launcher.env; test ! -e /tmp/mister-magik/fs-fault-session; test ! -e /tmp/mister-magik/fs-fault.json; test ! -e /media/fat/mister-magik/rebuild-on-next-boot; test ! -e /media/fat/mister-magik-dev/rebuild-on-next-boot",
+        "set -eu; {process_cleanup}; {tracefs_cleanup}; rm -rf {root}; mkdir -p {root}; {safety}",
         root = sh(STREAMLINE_REMOTE_ROOT),
         process_cleanup = streamline_owned_process_cleanup_fragment(),
         tracefs_cleanup = streamline_owned_tracefs_cleanup_fragment(),
+        safety = safety,
     )
 }
 
 fn streamline_capture_command(workload: StreamlineWorkload) -> String {
     let app = match workload {
-        StreamlineWorkload::Screensaver => {
-            "/media/fat/mister-magik-dev/mister-magik-fb pmu-profile screensaver".to_string()
-        }
+        StreamlineWorkload::Screensaver => development_gui_command("pmu-profile screensaver"),
     };
     let invocation = format!(
         "{gatord} --output {apc} --max-duration 10 --sample-rate low --system-wide no --exclude-kernel no --call-stack-unwinding no --stop-on-exit yes --capture-log --app {app}",
@@ -11156,11 +11221,13 @@ fn streamline_package_command() -> String {
 }
 
 fn streamline_cleanup_command() -> String {
+    let safety = platform_safety_script();
     format!(
-        "set -eu; {process_cleanup}; {tracefs_cleanup}; rm -rf {root}; test ! -e {root}; test ! -e /media/fat/mister-magik/launcher.env; test ! -e /media/fat/mister-magik-dev/launcher.env; test ! -e /tmp/mister-magik/fs-fault-launcher.env; test ! -e /tmp/mister-magik/fs-fault-session; test ! -e /tmp/mister-magik/fs-fault.json; test ! -e /media/fat/mister-magik/rebuild-on-next-boot; test ! -e /media/fat/mister-magik-dev/rebuild-on-next-boot",
+        "set -eu; {process_cleanup}; {tracefs_cleanup}; rm -rf {root}; test ! -e {root}; {safety}",
         process_cleanup = streamline_owned_process_cleanup_fragment(),
         tracefs_cleanup = streamline_owned_tracefs_cleanup_fragment(),
         root = sh(STREAMLINE_REMOTE_ROOT),
+        safety = safety,
     )
 }
 
@@ -11245,7 +11312,7 @@ fn verify_installed_search_ui(config: &NativeDeviceConfig, output_dir: &Path) ->
                     ),
                 ],
                 timeout_secs: 45,
-                remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+                remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str().into(),
                 ..LauncherRestartOptions::default()
             },
         )?;
@@ -11283,7 +11350,7 @@ fn verify_installed_search_ui(config: &NativeDeviceConfig, output_dir: &Path) ->
         &session,
         &LauncherRestartOptions {
             clear_env: true,
-            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str().into(),
             timeout_secs: 45,
             ..LauncherRestartOptions::default()
         },
@@ -11378,7 +11445,7 @@ fn profile_installed_system_entry(
     let capability = exec_checked_output(
         &session,
         "installed system-entry benchmark capability",
-        "/media/fat/mister-magik-dev/mister-magik-fb benchmark-capabilities",
+        DEVELOPMENT_BENCHMARK_CAPABILITIES_COMMAND.as_str(),
     )?;
     let capability = last_json_line(&capability.stdout)
         .ok_or("installed benchmark capability output contains no JSON report")?;
@@ -11388,7 +11455,7 @@ fn profile_installed_system_entry(
     let registry = exec_checked_output(
         &session,
         "system-entry registry report",
-        "/media/fat/mister-magik-dev/mister-magik-fb catalog-v3-registry-report",
+        DEVELOPMENT_CATALOG_REGISTRY_REPORT_COMMAND.as_str(),
     )?;
     let registry = parse_system_entry_registry(&registry.stdout)?;
     let registry_systems = registry["systems"]
@@ -11484,7 +11551,7 @@ fn profile_installed_system_entry(
             &session,
             &LauncherRestartOptions {
                 clear_env: true,
-                remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+                remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str().into(),
                 timeout_secs: 45,
                 ..LauncherRestartOptions::default()
             },
@@ -11631,7 +11698,7 @@ fn profile_installed_system_entry_critical(
     let capability = exec_checked_output(
         &session,
         "installed system-entry benchmark capability",
-        "/media/fat/mister-magik-dev/mister-magik-fb benchmark-capabilities",
+        DEVELOPMENT_BENCHMARK_CAPABILITIES_COMMAND.as_str(),
     )?;
     let capability = last_json_line(&capability.stdout)
         .ok_or("installed benchmark capability output contains no JSON report")?;
@@ -11641,7 +11708,7 @@ fn profile_installed_system_entry_critical(
     let registry = exec_checked_output(
         &session,
         "system-entry registry report",
-        "/media/fat/mister-magik-dev/mister-magik-fb catalog-v3-registry-report",
+        DEVELOPMENT_CATALOG_REGISTRY_REPORT_COMMAND.as_str(),
     )?;
     let registry = parse_system_entry_registry(&registry.stdout)?;
     let games_by_system = registry["systems"]
@@ -11686,7 +11753,7 @@ fn profile_installed_system_entry_critical(
             &session,
             &LauncherRestartOptions {
                 clear_env: true,
-                remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+                remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str().into(),
                 timeout_secs: 45,
                 ..LauncherRestartOptions::default()
             },
@@ -11773,7 +11840,7 @@ fn profile_installed_system_entry_repeated(
     let capability = exec_checked_output(
         &session,
         "installed system-entry benchmark capability",
-        "/media/fat/mister-magik-dev/mister-magik-fb benchmark-capabilities",
+        DEVELOPMENT_BENCHMARK_CAPABILITIES_COMMAND.as_str(),
     )?;
     let capability = last_json_line(&capability.stdout)
         .ok_or("installed benchmark capability output contains no JSON report")?;
@@ -11783,7 +11850,7 @@ fn profile_installed_system_entry_repeated(
     let registry = exec_checked_output(
         &session,
         "system-entry registry report",
-        "/media/fat/mister-magik-dev/mister-magik-fb catalog-v3-registry-report",
+        DEVELOPMENT_CATALOG_REGISTRY_REPORT_COMMAND.as_str(),
     )?;
     let registry = parse_system_entry_registry(&registry.stdout)?;
     let populated = registry["systems"]
@@ -11833,7 +11900,7 @@ fn profile_installed_system_entry_repeated(
             &session,
             &LauncherRestartOptions {
                 clear_env: true,
-                remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+                remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str().into(),
                 timeout_secs: 45,
                 ..LauncherRestartOptions::default()
             },
@@ -11897,7 +11964,7 @@ fn profile_installed_system_entry_critical_profile(
     let capability = exec_checked_output(
         &session,
         "installed system-entry profile capability",
-        "/media/fat/mister-magik-dev/mister-magik-fb benchmark-capabilities",
+        DEVELOPMENT_BENCHMARK_CAPABILITIES_COMMAND.as_str(),
     )?;
     let capability = last_json_line(&capability.stdout)
         .ok_or("installed benchmark capability output contains no JSON report")?;
@@ -11911,7 +11978,7 @@ fn profile_installed_system_entry_critical_profile(
     let registry = exec_checked_output(
         &session,
         "system-entry registry report",
-        "/media/fat/mister-magik-dev/mister-magik-fb catalog-v3-registry-report",
+        DEVELOPMENT_CATALOG_REGISTRY_REPORT_COMMAND.as_str(),
     )?;
     let registry = parse_system_entry_registry(&registry.stdout)?;
     let games_by_system = registry["systems"]
@@ -11960,7 +12027,7 @@ fn profile_installed_system_entry_critical_profile(
             &session,
             &LauncherRestartOptions {
                 clear_env: true,
-                remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+                remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str().into(),
                 timeout_secs: 45,
                 ..LauncherRestartOptions::default()
             },
@@ -12016,15 +12083,15 @@ fn profile_installed_system_entry_critical_streamline(
     let gatord_sha256 = file_sha256(gatord.clone())?;
     fs::create_dir_all(output_dir)?;
     let session = connect_with(&config.connection, 10)?;
-    let manifest = remote_read(&session, "/media/fat/mister-magik-dev/platform-v3.manifest")
+    let manifest = remote_read(&session, LOCAL_MAIN_MANIFEST_REMOTE)
         .ok_or("development manifest is unavailable before system-entry Streamline capture")?;
     let installed_identity = streamline_installed_identity(&session, config.agent()?, &manifest)?;
-    let original_settings = remote_read(&session, ORIENTATION_TRANSITION_SETTINGS_REMOTE);
+    let original_settings = remote_read(&session, ORIENTATION_TRANSITION_SETTINGS_REMOTE.as_str());
     let original_status = read_launcher_status(&session)?;
     let capability = exec_checked_output(
         &session,
         "installed system-entry Streamline capability",
-        "/media/fat/mister-magik-dev/mister-magik-fb benchmark-capabilities",
+        DEVELOPMENT_BENCHMARK_CAPABILITIES_COMMAND.as_str(),
     )?;
     let capability = last_json_line(&capability.stdout)
         .ok_or("installed benchmark capability output contains no JSON report")?;
@@ -12038,7 +12105,7 @@ fn profile_installed_system_entry_critical_streamline(
     let registry = exec_checked_output(
         &session,
         "system-entry Streamline registry report",
-        "/media/fat/mister-magik-dev/mister-magik-fb catalog-v3-registry-report",
+        DEVELOPMENT_CATALOG_REGISTRY_REPORT_COMMAND.as_str(),
     )?;
     let registry = parse_system_entry_registry(&registry.stdout)?;
     let games_by_system = registry["systems"]
@@ -12114,7 +12181,7 @@ fn profile_installed_system_entry_critical_streamline(
         &session,
         &LauncherRestartOptions {
             clear_env: true,
-            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str().into(),
             timeout_secs: 45,
             ..LauncherRestartOptions::default()
         },
@@ -12139,7 +12206,7 @@ fn profile_installed_system_entry_critical_streamline(
             .into());
         }
     };
-    let final_manifest = remote_read(&session, "/media/fat/mister-magik-dev/platform-v3.manifest")
+    let final_manifest = remote_read(&session, LOCAL_MAIN_MANIFEST_REMOTE)
         .ok_or("development manifest is unavailable after system-entry Streamline capture")?;
     if final_manifest != manifest
         || streamline_installed_identity(&session, config.agent()?, &final_manifest)?
@@ -12147,7 +12214,7 @@ fn profile_installed_system_entry_critical_streamline(
     {
         return Err("installed identity changed during system-entry Streamline capture".into());
     }
-    if remote_read(&session, ORIENTATION_TRANSITION_SETTINGS_REMOTE) != original_settings {
+    if remote_read(&session, ORIENTATION_TRANSITION_SETTINGS_REMOTE.as_str()) != original_settings {
         return Err("system-entry Streamline capture changed settings.json".into());
     }
     let final_status = read_launcher_status(&session)?;
@@ -12374,7 +12441,7 @@ fn run_system_entry_sample(
             LauncherRestartOptions {
                 env_vars,
                 timeout_secs: 45,
-                remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+                remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str().into(),
                 ..LauncherRestartOptions::default()
             },
         )?;
@@ -12859,7 +12926,7 @@ fn profile_installed_catalog_lifecycle(
     output_dir: &Path,
 ) -> Result<String> {
     let session = connect_with(&config.connection, 10)?;
-    let manifest = remote_read(&session, "/media/fat/mister-magik-dev/platform-v3.manifest")
+    let manifest = remote_read(&session, LOCAL_MAIN_MANIFEST_REMOTE)
         .ok_or("development platform manifest is missing")?;
     let boot_id = remote_read(&session, "/proc/sys/kernel/random/boot_id")
         .ok_or("device boot id is unavailable")?
@@ -12890,7 +12957,7 @@ fn profile_installed_catalog_lifecycle(
             LauncherRestartOptions {
                 env_vars: catalog_lifecycle_launcher_env(),
                 timeout_secs: CATALOG_LIFECYCLE_FIRST_VISIBLE_TIMEOUT_SECS,
-                remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+                remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str().into(),
                 ..LauncherRestartOptions::default()
             },
         )?;
@@ -13040,7 +13107,7 @@ fn profile_installed_catalog_lifecycle(
         &session,
         &LauncherRestartOptions {
             clear_env: true,
-            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str().into(),
             timeout_secs: CATALOG_LIFECYCLE_FIRST_VISIBLE_TIMEOUT_SECS,
             ..LauncherRestartOptions::default()
         },
@@ -13073,7 +13140,7 @@ fn profile_installed_catalog_lifecycle(
     if final_boot_id.trim() != boot_id {
         return Err("device rebooted during the catalog lifecycle benchmark".into());
     }
-    let final_manifest = remote_read(&session, "/media/fat/mister-magik-dev/platform-v3.manifest")
+    let final_manifest = remote_read(&session, LOCAL_MAIN_MANIFEST_REMOTE)
         .ok_or("development platform manifest is missing after catalog lifecycle benchmark")?;
     if final_manifest != manifest {
         return Err(
@@ -13105,17 +13172,12 @@ const COLD_BOOT_PROFILE_REMOTE_DIR: &str = "/tmp/mister-magik/cold-boot-profile"
 
 fn cold_boot_profile_preflight_command() -> String {
     let verify = installed_platform_verify_command(Layout::Development);
+    let safety = platform_safety_script();
     shell_sequence([
         "set -eu",
         verify.as_str(),
         "test ! -e /tmp/mister-magik/reboot-unstable",
-        "test ! -e /media/fat/mister-magik/launcher.env",
-        "test ! -e /media/fat/mister-magik-dev/launcher.env",
-        "test ! -e /tmp/mister-magik/fs-fault-launcher.env",
-        "test ! -e /tmp/mister-magik/fs-fault-session",
-        "test ! -e /tmp/mister-magik/fs-fault.json",
-        "test ! -e /media/fat/mister-magik/rebuild-on-next-boot",
-        "test ! -e /media/fat/mister-magik-dev/rebuild-on-next-boot",
+        safety.as_str(),
         "sync",
     ])
 }
@@ -13217,13 +13279,15 @@ fn profile_installed_cold_boot(
 
 fn cleanup_cold_boot_pprof(config: &NativeDeviceConfig) -> Result<()> {
     let session = connect_with(&config.connection, 10)?;
+    let safety = platform_safety_script();
     exec_checked(
         &session,
         "cold-boot pprof cleanup",
         &format!(
-            "set -eu; rm -f {env}; rm -rf {profile}; test ! -e {env}; test ! -e /media/fat/mister-magik/launcher.env; test ! -e /tmp/mister-magik/fs-fault-launcher.env; test ! -e /tmp/mister-magik/fs-fault-session; test ! -e /tmp/mister-magik/fs-fault.json; test ! -e /media/fat/mister-magik/rebuild-on-next-boot; test ! -e /media/fat/mister-magik-dev/rebuild-on-next-boot",
-            env = sh(DEVELOPMENT_LAUNCHER_ENV_REMOTE),
+            "set -eu; rm -f {env}; rm -rf {profile}; test ! -e {env}; {safety}",
+            env = sh(DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str()),
             profile = sh(COLD_BOOT_PROFILE_REMOTE_DIR),
+            safety = safety,
         ),
     )?;
     Ok(())
@@ -13251,7 +13315,7 @@ fn profile_installed_cold_boot_run(
         let capability = exec_checked_output(
             &session,
             "installed cold-boot pprof capability",
-            "/media/fat/mister-magik-dev/mister-magik-fb benchmark-capabilities",
+            DEVELOPMENT_BENCHMARK_CAPABILITIES_COMMAND.as_str(),
         )?;
         let capability = last_json_line(&capability.stdout)
             .ok_or("installed benchmark capability output contains no JSON report")?;
@@ -13272,10 +13336,10 @@ fn profile_installed_cold_boot_run(
         )?;
         put_bytes(
             &session,
-            DEVELOPMENT_LAUNCHER_ENV_REMOTE,
+            DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str(),
             one_shot_launcher_env_text(
                 &cold_boot_pprof_launcher_env(),
-                DEVELOPMENT_LAUNCHER_ENV_REMOTE,
+                DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str(),
             )
             .as_bytes(),
         )?;
@@ -13834,7 +13898,7 @@ fn profile_installed_launch_return_once(
         LauncherRestartOptions {
             env_vars: launch_return_once_initial_env(),
             timeout_secs: 45,
-            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str().into(),
             ..LauncherRestartOptions::default()
         },
     )?;
@@ -14062,7 +14126,7 @@ fn profile_installed_launch_return_arm(
             &session,
             "launch-return benchmark preflight cleanup",
             &remove_files_command(&[
-                DEVELOPMENT_LAUNCHER_ENV_REMOTE,
+                DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str(),
                 LAUNCH_RETURN_GATE_REMOTE,
                 LAUNCH_RETURN_STATE_REMOTE,
             ]),
@@ -14078,7 +14142,7 @@ fn profile_installed_launch_return_arm(
             LauncherRestartOptions {
                 env_vars: launch_return_initial_env(arm),
                 timeout_secs: 45,
-                remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+                remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str().into(),
                 ..LauncherRestartOptions::default()
             },
         )?;
@@ -14160,8 +14224,9 @@ fn profile_installed_launch_return_arm(
             )?;
             put_bytes(
                 &session,
-                DEVELOPMENT_LAUNCHER_ENV_REMOTE,
-                one_shot_launcher_env_text(&return_env, DEVELOPMENT_LAUNCHER_ENV_REMOTE).as_bytes(),
+                DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str(),
+                one_shot_launcher_env_text(&return_env, DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str())
+                    .as_bytes(),
             )?;
             fs::write(
                 output_dir.join(format!("cycle-{cycle_number}-pre-launch-state.json")),
@@ -15028,7 +15093,7 @@ fn restore_installed_launch_return(endpoint: &AgentEndpoint, session: &Session) 
         session,
         "launch-return benchmark cleanup",
         &remove_files_command(&[
-            DEVELOPMENT_LAUNCHER_ENV_REMOTE,
+            DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str(),
             LAUNCH_RETURN_GATE_REMOTE,
             LAUNCH_RETURN_STATE_REMOTE,
         ]),
@@ -15047,7 +15112,7 @@ fn restore_installed_launch_return(endpoint: &AgentEndpoint, session: &Session) 
             session,
             &LauncherRestartOptions {
                 clear_env: true,
-                remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+                remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str().into(),
                 timeout_secs: 45,
                 ..LauncherRestartOptions::default()
             },
@@ -15063,22 +15128,25 @@ fn launch_return_cleanup_needs_active_restart(main_status: &Value) -> bool {
 }
 
 fn catalog_lifecycle_prepare_command() -> String {
+    let safety = platform_safety_script();
     format!(
-        "set -eu; root={root}; rm -rf \"$root\"; mkdir -p \"$root\"; test ! -e /media/fat/mister-magik/launcher.env; test ! -e /media/fat/mister-magik-dev/launcher.env; test ! -e /tmp/mister-magik/fs-fault-launcher.env; test ! -e /tmp/mister-magik/fs-fault-session; test ! -e /tmp/mister-magik/fs-fault.json; test ! -e /media/fat/mister-magik/rebuild-on-next-boot; test ! -e /media/fat/mister-magik-dev/rebuild-on-next-boot",
+        "set -eu; root={root}; rm -rf \"$root\"; mkdir -p \"$root\"; {safety}",
         root = sh(CATALOG_LIFECYCLE_REMOTE_DIR),
+        safety = safety,
     )
 }
 
 fn catalog_lifecycle_runtime_command(subcommand: &str) -> String {
     let root = CATALOG_LIFECYCLE_REMOTE_DIR;
     format!(
-        "env MISTER_SHARDED_CATALOG_DIR={catalog} MISTER_LIBRARY_SQLITE={library} MISTER_ARCADE_BOOTSTRAP_INDEX={bootstrap} MISTER_LIBRARY_REFRESH_LOCK={refresh_lock} MISTER_CATALOG_BUILDER_LOCK={builder_lock} MISTER_CATALOG_READY_SNAPSHOT={ready_snapshot} MISTER_MAGIK_FOREGROUND_LIBRARY_REFRESH=1 /media/fat/mister-magik-dev/mister-magik-fb {subcommand}",
+        "env MISTER_SHARDED_CATALOG_DIR={catalog} MISTER_LIBRARY_SQLITE={library} MISTER_ARCADE_BOOTSTRAP_INDEX={bootstrap} MISTER_LIBRARY_REFRESH_LOCK={refresh_lock} MISTER_CATALOG_BUILDER_LOCK={builder_lock} MISTER_CATALOG_READY_SNAPSHOT={ready_snapshot} MISTER_MAGIK_FOREGROUND_LIBRARY_REFRESH=1 {gui} {subcommand}",
         catalog = sh(&format!("{root}/catalog-v3")),
         library = sh(&format!("{root}/library.sqlite3")),
         bootstrap = sh(&format!("{root}/arcade-bootstrap.nav.lz4b")),
         refresh_lock = sh(&format!("{root}/library-refresh.lock")),
         builder_lock = sh(&format!("{root}/catalog-builder.lock")),
         ready_snapshot = sh(&format!("{root}/catalog-ready.snapshot")),
+        gui = sh(DEVELOPMENT_GUI_REMOTE),
     )
 }
 
@@ -15118,7 +15186,9 @@ fn catalog_lifecycle_launcher_env() -> Vec<(String, String)> {
 }
 
 const ORIENTATION_TRANSITION_REMOTE_DIR: &str = "/tmp/mister-magik/orientation-transitions";
-const ORIENTATION_TRANSITION_SETTINGS_REMOTE: &str = "/media/fat/mister-magik-dev/settings.json";
+static ORIENTATION_TRANSITION_SETTINGS_REMOTE: LazyLock<String> = LazyLock::new(|| {
+    installed_layout::app_path(Layout::Development, "settings.json").expect("static installed path")
+});
 const ORIENTATION_TRANSITION_TELEMETRY_SECS: u64 = 48;
 const ORIENTATION_TRANSITION_LEGS_PER_EFFECT: usize = 6;
 const SETTINGS_NAVIGATION_REMOTE_DIR: &str = "/tmp/mister-magik/settings-navigation";
@@ -15174,7 +15244,7 @@ fn run_installed_settings_navigation(
     let capability = exec_checked_output(
         &session,
         "installed Settings navigation benchmark capability",
-        "/media/fat/mister-magik-dev/mister-magik-fb benchmark-capabilities",
+        DEVELOPMENT_BENCHMARK_CAPABILITIES_COMMAND.as_str(),
     )?;
     let capability = last_json_line(&capability.stdout)
         .ok_or("installed benchmark capability output contains no JSON report")?;
@@ -15197,11 +15267,11 @@ fn run_installed_settings_navigation(
     }
     let boot_id = remote_read(&session, "/proc/sys/kernel/random/boot_id")
         .ok_or("device boot id is unavailable")?;
-    let manifest = remote_read(&session, "/media/fat/mister-magik-dev/platform-v3.manifest")
+    let manifest = remote_read(&session, LOCAL_MAIN_MANIFEST_REMOTE)
         .ok_or("development platform manifest is missing")?;
     let original_ini =
         remote_read(&session, "/media/fat/MiSTer.ini").ok_or("MiSTer.ini is unavailable")?;
-    let original_settings = remote_read(&session, ORIENTATION_TRANSITION_SETTINGS_REMOTE);
+    let original_settings = remote_read(&session, ORIENTATION_TRANSITION_SETTINGS_REMOTE.as_str());
     let original_display = exec_checked_output(
         &session,
         "query original Settings navigation display mode",
@@ -15262,7 +15332,7 @@ fn run_installed_settings_navigation(
             LauncherRestartOptions {
                 env_vars: settings_navigation_launcher_env(pprof),
                 timeout_secs: 45,
-                remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+                remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str().into(),
                 ..LauncherRestartOptions::default()
             },
         )?;
@@ -15383,7 +15453,7 @@ fn restore_installed_settings_navigation_benchmark(
         "clear Settings navigation benchmark one-shot state",
         &format!(
             "rm -f {env} /tmp/mister-magik/realtime-frame-analytics; rm -rf {artifacts}",
-            env = sh(DEVELOPMENT_LAUNCHER_ENV_REMOTE),
+            env = sh(DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str()),
             artifacts = sh(SETTINGS_NAVIGATION_REMOTE_DIR),
         ),
     )?;
@@ -15391,7 +15461,7 @@ fn restore_installed_settings_navigation_benchmark(
         &session,
         &LauncherRestartOptions {
             clear_env: true,
-            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str().into(),
             timeout_secs: 45,
             ..LauncherRestartOptions::default()
         },
@@ -15415,9 +15485,7 @@ fn restore_installed_settings_navigation_benchmark(
     {
         return Err("device rebooted during Settings navigation benchmark".into());
     }
-    if remote_read(&session, "/media/fat/mister-magik-dev/platform-v3.manifest").as_deref()
-        != Some(expected_manifest)
-    {
+    if remote_read(&session, LOCAL_MAIN_MANIFEST_REMOTE).as_deref() != Some(expected_manifest) {
         return Err(
             "installed platform manifest changed during Settings navigation benchmark".into(),
         );
@@ -15427,7 +15495,8 @@ fn restore_installed_settings_navigation_benchmark(
     {
         return Err("Settings navigation benchmark changed retained MiSTer.ini".into());
     }
-    if remote_read(&session, ORIENTATION_TRANSITION_SETTINGS_REMOTE).as_deref() != expected_settings
+    if remote_read(&session, ORIENTATION_TRANSITION_SETTINGS_REMOTE.as_str()).as_deref()
+        != expected_settings
     {
         return Err("Settings navigation benchmark changed settings.json".into());
     }
@@ -15509,7 +15578,7 @@ fn run_installed_orientation_transition(
     let capability = exec_checked_output(
         &session,
         "installed orientation benchmark capability",
-        "/media/fat/mister-magik-dev/mister-magik-fb benchmark-capabilities",
+        DEVELOPMENT_BENCHMARK_CAPABILITIES_COMMAND.as_str(),
     )?;
     let capability = last_json_line(&capability.stdout)
         .ok_or("installed benchmark capability output contains no JSON report")?;
@@ -15530,11 +15599,11 @@ fn run_installed_orientation_transition(
     }
     let boot_id = remote_read(&session, "/proc/sys/kernel/random/boot_id")
         .ok_or("device boot id is unavailable")?;
-    let manifest = remote_read(&session, "/media/fat/mister-magik-dev/platform-v3.manifest")
+    let manifest = remote_read(&session, LOCAL_MAIN_MANIFEST_REMOTE)
         .ok_or("development platform manifest is missing")?;
     let original_ini =
         remote_read(&session, "/media/fat/MiSTer.ini").ok_or("MiSTer.ini is unavailable")?;
-    let original_settings = remote_read(&session, ORIENTATION_TRANSITION_SETTINGS_REMOTE);
+    let original_settings = remote_read(&session, ORIENTATION_TRANSITION_SETTINGS_REMOTE.as_str());
     let original_display = exec_checked_output(
         &session,
         "query original orientation benchmark display mode",
@@ -15593,7 +15662,7 @@ fn run_installed_orientation_transition(
             LauncherRestartOptions {
                 env_vars,
                 timeout_secs: 45,
-                remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+                remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str().into(),
                 ..LauncherRestartOptions::default()
             },
         )?;
@@ -15725,7 +15794,7 @@ fn restore_installed_orientation_transition_benchmark(
         "clear orientation benchmark one-shot state",
         &format!(
             "rm -f {env} /tmp/mister-magik/realtime-frame-analytics; rm -rf {artifacts}",
-            env = sh(DEVELOPMENT_LAUNCHER_ENV_REMOTE),
+            env = sh(DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str()),
             artifacts = sh(ORIENTATION_TRANSITION_REMOTE_DIR),
         ),
     )?;
@@ -15733,7 +15802,7 @@ fn restore_installed_orientation_transition_benchmark(
         &session,
         &LauncherRestartOptions {
             clear_env: true,
-            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str().into(),
             timeout_secs: 45,
             ..LauncherRestartOptions::default()
         },
@@ -15757,9 +15826,7 @@ fn restore_installed_orientation_transition_benchmark(
     {
         return Err("device rebooted during orientation benchmark".into());
     }
-    if remote_read(&session, "/media/fat/mister-magik-dev/platform-v3.manifest").as_deref()
-        != Some(expected_manifest)
-    {
+    if remote_read(&session, LOCAL_MAIN_MANIFEST_REMOTE).as_deref() != Some(expected_manifest) {
         return Err("installed platform manifest changed during orientation benchmark".into());
     }
     if expected_ini.is_none()
@@ -15767,7 +15834,8 @@ fn restore_installed_orientation_transition_benchmark(
     {
         return Err("orientation benchmark changed the retained 1280x720p60 MiSTer.ini".into());
     }
-    if remote_read(&session, ORIENTATION_TRANSITION_SETTINGS_REMOTE).as_deref() != expected_settings
+    if remote_read(&session, ORIENTATION_TRANSITION_SETTINGS_REMOTE.as_str()).as_deref()
+        != expected_settings
     {
         return Err("orientation benchmark changed settings.json".into());
     }
@@ -16573,7 +16641,7 @@ fn profile_installed_navigation_transition_run(
                 ("MISTER_PPROF_COMPLETE".into(), remote_complete.clone()),
             ],
             timeout_secs: 45,
-            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str().into(),
             ..LauncherRestartOptions::default()
         },
     )?;
@@ -16625,7 +16693,7 @@ fn restore_installed_navigation_transition_profile(config: &NativeDeviceConfig) 
     let session = connect_with(&config.connection, 10)?;
     let cleanup = format!(
         "rm -f {env} /tmp/mister-magik/realtime-frame-analytics; rm -rf {profiles}",
-        env = sh(DEVELOPMENT_LAUNCHER_ENV_REMOTE),
+        env = sh(DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str()),
         profiles = sh(NAVIGATION_TRANSITION_PROFILE_REMOTE_DIR),
     );
     exec_checked(&session, "navigation transition profile cleanup", &cleanup)?;
@@ -16633,7 +16701,7 @@ fn restore_installed_navigation_transition_profile(config: &NativeDeviceConfig) 
         &session,
         &LauncherRestartOptions {
             clear_env: true,
-            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str().into(),
             timeout_secs: 45,
             ..LauncherRestartOptions::default()
         },
@@ -16643,7 +16711,7 @@ fn restore_installed_navigation_transition_profile(config: &NativeDeviceConfig) 
         "navigation transition profile final cleanup",
         &format!(
             "{cleanup}; test ! -e {env}; test ! -e {profiles}",
-            env = sh(DEVELOPMENT_LAUNCHER_ENV_REMOTE),
+            env = sh(DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str()),
             profiles = sh(NAVIGATION_TRANSITION_PROFILE_REMOTE_DIR),
         ),
     )?;
@@ -17303,7 +17371,7 @@ fn profile_installed_screensaver(config: &NativeDeviceConfig, output_dir: &Path)
     let capability = exec_checked_output(
         &session,
         "installed benchmark capability",
-        "/media/fat/mister-magik-dev/mister-magik-fb benchmark-capabilities",
+        DEVELOPMENT_BENCHMARK_CAPABILITIES_COMMAND.as_str(),
     )?;
     let capability = last_json_line(&capability.stdout)
         .ok_or("installed benchmark capability output contains no JSON report")?;
@@ -17335,7 +17403,7 @@ fn profile_installed_screensaver(config: &NativeDeviceConfig, output_dir: &Path)
     {
         return Err("screensaver benchmark requires an existing usable cached catalog".into());
     }
-    let manifest = remote_read(&session, "/media/fat/mister-magik-dev/platform-v3.manifest")
+    let manifest = remote_read(&session, LOCAL_MAIN_MANIFEST_REMOTE)
         .ok_or("development platform manifest is missing")?;
     let boot_id = remote_read(&session, "/proc/sys/kernel/random/boot_id")
         .ok_or("device boot id is unavailable")?
@@ -17631,7 +17699,7 @@ fn finalize_benchmark_state(
     if final_boot_id.trim() != expected_boot_id {
         return Err("device rebooted during the in-place screensaver benchmark".into());
     }
-    let final_manifest = remote_read(&session, "/media/fat/mister-magik-dev/platform-v3.manifest")
+    let final_manifest = remote_read(&session, LOCAL_MAIN_MANIFEST_REMOTE)
         .ok_or("development platform manifest is missing after benchmark")?;
     if final_manifest != expected_manifest {
         return Err("installed platform manifest changed during benchmark".into());
@@ -17704,7 +17772,7 @@ fn measure_installed_screensaver_cadence(
                 ),
             ],
             timeout_secs: 45,
-            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str().into(),
             ..LauncherRestartOptions::default()
         },
     )?;
@@ -17863,7 +17931,7 @@ fn profile_installed_screensaver_run(
                 ("MISTER_PPROF_COMPLETE".into(), remote_complete.clone()),
             ],
             timeout_secs: 45,
-            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str().into(),
             ..LauncherRestartOptions::default()
         },
     )?;
@@ -17989,7 +18057,7 @@ fn restore_installed_screensaver_profile(config: &NativeDeviceConfig) -> Result<
     let session = connect_with(&config.connection, 10)?;
     let cleanup = format!(
         "set -eu; rm -f {env} /tmp/mister-magik/realtime-frame-analytics; rm -rf {profiles}",
-        env = sh(DEVELOPMENT_LAUNCHER_ENV_REMOTE),
+        env = sh(DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str()),
         profiles = sh(SCREENSAVER_PROFILE_REMOTE_DIR)
     );
     let cleanup_result = exec_checked(&session, "screensaver benchmark cleanup", &cleanup);
@@ -17997,7 +18065,7 @@ fn restore_installed_screensaver_profile(config: &NativeDeviceConfig) -> Result<
         &session,
         &LauncherRestartOptions {
             clear_env: true,
-            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str().into(),
             timeout_secs: 45,
             ..LauncherRestartOptions::default()
         },
@@ -18007,7 +18075,7 @@ fn restore_installed_screensaver_profile(config: &NativeDeviceConfig) -> Result<
         "screensaver benchmark final cleanup",
         &format!(
             "{cleanup}; test ! -e {env}; test ! -e {profiles}; for delay in 1 1 1; do rm -f /tmp/mister-magik/realtime-frame-analytics; sleep \"$delay\"; done; test ! -e /tmp/mister-magik/realtime-frame-analytics",
-            env = sh(DEVELOPMENT_LAUNCHER_ENV_REMOTE),
+            env = sh(DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str()),
             profiles = sh(SCREENSAVER_PROFILE_REMOTE_DIR)
         ),
     );
@@ -20399,33 +20467,7 @@ struct MagikDeployTransaction {
     manifest: ManifestDeploy,
 }
 
-const RUNTIME_MANIFEST_FIELDS: &[&str] = &[
-    "format",
-    "platform_release",
-    "platform_release_number",
-    "platform_bundle_id",
-    "qualification_candidate_id",
-    "latch_protocol_version",
-    "latch_capability_mask",
-    "main_path",
-    "gui_path",
-    "manager_path",
-    "scanout_module_path",
-    "scanout_metadata_path",
-    "latch_rbf_path",
-    "latch_metadata_path",
-    "main_sha256",
-    "gui_sha256",
-    "manager_sha256",
-    "scanout_module_sha256",
-    "scanout_metadata_sha256",
-    "latch_rbf_sha256",
-    "latch_metadata_sha256",
-    "platform_contract_sha256",
-    "main_revision",
-    "magik_revision",
-    "menu_revision",
-];
+const RUNTIME_MANIFEST_FIELDS: &[&str] = platform_manifest_contract::FIELDS;
 
 fn validate_runtime_bundle_identity(
     local: &Path,
@@ -20447,58 +20489,14 @@ fn validate_runtime_bundle_identity(
         .into());
     }
     let text = fs::read_to_string(manifest_local)?;
-    let mut fields = BTreeMap::new();
-    for line in text.lines() {
-        let (key, value) = line
-            .split_once('=')
-            .ok_or("runtime manifest contains a malformed line")?;
-        if value.is_empty()
-            || !RUNTIME_MANIFEST_FIELDS.contains(&key)
-            || fields.insert(key, value).is_some()
-        {
-            return Err(
-                format!("runtime manifest has an invalid or duplicate field: {key}").into(),
-            );
-        }
-    }
-    if fields.len() != RUNTIME_MANIFEST_FIELDS.len()
-        || RUNTIME_MANIFEST_FIELDS
-            .iter()
-            .any(|field| !fields.contains_key(field))
-    {
-        return Err("runtime manifest does not have the exact canonical field set".into());
-    }
-    for (key, expected) in [
-        ("format", "mister-magik-platform-v3"),
-        ("latch_protocol_version", "5"),
-        ("latch_capability_mask", "0x03ff"),
-        ("main_path", "/media/fat/MiSTer_MagiKDev"),
-        ("gui_path", "/media/fat/mister-magik-dev/mister-magik-fb"),
-        (
-            "manager_path",
-            "/media/fat/mister-magik-dev/mister-magik-manager",
-        ),
-        (
-            "scanout_module_path",
-            "/media/fat/mister-magik-dev/mister_magik_scanout_slots.ko",
-        ),
-        (
-            "scanout_metadata_path",
-            "/media/fat/mister-magik-dev/mister_magik_scanout_slots.metadata.txt",
-        ),
-        (
-            "latch_rbf_path",
-            "/media/fat/mister-magik-dev/fpga/menu-magik-vblank-latch.rbf",
-        ),
-        (
-            "latch_metadata_path",
-            "/media/fat/mister-magik-dev/fpga/menu-magik-vblank-latch.metadata.txt",
-        ),
-        ("gui_sha256", expected_sha256),
-    ] {
-        if fields.get(key).copied() != Some(expected) {
-            return Err(format!("runtime manifest field {key} is not canonical").into());
-        }
+    let manifest = platform_manifest_contract::parse(
+        &text,
+        platform_manifest_contract::Layout::Development,
+        platform_manifest_contract::ValidationProfile::AgentStrict,
+    )
+    .map_err(|error| format!("runtime manifest is invalid: {error}"))?;
+    if manifest.get("gui_sha256") != Some(expected_sha256) {
+        return Err("runtime manifest field gui_sha256 is not canonical".into());
     }
     file_sha256(manifest_local.to_path_buf())
 }
@@ -20541,8 +20539,8 @@ impl MagikDeployTransaction {
         if remote.split('/').any(|part| part == "." || part == "..") {
             return Err(format!("unsupported deploy remote path component: {remote}").into());
         }
-        if remote != "/media/fat/mister-magik-dev/mister-magik-fb"
-            || manifest_remote != "/media/fat/mister-magik-dev/platform-v3.manifest"
+        if remote != DEVELOPMENT_GUI_REMOTE
+            || manifest_remote != LOCAL_MAIN_MANIFEST_REMOTE
             || !local.is_file()
             || !manifest_local.is_file()
         {
@@ -21439,7 +21437,7 @@ impl Default for LauncherRestartOptions {
             timeout_secs: 20,
             remote_env: configured_remote_path(
                 "MISTER_MAGIK_LAUNCHER_ENV",
-                DEFAULT_LAUNCHER_ENV_REMOTE,
+                DEFAULT_LAUNCHER_ENV_REMOTE.as_str(),
             ),
         }
     }
@@ -21535,7 +21533,7 @@ fn capture_first_arcade(config: &NativeDeviceConfig, output: &Path) -> Result<()
                 ),
             ],
             timeout_secs: 45,
-            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str().into(),
             ..LauncherRestartOptions::default()
         },
     )?;
@@ -21581,7 +21579,7 @@ fn capture_snes_hub(config: &NativeDeviceConfig, output: &Path) -> Result<()> {
                 ("MISTER_LAUNCHER_START_SYSTEM".into(), "snes".into()),
             ],
             timeout_secs: 45,
-            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.into(),
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str().into(),
             ..LauncherRestartOptions::default()
         },
     )?;
@@ -21795,6 +21793,7 @@ fn agent_diagnostics(args: &[String]) -> Result<()> {
 fn ssh_diagnostics_bundle(agent_error: String) -> Result<Value> {
     let sess = connect(10)?;
     let status = collect_status(&sess)?;
+    let agent_log = installed_layout::app_path(Layout::Development, "bootlogs/agent.log")?;
     let ps = exec(&sess, "ps w", true)
         .map(|out| out.stdout)
         .unwrap_or_else(|err| format!("error: {err}"));
@@ -21823,7 +21822,7 @@ fn ssh_diagnostics_bundle(agent_error: String) -> Result<Value> {
             "slint_log_tail": tail_remote(&sess, "/tmp/mister-magik-slint.log", 120).map(|lines| lines.join("\n")),
             "main_log_tail": tail_remote(&sess, "/tmp/mister-magik-main.log", 120).map(|lines| lines.join("\n")),
             "agent_tmp_log_tail": tail_remote(&sess, "/tmp/mister-magik-agent.log", 160).map(|lines| lines.join("\n")),
-            "agent_persistent_log_tail": tail_remote(&sess, "/media/fat/mister-magik-dev/bootlogs/agent.log", 160).map(|lines| lines.join("\n")),
+            "agent_persistent_log_tail": tail_remote(&sess, &agent_log, 160).map(|lines| lines.join("\n")),
             "boot_analytics_tail": tail_remote(&sess, "/tmp/mister-magik-boot-analytics.tsv", 80).map(|lines| lines.join("\n")),
         },
         "crashes": ssh_crash_reports_json(&sess),
@@ -21931,8 +21930,10 @@ fn write_diagnostics_bundle(out_dir: &Path, bundle: &Value) -> Result<()> {
 }
 
 fn ssh_crash_reports_json(sess: &Session) -> Value {
-    let crash_dir =
-        configured_remote_path("MISTER_MAGIK_APP_DIR", "/media/fat/mister-magik") + "/crashes";
+    let crash_dir = configured_remote_path(
+        "MISTER_MAGIK_APP_DIR",
+        installed_layout::paths(Layout::Public).root,
+    ) + "/crashes";
     let latest_path = format!("{crash_dir}/latest.json");
     let latest = remote_read(sess, &latest_path)
         .and_then(|text| serde_json::from_str(&text).ok())
@@ -21962,12 +21963,16 @@ fn ssh_crash_reports_json(sess: &Session) -> Value {
 }
 
 fn ssh_catalog_failure_reports_json(sess: &Session) -> Value {
-    let configured = configured_remote_path("MISTER_MAGIK_APP_DIR", "/media/fat/mister-magik")
-        + "/diagnostics/catalog";
+    let configured = configured_remote_path(
+        "MISTER_MAGIK_APP_DIR",
+        installed_layout::paths(Layout::Public).root,
+    ) + "/diagnostics/catalog";
     let mut dirs = vec![
         configured,
-        "/media/fat/mister-magik/diagnostics/catalog".to_string(),
-        "/media/fat/mister-magik-dev/diagnostics/catalog".to_string(),
+        installed_layout::app_path(Layout::Public, "diagnostics/catalog")
+            .expect("static installed path"),
+        installed_layout::app_path(Layout::Development, "diagnostics/catalog")
+            .expect("static installed path"),
     ];
     dirs.sort();
     dirs.dedup();
@@ -22009,12 +22014,17 @@ fn ssh_latest_diagnostic_report(
     relative_path: &str,
     timestamp_field: &str,
 ) -> Value {
-    let configured = configured_remote_path("MISTER_MAGIK_APP_DIR", "/media/fat/mister-magik");
-    let mut paths = vec![
-        format!("{configured}/{relative_path}"),
-        format!("/media/fat/mister-magik/{relative_path}"),
-        format!("/media/fat/mister-magik-dev/{relative_path}"),
-    ];
+    let configured = configured_remote_path(
+        "MISTER_MAGIK_APP_DIR",
+        installed_layout::paths(Layout::Public).root,
+    );
+    let Ok(public) = installed_layout::app_path(Layout::Public, relative_path) else {
+        return Value::Null;
+    };
+    let Ok(development) = installed_layout::app_path(Layout::Development, relative_path) else {
+        return Value::Null;
+    };
+    let mut paths = vec![format!("{configured}/{relative_path}"), public, development];
     paths.sort();
     paths.dedup();
     let mut reports = paths
@@ -22039,9 +22049,12 @@ fn ssh_latest_diagnostic_report(
 
 fn ssh_current_latch_failure_report(sess: &Session) -> Value {
     for app in [
-        configured_remote_path("MISTER_MAGIK_APP_DIR", "/media/fat/mister-magik"),
-        "/media/fat/mister-magik".to_owned(),
-        "/media/fat/mister-magik-dev".to_owned(),
+        configured_remote_path(
+            "MISTER_MAGIK_APP_DIR",
+            installed_layout::paths(Layout::Public).root,
+        ),
+        installed_layout::paths(Layout::Public).root.to_owned(),
+        installed_layout::paths(Layout::Development).root.to_owned(),
     ] {
         let pointer_path = format!("{app}/diagnostics/latch/current-identity.json");
         let Some(pointer) = remote_read(sess, &pointer_path)
@@ -22098,8 +22111,10 @@ fn remote_crash_report_paths(
     limit: usize,
     latest_name: Option<&str>,
 ) -> Vec<String> {
-    let crash_dir =
-        configured_remote_path("MISTER_MAGIK_APP_DIR", "/media/fat/mister-magik") + "/crashes";
+    let crash_dir = configured_remote_path(
+        "MISTER_MAGIK_APP_DIR",
+        installed_layout::paths(Layout::Public).root,
+    ) + "/crashes";
     let cmd = format!(
         "ls -1 {} 2>/dev/null | grep '^report-.*\\.json$' | sort | tail -n {}",
         sh(&crash_dir),
@@ -22149,8 +22164,8 @@ fn active_route_status_binary(status: &Value) -> Result<&'static str> {
         return Err("display route readback requires MagiK to own the FPGA".into());
     }
     match status.get("executable_path").and_then(Value::as_str) {
-        Some("/media/fat/MiSTer_MagiKDev") => Ok("/media/fat/mister-magik-dev/mister-magik-fb"),
-        Some("/media/fat/MiSTer_MagiK") => Ok("/media/fat/mister-magik/mister-magik-fb"),
+        Some(LOCAL_MAIN_REMOTE) => Ok(DEVELOPMENT_GUI_REMOTE),
+        Some(PUBLIC_MAIN_REMOTE) => Ok(PUBLIC_GUI_REMOTE),
         Some(path) => {
             Err(format!("unsupported active Main executable for route readback: {path}").into())
         }
@@ -22184,10 +22199,7 @@ fn run_catalog_inspect(sess: &Session, args: &[String]) -> Result<()> {
     if !args.is_empty() {
         return Err("usage: scripts/agent device catalog inspect".into());
     }
-    let binary = configured_remote_path(
-        "MISTER_MAGIK_BIN",
-        "/media/fat/mister-magik/mister-magik-fb",
-    );
+    let binary = configured_remote_path("MISTER_MAGIK_BIN", PUBLIC_GUI_REMOTE);
     let command = remote_subcommand(&binary, "catalog-v3-inspect", args);
     let out = exec(sess, &command, true)?;
     print!("{}", out.stdout);
@@ -22202,11 +22214,12 @@ fn run_catalog_inspect(sess: &Session, args: &[String]) -> Result<()> {
 
 fn purge_development_library_data_and_reboot() -> Result<()> {
     let session = connect(10)?;
-    exec_checked(
-        &session,
-        "Dev library purge preflight",
-        "set -eu; pidof MiSTer_MagiKDev >/dev/null; test -x /media/fat/mister-magik-dev/mister-magik-fb; test ! -e /tmp/mister-magik/reboot-unstable; test ! -e /media/fat/mister-magik/launcher.env; test ! -e /media/fat/mister-magik-dev/launcher.env; test ! -e /tmp/mister-magik/fs-fault-launcher.env; test ! -e /tmp/mister-magik/fs-fault-session; test ! -e /tmp/mister-magik/fs-fault.json; test ! -e /media/fat/mister-magik/rebuild-on-next-boot; test ! -e /media/fat/mister-magik-dev/rebuild-on-next-boot",
-    )?;
+    let preflight = format!(
+        "set -eu; pidof MiSTer_MagiKDev >/dev/null; test -x {gui}; test ! -e /tmp/mister-magik/reboot-unstable; {safety}",
+        gui = sh(DEVELOPMENT_GUI_REMOTE),
+        safety = platform_safety_script(),
+    );
+    exec_checked(&session, "Dev library purge preflight", &preflight)?;
     exec_checked(
         &session,
         "Dev library purge suspend",
@@ -22215,7 +22228,10 @@ fn purge_development_library_data_and_reboot() -> Result<()> {
     let purge = exec_checked_output(
         &session,
         "Dev catalog and screenshot purge",
-        "/media/fat/mister-magik-dev/mister-magik-fb purge-library-data --confirm",
+        &format!(
+            "{} purge-library-data --confirm",
+            sh(DEVELOPMENT_GUI_REMOTE)
+        ),
     );
     let purge = match purge {
         Ok(output) => output,
@@ -22375,13 +22391,16 @@ fn catalog_snapshot_identity(
 }
 
 fn is_catalog_database_path(path: &str) -> bool {
-    let relative = [
-        "/media/fat/mister-magik/catalog-v3/",
-        "/media/fat/mister-magik-dev/catalog-v3/",
-    ]
-    .into_iter()
-    .find_map(|root| path.strip_prefix(root));
-    relative.is_some_and(|path| {
+    let relative = [Layout::Public, Layout::Development]
+        .into_iter()
+        .map(|layout| {
+            format!(
+                "{}/",
+                installed_layout::app_path(layout, "catalog-v3").expect("static installed path")
+            )
+        })
+        .find_map(|root| path.strip_prefix(&root).map(str::to_owned));
+    relative.as_deref().is_some_and(|path| {
         !path.is_empty()
             && !path.starts_with('/')
             && !path.split('/').any(|component| component == "..")
@@ -22390,19 +22409,22 @@ fn is_catalog_database_path(path: &str) -> bool {
 }
 
 fn active_catalog_root(session: &Session) -> Result<String> {
+    let public = installed_layout::app_path(Layout::Public, "catalog-v3")?;
+    let development = installed_layout::app_path(Layout::Development, "catalog-v3")?;
     let output = exec(
         session,
-        "set -eu; if pidof MiSTer_MagiKDev >/dev/null 2>&1; then printf /media/fat/mister-magik-dev/catalog-v3; else printf /media/fat/mister-magik/catalog-v3; fi",
+        &format!(
+            "set -eu; if pidof MiSTer_MagiKDev >/dev/null 2>&1; then printf %s {development}; else printf %s {public}; fi",
+            development = sh(&development),
+            public = sh(&public),
+        ),
         false,
     )?;
     if let Some(message) = exec_failure_message("resolve catalog root", &output) {
         return Err(message.into());
     }
     let root = output.stdout.trim();
-    if !matches!(
-        root,
-        "/media/fat/mister-magik/catalog-v3" | "/media/fat/mister-magik-dev/catalog-v3"
-    ) {
+    if root != public && root != development {
         return Err("device returned an invalid catalog root".into());
     }
     Ok(root.to_owned())
@@ -22491,8 +22513,10 @@ impl Drop for CatalogQueryTemporary {
 
 #[cfg(test)]
 fn parse_library_db_queries(args: &[String]) -> Result<(String, Vec<String>)> {
-    let mut remote_path =
-        configured_remote_path("MISTER_MAGIK_LIBRARY_DB", DEFAULT_REMOTE_LIBRARY_DB);
+    let mut remote_path = configured_remote_path(
+        "MISTER_MAGIK_LIBRARY_DB",
+        DEFAULT_REMOTE_LIBRARY_DB.as_str(),
+    );
     let mut query_parts = Vec::new();
     let mut queries = Vec::new();
     let mut i = 0usize;
@@ -22685,6 +22709,11 @@ fn ensure_stock_inittab_text(input: &str) -> String {
     let newline = if input.contains("\r\n") { "\r\n" } else { "\n" };
     let mut out = Vec::new();
     let mut wrote = false;
+    let magik_main_prefix = format!("::sysinit:{}", installed_layout::paths(Layout::Public).main);
+    let magik_boot = format!(
+        "::sysinit:{}/boot.sh",
+        installed_layout::paths(Layout::Public).root
+    );
     for raw in input.lines() {
         let line = raw.strip_suffix('\r').unwrap_or(raw);
         if line.starts_with("::sysinit:/media/fat/MiSTer ") && line.ends_with('&') {
@@ -22694,9 +22723,7 @@ fn ensure_stock_inittab_text(input: &str) -> String {
             }
             continue;
         }
-        if line.starts_with("::sysinit:/media/fat/MiSTer_MagiK")
-            || line.starts_with("::sysinit:/media/fat/mister-magik/boot.sh")
-        {
+        if line.starts_with(&magik_main_prefix) || line.starts_with(&magik_boot) {
             continue;
         }
         out.push(line.to_string());
@@ -24611,11 +24638,27 @@ mod tests {
     }
 
     fn runtime_manifest_for(gui_sha256: &str) -> String {
-        format!(
-            "format=mister-magik-platform-v3\nplatform_release=platform-v0.1\nplatform_release_number=1\nplatform_bundle_id={hash}\nqualification_candidate_id={hash}\nlatch_protocol_version=5\nlatch_capability_mask=0x03ff\nmain_path=/media/fat/MiSTer_MagiKDev\ngui_path=/media/fat/mister-magik-dev/mister-magik-fb\nmanager_path=/media/fat/mister-magik-dev/mister-magik-manager\nscanout_module_path=/media/fat/mister-magik-dev/mister_magik_scanout_slots.ko\nscanout_metadata_path=/media/fat/mister-magik-dev/mister_magik_scanout_slots.metadata.txt\nlatch_rbf_path=/media/fat/mister-magik-dev/fpga/menu-magik-vblank-latch.rbf\nlatch_metadata_path=/media/fat/mister-magik-dev/fpga/menu-magik-vblank-latch.metadata.txt\nmain_sha256={hash}\ngui_sha256={gui_sha256}\nmanager_sha256={hash}\nscanout_module_sha256={hash}\nscanout_metadata_sha256={hash}\nlatch_rbf_sha256={hash}\nlatch_metadata_sha256={hash}\nplatform_contract_sha256={hash}\nmain_revision={revision}\nmagik_revision={revision}\nmenu_revision={revision}\n",
-            hash = "a".repeat(64),
-            revision = "b".repeat(40),
-        )
+        let mut values = BTreeMap::new();
+        values.insert("format".to_owned(), "mister-magik-platform-v3".to_owned());
+        values.insert("platform_release".to_owned(), "platform-v0.1".to_owned());
+        values.insert("platform_release_number".to_owned(), "1".to_owned());
+        values.insert("platform_bundle_id".to_owned(), "a".repeat(64));
+        values.insert("latch_protocol_version".to_owned(), "5".to_owned());
+        values.insert("latch_capability_mask".to_owned(), "0x03ff".to_owned());
+        for (name, path) in installed_layout::paths(Layout::Development).components() {
+            values.insert(format!("{name}_path"), path.to_owned());
+            values.insert(format!("{name}_sha256"), "a".repeat(64));
+        }
+        values.insert("gui_sha256".to_owned(), gui_sha256.to_owned());
+        values.insert("platform_contract_sha256".to_owned(), "a".repeat(64));
+        for field in ["main_revision", "magik_revision", "menu_revision"] {
+            values.insert(field.to_owned(), "b".repeat(40));
+        }
+        values.insert(
+            "qualification_candidate_id".to_owned(),
+            mister_magik_platform_manifest_contract::qualification_candidate_id(&values),
+        );
+        mister_magik_platform_manifest_contract::serialize(&values).unwrap()
     }
 
     fn local_main_manifest_for(main_sha256: &str, gui_sha256: &str) -> String {
@@ -24868,7 +24911,7 @@ video_mode=14
     fn one_shot_launcher_env_removes_itself_after_being_sourced() {
         let text = one_shot_launcher_env_text(
             &[("MISTER_CATALOG_REFRESH".into(), "off".into())],
-            DEVELOPMENT_LAUNCHER_ENV_REMOTE,
+            DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str(),
         );
 
         assert!(text.contains("export MISTER_CATALOG_REFRESH='off'"));
@@ -26520,7 +26563,7 @@ H: Handlers=event3 js0"#
     #[test]
     fn platform_deploy_validates_every_required_file_and_publishes_manifest_last() {
         let stage = temp_path("platform-stage");
-        for (relative, _) in PLATFORM_DEPLOY_FILES {
+        for (relative, _) in platform_deploy_files() {
             let path = stage.join(relative);
             fs::create_dir_all(path.parent().unwrap()).unwrap();
             fs::write(path, relative.as_bytes()).unwrap();
@@ -26623,7 +26666,7 @@ H: Handlers=event3 js0"#
 
     fn platform_stage(label: &str) -> (PathBuf, PlatformDeployTransaction) {
         let stage = temp_path(label);
-        for (relative, _) in PLATFORM_DEPLOY_FILES {
+        for (relative, _) in platform_deploy_files() {
             let path = stage.join(relative);
             fs::create_dir_all(path.parent().unwrap()).unwrap();
             fs::write(path, relative.as_bytes()).unwrap();
@@ -26670,7 +26713,7 @@ H: Handlers=event3 js0"#
         let report = transaction.run_with(&remote).unwrap();
 
         assert_eq!(report.changed_files, 0);
-        assert_eq!(report.skipped_files, PLATFORM_DEPLOY_FILES.len());
+        assert_eq!(report.skipped_files, platform_deploy_files().len());
         assert_eq!(report.transferred_bytes, 0);
         assert_eq!(remote.events().len(), 1, "only inventory should run");
         fs::remove_dir_all(stage).unwrap();
@@ -26883,20 +26926,20 @@ H: Handlers=event3 js0"#
     fn release_recovery_requires_volatile_token_and_clears_every_arming_path() {
         let begin = release_begin_command();
         assert!(!begin.contains(";;"));
-        assert!(begin.contains(RELEASE_SNAPSHOT));
-        assert!(RELEASE_SNAPSHOT.starts_with("/media/fat/"));
+        assert!(begin.contains(RELEASE_SNAPSHOT.as_str()));
+        assert!(RELEASE_SNAPSHOT.as_str().starts_with("/media/fat/"));
         let rearm = release_rearm_token_command();
         assert!(rearm.contains(RELEASE_TOKEN));
-        assert!(!rearm.contains(RELEASE_SNAPSHOT));
+        assert!(!rearm.contains(RELEASE_SNAPSHOT.as_str()));
         let catalog = release_catalog_command();
         assert!(catalog.contains("pidof MiSTer_MagiKDev"));
-        assert!(catalog.contains("root=/media/fat/mister-magik-dev"));
+        assert!(catalog.contains("root='/media/fat/mister-magik-dev'"));
         let recovery = release_recovery_command();
         assert!(recovery.contains(RELEASE_TOKEN));
         assert!(recovery.contains("attended-non-network-recovery-confirmed"));
         let restore = release_restore_command();
         assert!(!restore.contains(";;"));
-        assert!(restore.contains(RELEASE_SNAPSHOT));
+        assert!(restore.contains(RELEASE_SNAPSHOT.as_str()));
         for path in [
             "/media/fat/mister-magik/launcher.env",
             "/media/fat/mister-magik-dev/launcher.env",
@@ -26953,7 +26996,7 @@ H: Handlers=event3 js0"#
         assert!(repair.contains("agent-benchmark.tsv"));
         assert!(repair.contains("realtime-frame-analytics"));
         assert!(repair.contains("screensaver-profile"));
-        assert!(repair.contains("rm -f /media/fat/mister-magik/launcher.env"));
+        assert!(repair.contains("rm -f '/media/fat/mister-magik/launcher.env'"));
         assert!(repair.contains("/media/fat/mister-magik-dev/launcher.env"));
         assert!(repair.contains("/media/fat/mister-magik-dev/rebuild-on-next-boot"));
     }
@@ -26962,7 +27005,7 @@ H: Handlers=event3 js0"#
     fn one_shot_recovery_clears_arming_and_refuses_known_reboot_instability() {
         let preflight = one_shot_recovery_preflight_command();
         assert!(preflight.contains("test ! -e /tmp/mister-magik/reboot-unstable"));
-        assert!(preflight.contains("rm -f /media/fat/mister-magik/launcher.env"));
+        assert!(preflight.contains("rm -f '/media/fat/mister-magik/launcher.env'"));
         assert!(preflight.contains("/media/fat/mister-magik-dev/launcher.env"));
         assert!(preflight.contains("/tmp/mister-magik/fs-fault-session"));
         assert!(preflight.ends_with("sync"));

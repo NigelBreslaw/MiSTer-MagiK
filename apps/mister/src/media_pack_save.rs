@@ -10,10 +10,10 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-pub(crate) const PROGRESS_COPY_CHUNK_BYTES: usize = 256 * 1024;
+pub const PROGRESS_COPY_CHUNK_BYTES: usize = 256 * 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum PackSavePhase {
+pub enum PackSavePhase {
     Copy,
     Sync,
     Rename,
@@ -21,7 +21,7 @@ pub(crate) enum PackSavePhase {
 }
 
 impl PackSavePhase {
-    pub(crate) fn label(self) -> &'static str {
+    pub fn label(self) -> &'static str {
         match self {
             Self::Copy => "save",
             Self::Sync => "sync",
@@ -32,36 +32,38 @@ impl PackSavePhase {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct PackSaveProgress {
-    pub(crate) phase: PackSavePhase,
-    pub(crate) bytes_done: u64,
-    pub(crate) bytes_total: u64,
+pub struct PackSaveProgress {
+    pub phase: PackSavePhase,
+    pub bytes_done: u64,
+    pub bytes_total: u64,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(crate) struct PackSaveMetrics {
-    pub(crate) bytes: u64,
-    pub(crate) copy_ms: u64,
-    pub(crate) sync_ms: u64,
-    pub(crate) rename_ms: u64,
-    pub(crate) parent_sync_ms: u64,
-    pub(crate) total_ms: u64,
-    pub(crate) progress_events: u64,
+pub struct PackSaveMetrics {
+    pub bytes: u64,
+    pub copy_ms: u64,
+    pub sync_ms: u64,
+    pub rename_ms: u64,
+    pub parent_sync_ms: u64,
+    pub total_ms: u64,
+    pub progress_events: u64,
 }
 
-pub(crate) fn publish_pack_file_for_bench(
+pub fn publish_pack_file_for_bench(
     source: &Path,
     final_path: &Path,
     mut progress: impl FnMut(PackSaveProgress),
 ) -> Result<PackSaveMetrics, String> {
-    let result = publish_pack_file_impl(source, final_path, &mut progress);
+    let mut fault_control =
+        mister_magik_mister_runtime::direct_reset_fault::process_fault_control();
+    let result = publish_pack_file_impl(source, final_path, &mut progress, &mut fault_control);
     if result.is_err() {
         let _ = fs::remove_file(temp_path_for(final_path));
     }
     result
 }
 
-pub(crate) fn publish_pack_file_with_progress(
+pub fn publish_pack_file_with_progress(
     source: &Path,
     final_path: &Path,
     progress: impl FnMut(PackSaveProgress),
@@ -69,10 +71,24 @@ pub(crate) fn publish_pack_file_with_progress(
     publish_pack_file_for_bench(source, final_path, progress)
 }
 
+pub fn publish_pack_file_with_progress_and_fault_control(
+    source: &Path,
+    final_path: &Path,
+    mut progress: impl FnMut(PackSaveProgress),
+    fault_control: &mut dyn mister_magik_catalog::fs_fault::DirectResetFaultControl,
+) -> Result<PackSaveMetrics, String> {
+    let result = publish_pack_file_impl(source, final_path, &mut progress, fault_control);
+    if result.is_err() {
+        let _ = fs::remove_file(temp_path_for(final_path));
+    }
+    result
+}
+
 fn publish_pack_file_impl(
     source: &Path,
     final_path: &Path,
     progress: &mut dyn FnMut(PackSaveProgress),
+    fault_control: &mut dyn mister_magik_catalog::fs_fault::DirectResetFaultControl,
 ) -> Result<PackSaveMetrics, String> {
     let publish = prepare_artifact_publish(
         final_path,
@@ -93,7 +109,11 @@ fn publish_pack_file_impl(
 
     let copy_started = Instant::now();
     metrics.progress_events = copy_with_progress(&mut input, &mut output, metrics.bytes, progress)?;
-    mister_magik_catalog::fs_fault::maybe_fault("media.pack.after_temp_write", final_path);
+    mister_magik_catalog::fs_fault::maybe_fault_with_control(
+        "media.pack.after_temp_write",
+        final_path,
+        fault_control,
+    );
     metrics.copy_ms = elapsed_ms(copy_started.elapsed());
 
     let bytes = metrics.bytes;
@@ -102,7 +122,11 @@ fn publish_pack_file_impl(
     output
         .sync_all()
         .map_err(|e| format!("sync {}: {e}", publish.temp_path().display()))?;
-    mister_magik_catalog::fs_fault::maybe_fault("media.pack.after_temp_sync", final_path);
+    mister_magik_catalog::fs_fault::maybe_fault_with_control(
+        "media.pack.after_temp_sync",
+        final_path,
+        fault_control,
+    );
     metrics.sync_ms = elapsed_ms(sync_started.elapsed());
     drop(output);
 
@@ -110,9 +134,10 @@ fn publish_pack_file_impl(
     emit_progress(&mut metrics, progress, PackSavePhase::Rename, bytes, bytes);
     let rename_started = Instant::now();
     publish.install_temp(None)?;
-    mister_magik_catalog::fs_fault::maybe_fault(
+    mister_magik_catalog::fs_fault::maybe_fault_with_control(
         "media.pack.after_rename_before_parent_sync",
         final_path,
+        fault_control,
     );
     metrics.rename_ms = elapsed_ms(rename_started.elapsed());
 
@@ -146,7 +171,7 @@ fn emit_progress(
     });
 }
 
-pub(crate) fn temp_path_for(final_path: &Path) -> PathBuf {
+pub fn temp_path_for(final_path: &Path) -> PathBuf {
     static_temp_path_for(final_path, "screenshot-pack")
 }
 
@@ -186,7 +211,7 @@ fn file_len(path: &Path) -> Result<u64, String> {
         .map_err(|e| format!("stat {}: {e}", path.display()))
 }
 
-pub(crate) fn cleanup_pack_publish_temps(final_path: &Path) {
+pub fn cleanup_pack_publish_temps(final_path: &Path) {
     cleanup_static_and_timestamped_temps(final_path, "screenshot-pack");
 }
 
@@ -197,6 +222,21 @@ fn elapsed_ms(duration: Duration) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(Default)]
+    struct RecordingFaultControl {
+        points: Vec<String>,
+    }
+
+    impl mister_magik_catalog::fs_fault::DirectResetFaultControl for RecordingFaultControl {
+        fn request_direct_reset(
+            &mut self,
+            request: &mister_magik_catalog::fs_fault::DirectResetFaultRequest,
+        ) -> mister_magik_catalog::fs_fault::DirectResetFaultOutcome {
+            self.points.push(request.point().to_string());
+            mister_magik_catalog::fs_fault::DirectResetFaultOutcome::Noop
+        }
+    }
 
     fn temp_dir(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("{name}-{}", std::process::id()));
@@ -212,10 +252,25 @@ mod tests {
         fs::write(&source, b"abcdef0123456789").unwrap();
 
         let final_path = dir.join("out.bin");
-        let metrics = publish_pack_file_for_bench(&source, &final_path, |_| {}).unwrap();
+        let mut fault_control = RecordingFaultControl::default();
+        let metrics = publish_pack_file_with_progress_and_fault_control(
+            &source,
+            &final_path,
+            |_| {},
+            &mut fault_control,
+        )
+        .unwrap();
         assert_eq!(fs::read(&final_path).unwrap(), b"abcdef0123456789");
         assert_eq!(metrics.bytes, 16);
         assert!(metrics.progress_events > 0);
+        assert_eq!(
+            fault_control.points,
+            vec![
+                "media.pack.after_temp_write",
+                "media.pack.after_temp_sync",
+                "media.pack.after_rename_before_parent_sync",
+            ]
+        );
 
         let _ = fs::remove_dir_all(dir);
     }

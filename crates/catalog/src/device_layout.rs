@@ -3,12 +3,13 @@
 
 //! Fixed public/development device layouts.
 
+use mister_magik_platform_manifest_contract::{DEVELOPMENT_PATHS, InstalledPaths, PUBLIC_PATHS};
 use std::path::{Path, PathBuf};
 
-pub const PUBLIC_APP_DIR: &str = "/media/fat/mister-magik";
-pub const DEV_APP_DIR: &str = "/media/fat/mister-magik-dev";
-pub const PUBLIC_MAIN: &str = "/media/fat/MiSTer_MagiK";
-pub const DEV_MAIN: &str = "/media/fat/MiSTer_MagiKDev";
+pub const PUBLIC_APP_DIR: &str = PUBLIC_PATHS.root;
+pub const DEV_APP_DIR: &str = DEVELOPMENT_PATHS.root;
+pub const PUBLIC_MAIN: &str = PUBLIC_PATHS.main;
+pub const DEV_MAIN: &str = DEVELOPMENT_PATHS.main;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DeviceLayout {
@@ -18,12 +19,9 @@ pub enum DeviceLayout {
 
 impl DeviceLayout {
     pub fn for_executable(path: &Path) -> Self {
-        match path
-            .parent()
-            .and_then(Path::file_name)
-            .and_then(|name| name.to_str())
-        {
-            Some("mister-magik-dev") => Self::Dev,
+        let development_directory = Path::new(DEVELOPMENT_PATHS.root).file_name();
+        match path.parent().and_then(Path::file_name) {
+            name if name == development_directory => Self::Dev,
             _ => Self::Public,
         }
     }
@@ -37,16 +35,17 @@ impl DeviceLayout {
     }
 
     pub const fn app_dir(self) -> &'static str {
-        match self {
-            Self::Public => PUBLIC_APP_DIR,
-            Self::Dev => DEV_APP_DIR,
-        }
+        self.paths().root
     }
 
     pub const fn main_path(self) -> &'static str {
+        self.paths().main
+    }
+
+    pub const fn paths(self) -> InstalledPaths {
         match self {
-            Self::Public => PUBLIC_MAIN,
-            Self::Dev => DEV_MAIN,
+            Self::Public => PUBLIC_PATHS,
+            Self::Dev => DEVELOPMENT_PATHS,
         }
     }
 

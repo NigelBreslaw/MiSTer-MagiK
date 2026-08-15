@@ -5,6 +5,8 @@
 """Regression checks for the embedded production catalog-builder boundary."""
 
 from pathlib import Path
+import subprocess
+import sys
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -47,11 +49,24 @@ def main() -> None:
     package = read("scripts/package-distribution.sh")
     forbid(package, "--catalog-builder", "release package")
     forbid(package, "mister-magik-catalog-builder", "release package")
-    require(package, "platform-v3.manifest", "release package")
+    require(package, "PLATFORM_V3_FILE_NAME", "release package")
 
-    manifest = read("agent-cli/src/platform_manifest.rs")
-    require(manifest, 'FORMAT: &str = "mister-magik-platform-v3"', "platform manifest")
-    forbid(manifest, '"catalog_builder"', "platform manifest")
+    subprocess.run(
+        [sys.executable, "scripts/checks/generate-platform-v3-consumers.py", "--check"],
+        cwd=ROOT,
+        check=True,
+    )
+    constants = read("mister/platform/contracts/generated/platform-v3.constants.sh")
+    require(
+        constants,
+        "PLATFORM_V3_FORMAT='mister-magik-platform-v3'",
+        "generated platform manifest constants",
+    )
+    forbid(constants, "catalog_builder", "generated platform manifest constants")
+    for layout in ("public", "development"):
+        fixture = read(f"mister/platform/contracts/generated/platform-v3.{layout}.fixture")
+        require(fixture, "format=mister-magik-platform-v3", f"{layout} fixture")
+        forbid(fixture, "catalog_builder", f"{layout} fixture")
 
     print("embedded catalog release checks ok")
 

@@ -67,7 +67,7 @@ impl BenchArtifact {
     }
 }
 
-pub(crate) fn run() {
+pub fn run() {
     match run_inner(std::env::args().skip(2)) {
         Ok(()) => {}
         Err(error) => {
@@ -260,6 +260,12 @@ fn bench_final_path(config: &BenchConfig, iteration: usize) -> PathBuf {
     ))
 }
 
+fn observe_media_fault(point: &str, path: &Path) {
+    let mut fault_control =
+        mister_magik_mister_runtime::direct_reset_fault::process_fault_control();
+    mister_magik_catalog::fs_fault::maybe_fault_with_control(point, path, &mut fault_control);
+}
+
 fn publish_index_for_bench(source: &Path, pack_path: &Path) -> Result<PackSaveMetrics, String> {
     let final_path = index_path_for_pack_path(pack_path);
     let publish = prepare_artifact_publish(
@@ -275,17 +281,14 @@ fn publish_index_for_bench(source: &Path, pack_path: &Path) -> Result<PackSaveMe
         .map_err(|e| format!("create {}: {e}", publish.temp_path().display()))?;
     let bytes = std::io::copy(&mut input, &mut output)
         .map_err(|e| format!("copy bench index {}: {e}", publish.temp_path().display()))?;
-    mister_magik_catalog::fs_fault::maybe_fault("media.index.after_temp_write", &final_path);
+    observe_media_fault("media.index.after_temp_write", &final_path);
     output
         .sync_all()
         .map_err(|e| format!("sync bench index {}: {e}", publish.temp_path().display()))?;
-    mister_magik_catalog::fs_fault::maybe_fault("media.index.after_temp_sync", &final_path);
+    observe_media_fault("media.index.after_temp_sync", &final_path);
     drop(output);
     publish.install_temp(Some("bench index"))?;
-    mister_magik_catalog::fs_fault::maybe_fault(
-        "media.index.after_rename_before_parent_sync",
-        &final_path,
-    );
+    observe_media_fault("media.index.after_rename_before_parent_sync", &final_path);
     sync_path_rust_best_effort(publish.parent());
     Ok(PackSaveMetrics {
         bytes,
@@ -317,7 +320,7 @@ fn publish_state_for_bench(
             publish.temp_path().display()
         )
     })?;
-    mister_magik_catalog::fs_fault::maybe_fault("media.state.after_temp_write", &path);
+    observe_media_fault("media.state.after_temp_write", &path);
     File::open(publish.temp_path())
         .and_then(|file| file.sync_all())
         .map_err(|e| {
@@ -326,12 +329,9 @@ fn publish_state_for_bench(
                 publish.temp_path().display()
             )
         })?;
-    mister_magik_catalog::fs_fault::maybe_fault("media.state.after_temp_sync", &path);
+    observe_media_fault("media.state.after_temp_sync", &path);
     publish.install_temp(Some("bench media state"))?;
-    mister_magik_catalog::fs_fault::maybe_fault(
-        "media.state.after_rename_before_parent_sync",
-        &path,
-    );
+    observe_media_fault("media.state.after_rename_before_parent_sync", &path);
     sync_path_rust_best_effort(publish.parent());
     Ok(PackSaveMetrics {
         bytes: text.len() as u64,

@@ -13,6 +13,7 @@ use std::fmt;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct InstalledPaths {
     pub root: &'static str,
+    pub manifest: &'static str,
     pub main: &'static str,
     pub gui: &'static str,
     pub manager: &'static str,
@@ -199,12 +200,7 @@ fn validate(
     layout: Layout,
     profile: ValidationProfile,
 ) -> Result<(), ManifestError> {
-    match profile {
-        ValidationProfile::AgentStrict | ValidationProfile::ManagerLegacy => {
-            require_exact_fields(values)?;
-        }
-        ValidationProfile::GuiLegacy => require_gui_fields(values)?,
-    }
+    require_exact_fields(values)?;
     if values["format"] != FORMAT {
         return Err(ManifestError::new(
             "unsupported_platform_manifest",
@@ -237,38 +233,30 @@ fn validate(
             ),
         ));
     }
-    match profile {
-        ValidationProfile::GuiLegacy => Ok(()),
-        ValidationProfile::AgentStrict | ValidationProfile::ManagerLegacy => {
-            validate_complete_identity(values, layout)?;
-            if profile == ValidationProfile::AgentStrict
-                && values["qualification_candidate_id"] != qualification_candidate_id(values)
-            {
-                return Err(ManifestError::new(
-                    "platform_candidate_identity_mismatch",
-                    values["qualification_candidate_id"].clone(),
-                ));
-            }
-            Ok(())
-        }
+    validate_identity_encoding(values)?;
+    if matches!(
+        profile,
+        ValidationProfile::AgentStrict | ValidationProfile::ManagerLegacy
+    ) {
+        validate_layout_paths(values, layout)?;
     }
+    if values["qualification_candidate_id"] != qualification_candidate_id(values) {
+        return Err(ManifestError::new(
+            "platform_candidate_identity_mismatch",
+            values["qualification_candidate_id"].clone(),
+        ));
+    }
+    Ok(())
 }
 
-fn validate_complete_identity(
-    values: &BTreeMap<String, String>,
-    layout: Layout,
-) -> Result<(), ManifestError> {
+fn validate_identity_encoding(values: &BTreeMap<String, String>) -> Result<(), ManifestError> {
     require_hex("platform_bundle_id", &values["platform_bundle_id"], 64)?;
     require_hex(
         "qualification_candidate_id",
         &values["qualification_candidate_id"],
         64,
     )?;
-    for (name, expected) in layout.paths().components() {
-        let path_field = format!("{name}_path");
-        if values[&path_field] != expected {
-            return Err(ManifestError::new("platform_path_mismatch", name));
-        }
+    for (name, _) in Layout::Public.paths().components() {
         let hash_field = format!("{name}_sha256");
         require_hex(&hash_field, &values[&hash_field], 64)?;
     }
@@ -283,6 +271,19 @@ fn validate_complete_identity(
     Ok(())
 }
 
+fn validate_layout_paths(
+    values: &BTreeMap<String, String>,
+    layout: Layout,
+) -> Result<(), ManifestError> {
+    for (name, expected) in layout.paths().components() {
+        let path_field = format!("{name}_path");
+        if values[&path_field] != expected {
+            return Err(ManifestError::new("platform_path_mismatch", name));
+        }
+    }
+    Ok(())
+}
+
 fn require_exact_fields(values: &BTreeMap<String, String>) -> Result<(), ManifestError> {
     if values.len() == FIELDS.len() && FIELDS.iter().all(|field| values.contains_key(*field)) {
         Ok(())
@@ -290,36 +291,6 @@ fn require_exact_fields(values: &BTreeMap<String, String>) -> Result<(), Manifes
         Err(ManifestError::new(
             "invalid_platform_manifest_fields",
             values.keys().cloned().collect::<Vec<_>>().join(","),
-        ))
-    }
-}
-
-fn require_gui_fields(values: &BTreeMap<String, String>) -> Result<(), ManifestError> {
-    const GUI_FIELDS: &[&str] = &[
-        "format",
-        "platform_release",
-        "platform_release_number",
-        "platform_bundle_id",
-        "qualification_candidate_id",
-        "latch_protocol_version",
-        "latch_capability_mask",
-        "main_path",
-        "main_sha256",
-        "gui_sha256",
-        "scanout_module_path",
-        "scanout_module_sha256",
-        "latch_rbf_path",
-        "latch_rbf_sha256",
-        "main_revision",
-        "magik_revision",
-        "menu_revision",
-    ];
-    if GUI_FIELDS.iter().all(|field| values.contains_key(*field)) {
-        Ok(())
-    } else {
-        Err(ManifestError::new(
-            "invalid_platform_manifest_fields",
-            "GUI legacy required fields",
         ))
     }
 }
@@ -390,6 +361,28 @@ mod tests {
     }
 
     #[test]
+    fn checked_in_non_rust_fixtures_match_the_typed_contract() {
+        for (text, layout) in [
+            (
+                include_str!("../../generated/platform-v3.public.fixture"),
+                Layout::Public,
+            ),
+            (
+                include_str!("../../generated/platform-v3.development.fixture"),
+                Layout::Development,
+            ),
+        ] {
+            assert_eq!(
+                parse(text, layout, ValidationProfile::AgentStrict)
+                    .unwrap()
+                    .serialize()
+                    .unwrap(),
+                text
+            );
+        }
+    }
+
+    #[test]
     fn strict_profile_preserves_current_rejection_classes() {
         let valid = canonical(Layout::Development);
         let cases = [
@@ -428,7 +421,28 @@ mod tests {
     }
 
     #[test]
-    fn legacy_profiles_do_not_tighten_candidate_identity_yet() {
+    fn every_profile_rejects_noncanonical_identity_before_candidate_mismatch() {
+        let valid = canonical(Layout::Development);
+        let noncanonical = valid.replace(
+            &format!("platform_bundle_id={}", "c".repeat(64)),
+            &format!("platform_bundle_id={}", "C".repeat(64)),
+        );
+        for profile in [
+            ValidationProfile::AgentStrict,
+            ValidationProfile::GuiLegacy,
+            ValidationProfile::ManagerLegacy,
+        ] {
+            assert_eq!(
+                parse(&noncanonical, Layout::Development, profile)
+                    .unwrap_err()
+                    .code(),
+                "invalid_platform_identity"
+            );
+        }
+    }
+
+    #[test]
+    fn every_profile_rejects_forged_candidate_identity() {
         let valid = canonical(Layout::Development);
         let candidate = valid
             .lines()
@@ -445,8 +459,27 @@ mod tests {
                 Layout::Development,
                 ValidationProfile::ManagerLegacy
             )
-            .is_ok()
+            .is_err()
         );
-        assert!(parse(&forged, Layout::Development, ValidationProfile::GuiLegacy).is_ok());
+        assert!(parse(&forged, Layout::Development, ValidationProfile::GuiLegacy).is_err());
+    }
+
+    #[test]
+    fn gui_profile_rejects_missing_and_additional_fields() {
+        let valid = canonical(Layout::Development);
+        let missing = valid
+            .lines()
+            .filter(|line| !line.starts_with("manager_sha256="))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let additional = format!("{valid}unexpected=value\n");
+        for text in [missing, additional] {
+            assert_eq!(
+                parse(&text, Layout::Development, ValidationProfile::GuiLegacy)
+                    .unwrap_err()
+                    .code(),
+                "invalid_platform_manifest_fields"
+            );
+        }
     }
 }

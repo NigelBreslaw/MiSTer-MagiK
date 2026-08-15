@@ -8,6 +8,7 @@
 //! built with `scripts/agent build runtime-analysis`; benchmarks profile the installed runtime.
 
 use std::sync::atomic::{AtomicU8, Ordering};
+#[cfg(any(feature = "profile", test))]
 use std::time::Duration;
 
 const SCREENSAVER_TRIGGER: &str = "screensaver";
@@ -19,6 +20,7 @@ const LAUNCH_RETURN_TRIGGER: &str = "launch-return";
 const COLD_BOOT_TRIGGER: &str = "cold-boot";
 const SYSTEM_ENTRY_TRIGGER: &str = "system-entry";
 const LAUNCHER_RESPONSE_TRIGGER: &str = "launcher-response";
+#[cfg(any(feature = "profile", test))]
 const DEFAULT_SCREENSAVER_PROFILE_SECS: u64 = 30;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -34,6 +36,7 @@ enum BoundedProfileTrigger {
 }
 
 impl BoundedProfileTrigger {
+    #[cfg(feature = "profile")]
     const fn label(self) -> &'static str {
         match self {
             Self::Screensaver => SCREENSAVER_TRIGGER,
@@ -47,6 +50,7 @@ impl BoundedProfileTrigger {
         }
     }
 
+    #[cfg(feature = "profile")]
     const fn schema(self) -> &'static str {
         match self {
             Self::Screensaver => "mister-magik-screensaver-pprof-v1",
@@ -174,16 +178,19 @@ fn bounded_profile_trigger_from_values(
     }
 }
 
+#[cfg(any(feature = "profile", test))]
 fn screensaver_profile_duration() -> Duration {
     screensaver_profile_duration_from_value(
         std::env::var("MISTER_PPROF_DURATION_SECS").ok().as_deref(),
     )
 }
 
+#[cfg(any(feature = "profile", test))]
 fn screensaver_profile_warmup() -> Duration {
     screensaver_profile_warmup_from_value(std::env::var("MISTER_PPROF_WARMUP_SECS").ok().as_deref())
 }
 
+#[cfg(any(feature = "profile", test))]
 fn screensaver_profile_warmup_from_value(value: Option<&str>) -> Duration {
     Duration::from_secs(
         value
@@ -193,6 +200,7 @@ fn screensaver_profile_warmup_from_value(value: Option<&str>) -> Duration {
     )
 }
 
+#[cfg(any(feature = "profile", test))]
 fn screensaver_profile_duration_from_value(value: Option<&str>) -> Duration {
     Duration::from_secs(
         value
@@ -202,6 +210,7 @@ fn screensaver_profile_duration_from_value(value: Option<&str>) -> Duration {
     )
 }
 
+#[cfg(any(feature = "profile", test))]
 fn screensaver_profile_frame_bounds(first_frame: u64, next_frame: u64) -> (u64, u64) {
     (first_frame, next_frame.saturating_sub(1).max(first_frame))
 }

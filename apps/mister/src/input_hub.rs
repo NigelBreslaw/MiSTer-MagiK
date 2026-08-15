@@ -108,6 +108,7 @@ impl MailboxState {
         self.wake_generation = self.wake_generation.wrapping_add(1);
     }
 
+    #[cfg(test)]
     fn publish(&mut self, pending: crate::input_event::PendingInputEvent) -> bool {
         self.publish_proxy(pending, ProxyEventMetadata::default())
     }
@@ -757,7 +758,7 @@ fn parse_input_event(bytes: &[u8; INPUT_EVENT_SIZE]) -> (u64, u16, u16, i32) {
     )
 }
 
-pub(crate) fn monotonic_us() -> u64 {
+pub fn monotonic_us() -> u64 {
     let mut value = libc::timespec {
         tv_sec: 0,
         tv_nsec: 0,

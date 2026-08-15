@@ -140,6 +140,8 @@ pub enum BuiltinOperation {
     ShellOwnership,
     RuntimeEnvironment,
     PlatformManifestAuthority,
+    DeviceCrateRootOwnership,
+    ExecutableBoundaries,
     DistributionWorkflow,
     KernelWorkflow,
     PlatformWorkflow,

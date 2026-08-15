@@ -84,10 +84,31 @@ line count without clearer ownership or dependency direction is not success.
 Stable owner IDs keep moved or temporarily absent hotspot paths visible rather
 than silently treating them as resolved.
 
-The current exception inventory, P1 migration owners, removal conditions, and
+The enforced boundary inventory, remaining Type/Decompose ownership, and
 exclusive edit seams are recorded in
 `docs/agents/architecture-debt-ledger.md`. That ledger governs sequencing; the
 report remains evidence only.
+
+### Enforced executable boundaries
+
+Launcher orchestration depends on the portable `LaunchHandoff`,
+`DisplayControl`, `RuntimeState`, and `LauncherPersistence` capabilities in
+`crates/magik-core`. Device paths, Main commands, process inspection, and
+display-response parsing stay in `mister/platform/runtime`; launcher-owned
+return state, settings, input profiles, and recovery composition stay in the
+application. Destructive reset requests use the separate typed
+`DirectResetFaultControl` capability and expose no caller-selected command or
+path.
+
+Platform-v3 structure, installed component paths, and candidate identity come
+from the shared manifest contract. The application binary owns only allocator
+and process bootstrap; the library owns the application module graph and
+entrypoint. Device protocol v2 retains legacy error text while optional
+structured failure metadata survives host parsing, nested `AgentError`
+contexts, redacted progress JSON, and SQLite evidence. Repository builtins
+reject new FIFO owners, copied platform paths or parsers, duplicate device
+crate roots, missing production effect adapters, and string-flattened
+executable error edges.
 
 ## Boot And Process Model
 
@@ -973,9 +994,12 @@ Relevant docs:
 
 ## Build And Module Boundaries
 
-`apps/mister/src/lib.rs` holds host-testable logic without the Slint/UI feature.
-The binary target in `apps/mister/src/main.rs` owns device-only work: FPGA,
-framebuffer, VT, input, audio, and the Slint runtime.
+`apps/mister/src/lib.rs` is the single application module root. Host-testable
+logic remains available without the Slint/UI feature; device-only FPGA,
+framebuffer, VT, input, audio, and Slint modules are library-owned behind their
+existing cfgs. `apps/mister/src/app_entry.rs` owns process state and command
+dispatch. The binary target in `apps/mister/src/main.rs` is only the allocator,
+earliest installed-layout initialization, and the call to `app_entry::run`.
 
 Use `apps/mister/BUILD.md` for build profiles, cross-compilation, FFmpeg, size
 tracking, and CI details. Do not duplicate those details here.

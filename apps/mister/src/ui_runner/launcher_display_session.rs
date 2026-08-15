@@ -25,7 +25,7 @@ impl LauncherDisplayHardware for Fpga {
     }
 }
 
-pub(crate) struct LauncherDisplaySession {
+pub struct LauncherDisplaySession {
     route: LauncherFramebufferRoute,
     fb_width: usize,
     fb_height: usize,
@@ -37,7 +37,7 @@ pub(crate) struct LauncherDisplaySession {
 }
 
 impl LauncherDisplaySession {
-    pub(crate) fn new(ui: &UiDisplay) -> Self {
+    pub fn new(ui: &UiDisplay) -> Self {
         Self::with_guard(ui, FramebufferRouteGuard::from_env())
     }
 
@@ -57,15 +57,15 @@ impl LauncherDisplaySession {
         }
     }
 
-    pub(crate) fn route(&self) -> LauncherFramebufferRoute {
+    pub fn route(&self) -> LauncherFramebufferRoute {
         self.route
     }
 
-    pub(crate) fn enable_initial(&mut self, hardware: &mut Fpga) -> io::Result<u16> {
+    pub fn enable_initial(&mut self, hardware: &mut Fpga) -> io::Result<u16> {
         self.enable_route(hardware)
     }
 
-    pub(crate) fn enable_boot_settle(&mut self, hardware: &mut Fpga) -> io::Result<u16> {
+    pub fn enable_boot_settle(&mut self, hardware: &mut Fpga) -> io::Result<u16> {
         self.enable_route(hardware)
     }
 

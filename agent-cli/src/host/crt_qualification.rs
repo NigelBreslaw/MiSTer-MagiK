@@ -2,10 +2,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use super::{
-    IniEdit, MenuOutputProfile, RebootMode, Result, acknowledged_main_command, connect,
-    crt_trial_run_command, edit_remote_ini, exec, exec_checked, exec_checked_output, issue_reboot,
-    parse_crt_runtime_settings_reply, parse_crt_trial_status, remote_write, wait_down,
-    wait_launcher_ready, wait_up,
+    DEVELOPMENT_GUI_REMOTE, IniEdit, MenuOutputProfile, RebootMode, Result,
+    acknowledged_main_command, connect, crt_trial_run_command, edit_remote_ini, exec, exec_checked,
+    exec_checked_output, issue_reboot, parse_crt_runtime_settings_reply, parse_crt_trial_status,
+    platform_safety_script, remote_write, wait_down, wait_launcher_ready, wait_up,
 };
 use serde_json::{Value, json};
 use ssh2::Session;
@@ -268,9 +268,10 @@ fn run_probe(pattern: &str, seconds: u64, output: &Path) -> Result<()> {
 fn crt_probe_run_command(pattern: &str, seconds: u64, runtime_settings: &str) -> String {
     let resume = acknowledged_main_command("mister_magik_resume");
     format!(
-        "cleanup() {{ trap - EXIT HUP INT TERM; {resume}; }}; trap cleanup EXIT HUP INT TERM; set -eu; test -x /media/fat/mister-magik-dev/mister-magik-fb; MISTER_CRT_PROBE_PATTERN={} MISTER_MAGIK_RUNTIME_SETTINGS_V1={} /media/fat/mister-magik-dev/mister-magik-fb ui crt_probe {seconds} >/tmp/mister-magik-crt_probe.log 2>&1",
+        "cleanup() {{ trap - EXIT HUP INT TERM; {resume}; }}; trap cleanup EXIT HUP INT TERM; set -eu; test -x {gui}; MISTER_CRT_PROBE_PATTERN={} MISTER_MAGIK_RUNTIME_SETTINGS_V1={} {gui} ui crt_probe {seconds} >/tmp/mister-magik-crt_probe.log 2>&1",
         super::sh(pattern),
         super::sh(runtime_settings),
+        gui = super::sh(DEVELOPMENT_GUI_REMOTE),
     )
 }
 
@@ -482,7 +483,7 @@ fn ensure_arming_clear(session: &Session) -> Result<()> {
     exec_checked(
         session,
         "CRT qualification arming preflight",
-        "set -eu; for path in /media/fat/mister-magik/launcher.env /media/fat/mister-magik-dev/launcher.env /tmp/mister-magik/fs-fault-launcher.env /tmp/mister-magik/fs-fault-session /tmp/mister-magik/fs-fault.json /media/fat/mister-magik/rebuild-on-next-boot /media/fat/mister-magik-dev/rebuild-on-next-boot; do test ! -e \"$path\"; done",
+        &format!("set -eu; {}", platform_safety_script()),
     )
 }
 

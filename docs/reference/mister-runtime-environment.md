@@ -2,7 +2,7 @@
 
 <!-- Generated from apps/mister/config/runtime-environment.toml. Do not edit. -->
 
-Registry format: `mister-magik-runtime-environment-v1`. Baseline: 397 literal occurrences, 275 owned names, 11 external/build-time names.
+Registry format: `mister-magik-runtime-environment-v1`. Baseline: 395 literal occurrences, 274 owned names, 10 external/build-time names.
 
 | Name | Classification | Shape | Default behavior | Visibility | Owner |
 |---|---|---|---|---|---|
@@ -38,7 +38,6 @@ Registry format: `mister-magik-runtime-environment-v1`. Baseline: 397 literal oc
 | `MISTER_CATALOG_REFRESH` | production | string, enum, or boolean token | site-defined fallback; unchanged in P0 | internal runtime | `apps/mister/src/ui_runner/ui_frame_target.rs` |
 | `MISTER_CATALOG_TRACE` | diagnostic | string, enum, or boolean token | site-defined fallback; unchanged in P0 | developer diagnostic | `crates/catalog/src/catalog_checkpoint.rs` |
 | `MISTER_CLOUD` | production | string, enum, or boolean token | site-defined fallback; unchanged in P0 | internal runtime | `crates/particles/src/intro.rs` |
-| `MISTER_CMD` | external | string, enum, or boolean token | site-defined fallback; unchanged in P0 | external compatibility | `crates/catalog/src/fs_fault.rs` |
 | `MISTER_CRASH_BACKTRACE` | diagnostic | string, enum, or boolean token | site-defined fallback; unchanged in P0 | developer diagnostic | `apps/mister/src/crash_report.rs` |
 | `MISTER_CRT_PROBE_PATTERN` | production | string, enum, or boolean token | site-defined fallback; unchanged in P0 | internal runtime | `apps/mister/src/ui_runner/crt_trial_loop.rs` |
 | `MISTER_CRT_TRIAL_CONTENT_BOUNDS` | production | string, enum, or boolean token | site-defined fallback; unchanged in P0 | internal runtime | `apps/mister/src/ui_runner/crt_trial_loop.rs` |
@@ -134,19 +133,19 @@ Registry format: `mister-magik-runtime-environment-v1`. Baseline: 397 literal oc
 | `MISTER_MAGIK_HOT_JOURNAL_DB` | production | string, enum, or boolean token | site-defined fallback; unchanged in P0 | internal runtime | `crates/catalog/src/sqlite_catalog.rs` |
 | `MISTER_MAGIK_INPUT_PROXY` | production | string, enum, or boolean token | site-defined fallback; unchanged in P0 | internal runtime | `apps/mister/src/input_hub.rs` |
 | `MISTER_MAGIK_INPUT_PROXY_PROTOCOL` | production | string, enum, or boolean token | site-defined fallback; unchanged in P0 | internal runtime | `apps/mister/src/input_hub.rs` |
-| `MISTER_MAGIK_MAIN_GENERATION` | production | bounded integer | missing or invalid disables supervised readiness acknowledgement | internal runtime | `apps/mister/src/ui_runner/launcher_readiness.rs` |
-| `MISTER_MAGIK_MAIN_PID` | production | bounded integer | missing or invalid disables supervised readiness acknowledgement | internal runtime | `apps/mister/src/ui_runner/launcher_readiness.rs` |
-| `MISTER_MAGIK_OWNER_EPOCH` | production | bounded integer | missing or invalid disables supervised readiness acknowledgement | internal runtime | `apps/mister/src/ui_runner/launcher_readiness.rs` |
+| `MISTER_MAGIK_MAIN_GENERATION` | production | bounded integer | missing or invalid disables supervised readiness acknowledgement | internal runtime | `apps/mister/src/process_config.rs` |
+| `MISTER_MAGIK_MAIN_PID` | production | bounded integer | missing or invalid disables supervised readiness acknowledgement | internal runtime | `apps/mister/src/process_config.rs` |
+| `MISTER_MAGIK_OWNER_EPOCH` | production | bounded integer | missing or invalid disables supervised readiness acknowledgement | internal runtime | `apps/mister/src/process_config.rs` |
 | `MISTER_MAGIK_PARENT` | production | string, enum, or boolean token | site-defined fallback; unchanged in P0 | internal runtime | `apps/mister/src/ui_runner/launcher_loop.rs` |
 | `MISTER_MAGIK_PROCESS_LOCK` | production | string, enum, or boolean token | site-defined fallback; unchanged in P0 | internal runtime | `apps/mister/src/main.rs` |
-| `MISTER_MAGIK_READY_FIFO` | production | path or path list | site-defined fallback; unchanged in P0 | internal runtime | `apps/mister/src/ui_runner/launcher_readiness.rs` |
+| `MISTER_MAGIK_READY_FIFO` | production | path or path list | site-defined fallback; unchanged in P0 | internal runtime | `apps/mister/src/process_config.rs` |
 | `MISTER_MAGIK_RELEASE_MARKER` | production | path or path list | site-defined fallback; unchanged in P0 | internal runtime | `apps/mister/src/ui_runner/update_checker.rs` |
 | `MISTER_MAGIK_RETURN_TO_LAUNCHER` | production | string, enum, or boolean token | site-defined fallback; unchanged in P0 | internal runtime | `apps/mister/src/ui_runner/launcher_loop.rs` |
 | `MISTER_MAGIK_RUNTIME_DISPLAY_V1` | production | string, enum, or boolean token | site-defined fallback; unchanged in P0 | internal runtime | `apps/mister/src/ui_display.rs` |
 | `MISTER_MAGIK_RUNTIME_SETTINGS_V1` | production | string, enum, or boolean token | site-defined fallback; unchanged in P0 | internal runtime | `apps/mister/src/ui_display.rs` |
 | `MISTER_MAGIK_SOURCE_DIRTY` | build-time | path or path list | site-defined fallback; unchanged in P0 | build pipeline | `apps/mister/src/build_identity.rs` |
 | `MISTER_MAGIK_SOURCE_REVISION` | build-time | string, enum, or boolean token | site-defined fallback; unchanged in P0 | build pipeline | `apps/mister/src/build_identity.rs` |
-| `MISTER_MAGIK_STARTUP_TOKEN` | production | string, enum, or boolean token | site-defined fallback; unchanged in P0 | internal runtime | `apps/mister/src/ui_runner/launcher_readiness.rs` |
+| `MISTER_MAGIK_STARTUP_TOKEN` | production | string, enum, or boolean token | site-defined fallback; unchanged in P0 | internal runtime | `apps/mister/src/process_config.rs` |
 | `MISTER_MAGIK_TEST_AUTO_LAUNCH_GATE` | test | string, enum, or boolean token | site-defined fallback; unchanged in P0 | test only | `apps/mister/src/ui_runner/launcher_loop.rs` |
 | `MISTER_MAGIK_TEST_CATALOG_PUBLICATION_GATE` | test | string, enum, or boolean token | site-defined fallback; unchanged in P0 | test only | `apps/mister/src/ui_runner/launcher_catalog_publication_test.rs` |
 | `MISTER_MAGIK_TEST_CATALOG_PUBLICATION_SESSION` | test | string, enum, or boolean token | site-defined fallback; unchanged in P0 | test only | `apps/mister/src/ui_runner/launcher_catalog_publication_test.rs` |

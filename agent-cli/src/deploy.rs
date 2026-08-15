@@ -363,14 +363,12 @@ mod tests {
         let main = "b".repeat(40);
         for manifest in [
             format!(
-                "format=mister-magik-platform-v3\nmagik_revision={revision}\nmain_revision={main}\n"
+                "format={}\nmagik_revision={revision}\nmain_revision={main}\n",
+                platform_manifest::FORMAT
             ),
             format!("{}magik_revision={revision}\n", manifest(&revision, &main)),
             format!("{}extra=value\n", manifest(&revision, &main)),
-            manifest(&revision, &main).replace(
-                "/media/fat/mister-magik-dev/mister-magik-manager",
-                "/tmp/manager",
-            ),
+            manifest(&revision, &main).replace(Layout::Development.paths().manager, "/tmp/manager"),
         ] {
             assert_eq!(
                 reconcile(Path::new("."), &manifest, &revision).decision,
@@ -420,7 +418,7 @@ mod tests {
 
     fn manifest(magik: &str, main: &str) -> String {
         let mut values = std::collections::BTreeMap::<String, String>::new();
-        values.insert("format".into(), "mister-magik-platform-v3".to_owned());
+        values.insert("format".into(), platform_manifest::FORMAT.to_owned());
         values.insert("platform_release".into(), "platform-v0.16".to_owned());
         values.insert("platform_release_number".into(), "16".to_owned());
         values.insert("platform_bundle_id".into(), "e".repeat(64));
@@ -448,10 +446,7 @@ mod tests {
             "qualification_candidate_id".into(),
             platform_manifest::qualification_candidate_id(&values),
         );
-        platform_manifest::FIELDS
-            .iter()
-            .map(|field| format!("{field}={}\n", values[*field]))
-            .collect()
+        mister_magik_platform_manifest_contract::serialize(&values).unwrap()
     }
 
     fn git(repository: &Path, args: &[&str]) {

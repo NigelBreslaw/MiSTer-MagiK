@@ -245,6 +245,7 @@ fn add_path_operations(
     }
     if path == Path::new("mister/platform/contracts/platform-v3.schema.toml")
         || path.starts_with("mister/platform/contracts/manifest")
+        || path.starts_with("mister/platform/contracts/generated")
         || path == Path::new("mister/platform/fpga/menu-vblank-latch/latch-protocol.json")
         || path.extension().and_then(|extension| extension.to_str()) == Some("rs")
         || path.starts_with("scripts")
@@ -255,6 +256,42 @@ fn add_path_operations(
             "Check platform manifest authority",
             BuiltinOperation::PlatformManifestAuthority,
             "platform contract or maintained consumer changed → platform-v3 duplication guard",
+        ));
+    }
+    if path.starts_with("apps/mister/src")
+        || path == Path::new("agent-cli/src/checks.rs")
+        || path == Path::new("agent-cli/src/model.rs")
+    {
+        add(builtin(
+            "repo.device-crate-root-ownership",
+            "Check device crate-root ownership",
+            BuiltinOperation::DeviceCrateRootOwnership,
+            "device application source changed → single crate-root ownership guard",
+        ));
+    }
+    if path == Path::new("crates/magik-core/src/launcher_effects.rs")
+        || path == Path::new("crates/catalog/src/fs_fault.rs")
+        || path.starts_with("apps/mister/src")
+        || path.starts_with("mister/platform/runtime/src")
+        || path.starts_with("mister/tools/agent/src")
+        || matches!(
+            path.to_str(),
+            Some(
+                "agent-cli/src/main.rs"
+                    | "agent-cli/src/error.rs"
+                    | "agent-cli/src/progress.rs"
+                    | "agent-cli/src/evidence.rs"
+                    | "agent-cli/src/checks.rs"
+                    | "agent-cli/src/model.rs"
+                    | "agent-cli/src/planner.rs"
+            )
+        )
+    {
+        add(builtin(
+            "repo.executable-boundaries",
+            "Check executable boundary ownership",
+            BuiltinOperation::ExecutableBoundaries,
+            "portable capability, runtime adapter, or executable error edge changed → enforced boundary contract",
         ));
     }
     if path.file_name().and_then(|name| name.to_str()) == Some("AGENTS.md")
@@ -552,8 +589,7 @@ fn add_path_operations(
                         "test",
                         "--manifest-path",
                         "apps/mister/Cargo.toml",
-                        "--bin",
-                        "mister-magik-fb",
+                        "--lib",
                         "--no-default-features",
                         "--features",
                         features,
@@ -675,8 +711,7 @@ fn add_path_operations(
                         "test",
                         "--manifest-path",
                         "apps/mister/Cargo.toml",
-                        "--bin",
-                        "mister-magik-fb",
+                        "--lib",
                         "--no-default-features",
                         "--features",
                         "ui",
@@ -735,19 +770,18 @@ fn add_path_operations(
             add(with_inputs(
                 cargo(
                     "app.ui-tests",
-                    "Test launcher binary logic",
+                    "Test launcher library logic",
                     &[
                         "test",
                         "--manifest-path",
                         "apps/mister/Cargo.toml",
-                        "--bin",
-                        "mister-magik-fb",
+                        "--lib",
                         "--no-default-features",
                         "--features",
                         "ui",
                         "launcher_catalog_session::tests",
                     ],
-                    "launcher session source → focused UI binary tests",
+                    "launcher session source → focused UI library tests",
                 ),
                 MISTER_APP_COMPILED_INPUTS,
             ));
@@ -1190,7 +1224,7 @@ fn add_script_operations(repository: &Path, path: &Path, add: &mut impl FnMut(Op
         ));
     }
     if text.ends_with("MiSTer-MagiK.sh") || text.ends_with("test-mister-magik-installer.sh") {
-        add(with_inputs(
+        let mut manager_fixture = with_inputs(
             cargo(
                 "mister-manager.host-binary",
                 "Build host installer manager fixture",
@@ -1204,7 +1238,9 @@ fn add_script_operations(repository: &Path, path: &Path, add: &mut impl FnMut(Op
                 "installer lifecycle fixture requires the host manager binary",
             ),
             &["mister/tools/manager"],
-        ));
+        );
+        manager_fixture.risk = Risk::LocalWrite;
+        add(manager_fixture);
         let mut lifecycle = with_inputs(
             op_owned(
                 "scripts.installer-lifecycle",
@@ -1557,7 +1593,7 @@ mod tests {
                 .iter()
                 .find(|operation| operation.id == "scripts.codex-context-report")
                 .expect("focused context report contract");
-            assert_eq!(operation.command, "python3");
+            assert_eq!(operation.program, "python3");
             assert_eq!(
                 operation.args,
                 ["scripts/tests/test-codex-context-report.py"]
@@ -1777,7 +1813,7 @@ mod tests {
     }
 
     #[test]
-    fn launcher_session_plan_uses_binary_ui_tests() {
+    fn launcher_session_plan_uses_library_ui_tests() {
         let plan = affected_plan(
             AssuranceRequest::Plan {
                 scope: Scope::Paths(vec![]),
@@ -1790,13 +1826,8 @@ mod tests {
             .iter()
             .find(|operation| operation.id == "app.ui-tests")
             .unwrap();
-        assert!(!tests.args.contains(&"--lib".into()));
-        assert!(
-            tests
-                .args
-                .windows(2)
-                .any(|args| args == ["--bin", "mister-magik-fb"])
-        );
+        assert!(tests.args.contains(&"--lib".into()));
+        assert!(!tests.args.contains(&"--bin".into()));
         assert!(tests.args.contains(&"ui".into()));
         assert!(
             tests
@@ -1820,12 +1851,8 @@ mod tests {
             .find(|operation| operation.id == "app.production-ui-tests")
             .unwrap();
         assert!(production_test.args.contains(&"ui".into()));
-        assert!(
-            production_test
-                .args
-                .windows(2)
-                .any(|args| args == ["--bin", "mister-magik-fb"])
-        );
+        assert!(production_test.args.contains(&"--lib".into()));
+        assert!(!production_test.args.contains(&"--bin".into()));
         assert!(!production_test.args.contains(&"ui,experiments".into()));
 
         let preview = affected_plan(
@@ -2250,12 +2277,37 @@ mod tests {
             .iter()
             .find(|operation| operation.id == "app.media-http-signed-tests")
             .unwrap();
+        assert!(signed_app.args.iter().any(|arg| arg == "--lib"));
+        assert!(!signed_app.args.iter().any(|arg| arg == "--bin"));
         assert!(
             signed_app
                 .args
                 .iter()
                 .any(|arg| arg == "ui,signed-media-manifests")
         );
+    }
+
+    #[test]
+    fn installer_lifecycle_always_materializes_its_manager_fixture() {
+        let plan = affected_plan(
+            AssuranceRequest::Plan {
+                scope: Scope::Paths(vec![]),
+            },
+            vec!["scripts/tests/test-mister-magik-installer.sh".into()],
+        )
+        .unwrap();
+        let manager = plan
+            .operations
+            .iter()
+            .find(|operation| operation.id == "mister-manager.host-binary")
+            .unwrap();
+        let lifecycle = plan
+            .operations
+            .iter()
+            .find(|operation| operation.id == "scripts.installer-lifecycle")
+            .unwrap();
+        assert_eq!(manager.risk, Risk::LocalWrite);
+        assert!(manager.workflow_phase() < lifecycle.workflow_phase());
     }
 
     #[test]
@@ -2402,6 +2454,28 @@ mod tests {
             .collect();
         assert_eq!(operations.len(), 1);
         assert_eq!(operations[0].id, "repo.runtime-environment");
+    }
+
+    #[test]
+    fn executable_edges_select_boundary_ownership_once() {
+        let plan = affected_plan(
+            AssuranceRequest::Plan {
+                scope: Scope::Paths(vec![]),
+            },
+            vec![
+                "apps/mister/src/launcher.rs".into(),
+                "agent-cli/src/progress.rs".into(),
+                "mister/tools/agent/src/main.rs".into(),
+            ],
+        )
+        .unwrap();
+        let operations: Vec<_> = plan
+            .operations
+            .iter()
+            .filter(|operation| operation.builtin == Some(BuiltinOperation::ExecutableBoundaries))
+            .collect();
+        assert_eq!(operations.len(), 1);
+        assert_eq!(operations[0].id, "repo.executable-boundaries");
     }
 
     #[test]
