@@ -105,8 +105,14 @@ name = "MISTER_ARCADE_ENTRY_TRACE"
 owner = "apps/mister/src/ui_runner/launcher_loop.rs"
 classification = "diagnostic"
 value_shape = "string, enum, or boolean token"
-default_behavior = "site-defined fallback; unchanged in P0"
+default_behavior = "uses the owner-defined value or disabled state when unset"
 visibility = "developer diagnostic"
+parser = "string"
+scope = "instrumentation"
+conflicts = []
+sensitivity = "public"
+aliases = []
+documentation = { summary = "Controls arcade entry trace behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
 name = "MISTER_ARCADE_ROOT"
@@ -211,16 +217,28 @@ name = "MISTER_BOOT_FRAME_PROFILE_FILE"
 owner = "mister/platform/runtime/src/boot_analytics.rs"
 classification = "diagnostic"
 value_shape = "path or path list"
-default_behavior = "site-defined fallback; unchanged in P0"
+default_behavior = "uses the owner-defined output, fixture, or disabled path when unset"
 visibility = "developer diagnostic"
+parser = "path"
+scope = "instrumentation"
+conflicts = []
+sensitivity = "path"
+aliases = []
+documentation = { summary = "Controls boot frame profile file behavior", accepted_values = [], value_policy = "redact" }
 
 [[control]]
 name = "MISTER_BOOT_FRAME_PROFILE_FRAMES"
 owner = "mister/platform/runtime/src/boot_analytics.rs"
 classification = "diagnostic"
 value_shape = "bounded integer"
-default_behavior = "site-defined fallback; unchanged in P0"
+default_behavior = "uses the owner-defined bounded numeric default when unset or invalid"
 visibility = "developer diagnostic"
+parser = "u64"
+scope = "instrumentation"
+conflicts = []
+sensitivity = "public"
+aliases = []
+documentation = { summary = "Controls boot frame profile frames behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
 name = "MISTER_CAMERA_EFFECTS"
@@ -297,8 +315,14 @@ name = "MISTER_CAMERA_EFFECTS_TRACE"
 owner = "apps/mister/src/ui_runner/experiments/effects/camera_effects_loop.rs"
 classification = "diagnostic"
 value_shape = "string, enum, or boolean token"
-default_behavior = "site-defined fallback; unchanged in P0"
+default_behavior = "uses the owner-defined value or disabled state when unset"
 visibility = "developer diagnostic"
+parser = "string"
+scope = "instrumentation"
+conflicts = []
+sensitivity = "public"
+aliases = []
+documentation = { summary = "Controls camera effects trace behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
 name = "MISTER_CATALOG_BACKGROUND_DELAY_MS"
@@ -347,8 +371,14 @@ name = "MISTER_CATALOG_DIAGNOSTICS_DIR"
 owner = "apps/mister/src/catalog_progress_report.rs"
 classification = "diagnostic"
 value_shape = "path or path list"
-default_behavior = "site-defined fallback; unchanged in P0"
+default_behavior = "uses the owner-defined output, fixture, or disabled path when unset"
 visibility = "developer diagnostic"
+parser = "path"
+scope = "instrumentation"
+conflicts = []
+sensitivity = "path"
+aliases = []
+documentation = { summary = "Controls catalog diagnostics dir behavior", accepted_values = [], value_policy = "redact" }
 
 [[control]]
 name = "MISTER_CATALOG_DURABLE_RESUME"
@@ -411,16 +441,28 @@ name = "MISTER_CATALOG_TRACE"
 owner = "crates/catalog/src/catalog_checkpoint.rs"
 classification = "diagnostic"
 value_shape = "string, enum, or boolean token"
-default_behavior = "site-defined fallback; unchanged in P0"
+default_behavior = "uses the owner-defined value or disabled state when unset"
 visibility = "developer diagnostic"
+parser = "string"
+scope = "instrumentation"
+conflicts = []
+sensitivity = "public"
+aliases = []
+documentation = { summary = "Controls catalog trace behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
 name = "MISTER_CRASH_BACKTRACE"
 owner = "apps/mister/src/crash_report.rs"
 classification = "diagnostic"
-value_shape = "string, enum, or boolean token"
-default_behavior = "site-defined fallback; unchanged in P0"
+value_shape = "boolean token"
+default_behavior = "uses the owner-defined enabled or disabled default when unset or unrecognized"
 visibility = "developer diagnostic"
+parser = "bool"
+scope = "instrumentation"
+conflicts = []
+sensitivity = "public"
+aliases = []
+documentation = { summary = "Controls crash backtrace behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
 name = "MISTER_CRT_PROBE_PATTERN"
@@ -483,16 +525,28 @@ name = "MISTER_EFFECT_BENCH_LABEL"
 owner = "apps/mister/src/ui_effect_bench.rs"
 classification = "benchmark"
 value_shape = "string, enum, or boolean token"
-default_behavior = "site-defined fallback; unchanged in P0"
+default_behavior = "uses the owner-defined value or disabled state when unset"
 visibility = "benchmark only"
+parser = "string"
+scope = "instrumentation"
+conflicts = []
+sensitivity = "public"
+aliases = []
+documentation = { summary = "Controls effect bench label behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
 name = "MISTER_FB_DIAGNOSTIC_RECT"
 owner = "mister/platform/runtime/src/fpga.rs"
 classification = "diagnostic"
 value_shape = "string, enum, or boolean token"
-default_behavior = "site-defined fallback; unchanged in P0"
+default_behavior = "uses the owner-defined value or disabled state when unset"
 visibility = "developer diagnostic"
+parser = "string"
+scope = "instrumentation"
+conflicts = []
+sensitivity = "public"
+aliases = []
+documentation = { summary = "Controls fb diagnostic rect behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
 name = "MISTER_FB_MAP_BANDWIDTH_FRAMES"
@@ -666,33 +720,57 @@ documentation = { summary = "Controls frame order behavior", accepted_values = [
 name = "MISTER_FS_FAULT_ACTION"
 owner = "crates/catalog/src/fs_fault.rs"
 classification = "fault"
-value_shape = "string, enum, or boolean token"
-default_behavior = "site-defined fallback; unchanged in P0"
+value_shape = "enum token"
+default_behavior = "uses the owner-defined mode when unset or unrecognized"
 visibility = "destructive test only"
+parser = "enum"
+scope = "command"
+conflicts = []
+sensitivity = "public"
+aliases = []
+documentation = { summary = "Controls fs fault action behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
 name = "MISTER_FS_FAULT_DELAY_MS"
 owner = "crates/catalog/src/fs_fault.rs"
 classification = "fault"
 value_shape = "bounded integer"
-default_behavior = "site-defined fallback; unchanged in P0"
+default_behavior = "uses the owner-defined bounded numeric default when unset or invalid"
 visibility = "destructive test only"
+parser = "u64"
+scope = "command"
+conflicts = []
+sensitivity = "public"
+aliases = []
+documentation = { summary = "Controls fs fault delay ms behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
 name = "MISTER_FS_FAULT_POINT"
 owner = "crates/catalog/src/fs_fault.rs"
 classification = "fault"
 value_shape = "string, enum, or boolean token"
-default_behavior = "site-defined fallback; unchanged in P0"
+default_behavior = "uses the owner-defined value or disabled state when unset"
 visibility = "destructive test only"
+parser = "string"
+scope = "command"
+conflicts = []
+sensitivity = "public"
+aliases = []
+documentation = { summary = "Controls fs fault point behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
 name = "MISTER_FS_FAULT_SESSION"
 owner = "crates/catalog/src/fs_fault.rs"
 classification = "fault"
-value_shape = "string, enum, or boolean token"
-default_behavior = "site-defined fallback; unchanged in P0"
+value_shape = "volatile token"
+default_behavior = "uses the owner-defined value or disabled state when unset"
 visibility = "destructive test only"
+parser = "string"
+scope = "command"
+conflicts = []
+sensitivity = "volatile-token"
+aliases = []
+documentation = { summary = "Controls fs fault session behavior", accepted_values = [], value_policy = "omit" }
 
 [[control]]
 name = "MISTER_GLYPH_ALPHA_THRESHOLD"
@@ -712,25 +790,43 @@ documentation = { summary = "Controls glyph alpha threshold behavior", accepted_
 name = "MISTER_GUI_FRAME_PROFILE"
 owner = "apps/mister/src/ui_runner/launcher_gui_profile.rs"
 classification = "diagnostic"
-value_shape = "string, enum, or boolean token"
-default_behavior = "site-defined fallback; unchanged in P0"
+value_shape = "enum token"
+default_behavior = "uses the owner-defined mode when unset or unrecognized"
 visibility = "developer diagnostic"
+parser = "enum"
+scope = "instrumentation"
+conflicts = []
+sensitivity = "public"
+aliases = []
+documentation = { summary = "Controls gui frame profile behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
 name = "MISTER_GUI_FRAME_PROFILE_COMPLETE"
 owner = "apps/mister/src/ui_runner/launcher_gui_profile.rs"
 classification = "diagnostic"
 value_shape = "string, enum, or boolean token"
-default_behavior = "site-defined fallback; unchanged in P0"
+default_behavior = "uses the owner-defined value or disabled state when unset"
 visibility = "developer diagnostic"
+parser = "string"
+scope = "instrumentation"
+conflicts = []
+sensitivity = "public"
+aliases = []
+documentation = { summary = "Controls gui frame profile complete behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
 name = "MISTER_GUI_FRAME_PROFILE_PMU"
 owner = "apps/mister/src/ui_runner/launcher_gui_profile.rs"
 classification = "diagnostic"
 value_shape = "string, enum, or boolean token"
-default_behavior = "site-defined fallback; unchanged in P0"
+default_behavior = "uses the owner-defined value or disabled state when unset"
 visibility = "developer diagnostic"
+parser = "string"
+scope = "instrumentation"
+conflicts = []
+sensitivity = "public"
+aliases = []
+documentation = { summary = "Controls gui frame profile pmu behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
 name = "MISTER_HBMAME_SQLITE"
@@ -821,40 +917,70 @@ name = "MISTER_INPUT_INTEGRITY_TRACE"
 owner = "apps/mister/src/ui_runner/launcher_loop.rs"
 classification = "diagnostic"
 value_shape = "string, enum, or boolean token"
-default_behavior = "site-defined fallback; unchanged in P0"
+default_behavior = "uses the owner-defined value or disabled state when unset"
 visibility = "developer diagnostic"
+parser = "string"
+scope = "instrumentation"
+conflicts = []
+sensitivity = "public"
+aliases = []
+documentation = { summary = "Controls input integrity trace behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
 name = "MISTER_INPUT_LATENCY_LAB_ARM"
 owner = "apps/mister/src/ui_runner/launcher_input_latency_lab.rs"
 classification = "diagnostic"
-value_shape = "string, enum, or boolean token"
-default_behavior = "site-defined fallback; unchanged in P0"
+value_shape = "boolean token"
+default_behavior = "uses the owner-defined enabled or disabled default when unset or unrecognized"
 visibility = "developer diagnostic"
+parser = "bool"
+scope = "instrumentation"
+conflicts = []
+sensitivity = "public"
+aliases = []
+documentation = { summary = "Controls input latency lab arm behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
 name = "MISTER_INPUT_LATENCY_LAB_READER_POLICY"
 owner = "apps/mister/src/input_hub.rs"
 classification = "diagnostic"
-value_shape = "string, enum, or boolean token"
-default_behavior = "site-defined fallback; unchanged in P0"
+value_shape = "enum token"
+default_behavior = "uses the owner-defined mode when unset or unrecognized"
 visibility = "developer diagnostic"
+parser = "enum"
+scope = "instrumentation"
+conflicts = []
+sensitivity = "public"
+aliases = []
+documentation = { summary = "Controls input latency lab reader policy behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
 name = "MISTER_INPUT_LATENCY_LAB_READER_SCHEDSTAT"
 owner = "apps/mister/src/input_hub.rs"
 classification = "diagnostic"
-value_shape = "string, enum, or boolean token"
-default_behavior = "site-defined fallback; unchanged in P0"
+value_shape = "boolean token"
+default_behavior = "uses the owner-defined enabled or disabled default when unset or unrecognized"
 visibility = "developer diagnostic"
+parser = "bool"
+scope = "instrumentation"
+conflicts = []
+sensitivity = "public"
+aliases = []
+documentation = { summary = "Controls input latency lab reader schedstat behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
 name = "MISTER_INPUT_LATENCY_LAB_SESSION"
 owner = "apps/mister/src/input_hub.rs"
 classification = "diagnostic"
 value_shape = "string, enum, or boolean token"
-default_behavior = "site-defined fallback; unchanged in P0"
+default_behavior = "uses the owner-defined value or disabled state when unset"
 visibility = "developer diagnostic"
+parser = "string"
+scope = "instrumentation"
+conflicts = []
+sensitivity = "public"
+aliases = []
+documentation = { summary = "Controls input latency lab session behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
 name = "MISTER_LATCH_V5_QUALIFICATION"
@@ -889,16 +1015,28 @@ name = "MISTER_LAUNCHER_BENCH_AFTER_INPUT_SCRIPT"
 owner = "apps/mister/src/ui_runner/launcher_bench.rs"
 classification = "benchmark"
 value_shape = "string, enum, or boolean token"
-default_behavior = "site-defined fallback; unchanged in P0"
+default_behavior = "uses the owner-defined value or disabled state when unset"
 visibility = "benchmark only"
+parser = "string"
+scope = "instrumentation"
+conflicts = []
+sensitivity = "public"
+aliases = []
+documentation = { summary = "Controls launcher bench after input script behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
 name = "MISTER_LAUNCHER_BENCH_SCENARIO"
 owner = "apps/mister/src/ui_runner/launcher_bench.rs"
 classification = "benchmark"
-value_shape = "string, enum, or boolean token"
-default_behavior = "site-defined fallback; unchanged in P0"
+value_shape = "enum token"
+default_behavior = "uses the owner-defined mode when unset or unrecognized"
 visibility = "benchmark only"
+parser = "enum"
+scope = "instrumentation"
+conflicts = []
+sensitivity = "public"
+aliases = []
+documentation = { summary = "Controls launcher bench scenario behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
 name = "MISTER_LAUNCHER_DIRTY_OPT"
@@ -975,8 +1113,14 @@ name = "MISTER_LAUNCHER_RESPONSE_EXECUTION_TRACE"
 owner = "apps/mister/src/ui_runner/launcher_loop.rs"
 classification = "diagnostic"
 value_shape = "string, enum, or boolean token"
-default_behavior = "site-defined fallback; unchanged in P0"
+default_behavior = "uses the owner-defined value or disabled state when unset"
 visibility = "developer diagnostic"
+parser = "string"
+scope = "instrumentation"
+conflicts = []
+sensitivity = "public"
+aliases = []
+documentation = { summary = "Controls launcher response execution trace behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
 name = "MISTER_LAUNCHER_RESPONSE_EXPECTED_CONFIRMED"
@@ -1024,17 +1168,29 @@ documentation = { summary = "Controls launcher response frame complete behavior"
 name = "MISTER_LAUNCHER_RESPONSE_PMU"
 owner = "apps/mister/src/ui_runner/launcher_loop.rs"
 classification = "diagnostic"
-value_shape = "string, enum, or boolean token"
-default_behavior = "site-defined fallback; unchanged in P0"
+value_shape = "enum token"
+default_behavior = "uses the owner-defined mode when unset or unrecognized"
 visibility = "developer diagnostic"
+parser = "enum"
+scope = "instrumentation"
+conflicts = []
+sensitivity = "public"
+aliases = []
+documentation = { summary = "Controls launcher response pmu behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
 name = "MISTER_LAUNCHER_RESPONSE_PMU_COMPLETE"
 owner = "apps/mister/src/ui_runner/launcher_loop.rs"
 classification = "diagnostic"
 value_shape = "string, enum, or boolean token"
-default_behavior = "site-defined fallback; unchanged in P0"
+default_behavior = "uses the owner-defined value or disabled state when unset"
 visibility = "developer diagnostic"
+parser = "string"
+scope = "instrumentation"
+conflicts = []
+sensitivity = "public"
+aliases = []
+documentation = { summary = "Controls launcher response pmu complete behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
 name = "MISTER_LAUNCHER_RESPONSE_RUN_ID"
@@ -1055,8 +1211,14 @@ name = "MISTER_LAUNCHER_RESPONSE_TRACE"
 owner = "apps/mister/src/ui_runner/launcher_loop.rs"
 classification = "diagnostic"
 value_shape = "string, enum, or boolean token"
-default_behavior = "site-defined fallback; unchanged in P0"
+default_behavior = "uses the owner-defined value or disabled state when unset"
 visibility = "developer diagnostic"
+parser = "string"
+scope = "instrumentation"
+conflicts = []
+sensitivity = "public"
+aliases = []
+documentation = { summary = "Controls launcher response trace behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
 name = "MISTER_LAUNCHER_START_MENU"
@@ -1161,8 +1323,14 @@ name = "MISTER_LAUNCH_HANDOFF_TRACE"
 owner = "apps/mister/src/ui_runner/launch_handoff_session.rs"
 classification = "diagnostic"
 value_shape = "string, enum, or boolean token"
-default_behavior = "site-defined fallback; unchanged in P0"
+default_behavior = "uses the owner-defined value or disabled state when unset"
 visibility = "developer diagnostic"
+parser = "string"
+scope = "instrumentation"
+conflicts = []
+sensitivity = "public"
+aliases = []
+documentation = { summary = "Controls launch handoff trace behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
 name = "MISTER_LAUNCH_PREP_AMIGAVISION_LIMIT"
@@ -1253,48 +1421,84 @@ name = "MISTER_LAUNCH_RETURN_PMU_HANDOFF_OUT"
 owner = "apps/mister/src/ui_runner/launch_handoff_session.rs"
 classification = "diagnostic"
 value_shape = "path or path list"
-default_behavior = "site-defined fallback; unchanged in P0"
+default_behavior = "uses the owner-defined output, fixture, or disabled path when unset"
 visibility = "developer diagnostic"
+parser = "path"
+scope = "instrumentation"
+conflicts = []
+sensitivity = "path"
+aliases = []
+documentation = { summary = "Controls launch return pmu handoff out behavior", accepted_values = [], value_policy = "redact" }
 
 [[control]]
 name = "MISTER_LIBRARY_BENCH_FORCE_REBUILD"
 owner = "crates/catalog/src/library_cli.rs"
 classification = "benchmark"
-value_shape = "string, enum, or boolean token"
-default_behavior = "site-defined fallback; unchanged in P0"
+value_shape = "boolean token"
+default_behavior = "uses the owner-defined enabled or disabled default when unset or unrecognized"
 visibility = "benchmark only"
+parser = "bool"
+scope = "instrumentation"
+conflicts = []
+sensitivity = "public"
+aliases = []
+documentation = { summary = "Controls library bench force rebuild behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
 name = "MISTER_LIBRARY_BENCH_ITERATIONS"
 owner = "crates/catalog/src/library_cli.rs"
 classification = "benchmark"
 value_shape = "bounded integer"
-default_behavior = "site-defined fallback; unchanged in P0"
+default_behavior = "uses the owner-defined bounded numeric default when unset or invalid"
 visibility = "benchmark only"
+parser = "u64"
+scope = "instrumentation"
+conflicts = []
+sensitivity = "public"
+aliases = []
+documentation = { summary = "Controls library bench iterations behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
 name = "MISTER_LIBRARY_BENCH_LABEL"
 owner = "crates/catalog/src/library_cli.rs"
 classification = "benchmark"
 value_shape = "string, enum, or boolean token"
-default_behavior = "site-defined fallback; unchanged in P0"
+default_behavior = "uses the owner-defined value or disabled state when unset"
 visibility = "benchmark only"
+parser = "string"
+scope = "instrumentation"
+conflicts = []
+sensitivity = "public"
+aliases = []
+documentation = { summary = "Controls library bench label behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
 name = "MISTER_LIBRARY_BENCH_PRECOUNT"
 owner = "crates/catalog/src/library_cli.rs"
 classification = "benchmark"
-value_shape = "string, enum, or boolean token"
-default_behavior = "site-defined fallback; unchanged in P0"
+value_shape = "boolean token"
+default_behavior = "uses the owner-defined enabled or disabled default when unset or unrecognized"
 visibility = "benchmark only"
+parser = "bool"
+scope = "instrumentation"
+conflicts = []
+sensitivity = "public"
+aliases = []
+documentation = { summary = "Controls library bench precount behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
 name = "MISTER_LIBRARY_BENCH_SQLITE"
 owner = "crates/catalog/src/device_layout.rs"
 classification = "benchmark"
-value_shape = "path or path list"
-default_behavior = "site-defined fallback; unchanged in P0"
+value_shape = "path"
+default_behavior = "uses the owner-defined output, fixture, or disabled path when unset"
 visibility = "benchmark only"
+parser = "path"
+scope = "instrumentation"
+conflicts = []
+sensitivity = "path"
+aliases = []
+documentation = { summary = "Controls library bench sqlite behavior", accepted_values = [], value_policy = "redact" }
 
 [[control]]
 name = "MISTER_LIBRARY_NAMESPACE_BACKEND"
@@ -1734,49 +1938,85 @@ documentation = { summary = "Controls magik startup token behavior", accepted_va
 name = "MISTER_MAGIK_TEST_AUTO_LAUNCH_GATE"
 owner = "apps/mister/src/ui_runner/launcher_loop.rs"
 classification = "test"
-value_shape = "string, enum, or boolean token"
-default_behavior = "site-defined fallback; unchanged in P0"
+value_shape = "path"
+default_behavior = "uses the owner-defined output, fixture, or disabled path when unset"
 visibility = "test only"
+parser = "path"
+scope = "command"
+conflicts = []
+sensitivity = "path"
+aliases = []
+documentation = { summary = "Controls magik test auto launch gate behavior", accepted_values = [], value_policy = "redact" }
 
 [[control]]
 name = "MISTER_MAGIK_TEST_CATALOG_PUBLICATION_GATE"
 owner = "apps/mister/src/ui_runner/launcher_catalog_publication_test.rs"
 classification = "test"
-value_shape = "string, enum, or boolean token"
-default_behavior = "site-defined fallback; unchanged in P0"
+value_shape = "path"
+default_behavior = "uses the owner-defined output, fixture, or disabled path when unset"
 visibility = "test only"
+parser = "path"
+scope = "command"
+conflicts = []
+sensitivity = "path"
+aliases = []
+documentation = { summary = "Controls magik test catalog publication gate behavior", accepted_values = [], value_policy = "redact" }
 
 [[control]]
 name = "MISTER_MAGIK_TEST_CATALOG_PUBLICATION_SESSION"
 owner = "apps/mister/src/ui_runner/launcher_catalog_publication_test.rs"
 classification = "test"
-value_shape = "string, enum, or boolean token"
-default_behavior = "site-defined fallback; unchanged in P0"
+value_shape = "path"
+default_behavior = "uses the owner-defined output, fixture, or disabled path when unset"
 visibility = "test only"
+parser = "path"
+scope = "command"
+conflicts = []
+sensitivity = "path"
+aliases = []
+documentation = { summary = "Controls magik test catalog publication session behavior", accepted_values = [], value_policy = "redact" }
 
 [[control]]
 name = "MISTER_MAGIK_TEST_CATALOG_RECOVERY_DIALOG"
 owner = "apps/mister/src/ui_runner/launcher_loop.rs"
 classification = "test"
-value_shape = "string, enum, or boolean token"
-default_behavior = "site-defined fallback; unchanged in P0"
+value_shape = "enum token"
+default_behavior = "uses the owner-defined mode when unset or unrecognized"
 visibility = "test only"
+parser = "enum"
+scope = "command"
+conflicts = []
+sensitivity = "public"
+aliases = []
+documentation = { summary = "Controls magik test catalog recovery dialog behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
 name = "MISTER_MAGIK_TEST_FIRST_FRAME_RELEASE_GATE"
 owner = "apps/mister/src/ui_runner/launcher_catalog_publication_test.rs"
 classification = "test"
-value_shape = "string, enum, or boolean token"
-default_behavior = "site-defined fallback; unchanged in P0"
+value_shape = "path"
+default_behavior = "uses the owner-defined output, fixture, or disabled path when unset"
 visibility = "test only"
+parser = "path"
+scope = "command"
+conflicts = []
+sensitivity = "path"
+aliases = []
+documentation = { summary = "Controls magik test first frame release gate behavior", accepted_values = [], value_policy = "redact" }
 
 [[control]]
 name = "MISTER_MAGIK_TEST_LIBRARY_CHANGED_DIALOG_CHOICE"
 owner = "apps/mister/src/ui_runner/launcher_loop.rs"
 classification = "test"
-value_shape = "string, enum, or boolean token"
-default_behavior = "site-defined fallback; unchanged in P0"
+value_shape = "enum token"
+default_behavior = "uses the owner-defined mode when unset or unrecognized"
 visibility = "test only"
+parser = "enum"
+scope = "command"
+conflicts = []
+sensitivity = "public"
+aliases = []
+documentation = { summary = "Controls magik test library changed dialog choice behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
 name = "MISTER_MAGIK_VERSION"
@@ -1824,9 +2064,15 @@ documentation = { summary = "Controls media asset dir behavior", accepted_values
 name = "MISTER_MEDIA_BENCH_CONTENTION"
 owner = "apps/mister/src/launcher_runtime/media.rs"
 classification = "benchmark"
-value_shape = "string, enum, or boolean token"
-default_behavior = "site-defined fallback; unchanged in P0"
+value_shape = "boolean token"
+default_behavior = "uses the owner-defined enabled or disabled default when unset or unrecognized"
 visibility = "benchmark only"
+parser = "bool"
+scope = "instrumentation"
+conflicts = []
+sensitivity = "public"
+aliases = []
+documentation = { summary = "Controls media bench contention behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
 name = "MISTER_MEDIA_CONCURRENCY"
@@ -1959,8 +2205,14 @@ name = "MISTER_ORIENTATION_PMU_COMPLETE"
 owner = "apps/mister/src/ui_runner/launcher_loop.rs"
 classification = "diagnostic"
 value_shape = "string, enum, or boolean token"
-default_behavior = "site-defined fallback; unchanged in P0"
+default_behavior = "uses the owner-defined value or disabled state when unset"
 visibility = "developer diagnostic"
+parser = "string"
+scope = "instrumentation"
+conflicts = []
+sensitivity = "public"
+aliases = []
+documentation = { summary = "Controls orientation pmu complete behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
 name = "MISTER_ORIENTATION_SIMD"
@@ -1980,9 +2232,15 @@ documentation = { summary = "Controls orientation simd behavior", accepted_value
 name = "MISTER_ORIENTATION_TRANSITIONS_BENCHMARK"
 owner = "apps/mister/src/ui_runner.rs"
 classification = "benchmark"
-value_shape = "string, enum, or boolean token"
-default_behavior = "site-defined fallback; unchanged in P0"
+value_shape = "boolean token"
+default_behavior = "uses the owner-defined enabled or disabled default when unset or unrecognized"
 visibility = "benchmark only"
+parser = "bool"
+scope = "instrumentation"
+conflicts = []
+sensitivity = "public"
+aliases = []
+documentation = { summary = "Controls orientation transitions benchmark behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
 name = "MISTER_ORIENTATION_TRANSITIONS_EVIDENCE_DIR"
@@ -2058,9 +2316,15 @@ documentation = { summary = "Controls particle command order behavior", accepted
 name = "MISTER_PARTICLE_PMU"
 owner = "apps/mister/src/particle_renderer.rs"
 classification = "diagnostic"
-value_shape = "string, enum, or boolean token"
-default_behavior = "site-defined fallback; unchanged in P0"
+value_shape = "enum token"
+default_behavior = "uses the owner-defined mode when unset or unrecognized"
 visibility = "developer diagnostic"
+parser = "enum"
+scope = "instrumentation"
+conflicts = []
+sensitivity = "public"
+aliases = []
+documentation = { summary = "Controls particle pmu behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
 name = "MISTER_PARTICLE_PROJECTION"
@@ -2108,89 +2372,155 @@ documentation = { summary = "Controls particle simd behavior", accepted_values =
 name = "MISTER_PMU_PROFILE"
 owner = "crates/perf-events/src/lib.rs"
 classification = "diagnostic"
-value_shape = "string, enum, or boolean token"
-default_behavior = "site-defined fallback; unchanged in P0"
+value_shape = "enum token"
+default_behavior = "uses the owner-defined mode when unset or unrecognized"
 visibility = "developer diagnostic"
+parser = "enum"
+scope = "instrumentation"
+conflicts = []
+sensitivity = "public"
+aliases = []
+documentation = { summary = "Controls pmu profile behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
 name = "MISTER_PMU_RECORD_LIMIT"
 owner = "crates/perf-events/src/lib.rs"
 classification = "diagnostic"
 value_shape = "bounded integer"
-default_behavior = "site-defined fallback; unchanged in P0"
+default_behavior = "uses the owner-defined bounded numeric default when unset or invalid"
 visibility = "developer diagnostic"
+parser = "u64"
+scope = "instrumentation"
+conflicts = []
+sensitivity = "public"
+aliases = []
+documentation = { summary = "Controls pmu record limit behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
 name = "MISTER_PMU_SAMPLE_EVERY"
 owner = "crates/perf-events/src/lib.rs"
 classification = "diagnostic"
 value_shape = "string, enum, or boolean token"
-default_behavior = "site-defined fallback; unchanged in P0"
+default_behavior = "uses the owner-defined value or disabled state when unset"
 visibility = "developer diagnostic"
+parser = "string"
+scope = "instrumentation"
+conflicts = []
+sensitivity = "public"
+aliases = []
+documentation = { summary = "Controls pmu sample every behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
 name = "MISTER_PPROF"
 owner = "apps/mister/src/cpu_profile.rs"
 classification = "diagnostic"
-value_shape = "string, enum, or boolean token"
-default_behavior = "site-defined fallback; unchanged in P0"
+value_shape = "boolean token"
+default_behavior = "uses the owner-defined enabled or disabled default when unset or unrecognized"
 visibility = "developer diagnostic"
+parser = "bool"
+scope = "instrumentation"
+conflicts = []
+sensitivity = "public"
+aliases = []
+documentation = { summary = "Controls pprof behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
 name = "MISTER_PPROF_COMPLETE"
 owner = "apps/mister/src/cpu_profile.rs"
 classification = "diagnostic"
-value_shape = "string, enum, or boolean token"
-default_behavior = "site-defined fallback; unchanged in P0"
+value_shape = "boolean token"
+default_behavior = "uses the owner-defined enabled or disabled default when unset or unrecognized"
 visibility = "developer diagnostic"
+parser = "bool"
+scope = "instrumentation"
+conflicts = []
+sensitivity = "public"
+aliases = []
+documentation = { summary = "Controls pprof complete behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
 name = "MISTER_PPROF_DURATION_SECS"
 owner = "apps/mister/src/cpu_profile.rs"
 classification = "diagnostic"
 value_shape = "bounded integer"
-default_behavior = "site-defined fallback; unchanged in P0"
+default_behavior = "uses the owner-defined bounded numeric default when unset or invalid"
 visibility = "developer diagnostic"
+parser = "u64"
+scope = "instrumentation"
+conflicts = []
+sensitivity = "public"
+aliases = []
+documentation = { summary = "Controls pprof duration secs behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
 name = "MISTER_PPROF_FOLDED_OUT"
 owner = "apps/mister/src/cpu_profile.rs"
 classification = "diagnostic"
 value_shape = "path or path list"
-default_behavior = "site-defined fallback; unchanged in P0"
+default_behavior = "uses the owner-defined output, fixture, or disabled path when unset"
 visibility = "developer diagnostic"
+parser = "path"
+scope = "instrumentation"
+conflicts = []
+sensitivity = "path"
+aliases = []
+documentation = { summary = "Controls pprof folded out behavior", accepted_values = [], value_policy = "redact" }
 
 [[control]]
 name = "MISTER_PPROF_HZ"
 owner = "apps/mister/src/cpu_profile.rs"
 classification = "diagnostic"
 value_shape = "bounded integer"
-default_behavior = "site-defined fallback; unchanged in P0"
+default_behavior = "uses the owner-defined bounded numeric default when unset or invalid"
 visibility = "developer diagnostic"
+parser = "u64"
+scope = "instrumentation"
+conflicts = []
+sensitivity = "public"
+aliases = []
+documentation = { summary = "Controls pprof hz behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
 name = "MISTER_PPROF_OUT"
 owner = "apps/mister/src/cpu_profile.rs"
 classification = "diagnostic"
 value_shape = "path or path list"
-default_behavior = "site-defined fallback; unchanged in P0"
+default_behavior = "uses the owner-defined output, fixture, or disabled path when unset"
 visibility = "developer diagnostic"
+parser = "path"
+scope = "instrumentation"
+conflicts = []
+sensitivity = "path"
+aliases = []
+documentation = { summary = "Controls pprof out behavior", accepted_values = [], value_policy = "redact" }
 
 [[control]]
 name = "MISTER_PPROF_TRIGGER"
 owner = "apps/mister/src/cpu_profile.rs"
 classification = "diagnostic"
-value_shape = "string, enum, or boolean token"
-default_behavior = "site-defined fallback; unchanged in P0"
+value_shape = "boolean token"
+default_behavior = "uses the owner-defined enabled or disabled default when unset or unrecognized"
 visibility = "developer diagnostic"
+parser = "bool"
+scope = "instrumentation"
+conflicts = []
+sensitivity = "public"
+aliases = []
+documentation = { summary = "Controls pprof trigger behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
 name = "MISTER_PPROF_WARMUP_SECS"
 owner = "apps/mister/src/cpu_profile.rs"
 classification = "diagnostic"
 value_shape = "bounded integer"
-default_behavior = "site-defined fallback; unchanged in P0"
+default_behavior = "uses the owner-defined bounded numeric default when unset or invalid"
 visibility = "developer diagnostic"
+parser = "u64"
+scope = "instrumentation"
+conflicts = []
+sensitivity = "public"
+aliases = []
+documentation = { summary = "Controls pprof warmup secs behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
 name = "MISTER_PRESENT_BACKEND"
@@ -2434,9 +2764,15 @@ documentation = { summary = "Controls preview run label behavior", accepted_valu
 name = "MISTER_PREVIEW_SCROLL_EXIT_AFTER_TRACE"
 owner = "apps/mister/src/ui_runner/launcher_loop.rs"
 classification = "diagnostic"
-value_shape = "string, enum, or boolean token"
-default_behavior = "site-defined fallback; unchanged in P0"
+value_shape = "boolean token"
+default_behavior = "uses the owner-defined enabled or disabled default when unset or unrecognized"
 visibility = "developer diagnostic"
+parser = "bool"
+scope = "instrumentation"
+conflicts = []
+sensitivity = "public"
+aliases = []
+documentation = { summary = "Controls preview scroll exit after trace behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
 name = "MISTER_PREVIEW_SCROLL_SKIP_ARCHIVE_WARM"
@@ -2457,24 +2793,42 @@ name = "MISTER_PREVIEW_SCROLL_TRACE"
 owner = "apps/mister/src/ui_runner/launcher_frame_accounting.rs"
 classification = "diagnostic"
 value_shape = "string, enum, or boolean token"
-default_behavior = "site-defined fallback; unchanged in P0"
+default_behavior = "uses the owner-defined value or disabled state when unset"
 visibility = "developer diagnostic"
+parser = "string"
+scope = "instrumentation"
+conflicts = []
+sensitivity = "public"
+aliases = []
+documentation = { summary = "Controls preview scroll trace behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
 name = "MISTER_PREVIEW_SCROLL_TRACE_COMPLETE"
 owner = "apps/mister/src/ui_runner/launcher_frame_accounting.rs"
 classification = "diagnostic"
 value_shape = "string, enum, or boolean token"
-default_behavior = "site-defined fallback; unchanged in P0"
+default_behavior = "uses the owner-defined value or disabled state when unset"
 visibility = "developer diagnostic"
+parser = "string"
+scope = "instrumentation"
+conflicts = []
+sensitivity = "public"
+aliases = []
+documentation = { summary = "Controls preview scroll trace complete behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
 name = "MISTER_PREVIEW_SCROLL_TRACE_SECS"
 owner = "apps/mister/src/ui_runner/launcher_frame_accounting.rs"
 classification = "diagnostic"
 value_shape = "bounded integer"
-default_behavior = "site-defined fallback; unchanged in P0"
+default_behavior = "uses the owner-defined bounded numeric default when unset or invalid"
 visibility = "developer diagnostic"
+parser = "u64"
+scope = "instrumentation"
+conflicts = []
+sensitivity = "public"
+aliases = []
+documentation = { summary = "Controls preview scroll trace secs behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
 name = "MISTER_PREVIEW_STEP_HOLD_SECS"
@@ -2494,9 +2848,15 @@ documentation = { summary = "Controls preview step hold secs behavior", accepted
 name = "MISTER_PREVIEW_TRACE"
 owner = "apps/mister/src/preview_state.rs"
 classification = "diagnostic"
-value_shape = "string, enum, or boolean token"
-default_behavior = "site-defined fallback; unchanged in P0"
+value_shape = "boolean token"
+default_behavior = "uses the owner-defined enabled or disabled default when unset or unrecognized"
 visibility = "developer diagnostic"
+parser = "bool"
+scope = "instrumentation"
+conflicts = []
+sensitivity = "public"
+aliases = []
+documentation = { summary = "Controls preview trace behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
 name = "MISTER_PREVIEW_TRANSITION"
@@ -2600,25 +2960,43 @@ documentation = { summary = "Controls preview visual pct behavior", accepted_val
 name = "MISTER_PROFILE"
 owner = "apps/mister/src/frame_profile.rs"
 classification = "diagnostic"
-value_shape = "string, enum, or boolean token"
-default_behavior = "site-defined fallback; unchanged in P0"
+value_shape = "enum token"
+default_behavior = "uses the owner-defined mode when unset or unrecognized"
 visibility = "developer diagnostic"
+parser = "enum"
+scope = "instrumentation"
+conflicts = []
+sensitivity = "public"
+aliases = []
+documentation = { summary = "Controls profile behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
 name = "MISTER_PROFILE_FILE"
 owner = "apps/mister/src/frame_profile.rs"
 classification = "diagnostic"
 value_shape = "path or path list"
-default_behavior = "site-defined fallback; unchanged in P0"
+default_behavior = "uses the owner-defined output, fixture, or disabled path when unset"
 visibility = "developer diagnostic"
+parser = "path"
+scope = "instrumentation"
+conflicts = []
+sensitivity = "path"
+aliases = []
+documentation = { summary = "Controls profile file behavior", accepted_values = [], value_policy = "redact" }
 
 [[control]]
 name = "MISTER_PROFILE_SLOW_US"
 owner = "apps/mister/src/frame_profile.rs"
 classification = "diagnostic"
 value_shape = "bounded integer"
-default_behavior = "site-defined fallback; unchanged in P0"
+default_behavior = "uses the owner-defined bounded numeric default when unset or invalid"
 visibility = "developer diagnostic"
+parser = "u64"
+scope = "instrumentation"
+conflicts = []
+sensitivity = "public"
+aliases = []
+documentation = { summary = "Controls profile slow us behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
 name = "MISTER_RASTER_EFFECTS"
@@ -2695,8 +3073,14 @@ name = "MISTER_RASTER_EFFECTS_TRACE"
 owner = "apps/mister/src/ui_runner/experiments/effects/raster_effects_loop.rs"
 classification = "diagnostic"
 value_shape = "string, enum, or boolean token"
-default_behavior = "site-defined fallback; unchanged in P0"
+default_behavior = "uses the owner-defined value or disabled state when unset"
 visibility = "developer diagnostic"
+parser = "string"
+scope = "instrumentation"
+conflicts = []
+sensitivity = "public"
+aliases = []
+documentation = { summary = "Controls raster effects trace behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
 name = "MISTER_SATURN_PREVIEW_ARCHIVE"
@@ -2786,9 +3170,15 @@ documentation = { summary = "Controls screensaver start preview when ready behav
 name = "MISTER_SETTINGS_NAVIGATION_BENCHMARK"
 owner = "apps/mister/src/ui_runner.rs"
 classification = "benchmark"
-value_shape = "string, enum, or boolean token"
-default_behavior = "site-defined fallback; unchanged in P0"
+value_shape = "boolean token"
+default_behavior = "uses the owner-defined enabled or disabled default when unset or unrecognized"
 visibility = "benchmark only"
+parser = "bool"
+scope = "instrumentation"
+conflicts = []
+sensitivity = "public"
+aliases = []
+documentation = { summary = "Controls settings navigation benchmark behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
 name = "MISTER_SETTINGS_NAVIGATION_EVIDENCE_DIR"
@@ -2921,32 +3311,56 @@ name = "MISTER_SPRITE_EFFECTS_TRACE"
 owner = "apps/mister/src/ui_runner/experiments/effects/sprite_effects_loop.rs"
 classification = "diagnostic"
 value_shape = "string, enum, or boolean token"
-default_behavior = "site-defined fallback; unchanged in P0"
+default_behavior = "uses the owner-defined value or disabled state when unset"
 visibility = "developer diagnostic"
+parser = "string"
+scope = "instrumentation"
+conflicts = []
+sensitivity = "public"
+aliases = []
+documentation = { summary = "Controls sprite effects trace behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
 name = "MISTER_STREAM_SCALAR_BENCH_SAMPLES"
 owner = "mister/platform/runtime/src/framebuffer/downsample.rs"
 classification = "benchmark"
 value_shape = "string, enum, or boolean token"
-default_behavior = "site-defined fallback; unchanged in P0"
+default_behavior = "uses the owner-defined value or disabled state when unset"
 visibility = "benchmark only"
+parser = "string"
+scope = "instrumentation"
+conflicts = []
+sensitivity = "public"
+aliases = []
+documentation = { summary = "Controls stream scalar bench samples behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
 name = "MISTER_SYSTEM_ENTRY_BENCHMARK_SYSTEM"
 owner = "apps/mister/src/ui_runner/launcher_bench.rs"
 classification = "benchmark"
 value_shape = "string, enum, or boolean token"
-default_behavior = "site-defined fallback; unchanged in P0"
+default_behavior = "uses the owner-defined value or disabled state when unset"
 visibility = "benchmark only"
+parser = "string"
+scope = "instrumentation"
+conflicts = []
+sensitivity = "public"
+aliases = []
+documentation = { summary = "Controls system entry benchmark system behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
 name = "MISTER_SYSTEM_ENTRY_PROFILE_OUT"
 owner = "apps/mister/src/ui_runner/launcher_loop.rs"
 classification = "diagnostic"
 value_shape = "path or path list"
-default_behavior = "site-defined fallback; unchanged in P0"
+default_behavior = "uses the owner-defined output, fixture, or disabled path when unset"
 visibility = "developer diagnostic"
+parser = "path"
+scope = "instrumentation"
+conflicts = []
+sensitivity = "path"
+aliases = []
+documentation = { summary = "Controls system entry profile out behavior", accepted_values = [], value_policy = "redact" }
 
 [[control]]
 name = "MISTER_SYSTEM_ENTRY_RUN_ID"
@@ -2967,16 +3381,28 @@ name = "MISTER_SYSTEM_ENTRY_TRACE"
 owner = "apps/mister/src/ui_runner/launcher_loop.rs"
 classification = "diagnostic"
 value_shape = "string, enum, or boolean token"
-default_behavior = "site-defined fallback; unchanged in P0"
+default_behavior = "uses the owner-defined value or disabled state when unset"
 visibility = "developer diagnostic"
+parser = "string"
+scope = "instrumentation"
+conflicts = []
+sensitivity = "public"
+aliases = []
+documentation = { summary = "Controls system entry trace behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
 name = "MISTER_TEST_EFFECTS_UNSET"
 owner = "apps/mister/src/ui_runner/experiments/effects/effect_loop_support.rs"
 classification = "test"
-value_shape = "string, enum, or boolean token"
-default_behavior = "site-defined fallback; unchanged in P0"
+value_shape = "boolean token"
+default_behavior = "uses the owner-defined enabled or disabled default when unset or unrecognized"
 visibility = "test only"
+parser = "bool"
+scope = "command"
+conflicts = []
+sensitivity = "public"
+aliases = []
+documentation = { summary = "Controls test effects unset behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
 name = "MISTER_TEXT_EFFECTS"
@@ -3053,8 +3479,14 @@ name = "MISTER_TEXT_EFFECTS_TRACE"
 owner = "apps/mister/src/ui_runner/experiments/effects/text_effects_loop.rs"
 classification = "diagnostic"
 value_shape = "string, enum, or boolean token"
-default_behavior = "site-defined fallback; unchanged in P0"
+default_behavior = "uses the owner-defined value or disabled state when unset"
 visibility = "developer diagnostic"
+parser = "string"
+scope = "instrumentation"
+conflicts = []
+sensitivity = "public"
+aliases = []
+documentation = { summary = "Controls text effects trace behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
 name = "MISTER_THREAD_POLICY"
@@ -3075,8 +3507,14 @@ name = "MISTER_TRACE_FILE"
 owner = "apps/mister/src/frame_profile.rs"
 classification = "diagnostic"
 value_shape = "path or path list"
-default_behavior = "site-defined fallback; unchanged in P0"
+default_behavior = "uses the owner-defined output, fixture, or disabled path when unset"
 visibility = "developer diagnostic"
+parser = "path"
+scope = "instrumentation"
+conflicts = []
+sensitivity = "path"
+aliases = []
+documentation = { summary = "Controls trace file behavior", accepted_values = [], value_policy = "redact" }
 
 [[control]]
 name = "MISTER_TRANSITION_EFFECTS"
@@ -3153,8 +3591,14 @@ name = "MISTER_TRANSITION_EFFECTS_TRACE"
 owner = "apps/mister/src/ui_runner/experiments/effects/transition_effects_loop.rs"
 classification = "diagnostic"
 value_shape = "string, enum, or boolean token"
-default_behavior = "site-defined fallback; unchanged in P0"
+default_behavior = "uses the owner-defined value or disabled state when unset"
 visibility = "developer diagnostic"
+parser = "string"
+scope = "instrumentation"
+conflicts = []
+sensitivity = "public"
+aliases = []
+documentation = { summary = "Controls transition effects trace behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
 name = "MISTER_UI_FB_SIZE"
@@ -3230,9 +3674,15 @@ documentation = { summary = "Controls video path behavior", accepted_values = []
 name = "MISTER_VIDEO_PROFILE"
 owner = "apps/mister/src/frame_profile.rs"
 classification = "diagnostic"
-value_shape = "string, enum, or boolean token"
-default_behavior = "site-defined fallback; unchanged in P0"
+value_shape = "enum token"
+default_behavior = "uses the owner-defined mode when unset or unrecognized"
 visibility = "developer diagnostic"
+parser = "enum"
+scope = "instrumentation"
+conflicts = []
+sensitivity = "public"
+aliases = []
+documentation = { summary = "Controls video profile behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
 name = "MISTER_VIDEO_SCALE"

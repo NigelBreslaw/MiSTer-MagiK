@@ -28,10 +28,10 @@ def metadata_list(values: list[str] | None) -> str:
     return ", ".join(values) if values else "—"
 
 
-def documentation_text(documentation: dict | None) -> str:
+def documentation_text(documentation: dict | None, sensitive: bool) -> str:
     if not documentation:
         return "—"
-    accepted = documentation.get("accepted_values", [])
+    accepted = [] if sensitive else documentation.get("accepted_values", [])
     values = f"; values: {', '.join(accepted)}" if accepted else ""
     return (
         f"{documentation['summary']}{values}; "
@@ -58,8 +58,11 @@ def render(registry: dict) -> str:
     ]
     for control in sorted(registry["control"], key=lambda value: value["name"]):
         default = control["default_behavior"].replace("|", "\\|")
-        typed = typed_default(control.get("typed_default")).replace("|", "\\|")
-        documentation = documentation_text(control.get("documentation")).replace(
+        sensitive = control.get("sensitivity") in {"secret", "volatile-token"}
+        typed = (
+            "—" if sensitive else typed_default(control.get("typed_default"))
+        ).replace("|", "\\|")
+        documentation = documentation_text(control.get("documentation"), sensitive).replace(
             "|", "\\|"
         )
         lines.append(

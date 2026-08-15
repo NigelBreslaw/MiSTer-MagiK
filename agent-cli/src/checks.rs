@@ -1004,7 +1004,7 @@ fn validate_runtime_environment_metadata(control: &RuntimeEnvironmentControl) ->
 fn requires_complete_runtime_metadata(control: &RuntimeEnvironmentControl) -> bool {
     matches!(
         control.classification.as_str(),
-        "production" | "external" | "build-time"
+        "production" | "diagnostic" | "benchmark" | "test" | "fault" | "external" | "build-time"
     )
 }
 
@@ -1013,7 +1013,18 @@ fn has_complete_runtime_metadata(control: &RuntimeEnvironmentControl) -> bool {
         "external" => ["external"].as_slice(),
         "build-time" => ["build"].as_slice(),
         "production" => ["process", "command"].as_slice(),
+        "diagnostic" | "benchmark" => ["instrumentation"].as_slice(),
+        "test" | "fault" => ["command"].as_slice(),
         _ => return true,
+    };
+    let sensitive_documentation_is_safe = match control.sensitivity.as_deref() {
+        Some("secret" | "volatile-token") => {
+            control.documentation.as_ref().is_some_and(|documentation| {
+                matches!(documentation.value_policy.as_str(), "redact" | "omit")
+                    && documentation.accepted_values.is_empty()
+            })
+        }
+        _ => true,
     };
     control.parser.is_some()
         && control
@@ -1023,6 +1034,7 @@ fn has_complete_runtime_metadata(control: &RuntimeEnvironmentControl) -> bool {
         && control.sensitivity.is_some()
         && control.documentation.is_some()
         && control.default_behavior != "site-defined fallback; unchanged in P0"
+        && sensitive_documentation_is_safe
 }
 
 fn typed_default_matches(parser: Option<&str>, value: &toml::Value) -> bool {
@@ -1097,11 +1109,15 @@ fn render_runtime_environment_reference(registry: &RuntimeEnvironmentRegistry) -
     ));
     output.push_str("| Name | Classification | Shape | Default behavior | Parser | Typed default | Scope | Conflicts | Sensitivity | Aliases | Documentation | Visibility | Owner |\n|---|---|---|---|---|---|---|---|---|---|---|---|---|\n");
     for control in &registry.control {
+        let sensitive = matches!(
+            control.sensitivity.as_deref(),
+            Some("secret" | "volatile-token")
+        );
         let documentation = control
             .documentation
             .as_ref()
             .map(|documentation| {
-                let accepted = if documentation.accepted_values.is_empty() {
+                let accepted = if sensitive || documentation.accepted_values.is_empty() {
                     String::new()
                 } else {
                     format!("; values: {}", documentation.accepted_values.join(", "))
@@ -1119,12 +1135,16 @@ fn render_runtime_environment_reference(registry: &RuntimeEnvironmentRegistry) -
             control.value_shape,
             control.default_behavior.replace('|', "\\|"),
             control.parser.as_deref().unwrap_or("—"),
-            control
-                .typed_default
-                .as_ref()
-                .map(ToString::to_string)
-                .unwrap_or_else(|| "—".into())
-                .replace('|', "\\|"),
+            if sensitive {
+                "—".into()
+            } else {
+                control
+                    .typed_default
+                    .as_ref()
+                    .map(ToString::to_string)
+                    .unwrap_or_else(|| "—".into())
+                    .replace('|', "\\|")
+            },
             control.scope.as_deref().unwrap_or("—"),
             metadata_list(&control.conflicts),
             control.sensitivity.as_deref().unwrap_or("—"),
@@ -2103,6 +2123,39 @@ visibility = "internal runtime"
         )
         .unwrap();
         assert!(!has_complete_runtime_metadata(&incomplete));
+
+        let sensitive_registry: RuntimeEnvironmentRegistry = toml::from_str(
+            r#"format = "mister-magik-runtime-environment-v2"
+source_roots = []
+
+[baseline]
+literal_occurrences = 1
+unique_names = 1
+external_build_names = 0
+
+[[control]]
+name = "MISTER_FIXTURE"
+owner = "apps/mister/src/config.rs"
+classification = "fault"
+value_shape = "volatile token"
+default_behavior = "disabled when unset"
+visibility = "fault only"
+parser = "string"
+typed_default = "do-not-print"
+scope = "command"
+conflicts = []
+sensitivity = "volatile-token"
+aliases = []
+documentation = { summary = "Volatile fixture token", accepted_values = ["do-not-print"], value_policy = "omit" }
+"#,
+        )
+        .unwrap();
+        let rendered = render_runtime_environment_reference(&sensitive_registry);
+        assert!(!rendered.contains("do-not-print"));
+        assert!(rendered.contains("Volatile fixture token; value policy: omit"));
+        assert!(!has_complete_runtime_metadata(
+            &sensitive_registry.control[0]
+        ));
     }
 
     #[test]
