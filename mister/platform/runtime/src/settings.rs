@@ -165,7 +165,7 @@ impl MagikSettings {
     }
 
     pub fn save(&self) -> io::Result<()> {
-        let mut fault_control = mister_magik_catalog::fs_fault::NoopDirectResetFaultControl;
+        let mut fault_control = crate::direct_reset_fault::process_fault_control();
         self.save_with_fault_control(&mut fault_control)
     }
 
@@ -180,7 +180,7 @@ impl MagikSettings {
     }
 
     pub fn save_to(&self, path: impl AsRef<Path>) -> io::Result<()> {
-        let mut fault_control = mister_magik_catalog::fs_fault::NoopDirectResetFaultControl;
+        let mut fault_control = crate::direct_reset_fault::process_fault_control();
         self.save_to_with_fault_control(path, &mut fault_control)
     }
 

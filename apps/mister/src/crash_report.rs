@@ -86,7 +86,8 @@ fn panic_report_value(
 }
 
 fn write_report_value(dir: &Path, report_id: &str, report: &Value) -> io::Result<PathBuf> {
-    let mut fault_control = mister_magik_catalog::fs_fault::NoopDirectResetFaultControl;
+    let mut fault_control =
+        mister_magik_mister_runtime::direct_reset_fault::process_fault_control();
     write_report_value_with_fault_control(
         &SystemReportIo,
         dir,

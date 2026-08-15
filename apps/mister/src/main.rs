@@ -202,6 +202,14 @@ fn main() {
 
     let cmd = command_args::resolve_command(&args);
     let fault_config = mister_magik_catalog::fs_fault::FaultConfig::capture_from_process();
+    if let Err(error) =
+        mister_magik_mister_runtime::direct_reset_fault::install_process_fault_config(
+            fault_config.clone(),
+        )
+    {
+        crate::ui_errln!("fault configuration initialization failed: {error}");
+        std::process::exit(1);
+    }
 
     let latch_readiness_json =
         cmd == "latch-readiness-report" && args.iter().any(|arg| arg == "--json");
@@ -558,8 +566,10 @@ fn print_experiment_capabilities() {
 }
 
 fn run_library_refresh() {
-    let result = mister_magik_catalog::builder_service::run(
+    let result = mister_magik_catalog::builder_service::run_with_execution_policy_and_fault_control(
         mister_magik_catalog::builder_service::BuilderOperation::Rebuild,
+        mister_magik_catalog::builder_service::BuilderExecutionPolicy::ForegroundUntilFirstVisible,
+        Box::new(mister_magik_mister_runtime::direct_reset_fault::process_fault_control()),
         |event| crate::ui_logln!("{}", serde_json::to_string(&event).unwrap_or_default()),
     );
     if let Err(error) = result {

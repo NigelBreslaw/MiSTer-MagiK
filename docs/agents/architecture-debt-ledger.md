@@ -22,9 +22,13 @@ path is not a migration strategy.
 | Current path | Capability owner | Destination and removal condition |
 |---|---|---|
 | `mister/platform/runtime/src/main_command.rs` | P1 Enforce | Sole production-app command transport. Keep wire spelling, serialized reply association, bounded FIFO writes, and endpoint paths private to this typed module. |
-| `crates/catalog/src/fs_fault.rs` | P1 Enforce | Compatible `FaultConfig` is captured once at the selected-command boundary with redacted volatile-token diagnostics and the seven cleanup artifacts characterized. The portable `DirectResetFaultControl` contract now covers every catalog, settings, launcher, launch-preparation, crash, purge, and media persistence fault point with effect-free defaults and order coverage. Runtime activation and legacy endpoint deletion remain. |
 | `mister/tools/agent/src/main.rs` | P1 Enforce device-service boundary | This is a distinct attended device-service capability, not production app transport. Keep the entry only while this file performs that service operation; if it moves, update the inventory atomically after zero old references. |
 | `agent-cli/src/host/remote.rs` | P1 Enforce host boundary | This constructs bounded host commands and is not production app transport. Keep the entry only while this file owns that construction; if it moves, update the inventory atomically after zero old references. |
+
+The destructive fault exception is closed. Catalog and app persistence expose
+only `DirectResetFaultControl` event evidence; platform runtime owns volatile
+arming, marker/session paths, the typed no-reply Main reset command, bounded
+delay, and the stable seven-artifact cleanup operation.
 
 ## Launcher platform-effect characterization
 

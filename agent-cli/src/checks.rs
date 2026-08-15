@@ -647,10 +647,6 @@ fn check_shell_ownership(repository: &Path) -> Result<(), String> {
             "production app command transport",
         ),
         (
-            "crates/catalog/src/fs_fault.rs",
-            "catalog destructive-fault capability",
-        ),
-        (
             "mister/tools/agent/src/main.rs",
             "device-service command capability",
         ),

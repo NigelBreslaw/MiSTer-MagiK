@@ -34,7 +34,8 @@ pub fn button_overrides_for_mra(path: &Path) -> Result<Vec<ButtonOverride>, Stri
 }
 
 pub fn write_button_overrides_for_mra(path: &Path) -> Result<(), String> {
-    let mut fault_control = mister_magik_catalog::fs_fault::NoopDirectResetFaultControl;
+    let mut fault_control =
+        mister_magik_mister_runtime::direct_reset_fault::process_fault_control();
     write_button_overrides_for_mra_with_fault_control(path, &mut fault_control)
 }
 
@@ -47,7 +48,8 @@ pub fn write_button_overrides_for_mra_with_fault_control(
 }
 
 pub fn write_button_overrides(overrides: &[ButtonOverride]) -> Result<(), String> {
-    let mut fault_control = mister_magik_catalog::fs_fault::NoopDirectResetFaultControl;
+    let mut fault_control =
+        mister_magik_mister_runtime::direct_reset_fault::process_fault_control();
     write_button_overrides_with_fault_control(overrides, &mut fault_control)
 }
 
@@ -118,7 +120,8 @@ fn write_button_overrides_to_path(
 }
 
 pub fn remove_button_overrides() -> Result<(), String> {
-    let mut fault_control = mister_magik_catalog::fs_fault::NoopDirectResetFaultControl;
+    let mut fault_control =
+        mister_magik_mister_runtime::direct_reset_fault::process_fault_control();
     remove_button_overrides_with_fault_control(&mut fault_control)
 }
 

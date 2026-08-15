@@ -1217,7 +1217,8 @@ fn install_streamed_object(
     tx: &mpsc::Sender<MediaWorkerMessage>,
     emit_progress: bool,
 ) -> Result<(), String> {
-    let mut fault_control = mister_magik_catalog::fs_fault::NoopDirectResetFaultControl;
+    let mut fault_control =
+        mister_magik_mister_runtime::direct_reset_fault::process_fault_control();
     install_streamed_object_with_fault_control(
         publish,
         streamed,
@@ -1444,7 +1445,8 @@ fn cache_metadata_json(metadata: &HttpCacheMetadata) -> Value {
 }
 
 fn write_json_atomic(path: &Path, value: &Value) -> Result<(), String> {
-    let mut fault_control = mister_magik_catalog::fs_fault::NoopDirectResetFaultControl;
+    let mut fault_control =
+        mister_magik_mister_runtime::direct_reset_fault::process_fault_control();
     write_json_atomic_with_fault_control(path, value, &mut fault_control)
 }
 

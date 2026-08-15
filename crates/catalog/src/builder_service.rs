@@ -8,7 +8,7 @@ use crate::builder_protocol::{
     CatalogPlannedSystem,
 };
 use crate::catalog_build_record;
-use crate::catalog_navigation::write_catalog_navigation_snapshot_with_timing;
+use crate::catalog_navigation::write_catalog_navigation_snapshot_with_timing_and_fault_control;
 use crate::library_db;
 use crate::runtime_thread::{RuntimeThreadRole, apply_runtime_thread_policy};
 use std::cell::RefCell;
@@ -79,6 +79,20 @@ pub fn run(
 pub fn run_with_execution_policy(
     operation: BuilderOperation,
     execution_policy: BuilderExecutionPolicy,
+    emit: impl FnMut(CatalogBuilderEvent),
+) -> Result<(), String> {
+    run_with_execution_policy_and_fault_control(
+        operation,
+        execution_policy,
+        Box::new(crate::fs_fault::NoopDirectResetFaultControl),
+        emit,
+    )
+}
+
+pub fn run_with_execution_policy_and_fault_control(
+    operation: BuilderOperation,
+    execution_policy: BuilderExecutionPolicy,
+    fault_control: Box<dyn crate::fs_fault::DirectResetFaultControl + Send>,
     mut emit: impl FnMut(CatalogBuilderEvent),
 ) -> Result<(), String> {
     let mut backend = SystemBuilderBackend {
@@ -90,6 +104,7 @@ pub fn run_with_execution_policy(
         post_reveal_background: false,
         force_all_systems: operation == BuilderOperation::RebuildAll,
         arcade_bootstrap_scan: None,
+        fault_control,
     };
     run_with_backend_policy(
         operation,
@@ -806,6 +821,7 @@ struct SystemBuilderBackend {
     post_reveal_background: bool,
     force_all_systems: bool,
     arcade_bootstrap_scan: Option<library_db::LibraryRamScanArtifact>,
+    fault_control: Box<dyn crate::fs_fault::DirectResetFaultControl + Send>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1266,10 +1282,11 @@ impl BuilderBackend for SystemBuilderBackend {
             progress,
             "Creating compressed navigation catalog…",
             || {
-                write_catalog_navigation_snapshot_with_timing(
+                write_catalog_navigation_snapshot_with_timing_and_fault_control(
                     path,
                     &prepared.catalog,
                     &prepared.stamp,
+                    &mut *self.fault_control,
                 )
             },
         )?;

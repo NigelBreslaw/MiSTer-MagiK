@@ -54,7 +54,8 @@ pub(crate) fn publish_pack_file_for_bench(
     final_path: &Path,
     mut progress: impl FnMut(PackSaveProgress),
 ) -> Result<PackSaveMetrics, String> {
-    let mut fault_control = mister_magik_catalog::fs_fault::NoopDirectResetFaultControl;
+    let mut fault_control =
+        mister_magik_mister_runtime::direct_reset_fault::process_fault_control();
     let result = publish_pack_file_impl(source, final_path, &mut progress, &mut fault_control);
     if result.is_err() {
         let _ = fs::remove_file(temp_path_for(final_path));

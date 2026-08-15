@@ -81,7 +81,8 @@ thread_local! {
 }
 
 pub fn prepare_launch_ref(launch_ref: &str) -> Result<String, String> {
-    let mut fault_control = mister_magik_catalog::fs_fault::NoopDirectResetFaultControl;
+    let mut fault_control =
+        mister_magik_mister_runtime::direct_reset_fault::process_fault_control();
     prepare_launch_ref_with_fault_control(launch_ref, &mut fault_control)
 }
 
@@ -96,7 +97,8 @@ pub fn prepare_launch_ref_with_fault_control(
 pub fn prepare_launch_target(
     launch_target: &LaunchTarget,
 ) -> Result<LaunchTarget, LaunchPreparationError> {
-    let mut fault_control = mister_magik_catalog::fs_fault::NoopDirectResetFaultControl;
+    let mut fault_control =
+        mister_magik_mister_runtime::direct_reset_fault::process_fault_control();
     prepare_launch_target_with_fault_control(launch_target, &mut fault_control)
 }
 

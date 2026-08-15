@@ -14,6 +14,8 @@ macro_rules! ui_logln {
 }
 
 pub mod boot_analytics;
+#[cfg(feature = "app-runtime")]
+pub mod direct_reset_fault;
 pub mod display_plan;
 pub mod display_resolution;
 pub mod fpga;

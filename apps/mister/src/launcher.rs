@@ -5676,7 +5676,8 @@ pub fn delete_screenshot_packs() -> Result<usize, String> {
 }
 
 fn delete_screenshot_packs_at(asset_dir: &Path) -> Result<usize, String> {
-    let mut fault_control = mister_magik_catalog::fs_fault::NoopDirectResetFaultControl;
+    let mut fault_control =
+        mister_magik_mister_runtime::direct_reset_fault::process_fault_control();
     delete_screenshot_packs_at_with_fault_control(asset_dir, &mut fault_control)
 }
 
@@ -5743,7 +5744,8 @@ pub fn consume_library_rebuild_on_next_boot() -> Result<bool, String> {
 }
 
 fn request_library_rebuild_on_next_boot_at(path: &Path) -> Result<(), String> {
-    let mut fault_control = mister_magik_catalog::fs_fault::NoopDirectResetFaultControl;
+    let mut fault_control =
+        mister_magik_mister_runtime::direct_reset_fault::process_fault_control();
     request_library_rebuild_on_next_boot_at_with_fault_control(path, &mut fault_control)
 }
 

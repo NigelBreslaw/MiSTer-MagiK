@@ -261,7 +261,8 @@ fn bench_final_path(config: &BenchConfig, iteration: usize) -> PathBuf {
 }
 
 fn observe_media_fault(point: &str, path: &Path) {
-    let mut fault_control = mister_magik_catalog::fs_fault::NoopDirectResetFaultControl;
+    let mut fault_control =
+        mister_magik_mister_runtime::direct_reset_fault::process_fault_control();
     mister_magik_catalog::fs_fault::maybe_fault_with_control(point, path, &mut fault_control);
 }
 
