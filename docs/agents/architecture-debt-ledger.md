@@ -1,8 +1,8 @@
-# Architecture containment and P1 migration ledger
+# Architecture boundary and remaining P1 ownership ledger
 
-This is the current handoff from P0 containment to the P1 Enforce, Decompose,
-and Type streams. It records temporary exceptions and edit ownership; it is
-not an acceptance target based on file length. The typed checks in
+This is the current handoff from completed P1 Enforce work to the remaining
+Decompose and Type streams. It records enforced boundaries and edit ownership;
+it is not an acceptance target based on file length. The typed checks in
 `agent-cli/src/checks.rs` and their selection in `agent-cli/src/planner.rs`
 remain the executable containment boundary.
 
@@ -40,7 +40,7 @@ or record an explicit behavior change.
 | Capability | Current direct effect owners |
 |---|---|
 | Main command transport | `mister/platform/runtime/src/main_command.rs`; launcher callers use typed `MainCommand` variants and have no endpoint access |
-| Launch handoff and recovery | `execute_game_launch_with` now builds the portable `LaunchHandoffRequest` and invokes `LaunchIoHandoff`; `SystemLaunchIo` remains the temporary production effect adapter until its raw process, marker, profile, override, and Main calls move behind their owning runtime/persistence capabilities. Recovery remains in `spawn_mister`, `reboot_mister_with`, and `exit_to_mister`. |
+| Launch handoff and recovery | `execute_game_launch_with` builds the portable `LaunchHandoffRequest` and invokes `LaunchIoHandoff`; `SystemLaunchIo` composes platform-owned Main/runtime adapters with launcher-owned input profiles, button overrides, and recovery ordering. Recovery remains in `spawn_mister`, `reboot_mister_with`, and `exit_to_mister`. |
 | Display control | Platform runtime's `MainDisplayControl` implements the portable `DisplayControl` capability over typed `MainCommand` calls and owns response parsing; the public launcher display helpers retain their existing strings, polling cadence, and transaction-state API as compatibility wrappers. |
 | Runtime state and process inspection | Platform runtime's `SystemRuntimeState` implements the portable `RuntimeState` snapshot for registered Main process state, arcade-core command-line classification, and heartbeat; launcher compatibility helpers now delegate to that capability. |
 | Launcher persistence | `SystemLauncherPersistence` implements the portable `LauncherPersistence` capability for launch-return state, settings, input policy, and rebuild-marker ownership; launcher-facing helpers remain compatibility wrappers. Button profiles, screenshot-pack cleanup, and menu-wallpaper restoration remain explicit launcher composition effects. |
@@ -247,6 +247,18 @@ projection (`code`, `phase`, `retry_policy`, and `recovery_required`) through
 nested `AgentError` phases. Human message rendering is unchanged. The nullable
 v12 evidence column leaves old records compatible and intentionally avoids a
 second structured copy of device detail or credentials.
+
+## Enforce closure
+
+The executable-boundary builtin now requires the portable capability surface,
+platform-owned Main/display/runtime/fault adapters, launcher-owned handoff and
+persistence composition, structured device emission, `AgentResult` CLI edge,
+and redacted evidence projection. Separate negative guards reject every former
+P1 bypass: unowned direct FIFO access, copied platform-v3 structure or installed
+component paths, duplicate binary/library module roots, and string-flattened
+device or CLI failure edges. There is no temporary P1 Enforce exception or P0
+error-boundary exception left in this ledger; the remaining temporary runtime
+environment reads belong only to the separately sequenced Type lane.
 
 ## Hotspot ownership
 

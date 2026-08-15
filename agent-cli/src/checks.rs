@@ -30,6 +30,7 @@ pub fn label(operation: BuiltinOperation) -> &'static str {
         BuiltinOperation::RuntimeEnvironment => "runtime environment ownership",
         BuiltinOperation::PlatformManifestAuthority => "platform manifest authority",
         BuiltinOperation::DeviceCrateRootOwnership => "device crate-root ownership",
+        BuiltinOperation::ExecutableBoundaries => "executable boundary ownership",
         BuiltinOperation::DistributionWorkflow => "distribution workflow",
         BuiltinOperation::KernelWorkflow => "kernel workflow",
         BuiltinOperation::PlatformWorkflow => "platform workflow",
@@ -48,6 +49,7 @@ pub fn run(operation: BuiltinOperation, repository: &Path) -> Result<(), String>
             check_platform_manifest_authority(repository)
         }
         BuiltinOperation::DeviceCrateRootOwnership => check_device_crate_root_ownership(repository),
+        BuiltinOperation::ExecutableBoundaries => check_executable_boundaries(repository),
         BuiltinOperation::DistributionWorkflow => check_distribution_workflow(repository),
         BuiltinOperation::KernelWorkflow => check_kernel_workflow(repository),
         BuiltinOperation::PlatformWorkflow => check_platform_workflow(repository),
@@ -724,7 +726,7 @@ fn check_shell_ownership(repository: &Path) -> Result<(), String> {
                 .collect::<Vec<_>>()
                 .join(", ");
             return Err(format!(
-                "main_fifo_writer_outside_owner: {relative}; production app command transport targets mister/platform/runtime; approved temporary owners: {owners}"
+                "main_fifo_writer_outside_owner: {relative}; production app command transport targets mister/platform/runtime; approved boundary owners: {owners}"
             ));
         }
     }
@@ -1009,6 +1011,180 @@ fn check_device_crate_root_ownership(repository: &Path) -> Result<(), String> {
     Ok(())
 }
 
+fn check_executable_boundaries(repository: &Path) -> Result<(), String> {
+    let portable = read(repository, "crates/magik-core/src/launcher_effects.rs")?;
+    require_fragments(
+        "portable_launcher_effects",
+        &portable,
+        &[
+            "pub trait LaunchHandoff",
+            "pub trait DisplayControl",
+            "pub trait RuntimeState",
+            "pub trait LauncherPersistence",
+        ],
+        &[
+            "std::fs",
+            "std::path",
+            "std::process",
+            "slint::",
+            "/dev/",
+            "MainCommand",
+        ],
+    )?;
+
+    let runtime = read(repository, "mister/platform/runtime/src/lib.rs")?;
+    require_fragments(
+        "platform_runtime_effects",
+        &runtime,
+        &[
+            "pub mod display_control;",
+            "pub mod direct_reset_fault;",
+            "pub mod main_command;",
+            "pub mod runtime_state;",
+        ],
+        &[],
+    )?;
+    require_fragments(
+        "platform_display_control",
+        &read(repository, "mister/platform/runtime/src/display_control.rs")?,
+        &[
+            "pub struct MainDisplayControl",
+            "impl DisplayControl for MainDisplayControl",
+            "main_command::execute(&MainCommand::DisplayApply",
+            "pub fn parse_state_response",
+        ],
+        &[],
+    )?;
+    require_fragments(
+        "platform_runtime_state",
+        &read(repository, "mister/platform/runtime/src/runtime_state.rs")?,
+        &[
+            "pub struct SystemRuntimeState",
+            "impl RuntimeState for SystemRuntimeState",
+        ],
+        &[],
+    )?;
+    require_fragments(
+        "platform_direct_reset",
+        &read(
+            repository,
+            "mister/platform/runtime/src/direct_reset_fault.rs",
+        )?,
+        &[
+            "pub struct SystemDirectResetFaultControl",
+            "impl DirectResetFaultControl for SystemDirectResetFaultControl",
+        ],
+        &[],
+    )?;
+
+    let launcher = read(repository, "apps/mister/src/launcher.rs")?;
+    require_fragments(
+        "launcher_effect_composition",
+        &launcher,
+        &[
+            "impl LaunchHandoff for LaunchIoHandoff",
+            "impl LauncherPersistence for SystemLauncherPersistence",
+            "SystemRuntimeState",
+            "display_control::MainDisplayControl",
+        ],
+        &[
+            "LauncherDisplayControl",
+            "MagikPlatform",
+            "MisterRuntimeBackend",
+            "MisterRuntime",
+        ],
+    )?;
+
+    let device_agent = read(repository, "mister/tools/agent/src/main.rs")?;
+    let cli = read(repository, "agent-cli/src/main.rs")?;
+    if executable_error_flattening_returned(&device_agent, &cli) {
+        return Err("executable_error_string_flattening_returned".into());
+    }
+    require_fragments(
+        "device_failure_emission",
+        &device_agent,
+        &[
+            "fn failure_response(",
+            "fn authentication_failure_response(",
+            "fn busy_failure_response(",
+            "fn unavailable_failure_response(",
+            "fn operation_failure_response(",
+            "fn alpha_candidate_failure_response(",
+        ],
+        &[],
+    )?;
+    let error = read(repository, "agent-cli/src/error.rs")?;
+    require_fragments(
+        "agent_error_structure",
+        &error,
+        &[
+            "StructuredDevice",
+            "pub fn structured_failure(&self)",
+            "Self::Phase { source, .. } | Self::Cancelled(source) => source.structured_failure()",
+        ],
+        &[],
+    )?;
+    require_fragments(
+        "agent_cli_error_boundary",
+        &cli,
+        &[
+            "fn run() -> AgentResult<ExitCode>",
+            "fn open() -> AgentResult<Self>",
+            "reporter.emit_failure(\"request\", &error)",
+            "ExitCode::from(70)",
+            "ExitCode::FAILURE",
+            "ExitCode::from(3)",
+        ],
+        &[
+            "fn run() -> Result<ExitCode, String>",
+            "reporter.emit(EventKind::Failed, \"request\", &error.to_string(), None)",
+        ],
+    )?;
+    let progress = read(repository, "agent-cli/src/progress.rs")?;
+    require_fragments(
+        "agent_failure_projection",
+        &progress,
+        &[
+            "pub struct FailureEvidence",
+            "pub code: String",
+            "pub phase: String",
+            "pub retry_policy: String",
+            "pub recovery_required: bool",
+            "pub fn emit_failure(",
+        ],
+        &[],
+    )?;
+    let failure_projection = progress
+        .split_once("pub struct FailureEvidence")
+        .and_then(|(_, tail)| tail.split_once('}'))
+        .map(|(body, _)| body)
+        .ok_or("agent_failure_projection_missing")?;
+    if failure_projection.contains("detail") {
+        return Err("agent_failure_projection_must_redact_detail".into());
+    }
+    require_fragments(
+        "agent_failure_evidence",
+        &read(repository, "agent-cli/src/evidence.rs")?,
+        &[
+            "failure_json TEXT",
+            "PRAGMA user_version = 12",
+            "pub failure: Option<FailureEvidence>",
+            "fn migrate_v11_to_v12",
+        ],
+        &[],
+    )?;
+    Ok(())
+}
+
+fn executable_error_flattening_returned(device_agent: &str, cli: &str) -> bool {
+    let device_agent = device_agent.split_whitespace().collect::<String>();
+    let cli = cli.split_whitespace().collect::<String>();
+    device_agent.contains("response(id,false")
+        || device_agent.contains("response(None,false")
+        || cli.contains("fnrun()->Result<ExitCode,String>")
+        || cli.contains("reporter.emit(EventKind::Failed,\"request\",&error.to_string(),None)")
+}
+
 fn rust_module_declarations(source: &str) -> BTreeSet<String> {
     source
         .lines()
@@ -1110,6 +1286,7 @@ fn check_platform_manifest_authority(repository: &Path) -> Result<(), String> {
     let dev = &schema.layouts["dev"];
     let files = repository_files(repository)?;
     let mut unledgered = Vec::new();
+    let mut installed_path_duplicates = Vec::new();
     for path in files {
         let relative = path.to_string_lossy();
         if relative == AUTHORITY
@@ -1130,9 +1307,21 @@ fn check_platform_manifest_authority(repository: &Path) -> Result<(), String> {
         let Ok(source) = fs::read_to_string(repository.join(&path)) else {
             continue;
         };
+        if extension == Some("rs")
+            && platform_installed_path_duplicate(&source, &schema, public, dev)
+        {
+            installed_path_duplicates.push(relative.clone().into_owned());
+        }
         if platform_manifest_structural_duplicate(&source, &schema, public, dev) {
             unledgered.push(relative.into_owned());
         }
+    }
+    if !installed_path_duplicates.is_empty() {
+        installed_path_duplicates.sort();
+        return Err(format!(
+            "platform_installed_path_duplicate_outside_contract: {}; use Layout::paths()",
+            installed_path_duplicates.join(",")
+        ));
     }
     if !unledgered.is_empty() {
         unledgered.sort();
@@ -1142,6 +1331,37 @@ fn check_platform_manifest_authority(repository: &Path) -> Result<(), String> {
         ));
     }
     Ok(())
+}
+
+fn platform_installed_path_duplicate(
+    source: &str,
+    schema: &PlatformManifestSchema,
+    public: &PlatformManifestLayout,
+    dev: &PlatformManifestLayout,
+) -> bool {
+    let production = source.split("#[cfg(test)]").next().unwrap_or(source);
+    let public_manifest = format!("{}/{}", public.root, schema.file_name);
+    let dev_manifest = format!("{}/{}", dev.root, schema.file_name);
+    [
+        public_manifest.as_str(),
+        dev_manifest.as_str(),
+        &public.main,
+        &public.gui,
+        &public.manager,
+        &public.scanout_module,
+        &public.scanout_metadata,
+        &public.latch_rbf,
+        &public.latch_metadata,
+        &dev.main,
+        &dev.gui,
+        &dev.manager,
+        &dev.scanout_module,
+        &dev.scanout_metadata,
+        &dev.latch_rbf,
+        &dev.latch_metadata,
+    ]
+    .iter()
+    .any(|path| production.contains(*path))
 }
 
 fn check_generated_platform_manifest_consumers(
@@ -1670,6 +1890,15 @@ visibility = "internal runtime"
         )
         .unwrap();
         assert!(check_platform_manifest_authority(&root).is_ok());
+        fs::remove_file(root.join("apps/mister/src/media_manifest.rs")).unwrap();
+        fs::write(
+            root.join("apps/mister/src/copied_layout.rs"),
+            "const GUI: &str = \"/media/fat/mister-magik/mister-magik-fb\";\n",
+        )
+        .unwrap();
+        let error = check_platform_manifest_authority(&root).unwrap_err();
+        assert!(error.contains("platform_installed_path_duplicate_outside_contract"));
+        assert!(error.contains("apps/mister/src/copied_layout.rs"));
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -1714,6 +1943,22 @@ visibility = "internal runtime"
         let error = check_device_crate_root_ownership(&root).unwrap_err();
         assert!(error.contains("unexpected=unplanned"));
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn executable_error_guard_rejects_legacy_string_edges() {
+        assert!(!executable_error_flattening_returned(
+            "failure_response(id, error)",
+            "fn run() -> AgentResult<ExitCode> { reporter.emit_failure(\"request\", &error); }",
+        ));
+        assert!(executable_error_flattening_returned(
+            "response(id, false, None, Some(error))",
+            "fn run() -> AgentResult<ExitCode> { Ok(ExitCode::SUCCESS) }",
+        ));
+        assert!(executable_error_flattening_returned(
+            "failure_response(id, error)",
+            "fn run() -> Result<ExitCode, String> { reporter.emit(EventKind::Failed, \"request\", &error.to_string(), None); }",
+        ));
     }
 
     #[test]

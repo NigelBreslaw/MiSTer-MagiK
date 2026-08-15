@@ -269,6 +269,31 @@ fn add_path_operations(
             "device application source changed → single crate-root ownership guard",
         ));
     }
+    if path == Path::new("crates/magik-core/src/launcher_effects.rs")
+        || path == Path::new("crates/catalog/src/fs_fault.rs")
+        || path.starts_with("apps/mister/src")
+        || path.starts_with("mister/platform/runtime/src")
+        || path.starts_with("mister/tools/agent/src")
+        || matches!(
+            path.to_str(),
+            Some(
+                "agent-cli/src/main.rs"
+                    | "agent-cli/src/error.rs"
+                    | "agent-cli/src/progress.rs"
+                    | "agent-cli/src/evidence.rs"
+                    | "agent-cli/src/checks.rs"
+                    | "agent-cli/src/model.rs"
+                    | "agent-cli/src/planner.rs"
+            )
+        )
+    {
+        add(builtin(
+            "repo.executable-boundaries",
+            "Check executable boundary ownership",
+            BuiltinOperation::ExecutableBoundaries,
+            "portable capability, runtime adapter, or executable error edge changed → enforced boundary contract",
+        ));
+    }
     if path.file_name().and_then(|name| name.to_str()) == Some("AGENTS.md")
         || path.starts_with("docs/agents")
         || path == Path::new(".codex/config.toml")
@@ -2414,6 +2439,28 @@ mod tests {
             .collect();
         assert_eq!(operations.len(), 1);
         assert_eq!(operations[0].id, "repo.runtime-environment");
+    }
+
+    #[test]
+    fn executable_edges_select_boundary_ownership_once() {
+        let plan = affected_plan(
+            AssuranceRequest::Plan {
+                scope: Scope::Paths(vec![]),
+            },
+            vec![
+                "apps/mister/src/launcher.rs".into(),
+                "agent-cli/src/progress.rs".into(),
+                "mister/tools/agent/src/main.rs".into(),
+            ],
+        )
+        .unwrap();
+        let operations: Vec<_> = plan
+            .operations
+            .iter()
+            .filter(|operation| operation.builtin == Some(BuiltinOperation::ExecutableBoundaries))
+            .collect();
+        assert_eq!(operations.len(), 1);
+        assert_eq!(operations[0].id, "repo.executable-boundaries");
     }
 
     #[test]
