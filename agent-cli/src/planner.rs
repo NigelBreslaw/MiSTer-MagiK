@@ -711,8 +711,7 @@ fn add_path_operations(
                         "test",
                         "--manifest-path",
                         "apps/mister/Cargo.toml",
-                        "--bin",
-                        "mister-magik-fb",
+                        "--lib",
                         "--no-default-features",
                         "--features",
                         "ui",
@@ -771,19 +770,18 @@ fn add_path_operations(
             add(with_inputs(
                 cargo(
                     "app.ui-tests",
-                    "Test launcher binary logic",
+                    "Test launcher library logic",
                     &[
                         "test",
                         "--manifest-path",
                         "apps/mister/Cargo.toml",
-                        "--bin",
-                        "mister-magik-fb",
+                        "--lib",
                         "--no-default-features",
                         "--features",
                         "ui",
                         "launcher_catalog_session::tests",
                     ],
-                    "launcher session source → focused UI binary tests",
+                    "launcher session source → focused UI library tests",
                 ),
                 MISTER_APP_COMPILED_INPUTS,
             ));
@@ -1813,7 +1811,7 @@ mod tests {
     }
 
     #[test]
-    fn launcher_session_plan_uses_binary_ui_tests() {
+    fn launcher_session_plan_uses_library_ui_tests() {
         let plan = affected_plan(
             AssuranceRequest::Plan {
                 scope: Scope::Paths(vec![]),
@@ -1826,13 +1824,8 @@ mod tests {
             .iter()
             .find(|operation| operation.id == "app.ui-tests")
             .unwrap();
-        assert!(!tests.args.contains(&"--lib".into()));
-        assert!(
-            tests
-                .args
-                .windows(2)
-                .any(|args| args == ["--bin", "mister-magik-fb"])
-        );
+        assert!(tests.args.contains(&"--lib".into()));
+        assert!(!tests.args.contains(&"--bin".into()));
         assert!(tests.args.contains(&"ui".into()));
         assert!(
             tests
@@ -1856,12 +1849,8 @@ mod tests {
             .find(|operation| operation.id == "app.production-ui-tests")
             .unwrap();
         assert!(production_test.args.contains(&"ui".into()));
-        assert!(
-            production_test
-                .args
-                .windows(2)
-                .any(|args| args == ["--bin", "mister-magik-fb"])
-        );
+        assert!(production_test.args.contains(&"--lib".into()));
+        assert!(!production_test.args.contains(&"--bin".into()));
         assert!(!production_test.args.contains(&"ui,experiments".into()));
 
         let preview = affected_plan(
