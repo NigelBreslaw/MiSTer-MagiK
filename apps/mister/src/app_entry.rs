@@ -62,8 +62,6 @@
 //! See docs/architecture.md for display routing and boot handoff; see
 //! apps/mister/BUILD.md for toolchain details.
 
-#![allow(dead_code)]
-
 use std::ffi::CString;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};

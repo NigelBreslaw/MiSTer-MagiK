@@ -962,6 +962,7 @@ fn render_runtime_environment_reference(registry: &RuntimeEnvironmentRegistry) -
 fn check_device_crate_root_ownership(repository: &Path) -> Result<(), String> {
     const EXPECTED: [(&str, &str); 0] = [];
     let main = read(repository, "apps/mister/src/main.rs")?;
+    let app_entry = read(repository, "apps/mister/src/app_entry.rs")?;
     let library = read(repository, "apps/mister/src/lib.rs")?;
     let experiments = fs::read_to_string(repository.join("apps/mister/src/experiments/mod.rs"))
         .unwrap_or_default();
@@ -997,6 +998,8 @@ fn check_device_crate_root_ownership(repository: &Path) -> Result<(), String> {
         || !main.contains("app_entry::run()")
         || !main_modules.is_empty()
         || main.contains("std::env::args")
+        || main.contains("#![allow(dead_code)]")
+        || app_entry.contains("#![allow(dead_code)]")
     {
         return Err(
             "device_binary_bootstrap_drift: main.rs owns only allocator, earliest layout initialization, and app_entry::run"
@@ -1689,6 +1692,11 @@ visibility = "internal runtime"
         fs::write(
             root.join("apps/mister/src/lib.rs"),
             "pub mod library_only;\n",
+        )
+        .unwrap();
+        fs::write(
+            root.join("apps/mister/src/app_entry.rs"),
+            "pub fn run() {}\n",
         )
         .unwrap();
         fs::write(root.join("apps/mister/src/experiments/mod.rs"), "").unwrap();

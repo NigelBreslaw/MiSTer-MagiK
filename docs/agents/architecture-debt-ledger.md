@@ -182,6 +182,11 @@ the library entrypoint. The characterized startup order is unchanged. The
 crate-root check also enforces that narrow binary shape and rejects any new
 module declaration or command/config parsing in `main.rs`.
 
+The former application-wide dead-code allowance was removed with the entrypoint
+move. The crate-root check rejects its return in either executable edge. The
+remaining leaf `#[allow(dead_code)]` annotations in `lib.rs` are cfg-local to
+shared rendering helpers that are intentionally partial in host/preview graphs.
+
 ## Hotspot ownership
 
 The PR advisory report uses stable owner IDs so moves do not erase history.
