@@ -22,7 +22,7 @@ path is not a migration strategy.
 | Current path | Capability owner | Destination and removal condition |
 |---|---|---|
 | `mister/platform/runtime/src/main_command.rs` | P1 Enforce | Sole production-app command transport. Keep wire spelling, serialized reply association, bounded FIFO writes, and endpoint paths private to this typed module. |
-| `crates/catalog/src/fs_fault.rs` | P1 Type then P1 Enforce, serially | Type first captures compatible `FaultConfig` parsing and arming policy. Enforce then injects and moves command transport. Remove the exception after the typed config feeds the runtime-owned effect and the catalog file performs no endpoint I/O. |
+| `crates/catalog/src/fs_fault.rs` | P1 Enforce | Compatible `FaultConfig` is now captured once at the selected-command boundary with redacted volatile-token diagnostics and the seven cleanup artifacts characterized. Enforce next injects and moves command transport. Remove the exception after that captured config feeds the runtime-owned effect and the catalog file performs no endpoint I/O. |
 | `mister/tools/agent/src/main.rs` | P1 Enforce device-service boundary | This is a distinct attended device-service capability, not production app transport. Keep the entry only while this file performs that service operation; if it moves, update the inventory atomically after zero old references. |
 | `agent-cli/src/host/remote.rs` | P1 Enforce host boundary | This constructs bounded host commands and is not production app transport. Keep the entry only while this file owns that construction; if it moves, update the inventory atomically after zero old references. |
 
@@ -124,8 +124,8 @@ Enforce, Decompose, and Type may use separate worktrees concurrently only when
 their active commits do not touch a shared seam below. Changes crossing a seam
 are serialized in this order:
 
-- Type owns `FaultConfig` parsing and arming policy in
-  `crates/catalog/src/fs_fault.rs` before Enforce moves its command effect.
+- The compatible `FaultConfig` parsing and arming-policy capture landed before
+  Enforce moves the command effect from `crates/catalog/src/fs_fault.rs`.
 - Enforce owns stable installed roots and component paths. Its adoption of
   `crates/catalog/src/device_layout.rs` precedes Type's catalog, cache,
   temporary-path, and process-override derivation; the file is never edited by

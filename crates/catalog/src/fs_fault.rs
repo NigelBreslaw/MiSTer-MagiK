@@ -4,6 +4,7 @@
 //! Test-only filesystem fault injection for destructive device experiments.
 
 use serde_json::json;
+use std::fmt;
 use std::fs;
 use std::io::Write;
 use std::path::Path;
@@ -20,8 +21,18 @@ const MISTER_CMD: &str = "/dev/MiSTer_cmd";
 const DIRECT_RESET_NO_SYNC: &str = "direct-reset-no-sync";
 const DIRECT_RESET_NO_SYNC_CMD: &str = "mister_magik_direct_reset_no_sync\n";
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct FaultConfig {
+pub const DIRECT_RESET_CLEANUP_ARTIFACTS: [&str; 7] = [
+    "/media/fat/mister-magik/launcher.env",
+    "/media/fat/mister-magik-dev/launcher.env",
+    "/tmp/mister-magik/fs-fault-launcher.env",
+    "/tmp/mister-magik/fs-fault-session",
+    "/tmp/mister-magik/fs-fault.json",
+    "/media/fat/mister-magik/rebuild-on-next-boot",
+    "/media/fat/mister-magik-dev/rebuild-on-next-boot",
+];
+
+#[derive(Clone, PartialEq, Eq)]
+pub struct FaultConfig {
     point: String,
     action: String,
     delay_ms: u64,
@@ -29,13 +40,32 @@ struct FaultConfig {
 }
 
 impl FaultConfig {
-    fn from_env() -> Option<Self> {
+    /// Capture the compatible destructive-fault controls once at process entry.
+    ///
+    /// The session token remains volatile and is never serialized by this type.
+    pub fn capture_from_process() -> Option<Self> {
         Self::from_values(
             std::env::var(POINT_ENV).ok().as_deref(),
             std::env::var(ACTION_ENV).ok().as_deref(),
             std::env::var(DELAY_ENV).ok().as_deref(),
             std::env::var(SESSION_ENV).ok().as_deref(),
         )
+    }
+
+    pub fn point(&self) -> &str {
+        &self.point
+    }
+
+    pub fn action(&self) -> &str {
+        &self.action
+    }
+
+    pub fn delay_ms(&self) -> u64 {
+        self.delay_ms
+    }
+
+    pub fn session_token(&self) -> Option<&str> {
+        self.session.as_deref()
     }
 
     fn from_values(
@@ -63,8 +93,20 @@ impl FaultConfig {
     }
 }
 
+impl fmt::Debug for FaultConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("FaultConfig")
+            .field("point", &self.point)
+            .field("action", &self.action)
+            .field("delay_ms", &self.delay_ms)
+            .field("session", &self.session.as_ref().map(|_| "<redacted>"))
+            .finish()
+    }
+}
+
 pub fn maybe_fault(point: &str, target: impl AsRef<Path>) {
-    let Some(config) = FaultConfig::from_env() else {
+    let Some(config) = FaultConfig::capture_from_process() else {
         return;
     };
     let target = target.as_ref();
@@ -302,5 +344,40 @@ mod tests {
         assert_eq!(config.action, DIRECT_RESET_NO_SYNC);
         assert_eq!(config.delay_ms, DEFAULT_DELAY_MS);
         assert_eq!(config.session, None);
+    }
+
+    #[test]
+    fn captured_config_redacts_the_volatile_session_token() {
+        let config = FaultConfig::from_values(
+            Some("settings.after_rename"),
+            Some(DIRECT_RESET_NO_SYNC),
+            Some("17"),
+            Some("secret-session-token"),
+        )
+        .expect("config");
+
+        assert_eq!(config.point(), "settings.after_rename");
+        assert_eq!(config.action(), DIRECT_RESET_NO_SYNC);
+        assert_eq!(config.delay_ms(), 17);
+        assert_eq!(config.session_token(), Some("secret-session-token"));
+        let debug = format!("{config:?}");
+        assert!(debug.contains("<redacted>"));
+        assert!(!debug.contains("secret-session-token"));
+    }
+
+    #[test]
+    fn direct_reset_cleanup_artifacts_cover_both_layouts_and_volatile_state() {
+        assert_eq!(
+            DIRECT_RESET_CLEANUP_ARTIFACTS,
+            [
+                "/media/fat/mister-magik/launcher.env",
+                "/media/fat/mister-magik-dev/launcher.env",
+                "/tmp/mister-magik/fs-fault-launcher.env",
+                "/tmp/mister-magik/fs-fault-session",
+                "/tmp/mister-magik/fs-fault.json",
+                "/media/fat/mister-magik/rebuild-on-next-boot",
+                "/media/fat/mister-magik-dev/rebuild-on-next-boot",
+            ]
+        );
     }
 }

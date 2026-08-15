@@ -201,6 +201,7 @@ fn main() {
     }
 
     let cmd = command_args::resolve_command(&args);
+    let fault_config = mister_magik_catalog::fs_fault::FaultConfig::capture_from_process();
 
     let latch_readiness_json =
         cmd == "latch-readiness-report" && args.iter().any(|arg| arg == "--json");
@@ -236,7 +237,7 @@ fn main() {
         command.kind,
         command_args::CommandKind::PreFpga | command_args::CommandKind::ListOnly
     ) {
-        dispatch_pre_fpga(&cmd, &args);
+        dispatch_pre_fpga(&cmd, &args, fault_config.as_ref());
         return;
     }
 
@@ -263,7 +264,13 @@ fn main() {
         }
     };
 
-    dispatch_fpga(&cmd, &args, &mut f, process_entry_cpu_profile);
+    dispatch_fpga(
+        &cmd,
+        &args,
+        &mut f,
+        process_entry_cpu_profile,
+        fault_config.as_ref(),
+    );
 }
 
 enum ProcessLockState {
@@ -359,7 +366,11 @@ fn remove_pid_lock_if_owner(path: &Path, pid: u32) {
     }
 }
 
-fn dispatch_pre_fpga(cmd: &str, args: &[String]) {
+fn dispatch_pre_fpga(
+    cmd: &str,
+    args: &[String],
+    _fault_config: Option<&mister_magik_catalog::fs_fault::FaultConfig>,
+) {
     match cmd {
         #[cfg(feature = "diagnostics")]
         "vsync-probe" => run_vsync_probe(),
@@ -480,6 +491,7 @@ fn dispatch_fpga(
     args: &[String],
     f: &mut Fpga,
     process_entry_cpu_profile: Option<cpu_profile::CpuProfiler>,
+    _fault_config: Option<&mister_magik_catalog::fs_fault::FaultConfig>,
 ) {
     match cmd {
         "read" => read_mode(f),
