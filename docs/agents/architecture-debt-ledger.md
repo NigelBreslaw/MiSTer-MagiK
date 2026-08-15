@@ -213,6 +213,12 @@ All authenticated control and binary-stream endpoints now emit
 Authentication text, logging, and connection behavior are unchanged; no token
 value enters the structured sibling.
 
+Control saturation, exclusive framebuffer-consumer contention, producer
+connection failure, and control transport setup/read failure now emit
+`device_busy` or `device_unavailable` metadata in the `availability` phase.
+Their legacy strings and connection behavior are unchanged, and both families
+advertise only the existing bounded retry behavior.
+
 ## Hotspot ownership
 
 The PR advisory report uses stable owner IDs so moves do not erase history.

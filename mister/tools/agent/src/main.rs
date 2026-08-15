@@ -1505,7 +1505,7 @@ mod linux {
                             let _ = writeln!(
                                 stream,
                                 "{}",
-                                response(None, false, None, Some("agent is busy"))
+                                busy_failure_response(None, "agent is busy")
                             );
                             continue;
                         };
@@ -1539,7 +1539,7 @@ mod linux {
         let mut reader = match stream.try_clone() {
             Ok(cloned) => BufReader::new(cloned),
             Err(err) => {
-                let response = response(None, false, None, Some(&format!("clone error: {err}")));
+                let response = unavailable_failure_response(None, &format!("clone error: {err}"));
                 let _ = writeln!(stream, "{response}");
                 return;
             }
@@ -1589,7 +1589,7 @@ mod linux {
                 mister_magik_agent_protocol::RetryPolicy::Never,
                 false,
             ),
-            Err(err) => response(None, false, None, Some(&format!("read error: {err}"))),
+            Err(err) => unavailable_failure_response(None, &format!("read error: {err}")),
         };
         let _ = writeln!(stream, "{response}");
     }
@@ -1667,12 +1667,7 @@ mod linux {
             let _ = writeln!(
                 stream,
                 "{}",
-                response(
-                    id,
-                    false,
-                    None,
-                    Some("framebuffer stream already has a desktop consumer")
-                )
+                busy_failure_response(id, "framebuffer stream already has a desktop consumer",)
             );
             return true;
         };
@@ -1682,11 +1677,9 @@ mod linux {
                 let _ = writeln!(
                     stream,
                     "{}",
-                    response(
+                    unavailable_failure_response(
                         id,
-                        false,
-                        None,
-                        Some(&format!("producer stream unavailable: {err}"))
+                        &format!("producer stream unavailable: {err}"),
                     )
                 );
                 return true;
@@ -2940,6 +2933,28 @@ mod linux {
             mister_magik_agent_protocol::FailureCode::AuthenticationRequired,
             mister_magik_agent_protocol::FailurePhase::Authentication,
             mister_magik_agent_protocol::RetryPolicy::Never,
+            false,
+        )
+    }
+
+    pub(super) fn busy_failure_response(id: Option<Value>, error: &str) -> String {
+        failure_response(
+            id,
+            error,
+            mister_magik_agent_protocol::FailureCode::DeviceBusy,
+            mister_magik_agent_protocol::FailurePhase::Availability,
+            mister_magik_agent_protocol::RetryPolicy::Retry,
+            false,
+        )
+    }
+
+    pub(super) fn unavailable_failure_response(id: Option<Value>, error: &str) -> String {
+        failure_response(
+            id,
+            error,
+            mister_magik_agent_protocol::FailureCode::DeviceUnavailable,
+            mister_magik_agent_protocol::FailurePhase::Availability,
+            mister_magik_agent_protocol::RetryPolicy::Retry,
             false,
         )
     }
@@ -6822,6 +6837,23 @@ mod tests {
         assert_eq!(auth["error"], "unauthorized");
         assert_eq!(auth["failure"]["code"], "authentication_required");
         assert_eq!(auth["failure"]["phase"], "authentication");
+
+        let busy: Value =
+            serde_json::from_str(&linux::busy_failure_response(None, "agent is busy")).unwrap();
+        assert_eq!(busy["error"], "agent is busy");
+        assert_eq!(busy["failure"]["code"], "device_busy");
+        assert_eq!(busy["failure"]["phase"], "availability");
+        assert_eq!(busy["failure"]["retry_policy"], "retry");
+
+        let unavailable: Value = serde_json::from_str(&linux::unavailable_failure_response(
+            Some(json!(11)),
+            "producer stream unavailable",
+        ))
+        .unwrap();
+        assert_eq!(unavailable["error"], "producer stream unavailable");
+        assert_eq!(unavailable["failure"]["code"], "device_unavailable");
+        assert_eq!(unavailable["failure"]["phase"], "availability");
+        assert_eq!(unavailable["failure"]["retry_policy"], "retry");
     }
 
     #[test]
