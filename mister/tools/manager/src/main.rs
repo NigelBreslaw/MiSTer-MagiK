@@ -192,14 +192,19 @@ impl Paths {
     fn from_environment() -> Self {
         let fat =
             PathBuf::from(env::var_os("MISTER_MAGIK_FAT").unwrap_or_else(|| "/media/fat".into()));
-        let app = fat.join("mister-magik");
+        let public = ManifestLayout::Public.paths();
+        let app = fat.join(
+            Path::new(public.root)
+                .strip_prefix("/media/fat")
+                .expect("public app root is below /media/fat"),
+        );
         Self {
             inittab: PathBuf::from(
                 env::var_os("MISTER_MAGIK_INITTAB").unwrap_or_else(|| "/etc/inittab".into()),
             ),
             ini: fat.join("MiSTer.ini"),
             backup: fat.join("MiSTer.ini.bak.before-magik"),
-            manifest: app.join("platform-v3.manifest"),
+            manifest: app.join(mister_magik_platform_manifest_contract::FILE_NAME),
             script: fat.join("Scripts/MiSTer-MagiK.sh"),
             test_mode: env::var("MISTER_MAGIK_TEST_MODE").as_deref() == Ok("1"),
             test_keys: RefCell::new(
@@ -537,6 +542,7 @@ fn prepare_stock_inittab(path: &Path) -> Result<Vec<u8>> {
     let newline = if input.contains("\r\n") { "\r\n" } else { "\n" };
     let mut output = Vec::new();
     let mut wrote = false;
+    let (magik_main, magik_boot) = magik_inittab_prefixes();
     for raw in input.lines() {
         let line = raw.strip_suffix('\r').unwrap_or(raw);
         if line.starts_with("::sysinit:/media/fat/MiSTer ") && line.ends_with('&') {
@@ -544,9 +550,7 @@ fn prepare_stock_inittab(path: &Path) -> Result<Vec<u8>> {
                 output.push("::sysinit:/media/fat/MiSTer &");
                 wrote = true;
             }
-        } else if !line.starts_with("::sysinit:/media/fat/MiSTer_MagiK")
-            && !line.starts_with("::sysinit:/media/fat/mister-magik/boot.sh")
-        {
+        } else if !line.starts_with(&magik_main) && !line.starts_with(&magik_boot) {
             output.push(line);
         }
     }
@@ -556,6 +560,14 @@ fn prepare_stock_inittab(path: &Path) -> Result<Vec<u8>> {
     let mut bytes = output.join(newline).into_bytes();
     bytes.extend_from_slice(newline.as_bytes());
     Ok(bytes)
+}
+
+fn magik_inittab_prefixes() -> (String, String) {
+    let public = ManifestLayout::Public.paths();
+    (
+        format!("::sysinit:{}", public.main),
+        format!("::sysinit:{}/boot.sh", public.root),
+    )
 }
 
 fn remount_root_writable(paths: &Paths) -> Result<()> {
@@ -594,15 +606,15 @@ fn validate_stock(paths: &Paths) -> Result<()> {
 
 fn verify_stock_inittab(path: &Path) -> Result<()> {
     let text = fs::read_to_string(path)?;
+    let (magik_main, magik_boot) = magik_inittab_prefixes();
     let stock = text
         .lines()
         .filter(|line| line.trim_end_matches('\r') == "::sysinit:/media/fat/MiSTer &")
         .count();
     if stock != 1
-        || text.lines().any(|line| {
-            line.starts_with("::sysinit:/media/fat/MiSTer_MagiK")
-                || line.starts_with("::sysinit:/media/fat/mister-magik/boot.sh")
-        })
+        || text
+            .lines()
+            .any(|line| line.starts_with(&magik_main) || line.starts_with(&magik_boot))
     {
         return Err("inittab is not in verified stock state".into());
     }
@@ -961,49 +973,15 @@ mod tests {
         )
         .unwrap();
 
-        let paths_and_hashes = [
-            (
-                "main",
-                "/media/fat/MiSTer_MagiK",
-                paths.fat.join("MiSTer_MagiK"),
-            ),
-            (
-                "gui",
-                "/media/fat/mister-magik/mister-magik-fb",
-                app.join("mister-magik-fb"),
-            ),
-            (
-                "manager",
-                "/media/fat/mister-magik/mister-magik-manager",
-                app.join("mister-magik-manager"),
-            ),
-            (
-                "scanout_module",
-                "/media/fat/mister-magik/mister_magik_scanout_slots.ko",
-                app.join("mister_magik_scanout_slots.ko"),
-            ),
-            (
-                "scanout_metadata",
-                "/media/fat/mister-magik/mister_magik_scanout_slots.metadata.txt",
-                app.join("mister_magik_scanout_slots.metadata.txt"),
-            ),
-            (
-                "latch_rbf",
-                "/media/fat/mister-magik/fpga/menu-magik-vblank-latch.rbf",
-                fpga.join("menu-magik-vblank-latch.rbf"),
-            ),
-            (
-                "latch_metadata",
-                "/media/fat/mister-magik/fpga/menu-magik-vblank-latch.metadata.txt",
-                fpga.join("menu-magik-vblank-latch.metadata.txt"),
-            ),
-        ];
         let mut manifest = format!(
             "format=mister-magik-platform-v3\nplatform_release=platform-v0.7\nplatform_release_number=7\nplatform_bundle_id={}\nqualification_candidate_id={}\nlatch_protocol_version=5\nlatch_capability_mask=0x03ff\n",
             "3".repeat(64),
             "4".repeat(64)
         );
-        for (name, installed_path, local_path) in paths_and_hashes {
+        for (name, installed_path) in ManifestLayout::Public.paths().components() {
+            let local_path = paths
+                .fat
+                .join(installed_path.trim_start_matches("/media/fat/"));
             manifest.push_str(&format!("{name}_path={installed_path}\n"));
             manifest.push_str(&format!("{name}_sha256={}\n", digest(&local_path).unwrap()));
         }

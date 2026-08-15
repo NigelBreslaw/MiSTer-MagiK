@@ -131,6 +131,10 @@ files through the catalog layout adapter, which now delegates to the shared
 contract. The last unused public-layout video constants were removed; public
 and Dev runtime selection continues to follow the executable location.
 
+The manager now derives its public app root, manifest path, component fixtures,
+and legacy inittab removal prefixes from the shared public layout while
+preserving `MISTER_MAGIK_FAT` test/install-root remapping.
+
 ## Hotspot ownership
 
 The PR advisory report uses stable owner IDs so moves do not erase history.
