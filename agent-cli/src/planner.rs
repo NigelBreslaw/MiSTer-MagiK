@@ -258,6 +258,17 @@ fn add_path_operations(
             "platform contract or maintained consumer changed → platform-v3 duplication guard",
         ));
     }
+    if path.starts_with("apps/mister/src")
+        || path == Path::new("agent-cli/src/checks.rs")
+        || path == Path::new("agent-cli/src/model.rs")
+    {
+        add(builtin(
+            "repo.device-crate-root-ownership",
+            "Check device crate-root ownership",
+            BuiltinOperation::DeviceCrateRootOwnership,
+            "device application source changed → single crate-root ownership guard",
+        ));
+    }
     if path.file_name().and_then(|name| name.to_str()) == Some("AGENTS.md")
         || path.starts_with("docs/agents")
         || path == Path::new(".codex/config.toml")

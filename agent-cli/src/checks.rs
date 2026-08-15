@@ -29,6 +29,7 @@ pub fn label(operation: BuiltinOperation) -> &'static str {
         BuiltinOperation::ShellOwnership => "shell ownership",
         BuiltinOperation::RuntimeEnvironment => "runtime environment ownership",
         BuiltinOperation::PlatformManifestAuthority => "platform manifest authority",
+        BuiltinOperation::DeviceCrateRootOwnership => "device crate-root ownership",
         BuiltinOperation::DistributionWorkflow => "distribution workflow",
         BuiltinOperation::KernelWorkflow => "kernel workflow",
         BuiltinOperation::PlatformWorkflow => "platform workflow",
@@ -46,6 +47,7 @@ pub fn run(operation: BuiltinOperation, repository: &Path) -> Result<(), String>
         BuiltinOperation::PlatformManifestAuthority => {
             check_platform_manifest_authority(repository)
         }
+        BuiltinOperation::DeviceCrateRootOwnership => check_device_crate_root_ownership(repository),
         BuiltinOperation::DistributionWorkflow => check_distribution_workflow(repository),
         BuiltinOperation::KernelWorkflow => check_kernel_workflow(repository),
         BuiltinOperation::PlatformWorkflow => check_platform_workflow(repository),
@@ -957,6 +959,77 @@ fn render_runtime_environment_reference(registry: &RuntimeEnvironmentRegistry) -
     output
 }
 
+fn check_device_crate_root_ownership(repository: &Path) -> Result<(), String> {
+    const EXPECTED: [(&str, &str); 14] = [
+        ("arcade_list_renderer", "20c-rendering-display"),
+        ("artifact_publish", "20a-reporting-identity"),
+        ("bitmap_text", "20c-rendering-display"),
+        ("catalog_failure_report", "20a-reporting-identity"),
+        ("catalog_progress_report", "20a-reporting-identity"),
+        ("diagnostic_identity", "20a-reporting-identity"),
+        ("experiments/effects", "20d-cfg-test"),
+        ("fallible_log", "20a-reporting-identity"),
+        ("latch_failure_report", "20a-reporting-identity"),
+        ("media_http", "20b-media"),
+        ("media_pack_save", "20b-media"),
+        ("test_support", "20d-cfg-test"),
+        ("ui_display", "20c-rendering-display"),
+        ("video_i420", "20b-media"),
+    ];
+    let main = read(repository, "apps/mister/src/main.rs")?;
+    let library = read(repository, "apps/mister/src/lib.rs")?;
+    let experiments = read(repository, "apps/mister/src/experiments/mod.rs")?;
+    let main_modules = rust_module_declarations(&main);
+    let library_modules = rust_module_declarations(&library);
+    let mut actual: BTreeSet<String> = main_modules
+        .intersection(&library_modules)
+        .cloned()
+        .collect();
+    if main_modules.contains("experiments")
+        && library.contains("pub mod experiments {")
+        && library.contains("pub mod effects;")
+        && experiments.contains("mod effects;")
+    {
+        actual.insert("experiments/effects".into());
+    }
+    let expected: BTreeSet<String> = EXPECTED
+        .iter()
+        .map(|(module, _batch)| (*module).to_owned())
+        .collect();
+    if actual != expected {
+        let unexpected = actual.difference(&expected).cloned().collect::<Vec<_>>();
+        let missing = expected.difference(&actual).cloned().collect::<Vec<_>>();
+        return Err(format!(
+            "device_crate_root_inventory_drift: unexpected={} missing={}; migrate through the recorded 20a-20d batches",
+            unexpected.join(","),
+            missing.join(",")
+        ));
+    }
+    Ok(())
+}
+
+fn rust_module_declarations(source: &str) -> BTreeSet<String> {
+    source
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            let declaration = line
+                .strip_prefix("mod ")
+                .or_else(|| line.strip_prefix("pub mod "))
+                .or_else(|| line.strip_prefix("pub(crate) mod "))?;
+            declaration
+                .strip_suffix(';')
+                .filter(|name| {
+                    !name.is_empty()
+                        && name
+                            .bytes()
+                            .all(|byte| byte == b'_' || byte.is_ascii_alphanumeric())
+                })
+                .map(str::to_owned)
+        })
+        .collect()
+}
+
 #[derive(serde::Deserialize)]
 struct PlatformManifestSchema {
     format: String,
@@ -1596,6 +1669,69 @@ visibility = "internal runtime"
         )
         .unwrap();
         assert!(check_platform_manifest_authority(&root).is_ok());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn device_crate_root_guard_rejects_a_duplicate_outside_the_inventory() {
+        let root = std::env::temp_dir().join(format!(
+            "agent-cli-device-root-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(root.join("apps/mister/src/experiments")).unwrap();
+        let direct = [
+            "arcade_list_renderer",
+            "artifact_publish",
+            "bitmap_text",
+            "catalog_failure_report",
+            "catalog_progress_report",
+            "diagnostic_identity",
+            "fallible_log",
+            "latch_failure_report",
+            "media_http",
+            "media_pack_save",
+            "test_support",
+            "ui_display",
+            "video_i420",
+        ];
+        let declarations = direct
+            .iter()
+            .map(|module| format!("mod {module};\n"))
+            .collect::<String>();
+        fs::write(
+            root.join("apps/mister/src/main.rs"),
+            format!("{declarations}mod experiments;\n"),
+        )
+        .unwrap();
+        fs::write(
+            root.join("apps/mister/src/lib.rs"),
+            format!("{declarations}pub mod experiments {{\n    pub mod effects;\n}}\n"),
+        )
+        .unwrap();
+        fs::write(
+            root.join("apps/mister/src/experiments/mod.rs"),
+            "pub(crate) mod effects;\n",
+        )
+        .unwrap();
+        assert!(check_device_crate_root_ownership(&root).is_ok());
+        fs::write(
+            root.join("apps/mister/src/main.rs"),
+            format!("{declarations}mod experiments;\nmod unplanned;\n"),
+        )
+        .unwrap();
+        fs::write(
+            root.join("apps/mister/src/lib.rs"),
+            format!(
+                "{declarations}mod unplanned;\npub mod experiments {{\n    pub mod effects;\n}}\n"
+            ),
+        )
+        .unwrap();
+        let error = check_device_crate_root_ownership(&root).unwrap_err();
+        assert!(error.contains("unexpected=unplanned"));
         fs::remove_dir_all(root).unwrap();
     }
 

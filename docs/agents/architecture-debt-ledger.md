@@ -121,6 +121,28 @@ The manager now derives its public app root, manifest path, component fixtures,
 and legacy inittab removal prefixes from the shared public layout while
 preserving `MISTER_MAGIK_FAT` test/install-root remapping.
 
+## Device crate-root migration inventory
+
+The device application currently has 14 shared source owners compiled through
+both the library and binary roots. The static device crate-root ownership check
+rejects any addition or unrecorded removal. Migration is library-authoritative:
+each batch adds the required library visibility, changes binary consumers to
+`mister_magik_fb::...`, and removes the binary declaration in the same commit.
+The binary must not become an import authority for the library.
+
+| Batch | Current duplicate source owners | Classification |
+|---|---|---|
+| `20a-reporting-identity` | `artifact_publish`, `catalog_failure_report`, `catalog_progress_report`, `diagnostic_identity`, `fallible_log`, `latch_failure_report` | Shared reporting/identity leaves |
+| `20b-media` | `media_http`, `media_pack_save`, `video_i420` | Shared media leaves |
+| `20c-rendering-display` | `arcade_list_renderer`, `bitmap_text`, `ui_display` | Shared rendering/display leaves |
+| `20d-cfg-test` | `experiments/effects`, `test_support` | cfg/test-only owners |
+
+After each batch, remove exactly its names from the check inventory. Runtime
+modules are migrated only after typed process configuration is captured and
+passed through the existing composition root. `ui_runner` remains an
+ownership-only move: readiness, scheduling, frame phases, presentation, and
+the `ready-v2` posted-frame contract do not change in this track.
+
 ## Hotspot ownership
 
 The PR advisory report uses stable owner IDs so moves do not erase history.
