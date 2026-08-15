@@ -65,6 +65,7 @@ mod macos {
         ArcadeGame, Launcher, MenuItem, MenuItemKind, MenuItemPresentation, MenuItemStatus,
         MisterBridge, MisterUi, ScreenshotPackProgress,
     };
+    use sha2::{Digest, Sha256};
     use slint::platform::software_renderer::{RepaintBufferType, Rgb565Pixel};
     use slint::{ComponentHandle, Model, ModelRc, PhysicalSize, SharedString, VecModel};
     use softbuffer::{Context, Surface};
@@ -92,7 +93,13 @@ mod macos {
     const MAX_AUTO_REFRESH_HZ: u32 = 120;
     const PREVIEW_TRANSITION_DURATION: Duration = Duration::from_millis(200);
     const ARCADE_MEDIA_SYSTEM_ID: &str = "arcade";
+    const PARTICLE_SCENE_SEED: u64 = 0x4d61_6769_4b;
     const SCREENSHOT_TILE_SEED: u64 = 0x4d61_6769_4b54_696c;
+    const CAPTURE_PROVENANCE_SCHEMA: &str = "mister-magik-launcher-capture-v1";
+    const PINNED_SLINT_VERSION: &str = "1.17.1";
+    const RGB565_CONVERSION_VERSION: &str = "rgb565-le-expand-v1";
+    const PREVIEW_RENDERER_ID: &str = "slint-software-rgb565-reused-buffer";
+    const PNG_ENCODER_ID: &str = "png-rgb8-filter-none-zlib-best-v1";
 
     pub fn run() -> Result<(), Box<dyn Error>> {
         let options = PreviewOptions::parse(std::env::args().skip(1))?;
@@ -152,7 +159,7 @@ mod macos {
         if headless && options.scenario == Scenario::ScreenshotTiles {
             application.load_headless_screenshot_tiles()?;
         }
-        if let Some(output) = options.output {
+        if let Some(output) = options.output.as_deref() {
             let mut demo_origin_selected_id = None;
             let mut demo_origin_frame = None;
             let navigation_demo = options.navigation_transition_demo.is_some()
@@ -247,12 +254,29 @@ mod macos {
                 application.settle_headless_production_screensaver()?;
             }
             let capture = oriented_capture(application.frame_target.cached_565(), layout);
+            let capture_hash = frame_hash(&capture);
             write_capture(
-                &output,
+                output,
                 &capture,
                 layout.composition_w(),
                 layout.composition_h(),
             )?;
+            if let Some(provenance_output) = options.provenance_output.as_deref() {
+                let provenance = CaptureProvenance::for_capture(
+                    &options,
+                    layout.composition_w(),
+                    layout.composition_h(),
+                    application.refresh_hz,
+                    application.fixed_time.get(),
+                    capture_hash,
+                );
+                write_capture_provenance(provenance_output, &provenance)?;
+                println!(
+                    "provenance={} sha256={}",
+                    provenance_output.display(),
+                    provenance.identity()?
+                );
+            }
             println!(
                 "capture={} scenario={} frame={} refresh_hz={} transition_phase={:?} transition_progress_q16={} hash={:016x}",
                 output.display(),
@@ -261,7 +285,7 @@ mod macos {
                 application.refresh_hz,
                 application.navigation_transition.frame().phase,
                 application.navigation_transition.frame().progress_q16,
-                frame_hash(&capture)
+                capture_hash
             );
             return Ok(());
         }
@@ -2016,7 +2040,7 @@ mod macos {
                     count: 16_384,
                     width: self.frame_width,
                     height: self.frame_height,
-                    seed: 0x4d61_6769_4b,
+                    seed: PARTICLE_SCENE_SEED,
                     preset: ParticlePreset::Visual,
                 })
                 .expect("create production particle screensaver")
@@ -2314,6 +2338,40 @@ mod macos {
             }
         }
 
+        fn id(self) -> &'static str {
+            match self {
+                Self::Home => "home",
+                Self::SystemHub => "system-hub",
+                Self::Arcade => "arcade",
+                Self::ArcadeSearch => "arcade-search",
+                Self::ArcadeCrossfade => "arcade-crossfade",
+                Self::Settings => "settings",
+                Self::OrientationChoice => "orientation-choice",
+                Self::Controller => "controller",
+                Self::ControllerSetup => "controller-setup",
+                Self::About => "about",
+                Self::Licenses => "licenses",
+                Self::Info => "info",
+                Self::ScreensaverSettings => "screensaver-settings",
+                Self::Startup => "startup",
+                Self::Confirm => "confirm",
+                Self::CatalogScan => "catalog-scan",
+                Self::BackgroundScan => "background-scan",
+                Self::Loading => "loading",
+                Self::MediaProgress => "media-progress",
+                Self::ParticleScreensaver => "particle-screensaver",
+                Self::ScreenshotTiles => "screenshot-tiles",
+            }
+        }
+
+        const fn deterministic_seed(self) -> Option<u64> {
+            match self {
+                Self::ParticleScreensaver => Some(PARTICLE_SCENE_SEED),
+                Self::ScreenshotTiles => Some(SCREENSHOT_TILE_SEED),
+                _ => None,
+            }
+        }
+
         fn shortcut(self) -> &'static str {
             match self {
                 Self::Home => "1",
@@ -2503,6 +2561,7 @@ mod macos {
         scenario: Scenario,
         frame: u64,
         output: Option<PathBuf>,
+        provenance_output: Option<PathBuf>,
         refresh_rate: RefreshRate,
         content_mode: ContentMode,
         sd_root: Option<PathBuf>,
@@ -2522,6 +2581,7 @@ mod macos {
             let mut scenario = Scenario::Home;
             let mut frame = 0;
             let mut output = None;
+            let mut provenance_output = None;
             let mut refresh_rate = RefreshRate::Auto;
             let mut content_mode = ContentMode::Auto;
             let mut sd_root = None;
@@ -2553,6 +2613,12 @@ mod macos {
                     "--output" => {
                         let value = arguments.next().ok_or("--output requires a file path")?;
                         output = Some(PathBuf::from(value));
+                    }
+                    "--provenance-output" => {
+                        let value = arguments
+                            .next()
+                            .ok_or("--provenance-output requires a file path")?;
+                        provenance_output = Some(PathBuf::from(value));
                     }
                     "--refresh-rate" => {
                         let value = arguments
@@ -2629,7 +2695,7 @@ mod macos {
                     }
                     "--help" | "-h" => {
                         return Err(
-                            "usage: mister-magik-ui-preview [--content auto|fixtures|card] [--sd-root PATH] [--cache-root PATH] [--no-scan] [--no-download] [--navigation-transition-duration-ms 100..10000] [--navigation-transition-demo home-consoles|home-arcade|consoles-system] [--settings-page-transition-demo] [--navigation-transition-demo-reverse] [--display-profile hdmi|crt-240p|crt-288p|crt-480p|crt-576p] [--orientation normal|monitor-clockwise|monitor-counterclockwise] [--scenario NAME] [--refresh-rate auto|60|120] [--frame N] [--output FILE.ppm|FILE.png]"
+                            "usage: mister-magik-ui-preview [--content auto|fixtures|card] [--sd-root PATH] [--cache-root PATH] [--no-scan] [--no-download] [--navigation-transition-duration-ms 100..10000] [--navigation-transition-demo home-consoles|home-arcade|consoles-system] [--settings-page-transition-demo] [--navigation-transition-demo-reverse] [--display-profile hdmi|crt-240p|crt-288p|crt-480p|crt-576p] [--orientation normal|monitor-clockwise|monitor-counterclockwise] [--scenario NAME] [--refresh-rate auto|60|120] [--frame N] [--output FILE.ppm|FILE.png] [--provenance-output FILE.json]"
                                 .into(),
                         );
                     }
@@ -2638,6 +2704,12 @@ mod macos {
             }
             if frame > 0 && output.is_none() {
                 return Err("--frame requires --output".into());
+            }
+            if provenance_output.is_some() && output.is_none() {
+                return Err("--provenance-output requires --output".into());
+            }
+            if provenance_output == output && output.is_some() {
+                return Err("--provenance-output must differ from --output".into());
             }
             if navigation_transition_demo_reverse
                 && navigation_transition_demo.is_none()
@@ -2652,6 +2724,7 @@ mod macos {
                 scenario,
                 frame,
                 output,
+                provenance_output,
                 refresh_rate,
                 content_mode,
                 sd_root,
@@ -2771,6 +2844,16 @@ mod macos {
                 Self::Crt288p => "display:crt-288p",
                 Self::Crt480p => "display:crt-480p",
                 Self::Crt576p => "display:crt-576p",
+            }
+        }
+
+        const fn id(self) -> &'static str {
+            match self {
+                Self::Hdmi => "hdmi",
+                Self::Crt240p => "crt-240p",
+                Self::Crt288p => "crt-288p",
+                Self::Crt480p => "crt-480p",
+                Self::Crt576p => "crt-576p",
             }
         }
     }
@@ -2897,6 +2980,127 @@ mod macos {
             .unwrap_or(0)
             .min(u128::from(u64::MAX));
         Duration::from_nanos(nanos as u64)
+    }
+
+    #[derive(Clone, Debug, serde::Serialize)]
+    struct CaptureProvenance {
+        schema: &'static str,
+        scenario: &'static str,
+        frame: u64,
+        width: u32,
+        height: u32,
+        orientation: &'static str,
+        display_profile: &'static str,
+        refresh_hz: u32,
+        fixed_time_us: u64,
+        scene_seed: Option<String>,
+        rgb565_hash: String,
+        rgb565_conversion: &'static str,
+        renderer: &'static str,
+        slint_version: &'static str,
+        png_encoder: &'static str,
+        fixture_sha256: String,
+        asset_bundle_sha256: String,
+        font_bundle_sha256: String,
+    }
+
+    impl CaptureProvenance {
+        fn for_capture(
+            options: &PreviewOptions,
+            width: usize,
+            height: usize,
+            refresh_hz: u32,
+            fixed_time: Duration,
+            rgb565_hash: u64,
+        ) -> Self {
+            Self {
+                schema: CAPTURE_PROVENANCE_SCHEMA,
+                scenario: options.scenario.id(),
+                frame: options.frame,
+                width: u32::try_from(width).expect("preview width fits provenance format"),
+                height: u32::try_from(height).expect("preview height fits provenance format"),
+                orientation: orientation_id(options.orientation),
+                display_profile: options.display_profile.id(),
+                refresh_hz,
+                fixed_time_us: fixed_time.as_micros().min(u128::from(u64::MAX)) as u64,
+                scene_seed: options
+                    .scenario
+                    .deterministic_seed()
+                    .map(|seed| format!("{seed:016x}")),
+                rgb565_hash: format!("{rgb565_hash:016x}"),
+                rgb565_conversion: RGB565_CONVERSION_VERSION,
+                renderer: PREVIEW_RENDERER_ID,
+                slint_version: PINNED_SLINT_VERSION,
+                png_encoder: PNG_ENCODER_ID,
+                fixture_sha256: bundle_sha256(&[(
+                    "ui_preview_fixtures.rs",
+                    include_bytes!("../ui_preview_fixtures.rs"),
+                )]),
+                asset_bundle_sha256: bundle_sha256(&[
+                    (
+                        "snes-small-v1.rgb565a",
+                        include_bytes!("../../assets/snes/snes-small-v1.rgb565a"),
+                    ),
+                    (
+                        "jersey25-41px.mmbf",
+                        include_bytes!("../../assets/fonts/jersey25-41px.mmbf"),
+                    ),
+                ]),
+                font_bundle_sha256: bundle_sha256(&[(
+                    "PressStart2P-Regular.ttf",
+                    include_bytes!("../../ui/fonts/PressStart2P-Regular.ttf"),
+                )]),
+            }
+        }
+
+        fn encoded(&self) -> Result<Vec<u8>, serde_json::Error> {
+            let mut encoded = serde_json::to_vec_pretty(self)?;
+            encoded.push(b'\n');
+            Ok(encoded)
+        }
+
+        fn identity(&self) -> Result<String, serde_json::Error> {
+            Ok(sha256_hex(&self.encoded()?))
+        }
+    }
+
+    const fn orientation_id(orientation: ScreenOrientation) -> &'static str {
+        match orientation {
+            ScreenOrientation::Normal => "normal",
+            ScreenOrientation::MonitorClockwise => "monitor-clockwise",
+            ScreenOrientation::MonitorCounterclockwise => "monitor-counterclockwise",
+        }
+    }
+
+    fn write_capture_provenance(
+        path: &Path,
+        provenance: &CaptureProvenance,
+    ) -> Result<(), Box<dyn Error>> {
+        let encoded = provenance.encoded()?;
+        let mut file = OpenOptions::new().write(true).create_new(true).open(path)?;
+        file.write_all(&encoded)?;
+        Ok(())
+    }
+
+    fn bundle_sha256(entries: &[(&str, &[u8])]) -> String {
+        let mut hasher = Sha256::new();
+        for (name, bytes) in entries {
+            hasher.update((name.len() as u64).to_be_bytes());
+            hasher.update(name.as_bytes());
+            hasher.update((bytes.len() as u64).to_be_bytes());
+            hasher.update(bytes);
+        }
+        sha256_hex(&hasher.finalize())
+    }
+
+    fn sha256_hex(bytes: &[u8]) -> String {
+        const HEX: &[u8; 16] = b"0123456789abcdef";
+        let mut encoded = String::with_capacity(bytes.len().saturating_mul(2));
+        for &byte in bytes {
+            encoded.push(char::from(HEX[usize::from(byte >> 4)]));
+            encoded.push(char::from(HEX[usize::from(byte & 0x0f)]));
+        }
+        encoded
     }
 
     fn write_capture(
@@ -3814,6 +4018,42 @@ mod macos {
         }
 
         #[test]
+        fn provenance_output_requires_a_distinct_capture_output() {
+            assert!(
+                PreviewOptions::parse(
+                    ["--provenance-output", "/tmp/capture.json"].map(String::from)
+                )
+                .is_err()
+            );
+            assert!(
+                PreviewOptions::parse(
+                    [
+                        "--output",
+                        "/tmp/capture.png",
+                        "--provenance-output",
+                        "/tmp/capture.png",
+                    ]
+                    .map(String::from)
+                )
+                .is_err()
+            );
+            let options = PreviewOptions::parse(
+                [
+                    "--output",
+                    "/tmp/capture.png",
+                    "--provenance-output",
+                    "/tmp/capture.json",
+                ]
+                .map(String::from),
+            )
+            .unwrap();
+            assert_eq!(
+                options.provenance_output,
+                Some(PathBuf::from("/tmp/capture.json"))
+            );
+        }
+
+        #[test]
         fn explicit_refresh_rate_gives_time_based_headless_frames() {
             let options =
                 PreviewOptions::parse(["--refresh-rate", "120"].map(String::from)).unwrap();
@@ -3906,6 +4146,89 @@ mod macos {
             assert_eq!(u32::from_be_bytes(first[20..24].try_into().unwrap()), 2);
             assert_eq!(first[24], 8);
             assert_eq!(first[25], 2);
+        }
+
+        #[test]
+        fn capture_provenance_is_stable_and_every_pinned_fact_changes_identity() {
+            let options = PreviewOptions::parse(
+                [
+                    "--scenario",
+                    "particle-screensaver",
+                    "--frame",
+                    "7",
+                    "--refresh-rate",
+                    "60",
+                    "--output",
+                    "/tmp/capture.png",
+                ]
+                .map(String::from),
+            )
+            .unwrap();
+            let base = CaptureProvenance::for_capture(
+                &options,
+                960,
+                540,
+                60,
+                Duration::from_micros(116_666),
+                0x0123_4567_89ab_cdef,
+            );
+            let repeated = CaptureProvenance::for_capture(
+                &options,
+                960,
+                540,
+                60,
+                Duration::from_micros(116_666),
+                0x0123_4567_89ab_cdef,
+            );
+
+            assert_eq!(base.encoded().unwrap(), repeated.encoded().unwrap());
+            assert_eq!(base.identity().unwrap(), repeated.identity().unwrap());
+            assert_eq!(base.scene_seed.as_deref(), Some("0000004d6167694b"));
+            let json = String::from_utf8(base.encoded().unwrap()).unwrap();
+            assert!(!json.contains("/tmp/capture.png"));
+            assert!(!json.contains("/Users/"));
+
+            assert_provenance_change(&base, |value| value.frame += 1);
+            assert_provenance_change(&base, |value| value.width += 1);
+            assert_provenance_change(&base, |value| value.height += 1);
+            assert_provenance_change(&base, |value| value.orientation = "monitor-clockwise");
+            assert_provenance_change(&base, |value| value.display_profile = "crt-480p");
+            assert_provenance_change(&base, |value| value.refresh_hz = 120);
+            assert_provenance_change(&base, |value| value.fixed_time_us += 1);
+            assert_provenance_change(&base, |value| value.scene_seed = None);
+            assert_provenance_change(&base, |value| value.rgb565_hash.push('0'));
+            assert_provenance_change(&base, |value| value.fixture_sha256.push('0'));
+            assert_provenance_change(&base, |value| value.asset_bundle_sha256.push('0'));
+            assert_provenance_change(&base, |value| value.font_bundle_sha256.push('0'));
+        }
+
+        #[test]
+        fn provenance_writer_refuses_overwrite_and_slint_version_is_pinned() {
+            assert!(include_str!("../../Cargo.toml").contains("slint = { version = \"=1.17.1\""));
+            let options =
+                PreviewOptions::parse(["--output", "/tmp/capture.png"].map(String::from)).unwrap();
+            let provenance =
+                CaptureProvenance::for_capture(&options, 2, 1, 60, Duration::ZERO, 0x1234);
+            let suffix = NEXT_CAPTURE_PATH.fetch_add(1, Ordering::Relaxed);
+            let path = std::env::temp_dir().join(format!(
+                "mister-magik-ui-preview-provenance-{}-{suffix}.json",
+                std::process::id()
+            ));
+
+            write_capture_provenance(&path, &provenance).expect("write provenance");
+            let first = std::fs::read(&path).expect("read provenance");
+            assert!(write_capture_provenance(&path, &provenance).is_err());
+            assert_eq!(std::fs::read(&path).unwrap(), first);
+            let _ = std::fs::remove_file(path);
+        }
+
+        fn assert_provenance_change(
+            base: &CaptureProvenance,
+            mutate: impl FnOnce(&mut CaptureProvenance),
+        ) {
+            let mut changed = base.clone();
+            mutate(&mut changed);
+            assert_ne!(base.identity().unwrap(), changed.identity().unwrap());
         }
 
         #[test]
