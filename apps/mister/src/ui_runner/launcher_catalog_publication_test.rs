@@ -2,14 +2,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use super::*;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 const READY_FAIL_OPEN: Duration = Duration::from_secs(20);
 const HOLD_FAIL_OPEN: Duration = Duration::from_secs(10);
 
 pub(super) struct CatalogPublicationTestDriver {
-    ready_gate: Option<String>,
-    first_frame_release_gate: Option<String>,
+    ready_gate: Option<PathBuf>,
+    first_frame_release_gate: Option<PathBuf>,
     replay_catalog: Option<ArcadeCatalog>,
     ready_sent: bool,
     ready_deadline: Option<Instant>,
@@ -18,11 +18,13 @@ pub(super) struct CatalogPublicationTestDriver {
 }
 
 impl CatalogPublicationTestDriver {
-    pub(super) fn from_env(start: Instant) -> Self {
-        let ready_gate = volatile_test_path("MISTER_MAGIK_TEST_CATALOG_PUBLICATION_GATE");
-        let first_frame_release_gate =
-            volatile_test_path("MISTER_MAGIK_TEST_FIRST_FRAME_RELEASE_GATE");
-        let session = volatile_test_path("MISTER_MAGIK_TEST_CATALOG_PUBLICATION_SESSION");
+    pub(super) fn from_config(
+        config: &mister_magik_fb::process_config::LauncherTestConfig,
+        start: Instant,
+    ) -> Self {
+        let ready_gate = config.catalog_publication_gate().map(Path::to_path_buf);
+        let first_frame_release_gate = config.first_frame_release_gate().map(Path::to_path_buf);
+        let session = config.catalog_publication_session();
         let armed = ready_gate.is_some()
             && first_frame_release_gate.is_some()
             && session
@@ -148,24 +150,17 @@ impl CatalogPublicationTestDriver {
     }
 }
 
-fn volatile_test_path(name: &str) -> Option<String> {
-    std::env::var(name)
-        .ok()
-        .filter(|path| is_volatile_test_path(path))
-}
-
-fn is_volatile_test_path(path: &str) -> bool {
-    path.starts_with("/tmp/") && path.len() > "/tmp/".len()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn publication_test_paths_must_be_volatile() {
-        assert!(is_volatile_test_path("/tmp/catalog-publication"));
-        assert!(!is_volatile_test_path("/tmp/"));
-        assert!(!is_volatile_test_path("/media/fat/persistent"));
+    fn unconfigured_publication_test_is_inert() {
+        let driver = CatalogPublicationTestDriver::from_config(
+            &mister_magik_fb::process_config::LauncherTestConfig::default(),
+            Instant::now(),
+        );
+        assert!(driver.ready_gate.is_none());
+        assert!(driver.first_frame_release_gate.is_none());
     }
 }

@@ -11,7 +11,7 @@ source_roots = [
 ]
 
 [baseline]
-literal_occurrences = 395
+literal_occurrences = 401
 unique_names = 267
 external_build_names = 7
 
@@ -1936,7 +1936,7 @@ documentation = { summary = "Controls magik startup token behavior", accepted_va
 
 [[control]]
 name = "MISTER_MAGIK_TEST_AUTO_LAUNCH_GATE"
-owner = "apps/mister/src/ui_runner/launcher_loop.rs"
+owner = "apps/mister/src/process_config.rs"
 classification = "test"
 value_shape = "path"
 default_behavior = "uses the owner-defined output, fixture, or disabled path when unset"
@@ -1950,7 +1950,7 @@ documentation = { summary = "Controls magik test auto launch gate behavior", acc
 
 [[control]]
 name = "MISTER_MAGIK_TEST_CATALOG_PUBLICATION_GATE"
-owner = "apps/mister/src/ui_runner/launcher_catalog_publication_test.rs"
+owner = "apps/mister/src/process_config.rs"
 classification = "test"
 value_shape = "path"
 default_behavior = "uses the owner-defined output, fixture, or disabled path when unset"
@@ -1964,7 +1964,7 @@ documentation = { summary = "Controls magik test catalog publication gate behavi
 
 [[control]]
 name = "MISTER_MAGIK_TEST_CATALOG_PUBLICATION_SESSION"
-owner = "apps/mister/src/ui_runner/launcher_catalog_publication_test.rs"
+owner = "apps/mister/src/process_config.rs"
 classification = "test"
 value_shape = "path"
 default_behavior = "uses the owner-defined output, fixture, or disabled path when unset"
@@ -1978,7 +1978,7 @@ documentation = { summary = "Controls magik test catalog publication session beh
 
 [[control]]
 name = "MISTER_MAGIK_TEST_CATALOG_RECOVERY_DIALOG"
-owner = "apps/mister/src/ui_runner/launcher_loop.rs"
+owner = "apps/mister/src/process_config.rs"
 classification = "test"
 value_shape = "enum token"
 default_behavior = "uses the owner-defined mode when unset or unrecognized"
@@ -1992,7 +1992,7 @@ documentation = { summary = "Controls magik test catalog recovery dialog behavio
 
 [[control]]
 name = "MISTER_MAGIK_TEST_FIRST_FRAME_RELEASE_GATE"
-owner = "apps/mister/src/ui_runner/launcher_catalog_publication_test.rs"
+owner = "apps/mister/src/process_config.rs"
 classification = "test"
 value_shape = "path"
 default_behavior = "uses the owner-defined output, fixture, or disabled path when unset"
@@ -2006,7 +2006,7 @@ documentation = { summary = "Controls magik test first frame release gate behavi
 
 [[control]]
 name = "MISTER_MAGIK_TEST_LIBRARY_CHANGED_DIALOG_CHOICE"
-owner = "apps/mister/src/ui_runner/launcher_loop.rs"
+owner = "apps/mister/src/process_config.rs"
 classification = "test"
 value_shape = "enum token"
 default_behavior = "uses the owner-defined mode when unset or unrecognized"

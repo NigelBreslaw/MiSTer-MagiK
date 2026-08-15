@@ -71,6 +71,21 @@ const SCREENSAVER_START_PREVIEW_AFTER_ANALYTICS: &str =
     "MISTER_SCREENSAVER_START_PREVIEW_AFTER_ANALYTICS";
 const SCREENSAVER_START_PREVIEW_WHEN_READY: &str = "MISTER_SCREENSAVER_START_PREVIEW_WHEN_READY";
 const PRESENT_BACKEND: &str = "MISTER_PRESENT_BACKEND";
+const TEST_CATALOG_RECOVERY_DIALOG: &str = "MISTER_MAGIK_TEST_CATALOG_RECOVERY_DIALOG";
+const TEST_LIBRARY_CHANGED_DIALOG_CHOICE: &str = "MISTER_MAGIK_TEST_LIBRARY_CHANGED_DIALOG_CHOICE";
+const TEST_AUTO_LAUNCH_GATE: &str = "MISTER_MAGIK_TEST_AUTO_LAUNCH_GATE";
+const TEST_CATALOG_PUBLICATION_GATE: &str = "MISTER_MAGIK_TEST_CATALOG_PUBLICATION_GATE";
+const TEST_FIRST_FRAME_RELEASE_GATE: &str = "MISTER_MAGIK_TEST_FIRST_FRAME_RELEASE_GATE";
+const TEST_CATALOG_PUBLICATION_SESSION: &str = "MISTER_MAGIK_TEST_CATALOG_PUBLICATION_SESSION";
+const MODAL_TEST_PATH_INPUTS: &[&str] = &[
+    "MISTER_SHARDED_CATALOG_DIR",
+    "MISTER_LIBRARY_SQLITE",
+    "MISTER_ARCADE_BOOTSTRAP_INDEX",
+    "MISTER_LIBRARY_REFRESH_LOCK",
+    "MISTER_CATALOG_BUILDER_LOCK",
+    "MISTER_CATALOG_READY_SNAPSHOT",
+    "MISTER_CATALOG_DIAGNOSTICS_DIR",
+];
 
 #[derive(Clone, Default)]
 pub struct EnvironmentSnapshot {
@@ -174,6 +189,7 @@ pub struct LauncherProcessConfig {
     benchmark: LauncherBenchmarkConfig,
     #[cfg(feature = "ui")]
     qualification: QualificationConfig,
+    tests: LauncherTestConfig,
     presentation_backend: PresentBackendConfig,
 }
 
@@ -237,8 +253,106 @@ impl LauncherProcessConfig {
         self.qualification
     }
 
+    pub fn tests(&self) -> &LauncherTestConfig {
+        &self.tests
+    }
+
     pub fn presentation_backend(&self) -> &PresentBackendConfig {
         &self.presentation_backend
+    }
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct LauncherTestConfig {
+    catalog_recovery_dialog: Option<String>,
+    library_changed_dialog_choice: Option<String>,
+    auto_launch_gate: Option<PathBuf>,
+    catalog_publication_gate: Option<PathBuf>,
+    first_frame_release_gate: Option<PathBuf>,
+    catalog_publication_session: Option<PathBuf>,
+    modal_path_inputs: Vec<PathBuf>,
+}
+
+impl LauncherTestConfig {
+    fn capture(environment: &EnvironmentSnapshot) -> Self {
+        Self {
+            catalog_recovery_dialog: environment
+                .get(TEST_CATALOG_RECOVERY_DIALOG)
+                .map(str::to_owned),
+            library_changed_dialog_choice: environment
+                .get(TEST_LIBRARY_CHANGED_DIALOG_CHOICE)
+                .map(str::to_owned),
+            auto_launch_gate: environment
+                .get_path(TEST_AUTO_LAUNCH_GATE)
+                .map(Path::to_path_buf),
+            catalog_publication_gate: volatile_test_path(
+                environment.get_path(TEST_CATALOG_PUBLICATION_GATE),
+            ),
+            first_frame_release_gate: volatile_test_path(
+                environment.get_path(TEST_FIRST_FRAME_RELEASE_GATE),
+            ),
+            catalog_publication_session: volatile_test_path(
+                environment.get_path(TEST_CATALOG_PUBLICATION_SESSION),
+            ),
+            modal_path_inputs: MODAL_TEST_PATH_INPUTS
+                .iter()
+                .filter_map(|name| environment.get_path(name).map(Path::to_path_buf))
+                .collect(),
+        }
+    }
+
+    pub fn catalog_recovery_dialog(&self) -> Option<&str> {
+        self.catalog_recovery_dialog.as_deref()
+    }
+
+    pub fn library_changed_dialog_choice(&self) -> Option<&str> {
+        self.library_changed_dialog_choice.as_deref()
+    }
+
+    pub fn auto_launch_gate(&self) -> Option<&Path> {
+        self.auto_launch_gate.as_deref()
+    }
+
+    pub fn catalog_publication_gate(&self) -> Option<&Path> {
+        self.catalog_publication_gate.as_deref()
+    }
+
+    pub fn first_frame_release_gate(&self) -> Option<&Path> {
+        self.first_frame_release_gate.as_deref()
+    }
+
+    pub fn catalog_publication_session(&self) -> Option<&Path> {
+        self.catalog_publication_session.as_deref()
+    }
+
+    pub fn modal_path_inputs(&self) -> &[PathBuf] {
+        &self.modal_path_inputs
+    }
+}
+
+fn volatile_test_path(path: Option<&Path>) -> Option<PathBuf> {
+    path.filter(|path| path.starts_with("/tmp") && path != &Path::new("/tmp"))
+        .map(Path::to_path_buf)
+}
+
+#[derive(Clone, Default)]
+pub struct FaultProcessConfig {
+    armed: Option<FaultConfig>,
+}
+
+impl FaultProcessConfig {
+    fn capture(environment: &EnvironmentSnapshot) -> Self {
+        let captured = FaultConfig::capture_with(|name| environment.get(name));
+        let armed = captured.filter(|config| {
+            config
+                .session_token()
+                .is_some_and(|path| Path::new(path).starts_with("/tmp") && path != "/tmp")
+        });
+        Self { armed }
+    }
+
+    pub fn armed(&self) -> Option<&FaultConfig> {
+        self.armed.as_ref()
     }
 }
 
@@ -662,7 +776,7 @@ pub struct ProcessConfig {
     archive_cache: ArchiveCacheConfig,
     launcher: Option<LauncherProcessConfig>,
     instrumentation: InstrumentationModifiers,
-    fault: Option<FaultConfig>,
+    fault: FaultProcessConfig,
 }
 
 impl ProcessConfig {
@@ -725,11 +839,10 @@ impl ProcessConfig {
             benchmark: LauncherBenchmarkConfig::capture_with(|name| environment.get(name)),
             #[cfg(feature = "ui")]
             qualification: QualificationConfig::capture_with(|name| environment.get(name)),
+            tests: LauncherTestConfig::capture(environment),
             presentation_backend: PresentBackendConfig::capture(environment),
         });
-        // Fault capture deliberately remains an early, compatibility-preserving
-        // process boundary until C19 applies command and feature gates.
-        let fault = FaultConfig::capture_with(|name| environment.get(name));
+        let fault = FaultProcessConfig::capture(environment);
         Self {
             command,
             device_paths,
@@ -772,7 +885,7 @@ impl ProcessConfig {
     }
 
     pub fn fault(&self) -> Option<&FaultConfig> {
-        self.fault.as_ref()
+        self.fault.armed()
     }
 }
 
@@ -1044,6 +1157,49 @@ mod tests {
             .scripted();
 
         assert_eq!(scripted, &ScriptedInputConfig::default());
+    }
+
+    #[test]
+    fn fault_configuration_requires_a_volatile_session_token() {
+        let ordinary = EnvironmentSnapshot::from_values([
+            ("MISTER_FS_FAULT_POINT", "settings.after_rename"),
+            ("MISTER_FS_FAULT_ACTION", "direct-reset-no-sync"),
+        ]);
+        let persistent = EnvironmentSnapshot::from_values([
+            ("MISTER_FS_FAULT_POINT", "settings.after_rename"),
+            ("MISTER_FS_FAULT_SESSION", "/media/fat/launcher.env"),
+        ]);
+        let volatile = EnvironmentSnapshot::from_values([
+            ("MISTER_FS_FAULT_POINT", "settings.after_rename"),
+            (
+                "MISTER_FS_FAULT_SESSION",
+                "/tmp/mister-magik/fs-fault-session",
+            ),
+        ]);
+
+        assert!(FaultProcessConfig::capture(&ordinary).armed().is_none());
+        assert!(FaultProcessConfig::capture(&persistent).armed().is_none());
+        assert!(FaultProcessConfig::capture(&volatile).armed().is_some());
+    }
+
+    #[test]
+    fn launcher_test_paths_reject_persistent_publication_controls() {
+        let environment = EnvironmentSnapshot::from_values([
+            (TEST_CATALOG_PUBLICATION_GATE, "/media/fat/gate"),
+            (TEST_FIRST_FRAME_RELEASE_GATE, "/tmp/release"),
+            (TEST_CATALOG_PUBLICATION_SESSION, "/tmp/session"),
+        ]);
+        let config = LauncherTestConfig::capture(&environment);
+
+        assert!(config.catalog_publication_gate().is_none());
+        assert_eq!(
+            config.first_frame_release_gate(),
+            Some(Path::new("/tmp/release"))
+        );
+        assert_eq!(
+            config.catalog_publication_session(),
+            Some(Path::new("/tmp/session"))
+        );
     }
 
     #[test]

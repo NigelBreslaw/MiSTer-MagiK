@@ -33,7 +33,7 @@ use mister_magik_catalog::catalog_summary;
 use mister_magik_fb::process_config::{ScreensaverStartMode, ScriptedInputConfig};
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::io::{Read, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Sender, channel};
 
 const DEFAULT_CATALOG_BACKGROUND_VALIDATION_DELAY: Duration = Duration::from_secs(2);
@@ -46,7 +46,6 @@ const SETTINGS_NAVIGATION_STATUS_DRAIN_MIN: Duration = Duration::from_millis(500
 const SETTINGS_NAVIGATION_STATUS_DRAIN_LIMIT: Duration = Duration::from_secs(2);
 const SQLITE_HEADER: &[u8; 16] = b"SQLite format 3\0";
 const MODAL_INPUT_TEST_ROOT: &str = "/tmp/mister-magik/modal-input-benchmark";
-const MODAL_INPUT_TEST_ENV: &str = "MISTER_MAGIK_TEST_CATALOG_RECOVERY_DIALOG";
 
 fn navigation_geometry_to_composition(
     layout: UiLayoutGeometry,
@@ -280,15 +279,6 @@ fn nav_selection_feedback_target(nav: &LauncherNav) -> Option<SelectionFeedbackT
         Screen::Arcade | Screen::Controller | Screen::Info | Screen::Licenses => None,
     }
 }
-const MODAL_INPUT_TEST_PATH_ENVS: &[&str] = &[
-    "MISTER_SHARDED_CATALOG_DIR",
-    "MISTER_LIBRARY_SQLITE",
-    "MISTER_ARCADE_BOOTSTRAP_INDEX",
-    "MISTER_LIBRARY_REFRESH_LOCK",
-    "MISTER_CATALOG_BUILDER_LOCK",
-    "MISTER_CATALOG_READY_SNAPSHOT",
-    "MISTER_CATALOG_DIAGNOSTICS_DIR",
-];
 const ORIENTATION_TRANSITION_BENCHMARK_EVIDENCE_ENV: &str =
     "MISTER_ORIENTATION_TRANSITIONS_EVIDENCE_DIR";
 const SETTINGS_NAVIGATION_BENCHMARK_EVIDENCE_ENV: &str = "MISTER_SETTINGS_NAVIGATION_EVIDENCE_DIR";
@@ -3213,8 +3203,14 @@ impl InputIntegrityTrace {
 }
 
 impl LibraryChangedDialogTestDriver {
-    fn from_env(start: Instant) -> Self {
-        let choice = library_changed_test_dialog_choice_from_env(start);
+    fn from_config(
+        config: &mister_magik_fb::process_config::LauncherTestConfig,
+        start: Instant,
+    ) -> Self {
+        let choice = library_changed_test_dialog_choice_from_value(
+            config.library_changed_dialog_choice(),
+            start,
+        );
         Self {
             choice,
             dialog_seen_at: None,
@@ -4413,24 +4409,23 @@ fn sqlite_file_has_valid_header(path: &Path) -> bool {
     file.read_exact(&mut header).is_ok() && &header == SQLITE_HEADER
 }
 
-fn modal_input_test_paths_are_isolated<'a>(paths: impl IntoIterator<Item = &'a str>) -> bool {
+fn modal_input_test_paths_are_isolated<'a>(paths: impl IntoIterator<Item = &'a Path>) -> bool {
     let root = Path::new(MODAL_INPUT_TEST_ROOT);
-    paths.into_iter().all(|path| {
-        let path = Path::new(path);
-        path != root && path.starts_with(root)
-    })
+    paths
+        .into_iter()
+        .all(|path| path != root && path.starts_with(root))
 }
 
-fn modal_input_catalog_recovery_test_requested(start: Instant) -> bool {
-    if std::env::var(MODAL_INPUT_TEST_ENV).as_deref() != Ok("upgrade") {
+fn modal_input_catalog_recovery_test_requested(
+    config: &mister_magik_fb::process_config::LauncherTestConfig,
+    start: Instant,
+) -> bool {
+    if config.catalog_recovery_dialog() != Some("upgrade") {
         return false;
     }
-    let paths = MODAL_INPUT_TEST_PATH_ENVS
-        .iter()
-        .map(|name| std::env::var(name).ok())
-        .collect::<Vec<_>>();
-    let isolated = paths.iter().all(Option::is_some)
-        && modal_input_test_paths_are_isolated(paths.iter().filter_map(Option::as_deref));
+    let paths = config.modal_path_inputs();
+    let isolated =
+        paths.len() == 7 && modal_input_test_paths_are_isolated(paths.iter().map(PathBuf::as_path));
     if !isolated {
         print_startup_event(
             start,
@@ -5282,9 +5277,11 @@ pub(super) fn run_launcher_loop(
     // sharded registry, summary, or existing database can seed the launcher.
     // First creation remains foreground through the !catalog_ready lifecycle.
     let mut catalog_session = LauncherCatalogSession::new(false);
-    let mut catalog_publication_test = CatalogPublicationTestDriver::from_env(start);
+    let mut catalog_publication_test =
+        CatalogPublicationTestDriver::from_config(launcher_config.tests(), start);
     let mut media_session = ScreenshotMediaUpdateSession::default();
-    let mut library_changed_dialog_test = LibraryChangedDialogTestDriver::from_env(start);
+    let mut library_changed_dialog_test =
+        LibraryChangedDialogTestDriver::from_config(launcher_config.tests(), start);
     let mut launcher_input_script =
         LauncherInputScriptDriver::from_config(launcher_config.input().scripted(), start);
     let mut launcher_automation = LauncherAutomation::new();
@@ -5630,7 +5627,12 @@ pub(super) fn run_launcher_loop(
     }
     let _ = lifecycle.after_boot_splash_presented(startup_catalog_state, &mut lifecycle_effects);
     apply_lifecycle_effects(&mut lifecycle_effects, &mut scheduler, start);
-    let mut modal_input_test_dialog_pending = modal_input_catalog_recovery_test_requested(start);
+    let mut modal_input_test_dialog_pending =
+        modal_input_catalog_recovery_test_requested(launcher_config.tests(), start);
+    let auto_launch_gate = launcher_config
+        .tests()
+        .auto_launch_gate()
+        .map(Path::to_path_buf);
     let mut modal_input_test_bridge_sync_pending = maybe_present_modal_input_test_dialog(
         &mut modal_input_test_dialog_pending,
         catalog_ready,
@@ -7394,7 +7396,7 @@ pub(super) fn run_launcher_loop(
                                 })
                         } else if auto_launch_selected
                             && !auto_launch_selected_done
-                            && launcher_auto_launch_gate_ready()
+                            && launcher_auto_launch_gate_ready(auto_launch_gate.as_deref())
                             && catalog_ready
                             && nav.screen == Screen::Arcade
                         {
@@ -11732,9 +11734,8 @@ fn update_catalog_ready_stationary_edge_since(
     .then_some(current.unwrap_or(now))
 }
 
-fn launcher_auto_launch_gate_ready() -> bool {
-    let value = std::env::var("MISTER_MAGIK_TEST_AUTO_LAUNCH_GATE").ok();
-    launcher_auto_launch_gate_ready_from_value(value.as_deref())
+fn launcher_auto_launch_gate_ready(path: Option<&Path>) -> bool {
+    launcher_auto_launch_gate_ready_from_value(path.and_then(Path::to_str))
 }
 
 fn launcher_auto_launch_gate_ready_from_value(path: Option<&str>) -> bool {
@@ -12964,11 +12965,12 @@ fn deferred_catalog_worker_lifecycle_input(
     }
 }
 
-fn library_changed_test_dialog_choice_from_env(
+fn library_changed_test_dialog_choice_from_value(
+    value: Option<&str>,
     start: Instant,
 ) -> Option<launcher::LibraryChangedTestDialogChoice> {
-    let value = std::env::var("MISTER_MAGIK_TEST_LIBRARY_CHANGED_DIALOG_CHOICE").ok()?;
-    match launcher::parse_library_changed_test_dialog_choice(&value) {
+    let value = value?;
+    match launcher::parse_library_changed_test_dialog_choice(value) {
         Ok(choice) => choice,
         Err(e) => {
             crate::ui_errln!("{e}");
@@ -13950,17 +13952,17 @@ mod tests {
     #[test]
     fn modal_input_test_requires_every_path_below_fixed_tmp_root() {
         assert!(modal_input_test_paths_are_isolated([
-            "/tmp/mister-magik/modal-input-benchmark/catalog-v3",
-            "/tmp/mister-magik/modal-input-benchmark/library.sqlite3",
-            "/tmp/mister-magik/modal-input-benchmark/catalog-ready.snapshot",
+            Path::new("/tmp/mister-magik/modal-input-benchmark/catalog-v3"),
+            Path::new("/tmp/mister-magik/modal-input-benchmark/library.sqlite3"),
+            Path::new("/tmp/mister-magik/modal-input-benchmark/catalog-ready.snapshot"),
         ]));
         assert!(!modal_input_test_paths_are_isolated([
-            "/tmp/mister-magik/modal-input-benchmark/catalog-v3",
-            "/media/fat/mister-magik-dev/library.sqlite3",
+            Path::new("/tmp/mister-magik/modal-input-benchmark/catalog-v3"),
+            Path::new("/media/fat/mister-magik-dev/library.sqlite3"),
         ]));
-        assert!(!modal_input_test_paths_are_isolated([
-            "/tmp/mister-magik/modal-input-benchmark",
-        ]));
+        assert!(!modal_input_test_paths_are_isolated([Path::new(
+            "/tmp/mister-magik/modal-input-benchmark"
+        ),]));
     }
 
     #[test]
