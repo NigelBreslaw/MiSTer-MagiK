@@ -21,6 +21,11 @@ use crate::library_db;
 use crate::settings::{MagikSettings, ScreenOrientation};
 use crate::spring_animation::{SpringAnimation, SpringConfiguration};
 use mister_magik_catalog::media_identity::screenshot_reset_deletes_filename;
+use mister_magik_core::launcher_effects::{
+    LaunchHandoff, LaunchHandoffOutcome, LaunchHandoffRequest,
+    LaunchSelection as EffectLaunchSelection, LauncherEffectFailure, LauncherEffectFailureKind,
+    StructuredLaunchSelection as EffectStructuredLaunchSelection,
+};
 use mister_magik_mister_runtime::display_resolution::{DISPLAY_RESOLUTIONS, DisplayResolution};
 use mister_magik_mister_runtime::main_command::{self, MainCommand};
 use serde::{Deserialize, Serialize};
@@ -4836,7 +4841,7 @@ trait LaunchIo {
     fn write_input_policy_marker(&mut self, simple_joystick_handling: bool) -> Result<(), String>;
     fn write_button_overrides(
         &mut self,
-        launch_target: &LaunchTarget,
+        selection: &EffectLaunchSelection,
         simple_joystick_handling: bool,
     ) -> Result<(), String>;
     fn write_mister_command(&mut self, command: &MainCommand) -> Result<(), String>;
@@ -4887,10 +4892,10 @@ impl LaunchIo for SystemLaunchIo {
 
     fn write_button_overrides(
         &mut self,
-        launch_target: &LaunchTarget,
+        selection: &EffectLaunchSelection,
         simple_joystick_handling: bool,
     ) -> Result<(), String> {
-        write_button_overrides_for_launch(launch_target, simple_joystick_handling)
+        write_button_overrides_for_launch(selection, simple_joystick_handling)
     }
 
     fn write_mister_command(&mut self, command: &MainCommand) -> Result<(), String> {
@@ -4952,16 +4957,18 @@ fn write_input_policy_marker(simple_joystick_handling: bool) -> Result<(), Strin
 }
 
 fn write_button_overrides_for_launch(
-    launch_target: &LaunchTarget,
+    selection: &EffectLaunchSelection,
     simple_joystick_handling: bool,
 ) -> Result<(), String> {
     if !simple_joystick_handling {
         return remove_button_overrides();
     }
 
-    match launch_target {
-        LaunchTarget::Path(path) if path.to_ascii_lowercase().ends_with(".mra") => {
-            write_button_overrides_for_mra(Path::new(path.as_ref()))
+    match selection {
+        EffectLaunchSelection::CatalogPath { target }
+            if target.to_ascii_lowercase().ends_with(".mra") =>
+        {
+            write_button_overrides_for_mra(Path::new(target))
         }
         _ => remove_button_overrides(),
     }
@@ -5023,17 +5030,53 @@ fn write_simple_input_profile(name: &str, map: &[u32; 32]) -> Result<(), String>
 }
 
 fn encode_launch_plan(plan: &StructuredLaunchPlan) -> String {
-    let mount_index = plan.mount_index.to_string();
-    let delay_secs = plan.delay_secs.to_string();
-    let core_path = logical_core_path(plan.core_path.as_ref());
+    encode_launch_fields(
+        plan.launch_ref.as_ref(),
+        plan.title.as_ref(),
+        plan.system_id.as_ref(),
+        plan.core_path.as_ref(),
+        plan.payload_path.as_ref(),
+        plan.mount_kind.as_ref(),
+        plan.mount_index,
+        plan.delay_secs,
+    )
+}
+
+fn encode_effect_launch_plan(plan: &EffectStructuredLaunchSelection) -> String {
+    encode_launch_fields(
+        &plan.launch_ref,
+        &plan.title,
+        &plan.system_id,
+        &plan.core,
+        &plan.payload,
+        &plan.mount_kind,
+        plan.mount_index,
+        plan.delay_secs,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn encode_launch_fields(
+    launch_ref: &str,
+    title: &str,
+    system_id: &str,
+    core_path: &str,
+    payload_path: &str,
+    mount_kind: &str,
+    mount_index: u8,
+    delay_secs: u8,
+) -> String {
+    let mount_index = mount_index.to_string();
+    let delay_secs = delay_secs.to_string();
+    let core_path = logical_core_path(core_path);
     let fields = [
         ("schema", "1"),
-        ("launch_ref", plan.launch_ref.as_ref()),
-        ("title", plan.title.as_ref()),
-        ("system_id", plan.system_id.as_ref()),
+        ("launch_ref", launch_ref),
+        ("title", title),
+        ("system_id", system_id),
         ("core_path", core_path),
-        ("payload_path", plan.payload_path.as_ref()),
-        ("mount_kind", plan.mount_kind.as_ref()),
+        ("payload_path", payload_path),
+        ("mount_kind", mount_kind),
         ("mount_index", mount_index.as_str()),
         ("delay_secs", delay_secs.as_str()),
     ];
@@ -5201,7 +5244,7 @@ pub fn execute_game_launch_handoff_bench(
 
         fn write_button_overrides(
             &mut self,
-            _launch_target: &LaunchTarget,
+            _selection: &EffectLaunchSelection,
             _simple_joystick_handling: bool,
         ) -> Result<(), String> {
             Ok(())
@@ -5228,6 +5271,108 @@ pub fn execute_game_launch_handoff_bench(
         prepare_us: prepare.elapsed().as_micros() as u64,
         handoff_us: io.handoff_us,
     }
+}
+
+fn effect_selection_from_launch_target(
+    launch_target: &LaunchTarget,
+) -> Result<EffectLaunchSelection, LaunchError> {
+    match launch_target {
+        LaunchTarget::Path(path) => Ok(EffectLaunchSelection::CatalogPath {
+            target: path.to_string(),
+        }),
+        LaunchTarget::Structured(plan) => Ok(EffectLaunchSelection::Structured(
+            EffectStructuredLaunchSelection {
+                launch_ref: plan.launch_ref.to_string(),
+                title: plan.title.to_string(),
+                system_id: plan.system_id.to_string(),
+                core: plan.core_path.to_string(),
+                payload: plan.payload_path.to_string(),
+                mount_kind: plan.mount_kind.to_string(),
+                mount_index: plan.mount_index,
+                delay_secs: plan.delay_secs,
+            },
+        )),
+        LaunchTarget::Prepared(selection) => Err(LaunchError::new(
+            format!(
+                "prepared {} launch must be resolved before Main handoff: {}",
+                selection.collection_id, selection.launch_ref
+            ),
+            false,
+        )),
+        LaunchTarget::MissingStructured(launch_ref) => Err(LaunchError::new(
+            format!("structured launch plan missing from catalog: {launch_ref}"),
+            false,
+        )),
+    }
+}
+
+struct LaunchIoHandoff<'a, I> {
+    io: &'a mut I,
+    magik_running: bool,
+    started_main: bool,
+}
+
+impl<I: LaunchIo> LaunchIoHandoff<'_, I> {
+    fn failure(
+        &self,
+        kind: LauncherEffectFailureKind,
+        detail: impl Into<String>,
+    ) -> LauncherEffectFailure {
+        LauncherEffectFailure::new(kind, detail).with_recovery_required(self.started_main)
+    }
+}
+
+impl<I: LaunchIo> LaunchHandoff for LaunchIoHandoff<'_, I> {
+    fn handoff(
+        &mut self,
+        request: &LaunchHandoffRequest,
+    ) -> Result<LaunchHandoffOutcome, LauncherEffectFailure> {
+        if self.magik_running {
+            if request.simple_joystick_handling {
+                self.io
+                    .prepare_simple_input_profiles()
+                    .map_err(|error| self.failure(LauncherEffectFailureKind::Unavailable, error))?;
+            }
+            self.io
+                .write_button_overrides(&request.selection, request.simple_joystick_handling)
+                .map_err(|error| self.failure(LauncherEffectFailureKind::Unavailable, error))?;
+            self.io
+                .write_input_policy_marker(request.simple_joystick_handling)
+                .map_err(|error| self.failure(LauncherEffectFailureKind::Unavailable, error))?;
+        }
+
+        let command = match (&request.selection, self.magik_running) {
+            (EffectLaunchSelection::CatalogPath { target }, true) => MainCommand::LaunchPath {
+                target: target.clone(),
+            },
+            (EffectLaunchSelection::CatalogPath { target }, false) => MainCommand::LoadCore {
+                target: target.clone(),
+            },
+            (EffectLaunchSelection::Structured(plan), true) => MainCommand::StructuredLaunch {
+                fields: encode_effect_launch_plan(plan),
+            },
+            (EffectLaunchSelection::Structured(_), false) => {
+                return Err(self.failure(
+                    LauncherEffectFailureKind::Rejected,
+                    "structured launch plan requires MiSTer_MagiK",
+                ));
+            }
+        };
+        crate::ui_logln!("launch: {command:?}");
+        if let Err(error) = self.io.write_mister_command(&command) {
+            if self.magik_running {
+                let _ = self.io.write_input_policy_marker(false);
+            }
+            return Err(self.failure(LauncherEffectFailureKind::Rejected, error));
+        }
+        Ok(LaunchHandoffOutcome {
+            started_main: self.started_main,
+        })
+    }
+}
+
+fn launch_error_from_effect(failure: LauncherEffectFailure) -> LaunchError {
+    LaunchError::new(failure.detail(), failure.recovery_required())
 }
 
 fn execute_game_launch_with(
@@ -5272,67 +5417,20 @@ fn execute_game_launch_with(
         .map_err(|error| LaunchError::new(error, spawned))?;
 
     let magik_running = io.magik_running();
-    if magik_running {
-        let simple_joystick_handling = io.simple_joystick_handling();
-        if simple_joystick_handling {
-            io.prepare_simple_input_profiles()
-                .map_err(|e| LaunchError::new(e, spawned))?;
-        }
-        io.write_button_overrides(launch_target, simple_joystick_handling)
-            .map_err(|e| LaunchError::new(e, spawned))?;
-        io.write_input_policy_marker(simple_joystick_handling)
-            .map_err(|e| LaunchError::new(e, spawned))?;
-    }
-    let command = match (magik_running, launch_target) {
-        (true, LaunchTarget::Path(path)) => MainCommand::LaunchPath {
-            target: path.to_string(),
-        },
-        (true, LaunchTarget::Structured(plan)) => MainCommand::StructuredLaunch {
-            fields: encode_launch_plan(plan),
-        },
-        (true, LaunchTarget::Prepared(selection)) => {
-            return Err(LaunchError::new(
-                format!("prepared launch unresolved: {}", selection.launch_ref),
-                spawned,
-            ));
-        }
-        (true, LaunchTarget::MissingStructured(launch_ref)) => {
-            return Err(LaunchError::new(
-                format!("structured launch plan missing from catalog: {launch_ref}"),
-                spawned,
-            ));
-        }
-        (false, LaunchTarget::Path(path)) => MainCommand::LoadCore {
-            target: path.to_string(),
-        },
-        (false, LaunchTarget::Structured(_)) => {
-            return Err(LaunchError::new(
-                "structured launch plan requires MiSTer_MagiK".to_string(),
-                spawned,
-            ));
-        }
-        (false, LaunchTarget::Prepared(selection)) => {
-            return Err(LaunchError::new(
-                format!("prepared launch unresolved: {}", selection.launch_ref),
-                spawned,
-            ));
-        }
-        (false, LaunchTarget::MissingStructured(launch_ref)) => {
-            return Err(LaunchError::new(
-                format!("structured launch plan missing from catalog: {launch_ref}"),
-                spawned,
-            ));
-        }
+    let request = LaunchHandoffRequest {
+        selection: effect_selection_from_launch_target(launch_target)?,
+        simple_joystick_handling: magik_running && io.simple_joystick_handling(),
     };
-    crate::ui_logln!("launch: {command:?}");
-    if let Err(e) = io.write_mister_command(&command) {
-        if magik_running {
-            let _ = io.write_input_policy_marker(false);
-        }
-        return Err(LaunchError::new(e, spawned));
-    }
+    let mut handoff = LaunchIoHandoff {
+        io,
+        magik_running,
+        started_main: spawned,
+    };
+    let outcome = handoff
+        .handoff(&request)
+        .map_err(launch_error_from_effect)?;
     LAUNCH_STATE.store(LAUNCH_SENT, Ordering::Release);
-    Ok(spawned)
+    Ok(outcome.started_main)
 }
 
 pub fn reset_launch() {
@@ -5557,12 +5655,14 @@ mod tests {
 
         fn write_button_overrides(
             &mut self,
-            launch_target: &LaunchTarget,
+            selection: &EffectLaunchSelection,
             simple_joystick_handling: bool,
         ) -> Result<(), String> {
-            let action = match (simple_joystick_handling, launch_target) {
-                (true, LaunchTarget::Path(path)) if path.to_ascii_lowercase().ends_with(".mra") => {
-                    format!("write:{path}")
+            let action = match (simple_joystick_handling, selection) {
+                (true, EffectLaunchSelection::CatalogPath { target })
+                    if target.to_ascii_lowercase().ends_with(".mra") =>
+                {
+                    format!("write:{target}")
                 }
                 _ => "remove".to_string(),
             };

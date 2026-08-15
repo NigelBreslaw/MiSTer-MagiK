@@ -36,7 +36,7 @@ or record an explicit behavior change.
 | Capability | Current direct effect owners |
 |---|---|
 | Main command transport | `mister/platform/runtime/src/main_command.rs`; launcher callers use typed `MainCommand` variants and have no endpoint access |
-| Launch handoff and recovery | `SystemLaunchIo`, `execute_game_launch_with`, `spawn_mister`, `reboot_mister_with`, `exit_to_mister` |
+| Launch handoff and recovery | `execute_game_launch_with` now builds the portable `LaunchHandoffRequest` and invokes `LaunchIoHandoff`; `SystemLaunchIo` remains the temporary production effect adapter until its raw process, marker, profile, override, and Main calls move behind their owning runtime/persistence capabilities. Recovery remains in `spawn_mister`, `reboot_mister_with`, and `exit_to_mister`. |
 | Display control | `display_state`, `try_display_state`, `apply_display_resolution`, `confirm_display_resolution_and_wait`, `cancel_display_resolution` |
 | Runtime state and process inspection | `main_heartbeat`, `mister_running`, `mister_running_arcade_core` |
 | Launcher persistence | launch-return state helpers, input-policy/button-profile helpers, rebuild-marker helpers, screenshot-pack cleanup, and menu-wallpaper restoration |
