@@ -476,27 +476,49 @@ fn remove_file_if_exists_counted(path: &Path, label: &str) -> Result<bool, Strin
 }
 
 fn remove_sqlite_database_at(path: &Path) -> Result<(), String> {
-    remove_file_if_exists(path, "database")?;
-    let summary_path = catalog_summary::summary_path_for_sqlite(path);
-    remove_file_if_exists(&summary_path, "catalog summary")?;
-    let navigation_path = catalog_navigation::navigation_path_for_sqlite(path);
-    remove_file_if_exists(&navigation_path, "catalog navigation")?;
-    let duration_path = crate::catalog_build_record::duration_path_for_sqlite(path);
-    remove_file_if_exists(&duration_path, "catalog build duration")
+    let mut fault_control = crate::fs_fault::NoopDirectResetFaultControl;
+    remove_sqlite_database_at_with_fault_control(path, &mut fault_control)
 }
 
-fn remove_file_if_exists(path: &Path, label: &str) -> Result<(), String> {
+fn remove_sqlite_database_at_with_fault_control(
+    path: &Path,
+    fault_control: &mut dyn crate::fs_fault::DirectResetFaultControl,
+) -> Result<(), String> {
+    remove_file_if_exists(path, "database", fault_control)?;
+    let summary_path = catalog_summary::summary_path_for_sqlite(path);
+    remove_file_if_exists(&summary_path, "catalog summary", fault_control)?;
+    let navigation_path = catalog_navigation::navigation_path_for_sqlite(path);
+    remove_file_if_exists(&navigation_path, "catalog navigation", fault_control)?;
+    let duration_path = crate::catalog_build_record::duration_path_for_sqlite(path);
+    remove_file_if_exists(&duration_path, "catalog build duration", fault_control)
+}
+
+fn remove_file_if_exists(
+    path: &Path,
+    label: &str,
+    fault_control: &mut dyn crate::fs_fault::DirectResetFaultControl,
+) -> Result<(), String> {
     match std::fs::remove_file(path) {
-        Ok(()) => match label {
-            "database" => crate::fs_fault::maybe_fault("reset_delete.database.after_remove", path),
-            "catalog summary" => {
-                crate::fs_fault::maybe_fault("reset_delete.summary.after_remove", path)
-            }
-            "catalog navigation" => {
-                crate::fs_fault::maybe_fault("reset_delete.navigation.after_remove", path)
-            }
-            _ => {}
-        },
+        Ok(()) => {
+            match label {
+                "database" => crate::fs_fault::maybe_fault_with_control(
+                    "reset_delete.database.after_remove",
+                    path,
+                    fault_control,
+                ),
+                "catalog summary" => crate::fs_fault::maybe_fault_with_control(
+                    "reset_delete.summary.after_remove",
+                    path,
+                    fault_control,
+                ),
+                "catalog navigation" => crate::fs_fault::maybe_fault_with_control(
+                    "reset_delete.navigation.after_remove",
+                    path,
+                    fault_control,
+                ),
+                _ => crate::fs_fault::DirectResetFaultOutcome::Noop,
+            };
+        }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
         Err(e) => return Err(format!("failed to delete {label} {}: {e}", path.display())),
     }
@@ -1705,6 +1727,7 @@ fn save_sqlite_scan_with_progress_and_stamp_and_projections_with_bench_iteration
                 )?);
                 Ok(())
             };
+        let mut fault_control = crate::fs_fault::NoopDirectResetFaultControl;
         save_sqlite_scan_with_progress_using_writer_and_bench_iteration(
             path,
             scan,
@@ -1712,6 +1735,7 @@ fn save_sqlite_scan_with_progress_and_stamp_and_projections_with_bench_iteration
             sqlite_build_temp_plan(path),
             &mut writer,
             bench_iteration,
+            &mut fault_control,
         )?
     };
     let projections = projections
@@ -1804,6 +1828,7 @@ pub(crate) fn save_sqlite_scan_with_progress_using_writer(
     initial_plan: SqliteBuildTempPlan,
     writer: &mut dyn FnMut(&Path, &LibraryScan, &mut ProgressCallback<'_>) -> Result<(), String>,
 ) -> Result<u64, String> {
+    let mut fault_control = crate::fs_fault::NoopDirectResetFaultControl;
     save_sqlite_scan_with_progress_using_writer_and_bench_iteration(
         path,
         scan,
@@ -1811,6 +1836,7 @@ pub(crate) fn save_sqlite_scan_with_progress_using_writer(
         initial_plan,
         writer,
         None,
+        &mut fault_control,
     )
 }
 
@@ -1821,6 +1847,7 @@ fn save_sqlite_scan_with_progress_using_writer_and_bench_iteration(
     initial_plan: SqliteBuildTempPlan,
     writer: &mut dyn FnMut(&Path, &LibraryScan, &mut ProgressCallback<'_>) -> Result<(), String>,
     bench_iteration: Option<usize>,
+    fault_control: &mut dyn crate::fs_fault::DirectResetFaultControl,
 ) -> Result<u64, String> {
     let mut progress = progress;
     let first = save_sqlite_scan_attempt_with_writer_and_bench_iteration(
@@ -1830,6 +1857,7 @@ fn save_sqlite_scan_with_progress_using_writer_and_bench_iteration(
         &initial_plan,
         writer,
         bench_iteration,
+        fault_control,
     );
     match first {
         Ok(bytes) => Ok(bytes),
@@ -1849,6 +1877,7 @@ fn save_sqlite_scan_with_progress_using_writer_and_bench_iteration(
                 &fallback_plan,
                 writer,
                 bench_iteration,
+                fault_control,
             )
         }
         Err(e) => Err(e),
@@ -1862,6 +1891,7 @@ fn save_sqlite_scan_attempt_with_writer_and_bench_iteration(
     plan: &SqliteBuildTempPlan,
     writer: &mut dyn FnMut(&Path, &LibraryScan, &mut ProgressCallback<'_>) -> Result<(), String>,
     bench_iteration: Option<usize>,
+    fault_control: &mut dyn crate::fs_fault::DirectResetFaultControl,
 ) -> Result<u64, String> {
     if let Some(parent) = plan.build_tmp_path.parent() {
         std::fs::create_dir_all(parent)
@@ -1883,7 +1913,7 @@ fn save_sqlite_scan_attempt_with_writer_and_bench_iteration(
         let _ = std::fs::remove_file(&plan.build_tmp_path);
         return Err(e);
     }
-    let metrics = publish_sqlite_temp(path, plan, progress).inspect_err(|_| {
+    let metrics = publish_sqlite_temp(path, plan, progress, fault_control).inspect_err(|_| {
         let _ = std::fs::remove_file(&plan.final_tmp_path);
         let _ = std::fs::remove_file(&plan.build_tmp_path);
     })?;
@@ -1897,6 +1927,7 @@ fn publish_sqlite_temp(
     final_path: &Path,
     plan: &SqliteBuildTempPlan,
     progress: &mut ProgressCallback<'_>,
+    fault_control: &mut dyn crate::fs_fault::DirectResetFaultControl,
 ) -> Result<SqlitePublishMetrics, String> {
     let started = Instant::now();
     let mut metrics = SqlitePublishMetrics {
@@ -1908,14 +1939,22 @@ fn publish_sqlite_temp(
 
     let build_sync_t = Instant::now();
     sync_file_best_effort(&plan.build_tmp_path, "sqlite build temp")?;
-    crate::fs_fault::maybe_fault("catalog.sqlite.after_build_temp_sync", final_path);
+    crate::fs_fault::maybe_fault_with_control(
+        "catalog.sqlite.after_build_temp_sync",
+        final_path,
+        fault_control,
+    );
     metrics.build_sync_ms = elapsed_ms(build_sync_t.elapsed());
 
     if plan.build_tmp_path != plan.final_tmp_path {
         let copy_t = Instant::now();
         metrics.progress_events =
             copy_sqlite_temp_with_progress(&plan.build_tmp_path, &plan.final_tmp_path, progress)?;
-        crate::fs_fault::maybe_fault("catalog.sqlite.after_final_temp_copy", final_path);
+        crate::fs_fault::maybe_fault_with_control(
+            "catalog.sqlite.after_final_temp_copy",
+            final_path,
+            fault_control,
+        );
         metrics.copy_ms = elapsed_ms(copy_t.elapsed());
         let _ = std::fs::remove_file(&plan.build_tmp_path);
     } else {
@@ -1925,13 +1964,21 @@ fn publish_sqlite_temp(
 
     let final_sync_t = Instant::now();
     sync_file_best_effort(&plan.final_tmp_path, "sqlite temp")?;
-    crate::fs_fault::maybe_fault("catalog.sqlite.after_final_temp_sync", final_path);
+    crate::fs_fault::maybe_fault_with_control(
+        "catalog.sqlite.after_final_temp_sync",
+        final_path,
+        fault_control,
+    );
     metrics.final_sync_ms = elapsed_ms(final_sync_t.elapsed());
 
     let rename_t = Instant::now();
     std::fs::rename(&plan.final_tmp_path, final_path)
         .map_err(|e| format!("replace sqlite: {e}"))?;
-    crate::fs_fault::maybe_fault("catalog.sqlite.after_rename_before_parent_sync", final_path);
+    crate::fs_fault::maybe_fault_with_control(
+        "catalog.sqlite.after_rename_before_parent_sync",
+        final_path,
+        fault_control,
+    );
     metrics.rename_ms = elapsed_ms(rename_t.elapsed());
 
     let parent_sync_t = Instant::now();
@@ -4316,6 +4363,71 @@ mod tests {
     use rusqlite::Connection;
     use std::collections::BTreeSet;
     use std::path::PathBuf;
+
+    #[derive(Default)]
+    struct RecordingFaultControl {
+        requests: Vec<crate::fs_fault::DirectResetFaultRequest>,
+    }
+
+    impl crate::fs_fault::DirectResetFaultControl for RecordingFaultControl {
+        fn request_direct_reset(
+            &mut self,
+            request: &crate::fs_fault::DirectResetFaultRequest,
+        ) -> crate::fs_fault::DirectResetFaultOutcome {
+            self.requests.push(request.clone());
+            crate::fs_fault::DirectResetFaultOutcome::Noop
+        }
+    }
+
+    #[test]
+    fn sqlite_fault_hook_preserves_publish_and_reset_delete_order() {
+        let root = unique_temp_dir("sqlite-fault-hook-order");
+        let final_path = root.join("library.sqlite3");
+        let build_path = root.join("build.sqlite3");
+        let final_temp_path = root.join(".library.sqlite3.tmp");
+        std::fs::write(&build_path, b"sqlite fixture").expect("write build temp");
+        let plan = SqliteBuildTempPlan {
+            build_tmp_path: build_path,
+            final_tmp_path: final_temp_path,
+            source: SqliteBuildTempSource::BesideFinal,
+        };
+        let mut control = RecordingFaultControl::default();
+        let mut progress = None;
+        publish_sqlite_temp(&final_path, &plan, &mut progress, &mut control)
+            .expect("publish sqlite fixture");
+
+        let summary_path = catalog_summary::summary_path_for_sqlite(&final_path);
+        let navigation_path = catalog_navigation::navigation_path_for_sqlite(&final_path);
+        let duration_path = crate::catalog_build_record::duration_path_for_sqlite(&final_path);
+        std::fs::write(&summary_path, b"summary").expect("write summary");
+        std::fs::write(&navigation_path, b"navigation").expect("write navigation");
+        std::fs::write(&duration_path, b"duration").expect("write duration");
+        remove_sqlite_database_at_with_fault_control(&final_path, &mut control)
+            .expect("remove sqlite fixture");
+
+        assert_eq!(
+            control
+                .requests
+                .iter()
+                .map(|request| request.point())
+                .collect::<Vec<_>>(),
+            vec![
+                "catalog.sqlite.after_build_temp_sync",
+                "catalog.sqlite.after_final_temp_copy",
+                "catalog.sqlite.after_final_temp_sync",
+                "catalog.sqlite.after_rename_before_parent_sync",
+                "reset_delete.database.after_remove",
+                "reset_delete.summary.after_remove",
+                "reset_delete.navigation.after_remove",
+            ]
+        );
+        assert!(control.requests.iter().all(|request| {
+            request
+                .target()
+                .starts_with(root.to_str().expect("temp root"))
+        }));
+        let _ = std::fs::remove_dir_all(root);
+    }
 
     fn discovered_at_for_title(db: &Path, title: &str) -> Option<i64> {
         let conn = open_sqlite_read_only(db).expect("open discovery db");

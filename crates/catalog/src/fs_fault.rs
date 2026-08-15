@@ -174,6 +174,19 @@ pub fn maybe_fault(point: &str, target: impl AsRef<Path>) {
     maybe_fault_with(point, target, &config, &mut runtime);
 }
 
+/// Notify the injected capability while the characterized legacy executor
+/// remains the sole production effect owner during migration.
+pub fn maybe_fault_with_control(
+    point: &str,
+    target: impl AsRef<Path>,
+    control: &mut dyn DirectResetFaultControl,
+) -> DirectResetFaultOutcome {
+    let target = target.as_ref();
+    let outcome = control.request_direct_reset(&DirectResetFaultRequest::new(point, target));
+    maybe_fault(point, target);
+    outcome
+}
+
 fn maybe_fault_with(
     point: &str,
     target: &Path,
