@@ -9775,8 +9775,22 @@ pub(super) fn run_launcher_loop(
         }
         let mut crt_backdrop_full_damage = None;
         let mut crt_backdrop_work_trace = crate::crt_backdrop::CrtBackdropWorkTrace::default();
+        let mut crt_backdrop_snapshot_us = 0_u64;
+        let mut crt_backdrop_copy_us = 0_u64;
+        let mut crt_backdrop_list_overlay_us = 0_u64;
+        let mut crt_backdrop_chrome_restore_us = 0_u64;
+        let mut crt_backdrop_snapshot_pixels = 0_u32;
+        let mut crt_backdrop_copy_pixels = 0_u32;
+        let mut crt_backdrop_list_overlay_pixels = 0_u32;
+        let mut crt_backdrop_chrome_restore_pixels = 0_u32;
         if crt_backdrop_eligible {
+            let snapshot_start = Instant::now();
             layer_target.copy_cached_into(&mut crt_backdrop_chrome);
+            crt_backdrop_snapshot_us = snapshot_start
+                .elapsed()
+                .as_micros()
+                .min(u128::from(u64::MAX)) as u64;
+            crt_backdrop_snapshot_pixels = crt_backdrop_chrome.len().min(u32::MAX as usize) as u32;
             let selected_changed = crt_backdrop_selection != Some(nav.arcade.selected);
             let raw_transition = preview.raw_transition_frame();
             let transition_id = raw_transition.as_ref().map(|frame| frame.transition_id);
@@ -9813,7 +9827,13 @@ pub(super) fn run_launcher_loop(
                 if compose_full {
                     crt_backdrop_work_trace =
                         backdrop.compose(loop_start.saturating_duration_since(run_start));
-                    if layer_target.compose_crt_backdrop(backdrop.pixels()) {
+                    let copy_start = Instant::now();
+                    let copied = layer_target.compose_crt_backdrop(backdrop.pixels());
+                    crt_backdrop_copy_us =
+                        copy_start.elapsed().as_micros().min(u128::from(u64::MAX)) as u64;
+                    crt_backdrop_copy_pixels =
+                        backdrop.pixels().len().min(u32::MAX as usize) as u32;
+                    if copied {
                         crt_backdrop_full_damage = Some(DirtyRect {
                             x0: 0,
                             y0: 0,
@@ -10074,6 +10094,16 @@ pub(super) fn run_launcher_loop(
             crt_backdrop_prepare_pixels: crt_backdrop_work_trace.prepare_pixels,
             crt_backdrop_blend_us: crt_backdrop_work_trace.blend_us,
             crt_backdrop_blend_pixels: crt_backdrop_work_trace.blend_pixels,
+            crt_backdrop_snapshot_us,
+            crt_backdrop_snapshot_pixels,
+            crt_backdrop_copy_us,
+            crt_backdrop_copy_pixels,
+            crt_backdrop_list_overlay_us,
+            crt_backdrop_list_overlay_pixels,
+            crt_backdrop_chrome_restore_us,
+            crt_backdrop_chrome_restore_pixels,
+            crt_backdrop_alpha_bucket: crt_backdrop_work_trace.alpha_bucket,
+            crt_backdrop_active: crt_backdrop_work_trace.active,
             effect_label_us,
             navigation_transition_base_copy_us: navigation_transition
                 .last_render_stats()
@@ -10155,19 +10185,33 @@ pub(super) fn run_launcher_loop(
                 })
                 .and_then(|update| {
                     let rect = arcade_update_dirty_rect(&update);
+                    let list_start = Instant::now();
                     let composed = crt_backdrop.as_ref().is_some_and(|backdrop| {
                         layer_target.compose_arcade_list_over_backdrop(
                             &mut arcade_list_renderer,
                             backdrop.pixels(),
                         )
                     });
+                    crt_backdrop_list_overlay_us =
+                        list_start.elapsed().as_micros().min(u128::from(u64::MAX)) as u64;
+                    crt_backdrop_list_overlay_pixels = layout
+                        .content_rect()
+                        .width
+                        .saturating_mul(layout.content_rect().height)
+                        .min(u32::MAX as usize)
+                        as u32;
                     if composed {
+                        let chrome_start = Instant::now();
                         layer_target.restore_crt_arcade_chrome(
                             &crt_backdrop_chrome,
                             layout.content_rect(),
                             crt_metrics,
                             arcade_list_renderer.dirty_rect(),
                         );
+                        crt_backdrop_chrome_restore_us =
+                            chrome_start.elapsed().as_micros().min(u128::from(u64::MAX)) as u64;
+                        crt_backdrop_chrome_restore_pixels =
+                            crt_backdrop_chrome.len().min(u32::MAX as usize) as u32;
                     }
                     if layout.is_portrait() {
                         physical_arcade_rect = Some(layout.logical_rect_to_composition(rect));
@@ -10190,6 +10234,14 @@ pub(super) fn run_launcher_loop(
         } else {
             None
         };
+        custom_draw_trace.crt_backdrop_snapshot_us = crt_backdrop_snapshot_us;
+        custom_draw_trace.crt_backdrop_snapshot_pixels = crt_backdrop_snapshot_pixels;
+        custom_draw_trace.crt_backdrop_copy_us = crt_backdrop_copy_us;
+        custom_draw_trace.crt_backdrop_copy_pixels = crt_backdrop_copy_pixels;
+        custom_draw_trace.crt_backdrop_list_overlay_us = crt_backdrop_list_overlay_us;
+        custom_draw_trace.crt_backdrop_list_overlay_pixels = crt_backdrop_list_overlay_pixels;
+        custom_draw_trace.crt_backdrop_chrome_restore_us = crt_backdrop_chrome_restore_us;
+        custom_draw_trace.crt_backdrop_chrome_restore_pixels = crt_backdrop_chrome_restore_pixels;
         crt_backdrop_was_eligible = crt_backdrop_eligible;
         let physical_custom_damage = accepted_screensaver_frame.then_some(this_rect).flatten();
         let preview_layer_desired = should_desire_direct_layer(
@@ -10721,6 +10773,26 @@ pub(super) fn run_launcher_loop(
                 .crt_backdrop_prepare_pixels,
             presented_frame.custom_draw_trace.crt_backdrop_blend_us,
             presented_frame.custom_draw_trace.crt_backdrop_blend_pixels,
+            presented_frame.custom_draw_trace.crt_backdrop_snapshot_us,
+            presented_frame
+                .custom_draw_trace
+                .crt_backdrop_snapshot_pixels,
+            presented_frame.custom_draw_trace.crt_backdrop_copy_us,
+            presented_frame.custom_draw_trace.crt_backdrop_copy_pixels,
+            presented_frame
+                .custom_draw_trace
+                .crt_backdrop_list_overlay_us,
+            presented_frame
+                .custom_draw_trace
+                .crt_backdrop_list_overlay_pixels,
+            presented_frame
+                .custom_draw_trace
+                .crt_backdrop_chrome_restore_us,
+            presented_frame
+                .custom_draw_trace
+                .crt_backdrop_chrome_restore_pixels,
+            presented_frame.custom_draw_trace.crt_backdrop_alpha_bucket,
+            presented_frame.custom_draw_trace.crt_backdrop_active,
         );
         let launcher_response_present_receipt = LauncherResponsePresentReceipt {
             post_accepted_at_us: crate::input_hub::monotonic_us(),

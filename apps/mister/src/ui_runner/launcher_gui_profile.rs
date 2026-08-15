@@ -521,6 +521,16 @@ impl GuiProfilingController {
         crt_backdrop_prepare_pixels: u32,
         crt_backdrop_blend_us: u64,
         crt_backdrop_blend_pixels: u32,
+        crt_backdrop_snapshot_us: u64,
+        crt_backdrop_snapshot_pixels: u32,
+        crt_backdrop_copy_us: u64,
+        crt_backdrop_copy_pixels: u32,
+        crt_backdrop_list_overlay_us: u64,
+        crt_backdrop_list_overlay_pixels: u32,
+        crt_backdrop_chrome_restore_us: u64,
+        crt_backdrop_chrome_restore_pixels: u32,
+        crt_backdrop_alpha_bucket: u8,
+        crt_backdrop_active: bool,
     ) {
         if !self.active() {
             return;
@@ -539,6 +549,16 @@ impl GuiProfilingController {
         record["crt_backdrop_prepare_pixels"] = json!(crt_backdrop_prepare_pixels);
         record["crt_backdrop_blend_us"] = json!(crt_backdrop_blend_us);
         record["crt_backdrop_blend_pixels"] = json!(crt_backdrop_blend_pixels);
+        record["crt_backdrop_snapshot_us"] = json!(crt_backdrop_snapshot_us);
+        record["crt_backdrop_snapshot_pixels"] = json!(crt_backdrop_snapshot_pixels);
+        record["crt_backdrop_copy_us"] = json!(crt_backdrop_copy_us);
+        record["crt_backdrop_copy_pixels"] = json!(crt_backdrop_copy_pixels);
+        record["crt_backdrop_list_overlay_us"] = json!(crt_backdrop_list_overlay_us);
+        record["crt_backdrop_list_overlay_pixels"] = json!(crt_backdrop_list_overlay_pixels);
+        record["crt_backdrop_chrome_restore_us"] = json!(crt_backdrop_chrome_restore_us);
+        record["crt_backdrop_chrome_restore_pixels"] = json!(crt_backdrop_chrome_restore_pixels);
+        record["crt_backdrop_alpha_bucket"] = json!(crt_backdrop_alpha_bucket);
+        record["crt_backdrop_active"] = json!(crt_backdrop_active);
     }
 
     pub(super) fn record_latch(
@@ -722,13 +742,22 @@ mod tests {
             GuiRasterProfilePhase::Ordinary,
             Vec::new(),
         );
-        controller.record_frame_work(7, 8_500, 3_000, 220, 307_200, 180, 307_200);
+        controller.record_frame_work(
+            7, 8_500, 3_000, 220, 307_200, 180, 307_200, 10, 307_200, 11, 307_200, 12, 100_000, 13,
+            2_000, 4, true,
+        );
         assert_eq!(controller.frames[0]["wall_us"], 8_500);
         assert_eq!(controller.frames[0]["vsync_us"], 3_000);
         assert_eq!(controller.frames[0]["crt_backdrop_prepare_us"], 220);
         assert_eq!(controller.frames[0]["crt_backdrop_prepare_pixels"], 307_200);
         assert_eq!(controller.frames[0]["crt_backdrop_blend_us"], 180);
         assert_eq!(controller.frames[0]["crt_backdrop_blend_pixels"], 307_200);
+        assert_eq!(controller.frames[0]["crt_backdrop_snapshot_us"], 10);
+        assert_eq!(controller.frames[0]["crt_backdrop_copy_us"], 11);
+        assert_eq!(controller.frames[0]["crt_backdrop_list_overlay_us"], 12);
+        assert_eq!(controller.frames[0]["crt_backdrop_chrome_restore_us"], 13);
+        assert_eq!(controller.frames[0]["crt_backdrop_alpha_bucket"], 4);
+        assert_eq!(controller.frames[0]["crt_backdrop_active"], true);
     }
 
     #[test]

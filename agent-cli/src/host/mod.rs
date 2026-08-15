@@ -8112,6 +8112,39 @@ fn summarize_arcade_velocity_scroll(
         .map(|frame| frame_u64(frame, "crt_backdrop_blend_us"))
         .collect::<Vec<_>>();
     backdrop_blend_us.sort_unstable();
+    let mut backdrop_snapshot_us = scroll_profile_frames
+        .iter()
+        .map(|frame| frame_u64(frame, "crt_backdrop_snapshot_us"))
+        .collect::<Vec<_>>();
+    backdrop_snapshot_us.sort_unstable();
+    let mut backdrop_copy_us = scroll_profile_frames
+        .iter()
+        .map(|frame| frame_u64(frame, "crt_backdrop_copy_us"))
+        .collect::<Vec<_>>();
+    backdrop_copy_us.sort_unstable();
+    let mut backdrop_list_overlay_us = scroll_profile_frames
+        .iter()
+        .map(|frame| frame_u64(frame, "crt_backdrop_list_overlay_us"))
+        .collect::<Vec<_>>();
+    backdrop_list_overlay_us.sort_unstable();
+    let mut backdrop_chrome_restore_us = scroll_profile_frames
+        .iter()
+        .map(|frame| frame_u64(frame, "crt_backdrop_chrome_restore_us"))
+        .collect::<Vec<_>>();
+    backdrop_chrome_restore_us.sort_unstable();
+    let active_fade_frames = scroll_profile_frames
+        .iter()
+        .filter(|frame| frame.get("crt_backdrop_active").and_then(Value::as_bool) == Some(true))
+        .count();
+    let distinct_alpha_buckets = scroll_profile_frames
+        .iter()
+        .filter_map(|frame| {
+            frame
+                .get("crt_backdrop_alpha_bucket")
+                .and_then(Value::as_u64)
+        })
+        .collect::<std::collections::BTreeSet<_>>()
+        .len();
     let backdrop_prepare_pixels = scroll_profile_frames
         .iter()
         .map(|frame| frame_u64(frame, "crt_backdrop_prepare_pixels"))
@@ -8208,6 +8241,22 @@ fn summarize_arcade_velocity_scroll(
             "timing_us": percentile_summary(&backdrop_blend_us),
             "max_pixels": backdrop_blend_pixels,
         },
+        "crt_backdrop_snapshot": {
+            "timing_us": percentile_summary(&backdrop_snapshot_us),
+        },
+        "crt_backdrop_copy": {
+            "timing_us": percentile_summary(&backdrop_copy_us),
+        },
+        "crt_backdrop_list_overlay": {
+            "timing_us": percentile_summary(&backdrop_list_overlay_us),
+        },
+        "crt_backdrop_chrome_restore": {
+            "timing_us": percentile_summary(&backdrop_chrome_restore_us),
+        },
+        "crt_backdrop_fade_activity": {
+            "active_frames": active_fade_frames,
+            "distinct_alpha_buckets": distinct_alpha_buckets,
+        },
         "measurement": {
             "telemetry_analytics_mode": "off",
             "software_cadence_source": "gui-presentation-stamps",
@@ -8269,6 +8318,39 @@ fn summarize_arcade_velocity_scroll(
         percentile_99(&backdrop_blend_us),
         backdrop_blend_us.last().copied().unwrap_or(0),
         backdrop_blend_pixels,
+    )?;
+    writeln!(
+        report,
+        "- Backdrop snapshot (p95 / p99 / max): {} / {} / {} us",
+        percentile_95(&backdrop_snapshot_us),
+        percentile_99(&backdrop_snapshot_us),
+        backdrop_snapshot_us.last().copied().unwrap_or(0),
+    )?;
+    writeln!(
+        report,
+        "- Backdrop copy (p95 / p99 / max): {} / {} / {} us",
+        percentile_95(&backdrop_copy_us),
+        percentile_99(&backdrop_copy_us),
+        backdrop_copy_us.last().copied().unwrap_or(0),
+    )?;
+    writeln!(
+        report,
+        "- List overlay (p95 / p99 / max): {} / {} / {} us",
+        percentile_95(&backdrop_list_overlay_us),
+        percentile_99(&backdrop_list_overlay_us),
+        backdrop_list_overlay_us.last().copied().unwrap_or(0),
+    )?;
+    writeln!(
+        report,
+        "- Chrome restore (p95 / p99 / max): {} / {} / {} us",
+        percentile_95(&backdrop_chrome_restore_us),
+        percentile_99(&backdrop_chrome_restore_us),
+        backdrop_chrome_restore_us.last().copied().unwrap_or(0),
+    )?;
+    writeln!(
+        report,
+        "- Fade activity: {} active frames; {} distinct alpha buckets",
+        active_fade_frames, distinct_alpha_buckets,
     )?;
     fs::write(output_dir.join("report.md"), report)?;
     Ok(summary)
