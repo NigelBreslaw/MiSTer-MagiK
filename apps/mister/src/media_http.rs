@@ -16,12 +16,12 @@ const MANIFEST_CONNECT_TIMEOUT_SECS: u64 = 10;
 const MANIFEST_FETCH_TIMEOUT_SECS: u64 = 15;
 
 #[derive(Debug)]
-pub(crate) struct ManifestFetch {
-    pub(crate) bytes: Vec<u8>,
-    pub(crate) headers: String,
+pub struct ManifestFetch {
+    pub bytes: Vec<u8>,
+    pub headers: String,
 }
 
-pub(crate) fn fetch_manifest(url: &str) -> Result<ManifestFetch, String> {
+pub fn fetch_manifest(url: &str) -> Result<ManifestFetch, String> {
     fetch_manifest_with(
         url,
         configured_manifest_trust_mode(),
@@ -57,7 +57,7 @@ where
     })
 }
 
-pub(crate) fn write_bounded_stream_chunk(
+pub fn write_bounded_stream_chunk(
     output: &mut impl Write,
     hash: &mut impl Write,
     chunk: &[u8],

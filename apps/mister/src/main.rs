@@ -117,8 +117,6 @@ mod input_integrity_driver;
 mod media_bench_download;
 #[cfg(feature = "bench-tools")]
 mod media_bench_save;
-mod media_http;
-mod media_pack_save;
 mod memory_pressure;
 mod mr_audio;
 mod pmu_probe;
@@ -136,7 +134,6 @@ mod ui_display;
 #[cfg(mister_experiments)]
 mod ui_effect_bench;
 mod ui_runner;
-mod video_i420;
 #[cfg(all(target_os = "linux", target_arch = "arm"))]
 mod video_player;
 use mister_magik_mister_runtime::vt;
@@ -149,7 +146,7 @@ pub use mister_magik_fb::{
 };
 use mister_magik_fb::{
     artifact_publish, catalog_failure_report, catalog_progress_report, diagnostic_identity,
-    latch_failure_report,
+    latch_failure_report, media_http, media_pack_save, video_i420,
 };
 
 #[cfg(all(feature = "diagnostics", feature = "ui"))]

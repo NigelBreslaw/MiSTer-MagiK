@@ -46,9 +46,11 @@ pub mod licenses;
 #[cfg(all(feature = "ui-preview", target_os = "macos"))]
 pub mod macos_preview_content;
 #[cfg(any(feature = "ui", feature = "ui-preview"))]
-mod media_http;
+#[doc(hidden)]
+pub mod media_http;
 #[cfg(any(feature = "ui", feature = "ui-preview"))]
-mod media_pack_save;
+#[doc(hidden)]
+pub mod media_pack_save;
 pub mod media_update;
 pub mod particle_engine;
 #[cfg(any(feature = "ui", feature = "ui-preview"))]
@@ -83,8 +85,9 @@ pub mod visual_platform;
 pub mod experiments {
     pub mod effects;
 }
-#[cfg(test)]
-mod video_i420;
+#[cfg(any(feature = "ui", feature = "ui-preview", test))]
+#[doc(hidden)]
+pub mod video_i420;
 
 pub use mister_magik_catalog::{
     arcade_catalog, library_bench, library_db, media_identity, preview_worker,

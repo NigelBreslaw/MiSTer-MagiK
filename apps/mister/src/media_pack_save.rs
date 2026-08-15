@@ -10,10 +10,10 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-pub(crate) const PROGRESS_COPY_CHUNK_BYTES: usize = 256 * 1024;
+pub const PROGRESS_COPY_CHUNK_BYTES: usize = 256 * 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum PackSavePhase {
+pub enum PackSavePhase {
     Copy,
     Sync,
     Rename,
@@ -21,7 +21,7 @@ pub(crate) enum PackSavePhase {
 }
 
 impl PackSavePhase {
-    pub(crate) fn label(self) -> &'static str {
+    pub fn label(self) -> &'static str {
         match self {
             Self::Copy => "save",
             Self::Sync => "sync",
@@ -32,24 +32,24 @@ impl PackSavePhase {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct PackSaveProgress {
-    pub(crate) phase: PackSavePhase,
-    pub(crate) bytes_done: u64,
-    pub(crate) bytes_total: u64,
+pub struct PackSaveProgress {
+    pub phase: PackSavePhase,
+    pub bytes_done: u64,
+    pub bytes_total: u64,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub(crate) struct PackSaveMetrics {
-    pub(crate) bytes: u64,
-    pub(crate) copy_ms: u64,
-    pub(crate) sync_ms: u64,
-    pub(crate) rename_ms: u64,
-    pub(crate) parent_sync_ms: u64,
-    pub(crate) total_ms: u64,
-    pub(crate) progress_events: u64,
+pub struct PackSaveMetrics {
+    pub bytes: u64,
+    pub copy_ms: u64,
+    pub sync_ms: u64,
+    pub rename_ms: u64,
+    pub parent_sync_ms: u64,
+    pub total_ms: u64,
+    pub progress_events: u64,
 }
 
-pub(crate) fn publish_pack_file_for_bench(
+pub fn publish_pack_file_for_bench(
     source: &Path,
     final_path: &Path,
     mut progress: impl FnMut(PackSaveProgress),
@@ -63,7 +63,7 @@ pub(crate) fn publish_pack_file_for_bench(
     result
 }
 
-pub(crate) fn publish_pack_file_with_progress(
+pub fn publish_pack_file_with_progress(
     source: &Path,
     final_path: &Path,
     progress: impl FnMut(PackSaveProgress),
@@ -71,7 +71,7 @@ pub(crate) fn publish_pack_file_with_progress(
     publish_pack_file_for_bench(source, final_path, progress)
 }
 
-pub(crate) fn publish_pack_file_with_progress_and_fault_control(
+pub fn publish_pack_file_with_progress_and_fault_control(
     source: &Path,
     final_path: &Path,
     mut progress: impl FnMut(PackSaveProgress),
@@ -171,7 +171,7 @@ fn emit_progress(
     });
 }
 
-pub(crate) fn temp_path_for(final_path: &Path) -> PathBuf {
+pub fn temp_path_for(final_path: &Path) -> PathBuf {
     static_temp_path_for(final_path, "screenshot-pack")
 }
 
@@ -211,7 +211,7 @@ fn file_len(path: &Path) -> Result<u64, String> {
         .map_err(|e| format!("stat {}: {e}", path.display()))
 }
 
-pub(crate) fn cleanup_pack_publish_temps(final_path: &Path) {
+pub fn cleanup_pack_publish_temps(final_path: &Path) {
     cleanup_static_and_timestamped_temps(final_path, "screenshot-pack");
 }
 
