@@ -4391,17 +4391,6 @@ pub fn remove_launch_return_state() {
     }
 }
 
-fn remove_launch_return_state_at(path: &Path) {
-    match fs::remove_file(path) {
-        Ok(()) => {}
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-        Err(e) => crate::ui_errln!(
-            "failed to remove launch return state {}: {e}",
-            path.display()
-        ),
-    }
-}
-
 pub fn take_launch_return_state() -> Option<LaunchReturnState> {
     let mut persistence = SystemLauncherPersistence;
     let state = persistence.load_return_state();
@@ -4418,24 +4407,6 @@ pub fn take_launch_return_state() -> Option<LaunchReturnState> {
         Ok(state) => state,
         Err(failure) => {
             crate::ui_errln!("{}", failure.detail());
-            None
-        }
-    }
-}
-
-fn take_launch_return_state_at(path: &Path) -> Option<LaunchReturnState> {
-    let text = fs::read_to_string(path).ok()?;
-    remove_launch_return_state_at(path);
-    match serde_json::from_str::<LaunchReturnState>(&text) {
-        Ok(state)
-            if (1..=LAUNCH_RETURN_STATE_SCHEMA).contains(&state.schema_version)
-                && state.screen == "arcade" =>
-        {
-            Some(state)
-        }
-        Ok(_) => None,
-        Err(e) => {
-            crate::ui_errln!("invalid launch return state {}: {e}", path.display());
             None
         }
     }
@@ -5270,6 +5241,7 @@ fn write_simple_input_profile(name: &str, map: &[u32; 32]) -> Result<(), String>
     fs::rename(&tmp, &path).map_err(|e| format!("failed to install {}: {e}", path.display()))
 }
 
+#[cfg(test)]
 fn encode_launch_plan(plan: &StructuredLaunchPlan) -> String {
     encode_launch_fields(
         plan.launch_ref.as_ref(),
@@ -8413,11 +8385,21 @@ mod tests {
         };
 
         save_launch_return_state_at(&path, &state).expect("save return state");
-        assert_eq!(take_launch_return_state_at(&path), Some(state));
+        assert_eq!(
+            SystemLauncherPersistence::load_return_state_at(&path).expect("load return state"),
+            Some(state)
+        );
+        SystemLauncherPersistence::clear_return_state_at(&path).expect("clear return state");
         assert!(!path.exists());
 
         std::fs::write(&path, "{not-json").expect("write invalid state");
-        assert_eq!(take_launch_return_state_at(&path), None);
+        assert_eq!(
+            SystemLauncherPersistence::load_return_state_at(&path)
+                .expect_err("invalid return state")
+                .kind(),
+            LauncherEffectFailureKind::MalformedResponse
+        );
+        SystemLauncherPersistence::clear_return_state_at(&path).expect("clear invalid state");
         assert!(!path.exists());
         let _ = std::fs::remove_dir_all(root);
     }
@@ -8442,7 +8424,7 @@ mod tests {
 
         save_launch_return_state_at(&path, &state).expect("save return state");
         assert!(path.exists());
-        remove_launch_return_state_at(&path);
+        SystemLauncherPersistence::clear_return_state_at(&path).expect("clear return state");
 
         assert!(!path.exists());
         let _ = std::fs::remove_dir_all(root);
