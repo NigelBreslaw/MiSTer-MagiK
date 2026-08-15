@@ -35,6 +35,7 @@ use crate::arcade_list_renderer::{
 use crate::boot_analytics;
 use crate::controller_db::ControllerDb;
 use crate::cpu_profile;
+use crate::crt_backdrop::CrtBackdropState;
 use crate::display_config::{DisplayConfig, detect_runtime_display_geometry};
 use crate::frame_profile::{FrameProfiler, FrameRect, FrameSample, VideoFrameProfile};
 use crate::input::{PadInfo, PadPool};
@@ -54,9 +55,10 @@ use crate::screenshot_transitions::{
 };
 use crate::setup_nav::{SetupAction, SetupNav, SetupPhase};
 use crate::ui_display::{
-    CrtUiMetrics, RuntimeDisplayGeometry, ScreenOrientation, UiDisplay, UiDisplayPlan,
-    UiLayoutGeometry, UiPixelSize,
+    CrtUiMetrics, ResolvedOutputRoute, RuntimeDisplayGeometry, ScreenOrientation, UiDisplay,
+    UiDisplayPlan, UiLayoutGeometry, UiPixelSize,
 };
+use crate::visual_composition::{PreviewFrame, PreviewPixels};
 #[cfg(mister_experiments)]
 use mister_magik_fb::experiments::effects::framebuffer_effects::{
     EFFECT_SIZES, EffectKind, EffectSize,

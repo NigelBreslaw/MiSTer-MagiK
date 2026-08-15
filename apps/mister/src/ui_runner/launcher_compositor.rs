@@ -220,6 +220,22 @@ impl<'a> LayerTarget<'a> {
         snapshot_cached_565(self.target)
     }
 
+    pub(super) fn copy_cached_into(&self, destination: &mut Vec<Rgb565Pixel>) {
+        destination.resize(
+            self.target.cached_565().len(),
+            crate::crt_backdrop::CRT_BACKDROP_BACKGROUND,
+        );
+        destination.copy_from_slice(self.target.cached_565());
+    }
+
+    pub(super) fn compose_crt_backdrop(&mut self, pixels: &[Rgb565Pixel]) -> bool {
+        if pixels.len() != self.target.cached_565().len() {
+            return false;
+        }
+        self.target.cached_565_mut().copy_from_slice(pixels);
+        true
+    }
+
     pub(super) fn restore_cached(&mut self, snapshot: &[Rgb565Pixel]) -> bool {
         restore_cached_565(self.target, snapshot)
     }
@@ -367,6 +383,62 @@ impl<'a> LayerTarget<'a> {
             )
         } else {
             compose_arcade_list_update(self.target, renderer, update)
+        }
+    }
+
+    pub(super) fn compose_arcade_list_over_backdrop(
+        &mut self,
+        renderer: &mut ArcadeListRenderer,
+        backdrop: &[Rgb565Pixel],
+    ) -> bool {
+        renderer.compose_layer_over_backdrop_to_oriented_cached(
+            self.target,
+            backdrop,
+            self.layout.output_layout(),
+            true,
+        )
+    }
+
+    pub(super) fn restore_crt_arcade_chrome(
+        &mut self,
+        snapshot: &[Rgb565Pixel],
+        content: crate::ui_display::CrtContentRect,
+        metrics: CrtUiMetrics,
+        list: DirtyRect,
+    ) {
+        let grid_x = metrics.grid_x.max(1) as usize;
+        let grid_y = metrics.grid_y.max(1) as usize;
+        let header = DirtyRect {
+            x0: content.x + grid_x * 2,
+            y0: content.y + grid_y * 2,
+            x1: content.x + content.width - grid_x * 2,
+            y1: content.y + grid_y * 2 + metrics.header_height.max(1) as usize,
+        };
+        let footer = DirtyRect {
+            x0: header.x0,
+            y0: content.y + content.height - metrics.footer_height.max(1) as usize - grid_y * 2,
+            x1: header.x1,
+            y1: content.y + content.height - grid_y * 2,
+        };
+        let scrollbar = DirtyRect {
+            x0: list.x1.saturating_sub(grid_x),
+            y0: list.y0,
+            x1: list.x1,
+            y1: list.y1,
+        };
+        for rect in [header, footer, scrollbar] {
+            self.restore_logical_rect(snapshot, rect);
+        }
+    }
+
+    fn restore_logical_rect(&mut self, snapshot: &[Rgb565Pixel], rect: DirtyRect) {
+        for y in rect.y0.min(self.layout.logical_h())..rect.y1.min(self.layout.logical_h()) {
+            for x in rect.x0.min(self.layout.logical_w())..rect.x1.min(self.layout.logical_w()) {
+                let offset = self.layout.output_layout().physical_offset(x, y);
+                if offset < snapshot.len() && offset < self.target.cached_565().len() {
+                    self.target.cached_565_mut()[offset] = snapshot[offset];
+                }
+            }
         }
     }
 

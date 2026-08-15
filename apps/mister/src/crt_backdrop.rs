@@ -91,6 +91,26 @@ impl CrtBackdropState {
         self.retarget(None, now);
     }
 
+    pub fn clear_plain(&mut self) {
+        if self.transition_started.is_none() && self.target_is_plain && self.retarget_is_plain {
+            self.pending_prepare_us = 0;
+            self.pending_prepare_pixels = 0;
+            return;
+        }
+        let prepare_start = Instant::now();
+        self.source.fill(CRT_BACKDROP_BACKGROUND);
+        self.target.fill(CRT_BACKDROP_BACKGROUND);
+        self.retarget.fill(CRT_BACKDROP_BACKGROUND);
+        self.source_row_repeats.fill(true);
+        self.target_row_repeats.fill(true);
+        self.retarget_row_repeats.fill(true);
+        self.target_is_plain = true;
+        self.retarget_is_plain = true;
+        self.transition_started = None;
+        self.pending_prepare_us = duration_us(prepare_start.elapsed());
+        self.pending_prepare_pixels = self.retarget.len().min(u32::MAX as usize) as u32;
+    }
+
     pub fn retarget(&mut self, frame: Option<PreviewFrame<'_>>, now: Duration) {
         self.resolve_current(now);
         self.source.copy_from_slice(&self.retarget);

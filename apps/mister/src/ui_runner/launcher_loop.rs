@@ -806,7 +806,7 @@ fn should_defer_or_preserve_selected_preview(
     defer_selected_preview || (navigation_transition_active && source_was_arcade)
 }
 
-fn preview_result_work_allowed(
+fn preview_work_allowed(
     background_work_allowed: bool,
     system_entry_in_progress: bool,
     arcade_scroll_active: bool,
@@ -4971,7 +4971,7 @@ pub(super) fn run_launcher_loop(
         .flatten();
     let crt_layout = ui.output_route().is_crt();
     let crt_metrics = crate::ui_display::CrtUiMetrics::for_display(ui);
-    let preview_route = PreviewRoutePolicy::new(crt_layout);
+    let preview_route = PreviewRoutePolicy::for_output_route(ui.output_route());
     let mut nav =
         LauncherNav::for_crt_layout_with_row_height(crt_layout, crt_metrics.game_row_height);
     let settings_store =
@@ -5182,6 +5182,11 @@ pub(super) fn run_launcher_loop(
     } else {
         ArcadeListRenderer::new()
     };
+    let mut crt_backdrop = CrtBackdropState::for_display(ui);
+    let mut crt_backdrop_selection = None;
+    let mut crt_backdrop_transition_id = None;
+    let mut crt_backdrop_was_eligible = false;
+    let mut crt_backdrop_chrome = Vec::new();
     let mut launcher_preview_version = 1u64;
     let mut launcher_arcade_version = 1u64;
     let mut launcher_arcade_scroll_offset = 0i64;
@@ -6376,6 +6381,7 @@ pub(super) fn run_launcher_loop(
                     catalog_ready_stationary_edge_since = None;
                     process_catalog_worker_message(
                         message,
+                        preview_route,
                         &mut prepare_trace,
                         &mut launcher_response_trace,
                         frame_accounting.first_visible_copy_done(),
@@ -6438,6 +6444,7 @@ pub(super) fn run_launcher_loop(
                 }
                 process_catalog_worker_message(
                     message,
+                    preview_route,
                     &mut prepare_trace,
                     &mut launcher_response_trace,
                     frame_accounting.first_visible_copy_done(),
@@ -6479,6 +6486,7 @@ pub(super) fn run_launcher_loop(
                         error: "catalog worker disconnected before authoritative hydration"
                             .to_string(),
                     },
+                    preview_route,
                     &mut prepare_trace,
                     &mut launcher_response_trace,
                     frame_accounting.first_visible_copy_done(),
@@ -6803,6 +6811,7 @@ pub(super) fn run_launcher_loop(
             let effects = catalog_session.qualification_fresh_rebuild(arcade_root.clone());
             apply_catalog_session_effects(
                 effects,
+                preview_route,
                 &mut launcher_response_trace,
                 &app,
                 &mut nav,
@@ -7743,6 +7752,7 @@ pub(super) fn run_launcher_loop(
                                         catalog_session.rebuild_database(arcade_root.clone());
                                     apply_catalog_session_effects(
                                         effects,
+                                        preview_route,
                                         &mut launcher_response_trace,
                                         &app,
                                         &mut nav,
@@ -7808,6 +7818,7 @@ pub(super) fn run_launcher_loop(
                                     let effects = catalog_session.continue_with_stale_library();
                                     apply_catalog_session_effects(
                                         effects,
+                                        preview_route,
                                         &mut launcher_response_trace,
                                         &app,
                                         &mut nav,
@@ -7837,6 +7848,7 @@ pub(super) fn run_launcher_loop(
                                         catalog_session.rebuild_library(arcade_root.clone());
                                     apply_catalog_session_effects(
                                         effects,
+                                        preview_route,
                                         &mut launcher_response_trace,
                                         &app,
                                         &mut nav,
@@ -8332,7 +8344,8 @@ pub(super) fn run_launcher_loop(
                     ui,
                 )
                 .model_projection_us;
-                preview_scheduled_this_loop = nav.screen == Screen::Arcade;
+                preview_scheduled_this_loop =
+                    nav.screen == Screen::Arcade && preview_route.allows_hdmi_preview();
                 request_launcher_redraw!();
             }
             LauncherBridgeSyncPlan::Light => {
@@ -8358,7 +8371,8 @@ pub(super) fn run_launcher_loop(
                     ui,
                 )
                 .model_projection_us;
-                preview_scheduled_this_loop = nav.screen == Screen::Arcade;
+                preview_scheduled_this_loop =
+                    nav.screen == Screen::Arcade && preview_route.allows_hdmi_preview();
                 request_launcher_redraw!();
             }
             LauncherBridgeSyncPlan::None => {}
@@ -8515,9 +8529,17 @@ pub(super) fn run_launcher_loop(
                 }
             }
         }
+        let arcade_scroll_active = nav.screen == Screen::Arcade && nav.arcade.is_scroll_active();
+        let arcade_turbo_active = nav.screen == Screen::Arcade && nav.arcade.is_turbo_active();
+        let preview_work_allowed = preview_work_allowed(
+            background_work_allowed,
+            arcade_entry_latency.preview_adoption_in_progress(),
+            arcade_scroll_active,
+            arcade_turbo_active,
+        );
         let preview_schedule_trace_start = prepare_trace_enabled.then(Instant::now);
         if dirty_opt
-            && background_work_allowed
+            && preview_work_allowed
             && !preview_scheduled_this_loop
             && !launching
             && preview_route.allows_preview_work()
@@ -8533,8 +8555,8 @@ pub(super) fn run_launcher_loop(
                 nav.arcade.selected,
                 &mut preview,
                 defer_or_preserve_selected_preview,
-                nav.arcade.is_scroll_active(),
-                nav.arcade.is_turbo_active(),
+                arcade_scroll_active,
+                arcade_turbo_active,
             ) {
                 request_launcher_redraw!();
             }
@@ -8544,14 +8566,8 @@ pub(super) fn run_launcher_loop(
         }
         let preview_apply_trace_start = prepare_trace_enabled.then(Instant::now);
         let mut preview_apply_trace = PreviewApplyTrace::default();
-        let preview_result_work_allowed = preview_result_work_allowed(
-            background_work_allowed,
-            arcade_entry_latency.preview_adoption_in_progress(),
-            nav.screen == Screen::Arcade && nav.arcade.is_scroll_active(),
-            nav.screen == Screen::Arcade && nav.arcade.is_turbo_active(),
-        );
         let preview_apply_dirty = if !launching
-            && preview_result_work_allowed
+            && preview_work_allowed
             && !arcade_search_active
             && !memory_guard.active()
             && preview_route.allows_preview_work()
@@ -8560,7 +8576,7 @@ pub(super) fn run_launcher_loop(
                 &app,
                 &mut preview,
                 defer_or_preserve_selected_preview,
-                nav.screen == Screen::Arcade && nav.arcade.is_turbo_active(),
+                arcade_turbo_active,
             );
             preview_apply_trace = preview.last_apply_trace();
             dirty
@@ -8639,9 +8655,19 @@ pub(super) fn run_launcher_loop(
             PreviewRoute::Unavailable
         };
         preview.set_route(presentation_route);
+        let crt_backdrop_eligible = preview_route.allows_crt_backdrop()
+            && presentation_route == PreviewRoute::Eligible
+            && wants_arcade_list
+            && !nav.arcade_filter.drawer_open;
+        let crt_backdrop_leaving = crt_backdrop_was_eligible && !crt_backdrop_eligible;
+        if crt_backdrop_leaving {
+            full_frame_present = true;
+            request_launcher_redraw!();
+        }
         let preview_frame_intent = preview.frame_intent();
-        let wants_preview_layer = preview.direct_layer_desired();
-        let wants_preview = preview_route.allows_preview_work()
+        let wants_preview_layer =
+            preview_route.allows_hdmi_preview() && preview.direct_layer_desired();
+        let wants_preview = preview_route.allows_hdmi_preview()
             && !screensaver.active
             && !nav.arcade_search.is_active(&nav.arcade_filter.active)
             && direct_preview_requested(
@@ -9515,7 +9541,7 @@ pub(super) fn run_launcher_loop(
                 let _ = full_screen_transition.retain_redraw(generation);
             }
             None
-        } else if composition_decision.force_full_slint_raster {
+        } else if composition_decision.force_full_slint_raster || crt_backdrop_leaving {
             gui_raster_phase = gui_raster_profile_phase(true, true);
             let gui_raster_pmu = gui_profiling.phase_span(gui_raster_phase.span_name());
             let (dirty, damage, _) = layer_target.render_slint_full(&window);
@@ -9717,7 +9743,7 @@ pub(super) fn run_launcher_loop(
         let preview_blit_start = Instant::now();
         let gui_preview_pmu = gui_profiling.phase_span(gui_custom_selection.preview_composition);
         let empty_base_cached_rect = if (layout.is_portrait() || preview_direct_present_enabled())
-            && preview_route.allows_preview_work()
+            && preview_route.allows_hdmi_preview()
             && composition_decision.allow_preview_blit
             && !memory_guard.active()
             && preview.empty_base_commit_pending()
@@ -9746,6 +9772,58 @@ pub(super) fn run_launcher_loop(
         let preview_blit_us = preview_blit_start.elapsed().as_micros();
         if preview_transition_trace.active {
             request_launcher_redraw!();
+        }
+        let mut crt_backdrop_full_damage = None;
+        let mut crt_backdrop_work_trace = crate::crt_backdrop::CrtBackdropWorkTrace::default();
+        if crt_backdrop_eligible {
+            layer_target.copy_cached_into(&mut crt_backdrop_chrome);
+            let selected_changed = crt_backdrop_selection != Some(nav.arcade.selected);
+            let raw_transition = preview.raw_transition_frame();
+            let transition_id = raw_transition.as_ref().map(|frame| frame.transition_id);
+            let transition_changed = transition_id != crt_backdrop_transition_id;
+            let exact = preview_cache_state_before_composition == "exact";
+            if selected_changed || transition_changed || !crt_backdrop_was_eligible {
+                if let Some(backdrop) = crt_backdrop.as_mut() {
+                    if exact {
+                        let frame = raw_transition
+                            .as_ref()
+                            .map(|frame| &frame.current)
+                            .filter(|frame| frame.status() == PreviewRawFrameStatus::Ready)
+                            .map(preview_frame_from_raw);
+                        if let Some(frame) = frame {
+                            backdrop.retarget(
+                                Some(frame),
+                                loop_start.saturating_duration_since(run_start),
+                            );
+                        } else {
+                            backdrop.clear_plain();
+                        }
+                    } else {
+                        backdrop.clear_plain();
+                    }
+                }
+                crt_backdrop_selection = Some(nav.arcade.selected);
+                crt_backdrop_transition_id = transition_id;
+            }
+            if let Some(backdrop) = crt_backdrop.as_mut() {
+                let compose_full = selected_changed
+                    || transition_changed
+                    || !crt_backdrop_was_eligible
+                    || backdrop.is_transitioning();
+                if compose_full {
+                    crt_backdrop_work_trace =
+                        backdrop.compose(loop_start.saturating_duration_since(run_start));
+                    if layer_target.compose_crt_backdrop(backdrop.pixels()) {
+                        crt_backdrop_full_damage = Some(full_rect);
+                    }
+                    if crt_backdrop_work_trace.active {
+                        request_launcher_redraw!();
+                    }
+                }
+            }
+        } else {
+            crt_backdrop_selection = None;
+            crt_backdrop_transition_id = None;
         }
         let navigation_transition_composition_active = navigation_transition.is_active();
         let navigation_settings_physical_space = navigation_transition.settings_physical_space();
@@ -10060,7 +10138,36 @@ pub(super) fn run_launcher_loop(
                 launcher_arcade_scroll_offset.saturating_add(delta_y as i64);
         }
         let mut physical_arcade_rect = None;
-        let cached_arcade_rect = if crt_layout || layout.is_portrait() {
+        let cached_arcade_rect = if crt_backdrop_eligible {
+            arcade_list_rect
+                .or_else(|| {
+                    crt_backdrop_full_damage
+                        .map(|_| ArcadeListUpdate::Full(arcade_list_renderer.dirty_rect()))
+                })
+                .and_then(|update| {
+                    let rect = arcade_update_dirty_rect(&update);
+                    let composed = crt_backdrop.as_ref().is_some_and(|backdrop| {
+                        layer_target.compose_arcade_list_over_backdrop(
+                            &mut arcade_list_renderer,
+                            backdrop.pixels(),
+                        )
+                    });
+                    if composed {
+                        layer_target.restore_crt_arcade_chrome(
+                            &crt_backdrop_chrome,
+                            layout.content_rect(),
+                            crt_metrics,
+                            arcade_list_renderer.dirty_rect(),
+                        );
+                    }
+                    if layout.is_portrait() {
+                        physical_arcade_rect = Some(layout.logical_rect_to_composition(rect));
+                        None
+                    } else {
+                        Some(rect)
+                    }
+                })
+        } else if crt_layout || layout.is_portrait() {
             arcade_list_rect.and_then(|update| {
                 let rect = arcade_update_dirty_rect(&update);
                 let _ = layer_target.compose_arcade_list_update(&mut arcade_list_renderer, update);
@@ -10074,6 +10181,7 @@ pub(super) fn run_launcher_loop(
         } else {
             None
         };
+        crt_backdrop_was_eligible = crt_backdrop_eligible;
         let physical_custom_damage = accepted_screensaver_frame.then_some(this_rect).flatten();
         let preview_layer_desired = should_desire_direct_layer(
             wants_preview_layer,
@@ -10127,6 +10235,7 @@ pub(super) fn run_launcher_loop(
             damage.push_if_some(physical_arcade_rect);
             damage.push_if_some(physical_empty_preview_rect);
             damage.push_if_some(physical_raw_preview_rect);
+            damage.push_if_some(crt_backdrop_full_damage);
             damage
         };
         // Retain the v1 telemetry field for schema compatibility. Native Slint
@@ -10935,9 +11044,17 @@ pub(super) fn run_launcher_loop(
                         presented_frame.main_present_sequence,
                     );
                 }
-                let terminal_preview =
-                    matches!(preview.trace_cache_state(), "exact" | "cached" | "empty")
-                        && matches!(preview.presentation_label(), "visible" | "detached");
+                let terminal_preview = preview_terminal_for_route(
+                    preview_route,
+                    preview.trace_cache_state(),
+                    preview.presentation_label(),
+                    preview.raw_frame_status() == PreviewRawFrameStatus::Ready,
+                    preview.terminal_empty(),
+                    crt_backdrop_selection == Some(nav.arcade.selected),
+                    crt_backdrop
+                        .as_ref()
+                        .is_some_and(CrtBackdropState::is_transitioning),
+                );
                 gui_profiling.observe_route_presentation(
                     screen_label(nav.screen),
                     nav.arcade.is_scroll_active(),
@@ -11419,19 +11536,82 @@ fn should_desire_direct_layer(wants_layer: bool, composition_allows_layer: bool)
     wants_layer && composition_allows_layer
 }
 
+fn preview_frame_from_raw<'a>(frame: &'a PreviewRawFrame<'a>) -> PreviewFrame<'a> {
+    PreviewFrame {
+        pixels: match frame.pixels {
+            PreviewRawPixels::Empty => PreviewPixels::Empty,
+            PreviewRawPixels::Rgb8(pixels) => PreviewPixels::Rgb8(pixels),
+            PreviewRawPixels::Rgb565 {
+                pixels,
+                stride_pixels,
+            } => PreviewPixels::Rgb565 {
+                pixels,
+                stride_pixels,
+            },
+        },
+        source_width: frame.source_w as usize,
+        source_height: frame.source_h as usize,
+        display_width: frame.display_w as usize,
+        display_height: frame.display_h as usize,
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct PreviewRoutePolicy {
-    crt_layout: bool,
+    kind: PreviewRouteKind,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PreviewRouteKind {
+    Hdmi,
+    LowResolutionCrtBackdrop,
+    UnsupportedCrt,
 }
 
 impl PreviewRoutePolicy {
-    const fn new(crt_layout: bool) -> Self {
-        Self { crt_layout }
+    const fn for_output_route(route: ResolvedOutputRoute) -> Self {
+        Self {
+            kind: match route {
+                ResolvedOutputRoute::Hdmi => PreviewRouteKind::Hdmi,
+                ResolvedOutputRoute::Crt240p60 | ResolvedOutputRoute::Crt288p50 => {
+                    PreviewRouteKind::LowResolutionCrtBackdrop
+                }
+                ResolvedOutputRoute::Crt480p60 | ResolvedOutputRoute::Crt576p50 => {
+                    PreviewRouteKind::UnsupportedCrt
+                }
+            },
+        }
     }
 
     const fn allows_preview_work(self) -> bool {
-        !self.crt_layout
+        !matches!(self.kind, PreviewRouteKind::UnsupportedCrt)
     }
+
+    const fn allows_hdmi_preview(self) -> bool {
+        matches!(self.kind, PreviewRouteKind::Hdmi)
+    }
+
+    const fn allows_crt_backdrop(self) -> bool {
+        matches!(self.kind, PreviewRouteKind::LowResolutionCrtBackdrop)
+    }
+}
+
+fn preview_terminal_for_route(
+    policy: PreviewRoutePolicy,
+    cache_state: &str,
+    presentation_label: &str,
+    raw_frame_ready: bool,
+    terminal_empty: bool,
+    crt_selection_matches: bool,
+    crt_transitioning: bool,
+) -> bool {
+    if policy.allows_crt_backdrop() {
+        return ((cache_state == "exact" && raw_frame_ready) || terminal_empty)
+            && crt_selection_matches
+            && !crt_transitioning;
+    }
+    matches!(cache_state, "exact" | "cached" | "empty")
+        && matches!(presentation_label, "visible" | "detached")
 }
 
 /// Runs the catalog-to-media boundary only for routes that own screenshot work.
@@ -11550,6 +11730,7 @@ fn retain_startup_intro_catalog_ui_intent(
 #[allow(clippy::too_many_arguments)]
 fn process_catalog_worker_message(
     message: CatalogWorkerMessage,
+    preview_route: PreviewRoutePolicy,
     prepare_trace: &mut LauncherPrepareTrace,
     launcher_response_trace: &mut LauncherResponseTrace,
     first_visible_copy_done: bool,
@@ -11586,7 +11767,7 @@ fn process_catalog_worker_message(
             media_benchmark_contention,
             loop_start,
         );
-        let media_gate = if nav.uses_crt_layout() {
+        let media_gate = if !preview_route.allows_preview_work() {
             MediaInteractionGate {
                 active: true,
                 reason: "crt-no-screenshots",
@@ -11619,6 +11800,7 @@ fn process_catalog_worker_message(
     );
     apply_catalog_session_effects(
         effects,
+        preview_route,
         launcher_response_trace,
         app,
         nav,
@@ -12191,6 +12373,7 @@ fn maybe_present_modal_input_test_dialog(
 #[allow(clippy::too_many_arguments)]
 fn apply_catalog_session_effects(
     effects: CatalogSessionEffects,
+    preview_route: PreviewRoutePolicy,
     launcher_response_trace: &mut LauncherResponseTrace,
     app: &slint_ui::launcher::Launcher,
     nav: &mut LauncherNav,
@@ -12212,7 +12395,6 @@ fn apply_catalog_session_effects(
     now: Instant,
     start: Instant,
 ) {
-    let preview_route = PreviewRoutePolicy::new(nav.uses_crt_layout());
     for effect in effects.into_effects() {
         if let Some(media_effects) =
             dispatch_catalog_media_effect(preview_route, &effect, media_session)
@@ -14374,12 +14556,12 @@ mod tests {
     }
 
     #[test]
-    fn selected_preview_results_remain_live_during_normal_and_turbo_scroll() {
-        assert!(preview_result_work_allowed(false, false, true, false));
-        assert!(preview_result_work_allowed(false, false, true, true));
-        assert!(preview_result_work_allowed(false, true, false, false));
-        assert!(preview_result_work_allowed(true, false, false, false));
-        assert!(!preview_result_work_allowed(false, false, false, false));
+    fn selected_preview_work_remains_live_during_normal_and_turbo_scroll() {
+        assert!(preview_work_allowed(false, false, true, false));
+        assert!(preview_work_allowed(false, false, true, true));
+        assert!(preview_work_allowed(false, true, false, false));
+        assert!(preview_work_allowed(true, false, false, false));
+        assert!(!preview_work_allowed(false, false, false, false));
     }
 
     #[test]
@@ -14482,8 +14664,8 @@ mod tests {
     use mister_magik_fb::experiments::effects::framebuffer_effects::EffectSize;
 
     #[test]
-    fn crt_catalog_discovery_sequence_never_reaches_media_worker_actions() {
-        fn dispatched_media_actions(crt_layout: bool) -> Vec<&'static str> {
+    fn screenshot_media_actions_follow_route_capability() {
+        fn dispatched_media_actions(policy: PreviewRoutePolicy) -> Vec<&'static str> {
             let now = Instant::now();
             let mut catalog_session = LauncherCatalogSession::new(false);
             let catalog_effects = catalog_session.handle_worker_message(
@@ -14501,11 +14683,9 @@ mod tests {
             let mut media_session = ScreenshotMediaUpdateSession::default();
             let mut actions = Vec::new();
             for effect in catalog_effects.into_effects() {
-                let Some(media_effects) = dispatch_catalog_media_effect(
-                    PreviewRoutePolicy::new(crt_layout),
-                    &effect,
-                    &mut media_session,
-                ) else {
+                let Some(media_effects) =
+                    dispatch_catalog_media_effect(policy, &effect, &mut media_session)
+                else {
                     continue;
                 };
                 actions.extend(
@@ -14529,11 +14709,49 @@ mod tests {
             actions
         }
 
-        assert!(dispatched_media_actions(true).is_empty());
+        assert!(
+            dispatched_media_actions(PreviewRoutePolicy::for_output_route(
+                ResolvedOutputRoute::Crt480p60,
+            ))
+            .is_empty()
+        );
         assert_eq!(
-            dispatched_media_actions(false),
+            dispatched_media_actions(PreviewRoutePolicy::for_output_route(
+                ResolvedOutputRoute::Crt240p60,
+            )),
             vec!["ensure-worker", "set-interaction", "ensure-system"]
         );
+        assert_eq!(
+            dispatched_media_actions(PreviewRoutePolicy::for_output_route(
+                ResolvedOutputRoute::Hdmi,
+            )),
+            vec!["ensure-worker", "set-interaction", "ensure-system"]
+        );
+    }
+
+    #[test]
+    fn crt_profile_terminal_tracks_the_composed_backdrop_not_hdmi_layer_state() {
+        let crt = PreviewRoutePolicy::for_output_route(ResolvedOutputRoute::Crt240p60);
+        assert!(preview_terminal_for_route(
+            crt, "exact", "loading", true, false, true, false,
+        ));
+        assert!(preview_terminal_for_route(
+            crt, "empty", "loading", false, true, true, false,
+        ));
+        assert!(!preview_terminal_for_route(
+            crt, "exact", "loading", true, false, false, false,
+        ));
+        assert!(!preview_terminal_for_route(
+            crt, "exact", "loading", true, false, true, true,
+        ));
+
+        let hdmi = PreviewRoutePolicy::for_output_route(ResolvedOutputRoute::Hdmi);
+        assert!(preview_terminal_for_route(
+            hdmi, "exact", "visible", true, false, false, true,
+        ));
+        assert!(!preview_terminal_for_route(
+            hdmi, "exact", "loading", true, false, true, false,
+        ));
     }
 
     #[test]
