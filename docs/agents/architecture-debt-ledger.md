@@ -39,7 +39,7 @@ or record an explicit behavior change.
 | Launch handoff and recovery | `execute_game_launch_with` now builds the portable `LaunchHandoffRequest` and invokes `LaunchIoHandoff`; `SystemLaunchIo` remains the temporary production effect adapter until its raw process, marker, profile, override, and Main calls move behind their owning runtime/persistence capabilities. Recovery remains in `spawn_mister`, `reboot_mister_with`, and `exit_to_mister`. |
 | Display control | `LauncherDisplayControl` implements the portable `DisplayControl` capability over typed `MainCommand` calls; the public display helpers retain their existing strings, polling cadence, and transaction-state API as compatibility wrappers. |
 | Runtime state and process inspection | Platform runtime's `SystemRuntimeState` implements the portable `RuntimeState` snapshot for registered Main process state, arcade-core command-line classification, and heartbeat; launcher compatibility helpers now delegate to that capability. |
-| Launcher persistence | launch-return state helpers, input-policy/button-profile helpers, rebuild-marker helpers, screenshot-pack cleanup, and menu-wallpaper restoration |
+| Launcher persistence | `SystemLauncherPersistence` implements the portable `LauncherPersistence` capability for launch-return state, settings, input policy, and rebuild-marker ownership; launcher-facing helpers remain compatibility wrappers. Button profiles, screenshot-pack cleanup, and menu-wallpaper restoration remain explicit launcher composition effects. |
 
 The launch fake freezes preparation, override, marker, command, and recovery
 ordering. Main reply association remains serialized by the command-operation

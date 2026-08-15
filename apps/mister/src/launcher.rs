@@ -23,9 +23,9 @@ use crate::spring_animation::{SpringAnimation, SpringConfiguration};
 use mister_magik_catalog::media_identity::screenshot_reset_deletes_filename;
 use mister_magik_core::launcher_effects::{
     DisplayControl, DisplayState as EffectDisplayState, DisplayStateRead,
-    DisplayTransactionPhase as EffectDisplayTransactionPhase, LaunchHandoff, LaunchHandoffOutcome,
-    LaunchHandoffRequest, LaunchSelection as EffectLaunchSelection, LauncherEffectFailure,
-    LauncherEffectFailureKind, RuntimeState,
+    DisplayTransactionPhase as EffectDisplayTransactionPhase, InputPolicy, LaunchHandoff,
+    LaunchHandoffOutcome, LaunchHandoffRequest, LaunchSelection as EffectLaunchSelection,
+    LauncherEffectFailure, LauncherEffectFailureKind, LauncherPersistence, RuntimeState,
     StructuredLaunchSelection as EffectStructuredLaunchSelection,
 };
 use mister_magik_mister_runtime::display_resolution::{DISPLAY_RESOLUTIONS, DisplayResolution};
@@ -4367,7 +4367,9 @@ pub fn capture_launch_return_state(
 }
 
 pub fn save_launch_return_state(state: &LaunchReturnState) -> Result<(), String> {
-    save_launch_return_state_at(Path::new(LAUNCH_RETURN_STATE_PATH), state)
+    SystemLauncherPersistence
+        .save_return_state(state)
+        .map_err(|failure| failure.detail().to_string())
 }
 
 fn save_launch_return_state_at(path: &Path, state: &LaunchReturnState) -> Result<(), String> {
@@ -4384,7 +4386,9 @@ fn save_launch_return_state_at(path: &Path, state: &LaunchReturnState) -> Result
 }
 
 pub fn remove_launch_return_state() {
-    remove_launch_return_state_at(Path::new(LAUNCH_RETURN_STATE_PATH));
+    if let Err(failure) = SystemLauncherPersistence.clear_return_state() {
+        crate::ui_errln!("{}", failure.detail());
+    }
 }
 
 fn remove_launch_return_state_at(path: &Path) {
@@ -4399,7 +4403,24 @@ fn remove_launch_return_state_at(path: &Path) {
 }
 
 pub fn take_launch_return_state() -> Option<LaunchReturnState> {
-    take_launch_return_state_at(Path::new(LAUNCH_RETURN_STATE_PATH))
+    let mut persistence = SystemLauncherPersistence;
+    let state = persistence.load_return_state();
+    let should_clear = !matches!(
+        &state,
+        Err(failure) if failure.kind() == LauncherEffectFailureKind::Unavailable
+    );
+    if should_clear {
+        if let Err(failure) = persistence.clear_return_state() {
+            crate::ui_errln!("{}", failure.detail());
+        }
+    }
+    match state {
+        Ok(state) => state,
+        Err(failure) => {
+            crate::ui_errln!("{}", failure.detail());
+            None
+        }
+    }
 }
 
 fn take_launch_return_state_at(path: &Path) -> Option<LaunchReturnState> {
@@ -4417,6 +4438,102 @@ fn take_launch_return_state_at(path: &Path) -> Option<LaunchReturnState> {
             crate::ui_errln!("invalid launch return state {}: {e}", path.display());
             None
         }
+    }
+}
+
+struct SystemLauncherPersistence;
+
+impl SystemLauncherPersistence {
+    fn unavailable(detail: impl Into<String>) -> LauncherEffectFailure {
+        LauncherEffectFailure::new(LauncherEffectFailureKind::Unavailable, detail)
+    }
+
+    fn load_return_state_at(
+        path: &Path,
+    ) -> Result<Option<LaunchReturnState>, LauncherEffectFailure> {
+        let text = match fs::read_to_string(path) {
+            Ok(text) => text,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(error) => {
+                return Err(Self::unavailable(format!(
+                    "read launch return state {}: {error}",
+                    path.display()
+                )));
+            }
+        };
+        match serde_json::from_str::<LaunchReturnState>(&text) {
+            Ok(state)
+                if (1..=LAUNCH_RETURN_STATE_SCHEMA).contains(&state.schema_version)
+                    && state.screen == "arcade" =>
+            {
+                Ok(Some(state))
+            }
+            Ok(_) => Ok(None),
+            Err(error) => Err(LauncherEffectFailure::new(
+                LauncherEffectFailureKind::MalformedResponse,
+                format!("invalid launch return state {}: {error}", path.display()),
+            )),
+        }
+    }
+
+    fn clear_return_state_at(path: &Path) -> Result<(), LauncherEffectFailure> {
+        match fs::remove_file(path) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(Self::unavailable(format!(
+                "failed to remove launch return state {}: {error}",
+                path.display()
+            ))),
+        }
+    }
+
+    fn library_rebuild_pending(&self) -> bool {
+        library_rebuild_on_next_boot_path().exists()
+    }
+}
+
+impl LauncherPersistence for SystemLauncherPersistence {
+    type ReturnState = LaunchReturnState;
+    type Settings = MagikSettings;
+
+    fn load_return_state(&mut self) -> Result<Option<Self::ReturnState>, LauncherEffectFailure> {
+        Self::load_return_state_at(Path::new(LAUNCH_RETURN_STATE_PATH))
+    }
+
+    fn save_return_state(
+        &mut self,
+        state: &Self::ReturnState,
+    ) -> Result<(), LauncherEffectFailure> {
+        save_launch_return_state_at(Path::new(LAUNCH_RETURN_STATE_PATH), state)
+            .map_err(Self::unavailable)
+    }
+
+    fn clear_return_state(&mut self) -> Result<(), LauncherEffectFailure> {
+        Self::clear_return_state_at(Path::new(LAUNCH_RETURN_STATE_PATH))
+    }
+
+    fn load_settings(&mut self) -> Result<Self::Settings, LauncherEffectFailure> {
+        Ok(MagikSettings::load())
+    }
+
+    fn save_settings(&mut self, settings: &Self::Settings) -> Result<(), LauncherEffectFailure> {
+        settings
+            .save()
+            .map_err(|error| Self::unavailable(format!("save launcher settings: {error}")))
+    }
+
+    fn set_input_policy(&mut self, policy: InputPolicy) -> Result<(), LauncherEffectFailure> {
+        write_input_policy_marker(matches!(policy, InputPolicy::Simple)).map_err(Self::unavailable)
+    }
+
+    fn request_library_rebuild(&mut self) -> Result<(), LauncherEffectFailure> {
+        request_library_rebuild_on_next_boot_at(&library_rebuild_on_next_boot_path())
+            .map_err(Self::unavailable)
+    }
+
+    fn consume_library_rebuild(&mut self) -> Result<bool, LauncherEffectFailure> {
+        consume_library_rebuild_on_next_boot_at(&library_rebuild_on_next_boot_path())
+            .map_err(Self::unavailable)
     }
 }
 
@@ -4976,7 +5093,10 @@ impl LaunchIo for SystemLaunchIo {
     }
 
     fn simple_joystick_handling(&mut self) -> bool {
-        MagikSettings::load().simple_joystick_handling
+        SystemLauncherPersistence
+            .load_settings()
+            .map(|settings| settings.simple_joystick_handling)
+            .unwrap_or(false)
     }
 
     fn prepare_simple_input_profiles(&mut self) -> Result<(), String> {
@@ -5000,7 +5120,13 @@ impl LaunchIo for SystemLaunchIo {
     }
 
     fn write_input_policy_marker(&mut self, simple_joystick_handling: bool) -> Result<(), String> {
-        write_input_policy_marker(simple_joystick_handling)
+        SystemLauncherPersistence
+            .set_input_policy(if simple_joystick_handling {
+                InputPolicy::Simple
+            } else {
+                InputPolicy::Stock
+            })
+            .map_err(|failure| failure.detail().to_string())
     }
 
     fn write_button_overrides(
@@ -5618,15 +5744,19 @@ fn screenshot_reset_deletes_file(name: &str) -> bool {
 }
 
 pub fn library_rebuild_on_next_boot_pending() -> bool {
-    library_rebuild_on_next_boot_path().exists()
+    SystemLauncherPersistence.library_rebuild_pending()
 }
 
 pub fn request_library_rebuild_on_next_boot() -> Result<(), String> {
-    request_library_rebuild_on_next_boot_at(&library_rebuild_on_next_boot_path())
+    SystemLauncherPersistence
+        .request_library_rebuild()
+        .map_err(|failure| failure.detail().to_string())
 }
 
 pub fn consume_library_rebuild_on_next_boot() -> Result<bool, String> {
-    consume_library_rebuild_on_next_boot_at(&library_rebuild_on_next_boot_path())
+    SystemLauncherPersistence
+        .consume_library_rebuild()
+        .map_err(|failure| failure.detail().to_string())
 }
 
 fn request_library_rebuild_on_next_boot_at(path: &Path) -> Result<(), String> {
