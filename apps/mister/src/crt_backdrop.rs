@@ -7,6 +7,8 @@ use crate::preview_transition::{blend_rgb565_bucket, blend_rgb565_rows_bucketed}
 use crate::ui_display::{ResolvedOutputRoute, UiDisplay};
 use crate::visual_composition::{PreviewFrame, PreviewPixels};
 use slint::platform::software_renderer::Rgb565Pixel;
+use std::sync::Arc;
+use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
 use std::time::{Duration, Instant};
 
 pub const CRT_BACKDROP_FADE_DURATION: Duration = Duration::from_millis(130);
@@ -21,6 +23,65 @@ pub struct CrtBackdropWorkTrace {
     pub blend_pixels: u32,
     pub alpha_bucket: u8,
     pub active: bool,
+}
+
+struct BlendRequest {
+    source: Arc<[Rgb565Pixel]>,
+    target: Arc<[Rgb565Pixel]>,
+    width: usize,
+    alpha_bucket: u16,
+    epoch: u64,
+}
+
+struct BlendResult {
+    pixels: Arc<[Rgb565Pixel]>,
+    row_repeats: Vec<bool>,
+    alpha_bucket: u16,
+    epoch: u64,
+    blend_us: u64,
+}
+
+struct BlendWorker {
+    tx: SyncSender<BlendRequest>,
+    rx: Receiver<BlendResult>,
+}
+
+impl BlendWorker {
+    fn new() -> Self {
+        let (tx, requests) = sync_channel::<BlendRequest>(1);
+        let (results, rx) = sync_channel::<BlendResult>(1);
+        std::thread::Builder::new()
+            .name("crt-backdrop-blender".to_string())
+            .spawn(move || {
+                while let Ok(request) = requests.recv() {
+                    let started = Instant::now();
+                    let mut pixels = vec![CRT_BACKDROP_BACKGROUND; request.source.len()];
+                    let width = request.width.max(1);
+                    // The 240p target is a flat row-major surface.  The
+                    // worker deliberately uses the same bucketed scalar
+                    // kernel as the synchronous path for pixel identity.
+                    blend_rgb565_rows_bucketed(
+                        &mut pixels,
+                        &request.source,
+                        &request.target,
+                        request.alpha_bucket,
+                    );
+                    let row_repeats = plain_row_repeats(pixels.len() / width);
+                    let result = BlendResult {
+                        pixels: Arc::from(pixels),
+                        row_repeats,
+                        alpha_bucket: request.alpha_bucket,
+                        epoch: request.epoch,
+                        blend_us: duration_us(started.elapsed()),
+                    };
+                    if results.send(result).is_err() {
+                        break;
+                    }
+                }
+            })
+            .expect("spawn crt-backdrop-blender");
+        Self { tx, rx }
+    }
 }
 
 pub struct CrtBackdropState {
@@ -41,6 +102,11 @@ pub struct CrtBackdropState {
     transition_started: Option<Duration>,
     pending_prepare_us: u64,
     pending_prepare_pixels: u32,
+    blend_worker: BlendWorker,
+    blend_pending: bool,
+    blend_epoch: u64,
+    completed_blend_us: u64,
+    completed_alpha_bucket: u16,
 }
 
 impl CrtBackdropState {
@@ -83,6 +149,11 @@ impl CrtBackdropState {
             transition_started: None,
             pending_prepare_us: 0,
             pending_prepare_pixels: 0,
+            blend_worker: BlendWorker::new(),
+            blend_pending: false,
+            blend_epoch: 1,
+            completed_blend_us: 0,
+            completed_alpha_bucket: 32,
         }
     }
 
@@ -127,6 +198,8 @@ impl CrtBackdropState {
         self.target_is_plain = true;
         self.retarget_is_plain = true;
         self.transition_started = None;
+        self.blend_epoch = self.blend_epoch.wrapping_add(1).max(1);
+        self.blend_pending = false;
         self.pending_prepare_us = duration_us(prepare_start.elapsed());
         self.pending_prepare_pixels = self.retarget.len().min(u32::MAX as usize) as u32;
     }
@@ -162,6 +235,8 @@ impl CrtBackdropState {
         self.pending_prepare_us = duration_us(prepare_start.elapsed());
         self.pending_prepare_pixels = self.target.len().min(u32::MAX as usize) as u32;
         self.transition_started = (self.source != self.target).then_some(now);
+        self.blend_epoch = self.blend_epoch.wrapping_add(1).max(1);
+        self.blend_pending = false;
         if self.transition_started.is_none() {
             self.retarget.copy_from_slice(&self.target);
             self.retarget_row_repeats
@@ -187,6 +262,46 @@ impl CrtBackdropState {
             .min(CRT_BACKDROP_FADE_DURATION.as_micros());
         let denominator = CRT_BACKDROP_FADE_DURATION.as_micros().max(1);
         let alpha_bucket = ((numerator * 32 + denominator / 2) / denominator) as u16;
+        if self.retarget.len() >= 10_000 {
+            while let Ok(result) = self.blend_worker.rx.try_recv() {
+                self.blend_pending = false;
+                if result.epoch != self.blend_epoch {
+                    continue;
+                }
+                self.retarget.copy_from_slice(&result.pixels);
+                self.retarget_row_repeats
+                    .copy_from_slice(&result.row_repeats);
+                self.completed_blend_us = result.blend_us;
+                self.completed_alpha_bucket = result.alpha_bucket;
+                self.retarget_is_plain = false;
+                if result.alpha_bucket >= 32 {
+                    self.transition_started = None;
+                    self.retarget_is_plain = self.target_is_plain;
+                }
+            }
+            if !self.blend_pending {
+                let request = BlendRequest {
+                    source: Arc::from(self.source.clone()),
+                    target: Arc::from(self.target.clone()),
+                    width: self.width,
+                    alpha_bucket,
+                    epoch: self.blend_epoch,
+                };
+                if self.blend_worker.tx.try_send(request).is_ok() {
+                    self.blend_pending = true;
+                }
+            }
+            trace.blend_us = self.completed_blend_us;
+            trace.blend_pixels = if self.completed_blend_us > 0 {
+                self.retarget.len().min(u32::MAX as usize) as u32
+            } else {
+                0
+            };
+            trace.alpha_bucket = self.completed_alpha_bucket.min(32) as u8;
+            trace.active = self.transition_started.is_some();
+            self.expand_to_logical();
+            return trace;
+        }
         let blend_start = Instant::now();
         let row_width = self.width.max(1);
         for row in 0..self.physical_height {
