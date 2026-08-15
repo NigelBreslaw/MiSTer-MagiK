@@ -2,7 +2,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Shared vsync render loop and Slint bench scene dispatch.
-#![cfg_attr(mister_ui_scope_launcher, allow(dead_code))]
+#![cfg_attr(
+    any(
+        test,
+        mister_ui_scope_launcher,
+        not(all(target_os = "linux", target_arch = "arm"))
+    ),
+    allow(dead_code)
+)]
 
 use crate::fpga::Fpga;
 use crate::vt::VtGraphicsGuard;

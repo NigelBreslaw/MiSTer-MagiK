@@ -186,9 +186,10 @@ The former application-wide dead-code allowance was removed with the entrypoint
 move. The crate-root check rejects its return in either executable edge. The
 remaining leaf `#[allow(dead_code)]` annotations in `lib.rs` are cfg-local to
 shared rendering helpers that are intentionally partial in host/preview graphs.
-The `app_entry`, `cpu_profile`, and `ui_runner` roots use module-scoped,
-test-only dead-code allowances because bench-scene tests deliberately compile
-partial UI feature graphs; production builds retain full dead-code enforcement.
+The `app_entry`, `cpu_profile`, `input_hub`, `preview_state`, and `ui_runner`
+roots use module-scoped dead-code allowances for tests and non-device host
+targets because those builds deliberately compile partial UI graphs. Linux/ARM
+production builds retain full dead-code enforcement.
 The full feature matrix also proves `app_entry` imports only library modules it
 uses under the selected cfg, while typed ready-FIFO capture retains the legacy
 empty `PathBuf` fallback. Feature-specific application tests now target that

@@ -13,7 +13,10 @@ extern crate self as mister_magik_fb;
 #[doc(hidden)]
 pub mod allocation_metrics;
 #[cfg(feature = "ui")]
-#[cfg_attr(test, allow(dead_code))]
+#[cfg_attr(
+    any(test, not(all(target_os = "linux", target_arch = "arm"))),
+    allow(dead_code)
+)]
 #[doc(hidden)]
 pub mod app_entry;
 #[cfg(feature = "ui")]
@@ -39,7 +42,10 @@ pub mod catalog_progress_report;
 pub mod command_args;
 pub mod controller_db;
 #[cfg(feature = "ui")]
-#[cfg_attr(test, allow(dead_code))]
+#[cfg_attr(
+    any(test, not(all(target_os = "linux", target_arch = "arm"))),
+    allow(dead_code)
+)]
 #[doc(hidden)]
 pub mod cpu_profile;
 pub mod crash_report;
@@ -60,6 +66,7 @@ pub mod frame_profile;
 #[doc(hidden)]
 pub mod input;
 #[cfg(feature = "ui")]
+#[cfg_attr(not(all(target_os = "linux", target_arch = "arm")), allow(dead_code))]
 #[doc(hidden)]
 pub mod input_hub;
 #[cfg(feature = "ui")]
@@ -108,6 +115,7 @@ pub mod pmu_profile;
 #[doc(hidden)]
 pub mod preview_pack_bench;
 #[cfg(feature = "ui")]
+#[cfg_attr(not(all(target_os = "linux", target_arch = "arm")), allow(dead_code))]
 #[doc(hidden)]
 pub mod preview_state;
 #[cfg(any(feature = "ui", feature = "ui-preview"))]
@@ -143,7 +151,10 @@ pub mod ui_effect_bench;
 #[cfg(all(feature = "ui-preview", target_os = "macos"))]
 pub mod ui_preview_fixtures;
 #[cfg(feature = "ui")]
-#[cfg_attr(test, allow(dead_code))]
+#[cfg_attr(
+    any(test, not(all(target_os = "linux", target_arch = "arm"))),
+    allow(dead_code)
+)]
 #[doc(hidden)]
 pub mod ui_runner;
 #[cfg(any(feature = "ui", feature = "ui-preview"))]
