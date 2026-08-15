@@ -1369,7 +1369,8 @@ fn check_generated_platform_manifest_consumers(
     schema: &PlatformManifestSchema,
 ) -> Result<(), String> {
     const GENERATED_ROOT: &str = "mister/platform/contracts/generated";
-    const COMPONENTS: [(&str, fn(&PlatformManifestLayout) -> &str); 8] = [
+    type PlatformPathSelector = fn(&PlatformManifestLayout) -> &str;
+    const COMPONENTS: [(&str, PlatformPathSelector); 8] = [
         ("ROOT", |layout| &layout.root),
         ("MAIN", |layout| &layout.main),
         ("GUI", |layout| &layout.gui),
