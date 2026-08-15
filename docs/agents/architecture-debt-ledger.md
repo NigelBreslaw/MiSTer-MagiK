@@ -126,6 +126,11 @@ qualification, diagnostics, and platform-repair safety paths; manifest
 fixtures in deploy and local-Main delivery are generated from the same typed
 contract.
 
+The GUI resolves its manifest, media, diagnostics, settings, and launcher-owned
+files through the catalog layout adapter, which now delegates to the shared
+contract. The last unused public-layout video constants were removed; public
+and Dev runtime selection continues to follow the executable location.
+
 ## Hotspot ownership
 
 The PR advisory report uses stable owner IDs so moves do not erase history.
