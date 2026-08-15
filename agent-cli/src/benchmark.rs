@@ -48,6 +48,7 @@ enum BenchmarkProfile {
     LauncherResponseAttribution,
     GuiFrameAttribution,
     ArcadeVelocityScroll,
+    ArcadeVelocityScrollPprof,
     TransitionStreamline,
     AgentObserverAttribution,
     AgentIoAttribution,
@@ -128,6 +129,9 @@ impl BenchmarkDevice for DeviceClient {
             }
             BenchmarkProfile::ArcadeVelocityScroll => {
                 device.profile_arcade_velocity_scroll(&output_dir)
+            }
+            BenchmarkProfile::ArcadeVelocityScrollPprof => {
+                device.profile_arcade_velocity_scroll_pprof(&output_dir)
             }
             BenchmarkProfile::TransitionStreamline => {
                 device.profile_transition_streamline(&output_dir)
@@ -312,6 +316,9 @@ fn require_clean_installed_commit(
         }
         BenchmarkScenario::ArcadeVelocityScroll => {
             execute_arcade_velocity_scroll(&mut device, manifest, output_dir, reporter)
+        }
+        BenchmarkScenario::ArcadeVelocityScrollPprof => {
+            execute_arcade_velocity_scroll_pprof(&mut device, manifest, output_dir, reporter)
         }
         BenchmarkScenario::TransitionStreamline => execute_attribution_capture(
             &mut device,
@@ -737,6 +744,7 @@ fn particle_scene_lab_command(scenario: BenchmarkScenario) -> Option<&'static st
         | BenchmarkScenario::LauncherResponseAttribution
         | BenchmarkScenario::GuiFrameAttribution
         | BenchmarkScenario::ArcadeVelocityScroll
+        | BenchmarkScenario::ArcadeVelocityScrollPprof
         | BenchmarkScenario::TransitionStreamline
         | BenchmarkScenario::AgentObserverAttribution
         | BenchmarkScenario::AgentIoAttribution
@@ -1065,6 +1073,50 @@ fn execute_arcade_velocity_scroll(
         )
         .into());
     }
+    Ok(Outcome::Passed)
+}
+
+fn execute_arcade_velocity_scroll_pprof(
+    device: &mut impl BenchmarkDevice,
+    manifest: String,
+    output_dir: PathBuf,
+    reporter: &mut Reporter<'_>,
+) -> AgentResult<Outcome> {
+    reporter.emit(
+        EventKind::Progress,
+        "arcade-velocity-scroll-pprof",
+        "capturing a 240p-preserving pprof profile over the fixed Arcade velocity scroll",
+        Some(35),
+    )?;
+    let detail = device.profile(
+        BenchmarkProfile::ArcadeVelocityScrollPprof,
+        output_dir.clone(),
+    )?;
+    let summary: Value = serde_json::from_str(&detail).map_err(|error| error.to_string())?;
+    if summary.get("schema").and_then(Value::as_str)
+        != Some("mister-magik-arcade-velocity-scroll-pprof-v1")
+        || summary.get("artifact_status").and_then(Value::as_str) != Some("passed")
+        || summary
+            .pointer("/pprof/sample_hits")
+            .and_then(Value::as_i64)
+            .unwrap_or(0)
+            <= 0
+    {
+        return Err("Arcade velocity-scroll pprof did not produce complete v1 evidence".into());
+    }
+    device.verify_health()?;
+    reporter.emit(
+        EventKind::Progress,
+        "benchmark-result",
+        &serde_json::to_string(&json!({
+            "installed_manifest": manifest,
+            "summary": summary,
+            "output_dir": output_dir,
+            "performance_authority": "unprofiled arcade-velocity-scroll control",
+        }))
+        .map_err(|error| error.to_string())?,
+        Some(100),
+    )?;
     Ok(Outcome::Passed)
 }
 

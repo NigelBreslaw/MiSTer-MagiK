@@ -19,6 +19,7 @@ const LAUNCH_RETURN_TRIGGER: &str = "launch-return";
 const COLD_BOOT_TRIGGER: &str = "cold-boot";
 const SYSTEM_ENTRY_TRIGGER: &str = "system-entry";
 const LAUNCHER_RESPONSE_TRIGGER: &str = "launcher-response";
+const ARCADE_VELOCITY_SCROLL_TRIGGER: &str = "arcade-velocity-scroll";
 const PPROF: &str = "MISTER_PPROF";
 const PPROF_TRIGGER: &str = "MISTER_PPROF_TRIGGER";
 const PPROF_DURATION_SECS: &str = "MISTER_PPROF_DURATION_SECS";
@@ -37,6 +38,7 @@ enum BoundedProfileTrigger {
     OrientationTransitionFade,
     OrientationTransitionZoom,
     LauncherResponse,
+    ArcadeVelocityScroll,
     LaunchReturn,
     ColdBoot,
 }
@@ -51,6 +53,7 @@ impl BoundedProfileTrigger {
             Self::OrientationTransitionFade => ORIENTATION_TRANSITION_FADE_TRIGGER,
             Self::OrientationTransitionZoom => ORIENTATION_TRANSITION_ZOOM_TRIGGER,
             Self::LauncherResponse => LAUNCHER_RESPONSE_TRIGGER,
+            Self::ArcadeVelocityScroll => ARCADE_VELOCITY_SCROLL_TRIGGER,
             Self::LaunchReturn => LAUNCH_RETURN_TRIGGER,
             Self::ColdBoot => COLD_BOOT_TRIGGER,
         }
@@ -67,6 +70,7 @@ impl BoundedProfileTrigger {
             Self::OrientationTransitionFade => "mister-magik-orientation-transition-fade-pprof-v1",
             Self::OrientationTransitionZoom => "mister-magik-orientation-transition-zoom-pprof-v1",
             Self::LauncherResponse => "mister-magik-launcher-response-pprof-v1",
+            Self::ArcadeVelocityScroll => "mister-magik-arcade-velocity-scroll-pprof-v1",
             Self::LaunchReturn => "mister-magik-launch-return-pprof-v1",
             Self::ColdBoot => "mister-magik-cold-boot-pprof-v1",
         }
@@ -599,6 +603,7 @@ mod imp {
                         | BoundedProfileTrigger::OrientationTransitionFade
                         | BoundedProfileTrigger::OrientationTransitionZoom
                         | BoundedProfileTrigger::LauncherResponse
+                        | BoundedProfileTrigger::ArcadeVelocityScroll
                 )
             ) {
                 set_screensaver_profile_state(ScreensaverProfileState::Waiting);
@@ -662,6 +667,16 @@ mod imp {
 
         pub fn begin_launcher_response(&mut self, first_frame: u64) {
             self.begin(BoundedProfileTrigger::LauncherResponse, first_frame);
+        }
+
+        pub fn begin_arcade_velocity_scroll(&mut self, first_frame: u64) {
+            self.begin(BoundedProfileTrigger::ArcadeVelocityScroll, first_frame);
+        }
+
+        pub fn complete_arcade_velocity_scroll(&mut self, next_frame: u64) {
+            if self.trigger == Some(BoundedProfileTrigger::ArcadeVelocityScroll) {
+                self.complete(next_frame, false);
+            }
         }
 
         pub fn complete_launcher_response(&mut self, next_frame: u64) {
@@ -915,6 +930,10 @@ mod stub {
 
         pub fn begin_launcher_response(&mut self, _first_frame: u64) {}
 
+        pub fn begin_arcade_velocity_scroll(&mut self, _first_frame: u64) {}
+
+        pub fn complete_arcade_velocity_scroll(&mut self, _next_frame: u64) {}
+
         pub fn complete_launcher_response(&mut self, _next_frame: u64) {}
 
         pub fn poll(&mut self, _next_frame: u64) {}
@@ -1006,6 +1025,10 @@ mod tests {
         assert_eq!(
             bounded_profile_trigger_from_values(Some("1"), Some("launcher-response")),
             Some(BoundedProfileTrigger::LauncherResponse)
+        );
+        assert_eq!(
+            bounded_profile_trigger_from_values(Some("1"), Some("arcade-velocity-scroll")),
+            Some(BoundedProfileTrigger::ArcadeVelocityScroll)
         );
         assert_eq!(
             bounded_profile_trigger_from_values(Some("0"), Some("navigation-transitions")),

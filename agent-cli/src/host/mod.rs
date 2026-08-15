@@ -687,6 +687,15 @@ impl NativeDevice {
         })
     }
 
+    pub(crate) fn profile_arcade_velocity_scroll_pprof(
+        &mut self,
+        output_dir: &Path,
+    ) -> std::result::Result<String, DeviceFailure> {
+        self.benchmark_profile(|config| {
+            profile_installed_arcade_velocity_scroll_pprof(config, output_dir)
+        })
+    }
+
     pub(crate) fn profile_transition_streamline(
         &mut self,
         output_dir: &Path,
@@ -7544,8 +7553,17 @@ const GUI_PROFILE_REMOTE_COMPLETE: &str = "/tmp/mister-magik/gui-frame-profile.j
 const GUI_PROFILE_DEFAULT_SCROLL_MS: u64 = 900;
 const ARCADE_VELOCITY_SCROLL_DURATION_MS: u64 = 20_000;
 const ARCADE_VELOCITY_SCROLL_TELEMETRY_SECS: u64 = 35;
+const ARCADE_VELOCITY_SCROLL_PPROF_REMOTE_DIR: &str =
+    "/tmp/mister-magik/arcade-velocity-scroll-pprof";
 
 fn gui_profile_route_launcher_env(pmu: bool) -> Vec<(String, String)> {
+    gui_profile_route_launcher_env_with_pprof(pmu, None)
+}
+
+fn gui_profile_route_launcher_env_with_pprof(
+    pmu: bool,
+    pprof_remote_dir: Option<&str>,
+) -> Vec<(String, String)> {
     let mut environment = vec![
         ("MISTER_CATALOG_REFRESH".into(), "off".into()),
         ("MISTER_LAUNCHER_START_SCREEN".into(), "settings".into()),
@@ -7561,6 +7579,28 @@ fn gui_profile_route_launcher_env(pmu: bool) -> Vec<(String, String)> {
             ("MISTER_PMU_PROFILE".into(), "1".into()),
             ("MISTER_PMU_SAMPLE_EVERY".into(), "1".into()),
             ("MISTER_PMU_RECORD_LIMIT".into(), "16384".into()),
+        ]);
+    }
+    if let Some(remote_dir) = pprof_remote_dir {
+        environment.extend([
+            ("MISTER_PPROF".into(), "1".into()),
+            (
+                "MISTER_PPROF_TRIGGER".into(),
+                "arcade-velocity-scroll".into(),
+            ),
+            ("MISTER_PPROF_HZ".into(), "999".into()),
+            (
+                "MISTER_PPROF_OUT".into(),
+                format!("{remote_dir}/flamegraph.svg"),
+            ),
+            (
+                "MISTER_PPROF_FOLDED_OUT".into(),
+                format!("{remote_dir}/stacks.folded"),
+            ),
+            (
+                "MISTER_PPROF_COMPLETE".into(),
+                format!("{remote_dir}/profile.json"),
+            ),
         ]);
     }
     environment
@@ -7612,6 +7652,26 @@ fn run_gui_frame_profile_route(
     scroll_duration_ms: u64,
     terminal_checkpoint: Option<&str>,
 ) -> Result<Value> {
+    run_gui_frame_profile_route_with_pprof(
+        config,
+        session,
+        output_dir,
+        pmu,
+        scroll_duration_ms,
+        terminal_checkpoint,
+        None,
+    )
+}
+
+fn run_gui_frame_profile_route_with_pprof(
+    config: &NativeDeviceConfig,
+    session: &Session,
+    output_dir: &Path,
+    pmu: bool,
+    scroll_duration_ms: u64,
+    terminal_checkpoint: Option<&str>,
+    pprof_remote_dir: Option<&str>,
+) -> Result<Value> {
     fs::create_dir_all(output_dir)?;
     exec_checked(
         session,
@@ -7621,7 +7681,7 @@ fn run_gui_frame_profile_route(
     restart_launcher_with_one_shot_env(
         session,
         LauncherRestartOptions {
-            env_vars: gui_profile_route_launcher_env(pmu),
+            env_vars: gui_profile_route_launcher_env_with_pprof(pmu, pprof_remote_dir),
             timeout_secs: 45,
             remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str().into(),
             ..LauncherRestartOptions::default()
@@ -7936,6 +7996,189 @@ fn profile_installed_arcade_velocity_scroll(
     {
         return Err("display mode changed during Arcade velocity scroll".into());
     }
+    serde_json::to_string(&summary).map_err(Into::into)
+}
+
+fn profile_installed_arcade_velocity_scroll_pprof(
+    config: &NativeDeviceConfig,
+    output_dir: &Path,
+) -> Result<String> {
+    let session = connect_with(&config.connection, 10)?;
+    let capability = exec_checked_output(
+        &session,
+        "installed Arcade velocity-scroll pprof capability",
+        DEVELOPMENT_BENCHMARK_CAPABILITIES_COMMAND.as_str(),
+    )?;
+    let capability = last_json_line(&capability.stdout)
+        .ok_or("installed benchmark capability output contains no JSON report")?;
+    if capability
+        .get("arcade-velocity-scroll-pprof-v1")
+        .and_then(Value::as_bool)
+        != Some(true)
+    {
+        return Err("installed app does not support arcade-velocity-scroll-pprof-v1".into());
+    }
+    let manifest = remote_read(&session, LOCAL_MAIN_MANIFEST_REMOTE)
+        .ok_or("development platform manifest is missing")?;
+    let boot_id = remote_read(&session, "/proc/sys/kernel/random/boot_id")
+        .ok_or("device boot id is unavailable")?;
+    let original_display = exec_checked_output(
+        &session,
+        "query Arcade velocity-scroll pprof display mode",
+        &acknowledged_main_command("mister_magik_display_get_v1"),
+    )?;
+    if parse_display_reply_pending(original_display.stdout.trim())?.is_some() {
+        return Err(
+            "Arcade velocity-scroll pprof cannot start during a display transaction".into(),
+        );
+    }
+    let display_mode = parse_display_reply_active(original_display.stdout.trim())?;
+    let _ = arcade_velocity_scroll_minimum_fps(&display_mode)?;
+    fs::create_dir_all(output_dir)?;
+    exec_checked(
+        &session,
+        "prepare Arcade velocity-scroll pprof state",
+        &format!(
+            "set -eu; rm -rf {pprof}; {cleanup}",
+            pprof = sh(ARCADE_VELOCITY_SCROLL_PPROF_REMOTE_DIR),
+            cleanup = gui_profile_route_cleanup_command(),
+        ),
+    )?;
+
+    let telemetry_endpoint = config.agent()?.clone();
+    let telemetry_thread = thread::spawn(move || {
+        agent_telemetry_for_duration_with_mode(
+            &telemetry_endpoint,
+            Duration::from_secs(ARCADE_VELOCITY_SCROLL_TELEMETRY_SECS),
+            100,
+            "off",
+        )
+        .map_err(|error| error.to_string())
+    });
+    let route_result = run_gui_frame_profile_route_with_pprof(
+        config,
+        &session,
+        output_dir,
+        false,
+        ARCADE_VELOCITY_SCROLL_DURATION_MS,
+        Some("terminal-arcade"),
+        Some(ARCADE_VELOCITY_SCROLL_PPROF_REMOTE_DIR),
+    );
+    let telemetry_result: Result<Vec<Value>> = match telemetry_thread.join() {
+        Ok(Ok(telemetry)) => Ok(telemetry),
+        Ok(Err(error)) => Err(error.into()),
+        Err(_) => Err("Arcade velocity-scroll pprof telemetry collector panicked".into()),
+    };
+    let run_result = match (route_result, telemetry_result) {
+        (Ok(route), Ok(telemetry)) => {
+            let telemetry_text = telemetry
+                .iter()
+                .map(serde_json::to_string)
+                .collect::<std::result::Result<Vec<_>, _>>()?
+                .join("\n");
+            fs::write(
+                output_dir.join("telemetry.jsonl"),
+                format!("{telemetry_text}\n"),
+            )?;
+            let profile_text = wait_for_remote_text(
+                &session,
+                &format!("{ARCADE_VELOCITY_SCROLL_PPROF_REMOTE_DIR}/profile.json"),
+                Duration::from_secs(10),
+                "Arcade velocity-scroll pprof completion",
+            )?;
+            let profile: Value = serde_json::from_str(profile_text.trim())?;
+            if profile.get("schema").and_then(Value::as_str)
+                != Some("mister-magik-arcade-velocity-scroll-pprof-v1")
+                || profile.get("state").and_then(Value::as_str) != Some("complete")
+                || profile
+                    .get("sample_hits")
+                    .and_then(Value::as_i64)
+                    .unwrap_or(0)
+                    <= 0
+            {
+                return Err("Arcade velocity-scroll pprof pass produced no samples".into());
+            }
+            fs::write(output_dir.join("profile.json"), &profile_text)?;
+            for artifact in ["flamegraph.svg", "stacks.folded"] {
+                get(
+                    &session,
+                    &format!("{ARCADE_VELOCITY_SCROLL_PPROF_REMOTE_DIR}/{artifact}"),
+                    &output_dir.join(artifact),
+                )?;
+            }
+            let summary =
+                summarize_arcade_velocity_scroll(output_dir, &route, &telemetry, &display_mode)?;
+            Ok(json!({
+                "schema": "mister-magik-arcade-velocity-scroll-pprof-v1",
+                "artifact_status": "passed",
+                "display_mode": display_mode,
+                "route": summary,
+                "pprof": profile,
+            }))
+        }
+        (Err(route), Ok(_)) => Err(route),
+        (Ok(_), Err(telemetry)) => Err(telemetry),
+        (Err(route), Err(telemetry)) => {
+            Err(format!("{route}; telemetry collection failed: {telemetry}").into())
+        }
+    };
+
+    let launcher_restore = launcher_restart(
+        &session,
+        &LauncherRestartOptions {
+            clear_env: true,
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str().into(),
+            timeout_secs: 45,
+            ..LauncherRestartOptions::default()
+        },
+    );
+    let cleanup = exec_checked(
+        &session,
+        "clean Arcade velocity-scroll pprof state",
+        &format!(
+            "set -eu; rm -rf {pprof}; {cleanup}",
+            pprof = sh(ARCADE_VELOCITY_SCROLL_PPROF_REMOTE_DIR),
+            cleanup = gui_profile_route_cleanup_command(),
+        ),
+    );
+    let summary = match (run_result, launcher_restore, cleanup) {
+        (Ok(summary), Ok(()), Ok(())) => summary,
+        (run, launcher, cleanup) => {
+            return Err(format!(
+                "Arcade velocity-scroll pprof failed: run={:?}; launcher_restore={:?}; cleanup={:?}",
+                run.err(),
+                launcher.err(),
+                cleanup.err()
+            )
+            .into());
+        }
+    };
+    let final_manifest = remote_read(&session, LOCAL_MAIN_MANIFEST_REMOTE)
+        .ok_or("development platform manifest is missing after Arcade velocity-scroll pprof")?;
+    if final_manifest != manifest {
+        return Err(
+            "installed platform manifest changed during Arcade velocity-scroll pprof".into(),
+        );
+    }
+    let final_boot_id = remote_read(&session, "/proc/sys/kernel/random/boot_id")
+        .ok_or("device boot id is unavailable after Arcade velocity-scroll pprof")?;
+    if final_boot_id != boot_id {
+        return Err("device rebooted during Arcade velocity-scroll pprof".into());
+    }
+    let final_display = exec_checked_output(
+        &session,
+        "verify Arcade velocity-scroll pprof display mode",
+        &acknowledged_main_command("mister_magik_display_get_v1"),
+    )?;
+    if parse_display_reply_pending(final_display.stdout.trim())?.is_some()
+        || parse_display_reply_active(final_display.stdout.trim())? != display_mode
+    {
+        return Err("display mode changed during Arcade velocity-scroll pprof".into());
+    }
+    fs::write(
+        output_dir.join("summary.json"),
+        format!("{}\n", serde_json::to_string_pretty(&summary)?),
+    )?;
     serde_json::to_string(&summary).map_err(Into::into)
 }
 

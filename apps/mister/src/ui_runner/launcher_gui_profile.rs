@@ -313,6 +313,18 @@ impl GuiProfilingController {
         }
     }
 
+    pub(super) fn arcade_scroll_phase_started(&self) -> bool {
+        matches!(
+            self.state,
+            GuiProfileState::AwaitingPresentation(GuiProfilePhase::ArcadeScroll)
+                | GuiProfileState::Measuring(GuiProfilePhase::ArcadeScroll)
+        )
+    }
+
+    pub(super) fn settled_arcade_phase_pending(&self) -> bool {
+        self.state == GuiProfileState::AwaitingPresentation(GuiProfilePhase::SettledArcade)
+    }
+
     pub(super) fn request_phase(
         &mut self,
         phase: GuiProfilePhase,

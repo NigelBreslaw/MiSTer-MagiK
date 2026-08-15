@@ -7084,6 +7084,13 @@ pub(super) fn run_launcher_loop(
         }
         for event in incoming_input_events.iter().copied() {
             gui_profiling.observe_route_action(screen_label(nav.screen), event, frame_now);
+            if nav.screen == Screen::Arcade
+                && event.action == LogicalAction::Down
+                && event.phase == InputPhase::Pressed
+                && gui_profiling.arcade_scroll_phase_started()
+            {
+                screensaver_cpu_profile.begin_arcade_velocity_scroll(frames.saturating_add(1));
+            }
         }
         if screensaver.active {
             while let Some(event) = incoming_input_events.pop_front() {
@@ -11162,6 +11169,10 @@ pub(super) fn run_launcher_loop(
                     Instant::now(),
                     crate::input_hub::monotonic_us(),
                 );
+                if gui_profiling.settled_arcade_phase_pending() {
+                    screensaver_cpu_profile
+                        .complete_arcade_velocity_scroll(frames.saturating_add(1));
+                }
                 if gui_profiling.needs_presentation() {
                     request_launcher_redraw!();
                 }
