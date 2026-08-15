@@ -233,6 +233,7 @@ fn validate(
             ),
         ));
     }
+    validate_identity_encoding(values)?;
     if values["qualification_candidate_id"] != qualification_candidate_id(values) {
         return Err(ManifestError::new(
             "platform_candidate_identity_mismatch",
@@ -242,27 +243,20 @@ fn validate(
     match profile {
         ValidationProfile::GuiLegacy => Ok(()),
         ValidationProfile::AgentStrict | ValidationProfile::ManagerLegacy => {
-            validate_complete_identity(values, layout)?;
+            validate_layout_paths(values, layout)?;
             Ok(())
         }
     }
 }
 
-fn validate_complete_identity(
-    values: &BTreeMap<String, String>,
-    layout: Layout,
-) -> Result<(), ManifestError> {
+fn validate_identity_encoding(values: &BTreeMap<String, String>) -> Result<(), ManifestError> {
     require_hex("platform_bundle_id", &values["platform_bundle_id"], 64)?;
     require_hex(
         "qualification_candidate_id",
         &values["qualification_candidate_id"],
         64,
     )?;
-    for (name, expected) in layout.paths().components() {
-        let path_field = format!("{name}_path");
-        if values[&path_field] != expected {
-            return Err(ManifestError::new("platform_path_mismatch", name));
-        }
+    for (name, _) in Layout::Public.paths().components() {
         let hash_field = format!("{name}_sha256");
         require_hex(&hash_field, &values[&hash_field], 64)?;
     }
@@ -273,6 +267,19 @@ fn validate_complete_identity(
     )?;
     for field in ["main_revision", "magik_revision", "menu_revision"] {
         require_hex(field, &values[field], 40)?;
+    }
+    Ok(())
+}
+
+fn validate_layout_paths(
+    values: &BTreeMap<String, String>,
+    layout: Layout,
+) -> Result<(), ManifestError> {
+    for (name, expected) in layout.paths().components() {
+        let path_field = format!("{name}_path");
+        if values[&path_field] != expected {
+            return Err(ManifestError::new("platform_path_mismatch", name));
+        }
     }
     Ok(())
 }
@@ -409,6 +416,27 @@ mod tests {
                     .unwrap_err()
                     .code(),
                 expected
+            );
+        }
+    }
+
+    #[test]
+    fn every_profile_rejects_noncanonical_identity_before_candidate_mismatch() {
+        let valid = canonical(Layout::Development);
+        let noncanonical = valid.replace(
+            &format!("platform_bundle_id={}", "c".repeat(64)),
+            &format!("platform_bundle_id={}", "C".repeat(64)),
+        );
+        for profile in [
+            ValidationProfile::AgentStrict,
+            ValidationProfile::GuiLegacy,
+            ValidationProfile::ManagerLegacy,
+        ] {
+            assert_eq!(
+                parse(&noncanonical, Layout::Development, profile)
+                    .unwrap_err()
+                    .code(),
+                "invalid_platform_identity"
             );
         }
     }
