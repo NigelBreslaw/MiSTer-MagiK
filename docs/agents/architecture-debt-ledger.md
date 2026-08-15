@@ -47,6 +47,10 @@ lock and has no request identifiers or absolute reply deadline: it waits while
 Main is alive and its heartbeat advances, and fails on channel closure,
 oversized/malformed reply, process exit, or stopped heartbeat.
 
+The unused broad `MagikPlatform`, `MisterRuntimeBackend`, and `MisterRuntime`
+abstractions were removed after semantic reference checks proved that only
+their declarations, adapter implementation, and isolated fake remained.
+
 ## Runtime configuration containment
 
 `apps/mister/config/runtime-environment.toml` is the sole registry for the 272
