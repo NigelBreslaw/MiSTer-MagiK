@@ -9801,14 +9801,14 @@ pub(super) fn run_launcher_loop(
         }
         let mut crt_backdrop_full_damage = None;
         let mut crt_backdrop_work_trace = crate::crt_backdrop::CrtBackdropWorkTrace::default();
-        let mut crt_backdrop_snapshot_us = 0_u64;
+        let crt_backdrop_snapshot_us = 0_u64;
         let mut crt_backdrop_copy_us = 0_u64;
         let mut crt_backdrop_list_overlay_us = 0_u64;
-        let mut crt_backdrop_chrome_restore_us = 0_u64;
-        let mut crt_backdrop_snapshot_pixels = 0_u32;
+        let crt_backdrop_chrome_restore_us = 0_u64;
+        let crt_backdrop_snapshot_pixels = 0_u32;
         let mut crt_backdrop_copy_pixels = 0_u32;
         let mut crt_backdrop_list_overlay_pixels = 0_u32;
-        let mut crt_backdrop_chrome_restore_pixels = 0_u32;
+        let crt_backdrop_chrome_restore_pixels = 0_u32;
         if crt_backdrop_eligible {
             let crt_backdrop_profile_pmu =
                 mister_magik_perf_events::sampled_span("gui.custom.crt-backdrop-pipeline");
