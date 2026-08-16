@@ -237,7 +237,15 @@ pub struct ConsoleBitmapFont {
 }
 
 pub fn nocive_15_console_bitmap_font() -> Result<ConsoleBitmapFont, String> {
-    let decoded = decode_resource(NOCIVE_15_RESOURCE)?;
+    console_bitmap_font(NOCIVE_15_RESOURCE)
+}
+
+pub fn xerxes_10_console_bitmap_font() -> Result<ConsoleBitmapFont, String> {
+    console_bitmap_font(XERXES_10_RESOURCE)
+}
+
+fn console_bitmap_font(resource: &[u8]) -> Result<ConsoleBitmapFont, String> {
+    let decoded = decode_resource(resource)?;
     let scale = f32::from(decoded.pixel_size) / decoded.units_per_em;
     let glyphs = decoded
         .glyphs

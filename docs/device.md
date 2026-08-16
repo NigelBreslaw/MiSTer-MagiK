@@ -162,6 +162,12 @@ coverage, preferring the production odd row on ties, and leaves the catalog
 untouched. Again, capture only after the operator confirms the Arcade list is
 visible.
 
+For the Xerxes typeface comparison, use
+`scripts/agent device launcher restart --attended --crt-font-experiment xerxes`.
+This selects the existing exact-size Xerxes 10 bitmap resource only for CRT240
+Arcade titles, applies no glyph-row reconstruction, and does not touch the
+catalog. Capture only after the operator confirms the Arcade list is visible.
+
 On macOS, `scripts/agent capture usb-video [--output PATH]` captures the first
 nonblank 1920x1080 frame from the fixed `USB Video` input. The native
 AVFoundation path writes JPEG, refuses to overwrite an explicit output, and

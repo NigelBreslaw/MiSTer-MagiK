@@ -153,6 +153,10 @@ impl ArcadeListStyle {
             style.glyph_row_filter = match display.crt_font_experiment() {
                 CrtFontExperiment::CoverageMax => ConsoleGlyphRowFilter::PairwiseMax,
                 CrtFontExperiment::DominantRow => ConsoleGlyphRowFilter::PairwiseDominant,
+                CrtFontExperiment::Xerxes => {
+                    style.title_typeface = ConsoleTypeface::Xerxes10;
+                    ConsoleGlyphRowFilter::Native
+                }
                 CrtFontExperiment::Baseline | CrtFontExperiment::PhaseEven => {
                     ConsoleGlyphRowFilter::Native
                 }
@@ -3332,6 +3336,26 @@ mod tests {
             ConsoleGlyphRowFilter::PairwiseDominant
         );
         assert_eq!(hdmi.style.glyph_row_filter, ConsoleGlyphRowFilter::Native);
+    }
+
+    #[test]
+    fn xerxes_replaces_only_the_crt_240_arcade_title_typeface() {
+        let baseline_display = crt_240_display();
+        let xerxes_display = crt_240_display().with_crt_font_experiment(CrtFontExperiment::Xerxes);
+        let baseline = ArcadeListRenderer::new_for_crt_display(
+            CrtUiMetrics::for_display(&baseline_display),
+            &baseline_display,
+        );
+        let xerxes = ArcadeListRenderer::new_for_crt_display(
+            CrtUiMetrics::for_display(&xerxes_display),
+            &xerxes_display,
+        );
+        let hdmi = ArcadeListRenderer::new();
+
+        assert_eq!(baseline.style.title_typeface, ConsoleTypeface::Nocive15);
+        assert_eq!(xerxes.style.title_typeface, ConsoleTypeface::Xerxes10);
+        assert_eq!(xerxes.style.glyph_row_filter, ConsoleGlyphRowFilter::Native);
+        assert_eq!(hdmi.style.title_typeface, ConsoleTypeface::Nocive15);
     }
 
     #[test]

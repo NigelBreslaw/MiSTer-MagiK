@@ -101,6 +101,15 @@ that row across the pair. Activate it for the next attended comparison:
 scripts/agent device launcher restart --attended --crt-font-experiment dominant-row
 ```
 
+The `xerxes` arm replaces the CRT240 Arcade title typeface with the existing
+precompiled Xerxes 10 bitmap resource. Its 16px renderer size produces exact
+10-pixel capitals, and it uses the production centered sampler without any row
+repair filter:
+
+```text
+scripts/agent device launcher restart --attended --crt-font-experiment xerxes
+```
+
 Only `STEM-raw.png` is authoritative framebuffer evidence; the two `4x3`
 files are derived host previews and must not be used as HDMI/CRT sink proof.
 

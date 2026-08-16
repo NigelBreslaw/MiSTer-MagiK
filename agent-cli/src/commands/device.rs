@@ -298,6 +298,7 @@ pub enum CrtFontExperiment {
     PhaseEven,
     CoverageMax,
     DominantRow,
+    Xerxes,
 }
 
 #[derive(Debug, Args)]
@@ -496,6 +497,7 @@ impl CrtFontExperiment {
             Self::PhaseEven => "phase-even",
             Self::CoverageMax => "coverage-max",
             Self::DominantRow => "dominant-row",
+            Self::Xerxes => "xerxes",
         }
     }
 }
@@ -559,6 +561,17 @@ mod tests {
                 "--attended",
                 "--crt-font-experiment",
                 "phase-even",
+            ])
+            .is_ok()
+        );
+        assert!(
+            TestCli::try_parse_from([
+                "test",
+                "launcher",
+                "restart",
+                "--attended",
+                "--crt-font-experiment",
+                "xerxes",
             ])
             .is_ok()
         );

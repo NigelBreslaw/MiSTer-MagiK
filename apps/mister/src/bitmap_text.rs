@@ -79,6 +79,7 @@ pub struct ConsoleFont {
 pub enum ConsoleTypeface {
     PressStart2P,
     Nocive15,
+    Xerxes10,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -103,10 +104,24 @@ impl ConsoleFont {
         typeface: ConsoleTypeface,
         row_filter: ConsoleGlyphRowFilter,
     ) -> Self {
-        if typeface == ConsoleTypeface::Nocive15 {
-            assert_eq!(pixel_size, 16.0, "Nocive 15 has one exact renderer size");
-            let bitmap = mister_magik_fb::bitmap_font_resource::nocive_15_console_bitmap_font()
-                .expect("valid Nocive 15 bitmap font resource");
+        let bitmap = match typeface {
+            ConsoleTypeface::Nocive15 => {
+                assert_eq!(pixel_size, 16.0, "Nocive 15 has one exact renderer size");
+                Some(
+                    mister_magik_fb::bitmap_font_resource::nocive_15_console_bitmap_font()
+                        .expect("valid Nocive 15 bitmap font resource"),
+                )
+            }
+            ConsoleTypeface::Xerxes10 => {
+                assert_eq!(pixel_size, 16.0, "Xerxes 10 has one exact renderer size");
+                Some(
+                    mister_magik_fb::bitmap_font_resource::xerxes_10_console_bitmap_font()
+                        .expect("valid Xerxes 10 bitmap font resource"),
+                )
+            }
+            ConsoleTypeface::PressStart2P => None,
+        };
+        if let Some(bitmap) = bitmap {
             let glyphs = bitmap
                 .glyphs
                 .into_iter()
@@ -142,7 +157,7 @@ impl ConsoleFont {
                 include_bytes!("../ui/fonts/PressStart2P-Regular.ttf"),
                 "PressStart2P-Regular.ttf",
             ),
-            ConsoleTypeface::Nocive15 => unreachable!(),
+            ConsoleTypeface::Nocive15 | ConsoleTypeface::Xerxes10 => unreachable!(),
         };
         let font = swash::FontRef::from_index(data, 0).unwrap_or_else(|| panic!("{name}"));
         let metrics = font.metrics(&[]);
@@ -748,6 +763,9 @@ mod tests {
             (ConsoleTypeface::Nocive15, 16.0, 32, "MagiK 1984"),
             (ConsoleTypeface::Nocive15, 16.0, 19, "MagiK 1984"),
             (ConsoleTypeface::Nocive15, 16.0, 39, "MagiK 1984"),
+            (ConsoleTypeface::Xerxes10, 16.0, 32, "MagiK 1984"),
+            (ConsoleTypeface::Xerxes10, 16.0, 19, "MagiK 1984"),
+            (ConsoleTypeface::Xerxes10, 16.0, 39, "MagiK 1984"),
             (ConsoleTypeface::PressStart2P, 8.0, 32, "128"),
             (ConsoleTypeface::PressStart2P, 8.0, 19, "128"),
             (ConsoleTypeface::PressStart2P, 8.0, 39, "128"),
@@ -789,6 +807,15 @@ mod tests {
         assert!(font.font.is_none());
         let mask = font.rasterize_alpha_mask("ARCADE").unwrap();
         assert_eq!(mask.height, 15);
+        assert!(mask.alpha.iter().all(|alpha| matches!(alpha, 0 | 255)));
+    }
+
+    #[test]
+    fn xerxes_10_uses_only_the_precompiled_exact_size_resource() {
+        let mut font = ConsoleFont::new_with_typeface(16.0, ConsoleTypeface::Xerxes10);
+        assert!(font.font.is_none());
+        let mask = font.rasterize_alpha_mask("ARCADE").unwrap();
+        assert_eq!(mask.height, 10);
         assert!(mask.alpha.iter().all(|alpha| matches!(alpha, 0 | 255)));
     }
 
