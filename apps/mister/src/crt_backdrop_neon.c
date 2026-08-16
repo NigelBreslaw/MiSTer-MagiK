@@ -47,13 +47,11 @@ void mister_magik_crt_backdrop_blend_coarse_two(
     for (; index + 7 < end; index += 8) {
         // The coarse compositor samples every other source pixel and expands
         // each result to a two-pixel horizontal block.
-        const uint16x8_t from8 = vld1q_u16(previous + index);
-        const uint16x8_t to8 = vld1q_u16(current + index);
-        const uint16x8x2_t from_even_odd = vuzpq_u16(from8, from8);
-        const uint16x8x2_t to_even_odd = vuzpq_u16(to8, to8);
+        const uint16x4x2_t from_even_odd = vld2_u16(previous + index);
+        const uint16x4x2_t to_even_odd = vld2_u16(current + index);
         const uint16x4_t blended = blend_rgb565_four(
-            vget_low_u16(from_even_odd.val[0]),
-            vget_low_u16(to_even_odd.val[0]),
+            from_even_odd.val[0],
+            to_even_odd.val[0],
             clamped_alpha,
             inverse
         );
