@@ -707,8 +707,7 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
             })
             .map(|rect| rect.rows() as u32)
             .sum::<u32>();
-        let full_rect = self.full_rect();
-        let full_copy = rect_list_contains(plan.restore_rects, full_rect);
+        let full_copy = rect_list_contains(plan.restore_rects, self.full_rect());
         let catchup_bytes = plan.restore_rects.total_rgb565_bytes();
         let base_addr = self.base_addr(buffer_index);
         let buffer = self
@@ -728,7 +727,7 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
         let mut copied_bytes = 0usize;
         let mut copy_path = LatchCopyPath::IdentityFull;
         for rect in plan.restore_rects.iter() {
-            let copy_result = if direct_physical_copy && rect == full_rect {
+            let copy_result = if direct_physical_copy && rect == self.full_rect() {
                 B::copy_physical_full(buffer, cached)
             } else {
                 B::copy_rect(buffer, cached, rect)
