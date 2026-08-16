@@ -81,6 +81,7 @@ pub enum ConsoleTypeface {
     Nocive15,
     Xerxes10,
     Bacteria12,
+    Bacteria12Half,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -127,6 +128,16 @@ impl ConsoleFont {
                         .expect("valid Bacteria 12 bitmap font resource"),
                 )
             }
+            ConsoleTypeface::Bacteria12Half => {
+                assert_eq!(
+                    pixel_size, 16.0,
+                    "Bacteria 12 native resource is exactly 16px"
+                );
+                Some(
+                    mister_magik_fb::bitmap_font_resource::bacteria_12_native_console_bitmap_font()
+                        .expect("valid native-size Bacteria 12 bitmap font resource"),
+                )
+            }
             ConsoleTypeface::PressStart2P => None,
         };
         if let Some(bitmap) = bitmap {
@@ -165,7 +176,10 @@ impl ConsoleFont {
                 include_bytes!("../ui/fonts/PressStart2P-Regular.ttf"),
                 "PressStart2P-Regular.ttf",
             ),
-            ConsoleTypeface::Nocive15 | ConsoleTypeface::Xerxes10 | ConsoleTypeface::Bacteria12 => {
+            ConsoleTypeface::Nocive15
+            | ConsoleTypeface::Xerxes10
+            | ConsoleTypeface::Bacteria12
+            | ConsoleTypeface::Bacteria12Half => {
                 unreachable!()
             }
         };
@@ -777,6 +791,7 @@ mod tests {
             (ConsoleTypeface::Xerxes10, 16.0, 19, "MagiK 1984"),
             (ConsoleTypeface::Xerxes10, 16.0, 39, "MagiK 1984"),
             (ConsoleTypeface::Bacteria12, 32.0, 32, "MagiK 1984"),
+            (ConsoleTypeface::Bacteria12Half, 16.0, 32, "MagiK 1984"),
             (ConsoleTypeface::PressStart2P, 8.0, 32, "128"),
             (ConsoleTypeface::PressStart2P, 8.0, 19, "128"),
             (ConsoleTypeface::PressStart2P, 8.0, 39, "128"),
@@ -846,6 +861,15 @@ mod tests {
                 assert_eq!(rows[mask.stride + x + 1], cell);
             }
         }
+    }
+
+    #[test]
+    fn bacteria_12_half_uses_the_native_16px_resource() {
+        let mut font = ConsoleFont::new_with_typeface(16.0, ConsoleTypeface::Bacteria12Half);
+        assert!(font.font.is_none());
+        let mask = font.rasterize_alpha_mask("ARCADE").unwrap();
+        assert_eq!(mask.height, 12);
+        assert!(mask.alpha.iter().all(|alpha| matches!(alpha, 0 | 255)));
     }
 
     #[test]

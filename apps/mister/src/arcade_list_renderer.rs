@@ -164,6 +164,11 @@ impl ArcadeListStyle {
                     style.title_typeface = ConsoleTypeface::Bacteria12;
                     ConsoleGlyphRowFilter::Native
                 }
+                CrtFontExperiment::BacteriaHalf => {
+                    style.title_font_px = 16.0;
+                    style.title_typeface = ConsoleTypeface::Bacteria12Half;
+                    ConsoleGlyphRowFilter::Native
+                }
                 CrtFontExperiment::Baseline | CrtFontExperiment::PhaseEven => {
                     ConsoleGlyphRowFilter::Native
                 }
@@ -3385,6 +3390,24 @@ mod tests {
         assert_eq!(bacteria.style.row_height, 32);
         assert_eq!(hdmi.style.title_font_px, ARCADE_LIST_FONT_PX);
         assert_eq!(hdmi.style.title_typeface, ConsoleTypeface::Nocive15);
+    }
+
+    #[test]
+    fn bacteria_half_uses_the_native_16px_crt240_title_resource() {
+        let display = crt_240_display().with_crt_font_experiment(CrtFontExperiment::BacteriaHalf);
+        let renderer =
+            ArcadeListRenderer::new_for_crt_display(CrtUiMetrics::for_display(&display), &display);
+
+        assert_eq!(renderer.style.title_font_px, 16.0);
+        assert_eq!(
+            renderer.style.title_typeface,
+            ConsoleTypeface::Bacteria12Half
+        );
+        assert_eq!(
+            renderer.style.glyph_row_filter,
+            ConsoleGlyphRowFilter::Native
+        );
+        assert_eq!(renderer.style.row_height, 32);
     }
 
     #[test]

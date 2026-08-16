@@ -36,6 +36,7 @@ pub enum CrtFontExperiment {
     DominantRow,
     Xerxes,
     Bacteria,
+    BacteriaHalf,
 }
 
 impl CrtFontExperiment {
@@ -46,6 +47,7 @@ impl CrtFontExperiment {
             Some("dominant-row") => Self::DominantRow,
             Some("xerxes") => Self::Xerxes,
             Some("bacteria") => Self::Bacteria,
+            Some("bacteria-half") => Self::BacteriaHalf,
             _ => Self::Baseline,
         }
     }
@@ -58,6 +60,7 @@ impl CrtFontExperiment {
             Self::DominantRow => "dominant-row",
             Self::Xerxes => "xerxes",
             Self::Bacteria => "bacteria",
+            Self::BacteriaHalf => "bacteria-half",
         }
     }
 
@@ -69,7 +72,8 @@ impl CrtFontExperiment {
             | Self::CoverageMax
             | Self::DominantRow
             | Self::Xerxes
-            | Self::Bacteria => mister_magik_mister_runtime::framebuffer::vertical_scale::VerticalSampling::CenteredNearest,
+            | Self::Bacteria
+            | Self::BacteriaHalf => mister_magik_mister_runtime::framebuffer::vertical_scale::VerticalSampling::CenteredNearest,
             Self::PhaseEven => mister_magik_mister_runtime::framebuffer::vertical_scale::VerticalSampling::TopAlignedNearest,
         }
     }
@@ -1012,6 +1016,17 @@ mod tests {
         let experiment = CrtFontExperiment::parse(Some("bacteria"));
         assert_eq!(experiment, CrtFontExperiment::Bacteria);
         assert_eq!(experiment.label(), "bacteria");
+        assert_eq!(
+            experiment.vertical_sampling(),
+            mister_magik_mister_runtime::framebuffer::vertical_scale::VerticalSampling::CenteredNearest
+        );
+    }
+
+    #[test]
+    fn bacteria_half_keeps_the_original_centered_scanout_sampling() {
+        let experiment = CrtFontExperiment::parse(Some("bacteria-half"));
+        assert_eq!(experiment, CrtFontExperiment::BacteriaHalf);
+        assert_eq!(experiment.label(), "bacteria-half");
         assert_eq!(
             experiment.vertical_sampling(),
             mister_magik_mister_runtime::framebuffer::vertical_scale::VerticalSampling::CenteredNearest

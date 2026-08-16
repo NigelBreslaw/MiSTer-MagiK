@@ -300,6 +300,7 @@ pub enum CrtFontExperiment {
     DominantRow,
     Xerxes,
     Bacteria,
+    BacteriaHalf,
 }
 
 #[derive(Debug, Args)]
@@ -500,6 +501,7 @@ impl CrtFontExperiment {
             Self::DominantRow => "dominant-row",
             Self::Xerxes => "xerxes",
             Self::Bacteria => "bacteria",
+            Self::BacteriaHalf => "bacteria-half",
         }
     }
 }
@@ -563,6 +565,17 @@ mod tests {
                 "--attended",
                 "--crt-font-experiment",
                 "phase-even",
+            ])
+            .is_ok()
+        );
+        assert!(
+            TestCli::try_parse_from([
+                "test",
+                "launcher",
+                "restart",
+                "--attended",
+                "--crt-font-experiment",
+                "bacteria-half",
             ])
             .is_ok()
         );

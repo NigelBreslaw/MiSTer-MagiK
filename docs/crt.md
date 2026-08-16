@@ -121,6 +121,16 @@ framebuffer block, which is physically square at 640×240 on a 4:3 display. Its
 scripts/agent device launcher restart --attended --crt-font-experiment bacteria
 ```
 
+The `bacteria-half` arm uses the same supplied design at its native 16px size.
+Its capitals occupy 12 composition rows and therefore approximately six output
+scanlines after the unchanged centered 480→240 conversion. This is the direct
+half-size comparison: it applies no row reconstruction and may lose alternating
+design rows by construction.
+
+```text
+scripts/agent device launcher restart --attended --crt-font-experiment bacteria-half
+```
+
 Only `STEM-raw.png` is authoritative framebuffer evidence; the two `4x3`
 files are derived host previews and must not be used as HDMI/CRT sink proof.
 

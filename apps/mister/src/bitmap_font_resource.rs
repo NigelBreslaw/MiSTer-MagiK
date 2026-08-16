@@ -22,6 +22,8 @@ const NOCIVE_15_RESOURCE: &[u8] =
     include_bytes!("../../../private/magik-assets/fonts/nocive-15/nocive15-16px.mmbf");
 const BACTERIA_12_RESOURCE: &[u8] =
     include_bytes!("../../../private/magik-assets/fonts/bacteria-12/bacteria12-32px.mmbf");
+const BACTERIA_12_NATIVE_RESOURCE: &[u8] =
+    include_bytes!("../../../private/magik-assets/fonts/bacteria-12/bacteria12-16px.mmbf");
 const JERSEY_25_RESOURCE: &[u8] = include_bytes!("../assets/fonts/jersey25-41px.mmbf");
 
 #[derive(Clone, Debug, PartialEq)]
@@ -250,6 +252,10 @@ pub fn bacteria_12_console_bitmap_font() -> Result<ConsoleBitmapFont, String> {
     console_bitmap_font(BACTERIA_12_RESOURCE)
 }
 
+pub fn bacteria_12_native_console_bitmap_font() -> Result<ConsoleBitmapFont, String> {
+    console_bitmap_font(BACTERIA_12_NATIVE_RESOURCE)
+}
+
 fn console_bitmap_font(resource: &[u8]) -> Result<ConsoleBitmapFont, String> {
     let decoded = decode_resource(resource)?;
     let scale = f32::from(decoded.pixel_size) / decoded.units_per_em;
@@ -414,6 +420,16 @@ const NOCIVE_15_SPEC: GeneratorSpec = GeneratorSpec {
 const BACTERIA_12_SPEC: GeneratorSpec = GeneratorSpec {
     family: "Bacteria 12",
     pixel_size: 32,
+    weight: 400,
+    hint: false,
+    threshold: 128,
+    coverage: Coverage::FullCharmap,
+};
+
+#[cfg(any(test, feature = "asset-tools"))]
+const BACTERIA_12_NATIVE_SPEC: GeneratorSpec = GeneratorSpec {
+    family: "Bacteria 12",
+    pixel_size: 16,
     weight: 400,
     hint: false,
     threshold: 128,
@@ -619,6 +635,11 @@ pub fn generate_bacteria_12(font_bytes: &[u8]) -> Result<Vec<u8>, String> {
 }
 
 #[cfg(feature = "asset-tools")]
+pub fn generate_bacteria_12_native(font_bytes: &[u8]) -> Result<Vec<u8>, String> {
+    generate_resource(font_bytes, BACTERIA_12_NATIVE_SPEC)
+}
+
+#[cfg(feature = "asset-tools")]
 pub fn generate_jersey_25(font_bytes: &[u8]) -> Result<Vec<u8>, String> {
     generate_resource(font_bytes, JERSEY_25_SPEC)
 }
@@ -668,6 +689,10 @@ mod tests {
             BACTERIA_12_RESOURCE
         );
         assert_eq!(
+            generate_resource(BACTERIA_12_TTF, BACTERIA_12_NATIVE_SPEC).unwrap(),
+            BACTERIA_12_NATIVE_RESOURCE
+        );
+        assert_eq!(
             generate_resource(JERSEY_25_TTF, JERSEY_25_SPEC).unwrap(),
             JERSEY_25_RESOURCE
         );
@@ -679,12 +704,14 @@ mod tests {
         let xerxes_10 = decode_resource(XERXES_10_RESOURCE).unwrap();
         let nocive_15 = decode_resource(NOCIVE_15_RESOURCE).unwrap();
         let bacteria_12 = decode_resource(BACTERIA_12_RESOURCE).unwrap();
+        let bacteria_12_native = decode_resource(BACTERIA_12_NATIVE_RESOURCE).unwrap();
         let jersey_25 = decode_resource(JERSEY_25_RESOURCE).unwrap();
         for code_point in ['A', 'H', 'M', 'S'] {
             assert_eq!(glyph(&yesterday_10, code_point).height, 10);
             assert_eq!(glyph(&xerxes_10, code_point).height, 10);
             assert_eq!(glyph(&nocive_15, code_point).height, 15);
             assert_eq!(glyph(&bacteria_12, code_point).height, 24);
+            assert_eq!(glyph(&bacteria_12_native, code_point).height, 12);
             assert_eq!(glyph(&jersey_25, code_point).height, 25);
         }
     }
@@ -696,6 +723,7 @@ mod tests {
             XERXES_10_RESOURCE,
             NOCIVE_15_RESOURCE,
             BACTERIA_12_RESOURCE,
+            BACTERIA_12_NATIVE_RESOURCE,
             JERSEY_25_RESOURCE,
         ] {
             assert!(decode_resource(resource).unwrap().descent < 0.0);
@@ -709,6 +737,7 @@ mod tests {
             XERXES_10_RESOURCE,
             NOCIVE_15_RESOURCE,
             BACTERIA_12_RESOURCE,
+            BACTERIA_12_NATIVE_RESOURCE,
             JERSEY_25_RESOURCE,
         ] {
             let font = decode_resource(resource).unwrap();

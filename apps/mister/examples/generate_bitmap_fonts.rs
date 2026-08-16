@@ -2,8 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use mister_magik_fb::bitmap_font_resource::{
-    generate_bacteria_12, generate_jersey_25, generate_nocive_15, generate_xerxes_10,
-    generate_yesterday_10,
+    generate_bacteria_12, generate_bacteria_12_native, generate_jersey_25, generate_nocive_15,
+    generate_xerxes_10, generate_yesterday_10,
 };
 use std::path::PathBuf;
 
@@ -39,6 +39,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     std::fs::write(
         bacteria_dir.join("bacteria12-32px.mmbf"),
         generate_bacteria_12(&std::fs::read(bacteria_dir.join("Bacteria 12.ttf"))?)?,
+    )?;
+    std::fs::write(
+        bacteria_dir.join("bacteria12-16px.mmbf"),
+        generate_bacteria_12_native(&std::fs::read(bacteria_dir.join("Bacteria 12.ttf"))?)?,
     )?;
     std::fs::write(
         public_output_dir.join("jersey25-41px.mmbf"),
