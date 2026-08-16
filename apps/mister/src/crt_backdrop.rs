@@ -3,7 +3,7 @@
 
 //! Host-neutral RGB565 composition for low-resolution CRT screenshot backdrops.
 
-use crate::preview_transition::blend_rgb565_rows_bucketed;
+use crate::preview_transition::blend_rgb565_bucket;
 use crate::ui_display::{ResolvedOutputRoute, UiDisplay};
 use crate::visual_composition::{PreviewFrame, PreviewPixels};
 use slint::platform::software_renderer::Rgb565Pixel;
@@ -642,12 +642,18 @@ fn blend_rgb565_range(
         .min(previous.len())
         .min(current.len());
     let start = start.min(end);
-    blend_rgb565_rows_bucketed(
-        &mut destination[start..end],
-        &previous[start..end],
-        &current[start..end],
-        alpha_bucket,
-    );
+    let mut previous_source = Rgb565Pixel(u16::MAX);
+    let mut previous_current = Rgb565Pixel(u16::MAX);
+    for index in start..end {
+        if index > start && previous[index] == previous_source && current[index] == previous_current
+        {
+            destination[index] = destination[index - 1];
+        } else {
+            destination[index] = blend_rgb565_bucket(previous[index], current[index], alpha_bucket);
+        }
+        previous_source = previous[index];
+        previous_current = current[index];
+    }
 }
 
 fn copy_rgb565_row_excluding(
