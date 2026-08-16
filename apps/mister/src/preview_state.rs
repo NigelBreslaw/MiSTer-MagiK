@@ -169,7 +169,7 @@ impl BackdropPrepareWorker {
                         PreviewImagePixels::Rgb565 {
                             words,
                             stride_pixels,
-                        } => prepare_dimmed_rgb565_target(
+                        } => prepare_dimmed_rgb565_target_with_maps(
                             rgb565_words_as_pixels(&words),
                             request.image.source_w as usize,
                             request.image.source_h as usize,
