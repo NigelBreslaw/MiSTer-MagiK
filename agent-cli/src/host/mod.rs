@@ -7601,7 +7601,7 @@ fn gui_profile_route_launcher_env_with_pprof(
             ("MISTER_GUI_FRAME_PROFILE_PMU".into(), "1".into()),
             ("MISTER_PMU_PROFILE".into(), "1".into()),
             ("MISTER_PMU_SAMPLE_EVERY".into(), "1".into()),
-            ("MISTER_PMU_RECORD_LIMIT".into(), "16384".into()),
+            ("MISTER_PMU_RECORD_LIMIT".into(), "65536".into()),
         ]);
     }
     if let Some(remote_dir) = pprof_remote_dir {
