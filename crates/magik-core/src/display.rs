@@ -23,6 +23,26 @@ pub enum ResolvedOutputRoute {
     Crt576p50,
 }
 
+/// Selects how the NTSC 240-line route is composed before scanout.
+///
+/// The legacy mode keeps the historical 640x480 composition that is reduced
+/// to the 640x240 framebuffer. Native mode composes directly at 640x240.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Crt240Composition {
+    #[default]
+    Legacy480,
+    Native240,
+}
+
+impl Crt240Composition {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Legacy480 => "legacy-480",
+            Self::Native240 => "native-240",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ContentInsets {
     pub left: usize,
@@ -130,9 +150,21 @@ impl ResolvedOutputRoute {
     }
 
     pub const fn composition_geometry(self, framebuffer: (usize, usize)) -> (usize, usize) {
+        self.composition_geometry_with_crt240(framebuffer, Crt240Composition::Legacy480)
+    }
+
+    pub const fn composition_geometry_with_crt240(
+        self,
+        framebuffer: (usize, usize),
+        composition: Crt240Composition,
+    ) -> (usize, usize) {
         match self {
             Self::Crt288p50 | Self::Crt576p50 => framebuffer,
-            Self::Crt240p60 | Self::Crt480p60 => (CRT_COMPOSITION_W, CRT_COMPOSITION_H),
+            Self::Crt240p60 => match composition {
+                Crt240Composition::Legacy480 => (CRT_COMPOSITION_W, CRT_COMPOSITION_H),
+                Crt240Composition::Native240 => framebuffer,
+            },
+            Self::Crt480p60 => (CRT_COMPOSITION_W, CRT_COMPOSITION_H),
             Self::Hdmi => framebuffer,
         }
     }
@@ -207,6 +239,7 @@ pub struct ResolvedDisplayPlan {
     pub scan_h: u16,
     pub output_route: ResolvedOutputRoute,
     pub fb_policy: FramebufferSizePolicy,
+    pub crt240_composition: Crt240Composition,
 }
 
 impl ResolvedDisplayPlan {
@@ -214,6 +247,20 @@ impl ResolvedDisplayPlan {
         geometry: DisplayGeometry,
         output_route: ResolvedOutputRoute,
         fb_policy: FramebufferSizePolicy,
+    ) -> Self {
+        Self::from_geometry_with_crt240_composition(
+            geometry,
+            output_route,
+            fb_policy,
+            Crt240Composition::Legacy480,
+        )
+    }
+
+    pub fn from_geometry_with_crt240_composition(
+        geometry: DisplayGeometry,
+        output_route: ResolvedOutputRoute,
+        fb_policy: FramebufferSizePolicy,
+        crt240_composition: Crt240Composition,
     ) -> Self {
         let (fb_w, fb_h, fb_policy) = match output_route.framebuffer_geometry() {
             Some((fb_w, fb_h)) => (fb_w, fb_h, FramebufferSizePolicy::Auto),
@@ -223,7 +270,8 @@ impl ResolvedDisplayPlan {
                 (fb_w, fb_h, fb_policy)
             }
         };
-        let (render_w, render_h) = output_route.composition_geometry((fb_w, fb_h));
+        let (render_w, render_h) =
+            output_route.composition_geometry_with_crt240((fb_w, fb_h), crt240_composition);
         Self {
             fb_w,
             fb_h,
@@ -235,6 +283,7 @@ impl ResolvedDisplayPlan {
             scan_h: geometry.scan_h,
             output_route,
             fb_policy,
+            crt240_composition,
         }
     }
 
@@ -533,6 +582,46 @@ mod tests {
             let plan = ResolvedDisplayPlan::from_mode_or_detected(mode, None).expect(mode);
             assert_eq!((plan.fb_w, plan.fb_h), fb, "{mode}");
             assert_eq!((plan.render_w, plan.render_h), render, "{mode}");
+        }
+    }
+
+    #[test]
+    fn crt240_composition_policy_selects_native_or_legacy_geometry() {
+        let geometry = DisplayGeometry::new(640, 240);
+        let legacy = ResolvedDisplayPlan::from_geometry_with_crt240_composition(
+            geometry,
+            ResolvedOutputRoute::Crt240p60,
+            FramebufferSizePolicy::Auto,
+            Crt240Composition::Legacy480,
+        );
+        let native = ResolvedDisplayPlan::from_geometry_with_crt240_composition(
+            geometry,
+            ResolvedOutputRoute::Crt240p60,
+            FramebufferSizePolicy::Auto,
+            Crt240Composition::Native240,
+        );
+        assert_eq!((legacy.fb_w, legacy.fb_h), (640, 240));
+        assert_eq!((legacy.render_w, legacy.render_h), (640, 480));
+        assert_eq!(legacy.crt240_composition, Crt240Composition::Legacy480);
+        assert_eq!((native.fb_w, native.fb_h), (640, 240));
+        assert_eq!((native.render_w, native.render_h), (640, 240));
+        assert_eq!(native.crt240_composition, Crt240Composition::Native240);
+    }
+
+    #[test]
+    fn native_policy_leaves_other_crt_routes_unchanged() {
+        for route in [
+            ResolvedOutputRoute::Crt288p50,
+            ResolvedOutputRoute::Crt480p60,
+            ResolvedOutputRoute::Crt576p50,
+        ] {
+            let plan = ResolvedDisplayPlan::from_geometry_with_crt240_composition(
+                route.progressive_geometry().unwrap(),
+                route,
+                FramebufferSizePolicy::Auto,
+                Crt240Composition::Native240,
+            );
+            assert_eq!((plan.fb_w, plan.fb_h), (plan.render_w, plan.render_h));
         }
     }
 
