@@ -22506,7 +22506,7 @@ fn capture_and_restore_launcher(
 }
 
 fn capture_first_arcade(config: &NativeDeviceConfig, output: &Path) -> Result<()> {
-    capture_arcade_variant(config, output, None, "first Arcade screen")
+    capture_arcade_variant(config, output, "off", None, "first Arcade screen")
 }
 
 fn capture_crt_font_ab(config: &NativeDeviceConfig, pair: &str, output: &Path) -> Result<()> {
@@ -22561,12 +22561,14 @@ fn capture_crt_font_ab(config: &NativeDeviceConfig, pair: &str, output: &Path) -
         capture_arcade_variant(
             config,
             &a_stem,
+            "force",
             Some("baseline"),
             "CRT font row phase A (odd rows)",
         )?;
         capture_arcade_variant(
             config,
             &b_stem,
+            "force",
             Some("phase-even"),
             "CRT font row phase B (even rows)",
         )?;
@@ -22624,6 +22626,7 @@ fn active_display_mode_id() -> Result<String> {
 fn capture_arcade_variant(
     config: &NativeDeviceConfig,
     output: &Path,
+    catalog_refresh: &str,
     experiment: Option<&str>,
     label: &str,
 ) -> Result<()> {
@@ -22632,7 +22635,7 @@ fn capture_arcade_variant(
     }
     let session = connect_with(&config.connection, 10)?;
     let mut env_vars = vec![
-        ("MISTER_CATALOG_REFRESH".into(), "off".into()),
+        ("MISTER_CATALOG_REFRESH".into(), catalog_refresh.into()),
         ("MISTER_LAUNCHER_START_SCREEN".into(), "home".into()),
         (
             "MISTER_LAUNCHER_INPUT_SCRIPT".into(),
