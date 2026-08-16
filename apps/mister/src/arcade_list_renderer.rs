@@ -283,6 +283,7 @@ pub struct ArcadeListRenderer {
     row_cache: HashMap<usize, CachedArcadeRow>,
     favourite_launch_refs: HashSet<String>,
     surface: Vec<Rgb565Pixel>,
+    surface_nonfill_runs: Vec<Vec<(usize, usize)>>,
     band_scratch: Vec<Pixel>,
     selection_invert_scratch: Vec<Rgb565Pixel>,
     selection_horizontal: Vec<Rgb565Pixel>,
@@ -381,6 +382,7 @@ impl ArcadeListRenderer {
             row_cache: HashMap::new(),
             favourite_launch_refs: HashSet::new(),
             surface: vec![style.background_565; ARCADE_LIST_W * ARCADE_LIST_H],
+            surface_nonfill_runs: vec![Vec::new(); ARCADE_LIST_H],
             band_scratch: Vec::new(),
             selection_invert_scratch: Vec::new(),
             selection_horizontal: Vec::new(),
@@ -437,6 +439,7 @@ impl ArcadeListRenderer {
             if self.width != geometry.width {
                 self.width = geometry.width;
                 self.surface = vec![self.style.background_565; self.width * ARCADE_LIST_H];
+                self.surface_nonfill_runs = vec![Vec::new(); ARCADE_LIST_H];
                 self.row_cache.clear();
                 self.row_fingerprint_cache.clear();
             }
@@ -759,6 +762,7 @@ impl ArcadeListRenderer {
                 let dst_y = (self.surface_y + viewport_y) % self.visible_height;
                 let dst = dst_y * self.width;
                 self.surface[dst..dst + self.width].copy_from_slice(&row[src..src + self.width]);
+                self.rebuild_surface_nonfill_runs(dst_y);
             }
         }
     }
@@ -816,6 +820,7 @@ impl ArcadeListRenderer {
             let dst_y = (self.surface_y + viewport_y) % self.visible_height;
             let dst = dst_y * self.width;
             self.surface[dst..dst + self.width].copy_from_slice(&row[src..src + self.width]);
+            self.rebuild_surface_nonfill_runs(dst_y);
         }
     }
 
@@ -824,7 +829,35 @@ impl ArcadeListRenderer {
             let dst_y = (self.surface_y + band_y + row) % self.visible_height;
             let dst = dst_y * self.width;
             self.surface[dst..dst + self.width].fill(color);
+            self.surface_nonfill_runs[dst_y].clear();
         }
+    }
+
+    fn rebuild_surface_nonfill_runs(&mut self, row: usize) {
+        if row >= self.surface_nonfill_runs.len() {
+            return;
+        }
+        let surface_row = &self.surface[row * self.width..(row + 1) * self.width];
+        let mut runs = std::mem::take(&mut self.surface_nonfill_runs[row]);
+        runs.clear();
+        let mut x = 0;
+        while x < self.width {
+            while x < self.width
+                && is_arcade_unselected_fill_pixel_with_style(surface_row[x], self.style)
+            {
+                x += 1;
+            }
+            let run_start = x;
+            while x < self.width
+                && !is_arcade_unselected_fill_pixel_with_style(surface_row[x], self.style)
+            {
+                x += 1;
+            }
+            if run_start < x {
+                runs.push((run_start, x));
+            }
+        }
+        self.surface_nonfill_runs[row] = runs;
     }
 
     fn next_row_cache_epoch(&mut self) -> u64 {
@@ -894,6 +927,7 @@ impl ArcadeListRenderer {
                 &band[src..src + self.width],
                 &mut self.surface[dst..dst + self.width],
             );
+            self.rebuild_surface_nonfill_runs(dst_y);
         }
     }
 
@@ -973,25 +1007,19 @@ impl ArcadeListRenderer {
                 let destination = &mut cached[destination_start..destination_start + self.width];
                 let selected = viewport_y >= selection_y && viewport_y < selection_bottom;
                 let surface_row = &self.surface[source_start..source_start + self.width];
-                if !selected
-                    && surface_row
-                        .iter()
-                        .all(|pixel| is_arcade_unselected_fill_pixel_with_style(*pixel, self.style))
-                {
+                if selected {
+                    for x in 0..self.width {
+                        destination[x] =
+                            selected_aperture_pixel_with_style(surface_row[x], self.style);
+                    }
+                } else {
                     destination.copy_from_slice(
                         &backdrop[destination_start..destination_start + self.width],
                     );
-                    continue;
-                }
-                for x in 0..self.width {
-                    let pixel = surface_row[x];
-                    destination[x] = if selected {
-                        selected_aperture_pixel_with_style(pixel, self.style)
-                    } else if is_arcade_unselected_fill_pixel_with_style(pixel, self.style) {
-                        backdrop[destination_start + x]
-                    } else {
-                        pixel
-                    };
+                    for &(run_start, run_end) in &self.surface_nonfill_runs[source_y] {
+                        destination[run_start..run_end]
+                            .copy_from_slice(&surface_row[run_start..run_end]);
+                    }
                 }
             }
             if redraw_selection_frame {
