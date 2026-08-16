@@ -161,6 +161,7 @@ impl BackdropPrepareWorker {
         std::thread::Builder::new()
             .name("crt-backdrop-preparer".to_string())
             .spawn(move || {
+                lower_backdrop_prepare_worker_priority();
                 let mut x_map = Vec::new();
                 let mut y_map = Vec::new();
                 while let Ok(request) = requests.recv() {
@@ -203,6 +204,20 @@ impl BackdropPrepareWorker {
         Self { tx, rx }
     }
 }
+
+#[cfg(target_os = "linux")]
+fn lower_backdrop_prepare_worker_priority() {
+    // Preview preparation remains asynchronous and lossless, but should not
+    // preempt the foreground 60 Hz list/latch loop on the single-core CRT
+    // target while a long-press selection burst is in flight.
+    unsafe {
+        let tid = libc::syscall(libc::SYS_gettid) as libc::id_t;
+        let _ = libc::setpriority(libc::PRIO_PROCESS, tid, 10);
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn lower_backdrop_prepare_worker_priority() {}
 
 #[derive(Clone)]
 struct PreparedBackdropCacheEntry {
