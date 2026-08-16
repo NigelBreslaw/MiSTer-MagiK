@@ -3,7 +3,6 @@
 
 //! Host-neutral RGB565 composition for low-resolution CRT screenshot backdrops.
 
-use crate::preview_transition::blend_rgb565_bucket;
 use crate::ui_display::{ResolvedOutputRoute, UiDisplay};
 use crate::visual_composition::{PreviewFrame, PreviewPixels};
 use slint::platform::software_renderer::Rgb565Pixel;
@@ -689,6 +688,64 @@ fn blend_rgb565_range(
     alpha_bucket: u16,
     coarse_factor: usize,
 ) {
+    macro_rules! bucket {
+        ($alpha:literal, $inverse:literal) => {
+            blend_rgb565_range_const::<$alpha, $inverse>(
+                destination,
+                previous,
+                current,
+                start,
+                end,
+                coarse_factor,
+            )
+        };
+    }
+    match alpha_bucket.min(32) {
+        0 => bucket!(0, 32),
+        1 => bucket!(1, 31),
+        2 => bucket!(2, 30),
+        3 => bucket!(3, 29),
+        4 => bucket!(4, 28),
+        5 => bucket!(5, 27),
+        6 => bucket!(6, 26),
+        7 => bucket!(7, 25),
+        8 => bucket!(8, 24),
+        9 => bucket!(9, 23),
+        10 => bucket!(10, 22),
+        11 => bucket!(11, 21),
+        12 => bucket!(12, 20),
+        13 => bucket!(13, 19),
+        14 => bucket!(14, 18),
+        15 => bucket!(15, 17),
+        16 => bucket!(16, 16),
+        17 => bucket!(17, 15),
+        18 => bucket!(18, 14),
+        19 => bucket!(19, 13),
+        20 => bucket!(20, 12),
+        21 => bucket!(21, 11),
+        22 => bucket!(22, 10),
+        23 => bucket!(23, 9),
+        24 => bucket!(24, 8),
+        25 => bucket!(25, 7),
+        26 => bucket!(26, 6),
+        27 => bucket!(27, 5),
+        28 => bucket!(28, 4),
+        29 => bucket!(29, 3),
+        30 => bucket!(30, 2),
+        31 => bucket!(31, 1),
+        _ => bucket!(32, 0),
+    }
+}
+
+#[inline(always)]
+fn blend_rgb565_range_const<const ALPHA: u32, const INVERSE: u32>(
+    destination: &mut [Rgb565Pixel],
+    previous: &[Rgb565Pixel],
+    current: &[Rgb565Pixel],
+    start: usize,
+    end: usize,
+    coarse_factor: usize,
+) {
     let end = end
         .min(destination.len())
         .min(previous.len())
@@ -705,7 +762,7 @@ fn blend_rgb565_range(
                 destination[index] = destination[index - 1];
             } else {
                 destination[index] =
-                    blend_rgb565_bucket(previous[index], current[index], alpha_bucket);
+                    blend_rgb565_const::<ALPHA, INVERSE>(previous[index], current[index]);
             }
             previous_source = previous[index];
             previous_current = current[index];
@@ -713,12 +770,24 @@ fn blend_rgb565_range(
     } else {
         let mut index = start;
         while index < end {
-            let pixel = blend_rgb565_bucket(previous[index], current[index], alpha_bucket);
+            let pixel = blend_rgb565_const::<ALPHA, INVERSE>(previous[index], current[index]);
             let block_end = index.saturating_add(coarse_factor).min(end);
             destination[index..block_end].fill(pixel);
             index = block_end;
         }
     }
+}
+
+#[inline(always)]
+const fn blend_rgb565_const<const ALPHA: u32, const INVERSE: u32>(
+    from: Rgb565Pixel,
+    to: Rgb565Pixel,
+) -> Rgb565Pixel {
+    let from = from.0 as u32;
+    let to = to.0 as u32;
+    let red_blue = (((from & 0xf81f) * INVERSE + (to & 0xf81f) * ALPHA) >> 5) & 0xf81f;
+    let green = (((from & 0x07e0) * INVERSE + (to & 0x07e0) * ALPHA) >> 5) & 0x07e0;
+    Rgb565Pixel((red_blue | green) as u16)
 }
 
 fn copy_rgb565_row_excluding(
