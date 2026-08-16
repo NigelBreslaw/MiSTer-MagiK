@@ -1124,7 +1124,7 @@ pub fn product_chrome_rects(
 mod tests {
     use super::*;
     use crate::ui_display::{UiDisplayPlan, UiFramebufferSizePolicy};
-    use mister_magik_core::display::DisplayGeometry;
+    use mister_magik_core::display::{Crt240Composition, DisplayGeometry};
 
     fn frame<'a>(pixels: &'a [Rgb565Pixel], width: usize, height: usize) -> PreviewFrame<'a> {
         PreviewFrame {
@@ -1210,44 +1210,54 @@ mod tests {
     }
 
     #[test]
-    fn low_resolution_routes_allocate_exact_composition_sizes() {
-        for (route, geometry, expected) in [
+    fn low_resolution_routes_share_backdrop_reference_height() {
+        for (route, geometry, composition, expected) in [
             (
                 ResolvedOutputRoute::Crt240p60,
                 DisplayGeometry::new(640, 240),
-                (640, 480),
+                Crt240Composition::Native240,
+                (640, 240, 240),
+            ),
+            (
+                ResolvedOutputRoute::Crt240p60,
+                DisplayGeometry::new(640, 240),
+                Crt240Composition::Legacy480,
+                (640, 480, 240),
             ),
             (
                 ResolvedOutputRoute::Crt288p50,
                 DisplayGeometry::new(640, 288),
-                (640, 288),
+                Crt240Composition::Native240,
+                (640, 288, 288),
             ),
         ] {
-            let plan = UiDisplayPlan::from_geometry_with_route(
+            let plan = UiDisplayPlan::from_geometry_with_route_and_composition(
                 geometry,
                 route,
                 "test-backdrop-route",
                 UiFramebufferSizePolicy::Auto,
+                composition,
             );
             let display = UiDisplay::for_plan(plan);
             let backdrop = CrtBackdropState::for_display(&display).unwrap();
-            assert_eq!((backdrop.width(), backdrop.height()), expected);
             assert_eq!(
-                backdrop.physical_height(),
-                if matches!(route, ResolvedOutputRoute::Crt240p60) {
-                    240
-                } else {
-                    288
-                }
+                (
+                    backdrop.width(),
+                    backdrop.height(),
+                    backdrop.physical_height()
+                ),
+                expected
             );
+            assert_eq!(backdrop.reference_height(), CRT_COMPOSITION_H);
             assert_eq!(backdrop.pixels().len(), expected.0 * expected.1);
         }
     }
 
     #[test]
-    fn physical_240p_target_centers_uncropped_sources_at_fitting_integer_scale() {
+    fn low_resolution_targets_center_uncropped_sources_at_fitting_integer_scale() {
         let white = Rgb565Pixel(0xffff);
         for (
+            destination_height,
             source_width,
             source_height,
             integer_scale,
@@ -1260,21 +1270,24 @@ mod tests {
             expected_source_y0,
             expected_source_y1,
         ) in [
-            (320, 224, 2, 0, 640, 8, 232, 0, 319, 0, 223),
-            (187, 320, 1, 226, 413, 40, 200, 0, 186, 1, 319),
-            (280, 320, 1, 180, 460, 40, 200, 0, 279, 1, 319),
+            (240, 320, 224, 2, 0, 640, 8, 232, 0, 319, 0, 223),
+            (240, 187, 320, 1, 226, 413, 40, 200, 0, 186, 1, 319),
+            (240, 280, 320, 1, 180, 460, 40, 200, 0, 279, 1, 319),
+            (288, 320, 224, 2, 0, 640, 10, 278, 0, 319, 0, 223),
+            (288, 187, 320, 1, 226, 413, 48, 240, 0, 186, 0, 319),
+            (288, 280, 320, 1, 180, 460, 48, 240, 0, 279, 0, 319),
         ] {
             let source = vec![white; source_width * source_height];
-            let mut destination = vec![CRT_BACKDROP_BACKGROUND; 640 * 240];
+            let mut destination = vec![CRT_BACKDROP_BACKGROUND; 640 * destination_height];
             let mut x_map = vec![0; 640];
-            let mut y_map = vec![0; 240];
-            let mut row_repeats = vec![false; 240];
+            let mut y_map = vec![0; destination_height];
+            let mut row_repeats = vec![false; destination_height];
 
             assert!(scale_dimmed_center_crop_mapped_with_logical_height(
                 &mut destination,
                 640,
-                240,
-                480,
+                destination_height,
+                CRT_COMPOSITION_H,
                 frame(&source, source_width, source_height),
                 &mut x_map,
                 &mut y_map,
@@ -1321,34 +1334,58 @@ mod tests {
     }
 
     #[test]
-    fn product_composition_keeps_adjacent_source_rows_distinct() {
-        let display = UiDisplay::for_plan(UiDisplayPlan::from_geometry_with_route(
-            DisplayGeometry::new(640, 240),
-            ResolvedOutputRoute::Crt240p60,
-            "test-product-backdrop",
-            UiFramebufferSizePolicy::Auto,
-        ));
-        let metrics = CrtUiMetrics::for_display(&display);
-        let source = [
-            Rgb565Pixel(0xf800),
-            Rgb565Pixel(0xf800),
-            Rgb565Pixel(0x001f),
-            Rgb565Pixel(0x001f),
-        ];
-        let mut backdrop = CrtBackdropState::for_display(&display).unwrap();
-        backdrop.retarget(Some(frame(&source, 2, 2)), Duration::ZERO);
-        let mut destination = vec![CRT_BACKDROP_BACKGROUND; 640 * 480];
+    fn shared_product_composition_keeps_adjacent_source_rows_distinct() {
+        for (route, geometry, first_row, second_row) in [
+            (
+                ResolvedOutputRoute::Crt240p60,
+                DisplayGeometry::new(640, 240),
+                119,
+                120,
+            ),
+            (
+                ResolvedOutputRoute::Crt288p50,
+                DisplayGeometry::new(640, 288),
+                143,
+                144,
+            ),
+        ] {
+            let display =
+                UiDisplay::for_plan(UiDisplayPlan::from_geometry_with_route_and_composition(
+                    geometry,
+                    route,
+                    "test-product-backdrop",
+                    UiFramebufferSizePolicy::Auto,
+                    Crt240Composition::Native240,
+                ));
+            let metrics = CrtUiMetrics::for_display(&display);
+            let source = [
+                Rgb565Pixel(0xf800),
+                Rgb565Pixel(0xf800),
+                Rgb565Pixel(0x001f),
+                Rgb565Pixel(0x001f),
+            ];
+            let mut backdrop = CrtBackdropState::for_display(&display).unwrap();
+            backdrop.retarget(Some(frame(&source, 2, 2)), Duration::ZERO);
+            let mut destination =
+                vec![CRT_BACKDROP_BACKGROUND; display.render_w() * display.render_h()];
 
-        let trace = backdrop.compose_product_into(
-            CRT_BACKDROP_FADE_DURATION,
-            &mut destination,
-            display.content_rect(),
-            metrics,
-        );
+            let trace = backdrop.compose_product_into(
+                CRT_BACKDROP_FADE_DURATION,
+                &mut destination,
+                display.content_rect(),
+                metrics,
+            );
 
-        assert!(!trace.active);
-        assert_eq!(backdrop.retarget[119 * 640 + 318], darken_rgb565(source[0]));
-        assert_eq!(backdrop.retarget[120 * 640 + 318], darken_rgb565(source[2]));
+            assert!(!trace.active);
+            assert_eq!(
+                backdrop.retarget[first_row * 640 + 318],
+                darken_rgb565(source[0])
+            );
+            assert_eq!(
+                backdrop.retarget[second_row * 640 + 318],
+                darken_rgb565(source[2])
+            );
+        }
     }
 
     #[test]
