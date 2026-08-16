@@ -9856,12 +9856,42 @@ pub(super) fn run_launcher_loop(
                     || backdrop.is_transitioning();
                 if compose_full {
                     let compose_start = Instant::now();
-                    let protected_chrome = super::launcher_compositor::crt_arcade_chrome_rects(
+                    let chrome_rects = super::launcher_compositor::crt_arcade_chrome_rects(
                         layout.content_rect(),
                         crt_metrics,
                         arcade_list_renderer.dirty_rect(),
-                    )
-                    .map(|rect| (rect.x0, rect.y0, rect.x1, rect.y1));
+                    );
+                    // The CRT-selected row is fully opaque cyan. Leave it
+                    // untouched during backdrop blending; the list overlay
+                    // rewrites it immediately afterward, avoiding blend and
+                    // copy work for pixels that can never be visible.
+                    let selection_rect = arcade_list_renderer.selection_rect();
+                    let protected_chrome = [
+                        (
+                            chrome_rects[0].x0,
+                            chrome_rects[0].y0,
+                            chrome_rects[0].x1,
+                            chrome_rects[0].y1,
+                        ),
+                        (
+                            chrome_rects[1].x0,
+                            chrome_rects[1].y0,
+                            chrome_rects[1].x1,
+                            chrome_rects[1].y1,
+                        ),
+                        (
+                            chrome_rects[2].x0,
+                            chrome_rects[2].y0,
+                            chrome_rects[2].x1,
+                            chrome_rects[2].y1,
+                        ),
+                        (
+                            selection_rect.x0,
+                            selection_rect.y0,
+                            selection_rect.x1,
+                            selection_rect.y1,
+                        ),
+                    ];
                     crt_backdrop_work_trace = backdrop.compose_into_coarse_excluding(
                         loop_start.saturating_duration_since(run_start),
                         layer_target.presentation_pixels_mut(),
