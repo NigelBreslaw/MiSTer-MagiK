@@ -307,19 +307,48 @@ impl CrtBackdropState {
                 let destination = &mut self.retarget[start..end];
                 let previous = &self.source[start..end];
                 let current = &self.target[start..end];
-                // `retarget` is an internal backdrop buffer.  Protected
-                // chrome only needs preservation when expanding into the
-                // visible presentation surface below, so keep this hot
-                // blend path contiguous and branch-free.
-                blend_rgb565_range(
-                    destination,
-                    previous,
-                    current,
-                    0,
-                    destination.len(),
-                    alpha_bucket,
-                    coarse_factor,
-                );
+                if protected_rects
+                    .iter()
+                    .any(|&(_, y0, _, y1)| row >= y0 && row < y1)
+                {
+                    let mut cursor = 0;
+                    for &(x0, y0, x1, y1) in protected_rects {
+                        if row < y0 || row >= y1 {
+                            continue;
+                        }
+                        let protected_start = x0.min(destination.len());
+                        let protected_end = x1.min(destination.len()).max(protected_start);
+                        blend_rgb565_range(
+                            destination,
+                            previous,
+                            current,
+                            cursor,
+                            protected_start.max(cursor),
+                            alpha_bucket,
+                            coarse_factor,
+                        );
+                        cursor = cursor.max(protected_end);
+                    }
+                    blend_rgb565_range(
+                        destination,
+                        previous,
+                        current,
+                        cursor,
+                        destination.len(),
+                        alpha_bucket,
+                        coarse_factor,
+                    );
+                } else {
+                    blend_rgb565_range(
+                        destination,
+                        previous,
+                        current,
+                        0,
+                        destination.len(),
+                        alpha_bucket,
+                        coarse_factor,
+                    );
+                }
             }
             for copy_row in row + 1..(row + coarse_factor).min(self.physical_height) {
                 let source_start = row * row_width;
@@ -331,8 +360,12 @@ impl CrtBackdropState {
                     .saturating_add(row_width)
                     .min(self.retarget.len());
                 let (before, after) = self.retarget.split_at_mut(destination_start);
-                after[..destination_end - destination_start]
-                    .copy_from_slice(&before[source_start..source_end]);
+                copy_rgb565_row_excluding(
+                    &mut after[..destination_end - destination_start],
+                    &before[source_start..source_end],
+                    copy_row,
+                    protected_rects,
+                );
             }
             row = row.saturating_add(coarse_factor);
         }
