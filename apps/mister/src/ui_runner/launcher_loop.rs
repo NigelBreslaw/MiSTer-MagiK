@@ -3603,6 +3603,7 @@ impl LauncherWakeReasons {
     const HOME_HORIZONTAL_INPUT_HELD: Self = Self(1 << 23);
     const FB0_ROUTE_RECOVERY_PENDING: Self = Self(1 << 24);
     const LATENCY_CRITICAL_INPUT: Self = Self(1 << 25);
+    const CRT_BACKDROP_PREPARED: Self = Self(1 << 26);
 
     #[inline]
     fn insert_if(&mut self, reason: Self, active: bool) {
@@ -8875,6 +8876,9 @@ pub(super) fn run_launcher_loop(
         if !stream_motion_before_render {
             let _ = launcher_presenter.publish_stream_refinement_if_due();
         }
+        let crt_backdrop_prepared = crt_backdrop
+            .as_mut()
+            .is_some_and(CrtBackdropController::poll);
         let mut wake_reasons = LauncherWakeReasons::default();
         wake_reasons.insert_if(LauncherWakeReasons::REDRAW_PENDING, window.redraw_pending());
         wake_reasons.insert_if(LauncherWakeReasons::LAUNCHING, launching);
@@ -8942,6 +8946,10 @@ pub(super) fn run_launcher_loop(
         wake_reasons.insert_if(
             LauncherWakeReasons::PREVIEW_SCHEDULED_THIS_LOOP,
             preview_scheduled_this_loop,
+        );
+        wake_reasons.insert_if(
+            LauncherWakeReasons::CRT_BACKDROP_PREPARED,
+            crt_backdrop_prepared,
         );
         wake_reasons.insert_if(
             LauncherWakeReasons::COMPOSITION_FORCES_FULL_PRESENT,
@@ -16809,6 +16817,7 @@ mod tests {
             LauncherWakeReasons::ARCADE_SEARCH_ACTIVE,
             LauncherWakeReasons::PREVIEW_DIRTY,
             LauncherWakeReasons::PREVIEW_SCHEDULED_THIS_LOOP,
+            LauncherWakeReasons::CRT_BACKDROP_PREPARED,
             LauncherWakeReasons::COMPOSITION_FORCES_FULL_PRESENT,
             LauncherWakeReasons::COMPOSITION_CLEARS_DIRECT_LAYERS,
             LauncherWakeReasons::FB0_ROUTE_RECOVERY_PENDING,

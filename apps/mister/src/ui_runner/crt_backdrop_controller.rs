@@ -179,7 +179,8 @@ impl CrtBackdropController {
         self.transition_id
     }
 
-    pub(super) fn poll(&mut self) {
+    pub(super) fn poll(&mut self) -> bool {
+        let mut accepted = false;
         while let Ok(result) = self.worker.rx.try_recv() {
             self.pending.remove(&result.identity);
             if self.active_epoch != 0 && result.identity.epoch != self.active_epoch {
@@ -211,6 +212,7 @@ impl CrtBackdropController {
             });
             self.cache_bytes = self.cache_bytes.saturating_add(bytes);
             self.revision = self.revision.wrapping_add(1).max(1);
+            accepted = true;
             while self.cache_bytes > PREPARED_CACHE_BYTES {
                 let Some(evicted) = self.cache.pop_front() else {
                     break;
@@ -218,6 +220,7 @@ impl CrtBackdropController {
                 self.cache_bytes = self.cache_bytes.saturating_sub(evicted.bytes);
             }
         }
+        accepted
     }
 
     fn request_prepare(&mut self, source: &BackdropSource) {
