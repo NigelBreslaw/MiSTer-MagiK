@@ -598,30 +598,6 @@ fn scale_dimmed_center_crop_mapped_with_logical_height(
 /// Prepare one RGB565 screenshot for the low-resolution CRT backdrop.  This
 /// helper is deliberately allocation-owned by its caller so it can run on a
 /// worker lane and hand the resulting buffers to `CrtBackdropState` by `Arc`.
-pub(crate) fn prepare_dimmed_rgb565_target(
-    source: &[Rgb565Pixel],
-    source_width: usize,
-    source_height: usize,
-    source_stride_pixels: usize,
-    destination_width: usize,
-    destination_physical_height: usize,
-    logical_destination_height: usize,
-) -> Option<(Vec<Rgb565Pixel>, Vec<bool>)> {
-    let mut x_map = Vec::new();
-    let mut y_map = Vec::new();
-    prepare_dimmed_rgb565_target_with_maps(
-        source,
-        source_width,
-        source_height,
-        source_stride_pixels,
-        destination_width,
-        destination_physical_height,
-        logical_destination_height,
-        &mut x_map,
-        &mut y_map,
-    )
-}
-
 /// Worker-friendly variant that reuses the nearest-neighbour maps between
 /// requests. The destination remains request-owned because it is handed to
 /// the backdrop cache, while the maps are pure scratch state.
