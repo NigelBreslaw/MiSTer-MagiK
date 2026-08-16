@@ -1,0 +1,12 @@
+Spleen 2.2.0
+
+Upstream: https://github.com/fcambus/spleen
+Revision: master resources retrieved 2026-08-16
+Sources: spleen-5x8.bdf, spleen-6x12.bdf
+Source SHA-256 (5x8): 40488184d075d0c752cdd239b441c5ece51e50b353156f2496c756c384ab01cb
+Source SHA-256 (6x12): fc0743d164690f99b7e2e1b9d503180e4c719a9831ae03fd8f6da18c857dee27
+Copyright: Copyright (c) 2018-2026, Frederic Cambus
+License: BSD-2-Clause; see apps/mister/licenses/SPLEEN.txt
+
+The checked-in MMBF resources are generated deterministically from the BDF
+sources. The 2x variants expand every authored bitmap pixel to a 2x2 block.

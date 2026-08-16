@@ -3,9 +3,10 @@
 
 use mister_magik_fb::bitmap_font_resource::{
     generate_bacteria_12, generate_bacteria_12_native, generate_jersey_25, generate_nocive_15,
-    generate_terminus_8x14_bold, generate_terminus_8x14_native, generate_terminus_8x14_normal,
-    generate_xerxes_10, generate_xerxes_10_crt240, generate_yesterday_10,
-    generate_yesterday_10_crt240,
+    generate_spleen_5x8_doubled, generate_spleen_5x8_native, generate_spleen_6x12_doubled,
+    generate_spleen_6x12_native, generate_terminus_8x14_bold, generate_terminus_8x14_native,
+    generate_terminus_8x14_normal, generate_xerxes_10, generate_xerxes_10_crt240,
+    generate_yesterday_10, generate_yesterday_10_crt240,
 };
 use std::path::PathBuf;
 
@@ -76,6 +77,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     std::fs::write(
         terminus_dir.join("terminus-8x14-bold-2x.mmbf"),
         generate_terminus_8x14_bold(&std::fs::read_to_string(terminus_dir.join("ter-u14b.bdf"))?)?,
+    )?;
+    let spleen_dir = public_output_dir.join("spleen");
+    let spleen_5x8 = std::fs::read_to_string(spleen_dir.join("spleen-5x8.bdf"))?;
+    let spleen_6x12 = std::fs::read_to_string(spleen_dir.join("spleen-6x12.bdf"))?;
+    std::fs::write(
+        spleen_dir.join("spleen-5x8-1x.mmbf"),
+        generate_spleen_5x8_native(&spleen_5x8)?,
+    )?;
+    std::fs::write(
+        spleen_dir.join("spleen-5x8-2x.mmbf"),
+        generate_spleen_5x8_doubled(&spleen_5x8)?,
+    )?;
+    std::fs::write(
+        spleen_dir.join("spleen-6x12-1x.mmbf"),
+        generate_spleen_6x12_native(&spleen_6x12)?,
+    )?;
+    std::fs::write(
+        spleen_dir.join("spleen-6x12-2x.mmbf"),
+        generate_spleen_6x12_doubled(&spleen_6x12)?,
     )?;
     Ok(())
 }

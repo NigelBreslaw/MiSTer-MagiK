@@ -44,6 +44,26 @@ const TERMINUS_8X14_BOLD_RESOURCE: &[u8] =
     include_bytes!("../assets/fonts/terminus-8x14/terminus-8x14-bold-2x.mmbf");
 #[cfg(feature = "asset-tools")]
 const TERMINUS_8X14_BOLD_RESOURCE: &[u8] = &[];
+#[cfg(not(feature = "asset-tools"))]
+const SPLEEN_5X8_NATIVE_RESOURCE: &[u8] =
+    include_bytes!("../assets/fonts/spleen/spleen-5x8-1x.mmbf");
+#[cfg(feature = "asset-tools")]
+const SPLEEN_5X8_NATIVE_RESOURCE: &[u8] = &[];
+#[cfg(not(feature = "asset-tools"))]
+const SPLEEN_5X8_DOUBLED_RESOURCE: &[u8] =
+    include_bytes!("../assets/fonts/spleen/spleen-5x8-2x.mmbf");
+#[cfg(feature = "asset-tools")]
+const SPLEEN_5X8_DOUBLED_RESOURCE: &[u8] = &[];
+#[cfg(not(feature = "asset-tools"))]
+const SPLEEN_6X12_NATIVE_RESOURCE: &[u8] =
+    include_bytes!("../assets/fonts/spleen/spleen-6x12-1x.mmbf");
+#[cfg(feature = "asset-tools")]
+const SPLEEN_6X12_NATIVE_RESOURCE: &[u8] = &[];
+#[cfg(not(feature = "asset-tools"))]
+const SPLEEN_6X12_DOUBLED_RESOURCE: &[u8] =
+    include_bytes!("../assets/fonts/spleen/spleen-6x12-2x.mmbf");
+#[cfg(feature = "asset-tools")]
+const SPLEEN_6X12_DOUBLED_RESOURCE: &[u8] = &[];
 
 #[derive(Clone, Debug, PartialEq)]
 struct DecodedGlyph {
@@ -295,6 +315,10 @@ pub fn terminus_8x14_bold_console_bitmap_font() -> Result<ConsoleBitmapFont, Str
     console_bitmap_font(TERMINUS_8X14_BOLD_RESOURCE)
 }
 
+pub fn spleen_6x12_native_console_bitmap_font() -> Result<ConsoleBitmapFont, String> {
+    console_bitmap_font(SPLEEN_6X12_NATIVE_RESOURCE)
+}
+
 fn console_bitmap_font(resource: &[u8]) -> Result<ConsoleBitmapFont, String> {
     let decoded = decode_resource(resource)?;
     let scale = f32::from(decoded.pixel_size) / decoded.units_per_em;
@@ -418,7 +442,7 @@ pub fn register_bitmap_fonts(renderer: &slint::platform::software_renderer::Soft
     use std::cell::Cell;
     use std::sync::OnceLock;
 
-    static FONTS: OnceLock<[&'static i_slint_core::graphics::BitmapFont; 6]> = OnceLock::new();
+    static FONTS: OnceLock<[&'static i_slint_core::graphics::BitmapFont; 8]> = OnceLock::new();
     thread_local! {
         static REGISTERED: Cell<bool> = const { Cell::new(false) };
     }
@@ -439,6 +463,18 @@ pub fn register_bitmap_fonts(renderer: &slint::platform::software_renderer::Soft
                     .expect("valid native Terminus bitmap font"),
                 decode_resource(TERMINUS_8X14_NORMAL_RESOURCE)
                     .expect("valid doubled Terminus bitmap font"),
+            ]),
+            leak_font_family(vec![
+                decode_resource(SPLEEN_5X8_NATIVE_RESOURCE)
+                    .expect("valid native Spleen 5x8 bitmap font"),
+                decode_resource(SPLEEN_5X8_DOUBLED_RESOURCE)
+                    .expect("valid doubled Spleen 5x8 bitmap font"),
+            ]),
+            leak_font_family(vec![
+                decode_resource(SPLEEN_6X12_NATIVE_RESOURCE)
+                    .expect("valid native Spleen 6x12 bitmap font"),
+                decode_resource(SPLEEN_6X12_DOUBLED_RESOURCE)
+                    .expect("valid doubled Spleen 6x12 bitmap font"),
             ]),
         ]
     });
@@ -723,6 +759,8 @@ fn generate_bdf_resource(
     family: &str,
     weight: u16,
     pixel_scale: usize,
+    source_x_height: f32,
+    source_cap_height: f32,
 ) -> Result<Vec<u8>, String> {
     #[derive(Default)]
     struct SourceGlyph {
@@ -903,8 +941,8 @@ fn generate_bdf_resource(
             units_per_em: scaled_cell_height as f32,
             ascent: ascent as f32 * metric_scale,
             descent: -(descent as f32 * metric_scale),
-            x_height: 7.0 * metric_scale,
-            cap_height: 10.0 * metric_scale,
+            x_height: source_x_height * metric_scale,
+            cap_height: source_cap_height * metric_scale,
             glyphs,
         },
         false,
@@ -954,17 +992,37 @@ pub fn generate_jersey_25(font_bytes: &[u8]) -> Result<Vec<u8>, String> {
 
 #[cfg(feature = "asset-tools")]
 pub fn generate_terminus_8x14_normal(source: &str) -> Result<Vec<u8>, String> {
-    generate_bdf_resource(source, "Terminus 8x14", 400, 2)
+    generate_bdf_resource(source, "Terminus 8x14", 400, 2, 7.0, 10.0)
 }
 
 #[cfg(feature = "asset-tools")]
 pub fn generate_terminus_8x14_native(source: &str) -> Result<Vec<u8>, String> {
-    generate_bdf_resource(source, "Terminus 8x14", 400, 1)
+    generate_bdf_resource(source, "Terminus 8x14", 400, 1, 7.0, 10.0)
 }
 
 #[cfg(feature = "asset-tools")]
 pub fn generate_terminus_8x14_bold(source: &str) -> Result<Vec<u8>, String> {
-    generate_bdf_resource(source, "Terminus 8x14 Bold", 700, 2)
+    generate_bdf_resource(source, "Terminus 8x14 Bold", 700, 2, 7.0, 10.0)
+}
+
+#[cfg(feature = "asset-tools")]
+pub fn generate_spleen_5x8_native(source: &str) -> Result<Vec<u8>, String> {
+    generate_bdf_resource(source, "Spleen 5x8", 400, 1, 5.0, 7.0)
+}
+
+#[cfg(feature = "asset-tools")]
+pub fn generate_spleen_5x8_doubled(source: &str) -> Result<Vec<u8>, String> {
+    generate_bdf_resource(source, "Spleen 5x8", 400, 2, 5.0, 7.0)
+}
+
+#[cfg(feature = "asset-tools")]
+pub fn generate_spleen_6x12_native(source: &str) -> Result<Vec<u8>, String> {
+    generate_bdf_resource(source, "Spleen 6x12", 400, 1, 6.0, 8.0)
+}
+
+#[cfg(feature = "asset-tools")]
+pub fn generate_spleen_6x12_doubled(source: &str) -> Result<Vec<u8>, String> {
+    generate_bdf_resource(source, "Spleen 6x12", 400, 2, 6.0, 8.0)
 }
 
 #[cfg(test)]
@@ -983,6 +1041,8 @@ mod tests {
     const TERMINUS_8X14_NORMAL_BDF: &str =
         include_str!("../assets/fonts/terminus-8x14/ter-u14n.bdf");
     const TERMINUS_8X14_BOLD_BDF: &str = include_str!("../assets/fonts/terminus-8x14/ter-u14b.bdf");
+    const SPLEEN_5X8_BDF: &str = include_str!("../assets/fonts/spleen/spleen-5x8.bdf");
+    const SPLEEN_6X12_BDF: &str = include_str!("../assets/fonts/spleen/spleen-6x12.bdf");
 
     fn glyph<'a>(font: &'a DecodedFont, code_point: char) -> &'a DecodedGlyph {
         font.glyphs
@@ -1031,16 +1091,42 @@ mod tests {
             JERSEY_25_RESOURCE
         );
         assert_eq!(
-            generate_bdf_resource(TERMINUS_8X14_NORMAL_BDF, "Terminus 8x14", 400, 1).unwrap(),
+            generate_bdf_resource(TERMINUS_8X14_NORMAL_BDF, "Terminus 8x14", 400, 1, 7.0, 10.0,)
+                .unwrap(),
             TERMINUS_8X14_NATIVE_RESOURCE
         );
         assert_eq!(
-            generate_bdf_resource(TERMINUS_8X14_NORMAL_BDF, "Terminus 8x14", 400, 2).unwrap(),
+            generate_bdf_resource(TERMINUS_8X14_NORMAL_BDF, "Terminus 8x14", 400, 2, 7.0, 10.0,)
+                .unwrap(),
             TERMINUS_8X14_NORMAL_RESOURCE
         );
         assert_eq!(
-            generate_bdf_resource(TERMINUS_8X14_BOLD_BDF, "Terminus 8x14 Bold", 700, 2).unwrap(),
+            generate_bdf_resource(
+                TERMINUS_8X14_BOLD_BDF,
+                "Terminus 8x14 Bold",
+                700,
+                2,
+                7.0,
+                10.0,
+            )
+            .unwrap(),
             TERMINUS_8X14_BOLD_RESOURCE
+        );
+        assert_eq!(
+            generate_bdf_resource(SPLEEN_5X8_BDF, "Spleen 5x8", 400, 1, 5.0, 7.0).unwrap(),
+            SPLEEN_5X8_NATIVE_RESOURCE
+        );
+        assert_eq!(
+            generate_bdf_resource(SPLEEN_5X8_BDF, "Spleen 5x8", 400, 2, 5.0, 7.0).unwrap(),
+            SPLEEN_5X8_DOUBLED_RESOURCE
+        );
+        assert_eq!(
+            generate_bdf_resource(SPLEEN_6X12_BDF, "Spleen 6x12", 400, 1, 6.0, 8.0).unwrap(),
+            SPLEEN_6X12_NATIVE_RESOURCE
+        );
+        assert_eq!(
+            generate_bdf_resource(SPLEEN_6X12_BDF, "Spleen 6x12", 400, 2, 6.0, 8.0).unwrap(),
+            SPLEEN_6X12_DOUBLED_RESOURCE
         );
     }
 
@@ -1080,6 +1166,10 @@ mod tests {
             TERMINUS_8X14_NATIVE_RESOURCE,
             TERMINUS_8X14_NORMAL_RESOURCE,
             TERMINUS_8X14_BOLD_RESOURCE,
+            SPLEEN_5X8_NATIVE_RESOURCE,
+            SPLEEN_5X8_DOUBLED_RESOURCE,
+            SPLEEN_6X12_NATIVE_RESOURCE,
+            SPLEEN_6X12_DOUBLED_RESOURCE,
         ] {
             assert!(decode_resource(resource).unwrap().descent < 0.0);
         }
@@ -1129,6 +1219,25 @@ mod tests {
     }
 
     #[test]
+    fn spleen_resources_preserve_native_and_doubled_cells() {
+        for (resource, family, pixel_size, width, height, advance) in [
+            (SPLEEN_5X8_NATIVE_RESOURCE, "Spleen 5x8", 8, 5, 8, 320),
+            (SPLEEN_5X8_DOUBLED_RESOURCE, "Spleen 5x8", 16, 10, 16, 640),
+            (SPLEEN_6X12_NATIVE_RESOURCE, "Spleen 6x12", 12, 6, 12, 384),
+            (SPLEEN_6X12_DOUBLED_RESOURCE, "Spleen 6x12", 24, 12, 24, 768),
+        ] {
+            let font = decode_resource(resource).unwrap();
+            assert_eq!(font.family_name, family);
+            assert_eq!(font.pixel_size, pixel_size);
+            let glyph = glyph(&font, 'A');
+            assert_eq!(
+                (glyph.width, glyph.height, glyph.x_advance),
+                (width, height, advance)
+            );
+        }
+    }
+
+    #[test]
     fn unpacked_coverage_is_binary() {
         for resource in [
             YESTERDAY_10_RESOURCE,
@@ -1139,6 +1248,10 @@ mod tests {
             BACTERIA_12_RESOURCE,
             BACTERIA_12_NATIVE_RESOURCE,
             JERSEY_25_RESOURCE,
+            SPLEEN_5X8_NATIVE_RESOURCE,
+            SPLEEN_5X8_DOUBLED_RESOURCE,
+            SPLEEN_6X12_NATIVE_RESOURCE,
+            SPLEEN_6X12_DOUBLED_RESOURCE,
         ] {
             let font = decode_resource(resource).unwrap();
             for glyph in &font.glyphs {
