@@ -1,7 +1,8 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { Start2P, Start2PSize } from "../components/start2p.slint";
+import { Terminus8x14, Terminus8x14Size } from "../components/terminus_8x14.slint";
+import { Jersey25 } from "../components/jersey_25.slint";
 
 import { MisterUi } from "../mister_window.slint";
 import { MisterBridge, ScreenshotPackProgress } from "../api.slint";
@@ -19,14 +20,14 @@ component CrtProgressRow inherits Rectangle {
         padding-right: MisterUi.grid-x;
         spacing: MisterUi.grid-x;
         cross-axis-alignment: center;
-        Start2P {
+        Terminus8x14 {
             text: root.pack.system + "  " + root.pack.phase;
             color: CrtTheme.text;
             size: MisterUi.crt-body-font;
             overflow: elide;
             horizontal-stretch: 1;
         }
-        Start2P {
+        Terminus8x14 {
             text: root.pack.percent < 0 ? "..." : root.pack.percent + "%";
             color: CrtTheme.muted;
             size: MisterUi.crt-body-font;
@@ -62,15 +63,14 @@ export component CatalogScanPopup inherits Rectangle {
 
             Rectangle { vertical-stretch: 1; background: transparent; }
 
-            Start2P {
+            Jersey25 {
                 width: root.scan-content-width;
                 text: "MiSTer MagiK";
                 color: CrtTheme.accent;
-                size: MisterUi.crt-heading-font;
                 horizontal-alignment: center;
             }
 
-            Start2P {
+            Terminus8x14 {
                 width: root.scan-content-width;
                 text: MisterBridge.catalog-scan-message;
                 color: CrtTheme.text;
@@ -79,7 +79,7 @@ export component CatalogScanPopup inherits Rectangle {
                 wrap: word-wrap;
             }
 
-            Start2P {
+            Terminus8x14 {
                 width: root.scan-content-width;
                 text: MisterBridge.catalog-scan-title;
                 color: #d7eef8;
@@ -87,7 +87,7 @@ export component CatalogScanPopup inherits Rectangle {
                 horizontal-alignment: center;
             }
 
-            Start2P {
+            Terminus8x14 {
                 width: root.scan-content-width;
                 text: MisterBridge.catalog-scan-detail;
                 color: CrtTheme.muted;
@@ -100,7 +100,7 @@ export component CatalogScanPopup inherits Rectangle {
                 width: root.scan-progress-width;
                 spacing: 5px;
 
-                Start2P {
+                Terminus8x14 {
                     text: MisterBridge.media-pack-summary;
                     color: #d7eef8;
                     size: MisterUi.crt-body-font;
@@ -135,7 +135,7 @@ export component MediaProgressPopup inherits Rectangle {
         padding-bottom: 8px;
         spacing: 5px;
 
-        Start2P {
+        Terminus8x14 {
             text: MisterBridge.media-pack-summary;
             color: #d7eef8;
             size: MisterUi.crt-body-font;
@@ -156,10 +156,9 @@ export component StartupSplash inherits Rectangle {
         alignment: center;
         spacing: 12px;
 
-        Start2P {
+        Jersey25 {
             text: "MiSTer MagiK";
             color: CrtTheme.text;
-            size: MisterUi.crt-heading-font;
             horizontal-alignment: center;
         }
     }
@@ -179,14 +178,14 @@ export component BackgroundScanBadge inherits Rectangle {
     t := HorizontalLayout {
         alignment: start;
         width: self.preferred-width;
-        Start2P {
+        Terminus8x14 {
             text: "Building library";
             color: #d7eef8;
             size: MisterUi.crt-body-font;
             horizontal-alignment: center;
             vertical-alignment: center;
         }
-        Start2P {
+        Terminus8x14 {
             text: ".";
             color: MisterBridge.catalog-scan-dot-visible ? #d7eef8 : transparent;
             size: MisterUi.crt-body-font;
@@ -207,11 +206,11 @@ component CompactDialogButton inherits Rectangle {
     border-width: 1px;
     border-color: focused ? CrtTheme.accent : acknowledged ? #4e8f80 : CrtTheme.border;
 
-    Start2P {
+    Terminus8x14 {
         text: root.label;
         color: root.focused ? CrtTheme.accent-text : CrtTheme.text;
         size: MisterUi.portrait-layout && MisterUi.window-width < 400
-            ? Start2PSize.px8
+            ? Terminus8x14Size.px8
             : MisterUi.crt-body-font;
         horizontal-alignment: center;
         vertical-alignment: center;
@@ -239,18 +238,24 @@ export component ConfirmDialog inherits Rectangle {
             padding-bottom: MisterUi.grid-y;
             spacing: MisterUi.grid-y;
 
-            Start2P {
+            if !root.narrow-portrait : Jersey25 {
                 text: MisterBridge.confirm-title;
                 color: CrtTheme.accent;
-                size: root.narrow-portrait ? Start2PSize.px8 : MisterUi.crt-heading-font;
+                horizontal-alignment: center;
+                wrap: word-wrap;
+            }
+            if root.narrow-portrait : Terminus8x14 {
+                text: MisterBridge.confirm-title;
+                color: CrtTheme.accent;
+                size: Terminus8x14Size.px8;
                 horizontal-alignment: center;
                 wrap: word-wrap;
             }
 
-            Start2P {
+            Terminus8x14 {
                 text: MisterBridge.confirm-message;
                 color: CrtTheme.text;
-                size: root.narrow-portrait ? Start2PSize.px8 : MisterUi.crt-body-font;
+                size: root.narrow-portrait ? Terminus8x14Size.px8 : MisterUi.crt-body-font;
                 horizontal-alignment: center;
                 vertical-alignment: center;
                 wrap: word-wrap;
@@ -284,19 +289,22 @@ export component LoadingOverlay inherits Rectangle {
         alignment: center;
         spacing: 12px;
 
-        Start2P {
+        if !MisterUi.portrait-layout : Jersey25 {
             text: MisterBridge.loading-message;
             color: CrtTheme.text;
-            size: MisterUi.portrait-layout && MisterUi.window-width < 400
-                ? Start2PSize.px8
-                : MisterUi.portrait-layout ? Start2PSize.px16 : MisterUi.crt-heading-font;
+            horizontal-alignment: center;
+        }
+        if MisterUi.portrait-layout : Terminus8x14 {
+            text: MisterBridge.loading-message;
+            color: CrtTheme.text;
+            size: MisterUi.window-width < 400 ? Terminus8x14Size.px8 : Terminus8x14Size.px16;
             horizontal-alignment: center;
         }
 
-        Start2P {
+        Terminus8x14 {
             text: MisterBridge.loading-detail != "" ? MisterBridge.loading-detail : "Please wait...";
             color: CrtTheme.muted;
-            size: MisterUi.portrait-layout ? Start2PSize.px8 : MisterUi.crt-body-font;
+            size: MisterUi.portrait-layout ? Terminus8x14Size.px8 : MisterUi.crt-body-font;
             horizontal-alignment: center;
         }
     }

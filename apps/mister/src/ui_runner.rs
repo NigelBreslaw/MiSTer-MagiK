@@ -362,16 +362,16 @@ macro_rules! with_scene_app_layout {
             mister_ui.set_crt_grid_y(crt_metrics.grid_y);
             mister_ui.set_crt_border_x(crt_metrics.border_x);
             mister_ui.set_crt_border_y(crt_metrics.border_y);
-            let start2p_size = |size| match size {
-                UiPixelSize::Px8 => slint_ui::$module::Start2PSize::Px8,
-                UiPixelSize::Px16 => slint_ui::$module::Start2PSize::Px16,
-                UiPixelSize::Px24 => slint_ui::$module::Start2PSize::Px24,
-                UiPixelSize::Px32 => slint_ui::$module::Start2PSize::Px32,
+            let crt_text_size = |size| match size {
+                UiPixelSize::Px8 => slint_ui::$module::Terminus8x14Size::Px8,
+                UiPixelSize::Px16 => slint_ui::$module::Terminus8x14Size::Px16,
+                UiPixelSize::Px24 => slint_ui::$module::Terminus8x14Size::Px24,
+                UiPixelSize::Px32 => slint_ui::$module::Terminus8x14Size::Px32,
             };
-            mister_ui.set_crt_body_font(start2p_size(crt_metrics.body_font));
-            mister_ui.set_crt_heading_font(start2p_size(crt_metrics.heading_font));
-            mister_ui.set_crt_card_title_font(start2p_size(crt_metrics.card_title_font));
-            mister_ui.set_crt_card_detail_font(start2p_size(crt_metrics.card_detail_font));
+            mister_ui.set_crt_body_font(crt_text_size(crt_metrics.body_font));
+            mister_ui.set_crt_heading_font(crt_text_size(crt_metrics.heading_font));
+            mister_ui.set_crt_card_title_font(crt_text_size(crt_metrics.card_title_font));
+            mister_ui.set_crt_card_detail_font(crt_text_size(crt_metrics.card_detail_font));
             mister_ui.set_crt_header_height(crt_metrics.header_height);
             mister_ui.set_crt_footer_height(crt_metrics.footer_height);
             mister_ui.set_crt_game_row_height(crt_metrics.game_row_height);

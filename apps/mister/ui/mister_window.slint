@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { Start2PMetrics, Start2PSize } from "components/start2p.slint";
+import { Terminus8x14Metrics, Terminus8x14Size } from "components/terminus_8x14.slint";
 
 // Rust sets the root window dimensions before show. Defaults preserve the
 // current launcher/benchmark design size when a caller does not override them.
@@ -18,10 +18,10 @@ export global MisterUi {
     in-out property <int> crt-grid-y: 8;
     in-out property <int> crt-border-x: 1;
     in-out property <int> crt-border-y: 1;
-    in-out property <Start2PSize> crt-body-font: Start2PSize.px8;
-    in-out property <Start2PSize> crt-heading-font: Start2PSize.px16;
-    in-out property <Start2PSize> crt-card-title-font: Start2PSize.px24;
-    in-out property <Start2PSize> crt-card-detail-font: Start2PSize.px16;
+    in-out property <Terminus8x14Size> crt-body-font: Terminus8x14Size.px8;
+    in-out property <Terminus8x14Size> crt-heading-font: Terminus8x14Size.px16;
+    in-out property <Terminus8x14Size> crt-card-title-font: Terminus8x14Size.px24;
+    in-out property <Terminus8x14Size> crt-card-detail-font: Terminus8x14Size.px16;
     in-out property <int> crt-header-height: 48;
     in-out property <int> crt-footer-height: 40;
     in-out property <int> crt-game-row-height: 48;
@@ -37,10 +37,10 @@ export global MisterUi {
     // uses explicit axes.
     out property <length> grid: grid-y;
     out property <length> border: border-x;
-    out property <length> body-font: Start2PMetrics.resolve(crt-body-font);
-    out property <length> heading-font: Start2PMetrics.resolve(crt-heading-font);
-    out property <length> card-title-font: Start2PMetrics.resolve(crt-card-title-font);
-    out property <length> card-detail-font: Start2PMetrics.resolve(crt-card-detail-font);
+    out property <length> body-font: Terminus8x14Metrics.resolve(crt-body-font);
+    out property <length> heading-font: Terminus8x14Metrics.resolve(crt-heading-font);
+    out property <length> card-title-font: Terminus8x14Metrics.resolve(crt-card-title-font);
+    out property <length> card-detail-font: Terminus8x14Metrics.resolve(crt-card-detail-font);
     out property <length> header-height: crt-header-height * 1px;
     out property <length> footer-height: crt-footer-height * 1px;
     out property <length> game-row-height: crt-game-row-height * 1px;

@@ -1,7 +1,9 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { Start2P, Start2PSize } from "start2p.slint";
+import { Terminus8x14 } from "terminus_8x14.slint";
+import { Jersey25 } from "jersey_25.slint";
+import { Nocive15 } from "nocive_15.slint";
 
 import { MisterUi } from "../mister_window.slint";
 import { MenuItemStatus } from "../launcher_menu.slint";
@@ -39,27 +41,28 @@ export component CrtHeader inherits Rectangle {
             spacing: 0px;
             horizontal-stretch: 1;
 
-            Start2P {
+            if MisterUi.heading-font >= 32px : Jersey25 {
                 text: root.title;
                 color: CrtTheme.text;
-                size: MisterUi.portrait-layout && MisterUi.window-width < 400
-                    ? Start2PSize.px8
-                    : MisterUi.portrait-layout ? MisterUi.crt-body-font : MisterUi.crt-heading-font;
+                overflow: elide;
+            }
+            if MisterUi.heading-font < 32px : Terminus8x14 {
+                text: root.title;
+                color: CrtTheme.text;
+                size: MisterUi.crt-heading-font;
                 overflow: elide;
             }
 
-            if root.subtitle != "" : Start2P {
+            if root.subtitle != "" : Terminus8x14 {
                 text: root.subtitle;
                 color: CrtTheme.warning;
-                size: MisterUi.crt-body-font;
                 overflow: elide;
             }
         }
 
-        Start2P {
+        Terminus8x14 {
             text: root.status;
             color: CrtTheme.text;
-            size: MisterUi.portrait-layout ? Start2PSize.px8 : MisterUi.crt-body-font;
             horizontal-alignment: right;
         }
     }
@@ -81,17 +84,15 @@ export component CrtFooter inherits Rectangle {
         spacing: MisterUi.grid-x;
         cross-axis-alignment: center;
 
-        Start2P {
+        Nocive15 {
             text: root.left-hint;
             color: CrtTheme.muted;
-            size: MisterUi.portrait-layout ? Start2PSize.px8 : MisterUi.crt-body-font;
             horizontal-stretch: 1;
         }
 
-        Start2P {
+        Nocive15 {
             text: root.right-hint;
             color: CrtTheme.muted;
-            size: MisterUi.portrait-layout ? Start2PSize.px8 : MisterUi.crt-body-font;
             horizontal-alignment: right;
         }
     }
@@ -116,7 +117,7 @@ export component CrtMenuRow inherits Rectangle {
         spacing: MisterUi.grid-x;
         cross-axis-alignment: center;
 
-        Start2P {
+        Terminus8x14 {
             text: (root.focused ? "> " : "  ") + root.label;
             color: !root.enabled ? CrtTheme.muted
                 : root.focused ? CrtTheme.accent-text : CrtTheme.text;
@@ -125,7 +126,7 @@ export component CrtMenuRow inherits Rectangle {
             horizontal-stretch: 1;
         }
 
-        Start2P {
+        Terminus8x14 {
             text: root.detail;
             color: !root.enabled ? CrtTheme.muted
                 : root.focused ? CrtTheme.accent-text : CrtTheme.muted;
@@ -163,7 +164,7 @@ export component CrtCard inherits Rectangle {
         spacing: MisterUi.grid-x;
         cross-axis-alignment: center;
 
-        Start2P {
+        Terminus8x14 {
             width: MisterUi.portrait-layout ? MisterUi.body-font : MisterUi.card-title-font;
             text: root.focused && root.show-marker ? ">" : "";
             color: CrtTheme.accent-text;
@@ -176,26 +177,35 @@ export component CrtCard inherits Rectangle {
             alignment: center;
             horizontal-stretch: 1;
 
-            Start2P {
+            if MisterUi.card-title-font >= 24px : Jersey25 {
                 text: root.label;
                 color: root.focused ? CrtTheme.accent-text
                     : root.status == MenuItemStatus.failed ? CrtTheme.danger
                     : root.status == MenuItemStatus.update-failed ? CrtTheme.warning
                     : root.status == MenuItemStatus.scanning ? CrtTheme.accent
                     : CrtTheme.text;
-                size: MisterUi.portrait-layout ? MisterUi.crt-body-font : MisterUi.crt-card-title-font;
+                overflow: elide;
+                vertical-alignment: center;
+            }
+            if MisterUi.card-title-font < 24px : Terminus8x14 {
+                text: root.label;
+                color: root.focused ? CrtTheme.accent-text
+                    : root.status == MenuItemStatus.failed ? CrtTheme.danger
+                    : root.status == MenuItemStatus.update-failed ? CrtTheme.warning
+                    : root.status == MenuItemStatus.scanning ? CrtTheme.accent
+                    : CrtTheme.text;
+                size: MisterUi.crt-card-title-font;
                 overflow: elide;
                 vertical-alignment: center;
             }
 
-            if root.detail != "" : Start2P {
+            if root.detail != "" : Terminus8x14 {
                 text: root.detail;
                 color: root.focused ? #17304a
                     : root.status == MenuItemStatus.failed ? CrtTheme.danger
                     : root.status == MenuItemStatus.update-failed ? CrtTheme.warning
                     : root.status == MenuItemStatus.scanning ? CrtTheme.accent
                     : CrtTheme.muted;
-                size: MisterUi.portrait-layout ? Start2PSize.px8 : MisterUi.crt-card-detail-font;
                 overflow: elide;
                 vertical-alignment: center;
             }
@@ -215,19 +225,17 @@ export component CrtNavHint inherits HorizontalLayout {
         height: MisterUi.body-font * 3 / 2;
         background: CrtTheme.accent;
 
-        Start2P {
+        Nocive15 {
             text: root.button;
             color: CrtTheme.accent-text;
-            size: MisterUi.crt-body-font;
             horizontal-alignment: center;
             vertical-alignment: center;
         }
     }
 
-    Start2P {
+    Nocive15 {
         text: root.label;
         color: CrtTheme.text;
-        size: MisterUi.crt-body-font;
         vertical-alignment: center;
     }
 }

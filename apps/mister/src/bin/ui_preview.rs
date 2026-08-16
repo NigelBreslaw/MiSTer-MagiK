@@ -3229,16 +3229,16 @@ mod macos {
         ui.set_crt_grid_y(metrics.grid_y);
         ui.set_crt_border_x(metrics.border_x);
         ui.set_crt_border_y(metrics.border_y);
-        let start2p_size = |size| match size {
-            UiPixelSize::Px8 => mister_magik_ui::launcher::Start2PSize::Px8,
-            UiPixelSize::Px16 => mister_magik_ui::launcher::Start2PSize::Px16,
-            UiPixelSize::Px24 => mister_magik_ui::launcher::Start2PSize::Px24,
-            UiPixelSize::Px32 => mister_magik_ui::launcher::Start2PSize::Px32,
+        let crt_text_size = |size| match size {
+            UiPixelSize::Px8 => mister_magik_ui::launcher::Terminus8x14Size::Px8,
+            UiPixelSize::Px16 => mister_magik_ui::launcher::Terminus8x14Size::Px16,
+            UiPixelSize::Px24 => mister_magik_ui::launcher::Terminus8x14Size::Px24,
+            UiPixelSize::Px32 => mister_magik_ui::launcher::Terminus8x14Size::Px32,
         };
-        ui.set_crt_body_font(start2p_size(metrics.body_font));
-        ui.set_crt_heading_font(start2p_size(metrics.heading_font));
-        ui.set_crt_card_title_font(start2p_size(metrics.card_title_font));
-        ui.set_crt_card_detail_font(start2p_size(metrics.card_detail_font));
+        ui.set_crt_body_font(crt_text_size(metrics.body_font));
+        ui.set_crt_heading_font(crt_text_size(metrics.heading_font));
+        ui.set_crt_card_title_font(crt_text_size(metrics.card_title_font));
+        ui.set_crt_card_detail_font(crt_text_size(metrics.card_detail_font));
         ui.set_crt_header_height(metrics.header_height);
         ui.set_crt_footer_height(metrics.footer_height);
         ui.set_crt_game_row_height(metrics.game_row_height);

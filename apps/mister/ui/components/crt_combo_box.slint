@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { Start2P, Start2PSize } from "start2p.slint";
+import { Terminus8x14, Terminus8x14Size } from "terminus_8x14.slint";
 
 import { MisterUi } from "../mister_window.slint";
 import { MisterBridge } from "../api.slint";
@@ -24,20 +24,20 @@ component CrtResolutionRow inherits Rectangle {
         spacing: MisterUi.grid-x;
         cross-axis-alignment: center;
 
-        Start2P {
+        Terminus8x14 {
             width: MisterUi.body-font;
             text: root.focused ? ">" : "";
             color: CrtTheme.accent-text;
             size: MisterUi.crt-body-font;
         }
-        Start2P {
+        Terminus8x14 {
             text: root.label;
             color: root.focused ? CrtTheme.accent-text : CrtTheme.text;
             size: MisterUi.crt-body-font;
             overflow: elide;
             horizontal-stretch: 1;
         }
-        Start2P {
+        Terminus8x14 {
             text: root.detail;
             color: root.focused ? CrtTheme.accent-text : CrtTheme.muted;
             size: MisterUi.crt-body-font;
@@ -53,17 +53,17 @@ component CrtResolutionRow inherits Rectangle {
         spacing: MisterUi.grid-y;
         alignment: center;
 
-        Start2P {
+        Terminus8x14 {
             text: root.label;
             color: root.focused ? CrtTheme.accent-text : CrtTheme.text;
-            size: Start2PSize.px8;
+            size: Terminus8x14Size.px8;
             horizontal-alignment: center;
             wrap: word-wrap;
         }
-        if root.detail != "" : Start2P {
+        if root.detail != "" : Terminus8x14 {
             text: root.detail;
             color: root.focused ? CrtTheme.accent-text : CrtTheme.muted;
-            size: Start2PSize.px8;
+            size: Terminus8x14Size.px8;
             horizontal-alignment: center;
         }
     }
