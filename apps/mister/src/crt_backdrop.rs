@@ -724,11 +724,12 @@ fn blend_rgb565_range(
                 };
             }
             match alpha_bucket.min(32) {
-                0 => bucket!(0, 32),
+                0 => copy_rgb565_coarse_two_source(destination, previous, start, end),
                 4 => bucket!(4, 28),
                 8 => bucket!(8, 24),
                 12 => bucket!(12, 20),
                 16 => bucket!(16, 16),
+                32 => copy_rgb565_coarse_two_source(destination, current, start, end),
                 _ => {
                     let mut index = start;
                     while index + 1 < end {
@@ -753,6 +754,25 @@ fn blend_rgb565_range(
             destination[index..block_end].fill(pixel);
             index = block_end;
         }
+    }
+}
+
+#[inline(always)]
+fn copy_rgb565_coarse_two_source(
+    destination: &mut [Rgb565Pixel],
+    source: &[Rgb565Pixel],
+    start: usize,
+    end: usize,
+) {
+    let mut index = start;
+    while index + 1 < end {
+        let pixel = source[index];
+        destination[index] = pixel;
+        destination[index + 1] = pixel;
+        index += 2;
+    }
+    if index < end {
+        destination[index] = source[index];
     }
 }
 
