@@ -712,6 +712,7 @@ const fn rgb565_from_rgb888(r: u8, g: u8, b: u8) -> Rgb565Pixel {
     Rgb565Pixel(((r as u16 >> 3) << 11) | ((g as u16 >> 2) << 5) | (b as u16 >> 3))
 }
 
+#[inline(always)]
 fn blend_rgb565_range(
     destination: &mut [Rgb565Pixel],
     previous: &[Rgb565Pixel],
