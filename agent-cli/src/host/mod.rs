@@ -22506,7 +22506,15 @@ fn capture_and_restore_launcher(
 }
 
 fn capture_first_arcade(config: &NativeDeviceConfig, output: &Path) -> Result<()> {
-    capture_arcade_variant(config, output, Some("off"), None, "first Arcade screen")
+    capture_arcade_variant(
+        config,
+        output,
+        Some("off"),
+        "home",
+        Some("wait:120,a,wait:120"),
+        None,
+        "first Arcade screen",
+    )
 }
 
 fn capture_crt_font_ab(config: &NativeDeviceConfig, pair: &str, output: &Path) -> Result<()> {
@@ -22562,12 +22570,16 @@ fn capture_crt_font_ab(config: &NativeDeviceConfig, pair: &str, output: &Path) -
             config,
             &a_stem,
             None,
+            "arcade",
+            None,
             Some("baseline"),
             "CRT font row phase A (odd rows)",
         )?;
         capture_arcade_variant(
             config,
             &b_stem,
+            None,
+            "arcade",
             None,
             Some("phase-even"),
             "CRT font row phase B (even rows)",
@@ -22627,6 +22639,8 @@ fn capture_arcade_variant(
     config: &NativeDeviceConfig,
     output: &Path,
     catalog_refresh: Option<&str>,
+    start_screen: &str,
+    input_script: Option<&str>,
     experiment: Option<&str>,
     label: &str,
 ) -> Result<()> {
@@ -22634,17 +22648,14 @@ fn capture_arcade_variant(
         return Err(format!("capture output already exists: {}", output.display()).into());
     }
     let session = connect_with(&config.connection, 10)?;
-    let mut env_vars = vec![
-        ("MISTER_LAUNCHER_START_SCREEN".into(), "home".into()),
-        (
-            "MISTER_LAUNCHER_INPUT_SCRIPT".into(),
-            "wait:120,a,wait:120".into(),
-        ),
-        (
+    let mut env_vars = vec![("MISTER_LAUNCHER_START_SCREEN".into(), start_screen.into())];
+    if let Some(input_script) = input_script {
+        env_vars.push(("MISTER_LAUNCHER_INPUT_SCRIPT".into(), input_script.into()));
+        env_vars.push((
             "MISTER_LAUNCHER_INPUT_SCRIPT_WAIT_FRAMES".into(),
             "1".into(),
-        ),
-    ];
+        ));
+    }
     if let Some(catalog_refresh) = catalog_refresh {
         env_vars.insert(0, ("MISTER_CATALOG_REFRESH".into(), catalog_refresh.into()));
     }
