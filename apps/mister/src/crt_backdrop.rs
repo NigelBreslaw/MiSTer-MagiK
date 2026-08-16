@@ -753,14 +753,36 @@ fn blend_rgb565_range(
             }
             match alpha_bucket.min(32) {
                 0 => copy_rgb565_coarse_two_source(destination, previous, start, end),
-                4 => bucket!(4, 28),
-                8 => bucket!(8, 24),
-                12 => bucket!(12, 20),
-                16 => bucket!(16, 16),
-                20 => bucket!(20, 12),
-                25 => bucket!(25, 7),
                 32 => copy_rgb565_coarse_two_source(destination, current, start, end),
                 _ => {
+                    #[cfg(all(target_os = "linux", target_arch = "arm"))]
+                    {
+                        // SAFETY: the slices are disjoint, and the bounds passed to the C
+                        // kernel are validated by this function before entering the loop.
+                        unsafe {
+                            blend_rgb565_coarse_two_neon(
+                                destination,
+                                previous,
+                                current,
+                                start,
+                                end,
+                                alpha_bucket,
+                            );
+                        }
+                        return;
+                    }
+                    #[cfg(not(all(target_os = "linux", target_arch = "arm")))]
+                    {
+                        match alpha_bucket.min(32) {
+                            4 => bucket!(4, 28),
+                            8 => bucket!(8, 24),
+                            12 => bucket!(12, 20),
+                            16 => bucket!(16, 16),
+                            20 => bucket!(20, 12),
+                            25 => bucket!(25, 7),
+                            _ => {}
+                        }
+                    }
                     let mut index = start;
                     while index + 1 < end {
                         let pixel =
@@ -797,6 +819,38 @@ fn blend_rgb565_range(
             previous_pixel = pixel;
             index = block_end;
         }
+    }
+}
+
+#[cfg(all(target_os = "linux", target_arch = "arm"))]
+unsafe fn blend_rgb565_coarse_two_neon(
+    destination: &mut [Rgb565Pixel],
+    previous: &[Rgb565Pixel],
+    current: &[Rgb565Pixel],
+    start: usize,
+    end: usize,
+    alpha_bucket: u16,
+) {
+    unsafe extern "C" {
+        fn mister_magik_crt_backdrop_blend_coarse_two(
+            destination: *mut u16,
+            previous: *const u16,
+            current: *const u16,
+            start: usize,
+            end: usize,
+            alpha: u16,
+        );
+    }
+    // SAFETY: callers clamp all three slices to `end`; the C kernel only accesses those ranges.
+    unsafe {
+        mister_magik_crt_backdrop_blend_coarse_two(
+            destination.as_mut_ptr().cast(),
+            previous.as_ptr().cast(),
+            current.as_ptr().cast(),
+            start,
+            end,
+            alpha_bucket,
+        );
     }
 }
 
