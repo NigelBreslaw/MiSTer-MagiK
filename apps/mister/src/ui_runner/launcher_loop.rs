@@ -9874,6 +9874,7 @@ pub(super) fn run_launcher_loop(
             navigation_transition_frame_active.then_some(loop_start);
         let mut navigation_transition_render_us = 0u128;
         let mut navigation_logical_frame_rendered = false;
+        let mut restore_crt_backdrop_after_navigation = false;
         if navigation_transition_composition_active {
             let navigation_transition_compositor_started = Instant::now();
             let now_us = loop_start
@@ -10052,11 +10053,14 @@ pub(super) fn run_launcher_loop(
                     );
                 }
                 let pending = pending_navigation_transition.take();
-                if completion.is_some_and(|completion| {
+                let completed_at_destination = completion.is_some_and(|completion| {
                     completion.endpoint == NavigationTransitionEndpoint::Destination
-                }) && pending
-                    .as_ref()
-                    .is_some_and(|pending| pending.event.action == LauncherAction::NavigateHome)
+                });
+                restore_crt_backdrop_after_navigation = completed_at_destination;
+                if completed_at_destination
+                    && pending
+                        .as_ref()
+                        .is_some_and(|pending| pending.event.action == LauncherAction::NavigateHome)
                 {
                     navigation_transition.clear_geometry_history();
                 }
@@ -10086,6 +10090,46 @@ pub(super) fn run_launcher_loop(
             navigation_transition
                 .note_frame_work_us(navigation_transition_render_us.min(u64::MAX as u128) as u64);
             sync_navigation_transition_active(&app, &navigation_transition);
+        }
+        if restore_crt_backdrop_after_navigation
+            && crt_backdrop_eligible
+            && let Some(backdrop) = crt_backdrop.as_mut()
+        {
+            let restore_started = Instant::now();
+            let restored = backdrop.restore_after_full_frame_occlusion(
+                loop_start.saturating_duration_since(run_start),
+                layer_target.presentation_pixels_mut(),
+                layout.content_rect(),
+                crt_metrics,
+            );
+            let restore_us = restore_started.elapsed().as_micros();
+            crt_backdrop_copy_us = crt_backdrop_copy_us.saturating_add(
+                restore_us
+                    .saturating_sub(u128::from(restored.trace.blend_us))
+                    .min(u128::from(u64::MAX)) as u64,
+            );
+            crt_backdrop_copy_pixels = crt_backdrop_copy_pixels.saturating_add(
+                backdrop
+                    .width()
+                    .saturating_mul(backdrop.height())
+                    .min(u32::MAX as usize) as u32,
+            );
+            crt_backdrop_work_trace.blend_us = crt_backdrop_work_trace
+                .blend_us
+                .saturating_add(restored.trace.blend_us);
+            crt_backdrop_work_trace.blend_pixels = crt_backdrop_work_trace
+                .blend_pixels
+                .saturating_add(restored.trace.blend_pixels);
+            crt_backdrop_work_trace.alpha_bucket = restored.trace.alpha_bucket;
+            crt_backdrop_work_trace.active = restored.trace.active;
+            if restored.full_damage {
+                crt_backdrop_full_damage = Some(DirtyRect {
+                    x0: 0,
+                    y0: 0,
+                    x1: layout.composition_w(),
+                    y1: layout.composition_h(),
+                });
+            }
         }
         let effect_label_us = navigation_transition_render_us;
         let navigation_telemetry = navigation_transition.telemetry();
