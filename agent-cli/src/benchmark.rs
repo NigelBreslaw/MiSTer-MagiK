@@ -1066,7 +1066,7 @@ fn execute_arcade_velocity_scroll(
     reporter.emit(
         EventKind::Progress,
         "arcade-velocity-scroll",
-        "measuring one fixed 20-second Arcade velocity scroll on the active display mode",
+        "measuring one fixed 40-second Arcade velocity scroll on the active display mode",
         Some(35),
     )?;
     let detail = device.profile(BenchmarkProfile::ArcadeVelocityScroll, output_dir.clone())?;

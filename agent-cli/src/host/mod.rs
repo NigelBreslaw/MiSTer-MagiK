@@ -7578,8 +7578,8 @@ fn wait_input_integrity_launcher(session: &Session, timeout: Duration) -> Result
 
 const GUI_PROFILE_REMOTE_COMPLETE: &str = "/tmp/mister-magik/gui-frame-profile.json";
 const GUI_PROFILE_DEFAULT_SCROLL_MS: u64 = 900;
-const ARCADE_VELOCITY_SCROLL_DURATION_MS: u64 = 20_000;
-const ARCADE_VELOCITY_SCROLL_TELEMETRY_SECS: u64 = 35;
+const ARCADE_VELOCITY_SCROLL_DURATION_MS: u64 = 40_000;
+const ARCADE_VELOCITY_SCROLL_TELEMETRY_SECS: u64 = 55;
 const ARCADE_VELOCITY_SCROLL_PPROF_REMOTE_DIR: &str =
     "/tmp/mister-magik/arcade-velocity-scroll-pprof";
 
@@ -8835,7 +8835,7 @@ fn summarize_arcade_velocity_scroll(
         .unwrap_or(0);
     let mut quality_failures = Vec::new();
     if phase_duration_us < ARCADE_VELOCITY_SCROLL_DURATION_MS * 1_000 {
-        quality_failures.push("scroll-window-shorter-than-20-seconds");
+        quality_failures.push("scroll-window-shorter-than-40-seconds");
     }
     if physical_fps < minimum_physical_fps {
         quality_failures.push(arcade_velocity_scroll_fps_failure(minimum_physical_fps));
