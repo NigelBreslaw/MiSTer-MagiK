@@ -84,6 +84,8 @@ pub enum ConsoleTypeface {
     Xerxes10Perfect,
     Bacteria12,
     Bacteria12Half,
+    Terminus8x14Normal,
+    Terminus8x14Bold,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -155,6 +157,20 @@ impl ConsoleFont {
                         .expect("valid native-size Bacteria 12 bitmap font resource"),
                 )
             }
+            ConsoleTypeface::Terminus8x14Normal => {
+                assert_eq!(pixel_size, 28.0, "Terminus has one exact CRT240 size");
+                Some(
+                    mister_magik_fb::bitmap_font_resource::terminus_8x14_normal_console_bitmap_font()
+                        .expect("valid pixel-perfect Terminus normal bitmap font resource"),
+                )
+            }
+            ConsoleTypeface::Terminus8x14Bold => {
+                assert_eq!(pixel_size, 28.0, "Terminus has one exact CRT240 size");
+                Some(
+                    mister_magik_fb::bitmap_font_resource::terminus_8x14_bold_console_bitmap_font()
+                        .expect("valid pixel-perfect Terminus bold bitmap font resource"),
+                )
+            }
             ConsoleTypeface::PressStart2P => None,
         };
         if let Some(bitmap) = bitmap {
@@ -198,7 +214,9 @@ impl ConsoleFont {
             | ConsoleTypeface::Xerxes10
             | ConsoleTypeface::Xerxes10Perfect
             | ConsoleTypeface::Bacteria12
-            | ConsoleTypeface::Bacteria12Half => {
+            | ConsoleTypeface::Bacteria12Half
+            | ConsoleTypeface::Terminus8x14Normal
+            | ConsoleTypeface::Terminus8x14Bold => {
                 unreachable!()
             }
         };
@@ -813,6 +831,8 @@ mod tests {
             (ConsoleTypeface::Xerxes10Perfect, 32.0, 32, "MagiK 1984"),
             (ConsoleTypeface::Bacteria12, 32.0, 32, "MagiK 1984"),
             (ConsoleTypeface::Bacteria12Half, 16.0, 32, "MagiK 1984"),
+            (ConsoleTypeface::Terminus8x14Normal, 28.0, 32, "MagiK 1984"),
+            (ConsoleTypeface::Terminus8x14Bold, 28.0, 32, "MagiK 1984"),
             (ConsoleTypeface::PressStart2P, 8.0, 32, "128"),
             (ConsoleTypeface::PressStart2P, 8.0, 19, "128"),
             (ConsoleTypeface::PressStart2P, 8.0, 39, "128"),
@@ -927,6 +947,32 @@ mod tests {
         let mask = font.rasterize_alpha_mask("ARCADE").unwrap();
         assert_eq!(mask.height, 12);
         assert!(mask.alpha.iter().all(|alpha| matches!(alpha, 0 | 255)));
+    }
+
+    #[test]
+    fn terminus_faces_preserve_native_pixels_and_have_distinct_weight() {
+        let mut ink_counts = Vec::new();
+        for typeface in [
+            ConsoleTypeface::Terminus8x14Normal,
+            ConsoleTypeface::Terminus8x14Bold,
+        ] {
+            let mut font = ConsoleFont::new_with_typeface(28.0, typeface);
+            assert!(font.font.is_none());
+            let mask = font.rasterize_alpha_mask("ARCADE").unwrap();
+            assert_eq!(mask.height, 20);
+            assert_eq!(mask.width % 2, 0);
+            assert!(mask.alpha.iter().all(|alpha| matches!(alpha, 0 | 255)));
+            for rows in mask.alpha.chunks_exact(mask.stride * 2) {
+                for x in (0..mask.width).step_by(2) {
+                    let cell = rows[x];
+                    assert_eq!(rows[x + 1], cell);
+                    assert_eq!(rows[mask.stride + x], cell);
+                    assert_eq!(rows[mask.stride + x + 1], cell);
+                }
+            }
+            ink_counts.push(mask.alpha.into_iter().filter(|alpha| *alpha != 0).count());
+        }
+        assert!(ink_counts[1] > ink_counts[0]);
     }
 
     #[test]

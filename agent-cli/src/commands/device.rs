@@ -303,6 +303,8 @@ pub enum CrtFontExperiment {
     YesterdayPerfect,
     Bacteria,
     BacteriaHalf,
+    TerminusNormal,
+    TerminusBold,
 }
 
 #[derive(Debug, Args)]
@@ -506,6 +508,8 @@ impl CrtFontExperiment {
             Self::YesterdayPerfect => "yesterday-perfect",
             Self::Bacteria => "bacteria",
             Self::BacteriaHalf => "bacteria-half",
+            Self::TerminusNormal => "terminus-normal",
+            Self::TerminusBold => "terminus-bold",
         }
     }
 }
@@ -572,6 +576,19 @@ mod tests {
             ])
             .is_ok()
         );
+        for experiment in ["terminus-normal", "terminus-bold"] {
+            assert!(
+                TestCli::try_parse_from([
+                    "test",
+                    "launcher",
+                    "restart",
+                    "--attended",
+                    "--crt-font-experiment",
+                    experiment,
+                ])
+                .is_ok()
+            );
+        }
         assert!(
             TestCli::try_parse_from([
                 "test",

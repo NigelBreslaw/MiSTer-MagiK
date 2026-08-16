@@ -39,6 +39,8 @@ pub enum CrtFontExperiment {
     YesterdayPerfect,
     Bacteria,
     BacteriaHalf,
+    TerminusNormal,
+    TerminusBold,
 }
 
 impl CrtFontExperiment {
@@ -52,6 +54,8 @@ impl CrtFontExperiment {
             Some("yesterday-perfect") => Self::YesterdayPerfect,
             Some("bacteria") => Self::Bacteria,
             Some("bacteria-half") => Self::BacteriaHalf,
+            Some("terminus-normal") => Self::TerminusNormal,
+            Some("terminus-bold") => Self::TerminusBold,
             _ => Self::Baseline,
         }
     }
@@ -67,6 +71,8 @@ impl CrtFontExperiment {
             Self::YesterdayPerfect => "yesterday-perfect",
             Self::Bacteria => "bacteria",
             Self::BacteriaHalf => "bacteria-half",
+            Self::TerminusNormal => "terminus-normal",
+            Self::TerminusBold => "terminus-bold",
         }
     }
 
@@ -81,7 +87,9 @@ impl CrtFontExperiment {
             | Self::XerxesPerfect
             | Self::YesterdayPerfect
             | Self::Bacteria
-            | Self::BacteriaHalf => mister_magik_mister_runtime::framebuffer::vertical_scale::VerticalSampling::CenteredNearest,
+            | Self::BacteriaHalf
+            | Self::TerminusNormal
+            | Self::TerminusBold => mister_magik_mister_runtime::framebuffer::vertical_scale::VerticalSampling::CenteredNearest,
             Self::PhaseEven => mister_magik_mister_runtime::framebuffer::vertical_scale::VerticalSampling::TopAlignedNearest,
         }
     }
@@ -1061,6 +1069,22 @@ mod tests {
             experiment.vertical_sampling(),
             mister_magik_mister_runtime::framebuffer::vertical_scale::VerticalSampling::CenteredNearest
         );
+    }
+
+    #[test]
+    fn terminus_faces_are_font_only_and_keep_centered_sampling() {
+        for (value, expected) in [
+            ("terminus-normal", CrtFontExperiment::TerminusNormal),
+            ("terminus-bold", CrtFontExperiment::TerminusBold),
+        ] {
+            let experiment = CrtFontExperiment::parse(Some(value));
+            assert_eq!(experiment, expected);
+            assert_eq!(experiment.label(), value);
+            assert_eq!(
+                experiment.vertical_sampling(),
+                mister_magik_mister_runtime::framebuffer::vertical_scale::VerticalSampling::CenteredNearest
+            );
+        }
     }
 
     #[test]

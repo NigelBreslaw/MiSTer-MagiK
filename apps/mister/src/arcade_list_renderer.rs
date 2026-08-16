@@ -179,6 +179,16 @@ impl ArcadeListStyle {
                     style.title_typeface = ConsoleTypeface::Bacteria12Half;
                     ConsoleGlyphRowFilter::Native
                 }
+                CrtFontExperiment::TerminusNormal => {
+                    style.title_font_px = 28.0;
+                    style.title_typeface = ConsoleTypeface::Terminus8x14Normal;
+                    ConsoleGlyphRowFilter::Native
+                }
+                CrtFontExperiment::TerminusBold => {
+                    style.title_font_px = 28.0;
+                    style.title_typeface = ConsoleTypeface::Terminus8x14Bold;
+                    ConsoleGlyphRowFilter::Native
+                }
                 CrtFontExperiment::Baseline | CrtFontExperiment::PhaseEven => {
                     ConsoleGlyphRowFilter::Native
                 }
@@ -3455,6 +3465,33 @@ mod tests {
             ConsoleGlyphRowFilter::Native
         );
         assert_eq!(renderer.style.row_height, 32);
+    }
+
+    #[test]
+    fn terminus_faces_use_the_exact_28px_crt240_resources() {
+        for (experiment, expected_typeface) in [
+            (
+                CrtFontExperiment::TerminusNormal,
+                ConsoleTypeface::Terminus8x14Normal,
+            ),
+            (
+                CrtFontExperiment::TerminusBold,
+                ConsoleTypeface::Terminus8x14Bold,
+            ),
+        ] {
+            let display = crt_240_display().with_crt_font_experiment(experiment);
+            let renderer = ArcadeListRenderer::new_for_crt_display(
+                CrtUiMetrics::for_display(&display),
+                &display,
+            );
+            assert_eq!(renderer.style.title_font_px, 28.0);
+            assert_eq!(renderer.style.title_typeface, expected_typeface);
+            assert_eq!(
+                renderer.style.glyph_row_filter,
+                ConsoleGlyphRowFilter::Native
+            );
+            assert_eq!(renderer.style.row_height, 32);
+        }
     }
 
     #[test]

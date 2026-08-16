@@ -23,8 +23,9 @@ export component LicensesScreen inherits Rectangle {
         CrtMenuRow { label: "Press Start 2P"; detail: ">"; focused: MisterBridge.licenses-selected == 2; acknowledged: MisterBridge.selection-feedback-query("licenses", "press-start-2p", MisterBridge.selection-feedback-revision); }
         CrtMenuRow { label: "Commercial Fonts"; detail: ">"; focused: MisterBridge.licenses-selected == 3; acknowledged: MisterBridge.selection-feedback-query("licenses", "commercial-fonts", MisterBridge.selection-feedback-revision); }
         CrtMenuRow { label: "Jersey 25"; detail: ">"; focused: MisterBridge.licenses-selected == 4; acknowledged: MisterBridge.selection-feedback-query("licenses", "jersey-25", MisterBridge.selection-feedback-revision); }
-        CrtMenuRow { label: "Arcade Cabinet"; detail: ">"; focused: MisterBridge.licenses-selected == 5; acknowledged: MisterBridge.selection-feedback-query("licenses", "arcade-cabinet", MisterBridge.selection-feedback-revision); }
-        CrtMenuRow { label: "Slint"; detail: ">"; focused: MisterBridge.licenses-selected == 6; acknowledged: MisterBridge.selection-feedback-query("licenses", "slint", MisterBridge.selection-feedback-revision); }
+        CrtMenuRow { label: "Terminus Font"; detail: ">"; focused: MisterBridge.licenses-selected == 5; acknowledged: MisterBridge.selection-feedback-query("licenses", "terminus-font", MisterBridge.selection-feedback-revision); }
+        CrtMenuRow { label: "Arcade Cabinet"; detail: ">"; focused: MisterBridge.licenses-selected == 6; acknowledged: MisterBridge.selection-feedback-query("licenses", "arcade-cabinet", MisterBridge.selection-feedback-revision); }
+        CrtMenuRow { label: "Slint"; detail: ">"; focused: MisterBridge.licenses-selected == 7; acknowledged: MisterBridge.selection-feedback-query("licenses", "slint", MisterBridge.selection-feedback-revision); }
         CrtFooter { left-hint: "A Open   B Back"; right-hint: "HOME Launcher"; }
     }
 
@@ -40,7 +41,8 @@ export component LicensesScreen inherits Rectangle {
                   MisterBridge.licenses-selected == 2 ? "Press Start 2P  v" :
                   MisterBridge.licenses-selected == 3 ? "Commercial Fonts  v" :
                   MisterBridge.licenses-selected == 4 ? "Jersey 25  v" :
-                  MisterBridge.licenses-selected == 5 ? "Arcade Cabinet  v" : "Slint  v";
+                  MisterBridge.licenses-selected == 5 ? "Terminus Font  v" :
+                  MisterBridge.licenses-selected == 6 ? "Arcade Cabinet  v" : "Slint  v";
             color: CrtTheme.accent;
             size: MisterUi.crt-heading-font;
             horizontal-alignment: center;
