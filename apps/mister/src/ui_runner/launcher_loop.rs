@@ -9879,9 +9879,7 @@ pub(super) fn run_launcher_loop(
                         as u32;
                     let copied = layer_target.presentation_frame_view().pixels().len()
                         >= crt_backdrop_copy_pixels as usize;
-                    let backdrop_pixels_changed = !(crt_backdrop_work_trace.active
-                        && crt_backdrop_work_trace.alpha_bucket == 0);
-                    if copied && backdrop_pixels_changed {
+                    if copied {
                         crt_backdrop_full_damage = Some(DirtyRect {
                             x0: 0,
                             y0: 0,
