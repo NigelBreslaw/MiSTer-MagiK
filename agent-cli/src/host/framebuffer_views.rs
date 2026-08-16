@@ -298,7 +298,7 @@ mod tests {
         assert!(pixels[..640 * 96 * 3].iter().all(|&pixel| pixel == 0));
         assert!(pixels[640 * 384 * 3..].iter().all(|&pixel| pixel == 0));
         assert_eq!(pixels[640 * 96 * 3], 0);
-        assert_eq!(pixels[640 * 383 * 3], 287);
+        assert_eq!(pixels[640 * 383 * 3], 36);
     }
 
     #[test]
@@ -308,9 +308,9 @@ mod tests {
         let (width, height, pixels) = decode_fixture(&views.display_4x3_png);
         assert_eq!((width, height), (640, 480));
         assert_eq!(pixels[0], 0);
-        assert_eq!(pixels[640 * 1 * 3], 0);
+        assert_eq!(pixels[640 * 3], 0);
         assert_eq!(pixels[640 * 2 * 3], 1);
-        assert_eq!(pixels[640 * 479 * 3], 287);
+        assert_eq!(pixels[640 * 479 * 3], 36);
     }
 
     #[test]
