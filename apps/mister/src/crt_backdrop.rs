@@ -50,9 +50,6 @@ pub struct CrtBackdropState {
     target_is_plain: bool,
     retarget_is_plain: bool,
     transition_started: Option<Duration>,
-    composition_generation: u64,
-    last_composed_generation: u64,
-    last_composed_alpha_bucket: Option<u16>,
     pending_prepare_us: u64,
     pending_prepare_pixels: u32,
 }
@@ -95,9 +92,6 @@ impl CrtBackdropState {
             target_is_plain: true,
             retarget_is_plain: true,
             transition_started: None,
-            composition_generation: 1,
-            last_composed_generation: 0,
-            last_composed_alpha_bucket: None,
             pending_prepare_us: 0,
             pending_prepare_pixels: 0,
         }
@@ -123,18 +117,6 @@ impl CrtBackdropState {
         self.transition_started.is_some()
     }
 
-    /// Force the next composition to rewrite its destination. This is needed
-    /// when Slint has replaced the cached base while backdrop state is stable.
-    pub fn invalidate_composition_cache(&mut self) {
-        self.last_composed_generation = 0;
-        self.last_composed_alpha_bucket = None;
-    }
-
-    fn mark_retargeted(&mut self) {
-        self.composition_generation = self.composition_generation.wrapping_add(1).max(1);
-        self.invalidate_composition_cache();
-    }
-
     pub fn retarget_plain(&mut self, now: Duration) {
         self.retarget(None, now);
     }
@@ -145,7 +127,6 @@ impl CrtBackdropState {
             self.pending_prepare_pixels = 0;
             return;
         }
-        self.mark_retargeted();
         let prepare_start = Instant::now();
         self.source.fill(CRT_BACKDROP_BACKGROUND);
         self.target = std::sync::Arc::from(vec![CRT_BACKDROP_BACKGROUND; self.target.len()]);
@@ -192,7 +173,6 @@ impl CrtBackdropState {
         self.pending_prepare_us = duration_us(prepare_start.elapsed());
         self.pending_prepare_pixels = self.target.len().min(u32::MAX as usize) as u32;
         self.transition_started = (self.source.as_slice() != self.target.as_ref()).then_some(now);
-        self.mark_retargeted();
         if self.transition_started.is_none() {
             self.retarget.copy_from_slice(&self.target);
             self.retarget_row_repeats
@@ -222,7 +202,6 @@ impl CrtBackdropState {
             self.pending_prepare_pixels = 0;
             self.transition_started =
                 (self.source.as_slice() != self.target.as_ref()).then_some(now);
-            self.mark_retargeted();
             return;
         };
         self.target = prepared.pixels;
@@ -231,7 +210,6 @@ impl CrtBackdropState {
         self.pending_prepare_us = 0;
         self.pending_prepare_pixels = 0;
         self.transition_started = (self.source != self.target.as_ref()).then_some(now);
-        self.mark_retargeted();
         if self.transition_started.is_none() {
             self.retarget.copy_from_slice(&self.target);
             self.retarget_row_repeats
@@ -296,14 +274,7 @@ impl CrtBackdropState {
         };
         let Some(started) = self.transition_started else {
             trace.alpha_bucket = 32;
-            if self.last_composed_generation == self.composition_generation
-                && self.last_composed_alpha_bucket == Some(32)
-            {
-                return trace;
-            }
             self.expand_into(destination, protected_rects);
-            self.last_composed_generation = self.composition_generation;
-            self.last_composed_alpha_bucket = Some(32);
             return trace;
         };
         let elapsed = now.checked_sub(started).unwrap_or_default();
@@ -312,13 +283,6 @@ impl CrtBackdropState {
             .min(CRT_BACKDROP_FADE_DURATION.as_micros());
         let denominator = CRT_BACKDROP_FADE_DURATION.as_micros().max(1);
         let alpha_bucket = ((numerator * 32 + denominator / 2) / denominator) as u16;
-        trace.alpha_bucket = alpha_bucket.min(32) as u8;
-        trace.active = alpha_bucket < 32;
-        if self.last_composed_generation == self.composition_generation
-            && self.last_composed_alpha_bucket == Some(alpha_bucket)
-        {
-            return trace;
-        }
         let blend_start = Instant::now();
         let row_width = self.width.max(1);
         let coarse_factor = coarse_factor.max(1);
@@ -386,14 +350,14 @@ impl CrtBackdropState {
         }
         trace.blend_us = duration_us(blend_start.elapsed());
         trace.blend_pixels = self.retarget.len().min(u32::MAX as usize) as u32;
+        trace.alpha_bucket = alpha_bucket.min(32) as u8;
+        trace.active = alpha_bucket < 32;
         if !trace.active {
             self.transition_started = None;
             self.retarget_is_plain = self.target_is_plain;
         } else {
             self.retarget_is_plain = false;
         }
-        self.last_composed_generation = self.composition_generation;
-        self.last_composed_alpha_bucket = Some(alpha_bucket);
         self.expand_into(destination, protected_rects);
         trace
     }

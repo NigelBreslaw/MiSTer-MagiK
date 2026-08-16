@@ -9849,9 +9849,6 @@ pub(super) fn run_launcher_loop(
                 crt_backdrop_prepared_revision = prepared_revision;
             }
             if let Some(backdrop) = crt_backdrop.as_mut() {
-                if !crt_backdrop_was_eligible {
-                    backdrop.invalidate_composition_cache();
-                }
                 let compose_full = selected_changed
                     || transition_changed
                     || prepared_changed
