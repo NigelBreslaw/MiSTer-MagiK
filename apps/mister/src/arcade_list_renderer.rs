@@ -847,13 +847,13 @@ impl ArcadeListRenderer {
         let mut x = 0;
         while x < self.width {
             while x < self.width
-                && is_arcade_unselected_fill_pixel_with_style(surface_row[x], self.style)
+                && is_arcade_unselected_overlay_fill_pixel(surface_row[x], self.style)
             {
                 x += 1;
             }
             let run_start = x;
             while x < self.width
-                && !is_arcade_unselected_fill_pixel_with_style(surface_row[x], self.style)
+                && !is_arcade_unselected_overlay_fill_pixel(surface_row[x], self.style)
             {
                 x += 1;
             }
@@ -2253,6 +2253,11 @@ fn is_arcade_row_background_pixel_with_style(pixel: Rgb565Pixel, style: ArcadeLi
 
 fn is_arcade_unselected_fill_pixel_with_style(pixel: Rgb565Pixel, style: ArcadeListStyle) -> bool {
     pixel == style.background_565 || pixel == style.alternate_background_565
+}
+
+fn is_arcade_unselected_overlay_fill_pixel(pixel: Rgb565Pixel, style: ArcadeListStyle) -> bool {
+    is_arcade_unselected_fill_pixel_with_style(pixel, style)
+        || (style.crt_palette && pixel == style.border_565)
 }
 
 fn arcade_selection_inversion_enabled() -> bool {
