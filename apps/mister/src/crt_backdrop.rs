@@ -827,44 +827,14 @@ fn blend_rgb565_coarse_two_const<const ALPHA: u32, const INVERSE: u32>(
 ) {
     let mut index = start;
     while index + 1 < end {
-        let pixel = blend_rgb565_pair_const::<ALPHA, INVERSE>(
-            previous[index],
-            current[index],
-            previous[index + 1],
-            current[index + 1],
-        );
-        destination[index] = pixel.0;
-        destination[index + 1] = pixel.1;
+        let pixel = blend_rgb565_const::<ALPHA, INVERSE>(previous[index], current[index]);
+        destination[index] = pixel;
+        destination[index + 1] = pixel;
         index += 2;
     }
     if index < end {
         destination[index] = blend_rgb565_const::<ALPHA, INVERSE>(previous[index], current[index]);
     }
-}
-
-#[inline(always)]
-const fn blend_rgb565_pair_const<const ALPHA: u32, const INVERSE: u32>(
-    from_low: Rgb565Pixel,
-    to_low: Rgb565Pixel,
-    from_high: Rgb565Pixel,
-    to_high: Rgb565Pixel,
-) -> (Rgb565Pixel, Rgb565Pixel) {
-    let from = u64::from(from_low.0) | (u64::from(from_high.0) << 32);
-    let to = u64::from(to_low.0) | (u64::from(to_high.0) << 32);
-    let red_blue_mask = 0xf81f_f81f_u64;
-    let green_mask = 0x07e0_07e0_u64;
-    let red_blue = (((from & red_blue_mask) * u64::from(INVERSE)
-        + (to & red_blue_mask) * u64::from(ALPHA))
-        >> 5)
-        & red_blue_mask;
-    let green = (((from & green_mask) * u64::from(INVERSE) + (to & green_mask) * u64::from(ALPHA))
-        >> 5)
-        & green_mask;
-    let blended = red_blue | green;
-    (
-        Rgb565Pixel(blended as u16),
-        Rgb565Pixel((blended >> 32) as u16),
-    )
 }
 
 #[inline(always)]
@@ -1142,24 +1112,6 @@ mod tests {
         assert_eq!(destination[2], marker);
         assert_ne!(destination[0], marker);
         assert_ne!(destination[3], marker);
-    }
-
-    #[test]
-    fn packed_pair_blend_matches_scalar_rgb565_blend() {
-        let samples = [
-            (Rgb565Pixel(0x0000), Rgb565Pixel(0xffff)),
-            (Rgb565Pixel(0xf800), Rgb565Pixel(0x07e0)),
-            (Rgb565Pixel(0x1234), Rgb565Pixel(0xabcd)),
-            (Rgb565Pixel(0xffff), Rgb565Pixel(0x0001)),
-        ];
-        for &(from_low, to_low) in &samples {
-            for &(from_high, to_high) in &samples {
-                let packed =
-                    blend_rgb565_pair_const::<12, 20>(from_low, to_low, from_high, to_high);
-                assert_eq!(packed.0, blend_rgb565_const::<12, 20>(from_low, to_low));
-                assert_eq!(packed.1, blend_rgb565_const::<12, 20>(from_high, to_high));
-            }
-        }
     }
 
     #[test]
