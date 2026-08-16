@@ -15,6 +15,7 @@ pub(crate) fn force_frame_pointers_requested() -> bool {
         .unwrap_or(false)
 }
 
+#[allow(dead_code)]
 fn force_frame_pointers_requested_in(flags: &str) -> bool {
     let mut expects_codegen_value = false;
 
