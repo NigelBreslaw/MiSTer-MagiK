@@ -473,14 +473,24 @@ impl NativeDevice {
                     LauncherCommand::Status => agent_magik(&device_strings(["status"])),
                     LauncherCommand::Restart(args) => {
                         let session = connect(10)?;
+                        let mut env_vars = Vec::new();
                         if let Some(experiment) = args.crt_font_experiment {
+                            env_vars.push((
+                                "MISTER_CRT_FONT_EXPERIMENT".into(),
+                                experiment.as_str().into(),
+                            ));
+                        }
+                        if let Some(composition) = args.crt240_composition {
+                            env_vars.push((
+                                "MISTER_CRT240_COMPOSITION".into(),
+                                composition.as_str().into(),
+                            ));
+                        }
+                        if !env_vars.is_empty() {
                             restart_launcher_with_one_shot_env(
                                 &session,
                                 LauncherRestartOptions {
-                                    env_vars: vec![(
-                                        "MISTER_CRT_FONT_EXPERIMENT".into(),
-                                        experiment.as_str().into(),
-                                    )],
+                                    env_vars,
                                     timeout_secs: 45,
                                     remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str().into(),
                                     ..LauncherRestartOptions::default()

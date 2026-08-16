@@ -291,6 +291,8 @@ pub struct LauncherRestartArgs {
     attended: bool,
     #[arg(long, value_enum)]
     pub(crate) crt_font_experiment: Option<CrtFontExperiment>,
+    #[arg(long, value_enum)]
+    pub(crate) crt240_composition: Option<Crt240Composition>,
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
@@ -303,6 +305,22 @@ pub enum CrtFontExperiment {
     YesterdayPerfect,
     Bacteria,
     BacteriaHalf,
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+pub enum Crt240Composition {
+    Native,
+    #[value(name = "legacy-480")]
+    Legacy480,
+}
+
+impl Crt240Composition {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Native => "native",
+            Self::Legacy480 => "legacy-480",
+        }
+    }
 }
 
 #[derive(Debug, Args)]
@@ -569,6 +587,17 @@ mod tests {
                 "--attended",
                 "--crt-font-experiment",
                 "phase-even",
+            ])
+            .is_ok()
+        );
+        assert!(
+            TestCli::try_parse_from([
+                "test",
+                "launcher",
+                "restart",
+                "--attended",
+                "--crt240-composition",
+                "legacy-480",
             ])
             .is_ok()
         );

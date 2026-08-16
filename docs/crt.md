@@ -23,7 +23,7 @@ four built-in progressive Menu modes:
 
 | Resolved mode | RGB565 composition → scanout | Pixel clock | Horizontal timing (active/front/sync/back) | Vertical timing (active/front/sync/back) | Nominal rates |
 | --- | --- | ---: | --- | --- | --- |
-| `crt-240p60` | 640×480 → 640×240 | 12.587 MHz | 640/30/60/70 | 240/4/4/14 | 15.7338 kHz / 60.052 Hz |
+| `crt-240p60` | 640×240 → 640×240 (legacy compatibility: 640×480) | 12.587 MHz | 640/30/60/70 | 240/4/4/14 | 15.7338 kHz / 60.052 Hz |
 | `crt-288p50` | 640×288 → 640×288 | 12.587 MHz | 640/30/60/70 | 288/6/4/14 | 15.7338 kHz / 50.429 Hz |
 | `crt-480p60` | 640×480 → 640×480 | 25.175 MHz | 640/16/96/48 | 480/8/4/33 | 31.4688 kHz / 59.940 Hz |
 | `crt-576p50` | 640×576 → 640×576 | 25.175 MHz | 640/16/96/48 | 576/2/4/42 | 31.4688 kHz / 50.431 Hz |
@@ -34,17 +34,18 @@ scanout and scan geometry. It does not synthesize or alter those timings.
 
 Composition dimensions, scanout dimensions, scan timing, and destination
 placement are separate. Slint, Rust Arcade rows, screensavers, and overlays
-converge in one cached RGB565 composition owned by the resolved route. Only
-240p uses the centred nearest-row vertical transform, mapping 480 composition
-rows to 240 scanout rows while preserving all 640 horizontal pixels. Both PAL
-routes compose natively, so presentation and dirty-row mapping are identity
-operations. The scan timing describes the analogue raster owned by Main and
-Menu. The inclusive destination rectangle posts the complete native scanout
-raster into Menu's scan space:
+converge in one cached RGB565 composition owned by the resolved route. The
+production CRT240 path now composes directly at 640×240, matching the PAL
+routes so presentation and dirty-row mapping are identity operations. The
+previous 640×480 CRT240 composition remains available as a volatile
+compatibility policy (`MISTER_CRT240_COMPOSITION=legacy-480`) for visual A/B
+review. The scan timing describes the analogue raster owned by Main and Menu.
+The inclusive destination rectangle posts the complete native scanout raster
+into Menu's scan space:
 
 | Mode | Composition | RGB565 scanout/capture | Destination rectangle |
 | --- | --- | --- | --- |
-| `crt-240p60` | 640×480 | 640×240 | `(67,706,12,251)` |
+| `crt-240p60` | 640×240 (legacy: 640×480) | 640×240 | `(67,706,12,251)` |
 | `crt-288p50` | 640×288 | 640×288 | `(67,706,12,299)` |
 | `crt-480p60` | 640×480 | 640×480 | `(45,684,31,510)` |
 | `crt-576p50` | 640×576 | 640×576 | `(45,684,40,615)` |
@@ -52,9 +53,10 @@ raster into Menu's scan space:
 The FPGA OSD/framebuffer path is a direct scan overlay, not a general-purpose
 product scaler. Exact 2× relationships such as 320×144→640×288 or
 320×288→640×576 are therefore not the UI objective. MagiK gives the FPGA a
-framebuffer that already matches the complete destination raster, apart from
-the deliberate 480→240 conversion on the 240p route. Authoritative framebuffer
-captures are consequently 640×240, 640×288, 640×480, or 640×576.
+framebuffer that already matches the complete destination raster. The legacy
+CRT240 policy is the only path that deliberately performs a 480→240
+conversion. Authoritative framebuffer captures are consequently 640×240,
+640×288, 640×480, or 640×576.
 
 ## Capture inspection views
 
@@ -81,6 +83,22 @@ It captures the production centered odd-row sampler as A and a top-aligned
 even-row sampler as B, then emits a side-by-side `1280×480` true-4:3 review
 image. The experiment is volatile and the production baseline remains the
 default when `MISTER_CRT_FONT_EXPERIMENT` is unset.
+
+For composition A/B review, keep the Arcade list open and capture the same
+fixture twice. Native 640×240 is the production baseline; the compatibility
+capture uses the old 640×480 composition and centred row transform:
+
+```text
+scripts/agent device launcher restart --attended --crt240-composition legacy-480
+scripts/agent device launcher capture-first-arcade --attended --output CRT240-legacy
+scripts/agent device launcher restart --attended --crt240-composition native
+scripts/agent device launcher capture-first-arcade --attended --output CRT240-native
+```
+
+Compare each raw capture with its generated `-raw-letterbox-4x3.png` and
+`-display-4x3.png` companions. This isolates composition changes from the
+physical 4:3 inspection transform; do not compare a letterboxed image against
+the true-4:3 view as if they were the same pixel grid.
 
 The font-only follow-up locks Arcade glyph coverage to absolute two-row groups
 before the 480→240 conversion. Each pair receives the maximum alpha coverage
