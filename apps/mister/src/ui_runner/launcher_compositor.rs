@@ -548,13 +548,10 @@ fn crt_arcade_chrome_rects(
         x1: header.x1,
         y1: content.y + content.height - grid_y * 2,
     };
-    let scrollbar = DirtyRect {
-        x0: list.x1.saturating_sub(grid_x),
-        y0: list.y0,
-        x1: list.x1,
-        y1: list.y1,
-    };
-    [header, footer, scrollbar]
+    // The scrolling indicator is intentionally omitted on CRT backdrops: it
+    // is decorative, while the selected cyan row and readable text remain.
+    let _ = list;
+    [header, footer]
 }
 
 fn snapshot_cached_565(target: &UiFrameTarget) -> Vec<Rgb565Pixel> {
