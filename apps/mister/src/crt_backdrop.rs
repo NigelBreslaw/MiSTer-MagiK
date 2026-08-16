@@ -885,19 +885,8 @@ fn copy_rgb565_row_excluding(
             destination[protected_end..width].copy_from_slice(&source[protected_end..width]);
             return;
         }
-        _ => copy_rgb565_row_excluding_multiple(destination, source, width, row, protected_rects),
+        _ => {}
     }
-}
-
-#[cold]
-#[inline(never)]
-fn copy_rgb565_row_excluding_multiple(
-    destination: &mut [Rgb565Pixel],
-    source: &[Rgb565Pixel],
-    width: usize,
-    row: usize,
-    protected_rects: &[(usize, usize, usize, usize)],
-) {
     let mut cursor = 0;
     for &(x0, y0, x1, y1) in protected_rects {
         if row < y0 || row >= y1 {
