@@ -14900,6 +14900,34 @@ mod tests {
     }
 
     #[test]
+    fn crt_route_policy_is_fixed_to_the_supported_backdrop_matrix() {
+        let hdmi = PreviewRoutePolicy::for_output_route(ResolvedOutputRoute::Hdmi);
+        assert!(hdmi.allows_preview_work());
+        assert!(hdmi.allows_hdmi_preview());
+        assert!(!hdmi.allows_crt_backdrop());
+
+        for route in [
+            ResolvedOutputRoute::Crt240p60,
+            ResolvedOutputRoute::Crt288p50,
+        ] {
+            let crt = PreviewRoutePolicy::for_output_route(route);
+            assert!(crt.allows_preview_work());
+            assert!(!crt.allows_hdmi_preview());
+            assert!(crt.allows_crt_backdrop());
+        }
+
+        for route in [
+            ResolvedOutputRoute::Crt480p60,
+            ResolvedOutputRoute::Crt576p50,
+        ] {
+            let unsupported = PreviewRoutePolicy::for_output_route(route);
+            assert!(!unsupported.allows_preview_work());
+            assert!(!unsupported.allows_hdmi_preview());
+            assert!(!unsupported.allows_crt_backdrop());
+        }
+    }
+
+    #[test]
     fn full_present_during_crt_arcade_keeps_same_frame_list_repaint_ownership() {
         let mut composition = UiCompositionController::new();
         let input = UiCompositionInput {
