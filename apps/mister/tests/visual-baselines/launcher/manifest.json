@@ -1,7 +1,7 @@
 {
   "schema": "mister-magik-launcher-visual-baseline-v1",
-  "source_commit": "c26273c9dc54241d8fe98040acd7caac1792d12a",
-  "scene_manifest_sha256": "b3522b84ac02c691086951c1954f2da70277fc46fa556d27674369e6d6fd5a45",
+  "source_commit": "069d61951fe4387ebde6e731a9e8cdc702156c1a",
+  "scene_manifest_sha256": "d53a60a81a87d0bbe7d895028837dc379075d878e98b10b9bb188e4ebe86e896",
   "review": {
     "owner": "Codex (visual review delegated by Nigel Breslaw)",
     "result": "accepted",
@@ -20,6 +20,72 @@
     "font_bundle_sha256": "359d9077b71eec53c02ff5362f983c7f793808c4062a59957446169fe89e9aa9"
   },
   "scenes": [
+    {
+      "id": "crt-240p-arcade",
+      "rgb565_hash": "c0fc2eefbef719ca",
+      "provenance_sha256": "e1d7e06c0f45a410ad583fc09be9bdb5154e02aeee255ac665a52e3d7864713c",
+      "scenario": "arcade",
+      "frame": 0,
+      "fixed_time_us": 16666,
+      "width": 640,
+      "height": 480,
+      "display_profile": "crt-240p"
+    },
+    {
+      "id": "crt-240p-catalog-scan",
+      "rgb565_hash": "682862f9a0f60c65",
+      "provenance_sha256": "bb297b15c25601b0a7d3bcb58982695dae37fda6b94075a0a498ac7d939805db",
+      "scenario": "catalog-scan",
+      "frame": 0,
+      "fixed_time_us": 16666,
+      "width": 640,
+      "height": 480,
+      "display_profile": "crt-240p"
+    },
+    {
+      "id": "crt-240p-controller-setup",
+      "rgb565_hash": "bc34ed95feb1b0c5",
+      "provenance_sha256": "282477ca012c1a2fa21ec2e616c0366167e7a3abbfca4fe08388ecf43b787fbe",
+      "scenario": "controller-setup",
+      "frame": 0,
+      "fixed_time_us": 16666,
+      "width": 640,
+      "height": 480,
+      "display_profile": "crt-240p"
+    },
+    {
+      "id": "crt-240p-home",
+      "rgb565_hash": "825eb20ec6cc734d",
+      "provenance_sha256": "56893f16a887287e7f82542af504be85aeba0dafe49c90576b3191ed22646ee9",
+      "scenario": "home",
+      "frame": 0,
+      "fixed_time_us": 16666,
+      "width": 640,
+      "height": 480,
+      "display_profile": "crt-240p"
+    },
+    {
+      "id": "crt-240p-navigation-transition-midpoint",
+      "rgb565_hash": "44ffbd71fd032f5a",
+      "provenance_sha256": "f98c4136c447f526daf4faba38bd660b8e100265adfdc7f9aaca4720de842093",
+      "scenario": "home",
+      "frame": 17,
+      "fixed_time_us": 900000,
+      "width": 640,
+      "height": 480,
+      "display_profile": "crt-240p"
+    },
+    {
+      "id": "crt-240p-settings",
+      "rgb565_hash": "42056fda5ab68bd5",
+      "provenance_sha256": "66b873ee9c55ff823d1ec58fa5fe7afa9b2f5e83e82ba47548b59aa14dcbc9bf",
+      "scenario": "settings",
+      "frame": 0,
+      "fixed_time_us": 16666,
+      "width": 640,
+      "height": 480,
+      "display_profile": "crt-240p"
+    },
     {
       "id": "crt-arcade",
       "rgb565_hash": "8247ef3d82a66c19",
