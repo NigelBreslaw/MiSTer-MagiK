@@ -334,9 +334,10 @@ impl CrtBackdropState {
                 let destination_end = destination_start
                     .saturating_add(row_width)
                     .min(self.retarget.len());
+                let (before, after) = self.retarget.split_at_mut(destination_start);
                 copy_rgb565_row_excluding(
-                    &mut self.retarget[destination_start..destination_end],
-                    &self.retarget[source_start..source_end],
+                    &mut after[..destination_end - destination_start],
+                    &before[source_start..source_end],
                     copy_row,
                     protected_rects,
                 );
