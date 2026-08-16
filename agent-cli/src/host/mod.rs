@@ -8551,7 +8551,6 @@ fn profile_installed_arcade_velocity_scroll_attribution(
                 "crt_backdrop_list_overlay",
                 "crt_backdrop_blend",
                 "crt_backdrop_copy",
-                "crt_backdrop_snapshot",
             ],
             "selection_rule": "advance only when a hotspot accounts for >=10% of cycles, >=1ms of frame time, or measurable repeated-vblank reduction",
             "cadence_rule": "unprofiled control owns physical cadence and repeated-vblank gates",
@@ -8782,11 +8781,6 @@ fn summarize_arcade_velocity_scroll(
         .map(|frame| frame_u64(frame, "crt_backdrop_blend_us"))
         .collect::<Vec<_>>();
     backdrop_blend_us.sort_unstable();
-    let mut backdrop_snapshot_us = scroll_profile_frames
-        .iter()
-        .map(|frame| frame_u64(frame, "crt_backdrop_snapshot_us"))
-        .collect::<Vec<_>>();
-    backdrop_snapshot_us.sort_unstable();
     let mut backdrop_copy_us = scroll_profile_frames
         .iter()
         .map(|frame| frame_u64(frame, "crt_backdrop_copy_us"))
@@ -8797,11 +8791,6 @@ fn summarize_arcade_velocity_scroll(
         .map(|frame| frame_u64(frame, "crt_backdrop_list_overlay_us"))
         .collect::<Vec<_>>();
     backdrop_list_overlay_us.sort_unstable();
-    let mut backdrop_chrome_restore_us = scroll_profile_frames
-        .iter()
-        .map(|frame| frame_u64(frame, "crt_backdrop_chrome_restore_us"))
-        .collect::<Vec<_>>();
-    backdrop_chrome_restore_us.sort_unstable();
     let active_fade_frames = scroll_profile_frames
         .iter()
         .filter(|frame| frame.get("crt_backdrop_active").and_then(Value::as_bool) == Some(true))
@@ -8915,17 +8904,11 @@ fn summarize_arcade_velocity_scroll(
             "timing_us": percentile_summary(&backdrop_blend_us),
             "max_pixels": backdrop_blend_pixels,
         },
-        "crt_backdrop_snapshot": {
-            "timing_us": percentile_summary(&backdrop_snapshot_us),
-        },
         "crt_backdrop_copy": {
             "timing_us": percentile_summary(&backdrop_copy_us),
         },
         "crt_backdrop_list_overlay": {
             "timing_us": percentile_summary(&backdrop_list_overlay_us),
-        },
-        "crt_backdrop_chrome_restore": {
-            "timing_us": percentile_summary(&backdrop_chrome_restore_us),
         },
         "crt_backdrop_fade_activity": {
             "active_frames": active_fade_frames,
@@ -8999,13 +8982,6 @@ fn summarize_arcade_velocity_scroll(
     )?;
     writeln!(
         report,
-        "- Backdrop snapshot (p95 / p99 / max): {} / {} / {} us",
-        percentile_95(&backdrop_snapshot_us),
-        percentile_99(&backdrop_snapshot_us),
-        backdrop_snapshot_us.last().copied().unwrap_or(0),
-    )?;
-    writeln!(
-        report,
         "- Backdrop copy (p95 / p99 / max): {} / {} / {} us",
         percentile_95(&backdrop_copy_us),
         percentile_99(&backdrop_copy_us),
@@ -9017,13 +8993,6 @@ fn summarize_arcade_velocity_scroll(
         percentile_95(&backdrop_list_overlay_us),
         percentile_99(&backdrop_list_overlay_us),
         backdrop_list_overlay_us.last().copied().unwrap_or(0),
-    )?;
-    writeln!(
-        report,
-        "- Chrome restore (p95 / p99 / max): {} / {} / {} us",
-        percentile_95(&backdrop_chrome_restore_us),
-        percentile_99(&backdrop_chrome_restore_us),
-        backdrop_chrome_restore_us.last().copied().unwrap_or(0),
     )?;
     writeln!(
         report,

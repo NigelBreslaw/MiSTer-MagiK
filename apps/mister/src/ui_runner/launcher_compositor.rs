@@ -220,71 +220,6 @@ impl<'a> LayerTarget<'a> {
         snapshot_cached_565(self.target)
     }
 
-    pub(super) fn copy_cached_into(&self, destination: &mut Vec<Rgb565Pixel>) {
-        destination.resize(
-            self.target.cached_565().len(),
-            crate::crt_backdrop::CRT_BACKDROP_BACKGROUND,
-        );
-        destination.copy_from_slice(self.target.cached_565());
-    }
-
-    pub(super) fn snapshot_crt_arcade_chrome(
-        &self,
-        destination: &mut Vec<Rgb565Pixel>,
-        content: crate::ui_display::CrtContentRect,
-        metrics: CrtUiMetrics,
-    ) -> u32 {
-        destination.resize(
-            self.target.cached_565().len(),
-            crate::crt_backdrop::CRT_BACKDROP_BACKGROUND,
-        );
-        let layout = self.layout.output_layout();
-        let cached = self.target.cached_565();
-        let rects = crt_arcade_chrome_rects(content, metrics);
-        let mut copied = 0usize;
-        if matches!(
-            layout.rotation(),
-            mister_magik_framebuffer_scenes::OutputRotation::None
-        ) && layout.physical_stride() == layout.logical_width()
-        {
-            for rect in rects {
-                let x0 = rect.x0.min(layout.logical_width());
-                let x1 = rect.x1.min(layout.logical_width());
-                for y in rect.y0.min(layout.logical_height())..rect.y1.min(layout.logical_height())
-                {
-                    let start = y * layout.physical_stride() + x0;
-                    let end = y * layout.physical_stride() + x1;
-                    destination[start..end].copy_from_slice(&cached[start..end]);
-                    copied = copied.saturating_add(end.saturating_sub(start));
-                }
-            }
-        } else {
-            for rect in rects {
-                for y in rect.y0.min(layout.logical_height())..rect.y1.min(layout.logical_height())
-                {
-                    for x in
-                        rect.x0.min(layout.logical_width())..rect.x1.min(layout.logical_width())
-                    {
-                        let offset = layout.physical_offset(x, y);
-                        if offset < destination.len() && offset < cached.len() {
-                            destination[offset] = cached[offset];
-                            copied = copied.saturating_add(1);
-                        }
-                    }
-                }
-            }
-        }
-        copied.min(u32::MAX as usize) as u32
-    }
-
-    pub(super) fn compose_crt_backdrop(&mut self, pixels: &[Rgb565Pixel]) -> bool {
-        if pixels.len() != self.target.cached_565().len() {
-            return false;
-        }
-        self.target.cached_565_mut().copy_from_slice(pixels);
-        true
-    }
-
     pub(super) fn restore_cached(&mut self, snapshot: &[Rgb565Pixel]) -> bool {
         restore_cached_565(self.target, snapshot)
     }
@@ -452,45 +387,6 @@ impl<'a> LayerTarget<'a> {
         )
     }
 
-    pub(super) fn restore_crt_arcade_chrome(
-        &mut self,
-        snapshot: &[Rgb565Pixel],
-        content: crate::ui_display::CrtContentRect,
-        metrics: CrtUiMetrics,
-    ) {
-        for rect in crt_arcade_chrome_rects(content, metrics) {
-            self.restore_logical_rect(snapshot, rect);
-        }
-    }
-
-    fn restore_logical_rect(&mut self, snapshot: &[Rgb565Pixel], rect: DirtyRect) {
-        let layout = self.layout.output_layout();
-        if matches!(
-            layout.rotation(),
-            mister_magik_framebuffer_scenes::OutputRotation::None
-        ) && layout.physical_stride() == layout.logical_width()
-        {
-            let x0 = rect.x0.min(layout.logical_width());
-            let x1 = rect.x1.min(layout.logical_width());
-            for y in rect.y0.min(layout.logical_height())..rect.y1.min(layout.logical_height()) {
-                let start = y * layout.physical_stride() + x0;
-                let end = y * layout.physical_stride() + x1;
-                if end <= snapshot.len() && end <= self.target.cached_565().len() {
-                    self.target.cached_565_mut()[start..end].copy_from_slice(&snapshot[start..end]);
-                }
-            }
-            return;
-        }
-        for y in rect.y0.min(self.layout.logical_h())..rect.y1.min(self.layout.logical_h()) {
-            for x in rect.x0.min(self.layout.logical_w())..rect.x1.min(self.layout.logical_w()) {
-                let offset = self.layout.output_layout().physical_offset(x, y);
-                if offset < snapshot.len() && offset < self.target.cached_565().len() {
-                    self.target.cached_565_mut()[offset] = snapshot[offset];
-                }
-            }
-        }
-    }
-
     pub(super) fn compose_arcade_list_snapshot_update(
         &mut self,
         renderer: &mut ArcadeListRenderer,
@@ -527,27 +423,6 @@ impl<'a> LayerTarget<'a> {
             self.target.direct_preview_view()
         }
     }
-}
-
-pub(super) fn crt_arcade_chrome_rects(
-    content: crate::ui_display::CrtContentRect,
-    metrics: CrtUiMetrics,
-) -> [DirtyRect; 2] {
-    let grid_x = metrics.grid_x.max(1) as usize;
-    let grid_y = metrics.grid_y.max(1) as usize;
-    let header = DirtyRect {
-        x0: content.x + grid_x * 2,
-        y0: content.y + grid_y * 2,
-        x1: content.x + content.width - grid_x * 2,
-        y1: content.y + grid_y * 2 + metrics.header_height.max(1) as usize,
-    };
-    let footer = DirtyRect {
-        x0: header.x0,
-        y0: content.y + content.height - metrics.footer_height.max(1) as usize - grid_y * 2,
-        x1: header.x1,
-        y1: content.y + content.height - grid_y * 2,
-    };
-    [header, footer]
 }
 
 fn snapshot_cached_565(target: &UiFrameTarget) -> Vec<Rgb565Pixel> {

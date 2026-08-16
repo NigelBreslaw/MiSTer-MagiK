@@ -9800,14 +9800,10 @@ pub(super) fn run_launcher_loop(
         }
         let mut crt_backdrop_full_damage = None;
         let mut crt_backdrop_work_trace = crate::crt_backdrop::CrtBackdropWorkTrace::default();
-        let crt_backdrop_snapshot_us = 0_u64;
         let mut crt_backdrop_copy_us = 0_u64;
         let mut crt_backdrop_list_overlay_us = 0_u64;
-        let crt_backdrop_chrome_restore_us = 0_u64;
-        let crt_backdrop_snapshot_pixels = 0_u32;
         let mut crt_backdrop_copy_pixels = 0_u32;
         let mut crt_backdrop_list_overlay_pixels = 0_u32;
-        let crt_backdrop_chrome_restore_pixels = 0_u32;
         let transition_id = preview
             .raw_transition_frame()
             .as_ref()
@@ -10092,14 +10088,10 @@ pub(super) fn run_launcher_loop(
             crt_backdrop_prepare_pixels: crt_backdrop_work_trace.prepare_pixels,
             crt_backdrop_blend_us: crt_backdrop_work_trace.blend_us,
             crt_backdrop_blend_pixels: crt_backdrop_work_trace.blend_pixels,
-            crt_backdrop_snapshot_us,
-            crt_backdrop_snapshot_pixels,
             crt_backdrop_copy_us,
             crt_backdrop_copy_pixels,
             crt_backdrop_list_overlay_us,
             crt_backdrop_list_overlay_pixels,
-            crt_backdrop_chrome_restore_us,
-            crt_backdrop_chrome_restore_pixels,
             crt_backdrop_alpha_bucket: crt_backdrop_work_trace.alpha_bucket,
             crt_backdrop_active: crt_backdrop_work_trace.active,
             crt_backdrop_selected: nav.arcade.selected,
@@ -10229,14 +10221,10 @@ pub(super) fn run_launcher_loop(
         } else {
             None
         };
-        custom_draw_trace.crt_backdrop_snapshot_us = crt_backdrop_snapshot_us;
-        custom_draw_trace.crt_backdrop_snapshot_pixels = crt_backdrop_snapshot_pixels;
         custom_draw_trace.crt_backdrop_copy_us = crt_backdrop_copy_us;
         custom_draw_trace.crt_backdrop_copy_pixels = crt_backdrop_copy_pixels;
         custom_draw_trace.crt_backdrop_list_overlay_us = crt_backdrop_list_overlay_us;
         custom_draw_trace.crt_backdrop_list_overlay_pixels = crt_backdrop_list_overlay_pixels;
-        custom_draw_trace.crt_backdrop_chrome_restore_us = crt_backdrop_chrome_restore_us;
-        custom_draw_trace.crt_backdrop_chrome_restore_pixels = crt_backdrop_chrome_restore_pixels;
         let physical_custom_damage = accepted_screensaver_frame.then_some(this_rect).flatten();
         let preview_layer_desired = should_desire_direct_layer(
             wants_preview_layer,
@@ -10767,10 +10755,6 @@ pub(super) fn run_launcher_loop(
                 .crt_backdrop_prepare_pixels,
             presented_frame.custom_draw_trace.crt_backdrop_blend_us,
             presented_frame.custom_draw_trace.crt_backdrop_blend_pixels,
-            presented_frame.custom_draw_trace.crt_backdrop_snapshot_us,
-            presented_frame
-                .custom_draw_trace
-                .crt_backdrop_snapshot_pixels,
             presented_frame.custom_draw_trace.crt_backdrop_copy_us,
             presented_frame.custom_draw_trace.crt_backdrop_copy_pixels,
             presented_frame
@@ -10779,12 +10763,6 @@ pub(super) fn run_launcher_loop(
             presented_frame
                 .custom_draw_trace
                 .crt_backdrop_list_overlay_pixels,
-            presented_frame
-                .custom_draw_trace
-                .crt_backdrop_chrome_restore_us,
-            presented_frame
-                .custom_draw_trace
-                .crt_backdrop_chrome_restore_pixels,
             presented_frame.custom_draw_trace.crt_backdrop_alpha_bucket,
             presented_frame.custom_draw_trace.crt_backdrop_active,
             presented_frame.custom_draw_trace.crt_backdrop_selected,

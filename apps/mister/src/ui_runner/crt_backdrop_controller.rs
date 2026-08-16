@@ -28,7 +28,6 @@ struct PreparedIdentity {
 
 struct PrepareRequest {
     identity: PreparedIdentity,
-    queued_at: Instant,
     words: Arc<[u16]>,
     source_width: usize,
     source_height: usize,
@@ -37,7 +36,6 @@ struct PrepareRequest {
 
 struct PrepareResult {
     identity: PreparedIdentity,
-    queued_us: u64,
     prepare_us: u64,
     pixels: Arc<[Rgb565Pixel]>,
     row_repeats: Arc<[bool]>,
@@ -75,11 +73,6 @@ impl PrepareWorker {
                     };
                     let result = PrepareResult {
                         identity: request.identity,
-                        queued_us: request
-                            .queued_at
-                            .elapsed()
-                            .as_micros()
-                            .min(u128::from(u64::MAX)) as u64,
                         prepare_us: started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64,
                         pixels: Arc::from(pixels),
                         row_repeats: Arc::from(row_repeats),
@@ -112,7 +105,6 @@ struct PreparedEntry {
     pixels: Arc<[Rgb565Pixel]>,
     row_repeats: Arc<[bool]>,
     bytes: usize,
-    queued_us: u64,
     prepare_us: u64,
 }
 
@@ -130,7 +122,6 @@ pub(super) struct CrtBackdropController {
     pending: HashSet<PreparedIdentity>,
     active_epoch: u64,
     revision: u64,
-    pending_queue_us: u64,
     pending_prepare_us: u64,
     selected: Option<usize>,
     transition_id: Option<u64>,
@@ -148,7 +139,6 @@ impl CrtBackdropController {
             pending: HashSet::new(),
             active_epoch: 0,
             revision: 0,
-            pending_queue_us: 0,
             pending_prepare_us: 0,
             selected: None,
             transition_id: None,
@@ -189,17 +179,12 @@ impl CrtBackdropController {
         self.transition_id
     }
 
-    pub(super) fn worker_timings(&self) -> (u64, u64) {
-        (self.pending_queue_us, self.pending_prepare_us)
-    }
-
     pub(super) fn poll(&mut self) {
         while let Ok(result) = self.worker.rx.try_recv() {
             self.pending.remove(&result.identity);
             if self.active_epoch != 0 && result.identity.epoch != self.active_epoch {
                 continue;
             }
-            self.pending_queue_us = result.queued_us;
             self.pending_prepare_us = result.prepare_us;
             let bytes = result
                 .pixels
@@ -222,7 +207,6 @@ impl CrtBackdropController {
                 pixels: result.pixels,
                 row_repeats: result.row_repeats,
                 bytes,
-                queued_us: result.queued_us,
                 prepare_us: result.prepare_us,
             });
             self.cache_bytes = self.cache_bytes.saturating_add(bytes);
@@ -251,7 +235,6 @@ impl CrtBackdropController {
         }
         let request = PrepareRequest {
             identity: identity.clone(),
-            queued_at: Instant::now(),
             words: Arc::clone(&source.words),
             source_width: source.source_width,
             source_height: source.source_height,
@@ -278,7 +261,6 @@ impl CrtBackdropController {
             .iter()
             .position(|entry| entry.identity == identity)?;
         let entry = self.cache.remove(index)?;
-        self.pending_queue_us = entry.queued_us;
         self.pending_prepare_us = entry.prepare_us;
         let prepared = PreparedCrtBackdrop {
             pixels: Arc::clone(&entry.pixels),
@@ -340,6 +322,13 @@ impl CrtBackdropController {
                 destination,
                 &product_chrome_rects(content, metrics),
             );
+            if prepared_changed {
+                frame.trace.prepare_us = self.pending_prepare_us;
+                frame.trace.prepare_pixels = self
+                    .width()
+                    .saturating_mul(self.physical_height())
+                    .min(u32::MAX as usize) as u32;
+            }
             frame.full_damage = destination.len() >= self.width().saturating_mul(self.height());
         }
         self.was_eligible = true;
