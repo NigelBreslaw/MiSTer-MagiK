@@ -310,7 +310,7 @@ impl CrtBackdropState {
         metrics: CrtUiMetrics,
     ) -> CrtBackdropWorkTrace {
         let protected = product_chrome_rects(content, metrics);
-        let trace = self.compose_to(now, destination, &protected, CRT_PRODUCT_TEXT_COLORS, 2);
+        let trace = self.compose_to(now, destination, &protected, CRT_PRODUCT_TEXT_COLORS, 1);
         if !trace.active {
             self.expand_to_logical();
         }
@@ -587,27 +587,29 @@ fn scale_dimmed_center_crop_mapped_with_logical_height(
     }
 
     // The 240p route owns a 640x480 logical composition backed by half as
-    // many physical rows. Keep each cropped screenshot pixel as an exact 2x2
-    // logical block instead of stretching the crop to fill the composition.
-    let pixel_double = logical_destination_height == destination_height.saturating_mul(2);
-    let (crop_x, crop_y, crop_width, crop_height) = if pixel_double {
-        center_crop_4_3_nearest(frame.source_width, frame.source_height)
-    } else {
-        center_crop_4_3(frame.source_width, frame.source_height)
-    };
-    if pixel_double {
-        let scaled_width = crop_width.saturating_mul(2);
+    // many physical rows. Preserve the complete source bounds at the largest
+    // fitting integer scale: 2x when it fits, otherwise 1x for tall portraits.
+    let integer_scale_route = logical_destination_height == destination_height.saturating_mul(2);
+    if integer_scale_route {
+        let integer_scale = if frame.source_width.saturating_mul(2) <= destination_width
+            && frame.source_height.saturating_mul(2) <= logical_destination_height
+        {
+            2
+        } else {
+            1
+        };
+        let scaled_width = frame.source_width.saturating_mul(integer_scale);
         let image_x = (destination_width as isize - scaled_width as isize) / 2;
         for (destination_x, source_x) in x_map[..destination_width].iter_mut().enumerate() {
             let local_x = destination_x as isize - image_x;
             *source_x = if local_x >= 0 && local_x < scaled_width as isize {
-                crop_x + local_x as usize / 2
+                local_x as usize / integer_scale
             } else {
                 usize::MAX
             };
         }
 
-        let scaled_logical_height = crop_height.saturating_mul(2);
+        let scaled_logical_height = frame.source_height.saturating_mul(integer_scale);
         let image_y = (logical_destination_height as isize - scaled_logical_height as isize) / 2;
         for destination_y in 0..destination_height {
             let logical_y = destination_y
@@ -617,12 +619,14 @@ fn scale_dimmed_center_crop_mapped_with_logical_height(
                 / destination_height.saturating_mul(2).max(1);
             let local_y = logical_y as isize - image_y;
             y_map[destination_y] = if local_y >= 0 && local_y < scaled_logical_height as isize {
-                crop_y + local_y as usize / 2
+                local_y as usize / integer_scale
             } else {
                 usize::MAX
             };
         }
     } else {
+        let (crop_x, crop_y, crop_width, crop_height) =
+            center_crop_4_3(frame.source_width, frame.source_height);
         for (destination_x, source_x) in x_map[..destination_width].iter_mut().enumerate() {
             *source_x = crop_x
                 + (destination_x.saturating_mul(crop_width) / destination_width)
@@ -742,20 +746,6 @@ fn center_crop_4_3(width: usize, height: usize) -> (usize, usize, usize, usize) 
         ((width - crop_width) / 2, 0, crop_width, height)
     } else {
         let crop_height = (width.saturating_mul(3) / 4).max(1).min(height);
-        (0, (height - crop_height) / 2, width, crop_height)
-    }
-}
-
-fn center_crop_4_3_nearest(width: usize, height: usize) -> (usize, usize, usize, usize) {
-    if width.saturating_mul(3) > height.saturating_mul(4) {
-        let crop_width = (height.saturating_mul(4).saturating_add(1) / 3)
-            .max(1)
-            .min(width);
-        ((width - crop_width) / 2, 0, crop_width, height)
-    } else {
-        let crop_height = (width.saturating_mul(3).saturating_add(2) / 4)
-            .max(1)
-            .min(height);
         (0, (height - crop_height) / 2, width, crop_height)
     }
 }
@@ -1139,8 +1129,6 @@ mod tests {
         assert_eq!(center_crop_4_3(600, 800), (0, 175, 600, 450));
         assert_eq!(center_crop_4_3(640, 480), (0, 0, 640, 480));
         assert_eq!(center_crop_4_3(320, 224), (11, 0, 298, 224));
-        assert_eq!(center_crop_4_3_nearest(320, 224), (10, 0, 299, 224));
-        assert_eq!(center_crop_4_3_nearest(187, 320), (0, 90, 187, 140));
     }
 
     #[test]
@@ -1241,11 +1229,12 @@ mod tests {
     }
 
     #[test]
-    fn physical_240p_target_centers_exact_pixel_doubled_crops() {
+    fn physical_240p_target_centers_uncropped_sources_at_fitting_integer_scale() {
         let white = Rgb565Pixel(0xffff);
         for (
             source_width,
             source_height,
+            integer_scale,
             expected_x0,
             expected_x1,
             expected_physical_y0,
@@ -1255,8 +1244,9 @@ mod tests {
             expected_source_y0,
             expected_source_y1,
         ) in [
-            (320, 224, 21, 619, 8, 232, 10, 308, 0, 223),
-            (187, 320, 133, 507, 50, 190, 0, 186, 90, 229),
+            (320, 224, 2, 0, 640, 8, 232, 0, 319, 0, 223),
+            (187, 320, 1, 226, 413, 40, 200, 0, 186, 1, 319),
+            (280, 320, 1, 180, 460, 40, 200, 0, 279, 1, 319),
         ] {
             let source = vec![white; source_width * source_height];
             let mut destination = vec![CRT_BACKDROP_BACKGROUND; 640 * 240];
@@ -1275,22 +1265,28 @@ mod tests {
                 &mut row_repeats,
             ));
 
-            assert_eq!(x_map[expected_x0 - 1], usize::MAX);
+            if expected_x0 > 0 {
+                assert_eq!(x_map[expected_x0 - 1], usize::MAX);
+            }
             assert_eq!(x_map[expected_x0], expected_source_x0);
-            assert_eq!(x_map[expected_x0 + 1], expected_source_x0);
-            assert_eq!(x_map[expected_x1 - 2], expected_source_x1);
+            assert_eq!(x_map[expected_x0 + integer_scale - 1], expected_source_x0);
+            assert_eq!(x_map[expected_x1 - integer_scale], expected_source_x1);
             assert_eq!(x_map[expected_x1 - 1], expected_source_x1);
-            assert_eq!(x_map[expected_x1], usize::MAX);
+            if expected_x1 < x_map.len() {
+                assert_eq!(x_map[expected_x1], usize::MAX);
+            }
             assert_eq!(y_map[expected_physical_y0 - 1], usize::MAX);
             assert_eq!(y_map[expected_physical_y0], expected_source_y0);
             assert_eq!(y_map[expected_physical_y1 - 1], expected_source_y1);
             assert_eq!(y_map[expected_physical_y1], usize::MAX);
 
             let first_image_row = expected_physical_y0 * 640;
-            assert_eq!(
-                destination[first_image_row + expected_x0 - 1],
-                CRT_BACKDROP_BACKGROUND
-            );
+            if expected_x0 > 0 {
+                assert_eq!(
+                    destination[first_image_row + expected_x0 - 1],
+                    CRT_BACKDROP_BACKGROUND
+                );
+            }
             assert_eq!(
                 destination[first_image_row + expected_x0],
                 darken_rgb565(white)
@@ -1299,11 +1295,44 @@ mod tests {
                 destination[first_image_row + expected_x1 - 1],
                 darken_rgb565(white)
             );
-            assert_eq!(
-                destination[first_image_row + expected_x1],
-                CRT_BACKDROP_BACKGROUND
-            );
+            if expected_x1 < 640 {
+                assert_eq!(
+                    destination[first_image_row + expected_x1],
+                    CRT_BACKDROP_BACKGROUND
+                );
+            }
         }
+    }
+
+    #[test]
+    fn product_composition_keeps_adjacent_source_rows_distinct() {
+        let display = UiDisplay::for_plan(UiDisplayPlan::from_geometry_with_route(
+            DisplayGeometry::new(640, 240),
+            ResolvedOutputRoute::Crt240p60,
+            "test-product-backdrop",
+            UiFramebufferSizePolicy::Auto,
+        ));
+        let metrics = CrtUiMetrics::for_display(&display);
+        let source = [
+            Rgb565Pixel(0xf800),
+            Rgb565Pixel(0xf800),
+            Rgb565Pixel(0x001f),
+            Rgb565Pixel(0x001f),
+        ];
+        let mut backdrop = CrtBackdropState::for_display(&display).unwrap();
+        backdrop.retarget(Some(frame(&source, 2, 2)), Duration::ZERO);
+        let mut destination = vec![CRT_BACKDROP_BACKGROUND; 640 * 480];
+
+        let trace = backdrop.compose_product_into(
+            CRT_BACKDROP_FADE_DURATION,
+            &mut destination,
+            display.content_rect(),
+            metrics,
+        );
+
+        assert!(!trace.active);
+        assert_eq!(backdrop.retarget[119 * 640 + 318], darken_rgb565(source[0]));
+        assert_eq!(backdrop.retarget[120 * 640 + 318], darken_rgb565(source[2]));
     }
 
     #[test]
