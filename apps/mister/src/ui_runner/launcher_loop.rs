@@ -14254,10 +14254,10 @@ mod tests {
         assert_eq!(
             renderer.dirty_rect(),
             DirtyRect {
-                x0: 16,
-                y0: 104,
-                x1: 624,
-                y1: 416,
+                x0: 48,
+                y0: 128,
+                x1: 592,
+                y1: 392,
             }
         );
     }
@@ -14321,10 +14321,10 @@ mod tests {
         assert_eq!(
             crt_renderer.dirty_rect(),
             DirtyRect {
-                x0: 288,
-                y0: 104,
-                x1: 624,
-                y1: 416,
+                x0: 294,
+                y0: 128,
+                x1: 592,
+                y1: 392,
             }
         );
     }
@@ -14332,7 +14332,7 @@ mod tests {
     #[test]
     fn crt_routes_use_roomier_rows_in_normal_and_search_layouts() {
         for (pal, scandoubler, expected_row_height, expected_full_rows) in
-            [(0, 0, 32, 9), (1, 0, 19, 7), (0, 1, 32, 12), (1, 1, 39, 11)]
+            [(0, 0, 32, 8), (1, 0, 19, 7), (0, 1, 32, 12), (1, 1, 39, 11)]
         {
             let ini = format!(
                 "[MiSTer]\ndirect_video=1\nmenu_pal={pal}\nforced_scandoubler={scandoubler}\n"

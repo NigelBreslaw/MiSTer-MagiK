@@ -2460,7 +2460,7 @@ mod tests {
             crate::ui_display::ScreenOrientation::Normal,
         )
         .output_layout();
-        let sentinel = Rgb565Pixel(0xdead);
+        let sentinel = Rgb565Pixel(0x1234);
         let backdrop = (0..layout.len())
             .map(|index| Rgb565Pixel((index as u16).wrapping_mul(17)))
             .collect::<Vec<_>>();

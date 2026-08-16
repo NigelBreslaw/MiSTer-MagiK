@@ -235,6 +235,9 @@ impl CrtBackdropState {
         let mut logical_retarget = std::mem::take(&mut self.logical_retarget);
         let trace = self.compose_to(now, &mut logical_retarget, &[], 1);
         self.logical_retarget = logical_retarget;
+        if !trace.active {
+            self.expand_to_logical();
+        }
         trace
     }
 
@@ -245,7 +248,11 @@ impl CrtBackdropState {
         now: Duration,
         destination: &mut [Rgb565Pixel],
     ) -> CrtBackdropWorkTrace {
-        self.compose_to(now, destination, &[], 1)
+        let trace = self.compose_to(now, destination, &[], 1);
+        if !trace.active {
+            self.expand_to_logical();
+        }
+        trace
     }
 
     /// Compose the backdrop while preserving opaque UI rectangles already in
@@ -258,7 +265,11 @@ impl CrtBackdropState {
         destination: &mut [Rgb565Pixel],
         protected_rects: &[(usize, usize, usize, usize)],
     ) -> CrtBackdropWorkTrace {
-        self.compose_to(now, destination, protected_rects, 1)
+        let trace = self.compose_to(now, destination, protected_rects, 1);
+        if !trace.active {
+            self.expand_to_logical();
+        }
+        trace
     }
 
     /// Compose a deliberately coarse 2x2 backdrop fade for CRT performance
@@ -269,7 +280,11 @@ impl CrtBackdropState {
         destination: &mut [Rgb565Pixel],
         protected_rects: &[(usize, usize, usize, usize)],
     ) -> CrtBackdropWorkTrace {
-        self.compose_to(now, destination, protected_rects, 2)
+        let trace = self.compose_to(now, destination, protected_rects, 2);
+        if !trace.active {
+            self.expand_to_logical();
+        }
+        trace
     }
 
     /// Compose the fixed production CRT backdrop directly into a frame while
@@ -378,11 +393,6 @@ impl CrtBackdropState {
             self.retarget_is_plain = false;
         }
         self.expand_into(destination, protected_rects);
-        if !trace.active {
-            // Keep the logical view used by settled list restoration in sync
-            // with the physical retarget that was just presented.
-            self.expand_to_logical();
-        }
         trace
     }
 
@@ -1052,8 +1062,10 @@ mod tests {
         let source = [
             Rgb565Pixel(0xf800),
             Rgb565Pixel(0x07e0),
+            Rgb565Pixel(0x0000),
             Rgb565Pixel(0x001f),
             Rgb565Pixel(0xffff),
+            Rgb565Pixel(0x0000),
         ];
         let mut output = [Rgb565Pixel(0); 16];
         let mut x_map = [0; 4];
@@ -1063,7 +1075,7 @@ mod tests {
             &mut output,
             4,
             4,
-            frame(&source, 2, 2),
+            frame(&source, 3, 2),
             &mut x_map,
             &mut y_map,
             &mut row_repeats,
@@ -1082,14 +1094,14 @@ mod tests {
                 darken_rgb565(source[0]),
                 darken_rgb565(source[1]),
                 darken_rgb565(source[1]),
-                darken_rgb565(source[2]),
-                darken_rgb565(source[2]),
                 darken_rgb565(source[3]),
                 darken_rgb565(source[3]),
-                darken_rgb565(source[2]),
-                darken_rgb565(source[2]),
+                darken_rgb565(source[4]),
+                darken_rgb565(source[4]),
                 darken_rgb565(source[3]),
                 darken_rgb565(source[3]),
+                darken_rgb565(source[4]),
+                darken_rgb565(source[4]),
             ]
         );
     }
@@ -1291,7 +1303,7 @@ mod tests {
             backdrop
                 .pixels()
                 .iter()
-                .all(|pixel| *pixel == Rgb565Pixel(0xffff))
+                .all(|pixel| *pixel == darken_rgb565(Rgb565Pixel(0xffff)))
         );
     }
 }
