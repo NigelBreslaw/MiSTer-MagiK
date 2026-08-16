@@ -711,6 +711,20 @@ fn blend_rgb565_range(
             previous_current = current[index];
         }
     } else {
+        if coarse_factor == 2 {
+            let mut index = start;
+            while index + 1 < end {
+                let pixel = blend_rgb565_bucket(previous[index], current[index], alpha_bucket);
+                destination[index] = pixel;
+                destination[index + 1] = pixel;
+                index += 2;
+            }
+            if index < end {
+                destination[index] =
+                    blend_rgb565_bucket(previous[index], current[index], alpha_bucket);
+            }
+            return;
+        }
         let mut index = start;
         while index < end {
             let pixel = blend_rgb565_bucket(previous[index], current[index], alpha_bucket);
