@@ -7,9 +7,6 @@ use crate::preview_transition::blend_rgb565_bucket;
 use crate::ui_display::{ResolvedOutputRoute, UiDisplay};
 use crate::visual_composition::{PreviewFrame, PreviewPixels};
 use slint::platform::software_renderer::Rgb565Pixel;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc::{Receiver, SyncSender, TryRecvError, TrySendError, sync_channel};
 use std::time::{Duration, Instant};
 
 /// A prepared, dimmed RGB565 target produced away from the launcher render
@@ -37,103 +34,11 @@ pub struct CrtBackdropWorkTrace {
     pub active: bool,
 }
 
-struct BackdropBlendRequest {
-    generation: u64,
-    alpha_bucket: u16,
-    width: usize,
-    physical_height: usize,
-    coarse_factor: usize,
-    source: Arc<[Rgb565Pixel]>,
-    target: Arc<[Rgb565Pixel]>,
-}
-
-struct BackdropBlendResult {
-    generation: u64,
-    alpha_bucket: u16,
-    pixels: Vec<Rgb565Pixel>,
-}
-
-struct BackdropBlendWorker {
-    tx: SyncSender<BackdropBlendRequest>,
-    rx: Receiver<BackdropBlendResult>,
-    latest_generation: Arc<AtomicU64>,
-}
-
-impl BackdropBlendWorker {
-    fn new() -> Self {
-        let (tx, requests) = sync_channel::<BackdropBlendRequest>(1);
-        let (results, rx) = sync_channel::<BackdropBlendResult>(1);
-        let latest_generation = Arc::new(AtomicU64::new(1));
-        let worker_generation = Arc::clone(&latest_generation);
-        std::thread::Builder::new()
-            .name("crt-backdrop-blend".to_string())
-            .spawn(move || {
-                while let Ok(request) = requests.recv() {
-                    if worker_generation.load(Ordering::Acquire) != request.generation {
-                        continue;
-                    }
-                    let pixels = blend_coarse_frame(
-                        &request.source,
-                        &request.target,
-                        request.width,
-                        request.physical_height,
-                        request.alpha_bucket,
-                        request.coarse_factor,
-                    );
-                    if worker_generation.load(Ordering::Acquire) != request.generation {
-                        continue;
-                    }
-                    if results
-                        .send(BackdropBlendResult {
-                            generation: request.generation,
-                            alpha_bucket: request.alpha_bucket,
-                            pixels,
-                        })
-                        .is_err()
-                    {
-                        break;
-                    }
-                }
-            })
-            .expect("spawn crt-backdrop-blend");
-        Self {
-            tx,
-            rx,
-            latest_generation,
-        }
-    }
-
-    fn retarget_generation(&self, generation: u64) {
-        self.latest_generation.store(generation, Ordering::Release);
-    }
-
-    fn request(&self, request: BackdropBlendRequest) {
-        match self.tx.try_send(request) {
-            Ok(()) | Err(TrySendError::Disconnected(_)) | Err(TrySendError::Full(_)) => {}
-        }
-    }
-
-    fn try_take(&self, generation: u64, alpha_bucket: u16) -> Option<BackdropBlendResult> {
-        loop {
-            match self.rx.try_recv() {
-                Ok(result)
-                    if result.generation == generation && result.alpha_bucket == alpha_bucket =>
-                {
-                    return Some(result);
-                }
-                Ok(_) => continue,
-                Err(TryRecvError::Empty | TryRecvError::Disconnected) => return None,
-            }
-        }
-    }
-}
-
 pub struct CrtBackdropState {
     width: usize,
     height: usize,
     physical_height: usize,
     source: Vec<Rgb565Pixel>,
-    source_shared: Arc<[Rgb565Pixel]>,
     target: std::sync::Arc<[Rgb565Pixel]>,
     retarget: Vec<Rgb565Pixel>,
     logical_retarget: Vec<Rgb565Pixel>,
@@ -145,8 +50,6 @@ pub struct CrtBackdropState {
     target_is_plain: bool,
     retarget_is_plain: bool,
     transition_started: Option<Duration>,
-    composition_generation: u64,
-    blend_worker: BackdropBlendWorker,
     pending_prepare_us: u64,
     pending_prepare_pixels: u32,
 }
@@ -178,7 +81,6 @@ impl CrtBackdropState {
             height,
             physical_height,
             source: vec![CRT_BACKDROP_BACKGROUND; len],
-            source_shared: Arc::from(vec![CRT_BACKDROP_BACKGROUND; len]),
             target: std::sync::Arc::from(vec![CRT_BACKDROP_BACKGROUND; len]),
             retarget: vec![CRT_BACKDROP_BACKGROUND; len],
             logical_retarget: vec![CRT_BACKDROP_BACKGROUND; logical_len],
@@ -190,8 +92,6 @@ impl CrtBackdropState {
             target_is_plain: true,
             retarget_is_plain: true,
             transition_started: None,
-            composition_generation: 1,
-            blend_worker: BackdropBlendWorker::new(),
             pending_prepare_us: 0,
             pending_prepare_pixels: 0,
         }
@@ -217,12 +117,6 @@ impl CrtBackdropState {
         self.transition_started.is_some()
     }
 
-    fn mark_retargeted(&mut self) {
-        self.composition_generation = self.composition_generation.wrapping_add(1).max(1);
-        self.blend_worker
-            .retarget_generation(self.composition_generation);
-    }
-
     pub fn retarget_plain(&mut self, now: Duration) {
         self.retarget(None, now);
     }
@@ -235,7 +129,6 @@ impl CrtBackdropState {
         }
         let prepare_start = Instant::now();
         self.source.fill(CRT_BACKDROP_BACKGROUND);
-        self.source_shared = Arc::from(self.source.clone());
         self.target = std::sync::Arc::from(vec![CRT_BACKDROP_BACKGROUND; self.target.len()]);
         self.retarget.fill(CRT_BACKDROP_BACKGROUND);
         self.logical_retarget.fill(CRT_BACKDROP_BACKGROUND);
@@ -245,7 +138,6 @@ impl CrtBackdropState {
         self.target_is_plain = true;
         self.retarget_is_plain = true;
         self.transition_started = None;
-        self.mark_retargeted();
         self.pending_prepare_us = duration_us(prepare_start.elapsed());
         self.pending_prepare_pixels = self.retarget.len().min(u32::MAX as usize) as u32;
     }
@@ -253,7 +145,6 @@ impl CrtBackdropState {
     pub fn retarget(&mut self, frame: Option<PreviewFrame<'_>>, now: Duration) {
         self.resolve_current(now);
         self.source.copy_from_slice(&self.retarget);
-        self.source_shared = Arc::from(self.source.clone());
         self.source_row_repeats
             .copy_from_slice(&self.retarget_row_repeats);
 
@@ -282,7 +173,6 @@ impl CrtBackdropState {
         self.pending_prepare_us = duration_us(prepare_start.elapsed());
         self.pending_prepare_pixels = self.target.len().min(u32::MAX as usize) as u32;
         self.transition_started = (self.source.as_slice() != self.target.as_ref()).then_some(now);
-        self.mark_retargeted();
         if self.transition_started.is_none() {
             self.retarget.copy_from_slice(&self.target);
             self.retarget_row_repeats
@@ -302,7 +192,6 @@ impl CrtBackdropState {
     ) {
         self.resolve_current(now);
         self.source.copy_from_slice(&self.retarget);
-        self.source_shared = Arc::from(self.source.clone());
         self.source_row_repeats
             .copy_from_slice(&self.retarget_row_repeats);
         let Some(prepared) = prepared else {
@@ -313,7 +202,6 @@ impl CrtBackdropState {
             self.pending_prepare_pixels = 0;
             self.transition_started =
                 (self.source.as_slice() != self.target.as_ref()).then_some(now);
-            self.mark_retargeted();
             return;
         };
         self.target = prepared.pixels;
@@ -322,7 +210,6 @@ impl CrtBackdropState {
         self.pending_prepare_us = 0;
         self.pending_prepare_pixels = 0;
         self.transition_started = (self.source != self.target.as_ref()).then_some(now);
-        self.mark_retargeted();
         if self.transition_started.is_none() {
             self.retarget.copy_from_slice(&self.target);
             self.retarget_row_repeats
@@ -396,43 +283,6 @@ impl CrtBackdropState {
             .min(CRT_BACKDROP_FADE_DURATION.as_micros());
         let denominator = CRT_BACKDROP_FADE_DURATION.as_micros().max(1);
         let alpha_bucket = ((numerator * 32 + denominator / 2) / denominator) as u16;
-        if coarse_factor > 1 {
-            if let Some(result) = self
-                .blend_worker
-                .try_take(self.composition_generation, alpha_bucket)
-            {
-                if result.pixels.len() == self.retarget.len() {
-                    self.retarget.copy_from_slice(&result.pixels);
-                    for row in 0..self.physical_height {
-                        self.retarget_row_repeats[row] = (coarse_factor > 1
-                            && row % coarse_factor != 0)
-                            || (row > 0
-                                && self.source_row_repeats[row]
-                                && self.target_row_repeats[row]);
-                    }
-                    trace.blend_pixels = result.pixels.len().min(u32::MAX as usize) as u32;
-                    trace.alpha_bucket = alpha_bucket.min(32) as u8;
-                    trace.active = alpha_bucket < 32;
-                    if !trace.active {
-                        self.transition_started = None;
-                        self.retarget_is_plain = self.target_is_plain;
-                    } else {
-                        self.retarget_is_plain = false;
-                    }
-                    self.expand_into(destination, protected_rects);
-                    return trace;
-                }
-            }
-            self.blend_worker.request(BackdropBlendRequest {
-                generation: self.composition_generation,
-                alpha_bucket,
-                width: self.width,
-                physical_height: self.physical_height,
-                coarse_factor,
-                source: Arc::clone(&self.source_shared),
-                target: Arc::clone(&self.target),
-            });
-        }
         let blend_start = Instant::now();
         let row_width = self.width.max(1);
         let coarse_factor = coarse_factor.max(1);
@@ -869,46 +719,6 @@ fn blend_rgb565_range(
             index = block_end;
         }
     }
-}
-
-fn blend_coarse_frame(
-    source: &[Rgb565Pixel],
-    target: &[Rgb565Pixel],
-    width: usize,
-    physical_height: usize,
-    alpha_bucket: u16,
-    coarse_factor: usize,
-) -> Vec<Rgb565Pixel> {
-    let len = width.saturating_mul(physical_height);
-    let mut pixels = vec![CRT_BACKDROP_BACKGROUND; len];
-    let coarse_factor = coarse_factor.max(1);
-    for row in (0..physical_height).step_by(coarse_factor) {
-        let start = row.saturating_mul(width);
-        let end = start
-            .saturating_add(width)
-            .min(len)
-            .min(source.len())
-            .min(target.len());
-        blend_rgb565_range(
-            &mut pixels,
-            source,
-            target,
-            start,
-            end,
-            alpha_bucket,
-            coarse_factor,
-        );
-        let row_end = (row + coarse_factor).min(physical_height);
-        for copy_row in row + 1..row_end {
-            let destination_start = copy_row * width;
-            let source_start = row * width;
-            let destination_end = (destination_start + width).min(len);
-            let source_end = (source_start + width).min(len);
-            pixels[destination_start..destination_end]
-                .copy_from_slice(&pixels[source_start..source_end]);
-        }
-    }
-    pixels
 }
 
 fn copy_rgb565_row_excluding(
