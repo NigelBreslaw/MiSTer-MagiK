@@ -367,26 +367,23 @@ fn sync_arcade_preview_geometry_bridge(
 
 pub(super) fn arcade_list_layout(nav: &LauncherNav, ui: &UiDisplay) -> (ArcadeListGeometry, usize) {
     let search = nav.arcade_search.is_active(&nav.arcade_filter.active);
-    let geometry = if nav.uses_crt_layout() {
+    if nav.uses_crt_layout() {
         let layout =
             crate::ui_display::UiLayoutGeometry::for_display(ui, nav.settings.screen_orientation);
-        ArcadeListGeometry::crt_for_content(
-            layout.content_rect(),
-            CrtUiMetrics::for_display(ui),
-            search,
-        )
-    } else if nav.uses_portrait_layout() {
+        let content = layout.content_rect();
+        return (
+            ArcadeListGeometry::crt_for_content(content, CrtUiMetrics::for_display(ui), search),
+            content.bottom(),
+        );
+    }
+    let geometry = if nav.uses_portrait_layout() {
         ArcadeListGeometry::portrait(ui.render_h(), ui.render_w(), search)
     } else if search {
         ArcadeListGeometry::search_for_render_w(ui.render_w())
     } else {
         ArcadeListGeometry::NORMAL
     };
-    let render_h = if nav.uses_crt_layout() {
-        crate::ui_display::UiLayoutGeometry::for_display(ui, nav.settings.screen_orientation)
-            .content_rect()
-            .bottom()
-    } else if nav.uses_portrait_layout() && search {
+    let render_h = if nav.uses_portrait_layout() && search {
         geometry.y + ui.render_w() * 34 / 100 + 16
     } else if nav.uses_portrait_layout() {
         ui.render_w()
