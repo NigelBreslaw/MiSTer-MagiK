@@ -10409,7 +10409,23 @@ pub(super) fn run_launcher_loop(
             custom_draw_trace.orientation_transition_total_us =
                 orientation_started.elapsed().as_micros();
         }
-        let final_preview_target_presented = raw_preview.is_some()
+        // CRT routes do not own an HDMI preview layer, so the normal preview
+        // presentation acknowledgement can never fire for them.  Without a
+        // route-specific acknowledgement the preview remains `animating`
+        // forever, keeping the launcher awake and allowing the Slint base
+        // raster to overwrite the settled CRT backdrop between list ticks.
+        let crt_backdrop_target_presented = crt_backdrop_frame_is_presented(
+            navigation_transition_composition_active,
+            crt_backdrop_full_damage.is_some(),
+            crt_backdrop_work_trace.active,
+            preview_cache_state_before_composition == "exact",
+            preview.raw_frame_status() == PreviewRawFrameStatus::Ready,
+            crt_backdrop
+                .as_ref()
+                .is_some_and(CrtBackdropController::is_transitioning),
+        );
+        let final_preview_target_presented = (raw_preview.is_some()
+            || crt_backdrop_target_presented)
             && preview.presentation_requires_present()
             && preview_transition_trace.progress >= 1.0;
         let cached_empty_target_presented = (layout.is_portrait()
@@ -11649,6 +11665,22 @@ enum PreviewRouteKind {
     Hdmi,
     LowResolutionCrtBackdrop,
     UnsupportedCrt,
+}
+
+fn crt_backdrop_frame_is_presented(
+    navigation_transition_active: bool,
+    full_damage: bool,
+    work_active: bool,
+    exact_preview: bool,
+    raw_frame_ready: bool,
+    backdrop_transitioning: bool,
+) -> bool {
+    !navigation_transition_active
+        && full_damage
+        && !work_active
+        && exact_preview
+        && raw_frame_ready
+        && !backdrop_transitioning
 }
 
 impl PreviewRoutePolicy {
@@ -14863,6 +14895,31 @@ mod tests {
             assert!(!unsupported.allows_hdmi_preview());
             assert!(!unsupported.allows_crt_backdrop());
         }
+    }
+
+    #[test]
+    fn crt_backdrop_acknowledgement_requires_a_settled_full_frame() {
+        assert!(crt_backdrop_frame_is_presented(
+            false, true, false, true, true, false
+        ));
+        assert!(!crt_backdrop_frame_is_presented(
+            true, true, false, true, true, false
+        ));
+        assert!(!crt_backdrop_frame_is_presented(
+            false, false, false, true, true, false
+        ));
+        assert!(!crt_backdrop_frame_is_presented(
+            false, true, true, true, true, false
+        ));
+        assert!(!crt_backdrop_frame_is_presented(
+            false, true, false, false, true, false
+        ));
+        assert!(!crt_backdrop_frame_is_presented(
+            false, true, false, true, false, false
+        ));
+        assert!(!crt_backdrop_frame_is_presented(
+            false, true, false, true, true, true
+        ));
     }
 
     #[test]
