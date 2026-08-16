@@ -465,6 +465,20 @@ aliases = []
 documentation = { summary = "Controls crash backtrace behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
+name = "MISTER_CRT_FONT_EXPERIMENT"
+owner = "apps/mister/src/ui_display.rs"
+classification = "diagnostic"
+value_shape = "enum token"
+default_behavior = "uses the production baseline when unset or unrecognized"
+visibility = "developer diagnostic"
+parser = "enum"
+scope = "instrumentation"
+conflicts = []
+sensitivity = "public"
+aliases = []
+documentation = { summary = "Selects a volatile CRT font visual experiment", accepted_values = ["phase-odd", "phase-even"], value_policy = "document" }
+
+[[control]]
 name = "MISTER_CRT_PROBE_PATTERN"
 owner = "apps/mister/src/ui_runner/crt_trial_loop.rs"
 classification = "production"

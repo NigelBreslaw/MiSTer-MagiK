@@ -5739,6 +5739,7 @@ pub(super) fn run_launcher_loop(
     let mut frame_accounting = LauncherFrameAccounting::new(
         run_start,
         ui.output_route().label(),
+        ui.crt_font_experiment().label(),
         ui.fb_w(),
         ui.fb_h(),
         profile_config.frame().fps_log_enabled(),
@@ -6882,6 +6883,7 @@ pub(super) fn run_launcher_loop(
                 frame_accounting = LauncherFrameAccounting::new(
                     run_start,
                     ui.output_route().label(),
+                    ui.crt_font_experiment().label(),
                     ui.fb_w(),
                     ui.fb_h(),
                     profile_config.frame().fps_log_enabled(),

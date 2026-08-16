@@ -361,6 +361,7 @@ impl NativeDevice {
                 | DeviceCommand::Launcher {
                     command: LauncherCommand::Status
                         | LauncherCommand::CaptureFirstArcade(_)
+                        | LauncherCommand::CaptureCrtFontAb(_)
                         | LauncherCommand::CaptureSnesHub(_)
                         | LauncherCommand::ReturnToLauncher(_),
                 }
@@ -482,6 +483,9 @@ impl NativeDevice {
                     }
                     LauncherCommand::CaptureFirstArcade(args) => {
                         capture_first_arcade(&prepared.config, &args.output)
+                    }
+                    LauncherCommand::CaptureCrtFontAb(args) => {
+                        capture_crt_font_ab(&prepared.config, &args.pair, &args.output)
                     }
                     LauncherCommand::CaptureSnesHub(args) => {
                         capture_snes_hub(&prepared.config, &args.output)
@@ -21747,13 +21751,26 @@ struct CaptureArtifactLink {
 
 fn capture_buffer_at(agent: &AgentEndpoint, args: &[String]) -> Result<()> {
     validate_capture_buffer_args(args)?;
-    let capture = request_framebuffer_png_at(agent)?;
     let output = option_value(args, "--output");
-    let artifacts = write_capture_bundle(&capture, output.as_deref())?;
+    let artifacts = capture_buffer_bundle_at(agent, output.as_deref())?;
+    print_capture_artifacts(&artifacts);
+    Ok(())
+}
+
+fn capture_buffer_bundle_at(
+    agent: &AgentEndpoint,
+    requested_stem: Option<&str>,
+) -> Result<Vec<CaptureArtifactLink>> {
+    let capture = request_framebuffer_png_at(agent)?;
+    let artifacts = write_capture_bundle(&capture, requested_stem)?;
     eprintln!(
         "framebuffer capture source={}",
         capture_source_label(&capture.result)?
     );
+    Ok(artifacts)
+}
+
+fn print_capture_artifacts(artifacts: &[CaptureArtifactLink]) {
     for artifact in artifacts {
         if io::stdout().is_terminal() {
             println!("{}: {}", artifact.label, artifact.path.display());
@@ -21761,7 +21778,6 @@ fn capture_buffer_at(agent: &AgentEndpoint, args: &[String]) -> Result<()> {
             println!("[{}](<{}>)", artifact.label, artifact.path.display());
         }
     }
-    Ok(())
 }
 
 fn write_capture_bundle(
@@ -21960,6 +21976,15 @@ fn write_capture_files(artifacts: &[PendingCaptureArtifact]) -> Result<()> {
         }
     }
     result
+}
+
+fn write_capture_manifest(path: &Path, manifest: &Value) -> Result<()> {
+    let bytes = serde_json::to_vec_pretty(manifest)?;
+    let mut file = OpenOptions::new().write(true).create_new(true).open(path)?;
+    file.write_all(&bytes)?;
+    file.write_all(b"\n")?;
+    file.sync_all()?;
+    Ok(())
 }
 
 fn delivery_smoke_capture_detail(capture: &PngCapture) -> Result<String> {
@@ -22481,25 +22506,150 @@ fn capture_and_restore_launcher(
 }
 
 fn capture_first_arcade(config: &NativeDeviceConfig, output: &Path) -> Result<()> {
+    capture_arcade_variant(config, output, None, "first Arcade screen")
+}
+
+fn capture_crt_font_ab(config: &NativeDeviceConfig, pair: &str, output: &Path) -> Result<()> {
+    if pair != "row-phase" {
+        return Err("unsupported CRT font pair; expected row-phase".into());
+    }
+    let base = normalize_capture_stem(output)?;
+    let parent = base
+        .parent()
+        .ok_or("CRT font A/B output must have a parent directory")?;
+    if !parent.is_dir() {
+        return Err(format!(
+            "CRT font A/B output directory does not exist: {}",
+            parent.display()
+        )
+        .into());
+    }
+    let base_name = base
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or("CRT font A/B output stem must be valid UTF-8")?;
+    let a_stem = base.with_file_name(format!("{base_name}-row-phase-a-odd"));
+    let b_stem = base.with_file_name(format!("{base_name}-row-phase-b-even"));
+    let compare_path = base.with_file_name(format!("{base_name}-row-phase-compare-4x3.png"));
+    let manifest_path = base.with_file_name(format!("{base_name}-row-phase.json"));
+    for stem in [&a_stem, &b_stem] {
+        if !capture_paths_available(stem, true) {
+            return Err(format!(
+                "CRT font A/B capture output already exists: {}",
+                stem.display()
+            )
+            .into());
+        }
+    }
+    if compare_path.exists() || manifest_path.exists() {
+        return Err("CRT font A/B comparison output already exists".into());
+    }
+
+    let original_mode = active_display_mode_id()?;
+    let original_mode_known = DISPLAY_MATRIX_MODES
+        .iter()
+        .any(|mode| mode.id == original_mode);
+    if !original_mode_known {
+        return Err(format!("cannot restore unsupported display mode: {original_mode}").into());
+    }
+    let switched_to_240 = original_mode != "crt-240p60";
+    if switched_to_240 {
+        display_mode_cli(&["crt-240p60".into(), "--attended".into(), "--keep".into()])?;
+    }
+
+    let capture_result = (|| -> Result<()> {
+        capture_arcade_variant(
+            config,
+            &a_stem,
+            Some("baseline"),
+            "CRT font row phase A (odd rows)",
+        )?;
+        capture_arcade_variant(
+            config,
+            &b_stem,
+            Some("phase-even"),
+            "CRT font row phase B (even rows)",
+        )?;
+        let a_display = fs::read(capture_artifact_path(&a_stem, "-display-4x3.png"))?;
+        let b_display = fs::read(capture_artifact_path(&b_stem, "-display-4x3.png"))?;
+        let comparison = framebuffer_views::side_by_side_4x3_png(&a_display, &b_display)?;
+        write_capture_files(&[PendingCaptureArtifact {
+            label: "CRT font row phase A/B comparison 4:3",
+            path: compare_path.clone(),
+            png: comparison,
+        }])?;
+        let manifest = json!({
+            "schema": "mister-magik-crt-font-ab-v1",
+            "pair": pair,
+            "route": "crt-240p60",
+            "a": {"label": "odd rows", "experiment": "baseline", "stem": a_stem},
+            "b": {"label": "even rows", "experiment": "phase-even", "stem": b_stem},
+            "comparison": compare_path,
+        });
+        write_capture_manifest(&manifest_path, &manifest)
+    })();
+    let restore_result = if switched_to_240 {
+        display_mode_cli(&[original_mode, "--attended".into(), "--keep".into()])
+    } else {
+        Ok(())
+    };
+    match (capture_result, restore_result) {
+        (Ok(()), Ok(())) => {
+            println!("CRT font A/B comparison: {}", compare_path.display());
+            println!("CRT font A/B manifest: {}", manifest_path.display());
+            Ok(())
+        }
+        (Err(capture), Ok(())) => Err(capture),
+        (Ok(()), Err(restore)) => Err(format!(
+            "CRT font A/B capture succeeded but display restore failed: {restore}"
+        )
+        .into()),
+        (Err(capture), Err(restore)) => Err(format!(
+            "CRT font A/B capture failed ({capture}); display restore also failed ({restore})"
+        )
+        .into()),
+    }
+}
+
+fn active_display_mode_id() -> Result<String> {
+    let session = connect(10)?;
+    let reply = exec_checked_output(
+        &session,
+        "query original display mode",
+        &acknowledged_main_command("mister_magik_display_get_v1"),
+    )?;
+    Ok(parse_display_reply_active(reply.stdout.trim())?.to_string())
+}
+
+fn capture_arcade_variant(
+    config: &NativeDeviceConfig,
+    output: &Path,
+    experiment: Option<&str>,
+    label: &str,
+) -> Result<()> {
     if capture_output_has_existing_artifact(output)? {
         return Err(format!("capture output already exists: {}", output.display()).into());
     }
     let session = connect_with(&config.connection, 10)?;
+    let mut env_vars = vec![
+        ("MISTER_CATALOG_REFRESH".into(), "off".into()),
+        ("MISTER_LAUNCHER_START_SCREEN".into(), "home".into()),
+        (
+            "MISTER_LAUNCHER_INPUT_SCRIPT".into(),
+            "wait:120,a,wait:120".into(),
+        ),
+        (
+            "MISTER_LAUNCHER_INPUT_SCRIPT_WAIT_FRAMES".into(),
+            "1".into(),
+        ),
+    ];
+    if let Some(experiment) = experiment {
+        env_vars.push(("MISTER_CRT_FONT_EXPERIMENT".into(), experiment.into()));
+    }
     restart_launcher_with_one_shot_env(
         &session,
         LauncherRestartOptions {
-            env_vars: vec![
-                ("MISTER_CATALOG_REFRESH".into(), "off".into()),
-                ("MISTER_LAUNCHER_START_SCREEN".into(), "home".into()),
-                (
-                    "MISTER_LAUNCHER_INPUT_SCRIPT".into(),
-                    "wait:120,a,wait:120".into(),
-                ),
-                (
-                    "MISTER_LAUNCHER_INPUT_SCRIPT_WAIT_FRAMES".into(),
-                    "1".into(),
-                ),
-            ],
+            env_vars,
             timeout_secs: 45,
             remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str().into(),
             ..LauncherRestartOptions::default()
@@ -22512,6 +22662,8 @@ fn capture_first_arcade(config: &NativeDeviceConfig, output: &Path) -> Result<()
         let status = read_launcher_status(&session)?;
         let arcade_settled = status.get("screen").and_then(Value::as_str) == Some("arcade")
             && status.get("composition_state").and_then(Value::as_str) == Some("mixed-arcade")
+            && status.get("crt_font_experiment").and_then(Value::as_str)
+                == Some(experiment.unwrap_or("baseline"))
             && status
                 .get("selected_game_id")
                 .and_then(Value::as_str)
@@ -22530,7 +22682,7 @@ fn capture_first_arcade(config: &NativeDeviceConfig, output: &Path) -> Result<()
     }
     drop(session);
 
-    capture_and_restore_launcher(config, output, "first Arcade screen")
+    capture_and_restore_launcher(config, output, label)
 }
 
 fn capture_snes_hub(config: &NativeDeviceConfig, output: &Path) -> Result<()> {

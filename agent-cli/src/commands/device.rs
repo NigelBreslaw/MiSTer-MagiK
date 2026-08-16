@@ -280,6 +280,7 @@ pub enum LauncherCommand {
     Status,
     Restart(AttendedArgs),
     CaptureFirstArcade(FirstArcadeCaptureArgs),
+    CaptureCrtFontAb(CrtFontAbCaptureArgs),
     CaptureSnesHub(FirstArcadeCaptureArgs),
     ReturnToLauncher(AttendedArgs),
 }
@@ -288,6 +289,16 @@ pub enum LauncherCommand {
 pub struct FirstArcadeCaptureArgs {
     #[arg(long, required = true)]
     attended: bool,
+    #[arg(long, value_name = "STEM")]
+    pub(crate) output: PathBuf,
+}
+
+#[derive(Debug, Args)]
+pub struct CrtFontAbCaptureArgs {
+    #[arg(long, required = true)]
+    attended: bool,
+    #[arg(long, value_name = "PAIR")]
+    pub(crate) pair: String,
     #[arg(long, value_name = "STEM")]
     pub(crate) output: PathBuf,
 }

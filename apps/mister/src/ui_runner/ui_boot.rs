@@ -73,7 +73,8 @@ impl UiBootFramebufferSession {
                     std::process::exit(1);
                 }
             };
-        let ui = UiDisplay::for_plan(display_plan);
+        let ui = UiDisplay::for_plan(display_plan)
+            .with_crt_font_experiment(config.display_inputs().crt_font_experiment());
         crate::ui_logln!("{}", ui.log_line());
         disp.clear_black();
         boot_analytics::event(

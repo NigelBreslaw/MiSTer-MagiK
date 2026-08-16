@@ -71,6 +71,17 @@ workflow is the deterministic typography fixture:
 scripts/agent device launcher capture-first-arcade --attended --output STEM
 ```
 
+The first visual experiment is an attended A/B row-phase comparison:
+
+```text
+scripts/agent device launcher capture-crt-font-ab --attended --pair row-phase --output STEM
+```
+
+It captures the production centered odd-row sampler as A and a top-aligned
+even-row sampler as B, then emits a side-by-side `1280×480` true-4:3 review
+image. The experiment is volatile and the production baseline remains the
+default when `MISTER_CRT_FONT_EXPERIMENT` is unset.
+
 Only `STEM-raw.png` is authoritative framebuffer evidence; the two `4x3`
 files are derived host previews and must not be used as HDMI/CRT sink proof.
 

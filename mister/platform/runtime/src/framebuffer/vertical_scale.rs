@@ -32,6 +32,14 @@ pub struct VerticalRgb565Transform {
     width: usize,
     source_height: usize,
     destination_height: usize,
+    sampling: VerticalSampling,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum VerticalSampling {
+    #[default]
+    CenteredNearest,
+    TopAlignedNearest,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -49,6 +57,23 @@ impl VerticalRgb565Transform {
         if width == 0 || source_height == 0 || destination_height == 0 {
             return Err("vertical transform geometry must be non-zero");
         }
+        Self::new_with_sampling(
+            width,
+            source_height,
+            destination_height,
+            VerticalSampling::CenteredNearest,
+        )
+    }
+
+    pub fn new_with_sampling(
+        width: usize,
+        source_height: usize,
+        destination_height: usize,
+        sampling: VerticalSampling,
+    ) -> Result<Self, &'static str> {
+        if width == 0 || source_height == 0 || destination_height == 0 {
+            return Err("vertical transform geometry must be non-zero");
+        }
         width
             .checked_mul(source_height)
             .and_then(|pixels| pixels.checked_mul(2))
@@ -61,6 +86,7 @@ impl VerticalRgb565Transform {
             width,
             source_height,
             destination_height,
+            sampling,
         })
     }
 
@@ -76,6 +102,10 @@ impl VerticalRgb565Transform {
         self.destination_height
     }
 
+    pub const fn sampling(self) -> VerticalSampling {
+        self.sampling
+    }
+
     pub fn source_row_for_destination(self, destination_y: usize) -> Option<usize> {
         if destination_y >= self.destination_height {
             return None;
@@ -83,9 +113,17 @@ impl VerticalRgb565Transform {
         if self.source_height == self.destination_height {
             return Some(destination_y);
         }
-        let numerator =
-            (destination_y.checked_mul(2)?.checked_add(1)?).checked_mul(self.source_height)?;
-        Some((numerator / (self.destination_height * 2)).min(self.source_height - 1))
+        let numerator = match self.sampling {
+            VerticalSampling::CenteredNearest => {
+                (destination_y.checked_mul(2)?.checked_add(1)?).checked_mul(self.source_height)?
+            }
+            VerticalSampling::TopAlignedNearest => destination_y.checked_mul(self.source_height)?,
+        };
+        let denominator = match self.sampling {
+            VerticalSampling::CenteredNearest => self.destination_height * 2,
+            VerticalSampling::TopAlignedNearest => self.destination_height,
+        };
+        Some((numerator / denominator).min(self.source_height - 1))
     }
 
     pub fn destination_rect_for_source(self, source_rect: VerticalRect) -> Option<VerticalRect> {
@@ -271,6 +309,21 @@ mod tests {
             transform.destination_rect_for_source(rect(0, 1, 640, 1)),
             Some(rect(0, 0, 640, 1))
         );
+    }
+
+    #[test]
+    fn top_aligned_sampling_uses_even_source_rows() {
+        let transform = VerticalRgb565Transform::new_with_sampling(
+            640,
+            480,
+            240,
+            VerticalSampling::TopAlignedNearest,
+        )
+        .unwrap();
+        assert_eq!(transform.source_row_for_destination(0), Some(0));
+        assert_eq!(transform.source_row_for_destination(1), Some(2));
+        assert_eq!(transform.source_row_for_destination(239), Some(478));
+        assert_eq!(transform.sampling(), VerticalSampling::TopAlignedNearest);
     }
 
     #[test]

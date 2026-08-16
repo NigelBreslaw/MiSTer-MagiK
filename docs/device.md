@@ -144,6 +144,11 @@ non-authoritative sources produce only the raw artifact. The deterministic
 Arcade fixture is available through
 `scripts/agent device launcher capture-first-arcade --attended --output STEM`.
 
+For the first CRT font A/B review, use the attended row-phase harness:
+`scripts/agent device launcher capture-crt-font-ab --attended --pair row-phase --output STEM`.
+It switches to 240p for the pair, restores the prior route afterward, and
+writes labeled A/B bundles plus a side-by-side true-4:3 comparison.
+
 On macOS, `scripts/agent capture usb-video [--output PATH]` captures the first
 nonblank 1920x1080 frame from the fixed `USB Video` input. The native
 AVFoundation path writes JPEG, refuses to overwrite an explicit output, and

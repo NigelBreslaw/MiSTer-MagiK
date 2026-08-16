@@ -28,6 +28,7 @@ use mister_magik_fb::framebuffer::full_frame_latch::{
     dev_latch_post_skip_for, dev_latch_timeout_for, posted_sequence_observed, read_post_status,
 };
 use mister_magik_fb::framebuffer::vertical_scale::Rgb565FrameView as VerticalRgb565FrameView;
+use mister_magik_fb::framebuffer::vertical_scale::VerticalSampling;
 use mister_magik_fb::latch_readiness::{
     LatchFailure, LatchFailureReason, LatchFailureStage, LatchWireDecision,
 };
@@ -111,6 +112,7 @@ impl LatchFrameBuffers for PluginLatchFrameBuffers {
         buffer: &mut Self::Buffer,
         cached: CachedFrameView<'_>,
         rect: DirtyRect,
+        sampling: VerticalSampling,
     ) -> Result<LatchCopyResult, String> {
         let full_source =
             rect.x0 == 0 && rect.y0 == 0 && rect.x1 == cached.width() && rect.y1 == cached.height();
@@ -124,7 +126,7 @@ impl LatchFrameBuffers for PluginLatchFrameBuffers {
                 .map_err(|e| e.to_string());
         }
         buffer
-            .copy_vertical_rect(
+            .copy_vertical_rect_with_sampling(
                 VerticalRgb565FrameView {
                     pixels: cached.pixels(),
                     width: cached.width(),
@@ -132,6 +134,7 @@ impl LatchFrameBuffers for PluginLatchFrameBuffers {
                     stride_pixels: cached.stride(),
                 },
                 rect,
+                sampling,
             )
             .map(|bytes| LatchCopyResult {
                 bytes,
@@ -221,6 +224,7 @@ pub(in crate::ui_runner) struct FpgaVblankLatchHiddenPresenter<B = PluginLatchFr
     render_width: usize,
     render_height: usize,
     latch_geometry: crate::fpga::LatchedFbufGeometry,
+    vertical_sampling: VerticalSampling,
     hidden_active_verified: bool,
     capabilities_verified: bool,
     negotiated_capabilities: Option<mister_magik_latch_contract::LatchCapabilities>,
@@ -277,6 +281,7 @@ impl FpgaVblankLatchHiddenPresenter<PluginLatchFrameBuffers> {
                 route,
                 configured_fpga_latch_right_guard_cols(),
             ),
+            ui.vertical_sampling(),
         ))
     }
 
@@ -364,6 +369,7 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
         render_width: usize,
         render_height: usize,
         latch_geometry: crate::fpga::LatchedFbufGeometry,
+        vertical_sampling: VerticalSampling,
     ) -> Self {
         let base1 = buffers.base_addr(1);
         let base2 = buffers.base_addr(2);
@@ -378,6 +384,7 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
             render_width,
             render_height,
             latch_geometry,
+            vertical_sampling,
             hidden_active_verified: false,
             capabilities_verified: false,
             negotiated_capabilities: None,
@@ -698,7 +705,7 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
         let mut copied_bytes = 0usize;
         let mut copy_path = LatchCopyPath::IdentityFull;
         for rect in plan.restore_rects.iter() {
-            match B::copy_rect(buffer, cached, rect) {
+            match B::copy_rect(buffer, cached, rect, self.vertical_sampling) {
                 Ok(result) => {
                     copied_bytes = copied_bytes.saturating_add(result.bytes);
                     if result.path != LatchCopyPath::IdentityFull {
@@ -1326,6 +1333,7 @@ mod tests {
             buffer: &mut Self::Buffer,
             cached: CachedFrameView<'_>,
             rect: DirtyRect,
+            _sampling: VerticalSampling,
         ) -> Result<LatchCopyResult, String> {
             buffer.events.borrow_mut().push(TestEvent::Copy);
             buffer.copy_count += 1;

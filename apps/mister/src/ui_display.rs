@@ -25,12 +25,46 @@ const DEVICE_INI_PATH: &str = "/media/fat/MiSTer.ini";
 const UI_FB_SIZE_ENV: &str = "MISTER_UI_FB_SIZE";
 const RUNTIME_SETTINGS_ENV: &str = "MISTER_MAGIK_RUNTIME_SETTINGS_V1";
 const RUNTIME_DISPLAY_ENV: &str = "MISTER_MAGIK_RUNTIME_DISPLAY_V1";
+const CRT_FONT_EXPERIMENT_ENV: &str = "MISTER_CRT_FONT_EXPERIMENT";
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum CrtFontExperiment {
+    #[default]
+    Baseline,
+    PhaseEven,
+}
+
+impl CrtFontExperiment {
+    pub fn parse(value: Option<&str>) -> Self {
+        match value.map(str::trim) {
+            Some("phase-even") | Some("sampling=even") => Self::PhaseEven,
+            _ => Self::Baseline,
+        }
+    }
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Baseline => "baseline",
+            Self::PhaseEven => "phase-even",
+        }
+    }
+
+    pub const fn vertical_sampling(
+        self,
+    ) -> mister_magik_mister_runtime::framebuffer::vertical_scale::VerticalSampling {
+        match self {
+            Self::Baseline => mister_magik_mister_runtime::framebuffer::vertical_scale::VerticalSampling::CenteredNearest,
+            Self::PhaseEven => mister_magik_mister_runtime::framebuffer::vertical_scale::VerticalSampling::TopAlignedNearest,
+        }
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct UiDisplayInputs {
     fb_policy: UiFramebufferSizePolicy,
     runtime_settings: Option<String>,
     runtime_display: Option<String>,
+    crt_font_experiment: CrtFontExperiment,
 }
 
 impl UiDisplayInputs {
@@ -41,7 +75,12 @@ impl UiDisplayInputs {
                 .unwrap_or(UiFramebufferSizePolicy::Auto),
             runtime_settings: get(RUNTIME_SETTINGS_ENV).map(str::to_owned),
             runtime_display: get(RUNTIME_DISPLAY_ENV).map(str::to_owned),
+            crt_font_experiment: CrtFontExperiment::parse(get(CRT_FONT_EXPERIMENT_ENV)),
         }
+    }
+
+    pub const fn crt_font_experiment(&self) -> CrtFontExperiment {
+        self.crt_font_experiment
     }
 
     pub fn capture_process() -> Self {
@@ -748,6 +787,7 @@ pub struct UiDisplay {
     scan_h: u16,
     direct_video: bool,
     output_route: ResolvedOutputRoute,
+    crt_font_experiment: CrtFontExperiment,
 }
 
 impl UiDisplay {
@@ -764,6 +804,7 @@ impl UiDisplay {
             scan_h: fb_h.min(u16::MAX as usize) as u16,
             direct_video: false,
             output_route: ResolvedOutputRoute::Hdmi,
+            crt_font_experiment: CrtFontExperiment::Baseline,
         }
     }
 
@@ -779,7 +820,13 @@ impl UiDisplay {
             scan_h: plan.scan_h,
             direct_video: plan.direct_video,
             output_route: plan.output_route,
+            crt_font_experiment: CrtFontExperiment::Baseline,
         }
+    }
+
+    pub fn with_crt_font_experiment(mut self, experiment: CrtFontExperiment) -> Self {
+        self.crt_font_experiment = experiment;
+        self
     }
 
     pub fn render_w(&self) -> usize {
@@ -822,6 +869,16 @@ impl UiDisplay {
         self.output_route
     }
 
+    pub const fn crt_font_experiment(&self) -> CrtFontExperiment {
+        self.crt_font_experiment
+    }
+
+    pub const fn vertical_sampling(
+        &self,
+    ) -> mister_magik_mister_runtime::framebuffer::vertical_scale::VerticalSampling {
+        self.crt_font_experiment.vertical_sampling()
+    }
+
     pub fn content_rect(&self) -> CrtContentRect {
         let insets = self.output_route.content_insets();
         CrtContentRect {
@@ -838,7 +895,7 @@ impl UiDisplay {
 
     pub fn log_line(&self) -> String {
         format!(
-            "render={}x{} fb={}x{} output={}x{} scan={}x{} direct_video={}",
+            "render={}x{} fb={}x{} output={}x{} scan={}x{} direct_video={} crt_font_experiment={}",
             self.render_w(),
             self.render_h(),
             self.fb_w,
@@ -847,7 +904,8 @@ impl UiDisplay {
             self.output_h,
             self.scan_w,
             self.scan_h,
-            self.direct_video
+            self.direct_video,
+            self.crt_font_experiment.label()
         )
     }
 }

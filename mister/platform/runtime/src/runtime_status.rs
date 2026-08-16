@@ -137,6 +137,7 @@ launcher_status_types! {
         preview_asset_key,
         catalog_generation,
         output_route,
+        crt_font_experiment,
         vsync_source,
         present_backend,
         present_status,
@@ -713,6 +714,7 @@ fn write_launcher_status_json(
     field!("effective_view", status.effective_view);
     field!("return_screen", status.return_screen);
     field!("output_route", status.output_route);
+    field!("crt_font_experiment", status.crt_font_experiment);
     field!("framebuffer_width", status.framebuffer_width);
     field!("framebuffer_height", status.framebuffer_height);
     field!("frames", status.frames);
@@ -1048,6 +1050,7 @@ fn launcher_status_value(
     insert!("preview_asset_key", status.preview_asset_key);
     insert!("catalog_generation", status.catalog_generation);
     insert!("output_route", status.output_route);
+    insert!("crt_font_experiment", status.crt_font_experiment);
     insert!("framebuffer_width", status.framebuffer_width);
     insert!("framebuffer_height", status.framebuffer_height);
     insert!("frames", status.frames);
@@ -1774,6 +1777,7 @@ mod tests {
                 preview_asset_key: "1942",
                 catalog_generation: "generation-4",
                 output_route: "crt-576p50",
+                crt_font_experiment: "baseline",
                 frames: 42,
                 idle: true,
                 idle_loops: 12,
@@ -2290,6 +2294,7 @@ mod tests {
             preview_asset_key: "1942",
             catalog_generation: "generation-4",
             output_route: "crt-288p50",
+            crt_font_experiment: "baseline",
             frames: 7,
             idle: false,
             idle_loops: 0,

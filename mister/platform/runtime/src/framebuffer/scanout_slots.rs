@@ -20,7 +20,9 @@ use crate::framebuffer::hidden_scanout::{
     validate_scanout_slots_geometry, validate_scanout_slots_geometry_for_layout,
 };
 use crate::framebuffer::target::DirtyRect;
-use crate::framebuffer::vertical_scale::{Rgb565FrameView, VerticalRect, VerticalRgb565Transform};
+use crate::framebuffer::vertical_scale::{
+    Rgb565FrameView, VerticalRect, VerticalRgb565Transform, VerticalSampling,
+};
 use slint::platform::software_renderer::Rgb565Pixel;
 
 pub struct ScanoutSlotsRgb565Framebuffer {
@@ -123,8 +125,22 @@ impl ScanoutSlotsRgb565Framebuffer {
         source: Rgb565FrameView<'_, Rgb565Pixel>,
         rect: DirtyRect,
     ) -> Result<usize, ScanoutSlotsError> {
-        let transform = VerticalRgb565Transform::new(self.width(), source.height, self.height())
-            .map_err(|error| ScanoutSlotsError::InvalidGeometry(error.to_string()))?;
+        self.copy_vertical_rect_with_sampling(source, rect, VerticalSampling::CenteredNearest)
+    }
+
+    pub fn copy_vertical_rect_with_sampling(
+        &mut self,
+        source: Rgb565FrameView<'_, Rgb565Pixel>,
+        rect: DirtyRect,
+        sampling: VerticalSampling,
+    ) -> Result<usize, ScanoutSlotsError> {
+        let transform = VerticalRgb565Transform::new_with_sampling(
+            self.width(),
+            source.height,
+            self.height(),
+            sampling,
+        )
+        .map_err(|error| ScanoutSlotsError::InvalidGeometry(error.to_string()))?;
         let stride_pixels = self.stride_pixels();
         transform
             .copy_rect(

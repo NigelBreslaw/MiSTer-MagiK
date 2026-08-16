@@ -7,6 +7,8 @@
 use super::downsample::Rgb565FrameView;
 #[cfg(feature = "ui")]
 use super::target::{CachedFrameView, DirtyRect};
+#[cfg(feature = "ui")]
+use super::vertical_scale::VerticalSampling;
 use crate::fpga::{
     Fpga, FpgaUioGuard, LatchedFbufGeometry, LatchedFbufPostAttempt, LatchedFbufPostError,
     LatchedFbufStatus, LatchedFbufStatusReadError, LatchedFbufStatusSample, MAGIK_FBUF_LATCH_MAGIC,
@@ -194,6 +196,7 @@ pub trait LatchFrameBuffers {
         buffer: &mut Self::Buffer,
         cached: CachedFrameView<'_>,
         rect: DirtyRect,
+        sampling: VerticalSampling,
     ) -> Result<LatchCopyResult, String>;
     fn publish_writes(buffer: &mut Self::Buffer);
 }
