@@ -9800,7 +9800,6 @@ pub(super) fn run_launcher_loop(
             request_launcher_redraw!();
         }
         let mut crt_backdrop_full_damage = None;
-        let mut crt_backdrop_damage = DirtyRectList::new();
         let mut crt_backdrop_work_trace = crate::crt_backdrop::CrtBackdropWorkTrace::default();
         let crt_backdrop_snapshot_us = 0_u64;
         let mut crt_backdrop_copy_us = 0_u64;
@@ -9881,26 +9880,12 @@ pub(super) fn run_launcher_loop(
                     let copied = layer_target.presentation_frame_view().pixels().len()
                         >= crt_backdrop_copy_pixels as usize;
                     if copied {
-                        let backdrop_full_damage = DirtyRect {
+                        crt_backdrop_full_damage = Some(DirtyRect {
                             x0: 0,
                             y0: 0,
                             x1: layout.composition_w(),
                             y1: layout.composition_h(),
-                        };
-                        crt_backdrop_full_damage = Some(backdrop_full_damage);
-                        let mut protected_damage = DirtyRectList::new();
-                        for rect in protected_chrome {
-                            protected_damage.push(DirtyRect {
-                                x0: rect.0,
-                                y0: rect.1,
-                                x1: rect.2,
-                                y1: rect.3,
-                            });
-                        }
-                        crt_backdrop_damage = subtract_dirty_rects(
-                            DirtyRectList::from_one(backdrop_full_damage),
-                            &protected_damage,
-                        );
+                        });
                     }
                     if crt_backdrop_work_trace.active {
                         request_launcher_redraw!();
@@ -10353,7 +10338,7 @@ pub(super) fn run_launcher_loop(
             damage.push_if_some(physical_arcade_rect);
             damage.push_if_some(physical_empty_preview_rect);
             damage.push_if_some(physical_raw_preview_rect);
-            damage.extend_from(&crt_backdrop_damage);
+            damage.push_if_some(crt_backdrop_full_damage);
             damage
         };
         // Retain the v1 telemetry field for schema compatibility. Native Slint
