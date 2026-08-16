@@ -9715,6 +9715,8 @@ pub(super) fn run_launcher_loop(
         let arcade_list_update_start = Instant::now();
         let arcade_list_rect = if wants_arcade_list && composition_decision.allow_arcade_list_blit {
             let gui_arcade_pmu = gui_profiling.phase_span(gui_custom_selection.arcade_row_update);
+            let arcade_list_profile_pmu =
+                mister_magik_perf_events::sampled_span("gui.custom.crt-arcade-list-update");
             configure_arcade_list_renderer_geometry(&mut arcade_list_renderer, &nav, ui);
             let force_arcade_redraw = arcade_list_needs_forced_redraw(
                 &arcade_list_renderer,
@@ -9758,6 +9760,7 @@ pub(super) fn run_launcher_loop(
                     force_arcade_redraw,
                 )
             };
+            drop(arcade_list_profile_pmu);
             drop(gui_arcade_pmu);
             update
         } else {
@@ -9808,6 +9811,8 @@ pub(super) fn run_launcher_loop(
         let mut crt_backdrop_list_overlay_pixels = 0_u32;
         let mut crt_backdrop_chrome_restore_pixels = 0_u32;
         if crt_backdrop_eligible {
+            let crt_backdrop_profile_pmu =
+                mister_magik_perf_events::sampled_span("gui.custom.crt-backdrop-pipeline");
             // The cached Slint base and its opaque CRT chrome remain stable
             // through velocity ticks. Refresh the snapshot only after an
             // actual Slint raster or when entering the eligible route.
@@ -9900,6 +9905,7 @@ pub(super) fn run_launcher_loop(
                     }
                 }
             }
+            drop(crt_backdrop_profile_pmu);
         } else {
             crt_backdrop_selection = None;
             crt_backdrop_transition_id = None;
@@ -10243,6 +10249,8 @@ pub(super) fn run_launcher_loop(
                 })
                 .and_then(|update| {
                     let rect = arcade_update_dirty_rect(&update);
+                    let crt_overlay_profile_pmu =
+                        mister_magik_perf_events::sampled_span("gui.custom.crt-list-overlay");
                     let list_start = Instant::now();
                     let composed = crt_backdrop.as_ref().is_some_and(|backdrop| {
                         layer_target.compose_arcade_list_over_backdrop(
@@ -10271,6 +10279,7 @@ pub(super) fn run_launcher_loop(
                         crt_backdrop_chrome_restore_pixels =
                             crt_backdrop_chrome.len().min(u32::MAX as usize) as u32;
                     }
+                    drop(crt_overlay_profile_pmu);
                     if layout.is_portrait() {
                         physical_arcade_rect = Some(layout.logical_rect_to_composition(rect));
                         None
