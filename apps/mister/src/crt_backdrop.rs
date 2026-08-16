@@ -832,6 +832,15 @@ fn copy_rgb565_row_excluding(
     protected_rects: &[(usize, usize, usize, usize)],
 ) {
     let width = destination.len().min(source.len());
+    // Most backdrop rows do not intersect the opaque chrome.  Keep that
+    // common path to one slice copy instead of walking every protected rect.
+    if !protected_rects
+        .iter()
+        .any(|&(_, y0, _, y1)| row >= y0 && row < y1)
+    {
+        destination[..width].copy_from_slice(&source[..width]);
+        return;
+    }
     let mut cursor = 0;
     for &(x0, y0, x1, y1) in protected_rects {
         if row < y0 || row >= y1 {
