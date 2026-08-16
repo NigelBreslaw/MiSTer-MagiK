@@ -75,6 +75,7 @@ struct ArcadeListStyle {
     badge_fill_565: Rgb565Pixel,
     badge_text: Pixel,
     title_font_px: f32,
+    meta_font_px: f32,
     title_typeface: ConsoleTypeface,
     meta_typeface: ConsoleTypeface,
     glyph_row_filter: ConsoleGlyphRowFilter,
@@ -137,6 +138,7 @@ impl ArcadeListStyle {
             badge_fill_565: ARCADE_NEW_BADGE_FILL_565,
             badge_text: ARCADE_NEW_BADGE_TEXT,
             title_font_px: ARCADE_LIST_FONT_PX,
+            meta_font_px: ARCADE_LIST_META_FONT_PX,
             title_typeface: ConsoleTypeface::Nocive15,
             meta_typeface: ConsoleTypeface::PressStart2P,
             glyph_row_filter: ConsoleGlyphRowFilter::Native,
@@ -179,17 +181,9 @@ impl ArcadeListStyle {
                     style.title_typeface = ConsoleTypeface::Bacteria12Half;
                     ConsoleGlyphRowFilter::Native
                 }
-                CrtFontExperiment::TerminusNormal => {
-                    style.title_font_px = 28.0;
-                    style.title_typeface = ConsoleTypeface::Terminus8x14Normal;
-                    ConsoleGlyphRowFilter::Native
-                }
-                CrtFontExperiment::TerminusBold => {
-                    style.title_font_px = 28.0;
-                    style.title_typeface = ConsoleTypeface::Terminus8x14Bold;
-                    ConsoleGlyphRowFilter::Native
-                }
                 CrtFontExperiment::Baseline | CrtFontExperiment::PhaseEven => {
+                    style.title_font_px = 32.0;
+                    style.title_typeface = ConsoleTypeface::Yesterday10Perfect;
                     ConsoleGlyphRowFilter::Native
                 }
             };
@@ -220,9 +214,10 @@ impl ArcadeListStyle {
             badge_fill_565: rgb565_from_rgb888(0x40, 0xe5, 0xe7),
             badge_text: Pixel(0x0003132d),
             title_font_px: ARCADE_LIST_FONT_PX,
+            meta_font_px: 14.0,
             title_typeface: ConsoleTypeface::Nocive15,
             meta_typeface: match metrics.font_family {
-                CrtFontFamily::PressStart2P => ConsoleTypeface::PressStart2P,
+                CrtFontFamily::Terminus8x14 => ConsoleTypeface::Terminus8x14Small,
             },
             glyph_row_filter: ConsoleGlyphRowFilter::Native,
             crt_palette: true,
@@ -433,7 +428,7 @@ impl ArcadeListRenderer {
                 style.glyph_row_filter,
             ),
             meta_font: ConsoleFont::new_with_typeface_and_row_filter(
-                ARCADE_LIST_META_FONT_PX,
+                style.meta_font_px,
                 style.meta_typeface,
                 style.glyph_row_filter,
             ),
@@ -3311,7 +3306,8 @@ mod tests {
 
         assert_eq!(crt.style.row_height, 24);
         assert_eq!(crt.style.title_typeface, ConsoleTypeface::Nocive15);
-        assert_eq!(crt.style.meta_typeface, ConsoleTypeface::PressStart2P);
+        assert_eq!(crt.style.meta_typeface, ConsoleTypeface::Terminus8x14Small);
+        assert_eq!(crt.style.meta_font_px, 14.0);
         assert!(crt.style.crt_palette);
         assert_eq!(crt.style.background.0, 0x00020817);
         assert_eq!(
@@ -3323,6 +3319,7 @@ mod tests {
         assert_eq!(hdmi.style.row_height, ARCADE_ROW_HEIGHT);
         assert_eq!(hdmi.style.title_typeface, ConsoleTypeface::Nocive15);
         assert_eq!(hdmi.style.meta_typeface, ConsoleTypeface::PressStart2P);
+        assert_eq!(hdmi.style.meta_font_px, ARCADE_LIST_META_FONT_PX);
         assert!(!hdmi.style.crt_palette);
         assert_eq!(hdmi.style.background.0, ARCADE_LIST_BG_COLOR.0);
         assert_eq!(hdmi.style.badge_fill.0, ARCADE_NEW_BADGE_FILL.0);
@@ -3468,30 +3465,24 @@ mod tests {
     }
 
     #[test]
-    fn terminus_faces_use_the_exact_28px_crt240_resources() {
-        for (experiment, expected_typeface) in [
-            (
-                CrtFontExperiment::TerminusNormal,
-                ConsoleTypeface::Terminus8x14Normal,
-            ),
-            (
-                CrtFontExperiment::TerminusBold,
-                ConsoleTypeface::Terminus8x14Bold,
-            ),
-        ] {
-            let display = crt_240_display().with_crt_font_experiment(experiment);
-            let renderer = ArcadeListRenderer::new_for_crt_display(
-                CrtUiMetrics::for_display(&display),
-                &display,
-            );
-            assert_eq!(renderer.style.title_font_px, 28.0);
-            assert_eq!(renderer.style.title_typeface, expected_typeface);
-            assert_eq!(
-                renderer.style.glyph_row_filter,
-                ConsoleGlyphRowFilter::Native
-            );
-            assert_eq!(renderer.style.row_height, 32);
-        }
+    fn crt240_baseline_restores_yesterday_titles_and_terminus_metadata() {
+        let display = crt_240_display();
+        let renderer =
+            ArcadeListRenderer::new_for_crt_display(CrtUiMetrics::for_display(&display), &display);
+
+        assert_eq!(renderer.style.title_font_px, 32.0);
+        assert_eq!(
+            renderer.style.title_typeface,
+            ConsoleTypeface::Yesterday10Perfect
+        );
+        assert_eq!(
+            renderer.style.meta_typeface,
+            ConsoleTypeface::Terminus8x14Small
+        );
+        assert_eq!(
+            renderer.style.glyph_row_filter,
+            ConsoleGlyphRowFilter::Native
+        );
     }
 
     #[test]
@@ -3499,7 +3490,7 @@ mod tests {
         for (row_height, font_family, raster) in [
             (
                 32,
-                CrtFontFamily::PressStart2P,
+                CrtFontFamily::Terminus8x14,
                 ArcadeListRasterMetrics {
                     scroll_quantum_y: 2,
                     separator_y: 2,
@@ -3509,17 +3500,17 @@ mod tests {
             ),
             (
                 19,
-                CrtFontFamily::PressStart2P,
+                CrtFontFamily::Terminus8x14,
                 ArcadeListRasterMetrics::native_crt(),
             ),
             (
                 32,
-                CrtFontFamily::PressStart2P,
+                CrtFontFamily::Terminus8x14,
                 ArcadeListRasterMetrics::native_crt(),
             ),
             (
                 39,
-                CrtFontFamily::PressStart2P,
+                CrtFontFamily::Terminus8x14,
                 ArcadeListRasterMetrics::native_crt(),
             ),
         ] {

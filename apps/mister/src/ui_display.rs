@@ -39,8 +39,6 @@ pub enum CrtFontExperiment {
     YesterdayPerfect,
     Bacteria,
     BacteriaHalf,
-    TerminusNormal,
-    TerminusBold,
 }
 
 impl CrtFontExperiment {
@@ -54,8 +52,6 @@ impl CrtFontExperiment {
             Some("yesterday-perfect") => Self::YesterdayPerfect,
             Some("bacteria") => Self::Bacteria,
             Some("bacteria-half") => Self::BacteriaHalf,
-            Some("terminus-normal") => Self::TerminusNormal,
-            Some("terminus-bold") => Self::TerminusBold,
             _ => Self::Baseline,
         }
     }
@@ -71,8 +67,6 @@ impl CrtFontExperiment {
             Self::YesterdayPerfect => "yesterday-perfect",
             Self::Bacteria => "bacteria",
             Self::BacteriaHalf => "bacteria-half",
-            Self::TerminusNormal => "terminus-normal",
-            Self::TerminusBold => "terminus-bold",
         }
     }
 
@@ -87,9 +81,7 @@ impl CrtFontExperiment {
             | Self::XerxesPerfect
             | Self::YesterdayPerfect
             | Self::Bacteria
-            | Self::BacteriaHalf
-            | Self::TerminusNormal
-            | Self::TerminusBold => mister_magik_mister_runtime::framebuffer::vertical_scale::VerticalSampling::CenteredNearest,
+            | Self::BacteriaHalf => mister_magik_mister_runtime::framebuffer::vertical_scale::VerticalSampling::CenteredNearest,
             Self::PhaseEven => mister_magik_mister_runtime::framebuffer::vertical_scale::VerticalSampling::TopAlignedNearest,
         }
     }
@@ -127,14 +119,14 @@ impl UiDisplayInputs {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CrtFontFamily {
-    PressStart2P,
+    Terminus8x14,
 }
 
 impl CrtFontFamily {
     /// Slint family name embedded in the route's selected font asset.
     pub const fn label(self) -> &'static str {
         match self {
-            Self::PressStart2P => "Press Start 2P",
+            Self::Terminus8x14 => "Terminus 8x14",
         }
     }
 }
@@ -188,7 +180,7 @@ impl CrtUiMetrics {
             game_row_height: 24,
             header_height: 48,
             footer_height: 24,
-            font_family: CrtFontFamily::PressStart2P,
+            font_family: CrtFontFamily::Terminus8x14,
         }
     }
 
@@ -206,7 +198,7 @@ impl CrtUiMetrics {
                 game_row_height: 32,
                 header_height: 80,
                 footer_height: 40,
-                font_family: CrtFontFamily::PressStart2P,
+                font_family: CrtFontFamily::Terminus8x14,
             },
             ResolvedOutputRoute::Crt288p50 => Self {
                 grid_x: 8,
@@ -220,7 +212,7 @@ impl CrtUiMetrics {
                 game_row_height: 19,
                 header_height: 56,
                 footer_height: 24,
-                font_family: CrtFontFamily::PressStart2P,
+                font_family: CrtFontFamily::Terminus8x14,
             },
             ResolvedOutputRoute::Crt480p60 => Self {
                 grid_x: 4,
@@ -234,7 +226,7 @@ impl CrtUiMetrics {
                 game_row_height: 32,
                 header_height: 48,
                 footer_height: 24,
-                font_family: CrtFontFamily::PressStart2P,
+                font_family: CrtFontFamily::Terminus8x14,
             },
             ResolvedOutputRoute::Crt576p50 => Self {
                 grid_x: 4,
@@ -248,7 +240,7 @@ impl CrtUiMetrics {
                 game_row_height: 39,
                 header_height: 56,
                 footer_height: 29,
-                font_family: CrtFontFamily::PressStart2P,
+                font_family: CrtFontFamily::Terminus8x14,
             },
             _ => Self::for_framebuffer(display.render_w, display.render_h),
         }
@@ -1072,22 +1064,6 @@ mod tests {
     }
 
     #[test]
-    fn terminus_faces_are_font_only_and_keep_centered_sampling() {
-        for (value, expected) in [
-            ("terminus-normal", CrtFontExperiment::TerminusNormal),
-            ("terminus-bold", CrtFontExperiment::TerminusBold),
-        ] {
-            let experiment = CrtFontExperiment::parse(Some(value));
-            assert_eq!(experiment, expected);
-            assert_eq!(experiment.label(), value);
-            assert_eq!(
-                experiment.vertical_sampling(),
-                mister_magik_mister_runtime::framebuffer::vertical_scale::VerticalSampling::CenteredNearest
-            );
-        }
-    }
-
-    #[test]
     fn crt_routes_expose_main_raster_periods() {
         assert_eq!(ResolvedOutputRoute::Hdmi.nominal_period_us(), None);
         assert_eq!(
@@ -1774,7 +1750,7 @@ mod tests {
                 ),
                 expected_metrics
             );
-            assert_eq!(metrics.font_family, CrtFontFamily::PressStart2P);
+            assert_eq!(metrics.font_family, CrtFontFamily::Terminus8x14);
         }
     }
 

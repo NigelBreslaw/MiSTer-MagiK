@@ -148,18 +148,12 @@ design rows by construction.
 scripts/agent device launcher restart --attended --crt-font-experiment bacteria-half
 ```
 
-The `terminus-normal` and `terminus-bold` arms use the official Terminus 8×14
-BDF faces directly. Generation expands every native bitmap pixel to an exact
-2×2 composition block, producing a 16×28 composition cell without outline
-rasterization or resampling. Centered 480→240 scanout retains each authored
-pixel as a 2×1 framebuffer block, which is physically square on the 4:3
-640×240 output. Both use the unchanged 32-pixel Arcade row and native glyph-row
-filter:
-
-```text
-scripts/agent device launcher restart --attended --crt-font-experiment terminus-normal
-scripts/agent device launcher restart --attended --crt-font-experiment terminus-bold
-```
+The production CRT typography uses Jersey 25 for major headings, native
+Terminus 8×14 for settings, status, and small text, and Nocive 15 for footer
+hints. Press Start 2P remains available to HDMI but is not used by the CRT UI.
+CRT240 Arcade game titles use the pixel-perfect 32px Yesterday 10 resource;
+the retained Terminus 28px normal and bold resources are not Arcade title
+selectors.
 
 Only `STEM-raw.png` is authoritative framebuffer evidence; the two `4x3`
 files are derived host previews and must not be used as HDMI/CRT sink proof.

@@ -193,13 +193,11 @@ It uses the native 16px Bacteria resource with unchanged centered scanout and
 no row reconstruction. Its 12-row capitals reduce to roughly six CRT
 scanlines; the catalog remains untouched.
 
-For the native Terminus comparison, use
-`scripts/agent device launcher restart --attended --crt-font-experiment terminus-normal`
-or replace the final value with `terminus-bold`. Both arms use the official
-8×14 BDF face expanded to a 16×28 composition cell. Each authored pixel is an
-exact 2×2 composition block and therefore survives centered 480→240 scanout as
-a physically square 2×1 framebuffer block. These volatile switches do not
-refresh or modify the catalog.
+CRT UI typography uses Jersey 25 for major headings, the native Terminus 8×14
+resource for settings and compact status text, and Nocive 15 for footer hints.
+Press Start 2P is not used on CRT routes. CRT240 Arcade game titles default to
+the pixel-perfect 32px Yesterday 10 resource, while Arcade metadata uses native
+Terminus. Typography selection does not refresh or modify the catalog.
 
 On macOS, `scripts/agent capture usb-video [--output PATH]` captures the first
 nonblank 1920x1080 frame from the fixed `USB Video` input. The native
