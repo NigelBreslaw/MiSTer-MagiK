@@ -546,7 +546,7 @@ const JERSEY_25_SPEC: GeneratorSpec = GeneratorSpec {
     weight: 400,
     hint: true,
     threshold: 128,
-    coverage: Coverage::Uppercase,
+    coverage: Coverage::FullCharmap,
 };
 
 #[cfg(any(test, feature = "asset-tools"))]
