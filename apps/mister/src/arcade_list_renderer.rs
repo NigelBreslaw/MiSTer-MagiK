@@ -164,6 +164,11 @@ impl ArcadeListStyle {
                     style.title_typeface = ConsoleTypeface::Xerxes10Perfect;
                     ConsoleGlyphRowFilter::Native
                 }
+                CrtFontExperiment::YesterdayPerfect => {
+                    style.title_font_px = 32.0;
+                    style.title_typeface = ConsoleTypeface::Yesterday10Perfect;
+                    ConsoleGlyphRowFilter::Native
+                }
                 CrtFontExperiment::Bacteria => {
                     style.title_font_px = 32.0;
                     style.title_typeface = ConsoleTypeface::Bacteria12;
@@ -3386,6 +3391,25 @@ mod tests {
         assert_eq!(
             renderer.style.title_typeface,
             ConsoleTypeface::Xerxes10Perfect
+        );
+        assert_eq!(
+            renderer.style.glyph_row_filter,
+            ConsoleGlyphRowFilter::Native
+        );
+        assert_eq!(renderer.style.row_height, 32);
+    }
+
+    #[test]
+    fn yesterday_perfect_uses_the_exact_32px_crt240_title_resource() {
+        let display =
+            crt_240_display().with_crt_font_experiment(CrtFontExperiment::YesterdayPerfect);
+        let renderer =
+            ArcadeListRenderer::new_for_crt_display(CrtUiMetrics::for_display(&display), &display);
+
+        assert_eq!(renderer.style.title_font_px, 32.0);
+        assert_eq!(
+            renderer.style.title_typeface,
+            ConsoleTypeface::Yesterday10Perfect
         );
         assert_eq!(
             renderer.style.glyph_row_filter,

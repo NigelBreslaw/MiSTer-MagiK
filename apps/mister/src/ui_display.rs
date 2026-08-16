@@ -36,6 +36,7 @@ pub enum CrtFontExperiment {
     DominantRow,
     Xerxes,
     XerxesPerfect,
+    YesterdayPerfect,
     Bacteria,
     BacteriaHalf,
 }
@@ -48,6 +49,7 @@ impl CrtFontExperiment {
             Some("dominant-row") => Self::DominantRow,
             Some("xerxes") => Self::Xerxes,
             Some("xerxes-perfect") => Self::XerxesPerfect,
+            Some("yesterday-perfect") => Self::YesterdayPerfect,
             Some("bacteria") => Self::Bacteria,
             Some("bacteria-half") => Self::BacteriaHalf,
             _ => Self::Baseline,
@@ -62,6 +64,7 @@ impl CrtFontExperiment {
             Self::DominantRow => "dominant-row",
             Self::Xerxes => "xerxes",
             Self::XerxesPerfect => "xerxes-perfect",
+            Self::YesterdayPerfect => "yesterday-perfect",
             Self::Bacteria => "bacteria",
             Self::BacteriaHalf => "bacteria-half",
         }
@@ -76,6 +79,7 @@ impl CrtFontExperiment {
             | Self::DominantRow
             | Self::Xerxes
             | Self::XerxesPerfect
+            | Self::YesterdayPerfect
             | Self::Bacteria
             | Self::BacteriaHalf => mister_magik_mister_runtime::framebuffer::vertical_scale::VerticalSampling::CenteredNearest,
             Self::PhaseEven => mister_magik_mister_runtime::framebuffer::vertical_scale::VerticalSampling::TopAlignedNearest,
@@ -1020,6 +1024,17 @@ mod tests {
         let experiment = CrtFontExperiment::parse(Some("xerxes-perfect"));
         assert_eq!(experiment, CrtFontExperiment::XerxesPerfect);
         assert_eq!(experiment.label(), "xerxes-perfect");
+        assert_eq!(
+            experiment.vertical_sampling(),
+            mister_magik_mister_runtime::framebuffer::vertical_scale::VerticalSampling::CenteredNearest
+        );
+    }
+
+    #[test]
+    fn yesterday_perfect_keeps_the_original_centered_scanout_sampling() {
+        let experiment = CrtFontExperiment::parse(Some("yesterday-perfect"));
+        assert_eq!(experiment, CrtFontExperiment::YesterdayPerfect);
+        assert_eq!(experiment.label(), "yesterday-perfect");
         assert_eq!(
             experiment.vertical_sampling(),
             mister_magik_mister_runtime::framebuffer::vertical_scale::VerticalSampling::CenteredNearest

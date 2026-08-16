@@ -174,6 +174,12 @@ It selects the generated 32px Xerxes resource only for CRT240 Arcade titles
 and game rows. Each design cell becomes a 2×2 composition block and survives
 the unchanged centered 480→240 conversion exactly; the catalog is untouched.
 
+For the pixel-perfect Yesterday comparison, use
+`scripts/agent device launcher restart --attended --crt-font-experiment yesterday-perfect`.
+It selects the generated 32px Yesterday resource only for CRT240 Arcade titles
+and game rows, uses unchanged centered scanout with exact 2×2 composition
+cells, and leaves the catalog untouched.
+
 For the pixel-grid Bacteria 12 comparison, use
 `scripts/agent device launcher restart --attended --crt-font-experiment bacteria`.
 It selects the generated 32px Bacteria resource only for CRT240 Arcade titles

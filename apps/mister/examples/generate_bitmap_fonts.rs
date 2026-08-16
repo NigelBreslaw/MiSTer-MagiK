@@ -4,6 +4,7 @@
 use mister_magik_fb::bitmap_font_resource::{
     generate_bacteria_12, generate_bacteria_12_native, generate_jersey_25, generate_nocive_15,
     generate_xerxes_10, generate_xerxes_10_crt240, generate_yesterday_10,
+    generate_yesterday_10_crt240,
 };
 use std::path::PathBuf;
 
@@ -27,6 +28,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     std::fs::write(
         yesterday_dir.join("yesterday10-16px.mmbf"),
         generate_yesterday_10(&std::fs::read(yesterday_dir.join("Yesterday 10.ttf"))?)?,
+    )?;
+    std::fs::write(
+        yesterday_dir.join("yesterday10-32px.mmbf"),
+        generate_yesterday_10_crt240(&std::fs::read(yesterday_dir.join("Yesterday 10.ttf"))?)?,
     )?;
     std::fs::write(
         xerxes_dir.join("xerxes10-16px.mmbf"),

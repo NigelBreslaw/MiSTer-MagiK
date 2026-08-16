@@ -78,6 +78,7 @@ pub struct ConsoleFont {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ConsoleTypeface {
     PressStart2P,
+    Yesterday10Perfect,
     Nocive15,
     Xerxes10,
     Xerxes10Perfect,
@@ -108,6 +109,14 @@ impl ConsoleFont {
         row_filter: ConsoleGlyphRowFilter,
     ) -> Self {
         let bitmap = match typeface {
+            ConsoleTypeface::Yesterday10Perfect => {
+                assert_eq!(pixel_size, 32.0, "Yesterday 10 has one exact CRT240 size");
+                Some(
+                    mister_magik_fb::bitmap_font_resource::yesterday_10_crt240_console_bitmap_font(
+                    )
+                    .expect("valid pixel-perfect Yesterday 10 bitmap font resource"),
+                )
+            }
             ConsoleTypeface::Nocive15 => {
                 assert_eq!(pixel_size, 16.0, "Nocive 15 has one exact renderer size");
                 Some(
@@ -185,6 +194,7 @@ impl ConsoleFont {
                 "PressStart2P-Regular.ttf",
             ),
             ConsoleTypeface::Nocive15
+            | ConsoleTypeface::Yesterday10Perfect
             | ConsoleTypeface::Xerxes10
             | ConsoleTypeface::Xerxes10Perfect
             | ConsoleTypeface::Bacteria12
@@ -799,6 +809,7 @@ mod tests {
             (ConsoleTypeface::Xerxes10, 16.0, 32, "MagiK 1984"),
             (ConsoleTypeface::Xerxes10, 16.0, 19, "MagiK 1984"),
             (ConsoleTypeface::Xerxes10, 16.0, 39, "MagiK 1984"),
+            (ConsoleTypeface::Yesterday10Perfect, 32.0, 32, "MagiK 1984"),
             (ConsoleTypeface::Xerxes10Perfect, 32.0, 32, "MagiK 1984"),
             (ConsoleTypeface::Bacteria12, 32.0, 32, "MagiK 1984"),
             (ConsoleTypeface::Bacteria12Half, 16.0, 32, "MagiK 1984"),
@@ -853,6 +864,24 @@ mod tests {
         let mask = font.rasterize_alpha_mask("ARCADE").unwrap();
         assert_eq!(mask.height, 10);
         assert!(mask.alpha.iter().all(|alpha| matches!(alpha, 0 | 255)));
+    }
+
+    #[test]
+    fn yesterday_10_perfect_uses_exact_2_by_2_crt240_cells() {
+        let mut font = ConsoleFont::new_with_typeface(32.0, ConsoleTypeface::Yesterday10Perfect);
+        assert!(font.font.is_none());
+        let mask = font.rasterize_alpha_mask("ARCADE").unwrap();
+        assert_eq!(mask.height, 20);
+        assert_eq!(mask.width % 2, 0);
+        assert!(mask.alpha.iter().all(|alpha| matches!(alpha, 0 | 255)));
+        for rows in mask.alpha.chunks_exact(mask.stride * 2) {
+            for x in (0..mask.width).step_by(2) {
+                let cell = rows[x];
+                assert_eq!(rows[x + 1], cell);
+                assert_eq!(rows[mask.stride + x], cell);
+                assert_eq!(rows[mask.stride + x + 1], cell);
+            }
+        }
     }
 
     #[test]

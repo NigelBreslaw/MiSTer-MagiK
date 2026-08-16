@@ -119,6 +119,14 @@ rows and 10 output scanlines.
 scripts/agent device launcher restart --attended --crt-font-experiment xerxes-perfect
 ```
 
+The `yesterday-perfect` arm applies the same lossless 32px CRT240 mapping to
+Yesterday 10. Its 64-unit design cells become exact 2×2 composition blocks,
+and its 640-unit capitals become 20 composition rows and 10 output scanlines.
+
+```text
+scripts/agent device launcher restart --attended --crt-font-experiment yesterday-perfect
+```
+
 The `bacteria` arm uses the supplied Bacteria 12 bitmap design at 32px for the
 CRT240 Arcade title and game rows. The font has a 1,024-unit em and 64-unit
 design grid, so 32px maps each design cell to a 2×2 composition block. The

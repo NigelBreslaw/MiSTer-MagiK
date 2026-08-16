@@ -16,6 +16,8 @@ const MAX_GLYPH_DIMENSION: usize = 256;
 
 const YESTERDAY_10_RESOURCE: &[u8] =
     include_bytes!("../../../private/magik-assets/fonts/yesterday-10/yesterday10-16px.mmbf");
+const YESTERDAY_10_CRT240_RESOURCE: &[u8] =
+    include_bytes!("../../../private/magik-assets/fonts/yesterday-10/yesterday10-32px.mmbf");
 const XERXES_10_RESOURCE: &[u8] =
     include_bytes!("../../../private/magik-assets/fonts/xerxes-10/xerxes10-16px.mmbf");
 const XERXES_10_CRT240_RESOURCE: &[u8] =
@@ -246,6 +248,10 @@ pub fn nocive_15_console_bitmap_font() -> Result<ConsoleBitmapFont, String> {
     console_bitmap_font(NOCIVE_15_RESOURCE)
 }
 
+pub fn yesterday_10_crt240_console_bitmap_font() -> Result<ConsoleBitmapFont, String> {
+    console_bitmap_font(YESTERDAY_10_CRT240_RESOURCE)
+}
+
 pub fn xerxes_10_console_bitmap_font() -> Result<ConsoleBitmapFont, String> {
     console_bitmap_font(XERXES_10_RESOURCE)
 }
@@ -396,6 +402,16 @@ struct GeneratorSpec {
 const YESTERDAY_10_SPEC: GeneratorSpec = GeneratorSpec {
     family: "Yesterday 10",
     pixel_size: 16,
+    weight: 400,
+    hint: false,
+    threshold: 128,
+    coverage: Coverage::FullCharmap,
+};
+
+#[cfg(any(test, feature = "asset-tools"))]
+const YESTERDAY_10_CRT240_SPEC: GeneratorSpec = GeneratorSpec {
+    family: "Yesterday 10",
+    pixel_size: 32,
     weight: 400,
     hint: false,
     threshold: 128,
@@ -636,6 +652,11 @@ pub fn generate_yesterday_10(font_bytes: &[u8]) -> Result<Vec<u8>, String> {
 }
 
 #[cfg(feature = "asset-tools")]
+pub fn generate_yesterday_10_crt240(font_bytes: &[u8]) -> Result<Vec<u8>, String> {
+    generate_resource(font_bytes, YESTERDAY_10_CRT240_SPEC)
+}
+
+#[cfg(feature = "asset-tools")]
 pub fn generate_xerxes_10(font_bytes: &[u8]) -> Result<Vec<u8>, String> {
     generate_resource(font_bytes, XERXES_10_SPEC)
 }
@@ -698,6 +719,10 @@ mod tests {
             YESTERDAY_10_RESOURCE
         );
         assert_eq!(
+            generate_resource(YESTERDAY_10_TTF, YESTERDAY_10_CRT240_SPEC).unwrap(),
+            YESTERDAY_10_CRT240_RESOURCE
+        );
+        assert_eq!(
             generate_resource(XERXES_10_TTF, XERXES_10_SPEC).unwrap(),
             XERXES_10_RESOURCE
         );
@@ -726,6 +751,7 @@ mod tests {
     #[test]
     fn bitmap_font_cap_heights_are_exact() {
         let yesterday_10 = decode_resource(YESTERDAY_10_RESOURCE).unwrap();
+        let yesterday_10_crt240 = decode_resource(YESTERDAY_10_CRT240_RESOURCE).unwrap();
         let xerxes_10 = decode_resource(XERXES_10_RESOURCE).unwrap();
         let xerxes_10_crt240 = decode_resource(XERXES_10_CRT240_RESOURCE).unwrap();
         let nocive_15 = decode_resource(NOCIVE_15_RESOURCE).unwrap();
@@ -734,6 +760,7 @@ mod tests {
         let jersey_25 = decode_resource(JERSEY_25_RESOURCE).unwrap();
         for code_point in ['A', 'H', 'M', 'S'] {
             assert_eq!(glyph(&yesterday_10, code_point).height, 10);
+            assert_eq!(glyph(&yesterday_10_crt240, code_point).height, 20);
             assert_eq!(glyph(&xerxes_10, code_point).height, 10);
             assert_eq!(glyph(&xerxes_10_crt240, code_point).height, 20);
             assert_eq!(glyph(&nocive_15, code_point).height, 15);
@@ -747,6 +774,7 @@ mod tests {
     fn descents_follow_slints_negative_metric_contract() {
         for resource in [
             YESTERDAY_10_RESOURCE,
+            YESTERDAY_10_CRT240_RESOURCE,
             XERXES_10_RESOURCE,
             XERXES_10_CRT240_RESOURCE,
             NOCIVE_15_RESOURCE,
@@ -762,6 +790,7 @@ mod tests {
     fn unpacked_coverage_is_binary() {
         for resource in [
             YESTERDAY_10_RESOURCE,
+            YESTERDAY_10_CRT240_RESOURCE,
             XERXES_10_RESOURCE,
             XERXES_10_CRT240_RESOURCE,
             NOCIVE_15_RESOURCE,
