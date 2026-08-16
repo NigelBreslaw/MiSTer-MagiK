@@ -13,6 +13,7 @@ use std::time::{Duration, Instant};
 /// thread.  The pixel and row-repeat buffers are immutable so adopting a
 /// target only clones two `Arc`s; the UI never rescales or copies the source
 /// image on the selection-change path.
+#[cfg(feature = "ui")]
 #[derive(Clone)]
 pub(crate) struct PreparedCrtBackdrop {
     pub(crate) pixels: std::sync::Arc<[Rgb565Pixel]>,
@@ -22,6 +23,7 @@ pub(crate) struct PreparedCrtBackdrop {
 
 /// Immutable decoded screenshot data handed from the preview cache to the
 /// CRT preparation worker.  The controller owns all derived buffers.
+#[cfg(feature = "ui")]
 #[derive(Clone)]
 pub(crate) struct BackdropSource {
     pub(crate) key: String,
@@ -197,6 +199,7 @@ impl CrtBackdropState {
     /// Adopt an immutable target prepared by the background lane.  This is
     /// intentionally separate from `retarget`, whose compatibility path still
     /// performs scaling synchronously for host tests and non-Arcade callers.
+    #[cfg(feature = "ui")]
     pub(crate) fn retarget_prepared(
         &mut self,
         prepared: Option<PreparedCrtBackdrop>,
@@ -625,6 +628,7 @@ fn scale_dimmed_center_crop_mapped_with_logical_height(
 /// Worker-friendly variant that reuses the nearest-neighbour maps between
 /// requests. The destination remains request-owned because it is handed to
 /// the backdrop cache, while the maps are pure scratch state.
+#[cfg(feature = "ui")]
 pub(crate) fn prepare_dimmed_rgb565_target_with_maps(
     source: &[Rgb565Pixel],
     source_width: usize,
