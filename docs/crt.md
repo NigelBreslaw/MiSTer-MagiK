@@ -92,6 +92,15 @@ fixture manually:
 scripts/agent device launcher restart --attended --crt-font-experiment coverage-max
 ```
 
+The `dominant-row` follow-up preserves one complete source row per absolute
+two-row group instead of merging their pixels. It chooses the row with greater
+total glyph coverage and prefers the production odd row on ties, then repeats
+that row across the pair. Activate it for the next attended comparison:
+
+```text
+scripts/agent device launcher restart --attended --crt-font-experiment dominant-row
+```
+
 Only `STEM-raw.png` is authoritative framebuffer evidence; the two `4x3`
 files are derived host previews and must not be used as HDMI/CRT sink proof.
 

@@ -297,6 +297,7 @@ pub struct LauncherRestartArgs {
 pub enum CrtFontExperiment {
     PhaseEven,
     CoverageMax,
+    DominantRow,
 }
 
 #[derive(Debug, Args)]
@@ -494,6 +495,7 @@ impl CrtFontExperiment {
         match self {
             Self::PhaseEven => "phase-even",
             Self::CoverageMax => "coverage-max",
+            Self::DominantRow => "dominant-row",
         }
     }
 }
@@ -557,6 +559,17 @@ mod tests {
                 "--attended",
                 "--crt-font-experiment",
                 "phase-even",
+            ])
+            .is_ok()
+        );
+        assert!(
+            TestCli::try_parse_from([
+                "test",
+                "launcher",
+                "restart",
+                "--attended",
+                "--crt-font-experiment",
+                "dominant-row",
             ])
             .is_ok()
         );

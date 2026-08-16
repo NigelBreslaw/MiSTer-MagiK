@@ -155,6 +155,13 @@ open the Arcade list manually, and capture only after the operator confirms the
 fixture is visible. The one-shot experiment does not refresh or replace the
 catalog.
 
+For the non-merging follow-up, use
+`scripts/agent device launcher restart --attended --crt-font-experiment dominant-row`.
+It selects one complete glyph row for each absolute two-row group based on total
+coverage, preferring the production odd row on ties, and leaves the catalog
+untouched. Again, capture only after the operator confirms the Arcade list is
+visible.
+
 On macOS, `scripts/agent capture usb-video [--output PATH]` captures the first
 nonblank 1920x1080 frame from the fixed `USB Video` input. The native
 AVFoundation path writes JPEG, refuses to overwrite an explicit output, and

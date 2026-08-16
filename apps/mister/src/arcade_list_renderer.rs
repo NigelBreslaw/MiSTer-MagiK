@@ -149,10 +149,14 @@ impl ArcadeListStyle {
     fn crt_for_display(metrics: CrtUiMetrics, display: &UiDisplay) -> Self {
         let mut style =
             Self::crt_with_raster(metrics, ArcadeListRasterMetrics::for_display(display));
-        if display.output_route() == ResolvedOutputRoute::Crt240p60
-            && display.crt_font_experiment() == CrtFontExperiment::CoverageMax
-        {
-            style.glyph_row_filter = ConsoleGlyphRowFilter::PairwiseMax;
+        if display.output_route() == ResolvedOutputRoute::Crt240p60 {
+            style.glyph_row_filter = match display.crt_font_experiment() {
+                CrtFontExperiment::CoverageMax => ConsoleGlyphRowFilter::PairwiseMax,
+                CrtFontExperiment::DominantRow => ConsoleGlyphRowFilter::PairwiseDominant,
+                CrtFontExperiment::Baseline | CrtFontExperiment::PhaseEven => {
+                    ConsoleGlyphRowFilter::Native
+                }
+            };
         }
         style
     }
@@ -3309,6 +3313,23 @@ mod tests {
         assert_eq!(
             coverage.style.glyph_row_filter,
             ConsoleGlyphRowFilter::PairwiseMax
+        );
+        assert_eq!(hdmi.style.glyph_row_filter, ConsoleGlyphRowFilter::Native);
+    }
+
+    #[test]
+    fn dominant_row_filters_only_the_crt_240_arcade_glyphs() {
+        let dominant_display =
+            crt_240_display().with_crt_font_experiment(CrtFontExperiment::DominantRow);
+        let dominant = ArcadeListRenderer::new_for_crt_display(
+            CrtUiMetrics::for_display(&dominant_display),
+            &dominant_display,
+        );
+        let hdmi = ArcadeListRenderer::new();
+
+        assert_eq!(
+            dominant.style.glyph_row_filter,
+            ConsoleGlyphRowFilter::PairwiseDominant
         );
         assert_eq!(hdmi.style.glyph_row_filter, ConsoleGlyphRowFilter::Native);
     }

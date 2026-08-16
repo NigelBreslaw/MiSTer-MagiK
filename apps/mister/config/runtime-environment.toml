@@ -476,7 +476,7 @@ scope = "instrumentation"
 conflicts = []
 sensitivity = "public"
 aliases = []
-documentation = { summary = "Selects a volatile CRT font visual experiment", accepted_values = ["phase-even", "coverage-max"], value_policy = "document" }
+documentation = { summary = "Selects a volatile CRT font visual experiment", accepted_values = ["phase-even", "coverage-max", "dominant-row"], value_policy = "document" }
 
 [[control]]
 name = "MISTER_CRT_PROBE_PATTERN"

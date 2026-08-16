@@ -86,6 +86,7 @@ pub enum ConsoleGlyphRowFilter {
     #[default]
     Native,
     PairwiseMax,
+    PairwiseDominant,
 }
 
 impl ConsoleFont {
@@ -497,6 +498,36 @@ fn draw_solid_glyph(
                 pair_y += 2;
             }
         }
+        ConsoleGlyphRowFilter::PairwiseDominant => {
+            let glyph_y1 = gy0 + glyph.height as isize;
+            let mut pair_y = gy0.div_euclid(2) * 2;
+            while pair_y < glyph_y1 {
+                let Some(source_gy) = dominant_pair_row(pair_y, gy0, glyph.height, |gy| {
+                    glyph.data[gy * glyph.width..(gy + 1) * glyph.width]
+                        .iter()
+                        .map(|alpha| u32::from(*alpha))
+                        .sum()
+                }) else {
+                    pair_y += 2;
+                    continue;
+                };
+                for gx in 0..glyph.width {
+                    let dx = gx0 + gx as isize;
+                    if dx < 0 || dx >= clip_w as isize {
+                        continue;
+                    }
+                    if glyph.data[source_gy * glyph.width + gx] < 128 {
+                        continue;
+                    }
+                    for dy in [pair_y, pair_y + 1] {
+                        if dy >= clip_y as isize && dy < (clip_y + clip_h) as isize {
+                            dst[dy as usize * stride + dx as usize] = color;
+                        }
+                    }
+                }
+                pair_y += 2;
+            }
+        }
     }
 }
 
@@ -558,7 +589,54 @@ fn draw_gradient_glyph(
                 pair_y += 2;
             }
         }
+        ConsoleGlyphRowFilter::PairwiseDominant => {
+            let glyph_y1 = gy0 + glyph.height as isize;
+            let mut pair_y = gy0.div_euclid(2) * 2;
+            while pair_y < glyph_y1 {
+                let Some(source_gy) = dominant_pair_row(pair_y, gy0, glyph.height, |gy| {
+                    glyph.mask[gy * glyph.width..(gy + 1) * glyph.width]
+                        .iter()
+                        .filter(|ink| **ink)
+                        .count() as u32
+                }) else {
+                    pair_y += 2;
+                    continue;
+                };
+                for gx in 0..glyph.width {
+                    let dx = gx0 + gx as isize;
+                    if dx < 0 || dx >= clip_w as isize {
+                        continue;
+                    }
+                    if !glyph.mask[source_gy * glyph.width + gx] {
+                        continue;
+                    }
+                    let color = glyph.row_colors[source_gy];
+                    for dy in [pair_y, pair_y + 1] {
+                        if dy >= clip_y as isize && dy < (clip_y + clip_h) as isize {
+                            dst[dy as usize * stride + dx as usize] = color;
+                        }
+                    }
+                }
+                pair_y += 2;
+            }
+        }
     }
+}
+
+fn dominant_pair_row(
+    pair_y: isize,
+    gy0: isize,
+    glyph_height: usize,
+    mut coverage: impl FnMut(usize) -> u32,
+) -> Option<usize> {
+    [pair_y, pair_y + 1]
+        .into_iter()
+        .filter_map(|dy| {
+            let gy = dy - gy0;
+            (gy >= 0 && gy < glyph_height as isize).then_some((dy, gy as usize))
+        })
+        .max_by_key(|(dy, gy)| (coverage(*gy), *dy))
+        .map(|(_, gy)| gy)
 }
 
 fn interpolate_rgb(from: u32, to: u32, t_num: u32, t_den: u32) -> u32 {
@@ -800,6 +878,69 @@ mod tests {
         );
         for rows in filtered_pixels.chunks_exact(width * 2) {
             assert_eq!(rows[..width], rows[width..]);
+        }
+
+        let ink_columns = |pixels: &[Pixel]| {
+            (0..width)
+                .map(|x| (0..height).any(|y| pixels[y * width + x] != background))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(ink_columns(&native_pixels), ink_columns(&filtered_pixels));
+    }
+
+    #[test]
+    fn pairwise_dominant_repeats_the_more_covered_whole_glyph_row() {
+        let width = 80;
+        let height = 40;
+        let background = Pixel(0x00112233);
+        let color = Pixel(0x00e8e0f0);
+        let mut native = ConsoleFont::new_with_typeface_and_row_filter(
+            16.0,
+            ConsoleTypeface::Nocive15,
+            ConsoleGlyphRowFilter::Native,
+        );
+        let mut filtered = ConsoleFont::new_with_typeface_and_row_filter(
+            16.0,
+            ConsoleTypeface::Nocive15,
+            ConsoleGlyphRowFilter::PairwiseDominant,
+        );
+        let mut native_pixels = vec![background; width * height];
+        let mut filtered_pixels = vec![background; width * height];
+        let baseline = native.centered_text_baseline("M", 0, height);
+        native.draw_text_clipped(
+            &mut native_pixels,
+            width,
+            width,
+            0,
+            height,
+            8,
+            baseline,
+            "M",
+            color,
+        );
+        filtered.draw_text_clipped(
+            &mut filtered_pixels,
+            width,
+            width,
+            0,
+            height,
+            8,
+            baseline,
+            "M",
+            color,
+        );
+
+        let ink_count = |row: &[Pixel]| row.iter().filter(|pixel| **pixel != background).count();
+        assert_ne!(native_pixels, filtered_pixels);
+        for (native_rows, filtered_rows) in native_pixels
+            .chunks_exact(width * 2)
+            .zip(filtered_pixels.chunks_exact(width * 2))
+        {
+            assert_eq!(filtered_rows[..width], filtered_rows[width..]);
+            assert_eq!(
+                ink_count(&filtered_rows[..width]),
+                ink_count(&native_rows[..width]).max(ink_count(&native_rows[width..]))
+            );
         }
 
         let ink_columns = |pixels: &[Pixel]| {
