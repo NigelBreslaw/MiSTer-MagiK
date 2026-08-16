@@ -440,9 +440,6 @@ fn benchmark_capabilities() -> serde_json::Value {
         "persisted-search-v1": true,
         "input-integrity-driver-v1": true,
         "arcade-velocity-scroll-v1": true,
-        "arcade-velocity-scroll-pprof-v1": cfg!(feature = "profile"),
-        "arcade-velocity-scroll-pmu-v1": true,
-        "arcade-velocity-scroll-streamline-v1": true,
         "arcade-velocity-scroll-attribution-v1": true,
         "system-entry-v1": true,
         "system-entry-profile-v1": cfg!(feature = "profile"),
@@ -2977,12 +2974,6 @@ mod tests {
         assert_eq!(capabilities["pmu-profile-v1"], true);
         assert_eq!(capabilities["pmu-profile-v2"], true);
         assert_eq!(capabilities["settings-navigation-transition-v4"], true);
-        assert_eq!(
-            capabilities["arcade-velocity-scroll-pprof-v1"],
-            cfg!(feature = "profile")
-        );
-        assert_eq!(capabilities["arcade-velocity-scroll-pmu-v1"], true);
-        assert_eq!(capabilities["arcade-velocity-scroll-streamline-v1"], true);
         assert_eq!(capabilities["arcade-velocity-scroll-attribution-v1"], true);
     }
 }

@@ -687,33 +687,6 @@ impl NativeDevice {
         })
     }
 
-    pub(crate) fn profile_arcade_velocity_scroll_pprof(
-        &mut self,
-        output_dir: &Path,
-    ) -> std::result::Result<String, DeviceFailure> {
-        self.benchmark_profile(|config| {
-            profile_installed_arcade_velocity_scroll_pprof(config, output_dir)
-        })
-    }
-
-    pub(crate) fn profile_arcade_velocity_scroll_pmu(
-        &mut self,
-        output_dir: &Path,
-    ) -> std::result::Result<String, DeviceFailure> {
-        self.benchmark_profile(|config| {
-            profile_installed_arcade_velocity_scroll_pmu(config, output_dir)
-        })
-    }
-
-    pub(crate) fn profile_arcade_velocity_scroll_streamline(
-        &mut self,
-        output_dir: &Path,
-    ) -> std::result::Result<String, DeviceFailure> {
-        self.benchmark_profile(|config| {
-            profile_installed_arcade_velocity_scroll_streamline(config, output_dir)
-        })
-    }
-
     pub(crate) fn profile_arcade_velocity_scroll_attribution(
         &mut self,
         output_dir: &Path,
@@ -8035,11 +8008,11 @@ fn profile_installed_arcade_velocity_scroll_pprof(
     let capability = last_json_line(&capability.stdout)
         .ok_or("installed benchmark capability output contains no JSON report")?;
     if capability
-        .get("arcade-velocity-scroll-pprof-v1")
+        .get("arcade-velocity-scroll-attribution-v1")
         .and_then(Value::as_bool)
         != Some(true)
     {
-        return Err("installed app does not support arcade-velocity-scroll-pprof-v1".into());
+        return Err("installed app does not support arcade-velocity-scroll-attribution-v1".into());
     }
     let manifest = remote_read(&session, LOCAL_MAIN_MANIFEST_REMOTE)
         .ok_or("development platform manifest is missing")?;
@@ -8218,11 +8191,11 @@ fn profile_installed_arcade_velocity_scroll_pmu(
     let capability = last_json_line(&capability.stdout)
         .ok_or("installed benchmark capability output contains no JSON report")?;
     if capability
-        .get("arcade-velocity-scroll-pmu-v1")
+        .get("arcade-velocity-scroll-attribution-v1")
         .and_then(Value::as_bool)
         != Some(true)
     {
-        return Err("installed app does not support arcade-velocity-scroll-pmu-v1".into());
+        return Err("installed app does not support arcade-velocity-scroll-attribution-v1".into());
     }
     let manifest = remote_read(&session, LOCAL_MAIN_MANIFEST_REMOTE)
         .ok_or("development platform manifest is missing")?;
@@ -8380,11 +8353,11 @@ fn profile_installed_arcade_velocity_scroll_streamline(
     let capability = last_json_line(&capability.stdout)
         .ok_or("installed benchmark capability output contains no JSON report")?;
     if capability
-        .get("arcade-velocity-scroll-streamline-v1")
+        .get("arcade-velocity-scroll-attribution-v1")
         .and_then(Value::as_bool)
         != Some(true)
     {
-        return Err("installed app does not support arcade-velocity-scroll-streamline-v1".into());
+        return Err("installed app does not support arcade-velocity-scroll-attribution-v1".into());
     }
     let manifest = remote_read(&session, LOCAL_MAIN_MANIFEST_REMOTE)
         .ok_or("development platform manifest is missing")?;

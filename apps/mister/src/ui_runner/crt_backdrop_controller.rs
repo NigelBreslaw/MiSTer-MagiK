@@ -300,8 +300,8 @@ impl CrtBackdropController {
         if selected_changed || transition_changed || prepared_changed || !self.was_eligible {
             if let Some(source) = source.as_ref() {
                 self.request_prepare(source);
-                self.state
-                    .retarget_prepared(self.prepared_target(source), now);
+                let prepared = self.prepared_target(source);
+                self.state.retarget_prepared(prepared, now);
             } else {
                 self.state.clear_plain();
             }
