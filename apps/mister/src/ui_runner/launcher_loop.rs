@@ -9553,6 +9553,18 @@ pub(super) fn run_launcher_loop(
                 let _ = full_screen_transition.retain_redraw(generation);
             }
             None
+        } else if crt_backdrop_eligible
+            && crt_backdrop_was_eligible
+            && !crt_backdrop_leaving
+            && !full_frame_present
+            && (arcade_scroll_active || preview.raw_transition_frame().is_some())
+        {
+            // During CRT Arcade motion, the custom compositor owns the
+            // changing backdrop, list, and chrome restoration. Keep the
+            // launcher cadence alive without rerasterizing the unchanged
+            // Slint base on every velocity tick.
+            request_launcher_redraw!();
+            None
         } else if composition_decision.force_full_slint_raster || crt_backdrop_leaving {
             gui_raster_phase = gui_raster_profile_phase(true, true);
             let gui_raster_pmu = gui_profiling.phase_span(gui_raster_phase.span_name());
