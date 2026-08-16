@@ -607,6 +607,35 @@ pub(crate) fn prepare_dimmed_rgb565_target(
     destination_physical_height: usize,
     logical_destination_height: usize,
 ) -> Option<(Vec<Rgb565Pixel>, Vec<bool>)> {
+    let mut x_map = Vec::new();
+    let mut y_map = Vec::new();
+    prepare_dimmed_rgb565_target_with_maps(
+        source,
+        source_width,
+        source_height,
+        source_stride_pixels,
+        destination_width,
+        destination_physical_height,
+        logical_destination_height,
+        &mut x_map,
+        &mut y_map,
+    )
+}
+
+/// Worker-friendly variant that reuses the nearest-neighbour maps between
+/// requests. The destination remains request-owned because it is handed to
+/// the backdrop cache, while the maps are pure scratch state.
+pub(crate) fn prepare_dimmed_rgb565_target_with_maps(
+    source: &[Rgb565Pixel],
+    source_width: usize,
+    source_height: usize,
+    source_stride_pixels: usize,
+    destination_width: usize,
+    destination_physical_height: usize,
+    logical_destination_height: usize,
+    x_map: &mut Vec<usize>,
+    y_map: &mut Vec<usize>,
+) -> Option<(Vec<Rgb565Pixel>, Vec<bool>)> {
     if source_width == 0
         || source_height == 0
         || source_stride_pixels < source_width
@@ -629,14 +658,16 @@ pub(crate) fn prepare_dimmed_rgb565_target(
         display_width: source_width,
         display_height: source_height,
     };
+    x_map.resize(destination_width, 0);
+    y_map.resize(destination_physical_height, 0);
     scale_dimmed_center_crop_mapped_with_logical_height(
         &mut pixels,
         destination_width,
         destination_physical_height,
         logical_destination_height,
         frame,
-        &mut vec![0; destination_width],
-        &mut vec![0; destination_physical_height],
+        x_map,
+        y_map,
         &mut row_repeats,
     )
     .then_some((pixels, row_repeats))

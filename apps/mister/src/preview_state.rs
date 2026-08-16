@@ -12,7 +12,7 @@ use slint::platform::software_renderer::Rgb565Pixel;
 use slint_ui::launcher::PreviewStatus;
 
 use crate::arcade_catalog::{ArcadeGameEntry, ArcadeGameView};
-use crate::crt_backdrop::{PreparedCrtBackdrop, prepare_dimmed_rgb565_target};
+use crate::crt_backdrop::{PreparedCrtBackdrop, prepare_dimmed_rgb565_target_with_maps};
 use crate::preview_worker::{
     DEFAULT_PREVIEW_CACHE_CAP, DEFAULT_PREVIEW_RADIUS, PreviewLoadSource, PreviewPixels,
     PreviewPriority, PreviewResult, PreviewSelectedRequestHandle, PreviewWorker,
@@ -161,6 +161,8 @@ impl BackdropPrepareWorker {
         std::thread::Builder::new()
             .name("crt-backdrop-preparer".to_string())
             .spawn(move || {
+                let mut x_map = Vec::new();
+                let mut y_map = Vec::new();
                 while let Ok(request) = requests.recv() {
                     let started = Instant::now();
                     let Some((pixels, row_repeats)) = (match &request.image.pixels {
@@ -175,6 +177,8 @@ impl BackdropPrepareWorker {
                             request.identity.width,
                             request.identity.physical_height,
                             request.identity.logical_height,
+                            &mut x_map,
+                            &mut y_map,
                         ),
                     }) else {
                         continue;
