@@ -6,6 +6,7 @@
 use crate::preview_transition::blend_rgb565_bucket;
 use crate::ui_display::{CrtContentRect, CrtUiMetrics, ResolvedOutputRoute, UiDisplay};
 use crate::visual_composition::{PreviewFrame, PreviewPixels};
+use mister_magik_core::display::CRT_COMPOSITION_H;
 use slint::platform::software_renderer::Rgb565Pixel;
 use std::time::{Duration, Instant};
 
@@ -61,6 +62,7 @@ pub struct CrtBackdropState {
     width: usize,
     height: usize,
     physical_height: usize,
+    reference_height: usize,
     source: Vec<Rgb565Pixel>,
     target: std::sync::Arc<[Rgb565Pixel]>,
     retarget: Vec<Rgb565Pixel>,
@@ -80,13 +82,13 @@ pub struct CrtBackdropState {
 impl CrtBackdropState {
     pub fn for_display(display: &UiDisplay) -> Option<Self> {
         match display.output_route() {
-            ResolvedOutputRoute::Crt240p60 => Some(Self::new_with_heights(
-                display.render_w(),
-                display.render_h(),
-                display.output_h() as usize,
-            )),
-            ResolvedOutputRoute::Crt288p50 => {
-                Some(Self::new(display.render_w(), display.render_h()))
+            ResolvedOutputRoute::Crt240p60 | ResolvedOutputRoute::Crt288p50 => {
+                Some(Self::new_with_reference_height(
+                    display.render_w(),
+                    display.render_h(),
+                    display.output_h() as usize,
+                    CRT_COMPOSITION_H,
+                ))
             }
             _ => None,
         }
@@ -97,12 +99,22 @@ impl CrtBackdropState {
     }
 
     fn new_with_heights(width: usize, height: usize, physical_height: usize) -> Self {
+        Self::new_with_reference_height(width, height, physical_height, height)
+    }
+
+    fn new_with_reference_height(
+        width: usize,
+        height: usize,
+        physical_height: usize,
+        reference_height: usize,
+    ) -> Self {
         let len = width.saturating_mul(physical_height);
         let logical_len = width.saturating_mul(height);
         Self {
             width,
             height,
             physical_height,
+            reference_height,
             source: vec![CRT_BACKDROP_BACKGROUND; len],
             target: std::sync::Arc::from(vec![CRT_BACKDROP_BACKGROUND; len]),
             retarget: vec![CRT_BACKDROP_BACKGROUND; len],
@@ -130,6 +142,10 @@ impl CrtBackdropState {
 
     pub fn physical_height(&self) -> usize {
         self.physical_height
+    }
+
+    pub fn reference_height(&self) -> usize {
+        self.reference_height
     }
 
     pub fn pixels(&self) -> &[Rgb565Pixel] {
@@ -180,7 +196,7 @@ impl CrtBackdropState {
                     &mut prepared,
                     self.width,
                     self.physical_height,
-                    self.height,
+                    self.reference_height,
                     frame,
                     &mut self.x_map,
                     &mut self.y_map,
@@ -543,7 +559,7 @@ fn scale_dimmed_center_crop_mapped_with_logical_height(
     destination: &mut [Rgb565Pixel],
     destination_width: usize,
     destination_height: usize,
-    logical_destination_height: usize,
+    reference_destination_height: usize,
     frame: PreviewFrame<'_>,
     x_map: &mut [usize],
     y_map: &mut [usize],
@@ -586,13 +602,13 @@ fn scale_dimmed_center_crop_mapped_with_logical_height(
         return false;
     }
 
-    // The 240p route owns a 640x480 logical composition backed by half as
-    // many physical rows. Preserve the complete source bounds at the largest
-    // fitting integer scale: 2x when it fits, otherwise 1x for tall portraits.
-    let integer_scale_route = logical_destination_height == destination_height.saturating_mul(2);
+    // The low-resolution CRT routes share a 640x480 visual reference while
+    // preparing their native 240- or 288-row backdrops. Preserve the complete
+    // source bounds at 2x when they fit, otherwise 1x for tall portraits.
+    let integer_scale_route = reference_destination_height > destination_height;
     if integer_scale_route {
         let integer_scale = if frame.source_width.saturating_mul(2) <= destination_width
-            && frame.source_height.saturating_mul(2) <= logical_destination_height
+            && frame.source_height.saturating_mul(2) <= reference_destination_height
         {
             2
         } else {
@@ -610,12 +626,12 @@ fn scale_dimmed_center_crop_mapped_with_logical_height(
         }
 
         let scaled_logical_height = frame.source_height.saturating_mul(integer_scale);
-        let image_y = (logical_destination_height as isize - scaled_logical_height as isize) / 2;
+        let image_y = (reference_destination_height as isize - scaled_logical_height as isize) / 2;
         for destination_y in 0..destination_height {
             let logical_y = destination_y
                 .saturating_mul(2)
                 .saturating_add(1)
-                .saturating_mul(logical_destination_height)
+                .saturating_mul(reference_destination_height)
                 / destination_height.saturating_mul(2).max(1);
             let local_y = logical_y as isize - image_y;
             y_map[destination_y] = if local_y >= 0 && local_y < scaled_logical_height as isize {
@@ -699,7 +715,7 @@ pub(crate) fn prepare_dimmed_rgb565_target_with_maps(
     source_stride_pixels: usize,
     destination_width: usize,
     destination_physical_height: usize,
-    logical_destination_height: usize,
+    reference_destination_height: usize,
     x_map: &mut Vec<usize>,
     y_map: &mut Vec<usize>,
 ) -> Option<(Vec<Rgb565Pixel>, Vec<bool>)> {
@@ -731,7 +747,7 @@ pub(crate) fn prepare_dimmed_rgb565_target_with_maps(
         &mut pixels,
         destination_width,
         destination_physical_height,
-        logical_destination_height,
+        reference_destination_height,
         frame,
         x_map,
         y_map,

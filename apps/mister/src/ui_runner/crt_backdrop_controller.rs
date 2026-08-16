@@ -23,7 +23,7 @@ struct PreparedIdentity {
     epoch: u64,
     width: usize,
     physical_height: usize,
-    logical_height: usize,
+    reference_height: usize,
 }
 
 struct PrepareRequest {
@@ -65,7 +65,7 @@ impl PrepareWorker {
                         request.stride_pixels,
                         request.identity.width,
                         request.identity.physical_height,
-                        request.identity.logical_height,
+                        request.identity.reference_height,
                         &mut x_map,
                         &mut y_map,
                     ) else {
@@ -159,6 +159,10 @@ impl CrtBackdropController {
         self.state.physical_height()
     }
 
+    fn reference_height(&self) -> usize {
+        self.state.reference_height()
+    }
+
     pub(super) fn pixels(&self) -> &[Rgb565Pixel] {
         self.state.pixels()
     }
@@ -229,7 +233,7 @@ impl CrtBackdropController {
             epoch: source.epoch,
             width: self.width(),
             physical_height: self.physical_height(),
-            logical_height: self.height(),
+            reference_height: self.reference_height(),
         };
         if self.cache.iter().any(|entry| entry.identity == identity)
             || !self.pending.insert(identity.clone())
@@ -257,7 +261,7 @@ impl CrtBackdropController {
             epoch: source.epoch,
             width: self.width(),
             physical_height: self.physical_height(),
-            logical_height: self.height(),
+            reference_height: self.reference_height(),
         };
         let index = self
             .cache
