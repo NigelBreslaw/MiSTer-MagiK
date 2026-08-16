@@ -9,6 +9,7 @@ const FORCE_FRAME_POINTERS: &str = "force-frame-pointers=yes";
 /// Keep the parser local to the shared build support so every ARM C build
 /// applies the same profiling policy without letting `cc` translate unrelated
 /// Rust flags into C flags.
+#[allow(dead_code)]
 pub(crate) fn force_frame_pointers_requested() -> bool {
     std::env::var_os("CARGO_ENCODED_RUSTFLAGS")
         .map(|flags| force_frame_pointers_requested_in(&flags.to_string_lossy()))
