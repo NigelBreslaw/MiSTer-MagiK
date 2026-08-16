@@ -25,7 +25,6 @@ mod agent_client;
 mod arcade_database;
 mod crt_qualification;
 mod discovery;
-#[allow(dead_code)]
 mod framebuffer_views;
 mod installed_layout;
 mod latch_v5_qualification;
@@ -21735,76 +21734,225 @@ struct PngCapture {
     elapsed_ms: u128,
 }
 
+struct PendingCaptureArtifact {
+    label: &'static str,
+    path: PathBuf,
+    png: Vec<u8>,
+}
+
+struct CaptureArtifactLink {
+    label: &'static str,
+    path: PathBuf,
+}
+
 fn capture_buffer_at(agent: &AgentEndpoint, args: &[String]) -> Result<()> {
     validate_capture_buffer_args(args)?;
     let capture = request_framebuffer_png_at(agent)?;
+    let output = option_value(args, "--output");
+    let artifacts = write_capture_bundle(&capture, output.as_deref())?;
     eprintln!(
         "framebuffer capture source={}",
         capture_source_label(&capture.result)?
     );
-    if let Some(output) = option_value(args, "--output") {
-        let path = write_explicit_capture(Path::new(&output), &capture.png)?;
-        println!("{}", capture_markdown_link(&path));
-    } else if io::stdout().is_terminal() {
-        println!("{}", write_desktop_capture(&capture.png)?.display());
-    } else {
-        let path = write_temporary_capture(&capture.png)?;
-        println!("{}", capture_markdown_link(&path));
+    for artifact in artifacts {
+        if io::stdout().is_terminal() {
+            println!("{}: {}", artifact.label, artifact.path.display());
+        } else {
+            println!("[{}](<{}>)", artifact.label, artifact.path.display());
+        }
     }
     Ok(())
 }
 
-fn write_explicit_capture(path: &Path, png: &[u8]) -> Result<PathBuf> {
+fn write_capture_bundle(
+    capture: &PngCapture,
+    requested_stem: Option<&str>,
+) -> Result<Vec<CaptureArtifactLink>> {
+    let (width, height) = capture_dimensions(&capture.result)?;
+    let views = if capture
+        .result
+        .get("authoritative_scanout")
+        .and_then(Value::as_bool)
+        == Some(true)
+    {
+        framebuffer_views::derive_15khz_views(&capture.png, width, height)?
+    } else {
+        None
+    };
+    let stem = capture_output_stem(requested_stem, views.is_some())?;
+    let mut pending = vec![PendingCaptureArtifact {
+        label: "MiSTer framebuffer raw",
+        path: capture_artifact_path(&stem, "-raw.png"),
+        png: capture.png.clone(),
+    }];
+    if let Some(views) = views {
+        pending.push(PendingCaptureArtifact {
+            label: "MiSTer framebuffer raw letterbox 4:3",
+            path: capture_artifact_path(&stem, "-raw-letterbox-4x3.png"),
+            png: views.raw_letterbox_png,
+        });
+        pending.push(PendingCaptureArtifact {
+            label: "MiSTer framebuffer display 4:3",
+            path: capture_artifact_path(&stem, "-display-4x3.png"),
+            png: views.display_4x3_png,
+        });
+    }
+    let links = pending
+        .iter()
+        .map(|artifact| CaptureArtifactLink {
+            label: artifact.label,
+            path: artifact.path.clone(),
+        })
+        .collect::<Vec<_>>();
+    write_capture_files(&pending)?;
+    Ok(links)
+}
+
+fn capture_dimensions(result: &Value) -> Result<(usize, usize)> {
+    let width = usize::try_from(
+        result
+            .get("width")
+            .and_then(Value::as_u64)
+            .ok_or("agent framebuffer capture response missing width")?,
+    )?;
+    let height = usize::try_from(
+        result
+            .get("height")
+            .and_then(Value::as_u64)
+            .ok_or("agent framebuffer capture response missing height")?,
+    )?;
+    Ok((width, height))
+}
+
+fn capture_output_stem(requested: Option<&str>, has_views: bool) -> Result<PathBuf> {
+    if let Some(requested) = requested {
+        return normalize_capture_stem(Path::new(requested));
+    }
+    if io::stdout().is_terminal() {
+        let desktop = PathBuf::from(env::var("HOME")?).join("Desktop");
+        if !desktop.is_dir() {
+            return Err(format!("Desktop directory does not exist: {}", desktop.display()).into());
+        }
+        let output = Command::new("date").arg("+%Y-%m-%d at %H.%M.%S").output()?;
+        if !output.status.success() {
+            return Err("could not determine local capture time".into());
+        }
+        let timestamp = String::from_utf8(output.stdout)?.trim().to_string();
+        return unique_capture_stem(
+            &desktop,
+            &format!("MiSTer Framebuffer {timestamp}"),
+            has_views,
+            " ",
+        );
+    }
+
+    let directory = env::temp_dir().join("mister-magik").join("captures");
+    fs::create_dir_all(&directory)?;
+    let directory = fs::canonicalize(directory)?;
+    unique_capture_stem(
+        &directory,
+        &format!("mister-magik-framebuffer-{}", unix_ms_now()),
+        has_views,
+        "-",
+    )
+}
+
+fn normalize_capture_stem(path: &Path) -> Result<PathBuf> {
     let path = if path.is_absolute() {
         path.to_path_buf()
     } else {
         env::current_dir()?.join(path)
     };
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&path)?;
-    file.write_all(png)?;
-    file.sync_all()?;
-    Ok(path)
+    if path.exists() && path.is_dir() {
+        return Err(format!("capture output stem is a directory: {}", path.display()).into());
+    }
+    let file_name = path
+        .file_name()
+        .ok_or("capture output stem must name a file")?;
+    let stem = if path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("png"))
+    {
+        path.with_file_name(
+            Path::new(file_name)
+                .file_stem()
+                .ok_or("capture output stem must name a file")?,
+        )
+    } else {
+        path
+    };
+    if stem.file_name().is_none() {
+        return Err("capture output stem must not be empty".into());
+    }
+    Ok(stem)
 }
 
-fn write_temporary_capture(png: &[u8]) -> Result<PathBuf> {
-    write_temporary_capture_at(&env::temp_dir(), unix_ms_now(), png)
-}
-
-fn write_temporary_capture_at(temp_root: &Path, timestamp_ms: u128, png: &[u8]) -> Result<PathBuf> {
-    let directory = temp_root.join("mister-magik").join("captures");
-    fs::create_dir_all(&directory)?;
-    let directory = fs::canonicalize(directory)?;
+fn unique_capture_stem(
+    directory: &Path,
+    base: &str,
+    has_views: bool,
+    separator: &str,
+) -> Result<PathBuf> {
+    if !directory.is_dir() {
+        return Err(format!(
+            "capture output directory does not exist: {}",
+            directory.display()
+        )
+        .into());
+    }
     for suffix in 1_u64.. {
-        let path = temporary_capture_path(&directory, timestamp_ms, suffix);
-        match OpenOptions::new().write(true).create_new(true).open(&path) {
-            Ok(mut file) => {
-                file.write_all(png)?;
-                file.sync_all()?;
-                return Ok(path);
-            }
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
-            Err(error) => return Err(error.into()),
+        let name = if suffix == 1 {
+            base.to_string()
+        } else {
+            format!("{base}{separator}{suffix}")
+        };
+        let stem = directory.join(name);
+        if capture_paths_available(&stem, has_views) {
+            return Ok(stem);
         }
     }
     unreachable!("capture suffix space exhausted")
 }
 
-fn temporary_capture_path(directory: &Path, timestamp_ms: u128, suffix: u64) -> PathBuf {
-    let suffix = if suffix == 1 {
-        String::new()
-    } else {
-        format!("-{suffix}")
-    };
-    directory.join(format!(
-        "mister-magik-framebuffer-{timestamp_ms}{suffix}.png"
-    ))
+fn capture_artifact_path(stem: &Path, suffix: &str) -> PathBuf {
+    let mut file_name = stem.file_name().unwrap_or_default().to_os_string();
+    file_name.push(suffix);
+    stem.with_file_name(file_name)
 }
 
-fn capture_markdown_link(path: &Path) -> String {
-    format!("[MiSTer framebuffer](<{}>)", path.display())
+fn capture_paths_available(stem: &Path, has_views: bool) -> bool {
+    let mut paths = vec![capture_artifact_path(stem, "-raw.png")];
+    if has_views {
+        paths.push(capture_artifact_path(stem, "-raw-letterbox-4x3.png"));
+        paths.push(capture_artifact_path(stem, "-display-4x3.png"));
+    }
+    paths.iter().all(|path| !path.exists())
+}
+
+fn write_capture_files(artifacts: &[PendingCaptureArtifact]) -> Result<()> {
+    if artifacts.iter().any(|artifact| artifact.path.exists()) {
+        return Err("one or more capture output files already exist".into());
+    }
+    let mut created = Vec::with_capacity(artifacts.len());
+    let result = (|| -> Result<()> {
+        for artifact in artifacts {
+            let mut file = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&artifact.path)?;
+            created.push(artifact.path.clone());
+            file.write_all(&artifact.png)?;
+            file.sync_all()?;
+        }
+        Ok(())
+    })();
+    if result.is_err() {
+        for path in created {
+            let _ = fs::remove_file(path);
+        }
+    }
+    result
 }
 
 fn delivery_smoke_capture_detail(capture: &PngCapture) -> Result<String> {
@@ -21945,7 +22093,7 @@ fn validate_capture_buffer_args(args: &[String]) -> Result<()> {
     if args.is_empty() || (args.len() == 2 && args[0] == "--output" && !args[1].trim().is_empty()) {
         Ok(())
     } else {
-        Err("usage: scripts/agent device capture framebuffer [--output PATH]".into())
+        Err("usage: scripts/agent device capture framebuffer [--output STEM]".into())
     }
 }
 
@@ -22007,47 +22155,6 @@ fn validate_png(png: &[u8]) -> Result<()> {
         return Err("agent framebuffer capture returned invalid PNG data".into());
     }
     Ok(())
-}
-
-fn write_desktop_capture(png: &[u8]) -> Result<PathBuf> {
-    let desktop = PathBuf::from(env::var("HOME")?).join("Desktop");
-    if !desktop.is_dir() {
-        return Err(format!("Desktop directory does not exist: {}", desktop.display()).into());
-    }
-    let output = Command::new("date").arg("+%Y-%m-%d at %H.%M.%S").output()?;
-    if !output.status.success() {
-        return Err("could not determine local capture time".into());
-    }
-    let timestamp = String::from_utf8(output.stdout)?.trim().to_string();
-    write_desktop_capture_at(&desktop, &timestamp, png)
-}
-
-fn write_desktop_capture_at(desktop: &Path, timestamp: &str, png: &[u8]) -> Result<PathBuf> {
-    if !desktop.is_dir() {
-        return Err(format!("Desktop directory does not exist: {}", desktop.display()).into());
-    }
-    for suffix in 1_u64.. {
-        let path = desktop_capture_path(desktop, timestamp, suffix);
-        match OpenOptions::new().write(true).create_new(true).open(&path) {
-            Ok(mut file) => {
-                file.write_all(png)?;
-                file.sync_all()?;
-                return Ok(path);
-            }
-            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
-            Err(error) => return Err(error.into()),
-        }
-    }
-    unreachable!("capture suffix space exhausted")
-}
-
-fn desktop_capture_path(desktop: &Path, timestamp: &str, suffix: u64) -> PathBuf {
-    let suffix = if suffix == 1 {
-        String::new()
-    } else {
-        format!(" {suffix}")
-    };
-    desktop.join(format!("MiSTer Framebuffer {timestamp}{suffix}.png"))
 }
 
 fn decode_hex(hex: &str) -> Result<Vec<u8>> {
@@ -27033,15 +27140,17 @@ H: Handlers=event3 js0"#
     }
 
     #[test]
-    fn capture_buffer_paths_follow_screenshot_naming() {
-        let desktop = Path::new("/Users/example/Desktop");
+    fn capture_buffer_paths_follow_bundle_naming() {
+        let stem = Path::new("/Users/example/Desktop/MiSTer Framebuffer 2026-07-20 at 14.32.08");
         assert_eq!(
-            desktop_capture_path(desktop, "2026-07-20 at 14.32.08", 1),
-            desktop.join("MiSTer Framebuffer 2026-07-20 at 14.32.08.png")
+            capture_artifact_path(stem, "-raw.png"),
+            Path::new("/Users/example/Desktop/MiSTer Framebuffer 2026-07-20 at 14.32.08-raw.png")
         );
         assert_eq!(
-            desktop_capture_path(desktop, "2026-07-20 at 14.32.08", 2),
-            desktop.join("MiSTer Framebuffer 2026-07-20 at 14.32.08 2.png")
+            capture_artifact_path(stem, "-display-4x3.png"),
+            Path::new(
+                "/Users/example/Desktop/MiSTer Framebuffer 2026-07-20 at 14.32.08-display-4x3.png"
+            )
         );
     }
 
@@ -27052,7 +27161,7 @@ H: Handlers=event3 js0"#
             validate_capture_buffer_args(&["extra".to_string()])
                 .unwrap_err()
                 .to_string(),
-            "usage: scripts/agent device capture framebuffer [--output PATH]"
+            "usage: scripts/agent device capture framebuffer [--output STEM]"
         );
     }
 
@@ -27064,39 +27173,97 @@ H: Handlers=event3 js0"#
     }
 
     #[test]
-    fn capture_buffer_writes_timestamped_temporary_files_without_overwriting() {
+    fn capture_buffer_allocates_collision_safe_temporary_stems() {
         let root = temp_path("capture-temporary");
-        let png = b"\x89PNG\r\n\x1a\nfixture";
-        let first = write_temporary_capture_at(&root, 1_753_012_345_678, png).unwrap();
-        let second = write_temporary_capture_at(&root, 1_753_012_345_678, png).unwrap();
-        let captures = fs::canonicalize(root.join("mister-magik/captures")).unwrap();
-
-        assert_eq!(first.parent(), Some(captures.as_path()));
+        let captures = root.join("mister-magik/captures");
+        fs::create_dir_all(&captures).unwrap();
+        let first = unique_capture_stem(
+            &captures,
+            "mister-magik-framebuffer-1753012345678",
+            true,
+            "-",
+        )
+        .unwrap();
         assert_eq!(
             first.file_name().unwrap(),
-            "mister-magik-framebuffer-1753012345678.png"
+            "mister-magik-framebuffer-1753012345678"
         );
+        for suffix in ["-raw.png", "-raw-letterbox-4x3.png", "-display-4x3.png"] {
+            fs::write(capture_artifact_path(&first, suffix), b"fixture").unwrap();
+        }
+        let second = unique_capture_stem(
+            &captures,
+            "mister-magik-framebuffer-1753012345678",
+            true,
+            "-",
+        )
+        .unwrap();
         assert_eq!(
             second.file_name().unwrap(),
-            "mister-magik-framebuffer-1753012345678-2.png"
+            "mister-magik-framebuffer-1753012345678-2"
         );
-        assert_eq!(fs::read(&first).unwrap(), png);
-        assert_eq!(fs::read(&second).unwrap(), png);
 
         fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
-    fn capture_buffer_markdown_link_contains_only_the_absolute_path() {
-        let path = Path::new("/private/tmp/mister-magik/captures/framebuffer fixture.png");
-        let output = capture_markdown_link(path);
-
+    fn capture_output_stem_strips_only_png_extension() {
         assert_eq!(
-            output,
-            "[MiSTer framebuffer](</private/tmp/mister-magik/captures/framebuffer fixture.png>)"
+            normalize_capture_stem(Path::new("captures/arcade.png")).unwrap(),
+            env::current_dir().unwrap().join("captures/arcade")
         );
-        assert!(!output.contains("data"));
-        assert!(!output.contains("iVBOR"));
+        assert_eq!(
+            normalize_capture_stem(Path::new("captures/arcade.raw")).unwrap(),
+            env::current_dir().unwrap().join("captures/arcade.raw")
+        );
+    }
+
+    #[test]
+    fn capture_bundle_writes_raw_only_for_non_crt_sources() {
+        let root = temp_path("capture-bundle-raw-only");
+        fs::create_dir_all(&root).unwrap();
+        let stem = root.join("arcade.png");
+        let capture = PngCapture {
+            result: json!({
+                "width": 640,
+                "height": 480,
+                "authoritative_scanout": false
+            }),
+            png: b"raw-png".to_vec(),
+            elapsed_ms: 0,
+        };
+        let links = write_capture_bundle(&capture, Some(stem.to_str().unwrap())).unwrap();
+        assert_eq!(links.len(), 1);
+        assert_eq!(links[0].label, "MiSTer framebuffer raw");
+        assert_eq!(links[0].path, root.join("arcade-raw.png"));
+        assert_eq!(fs::read(&links[0].path).unwrap(), b"raw-png");
+        assert!(!root.join("arcade-display-4x3.png").exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn capture_bundle_preflight_prevents_partial_writes() {
+        let root = temp_path("capture-bundle-preflight");
+        fs::create_dir_all(&root).unwrap();
+        let stem = root.join("arcade");
+        let collision = capture_artifact_path(&stem, "-display-4x3.png");
+        fs::write(&collision, b"existing").unwrap();
+        let artifacts = vec![
+            PendingCaptureArtifact {
+                label: "raw",
+                path: capture_artifact_path(&stem, "-raw.png"),
+                png: b"raw".to_vec(),
+            },
+            PendingCaptureArtifact {
+                label: "display",
+                path: collision.clone(),
+                png: b"new".to_vec(),
+            },
+        ];
+        assert!(write_capture_files(&artifacts).is_err());
+        assert!(!capture_artifact_path(&stem, "-raw.png").exists());
+        assert_eq!(fs::read(collision).unwrap(), b"existing");
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -27392,33 +27559,50 @@ H: Handlers=event3 js0"#
     }
 
     #[test]
-    fn capture_buffer_writes_real_collision_safe_desktop_files() {
+    fn capture_buffer_allocates_collision_safe_desktop_stems() {
         let root = temp_path("capture-desktop");
         let desktop = root.join("Desktop");
         fs::create_dir_all(&desktop).unwrap();
-        let png = b"\x89PNG\r\n\x1a\nfixture";
-        let first = write_desktop_capture_at(&desktop, "2026-07-20 at 14.32.08", png).unwrap();
-        let second = write_desktop_capture_at(&desktop, "2026-07-20 at 14.32.08", png).unwrap();
+        let first = unique_capture_stem(
+            &desktop,
+            "MiSTer Framebuffer 2026-07-20 at 14.32.08",
+            true,
+            " ",
+        )
+        .unwrap();
+        for suffix in ["-raw.png", "-raw-letterbox-4x3.png", "-display-4x3.png"] {
+            fs::write(capture_artifact_path(&first, suffix), b"fixture").unwrap();
+        }
+        let second = unique_capture_stem(
+            &desktop,
+            "MiSTer Framebuffer 2026-07-20 at 14.32.08",
+            true,
+            " ",
+        )
+        .unwrap();
         assert_eq!(
             first.file_name().unwrap(),
-            "MiSTer Framebuffer 2026-07-20 at 14.32.08.png"
+            "MiSTer Framebuffer 2026-07-20 at 14.32.08"
         );
         assert_eq!(
             second.file_name().unwrap(),
-            "MiSTer Framebuffer 2026-07-20 at 14.32.08 2.png"
+            "MiSTer Framebuffer 2026-07-20 at 14.32.08 2"
         );
-        assert_eq!(fs::read(first).unwrap(), png);
-        assert_eq!(fs::read(second).unwrap(), png);
         fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
     fn capture_buffer_rejects_missing_desktop() {
         let desktop = temp_path("missing-desktop").join("Desktop");
-        let error = write_desktop_capture_at(&desktop, "2026-07-20 at 14.32.08", b"png")
-            .unwrap_err()
-            .to_string();
-        assert!(error.starts_with("Desktop directory does not exist:"));
+        let error = unique_capture_stem(
+            &desktop,
+            "MiSTer Framebuffer 2026-07-20 at 14.32.08",
+            true,
+            " ",
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.starts_with("capture output directory does not exist:"));
     }
 
     #[test]
