@@ -1,11 +1,11 @@
 {
   "schema": "mister-magik-launcher-visual-baseline-v1",
-  "source_commit": "069d61951fe4387ebde6e731a9e8cdc702156c1a",
+  "source_commit": "ec67c135aea4aa51feb5ae9712a88a2b48acc9b5",
   "scene_manifest_sha256": "d53a60a81a87d0bbe7d895028837dc379075d878e98b10b9bb188e4ebe86e896",
   "review": {
     "owner": "Codex (visual review delegated by Nigel Breslaw)",
     "result": "accepted",
-    "scope": "12 launcher PNGs: HDMI and CRT steady states plus navigation-transition midpoints"
+    "scope": "18 launcher PNGs: HDMI, CRT 240p, and CRT 480p steady states plus navigation-transition midpoints"
   },
   "shared_provenance": {
     "capture_schema": "mister-magik-launcher-capture-v1",
@@ -16,14 +16,14 @@
     "slint_version": "1.17.1",
     "png_encoder": "png-rgb8-filter-none-zlib-best-v1",
     "fixture_sha256": "9998b71830e02db4348dfa4c53684251bc9a25a39b2a094d46e851c70783c37a",
-    "asset_bundle_sha256": "8d705597b5a46293a1a83269313653d9660c904c09be7197823fb02601c8f67c",
+    "asset_bundle_sha256": "a215cf99a3f03f325061bcd570dd9bd4bb51405748d87583a23bfd942a1a1548",
     "font_bundle_sha256": "359d9077b71eec53c02ff5362f983c7f793808c4062a59957446169fe89e9aa9"
   },
   "scenes": [
     {
       "id": "crt-240p-arcade",
-      "rgb565_hash": "c0fc2eefbef719ca",
-      "provenance_sha256": "e1d7e06c0f45a410ad583fc09be9bdb5154e02aeee255ac665a52e3d7864713c",
+      "rgb565_hash": "46557ad03c63e7e4",
+      "provenance_sha256": "45190ca4b0efc77c8397b52ae9ebac85fc05ccf07f42a61757ac19aa3d55add6",
       "scenario": "arcade",
       "frame": 0,
       "fixed_time_us": 16666,
@@ -33,8 +33,8 @@
     },
     {
       "id": "crt-240p-catalog-scan",
-      "rgb565_hash": "682862f9a0f60c65",
-      "provenance_sha256": "bb297b15c25601b0a7d3bcb58982695dae37fda6b94075a0a498ac7d939805db",
+      "rgb565_hash": "56d721ede9e78035",
+      "provenance_sha256": "a5638e1ede4f7fd7d4b3ff688a797f8397311c43275e400d48410d05b9e27db6",
       "scenario": "catalog-scan",
       "frame": 0,
       "fixed_time_us": 16666,
@@ -44,8 +44,8 @@
     },
     {
       "id": "crt-240p-controller-setup",
-      "rgb565_hash": "bc34ed95feb1b0c5",
-      "provenance_sha256": "282477ca012c1a2fa21ec2e616c0366167e7a3abbfca4fe08388ecf43b787fbe",
+      "rgb565_hash": "630dbd029e8200cf",
+      "provenance_sha256": "cadd7b3cf0b5e6c6d7400957416790a46826969f16454bd8fd5b08178c5e7fb4",
       "scenario": "controller-setup",
       "frame": 0,
       "fixed_time_us": 16666,
@@ -55,8 +55,8 @@
     },
     {
       "id": "crt-240p-home",
-      "rgb565_hash": "825eb20ec6cc734d",
-      "provenance_sha256": "56893f16a887287e7f82542af504be85aeba0dafe49c90576b3191ed22646ee9",
+      "rgb565_hash": "779cbf0354702eac",
+      "provenance_sha256": "5d73876dc8893b6f1532de975089d6b746509a4a622c9db474c225aab2f9f8e7",
       "scenario": "home",
       "frame": 0,
       "fixed_time_us": 16666,
@@ -66,8 +66,8 @@
     },
     {
       "id": "crt-240p-navigation-transition-midpoint",
-      "rgb565_hash": "44ffbd71fd032f5a",
-      "provenance_sha256": "f98c4136c447f526daf4faba38bd660b8e100265adfdc7f9aaca4720de842093",
+      "rgb565_hash": "596cd9f34c1aebfa",
+      "provenance_sha256": "08d6b613ac0ef9ba990802d05fe43e6c3188effdf8188c60e4c570f8868da67e",
       "scenario": "home",
       "frame": 17,
       "fixed_time_us": 900000,
@@ -77,8 +77,8 @@
     },
     {
       "id": "crt-240p-settings",
-      "rgb565_hash": "42056fda5ab68bd5",
-      "provenance_sha256": "66b873ee9c55ff823d1ec58fa5fe7afa9b2f5e83e82ba47548b59aa14dcbc9bf",
+      "rgb565_hash": "26c78dfbf91acbc5",
+      "provenance_sha256": "1c0e8af275835b4a118f04d9229d5899f07df1149f124a4412c106c3064a4d8b",
       "scenario": "settings",
       "frame": 0,
       "fixed_time_us": 16666,
@@ -88,8 +88,8 @@
     },
     {
       "id": "crt-arcade",
-      "rgb565_hash": "8247ef3d82a66c19",
-      "provenance_sha256": "61cde2519cdf6d570394af01eb62cfe43156a05c65ee1e94f2b6bd0c56ed4536",
+      "rgb565_hash": "9e713adbe61e139b",
+      "provenance_sha256": "4ecd502afa441764b9afdb63c37551d2665fa637f8ea4a764755922c4fa3a9fa",
       "scenario": "arcade",
       "frame": 0,
       "fixed_time_us": 16666,
@@ -99,8 +99,8 @@
     },
     {
       "id": "crt-catalog-scan",
-      "rgb565_hash": "7e50418399ddeeb8",
-      "provenance_sha256": "f42dc4c62dc451c22508d11f306af73371bf55d435482a5aefc3e53adf23aeca",
+      "rgb565_hash": "123a516764a56d5f",
+      "provenance_sha256": "dc13171c8ca7b21e81fde711a1e87c9147bd2c729119812e0f01306c886e7309",
       "scenario": "catalog-scan",
       "frame": 0,
       "fixed_time_us": 16666,
@@ -110,8 +110,8 @@
     },
     {
       "id": "crt-controller-setup",
-      "rgb565_hash": "c846779340c2a17a",
-      "provenance_sha256": "02eb03b7fa4574942082170494bcbff24dbd3f18eda323c4a467c7d978b82b55",
+      "rgb565_hash": "c8abfcaeaca949bd",
+      "provenance_sha256": "87bf9fccb8300c874805e262b65bc18472c783eef8ff8c90552639ddbb776e70",
       "scenario": "controller-setup",
       "frame": 0,
       "fixed_time_us": 16666,
@@ -121,8 +121,8 @@
     },
     {
       "id": "crt-home",
-      "rgb565_hash": "2c078b4093645eb8",
-      "provenance_sha256": "4de22a68d83fe206987992895ae0a8a78d5328aa57e67c14fec01e6628a2b93a",
+      "rgb565_hash": "ab1bcf82b2130076",
+      "provenance_sha256": "28df7c576822169a3c3d5190505fe744d3229862e3e1eda581b096afe6833ae9",
       "scenario": "home",
       "frame": 0,
       "fixed_time_us": 16666,
@@ -132,8 +132,8 @@
     },
     {
       "id": "crt-navigation-transition-midpoint",
-      "rgb565_hash": "b4a4945e0d23f76a",
-      "provenance_sha256": "b84830187aeb5075d5740066c931f0c64fccc27a6690da6ffa3080539028ab91",
+      "rgb565_hash": "deb7ec4466389a7a",
+      "provenance_sha256": "b28de3a934a2a059a73103ef79ce55d692361bb45eb79b63f16110877382e856",
       "scenario": "home",
       "frame": 17,
       "fixed_time_us": 900000,
@@ -143,8 +143,8 @@
     },
     {
       "id": "crt-settings",
-      "rgb565_hash": "4728489017fe1a8f",
-      "provenance_sha256": "7d095db88aa30d176f32a396c8ab78506d3e4a4e788e615aa1645f32b5c8f85a",
+      "rgb565_hash": "6e8df58b8948f2b6",
+      "provenance_sha256": "6793bc568d474fa01a1d2462f2e39090138827be5e9cc78e7596d446dfb80ef3",
       "scenario": "settings",
       "frame": 0,
       "fixed_time_us": 16666,
@@ -155,7 +155,7 @@
     {
       "id": "hdmi-arcade",
       "rgb565_hash": "15df72d3c5536af0",
-      "provenance_sha256": "7cb7293434f6f5b0eca6bd3d2bb0bf3bf3e4c02b76c091b6e9615515434eac85",
+      "provenance_sha256": "8d9a74a1f6b0695def6a3007e89cc5b0cf0ff956a401ceedd945f26c92ca8a7c",
       "scenario": "arcade",
       "frame": 0,
       "fixed_time_us": 16666,
@@ -166,7 +166,7 @@
     {
       "id": "hdmi-catalog-scan",
       "rgb565_hash": "4736aa42538b234e",
-      "provenance_sha256": "442fc94bf66d2dd86113b5fbd4a6c7acd98f7c173aede9b406d00bfad5647eb8",
+      "provenance_sha256": "d7002bb76ab6f2b46ef50eeb867eafba0d80f0b8479ada90a9471d63a79b4048",
       "scenario": "catalog-scan",
       "frame": 0,
       "fixed_time_us": 16666,
@@ -177,7 +177,7 @@
     {
       "id": "hdmi-controller-setup",
       "rgb565_hash": "15e0e4f43ae6f06e",
-      "provenance_sha256": "e62c67b30446a94474e5cf97a32deecc2e65436b1f5eef82887f4f7fc9bd9171",
+      "provenance_sha256": "67461ba845102da0a864a7c792a23a7c48f09a1dcefe08b7cadfb927aae331cd",
       "scenario": "controller-setup",
       "frame": 0,
       "fixed_time_us": 16666,
@@ -188,7 +188,7 @@
     {
       "id": "hdmi-home",
       "rgb565_hash": "277037909826edc1",
-      "provenance_sha256": "114178b74cb9fff16c2e6f8b941484ce8678115328d708a62a1c4e459401a081",
+      "provenance_sha256": "b18c885fe588fa4d1cee82c14d37db41d5df7cd87c237dcad3c4737097d4f237",
       "scenario": "home",
       "frame": 0,
       "fixed_time_us": 16666,
@@ -199,7 +199,7 @@
     {
       "id": "hdmi-navigation-transition-midpoint",
       "rgb565_hash": "3c377789b019d492",
-      "provenance_sha256": "f95d1440f7c90fd4ea8b2a14879cd971dfe6b52b78a922b75d9384e72ea420b3",
+      "provenance_sha256": "c70dfa104304f7b9424f6474fb9ea59265fb31307be7ae3150b90c7c1e1c27ef",
       "scenario": "home",
       "frame": 17,
       "fixed_time_us": 900000,
@@ -210,7 +210,7 @@
     {
       "id": "hdmi-settings",
       "rgb565_hash": "6a256562878a0fea",
-      "provenance_sha256": "b5983ee64a059d0d0fee6e7883355beb74542edf3602b83f75effebda9fd6f21",
+      "provenance_sha256": "61a1c69d3b5210fe3c057e2c078724fd13e037019418c15ea6d414779941c1d2",
       "scenario": "settings",
       "frame": 0,
       "fixed_time_us": 16666,
