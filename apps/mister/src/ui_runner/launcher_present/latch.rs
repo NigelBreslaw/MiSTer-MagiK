@@ -1556,6 +1556,7 @@ mod tests {
             WIDTH,
             HEIGHT,
             crate::fpga::LatchedFbufGeometry::new(WIDTH as u16, route.mode(), 1),
+            VerticalSampling::CenteredNearest,
         )
     }
 

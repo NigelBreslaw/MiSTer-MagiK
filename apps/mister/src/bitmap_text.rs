@@ -1047,19 +1047,30 @@ mod tests {
             gradient,
         );
 
-        assert_ne!(native_pixels, filtered_pixels);
         assert!(
             native_pixels
-                .chunks_exact(width * 2)
-                .any(|rows| { rows[..width] != rows[width..] })
+                .iter()
+                .zip(&filtered_pixels)
+                .any(|(native, filtered)| native.0 != filtered.0)
         );
+        assert!(native_pixels.chunks_exact(width * 2).any(|rows| {
+            rows[..width]
+                .iter()
+                .zip(&rows[width..])
+                .any(|(top, bottom)| top.0 != bottom.0)
+        }));
         for rows in filtered_pixels.chunks_exact(width * 2) {
-            assert_eq!(rows[..width], rows[width..]);
+            assert!(
+                rows[..width]
+                    .iter()
+                    .zip(&rows[width..])
+                    .all(|(top, bottom)| top.0 == bottom.0)
+            );
         }
 
         let ink_columns = |pixels: &[Pixel]| {
             (0..width)
-                .map(|x| (0..height).any(|y| pixels[y * width + x] != background))
+                .map(|x| (0..height).any(|y| pixels[y * width + x].0 != background.0))
                 .collect::<Vec<_>>()
         };
         assert_eq!(ink_columns(&native_pixels), ink_columns(&filtered_pixels));
@@ -1107,13 +1118,23 @@ mod tests {
             color,
         );
 
-        let ink_count = |row: &[Pixel]| row.iter().filter(|pixel| **pixel != background).count();
-        assert_ne!(native_pixels, filtered_pixels);
+        let ink_count = |row: &[Pixel]| row.iter().filter(|pixel| pixel.0 != background.0).count();
+        assert!(
+            native_pixels
+                .iter()
+                .zip(&filtered_pixels)
+                .any(|(native, filtered)| native.0 != filtered.0)
+        );
         for (native_rows, filtered_rows) in native_pixels
             .chunks_exact(width * 2)
             .zip(filtered_pixels.chunks_exact(width * 2))
         {
-            assert_eq!(filtered_rows[..width], filtered_rows[width..]);
+            assert!(
+                filtered_rows[..width]
+                    .iter()
+                    .zip(&filtered_rows[width..])
+                    .all(|(top, bottom)| top.0 == bottom.0)
+            );
             assert_eq!(
                 ink_count(&filtered_rows[..width]),
                 ink_count(&native_rows[..width]).max(ink_count(&native_rows[width..]))
@@ -1122,7 +1143,7 @@ mod tests {
 
         let ink_columns = |pixels: &[Pixel]| {
             (0..width)
-                .map(|x| (0..height).any(|y| pixels[y * width + x] != background))
+                .map(|x| (0..height).any(|y| pixels[y * width + x].0 != background.0))
                 .collect::<Vec<_>>()
         };
         assert_eq!(ink_columns(&native_pixels), ink_columns(&filtered_pixels));
