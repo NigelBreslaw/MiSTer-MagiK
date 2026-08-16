@@ -29,6 +29,16 @@ const BACTERIA_12_RESOURCE: &[u8] =
 const BACTERIA_12_NATIVE_RESOURCE: &[u8] =
     include_bytes!("../../../private/magik-assets/fonts/bacteria-12/bacteria12-16px.mmbf");
 const JERSEY_25_RESOURCE: &[u8] = include_bytes!("../assets/fonts/jersey25-41px.mmbf");
+#[cfg(not(feature = "asset-tools"))]
+const TERMINUS_8X14_NORMAL_RESOURCE: &[u8] =
+    include_bytes!("../assets/fonts/terminus-8x14/terminus-8x14-normal-2x.mmbf");
+#[cfg(feature = "asset-tools")]
+const TERMINUS_8X14_NORMAL_RESOURCE: &[u8] = &[];
+#[cfg(not(feature = "asset-tools"))]
+const TERMINUS_8X14_BOLD_RESOURCE: &[u8] =
+    include_bytes!("../assets/fonts/terminus-8x14/terminus-8x14-bold-2x.mmbf");
+#[cfg(feature = "asset-tools")]
+const TERMINUS_8X14_BOLD_RESOURCE: &[u8] = &[];
 
 #[derive(Clone, Debug, PartialEq)]
 struct DecodedGlyph {
@@ -266,6 +276,14 @@ pub fn bacteria_12_console_bitmap_font() -> Result<ConsoleBitmapFont, String> {
 
 pub fn bacteria_12_native_console_bitmap_font() -> Result<ConsoleBitmapFont, String> {
     console_bitmap_font(BACTERIA_12_NATIVE_RESOURCE)
+}
+
+pub fn terminus_8x14_normal_console_bitmap_font() -> Result<ConsoleBitmapFont, String> {
+    console_bitmap_font(TERMINUS_8X14_NORMAL_RESOURCE)
+}
+
+pub fn terminus_8x14_bold_console_bitmap_font() -> Result<ConsoleBitmapFont, String> {
+    console_bitmap_font(TERMINUS_8X14_BOLD_RESOURCE)
 }
 
 fn console_bitmap_font(resource: &[u8]) -> Result<ConsoleBitmapFont, String> {
@@ -646,6 +664,201 @@ fn encode_resource(font: &DecodedFont, hint: bool, threshold: u8) -> Result<Vec<
     Ok(output)
 }
 
+#[cfg(any(test, feature = "asset-tools"))]
+fn generate_bdf_resource(
+    source: &str,
+    family: &str,
+    weight: u16,
+    pixel_scale: usize,
+) -> Result<Vec<u8>, String> {
+    #[derive(Default)]
+    struct SourceGlyph {
+        encoding: Option<u32>,
+        advance: Option<i32>,
+        bounds: Option<(usize, usize, i32, i32)>,
+        bitmap: Vec<String>,
+    }
+
+    fn parse_property_i32(line: &str, name: &str) -> Result<Option<i32>, String> {
+        let Some(value) = line.strip_prefix(name) else {
+            return Ok(None);
+        };
+        value
+            .trim()
+            .parse::<i32>()
+            .map(Some)
+            .map_err(|_| format!("invalid BDF {name}"))
+    }
+
+    if pixel_scale == 0 {
+        return Err("BDF pixel scale must be positive".to_string());
+    }
+    let mut font_bounds = None;
+    let mut font_ascent = None;
+    let mut font_descent = None;
+    let mut source_glyph = None::<SourceGlyph>;
+    let mut reading_bitmap = false;
+    let mut source_glyphs = Vec::new();
+
+    for line in source.lines().map(str::trim) {
+        if let Some(glyph) = source_glyph.as_mut() {
+            if line == "ENDCHAR" {
+                source_glyphs.push(source_glyph.take().unwrap());
+                reading_bitmap = false;
+            } else if reading_bitmap {
+                glyph.bitmap.push(line.to_string());
+            } else if let Some(value) = parse_property_i32(line, "ENCODING ")? {
+                glyph.encoding = u32::try_from(value).ok();
+            } else if let Some(values) = line.strip_prefix("DWIDTH ") {
+                let mut values = values.split_whitespace();
+                glyph.advance = Some(
+                    values
+                        .next()
+                        .ok_or_else(|| "missing BDF DWIDTH".to_string())?
+                        .parse()
+                        .map_err(|_| "invalid BDF DWIDTH".to_string())?,
+                );
+            } else if let Some(values) = line.strip_prefix("BBX ") {
+                let values = values
+                    .split_whitespace()
+                    .map(str::parse::<i32>)
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(|_| "invalid BDF BBX".to_string())?;
+                if values.len() != 4 || values[0] < 0 || values[1] < 0 {
+                    return Err("invalid BDF BBX".to_string());
+                }
+                glyph.bounds = Some((values[0] as usize, values[1] as usize, values[2], values[3]));
+            } else if line == "BITMAP" {
+                reading_bitmap = true;
+            }
+            continue;
+        }
+
+        if line.starts_with("STARTCHAR ") {
+            source_glyph = Some(SourceGlyph::default());
+        } else if let Some(values) = line.strip_prefix("FONTBOUNDINGBOX ") {
+            let values = values
+                .split_whitespace()
+                .map(str::parse::<i32>)
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|_| "invalid BDF FONTBOUNDINGBOX".to_string())?;
+            if values.len() != 4 || values[0] <= 0 || values[1] <= 0 {
+                return Err("invalid BDF FONTBOUNDINGBOX".to_string());
+            }
+            font_bounds = Some((values[0] as usize, values[1] as usize));
+        } else if let Some(value) = parse_property_i32(line, "FONT_ASCENT ")? {
+            font_ascent = Some(value);
+        } else if let Some(value) = parse_property_i32(line, "FONT_DESCENT ")? {
+            font_descent = Some(value);
+        }
+    }
+    if source_glyph.is_some() {
+        return Err("unterminated BDF glyph".to_string());
+    }
+
+    let (cell_width, cell_height) = font_bounds.ok_or_else(|| "missing BDF bounds".to_string())?;
+    let ascent = font_ascent.ok_or_else(|| "missing BDF ascent".to_string())?;
+    let descent = font_descent.ok_or_else(|| "missing BDF descent".to_string())?;
+    let scaled_cell_height = cell_height
+        .checked_mul(pixel_scale)
+        .ok_or_else(|| "scaled BDF height overflow".to_string())?;
+    if cell_width * pixel_scale > MAX_GLYPH_DIMENSION
+        || scaled_cell_height > MAX_GLYPH_DIMENSION
+        || source_glyphs.len() > MAX_GLYPHS
+    {
+        return Err("scaled BDF exceeds resource bounds".to_string());
+    }
+
+    let mut glyphs = Vec::with_capacity(source_glyphs.len());
+    for source_glyph in source_glyphs {
+        let Some(code_point) = source_glyph.encoding.and_then(char::from_u32) else {
+            continue;
+        };
+        let advance = source_glyph
+            .advance
+            .ok_or_else(|| format!("missing BDF advance for U+{:04X}", u32::from(code_point)))?;
+        let (source_width, source_height, source_x, source_y) = source_glyph
+            .bounds
+            .ok_or_else(|| format!("missing BDF bounds for U+{:04X}", u32::from(code_point)))?;
+        if source_glyph.bitmap.len() != source_height {
+            return Err(format!(
+                "BDF bitmap height mismatch for U+{:04X}",
+                u32::from(code_point)
+            ));
+        }
+        let width = source_width
+            .checked_mul(pixel_scale)
+            .ok_or_else(|| "scaled BDF width overflow".to_string())?;
+        let height = source_height
+            .checked_mul(pixel_scale)
+            .ok_or_else(|| "scaled BDF height overflow".to_string())?;
+        let stride = width.div_ceil(8);
+        let mut packed = vec![0; stride * height];
+        for (source_row, row) in source_glyph.bitmap.iter().enumerate() {
+            let row_bytes = (0..row.len())
+                .step_by(2)
+                .map(|offset| {
+                    u8::from_str_radix(
+                        row.get(offset..offset + 2)
+                            .ok_or_else(|| "odd BDF bitmap row length".to_string())?,
+                        16,
+                    )
+                    .map_err(|_| "invalid BDF bitmap row".to_string())
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            if row_bytes.len() * 8 < source_width {
+                return Err("short BDF bitmap row".to_string());
+            }
+            for source_x_bit in 0..source_width {
+                if row_bytes[source_x_bit / 8] & (0x80 >> (source_x_bit & 7)) == 0 {
+                    continue;
+                }
+                for y_repeat in 0..pixel_scale {
+                    let y = source_row * pixel_scale + y_repeat;
+                    for x_repeat in 0..pixel_scale {
+                        let x = source_x_bit * pixel_scale + x_repeat;
+                        packed[y * stride + x / 8] |= 0x80 >> (x & 7);
+                    }
+                }
+            }
+        }
+        let scaled_26_6 = |value: i32| -> Result<i16, String> {
+            i16::try_from(value * pixel_scale as i32 * 64)
+                .map_err(|_| "scaled BDF metric exceeds resource format".to_string())
+        };
+        glyphs.push(DecodedGlyph {
+            code_point,
+            x: scaled_26_6(source_x)?,
+            y: scaled_26_6(source_y)?,
+            width: width as i16,
+            height: height as i16,
+            x_advance: scaled_26_6(advance)?,
+            stride: stride as u16,
+            packed,
+        });
+    }
+    glyphs.sort_by_key(|glyph| glyph.code_point);
+    glyphs.dedup_by_key(|glyph| glyph.code_point);
+
+    let metric_scale = pixel_scale as f32;
+    encode_resource(
+        &DecodedFont {
+            family_name: family.to_string(),
+            pixel_size: scaled_cell_height as i16,
+            weight,
+            italic: false,
+            units_per_em: scaled_cell_height as f32,
+            ascent: ascent as f32 * metric_scale,
+            descent: -(descent as f32 * metric_scale),
+            x_height: 7.0 * metric_scale,
+            cap_height: 10.0 * metric_scale,
+            glyphs,
+        },
+        false,
+        128,
+    )
+}
+
 #[cfg(feature = "asset-tools")]
 pub fn generate_yesterday_10(font_bytes: &[u8]) -> Result<Vec<u8>, String> {
     generate_resource(font_bytes, YESTERDAY_10_SPEC)
@@ -686,6 +899,16 @@ pub fn generate_jersey_25(font_bytes: &[u8]) -> Result<Vec<u8>, String> {
     generate_resource(font_bytes, JERSEY_25_SPEC)
 }
 
+#[cfg(feature = "asset-tools")]
+pub fn generate_terminus_8x14_normal(source: &str) -> Result<Vec<u8>, String> {
+    generate_bdf_resource(source, "Terminus 8x14", 400, 2)
+}
+
+#[cfg(feature = "asset-tools")]
+pub fn generate_terminus_8x14_bold(source: &str) -> Result<Vec<u8>, String> {
+    generate_bdf_resource(source, "Terminus 8x14 Bold", 700, 2)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -699,6 +922,9 @@ mod tests {
     const BACTERIA_12_TTF: &[u8] =
         include_bytes!("../../../private/magik-assets/fonts/bacteria-12/Bacteria 12.ttf");
     const JERSEY_25_TTF: &[u8] = include_bytes!("../ui/fonts/Jersey25-Regular.ttf");
+    const TERMINUS_8X14_NORMAL_BDF: &str =
+        include_str!("../assets/fonts/terminus-8x14/ter-u14n.bdf");
+    const TERMINUS_8X14_BOLD_BDF: &str = include_str!("../assets/fonts/terminus-8x14/ter-u14b.bdf");
 
     fn glyph<'a>(font: &'a DecodedFont, code_point: char) -> &'a DecodedGlyph {
         font.glyphs
@@ -746,6 +972,14 @@ mod tests {
             generate_resource(JERSEY_25_TTF, JERSEY_25_SPEC).unwrap(),
             JERSEY_25_RESOURCE
         );
+        assert_eq!(
+            generate_bdf_resource(TERMINUS_8X14_NORMAL_BDF, "Terminus 8x14", 400, 2).unwrap(),
+            TERMINUS_8X14_NORMAL_RESOURCE
+        );
+        assert_eq!(
+            generate_bdf_resource(TERMINUS_8X14_BOLD_BDF, "Terminus 8x14 Bold", 700, 2).unwrap(),
+            TERMINUS_8X14_BOLD_RESOURCE
+        );
     }
 
     #[test]
@@ -781,9 +1015,43 @@ mod tests {
             BACTERIA_12_RESOURCE,
             BACTERIA_12_NATIVE_RESOURCE,
             JERSEY_25_RESOURCE,
+            TERMINUS_8X14_NORMAL_RESOURCE,
+            TERMINUS_8X14_BOLD_RESOURCE,
         ] {
             assert!(decode_resource(resource).unwrap().descent < 0.0);
         }
+    }
+
+    #[test]
+    fn terminus_sources_expand_to_exact_two_by_two_blocks() {
+        for resource in [TERMINUS_8X14_NORMAL_RESOURCE, TERMINUS_8X14_BOLD_RESOURCE] {
+            let font = decode_resource(resource).unwrap();
+            assert_eq!(font.pixel_size, 28);
+            assert_eq!(font.ascent, 24.0);
+            assert_eq!(font.descent, -4.0);
+            let glyph = glyph(&font, 'A');
+            assert_eq!((glyph.width, glyph.height, glyph.x_advance), (16, 28, 1024));
+            let alpha = unpack_glyph(glyph);
+            for y in (0..glyph.height as usize).step_by(2) {
+                for x in (0..glyph.width as usize).step_by(2) {
+                    let value = alpha[y * glyph.width as usize + x];
+                    assert_eq!(alpha[y * glyph.width as usize + x + 1], value);
+                    assert_eq!(alpha[(y + 1) * glyph.width as usize + x], value);
+                    assert_eq!(alpha[(y + 1) * glyph.width as usize + x + 1], value);
+                }
+            }
+        }
+        let normal = decode_resource(TERMINUS_8X14_NORMAL_RESOURCE).unwrap();
+        let bold = decode_resource(TERMINUS_8X14_BOLD_RESOURCE).unwrap();
+        let normal_ink = unpack_glyph(glyph(&normal, 'A'))
+            .into_iter()
+            .filter(|value| *value != 0)
+            .count();
+        let bold_ink = unpack_glyph(glyph(&bold, 'A'))
+            .into_iter()
+            .filter(|value| *value != 0)
+            .count();
+        assert!(bold_ink > normal_ink);
     }
 
     #[test]

@@ -1,0 +1,13 @@
+Terminus Font 4.49.1
+
+Upstream: https://terminus-font.sourceforge.net/
+Archive: terminus-font-4.49.1.tar.gz
+Archive SHA-256: d961c1b781627bf417f9b340693d64fc219e0113ad3a3af1a3424c7aa373ef79
+Sources: ter-u14n.bdf (normal), ter-u14b.bdf (bold)
+Copyright: Copyright (C) 2020 Dimitar Toshkov Zhekov
+License: SIL Open Font License 1.1; see apps/mister/licenses/TERMINUS-FONT.txt
+
+The generated MMBF resources expand every native 8x14 BDF pixel to a 2x2
+composition block. CRT240's exact 2:1 vertical reduction then preserves each
+source pixel as a 2x1 framebuffer pixel, which has square physical geometry on
+the 4:3 640x240 output.
