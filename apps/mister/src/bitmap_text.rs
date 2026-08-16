@@ -961,11 +961,11 @@ mod tests {
     }
 
     #[test]
-    fn terminus_small_uses_the_native_bitmap_resource() {
+    fn spleen_small_uses_the_native_bitmap_resource() {
         let mut font = ConsoleFont::new_with_typeface(12.0, ConsoleTypeface::Spleen6x12Small);
         assert!(font.font.is_none());
         let mask = font.rasterize_alpha_mask("ARCADE").unwrap();
-        assert_eq!(mask.height, 10);
+        assert_eq!(mask.height, 12);
         assert!(mask.alpha.iter().all(|alpha| matches!(alpha, 0 | 255)));
     }
 

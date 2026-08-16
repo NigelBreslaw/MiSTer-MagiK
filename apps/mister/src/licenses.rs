@@ -135,7 +135,7 @@ mod tests {
         assert!(COMMERCIAL_FONTS.contains("commercial licences"));
         assert!(JERSEY_25.contains("SIL OPEN FONT LICENSE"));
         assert!(TERMINUS_FONT.contains("Reserved Font Name \"Terminus Font\""));
-        assert!(SPLEEN.contains("BSD 2-Clause License"));
+        assert!(SPLEEN.contains("Redistribution and use of source and binary forms"));
         assert!(ARCADE_CABINET.contains("Lluc Guardiolaa"));
         assert!(ARCADE_CABINET.contains("CC-BY-NC-4.0"));
     }

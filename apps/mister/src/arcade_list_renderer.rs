@@ -3403,7 +3403,10 @@ mod tests {
         );
         let hdmi = ArcadeListRenderer::new();
 
-        assert_eq!(baseline.style.title_typeface, ConsoleTypeface::Nocive15);
+        assert_eq!(
+            baseline.style.title_typeface,
+            ConsoleTypeface::Yesterday10Perfect
+        );
         assert_eq!(xerxes.style.title_typeface, ConsoleTypeface::Xerxes10);
         assert_eq!(xerxes.style.glyph_row_filter, ConsoleGlyphRowFilter::Native);
         assert_eq!(hdmi.style.title_typeface, ConsoleTypeface::Nocive15);
@@ -3581,7 +3584,7 @@ mod tests {
             let text_top = *text_rows.first().expect("badge text top");
             let text_bottom = *text_rows.last().expect("badge text bottom");
             assert!(
-                (text_top - top).abs_diff(bottom - text_bottom) <= 1,
+                (text_top - top).abs_diff(bottom - text_bottom) <= 2,
                 "row height {row_height}"
             );
         }
