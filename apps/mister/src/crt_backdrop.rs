@@ -904,9 +904,8 @@ fn blend_coarse_frame(
             let source_start = row * width;
             let destination_end = (destination_start + width).min(len);
             let source_end = (source_start + width).min(len);
-            let (before, after) = pixels.split_at_mut(destination_start);
-            after[..destination_end - destination_start]
-                .copy_from_slice(&before[source_start..source_end]);
+            pixels[destination_start..destination_end]
+                .copy_from_slice(&pixels[source_start..source_end]);
         }
     }
     pixels
