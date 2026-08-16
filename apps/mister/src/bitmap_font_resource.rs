@@ -308,6 +308,10 @@ pub fn bacteria_12_native_console_bitmap_font() -> Result<ConsoleBitmapFont, Str
     console_bitmap_font(BACTERIA_12_NATIVE_RESOURCE)
 }
 
+pub fn jersey_15_console_bitmap_font() -> Result<ConsoleBitmapFont, String> {
+    console_bitmap_font(JERSEY_15_RESOURCE)
+}
+
 pub fn terminus_8x14_normal_console_bitmap_font() -> Result<ConsoleBitmapFont, String> {
     console_bitmap_font(TERMINUS_8X14_NORMAL_RESOURCE)
 }
