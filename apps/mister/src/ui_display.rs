@@ -26,6 +26,16 @@ const UI_FB_SIZE_ENV: &str = "MISTER_UI_FB_SIZE";
 const RUNTIME_SETTINGS_ENV: &str = "MISTER_MAGIK_RUNTIME_SETTINGS_V1";
 const RUNTIME_DISPLAY_ENV: &str = "MISTER_MAGIK_RUNTIME_DISPLAY_V1";
 const CRT_FONT_EXPERIMENT_ENV: &str = "MISTER_CRT_FONT_EXPERIMENT";
+const CRT240_COMPOSITION_ENV: &str = "MISTER_CRT240_COMPOSITION";
+
+impl Crt240Composition {
+    pub fn parse(value: Option<&str>) -> Self {
+        match value.map(str::trim).map(str::to_ascii_lowercase).as_deref() {
+            Some("legacy-480") | Some("legacy") => Self::Legacy480,
+            _ => Self::Native240,
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum CrtFontExperiment {
@@ -93,6 +103,7 @@ pub struct UiDisplayInputs {
     runtime_settings: Option<String>,
     runtime_display: Option<String>,
     crt_font_experiment: CrtFontExperiment,
+    crt240_composition: Crt240Composition,
 }
 
 impl UiDisplayInputs {
@@ -104,11 +115,16 @@ impl UiDisplayInputs {
             runtime_settings: get(RUNTIME_SETTINGS_ENV).map(str::to_owned),
             runtime_display: get(RUNTIME_DISPLAY_ENV).map(str::to_owned),
             crt_font_experiment: CrtFontExperiment::parse(get(CRT_FONT_EXPERIMENT_ENV)),
+            crt240_composition: Crt240Composition::parse(get(CRT240_COMPOSITION_ENV)),
         }
     }
 
     pub const fn crt_font_experiment(&self) -> CrtFontExperiment {
         self.crt_font_experiment
+    }
+
+    pub const fn crt240_composition(&self) -> Crt240Composition {
+        self.crt240_composition
     }
 
     pub fn capture_process() -> Self {
@@ -547,17 +563,19 @@ impl UiDisplayPlan {
     ) -> Self {
         let ini = std::fs::read_to_string(DEVICE_INI_PATH).ok();
         let fb_policy = inputs.fb_policy;
+        let crt240_composition = inputs.crt240_composition;
         let resolved_route = inputs
             .runtime_settings
             .as_deref()
             .and_then(ResolvedOutputRoute::from_runtime_settings_v1)
             .unwrap_or(ResolvedOutputRoute::Hdmi);
         if let Some(geometry) = resolved_route.progressive_geometry() {
-            return Self::from_geometry_with_route(
+            return Self::from_geometry_with_route_and_composition(
                 geometry,
                 resolved_route,
                 "main-runtime-settings-crt",
                 UiFramebufferSizePolicy::Auto,
+                crt240_composition,
             );
         }
         if let Some(geometry) = inputs
@@ -565,11 +583,12 @@ impl UiDisplayPlan {
             .as_deref()
             .and_then(runtime_display_geometry_v1)
         {
-            return Self::from_geometry_with_route(
+            return Self::from_geometry_with_route_and_composition(
                 geometry,
                 resolved_route,
                 "main-runtime-display-mode",
                 fb_policy,
+                crt240_composition,
             );
         }
         if let Some(runtime) = runtime {
@@ -1113,6 +1132,57 @@ mod tests {
             experiment.vertical_sampling(),
             mister_magik_mister_runtime::framebuffer::vertical_scale::VerticalSampling::CenteredNearest
         );
+    }
+
+    #[test]
+    fn crt240_composition_defaults_native_and_accepts_legacy_override() {
+        assert_eq!(Crt240Composition::parse(None), Crt240Composition::Native240);
+        assert_eq!(
+            Crt240Composition::parse(Some("native")),
+            Crt240Composition::Native240
+        );
+        assert_eq!(
+            Crt240Composition::parse(Some("legacy-480")),
+            Crt240Composition::Legacy480
+        );
+        assert_eq!(
+            Crt240Composition::parse(Some("unrecognized")),
+            Crt240Composition::Native240
+        );
+    }
+
+    #[test]
+    fn display_inputs_capture_the_volatile_crt240_composition_policy() {
+        let native = UiDisplayInputs::capture_with(|name| {
+            (name == CRT240_COMPOSITION_ENV).then_some("native")
+        });
+        assert_eq!(native.crt240_composition(), Crt240Composition::Native240);
+
+        let legacy = UiDisplayInputs::capture_with(|name| {
+            (name == CRT240_COMPOSITION_ENV).then_some("legacy-480")
+        });
+        assert_eq!(legacy.crt240_composition(), Crt240Composition::Legacy480);
+    }
+
+    #[test]
+    fn production_input_policy_selects_native_crt240_without_changing_legacy_override() {
+        let native_inputs = UiDisplayInputs::capture_with(|name| match name {
+            RUNTIME_SETTINGS_ENV => Some("schema=1&output=crt-240p60"),
+            CRT240_COMPOSITION_ENV => None,
+            _ => None,
+        });
+        let native =
+            UiDisplayPlan::from_runtime_or_mister_ini_file_with_inputs(None, &native_inputs);
+        assert_eq!((native.render_w, native.render_h), (640, 240));
+
+        let legacy_inputs = UiDisplayInputs::capture_with(|name| match name {
+            RUNTIME_SETTINGS_ENV => Some("schema=1&output=crt-240p60"),
+            CRT240_COMPOSITION_ENV => Some("legacy-480"),
+            _ => None,
+        });
+        let legacy =
+            UiDisplayPlan::from_runtime_or_mister_ini_file_with_inputs(None, &legacy_inputs);
+        assert_eq!((legacy.render_w, legacy.render_h), (640, 480));
     }
 
     #[test]

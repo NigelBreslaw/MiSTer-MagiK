@@ -479,6 +479,21 @@ aliases = []
 documentation = { summary = "Selects a volatile CRT font visual experiment", accepted_values = ["phase-even", "coverage-max", "dominant-row", "xerxes", "xerxes-perfect", "yesterday-perfect", "bacteria", "bacteria-half"], value_policy = "document" }
 
 [[control]]
+name = "MISTER_CRT240_COMPOSITION"
+owner = "apps/mister/src/ui_display.rs"
+classification = "diagnostic"
+value_shape = "enum token"
+default_behavior = "uses native 640x240 composition when unset or unrecognized"
+visibility = "developer diagnostic"
+parser = "enum"
+typed_default = "native"
+scope = "instrumentation"
+conflicts = []
+sensitivity = "public"
+aliases = []
+documentation = { summary = "Selects the volatile CRT240 composition policy", accepted_values = ["native", "legacy-480"], value_policy = "document" }
+
+[[control]]
 name = "MISTER_CRT_PROBE_PATTERN"
 owner = "apps/mister/src/ui_runner/crt_trial_loop.rs"
 classification = "production"
