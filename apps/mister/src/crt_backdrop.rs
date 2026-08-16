@@ -249,7 +249,7 @@ impl CrtBackdropState {
         self.compose_to(now, destination, protected_rects, 1)
     }
 
-    /// Compose a deliberately coarse backdrop fade for CRT performance
+    /// Compose a deliberately coarse 2x2 backdrop fade for CRT performance
     /// experiments. The interactive foreground remains full resolution.
     pub fn compose_into_coarse_excluding(
         &mut self,
@@ -257,17 +257,7 @@ impl CrtBackdropState {
         destination: &mut [Rgb565Pixel],
         protected_rects: &[(usize, usize, usize, usize)],
     ) -> CrtBackdropWorkTrace {
-        self.compose_into_coarse_factor_excluding(now, destination, protected_rects, 2)
-    }
-
-    pub fn compose_into_coarse_factor_excluding(
-        &mut self,
-        now: Duration,
-        destination: &mut [Rgb565Pixel],
-        protected_rects: &[(usize, usize, usize, usize)],
-        coarse_factor: usize,
-    ) -> CrtBackdropWorkTrace {
-        self.compose_to(now, destination, protected_rects, coarse_factor.max(1))
+        self.compose_to(now, destination, protected_rects, 2)
     }
 
     fn compose_to(
