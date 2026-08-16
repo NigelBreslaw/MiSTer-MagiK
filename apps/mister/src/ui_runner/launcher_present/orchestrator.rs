@@ -80,7 +80,6 @@ pub(in crate::ui_runner) struct LauncherPresentFrame {
     pub(in crate::ui_runner) stream_motion_active: bool,
     pub(in crate::ui_runner) direct_hidden_mode: bool,
     pub(in crate::ui_runner) completed_hidden_frame: Option<CompletedHiddenFrame>,
-    pub(in crate::ui_runner) direct_physical_copy: bool,
     pub(in crate::ui_runner) capture_readiness_source: bool,
     pub(in crate::ui_runner) profile_latch_phases: bool,
 }
@@ -193,7 +192,6 @@ impl LauncherPresenter<FpgaVblankLatchHiddenPresenter> {
             stream_motion_active: frame.stream_motion_active,
             direct_hidden_mode: frame.direct_hidden_mode,
             completed_hidden_frame: frame.completed_hidden_frame,
-            direct_physical_copy: frame.direct_physical_copy,
             capture_readiness_source: frame.capture_readiness_source,
             profile_latch_phases: frame.profile_latch_phases,
         };
@@ -524,7 +522,6 @@ struct LivePresentationAdapters<'a, 'target> {
     stream_motion_active: bool,
     direct_hidden_mode: bool,
     completed_hidden_frame: Option<CompletedHiddenFrame>,
-    direct_physical_copy: bool,
     capture_readiness_source: bool,
     profile_latch_phases: bool,
 }
@@ -661,7 +658,6 @@ impl PresentationAdapters<FpgaVblankLatchHiddenPresenter> for LivePresentationAd
             hardware,
             self.display,
             self.profile_latch_phases,
-            self.direct_physical_copy,
             |hidden, plan| {
                 preview_redraw_rect = plan.preview_redraw;
                 arcade_redraw_update = plan.arcade_redraw;

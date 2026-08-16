@@ -195,10 +195,6 @@ pub trait LatchFrameBuffers {
         cached: CachedFrameView<'_>,
         rect: DirtyRect,
     ) -> Result<LatchCopyResult, String>;
-    fn copy_physical_full(
-        buffer: &mut Self::Buffer,
-        cached: CachedFrameView<'_>,
-    ) -> Result<LatchCopyResult, String>;
     fn publish_writes(buffer: &mut Self::Buffer);
 }
 
