@@ -307,33 +307,48 @@ impl CrtBackdropState {
                 let destination = &mut self.retarget[start..end];
                 let previous = &self.source[start..end];
                 let current = &self.target[start..end];
-                let mut cursor = 0;
-                for &(x0, y0, x1, y1) in protected_rects {
-                    if row < y0 || row >= y1 {
-                        continue;
+                if protected_rects
+                    .iter()
+                    .any(|&(_, y0, _, y1)| row >= y0 && row < y1)
+                {
+                    let mut cursor = 0;
+                    for &(x0, y0, x1, y1) in protected_rects {
+                        if row < y0 || row >= y1 {
+                            continue;
+                        }
+                        let protected_start = x0.min(destination.len());
+                        let protected_end = x1.min(destination.len()).max(protected_start);
+                        blend_rgb565_range(
+                            destination,
+                            previous,
+                            current,
+                            cursor,
+                            protected_start.max(cursor),
+                            alpha_bucket,
+                            coarse_factor,
+                        );
+                        cursor = cursor.max(protected_end);
                     }
-                    let protected_start = x0.min(destination.len());
-                    let protected_end = x1.min(destination.len()).max(protected_start);
                     blend_rgb565_range(
                         destination,
                         previous,
                         current,
                         cursor,
-                        protected_start.max(cursor),
+                        destination.len(),
                         alpha_bucket,
                         coarse_factor,
                     );
-                    cursor = cursor.max(protected_end);
+                } else {
+                    blend_rgb565_range(
+                        destination,
+                        previous,
+                        current,
+                        0,
+                        destination.len(),
+                        alpha_bucket,
+                        coarse_factor,
+                    );
                 }
-                blend_rgb565_range(
-                    destination,
-                    previous,
-                    current,
-                    cursor,
-                    destination.len(),
-                    alpha_bucket,
-                    coarse_factor,
-                );
             }
             for copy_row in row + 1..(row + coarse_factor).min(self.physical_height) {
                 let source_start = row * row_width;
