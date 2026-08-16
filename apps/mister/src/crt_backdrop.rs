@@ -221,7 +221,7 @@ impl CrtBackdropState {
 
     pub fn compose(&mut self, now: Duration) -> CrtBackdropWorkTrace {
         let mut logical_retarget = std::mem::take(&mut self.logical_retarget);
-        let trace = self.compose_to(now, &mut logical_retarget);
+        let trace = self.compose_to(now, &mut logical_retarget, &[]);
         self.logical_retarget = logical_retarget;
         trace
     }
@@ -233,13 +233,27 @@ impl CrtBackdropState {
         now: Duration,
         destination: &mut [Rgb565Pixel],
     ) -> CrtBackdropWorkTrace {
-        self.compose_to(now, destination)
+        self.compose_to(now, destination, &[])
+    }
+
+    /// Compose the backdrop while preserving opaque UI rectangles already in
+    /// `destination`. Coordinates are in the logical RGB565 frame space.
+    /// Protected pixels are still represented by the normal UI base/chrome;
+    /// they are not part of the screenshot fade work.
+    pub fn compose_into_excluding(
+        &mut self,
+        now: Duration,
+        destination: &mut [Rgb565Pixel],
+        protected_rects: &[(usize, usize, usize, usize)],
+    ) -> CrtBackdropWorkTrace {
+        self.compose_to(now, destination, protected_rects)
     }
 
     fn compose_to(
         &mut self,
         now: Duration,
         destination: &mut [Rgb565Pixel],
+        protected_rects: &[(usize, usize, usize, usize)],
     ) -> CrtBackdropWorkTrace {
         let mut trace = CrtBackdropWorkTrace {
             prepare_us: std::mem::take(&mut self.pending_prepare_us),
@@ -248,7 +262,7 @@ impl CrtBackdropState {
         };
         let Some(started) = self.transition_started else {
             trace.alpha_bucket = 32;
-            self.expand_into(destination);
+            self.expand_into(destination, protected_rects);
             return trace;
         };
         let elapsed = now.checked_sub(started).unwrap_or_default();
@@ -270,21 +284,31 @@ impl CrtBackdropState {
             let destination = &mut self.retarget[start..end];
             let previous = &self.source[start..end];
             let current = &self.target[start..end];
-            let mut previous_source = Rgb565Pixel(u16::MAX);
-            let mut previous_current = Rgb565Pixel(u16::MAX);
-            for index in 0..destination.len() {
-                if index > 0
-                    && previous[index] == previous_source
-                    && current[index] == previous_current
-                {
-                    destination[index] = destination[index - 1];
-                } else {
-                    destination[index] =
-                        blend_rgb565_bucket(previous[index], current[index], alpha_bucket);
+            let mut cursor = 0;
+            for &(x0, y0, x1, y1) in protected_rects {
+                if row < y0 || row >= y1 {
+                    continue;
                 }
-                previous_source = previous[index];
-                previous_current = current[index];
+                let protected_start = x0.min(destination.len());
+                let protected_end = x1.min(destination.len()).max(protected_start);
+                blend_rgb565_range(
+                    destination,
+                    previous,
+                    current,
+                    cursor,
+                    protected_start.max(cursor),
+                    alpha_bucket,
+                );
+                cursor = cursor.max(protected_end);
             }
+            blend_rgb565_range(
+                destination,
+                previous,
+                current,
+                cursor,
+                destination.len(),
+                alpha_bucket,
+            );
         }
         for row in 0..self.physical_height {
             self.retarget_row_repeats[row] =
@@ -300,17 +324,28 @@ impl CrtBackdropState {
         } else {
             self.retarget_is_plain = false;
         }
-        self.expand_into(destination);
+        self.expand_into(destination, protected_rects);
         trace
     }
 
-    fn expand_into(&self, destination: &mut [Rgb565Pixel]) {
+    fn expand_into(
+        &self,
+        destination: &mut [Rgb565Pixel],
+        protected_rects: &[(usize, usize, usize, usize)],
+    ) {
         let required = self.width.saturating_mul(self.height);
         if destination.len() < required {
             return;
         }
         if self.height == self.physical_height {
-            destination[..required].copy_from_slice(&self.retarget[..required]);
+            for row in 0..self.height {
+                copy_rgb565_row_excluding(
+                    &mut destination[row * self.width..(row + 1) * self.width],
+                    &self.retarget[row * self.width..(row + 1) * self.width],
+                    row,
+                    protected_rects,
+                );
+            }
             return;
         }
         for logical_y in 0..self.height {
@@ -321,8 +356,12 @@ impl CrtBackdropState {
                 .min(self.physical_height.saturating_sub(1));
             let logical_start = logical_y * self.width;
             let physical_start = physical_y * self.width;
-            destination[logical_start..logical_start + self.width]
-                .copy_from_slice(&self.retarget[physical_start..physical_start + self.width]);
+            copy_rgb565_row_excluding(
+                &mut destination[logical_start..logical_start + self.width],
+                &self.retarget[physical_start..physical_start + self.width],
+                logical_y,
+                protected_rects,
+            );
         }
     }
 
@@ -590,6 +629,54 @@ const fn rgb565_from_rgb888(r: u8, g: u8, b: u8) -> Rgb565Pixel {
     Rgb565Pixel(((r as u16 >> 3) << 11) | ((g as u16 >> 2) << 5) | (b as u16 >> 3))
 }
 
+fn blend_rgb565_range(
+    destination: &mut [Rgb565Pixel],
+    previous: &[Rgb565Pixel],
+    current: &[Rgb565Pixel],
+    start: usize,
+    end: usize,
+    alpha_bucket: u16,
+) {
+    let end = end
+        .min(destination.len())
+        .min(previous.len())
+        .min(current.len());
+    let start = start.min(end);
+    let mut previous_source = Rgb565Pixel(u16::MAX);
+    let mut previous_current = Rgb565Pixel(u16::MAX);
+    for index in start..end {
+        if index > start && previous[index] == previous_source && current[index] == previous_current
+        {
+            destination[index] = destination[index - 1];
+        } else {
+            destination[index] = blend_rgb565_bucket(previous[index], current[index], alpha_bucket);
+        }
+        previous_source = previous[index];
+        previous_current = current[index];
+    }
+}
+
+fn copy_rgb565_row_excluding(
+    destination: &mut [Rgb565Pixel],
+    source: &[Rgb565Pixel],
+    row: usize,
+    protected_rects: &[(usize, usize, usize, usize)],
+) {
+    let width = destination.len().min(source.len());
+    let mut cursor = 0;
+    for &(x0, y0, x1, y1) in protected_rects {
+        if row < y0 || row >= y1 {
+            continue;
+        }
+        let protected_start = x0.min(width);
+        let protected_end = x1.min(width).max(protected_start);
+        let copy_end = protected_start.max(cursor);
+        destination[cursor..copy_end].copy_from_slice(&source[cursor..copy_end]);
+        cursor = cursor.max(protected_end);
+    }
+    destination[cursor..width].copy_from_slice(&source[cursor..width]);
+}
+
 fn duration_us(duration: Duration) -> u64 {
     duration.as_micros().min(u64::MAX as u128) as u64
 }
@@ -786,5 +873,24 @@ mod tests {
                 .iter()
                 .all(|pixel| *pixel == CRT_BACKDROP_BACKGROUND)
         );
+    }
+
+    #[test]
+    fn protected_rectangles_are_not_overwritten_during_compose() {
+        let target = vec![Rgb565Pixel(0xffff); 8];
+        let mut backdrop = CrtBackdropState::new(4, 2);
+        backdrop.retarget(Some(frame(&target, 4, 2)), Duration::ZERO);
+        let marker = Rgb565Pixel(0x07e0);
+        let mut destination = vec![marker; 8];
+        let trace = backdrop.compose_into_excluding(
+            Duration::from_millis(65),
+            &mut destination,
+            &[(1, 0, 3, 2)],
+        );
+        assert!(trace.active);
+        assert_eq!(destination[1], marker);
+        assert_eq!(destination[2], marker);
+        assert_ne!(destination[0], marker);
+        assert_ne!(destination[3], marker);
     }
 }

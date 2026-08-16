@@ -529,7 +529,7 @@ impl<'a> LayerTarget<'a> {
     }
 }
 
-fn crt_arcade_chrome_rects(
+pub(super) fn crt_arcade_chrome_rects(
     content: crate::ui_display::CrtContentRect,
     metrics: CrtUiMetrics,
     list: DirtyRect,
