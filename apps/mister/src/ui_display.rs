@@ -687,7 +687,7 @@ impl UiDisplayPlan {
         Self::from_geometry_with_route(geometry, output_route, source, fb_policy)
     }
 
-    fn from_geometry_with_route(
+    pub(crate) fn from_geometry_with_route(
         geometry: VideoModeGeometry,
         output_route: ResolvedOutputRoute,
         source: &'static str,
