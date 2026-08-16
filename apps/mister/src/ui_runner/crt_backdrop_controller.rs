@@ -277,6 +277,7 @@ impl CrtBackdropController {
     pub(super) fn compose(
         &mut self,
         eligible: bool,
+        force_full_repaint: bool,
         selected: usize,
         transition_id: Option<u64>,
         source: Option<BackdropSource>,
@@ -317,6 +318,7 @@ impl CrtBackdropController {
             || transition_changed
             || prepared_changed
             || !self.was_eligible
+            || force_full_repaint
             || self.state.is_transitioning();
         let mut frame = CrtBackdropFrame::default();
         if compose_full {
@@ -336,29 +338,6 @@ impl CrtBackdropController {
         }
         self.was_eligible = true;
         frame
-    }
-
-    /// Restore the controller's current backdrop after a full-frame effect
-    /// has replaced the cached launcher surface. The navigation transition
-    /// owns its endpoint frame, so the normal change-driven `compose` call can
-    /// otherwise leave the controller believing that pixels which were just
-    /// overwritten are still present.
-    pub(super) fn restore_after_full_frame_occlusion(
-        &mut self,
-        now: Duration,
-        destination: &mut [Rgb565Pixel],
-        content: CrtContentRect,
-        metrics: CrtUiMetrics,
-    ) -> CrtBackdropFrame {
-        let trace = self.state.compose_into_coarse_excluding(
-            now,
-            destination,
-            &product_chrome_rects(content, metrics),
-        );
-        CrtBackdropFrame {
-            trace,
-            full_damage: destination.len() >= self.width().saturating_mul(self.height()),
-        }
     }
 }
 
@@ -381,7 +360,7 @@ mod tests {
     use crate::visual_composition::{PreviewFrame, PreviewPixels};
 
     #[test]
-    fn full_frame_occlusion_restore_repaints_backdrop_but_preserves_chrome() {
+    fn forced_compose_repaints_settled_backdrop_but_preserves_chrome() {
         let display = UiDisplay::for_plan(
             UiDisplayPlan::from_mister_ini_text(
                 "[MiSTer]\ndirect_video=1\nmenu_pal=0\nforced_scandoubler=0\n",
@@ -408,10 +387,17 @@ mod tests {
         );
         let settled_at = CRT_BACKDROP_FADE_DURATION + Duration::from_millis(1);
         let _ = controller.state.compose(settled_at);
+        controller.selected = Some(0);
+        controller.was_eligible = true;
 
         let sentinel = Rgb565Pixel(0xf81f);
         let mut destination = vec![sentinel; controller.width() * controller.height()];
-        let restored = controller.restore_after_full_frame_occlusion(
+        let restored = controller.compose(
+            true,
+            true,
+            0,
+            None,
+            None,
             settled_at,
             &mut destination,
             content,
