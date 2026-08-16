@@ -285,10 +285,10 @@ impl CrtBackdropState {
         let alpha_bucket = ((numerator * 32 + denominator / 2) / denominator) as u16;
         if alpha_bucket == 0 {
             // Retargeting snapshots the currently displayed blend into
-            // `retarget` and its logical expansion before this transition
-            // starts.  The alpha-zero endpoint is therefore already present
-            // in the destination; leave it untouched while the list layer
-            // repaints over the stationary backdrop.
+            // `retarget`. Rewrite the destination even at the alpha-zero
+            // endpoint so a frame marked as fresh cannot retain the prior
+            // list overlay underneath the new foreground.
+            self.expand_into(destination, protected_rects);
             trace.alpha_bucket = 0;
             trace.active = true;
             return trace;
@@ -352,6 +352,11 @@ impl CrtBackdropState {
             self.retarget_is_plain = false;
         }
         self.expand_into(destination, protected_rects);
+        if !trace.active {
+            // Keep the logical view used by settled list restoration in sync
+            // with the physical retarget that was just presented.
+            self.expand_to_logical();
+        }
         trace
     }
 
@@ -1205,5 +1210,41 @@ mod tests {
         assert_eq!(destination[4 + 1], marker);
         assert_eq!(destination[8 + 1], marker);
         assert_ne!(destination[12 + 1], marker);
+    }
+
+    #[test]
+    fn alpha_zero_composition_rewrites_the_backdrop_destination() {
+        let target = vec![Rgb565Pixel(0xffff); 8];
+        let mut backdrop = CrtBackdropState::new_with_heights(4, 4, 2);
+        backdrop.retarget(Some(frame(&target, 4, 2)), Duration::ZERO);
+        let marker = Rgb565Pixel(0x1234);
+        let mut destination = vec![marker; 16];
+        let trace = backdrop.compose_into_coarse_excluding(Duration::ZERO, &mut destination, &[]);
+
+        assert_eq!(trace.alpha_bucket, 0);
+        assert!(trace.active);
+        assert!(destination.iter().all(|pixel| *pixel != marker));
+    }
+
+    #[test]
+    fn settled_physical_composition_updates_logical_backdrop_pixels() {
+        let target = vec![Rgb565Pixel(0xffff); 8];
+        let mut backdrop = CrtBackdropState::new_with_heights(4, 4, 2);
+        backdrop.retarget(Some(frame(&target, 4, 2)), Duration::ZERO);
+        let mut destination = vec![Rgb565Pixel(0); 16];
+        let trace = backdrop.compose_into_coarse_excluding(
+            CRT_BACKDROP_FADE_DURATION,
+            &mut destination,
+            &[],
+        );
+
+        assert_eq!(trace.alpha_bucket, 32);
+        assert!(!trace.active);
+        assert!(
+            backdrop
+                .pixels()
+                .iter()
+                .all(|pixel| *pixel == Rgb565Pixel(0xffff))
+        );
     }
 }

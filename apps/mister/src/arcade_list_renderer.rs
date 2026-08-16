@@ -302,9 +302,6 @@ pub struct ArcadeListRenderer {
     visible_height: usize,
     style: ArcadeListStyle,
     crt_metrics: Option<CrtUiMetrics>,
-    backdrop_overlay_valid: bool,
-    backdrop_overlay_surface_y: usize,
-    backdrop_overlay_selection_y: usize,
 }
 
 pub struct CachedArcadeRow {
@@ -406,9 +403,6 @@ impl ArcadeListRenderer {
             visible_height: ARCADE_LIST_H,
             style,
             crt_metrics,
-            backdrop_overlay_valid: false,
-            backdrop_overlay_surface_y: 0,
-            backdrop_overlay_selection_y: 0,
         }
     }
 
@@ -458,7 +452,6 @@ impl ArcadeListRenderer {
             self.last_draw = None;
             self.last_filter_draw = None;
             self.surface_y = 0;
-            self.backdrop_overlay_valid = false;
         }
     }
 
@@ -466,7 +459,6 @@ impl ArcadeListRenderer {
         self.last_draw = None;
         self.last_filter_draw = None;
         self.surface_y = 0;
-        self.backdrop_overlay_valid = false;
     }
 
     pub fn set_favourite_launch_refs<'a>(&mut self, refs: impl IntoIterator<Item = &'a str>) {
@@ -1061,37 +1053,20 @@ impl ArcadeListRenderer {
         let identity_layout = matches!(output_layout.rotation(), OutputRotation::None)
             && output_layout.physical_stride() == output_layout.logical_width();
         if identity_layout {
-            // CRT240p is an upright contiguous surface. After the first
-            // backdrop composition, restore only the previous overlay runs
-            // before drawing the current runs. The row fill is already the
-            // stationary backdrop, so copying every list pixel on every
-            // velocity-scroll frame is unnecessary.
-            let previous_surface_y = self.backdrop_overlay_surface_y;
-            let previous_selection_y = self.backdrop_overlay_selection_y;
-            let previous_valid = self.backdrop_overlay_valid && !backdrop_is_fresh;
-            if previous_valid {
-                let previous_selection_bottom =
-                    previous_selection_y + self.style.row_height.max(1) as usize;
+            // CRT240p is an upright contiguous surface. Restore every
+            // unselected row from the stationary backdrop before drawing the
+            // current runs so glyphs from overwritten ring-buffer rows cannot
+            // survive a scroll step.
+            if !backdrop_is_fresh {
                 for viewport_y in 0..self.visible_height {
-                    let source_y = (previous_surface_y + viewport_y) % self.visible_height;
                     let destination_start = (self.geometry.y + viewport_y)
                         * output_layout.physical_stride()
                         + self.geometry.x;
                     let destination =
                         &mut cached[destination_start..destination_start + self.width];
-                    if viewport_y >= previous_selection_y && viewport_y < previous_selection_bottom
-                    {
-                        destination.copy_from_slice(
-                            &backdrop[destination_start..destination_start + self.width],
-                        );
-                    } else {
-                        for &(run_start, run_end) in &self.surface_nonfill_runs[source_y] {
-                            destination[run_start..run_end].copy_from_slice(
-                                &backdrop
-                                    [destination_start + run_start..destination_start + run_end],
-                            );
-                        }
-                    }
+                    destination.copy_from_slice(
+                        &backdrop[destination_start..destination_start + self.width],
+                    );
                 }
             }
             for viewport_y in 0..self.visible_height {
@@ -1114,11 +1089,6 @@ impl ArcadeListRenderer {
                             selected_aperture_pixel_with_style(surface_row[x], self.style);
                     }
                 } else {
-                    if !previous_valid && !backdrop_is_fresh {
-                        destination.copy_from_slice(
-                            &backdrop[destination_start..destination_start + self.width],
-                        );
-                    }
                     for &(run_start, run_end) in &self.surface_nonfill_runs[source_y] {
                         destination[run_start..run_end]
                             .copy_from_slice(&surface_row[run_start..run_end]);
@@ -1128,9 +1098,6 @@ impl ArcadeListRenderer {
             if redraw_selection_frame {
                 self.compose_selection_frame_to_oriented_cached(cached, output_layout);
             }
-            self.backdrop_overlay_valid = true;
-            self.backdrop_overlay_surface_y = self.surface_y;
-            self.backdrop_overlay_selection_y = selection_y;
             return true;
         }
         for viewport_y in 0..self.visible_height {
