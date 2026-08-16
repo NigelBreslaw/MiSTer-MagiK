@@ -408,33 +408,12 @@ impl CrtBackdropState {
                 let source_start = physical_y * self.width;
                 let source_end = source_start + self.width;
                 let logical_y = physical_y * 2;
-                let first_protected = protected_rects
-                    .iter()
-                    .any(|&(_, y0, _, y1)| logical_y >= y0 && logical_y < y1);
-                let second_logical_y = logical_y + 1;
-                let second_protected = protected_rects
-                    .iter()
-                    .any(|&(_, y0, _, y1)| second_logical_y >= y0 && second_logical_y < y1);
-                let first_destination_start = logical_y * self.width;
-                copy_rgb565_row_excluding(
-                    &mut destination[first_destination_start..first_destination_start + self.width],
-                    &self.retarget[source_start..source_end],
-                    logical_y,
-                    protected_rects,
-                );
-                if !first_protected && !second_protected {
-                    let second_destination_start = second_logical_y * self.width;
-                    let (before, after) = destination.split_at_mut(second_destination_start);
-                    after[..self.width].copy_from_slice(
-                        &before[first_destination_start..first_destination_start + self.width],
-                    );
-                } else {
-                    let second_destination_start = second_logical_y * self.width;
+                for row in [logical_y, logical_y + 1] {
+                    let destination_start = row * self.width;
                     copy_rgb565_row_excluding(
-                        &mut destination
-                            [second_destination_start..second_destination_start + self.width],
+                        &mut destination[destination_start..destination_start + self.width],
                         &self.retarget[source_start..source_end],
-                        second_logical_y,
+                        row,
                         protected_rects,
                     );
                 }
