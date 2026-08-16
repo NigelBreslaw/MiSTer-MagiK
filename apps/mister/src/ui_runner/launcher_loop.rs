@@ -9808,18 +9808,25 @@ pub(super) fn run_launcher_loop(
         let mut crt_backdrop_list_overlay_pixels = 0_u32;
         let mut crt_backdrop_chrome_restore_pixels = 0_u32;
         if crt_backdrop_eligible {
-            let snapshot_start = Instant::now();
-            let chrome_pixels = layer_target.snapshot_crt_arcade_chrome(
-                &mut crt_backdrop_chrome,
-                layout.content_rect(),
-                crt_metrics,
-                arcade_list_renderer.dirty_rect(),
-            );
-            crt_backdrop_snapshot_us = snapshot_start
-                .elapsed()
-                .as_micros()
-                .min(u128::from(u64::MAX)) as u64;
-            crt_backdrop_snapshot_pixels = chrome_pixels;
+            // The cached Slint base and its opaque CRT chrome remain stable
+            // through velocity ticks. Refresh the snapshot only after an
+            // actual Slint raster or when entering the eligible route.
+            let refresh_chrome_snapshot =
+                !crt_backdrop_was_eligible || !slint_damage.is_empty() || full_frame_present;
+            if refresh_chrome_snapshot {
+                let snapshot_start = Instant::now();
+                let chrome_pixels = layer_target.snapshot_crt_arcade_chrome(
+                    &mut crt_backdrop_chrome,
+                    layout.content_rect(),
+                    crt_metrics,
+                    arcade_list_renderer.dirty_rect(),
+                );
+                crt_backdrop_snapshot_us = snapshot_start
+                    .elapsed()
+                    .as_micros()
+                    .min(u128::from(u64::MAX)) as u64;
+                crt_backdrop_snapshot_pixels = chrome_pixels;
+            }
             let selected_changed = crt_backdrop_selection != Some(nav.arcade.selected);
             let transition_id = preview
                 .raw_transition_frame()
