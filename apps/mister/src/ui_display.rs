@@ -28,15 +28,6 @@ const RUNTIME_DISPLAY_ENV: &str = "MISTER_MAGIK_RUNTIME_DISPLAY_V1";
 const CRT_FONT_EXPERIMENT_ENV: &str = "MISTER_CRT_FONT_EXPERIMENT";
 const CRT240_COMPOSITION_ENV: &str = "MISTER_CRT240_COMPOSITION";
 
-impl Crt240Composition {
-    pub fn parse(value: Option<&str>) -> Self {
-        match value.map(str::trim).map(str::to_ascii_lowercase).as_deref() {
-            Some("legacy-480") | Some("legacy") => Self::Legacy480,
-            _ => Self::Native240,
-        }
-    }
-}
-
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum CrtFontExperiment {
     #[default]

@@ -35,6 +35,13 @@ pub enum Crt240Composition {
 }
 
 impl Crt240Composition {
+    pub fn parse(value: Option<&str>) -> Self {
+        match value.map(str::trim).map(str::to_ascii_lowercase).as_deref() {
+            Some("legacy-480") | Some("legacy") => Self::Legacy480,
+            _ => Self::Native240,
+        }
+    }
+
     pub const fn label(self) -> &'static str {
         match self {
             Self::Legacy480 => "legacy-480",
