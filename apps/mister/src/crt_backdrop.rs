@@ -826,34 +826,14 @@ fn blend_rgb565_coarse_two_const<const ALPHA: u32, const INVERSE: u32>(
     end: usize,
 ) {
     let mut index = start;
-    let mut previous_source = Rgb565Pixel(u16::MAX);
-    let mut previous_current = Rgb565Pixel(u16::MAX);
-    let mut previous_pixel = Rgb565Pixel(0);
     while index + 1 < end {
-        let pixel = if index > start
-            && previous[index] == previous_source
-            && current[index] == previous_current
-        {
-            previous_pixel
-        } else {
-            blend_rgb565_const::<ALPHA, INVERSE>(previous[index], current[index])
-        };
+        let pixel = blend_rgb565_const::<ALPHA, INVERSE>(previous[index], current[index]);
         destination[index] = pixel;
         destination[index + 1] = pixel;
-        previous_source = previous[index];
-        previous_current = current[index];
-        previous_pixel = pixel;
         index += 2;
     }
     if index < end {
-        destination[index] = if index > start
-            && previous[index] == previous_source
-            && current[index] == previous_current
-        {
-            previous_pixel
-        } else {
-            blend_rgb565_const::<ALPHA, INVERSE>(previous[index], current[index])
-        };
+        destination[index] = blend_rgb565_const::<ALPHA, INVERSE>(previous[index], current[index]);
     }
 }
 
