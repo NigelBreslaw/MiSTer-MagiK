@@ -307,48 +307,20 @@ impl CrtBackdropState {
                 let destination = &mut self.retarget[start..end];
                 let previous = &self.source[start..end];
                 let current = &self.target[start..end];
-                if protected_rects
-                    .iter()
-                    .any(|&(_, y0, _, y1)| row >= y0 && row < y1)
-                {
-                    let mut cursor = 0;
-                    for &(x0, y0, x1, y1) in protected_rects {
-                        if row < y0 || row >= y1 {
-                            continue;
-                        }
-                        let protected_start = x0.min(destination.len());
-                        let protected_end = x1.min(destination.len()).max(protected_start);
-                        blend_rgb565_range(
-                            destination,
-                            previous,
-                            current,
-                            cursor,
-                            protected_start.max(cursor),
-                            alpha_bucket,
-                            coarse_factor,
-                        );
-                        cursor = cursor.max(protected_end);
-                    }
-                    blend_rgb565_range(
-                        destination,
-                        previous,
-                        current,
-                        cursor,
-                        destination.len(),
-                        alpha_bucket,
-                        coarse_factor,
-                    );
-                } else {
-                    blend_rgb565_range(
-                        destination,
-                        previous,
-                        current,
-                        0,
-                        destination.len(),
-                        alpha_bucket,
-                        coarse_factor,
-                    );
-                }
+                // The retarget buffer is stored at the physical backdrop
+                // height. Protected rectangles use logical output-space
+                // coordinates and are applied only during expansion below;
+                // mixing those coordinate systems here leaves stale rows in
+                // the expanded list viewport on 240p.
+                blend_rgb565_range(
+                    destination,
+                    previous,
+                    current,
+                    0,
+                    destination.len(),
+                    alpha_bucket,
+                    coarse_factor,
+                );
             }
             for copy_row in row + 1..(row + coarse_factor).min(self.physical_height) {
                 let source_start = row * row_width;
@@ -1213,5 +1185,25 @@ mod tests {
         assert_eq!(destination[0], destination[4]);
         assert_eq!(destination[2], destination[3]);
         assert_eq!(destination[2], destination[6]);
+    }
+
+    #[test]
+    fn physical_rows_are_blended_before_logical_chrome_exclusion() {
+        let target = vec![Rgb565Pixel(0xffff); 8];
+        let mut backdrop = CrtBackdropState::new_with_heights(4, 4, 2);
+        backdrop.retarget(Some(frame(&target, 4, 2)), Duration::ZERO);
+        let marker = Rgb565Pixel(0x1234);
+        let mut destination = vec![marker; 16];
+        let trace = backdrop.compose_into_coarse_excluding(
+            Duration::from_millis(65),
+            &mut destination,
+            &[(1, 1, 3, 3)],
+        );
+
+        assert!(trace.active);
+        assert_ne!(backdrop.retarget[5], CRT_BACKDROP_BACKGROUND);
+        assert_eq!(destination[4 + 1], marker);
+        assert_eq!(destination[8 + 1], marker);
+        assert_ne!(destination[12 + 1], marker);
     }
 }
