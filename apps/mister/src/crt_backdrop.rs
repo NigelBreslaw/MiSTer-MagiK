@@ -220,6 +220,27 @@ impl CrtBackdropState {
     }
 
     pub fn compose(&mut self, now: Duration) -> CrtBackdropWorkTrace {
+        let mut logical_retarget = std::mem::take(&mut self.logical_retarget);
+        let trace = self.compose_to(now, &mut logical_retarget);
+        self.logical_retarget = logical_retarget;
+        trace
+    }
+
+    /// Compose directly into an external RGB565 frame. The launcher uses this
+    /// path so the logical backdrop does not incur a second full-frame copy.
+    pub fn compose_into(
+        &mut self,
+        now: Duration,
+        destination: &mut [Rgb565Pixel],
+    ) -> CrtBackdropWorkTrace {
+        self.compose_to(now, destination)
+    }
+
+    fn compose_to(
+        &mut self,
+        now: Duration,
+        destination: &mut [Rgb565Pixel],
+    ) -> CrtBackdropWorkTrace {
         let mut trace = CrtBackdropWorkTrace {
             prepare_us: std::mem::take(&mut self.pending_prepare_us),
             prepare_pixels: std::mem::take(&mut self.pending_prepare_pixels),
@@ -227,6 +248,7 @@ impl CrtBackdropState {
         };
         let Some(started) = self.transition_started else {
             trace.alpha_bucket = 32;
+            self.expand_into(destination);
             return trace;
         };
         let elapsed = now.checked_sub(started).unwrap_or_default();
@@ -289,8 +311,30 @@ impl CrtBackdropState {
         } else {
             self.retarget_is_plain = false;
         }
-        self.expand_to_logical();
+        self.expand_into(destination);
         trace
+    }
+
+    fn expand_into(&self, destination: &mut [Rgb565Pixel]) {
+        let required = self.width.saturating_mul(self.height);
+        if destination.len() < required {
+            return;
+        }
+        if self.height == self.physical_height {
+            destination[..required].copy_from_slice(&self.retarget[..required]);
+            return;
+        }
+        for logical_y in 0..self.height {
+            let physical_y = logical_y
+                .saturating_mul(self.physical_height)
+                .checked_div(self.height)
+                .unwrap_or(0)
+                .min(self.physical_height.saturating_sub(1));
+            let logical_start = logical_y * self.width;
+            let physical_start = physical_y * self.width;
+            destination[logical_start..logical_start + self.width]
+                .copy_from_slice(&self.retarget[physical_start..physical_start + self.width]);
+        }
     }
 
     fn expand_to_logical(&mut self) {

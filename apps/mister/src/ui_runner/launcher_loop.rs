@@ -9851,14 +9851,23 @@ pub(super) fn run_launcher_loop(
                     || !crt_backdrop_was_eligible
                     || backdrop.is_transitioning();
                 if compose_full {
-                    crt_backdrop_work_trace =
-                        backdrop.compose(loop_start.saturating_duration_since(run_start));
-                    let copy_start = Instant::now();
-                    let copied = layer_target.compose_crt_backdrop(backdrop.pixels());
-                    crt_backdrop_copy_us =
-                        copy_start.elapsed().as_micros().min(u128::from(u64::MAX)) as u64;
-                    crt_backdrop_copy_pixels =
-                        backdrop.pixels().len().min(u32::MAX as usize) as u32;
+                    let compose_start = Instant::now();
+                    crt_backdrop_work_trace = backdrop.compose_into(
+                        loop_start.saturating_duration_since(run_start),
+                        layer_target.presentation_pixels_mut(),
+                    );
+                    let compose_us = compose_start.elapsed().as_micros();
+                    crt_backdrop_copy_us = compose_us
+                        .saturating_sub(u128::from(crt_backdrop_work_trace.blend_us))
+                        .min(u128::from(u64::MAX))
+                        as u64;
+                    crt_backdrop_copy_pixels = backdrop
+                        .width()
+                        .saturating_mul(backdrop.height())
+                        .min(u32::MAX as usize)
+                        as u32;
+                    let copied = layer_target.presentation_frame_view().pixels().len()
+                        >= crt_backdrop_copy_pixels as usize;
                     if copied {
                         crt_backdrop_full_damage = Some(DirtyRect {
                             x0: 0,
