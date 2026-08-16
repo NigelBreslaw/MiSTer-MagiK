@@ -136,29 +136,6 @@ impl VerticalRgb565Transform {
             return Ok(None);
         };
 
-        // CRT 240p uses an exact 2:1 vertical transform. The general path
-        // recomputes the source row mapping for every destination row; the
-        // fixed-ratio path keeps the same centre-sampled odd source rows while
-        // reducing that arithmetic on the latch hot path.
-        if self.source_height == self.destination_height.saturating_mul(2)
-            && source_rect.x0 == 0
-            && source_rect.x1 == self.width
-            && source.stride_pixels == self.width
-            && destination_stride == self.width
-        {
-            for destination_y in destination_rect.y0..destination_rect.y1 {
-                let source_y = destination_y.saturating_mul(2).saturating_add(1);
-                let source_start = source_y * source.stride_pixels;
-                let destination_start = destination_y * destination_stride;
-                destination[destination_start..destination_start + self.width]
-                    .copy_from_slice(&source.pixels[source_start..source_start + self.width]);
-            }
-            return Ok(Some(VerticalCopyStats {
-                destination_rect,
-                bytes: destination_rect.width() * destination_rect.rows() * 2,
-            }));
-        }
-
         if self.source_height == self.destination_height {
             if source_rect.x0 == 0
                 && source_rect.x1 == self.width
