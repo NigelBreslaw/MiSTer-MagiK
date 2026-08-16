@@ -267,6 +267,19 @@ impl CrtBackdropState {
         protected_rects: &[(usize, usize, usize, usize)],
         coarse_factor: usize,
     ) -> CrtBackdropWorkTrace {
+        if coarse_factor == 2 {
+            self.compose_to_inner::<2>(now, destination, protected_rects)
+        } else {
+            self.compose_to_inner::<1>(now, destination, protected_rects)
+        }
+    }
+
+    fn compose_to_inner<const COARSE_FACTOR: usize>(
+        &mut self,
+        now: Duration,
+        destination: &mut [Rgb565Pixel],
+        protected_rects: &[(usize, usize, usize, usize)],
+    ) -> CrtBackdropWorkTrace {
         let mut trace = CrtBackdropWorkTrace {
             prepare_us: std::mem::take(&mut self.pending_prepare_us),
             prepare_pixels: std::mem::take(&mut self.pending_prepare_pixels),
@@ -295,7 +308,7 @@ impl CrtBackdropState {
         }
         let blend_start = Instant::now();
         let row_width = self.width.max(1);
-        let coarse_factor = coarse_factor.max(1);
+        let coarse_factor = COARSE_FACTOR.max(1);
         let mut row = 0;
         while row < self.physical_height {
             let start = row.saturating_mul(row_width);
@@ -318,35 +331,32 @@ impl CrtBackdropState {
                         }
                         let protected_start = x0.min(destination.len());
                         let protected_end = x1.min(destination.len()).max(protected_start);
-                        blend_rgb565_range(
+                        blend_rgb565_range::<COARSE_FACTOR>(
                             destination,
                             previous,
                             current,
                             cursor,
                             protected_start.max(cursor),
                             alpha_bucket,
-                            coarse_factor,
                         );
                         cursor = cursor.max(protected_end);
                     }
-                    blend_rgb565_range(
+                    blend_rgb565_range::<COARSE_FACTOR>(
                         destination,
                         previous,
                         current,
                         cursor,
                         destination.len(),
                         alpha_bucket,
-                        coarse_factor,
                     );
                 } else {
-                    blend_rgb565_range(
+                    blend_rgb565_range::<COARSE_FACTOR>(
                         destination,
                         previous,
                         current,
                         0,
                         destination.len(),
                         alpha_bucket,
-                        coarse_factor,
                     );
                 }
             }
@@ -712,21 +722,20 @@ const fn rgb565_from_rgb888(r: u8, g: u8, b: u8) -> Rgb565Pixel {
     Rgb565Pixel(((r as u16 >> 3) << 11) | ((g as u16 >> 2) << 5) | (b as u16 >> 3))
 }
 
-fn blend_rgb565_range(
+fn blend_rgb565_range<const COARSE_FACTOR: usize>(
     destination: &mut [Rgb565Pixel],
     previous: &[Rgb565Pixel],
     current: &[Rgb565Pixel],
     start: usize,
     end: usize,
     alpha_bucket: u16,
-    coarse_factor: usize,
 ) {
     let end = end
         .min(destination.len())
         .min(previous.len())
         .min(current.len());
     let start = start.min(end);
-    if coarse_factor <= 1 {
+    if COARSE_FACTOR <= 1 {
         let mut previous_source = Rgb565Pixel(u16::MAX);
         let mut previous_current = Rgb565Pixel(u16::MAX);
         for index in start..end {
@@ -743,7 +752,7 @@ fn blend_rgb565_range(
             previous_current = current[index];
         }
     } else {
-        if coarse_factor == 2 {
+        if COARSE_FACTOR == 2 {
             macro_rules! bucket {
                 ($alpha:literal, $inverse:literal) => {
                     blend_rgb565_coarse_two_const::<$alpha, $inverse>(
@@ -792,7 +801,7 @@ fn blend_rgb565_range(
             } else {
                 blend_rgb565_bucket(previous[index], current[index], alpha_bucket)
             };
-            let block_end = index.saturating_add(coarse_factor).min(end);
+            let block_end = index.saturating_add(COARSE_FACTOR).min(end);
             destination[index..block_end].fill(pixel);
             previous_source = previous[index];
             previous_current = current[index];
