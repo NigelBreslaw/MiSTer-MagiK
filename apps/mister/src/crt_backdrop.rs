@@ -806,15 +806,6 @@ fn copy_rgb565_coarse_two_source(
     end: usize,
 ) {
     let mut index = start;
-    while index + 3 < end {
-        let first = blend_rgb565_const::<ALPHA, INVERSE>(previous[index], current[index]);
-        let second = blend_rgb565_const::<ALPHA, INVERSE>(previous[index + 2], current[index + 2]);
-        destination[index] = first;
-        destination[index + 1] = first;
-        destination[index + 2] = second;
-        destination[index + 3] = second;
-        index += 4;
-    }
     while index + 1 < end {
         let pixel = source[index];
         destination[index] = pixel;
@@ -835,6 +826,15 @@ fn blend_rgb565_coarse_two_const<const ALPHA: u32, const INVERSE: u32>(
     end: usize,
 ) {
     let mut index = start;
+    while index + 3 < end {
+        let first = blend_rgb565_const::<ALPHA, INVERSE>(previous[index], current[index]);
+        let second = blend_rgb565_const::<ALPHA, INVERSE>(previous[index + 2], current[index + 2]);
+        destination[index] = first;
+        destination[index + 1] = first;
+        destination[index + 2] = second;
+        destination[index + 3] = second;
+        index += 4;
+    }
     while index + 1 < end {
         let pixel = blend_rgb565_const::<ALPHA, INVERSE>(previous[index], current[index]);
         destination[index] = pixel;
