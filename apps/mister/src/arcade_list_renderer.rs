@@ -973,25 +973,36 @@ impl ArcadeListRenderer {
                 let destination = &mut cached[destination_start..destination_start + self.width];
                 let selected = viewport_y >= selection_y && viewport_y < selection_bottom;
                 let surface_row = &self.surface[source_start..source_start + self.width];
-                if !selected
-                    && surface_row
-                        .iter()
-                        .all(|pixel| is_arcade_unselected_fill_pixel_with_style(*pixel, self.style))
-                {
-                    destination.copy_from_slice(
-                        &backdrop[destination_start..destination_start + self.width],
-                    );
+                let backdrop_row = &backdrop[destination_start..destination_start + self.width];
+                if selected {
+                    for x in 0..self.width {
+                        destination[x] =
+                            selected_aperture_pixel_with_style(surface_row[x], self.style);
+                    }
                     continue;
                 }
-                for x in 0..self.width {
-                    let pixel = surface_row[x];
-                    destination[x] = if selected {
-                        selected_aperture_pixel_with_style(pixel, self.style)
-                    } else if is_arcade_unselected_fill_pixel_with_style(pixel, self.style) {
-                        backdrop[destination_start + x]
-                    } else {
-                        pixel
-                    };
+
+                // Restore the complete backdrop row with one bulk copy, then
+                // overwrite only contiguous non-fill runs from the list
+                // surface. This keeps the backdrop stationary while reducing
+                // per-pixel stores for sparse glyphs and badges.
+                destination.copy_from_slice(backdrop_row);
+                let mut x = 0;
+                while x < self.width {
+                    while x < self.width
+                        && is_arcade_unselected_fill_pixel_with_style(surface_row[x], self.style)
+                    {
+                        x += 1;
+                    }
+                    let run_start = x;
+                    while x < self.width
+                        && !is_arcade_unselected_fill_pixel_with_style(surface_row[x], self.style)
+                    {
+                        x += 1;
+                    }
+                    if run_start < x {
+                        destination[run_start..x].copy_from_slice(&surface_row[run_start..x]);
+                    }
                 }
             }
             if redraw_selection_frame {
