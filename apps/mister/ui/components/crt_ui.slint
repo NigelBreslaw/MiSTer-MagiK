@@ -42,16 +42,37 @@ export component CrtHeader inherits Rectangle {
             spacing: 0px;
             horizontal-stretch: 1;
 
-            if MisterUi.heading-font >= 32px : Jersey25 {
-                text: root.title;
-                color: CrtTheme.text;
-                overflow: elide;
-            }
-            if MisterUi.heading-font < 32px : Spleen6x12 {
-                text: root.title;
-                color: CrtTheme.text;
-                size: MisterUi.crt-heading-font;
-                overflow: elide;
+            HorizontalLayout {
+                spacing: MisterUi.grid-x;
+
+                if MisterUi.crt-body-font == Spleen6x12Size.px16 : Jersey15 {
+                    text: root.title;
+                    color: CrtTheme.text;
+                    horizontal-stretch: 1;
+                    overflow: elide;
+                }
+                if MisterUi.crt-body-font != Spleen6x12Size.px16
+                    && MisterUi.heading-font >= 32px : Jersey25 {
+                    text: root.title;
+                    color: CrtTheme.text;
+                    horizontal-stretch: 1;
+                    overflow: elide;
+                }
+                if MisterUi.crt-body-font != Spleen6x12Size.px16
+                    && MisterUi.heading-font < 32px : Spleen6x12 {
+                    text: root.title;
+                    color: CrtTheme.text;
+                    size: MisterUi.crt-heading-font;
+                    horizontal-stretch: 1;
+                    overflow: elide;
+                }
+
+                if root.status != "" : Spleen6x12 {
+                    text: root.status;
+                    color: CrtTheme.text;
+                    size: MisterUi.crt-body-font;
+                    horizontal-alignment: left;
+                }
             }
 
             if root.subtitle != "" : Spleen6x12 {
@@ -60,13 +81,6 @@ export component CrtHeader inherits Rectangle {
                 size: MisterUi.crt-body-font;
                 overflow: elide;
             }
-        }
-
-        Spleen6x12 {
-            text: root.status;
-            color: CrtTheme.text;
-            size: MisterUi.crt-body-font;
-            horizontal-alignment: right;
         }
     }
 }
