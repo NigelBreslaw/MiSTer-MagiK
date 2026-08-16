@@ -849,14 +849,16 @@ const fn blend_rgb565_pair_const<const ALPHA: u32, const INVERSE: u32>(
     from_high: Rgb565Pixel,
     to_high: Rgb565Pixel,
 ) -> (Rgb565Pixel, Rgb565Pixel) {
-    let from = from_low.0 as u64 | ((from_high.0 as u64) << 32);
-    let to = to_low.0 as u64 | ((to_high.0 as u64) << 32);
+    let from = u64::from(from_low.0) | (u64::from(from_high.0) << 32);
+    let to = u64::from(to_low.0) | (u64::from(to_high.0) << 32);
     let red_blue_mask = 0xf81f_f81f_u64;
     let green_mask = 0x07e0_07e0_u64;
-    let red_blue =
-        (((from & red_blue_mask) * INVERSE as u64 + (to & red_blue_mask) * ALPHA as u64) >> 5)
-            & red_blue_mask;
-    let green = (((from & green_mask) * INVERSE as u64 + (to & green_mask) * ALPHA as u64) >> 5)
+    let red_blue = (((from & red_blue_mask) * u64::from(INVERSE)
+        + (to & red_blue_mask) * u64::from(ALPHA))
+        >> 5)
+        & red_blue_mask;
+    let green = (((from & green_mask) * u64::from(INVERSE) + (to & green_mask) * u64::from(ALPHA))
+        >> 5)
         & green_mask;
     let blended = red_blue | green;
     (
