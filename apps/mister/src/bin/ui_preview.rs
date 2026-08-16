@@ -1534,7 +1534,7 @@ mod macos {
                         games,
                         self.launcher_nav.arcade.selected,
                         self.launcher_nav.arcade.visual_index,
-                        false,
+                        true,
                     );
                 } else {
                     self.arcade_layer.compose(
