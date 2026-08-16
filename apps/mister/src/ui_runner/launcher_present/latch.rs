@@ -144,6 +144,34 @@ impl LatchFrameBuffers for PluginLatchFrameBuffers {
             .map_err(|e| e.to_string())
     }
 
+    fn copy_physical_full(
+        buffer: &mut Self::Buffer,
+        cached: CachedFrameView<'_>,
+    ) -> Result<LatchCopyResult, String> {
+        if cached.width() != buffer.width()
+            || cached.height() != buffer.height().saturating_mul(2)
+            || cached.stride() != cached.width()
+            || buffer.stride_pixels() != buffer.width()
+        {
+            return Err("physical CRT copy requires an exact 2:1 packed frame".to_string());
+        }
+        let width = buffer.width();
+        let height = buffer.height();
+        let stride = buffer.stride_pixels();
+        let destination = buffer.pixels_mut();
+        for destination_y in 0..height {
+            let source_y = destination_y.saturating_mul(2).saturating_add(1);
+            let source_start = source_y * cached.stride();
+            let destination_start = destination_y * stride;
+            destination[destination_start..destination_start + width]
+                .copy_from_slice(&cached.pixels()[source_start..source_start + width]);
+        }
+        Ok(LatchCopyResult {
+            bytes: width * height * 2,
+            path: LatchCopyPath::VerticalFull,
+        })
+    }
+
     fn publish_writes(buffer: &mut Self::Buffer) {
         buffer.publish_writes();
     }
@@ -600,6 +628,7 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
         hardware: &mut H,
         _display_session: &mut LauncherDisplaySession,
         profile_latch_phases: bool,
+        direct_physical_copy: bool,
         apply_overlays: F,
     ) -> Result<FpgaVblankLatchHiddenPresentStats, LatchFailure>
     where
@@ -698,7 +727,12 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
         let mut copied_bytes = 0usize;
         let mut copy_path = LatchCopyPath::IdentityFull;
         for rect in plan.restore_rects.iter() {
-            match B::copy_rect(buffer, cached, rect) {
+            let copy_result = if direct_physical_copy && rect == self.full_rect() {
+                B::copy_physical_full(buffer, cached)
+            } else {
+                B::copy_rect(buffer, cached, rect)
+            };
+            match copy_result {
                 Ok(result) => {
                     copied_bytes = copied_bytes.saturating_add(result.bytes);
                     if result.path != LatchCopyPath::IdentityFull {
@@ -1348,6 +1382,25 @@ mod tests {
             })
         }
 
+        fn copy_physical_full(
+            buffer: &mut Self::Buffer,
+            cached: CachedFrameView<'_>,
+        ) -> Result<LatchCopyResult, String> {
+            buffer.events.borrow_mut().push(TestEvent::Copy);
+            buffer.copy_count += 1;
+            for destination_y in 0..HEIGHT {
+                let source_y = destination_y * 2 + 1;
+                let source_start = source_y * WIDTH;
+                let destination_start = destination_y * WIDTH;
+                buffer.pixels[destination_start..destination_start + WIDTH]
+                    .copy_from_slice(&cached.pixels()[source_start..source_start + WIDTH]);
+            }
+            Ok(LatchCopyResult {
+                bytes: WIDTH * HEIGHT * 2,
+                path: LatchCopyPath::VerticalFull,
+            })
+        }
+
         fn publish_writes(buffer: &mut Self::Buffer) {
             buffer.events.borrow_mut().push(TestEvent::Publish);
         }
@@ -1577,6 +1630,7 @@ mod tests {
             hardware,
             display,
             false,
+            false,
             |_, _| Ok(()),
         )
     }
@@ -1603,6 +1657,7 @@ mod tests {
                 frame_plan(),
                 &mut hardware,
                 &mut display,
+                false,
                 false,
                 |_, _| {
                     events.borrow_mut().push(TestEvent::Overlay);
@@ -1848,6 +1903,7 @@ mod tests {
                 frame_plan(),
                 &mut hardware,
                 &mut display,
+                false,
                 false,
                 |hidden, _| {
                     hidden.pixels[0] = Rgb565Pixel(0x5aa5);
