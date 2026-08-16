@@ -832,14 +832,31 @@ fn copy_rgb565_row_excluding(
     protected_rects: &[(usize, usize, usize, usize)],
 ) {
     let width = destination.len().min(source.len());
+    let mut overlapping = None;
+    let mut overlap_count = 0usize;
+    for &(x0, y0, x1, y1) in protected_rects {
+        if row >= y0 && row < y1 {
+            overlap_count += 1;
+            if overlap_count == 1 {
+                overlapping = Some((x0, x1));
+            }
+        }
+    }
     // Most backdrop rows do not intersect the opaque chrome.  Keep that
     // common path to one slice copy instead of walking every protected rect.
-    if !protected_rects
-        .iter()
-        .any(|&(_, y0, _, y1)| row >= y0 && row < y1)
-    {
-        destination[..width].copy_from_slice(&source[..width]);
-        return;
+    match (overlap_count, overlapping) {
+        (0, _) => {
+            destination[..width].copy_from_slice(&source[..width]);
+            return;
+        }
+        (1, Some((x0, x1))) => {
+            let protected_start = x0.min(width);
+            let protected_end = x1.min(width).max(protected_start);
+            destination[..protected_start].copy_from_slice(&source[..protected_start]);
+            destination[protected_end..width].copy_from_slice(&source[protected_end..width]);
+            return;
+        }
+        _ => {}
     }
     let mut cursor = 0;
     for &(x0, y0, x1, y1) in protected_rects {
