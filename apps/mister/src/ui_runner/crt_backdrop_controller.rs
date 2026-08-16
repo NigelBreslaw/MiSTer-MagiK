@@ -3,10 +3,9 @@
 
 //! Launcher-owned CRT backdrop preparation, caching, and frame composition.
 
-use super::launcher_compositor::crt_arcade_chrome_rects;
 use crate::crt_backdrop::{
     BackdropSource, CrtBackdropState, CrtBackdropWorkTrace, PreparedCrtBackdrop,
-    prepare_dimmed_rgb565_target_with_maps,
+    prepare_dimmed_rgb565_target_with_maps, product_chrome_rects,
 };
 use crate::ui_display::{CrtContentRect, CrtUiMetrics, UiDisplay};
 use slint::platform::software_renderer::Rgb565Pixel;
@@ -336,11 +335,11 @@ impl CrtBackdropController {
             || self.state.is_transitioning();
         let mut frame = CrtBackdropFrame::default();
         if compose_full {
-            let protected = crt_arcade_chrome_rects(content, metrics)
-                .map(|rect| (rect.x0, rect.y0, rect.x1, rect.y1));
-            frame.trace = self
-                .state
-                .compose_into_coarse_excluding(now, destination, &protected);
+            frame.trace = self.state.compose_into_coarse_excluding(
+                now,
+                destination,
+                &product_chrome_rects(content, metrics),
+            );
             frame.full_damage = destination.len() >= self.width().saturating_mul(self.height());
         }
         self.was_eligible = true;

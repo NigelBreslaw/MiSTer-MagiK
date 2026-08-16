@@ -4,7 +4,7 @@
 //! Host-neutral RGB565 composition for low-resolution CRT screenshot backdrops.
 
 use crate::preview_transition::blend_rgb565_bucket;
-use crate::ui_display::{ResolvedOutputRoute, UiDisplay};
+use crate::ui_display::{CrtContentRect, CrtUiMetrics, ResolvedOutputRoute, UiDisplay};
 use crate::visual_composition::{PreviewFrame, PreviewPixels};
 use slint::platform::software_renderer::Rgb565Pixel;
 use std::time::{Duration, Instant};
@@ -270,6 +270,20 @@ impl CrtBackdropState {
         protected_rects: &[(usize, usize, usize, usize)],
     ) -> CrtBackdropWorkTrace {
         self.compose_to(now, destination, protected_rects, 2)
+    }
+
+    /// Compose the fixed production CRT backdrop directly into a frame while
+    /// preserving the opaque Arcade header and footer.
+    pub fn compose_product_into(
+        &mut self,
+        now: Duration,
+        destination: &mut [Rgb565Pixel],
+        content: CrtContentRect,
+        metrics: CrtUiMetrics,
+    ) -> CrtBackdropWorkTrace {
+        let protected =
+            product_chrome_rects(content, metrics).map(|rect| (rect.0, rect.1, rect.2, rect.3));
+        self.compose_into_coarse_excluding(now, destination, &protected)
     }
 
     fn compose_to(
@@ -971,6 +985,27 @@ fn copy_rgb565_row_excluding(
 
 fn duration_us(duration: Duration) -> u64 {
     duration.as_micros().min(u64::MAX as u128) as u64
+}
+
+pub fn product_chrome_rects(
+    content: CrtContentRect,
+    metrics: CrtUiMetrics,
+) -> [(usize, usize, usize, usize); 2] {
+    let grid_x = metrics.grid_x.max(1) as usize;
+    let grid_y = metrics.grid_y.max(1) as usize;
+    let header = (
+        content.x + grid_x * 2,
+        content.y + grid_y * 2,
+        content.x + content.width - grid_x * 2,
+        content.y + grid_y * 2 + metrics.header_height.max(1) as usize,
+    );
+    let footer = (
+        header.0,
+        content.y + content.height - metrics.footer_height.max(1) as usize - grid_y * 2,
+        header.2,
+        content.y + content.height - grid_y * 2,
+    );
+    [header, footer]
 }
 
 #[cfg(test)]

@@ -446,7 +446,6 @@ mod macos {
         arcade_layer: ArcadeVisualLayer,
         crt_backdrop: Option<CrtBackdropState>,
         crt_backdrop_target_key: Option<Option<String>>,
-        crt_chrome: Vec<Rgb565Pixel>,
         preview_transition: PreviewTransitionController<()>,
         preview_compositor: Rgb565PreviewTransitionCompositor,
         preview_previous_index: Option<usize>,
@@ -644,7 +643,6 @@ mod macos {
                 arcade_layer: ArcadeVisualLayer::new(frame_width, frame_height),
                 crt_backdrop: CrtBackdropState::for_display(&display),
                 crt_backdrop_target_key: None,
-                crt_chrome: vec![Rgb565Pixel(0); frame_width.saturating_mul(frame_height)],
                 preview_transition: PreviewTransitionController::default(),
                 preview_compositor: Rgb565PreviewTransitionCompositor::new(
                     frame_width,
@@ -1502,13 +1500,16 @@ mod macos {
                     && matches!(self.scenario, Scenario::Arcade | Scenario::ArcadeCrossfade);
                 if low_resolution_backdrop {
                     self.sync_crt_backdrop_target(false);
-                    self.crt_chrome
-                        .copy_from_slice(self.frame_target.cached_565());
+                    let display = self.display_profile.display();
+                    let layout = UiLayoutGeometry::for_display(&display, self.orientation);
+                    let metrics = CrtUiMetrics::for_display(&display);
                     if let Some(backdrop) = self.crt_backdrop.as_mut() {
-                        let _ = backdrop.compose(self.fixed_time.get());
-                        self.frame_target
-                            .cached_565_mut()
-                            .copy_from_slice(backdrop.pixels());
+                        let _ = backdrop.compose_product_into(
+                            self.fixed_time.get(),
+                            self.frame_target.cached_565_mut(),
+                            layout.content_rect(),
+                            metrics,
+                        );
                     }
                 }
                 let games = self
@@ -1533,9 +1534,8 @@ mod macos {
                         games,
                         self.launcher_nav.arcade.selected,
                         self.launcher_nav.arcade.visual_index,
-                        true,
+                        false,
                     );
-                    self.restore_crt_arcade_chrome(layout);
                 } else {
                     self.arcade_layer.compose(
                         &mut self.frame_target,
@@ -1694,40 +1694,6 @@ mod macos {
                 let _ = backdrop.compose(now + CRT_BACKDROP_FADE_DURATION);
             }
             self.crt_backdrop_target_key = Some(target_key);
-        }
-
-        fn restore_crt_arcade_chrome(&mut self, layout: UiLayoutGeometry) {
-            let display = self.display_profile.display();
-            let metrics = CrtUiMetrics::for_display(&display);
-            let content = layout.content_rect();
-            let header = mister_magik_fb::framebuffer::target::DirtyRect {
-                x0: content.x + metrics.grid_x.max(1) as usize * 2,
-                y0: content.y + metrics.grid_y.max(1) as usize * 2,
-                x1: content.x + content.width - metrics.grid_x.max(1) as usize * 2,
-                y1: content.y
-                    + metrics.grid_y.max(1) as usize * 2
-                    + metrics.header_height.max(1) as usize,
-            };
-            let footer = mister_magik_fb::framebuffer::target::DirtyRect {
-                x0: header.x0,
-                y0: content.y + content.height
-                    - metrics.footer_height.max(1) as usize
-                    - metrics.grid_y.max(1) as usize * 2,
-                x1: header.x1,
-                y1: content.y + content.height - metrics.grid_y.max(1) as usize * 2,
-            };
-            copy_logical_rect(
-                self.frame_target.cached_565_mut(),
-                &self.crt_chrome,
-                layout.output_layout(),
-                header,
-            );
-            copy_logical_rect(
-                self.frame_target.cached_565_mut(),
-                &self.crt_chrome,
-                layout.output_layout(),
-                footer,
-            );
         }
 
         fn request_selected_preview(&mut self) {
@@ -3932,22 +3898,6 @@ mod macos {
             source_height: screenshot.height,
             display_width: 320,
             display_height: 240,
-        }
-    }
-
-    fn copy_logical_rect(
-        destination: &mut [Rgb565Pixel],
-        source: &[Rgb565Pixel],
-        layout: mister_magik_framebuffer_scenes::Rgb565OutputLayout,
-        rect: mister_magik_fb::framebuffer::target::DirtyRect,
-    ) {
-        for y in rect.y0.min(layout.logical_height())..rect.y1.min(layout.logical_height()) {
-            for x in rect.x0.min(layout.logical_width())..rect.x1.min(layout.logical_width()) {
-                let offset = layout.physical_offset(x, y);
-                if offset < destination.len() && offset < source.len() {
-                    destination[offset] = source[offset];
-                }
-            }
         }
     }
 
