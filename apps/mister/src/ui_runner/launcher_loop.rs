@@ -5187,7 +5187,6 @@ pub(super) fn run_launcher_loop(
     let mut crt_backdrop_transition_id = None;
     let mut crt_backdrop_prepared_revision = 0_u64;
     let mut crt_backdrop_was_eligible = false;
-    let mut crt_backdrop_chrome = Vec::new();
     let mut launcher_preview_version = 1u64;
     let mut launcher_arcade_version = 1u64;
     let mut launcher_arcade_scroll_offset = 0i64;
@@ -9813,25 +9812,6 @@ pub(super) fn run_launcher_loop(
         if crt_backdrop_eligible {
             let crt_backdrop_profile_pmu =
                 mister_magik_perf_events::sampled_span("gui.custom.crt-backdrop-pipeline");
-            // The cached Slint base and its opaque CRT chrome remain stable
-            // through velocity ticks. Refresh the snapshot only after an
-            // actual Slint raster or when entering the eligible route.
-            let refresh_chrome_snapshot =
-                !crt_backdrop_was_eligible || !slint_damage.is_empty() || full_frame_present;
-            if refresh_chrome_snapshot {
-                let snapshot_start = Instant::now();
-                let chrome_pixels = layer_target.snapshot_crt_arcade_chrome(
-                    &mut crt_backdrop_chrome,
-                    layout.content_rect(),
-                    crt_metrics,
-                    arcade_list_renderer.dirty_rect(),
-                );
-                crt_backdrop_snapshot_us = snapshot_start
-                    .elapsed()
-                    .as_micros()
-                    .min(u128::from(u64::MAX)) as u64;
-                crt_backdrop_snapshot_pixels = chrome_pixels;
-            }
             let selected_changed = crt_backdrop_selection != Some(nav.arcade.selected);
             let transition_id = preview
                 .raw_transition_frame()
@@ -10259,7 +10239,7 @@ pub(super) fn run_launcher_loop(
                     let crt_overlay_profile_pmu =
                         mister_magik_perf_events::sampled_span("gui.custom.crt-list-overlay");
                     let list_start = Instant::now();
-                    let composed = crt_backdrop.as_ref().is_some_and(|backdrop| {
+                    let _composed = crt_backdrop.as_ref().is_some_and(|backdrop| {
                         layer_target.compose_arcade_list_over_backdrop(
                             &mut arcade_list_renderer,
                             backdrop.pixels(),
@@ -10273,19 +10253,6 @@ pub(super) fn run_launcher_loop(
                         .saturating_mul(layout.content_rect().height)
                         .min(u32::MAX as usize)
                         as u32;
-                    if composed {
-                        let chrome_start = Instant::now();
-                        layer_target.restore_crt_arcade_chrome(
-                            &crt_backdrop_chrome,
-                            layout.content_rect(),
-                            crt_metrics,
-                            arcade_list_renderer.dirty_rect(),
-                        );
-                        crt_backdrop_chrome_restore_us =
-                            chrome_start.elapsed().as_micros().min(u128::from(u64::MAX)) as u64;
-                        crt_backdrop_chrome_restore_pixels =
-                            crt_backdrop_chrome.len().min(u32::MAX as usize) as u32;
-                    }
                     drop(crt_overlay_profile_pmu);
                     if layout.is_portrait() {
                         physical_arcade_rect = Some(layout.logical_rect_to_composition(rect));
