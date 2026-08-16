@@ -193,9 +193,9 @@ export component CrtCard inherits Rectangle {
             vertical-alignment: center;
         }
 
-        VerticalLayout {
-            spacing: 0px;
-            alignment: center;
+        HorizontalLayout {
+            spacing: MisterUi.grid-x;
+            cross-axis-alignment: center;
             horizontal-stretch: 1;
 
             if MisterUi.card-title-font >= 24px
@@ -206,6 +206,7 @@ export component CrtCard inherits Rectangle {
                     : root.status == MenuItemStatus.update-failed ? CrtTheme.warning
                     : root.status == MenuItemStatus.scanning ? CrtTheme.accent
                     : CrtTheme.text;
+                horizontal-stretch: root.detail == "" ? 1 : 0;
                 overflow: elide;
                 vertical-alignment: center;
             }
@@ -217,6 +218,7 @@ export component CrtCard inherits Rectangle {
                     : root.status == MenuItemStatus.update-failed ? CrtTheme.warning
                     : root.status == MenuItemStatus.scanning ? CrtTheme.accent
                     : CrtTheme.text;
+                horizontal-stretch: root.detail == "" ? 1 : 0;
                 overflow: elide;
                 vertical-alignment: center;
             }
@@ -228,6 +230,7 @@ export component CrtCard inherits Rectangle {
                     : root.status == MenuItemStatus.scanning ? CrtTheme.accent
                     : CrtTheme.text;
                 size: MisterUi.crt-card-title-font;
+                horizontal-stretch: root.detail == "" ? 1 : 0;
                 overflow: elide;
                 vertical-alignment: center;
             }
