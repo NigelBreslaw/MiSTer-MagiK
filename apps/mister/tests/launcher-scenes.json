@@ -2,6 +2,81 @@
   "schema": "mister-magik-launcher-scenes-v1",
   "scenes": [
     {
+      "id": "crt-240p-arcade",
+      "profile": "crt-240p",
+      "scenario": "arcade",
+      "content": "fixtures",
+      "orientation": "normal",
+      "refresh_hz": 60,
+      "frame": 0,
+      "scan": false,
+      "download": false,
+      "transition": null
+    },
+    {
+      "id": "crt-240p-catalog-scan",
+      "profile": "crt-240p",
+      "scenario": "catalog-scan",
+      "content": "fixtures",
+      "orientation": "normal",
+      "refresh_hz": 60,
+      "frame": 0,
+      "scan": false,
+      "download": false,
+      "transition": null
+    },
+    {
+      "id": "crt-240p-controller-setup",
+      "profile": "crt-240p",
+      "scenario": "controller-setup",
+      "content": "fixtures",
+      "orientation": "normal",
+      "refresh_hz": 60,
+      "frame": 0,
+      "scan": false,
+      "download": false,
+      "transition": null
+    },
+    {
+      "id": "crt-240p-home",
+      "profile": "crt-240p",
+      "scenario": "home",
+      "content": "fixtures",
+      "orientation": "normal",
+      "refresh_hz": 60,
+      "frame": 0,
+      "scan": false,
+      "download": false,
+      "transition": null
+    },
+    {
+      "id": "crt-240p-navigation-transition-midpoint",
+      "profile": "crt-240p",
+      "scenario": "navigation-transition-midpoint",
+      "content": "fixtures",
+      "orientation": "normal",
+      "refresh_hz": 60,
+      "frame": 17,
+      "scan": false,
+      "download": false,
+      "transition": {
+        "edge": "home-arcade",
+        "duration_ms": 600
+      }
+    },
+    {
+      "id": "crt-240p-settings",
+      "profile": "crt-240p",
+      "scenario": "settings",
+      "content": "fixtures",
+      "orientation": "normal",
+      "refresh_hz": 60,
+      "frame": 0,
+      "scan": false,
+      "download": false,
+      "transition": null
+    },
+    {
       "id": "crt-arcade",
       "profile": "crt-480p",
       "scenario": "arcade",

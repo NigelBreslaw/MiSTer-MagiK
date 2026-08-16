@@ -10,7 +10,7 @@ pub(super) const LAUNCHER_SCENE_MANIFEST_JSON: &str =
     include_str!("../../../tests/launcher-scenes.json");
 
 const SCHEMA: &str = "mister-magik-launcher-scenes-v1";
-const EXPECTED_SCENE_COUNT: usize = 12;
+const EXPECTED_SCENE_COUNT: usize = 18;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -38,6 +38,8 @@ pub(super) struct LauncherScene {
 #[serde(rename_all = "kebab-case")]
 pub(super) enum SceneProfile {
     Hdmi,
+    #[serde(rename = "crt-240p")]
+    Crt240p,
     #[serde(rename = "crt-480p")]
     Crt480p,
 }
@@ -46,6 +48,7 @@ impl SceneProfile {
     const fn id(self) -> &'static str {
         match self {
             Self::Hdmi => "hdmi",
+            Self::Crt240p => "crt-240p",
             Self::Crt480p => "crt",
         }
     }
@@ -177,7 +180,11 @@ fn validate(manifest: &LauncherSceneManifest) -> Result<(), String> {
         }
     }
 
-    for profile in [SceneProfile::Hdmi, SceneProfile::Crt480p] {
+    for profile in [
+        SceneProfile::Hdmi,
+        SceneProfile::Crt240p,
+        SceneProfile::Crt480p,
+    ] {
         for scenario in [
             SceneScenario::Home,
             SceneScenario::Arcade,

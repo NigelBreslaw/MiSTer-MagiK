@@ -2727,6 +2727,9 @@ mod macos {
                 serde_json::from_slice(&std::fs::read(&provenance_path)?)?;
             let (expected_width, expected_height) = match scene.profile {
                 SceneProfile::Hdmi => (HDMI_FRAME_WIDTH as u64, HDMI_FRAME_HEIGHT as u64),
+                // CRT-240p renders a 640x480 logical surface before the
+                // output plan expands it to the physical 640x240 mode.
+                SceneProfile::Crt240p => (640, 480),
                 SceneProfile::Crt480p => (640, 480),
             };
             if provenance.get("width").and_then(serde_json::Value::as_u64) != Some(expected_width)
@@ -2792,6 +2795,7 @@ mod macos {
         };
         let profile = match scene.profile {
             SceneProfile::Hdmi => "hdmi",
+            SceneProfile::Crt240p => "crt-240p",
             SceneProfile::Crt480p => "crt-480p",
         };
         let mut arguments = [
