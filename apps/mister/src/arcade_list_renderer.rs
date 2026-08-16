@@ -1080,65 +1080,34 @@ impl ArcadeListRenderer {
                     }
                 }
             }
-            if backdrop_is_fresh {
-                for viewport_y in 0..self.visible_height {
-                    let source_y = (self.surface_y + viewport_y) % self.visible_height;
-                    let source_start = source_y * self.width;
-                    let destination_start = (self.geometry.y + viewport_y)
-                        * output_layout.physical_stride()
-                        + self.geometry.x;
-                    let destination =
-                        &mut cached[destination_start..destination_start + self.width];
-                    let selected = viewport_y >= selection_y && viewport_y < selection_bottom;
-                    let surface_row = &self.surface[source_start..source_start + self.width];
-                    if selected && self.style.crt_palette {
-                        destination.fill(self.style.selection_fill_565);
-                        for &(run_start, run_end) in &self.surface_selected_text_runs[source_y] {
-                            destination[run_start..run_end].fill(self.style.selection_text_565);
-                        }
-                    } else if selected {
-                        for x in 0..self.width {
-                            destination[x] =
-                                selected_aperture_pixel_with_style(surface_row[x], self.style);
-                        }
-                    } else {
-                        for &(run_start, run_end) in &self.surface_nonfill_runs[source_y] {
-                            destination[run_start..run_end]
-                                .copy_from_slice(&surface_row[run_start..run_end]);
-                        }
+            for viewport_y in 0..self.visible_height {
+                let source_y = (self.surface_y + viewport_y) % self.visible_height;
+                let source_start = source_y * self.width;
+                let destination_start = (self.geometry.y + viewport_y)
+                    * output_layout.physical_stride()
+                    + self.geometry.x;
+                let destination = &mut cached[destination_start..destination_start + self.width];
+                let selected = viewport_y >= selection_y && viewport_y < selection_bottom;
+                let surface_row = &self.surface[source_start..source_start + self.width];
+                if selected && self.style.crt_palette {
+                    destination.fill(self.style.selection_fill_565);
+                    for &(run_start, run_end) in &self.surface_selected_text_runs[source_y] {
+                        destination[run_start..run_end].fill(self.style.selection_text_565);
                     }
-                }
-            } else {
-                for viewport_y in 0..self.visible_height {
-                    let source_y = (self.surface_y + viewport_y) % self.visible_height;
-                    let source_start = source_y * self.width;
-                    let destination_start = (self.geometry.y + viewport_y)
-                        * output_layout.physical_stride()
-                        + self.geometry.x;
-                    let destination =
-                        &mut cached[destination_start..destination_start + self.width];
-                    let selected = viewport_y >= selection_y && viewport_y < selection_bottom;
-                    let surface_row = &self.surface[source_start..source_start + self.width];
-                    if selected && self.style.crt_palette {
-                        destination.fill(self.style.selection_fill_565);
-                        for &(run_start, run_end) in &self.surface_selected_text_runs[source_y] {
-                            destination[run_start..run_end].fill(self.style.selection_text_565);
-                        }
-                    } else if selected {
-                        for x in 0..self.width {
-                            destination[x] =
-                                selected_aperture_pixel_with_style(surface_row[x], self.style);
-                        }
-                    } else {
-                        if !previous_valid {
-                            destination.copy_from_slice(
-                                &backdrop[destination_start..destination_start + self.width],
-                            );
-                        }
-                        for &(run_start, run_end) in &self.surface_nonfill_runs[source_y] {
-                            destination[run_start..run_end]
-                                .copy_from_slice(&surface_row[run_start..run_end]);
-                        }
+                } else if selected {
+                    for x in 0..self.width {
+                        destination[x] =
+                            selected_aperture_pixel_with_style(surface_row[x], self.style);
+                    }
+                } else {
+                    if !previous_valid && !backdrop_is_fresh {
+                        destination.copy_from_slice(
+                            &backdrop[destination_start..destination_start + self.width],
+                        );
+                    }
+                    for &(run_start, run_end) in &self.surface_nonfill_runs[source_y] {
+                        destination[run_start..run_end]
+                            .copy_from_slice(&surface_row[run_start..run_end]);
                     }
                 }
             }
