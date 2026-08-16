@@ -284,6 +284,7 @@ pub struct ArcadeListRenderer {
     favourite_launch_refs: HashSet<String>,
     surface: Vec<Rgb565Pixel>,
     surface_nonfill_runs: Vec<Vec<(usize, usize)>>,
+    surface_selected_text_runs: Vec<Vec<(usize, usize)>>,
     band_scratch: Vec<Pixel>,
     selection_invert_scratch: Vec<Rgb565Pixel>,
     selection_horizontal: Vec<Rgb565Pixel>,
@@ -383,6 +384,7 @@ impl ArcadeListRenderer {
             favourite_launch_refs: HashSet::new(),
             surface: vec![style.background_565; ARCADE_LIST_W * ARCADE_LIST_H],
             surface_nonfill_runs: vec![Vec::new(); ARCADE_LIST_H],
+            surface_selected_text_runs: vec![Vec::new(); ARCADE_LIST_H],
             band_scratch: Vec::new(),
             selection_invert_scratch: Vec::new(),
             selection_horizontal: Vec::new(),
@@ -440,6 +442,7 @@ impl ArcadeListRenderer {
                 self.width = geometry.width;
                 self.surface = vec![self.style.background_565; self.width * ARCADE_LIST_H];
                 self.surface_nonfill_runs = vec![Vec::new(); ARCADE_LIST_H];
+                self.surface_selected_text_runs = vec![Vec::new(); ARCADE_LIST_H];
                 self.row_cache.clear();
                 self.row_fingerprint_cache.clear();
             }
@@ -843,7 +846,9 @@ impl ArcadeListRenderer {
         }
         let surface_row = &self.surface[row * self.width..(row + 1) * self.width];
         let mut runs = std::mem::take(&mut self.surface_nonfill_runs[row]);
+        let mut selected_text_runs = std::mem::take(&mut self.surface_selected_text_runs[row]);
         runs.clear();
+        selected_text_runs.clear();
         let mut x = 0;
         while x < self.width {
             while x < self.width
@@ -861,7 +866,25 @@ impl ArcadeListRenderer {
                 runs.push((run_start, x));
             }
         }
+        let mut x = 0;
+        while x < self.width {
+            while x < self.width
+                && is_arcade_row_background_pixel_with_style(surface_row[x], self.style)
+            {
+                x += 1;
+            }
+            let run_start = x;
+            while x < self.width
+                && !is_arcade_row_background_pixel_with_style(surface_row[x], self.style)
+            {
+                x += 1;
+            }
+            if run_start < x {
+                selected_text_runs.push((run_start, x));
+            }
+        }
         self.surface_nonfill_runs[row] = runs;
+        self.surface_selected_text_runs[row] = selected_text_runs;
     }
 
     fn next_row_cache_epoch(&mut self) -> u64 {
@@ -1029,9 +1052,9 @@ impl ArcadeListRenderer {
                 let selected = viewport_y >= selection_y && viewport_y < selection_bottom;
                 let surface_row = &self.surface[source_start..source_start + self.width];
                 if selected {
-                    for x in 0..self.width {
-                        destination[x] =
-                            selected_aperture_pixel_with_style(surface_row[x], self.style);
+                    destination.fill(self.style.selection_fill_565);
+                    for &(run_start, run_end) in &self.surface_selected_text_runs[source_y] {
+                        destination[run_start..run_end].fill(self.style.selection_text_565);
                     }
                 } else {
                     if !backdrop_is_fresh {
