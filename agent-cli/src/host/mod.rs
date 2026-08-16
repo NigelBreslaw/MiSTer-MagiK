@@ -25,6 +25,8 @@ mod agent_client;
 mod arcade_database;
 mod crt_qualification;
 mod discovery;
+#[allow(dead_code)]
+mod framebuffer_views;
 mod installed_layout;
 mod latch_v5_qualification;
 mod launcher_automation;
