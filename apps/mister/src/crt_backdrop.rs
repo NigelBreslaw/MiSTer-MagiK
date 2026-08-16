@@ -257,7 +257,7 @@ impl CrtBackdropState {
         destination: &mut [Rgb565Pixel],
         protected_rects: &[(usize, usize, usize, usize)],
     ) -> CrtBackdropWorkTrace {
-        self.compose_to(now, destination, protected_rects, 2)
+        self.compose_to(now, destination, protected_rects, 3)
     }
 
     fn compose_to(
