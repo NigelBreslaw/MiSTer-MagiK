@@ -765,10 +765,23 @@ fn blend_rgb565_range(
             return;
         }
         let mut index = start;
+        let mut previous_source = Rgb565Pixel(u16::MAX);
+        let mut previous_current = Rgb565Pixel(u16::MAX);
+        let mut previous_pixel = Rgb565Pixel(0);
         while index < end {
-            let pixel = blend_rgb565_bucket(previous[index], current[index], alpha_bucket);
+            let pixel = if index > start
+                && previous[index] == previous_source
+                && current[index] == previous_current
+            {
+                previous_pixel
+            } else {
+                blend_rgb565_bucket(previous[index], current[index], alpha_bucket)
+            };
             let block_end = index.saturating_add(coarse_factor).min(end);
             destination[index..block_end].fill(pixel);
+            previous_source = previous[index];
+            previous_current = current[index];
+            previous_pixel = pixel;
             index = block_end;
         }
     }
