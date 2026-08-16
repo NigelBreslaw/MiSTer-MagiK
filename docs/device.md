@@ -149,6 +149,12 @@ For the first CRT font A/B review, use the attended row-phase harness:
 It switches to 240p for the pair, restores the prior route afterward, and
 writes labeled A/B bundles plus a side-by-side true-4:3 comparison.
 
+For the font-only coverage experiment, restart the launcher with
+`scripts/agent device launcher restart --attended --crt-font-experiment coverage-max`,
+open the Arcade list manually, and capture only after the operator confirms the
+fixture is visible. The one-shot experiment does not refresh or replace the
+catalog.
+
 On macOS, `scripts/agent capture usb-video [--output PATH]` captures the first
 nonblank 1920x1080 frame from the fixed `USB Video` input. The native
 AVFoundation path writes JPEG, refuses to overwrite an explicit output, and

@@ -82,6 +82,16 @@ even-row sampler as B, then emits a side-by-side `1280×480` true-4:3 review
 image. The experiment is volatile and the production baseline remains the
 default when `MISTER_CRT_FONT_EXPERIMENT` is unset.
 
+The font-only follow-up locks Arcade glyph coverage to absolute two-row groups
+before the 480→240 conversion. Each pair receives the maximum alpha coverage
+from either source row, while horizontal metrics, layout, and the backdrop stay
+unchanged. Activate it without capturing so the operator can open the review
+fixture manually:
+
+```text
+scripts/agent device launcher restart --attended --crt-font-experiment coverage-max
+```
+
 Only `STEM-raw.png` is authoritative framebuffer evidence; the two `4x3`
 files are derived host previews and must not be used as HDMI/CRT sink proof.
 

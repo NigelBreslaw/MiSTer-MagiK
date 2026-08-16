@@ -32,12 +32,14 @@ pub enum CrtFontExperiment {
     #[default]
     Baseline,
     PhaseEven,
+    CoverageMax,
 }
 
 impl CrtFontExperiment {
     pub fn parse(value: Option<&str>) -> Self {
         match value.map(str::trim) {
             Some("phase-even") | Some("sampling=even") => Self::PhaseEven,
+            Some("coverage-max") => Self::CoverageMax,
             _ => Self::Baseline,
         }
     }
@@ -46,6 +48,7 @@ impl CrtFontExperiment {
         match self {
             Self::Baseline => "baseline",
             Self::PhaseEven => "phase-even",
+            Self::CoverageMax => "coverage-max",
         }
     }
 
@@ -53,7 +56,7 @@ impl CrtFontExperiment {
         self,
     ) -> mister_magik_mister_runtime::framebuffer::vertical_scale::VerticalSampling {
         match self {
-            Self::Baseline => mister_magik_mister_runtime::framebuffer::vertical_scale::VerticalSampling::CenteredNearest,
+            Self::Baseline | Self::CoverageMax => mister_magik_mister_runtime::framebuffer::vertical_scale::VerticalSampling::CenteredNearest,
             Self::PhaseEven => mister_magik_mister_runtime::framebuffer::vertical_scale::VerticalSampling::TopAlignedNearest,
         }
     }
@@ -957,6 +960,17 @@ impl<'a> ParsedIni<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn coverage_max_is_font_only_and_keeps_centered_scanout_sampling() {
+        let experiment = CrtFontExperiment::parse(Some("coverage-max"));
+        assert_eq!(experiment, CrtFontExperiment::CoverageMax);
+        assert_eq!(experiment.label(), "coverage-max");
+        assert_eq!(
+            experiment.vertical_sampling(),
+            mister_magik_mister_runtime::framebuffer::vertical_scale::VerticalSampling::CenteredNearest
+        );
+    }
 
     #[test]
     fn crt_routes_expose_main_raster_periods() {

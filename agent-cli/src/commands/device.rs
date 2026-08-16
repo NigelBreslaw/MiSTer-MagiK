@@ -296,6 +296,7 @@ pub struct LauncherRestartArgs {
 #[derive(Clone, Copy, Debug, ValueEnum)]
 pub enum CrtFontExperiment {
     PhaseEven,
+    CoverageMax,
 }
 
 #[derive(Debug, Args)]
@@ -492,6 +493,7 @@ impl CrtFontExperiment {
     pub(crate) const fn as_str(self) -> &'static str {
         match self {
             Self::PhaseEven => "phase-even",
+            Self::CoverageMax => "coverage-max",
         }
     }
 }
@@ -555,6 +557,17 @@ mod tests {
                 "--attended",
                 "--crt-font-experiment",
                 "phase-even",
+            ])
+            .is_ok()
+        );
+        assert!(
+            TestCli::try_parse_from([
+                "test",
+                "launcher",
+                "restart",
+                "--attended",
+                "--crt-font-experiment",
+                "coverage-max",
             ])
             .is_ok()
         );

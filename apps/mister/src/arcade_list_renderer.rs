@@ -9,13 +9,13 @@ use std::sync::{Arc, OnceLock};
 use crate::arcade_catalog::{
     ARCADE_LIST_VISIBLE_H, ARCADE_ROW_HEIGHT, ArcadeGameEntry, ArcadeGameView,
 };
-use crate::bitmap_text::{ConsoleFont, ConsoleTypeface, TextGradient};
+use crate::bitmap_text::{ConsoleFont, ConsoleGlyphRowFilter, ConsoleTypeface, TextGradient};
 use crate::framebuffer::mapped::{MappedRgb565Framebuffer, Pixel, pixel_to_rgb565};
 use crate::framebuffer::present::{copy_dense_rect_565, copy_strided_rect_565};
 use crate::framebuffer::scanout_slots::ScanoutSlotsRgb565Framebuffer;
 use crate::framebuffer::target::{DirtyRect, UiFrameTarget};
 use crate::ui_display::{
-    CrtContentRect, CrtFontFamily, CrtUiMetrics, ResolvedOutputRoute, UiDisplay,
+    CrtContentRect, CrtFontExperiment, CrtFontFamily, CrtUiMetrics, ResolvedOutputRoute, UiDisplay,
 };
 use mister_magik_framebuffer_scenes::{OutputRotation, Rgb565OutputLayout, Rgb565SurfaceMut};
 use slint::platform::software_renderer::Rgb565Pixel;
@@ -76,6 +76,7 @@ struct ArcadeListStyle {
     badge_text: Pixel,
     title_typeface: ConsoleTypeface,
     meta_typeface: ConsoleTypeface,
+    glyph_row_filter: ConsoleGlyphRowFilter,
     crt_palette: bool,
 }
 
@@ -136,6 +137,7 @@ impl ArcadeListStyle {
             badge_text: ARCADE_NEW_BADGE_TEXT,
             title_typeface: ConsoleTypeface::Nocive15,
             meta_typeface: ConsoleTypeface::PressStart2P,
+            glyph_row_filter: ConsoleGlyphRowFilter::Native,
             crt_palette: false,
         }
     }
@@ -145,7 +147,14 @@ impl ArcadeListStyle {
     }
 
     fn crt_for_display(metrics: CrtUiMetrics, display: &UiDisplay) -> Self {
-        Self::crt_with_raster(metrics, ArcadeListRasterMetrics::for_display(display))
+        let mut style =
+            Self::crt_with_raster(metrics, ArcadeListRasterMetrics::for_display(display));
+        if display.output_route() == ResolvedOutputRoute::Crt240p60
+            && display.crt_font_experiment() == CrtFontExperiment::CoverageMax
+        {
+            style.glyph_row_filter = ConsoleGlyphRowFilter::PairwiseMax;
+        }
+        style
     }
 
     const fn crt_with_raster(metrics: CrtUiMetrics, raster: ArcadeListRasterMetrics) -> Self {
@@ -174,6 +183,7 @@ impl ArcadeListStyle {
             meta_typeface: match metrics.font_family {
                 CrtFontFamily::PressStart2P => ConsoleTypeface::PressStart2P,
             },
+            glyph_row_filter: ConsoleGlyphRowFilter::Native,
             crt_palette: true,
         }
     }
@@ -376,10 +386,15 @@ impl ArcadeListRenderer {
 
     fn new_with_style(style: ArcadeListStyle, crt_metrics: Option<CrtUiMetrics>) -> Self {
         Self {
-            title_font: ConsoleFont::new_with_typeface(ARCADE_LIST_FONT_PX, style.title_typeface),
-            meta_font: ConsoleFont::new_with_typeface(
+            title_font: ConsoleFont::new_with_typeface_and_row_filter(
+                ARCADE_LIST_FONT_PX,
+                style.title_typeface,
+                style.glyph_row_filter,
+            ),
+            meta_font: ConsoleFont::new_with_typeface_and_row_filter(
                 ARCADE_LIST_META_FONT_PX,
                 style.meta_typeface,
+                style.glyph_row_filter,
             ),
             row_cache: HashMap::new(),
             favourite_launch_refs: HashSet::new(),
@@ -3270,6 +3285,32 @@ mod tests {
         assert!(!hdmi.style.crt_palette);
         assert_eq!(hdmi.style.background.0, ARCADE_LIST_BG_COLOR.0);
         assert_eq!(hdmi.style.badge_fill.0, ARCADE_NEW_BADGE_FILL.0);
+    }
+
+    #[test]
+    fn coverage_max_filters_only_the_crt_240_arcade_glyphs() {
+        let baseline_display = crt_240_display();
+        let coverage_display =
+            crt_240_display().with_crt_font_experiment(CrtFontExperiment::CoverageMax);
+        let baseline = ArcadeListRenderer::new_for_crt_display(
+            CrtUiMetrics::for_display(&baseline_display),
+            &baseline_display,
+        );
+        let coverage = ArcadeListRenderer::new_for_crt_display(
+            CrtUiMetrics::for_display(&coverage_display),
+            &coverage_display,
+        );
+        let hdmi = ArcadeListRenderer::new();
+
+        assert_eq!(
+            baseline.style.glyph_row_filter,
+            ConsoleGlyphRowFilter::Native
+        );
+        assert_eq!(
+            coverage.style.glyph_row_filter,
+            ConsoleGlyphRowFilter::PairwiseMax
+        );
+        assert_eq!(hdmi.style.glyph_row_filter, ConsoleGlyphRowFilter::Native);
     }
 
     #[test]

@@ -68,6 +68,7 @@ pub struct ConsoleFont {
     scale_context: swash::scale::ScaleContext,
     glyphs: HashMap<char, ConsoleGlyph>,
     gradient_glyphs: HashMap<(char, TextGradient), ConsoleGradientGlyph>,
+    row_filter: ConsoleGlyphRowFilter,
     pixel_size: f32,
     units_per_em: f32,
     ascent: f32,
@@ -80,12 +81,27 @@ pub enum ConsoleTypeface {
     Nocive15,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ConsoleGlyphRowFilter {
+    #[default]
+    Native,
+    PairwiseMax,
+}
+
 impl ConsoleFont {
     pub fn new(pixel_size: f32) -> Self {
         Self::new_with_typeface(pixel_size, ConsoleTypeface::PressStart2P)
     }
 
     pub fn new_with_typeface(pixel_size: f32, typeface: ConsoleTypeface) -> Self {
+        Self::new_with_typeface_and_row_filter(pixel_size, typeface, ConsoleGlyphRowFilter::Native)
+    }
+
+    pub fn new_with_typeface_and_row_filter(
+        pixel_size: f32,
+        typeface: ConsoleTypeface,
+        row_filter: ConsoleGlyphRowFilter,
+    ) -> Self {
         if typeface == ConsoleTypeface::Nocive15 {
             assert_eq!(pixel_size, 16.0, "Nocive 15 has one exact renderer size");
             let bitmap = mister_magik_fb::bitmap_font_resource::nocive_15_console_bitmap_font()
@@ -112,6 +128,7 @@ impl ConsoleFont {
                 scale_context: swash::scale::ScaleContext::new(),
                 glyphs,
                 gradient_glyphs: HashMap::new(),
+                row_filter,
                 pixel_size,
                 units_per_em: 1.0,
                 ascent: bitmap.ascent,
@@ -135,6 +152,7 @@ impl ConsoleFont {
             scale_context: swash::scale::ScaleContext::new(),
             glyphs: HashMap::new(),
             gradient_glyphs: HashMap::new(),
+            row_filter,
             pixel_size,
             units_per_em,
             ascent: metrics.ascent * scale,
@@ -370,6 +388,7 @@ impl ConsoleFont {
         text: &str,
         color: Pixel,
     ) {
+        let row_filter = self.row_filter;
         let mut pen_x = x;
         for ch in text.chars() {
             let Some(glyph) = self.glyph(ch) else {
@@ -377,22 +396,9 @@ impl ConsoleFont {
             };
             let gx0 = pen_x + glyph.left as isize;
             let gy0 = baseline_y - glyph.top as isize;
-            for gy in 0..glyph.height {
-                let dy = gy0 + gy as isize;
-                if dy < clip_y as isize || dy >= (clip_y + clip_h) as isize {
-                    continue;
-                }
-                for gx in 0..glyph.width {
-                    let dx = gx0 + gx as isize;
-                    if dx < 0 || dx >= clip_w as isize {
-                        continue;
-                    }
-                    let alpha = glyph.data[gy * glyph.width + gx];
-                    if alpha >= 128 {
-                        dst[dy as usize * stride + dx as usize] = color;
-                    }
-                }
-            }
+            draw_solid_glyph(
+                dst, stride, clip_w, clip_y, clip_h, gx0, gy0, glyph, color, row_filter,
+            );
             pen_x += glyph.advance as isize;
         }
     }
@@ -409,6 +415,7 @@ impl ConsoleFont {
         text: &str,
         gradient: TextGradient,
     ) {
+        let row_filter = self.row_filter;
         let mut pen_x = x;
         for ch in text.chars() {
             let Some(glyph) = self.gradient_glyph(ch, gradient) else {
@@ -416,6 +423,34 @@ impl ConsoleFont {
             };
             let gx0 = pen_x + glyph.left as isize;
             let gy0 = baseline_y - glyph.top as isize;
+            draw_gradient_glyph(
+                dst, stride, clip_w, clip_y, clip_h, gx0, gy0, glyph, row_filter,
+            );
+            pen_x += glyph.advance as isize;
+        }
+    }
+
+    #[cfg(test)]
+    fn gradient_glyph_cache_len(&self) -> usize {
+        self.gradient_glyphs.len()
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_solid_glyph(
+    dst: &mut [Pixel],
+    stride: usize,
+    clip_w: usize,
+    clip_y: usize,
+    clip_h: usize,
+    gx0: isize,
+    gy0: isize,
+    glyph: &ConsoleGlyph,
+    color: Pixel,
+    row_filter: ConsoleGlyphRowFilter,
+) {
+    match row_filter {
+        ConsoleGlyphRowFilter::Native => {
             for gy in 0..glyph.height {
                 let dy = gy0 + gy as isize;
                 if dy < clip_y as isize || dy >= (clip_y + clip_h) as isize {
@@ -426,19 +461,103 @@ impl ConsoleFont {
                     if dx < 0 || dx >= clip_w as isize {
                         continue;
                     }
-                    let src = gy * glyph.width + gx;
-                    if glyph.mask[src] {
+                    if glyph.data[gy * glyph.width + gx] >= 128 {
+                        dst[dy as usize * stride + dx as usize] = color;
+                    }
+                }
+            }
+        }
+        ConsoleGlyphRowFilter::PairwiseMax => {
+            let glyph_y1 = gy0 + glyph.height as isize;
+            let mut pair_y = gy0.div_euclid(2) * 2;
+            while pair_y < glyph_y1 {
+                for gx in 0..glyph.width {
+                    let dx = gx0 + gx as isize;
+                    if dx < 0 || dx >= clip_w as isize {
+                        continue;
+                    }
+                    let alpha = [pair_y, pair_y + 1]
+                        .into_iter()
+                        .filter_map(|dy| {
+                            let gy = dy - gy0;
+                            (gy >= 0 && gy < glyph.height as isize)
+                                .then(|| glyph.data[gy as usize * glyph.width + gx])
+                        })
+                        .max()
+                        .unwrap_or(0);
+                    if alpha < 128 {
+                        continue;
+                    }
+                    for dy in [pair_y, pair_y + 1] {
+                        if dy >= clip_y as isize && dy < (clip_y + clip_h) as isize {
+                            dst[dy as usize * stride + dx as usize] = color;
+                        }
+                    }
+                }
+                pair_y += 2;
+            }
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_gradient_glyph(
+    dst: &mut [Pixel],
+    stride: usize,
+    clip_w: usize,
+    clip_y: usize,
+    clip_h: usize,
+    gx0: isize,
+    gy0: isize,
+    glyph: &ConsoleGradientGlyph,
+    row_filter: ConsoleGlyphRowFilter,
+) {
+    match row_filter {
+        ConsoleGlyphRowFilter::Native => {
+            for gy in 0..glyph.height {
+                let dy = gy0 + gy as isize;
+                if dy < clip_y as isize || dy >= (clip_y + clip_h) as isize {
+                    continue;
+                }
+                for gx in 0..glyph.width {
+                    let dx = gx0 + gx as isize;
+                    if dx < 0 || dx >= clip_w as isize {
+                        continue;
+                    }
+                    if glyph.mask[gy * glyph.width + gx] {
                         dst[dy as usize * stride + dx as usize] = glyph.row_colors[gy];
                     }
                 }
             }
-            pen_x += glyph.advance as isize;
         }
-    }
-
-    #[cfg(test)]
-    fn gradient_glyph_cache_len(&self) -> usize {
-        self.gradient_glyphs.len()
+        ConsoleGlyphRowFilter::PairwiseMax => {
+            let glyph_y1 = gy0 + glyph.height as isize;
+            let mut pair_y = gy0.div_euclid(2) * 2;
+            while pair_y < glyph_y1 {
+                for gx in 0..glyph.width {
+                    let dx = gx0 + gx as isize;
+                    if dx < 0 || dx >= clip_w as isize {
+                        continue;
+                    }
+                    let color = [pair_y, pair_y + 1].into_iter().find_map(|dy| {
+                        let gy = dy - gy0;
+                        (gy >= 0 && gy < glyph.height as isize)
+                            .then_some(gy as usize)
+                            .filter(|gy| glyph.mask[*gy * glyph.width + gx])
+                            .map(|gy| glyph.row_colors[gy])
+                    });
+                    let Some(color) = color else {
+                        continue;
+                    };
+                    for dy in [pair_y, pair_y + 1] {
+                        if dy >= clip_y as isize && dy < (clip_y + clip_h) as isize {
+                            dst[dy as usize * stride + dx as usize] = color;
+                        }
+                    }
+                }
+                pair_y += 2;
+            }
+        }
     }
 }
 
@@ -629,6 +748,66 @@ mod tests {
         let solid_mask = solid.iter().map(|px| px.0 != bg.0).collect::<Vec<_>>();
         let gradient_mask = gradient.iter().map(|px| px.0 != bg.0).collect::<Vec<_>>();
         assert_eq!(gradient_mask, solid_mask);
+    }
+
+    #[test]
+    fn pairwise_max_locks_glyph_coverage_to_absolute_row_pairs() {
+        let width = 220;
+        let height = 40;
+        let background = Pixel(0x00112233);
+        let gradient = TextGradient::new(Pixel(0x00aaa5ff), Pixel(0x00aaa5ff), Pixel(0x00aaa5ff));
+        let mut native = ConsoleFont::new_with_typeface_and_row_filter(
+            16.0,
+            ConsoleTypeface::Nocive15,
+            ConsoleGlyphRowFilter::Native,
+        );
+        let mut filtered = ConsoleFont::new_with_typeface_and_row_filter(
+            16.0,
+            ConsoleTypeface::Nocive15,
+            ConsoleGlyphRowFilter::PairwiseMax,
+        );
+        let mut native_pixels = vec![background; width * height];
+        let mut filtered_pixels = vec![background; width * height];
+        let baseline = native.centered_text_baseline("MAGIK", 0, height);
+        native.draw_text_clipped_gradient(
+            &mut native_pixels,
+            width,
+            width,
+            0,
+            height,
+            8,
+            baseline,
+            "MAGIK",
+            gradient,
+        );
+        filtered.draw_text_clipped_gradient(
+            &mut filtered_pixels,
+            width,
+            width,
+            0,
+            height,
+            8,
+            baseline,
+            "MAGIK",
+            gradient,
+        );
+
+        assert_ne!(native_pixels, filtered_pixels);
+        assert!(
+            native_pixels
+                .chunks_exact(width * 2)
+                .any(|rows| { rows[..width] != rows[width..] })
+        );
+        for rows in filtered_pixels.chunks_exact(width * 2) {
+            assert_eq!(rows[..width], rows[width..]);
+        }
+
+        let ink_columns = |pixels: &[Pixel]| {
+            (0..width)
+                .map(|x| (0..height).any(|y| pixels[y * width + x] != background))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(ink_columns(&native_pixels), ink_columns(&filtered_pixels));
     }
 
     #[test]
