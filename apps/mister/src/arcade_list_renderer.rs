@@ -101,7 +101,9 @@ impl ArcadeListRasterMetrics {
     }
 
     fn for_display(display: &UiDisplay) -> Self {
-        if display.output_route() == ResolvedOutputRoute::Crt240p60 {
+        if display.output_route() == ResolvedOutputRoute::Crt240p60
+            && !display.is_native_composition()
+        {
             Self {
                 scroll_quantum_y: 2,
                 separator_y: 2,
@@ -153,7 +155,9 @@ impl ArcadeListStyle {
     fn crt_for_display(metrics: CrtUiMetrics, display: &UiDisplay) -> Self {
         let mut style =
             Self::crt_with_raster(metrics, ArcadeListRasterMetrics::for_display(display));
-        if display.output_route() == ResolvedOutputRoute::Crt240p60 {
+        if display.output_route() == ResolvedOutputRoute::Crt240p60
+            && !display.is_native_composition()
+        {
             style.glyph_row_filter = match display.crt_font_experiment() {
                 CrtFontExperiment::CoverageMax => ConsoleGlyphRowFilter::PairwiseMax,
                 CrtFontExperiment::DominantRow => ConsoleGlyphRowFilter::PairwiseDominant,
@@ -187,6 +191,10 @@ impl ArcadeListStyle {
                     ConsoleGlyphRowFilter::Native
                 }
             };
+        } else if display.output_route() == ResolvedOutputRoute::Crt240p60 {
+            style.title_font_px = 16.0;
+            style.title_typeface = ConsoleTypeface::Yesterday10;
+            style.glyph_row_filter = ConsoleGlyphRowFilter::Native;
         }
         style
     }
@@ -2446,6 +2454,19 @@ mod tests {
         UiDisplay::for_plan(plan)
     }
 
+    fn native_crt_240_display() -> UiDisplay {
+        let plan = crate::ui_display::UiDisplayPlan::from_geometry_with_route_and_composition(
+            crate::ui_display::ResolvedOutputRoute::Crt240p60
+                .progressive_geometry()
+                .expect("CRT240 display geometry"),
+            crate::ui_display::ResolvedOutputRoute::Crt240p60,
+            "test-native-crt240",
+            crate::ui_display::UiFramebufferSizePolicy::Auto,
+            crate::ui_display::Crt240Composition::Native240,
+        );
+        UiDisplay::for_plan(plan)
+    }
+
     #[test]
     fn portrait_cached_composition_matches_logical_arcade_pixels() {
         let mut logical_renderer = ArcadeListRenderer::new();
@@ -3483,6 +3504,23 @@ mod tests {
             renderer.style.glyph_row_filter,
             ConsoleGlyphRowFilter::Native
         );
+    }
+
+    #[test]
+    fn native_crt240_uses_native_title_resource_and_raster_steps() {
+        let display = native_crt_240_display();
+        let renderer =
+            ArcadeListRenderer::new_for_crt_display(CrtUiMetrics::for_display(&display), &display);
+
+        assert_eq!(renderer.style.title_font_px, 16.0);
+        assert_eq!(renderer.style.title_typeface, ConsoleTypeface::Yesterday10);
+        assert_eq!(
+            renderer.style.meta_typeface,
+            ConsoleTypeface::Spleen6x12Small
+        );
+        assert_eq!(renderer.style.scroll_quantum_y, 1);
+        assert_eq!(renderer.style.separator_top, 1);
+        assert_eq!(renderer.style.selection_frame_y, 1);
     }
 
     #[test]

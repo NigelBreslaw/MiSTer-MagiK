@@ -22,23 +22,7 @@ fn direct_hidden_framebuffer_geometry_available(ui: &UiDisplay) -> bool {
 }
 
 fn startup_intro_native_hidden_geometry_available(ui: &UiDisplay) -> bool {
-    match ui.output_route() {
-        crate::ui_display::ResolvedOutputRoute::Hdmi => {
-            ui.render_w() == ui.fb_w() && ui.render_h() == ui.fb_h()
-        }
-        crate::ui_display::ResolvedOutputRoute::Crt240p60 => {
-            (ui.fb_w(), ui.fb_h(), ui.render_w(), ui.render_h()) == (640, 240, 640, 480)
-        }
-        crate::ui_display::ResolvedOutputRoute::Crt288p50 => {
-            (ui.fb_w(), ui.fb_h(), ui.render_w(), ui.render_h()) == (640, 288, 640, 288)
-        }
-        crate::ui_display::ResolvedOutputRoute::Crt480p60 => {
-            (ui.fb_w(), ui.fb_h(), ui.render_w(), ui.render_h()) == (640, 480, 640, 480)
-        }
-        crate::ui_display::ResolvedOutputRoute::Crt576p50 => {
-            (ui.fb_w(), ui.fb_h(), ui.render_w(), ui.render_h()) == (640, 576, 640, 576)
-        }
-    }
+    ui.is_native_composition()
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -982,13 +966,25 @@ mod tests {
             scan_h: 1080,
         };
         for route in ["crt-240p60", "crt-288p50", "crt-480p60", "crt-576p50"] {
-            let plan = UiDisplayPlan::from_runtime_or_mister_ini_text(
-                Some(runtime),
-                "[Menu]\nvideo_mode=8\n",
-                Some(&format!("schema=1&output={route}")),
-                None,
-            )
-            .expect("supported CRT route");
+            let plan = if route == "crt-240p60" {
+                UiDisplayPlan::from_geometry_with_route_and_composition(
+                    crate::ui_display::ResolvedOutputRoute::Crt240p60
+                        .progressive_geometry()
+                        .expect("CRT240 geometry"),
+                    crate::ui_display::ResolvedOutputRoute::Crt240p60,
+                    "test-native-crt240",
+                    crate::ui_display::UiFramebufferSizePolicy::Auto,
+                    crate::ui_display::Crt240Composition::Native240,
+                )
+            } else {
+                UiDisplayPlan::from_runtime_or_mister_ini_text(
+                    Some(runtime),
+                    "[Menu]\nvideo_mode=8\n",
+                    Some(&format!("schema=1&output={route}")),
+                    None,
+                )
+                .expect("supported CRT route")
+            };
             let ui = UiDisplay::for_plan(plan);
 
             assert!(

@@ -65,8 +65,8 @@ mod macos {
     };
     use mister_magik_fb::production_launcher_screensaver::LauncherScreensaver;
     use mister_magik_fb::ui_display::{
-        CrtUiMetrics, ResolvedOutputRoute, ScreenOrientation, UiDisplay, UiDisplayPlan,
-        UiFramebufferSizePolicy, UiLayoutGeometry, UiPixelSize,
+        Crt240Composition, CrtUiMetrics, ResolvedOutputRoute, ScreenOrientation, UiDisplay,
+        UiDisplayPlan, UiFramebufferSizePolicy, UiLayoutGeometry, UiPixelSize,
     };
     use mister_magik_fb::ui_preview_fixtures::{FixtureScreenshot, UiPreviewFixtures};
     use mister_magik_fb::visual_composition::{
@@ -3157,6 +3157,11 @@ mod macos {
                 scan_h: fb_h as u16,
                 direct_video: self.is_crt(),
                 output_route: self.route(),
+                crt240_composition: if matches!(self, Self::Crt240p) {
+                    Crt240Composition::Legacy480
+                } else {
+                    Crt240Composition::Native240
+                },
                 fb_policy: UiFramebufferSizePolicy::Auto,
                 source: "ui-preview-display-profile",
                 fallback: false,

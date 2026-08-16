@@ -78,6 +78,7 @@ pub struct ConsoleFont {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ConsoleTypeface {
     PressStart2P,
+    Yesterday10,
     Yesterday10Perfect,
     Nocive15,
     Xerxes10,
@@ -110,6 +111,16 @@ impl ConsoleFont {
         row_filter: ConsoleGlyphRowFilter,
     ) -> Self {
         let bitmap = match typeface {
+            ConsoleTypeface::Yesterday10 => {
+                assert_eq!(
+                    pixel_size, 16.0,
+                    "Yesterday 10 native resource is exactly 16px"
+                );
+                Some(
+                    mister_magik_fb::bitmap_font_resource::yesterday_10_console_bitmap_font()
+                        .expect("valid native-size Yesterday 10 bitmap font resource"),
+                )
+            }
             ConsoleTypeface::Yesterday10Perfect => {
                 assert_eq!(pixel_size, 32.0, "Yesterday 10 has one exact CRT240 size");
                 Some(
@@ -202,6 +213,7 @@ impl ConsoleFont {
                 "PressStart2P-Regular.ttf",
             ),
             ConsoleTypeface::Nocive15
+            | ConsoleTypeface::Yesterday10
             | ConsoleTypeface::Yesterday10Perfect
             | ConsoleTypeface::Xerxes10
             | ConsoleTypeface::Xerxes10Perfect
@@ -892,6 +904,15 @@ mod tests {
                 assert_eq!(rows[mask.stride + x + 1], cell);
             }
         }
+    }
+
+    #[test]
+    fn yesterday_10_native_uses_the_unscaled_resource() {
+        let mut font = ConsoleFont::new_with_typeface(16.0, ConsoleTypeface::Yesterday10);
+        assert!(font.font.is_none());
+        let mask = font.rasterize_alpha_mask("ARCADE").unwrap();
+        assert_eq!(mask.height, 10);
+        assert!(mask.alpha.iter().all(|alpha| matches!(alpha, 0 | 255)));
     }
 
     #[test]

@@ -657,34 +657,40 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
         let rect_count = plan.restore_rects.len() as u32;
         // Damage remains in composition coordinates; analytics report the
         // destination rows that the native scanout copy actually touched.
-        let vertical_transform =
-            mister_magik_fb::framebuffer::vertical_scale::VerticalRgb565Transform::new(
-                self.width,
-                self.render_height,
-                self.height,
-            )
-            .map_err(|error| {
-                LatchFailure::runtime(
-                    LatchFailureStage::FrameCopy,
-                    LatchFailureReason::FrameCopyFailed,
-                    error,
+        let copied_rows = if self.render_height == self.height {
+            plan.restore_rects
+                .iter()
+                .map(|rect| rect.rows() as u32)
+                .sum::<u32>()
+        } else {
+            let vertical_transform =
+                mister_magik_fb::framebuffer::vertical_scale::VerticalRgb565Transform::new(
+                    self.width,
+                    self.render_height,
+                    self.height,
                 )
-            })?;
-        let copied_rows = plan
-            .restore_rects
-            .iter()
-            .filter_map(|rect| {
-                vertical_transform.destination_rect_for_source(
-                    mister_magik_fb::framebuffer::vertical_scale::VerticalRect {
-                        x0: rect.x0,
-                        y0: rect.y0,
-                        x1: rect.x1,
-                        y1: rect.y1,
-                    },
-                )
-            })
-            .map(|rect| rect.rows() as u32)
-            .sum::<u32>();
+                .map_err(|error| {
+                    LatchFailure::runtime(
+                        LatchFailureStage::FrameCopy,
+                        LatchFailureReason::FrameCopyFailed,
+                        error,
+                    )
+                })?;
+            plan.restore_rects
+                .iter()
+                .filter_map(|rect| {
+                    vertical_transform.destination_rect_for_source(
+                        mister_magik_fb::framebuffer::vertical_scale::VerticalRect {
+                            x0: rect.x0,
+                            y0: rect.y0,
+                            x1: rect.x1,
+                            y1: rect.y1,
+                        },
+                    )
+                })
+                .map(|rect| rect.rows() as u32)
+                .sum::<u32>()
+        };
         let full_copy = rect_list_contains(plan.restore_rects, self.full_rect());
         let catchup_bytes = plan.restore_rects.total_rgb565_bytes();
         let base_addr = self.base_addr(buffer_index);

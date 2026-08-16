@@ -10,8 +10,8 @@
 #[cfg(test)]
 use mister_magik_core::display::launcher_framebuffer_size;
 pub use mister_magik_core::display::{
-    DEFAULT_OUTPUT_H, DEFAULT_OUTPUT_W, ResolvedOutputRoute, RuntimeDisplayGeometry, UI_FB_H,
-    UI_FB_W,
+    Crt240Composition, DEFAULT_OUTPUT_H, DEFAULT_OUTPUT_W, ResolvedOutputRoute,
+    RuntimeDisplayGeometry, UI_FB_H, UI_FB_W,
 };
 use mister_magik_core::display::{
     DisplayGeometry as VideoModeGeometry, FramebufferSizePolicy, ResolvedDisplayPlan,
@@ -186,6 +186,20 @@ impl CrtUiMetrics {
 
     pub const fn for_display(display: &UiDisplay) -> Self {
         match display.output_route {
+            ResolvedOutputRoute::Crt240p60 if display.is_native_composition() => Self {
+                grid_x: 8,
+                grid_y: 4,
+                border_x: 2,
+                border_y: 1,
+                body_font: UiPixelSize::Px16,
+                heading_font: UiPixelSize::Px32,
+                card_title_font: UiPixelSize::Px24,
+                card_detail_font: UiPixelSize::Px16,
+                game_row_height: 16,
+                header_height: 48,
+                footer_height: 20,
+                font_family: CrtFontFamily::Spleen6x12,
+            },
             ResolvedOutputRoute::Crt240p60 => Self {
                 grid_x: 8,
                 grid_y: 8,
@@ -509,6 +523,7 @@ pub struct UiDisplayPlan {
     pub scan_h: u16,
     pub direct_video: bool,
     pub output_route: ResolvedOutputRoute,
+    pub crt240_composition: Crt240Composition,
     pub fb_policy: UiFramebufferSizePolicy,
     pub source: &'static str,
     pub fallback: bool,
@@ -760,7 +775,28 @@ impl UiDisplayPlan {
         source: &'static str,
         fb_policy: UiFramebufferSizePolicy,
     ) -> Self {
-        let shared = ResolvedDisplayPlan::from_geometry(geometry, output_route, fb_policy.shared());
+        Self::from_geometry_with_route_and_composition(
+            geometry,
+            output_route,
+            source,
+            fb_policy,
+            Crt240Composition::Legacy480,
+        )
+    }
+
+    pub(crate) fn from_geometry_with_route_and_composition(
+        geometry: VideoModeGeometry,
+        output_route: ResolvedOutputRoute,
+        source: &'static str,
+        fb_policy: UiFramebufferSizePolicy,
+        crt240_composition: Crt240Composition,
+    ) -> Self {
+        let shared = ResolvedDisplayPlan::from_geometry_with_crt240_composition(
+            geometry,
+            output_route,
+            fb_policy.shared(),
+            crt240_composition,
+        );
         let fb_policy = match shared.fb_policy {
             FramebufferSizePolicy::Auto => UiFramebufferSizePolicy::Auto,
             FramebufferSizePolicy::Force960x540 => UiFramebufferSizePolicy::Force960x540,
@@ -777,6 +813,7 @@ impl UiDisplayPlan {
             scan_h: shared.scan_h,
             direct_video: output_route.is_crt(),
             output_route,
+            crt240_composition: shared.crt240_composition,
             fb_policy,
             source,
             fallback: false,
@@ -785,9 +822,10 @@ impl UiDisplayPlan {
 
     pub fn log_line(self) -> String {
         format!(
-            "display-plan: source={} route={} output={}x{} scan={}x{} render={}x{} fb={}x{} composition_transformed={} fb_policy={} direct_video={} fallback={}",
+            "display-plan: source={} route={} crt240_composition={} output={}x{} scan={}x{} render={}x{} fb={}x{} composition_transformed={} fb_policy={} direct_video={} fallback={}",
             self.source,
             self.output_route.label(),
+            self.crt240_composition.label(),
             self.output_w,
             self.output_h,
             self.scan_w,
@@ -815,6 +853,7 @@ pub struct UiDisplay {
     scan_h: u16,
     direct_video: bool,
     output_route: ResolvedOutputRoute,
+    crt240_composition: Crt240Composition,
     crt_font_experiment: CrtFontExperiment,
 }
 
@@ -832,6 +871,7 @@ impl UiDisplay {
             scan_h: fb_h.min(u16::MAX as usize) as u16,
             direct_video: false,
             output_route: ResolvedOutputRoute::Hdmi,
+            crt240_composition: Crt240Composition::Native240,
             crt_font_experiment: CrtFontExperiment::Baseline,
         }
     }
@@ -848,6 +888,7 @@ impl UiDisplay {
             scan_h: plan.scan_h,
             direct_video: plan.direct_video,
             output_route: plan.output_route,
+            crt240_composition: plan.crt240_composition,
             crt_font_experiment: CrtFontExperiment::Baseline,
         }
     }
@@ -897,6 +938,14 @@ impl UiDisplay {
         self.output_route
     }
 
+    pub const fn crt240_composition(&self) -> Crt240Composition {
+        self.crt240_composition
+    }
+
+    pub const fn is_native_composition(&self) -> bool {
+        self.render_w == self.fb_w && self.render_h == self.fb_h
+    }
+
     pub const fn crt_font_experiment(&self) -> CrtFontExperiment {
         self.crt_font_experiment
     }
@@ -908,7 +957,9 @@ impl UiDisplay {
     }
 
     pub fn content_rect(&self) -> CrtContentRect {
-        let insets = self.output_route.content_insets();
+        let insets = self
+            .output_route
+            .content_insets_with_crt240(self.crt240_composition);
         CrtContentRect {
             x: insets.left.min(self.render_w),
             y: insets.top.min(self.render_h),
@@ -923,7 +974,7 @@ impl UiDisplay {
 
     pub fn log_line(&self) -> String {
         format!(
-            "render={}x{} fb={}x{} output={}x{} scan={}x{} direct_video={} crt_font_experiment={}",
+            "render={}x{} fb={}x{} output={}x{} scan={}x{} direct_video={} crt240_composition={} crt_font_experiment={}",
             self.render_w(),
             self.render_h(),
             self.fb_w,
@@ -933,6 +984,7 @@ impl UiDisplay {
             self.scan_w,
             self.scan_h,
             self.direct_video,
+            self.crt240_composition.label(),
             self.crt_font_experiment.label()
         )
     }
@@ -1752,6 +1804,44 @@ mod tests {
             );
             assert_eq!(metrics.font_family, CrtFontFamily::Spleen6x12);
         }
+    }
+
+    #[test]
+    fn native_crt240_uses_direct_rows_and_preserves_physical_safe_area() {
+        let plan = UiDisplayPlan::from_geometry_with_route_and_composition(
+            VideoModeGeometry::new(640, 240),
+            ResolvedOutputRoute::Crt240p60,
+            "test-native-crt240",
+            UiFramebufferSizePolicy::Auto,
+            Crt240Composition::Native240,
+        );
+        let display = UiDisplay::for_plan(plan);
+        assert_eq!((display.fb_w(), display.fb_h()), (640, 240));
+        assert_eq!((display.render_w(), display.render_h()), (640, 240));
+        assert_eq!(
+            display.content_rect(),
+            CrtContentRect {
+                x: 32,
+                y: 12,
+                width: 576,
+                height: 216,
+            }
+        );
+        let metrics = CrtUiMetrics::for_display(&display);
+        assert_eq!(
+            (
+                metrics.grid_x,
+                metrics.grid_y,
+                metrics.border_x,
+                metrics.border_y,
+                metrics.body_font.pixels(),
+                metrics.card_detail_font.pixels(),
+                metrics.game_row_height,
+                metrics.header_height,
+                metrics.footer_height,
+            ),
+            (8, 4, 2, 1, 16, 16, 16, 48, 20)
+        );
     }
 
     #[test]

@@ -101,12 +101,26 @@ impl ResolvedOutputRoute {
     }
 
     pub const fn content_insets(self) -> ContentInsets {
+        self.content_insets_with_crt240(Crt240Composition::Legacy480)
+    }
+
+    pub const fn content_insets_with_crt240(self, composition: Crt240Composition) -> ContentInsets {
         match self {
-            Self::Crt240p60 => ContentInsets {
-                left: 32,
-                top: 24,
-                right: 32,
-                bottom: 24,
+            Self::Crt240p60 => match composition {
+                Crt240Composition::Legacy480 => ContentInsets {
+                    left: 32,
+                    top: 24,
+                    right: 32,
+                    bottom: 24,
+                },
+                // Keep the same physical safe area as legacy 480-line mode.
+                // Native 240-line composition has half the logical rows.
+                Crt240Composition::Native240 => ContentInsets {
+                    left: 32,
+                    top: 12,
+                    right: 32,
+                    bottom: 12,
+                },
             },
             Self::Crt288p50 => ContentInsets {
                 left: 32,

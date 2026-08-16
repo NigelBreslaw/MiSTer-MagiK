@@ -283,6 +283,10 @@ pub fn nocive_15_console_bitmap_font() -> Result<ConsoleBitmapFont, String> {
     console_bitmap_font(NOCIVE_15_RESOURCE)
 }
 
+pub fn yesterday_10_console_bitmap_font() -> Result<ConsoleBitmapFont, String> {
+    console_bitmap_font(YESTERDAY_10_RESOURCE)
+}
+
 pub fn yesterday_10_crt240_console_bitmap_font() -> Result<ConsoleBitmapFont, String> {
     console_bitmap_font(YESTERDAY_10_CRT240_RESOURCE)
 }
