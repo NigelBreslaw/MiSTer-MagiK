@@ -3,8 +3,9 @@
 
 use mister_magik_fb::bitmap_font_resource::{
     generate_bacteria_12, generate_bacteria_12_native, generate_jersey_25, generate_nocive_15,
-    generate_terminus_8x14_bold, generate_terminus_8x14_normal, generate_xerxes_10,
-    generate_xerxes_10_crt240, generate_yesterday_10, generate_yesterday_10_crt240,
+    generate_terminus_8x14_bold, generate_terminus_8x14_native, generate_terminus_8x14_normal,
+    generate_xerxes_10, generate_xerxes_10_crt240, generate_yesterday_10,
+    generate_yesterday_10_crt240,
 };
 use std::path::PathBuf;
 
@@ -60,6 +61,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         )?)?,
     )?;
     let terminus_dir = public_output_dir.join("terminus-8x14");
+    std::fs::write(
+        terminus_dir.join("terminus-8x14-normal-1x.mmbf"),
+        generate_terminus_8x14_native(&std::fs::read_to_string(
+            terminus_dir.join("ter-u14n.bdf"),
+        )?)?,
+    )?;
     std::fs::write(
         terminus_dir.join("terminus-8x14-normal-2x.mmbf"),
         generate_terminus_8x14_normal(&std::fs::read_to_string(

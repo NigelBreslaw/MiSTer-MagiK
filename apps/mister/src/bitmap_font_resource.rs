@@ -30,6 +30,11 @@ const BACTERIA_12_NATIVE_RESOURCE: &[u8] =
     include_bytes!("../../../private/magik-assets/fonts/bacteria-12/bacteria12-16px.mmbf");
 const JERSEY_25_RESOURCE: &[u8] = include_bytes!("../assets/fonts/jersey25-41px.mmbf");
 #[cfg(not(feature = "asset-tools"))]
+const TERMINUS_8X14_NATIVE_RESOURCE: &[u8] =
+    include_bytes!("../assets/fonts/terminus-8x14/terminus-8x14-normal-1x.mmbf");
+#[cfg(feature = "asset-tools")]
+const TERMINUS_8X14_NATIVE_RESOURCE: &[u8] = &[];
+#[cfg(not(feature = "asset-tools"))]
 const TERMINUS_8X14_NORMAL_RESOURCE: &[u8] =
     include_bytes!("../assets/fonts/terminus-8x14/terminus-8x14-normal-2x.mmbf");
 #[cfg(feature = "asset-tools")]
@@ -282,6 +287,10 @@ pub fn terminus_8x14_normal_console_bitmap_font() -> Result<ConsoleBitmapFont, S
     console_bitmap_font(TERMINUS_8X14_NORMAL_RESOURCE)
 }
 
+pub fn terminus_8x14_native_console_bitmap_font() -> Result<ConsoleBitmapFont, String> {
+    console_bitmap_font(TERMINUS_8X14_NATIVE_RESOURCE)
+}
+
 pub fn terminus_8x14_bold_console_bitmap_font() -> Result<ConsoleBitmapFont, String> {
     console_bitmap_font(TERMINUS_8X14_BOLD_RESOURCE)
 }
@@ -314,10 +323,34 @@ fn console_bitmap_font(resource: &[u8]) -> Result<ConsoleBitmapFont, String> {
 
 #[cfg(any(feature = "ui", feature = "ui-preview"))]
 fn leak_font(decoded: DecodedFont) -> &'static i_slint_core::graphics::BitmapFont {
+    leak_font_family(vec![decoded])
+}
+
+#[cfg(any(feature = "ui", feature = "ui-preview"))]
+fn leak_font_family(
+    mut decoded_fonts: Vec<DecodedFont>,
+) -> &'static i_slint_core::graphics::BitmapFont {
     use i_slint_core::graphics::{BitmapFont, BitmapGlyph, BitmapGlyphs, CharacterMapEntry};
     use i_slint_core::slice::Slice;
 
-    let family_name = Box::leak(decoded.family_name.into_bytes().into_boxed_slice());
+    decoded_fonts.sort_by_key(|font| font.pixel_size);
+    let decoded = decoded_fonts
+        .first()
+        .expect("bitmap font family must contain at least one size");
+    for candidate in &decoded_fonts[1..] {
+        assert_eq!(candidate.family_name, decoded.family_name);
+        assert_eq!(candidate.weight, decoded.weight);
+        assert_eq!(candidate.italic, decoded.italic);
+        assert_eq!(candidate.glyphs.len(), decoded.glyphs.len());
+        assert!(
+            candidate
+                .glyphs
+                .iter()
+                .zip(&decoded.glyphs)
+                .all(|(candidate, base)| candidate.code_point == base.code_point)
+        );
+    }
+    let family_name = Box::leak(decoded.family_name.clone().into_bytes().into_boxed_slice());
     let character_map = decoded
         .glyphs
         .iter()
@@ -327,40 +360,54 @@ fn leak_font(decoded: DecodedFont) -> &'static i_slint_core::graphics::BitmapFon
             glyph_index: glyph_index as u16,
         })
         .collect::<Vec<_>>();
-    let glyph_data = decoded
-        .glyphs
-        .iter()
-        .map(|glyph| {
-            let alpha = Box::leak(unpack_glyph(glyph).into_boxed_slice());
-            BitmapGlyph {
-                x: glyph.x,
-                y: glyph.y,
-                width: glyph.width,
-                height: glyph.height,
-                x_advance: glyph.x_advance,
-                data: Slice::from_slice(alpha),
-            }
-        })
-        .collect::<Vec<_>>();
+    let (units_per_em, ascent, descent, x_height, cap_height, weight, italic) = (
+        decoded.units_per_em,
+        decoded.ascent,
+        decoded.descent,
+        decoded.x_height,
+        decoded.cap_height,
+        decoded.weight,
+        decoded.italic,
+    );
     let glyph_sets = Box::leak(
-        vec![BitmapGlyphs {
-            pixel_size: decoded.pixel_size,
-            glyph_data: Slice::from_slice(Box::leak(glyph_data.into_boxed_slice())),
-        }]
-        .into_boxed_slice(),
+        decoded_fonts
+            .into_iter()
+            .map(|font| {
+                let glyph_data = font
+                    .glyphs
+                    .iter()
+                    .map(|glyph| {
+                        let alpha = Box::leak(unpack_glyph(glyph).into_boxed_slice());
+                        BitmapGlyph {
+                            x: glyph.x,
+                            y: glyph.y,
+                            width: glyph.width,
+                            height: glyph.height,
+                            x_advance: glyph.x_advance,
+                            data: Slice::from_slice(alpha),
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                BitmapGlyphs {
+                    pixel_size: font.pixel_size,
+                    glyph_data: Slice::from_slice(Box::leak(glyph_data.into_boxed_slice())),
+                }
+            })
+            .collect::<Vec<_>>()
+            .into_boxed_slice(),
     );
 
     Box::leak(Box::new(BitmapFont {
         family_name: Slice::from_slice(family_name),
         character_map: Slice::from_slice(Box::leak(character_map.into_boxed_slice())),
-        units_per_em: decoded.units_per_em,
-        ascent: decoded.ascent,
-        descent: decoded.descent,
-        x_height: decoded.x_height,
-        cap_height: decoded.cap_height,
+        units_per_em,
+        ascent,
+        descent,
+        x_height,
+        cap_height,
         glyphs: Slice::from_slice(glyph_sets),
-        weight: decoded.weight,
-        italic: decoded.italic,
+        weight,
+        italic,
         sdf: false,
     }))
 }
@@ -371,7 +418,7 @@ pub fn register_bitmap_fonts(renderer: &slint::platform::software_renderer::Soft
     use std::cell::Cell;
     use std::sync::OnceLock;
 
-    static FONTS: OnceLock<[&'static i_slint_core::graphics::BitmapFont; 5]> = OnceLock::new();
+    static FONTS: OnceLock<[&'static i_slint_core::graphics::BitmapFont; 6]> = OnceLock::new();
     thread_local! {
         static REGISTERED: Cell<bool> = const { Cell::new(false) };
     }
@@ -387,6 +434,12 @@ pub fn register_bitmap_fonts(renderer: &slint::platform::software_renderer::Soft
                 decode_resource(BACTERIA_12_RESOURCE).expect("valid Bacteria 12 bitmap font"),
             ),
             leak_font(decode_resource(JERSEY_25_RESOURCE).expect("valid Jersey 25 bitmap font")),
+            leak_font_family(vec![
+                decode_resource(TERMINUS_8X14_NATIVE_RESOURCE)
+                    .expect("valid native Terminus bitmap font"),
+                decode_resource(TERMINUS_8X14_NORMAL_RESOURCE)
+                    .expect("valid doubled Terminus bitmap font"),
+            ]),
         ]
     });
     REGISTERED.with(|registered| {
@@ -905,6 +958,11 @@ pub fn generate_terminus_8x14_normal(source: &str) -> Result<Vec<u8>, String> {
 }
 
 #[cfg(feature = "asset-tools")]
+pub fn generate_terminus_8x14_native(source: &str) -> Result<Vec<u8>, String> {
+    generate_bdf_resource(source, "Terminus 8x14", 400, 1)
+}
+
+#[cfg(feature = "asset-tools")]
 pub fn generate_terminus_8x14_bold(source: &str) -> Result<Vec<u8>, String> {
     generate_bdf_resource(source, "Terminus 8x14 Bold", 700, 2)
 }
@@ -973,6 +1031,10 @@ mod tests {
             JERSEY_25_RESOURCE
         );
         assert_eq!(
+            generate_bdf_resource(TERMINUS_8X14_NORMAL_BDF, "Terminus 8x14", 400, 1).unwrap(),
+            TERMINUS_8X14_NATIVE_RESOURCE
+        );
+        assert_eq!(
             generate_bdf_resource(TERMINUS_8X14_NORMAL_BDF, "Terminus 8x14", 400, 2).unwrap(),
             TERMINUS_8X14_NORMAL_RESOURCE
         );
@@ -1015,6 +1077,7 @@ mod tests {
             BACTERIA_12_RESOURCE,
             BACTERIA_12_NATIVE_RESOURCE,
             JERSEY_25_RESOURCE,
+            TERMINUS_8X14_NATIVE_RESOURCE,
             TERMINUS_8X14_NORMAL_RESOURCE,
             TERMINUS_8X14_BOLD_RESOURCE,
         ] {
@@ -1052,6 +1115,17 @@ mod tests {
             .filter(|value| *value != 0)
             .count();
         assert!(bold_ink > normal_ink);
+    }
+
+    #[test]
+    fn terminus_native_resource_preserves_the_eight_by_fourteen_cell() {
+        let font = decode_resource(TERMINUS_8X14_NATIVE_RESOURCE).unwrap();
+        assert_eq!(font.family_name, "Terminus 8x14");
+        assert_eq!(font.pixel_size, 14);
+        assert_eq!(font.ascent, 12.0);
+        assert_eq!(font.descent, -2.0);
+        let glyph = glyph(&font, 'A');
+        assert_eq!((glyph.width, glyph.height, glyph.x_advance), (8, 14, 512));
     }
 
     #[test]
