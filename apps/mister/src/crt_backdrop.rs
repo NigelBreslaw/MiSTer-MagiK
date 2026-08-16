@@ -387,16 +387,15 @@ impl CrtBackdropState {
                 let source_start = physical_y * self.width;
                 let source_end = source_start + self.width;
                 let logical_y = physical_y * 2;
-                let destination_start = logical_y * self.width;
-                let (before, after) = destination.split_at_mut(destination_start + self.width);
-                copy_rgb565_row_pair_excluding(
-                    &mut before[destination_start..destination_start + self.width],
-                    &mut after[..self.width],
-                    &self.retarget[source_start..source_end],
-                    logical_y,
-                    logical_y + 1,
-                    protected_rects,
-                );
+                for row in [logical_y, logical_y + 1] {
+                    let destination_start = row * self.width;
+                    copy_rgb565_row_excluding(
+                        &mut destination[destination_start..destination_start + self.width],
+                        &self.retarget[source_start..source_end],
+                        row,
+                        protected_rects,
+                    );
+                }
             }
             return;
         }
@@ -755,43 +754,6 @@ fn copy_rgb565_row_excluding(
         cursor = cursor.max(protected_end);
     }
     destination[cursor..width].copy_from_slice(&source[cursor..width]);
-}
-
-fn copy_rgb565_row_pair_excluding(
-    first_destination: &mut [Rgb565Pixel],
-    second_destination: &mut [Rgb565Pixel],
-    source: &[Rgb565Pixel],
-    first_row: usize,
-    second_row: usize,
-    protected_rects: &[(usize, usize, usize, usize)],
-) {
-    let same_protected_rows = protected_rects.iter().all(|&(_, y0, _, y1)| {
-        (first_row >= y0 && first_row < y1) == (second_row >= y0 && second_row < y1)
-    });
-    if !same_protected_rows {
-        copy_rgb565_row_excluding(first_destination, source, first_row, protected_rects);
-        copy_rgb565_row_excluding(second_destination, source, second_row, protected_rects);
-        return;
-    }
-
-    let width = first_destination
-        .len()
-        .min(second_destination.len())
-        .min(source.len());
-    let mut cursor = 0;
-    for &(x0, y0, x1, y1) in protected_rects {
-        if first_row < y0 || first_row >= y1 {
-            continue;
-        }
-        let protected_start = x0.min(width);
-        let protected_end = x1.min(width).max(protected_start);
-        let copy_end = protected_start.max(cursor);
-        first_destination[cursor..copy_end].copy_from_slice(&source[cursor..copy_end]);
-        second_destination[cursor..copy_end].copy_from_slice(&source[cursor..copy_end]);
-        cursor = cursor.max(protected_end);
-    }
-    first_destination[cursor..width].copy_from_slice(&source[cursor..width]);
-    second_destination[cursor..width].copy_from_slice(&source[cursor..width]);
 }
 
 fn duration_us(duration: Duration) -> u64 {
