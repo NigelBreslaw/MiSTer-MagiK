@@ -110,6 +110,15 @@ repair filter:
 scripts/agent device launcher restart --attended --crt-font-experiment xerxes
 ```
 
+The `xerxes-perfect` arm uses Xerxes 10 at 32px. Its 64-unit design cells map
+to exact 2×2 composition blocks, so centered 480→240 scanout retains every
+cell as a 2×1 framebuffer block. Its 640-unit capitals occupy 20 composition
+rows and 10 output scanlines.
+
+```text
+scripts/agent device launcher restart --attended --crt-font-experiment xerxes-perfect
+```
+
 The `bacteria` arm uses the supplied Bacteria 12 bitmap design at 32px for the
 CRT240 Arcade title and game rows. The font has a 1,024-unit em and 64-unit
 design grid, so 32px maps each design cell to a 2×2 composition block. The

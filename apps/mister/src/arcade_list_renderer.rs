@@ -159,6 +159,11 @@ impl ArcadeListStyle {
                     style.title_typeface = ConsoleTypeface::Xerxes10;
                     ConsoleGlyphRowFilter::Native
                 }
+                CrtFontExperiment::XerxesPerfect => {
+                    style.title_font_px = 32.0;
+                    style.title_typeface = ConsoleTypeface::Xerxes10Perfect;
+                    ConsoleGlyphRowFilter::Native
+                }
                 CrtFontExperiment::Bacteria => {
                     style.title_font_px = 32.0;
                     style.title_typeface = ConsoleTypeface::Bacteria12;
@@ -3369,6 +3374,24 @@ mod tests {
         assert_eq!(xerxes.style.title_typeface, ConsoleTypeface::Xerxes10);
         assert_eq!(xerxes.style.glyph_row_filter, ConsoleGlyphRowFilter::Native);
         assert_eq!(hdmi.style.title_typeface, ConsoleTypeface::Nocive15);
+    }
+
+    #[test]
+    fn xerxes_perfect_uses_the_exact_32px_crt240_title_resource() {
+        let display = crt_240_display().with_crt_font_experiment(CrtFontExperiment::XerxesPerfect);
+        let renderer =
+            ArcadeListRenderer::new_for_crt_display(CrtUiMetrics::for_display(&display), &display);
+
+        assert_eq!(renderer.style.title_font_px, 32.0);
+        assert_eq!(
+            renderer.style.title_typeface,
+            ConsoleTypeface::Xerxes10Perfect
+        );
+        assert_eq!(
+            renderer.style.glyph_row_filter,
+            ConsoleGlyphRowFilter::Native
+        );
+        assert_eq!(renderer.style.row_height, 32);
     }
 
     #[test]

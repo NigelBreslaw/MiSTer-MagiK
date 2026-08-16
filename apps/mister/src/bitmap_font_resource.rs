@@ -18,6 +18,8 @@ const YESTERDAY_10_RESOURCE: &[u8] =
     include_bytes!("../../../private/magik-assets/fonts/yesterday-10/yesterday10-16px.mmbf");
 const XERXES_10_RESOURCE: &[u8] =
     include_bytes!("../../../private/magik-assets/fonts/xerxes-10/xerxes10-16px.mmbf");
+const XERXES_10_CRT240_RESOURCE: &[u8] =
+    include_bytes!("../../../private/magik-assets/fonts/xerxes-10/xerxes10-32px.mmbf");
 const NOCIVE_15_RESOURCE: &[u8] =
     include_bytes!("../../../private/magik-assets/fonts/nocive-15/nocive15-16px.mmbf");
 const BACTERIA_12_RESOURCE: &[u8] =
@@ -248,6 +250,10 @@ pub fn xerxes_10_console_bitmap_font() -> Result<ConsoleBitmapFont, String> {
     console_bitmap_font(XERXES_10_RESOURCE)
 }
 
+pub fn xerxes_10_crt240_console_bitmap_font() -> Result<ConsoleBitmapFont, String> {
+    console_bitmap_font(XERXES_10_CRT240_RESOURCE)
+}
+
 pub fn bacteria_12_console_bitmap_font() -> Result<ConsoleBitmapFont, String> {
     console_bitmap_font(BACTERIA_12_RESOURCE)
 }
@@ -400,6 +406,16 @@ const YESTERDAY_10_SPEC: GeneratorSpec = GeneratorSpec {
 const XERXES_10_SPEC: GeneratorSpec = GeneratorSpec {
     family: "Xerxes 10",
     pixel_size: 16,
+    weight: 400,
+    hint: false,
+    threshold: 128,
+    coverage: Coverage::FullCharmap,
+};
+
+#[cfg(any(test, feature = "asset-tools"))]
+const XERXES_10_CRT240_SPEC: GeneratorSpec = GeneratorSpec {
+    family: "Xerxes 10",
+    pixel_size: 32,
     weight: 400,
     hint: false,
     threshold: 128,
@@ -625,6 +641,11 @@ pub fn generate_xerxes_10(font_bytes: &[u8]) -> Result<Vec<u8>, String> {
 }
 
 #[cfg(feature = "asset-tools")]
+pub fn generate_xerxes_10_crt240(font_bytes: &[u8]) -> Result<Vec<u8>, String> {
+    generate_resource(font_bytes, XERXES_10_CRT240_SPEC)
+}
+
+#[cfg(feature = "asset-tools")]
 pub fn generate_nocive_15(font_bytes: &[u8]) -> Result<Vec<u8>, String> {
     generate_resource(font_bytes, NOCIVE_15_SPEC)
 }
@@ -681,6 +702,10 @@ mod tests {
             XERXES_10_RESOURCE
         );
         assert_eq!(
+            generate_resource(XERXES_10_TTF, XERXES_10_CRT240_SPEC).unwrap(),
+            XERXES_10_CRT240_RESOURCE
+        );
+        assert_eq!(
             generate_resource(NOCIVE_15_TTF, NOCIVE_15_SPEC).unwrap(),
             NOCIVE_15_RESOURCE
         );
@@ -702,6 +727,7 @@ mod tests {
     fn bitmap_font_cap_heights_are_exact() {
         let yesterday_10 = decode_resource(YESTERDAY_10_RESOURCE).unwrap();
         let xerxes_10 = decode_resource(XERXES_10_RESOURCE).unwrap();
+        let xerxes_10_crt240 = decode_resource(XERXES_10_CRT240_RESOURCE).unwrap();
         let nocive_15 = decode_resource(NOCIVE_15_RESOURCE).unwrap();
         let bacteria_12 = decode_resource(BACTERIA_12_RESOURCE).unwrap();
         let bacteria_12_native = decode_resource(BACTERIA_12_NATIVE_RESOURCE).unwrap();
@@ -709,6 +735,7 @@ mod tests {
         for code_point in ['A', 'H', 'M', 'S'] {
             assert_eq!(glyph(&yesterday_10, code_point).height, 10);
             assert_eq!(glyph(&xerxes_10, code_point).height, 10);
+            assert_eq!(glyph(&xerxes_10_crt240, code_point).height, 20);
             assert_eq!(glyph(&nocive_15, code_point).height, 15);
             assert_eq!(glyph(&bacteria_12, code_point).height, 24);
             assert_eq!(glyph(&bacteria_12_native, code_point).height, 12);
@@ -721,6 +748,7 @@ mod tests {
         for resource in [
             YESTERDAY_10_RESOURCE,
             XERXES_10_RESOURCE,
+            XERXES_10_CRT240_RESOURCE,
             NOCIVE_15_RESOURCE,
             BACTERIA_12_RESOURCE,
             BACTERIA_12_NATIVE_RESOURCE,
@@ -735,6 +763,7 @@ mod tests {
         for resource in [
             YESTERDAY_10_RESOURCE,
             XERXES_10_RESOURCE,
+            XERXES_10_CRT240_RESOURCE,
             NOCIVE_15_RESOURCE,
             BACTERIA_12_RESOURCE,
             BACTERIA_12_NATIVE_RESOURCE,

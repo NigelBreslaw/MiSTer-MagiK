@@ -3,7 +3,7 @@
 
 use mister_magik_fb::bitmap_font_resource::{
     generate_bacteria_12, generate_bacteria_12_native, generate_jersey_25, generate_nocive_15,
-    generate_xerxes_10, generate_yesterday_10,
+    generate_xerxes_10, generate_xerxes_10_crt240, generate_yesterday_10,
 };
 use std::path::PathBuf;
 
@@ -31,6 +31,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     std::fs::write(
         xerxes_dir.join("xerxes10-16px.mmbf"),
         generate_xerxes_10(&std::fs::read(xerxes_dir.join("Xerxes 10.ttf"))?)?,
+    )?;
+    std::fs::write(
+        xerxes_dir.join("xerxes10-32px.mmbf"),
+        generate_xerxes_10_crt240(&std::fs::read(xerxes_dir.join("Xerxes 10.ttf"))?)?,
     )?;
     std::fs::write(
         nocive_dir.join("nocive15-16px.mmbf"),

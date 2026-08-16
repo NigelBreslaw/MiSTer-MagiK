@@ -35,6 +35,7 @@ pub enum CrtFontExperiment {
     CoverageMax,
     DominantRow,
     Xerxes,
+    XerxesPerfect,
     Bacteria,
     BacteriaHalf,
 }
@@ -46,6 +47,7 @@ impl CrtFontExperiment {
             Some("coverage-max") => Self::CoverageMax,
             Some("dominant-row") => Self::DominantRow,
             Some("xerxes") => Self::Xerxes,
+            Some("xerxes-perfect") => Self::XerxesPerfect,
             Some("bacteria") => Self::Bacteria,
             Some("bacteria-half") => Self::BacteriaHalf,
             _ => Self::Baseline,
@@ -59,6 +61,7 @@ impl CrtFontExperiment {
             Self::CoverageMax => "coverage-max",
             Self::DominantRow => "dominant-row",
             Self::Xerxes => "xerxes",
+            Self::XerxesPerfect => "xerxes-perfect",
             Self::Bacteria => "bacteria",
             Self::BacteriaHalf => "bacteria-half",
         }
@@ -72,6 +75,7 @@ impl CrtFontExperiment {
             | Self::CoverageMax
             | Self::DominantRow
             | Self::Xerxes
+            | Self::XerxesPerfect
             | Self::Bacteria
             | Self::BacteriaHalf => mister_magik_mister_runtime::framebuffer::vertical_scale::VerticalSampling::CenteredNearest,
             Self::PhaseEven => mister_magik_mister_runtime::framebuffer::vertical_scale::VerticalSampling::TopAlignedNearest,
@@ -1005,6 +1009,17 @@ mod tests {
         let experiment = CrtFontExperiment::parse(Some("xerxes"));
         assert_eq!(experiment, CrtFontExperiment::Xerxes);
         assert_eq!(experiment.label(), "xerxes");
+        assert_eq!(
+            experiment.vertical_sampling(),
+            mister_magik_mister_runtime::framebuffer::vertical_scale::VerticalSampling::CenteredNearest
+        );
+    }
+
+    #[test]
+    fn xerxes_perfect_keeps_the_original_centered_scanout_sampling() {
+        let experiment = CrtFontExperiment::parse(Some("xerxes-perfect"));
+        assert_eq!(experiment, CrtFontExperiment::XerxesPerfect);
+        assert_eq!(experiment.label(), "xerxes-perfect");
         assert_eq!(
             experiment.vertical_sampling(),
             mister_magik_mister_runtime::framebuffer::vertical_scale::VerticalSampling::CenteredNearest
