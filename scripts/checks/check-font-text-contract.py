@@ -68,6 +68,14 @@ CONTRACTS = (
         "41px",
     ),
     PrimitiveContract(
+        UI_ROOT / "components/jersey_15.slint",
+        "Jersey15",
+        "Jersey15Size",
+        ("px15",),
+        "Jersey 15",
+        "27px",
+    ),
+    PrimitiveContract(
         UI_ROOT / "components/nocive_15.slint",
         "Nocive15",
         "Nocive15Size",

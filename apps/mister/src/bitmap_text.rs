@@ -80,6 +80,7 @@ pub enum ConsoleTypeface {
     PressStart2P,
     Yesterday10,
     Yesterday10Perfect,
+    Jersey15,
     Nocive15,
     Xerxes10,
     Xerxes10Perfect,
@@ -127,6 +128,13 @@ impl ConsoleFont {
                     mister_magik_fb::bitmap_font_resource::yesterday_10_crt240_console_bitmap_font(
                     )
                     .expect("valid pixel-perfect Yesterday 10 bitmap font resource"),
+                )
+            }
+            ConsoleTypeface::Jersey15 => {
+                assert_eq!(pixel_size, 16.0, "Jersey 15 has one exact renderer size");
+                Some(
+                    mister_magik_fb::bitmap_font_resource::jersey_15_console_bitmap_font()
+                        .expect("valid pixel-perfect Jersey 15 bitmap font resource"),
                 )
             }
             ConsoleTypeface::Nocive15 => {
@@ -212,7 +220,8 @@ impl ConsoleFont {
                 include_bytes!("../ui/fonts/PressStart2P-Regular.ttf"),
                 "PressStart2P-Regular.ttf",
             ),
-            ConsoleTypeface::Nocive15
+            ConsoleTypeface::Jersey15
+            | ConsoleTypeface::Nocive15
             | ConsoleTypeface::Yesterday10
             | ConsoleTypeface::Yesterday10Perfect
             | ConsoleTypeface::Xerxes10
@@ -825,6 +834,7 @@ mod tests {
     fn centered_text_baseline_balances_crt_title_and_metadata_ink() {
         for (typeface, pixel_size, row_height, text) in [
             (ConsoleTypeface::Nocive15, 16.0, 32, "MagiK 1984"),
+            (ConsoleTypeface::Jersey15, 16.0, 32, "MagiK 1984"),
             (ConsoleTypeface::Nocive15, 16.0, 19, "MagiK 1984"),
             (ConsoleTypeface::Nocive15, 16.0, 39, "MagiK 1984"),
             (ConsoleTypeface::Xerxes10, 16.0, 32, "MagiK 1984"),
@@ -873,6 +883,15 @@ mod tests {
     #[test]
     fn nocive_15_uses_only_the_precompiled_exact_size_resource() {
         let mut font = ConsoleFont::new_with_typeface(16.0, ConsoleTypeface::Nocive15);
+        assert!(font.font.is_none());
+        let mask = font.rasterize_alpha_mask("ARCADE").unwrap();
+        assert_eq!(mask.height, 15);
+        assert!(mask.alpha.iter().all(|alpha| matches!(alpha, 0 | 255)));
+    }
+
+    #[test]
+    fn jersey_15_uses_only_the_precompiled_exact_size_resource() {
+        let mut font = ConsoleFont::new_with_typeface(16.0, ConsoleTypeface::Jersey15);
         assert!(font.font.is_none());
         let mask = font.rasterize_alpha_mask("ARCADE").unwrap();
         assert_eq!(mask.height, 15);

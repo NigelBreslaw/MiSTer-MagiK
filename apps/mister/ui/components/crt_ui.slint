@@ -3,6 +3,7 @@
 
 import { Spleen6x12, Spleen6x12Size } from "spleen_6x12.slint";
 import { Spleen5x8, Spleen5x8Size } from "spleen_5x8.slint";
+import { Jersey15 } from "jersey_15.slint";
 import { Jersey25 } from "jersey_25.slint";
 
 import { MisterUi } from "../mister_window.slint";
@@ -183,7 +184,19 @@ export component CrtCard inherits Rectangle {
             alignment: center;
             horizontal-stretch: 1;
 
-            if MisterUi.card-title-font >= 24px : Jersey25 {
+            if MisterUi.card-title-font >= 24px
+                && MisterUi.crt-body-font == Spleen6x12Size.px16 : Jersey15 {
+                text: root.label;
+                color: root.focused ? CrtTheme.accent-text
+                    : root.status == MenuItemStatus.failed ? CrtTheme.danger
+                    : root.status == MenuItemStatus.update-failed ? CrtTheme.warning
+                    : root.status == MenuItemStatus.scanning ? CrtTheme.accent
+                    : CrtTheme.text;
+                overflow: elide;
+                vertical-alignment: center;
+            }
+            if MisterUi.card-title-font >= 24px
+                && MisterUi.crt-body-font != Spleen6x12Size.px16 : Jersey25 {
                 text: root.label;
                 color: root.focused ? CrtTheme.accent-text
                     : root.status == MenuItemStatus.failed ? CrtTheme.danger

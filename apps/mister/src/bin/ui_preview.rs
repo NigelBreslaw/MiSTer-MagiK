@@ -3394,6 +3394,10 @@ mod macos {
                         include_bytes!("../../assets/snes/snes-small-v1.rgb565a"),
                     ),
                     (
+                        "jersey15-27px.mmbf",
+                        include_bytes!("../../assets/fonts/jersey15-27px.mmbf"),
+                    ),
+                    (
                         "jersey25-41px.mmbf",
                         include_bytes!("../../assets/fonts/jersey25-41px.mmbf"),
                     ),

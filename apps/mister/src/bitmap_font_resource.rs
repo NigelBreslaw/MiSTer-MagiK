@@ -28,6 +28,7 @@ const BACTERIA_12_RESOURCE: &[u8] =
     include_bytes!("../../../private/magik-assets/fonts/bacteria-12/bacteria12-32px.mmbf");
 const BACTERIA_12_NATIVE_RESOURCE: &[u8] =
     include_bytes!("../../../private/magik-assets/fonts/bacteria-12/bacteria12-16px.mmbf");
+const JERSEY_15_RESOURCE: &[u8] = include_bytes!("../assets/fonts/jersey15-27px.mmbf");
 const JERSEY_25_RESOURCE: &[u8] = include_bytes!("../assets/fonts/jersey25-41px.mmbf");
 #[cfg(not(feature = "asset-tools"))]
 const TERMINUS_8X14_NATIVE_RESOURCE: &[u8] =
@@ -446,7 +447,7 @@ pub fn register_bitmap_fonts(renderer: &slint::platform::software_renderer::Soft
     use std::cell::Cell;
     use std::sync::OnceLock;
 
-    static FONTS: OnceLock<[&'static i_slint_core::graphics::BitmapFont; 8]> = OnceLock::new();
+    static FONTS: OnceLock<[&'static i_slint_core::graphics::BitmapFont; 9]> = OnceLock::new();
     thread_local! {
         static REGISTERED: Cell<bool> = const { Cell::new(false) };
     }
@@ -461,6 +462,7 @@ pub fn register_bitmap_fonts(renderer: &slint::platform::software_renderer::Soft
             leak_font(
                 decode_resource(BACTERIA_12_RESOURCE).expect("valid Bacteria 12 bitmap font"),
             ),
+            leak_font(decode_resource(JERSEY_15_RESOURCE).expect("valid Jersey 15 bitmap font")),
             leak_font(decode_resource(JERSEY_25_RESOURCE).expect("valid Jersey 25 bitmap font")),
             leak_font_family(vec![
                 decode_resource(TERMINUS_8X14_NATIVE_RESOURCE)
@@ -582,6 +584,18 @@ const BACTERIA_12_NATIVE_SPEC: GeneratorSpec = GeneratorSpec {
 const JERSEY_25_SPEC: GeneratorSpec = GeneratorSpec {
     family: "Jersey 25",
     pixel_size: 41,
+    weight: 400,
+    hint: true,
+    threshold: 128,
+    coverage: Coverage::FullCharmap,
+};
+
+#[cfg(any(test, feature = "asset-tools"))]
+const JERSEY_15_SPEC: GeneratorSpec = GeneratorSpec {
+    family: "Jersey 15",
+    // Jersey 15's 750/1350 cap-height ratio needs a 27px source raster for
+    // exact 15px physical capitals.
+    pixel_size: 27,
     weight: 400,
     hint: true,
     threshold: 128,
@@ -989,6 +1003,11 @@ pub fn generate_jersey_25(font_bytes: &[u8]) -> Result<Vec<u8>, String> {
 }
 
 #[cfg(feature = "asset-tools")]
+pub fn generate_jersey_15(font_bytes: &[u8]) -> Result<Vec<u8>, String> {
+    generate_resource(font_bytes, JERSEY_15_SPEC)
+}
+
+#[cfg(feature = "asset-tools")]
 pub fn generate_terminus_8x14_normal(source: &str) -> Result<Vec<u8>, String> {
     generate_bdf_resource(source, "Terminus 8x14", 400, 2, 7.0, 10.0)
 }
@@ -1035,6 +1054,7 @@ mod tests {
         include_bytes!("../../../private/magik-assets/fonts/nocive-15/Nocive 15.ttf");
     const BACTERIA_12_TTF: &[u8] =
         include_bytes!("../../../private/magik-assets/fonts/bacteria-12/Bacteria 12.ttf");
+    const JERSEY_15_TTF: &[u8] = include_bytes!("../ui/fonts/Jersey15-Regular.ttf");
     const JERSEY_25_TTF: &[u8] = include_bytes!("../ui/fonts/Jersey25-Regular.ttf");
     const TERMINUS_8X14_NORMAL_BDF: &str =
         include_str!("../assets/fonts/terminus-8x14/ter-u14n.bdf");
@@ -1089,6 +1109,10 @@ mod tests {
             JERSEY_25_RESOURCE
         );
         assert_eq!(
+            generate_resource(JERSEY_15_TTF, JERSEY_15_SPEC).unwrap(),
+            JERSEY_15_RESOURCE
+        );
+        assert_eq!(
             generate_bdf_resource(TERMINUS_8X14_NORMAL_BDF, "Terminus 8x14", 400, 1, 7.0, 10.0,)
                 .unwrap(),
             TERMINUS_8X14_NATIVE_RESOURCE
@@ -1137,6 +1161,7 @@ mod tests {
         let nocive_15 = decode_resource(NOCIVE_15_RESOURCE).unwrap();
         let bacteria_12 = decode_resource(BACTERIA_12_RESOURCE).unwrap();
         let bacteria_12_native = decode_resource(BACTERIA_12_NATIVE_RESOURCE).unwrap();
+        let jersey_15 = decode_resource(JERSEY_15_RESOURCE).unwrap();
         let jersey_25 = decode_resource(JERSEY_25_RESOURCE).unwrap();
         for code_point in ['A', 'H', 'M', 'S'] {
             assert_eq!(glyph(&yesterday_10, code_point).height, 10);
@@ -1146,6 +1171,7 @@ mod tests {
             assert_eq!(glyph(&nocive_15, code_point).height, 15);
             assert_eq!(glyph(&bacteria_12, code_point).height, 24);
             assert_eq!(glyph(&bacteria_12_native, code_point).height, 12);
+            assert_eq!(glyph(&jersey_15, code_point).height, 15);
             assert_eq!(glyph(&jersey_25, code_point).height, 25);
         }
     }
@@ -1160,6 +1186,7 @@ mod tests {
             NOCIVE_15_RESOURCE,
             BACTERIA_12_RESOURCE,
             BACTERIA_12_NATIVE_RESOURCE,
+            JERSEY_15_RESOURCE,
             JERSEY_25_RESOURCE,
             TERMINUS_8X14_NATIVE_RESOURCE,
             TERMINUS_8X14_NORMAL_RESOURCE,

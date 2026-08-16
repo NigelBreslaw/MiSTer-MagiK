@@ -4,12 +4,13 @@
 use std::sync::OnceLock;
 
 // Directly shipped third-party assets remain visible in the in-app legal surface.
-pub const LICENSE_TITLES: [&str; 9] = [
+pub const LICENSE_TITLES: [&str; 10] = [
     "MiSTer MagiK",
     "FFmpeg",
     "Press Start 2P",
     "Commercial Fonts",
     "Jersey 25",
+    "Jersey 15",
     "Terminus Font",
     "Spleen",
     "Arcade Cabinet",
@@ -21,6 +22,7 @@ const FFMPEG: &str = include_str!("../licenses/FFMPEG.txt");
 const PRESS_START_2P: &str = include_str!("../licenses/PRESS-START-2P.txt");
 const COMMERCIAL_FONTS: &str = include_str!("../licenses/COMMERCIAL-FONTS.txt");
 const JERSEY_25: &str = include_str!("../licenses/JERSEY-25.txt");
+const JERSEY_15: &str = include_str!("../licenses/JERSEY-15.txt");
 const TERMINUS_FONT: &str = include_str!("../licenses/TERMINUS-FONT.txt");
 const SPLEEN: &str = include_str!("../licenses/SPLEEN.txt");
 const ARCADE_CABINET: &str =
@@ -30,19 +32,21 @@ const LICENSE_VISIBLE_ROWS: usize = 40;
 
 pub fn text(index: usize) -> &'static str {
     match index {
-        0 | 8 => GPL3,
+        0 | 9 => GPL3,
         1 => FFMPEG,
         2 => PRESS_START_2P,
         3 => COMMERCIAL_FONTS,
         4 => JERSEY_25,
-        5 => TERMINUS_FONT,
-        6 => SPLEEN,
-        _ => ARCADE_CABINET,
+        5 => JERSEY_15,
+        6 => TERMINUS_FONT,
+        7 => SPLEEN,
+        8 => ARCADE_CABINET,
+        _ => GPL3,
     }
 }
 
 pub fn wrapped_lines(index: usize) -> &'static [String] {
-    static LINES: [OnceLock<Vec<String>>; 9] = [const { OnceLock::new() }; 9];
+    static LINES: [OnceLock<Vec<String>>; 10] = [const { OnceLock::new() }; 10];
     let index = index.min(LICENSE_TITLES.len() - 1);
     LINES[index].get_or_init(|| wrap_text(index))
 }
@@ -94,7 +98,7 @@ mod tests {
 
     #[test]
     fn every_major_license_has_full_text_and_can_scroll() {
-        for index in [0, 1, 2, 4, 5, 8] {
+        for index in [0, 1, 2, 4, 5, 6, 9] {
             assert!(
                 text(index).len() > 1_000,
                 "{} text is incomplete",
@@ -123,17 +127,19 @@ mod tests {
                 "Press Start 2P",
                 "Commercial Fonts",
                 "Jersey 25",
+                "Jersey 15",
                 "Terminus Font",
                 "Spleen",
                 "Arcade Cabinet",
                 "Slint"
             ]
         );
-        assert_eq!(text(8), GPL3);
+        assert_eq!(text(9), GPL3);
         assert!(FFMPEG.contains("FFmpeg 8.1.2"));
         assert!(PRESS_START_2P.contains("SIL Open Font License"));
         assert!(COMMERCIAL_FONTS.contains("commercial licences"));
         assert!(JERSEY_25.contains("SIL OPEN FONT LICENSE"));
+        assert!(JERSEY_15.contains("SIL Open Font License"));
         assert!(TERMINUS_FONT.contains("Reserved Font Name \"Terminus Font\""));
         assert!(SPLEEN.contains("Redistribution and use in source and binary forms"));
         assert!(ARCADE_CABINET.contains("Lluc Guardiolaa"));

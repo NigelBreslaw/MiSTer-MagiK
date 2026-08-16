@@ -191,9 +191,12 @@ impl ArcadeListStyle {
                     ConsoleGlyphRowFilter::Native
                 }
             };
-        } else if display.output_route() == ResolvedOutputRoute::Crt240p60 {
+        } else if matches!(
+            display.output_route(),
+            ResolvedOutputRoute::Crt240p60 | ResolvedOutputRoute::Crt288p50
+        ) {
             style.title_font_px = 16.0;
-            style.title_typeface = ConsoleTypeface::Yesterday10;
+            style.title_typeface = ConsoleTypeface::Jersey15;
             style.glyph_row_filter = ConsoleGlyphRowFilter::Native;
         }
         style
@@ -3516,7 +3519,7 @@ mod tests {
             ArcadeListRenderer::new_for_crt_display(CrtUiMetrics::for_display(&display), &display);
 
         assert_eq!(renderer.style.title_font_px, 16.0);
-        assert_eq!(renderer.style.title_typeface, ConsoleTypeface::Yesterday10);
+        assert_eq!(renderer.style.title_typeface, ConsoleTypeface::Jersey15);
         assert_eq!(
             renderer.style.meta_typeface,
             ConsoleTypeface::Spleen6x12Small
