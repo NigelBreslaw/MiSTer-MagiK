@@ -278,11 +278,24 @@ impl SceneLabScene {
 #[derive(Debug, Subcommand)]
 pub enum LauncherCommand {
     Status,
-    Restart(AttendedArgs),
+    Restart(LauncherRestartArgs),
     CaptureFirstArcade(FirstArcadeCaptureArgs),
     CaptureCrtFontAb(CrtFontAbCaptureArgs),
     CaptureSnesHub(FirstArcadeCaptureArgs),
     ReturnToLauncher(AttendedArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct LauncherRestartArgs {
+    #[arg(long, required = true)]
+    attended: bool,
+    #[arg(long, value_enum)]
+    pub(crate) crt_font_experiment: Option<CrtFontExperiment>,
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+pub enum CrtFontExperiment {
+    PhaseEven,
 }
 
 #[derive(Debug, Args)]
@@ -475,6 +488,14 @@ impl Scene {
     }
 }
 
+impl CrtFontExperiment {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::PhaseEven => "phase-even",
+        }
+    }
+}
+
 impl DisplayMode {
     pub(crate) const fn as_str(self) -> &'static str {
         match self {
@@ -526,6 +547,17 @@ mod tests {
             .is_err()
         );
         assert!(TestCli::try_parse_from(["test", "mode", "set", "dev", "--attended"]).is_ok());
+        assert!(
+            TestCli::try_parse_from([
+                "test",
+                "launcher",
+                "restart",
+                "--attended",
+                "--crt-font-experiment",
+                "phase-even",
+            ])
+            .is_ok()
+        );
         assert!(
             TestCli::try_parse_from(["test", "catalog", "purge", "--attended", "--reboot",])
                 .is_ok()

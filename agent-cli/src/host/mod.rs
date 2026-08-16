@@ -471,15 +471,30 @@ impl NativeDevice {
                 }
                 DeviceCommand::Launcher { command } => match command {
                     LauncherCommand::Status => agent_magik(&device_strings(["status"])),
-                    LauncherCommand::Restart(_) => {
+                    LauncherCommand::Restart(args) => {
                         let session = connect(10)?;
-                        launcher_restart(
-                            &session,
-                            &LauncherRestartOptions {
-                                clear_env: true,
-                                ..LauncherRestartOptions::default()
-                            },
-                        )
+                        if let Some(experiment) = args.crt_font_experiment {
+                            restart_launcher_with_one_shot_env(
+                                &session,
+                                LauncherRestartOptions {
+                                    env_vars: vec![(
+                                        "MISTER_CRT_FONT_EXPERIMENT".into(),
+                                        experiment.as_str().into(),
+                                    )],
+                                    timeout_secs: 45,
+                                    remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str().into(),
+                                    ..LauncherRestartOptions::default()
+                                },
+                            )
+                        } else {
+                            launcher_restart(
+                                &session,
+                                &LauncherRestartOptions {
+                                    clear_env: true,
+                                    ..LauncherRestartOptions::default()
+                                },
+                            )
+                        }
                     }
                     LauncherCommand::CaptureFirstArcade(args) => {
                         capture_first_arcade(&prepared.config, &args.output)
