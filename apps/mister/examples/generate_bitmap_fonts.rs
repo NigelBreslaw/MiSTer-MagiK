@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use mister_magik_fb::bitmap_font_resource::{
-    generate_jersey_25, generate_nocive_15, generate_xerxes_10, generate_yesterday_10,
+    generate_bacteria_12, generate_jersey_25, generate_nocive_15, generate_xerxes_10,
+    generate_yesterday_10,
 };
 use std::path::PathBuf;
 
@@ -21,6 +22,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let yesterday_dir = private_asset_dir.join("fonts/yesterday-10");
     let xerxes_dir = private_asset_dir.join("fonts/xerxes-10");
     let nocive_dir = private_asset_dir.join("fonts/nocive-15");
+    let bacteria_dir = private_asset_dir.join("fonts/bacteria-12");
     std::fs::create_dir_all(&public_output_dir)?;
     std::fs::write(
         yesterday_dir.join("yesterday10-16px.mmbf"),
@@ -33,6 +35,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     std::fs::write(
         nocive_dir.join("nocive15-16px.mmbf"),
         generate_nocive_15(&std::fs::read(nocive_dir.join("Nocive 15.ttf"))?)?,
+    )?;
+    std::fs::write(
+        bacteria_dir.join("bacteria12-32px.mmbf"),
+        generate_bacteria_12(&std::fs::read(bacteria_dir.join("Bacteria 12.ttf"))?)?,
     )?;
     std::fs::write(
         public_output_dir.join("jersey25-41px.mmbf"),

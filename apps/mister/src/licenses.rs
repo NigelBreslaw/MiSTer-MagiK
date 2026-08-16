@@ -104,6 +104,7 @@ mod tests {
         assert!(COMMERCIAL_FONTS.contains("Yesterday 10"));
         assert!(COMMERCIAL_FONTS.contains("Xerxes 10"));
         assert!(COMMERCIAL_FONTS.contains("Nocive 15"));
+        assert!(COMMERCIAL_FONTS.contains("Bacteria 12"));
     }
 
     #[test]

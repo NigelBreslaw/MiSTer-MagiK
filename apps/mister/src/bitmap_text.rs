@@ -80,6 +80,7 @@ pub enum ConsoleTypeface {
     PressStart2P,
     Nocive15,
     Xerxes10,
+    Bacteria12,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -117,6 +118,13 @@ impl ConsoleFont {
                 Some(
                     mister_magik_fb::bitmap_font_resource::xerxes_10_console_bitmap_font()
                         .expect("valid Xerxes 10 bitmap font resource"),
+                )
+            }
+            ConsoleTypeface::Bacteria12 => {
+                assert_eq!(pixel_size, 32.0, "Bacteria 12 has one exact CRT240 size");
+                Some(
+                    mister_magik_fb::bitmap_font_resource::bacteria_12_console_bitmap_font()
+                        .expect("valid Bacteria 12 bitmap font resource"),
                 )
             }
             ConsoleTypeface::PressStart2P => None,
@@ -157,7 +165,9 @@ impl ConsoleFont {
                 include_bytes!("../ui/fonts/PressStart2P-Regular.ttf"),
                 "PressStart2P-Regular.ttf",
             ),
-            ConsoleTypeface::Nocive15 | ConsoleTypeface::Xerxes10 => unreachable!(),
+            ConsoleTypeface::Nocive15 | ConsoleTypeface::Xerxes10 | ConsoleTypeface::Bacteria12 => {
+                unreachable!()
+            }
         };
         let font = swash::FontRef::from_index(data, 0).unwrap_or_else(|| panic!("{name}"));
         let metrics = font.metrics(&[]);
@@ -766,6 +776,7 @@ mod tests {
             (ConsoleTypeface::Xerxes10, 16.0, 32, "MagiK 1984"),
             (ConsoleTypeface::Xerxes10, 16.0, 19, "MagiK 1984"),
             (ConsoleTypeface::Xerxes10, 16.0, 39, "MagiK 1984"),
+            (ConsoleTypeface::Bacteria12, 32.0, 32, "MagiK 1984"),
             (ConsoleTypeface::PressStart2P, 8.0, 32, "128"),
             (ConsoleTypeface::PressStart2P, 8.0, 19, "128"),
             (ConsoleTypeface::PressStart2P, 8.0, 39, "128"),
@@ -817,6 +828,24 @@ mod tests {
         let mask = font.rasterize_alpha_mask("ARCADE").unwrap();
         assert_eq!(mask.height, 10);
         assert!(mask.alpha.iter().all(|alpha| matches!(alpha, 0 | 255)));
+    }
+
+    #[test]
+    fn bacteria_12_uses_the_pixel_perfect_crt240_resource() {
+        let mut font = ConsoleFont::new_with_typeface(32.0, ConsoleTypeface::Bacteria12);
+        assert!(font.font.is_none());
+        let mask = font.rasterize_alpha_mask("ARCADE").unwrap();
+        assert_eq!(mask.height, 24);
+        assert_eq!(mask.width % 2, 0);
+        assert!(mask.alpha.iter().all(|alpha| matches!(alpha, 0 | 255)));
+        for rows in mask.alpha.chunks_exact(mask.stride * 2) {
+            for x in (0..mask.width).step_by(2) {
+                let cell = rows[x];
+                assert_eq!(rows[x + 1], cell);
+                assert_eq!(rows[mask.stride + x], cell);
+                assert_eq!(rows[mask.stride + x + 1], cell);
+            }
+        }
     }
 
     #[test]

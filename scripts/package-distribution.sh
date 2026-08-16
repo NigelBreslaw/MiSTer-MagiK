@@ -431,7 +431,7 @@ portion remains under its upstream GPL-3.0 terms.
 The launcher includes Slint under its GPL-3.0-only option, the normal runtime
 Rust dependency closure, statically linked FFmpeg libraries under LGPL-2.1-or-later,
 the Press Start 2P and Jersey 25 fonts under SIL OFL-1.1, commercially licensed
-Yesterday 10, Xerxes 10, and Nocive 15 bitmap glyphs, and the Arcade Cabinet particle model
+Yesterday 10, Xerxes 10, Nocive 15, and Bacteria 12 bitmap glyphs, and the Arcade Cabinet particle model
 by Lluc Guardiolaa under CC-BY-NC-4.0. Complete notices and attribution are in
 the mister-magik/licenses/ directory.
 

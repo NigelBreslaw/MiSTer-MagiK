@@ -74,6 +74,7 @@ struct ArcadeListStyle {
     badge_fill: Pixel,
     badge_fill_565: Rgb565Pixel,
     badge_text: Pixel,
+    title_font_px: f32,
     title_typeface: ConsoleTypeface,
     meta_typeface: ConsoleTypeface,
     glyph_row_filter: ConsoleGlyphRowFilter,
@@ -135,6 +136,7 @@ impl ArcadeListStyle {
             badge_fill: ARCADE_NEW_BADGE_FILL,
             badge_fill_565: ARCADE_NEW_BADGE_FILL_565,
             badge_text: ARCADE_NEW_BADGE_TEXT,
+            title_font_px: ARCADE_LIST_FONT_PX,
             title_typeface: ConsoleTypeface::Nocive15,
             meta_typeface: ConsoleTypeface::PressStart2P,
             glyph_row_filter: ConsoleGlyphRowFilter::Native,
@@ -155,6 +157,11 @@ impl ArcadeListStyle {
                 CrtFontExperiment::DominantRow => ConsoleGlyphRowFilter::PairwiseDominant,
                 CrtFontExperiment::Xerxes => {
                     style.title_typeface = ConsoleTypeface::Xerxes10;
+                    ConsoleGlyphRowFilter::Native
+                }
+                CrtFontExperiment::Bacteria => {
+                    style.title_font_px = 32.0;
+                    style.title_typeface = ConsoleTypeface::Bacteria12;
                     ConsoleGlyphRowFilter::Native
                 }
                 CrtFontExperiment::Baseline | CrtFontExperiment::PhaseEven => {
@@ -187,6 +194,7 @@ impl ArcadeListStyle {
             badge_fill: Pixel(0x0040e5e7),
             badge_fill_565: rgb565_from_rgb888(0x40, 0xe5, 0xe7),
             badge_text: Pixel(0x0003132d),
+            title_font_px: ARCADE_LIST_FONT_PX,
             title_typeface: ConsoleTypeface::Nocive15,
             meta_typeface: match metrics.font_family {
                 CrtFontFamily::PressStart2P => ConsoleTypeface::PressStart2P,
@@ -395,7 +403,7 @@ impl ArcadeListRenderer {
     fn new_with_style(style: ArcadeListStyle, crt_metrics: Option<CrtUiMetrics>) -> Self {
         Self {
             title_font: ConsoleFont::new_with_typeface_and_row_filter(
-                ARCADE_LIST_FONT_PX,
+                style.title_font_px,
                 style.title_typeface,
                 style.glyph_row_filter,
             ),
@@ -3355,6 +3363,27 @@ mod tests {
         assert_eq!(baseline.style.title_typeface, ConsoleTypeface::Nocive15);
         assert_eq!(xerxes.style.title_typeface, ConsoleTypeface::Xerxes10);
         assert_eq!(xerxes.style.glyph_row_filter, ConsoleGlyphRowFilter::Native);
+        assert_eq!(hdmi.style.title_typeface, ConsoleTypeface::Nocive15);
+    }
+
+    #[test]
+    fn bacteria_uses_the_exact_32px_crt240_title_resource() {
+        let bacteria_display =
+            crt_240_display().with_crt_font_experiment(CrtFontExperiment::Bacteria);
+        let bacteria = ArcadeListRenderer::new_for_crt_display(
+            CrtUiMetrics::for_display(&bacteria_display),
+            &bacteria_display,
+        );
+        let hdmi = ArcadeListRenderer::new();
+
+        assert_eq!(bacteria.style.title_font_px, 32.0);
+        assert_eq!(bacteria.style.title_typeface, ConsoleTypeface::Bacteria12);
+        assert_eq!(
+            bacteria.style.glyph_row_filter,
+            ConsoleGlyphRowFilter::Native
+        );
+        assert_eq!(bacteria.style.row_height, 32);
+        assert_eq!(hdmi.style.title_font_px, ARCADE_LIST_FONT_PX);
         assert_eq!(hdmi.style.title_typeface, ConsoleTypeface::Nocive15);
     }
 

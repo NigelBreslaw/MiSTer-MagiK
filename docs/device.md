@@ -168,6 +168,13 @@ This selects the existing exact-size Xerxes 10 bitmap resource only for CRT240
 Arcade titles, applies no glyph-row reconstruction, and does not touch the
 catalog. Capture only after the operator confirms the Arcade list is visible.
 
+For the pixel-grid Bacteria 12 comparison, use
+`scripts/agent device launcher restart --attended --crt-font-experiment bacteria`.
+It selects the generated 32px Bacteria resource only for CRT240 Arcade titles
+and game rows. Each 64-unit design cell becomes a 2×2 composition block, so the
+normal centered 480→240 conversion retains the intended bitmap exactly. It
+does not use glyph-row reconstruction or touch the catalog.
+
 On macOS, `scripts/agent capture usb-video [--output PATH]` captures the first
 nonblank 1920x1080 frame from the fixed `USB Video` input. The native
 AVFoundation path writes JPEG, refuses to overwrite an explicit output, and

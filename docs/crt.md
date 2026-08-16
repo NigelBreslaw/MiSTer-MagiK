@@ -110,6 +110,17 @@ repair filter:
 scripts/agent device launcher restart --attended --crt-font-experiment xerxes
 ```
 
+The `bacteria` arm uses the supplied Bacteria 12 bitmap design at 32px for the
+CRT240 Arcade title and game rows. The font has a 1,024-unit em and 64-unit
+design grid, so 32px maps each design cell to a 2×2 composition block. The
+production 480→240 transform therefore preserves every cell as an exact 2×1
+framebuffer block, which is physically square at 640×240 on a 4:3 display. Its
+768-unit capitals become 24 composition rows and 12 output scanlines:
+
+```text
+scripts/agent device launcher restart --attended --crt-font-experiment bacteria
+```
+
 Only `STEM-raw.png` is authoritative framebuffer evidence; the two `4x3`
 files are derived host previews and must not be used as HDMI/CRT sink proof.
 
