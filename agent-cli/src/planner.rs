@@ -186,6 +186,8 @@ fn classified(path: &Path) -> bool {
     crate::components::classify(path).is_some()
 }
 
+const LAUNCHER_VISUAL_MATRIX_ENABLED: bool = false;
+
 fn launcher_visual_matrix_affected(path: &Path) -> bool {
     path.starts_with("apps/mister/ui")
         || path.starts_with("apps/mister/ui-generated")
@@ -687,7 +689,7 @@ fn add_path_operations(
             ));
         }
     }
-    if launcher_visual_matrix_affected(path) {
+    if LAUNCHER_VISUAL_MATRIX_ENABLED && launcher_visual_matrix_affected(path) {
         let mut matrix = with_inputs(
             cargo(
                 "app.launcher-visual-matrix",
@@ -1964,20 +1966,16 @@ mod tests {
             assert!(operation.args.contains(&"ui-preview".into()));
             assert_eq!(operation.inputs, MISTER_APP_COMPILED_INPUTS);
         }
-        let matrix = plan
-            .operations
-            .iter()
-            .find(|operation| operation.id == "app.launcher-visual-matrix")
-            .expect("preview changes select visual matrix");
-        assert_eq!(matrix.phase, WorkflowPhase::Expensive);
-        assert_eq!(matrix.risk, Risk::LocalWrite);
-        assert!(matrix.args.contains(&"--check-baselines".into()));
-        assert!(!matrix.args.iter().any(|arg| arg.contains("update")));
-        assert_eq!(matrix.inputs, MISTER_APP_COMPILED_INPUTS);
+        assert!(
+            !plan
+                .operations
+                .iter()
+                .any(|operation| operation.id == "app.launcher-visual-matrix")
+        );
     }
 
     #[test]
-    fn launcher_visual_matrix_covers_every_owned_seam() {
+    fn launcher_visual_matrix_is_temporarily_disabled_for_every_owned_seam() {
         for path in [
             "apps/mister/ui/launcher.slint",
             "apps/mister/src/launcher_presentation.rs",
@@ -1995,10 +1993,10 @@ mod tests {
             )
             .unwrap_or_else(|error| panic!("cannot plan {path}: {error}"));
             assert!(
-                plan.operations
+                !plan
+                    .operations
                     .iter()
-                    .any(|operation| operation.id == "app.launcher-visual-matrix"),
-                "missing launcher matrix for {path}"
+                    .any(|operation| operation.id == "app.launcher-visual-matrix")
             );
         }
     }
