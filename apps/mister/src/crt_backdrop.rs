@@ -740,17 +740,6 @@ fn blend_rgb565_range(
         }
     } else {
         if coarse_factor == 2 {
-            macro_rules! bucket {
-                ($alpha:literal, $inverse:literal) => {
-                    blend_rgb565_coarse_two_const::<$alpha, $inverse>(
-                        destination,
-                        previous,
-                        current,
-                        start,
-                        end,
-                    )
-                };
-            }
             match alpha_bucket.min(32) {
                 0 => copy_rgb565_coarse_two_source(destination, previous, start, end),
                 32 => copy_rgb565_coarse_two_source(destination, current, start, end),
@@ -774,26 +763,62 @@ fn blend_rgb565_range(
                     #[cfg(not(all(target_os = "linux", target_arch = "arm")))]
                     {
                         match alpha_bucket.min(32) {
-                            4 => bucket!(4, 28),
-                            8 => bucket!(8, 24),
-                            12 => bucket!(12, 20),
-                            16 => bucket!(16, 16),
-                            20 => bucket!(20, 12),
-                            25 => bucket!(25, 7),
+                            4 => blend_rgb565_coarse_two_const::<4, 28>(
+                                destination,
+                                previous,
+                                current,
+                                start,
+                                end,
+                            ),
+                            8 => blend_rgb565_coarse_two_const::<8, 24>(
+                                destination,
+                                previous,
+                                current,
+                                start,
+                                end,
+                            ),
+                            12 => blend_rgb565_coarse_two_const::<12, 20>(
+                                destination,
+                                previous,
+                                current,
+                                start,
+                                end,
+                            ),
+                            16 => blend_rgb565_coarse_two_const::<16, 16>(
+                                destination,
+                                previous,
+                                current,
+                                start,
+                                end,
+                            ),
+                            20 => blend_rgb565_coarse_two_const::<20, 12>(
+                                destination,
+                                previous,
+                                current,
+                                start,
+                                end,
+                            ),
+                            25 => blend_rgb565_coarse_two_const::<25, 7>(
+                                destination,
+                                previous,
+                                current,
+                                start,
+                                end,
+                            ),
                             _ => {}
                         }
-                    }
-                    let mut index = start;
-                    while index + 1 < end {
-                        let pixel =
-                            blend_rgb565_bucket(previous[index], current[index], alpha_bucket);
-                        destination[index] = pixel;
-                        destination[index + 1] = pixel;
-                        index += 2;
-                    }
-                    if index < end {
-                        destination[index] =
-                            blend_rgb565_bucket(previous[index], current[index], alpha_bucket);
+                        let mut index = start;
+                        while index + 1 < end {
+                            let pixel =
+                                blend_rgb565_bucket(previous[index], current[index], alpha_bucket);
+                            destination[index] = pixel;
+                            destination[index + 1] = pixel;
+                            index += 2;
+                        }
+                        if index < end {
+                            destination[index] =
+                                blend_rgb565_bucket(previous[index], current[index], alpha_bucket);
+                        }
                     }
                 }
             }
@@ -873,6 +898,7 @@ fn copy_rgb565_coarse_two_source(
     }
 }
 
+#[cfg(not(all(target_os = "linux", target_arch = "arm")))]
 #[inline(always)]
 fn blend_rgb565_coarse_two_const<const ALPHA: u32, const INVERSE: u32>(
     destination: &mut [Rgb565Pixel],
@@ -893,6 +919,7 @@ fn blend_rgb565_coarse_two_const<const ALPHA: u32, const INVERSE: u32>(
     }
 }
 
+#[cfg(not(all(target_os = "linux", target_arch = "arm")))]
 #[inline(always)]
 const fn blend_rgb565_const<const ALPHA: u32, const INVERSE: u32>(
     from: Rgb565Pixel,
