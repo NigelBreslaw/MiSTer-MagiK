@@ -695,18 +695,20 @@ fn blend_rgb565_range(
         .min(current.len());
     let start = start.min(end);
     if coarse_factor <= 1 {
-        let mut index = start;
-        while index < end {
-            let pixel = blend_rgb565_bucket(previous[index], current[index], alpha_bucket);
-            let mut run_end = index + 1;
-            while run_end < end
-                && previous[run_end] == previous[index]
-                && current[run_end] == current[index]
+        let mut previous_source = Rgb565Pixel(u16::MAX);
+        let mut previous_current = Rgb565Pixel(u16::MAX);
+        for index in start..end {
+            if index > start
+                && previous[index] == previous_source
+                && current[index] == previous_current
             {
-                run_end += 1;
+                destination[index] = destination[index - 1];
+            } else {
+                destination[index] =
+                    blend_rgb565_bucket(previous[index], current[index], alpha_bucket);
             }
-            destination[index..run_end].fill(pixel);
-            index = run_end;
+            previous_source = previous[index];
+            previous_current = current[index];
         }
     } else {
         let mut index = start;
