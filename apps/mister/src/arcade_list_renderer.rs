@@ -2461,9 +2461,7 @@ mod tests {
         )
         .output_layout();
         let sentinel = Rgb565Pixel(0x1234);
-        let backdrop = (0..layout.len())
-            .map(|index| Rgb565Pixel((index as u16).wrapping_mul(17)))
-            .collect::<Vec<_>>();
+        let backdrop = vec![Rgb565Pixel(0x4321); layout.len()];
         let mut target = UiFrameTarget::cached(FramebufferTargetGeometry::new(640, 480));
         target.cached_565_mut().fill(sentinel);
         assert!(renderer.compose_layer_over_backdrop_to_oriented_cached(

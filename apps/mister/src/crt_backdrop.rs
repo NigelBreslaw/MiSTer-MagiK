@@ -1156,7 +1156,7 @@ mod tests {
 
         let mut backdrop = CrtBackdropState::new_with_heights(1, 480, 240);
         backdrop.retarget(Some(frame(&source, 1, 480)), Duration::ZERO);
-        let _ = backdrop.compose(Duration::ZERO);
+        let _ = backdrop.compose(CRT_BACKDROP_FADE_DURATION);
         let logical = backdrop.pixels();
         for physical_y in 0..240 {
             assert_eq!(logical[physical_y * 2 + 1], reference[physical_y * 2 + 1]);
