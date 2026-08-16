@@ -758,6 +758,7 @@ fn blend_rgb565_range(
                 12 => bucket!(12, 20),
                 16 => bucket!(16, 16),
                 20 => bucket!(20, 12),
+                25 => bucket!(25, 7),
                 32 => copy_rgb565_coarse_two_source(destination, current, start, end),
                 _ => {
                     let mut index = start;
