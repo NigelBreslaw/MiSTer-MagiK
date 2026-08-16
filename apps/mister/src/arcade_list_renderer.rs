@@ -282,6 +282,7 @@ pub struct ArcadeListRenderer {
     meta_font: ConsoleFont,
     row_cache: HashMap<usize, CachedArcadeRow>,
     favourite_launch_refs: HashSet<String>,
+    favourite_launch_refs_revision: u64,
     surface: Vec<Rgb565Pixel>,
     surface_nonfill_runs: Vec<Vec<(usize, usize)>>,
     surface_selected_text_runs: Vec<Vec<(usize, usize)>>,
@@ -385,6 +386,7 @@ impl ArcadeListRenderer {
             ),
             row_cache: HashMap::new(),
             favourite_launch_refs: HashSet::new(),
+            favourite_launch_refs_revision: u64::MAX,
             surface: vec![style.background_565; ARCADE_LIST_W * ARCADE_LIST_H],
             surface_nonfill_runs: vec![Vec::new(); ARCADE_LIST_H],
             surface_selected_text_runs: vec![Vec::new(); ARCADE_LIST_H],
@@ -475,6 +477,18 @@ impl ArcadeListRenderer {
             self.row_fingerprint_cache.clear();
             self.invalidate_presented_layer();
         }
+    }
+
+    pub fn set_favourite_launch_refs_if_changed<'a>(
+        &mut self,
+        revision: u64,
+        refs: impl IntoIterator<Item = &'a str>,
+    ) {
+        if self.favourite_launch_refs_revision == revision {
+            return;
+        }
+        self.set_favourite_launch_refs(refs);
+        self.favourite_launch_refs_revision = revision;
     }
 
     pub fn draw(

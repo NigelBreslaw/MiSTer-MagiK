@@ -865,6 +865,7 @@ pub struct LauncherNav {
     pub arcade_filter: ArcadeFilterState,
     pub arcade_search: ArcadeSearchState,
     favourite_launch_refs: HashSet<String>,
+    favourite_launch_refs_revision: u64,
     recent_launch_refs: Vec<String>,
     arcade_user_list_mode: ArcadeUserListMode,
     user_list_indexes: Vec<usize>,
@@ -959,6 +960,7 @@ pub struct NavigationTransitionState {
     arcade_filter: ArcadeFilterState,
     arcade_search: ArcadeSearchState,
     favourite_launch_refs: HashSet<String>,
+    favourite_launch_refs_revision: u64,
     recent_launch_refs: Vec<String>,
     arcade_user_list_mode: ArcadeUserListMode,
     user_list_indexes: Vec<usize>,
@@ -1277,6 +1279,7 @@ impl LauncherNav {
             arcade_filter: ArcadeFilterState::new(),
             arcade_search: ArcadeSearchState::new(),
             favourite_launch_refs: HashSet::new(),
+            favourite_launch_refs_revision: 0,
             recent_launch_refs: Vec::new(),
             arcade_user_list_mode: ArcadeUserListMode::Games,
             user_list_indexes: Vec::new(),
@@ -1946,6 +1949,7 @@ impl LauncherNav {
             arcade_filter: self.arcade_filter.clone(),
             arcade_search: self.arcade_search.clone(),
             favourite_launch_refs: self.favourite_launch_refs.clone(),
+            favourite_launch_refs_revision: self.favourite_launch_refs_revision,
             recent_launch_refs: self.recent_launch_refs.clone(),
             arcade_user_list_mode: self.arcade_user_list_mode,
             user_list_indexes: self.user_list_indexes.clone(),
@@ -1993,6 +1997,7 @@ impl LauncherNav {
         self.arcade_filter = state.arcade_filter;
         self.arcade_search = state.arcade_search;
         self.favourite_launch_refs = state.favourite_launch_refs;
+        self.favourite_launch_refs_revision = state.favourite_launch_refs_revision;
         self.recent_launch_refs = state.recent_launch_refs;
         self.arcade_user_list_mode = state.arcade_user_list_mode;
         self.user_list_indexes = state.user_list_indexes;
@@ -3326,7 +3331,12 @@ impl LauncherNav {
     }
 
     pub fn set_favourite_launch_refs(&mut self, refs: impl IntoIterator<Item = String>) {
-        self.favourite_launch_refs = refs.into_iter().collect();
+        let refs = refs.into_iter().collect::<HashSet<_>>();
+        if self.favourite_launch_refs != refs {
+            self.favourite_launch_refs = refs;
+            self.favourite_launch_refs_revision =
+                self.favourite_launch_refs_revision.wrapping_add(1);
+        }
     }
 
     pub fn set_user_game_refs(
@@ -3398,10 +3408,14 @@ impl LauncherNav {
     }
 
     pub fn apply_favourite_state(&mut self, launch_ref: &str, favourite: bool) {
-        if favourite {
-            self.favourite_launch_refs.insert(launch_ref.to_string());
+        let changed = if favourite {
+            self.favourite_launch_refs.insert(launch_ref.to_string())
         } else {
-            self.favourite_launch_refs.remove(launch_ref);
+            self.favourite_launch_refs.remove(launch_ref)
+        };
+        if changed {
+            self.favourite_launch_refs_revision =
+                self.favourite_launch_refs_revision.wrapping_add(1);
         }
     }
 
@@ -3421,6 +3435,10 @@ impl LauncherNav {
 
     pub fn favourite_launch_refs(&self) -> impl Iterator<Item = &str> {
         self.favourite_launch_refs.iter().map(String::as_str)
+    }
+
+    pub fn favourite_launch_refs_revision(&self) -> u64 {
+        self.favourite_launch_refs_revision
     }
 
     #[must_use]

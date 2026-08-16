@@ -836,7 +836,10 @@ fn configure_arcade_list_renderer_geometry(
 ) {
     let (geometry, render_h) = arcade_list_layout(nav, ui);
     renderer.set_geometry_for_render_h(geometry, render_h);
-    renderer.set_favourite_launch_refs(nav.favourite_launch_refs());
+    renderer.set_favourite_launch_refs_if_changed(
+        nav.favourite_launch_refs_revision(),
+        nav.favourite_launch_refs(),
+    );
 }
 
 fn navigation_transition_for_intent(
