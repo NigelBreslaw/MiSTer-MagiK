@@ -857,33 +857,6 @@ fn copy_rgb565_row_excluding(
     protected_rects: &[(usize, usize, usize, usize)],
 ) {
     let width = destination.len().min(source.len());
-    if protected_rects.len() == 3 {
-        let first = protected_rects[0];
-        let second = protected_rects[1];
-        let third = protected_rects[2];
-        let first_overlaps = row >= first.1 && row < first.3;
-        let second_overlaps = row >= second.1 && row < second.3;
-        let third_overlaps = row >= third.1 && row < third.3;
-        let overlap_count = first_overlaps as u8 + second_overlaps as u8 + third_overlaps as u8;
-        if overlap_count == 0 {
-            destination[..width].copy_from_slice(&source[..width]);
-            return;
-        }
-        if overlap_count == 1 {
-            let (x0, x1) = if first_overlaps {
-                (first.0, first.2)
-            } else if second_overlaps {
-                (second.0, second.2)
-            } else {
-                (third.0, third.2)
-            };
-            let protected_start = x0.min(width);
-            let protected_end = x1.min(width).max(protected_start);
-            destination[..protected_start].copy_from_slice(&source[..protected_start]);
-            destination[protected_end..width].copy_from_slice(&source[protected_end..width]);
-            return;
-        }
-    }
     let mut overlapping = None;
     let mut overlap_count = 0usize;
     for &(x0, y0, x1, y1) in protected_rects {
