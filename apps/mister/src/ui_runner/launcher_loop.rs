@@ -9862,7 +9862,7 @@ pub(super) fn run_launcher_loop(
                         arcade_list_renderer.dirty_rect(),
                     )
                     .map(|rect| (rect.x0, rect.y0, rect.x1, rect.y1));
-                    crt_backdrop_work_trace = backdrop.compose_into_excluding(
+                    crt_backdrop_work_trace = backdrop.compose_into_coarse_excluding(
                         loop_start.saturating_duration_since(run_start),
                         layer_target.presentation_pixels_mut(),
                         &protected_chrome,

@@ -221,7 +221,7 @@ impl CrtBackdropState {
 
     pub fn compose(&mut self, now: Duration) -> CrtBackdropWorkTrace {
         let mut logical_retarget = std::mem::take(&mut self.logical_retarget);
-        let trace = self.compose_to(now, &mut logical_retarget, &[]);
+        let trace = self.compose_to(now, &mut logical_retarget, &[], 1);
         self.logical_retarget = logical_retarget;
         trace
     }
@@ -233,7 +233,7 @@ impl CrtBackdropState {
         now: Duration,
         destination: &mut [Rgb565Pixel],
     ) -> CrtBackdropWorkTrace {
-        self.compose_to(now, destination, &[])
+        self.compose_to(now, destination, &[], 1)
     }
 
     /// Compose the backdrop while preserving opaque UI rectangles already in
@@ -246,7 +246,18 @@ impl CrtBackdropState {
         destination: &mut [Rgb565Pixel],
         protected_rects: &[(usize, usize, usize, usize)],
     ) -> CrtBackdropWorkTrace {
-        self.compose_to(now, destination, protected_rects)
+        self.compose_to(now, destination, protected_rects, 1)
+    }
+
+    /// Compose a deliberately coarse 2x2 backdrop fade for CRT performance
+    /// experiments. The interactive foreground remains full resolution.
+    pub fn compose_into_coarse_excluding(
+        &mut self,
+        now: Duration,
+        destination: &mut [Rgb565Pixel],
+        protected_rects: &[(usize, usize, usize, usize)],
+    ) -> CrtBackdropWorkTrace {
+        self.compose_to(now, destination, protected_rects, 2)
     }
 
     fn compose_to(
@@ -254,6 +265,7 @@ impl CrtBackdropState {
         now: Duration,
         destination: &mut [Rgb565Pixel],
         protected_rects: &[(usize, usize, usize, usize)],
+        coarse_factor: usize,
     ) -> CrtBackdropWorkTrace {
         let mut trace = CrtBackdropWorkTrace {
             prepare_us: std::mem::take(&mut self.pending_prepare_us),
@@ -273,46 +285,67 @@ impl CrtBackdropState {
         let alpha_bucket = ((numerator * 32 + denominator / 2) / denominator) as u16;
         let blend_start = Instant::now();
         let row_width = self.width.max(1);
-        for row in 0..self.physical_height {
+        let coarse_factor = coarse_factor.max(1);
+        let mut row = 0;
+        while row < self.physical_height {
             let start = row.saturating_mul(row_width);
             let end = start.saturating_add(row_width).min(self.retarget.len());
             if row > 0 && self.source_row_repeats[row] && self.target_row_repeats[row] {
                 let (before, current) = self.retarget.split_at_mut(start);
                 current[..end - start].copy_from_slice(&before[start - row_width..start]);
-                continue;
-            }
-            let destination = &mut self.retarget[start..end];
-            let previous = &self.source[start..end];
-            let current = &self.target[start..end];
-            let mut cursor = 0;
-            for &(x0, y0, x1, y1) in protected_rects {
-                if row < y0 || row >= y1 {
-                    continue;
+            } else {
+                let destination = &mut self.retarget[start..end];
+                let previous = &self.source[start..end];
+                let current = &self.target[start..end];
+                let mut cursor = 0;
+                for &(x0, y0, x1, y1) in protected_rects {
+                    if row < y0 || row >= y1 {
+                        continue;
+                    }
+                    let protected_start = x0.min(destination.len());
+                    let protected_end = x1.min(destination.len()).max(protected_start);
+                    blend_rgb565_range(
+                        destination,
+                        previous,
+                        current,
+                        cursor,
+                        protected_start.max(cursor),
+                        alpha_bucket,
+                        coarse_factor,
+                    );
+                    cursor = cursor.max(protected_end);
                 }
-                let protected_start = x0.min(destination.len());
-                let protected_end = x1.min(destination.len()).max(protected_start);
                 blend_rgb565_range(
                     destination,
                     previous,
                     current,
                     cursor,
-                    protected_start.max(cursor),
+                    destination.len(),
                     alpha_bucket,
+                    coarse_factor,
                 );
-                cursor = cursor.max(protected_end);
             }
-            blend_rgb565_range(
-                destination,
-                previous,
-                current,
-                cursor,
-                destination.len(),
-                alpha_bucket,
-            );
+            for copy_row in row + 1..(row + coarse_factor).min(self.physical_height) {
+                let source_start = row * row_width;
+                let source_end = source_start
+                    .saturating_add(row_width)
+                    .min(self.retarget.len());
+                let destination_start = copy_row * row_width;
+                let destination_end = destination_start
+                    .saturating_add(row_width)
+                    .min(self.retarget.len());
+                copy_rgb565_row_excluding(
+                    &mut self.retarget[destination_start..destination_end],
+                    &self.retarget[source_start..source_end],
+                    copy_row,
+                    protected_rects,
+                );
+            }
+            row = row.saturating_add(coarse_factor);
         }
         for row in 0..self.physical_height {
-            self.retarget_row_repeats[row] =
-                row > 0 && self.source_row_repeats[row] && self.target_row_repeats[row];
+            self.retarget_row_repeats[row] = (coarse_factor > 1 && row % coarse_factor != 0)
+                || (row > 0 && self.source_row_repeats[row] && self.target_row_repeats[row]);
         }
         trace.blend_us = duration_us(blend_start.elapsed());
         trace.blend_pixels = self.retarget.len().min(u32::MAX as usize) as u32;
@@ -636,23 +669,37 @@ fn blend_rgb565_range(
     start: usize,
     end: usize,
     alpha_bucket: u16,
+    coarse_factor: usize,
 ) {
     let end = end
         .min(destination.len())
         .min(previous.len())
         .min(current.len());
     let start = start.min(end);
-    let mut previous_source = Rgb565Pixel(u16::MAX);
-    let mut previous_current = Rgb565Pixel(u16::MAX);
-    for index in start..end {
-        if index > start && previous[index] == previous_source && current[index] == previous_current
-        {
-            destination[index] = destination[index - 1];
-        } else {
-            destination[index] = blend_rgb565_bucket(previous[index], current[index], alpha_bucket);
+    if coarse_factor <= 1 {
+        let mut previous_source = Rgb565Pixel(u16::MAX);
+        let mut previous_current = Rgb565Pixel(u16::MAX);
+        for index in start..end {
+            if index > start
+                && previous[index] == previous_source
+                && current[index] == previous_current
+            {
+                destination[index] = destination[index - 1];
+            } else {
+                destination[index] =
+                    blend_rgb565_bucket(previous[index], current[index], alpha_bucket);
+            }
+            previous_source = previous[index];
+            previous_current = current[index];
         }
-        previous_source = previous[index];
-        previous_current = current[index];
+    } else {
+        let mut index = start;
+        while index < end {
+            let pixel = blend_rgb565_bucket(previous[index], current[index], alpha_bucket);
+            let block_end = index.saturating_add(coarse_factor).min(end);
+            destination[index..block_end].fill(pixel);
+            index = block_end;
+        }
     }
 }
 
@@ -892,5 +939,23 @@ mod tests {
         assert_eq!(destination[2], marker);
         assert_ne!(destination[0], marker);
         assert_ne!(destination[3], marker);
+    }
+
+    #[test]
+    fn coarse_compose_expands_each_fade_sample_to_a_two_by_two_block() {
+        let target = vec![Rgb565Pixel(0xffff); 16];
+        let mut backdrop = CrtBackdropState::new(4, 4);
+        backdrop.retarget(Some(frame(&target, 4, 4)), Duration::ZERO);
+        let mut destination = vec![Rgb565Pixel(0); 16];
+        let trace = backdrop.compose_into_coarse_excluding(
+            Duration::from_millis(65),
+            &mut destination,
+            &[],
+        );
+        assert!(trace.active);
+        assert_eq!(destination[0], destination[1]);
+        assert_eq!(destination[0], destination[4]);
+        assert_eq!(destination[2], destination[3]);
+        assert_eq!(destination[2], destination[6]);
     }
 }
