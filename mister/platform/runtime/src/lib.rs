@@ -34,3 +34,8 @@ pub mod runtime_status;
 #[cfg(feature = "app-runtime")]
 pub mod settings;
 pub mod vt;
+
+#[cfg(test)]
+#[allow(dead_code)]
+#[path = "../c_build_support.rs"]
+mod c_build_support;

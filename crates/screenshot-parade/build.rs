@@ -1,11 +1,15 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+#[path = "../../mister/platform/runtime/c_build_support.rs"]
+mod c_build_support;
+
 use std::fmt::Write;
 use std::path::PathBuf;
 
 fn main() {
     println!("cargo:rerun-if-changed=src/screenshot_phase_neon.c");
+    println!("cargo:rerun-if-changed=../../mister/platform/runtime/c_build_support.rs");
     if std::env::var("CARGO_CFG_TARGET_ARCH").as_deref() != Ok("arm") {
         return;
     }
@@ -26,7 +30,7 @@ fn main() {
     header.push_str("};\n");
     std::fs::write(&reciprocal_header, header).expect("write reciprocal header");
 
-    cc::Build::new()
+    c_build()
         .file("src/screenshot_phase_neon.c")
         .include(out_dir)
         .flag("-std=c11")
@@ -36,4 +40,13 @@ fn main() {
         .flag("-mfloat-abi=hard")
         .flag("-ffp-contract=off")
         .compile("mister_magik_screenshot_phase_neon");
+}
+
+fn c_build() -> cc::Build {
+    let mut build = cc::Build::new();
+    build.inherit_rustflags(false);
+    if c_build_support::force_frame_pointers_requested() {
+        build.force_frame_pointer(true);
+    }
+    build
 }
