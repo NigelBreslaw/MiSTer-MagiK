@@ -853,6 +853,7 @@ const fn blend_rgb565_const<const ALPHA: u32, const INVERSE: u32>(
     Rgb565Pixel((red_blue | green) as u16)
 }
 
+#[inline(always)]
 fn copy_rgb565_row_excluding(
     destination: &mut [Rgb565Pixel],
     source: &[Rgb565Pixel],
