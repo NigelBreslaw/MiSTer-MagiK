@@ -814,13 +814,17 @@ impl ArcadeListRenderer {
         let copy_h = (clip_y1 - clip_y0) as usize;
         let src_y = (clip_y0 - y) as usize;
         let dst_y = (clip_y0 as usize).saturating_sub(band_y);
+        let mut changed_rows = Vec::with_capacity(copy_h);
         for row_y in 0..copy_h {
             let src = (src_y + row_y) * self.width;
             let viewport_y = band_y + dst_y + row_y;
             let dst_y = (self.surface_y + viewport_y) % self.visible_height;
             let dst = dst_y * self.width;
             self.surface[dst..dst + self.width].copy_from_slice(&row[src..src + self.width]);
-            self.rebuild_surface_nonfill_runs(dst_y);
+            changed_rows.push(dst_y);
+        }
+        for row in changed_rows {
+            self.rebuild_surface_nonfill_runs(row);
         }
     }
 
