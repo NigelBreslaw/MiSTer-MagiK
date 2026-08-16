@@ -10243,6 +10243,7 @@ pub(super) fn run_launcher_loop(
                         layer_target.compose_arcade_list_over_backdrop(
                             &mut arcade_list_renderer,
                             backdrop.pixels(),
+                            crt_backdrop_full_damage.is_some(),
                         )
                     });
                     crt_backdrop_list_overlay_us =

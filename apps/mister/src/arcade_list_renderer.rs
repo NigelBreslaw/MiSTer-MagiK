@@ -985,6 +985,23 @@ impl ArcadeListRenderer {
         output_layout: Rgb565OutputLayout,
         redraw_selection_frame: bool,
     ) -> bool {
+        self.compose_layer_over_backdrop_to_oriented_cached_with_state(
+            target,
+            backdrop,
+            output_layout,
+            redraw_selection_frame,
+            false,
+        )
+    }
+
+    pub fn compose_layer_over_backdrop_to_oriented_cached_with_state(
+        &mut self,
+        target: &mut UiFrameTarget,
+        backdrop: &[Rgb565Pixel],
+        output_layout: Rgb565OutputLayout,
+        redraw_selection_frame: bool,
+        backdrop_is_fresh: bool,
+    ) -> bool {
         if backdrop.len() < output_layout.len()
             || target.cached_565().len() < output_layout.len()
             || self.geometry.x.saturating_add(self.width) > output_layout.logical_width()
@@ -1017,9 +1034,11 @@ impl ArcadeListRenderer {
                             selected_aperture_pixel_with_style(surface_row[x], self.style);
                     }
                 } else {
-                    destination.copy_from_slice(
-                        &backdrop[destination_start..destination_start + self.width],
-                    );
+                    if !backdrop_is_fresh {
+                        destination.copy_from_slice(
+                            &backdrop[destination_start..destination_start + self.width],
+                        );
+                    }
                     for &(run_start, run_end) in &self.surface_nonfill_runs[source_y] {
                         destination[run_start..run_end]
                             .copy_from_slice(&surface_row[run_start..run_end]);
@@ -1042,6 +1061,10 @@ impl ArcadeListRenderer {
                 let pixel = self.surface[source_row + x];
                 cached[offset] = if selected {
                     selected_aperture_pixel_with_style(pixel, self.style)
+                } else if backdrop_is_fresh
+                    && is_arcade_unselected_fill_pixel_with_style(pixel, self.style)
+                {
+                    cached[offset]
                 } else if is_arcade_unselected_fill_pixel_with_style(pixel, self.style) {
                     backdrop[offset]
                 } else {

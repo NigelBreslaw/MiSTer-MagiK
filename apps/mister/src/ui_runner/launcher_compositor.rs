@@ -440,14 +440,16 @@ impl<'a> LayerTarget<'a> {
         &mut self,
         renderer: &mut ArcadeListRenderer,
         backdrop: &[Rgb565Pixel],
+        backdrop_is_fresh: bool,
     ) -> bool {
-        renderer.compose_layer_over_backdrop_to_oriented_cached(
+        renderer.compose_layer_over_backdrop_to_oriented_cached_with_state(
             self.target,
             backdrop,
             self.layout.output_layout(),
             // The selected row is already opaque cyan on CRT; omit the
             // decorative frame while scrolling to avoid another line pass.
             false,
+            backdrop_is_fresh,
         )
     }
 
