@@ -445,7 +445,9 @@ impl<'a> LayerTarget<'a> {
             self.target,
             backdrop,
             self.layout.output_layout(),
-            true,
+            // The selected row is already opaque cyan on CRT; omit the
+            // decorative frame while scrolling to avoid another line pass.
+            false,
         )
     }
 
