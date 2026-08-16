@@ -20,6 +20,18 @@ pub(crate) struct PreparedCrtBackdrop {
     pub(crate) is_plain: bool,
 }
 
+/// Immutable decoded screenshot data handed from the preview cache to the
+/// CRT preparation worker.  The controller owns all derived buffers.
+#[derive(Clone)]
+pub(crate) struct BackdropSource {
+    pub(crate) key: String,
+    pub(crate) epoch: u64,
+    pub(crate) words: std::sync::Arc<[u16]>,
+    pub(crate) source_width: usize,
+    pub(crate) source_height: usize,
+    pub(crate) stride_pixels: usize,
+}
+
 pub const CRT_BACKDROP_FADE_DURATION: Duration = Duration::from_millis(130);
 pub const CRT_BACKDROP_DARK_RETAIN_PERCENT: u8 = 40;
 pub const CRT_BACKDROP_BACKGROUND: Rgb565Pixel = rgb565_from_rgb888(0x02, 0x08, 0x17);

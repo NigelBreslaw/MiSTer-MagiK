@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use super::arcade_drawer::{ArcadeDrawerViewCache, arcade_filter_cache_token};
+use super::crt_backdrop_controller::CrtBackdropController;
 use super::launcher_frame_accounting::{
     FrameAnalyticsCpuStamp, FrameAnalyticsMode, LauncherCustomDrawTrace, LauncherFrameAccounting,
     LauncherFrameCpuTrace, LauncherFrameIdentity, LauncherFrameRenderData,
@@ -5185,11 +5186,7 @@ pub(super) fn run_launcher_loop(
     } else {
         ArcadeListRenderer::new()
     };
-    let mut crt_backdrop = CrtBackdropState::for_display(ui);
-    let mut crt_backdrop_selection = None;
-    let mut crt_backdrop_transition_id = None;
-    let mut crt_backdrop_prepared_revision = 0_u64;
-    let mut crt_backdrop_was_eligible = false;
+    let mut crt_backdrop = CrtBackdropController::for_display(ui);
     let mut launcher_preview_version = 1u64;
     let mut launcher_arcade_version = 1u64;
     let mut launcher_arcade_scroll_offset = 0i64;
@@ -8669,10 +8666,9 @@ pub(super) fn run_launcher_loop(
             && presentation_route == PreviewRoute::Eligible
             && wants_arcade_list
             && !nav.arcade_filter.drawer_open;
-        // Target preparation is a bounded, non-blocking worker hand-off.  It
-        // is polled before composition so a completed target can be adopted
-        // on this frame without doing any scaling on the UI thread.
-        preview.poll_backdrop_preparations();
+        let crt_backdrop_was_eligible = crt_backdrop
+            .as_ref()
+            .is_some_and(CrtBackdropController::was_eligible);
         let crt_backdrop_leaving = crt_backdrop_was_eligible && !crt_backdrop_eligible;
         if crt_backdrop_leaving {
             full_frame_present = true;
@@ -9812,93 +9808,45 @@ pub(super) fn run_launcher_loop(
         let mut crt_backdrop_copy_pixels = 0_u32;
         let mut crt_backdrop_list_overlay_pixels = 0_u32;
         let crt_backdrop_chrome_restore_pixels = 0_u32;
-        if crt_backdrop_eligible {
-            let crt_backdrop_profile_pmu =
-                mister_magik_perf_events::sampled_span("gui.custom.crt-backdrop-pipeline");
-            let selected_changed = crt_backdrop_selection != Some(nav.arcade.selected);
-            let transition_id = preview
-                .raw_transition_frame()
-                .as_ref()
-                .map(|frame| frame.transition_id);
-            let transition_changed = transition_id != crt_backdrop_transition_id;
-            let prepared_revision = preview.backdrop_prepare_revision();
-            let prepared_changed = prepared_revision != crt_backdrop_prepared_revision;
-            let exact = preview_cache_state_before_composition == "exact";
-            if selected_changed
-                || transition_changed
-                || prepared_changed
-                || !crt_backdrop_was_eligible
-            {
-                if let Some(backdrop) = crt_backdrop.as_mut() {
-                    if exact {
-                        let now = loop_start.saturating_duration_since(run_start);
-                        preview.request_backdrop_prepare(
-                            backdrop.width(),
-                            backdrop.physical_height(),
-                            backdrop.height(),
-                        );
-                        let prepared = preview.prepared_backdrop(
-                            backdrop.width(),
-                            backdrop.physical_height(),
-                            backdrop.height(),
-                        );
-                        backdrop.retarget_prepared(prepared, now);
-                    } else {
-                        backdrop.clear_plain();
-                    }
-                }
-                crt_backdrop_selection = Some(nav.arcade.selected);
-                crt_backdrop_transition_id = transition_id;
-                crt_backdrop_prepared_revision = prepared_revision;
+        let transition_id = preview
+            .raw_transition_frame()
+            .as_ref()
+            .map(|frame| frame.transition_id);
+        if let Some(backdrop) = crt_backdrop.as_mut() {
+            let compose_start = Instant::now();
+            let result = backdrop.compose(
+                crt_backdrop_eligible,
+                nav.arcade.selected,
+                transition_id,
+                (preview_cache_state_before_composition == "exact")
+                    .then(|| preview.selected_backdrop_source())
+                    .flatten(),
+                loop_start.saturating_duration_since(run_start),
+                layer_target.presentation_pixels_mut(),
+                layout.content_rect(),
+                crt_metrics,
+            );
+            crt_backdrop_work_trace = result.trace;
+            crt_backdrop_copy_us = compose_start
+                .elapsed()
+                .as_micros()
+                .saturating_sub(u128::from(crt_backdrop_work_trace.blend_us))
+                .min(u128::from(u64::MAX)) as u64;
+            crt_backdrop_copy_pixels = backdrop
+                .width()
+                .saturating_mul(backdrop.height())
+                .min(u32::MAX as usize) as u32;
+            if result.full_damage {
+                crt_backdrop_full_damage = Some(DirtyRect {
+                    x0: 0,
+                    y0: 0,
+                    x1: layout.composition_w(),
+                    y1: layout.composition_h(),
+                });
             }
-            if let Some(backdrop) = crt_backdrop.as_mut() {
-                let compose_full = selected_changed
-                    || transition_changed
-                    || prepared_changed
-                    || !crt_backdrop_was_eligible
-                    || backdrop.is_transitioning();
-                if compose_full {
-                    let compose_start = Instant::now();
-                    let protected_chrome = super::launcher_compositor::crt_arcade_chrome_rects(
-                        layout.content_rect(),
-                        crt_metrics,
-                    )
-                    .map(|rect| (rect.x0, rect.y0, rect.x1, rect.y1));
-                    crt_backdrop_work_trace = backdrop.compose_into_coarse_excluding(
-                        loop_start.saturating_duration_since(run_start),
-                        layer_target.presentation_pixels_mut(),
-                        &protected_chrome,
-                    );
-                    let compose_us = compose_start.elapsed().as_micros();
-                    crt_backdrop_copy_us = compose_us
-                        .saturating_sub(u128::from(crt_backdrop_work_trace.blend_us))
-                        .min(u128::from(u64::MAX))
-                        as u64;
-                    crt_backdrop_copy_pixels = backdrop
-                        .width()
-                        .saturating_mul(backdrop.height())
-                        .min(u32::MAX as usize)
-                        as u32;
-                    let copied = layer_target.presentation_frame_view().pixels().len()
-                        >= crt_backdrop_copy_pixels as usize;
-                    if copied {
-                        crt_backdrop_full_damage = Some(DirtyRect {
-                            x0: 0,
-                            y0: 0,
-                            x1: layout.composition_w(),
-                            y1: layout.composition_h(),
-                        });
-                    }
-                    if crt_backdrop_work_trace.active {
-                        request_launcher_redraw!();
-                    }
-                }
+            if crt_backdrop_work_trace.active {
+                request_launcher_redraw!();
             }
-            drop(crt_backdrop_profile_pmu);
-        } else {
-            crt_backdrop_selection = None;
-            crt_backdrop_transition_id = None;
-            crt_backdrop_prepared_revision = preview.backdrop_prepare_revision();
         }
         let navigation_transition_composition_active = navigation_transition.is_active();
         let navigation_settings_physical_space = navigation_transition.settings_physical_space();
@@ -10155,7 +10103,10 @@ pub(super) fn run_launcher_loop(
             crt_backdrop_alpha_bucket: crt_backdrop_work_trace.alpha_bucket,
             crt_backdrop_active: crt_backdrop_work_trace.active,
             crt_backdrop_selected: nav.arcade.selected,
-            crt_backdrop_transition_id: crt_backdrop_transition_id.unwrap_or(0),
+            crt_backdrop_transition_id: crt_backdrop
+                .as_ref()
+                .and_then(CrtBackdropController::transition_id)
+                .unwrap_or(0),
             crt_backdrop_cache_state: preview_cache_state_before_composition,
             effect_label_us,
             navigation_transition_base_copy_us: navigation_transition
@@ -10286,7 +10237,6 @@ pub(super) fn run_launcher_loop(
         custom_draw_trace.crt_backdrop_list_overlay_pixels = crt_backdrop_list_overlay_pixels;
         custom_draw_trace.crt_backdrop_chrome_restore_us = crt_backdrop_chrome_restore_us;
         custom_draw_trace.crt_backdrop_chrome_restore_pixels = crt_backdrop_chrome_restore_pixels;
-        crt_backdrop_was_eligible = crt_backdrop_eligible;
         let physical_custom_damage = accepted_screensaver_frame.then_some(this_rect).flatten();
         let preview_layer_desired = should_desire_direct_layer(
             wants_preview_layer,
@@ -11191,10 +11141,12 @@ pub(super) fn run_launcher_loop(
                     preview.presentation_label(),
                     preview.raw_frame_status() == PreviewRawFrameStatus::Ready,
                     preview.terminal_empty(),
-                    crt_backdrop_selection == Some(nav.arcade.selected),
                     crt_backdrop
                         .as_ref()
-                        .is_some_and(CrtBackdropState::is_transitioning),
+                        .is_some_and(|backdrop| backdrop.selection_matches(nav.arcade.selected)),
+                    crt_backdrop
+                        .as_ref()
+                        .is_some_and(CrtBackdropController::is_transitioning),
                 );
                 gui_profiling.observe_route_presentation(
                     screen_label(nav.screen),

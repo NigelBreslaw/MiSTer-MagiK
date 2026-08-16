@@ -35,7 +35,6 @@ use crate::arcade_list_renderer::{
 use crate::boot_analytics;
 use crate::controller_db::ControllerDb;
 use crate::cpu_profile;
-use crate::crt_backdrop::CrtBackdropState;
 use crate::display_config::{DisplayConfig, detect_runtime_display_geometry};
 use crate::frame_profile::{FrameProfiler, FrameRect, FrameSample, VideoFrameProfile};
 use crate::input::{PadInfo, PadPool};
@@ -126,6 +125,8 @@ mod catalog_worker;
 mod controller_loop;
 #[cfg(test)]
 mod controller_setup_input_session;
+#[allow(dead_code)]
+mod crt_backdrop_controller;
 mod crt_trial_loop;
 #[cfg(mister_experiments)]
 mod experiments;
