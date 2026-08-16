@@ -139,18 +139,57 @@ fn transition_progress(elapsed: Duration, duration: Duration) -> f32 {
 
 #[inline(always)]
 pub fn blend_rgb565_bucket(from: Rgb565Pixel, to: Rgb565Pixel, alpha_bucket: u16) -> Rgb565Pixel {
+    macro_rules! bucket {
+        ($alpha:literal, $inverse:literal) => {
+            blend_rgb565_const::<$alpha, $inverse>(from, to)
+        };
+    }
+    match alpha_bucket.min(32) {
+        0 => from,
+        1 => bucket!(1, 31),
+        2 => bucket!(2, 30),
+        3 => bucket!(3, 29),
+        4 => bucket!(4, 28),
+        5 => bucket!(5, 27),
+        6 => bucket!(6, 26),
+        7 => bucket!(7, 25),
+        8 => bucket!(8, 24),
+        9 => bucket!(9, 23),
+        10 => bucket!(10, 22),
+        11 => bucket!(11, 21),
+        12 => bucket!(12, 20),
+        13 => bucket!(13, 19),
+        14 => bucket!(14, 18),
+        15 => bucket!(15, 17),
+        16 => bucket!(16, 16),
+        17 => bucket!(17, 15),
+        18 => bucket!(18, 14),
+        19 => bucket!(19, 13),
+        20 => bucket!(20, 12),
+        21 => bucket!(21, 11),
+        22 => bucket!(22, 10),
+        23 => bucket!(23, 9),
+        24 => bucket!(24, 8),
+        25 => bucket!(25, 7),
+        26 => bucket!(26, 6),
+        27 => bucket!(27, 5),
+        28 => bucket!(28, 4),
+        29 => bucket!(29, 3),
+        30 => bucket!(30, 2),
+        31 => bucket!(31, 1),
+        _ => to,
+    }
+}
+
+#[inline(always)]
+fn blend_rgb565_const<const ALPHA: u32, const INVERSE: u32>(
+    from: Rgb565Pixel,
+    to: Rgb565Pixel,
+) -> Rgb565Pixel {
     let from = u32::from(from.0);
     let to = u32::from(to.0);
-    let alpha = u32::from(alpha_bucket.min(32));
-    if alpha == 0 {
-        return Rgb565Pixel(from as u16);
-    }
-    if alpha >= 32 {
-        return Rgb565Pixel(to as u16);
-    }
-    let inverse = 32 - alpha;
-    let red_blue = (((from & 0xf81f) * inverse + (to & 0xf81f) * alpha) >> 5) & 0xf81f;
-    let green = (((from & 0x07e0) * inverse + (to & 0x07e0) * alpha) >> 5) & 0x07e0;
+    let red_blue = (((from & 0xf81f) * INVERSE + (to & 0xf81f) * ALPHA) >> 5) & 0xf81f;
+    let green = (((from & 0x07e0) * INVERSE + (to & 0x07e0) * ALPHA) >> 5) & 0x07e0;
     Rgb565Pixel((red_blue | green) as u16)
 }
 
