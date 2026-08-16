@@ -382,6 +382,23 @@ impl CrtBackdropState {
             }
             return;
         }
+        if self.height == self.physical_height.saturating_mul(2) {
+            for physical_y in 0..self.physical_height {
+                let source_start = physical_y * self.width;
+                let source_end = source_start + self.width;
+                let logical_y = physical_y * 2;
+                for row in [logical_y, logical_y + 1] {
+                    let destination_start = row * self.width;
+                    copy_rgb565_row_excluding(
+                        &mut destination[destination_start..destination_start + self.width],
+                        &self.retarget[source_start..source_end],
+                        row,
+                        protected_rects,
+                    );
+                }
+            }
+            return;
+        }
         for logical_y in 0..self.height {
             let physical_y = logical_y
                 .saturating_mul(self.physical_height)
