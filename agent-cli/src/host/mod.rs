@@ -21921,6 +21921,13 @@ fn capture_artifact_path(stem: &Path, suffix: &str) -> PathBuf {
     stem.with_file_name(file_name)
 }
 
+fn capture_output_has_existing_artifact(path: &Path) -> Result<bool> {
+    let stem = normalize_capture_stem(path)?;
+    Ok(["-raw.png", "-raw-letterbox-4x3.png", "-display-4x3.png"]
+        .iter()
+        .any(|suffix| capture_artifact_path(&stem, suffix).exists()))
+}
+
 fn capture_paths_available(stem: &Path, has_views: bool) -> bool {
     let mut paths = vec![capture_artifact_path(stem, "-raw.png")];
     if has_views {
@@ -22474,7 +22481,7 @@ fn capture_and_restore_launcher(
 }
 
 fn capture_first_arcade(config: &NativeDeviceConfig, output: &Path) -> Result<()> {
-    if output.exists() {
+    if capture_output_has_existing_artifact(output)? {
         return Err(format!("capture output already exists: {}", output.display()).into());
     }
     let session = connect_with(&config.connection, 10)?;
@@ -22527,7 +22534,7 @@ fn capture_first_arcade(config: &NativeDeviceConfig, output: &Path) -> Result<()
 }
 
 fn capture_snes_hub(config: &NativeDeviceConfig, output: &Path) -> Result<()> {
-    if output.exists() {
+    if capture_output_has_existing_artifact(output)? {
         return Err(format!("capture output already exists: {}", output.display()).into());
     }
     let session = connect_with(&config.connection, 10)?;

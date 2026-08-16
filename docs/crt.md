@@ -56,6 +56,24 @@ framebuffer that already matches the complete destination raster, apart from
 the deliberate 480→240 conversion on the 240p route. Authoritative framebuffer
 captures are consequently 640×240, 640×288, 640×480, or 640×576.
 
+## Capture inspection views
+
+The typed framebuffer capture preserves the authoritative scanout PNG and, for
+authoritative 15 kHz `640×240` and `640×288` captures, also emits two host-side
+inspection views. `STEM-raw-letterbox-4x3.png` places the unchanged source
+raster on a black `640×480` canvas. `STEM-display-4x3.png` maps source rows to
+the same `640×480` canvas with centered nearest-scanline sampling. This makes
+the square-pixel and physical-aspect interpretations visible together without
+changing the device capture or inventing blended colors. The Arcade-list
+workflow is the deterministic typography fixture:
+
+```text
+scripts/agent device launcher capture-first-arcade --attended --output STEM
+```
+
+Only `STEM-raw.png` is authoritative framebuffer evidence; the two `4x3`
+files are derived host previews and must not be used as HDMI/CRT sink proof.
+
 Route-owned safe areas affect content, not the full-screen background. The
 288p canvas reserves 20 native rows at the top and 13 at the bottom, producing
 a 640×255 content rectangle; the 576p canvas reserves 64 pixels at the right.

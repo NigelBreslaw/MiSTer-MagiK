@@ -124,9 +124,25 @@ Delivery smoke requires authoritative, nonblank hidden-slot content; manual
 captures may still represent a legitimately blank authoritative frame.
 
 Interactive captures are saved to the Desktop. When stdout is redirected, the
-capture is saved under the OS temporary directory at
-`mister-magik/captures/`, and the command prints a Markdown link to the PNG so
-an image-capable agent can inspect it without receiving base64 text.
+capture bundle is saved under the OS temporary directory at
+`mister-magik/captures/`, and the command prints labeled Markdown links so an
+image-capable agent can inspect it without receiving base64 text. With
+`--output STEM`, the same bundle is written beside the requested stem; an
+optional `.png` suffix is stripped.
+
+For authoritative 15 kHz captures (`640×240` or `640×288`), the bundle has
+three files:
+
+- `STEM-raw.png` — the byte-preserved authoritative scanout capture.
+- `STEM-raw-letterbox-4x3.png` — the raw square-pixel raster centered on a
+  black `640×480` canvas, with no source pixels scaled.
+- `STEM-display-4x3.png` — a `640×480` nearest-scanline preview representing
+  the physical 4:3 display aspect.
+
+The latter two are inspection views, not new scanout evidence. Other routes or
+non-authoritative sources produce only the raw artifact. The deterministic
+Arcade fixture is available through
+`scripts/agent device launcher capture-first-arcade --attended --output STEM`.
 
 On macOS, `scripts/agent capture usb-video [--output PATH]` captures the first
 nonblank 1920x1080 frame from the fixed `USB Video` input. The native

@@ -175,7 +175,7 @@ pub enum CaptureCommand {
 
 #[derive(Debug, Args)]
 pub struct FramebufferArgs {
-    #[arg(long)]
+    #[arg(long, value_name = "STEM")]
     pub(crate) output: Option<PathBuf>,
 }
 
@@ -288,7 +288,7 @@ pub enum LauncherCommand {
 pub struct FirstArcadeCaptureArgs {
     #[arg(long, required = true)]
     attended: bool,
-    #[arg(long)]
+    #[arg(long, value_name = "STEM")]
     pub(crate) output: PathBuf,
 }
 
