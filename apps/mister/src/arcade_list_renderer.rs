@@ -1047,21 +1047,37 @@ impl ArcadeListRenderer {
         let identity_layout = matches!(output_layout.rotation(), OutputRotation::None)
             && output_layout.physical_stride() == output_layout.logical_width();
         if identity_layout {
-            // CRT240p is an upright contiguous surface. Restore the viewport
-            // rows from the stationary backdrop before drawing current runs;
-            // this experiment trades extra sequential bandwidth for fewer
-            // small run-segment walks.
+            // CRT240p is an upright contiguous surface. After the first
+            // backdrop composition, restore only the previous overlay runs
+            // before drawing the current runs. The row fill is already the
+            // stationary backdrop, so copying every list pixel on every
+            // velocity-scroll frame is unnecessary.
+            let previous_surface_y = self.backdrop_overlay_surface_y;
+            let previous_selection_y = self.backdrop_overlay_selection_y;
             let previous_valid = self.backdrop_overlay_valid && !backdrop_is_fresh;
             if previous_valid {
+                let previous_selection_bottom =
+                    previous_selection_y + self.style.row_height.max(1) as usize;
                 for viewport_y in 0..self.visible_height {
+                    let source_y = (previous_surface_y + viewport_y) % self.visible_height;
                     let destination_start = (self.geometry.y + viewport_y)
                         * output_layout.physical_stride()
                         + self.geometry.x;
                     let destination =
                         &mut cached[destination_start..destination_start + self.width];
-                    destination.copy_from_slice(
-                        &backdrop[destination_start..destination_start + self.width],
-                    );
+                    if viewport_y >= previous_selection_y && viewport_y < previous_selection_bottom
+                    {
+                        destination.copy_from_slice(
+                            &backdrop[destination_start..destination_start + self.width],
+                        );
+                    } else {
+                        for &(run_start, run_end) in &self.surface_nonfill_runs[source_y] {
+                            destination[run_start..run_end].copy_from_slice(
+                                &backdrop
+                                    [destination_start + run_start..destination_start + run_end],
+                            );
+                        }
+                    }
                 }
             }
             for viewport_y in 0..self.visible_height {
