@@ -360,12 +360,8 @@ impl CrtBackdropState {
                     .saturating_add(row_width)
                     .min(self.retarget.len());
                 let (before, after) = self.retarget.split_at_mut(destination_start);
-                copy_rgb565_row_excluding(
-                    &mut after[..destination_end - destination_start],
-                    &before[source_start..source_end],
-                    copy_row,
-                    protected_rects,
-                );
+                after[..destination_end - destination_start]
+                    .copy_from_slice(&before[source_start..source_end]);
             }
             row = row.saturating_add(coarse_factor);
         }
