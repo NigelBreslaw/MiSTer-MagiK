@@ -5,7 +5,7 @@
 
 use crate::crt_backdrop::{
     BackdropSource, CrtBackdropState, CrtBackdropWorkTrace, PreparedCrtBackdrop,
-    prepare_dimmed_rgb565_target_with_maps, product_chrome_rects,
+    prepare_dimmed_rgb565_target_with_maps,
 };
 use crate::ui_display::{CrtContentRect, CrtUiMetrics, UiDisplay};
 use slint::platform::software_renderer::Rgb565Pixel;
@@ -322,11 +322,9 @@ impl CrtBackdropController {
             || self.state.is_transitioning();
         let mut frame = CrtBackdropFrame::default();
         if compose_full {
-            frame.trace = self.state.compose_into_coarse_excluding(
-                now,
-                destination,
-                &product_chrome_rects(content, metrics),
-            );
+            frame.trace = self
+                .state
+                .compose_product_into(now, destination, content, metrics);
             if prepared_changed {
                 frame.trace.prepare_us = self.pending_prepare_us;
                 frame.trace.prepare_pixels = self
@@ -355,12 +353,15 @@ fn rgb565_words_as_pixels(words: &[u16]) -> &[Rgb565Pixel] {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::crt_backdrop::CRT_BACKDROP_FADE_DURATION;
+    use crate::crt_backdrop::{
+        CRT_BACKDROP_FADE_DURATION, CRT_PRODUCT_FOOTER_TEXT, CRT_PRODUCT_HEADER_TEXT,
+        product_chrome_rects,
+    };
     use crate::ui_display::{ScreenOrientation, UiDisplayPlan, UiLayoutGeometry};
     use crate::visual_composition::{PreviewFrame, PreviewPixels};
 
     #[test]
-    fn forced_compose_repaints_settled_backdrop_but_preserves_chrome() {
+    fn forced_compose_repaints_settled_backdrop_but_preserves_chrome_text() {
         let display = UiDisplay::for_plan(
             UiDisplayPlan::from_mister_ini_text(
                 "[MiSTer]\ndirect_video=1\nmenu_pal=0\nforced_scandoubler=0\n",
@@ -392,6 +393,12 @@ mod tests {
 
         let sentinel = Rgb565Pixel(0xf81f);
         let mut destination = vec![sentinel; controller.width() * controller.height()];
+        let [header, footer] = product_chrome_rects(content, metrics);
+        let header_text_index = header.1 * controller.width() + header.0;
+        let header_background_index = header_text_index + 1;
+        let footer_text_index = footer.1 * controller.width() + footer.0;
+        destination[header_text_index] = CRT_PRODUCT_HEADER_TEXT;
+        destination[footer_text_index] = CRT_PRODUCT_FOOTER_TEXT;
         let restored = controller.compose(
             true,
             true,
@@ -404,11 +411,11 @@ mod tests {
             metrics,
         );
 
-        let [header, _footer] = product_chrome_rects(content, metrics);
         let background_index = content.y * controller.width() + content.x;
-        let header_index = header.1 * controller.width() + header.0;
         assert!(restored.full_damage);
         assert_ne!(destination[background_index], sentinel);
-        assert_eq!(destination[header_index], sentinel);
+        assert_ne!(destination[header_background_index], sentinel);
+        assert_eq!(destination[header_text_index], CRT_PRODUCT_HEADER_TEXT);
+        assert_eq!(destination[footer_text_index], CRT_PRODUCT_FOOTER_TEXT);
     }
 }

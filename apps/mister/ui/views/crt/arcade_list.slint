@@ -89,6 +89,9 @@ export component ArcadeListScreen inherits Rectangle {
         x: MisterUi.grid-x * 2;
         y: MisterUi.grid-y * 2;
         width: parent.width - MisterUi.grid-x * 4;
+        background: transparent;
+        border-width: 0px;
+        border-color: transparent;
         title: MisterBridge.arcade-search-active ? "Search" : MisterBridge.active-system-title;
         subtitle: "";
         status: MisterBridge.arcade-search-active
@@ -151,6 +154,9 @@ export component ArcadeListScreen inherits Rectangle {
         x: MisterUi.grid-x * 2;
         y: parent.height - MisterUi.footer-height - MisterUi.grid-y * 2;
         width: parent.width - MisterUi.grid-x * 4;
+        background: transparent;
+        border-width: 0px;
+        border-color: transparent;
         left-hint: "A Launch   X Options   Y Search";
         right-hint: "B Back   HOME Launcher";
     }
