@@ -196,7 +196,7 @@ impl ArcadeListStyle {
             ResolvedOutputRoute::Crt240p60 | ResolvedOutputRoute::Crt288p50
         ) {
             style.title_font_px = 16.0;
-            style.title_typeface = ConsoleTypeface::Jersey15;
+            style.title_typeface = ConsoleTypeface::Yesterday10;
             style.glyph_row_filter = ConsoleGlyphRowFilter::Native;
         }
         style
@@ -3513,13 +3513,13 @@ mod tests {
     }
 
     #[test]
-    fn native_crt240_uses_native_title_resource_and_raster_steps() {
+    fn native_crt240_uses_yesterday_title_resource_and_raster_steps() {
         let display = native_crt_240_display();
         let renderer =
             ArcadeListRenderer::new_for_crt_display(CrtUiMetrics::for_display(&display), &display);
 
         assert_eq!(renderer.style.title_font_px, 16.0);
-        assert_eq!(renderer.style.title_typeface, ConsoleTypeface::Jersey15);
+        assert_eq!(renderer.style.title_typeface, ConsoleTypeface::Yesterday10);
         assert_eq!(
             renderer.style.meta_typeface,
             ConsoleTypeface::Spleen6x12Small
