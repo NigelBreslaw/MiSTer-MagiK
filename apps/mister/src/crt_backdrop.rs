@@ -712,16 +712,37 @@ fn blend_rgb565_range(
         }
     } else {
         if coarse_factor == 2 {
-            let mut index = start;
-            while index + 1 < end {
-                let pixel = blend_rgb565_bucket(previous[index], current[index], alpha_bucket);
-                destination[index] = pixel;
-                destination[index + 1] = pixel;
-                index += 2;
+            macro_rules! bucket {
+                ($alpha:literal, $inverse:literal) => {
+                    blend_rgb565_coarse_two_const::<$alpha, $inverse>(
+                        destination,
+                        previous,
+                        current,
+                        start,
+                        end,
+                    )
+                };
             }
-            if index < end {
-                destination[index] =
-                    blend_rgb565_bucket(previous[index], current[index], alpha_bucket);
+            match alpha_bucket.min(32) {
+                0 => bucket!(0, 32),
+                4 => bucket!(4, 28),
+                8 => bucket!(8, 24),
+                12 => bucket!(12, 20),
+                16 => bucket!(16, 16),
+                _ => {
+                    let mut index = start;
+                    while index + 1 < end {
+                        let pixel =
+                            blend_rgb565_bucket(previous[index], current[index], alpha_bucket);
+                        destination[index] = pixel;
+                        destination[index + 1] = pixel;
+                        index += 2;
+                    }
+                    if index < end {
+                        destination[index] =
+                            blend_rgb565_bucket(previous[index], current[index], alpha_bucket);
+                    }
+                }
             }
             return;
         }
@@ -733,6 +754,38 @@ fn blend_rgb565_range(
             index = block_end;
         }
     }
+}
+
+#[inline(always)]
+fn blend_rgb565_coarse_two_const<const ALPHA: u32, const INVERSE: u32>(
+    destination: &mut [Rgb565Pixel],
+    previous: &[Rgb565Pixel],
+    current: &[Rgb565Pixel],
+    start: usize,
+    end: usize,
+) {
+    let mut index = start;
+    while index + 1 < end {
+        let pixel = blend_rgb565_const::<ALPHA, INVERSE>(previous[index], current[index]);
+        destination[index] = pixel;
+        destination[index + 1] = pixel;
+        index += 2;
+    }
+    if index < end {
+        destination[index] = blend_rgb565_const::<ALPHA, INVERSE>(previous[index], current[index]);
+    }
+}
+
+#[inline(always)]
+const fn blend_rgb565_const<const ALPHA: u32, const INVERSE: u32>(
+    from: Rgb565Pixel,
+    to: Rgb565Pixel,
+) -> Rgb565Pixel {
+    let from = from.0 as u32;
+    let to = to.0 as u32;
+    let red_blue = (((from & 0xf81f) * INVERSE + (to & 0xf81f) * ALPHA) >> 5) & 0xf81f;
+    let green = (((from & 0x07e0) * INVERSE + (to & 0x07e0) * ALPHA) >> 5) & 0x07e0;
+    Rgb565Pixel((red_blue | green) as u16)
 }
 
 fn copy_rgb565_row_excluding(
