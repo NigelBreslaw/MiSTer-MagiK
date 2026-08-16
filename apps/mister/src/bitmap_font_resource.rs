@@ -494,7 +494,6 @@ pub fn register_bitmap_fonts(renderer: &slint::platform::software_renderer::Soft
 #[cfg(any(test, feature = "asset-tools"))]
 #[derive(Clone, Copy)]
 enum Coverage {
-    Uppercase,
     FullCharmap,
 }
 
@@ -600,17 +599,12 @@ fn generate_resource(font_bytes: &[u8], spec: GeneratorSpec) -> Result<Vec<u8>, 
         .ok_or_else(|| "unable to parse source font".to_string())?;
     let charmap = font.charmap();
     let mut code_points = BTreeSet::new();
-    match spec.coverage {
-        Coverage::Uppercase => {
-            code_points.insert(u32::from(' '));
-            code_points.extend(('A'..='Z').map(u32::from));
+    debug_assert!(matches!(spec.coverage, Coverage::FullCharmap));
+    charmap.enumerate(|code_point, glyph_id| {
+        if glyph_id != 0 && char::from_u32(code_point).is_some() {
+            code_points.insert(code_point);
         }
-        Coverage::FullCharmap => charmap.enumerate(|code_point, glyph_id| {
-            if glyph_id != 0 && char::from_u32(code_point).is_some() {
-                code_points.insert(code_point);
-            }
-        }),
-    }
+    });
     if code_points.len() > MAX_GLYPHS {
         return Err("source font contains too many glyphs".to_string());
     }
