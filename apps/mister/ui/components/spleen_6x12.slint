@@ -1,0 +1,35 @@
+// Copyright (C) 2026 Nigel Breslaw
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+export enum Spleen6x12Size {
+    px8,
+    px16,
+    px24,
+    px32,
+}
+
+export global Spleen6x12Metrics {
+    // Layout tokens retain the existing route scale. Raster sizes select the
+    // native 6x12 grid or its exact 2x resource.
+    pure public function resolve(size: Spleen6x12Size) -> length {
+        return size == Spleen6x12Size.px8 ? 8px
+            : size == Spleen6x12Size.px16 ? 16px
+            : size == Spleen6x12Size.px24 ? 24px
+            : 32px;
+    }
+
+    pure public function raster(size: Spleen6x12Size) -> length {
+        return size == Spleen6x12Size.px8 || size == Spleen6x12Size.px16 ? 12px : 24px;
+    }
+}
+
+export component Spleen6x12 inherits Text {
+    in property <Spleen6x12Size> size: Spleen6x12Size.px16;
+    color: white;
+    font-family: "Spleen 6x12";
+    font-size: Spleen6x12Metrics.raster(root.size);
+    horizontal-alignment: start;
+    vertical-alignment: top;
+    overflow: clip;
+    wrap: no-wrap;
+}

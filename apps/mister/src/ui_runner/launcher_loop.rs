@@ -245,8 +245,10 @@ fn nav_selection_feedback_target(nav: &LauncherNav) -> Option<SelectionFeedbackT
                 "mister-magik",
                 "ffmpeg",
                 "press-start-2p",
-                "jersey-10",
+                "commercial-fonts",
                 "jersey-25",
+                "terminus-font",
+                "spleen",
                 "arcade-cabinet",
                 "slint",
             ]
@@ -13633,7 +13635,7 @@ mod tests {
         );
 
         nav.screen = Screen::Licenses;
-        nav.licenses_selected = 6;
+        nav.licenses_selected = 8;
         assert_eq!(
             nav_selection_feedback_target(&nav),
             Some(SelectionFeedbackTarget::new("licenses", "slint"))

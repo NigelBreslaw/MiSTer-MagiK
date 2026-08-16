@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { Terminus8x14 } from "../../components/terminus_8x14.slint";
+import { Spleen6x12 } from "../../components/spleen_6x12.slint";
 
 import { MisterUi } from "../../mister_window.slint";
 import { MisterBridge } from "../../api.slint";
@@ -19,14 +19,14 @@ export component AboutScreen inherits Rectangle {
 
         CrtHeader { title: "About"; subtitle: "MiSTer MagiK"; status: ""; }
 
-        Terminus8x14 {
+        Spleen6x12 {
             text: "An Unintuitive.com production, crafted in Finland by Nigel Breslaw.";
             color: CrtTheme.text;
             size: MisterUi.crt-body-font;
             wrap: word-wrap;
             horizontal-alignment: center;
         }
-        Terminus8x14 {
+        Spleen6x12 {
             text: "Thanks to the MiSTer project. Made with Slint.";
             color: CrtTheme.muted;
             size: MisterUi.crt-body-font;

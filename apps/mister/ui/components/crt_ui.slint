@@ -1,9 +1,9 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { Terminus8x14 } from "terminus_8x14.slint";
+import { Spleen6x12, Spleen6x12Size } from "spleen_6x12.slint";
+import { Spleen5x8, Spleen5x8Size } from "spleen_5x8.slint";
 import { Jersey25 } from "jersey_25.slint";
-import { Nocive15 } from "nocive_15.slint";
 
 import { MisterUi } from "../mister_window.slint";
 import { MenuItemStatus } from "../launcher_menu.slint";
@@ -46,23 +46,25 @@ export component CrtHeader inherits Rectangle {
                 color: CrtTheme.text;
                 overflow: elide;
             }
-            if MisterUi.heading-font < 32px : Terminus8x14 {
+            if MisterUi.heading-font < 32px : Spleen6x12 {
                 text: root.title;
                 color: CrtTheme.text;
                 size: MisterUi.crt-heading-font;
                 overflow: elide;
             }
 
-            if root.subtitle != "" : Terminus8x14 {
+            if root.subtitle != "" : Spleen6x12 {
                 text: root.subtitle;
                 color: CrtTheme.warning;
+                size: MisterUi.crt-body-font;
                 overflow: elide;
             }
         }
 
-        Terminus8x14 {
+        Spleen6x12 {
             text: root.status;
             color: CrtTheme.text;
+            size: MisterUi.crt-body-font;
             horizontal-alignment: right;
         }
     }
@@ -84,15 +86,19 @@ export component CrtFooter inherits Rectangle {
         spacing: MisterUi.grid-x;
         cross-axis-alignment: center;
 
-        Nocive15 {
+        Spleen5x8 {
             text: root.left-hint;
             color: CrtTheme.muted;
+            size: MisterUi.crt-body-font == Spleen6x12Size.px24
+                ? Spleen5x8Size.px16 : Spleen5x8Size.px8;
             horizontal-stretch: 1;
         }
 
-        Nocive15 {
+        Spleen5x8 {
             text: root.right-hint;
             color: CrtTheme.muted;
+            size: MisterUi.crt-body-font == Spleen6x12Size.px24
+                ? Spleen5x8Size.px16 : Spleen5x8Size.px8;
             horizontal-alignment: right;
         }
     }
@@ -117,7 +123,7 @@ export component CrtMenuRow inherits Rectangle {
         spacing: MisterUi.grid-x;
         cross-axis-alignment: center;
 
-        Terminus8x14 {
+        Spleen6x12 {
             text: (root.focused ? "> " : "  ") + root.label;
             color: !root.enabled ? CrtTheme.muted
                 : root.focused ? CrtTheme.accent-text : CrtTheme.text;
@@ -126,7 +132,7 @@ export component CrtMenuRow inherits Rectangle {
             horizontal-stretch: 1;
         }
 
-        Terminus8x14 {
+        Spleen6x12 {
             text: root.detail;
             color: !root.enabled ? CrtTheme.muted
                 : root.focused ? CrtTheme.accent-text : CrtTheme.muted;
@@ -164,7 +170,7 @@ export component CrtCard inherits Rectangle {
         spacing: MisterUi.grid-x;
         cross-axis-alignment: center;
 
-        Terminus8x14 {
+        Spleen6x12 {
             width: MisterUi.portrait-layout ? MisterUi.body-font : MisterUi.card-title-font;
             text: root.focused && root.show-marker ? ">" : "";
             color: CrtTheme.accent-text;
@@ -187,7 +193,7 @@ export component CrtCard inherits Rectangle {
                 overflow: elide;
                 vertical-alignment: center;
             }
-            if MisterUi.card-title-font < 24px : Terminus8x14 {
+            if MisterUi.card-title-font < 24px : Spleen6x12 {
                 text: root.label;
                 color: root.focused ? CrtTheme.accent-text
                     : root.status == MenuItemStatus.failed ? CrtTheme.danger
@@ -199,13 +205,14 @@ export component CrtCard inherits Rectangle {
                 vertical-alignment: center;
             }
 
-            if root.detail != "" : Terminus8x14 {
+            if root.detail != "" : Spleen6x12 {
                 text: root.detail;
                 color: root.focused ? #17304a
                     : root.status == MenuItemStatus.failed ? CrtTheme.danger
                     : root.status == MenuItemStatus.update-failed ? CrtTheme.warning
                     : root.status == MenuItemStatus.scanning ? CrtTheme.accent
                     : CrtTheme.muted;
+                size: MisterUi.crt-card-detail-font;
                 overflow: elide;
                 vertical-alignment: center;
             }
@@ -225,17 +232,21 @@ export component CrtNavHint inherits HorizontalLayout {
         height: MisterUi.body-font * 3 / 2;
         background: CrtTheme.accent;
 
-        Nocive15 {
+        Spleen5x8 {
             text: root.button;
             color: CrtTheme.accent-text;
+            size: MisterUi.crt-body-font == Spleen6x12Size.px24
+                ? Spleen5x8Size.px16 : Spleen5x8Size.px8;
             horizontal-alignment: center;
             vertical-alignment: center;
         }
     }
 
-    Nocive15 {
+    Spleen5x8 {
         text: root.label;
         color: CrtTheme.text;
+        size: MisterUi.crt-body-font == Spleen6x12Size.px24
+            ? Spleen5x8Size.px16 : Spleen5x8Size.px8;
         vertical-alignment: center;
     }
 }

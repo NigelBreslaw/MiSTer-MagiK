@@ -84,7 +84,7 @@ pub enum ConsoleTypeface {
     Xerxes10Perfect,
     Bacteria12,
     Bacteria12Half,
-    Terminus8x14Small,
+    Spleen6x12Small,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -156,11 +156,11 @@ impl ConsoleFont {
                         .expect("valid native-size Bacteria 12 bitmap font resource"),
                 )
             }
-            ConsoleTypeface::Terminus8x14Small => {
-                assert_eq!(pixel_size, 14.0, "Terminus has one exact native size");
+            ConsoleTypeface::Spleen6x12Small => {
+                assert_eq!(pixel_size, 12.0, "Spleen has one exact native size");
                 Some(
-                    mister_magik_fb::bitmap_font_resource::terminus_8x14_native_console_bitmap_font()
-                        .expect("valid native Terminus bitmap font resource"),
+                    mister_magik_fb::bitmap_font_resource::spleen_6x12_native_console_bitmap_font()
+                        .expect("valid native Spleen bitmap font resource"),
                 )
             }
             ConsoleTypeface::PressStart2P => None,
@@ -207,7 +207,7 @@ impl ConsoleFont {
             | ConsoleTypeface::Xerxes10Perfect
             | ConsoleTypeface::Bacteria12
             | ConsoleTypeface::Bacteria12Half
-            | ConsoleTypeface::Terminus8x14Small => {
+            | ConsoleTypeface::Spleen6x12Small => {
                 unreachable!()
             }
         };
@@ -822,7 +822,7 @@ mod tests {
             (ConsoleTypeface::Xerxes10Perfect, 32.0, 32, "MagiK 1984"),
             (ConsoleTypeface::Bacteria12, 32.0, 32, "MagiK 1984"),
             (ConsoleTypeface::Bacteria12Half, 16.0, 32, "MagiK 1984"),
-            (ConsoleTypeface::Terminus8x14Small, 14.0, 32, "MagiK 1984"),
+            (ConsoleTypeface::Spleen6x12Small, 12.0, 32, "MagiK 1984"),
             (ConsoleTypeface::PressStart2P, 8.0, 32, "128"),
             (ConsoleTypeface::PressStart2P, 8.0, 19, "128"),
             (ConsoleTypeface::PressStart2P, 8.0, 39, "128"),
@@ -941,7 +941,7 @@ mod tests {
 
     #[test]
     fn terminus_small_uses_the_native_bitmap_resource() {
-        let mut font = ConsoleFont::new_with_typeface(14.0, ConsoleTypeface::Terminus8x14Small);
+        let mut font = ConsoleFont::new_with_typeface(12.0, ConsoleTypeface::Spleen6x12Small);
         assert!(font.font.is_none());
         let mask = font.rasterize_alpha_mask("ARCADE").unwrap();
         assert_eq!(mask.height, 10);

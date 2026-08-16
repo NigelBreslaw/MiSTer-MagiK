@@ -4,8 +4,8 @@
 import { MisterWindow, MisterUi } from "mister_window.slint";
 import { Start2P, Start2PSize } from "components/start2p.slint";
 export { Start2PSize } from "components/start2p.slint";
-import { Terminus8x14, Terminus8x14Size } from "components/terminus_8x14.slint";
-export { Terminus8x14Size } from "components/terminus_8x14.slint";
+import { Spleen6x12, Spleen6x12Size } from "components/spleen_6x12.slint";
+export { Spleen6x12Size } from "components/spleen_6x12.slint";
 import { MisterBridge, PreviewStatus, ScreenshotPackProgress } from "api.slint";
 import { CrtLauncherUi } from "variants/crt_ui.slint";
 import { HdmiLauncherUi } from "variants/hdmi_ui.slint";
@@ -44,12 +44,13 @@ export component Launcher inherits MisterWindow {
             horizontal-alignment: center;
             wrap: word-wrap;
         }
-        if MisterUi.crt-layout : Terminus8x14 {
+        if MisterUi.crt-layout : Spleen6x12 {
             x: 12px;
             width: parent.width - 24px;
             height: parent.height;
             text: MisterBridge.input-fault-notice;
             color: white;
+            size: MisterUi.crt-body-font;
             vertical-alignment: center;
             horizontal-alignment: center;
             wrap: word-wrap;

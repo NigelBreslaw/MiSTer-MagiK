@@ -214,10 +214,10 @@ impl ArcadeListStyle {
             badge_fill_565: rgb565_from_rgb888(0x40, 0xe5, 0xe7),
             badge_text: Pixel(0x0003132d),
             title_font_px: ARCADE_LIST_FONT_PX,
-            meta_font_px: 14.0,
+            meta_font_px: 12.0,
             title_typeface: ConsoleTypeface::Nocive15,
             meta_typeface: match metrics.font_family {
-                CrtFontFamily::Terminus8x14 => ConsoleTypeface::Terminus8x14Small,
+                CrtFontFamily::Spleen6x12 => ConsoleTypeface::Spleen6x12Small,
             },
             glyph_row_filter: ConsoleGlyphRowFilter::Native,
             crt_palette: true,
@@ -3306,8 +3306,8 @@ mod tests {
 
         assert_eq!(crt.style.row_height, 24);
         assert_eq!(crt.style.title_typeface, ConsoleTypeface::Nocive15);
-        assert_eq!(crt.style.meta_typeface, ConsoleTypeface::Terminus8x14Small);
-        assert_eq!(crt.style.meta_font_px, 14.0);
+        assert_eq!(crt.style.meta_typeface, ConsoleTypeface::Spleen6x12Small);
+        assert_eq!(crt.style.meta_font_px, 12.0);
         assert!(crt.style.crt_palette);
         assert_eq!(crt.style.background.0, 0x00020817);
         assert_eq!(
@@ -3477,7 +3477,7 @@ mod tests {
         );
         assert_eq!(
             renderer.style.meta_typeface,
-            ConsoleTypeface::Terminus8x14Small
+            ConsoleTypeface::Spleen6x12Small
         );
         assert_eq!(
             renderer.style.glyph_row_filter,
@@ -3490,7 +3490,7 @@ mod tests {
         for (row_height, font_family, raster) in [
             (
                 32,
-                CrtFontFamily::Terminus8x14,
+                CrtFontFamily::Spleen6x12,
                 ArcadeListRasterMetrics {
                     scroll_quantum_y: 2,
                     separator_y: 2,
@@ -3500,17 +3500,17 @@ mod tests {
             ),
             (
                 19,
-                CrtFontFamily::Terminus8x14,
+                CrtFontFamily::Spleen6x12,
                 ArcadeListRasterMetrics::native_crt(),
             ),
             (
                 32,
-                CrtFontFamily::Terminus8x14,
+                CrtFontFamily::Spleen6x12,
                 ArcadeListRasterMetrics::native_crt(),
             ),
             (
                 39,
-                CrtFontFamily::Terminus8x14,
+                CrtFontFamily::Spleen6x12,
                 ArcadeListRasterMetrics::native_crt(),
             ),
         ] {

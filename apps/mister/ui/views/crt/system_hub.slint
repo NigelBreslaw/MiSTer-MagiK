@@ -3,7 +3,7 @@
 
 import { MisterBridge } from "../../api.slint";
 import { MisterUi } from "../../mister_window.slint";
-import { Terminus8x14 } from "../../components/terminus_8x14.slint";
+import { Spleen6x12 } from "../../components/spleen_6x12.slint";
 import { CrtTheme, CrtFooter } from "../../components/crt_ui.slint";
 import { Jersey25 } from "../../components/jersey_25.slint";
 
@@ -17,10 +17,10 @@ component HubCard inherits Rectangle {
     background: focused ? CrtTheme.panel-alt : CrtTheme.panel;
     border-width: focused ? MisterUi.border * 2 : MisterUi.border;
     border-color: focused ? CrtTheme.accent : acknowledged ? #4e8f80 : CrtTheme.border;
-    Terminus8x14 { x: MisterUi.grid-x; y: MisterUi.grid-y; width: 32px; text: root.glyph; color: root.focused ? CrtTheme.accent : CrtTheme.muted; size: MisterUi.crt-heading-font; horizontal-alignment: center; }
+    Spleen6x12 { x: MisterUi.grid-x; y: MisterUi.grid-y; width: 32px; text: root.glyph; color: root.focused ? CrtTheme.accent : CrtTheme.muted; size: MisterUi.crt-heading-font; horizontal-alignment: center; }
     Jersey25 { x: 48px; y: MisterUi.grid-y; width: parent.width - 56px; text: root.label; color: root.enabled ? (root.focused ? CrtTheme.accent : CrtTheme.text) : CrtTheme.muted; }
     Rectangle { x: MisterUi.grid-x; y: parent.height / 2 + 4px; width: parent.width - MisterUi.grid-x * 2; height: MisterUi.border; background: root.focused ? CrtTheme.accent : CrtTheme.border; }
-    Terminus8x14 { x: MisterUi.grid-x; y: parent.height - 24px; width: parent.width - MisterUi.grid-x * 2; text: root.detail; color: CrtTheme.muted; size: MisterUi.crt-body-font; horizontal-alignment: center; }
+    Spleen6x12 { x: MisterUi.grid-x; y: parent.height - 24px; width: parent.width - MisterUi.grid-x * 2; text: root.detail; color: CrtTheme.muted; size: MisterUi.crt-body-font; horizontal-alignment: center; }
 }
 
 export component SystemHubScreen inherits Rectangle {
@@ -28,7 +28,7 @@ export component SystemHubScreen inherits Rectangle {
     property <length> card-width: (root.width - MisterUi.grid-x * 5) / 2;
     property <length> card-height: (root.height - 150px - MisterUi.footer-height - MisterUi.grid-y * 3) / 2;
     Jersey25 { x: MisterUi.grid-x * 2; y: 0px; width: 300px; height: 41px; text: "SUPER NINTENDO"; color: CrtTheme.text; }
-    Terminus8x14 { x: MisterUi.grid-x * 2; y: 50px; text: "1990 / 16-BIT CONSOLE"; size: MisterUi.crt-body-font; color: CrtTheme.warning; }
+    Spleen6x12 { x: MisterUi.grid-x * 2; y: 50px; text: "1990 / 16-BIT CONSOLE"; size: MisterUi.crt-body-font; color: CrtTheme.warning; }
     Image { x: parent.width - 185px - MisterUi.grid-x * 2; y: MisterUi.grid-y; visible: MisterBridge.snes-artwork-visible; source: MisterBridge.snes-artwork; width: 185px; height: 82px; }
     HubCard { x: MisterUi.grid-x * 2; y: 104px; width: card-width; height: card-height; glyph: "+"; label: "GAMES"; detail: MisterBridge.system-hub-games-count + " TITLES"; focused: MisterBridge.system-hub-selected == 0; acknowledged: MisterBridge.selection-feedback-query("system-hub", "games", MisterBridge.selection-feedback-revision); }
     HubCard { x: MisterUi.grid-x * 3 + card-width; y: 104px; width: card-width; height: card-height; glyph: "@"; label: "RECENT"; detail: MisterBridge.system-hub-recent-count + " PLAYED"; focused: MisterBridge.system-hub-selected == 1; acknowledged: MisterBridge.selection-feedback-query("system-hub", "recent", MisterBridge.selection-feedback-revision); }

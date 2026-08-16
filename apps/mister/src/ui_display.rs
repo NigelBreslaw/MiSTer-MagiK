@@ -119,14 +119,14 @@ impl UiDisplayInputs {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CrtFontFamily {
-    Terminus8x14,
+    Spleen6x12,
 }
 
 impl CrtFontFamily {
     /// Slint family name embedded in the route's selected font asset.
     pub const fn label(self) -> &'static str {
         match self {
-            Self::Terminus8x14 => "Terminus 8x14",
+            Self::Spleen6x12 => "Spleen 6x12",
         }
     }
 }
@@ -180,7 +180,7 @@ impl CrtUiMetrics {
             game_row_height: 24,
             header_height: 48,
             footer_height: 24,
-            font_family: CrtFontFamily::Terminus8x14,
+            font_family: CrtFontFamily::Spleen6x12,
         }
     }
 
@@ -191,14 +191,14 @@ impl CrtUiMetrics {
                 grid_y: 8,
                 border_x: 2,
                 border_y: 2,
-                body_font: UiPixelSize::Px16,
+                body_font: UiPixelSize::Px24,
                 heading_font: UiPixelSize::Px32,
                 card_title_font: UiPixelSize::Px24,
-                card_detail_font: UiPixelSize::Px16,
+                card_detail_font: UiPixelSize::Px24,
                 game_row_height: 32,
                 header_height: 80,
                 footer_height: 40,
-                font_family: CrtFontFamily::Terminus8x14,
+                font_family: CrtFontFamily::Spleen6x12,
             },
             ResolvedOutputRoute::Crt288p50 => Self {
                 grid_x: 8,
@@ -212,7 +212,7 @@ impl CrtUiMetrics {
                 game_row_height: 19,
                 header_height: 56,
                 footer_height: 24,
-                font_family: CrtFontFamily::Terminus8x14,
+                font_family: CrtFontFamily::Spleen6x12,
             },
             ResolvedOutputRoute::Crt480p60 => Self {
                 grid_x: 4,
@@ -226,7 +226,7 @@ impl CrtUiMetrics {
                 game_row_height: 32,
                 header_height: 48,
                 footer_height: 24,
-                font_family: CrtFontFamily::Terminus8x14,
+                font_family: CrtFontFamily::Spleen6x12,
             },
             ResolvedOutputRoute::Crt576p50 => Self {
                 grid_x: 4,
@@ -240,7 +240,7 @@ impl CrtUiMetrics {
                 game_row_height: 39,
                 header_height: 56,
                 footer_height: 29,
-                font_family: CrtFontFamily::Terminus8x14,
+                font_family: CrtFontFamily::Spleen6x12,
             },
             _ => Self::for_framebuffer(display.render_w, display.render_h),
         }
@@ -1691,7 +1691,7 @@ mod tests {
                     width: 576,
                     height: 432,
                 },
-                (8, 8, 2, 2, 16, 32, 24, 16, 32, 80, 40),
+                (8, 8, 2, 2, 24, 32, 24, 24, 32, 80, 40),
             ),
             (
                 ResolvedOutputRoute::Crt288p50,
@@ -1750,7 +1750,7 @@ mod tests {
                 ),
                 expected_metrics
             );
-            assert_eq!(metrics.font_family, CrtFontFamily::Terminus8x14);
+            assert_eq!(metrics.font_family, CrtFontFamily::Spleen6x12);
         }
     }
 

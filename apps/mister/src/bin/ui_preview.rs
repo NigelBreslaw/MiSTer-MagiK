@@ -3230,10 +3230,10 @@ mod macos {
         ui.set_crt_border_x(metrics.border_x);
         ui.set_crt_border_y(metrics.border_y);
         let crt_text_size = |size| match size {
-            UiPixelSize::Px8 => mister_magik_ui::launcher::Terminus8x14Size::Px8,
-            UiPixelSize::Px16 => mister_magik_ui::launcher::Terminus8x14Size::Px16,
-            UiPixelSize::Px24 => mister_magik_ui::launcher::Terminus8x14Size::Px24,
-            UiPixelSize::Px32 => mister_magik_ui::launcher::Terminus8x14Size::Px32,
+            UiPixelSize::Px8 => mister_magik_ui::launcher::Spleen6x12Size::Px8,
+            UiPixelSize::Px16 => mister_magik_ui::launcher::Spleen6x12Size::Px16,
+            UiPixelSize::Px24 => mister_magik_ui::launcher::Spleen6x12Size::Px24,
+            UiPixelSize::Px32 => mister_magik_ui::launcher::Spleen6x12Size::Px32,
         };
         ui.set_crt_body_font(crt_text_size(metrics.body_font));
         ui.set_crt_heading_font(crt_text_size(metrics.heading_font));
@@ -4253,15 +4253,15 @@ mod macos {
                     ResolvedOutputRoute::Hdmi,
                     (960, 540),
                     UiPixelSize::Px8,
-                    "Press Start 2P",
+                    "Spleen 6x12",
                 ),
                 (
                     "crt-240p",
                     DisplayProfile::Crt240p,
                     ResolvedOutputRoute::Crt240p60,
                     (640, 480),
-                    UiPixelSize::Px16,
-                    "Press Start 2P",
+                    UiPixelSize::Px24,
+                    "Spleen 6x12",
                 ),
                 (
                     "crt-288p",
@@ -4269,7 +4269,7 @@ mod macos {
                     ResolvedOutputRoute::Crt288p50,
                     (640, 288),
                     UiPixelSize::Px16,
-                    "Press Start 2P",
+                    "Spleen 6x12",
                 ),
                 (
                     "crt-480p",
@@ -4277,7 +4277,7 @@ mod macos {
                     ResolvedOutputRoute::Crt480p60,
                     (640, 480),
                     UiPixelSize::Px8,
-                    "Press Start 2P",
+                    "Spleen 6x12",
                 ),
                 (
                     "crt-576p",
@@ -4285,7 +4285,7 @@ mod macos {
                     ResolvedOutputRoute::Crt576p50,
                     (640, 576),
                     UiPixelSize::Px8,
-                    "Press Start 2P",
+                    "Spleen 6x12",
                 ),
             ] {
                 assert_eq!(DisplayProfile::parse(name).unwrap(), profile);

@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { Terminus8x14, Terminus8x14Size } from "../components/terminus_8x14.slint";
+import { Spleen6x12, Spleen6x12Size } from "../components/spleen_6x12.slint";
 import { Jersey25 } from "../components/jersey_25.slint";
 
 import { MisterUi } from "../mister_window.slint";
@@ -20,14 +20,14 @@ component CrtProgressRow inherits Rectangle {
         padding-right: MisterUi.grid-x;
         spacing: MisterUi.grid-x;
         cross-axis-alignment: center;
-        Terminus8x14 {
+        Spleen6x12 {
             text: root.pack.system + "  " + root.pack.phase;
             color: CrtTheme.text;
             size: MisterUi.crt-body-font;
             overflow: elide;
             horizontal-stretch: 1;
         }
-        Terminus8x14 {
+        Spleen6x12 {
             text: root.pack.percent < 0 ? "..." : root.pack.percent + "%";
             color: CrtTheme.muted;
             size: MisterUi.crt-body-font;
@@ -70,7 +70,7 @@ export component CatalogScanPopup inherits Rectangle {
                 horizontal-alignment: center;
             }
 
-            Terminus8x14 {
+            Spleen6x12 {
                 width: root.scan-content-width;
                 text: MisterBridge.catalog-scan-message;
                 color: CrtTheme.text;
@@ -79,7 +79,7 @@ export component CatalogScanPopup inherits Rectangle {
                 wrap: word-wrap;
             }
 
-            Terminus8x14 {
+            Spleen6x12 {
                 width: root.scan-content-width;
                 text: MisterBridge.catalog-scan-title;
                 color: #d7eef8;
@@ -87,7 +87,7 @@ export component CatalogScanPopup inherits Rectangle {
                 horizontal-alignment: center;
             }
 
-            Terminus8x14 {
+            Spleen6x12 {
                 width: root.scan-content-width;
                 text: MisterBridge.catalog-scan-detail;
                 color: CrtTheme.muted;
@@ -100,7 +100,7 @@ export component CatalogScanPopup inherits Rectangle {
                 width: root.scan-progress-width;
                 spacing: 5px;
 
-                Terminus8x14 {
+                Spleen6x12 {
                     text: MisterBridge.media-pack-summary;
                     color: #d7eef8;
                     size: MisterUi.crt-body-font;
@@ -135,7 +135,7 @@ export component MediaProgressPopup inherits Rectangle {
         padding-bottom: 8px;
         spacing: 5px;
 
-        Terminus8x14 {
+        Spleen6x12 {
             text: MisterBridge.media-pack-summary;
             color: #d7eef8;
             size: MisterUi.crt-body-font;
@@ -178,14 +178,14 @@ export component BackgroundScanBadge inherits Rectangle {
     t := HorizontalLayout {
         alignment: start;
         width: self.preferred-width;
-        Terminus8x14 {
+        Spleen6x12 {
             text: "Building library";
             color: #d7eef8;
             size: MisterUi.crt-body-font;
             horizontal-alignment: center;
             vertical-alignment: center;
         }
-        Terminus8x14 {
+        Spleen6x12 {
             text: ".";
             color: MisterBridge.catalog-scan-dot-visible ? #d7eef8 : transparent;
             size: MisterUi.crt-body-font;
@@ -206,11 +206,11 @@ component CompactDialogButton inherits Rectangle {
     border-width: 1px;
     border-color: focused ? CrtTheme.accent : acknowledged ? #4e8f80 : CrtTheme.border;
 
-    Terminus8x14 {
+    Spleen6x12 {
         text: root.label;
         color: root.focused ? CrtTheme.accent-text : CrtTheme.text;
         size: MisterUi.portrait-layout && MisterUi.window-width < 400
-            ? Terminus8x14Size.px8
+            ? Spleen6x12Size.px8
             : MisterUi.crt-body-font;
         horizontal-alignment: center;
         vertical-alignment: center;
@@ -244,18 +244,18 @@ export component ConfirmDialog inherits Rectangle {
                 horizontal-alignment: center;
                 wrap: word-wrap;
             }
-            if root.narrow-portrait : Terminus8x14 {
+            if root.narrow-portrait : Spleen6x12 {
                 text: MisterBridge.confirm-title;
                 color: CrtTheme.accent;
-                size: Terminus8x14Size.px8;
+                size: Spleen6x12Size.px8;
                 horizontal-alignment: center;
                 wrap: word-wrap;
             }
 
-            Terminus8x14 {
+            Spleen6x12 {
                 text: MisterBridge.confirm-message;
                 color: CrtTheme.text;
-                size: root.narrow-portrait ? Terminus8x14Size.px8 : MisterUi.crt-body-font;
+                size: root.narrow-portrait ? Spleen6x12Size.px8 : MisterUi.crt-body-font;
                 horizontal-alignment: center;
                 vertical-alignment: center;
                 wrap: word-wrap;
@@ -294,17 +294,17 @@ export component LoadingOverlay inherits Rectangle {
             color: CrtTheme.text;
             horizontal-alignment: center;
         }
-        if MisterUi.portrait-layout : Terminus8x14 {
+        if MisterUi.portrait-layout : Spleen6x12 {
             text: MisterBridge.loading-message;
             color: CrtTheme.text;
-            size: MisterUi.window-width < 400 ? Terminus8x14Size.px8 : Terminus8x14Size.px16;
+            size: MisterUi.window-width < 400 ? Spleen6x12Size.px8 : Spleen6x12Size.px16;
             horizontal-alignment: center;
         }
 
-        Terminus8x14 {
+        Spleen6x12 {
             text: MisterBridge.loading-detail != "" ? MisterBridge.loading-detail : "Please wait...";
             color: CrtTheme.muted;
-            size: MisterUi.portrait-layout ? Terminus8x14Size.px8 : MisterUi.crt-body-font;
+            size: MisterUi.portrait-layout ? Spleen6x12Size.px8 : MisterUi.crt-body-font;
             horizontal-alignment: center;
         }
     }

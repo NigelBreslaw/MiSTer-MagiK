@@ -83,6 +83,22 @@ CONTRACTS = (
         "Terminus 8x14",
         "14px",
     ),
+    PrimitiveContract(
+        UI_ROOT / "components/spleen_5x8.slint",
+        "Spleen5x8",
+        "Spleen5x8Size",
+        ("px8", "px16"),
+        "Spleen 5x8",
+        "8px",
+    ),
+    PrimitiveContract(
+        UI_ROOT / "components/spleen_6x12.slint",
+        "Spleen6x12",
+        "Spleen6x12Size",
+        ("px8", "px16", "px24", "px32"),
+        "Spleen 6x12",
+        "12px",
+    ),
 )
 CONTRACT_BY_PATH = {contract.path: contract for contract in CONTRACTS}
 

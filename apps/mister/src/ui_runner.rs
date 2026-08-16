@@ -363,10 +363,10 @@ macro_rules! with_scene_app_layout {
             mister_ui.set_crt_border_x(crt_metrics.border_x);
             mister_ui.set_crt_border_y(crt_metrics.border_y);
             let crt_text_size = |size| match size {
-                UiPixelSize::Px8 => slint_ui::$module::Terminus8x14Size::Px8,
-                UiPixelSize::Px16 => slint_ui::$module::Terminus8x14Size::Px16,
-                UiPixelSize::Px24 => slint_ui::$module::Terminus8x14Size::Px24,
-                UiPixelSize::Px32 => slint_ui::$module::Terminus8x14Size::Px32,
+                UiPixelSize::Px8 => slint_ui::$module::Spleen6x12Size::Px8,
+                UiPixelSize::Px16 => slint_ui::$module::Spleen6x12Size::Px16,
+                UiPixelSize::Px24 => slint_ui::$module::Spleen6x12Size::Px24,
+                UiPixelSize::Px32 => slint_ui::$module::Spleen6x12Size::Px32,
             };
             mister_ui.set_crt_body_font(crt_text_size(crt_metrics.body_font));
             mister_ui.set_crt_heading_font(crt_text_size(crt_metrics.heading_font));
