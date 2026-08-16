@@ -3,7 +3,7 @@
 
 //! Host-neutral RGB565 composition for low-resolution CRT screenshot backdrops.
 
-use crate::preview_transition::{blend_rgb565_bucket, blend_rgb565_rows_bucketed};
+use crate::preview_transition::blend_rgb565_bucket;
 use crate::ui_display::{ResolvedOutputRoute, UiDisplay};
 use crate::visual_composition::{PreviewFrame, PreviewPixels};
 use slint::platform::software_renderer::Rgb565Pixel;
@@ -270,17 +270,6 @@ impl CrtBackdropState {
             let destination = &mut self.retarget[start..end];
             let previous = &self.source[start..end];
             let current = &self.target[start..end];
-            let has_horizontal_repeat =
-                previous
-                    .windows(2)
-                    .zip(current.windows(2))
-                    .any(|(previous_pair, current_pair)| {
-                        previous_pair[1] == previous_pair[0] && current_pair[1] == current_pair[0]
-                    });
-            if !has_horizontal_repeat {
-                blend_rgb565_rows_bucketed(destination, previous, current, alpha_bucket);
-                continue;
-            }
             let mut previous_source = Rgb565Pixel(u16::MAX);
             let mut previous_current = Rgb565Pixel(u16::MAX);
             for index in 0..destination.len() {
