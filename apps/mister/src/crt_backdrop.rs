@@ -270,20 +270,20 @@ impl CrtBackdropState {
             let destination = &mut self.retarget[start..end];
             let previous = &self.source[start..end];
             let current = &self.target[start..end];
-            let mut previous_source = Rgb565Pixel(u16::MAX);
-            let mut previous_current = Rgb565Pixel(u16::MAX);
-            for index in 0..destination.len() {
-                if index > 0
-                    && previous[index] == previous_source
-                    && current[index] == previous_current
+            let mut index = 0;
+            while index < destination.len() {
+                let previous_pixel = previous[index];
+                let current_pixel = current[index];
+                let blended = blend_rgb565_bucket(previous_pixel, current_pixel, alpha_bucket);
+                let mut run_end = index + 1;
+                while run_end < destination.len()
+                    && previous[run_end] == previous_pixel
+                    && current[run_end] == current_pixel
                 {
-                    destination[index] = destination[index - 1];
-                } else {
-                    destination[index] =
-                        blend_rgb565_bucket(previous[index], current[index], alpha_bucket);
+                    run_end += 1;
                 }
-                previous_source = previous[index];
-                previous_current = current[index];
+                destination[index..run_end].fill(blended);
+                index = run_end;
             }
         }
         for row in 0..self.physical_height {
