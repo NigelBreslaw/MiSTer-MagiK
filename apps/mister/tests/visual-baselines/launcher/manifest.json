@@ -1,6 +1,6 @@
 {
   "schema": "mister-magik-launcher-visual-baseline-v1",
-  "source_commit": "f9093bea1995ac16dac7b89aaa92e506e74d2fc3",
+  "source_commit": "c26273c9dc54241d8fe98040acd7caac1792d12a",
   "scene_manifest_sha256": "b3522b84ac02c691086951c1954f2da70277fc46fa556d27674369e6d6fd5a45",
   "review": {
     "owner": "Codex (visual review delegated by Nigel Breslaw)",
@@ -22,8 +22,8 @@
   "scenes": [
     {
       "id": "crt-arcade",
-      "rgb565_hash": "c9d6cfe5cf5e5327",
-      "provenance_sha256": "e5d4f3a4fea47e595456b00251b87be29347792306edd17c2d1653f359f4f601",
+      "rgb565_hash": "8247ef3d82a66c19",
+      "provenance_sha256": "61cde2519cdf6d570394af01eb62cfe43156a05c65ee1e94f2b6bd0c56ed4536",
       "scenario": "arcade",
       "frame": 0,
       "fixed_time_us": 16666,
