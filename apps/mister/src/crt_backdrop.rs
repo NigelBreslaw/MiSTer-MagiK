@@ -283,6 +283,16 @@ impl CrtBackdropState {
             .min(CRT_BACKDROP_FADE_DURATION.as_micros());
         let denominator = CRT_BACKDROP_FADE_DURATION.as_micros().max(1);
         let alpha_bucket = ((numerator * 32 + denominator / 2) / denominator) as u16;
+        if alpha_bucket == 0 {
+            // Retargeting snapshots the currently displayed blend into
+            // `retarget` and its logical expansion before this transition
+            // starts.  The alpha-zero endpoint is therefore already present
+            // in the destination; leave it untouched while the list layer
+            // repaints over the stationary backdrop.
+            trace.alpha_bucket = 0;
+            trace.active = true;
+            return trace;
+        }
         let blend_start = Instant::now();
         let row_width = self.width.max(1);
         let coarse_factor = coarse_factor.max(1);
