@@ -603,17 +603,12 @@ fn scale_dimmed_center_crop_mapped_with_logical_height(
     }
 
     // The low-resolution CRT routes share a 640x480 visual reference while
-    // preparing their native 240- or 288-row backdrops. Preserve the complete
-    // source bounds at 2x when they fit, otherwise 1x for tall portraits.
+    // preparing their native 240- or 288-row backdrops. Every screenshot is
+    // doubled with nearest-neighbour sampling, centred, and clipped to that
+    // reference instead of changing scale according to its orientation.
     let integer_scale_route = reference_destination_height > destination_height;
     if integer_scale_route {
-        let integer_scale = if frame.source_width.saturating_mul(2) <= destination_width
-            && frame.source_height.saturating_mul(2) <= reference_destination_height
-        {
-            2
-        } else {
-            1
-        };
+        let integer_scale = 2;
         let scaled_width = frame.source_width.saturating_mul(integer_scale);
         let image_x = (destination_width as isize - scaled_width as isize) / 2;
         for (destination_x, source_x) in x_map[..destination_width].iter_mut().enumerate() {
@@ -1254,7 +1249,7 @@ mod tests {
     }
 
     #[test]
-    fn low_resolution_targets_center_uncropped_sources_at_fitting_integer_scale() {
+    fn low_resolution_targets_double_and_clip_every_source() {
         let white = Rgb565Pixel(0xffff);
         for (
             destination_height,
@@ -1271,11 +1266,11 @@ mod tests {
             expected_source_y1,
         ) in [
             (240, 320, 224, 2, 0, 640, 8, 232, 0, 319, 0, 223),
-            (240, 187, 320, 1, 226, 413, 40, 200, 0, 186, 1, 319),
-            (240, 280, 320, 1, 180, 460, 40, 200, 0, 279, 1, 319),
+            (240, 187, 320, 2, 133, 507, 0, 240, 0, 186, 40, 279),
+            (240, 280, 320, 2, 40, 600, 0, 240, 0, 279, 40, 279),
             (288, 320, 224, 2, 0, 640, 10, 278, 0, 319, 0, 223),
-            (288, 187, 320, 1, 226, 413, 48, 240, 0, 186, 0, 319),
-            (288, 280, 320, 1, 180, 460, 48, 240, 0, 279, 0, 319),
+            (288, 187, 320, 2, 133, 507, 0, 288, 0, 186, 40, 279),
+            (288, 280, 320, 2, 40, 600, 0, 288, 0, 279, 40, 279),
         ] {
             let source = vec![white; source_width * source_height];
             let mut destination = vec![CRT_BACKDROP_BACKGROUND; 640 * destination_height];
@@ -1304,10 +1299,14 @@ mod tests {
             if expected_x1 < x_map.len() {
                 assert_eq!(x_map[expected_x1], usize::MAX);
             }
-            assert_eq!(y_map[expected_physical_y0 - 1], usize::MAX);
+            if expected_physical_y0 > 0 {
+                assert_eq!(y_map[expected_physical_y0 - 1], usize::MAX);
+            }
             assert_eq!(y_map[expected_physical_y0], expected_source_y0);
             assert_eq!(y_map[expected_physical_y1 - 1], expected_source_y1);
-            assert_eq!(y_map[expected_physical_y1], usize::MAX);
+            if expected_physical_y1 < y_map.len() {
+                assert_eq!(y_map[expected_physical_y1], usize::MAX);
+            }
 
             let first_image_row = expected_physical_y0 * 640;
             if expected_x0 > 0 {
