@@ -3,6 +3,7 @@
 
 //! Host-neutral RGB565 composition for low-resolution CRT screenshot backdrops.
 
+use crate::preview_transition::blend_rgb565_bucket;
 use crate::ui_display::{ResolvedOutputRoute, UiDisplay};
 use crate::visual_composition::{PreviewFrame, PreviewPixels};
 use slint::platform::software_renderer::Rgb565Pixel;
@@ -51,9 +52,6 @@ pub struct CrtBackdropState {
     transition_started: Option<Duration>,
     pending_prepare_us: u64,
     pending_prepare_pixels: u32,
-    blend_alpha_bucket: u16,
-    blend_5_lut: [u16; 32 * 32],
-    blend_6_lut: [u16; 64 * 64],
 }
 
 impl CrtBackdropState {
@@ -96,9 +94,6 @@ impl CrtBackdropState {
             transition_started: None,
             pending_prepare_us: 0,
             pending_prepare_pixels: 0,
-            blend_alpha_bucket: u16::MAX,
-            blend_5_lut: [0; 32 * 32],
-            blend_6_lut: [0; 64 * 64],
         }
     }
 
@@ -262,10 +257,6 @@ impl CrtBackdropState {
             .min(CRT_BACKDROP_FADE_DURATION.as_micros());
         let denominator = CRT_BACKDROP_FADE_DURATION.as_micros().max(1);
         let alpha_bucket = ((numerator * 32 + denominator / 2) / denominator) as u16;
-        if alpha_bucket != self.blend_alpha_bucket {
-            refresh_blend_luts(alpha_bucket, &mut self.blend_5_lut, &mut self.blend_6_lut);
-            self.blend_alpha_bucket = alpha_bucket;
-        }
         let blend_start = Instant::now();
         let row_width = self.width.max(1);
         for row in 0..self.physical_height {
@@ -288,12 +279,8 @@ impl CrtBackdropState {
                 {
                     destination[index] = destination[index - 1];
                 } else {
-                    destination[index] = blend_rgb565_bucket_lut(
-                        previous[index],
-                        current[index],
-                        &self.blend_5_lut,
-                        &self.blend_6_lut,
-                    );
+                    destination[index] =
+                        blend_rgb565_bucket(previous[index], current[index], alpha_bucket);
                 }
                 previous_source = previous[index];
                 previous_current = current[index];
@@ -572,40 +559,6 @@ fn darken_rgb565(pixel: Rgb565Pixel) -> Rgb565Pixel {
     Rgb565Pixel((red << 11) | (green << 5) | blue)
 }
 
-fn refresh_blend_luts(
-    alpha_bucket: u16,
-    blend_5: &mut [u16; 32 * 32],
-    blend_6: &mut [u16; 64 * 64],
-) {
-    let alpha = u32::from(alpha_bucket.min(32));
-    let inverse = 32 - alpha;
-    for from in 0..32_u32 {
-        for to in 0..32_u32 {
-            blend_5[(from * 32 + to) as usize] = ((from * inverse + to * alpha) >> 5) as u16;
-        }
-    }
-    for from in 0..64_u32 {
-        for to in 0..64_u32 {
-            blend_6[(from * 64 + to) as usize] = ((from * inverse + to * alpha) >> 5) as u16;
-        }
-    }
-}
-
-#[inline(always)]
-fn blend_rgb565_bucket_lut(
-    from: Rgb565Pixel,
-    to: Rgb565Pixel,
-    blend_5: &[u16; 32 * 32],
-    blend_6: &[u16; 64 * 64],
-) -> Rgb565Pixel {
-    let from = from.0;
-    let to = to.0;
-    let red = blend_5[(((from >> 11) & 0x1f) * 32 + ((to >> 11) & 0x1f)) as usize];
-    let green = blend_6[(((from >> 5) & 0x3f) * 64 + ((to >> 5) & 0x3f)) as usize];
-    let blue = blend_5[((from & 0x1f) * 32 + (to & 0x1f)) as usize];
-    Rgb565Pixel((red << 11) | (green << 5) | blue)
-}
-
 const DARKEN_5: [u16; 32] = darken_table_5();
 const DARKEN_6: [u16; 64] = darken_table_6();
 
@@ -833,23 +786,5 @@ mod tests {
                 .iter()
                 .all(|pixel| *pixel == CRT_BACKDROP_BACKGROUND)
         );
-    }
-
-    #[test]
-    fn blend_lookup_matches_reference_rgb565_math() {
-        let mut blend_5 = [0; 32 * 32];
-        let mut blend_6 = [0; 64 * 64];
-        for alpha in 0..=32 {
-            refresh_blend_luts(alpha, &mut blend_5, &mut blend_6);
-            for from in [Rgb565Pixel(0), Rgb565Pixel(0x1234), Rgb565Pixel(0xffff)] {
-                for to in [Rgb565Pixel(0), Rgb565Pixel(0x5678), Rgb565Pixel(0xffff)] {
-                    let expected = crate::preview_transition::blend_rgb565_bucket(from, to, alpha);
-                    assert_eq!(
-                        blend_rgb565_bucket_lut(from, to, &blend_5, &blend_6),
-                        expected
-                    );
-                }
-            }
-        }
     }
 }
