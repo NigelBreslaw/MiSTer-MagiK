@@ -436,12 +436,6 @@ impl LauncherBridgePresenter {
                 set_arcade_selected,
                 nav.arcade.selected as i32
             );
-            set_if_changed!(
-                bridge,
-                get_arcade_scroll_y,
-                set_arcade_scroll_y,
-                nav.arcade.scroll_y
-            );
         }
         sync_search(&bridge, nav);
     }

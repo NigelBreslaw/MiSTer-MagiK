@@ -9862,7 +9862,6 @@ pub(super) fn run_launcher_loop(
                     let protected_chrome = super::launcher_compositor::crt_arcade_chrome_rects(
                         layout.content_rect(),
                         crt_metrics,
-                        arcade_list_renderer.dirty_rect(),
                     )
                     .map(|rect| (rect.x0, rect.y0, rect.x1, rect.y1));
                     crt_backdrop_work_trace = backdrop.compose_into_coarse_excluding(

@@ -124,7 +124,6 @@ pub(super) fn init_launcher_bridge(app: &slint_ui::launcher::Launcher, pad: &Pad
         slint_ui::launcher::ArcadeGame,
     >::new())));
     bridge.set_arcade_selected(0);
-    bridge.set_arcade_scroll_y(0);
     sync_launcher_arcade_geometry_bridge(&bridge);
     bridge.set_arcade_games_loading(false);
     bridge.set_arcade_search_keys(ModelRc::new(VecModel::from(

@@ -1728,20 +1728,6 @@ mod macos {
                 layout.output_layout(),
                 footer,
             );
-            let list = self.arcade_layer.dirty_rect();
-            let scrollbar_width = metrics.grid_x.max(1) as usize;
-            let scrollbar = mister_magik_fb::framebuffer::target::DirtyRect {
-                x0: list.x1.saturating_sub(scrollbar_width),
-                y0: list.y0,
-                x1: list.x1,
-                y1: list.y1,
-            };
-            copy_logical_rect(
-                self.frame_target.cached_565_mut(),
-                &self.crt_chrome,
-                layout.output_layout(),
-                scrollbar,
-            );
         }
 
         fn request_selected_preview(&mut self) {

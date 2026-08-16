@@ -83,17 +83,6 @@ component SearchKeyboard inherits Rectangle {
 
 export component ArcadeListScreen inherits Rectangle {
     property <int> count: MisterBridge.active-system-count;
-    property <int> visible-game-rows: max(
-        1,
-        floor(MisterBridge.arcade-list-height / MisterUi.crt-game-row-height),
-    );
-    property <length> scrollbar-height: max(
-        MisterUi.body-font,
-        MisterBridge.arcade-list-height * 1px
-            * root.visible-game-rows / max(root.count, root.visible-game-rows),
-    );
-    property <length> scrollbar-travel: MisterBridge.arcade-list-height * 1px
-        - root.scrollbar-height;
     background: CrtTheme.background;
 
     CrtHeader {
@@ -139,25 +128,6 @@ export component ArcadeListScreen inherits Rectangle {
             size: MisterUi.crt-body-font;
             horizontal-alignment: center;
             vertical-alignment: center;
-        }
-    }
-
-    if root.count > root.visible-game-rows : Rectangle {
-        x: (MisterBridge.arcade-list-x + MisterBridge.arcade-list-width) * 1px
-            - MisterUi.grid-x;
-        y: MisterBridge.arcade-list-y * 1px;
-        width: MisterUi.grid-x;
-        height: MisterBridge.arcade-list-height * 1px;
-        background: CrtTheme.background;
-        border-width: MisterUi.border;
-        border-color: CrtTheme.border;
-
-        Rectangle {
-            x: MisterUi.border;
-            width: parent.width - MisterUi.border * 2;
-            height: root.scrollbar-height;
-            y: root.scrollbar-travel * MisterBridge.arcade-selected / max(1, root.count - 1);
-            background: CrtTheme.text;
         }
     }
 

@@ -233,7 +233,6 @@ impl<'a> LayerTarget<'a> {
         destination: &mut Vec<Rgb565Pixel>,
         content: crate::ui_display::CrtContentRect,
         metrics: CrtUiMetrics,
-        list: DirtyRect,
     ) -> u32 {
         destination.resize(
             self.target.cached_565().len(),
@@ -241,7 +240,7 @@ impl<'a> LayerTarget<'a> {
         );
         let layout = self.layout.output_layout();
         let cached = self.target.cached_565();
-        let rects = crt_arcade_chrome_rects(content, metrics, list);
+        let rects = crt_arcade_chrome_rects(content, metrics);
         let mut copied = 0usize;
         if matches!(
             layout.rotation(),
@@ -458,9 +457,8 @@ impl<'a> LayerTarget<'a> {
         snapshot: &[Rgb565Pixel],
         content: crate::ui_display::CrtContentRect,
         metrics: CrtUiMetrics,
-        list: DirtyRect,
     ) {
-        for rect in crt_arcade_chrome_rects(content, metrics, list) {
+        for rect in crt_arcade_chrome_rects(content, metrics) {
             self.restore_logical_rect(snapshot, rect);
         }
     }
@@ -534,8 +532,7 @@ impl<'a> LayerTarget<'a> {
 pub(super) fn crt_arcade_chrome_rects(
     content: crate::ui_display::CrtContentRect,
     metrics: CrtUiMetrics,
-    list: DirtyRect,
-) -> [DirtyRect; 3] {
+) -> [DirtyRect; 2] {
     let grid_x = metrics.grid_x.max(1) as usize;
     let grid_y = metrics.grid_y.max(1) as usize;
     let header = DirtyRect {
@@ -550,13 +547,7 @@ pub(super) fn crt_arcade_chrome_rects(
         x1: header.x1,
         y1: content.y + content.height - grid_y * 2,
     };
-    let scrollbar = DirtyRect {
-        x0: list.x1.saturating_sub(grid_x),
-        y0: list.y0,
-        x1: list.x1,
-        y1: list.y1,
-    };
-    [header, footer, scrollbar]
+    [header, footer]
 }
 
 fn snapshot_cached_565(target: &UiFrameTarget) -> Vec<Rgb565Pixel> {
