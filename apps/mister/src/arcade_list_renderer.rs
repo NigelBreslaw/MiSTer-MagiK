@@ -1051,10 +1051,15 @@ impl ArcadeListRenderer {
                 let destination = &mut cached[destination_start..destination_start + self.width];
                 let selected = viewport_y >= selection_y && viewport_y < selection_bottom;
                 let surface_row = &self.surface[source_start..source_start + self.width];
-                if selected {
+                if selected && self.style.crt_palette {
                     destination.fill(self.style.selection_fill_565);
                     for &(run_start, run_end) in &self.surface_selected_text_runs[source_y] {
                         destination[run_start..run_end].fill(self.style.selection_text_565);
+                    }
+                } else if selected {
+                    for x in 0..self.width {
+                        destination[x] =
+                            selected_aperture_pixel_with_style(surface_row[x], self.style);
                     }
                 } else {
                     if !backdrop_is_fresh {
