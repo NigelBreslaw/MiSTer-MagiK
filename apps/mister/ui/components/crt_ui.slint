@@ -48,14 +48,14 @@ export component CrtHeader inherits Rectangle {
                 if MisterUi.crt-body-font == Spleen6x12Size.px16 : Jersey15 {
                     text: root.title;
                     color: CrtTheme.text;
-                    horizontal-stretch: 1;
+                    horizontal-stretch: root.status == "" ? 1 : 0;
                     overflow: elide;
                 }
                 if MisterUi.crt-body-font != Spleen6x12Size.px16
                     && MisterUi.heading-font >= 32px : Jersey25 {
                     text: root.title;
                     color: CrtTheme.text;
-                    horizontal-stretch: 1;
+                    horizontal-stretch: root.status == "" ? 1 : 0;
                     overflow: elide;
                 }
                 if MisterUi.crt-body-font != Spleen6x12Size.px16
@@ -63,7 +63,7 @@ export component CrtHeader inherits Rectangle {
                     text: root.title;
                     color: CrtTheme.text;
                     size: MisterUi.crt-heading-font;
-                    horizontal-stretch: 1;
+                    horizontal-stretch: root.status == "" ? 1 : 0;
                     overflow: elide;
                 }
 
