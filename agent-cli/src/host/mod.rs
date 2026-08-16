@@ -22673,7 +22673,7 @@ fn capture_arcade_variant(
     )?;
 
     let started = Instant::now();
-    let timeout = Duration::from_secs(90);
+    let timeout = Duration::from_secs(300);
     loop {
         let status = read_launcher_status(&session)?;
         let arcade_settled = status.get("screen").and_then(Value::as_str) == Some("arcade")
