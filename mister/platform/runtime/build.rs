@@ -25,6 +25,7 @@ fn main() {
     }
 }
 
+#[cfg(feature = "ui")]
 fn c_build() -> cc::Build {
     let mut build = cc::Build::new();
     build.inherit_rustflags(false);
