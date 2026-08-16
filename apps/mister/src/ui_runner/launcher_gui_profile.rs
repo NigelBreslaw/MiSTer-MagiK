@@ -9,7 +9,7 @@ const ENABLE_ENV: &str = "MISTER_GUI_FRAME_PROFILE";
 const COMPLETE_ENV: &str = "MISTER_GUI_FRAME_PROFILE_COMPLETE";
 const PMU_ENV: &str = "MISTER_GUI_FRAME_PROFILE_PMU";
 const PHASE_TIMEOUT: Duration = Duration::from_secs(20);
-const ARCADE_SCROLL_PHASE_TIMEOUT: Duration = Duration::from_secs(30);
+const ARCADE_SCROLL_PHASE_TIMEOUT: Duration = Duration::from_secs(50);
 const FRAME_LIMIT: usize = 4_096;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
