@@ -533,7 +533,7 @@ fn crt_arcade_chrome_rects(
     content: crate::ui_display::CrtContentRect,
     metrics: CrtUiMetrics,
     list: DirtyRect,
-) -> [DirtyRect; 3] {
+) -> [DirtyRect; 2] {
     let grid_x = metrics.grid_x.max(1) as usize;
     let grid_y = metrics.grid_y.max(1) as usize;
     let header = DirtyRect {
