@@ -765,8 +765,10 @@ fn blend_rgb565_range(
                     while index + 1 < end {
                         let pixel =
                             blend_rgb565_bucket(previous[index], current[index], alpha_bucket);
-                        destination[index] = pixel;
-                        destination[index + 1] = pixel;
+                        // SAFETY: the loop proves that two contiguous destination pixels exist.
+                        unsafe {
+                            write_duplicated_rgb565(destination.as_mut_ptr().add(index), pixel)
+                        };
                         index += 2;
                     }
                     if index < end {
@@ -810,8 +812,8 @@ fn copy_rgb565_coarse_two_source(
     let mut index = start;
     while index + 1 < end {
         let pixel = source[index];
-        destination[index] = pixel;
-        destination[index + 1] = pixel;
+        // SAFETY: the loop proves that two contiguous destination pixels exist.
+        unsafe { write_duplicated_rgb565(destination.as_mut_ptr().add(index), pixel) };
         index += 2;
     }
     if index < end {
@@ -830,13 +832,20 @@ fn blend_rgb565_coarse_two_const<const ALPHA: u32, const INVERSE: u32>(
     let mut index = start;
     while index + 1 < end {
         let pixel = blend_rgb565_const::<ALPHA, INVERSE>(previous[index], current[index]);
-        destination[index] = pixel;
-        destination[index + 1] = pixel;
+        // SAFETY: the loop proves that two contiguous destination pixels exist.
+        unsafe { write_duplicated_rgb565(destination.as_mut_ptr().add(index), pixel) };
         index += 2;
     }
     if index < end {
         destination[index] = blend_rgb565_const::<ALPHA, INVERSE>(previous[index], current[index]);
     }
+}
+
+#[inline(always)]
+unsafe fn write_duplicated_rgb565(destination: *mut Rgb565Pixel, pixel: Rgb565Pixel) {
+    let pair = u32::from(pixel.0) | (u32::from(pixel.0) << 16);
+    // SAFETY: Rgb565Pixel is a two-byte tuple pixel; unaligned access supports odd pixel offsets.
+    unsafe { destination.cast::<u32>().write_unaligned(pair) };
 }
 
 #[inline(always)]
