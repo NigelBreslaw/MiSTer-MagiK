@@ -2847,13 +2847,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "mister-magik-build-identity"
-version = "0.1.0"
-dependencies = [
- "serde",
-]
-
-[[package]]
 name = "mister-magik-catalog"
 version = "0.1.0"
 dependencies = [
@@ -2886,7 +2879,6 @@ dependencies = [
  "libc",
  "lz4_flex",
  "mister-magik-agent-protocol",
- "mister-magik-build-identity",
  "mister-magik-catalog",
  "mister-magik-core",
  "mister-magik-framebuffer-scenes",
@@ -6456,7 +6448,7 @@ dependencies = [
 name = "zvariant_utils"
 version = "4.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "629d80ece222cad20fe0e8741be493c4ab166acf3b85341bdc2cdbcfd8f5f3c2d6"
+checksum = "629d80ece222cad20fe0e8741be493c4ab166acf3b85341bdc2cdbcfd8f3c2d6"
 dependencies = [
  "proc-macro2",
  "quote",

@@ -312,11 +312,11 @@ mod tests {
         assert_eq!(value["schema"], REPORT_SCHEMA);
         assert_eq!(
             value["build"]["build_number"],
-            crate::build_identity::BuildIdentity::current().build_number
+            env!("MISTER_MAGIK_BUILD_NUMBER")
         );
         assert_eq!(
             value["build"]["source_revision"],
-            crate::build_identity::BuildIdentity::current().source_revision
+            env!("MISTER_MAGIK_SOURCE_REVISION")
         );
         let retained = fs::read_dir(&dir)
             .unwrap()

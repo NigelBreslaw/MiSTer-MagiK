@@ -91,12 +91,8 @@ impl CapsuleBinding {
             catalog_stamp_fingerprint: stamp,
             catalog_schema: SCHEMA_VERSION,
             catalog_build: CATALOG_BUILD_VERSION,
-            binary_version: crate::build_identity::BuildIdentity::current()
-                .package_version
-                .to_string(),
-            binary_build: crate::build_identity::BuildIdentity::current()
-                .build_time
-                .to_string(),
+            binary_version: env!("CARGO_PKG_VERSION").to_string(),
+            binary_build: env!("MISTER_MAGIK_BUILD_TIME").to_string(),
         }
     }
 }

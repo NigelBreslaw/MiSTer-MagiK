@@ -69,7 +69,7 @@ fn panic_report_value(
         "build": crate::build_identity::BuildIdentity::current(),
         "process": {
             "arch": std::env::consts::ARCH,
-            "package_version": crate::build_identity::BuildIdentity::current().package_version,
+            "package_version": env!("CARGO_PKG_VERSION"),
             "args": args,
             "proc_status": read_text_value("/proc/self/status"),
         },
