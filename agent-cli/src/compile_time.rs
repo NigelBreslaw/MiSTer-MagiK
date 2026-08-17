@@ -34,6 +34,8 @@ pub enum CompileTimeTarget {
     FramebufferLabMacos,
     MagikFullAppArm,
     MagikFullAppMacos,
+    MagikReleaseDeviceArmAll,
+    MagikReleaseDeviceArmProduction,
     FramebufferSceneLabArm,
     FramebufferSceneLabMacos,
 }
@@ -66,6 +68,8 @@ impl CompileTimeTarget {
             Self::FramebufferLabMacos => "framebuffer-lab-macos",
             Self::MagikFullAppArm => "magik-full-app-arm",
             Self::MagikFullAppMacos => "magik-full-app-macos",
+            Self::MagikReleaseDeviceArmAll => "magik-release-device-arm-all",
+            Self::MagikReleaseDeviceArmProduction => "magik-release-device-arm-production",
             Self::FramebufferSceneLabArm => "framebuffer-scene-lab-arm",
             Self::FramebufferSceneLabMacos => "framebuffer-scene-lab-macos",
         }
@@ -498,6 +502,16 @@ fn run_build(repository: &Path, target: CompileTimeTarget, target_dir: &Path) ->
             target_dir,
         ),
         CompileTimeTarget::MagikFullAppMacos => build_macos_full_app(repository, target_dir),
+        CompileTimeTarget::MagikReleaseDeviceArmAll => execute_quiet_at_target_dir(
+            repository,
+            &BuildSpec::canonical(crate::deploy::UiScope::All),
+            target_dir,
+        ),
+        CompileTimeTarget::MagikReleaseDeviceArmProduction => execute_quiet_at_target_dir(
+            repository,
+            &BuildSpec::canonical(crate::deploy::UiScope::Production),
+            target_dir,
+        ),
         CompileTimeTarget::FramebufferSceneLabArm => execute_quiet_at_target_dir(
             repository,
             &BuildSpec::framebuffer_scene_lab_device(),
@@ -524,6 +538,16 @@ impl CompileTimeTarget {
                     Ok("crates/particles/src/magik.rs")
                 } else {
                     Err("the full-app compile target supports only --edit shared-magik".into())
+                }
+            }
+            Self::MagikReleaseDeviceArmAll | Self::MagikReleaseDeviceArmProduction => {
+                if edit == CompileTimeEdit::SharedMagik {
+                    Ok("apps/mister/src/main.rs")
+                } else {
+                    Err(
+                        "the release-device compile target supports only --edit shared-magik"
+                            .into(),
+                    )
                 }
             }
             Self::FramebufferSceneLabArm | Self::FramebufferSceneLabMacos => Ok(match edit {
@@ -1137,6 +1161,10 @@ mod tests {
         assert_eq!(
             CompileTimeTarget::MagikFullAppMacos.label(),
             "magik-full-app-macos"
+        );
+        assert_eq!(
+            CompileTimeTarget::MagikReleaseDeviceArmProduction.label(),
+            "magik-release-device-arm-production"
         );
         assert_eq!(
             CompileTimeTarget::FramebufferSceneLabArm.label(),
