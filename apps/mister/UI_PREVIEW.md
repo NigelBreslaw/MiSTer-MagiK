@@ -71,8 +71,10 @@ apps/mister/scripts/dev-ui-mac.sh --content card --sd-root /Volumes/MiSTer_Data
 Card mode loads the newest valid Catalog V3 generation from the per-card Mac
 cache, production card directory, or development card directory. Interactive
 sessions then rebuild the catalog in the background with the production
-scanner. Physical card paths are remapped back to `/media/fat` before
-publication, so launch references are identical to MiSTer.
+scanner. When a valid generation is already loaded, refresh progress remains a
+non-blocking badge so the launcher and any cold-start morph target stay usable.
+Physical card paths are remapped back to `/media/fat` before publication, so
+launch references are identical to MiSTer.
 
 If all three Catalog V3 locations are missing, automatic cold start requires
 that background scan. Combining a missing catalog with `--no-scan` reports an

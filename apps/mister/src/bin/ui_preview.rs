@@ -2274,7 +2274,10 @@ mod macos {
                 let bridge = self.launcher.global::<MisterBridge>();
                 match event {
                     CatalogWorkerEvent::Progress { title, detail } => {
-                        bridge.set_catalog_scan_visible(true);
+                        let background =
+                            catalog_scan_progress_is_background(self.catalog_generation);
+                        bridge.set_catalog_scan_visible(!background);
+                        bridge.set_catalog_background_scan_visible(background);
                         bridge.set_catalog_scan_title(title.into());
                         bridge.set_catalog_scan_message("Reading the mounted card".into());
                         bridge.set_catalog_scan_detail(detail.into());
@@ -2295,6 +2298,7 @@ mod macos {
                             .selection
                             .min(self.catalog.games.len().saturating_sub(1));
                         bridge.set_catalog_scan_visible(false);
+                        bridge.set_catalog_background_scan_visible(false);
                         self.startup_intro_catalog_ready = true;
                         self.sync_launcher_navigation();
                         if let Some(window) = self.native_window.as_ref() {
@@ -2303,7 +2307,10 @@ mod macos {
                         keep_receiver = false;
                     }
                     CatalogWorkerEvent::Failed(error) => {
-                        bridge.set_catalog_scan_visible(true);
+                        let blocking =
+                            !catalog_scan_progress_is_background(self.catalog_generation);
+                        bridge.set_catalog_scan_visible(blocking);
+                        bridge.set_catalog_background_scan_visible(false);
                         bridge.set_catalog_scan_title("Mac catalog scan failed".into());
                         bridge.set_catalog_scan_message("The card was not modified".into());
                         bridge.set_catalog_scan_detail(error.clone().into());
@@ -3462,6 +3469,10 @@ mod macos {
         Failed(String),
     }
 
+    fn catalog_scan_progress_is_background(catalog_generation: Option<u64>) -> bool {
+        catalog_generation.is_some()
+    }
+
     fn spawn_catalog_worker(
         layout: &mister_magik_fb::macos_preview_content::HostContentLayout,
     ) -> Result<mpsc::Receiver<CatalogWorkerEvent>, String> {
@@ -4340,6 +4351,12 @@ mod macos {
             assert_eq!(rgb565_to_xrgb8888(Rgb565Pixel(0xf800)), 0x00ff0000);
             assert_eq!(rgb565_to_xrgb8888(Rgb565Pixel(0x07e0)), 0x0000ff00);
             assert_eq!(rgb565_to_xrgb8888(Rgb565Pixel(0x001f)), 0x000000ff);
+        }
+
+        #[test]
+        fn catalog_refresh_is_non_blocking_when_a_generation_is_already_loaded() {
+            assert!(!catalog_scan_progress_is_background(None));
+            assert!(catalog_scan_progress_is_background(Some(7)));
         }
 
         #[test]
