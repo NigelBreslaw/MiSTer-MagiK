@@ -402,11 +402,11 @@ mod tests {
         assert_eq!(value["schema"], REPORT_SCHEMA);
         assert_eq!(
             value["build"]["build_number"],
-            env!("MISTER_MAGIK_BUILD_NUMBER")
+            crate::build_identity::BuildIdentity::current().build_number
         );
         assert_eq!(
             value["build"]["source_revision"],
-            env!("MISTER_MAGIK_SOURCE_REVISION")
+            crate::build_identity::BuildIdentity::current().source_revision
         );
         assert!(
             fs::read_dir(&dir)

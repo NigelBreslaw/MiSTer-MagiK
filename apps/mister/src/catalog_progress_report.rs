@@ -848,11 +848,11 @@ mod tests {
             serde_json::from_slice(&fs::read(dir.join(LATEST_FILE)).unwrap()).unwrap();
         assert_eq!(
             latest["build"]["build_number"],
-            env!("MISTER_MAGIK_BUILD_NUMBER")
+            crate::build_identity::BuildIdentity::current().build_number
         );
         assert_eq!(
             latest["build"]["source_revision"],
-            env!("MISTER_MAGIK_SOURCE_REVISION")
+            crate::build_identity::BuildIdentity::current().source_revision
         );
         assert!(
             fs::read_dir(&dir)

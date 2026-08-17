@@ -125,6 +125,9 @@ The canonical `release-device` runtime uses the measured thin-LTO profile
 support, and retains function symbols. Binary size is not a release gate;
 device correctness, memory headroom, and frame cadence remain required.
 Benchmarks activate profiling only on the already-installed runtime.
+Build identity metadata is isolated in `crates/build-identity`, so commit-only
+identity refreshes do not invalidate the frontend's source crate; the runtime
+still embeds the same revision, dirty-state, version, and build-time fields.
 `scripts/agent build runtime-analysis` produces
 the `release-device-profile` offline artifact and is not callable from the
 benchmark workflow or deployable by it. Runtime delivery always

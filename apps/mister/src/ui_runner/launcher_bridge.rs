@@ -287,9 +287,8 @@ pub(super) fn sync_settings_bridge(
 }
 
 fn build_label() -> String {
-    let version = env!("MISTER_MAGIK_VERSION");
-    let build_time = env!("MISTER_MAGIK_BUILD_TIME");
-    format_build_label(version, build_time)
+    let identity = crate::build_identity::BuildIdentity::current();
+    format_build_label(identity.version, identity.build_time)
 }
 
 fn format_build_label(version: &str, build_time: &str) -> String {
