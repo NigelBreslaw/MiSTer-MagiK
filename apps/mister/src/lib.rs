@@ -6,7 +6,7 @@
 //! The framebuffer, FPGA, Linux input, and Slint renderer stay in the binary
 //! target behind the `ui` feature. This library keeps pure logic available for
 //! fast macOS host tests without compiling Slint/AppKit.
-//! Runtime delivery still records the exact source commit for traceability.
+//! Runtime delivery records the exact source commit regardless of transport.
 
 extern crate self as mister_magik_fb;
 
