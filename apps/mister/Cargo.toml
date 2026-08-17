@@ -131,6 +131,10 @@ inherits = "release-device"
 lto = "thin"
 codegen-units = 16
 
+[profile.release-device-thin-stripped]
+inherits = "release-device-thin"
+strip = true
+
 [profile.release-device-profile]
 # Profiling build: symbols + frame pointers for pprof flamegraphs on device.
 inherits = "release-device"

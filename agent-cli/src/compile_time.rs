@@ -37,6 +37,7 @@ pub enum CompileTimeTarget {
     MagikReleaseDeviceArmAll,
     MagikReleaseDeviceArmProduction,
     MagikReleaseDeviceArmThin,
+    MagikReleaseDeviceArmThinStripped,
     FramebufferSceneLabArm,
     FramebufferSceneLabMacos,
 }
@@ -72,6 +73,7 @@ impl CompileTimeTarget {
             Self::MagikReleaseDeviceArmAll => "magik-release-device-arm-all",
             Self::MagikReleaseDeviceArmProduction => "magik-release-device-arm-production",
             Self::MagikReleaseDeviceArmThin => "magik-release-device-arm-thin",
+            Self::MagikReleaseDeviceArmThinStripped => "magik-release-device-arm-thin-stripped",
             Self::FramebufferSceneLabArm => "framebuffer-scene-lab-arm",
             Self::FramebufferSceneLabMacos => "framebuffer-scene-lab-macos",
         }
@@ -522,6 +524,14 @@ fn run_build(repository: &Path, target: CompileTimeTarget, target_dir: &Path) ->
             ),
             target_dir,
         ),
+        CompileTimeTarget::MagikReleaseDeviceArmThinStripped => execute_quiet_at_target_dir(
+            repository,
+            &BuildSpec::canonical_profile(
+                crate::deploy::UiScope::Production,
+                "release-device-thin-stripped",
+            ),
+            target_dir,
+        ),
         CompileTimeTarget::FramebufferSceneLabArm => execute_quiet_at_target_dir(
             repository,
             &BuildSpec::framebuffer_scene_lab_device(),
@@ -552,7 +562,8 @@ impl CompileTimeTarget {
             }
             Self::MagikReleaseDeviceArmAll
             | Self::MagikReleaseDeviceArmProduction
-            | Self::MagikReleaseDeviceArmThin => {
+            | Self::MagikReleaseDeviceArmThin
+            | Self::MagikReleaseDeviceArmThinStripped => {
                 if edit == CompileTimeEdit::SharedMagik {
                     Ok("apps/mister/src/main.rs")
                 } else {
