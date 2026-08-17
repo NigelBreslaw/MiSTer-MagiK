@@ -93,6 +93,15 @@ never deployment health evidence. The host tool intentionally exposes no
 generic remote shell, file upload, directory upload, or binary deployment
 subcommand; fixed typed operations own all device mutation.
 
+The large Runtime executable is transferred byte-for-byte by a one-shot HTTP
+listener bound to the host route used for the MiSTer. The listener exposes only
+an unpredictable single-use path and is stopped before activation continues.
+The device bounds the raw download by the expected byte count, and the normal
+transaction verifies its SHA-256 before swapping it into place. If the HTTP
+fetch fails, delivery removes and confirms removal of the partial staging file
+before one fallback through the existing SFTP transport. Artwork and manifests
+remain on SFTP.
+
 The attended release gate qualifies whichever MagiK layout is currently active.
 Its display phase reboots through the fixed boundary matrix: presets 10, 13,
 14, 8, and 0, followed by custom `1920,1200,60`. Every case requires the ABI

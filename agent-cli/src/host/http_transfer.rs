@@ -60,7 +60,12 @@ impl OneShotHttpArtifactServer {
         }
     }
 
-    fn start_bound(source: &Path, bind_ip: IpAddr, token: &str, timeout: Duration) -> Result<Self> {
+    pub(super) fn start_bound(
+        source: &Path,
+        bind_ip: IpAddr,
+        token: &str,
+        timeout: Duration,
+    ) -> Result<Self> {
         let metadata = fs::metadata(source)?;
         if !metadata.is_file() {
             return Err(format!("delivery HTTP source is not a file: {}", source.display()).into());
