@@ -36,6 +36,7 @@ pub enum CompileTimeTarget {
     MagikFullAppMacos,
     MagikReleaseDeviceArmAll,
     MagikReleaseDeviceArmProduction,
+    MagikReleaseDeviceArmThin,
     FramebufferSceneLabArm,
     FramebufferSceneLabMacos,
 }
@@ -70,6 +71,7 @@ impl CompileTimeTarget {
             Self::MagikFullAppMacos => "magik-full-app-macos",
             Self::MagikReleaseDeviceArmAll => "magik-release-device-arm-all",
             Self::MagikReleaseDeviceArmProduction => "magik-release-device-arm-production",
+            Self::MagikReleaseDeviceArmThin => "magik-release-device-arm-thin",
             Self::FramebufferSceneLabArm => "framebuffer-scene-lab-arm",
             Self::FramebufferSceneLabMacos => "framebuffer-scene-lab-macos",
         }
@@ -512,6 +514,14 @@ fn run_build(repository: &Path, target: CompileTimeTarget, target_dir: &Path) ->
             &BuildSpec::canonical(crate::deploy::UiScope::Production),
             target_dir,
         ),
+        CompileTimeTarget::MagikReleaseDeviceArmThin => execute_quiet_at_target_dir(
+            repository,
+            &BuildSpec::canonical_profile(
+                crate::deploy::UiScope::Production,
+                "release-device-thin",
+            ),
+            target_dir,
+        ),
         CompileTimeTarget::FramebufferSceneLabArm => execute_quiet_at_target_dir(
             repository,
             &BuildSpec::framebuffer_scene_lab_device(),
@@ -540,7 +550,9 @@ impl CompileTimeTarget {
                     Err("the full-app compile target supports only --edit shared-magik".into())
                 }
             }
-            Self::MagikReleaseDeviceArmAll | Self::MagikReleaseDeviceArmProduction => {
+            Self::MagikReleaseDeviceArmAll
+            | Self::MagikReleaseDeviceArmProduction
+            | Self::MagikReleaseDeviceArmThin => {
                 if edit == CompileTimeEdit::SharedMagik {
                     Ok("apps/mister/src/main.rs")
                 } else {

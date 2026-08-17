@@ -124,6 +124,13 @@ codegen-units = 2
 # line-level debug sections.
 strip = "debuginfo"
 
+# Isolated thin-LTO candidate. It is never selected by ordinary delivery
+# until the typed campaign and device parity gates both accept it.
+[profile.release-device-thin]
+inherits = "release-device"
+lto = "thin"
+codegen-units = 16
+
 [profile.release-device-profile]
 # Profiling build: symbols + frame pointers for pprof flamegraphs on device.
 inherits = "release-device"
