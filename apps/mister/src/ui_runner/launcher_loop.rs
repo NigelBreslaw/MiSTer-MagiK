@@ -9830,6 +9830,7 @@ pub(super) fn run_launcher_loop(
             let result = backdrop.compose(
                 crt_backdrop_eligible,
                 force_crt_backdrop_repaint,
+                arcade_turbo_active,
                 nav.arcade.selected,
                 transition_id,
                 (preview_cache_state_before_composition == "exact")

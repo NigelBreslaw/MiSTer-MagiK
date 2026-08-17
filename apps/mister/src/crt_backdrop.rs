@@ -229,6 +229,7 @@ impl CrtBackdropState {
         &mut self,
         prepared: Option<PreparedCrtBackdrop>,
         now: Duration,
+        instant: bool,
     ) {
         self.resolve_current(now);
         self.source.copy_from_slice(&self.retarget);
@@ -240,6 +241,10 @@ impl CrtBackdropState {
             self.target_is_plain = true;
             self.pending_prepare_us = 0;
             self.pending_prepare_pixels = 0;
+            if instant {
+                self.snap_to_target();
+                return;
+            }
             self.transition_started =
                 (self.source.as_slice() != self.target.as_ref()).then_some(now);
             return;
@@ -249,6 +254,10 @@ impl CrtBackdropState {
         self.target_is_plain = prepared.is_plain;
         self.pending_prepare_us = 0;
         self.pending_prepare_pixels = 0;
+        if instant {
+            self.snap_to_target();
+            return;
+        }
         self.transition_started = (self.source != self.target.as_ref()).then_some(now);
         if self.transition_started.is_none() {
             self.retarget.copy_from_slice(&self.target);
@@ -509,6 +518,15 @@ impl CrtBackdropState {
         if self.transition_started.is_some() {
             let _ = self.compose(now);
         }
+    }
+
+    fn snap_to_target(&mut self) {
+        self.retarget.copy_from_slice(&self.target);
+        self.retarget_row_repeats
+            .copy_from_slice(&self.target_row_repeats);
+        self.retarget_is_plain = self.target_is_plain;
+        self.transition_started = None;
+        self.expand_to_logical();
     }
 }
 
@@ -1436,6 +1454,37 @@ mod tests {
                 .iter()
                 .all(|pixel| *pixel == CRT_BACKDROP_BACKGROUND)
         );
+    }
+
+    #[cfg(feature = "ui")]
+    #[test]
+    fn prepared_targets_can_cut_directly_to_an_image_or_blank() {
+        let mut backdrop = CrtBackdropState::new(2, 2);
+        let target = Rgb565Pixel(0xf800);
+        backdrop.retarget_prepared(
+            Some(PreparedCrtBackdrop {
+                pixels: std::sync::Arc::from(vec![target; 4]),
+                row_repeats: std::sync::Arc::from(vec![false; 2]),
+                is_plain: false,
+            }),
+            Duration::ZERO,
+            true,
+        );
+
+        assert!(!backdrop.is_transitioning());
+        assert!(backdrop.pixels().iter().all(|pixel| *pixel == target));
+        assert!(!backdrop.compose(Duration::ZERO).active);
+
+        backdrop.retarget_prepared(None, Duration::from_millis(1), true);
+
+        assert!(!backdrop.is_transitioning());
+        assert!(
+            backdrop
+                .pixels()
+                .iter()
+                .all(|pixel| *pixel == CRT_BACKDROP_BACKGROUND)
+        );
+        assert!(!backdrop.compose(Duration::from_millis(1)).active);
     }
 
     #[test]

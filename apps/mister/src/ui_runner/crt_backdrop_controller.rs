@@ -282,6 +282,7 @@ impl CrtBackdropController {
         &mut self,
         eligible: bool,
         force_full_repaint: bool,
+        instant_transition: bool,
         selected: usize,
         transition_id: Option<u64>,
         source: Option<BackdropSource>,
@@ -309,7 +310,8 @@ impl CrtBackdropController {
             if let Some(source) = source.as_ref() {
                 self.request_prepare(source);
                 let prepared = self.prepared_target(source);
-                self.state.retarget_prepared(prepared, now);
+                self.state
+                    .retarget_prepared(prepared, now, instant_transition);
             } else {
                 self.state.clear_plain();
             }
@@ -406,6 +408,7 @@ mod tests {
         let restored = controller.compose(
             true,
             true,
+            false,
             0,
             None,
             None,
