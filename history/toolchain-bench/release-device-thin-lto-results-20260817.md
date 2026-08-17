@@ -25,3 +25,13 @@ All five edit samples were below the baseline median, so the typed campaign
 advanced the baseline to `/private/tmp/mister-magik-campaign/baseline-thin.json`.
 The profile remains a candidate for delivery until device performance, memory,
 frame cadence, and binary-size parity are signed off.
+
+Artifact-size check from the same external target directories:
+
+| artifact | bytes |
+| --- | ---: |
+| fat-LTO/2 baseline | 24,479,424 |
+| thin-LTO candidate | 30,955,412 |
+
+The candidate is 26.46% larger, so this is a compile-time win but not yet a
+parity-qualified production baseline.
