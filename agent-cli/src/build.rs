@@ -226,8 +226,16 @@ impl BuildSpec {
 
     #[must_use]
     pub fn canonical(ui_scope: UiScope) -> Self {
+        Self::canonical_profile(ui_scope, "release-device")
+    }
+
+    #[must_use]
+    pub fn canonical_profile(ui_scope: UiScope, profile: &'static str) -> Self {
         let mut spec = Self::for_command(BuildCommand::RuntimeDevice)
             .expect("runtime device builds have a specification");
+        spec.profile = profile;
+        spec.artifact = runtime_artifact(profile);
+        spec.receipt = PathBuf::from(format!("{}.build-receipt.tsv", spec.artifact.display()));
         spec.ui_scope = ui_scope;
         spec.cache_identity = format!(
             "v5:{TARGET}:{:?}:{:?}:{}:{}:{}",

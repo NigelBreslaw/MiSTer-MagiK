@@ -124,6 +124,17 @@ codegen-units = 2
 # line-level debug sections.
 strip = "debuginfo"
 
+# Compile-time campaign variants. The canonical delivery profile remains
+# `release-device`; these profiles are selected only by the typed campaign
+# runner until a measured winner is promoted.
+[profile.release-device-cgu4]
+inherits = "release-device"
+codegen-units = 4
+
+[profile.release-device-cgu8]
+inherits = "release-device"
+codegen-units = 8
+
 [profile.release-device-profile]
 # Profiling build: symbols + frame pointers for pprof flamegraphs on device.
 inherits = "release-device"
