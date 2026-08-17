@@ -121,7 +121,7 @@ a MiSTer. The 2026-08-07 ARM sampling run was stopped before it completed, so
 no ARM speedup ratio is claimed in the recorded evidence.
 
 The canonical `release-device` runtime uses the measured thin-LTO profile
-(`opt-level=3`, sixteen codegen units), includes dormant on-device profiling
+(`opt-level=3`, thirty-two codegen units), includes dormant on-device profiling
 support, and retains function symbols. Binary size is not a release gate;
 device correctness, memory headroom, and frame cadence remain required.
 Benchmarks activate profiling only on the already-installed runtime.

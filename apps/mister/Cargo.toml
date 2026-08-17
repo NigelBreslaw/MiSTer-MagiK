@@ -114,7 +114,7 @@ codegen-units = 256
 lto = false
 
 [profile.release-device]
-# Full MiSTer release: thin LTO + sixteen CGUs. This preserves opt-level 3 and
+# Full MiSTer release: thin LTO + thirty-two CGUs. This preserves opt-level 3 and
 # whole-program optimization while materially shortening the final release
 # build on the multicore development host. Binary size is intentionally not a
 # delivery gate; the device parity gate remains runtime correctness, memory,
@@ -122,13 +122,13 @@ lto = false
 # Cortex-A9 tuning is applied by the typed agent-cli ARM build state machine.
 inherits = "release"
 lto = "thin"
-codegen-units = 16
+codegen-units = 32
 # Retain function symbols for dormant on-device pprof while dropping bulky
 # line-level debug sections.
 strip = "debuginfo"
 
-# Named alias retained for reproducible campaign comparisons. Ordinary
-# delivery selects release-device above.
+# Historical alias retained for reproducible comparison with the former
+# thin-LTO/16-CGU candidate. Ordinary delivery selects release-device above.
 [profile.release-device-thin]
 inherits = "release-device"
 lto = "thin"
@@ -138,8 +138,8 @@ codegen-units = 16
 inherits = "release-device-thin"
 strip = true
 
-# Isolated scaling candidate for the thin-LTO campaign. It is not selected by
-# ordinary delivery unless the typed campaign advances it as the new baseline.
+# Named alias for the measured thin-LTO/32-CGU baseline. Ordinary delivery
+# selects release-device above.
 [profile.release-device-thin-cgu32]
 inherits = "release-device"
 lto = "thin"
