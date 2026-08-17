@@ -107,8 +107,8 @@ impl ConfirmedOrientationStore {
 pub const fn osd_rotation_for_orientation(orientation: ScreenOrientation) -> u8 {
     match orientation {
         ScreenOrientation::Normal => 0,
-        ScreenOrientation::MonitorClockwise => 2,
-        ScreenOrientation::MonitorCounterclockwise => 1,
+        ScreenOrientation::MonitorClockwise => 1,
+        ScreenOrientation::MonitorCounterclockwise => 2,
     }
 }
 
@@ -173,15 +173,15 @@ mod tests {
     }
 
     #[test]
-    fn orientation_mapping_compensates_for_the_physical_monitor_direction() {
+    fn orientation_mapping_matches_main_osd_rotation_direction() {
         assert_eq!(osd_rotation_for_orientation(ScreenOrientation::Normal), 0);
         assert_eq!(
             osd_rotation_for_orientation(ScreenOrientation::MonitorClockwise),
-            2
+            1
         );
         assert_eq!(
             osd_rotation_for_orientation(ScreenOrientation::MonitorCounterclockwise),
-            1
+            2
         );
     }
 
