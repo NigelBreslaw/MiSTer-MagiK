@@ -677,8 +677,34 @@ fn scale_dimmed_center_crop_mapped_with_logical_height(
     y_map: &mut [usize],
     row_repeats: &mut [bool],
 ) -> bool {
+    scale_dimmed_center_crop_mapped_with_logical_size(
+        destination,
+        destination_width,
+        destination_height,
+        destination_width,
+        reference_destination_height,
+        frame,
+        x_map,
+        y_map,
+        row_repeats,
+    )
+}
+
+fn scale_dimmed_center_crop_mapped_with_logical_size(
+    destination: &mut [Rgb565Pixel],
+    destination_width: usize,
+    destination_height: usize,
+    reference_destination_width: usize,
+    reference_destination_height: usize,
+    frame: PreviewFrame<'_>,
+    x_map: &mut [usize],
+    y_map: &mut [usize],
+    row_repeats: &mut [bool],
+) -> bool {
     if destination_width == 0
         || destination_height == 0
+        || reference_destination_width == 0
+        || reference_destination_height == 0
         || destination.len() < destination_width.saturating_mul(destination_height)
         || x_map.len() < destination_width
         || y_map.len() < destination_height
@@ -718,13 +744,19 @@ fn scale_dimmed_center_crop_mapped_with_logical_height(
     // preparing their native 240- or 288-row backdrops. Every screenshot is
     // doubled with nearest-neighbour sampling, centred, and clipped to that
     // reference instead of changing scale according to its orientation.
-    let integer_scale_route = reference_destination_height > destination_height;
+    let integer_scale_route = reference_destination_width > destination_width
+        || reference_destination_height > destination_height;
     if integer_scale_route {
         let integer_scale = 2;
         let scaled_width = frame.source_width.saturating_mul(integer_scale);
-        let image_x = (destination_width as isize - scaled_width as isize) / 2;
+        let image_x = (reference_destination_width as isize - scaled_width as isize) / 2;
         for (destination_x, source_x) in x_map[..destination_width].iter_mut().enumerate() {
-            let local_x = destination_x as isize - image_x;
+            let logical_x = destination_x
+                .saturating_mul(2)
+                .saturating_add(1)
+                .saturating_mul(reference_destination_width)
+                / destination_width.saturating_mul(2).max(1);
+            let local_x = logical_x as isize - image_x;
             *source_x = if local_x >= 0 && local_x < scaled_width as isize {
                 local_x as usize / integer_scale
             } else {
@@ -887,17 +919,43 @@ pub(crate) fn prepare_dimmed_rgb565_target_for_output_with_maps(
             y_map,
         );
     }
-    let (logical, _) = prepare_dimmed_rgb565_target_with_maps(
-        source,
+    let mut logical = vec![
+        CRT_BACKDROP_BACKGROUND;
+        output
+            .logical_width()
+            .saturating_mul(output.logical_height())
+    ];
+    let mut logical_row_repeats = vec![false; output.logical_height()];
+    let frame = PreviewFrame {
+        pixels: PreviewPixels::Rgb565 {
+            pixels: source,
+            stride_pixels: source_stride_pixels,
+        },
         source_width,
         source_height,
-        source_stride_pixels,
+        display_width: source_width,
+        display_height: source_height,
+    };
+    x_map.resize(output.logical_width(), 0);
+    y_map.resize(output.logical_height(), 0);
+    // A rotated native CRT buffer is the 640x480 visual reference transposed:
+    // 480 logical reference pixels across by 640 down. Map the native 240- or
+    // 288-pixel logical width through that reference so every source remains a
+    // strict 2x nearest-neighbour image. This deliberately bypasses the 4:3
+    // fill crop used by non-CRT-sized identity outputs.
+    if !scale_dimmed_center_crop_mapped_with_logical_size(
+        &mut logical,
         output.logical_width(),
         output.logical_height(),
+        reference_destination_height,
         output.logical_height(),
+        frame,
         x_map,
         y_map,
-    )?;
+        &mut logical_row_repeats,
+    ) {
+        return None;
+    }
     let mut physical = vec![CRT_BACKDROP_BACKGROUND; output.len()];
     for logical_y in 0..output.logical_height() {
         for logical_x in 0..output.logical_width() {
@@ -1343,6 +1401,61 @@ mod tests {
                     darken_rgb565(expected),
                     "logical corner ({x}, {y}) for {rotation:?}"
                 );
+            }
+        }
+    }
+
+    #[cfg(feature = "ui")]
+    #[test]
+    fn rotated_crt_sources_use_two_x_reference_without_crop_or_stretch() {
+        for logical_width in [240, 288] {
+            for rotation in [
+                OutputRotation::Clockwise90,
+                OutputRotation::CounterClockwise90,
+            ] {
+                let output = Rgb565OutputLayout::new(logical_width, 640, 640, rotation).unwrap();
+                let mut x_map = Vec::new();
+                let mut y_map = Vec::new();
+
+                let portrait = vec![Rgb565Pixel(0xffff); 240 * 320];
+                prepare_dimmed_rgb565_target_for_output_with_maps(
+                    &portrait,
+                    240,
+                    320,
+                    240,
+                    output,
+                    CRT_COMPOSITION_H,
+                    &mut x_map,
+                    &mut y_map,
+                )
+                .unwrap();
+                assert_eq!(x_map[0], 0, "portrait left edge for {output:?}");
+                assert_eq!(x_map[logical_width - 1], 239, "portrait right edge");
+                assert_eq!(&y_map[..2], &[0, 0], "portrait top rows");
+                assert_eq!(&y_map[638..], &[319, 319], "portrait bottom rows");
+
+                let landscape = vec![Rgb565Pixel(0xffff); 320 * 224];
+                prepare_dimmed_rgb565_target_for_output_with_maps(
+                    &landscape,
+                    320,
+                    224,
+                    320,
+                    output,
+                    CRT_COMPOSITION_H,
+                    &mut x_map,
+                    &mut y_map,
+                )
+                .unwrap();
+                assert_eq!(x_map[0], 40, "landscape clipped left edge");
+                assert_eq!(
+                    x_map[logical_width - 1],
+                    279,
+                    "landscape clipped right edge"
+                );
+                assert_eq!(y_map[95], usize::MAX, "landscape upper matte");
+                assert_eq!(&y_map[96..98], &[0, 0], "landscape first doubled row");
+                assert_eq!(&y_map[542..544], &[223, 223], "landscape last doubled row");
+                assert_eq!(y_map[544], usize::MAX, "landscape lower matte");
             }
         }
     }
