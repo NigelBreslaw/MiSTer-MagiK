@@ -317,6 +317,7 @@ fn execute_with_device<D: DeliveryDevice>(
         main_revision: None,
         installed_manifest: None,
         phase_timings: Vec::new(),
+        build_timings: Vec::new(),
         timing_samples: Vec::new(),
         stage: repository
             .join("build/agent-deploy/stage")
@@ -340,10 +341,12 @@ fn execute_with_device<D: DeliveryDevice>(
     match transaction {
         Ok(()) => {
             emit_phase_timings(reporter, &actions.phase_timings)?;
+            emit_build_timings(reporter, &actions.build_timings)?;
             emit_delivery_timings(reporter, &actions.timing_samples)?;
         }
         Err(error) => {
             let _ = emit_phase_timings(reporter, &actions.phase_timings);
+            let _ = emit_build_timings(reporter, &actions.build_timings);
             let _ = emit_delivery_timings(reporter, &actions.timing_samples);
             return Err(error);
         }
@@ -404,6 +407,30 @@ fn emit_delivery_timings(
     for sample in samples {
         let (kind, phase, message) = render_delivery_timing(*sample);
         reporter.emit(kind, phase, &message, None)?;
+    }
+    Ok(())
+}
+
+fn emit_build_timings(
+    reporter: &mut Reporter<'_>,
+    samples: &[crate::build::BuildTimingSample],
+) -> AgentResult<()> {
+    for sample in samples {
+        reporter.emit(
+            if sample.status == crate::host::DeliveryTimingStatus::Passed {
+                EventKind::Completed
+            } else {
+                EventKind::Warning
+            },
+            "build-timing",
+            &format!(
+                "build_phase_tsv\tscope=build\tphase={}\tstatus={}\tseconds={:.3}",
+                sample.phase,
+                sample.status.label(),
+                sample.elapsed_ms as f64 / 1_000.0,
+            ),
+            None,
+        )?;
     }
     Ok(())
 }
@@ -506,6 +533,7 @@ struct ProcessActions<'a, D = DeviceClient> {
     main_revision: Option<String>,
     installed_manifest: Option<String>,
     phase_timings: Vec<DeliveryPhaseTiming>,
+    build_timings: Vec<crate::build::BuildTimingSample>,
     timing_samples: Vec<crate::host::DeliveryTimingSample>,
     stage: PathBuf,
     device: D,
@@ -529,7 +557,10 @@ impl<D> ProcessActions<'_, D> {
     }
 
     fn build_runtime(&mut self) -> AgentResult<()> {
-        crate::build::execute_quiet(self.repository, &self.deployment.build)?;
+        self.build_timings = crate::build::execute_quiet_with_timings(
+            self.repository,
+            &self.deployment.build,
+        )?;
         let receipt = self.deployment.build.verify(self.repository)?;
         if receipt.source_commit != self.expected_commit || receipt.source_dirty {
             return Err("runtime artifact was not built from the exact clean commit".into());
@@ -1362,6 +1393,7 @@ mod tests {
             main_revision: None,
             installed_manifest: None,
             phase_timings: Vec::new(),
+            build_timings: Vec::new(),
             timing_samples: Vec::new(),
             stage: PathBuf::from("stage"),
             device,

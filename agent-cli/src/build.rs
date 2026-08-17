@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const TARGET: &str = "armv7-unknown-linux-gnueabihf";
 const IMAGE: &str = "mister-magik-cross-armv7:ubuntu20-arm64";
@@ -432,6 +432,13 @@ pub trait BuildActions {
     fn run(&mut self, phase: Phase) -> AgentResult<()>;
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct BuildTimingSample {
+    pub(crate) phase: &'static str,
+    pub(crate) status: crate::host::DeliveryTimingStatus,
+    pub(crate) elapsed_ms: u64,
+}
+
 pub fn run_state_machine(
     actions: &mut dyn BuildActions,
     progress: &mut dyn FnMut(Phase, u8) -> AgentResult<()>,
@@ -469,20 +476,32 @@ fn execute_with_session(
     reporter: &mut Reporter<'_>,
 ) -> AgentResult<()> {
     let mut actions = ProcessBuildActions::new(session, spec);
-    run_state_machine(&mut actions, &mut |phase, percent| {
+    let result = run_state_machine(&mut actions, &mut |phase, percent| {
         Ok(reporter.emit(
             EventKind::Progress,
             phase.label(),
             &format!("build {}", phase.label()),
             Some(percent),
         )?)
-    })
+    });
+    let _ = emit_build_timings(reporter, &actions.timings);
+    result
 }
 
 pub fn execute_quiet(repository: &Path, spec: &BuildSpec) -> AgentResult<()> {
     let mut session = BuildSession::new(repository)?;
     let mut actions = ProcessBuildActions::new(&mut session, spec);
     run_state_machine(&mut actions, &mut |_, _| Ok(()))
+}
+
+pub(crate) fn execute_quiet_with_timings(
+    repository: &Path,
+    spec: &BuildSpec,
+) -> AgentResult<Vec<BuildTimingSample>> {
+    let mut session = BuildSession::new(repository)?;
+    let mut actions = ProcessBuildActions::new(&mut session, spec);
+    run_state_machine(&mut actions, &mut |_, _| Ok(()))?;
+    Ok(actions.timings)
 }
 
 /// Executes a build in an explicit Cargo target directory. This is reserved
@@ -733,6 +752,7 @@ struct ProcessBuildActions<'session, 'repository, 'spec> {
     session: &'session mut BuildSession<'repository>,
     spec: &'spec BuildSpec,
     target_dir: PathBuf,
+    timings: Vec<BuildTimingSample>,
 }
 
 impl<'session, 'repository, 'spec> ProcessBuildActions<'session, 'repository, 'spec> {
@@ -756,6 +776,7 @@ impl<'session, 'repository, 'spec> ProcessBuildActions<'session, 'repository, 's
             session,
             spec,
             target_dir,
+            timings: Vec::new(),
         }
     }
 
@@ -774,21 +795,52 @@ impl<'session, 'repository, 'spec> ProcessBuildActions<'session, 'repository, 's
             session,
             spec,
             target_dir: target_dir.to_path_buf(),
+            timings: Vec::new(),
         })
     }
 
-    fn compile(&self) -> AgentResult<()> {
+    fn compile(&mut self) -> AgentResult<()> {
         if self.spec.target == BuildTarget::Runtime && self.spec.mode != BuildMode::CheckLibrary {
-            build_minimal_ffmpeg(
+            let started = Instant::now();
+            let result = build_minimal_ffmpeg(
                 self.session.repository,
                 self.session.backend,
                 FfmpegVerification::Stamp,
-            )?;
+            );
+            self.record_timing("compile.ffmpeg-cache", started, &result);
+            result?;
         }
         match self.session.backend {
-            BuildBackend::AppleContainer => self.compile_in_apple_container(),
-            BuildBackend::Cross => self.compile_with_cross(),
+            BuildBackend::AppleContainer => {
+                let started = Instant::now();
+                let result = self.compile_in_apple_container();
+                self.record_timing("compile.cargo", started, &result);
+                result
+            }
+            BuildBackend::Cross => {
+                let started = Instant::now();
+                let result = self.compile_with_cross();
+                self.record_timing("compile.cargo", started, &result);
+                result
+            }
         }
+    }
+
+    fn record_timing(
+        &mut self,
+        phase: &'static str,
+        started: Instant,
+        result: &AgentResult<()>,
+    ) {
+        self.timings.push(BuildTimingSample {
+            phase,
+            status: if result.is_ok() {
+                crate::host::DeliveryTimingStatus::Passed
+            } else {
+                crate::host::DeliveryTimingStatus::Failed
+            },
+            elapsed_ms: elapsed_millis(started),
+        });
     }
 
     fn compile_in_apple_container(&self) -> AgentResult<()> {
@@ -1214,7 +1266,8 @@ fn verify_minimal_ffmpeg(source: &Path, dist: &Path) -> AgentResult<()> {
 
 impl BuildActions for ProcessBuildActions<'_, '_, '_> {
     fn run(&mut self, phase: Phase) -> AgentResult<()> {
-        match phase {
+        let started = Instant::now();
+        let result = match phase {
             Phase::Infer | Phase::Complete => Ok(()),
             Phase::Preflight => self.session.ensure_preflight(),
             Phase::PrepareContainer => {
@@ -1235,8 +1288,46 @@ impl BuildActions for ProcessBuildActions<'_, '_, '_> {
                 Ok(())
             }
             Phase::Receipt => self.write_receipt(),
-        }
+        };
+        self.timings.push(BuildTimingSample {
+            phase: phase.label(),
+            status: if result.is_ok() {
+                crate::host::DeliveryTimingStatus::Passed
+            } else {
+                crate::host::DeliveryTimingStatus::Failed
+            },
+            elapsed_ms: elapsed_millis(started),
+        });
+        result
     }
+}
+
+fn elapsed_millis(started: Instant) -> u64 {
+    started.elapsed().as_millis().try_into().unwrap_or(u64::MAX)
+}
+
+fn emit_build_timings(
+    reporter: &mut Reporter<'_>,
+    samples: &[BuildTimingSample],
+) -> AgentResult<()> {
+    for sample in samples {
+        reporter.emit(
+            if sample.status == crate::host::DeliveryTimingStatus::Passed {
+                EventKind::Completed
+            } else {
+                EventKind::Warning
+            },
+            "build-timing",
+            &format!(
+                "build_phase_tsv\tscope=build\tphase={}\tstatus={}\tseconds={:.3}",
+                sample.phase,
+                sample.status.label(),
+                sample.elapsed_ms as f64 / 1_000.0,
+            ),
+            None,
+        )?;
+    }
+    Ok(())
 }
 
 fn infer_backend() -> AgentResult<BuildBackend> {
