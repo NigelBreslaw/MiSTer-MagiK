@@ -52,6 +52,14 @@ const ARCADE_NEW_BADGE_FILL: Pixel = Pixel(0x0006d6a0);
 const ARCADE_NEW_BADGE_FILL_565: Rgb565Pixel = rgb565_from_rgb888(0x06, 0xd6, 0xa0);
 const ARCADE_NEW_BADGE_TEXT: Pixel = Pixel(0x00120d1a);
 
+pub const fn crt_arcade_row_height(base_row_height: i32, portrait: bool) -> i32 {
+    if portrait {
+        base_row_height.saturating_mul(2)
+    } else {
+        base_row_height
+    }
+}
+
 #[derive(Clone, Copy)]
 struct ArcadeListStyle {
     row_height: i32,
@@ -359,6 +367,7 @@ pub struct ArcadeListRenderer {
     visible_height: usize,
     style: ArcadeListStyle,
     crt_metrics: Option<CrtUiMetrics>,
+    crt_base_style: Option<ArcadeListStyle>,
 }
 
 pub struct CachedArcadeRow {
@@ -432,6 +441,7 @@ impl ArcadeListRenderer {
     }
 
     fn new_with_style(style: ArcadeListStyle, crt_metrics: Option<CrtUiMetrics>) -> Self {
+        let crt_base_style = crt_metrics.map(|_| style);
         Self {
             title_font: ConsoleFont::new_with_typeface_and_row_filter(
                 style.title_font_px,
@@ -465,6 +475,7 @@ impl ArcadeListRenderer {
             visible_height: ARCADE_LIST_H,
             style,
             crt_metrics,
+            crt_base_style,
         }
     }
 
@@ -515,6 +526,27 @@ impl ArcadeListRenderer {
             self.last_filter_draw = None;
             self.surface_y = 0;
         }
+    }
+
+    pub fn set_crt_portrait_rows(&mut self, portrait: bool) {
+        let Some(mut style) = self.crt_base_style else {
+            return;
+        };
+        style.row_height = crt_arcade_row_height(style.row_height, portrait);
+        if portrait {
+            style.separator_top = 0;
+            style.separator_bottom = 0;
+        }
+        if self.style.row_height == style.row_height
+            && self.style.separator_top == style.separator_top
+            && self.style.separator_bottom == style.separator_bottom
+        {
+            return;
+        }
+        self.style = style;
+        self.row_cache.clear();
+        self.row_fingerprint_cache.clear();
+        self.invalidate_presented_layer();
     }
 
     pub fn invalidate_presented_layer(&mut self) {
@@ -3347,6 +3379,24 @@ mod tests {
         assert!(!hdmi.style.crt_palette);
         assert_eq!(hdmi.style.background.0, ARCADE_LIST_BG_COLOR.0);
         assert_eq!(hdmi.style.badge_fill.0, ARCADE_NEW_BADGE_FILL.0);
+    }
+
+    #[test]
+    fn crt_portrait_rows_are_double_height_without_separators() {
+        let mut crt = ArcadeListRenderer::new_for_crt(24);
+        assert_eq!(crt.style.row_height, 24);
+        assert_eq!(crt.style.separator_top, 1);
+
+        crt.set_crt_portrait_rows(true);
+
+        assert_eq!(crt.style.row_height, 48);
+        assert_eq!(crt.style.separator_top, 0);
+        assert_eq!(crt.style.separator_bottom, 0);
+
+        crt.set_crt_portrait_rows(false);
+
+        assert_eq!(crt.style.row_height, 24);
+        assert_eq!(crt.style.separator_top, 1);
     }
 
     #[test]

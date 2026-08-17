@@ -4710,6 +4710,13 @@ fn apply_orientation_layout(
     nav.sync_orientation_selection();
     *layout = UiLayoutGeometry::for_display(ui, orientation);
     nav.set_portrait_layout(layout.is_portrait());
+    if ui.output_route().is_crt() {
+        let metrics = crate::ui_display::CrtUiMetrics::for_display(ui);
+        nav.set_arcade_row_height(crt_arcade_row_height(
+            metrics.game_row_height,
+            layout.is_portrait(),
+        ));
+    }
     let mister_ui = app.global::<slint_ui::launcher::MisterUi>();
     mister_ui.set_window_width(layout.logical_w() as i32);
     mister_ui.set_window_height(layout.logical_h() as i32);
@@ -4995,6 +5002,12 @@ pub(super) fn run_launcher_loop(
     }
     let mut layout = UiLayoutGeometry::for_display(ui, nav.settings.screen_orientation);
     nav.set_portrait_layout(layout.is_portrait());
+    if crt_layout {
+        nav.set_arcade_row_height(crt_arcade_row_height(
+            crt_metrics.game_row_height,
+            layout.is_portrait(),
+        ));
+    }
     nav.sync_orientation_selection();
     let navigation_motion_enabled =
         !nav.settings.reduce_motion || profile_config.cpu().navigation_transition_requested();
@@ -5190,6 +5203,7 @@ pub(super) fn run_launcher_loop(
     } else {
         ArcadeListRenderer::new()
     };
+    arcade_list_renderer.set_crt_portrait_rows(layout.is_portrait());
     let mut crt_backdrop = CrtBackdropController::for_display(ui);
     let mut launcher_preview_version = 1u64;
     let mut launcher_arcade_version = 1u64;
@@ -9728,6 +9742,7 @@ pub(super) fn run_launcher_loop(
             let gui_arcade_pmu = gui_profiling.phase_span(gui_custom_selection.arcade_row_update);
             let arcade_list_profile_pmu =
                 mister_magik_perf_events::sampled_span("gui.custom.crt-arcade-list-update");
+            arcade_list_renderer.set_crt_portrait_rows(layout.is_portrait());
             configure_arcade_list_renderer_geometry(&mut arcade_list_renderer, &nav, ui);
             let force_arcade_redraw = arcade_list_needs_forced_redraw(
                 &arcade_list_renderer,

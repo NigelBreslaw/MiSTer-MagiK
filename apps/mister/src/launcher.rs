@@ -485,6 +485,15 @@ impl ArcadeNav {
         self.row_height
     }
 
+    fn set_row_height(&mut self, row_height: i32) {
+        let row_height = row_height.max(1);
+        if self.row_height == row_height {
+            return;
+        }
+        self.row_height = row_height;
+        self.snap_to_selected();
+    }
+
     pub fn is_settled_at_selected(&self) -> bool {
         self.scroll_y == self.selected as i32 * self.row_height
             && (self.visual_index - self.selected as f32).abs() < 0.001
@@ -1212,6 +1221,13 @@ impl LauncherNav {
 
     pub fn uses_crt_layout(&self) -> bool {
         self.crt_layout
+    }
+
+    pub fn set_arcade_row_height(&mut self, row_height: i32) {
+        if self.crt_layout {
+            self.arcade.set_row_height(row_height);
+            self.arcade_filter.scroll.set_row_height(row_height);
+        }
     }
 
     pub fn set_portrait_layout(&mut self, portrait_layout: bool) {
@@ -7827,6 +7843,19 @@ mod tests {
         assert_eq!(nav.arcade.selected, 3);
         assert_eq!(nav.arcade.scroll_y, 72);
         assert_eq!(nav.arcade.visual_index, 3.0);
+    }
+
+    #[test]
+    fn changing_crt_row_height_keeps_navigation_on_the_selected_item() {
+        let mut nav = LauncherNav::for_crt_layout_with_row_height(true, 24);
+        nav.arcade.restore_position(3, 72, 8);
+
+        nav.set_arcade_row_height(48);
+
+        assert_eq!(nav.arcade.row_height(), 48);
+        assert_eq!(nav.arcade.scroll_y, 144);
+        assert_eq!(nav.arcade.visual_index, 3.0);
+        assert_eq!(nav.arcade_filter.scroll.row_height(), 48);
     }
 
     #[test]
