@@ -36,8 +36,6 @@ pub enum CompileTimeTarget {
     MagikFullAppMacos,
     MagikReleaseDeviceArmAll,
     MagikReleaseDeviceArmProduction,
-    MagikReleaseDeviceArmFatCgu4,
-    MagikReleaseDeviceArmFatCgu8,
     FramebufferSceneLabArm,
     FramebufferSceneLabMacos,
 }
@@ -72,8 +70,6 @@ impl CompileTimeTarget {
             Self::MagikFullAppMacos => "magik-full-app-macos",
             Self::MagikReleaseDeviceArmAll => "magik-release-device-arm-all",
             Self::MagikReleaseDeviceArmProduction => "magik-release-device-arm-production",
-            Self::MagikReleaseDeviceArmFatCgu4 => "magik-release-device-arm-fat-cgu4",
-            Self::MagikReleaseDeviceArmFatCgu8 => "magik-release-device-arm-fat-cgu8",
             Self::FramebufferSceneLabArm => "framebuffer-scene-lab-arm",
             Self::FramebufferSceneLabMacos => "framebuffer-scene-lab-macos",
         }
@@ -516,22 +512,6 @@ fn run_build(repository: &Path, target: CompileTimeTarget, target_dir: &Path) ->
             &BuildSpec::canonical(crate::deploy::UiScope::Production),
             target_dir,
         ),
-        CompileTimeTarget::MagikReleaseDeviceArmFatCgu4 => execute_quiet_at_target_dir(
-            repository,
-            &BuildSpec::canonical_profile(
-                crate::deploy::UiScope::Production,
-                "release-device-cgu4",
-            ),
-            target_dir,
-        ),
-        CompileTimeTarget::MagikReleaseDeviceArmFatCgu8 => execute_quiet_at_target_dir(
-            repository,
-            &BuildSpec::canonical_profile(
-                crate::deploy::UiScope::Production,
-                "release-device-cgu8",
-            ),
-            target_dir,
-        ),
         CompileTimeTarget::FramebufferSceneLabArm => execute_quiet_at_target_dir(
             repository,
             &BuildSpec::framebuffer_scene_lab_device(),
@@ -560,10 +540,7 @@ impl CompileTimeTarget {
                     Err("the full-app compile target supports only --edit shared-magik".into())
                 }
             }
-            Self::MagikReleaseDeviceArmAll
-            | Self::MagikReleaseDeviceArmProduction
-            | Self::MagikReleaseDeviceArmFatCgu4
-            | Self::MagikReleaseDeviceArmFatCgu8 => {
+            Self::MagikReleaseDeviceArmAll | Self::MagikReleaseDeviceArmProduction => {
                 if edit == CompileTimeEdit::SharedMagik {
                     Ok("apps/mister/src/main.rs")
                 } else {
