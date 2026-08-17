@@ -18,6 +18,7 @@ pub enum RuntimeThreadRole {
     LibraryWalkerForeground,
     PreviewSelected,
     PreviewPrefetch,
+    CrtBackdropPrepare,
     MediaWorker,
     MediaDownload,
     MediaIndex,
@@ -46,6 +47,7 @@ impl RuntimeThreadRole {
             Self::LibraryWalkerForeground => "library-walker-foreground",
             Self::PreviewSelected => "preview-selected",
             Self::PreviewPrefetch => "preview-prefetch",
+            Self::CrtBackdropPrepare => "crt-backdrop-prepare",
             Self::MediaWorker => "media-worker",
             Self::MediaDownload => "media-download",
             Self::MediaIndex => "media-index",
@@ -83,7 +85,9 @@ impl RuntimeThreadRole {
             }
             Self::LibraryWalker => RuntimeThreadPolicy::new(10, ThreadAffinity::Cpu0),
             Self::PreviewSelected => RuntimeThreadPolicy::new(0, ThreadAffinity::Cpu0),
-            Self::PreviewPrefetch => RuntimeThreadPolicy::new(10, ThreadAffinity::Cpu0),
+            Self::PreviewPrefetch | Self::CrtBackdropPrepare => {
+                RuntimeThreadPolicy::new(10, ThreadAffinity::Cpu0)
+            }
             Self::MediaWorker | Self::MediaIndex => {
                 RuntimeThreadPolicy::new(10, ThreadAffinity::Cpu0)
             }
@@ -564,6 +568,7 @@ mod tests {
             RuntimeThreadRole::MediaWorker,
             RuntimeThreadRole::MediaIndex,
             RuntimeThreadRole::FramebufferStream,
+            RuntimeThreadRole::CrtBackdropPrepare,
             RuntimeThreadRole::ScreensaverRenderer,
             RuntimeThreadRole::StartupIntroSnapshot,
             RuntimeThreadRole::ScreensaverLoader,
@@ -639,6 +644,11 @@ mod tests {
             ),
             (RuntimeThreadRole::PreviewSelected, 0, ThreadAffinity::Cpu0),
             (RuntimeThreadRole::PreviewPrefetch, 10, ThreadAffinity::Cpu0),
+            (
+                RuntimeThreadRole::CrtBackdropPrepare,
+                10,
+                ThreadAffinity::Cpu0,
+            ),
             (RuntimeThreadRole::MediaWorker, 10, ThreadAffinity::Cpu0),
             (
                 RuntimeThreadRole::MediaDownload,
@@ -722,5 +732,16 @@ mod tests {
         }
         assert!(!env_value_is_off(Some("on")));
         assert!(!env_value_is_off(None));
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    #[test]
+    fn crt_backdrop_prepare_policy_degrades_observably_off_linux() {
+        let report = apply_runtime_thread_policy(RuntimeThreadRole::CrtBackdropPrepare);
+        assert_eq!(report.role, "crt-backdrop-prepare");
+        assert_eq!(report.intended_nice, Some(10));
+        assert_eq!(report.intended_affinity, "cpu0");
+        assert_eq!(report.nice_status, "unsupported");
+        assert_eq!(report.affinity_status, "unsupported");
     }
 }

@@ -81,7 +81,9 @@ impl PrepareWorker {
         std::thread::Builder::new()
             .name("crt-backdrop-preparer".to_string())
             .spawn(move || {
-                lower_prepare_worker_priority();
+                mister_magik_catalog::runtime_thread::apply_runtime_thread_policy(
+                    mister_magik_catalog::runtime_thread::RuntimeThreadRole::CrtBackdropPrepare,
+                );
                 let mut x_map = Vec::new();
                 let mut y_map = Vec::new();
                 while let Ok(request) = requests.recv() {
@@ -115,18 +117,6 @@ impl PrepareWorker {
         Self { tx, rx }
     }
 }
-
-#[cfg(target_os = "linux")]
-fn lower_prepare_worker_priority() {
-    // The worker must not preempt the foreground 60 Hz list/latch loop.
-    unsafe {
-        let tid = libc::syscall(libc::SYS_gettid) as libc::id_t;
-        let _ = libc::setpriority(libc::PRIO_PROCESS, tid, 10);
-    }
-}
-
-#[cfg(not(target_os = "linux"))]
-fn lower_prepare_worker_priority() {}
 
 #[derive(Clone)]
 struct PreparedEntry {
@@ -459,6 +449,89 @@ mod tests {
         assert_ne!(identities[0], identities[1]);
         assert_ne!(identities[0], identities[2]);
         assert_ne!(identities[1], identities[2]);
+    }
+
+    fn prepare_request(identity: PreparedIdentity, output: Rgb565OutputLayout) -> PrepareRequest {
+        PrepareRequest {
+            identity,
+            words: Arc::from(vec![0_u16; 4]),
+            source_width: 2,
+            source_height: 2,
+            stride_pixels: 2,
+            output,
+        }
+    }
+
+    #[test]
+    fn prepare_queue_remains_bounded() {
+        let (tx, _rx) = sync_channel(PREPARE_QUEUE_CAP);
+        let output = Rgb565OutputLayout::new(2, 2, 2, OutputRotation::None).unwrap();
+        let identity = PreparedIdentity {
+            key: "bounded".to_string(),
+            epoch: 1,
+            width: 2,
+            physical_height: 2,
+            reference_height: 2,
+            logical_width: 2,
+            logical_height: 2,
+            rotation: 0,
+        };
+        for _ in 0..PREPARE_QUEUE_CAP {
+            assert!(
+                tx.try_send(prepare_request(identity.clone(), output))
+                    .is_ok()
+            );
+        }
+        assert!(matches!(
+            tx.try_send(prepare_request(identity, output)),
+            Err(TrySendError::Full(_))
+        ));
+    }
+
+    #[test]
+    fn stale_prepare_epoch_is_still_rejected() {
+        let display = UiDisplay::for_plan(
+            UiDisplayPlan::from_mister_ini_text(
+                "[MiSTer]\ndirect_video=1\nmenu_pal=0\nforced_scandoubler=0\n",
+            )
+            .expect("CRT240 display plan"),
+        );
+        let mut controller = CrtBackdropController::for_display(&display).expect("CRT backdrop");
+        let (request_tx, _request_rx) = sync_channel(PREPARE_QUEUE_CAP);
+        let (result_tx, result_rx) = sync_channel(PREPARE_QUEUE_CAP);
+        controller.worker = PrepareWorker {
+            tx: request_tx,
+            rx: result_rx,
+        };
+        controller.active_epoch = 2;
+        let layout = UiLayoutGeometry::for_display(&display, ScreenOrientation::Normal);
+        let source = BackdropSource {
+            key: "stale".to_string(),
+            epoch: 1,
+            words: Arc::from(vec![0_u16; 4]),
+            source_width: 2,
+            source_height: 2,
+            stride_pixels: 2,
+        };
+        let identity = controller.prepared_identity(&source, layout);
+        controller.pending.insert(identity.clone());
+        assert!(
+            result_tx
+                .send(PrepareResult {
+                    identity: identity.clone(),
+                    prepare_us: 1,
+                    pixels: Arc::from(vec![
+                        Rgb565Pixel(0);
+                        controller.width() * controller.physical_height()
+                    ]),
+                    row_repeats: Arc::from(vec![false; controller.physical_height()]),
+                })
+                .is_ok()
+        );
+
+        assert!(!controller.poll());
+        assert!(controller.cache.is_empty());
+        assert!(!controller.pending.contains(&identity));
     }
 
     #[test]
