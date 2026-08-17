@@ -204,6 +204,10 @@ fn arcade_scroll_speed_div() -> i32 {
     })
 }
 
+fn arcade_scroll_speed_for_row_height(reference_speed: f64, row_height: i32) -> f64 {
+    reference_speed * f64::from(row_height.max(1)) / f64::from(ARCADE_ROW_HEIGHT)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LaunchError {
     kind: LaunchFailureKind,
@@ -576,11 +580,13 @@ impl ArcadeNav {
                 now.saturating_duration_since(started) > ARCADE_QUICK_TAP_MAX
             });
         if continuous_active {
-            let target_speed = if self.scroll.turbo_active {
+            let reference_speed = if self.scroll.turbo_active {
                 ARCADE_TURBO_PX_PER_SECOND
             } else {
                 ARCADE_NORMAL_PX_PER_SECOND
-            } / arcade_scroll_speed_div() as f64;
+            };
+            let target_speed = arcade_scroll_speed_for_row_height(reference_speed, self.row_height)
+                / arcade_scroll_speed_div() as f64;
             if !self.scroll.continuous_active {
                 self.scroll_velocity_animation
                     .snap_to(self.scroll_animation.velocity());
@@ -7821,6 +7827,44 @@ mod tests {
         assert_eq!(nav.arcade.selected, 3);
         assert_eq!(nav.arcade.scroll_y, 72);
         assert_eq!(nav.arcade.visual_index, 3.0);
+    }
+
+    #[test]
+    fn arcade_scroll_cadence_matches_the_hdmi_reference_for_every_row_height() {
+        let normal_reference_seconds = f64::from(ARCADE_ROW_HEIGHT) / ARCADE_NORMAL_PX_PER_SECOND;
+        let turbo_reference_seconds = f64::from(ARCADE_ROW_HEIGHT) / ARCADE_TURBO_PX_PER_SECOND;
+        for row_height in [16, 19, 32, 39, ARCADE_ROW_HEIGHT] {
+            let normal_speed =
+                arcade_scroll_speed_for_row_height(ARCADE_NORMAL_PX_PER_SECOND, row_height);
+            let turbo_speed =
+                arcade_scroll_speed_for_row_height(ARCADE_TURBO_PX_PER_SECOND, row_height);
+
+            assert!(
+                (f64::from(row_height) / normal_speed - normal_reference_seconds).abs()
+                    < f64::EPSILON
+            );
+            assert!(
+                (f64::from(row_height) / turbo_speed - turbo_reference_seconds).abs()
+                    < f64::EPSILON
+            );
+        }
+
+        assert_eq!(
+            arcade_scroll_speed_for_row_height(ARCADE_NORMAL_PX_PER_SECOND, 16),
+            120.0
+        );
+        assert_eq!(
+            arcade_scroll_speed_for_row_height(ARCADE_TURBO_PX_PER_SECOND, 16),
+            240.0
+        );
+        assert_eq!(
+            arcade_scroll_speed_for_row_height(ARCADE_NORMAL_PX_PER_SECOND, 19),
+            142.5
+        );
+        assert_eq!(
+            arcade_scroll_speed_for_row_height(ARCADE_TURBO_PX_PER_SECOND, 19),
+            285.0
+        );
     }
 
     #[test]
