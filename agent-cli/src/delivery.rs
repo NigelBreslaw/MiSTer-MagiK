@@ -318,6 +318,7 @@ fn execute_with_device<D: DeliveryDevice>(
         installed_manifest: None,
         phase_timings: Vec::new(),
         build_timings: Vec::new(),
+        build_attribution: None,
         timing_samples: Vec::new(),
         stage: repository
             .join("build/agent-deploy/stage")
@@ -342,11 +343,17 @@ fn execute_with_device<D: DeliveryDevice>(
         Ok(()) => {
             emit_phase_timings(reporter, &actions.phase_timings)?;
             emit_build_timings(reporter, &actions.build_timings)?;
+            if let Some(attribution) = actions.build_attribution.as_ref() {
+                emit_build_attribution(reporter, attribution)?;
+            }
             emit_delivery_timings(reporter, &actions.timing_samples)?;
         }
         Err(error) => {
             let _ = emit_phase_timings(reporter, &actions.phase_timings);
             let _ = emit_build_timings(reporter, &actions.build_timings);
+            if let Some(attribution) = actions.build_attribution.as_ref() {
+                let _ = emit_build_attribution(reporter, attribution);
+            }
             let _ = emit_delivery_timings(reporter, &actions.timing_samples);
             return Err(error);
         }
@@ -432,6 +439,30 @@ fn emit_build_timings(
             None,
         )?;
     }
+    Ok(())
+}
+
+fn emit_build_attribution(
+    reporter: &mut Reporter<'_>,
+    attribution: &crate::build::BuildArtifactAttribution,
+) -> AgentResult<()> {
+    let largest = attribution
+        .largest_files
+        .iter()
+        .map(|file| format!("{}:{}", file.path, file.bytes))
+        .collect::<Vec<_>>()
+        .join(",");
+    reporter.emit(
+        EventKind::Completed,
+        "build-artifact",
+        &format!(
+            "build_artifact_tsv\tscope=build\tartifact={}\tartifact_bytes={}\trelease_dir_bytes={}\tlargest_files={largest}",
+            attribution.artifact,
+            attribution.artifact_bytes,
+            attribution.release_dir_bytes,
+        ),
+        None,
+    )?;
     Ok(())
 }
 
@@ -534,6 +565,7 @@ struct ProcessActions<'a, D = DeviceClient> {
     installed_manifest: Option<String>,
     phase_timings: Vec<DeliveryPhaseTiming>,
     build_timings: Vec<crate::build::BuildTimingSample>,
+    build_attribution: Option<crate::build::BuildArtifactAttribution>,
     timing_samples: Vec<crate::host::DeliveryTimingSample>,
     stage: PathBuf,
     device: D,
@@ -557,8 +589,10 @@ impl<D> ProcessActions<'_, D> {
     }
 
     fn build_runtime(&mut self) -> AgentResult<()> {
-        self.build_timings =
+        let report =
             crate::build::execute_quiet_with_timings(self.repository, &self.deployment.build)?;
+        self.build_timings = report.samples;
+        self.build_attribution = report.attribution;
         let receipt = self.deployment.build.verify(self.repository)?;
         if receipt.source_commit != self.expected_commit || receipt.source_dirty {
             return Err("runtime artifact was not built from the exact clean commit".into());
@@ -1392,6 +1426,7 @@ mod tests {
             installed_manifest: None,
             phase_timings: Vec::new(),
             build_timings: Vec::new(),
+            build_attribution: None,
             timing_samples: Vec::new(),
             stage: PathBuf::from("stage"),
             device,

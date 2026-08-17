@@ -439,6 +439,26 @@ pub(crate) struct BuildTimingSample {
     pub(crate) elapsed_ms: u64,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct BuildArtifactFile {
+    pub(crate) path: String,
+    pub(crate) bytes: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct BuildArtifactAttribution {
+    pub(crate) artifact: String,
+    pub(crate) artifact_bytes: u64,
+    pub(crate) release_dir_bytes: u64,
+    pub(crate) largest_files: Vec<BuildArtifactFile>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct BuildTimingReport {
+    pub(crate) samples: Vec<BuildTimingSample>,
+    pub(crate) attribution: Option<BuildArtifactAttribution>,
+}
+
 pub fn run_state_machine(
     actions: &mut dyn BuildActions,
     progress: &mut dyn FnMut(Phase, u8) -> AgentResult<()>,
@@ -485,6 +505,9 @@ fn execute_with_session(
         )?)
     });
     let _ = emit_build_timings(reporter, &actions.timings);
+    if let Some(attribution) = actions.attribution.as_ref() {
+        let _ = emit_build_attribution(reporter, attribution);
+    }
     result
 }
 
@@ -497,11 +520,14 @@ pub fn execute_quiet(repository: &Path, spec: &BuildSpec) -> AgentResult<()> {
 pub(crate) fn execute_quiet_with_timings(
     repository: &Path,
     spec: &BuildSpec,
-) -> AgentResult<Vec<BuildTimingSample>> {
+) -> AgentResult<BuildTimingReport> {
     let mut session = BuildSession::new(repository)?;
     let mut actions = ProcessBuildActions::new(&mut session, spec);
     run_state_machine(&mut actions, &mut |_, _| Ok(()))?;
-    Ok(actions.timings)
+    Ok(BuildTimingReport {
+        samples: actions.timings,
+        attribution: actions.attribution,
+    })
 }
 
 /// Executes a build in an explicit Cargo target directory. This is reserved
@@ -753,6 +779,7 @@ struct ProcessBuildActions<'session, 'repository, 'spec> {
     spec: &'spec BuildSpec,
     target_dir: PathBuf,
     timings: Vec<BuildTimingSample>,
+    attribution: Option<BuildArtifactAttribution>,
 }
 
 impl<'session, 'repository, 'spec> ProcessBuildActions<'session, 'repository, 'spec> {
@@ -777,6 +804,7 @@ impl<'session, 'repository, 'spec> ProcessBuildActions<'session, 'repository, 's
             spec,
             target_dir,
             timings: Vec::new(),
+            attribution: None,
         }
     }
 
@@ -796,6 +824,7 @@ impl<'session, 'repository, 'spec> ProcessBuildActions<'session, 'repository, 's
             spec,
             target_dir: target_dir.to_path_buf(),
             timings: Vec::new(),
+            attribution: None,
         })
     }
 
@@ -901,6 +930,28 @@ impl<'session, 'repository, 'spec> ProcessBuildActions<'session, 'repository, 's
         std::fs::copy(&source, &destination)
             .map_err(|error| format!("cannot mirror build artifact: {error}"))?;
         Ok(())
+    }
+
+    fn record_artifact_attribution(&mut self) {
+        if self.spec.mode != BuildMode::Build {
+            return;
+        }
+        let artifact = self.session.repository.join(&self.spec.artifact);
+        let release_dir = self.target_dir.join(TARGET).join(self.spec.profile);
+        let Ok(artifact_bytes) = std::fs::metadata(&artifact).map(|metadata| metadata.len()) else {
+            return;
+        };
+        let mut files = Vec::new();
+        collect_files(&release_dir, &release_dir, &mut files);
+        let release_dir_bytes = files.iter().map(|file| file.bytes).sum();
+        files.sort_by(|left, right| right.bytes.cmp(&left.bytes));
+        files.truncate(12);
+        self.attribution = Some(BuildArtifactAttribution {
+            artifact: self.spec.artifact.display().to_string(),
+            artifact_bytes,
+            release_dir_bytes,
+            largest_files: files,
+        });
     }
 
     fn write_receipt(&self) -> AgentResult<()> {
@@ -1275,6 +1326,7 @@ impl BuildActions for ProcessBuildActions<'_, '_, '_> {
             Phase::Compile => self.compile(),
             Phase::Verify => {
                 self.mirror_artifact()?;
+                self.record_artifact_attribution();
                 if self.spec.mode == BuildMode::Build
                     && !self.session.repository.join(&self.spec.artifact).is_file()
                 {
@@ -1323,6 +1375,57 @@ fn emit_build_timings(
         )?;
     }
     Ok(())
+}
+
+fn emit_build_attribution(
+    reporter: &mut Reporter<'_>,
+    attribution: &BuildArtifactAttribution,
+) -> AgentResult<()> {
+    let largest = attribution
+        .largest_files
+        .iter()
+        .map(|file| format!("{}:{}", file.path, file.bytes))
+        .collect::<Vec<_>>()
+        .join(",");
+    reporter.emit(
+        EventKind::Completed,
+        "build-artifact",
+        &format!(
+            "build_artifact_tsv\tscope=build\tartifact={}\tartifact_bytes={}\trelease_dir_bytes={}\tlargest_files={largest}",
+            attribution.artifact,
+            attribution.artifact_bytes,
+            attribution.release_dir_bytes,
+        ),
+        None,
+    )?;
+    Ok(())
+}
+
+fn collect_files(root: &Path, base: &Path, files: &mut Vec<BuildArtifactFile>) {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if file_type.is_dir() {
+            collect_files(&path, base, files);
+        } else if file_type.is_file() {
+            let Ok(bytes) = entry.metadata().map(|metadata| metadata.len()) else {
+                continue;
+            };
+            files.push(BuildArtifactFile {
+                path: path
+                    .strip_prefix(base)
+                    .unwrap_or(&path)
+                    .display()
+                    .to_string(),
+                bytes,
+            });
+        }
+    }
 }
 
 fn infer_backend() -> AgentResult<BuildBackend> {
