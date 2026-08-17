@@ -8797,6 +8797,7 @@ pub(super) fn run_launcher_loop(
                 .flatten();
             let bridge = app.global::<slint_ui::launcher::MisterBridge>();
             launcher_automation.observe_state(AutomationSemanticState {
+                screen_orientation: nav.settings.screen_orientation.label().to_string(),
                 effective_view: effective_view.label().to_string(),
                 return_screen: screen_label(nav.screen).to_string(),
                 menu_id: nav.current_menu_id().to_string(),

@@ -8802,6 +8802,8 @@ fn summarize_arcade_velocity_scroll(
     use std::fmt::Write as _;
 
     let profile = gui_profile_payload(route)?;
+    let (screen_orientation, ending_screen_orientation) =
+        arcade_velocity_scroll_orientations(route)?;
     let minimum_physical_fps = arcade_velocity_scroll_minimum_fps(display_mode)?;
     let phase_started_us = gui_profile_phase_marker_us(profile, "arcade-scroll", "started")?;
     let phase_presented_us = gui_profile_phase_marker_us(profile, "arcade-scroll", "presented")?;
@@ -9055,6 +9057,9 @@ fn summarize_arcade_velocity_scroll(
     if selection_changes == 0 || distinct_selections.len() < 2 {
         quality_failures.push("arcade-selection-did-not-advance");
     }
+    if screen_orientation != ending_screen_orientation {
+        quality_failures.push("screen-orientation-changed");
+    }
     let quality_status = if quality_failures.is_empty() {
         "passed"
     } else {
@@ -9066,6 +9071,8 @@ fn summarize_arcade_velocity_scroll(
         "quality_status": quality_status,
         "quality_failures": quality_failures,
         "display_mode": display_mode,
+        "screen_orientation": screen_orientation,
+        "ending_screen_orientation": ending_screen_orientation,
         "hold_duration_ms": ARCADE_VELOCITY_SCROLL_DURATION_MS,
         "phase_duration_us": phase_duration_us,
         "frames": frames.len(),
@@ -9136,6 +9143,7 @@ fn summarize_arcade_velocity_scroll(
     let mut report = String::from("# Arcade velocity-scroll benchmark\n\n");
     writeln!(report, "Quality: **{}**\n", quality_status)?;
     writeln!(report, "- Active mode: `{display_mode}`")?;
+    writeln!(report, "- Screen orientation: `{screen_orientation}`")?;
     writeln!(
         report,
         "- Fixed hold: {} ms",
@@ -9201,6 +9209,20 @@ fn summarize_arcade_velocity_scroll(
     )?;
     fs::write(output_dir.join("report.md"), report)?;
     Ok(summary)
+}
+
+fn arcade_velocity_scroll_orientations(route: &Value) -> Result<(&str, &str)> {
+    let started = route
+        .pointer("/arcade_entered/semantic/screen_orientation")
+        .and_then(Value::as_str)
+        .filter(|orientation| !orientation.is_empty())
+        .ok_or("Arcade velocity-scroll entry snapshot has no screen orientation")?;
+    let ended = route
+        .pointer("/settled_arcade/semantic/screen_orientation")
+        .and_then(Value::as_str)
+        .filter(|orientation| !orientation.is_empty())
+        .ok_or("Arcade velocity-scroll terminal snapshot has no screen orientation")?;
+    Ok((started, ended))
 }
 
 fn arcade_velocity_scroll_minimum_fps(display_mode: &str) -> Result<f64> {
@@ -30055,6 +30077,38 @@ H: Handlers=event3 js0"#
             None
         );
         assert_eq!(percentile_summary(&[1, 2, 3, 4, 5])["max"], 5);
+    }
+
+    #[test]
+    fn arcade_velocity_scroll_reports_all_screen_orientations() {
+        for orientation in [
+            "Normal",
+            "Monitor right (clockwise)",
+            "Monitor left (counterclockwise)",
+        ] {
+            let route = json!({
+                "arcade_entered": { "semantic": { "screen_orientation": orientation } },
+                "settled_arcade": { "semantic": { "screen_orientation": orientation } },
+            });
+            assert_eq!(
+                arcade_velocity_scroll_orientations(&route).unwrap(),
+                (orientation, orientation)
+            );
+        }
+    }
+
+    #[test]
+    fn arcade_velocity_scroll_exposes_orientation_changes() {
+        let route = json!({
+            "arcade_entered": { "semantic": { "screen_orientation": "Normal" } },
+            "settled_arcade": {
+                "semantic": { "screen_orientation": "Monitor right (clockwise)" }
+            },
+        });
+        assert_eq!(
+            arcade_velocity_scroll_orientations(&route).unwrap(),
+            ("Normal", "Monitor right (clockwise)")
+        );
     }
 
     const MAME_1942_FIXTURE: &str = r#"<?xml version="1.0"?>

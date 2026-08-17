@@ -48,6 +48,7 @@ pub(super) struct AutomationFrameStamp {
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
 pub(super) struct AutomationSemanticState {
+    pub(super) screen_orientation: String,
     pub(super) effective_view: String,
     pub(super) return_screen: String,
     pub(super) menu_id: String,
