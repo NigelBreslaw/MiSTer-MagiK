@@ -26,6 +26,7 @@ mod arcade_database;
 mod crt_qualification;
 mod discovery;
 mod framebuffer_views;
+mod http_transfer;
 mod installed_layout;
 mod latch_v5_qualification;
 mod launcher_automation;
