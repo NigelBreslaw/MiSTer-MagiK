@@ -38,6 +38,7 @@ pub enum CompileTimeTarget {
     MagikReleaseDeviceArmProduction,
     MagikReleaseDeviceArmThin,
     MagikReleaseDeviceArmThinStripped,
+    MagikReleaseDeviceArmThinCgu32,
     FramebufferSceneLabArm,
     FramebufferSceneLabMacos,
 }
@@ -74,6 +75,7 @@ impl CompileTimeTarget {
             Self::MagikReleaseDeviceArmProduction => "magik-release-device-arm-production",
             Self::MagikReleaseDeviceArmThin => "magik-release-device-arm-thin",
             Self::MagikReleaseDeviceArmThinStripped => "magik-release-device-arm-thin-stripped",
+            Self::MagikReleaseDeviceArmThinCgu32 => "magik-release-device-arm-thin-cgu32",
             Self::FramebufferSceneLabArm => "framebuffer-scene-lab-arm",
             Self::FramebufferSceneLabMacos => "framebuffer-scene-lab-macos",
         }
@@ -532,6 +534,14 @@ fn run_build(repository: &Path, target: CompileTimeTarget, target_dir: &Path) ->
             ),
             target_dir,
         ),
+        CompileTimeTarget::MagikReleaseDeviceArmThinCgu32 => execute_quiet_at_target_dir(
+            repository,
+            &BuildSpec::canonical_profile(
+                crate::deploy::UiScope::Production,
+                "release-device-thin-cgu32",
+            ),
+            target_dir,
+        ),
         CompileTimeTarget::FramebufferSceneLabArm => execute_quiet_at_target_dir(
             repository,
             &BuildSpec::framebuffer_scene_lab_device(),
@@ -563,7 +573,8 @@ impl CompileTimeTarget {
             Self::MagikReleaseDeviceArmAll
             | Self::MagikReleaseDeviceArmProduction
             | Self::MagikReleaseDeviceArmThin
-            | Self::MagikReleaseDeviceArmThinStripped => {
+            | Self::MagikReleaseDeviceArmThinStripped
+            | Self::MagikReleaseDeviceArmThinCgu32 => {
                 if edit == CompileTimeEdit::SharedMagik {
                     Ok("apps/mister/src/main.rs")
                 } else {
@@ -1188,6 +1199,10 @@ mod tests {
         assert_eq!(
             CompileTimeTarget::MagikReleaseDeviceArmProduction.label(),
             "magik-release-device-arm-production"
+        );
+        assert_eq!(
+            CompileTimeTarget::MagikReleaseDeviceArmThinCgu32.label(),
+            "magik-release-device-arm-thin-cgu32"
         );
         assert_eq!(
             CompileTimeTarget::FramebufferSceneLabArm.label(),
