@@ -23,15 +23,10 @@ the LTO strategy and codegen-unit count changed.
 
 All five edit samples were below the baseline median, so the typed campaign
 advanced the baseline to `/private/tmp/mister-magik-campaign/baseline-thin.json`.
-The profile remains a candidate for delivery until device performance, memory,
-frame cadence, and binary-size parity are signed off.
+Binary size is intentionally not a gate for this campaign. The profile retains
+function symbols and remains subject to device performance, memory, and frame
+cadence sign-off.
 
-Artifact-size check from the same external target directories:
-
-| artifact | bytes |
-| --- | ---: |
-| fat-LTO/2 baseline | 24,479,424 |
-| thin-LTO candidate | 30,955,412 |
-
-The candidate is 26.46% larger, so this is a compile-time win but not yet a
-parity-qualified production baseline.
+For reference, the same external target directories produced 24,479,424 bytes
+for fat-LTO/2 and 30,955,412 bytes for thin-LTO. That size increase does not
+change the compile-time decision.

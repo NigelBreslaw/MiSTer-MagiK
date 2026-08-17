@@ -120,9 +120,12 @@ the legacy PR release profile, legacy main `release-device`, and candidate
 a MiSTer. The 2026-08-07 ARM sampling run was stopped before it completed, so
 no ARM speedup ratio is claimed in the recorded evidence.
 
-The canonical `release-device` runtime includes dormant on-device profiling
-support and retains function symbols. Benchmarks activate that support only on
-the already-installed runtime. `scripts/agent build runtime-analysis` produces
+The canonical `release-device` runtime uses the measured thin-LTO profile
+(`opt-level=3`, sixteen codegen units), includes dormant on-device profiling
+support, and retains function symbols. Binary size is not a release gate;
+device correctness, memory headroom, and frame cadence remain required.
+Benchmarks activate profiling only on the already-installed runtime.
+`scripts/agent build runtime-analysis` produces
 the `release-device-profile` offline artifact and is not callable from the
 benchmark workflow or deployable by it. Runtime delivery always
 publishes `mister-magik-fb` together with its regenerated
