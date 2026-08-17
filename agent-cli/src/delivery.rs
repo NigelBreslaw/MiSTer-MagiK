@@ -169,8 +169,17 @@ trait DeliveryDevice {
     fn connect(&mut self) -> AgentResult<()>;
     fn read_development_manifest(&mut self) -> AgentResult<String>;
     fn read_active_runtime(&mut self) -> AgentResult<crate::host::ActiveRuntime>;
-    fn deliver_runtime(&mut self, delivery: RuntimeDelivery) -> AgentResult<()>;
-    fn deliver_platform(&mut self, stage: PathBuf, expected_sha256: String) -> AgentResult<()>;
+    fn deliver_runtime(
+        &mut self,
+        delivery: RuntimeDelivery,
+        timings: &mut Vec<crate::host::DeliveryTimingSample>,
+    ) -> AgentResult<()>;
+    fn deliver_platform(
+        &mut self,
+        stage: PathBuf,
+        expected_sha256: String,
+        timings: &mut Vec<crate::host::DeliveryTimingSample>,
+    ) -> AgentResult<()>;
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -195,7 +204,11 @@ impl DeliveryDevice for DeviceClient {
         self.read(crate::NativeDevice::read_active_runtime)
     }
 
-    fn deliver_runtime(&mut self, delivery: RuntimeDelivery) -> AgentResult<()> {
+    fn deliver_runtime(
+        &mut self,
+        delivery: RuntimeDelivery,
+        timings: &mut Vec<crate::host::DeliveryTimingSample>,
+    ) -> AgentResult<()> {
         self.mutate(|device| {
             device.deliver_runtime(
                 &delivery.local,
@@ -203,12 +216,18 @@ impl DeliveryDevice for DeviceClient {
                 &delivery.expected_sha256,
                 &delivery.artwork_local,
                 &delivery.artwork_expected_sha256,
+                timings,
             )
         })
     }
 
-    fn deliver_platform(&mut self, stage: PathBuf, expected_sha256: String) -> AgentResult<()> {
-        self.mutate(|device| device.deliver_platform(&stage, &expected_sha256))
+    fn deliver_platform(
+        &mut self,
+        stage: PathBuf,
+        expected_sha256: String,
+        timings: &mut Vec<crate::host::DeliveryTimingSample>,
+    ) -> AgentResult<()> {
+        self.mutate(|device| device.deliver_platform(&stage, &expected_sha256, timings))
     }
 }
 
@@ -244,12 +263,13 @@ fn execute_with_device<D: DeliveryDevice>(
         manager_artifact: None,
         main_revision: None,
         installed_manifest: None,
+        timing_samples: Vec::new(),
         stage: repository
             .join("build/agent-deploy/stage")
             .join(expected_commit),
         device,
     };
-    run_transaction(&mut actions, &mut |step, percent| match step {
+    let transaction = run_transaction(&mut actions, &mut |step, percent| match step {
         Step::Action(phase) => Ok(reporter.emit(
             EventKind::Progress,
             phase.label(),
@@ -262,7 +282,14 @@ fn execute_with_device<D: DeliveryDevice>(
             "delivery failed; restoring verified snapshot",
             Some(percent),
         )?),
-    })?;
+    });
+    match transaction {
+        Ok(()) => emit_delivery_timings(reporter, &actions.timing_samples)?,
+        Err(error) => {
+            let _ = emit_delivery_timings(reporter, &actions.timing_samples);
+            return Err(error);
+        }
+    }
     if let Some(candidate) = actions.deployment.platform_candidate.as_ref() {
         let release = candidate.release_tag.as_deref().unwrap_or("candidate");
         let cache = if candidate.reused {
@@ -281,6 +308,65 @@ fn execute_with_device<D: DeliveryDevice>(
         outcome: Outcome::Passed,
         decision: actions.decision,
     })
+}
+
+fn emit_delivery_timings(
+    reporter: &mut Reporter<'_>,
+    samples: &[crate::host::DeliveryTimingSample],
+) -> AgentResult<()> {
+    for sample in samples {
+        let (kind, phase, message) = render_delivery_timing(*sample);
+        reporter.emit(kind, phase, &message, None)?;
+    }
+    Ok(())
+}
+
+fn render_delivery_timing(
+    sample: crate::host::DeliveryTimingSample,
+) -> (EventKind, &'static str, String) {
+    use crate::host::{DeliveryTimingSample, DeliveryTimingStatus};
+
+    match sample {
+        DeliveryTimingSample::Transfer {
+            lane,
+            status,
+            metrics,
+        } => (
+            if status == DeliveryTimingStatus::Passed {
+                EventKind::Completed
+            } else {
+                EventKind::Warning
+            },
+            "delivery-transfer",
+            format!(
+                "delivery_transfer_tsv\tlane={}\tstatus={}\tfiles={}\tbytes={}\tupload_ms={}\tdeploy_ms={}\tbytes_per_second={}",
+                lane.label(),
+                status.label(),
+                metrics.files,
+                metrics.bytes,
+                metrics.upload_ms,
+                metrics.deploy_ms,
+                metrics.bytes_per_second(),
+            ),
+        ),
+        DeliveryTimingSample::Smoke {
+            lane,
+            status,
+            smoke_ms,
+        } => (
+            if status == DeliveryTimingStatus::Passed {
+                EventKind::Completed
+            } else {
+                EventKind::Warning
+            },
+            "delivery-smoke",
+            format!(
+                "delivery_smoke_tsv\tlane={}\tstatus={}\tsmoke_ms={smoke_ms}",
+                lane.label(),
+                status.label(),
+            ),
+        ),
+    }
 }
 
 pub fn cleanup_workspace(repository: &Path) -> Result<(), String> {
@@ -309,6 +395,7 @@ struct ProcessActions<'a, D = DeviceClient> {
     manager_artifact: Option<PathBuf>,
     main_revision: Option<String>,
     installed_manifest: Option<String>,
+    timing_samples: Vec<crate::host::DeliveryTimingSample>,
     stage: PathBuf,
     device: D,
 }
@@ -494,20 +581,25 @@ impl<D: DeliveryDevice> DeliveryActions for ProcessActions<'_, D> {
                     .clone()
                     .ok_or("qualified runtime identity is missing")?;
                 match self.decision {
-                    DeliveryDecision::Runtime => self.device.deliver_runtime(RuntimeDelivery {
-                        local: self.repository.join(self.deployment.build.artifact()),
-                        manifest_local: self.stage.join(crate::platform_manifest::FILE_NAME),
+                    DeliveryDecision::Runtime => self.device.deliver_runtime(
+                        RuntimeDelivery {
+                            local: self.repository.join(self.deployment.build.artifact()),
+                            manifest_local: self.stage.join(crate::platform_manifest::FILE_NAME),
+                            expected_sha256,
+                            artwork_local: self
+                                .repository
+                                .join("apps/mister/assets/snes/snes-small-v1.rgb565a"),
+                            artwork_expected_sha256:
+                                "7a76993e7e1b0063832b94e9d2ad588549587cf09a14ac2ced72d349ed12f766"
+                                    .into(),
+                        },
+                        &mut self.timing_samples,
+                    ),
+                    DeliveryDecision::Platform => self.device.deliver_platform(
+                        self.stage.clone(),
                         expected_sha256,
-                        artwork_local: self
-                            .repository
-                            .join("apps/mister/assets/snes/snes-small-v1.rgb565a"),
-                        artwork_expected_sha256:
-                            "7a76993e7e1b0063832b94e9d2ad588549587cf09a14ac2ced72d349ed12f766"
-                                .into(),
-                    }),
-                    DeliveryDecision::Platform => self
-                        .device
-                        .deliver_platform(self.stage.clone(), expected_sha256),
+                        &mut self.timing_samples,
+                    ),
                     DeliveryDecision::NoOp => Ok(()),
                 }
             }
@@ -704,6 +796,7 @@ fn run_bounded(repository: &Path, program: &str, args: &[String]) -> AgentResult
 mod tests {
     use super::*;
     use std::cell::RefCell;
+    use std::ffi::OsString;
     use std::rc::Rc;
 
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -713,6 +806,26 @@ mod tests {
     }
 
     struct RequestRecorder(Rc<RefCell<Vec<DeliveryCall>>>);
+
+    fn sample_timings(lane: crate::host::DeliveryLane) -> [crate::host::DeliveryTimingSample; 2] {
+        [
+            crate::host::DeliveryTimingSample::Transfer {
+                lane,
+                status: crate::host::DeliveryTimingStatus::Passed,
+                metrics: crate::host::DeliveryTransferMetrics {
+                    files: 3,
+                    bytes: 1_500,
+                    upload_ms: 500,
+                    deploy_ms: 900,
+                },
+            },
+            crate::host::DeliveryTimingSample::Smoke {
+                lane,
+                status: crate::host::DeliveryTimingStatus::Passed,
+                smoke_ms: 250,
+            },
+        ]
+    }
 
     impl DeliveryDevice for RequestRecorder {
         fn connect(&mut self) -> AgentResult<()> {
@@ -730,8 +843,13 @@ mod tests {
             ))
         }
 
-        fn deliver_runtime(&mut self, _delivery: RuntimeDelivery) -> AgentResult<()> {
+        fn deliver_runtime(
+            &mut self,
+            _delivery: RuntimeDelivery,
+            timings: &mut Vec<crate::host::DeliveryTimingSample>,
+        ) -> AgentResult<()> {
             self.0.borrow_mut().push(DeliveryCall::Runtime);
+            timings.extend(sample_timings(crate::host::DeliveryLane::Runtime));
             Ok(())
         }
 
@@ -739,8 +857,10 @@ mod tests {
             &mut self,
             _stage: PathBuf,
             _expected_sha256: String,
+            timings: &mut Vec<crate::host::DeliveryTimingSample>,
         ) -> AgentResult<()> {
             self.0.borrow_mut().push(DeliveryCall::Platform);
+            timings.extend(sample_timings(crate::host::DeliveryLane::Platform));
             Ok(())
         }
     }
@@ -945,6 +1065,10 @@ mod tests {
             requests.borrow().as_slice(),
             [DeliveryCall::Runtime]
         ));
+        assert_eq!(
+            actions.timing_samples,
+            sample_timings(crate::host::DeliveryLane::Runtime)
+        );
     }
 
     #[test]
@@ -973,6 +1097,20 @@ mod tests {
     }
 
     #[test]
+    fn no_op_delivery_has_no_transfer_or_smoke_samples() {
+        let requests = Rc::new(RefCell::new(Vec::new()));
+        let mut actions = scenario_actions(
+            crate::deploy::DeploymentKind::Runtime,
+            RequestRecorder(Rc::clone(&requests)),
+        );
+        actions.decision = DeliveryDecision::NoOp;
+
+        assert!(!actions.should_run(Phase::RemoteInventoryUpload));
+        assert!(actions.timing_samples.is_empty());
+        assert!(requests.borrow().is_empty());
+    }
+
+    #[test]
     fn deterministic_platform_uses_one_transaction_request() {
         let requests = Rc::new(RefCell::new(Vec::new()));
         let mut actions = scenario_actions(
@@ -984,6 +1122,82 @@ mod tests {
             requests.borrow().as_slice(),
             [DeliveryCall::Platform]
         ));
+        assert_eq!(
+            actions.timing_samples,
+            sample_timings(crate::host::DeliveryLane::Platform)
+        );
+    }
+
+    #[test]
+    fn timing_samples_render_as_stable_machine_readable_events() {
+        let [transfer, smoke] = sample_timings(crate::host::DeliveryLane::Runtime);
+        assert_eq!(
+            render_delivery_timing(transfer),
+            (
+                EventKind::Completed,
+                "delivery-transfer",
+                "delivery_transfer_tsv\tlane=runtime\tstatus=passed\tfiles=3\tbytes=1500\tupload_ms=500\tdeploy_ms=900\tbytes_per_second=3000".into(),
+            )
+        );
+        assert_eq!(
+            render_delivery_timing(smoke),
+            (
+                EventKind::Completed,
+                "delivery-smoke",
+                "delivery_smoke_tsv\tlane=runtime\tstatus=passed\tsmoke_ms=250".into(),
+            )
+        );
+        let failed_transfer = crate::host::DeliveryTimingSample::Transfer {
+            lane: crate::host::DeliveryLane::Platform,
+            status: crate::host::DeliveryTimingStatus::Failed,
+            metrics: crate::host::DeliveryTransferMetrics {
+                files: 1,
+                bytes: 1_024,
+                upload_ms: 100,
+                deploy_ms: 150,
+            },
+        };
+        let failed_smoke = crate::host::DeliveryTimingSample::Smoke {
+            lane: crate::host::DeliveryLane::Platform,
+            status: crate::host::DeliveryTimingStatus::Failed,
+            smoke_ms: 400,
+        };
+        assert_eq!(
+            render_delivery_timing(failed_transfer).0,
+            EventKind::Warning
+        );
+        assert_eq!(render_delivery_timing(failed_smoke).0, EventKind::Warning);
+    }
+
+    #[test]
+    fn timing_events_are_retained_without_progress_coalescing() {
+        let root = std::env::temp_dir().join(format!(
+            "mister-magik-delivery-timing-evidence-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        let evidence = crate::evidence::Evidence::open_at(&root).unwrap();
+        let request = crate::request::RawRequest::capture([OsString::from("agent-cli")]);
+        evidence.begin_request(&request).unwrap();
+        let mut reporter = Reporter::new(&evidence, crate::cli::OutputFormat::Human, &request.id);
+
+        let mut samples = sample_timings(crate::host::DeliveryLane::Runtime).to_vec();
+        samples.push(crate::host::DeliveryTimingSample::Smoke {
+            lane: crate::host::DeliveryLane::Runtime,
+            status: crate::host::DeliveryTimingStatus::Failed,
+            smoke_ms: 400,
+        });
+        emit_delivery_timings(&mut reporter, &samples).unwrap();
+
+        let detail = evidence.run_detail(&request.id).unwrap().unwrap();
+        assert_eq!(detail.events.len(), 3);
+        assert_eq!(detail.events[0].phase, "delivery-transfer");
+        assert_eq!(detail.events[0].kind, "completed");
+        assert_eq!(detail.events[1].phase, "delivery-smoke");
+        assert_eq!(detail.events[1].kind, "completed");
+        assert_eq!(detail.events[2].phase, "delivery-smoke");
+        assert_eq!(detail.events[2].kind, "warning");
+        let _ = fs::remove_dir_all(root);
     }
 
     fn scenario_actions(
@@ -1005,6 +1219,7 @@ mod tests {
             manager_artifact: None,
             main_revision: None,
             installed_manifest: None,
+            timing_samples: Vec::new(),
             stage: PathBuf::from("stage"),
             device,
         }

@@ -600,9 +600,9 @@ impl NativeDevice {
         expected_sha256: &str,
         artwork_local: &Path,
         artwork_expected_sha256: &str,
+        timings: &mut Vec<DeliveryTimingSample>,
     ) -> std::result::Result<(), DeviceFailure> {
         let prepared = self.prepare(DeviceAccess::AGENT_MUTATION)?;
-        let mut timings = Vec::new();
         deliver_runtime_transaction(
             &prepared.config,
             RuntimeDeliveryBundle {
@@ -615,7 +615,7 @@ impl NativeDevice {
                 artwork_remote: DEVELOPMENT_ARTWORK_REMOTE.as_str(),
                 artwork_expected_sha256,
             },
-            &mut timings,
+            timings,
         )
         .map(|_| ())
     }
@@ -624,11 +624,10 @@ impl NativeDevice {
         &mut self,
         stage: &Path,
         expected_sha256: &str,
+        timings: &mut Vec<DeliveryTimingSample>,
     ) -> std::result::Result<(), DeviceFailure> {
         let prepared = self.prepare(DeviceAccess::AGENT_MUTATION)?;
-        let mut timings = Vec::new();
-        deliver_platform_transaction(&prepared.config, stage, expected_sha256, &mut timings)
-            .map(|_| ())
+        deliver_platform_transaction(&prepared.config, stage, expected_sha256, timings).map(|_| ())
     }
 
     pub(crate) fn deliver_local_main(
@@ -2091,10 +2090,28 @@ pub(crate) enum DeliveryLane {
     Platform,
 }
 
+impl DeliveryLane {
+    pub(crate) const fn label(self) -> &'static str {
+        match self {
+            Self::Runtime => "runtime",
+            Self::Platform => "platform",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum DeliveryTimingStatus {
     Passed,
     Failed,
+}
+
+impl DeliveryTimingStatus {
+    pub(crate) const fn label(self) -> &'static str {
+        match self {
+            Self::Passed => "passed",
+            Self::Failed => "failed",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -2103,6 +2120,15 @@ pub(crate) struct DeliveryTransferMetrics {
     pub(crate) bytes: u64,
     pub(crate) upload_ms: u64,
     pub(crate) deploy_ms: u64,
+}
+
+impl DeliveryTransferMetrics {
+    pub(crate) fn bytes_per_second(self) -> u64 {
+        if self.upload_ms == 0 {
+            return 0;
+        }
+        self.bytes.saturating_mul(1_000) / self.upload_ms
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
