@@ -13,7 +13,8 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
 const ACCEPT_POLL: Duration = Duration::from_millis(10);
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
+const REQUEST_READ_TIMEOUT: Duration = Duration::from_secs(2);
+const RESPONSE_WRITE_TIMEOUT: Duration = Duration::from_secs(120);
 const SERVE_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_REQUEST_BYTES: usize = 8 * 1024;
 const MAX_REJECTED_REQUESTS: usize = 8;
@@ -191,8 +192,9 @@ fn handle_request(
     source_bytes: u64,
     request_path: &str,
 ) -> Result<Option<HttpServeReport>> {
-    stream.set_read_timeout(Some(REQUEST_TIMEOUT))?;
-    stream.set_write_timeout(Some(REQUEST_TIMEOUT))?;
+    stream.set_nonblocking(false)?;
+    stream.set_read_timeout(Some(REQUEST_READ_TIMEOUT))?;
+    stream.set_write_timeout(Some(RESPONSE_WRITE_TIMEOUT))?;
     let request = read_request(stream)?;
     let mut lines = request.split("\r\n");
     let request_line = lines.next().unwrap_or_default();
