@@ -15,6 +15,16 @@ From the repository root:
 apps/mister/scripts/dev-ui-mac.sh
 ```
 
+The launcher uses Cargo's optimized release profile by default. The particle
+intro advances from successfully presented frames, so an unoptimized renderer
+can make its motion run much slower than wall time, especially on a 120 Hz
+display. Use `--debug` only when source-level debugging is more important than
+representative motion:
+
+```bash
+apps/mister/scripts/dev-ui-mac.sh --debug
+```
+
 Interactive card previews use `--cold-start auto` by default. When no valid
 Catalog V3 seed exists, the preview runs the production 20-second particle
 intro while the Mac-local catalog scan proceeds, derives the morph target from
