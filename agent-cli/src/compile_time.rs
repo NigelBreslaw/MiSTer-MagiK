@@ -8,7 +8,7 @@ use crate::error::AgentResult;
 use crate::process;
 use crate::progress::{EventKind, Reporter};
 use clap::{Subcommand, ValueEnum};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs::{FileTimes, OpenOptions};
 use std::io::Write;
@@ -20,14 +20,14 @@ const BUILD_DEADLINE: Duration = Duration::from_secs(30 * 60);
 const NO_OP_SAMPLES: usize = 5;
 const EDIT_REBUILD_SAMPLES: usize = 5;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, ValueEnum)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, ValueEnum)]
 #[serde(rename_all = "kebab-case")]
 pub enum RevisionComparisonScenario {
     PrePushCatalog,
     ArmRuntimeCi,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, ValueEnum)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize, ValueEnum)]
 #[serde(rename_all = "kebab-case")]
 pub enum CompileTimeTarget {
     FramebufferLabArm,
@@ -38,7 +38,7 @@ pub enum CompileTimeTarget {
     FramebufferSceneLabMacos,
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, ValueEnum)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize, ValueEnum)]
 #[serde(rename_all = "kebab-case")]
 pub enum CompileTimeEdit {
     #[default]
@@ -105,11 +105,28 @@ pub enum CompileTimeCommand {
         #[arg(long, value_enum, required = true)]
         scenario: Vec<RevisionComparisonScenario>,
     },
+    /// Measure one candidate and advance the sequential compile-time baseline only on a win.
+    Campaign {
+        #[arg(value_enum)]
+        target: CompileTimeTarget,
+        #[arg(long, value_name = "NEW_ABSOLUTE_PATH")]
+        target_dir: PathBuf,
+        #[arg(long, value_name = "NEW_JSON_PATH")]
+        candidate_output: PathBuf,
+        #[arg(long, value_name = "JSON_PATH")]
+        baseline: Option<PathBuf>,
+        #[arg(long, value_name = "NEW_JSON_PATH")]
+        output: PathBuf,
+        #[arg(long, value_name = "NEW_JSON_PATH")]
+        next_baseline: PathBuf,
+        #[arg(long, value_enum, default_value = "shared-magik")]
+        edit: CompileTimeEdit,
+    },
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 struct CompileTimeReport {
-    schema: &'static str,
+    schema: String,
     target: CompileTimeTarget,
     edit: CompileTimeEdit,
     source_revision: String,
@@ -125,6 +142,20 @@ struct CompileTimeReport {
     no_op_ms: Vec<u128>,
     edit_warmup_ms: u128,
     edit_rebuild_ms: Vec<u128>,
+}
+
+#[derive(Debug, Serialize)]
+struct CampaignReport {
+    schema: &'static str,
+    target: CompileTimeTarget,
+    edit: CompileTimeEdit,
+    baseline_report: Option<String>,
+    candidate_report: String,
+    next_baseline: String,
+    baseline_median_ms: Option<u128>,
+    candidate_median_ms: u128,
+    candidate_samples_below_baseline: usize,
+    winning: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -218,7 +249,130 @@ pub fn execute(
             scenario,
             reporter,
         ),
+        CompileTimeCommand::Campaign {
+            target,
+            target_dir,
+            candidate_output,
+            baseline,
+            output,
+            next_baseline,
+            edit,
+        } => campaign(
+            repository,
+            *target,
+            *edit,
+            target_dir,
+            candidate_output,
+            baseline.as_deref(),
+            output,
+            next_baseline,
+            reporter,
+        ),
     }
+}
+
+fn campaign(
+    repository: &Path,
+    target: CompileTimeTarget,
+    edit: CompileTimeEdit,
+    target_dir: &Path,
+    candidate_output: &Path,
+    baseline: Option<&Path>,
+    output: &Path,
+    next_baseline: &Path,
+    reporter: &mut Reporter<'_>,
+) -> AgentResult<()> {
+    validate_target_dir(repository, target_dir, true)?;
+    for (label, path) in [
+        ("candidate output", candidate_output),
+        ("campaign output", output),
+        ("next baseline", next_baseline),
+    ] {
+        if path.exists() {
+            return Err(format!("{label} already exists: {}", path.display()).into());
+        }
+    }
+    if baseline.is_some_and(|path| !path.is_file()) {
+        return Err("campaign baseline must be an existing JSON report".into());
+    }
+    measure(
+        repository,
+        target,
+        edit,
+        target_dir,
+        candidate_output,
+        reporter,
+    )?;
+    let candidate = read_compile_time_report(candidate_output)?;
+    let (baseline_median_ms, candidate_samples_below_baseline, winning) =
+        if let Some(path) = baseline {
+            let baseline_report = read_compile_time_report(path)?;
+            let baseline_median_ms = median(&baseline_report.edit_rebuild_ms)?;
+            let candidate_median_ms = median(&candidate.edit_rebuild_ms)?;
+            let below = candidate
+                .edit_rebuild_ms
+                .iter()
+                .filter(|sample| **sample < baseline_median_ms)
+                .count();
+            (
+                Some(baseline_median_ms),
+                below,
+                candidate_median_ms < baseline_median_ms && below >= 3,
+            )
+        } else {
+            (None, 0, true)
+        };
+    let candidate_median_ms = median(&candidate.edit_rebuild_ms)?;
+    std::fs::copy(
+        if winning {
+            candidate_output
+        } else {
+            baseline.ok_or("losing campaign requires a baseline report")?
+        },
+        next_baseline,
+    )
+    .map_err(|error| format!("cannot advance campaign baseline: {error}"))?;
+    let report = CampaignReport {
+        schema: "mister-magik-compile-campaign-v1",
+        target,
+        edit,
+        baseline_report: baseline.map(|path| path.display().to_string()),
+        candidate_report: candidate_output.display().to_string(),
+        next_baseline: next_baseline.display().to_string(),
+        baseline_median_ms,
+        candidate_median_ms,
+        candidate_samples_below_baseline,
+        winning,
+    };
+    write_json_report(output, &report)?;
+    reporter.emit(
+        if winning {
+            EventKind::Completed
+        } else {
+            EventKind::Warning
+        },
+        "compile-time-campaign",
+        &format!(
+            "campaign candidate={} median_ms={} baseline_ms={} winning={winning}",
+            candidate_output.display(),
+            candidate_median_ms,
+            baseline_median_ms.map_or_else(|| "none".to_owned(), |value| value.to_string()),
+        ),
+        Some(100),
+    )?;
+    Ok(())
+}
+
+fn read_compile_time_report(path: &Path) -> AgentResult<CompileTimeReport> {
+    let text = std::fs::read_to_string(path)
+        .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
+    serde_json::from_str(&text).map_err(|error| {
+        format!(
+            "cannot parse compile-time report {}: {error}",
+            path.display()
+        )
+        .into()
+    })
 }
 
 fn measure(
@@ -288,7 +442,7 @@ fn measure(
     let source_sha256_after = source_guard.finish()?;
     require_clean_source(repository, &source)?;
     let report = CompileTimeReport {
-        schema: "mister-magik-compile-time-v3",
+        schema: "mister-magik-compile-time-v3".into(),
         target,
         edit,
         source_revision: command_output(repository, "git", &["rev-parse", "HEAD"])?,

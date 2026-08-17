@@ -826,12 +826,7 @@ impl<'session, 'repository, 'spec> ProcessBuildActions<'session, 'repository, 's
         }
     }
 
-    fn record_timing(
-        &mut self,
-        phase: &'static str,
-        started: Instant,
-        result: &AgentResult<()>,
-    ) {
+    fn record_timing(&mut self, phase: &'static str, started: Instant, result: &AgentResult<()>) {
         self.timings.push(BuildTimingSample {
             phase,
             status: if result.is_ok() {

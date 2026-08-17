@@ -557,10 +557,8 @@ impl<D> ProcessActions<'_, D> {
     }
 
     fn build_runtime(&mut self) -> AgentResult<()> {
-        self.build_timings = crate::build::execute_quiet_with_timings(
-            self.repository,
-            &self.deployment.build,
-        )?;
+        self.build_timings =
+            crate::build::execute_quiet_with_timings(self.repository, &self.deployment.build)?;
         let receipt = self.deployment.build.verify(self.repository)?;
         if receipt.source_commit != self.expected_commit || receipt.source_dirty {
             return Err("runtime artifact was not built from the exact clean commit".into());

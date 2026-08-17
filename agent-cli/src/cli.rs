@@ -767,6 +767,23 @@ mod tests {
             ])
             .is_err()
         );
+        assert!(
+            Cli::try_parse_from([
+                "agent-cli",
+                "compile-time",
+                "campaign",
+                "magik-full-app-arm",
+                "--target-dir",
+                "/tmp/campaign-target",
+                "--candidate-output",
+                "/tmp/candidate.json",
+                "--output",
+                "/tmp/campaign.json",
+                "--next-baseline",
+                "/tmp/baseline-next.json",
+            ])
+            .is_ok()
+        );
     }
 
     #[test]
