@@ -52,6 +52,7 @@ mod macos {
         NavigationTransitionRuntime, crt_navigation_geometry, hdmi_navigation_geometry,
     };
     use mister_magik_fb::launcher_runtime::settings::{FileSettingsStore, SettingsStore};
+    use mister_magik_fb::launcher_runtime::startup_intro::StartupIntroPlayback;
     use mister_magik_fb::launcher_taxonomy::{
         CONSOLES_MENU_ID, LauncherMenuItemKind, ROOT_MENU_ID,
     };
@@ -188,6 +189,7 @@ mod macos {
             !options.no_download,
             options.display_profile,
             options.orientation,
+            options.cold_start_mode,
             options.navigation_transition_demo.is_some()
                 || options.settings_page_transition_demo
                 || options.navigation_transition_duration_ms.is_some(),
@@ -477,6 +479,11 @@ mod macos {
         pending_navigation_event: Option<LauncherEvent>,
         pending_navigation_committed: bool,
         pending_navigation_source_state: Option<NavigationTransitionState>,
+        cold_start_mode: ColdStartMode,
+        startup_intro: Option<StartupIntroPlayback>,
+        startup_intro_catalog_ready: bool,
+        startup_intro_rendered: bool,
+        startup_intro_failure: Option<String>,
     }
 
     fn preview_input_focus(nav: &LauncherNav, transition: bool) -> FocusRequest {
@@ -537,6 +544,7 @@ mod macos {
             download_media: bool,
             display_profile: DisplayProfile,
             orientation: ScreenOrientation,
+            cold_start_mode: ColdStartMode,
             force_navigation_motion: bool,
         ) -> Result<Self, Box<dyn Error>> {
             let fixtures = UiPreviewFixtures::new()?;
@@ -591,6 +599,17 @@ mod macos {
             } else {
                 None
             };
+            let catalog_missing = catalog_source == "catalog:missing";
+            let startup_intro_requested = cold_start_mode.should_start(headless, catalog_missing);
+            if startup_intro_requested && catalog_missing && catalog_worker.is_none() {
+                return Err(
+                    "cold startup needs an active catalog scan; enable scanning or pass --cold-start skip"
+                        .into(),
+                );
+            }
+            let startup_intro = startup_intro_requested
+                .then(|| StartupIntroPlayback::new(&display))
+                .transpose()?;
             let preview_worker = content.card().map(|_| PreviewWorker::new());
             let card_connected = content
                 .card()
@@ -681,6 +700,11 @@ mod macos {
                 pending_navigation_event: None,
                 pending_navigation_committed: false,
                 pending_navigation_source_state: None,
+                cold_start_mode,
+                startup_intro,
+                startup_intro_catalog_ready: !catalog_missing,
+                startup_intro_rendered: false,
+                startup_intro_failure: None,
                 launcher_input_events: VecDeque::new(),
                 launcher_active_presses: HashMap::new(),
                 launcher_input_sequence: 0,
@@ -718,8 +742,24 @@ mod macos {
         }
 
         fn window_title(&self) -> String {
+            let cold_start = self.startup_intro.as_ref().map_or_else(
+                || {
+                    self.startup_intro_failure.as_ref().map_or_else(
+                        || format!("cold-start:{}", self.cold_start_mode.id()),
+                        |error| format!("cold-start:failed:{error}"),
+                    )
+                },
+                |intro| {
+                    format!(
+                        "cold-start:{}:{}ms:wait={}",
+                        self.cold_start_mode.id(),
+                        intro.elapsed().as_millis(),
+                        intro.waiting_frames()
+                    )
+                },
+            );
             format!(
-                "MiSTer MagiK UI Preview — {} — {} — {} Hz — {} — {} — {} — {}",
+                "MiSTer MagiK UI Preview — {} — {} — {} Hz — {} — {} — {} — {} — {}",
                 self.scenario.label(),
                 self.scenario.shortcut(),
                 self.refresh_hz,
@@ -727,6 +767,7 @@ mod macos {
                 self.catalog_source,
                 self.display_profile.label(),
                 self.tile_pack_status,
+                cold_start,
             )
         }
 
@@ -877,6 +918,10 @@ mod macos {
         }
 
         fn handle_key(&mut self, code: KeyCode) {
+            if matches!(code, KeyCode::Digit8 | KeyCode::Numpad8) {
+                self.start_startup_intro_replay();
+                return;
+            }
             if let Some(scenario) = shortcut_scenario(code) {
                 self.select_scenario(scenario);
                 return;
@@ -1479,7 +1524,8 @@ mod macos {
             self.slint_window.request_redraw();
         }
 
-        fn compose_frame(&mut self) {
+        fn compose_frame(&mut self) -> bool {
+            self.startup_intro_rendered = false;
             self.poll_catalog_worker();
             self.poll_preview_worker();
             self.poll_media_worker();
@@ -1630,7 +1676,96 @@ mod macos {
                 self.screensaver_elapsed += frame_delta;
             }
             self.compose_navigation_transition();
+            self.compose_startup_intro();
             self.fixed_time.set(self.fixed_time.get() + frame_delta);
+            let rendered = self.startup_intro_rendered;
+            if self.headless && rendered {
+                self.confirm_startup_intro_frame();
+            }
+            rendered
+        }
+
+        fn compose_startup_intro(&mut self) {
+            let Some(intro) = self.startup_intro.as_mut() else {
+                return;
+            };
+            if self.startup_intro_catalog_ready && intro.snapshot_capture_needed() {
+                if let Err(error) =
+                    intro.begin_launcher_snapshot_preparation(self.frame_target.cached_565())
+                {
+                    self.fail_startup_intro(error);
+                    return;
+                }
+            }
+            if let Err(error) = intro.poll_launcher_snapshot_preparation() {
+                self.fail_startup_intro(error);
+                return;
+            }
+            let buffer_index = (intro.frame() & 1) as u8;
+            if let Err(error) = intro.render_into(
+                self.frame_target.cached_565_mut(),
+                buffer_index,
+                self.frame_width,
+            ) {
+                self.fail_startup_intro(error);
+                return;
+            }
+            self.startup_intro_rendered = true;
+        }
+
+        fn confirm_startup_intro_frame(&mut self) {
+            if !self.startup_intro_rendered {
+                return;
+            }
+            let refresh_period_us = u64::from(1_000_000_u32.saturating_add(self.refresh_hz / 2))
+                / u64::from(self.refresh_hz.max(1));
+            let completed = self
+                .startup_intro
+                .as_mut()
+                .is_some_and(|intro| intro.note_presented(refresh_period_us));
+            if completed {
+                let restored = self.startup_intro.as_ref().is_some_and(|intro| {
+                    intro.restore_handoff_snapshot(self.frame_target.cached_565_mut())
+                });
+                if !restored {
+                    self.startup_intro_failure =
+                        Some("startup intro handoff cache geometry mismatch".to_owned());
+                }
+                self.startup_intro = None;
+                self.startup_intro_rendered = false;
+                if let Some(window) = self.native_window.as_ref() {
+                    window.set_title(&self.window_title());
+                    window.request_redraw();
+                }
+            }
+        }
+
+        fn start_startup_intro_replay(&mut self) {
+            let display = self.display_profile.display();
+            match StartupIntroPlayback::new(&display) {
+                Ok(intro) => {
+                    self.cold_start_mode = ColdStartMode::Force;
+                    self.startup_intro = Some(intro);
+                    self.startup_intro_catalog_ready = true;
+                    self.startup_intro_failure = None;
+                    if let Some(window) = self.native_window.as_ref() {
+                        window.set_title(&self.window_title());
+                        window.request_redraw();
+                    }
+                }
+                Err(error) => self.fail_startup_intro(error),
+            }
+        }
+
+        fn fail_startup_intro(&mut self, error: String) {
+            eprintln!("startup intro failed open: {error}");
+            self.startup_intro = None;
+            self.startup_intro_rendered = false;
+            self.startup_intro_failure = Some(error);
+            if let Some(window) = self.native_window.as_ref() {
+                window.set_title(&self.window_title());
+                window.request_redraw();
+            }
         }
 
         fn prime_crt_backdrop(&mut self, scenario: Scenario) {
@@ -2160,6 +2295,7 @@ mod macos {
                             .selection
                             .min(self.catalog.games.len().saturating_sub(1));
                         bridge.set_catalog_scan_visible(false);
+                        self.startup_intro_catalog_ready = true;
                         self.sync_launcher_navigation();
                         if let Some(window) = self.native_window.as_ref() {
                             window.set_title(&self.window_title());
@@ -2174,6 +2310,9 @@ mod macos {
                         bridge.set_catalog_scan_percent(0);
                         self.catalog_source = "catalog:scan-failed".to_owned();
                         eprintln!("catalog scan failed: {error}");
+                        if self.startup_intro.is_some() {
+                            self.fail_startup_intro(error.clone());
+                        }
                         keep_receiver = false;
                     }
                 }
@@ -2265,7 +2404,7 @@ mod macos {
         }
 
         fn render(&mut self) {
-            self.compose_frame();
+            let startup_intro_rendered = self.compose_frame();
             let Some(window) = self.native_window.as_ref() else {
                 return;
             };
@@ -2296,6 +2435,9 @@ mod macos {
             let mut buffer = surface.buffer_mut().expect("map preview surface");
             buffer.copy_from_slice(&self.xrgb8888);
             buffer.present().expect("present preview surface");
+            if startup_intro_rendered {
+                self.confirm_startup_intro_frame();
+            }
         }
     }
 
@@ -2322,8 +2464,13 @@ mod macos {
                 WindowEvent::CloseRequested => event_loop.exit(),
                 WindowEvent::RedrawRequested => self.render(),
                 WindowEvent::KeyboardInput { event, .. } if !event.repeat => {
+                    if self.startup_intro.is_some() {
+                        return;
+                    }
                     if let PhysicalKey::Code(code) = event.physical_key {
-                        if event.state == ElementState::Pressed && shortcut_scenario(code).is_some()
+                        if event.state == ElementState::Pressed
+                            && (matches!(code, KeyCode::Digit8 | KeyCode::Numpad8)
+                                || shortcut_scenario(code).is_some())
                         {
                             self.handle_key(code);
                         } else if self.scenario.uses_launcher_navigation() {
@@ -2557,7 +2704,6 @@ mod macos {
             KeyCode::Digit5 | KeyCode::Numpad5 => Some(Scenario::Licenses),
             KeyCode::Digit6 | KeyCode::Numpad6 => Some(Scenario::Info),
             KeyCode::Digit7 | KeyCode::Numpad7 => Some(Scenario::ScreensaverSettings),
-            KeyCode::Digit8 | KeyCode::Numpad8 => Some(Scenario::Startup),
             KeyCode::Digit9 | KeyCode::Numpad9 => Some(Scenario::Confirm),
             KeyCode::Digit0 | KeyCode::Numpad0 => Some(Scenario::CatalogScan),
             KeyCode::KeyA => Some(Scenario::Arcade),
@@ -2841,6 +2987,43 @@ mod macos {
         arguments
     }
 
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+    enum ColdStartMode {
+        #[default]
+        Auto,
+        Force,
+        Skip,
+    }
+
+    impl ColdStartMode {
+        fn parse(value: &str) -> Result<Self, String> {
+            match value.trim().to_ascii_lowercase().as_str() {
+                "auto" => Ok(Self::Auto),
+                "force" => Ok(Self::Force),
+                "skip" => Ok(Self::Skip),
+                _ => Err(format!(
+                    "invalid cold-start mode {value:?}; expected auto, force, or skip"
+                )),
+            }
+        }
+
+        const fn id(self) -> &'static str {
+            match self {
+                Self::Auto => "auto",
+                Self::Force => "force",
+                Self::Skip => "skip",
+            }
+        }
+
+        const fn should_start(self, headless: bool, catalog_missing: bool) -> bool {
+            match self {
+                Self::Auto => !headless && catalog_missing,
+                Self::Force => true,
+                Self::Skip => false,
+            }
+        }
+    }
+
     struct PreviewOptions {
         scenario: Scenario,
         frame: u64,
@@ -2852,6 +3035,7 @@ mod macos {
         cache_root: Option<PathBuf>,
         no_scan: bool,
         no_download: bool,
+        cold_start_mode: ColdStartMode,
         display_profile: DisplayProfile,
         orientation: ScreenOrientation,
         navigation_transition_demo: Option<NavigationTransitionEdge>,
@@ -2877,6 +3061,8 @@ mod macos {
             let mut cache_root = None;
             let mut no_scan = false;
             let mut no_download = false;
+            let mut cold_start_mode = ColdStartMode::Auto;
+            let mut cold_start_explicit = false;
             let mut display_profile = DisplayProfile::Hdmi;
             let mut orientation = ScreenOrientation::Normal;
             let mut navigation_transition_demo = None;
@@ -2938,6 +3124,13 @@ mod macos {
                     }
                     "--no-scan" => no_scan = true,
                     "--no-download" => no_download = true,
+                    "--cold-start" => {
+                        let value = arguments
+                            .next()
+                            .ok_or("--cold-start requires auto, force, or skip")?;
+                        cold_start_mode = ColdStartMode::parse(&value)?;
+                        cold_start_explicit = true;
+                    }
                     "--navigation-transition-duration-ms" => {
                         let value = arguments
                             .next()
@@ -3018,7 +3211,7 @@ mod macos {
                     }
                     "--help" | "-h" => {
                         return Err(
-                            "usage: mister-magik-ui-preview [--list-scenes] [--check-baselines DIR | --matrix-output DIR [--expected-matrix DIR --mismatch-output DIR]] [--content auto|fixtures|card] [--sd-root PATH] [--cache-root PATH] [--no-scan] [--no-download] [--navigation-transition-duration-ms 100..10000] [--navigation-transition-demo home-consoles|home-arcade|consoles-system] [--settings-page-transition-demo] [--navigation-transition-demo-reverse] [--display-profile hdmi|crt-240p|crt-288p|crt-480p|crt-576p] [--orientation normal|monitor-clockwise|monitor-counterclockwise] [--scenario NAME] [--refresh-rate auto|60|120] [--frame N] [--output FILE.ppm|FILE.png] [--provenance-output FILE.json]"
+                            "usage: mister-magik-ui-preview [--list-scenes] [--check-baselines DIR | --matrix-output DIR [--expected-matrix DIR --mismatch-output DIR]] [--content auto|fixtures|card] [--sd-root PATH] [--cache-root PATH] [--no-scan] [--no-download] [--cold-start auto|force|skip] [--navigation-transition-duration-ms 100..10000] [--navigation-transition-demo home-consoles|home-arcade|consoles-system] [--settings-page-transition-demo] [--navigation-transition-demo-reverse] [--display-profile hdmi|crt-240p|crt-288p|crt-480p|crt-576p] [--orientation normal|monitor-clockwise|monitor-counterclockwise] [--scenario NAME] [--refresh-rate auto|60|120] [--frame N] [--output FILE.ppm|FILE.png] [--provenance-output FILE.json]"
                                 .into(),
                         );
                     }
@@ -3062,6 +3255,15 @@ mod macos {
                         .into(),
                 );
             }
+            if scenario == Scenario::Startup {
+                if cold_start_explicit && cold_start_mode == ColdStartMode::Skip {
+                    return Err(
+                        "--scenario startup cannot be combined with --cold-start skip".into(),
+                    );
+                }
+                scenario = Scenario::Home;
+                cold_start_mode = ColdStartMode::Force;
+            }
             Ok(Self {
                 scenario,
                 frame,
@@ -3073,6 +3275,7 @@ mod macos {
                 cache_root,
                 no_scan,
                 no_download,
+                cold_start_mode,
                 display_profile,
                 orientation,
                 navigation_transition_demo,
@@ -3346,6 +3549,8 @@ mod macos {
         refresh_hz: u32,
         fixed_time_us: u64,
         scene_seed: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        cold_start: Option<&'static str>,
         rgb565_hash: String,
         rgb565_conversion: &'static str,
         renderer: &'static str,
@@ -3379,6 +3584,8 @@ mod macos {
                     .scenario
                     .deterministic_seed()
                     .map(|seed| format!("{seed:016x}")),
+                cold_start: (options.cold_start_mode != ColdStartMode::Auto)
+                    .then(|| options.cold_start_mode.id()),
                 rgb565_hash: format!("{rgb565_hash:016x}"),
                 rgb565_conversion: RGB565_CONVERSION_VERSION,
                 renderer: PREVIEW_RENDERER_ID,
@@ -4175,6 +4382,38 @@ mod macos {
             assert_eq!(options.content_mode, ContentMode::Auto);
             assert_eq!(options.display_profile, DisplayProfile::Hdmi);
             assert_eq!(options.orientation, ScreenOrientation::Normal);
+            assert_eq!(options.cold_start_mode, ColdStartMode::Auto);
+        }
+
+        #[test]
+        fn cold_start_modes_and_startup_alias_are_explicit() {
+            let forced = PreviewOptions::parse(
+                ["--cold-start", "force", "--scenario", "arcade"].map(String::from),
+            )
+            .unwrap();
+            assert_eq!(forced.scenario, Scenario::Arcade);
+            assert_eq!(forced.cold_start_mode, ColdStartMode::Force);
+
+            let legacy =
+                PreviewOptions::parse(["--scenario", "startup"].map(String::from)).unwrap();
+            assert_eq!(legacy.scenario, Scenario::Home);
+            assert_eq!(legacy.cold_start_mode, ColdStartMode::Force);
+
+            assert!(
+                PreviewOptions::parse(
+                    ["--scenario", "startup", "--cold-start", "skip"].map(String::from)
+                )
+                .is_err()
+            );
+        }
+
+        #[test]
+        fn automatic_cold_start_is_interactive_and_missing_catalog_only() {
+            assert!(ColdStartMode::Auto.should_start(false, true));
+            assert!(!ColdStartMode::Auto.should_start(false, false));
+            assert!(!ColdStartMode::Auto.should_start(true, true));
+            assert!(ColdStartMode::Force.should_start(true, false));
+            assert!(!ColdStartMode::Skip.should_start(false, true));
         }
 
         #[test]
@@ -4587,6 +4826,7 @@ mod macos {
                 shortcut_scenario(KeyCode::Numpad7),
                 Some(Scenario::ScreensaverSettings)
             );
+            assert_eq!(shortcut_scenario(KeyCode::Numpad8), None);
         }
 
         #[test]
@@ -4667,6 +4907,7 @@ mod macos {
             assert_provenance_change(&base, |value| value.refresh_hz = 120);
             assert_provenance_change(&base, |value| value.fixed_time_us += 1);
             assert_provenance_change(&base, |value| value.scene_seed = None);
+            assert_provenance_change(&base, |value| value.cold_start = Some("force"));
             assert_provenance_change(&base, |value| value.rgb565_hash.push('0'));
             assert_provenance_change(&base, |value| value.fixture_sha256.push('0'));
             assert_provenance_change(&base, |value| value.asset_bundle_sha256.push('0'));
