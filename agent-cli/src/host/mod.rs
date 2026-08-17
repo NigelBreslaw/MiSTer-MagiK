@@ -602,6 +602,7 @@ impl NativeDevice {
         artwork_expected_sha256: &str,
     ) -> std::result::Result<(), DeviceFailure> {
         let prepared = self.prepare(DeviceAccess::AGENT_MUTATION)?;
+        let mut timings = Vec::new();
         deliver_runtime_transaction(
             &prepared.config,
             RuntimeDeliveryBundle {
@@ -614,6 +615,7 @@ impl NativeDevice {
                 artwork_remote: DEVELOPMENT_ARTWORK_REMOTE.as_str(),
                 artwork_expected_sha256,
             },
+            &mut timings,
         )
         .map(|_| ())
     }
@@ -624,7 +626,9 @@ impl NativeDevice {
         expected_sha256: &str,
     ) -> std::result::Result<(), DeviceFailure> {
         let prepared = self.prepare(DeviceAccess::AGENT_MUTATION)?;
-        deliver_platform_transaction(&prepared.config, stage, expected_sha256).map(|_| ())
+        let mut timings = Vec::new();
+        deliver_platform_transaction(&prepared.config, stage, expected_sha256, &mut timings)
+            .map(|_| ())
     }
 
     pub(crate) fn deliver_local_main(
@@ -635,12 +639,14 @@ impl NativeDevice {
         expected_gui_sha256: &str,
     ) -> std::result::Result<(), DeviceFailure> {
         let prepared = self.prepare(DeviceAccess::AGENT_MUTATION)?;
+        let mut timings = Vec::new();
         deliver_local_main_transaction(
             &prepared.config,
             local,
             manifest_local,
             expected_main_sha256,
             expected_gui_sha256,
+            &mut timings,
         )
         .map(|_| ())
     }
@@ -2079,9 +2085,50 @@ fn validate_terminal_compatibility_evidence(evidence: &Value) -> Result<&str> {
     Ok(recovery_state)
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum DeliveryLane {
+    Runtime,
+    Platform,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum DeliveryTimingStatus {
+    Passed,
+    Failed,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct DeliveryTransferMetrics {
+    pub(crate) files: u64,
+    pub(crate) bytes: u64,
+    pub(crate) upload_ms: u64,
+    pub(crate) deploy_ms: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum DeliveryTimingSample {
+    Transfer {
+        lane: DeliveryLane,
+        status: DeliveryTimingStatus,
+        metrics: DeliveryTransferMetrics,
+    },
+    Smoke {
+        lane: DeliveryLane,
+        status: DeliveryTimingStatus,
+        smoke_ms: u64,
+    },
+}
+
 trait CoherentDeliveryActions {
+    fn timing_lane(&self) -> Option<DeliveryLane> {
+        None
+    }
+
     fn snapshot(&mut self) -> std::result::Result<(), DeviceFailure>;
-    fn deploy(&mut self) -> std::result::Result<(), DeviceFailure>;
+    fn deploy(
+        &mut self,
+        metrics: &mut DeliveryTransferMetrics,
+    ) -> std::result::Result<(), DeviceFailure>;
     fn activate(&mut self) -> std::result::Result<(), DeviceFailure>;
     fn reboot(&mut self) -> std::result::Result<(), DeviceFailure>;
     fn smoke(&mut self) -> std::result::Result<String, DeviceFailure>;
@@ -2096,6 +2143,7 @@ trait CoherentDeliveryActions {
 fn run_coherent_delivery(
     actions: &mut dyn CoherentDeliveryActions,
     reboots: bool,
+    timings: &mut Vec<DeliveryTimingSample>,
 ) -> std::result::Result<String, DeviceFailure> {
     actions.snapshot()?;
     let delivery = (|| {
@@ -2104,7 +2152,22 @@ fn run_coherent_delivery(
                 "delivery interrupted".into(),
             ));
         }
-        actions.deploy()?;
+        let mut transfer = DeliveryTransferMetrics::default();
+        let deploy_started = Instant::now();
+        let deploy = actions.deploy(&mut transfer);
+        transfer.deploy_ms = elapsed_millis(deploy_started);
+        if let Some(lane) = actions.timing_lane() {
+            timings.push(DeliveryTimingSample::Transfer {
+                lane,
+                status: if deploy.is_ok() {
+                    DeliveryTimingStatus::Passed
+                } else {
+                    DeliveryTimingStatus::Failed
+                },
+                metrics: transfer,
+            });
+        }
+        deploy?;
         if actions.interrupted() {
             return Err(DeviceFailure::OperationFailed(
                 "delivery interrupted".into(),
@@ -2119,7 +2182,20 @@ fn run_coherent_delivery(
                 "delivery interrupted".into(),
             ));
         }
-        let detail = actions.smoke()?;
+        let smoke_started = Instant::now();
+        let smoke = actions.smoke();
+        if let Some(lane) = actions.timing_lane() {
+            timings.push(DeliveryTimingSample::Smoke {
+                lane,
+                status: if smoke.is_ok() {
+                    DeliveryTimingStatus::Passed
+                } else {
+                    DeliveryTimingStatus::Failed
+                },
+                smoke_ms: elapsed_millis(smoke_started),
+            });
+        }
+        let detail = smoke?;
         if actions.interrupted() {
             return Err(DeviceFailure::OperationFailed(
                 "delivery interrupted".into(),
@@ -2171,6 +2247,10 @@ struct RuntimeDeliveryActions<'a> {
 }
 
 impl CoherentDeliveryActions for RuntimeDeliveryActions<'_> {
+    fn timing_lane(&self) -> Option<DeliveryLane> {
+        Some(DeliveryLane::Runtime)
+    }
+
     fn snapshot(&mut self) -> std::result::Result<(), DeviceFailure> {
         exec_checked(
             self.session,
@@ -2185,9 +2265,22 @@ impl CoherentDeliveryActions for RuntimeDeliveryActions<'_> {
         .map_err(device_failure)
     }
 
-    fn deploy(&mut self) -> std::result::Result<(), DeviceFailure> {
+    fn deploy(
+        &mut self,
+        metrics: &mut DeliveryTransferMetrics,
+    ) -> std::result::Result<(), DeviceFailure> {
         let artwork_upload = format!("{}.upload", self.artwork_remote);
-        put(self.session, self.artwork_local, &artwork_upload).map_err(device_failure)?;
+        let artwork_bytes = fs::metadata(self.artwork_local)
+            .map_err(device_failure)?
+            .len();
+        put_measured(
+            &SshDeployRemote { sess: self.session },
+            self.artwork_local,
+            &artwork_upload,
+            artwork_bytes,
+            metrics,
+        )
+        .map_err(device_failure)?;
         exec_checked(
             self.session,
             "SNES artwork activation",
@@ -2206,6 +2299,7 @@ impl CoherentDeliveryActions for RuntimeDeliveryActions<'_> {
             self.manifest_local,
             self.manifest_remote,
             self.expected_sha256,
+            metrics,
         )
         .map_err(device_failure)
     }
@@ -2298,6 +2392,7 @@ struct RuntimeDeliveryBundle<'a> {
 fn deliver_runtime_transaction(
     config: &NativeDeviceConfig,
     bundle: RuntimeDeliveryBundle<'_>,
+    timings: &mut Vec<DeliveryTimingSample>,
 ) -> std::result::Result<String, DeviceFailure> {
     let RuntimeDeliveryBundle {
         local,
@@ -2347,6 +2442,7 @@ fn deliver_runtime_transaction(
             artwork_expected_sha256,
         },
         false,
+        timings,
     )
 }
 
@@ -2360,6 +2456,10 @@ struct PlatformDeliveryActions<'a> {
 }
 
 impl CoherentDeliveryActions for PlatformDeliveryActions<'_> {
+    fn timing_lane(&self) -> Option<DeliveryLane> {
+        Some(DeliveryLane::Platform)
+    }
+
     fn snapshot(&mut self) -> std::result::Result<(), DeviceFailure> {
         let reconciliation = exec_checked_output(
             self.session,
@@ -2377,9 +2477,12 @@ impl CoherentDeliveryActions for PlatformDeliveryActions<'_> {
         .map_err(device_failure)
     }
 
-    fn deploy(&mut self) -> std::result::Result<(), DeviceFailure> {
+    fn deploy(
+        &mut self,
+        metrics: &mut DeliveryTransferMetrics,
+    ) -> std::result::Result<(), DeviceFailure> {
         self.transaction
-            .run(self.session)
+            .run(self.session, metrics)
             .map(|_| ())
             .map_err(device_failure)
     }
@@ -2435,6 +2538,7 @@ fn deliver_platform_transaction(
     config: &NativeDeviceConfig,
     stage: &Path,
     expected_sha256: &str,
+    timings: &mut Vec<DeliveryTimingSample>,
 ) -> std::result::Result<String, DeviceFailure> {
     require_delivery_sha256(expected_sha256)?;
     let transaction = PlatformDeployTransaction::validate(stage).map_err(device_failure)?;
@@ -2449,6 +2553,7 @@ fn deliver_platform_transaction(
             recovery_reboot_used: false,
         },
         true,
+        timings,
     )
 }
 
@@ -2636,7 +2741,10 @@ impl CoherentDeliveryActions for LocalMainDeliveryActions<'_> {
         .map_err(device_failure)
     }
 
-    fn deploy(&mut self) -> std::result::Result<(), DeviceFailure> {
+    fn deploy(
+        &mut self,
+        metrics: &mut DeliveryTransferMetrics,
+    ) -> std::result::Result<(), DeviceFailure> {
         let candidate = parse_local_main_manifest(self.manifest_local).map_err(device_failure)?;
         validate_local_main_overlay_preserves_installed(
             self.installed_manifest.as_ref().ok_or_else(|| {
@@ -2646,12 +2754,22 @@ impl CoherentDeliveryActions for LocalMainDeliveryActions<'_> {
         )
         .map_err(|error| DeviceFailure::ArtifactMismatch(error.to_string()))?;
         let session = self.connect()?;
-        put(&session, self.local, &format!("{LOCAL_MAIN_REMOTE}.upload"))
-            .map_err(device_failure)?;
-        put(
-            &session,
+        put_measured(
+            &SshDeployRemote { sess: &session },
+            self.local,
+            &format!("{LOCAL_MAIN_REMOTE}.upload"),
+            fs::metadata(self.local).map_err(device_failure)?.len(),
+            metrics,
+        )
+        .map_err(device_failure)?;
+        put_measured(
+            &SshDeployRemote { sess: &session },
             self.manifest_local,
             &format!("{LOCAL_MAIN_MANIFEST_REMOTE}.upload"),
+            fs::metadata(self.manifest_local)
+                .map_err(device_failure)?
+                .len(),
+            metrics,
         )
         .map_err(device_failure)?;
         exec_checked(
@@ -2892,6 +3010,7 @@ fn deliver_local_main_transaction(
     manifest_local: &Path,
     expected_main_sha256: &str,
     expected_gui_sha256: &str,
+    timings: &mut Vec<DeliveryTimingSample>,
 ) -> std::result::Result<String, DeviceFailure> {
     let _signal_guard = LocalMainDeliverySignalGuard::install();
     require_delivery_sha256(expected_main_sha256)?;
@@ -2916,6 +3035,7 @@ fn deliver_local_main_transaction(
             recovery_reboot_used: false,
         },
         true,
+        timings,
     )
 }
 
@@ -21265,6 +21385,7 @@ fn deploy_magik_bundle(
     manifest_local: &Path,
     manifest_remote: &str,
     expected_sha256: &str,
+    metrics: &mut DeliveryTransferMetrics,
 ) -> Result<()> {
     let total_t = Instant::now();
     let validate_t = Instant::now();
@@ -21276,7 +21397,7 @@ fn deploy_magik_bundle(
         expected_sha256,
     )?;
     let validate_ms = validate_t.elapsed().as_millis();
-    let report = transaction.run_ssh(sess, validate_ms, total_t)?;
+    let report = transaction.run_ssh(sess, validate_ms, total_t, metrics)?;
     report.print();
     Ok(())
 }
@@ -21405,6 +21526,9 @@ struct MagikDeployReport {
     chmod_size_ms: u128,
     resume_ms: u128,
     cleanup_ms: u128,
+    transferred_files: u64,
+    transferred_bytes: u64,
+    transfer_ms: u64,
 }
 
 impl MagikDeployTransaction {
@@ -21457,8 +21581,9 @@ impl MagikDeployTransaction {
         sess: &Session,
         validate_ms: u128,
         total_t: Instant,
+        metrics: &mut DeliveryTransferMetrics,
     ) -> Result<MagikDeployReport> {
-        self.run_with(&SshDeployRemote { sess }, validate_ms, total_t)
+        self.run_with(&SshDeployRemote { sess }, validate_ms, total_t, metrics)
     }
 
     fn run_with<R: DeployRemote>(
@@ -21466,6 +21591,7 @@ impl MagikDeployTransaction {
         remote: &R,
         validate_ms: u128,
         total_t: Instant,
+        metrics: &mut DeliveryTransferMetrics,
     ) -> Result<MagikDeployReport> {
         let prepare_ms = match self.prepare(remote) {
             Ok(elapsed) => elapsed,
@@ -21483,8 +21609,17 @@ impl MagikDeployTransaction {
             suspended = true;
 
             let upload_t = Instant::now();
-            remote.put(&self.local, &self.upload)?;
-            remote.put(&self.manifest.local, &self.manifest.upload)?;
+            let transfer_before = metrics.upload_ms;
+            put_measured(remote, &self.local, &self.upload, self.local_bytes, metrics)?;
+            let manifest_bytes = fs::metadata(&self.manifest.local)?.len();
+            put_measured(
+                remote,
+                &self.manifest.local,
+                &self.manifest.upload,
+                manifest_bytes,
+                metrics,
+            )?;
+            let transfer_ms = metrics.upload_ms.saturating_sub(transfer_before);
             self.verify_uploads(remote)?;
             let upload_ms = upload_t.elapsed().as_millis();
 
@@ -21513,6 +21648,9 @@ impl MagikDeployTransaction {
                 chmod_size_ms,
                 resume_ms,
                 cleanup_ms,
+                transferred_files: 2,
+                transferred_bytes: self.local_bytes.saturating_add(manifest_bytes),
+                transfer_ms,
             })
         })();
 
@@ -21637,6 +21775,27 @@ trait DeployRemote {
     fn put(&self, local: &Path, remote: &str) -> Result<()>;
 }
 
+fn elapsed_millis(started: Instant) -> u64 {
+    started.elapsed().as_millis().try_into().unwrap_or(u64::MAX)
+}
+
+fn put_measured<R: DeployRemote>(
+    remote: &R,
+    local: &Path,
+    destination: &str,
+    bytes: u64,
+    metrics: &mut DeliveryTransferMetrics,
+) -> Result<()> {
+    let started = Instant::now();
+    let result = remote.put(local, destination);
+    metrics.upload_ms = metrics.upload_ms.saturating_add(elapsed_millis(started));
+    if result.is_ok() {
+        metrics.files = metrics.files.saturating_add(1);
+        metrics.bytes = metrics.bytes.saturating_add(bytes);
+    }
+    result
+}
+
 struct SshDeployRemote<'a> {
     sess: &'a Session,
 }
@@ -21665,7 +21824,7 @@ impl MagikDeployReport {
         let finish_ms = self.swap_ms + self.chmod_size_ms;
         let resume_size_ms = self.resume_ms + self.chmod_size_ms;
         println!(
-            "deploy_runtime_bundle local={} remote={} local_bytes={} remote_bytes={} total_ms={} prepare_ms={} suspend_ms={} put_ms={} finish_ms={} resume_size_ms={} validate_ms={} upload_ms={} swap_ms={} chmod_size_ms={} resume_ms={} cleanup_ms={}",
+            "deploy_runtime_bundle local={} remote={} local_bytes={} remote_bytes={} total_ms={} prepare_ms={} suspend_ms={} put_ms={} finish_ms={} resume_size_ms={} validate_ms={} upload_ms={} swap_ms={} chmod_size_ms={} resume_ms={} cleanup_ms={} transferred_files={} transferred_bytes={} transfer_ms={}",
             self.local.display(),
             self.remote,
             self.local_bytes,
@@ -21681,7 +21840,10 @@ impl MagikDeployReport {
             self.swap_ms,
             self.chmod_size_ms,
             self.resume_ms,
-            self.cleanup_ms
+            self.cleanup_ms,
+            self.transferred_files,
+            self.transferred_bytes,
+            self.transfer_ms,
         );
     }
 }
@@ -26826,11 +26988,21 @@ H: Handlers=event3 js0"#
     }
 
     impl CoherentDeliveryActions for ScriptedCoherentDelivery {
+        fn timing_lane(&self) -> Option<DeliveryLane> {
+            Some(DeliveryLane::Runtime)
+        }
+
         fn snapshot(&mut self) -> std::result::Result<(), DeviceFailure> {
             self.step("snapshot")
         }
 
-        fn deploy(&mut self) -> std::result::Result<(), DeviceFailure> {
+        fn deploy(
+            &mut self,
+            metrics: &mut DeliveryTransferMetrics,
+        ) -> std::result::Result<(), DeviceFailure> {
+            metrics.files = 3;
+            metrics.bytes = 1_024;
+            metrics.upload_ms = 8;
             self.step("deploy")
         }
 
@@ -26862,20 +27034,42 @@ H: Handlers=event3 js0"#
     #[test]
     fn coherent_runtime_commits_without_reboot() {
         let mut actions = ScriptedCoherentDelivery::default();
+        let mut timings = Vec::new();
         assert_eq!(
-            run_coherent_delivery(&mut actions, false).unwrap(),
+            run_coherent_delivery(&mut actions, false, &mut timings).unwrap(),
             "healthy"
         );
         assert_eq!(
             actions.events,
             ["snapshot", "deploy", "activate", "smoke", "commit"]
         );
+        assert!(matches!(
+            timings.as_slice(),
+            [
+                DeliveryTimingSample::Transfer {
+                    lane: DeliveryLane::Runtime,
+                    status: DeliveryTimingStatus::Passed,
+                    metrics: DeliveryTransferMetrics {
+                        files: 3,
+                        bytes: 1_024,
+                        upload_ms: 8,
+                        ..
+                    },
+                },
+                DeliveryTimingSample::Smoke {
+                    lane: DeliveryLane::Runtime,
+                    status: DeliveryTimingStatus::Passed,
+                    ..
+                },
+            ]
+        ));
     }
 
     #[test]
     fn coherent_platform_reboots_and_commits_after_smoke() {
         let mut actions = ScriptedCoherentDelivery::default();
-        run_coherent_delivery(&mut actions, true).unwrap();
+        let mut timings = Vec::new();
+        run_coherent_delivery(&mut actions, true, &mut timings).unwrap();
         assert_eq!(
             actions.events,
             [
@@ -26890,19 +27084,28 @@ H: Handlers=event3 js0"#
             fail_at: Some("smoke"),
             ..ScriptedCoherentDelivery::default()
         };
-        assert!(run_coherent_delivery(&mut runtime, false).is_err());
+        let mut runtime_timings = Vec::new();
+        assert!(run_coherent_delivery(&mut runtime, false, &mut runtime_timings).is_err());
         assert_eq!(
             runtime.events,
             [
                 "snapshot", "deploy", "activate", "smoke", "rollback", "health"
             ]
         );
+        assert!(matches!(
+            runtime_timings.last(),
+            Some(DeliveryTimingSample::Smoke {
+                status: DeliveryTimingStatus::Failed,
+                ..
+            })
+        ));
 
         let mut platform = ScriptedCoherentDelivery {
             fail_at: Some("smoke"),
             ..ScriptedCoherentDelivery::default()
         };
-        assert!(run_coherent_delivery(&mut platform, true).is_err());
+        let mut platform_timings = Vec::new();
+        assert!(run_coherent_delivery(&mut platform, true, &mut platform_timings).is_err());
         assert_eq!(
             platform.events,
             [
@@ -26918,9 +27121,23 @@ H: Handlers=event3 js0"#
             rollback_fails: true,
             ..ScriptedCoherentDelivery::default()
         };
+        let mut timings = Vec::new();
         assert!(matches!(
-            run_coherent_delivery(&mut actions, false),
+            run_coherent_delivery(&mut actions, false, &mut timings),
             Err(DeviceFailure::RecoveryRequired(_))
+        ));
+        assert!(matches!(
+            timings.as_slice(),
+            [DeliveryTimingSample::Transfer {
+                status: DeliveryTimingStatus::Failed,
+                metrics: DeliveryTransferMetrics {
+                    files: 3,
+                    bytes: 1_024,
+                    upload_ms: 8,
+                    ..
+                },
+                ..
+            }]
         ));
     }
 
@@ -26931,7 +27148,7 @@ H: Handlers=event3 js0"#
             ..ScriptedCoherentDelivery::default()
         };
         assert!(matches!(
-            run_coherent_delivery(&mut actions, false),
+            run_coherent_delivery(&mut actions, false, &mut Vec::new()),
             Err(DeviceFailure::RecoveryRequired(_))
         ));
         assert_eq!(
@@ -27047,8 +27264,11 @@ H: Handlers=event3 js0"#
         )
         .unwrap();
         let remote = scripted_deploy_remote(3);
+        let mut metrics = DeliveryTransferMetrics::default();
 
-        tx.run_with(&remote, 0, Instant::now()).unwrap();
+        let report = tx
+            .run_with(&remote, 0, Instant::now(), &mut metrics)
+            .unwrap();
         let events = remote.events();
         assert!(events[2].ends_with("mister-magik-fb.upload"));
         assert!(events[3].ends_with("platform-v3.manifest.upload"));
@@ -27057,6 +27277,14 @@ H: Handlers=event3 js0"#
             events[5].find("mister-magik-fb.upload").unwrap()
                 < events[5].find("platform-v3.manifest.upload").unwrap()
         );
+        assert_eq!(metrics.files, 2);
+        assert_eq!(
+            metrics.bytes,
+            fs::metadata(&local).unwrap().len() + fs::metadata(&manifest).unwrap().len()
+        );
+        assert_eq!(report.transferred_files, metrics.files);
+        assert_eq!(report.transferred_bytes, metrics.bytes);
+        assert_eq!(report.transfer_ms, metrics.upload_ms);
         let _ = fs::remove_file(local);
         let _ = fs::remove_file(manifest);
     }
@@ -27078,8 +27306,12 @@ H: Handlers=event3 js0"#
         .unwrap();
         let mut remote = scripted_deploy_remote(3);
         remote.fail_upload = true;
+        let mut metrics = DeliveryTransferMetrics::default();
 
-        assert!(tx.run_with(&remote, 0, Instant::now()).is_err());
+        assert!(
+            tx.run_with(&remote, 0, Instant::now(), &mut metrics)
+                .is_err()
+        );
         let events = remote.events();
 
         assert!(events[1].contains("mister_magik_suspend"));
@@ -27087,6 +27319,8 @@ H: Handlers=event3 js0"#
         assert!(events[3].starts_with("rm -f "));
         assert!(events[4].contains("mister_magik_resume"));
         assert_eq!(events.len(), 5);
+        assert_eq!(metrics.files, 0);
+        assert_eq!(metrics.bytes, 0);
         let _ = fs::remove_file(local);
         let _ = fs::remove_file(manifest);
     }
@@ -27109,7 +27343,15 @@ H: Handlers=event3 js0"#
         let mut remote = scripted_deploy_remote(3);
         remote.fail_command_containing = Some("sha256sum");
 
-        assert!(tx.run_with(&remote, 0, Instant::now()).is_err());
+        assert!(
+            tx.run_with(
+                &remote,
+                0,
+                Instant::now(),
+                &mut DeliveryTransferMetrics::default(),
+            )
+            .is_err()
+        );
         let events = remote.events();
         assert!(!events.iter().any(|event| event.contains("; mv ")));
         assert!(
@@ -27139,7 +27381,15 @@ H: Handlers=event3 js0"#
         let mut remote = scripted_deploy_remote(3);
         remote.fail_command_containing = Some("mkdir -p");
 
-        assert!(tx.run_with(&remote, 0, Instant::now()).is_err());
+        assert!(
+            tx.run_with(
+                &remote,
+                0,
+                Instant::now(),
+                &mut DeliveryTransferMetrics::default(),
+            )
+            .is_err()
+        );
         let events = remote.events();
 
         assert_eq!(events.len(), 2);
@@ -27954,12 +28204,15 @@ H: Handlers=event3 js0"#
     fn platform_deploy_skips_every_matching_remote_artifact() {
         let (stage, transaction) = platform_stage("platform-stage-unchanged");
         let remote = scripted_platform_remote(platform_inventory(&transaction, &[]));
+        let mut metrics = DeliveryTransferMetrics::default();
 
-        let report = transaction.run_with(&remote).unwrap();
+        let report = transaction.run_with(&remote, &mut metrics).unwrap();
 
         assert_eq!(report.changed_files, 0);
         assert_eq!(report.skipped_files, platform_deploy_files().len());
         assert_eq!(report.transferred_bytes, 0);
+        assert_eq!(report.transfer_ms, 0);
+        assert_eq!(metrics, DeliveryTransferMetrics::default());
         assert_eq!(remote.events().len(), 1, "only inventory should run");
         fs::remove_dir_all(stage).unwrap();
     }
@@ -27973,8 +28226,9 @@ H: Handlers=event3 js0"#
             &transaction,
             &[(gui, false), (manifest, false)],
         ));
+        let mut metrics = DeliveryTransferMetrics::default();
 
-        let report = transaction.run_with(&remote).unwrap();
+        let report = transaction.run_with(&remote, &mut metrics).unwrap();
         let events = remote.events();
         let uploads = events
             .iter()
@@ -27983,6 +28237,9 @@ H: Handlers=event3 js0"#
         let activation = events.last().unwrap();
 
         assert_eq!(report.changed_files, 2);
+        assert_eq!(metrics.files, 2);
+        assert_eq!(metrics.bytes, report.transferred_bytes);
+        assert_eq!(report.transfer_ms, metrics.upload_ms);
         assert_eq!(uploads.len(), 2);
         assert!(
             uploads
@@ -28013,7 +28270,9 @@ H: Handlers=event3 js0"#
         let manager = "/media/fat/mister-magik-dev/mister-magik-manager";
         let remote = scripted_platform_remote(platform_inventory(&transaction, &[(manager, true)]));
 
-        let report = transaction.run_with(&remote).unwrap();
+        let report = transaction
+            .run_with(&remote, &mut DeliveryTransferMetrics::default())
+            .unwrap();
 
         assert_eq!(report.changed_files, 1);
         assert!(remote.events().iter().any(
@@ -28027,7 +28286,10 @@ H: Handlers=event3 js0"#
         let (stage, transaction) = platform_stage("platform-stage-invalid-inventory");
         let remote = scripted_platform_remote("invalid".to_string());
 
-        let error = transaction.run_with(&remote).unwrap_err().to_string();
+        let error = transaction
+            .run_with(&remote, &mut DeliveryTransferMetrics::default())
+            .unwrap_err()
+            .to_string();
 
         assert!(error.contains("platform inventory returned"));
         assert!(

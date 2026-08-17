@@ -3,8 +3,8 @@
 
 use super::installed_layout::{app_path, arming_paths, paths};
 use super::{
-    DeployRemote, ExecOutput, Layout, Path, PathBuf, Result, Session, SshDeployRemote,
-    exec_failure_message, file_sha256, fs, sh, shell_sequence,
+    DeliveryTransferMetrics, DeployRemote, ExecOutput, Layout, Path, PathBuf, Result, Session,
+    SshDeployRemote, exec_failure_message, file_sha256, fs, put_measured, sh, shell_sequence,
 };
 
 const SNES_ARTWORK_SHA256: &str =
@@ -91,6 +91,7 @@ pub(super) struct PlatformDeployReport {
     pub(super) changed_files: usize,
     pub(super) skipped_files: usize,
     pub(super) transferred_bytes: u64,
+    pub(super) transfer_ms: u64,
 }
 
 impl PlatformDeployTransaction {
@@ -117,11 +118,19 @@ impl PlatformDeployTransaction {
         })
     }
 
-    pub(super) fn run(&self, sess: &Session) -> Result<PlatformDeployReport> {
-        self.run_with(&SshDeployRemote { sess })
+    pub(super) fn run(
+        &self,
+        sess: &Session,
+        metrics: &mut DeliveryTransferMetrics,
+    ) -> Result<PlatformDeployReport> {
+        self.run_with(&SshDeployRemote { sess }, metrics)
     }
 
-    pub(super) fn run_with<R: DeployRemote>(&self, remote: &R) -> Result<PlatformDeployReport> {
+    pub(super) fn run_with<R: DeployRemote>(
+        &self,
+        remote: &R,
+        metrics: &mut DeliveryTransferMetrics,
+    ) -> Result<PlatformDeployReport> {
         let inventory = remote.exec(&self.inventory_command())?;
         if let Some(message) = exec_failure_message("platform inventory", &inventory) {
             return Err(message.into());
@@ -139,10 +148,11 @@ impl PlatformDeployTransaction {
             changed_files: changed.len(),
             skipped_files: self.files.len().saturating_sub(changed.len()),
             transferred_bytes: changed.iter().map(|file| file.bytes).sum(),
+            transfer_ms: 0,
         };
         if changed.is_empty() {
             println!(
-                "platform deploy ok stage={} changed_files=0 skipped_files={} transferred_bytes=0",
+                "platform deploy ok stage={} changed_files=0 skipped_files={} transferred_bytes=0 transfer_ms=0",
                 self.stage.display(),
                 report.skipped_files,
             );
@@ -154,20 +164,30 @@ impl PlatformDeployTransaction {
         remote
             .exec(&format!("mkdir -p {} {}", sh(&fpga), sh(&snapshots)))
             .and_then(|output| checked_deploy_output("platform prepare", output))?;
+        let transfer_before = metrics.upload_ms;
         for file in &changed {
-            remote.put(&file.local, &format!("{}.upload", file.remote))?;
+            put_measured(
+                remote,
+                &file.local,
+                &format!("{}.upload", file.remote),
+                file.bytes,
+                metrics,
+            )?;
         }
+        let mut report = report;
+        report.transfer_ms = metrics.upload_ms.saturating_sub(transfer_before);
         let script = self.activation_script(&changed);
         let output = remote.exec(&script)?;
         if let Some(message) = exec_failure_message("platform activation", &output) {
             return Err(message.into());
         }
         println!(
-            "platform deploy ok stage={} changed_files={} skipped_files={} transferred_bytes={}",
+            "platform deploy ok stage={} changed_files={} skipped_files={} transferred_bytes={} transfer_ms={}",
             self.stage.display(),
             report.changed_files,
             report.skipped_files,
             report.transferred_bytes,
+            report.transfer_ms,
         );
         Ok(report)
     }
