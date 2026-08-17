@@ -145,6 +145,12 @@ inherits = "release-device"
 lto = "thin"
 codegen-units = 32
 
+# Isolated scaling candidate for the next thin-LTO campaign step.
+[profile.release-device-thin-cgu64]
+inherits = "release-device"
+lto = "thin"
+codegen-units = 64
+
 [profile.release-device-profile]
 # Profiling build: symbols + frame pointers for pprof flamegraphs on device.
 inherits = "release-device"
