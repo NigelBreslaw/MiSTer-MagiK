@@ -6173,11 +6173,22 @@ mod tests {
     }
 
     #[test]
-    fn launcher_ignores_home_launch_when_catalog_has_no_systems() {
+    fn launcher_keeps_the_empty_arcade_shell_unavailable() {
         let catalog = arcade_catalog(vec![], vec![]);
         let mut nav = LauncherNav::new();
         let t0 = Instant::now();
         let press_a = pad_with(|pad| pad.btn_a = true);
+
+        nav.sync_launcher_taxonomy(&catalog);
+        assert_eq!(nav.current_menu_count(), 1);
+        assert_eq!(
+            nav.current_menu_items()[0].id,
+            crate::arcade_catalog::MENU_ARCADE_SYSTEM_ID
+        );
+        assert!(
+            !nav.menu_item_catalog_presentation(&nav.current_menu_items()[0])
+                .available
+        );
 
         assert!(nav.handle_input(&press_a, t0, &catalog).is_none());
 
@@ -7721,7 +7732,7 @@ mod tests {
     }
 
     #[test]
-    fn hierarchy_catalog_shrink_and_empty_catalog_return_to_a_valid_root() {
+    fn hierarchy_catalog_shrink_returns_home_and_bare_arcade_uses_the_empty_shell() {
         let initial = hierarchy_catalog();
         let mut nav = LauncherNav::new();
         assert!(nav.open_system(&initial, "neogeopocket"));
@@ -7746,10 +7757,14 @@ mod tests {
         );
         nav.screen = Screen::Arcade;
         nav.sync_launcher_taxonomy(&empty);
-        assert_eq!(nav.screen, Screen::Home);
+        assert_eq!(nav.screen, Screen::Arcade);
         assert_eq!(nav.current_menu_id(), ROOT_MENU_ID);
-        assert_eq!(nav.current_menu_count(), 0);
-        assert!(nav.active_collection().is_none());
+        assert_eq!(nav.current_menu_count(), 1);
+        assert_eq!(
+            nav.active_collection()
+                .map(|collection| collection.id.as_str()),
+            Some(crate::arcade_catalog::MENU_ARCADE_SYSTEM_ID)
+        );
     }
 
     #[test]

@@ -602,24 +602,22 @@ impl<'a> TaxonomyBuilder<'a> {
             .fold(0usize, |total, system| total.saturating_add(system.count));
         let arcade_count = resident_arcade_count.max(declared_arcade_count);
         let mut items = Vec::new();
-        if arcade_count > 0 {
-            self.taxonomy.collections.insert(
-                MENU_ARCADE_SYSTEM_ID.to_string(),
-                LauncherCollection {
-                    id: MENU_ARCADE_SYSTEM_ID.to_string(),
-                    title: "Arcade".to_string(),
-                    count: arcade_count,
-                    system_id: None,
-                    legacy_system_id: "arcade".to_string(),
-                },
-            );
-            items.push(LauncherMenuItem {
+        self.taxonomy.collections.insert(
+            MENU_ARCADE_SYSTEM_ID.to_string(),
+            LauncherCollection {
                 id: MENU_ARCADE_SYSTEM_ID.to_string(),
                 title: "Arcade".to_string(),
                 count: arcade_count,
-                kind: LauncherMenuItemKind::Collection,
-            });
-        }
+                system_id: None,
+                legacy_system_id: "arcade".to_string(),
+            },
+        );
+        items.push(LauncherMenuItem {
+            id: MENU_ARCADE_SYSTEM_ID.to_string(),
+            title: "Arcade".to_string(),
+            count: arcade_count,
+            kind: LauncherMenuItemKind::Collection,
+        });
         for menu_id in [CONSOLES_MENU_ID, COMPUTERS_MENU_ID, HANDHELDS_MENU_ID] {
             if let Some(menu) = self.taxonomy.menu(menu_id) {
                 items.push(LauncherMenuItem {
@@ -871,11 +869,29 @@ mod tests {
     }
 
     #[test]
-    fn empty_groups_are_pruned_recursively() {
+    fn empty_catalog_keeps_the_arcade_shell() {
+        let taxonomy = LauncherTaxonomy::from_catalog(&catalog(Vec::new(), Vec::new()));
+        let root = taxonomy.root_menu().expect("root");
+
+        assert_eq!(root.items.len(), 1);
+        assert_eq!(root.items[0].id, MENU_ARCADE_SYSTEM_ID);
+        assert_eq!(root.items[0].count, 0);
+        assert_eq!(
+            taxonomy
+                .collection(MENU_ARCADE_SYSTEM_ID)
+                .expect("Arcade shell")
+                .count,
+            0
+        );
+    }
+
+    #[test]
+    fn non_arcade_empty_groups_are_pruned_recursively() {
         let taxonomy = LauncherTaxonomy::from_catalog(&catalog(Vec::new(), vec![system("nes", 4)]));
         let root = taxonomy.root_menu().expect("root");
-        assert_eq!(root.items.len(), 1);
-        assert_eq!(root.items[0].id, CONSOLES_MENU_ID);
+        assert_eq!(root.items.len(), 2);
+        assert_eq!(root.items[0].id, MENU_ARCADE_SYSTEM_ID);
+        assert_eq!(root.items[1].id, CONSOLES_MENU_ID);
         assert!(taxonomy.menu(HANDHELDS_MENU_ID).is_none());
         assert!(taxonomy.menu(CONSOLES_OTHER_MENU_ID).is_none());
     }
