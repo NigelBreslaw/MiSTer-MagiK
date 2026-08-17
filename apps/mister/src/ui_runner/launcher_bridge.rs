@@ -703,13 +703,52 @@ fn sync_launcher_confirm_bridge(
             );
         }
     } else if nav.confirm_action == Some(launcher::ConfirmAction::ScreenOrientation) {
-        let label = format!("Cancel ({})", nav.orientation_confirm_remaining);
+        let label = if nav.orientation_error.is_some() {
+            "Cancel".to_string()
+        } else {
+            format!("Cancel ({})", nav.orientation_confirm_remaining)
+        };
         set_bridge_string_if_changed!(
             bridge,
             get_confirm_left_label,
             set_confirm_left_label,
             &label
         );
+        if nav.orientation_confirm_busy {
+            set_bridge_string_if_changed!(
+                bridge,
+                get_confirm_message,
+                set_confirm_message,
+                "Saving the launcher and MiSTer OSD orientation…"
+            );
+            set_bridge_string_if_changed!(
+                bridge,
+                get_confirm_right_label,
+                set_confirm_right_label,
+                "Saving…"
+            );
+        } else if let Some(error) = nav.orientation_error.as_deref() {
+            let message =
+                format!("Could not save the screen orientation: {error}. Retry or cancel.");
+            set_bridge_string_if_changed!(
+                bridge,
+                get_confirm_title,
+                set_confirm_title,
+                "Orientation change failed"
+            );
+            set_bridge_string_if_changed!(
+                bridge,
+                get_confirm_message,
+                set_confirm_message,
+                &message
+            );
+            set_bridge_string_if_changed!(
+                bridge,
+                get_confirm_right_label,
+                set_confirm_right_label,
+                "Retry"
+            );
+        }
     } else if nav.confirm_action == Some(launcher::ConfirmAction::DisplayResolutionError) {
         if let Some(error) = nav.display_error.as_deref() {
             set_bridge_string_if_changed!(bridge, get_confirm_message, set_confirm_message, error);

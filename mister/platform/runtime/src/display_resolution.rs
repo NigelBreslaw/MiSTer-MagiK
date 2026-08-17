@@ -19,6 +19,35 @@ pub fn persist(id: &str) -> io::Result<()> {
     persist_to(DEVICE_INI_PATH, id)
 }
 
+pub fn persist_osd_rotation(rotation: u8) -> io::Result<bool> {
+    persist_osd_rotation_to(DEVICE_INI_PATH, rotation)
+}
+
+pub fn persist_osd_rotation_to(path: impl AsRef<Path>, rotation: u8) -> io::Result<bool> {
+    if rotation > 2 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "OSD rotation must be 0, 1, or 2",
+        ));
+    }
+    let path = path.as_ref();
+    let text = fs::read_to_string(path)?;
+    let mut lines = text.lines().map(str::to_owned).collect::<Vec<_>>();
+    let value = rotation.to_string();
+    set_ini_key(&mut lines, "MiSTer", "osd_rotate", &value);
+    if lines == text.lines().map(str::to_owned).collect::<Vec<_>>() {
+        return Ok(false);
+    }
+    write_ini_lines(path, &lines, "ini.mister-magik-osd-new")?;
+    let installed = fs::read_to_string(path)?;
+    if effective_ini_value(&installed, "MiSTer", "osd_rotate").as_deref() != Some(value.as_str()) {
+        return Err(io::Error::other(
+            "MiSTer.ini did not retain the requested OSD rotation",
+        ));
+    }
+    Ok(true)
+}
+
 pub fn persist_to(path: impl AsRef<Path>, id: &str) -> io::Result<()> {
     let mode = find(id)
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "unsupported display mode"))?;
@@ -41,7 +70,11 @@ pub fn persist_to(path: impl AsRef<Path>, id: &str) -> io::Result<()> {
     if let Some(video_mode) = mode.video_mode {
         set_ini_key(&mut lines, "Menu", "video_mode", video_mode);
     }
-    let tmp = path.with_extension("ini.mister-magik-display-new");
+    write_ini_lines(path, &lines, "ini.mister-magik-display-new")
+}
+
+fn write_ini_lines(path: &Path, lines: &[String], temporary_extension: &str) -> io::Result<()> {
+    let tmp = path.with_extension(temporary_extension);
     let mut file = OpenOptions::new()
         .create(true)
         .truncate(true)
@@ -55,6 +88,23 @@ pub fn persist_to(path: impl AsRef<Path>, id: &str) -> io::Result<()> {
         OpenOptions::new().read(true).open(parent)?.sync_all()?;
     }
     Ok(())
+}
+
+fn effective_ini_value(text: &str, wanted_section: &str, wanted_key: &str) -> Option<String> {
+    let mut section = String::new();
+    let mut value = None;
+    for line in text.lines() {
+        let content = line.split([';', '#']).next().unwrap_or("").trim();
+        if content.starts_with('[') && content.ends_with(']') {
+            section = content[1..content.len() - 1].trim().to_owned();
+        } else if section.eq_ignore_ascii_case(wanted_section)
+            && let Some((key, candidate)) = content.split_once('=')
+            && key.trim().eq_ignore_ascii_case(wanted_key)
+        {
+            value = Some(candidate.trim().to_owned());
+        }
+    }
+    value
 }
 
 fn set_ini_key(lines: &mut Vec<String>, wanted_section: &str, wanted_key: &str, value: &str) {
@@ -156,6 +206,29 @@ mod tests {
         assert!(text.contains("menu_pal=1"));
         assert!(text.contains("forced_scandoubler=1"));
         assert!(text.contains("foo=bar"));
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn osd_rotation_persistence_is_typed_lossless_and_idempotent() {
+        let path = std::env::temp_dir().join(format!(
+            "mister-magik-osd-rotation-{}.ini",
+            std::process::id()
+        ));
+        fs::write(
+            &path,
+            "[MiSTer]\nmain=MiSTer_MagiK\nosd_rotate=0 ; keep\n[Menu]\nvideo_mode=8\n",
+        )
+        .unwrap();
+
+        assert!(persist_osd_rotation_to(&path, 1).unwrap());
+        let text = fs::read_to_string(&path).unwrap();
+        assert!(text.contains("osd_rotate=1 ; keep"));
+        assert!(text.contains("main=MiSTer_MagiK"));
+        assert!(text.contains("[Menu]\nvideo_mode=8"));
+        assert!(!persist_osd_rotation_to(&path, 1).unwrap());
+        assert_eq!(fs::read_to_string(&path).unwrap(), text);
+        assert!(persist_osd_rotation_to(&path, 3).is_err());
         let _ = fs::remove_file(path);
     }
 }

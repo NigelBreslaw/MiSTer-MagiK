@@ -4991,7 +4991,11 @@ pub(super) fn run_launcher_loop(
         LauncherNav::for_crt_layout_with_row_height(crt_layout, crt_metrics.game_row_height);
     let settings_store =
         FileSettingsStore::new(launcher_config.device_paths().app_path("settings.json"));
+    let orientation_store = ConfirmedOrientationStore::for_runtime(settings_store.clone());
     nav.settings = settings_store.load();
+    if let Err(error) = orientation_store.reconcile_osd_rotation(nav.settings.screen_orientation) {
+        crate::ui_errln!("settings: failed to reconcile MiSTer OSD rotation: {error}");
+    }
     if orientation_benchmark.enabled() {
         nav.settings.screen_orientation = ScreenOrientation::Normal;
         nav.settings.reduce_motion = false;
@@ -5033,6 +5037,7 @@ pub(super) fn run_launcher_loop(
     let mut orientation_preparation_trace = OrientationPreparationTrace::default();
     let (display_confirm_tx, display_confirm_rx) =
         mpsc::channel::<Result<launcher::DisplayCommandState, String>>();
+    let (orientation_confirm_tx, orientation_confirm_rx) = mpsc::channel::<Result<(), String>>();
     // Main owns the active display mode; the launcher only mirrors its reported state.
     if std::env::var_os("MISTER_MAGIK_PARENT").is_some() {
         if let Ok(state) = launcher::try_display_state() {
@@ -5982,6 +5987,25 @@ pub(super) fn run_launcher_loop(
                 orientation_full_redraw_pending = true;
                 full_bridge_dirty = true;
             }
+        }
+        while let Ok(result) = orientation_confirm_rx.try_recv() {
+            nav.orientation_confirm_busy = false;
+            match result {
+                Ok(()) => {
+                    orientation_previous = None;
+                    nav.confirm_action = None;
+                    nav.confirm_selected = 0;
+                    nav.orientation_error = None;
+                    nav.orientation_confirm_remaining = 0;
+                }
+                Err(error) => {
+                    nav.confirm_action = Some(launcher::ConfirmAction::ScreenOrientation);
+                    nav.confirm_selected = 1;
+                    nav.orientation_error = Some(error);
+                }
+            }
+            full_bridge_dirty = true;
+            request_launcher_redraw!();
         }
         while let Ok(result) = display_confirm_rx.try_recv() {
             pacer.rearm_after_display_mode_change();
@@ -7949,6 +7973,8 @@ pub(super) fn run_launcher_loop(
                                     {
                                         let previous = nav.settings.screen_orientation;
                                         orientation_previous = Some(previous);
+                                        nav.orientation_confirm_busy = false;
+                                        nav.orientation_error = None;
                                         arm_orientation_confirmation(&mut nav);
                                         orientation_confirm_deadline = None;
                                         let animated = begin_orientation_transition(
@@ -7985,13 +8011,24 @@ pub(super) fn run_launcher_loop(
                                 }
                                 LauncherAction::ConfirmScreenOrientation => {
                                     orientation_confirm_deadline = None;
-                                    orientation_previous = None;
                                     nav.orientation_confirm_remaining = 0;
-                                    if let Err(error) = settings_store.save(&nav.settings) {
-                                        crate::ui_errln!(
-                                            "settings: failed to save screen orientation: {error}"
-                                        );
-                                    }
+                                    nav.orientation_confirm_busy = true;
+                                    nav.orientation_error = None;
+                                    nav.confirm_action =
+                                        Some(launcher::ConfirmAction::ScreenOrientation);
+                                    nav.confirm_selected = 1;
+                                    let confirmed = nav.settings.clone();
+                                    let mut previous = confirmed.clone();
+                                    previous.screen_orientation = orientation_previous
+                                        .unwrap_or(confirmed.screen_orientation);
+                                    let result_tx = orientation_confirm_tx.clone();
+                                    let store = orientation_store.clone();
+                                    std::thread::spawn(move || {
+                                        let result = store
+                                            .save_confirmed(&previous, &confirmed)
+                                            .map_err(|error| error.to_string());
+                                        let _ = result_tx.send(result);
+                                    });
                                 }
                                 LauncherAction::CancelScreenOrientation => {
                                     if let Some(previous) = orientation_previous.take() {
@@ -8019,6 +8056,8 @@ pub(super) fn run_launcher_loop(
                                     }
                                     orientation_confirm_deadline = None;
                                     nav.orientation_confirm_remaining = 0;
+                                    nav.orientation_confirm_busy = false;
+                                    nav.orientation_error = None;
                                     orientation_full_redraw_pending = true;
                                     full_bridge_dirty = true;
                                 }

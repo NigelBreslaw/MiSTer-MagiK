@@ -869,6 +869,8 @@ pub struct LauncherNav {
     pub orientation_selected: usize,
     pub orientation_highlighted: usize,
     pub orientation_confirm_remaining: u8,
+    pub orientation_confirm_busy: bool,
+    pub orientation_error: Option<String>,
     pub screensaver_selected: usize,
     pub settings: MagikSettings,
     pub licenses_selected: usize,
@@ -965,6 +967,8 @@ pub struct NavigationTransitionState {
     orientation_selected: usize,
     orientation_highlighted: usize,
     orientation_confirm_remaining: u8,
+    orientation_confirm_busy: bool,
+    orientation_error: Option<String>,
     screensaver_selected: usize,
     licenses_selected: usize,
     licenses_expanded: bool,
@@ -1290,6 +1294,8 @@ impl LauncherNav {
             orientation_selected: 0,
             orientation_highlighted: 0,
             orientation_confirm_remaining: 0,
+            orientation_confirm_busy: false,
+            orientation_error: None,
             screensaver_selected: 0,
             settings: MagikSettings::default(),
             licenses_selected: 0,
@@ -1961,6 +1967,8 @@ impl LauncherNav {
             orientation_selected: self.orientation_selected,
             orientation_highlighted: self.orientation_highlighted,
             orientation_confirm_remaining: self.orientation_confirm_remaining,
+            orientation_confirm_busy: self.orientation_confirm_busy,
+            orientation_error: self.orientation_error.clone(),
             screensaver_selected: self.screensaver_selected,
             licenses_selected: self.licenses_selected,
             licenses_expanded: self.licenses_expanded,
@@ -2009,6 +2017,8 @@ impl LauncherNav {
         self.orientation_selected = state.orientation_selected;
         self.orientation_highlighted = state.orientation_highlighted;
         self.orientation_confirm_remaining = state.orientation_confirm_remaining;
+        self.orientation_confirm_busy = state.orientation_confirm_busy;
+        self.orientation_error = state.orientation_error;
         self.screensaver_selected = state.screensaver_selected;
         self.licenses_selected = state.licenses_selected;
         self.licenses_expanded = state.licenses_expanded;
@@ -3163,6 +3173,11 @@ impl LauncherNav {
 
     fn handle_confirm(&mut self, pressed: &PadState) -> Option<LauncherEvent> {
         let home_pressed = pressed.btn_home;
+        if self.confirm_action == Some(ConfirmAction::ScreenOrientation)
+            && self.orientation_confirm_busy
+        {
+            return None;
+        }
         if self.confirm_action == Some(ConfirmAction::DisplayResolutionError) {
             if pressed.btn_a || pressed.btn_b || home_pressed {
                 self.confirm_action = None;
@@ -8553,6 +8568,25 @@ mod tests {
             .handle_input(&press_b, t0 + Duration::from_millis(128), &catalog)
             .expect("cancel orientation");
         assert_eq!(event.action, LauncherAction::CancelScreenOrientation);
+    }
+
+    #[test]
+    fn orientation_confirmation_ignores_input_while_both_settings_are_saving() {
+        let catalog = multi_system_catalog();
+        let mut nav = LauncherNav::new();
+        nav.confirm_action = Some(ConfirmAction::ScreenOrientation);
+        nav.confirm_selected = 1;
+        nav.orientation_confirm_busy = true;
+        let t0 = Instant::now();
+
+        for pressed in [
+            pad_with(|pad| pad.btn_a = true),
+            pad_with(|pad| pad.btn_b = true),
+            pad_with(|pad| pad.btn_home = true),
+        ] {
+            assert!(nav.handle_input(&pressed, t0, &catalog).is_none());
+            assert_eq!(nav.confirm_action, Some(ConfirmAction::ScreenOrientation));
+        }
     }
 
     #[test]
