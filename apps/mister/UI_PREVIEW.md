@@ -15,6 +15,23 @@ From the repository root:
 apps/mister/scripts/dev-ui-mac.sh
 ```
 
+Interactive card previews use `--cold-start auto` by default. When no valid
+Catalog V3 seed exists, the preview runs the production 20-second particle
+intro while the Mac-local catalog scan proceeds, derives the morph target from
+the real off-screen RGB565 launcher frame, and enables input only after the
+pixel-identical handoff.
+
+Force the sequence with fixture or warm content, or skip it explicitly:
+
+```bash
+apps/mister/scripts/dev-ui-mac.sh --content fixtures --cold-start force
+apps/mister/scripts/dev-ui-mac.sh --content card --sd-root /Volumes/MiSTer_Data --cold-start skip
+```
+
+The former `--scenario startup` command remains an alias for
+`--scenario home --cold-start force`; it no longer opens the retired static
+startup overlay.
+
 Start on a particular scenario:
 
 ```bash
@@ -46,6 +63,11 @@ cache, production card directory, or development card directory. Interactive
 sessions then rebuild the catalog in the background with the production
 scanner. Physical card paths are remapped back to `/media/fat` before
 publication, so launch references are identical to MiSTer.
+
+If all three Catalog V3 locations are missing, automatic cold start requires
+that background scan. Combining a missing catalog with `--no-scan` reports an
+actionable error; use `--cold-start skip` when deliberately inspecting that
+state without rebuilding.
 
 The card is always a read-only content source. Catalog state, scanner caches,
 downloaded screenshot packs, settings, and temporary work are written beneath
@@ -124,7 +146,7 @@ copy of the UI.
 | `5` | Licenses |
 | `6` | Info |
 | `7` | Screensaver settings |
-| `8` | Startup overlay |
+| `8` | Replay the production particle intro into the current launcher view |
 | `9` | Confirmation overlay |
 | `0` | Catalog scan |
 | `A` | Arcade with Rust-painted rows and RGB565 preview |
@@ -173,6 +195,11 @@ data. Headless `auto` uses 60 Hz; at an explicit 120 Hz, frame 12 is exactly 100
 ms. Repeating a scenario, frame, and refresh rate produces the same RGB565
 output.
 
+Headless captures never auto-select cold start. Use `--cold-start force` with
+fixture or warm catalog content to capture the deterministic production intro;
+frame 1020 is the 17-second HDMI morph at 60 Hz and frame 1200 is the exact
+launcher handoff. Use `--cold-start skip` for an explicit direct-launch capture.
+
 Use `--settings-page-transition-demo` to capture the Settings page-depth
 transition. Add `--navigation-transition-demo-reverse` to capture the backing
 motion instead.
@@ -191,6 +218,8 @@ unavailable; it never substitutes fixture screenshots or starts a download.
 - the production Rust Arcade list renderer;
 - the production screenshot scaling and crossfade compositor;
 - the production particle renderer;
+- the production cold-start storyboard, live RGB565 launcher morph target, and
+  pixel-identical handoff;
 - the production archive-streamed, multi-depth screenshot parade with real
   Arcade pack images in card mode;
 - mounted-card discovery and canonical `/media/fat` path mapping;
