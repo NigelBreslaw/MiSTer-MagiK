@@ -18,8 +18,10 @@ fn main() {
     let scope = std::env::var("MISTER_UI_BUILD_SCOPE").unwrap_or_else(|_| "all".into());
     let launcher_only = match scope.as_str() {
         "" | "all" => false,
-        "launcher" | "arcade" => true,
-        other => panic!("unknown MISTER_UI_BUILD_SCOPE={other:?}; use all|launcher|arcade"),
+        "launcher" | "arcade" | "production" => true,
+        other => {
+            panic!("unknown MISTER_UI_BUILD_SCOPE={other:?}; use all|launcher|arcade|production")
+        }
     };
     if launcher_only {
         println!("cargo:rustc-cfg=mister_ui_scope_launcher");

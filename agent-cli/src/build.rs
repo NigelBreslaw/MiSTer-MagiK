@@ -1916,12 +1916,14 @@ mod tests {
     #[test]
     fn cache_identity_changes_with_profile_scope_and_target() {
         let device = BuildSpec::canonical(UiScope::All);
+        let production = BuildSpec::canonical(UiScope::Production);
         let ci = BuildSpec::for_command(BuildCommand::RuntimeCi).unwrap();
         let agent = BuildSpec::for_command(BuildCommand::DeviceAgentCi).unwrap();
         assert_eq!(ci.profile, "ci-fast");
         assert_eq!(agent.profile, "ci-fast");
         assert_ne!(device.cache_identity, ci.cache_identity);
         assert_ne!(device.cache_identity, agent.cache_identity);
+        assert_ne!(device.cache_identity, production.cache_identity);
         assert_ne!(
             device.cache_identity,
             BuildSpec::canonical(UiScope::Launcher).cache_identity
@@ -1935,6 +1937,11 @@ mod tests {
             !BuildSpec::canonical(UiScope::Launcher)
                 .cache_identity
                 .contains(":all:launcher")
+        );
+        assert!(
+            BuildSpec::canonical(UiScope::Production)
+                .cache_identity
+                .ends_with(":production")
         );
     }
 

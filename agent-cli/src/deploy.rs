@@ -54,6 +54,7 @@ impl DeploymentKind {
 pub enum UiScope {
     Launcher,
     Arcade,
+    Production,
     All,
 }
 
@@ -63,6 +64,7 @@ impl UiScope {
         match self {
             Self::Launcher => "launcher",
             Self::Arcade => "arcade",
+            Self::Production => "production",
             Self::All => "all",
         }
     }
@@ -237,7 +239,7 @@ fn ui_scope(paths: &[PathBuf]) -> UiScope {
     }) {
         UiScope::Arcade
     } else {
-        UiScope::All
+        UiScope::Production
     }
 }
 
@@ -492,11 +494,11 @@ mod tests {
     }
 
     #[test]
-    fn unknown_or_empty_impact_falls_back_to_full_ui() {
+    fn unknown_or_empty_impact_uses_safe_production_scope() {
         assert_eq!(ui_scope(&[]), UiScope::All);
         assert_eq!(
             ui_scope(&[PathBuf::from("docs/architecture.md")]),
-            UiScope::All
+            UiScope::Production
         );
     }
 
@@ -507,7 +509,7 @@ mod tests {
             PathBuf::from("mister/platform/kernel/scanout-slots/scanout.c"),
         ];
         assert_eq!(platform_components(&paths), vec!["kernel", "fpga"]);
-        assert_eq!(ui_scope(&paths), UiScope::All);
+        assert_eq!(ui_scope(&paths), UiScope::Production);
     }
 
     #[test]
