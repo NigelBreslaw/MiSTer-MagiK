@@ -375,7 +375,7 @@ impl<'a> LayerTarget<'a> {
         renderer: &mut ArcadeListRenderer,
         backdrop: &[Rgb565Pixel],
         backdrop_is_fresh: bool,
-    ) -> bool {
+    ) -> ArcadeListCompositionStats {
         renderer.compose_layer_over_backdrop_to_oriented_cached_with_state(
             self.target,
             backdrop,

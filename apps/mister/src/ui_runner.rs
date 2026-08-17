@@ -29,8 +29,9 @@ use crate::arcade_catalog::{
     HOME_LIST_VISIBLE_W, HOME_TILE_GAP, HOME_TILE_WIDTH, LaunchTarget,
 };
 use crate::arcade_list_renderer::{
-    ARCADE_LIST_H, ARCADE_LIST_W, ARCADE_LIST_X, ARCADE_LIST_Y, ArcadeListGeometry, ArcadeListItem,
-    ArcadeListRenderer, ArcadeListUpdate, CrtArcadeLayout, crt_arcade_row_height,
+    ARCADE_LIST_H, ARCADE_LIST_W, ARCADE_LIST_X, ARCADE_LIST_Y, ArcadeListCompositionStats,
+    ArcadeListGeometry, ArcadeListItem, ArcadeListRenderer, ArcadeListUpdate, CrtArcadeLayout,
+    crt_arcade_row_height,
 };
 use crate::boot_analytics;
 use crate::controller_db::ControllerDb;

@@ -9833,6 +9833,8 @@ pub(super) fn run_launcher_loop(
         let mut crt_backdrop_list_overlay_us = 0_u64;
         let mut crt_backdrop_copy_pixels = 0_u32;
         let mut crt_backdrop_list_overlay_pixels = 0_u32;
+        let mut crt_backdrop_list_restore_pixels = 0_u32;
+        let mut crt_backdrop_list_foreground_pixels = 0_u32;
         let transition_id = preview
             .raw_transition_frame()
             .as_ref()
@@ -10224,22 +10226,22 @@ pub(super) fn run_launcher_loop(
                     let rect = arcade_update_dirty_rect(&update);
                     let crt_overlay_profile_pmu =
                         mister_magik_perf_events::sampled_span("gui.custom.crt-list-overlay");
-                    let list_start = Instant::now();
-                    let _composed = crt_backdrop.as_ref().is_some_and(|backdrop| {
-                        layer_target.compose_arcade_list_over_backdrop(
-                            &mut arcade_list_renderer,
-                            backdrop.pixels(),
-                            crt_backdrop_full_damage.is_some(),
-                        )
-                    });
-                    crt_backdrop_list_overlay_us =
-                        list_start.elapsed().as_micros().min(u128::from(u64::MAX)) as u64;
-                    crt_backdrop_list_overlay_pixels = layout
-                        .content_rect()
-                        .width
-                        .saturating_mul(layout.content_rect().height)
-                        .min(u32::MAX as usize)
-                        as u32;
+                    let composition = crt_backdrop
+                        .as_ref()
+                        .map(|backdrop| {
+                            layer_target.compose_arcade_list_over_backdrop(
+                                &mut arcade_list_renderer,
+                                backdrop.pixels(),
+                                crt_backdrop_full_damage.is_some(),
+                            )
+                        })
+                        .unwrap_or_default();
+                    crt_backdrop_list_overlay_us = composition.elapsed_us;
+                    crt_backdrop_list_restore_pixels = composition.restored_pixels;
+                    crt_backdrop_list_foreground_pixels = composition.foreground_pixels;
+                    crt_backdrop_list_overlay_pixels = composition
+                        .restored_pixels
+                        .saturating_add(composition.foreground_pixels);
                     drop(crt_overlay_profile_pmu);
                     if layout.is_portrait() {
                         physical_arcade_rect = Some(layout.logical_rect_to_composition(rect));
@@ -10266,6 +10268,8 @@ pub(super) fn run_launcher_loop(
         custom_draw_trace.crt_backdrop_copy_pixels = crt_backdrop_copy_pixels;
         custom_draw_trace.crt_backdrop_list_overlay_us = crt_backdrop_list_overlay_us;
         custom_draw_trace.crt_backdrop_list_overlay_pixels = crt_backdrop_list_overlay_pixels;
+        custom_draw_trace.crt_backdrop_list_restore_pixels = crt_backdrop_list_restore_pixels;
+        custom_draw_trace.crt_backdrop_list_foreground_pixels = crt_backdrop_list_foreground_pixels;
         let physical_custom_damage = accepted_screensaver_frame.then_some(this_rect).flatten();
         let preview_layer_desired = should_desire_direct_layer(
             wants_preview_layer,
@@ -10820,6 +10824,12 @@ pub(super) fn run_launcher_loop(
             presented_frame
                 .custom_draw_trace
                 .crt_backdrop_list_overlay_pixels,
+            presented_frame
+                .custom_draw_trace
+                .crt_backdrop_list_restore_pixels,
+            presented_frame
+                .custom_draw_trace
+                .crt_backdrop_list_foreground_pixels,
             presented_frame.custom_draw_trace.crt_backdrop_alpha_bucket,
             presented_frame.custom_draw_trace.crt_backdrop_active,
             presented_frame.custom_draw_trace.crt_backdrop_selected,

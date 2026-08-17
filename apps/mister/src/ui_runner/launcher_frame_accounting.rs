@@ -971,6 +971,8 @@ pub(super) struct LauncherCustomDrawTrace {
     pub(super) crt_backdrop_copy_pixels: u32,
     pub(super) crt_backdrop_list_overlay_us: u64,
     pub(super) crt_backdrop_list_overlay_pixels: u32,
+    pub(super) crt_backdrop_list_restore_pixels: u32,
+    pub(super) crt_backdrop_list_foreground_pixels: u32,
     pub(super) crt_backdrop_alpha_bucket: u8,
     pub(super) crt_backdrop_active: bool,
     pub(super) crt_backdrop_selected: usize,

@@ -8993,6 +8993,16 @@ fn summarize_arcade_velocity_scroll(
         .map(|frame| frame_u64(frame, "crt_backdrop_list_overlay_us"))
         .collect::<Vec<_>>();
     backdrop_list_overlay_us.sort_unstable();
+    let backdrop_list_restore_pixels = scroll_profile_frames
+        .iter()
+        .map(|frame| frame_u64(frame, "crt_backdrop_list_restore_pixels"))
+        .max()
+        .unwrap_or(0);
+    let backdrop_list_foreground_pixels = scroll_profile_frames
+        .iter()
+        .map(|frame| frame_u64(frame, "crt_backdrop_list_foreground_pixels"))
+        .max()
+        .unwrap_or(0);
     let active_fade_frames = scroll_profile_frames
         .iter()
         .filter(|frame| frame.get("crt_backdrop_active").and_then(Value::as_bool) == Some(true))
@@ -9116,6 +9126,8 @@ fn summarize_arcade_velocity_scroll(
         },
         "crt_backdrop_list_overlay": {
             "timing_us": percentile_summary(&backdrop_list_overlay_us),
+            "max_restored_pixels": backdrop_list_restore_pixels,
+            "max_foreground_pixels": backdrop_list_foreground_pixels,
         },
         "crt_backdrop_fade_activity": {
             "active_frames": active_fade_frames,
@@ -9197,10 +9209,12 @@ fn summarize_arcade_velocity_scroll(
     )?;
     writeln!(
         report,
-        "- List overlay (p95 / p99 / max): {} / {} / {} us",
+        "- List overlay (p95 / p99 / max): {} / {} / {} us; max restored / foreground pixels: {} / {}",
         percentile_95(&backdrop_list_overlay_us),
         percentile_99(&backdrop_list_overlay_us),
         backdrop_list_overlay_us.last().copied().unwrap_or(0),
+        backdrop_list_restore_pixels,
+        backdrop_list_foreground_pixels,
     )?;
     writeln!(
         report,

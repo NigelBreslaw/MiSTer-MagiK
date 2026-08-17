@@ -97,6 +97,7 @@ impl ArcadeVisualLayer {
         };
         self.renderer
             .compose_layer_over_backdrop_to_oriented_cached(target, backdrop, output_layout, true)
+            .composed
             .then_some(rect)
     }
 

@@ -5,6 +5,7 @@ use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
+use std::time::Instant;
 
 use crate::arcade_catalog::{
     ARCADE_LIST_VISIBLE_H, ARCADE_ROW_HEIGHT, ArcadeGameEntry, ArcadeGameView,
@@ -493,6 +494,16 @@ pub struct ArcadeListRenderer {
     style: ArcadeListStyle,
     crt_metrics: Option<CrtUiMetrics>,
     crt_base_style: Option<ArcadeListStyle>,
+    oriented_viewport_layout: Option<Rgb565OutputLayout>,
+    oriented_viewport_rect: DirtyRect,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ArcadeListCompositionStats {
+    pub composed: bool,
+    pub restored_pixels: u32,
+    pub foreground_pixels: u32,
+    pub elapsed_us: u64,
 }
 
 pub struct CachedArcadeRow {
@@ -601,6 +612,13 @@ impl ArcadeListRenderer {
             style,
             crt_metrics,
             crt_base_style,
+            oriented_viewport_layout: None,
+            oriented_viewport_rect: DirtyRect {
+                x0: 0,
+                y0: 0,
+                x1: 0,
+                y1: 0,
+            },
         }
     }
 
@@ -645,8 +663,13 @@ impl ArcadeListRenderer {
         geometry: ArcadeListGeometry,
         visible_height: usize,
     ) {
-        self.visible_height = visible_height.min(ARCADE_LIST_H);
+        let visible_height = visible_height.min(ARCADE_LIST_H);
+        if self.visible_height != visible_height {
+            self.oriented_viewport_layout = None;
+        }
+        self.visible_height = visible_height;
         if self.geometry != geometry {
+            self.oriented_viewport_layout = None;
             if self.width != geometry.width {
                 self.width = geometry.width;
                 self.surface = vec![self.style.background_565; self.width * ARCADE_LIST_H];
@@ -1249,7 +1272,7 @@ impl ArcadeListRenderer {
         backdrop: &[Rgb565Pixel],
         output_layout: Rgb565OutputLayout,
         redraw_selection_frame: bool,
-    ) -> bool {
+    ) -> ArcadeListCompositionStats {
         self.compose_layer_over_backdrop_to_oriented_cached_with_state(
             target,
             backdrop,
@@ -1266,13 +1289,14 @@ impl ArcadeListRenderer {
         output_layout: Rgb565OutputLayout,
         redraw_selection_frame: bool,
         backdrop_is_fresh: bool,
-    ) -> bool {
+    ) -> ArcadeListCompositionStats {
+        let started = Instant::now();
         if backdrop.len() < output_layout.len()
             || target.cached_565().len() < output_layout.len()
             || self.geometry.x.saturating_add(self.width) > output_layout.logical_width()
             || self.geometry.y.saturating_add(self.visible_height) > output_layout.logical_height()
         {
-            return false;
+            return ArcadeListCompositionStats::default();
         }
 
         let selection_y = self.selection_y();
@@ -1326,7 +1350,39 @@ impl ArcadeListRenderer {
             if redraw_selection_frame {
                 self.compose_selection_frame_to_oriented_cached(cached, output_layout);
             }
-            return true;
+            return ArcadeListCompositionStats {
+                composed: true,
+                restored_pixels: if backdrop_is_fresh {
+                    0
+                } else {
+                    self.width
+                        .saturating_mul(self.visible_height)
+                        .min(u32::MAX as usize) as u32
+                },
+                foreground_pixels: self
+                    .surface_nonfill_runs
+                    .iter()
+                    .flat_map(|runs| runs.iter())
+                    .map(|(start, end)| end.saturating_sub(*start))
+                    .sum::<usize>()
+                    .min(u32::MAX as usize) as u32,
+                elapsed_us: started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64,
+            };
+        }
+        if self.style.crt_palette {
+            let stats = self.compose_rotated_crt_layer_over_backdrop(
+                cached,
+                backdrop,
+                output_layout,
+                backdrop_is_fresh,
+            );
+            if redraw_selection_frame {
+                self.compose_selection_frame_to_oriented_cached(cached, output_layout);
+            }
+            return ArcadeListCompositionStats {
+                elapsed_us: started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64,
+                ..stats
+            };
         }
         for viewport_y in 0..self.visible_height {
             let source_y = (self.surface_y + viewport_y) % self.visible_height;
@@ -1353,7 +1409,114 @@ impl ArcadeListRenderer {
         if redraw_selection_frame {
             self.compose_selection_frame_to_oriented_cached(cached, output_layout);
         }
-        true
+        ArcadeListCompositionStats {
+            composed: true,
+            restored_pixels: if backdrop_is_fresh {
+                0
+            } else {
+                self.width
+                    .saturating_mul(self.visible_height)
+                    .min(u32::MAX as usize) as u32
+            },
+            foreground_pixels: self
+                .width
+                .saturating_mul(self.visible_height)
+                .min(u32::MAX as usize) as u32,
+            elapsed_us: started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64,
+        }
+    }
+
+    fn compose_rotated_crt_layer_over_backdrop(
+        &mut self,
+        cached: &mut [Rgb565Pixel],
+        backdrop: &[Rgb565Pixel],
+        output_layout: Rgb565OutputLayout,
+        backdrop_is_fresh: bool,
+    ) -> ArcadeListCompositionStats {
+        if self.oriented_viewport_layout != Some(output_layout) {
+            let physical = output_layout.logical_rect_to_physical(
+                mister_magik_framebuffer_scenes::Rgb565Rect {
+                    x0: self.geometry.x,
+                    y0: self.geometry.y,
+                    x1: self.geometry.x + self.width,
+                    y1: self.geometry.y + self.visible_height,
+                },
+            );
+            self.oriented_viewport_rect = DirtyRect {
+                x0: physical.x0,
+                y0: physical.y0,
+                x1: physical.x1,
+                y1: physical.y1,
+            };
+            self.oriented_viewport_layout = Some(output_layout);
+        }
+        let physical = self.oriented_viewport_rect;
+        let mut restored_pixels = 0_usize;
+        if !backdrop_is_fresh {
+            for physical_y in physical.y0..physical.y1 {
+                let start = physical_y * output_layout.physical_stride() + physical.x0;
+                let end = start + physical.width();
+                cached[start..end].copy_from_slice(&backdrop[start..end]);
+            }
+            restored_pixels = physical.width().saturating_mul(physical.rows() as usize);
+        }
+
+        let selection_y = self.selection_y().min(self.visible_height);
+        let selection_bottom = selection_y
+            .saturating_add(self.style.row_height.max(1) as usize)
+            .min(self.visible_height);
+        let selection =
+            output_layout.logical_rect_to_physical(mister_magik_framebuffer_scenes::Rgb565Rect {
+                x0: self.geometry.x,
+                y0: self.geometry.y + selection_y,
+                x1: self.geometry.x + self.width,
+                y1: self.geometry.y + selection_bottom,
+            });
+        let mut foreground_pixels = 0_usize;
+        for physical_y in selection.y0..selection.y1 {
+            let start = physical_y * output_layout.physical_stride() + selection.x0;
+            let end = start + selection.width();
+            cached[start..end].fill(self.style.selection_fill_565);
+            foreground_pixels = foreground_pixels.saturating_add(selection.width());
+        }
+
+        for viewport_y in 0..self.visible_height {
+            let source_y = (self.surface_y + viewport_y) % self.visible_height;
+            let selected = viewport_y >= selection_y && viewport_y < selection_bottom;
+            let runs = if selected {
+                &self.surface_selected_text_runs[source_y]
+            } else {
+                &self.surface_nonfill_runs[source_y]
+            };
+            for &(run_start, run_end) in runs {
+                for local_x in run_start..run_end {
+                    let logical_x = self.geometry.x + local_x;
+                    let logical_y = self.geometry.y + viewport_y;
+                    let (physical_x, physical_y) = match output_layout.rotation() {
+                        OutputRotation::Clockwise90 => {
+                            (output_layout.logical_height() - 1 - logical_y, logical_x)
+                        }
+                        OutputRotation::CounterClockwise90 => {
+                            (logical_y, output_layout.logical_width() - 1 - logical_x)
+                        }
+                        OutputRotation::None => unreachable!("rotated CRT compositor"),
+                    };
+                    cached[physical_y * output_layout.physical_stride() + physical_x] = if selected
+                    {
+                        self.style.selection_text_565
+                    } else {
+                        self.surface[source_y * self.width + local_x]
+                    };
+                    foreground_pixels = foreground_pixels.saturating_add(1);
+                }
+            }
+        }
+        ArcadeListCompositionStats {
+            composed: true,
+            restored_pixels: restored_pixels.min(u32::MAX as usize) as u32,
+            foreground_pixels: foreground_pixels.min(u32::MAX as usize) as u32,
+            elapsed_us: 0,
+        }
     }
 
     pub fn copy_layer_to_hidden(
@@ -2896,12 +3059,16 @@ mod tests {
         let backdrop = vec![Rgb565Pixel(0x4321); layout.len()];
         let mut target = UiFrameTarget::cached(FramebufferTargetGeometry::new(640, 480));
         target.cached_565_mut().fill(sentinel);
-        assert!(renderer.compose_layer_over_backdrop_to_oriented_cached(
-            &mut target,
-            &backdrop,
-            layout,
-            true,
-        ));
+        assert!(
+            renderer
+                .compose_layer_over_backdrop_to_oriented_cached(
+                    &mut target,
+                    &backdrop,
+                    layout,
+                    true,
+                )
+                .composed
+        );
 
         renderer.draw(
             ArcadeGameView::contiguous(&games),
@@ -2910,12 +3077,16 @@ mod tests {
             false,
         );
         target.cached_565_mut().fill(sentinel);
-        assert!(renderer.compose_layer_over_backdrop_to_oriented_cached(
-            &mut target,
-            &backdrop,
-            layout,
-            true,
-        ));
+        assert!(
+            renderer
+                .compose_layer_over_backdrop_to_oriented_cached(
+                    &mut target,
+                    &backdrop,
+                    layout,
+                    true,
+                )
+                .composed
+        );
 
         let dirty = renderer.dirty_rect();
         for y in dirty.y0..dirty.y1 {
@@ -2931,6 +3102,127 @@ mod tests {
         let unselected_x = dirty.x0 + 2;
         let offset = layout.physical_offset(unselected_x, unselected_y);
         assert_eq!(target.cached_565()[offset], backdrop[offset]);
+    }
+
+    fn scalar_crt_backdrop_composition(
+        renderer: &ArcadeListRenderer,
+        destination: &mut [Rgb565Pixel],
+        backdrop: &[Rgb565Pixel],
+        output: Rgb565OutputLayout,
+        backdrop_is_fresh: bool,
+    ) {
+        let selection_y = renderer.selection_y();
+        let selection_bottom = selection_y + renderer.style.row_height.max(1) as usize;
+        for viewport_y in 0..renderer.visible_height {
+            let source_y = (renderer.surface_y + viewport_y) % renderer.visible_height;
+            let source_row = source_y * renderer.width;
+            let selected = viewport_y >= selection_y && viewport_y < selection_bottom;
+            for local_x in 0..renderer.width {
+                let offset = output.physical_offset(
+                    renderer.geometry.x + local_x,
+                    renderer.geometry.y + viewport_y,
+                );
+                let pixel = renderer.surface[source_row + local_x];
+                destination[offset] = if selected {
+                    selected_aperture_pixel_with_style(pixel, renderer.style)
+                } else if is_arcade_unselected_overlay_fill_pixel(pixel, renderer.style) {
+                    if backdrop_is_fresh {
+                        destination[offset]
+                    } else {
+                        backdrop[offset]
+                    }
+                } else {
+                    pixel
+                };
+            }
+        }
+    }
+
+    #[test]
+    fn rotated_crt_backdrop_compositor_matches_scalar_reference_without_allocating() {
+        let display = native_crt_240_display();
+        let metrics = CrtUiMetrics::for_display(&display);
+        let games = games("arcade", 48);
+        for orientation in [
+            crate::ui_display::ScreenOrientation::MonitorClockwise,
+            crate::ui_display::ScreenOrientation::MonitorCounterclockwise,
+        ] {
+            let layout = UiLayoutGeometry::for_display(&display, orientation);
+            for search in [false, true] {
+                let arcade = CrtArcadeLayout::for_layout(layout, metrics, search);
+                let mut renderer = ArcadeListRenderer::new_for_crt_display(metrics, &display);
+                renderer.set_crt_portrait_rows(true);
+                renderer
+                    .set_geometry_for_visible_height(arcade.list_geometry(), arcade.list.height);
+                renderer.draw(ArcadeGameView::contiguous(&games), 4, 0.0, true);
+                let output = layout.output_layout();
+                let backdrop = (0..output.len())
+                    .map(|index| Rgb565Pixel(index as u16 ^ 0x5a5a))
+                    .collect::<Vec<_>>();
+                for backdrop_is_fresh in [false, true] {
+                    let mut optimized = UiFrameTarget::cached(FramebufferTargetGeometry::new(
+                        output.physical_width(),
+                        output.physical_height(),
+                    ));
+                    optimized.cached_565_mut().copy_from_slice(&backdrop);
+                    let mut scalar = backdrop.clone();
+                    scalar_crt_backdrop_composition(
+                        &renderer,
+                        &mut scalar,
+                        &backdrop,
+                        output,
+                        backdrop_is_fresh,
+                    );
+                    let stats = renderer.compose_layer_over_backdrop_to_oriented_cached_with_state(
+                        &mut optimized,
+                        &backdrop,
+                        output,
+                        false,
+                        backdrop_is_fresh,
+                    );
+                    assert!(stats.composed);
+                    assert_eq!(stats.restored_pixels == 0, backdrop_is_fresh);
+                    assert!(stats.foreground_pixels > 0);
+                    assert_eq!(optimized.cached_565(), scalar);
+                }
+
+                renderer.draw(
+                    ArcadeGameView::contiguous(&games),
+                    5,
+                    crt_arcade_row_height(metrics.game_row_height, true) as f32,
+                    false,
+                );
+                let capacities = (
+                    renderer.surface.capacity(),
+                    renderer.surface_nonfill_runs.capacity(),
+                    renderer.surface_selected_text_runs.capacity(),
+                    renderer.band_scratch.capacity(),
+                );
+                let mut target = UiFrameTarget::cached(FramebufferTargetGeometry::new(
+                    output.physical_width(),
+                    output.physical_height(),
+                ));
+                for _ in 0..32 {
+                    let stats = renderer.compose_layer_over_backdrop_to_oriented_cached_with_state(
+                        &mut target,
+                        &backdrop,
+                        output,
+                        false,
+                        false,
+                    );
+                    assert!(stats.composed);
+                }
+                assert_eq!(
+                    capacities,
+                    (
+                        renderer.surface.capacity(),
+                        renderer.surface_nonfill_runs.capacity(),
+                        renderer.surface_selected_text_runs.capacity(),
+                        renderer.band_scratch.capacity(),
+                    )
+                );
+            }
+        }
     }
 
     fn surface_in_viewport_order(renderer: &ArcadeListRenderer) -> Vec<Rgb565Pixel> {
