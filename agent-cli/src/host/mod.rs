@@ -2135,6 +2135,12 @@ impl DeliveryTransferMetrics {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum DeliveryTimingSample {
+    Stage {
+        lane: DeliveryLane,
+        stage: &'static str,
+        status: DeliveryTimingStatus,
+        elapsed_ms: u64,
+    },
     Transfer {
         lane: DeliveryLane,
         status: DeliveryTimingStatus,
@@ -2173,7 +2179,8 @@ fn run_coherent_delivery(
     reboots: bool,
     timings: &mut Vec<DeliveryTimingSample>,
 ) -> std::result::Result<String, DeviceFailure> {
-    actions.snapshot()?;
+    let lane = actions.timing_lane();
+    timed_delivery_stage(timings, lane, "snapshot", || actions.snapshot())?;
     let delivery = (|| {
         if actions.interrupted() {
             return Err(DeviceFailure::OperationFailed(
@@ -2201,9 +2208,9 @@ fn run_coherent_delivery(
                 "delivery interrupted".into(),
             ));
         }
-        actions.activate()?;
+        timed_delivery_stage(timings, lane, "activate", || actions.activate())?;
         if reboots {
-            actions.reboot()?;
+            timed_delivery_stage(timings, lane, "reboot", || actions.reboot())?;
         }
         if actions.interrupted() {
             return Err(DeviceFailure::OperationFailed(
@@ -2232,16 +2239,25 @@ fn run_coherent_delivery(
         Ok(detail)
     })();
     match delivery {
-        Ok(detail) => actions.commit().map(|()| detail).map_err(|error| {
-            DeviceFailure::RecoveryRequired(format!(
-                "delivery is healthy but commit cleanup failed ({error:?})"
-            ))
-        }),
+        Ok(detail) => timed_delivery_stage(timings, lane, "commit", || actions.commit())
+            .map(|()| detail)
+            .map_err(|error| {
+                DeviceFailure::RecoveryRequired(format!(
+                    "delivery is healthy but commit cleanup failed ({error:?})"
+                ))
+            }),
         Err(delivery_error) => {
-            let rollback = actions
-                .rollback()
-                .and_then(|()| if reboots { actions.reboot() } else { Ok(()) })
-                .and_then(|()| actions.health());
+            let rollback = timed_delivery_stage(timings, lane, "rollback", || actions.rollback())
+                .and_then(|()| {
+                    if reboots {
+                        timed_delivery_stage(timings, lane, "rollback-reboot", || actions.reboot())
+                    } else {
+                        Ok(())
+                    }
+                })
+                .and_then(|()| {
+                    timed_delivery_stage(timings, lane, "rollback-health", || actions.health())
+                });
             match rollback {
                 Ok(()) => Err(delivery_error),
                 Err(error) => Err(DeviceFailure::RecoveryRequired(format!(
@@ -2250,6 +2266,29 @@ fn run_coherent_delivery(
             }
         }
     }
+}
+
+fn timed_delivery_stage<T>(
+    timings: &mut Vec<DeliveryTimingSample>,
+    lane: Option<DeliveryLane>,
+    stage: &'static str,
+    action: impl FnOnce() -> std::result::Result<T, DeviceFailure>,
+) -> std::result::Result<T, DeviceFailure> {
+    let started = Instant::now();
+    let result = action();
+    if let Some(lane) = lane {
+        timings.push(DeliveryTimingSample::Stage {
+            lane,
+            stage,
+            status: if result.is_ok() {
+                DeliveryTimingStatus::Passed
+            } else {
+                DeliveryTimingStatus::Failed
+            },
+            elapsed_ms: elapsed_millis(started),
+        });
+    }
+    result
 }
 
 fn restore_and_resume(
@@ -27206,6 +27245,12 @@ H: Handlers=event3 js0"#
         assert!(matches!(
             timings.as_slice(),
             [
+                DeliveryTimingSample::Stage {
+                    lane: DeliveryLane::Runtime,
+                    stage: "snapshot",
+                    status: DeliveryTimingStatus::Passed,
+                    ..
+                },
                 DeliveryTimingSample::Transfer {
                     lane: DeliveryLane::Runtime,
                     status: DeliveryTimingStatus::Passed,
@@ -27216,8 +27261,20 @@ H: Handlers=event3 js0"#
                         ..
                     },
                 },
+                DeliveryTimingSample::Stage {
+                    lane: DeliveryLane::Runtime,
+                    stage: "activate",
+                    status: DeliveryTimingStatus::Passed,
+                    ..
+                },
                 DeliveryTimingSample::Smoke {
                     lane: DeliveryLane::Runtime,
+                    status: DeliveryTimingStatus::Passed,
+                    ..
+                },
+                DeliveryTimingSample::Stage {
+                    lane: DeliveryLane::Runtime,
+                    stage: "commit",
                     status: DeliveryTimingStatus::Passed,
                     ..
                 },
@@ -27252,13 +27309,13 @@ H: Handlers=event3 js0"#
                 "snapshot", "deploy", "activate", "smoke", "rollback", "health"
             ]
         );
-        assert!(matches!(
-            runtime_timings.last(),
-            Some(DeliveryTimingSample::Smoke {
+        assert!(runtime_timings.iter().any(|sample| matches!(
+            sample,
+            DeliveryTimingSample::Smoke {
                 status: DeliveryTimingStatus::Failed,
                 ..
-            })
-        ));
+            }
+        )));
 
         let mut platform = ScriptedCoherentDelivery {
             fail_at: Some("smoke"),
@@ -27288,16 +27345,28 @@ H: Handlers=event3 js0"#
         ));
         assert!(matches!(
             timings.as_slice(),
-            [DeliveryTimingSample::Transfer {
-                status: DeliveryTimingStatus::Failed,
-                metrics: DeliveryTransferMetrics {
-                    files: 3,
-                    bytes: 1_024,
-                    upload_ms: 8,
+            [
+                DeliveryTimingSample::Stage {
+                    stage: "snapshot",
+                    status: DeliveryTimingStatus::Passed,
                     ..
                 },
-                ..
-            }]
+                DeliveryTimingSample::Transfer {
+                    status: DeliveryTimingStatus::Failed,
+                    metrics: DeliveryTransferMetrics {
+                        files: 3,
+                        bytes: 1_024,
+                        upload_ms: 8,
+                        ..
+                    },
+                    ..
+                },
+                DeliveryTimingSample::Stage {
+                    stage: "rollback",
+                    status: DeliveryTimingStatus::Failed,
+                    ..
+                }
+            ]
         ));
     }
 

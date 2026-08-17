@@ -19,6 +19,7 @@ use std::io::{Read, Write};
 use std::path::Path;
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::time::Instant;
 
 fn main() -> ExitCode {
     match run() {
@@ -927,6 +928,7 @@ fn deliver(
     repository: &std::path::Path,
     reporter: &mut Reporter<'_>,
 ) -> AgentResult<Outcome> {
+    let total_started = Instant::now();
     let delivery = deliver_inner(evidence, repository, reporter);
     reporter.emit(
         EventKind::Progress,
@@ -934,8 +936,10 @@ fn deliver(
         "cleaning transient delivery staging",
         None,
     )?;
+    let cleanup_started = Instant::now();
     let cleanup = agent_cli::delivery::cleanup_workspace(repository);
-    match (delivery, cleanup) {
+    emit_delivery_timing(reporter, "cleanup", cleanup.is_ok(), cleanup_started)?;
+    let result = match (delivery, cleanup) {
         (Ok(execution), Ok(())) => {
             reporter.emit(
                 EventKind::Completed,
@@ -956,7 +960,9 @@ fn deliver(
             );
             Err(error)
         }
-    }
+    };
+    emit_delivery_timing(reporter, "cli-total", result.is_ok(), total_started)?;
+    result
 }
 
 fn deliver_inner(
@@ -964,12 +970,41 @@ fn deliver_inner(
     repository: &std::path::Path,
     reporter: &mut Reporter<'_>,
 ) -> AgentResult<agent_cli::delivery::DeliveryExecution> {
-    let dirty = agent_cli::git::value(repository, &["status", "--porcelain"])?;
-    if !dirty.is_empty() {
-        return Err("dirty_worktree: commit or discard changes before delivery".into());
-    }
-    let sha = agent_cli::git::value(repository, &["rev-parse", "HEAD"])?;
+    let preflight_started = Instant::now();
+    let preflight: AgentResult<String> = (|| {
+        let dirty = agent_cli::git::value(repository, &["status", "--porcelain"])?;
+        if !dirty.is_empty() {
+            return Err("dirty_worktree: commit or discard changes before delivery".into());
+        }
+        let sha = agent_cli::git::value(repository, &["rev-parse", "HEAD"])?;
+        Ok(sha)
+    })();
+    emit_delivery_timing(reporter, "preflight", preflight.is_ok(), preflight_started)?;
+    let sha = preflight?;
     agent_cli::delivery::execute(repository, &sha, reporter)
+}
+
+fn emit_delivery_timing(
+    reporter: &mut Reporter<'_>,
+    phase: &str,
+    passed: bool,
+    started: Instant,
+) -> AgentResult<()> {
+    reporter.emit(
+        if passed {
+            EventKind::Completed
+        } else {
+            EventKind::Warning
+        },
+        "delivery-timing",
+        &format!(
+            "delivery_phase_tsv\tscope=cli\tphase={phase}\tstatus={}\tseconds={:.3}",
+            if passed { "passed" } else { "failed" },
+            started.elapsed().as_secs_f64(),
+        ),
+        None,
+    )?;
+    Ok(())
 }
 
 fn deliver_local_main(

@@ -11,7 +11,7 @@ use serde_json::Value;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const PREPARE_DEADLINE: Duration = Duration::from_secs(10 * 60);
 
@@ -95,6 +95,15 @@ pub trait DeliveryActions {
     fn is_complete(&self) -> bool {
         false
     }
+
+    fn record_timing(&mut self, _sample: DeliveryPhaseTiming) {}
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DeliveryPhaseTiming {
+    phase: &'static str,
+    status: crate::host::DeliveryTimingStatus,
+    elapsed_ms: u64,
 }
 
 pub fn run_transaction(
@@ -126,7 +135,7 @@ pub fn run_transaction(
         if let Err(error) = progress(Step::Action(*phase), *percent) {
             if mutation_started {
                 let _ = progress(Step::Compensation, 95);
-                return match actions.compensate() {
+                return match compensate_with_timing(actions) {
                     Ok(()) => Err(format!("cancelled: {error}; rollback=complete").into()),
                     Err(rollback) => Err(AgentError::recovery_required(
                         format!("delivery cancelled ({error})"),
@@ -136,7 +145,18 @@ pub fn run_transaction(
             }
             return Err(AgentError::cancelled(error));
         }
-        match actions.run(*phase) {
+        let started = Instant::now();
+        let phase_result = actions.run(*phase);
+        actions.record_timing(DeliveryPhaseTiming {
+            phase: phase.label(),
+            status: if phase_result.is_ok() {
+                crate::host::DeliveryTimingStatus::Passed
+            } else {
+                crate::host::DeliveryTimingStatus::Failed
+            },
+            elapsed_ms: elapsed_millis(started),
+        });
+        match phase_result {
             Ok(()) => {
                 mutation_started |= phase.starts_mutation();
                 if actions.is_complete() {
@@ -145,7 +165,7 @@ pub fn run_transaction(
             }
             Err(error) if mutation_started || phase.may_have_mutated() => {
                 let _ = progress(Step::Compensation, 95);
-                return match actions.compensate() {
+                return match compensate_with_timing(actions) {
                     Ok(()) => Err(format!("{}: {error}; rollback=complete", phase.label()).into()),
                     Err(rollback) => Err(AgentError::recovery_required(
                         format!("{} failed ({error})", phase.label()),
@@ -157,6 +177,25 @@ pub fn run_transaction(
         }
     }
     Ok(())
+}
+
+fn compensate_with_timing(actions: &mut dyn DeliveryActions) -> AgentResult<()> {
+    let started = Instant::now();
+    let compensation = actions.compensate();
+    actions.record_timing(DeliveryPhaseTiming {
+        phase: "compensation",
+        status: if compensation.is_ok() {
+            crate::host::DeliveryTimingStatus::Passed
+        } else {
+            crate::host::DeliveryTimingStatus::Failed
+        },
+        elapsed_ms: elapsed_millis(started),
+    });
+    compensation
+}
+
+fn elapsed_millis(started: Instant) -> u64 {
+    started.elapsed().as_millis().try_into().unwrap_or(u64::MAX)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -252,7 +291,21 @@ fn execute_with_device<D: DeliveryDevice>(
     reporter: &mut Reporter<'_>,
     device: D,
 ) -> AgentResult<DeliveryExecution> {
-    let mut deployment = crate::deploy::plan(repository, Vec::new())?;
+    let planning_started = Instant::now();
+    let deployment = crate::deploy::plan(repository, Vec::new());
+    emit_phase_timing(
+        reporter,
+        DeliveryPhaseTiming {
+            phase: "planning",
+            status: if deployment.is_ok() {
+                crate::host::DeliveryTimingStatus::Passed
+            } else {
+                crate::host::DeliveryTimingStatus::Failed
+            },
+            elapsed_ms: elapsed_millis(planning_started),
+        },
+    )?;
+    let mut deployment = deployment?;
     deployment.platform_candidate = platform_candidate;
     let mut actions = ProcessActions {
         repository,
@@ -263,6 +316,7 @@ fn execute_with_device<D: DeliveryDevice>(
         manager_artifact: None,
         main_revision: None,
         installed_manifest: None,
+        phase_timings: Vec::new(),
         timing_samples: Vec::new(),
         stage: repository
             .join("build/agent-deploy/stage")
@@ -284,8 +338,12 @@ fn execute_with_device<D: DeliveryDevice>(
         )?),
     });
     match transaction {
-        Ok(()) => emit_delivery_timings(reporter, &actions.timing_samples)?,
+        Ok(()) => {
+            emit_phase_timings(reporter, &actions.phase_timings)?;
+            emit_delivery_timings(reporter, &actions.timing_samples)?;
+        }
         Err(error) => {
+            let _ = emit_phase_timings(reporter, &actions.phase_timings);
             let _ = emit_delivery_timings(reporter, &actions.timing_samples);
             return Err(error);
         }
@@ -308,6 +366,35 @@ fn execute_with_device<D: DeliveryDevice>(
         outcome: Outcome::Passed,
         decision: actions.decision,
     })
+}
+
+fn emit_phase_timings(
+    reporter: &mut Reporter<'_>,
+    samples: &[DeliveryPhaseTiming],
+) -> AgentResult<()> {
+    for sample in samples {
+        emit_phase_timing(reporter, *sample)?;
+    }
+    Ok(())
+}
+
+fn emit_phase_timing(reporter: &mut Reporter<'_>, sample: DeliveryPhaseTiming) -> AgentResult<()> {
+    reporter.emit(
+        if sample.status == crate::host::DeliveryTimingStatus::Passed {
+            EventKind::Completed
+        } else {
+            EventKind::Warning
+        },
+        "delivery-timing",
+        &format!(
+            "delivery_phase_tsv\tscope=cli\tphase={}\tstatus={}\tseconds={:.3}",
+            sample.phase,
+            sample.status.label(),
+            sample.elapsed_ms as f64 / 1_000.0,
+        ),
+        None,
+    )?;
+    Ok(())
 }
 
 fn emit_delivery_timings(
@@ -339,11 +426,13 @@ fn render_delivery_timing(
             },
             "delivery-transfer",
             format!(
-                "delivery_transfer_tsv\tlane={}\tstatus={}\tfiles={}\tbytes={}\tupload_ms={}\tdeploy_ms={}\tbytes_per_second={}",
+                "delivery_transfer_tsv\tscope=device\tlane={}\tstatus={}\tseconds={:.3}\tfiles={}\tbytes={}\tupload_seconds={:.3}\tupload_ms={}\tdeploy_ms={}\tbytes_per_second={}",
                 lane.label(),
                 status.label(),
+                metrics.deploy_ms as f64 / 1_000.0,
                 metrics.files,
                 metrics.bytes,
+                metrics.upload_ms as f64 / 1_000.0,
                 metrics.upload_ms,
                 metrics.deploy_ms,
                 metrics.bytes_per_second(),
@@ -361,9 +450,30 @@ fn render_delivery_timing(
             },
             "delivery-smoke",
             format!(
-                "delivery_smoke_tsv\tlane={}\tstatus={}\tsmoke_ms={smoke_ms}",
+                "delivery_smoke_tsv\tscope=device\tlane={}\tstatus={}\tseconds={:.3}\tsmoke_ms={smoke_ms}",
                 lane.label(),
                 status.label(),
+                smoke_ms as f64 / 1_000.0,
+            ),
+        ),
+        DeliveryTimingSample::Stage {
+            lane,
+            stage,
+            status,
+            elapsed_ms,
+        } => (
+            if status == DeliveryTimingStatus::Passed {
+                EventKind::Completed
+            } else {
+                EventKind::Warning
+            },
+            "delivery-device-stage",
+            format!(
+                "delivery_stage_tsv\tscope=device\tlane={}\tstage={}\tstatus={}\tseconds={:.3}",
+                lane.label(),
+                stage,
+                status.label(),
+                elapsed_ms as f64 / 1_000.0,
             ),
         ),
     }
@@ -395,6 +505,7 @@ struct ProcessActions<'a, D = DeviceClient> {
     manager_artifact: Option<PathBuf>,
     main_revision: Option<String>,
     installed_manifest: Option<String>,
+    phase_timings: Vec<DeliveryPhaseTiming>,
     timing_samples: Vec<crate::host::DeliveryTimingSample>,
     stage: PathBuf,
     device: D,
@@ -624,6 +735,10 @@ impl<D: DeliveryDevice> DeliveryActions for ProcessActions<'_, D> {
 
     fn is_complete(&self) -> bool {
         self.decision == DeliveryDecision::NoOp
+    }
+
+    fn record_timing(&mut self, sample: DeliveryPhaseTiming) {
+        self.phase_timings.push(sample);
     }
 
     fn compensate(&mut self) -> AgentResult<()> {
@@ -870,6 +985,7 @@ mod tests {
         fail_at: Option<Phase>,
         rollback_fails: bool,
         visited: Vec<Step>,
+        timings: Vec<DeliveryPhaseTiming>,
     }
 
     impl DeliveryActions for FakeActions {
@@ -889,6 +1005,10 @@ mod tests {
             } else {
                 Ok(())
             }
+        }
+
+        fn record_timing(&mut self, sample: DeliveryPhaseTiming) {
+            self.timings.push(sample);
         }
     }
 
@@ -917,6 +1037,13 @@ mod tests {
         assert_eq!(
             actions.visited,
             PHASES.map(Step::Action).into_iter().collect::<Vec<_>>()
+        );
+        assert_eq!(actions.timings.len(), PHASES.len());
+        assert!(
+            actions
+                .timings
+                .iter()
+                .all(|sample| { sample.status == crate::host::DeliveryTimingStatus::Passed })
         );
     }
 
@@ -965,6 +1092,7 @@ mod tests {
         .unwrap_err();
         assert!(error.to_string().starts_with("cancelled:"));
         assert_eq!(actions.visited.last(), Some(&Step::Compensation));
+        assert_eq!(actions.timings.last().unwrap().phase, "compensation");
     }
 
     #[test]
@@ -1136,7 +1264,7 @@ mod tests {
             (
                 EventKind::Completed,
                 "delivery-transfer",
-                "delivery_transfer_tsv\tlane=runtime\tstatus=passed\tfiles=3\tbytes=1500\tupload_ms=500\tdeploy_ms=900\tbytes_per_second=3000".into(),
+                "delivery_transfer_tsv\tscope=device\tlane=runtime\tstatus=passed\tseconds=0.900\tfiles=3\tbytes=1500\tupload_seconds=0.500\tupload_ms=500\tdeploy_ms=900\tbytes_per_second=3000".into(),
             )
         );
         assert_eq!(
@@ -1144,7 +1272,21 @@ mod tests {
             (
                 EventKind::Completed,
                 "delivery-smoke",
-                "delivery_smoke_tsv\tlane=runtime\tstatus=passed\tsmoke_ms=250".into(),
+                "delivery_smoke_tsv\tscope=device\tlane=runtime\tstatus=passed\tseconds=0.250\tsmoke_ms=250".into(),
+            )
+        );
+        let stage = crate::host::DeliveryTimingSample::Stage {
+            lane: crate::host::DeliveryLane::Runtime,
+            stage: "activate",
+            status: crate::host::DeliveryTimingStatus::Passed,
+            elapsed_ms: 125,
+        };
+        assert_eq!(
+            render_delivery_timing(stage),
+            (
+                EventKind::Completed,
+                "delivery-device-stage",
+                "delivery_stage_tsv\tscope=device\tlane=runtime\tstage=activate\tstatus=passed\tseconds=0.125".into(),
             )
         );
         let failed_transfer = crate::host::DeliveryTimingSample::Transfer {
@@ -1219,6 +1361,7 @@ mod tests {
             manager_artifact: None,
             main_revision: None,
             installed_manifest: None,
+            phase_timings: Vec::new(),
             timing_samples: Vec::new(),
             stage: PathBuf::from("stage"),
             device,

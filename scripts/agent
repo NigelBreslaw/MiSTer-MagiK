@@ -3,6 +3,14 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 set -euo pipefail
+DELIVERY_TIMING=0
+for argument in "$@"; do
+  if [[ "$argument" == "deliver" ]]; then
+    DELIVERY_TIMING=1
+    break
+  fi
+done
+WRAPPER_STARTED=$SECONDS
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MANIFEST="${MISTER_AGENT_CLI_MANIFEST:-$ROOT/agent-cli/Cargo.toml}"
 SOURCE_ROOT="$(dirname "$MANIFEST")"
@@ -24,6 +32,10 @@ case "$PROFILE" in
 esac
 BINARY="${MISTER_AGENT_CLI_BINARY:-$TARGET_ROOT/$PROFILE_DIR/agent-cli}"
 LOCK="$TARGET_ROOT/.agent-cli-build-lock"
+BUILD_LOCK_SECONDS=0
+BUILD_SECONDS=0
+BUILD_LOCK_STATUS=skipped
+BUILD_STATUS=skipped
 
 REQUIRED_INPUTS=(
   "$MANIFEST"
@@ -67,9 +79,17 @@ inputs_are_stale() {
   return 1
 }
 
+input_scan_started=$SECONDS
+INPUTS_STALE=0
 if inputs_are_stale; then
+  INPUTS_STALE=1
+fi
+INPUT_SCAN_SECONDS=$((SECONDS - input_scan_started))
+
+if (( INPUTS_STALE )); then
   mkdir -p "$TARGET_ROOT"
   waited=0
+  lock_started=$SECONDS
   until mkdir "$LOCK" 2>/dev/null; do
     if (( waited >= 1200 )); then
       echo "agent-cli build lock timed out" >&2
@@ -78,15 +98,27 @@ if inputs_are_stale; then
     sleep 0.05
     waited=$((waited + 1))
   done
+  BUILD_LOCK_SECONDS=$((SECONDS - lock_started))
+  BUILD_LOCK_STATUS=passed
   cleanup() { rmdir "$LOCK" 2>/dev/null || true; }
   trap cleanup EXIT INT TERM
 
   # Another launcher may have completed the build while this process waited.
   if inputs_are_stale; then
+    build_started=$SECONDS
     MISTER_AGENT_CLI_BINARY="$BINARY" cargo "${BUILD_ARGS[@]}" --manifest-path "$MANIFEST"
+    BUILD_SECONDS=$((SECONDS - build_started))
+    BUILD_STATUS=passed
   fi
   cleanup
   trap - EXIT INT TERM
+fi
+
+if (( DELIVERY_TIMING )); then
+  printf 'delivery-timing: scope=wrapper phase=input-scan status=passed seconds=%d.000\n' "$INPUT_SCAN_SECONDS" >&2
+  printf 'delivery-timing: scope=wrapper phase=build-lock status=%s seconds=%d.000\n' "$BUILD_LOCK_STATUS" "$BUILD_LOCK_SECONDS" >&2
+  printf 'delivery-timing: scope=wrapper phase=agent-cli-build status=%s seconds=%d.000\n' "$BUILD_STATUS" "$BUILD_SECONDS" >&2
+  printf 'delivery-timing: scope=wrapper phase=bootstrap-total status=passed seconds=%d.000\n' "$((SECONDS - WRAPPER_STARTED))" >&2
 fi
 
 exec "$BINARY" "$@"
