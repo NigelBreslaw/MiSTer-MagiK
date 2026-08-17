@@ -86,9 +86,9 @@ export component ArcadeListScreen inherits Rectangle {
     background: CrtTheme.background;
 
     CrtHeader {
-        x: MisterUi.grid-x * 2;
-        y: MisterUi.grid-y * 2;
-        width: parent.width - MisterUi.grid-x * 4;
+        x: MisterBridge.arcade-crt-header-x * 1px;
+        y: MisterBridge.arcade-crt-header-y * 1px;
+        width: MisterBridge.arcade-crt-header-width * 1px;
         background: transparent;
         border-width: 0px;
         border-color: transparent;
@@ -103,15 +103,15 @@ export component ArcadeListScreen inherits Rectangle {
     }
 
     if MisterBridge.arcade-search-active : SearchKeyboard {
-        x: MisterUi.grid-x;
-        y: MisterUi.header-height + MisterUi.grid-y * 3;
-        width: parent.width * 2 / 5;
-        height: parent.height - self.y - MisterUi.footer-height - MisterUi.grid-y * 3;
+        x: MisterBridge.arcade-crt-keyboard-x * 1px;
+        y: MisterBridge.arcade-crt-keyboard-y * 1px;
+        width: MisterBridge.arcade-crt-keyboard-width * 1px;
+        height: MisterBridge.arcade-crt-keyboard-height * 1px;
     }
 
     Rectangle {
-        x: MisterBridge.arcade-list-x * 1px;
-        y: MisterBridge.arcade-list-y * 1px;
+        x: (MisterBridge.arcade-list-x - MisterUi.crt-content-x) * 1px;
+        y: (MisterBridge.arcade-list-y - MisterUi.crt-content-y) * 1px;
         width: MisterBridge.arcade-list-width * 1px;
         height: MisterBridge.arcade-list-height * 1px;
         background: CrtTheme.panel-alt;
@@ -135,8 +135,8 @@ export component ArcadeListScreen inherits Rectangle {
     }
 
     if MisterBridge.arcade-games-loading : Rectangle {
-        x: MisterBridge.arcade-list-x * 1px;
-        y: MisterBridge.arcade-list-y * 1px;
+        x: (MisterBridge.arcade-list-x - MisterUi.crt-content-x) * 1px;
+        y: (MisterBridge.arcade-list-y - MisterUi.crt-content-y) * 1px;
         width: MisterBridge.arcade-list-width * 1px;
         height: MisterBridge.arcade-list-height * 1px;
         background: CrtTheme.panel-alt;
@@ -151,9 +151,9 @@ export component ArcadeListScreen inherits Rectangle {
     }
 
     CrtFooter {
-        x: MisterUi.grid-x * 2;
-        y: parent.height - MisterUi.footer-height - MisterUi.grid-y * 2;
-        width: parent.width - MisterUi.grid-x * 4;
+        x: MisterBridge.arcade-crt-footer-x * 1px;
+        y: MisterBridge.arcade-crt-footer-y * 1px;
+        width: MisterBridge.arcade-crt-footer-width * 1px;
         background: transparent;
         border-width: 0px;
         border-color: transparent;

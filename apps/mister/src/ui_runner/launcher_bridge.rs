@@ -336,14 +336,12 @@ fn sync_arcade_list_geometry_bridge(
     ui: &UiDisplay,
 ) {
     // Rust and Slint consume one route-owned PAL geometry contract.
-    let (geometry, render_h) = arcade_list_layout(nav, ui);
+    let (geometry, visible_height) = arcade_list_layout(nav, ui);
     bridge.set_arcade_list_x(geometry.x as i32);
     bridge.set_arcade_list_y(geometry.y as i32);
     bridge.set_arcade_list_width(geometry.width as i32);
-    bridge.set_arcade_list_height(geometry.visible_height_with_metrics(
-        render_h,
-        nav.uses_crt_layout().then(|| CrtUiMetrics::for_display(ui)),
-    ) as i32);
+    bridge.set_arcade_list_height(visible_height as i32);
+    sync_crt_arcade_layout_bridge(bridge, nav, ui);
     sync_arcade_preview_geometry_bridge(bridge, nav, ui);
 }
 
@@ -369,11 +367,8 @@ pub(super) fn arcade_list_layout(nav: &LauncherNav, ui: &UiDisplay) -> (ArcadeLi
     if nav.uses_crt_layout() {
         let layout =
             crate::ui_display::UiLayoutGeometry::for_display(ui, nav.settings.screen_orientation);
-        let content = layout.content_rect();
-        return (
-            ArcadeListGeometry::crt_for_content(content, CrtUiMetrics::for_display(ui), search),
-            content.bottom(),
-        );
+        let arcade = CrtArcadeLayout::for_layout(layout, CrtUiMetrics::for_display(ui), search);
+        return (arcade.list_geometry(), arcade.list.height);
     }
     let geometry = if nav.uses_portrait_layout() {
         ArcadeListGeometry::portrait(ui.render_h(), ui.render_w(), search)
@@ -389,7 +384,46 @@ pub(super) fn arcade_list_layout(nav: &LauncherNav, ui: &UiDisplay) -> (ArcadeLi
     } else {
         ui.render_h()
     };
-    (geometry, render_h)
+    (geometry, geometry.visible_height(render_h))
+}
+
+fn sync_crt_arcade_layout_bridge(
+    bridge: &slint_ui::launcher::MisterBridge,
+    nav: &LauncherNav,
+    ui: &UiDisplay,
+) {
+    if !nav.uses_crt_layout() {
+        return;
+    }
+    let geometry = UiLayoutGeometry::for_display(ui, nav.settings.screen_orientation);
+    let content = geometry.content_rect();
+    let arcade = CrtArcadeLayout::for_layout(
+        geometry,
+        CrtUiMetrics::for_display(ui),
+        nav.arcade_search.is_active(&nav.arcade_filter.active),
+    );
+    let relative = |rect: crate::ui_display::CrtContentRect| {
+        (
+            rect.x.saturating_sub(content.x) as i32,
+            rect.y.saturating_sub(content.y) as i32,
+            rect.width as i32,
+            rect.height as i32,
+        )
+    };
+    let (header_x, header_y, header_width, _) = relative(arcade.header);
+    let (footer_x, footer_y, footer_width, _) = relative(arcade.footer);
+    let (keyboard_x, keyboard_y, keyboard_width, keyboard_height) =
+        arcade.search_keyboard.map(relative).unwrap_or_default();
+    bridge.set_arcade_crt_header_x(header_x);
+    bridge.set_arcade_crt_header_y(header_y);
+    bridge.set_arcade_crt_header_width(header_width);
+    bridge.set_arcade_crt_footer_x(footer_x);
+    bridge.set_arcade_crt_footer_y(footer_y);
+    bridge.set_arcade_crt_footer_width(footer_width);
+    bridge.set_arcade_crt_keyboard_x(keyboard_x);
+    bridge.set_arcade_crt_keyboard_y(keyboard_y);
+    bridge.set_arcade_crt_keyboard_width(keyboard_width);
+    bridge.set_arcade_crt_keyboard_height(keyboard_height);
 }
 
 pub(super) struct CatalogScanBridgeStatus {
@@ -946,7 +980,7 @@ fn sync_arcade_list_geometry_bridge_if_changed(
     nav: &LauncherNav,
     ui: &UiDisplay,
 ) {
-    let (geometry, render_h) = arcade_list_layout(nav, ui);
+    let (geometry, visible_height) = arcade_list_layout(nav, ui);
     set_bridge_if_changed!(
         bridge,
         get_arcade_list_x,
@@ -969,11 +1003,9 @@ fn sync_arcade_list_geometry_bridge_if_changed(
         bridge,
         get_arcade_list_height,
         set_arcade_list_height,
-        geometry.visible_height_with_metrics(
-            render_h,
-            nav.uses_crt_layout().then(|| CrtUiMetrics::for_display(ui)),
-        ) as i32
+        visible_height as i32
     );
+    sync_crt_arcade_layout_bridge(bridge, nav, ui);
     let (width, height) = if nav.uses_portrait_layout() {
         (ui.render_h(), ui.render_w())
     } else {

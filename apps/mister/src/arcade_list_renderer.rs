@@ -16,6 +16,7 @@ use crate::framebuffer::scanout_slots::ScanoutSlotsRgb565Framebuffer;
 use crate::framebuffer::target::{DirtyRect, UiFrameTarget};
 use crate::ui_display::{
     CrtContentRect, CrtFontExperiment, CrtFontFamily, CrtUiMetrics, ResolvedOutputRoute, UiDisplay,
+    UiLayoutGeometry,
 };
 use mister_magik_framebuffer_scenes::{OutputRotation, Rgb565OutputLayout, Rgb565SurfaceMut};
 use slint::platform::software_renderer::Rgb565Pixel;
@@ -249,6 +250,122 @@ pub struct ArcadeListGeometry {
     pub x: usize,
     pub y: usize,
     pub width: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CrtArcadeLayout {
+    pub header: CrtContentRect,
+    pub list: CrtContentRect,
+    pub footer: CrtContentRect,
+    pub search_keyboard: Option<CrtContentRect>,
+}
+
+impl CrtArcadeLayout {
+    pub fn for_layout(layout: UiLayoutGeometry, metrics: CrtUiMetrics, search: bool) -> Self {
+        let content = layout.content_rect();
+        let grid_x = metrics.grid_x.max(1) as usize;
+        let grid_y = metrics.grid_y.max(1) as usize;
+        let header_height = (metrics.header_height.max(1) as usize).min(content.height);
+        let footer_height = (metrics.footer_height.max(1) as usize).min(content.height);
+
+        if layout.is_portrait() {
+            let header = CrtContentRect {
+                x: content.x,
+                y: content.y,
+                width: content.width,
+                height: header_height,
+            };
+            let footer = CrtContentRect {
+                x: content.x,
+                y: content.bottom().saturating_sub(footer_height),
+                width: content.width,
+                height: footer_height,
+            };
+            let body_y = header.bottom().saturating_add(grid_y).min(footer.y);
+            let body_bottom = footer.y.saturating_sub(grid_y).max(body_y);
+            let body_height = body_bottom.saturating_sub(body_y);
+            let (list, search_keyboard) = if search {
+                let keyboard_width = content.width * 2 / 5;
+                let keyboard = CrtContentRect {
+                    x: content.x,
+                    y: body_y,
+                    width: keyboard_width,
+                    height: body_height,
+                };
+                let list_x = keyboard.right().saturating_add(grid_x).min(content.right());
+                (
+                    CrtContentRect {
+                        x: list_x,
+                        y: body_y,
+                        width: content.right().saturating_sub(list_x),
+                        height: body_height,
+                    },
+                    Some(keyboard),
+                )
+            } else {
+                (
+                    CrtContentRect {
+                        x: content.x,
+                        y: body_y,
+                        width: content.width,
+                        height: body_height,
+                    },
+                    None,
+                )
+            };
+            return Self {
+                header,
+                list,
+                footer,
+                search_keyboard,
+            };
+        }
+
+        let margin_x = grid_x * 2;
+        let header = CrtContentRect {
+            x: content.x.saturating_add(margin_x),
+            y: content.y.saturating_add(grid_y * 2),
+            width: content.width.saturating_sub(margin_x * 2),
+            height: header_height,
+        };
+        let footer = CrtContentRect {
+            x: header.x,
+            y: content
+                .bottom()
+                .saturating_sub(footer_height.saturating_add(grid_y * 2)),
+            width: header.width,
+            height: footer_height,
+        };
+        let geometry = ArcadeListGeometry::crt_for_content(content, metrics, search);
+        let list = CrtContentRect {
+            x: geometry.x,
+            y: geometry.y,
+            width: geometry.width,
+            height: geometry.visible_height_with_metrics(content.bottom(), Some(metrics)),
+        };
+        let search_keyboard = search.then(|| CrtContentRect {
+            x: content.x.saturating_add(grid_x),
+            y: content.y.saturating_add(header_height + grid_y * 3),
+            width: content.width * 2 / 5,
+            height: content
+                .height
+                .saturating_sub(header_height + footer_height + grid_y * 6),
+        });
+        Self {
+            header,
+            list,
+            footer,
+            search_keyboard,
+        }
+    }
+
+    pub const fn list_geometry(self) -> ArcadeListGeometry {
+        ArcadeListGeometry {
+            x: self.list.x,
+            y: self.list.y,
+            width: self.list.width,
+        }
+    }
 }
 
 impl ArcadeListGeometry {
@@ -511,7 +628,16 @@ impl ArcadeListRenderer {
     }
 
     pub fn set_geometry_for_render_h(&mut self, geometry: ArcadeListGeometry, render_h: usize) {
-        self.visible_height = geometry.visible_height_with_metrics(render_h, self.crt_metrics);
+        let visible_height = geometry.visible_height_with_metrics(render_h, self.crt_metrics);
+        self.set_geometry_for_visible_height(geometry, visible_height);
+    }
+
+    pub fn set_geometry_for_visible_height(
+        &mut self,
+        geometry: ArcadeListGeometry,
+        visible_height: usize,
+    ) {
+        self.visible_height = visible_height.min(ARCADE_LIST_H);
         if self.geometry != geometry {
             if self.width != geometry.width {
                 self.width = geometry.width;
@@ -2500,6 +2626,197 @@ mod tests {
             crate::ui_display::Crt240Composition::Native240,
         );
         UiDisplay::for_plan(plan)
+    }
+
+    fn native_crt_288_display() -> UiDisplay {
+        let plan = crate::ui_display::UiDisplayPlan::from_geometry_with_route_and_composition(
+            crate::ui_display::ResolvedOutputRoute::Crt288p50
+                .progressive_geometry()
+                .expect("CRT288 display geometry"),
+            crate::ui_display::ResolvedOutputRoute::Crt288p50,
+            "test-native-crt288",
+            crate::ui_display::UiFramebufferSizePolicy::Auto,
+            crate::ui_display::Crt240Composition::Native240,
+        );
+        UiDisplay::for_plan(plan)
+    }
+
+    #[test]
+    fn native_240_portrait_arcade_uses_route_owned_safe_area() {
+        let display = native_crt_240_display();
+        let metrics = CrtUiMetrics::for_display(&display);
+        for orientation in [
+            crate::ui_display::ScreenOrientation::MonitorClockwise,
+            crate::ui_display::ScreenOrientation::MonitorCounterclockwise,
+        ] {
+            let ui_layout = UiLayoutGeometry::for_display(&display, orientation);
+            assert_eq!(
+                ui_layout.content_rect(),
+                CrtContentRect {
+                    x: 12,
+                    y: 32,
+                    width: 216,
+                    height: 576,
+                }
+            );
+            let normal = CrtArcadeLayout::for_layout(ui_layout, metrics, false);
+            assert_eq!(
+                normal.header,
+                CrtContentRect {
+                    x: 12,
+                    y: 32,
+                    width: 216,
+                    height: 48
+                }
+            );
+            assert_eq!(
+                normal.list,
+                CrtContentRect {
+                    x: 12,
+                    y: 84,
+                    width: 216,
+                    height: 500
+                }
+            );
+            assert_eq!(
+                normal.footer,
+                CrtContentRect {
+                    x: 12,
+                    y: 588,
+                    width: 216,
+                    height: 20
+                }
+            );
+            assert_eq!(normal.search_keyboard, None);
+
+            let search = CrtArcadeLayout::for_layout(ui_layout, metrics, true);
+            assert_eq!(
+                search.search_keyboard,
+                Some(CrtContentRect {
+                    x: 12,
+                    y: 84,
+                    width: 86,
+                    height: 500,
+                })
+            );
+            assert_eq!(
+                search.list,
+                CrtContentRect {
+                    x: 106,
+                    y: 84,
+                    width: 122,
+                    height: 500
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn native_288_portrait_arcade_preserves_asymmetric_pal_safe_area() {
+        let display = native_crt_288_display();
+        let metrics = CrtUiMetrics::for_display(&display);
+        for (orientation, expected_x) in [
+            (crate::ui_display::ScreenOrientation::MonitorClockwise, 15),
+            (
+                crate::ui_display::ScreenOrientation::MonitorCounterclockwise,
+                20,
+            ),
+        ] {
+            let ui_layout = UiLayoutGeometry::for_display(&display, orientation);
+            assert_eq!(
+                ui_layout.content_rect(),
+                CrtContentRect {
+                    x: expected_x,
+                    y: 32,
+                    width: 253,
+                    height: 576,
+                }
+            );
+            let normal = CrtArcadeLayout::for_layout(ui_layout, metrics, false);
+            assert_eq!(
+                normal.header,
+                CrtContentRect {
+                    x: expected_x,
+                    y: 32,
+                    width: 253,
+                    height: 56,
+                }
+            );
+            assert_eq!(
+                normal.list,
+                CrtContentRect {
+                    x: expected_x,
+                    y: 93,
+                    width: 253,
+                    height: 486,
+                }
+            );
+            assert_eq!(
+                normal.footer,
+                CrtContentRect {
+                    x: expected_x,
+                    y: 584,
+                    width: 253,
+                    height: 24,
+                }
+            );
+
+            let search = CrtArcadeLayout::for_layout(ui_layout, metrics, true);
+            assert_eq!(
+                search.search_keyboard,
+                Some(CrtContentRect {
+                    x: expected_x,
+                    y: 93,
+                    width: 101,
+                    height: 486,
+                })
+            );
+            assert_eq!(
+                search.list,
+                CrtContentRect {
+                    x: expected_x + 109,
+                    y: 93,
+                    width: 144,
+                    height: 486,
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn landscape_arcade_layout_preserves_existing_geometry() {
+        let display = native_crt_240_display();
+        let metrics = CrtUiMetrics::for_display(&display);
+        let ui_layout =
+            UiLayoutGeometry::for_display(&display, crate::ui_display::ScreenOrientation::Normal);
+        let content = ui_layout.content_rect();
+        for search in [false, true] {
+            let layout = CrtArcadeLayout::for_layout(ui_layout, metrics, search);
+            let legacy = ArcadeListGeometry::crt_for_content(content, metrics, search);
+            assert_eq!(layout.list_geometry(), legacy);
+            assert_eq!(
+                layout.list.height,
+                legacy.visible_height_with_metrics(content.bottom(), Some(metrics))
+            );
+            assert_eq!(
+                layout.header,
+                CrtContentRect {
+                    x: 48,
+                    y: 20,
+                    width: 544,
+                    height: 48
+                }
+            );
+            assert_eq!(
+                layout.footer,
+                CrtContentRect {
+                    x: 48,
+                    y: 200,
+                    width: 544,
+                    height: 20
+                }
+            );
+        }
     }
 
     #[test]

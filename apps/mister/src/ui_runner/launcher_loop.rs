@@ -838,8 +838,8 @@ fn configure_arcade_list_renderer_geometry(
     nav: &LauncherNav,
     ui: &UiDisplay,
 ) {
-    let (geometry, render_h) = arcade_list_layout(nav, ui);
-    renderer.set_geometry_for_render_h(geometry, render_h);
+    let (geometry, visible_height) = arcade_list_layout(nav, ui);
+    renderer.set_geometry_for_visible_height(geometry, visible_height);
     renderer.set_favourite_launch_refs_if_changed(
         nav.favourite_launch_refs_revision(),
         nav.favourite_launch_refs(),
@@ -14418,14 +14418,13 @@ mod tests {
                 } else {
                     arcade_catalog::ArcadeFilter::All
                 };
-                let (geometry, render_h) = arcade_list_layout(&nav, &display);
-                let visible_height = geometry.visible_height_with_metrics(render_h, Some(metrics));
+                let (geometry, visible_height) = arcade_list_layout(&nav, &display);
                 assert_eq!(
                     visible_height / metrics.game_row_height as usize,
                     expected_full_rows
                 );
                 let mut renderer = ArcadeListRenderer::new_for_crt_display(metrics, &display);
-                renderer.set_geometry_for_render_h(geometry, render_h);
+                renderer.set_geometry_for_visible_height(geometry, visible_height);
                 assert_eq!(
                     (renderer.selection_rect().y0 - renderer.dirty_rect().y0)
                         / metrics.game_row_height as usize,
