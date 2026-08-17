@@ -104,7 +104,7 @@ impl OneShotHttpArtifactServer {
         let result = self
             .worker
             .take()
-            .ok_or_else(|| "delivery HTTP server was already joined".into())?
+            .ok_or("delivery HTTP server was already joined")?
             .join()
             .map_err(|_| "delivery HTTP server thread panicked")?;
         result.map_err(Into::into)
