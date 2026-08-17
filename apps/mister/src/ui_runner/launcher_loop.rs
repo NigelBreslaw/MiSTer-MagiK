@@ -9843,6 +9843,11 @@ pub(super) fn run_launcher_loop(
         let force_crt_backdrop_repaint = full_screen_transition_release_raster_rendered;
         if let Some(backdrop) = crt_backdrop.as_mut() {
             let compose_start = Instant::now();
+            let crt_arcade_layout = CrtArcadeLayout::for_layout(
+                layout,
+                crt_metrics,
+                nav.arcade_search.is_active(&nav.arcade_filter.active),
+            );
             let result = backdrop.compose(
                 crt_backdrop_eligible,
                 force_crt_backdrop_repaint,
@@ -9854,7 +9859,8 @@ pub(super) fn run_launcher_loop(
                     .flatten(),
                 loop_start.saturating_duration_since(run_start),
                 layer_target.presentation_pixels_mut(),
-                layout.content_rect(),
+                layout,
+                crt_arcade_layout,
                 crt_metrics,
             );
             crt_backdrop_work_trace = result.trace;

@@ -25,6 +25,7 @@ mod macos {
     use mister_magik_fb::arcade_catalog::{
         ArcadeCatalog, ArcadeFilter, ArcadeGameEntry, MENU_ARCADE_SYSTEM_ID,
     };
+    use mister_magik_fb::arcade_list_renderer::CrtArcadeLayout;
     use mister_magik_fb::crt_backdrop::{CRT_BACKDROP_FADE_DURATION, CrtBackdropState};
     use mister_magik_fb::framebuffer::target::{FramebufferTargetGeometry, UiFrameTarget};
     use mister_magik_fb::input_event::{
@@ -1549,11 +1550,17 @@ mod macos {
                     let display = self.display_profile.display();
                     let layout = UiLayoutGeometry::for_display(&display, self.orientation);
                     let metrics = CrtUiMetrics::for_display(&display);
+                    let arcade_layout = CrtArcadeLayout::for_layout(
+                        layout,
+                        metrics,
+                        self.scenario == Scenario::ArcadeSearch,
+                    );
                     if let Some(backdrop) = self.crt_backdrop.as_mut() {
-                        let _ = backdrop.compose_product_into(
+                        let _ = backdrop.compose_product_into_layout(
                             self.fixed_time.get(),
                             self.frame_target.cached_565_mut(),
-                            layout.content_rect(),
+                            layout,
+                            arcade_layout,
                             metrics,
                         );
                     }
@@ -1817,13 +1824,15 @@ mod macos {
                 return;
             }
             let now = self.fixed_time.get();
+            let display = self.display_profile.display();
+            let layout = UiLayoutGeometry::for_display(&display, self.orientation);
             let Some(backdrop) = self.crt_backdrop.as_mut() else {
                 return;
             };
             if let Some(screenshot) = screenshot {
-                backdrop.retarget(Some(fixture_preview_frame(screenshot)), now);
+                backdrop.retarget_for_layout(Some(fixture_preview_frame(screenshot)), now, layout);
             } else {
-                backdrop.retarget_plain(now);
+                backdrop.retarget_for_layout(None, now, layout);
             }
             if settle {
                 let _ = backdrop.compose(now + CRT_BACKDROP_FADE_DURATION);

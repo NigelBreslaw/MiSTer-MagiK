@@ -3,10 +3,14 @@
 
 //! Host-neutral RGB565 composition for low-resolution CRT screenshot backdrops.
 
+use crate::arcade_list_renderer::CrtArcadeLayout;
 use crate::preview_transition::blend_rgb565_bucket;
-use crate::ui_display::{CrtContentRect, CrtUiMetrics, ResolvedOutputRoute, UiDisplay};
+use crate::ui_display::{
+    CrtContentRect, CrtUiMetrics, ResolvedOutputRoute, UiDisplay, UiLayoutGeometry,
+};
 use crate::visual_composition::{PreviewFrame, PreviewPixels};
 use mister_magik_core::display::CRT_COMPOSITION_H;
+use mister_magik_framebuffer_scenes::{OutputRotation, Rgb565OutputLayout, Rgb565Rect};
 use slint::platform::software_renderer::Rgb565Pixel;
 use std::time::{Duration, Instant};
 
@@ -268,6 +272,68 @@ impl CrtBackdropState {
         }
     }
 
+    #[cfg(feature = "ui-preview")]
+    pub(crate) fn retarget_for_layout(
+        &mut self,
+        frame: Option<PreviewFrame<'_>>,
+        now: Duration,
+        layout: UiLayoutGeometry,
+    ) {
+        if layout.output_layout().rotation() == OutputRotation::None {
+            self.retarget(frame, now);
+            return;
+        }
+        self.resolve_current(now);
+        self.source.copy_from_slice(&self.retarget);
+        self.source_row_repeats
+            .copy_from_slice(&self.retarget_row_repeats);
+        let prepare_start = Instant::now();
+        let mut x_map = Vec::new();
+        let mut y_map = Vec::new();
+        let prepared = frame.and_then(|frame| {
+            let PreviewPixels::Rgb565 {
+                pixels,
+                stride_pixels,
+            } = frame.pixels
+            else {
+                return None;
+            };
+            prepare_dimmed_rgb565_target_for_output_with_maps(
+                pixels,
+                frame.source_width,
+                frame.source_height,
+                stride_pixels,
+                layout.output_layout(),
+                self.reference_height,
+                &mut x_map,
+                &mut y_map,
+            )
+        });
+        let (pixels, row_repeats, is_plain) = prepared.map_or_else(
+            || {
+                (
+                    vec![CRT_BACKDROP_BACKGROUND; self.target.len()],
+                    vec![true; self.physical_height],
+                    true,
+                )
+            },
+            |(pixels, row_repeats)| (pixels, row_repeats, false),
+        );
+        self.target = std::sync::Arc::from(pixels);
+        self.target_row_repeats = std::sync::Arc::from(row_repeats);
+        self.target_is_plain = is_plain;
+        self.pending_prepare_us = duration_us(prepare_start.elapsed());
+        self.pending_prepare_pixels = self.target.len().min(u32::MAX as usize) as u32;
+        self.transition_started = (self.source != self.target.as_ref()).then_some(now);
+        if self.transition_started.is_none() {
+            self.retarget.copy_from_slice(&self.target);
+            self.retarget_row_repeats
+                .copy_from_slice(&self.target_row_repeats);
+            self.retarget_is_plain = self.target_is_plain;
+            self.expand_to_logical();
+        }
+    }
+
     pub fn compose(&mut self, now: Duration) -> CrtBackdropWorkTrace {
         let mut logical_retarget = std::mem::take(&mut self.logical_retarget);
         let trace = self.compose_to(now, &mut logical_retarget, &[], &[], 1);
@@ -335,6 +401,34 @@ impl CrtBackdropState {
         metrics: CrtUiMetrics,
     ) -> CrtBackdropWorkTrace {
         let protected = product_chrome_rects(content, metrics);
+        let trace = self.compose_to(now, destination, &protected, CRT_PRODUCT_TEXT_COLORS, 1);
+        if !trace.active {
+            self.expand_to_logical();
+        }
+        trace
+    }
+
+    pub fn compose_product_into_layout(
+        &mut self,
+        now: Duration,
+        destination: &mut [Rgb565Pixel],
+        layout: UiLayoutGeometry,
+        arcade: CrtArcadeLayout,
+        metrics: CrtUiMetrics,
+    ) -> CrtBackdropWorkTrace {
+        if layout.output_layout().rotation() == OutputRotation::None {
+            return self.compose_product_into(now, destination, layout.content_rect(), metrics);
+        }
+        let output = layout.output_layout();
+        let protected = [arcade.header, arcade.footer].map(|rect| {
+            let physical = output.logical_rect_to_physical(Rgb565Rect {
+                x0: rect.x,
+                y0: rect.y,
+                x1: rect.right(),
+                y1: rect.bottom(),
+            });
+            (physical.x0, physical.y0, physical.x1, physical.y1)
+        });
         let trace = self.compose_to(now, destination, &protected, CRT_PRODUCT_TEXT_COLORS, 1);
         if !trace.active {
             self.expand_to_logical();
@@ -769,6 +863,58 @@ pub(crate) fn prepare_dimmed_rgb565_target_with_maps(
     .then_some((pixels, row_repeats))
 }
 
+#[cfg(feature = "ui")]
+pub(crate) fn prepare_dimmed_rgb565_target_for_output_with_maps(
+    source: &[Rgb565Pixel],
+    source_width: usize,
+    source_height: usize,
+    source_stride_pixels: usize,
+    output: Rgb565OutputLayout,
+    reference_destination_height: usize,
+    x_map: &mut Vec<usize>,
+    y_map: &mut Vec<usize>,
+) -> Option<(Vec<Rgb565Pixel>, Vec<bool>)> {
+    if output.rotation() == OutputRotation::None {
+        return prepare_dimmed_rgb565_target_with_maps(
+            source,
+            source_width,
+            source_height,
+            source_stride_pixels,
+            output.logical_width(),
+            output.logical_height(),
+            reference_destination_height,
+            x_map,
+            y_map,
+        );
+    }
+    let (logical, _) = prepare_dimmed_rgb565_target_with_maps(
+        source,
+        source_width,
+        source_height,
+        source_stride_pixels,
+        output.logical_width(),
+        output.logical_height(),
+        output.logical_height(),
+        x_map,
+        y_map,
+    )?;
+    let mut physical = vec![CRT_BACKDROP_BACKGROUND; output.len()];
+    for logical_y in 0..output.logical_height() {
+        for logical_x in 0..output.logical_width() {
+            physical[output.physical_offset(logical_x, logical_y)] =
+                logical[logical_y * output.logical_width() + logical_x];
+        }
+    }
+    let mut row_repeats = vec![false; output.physical_height()];
+    for row in 1..output.physical_height() {
+        let previous = (row - 1) * output.physical_stride();
+        let current = row * output.physical_stride();
+        row_repeats[row] = physical[previous..previous + output.physical_width()]
+            == physical[current..current + output.physical_width()];
+    }
+    Some((physical, row_repeats))
+}
+
 fn center_crop_4_3(width: usize, height: usize) -> (usize, usize, usize, usize) {
     if width.saturating_mul(3) > height.saturating_mul(4) {
         let crop_width = (height.saturating_mul(4) / 3).max(1).min(width);
@@ -1136,7 +1282,9 @@ pub fn product_chrome_rects(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ui_display::{UiDisplayPlan, UiFramebufferSizePolicy};
+    use crate::ui_display::{
+        ScreenOrientation, UiDisplayPlan, UiFramebufferSizePolicy, UiLayoutGeometry,
+    };
     use mister_magik_core::display::{Crt240Composition, DisplayGeometry};
 
     fn frame<'a>(pixels: &'a [Rgb565Pixel], width: usize, height: usize) -> PreviewFrame<'a> {
@@ -1149,6 +1297,123 @@ mod tests {
             source_height: height,
             display_width: width,
             display_height: height,
+        }
+    }
+
+    #[cfg(feature = "ui")]
+    #[test]
+    fn prepared_four_corner_pattern_follows_both_output_rotations() {
+        let red = Rgb565Pixel(0xf800);
+        let green = Rgb565Pixel(0x07e0);
+        let blue = Rgb565Pixel(0x001f);
+        let white = Rgb565Pixel(0xffff);
+        let source = [
+            red,
+            Rgb565Pixel(0),
+            Rgb565Pixel(0),
+            white,
+            Rgb565Pixel(0),
+            Rgb565Pixel(0),
+            Rgb565Pixel(0),
+            Rgb565Pixel(0),
+            green,
+            Rgb565Pixel(0),
+            Rgb565Pixel(0),
+            blue,
+        ];
+        for rotation in [
+            OutputRotation::Clockwise90,
+            OutputRotation::CounterClockwise90,
+        ] {
+            let output = Rgb565OutputLayout::new(4, 3, 3, rotation).unwrap();
+            let (prepared, _) = prepare_dimmed_rgb565_target_for_output_with_maps(
+                &source,
+                4,
+                3,
+                4,
+                output,
+                3,
+                &mut Vec::new(),
+                &mut Vec::new(),
+            )
+            .unwrap();
+            for (x, y, expected) in [(0, 0, red), (3, 0, white), (0, 2, green), (3, 2, blue)] {
+                assert_eq!(
+                    prepared[output.physical_offset(x, y)],
+                    darken_rgb565(expected),
+                    "logical corner ({x}, {y}) for {rotation:?}"
+                );
+            }
+        }
+    }
+
+    #[cfg(feature = "ui")]
+    #[test]
+    fn portrait_product_chrome_survives_active_and_settled_backdrops() {
+        for (pal, expected_route) in [
+            (0, ResolvedOutputRoute::Crt240p60),
+            (1, ResolvedOutputRoute::Crt288p50),
+        ] {
+            let ini = format!("[MiSTer]\ndirect_video=1\nmenu_pal={pal}\nforced_scandoubler=0\n");
+            let display = UiDisplay::for_plan(
+                UiDisplayPlan::from_mister_ini_text(&ini).expect("native CRT display plan"),
+            );
+            assert_eq!(display.output_route(), expected_route);
+            let metrics = CrtUiMetrics::for_display(&display);
+            for orientation in [
+                ScreenOrientation::MonitorClockwise,
+                ScreenOrientation::MonitorCounterclockwise,
+            ] {
+                let layout = UiLayoutGeometry::for_display(&display, orientation);
+                let arcade = CrtArcadeLayout::for_layout(layout, metrics, false);
+                for compose_at in [Duration::from_millis(65), CRT_BACKDROP_FADE_DURATION] {
+                    let mut backdrop = CrtBackdropState::for_display(&display).unwrap();
+                    backdrop.retarget_prepared(
+                        Some(PreparedCrtBackdrop {
+                            pixels: std::sync::Arc::from(vec![
+                                Rgb565Pixel(0xffff);
+                                layout.output_layout().len()
+                            ]),
+                            row_repeats: std::sync::Arc::from(vec![
+                                false;
+                                layout
+                                    .output_layout()
+                                    .physical_height()
+                            ]),
+                            is_plain: false,
+                        }),
+                        Duration::ZERO,
+                        false,
+                    );
+                    let mut destination = vec![Rgb565Pixel(0x1234); layout.output_layout().len()];
+                    let [header, footer] = [arcade.header, arcade.footer].map(|rect| {
+                        layout.output_layout().logical_rect_to_physical(Rgb565Rect {
+                            x0: rect.x,
+                            y0: rect.y,
+                            x1: rect.right(),
+                            y1: rect.bottom(),
+                        })
+                    });
+                    let header_index =
+                        header.y0 * layout.output_layout().physical_stride() + header.x0;
+                    let footer_index =
+                        footer.y0 * layout.output_layout().physical_stride() + footer.x0;
+                    destination[header_index] = CRT_PRODUCT_HEADER_TEXT;
+                    destination[footer_index] = CRT_PRODUCT_FOOTER_TEXT;
+
+                    let trace = backdrop.compose_product_into_layout(
+                        compose_at,
+                        &mut destination,
+                        layout,
+                        arcade,
+                        metrics,
+                    );
+
+                    assert_eq!(trace.active, compose_at < CRT_BACKDROP_FADE_DURATION);
+                    assert_eq!(destination[header_index], CRT_PRODUCT_HEADER_TEXT);
+                    assert_eq!(destination[footer_index], CRT_PRODUCT_FOOTER_TEXT);
+                }
+            }
         }
     }
 

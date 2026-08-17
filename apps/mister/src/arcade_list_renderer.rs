@@ -31,6 +31,7 @@ pub const ARCADE_LIST_H: usize = ARCADE_LIST_VISIBLE_H as usize;
 pub const ARCADE_SEARCH_LIST_Y: usize = 56;
 pub const ARCADE_LIST_FONT_PX: f32 = 16.0;
 pub const ARCADE_LIST_META_FONT_PX: f32 = 8.0;
+const CRT_PORTRAIT_TITLE_CLEARANCE_ROWS: usize = 3;
 pub const ARCADE_LIST_BG_COLOR: Pixel = Pixel(0x001a1424);
 pub const ARCADE_LIST_BG_COLOR_565: Rgb565Pixel = rgb565_from_rgb888(0x1a, 0x14, 0x24);
 const ARCADE_LIST_ALT_BG_COLOR_565: Rgb565Pixel = rgb565_from_rgb888(0x15, 0x0f, 0x20);
@@ -281,7 +282,14 @@ impl CrtArcadeLayout {
                 width: content.width,
                 height: footer_height,
             };
-            let body_y = header.bottom().saturating_add(grid_y).min(footer.y);
+            let title_clearance = (crt_arcade_row_height(metrics.game_row_height, true).max(1)
+                as usize)
+                .saturating_mul(CRT_PORTRAIT_TITLE_CLEARANCE_ROWS);
+            let body_y = header
+                .bottom()
+                .saturating_add(grid_y)
+                .saturating_add(title_clearance)
+                .min(footer.y);
             let body_bottom = footer.y.saturating_sub(grid_y).max(body_y);
             let body_height = body_bottom.saturating_sub(body_y);
             let (list, search_keyboard) = if search {
@@ -2673,9 +2681,9 @@ mod tests {
                 normal.list,
                 CrtContentRect {
                     x: 12,
-                    y: 84,
+                    y: 180,
                     width: 216,
-                    height: 500
+                    height: 404
                 }
             );
             assert_eq!(
@@ -2694,18 +2702,18 @@ mod tests {
                 search.search_keyboard,
                 Some(CrtContentRect {
                     x: 12,
-                    y: 84,
+                    y: 180,
                     width: 86,
-                    height: 500,
+                    height: 404,
                 })
             );
             assert_eq!(
                 search.list,
                 CrtContentRect {
                     x: 106,
-                    y: 84,
+                    y: 180,
                     width: 122,
-                    height: 500
+                    height: 404
                 }
             );
         }
@@ -2746,9 +2754,9 @@ mod tests {
                 normal.list,
                 CrtContentRect {
                     x: expected_x,
-                    y: 93,
+                    y: 207,
                     width: 253,
-                    height: 486,
+                    height: 372,
                 }
             );
             assert_eq!(
@@ -2766,18 +2774,18 @@ mod tests {
                 search.search_keyboard,
                 Some(CrtContentRect {
                     x: expected_x,
-                    y: 93,
+                    y: 207,
                     width: 101,
-                    height: 486,
+                    height: 372,
                 })
             );
             assert_eq!(
                 search.list,
                 CrtContentRect {
                     x: expected_x + 109,
-                    y: 93,
+                    y: 207,
                     width: 144,
-                    height: 486,
+                    height: 372,
                 }
             );
         }

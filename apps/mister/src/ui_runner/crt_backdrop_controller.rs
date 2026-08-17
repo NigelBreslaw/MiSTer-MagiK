@@ -3,11 +3,13 @@
 
 //! Launcher-owned CRT backdrop preparation, caching, and frame composition.
 
+use crate::arcade_list_renderer::CrtArcadeLayout;
 use crate::crt_backdrop::{
     BackdropSource, CrtBackdropState, CrtBackdropWorkTrace, PreparedCrtBackdrop,
-    prepare_dimmed_rgb565_target_with_maps,
+    prepare_dimmed_rgb565_target_for_output_with_maps,
 };
-use crate::ui_display::{CrtContentRect, CrtUiMetrics, UiDisplay};
+use crate::ui_display::{CrtUiMetrics, UiDisplay, UiLayoutGeometry};
+use mister_magik_framebuffer_scenes::{OutputRotation, Rgb565OutputLayout};
 use slint::platform::software_renderer::Rgb565Pixel;
 use std::collections::{HashSet, VecDeque};
 use std::sync::Arc;
@@ -24,6 +26,31 @@ struct PreparedIdentity {
     width: usize,
     physical_height: usize,
     reference_height: usize,
+    logical_width: usize,
+    logical_height: usize,
+    rotation: u8,
+}
+
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+struct BackdropLayoutIdentity {
+    logical_width: usize,
+    logical_height: usize,
+    physical_width: usize,
+    physical_height: usize,
+    rotation: u8,
+}
+
+impl BackdropLayoutIdentity {
+    fn for_layout(layout: UiLayoutGeometry) -> Self {
+        let output = layout.output_layout();
+        Self {
+            logical_width: output.logical_width(),
+            logical_height: output.logical_height(),
+            physical_width: output.physical_width(),
+            physical_height: output.physical_height(),
+            rotation: output_rotation_id(output.rotation()),
+        }
+    }
 }
 
 struct PrepareRequest {
@@ -32,6 +59,7 @@ struct PrepareRequest {
     source_width: usize,
     source_height: usize,
     stride_pixels: usize,
+    output: Rgb565OutputLayout,
 }
 
 struct PrepareResult {
@@ -58,17 +86,18 @@ impl PrepareWorker {
                 let mut y_map = Vec::new();
                 while let Ok(request) = requests.recv() {
                     let started = Instant::now();
-                    let Some((pixels, row_repeats)) = prepare_dimmed_rgb565_target_with_maps(
-                        rgb565_words_as_pixels(&request.words),
-                        request.source_width,
-                        request.source_height,
-                        request.stride_pixels,
-                        request.identity.width,
-                        request.identity.physical_height,
-                        request.identity.reference_height,
-                        &mut x_map,
-                        &mut y_map,
-                    ) else {
+                    let Some((pixels, row_repeats)) =
+                        prepare_dimmed_rgb565_target_for_output_with_maps(
+                            rgb565_words_as_pixels(&request.words),
+                            request.source_width,
+                            request.source_height,
+                            request.stride_pixels,
+                            request.output,
+                            request.identity.reference_height,
+                            &mut x_map,
+                            &mut y_map,
+                        )
+                    else {
                         continue;
                     };
                     let result = PrepareResult {
@@ -127,6 +156,7 @@ pub(super) struct CrtBackdropController {
     transition_id: Option<u64>,
     prepared_revision: u64,
     was_eligible: bool,
+    active_layout: Option<BackdropLayoutIdentity>,
 }
 
 impl CrtBackdropController {
@@ -144,6 +174,7 @@ impl CrtBackdropController {
             transition_id: None,
             prepared_revision: 0,
             was_eligible: false,
+            active_layout: None,
         })
     }
 
@@ -227,14 +258,26 @@ impl CrtBackdropController {
         accepted
     }
 
-    fn request_prepare(&mut self, source: &BackdropSource) {
-        let identity = PreparedIdentity {
+    fn prepared_identity(
+        &self,
+        source: &BackdropSource,
+        layout: UiLayoutGeometry,
+    ) -> PreparedIdentity {
+        let output = layout.output_layout();
+        PreparedIdentity {
             key: source.key.clone(),
             epoch: source.epoch,
             width: self.width(),
             physical_height: self.physical_height(),
             reference_height: self.reference_height(),
-        };
+            logical_width: output.logical_width(),
+            logical_height: output.logical_height(),
+            rotation: output_rotation_id(output.rotation()),
+        }
+    }
+
+    fn request_prepare(&mut self, source: &BackdropSource, layout: UiLayoutGeometry) {
+        let identity = self.prepared_identity(source, layout);
         if self.cache.iter().any(|entry| entry.identity == identity)
             || !self.pending.insert(identity.clone())
         {
@@ -246,6 +289,7 @@ impl CrtBackdropController {
             source_width: source.source_width,
             source_height: source.source_height,
             stride_pixels: source.stride_pixels,
+            output: layout.output_layout(),
         };
         match self.worker.tx.try_send(request) {
             Ok(()) => {}
@@ -255,14 +299,12 @@ impl CrtBackdropController {
         }
     }
 
-    fn prepared_target(&mut self, source: &BackdropSource) -> Option<PreparedCrtBackdrop> {
-        let identity = PreparedIdentity {
-            key: source.key.clone(),
-            epoch: source.epoch,
-            width: self.width(),
-            physical_height: self.physical_height(),
-            reference_height: self.reference_height(),
-        };
+    fn prepared_target(
+        &mut self,
+        source: &BackdropSource,
+        layout: UiLayoutGeometry,
+    ) -> Option<PreparedCrtBackdrop> {
+        let identity = self.prepared_identity(source, layout);
         let index = self
             .cache
             .iter()
@@ -288,13 +330,20 @@ impl CrtBackdropController {
         source: Option<BackdropSource>,
         now: Duration,
         destination: &mut [Rgb565Pixel],
-        content: CrtContentRect,
+        layout: UiLayoutGeometry,
+        arcade_layout: CrtArcadeLayout,
         metrics: CrtUiMetrics,
     ) -> CrtBackdropFrame {
         if let Some(source) = source.as_ref() {
             self.active_epoch = source.epoch;
         }
         self.poll();
+        let layout_identity = BackdropLayoutIdentity::for_layout(layout);
+        let layout_changed = self.active_layout != Some(layout_identity);
+        if layout_changed {
+            self.active_layout = Some(layout_identity);
+            self.state.clear_plain();
+        }
         if !eligible {
             self.selected = None;
             self.transition_id = None;
@@ -306,10 +355,15 @@ impl CrtBackdropController {
         let selected_changed = self.selected != Some(selected);
         let transition_changed = self.transition_id != transition_id;
         let prepared_changed = self.prepared_revision != self.revision;
-        if selected_changed || transition_changed || prepared_changed || !self.was_eligible {
+        if selected_changed
+            || transition_changed
+            || prepared_changed
+            || layout_changed
+            || !self.was_eligible
+        {
             if let Some(source) = source.as_ref() {
-                self.request_prepare(source);
-                let prepared = self.prepared_target(source);
+                self.request_prepare(source, layout);
+                let prepared = self.prepared_target(source, layout);
                 self.state
                     .retarget_prepared(prepared, now, instant_transition);
             } else {
@@ -323,14 +377,19 @@ impl CrtBackdropController {
         let compose_full = selected_changed
             || transition_changed
             || prepared_changed
+            || layout_changed
             || !self.was_eligible
             || force_full_repaint
             || self.state.is_transitioning();
         let mut frame = CrtBackdropFrame::default();
         if compose_full {
-            frame.trace = self
-                .state
-                .compose_product_into(now, destination, content, metrics);
+            frame.trace = self.state.compose_product_into_layout(
+                now,
+                destination,
+                layout,
+                arcade_layout,
+                metrics,
+            );
             if prepared_changed {
                 frame.trace.prepare_us = self.pending_prepare_us;
                 frame.trace.prepare_pixels = self
@@ -342,6 +401,14 @@ impl CrtBackdropController {
         }
         self.was_eligible = true;
         frame
+    }
+}
+
+const fn output_rotation_id(rotation: OutputRotation) -> u8 {
+    match rotation {
+        OutputRotation::None => 0,
+        OutputRotation::Clockwise90 => 1,
+        OutputRotation::CounterClockwise90 => 2,
     }
 }
 
@@ -367,6 +434,34 @@ mod tests {
     use crate::visual_composition::{PreviewFrame, PreviewPixels};
 
     #[test]
+    fn prepared_identity_separates_all_output_orientations() {
+        let display = UiDisplay::for_plan(
+            UiDisplayPlan::from_mister_ini_text(
+                "[MiSTer]\ndirect_video=1\nmenu_pal=0\nforced_scandoubler=0\n",
+            )
+            .expect("CRT240 display plan"),
+        );
+        let controller = CrtBackdropController::for_display(&display).expect("CRT backdrop");
+        let source = BackdropSource {
+            key: "four-corners".to_string(),
+            epoch: 7,
+            words: Arc::from(vec![0_u16; 4]),
+            source_width: 2,
+            source_height: 2,
+            stride_pixels: 2,
+        };
+        let identities = ScreenOrientation::ALL.map(|orientation| {
+            controller.prepared_identity(
+                &source,
+                UiLayoutGeometry::for_display(&display, orientation),
+            )
+        });
+        assert_ne!(identities[0], identities[1]);
+        assert_ne!(identities[0], identities[2]);
+        assert_ne!(identities[1], identities[2]);
+    }
+
+    #[test]
     fn forced_compose_repaints_settled_backdrop_but_preserves_chrome_text() {
         let display = UiDisplay::for_plan(
             UiDisplayPlan::from_mister_ini_text(
@@ -377,6 +472,7 @@ mod tests {
         let layout = UiLayoutGeometry::for_display(&display, ScreenOrientation::Normal);
         let metrics = CrtUiMetrics::for_display(&display);
         let content = layout.content_rect();
+        let arcade_layout = CrtArcadeLayout::for_layout(layout, metrics, false);
         let mut controller = CrtBackdropController::for_display(&display).expect("CRT backdrop");
         let source = [Rgb565Pixel(0xffff); 4];
         controller.state.retarget(
@@ -414,7 +510,8 @@ mod tests {
             None,
             settled_at,
             &mut destination,
-            content,
+            layout,
+            arcade_layout,
             metrics,
         );
 
