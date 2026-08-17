@@ -8,7 +8,7 @@ use crate::app_state::{
 use crate::sd_card::{
     SdDirectoryListing, SdEntry, SdEntryKind, SdItemDetail, SdMetadataRow, item_name,
 };
-use mister_magik_agent_protocol::{self as agent_protocol, ResponseEnvelope};
+use mister_magik_agent_protocol::{self as agent_protocol, FailureCode, ResponseEnvelope};
 use mister_magik_framebuffer_stream::{
     FLAG_LZ4_SIZE_PREPENDED, FrameGeometry, FrameHeader, FrameKind, FrameRect,
     MAX_FRAME_SURFACE_BYTES, read_frame,
@@ -1165,6 +1165,12 @@ fn parse_response(line: &str, _elapsed: Duration) -> Result<Value, AgentError> {
         ResponseEnvelope::Ok { result, .. } => Ok(result),
         ResponseEnvelope::Error(error) if error == "unauthorized" => Err(AgentError::Unauthorized),
         ResponseEnvelope::Error(error) => Err(AgentError::Command(error)),
+        ResponseEnvelope::ErrorWithFailure { failure, .. }
+            if failure.code == FailureCode::AuthenticationRequired =>
+        {
+            Err(AgentError::Unauthorized)
+        }
+        ResponseEnvelope::ErrorWithFailure { error, .. } => Err(AgentError::Command(error)),
     }
 }
 
@@ -2386,6 +2392,13 @@ tiny"#
         )
         .expect_err("response should fail");
         assert!(matches!(err, AgentError::Unauthorized));
+
+        let structured = parse_response(
+            r#"{"id":1,"ok":false,"error":"bad token","failure":{"code":"authentication_required","detail":"bad token","phase":"authentication","retry_policy":"never","recovery_required":false}}"#,
+            Duration::ZERO,
+        )
+        .expect_err("structured authentication response should fail");
+        assert!(matches!(structured, AgentError::Unauthorized));
     }
 
     #[test]
@@ -2411,6 +2424,15 @@ tiny"#
             .expect_err("default command error");
         assert!(
             matches!(default_command, AgentError::Command(message) if message == "agent command failed")
+        );
+
+        let structured_command = parse_response(
+            r#"{"id":1,"ok":false,"error":"agent is busy","failure":{"code":"device_busy","detail":"agent is busy","phase":"availability","retry_policy":"retry","recovery_required":false}}"#,
+            Duration::ZERO,
+        )
+        .expect_err("structured command error");
+        assert!(
+            matches!(structured_command, AgentError::Command(message) if message == "agent is busy")
         );
     }
 
