@@ -836,6 +836,7 @@ impl ArcadeListRenderer {
         self.last_draw = None;
         self.last_filter_draw = None;
         self.surface_y = 0;
+        self.oriented_viewport_layout = None;
     }
 
     pub fn set_favourite_launch_refs<'a>(&mut self, refs: impl IntoIterator<Item = &'a str>) {
@@ -1386,6 +1387,73 @@ impl ArcadeListRenderer {
         if redraw_selection_frame {
             self.compose_selection_frame_to_oriented_cached(target.cached_565_mut(), output_layout);
         }
+        self.oriented_viewport_layout = Some(output_layout);
+    }
+
+    pub fn compose_layer_update_to_oriented_cached(
+        &mut self,
+        target: &mut UiFrameTarget,
+        output_layout: Rgb565OutputLayout,
+        update: ArcadeListUpdate,
+        redraw_selection_frame: bool,
+    ) {
+        let ArcadeListUpdate::Scroll { delta_y, .. } = update else {
+            self.compose_layer_to_oriented_cached(target, output_layout, redraw_selection_frame);
+            return;
+        };
+        let (dx, dy) = output_layout.logical_delta_to_physical(0, delta_y);
+        let Some(key) = self.oriented_viewport_layout else {
+            self.compose_layer_to_oriented_cached(target, output_layout, true);
+            return;
+        };
+        if key != output_layout
+            || self.style.crt_palette
+            || arcade_selection_inversion_enabled()
+            || delta_y == 0
+            || delta_y.unsigned_abs() as usize >= self.visible_height
+        {
+            self.compose_layer_to_oriented_cached(target, output_layout, true);
+            return;
+        }
+        let logical = mister_magik_framebuffer_scenes::Rgb565Rect {
+            x0: self.geometry.x,
+            y0: self.geometry.y,
+            x1: self.geometry.x + self.width,
+            y1: self.geometry.y + self.visible_height,
+        };
+        let physical = output_layout.logical_rect_to_physical(logical);
+        if !shift_oriented_rect(
+            target.cached_565_mut(),
+            output_layout,
+            physical,
+            dx,
+            dy,
+            self.style.background_565,
+        ) {
+            self.compose_layer_to_oriented_cached(target, output_layout, true);
+            return;
+        }
+        let exposed = delta_y.unsigned_abs() as usize;
+        let exposed_y = if delta_y < 0 {
+            self.visible_height.saturating_sub(exposed)
+        } else {
+            0
+        };
+        self.compose_viewport_band_to_oriented_cached(
+            target.cached_565_mut(),
+            output_layout,
+            exposed_y,
+            exposed,
+        );
+        let selection_y = self.selection_y();
+        self.compose_viewport_band_to_oriented_cached(
+            target.cached_565_mut(),
+            output_layout,
+            selection_y,
+            self.style.row_height.max(1) as usize,
+        );
+        self.compose_selection_frame_to_oriented_cached(target.cached_565_mut(), output_layout);
+        self.oriented_viewport_layout = Some(output_layout);
     }
 
     /// Restores the complete viewport from a stationary physical backdrop,
@@ -2386,6 +2454,77 @@ impl ArcadeListRenderer {
     }
 }
 
+fn shift_oriented_rect(
+    target: &mut [Rgb565Pixel],
+    output: Rgb565OutputLayout,
+    rect: mister_magik_framebuffer_scenes::Rgb565Rect,
+    dx: isize,
+    dy: isize,
+    fill: Rgb565Pixel,
+) -> bool {
+    let stride = output.physical_stride();
+    if rect.x1 <= rect.x0
+        || rect.y1 <= rect.y0
+        || rect.x1 > output.physical_width()
+        || rect.y1 > output.physical_height()
+        || target.len() < output.len()
+        || (dx != 0 && dy != 0)
+    {
+        return false;
+    }
+    let width = rect.x1 - rect.x0;
+    let height = rect.y1 - rect.y0;
+    if dx != 0 {
+        let distance = dx.unsigned_abs();
+        if distance >= width {
+            return false;
+        }
+        for y in rect.y0..rect.y1 {
+            let row = y * stride;
+            if dx > 0 {
+                target.copy_within(
+                    row + rect.x0..row + rect.x1 - distance,
+                    row + rect.x0 + distance,
+                );
+                target[row + rect.x0..row + rect.x0 + distance].fill(fill);
+            } else {
+                target.copy_within(row + rect.x0 + distance..row + rect.x1, row + rect.x0);
+                target[row + rect.x1 - distance..row + rect.x1].fill(fill);
+            }
+        }
+        return true;
+    }
+    if dy == 0 {
+        return true;
+    }
+    let distance = dy.unsigned_abs();
+    if distance >= height {
+        return false;
+    }
+    if dy > 0 {
+        for row in (0..height - distance).rev() {
+            let source = (rect.y0 + row) * stride + rect.x0;
+            let destination = (rect.y0 + row + distance) * stride + rect.x0;
+            target.copy_within(source..source + width, destination);
+        }
+        for y in rect.y0..rect.y0 + distance {
+            let start = y * stride + rect.x0;
+            target[start..start + width].fill(fill);
+        }
+    } else {
+        for row in 0..height - distance {
+            let source = (rect.y0 + row + distance) * stride + rect.x0;
+            let destination = (rect.y0 + row) * stride + rect.x0;
+            target.copy_within(source..source + width, destination);
+        }
+        for y in rect.y1 - distance..rect.y1 {
+            let start = y * stride + rect.x0;
+            target[start..start + width].fill(fill);
+        }
+    }
+    true
+}
+
 pub fn rendered_filter_content_hash() -> u64 {
     RENDERED_FILTER_CONTENT_HASH.load(Ordering::Relaxed)
 }
@@ -3164,6 +3303,70 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn oriented_scroll_shift_uses_the_physical_axis_for_each_quarter_turn() {
+        let output = Rgb565OutputLayout::new(4, 3, 4, OutputRotation::Clockwise90).unwrap();
+        let rect = output.logical_rect_to_physical(mister_magik_framebuffer_scenes::Rgb565Rect {
+            x0: 0,
+            y0: 0,
+            x1: 4,
+            y1: 3,
+        });
+        let mut pixels = (0..output.len())
+            .map(|value| Rgb565Pixel(value as u16))
+            .collect::<Vec<_>>();
+        let before = pixels.clone();
+        assert!(shift_oriented_rect(
+            &mut pixels,
+            output,
+            rect,
+            -1,
+            0,
+            Rgb565Pixel(0xffff),
+        ));
+        assert_eq!(
+            pixels[rect.y0 * output.physical_stride() + rect.x0],
+            Rgb565Pixel(0xffff)
+        );
+        assert_eq!(
+            pixels[rect.y0 * output.physical_stride() + rect.x0 + 1],
+            before[rect.y0 * output.physical_stride() + rect.x0]
+        );
+    }
+
+    #[test]
+    fn portrait_scroll_update_matches_a_full_rebuild() {
+        let games = games("arcade", 48);
+        let geometry = ArcadeListGeometry::portrait(540, 960, false);
+        let output =
+            Rgb565OutputLayout::new(540, 960, 960, OutputRotation::CounterClockwise90).unwrap();
+        let mut incremental = ArcadeListRenderer::new();
+        incremental.set_geometry_for_visible_height(geometry, 504);
+        let mut target = UiFrameTarget::cached(FramebufferTargetGeometry::new(
+            output.physical_stride(),
+            output.physical_height(),
+        ));
+        let first = incremental
+            .draw(ArcadeGameView::contiguous(&games), 0, 0.0, false)
+            .expect("initial Arcade update");
+        incremental.compose_layer_update_to_oriented_cached(&mut target, output, first, true);
+        let scroll = incremental
+            .draw(ArcadeGameView::contiguous(&games), 1, 1.0, false)
+            .expect("scroll Arcade update");
+        assert!(matches!(scroll, ArcadeListUpdate::Scroll { .. }));
+        incremental.compose_layer_update_to_oriented_cached(&mut target, output, scroll, false);
+
+        let mut full = ArcadeListRenderer::new();
+        full.set_geometry_for_visible_height(geometry, 504);
+        full.draw(ArcadeGameView::contiguous(&games), 1, 1.0, true);
+        let mut expected = UiFrameTarget::cached(FramebufferTargetGeometry::new(
+            output.physical_stride(),
+            output.physical_height(),
+        ));
+        full.compose_layer_to_oriented_cached(&mut expected, output, true);
+        assert_eq!(target.cached_565(), expected.cached_565());
     }
 
     #[test]

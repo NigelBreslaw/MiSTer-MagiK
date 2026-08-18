@@ -386,7 +386,12 @@ pub(super) fn compose_arcade_list_update_oriented(
     update: ArcadeListUpdate,
 ) -> PresentCopyStats {
     let redraw_selection_frame = matches!(update, ArcadeListUpdate::Full(_));
-    renderer.compose_layer_to_oriented_cached(target, output_layout, redraw_selection_frame);
+    renderer.compose_layer_update_to_oriented_cached(
+        target,
+        output_layout,
+        update,
+        redraw_selection_frame,
+    );
     PresentCopyStats {
         rows: arcade_update_dirty_rect(&update).rows(),
         bytes: renderer.present_pixels(&update, redraw_selection_frame)
