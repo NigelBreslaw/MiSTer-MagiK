@@ -10344,7 +10344,7 @@ pub(super) fn run_launcher_loop(
         let raw_preview_direct_rect = raw_preview.and_then(RawPreviewPresent::direct_rect);
         if let Some(rect) = raw_preview_direct_rect {
             launcher_preview_version = launcher_preview_version.wrapping_add(1).max(1);
-            if layout.is_portrait() {
+            if !crt_layout {
                 let state = PhysicalLayerState::new(rect, launcher_preview_version);
                 launcher_preview_publication = layer_target.capture_preview_publication(
                     state,
@@ -10463,10 +10463,16 @@ pub(super) fn run_launcher_loop(
             layer_target.direct_preview_rect().is_some(),
             raw_preview_direct_rect.is_some(),
         );
-        let preview_publication =
-            if layout.is_portrait() && preview_layer_desired && preview_direct_present_enabled() {
+        let mut preview_publication =
+            if !crt_layout && preview_layer_desired && preview_direct_present_enabled() {
                 launcher_preview_publication
                     .as_ref()
+                    .filter(|publication| {
+                        publication.layout_generation() == layer_target.output_layout_generation()
+                            && layer_target
+                                .direct_preview_view()
+                                .is_some_and(|view| publication.matches_view(view))
+                    })
                     .and_then(|publication| {
                         publication.for_frame(
                             publication.state(),
@@ -10476,18 +10482,10 @@ pub(super) fn run_launcher_loop(
             } else {
                 None
             };
-        let preview_desired = if layout.is_portrait() {
-            preview_publication
-                .as_ref()
-                .map(PhysicalLayerPublication::state)
-        } else if preview_layer_desired && preview_direct_present_enabled() {
-            layer_target
-                .direct_preview_rect()
-                .map(|rect| PhysicalLayerState::new(rect, launcher_preview_version))
-        } else {
-            None
-        };
-        let arcade_publication = if layout.is_portrait()
+        let preview_desired = preview_publication
+            .as_ref()
+            .map(PhysicalLayerPublication::state);
+        let mut arcade_publication = if layout.is_portrait()
             && !crt_layout
             && should_desire_direct_layer(
                 wants_arcade_list,
@@ -10495,6 +10493,12 @@ pub(super) fn run_launcher_loop(
             ) {
             launcher_arcade_publication
                 .as_ref()
+                .filter(|publication| {
+                    publication.layout_generation() == layer_target.output_layout_generation()
+                        && arcade_list_renderer
+                            .persistent_oriented_layer_view()
+                            .is_some_and(|view| publication.matches_view(view))
+                })
                 .and_then(|publication| {
                     publication.for_frame(publication.state(), direct_arcade_update)
                 })
@@ -10548,16 +10552,6 @@ pub(super) fn run_launcher_loop(
             damage.push_if_some(crt_backdrop_full_damage);
             damage
         };
-        if layout.is_portrait()
-            && let Some(arcade_layer) = arcade_desired
-        {
-            // The physical Arcade layer owns these slot pixels while active.
-            // Slint still updates the normal-RAM base cache underneath it, but
-            // copying intersecting base damage into a hidden slot would
-            // destroy that slot's layer identity and force catch-up recovery.
-            cached_damage =
-                subtract_dirty_rects(cached_damage, &DirtyRectList::from_one(arcade_layer.rect));
-        }
         // Retain the v1 telemetry field for schema compatibility. Native Slint
         // and custom layer composition no longer run a post-raster rotation.
         let orientation_damage_rotation_us = 0;
@@ -10678,6 +10672,10 @@ pub(super) fn run_launcher_loop(
             custom_draw_trace.orientation_transition_total_us =
                 orientation_started.elapsed().as_micros();
         }
+        cached_damage =
+            shield_base_damage_under_publication(cached_damage, &mut preview_publication);
+        cached_damage =
+            shield_base_damage_under_publication(cached_damage, &mut arcade_publication);
         // CRT routes do not own an HDMI preview layer, so the normal preview
         // presentation acknowledgement can never fire for them.  Without a
         // route-specific acknowledgement the preview remains `animating`
@@ -10721,6 +10719,13 @@ pub(super) fn run_launcher_loop(
                 cached_damage,
                 preview_publication,
                 arcade_publication,
+            )
+        } else if !crt_layout {
+            LauncherFramePlan::from_preview_publication_and_cached_arcade(
+                cached_damage,
+                preview_publication,
+                arcade_desired,
+                arcade_list_rect,
             )
         } else {
             LauncherFramePlan::from_cached_layers(
@@ -11907,6 +11912,28 @@ fn apply_startup_pending_display(
 
 fn should_desire_direct_layer(wants_layer: bool, composition_allows_layer: bool) -> bool {
     wants_layer && composition_allows_layer
+}
+
+fn shield_base_damage_under_publication(
+    damage: DirtyRectList,
+    publication: &mut Option<PhysicalLayerPublication>,
+) -> DirtyRectList {
+    let Some(current) = publication.as_ref() else {
+        return damage;
+    };
+    let rect = current.state().rect;
+    if !damage
+        .iter()
+        .any(|damaged| damaged.intersection(rect).is_some())
+    {
+        return damage;
+    }
+    let Some(reapply) = current.for_frame(current.state(), Some(PhysicalLayerUpdate::Full(rect)))
+    else {
+        return damage;
+    };
+    *publication = Some(reapply);
+    subtract_dirty_rects(damage, &DirtyRectList::from_one(rect))
 }
 
 fn should_start_preview_compositor(
@@ -13740,6 +13767,50 @@ fn apply_home_selected(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn base_damage_is_shielded_only_by_a_full_reapply_publication() {
+        let full = DirtyRect {
+            x0: 0,
+            y0: 0,
+            x1: 8,
+            y1: 6,
+        };
+        let layer = DirtyRect {
+            x0: 2,
+            y0: 1,
+            x1: 7,
+            y1: 5,
+        };
+        let pixels = vec![Rgb565Pixel(0x1234); layer.width() * layer.rows() as usize];
+        let mut publication = PhysicalLayerPublication::capture(
+            PhysicalLayerRole::Preview,
+            3,
+            9,
+            PhysicalLayerState::new(layer, 4),
+            None,
+            PhysicalLayerView::dense(&pixels, layer),
+        );
+
+        let shielded =
+            shield_base_damage_under_publication(DirtyRectList::from_one(full), &mut publication);
+
+        assert!(
+            shielded
+                .iter()
+                .all(|rect| rect.intersection(layer).is_none())
+        );
+        assert_eq!(
+            publication.and_then(|publication| publication.update()),
+            Some(PhysicalLayerUpdate::Full(layer))
+        );
+
+        let damage = DirtyRectList::from_one(full);
+        assert_eq!(
+            shield_base_damage_under_publication(damage, &mut None),
+            damage
+        );
+    }
 
     #[test]
     fn portrait_navigation_geometry_uses_physical_rectangles() {
