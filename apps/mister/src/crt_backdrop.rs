@@ -11,7 +11,8 @@ use crate::ui_display::{
 use crate::visual_composition::{PreviewFrame, PreviewPixels};
 use mister_magik_core::display::CRT_COMPOSITION_H;
 use mister_magik_framebuffer_scenes::{
-    OutputRotation, Rgb565OutputLayout, Rgb565Rect, blend_rgb565_neon_if_available,
+    OutputRotation, Rgb565OutputLayout, Rgb565Rect, Rgb565SurfaceMut,
+    blend_rgb565_neon_if_available,
 };
 use slint::platform::software_renderer::Rgb565Pixel;
 use std::time::{Duration, Instant};
@@ -960,11 +961,21 @@ pub(crate) fn prepare_dimmed_rgb565_target_for_output_with_maps(
         return None;
     }
     let mut physical = vec![CRT_BACKDROP_BACKGROUND; output.len()];
-    for logical_y in 0..output.logical_height() {
-        for logical_x in 0..output.logical_width() {
-            physical[output.physical_offset(logical_x, logical_y)] =
-                logical[logical_y * output.logical_width() + logical_x];
-        }
+    let copied = Rgb565SurfaceMut::new(&mut physical, output)
+        .expect("prepared CRT output length matches its layout")
+        .copy_rect_strided(
+            0,
+            0,
+            output.logical_width(),
+            output.logical_height(),
+            &logical,
+            output.logical_width(),
+            0,
+            0,
+        );
+    debug_assert!(copied, "complete CRT backdrop rotation is in bounds");
+    if !copied {
+        return None;
     }
     let mut row_repeats = vec![false; output.physical_height()];
     for row in 1..output.physical_height() {
@@ -1409,6 +1420,84 @@ mod tests {
                     darken_rgb565(expected),
                     "logical corner ({x}, {y}) for {rotation:?}"
                 );
+            }
+        }
+    }
+
+    #[cfg(feature = "ui")]
+    #[test]
+    fn rotated_crt_shared_kernel_matches_scalar_scatter() {
+        let source_width = 11;
+        let source_height = 7;
+        let source_stride = 13;
+        let mut source = vec![Rgb565Pixel(0); source_stride * source_height];
+        for y in 0..source_height {
+            for x in 0..source_width {
+                source[y * source_stride + x] =
+                    Rgb565Pixel(((x * 0x421 + y * 0x1083) & 0xffff) as u16);
+            }
+        }
+        let source_frame = PreviewFrame {
+            pixels: PreviewPixels::Rgb565 {
+                pixels: &source,
+                stride_pixels: source_stride,
+            },
+            source_width,
+            source_height,
+            display_width: source_width,
+            display_height: source_height,
+        };
+
+        for logical_width in [7, 9] {
+            for rotation in [
+                OutputRotation::Clockwise90,
+                OutputRotation::CounterClockwise90,
+            ] {
+                let output = Rgb565OutputLayout::new(logical_width, 13, 13, rotation).unwrap();
+                let mut logical =
+                    vec![CRT_BACKDROP_BACKGROUND; output.logical_width() * output.logical_height()];
+                let mut logical_row_repeats = vec![false; output.logical_height()];
+                assert!(scale_dimmed_center_crop_mapped_with_logical_size(
+                    &mut logical,
+                    output.logical_width(),
+                    output.logical_height(),
+                    13,
+                    output.logical_height(),
+                    source_frame,
+                    &mut vec![0; output.logical_width()],
+                    &mut vec![0; output.logical_height()],
+                    &mut logical_row_repeats,
+                ));
+                let mut expected = vec![CRT_BACKDROP_BACKGROUND; output.len()];
+                for logical_y in 0..output.logical_height() {
+                    for logical_x in 0..output.logical_width() {
+                        expected[output.physical_offset(logical_x, logical_y)] =
+                            logical[logical_y * output.logical_width() + logical_x];
+                    }
+                }
+
+                let (prepared, row_repeats) = prepare_dimmed_rgb565_target_for_output_with_maps(
+                    &source,
+                    source_width,
+                    source_height,
+                    source_stride,
+                    output,
+                    13,
+                    &mut Vec::new(),
+                    &mut Vec::new(),
+                )
+                .unwrap();
+                assert_eq!(prepared, expected, "{logical_width} {rotation:?}");
+                for row in 1..output.physical_height() {
+                    let previous = (row - 1) * output.physical_stride();
+                    let current = row * output.physical_stride();
+                    assert_eq!(
+                        row_repeats[row],
+                        expected[previous..previous + output.physical_width()]
+                            == expected[current..current + output.physical_width()],
+                        "row {row} for {logical_width} {rotation:?}"
+                    );
+                }
             }
         }
     }
