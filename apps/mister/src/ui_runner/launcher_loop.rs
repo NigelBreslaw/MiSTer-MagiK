@@ -10404,6 +10404,7 @@ pub(super) fn run_launcher_loop(
             composition_decision.allow_preview_blit,
             layout.is_portrait() && portrait_preview_worker_pending,
             layer_target.direct_preview_rect().is_some(),
+            raw_preview_direct_rect.is_some(),
         );
         let preview_desired = if preview_layer_desired && preview_direct_present_enabled() {
             let rect = if layout.is_portrait() {
@@ -11865,9 +11866,12 @@ fn should_desire_preview_direct_layer(
     composition_allows_layer: bool,
     portrait_worker_pending: bool,
     has_physical_preview: bool,
+    has_direct_preview_update: bool,
 ) -> bool {
     should_desire_direct_layer(
-        wants_layer || (portrait_worker_pending && has_physical_preview),
+        wants_layer
+            || has_direct_preview_update
+            || (portrait_worker_pending && has_physical_preview),
         composition_allows_layer,
     )
 }
@@ -17818,14 +17822,21 @@ mod tests {
 
     #[test]
     fn portrait_preview_layer_stays_owned_while_replacement_is_pending() {
-        assert!(should_desire_preview_direct_layer(false, true, true, true));
-        assert!(!should_desire_preview_direct_layer(
-            false, true, false, true
+        assert!(should_desire_preview_direct_layer(
+            false, true, true, true, false
         ));
         assert!(!should_desire_preview_direct_layer(
-            false, true, true, false
+            false, true, false, true, false
         ));
-        assert!(!should_desire_preview_direct_layer(true, false, true, true));
+        assert!(!should_desire_preview_direct_layer(
+            false, true, true, false, false
+        ));
+        assert!(!should_desire_preview_direct_layer(
+            true, false, true, true, false
+        ));
+        assert!(should_desire_preview_direct_layer(
+            false, true, false, true, true
+        ));
     }
 
     #[test]
