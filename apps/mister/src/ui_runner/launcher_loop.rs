@@ -10355,7 +10355,7 @@ pub(super) fn run_launcher_loop(
             ) {
             Some(
                 DirectLayerState::new(arcade_list_renderer.dirty_rect(), launcher_arcade_version)
-                    .with_content_offset_y(launcher_arcade_scroll_offset),
+                    .with_content_offset(LayerOffset::new(0, launcher_arcade_scroll_offset)),
             )
         } else {
             None

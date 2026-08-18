@@ -7,7 +7,11 @@ use super::target::{DirtyRect, DirtyRectList, subtract_dirty_rects};
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DirectLayerUpdate {
     Full(DirtyRect),
-    Scroll { delta_y: isize, rect: DirtyRect },
+    Scroll {
+        delta_x: isize,
+        delta_y: isize,
+        rect: DirtyRect,
+    },
 }
 
 impl DirectLayerUpdate {
@@ -27,10 +31,24 @@ pub enum LatchSlotHardwareState {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LayerOffset {
+    pub x: i64,
+    pub y: i64,
+}
+
+impl LayerOffset {
+    pub const ZERO: Self = Self { x: 0, y: 0 };
+
+    pub const fn new(x: i64, y: i64) -> Self {
+        Self { x, y }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DirectLayerState {
     pub rect: DirtyRect,
     pub version: u64,
-    pub content_offset_y: i64,
+    pub content_offset: LayerOffset,
 }
 
 impl DirectLayerState {
@@ -38,12 +56,12 @@ impl DirectLayerState {
         Self {
             rect,
             version,
-            content_offset_y: 0,
+            content_offset: LayerOffset::ZERO,
         }
     }
 
-    pub fn with_content_offset_y(mut self, content_offset_y: i64) -> Self {
-        self.content_offset_y = content_offset_y;
+    pub fn with_content_offset(mut self, content_offset: LayerOffset) -> Self {
+        self.content_offset = content_offset;
         self
     }
 }
@@ -342,11 +360,17 @@ fn direct_layer_redraw_update(
     if let Some(current) = current {
         if current.rect != desired.rect || current.version != desired.version {
             Some(DirectLayerUpdate::Full(desired.rect))
-        } else if current.content_offset_y != desired.content_offset_y {
+        } else if current.content_offset != desired.content_offset {
             Some(DirectLayerUpdate::Scroll {
+                delta_x: desired
+                    .content_offset
+                    .x
+                    .saturating_sub(current.content_offset.x)
+                    .clamp(isize::MIN as i64, isize::MAX as i64) as isize,
                 delta_y: desired
-                    .content_offset_y
-                    .saturating_sub(current.content_offset_y)
+                    .content_offset
+                    .y
+                    .saturating_sub(current.content_offset.y)
                     .clamp(isize::MIN as i64, isize::MAX as i64) as isize,
                 rect: desired.rect,
             })
@@ -1012,6 +1036,7 @@ mod tests {
                 None,
                 Some(arcade_v2),
                 Some(DirectLayerUpdate::Scroll {
+                    delta_x: 0,
                     delta_y: -1,
                     rect: arcade,
                 }),
@@ -1033,12 +1058,29 @@ mod tests {
     #[test]
     fn matching_arcade_generation_accumulates_scroll_for_older_slot() {
         let arcade = rect(0, 0, 4, 3);
-        let current = layer(arcade, 7).with_content_offset_y(-3);
-        let desired = layer(arcade, 7).with_content_offset_y(-11);
+        let current = layer(arcade, 7).with_content_offset(LayerOffset::new(0, -3));
+        let desired = layer(arcade, 7).with_content_offset(LayerOffset::new(0, -11));
 
         assert_eq!(
             direct_layer_redraw_update(current.into(), desired.into(), None, true),
             Some(DirectLayerUpdate::Scroll {
+                delta_x: 0,
+                delta_y: -8,
+                rect: arcade,
+            })
+        );
+    }
+
+    #[test]
+    fn physical_layer_offset_emits_both_scroll_axes() {
+        let arcade = rect(0, 0, 4, 3);
+        let current = layer(arcade, 7).with_content_offset(LayerOffset::new(-4, 6));
+        let desired = layer(arcade, 7).with_content_offset(LayerOffset::new(9, -2));
+
+        assert_eq!(
+            direct_layer_redraw_update(current.into(), desired.into(), None, false),
+            Some(DirectLayerUpdate::Scroll {
+                delta_x: 13,
                 delta_y: -8,
                 rect: arcade,
             })
