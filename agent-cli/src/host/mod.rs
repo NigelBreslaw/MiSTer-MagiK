@@ -7831,6 +7831,13 @@ const ARCADE_VELOCITY_SCROLL_SMOKE_DURATION_MS: u64 = 8_000;
 const ARCADE_VELOCITY_SCROLL_SMOKE_TELEMETRY_SECS: u64 = 18;
 const ARCADE_VELOCITY_SCROLL_PPROF_REMOTE_DIR: &str =
     "/tmp/mister-magik/arcade-velocity-scroll-pprof";
+const GUI_PROFILE_AUTOMATION_MARGIN_SECS: u64 = 90;
+
+fn gui_profile_automation_ttl_secs(scroll_duration_ms: u64) -> u64 {
+    scroll_duration_ms
+        .div_ceil(1_000)
+        .saturating_add(GUI_PROFILE_AUTOMATION_MARGIN_SECS)
+}
 
 fn gui_profile_route_launcher_env_with_pprof(
     pmu: bool,
@@ -8016,8 +8023,13 @@ fn run_gui_frame_profile_route_with_pprof(
         .get("main_generation")
         .and_then(Value::as_u64)
         .ok_or("GUI profiling Main status has no generation")?;
-    let begin =
-        launcher_automation::begin(config, build_version, source_revision, main_generation, 90)?;
+    let begin = launcher_automation::begin(
+        config,
+        build_version,
+        source_revision,
+        main_generation,
+        gui_profile_automation_ttl_secs(scroll_duration_ms),
+    )?;
     let begin: Value = serde_json::from_str(&begin)?;
     let nonce = begin
         .get("nonce")
@@ -25585,6 +25597,8 @@ mod tests {
                 .iter()
                 .any(|(name, value)| { name == "MISTER_PPROF_DURATION_SECS" && value == "40" })
         );
+        assert_eq!(gui_profile_automation_ttl_secs(40_000), 130);
+        assert_eq!(gui_profile_automation_ttl_secs(8_000), 98);
         let cleanup = gui_profile_route_cleanup_command();
         assert!(cleanup.contains(GUI_PROFILE_REMOTE_COMPLETE));
         for arming_path in [
