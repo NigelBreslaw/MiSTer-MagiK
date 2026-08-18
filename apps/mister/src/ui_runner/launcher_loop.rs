@@ -9867,7 +9867,9 @@ pub(super) fn run_launcher_loop(
         let preview_blit_us = preview_blit_start.elapsed().as_micros();
         let portrait_preview_rotation_pixels = if layout.is_portrait() {
             raw_preview
-                .and_then(RawPreviewPresent::cached_rect)
+                .map(|present| match present {
+                    RawPreviewPresent::Cached(rect) | RawPreviewPresent::Direct(rect) => rect,
+                })
                 .map(|rect| (rect.width() as u64).saturating_mul(u64::from(rect.rows())))
                 .unwrap_or(0)
         } else {
@@ -10338,15 +10340,18 @@ pub(super) fn run_launcher_loop(
             wants_preview_layer,
             composition_decision.allow_preview_blit,
         );
-        let preview_desired =
-            if !layout.is_portrait() && preview_layer_desired && preview_direct_present_enabled() {
-                Some(DirectLayerState::new(
-                    preview_screen_rect(ui),
-                    launcher_preview_version,
-                ))
-            } else {
-                None
-            };
+        let preview_desired = if preview_layer_desired && preview_direct_present_enabled() {
+            Some(DirectLayerState::new(
+                if layout.is_portrait() {
+                    layout.logical_rect_to_composition(preview_screen_rect(ui))
+                } else {
+                    preview_screen_rect(ui)
+                },
+                launcher_preview_version,
+            ))
+        } else {
+            None
+        };
         let arcade_desired = if !layout.is_portrait()
             && !crt_layout
             && should_desire_direct_layer(
