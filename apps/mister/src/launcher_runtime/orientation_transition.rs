@@ -1290,25 +1290,50 @@ mod tests {
     }
 
     #[test]
-    fn completed_frame_is_exact_destination() {
-        let start = Instant::now();
-        let source = [Rgb565Pixel(1); 12];
-        let destination = [Rgb565Pixel(2); 12];
-        let mut output = [Rgb565Pixel(0); 12];
-        let mut runtime = OrientationTransitionRuntime::new(4, 3);
-        runtime.start(
-            ScreenOrientation::Normal,
-            ScreenOrientation::MonitorClockwise,
-            &source,
-            start,
-            false,
-        );
-        assert!(runtime.capture_destination(&destination));
-        let (done, _, _) = runtime
-            .render_into(&mut output, start + ORIENTATION_WAVE_TOTAL_DURATION)
-            .expect("transition frame");
-        assert!(done);
-        assert_eq!(output, destination);
+    fn every_launcher_orientation_endpoint_is_pixel_exact() {
+        for (route, width, height) in [
+            ("hdmi-720p", 1280, 720),
+            ("crt-240p", 640, 240),
+            ("crt-288p", 640, 288),
+        ] {
+            let len = width * height;
+            let mut source = vec![Rgb565Pixel(0x1111); len];
+            let mut destination = vec![Rgb565Pixel(0x2222); len];
+            source[0] = Rgb565Pixel(0x1357);
+            source[len / 2] = Rgb565Pixel(0x2468);
+            source[len - 1] = Rgb565Pixel(0x369c);
+            destination[0] = Rgb565Pixel(0xabcd);
+            destination[len / 2] = Rgb565Pixel(0xbcde);
+            destination[len - 1] = Rgb565Pixel(0xcdef);
+            for effect in [
+                OrientationTransitionEffect::BrightnessFade,
+                OrientationTransitionEffect::CenterPixelZoom,
+            ] {
+                for from in ScreenOrientation::ALL {
+                    for to in ScreenOrientation::ALL {
+                        if from == to {
+                            continue;
+                        }
+                        let start = Instant::now();
+                        let mut output = vec![Rgb565Pixel(0); len];
+                        let mut runtime =
+                            OrientationTransitionRuntime::new_with_effect(width, height, effect);
+                        assert!(runtime.start(from, to, &source, start, false));
+                        assert!(runtime.copy_source_into(&mut output));
+                        assert_eq!(output, source, "source {route} {effect:?} {from:?}->{to:?}");
+                        assert!(runtime.capture_destination(&destination));
+                        let (done, _, _) = runtime
+                            .render_into(&mut output, start + ORIENTATION_WAVE_TOTAL_DURATION)
+                            .expect("transition frame");
+                        assert!(done, "{route} {effect:?} {from:?}->{to:?}");
+                        assert_eq!(
+                            output, destination,
+                            "destination {route} {effect:?} {from:?}->{to:?}"
+                        );
+                    }
+                }
+            }
+        }
     }
 
     #[test]

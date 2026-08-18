@@ -444,6 +444,27 @@ boundary. The retained `orientation_damage_rotation_us` telemetry field is a
 v1 schema-compatibility field and is zero because steady rendering performs no
 post-raster rotation.
 
+HDMI custom content is published through role-indexed `PhysicalLayerPublication`
+transactions. Each immutable publication binds its role, layout and content
+generations, physical rectangle, update, and dense backing, so a frame plan
+cannot name pixels that have already been replaced. Hidden slots retain their
+own preview and Arcade generations until both slots release them. Preview
+publications use the same dense physical owner in every HDMI orientation.
+Landscape Arcade keeps its ring-backed producer; portrait Arcade keeps a dense
+final-pixel producer because its logical scroll axis is the physical X axis.
+These are different producers behind one ownership and presentation contract,
+not separate slot protocols.
+
+CRT deliberately retains complete cached-frame ownership and never publishes
+an HDMI direct layer. While a backdrop transition, layout change, or full Slint
+damage is active, CRT restores and composes the complete frame. Once the
+backdrop is settled, `CrtArcadeOverlayState` preserves scroll deltas, restores
+stale foreground pixels from the immutable backdrop, and repaints only changed
+foreground and selection regions. Rotated screenshot backdrops are prepared on
+their dedicated worker and enter physical order through the shared tiled/NEON
+RGB565 rotation kernel; fades, protected chrome, row-repeat metadata, and final
+presentation remain route-owned.
+
 Navigation capture has its own composition phase. `NavigationTransition` owns
 the source snapshot and playback while direct layers are suppressed. After the
 navigation intent commits and its destination layers are available, the
@@ -504,6 +525,13 @@ screensaver, recovery, or live Slint. The transaction completes only when that
 frame's sequence, slot, and route epoch are confirmed physically active. An
 uncertain timeout enters reconciliation; it is never blindly reposted. A route
 reversal may replace the retiring layer in that same confirmed carrier frame.
+
+Host assurance exercises Home, System Hub, Arcade, Arcade search, Settings,
+dialogs, screensaver ownership, and navigation transitions across normal and
+both rotated HDMI layouts plus 240p and 288p portrait CRT geometry. The matrix
+checks logical-to-physical damage area, terminal pixels, layer retirement
+receipts, and exact source/destination transition endpoints. Device controls
+remain the authority for physical cadence and visible scanout.
 
 ```mermaid
 stateDiagram-v2

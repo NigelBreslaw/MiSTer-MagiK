@@ -531,6 +531,10 @@ fn composition_invariant(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mister_magik_framebuffer_scenes::{
+        OutputRotation, Rgb565OutputLayout, Rgb565Rect, Rgb565SurfaceMut,
+    };
+    use slint::platform::software_renderer::Rgb565Pixel;
 
     fn receipt(sequence: u16, carrier: DirectLayerCarrier) -> DirectLayerPresentationReceipt {
         DirectLayerPresentationReceipt {
@@ -572,6 +576,157 @@ mod tests {
             wants_preview: false,
             preview_cache_exact: false,
             preview_frame_ready: false,
+        }
+    }
+
+    #[test]
+    fn launcher_view_matrix_preserves_pixels_damage_and_layer_retirement() {
+        let routes = [
+            (
+                "hdmi-normal",
+                Rgb565OutputLayout::new(1280, 720, 1280, OutputRotation::None).unwrap(),
+                true,
+            ),
+            (
+                "hdmi-clockwise",
+                Rgb565OutputLayout::new(720, 1280, 1280, OutputRotation::Clockwise90).unwrap(),
+                true,
+            ),
+            (
+                "hdmi-counterclockwise",
+                Rgb565OutputLayout::new(720, 1280, 1280, OutputRotation::CounterClockwise90)
+                    .unwrap(),
+                true,
+            ),
+            (
+                "crt240-portrait",
+                Rgb565OutputLayout::new(240, 640, 640, OutputRotation::CounterClockwise90).unwrap(),
+                false,
+            ),
+            (
+                "crt288-portrait",
+                Rgb565OutputLayout::new(288, 640, 640, OutputRotation::CounterClockwise90).unwrap(),
+                false,
+            ),
+        ];
+        let cases = [
+            ("home", Screen::Home, UiCompositionState::FullSlint, 0_u8),
+            (
+                "system-hub",
+                Screen::SystemHub,
+                UiCompositionState::FullSlint,
+                0,
+            ),
+            ("arcade", Screen::Arcade, UiCompositionState::MixedArcade, 3),
+            (
+                "arcade-search",
+                Screen::Arcade,
+                UiCompositionState::MixedArcade,
+                1,
+            ),
+            (
+                "settings",
+                Screen::Settings,
+                UiCompositionState::FullSlint,
+                0,
+            ),
+            (
+                "dialog",
+                Screen::Arcade,
+                UiCompositionState::ModalOverArcade,
+                4,
+            ),
+            (
+                "screensaver",
+                Screen::Arcade,
+                UiCompositionState::Screensaver,
+                8,
+            ),
+            (
+                "navigation-transition",
+                Screen::SystemHub,
+                UiCompositionState::NavigationTransition,
+                16,
+            ),
+        ];
+
+        for (route, output, direct_capable) in routes {
+            let logical_damage = Rgb565Rect {
+                x0: 1,
+                y0: 2,
+                x1: output.logical_width() - 1,
+                y1: output.logical_height() - 2,
+            };
+            let physical_damage = output.logical_rect_to_physical(logical_damage);
+            assert!(physical_damage.x1 <= output.physical_width(), "{route}");
+            assert!(physical_damage.y1 <= output.physical_height(), "{route}");
+            assert_eq!(
+                logical_damage.width() * logical_damage.height(),
+                physical_damage.width() * physical_damage.height(),
+                "damage area for {route}"
+            );
+
+            let terminals = [
+                (0, 0, Rgb565Pixel(0x1111)),
+                (output.logical_width() - 1, 0, Rgb565Pixel(0x2222)),
+                (0, output.logical_height() - 1, Rgb565Pixel(0x3333)),
+                (
+                    output.logical_width() - 1,
+                    output.logical_height() - 1,
+                    Rgb565Pixel(0x4444),
+                ),
+                (
+                    output.logical_width() / 2,
+                    output.logical_height() / 2,
+                    Rgb565Pixel(0x5555),
+                ),
+            ];
+            let mut pixels = vec![Rgb565Pixel(0); output.len()];
+            let mut surface = Rgb565SurfaceMut::new(&mut pixels, output).unwrap();
+            for &(x, y, pixel) in &terminals {
+                assert!(surface.set(x, y, pixel), "terminal set for {route}");
+            }
+            for &(x, y, pixel) in &terminals {
+                assert_eq!(pixels[output.physical_offset(x, y)], pixel, "{route}");
+            }
+
+            for (view, screen, expected_state, flags) in cases {
+                let mut controller = UiCompositionController::new();
+                acquire_direct_layers(&mut controller);
+                let wants_arcade = direct_capable && flags & 1 != 0;
+                let wants_preview = direct_capable && flags & 2 != 0;
+                let decision = controller.tick(UiCompositionInput {
+                    screensaver_active: flags & 8 != 0,
+                    navigation_transition_active: flags & 16 != 0,
+                    confirm_visible: flags & 4 != 0,
+                    wants_arcade_list: wants_arcade,
+                    wants_preview,
+                    preview_cache_exact: true,
+                    preview_frame_ready: wants_preview,
+                    ..input(screen)
+                });
+                assert_eq!(decision.state, expected_state, "{route} {view}");
+                let expected_desired = DirectLayerObligations::new(wants_arcade, wants_preview);
+                assert_eq!(
+                    decision.direct_layers_desired, expected_desired,
+                    "{route} {view}"
+                );
+                let retirement_expected =
+                    expected_desired != DirectLayerObligations::new(true, true);
+                assert_eq!(
+                    decision.retirement_generation.is_some(),
+                    retirement_expected,
+                    "retirement for {route} {view}"
+                );
+                if let Some(generation) = decision.retirement_generation {
+                    assert!(controller.confirm_presented_layers(
+                        Some(generation),
+                        expected_desired,
+                        receipt(2, decision.retirement_carrier),
+                    ));
+                    assert!(controller.retirement.is_none(), "{route} {view}");
+                }
+            }
         }
     }
 

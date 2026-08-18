@@ -87,6 +87,18 @@ speed; it does not use the synthetic benchmark-only bounce helper.
 All Arcade arms use the full 40-second workload. The control and turbo arms
 own cadence qualification; profiler arms remain attribution-only.
 
+Optimization campaigns establish one compatible baseline immediately before a
+route/profiler is first changed and compare later artifacts to that baseline;
+they do not run the aggregate attribution suite between commits. HDMI portrait
+qualifies the dense physical Arcade and preview producers, HDMI landscape
+qualifies the ring-backed Arcade producer with shared preview publications,
+and CRT portrait qualifies complete cached-frame ownership plus its retained
+Arcade overlay. PMU and Streamline can attribute work but cannot overrule an
+unprofiled control. The host orientation matrix complements those device runs
+by checking Home, System Hub, Arcade, search, Settings, dialogs, screensaver,
+and transition endpoints across normal/clockwise/counterclockwise HDMI and
+240p/288p portrait CRT layouts.
+
 `modal-input` restarts the coherently installed Dev launcher with a one-shot,
 fixed test request and a catalog copied below
 `/tmp/mister-magik/modal-input-benchmark`. It presents the real catalog upgrade
