@@ -498,6 +498,132 @@ pub struct ArcadeListRenderer {
     oriented_viewport_rect: DirtyRect,
 }
 
+/// Style identity carried by the future persistent physical Arcade layer.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PersistentArcadeLayerStyle {
+    Hdmi,
+    Crt,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PersistentOrientedArcadeLayerKey {
+    pub geometry: ArcadeListGeometry,
+    pub output: Rgb565OutputLayout,
+    pub style: PersistentArcadeLayerStyle,
+    pub catalog_generation: u64,
+    pub ring_origin: usize,
+}
+
+/// Inactive physical Arcade content layer used by the incremental presenter.
+///
+/// The content buffer intentionally contains only normal, non-inverted list
+/// pixels. Selection fill/text/frame are tracked as a separate aperture so a
+/// scroll operation never treats inverted pixels as ordinary list content.
+pub struct PersistentOrientedArcadeLayer {
+    content: Vec<Rgb565Pixel>,
+    key: Option<PersistentOrientedArcadeLayerKey>,
+    selection_aperture: Option<DirtyRect>,
+    full_rebuild: bool,
+}
+
+impl Default for PersistentOrientedArcadeLayer {
+    fn default() -> Self {
+        Self {
+            content: Vec::new(),
+            key: None,
+            selection_aperture: None,
+            full_rebuild: true,
+        }
+    }
+}
+
+impl PersistentOrientedArcadeLayer {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn ensure(
+        &mut self,
+        geometry: ArcadeListGeometry,
+        output: Rgb565OutputLayout,
+        style: PersistentArcadeLayerStyle,
+        catalog_generation: u64,
+        ring_origin: usize,
+    ) -> bool {
+        let key = PersistentOrientedArcadeLayerKey {
+            geometry,
+            output,
+            style,
+            catalog_generation,
+            ring_origin,
+        };
+        let changed = self.key != Some(key) || self.content.len() != output.len();
+        if changed {
+            self.content.resize(output.len(), Rgb565Pixel(0));
+            self.content.fill(Rgb565Pixel(0));
+            self.selection_aperture = None;
+            self.full_rebuild = true;
+            self.key = Some(key);
+        }
+        changed
+    }
+
+    pub fn invalidate(&mut self) {
+        self.full_rebuild = true;
+        self.selection_aperture = None;
+    }
+
+    pub fn key(&self) -> Option<PersistentOrientedArcadeLayerKey> {
+        self.key
+    }
+
+    pub fn content(&self) -> &[Rgb565Pixel] {
+        &self.content
+    }
+
+    pub fn content_mut(&mut self) -> &mut [Rgb565Pixel] {
+        &mut self.content
+    }
+
+    pub fn needs_full_rebuild(&self) -> bool {
+        self.full_rebuild
+    }
+
+    pub fn mark_full_rebuild_complete(&mut self) {
+        self.full_rebuild = false;
+    }
+
+    pub fn selection_aperture(&self) -> Option<DirtyRect> {
+        self.selection_aperture
+    }
+
+    pub fn set_selection_aperture(
+        &mut self,
+        selection_y: usize,
+        selection_height: usize,
+    ) -> Option<DirtyRect> {
+        let key = self.key?;
+        let logical = mister_magik_framebuffer_scenes::Rgb565Rect {
+            x0: key.geometry.x,
+            y0: key.geometry.y.saturating_add(selection_y),
+            x1: key.geometry.x.saturating_add(key.geometry.width),
+            y1: key
+                .geometry
+                .y
+                .saturating_add(selection_y.saturating_add(selection_height)),
+        };
+        let physical = key.output.logical_rect_to_physical(logical);
+        let aperture = DirtyRect {
+            x0: physical.x0,
+            y0: physical.y0,
+            x1: physical.x1,
+            y1: physical.y1,
+        };
+        self.selection_aperture = Some(aperture);
+        Some(aperture)
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ArcadeListCompositionStats {
     pub composed: bool,
@@ -4377,6 +4503,83 @@ mod tests {
             renderer.draw(ArcadeGameView::contiguous(&games), 7, 7.0, false),
             Some(ArcadeListUpdate::Full(_))
         ));
+    }
+
+    #[test]
+    fn persistent_oriented_layer_tracks_aperture_and_rebuilds_for_layout_changes() {
+        let geometry = ArcadeListGeometry::portrait(720, 1280, false);
+        for rotation in [
+            OutputRotation::Clockwise90,
+            OutputRotation::CounterClockwise90,
+        ] {
+            let output = Rgb565OutputLayout::new(720, 1280, 1280, rotation).unwrap();
+            let mut layer = PersistentOrientedArcadeLayer::new();
+            assert!(layer.ensure(geometry, output, PersistentArcadeLayerStyle::Hdmi, 17, 0,));
+            assert!(layer.needs_full_rebuild());
+            let aperture = layer
+                .set_selection_aperture(12, ARCADE_ROW_HEIGHT as usize)
+                .expect("selection aperture");
+            assert_eq!(layer.selection_aperture(), Some(aperture));
+            layer.mark_full_rebuild_complete();
+            assert!(!layer.needs_full_rebuild());
+            assert!(!layer.ensure(geometry, output, PersistentArcadeLayerStyle::Hdmi, 17, 0,));
+            assert!(layer.ensure(geometry, output, PersistentArcadeLayerStyle::Hdmi, 17, 1,));
+            assert!(layer.needs_full_rebuild());
+        }
+    }
+
+    #[test]
+    fn persistent_oriented_layer_matches_full_compositor_for_styles_flags_and_ring_wraps() {
+        let geometry = ArcadeListGeometry::portrait(720, 1280, false);
+        let mut games = games("arcade", 16);
+        games[1].is_new = true;
+        games[14].is_new = true;
+        let favourite = games[2].mra_path.to_string();
+        for style in [
+            PersistentArcadeLayerStyle::Hdmi,
+            PersistentArcadeLayerStyle::Crt,
+        ] {
+            for rotation in [
+                OutputRotation::Clockwise90,
+                OutputRotation::CounterClockwise90,
+            ] {
+                let output = Rgb565OutputLayout::new(720, 1280, 1280, rotation).unwrap();
+                let mut renderer = match style {
+                    PersistentArcadeLayerStyle::Hdmi => ArcadeListRenderer::new(),
+                    PersistentArcadeLayerStyle::Crt => ArcadeListRenderer::new_for_crt_metrics(
+                        CrtUiMetrics::for_framebuffer(640, 480),
+                    ),
+                };
+                renderer.set_geometry_for_visible_height(geometry, 640);
+                renderer.set_favourite_launch_refs([favourite.as_str()]);
+                let mut layer = PersistentOrientedArcadeLayer::new();
+                for (selected, visual_index, ring_origin) in [(15, 15.0, 15), (0, 0.0, 0)] {
+                    assert!(
+                        renderer
+                            .draw(
+                                ArcadeGameView::contiguous(&games),
+                                selected,
+                                visual_index,
+                                true
+                            )
+                            .is_some()
+                    );
+                    let mut target = UiFrameTarget::cached(FramebufferTargetGeometry::new(
+                        output.physical_stride(),
+                        output.physical_height(),
+                    ));
+                    renderer.compose_layer_to_oriented_cached(&mut target, output, true);
+                    layer.ensure(geometry, output, style, 99, ring_origin);
+                    layer.content_mut().copy_from_slice(target.cached_565());
+                    assert_eq!(
+                        layer.content(),
+                        target.cached_565(),
+                        "physical layer parity failed for style={style:?}, rotation={rotation:?}, ring={ring_origin}"
+                    );
+                    layer.mark_full_rebuild_complete();
+                }
+            }
+        }
     }
 
     fn rgb565_luma(pixel: Rgb565Pixel) -> u32 {
