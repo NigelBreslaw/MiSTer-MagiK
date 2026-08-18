@@ -9791,11 +9791,18 @@ pub(super) fn run_launcher_loop(
                 mister_magik_perf_events::sampled_span("gui.custom.crt-arcade-list-update");
             arcade_list_renderer.set_crt_portrait_rows(layout.is_portrait());
             configure_arcade_list_renderer_geometry(&mut arcade_list_renderer, &nav, ui);
-            let force_arcade_redraw = arcade_list_needs_forced_redraw(
-                &arcade_list_renderer,
-                logical_slint_rect,
-                full_frame_present,
-            );
+            let force_arcade_redraw = if layout.is_portrait() && !crt_layout {
+                // The portrait list is a separately versioned physical layer.
+                // Slint/base damage is restored by the latch presenter and
+                // must not force regeneration of unchanged list content.
+                false
+            } else {
+                arcade_list_needs_forced_redraw(
+                    &arcade_list_renderer,
+                    logical_slint_rect,
+                    full_frame_present,
+                )
+            };
             let update = if nav.arcade_filter.drawer_open {
                 let feedback_surface = format!(
                     "arcade-filter:{}:{:?}",
@@ -10387,6 +10394,8 @@ pub(super) fn run_launcher_loop(
         custom_draw_trace.crt_backdrop_list_overlay_pixels = crt_backdrop_list_overlay_pixels;
         custom_draw_trace.crt_backdrop_list_restore_pixels = crt_backdrop_list_restore_pixels;
         custom_draw_trace.crt_backdrop_list_foreground_pixels = crt_backdrop_list_foreground_pixels;
+        custom_draw_trace.portrait_arcade_list_pixels = portrait_arcade_list_pixels;
+        custom_draw_trace.portrait_arcade_list_bytes = portrait_arcade_list_bytes;
         let physical_custom_damage = accepted_screensaver_frame.then_some(this_rect).flatten();
         let preview_layer_desired = should_desire_direct_layer(
             wants_preview_layer,
