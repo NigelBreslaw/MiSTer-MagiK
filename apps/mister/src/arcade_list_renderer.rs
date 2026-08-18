@@ -4618,6 +4618,7 @@ mod tests {
         assert_eq!(
             arcade_list_present_pixels(
                 &ArcadeListUpdate::Scroll {
+                    delta_x: 0,
                     delta_y: 12,
                     rect: DirtyRect {
                         x0: 0,

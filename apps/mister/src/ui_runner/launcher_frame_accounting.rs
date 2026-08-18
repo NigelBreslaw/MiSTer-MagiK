@@ -2993,6 +2993,7 @@ mod tests {
             main_present_buffer: 0,
             main_present_hidden_copy_us: 0,
             main_present_hidden_publish_us: 0,
+            main_present_hidden_copied_bytes: 0,
             main_present_hidden_invalid_bytes: 0,
             main_present_hidden_rect_count: 0,
             main_present_hidden_catchup_bytes: 0,

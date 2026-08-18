@@ -1488,7 +1488,7 @@ mod tests {
         let mut presenter = presenter(LauncherPresenterState::Latch(FakeLatch));
         let mut adapters = FakeAdapters::failing();
 
-        assert_eq!(presenter.present_with(expected, &mut adapters), 3);
+        assert_eq!(presenter.present_with(expected.clone(), &mut adapters), 3);
         assert_eq!(adapters.events, [Event::Latch, Event::Frozen]);
         assert_eq!(adapters.latch_frames, [expected]);
         assert!(adapters.fb0_frames.is_empty());

@@ -16452,11 +16452,11 @@ mod tests {
             ScreenOrientation::MonitorCounterclockwise,
         ] {
             assert_eq!(
-                launcher_startup_orientation(persisted, true, false),
+                launcher_startup_orientation(persisted, None, true, false),
                 ScreenOrientation::Normal
             );
             assert_eq!(
-                launcher_startup_orientation(persisted, false, false),
+                launcher_startup_orientation(persisted, None, false, false),
                 persisted
             );
         }
@@ -16466,7 +16466,7 @@ mod tests {
     pub(super) fn settings_navigation_benchmark_starts_in_landscape() {
         let persisted = ScreenOrientation::MonitorCounterclockwise;
         assert_eq!(
-            launcher_startup_orientation(persisted, false, true),
+            launcher_startup_orientation(persisted, None, false, true),
             ScreenOrientation::Normal
         );
     }
