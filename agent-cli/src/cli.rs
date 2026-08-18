@@ -899,7 +899,6 @@ mod tests {
             "control",
             "control-smoke",
             "pprof",
-            "pprof-smoke",
             "pmu",
             "pmu-smoke",
             "streamline",

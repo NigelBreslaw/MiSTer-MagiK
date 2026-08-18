@@ -7836,9 +7836,6 @@ const ARCADE_VELOCITY_SCROLL_DURATION_MS: u64 = 40_000;
 const ARCADE_VELOCITY_SCROLL_TELEMETRY_SECS: u64 = 55;
 const ARCADE_VELOCITY_SCROLL_SMOKE_DURATION_MS: u64 = 8_000;
 const ARCADE_VELOCITY_SCROLL_SMOKE_TELEMETRY_SECS: u64 = 18;
-const ARCADE_VELOCITY_SCROLL_PPROF_SMOKE_DURATION_MS: u64 = 8_000;
-const ARCADE_VELOCITY_SCROLL_PPROF_SMOKE_TELEMETRY_SECS: u64 = 18;
-const ARCADE_VELOCITY_SCROLL_PPROF_SMOKE_FINALIZATION_PROBE: Duration = Duration::from_secs(6);
 const ARCADE_VELOCITY_SCROLL_PPROF_REMOTE_DIR: &str =
     "/tmp/mister-magik/arcade-velocity-scroll-pprof";
 
@@ -8389,20 +8386,6 @@ fn profile_installed_arcade_velocity_scroll_pprof(
         ARCADE_VELOCITY_SCROLL_TELEMETRY_SECS,
         Duration::ZERO,
         "mister-magik-arcade-velocity-scroll-pprof-v1",
-    )
-}
-
-fn profile_installed_arcade_velocity_scroll_pprof_smoke(
-    config: &NativeDeviceConfig,
-    output_dir: &Path,
-) -> Result<String> {
-    profile_installed_arcade_velocity_scroll_pprof_workload(
-        config,
-        output_dir,
-        ARCADE_VELOCITY_SCROLL_PPROF_SMOKE_DURATION_MS,
-        ARCADE_VELOCITY_SCROLL_PPROF_SMOKE_TELEMETRY_SECS,
-        ARCADE_VELOCITY_SCROLL_PPROF_SMOKE_FINALIZATION_PROBE,
-        "mister-magik-arcade-velocity-scroll-pprof-smoke-v1",
     )
 }
 
