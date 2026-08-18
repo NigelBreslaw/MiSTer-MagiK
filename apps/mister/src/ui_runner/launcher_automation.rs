@@ -24,6 +24,7 @@ const REQUEST_SCHEMA: &str = "mister-magik-ui-automation-request-v1";
 const RESPONSE_SCHEMA: &str = "mister-magik-ui-automation-response-v1";
 const DEFAULT_DESCRIPTOR_PATH: &str = "/tmp/mister-magik/ui-automation-session.json";
 const DEFAULT_SOCKET_PATH: &str = "/tmp/mister-magik/ui-automation.sock";
+const DEFAULT_FAILURE_PATH: &str = "/tmp/mister-magik/ui-automation-failure.json";
 const MAX_SESSION_AGE: Duration = Duration::from_secs(120);
 const REQUEST_LEASE: Duration = Duration::from_secs(5);
 const CLOCK_SKEW: Duration = Duration::from_secs(10);
@@ -161,6 +162,7 @@ struct ActiveSession {
 pub(super) struct LauncherAutomation {
     descriptor_path: PathBuf,
     socket_path: PathBuf,
+    failure_path: PathBuf,
     session: Option<ActiveSession>,
     last_descriptor_poll: Instant,
     semantic: AutomationSemanticState,
@@ -173,13 +175,18 @@ pub(super) struct LauncherAutomation {
 
 impl LauncherAutomation {
     pub(super) fn new() -> Self {
-        Self::with_paths(DEFAULT_DESCRIPTOR_PATH.into(), DEFAULT_SOCKET_PATH.into())
+        Self::with_paths(
+            DEFAULT_DESCRIPTOR_PATH.into(),
+            DEFAULT_SOCKET_PATH.into(),
+            DEFAULT_FAILURE_PATH.into(),
+        )
     }
 
-    fn with_paths(descriptor_path: PathBuf, socket_path: PathBuf) -> Self {
+    fn with_paths(descriptor_path: PathBuf, socket_path: PathBuf, failure_path: PathBuf) -> Self {
         Self {
             descriptor_path,
             socket_path,
+            failure_path,
             session: None,
             last_descriptor_poll: Instant::now() - Duration::from_secs(1),
             semantic: AutomationSemanticState::default(),
@@ -482,6 +489,15 @@ impl LauncherAutomation {
 
     fn abort(&mut self, reason: &str) {
         crate::runtime_status::event("ui_automation_aborted", reason);
+        let detail = json!({
+            "schema": "mister-magik-ui-automation-failure-v1",
+            "reason": reason,
+            "recorded_unix_ms": unix_ms(),
+            "presented_action_sequence": self.presented_action_sequence,
+            "presented_state_revision": self.presented_state_revision,
+            "semantic": &self.semantic,
+        });
+        let _ = fs::write(&self.failure_path, format!("{detail}\n"));
         self.end_session();
     }
 
@@ -717,6 +733,27 @@ mod tests {
     }
 
     #[test]
+    fn abort_persists_a_nonce_free_failure_record() {
+        let failure_path = std::env::temp_dir().join(format!(
+            "mister-magik-automation-failure-{}-{}.json",
+            std::process::id(),
+            unix_ms()
+        ));
+        let mut automation = LauncherAutomation::with_paths(
+            "missing".into(),
+            "missing".into(),
+            failure_path.clone(),
+        );
+        automation.abort("session_expired");
+
+        let failure: Value =
+            serde_json::from_slice(&fs::read(&failure_path).expect("failure record")).unwrap();
+        assert_eq!(failure["reason"], "session_expired");
+        assert!(failure.get("nonce").is_none());
+        let _ = fs::remove_file(failure_path);
+    }
+
+    #[test]
     fn automation_press_and_release_share_a_press_id() {
         let now = Instant::now();
         let mut session = ActiveSession {
@@ -803,7 +840,8 @@ mod tests {
 
     #[test]
     fn semantic_revisions_ignore_identical_snapshots() {
-        let mut automation = LauncherAutomation::with_paths("missing".into(), "missing".into());
+        let mut automation =
+            LauncherAutomation::with_paths("missing".into(), "missing".into(), "missing".into());
         automation.session = Some(ActiveSession {
             descriptor: AutomationSessionDescriptor {
                 schema: SESSION_SCHEMA.to_string(),
@@ -837,7 +875,8 @@ mod tests {
 
     #[test]
     fn held_automation_direction_defers_launcher_background_work() {
-        let mut automation = LauncherAutomation::with_paths("missing".into(), "missing".into());
+        let mut automation =
+            LauncherAutomation::with_paths("missing".into(), "missing".into(), "missing".into());
         automation.session = Some(ActiveSession {
             descriptor: AutomationSessionDescriptor {
                 schema: SESSION_SCHEMA.to_string(),

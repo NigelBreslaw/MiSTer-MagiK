@@ -551,41 +551,104 @@ impl<'a> LayerTarget<'a> {
         renderer: &mut ArcadeListRenderer,
         update: ArcadeListUpdate,
         catalog_generation: u64,
-    ) -> PresentCopyStats {
-        let (stats, _) =
+        version: u64,
+        content_offset: LayerOffset,
+        content_generation: u64,
+    ) -> (PresentCopyStats, Option<PhysicalLayerPublication>) {
+        let (stats, physical_update) =
             self.compose_arcade_list_direct_layer(renderer, update, catalog_generation);
-        let view = renderer
-            .persistent_oriented_layer_view()
-            .expect("composed physical Arcade layer has a view");
-        assert!(
-            self.copy_physical_layer_snapshot_to_cached(view),
-            "physical Arcade layer does not match the presentation cache"
-        );
-        stats
+        let publication = renderer.persistent_oriented_layer_view().and_then(|view| {
+            let state =
+                DirectLayerState::new(view.rect(), version).with_content_offset(content_offset);
+            PhysicalLayerPublication::capture(
+                PhysicalLayerRole::Arcade,
+                self.output_layout_generation(),
+                content_generation,
+                state,
+                Some(physical_update),
+                view,
+            )
+        });
+        if let Some(publication) = publication.as_ref() {
+            assert!(
+                self.copy_physical_layer_snapshot_to_cached(
+                    publication,
+                    renderer
+                        .persistent_oriented_layer_view()
+                        .expect("published Arcade layer has a view")
+                ),
+                "physical Arcade publication does not match the presentation cache"
+            );
+        }
+        (stats, publication)
     }
 
-    fn copy_physical_layer_snapshot_to_cached(&mut self, view: DirectPreviewView<'_>) -> bool {
+    fn copy_physical_layer_snapshot_to_cached(
+        &mut self,
+        publication: &PhysicalLayerPublication,
+        view: DirectPreviewView<'_>,
+    ) -> bool {
         let output = self.layout.output_layout();
+        if publication.layout_generation() != self.output_layout_generation() {
+            return false;
+        }
+        if !publication.matches_view(view) {
+            return false;
+        }
         let rect = view.rect();
         let stride = output.physical_stride();
-        if view.stride() != stride
-            || rect.x0 >= rect.x1
+        if rect.x0 >= rect.x1
             || rect.y0 >= rect.y1
             || rect.x1 > stride
             || rect.y1 > output.physical_height()
-            || view.pixels().len() < output.len()
             || self.target.cached_565().len() < output.len()
         {
             return false;
         }
-        let source = view.pixels();
         let destination = self.target.cached_565_mut();
-        for row in rect.y0..rect.y1 {
-            let start = row * stride + rect.x0;
-            let end = start + rect.width();
-            destination[start..end].copy_from_slice(&source[start..end]);
+        for row in 0..rect.rows() as usize {
+            let destination_start = (rect.y0 + row) * stride + rect.x0;
+            destination[destination_start..destination_start + rect.width()].copy_from_slice(
+                match view.row(rect, row) {
+                    Some(source) => source,
+                    None => return false,
+                },
+            );
         }
         true
+    }
+
+    pub(super) fn capture_preview_publication(
+        &self,
+        state: DirectLayerState,
+        update: Option<DirectLayerUpdate>,
+        content_generation: u64,
+    ) -> Option<PhysicalLayerPublication> {
+        PhysicalLayerPublication::capture(
+            PhysicalLayerRole::Preview,
+            self.output_layout_generation(),
+            content_generation,
+            state,
+            update,
+            self.direct_preview_view()?,
+        )
+    }
+
+    pub(super) fn capture_arcade_publication(
+        &self,
+        renderer: &ArcadeListRenderer,
+        state: DirectLayerState,
+        update: Option<DirectLayerUpdate>,
+        content_generation: u64,
+    ) -> Option<PhysicalLayerPublication> {
+        PhysicalLayerPublication::capture(
+            PhysicalLayerRole::Arcade,
+            self.output_layout_generation(),
+            content_generation,
+            state,
+            update,
+            renderer.persistent_oriented_layer_view()?,
+        )
     }
 
     pub(super) fn compose_arcade_list_over_backdrop(
@@ -886,11 +949,18 @@ mod tests {
             output.physical_height(),
         ));
         target.cached_565_mut().fill(untouched);
+        let mut layer_target = LayerTarget::new_oriented(&mut target, layout);
+        let publication = PhysicalLayerPublication::capture(
+            PhysicalLayerRole::Arcade,
+            layer_target.output_layout_generation(),
+            9,
+            DirectLayerState::new(rect, 3),
+            Some(DirectLayerUpdate::Full(rect)),
+            view,
+        )
+        .unwrap();
 
-        assert!(
-            LayerTarget::new_oriented(&mut target, layout)
-                .copy_physical_layer_snapshot_to_cached(view)
-        );
+        assert!(layer_target.copy_physical_layer_snapshot_to_cached(&publication, view));
         for y in 0..output.physical_height() {
             for x in 0..output.physical_stride() {
                 let index = y * output.physical_stride() + x;

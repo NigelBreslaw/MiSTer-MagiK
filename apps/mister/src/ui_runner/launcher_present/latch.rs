@@ -611,7 +611,12 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
     ) -> Result<FpgaVblankLatchHiddenPresentStats, LatchFailure>
     where
         H: LatchHardware,
-        F: FnOnce(&mut B::Buffer, LatchPresentPlan) -> Result<(), String>,
+        F: FnOnce(
+            &mut B::Buffer,
+            LatchPresentPlan,
+            Option<&PhysicalLayerPublication>,
+            Option<&PhysicalLayerPublication>,
+        ) -> Result<(), String>,
     {
         if self.disabled {
             return Err(LatchFailure::incompatible(
@@ -629,7 +634,7 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
         let mut status_us = status_start.elapsed().as_micros() as u64;
 
         let current_damage_bytes = input.cached_damage().total_rgb565_bytes();
-        let mut plan = self.latch_state.plan_next(input);
+        let mut plan = self.latch_state.plan_next(input.clone());
         if plan.is_none() && before_status.pending() {
             let settle_started = Instant::now();
             while settle_started.elapsed() < TRANSIENT_PENDING_SETTLE_TIMEOUT {
@@ -638,7 +643,7 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
                 before_sample = self.read_geometry_safe_status(hardware)?;
                 before_status = before_sample.status;
                 status_us = status_us.saturating_add(retry_started.elapsed().as_micros() as u64);
-                plan = self.latch_state.plan_next(input);
+                plan = self.latch_state.plan_next(input.clone());
                 if plan.is_some() || !before_status.pending() {
                     break;
                 }
@@ -653,6 +658,14 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
             .with_wire_diagnostics(rejected_wire_diagnostics(before_sample.diagnostics))
         })?;
         let buffer_index = plan.slot_index;
+        let preview_publication = self
+            .latch_state
+            .planned_publication(PhysicalLayerRole::Preview)
+            .cloned();
+        let arcade_publication = self
+            .latch_state
+            .planned_publication(PhysicalLayerRole::Arcade)
+            .cloned();
         let invalid_bytes = self.latch_state.restore_bytes_for_slot(buffer_index);
         let rect_count = plan.restore_rects.len() as u32;
         // Damage remains in composition coordinates; analytics report the
@@ -734,7 +747,12 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
         let copy_us = copy_start.elapsed().as_micros();
         drop(base_copy_pmu);
         drop(copy_pmu);
-        if let Err(e) = apply_overlays(buffer, plan) {
+        if let Err(e) = apply_overlays(
+            buffer,
+            plan,
+            preview_publication.as_ref(),
+            arcade_publication.as_ref(),
+        ) {
             self.latch_state.mark_attempt_failed(buffer_index);
             return Err(LatchFailure::runtime(
                 LatchFailureStage::OverlayCompose,
@@ -1596,7 +1614,7 @@ mod tests {
             hardware,
             display,
             false,
-            |_, _| Ok(()),
+            |_, _, _, _| Ok(()),
         )
     }
 
@@ -1623,7 +1641,7 @@ mod tests {
                 &mut hardware,
                 &mut display,
                 false,
-                |_, _| {
+                |_, _, _, _| {
                     events.borrow_mut().push(TestEvent::Overlay);
                     Ok(())
                 },
@@ -1868,7 +1886,7 @@ mod tests {
                 &mut hardware,
                 &mut display,
                 false,
-                |hidden, _| {
+                |hidden, _, _, _| {
                     hidden.pixels[0] = Rgb565Pixel(0x5aa5);
                     Ok(())
                 },

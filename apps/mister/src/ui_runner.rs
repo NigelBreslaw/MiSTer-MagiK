@@ -215,8 +215,8 @@ use launcher_screensaver::{LauncherScreensaver, LauncherScreensaverLoader};
 use launcher_screensaver_pipeline::{RenderAheadPoll, ScreensaverRenderAhead};
 use launcher_startup_intro::*;
 use mister_magik_mister_runtime::framebuffer::latch_state::{
-    DirectLayerState, LatchFramePlan as LauncherFramePlan, LatchPresentPlan, LayerOffset,
-    TwoBufferLatchState,
+    DirectLayerState, DirectLayerUpdate, LatchFramePlan as LauncherFramePlan, LatchPresentPlan,
+    LayerOffset, PhysicalLayerPublication, PhysicalLayerRole, TwoBufferLatchState,
 };
 use portrait_preview_compositor::*;
 use raw565_preview_renderer::*;

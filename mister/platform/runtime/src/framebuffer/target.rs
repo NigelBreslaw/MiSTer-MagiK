@@ -228,7 +228,7 @@ pub(crate) struct StridedFrameRegion<'a> {
 }
 
 impl<'a> DirectPreviewView<'a> {
-    fn dense(pixels: &'a [Rgb565Pixel], rect: DirtyRect) -> Self {
+    pub(crate) fn dense(pixels: &'a [Rgb565Pixel], rect: DirtyRect) -> Self {
         Self {
             pixels,
             rect,
@@ -283,6 +283,17 @@ impl<'a> DirectPreviewView<'a> {
             src_x: self.src_x + rect.x0 - self.rect.x0,
             src_y: self.src_y + rect.y0 - self.rect.y0,
         })
+    }
+
+    pub fn row(self, rect: DirtyRect, row: usize) -> Option<&'a [Rgb565Pixel]> {
+        if row >= rect.rows() as usize {
+            return None;
+        }
+        let region = self.region(rect)?;
+        let start = (region.src_y + row)
+            .checked_mul(region.stride)?
+            .checked_add(region.src_x)?;
+        self.pixels.get(start..start.checked_add(rect.width())?)
     }
 }
 

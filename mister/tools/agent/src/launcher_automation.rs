@@ -16,12 +16,14 @@ const SESSION_SCHEMA: &str = "mister-magik-ui-automation-session-v1";
 const REQUEST_SCHEMA: &str = "mister-magik-ui-automation-request-v1";
 const DESCRIPTOR_PATH: &str = "/tmp/mister-magik/ui-automation-session.json";
 const SOCKET_PATH: &str = "/tmp/mister-magik/ui-automation.sock";
+const FAILURE_PATH: &str = "/tmp/mister-magik/ui-automation-failure.json";
 const STATUS_PATH: &str = "/tmp/mister-magik/status.json";
 const MAIN_STATUS_PATH: &str = "/tmp/mister-magik/main-status.json";
 const MAX_SESSION_SECONDS: u64 = 120;
 static CLIENT_SEQUENCE: AtomicU64 = AtomicU64::new(1);
 
 pub(crate) fn begin(args: Value) -> Result<Value, String> {
+    let _ = fs::remove_file(FAILURE_PATH);
     let expected_build_version = required_text(&args, "expected_build_version")?;
     let expected_source_revision = required_text(&args, "expected_source_revision")?;
     let expected_main_generation = required_u64(&args, "expected_main_generation")?;
@@ -146,7 +148,7 @@ fn request_socket(request: &Value) -> Result<Value, String> {
         .map_err(|error| format!("set automation response timeout: {error}"))?;
     socket
         .send_to(request.to_string().as_bytes(), SOCKET_PATH)
-        .map_err(|error| format!("send automation request: {error}"))?;
+        .map_err(|error| automation_socket_error("send automation request", error))?;
     let mut bytes = [0_u8; 64 * 1024];
     let length = socket
         .recv(&mut bytes)
@@ -162,6 +164,17 @@ fn request_socket(request: &Value) -> Result<Value, String> {
             .to_string());
     }
     Ok(response.get("result").cloned().unwrap_or(Value::Null))
+}
+
+fn automation_socket_error(operation: &str, error: std::io::Error) -> String {
+    let retained = fs::read_to_string(FAILURE_PATH)
+        .ok()
+        .and_then(|text| serde_json::from_str::<Value>(&text).ok())
+        .map(|failure| failure.to_string());
+    match retained {
+        Some(retained) => format!("{operation}: {error}; retained_failure={retained}"),
+        None => format!("{operation}: {error}"),
+    }
 }
 
 struct SocketCleanup(PathBuf);

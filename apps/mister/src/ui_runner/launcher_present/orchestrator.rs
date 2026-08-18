@@ -722,7 +722,7 @@ impl PresentationAdapters<FpgaVblankLatchHiddenPresenter> for LivePresentationAd
             hardware,
             self.display,
             self.profile_latch_phases,
-            |hidden, plan| {
+            |hidden, plan, preview_publication, arcade_publication| {
                 preview_redraw_rect = plan.preview_redraw;
                 arcade_redraw_update = plan.arcade_redraw;
                 if let Some(rect) = plan.preview_redraw {
@@ -733,8 +733,44 @@ impl PresentationAdapters<FpgaVblankLatchHiddenPresenter> for LivePresentationAd
                         })
                         .flatten();
                     let started = Instant::now();
-                    direct_preview_rows =
-                        layer_target.copy_direct_preview_rect_to_hidden(hidden, rect);
+                    let (layout_generation, content_generation, backing_key) =
+                        if let Some(publication) = preview_publication {
+                            let view = layer_target
+                                .direct_preview_view()
+                                .filter(|view| publication.matches_view(*view))
+                                .ok_or_else(|| {
+                                    PhysicalOverlayFailure {
+                                        role: PhysicalOverlayRole::Preview,
+                                        slot_index: plan.slot_index,
+                                        rect,
+                                        expected_rows: rect.rows(),
+                                        copied_rows: 0,
+                                        layout_generation: publication.layout_generation(),
+                                        content_generation: publication.content_generation(),
+                                        backing_key: format!("{:?}", publication.backing_key()),
+                                        cause: Some("published preview backing changed before copy".into()),
+                                    }
+                                    .to_string()
+                                })?;
+                            direct_preview_rows = copy_direct_preview_rect_to_hidden(
+                                hidden,
+                                view,
+                                rect,
+                            );
+                            (
+                                publication.layout_generation(),
+                                publication.content_generation(),
+                                format!("{:?}", publication.backing_key()),
+                            )
+                        } else {
+                            direct_preview_rows =
+                                layer_target.copy_direct_preview_rect_to_hidden(hidden, rect);
+                            (
+                                layer_target.output_layout_generation(),
+                                plan.preview_state_after().map_or(0, |state| state.version),
+                                format!("{:?}", layer_target.direct_preview_backing_diagnostic()),
+                            )
+                        };
                     hidden_preview_compose_us = started.elapsed().as_micros();
                     drop(preview_pmu);
                     require_complete_overlay_copy(
@@ -742,9 +778,9 @@ impl PresentationAdapters<FpgaVblankLatchHiddenPresenter> for LivePresentationAd
                         plan.slot_index,
                         rect,
                         direct_preview_rows,
-                        layer_target.output_layout_generation(),
-                        plan.preview_state_after().map_or(0, |state| state.version),
-                        || format!("{:?}", layer_target.direct_preview_backing_diagnostic()),
+                        layout_generation,
+                        content_generation,
+                        || backing_key,
                     )?;
                 }
                 if let Some(update) = plan.arcade_redraw {
@@ -756,33 +792,93 @@ impl PresentationAdapters<FpgaVblankLatchHiddenPresenter> for LivePresentationAd
                         .flatten();
                     let started = Instant::now();
                     let arcade_rect = update.dirty_rect();
-                    let arcade_generation =
-                        plan.arcade_state_after().map_or(0, |state| state.version);
-                    let arcade_backing =
-                        arcade_list_renderer.persistent_oriented_layer_diagnostic();
-                    arcade_stats = layer_target
-                        .copy_arcade_list_update_to_hidden(
+                    if let Some(publication) = arcade_publication {
+                        let view = arcade_list_renderer
+                            .persistent_oriented_layer_view()
+                            .filter(|view| publication.matches_view(*view))
+                            .ok_or_else(|| {
+                                PhysicalOverlayFailure {
+                                    role: PhysicalOverlayRole::Arcade,
+                                    slot_index: plan.slot_index,
+                                    rect: arcade_rect,
+                                    expected_rows: arcade_rect.rows(),
+                                    copied_rows: 0,
+                                    layout_generation: publication.layout_generation(),
+                                    content_generation: publication.content_generation(),
+                                    backing_key: format!("{:?}", publication.backing_key()),
+                                    cause: Some("published Arcade backing changed before copy".into()),
+                                }
+                                .to_string()
+                            })?;
+                        let rows = copy_direct_preview_rect_to_hidden(
                             hidden,
-                            arcade_list_renderer,
+                            view,
+                            arcade_rect,
+                        );
+                        require_complete_overlay_copy(
+                            PhysicalOverlayRole::Arcade,
                             plan.slot_index,
-                            plan.arcade_redraw_diff_safe,
-                            update,
-                        )
-                        .map_err(|cause| {
-                            PhysicalOverlayFailure {
-                                role: PhysicalOverlayRole::Arcade,
-                                slot_index: plan.slot_index,
-                                rect: arcade_rect,
-                                expected_rows: arcade_rect.rows(),
-                                copied_rows: 0,
-                                layout_generation: layer_target.output_layout_generation(),
-                                content_generation: arcade_generation,
-                                backing_key: format!("{arcade_backing:?}"),
-                                cause: Some(cause),
-                            }
-                            .to_string()
-                        })?;
-                    arcade_copy_trace = arcade_list_renderer.persistent_copy_trace();
+                            arcade_rect,
+                            rows,
+                            publication.layout_generation(),
+                            publication.content_generation(),
+                            || format!("{:?}", publication.backing_key()),
+                        )?;
+                        arcade_stats = PresentCopyStats {
+                            rows,
+                            bytes: arcade_rect
+                                .width()
+                                .saturating_mul(rows as usize)
+                                .saturating_mul(2),
+                        };
+                        arcade_copy_trace =
+                            crate::arcade_list_renderer::PersistentArcadeCopyTrace {
+                                decision: match update {
+                                    DirectLayerUpdate::Full(_) => crate::arcade_list_renderer::PersistentArcadeCopyDecision::FullCopy,
+                                    DirectLayerUpdate::Scroll { .. } => crate::arcade_list_renderer::PersistentArcadeCopyDecision::DenseScroll,
+                                },
+                                diff_safe: plan.arcade_redraw_diff_safe,
+                                write_us: started
+                                    .elapsed()
+                                    .as_micros()
+                                    .min(u128::from(u64::MAX))
+                                    as u64,
+                                written_pixels: arcade_rect
+                                    .width()
+                                    .saturating_mul(rows as usize)
+                                    as u64,
+                                changed_rows: rows,
+                                ..crate::arcade_list_renderer::PersistentArcadeCopyTrace::default()
+                            };
+                    } else {
+                        let arcade_generation =
+                            plan.arcade_state_after().map_or(0, |state| state.version);
+                        let arcade_backing =
+                            arcade_list_renderer.persistent_oriented_layer_diagnostic();
+                        arcade_stats = layer_target
+                            .copy_arcade_list_update_to_hidden(
+                                hidden,
+                                arcade_list_renderer,
+                                plan.slot_index,
+                                plan.arcade_redraw_diff_safe,
+                                update,
+                            )
+                            .map_err(|cause| {
+                                PhysicalOverlayFailure {
+                                    role: PhysicalOverlayRole::Arcade,
+                                    slot_index: plan.slot_index,
+                                    rect: arcade_rect,
+                                    expected_rows: arcade_rect.rows(),
+                                    copied_rows: 0,
+                                    layout_generation: layer_target.output_layout_generation(),
+                                    content_generation: arcade_generation,
+                                    backing_key: format!("{arcade_backing:?}"),
+                                    cause: Some(cause),
+                                }
+                                .to_string()
+                            })?;
+                        arcade_copy_trace = arcade_list_renderer.persistent_copy_trace();
+                    }
                     hidden_arcade_compose_us = started.elapsed().as_micros();
                     drop(arcade_pmu);
                 }

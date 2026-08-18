@@ -5220,6 +5220,9 @@ pub(super) fn run_launcher_loop(
     let mut launcher_preview_version = 1u64;
     let launcher_arcade_version = 1u64;
     let mut launcher_arcade_scroll_offset = LayerOffset::ZERO;
+    let mut launcher_arcade_content_generation = 1u64;
+    let mut launcher_preview_publication: Option<PhysicalLayerPublication> = None;
+    let mut launcher_arcade_publication: Option<PhysicalLayerPublication> = None;
     let mut arcade_drawer_view_cache = ArcadeDrawerViewCache::default();
     let mut composition = UiCompositionController::new();
     let mut cpu = process_entry_cpu_profile.or_else(|| cpu_profile::start(profile_config.cpu()));
@@ -10049,14 +10052,18 @@ pub(super) fn run_launcher_loop(
                             true,
                         ) {
                             if navigation_transition.settings_physical_space() {
-                                // The navigation destination and steady-state presenter share
-                                // this physical layer. Building it here keeps the first Arcade
-                                // input on the incremental path.
-                                let _ = layer_target.compose_arcade_list_direct_layer_snapshot(
-                                    &mut arcade_list_renderer,
-                                    update,
-                                    catalog_version as u64,
-                                );
+                                launcher_arcade_content_generation =
+                                    launcher_arcade_content_generation.wrapping_add(1).max(1);
+                                let (_, publication) = layer_target
+                                    .compose_arcade_list_direct_layer_snapshot(
+                                        &mut arcade_list_renderer,
+                                        update,
+                                        catalog_version as u64,
+                                        launcher_arcade_version,
+                                        launcher_arcade_scroll_offset,
+                                        launcher_arcade_content_generation,
+                                    );
+                                launcher_arcade_publication = publication;
                             } else {
                                 let _ = layer_target.compose_arcade_list_snapshot_update(
                                     &mut arcade_list_renderer,
@@ -10317,8 +10324,16 @@ pub(super) fn run_launcher_loop(
             .then_some(empty_base_cached_rect)
             .flatten();
         let raw_preview_direct_rect = raw_preview.and_then(RawPreviewPresent::direct_rect);
-        if raw_preview_direct_rect.is_some() {
+        if let Some(rect) = raw_preview_direct_rect {
             launcher_preview_version = launcher_preview_version.wrapping_add(1).max(1);
+            if layout.is_portrait() {
+                let state = DirectLayerState::new(rect, launcher_preview_version);
+                launcher_preview_publication = layer_target.capture_preview_publication(
+                    state,
+                    Some(DirectLayerUpdate::Full(rect)),
+                    launcher_preview_version,
+                );
+            }
         }
         let mut physical_arcade_rect = None;
         let mut direct_arcade_update = None;
@@ -10396,6 +10411,23 @@ pub(super) fn run_launcher_loop(
                 .y
                 .saturating_add(delta_y as i64);
         }
+        if layout.is_portrait()
+            && let Some(update) = direct_arcade_update
+            && let Some(rect) = arcade_list_renderer
+                .persistent_oriented_layer_view()
+                .map(DirectPreviewView::rect)
+        {
+            launcher_arcade_content_generation =
+                launcher_arcade_content_generation.wrapping_add(1).max(1);
+            let state = DirectLayerState::new(rect, launcher_arcade_version)
+                .with_content_offset(launcher_arcade_scroll_offset);
+            launcher_arcade_publication = layer_target.capture_arcade_publication(
+                &arcade_list_renderer,
+                state,
+                Some(update),
+                launcher_arcade_content_generation,
+            );
+        }
         custom_draw_trace.crt_backdrop_copy_us = crt_backdrop_copy_us;
         custom_draw_trace.crt_backdrop_copy_pixels = crt_backdrop_copy_pixels;
         custom_draw_trace.crt_backdrop_list_overlay_us = crt_backdrop_list_overlay_us;
@@ -10413,29 +10445,59 @@ pub(super) fn run_launcher_loop(
             layer_target.direct_preview_rect().is_some(),
             raw_preview_direct_rect.is_some(),
         );
-        let preview_desired = if preview_layer_desired && preview_direct_present_enabled() {
+        let preview_publication =
+            if layout.is_portrait() && preview_layer_desired && preview_direct_present_enabled() {
+                launcher_preview_publication
+                    .as_ref()
+                    .and_then(|publication| {
+                        publication.for_frame(
+                            publication.state(),
+                            raw_preview_direct_rect.map(DirectLayerUpdate::Full),
+                        )
+                    })
+            } else {
+                None
+            };
+        let preview_desired = if layout.is_portrait() {
+            preview_publication
+                .as_ref()
+                .map(PhysicalLayerPublication::state)
+        } else if preview_layer_desired && preview_direct_present_enabled() {
             layer_target
                 .direct_preview_rect()
                 .map(|rect| DirectLayerState::new(rect, launcher_preview_version))
         } else {
             None
         };
-        let arcade_desired = if !crt_layout
+        let arcade_publication = if layout.is_portrait()
+            && !crt_layout
             && should_desire_direct_layer(
                 wants_arcade_list,
                 composition_decision.allow_arcade_list_blit,
             ) {
-            let rect = if layout.is_portrait() {
-                arcade_list_renderer
-                    .persistent_oriented_layer_view()
-                    .map(DirectPreviewView::rect)
-            } else {
-                Some(arcade_list_renderer.dirty_rect())
-            };
-            rect.map(|rect| {
+            launcher_arcade_publication
+                .as_ref()
+                .and_then(|publication| {
+                    publication.for_frame(publication.state(), direct_arcade_update)
+                })
+        } else {
+            None
+        };
+        let arcade_desired = if layout.is_portrait() {
+            arcade_publication
+                .as_ref()
+                .map(PhysicalLayerPublication::state)
+        } else if !crt_layout
+            && should_desire_direct_layer(
+                wants_arcade_list,
+                composition_decision.allow_arcade_list_blit,
+            )
+        {
+            let rect = arcade_list_renderer.dirty_rect();
+            Some(
                 DirectLayerState::new(rect, launcher_arcade_version)
-                    .with_content_offset(launcher_arcade_scroll_offset)
-            })
+                    .with_content_offset(launcher_arcade_scroll_offset),
+            )
         } else {
             None
         };
@@ -10636,19 +10698,21 @@ pub(super) fn run_launcher_loop(
         if full_screen_transition.state() != FullScreenTransitionState::Live {
             record_launcher_frame_phase!(LauncherFramePhase::FullScreenTransition);
         }
-        let frame_plan = LauncherFramePlan::new(
-            cached_damage,
-            preview_desired,
-            raw_preview_direct_rect,
-            arcade_desired,
-            if crt_layout {
-                None
-            } else if layout.is_portrait() {
-                direct_arcade_update
-            } else {
-                arcade_list_rect
-            },
-        );
+        let frame_plan = if layout.is_portrait() {
+            LauncherFramePlan::from_publications(
+                cached_damage,
+                preview_publication,
+                arcade_publication,
+            )
+        } else {
+            LauncherFramePlan::new(
+                cached_damage,
+                preview_desired,
+                raw_preview_direct_rect,
+                arcade_desired,
+                if crt_layout { None } else { arcade_list_rect },
+            )
+        };
         record_launcher_frame_phase!(LauncherFramePhase::FramePlanned);
         let startup_can_present = lifecycle.startup_can_present_frame();
         let stream_motion_active = stream_motion_before_render
