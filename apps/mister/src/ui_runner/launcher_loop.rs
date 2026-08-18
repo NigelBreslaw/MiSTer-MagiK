@@ -10017,9 +10017,15 @@ pub(super) fn run_launcher_loop(
                         && preview.raw_frame_status() == PreviewRawFrameStatus::Ready;
                     let preview_surface_ready = if preview_exact {
                         if navigation_transition.settings_physical_space() {
-                            layer_target
-                                .compose_exact_preview_physical(&preview)
-                                .is_some()
+                            let (ready, publication) = layer_target.compose_exact_preview_physical(
+                                &preview,
+                                launcher_preview_publication.as_ref(),
+                                &mut launcher_preview_version,
+                            );
+                            if let Some(publication) = publication {
+                                launcher_preview_publication = Some(publication);
+                            }
+                            ready
                         } else {
                             match layer_target.compose_exact_preview(&preview) {
                                 Some(RawPreviewPresent::Cached(_)) => true,

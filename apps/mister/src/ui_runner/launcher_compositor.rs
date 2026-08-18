@@ -448,25 +448,91 @@ impl<'a> LayerTarget<'a> {
     pub(super) fn compose_exact_preview_physical(
         &mut self,
         preview: &PreviewState,
-    ) -> Option<DirtyRect> {
+        current: Option<&PhysicalLayerPublication>,
+        version: &mut u64,
+    ) -> (bool, Option<PhysicalLayerPublication>) {
         if !self.layout.is_portrait() {
-            return self
-                .compose_exact_preview(preview)
-                .and_then(RawPreviewPresent::cached_rect);
+            return (false, None);
         }
-        let frame = preview.raw_frame()?;
+        let Some(frame) = preview.raw_frame() else {
+            return (false, None);
+        };
         if frame.status() != PreviewRawFrameStatus::Ready {
-            return None;
+            return (false, None);
         }
-        let rect = self
+        let Some(rect) = self
             .target
-            .blit_raw_preview_direct(&self.drawing_ui, &frame, true)?;
+            .blit_raw_preview_direct(&self.drawing_ui, &frame, true)
+        else {
+            return (false, None);
+        };
+        let transition_id = preview
+            .raw_transition_frame()
+            .map(|frame| frame.transition_id)
+            .unwrap_or(0);
+        let token = oriented_preview_cache_token(
+            preview.presentation_generation(),
+            transition_id,
+            PreviewTransitionTrace::default(),
+        );
+        let output = self.layout.output_layout();
+        let physical_rect = self.layout.logical_rect_to_composition(rect);
         let rotation_pmu = mister_magik_perf_events::sampled_span("gui.custom.preview-rotation");
-        let rows = self
+        let changed = self
             .target
-            .compose_direct_preview_rect_oriented(rect, self.layout.output_layout());
+            .compose_direct_preview_to_physical(rect, output, token, false)
+            .is_some();
         drop(rotation_pmu);
-        (rows > 0).then(|| self.layout.logical_rect_to_composition(rect))
+        if !changed
+            && !self
+                .target
+                .physical_direct_preview_matches(physical_rect, output, token)
+        {
+            return (false, None);
+        }
+        let layout_generation = self.output_layout_generation();
+        let current = current.filter(|publication| {
+            publication.role() == PhysicalLayerRole::Preview
+                && publication.layout_generation() == layout_generation
+                && self
+                    .target
+                    .physical_direct_preview_view()
+                    .is_some_and(|view| publication.matches_view(view))
+        });
+        let publication = if changed || current.is_none() {
+            *version = version.wrapping_add(1).max(1);
+            let state = PhysicalLayerState::new(physical_rect, *version);
+            self.capture_preview_publication(
+                state,
+                Some(PhysicalLayerUpdate::Full(physical_rect)),
+                *version,
+            )
+        } else {
+            None
+        };
+        let effective = publication.as_ref().or(current);
+        let ready = effective
+            .is_some_and(|publication| self.copy_preview_publication_to_cached(publication));
+        (ready, publication)
+    }
+
+    fn copy_preview_publication_to_cached(
+        &mut self,
+        publication: &PhysicalLayerPublication,
+    ) -> bool {
+        if publication.role() != PhysicalLayerRole::Preview
+            || publication.layout_generation() != self.output_layout_generation()
+        {
+            return false;
+        }
+        let Some(view) = self.target.physical_direct_preview_view() else {
+            return false;
+        };
+        if !publication.matches_view(view) {
+            return false;
+        }
+        let rect = view.rect();
+        self.target.compose_physical_direct_preview_rect(rect) == rect.rows()
     }
 
     pub(super) fn compose_direct_preview_rect(&mut self, rect: DirtyRect) -> u32 {
@@ -916,6 +982,71 @@ mod tests {
         let layer_target = LayerTarget::new_oriented(&mut target, layout);
         assert_eq!(layer_target.direct_preview_rect(), Some(published));
         assert_eq!(published, layout.logical_rect_to_composition(logical));
+    }
+
+    #[test]
+    fn navigation_snapshot_uses_only_the_matching_preview_publication() {
+        let ui = UiDisplay::for_framebuffer(4, 3);
+        let layout = UiLayoutGeometry::for_display(&ui, ScreenOrientation::MonitorClockwise);
+        let logical = DirtyRect {
+            x0: 0,
+            y0: 1,
+            x1: 3,
+            y1: 3,
+        };
+        let mut target = UiFrameTarget::cached(FramebufferTargetGeometry::new(4, 3));
+        target
+            .direct_preview_565_rect_mut(logical)
+            .0
+            .copy_from_slice(&[
+                Rgb565Pixel(1),
+                Rgb565Pixel(2),
+                Rgb565Pixel(3),
+                Rgb565Pixel(4),
+                Rgb565Pixel(5),
+                Rgb565Pixel(6),
+            ]);
+        let physical = target
+            .compose_direct_preview_to_physical(logical, layout.output_layout(), 11, true)
+            .unwrap();
+        let expected = target
+            .physical_direct_preview_view()
+            .unwrap()
+            .pixels()
+            .to_vec();
+        target.cached_565_mut().fill(Rgb565Pixel(0));
+        let mut layer_target = LayerTarget::new_oriented(&mut target, layout);
+        let publication = layer_target
+            .capture_preview_publication(
+                PhysicalLayerState::new(physical, 1),
+                Some(PhysicalLayerUpdate::Full(physical)),
+                1,
+            )
+            .unwrap();
+
+        assert!(layer_target.copy_preview_publication_to_cached(&publication));
+        let copied = layer_target
+            .presentation_frame_view()
+            .pixels()
+            .iter()
+            .enumerate()
+            .filter_map(|(index, pixel)| {
+                let x = index % 4;
+                let y = index / 4;
+                (x >= physical.x0 && x < physical.x1 && y >= physical.y0 && y < physical.y1)
+                    .then_some(*pixel)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(copied, expected);
+
+        let mut replacement = vec![Rgb565Pixel(9); expected.len()];
+        assert!(layer_target.target.adopt_physical_direct_preview(
+            &mut replacement,
+            physical,
+            layout.output_layout(),
+            12,
+        ));
+        assert!(!layer_target.copy_preview_publication_to_cached(&publication));
     }
 
     #[test]
