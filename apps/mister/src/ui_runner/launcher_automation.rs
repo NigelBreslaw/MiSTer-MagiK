@@ -228,7 +228,10 @@ impl LauncherAutomation {
         let expired = self.session.as_ref().is_some_and(|session| {
             request_lease_expired(session.last_request, session.press, now)
                 || unix_ms() > session.descriptor.expires_unix_ms
-                || current_main_generation() != Some(session.descriptor.main_generation)
+                || confirmed_main_generation_mismatch(
+                    session.descriptor.main_generation,
+                    current_main_generation(),
+                )
         });
         if expired {
             return self.abort_releasing("session_expired");
@@ -537,6 +540,10 @@ fn request_lease_expired(
     now > lease_deadline
 }
 
+fn confirmed_main_generation_mismatch(expected: u64, observed: Option<u64>) -> bool {
+    observed.is_some_and(|generation| generation != expected)
+}
+
 fn retry_interrupted<T>(mut operation: impl FnMut() -> io::Result<T>) -> io::Result<T> {
     let mut retries = 0;
     loop {
@@ -778,6 +785,13 @@ mod tests {
             held,
             hold_deadline + REQUEST_LEASE + Duration::from_nanos(1)
         ));
+    }
+
+    #[test]
+    fn main_generation_requires_a_confirmed_mismatch() {
+        assert!(!confirmed_main_generation_mismatch(8126, Some(8126)));
+        assert!(!confirmed_main_generation_mismatch(8126, None));
+        assert!(confirmed_main_generation_mismatch(8126, Some(8127)));
     }
 
     #[test]
