@@ -2525,12 +2525,23 @@ impl ArcadeListRenderer {
             return &self.selection_invert_scratch;
         }
         let src_y = (self.surface_y + viewport_y) % self.visible_height;
-        for row in 0..h {
-            let src = (src_y + row) * self.width + x;
-            let dst = row * w;
-            for col in 0..w {
-                self.selection_invert_scratch[dst + col] =
-                    selected_aperture_pixel_with_style(self.surface[src + col], self.style);
+        let source_start = src_y * self.width + x;
+        let source_end = source_start.saturating_add(w.saturating_mul(h));
+        if x == 0 && w == self.width && source_end <= self.surface.len() {
+            prepare_selected_aperture_pixels(
+                &mut self.selection_invert_scratch,
+                &self.surface[source_start..source_end],
+                self.style,
+            );
+        } else {
+            for row in 0..h {
+                let src = (src_y + row) * self.width + x;
+                let dst = row * w;
+                prepare_selected_aperture_pixels(
+                    &mut self.selection_invert_scratch[dst..dst + w],
+                    &self.surface[src..src + w],
+                    self.style,
+                );
             }
         }
         &self.selection_invert_scratch
@@ -3689,6 +3700,65 @@ fn invert_rgb565(pixel: Rgb565Pixel) -> Rgb565Pixel {
 
 fn selected_aperture_pixel(pixel: Rgb565Pixel) -> Rgb565Pixel {
     selected_aperture_pixel_with_style(pixel, ArcadeListStyle::hdmi())
+}
+
+fn prepare_selected_aperture_pixels(
+    destination: &mut [Rgb565Pixel],
+    source: &[Rgb565Pixel],
+    style: ArcadeListStyle,
+) {
+    let count = destination.len().min(source.len());
+    #[cfg(all(target_os = "linux", target_arch = "arm"))]
+    if count > 0 && arcade_selection_neon_enabled() {
+        unsafe extern "C" {
+            fn mister_magik_arcade_selection_rgb565(
+                destination: *mut u16,
+                source: *const u16,
+                count: usize,
+                background: u16,
+                alternate_background: u16,
+                border: u16,
+                badge_fill: u16,
+                selection_fill: u16,
+                selection_foreground: u16,
+                fixed_foreground: u8,
+            );
+        }
+        // SAFETY: both slices contain at least `count` aligned RGB565 pixels.
+        unsafe {
+            mister_magik_arcade_selection_rgb565(
+                destination.as_mut_ptr().cast(),
+                source.as_ptr().cast(),
+                count,
+                style.background_565.0,
+                style.alternate_background_565.0,
+                style.border_565.0,
+                style.badge_fill_565.0,
+                style.selection_fill_565.0,
+                style.selection_text_565.0,
+                u8::from(style.crt_palette),
+            );
+        }
+        return;
+    }
+    for (destination, source) in destination[..count].iter_mut().zip(&source[..count]) {
+        *destination = selected_aperture_pixel_with_style(*source, style);
+    }
+}
+
+#[cfg(all(target_os = "linux", target_arch = "arm"))]
+fn arcade_selection_neon_enabled() -> bool {
+    use std::sync::OnceLock;
+
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        !std::env::var("MISTER_ARCADE_SELECTION_SCALAR").is_ok_and(|value| {
+            matches!(
+                value.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+    })
 }
 
 fn selected_aperture_pixel_with_style(pixel: Rgb565Pixel, style: ArcadeListStyle) -> Rgb565Pixel {
@@ -5409,6 +5479,30 @@ mod tests {
             selected_aperture_pixel_with_style(hdmi_text, hdmi),
             invert_rgb565(hdmi_text)
         );
+    }
+
+    #[test]
+    fn selected_aperture_kernel_matches_scalar_for_hdmi_and_crt() {
+        for style in [
+            ArcadeListStyle::hdmi(),
+            ArcadeListStyle::crt(CrtUiMetrics::for_framebuffer(640, 480)),
+        ] {
+            let source = [
+                style.background_565,
+                style.alternate_background_565,
+                style.border_565,
+                style.badge_fill_565,
+                Rgb565Pixel(0x0000),
+                Rgb565Pixel(0xffff),
+                Rgb565Pixel(0x1234),
+                Rgb565Pixel(0xabcd),
+                Rgb565Pixel(0x55aa),
+            ];
+            let mut actual = [Rgb565Pixel(0); 9];
+            prepare_selected_aperture_pixels(&mut actual, &source, style);
+            let expected = source.map(|pixel| selected_aperture_pixel_with_style(pixel, style));
+            assert_eq!(actual, expected);
+        }
     }
 
     #[test]
