@@ -7839,7 +7839,7 @@ fn gui_profile_route_launcher_env_with_pprof(
 ) -> Vec<(String, String)> {
     let mut environment = vec![
         ("MISTER_CATALOG_REFRESH".into(), "off".into()),
-        ("MISTER_LAUNCHER_START_SCREEN".into(), "arcade".into()),
+        ("MISTER_LAUNCHER_START_SCREEN".into(), "home".into()),
         ("MISTER_GUI_FRAME_PROFILE".into(), "1".into()),
         (
             "MISTER_GUI_FRAME_PROFILE_COMPLETE".into(),
@@ -8026,6 +8026,24 @@ fn run_gui_frame_profile_route_with_pprof(
         .to_string();
 
     let run_result = (|| -> Result<Value> {
+        let home_ready = wait_gui_profile_snapshot(
+            config,
+            &nonce,
+            |snapshot| {
+                gui_profile_effective_view(snapshot) == Some("home")
+                    && snapshot
+                        .pointer("/semantic/navigation_transition_active")
+                        .and_then(Value::as_bool)
+                        == Some(false)
+                    && snapshot
+                        .pointer("/semantic/selected_item_id")
+                        .and_then(Value::as_str)
+                        == Some("menu:arcade")
+            },
+            "settled Home with Arcade selected",
+        )?;
+        let arcade_enter_sequence =
+            modal_input_action(config, &nonce, AutomationAction::Tap(AutomationButton::A))?;
         let arcade_entered = wait_gui_profile_snapshot(
             config,
             &nonce,
@@ -8125,9 +8143,11 @@ fn run_gui_frame_profile_route_with_pprof(
             "status": "complete",
             "pmu_requested": pmu,
             "actions": {
+                "arcade_enter_sequence": arcade_enter_sequence,
                 "scroll_sequence": scroll_sequence,
                 "release_sequence": release_sequence,
             },
+            "home_ready": home_ready,
             "arcade_entered": arcade_entered,
             "scroll_snapshots": scroll_snapshots,
             "settled_arcade": settled_arcade,
@@ -25545,9 +25565,9 @@ mod tests {
             ARCADE_VELOCITY_SCROLL_PPROF_DURATION_MS,
         );
         assert!(
-            control.iter().any(|(name, value)| {
-                name == "MISTER_LAUNCHER_START_SCREEN" && value == "arcade"
-            })
+            control
+                .iter()
+                .any(|(name, value)| { name == "MISTER_LAUNCHER_START_SCREEN" && value == "home" })
         );
         assert!(
             control

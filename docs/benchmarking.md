@@ -70,9 +70,10 @@ and Streamline arms sequentially and writes one correlation manifest. A typed
 optional arm (`control`, `control-smoke`, `pprof`, `pmu`,
 `pmu-smoke`, or `streamline`) runs
 only that fixed arm, for example `scripts/agent benchmark
-arcade-velocity-scroll-attribution pprof`. Every arm starts directly on a
-settled Arcade screen; the former Settings-to-Home navigation preamble is not
-part of the measured workload. The unprofiled control remains a fixed
+arcade-velocity-scroll-attribution pprof`. Every arm starts on Home with Arcade
+preselected and enters it with one confirmation; the former Settings-to-Home
+navigation and focus-panning preamble is not part of the workload. The
+unprofiled control remains a fixed
 40-second performance authority. The pprof arm uses a 20-second hold, which is
 long enough to capture the recurring full-update outliers while avoiding an
 unnecessary second half of identical samples; profiler arms remain
