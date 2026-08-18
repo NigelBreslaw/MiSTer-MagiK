@@ -8723,13 +8723,13 @@ fn profile_installed_arcade_velocity_scroll_attribution(
     fs::create_dir_all(output_dir)?;
     let control_text =
         profile_installed_arcade_velocity_scroll(config, &output_dir.join("control"))?;
-    let pprof_text =
-        profile_installed_arcade_velocity_scroll_pprof(config, &output_dir.join("pprof"))?;
     let pmu_text = profile_installed_arcade_velocity_scroll_pmu(config, &output_dir.join("pmu"))?;
     let streamline_text = profile_installed_arcade_velocity_scroll_streamline(
         config,
         &output_dir.join("streamline"),
     )?;
+    let pprof_text =
+        profile_installed_arcade_velocity_scroll_pprof(config, &output_dir.join("pprof"))?;
     let control: Value = serde_json::from_str(&control_text)?;
     let pprof: Value = serde_json::from_str(&pprof_text)?;
     let pmu: Value = serde_json::from_str(&pmu_text)?;
