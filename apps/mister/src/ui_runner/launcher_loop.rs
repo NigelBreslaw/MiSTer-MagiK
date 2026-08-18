@@ -11478,12 +11478,23 @@ pub(super) fn run_launcher_loop(
                 catalog_ready,
                 finish_timing.runtime_status_write_us,
             );
+            gui_profiling.finalize_frame_timing(
+                frames,
+                GuiFrameTimingTrace::from_presented_frame(
+                    &presented_frame,
+                    finish_timing.frame_finish_us,
+                ),
+            );
             frame_accounting.write_finished_frame_trace(
                 &presented_frame,
                 finish_timing,
                 latch_trace_flush_deferred,
             );
         } else {
+            gui_profiling.finalize_frame_timing(
+                frames,
+                GuiFrameTimingTrace::from_presented_frame(&presented_frame, 0),
+            );
             frame_accounting.finish_frame(
                 presented_frame,
                 start,

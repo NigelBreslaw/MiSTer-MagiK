@@ -214,6 +214,56 @@ pub(super) struct GuiProfilingController {
     dropped_frames: u64,
     pmu_requested: bool,
     phase_markers: Vec<serde_json::Value>,
+    last_loop_start: Option<Instant>,
+    last_frame_t4: Option<Instant>,
+    last_timing_finalized_at: Option<Instant>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(super) struct GuiFrameTimingTrace {
+    pub(super) loop_start: Instant,
+    pub(super) frame_t4: Instant,
+    pub(super) timing_finalized_at: Instant,
+    pub(super) vsync_us: u128,
+    pub(super) pre_render_wait_us: u128,
+    pub(super) post_present_wait_us: u128,
+    pub(super) frame_finish_us: u128,
+    pub(super) frame_start_phase_us: u64,
+    pub(super) present_phase_us: u128,
+    pub(super) redraw_pending: bool,
+    pub(super) wake_reasons_bits: u64,
+    pub(super) completion_poll_count: u16,
+    pub(super) completion_poll_wall_us: u64,
+    pub(super) completion_poll_cpu_us: u64,
+}
+
+impl GuiFrameTimingTrace {
+    pub(super) fn from_presented_frame(
+        frame: &super::launcher_frame_accounting::LauncherPresentedFrame,
+        frame_finish_us: u128,
+    ) -> Self {
+        Self {
+            loop_start: frame.loop_start,
+            frame_t4: frame.frame_t4,
+            timing_finalized_at: Instant::now(),
+            vsync_us: frame.vsync_us_override.unwrap_or_else(|| {
+                frame
+                    .frame_t3
+                    .saturating_duration_since(frame.custom_draw_done)
+                    .as_micros()
+            }),
+            pre_render_wait_us: frame.pre_render_wait_us,
+            post_present_wait_us: frame.post_present_wait_us,
+            frame_finish_us,
+            frame_start_phase_us: frame.frame_start_phase_us,
+            present_phase_us: frame.present_phase_us,
+            redraw_pending: frame.redraw_pending,
+            wake_reasons_bits: frame.wake_reasons_bits,
+            completion_poll_count: frame.main_present_completion_poll_count,
+            completion_poll_wall_us: frame.main_present_completion_poll_wall_us,
+            completion_poll_cpu_us: frame.main_present_completion_poll_cpu_us,
+        }
+    }
 }
 
 impl GuiProfilingController {
@@ -243,6 +293,9 @@ impl GuiProfilingController {
             dropped_frames: 0,
             pmu_requested,
             phase_markers: Vec::with_capacity(GuiProfilePhase::ORDERED.len() * 2),
+            last_loop_start: None,
+            last_frame_t4: None,
+            last_timing_finalized_at: None,
         }
     }
 
@@ -258,6 +311,9 @@ impl GuiProfilingController {
             dropped_frames: 0,
             pmu_requested: false,
             phase_markers: Vec::new(),
+            last_loop_start: None,
+            last_frame_t4: None,
+            last_timing_finalized_at: None,
         }
     }
 
@@ -274,6 +330,9 @@ impl GuiProfilingController {
             dropped_frames: 0,
             pmu_requested: false,
             phase_markers: Vec::new(),
+            last_loop_start: None,
+            last_frame_t4: None,
+            last_timing_finalized_at: None,
         }
     }
 
@@ -583,6 +642,66 @@ impl GuiProfilingController {
             json!(portrait_preview_worker_affinity_status);
     }
 
+    pub(super) fn finalize_frame_timing(&mut self, frame: u64, timing: GuiFrameTimingTrace) {
+        if !self.active() {
+            return;
+        }
+        let loop_delta_us = self
+            .last_loop_start
+            .map(|previous| {
+                timing
+                    .loop_start
+                    .saturating_duration_since(previous)
+                    .as_micros()
+            })
+            .unwrap_or(0);
+        let post_frame_tail_us = self
+            .last_frame_t4
+            .map(|previous| {
+                timing
+                    .loop_start
+                    .saturating_duration_since(previous)
+                    .as_micros()
+            })
+            .unwrap_or(0);
+        let post_finish_tail_us = self
+            .last_timing_finalized_at
+            .map(|previous| {
+                timing
+                    .loop_start
+                    .saturating_duration_since(previous)
+                    .as_micros()
+            })
+            .unwrap_or(0);
+        self.last_loop_start = Some(timing.loop_start);
+        self.last_frame_t4 = Some(timing.frame_t4);
+        self.last_timing_finalized_at = Some(timing.timing_finalized_at);
+
+        let Some(record) =
+            self.frames.iter_mut().rev().find(|record| {
+                record.get("frame").and_then(serde_json::Value::as_u64) == Some(frame)
+            })
+        else {
+            self.dropped_frames = self.dropped_frames.saturating_add(1);
+            return;
+        };
+        record["wall_us"] = json!(saturating_duration_us(timing.loop_start, timing.frame_t4));
+        record["vsync_us"] = json!(u128_to_u64_saturating(timing.vsync_us));
+        record["loop_delta_us"] = json!(u128_to_u64_saturating(loop_delta_us));
+        record["pre_render_wait_us"] = json!(u128_to_u64_saturating(timing.pre_render_wait_us));
+        record["post_present_wait_us"] = json!(u128_to_u64_saturating(timing.post_present_wait_us));
+        record["post_frame_tail_us"] = json!(u128_to_u64_saturating(post_frame_tail_us));
+        record["frame_finish_us"] = json!(u128_to_u64_saturating(timing.frame_finish_us));
+        record["post_finish_tail_us"] = json!(u128_to_u64_saturating(post_finish_tail_us));
+        record["frame_start_phase_us"] = json!(timing.frame_start_phase_us);
+        record["present_phase_us"] = json!(u128_to_u64_saturating(timing.present_phase_us));
+        record["redraw_pending"] = json!(timing.redraw_pending);
+        record["wake_reasons_bits"] = json!(timing.wake_reasons_bits);
+        record["completion_poll_count"] = json!(timing.completion_poll_count);
+        record["completion_poll_wall_us"] = json!(timing.completion_poll_wall_us);
+        record["completion_poll_cpu_us"] = json!(timing.completion_poll_cpu_us);
+    }
+
     pub(super) fn record_latch(
         &mut self,
         frame: u64,
@@ -722,6 +841,14 @@ fn valid_volatile_profile_path(path: &Path) -> bool {
                 std::path::Component::ParentDir | std::path::Component::CurDir
             )
         })
+}
+
+fn u128_to_u64_saturating(value: u128) -> u64 {
+    value.min(u128::from(u64::MAX)) as u64
+}
+
+fn saturating_duration_us(start: Instant, end: Instant) -> u64 {
+    u128_to_u64_saturating(end.saturating_duration_since(start).as_micros())
 }
 
 #[cfg(test)]
@@ -873,6 +1000,81 @@ mod tests {
             controller.frames[0]["portrait_preview_worker_affinity_status"],
             "applied"
         );
+    }
+
+    #[test]
+    fn finalized_timing_replaces_pre_confirmation_work_timing() {
+        let now = Instant::now();
+        let mut controller = GuiProfilingController::enabled_for_test(now);
+        controller
+            .request_phase(GuiProfilePhase::ArcadeScroll, now)
+            .unwrap();
+        controller.record_frame(
+            7,
+            2_000,
+            "event-driven",
+            GuiBridgeProfilePhase::None,
+            GuiRasterProfilePhase::Ordinary,
+            Vec::new(),
+        );
+        controller.finalize_frame_timing(
+            7,
+            GuiFrameTimingTrace {
+                loop_start: now,
+                frame_t4: now + Duration::from_micros(8_000),
+                timing_finalized_at: now + Duration::from_micros(9_000),
+                vsync_us: 5_000,
+                pre_render_wait_us: 100,
+                post_present_wait_us: 4_800,
+                frame_finish_us: 1_000,
+                frame_start_phase_us: 2_000,
+                present_phase_us: 7_500,
+                redraw_pending: true,
+                wake_reasons_bits: 5,
+                completion_poll_count: 3,
+                completion_poll_wall_us: 4_700,
+                completion_poll_cpu_us: 40,
+            },
+        );
+        controller.record_frame(
+            8,
+            18_667,
+            "event-driven",
+            GuiBridgeProfilePhase::None,
+            GuiRasterProfilePhase::Ordinary,
+            Vec::new(),
+        );
+        controller.finalize_frame_timing(
+            8,
+            GuiFrameTimingTrace {
+                loop_start: now + Duration::from_micros(16_667),
+                frame_t4: now + Duration::from_micros(25_000),
+                timing_finalized_at: now + Duration::from_micros(26_000),
+                vsync_us: 5_100,
+                pre_render_wait_us: 110,
+                post_present_wait_us: 4_900,
+                frame_finish_us: 1_100,
+                frame_start_phase_us: 2_100,
+                present_phase_us: 7_600,
+                redraw_pending: false,
+                wake_reasons_bits: 2,
+                completion_poll_count: 4,
+                completion_poll_wall_us: 4_800,
+                completion_poll_cpu_us: 50,
+            },
+        );
+
+        let first = &controller.frames[0];
+        assert_eq!(first["wall_us"], 8_000);
+        assert_eq!(first["post_present_wait_us"], 4_800);
+        assert_eq!(first["frame_finish_us"], 1_000);
+        assert_eq!(first["redraw_pending"], true);
+        assert_eq!(first["completion_poll_count"], 3);
+        let second = &controller.frames[1];
+        assert_eq!(second["loop_delta_us"], 16_667);
+        assert_eq!(second["post_frame_tail_us"], 8_667);
+        assert_eq!(second["post_finish_tail_us"], 7_667);
+        assert_eq!(second["wake_reasons_bits"], 2);
     }
 
     #[test]

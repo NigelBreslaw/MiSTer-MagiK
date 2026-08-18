@@ -320,7 +320,7 @@ pub(super) struct LauncherFrameCpuTrace {
 pub(super) struct LauncherFrameFinishTraceTiming {
     pub(super) runtime_status_write_us: u128,
     runtime_status_write_deferred: bool,
-    frame_finish_us: u128,
+    pub(super) frame_finish_us: u128,
 }
 
 impl LauncherFrameSnapshotBuilder {
