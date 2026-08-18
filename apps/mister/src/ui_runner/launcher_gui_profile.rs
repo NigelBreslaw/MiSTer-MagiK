@@ -544,6 +544,10 @@ impl GuiProfilingController {
         crt_backdrop_selected: usize,
         crt_backdrop_transition_id: u64,
         crt_backdrop_cache_state: &'static str,
+        portrait_arcade_list_pixels: u64,
+        portrait_arcade_list_bytes: u64,
+        portrait_preview_rotation_pixels: u64,
+        portrait_preview_blend_pixels: u64,
     ) {
         if !self.active() {
             return;
@@ -573,11 +577,16 @@ impl GuiProfilingController {
         record["crt_backdrop_selected"] = json!(crt_backdrop_selected);
         record["crt_backdrop_transition_id"] = json!(crt_backdrop_transition_id);
         record["crt_backdrop_cache_state"] = json!(crt_backdrop_cache_state);
+        record["portrait_arcade_list_pixels"] = json!(portrait_arcade_list_pixels);
+        record["portrait_arcade_list_bytes"] = json!(portrait_arcade_list_bytes);
+        record["portrait_preview_rotation_pixels"] = json!(portrait_preview_rotation_pixels);
+        record["portrait_preview_blend_pixels"] = json!(portrait_preview_blend_pixels);
     }
 
     pub(super) fn record_latch(
         &mut self,
         frame: u64,
+        copied_bytes: usize,
         invalid_bytes: usize,
         catchup_bytes: usize,
         copied_rectangles: u32,
@@ -597,6 +606,7 @@ impl GuiProfilingController {
             return;
         };
         record["latch"] = json!({
+            "copied_bytes": copied_bytes,
             "invalid_bytes": invalid_bytes,
             "catchup_bytes": catchup_bytes,
             "copied_rectangles": copied_rectangles,
@@ -758,7 +768,7 @@ mod tests {
         );
         controller.record_frame_work(
             7, 8_500, 3_000, 220, 307_200, 180, 307_200, 11, 307_200, 12, 100_000, 80_000, 20_000,
-            4, true, 7, 11, "exact",
+            4, true, 7, 11, "exact", 12_345, 24_690, 2_048, 1_024,
         );
         assert_eq!(controller.frames[0]["wall_us"], 8_500);
         assert_eq!(controller.frames[0]["vsync_us"], 3_000);
@@ -781,6 +791,13 @@ mod tests {
         assert_eq!(controller.frames[0]["crt_backdrop_selected"], 7);
         assert_eq!(controller.frames[0]["crt_backdrop_transition_id"], 11);
         assert_eq!(controller.frames[0]["crt_backdrop_cache_state"], "exact");
+        assert_eq!(controller.frames[0]["portrait_arcade_list_pixels"], 12_345);
+        assert_eq!(controller.frames[0]["portrait_arcade_list_bytes"], 24_690);
+        assert_eq!(
+            controller.frames[0]["portrait_preview_rotation_pixels"],
+            2_048
+        );
+        assert_eq!(controller.frames[0]["portrait_preview_blend_pixels"], 1_024);
     }
 
     #[test]

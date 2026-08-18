@@ -274,6 +274,7 @@ pub(super) fn blit_raw_preview_if_needed(
     };
     let direct_present = allow_direct;
     let raw_rect = if trace.active {
+        let blend_pmu = mister_magik_perf_events::sampled_span("gui.custom.preview-blend");
         let (raw_rect, fade) = if direct_present {
             target.blit_raw_preview_transition_direct(
                 ui,
@@ -284,6 +285,7 @@ pub(super) fn blit_raw_preview_if_needed(
         } else {
             target.blit_raw_preview_transition(ui, &transition_frame, trace.effect, trace.progress)
         };
+        drop(blend_pmu);
         trace.fade = fade;
         raw_rect
     } else {

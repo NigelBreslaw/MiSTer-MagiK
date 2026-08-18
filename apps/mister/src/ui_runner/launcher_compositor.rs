@@ -279,11 +279,14 @@ impl<'a> LayerTarget<'a> {
         if self.layout.is_portrait()
             && let Some(RawPreviewPresent::Direct(rect)) = present
         {
+            let rotation_pmu =
+                mister_magik_perf_events::sampled_span("gui.custom.preview-rotation");
             let rows = self
                 .target
                 .compose_direct_preview_rect_mapped(rect, |x, y| {
                     self.layout.logical_pixel_to_composition(x, y)
                 });
+            drop(rotation_pmu);
             return (
                 (rows > 0).then(|| {
                     RawPreviewPresent::Cached(self.layout.logical_rect_to_composition(rect))
@@ -307,11 +310,14 @@ impl<'a> LayerTarget<'a> {
                 .target
                 .blit_raw_preview_direct(&self.drawing_ui, &frame, true)?;
             if self.layout.is_portrait() {
+                let rotation_pmu =
+                    mister_magik_perf_events::sampled_span("gui.custom.preview-rotation");
                 let rows = self
                     .target
                     .compose_direct_preview_rect_mapped(rect, |x, y| {
                         self.layout.logical_pixel_to_composition(x, y)
                     });
+                drop(rotation_pmu);
                 (rows > 0).then(|| {
                     RawPreviewPresent::Cached(self.layout.logical_rect_to_composition(rect))
                 })
@@ -359,12 +365,16 @@ impl<'a> LayerTarget<'a> {
         update: ArcadeListUpdate,
     ) -> PresentCopyStats {
         if self.layout.is_portrait() {
-            compose_arcade_list_update_oriented(
+            let rotation_pmu =
+                mister_magik_perf_events::sampled_span("gui.custom.arcade-list-rotation");
+            let stats = compose_arcade_list_update_oriented(
                 self.target,
                 self.layout.output_layout(),
                 renderer,
                 update,
-            )
+            );
+            drop(rotation_pmu);
+            stats
         } else {
             compose_arcade_list_update(self.target, renderer, update)
         }
@@ -458,6 +468,7 @@ pub(super) struct LauncherPresentResult {
     pub(super) main_present_buffer: u8,
     pub(super) main_present_hidden_copy_us: u128,
     pub(super) main_present_hidden_publish_us: u128,
+    pub(super) main_present_hidden_copied_bytes: usize,
     pub(super) main_present_hidden_invalid_bytes: usize,
     pub(super) main_present_hidden_rect_count: u32,
     pub(super) main_present_hidden_catchup_bytes: usize,

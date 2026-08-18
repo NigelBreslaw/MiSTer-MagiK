@@ -9833,6 +9833,8 @@ pub(super) fn run_launcher_loop(
             None
         };
         let arcade_list_update_us = arcade_list_update_start.elapsed().as_micros();
+        let mut portrait_arcade_list_pixels = 0_u64;
+        let mut portrait_arcade_list_bytes = 0_u64;
         let preview_blit_start = Instant::now();
         let gui_preview_pmu = gui_profiling.phase_span(gui_custom_selection.preview_composition);
         let empty_base_cached_rect = if (layout.is_portrait() || preview_direct_present_enabled())
@@ -9863,6 +9865,19 @@ pub(super) fn run_launcher_loop(
             };
         drop(gui_preview_pmu);
         let preview_blit_us = preview_blit_start.elapsed().as_micros();
+        let portrait_preview_rotation_pixels = if layout.is_portrait() {
+            raw_preview
+                .and_then(RawPreviewPresent::cached_rect)
+                .map(|rect| (rect.width() as u64).saturating_mul(u64::from(rect.rows())))
+                .unwrap_or(0)
+        } else {
+            0
+        };
+        let portrait_preview_blend_pixels = if layout.is_portrait() {
+            u64::from(preview_transition_trace.fade.pixels)
+        } else {
+            0
+        };
         if preview_transition_trace.active {
             request_launcher_redraw!();
         }
@@ -10165,7 +10180,11 @@ pub(super) fn run_launcher_loop(
         let navigation_telemetry = navigation_transition.telemetry();
         let mut custom_draw_trace = LauncherCustomDrawTrace {
             arcade_list_update_us,
+            portrait_arcade_list_pixels,
+            portrait_arcade_list_bytes,
             preview_blit_us,
+            portrait_preview_rotation_pixels,
+            portrait_preview_blend_pixels,
             crt_backdrop_prepare_us: crt_backdrop_work_trace.prepare_us,
             crt_backdrop_prepare_pixels: crt_backdrop_work_trace.prepare_pixels,
             crt_backdrop_blend_us: crt_backdrop_work_trace.blend_us,
@@ -10281,6 +10300,8 @@ pub(super) fn run_launcher_loop(
                     crt_backdrop_list_overlay_pixels = composition
                         .restored_pixels
                         .saturating_add(composition.foreground_pixels);
+                    portrait_arcade_list_pixels = u64::from(crt_backdrop_list_overlay_pixels);
+                    portrait_arcade_list_bytes = portrait_arcade_list_pixels.saturating_mul(2);
                     drop(crt_overlay_profile_pmu);
                     if layout.is_portrait() {
                         physical_arcade_rect = Some(layout.logical_rect_to_composition(rect));
@@ -10292,7 +10313,10 @@ pub(super) fn run_launcher_loop(
         } else if crt_layout || layout.is_portrait() {
             arcade_list_rect.and_then(|update| {
                 let rect = arcade_update_dirty_rect(&update);
-                let _ = layer_target.compose_arcade_list_update(&mut arcade_list_renderer, update);
+                let composition =
+                    layer_target.compose_arcade_list_update(&mut arcade_list_renderer, update);
+                portrait_arcade_list_bytes = composition.bytes as u64;
+                portrait_arcade_list_pixels = composition.bytes.saturating_div(2) as u64;
                 if layout.is_portrait() {
                     physical_arcade_rect = Some(layout.logical_rect_to_composition(rect));
                     None
@@ -10583,6 +10607,7 @@ pub(super) fn run_launcher_loop(
         let readiness_source_evidence = presentation.readiness_source_evidence.clone();
         gui_profiling.record_latch(
             frames,
+            presentation.main_present_hidden_copied_bytes,
             presentation.main_present_hidden_invalid_bytes,
             presentation.main_present_hidden_catchup_bytes,
             presentation.main_present_hidden_rect_count,
@@ -10874,6 +10899,16 @@ pub(super) fn run_launcher_loop(
             presented_frame.custom_draw_trace.crt_backdrop_selected,
             presented_frame.custom_draw_trace.crt_backdrop_transition_id,
             presented_frame.custom_draw_trace.crt_backdrop_cache_state,
+            presented_frame
+                .custom_draw_trace
+                .portrait_arcade_list_pixels,
+            presented_frame.custom_draw_trace.portrait_arcade_list_bytes,
+            presented_frame
+                .custom_draw_trace
+                .portrait_preview_rotation_pixels,
+            presented_frame
+                .custom_draw_trace
+                .portrait_preview_blend_pixels,
         );
         let launcher_response_present_receipt = LauncherResponsePresentReceipt {
             post_accepted_at_us: crate::input_hub::monotonic_us(),

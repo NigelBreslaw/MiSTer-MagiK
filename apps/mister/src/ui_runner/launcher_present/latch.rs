@@ -708,6 +708,9 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
                 ))
             })
             .flatten();
+        let base_copy_pmu = (profile_latch_phases && invalid_bytes <= current_damage_bytes)
+            .then(|| mister_magik_perf_events::sampled_span("gui.latch.hidden-slot-base-copy"))
+            .flatten();
         let mut copied_bytes = 0usize;
         let mut copy_path = LatchCopyPath::IdentityFull;
         for rect in plan.restore_rects.iter() {
@@ -729,6 +732,7 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
             }
         }
         let copy_us = copy_start.elapsed().as_micros();
+        drop(base_copy_pmu);
         drop(copy_pmu);
         if let Err(e) = apply_overlays(buffer, plan) {
             self.latch_state.mark_attempt_failed(buffer_index);
