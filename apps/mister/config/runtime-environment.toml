@@ -185,6 +185,20 @@ aliases = []
 documentation = { summary = "Controls arcade selection invert behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
+name = "MISTER_ARCADE_SELECTION_SCALAR"
+owner = "apps/mister/src/arcade_list_renderer.rs"
+classification = "diagnostic"
+value_shape = "boolean token"
+default_behavior = "uses the NEON selection kernel when unset or disabled"
+visibility = "developer diagnostic"
+parser = "bool"
+scope = "instrumentation"
+conflicts = []
+sensitivity = "public"
+aliases = []
+documentation = { summary = "Forces the scalar Arcade selection kernel for diagnostic A/B comparison", accepted_values = [], value_policy = "document" }
+
+[[control]]
 name = "MISTER_BACKGROUND_AFFINITY"
 owner = "crates/catalog/src/runtime_thread.rs"
 classification = "production"

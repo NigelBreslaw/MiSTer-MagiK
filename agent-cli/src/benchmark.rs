@@ -58,11 +58,9 @@ enum BenchmarkProfile {
     LauncherResponseAttribution,
     GuiFrameAttribution,
     ArcadeVelocityScroll,
-    ArcadeVelocityScrollControlSmoke,
     ArcadeVelocityScrollTurbo,
     ArcadeVelocityScrollPprof,
     ArcadeVelocityScrollPmu,
-    ArcadeVelocityScrollPmuSmoke,
     ArcadeVelocityScrollStreamline,
     ArcadeVelocityScrollAttribution,
     TransitionStreamline,
@@ -146,9 +144,6 @@ impl BenchmarkDevice for DeviceClient {
             BenchmarkProfile::ArcadeVelocityScroll => {
                 device.profile_arcade_velocity_scroll(&output_dir)
             }
-            BenchmarkProfile::ArcadeVelocityScrollControlSmoke => {
-                device.profile_arcade_velocity_scroll_control_smoke(&output_dir)
-            }
             BenchmarkProfile::ArcadeVelocityScrollTurbo => {
                 device.profile_arcade_velocity_scroll_turbo(&output_dir)
             }
@@ -157,9 +152,6 @@ impl BenchmarkDevice for DeviceClient {
             }
             BenchmarkProfile::ArcadeVelocityScrollPmu => {
                 device.profile_arcade_velocity_scroll_pmu(&output_dir)
-            }
-            BenchmarkProfile::ArcadeVelocityScrollPmuSmoke => {
-                device.profile_arcade_velocity_scroll_pmu_smoke(&output_dir)
             }
             BenchmarkProfile::ArcadeVelocityScrollStreamline => {
                 device.profile_arcade_velocity_scroll_streamline(&output_dir)
@@ -1202,10 +1194,6 @@ fn execute_arcade_velocity_scroll_arm(
             BenchmarkProfile::ArcadeVelocityScroll,
             "mister-magik-arcade-velocity-scroll-v1",
         ),
-        ArcadeVelocityScrollArm::ControlSmoke => (
-            BenchmarkProfile::ArcadeVelocityScrollControlSmoke,
-            "mister-magik-arcade-velocity-scroll-control-smoke-v1",
-        ),
         ArcadeVelocityScrollArm::Turbo => (
             BenchmarkProfile::ArcadeVelocityScrollTurbo,
             "mister-magik-arcade-velocity-scroll-v1",
@@ -1217,10 +1205,6 @@ fn execute_arcade_velocity_scroll_arm(
         ArcadeVelocityScrollArm::Pmu => (
             BenchmarkProfile::ArcadeVelocityScrollPmu,
             "mister-magik-arcade-velocity-scroll-pmu-v1",
-        ),
-        ArcadeVelocityScrollArm::PmuSmoke => (
-            BenchmarkProfile::ArcadeVelocityScrollPmuSmoke,
-            "mister-magik-arcade-velocity-scroll-pmu-smoke-v1",
         ),
         ArcadeVelocityScrollArm::Streamline => (
             BenchmarkProfile::ArcadeVelocityScrollStreamline,
@@ -1244,9 +1228,6 @@ fn execute_arcade_velocity_scroll_arm(
     let artifact_valid = match arm {
         ArcadeVelocityScrollArm::Control | ArcadeVelocityScrollArm::Turbo => {
             matches!(summary.get("quality_status"), Some(Value::String(_)))
-        }
-        ArcadeVelocityScrollArm::ControlSmoke => {
-            summary.get("artifact_status").and_then(Value::as_str) == Some("passed")
         }
         _ => summary.get("artifact_status").and_then(Value::as_str) == Some("passed"),
     };

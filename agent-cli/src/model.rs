@@ -105,11 +105,9 @@ impl BenchmarkScenario {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, clap::ValueEnum)]
 pub enum ArcadeVelocityScrollArm {
     Control,
-    ControlSmoke,
     Turbo,
     Pprof,
     Pmu,
-    PmuSmoke,
     Streamline,
 }
 
@@ -184,20 +182,14 @@ pub struct ArcadeVelocityScrollRunSpec {
 impl ArcadeVelocityScrollRunSpec {
     #[must_use]
     pub const fn new(arm: ArcadeVelocityScrollArm, route: ArcadeVelocityScrollRoute) -> Self {
-        let smoke = matches!(
-            arm,
-            ArcadeVelocityScrollArm::ControlSmoke | ArcadeVelocityScrollArm::PmuSmoke
-        );
         Self {
             arm,
             route,
-            duration_ms: if smoke { 8_000 } else { 40_000 },
-            telemetry_secs: if smoke { 18 } else { 55 },
+            duration_ms: 40_000,
+            telemetry_secs: 55,
             profiler: match arm {
                 ArcadeVelocityScrollArm::Pprof => ArcadeVelocityScrollProfiler::Pprof,
-                ArcadeVelocityScrollArm::Pmu | ArcadeVelocityScrollArm::PmuSmoke => {
-                    ArcadeVelocityScrollProfiler::Pmu
-                }
+                ArcadeVelocityScrollArm::Pmu => ArcadeVelocityScrollProfiler::Pmu,
                 ArcadeVelocityScrollArm::Streamline => ArcadeVelocityScrollProfiler::Streamline,
                 _ => ArcadeVelocityScrollProfiler::None,
             },
@@ -215,11 +207,9 @@ impl ArcadeVelocityScrollArm {
     pub const fn label(self) -> &'static str {
         match self {
             Self::Control => "control",
-            Self::ControlSmoke => "control-smoke",
             Self::Turbo => "turbo",
             Self::Pprof => "pprof",
             Self::Pmu => "pmu",
-            Self::PmuSmoke => "pmu-smoke",
             Self::Streamline => "streamline",
         }
     }

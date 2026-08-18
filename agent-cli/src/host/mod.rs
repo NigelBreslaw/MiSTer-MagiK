@@ -738,15 +738,6 @@ impl NativeDevice {
         })
     }
 
-    pub(crate) fn profile_arcade_velocity_scroll_control_smoke(
-        &mut self,
-        output_dir: &Path,
-    ) -> std::result::Result<String, DeviceFailure> {
-        self.benchmark_profile(|config| {
-            profile_installed_arcade_velocity_scroll_control_smoke(config, output_dir)
-        })
-    }
-
     pub(crate) fn profile_arcade_velocity_scroll_turbo(
         &mut self,
         output_dir: &Path,
@@ -771,15 +762,6 @@ impl NativeDevice {
     ) -> std::result::Result<String, DeviceFailure> {
         self.benchmark_profile(|config| {
             profile_installed_arcade_velocity_scroll_pmu(config, output_dir)
-        })
-    }
-
-    pub(crate) fn profile_arcade_velocity_scroll_pmu_smoke(
-        &mut self,
-        output_dir: &Path,
-    ) -> std::result::Result<String, DeviceFailure> {
-        self.benchmark_profile(|config| {
-            profile_installed_arcade_velocity_scroll_pmu_smoke(config, output_dir)
         })
     }
 
@@ -7850,8 +7832,6 @@ const ARCADE_VELOCITY_SCROLL_DURATION_MS: u64 = 40_000;
 const ARCADE_VELOCITY_SCROLL_TELEMETRY_SECS: u64 = 55;
 const ARCADE_VELOCITY_SCROLL_PPROF_DURATION_MS: u64 = 40_000;
 const ARCADE_VELOCITY_SCROLL_PPROF_TELEMETRY_SECS: u64 = 55;
-const ARCADE_VELOCITY_SCROLL_SMOKE_DURATION_MS: u64 = 8_000;
-const ARCADE_VELOCITY_SCROLL_SMOKE_TELEMETRY_SECS: u64 = 18;
 const ARCADE_VELOCITY_SCROLL_PPROF_REMOTE_DIR: &str =
     "/tmp/mister-magik/arcade-velocity-scroll-pprof";
 const GUI_PROFILE_AUTOMATION_MARGIN_SECS: u64 = 80;
@@ -8528,9 +8508,7 @@ fn run_arcade_velocity_scroll_spec(
 ) -> Result<Value> {
     let expected_profiler = match spec.arm {
         ArcadeVelocityScrollArm::Pprof => ArcadeVelocityScrollProfiler::Pprof,
-        ArcadeVelocityScrollArm::Pmu | ArcadeVelocityScrollArm::PmuSmoke => {
-            ArcadeVelocityScrollProfiler::Pmu
-        }
+        ArcadeVelocityScrollArm::Pmu => ArcadeVelocityScrollProfiler::Pmu,
         ArcadeVelocityScrollArm::Streamline => ArcadeVelocityScrollProfiler::Streamline,
         _ => ArcadeVelocityScrollProfiler::None,
     };
@@ -8545,15 +8523,6 @@ fn run_arcade_velocity_scroll_spec(
             spec.duration_ms,
             spec.telemetry_secs,
             None,
-            spec.input_mode,
-            orientation,
-        ),
-        ArcadeVelocityScrollArm::ControlSmoke => profile_installed_arcade_velocity_scroll_workload(
-            config,
-            output_dir,
-            spec.duration_ms,
-            spec.telemetry_secs,
-            Some("mister-magik-arcade-velocity-scroll-control-smoke-v1"),
             spec.input_mode,
             orientation,
         ),
@@ -8575,21 +8544,14 @@ fn run_arcade_velocity_scroll_spec(
             "mister-magik-arcade-velocity-scroll-pprof-v1",
             orientation,
         ),
-        ArcadeVelocityScrollArm::Pmu | ArcadeVelocityScrollArm::PmuSmoke => {
-            let schema = if spec.arm == ArcadeVelocityScrollArm::PmuSmoke {
-                "mister-magik-arcade-velocity-scroll-pmu-smoke-v1"
-            } else {
-                "mister-magik-arcade-velocity-scroll-pmu-v1"
-            };
-            profile_installed_arcade_velocity_scroll_pmu_workload(
-                config,
-                output_dir,
-                spec.duration_ms,
-                spec.telemetry_secs,
-                schema,
-                orientation,
-            )
-        }
+        ArcadeVelocityScrollArm::Pmu => profile_installed_arcade_velocity_scroll_pmu_workload(
+            config,
+            output_dir,
+            spec.duration_ms,
+            spec.telemetry_secs,
+            "mister-magik-arcade-velocity-scroll-pmu-v1",
+            orientation,
+        ),
         ArcadeVelocityScrollArm::Streamline => {
             profile_installed_arcade_velocity_scroll_streamline_workload(
                 config,
@@ -8722,21 +8684,6 @@ fn profile_installed_arcade_velocity_scroll(
         ARCADE_VELOCITY_SCROLL_DURATION_MS,
         ARCADE_VELOCITY_SCROLL_TELEMETRY_SECS,
         None,
-        ArcadeRunInputMode::Held,
-        None,
-    )
-}
-
-fn profile_installed_arcade_velocity_scroll_control_smoke(
-    config: &NativeDeviceConfig,
-    output_dir: &Path,
-) -> Result<String> {
-    profile_installed_arcade_velocity_scroll_workload(
-        config,
-        output_dir,
-        ARCADE_VELOCITY_SCROLL_SMOKE_DURATION_MS,
-        ARCADE_VELOCITY_SCROLL_SMOKE_TELEMETRY_SECS,
-        Some("mister-magik-arcade-velocity-scroll-control-smoke-v1"),
         ArcadeRunInputMode::Held,
         None,
     )
@@ -9145,20 +9092,6 @@ fn profile_installed_arcade_velocity_scroll_pmu(
         ARCADE_VELOCITY_SCROLL_DURATION_MS,
         ARCADE_VELOCITY_SCROLL_TELEMETRY_SECS,
         "mister-magik-arcade-velocity-scroll-pmu-v1",
-        None,
-    )
-}
-
-fn profile_installed_arcade_velocity_scroll_pmu_smoke(
-    config: &NativeDeviceConfig,
-    output_dir: &Path,
-) -> Result<String> {
-    profile_installed_arcade_velocity_scroll_pmu_workload(
-        config,
-        output_dir,
-        ARCADE_VELOCITY_SCROLL_SMOKE_DURATION_MS,
-        ARCADE_VELOCITY_SCROLL_SMOKE_TELEMETRY_SECS,
-        "mister-magik-arcade-velocity-scroll-pmu-smoke-v1",
         None,
     )
 }
@@ -26190,7 +26123,6 @@ mod tests {
             name == "MISTER_ARCADE_BENCHMARK_ORIENTATION" && value == "monitor-counterclockwise"
         }));
         assert_eq!(gui_profile_automation_ttl_secs(40_000), 120);
-        assert_eq!(gui_profile_automation_ttl_secs(8_000), 88);
         assert_eq!(gui_profile_automation_ttl_secs(90_000), 120);
         let cleanup = gui_profile_route_cleanup_command();
         assert!(cleanup.contains(GUI_PROFILE_REMOTE_COMPLETE));

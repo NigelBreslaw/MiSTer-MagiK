@@ -897,15 +897,7 @@ mod tests {
         for scenario in accepted {
             assert!(Cli::try_parse_from(["agent-cli", "benchmark", scenario]).is_ok());
         }
-        for arm in [
-            "control",
-            "control-smoke",
-            "turbo",
-            "pprof",
-            "pmu",
-            "pmu-smoke",
-            "streamline",
-        ] {
+        for arm in ["control", "turbo", "pprof", "pmu", "streamline"] {
             assert!(
                 Cli::try_parse_from([
                     "agent-cli",
@@ -946,6 +938,17 @@ mod tests {
             ])
             .is_err()
         );
+        for removed in ["control-smoke", "pmu-smoke"] {
+            assert!(
+                Cli::try_parse_from([
+                    "agent-cli",
+                    "benchmark",
+                    "arcade-velocity-scroll-attribution",
+                    removed,
+                ])
+                .is_err()
+            );
+        }
         assert!(
             Cli::try_parse_from([
                 "agent-cli",
