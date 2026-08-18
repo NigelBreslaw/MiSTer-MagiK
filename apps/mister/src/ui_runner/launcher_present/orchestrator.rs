@@ -681,6 +681,7 @@ impl PresentationAdapters<FpgaVblankLatchHiddenPresenter> for LivePresentationAd
                     arcade_stats = layer_target.copy_arcade_list_update_to_hidden(
                         hidden,
                         arcade_list_renderer,
+                        plan.slot_index,
                         update,
                     )?;
                     hidden_arcade_compose_us = started.elapsed().as_micros();

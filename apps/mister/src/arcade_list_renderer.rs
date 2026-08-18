@@ -527,7 +527,14 @@ pub struct PersistentOrientedArcadeLayer {
     content: Vec<Rgb565Pixel>,
     key: Option<PersistentOrientedArcadeLayerKey>,
     selection_aperture: Option<DirtyRect>,
+    slot_mirrors: [PersistentArcadeSlotMirror; 2],
     full_rebuild: bool,
+}
+
+#[derive(Default)]
+struct PersistentArcadeSlotMirror {
+    rect: Option<DirtyRect>,
+    pixels: Vec<Rgb565Pixel>,
 }
 
 impl Default for PersistentOrientedArcadeLayer {
@@ -536,6 +543,7 @@ impl Default for PersistentOrientedArcadeLayer {
             content: Vec::new(),
             key: None,
             selection_aperture: None,
+            slot_mirrors: std::array::from_fn(|_| PersistentArcadeSlotMirror::default()),
             full_rebuild: true,
         }
     }
@@ -574,6 +582,10 @@ impl PersistentOrientedArcadeLayer {
             self.content.resize(output.len(), Rgb565Pixel(0));
             self.content.fill(Rgb565Pixel(0));
             self.selection_aperture = None;
+            for mirror in &mut self.slot_mirrors {
+                mirror.rect = None;
+                mirror.pixels.clear();
+            }
             self.full_rebuild = true;
             self.key = Some(key);
         } else {
@@ -585,6 +597,9 @@ impl PersistentOrientedArcadeLayer {
     pub fn invalidate(&mut self) {
         self.full_rebuild = true;
         self.selection_aperture = None;
+        for mirror in &mut self.slot_mirrors {
+            mirror.rect = None;
+        }
     }
 
     pub fn key(&self) -> Option<PersistentOrientedArcadeLayerKey> {
@@ -1569,8 +1584,9 @@ impl ArcadeListRenderer {
     }
 
     pub fn copy_persistent_oriented_layer_update_to_hidden(
-        &self,
+        &mut self,
         hidden: &mut ScanoutSlotsRgb565Framebuffer,
+        slot_index: u8,
         update: ArcadeListUpdate,
     ) -> Result<(u32, usize), String> {
         let view = self
@@ -1591,6 +1607,7 @@ impl ArcadeListRenderer {
                         rect.rows()
                     ));
                 }
+                self.refresh_persistent_slot_mirror(slot_index, rect)?;
                 Ok((
                     rows,
                     rect.width().saturating_mul(rows as usize).saturating_mul(2),
@@ -1606,19 +1623,92 @@ impl ArcadeListRenderer {
                         "physical Arcade scroll rect mismatch: requested={rect:?} backing={layer_rect:?}"
                     ));
                 }
-                // Hidden scanout slots are write-combined. Reading them for a
-                // memmove is substantially slower than rewriting the dense
-                // final layer from normal RAM.
-                let rows = copy_direct_preview_rect_to_hidden(hidden, view, rect);
-                if rows != rect.rows() {
-                    return Err("physical Arcade scroll copy incomplete".to_string());
-                }
-                Ok((
-                    rows,
-                    rect.width().saturating_mul(rows as usize).saturating_mul(2),
-                ))
+                self.copy_persistent_oriented_layer_diff_to_hidden(hidden, slot_index, rect)
             }
         }
+    }
+
+    fn refresh_persistent_slot_mirror(
+        &mut self,
+        slot_index: u8,
+        rect: DirtyRect,
+    ) -> Result<(), String> {
+        let mirror_index = persistent_slot_mirror_index(slot_index)?;
+        let key = self
+            .persistent_oriented_layer
+            .key()
+            .ok_or_else(|| "physical Arcade layer has no key".to_string())?;
+        let stride = key.output.physical_stride();
+        let content = self.persistent_oriented_layer.content();
+        let mirror = &mut self.persistent_oriented_layer.slot_mirrors[mirror_index];
+        mirror.pixels.resize(
+            rect.width().saturating_mul(rect.rows() as usize),
+            Rgb565Pixel(0),
+        );
+        for row in 0..rect.rows() as usize {
+            let source = (rect.y0 + row) * stride + rect.x0;
+            let destination = row * rect.width();
+            mirror.pixels[destination..destination + rect.width()]
+                .copy_from_slice(&content[source..source + rect.width()]);
+        }
+        mirror.rect = Some(rect);
+        Ok(())
+    }
+
+    fn copy_persistent_oriented_layer_diff_to_hidden(
+        &mut self,
+        hidden: &mut ScanoutSlotsRgb565Framebuffer,
+        slot_index: u8,
+        rect: DirtyRect,
+    ) -> Result<(u32, usize), String> {
+        let mirror_index = persistent_slot_mirror_index(slot_index)?;
+        let key = self
+            .persistent_oriented_layer
+            .key()
+            .ok_or_else(|| "physical Arcade layer has no key".to_string())?;
+        let stride = key.output.physical_stride();
+        let content = self.persistent_oriented_layer.content();
+        let mirror = &self.persistent_oriented_layer.slot_mirrors[mirror_index];
+        let dense_len = rect.width().saturating_mul(rect.rows() as usize);
+        if mirror.rect != Some(rect) || mirror.pixels.len() != dense_len {
+            let view = self
+                .persistent_oriented_layer_view()
+                .ok_or_else(|| "physical Arcade layer is not initialized".to_string())?;
+            let rows = copy_direct_preview_rect_to_hidden(hidden, view, rect);
+            if rows != rect.rows() {
+                return Err("physical Arcade mirror recovery copy incomplete".to_string());
+            }
+            self.refresh_persistent_slot_mirror(slot_index, rect)?;
+            return Ok((rows, dense_len.saturating_mul(2)));
+        }
+
+        let mut rows = 0_u32;
+        let mut bytes = 0_usize;
+        for row in 0..rect.rows() as usize {
+            let source = (rect.y0 + row) * stride + rect.x0;
+            let previous = row * rect.width();
+            let current_row = &content[source..source + rect.width()];
+            let previous_row = &mirror.pixels[previous..previous + rect.width()];
+            let Some(span) = rgb565_difference_span(current_row, previous_row) else {
+                continue;
+            };
+            hidden
+                .copy_rect_565_strided(
+                    rect.x0 + span.start,
+                    rect.y0 + row,
+                    span.end - span.start,
+                    1,
+                    content,
+                    stride,
+                    rect.x0 + span.start,
+                    rect.y0 + row,
+                )
+                .map_err(|error| format!("physical Arcade sparse row copy failed: {error}"))?;
+            rows = rows.saturating_add(1);
+            bytes = bytes.saturating_add((span.end - span.start).saturating_mul(2));
+        }
+        self.refresh_persistent_slot_mirror(slot_index, rect)?;
+        Ok((rows, bytes))
     }
 
     /// Restores the complete viewport from a stationary physical backdrop,
@@ -3175,6 +3265,35 @@ fn copy_pixel_to_rgb565_row(src: &[Pixel], dst: &mut [Rgb565Pixel]) {
     }
 }
 
+fn persistent_slot_mirror_index(slot_index: u8) -> Result<usize, String> {
+    match slot_index {
+        1 => Ok(0),
+        2 => Ok(1),
+        _ => Err(format!(
+            "physical Arcade slot index must be 1 or 2, got {slot_index}"
+        )),
+    }
+}
+
+fn rgb565_difference_span(
+    current: &[Rgb565Pixel],
+    previous: &[Rgb565Pixel],
+) -> Option<std::ops::Range<usize>> {
+    if current.len() != previous.len() {
+        return (!current.is_empty()).then_some(0..current.len());
+    }
+    let start = current
+        .iter()
+        .zip(previous)
+        .position(|(current, previous)| current != previous)?;
+    let end = current
+        .iter()
+        .zip(previous)
+        .rposition(|(current, previous)| current != previous)?
+        .saturating_add(1);
+    Some(start..end)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3195,6 +3314,30 @@ mod tests {
                 )
             })
             .collect()
+    }
+
+    #[test]
+    fn rgb565_difference_span_bounds_only_changed_pixels() {
+        let previous = [
+            Rgb565Pixel(1),
+            Rgb565Pixel(2),
+            Rgb565Pixel(3),
+            Rgb565Pixel(4),
+            Rgb565Pixel(5),
+        ];
+        let mut current = previous;
+        assert_eq!(rgb565_difference_span(&current, &previous), None);
+        current[1] = Rgb565Pixel(9);
+        current[3] = Rgb565Pixel(8);
+        assert_eq!(rgb565_difference_span(&current, &previous), Some(1..4));
+    }
+
+    #[test]
+    fn persistent_slot_mirror_indices_are_exact() {
+        assert_eq!(persistent_slot_mirror_index(1), Ok(0));
+        assert_eq!(persistent_slot_mirror_index(2), Ok(1));
+        assert!(persistent_slot_mirror_index(0).is_err());
+        assert!(persistent_slot_mirror_index(3).is_err());
     }
 
     fn filter_items(labels: &[&str]) -> Vec<ArcadeListItem> {
