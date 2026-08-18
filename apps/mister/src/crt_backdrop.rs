@@ -242,10 +242,12 @@ impl CrtBackdropState {
         now: Duration,
         instant: bool,
     ) {
-        self.resolve_current(now);
-        self.source.copy_from_slice(&self.retarget);
-        self.source_row_repeats
-            .copy_from_slice(&self.retarget_row_repeats);
+        if !instant {
+            self.resolve_current(now);
+            self.source.copy_from_slice(&self.retarget);
+            self.source_row_repeats
+                .copy_from_slice(&self.retarget_row_repeats);
+        }
         let Some(prepared) = prepared else {
             self.target = std::sync::Arc::from(vec![CRT_BACKDROP_BACKGROUND; self.target.len()]);
             self.target_row_repeats = std::sync::Arc::from(vec![true; self.physical_height]);
@@ -1992,6 +1994,9 @@ mod tests {
     fn prepared_targets_can_cut_directly_to_an_image_or_blank() {
         let mut backdrop = CrtBackdropState::new(2, 2);
         let target = Rgb565Pixel(0xf800);
+        let unused_source = Rgb565Pixel(0x07e0);
+        backdrop.source.fill(unused_source);
+        backdrop.retarget.fill(Rgb565Pixel(0x001f));
         backdrop.retarget_prepared(
             Some(PreparedCrtBackdrop {
                 pixels: std::sync::Arc::from(vec![target; 4]),
@@ -2004,6 +2009,7 @@ mod tests {
 
         assert!(!backdrop.is_transitioning());
         assert!(backdrop.pixels().iter().all(|pixel| *pixel == target));
+        assert!(backdrop.source.iter().all(|pixel| *pixel == unused_source));
         assert!(!backdrop.compose(Duration::ZERO).active);
 
         backdrop.retarget_prepared(None, Duration::from_millis(1), true);
