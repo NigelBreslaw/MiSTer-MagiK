@@ -481,6 +481,8 @@ pub struct ArcadeListRenderer {
     surface_selected_text_runs: Vec<Vec<(usize, usize)>>,
     band_scratch: Vec<Pixel>,
     selection_invert_scratch: Vec<Rgb565Pixel>,
+    previous_selection_normal: Vec<Rgb565Pixel>,
+    previous_selection_normal_rect: Option<DirtyRect>,
     selection_horizontal: Vec<Rgb565Pixel>,
     selection_vertical: Vec<Rgb565Pixel>,
     row_cache_epoch: u64,
@@ -780,6 +782,8 @@ impl ArcadeListRenderer {
             surface_selected_text_runs: vec![Vec::new(); ARCADE_LIST_H],
             band_scratch: Vec::new(),
             selection_invert_scratch: Vec::new(),
+            previous_selection_normal: Vec::new(),
+            previous_selection_normal_rect: None,
             selection_horizontal: Vec::new(),
             selection_vertical: Vec::new(),
             row_cache_epoch: 0,
@@ -929,6 +933,7 @@ impl ArcadeListRenderer {
         visual_index: f32,
         force: bool,
     ) -> Option<ArcadeListUpdate> {
+        self.previous_selection_normal_rect = None;
         self.last_filter_draw = None;
         let visual_px = arcade_visual_px(
             visual_index,
@@ -976,6 +981,14 @@ impl ArcadeListRenderer {
                 && previous.visible_hash != key.visible_hash
         });
         let can_reuse_scrolled_surface = same_len && !visible_content_changed_at_same_position;
+        if !force
+            && previous.is_some()
+            && can_reuse_scrolled_surface
+            && content_delta != 0
+            && (content_delta.unsigned_abs() as usize) < self.visible_height
+        {
+            self.capture_previous_selection_normal();
+        }
         self.last_draw = Some(key);
         if previous.is_none() || !can_reuse_scrolled_surface || games.is_empty() {
             self.surface_y = 0;
@@ -1019,6 +1032,7 @@ impl ArcadeListRenderer {
         visual_index: f32,
         force: bool,
     ) -> Option<ArcadeListUpdate> {
+        self.previous_selection_normal_rect = None;
         self.last_draw = None;
         let visual_px = arcade_visual_px(
             visual_index,
@@ -1051,6 +1065,14 @@ impl ArcadeListRenderer {
         let can_reuse_scrolled_surface = previous.as_ref().is_some_and(|previous| {
             previous.len == key.len && previous.content_hash == key.content_hash
         });
+        if !force
+            && previous.is_some()
+            && can_reuse_scrolled_surface
+            && content_delta != 0
+            && (content_delta.unsigned_abs() as usize) < self.visible_height
+        {
+            self.capture_previous_selection_normal();
+        }
         if previous.is_none() || !can_reuse_scrolled_surface || items.is_empty() {
             self.surface_y = 0;
             self.draw_filter_content_band(items, visual_px, 0, self.visible_height);
@@ -1497,11 +1519,18 @@ impl ArcadeListRenderer {
             self.compose_layer_to_oriented_pixels(pixels, output_layout, true);
             return;
         };
+        let selection_requires_normalization = arcade_selection_inversion_enabled();
         if key != output_layout
             || self.style.crt_palette
-            || arcade_selection_inversion_enabled()
+            || (selection_requires_normalization && self.previous_selection_normal_rect.is_none())
             || delta_y == 0
             || delta_y.unsigned_abs() as usize >= self.visible_height
+        {
+            self.compose_layer_to_oriented_pixels(pixels, output_layout, true);
+            return;
+        }
+        if selection_requires_normalization
+            && !self.restore_previous_selection_normal_to_oriented(pixels, output_layout)
         {
             self.compose_layer_to_oriented_pixels(pixels, output_layout, true);
             return;
@@ -1539,6 +1568,7 @@ impl ArcadeListRenderer {
             self.style.row_height.max(1) as usize,
         );
         self.compose_selection_frame_to_oriented_cached(pixels, output_layout);
+        self.previous_selection_normal_rect = None;
         self.oriented_viewport_layout = Some(output_layout);
     }
 
@@ -2127,6 +2157,61 @@ impl ArcadeListRenderer {
             }
         }
         &self.selection_invert_scratch
+    }
+
+    fn capture_previous_selection_normal(&mut self) {
+        let rect = self.selection_rect();
+        let viewport_y = rect.y0.saturating_sub(self.geometry.y);
+        let width = rect.width().min(self.width);
+        let height = (rect.rows() as usize).min(self.visible_height.saturating_sub(viewport_y));
+        if width == 0 || height == 0 {
+            self.previous_selection_normal_rect = None;
+            return;
+        }
+        let mut normal = std::mem::take(&mut self.previous_selection_normal);
+        normal.resize(width.saturating_mul(height), Rgb565Pixel(0));
+        for row in 0..height {
+            let source_y = (self.surface_y + viewport_y + row) % self.visible_height;
+            let source = source_y * self.width;
+            let destination = row * width;
+            normal[destination..destination + width]
+                .copy_from_slice(&self.surface[source..source + width]);
+        }
+        self.previous_selection_normal = normal;
+        self.previous_selection_normal_rect = Some(DirtyRect {
+            x0: rect.x0,
+            y0: rect.y0,
+            x1: rect.x0 + width,
+            y1: rect.y0 + height,
+        });
+    }
+
+    fn restore_previous_selection_normal_to_oriented(
+        &mut self,
+        target: &mut [Rgb565Pixel],
+        output_layout: Rgb565OutputLayout,
+    ) -> bool {
+        let Some(rect) = self.previous_selection_normal_rect else {
+            return false;
+        };
+        let width = rect.width();
+        let height = rect.rows() as usize;
+        if self.previous_selection_normal.len() != width.saturating_mul(height) {
+            return false;
+        }
+        let Ok(mut surface) = Rgb565SurfaceMut::new(target, output_layout) else {
+            return false;
+        };
+        surface.copy_rect_strided(
+            rect.x0,
+            rect.y0,
+            width,
+            height,
+            &self.previous_selection_normal,
+            width,
+            0,
+            0,
+        )
     }
 
     fn copy_selection_frame_to_fb0(&mut self, disp: &mut MappedRgb565Framebuffer) {
