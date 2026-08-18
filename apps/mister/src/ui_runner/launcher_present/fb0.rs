@@ -187,7 +187,7 @@ mod tests {
             slint_dirty
         });
         cached_damage.push_if_some(raw_preview_rect);
-        let frame_plan = LauncherFramePlan::new(
+        let frame_plan = LauncherFramePlan::from_cached_layers(
             cached_damage,
             None,
             raw_preview_direct_rect,
@@ -262,7 +262,7 @@ mod tests {
         let mut target = UiFrameTarget::cached(FramebufferTargetGeometry::new(10, 10));
         target.direct_preview_565_rect_mut(preview_rect);
         let direct_preview = target.direct_preview_view();
-        let frame_plan = LauncherFramePlan::new(
+        let frame_plan = LauncherFramePlan::from_cached_layers(
             DirtyRectList::from_one(base),
             None,
             Some(preview_rect),
@@ -308,7 +308,7 @@ mod tests {
         let cached_pixels = vec![Rgb565Pixel(0); 100];
         let mut target = UiFrameTarget::cached(FramebufferTargetGeometry::new(10, 10));
         target.direct_preview_565_rect_mut(preview_rect);
-        let frame_plan = LauncherFramePlan::new(
+        let frame_plan = LauncherFramePlan::from_cached_layers(
             DirtyRectList::from_one(base),
             None,
             Some(preview_rect),

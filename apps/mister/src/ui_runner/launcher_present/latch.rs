@@ -1595,7 +1595,7 @@ mod tests {
     }
 
     fn frame_plan() -> LauncherFramePlan {
-        LauncherFramePlan::new(DirtyRectList::new(), None, None, None, None)
+        LauncherFramePlan::from_cached_layers(DirtyRectList::new(), None, None, None, None)
     }
 
     fn cached_pixels() -> Vec<Rgb565Pixel> {

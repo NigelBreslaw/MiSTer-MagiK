@@ -298,7 +298,7 @@ pub(super) fn run_crt_trial_loop(
                 .try_into()
                 .unwrap_or(u64::MAX),
         );
-        let plan = LauncherFramePlan::new(full_damage, None, None, None, None);
+        let plan = LauncherFramePlan::from_cached_layers(full_damage, None, None, None, None);
         let stats = match presenter.present_cached_full_frame(
             CachedFrameView::new(&frame, width, height),
             plan,

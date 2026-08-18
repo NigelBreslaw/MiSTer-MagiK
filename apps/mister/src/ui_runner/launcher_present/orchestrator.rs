@@ -1401,7 +1401,7 @@ mod tests {
     }
 
     fn frame() -> LauncherFramePlan {
-        LauncherFramePlan::new(
+        LauncherFramePlan::from_cached_layers(
             DirtyRectList::from_one(DirtyRect {
                 x0: 1,
                 y0: 2,

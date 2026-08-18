@@ -211,11 +211,17 @@ pub struct LatchFramePlan {
     arcade_dirty: Option<PhysicalLayerUpdate>,
     preview_publication: Option<PhysicalLayerPublication>,
     arcade_publication: Option<PhysicalLayerPublication>,
-    allow_unpublished_layers: bool,
+    layer_ownership: PhysicalLayerOwnership,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PhysicalLayerOwnership {
+    Cached,
+    Published,
 }
 
 impl LatchFramePlan {
-    pub fn new(
+    pub fn from_cached_layers(
         cached_damage: DirtyRectList,
         preview_desired: Option<PhysicalLayerState>,
         preview_dirty: Option<DirtyRect>,
@@ -230,7 +236,7 @@ impl LatchFramePlan {
             arcade_dirty,
             preview_publication: None,
             arcade_publication: None,
-            allow_unpublished_layers: true,
+            layer_ownership: PhysicalLayerOwnership::Cached,
         }
     }
 
@@ -260,7 +266,7 @@ impl LatchFramePlan {
             arcade_dirty: arcade.as_ref().and_then(PhysicalLayerPublication::update),
             preview_publication: preview,
             arcade_publication: arcade,
-            allow_unpublished_layers: false,
+            layer_ownership: PhysicalLayerOwnership::Published,
         }
     }
 
@@ -316,7 +322,7 @@ impl LatchFramePlan {
     ) -> Self {
         let mut cached = DirtyRectList::new();
         cached.push_if_some(cached_damage);
-        Self::new(
+        Self::from_cached_layers(
             cached,
             preview_desired,
             preview_dirty,
@@ -664,8 +670,8 @@ fn direct_layer_update_rect(update: &PhysicalLayerUpdate) -> DirtyRect {
 }
 
 fn frame_publications_match(input: &LatchFramePlan) -> bool {
-    if input.allow_unpublished_layers {
-        return true;
+    if input.layer_ownership == PhysicalLayerOwnership::Cached {
+        return input.preview_publication.is_none() && input.arcade_publication.is_none();
     }
     publication_matches(
         input.preview_desired,
@@ -771,6 +777,51 @@ mod tests {
         arcade: Option<PhysicalLayerPublication>,
     ) -> LatchFramePlan {
         LatchFramePlan::from_publications(DirtyRectList::new(), preview, arcade)
+    }
+
+    #[test]
+    fn cached_layer_plan_accepts_an_unpublished_arcade_redraw() {
+        let mut state = TwoBufferLatchState::new(WIDTH, HEIGHT);
+        all_writable(&mut state);
+        let arcade = rect(0, 0, 3, 2);
+        let update = PhysicalLayerUpdate::Full(arcade);
+
+        let plan = state
+            .plan_next(LatchFramePlan::from_cached_layers(
+                DirtyRectList::new(),
+                None,
+                None,
+                Some(layer(arcade, 1)),
+                Some(update),
+            ))
+            .expect("cached Arcade layer plan");
+
+        assert_eq!(plan.arcade_redraw, Some(update));
+        assert!(
+            state
+                .planned_publication(PhysicalLayerRole::Arcade)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn published_layer_plan_rejects_an_unpublished_arcade_redraw() {
+        let mut state = TwoBufferLatchState::new(WIDTH, HEIGHT);
+        all_writable(&mut state);
+        let arcade = rect(0, 0, 3, 2);
+
+        let input = LatchFramePlan {
+            cached_damage: DirtyRectList::new(),
+            preview_desired: None,
+            preview_dirty: None,
+            arcade_desired: Some(layer(arcade, 1)),
+            arcade_dirty: Some(PhysicalLayerUpdate::Full(arcade)),
+            preview_publication: None,
+            arcade_publication: None,
+            layer_ownership: PhysicalLayerOwnership::Published,
+        };
+
+        assert!(state.plan_next(input).is_none());
     }
 
     fn full() -> DirtyRect {

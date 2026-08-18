@@ -10705,7 +10705,7 @@ pub(super) fn run_launcher_loop(
                 arcade_publication,
             )
         } else {
-            LauncherFramePlan::new(
+            LauncherFramePlan::from_cached_layers(
                 cached_damage,
                 preview_desired,
                 raw_preview_direct_rect,
