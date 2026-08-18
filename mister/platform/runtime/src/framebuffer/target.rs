@@ -3,7 +3,7 @@
 
 pub use crate::framebuffer::damage::{DirtyRect, DirtyRectList, subtract_dirty_rects};
 use crate::framebuffer::format::production_label;
-use mister_magik_framebuffer_scenes::{Rgb565OutputLayout, Rgb565SurfaceMut};
+use mister_magik_framebuffer_scenes::{Rgb565OutputLayout, Rgb565Rect, Rgb565SurfaceMut};
 use slint::platform::software_renderer::{PhysicalRegion, Rgb565Pixel, SoftwareRenderer};
 use std::sync::OnceLock;
 
@@ -312,6 +312,10 @@ pub struct UiFrameTarget {
     cached_stride: usize,
     direct_preview: Vec<Rgb565Pixel>,
     direct_preview_rect: Option<DirtyRect>,
+    physical_direct_preview: Vec<Rgb565Pixel>,
+    physical_direct_preview_scratch: Vec<Rgb565Pixel>,
+    physical_direct_preview_rect: Option<DirtyRect>,
+    physical_direct_preview_cache: Option<OrientedPreviewCacheKey>,
     oriented_preview_cache: Option<OrientedPreviewCacheKey>,
 }
 
@@ -329,6 +333,10 @@ impl UiFrameTarget {
             cached_stride: geometry.render_w(),
             direct_preview: Vec::new(),
             direct_preview_rect: None,
+            physical_direct_preview: Vec::new(),
+            physical_direct_preview_scratch: Vec::new(),
+            physical_direct_preview_rect: None,
+            physical_direct_preview_cache: None,
             oriented_preview_cache: None,
         }
     }
@@ -409,6 +417,84 @@ impl UiFrameTarget {
 
     pub fn invalidate_oriented_preview_cache(&mut self) {
         self.oriented_preview_cache = None;
+        self.physical_direct_preview_rect = None;
+        self.physical_direct_preview_cache = None;
+    }
+
+    /// Builds a complete, destination-contiguous physical preview generation.
+    ///
+    /// The published buffer and rectangle are changed only after the complete
+    /// logical backing has been transformed successfully. This keeps the
+    /// producer generation atomic with the hidden-slot layer contract.
+    pub fn compose_direct_preview_to_physical(
+        &mut self,
+        rect: DirtyRect,
+        output: Rgb565OutputLayout,
+        token: u64,
+        force: bool,
+    ) -> Option<DirtyRect> {
+        let backing_rect = self.direct_preview_rect?;
+        if !backing_rect.contains(rect) || backing_rect.width() == 0 || backing_rect.rows() == 0 {
+            return None;
+        }
+        let key = OrientedPreviewCacheKey {
+            token,
+            rect: backing_rect,
+            output,
+        };
+        if !force && self.physical_direct_preview_cache == Some(key) {
+            return None;
+        }
+
+        let mapped = output.logical_rect_to_physical(Rgb565Rect {
+            x0: backing_rect.x0,
+            y0: backing_rect.y0,
+            x1: backing_rect.x1,
+            y1: backing_rect.y1,
+        });
+        let physical_rect = DirtyRect {
+            x0: mapped.x0,
+            y0: mapped.y0,
+            x1: mapped.x1,
+            y1: mapped.y1,
+        };
+        let local_output = Rgb565OutputLayout::new(
+            backing_rect.width(),
+            backing_rect.rows() as usize,
+            physical_rect.width(),
+            output.rotation(),
+        )
+        .ok()?;
+        if local_output.physical_width() != physical_rect.width()
+            || local_output.physical_height() != physical_rect.rows() as usize
+        {
+            return None;
+        }
+        self.physical_direct_preview_scratch
+            .resize(local_output.len(), Rgb565Pixel(0));
+        let copied = Rgb565SurfaceMut::new(&mut self.physical_direct_preview_scratch, local_output)
+            .ok()?
+            .copy_rect_strided(
+                0,
+                0,
+                backing_rect.width(),
+                backing_rect.rows() as usize,
+                &self.direct_preview,
+                backing_rect.width(),
+                0,
+                0,
+            );
+        if !copied {
+            return None;
+        }
+
+        std::mem::swap(
+            &mut self.physical_direct_preview,
+            &mut self.physical_direct_preview_scratch,
+        );
+        self.physical_direct_preview_rect = Some(physical_rect);
+        self.physical_direct_preview_cache = Some(key);
+        Some(physical_rect)
     }
 
     pub fn compose_direct_preview_rect(&mut self, rect: DirtyRect) -> u32 {
@@ -542,6 +628,15 @@ impl UiFrameTarget {
             pixels: &self.direct_preview,
             rect,
         })
+    }
+
+    pub fn physical_direct_preview_view(&self) -> Option<DirectPreviewView<'_>> {
+        self.physical_direct_preview_rect
+            .zip(self.physical_direct_preview_cache)
+            .map(|(rect, _)| DirectPreviewView {
+                pixels: &self.physical_direct_preview,
+                rect,
+            })
     }
 
     pub fn cached_565_mut(&mut self) -> &mut [Rgb565Pixel] {
@@ -750,6 +845,79 @@ mod tests {
             target.compose_direct_preview_rect_oriented_cached(preview_rect, output, 7, true,),
             2
         );
+    }
+
+    #[test]
+    fn physical_preview_generation_is_complete_and_uses_the_mapped_backing_rect() {
+        let mut target = UiFrameTarget::cached(FramebufferTargetGeometry::new(3, 4));
+        let preview_rect = rect(1, 1, 4, 3);
+        target
+            .direct_preview_565_rect_mut(preview_rect)
+            .0
+            .copy_from_slice(&[
+                Rgb565Pixel(1),
+                Rgb565Pixel(2),
+                Rgb565Pixel(3),
+                Rgb565Pixel(4),
+                Rgb565Pixel(5),
+                Rgb565Pixel(6),
+            ]);
+        let output = Rgb565OutputLayout::new(
+            4,
+            3,
+            3,
+            mister_magik_framebuffer_scenes::OutputRotation::Clockwise90,
+        )
+        .unwrap();
+
+        let physical = target
+            .compose_direct_preview_to_physical(preview_rect, output, 11, true)
+            .expect("complete physical preview");
+        assert_eq!(physical, rect(0, 1, 2, 4));
+        let view = target
+            .physical_direct_preview_view()
+            .expect("published physical preview");
+        assert_eq!(view.rect(), physical);
+        assert_eq!(view.stride(), 2);
+        assert_eq!(
+            view.pixels(),
+            &[
+                Rgb565Pixel(4),
+                Rgb565Pixel(1),
+                Rgb565Pixel(5),
+                Rgb565Pixel(2),
+                Rgb565Pixel(6),
+                Rgb565Pixel(3),
+            ]
+        );
+    }
+
+    #[test]
+    fn failed_physical_preview_generation_preserves_the_published_owner() {
+        let mut target = UiFrameTarget::cached(FramebufferTargetGeometry::new(3, 4));
+        let preview_rect = rect(1, 1, 4, 3);
+        target
+            .direct_preview_565_rect_mut(preview_rect)
+            .0
+            .fill(Rgb565Pixel(7));
+        let output = Rgb565OutputLayout::new(
+            4,
+            3,
+            3,
+            mister_magik_framebuffer_scenes::OutputRotation::Clockwise90,
+        )
+        .unwrap();
+        let published = target
+            .compose_direct_preview_to_physical(preview_rect, output, 1, true)
+            .unwrap();
+
+        assert_eq!(
+            target.compose_direct_preview_to_physical(rect(0, 0, 4, 3), output, 2, true),
+            None
+        );
+        let view = target.physical_direct_preview_view().unwrap();
+        assert_eq!(view.rect(), published);
+        assert!(view.pixels().iter().all(|pixel| *pixel == Rgb565Pixel(7)));
     }
 
     #[test]

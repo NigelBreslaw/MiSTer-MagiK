@@ -40,6 +40,17 @@ const LATCH_RETRY_DELAYS: [Duration; 4] = [
 ];
 const MAX_AUTO_RETRY_ATTEMPTS: u8 = LATCH_RETRY_DELAYS.len() as u8;
 
+fn require_complete_direct_preview_copy(rect: DirtyRect, copied_rows: u32) -> Result<(), String> {
+    let expected_rows = rect.rows();
+    if copied_rows == expected_rows {
+        Ok(())
+    } else {
+        Err(format!(
+            "direct preview ownership copy incomplete: rect={rect:?} expected_rows={expected_rows} copied_rows={copied_rows}"
+        ))
+    }
+}
+
 pub(in crate::ui_runner) struct LauncherPresenter<L = FpgaVblankLatchHiddenPresenter> {
     state: LauncherPresenterState<L>,
     failure_transitions: u64,
@@ -657,6 +668,7 @@ impl PresentationAdapters<FpgaVblankLatchHiddenPresenter> for LivePresentationAd
                         layer_target.copy_direct_preview_rect_to_hidden(hidden, rect);
                     hidden_preview_compose_us = started.elapsed().as_micros();
                     drop(preview_pmu);
+                    require_complete_direct_preview_copy(rect, direct_preview_rows)?;
                 }
                 if let Some(update) = plan.arcade_redraw {
                     let arcade_pmu = self
@@ -912,6 +924,21 @@ fn empty_present_result() -> LauncherPresentResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn preview_layer_ownership_requires_the_complete_requested_copy() {
+        let rect = DirtyRect {
+            x0: 10,
+            y0: 20,
+            x1: 30,
+            y1: 24,
+        };
+
+        assert!(require_complete_direct_preview_copy(rect, 4).is_ok());
+        let error = require_complete_direct_preview_copy(rect, 0).unwrap_err();
+        assert!(error.contains("expected_rows=4 copied_rows=0"));
+        assert!(require_complete_direct_preview_copy(rect, 3).is_err());
+    }
 
     #[test]
     fn unfinished_direct_frame_does_not_claim_a_latch_post() {

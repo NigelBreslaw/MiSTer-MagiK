@@ -319,19 +319,14 @@ impl<'a> LayerTarget<'a> {
             );
             let rotation_pmu =
                 mister_magik_perf_events::sampled_span("gui.custom.preview-rotation");
-            let rows = self.target.compose_direct_preview_rect_oriented_cached(
+            let physical_rect = self.target.compose_direct_preview_to_physical(
                 rect,
                 self.layout.output_layout(),
                 token,
                 raw_dirty_before || slint_touched_preview,
             );
             drop(rotation_pmu);
-            return (
-                (rows > 0).then(|| {
-                    RawPreviewPresent::Cached(self.layout.logical_rect_to_composition(rect))
-                }),
-                trace,
-            );
+            return (physical_rect.map(RawPreviewPresent::Direct), trace);
         }
         (present, trace)
     }
@@ -349,15 +344,25 @@ impl<'a> LayerTarget<'a> {
                 .target
                 .blit_raw_preview_direct(&self.drawing_ui, &frame, true)?;
             if self.layout.is_portrait() {
+                let transition_id = preview
+                    .raw_transition_frame()
+                    .map(|frame| frame.transition_id)
+                    .unwrap_or(0);
+                let token = oriented_preview_cache_token(
+                    preview.presentation_generation(),
+                    transition_id,
+                    PreviewTransitionTrace::default(),
+                );
                 let rotation_pmu =
                     mister_magik_perf_events::sampled_span("gui.custom.preview-rotation");
-                let rows = self
-                    .target
-                    .compose_direct_preview_rect_oriented(rect, self.layout.output_layout());
+                let physical_rect = self.target.compose_direct_preview_to_physical(
+                    rect,
+                    self.layout.output_layout(),
+                    token,
+                    true,
+                );
                 drop(rotation_pmu);
-                (rows > 0).then(|| {
-                    RawPreviewPresent::Cached(self.layout.logical_rect_to_composition(rect))
-                })
+                physical_rect.map(RawPreviewPresent::Direct)
             } else {
                 Some(RawPreviewPresent::Direct(rect))
             }
@@ -377,8 +382,19 @@ impl<'a> LayerTarget<'a> {
                 .compose_exact_preview(preview)
                 .and_then(RawPreviewPresent::cached_rect);
         }
-        self.compose_exact_preview(preview)
-            .and_then(RawPreviewPresent::cached_rect)
+        let frame = preview.raw_frame()?;
+        if frame.status() != PreviewRawFrameStatus::Ready {
+            return None;
+        }
+        let rect = self
+            .target
+            .blit_raw_preview_direct(&self.drawing_ui, &frame, true)?;
+        let rotation_pmu = mister_magik_perf_events::sampled_span("gui.custom.preview-rotation");
+        let rows = self
+            .target
+            .compose_direct_preview_rect_oriented(rect, self.layout.output_layout());
+        drop(rotation_pmu);
+        (rows > 0).then(|| self.layout.logical_rect_to_composition(rect))
     }
 
     pub(super) fn compose_direct_preview_rect(&mut self, rect: DirtyRect) -> u32 {
@@ -465,10 +481,14 @@ impl<'a> LayerTarget<'a> {
 
     pub(super) fn direct_preview_view(&self) -> Option<DirectPreviewView<'_>> {
         if self.layout.is_portrait() {
-            None
+            self.target.physical_direct_preview_view()
         } else {
             self.target.direct_preview_view()
         }
+    }
+
+    pub(super) fn direct_preview_rect(&self) -> Option<DirtyRect> {
+        self.direct_preview_view().map(DirectPreviewView::rect)
     }
 }
 
@@ -583,5 +603,29 @@ mod tests {
                 .iter()
                 .all(|pixel| *pixel == Rgb565Pixel(0))
         );
+    }
+
+    #[test]
+    fn portrait_preview_layer_rect_is_the_published_physical_backing_rect() {
+        let ui = UiDisplay::for_framebuffer(4, 3);
+        let layout = UiLayoutGeometry::for_display(&ui, ScreenOrientation::MonitorClockwise);
+        let logical = DirtyRect {
+            x0: 0,
+            y0: 1,
+            x1: 3,
+            y1: 3,
+        };
+        let mut target = UiFrameTarget::cached(FramebufferTargetGeometry::new(4, 3));
+        target
+            .direct_preview_565_rect_mut(logical)
+            .0
+            .fill(Rgb565Pixel(9));
+        let published = target
+            .compose_direct_preview_to_physical(logical, layout.output_layout(), 1, true)
+            .unwrap();
+
+        let layer_target = LayerTarget::new_oriented(&mut target, layout);
+        assert_eq!(layer_target.direct_preview_rect(), Some(published));
+        assert_eq!(published, layout.logical_rect_to_composition(logical));
     }
 }
