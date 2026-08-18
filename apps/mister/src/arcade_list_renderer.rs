@@ -945,7 +945,6 @@ impl ArcadeListRenderer {
             return Some(ArcadeListUpdate::Full(self.dirty_rect()));
         }
         Some(ArcadeListUpdate::Scroll {
-            delta_x: 0,
             delta_y: content_delta as isize,
             rect: self.dirty_rect(),
         })
@@ -1014,7 +1013,6 @@ impl ArcadeListRenderer {
             return Some(ArcadeListUpdate::Full(self.dirty_rect()));
         }
         Some(ArcadeListUpdate::Scroll {
-            delta_x: 0,
             delta_y: content_delta as isize,
             rect: self.dirty_rect(),
         })
