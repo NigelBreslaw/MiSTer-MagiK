@@ -1,6 +1,10 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+use crate::model::{
+    ArcadeVelocityScrollArm, ArcadeVelocityScrollInputMode as ArcadeRunInputMode,
+    ArcadeVelocityScrollProfiler, ArcadeVelocityScrollRunSpec,
+};
 use crate::transport::{AutomationAction, AutomationButton, DeviceFailure, Layout};
 use mister_magik_platform_manifest_contract as platform_manifest_contract;
 use quick_xml::Reader;
@@ -721,6 +725,16 @@ impl NativeDevice {
     ) -> std::result::Result<String, DeviceFailure> {
         self.benchmark_profile(|config| {
             profile_installed_arcade_velocity_scroll(config, output_dir)
+        })
+    }
+
+    pub(crate) fn profile_arcade_velocity_scroll_run(
+        &mut self,
+        output_dir: &Path,
+        spec: ArcadeVelocityScrollRunSpec,
+    ) -> std::result::Result<String, DeviceFailure> {
+        self.benchmark_profile(|config| {
+            profile_installed_arcade_velocity_scroll_run(config, output_dir, spec)
         })
     }
 
@@ -7843,13 +7857,7 @@ const ARCADE_VELOCITY_SCROLL_PPROF_REMOTE_DIR: &str =
 const GUI_PROFILE_AUTOMATION_MARGIN_SECS: u64 = 80;
 const GUI_PROFILE_AUTOMATION_MAX_SECS: u64 = 120;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum ArcadeVelocityScrollInputMode {
-    Held,
-    Turbo,
-}
-
-impl ArcadeVelocityScrollInputMode {
+impl ArcadeRunInputMode {
     const fn label(self) -> &'static str {
         match self {
             Self::Held => "held",
@@ -7869,6 +7877,7 @@ fn gui_profile_route_launcher_env_with_pprof(
     pmu: bool,
     pprof_remote_dir: Option<&str>,
     scroll_duration_ms: u64,
+    startup_orientation: Option<&str>,
 ) -> Vec<(String, String)> {
     let mut environment = vec![
         ("MISTER_CATALOG_REFRESH".into(), "off".into()),
@@ -7879,6 +7888,12 @@ fn gui_profile_route_launcher_env_with_pprof(
             GUI_PROFILE_REMOTE_COMPLETE.into(),
         ),
     ];
+    if let Some(orientation) = startup_orientation {
+        environment.push((
+            "MISTER_ARCADE_BENCHMARK_ORIENTATION".into(),
+            orientation.into(),
+        ));
+    }
     if pmu {
         environment.extend([
             ("MISTER_GUI_FRAME_PROFILE_PMU".into(), "1".into()),
@@ -7991,6 +8006,7 @@ fn run_gui_frame_profile_route(
     pmu: bool,
     scroll_duration_ms: u64,
     terminal_checkpoint: Option<&str>,
+    startup_orientation: Option<&str>,
 ) -> Result<Value> {
     run_gui_frame_profile_route_with_pprof(
         config,
@@ -8001,7 +8017,8 @@ fn run_gui_frame_profile_route(
         terminal_checkpoint,
         None,
         Duration::ZERO,
-        ArcadeVelocityScrollInputMode::Held,
+        ArcadeRunInputMode::Held,
+        startup_orientation,
     )
 }
 
@@ -8011,6 +8028,7 @@ fn run_gui_frame_profile_route_turbo(
     output_dir: &Path,
     scroll_duration_ms: u64,
     terminal_checkpoint: Option<&str>,
+    startup_orientation: Option<&str>,
 ) -> Result<Value> {
     run_gui_frame_profile_route_with_pprof(
         config,
@@ -8021,7 +8039,8 @@ fn run_gui_frame_profile_route_turbo(
         terminal_checkpoint,
         None,
         Duration::ZERO,
-        ArcadeVelocityScrollInputMode::Turbo,
+        ArcadeRunInputMode::Turbo,
+        startup_orientation,
     )
 }
 
@@ -8034,7 +8053,8 @@ fn run_gui_frame_profile_route_with_pprof(
     terminal_checkpoint: Option<&str>,
     pprof_remote_dir: Option<&str>,
     pprof_finalization_probe: Duration,
-    input_mode: ArcadeVelocityScrollInputMode,
+    input_mode: ArcadeRunInputMode,
+    startup_orientation: Option<&str>,
 ) -> Result<Value> {
     fs::create_dir_all(output_dir)?;
     exec_checked(
@@ -8049,6 +8069,7 @@ fn run_gui_frame_profile_route_with_pprof(
                 pmu,
                 pprof_remote_dir,
                 scroll_duration_ms,
+                startup_orientation,
             ),
             timeout_secs: 45,
             remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str().into(),
@@ -8122,7 +8143,7 @@ fn run_gui_frame_profile_route_with_pprof(
             },
             "settled Arcade entry",
         )?;
-        let turbo_prime_sequence = if input_mode == ArcadeVelocityScrollInputMode::Turbo {
+        let turbo_prime_sequence = if input_mode == ArcadeRunInputMode::Turbo {
             Some(modal_input_action(
                 config,
                 &nonce,
@@ -8250,6 +8271,447 @@ fn arcade_velocity_scroll_cleanup_command() -> String {
     )
 }
 
+fn retain_arcade_velocity_scroll_failure_context(
+    session: &Session,
+    output_dir: &Path,
+    route_result: &Result<Value>,
+) -> Result<()> {
+    let Err(error) = route_result else {
+        return Ok(());
+    };
+    if let Some(log) = remote_read(session, "/tmp/mister-magik-slint.log") {
+        fs::write(output_dir.join("failed-launcher.log"), log)?;
+    }
+    let automation_failure = remote_read(session, "/tmp/mister-magik/ui-automation-failure.json");
+    if let Some(failure) = automation_failure.as_ref() {
+        fs::write(output_dir.join("automation-failure.json"), failure)?;
+    }
+    let launcher_status = read_launcher_status(session).ok();
+    let main_status = remote_read(session, MAIN_STATUS_REMOTE)
+        .and_then(|status| serde_json::from_str::<Value>(&status).ok());
+    let context = json!({
+        "schema": "mister-magik-arcade-velocity-scroll-failure-context-v1",
+        "error": error.to_string(),
+        "automation_failure": automation_failure
+            .as_deref()
+            .and_then(|failure| serde_json::from_str::<Value>(failure).ok()),
+        "launcher_status": launcher_status,
+        "main_status": main_status,
+    });
+    fs::write(
+        output_dir.join("failure-context.json"),
+        format!("{}\n", serde_json::to_string_pretty(&context)?),
+    )?;
+    Ok(())
+}
+
+#[derive(Debug)]
+struct ArcadeVelocityScrollRouteSnapshot {
+    display_mode: DisplayMatrixMode,
+    mister_ini: String,
+    settings: Option<String>,
+    launcher_env: Option<String>,
+    boot_id: String,
+    manifest: String,
+}
+
+fn arcade_velocity_scroll_display_mode(id: &str) -> Result<DisplayMatrixMode> {
+    DISPLAY_MATRIX_MODES
+        .iter()
+        .find(|mode| mode.id == id)
+        .copied()
+        .ok_or_else(|| format!("Arcade benchmark display mode {id} is unsupported").into())
+}
+
+fn snapshot_arcade_velocity_scroll_route(
+    config: &NativeDeviceConfig,
+) -> Result<ArcadeVelocityScrollRouteSnapshot> {
+    let session = connect_with(&config.connection, 10)?;
+    let display = exec_checked_output(
+        &session,
+        "query original Arcade benchmark display mode",
+        &acknowledged_main_command("mister_magik_display_get_v1"),
+    )?;
+    if parse_display_reply_pending(display.stdout.trim())?.is_some() {
+        return Err("Arcade benchmark cannot start during a display transaction".into());
+    }
+    let display_mode =
+        arcade_velocity_scroll_display_mode(&parse_display_reply_active(display.stdout.trim())?)?;
+    Ok(ArcadeVelocityScrollRouteSnapshot {
+        display_mode,
+        mister_ini: remote_read(&session, "/media/fat/MiSTer.ini")
+            .ok_or("MiSTer.ini is unavailable before the Arcade benchmark")?,
+        settings: remote_read(&session, ORIENTATION_TRANSITION_SETTINGS_REMOTE.as_str()),
+        launcher_env: remote_read(&session, DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str()),
+        boot_id: remote_read(&session, "/proc/sys/kernel/random/boot_id")
+            .ok_or("device boot id is unavailable before the Arcade benchmark")?,
+        manifest: remote_read(&session, LOCAL_MAIN_MANIFEST_REMOTE)
+            .ok_or("development platform manifest is unavailable before the Arcade benchmark")?,
+    })
+}
+
+fn restore_optional_remote_file(
+    session: &Session,
+    path: &str,
+    expected: Option<&str>,
+    label: &str,
+) -> Result<()> {
+    match expected {
+        Some(contents) => {
+            put_bytes(session, path, contents.as_bytes())?;
+            exec_checked(
+                session,
+                &format!("sync restored {label}"),
+                &format!("set -eu; sync; test -f {}", sh(path)),
+            )?;
+        }
+        None => {
+            exec_checked(
+                session,
+                &format!("remove transient {label}"),
+                &format!("set -eu; rm -f {}; sync; test ! -e {}", sh(path), sh(path)),
+            )?;
+        }
+    }
+    Ok(())
+}
+
+fn restore_arcade_velocity_scroll_route(
+    config: &NativeDeviceConfig,
+    snapshot: &ArcadeVelocityScrollRouteSnapshot,
+) -> Result<Value> {
+    let session = connect_with(&config.connection, 10)?;
+    let clear_result = exec_checked(
+        &session,
+        "clear Arcade benchmark one-shot state",
+        &arcade_velocity_scroll_cleanup_command(),
+    );
+    let launcher_result = launcher_restart(
+        &session,
+        &LauncherRestartOptions {
+            clear_env: true,
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str().into(),
+            timeout_secs: 45,
+            ..LauncherRestartOptions::default()
+        },
+    );
+    combine_benchmark_cleanup(clear_result, launcher_result)?;
+    drop(session);
+    cancel_pending_benchmark_display_mode(config)?;
+    apply_confirmed_display_mode(
+        config,
+        snapshot.display_mode,
+        "Arcade benchmark display restoration",
+    )?;
+
+    let session = connect_with(&config.connection, 10)?;
+    restore_optional_remote_file(
+        &session,
+        "/media/fat/MiSTer.ini",
+        Some(&snapshot.mister_ini),
+        "MiSTer.ini",
+    )?;
+    restore_optional_remote_file(
+        &session,
+        ORIENTATION_TRANSITION_SETTINGS_REMOTE.as_str(),
+        snapshot.settings.as_deref(),
+        "launcher settings",
+    )?;
+    launcher_restart(
+        &session,
+        &LauncherRestartOptions {
+            clear_env: true,
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str().into(),
+            timeout_secs: 45,
+            ..LauncherRestartOptions::default()
+        },
+    )?;
+    restore_optional_remote_file(
+        &session,
+        DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str(),
+        snapshot.launcher_env.as_deref(),
+        "launcher environment",
+    )?;
+    wait_launcher_ready(&session, Instant::now(), Duration::from_secs(45))?;
+
+    let display = exec_checked_output(
+        &session,
+        "verify restored Arcade benchmark display mode",
+        &acknowledged_main_command("mister_magik_display_get_v1"),
+    )?;
+    if parse_display_reply_pending(display.stdout.trim())?.is_some()
+        || parse_display_reply_active(display.stdout.trim())? != snapshot.display_mode.id
+    {
+        return Err("Arcade benchmark did not restore the original display mode".into());
+    }
+    if remote_read(&session, "/media/fat/MiSTer.ini").as_deref()
+        != Some(snapshot.mister_ini.as_str())
+    {
+        return Err("Arcade benchmark did not restore MiSTer.ini exactly".into());
+    }
+    if remote_read(&session, ORIENTATION_TRANSITION_SETTINGS_REMOTE.as_str()).as_deref()
+        != snapshot.settings.as_deref()
+    {
+        return Err("Arcade benchmark did not restore settings.json exactly".into());
+    }
+    if remote_read(&session, DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str()).as_deref()
+        != snapshot.launcher_env.as_deref()
+    {
+        return Err("Arcade benchmark did not restore launcher.env exactly".into());
+    }
+    if remote_read(&session, "/proc/sys/kernel/random/boot_id").as_deref()
+        != Some(snapshot.boot_id.as_str())
+    {
+        return Err("device rebooted during the Arcade benchmark".into());
+    }
+    if remote_read(&session, LOCAL_MAIN_MANIFEST_REMOTE).as_deref()
+        != Some(snapshot.manifest.as_str())
+    {
+        return Err("installed platform manifest changed during the Arcade benchmark".into());
+    }
+    exec_checked(
+        &session,
+        "Arcade benchmark restored delivery health",
+        &delivery_health_command("dev")?,
+    )?;
+    let status = read_launcher_status(&session)?;
+    Ok(json!({
+        "status": "restored",
+        "display_mode": snapshot.display_mode.id,
+        "mister_ini_sha256": encode_hex(&Sha256::digest(snapshot.mister_ini.as_bytes())),
+        "settings_sha256": snapshot
+            .settings
+            .as_ref()
+            .map(|settings| encode_hex(&Sha256::digest(settings.as_bytes()))),
+        "launcher_env_sha256": snapshot
+            .launcher_env
+            .as_ref()
+            .map(|environment| encode_hex(&Sha256::digest(environment.as_bytes()))),
+        "launcher_pid": status.get("launcher_pid"),
+    }))
+}
+
+fn arcade_velocity_scroll_summary_orientation(summary: &Value) -> Option<&str> {
+    summary
+        .get("screen_orientation")
+        .and_then(Value::as_str)
+        .or_else(|| {
+            summary
+                .pointer("/route/screen_orientation")
+                .and_then(Value::as_str)
+        })
+}
+
+fn arcade_velocity_scroll_profile_orientation(orientation: &str) -> Result<&'static str> {
+    match orientation {
+        "normal" => Ok("Normal"),
+        "monitor-clockwise" => Ok("Monitor right (clockwise)"),
+        "monitor-counterclockwise" => Ok("Monitor left (counterclockwise)"),
+        _ => Err(format!("unsupported Arcade benchmark orientation {orientation}").into()),
+    }
+}
+
+fn arcade_velocity_scroll_effective_route(display_mode: &str, orientation: &str) -> &'static str {
+    match (display_mode, orientation) {
+        ("hdmi-1280x720p60", "Normal") => "hdmi-landscape",
+        ("hdmi-1280x720p60", "Monitor left (counterclockwise)") => "hdmi-portrait-left",
+        ("crt-240p60", "Monitor left (counterclockwise)") => "crt240-portrait-left",
+        ("crt-288p50", "Monitor left (counterclockwise)") => "crt288-portrait-left",
+        _ => "active",
+    }
+}
+
+fn run_arcade_velocity_scroll_spec(
+    config: &NativeDeviceConfig,
+    output_dir: &Path,
+    spec: ArcadeVelocityScrollRunSpec,
+) -> Result<Value> {
+    let expected_profiler = match spec.arm {
+        ArcadeVelocityScrollArm::Pprof => ArcadeVelocityScrollProfiler::Pprof,
+        ArcadeVelocityScrollArm::Pmu | ArcadeVelocityScrollArm::PmuSmoke => {
+            ArcadeVelocityScrollProfiler::Pmu
+        }
+        ArcadeVelocityScrollArm::Streamline => ArcadeVelocityScrollProfiler::Streamline,
+        _ => ArcadeVelocityScrollProfiler::None,
+    };
+    if spec.profiler != expected_profiler {
+        return Err("Arcade benchmark run specification has an inconsistent profiler".into());
+    }
+    let orientation = spec.route.orientation();
+    let summary = match spec.arm {
+        ArcadeVelocityScrollArm::Control => profile_installed_arcade_velocity_scroll_workload(
+            config,
+            output_dir,
+            spec.duration_ms,
+            spec.telemetry_secs,
+            None,
+            spec.input_mode,
+            orientation,
+        ),
+        ArcadeVelocityScrollArm::ControlSmoke => profile_installed_arcade_velocity_scroll_workload(
+            config,
+            output_dir,
+            spec.duration_ms,
+            spec.telemetry_secs,
+            Some("mister-magik-arcade-velocity-scroll-control-smoke-v1"),
+            spec.input_mode,
+            orientation,
+        ),
+        ArcadeVelocityScrollArm::Turbo => profile_installed_arcade_velocity_scroll_workload(
+            config,
+            output_dir,
+            spec.duration_ms,
+            spec.telemetry_secs,
+            None,
+            spec.input_mode,
+            orientation,
+        ),
+        ArcadeVelocityScrollArm::Pprof => profile_installed_arcade_velocity_scroll_pprof_workload(
+            config,
+            output_dir,
+            spec.duration_ms,
+            spec.telemetry_secs,
+            Duration::ZERO,
+            "mister-magik-arcade-velocity-scroll-pprof-v1",
+            orientation,
+        ),
+        ArcadeVelocityScrollArm::Pmu | ArcadeVelocityScrollArm::PmuSmoke => {
+            let schema = if spec.arm == ArcadeVelocityScrollArm::PmuSmoke {
+                "mister-magik-arcade-velocity-scroll-pmu-smoke-v1"
+            } else {
+                "mister-magik-arcade-velocity-scroll-pmu-v1"
+            };
+            profile_installed_arcade_velocity_scroll_pmu_workload(
+                config,
+                output_dir,
+                spec.duration_ms,
+                spec.telemetry_secs,
+                schema,
+                orientation,
+            )
+        }
+        ArcadeVelocityScrollArm::Streamline => {
+            profile_installed_arcade_velocity_scroll_streamline_workload(
+                config,
+                output_dir,
+                spec.duration_ms,
+                spec.telemetry_secs,
+                orientation,
+            )
+        }
+    }?;
+    serde_json::from_str(&summary).map_err(Into::into)
+}
+
+fn profile_installed_arcade_velocity_scroll_run(
+    config: &NativeDeviceConfig,
+    output_dir: &Path,
+    spec: ArcadeVelocityScrollRunSpec,
+) -> Result<String> {
+    fs::create_dir_all(output_dir)?;
+    let _signal_guard = AttendedOperationSignalGuard::install();
+    let snapshot = snapshot_arcade_velocity_scroll_route(config)?;
+    let requested_mode = spec
+        .route
+        .display_mode()
+        .map(arcade_velocity_scroll_display_mode)
+        .transpose()?;
+
+    let run_result = (|| -> Result<Value> {
+        if let Some(mode) = requested_mode {
+            apply_confirmed_display_mode(config, mode, "Arcade benchmark route selection")?;
+        }
+        let summary = run_arcade_velocity_scroll_spec(config, output_dir, spec)?;
+        let effective_display = summary
+            .get("display_mode")
+            .and_then(Value::as_str)
+            .ok_or("Arcade benchmark summary has no effective display mode")?;
+        let effective_orientation = arcade_velocity_scroll_summary_orientation(&summary)
+            .ok_or("Arcade benchmark summary has no effective orientation")?;
+        if let Some(mode) = requested_mode
+            && effective_display != mode.id
+        {
+            return Err(format!(
+                "Arcade benchmark route requested {} but ran {effective_display}",
+                mode.id
+            )
+            .into());
+        }
+        if let Some(orientation) = spec.route.orientation()
+            && effective_orientation != arcade_velocity_scroll_profile_orientation(orientation)?
+        {
+            return Err(format!(
+                "Arcade benchmark route requested {orientation} but ran {effective_orientation}"
+            )
+            .into());
+        }
+        Ok(summary)
+    })();
+    let restoration_result = restore_arcade_velocity_scroll_route(config, &snapshot);
+
+    let effective_display_mode = run_result
+        .as_ref()
+        .ok()
+        .and_then(|summary| summary.get("display_mode"))
+        .and_then(Value::as_str);
+    let effective_orientation = run_result
+        .as_ref()
+        .ok()
+        .and_then(arcade_velocity_scroll_summary_orientation);
+    let effective_route = effective_display_mode
+        .zip(effective_orientation)
+        .map(|(display, orientation)| arcade_velocity_scroll_effective_route(display, orientation));
+
+    let route_record = json!({
+        "schema": "mister-magik-arcade-velocity-scroll-route-v1",
+        "requested_route": spec.route.label(),
+        "requested_display_mode": spec.route.display_mode(),
+        "requested_orientation": spec.route.orientation(),
+        "original_display_mode": snapshot.display_mode.id,
+        "effective_route": effective_route,
+        "effective_display_mode": effective_display_mode,
+        "effective_orientation": effective_orientation,
+        "run_status": if run_result.is_ok() { "complete" } else { "failed" },
+        "restoration": restoration_result.as_ref().ok(),
+        "run_failure": run_result.as_ref().err().map(ToString::to_string),
+        "restoration_failure": restoration_result.as_ref().err().map(ToString::to_string),
+    });
+    fs::write(
+        output_dir.join("route.json"),
+        format!("{}\n", serde_json::to_string_pretty(&route_record)?),
+    )?;
+
+    let (mut summary, restoration) = match (run_result, restoration_result) {
+        (Ok(summary), Ok(restoration)) => (summary, restoration),
+        (Err(run), Ok(_)) => return Err(run),
+        (Ok(_), Err(restoration)) => {
+            return Err(format!("Arcade benchmark restoration failed: {restoration}").into());
+        }
+        (Err(run), Err(restoration)) => {
+            return Err(
+                format!("{run}; Arcade benchmark restoration failed: {restoration}").into(),
+            );
+        }
+    };
+    let effective_display = summary["display_mode"].clone();
+    let effective_orientation = arcade_velocity_scroll_summary_orientation(&summary)
+        .map(str::to_owned)
+        .ok_or("Arcade benchmark summary lost its effective orientation")?;
+    summary["requested_route"] = json!(spec.route.label());
+    summary["effective_route"] = json!(arcade_velocity_scroll_effective_route(
+        summary["display_mode"].as_str().unwrap_or_default(),
+        &effective_orientation,
+    ));
+    summary["effective_display_mode"] = effective_display;
+    summary["effective_orientation"] = json!(effective_orientation);
+    summary["route_restoration"] = restoration;
+    fs::write(
+        output_dir.join("summary.json"),
+        format!("{}\n", serde_json::to_string_pretty(&summary)?),
+    )?;
+    serde_json::to_string(&summary).map_err(Into::into)
+}
+
 fn profile_installed_arcade_velocity_scroll(
     config: &NativeDeviceConfig,
     output_dir: &Path,
@@ -8260,7 +8722,8 @@ fn profile_installed_arcade_velocity_scroll(
         ARCADE_VELOCITY_SCROLL_DURATION_MS,
         ARCADE_VELOCITY_SCROLL_TELEMETRY_SECS,
         None,
-        ArcadeVelocityScrollInputMode::Held,
+        ArcadeRunInputMode::Held,
+        None,
     )
 }
 
@@ -8274,7 +8737,8 @@ fn profile_installed_arcade_velocity_scroll_control_smoke(
         ARCADE_VELOCITY_SCROLL_SMOKE_DURATION_MS,
         ARCADE_VELOCITY_SCROLL_SMOKE_TELEMETRY_SECS,
         Some("mister-magik-arcade-velocity-scroll-control-smoke-v1"),
-        ArcadeVelocityScrollInputMode::Held,
+        ArcadeRunInputMode::Held,
+        None,
     )
 }
 
@@ -8288,7 +8752,8 @@ fn profile_installed_arcade_velocity_scroll_turbo(
         ARCADE_VELOCITY_SCROLL_DURATION_MS,
         ARCADE_VELOCITY_SCROLL_TELEMETRY_SECS,
         None,
-        ArcadeVelocityScrollInputMode::Turbo,
+        ArcadeRunInputMode::Turbo,
+        None,
     )
 }
 
@@ -8298,7 +8763,8 @@ fn profile_installed_arcade_velocity_scroll_workload(
     scroll_duration_ms: u64,
     telemetry_secs: u64,
     artifact_schema: Option<&str>,
-    input_mode: ArcadeVelocityScrollInputMode,
+    input_mode: ArcadeRunInputMode,
+    startup_orientation: Option<&str>,
 ) -> Result<String> {
     let session = connect_with(&config.connection, 10)?;
     let capability = exec_checked_output(
@@ -8344,22 +8810,25 @@ fn profile_installed_arcade_velocity_scroll_workload(
         .map_err(|error| error.to_string())
     });
     let route_result = match input_mode {
-        ArcadeVelocityScrollInputMode::Held => run_gui_frame_profile_route(
+        ArcadeRunInputMode::Held => run_gui_frame_profile_route(
             config,
             &session,
             output_dir,
             false,
             scroll_duration_ms,
             Some("terminal-arcade"),
+            startup_orientation,
         ),
-        ArcadeVelocityScrollInputMode::Turbo => run_gui_frame_profile_route_turbo(
+        ArcadeRunInputMode::Turbo => run_gui_frame_profile_route_turbo(
             config,
             &session,
             output_dir,
             scroll_duration_ms,
             Some("terminal-arcade"),
+            startup_orientation,
         ),
     };
+    retain_arcade_velocity_scroll_failure_context(&session, output_dir, &route_result)?;
     let telemetry_result: Result<Vec<Value>> = match telemetry_thread.join() {
         Ok(Ok(telemetry)) => Ok(telemetry),
         Ok(Err(error)) => Err(error.into()),
@@ -8463,6 +8932,7 @@ fn profile_installed_arcade_velocity_scroll_pprof(
         ARCADE_VELOCITY_SCROLL_PPROF_TELEMETRY_SECS,
         Duration::ZERO,
         "mister-magik-arcade-velocity-scroll-pprof-v1",
+        None,
     )
 }
 
@@ -8473,6 +8943,7 @@ fn profile_installed_arcade_velocity_scroll_pprof_workload(
     telemetry_secs: u64,
     finalization_probe: Duration,
     artifact_schema: &str,
+    startup_orientation: Option<&str>,
 ) -> Result<String> {
     let session = connect_with(&config.connection, 10)?;
     let capability = exec_checked_output(
@@ -8535,8 +9006,10 @@ fn profile_installed_arcade_velocity_scroll_pprof_workload(
         Some("terminal-arcade"),
         Some(ARCADE_VELOCITY_SCROLL_PPROF_REMOTE_DIR),
         finalization_probe,
-        ArcadeVelocityScrollInputMode::Held,
+        ArcadeRunInputMode::Held,
+        startup_orientation,
     );
+    retain_arcade_velocity_scroll_failure_context(&session, output_dir, &route_result)?;
     let telemetry_result: Result<Vec<Value>> = match telemetry_thread.join() {
         Ok(Ok(telemetry)) => Ok(telemetry),
         Ok(Err(error)) => Err(error.into()),
@@ -8672,6 +9145,7 @@ fn profile_installed_arcade_velocity_scroll_pmu(
         ARCADE_VELOCITY_SCROLL_DURATION_MS,
         ARCADE_VELOCITY_SCROLL_TELEMETRY_SECS,
         "mister-magik-arcade-velocity-scroll-pmu-v1",
+        None,
     )
 }
 
@@ -8685,6 +9159,7 @@ fn profile_installed_arcade_velocity_scroll_pmu_smoke(
         ARCADE_VELOCITY_SCROLL_SMOKE_DURATION_MS,
         ARCADE_VELOCITY_SCROLL_SMOKE_TELEMETRY_SECS,
         "mister-magik-arcade-velocity-scroll-pmu-smoke-v1",
+        None,
     )
 }
 
@@ -8694,6 +9169,7 @@ fn profile_installed_arcade_velocity_scroll_pmu_workload(
     scroll_duration_ms: u64,
     telemetry_secs: u64,
     artifact_schema: &str,
+    startup_orientation: Option<&str>,
 ) -> Result<String> {
     let session = connect_with(&config.connection, 10)?;
     let capability = exec_checked_output(
@@ -8743,7 +9219,9 @@ fn profile_installed_arcade_velocity_scroll_pmu_workload(
         true,
         scroll_duration_ms,
         Some("terminal-arcade"),
+        startup_orientation,
     );
+    retain_arcade_velocity_scroll_failure_context(&session, output_dir, &route_result)?;
     let telemetry_result: Result<Vec<Value>> = match telemetry_thread.join() {
         Ok(Ok(telemetry)) => Ok(telemetry),
         Ok(Err(error)) => Err(error.into()),
@@ -8853,6 +9331,22 @@ fn profile_installed_arcade_velocity_scroll_streamline(
     config: &NativeDeviceConfig,
     output_dir: &Path,
 ) -> Result<String> {
+    profile_installed_arcade_velocity_scroll_streamline_workload(
+        config,
+        output_dir,
+        ARCADE_VELOCITY_SCROLL_DURATION_MS,
+        ARCADE_VELOCITY_SCROLL_TELEMETRY_SECS,
+        None,
+    )
+}
+
+fn profile_installed_arcade_velocity_scroll_streamline_workload(
+    config: &NativeDeviceConfig,
+    output_dir: &Path,
+    scroll_duration_ms: u64,
+    telemetry_secs: u64,
+    startup_orientation: Option<&str>,
+) -> Result<String> {
     let gatord = streamline_gatord_path(env::var_os("MISTER_GATORD_PATH"))?;
     let gatord_metadata = fs::metadata(&gatord)?;
     if !gatord_metadata.is_file() || gatord_metadata.len() == 0 {
@@ -8903,7 +9397,7 @@ fn profile_installed_arcade_velocity_scroll_streamline(
     let telemetry_thread = thread::spawn(move || {
         agent_telemetry_for_duration_with_mode(
             &telemetry_endpoint,
-            Duration::from_secs(ARCADE_VELOCITY_SCROLL_TELEMETRY_SECS),
+            Duration::from_secs(telemetry_secs),
             100,
             "off",
         )
@@ -8914,8 +9408,9 @@ fn profile_installed_arcade_velocity_scroll_streamline(
         &session,
         &gatord,
         &route_dir,
-        ARCADE_VELOCITY_SCROLL_DURATION_MS,
+        scroll_duration_ms,
         ARCADE_VELOCITY_SCROLL_STREAMLINE_CAPTURE,
+        startup_orientation,
     );
     let telemetry_result: Result<Vec<Value>> = match telemetry_thread.join() {
         Ok(Ok(telemetry)) => Ok(telemetry),
@@ -8947,7 +9442,7 @@ fn profile_installed_arcade_velocity_scroll_streamline(
         &streamline_arm.route,
         &telemetry,
         &display_mode,
-        ARCADE_VELOCITY_SCROLL_DURATION_MS,
+        scroll_duration_ms,
     )?;
     let capture_manifest = streamline_capture_manifest(
         &installed_identity,
@@ -8965,6 +9460,7 @@ fn profile_installed_arcade_velocity_scroll_streamline(
         "schema": "mister-magik-arcade-velocity-scroll-streamline-v1",
         "artifact_status": "passed",
         "display_mode": display_mode,
+        "scroll_duration_ms": scroll_duration_ms,
         "route": route_summary,
         "streamline": {
             "gatord_version": streamline_arm.gatord_version,
@@ -11218,6 +11714,7 @@ fn run_gui_frame_profile_arm(
         pmu,
         GUI_PROFILE_DEFAULT_SCROLL_MS,
         None,
+        None,
     );
     if let Some(log) = remote_read(session, "/tmp/mister-magik-slint.log") {
         fs::write(output_dir.join("launcher.log"), log)?;
@@ -11261,6 +11758,7 @@ fn run_gui_frame_streamline_arm(
         output_dir,
         GUI_PROFILE_DEFAULT_SCROLL_MS,
         GUI_FRAME_STREAMLINE_CAPTURE,
+        None,
     )
 }
 
@@ -11271,6 +11769,7 @@ fn run_gui_frame_streamline_arm_with_options(
     output_dir: &Path,
     scroll_duration_ms: u64,
     capture_spec: SystemWideStreamlineCaptureSpec,
+    startup_orientation: Option<&str>,
 ) -> Result<GuiFrameStreamlineArm> {
     fs::create_dir_all(output_dir)?;
     let capture =
@@ -11287,6 +11786,7 @@ fn run_gui_frame_streamline_arm_with_options(
             false,
             scroll_duration_ms,
             None,
+            startup_orientation,
         );
         let capture_result = capture.stop(capture_thread);
         let capture_ended_monotonic_ns = capture.monotonic_ns("GUI frame capture end")?;
@@ -25654,12 +26154,13 @@ mod tests {
 
     #[test]
     fn gui_profile_route_environment_is_fixed_and_pmu_is_independent() {
-        let control = gui_profile_route_launcher_env_with_pprof(false, None, 40_000);
-        let pmu = gui_profile_route_launcher_env_with_pprof(true, None, 40_000);
+        let control = gui_profile_route_launcher_env_with_pprof(false, None, 40_000, None);
+        let pmu = gui_profile_route_launcher_env_with_pprof(true, None, 40_000, None);
         let pprof = gui_profile_route_launcher_env_with_pprof(
             false,
             Some(ARCADE_VELOCITY_SCROLL_PPROF_REMOTE_DIR),
             ARCADE_VELOCITY_SCROLL_PPROF_DURATION_MS,
+            Some("monitor-counterclockwise"),
         );
         assert!(
             control
@@ -25685,6 +26186,9 @@ mod tests {
                 .iter()
                 .any(|(name, value)| { name == "MISTER_PPROF_DURATION_SECS" && value == "40" })
         );
+        assert!(pprof.iter().any(|(name, value)| {
+            name == "MISTER_ARCADE_BENCHMARK_ORIENTATION" && value == "monitor-counterclockwise"
+        }));
         assert_eq!(gui_profile_automation_ttl_secs(40_000), 120);
         assert_eq!(gui_profile_automation_ttl_secs(8_000), 88);
         assert_eq!(gui_profile_automation_ttl_secs(90_000), 120);
@@ -30396,6 +30900,36 @@ H: Handlers=event3 js0"#
         assert_eq!(
             arcade_velocity_scroll_fps_failure(59.9),
             "physical-fps-below-59.9"
+        );
+    }
+
+    #[test]
+    fn arcade_velocity_scroll_names_effective_routes_from_measured_state() {
+        assert_eq!(
+            arcade_velocity_scroll_effective_route("hdmi-1280x720p60", "Normal"),
+            "hdmi-landscape"
+        );
+        assert_eq!(
+            arcade_velocity_scroll_effective_route(
+                "hdmi-1280x720p60",
+                "Monitor left (counterclockwise)"
+            ),
+            "hdmi-portrait-left"
+        );
+        assert_eq!(
+            arcade_velocity_scroll_effective_route("crt-240p60", "Monitor left (counterclockwise)"),
+            "crt240-portrait-left"
+        );
+        assert_eq!(
+            arcade_velocity_scroll_effective_route("crt-288p50", "Monitor left (counterclockwise)"),
+            "crt288-portrait-left"
+        );
+        assert_eq!(
+            arcade_velocity_scroll_effective_route(
+                "hdmi-1920x1080p60",
+                "Monitor left (counterclockwise)"
+            ),
+            "active"
         );
     }
 

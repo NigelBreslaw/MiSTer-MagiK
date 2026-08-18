@@ -190,8 +190,12 @@ fn dispatch(
         CliCommand::Deliver {
             target: Some(DeliverTarget::LocalMain),
         } => return deliver_local_main(repository, reporter),
-        CliCommand::Benchmark { scenario, arm } => {
-            return agent_cli::benchmark::execute(repository, *scenario, *arm, reporter);
+        CliCommand::Benchmark {
+            scenario,
+            arm,
+            route,
+        } => {
+            return agent_cli::benchmark::execute(repository, *scenario, *arm, *route, reporter);
         }
         CliCommand::Capture {
             command:

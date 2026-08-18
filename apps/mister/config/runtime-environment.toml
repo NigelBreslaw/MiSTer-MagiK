@@ -87,6 +87,20 @@ aliases = []
 documentation = { summary = "Controls arcade bootstrap index behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
+name = "MISTER_ARCADE_BENCHMARK_ORIENTATION"
+owner = "apps/mister/src/ui_runner.rs"
+classification = "benchmark"
+value_shape = "enum token"
+default_behavior = "uses persisted launcher orientation when unset or invalid"
+visibility = "benchmark only"
+parser = "enum"
+scope = "instrumentation"
+conflicts = []
+sensitivity = "public"
+aliases = []
+documentation = { summary = "Selects a one-shot in-memory launcher orientation for Arcade benchmarks", accepted_values = ["normal", "monitor-clockwise", "monitor-counterclockwise"], value_policy = "reject" }
+
+[[control]]
 name = "MISTER_ARCADE_ENTRY_RUN_ID"
 owner = "apps/mister/src/process_config.rs"
 classification = "production"

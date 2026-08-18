@@ -3,7 +3,10 @@
 
 use crate::device::DeviceClient;
 use crate::error::AgentResult;
-use crate::model::{ArcadeVelocityScrollArm, BenchmarkScenario, Outcome};
+use crate::model::{
+    ArcadeVelocityScrollArm, ArcadeVelocityScrollRoute, ArcadeVelocityScrollRunSpec,
+    BenchmarkScenario, Outcome,
+};
 use crate::progress::{EventKind, Reporter};
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
@@ -13,9 +16,10 @@ pub fn execute(
     repository: &Path,
     scenario: BenchmarkScenario,
     arm: Option<ArcadeVelocityScrollArm>,
+    route: ArcadeVelocityScrollRoute,
     reporter: &mut Reporter<'_>,
 ) -> AgentResult<Outcome> {
-    require_clean_installed_commit(repository, scenario, arm, reporter)
+    require_clean_installed_commit(repository, scenario, arm, route, reporter)
 }
 
 trait BenchmarkDevice {
@@ -25,6 +29,11 @@ trait BenchmarkDevice {
     fn verify_health(&mut self) -> AgentResult<()>;
     fn read_development_manifest(&mut self) -> AgentResult<String>;
     fn profile(&mut self, profile: BenchmarkProfile, output_dir: PathBuf) -> AgentResult<String>;
+    fn profile_arcade_velocity_scroll(
+        &mut self,
+        spec: ArcadeVelocityScrollRunSpec,
+        output_dir: PathBuf,
+    ) -> AgentResult<String>;
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -198,18 +207,37 @@ impl BenchmarkDevice for DeviceClient {
             BenchmarkProfile::Streamline => device.profile_streamline(&output_dir),
         })
     }
+
+    fn profile_arcade_velocity_scroll(
+        &mut self,
+        spec: ArcadeVelocityScrollRunSpec,
+        output_dir: PathBuf,
+    ) -> AgentResult<String> {
+        self.mutate(|device| device.profile_arcade_velocity_scroll_run(&output_dir, spec))
+    }
 }
 
 fn require_clean_installed_commit(
     repository: &Path,
     scenario: BenchmarkScenario,
     arm: Option<ArcadeVelocityScrollArm>,
+    route: ArcadeVelocityScrollRoute,
     reporter: &mut Reporter<'_>,
 ) -> AgentResult<Outcome> {
     if arm.is_some() && scenario != BenchmarkScenario::ArcadeVelocityScrollAttribution {
         return Err(
             "benchmark arm is supported only for arcade-velocity-scroll-attribution".into(),
         );
+    }
+    if route != ArcadeVelocityScrollRoute::Active
+        && scenario != BenchmarkScenario::ArcadeVelocityScrollAttribution
+    {
+        return Err(
+            "benchmark route is supported only for arcade-velocity-scroll-attribution".into(),
+        );
+    }
+    if route != ArcadeVelocityScrollRoute::Active && arm.is_none() {
+        return Err("an explicit Arcade benchmark route requires one profiler arm".into());
     }
     let head = crate::git::value(repository, &["rev-parse", "HEAD"])?;
     if !crate::git::value(repository, &["status", "--porcelain"])?.is_empty() {
@@ -349,9 +377,13 @@ fn require_clean_installed_commit(
             execute_arcade_velocity_scroll(&mut device, manifest, output_dir, reporter)
         }
         BenchmarkScenario::ArcadeVelocityScrollAttribution => match arm {
-            Some(arm) => {
-                execute_arcade_velocity_scroll_arm(&mut device, manifest, output_dir, reporter, arm)
-            }
+            Some(arm) => execute_arcade_velocity_scroll_arm(
+                &mut device,
+                manifest,
+                output_dir,
+                reporter,
+                ArcadeVelocityScrollRunSpec::new(arm, route),
+            ),
             None => execute_arcade_velocity_scroll_attribution(
                 &mut device,
                 manifest,
@@ -1162,8 +1194,9 @@ fn execute_arcade_velocity_scroll_arm(
     manifest: String,
     output_dir: PathBuf,
     reporter: &mut Reporter<'_>,
-    arm: ArcadeVelocityScrollArm,
+    spec: ArcadeVelocityScrollRunSpec,
 ) -> AgentResult<Outcome> {
+    let arm = spec.arm;
     let (profile, schema) = match arm {
         ArcadeVelocityScrollArm::Control => (
             BenchmarkProfile::ArcadeVelocityScroll,
@@ -1198,12 +1231,14 @@ fn execute_arcade_velocity_scroll_arm(
         EventKind::Progress,
         "arcade-velocity-scroll-attribution",
         &format!(
-            "collecting only the fixed {} arm without changing the active route",
-            arm.label()
+            "collecting only the fixed {} arm on the {} route",
+            arm.label(),
+            spec.route.label(),
         ),
         Some(25),
     )?;
-    let detail = device.profile(profile, output_dir.clone())?;
+    let _legacy_profile_dispatch = profile;
+    let detail = device.profile_arcade_velocity_scroll(spec, output_dir.clone())?;
     let summary: Value = serde_json::from_str(&detail).map_err(|error| error.to_string())?;
     let schema_valid = summary.get("schema").and_then(Value::as_str) == Some(schema);
     let artifact_valid = match arm {
@@ -1229,6 +1264,7 @@ fn execute_arcade_velocity_scroll_arm(
         &serde_json::to_string(&json!({
             "installed_manifest": manifest,
             "selected_arm": arm.label(),
+            "requested_route": spec.route.label(),
             "summary": summary,
             "output_dir": output_dir,
             "performance_authority": if matches!(

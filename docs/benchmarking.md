@@ -62,15 +62,23 @@ Supported scenarios:
 - `search`
 - `streamline`
 
-The Arcade velocity-scroll profiling scenarios preserve the active display
-route, including CRT 240p. The unprofiled `arcade-velocity-scroll` run owns
+The Arcade velocity-scroll profiling scenarios default to the active display
+route. A typed arm also accepts `--route active`, `--route hdmi-landscape`,
+`--route hdmi-portrait-left`, `--route crt240-portrait-left`, or
+`--route crt288-portrait-left`. Explicit routes select the display
+transactionally and apply orientation only to the benchmark launcher's
+in-memory state. On success or failure the runner restores and verifies the
+exact original display mode, `MiSTer.ini`, settings file, launcher environment,
+boot identity, installed manifest, and launcher health. Every artifact records
+the requested route plus the effective display mode and orientation. The
+unprofiled `arcade-velocity-scroll` run owns
 physical cadence and repeated-vblank qualification. The single
 `arcade-velocity-scroll-attribution` scenario runs the control, pprof, PMU,
 and Streamline arms sequentially and writes one correlation manifest. A typed
 optional arm (`control`, `control-smoke`, `turbo`, `pprof`, `pmu`,
 `pmu-smoke`, or `streamline`) runs
 only that fixed arm, for example `scripts/agent benchmark
-arcade-velocity-scroll-attribution pprof`. Every arm starts on Home with Arcade
+arcade-velocity-scroll-attribution pprof --route hdmi-portrait-left`. Every arm starts on Home with Arcade
 preselected and enters it with one confirmation; the former Settings-to-Home
 navigation and focus-panning preamble is not part of the workload. The
 unprofiled control, turbo, and profiler arms use a fixed 40-second hold;
@@ -80,7 +88,6 @@ speed; it does not use the synthetic benchmark-only bounce helper.
 The `control-smoke` and `pmu-smoke` arms use the same eight-second workload for
 directional optimization checks; only the full unprofiled `control` arm owns
 cadence qualification.
-None of these scenarios changes the display mode or restores a different mode.
 
 `modal-input` restarts the coherently installed Dev launcher with a one-shot,
 fixed test request and a catalog copied below

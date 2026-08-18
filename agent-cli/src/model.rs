@@ -113,6 +113,103 @@ pub enum ArcadeVelocityScrollArm {
     Streamline,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, clap::ValueEnum)]
+pub enum ArcadeVelocityScrollRoute {
+    #[default]
+    Active,
+    HdmiLandscape,
+    HdmiPortraitLeft,
+    Crt240PortraitLeft,
+    Crt288PortraitLeft,
+}
+
+impl ArcadeVelocityScrollRoute {
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Active => "active",
+            Self::HdmiLandscape => "hdmi-landscape",
+            Self::HdmiPortraitLeft => "hdmi-portrait-left",
+            Self::Crt240PortraitLeft => "crt240-portrait-left",
+            Self::Crt288PortraitLeft => "crt288-portrait-left",
+        }
+    }
+
+    #[must_use]
+    pub const fn display_mode(self) -> Option<&'static str> {
+        match self {
+            Self::Active => None,
+            Self::HdmiLandscape | Self::HdmiPortraitLeft => Some("hdmi-1280x720p60"),
+            Self::Crt240PortraitLeft => Some("crt-240p60"),
+            Self::Crt288PortraitLeft => Some("crt-288p50"),
+        }
+    }
+
+    #[must_use]
+    pub const fn orientation(self) -> Option<&'static str> {
+        match self {
+            Self::Active => None,
+            Self::HdmiLandscape => Some("normal"),
+            Self::HdmiPortraitLeft | Self::Crt240PortraitLeft | Self::Crt288PortraitLeft => {
+                Some("monitor-counterclockwise")
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ArcadeVelocityScrollProfiler {
+    None,
+    Pprof,
+    Pmu,
+    Streamline,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ArcadeVelocityScrollInputMode {
+    Held,
+    Turbo,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ArcadeVelocityScrollRunSpec {
+    pub arm: ArcadeVelocityScrollArm,
+    pub route: ArcadeVelocityScrollRoute,
+    pub duration_ms: u64,
+    pub telemetry_secs: u64,
+    pub profiler: ArcadeVelocityScrollProfiler,
+    pub input_mode: ArcadeVelocityScrollInputMode,
+}
+
+impl ArcadeVelocityScrollRunSpec {
+    #[must_use]
+    pub const fn new(arm: ArcadeVelocityScrollArm, route: ArcadeVelocityScrollRoute) -> Self {
+        let smoke = matches!(
+            arm,
+            ArcadeVelocityScrollArm::ControlSmoke | ArcadeVelocityScrollArm::PmuSmoke
+        );
+        Self {
+            arm,
+            route,
+            duration_ms: if smoke { 8_000 } else { 40_000 },
+            telemetry_secs: if smoke { 18 } else { 55 },
+            profiler: match arm {
+                ArcadeVelocityScrollArm::Pprof => ArcadeVelocityScrollProfiler::Pprof,
+                ArcadeVelocityScrollArm::Pmu | ArcadeVelocityScrollArm::PmuSmoke => {
+                    ArcadeVelocityScrollProfiler::Pmu
+                }
+                ArcadeVelocityScrollArm::Streamline => ArcadeVelocityScrollProfiler::Streamline,
+                _ => ArcadeVelocityScrollProfiler::None,
+            },
+            input_mode: if matches!(arm, ArcadeVelocityScrollArm::Turbo) {
+                ArcadeVelocityScrollInputMode::Turbo
+            } else {
+                ArcadeVelocityScrollInputMode::Held
+            },
+        }
+    }
+}
+
 impl ArcadeVelocityScrollArm {
     #[must_use]
     pub const fn label(self) -> &'static str {

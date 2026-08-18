@@ -108,10 +108,13 @@ fn launcher_env_flag(name: &str) -> bool {
 
 fn launcher_startup_orientation(
     persisted: ScreenOrientation,
+    benchmark_override: Option<ScreenOrientation>,
     orientation_benchmark: bool,
     settings_navigation_benchmark: bool,
 ) -> ScreenOrientation {
-    if orientation_benchmark {
+    if let Some(orientation) = benchmark_override {
+        orientation
+    } else if orientation_benchmark {
         ScreenOrientation::Normal
     } else if settings_navigation_benchmark {
         ScreenOrientation::Normal
@@ -536,6 +539,9 @@ pub fn run_ui(
                 launcher_env_flag("MISTER_SETTINGS_NAVIGATION_BENCHMARK");
             let launcher_orientation = launcher_startup_orientation(
                 launcher_settings.screen_orientation,
+                std::env::var("MISTER_ARCADE_BENCHMARK_ORIENTATION")
+                    .ok()
+                    .and_then(|value| ScreenOrientation::parse(&value)),
                 launcher_env_flag("MISTER_ORIENTATION_TRANSITIONS_BENCHMARK"),
                 settings_navigation_benchmark,
             );

@@ -8,7 +8,7 @@ use crate::compile_time::CompileTimeCommand;
 use crate::dependencies::DependenciesCommand;
 use crate::fpga::FpgaCommand;
 use crate::live_particles::LiveParticlesCommand;
-use crate::model::{ArcadeVelocityScrollArm, BenchmarkScenario, Scope};
+use crate::model::{ArcadeVelocityScrollArm, ArcadeVelocityScrollRoute, BenchmarkScenario, Scope};
 use crate::startup_particles::{SceneLabCommand, StartupParticlesCommand};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
@@ -69,6 +69,8 @@ pub enum Command {
         scenario: BenchmarkScenario,
         #[arg(value_enum)]
         arm: Option<ArcadeVelocityScrollArm>,
+        #[arg(long, value_enum, default_value_t)]
+        route: ArcadeVelocityScrollRoute,
     },
     Capture {
         #[command(subcommand)]
@@ -914,6 +916,36 @@ mod tests {
                 .is_ok()
             );
         }
+        for route in [
+            "active",
+            "hdmi-landscape",
+            "hdmi-portrait-left",
+            "crt240-portrait-left",
+            "crt288-portrait-left",
+        ] {
+            assert!(
+                Cli::try_parse_from([
+                    "agent-cli",
+                    "benchmark",
+                    "arcade-velocity-scroll-attribution",
+                    "control",
+                    "--route",
+                    route,
+                ])
+                .is_ok()
+            );
+        }
+        assert!(
+            Cli::try_parse_from([
+                "agent-cli",
+                "benchmark",
+                "arcade-velocity-scroll-attribution",
+                "control",
+                "--route",
+                "unknown",
+            ])
+            .is_err()
+        );
         assert!(
             Cli::try_parse_from([
                 "agent-cli",
