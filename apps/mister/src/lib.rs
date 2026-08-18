@@ -62,6 +62,7 @@ pub mod controller_db;
 #[doc(hidden)]
 pub mod cpu_profile;
 pub mod crash_report;
+pub mod crt_arcade_overlay;
 #[cfg(any(feature = "ui", feature = "ui-preview"))]
 pub mod crt_backdrop;
 pub mod diagnostic_identity;

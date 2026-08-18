@@ -3883,6 +3883,181 @@ mod tests {
         }
     }
 
+    fn crt_overlay_selection(renderer: &ArcadeListRenderer) -> Rgb565Rect {
+        let selection_y = renderer.selection_y();
+        Rgb565Rect {
+            x0: renderer.geometry.x,
+            y0: renderer.geometry.y + selection_y,
+            x1: renderer.geometry.x + renderer.width,
+            y1: renderer.geometry.y + selection_y + renderer.style.row_height.max(1) as usize,
+        }
+    }
+
+    fn crt_overlay_foreground_spans(renderer: &ArcadeListRenderer) -> Vec<Rgb565Rect> {
+        let selection_y = renderer.selection_y();
+        let selection_bottom = selection_y + renderer.style.row_height.max(1) as usize;
+        let mut spans = Vec::new();
+        for viewport_y in 0..renderer.visible_height {
+            if viewport_y >= selection_y && viewport_y < selection_bottom {
+                continue;
+            }
+            let source_y = (renderer.surface_y + viewport_y) % renderer.visible_height;
+            for &(x0, x1) in &renderer.surface_nonfill_runs[source_y] {
+                spans.push(Rgb565Rect {
+                    x0: renderer.geometry.x + x0,
+                    y0: renderer.geometry.y + viewport_y,
+                    x1: renderer.geometry.x + x1,
+                    y1: renderer.geometry.y + viewport_y + 1,
+                });
+            }
+        }
+        spans
+    }
+
+    fn restore_crt_overlay_rects(
+        destination: &mut [Rgb565Pixel],
+        backdrop: &[Rgb565Pixel],
+        output: Rgb565OutputLayout,
+        rects: impl IntoIterator<Item = Rgb565Rect>,
+    ) {
+        for rect in rects {
+            for y in rect.y0..rect.y1 {
+                for x in rect.x0..rect.x1 {
+                    let offset = output.physical_offset(x, y);
+                    destination[offset] = backdrop[offset];
+                }
+            }
+        }
+    }
+
+    fn crt_overlay_key(
+        renderer: &ArcadeListRenderer,
+        output: Rgb565OutputLayout,
+        style_revision: u64,
+    ) -> crate::crt_arcade_overlay::CrtArcadeOverlayKey {
+        crate::crt_arcade_overlay::CrtArcadeOverlayKey {
+            backdrop_revision: 7,
+            layout: output,
+            viewport: Rgb565Rect {
+                x0: renderer.geometry.x,
+                y0: renderer.geometry.y,
+                x1: renderer.geometry.x + renderer.width,
+                y1: renderer.geometry.y + renderer.visible_height,
+            },
+            style_revision,
+            catalog_generation: 11,
+            ring_origin: renderer.surface_y,
+            selection: crt_overlay_selection(renderer),
+        }
+    }
+
+    #[test]
+    fn retained_crt_overlay_plan_matches_full_compositor_across_routes_and_wraps() {
+        let mut games = games("arcade", 48);
+        games[1].is_new = true;
+        games[14].is_new = true;
+        let favourite = games[2].mra_path.to_string();
+        for display in [native_crt_240_display(), native_crt_288_display()] {
+            let metrics = CrtUiMetrics::for_display(&display);
+            for orientation in [
+                crate::ui_display::ScreenOrientation::MonitorClockwise,
+                crate::ui_display::ScreenOrientation::MonitorCounterclockwise,
+            ] {
+                let layout = UiLayoutGeometry::for_display(&display, orientation);
+                let arcade = CrtArcadeLayout::for_layout(layout, metrics, false);
+                let output = layout.output_layout();
+                let backdrop = (0..output.len())
+                    .map(|index| Rgb565Pixel((index as u16).rotate_left(5) ^ 0x6b4d))
+                    .collect::<Vec<_>>();
+                let mut renderer = ArcadeListRenderer::new_for_crt_display(metrics, &display);
+                renderer.set_crt_portrait_rows(true);
+                renderer
+                    .set_geometry_for_visible_height(arcade.list_geometry(), arcade.list.height);
+                renderer.set_favourite_launch_refs([favourite.as_str()]);
+                let row_height = renderer.style.row_height.max(1) as usize;
+                renderer.draw(ArcadeGameView::contiguous(&games), 8, 8.0, true);
+                renderer.surface_y = renderer.visible_height - row_height;
+
+                let mut incremental = UiFrameTarget::cached(FramebufferTargetGeometry::new(
+                    output.physical_width(),
+                    output.physical_height(),
+                ));
+                incremental.cached_565_mut().copy_from_slice(&backdrop);
+                assert!(
+                    renderer
+                        .compose_layer_over_backdrop_to_oriented_cached_with_state(
+                            &mut incremental,
+                            &backdrop,
+                            output,
+                            false,
+                            true,
+                        )
+                        .composed
+                );
+
+                let style_revision =
+                    u64::from(metrics.game_row_height as u16) | ((display.output_h() as u64) << 16);
+                let first_key = crt_overlay_key(&renderer, output, style_revision);
+                let first_spans = crt_overlay_foreground_spans(&renderer);
+                let mut retained = crate::crt_arcade_overlay::CrtArcadeOverlayState::new();
+                retained.commit(first_key, &first_spans);
+
+                let update = renderer
+                    .draw(ArcadeGameView::contiguous(&games), 9, 9.0, false)
+                    .expect("one-row CRT scroll");
+                let ArcadeListUpdate::Scroll { delta_y, .. } = update else {
+                    panic!("expected a retained CRT scroll update");
+                };
+                assert_eq!(renderer.surface_y, 0, "ring origin did not wrap");
+                let next_key = crt_overlay_key(&renderer, output, style_revision);
+                let plan = retained.plan(
+                    next_key,
+                    crate::crt_arcade_overlay::CrtArcadeOverlayUpdate::Scroll { delta_y },
+                );
+                assert!(!plan.full_rebuild);
+
+                let mut restore = plan.stale_glyph_spans.clone();
+                restore.extend_from_slice(&plan.exposed_stripes);
+                restore.extend(plan.selection_union);
+                restore_crt_overlay_rects(incremental.cached_565_mut(), &backdrop, output, restore);
+                assert!(
+                    renderer
+                        .compose_layer_over_backdrop_to_oriented_cached_with_state(
+                            &mut incremental,
+                            &backdrop,
+                            output,
+                            false,
+                            true,
+                        )
+                        .composed
+                );
+
+                let mut full = UiFrameTarget::cached(FramebufferTargetGeometry::new(
+                    output.physical_width(),
+                    output.physical_height(),
+                ));
+                full.cached_565_mut().copy_from_slice(&backdrop);
+                assert!(
+                    renderer
+                        .compose_layer_over_backdrop_to_oriented_cached_with_state(
+                            &mut full, &backdrop, output, false, false,
+                        )
+                        .composed
+                );
+                assert_eq!(
+                    incremental.cached_565(),
+                    full.cached_565(),
+                    "CRT retained parity failed for route={:?}, orientation={orientation:?}",
+                    display.output_route()
+                );
+
+                let next_spans = crt_overlay_foreground_spans(&renderer);
+                retained.commit(next_key, &next_spans);
+                assert_eq!(retained.key(), Some(next_key));
+            }
+        }
+    }
+
     #[test]
     fn rotated_crt_backdrop_compositor_matches_scalar_reference_without_allocating() {
         let display = native_crt_240_display();
