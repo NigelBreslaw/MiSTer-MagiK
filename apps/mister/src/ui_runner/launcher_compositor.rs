@@ -643,6 +643,7 @@ pub(super) struct LauncherPresentResult {
     pub(super) hidden_arcade_compose_us: u128,
     pub(super) direct_preview_present_us: u128,
     pub(super) arcade_list_present_us: u128,
+    pub(super) arcade_copy_trace: crate::arcade_list_renderer::PersistentArcadeCopyTrace,
     pub(super) main_present_backend: LauncherPresentBackend,
     pub(super) main_present_status: LauncherPresentStatus,
     pub(super) main_present_buffer: u8,

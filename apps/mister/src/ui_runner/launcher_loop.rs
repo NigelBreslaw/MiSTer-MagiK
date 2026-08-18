@@ -10359,6 +10359,8 @@ pub(super) fn run_launcher_loop(
                     update,
                     catalog_version as u64,
                 );
+                custom_draw_trace.persistent_arcade_composition =
+                    arcade_list_renderer.persistent_composition_trace();
                 portrait_arcade_list_bytes = composition.bytes as u64;
                 portrait_arcade_list_pixels = composition.bytes.saturating_div(2) as u64;
                 direct_arcade_update = Some(physical_update);
@@ -10686,6 +10688,7 @@ pub(super) fn run_launcher_loop(
             presentation.main_present_hidden_full_copy,
             presentation.main_present_buffer,
             presentation.main_present_copy_path,
+            presentation.arcade_copy_trace,
         );
         scheduler_phase =
             launcher_response_trace.record_scheduler_interval("raster-and-post", scheduler_phase);
@@ -10975,6 +10978,9 @@ pub(super) fn run_launcher_loop(
                 .custom_draw_trace
                 .portrait_arcade_list_pixels,
             presented_frame.custom_draw_trace.portrait_arcade_list_bytes,
+            presented_frame
+                .custom_draw_trace
+                .persistent_arcade_composition,
             presented_frame
                 .custom_draw_trace
                 .portrait_preview_rotation_pixels,

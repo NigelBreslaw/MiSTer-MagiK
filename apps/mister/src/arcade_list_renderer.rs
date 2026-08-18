@@ -501,6 +501,9 @@ pub struct ArcadeListRenderer {
     oriented_viewport_layout: Option<Rgb565OutputLayout>,
     oriented_viewport_rect: DirtyRect,
     persistent_oriented_layer: PersistentOrientedArcadeLayer,
+    last_update_reason: ArcadeListUpdateReason,
+    persistent_composition_trace: PersistentArcadeCompositionTrace,
+    persistent_copy_trace: PersistentArcadeCopyTrace,
 }
 
 /// Style identity carried by the future persistent physical Arcade layer.
@@ -518,6 +521,149 @@ pub struct PersistentOrientedArcadeLayerKey {
     pub style: PersistentArcadeLayerStyle,
     pub catalog_generation: u64,
     pub ring_origin: usize,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum ArcadeListUpdateKind {
+    #[default]
+    None,
+    Full,
+    Scroll,
+}
+
+impl ArcadeListUpdateKind {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Full => "full",
+            Self::Scroll => "scroll",
+        }
+    }
+
+    fn from_update(update: &ArcadeListUpdate) -> Self {
+        match update {
+            ArcadeListUpdate::Full(_) => Self::Full,
+            ArcadeListUpdate::Scroll { .. } => Self::Scroll,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum ArcadeListUpdateReason {
+    #[default]
+    None,
+    Forced,
+    Initial,
+    VisibleContentChanged,
+    StationaryContentChanged,
+    LargeDelta,
+    ScrollDelta,
+}
+
+impl ArcadeListUpdateReason {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Forced => "forced",
+            Self::Initial => "initial",
+            Self::VisibleContentChanged => "visible-content-changed",
+            Self::StationaryContentChanged => "stationary-content-changed",
+            Self::LargeDelta => "large-delta",
+            Self::ScrollDelta => "scroll-delta",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum PersistentArcadeRebuildReason {
+    #[default]
+    None,
+    Initial,
+    Geometry,
+    VisibleHeight,
+    Output,
+    Style,
+    CatalogGeneration,
+    BufferSize,
+    Invalidated,
+    RequestedFull,
+    LayoutChanged,
+    CrtStyle,
+    MissingSelectionCapture,
+    ZeroDelta,
+    LargeDelta,
+    SelectionRestoreFailed,
+    ShiftFailed,
+}
+
+impl PersistentArcadeRebuildReason {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Initial => "initial",
+            Self::Geometry => "geometry",
+            Self::VisibleHeight => "visible-height",
+            Self::Output => "output",
+            Self::Style => "style",
+            Self::CatalogGeneration => "catalog-generation",
+            Self::BufferSize => "buffer-size",
+            Self::Invalidated => "invalidated",
+            Self::RequestedFull => "requested-full",
+            Self::LayoutChanged => "layout-changed",
+            Self::CrtStyle => "crt-style",
+            Self::MissingSelectionCapture => "missing-selection-capture",
+            Self::ZeroDelta => "zero-delta",
+            Self::LargeDelta => "large-delta",
+            Self::SelectionRestoreFailed => "selection-restore-failed",
+            Self::ShiftFailed => "shift-failed",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct PersistentArcadeCompositionTrace {
+    pub requested_update: ArcadeListUpdateKind,
+    pub requested_reason: ArcadeListUpdateReason,
+    pub effective_update: ArcadeListUpdateKind,
+    pub rebuild_reason: PersistentArcadeRebuildReason,
+    pub elapsed_us: u64,
+    pub written_pixels: u64,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum PersistentArcadeCopyDecision {
+    #[default]
+    None,
+    SparseDiff,
+    MirrorRecovery,
+    FullCopy,
+    ScrollRecovery,
+}
+
+impl PersistentArcadeCopyDecision {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::SparseDiff => "sparse-diff",
+            Self::MirrorRecovery => "mirror-recovery",
+            Self::FullCopy => "full-copy",
+            Self::ScrollRecovery => "scroll-recovery",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct PersistentArcadeCopyTrace {
+    pub decision: PersistentArcadeCopyDecision,
+    pub diff_safe: bool,
+    pub mirror_valid: bool,
+    pub compare_us: u64,
+    pub write_us: u64,
+    pub mirror_refresh_us: u64,
+    pub compared_pixels: u64,
+    pub written_pixels: u64,
+    pub mirror_refresh_pixels: u64,
+    pub changed_rows: u32,
 }
 
 /// Inactive physical Arcade content layer used by the incremental presenter.
@@ -807,6 +953,9 @@ impl ArcadeListRenderer {
                 y1: 0,
             },
             persistent_oriented_layer: PersistentOrientedArcadeLayer::new(),
+            last_update_reason: ArcadeListUpdateReason::None,
+            persistent_composition_trace: PersistentArcadeCompositionTrace::default(),
+            persistent_copy_trace: PersistentArcadeCopyTrace::default(),
         }
     }
 
@@ -935,6 +1084,7 @@ impl ArcadeListRenderer {
     ) -> Option<ArcadeListUpdate> {
         self.previous_selection_normal_rect = None;
         self.last_filter_draw = None;
+        self.last_update_reason = ArcadeListUpdateReason::None;
         let visual_px = arcade_visual_px(
             visual_index,
             self.style.row_height,
@@ -966,6 +1116,7 @@ impl ArcadeListRenderer {
             return None;
         }
         if force && self.last_draw.as_ref() == Some(&key) {
+            self.last_update_reason = ArcadeListUpdateReason::Forced;
             return Some(ArcadeListUpdate::Full(self.dirty_rect()));
         }
         let content_delta = previous
@@ -1007,17 +1158,26 @@ impl ArcadeListRenderer {
             self.draw_content_band(games, visual_px, 0, d);
         }
         if force {
+            self.last_update_reason = ArcadeListUpdateReason::Forced;
             return Some(ArcadeListUpdate::Full(self.dirty_rect()));
         }
         if previous.is_none() {
+            self.last_update_reason = ArcadeListUpdateReason::Initial;
             return Some(ArcadeListUpdate::Full(self.dirty_rect()));
         }
         if !can_reuse_scrolled_surface {
+            self.last_update_reason = ArcadeListUpdateReason::VisibleContentChanged;
             return Some(ArcadeListUpdate::Full(self.dirty_rect()));
         }
-        if content_delta == 0 || content_delta.unsigned_abs() as usize >= self.visible_height {
+        if content_delta == 0 {
+            self.last_update_reason = ArcadeListUpdateReason::StationaryContentChanged;
             return Some(ArcadeListUpdate::Full(self.dirty_rect()));
         }
+        if content_delta.unsigned_abs() as usize >= self.visible_height {
+            self.last_update_reason = ArcadeListUpdateReason::LargeDelta;
+            return Some(ArcadeListUpdate::Full(self.dirty_rect()));
+        }
+        self.last_update_reason = ArcadeListUpdateReason::ScrollDelta;
         Some(ArcadeListUpdate::Scroll {
             delta_x: 0,
             delta_y: content_delta as isize,
@@ -1034,6 +1194,7 @@ impl ArcadeListRenderer {
     ) -> Option<ArcadeListUpdate> {
         self.previous_selection_normal_rect = None;
         self.last_draw = None;
+        self.last_update_reason = ArcadeListUpdateReason::None;
         let visual_px = arcade_visual_px(
             visual_index,
             self.style.row_height,
@@ -1056,6 +1217,7 @@ impl ArcadeListRenderer {
         let previous = self.last_filter_draw;
         self.last_filter_draw = Some(key);
         if force && previous.as_ref() == Some(&key) {
+            self.last_update_reason = ArcadeListUpdateReason::Forced;
             return Some(ArcadeListUpdate::Full(self.dirty_rect()));
         }
         let content_delta = previous
@@ -1090,12 +1252,27 @@ impl ArcadeListRenderer {
             self.surface_y = (self.surface_y + self.visible_height - d) % self.visible_height;
             self.draw_filter_content_band(items, visual_px, 0, d);
         }
-        if force || previous.is_none() || !can_reuse_scrolled_surface {
+        if force {
+            self.last_update_reason = ArcadeListUpdateReason::Forced;
             return Some(ArcadeListUpdate::Full(self.dirty_rect()));
         }
-        if content_delta == 0 || content_delta.unsigned_abs() as usize >= self.visible_height {
+        if previous.is_none() {
+            self.last_update_reason = ArcadeListUpdateReason::Initial;
             return Some(ArcadeListUpdate::Full(self.dirty_rect()));
         }
+        if !can_reuse_scrolled_surface {
+            self.last_update_reason = ArcadeListUpdateReason::VisibleContentChanged;
+            return Some(ArcadeListUpdate::Full(self.dirty_rect()));
+        }
+        if content_delta == 0 {
+            self.last_update_reason = ArcadeListUpdateReason::StationaryContentChanged;
+            return Some(ArcadeListUpdate::Full(self.dirty_rect()));
+        }
+        if content_delta.unsigned_abs() as usize >= self.visible_height {
+            self.last_update_reason = ArcadeListUpdateReason::LargeDelta;
+            return Some(ArcadeListUpdate::Full(self.dirty_rect()));
+        }
+        self.last_update_reason = ArcadeListUpdateReason::ScrollDelta;
         Some(ArcadeListUpdate::Scroll {
             delta_x: 0,
             delta_y: content_delta as isize,
@@ -1475,7 +1652,7 @@ impl ArcadeListRenderer {
         pixels: &mut [Rgb565Pixel],
         output_layout: Rgb565OutputLayout,
         redraw_selection_frame: bool,
-    ) {
+    ) -> u64 {
         self.compose_viewport_band_to_oriented_cached(
             pixels,
             output_layout,
@@ -1486,6 +1663,11 @@ impl ArcadeListRenderer {
             self.compose_selection_frame_to_oriented_cached(pixels, output_layout);
         }
         self.oriented_viewport_layout = Some(output_layout);
+        (self.width.saturating_mul(self.visible_height) as u64).saturating_add(
+            redraw_selection_frame
+                .then(|| self.selection_frame_write_pixels())
+                .unwrap_or(0),
+        )
     }
 
     pub fn compose_layer_update_to_oriented_cached(
@@ -1495,7 +1677,7 @@ impl ArcadeListRenderer {
         update: ArcadeListUpdate,
         redraw_selection_frame: bool,
     ) {
-        self.compose_layer_update_to_oriented_pixels(
+        let _ = self.compose_layer_update_to_oriented_pixels(
             target.cached_565_mut(),
             output_layout,
             update,
@@ -1509,31 +1691,60 @@ impl ArcadeListRenderer {
         output_layout: Rgb565OutputLayout,
         update: ArcadeListUpdate,
         redraw_selection_frame: bool,
-    ) {
+    ) -> (ArcadeListUpdateKind, PersistentArcadeRebuildReason, u64) {
         let ArcadeListUpdate::Scroll { delta_y, .. } = update else {
-            self.compose_layer_to_oriented_pixels(pixels, output_layout, redraw_selection_frame);
-            return;
+            let written = self.compose_layer_to_oriented_pixels(
+                pixels,
+                output_layout,
+                redraw_selection_frame,
+            );
+            return (
+                ArcadeListUpdateKind::Full,
+                PersistentArcadeRebuildReason::RequestedFull,
+                written,
+            );
         };
         let (dx, dy) = output_layout.logical_delta_to_physical(0, delta_y);
         let Some(key) = self.oriented_viewport_layout else {
-            self.compose_layer_to_oriented_pixels(pixels, output_layout, true);
-            return;
+            let written = self.compose_layer_to_oriented_pixels(pixels, output_layout, true);
+            return (
+                ArcadeListUpdateKind::Full,
+                PersistentArcadeRebuildReason::LayoutChanged,
+                written,
+            );
         };
         let selection_requires_normalization = arcade_selection_inversion_enabled();
-        if key != output_layout
-            || self.style.crt_palette
-            || (selection_requires_normalization && self.previous_selection_normal_rect.is_none())
-            || delta_y == 0
-            || delta_y.unsigned_abs() as usize >= self.visible_height
+        let fallback_reason = if key != output_layout {
+            Some(PersistentArcadeRebuildReason::LayoutChanged)
+        } else if self.style.crt_palette {
+            Some(PersistentArcadeRebuildReason::CrtStyle)
+        } else if selection_requires_normalization && self.previous_selection_normal_rect.is_none()
         {
-            self.compose_layer_to_oriented_pixels(pixels, output_layout, true);
-            return;
+            Some(PersistentArcadeRebuildReason::MissingSelectionCapture)
+        } else if delta_y == 0 {
+            Some(PersistentArcadeRebuildReason::ZeroDelta)
+        } else if delta_y.unsigned_abs() as usize >= self.visible_height {
+            Some(PersistentArcadeRebuildReason::LargeDelta)
+        } else {
+            None
+        };
+        if let Some(reason) = fallback_reason {
+            let written = self.compose_layer_to_oriented_pixels(pixels, output_layout, true);
+            return (ArcadeListUpdateKind::Full, reason, written);
         }
+        let restored_pixels = self
+            .previous_selection_normal_rect
+            .map(|rect| rect.width().saturating_mul(rect.rows() as usize) as u64)
+            .unwrap_or(0);
         if selection_requires_normalization
             && !self.restore_previous_selection_normal_to_oriented(pixels, output_layout)
         {
-            self.compose_layer_to_oriented_pixels(pixels, output_layout, true);
-            return;
+            let written = self.compose_layer_to_oriented_pixels(pixels, output_layout, true);
+            return (
+                ArcadeListUpdateKind::Full,
+                PersistentArcadeRebuildReason::SelectionRestoreFailed,
+                written,
+            );
         }
         let logical = mister_magik_framebuffer_scenes::Rgb565Rect {
             x0: self.geometry.x,
@@ -1550,8 +1761,12 @@ impl ArcadeListRenderer {
             dy,
             self.style.background_565,
         ) {
-            self.compose_layer_to_oriented_pixels(pixels, output_layout, true);
-            return;
+            let written = self.compose_layer_to_oriented_pixels(pixels, output_layout, true);
+            return (
+                ArcadeListUpdateKind::Full,
+                PersistentArcadeRebuildReason::ShiftFailed,
+                written,
+            );
         }
         let exposed = delta_y.unsigned_abs() as usize;
         let exposed_y = if delta_y < 0 {
@@ -1570,6 +1785,38 @@ impl ArcadeListRenderer {
         self.compose_selection_frame_to_oriented_cached(pixels, output_layout);
         self.previous_selection_normal_rect = None;
         self.oriented_viewport_layout = Some(output_layout);
+        let shifted_pixels = physical
+            .x1
+            .saturating_sub(physical.x0)
+            .saturating_mul(physical.y1.saturating_sub(physical.y0))
+            as u64;
+        let exposed_pixels = self.width.saturating_mul(exposed) as u64;
+        let selection_pixels =
+            self.width
+                .saturating_mul(self.style.row_height.max(1) as usize) as u64;
+        (
+            ArcadeListUpdateKind::Scroll,
+            PersistentArcadeRebuildReason::None,
+            restored_pixels
+                .saturating_add(shifted_pixels)
+                .saturating_add(exposed_pixels)
+                .saturating_add(selection_pixels)
+                .saturating_add(self.selection_frame_write_pixels()),
+        )
+    }
+
+    fn selection_frame_write_pixels(&self) -> u64 {
+        let rect = self.selection_rect();
+        let height = rect.y1.saturating_sub(rect.y0).min(ARCADE_LIST_H);
+        self.width
+            .saturating_mul(self.style.selection_frame_y)
+            .saturating_mul(2)
+            .saturating_add(
+                self.style
+                    .selection_frame_x
+                    .saturating_mul(height)
+                    .saturating_mul(2),
+            ) as u64
     }
 
     pub fn compose_persistent_oriented_layer(
@@ -1578,11 +1825,45 @@ impl ArcadeListRenderer {
         update: ArcadeListUpdate,
         catalog_generation: u64,
     ) -> ArcadeListUpdate {
+        let started = Instant::now();
+        let requested_update = ArcadeListUpdateKind::from_update(&update);
+        let requested_reason = self.last_update_reason;
         let mut layer = std::mem::take(&mut self.persistent_oriented_layer);
         let style = if self.style.crt_palette {
             PersistentArcadeLayerStyle::Crt
         } else {
             PersistentArcadeLayerStyle::Hdmi
+        };
+        let next_key = PersistentOrientedArcadeLayerKey {
+            geometry: self.geometry,
+            visible_height: self.visible_height,
+            output: output_layout,
+            style,
+            catalog_generation,
+            ring_origin: self.surface_y,
+        };
+        let ensure_reason = match layer.key() {
+            None => PersistentArcadeRebuildReason::Initial,
+            Some(current) if current.geometry != next_key.geometry => {
+                PersistentArcadeRebuildReason::Geometry
+            }
+            Some(current) if current.visible_height != next_key.visible_height => {
+                PersistentArcadeRebuildReason::VisibleHeight
+            }
+            Some(current) if current.output != next_key.output => {
+                PersistentArcadeRebuildReason::Output
+            }
+            Some(current) if current.style != next_key.style => {
+                PersistentArcadeRebuildReason::Style
+            }
+            Some(current) if current.catalog_generation != next_key.catalog_generation => {
+                PersistentArcadeRebuildReason::CatalogGeneration
+            }
+            Some(_) if layer.content.len() != output_layout.len() => {
+                PersistentArcadeRebuildReason::BufferSize
+            }
+            Some(_) if layer.needs_full_rebuild() => PersistentArcadeRebuildReason::Invalidated,
+            Some(_) => PersistentArcadeRebuildReason::None,
         };
         let changed = layer.ensure(
             self.geometry,
@@ -1597,16 +1878,37 @@ impl ArcadeListRenderer {
         } else {
             update
         };
-        self.compose_layer_update_to_oriented_pixels(
-            layer.content_mut(),
-            output_layout,
-            effective_update,
-            matches!(effective_update, ArcadeListUpdate::Full(_)),
-        );
+        let (effective_composition, composition_reason, written_pixels) = self
+            .compose_layer_update_to_oriented_pixels(
+                layer.content_mut(),
+                output_layout,
+                effective_update,
+                matches!(effective_update, ArcadeListUpdate::Full(_)),
+            );
         layer.set_selection_aperture(self.selection_y(), self.style.row_height.max(1) as usize);
         layer.mark_full_rebuild_complete();
         self.persistent_oriented_layer = layer;
+        self.persistent_composition_trace = PersistentArcadeCompositionTrace {
+            requested_update,
+            requested_reason,
+            effective_update: effective_composition,
+            rebuild_reason: if ensure_reason != PersistentArcadeRebuildReason::None {
+                ensure_reason
+            } else {
+                composition_reason
+            },
+            elapsed_us: started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64,
+            written_pixels,
+        };
         effective_update
+    }
+
+    pub fn persistent_composition_trace(&self) -> PersistentArcadeCompositionTrace {
+        self.persistent_composition_trace
+    }
+
+    pub fn persistent_copy_trace(&self) -> PersistentArcadeCopyTrace {
+        self.persistent_copy_trace
     }
 
     pub fn persistent_oriented_layer_view(&self) -> Option<DirectPreviewView<'_>> {
@@ -1620,6 +1922,10 @@ impl ArcadeListRenderer {
         diff_safe: bool,
         update: ArcadeListUpdate,
     ) -> Result<(u32, usize), String> {
+        self.persistent_copy_trace = PersistentArcadeCopyTrace {
+            diff_safe,
+            ..PersistentArcadeCopyTrace::default()
+        };
         let view = self
             .persistent_oriented_layer_view()
             .ok_or_else(|| "physical Arcade layer is not initialized".to_string())?;
@@ -1635,14 +1941,29 @@ impl ArcadeListRenderer {
                     return self
                         .copy_persistent_oriented_layer_diff_to_hidden(hidden, slot_index, rect);
                 }
+                let write_started = Instant::now();
                 let rows = copy_direct_preview_rect_to_hidden(hidden, view, rect);
+                let write_us = elapsed_us(write_started);
                 if rows != rect.rows() {
                     return Err(format!(
                         "physical Arcade full copy incomplete: expected_rows={} copied_rows={rows}",
                         rect.rows()
                     ));
                 }
+                let mirror_started = Instant::now();
                 self.refresh_persistent_slot_mirror(slot_index, rect)?;
+                let dense_pixels = rect.width().saturating_mul(rect.rows() as usize) as u64;
+                self.persistent_copy_trace = PersistentArcadeCopyTrace {
+                    decision: PersistentArcadeCopyDecision::FullCopy,
+                    diff_safe,
+                    mirror_valid: false,
+                    write_us,
+                    mirror_refresh_us: elapsed_us(mirror_started),
+                    written_pixels: dense_pixels,
+                    mirror_refresh_pixels: dense_pixels,
+                    changed_rows: rows,
+                    ..PersistentArcadeCopyTrace::default()
+                };
                 Ok((
                     rows,
                     rect.width().saturating_mul(rows as usize).saturating_mul(2),
@@ -1661,11 +1982,26 @@ impl ArcadeListRenderer {
                 if diff_safe {
                     self.copy_persistent_oriented_layer_diff_to_hidden(hidden, slot_index, rect)
                 } else {
+                    let write_started = Instant::now();
                     let rows = copy_direct_preview_rect_to_hidden(hidden, view, rect);
+                    let write_us = elapsed_us(write_started);
                     if rows != rect.rows() {
                         return Err("physical Arcade scroll recovery copy incomplete".to_string());
                     }
+                    let mirror_started = Instant::now();
                     self.refresh_persistent_slot_mirror(slot_index, rect)?;
+                    let dense_pixels = rect.width().saturating_mul(rect.rows() as usize) as u64;
+                    self.persistent_copy_trace = PersistentArcadeCopyTrace {
+                        decision: PersistentArcadeCopyDecision::ScrollRecovery,
+                        diff_safe,
+                        mirror_valid: false,
+                        write_us,
+                        mirror_refresh_us: elapsed_us(mirror_started),
+                        written_pixels: dense_pixels,
+                        mirror_refresh_pixels: dense_pixels,
+                        changed_rows: rows,
+                        ..PersistentArcadeCopyTrace::default()
+                    };
                     Ok((
                         rows,
                         rect.width().saturating_mul(rows as usize).saturating_mul(2),
@@ -1722,24 +2058,44 @@ impl ArcadeListRenderer {
             let view = self
                 .persistent_oriented_layer_view()
                 .ok_or_else(|| "physical Arcade layer is not initialized".to_string())?;
+            let write_started = Instant::now();
             let rows = copy_direct_preview_rect_to_hidden(hidden, view, rect);
+            let write_us = elapsed_us(write_started);
             if rows != rect.rows() {
                 return Err("physical Arcade mirror recovery copy incomplete".to_string());
             }
+            let mirror_started = Instant::now();
             self.refresh_persistent_slot_mirror(slot_index, rect)?;
+            self.persistent_copy_trace = PersistentArcadeCopyTrace {
+                decision: PersistentArcadeCopyDecision::MirrorRecovery,
+                diff_safe: true,
+                mirror_valid: false,
+                write_us,
+                mirror_refresh_us: elapsed_us(mirror_started),
+                written_pixels: dense_len as u64,
+                mirror_refresh_pixels: dense_len as u64,
+                changed_rows: rows,
+                ..PersistentArcadeCopyTrace::default()
+            };
             return Ok((rows, dense_len.saturating_mul(2)));
         }
 
         let mut rows = 0_u32;
         let mut bytes = 0_usize;
+        let mut compare_us = 0_u64;
+        let mut write_us = 0_u64;
         for row in 0..rect.rows() as usize {
             let source = (rect.y0 + row) * stride + rect.x0;
             let previous = row * rect.width();
             let current_row = &content[source..source + rect.width()];
             let previous_row = &mirror.pixels[previous..previous + rect.width()];
-            let Some(span) = rgb565_difference_span(current_row, previous_row) else {
+            let compare_started = Instant::now();
+            let span = rgb565_difference_span(current_row, previous_row);
+            compare_us = compare_us.saturating_add(elapsed_us(compare_started));
+            let Some(span) = span else {
                 continue;
             };
+            let write_started = Instant::now();
             hidden
                 .copy_rect_565_strided(
                     rect.x0 + span.start,
@@ -1752,10 +2108,24 @@ impl ArcadeListRenderer {
                     rect.y0 + row,
                 )
                 .map_err(|error| format!("physical Arcade sparse row copy failed: {error}"))?;
+            write_us = write_us.saturating_add(elapsed_us(write_started));
             rows = rows.saturating_add(1);
             bytes = bytes.saturating_add((span.end - span.start).saturating_mul(2));
         }
+        let mirror_started = Instant::now();
         self.refresh_persistent_slot_mirror(slot_index, rect)?;
+        self.persistent_copy_trace = PersistentArcadeCopyTrace {
+            decision: PersistentArcadeCopyDecision::SparseDiff,
+            diff_safe: true,
+            mirror_valid: true,
+            compare_us,
+            write_us,
+            mirror_refresh_us: elapsed_us(mirror_started),
+            compared_pixels: dense_len as u64,
+            written_pixels: bytes.saturating_div(2) as u64,
+            mirror_refresh_pixels: dense_len as u64,
+            changed_rows: rows,
+        };
         Ok((rows, bytes))
     }
 
@@ -3376,6 +3746,10 @@ fn persistent_slot_mirror_index(slot_index: u8) -> Result<usize, String> {
             "physical Arcade slot index must be 1 or 2, got {slot_index}"
         )),
     }
+}
+
+fn elapsed_us(started: Instant) -> u64 {
+    started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64
 }
 
 fn rgb565_difference_span(
@@ -5233,11 +5607,31 @@ mod tests {
                 .draw(ArcadeGameView::contiguous(&games), 12, 12.0, true)
                 .unwrap();
             incremental.compose_persistent_oriented_layer(output, first, 5);
+            let initial_trace = incremental.persistent_composition_trace();
+            assert_eq!(initial_trace.requested_update, ArcadeListUpdateKind::Full);
+            assert_eq!(initial_trace.effective_update, ArcadeListUpdateKind::Full);
+            assert_eq!(
+                initial_trace.rebuild_reason,
+                PersistentArcadeRebuildReason::Initial
+            );
+            assert!(initial_trace.written_pixels > 0);
             let scroll = incremental
                 .draw(ArcadeGameView::contiguous(&games), 13, 13.0, false)
                 .unwrap();
             assert!(matches!(scroll, ArcadeListUpdate::Scroll { .. }));
             incremental.compose_persistent_oriented_layer(output, scroll, 5);
+            let scroll_trace = incremental.persistent_composition_trace();
+            assert_eq!(scroll_trace.requested_update, ArcadeListUpdateKind::Scroll);
+            assert_eq!(
+                scroll_trace.requested_reason,
+                ArcadeListUpdateReason::ScrollDelta
+            );
+            assert_eq!(scroll_trace.effective_update, ArcadeListUpdateKind::Scroll);
+            assert_eq!(
+                scroll_trace.rebuild_reason,
+                PersistentArcadeRebuildReason::None
+            );
+            assert!(scroll_trace.written_pixels > 0);
 
             let mut reference = ArcadeListRenderer::new();
             reference.set_geometry_for_visible_height(geometry, 640);

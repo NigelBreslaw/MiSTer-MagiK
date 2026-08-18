@@ -588,6 +588,8 @@ impl PresentationAdapters<FpgaVblankLatchHiddenPresenter> for LivePresentationAd
         let mut hidden_arcade_compose_us = 0u128;
         let mut direct_preview_rows = 0u32;
         let mut arcade_stats = PresentCopyStats::default();
+        let mut arcade_copy_trace =
+            crate::arcade_list_renderer::PersistentArcadeCopyTrace::default();
         let mut preview_redraw_rect = None;
         let mut arcade_redraw_update = None;
         let layer_target = self.targets.layer_target;
@@ -685,6 +687,7 @@ impl PresentationAdapters<FpgaVblankLatchHiddenPresenter> for LivePresentationAd
                         plan.arcade_redraw_diff_safe,
                         update,
                     )?;
+                    arcade_copy_trace = arcade_list_renderer.persistent_copy_trace();
                     hidden_arcade_compose_us = started.elapsed().as_micros();
                     drop(arcade_pmu);
                 }
@@ -716,6 +719,7 @@ impl PresentationAdapters<FpgaVblankLatchHiddenPresenter> for LivePresentationAd
             hidden_arcade_compose_us,
             direct_preview_rows,
             arcade_stats,
+            arcade_copy_trace,
             preview_redraw_rect,
             arcade_redraw_update,
         );
@@ -781,6 +785,7 @@ fn fb0_present_result(stats: Fb0DirtyPresentStats) -> LauncherPresentResult {
         hidden_arcade_compose_us: 0,
         direct_preview_present_us: stats.direct_preview_present_us,
         arcade_list_present_us: stats.arcade_list_present_us,
+        arcade_copy_trace: crate::arcade_list_renderer::PersistentArcadeCopyTrace::default(),
         main_present_backend: LauncherPresentBackend::Fb0Dirty,
         main_present_status: LauncherPresentStatus::None,
         main_present_buffer: 0,
@@ -823,6 +828,7 @@ fn latch_present_result(
     hidden_arcade_compose_us: u128,
     direct_preview_rows: u32,
     arcade_stats: PresentCopyStats,
+    arcade_copy_trace: crate::arcade_list_renderer::PersistentArcadeCopyTrace,
     preview_redraw_rect: Option<DirtyRect>,
     arcade_redraw_update: Option<ArcadeListUpdate>,
 ) -> LauncherPresentResult {
@@ -854,6 +860,7 @@ fn latch_present_result(
         hidden_arcade_compose_us,
         direct_preview_present_us: hidden_preview_compose_us,
         arcade_list_present_us: hidden_arcade_compose_us,
+        arcade_copy_trace,
         main_present_backend: LauncherPresentBackend::FpgaVblankLatchHidden,
         main_present_status: if stats.set_supported && stats.status_supported {
             LauncherPresentStatus::Ok
@@ -898,6 +905,7 @@ fn empty_present_result() -> LauncherPresentResult {
         hidden_arcade_compose_us: 0,
         direct_preview_present_us: 0,
         arcade_list_present_us: 0,
+        arcade_copy_trace: crate::arcade_list_renderer::PersistentArcadeCopyTrace::default(),
         main_present_backend: LauncherPresentBackend::None,
         main_present_status: LauncherPresentStatus::None,
         main_present_buffer: 0,

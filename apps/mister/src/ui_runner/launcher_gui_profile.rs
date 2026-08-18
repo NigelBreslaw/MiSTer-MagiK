@@ -546,6 +546,8 @@ impl GuiProfilingController {
         crt_backdrop_cache_state: &'static str,
         portrait_arcade_list_pixels: u64,
         portrait_arcade_list_bytes: u64,
+        persistent_arcade_composition:
+            crate::arcade_list_renderer::PersistentArcadeCompositionTrace,
         portrait_preview_rotation_pixels: u64,
         portrait_preview_blend_pixels: u64,
         portrait_preview_worker_queue_replacements: u64,
@@ -585,6 +587,17 @@ impl GuiProfilingController {
         record["crt_backdrop_cache_state"] = json!(crt_backdrop_cache_state);
         record["portrait_arcade_list_pixels"] = json!(portrait_arcade_list_pixels);
         record["portrait_arcade_list_bytes"] = json!(portrait_arcade_list_bytes);
+        record["portrait_arcade_requested_update"] =
+            json!(persistent_arcade_composition.requested_update.label());
+        record["portrait_arcade_requested_reason"] =
+            json!(persistent_arcade_composition.requested_reason.label());
+        record["portrait_arcade_effective_update"] =
+            json!(persistent_arcade_composition.effective_update.label());
+        record["portrait_arcade_rebuild_reason"] =
+            json!(persistent_arcade_composition.rebuild_reason.label());
+        record["portrait_arcade_compose_us"] = json!(persistent_arcade_composition.elapsed_us);
+        record["portrait_arcade_composed_pixels"] =
+            json!(persistent_arcade_composition.written_pixels);
         record["portrait_preview_rotation_pixels"] = json!(portrait_preview_rotation_pixels);
         record["portrait_preview_blend_pixels"] = json!(portrait_preview_blend_pixels);
         record["portrait_preview_worker_queue_replacements"] =
@@ -610,6 +623,7 @@ impl GuiProfilingController {
         full_copy: bool,
         target_slot: u8,
         copy_path: &'static str,
+        arcade_copy: crate::arcade_list_renderer::PersistentArcadeCopyTrace,
     ) {
         if !self.active() {
             return;
@@ -630,6 +644,16 @@ impl GuiProfilingController {
             "full_copy": full_copy,
             "target_slot": target_slot,
             "copy_path": copy_path,
+            "arcade_copy_decision": arcade_copy.decision.label(),
+            "arcade_diff_safe": arcade_copy.diff_safe,
+            "arcade_mirror_valid": arcade_copy.mirror_valid,
+            "arcade_compare_us": arcade_copy.compare_us,
+            "arcade_write_us": arcade_copy.write_us,
+            "arcade_mirror_refresh_us": arcade_copy.mirror_refresh_us,
+            "arcade_compared_pixels": arcade_copy.compared_pixels,
+            "arcade_written_pixels": arcade_copy.written_pixels,
+            "arcade_mirror_refresh_pixels": arcade_copy.mirror_refresh_pixels,
+            "arcade_changed_rows": arcade_copy.changed_rows,
         });
     }
 
@@ -784,8 +808,57 @@ mod tests {
             Vec::new(),
         );
         controller.record_frame_work(
-            7, 8_500, 3_000, 220, 307_200, 180, 307_200, 11, 307_200, 12, 100_000, 80_000, 20_000,
-            4, true, 7, 11, "exact", 12_345, 24_690, 2_048, 1_024, 3, 2, 1, 4_500, 0, "applied",
+            7,
+            8_500,
+            3_000,
+            220,
+            307_200,
+            180,
+            307_200,
+            11,
+            307_200,
+            12,
+            100_000,
+            80_000,
+            20_000,
+            4,
+            true,
+            7,
+            11,
+            "exact",
+            12_345,
+            24_690,
+            crate::arcade_list_renderer::PersistentArcadeCompositionTrace::default(),
+            2_048,
+            1_024,
+            3,
+            2,
+            1,
+            4_500,
+            0,
+            "applied",
+        );
+        controller.record_latch(
+            7,
+            64,
+            128,
+            32,
+            2,
+            false,
+            1,
+            "vertical-partial",
+            crate::arcade_list_renderer::PersistentArcadeCopyTrace {
+                decision: crate::arcade_list_renderer::PersistentArcadeCopyDecision::SparseDiff,
+                diff_safe: true,
+                mirror_valid: true,
+                compare_us: 10,
+                write_us: 20,
+                mirror_refresh_us: 5,
+                compared_pixels: 100,
+                written_pixels: 32,
+                mirror_refresh_pixels: 100,
+                changed_rows: 2,
+            },
         );
         assert_eq!(controller.frames[0]["wall_us"], 8_500);
         assert_eq!(controller.frames[0]["vsync_us"], 3_000);
@@ -810,6 +883,12 @@ mod tests {
         assert_eq!(controller.frames[0]["crt_backdrop_cache_state"], "exact");
         assert_eq!(controller.frames[0]["portrait_arcade_list_pixels"], 12_345);
         assert_eq!(controller.frames[0]["portrait_arcade_list_bytes"], 24_690);
+        assert_eq!(
+            controller.frames[0]["latch"]["arcade_copy_decision"],
+            "sparse-diff"
+        );
+        assert_eq!(controller.frames[0]["latch"]["arcade_compare_us"], 10);
+        assert_eq!(controller.frames[0]["latch"]["arcade_written_pixels"], 32);
         assert_eq!(
             controller.frames[0]["portrait_preview_rotation_pixels"],
             2_048

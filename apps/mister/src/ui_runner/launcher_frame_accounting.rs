@@ -964,6 +964,8 @@ impl LauncherFrameAccounting {
 #[derive(Clone, Copy, Default)]
 pub(super) struct LauncherCustomDrawTrace {
     pub(super) arcade_list_update_us: u128,
+    pub(super) persistent_arcade_composition:
+        crate::arcade_list_renderer::PersistentArcadeCompositionTrace,
     pub(super) portrait_arcade_list_pixels: u64,
     pub(super) portrait_arcade_list_bytes: u64,
     pub(super) preview_blit_us: u128,
@@ -3115,6 +3117,8 @@ mod tests {
                 hidden_arcade_compose_us: frame.hidden_arcade_compose_us,
                 direct_preview_present_us: frame.direct_preview_present_us,
                 arcade_list_present_us: frame.arcade_list_present_us,
+                arcade_copy_trace: crate::arcade_list_renderer::PersistentArcadeCopyTrace::default(
+                ),
                 main_present_backend: frame.main_present_backend,
                 main_present_status: frame.main_present_status,
                 main_present_buffer: frame.main_present_buffer,
