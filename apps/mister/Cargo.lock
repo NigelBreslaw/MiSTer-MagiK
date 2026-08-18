@@ -2906,6 +2906,9 @@ dependencies = [
 [[package]]
 name = "mister-magik-framebuffer-scenes"
 version = "0.1.0"
+dependencies = [
+ "cc",
+]
 
 [[package]]
 name = "mister-magik-framebuffer-stream"

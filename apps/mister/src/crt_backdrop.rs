@@ -10,7 +10,9 @@ use crate::ui_display::{
 };
 use crate::visual_composition::{PreviewFrame, PreviewPixels};
 use mister_magik_core::display::CRT_COMPOSITION_H;
-use mister_magik_framebuffer_scenes::{OutputRotation, Rgb565OutputLayout, Rgb565Rect};
+use mister_magik_framebuffer_scenes::{
+    OutputRotation, Rgb565OutputLayout, Rgb565Rect, blend_rgb565_neon_if_available,
+};
 use slint::platform::software_renderer::Rgb565Pixel;
 use std::time::{Duration, Instant};
 
@@ -1035,6 +1037,11 @@ fn blend_rgb565_range(
         .min(previous.len())
         .min(current.len());
     let start = start.min(end);
+    if coarse_factor <= 1
+        && blend_rgb565_neon_if_available(destination, previous, current, start, end, alpha_bucket)
+    {
+        return;
+    }
     if coarse_factor <= 1 {
         let mut previous_source = Rgb565Pixel(u16::MAX);
         let mut previous_current = Rgb565Pixel(u16::MAX);

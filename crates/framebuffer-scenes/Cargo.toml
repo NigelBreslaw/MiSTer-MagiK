@@ -9,6 +9,9 @@ rust-version = "1.97.1"
 description = "Portable RGB565 framebuffer-scene contracts for MiSTer MagiK"
 license = "GPL-3.0-or-later"
 
+[build-dependencies]
+cc = "1.4.2"
+
 [lints.rust]
 warnings = "deny"
 

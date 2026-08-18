@@ -5,7 +5,8 @@
 
 use std::error::Error;
 use std::fmt;
-use std::mem::{MaybeUninit, size_of};
+use std::mem::{MaybeUninit, align_of, size_of};
+use std::sync::OnceLock;
 use std::time::Duration;
 
 pub mod navigation;
@@ -349,8 +350,164 @@ fn slices_overlap<P>(left: &[P], right: &[P]) -> bool {
     left_start < right_end && right_start < left_end
 }
 
+fn rgb565_neon_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        !matches!(
+            std::env::var("MISTER_RGB565_NEON").ok().as_deref(),
+            Some("0" | "off" | "false" | "no" | "scalar")
+        )
+    })
+}
+
+#[cfg(all(target_os = "linux", target_arch = "arm"))]
+fn copy_rotated_rgb565_neon<P: Copy>(
+    destination: &mut [P],
+    layout: Rgb565OutputLayout,
+    destination_x: usize,
+    destination_y: usize,
+    width: usize,
+    height: usize,
+    source: &[P],
+    source_stride: usize,
+    source_x: usize,
+    source_y: usize,
+) -> bool {
+    if !rgb565_neon_enabled()
+        || size_of::<P>() != size_of::<u16>()
+        || align_of::<P>() < align_of::<u16>()
+        || (destination.as_ptr() as usize) & 1 != 0
+        || (source.as_ptr() as usize) & 1 != 0
+    {
+        return false;
+    }
+    unsafe extern "C" {
+        fn mister_magik_rgb565_rotate_clockwise(
+            destination: *mut u16,
+            destination_stride: usize,
+            logical_width: usize,
+            logical_height: usize,
+            destination_x: usize,
+            destination_y: usize,
+            width: usize,
+            height: usize,
+            source: *const u16,
+            source_stride: usize,
+            source_x: usize,
+            source_y: usize,
+        );
+        fn mister_magik_rgb565_rotate_counter_clockwise(
+            destination: *mut u16,
+            destination_stride: usize,
+            logical_width: usize,
+            logical_height: usize,
+            destination_x: usize,
+            destination_y: usize,
+            width: usize,
+            height: usize,
+            source: *const u16,
+            source_stride: usize,
+            source_x: usize,
+            source_y: usize,
+        );
+    }
+    // SAFETY: the caller validated all source and destination rectangles, and
+    // overlapping slices were staged before entering this kernel.
+    unsafe {
+        match layout.rotation() {
+            OutputRotation::Clockwise90 => mister_magik_rgb565_rotate_clockwise(
+                destination.as_mut_ptr().cast(),
+                layout.physical_stride(),
+                layout.logical_width(),
+                layout.logical_height(),
+                destination_x,
+                destination_y,
+                width,
+                height,
+                source.as_ptr().cast(),
+                source_stride,
+                source_x,
+                source_y,
+            ),
+            OutputRotation::CounterClockwise90 => mister_magik_rgb565_rotate_counter_clockwise(
+                destination.as_mut_ptr().cast(),
+                layout.physical_stride(),
+                layout.logical_width(),
+                layout.logical_height(),
+                destination_x,
+                destination_y,
+                width,
+                height,
+                source.as_ptr().cast(),
+                source_stride,
+                source_x,
+                source_y,
+            ),
+            OutputRotation::None => return false,
+        }
+    }
+    true
+}
+
+#[cfg(not(all(target_os = "linux", target_arch = "arm")))]
+fn copy_rotated_rgb565_neon<P: Copy>(
+    _destination: &mut [P],
+    _layout: Rgb565OutputLayout,
+    _destination_x: usize,
+    _destination_y: usize,
+    _width: usize,
+    _height: usize,
+    _source: &[P],
+    _source_stride: usize,
+    _source_x: usize,
+    _source_y: usize,
+) -> bool {
+    false
+}
+
 #[allow(clippy::too_many_arguments)]
 fn copy_rotated_rgb565_tiled<P: Copy>(
+    destination: &mut [P],
+    layout: Rgb565OutputLayout,
+    destination_x: usize,
+    destination_y: usize,
+    width: usize,
+    height: usize,
+    source: &[P],
+    source_stride: usize,
+    source_x: usize,
+    source_y: usize,
+) {
+    if copy_rotated_rgb565_neon(
+        destination,
+        layout,
+        destination_x,
+        destination_y,
+        width,
+        height,
+        source,
+        source_stride,
+        source_x,
+        source_y,
+    ) {
+        return;
+    }
+    copy_rotated_rgb565_scalar(
+        destination,
+        layout,
+        destination_x,
+        destination_y,
+        width,
+        height,
+        source,
+        source_stride,
+        source_x,
+        source_y,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn copy_rotated_rgb565_scalar<P: Copy>(
     destination: &mut [P],
     layout: Rgb565OutputLayout,
     destination_x: usize,
@@ -406,6 +563,60 @@ fn copy_rotated_rgb565_tiled<P: Copy>(
                 OutputRotation::None => unreachable!("identity copies bypass rotation kernels"),
             }
         }
+    }
+}
+
+#[must_use]
+pub fn blend_rgb565_neon_if_available<P: Copy>(
+    destination: &mut [P],
+    previous: &[P],
+    current: &[P],
+    start: usize,
+    end: usize,
+    alpha_bucket: u16,
+) -> bool {
+    if !rgb565_neon_enabled()
+        || size_of::<P>() != size_of::<u16>()
+        || align_of::<P>() < align_of::<u16>()
+        || start >= end
+        || end > destination.len()
+        || end > previous.len()
+        || end > current.len()
+        || (destination.as_ptr() as usize) & 1 != 0
+        || (previous.as_ptr() as usize) & 1 != 0
+        || (current.as_ptr() as usize) & 1 != 0
+    {
+        return false;
+    }
+    #[cfg(all(target_os = "linux", target_arch = "arm"))]
+    {
+        unsafe extern "C" {
+            fn mister_magik_rgb565_blend(
+                destination: *mut u16,
+                previous: *const u16,
+                current: *const u16,
+                start: usize,
+                end: usize,
+                alpha: u16,
+            );
+        }
+        // SAFETY: the caller validated all slice bounds and alignment.
+        unsafe {
+            mister_magik_rgb565_blend(
+                destination.as_mut_ptr().cast(),
+                previous.as_ptr().cast(),
+                current.as_ptr().cast(),
+                start,
+                end,
+                alpha_bucket,
+            );
+        }
+        true
+    }
+    #[cfg(not(all(target_os = "linux", target_arch = "arm")))]
+    {
+        let _ = (destination, previous, current, start, end, alpha_bucket);
+        false
     }
 }
 
@@ -895,5 +1106,51 @@ mod tests {
         let mut surface = Rgb565SurfaceMut::new(&mut storage, layout).unwrap();
         assert!(surface.copy_rect_strided(1, 1, 3, 2, source, 7, 0, 0));
         assert_eq!(storage, expected);
+    }
+
+    #[cfg(all(target_os = "linux", target_arch = "arm"))]
+    #[test]
+    fn neon_rotation_matches_scalar_for_partial_tiles() {
+        let layout = Rgb565OutputLayout::new(13, 9, 16, OutputRotation::Clockwise90).unwrap();
+        let source = (0..19 * 13)
+            .map(|index| Rgb565Pixel((index as u16).wrapping_mul(29)))
+            .collect::<Vec<_>>();
+        let mut scalar = vec![Rgb565Pixel(0xaaaa); layout.len()];
+        let mut neon = scalar.clone();
+        copy_rotated_rgb565_scalar(&mut scalar, layout, 2, 1, 9, 7, &source, 19, 3, 4);
+        assert!(copy_rotated_rgb565_neon(
+            &mut neon, layout, 2, 1, 9, 7, &source, 19, 3, 4,
+        ));
+        assert_eq!(neon, scalar);
+    }
+
+    #[cfg(all(target_os = "linux", target_arch = "arm"))]
+    #[test]
+    fn neon_blend_matches_scalar_reference() {
+        let previous = (0..97)
+            .map(|index| Rgb565Pixel((index as u16).wrapping_mul(47)))
+            .collect::<Vec<_>>();
+        let current = (0..97)
+            .map(|index| Rgb565Pixel((index as u16).wrapping_mul(71)))
+            .collect::<Vec<_>>();
+        let alpha = 13_u16;
+        let mut expected = previous.clone();
+        for index in 3..94 {
+            let from = previous[index].0;
+            let to = current[index].0;
+            let red_blue = (((from & 0xf81f) * (32 - alpha) + (to & 0xf81f) * alpha) >> 5) & 0xf81f;
+            let green = (((from & 0x07e0) * (32 - alpha) + (to & 0x07e0) * alpha) >> 5) & 0x07e0;
+            expected[index] = Rgb565Pixel(red_blue | green);
+        }
+        let mut actual = previous.clone();
+        assert!(blend_rgb565_neon_if_available(
+            &mut actual,
+            &previous,
+            &current,
+            3,
+            94,
+            alpha,
+        ));
+        assert_eq!(actual, expected);
     }
 }
