@@ -36,6 +36,7 @@ use crate::arcade_list_renderer::{
 use crate::boot_analytics;
 use crate::controller_db::ControllerDb;
 use crate::cpu_profile;
+use crate::crt_arcade_overlay::CrtArcadeOverlayState;
 use crate::display_config::{DisplayConfig, detect_runtime_display_geometry};
 use crate::frame_profile::{FrameProfiler, FrameRect, FrameSample, VideoFrameProfile};
 use crate::input::{PadInfo, PadPool};

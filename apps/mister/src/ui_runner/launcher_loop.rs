@@ -5216,6 +5216,7 @@ pub(super) fn run_launcher_loop(
     };
     arcade_list_renderer.set_crt_portrait_rows(layout.is_portrait());
     let mut crt_backdrop = CrtBackdropController::for_display(ui);
+    let mut crt_arcade_overlay = CrtArcadeOverlayState::new();
     let mut launcher_preview_version = 1u64;
     let launcher_arcade_version = 1u64;
     let mut launcher_arcade_scroll_offset = LayerOffset::ZERO;
@@ -10355,6 +10356,11 @@ pub(super) fn run_launcher_loop(
         }
         let mut physical_arcade_rect = None;
         let mut direct_arcade_update = None;
+        if !crt_backdrop_eligible {
+            crt_arcade_overlay.clear();
+        } else if crt_backdrop_work_trace.active || crt_backdrop_full_damage.is_some() {
+            crt_arcade_overlay.invalidate();
+        }
         let cached_arcade_rect = if crt_backdrop_eligible {
             arcade_list_rect
                 .or_else(|| {
@@ -10371,7 +10377,13 @@ pub(super) fn run_launcher_loop(
                             layer_target.compose_arcade_list_over_backdrop(
                                 &mut arcade_list_renderer,
                                 backdrop.pixels(),
+                                update,
+                                backdrop.backdrop_revision(),
+                                catalog_version as u64,
                                 crt_backdrop_full_damage.is_some(),
+                                !backdrop.is_transitioning() && !crt_backdrop_work_trace.active,
+                                full_frame_present || crt_backdrop_full_damage.is_some(),
+                                &mut crt_arcade_overlay,
                             )
                         })
                         .unwrap_or_default();

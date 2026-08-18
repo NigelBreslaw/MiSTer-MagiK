@@ -204,6 +204,10 @@ impl CrtBackdropController {
         self.transition_id
     }
 
+    pub(super) fn backdrop_revision(&self) -> u64 {
+        self.prepared_revision
+    }
+
     pub(super) fn poll(&mut self) -> bool {
         let mut accepted = false;
         while let Ok(result) = self.worker.rx.try_recv() {

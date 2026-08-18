@@ -11,6 +11,9 @@ use crate::arcade_catalog::{
     ARCADE_LIST_VISIBLE_H, ARCADE_ROW_HEIGHT, ArcadeGameEntry, ArcadeGameView,
 };
 use crate::bitmap_text::{ConsoleFont, ConsoleGlyphRowFilter, ConsoleTypeface, TextGradient};
+use crate::crt_arcade_overlay::{
+    CrtArcadeOverlayKey, CrtArcadeOverlayState, CrtArcadeOverlayUpdate,
+};
 use crate::framebuffer::mapped::{MappedRgb565Framebuffer, Pixel, pixel_to_rgb565};
 use crate::framebuffer::present::{copy_dense_rect_565, copy_strided_rect_565};
 use crate::framebuffer::scanout_slots::ScanoutSlotsRgb565Framebuffer;
@@ -494,6 +497,7 @@ pub struct ArcadeListRenderer {
     previous_selection_normal_rect: Option<DirtyRect>,
     selection_horizontal: Vec<Rgb565Pixel>,
     selection_vertical: Vec<Rgb565Pixel>,
+    crt_overlay_damage_scratch: Vec<u64>,
     row_cache_epoch: u64,
     row_fingerprint_epoch: u64,
     row_fingerprint_cache: HashMap<usize, CachedArcadeRowFingerprint>,
@@ -825,6 +829,7 @@ impl ArcadeListRenderer {
             previous_selection_normal_rect: None,
             selection_horizontal: Vec::new(),
             selection_vertical: Vec::new(),
+            crt_overlay_damage_scratch: Vec::new(),
             row_cache_epoch: 0,
             row_fingerprint_epoch: 0,
             row_fingerprint_cache: HashMap::new(),
@@ -1992,6 +1997,226 @@ impl ArcadeListRenderer {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
+    pub fn compose_retained_crt_layer_over_backdrop(
+        &mut self,
+        target: &mut UiFrameTarget,
+        backdrop: &[Rgb565Pixel],
+        output_layout: Rgb565OutputLayout,
+        update: ArcadeListUpdate,
+        backdrop_revision: u64,
+        catalog_generation: u64,
+        backdrop_is_fresh: bool,
+        backdrop_is_settled: bool,
+        force_full: bool,
+        retained: &mut CrtArcadeOverlayState,
+    ) -> ArcadeListCompositionStats {
+        let key = self.crt_overlay_key(output_layout, backdrop_revision, catalog_generation);
+        let retained_update = match update {
+            ArcadeListUpdate::Full(_) => CrtArcadeOverlayUpdate::Full,
+            ArcadeListUpdate::Scroll { delta_y, .. } => CrtArcadeOverlayUpdate::Scroll { delta_y },
+        };
+        let plan = retained.plan(key, retained_update);
+        let use_incremental = backdrop_is_settled && !force_full && !plan.full_rebuild;
+        if !use_incremental {
+            let stats = self.compose_layer_over_backdrop_to_oriented_cached_with_state(
+                target,
+                backdrop,
+                output_layout,
+                false,
+                backdrop_is_fresh,
+            );
+            if stats.composed && backdrop_is_settled {
+                retained.commit(key, &self.crt_overlay_foreground_spans());
+            } else {
+                retained.invalidate();
+            }
+            return stats;
+        }
+
+        let started = Instant::now();
+        let viewport = key.viewport;
+        let mut damage = std::mem::take(&mut self.crt_overlay_damage_scratch);
+        damage.resize(output_layout.len().div_ceil(u64::BITS as usize), 0);
+        damage.fill(0);
+        for rect in &plan.stale_glyph_spans {
+            mark_crt_overlay_damage(&mut damage, output_layout, viewport, *rect);
+        }
+        for rect in &plan.exposed_stripes {
+            mark_crt_overlay_damage(&mut damage, output_layout, viewport, *rect);
+        }
+        if let Some(rect) = plan.selection_union {
+            mark_crt_overlay_damage(&mut damage, output_layout, viewport, rect);
+        }
+        let foreground_spans = self.crt_overlay_foreground_spans();
+        for rect in &foreground_spans {
+            mark_crt_overlay_damage(&mut damage, output_layout, viewport, *rect);
+        }
+        mark_crt_overlay_damage(&mut damage, output_layout, viewport, key.selection);
+
+        let (restored_pixels, foreground_pixels) = self.reconcile_crt_overlay_damage(
+            target.cached_565_mut(),
+            backdrop,
+            output_layout,
+            viewport,
+            &damage,
+        );
+        self.crt_overlay_damage_scratch = damage;
+        retained.commit(key, &foreground_spans);
+        ArcadeListCompositionStats {
+            composed: true,
+            restored_pixels,
+            foreground_pixels,
+            elapsed_us: started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64,
+        }
+    }
+
+    fn crt_overlay_key(
+        &self,
+        output: Rgb565OutputLayout,
+        backdrop_revision: u64,
+        catalog_generation: u64,
+    ) -> CrtArcadeOverlayKey {
+        let selection_y = self.selection_y();
+        CrtArcadeOverlayKey {
+            backdrop_revision,
+            layout: output,
+            viewport: Rgb565Rect {
+                x0: self.geometry.x,
+                y0: self.geometry.y,
+                x1: self.geometry.x + self.width,
+                y1: self.geometry.y + self.visible_height,
+            },
+            style_revision: self.crt_overlay_style_revision(),
+            catalog_generation,
+            ring_origin: self.surface_y,
+            selection: Rgb565Rect {
+                x0: self.geometry.x,
+                y0: self.geometry.y + selection_y,
+                x1: self.geometry.x + self.width,
+                y1: self.geometry.y + selection_y + self.style.row_height.max(1) as usize,
+            },
+        }
+    }
+
+    fn crt_overlay_style_revision(&self) -> u64 {
+        let mut hash = ARCADE_LIST_HASH_OFFSET;
+        arcade_hash_u64(&mut hash, self.style.row_height as u64);
+        arcade_hash_u64(&mut hash, self.style.scroll_quantum_y as u64);
+        arcade_hash_usize(&mut hash, self.style.separator_top);
+        arcade_hash_usize(&mut hash, self.style.separator_bottom);
+        arcade_hash_usize(&mut hash, self.style.selection_frame_x);
+        arcade_hash_usize(&mut hash, self.style.selection_frame_y);
+        arcade_hash_u64(&mut hash, u64::from(self.style.background_565.0));
+        arcade_hash_u64(&mut hash, u64::from(self.style.alternate_background_565.0));
+        arcade_hash_u64(&mut hash, u64::from(self.style.border_565.0));
+        arcade_hash_u64(&mut hash, u64::from(self.style.selection_fill_565.0));
+        arcade_hash_u64(&mut hash, u64::from(self.style.selection_text_565.0));
+        arcade_hash_u64(&mut hash, u64::from(self.style.selection_frame_565.0));
+        arcade_hash_u64(&mut hash, self.style.crt_palette as u64);
+        hash
+    }
+
+    fn crt_overlay_foreground_spans(&self) -> Vec<Rgb565Rect> {
+        let selection_y = self.selection_y();
+        let selection_bottom = selection_y + self.style.row_height.max(1) as usize;
+        let mut spans = Vec::new();
+        for viewport_y in 0..self.visible_height {
+            if viewport_y >= selection_y && viewport_y < selection_bottom {
+                continue;
+            }
+            let source_y = (self.surface_y + viewport_y) % self.visible_height;
+            for &(x0, x1) in &self.surface_nonfill_runs[source_y] {
+                spans.push(Rgb565Rect {
+                    x0: self.geometry.x + x0,
+                    y0: self.geometry.y + viewport_y,
+                    x1: self.geometry.x + x1,
+                    y1: self.geometry.y + viewport_y + 1,
+                });
+            }
+        }
+        spans
+    }
+
+    fn reconcile_crt_overlay_damage(
+        &self,
+        destination: &mut [Rgb565Pixel],
+        backdrop: &[Rgb565Pixel],
+        output: Rgb565OutputLayout,
+        viewport: Rgb565Rect,
+        damage: &[u64],
+    ) -> (u32, u32) {
+        if destination.len() < output.len()
+            || backdrop.len() < output.len()
+            || damage.len().saturating_mul(u64::BITS as usize) < output.len()
+        {
+            return (0, 0);
+        }
+        let physical = output.logical_rect_to_physical(viewport);
+        let mut restored = 0_u32;
+        let mut foreground = 0_u32;
+        for (word_index, &word) in damage.iter().enumerate() {
+            let mut pending = word;
+            while pending != 0 {
+                let bit = pending.trailing_zeros() as usize;
+                let offset = word_index * u64::BITS as usize + bit;
+                pending &= pending - 1;
+                if offset >= output.len() {
+                    continue;
+                }
+                let physical_y = offset / output.physical_stride();
+                let physical_x = offset - physical_y * output.physical_stride();
+                if physical_x < physical.x0
+                    || physical_x >= physical.x1
+                    || physical_y < physical.y0
+                    || physical_y >= physical.y1
+                {
+                    continue;
+                }
+                let (logical_x, logical_y) = output.physical_to_logical(physical_x, physical_y);
+                let desired = self.crt_overlay_pixel(logical_x, logical_y);
+                let pixel = desired.unwrap_or(backdrop[offset]);
+                if destination[offset] == pixel {
+                    continue;
+                }
+                destination[offset] = pixel;
+                if desired.is_some() {
+                    foreground = foreground.saturating_add(1);
+                } else {
+                    restored = restored.saturating_add(1);
+                }
+            }
+        }
+        (restored, foreground)
+    }
+
+    fn crt_overlay_pixel(&self, logical_x: usize, logical_y: usize) -> Option<Rgb565Pixel> {
+        let local_x = logical_x.checked_sub(self.geometry.x)?;
+        let viewport_y = logical_y.checked_sub(self.geometry.y)?;
+        if local_x >= self.width || viewport_y >= self.visible_height {
+            return None;
+        }
+        let source_y = (self.surface_y + viewport_y) % self.visible_height;
+        let source_pixel = self.surface[source_y * self.width + local_x];
+        let selection_y = self.selection_y();
+        let selected = viewport_y >= selection_y
+            && viewport_y < selection_y + self.style.row_height.max(1) as usize;
+        if selected && self.style.crt_palette {
+            let is_text = self.surface_selected_text_runs[source_y]
+                .iter()
+                .any(|&(x0, x1)| local_x >= x0 && local_x < x1);
+            return Some(if is_text {
+                self.style.selection_text_565
+            } else {
+                self.style.selection_fill_565
+            });
+        }
+        if selected {
+            return Some(selected_aperture_pixel_with_style(source_pixel, self.style));
+        }
+        (!is_arcade_unselected_overlay_fill_pixel(source_pixel, self.style)).then_some(source_pixel)
+    }
+
     fn compose_rotated_crt_layer_over_backdrop(
         &mut self,
         cached: &mut [Rgb565Pixel],
@@ -2873,6 +3098,34 @@ impl ArcadeListRenderer {
             );
         }
         row.into_iter().map(pixel_to_rgb565).collect()
+    }
+}
+
+fn mark_crt_overlay_damage(
+    damage: &mut [u64],
+    output: Rgb565OutputLayout,
+    viewport: Rgb565Rect,
+    rect: Rgb565Rect,
+) {
+    if damage.len().saturating_mul(u64::BITS as usize) < output.len() {
+        return;
+    }
+    let logical = Rgb565Rect {
+        x0: rect.x0.max(viewport.x0),
+        y0: rect.y0.max(viewport.y0),
+        x1: rect.x1.min(viewport.x1),
+        y1: rect.y1.min(viewport.y1),
+    };
+    if logical.x0 >= logical.x1 || logical.y0 >= logical.y1 {
+        return;
+    }
+    let physical = output.logical_rect_to_physical(logical);
+    for physical_y in physical.y0..physical.y1 {
+        let start = physical_y * output.physical_stride() + physical.x0;
+        let end = start + physical.x1.saturating_sub(physical.x0);
+        for offset in start..end {
+            damage[offset / u64::BITS as usize] |= 1_u64 << (offset % u64::BITS as usize);
+        }
     }
 }
 
@@ -3883,74 +4136,6 @@ mod tests {
         }
     }
 
-    fn crt_overlay_selection(renderer: &ArcadeListRenderer) -> Rgb565Rect {
-        let selection_y = renderer.selection_y();
-        Rgb565Rect {
-            x0: renderer.geometry.x,
-            y0: renderer.geometry.y + selection_y,
-            x1: renderer.geometry.x + renderer.width,
-            y1: renderer.geometry.y + selection_y + renderer.style.row_height.max(1) as usize,
-        }
-    }
-
-    fn crt_overlay_foreground_spans(renderer: &ArcadeListRenderer) -> Vec<Rgb565Rect> {
-        let selection_y = renderer.selection_y();
-        let selection_bottom = selection_y + renderer.style.row_height.max(1) as usize;
-        let mut spans = Vec::new();
-        for viewport_y in 0..renderer.visible_height {
-            if viewport_y >= selection_y && viewport_y < selection_bottom {
-                continue;
-            }
-            let source_y = (renderer.surface_y + viewport_y) % renderer.visible_height;
-            for &(x0, x1) in &renderer.surface_nonfill_runs[source_y] {
-                spans.push(Rgb565Rect {
-                    x0: renderer.geometry.x + x0,
-                    y0: renderer.geometry.y + viewport_y,
-                    x1: renderer.geometry.x + x1,
-                    y1: renderer.geometry.y + viewport_y + 1,
-                });
-            }
-        }
-        spans
-    }
-
-    fn restore_crt_overlay_rects(
-        destination: &mut [Rgb565Pixel],
-        backdrop: &[Rgb565Pixel],
-        output: Rgb565OutputLayout,
-        rects: impl IntoIterator<Item = Rgb565Rect>,
-    ) {
-        for rect in rects {
-            for y in rect.y0..rect.y1 {
-                for x in rect.x0..rect.x1 {
-                    let offset = output.physical_offset(x, y);
-                    destination[offset] = backdrop[offset];
-                }
-            }
-        }
-    }
-
-    fn crt_overlay_key(
-        renderer: &ArcadeListRenderer,
-        output: Rgb565OutputLayout,
-        style_revision: u64,
-    ) -> crate::crt_arcade_overlay::CrtArcadeOverlayKey {
-        crate::crt_arcade_overlay::CrtArcadeOverlayKey {
-            backdrop_revision: 7,
-            layout: output,
-            viewport: Rgb565Rect {
-                x0: renderer.geometry.x,
-                y0: renderer.geometry.y,
-                x1: renderer.geometry.x + renderer.width,
-                y1: renderer.geometry.y + renderer.visible_height,
-            },
-            style_revision,
-            catalog_generation: 11,
-            ring_origin: renderer.surface_y,
-            selection: crt_overlay_selection(renderer),
-        }
-    }
-
     #[test]
     fn retained_crt_overlay_plan_matches_full_compositor_across_routes_and_wraps() {
         let mut games = games("arcade", 48);
@@ -3995,41 +4180,32 @@ mod tests {
                         .composed
                 );
 
-                let style_revision =
-                    u64::from(metrics.game_row_height as u16) | ((display.output_h() as u64) << 16);
-                let first_key = crt_overlay_key(&renderer, output, style_revision);
-                let first_spans = crt_overlay_foreground_spans(&renderer);
+                let first_key = renderer.crt_overlay_key(output, 7, 11);
+                let first_spans = renderer.crt_overlay_foreground_spans();
                 let mut retained = crate::crt_arcade_overlay::CrtArcadeOverlayState::new();
                 retained.commit(first_key, &first_spans);
 
                 let update = renderer
                     .draw(ArcadeGameView::contiguous(&games), 9, 9.0, false)
                     .expect("one-row CRT scroll");
-                let ArcadeListUpdate::Scroll { delta_y, .. } = update else {
-                    panic!("expected a retained CRT scroll update");
-                };
+                assert!(matches!(update, ArcadeListUpdate::Scroll { .. }));
                 assert_eq!(renderer.surface_y, 0, "ring origin did not wrap");
-                let next_key = crt_overlay_key(&renderer, output, style_revision);
-                let plan = retained.plan(
-                    next_key,
-                    crate::crt_arcade_overlay::CrtArcadeOverlayUpdate::Scroll { delta_y },
+                let stats = renderer.compose_retained_crt_layer_over_backdrop(
+                    &mut incremental,
+                    &backdrop,
+                    output,
+                    update,
+                    7,
+                    11,
+                    false,
+                    true,
+                    false,
+                    &mut retained,
                 );
-                assert!(!plan.full_rebuild);
-
-                let mut restore = plan.stale_glyph_spans.clone();
-                restore.extend_from_slice(&plan.exposed_stripes);
-                restore.extend(plan.selection_union);
-                restore_crt_overlay_rects(incremental.cached_565_mut(), &backdrop, output, restore);
+                assert!(stats.composed);
                 assert!(
-                    renderer
-                        .compose_layer_over_backdrop_to_oriented_cached_with_state(
-                            &mut incremental,
-                            &backdrop,
-                            output,
-                            false,
-                            true,
-                        )
-                        .composed
+                    u64::from(stats.restored_pixels) + u64::from(stats.foreground_pixels)
+                        < (renderer.width * renderer.visible_height) as u64
                 );
 
                 let mut full = UiFrameTarget::cached(FramebufferTargetGeometry::new(
@@ -4051,9 +4227,10 @@ mod tests {
                     display.output_route()
                 );
 
-                let next_spans = crt_overlay_foreground_spans(&renderer);
-                retained.commit(next_key, &next_spans);
-                assert_eq!(retained.key(), Some(next_key));
+                assert_eq!(
+                    retained.key(),
+                    Some(renderer.crt_overlay_key(output, 7, 11))
+                );
             }
         }
     }

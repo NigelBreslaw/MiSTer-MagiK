@@ -726,16 +726,25 @@ impl<'a> LayerTarget<'a> {
         &mut self,
         renderer: &mut ArcadeListRenderer,
         backdrop: &[Rgb565Pixel],
+        update: ArcadeListUpdate,
+        backdrop_revision: u64,
+        catalog_generation: u64,
         backdrop_is_fresh: bool,
+        backdrop_is_settled: bool,
+        force_full: bool,
+        retained: &mut CrtArcadeOverlayState,
     ) -> ArcadeListCompositionStats {
-        renderer.compose_layer_over_backdrop_to_oriented_cached_with_state(
+        renderer.compose_retained_crt_layer_over_backdrop(
             self.target,
             backdrop,
             self.layout.output_layout(),
-            // The selected row is already opaque cyan on CRT; omit the
-            // decorative frame while scrolling to avoid another line pass.
-            false,
+            update,
+            backdrop_revision,
+            catalog_generation,
             backdrop_is_fresh,
+            backdrop_is_settled,
+            force_full,
+            retained,
         )
     }
 
