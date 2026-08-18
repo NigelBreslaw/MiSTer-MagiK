@@ -228,6 +228,22 @@ pub(super) struct GuiFrameTimingTrace {
     pub(super) pre_render_wait_us: u128,
     pub(super) post_present_wait_us: u128,
     pub(super) frame_finish_us: u128,
+    pub(super) prepare_us: u128,
+    pub(super) pre_render_stage_us: u128,
+    pub(super) slint_render_us: u128,
+    pub(super) custom_draw_us: u128,
+    pub(super) post_custom_to_present_us: u128,
+    pub(super) bridge_sync_us: u128,
+    pub(super) bridge_model_projection_us: u128,
+    pub(super) media_worker_us: u128,
+    pub(super) media_gate_us: u128,
+    pub(super) preview_schedule_us: u128,
+    pub(super) preview_apply_us: u128,
+    pub(super) hidden_compose_us: u128,
+    pub(super) hidden_preview_compose_us: u128,
+    pub(super) hidden_arcade_compose_us: u128,
+    pub(super) main_present_hidden_copy_us: u128,
+    pub(super) main_present_request_us: u128,
     pub(super) frame_start_phase_us: u64,
     pub(super) present_phase_us: u128,
     pub(super) redraw_pending: bool,
@@ -255,6 +271,34 @@ impl GuiFrameTimingTrace {
             pre_render_wait_us: frame.pre_render_wait_us,
             post_present_wait_us: frame.post_present_wait_us,
             frame_finish_us,
+            prepare_us: frame.prepare_us,
+            pre_render_stage_us: frame
+                .frame_t1
+                .saturating_duration_since(frame.frame_t0)
+                .as_micros(),
+            slint_render_us: frame
+                .frame_t2
+                .saturating_duration_since(frame.frame_t1)
+                .as_micros(),
+            custom_draw_us: frame
+                .custom_draw_done
+                .saturating_duration_since(frame.custom_draw_start)
+                .as_micros(),
+            post_custom_to_present_us: frame
+                .frame_t3
+                .saturating_duration_since(frame.custom_draw_done)
+                .as_micros(),
+            bridge_sync_us: frame.prepare_trace.bridge_sync_us,
+            bridge_model_projection_us: frame.prepare_trace.bridge_model_projection_us,
+            media_worker_us: frame.prepare_trace.media_worker_us,
+            media_gate_us: frame.prepare_trace.media_gate_us,
+            preview_schedule_us: frame.prepare_trace.preview_schedule_us,
+            preview_apply_us: frame.prepare_trace.preview_apply_us,
+            hidden_compose_us: frame.hidden_compose_us,
+            hidden_preview_compose_us: frame.hidden_preview_compose_us,
+            hidden_arcade_compose_us: frame.hidden_arcade_compose_us,
+            main_present_hidden_copy_us: frame.main_present_hidden_copy_us,
+            main_present_request_us: frame.main_present_request_us,
             frame_start_phase_us: frame.frame_start_phase_us,
             present_phase_us: frame.present_phase_us,
             redraw_pending: frame.redraw_pending,
@@ -692,6 +736,28 @@ impl GuiProfilingController {
         record["post_present_wait_us"] = json!(u128_to_u64_saturating(timing.post_present_wait_us));
         record["post_frame_tail_us"] = json!(u128_to_u64_saturating(post_frame_tail_us));
         record["frame_finish_us"] = json!(u128_to_u64_saturating(timing.frame_finish_us));
+        record["prepare_us"] = json!(u128_to_u64_saturating(timing.prepare_us));
+        record["pre_render_stage_us"] = json!(u128_to_u64_saturating(timing.pre_render_stage_us));
+        record["slint_render_us"] = json!(u128_to_u64_saturating(timing.slint_render_us));
+        record["custom_draw_us"] = json!(u128_to_u64_saturating(timing.custom_draw_us));
+        record["post_custom_to_present_us"] =
+            json!(u128_to_u64_saturating(timing.post_custom_to_present_us));
+        record["bridge_sync_us"] = json!(u128_to_u64_saturating(timing.bridge_sync_us));
+        record["bridge_model_projection_us"] =
+            json!(u128_to_u64_saturating(timing.bridge_model_projection_us));
+        record["media_worker_us"] = json!(u128_to_u64_saturating(timing.media_worker_us));
+        record["media_gate_us"] = json!(u128_to_u64_saturating(timing.media_gate_us));
+        record["preview_schedule_us"] = json!(u128_to_u64_saturating(timing.preview_schedule_us));
+        record["preview_apply_us"] = json!(u128_to_u64_saturating(timing.preview_apply_us));
+        record["hidden_compose_us"] = json!(u128_to_u64_saturating(timing.hidden_compose_us));
+        record["hidden_preview_compose_us"] =
+            json!(u128_to_u64_saturating(timing.hidden_preview_compose_us));
+        record["hidden_arcade_compose_us"] =
+            json!(u128_to_u64_saturating(timing.hidden_arcade_compose_us));
+        record["main_present_hidden_copy_us"] =
+            json!(u128_to_u64_saturating(timing.main_present_hidden_copy_us));
+        record["main_present_request_us"] =
+            json!(u128_to_u64_saturating(timing.main_present_request_us));
         record["post_finish_tail_us"] = json!(u128_to_u64_saturating(post_finish_tail_us));
         record["frame_start_phase_us"] = json!(timing.frame_start_phase_us);
         record["present_phase_us"] = json!(u128_to_u64_saturating(timing.present_phase_us));
@@ -1027,6 +1093,22 @@ mod tests {
                 pre_render_wait_us: 100,
                 post_present_wait_us: 4_800,
                 frame_finish_us: 1_000,
+                prepare_us: 10,
+                pre_render_stage_us: 20,
+                slint_render_us: 30,
+                custom_draw_us: 40,
+                post_custom_to_present_us: 50,
+                bridge_sync_us: 60,
+                bridge_model_projection_us: 70,
+                media_worker_us: 80,
+                media_gate_us: 90,
+                preview_schedule_us: 100,
+                preview_apply_us: 110,
+                hidden_compose_us: 120,
+                hidden_preview_compose_us: 130,
+                hidden_arcade_compose_us: 140,
+                main_present_hidden_copy_us: 150,
+                main_present_request_us: 160,
                 frame_start_phase_us: 2_000,
                 present_phase_us: 7_500,
                 redraw_pending: true,
@@ -1054,6 +1136,22 @@ mod tests {
                 pre_render_wait_us: 110,
                 post_present_wait_us: 4_900,
                 frame_finish_us: 1_100,
+                prepare_us: 11,
+                pre_render_stage_us: 21,
+                slint_render_us: 31,
+                custom_draw_us: 41,
+                post_custom_to_present_us: 51,
+                bridge_sync_us: 61,
+                bridge_model_projection_us: 71,
+                media_worker_us: 81,
+                media_gate_us: 91,
+                preview_schedule_us: 101,
+                preview_apply_us: 111,
+                hidden_compose_us: 121,
+                hidden_preview_compose_us: 131,
+                hidden_arcade_compose_us: 141,
+                main_present_hidden_copy_us: 151,
+                main_present_request_us: 161,
                 frame_start_phase_us: 2_100,
                 present_phase_us: 7_600,
                 redraw_pending: false,
@@ -1068,6 +1166,8 @@ mod tests {
         assert_eq!(first["wall_us"], 8_000);
         assert_eq!(first["post_present_wait_us"], 4_800);
         assert_eq!(first["frame_finish_us"], 1_000);
+        assert_eq!(first["bridge_sync_us"], 60);
+        assert_eq!(first["hidden_arcade_compose_us"], 140);
         assert_eq!(first["redraw_pending"], true);
         assert_eq!(first["completion_poll_count"], 3);
         let second = &controller.frames[1];
