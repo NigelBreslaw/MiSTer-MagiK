@@ -312,8 +312,6 @@ pub struct UiFrameTarget {
     cached_stride: usize,
     direct_preview: Vec<Rgb565Pixel>,
     direct_preview_rect: Option<DirtyRect>,
-    physical_direct_preview: Vec<Rgb565Pixel>,
-    physical_direct_preview_rect: Option<DirtyRect>,
     oriented_preview_cache: Option<OrientedPreviewCacheKey>,
 }
 
@@ -331,8 +329,6 @@ impl UiFrameTarget {
             cached_stride: geometry.render_w(),
             direct_preview: Vec::new(),
             direct_preview_rect: None,
-            physical_direct_preview: Vec::new(),
-            physical_direct_preview_rect: None,
             oriented_preview_cache: None,
         }
     }
@@ -413,48 +409,6 @@ impl UiFrameTarget {
 
     pub fn invalidate_oriented_preview_cache(&mut self) {
         self.oriented_preview_cache = None;
-        self.physical_direct_preview_rect = None;
-    }
-
-    pub fn ensure_physical_direct_preview_rect(&mut self, rect: DirtyRect) {
-        let len = rect.width().saturating_mul(rect.rows() as usize);
-        if self.physical_direct_preview_rect != Some(rect)
-            || self.physical_direct_preview.len() != len
-        {
-            self.physical_direct_preview.resize(len, Rgb565Pixel(0));
-            self.physical_direct_preview_rect = Some(rect);
-        }
-    }
-
-    pub fn copy_cached_rect_to_physical_direct_preview(&mut self, rect: DirtyRect) -> u32 {
-        let Some(backing_rect) = self.physical_direct_preview_rect else {
-            return 0;
-        };
-        if !backing_rect.contains(rect) {
-            return 0;
-        }
-        let width = rect.width();
-        let source_stride = self.cached_stride;
-        let source_x = rect.x0;
-        let source_y = rect.y0;
-        for row in 0..rect.rows() as usize {
-            let source_start = (source_y + row)
-                .saturating_mul(source_stride)
-                .saturating_add(source_x);
-            let source_end = source_start.saturating_add(width);
-            let destination_start = (rect.y0 - backing_rect.y0 + row)
-                .saturating_mul(backing_rect.width())
-                .saturating_add(rect.x0 - backing_rect.x0);
-            let destination_end = destination_start.saturating_add(width);
-            if source_end > self.cached.len()
-                || destination_end > self.physical_direct_preview.len()
-            {
-                return 0;
-            }
-            self.physical_direct_preview[destination_start..destination_end]
-                .copy_from_slice(&self.cached[source_start..source_end]);
-        }
-        rect.rows()
     }
 
     pub fn compose_direct_preview_rect(&mut self, rect: DirtyRect) -> u32 {
@@ -588,14 +542,6 @@ impl UiFrameTarget {
             pixels: &self.direct_preview,
             rect,
         })
-    }
-
-    pub fn physical_direct_preview_view(&self) -> Option<DirectPreviewView<'_>> {
-        self.physical_direct_preview_rect
-            .map(|rect| DirectPreviewView {
-                pixels: &self.physical_direct_preview,
-                rect,
-            })
     }
 
     pub fn cached_565_mut(&mut self) -> &mut [Rgb565Pixel] {
