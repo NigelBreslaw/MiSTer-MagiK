@@ -341,7 +341,8 @@ fn direct_layer_needs_restore(
     let Some(current) = current else {
         return false;
     };
-    !matches!(desired, Some(desired) if desired == current)
+    !matches!(desired, Some(desired)
+        if desired.rect == current.rect && desired.version == current.version)
 }
 
 fn direct_layer_redraw_rect(
@@ -1116,6 +1117,8 @@ mod tests {
         let arcade = rect(0, 0, 4, 3);
         let current = layer(arcade, 7).with_content_offset(LayerOffset::new(0, -3));
         let desired = layer(arcade, 7).with_content_offset(LayerOffset::new(0, -11));
+
+        assert!(!direct_layer_needs_restore(Some(current), Some(desired)));
 
         assert_eq!(
             direct_layer_redraw_update(current.into(), desired.into(), None, true),
