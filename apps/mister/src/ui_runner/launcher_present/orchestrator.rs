@@ -752,7 +752,7 @@ impl PresentationAdapters<FpgaVblankLatchHiddenPresenter> for LivePresentationAd
                                     }
                                     .to_string()
                                 })?;
-                            direct_preview_rows = copy_direct_preview_rect_to_hidden(
+                            direct_preview_rows = copy_physical_layer_rect_to_hidden(
                                 hidden,
                                 view,
                                 rect,
@@ -764,7 +764,7 @@ impl PresentationAdapters<FpgaVblankLatchHiddenPresenter> for LivePresentationAd
                             )
                         } else {
                             direct_preview_rows =
-                                layer_target.copy_direct_preview_rect_to_hidden(hidden, rect);
+                                layer_target.copy_physical_layer_rect_to_hidden(hidden, rect);
                             (
                                 layer_target.output_layout_generation(),
                                 plan.preview_state_after().map_or(0, |state| state.version),
@@ -810,7 +810,7 @@ impl PresentationAdapters<FpgaVblankLatchHiddenPresenter> for LivePresentationAd
                                 }
                                 .to_string()
                             })?;
-                        let rows = copy_direct_preview_rect_to_hidden(
+                        let rows = copy_physical_layer_rect_to_hidden(
                             hidden,
                             view,
                             arcade_rect,
@@ -834,8 +834,8 @@ impl PresentationAdapters<FpgaVblankLatchHiddenPresenter> for LivePresentationAd
                         arcade_copy_trace =
                             crate::arcade_list_renderer::PersistentArcadeCopyTrace {
                                 decision: match update {
-                                    DirectLayerUpdate::Full(_) => crate::arcade_list_renderer::PersistentArcadeCopyDecision::FullCopy,
-                                    DirectLayerUpdate::Scroll { .. } => crate::arcade_list_renderer::PersistentArcadeCopyDecision::DenseScroll,
+                                    PhysicalLayerUpdate::Full(_) => crate::arcade_list_renderer::PersistentArcadeCopyDecision::FullCopy,
+                                    PhysicalLayerUpdate::Scroll { .. } => crate::arcade_list_renderer::PersistentArcadeCopyDecision::DenseScroll,
                                 },
                                 diff_safe: plan.arcade_redraw_diff_safe,
                                 write_us: started

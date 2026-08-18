@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use super::damage::TwoSlotDamageLedger;
-use super::target::{DirectPreviewView, DirtyRect, DirtyRectList, subtract_dirty_rects};
+use super::target::{DirtyRect, DirtyRectList, PhysicalLayerView, subtract_dirty_rects};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PhysicalLayerRole {
@@ -11,10 +11,20 @@ pub enum PhysicalLayerRole {
 }
 
 impl PhysicalLayerRole {
+    pub const COUNT: usize = 2;
+    pub const ALL: [Self; Self::COUNT] = [Self::Preview, Self::Arcade];
+
     pub const fn label(self) -> &'static str {
         match self {
             Self::Preview => "preview",
             Self::Arcade => "arcade",
+        }
+    }
+
+    pub const fn index(self) -> usize {
+        match self {
+            Self::Preview => 0,
+            Self::Arcade => 1,
         }
     }
 }
@@ -35,8 +45,8 @@ pub struct PhysicalLayerPublication {
     role: PhysicalLayerRole,
     layout_generation: u64,
     content_generation: u64,
-    state: DirectLayerState,
-    update: Option<DirectLayerUpdate>,
+    state: PhysicalLayerState,
+    update: Option<PhysicalLayerUpdate>,
     backing_key: PhysicalLayerBackingKey,
 }
 
@@ -45,9 +55,9 @@ impl PhysicalLayerPublication {
         role: PhysicalLayerRole,
         layout_generation: u64,
         content_generation: u64,
-        state: DirectLayerState,
-        update: Option<DirectLayerUpdate>,
-        view: DirectPreviewView<'_>,
+        state: PhysicalLayerState,
+        update: Option<PhysicalLayerUpdate>,
+        view: PhysicalLayerView<'_>,
     ) -> Option<Self> {
         if layout_generation == 0
             || content_generation == 0
@@ -77,8 +87,8 @@ impl PhysicalLayerPublication {
 
     pub fn for_frame(
         &self,
-        state: DirectLayerState,
-        update: Option<DirectLayerUpdate>,
+        state: PhysicalLayerState,
+        update: Option<PhysicalLayerUpdate>,
     ) -> Option<Self> {
         if state.rect != self.state.rect
             || update.is_some_and(|update| update.dirty_rect() != state.rect)
@@ -104,11 +114,11 @@ impl PhysicalLayerPublication {
         self.content_generation
     }
 
-    pub const fn state(&self) -> DirectLayerState {
+    pub const fn state(&self) -> PhysicalLayerState {
         self.state
     }
 
-    pub const fn update(&self) -> Option<DirectLayerUpdate> {
+    pub const fn update(&self) -> Option<PhysicalLayerUpdate> {
         self.update
     }
 
@@ -116,7 +126,7 @@ impl PhysicalLayerPublication {
         self.backing_key
     }
 
-    pub fn matches_view(&self, view: DirectPreviewView<'_>) -> bool {
+    pub fn matches_view(&self, view: PhysicalLayerView<'_>) -> bool {
         view.rect() == self.state.rect
             && view.stride() == self.backing_key.stride
             && view.pixels().len() == self.backing_key.pixel_count
@@ -125,7 +135,7 @@ impl PhysicalLayerPublication {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum DirectLayerUpdate {
+pub enum PhysicalLayerUpdate {
     Full(DirtyRect),
     Scroll {
         delta_x: isize,
@@ -134,7 +144,7 @@ pub enum DirectLayerUpdate {
     },
 }
 
-impl DirectLayerUpdate {
+impl PhysicalLayerUpdate {
     pub const fn dirty_rect(self) -> DirtyRect {
         match self {
             Self::Full(rect) | Self::Scroll { rect, .. } => rect,
@@ -165,13 +175,13 @@ impl LayerOffset {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct DirectLayerState {
+pub struct PhysicalLayerState {
     pub rect: DirtyRect,
     pub version: u64,
     pub content_offset: LayerOffset,
 }
 
-impl DirectLayerState {
+impl PhysicalLayerState {
     pub fn new(rect: DirtyRect, version: u64) -> Self {
         Self {
             rect,
@@ -188,18 +198,17 @@ impl DirectLayerState {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct LatchSlotCoherency {
-    preview_present: Option<DirectLayerState>,
-    arcade_present: Option<DirectLayerState>,
+    layers: [Option<PhysicalLayerState>; PhysicalLayerRole::COUNT],
     hardware: LatchSlotHardwareState,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LatchFramePlan {
     cached_damage: DirtyRectList,
-    preview_desired: Option<DirectLayerState>,
+    preview_desired: Option<PhysicalLayerState>,
     preview_dirty: Option<DirtyRect>,
-    arcade_desired: Option<DirectLayerState>,
-    arcade_dirty: Option<DirectLayerUpdate>,
+    arcade_desired: Option<PhysicalLayerState>,
+    arcade_dirty: Option<PhysicalLayerUpdate>,
     preview_publication: Option<PhysicalLayerPublication>,
     arcade_publication: Option<PhysicalLayerPublication>,
     allow_unpublished_layers: bool,
@@ -208,10 +217,10 @@ pub struct LatchFramePlan {
 impl LatchFramePlan {
     pub fn new(
         cached_damage: DirtyRectList,
-        preview_desired: Option<DirectLayerState>,
+        preview_desired: Option<PhysicalLayerState>,
         preview_dirty: Option<DirtyRect>,
-        arcade_desired: Option<DirectLayerState>,
-        arcade_dirty: Option<DirectLayerUpdate>,
+        arcade_desired: Option<PhysicalLayerState>,
+        arcade_dirty: Option<PhysicalLayerUpdate>,
     ) -> Self {
         Self {
             cached_damage,
@@ -246,7 +255,7 @@ impl LatchFramePlan {
             preview_dirty: preview
                 .as_ref()
                 .and_then(PhysicalLayerPublication::update)
-                .map(DirectLayerUpdate::dirty_rect),
+                .map(PhysicalLayerUpdate::dirty_rect),
             arcade_desired: arcade.as_ref().map(PhysicalLayerPublication::state),
             arcade_dirty: arcade.as_ref().and_then(PhysicalLayerPublication::update),
             preview_publication: preview,
@@ -263,7 +272,7 @@ impl LatchFramePlan {
         self.preview_dirty
     }
 
-    pub fn arcade_dirty(&self) -> Option<DirectLayerUpdate> {
+    pub fn arcade_dirty(&self) -> Option<PhysicalLayerUpdate> {
         self.arcade_dirty
     }
 
@@ -273,17 +282,17 @@ impl LatchFramePlan {
             preview_dirty: self.preview_desired.map(|layer| layer.rect),
             arcade_dirty: self
                 .arcade_desired
-                .map(|layer| DirectLayerUpdate::Full(layer.rect)),
+                .map(|layer| PhysicalLayerUpdate::Full(layer.rect)),
             preview_publication: self.preview_publication.as_ref().and_then(|publication| {
                 publication.for_frame(
                     publication.state(),
-                    Some(DirectLayerUpdate::Full(publication.state().rect)),
+                    Some(PhysicalLayerUpdate::Full(publication.state().rect)),
                 )
             }),
             arcade_publication: self.arcade_publication.as_ref().and_then(|publication| {
                 publication.for_frame(
                     publication.state(),
-                    Some(DirectLayerUpdate::Full(publication.state().rect)),
+                    Some(PhysicalLayerUpdate::Full(publication.state().rect)),
                 )
             }),
             ..self
@@ -300,10 +309,10 @@ impl LatchFramePlan {
     #[cfg(test)]
     fn from_rects(
         cached_damage: Option<DirtyRect>,
-        preview_desired: Option<DirectLayerState>,
+        preview_desired: Option<PhysicalLayerState>,
         preview_dirty: Option<DirtyRect>,
-        arcade_desired: Option<DirectLayerState>,
-        arcade_dirty: Option<DirectLayerUpdate>,
+        arcade_desired: Option<PhysicalLayerState>,
+        arcade_dirty: Option<PhysicalLayerUpdate>,
     ) -> Self {
         let mut cached = DirtyRectList::new();
         cached.push_if_some(cached_damage);
@@ -322,18 +331,18 @@ pub struct LatchPresentPlan {
     pub slot_index: u8,
     pub restore_rects: DirtyRectList,
     pub preview_redraw: Option<DirtyRect>,
-    pub arcade_redraw: Option<DirectLayerUpdate>,
+    pub arcade_redraw: Option<PhysicalLayerUpdate>,
     pub arcade_redraw_diff_safe: bool,
-    preview_after: Option<DirectLayerState>,
-    arcade_after: Option<DirectLayerState>,
+    preview_after: Option<PhysicalLayerState>,
+    arcade_after: Option<PhysicalLayerState>,
 }
 
 impl LatchPresentPlan {
-    pub const fn preview_state_after(self) -> Option<DirectLayerState> {
+    pub const fn preview_state_after(self) -> Option<PhysicalLayerState> {
         self.preview_after
     }
 
-    pub const fn arcade_state_after(self) -> Option<DirectLayerState> {
+    pub const fn arcade_state_after(self) -> Option<PhysicalLayerState> {
         self.arcade_after
     }
 }
@@ -343,9 +352,9 @@ pub struct TwoBufferLatchState {
     slots: [LatchSlotCoherency; 2],
     base_damage: TwoSlotDamageLedger,
     next_slot_index: u8,
-    planned_publications: [Option<PhysicalLayerPublication>; 2],
-    slot_publications: [[Option<PhysicalLayerPublication>; 2]; 2],
-    latest_publication_generation: [Option<(u64, u64)>; 2],
+    planned_publications: [Option<PhysicalLayerPublication>; PhysicalLayerRole::COUNT],
+    slot_publications: [[Option<PhysicalLayerPublication>; PhysicalLayerRole::COUNT]; 2],
+    latest_publication_generation: [Option<(u64, u64)>; PhysicalLayerRole::COUNT],
 }
 
 impl TwoBufferLatchState {
@@ -353,13 +362,11 @@ impl TwoBufferLatchState {
         Self {
             slots: [
                 LatchSlotCoherency {
-                    preview_present: None,
-                    arcade_present: None,
+                    layers: [None; PhysicalLayerRole::COUNT],
                     hardware: LatchSlotHardwareState::Unknown,
                 },
                 LatchSlotCoherency {
-                    preview_present: None,
-                    arcade_present: None,
+                    layers: [None; PhysicalLayerRole::COUNT],
                     hardware: LatchSlotHardwareState::Unknown,
                 },
             ],
@@ -374,8 +381,7 @@ impl TwoBufferLatchState {
     pub fn invalidate_all(&mut self) {
         self.base_damage.invalidate_all();
         for slot in &mut self.slots {
-            slot.preview_present = None;
-            slot.arcade_present = None;
+            slot.layers.fill(None);
             slot.hardware = LatchSlotHardwareState::Unknown;
         }
         self.next_slot_index = 1;
@@ -430,8 +436,8 @@ impl TwoBufferLatchState {
         let slot_index = plan.slot_index;
         self.base_damage.mark_presented(slot_index);
         let selected = self.slot_mut(slot_index);
-        selected.preview_present = plan.preview_after;
-        selected.arcade_present = plan.arcade_after;
+        selected.layers[PhysicalLayerRole::Preview.index()] = plan.preview_after;
+        selected.layers[PhysicalLayerRole::Arcade.index()] = plan.arcade_after;
         selected.hardware = LatchSlotHardwareState::Unknown;
         let slot_offset = slot_offset(slot_index);
         self.slot_publications[slot_offset] = std::mem::take(&mut self.planned_publications);
@@ -441,8 +447,7 @@ impl TwoBufferLatchState {
     pub fn mark_attempt_failed(&mut self, slot_index: u8) {
         self.base_damage.mark_attempt_failed(slot_index);
         let slot = self.slot_mut(slot_index);
-        slot.preview_present = None;
-        slot.arcade_present = None;
+        slot.layers.fill(None);
         slot.hardware = LatchSlotHardwareState::Unknown;
         self.planned_publications.fill(None);
         self.slot_publications[slot_offset(slot_index)].fill(None);
@@ -487,11 +492,8 @@ impl TwoBufferLatchState {
     pub fn restore_bytes_for_slot(&self, slot_index: u8) -> usize {
         let slot = self.slot(slot_index);
         let mut bytes = self.base_damage.invalid_bytes(slot_index);
-        if let Some(preview) = slot.preview_present {
-            bytes = bytes.saturating_add(rect_bytes(preview.rect));
-        }
-        if let Some(arcade) = slot.arcade_present {
-            bytes = bytes.saturating_add(rect_bytes(arcade.rect));
+        for layer in slot.layers.iter().flatten() {
+            bytes = bytes.saturating_add(rect_bytes(layer.rect));
         }
         bytes
     }
@@ -520,16 +522,21 @@ impl TwoBufferLatchState {
         let slot = self.slot(slot_index);
         let mut restore_rects = self.base_damage.plan(slot_index);
 
-        let restore_preview =
-            direct_layer_needs_restore(slot.preview_present, input.preview_desired);
-        let restore_arcade = direct_layer_needs_restore(slot.arcade_present, input.arcade_desired);
+        let restore_preview = direct_layer_needs_restore(
+            slot.layers[PhysicalLayerRole::Preview.index()],
+            input.preview_desired,
+        );
+        let restore_arcade = direct_layer_needs_restore(
+            slot.layers[PhysicalLayerRole::Arcade.index()],
+            input.arcade_desired,
+        );
         if restore_preview {
-            if let Some(preview) = slot.preview_present {
+            if let Some(preview) = slot.layers[PhysicalLayerRole::Preview.index()] {
                 push_without_covered_rect(&mut restore_rects, preview.rect);
             }
         }
         if restore_arcade {
-            if let Some(arcade) = slot.arcade_present {
+            if let Some(arcade) = slot.layers[PhysicalLayerRole::Arcade.index()] {
                 push_without_covered_rect(&mut restore_rects, arcade.rect);
             }
         }
@@ -540,19 +547,19 @@ impl TwoBufferLatchState {
             layer_intersects_restore(input.arcade_desired, &restore_rects);
 
         let preview_redraw = direct_layer_redraw_rect(
-            slot.preview_present,
+            slot.layers[PhysicalLayerRole::Preview.index()],
             input.preview_desired,
             input.preview_dirty,
             preview_intersects_restore,
         );
         let arcade_redraw = direct_layer_redraw_update(
-            slot.arcade_present,
+            slot.layers[PhysicalLayerRole::Arcade.index()],
             input.arcade_desired,
             input.arcade_dirty,
             arcade_intersects_restore,
         );
         let arcade_redraw_diff_safe = !arcade_intersects_restore
-            && slot.arcade_present.is_some_and(|current| {
+            && slot.layers[PhysicalLayerRole::Arcade.index()].is_some_and(|current| {
                 input.arcade_desired.is_some_and(|desired| {
                     current.rect == desired.rect && current.version == desired.version
                 })
@@ -583,8 +590,8 @@ impl TwoBufferLatchState {
 }
 
 fn direct_layer_needs_restore(
-    current: Option<DirectLayerState>,
-    desired: Option<DirectLayerState>,
+    current: Option<PhysicalLayerState>,
+    desired: Option<PhysicalLayerState>,
 ) -> bool {
     let Some(current) = current else {
         return false;
@@ -594,8 +601,8 @@ fn direct_layer_needs_restore(
 }
 
 fn direct_layer_redraw_rect(
-    current: Option<DirectLayerState>,
-    desired: Option<DirectLayerState>,
+    current: Option<PhysicalLayerState>,
+    desired: Option<PhysicalLayerState>,
     dirty: Option<DirtyRect>,
     intersects_restore: bool,
 ) -> Option<DirtyRect> {
@@ -608,17 +615,17 @@ fn direct_layer_redraw_rect(
 }
 
 fn direct_layer_redraw_update(
-    current: Option<DirectLayerState>,
-    desired: Option<DirectLayerState>,
-    dirty: Option<DirectLayerUpdate>,
+    current: Option<PhysicalLayerState>,
+    desired: Option<PhysicalLayerState>,
+    dirty: Option<PhysicalLayerUpdate>,
     intersects_restore: bool,
-) -> Option<DirectLayerUpdate> {
+) -> Option<PhysicalLayerUpdate> {
     let desired = desired?;
     if let Some(current) = current {
         if current.rect != desired.rect || current.version != desired.version {
-            Some(DirectLayerUpdate::Full(desired.rect))
+            Some(PhysicalLayerUpdate::Full(desired.rect))
         } else if current.content_offset != desired.content_offset {
-            Some(DirectLayerUpdate::Scroll {
+            Some(PhysicalLayerUpdate::Scroll {
                 delta_x: desired
                     .content_offset
                     .x
@@ -632,17 +639,17 @@ fn direct_layer_redraw_update(
                 rect: desired.rect,
             })
         } else if intersects_restore {
-            Some(DirectLayerUpdate::Full(desired.rect))
+            Some(PhysicalLayerUpdate::Full(desired.rect))
         } else {
             dirty
         }
     } else {
-        Some(DirectLayerUpdate::Full(desired.rect))
+        Some(PhysicalLayerUpdate::Full(desired.rect))
     }
 }
 
 fn layer_intersects_restore(
-    layer: Option<DirectLayerState>,
+    layer: Option<PhysicalLayerState>,
     restore_rects: &DirtyRectList,
 ) -> bool {
     layer.is_some_and(|layer| {
@@ -652,7 +659,7 @@ fn layer_intersects_restore(
     })
 }
 
-fn direct_layer_update_rect(update: &DirectLayerUpdate) -> DirtyRect {
+fn direct_layer_update_rect(update: &PhysicalLayerUpdate) -> DirtyRect {
     update.dirty_rect()
 }
 
@@ -662,7 +669,7 @@ fn frame_publications_match(input: &LatchFramePlan) -> bool {
     }
     publication_matches(
         input.preview_desired,
-        input.preview_dirty.map(DirectLayerUpdate::Full),
+        input.preview_dirty.map(PhysicalLayerUpdate::Full),
         input.preview_publication.as_ref(),
         PhysicalLayerRole::Preview,
     ) && publication_matches(
@@ -674,8 +681,8 @@ fn frame_publications_match(input: &LatchFramePlan) -> bool {
 }
 
 fn publication_matches(
-    desired: Option<DirectLayerState>,
-    update: Option<DirectLayerUpdate>,
+    desired: Option<PhysicalLayerState>,
+    update: Option<PhysicalLayerUpdate>,
     publication: Option<&PhysicalLayerPublication>,
     role: PhysicalLayerRole,
 ) -> bool {
@@ -691,10 +698,7 @@ fn publication_matches(
 }
 
 const fn physical_layer_role_offset(role: PhysicalLayerRole) -> usize {
-    match role {
-        PhysicalLayerRole::Preview => 0,
-        PhysicalLayerRole::Arcade => 1,
-    }
+    role.index()
 }
 
 fn slot_offset(slot_index: u8) -> usize {
@@ -740,8 +744,8 @@ mod tests {
         DirtyRect { x0, y0, x1, y1 }
     }
 
-    fn layer(rect: DirtyRect, version: u64) -> DirectLayerState {
-        DirectLayerState::new(rect, version)
+    fn layer(rect: DirtyRect, version: u64) -> PhysicalLayerState {
+        PhysicalLayerState::new(rect, version)
     }
 
     fn publication(
@@ -756,8 +760,8 @@ mod tests {
             7,
             content_generation,
             layer(rect, 1),
-            Some(DirectLayerUpdate::Full(rect)),
-            DirectPreviewView::dense(&pixels, rect),
+            Some(PhysicalLayerUpdate::Full(rect)),
+            PhysicalLayerView::dense(&pixels, rect),
         )
         .unwrap()
     }
@@ -779,10 +783,10 @@ mod tests {
 
     fn input(
         cached_damage: Option<DirtyRect>,
-        preview: Option<DirectLayerState>,
+        preview: Option<PhysicalLayerState>,
         preview_dirty: Option<DirtyRect>,
-        arcade: Option<DirectLayerState>,
-        arcade_dirty: Option<DirectLayerUpdate>,
+        arcade: Option<PhysicalLayerState>,
+        arcade_dirty: Option<PhysicalLayerUpdate>,
     ) -> LatchFramePlan {
         LatchFramePlan::from_rects(cached_damage, preview, preview_dirty, arcade, arcade_dirty)
     }
@@ -808,9 +812,9 @@ mod tests {
         }
     }
 
-    fn arcade_update_rect(update: DirectLayerUpdate) -> DirtyRect {
+    fn arcade_update_rect(update: PhysicalLayerUpdate) -> DirtyRect {
         match update {
-            DirectLayerUpdate::Full(rect) | DirectLayerUpdate::Scroll { rect, .. } => rect,
+            PhysicalLayerUpdate::Full(rect) | PhysicalLayerUpdate::Scroll { rect, .. } => rect,
         }
     }
 
@@ -1015,7 +1019,7 @@ mod tests {
                 Some(preview_layer),
                 Some(preview),
                 Some(arcade_layer),
-                Some(DirectLayerUpdate::Full(arcade)),
+                Some(PhysicalLayerUpdate::Full(arcade)),
             ))
             .expect("first plan");
         apply_plan(&mut slot1, &cached, first);
@@ -1075,7 +1079,7 @@ mod tests {
             .expect("plan");
 
         assert_eq!(plan.preview_redraw, Some(preview));
-        assert_eq!(plan.arcade_redraw, Some(DirectLayerUpdate::Full(arcade)));
+        assert_eq!(plan.arcade_redraw, Some(PhysicalLayerUpdate::Full(arcade)));
     }
 
     #[test]
@@ -1096,7 +1100,7 @@ mod tests {
                 Some(preview_layer),
                 Some(preview),
                 Some(arcade_layer),
-                Some(DirectLayerUpdate::Full(arcade)),
+                Some(PhysicalLayerUpdate::Full(arcade)),
             ))
             .expect("first plan");
         apply_plan(&mut slot1, &cached, first);
@@ -1218,7 +1222,7 @@ mod tests {
                 Some(preview_layer),
                 Some(preview),
                 Some(arcade_layer),
-                Some(DirectLayerUpdate::Full(arcade)),
+                Some(PhysicalLayerUpdate::Full(arcade)),
             ))
             .expect("launcher plan");
         apply_plan(&mut slot1, &launcher, launcher_plan);
@@ -1231,7 +1235,7 @@ mod tests {
                 Some(preview_layer),
                 Some(preview),
                 Some(arcade_layer),
-                Some(DirectLayerUpdate::Full(arcade)),
+                Some(PhysicalLayerUpdate::Full(arcade)),
             ))
             .expect("second launcher plan");
         apply_plan(&mut slot2, &launcher, second_launcher_plan);
@@ -1401,7 +1405,7 @@ mod tests {
                 Some(layer(preview, 1)),
                 Some(preview),
                 Some(layer(arcade, 1)),
-                Some(DirectLayerUpdate::Full(arcade)),
+                Some(PhysicalLayerUpdate::Full(arcade)),
             ))
             .expect("plan");
         apply_plan(&mut slot, &cached, plan);
@@ -1427,7 +1431,7 @@ mod tests {
                 Some(layer(preview, 1)),
                 Some(preview),
                 Some(layer(arcade, 1)),
-                Some(DirectLayerUpdate::Full(arcade)),
+                Some(PhysicalLayerUpdate::Full(arcade)),
             ))
             .expect("plan");
 
@@ -1461,7 +1465,7 @@ mod tests {
                 Some(preview_layer),
                 Some(preview),
                 Some(arcade_v1),
-                Some(DirectLayerUpdate::Full(arcade)),
+                Some(PhysicalLayerUpdate::Full(arcade)),
             ))
             .expect("first plan");
         apply_plan(&mut slot1, &cached, first);
@@ -1474,7 +1478,7 @@ mod tests {
                 Some(preview_layer),
                 Some(preview),
                 Some(arcade_v1),
-                Some(DirectLayerUpdate::Full(arcade)),
+                Some(PhysicalLayerUpdate::Full(arcade)),
             ))
             .expect("second plan");
         apply_plan(&mut slot2, &cached, second);
@@ -1487,7 +1491,7 @@ mod tests {
                 Some(preview_layer),
                 None,
                 Some(arcade_v2),
-                Some(DirectLayerUpdate::Scroll {
+                Some(PhysicalLayerUpdate::Scroll {
                     delta_x: 0,
                     delta_y: -1,
                     rect: arcade,
@@ -1496,7 +1500,10 @@ mod tests {
             .expect("changed plan");
 
         assert_eq!(changed.preview_redraw, Some(preview));
-        assert_eq!(changed.arcade_redraw, Some(DirectLayerUpdate::Full(arcade)));
+        assert_eq!(
+            changed.arcade_redraw,
+            Some(PhysicalLayerUpdate::Full(arcade))
+        );
         assert!(!changed.arcade_redraw_diff_safe);
         assert!(changed.restore_rects.iter().all(|restore| {
             restore.intersection(preview).is_none() && restore.intersection(arcade).is_none()
@@ -1521,7 +1528,7 @@ mod tests {
                 None,
                 None,
                 Some(arcade_layer),
-                Some(DirectLayerUpdate::Full(arcade)),
+                Some(PhysicalLayerUpdate::Full(arcade)),
             ))
             .expect("first plan");
         state.mark_post_success(first);
@@ -1533,7 +1540,7 @@ mod tests {
                 None,
                 None,
                 Some(arcade_layer),
-                Some(DirectLayerUpdate::Full(arcade)),
+                Some(PhysicalLayerUpdate::Full(arcade)),
             ))
             .expect("second plan");
         state.mark_post_success(second);
@@ -1545,12 +1552,12 @@ mod tests {
                 None,
                 None,
                 Some(arcade_layer),
-                Some(DirectLayerUpdate::Full(arcade)),
+                Some(PhysicalLayerUpdate::Full(arcade)),
             ))
             .expect("content update");
         assert_eq!(
             content_update.arcade_redraw,
-            Some(DirectLayerUpdate::Full(arcade))
+            Some(PhysicalLayerUpdate::Full(arcade))
         );
         assert!(content_update.arcade_redraw_diff_safe);
     }
@@ -1565,7 +1572,7 @@ mod tests {
 
         assert_eq!(
             direct_layer_redraw_update(current.into(), desired.into(), None, true),
-            Some(DirectLayerUpdate::Scroll {
+            Some(PhysicalLayerUpdate::Scroll {
                 delta_x: 0,
                 delta_y: -8,
                 rect: arcade,
@@ -1581,7 +1588,7 @@ mod tests {
 
         assert_eq!(
             direct_layer_redraw_update(current.into(), desired.into(), None, false),
-            Some(DirectLayerUpdate::Scroll {
+            Some(PhysicalLayerUpdate::Scroll {
                 delta_x: 13,
                 delta_y: -8,
                 rect: arcade,
@@ -1672,7 +1679,7 @@ mod tests {
         assert_eq!(recovered.preview_dirty(), Some(preview));
         assert_eq!(
             recovered.arcade_dirty(),
-            Some(DirectLayerUpdate::Full(arcade))
+            Some(PhysicalLayerUpdate::Full(arcade))
         );
     }
 }

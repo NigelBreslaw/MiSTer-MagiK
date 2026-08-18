@@ -13,10 +13,10 @@ use crate::arcade_catalog::{
 use crate::bitmap_text::{ConsoleFont, ConsoleGlyphRowFilter, ConsoleTypeface, TextGradient};
 use crate::framebuffer::mapped::{MappedRgb565Framebuffer, Pixel, pixel_to_rgb565};
 use crate::framebuffer::present::{
-    copy_dense_rect_565, copy_direct_preview_rect_to_hidden, copy_strided_rect_565,
+    copy_dense_rect_565, copy_physical_layer_rect_to_hidden, copy_strided_rect_565,
 };
 use crate::framebuffer::scanout_slots::ScanoutSlotsRgb565Framebuffer;
-use crate::framebuffer::target::{DirectPreviewView, DirtyRect, UiFrameTarget};
+use crate::framebuffer::target::{DirtyRect, PhysicalLayerView, UiFrameTarget};
 use crate::ui_display::{
     CrtContentRect, CrtFontExperiment, CrtFontFamily, CrtUiMetrics, ResolvedOutputRoute, UiDisplay,
     UiLayoutGeometry,
@@ -506,7 +506,7 @@ pub struct ArcadeListRenderer {
     persistent_copy_trace: PersistentArcadeCopyTrace,
 }
 
-/// Style identity carried by the future persistent physical Arcade layer.
+/// Style identity carried by the persistent physical Arcade layer.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PersistentArcadeLayerStyle {
     Hdmi,
@@ -790,9 +790,9 @@ impl PersistentOrientedArcadeLayer {
         })
     }
 
-    pub fn view(&self) -> Option<DirectPreviewView<'_>> {
+    pub fn view(&self) -> Option<PhysicalLayerView<'_>> {
         let key = self.key?;
-        DirectPreviewView::from_frame_region(
+        PhysicalLayerView::from_frame_region(
             &self.content,
             key.output.physical_stride(),
             key.output.physical_height(),
@@ -891,7 +891,7 @@ struct ArcadeFilterListDrawKey {
     visible_hash: u64,
 }
 
-pub use mister_magik_mister_runtime::framebuffer::latch_state::DirectLayerUpdate as ArcadeListUpdate;
+pub use mister_magik_mister_runtime::framebuffer::latch_state::PhysicalLayerUpdate as ArcadeListUpdate;
 
 impl ArcadeListRenderer {
     pub fn new() -> Self {
@@ -1938,7 +1938,7 @@ impl ArcadeListRenderer {
         self.persistent_copy_trace
     }
 
-    pub fn persistent_oriented_layer_view(&self) -> Option<DirectPreviewView<'_>> {
+    pub fn persistent_oriented_layer_view(&self) -> Option<PhysicalLayerView<'_>> {
         self.persistent_oriented_layer.view()
     }
 
@@ -1979,7 +1979,7 @@ impl ArcadeListRenderer {
                         .copy_persistent_oriented_layer_diff_to_hidden(hidden, slot_index, rect);
                 }
                 let write_started = Instant::now();
-                let rows = copy_direct_preview_rect_to_hidden(hidden, view, rect);
+                let rows = copy_physical_layer_rect_to_hidden(hidden, view, rect);
                 let write_us = elapsed_us(write_started);
                 if rows != rect.rows() {
                     return Err(format!(
@@ -2023,7 +2023,7 @@ impl ArcadeListRenderer {
                 // the contiguous RAM-to-WC write and invalidate the unused
                 // mirror for this slot instead.
                 let write_started = Instant::now();
-                let rows = copy_direct_preview_rect_to_hidden(hidden, view, rect);
+                let rows = copy_physical_layer_rect_to_hidden(hidden, view, rect);
                 let write_us = elapsed_us(write_started);
                 if rows != rect.rows() {
                     return Err("physical Arcade dense scroll copy incomplete".to_string());
@@ -2101,7 +2101,7 @@ impl ArcadeListRenderer {
                 .persistent_oriented_layer_view()
                 .ok_or_else(|| "physical Arcade layer is not initialized".to_string())?;
             let write_started = Instant::now();
-            let rows = copy_direct_preview_rect_to_hidden(hidden, view, rect);
+            let rows = copy_physical_layer_rect_to_hidden(hidden, view, rect);
             let write_us = elapsed_us(write_started);
             if rows != rect.rows() {
                 return Err("physical Arcade mirror recovery copy incomplete".to_string());

@@ -473,13 +473,13 @@ impl<'a> LayerTarget<'a> {
         self.target.compose_direct_preview_rect(rect)
     }
 
-    pub(super) fn copy_direct_preview_rect_to_hidden(
+    pub(super) fn copy_physical_layer_rect_to_hidden(
         &self,
         hidden: &mut ScanoutSlotsRgb565Framebuffer,
         rect: DirtyRect,
     ) -> u32 {
         self.direct_preview_view()
-            .map(|view| copy_direct_preview_rect_to_hidden(hidden, view, rect))
+            .map(|view| copy_physical_layer_rect_to_hidden(hidden, view, rect))
             .unwrap_or(0)
     }
 
@@ -559,7 +559,7 @@ impl<'a> LayerTarget<'a> {
             self.compose_arcade_list_direct_layer(renderer, update, catalog_generation);
         let publication = renderer.persistent_oriented_layer_view().and_then(|view| {
             let state =
-                DirectLayerState::new(view.rect(), version).with_content_offset(content_offset);
+                PhysicalLayerState::new(view.rect(), version).with_content_offset(content_offset);
             PhysicalLayerPublication::capture(
                 PhysicalLayerRole::Arcade,
                 self.output_layout_generation(),
@@ -586,7 +586,7 @@ impl<'a> LayerTarget<'a> {
     fn copy_physical_layer_snapshot_to_cached(
         &mut self,
         publication: &PhysicalLayerPublication,
-        view: DirectPreviewView<'_>,
+        view: PhysicalLayerView<'_>,
     ) -> bool {
         let output = self.layout.output_layout();
         if publication.layout_generation() != self.output_layout_generation() {
@@ -620,8 +620,8 @@ impl<'a> LayerTarget<'a> {
 
     pub(super) fn capture_preview_publication(
         &self,
-        state: DirectLayerState,
-        update: Option<DirectLayerUpdate>,
+        state: PhysicalLayerState,
+        update: Option<PhysicalLayerUpdate>,
         content_generation: u64,
     ) -> Option<PhysicalLayerPublication> {
         PhysicalLayerPublication::capture(
@@ -637,8 +637,8 @@ impl<'a> LayerTarget<'a> {
     pub(super) fn capture_arcade_publication(
         &self,
         renderer: &ArcadeListRenderer,
-        state: DirectLayerState,
-        update: Option<DirectLayerUpdate>,
+        state: PhysicalLayerState,
+        update: Option<PhysicalLayerUpdate>,
         content_generation: u64,
     ) -> Option<PhysicalLayerPublication> {
         PhysicalLayerPublication::capture(
@@ -706,7 +706,7 @@ impl<'a> LayerTarget<'a> {
         self.target.cached_565_mut()
     }
 
-    pub(super) fn direct_preview_view(&self) -> Option<DirectPreviewView<'_>> {
+    pub(super) fn direct_preview_view(&self) -> Option<PhysicalLayerView<'_>> {
         if self.layout.is_portrait() {
             self.target.physical_direct_preview_view()
         } else {
@@ -715,7 +715,7 @@ impl<'a> LayerTarget<'a> {
     }
 
     pub(super) fn direct_preview_rect(&self) -> Option<DirtyRect> {
-        self.direct_preview_view().map(DirectPreviewView::rect)
+        self.direct_preview_view().map(PhysicalLayerView::rect)
     }
 
     pub(super) fn direct_preview_backing_diagnostic(
@@ -936,7 +936,7 @@ mod tests {
         let source = (0..output.len())
             .map(|index| Rgb565Pixel(index as u16 + 1))
             .collect::<Vec<_>>();
-        let view = DirectPreviewView::from_frame_region(
+        let view = PhysicalLayerView::from_frame_region(
             &source,
             output.physical_stride(),
             output.physical_height(),
@@ -954,8 +954,8 @@ mod tests {
             PhysicalLayerRole::Arcade,
             layer_target.output_layout_generation(),
             9,
-            DirectLayerState::new(rect, 3),
-            Some(DirectLayerUpdate::Full(rect)),
+            PhysicalLayerState::new(rect, 3),
+            Some(PhysicalLayerUpdate::Full(rect)),
             view,
         )
         .unwrap();

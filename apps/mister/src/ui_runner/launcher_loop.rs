@@ -10327,10 +10327,10 @@ pub(super) fn run_launcher_loop(
         if let Some(rect) = raw_preview_direct_rect {
             launcher_preview_version = launcher_preview_version.wrapping_add(1).max(1);
             if layout.is_portrait() {
-                let state = DirectLayerState::new(rect, launcher_preview_version);
+                let state = PhysicalLayerState::new(rect, launcher_preview_version);
                 launcher_preview_publication = layer_target.capture_preview_publication(
                     state,
-                    Some(DirectLayerUpdate::Full(rect)),
+                    Some(PhysicalLayerUpdate::Full(rect)),
                     launcher_preview_version,
                 );
             }
@@ -10415,11 +10415,11 @@ pub(super) fn run_launcher_loop(
             && let Some(update) = direct_arcade_update
             && let Some(rect) = arcade_list_renderer
                 .persistent_oriented_layer_view()
-                .map(DirectPreviewView::rect)
+                .map(PhysicalLayerView::rect)
         {
             launcher_arcade_content_generation =
                 launcher_arcade_content_generation.wrapping_add(1).max(1);
-            let state = DirectLayerState::new(rect, launcher_arcade_version)
+            let state = PhysicalLayerState::new(rect, launcher_arcade_version)
                 .with_content_offset(launcher_arcade_scroll_offset);
             launcher_arcade_publication = layer_target.capture_arcade_publication(
                 &arcade_list_renderer,
@@ -10452,7 +10452,7 @@ pub(super) fn run_launcher_loop(
                     .and_then(|publication| {
                         publication.for_frame(
                             publication.state(),
-                            raw_preview_direct_rect.map(DirectLayerUpdate::Full),
+                            raw_preview_direct_rect.map(PhysicalLayerUpdate::Full),
                         )
                     })
             } else {
@@ -10465,7 +10465,7 @@ pub(super) fn run_launcher_loop(
         } else if preview_layer_desired && preview_direct_present_enabled() {
             layer_target
                 .direct_preview_rect()
-                .map(|rect| DirectLayerState::new(rect, launcher_preview_version))
+                .map(|rect| PhysicalLayerState::new(rect, launcher_preview_version))
         } else {
             None
         };
@@ -10495,7 +10495,7 @@ pub(super) fn run_launcher_loop(
         {
             let rect = arcade_list_renderer.dirty_rect();
             Some(
-                DirectLayerState::new(rect, launcher_arcade_version)
+                PhysicalLayerState::new(rect, launcher_arcade_version)
                     .with_content_offset(launcher_arcade_scroll_offset),
             )
         } else {

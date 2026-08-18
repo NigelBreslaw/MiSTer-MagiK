@@ -68,12 +68,12 @@ use mister_magik_fb::framebuffer::full_frame_latch::{
     LatchCopyPath, LatchFrameBuffers, LatchHardware, wait_for_latch_completion,
 };
 use mister_magik_fb::framebuffer::present::{
-    copy_cached_rect_565, copy_cached_rows_565, copy_direct_preview_rect_565,
-    copy_direct_preview_rect_to_hidden,
+    copy_cached_rect_565, copy_cached_rows_565, copy_physical_layer_rect_565,
+    copy_physical_layer_rect_to_hidden,
 };
 use mister_magik_fb::framebuffer::route::LauncherFramebufferRoute;
 use mister_magik_fb::framebuffer::target::{
-    CachedFrameView, DirectPreviewView, DirtyRect, DirtyRectList, FramebufferTargetGeometry,
+    CachedFrameView, DirtyRect, DirtyRectList, FramebufferTargetGeometry, PhysicalLayerView,
     UiFrameTarget, blend_565, build_launcher_present_plan_from_layers, dirty_rect, dirty_rects,
     format_dirty_rect,
 };
@@ -218,8 +218,8 @@ use launcher_screensaver::{LauncherScreensaver, LauncherScreensaverLoader};
 use launcher_screensaver_pipeline::{RenderAheadPoll, ScreensaverRenderAhead};
 use launcher_startup_intro::*;
 use mister_magik_mister_runtime::framebuffer::latch_state::{
-    DirectLayerState, DirectLayerUpdate, LatchFramePlan as LauncherFramePlan, LatchPresentPlan,
-    LayerOffset, PhysicalLayerPublication, PhysicalLayerRole, TwoBufferLatchState,
+    LatchFramePlan as LauncherFramePlan, LatchPresentPlan, LayerOffset, PhysicalLayerPublication,
+    PhysicalLayerRole, PhysicalLayerState, PhysicalLayerUpdate, TwoBufferLatchState,
 };
 use portrait_preview_compositor::*;
 use raw565_preview_renderer::*;

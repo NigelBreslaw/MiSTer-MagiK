@@ -6,7 +6,7 @@ use super::super::*;
 pub(in crate::ui_runner) struct Fb0DirtyPresentRequest<'a> {
     pub(in crate::ui_runner) frame_plan: LauncherFramePlan,
     pub(in crate::ui_runner) cached_frame: CachedFrameView<'a>,
-    pub(in crate::ui_runner) direct_preview: Option<DirectPreviewView<'a>>,
+    pub(in crate::ui_runner) direct_preview: Option<PhysicalLayerView<'a>>,
     pub(in crate::ui_runner) fb0: &'a mut MappedRgb565Framebuffer,
     pub(in crate::ui_runner) arcade_list_renderer: &'a mut ArcadeListRenderer,
 }
@@ -25,7 +25,7 @@ pub(in crate::ui_runner) struct Fb0DirtyPresenter;
 
 pub(in crate::ui_runner) trait Fb0DirtyCopySink {
     fn copy_cached(&mut self, view: CachedFrameView<'_>, rect: DirtyRect) -> u32;
-    fn copy_direct_preview(&mut self, view: DirectPreviewView<'_>, rect: DirtyRect) -> u32;
+    fn copy_physical_layer(&mut self, view: PhysicalLayerView<'_>, rect: DirtyRect) -> u32;
     fn copy_arcade_list(&mut self, update: ArcadeListUpdate) -> PresentCopyStats;
 }
 
@@ -39,8 +39,8 @@ impl Fb0DirtyCopySink for LiveFb0DirtyCopySink<'_> {
         copy_cached_rect_565(self.fb0, view, rect).map_or(0, DirtyRect::rows)
     }
 
-    fn copy_direct_preview(&mut self, view: DirectPreviewView<'_>, rect: DirtyRect) -> u32 {
-        copy_direct_preview_rect_565(self.fb0, view, rect)
+    fn copy_physical_layer(&mut self, view: PhysicalLayerView<'_>, rect: DirtyRect) -> u32 {
+        copy_physical_layer_rect_565(self.fb0, view, rect)
     }
 
     fn copy_arcade_list(&mut self, update: ArcadeListUpdate) -> PresentCopyStats {
@@ -67,7 +67,7 @@ impl Fb0DirtyPresenter {
     pub(in crate::ui_runner) fn present_to(
         frame_plan: LauncherFramePlan,
         cached_frame: CachedFrameView<'_>,
-        direct_preview: Option<DirectPreviewView<'_>>,
+        direct_preview: Option<PhysicalLayerView<'_>>,
         sink: &mut impl Fb0DirtyCopySink,
     ) -> Fb0DirtyPresentStats {
         let cached_damage = frame_plan.cached_damage();
@@ -95,7 +95,7 @@ impl Fb0DirtyPresenter {
         let mut direct_preview_present_us = 0u128;
         if let (Some(view), Some(rect)) = (direct_preview, direct_preview_rect) {
             let copy_start = Instant::now();
-            direct_preview_rows = sink.copy_direct_preview(view, rect);
+            direct_preview_rows = sink.copy_physical_layer(view, rect);
             direct_preview_present_us = copy_start.elapsed().as_micros();
             copied_rows += direct_preview_rows;
             if direct_preview_rows != 0 {
@@ -158,7 +158,7 @@ mod tests {
             self.cached_rows
         }
 
-        fn copy_direct_preview(&mut self, _view: DirectPreviewView<'_>, _rect: DirtyRect) -> u32 {
+        fn copy_physical_layer(&mut self, _view: PhysicalLayerView<'_>, _rect: DirtyRect) -> u32 {
             self.events.push("preview");
             self.preview_rows
         }

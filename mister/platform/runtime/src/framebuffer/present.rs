@@ -5,7 +5,7 @@ use crate::framebuffer::mapped::MappedRgb565Framebuffer;
 use crate::framebuffer::scanout_slots::ScanoutSlotsRgb565Framebuffer;
 use crate::framebuffer::stream;
 use crate::framebuffer::target::{
-    CachedFrameView, DirectPreviewView, DirtyRect, StridedFrameRegion, dirty_rect_is_broad,
+    CachedFrameView, DirtyRect, PhysicalLayerView, StridedFrameRegion, dirty_rect_is_broad,
 };
 use crate::framebuffer::vertical_scale::Rgb565FrameView;
 use crate::framebuffer::vertical_scale::VerticalRect;
@@ -223,16 +223,16 @@ pub fn copy_strided_rect_565(
     true
 }
 
-pub fn copy_direct_preview_rect_565(
+pub fn copy_physical_layer_rect_565(
     disp: &mut MappedRgb565Framebuffer,
-    view: DirectPreviewView<'_>,
+    view: PhysicalLayerView<'_>,
     rect: DirtyRect,
 ) -> u32 {
     let geometry = stream_geometry(disp);
-    copy_direct_preview_region(
+    copy_physical_layer_region(
         view,
         rect,
-        "direct preview rect",
+        "physical layer rect",
         |region| {
             disp.present_rect_565_strided(
                 rect.x0,
@@ -258,15 +258,15 @@ pub fn copy_direct_preview_rect_565(
     )
 }
 
-pub fn copy_direct_preview_rect_to_hidden(
+pub fn copy_physical_layer_rect_to_hidden(
     hidden: &mut ScanoutSlotsRgb565Framebuffer,
-    view: DirectPreviewView<'_>,
+    view: PhysicalLayerView<'_>,
     rect: DirtyRect,
 ) -> u32 {
-    copy_direct_preview_region(
+    copy_physical_layer_region(
         view,
         rect,
-        "hidden direct preview rect",
+        "hidden physical layer rect",
         |region| {
             hidden.copy_rect_565_strided(
                 rect.x0,
@@ -283,8 +283,8 @@ pub fn copy_direct_preview_rect_to_hidden(
     )
 }
 
-fn copy_direct_preview_region<T, E>(
-    view: DirectPreviewView<'_>,
+fn copy_physical_layer_region<T, E>(
+    view: PhysicalLayerView<'_>,
     rect: DirtyRect,
     context: &str,
     copy: impl FnOnce(StridedFrameRegion<'_>) -> Result<T, E>,
@@ -355,7 +355,7 @@ mod tests {
             ]);
         let events = RefCell::new(Vec::new());
 
-        let rows = copy_direct_preview_region(
+        let rows = copy_physical_layer_region(
             target.direct_preview_view().expect("preview view"),
             rect(3, 2, 5, 3),
             "test",
@@ -381,7 +381,7 @@ mod tests {
         target.direct_preview_565_rect_mut(rect(2, 1, 6, 3));
         let events = RefCell::new(Vec::new());
 
-        let rows = copy_direct_preview_region(
+        let rows = copy_physical_layer_region(
             target.direct_preview_view().expect("preview view"),
             rect(3, 1, 5, 2),
             "test",
@@ -402,7 +402,7 @@ mod tests {
         target.direct_preview_565_rect_mut(rect(2, 1, 6, 3));
         let events = RefCell::new(Vec::new());
 
-        let rows = copy_direct_preview_region(
+        let rows = copy_physical_layer_region(
             target.direct_preview_view().expect("preview view"),
             rect(0, 0, 1, 1),
             "test",

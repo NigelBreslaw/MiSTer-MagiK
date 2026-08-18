@@ -211,7 +211,7 @@ impl<'a> CachedFrameView<'a> {
 }
 
 #[derive(Clone, Copy)]
-pub struct DirectPreviewView<'a> {
+pub struct PhysicalLayerView<'a> {
     pixels: &'a [Rgb565Pixel],
     rect: DirtyRect,
     stride: usize,
@@ -227,7 +227,7 @@ pub(crate) struct StridedFrameRegion<'a> {
     pub(crate) src_y: usize,
 }
 
-impl<'a> DirectPreviewView<'a> {
+impl<'a> PhysicalLayerView<'a> {
     pub(crate) fn dense(pixels: &'a [Rgb565Pixel], rect: DirtyRect) -> Self {
         Self {
             pixels,
@@ -700,15 +700,15 @@ impl UiFrameTarget {
         true
     }
 
-    pub fn direct_preview_view(&self) -> Option<DirectPreviewView<'_>> {
+    pub fn direct_preview_view(&self) -> Option<PhysicalLayerView<'_>> {
         self.direct_preview_rect
-            .map(|rect| DirectPreviewView::dense(&self.direct_preview, rect))
+            .map(|rect| PhysicalLayerView::dense(&self.direct_preview, rect))
     }
 
-    pub fn physical_direct_preview_view(&self) -> Option<DirectPreviewView<'_>> {
+    pub fn physical_direct_preview_view(&self) -> Option<PhysicalLayerView<'_>> {
         self.physical_direct_preview_rect
             .zip(self.physical_direct_preview_cache)
-            .map(|(rect, _)| DirectPreviewView::dense(&self.physical_direct_preview, rect))
+            .map(|(rect, _)| PhysicalLayerView::dense(&self.physical_direct_preview, rect))
     }
 
     pub fn direct_preview_backing_diagnostic(
@@ -1041,7 +1041,7 @@ mod tests {
         assert!(preview.region(rect(1, 1, 5, 2)).is_none());
 
         let region =
-            DirectPreviewView::from_frame_region(target.cached_565(), 8, 4, rect(2, 1, 6, 3))
+            PhysicalLayerView::from_frame_region(target.cached_565(), 8, 4, rect(2, 1, 6, 3))
                 .expect("strided frame region");
         let subregion = region.region(rect(3, 2, 5, 3)).unwrap();
         assert_eq!(region.stride(), 8);
