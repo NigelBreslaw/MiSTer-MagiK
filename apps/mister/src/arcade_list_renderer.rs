@@ -1117,6 +1117,20 @@ impl ArcadeListRenderer {
         if !force && self.last_draw.as_ref() == Some(&key) {
             return None;
         }
+        let resolved_missing_visible_hash = previous.as_ref().is_some_and(|previous| {
+            previous.len == key.len
+                && previous.visual_px == key.visual_px
+                && previous.anchor_hash == key.anchor_hash
+                && previous.visible_hash.is_none()
+                && key.visible_hash.is_some()
+        });
+        if !force && resolved_missing_visible_hash {
+            // Moving frames omit the expensive visible-window hash. The first
+            // stationary frame merely resolves that missing observation; it
+            // does not prove that list content changed.
+            self.last_draw = Some(key);
+            return None;
+        }
         if force && self.last_draw.as_ref() == Some(&key) {
             self.last_update_reason = ArcadeListUpdateReason::Forced;
             return Some(ArcadeListUpdate::Full(self.dirty_rect()));
@@ -1131,7 +1145,10 @@ impl ArcadeListRenderer {
         let visible_content_changed_at_same_position = previous.as_ref().is_some_and(|previous| {
             previous.len == key.len
                 && previous.visual_px == key.visual_px
-                && previous.visible_hash != key.visible_hash
+                && matches!(
+                    (previous.visible_hash, key.visible_hash),
+                    (Some(previous), Some(current)) if previous != current
+                )
         });
         let can_reuse_scrolled_surface = same_len && !visible_content_changed_at_same_position;
         if !force
@@ -4876,6 +4893,27 @@ mod tests {
             renderer.draw_filter_items(&items, 1, 1.0 / ARCADE_ROW_HEIGHT as f32, false,),
             Some(ArcadeListUpdate::Scroll { .. })
         ));
+    }
+
+    #[test]
+    fn first_stationary_frame_after_scroll_only_resolves_visible_hash() {
+        let games = games("arcade", 48);
+        let mut renderer = ArcadeListRenderer::new();
+        assert!(matches!(
+            renderer.draw(ArcadeGameView::contiguous(&games), 0, 0.0, false),
+            Some(ArcadeListUpdate::Full(_))
+        ));
+        let visual_index = 1.0 / ARCADE_ROW_HEIGHT as f32;
+        assert!(matches!(
+            renderer.draw(ArcadeGameView::contiguous(&games), 0, visual_index, false,),
+            Some(ArcadeListUpdate::Scroll { .. })
+        ));
+
+        assert_eq!(
+            renderer.draw(ArcadeGameView::contiguous(&games), 0, visual_index, false,),
+            None
+        );
+        assert_eq!(renderer.last_update_reason, ArcadeListUpdateReason::None);
     }
 
     #[test]
