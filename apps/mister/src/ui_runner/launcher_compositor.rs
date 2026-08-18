@@ -577,11 +577,13 @@ impl<'a> LayerTarget<'a> {
         hidden: &mut ScanoutSlotsRgb565Framebuffer,
         renderer: &mut ArcadeListRenderer,
         slot_index: u8,
+        diff_safe: bool,
         update: ArcadeListUpdate,
     ) -> Result<PresentCopyStats, String> {
         if self.layout.is_portrait() {
-            let (rows, bytes) = renderer
-                .copy_persistent_oriented_layer_update_to_hidden(hidden, slot_index, update)?;
+            let (rows, bytes) = renderer.copy_persistent_oriented_layer_update_to_hidden(
+                hidden, slot_index, diff_safe, update,
+            )?;
             Ok(PresentCopyStats { rows, bytes })
         } else {
             Ok(copy_arcade_list_update_to_hidden(hidden, renderer, update))

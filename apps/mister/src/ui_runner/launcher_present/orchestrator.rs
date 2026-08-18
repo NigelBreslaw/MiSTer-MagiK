@@ -682,6 +682,7 @@ impl PresentationAdapters<FpgaVblankLatchHiddenPresenter> for LivePresentationAd
                         hidden,
                         arcade_list_renderer,
                         plan.slot_index,
+                        plan.arcade_redraw_diff_safe,
                         update,
                     )?;
                     hidden_arcade_compose_us = started.elapsed().as_micros();

@@ -1587,6 +1587,7 @@ impl ArcadeListRenderer {
         &mut self,
         hidden: &mut ScanoutSlotsRgb565Framebuffer,
         slot_index: u8,
+        diff_safe: bool,
         update: ArcadeListUpdate,
     ) -> Result<(u32, usize), String> {
         let view = self
@@ -1599,6 +1600,10 @@ impl ArcadeListRenderer {
                     return Err(format!(
                         "physical Arcade full rect mismatch: requested={rect:?} backing={layer_rect:?}"
                     ));
+                }
+                if diff_safe {
+                    return self
+                        .copy_persistent_oriented_layer_diff_to_hidden(hidden, slot_index, rect);
                 }
                 let rows = copy_direct_preview_rect_to_hidden(hidden, view, rect);
                 if rows != rect.rows() {
@@ -1623,7 +1628,19 @@ impl ArcadeListRenderer {
                         "physical Arcade scroll rect mismatch: requested={rect:?} backing={layer_rect:?}"
                     ));
                 }
-                self.copy_persistent_oriented_layer_diff_to_hidden(hidden, slot_index, rect)
+                if diff_safe {
+                    self.copy_persistent_oriented_layer_diff_to_hidden(hidden, slot_index, rect)
+                } else {
+                    let rows = copy_direct_preview_rect_to_hidden(hidden, view, rect);
+                    if rows != rect.rows() {
+                        return Err("physical Arcade scroll recovery copy incomplete".to_string());
+                    }
+                    self.refresh_persistent_slot_mirror(slot_index, rect)?;
+                    Ok((
+                        rows,
+                        rect.width().saturating_mul(rows as usize).saturating_mul(2),
+                    ))
+                }
             }
         }
     }

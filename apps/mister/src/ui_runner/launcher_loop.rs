@@ -5218,7 +5218,7 @@ pub(super) fn run_launcher_loop(
     arcade_list_renderer.set_crt_portrait_rows(layout.is_portrait());
     let mut crt_backdrop = CrtBackdropController::for_display(ui);
     let mut launcher_preview_version = 1u64;
-    let mut launcher_arcade_version = 1u64;
+    let launcher_arcade_version = 1u64;
     let mut launcher_arcade_scroll_offset = LayerOffset::ZERO;
     let mut arcade_drawer_view_cache = ArcadeDrawerViewCache::default();
     let mut composition = UiCompositionController::new();
@@ -10370,10 +10370,7 @@ pub(super) fn run_launcher_loop(
             None
         };
         let layer_arcade_update = direct_arcade_update.or(arcade_list_rect);
-        if matches!(layer_arcade_update, Some(ArcadeListUpdate::Full(_))) {
-            launcher_arcade_version = launcher_arcade_version.wrapping_add(1).max(1);
-            launcher_arcade_scroll_offset = LayerOffset::ZERO;
-        } else if let Some(ArcadeListUpdate::Scroll {
+        if let Some(ArcadeListUpdate::Scroll {
             delta_x, delta_y, ..
         }) = layer_arcade_update
         {

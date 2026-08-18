@@ -148,6 +148,7 @@ pub struct LatchPresentPlan {
     pub restore_rects: DirtyRectList,
     pub preview_redraw: Option<DirtyRect>,
     pub arcade_redraw: Option<DirectLayerUpdate>,
+    pub arcade_redraw_diff_safe: bool,
     preview_after: Option<DirectLayerState>,
     arcade_after: Option<DirectLayerState>,
 }
@@ -302,6 +303,12 @@ impl TwoBufferLatchState {
             input.arcade_dirty,
             arcade_intersects_restore,
         );
+        let arcade_redraw_diff_safe = !arcade_intersects_restore
+            && slot.arcade_present.is_some_and(|current| {
+                input.arcade_desired.is_some_and(|desired| {
+                    current.rect == desired.rect && current.version == desired.version
+                })
+            });
         let mut direct_redraws = DirtyRectList::new();
         direct_redraws.push_if_some(preview_redraw);
         direct_redraws.push_if_some(arcade_redraw.as_ref().map(direct_layer_update_rect));
@@ -312,6 +319,7 @@ impl TwoBufferLatchState {
             restore_rects,
             preview_redraw,
             arcade_redraw,
+            arcade_redraw_diff_safe,
             preview_after: input.preview_desired,
             arcade_after: input.arcade_desired,
         }
@@ -1045,6 +1053,7 @@ mod tests {
 
         assert_eq!(changed.preview_redraw, Some(preview));
         assert_eq!(changed.arcade_redraw, Some(DirectLayerUpdate::Full(arcade)));
+        assert!(!changed.arcade_redraw_diff_safe);
         assert!(changed.restore_rects.iter().all(|restore| {
             restore.intersection(preview).is_none() && restore.intersection(arcade).is_none()
         }));
@@ -1053,6 +1062,53 @@ mod tests {
             slot1,
             parse_ppm_fixture(include_str!("../../testdata/latch_overlay_order.ppm"))
         );
+    }
+
+    #[test]
+    fn same_arcade_identity_allows_slot_local_content_diff() {
+        let arcade = rect(0, 0, 4, 3);
+        let arcade_layer = layer(arcade, 7);
+        let mut state = TwoBufferLatchState::new(WIDTH, HEIGHT);
+
+        all_writable(&mut state);
+        let first = state
+            .plan_next(input(
+                Some(full()),
+                None,
+                None,
+                Some(arcade_layer),
+                Some(DirectLayerUpdate::Full(arcade)),
+            ))
+            .expect("first plan");
+        state.mark_post_success(first);
+
+        all_writable(&mut state);
+        let second = state
+            .plan_next(input(
+                None,
+                None,
+                None,
+                Some(arcade_layer),
+                Some(DirectLayerUpdate::Full(arcade)),
+            ))
+            .expect("second plan");
+        state.mark_post_success(second);
+
+        all_writable(&mut state);
+        let content_update = state
+            .plan_next(input(
+                None,
+                None,
+                None,
+                Some(arcade_layer),
+                Some(DirectLayerUpdate::Full(arcade)),
+            ))
+            .expect("content update");
+        assert_eq!(
+            content_update.arcade_redraw,
+            Some(DirectLayerUpdate::Full(arcade))
+        );
+        assert!(content_update.arcade_redraw_diff_safe);
     }
 
     #[test]
