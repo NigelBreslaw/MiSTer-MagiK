@@ -406,8 +406,7 @@ impl<'a> LayerTarget<'a> {
         hidden: &mut ScanoutSlotsRgb565Framebuffer,
         rect: DirtyRect,
     ) -> u32 {
-        self.target
-            .direct_preview_view()
+        self.direct_preview_view()
             .map(|view| copy_direct_preview_rect_to_hidden(hidden, view, rect))
             .unwrap_or(0)
     }
