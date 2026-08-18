@@ -8134,7 +8134,11 @@ fn run_gui_frame_profile_route_with_pprof(
         get(
             session,
             GUI_PROFILE_REMOTE_COMPLETE,
-            &output_dir.join("profile.json"),
+            &output_dir.join(if pprof_remote_dir.is_some() {
+                "frame-profile.json"
+            } else {
+                "profile.json"
+            }),
         )?;
         validate_gui_profile_route(&profile, pmu)?;
         let status_after = read_launcher_status(session)?;
@@ -8858,6 +8862,11 @@ fn profile_installed_arcade_velocity_scroll_streamline(
         streamline_dir.join("capture-manifest.json"),
         format!("{}\n", serde_json::to_string_pretty(&capture_manifest)?),
     )?;
+    let frame_profile_artifact = if output_dir.join("frame-profile.json").is_file() {
+        "frame-profile.json"
+    } else {
+        "profile.json"
+    };
     let summary = json!({
         "schema": "mister-magik-arcade-velocity-scroll-streamline-v1",
         "artifact_status": "passed",
@@ -9334,7 +9343,7 @@ fn summarize_arcade_velocity_scroll(
         "terminal_checkpoint": route.get("terminal_checkpoint").cloned().unwrap_or(Value::Null),
         "artifacts": {
             "telemetry": "telemetry.jsonl",
-            "profile": "profile.json",
+            "profile": frame_profile_artifact,
             "terminal_png": "terminal-arcade.png",
             "terminal_metadata": "terminal-arcade.json",
         },
