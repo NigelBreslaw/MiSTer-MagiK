@@ -467,7 +467,7 @@ impl UiFrameTarget {
                     rect.x0,
                     rect.y0,
                     rect.width(),
-                    rect.height(),
+                    rect.y1 - rect.y0,
                     &self.direct_preview,
                     source_stride,
                     source_x,
