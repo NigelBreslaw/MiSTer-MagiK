@@ -712,6 +712,8 @@ impl GuiProfilingController {
         record["portrait_arcade_compose_us"] = json!(persistent_arcade_composition.elapsed_us);
         record["portrait_arcade_composed_pixels"] =
             json!(persistent_arcade_composition.written_pixels);
+        record["portrait_arcade_allocated_bytes"] =
+            json!(persistent_arcade_composition.allocated_bytes);
         record["portrait_preview_rotation_pixels"] =
             json!(custom_draw.portrait_preview_rotation_pixels);
         record["portrait_preview_blend_pixels"] = json!(custom_draw.portrait_preview_blend_pixels);
@@ -737,6 +739,7 @@ impl GuiProfilingController {
                 "rebuild_reason": persistent_arcade_composition.rebuild_reason.label(),
                 "compose_us": persistent_arcade_composition.elapsed_us,
                 "composed_pixels": persistent_arcade_composition.written_pixels,
+                "allocated_bytes": persistent_arcade_composition.allocated_bytes,
                 "hidden_compose_us": physical_layer_presentation.arcade_hidden_compose_us,
                 "present_us": physical_layer_presentation.arcade_present_us,
             },
@@ -1076,6 +1079,11 @@ mod tests {
             crt_backdrop_cache_state: "exact",
             portrait_arcade_list_pixels: 12_345,
             portrait_arcade_list_bytes: 24_690,
+            persistent_arcade_composition:
+                crate::arcade_list_renderer::PersistentArcadeCompositionTrace {
+                    allocated_bytes: 456_000,
+                    ..crate::arcade_list_renderer::PersistentArcadeCompositionTrace::default()
+                },
             portrait_preview_rotation_pixels: 2_048,
             portrait_preview_blend_pixels: 1_024,
             portrait_preview_worker_queue_replacements: 3,
@@ -1146,6 +1154,10 @@ mod tests {
         assert_eq!(controller.frames[0]["portrait_arcade_list_pixels"], 12_345);
         assert_eq!(controller.frames[0]["portrait_arcade_list_bytes"], 24_690);
         assert_eq!(
+            controller.frames[0]["portrait_arcade_allocated_bytes"],
+            456_000
+        );
+        assert_eq!(
             controller.frames[0]["latch"]["arcade_copy_decision"],
             "sparse-diff"
         );
@@ -1175,6 +1187,10 @@ mod tests {
         assert_eq!(
             controller.frames[0]["physical_layers"]["arcade"]["bytes"],
             24_690
+        );
+        assert_eq!(
+            controller.frames[0]["physical_layers"]["arcade"]["allocated_bytes"],
+            456_000
         );
         assert_eq!(
             controller.frames[0]["physical_layers"]["arcade"]["hidden_compose_us"],

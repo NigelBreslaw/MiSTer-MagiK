@@ -219,6 +219,191 @@ pub struct PhysicalLayerView<'a> {
     src_y: usize,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum PhysicalLayerCopyDecision {
+    #[default]
+    None,
+    SparseDiff,
+    MirrorRecovery,
+    FullCopy,
+    DenseScroll,
+    ScrollRecovery,
+}
+
+impl PhysicalLayerCopyDecision {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::SparseDiff => "sparse-diff",
+            Self::MirrorRecovery => "mirror-recovery",
+            Self::FullCopy => "full-copy",
+            Self::DenseScroll => "dense-scroll",
+            Self::ScrollRecovery => "scroll-recovery",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct PhysicalLayerCopyTrace {
+    pub decision: PhysicalLayerCopyDecision,
+    pub diff_safe: bool,
+    pub mirror_valid: bool,
+    pub compare_us: u64,
+    pub write_us: u64,
+    pub mirror_refresh_us: u64,
+    pub compared_pixels: u64,
+    pub written_pixels: u64,
+    pub mirror_refresh_pixels: u64,
+    pub changed_rows: u32,
+}
+
+/// Owned dense pixels for one physical composition-space rectangle.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PhysicalLayerBacking {
+    rect: DirtyRect,
+    stride: usize,
+    pixels: Vec<Rgb565Pixel>,
+}
+
+impl PhysicalLayerBacking {
+    pub fn new(rect: DirtyRect, fill: Rgb565Pixel) -> Option<Self> {
+        if rect.x0 >= rect.x1 || rect.y0 >= rect.y1 {
+            return None;
+        }
+        let stride = rect.width();
+        let len = stride.checked_mul(rect.rows() as usize)?;
+        Some(Self {
+            rect,
+            stride,
+            pixels: vec![fill; len],
+        })
+    }
+
+    pub fn ensure(&mut self, rect: DirtyRect, fill: Rgb565Pixel) -> bool {
+        if self.rect == rect {
+            return false;
+        }
+        *self = Self::new(rect, fill).expect("physical layer rectangle is nonempty");
+        true
+    }
+
+    pub fn fill(&mut self, pixel: Rgb565Pixel) {
+        self.pixels.fill(pixel);
+    }
+
+    pub fn rect(&self) -> DirtyRect {
+        self.rect
+    }
+
+    pub fn stride(&self) -> usize {
+        self.stride
+    }
+
+    pub fn pixels(&self) -> &[Rgb565Pixel] {
+        &self.pixels
+    }
+
+    pub fn pixels_mut(&mut self) -> &mut [Rgb565Pixel] {
+        &mut self.pixels
+    }
+
+    pub fn allocated_bytes(&self) -> usize {
+        self.pixels
+            .capacity()
+            .saturating_mul(std::mem::size_of::<Rgb565Pixel>())
+    }
+
+    pub fn view(&self) -> PhysicalLayerView<'_> {
+        PhysicalLayerView::dense(&self.pixels, self.rect)
+    }
+
+    /// Shifts the complete dense rectangle in physical coordinates.
+    pub fn shift(&mut self, dx: isize, dy: isize, fill: Rgb565Pixel) -> bool {
+        shift_physical_rect(
+            &mut self.pixels,
+            self.stride,
+            self.rect.rows() as usize,
+            DirtyRect {
+                x0: 0,
+                y0: 0,
+                x1: self.rect.width(),
+                y1: self.rect.rows() as usize,
+            },
+            dx,
+            dy,
+            fill,
+        )
+    }
+}
+
+pub fn shift_physical_rect(
+    pixels: &mut [Rgb565Pixel],
+    stride: usize,
+    height: usize,
+    rect: DirtyRect,
+    dx: isize,
+    dy: isize,
+    fill: Rgb565Pixel,
+) -> bool {
+    if rect.x0 >= rect.x1
+        || rect.y0 >= rect.y1
+        || rect.x1 > stride
+        || rect.y1 > height
+        || pixels.len() < stride.saturating_mul(height)
+        || (dx != 0 && dy != 0)
+    {
+        return false;
+    }
+    let width = rect.width();
+    let height = rect.rows() as usize;
+    if dx != 0 {
+        let distance = dx.unsigned_abs();
+        if distance >= width {
+            return false;
+        }
+        for y in rect.y0..rect.y1 {
+            let row = &mut pixels[y * stride + rect.x0..y * stride + rect.x1];
+            if dx > 0 {
+                row.copy_within(..width - distance, distance);
+                row[..distance].fill(fill);
+            } else {
+                row.copy_within(distance..width, 0);
+                row[width - distance..width].fill(fill);
+            }
+        }
+        return true;
+    }
+    if dy == 0 {
+        return true;
+    }
+    let distance = dy.unsigned_abs();
+    if distance >= height {
+        return false;
+    }
+    if dy > 0 {
+        for row in (0..height - distance).rev() {
+            let source = (rect.y0 + row) * stride + rect.x0;
+            let destination = (rect.y0 + row + distance) * stride + rect.x0;
+            pixels.copy_within(source..source + width, destination);
+        }
+        for y in rect.y0..rect.y0 + distance {
+            let start = y * stride + rect.x0;
+            pixels[start..start + width].fill(fill);
+        }
+    } else {
+        for row in 0..height - distance {
+            let source = (rect.y0 + row + distance) * stride + rect.x0;
+            let destination = (rect.y0 + row) * stride + rect.x0;
+            pixels.copy_within(source..source + width, destination);
+        }
+        for y in rect.y1 - distance..rect.y1 {
+            let start = y * stride + rect.x0;
+            pixels[start..start + width].fill(fill);
+        }
+    }
+    true
+}
+
 #[derive(Clone, Copy)]
 pub(crate) struct StridedFrameRegion<'a> {
     pub(crate) pixels: &'a [Rgb565Pixel],
@@ -1046,6 +1231,68 @@ mod tests {
         let subregion = region.region(rect(3, 2, 5, 3)).unwrap();
         assert_eq!(region.stride(), 8);
         assert_eq!((subregion.src_x, subregion.src_y), (3, 2));
+    }
+
+    #[test]
+    fn physical_layer_backing_is_dense_and_shifts_on_both_axes() {
+        let layer_rect = rect(20, 10, 24, 13);
+        let mut backing = PhysicalLayerBacking::new(layer_rect, Rgb565Pixel(0)).unwrap();
+        backing.pixels_mut().copy_from_slice(&[
+            Rgb565Pixel(1),
+            Rgb565Pixel(2),
+            Rgb565Pixel(3),
+            Rgb565Pixel(4),
+            Rgb565Pixel(5),
+            Rgb565Pixel(6),
+            Rgb565Pixel(7),
+            Rgb565Pixel(8),
+            Rgb565Pixel(9),
+            Rgb565Pixel(10),
+            Rgb565Pixel(11),
+            Rgb565Pixel(12),
+        ]);
+        assert_eq!(backing.stride(), 4);
+        assert_eq!(backing.allocated_bytes(), 24);
+        assert_eq!(backing.view().rect(), layer_rect);
+
+        assert!(backing.shift(1, 0, Rgb565Pixel(99)));
+        assert_eq!(
+            backing.pixels(),
+            &[
+                Rgb565Pixel(99),
+                Rgb565Pixel(1),
+                Rgb565Pixel(2),
+                Rgb565Pixel(3),
+                Rgb565Pixel(99),
+                Rgb565Pixel(5),
+                Rgb565Pixel(6),
+                Rgb565Pixel(7),
+                Rgb565Pixel(99),
+                Rgb565Pixel(9),
+                Rgb565Pixel(10),
+                Rgb565Pixel(11),
+            ]
+        );
+        assert!(backing.shift(0, -1, Rgb565Pixel(77)));
+        assert_eq!(
+            backing.pixels(),
+            &[
+                Rgb565Pixel(99),
+                Rgb565Pixel(5),
+                Rgb565Pixel(6),
+                Rgb565Pixel(7),
+                Rgb565Pixel(99),
+                Rgb565Pixel(9),
+                Rgb565Pixel(10),
+                Rgb565Pixel(11),
+                Rgb565Pixel(77),
+                Rgb565Pixel(77),
+                Rgb565Pixel(77),
+                Rgb565Pixel(77),
+            ]
+        );
+        assert!(!backing.shift(1, 1, Rgb565Pixel(0)));
+        assert!(!backing.shift(4, 0, Rgb565Pixel(0)));
     }
 
     #[test]

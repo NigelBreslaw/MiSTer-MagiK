@@ -216,6 +216,180 @@ impl Rgb565OutputLayout {
     }
 }
 
+/// A logical sub-rectangle stored as one dense physical RGB565 rectangle.
+///
+/// Local coordinates preserve the parent output's rotation, so the existing
+/// tiled and NEON copy kernels can write a layer without retaining pixels for
+/// the rest of the physical framebuffer.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Rgb565RegionLayout {
+    output: Rgb565OutputLayout,
+    logical_rect: Rgb565Rect,
+    physical_rect: Rgb565Rect,
+    dense_output: Rgb565OutputLayout,
+}
+
+impl Rgb565RegionLayout {
+    pub fn new(output: Rgb565OutputLayout, logical_rect: Rgb565Rect) -> Result<Self, SceneError> {
+        if logical_rect.x0 >= logical_rect.x1
+            || logical_rect.y0 >= logical_rect.y1
+            || logical_rect.x1 > output.logical_width()
+            || logical_rect.y1 > output.logical_height()
+        {
+            return Err(SceneError::InvalidGeometry(
+                "RGB565 region must be a nonempty logical output sub-rectangle",
+            ));
+        }
+        let physical_rect = output.logical_rect_to_physical(logical_rect);
+        let dense_output = Rgb565OutputLayout::new(
+            logical_rect.width(),
+            logical_rect.height(),
+            physical_rect.width(),
+            output.rotation(),
+        )?;
+        debug_assert_eq!(dense_output.physical_width(), physical_rect.width());
+        debug_assert_eq!(dense_output.physical_height(), physical_rect.height());
+        Ok(Self {
+            output,
+            logical_rect,
+            physical_rect,
+            dense_output,
+        })
+    }
+
+    #[must_use]
+    pub const fn output(self) -> Rgb565OutputLayout {
+        self.output
+    }
+
+    #[must_use]
+    pub const fn logical_rect(self) -> Rgb565Rect {
+        self.logical_rect
+    }
+
+    #[must_use]
+    pub const fn physical_rect(self) -> Rgb565Rect {
+        self.physical_rect
+    }
+
+    #[must_use]
+    pub const fn physical_stride(self) -> usize {
+        self.dense_output.physical_stride()
+    }
+
+    #[must_use]
+    pub const fn len(self) -> usize {
+        self.dense_output.len()
+    }
+
+    #[must_use]
+    pub const fn allocated_bytes(self) -> usize {
+        self.len().saturating_mul(size_of::<Rgb565Pixel>())
+    }
+
+    #[must_use]
+    pub const fn dense_output(self) -> Rgb565OutputLayout {
+        self.dense_output
+    }
+
+    #[must_use]
+    pub const fn contains_logical_rect(self, rect: Rgb565Rect) -> bool {
+        rect.x0 >= self.logical_rect.x0
+            && rect.y0 >= self.logical_rect.y0
+            && rect.x1 <= self.logical_rect.x1
+            && rect.y1 <= self.logical_rect.y1
+    }
+
+    #[must_use]
+    pub const fn local_logical(self, x: usize, y: usize) -> Option<(usize, usize)> {
+        if x < self.logical_rect.x0
+            || y < self.logical_rect.y0
+            || x >= self.logical_rect.x1
+            || y >= self.logical_rect.y1
+        {
+            return None;
+        }
+        Some((x - self.logical_rect.x0, y - self.logical_rect.y0))
+    }
+
+    #[must_use]
+    pub fn dense_offset(self, logical_x: usize, logical_y: usize) -> Option<usize> {
+        let (local_x, local_y) = self.local_logical(logical_x, logical_y)?;
+        Some(self.dense_output.physical_offset(local_x, local_y))
+    }
+}
+
+/// Mutable logical access to a dense physical RGB565 region.
+pub struct Rgb565RegionSurfaceMut<'a, P> {
+    pixels: &'a mut [P],
+    layout: Rgb565RegionLayout,
+}
+
+impl<'a, P> Rgb565RegionSurfaceMut<'a, P> {
+    pub fn new(pixels: &'a mut [P], layout: Rgb565RegionLayout) -> Result<Self, SceneError> {
+        if pixels.len() != layout.len() {
+            return Err(SceneError::TargetSizeMismatch {
+                actual: pixels.len(),
+                expected: layout.len(),
+            });
+        }
+        Ok(Self { pixels, layout })
+    }
+
+    #[must_use]
+    pub const fn layout(&self) -> Rgb565RegionLayout {
+        self.layout
+    }
+}
+
+impl<P: Copy> Rgb565RegionSurfaceMut<'_, P> {
+    #[allow(clippy::too_many_arguments)]
+    pub fn copy_rect_strided(
+        &mut self,
+        destination_x: usize,
+        destination_y: usize,
+        width: usize,
+        height: usize,
+        source: &[P],
+        source_stride: usize,
+        source_x: usize,
+        source_y: usize,
+    ) -> bool {
+        if width == 0 || height == 0 {
+            return true;
+        }
+        let Some(destination_x1) = destination_x.checked_add(width) else {
+            return false;
+        };
+        let Some(destination_y1) = destination_y.checked_add(height) else {
+            return false;
+        };
+        let destination = Rgb565Rect {
+            x0: destination_x,
+            y0: destination_y,
+            x1: destination_x1,
+            y1: destination_y1,
+        };
+        if !self.layout.contains_logical_rect(destination) {
+            return false;
+        }
+        let local_x = destination_x - self.layout.logical_rect.x0;
+        let local_y = destination_y - self.layout.logical_rect.y0;
+        Rgb565SurfaceMut::new(self.pixels, self.layout.dense_output)
+            .expect("region target length was validated")
+            .copy_rect_strided(
+                local_x,
+                local_y,
+                width,
+                height,
+                source,
+                source_stride,
+                source_x,
+                source_y,
+            )
+    }
+}
+
 /// Mutable pixel access in logical coordinates backed by a physically
 /// oriented buffer.
 pub struct Rgb565SurfaceMut<'a, P> {
@@ -946,6 +1120,116 @@ mod tests {
                 y1: 3,
             }
         );
+    }
+
+    #[test]
+    fn dense_region_layout_matches_parent_physical_coordinates() {
+        let logical_rect = Rgb565Rect {
+            x0: 2,
+            y0: 1,
+            x1: 7,
+            y1: 5,
+        };
+        for rotation in [
+            OutputRotation::None,
+            OutputRotation::Clockwise90,
+            OutputRotation::CounterClockwise90,
+        ] {
+            let output = Rgb565OutputLayout::new(9, 6, 11, rotation).unwrap();
+            let region = Rgb565RegionLayout::new(output, logical_rect).unwrap();
+            assert_eq!(region.output(), output);
+            assert_eq!(region.logical_rect(), logical_rect);
+            assert_eq!(
+                region.physical_rect(),
+                output.logical_rect_to_physical(logical_rect)
+            );
+            assert_eq!(
+                region.len(),
+                region.physical_rect().width() * region.physical_rect().height()
+            );
+            assert_eq!(region.allocated_bytes(), region.len() * 2);
+
+            for y in logical_rect.y0..logical_rect.y1 {
+                for x in logical_rect.x0..logical_rect.x1 {
+                    let (physical_x, physical_y) = output.logical_to_physical(x, y);
+                    let physical_rect = region.physical_rect();
+                    let expected = (physical_y - physical_rect.y0) * region.physical_stride()
+                        + physical_x
+                        - physical_rect.x0;
+                    assert_eq!(region.dense_offset(x, y), Some(expected));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn dense_region_surface_is_pixel_identical_to_parent_output() {
+        let logical_rect = Rgb565Rect {
+            x0: 2,
+            y0: 1,
+            x1: 7,
+            y1: 5,
+        };
+        let source: Vec<_> = (0..20).map(|value| Rgb565Pixel(value + 1)).collect();
+        for rotation in [
+            OutputRotation::None,
+            OutputRotation::Clockwise90,
+            OutputRotation::CounterClockwise90,
+        ] {
+            let output = Rgb565OutputLayout::new(9, 6, 11, rotation).unwrap();
+            let region = Rgb565RegionLayout::new(output, logical_rect).unwrap();
+            let mut full = vec![Rgb565Pixel(0); output.len()];
+            assert!(
+                Rgb565SurfaceMut::new(&mut full, output)
+                    .unwrap()
+                    .copy_rect_strided(2, 1, 5, 4, &source, 5, 0, 0)
+            );
+            let mut dense = vec![Rgb565Pixel(0); region.len()];
+            assert!(
+                Rgb565RegionSurfaceMut::new(&mut dense, region)
+                    .unwrap()
+                    .copy_rect_strided(2, 1, 5, 4, &source, 5, 0, 0)
+            );
+            let physical = region.physical_rect();
+            let mut cropped = Vec::with_capacity(region.len());
+            for y in physical.y0..physical.y1 {
+                let start = y * output.physical_stride() + physical.x0;
+                cropped.extend_from_slice(&full[start..start + physical.width()]);
+            }
+            assert_eq!(dense, cropped, "rotation={rotation:?}");
+        }
+    }
+
+    #[test]
+    fn dense_region_rejects_out_of_bounds_geometry_and_writes() {
+        let output = Rgb565OutputLayout::new(9, 6, 11, OutputRotation::Clockwise90).unwrap();
+        assert!(
+            Rgb565RegionLayout::new(
+                output,
+                Rgb565Rect {
+                    x0: 2,
+                    y0: 1,
+                    x1: 2,
+                    y1: 5,
+                }
+            )
+            .is_err()
+        );
+        let region = Rgb565RegionLayout::new(
+            output,
+            Rgb565Rect {
+                x0: 2,
+                y0: 1,
+                x1: 7,
+                y1: 5,
+            },
+        )
+        .unwrap();
+        let mut dense = vec![Rgb565Pixel(0); region.len()];
+        let source = [Rgb565Pixel(1); 4];
+        let mut surface = Rgb565RegionSurfaceMut::new(&mut dense, region).unwrap();
+        assert!(!surface.copy_rect_strided(1, 1, 2, 2, &source, 2, 0, 0));
+        assert!(!surface.copy_rect_strided(6, 4, 2, 2, &source, 2, 0, 0));
     }
 
     #[test]

@@ -34,6 +34,10 @@ pub mod arcade_list_renderer;
 #[cfg(any(feature = "ui", feature = "ui-preview"))]
 #[allow(dead_code)]
 #[doc(hidden)]
+pub mod arcade_physical_layer;
+#[cfg(any(feature = "ui", feature = "ui-preview"))]
+#[allow(dead_code)]
+#[doc(hidden)]
 pub mod artifact_publish;
 pub use mister_magik_mister_runtime::boot_analytics;
 pub mod bitmap_font_resource;

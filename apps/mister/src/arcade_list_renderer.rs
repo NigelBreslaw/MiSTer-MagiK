@@ -12,17 +12,26 @@ use crate::arcade_catalog::{
 };
 use crate::bitmap_text::{ConsoleFont, ConsoleGlyphRowFilter, ConsoleTypeface, TextGradient};
 use crate::framebuffer::mapped::{MappedRgb565Framebuffer, Pixel, pixel_to_rgb565};
-use crate::framebuffer::present::{
-    copy_dense_rect_565, copy_physical_layer_rect_to_hidden, copy_strided_rect_565,
-};
+use crate::framebuffer::present::{copy_dense_rect_565, copy_strided_rect_565};
 use crate::framebuffer::scanout_slots::ScanoutSlotsRgb565Framebuffer;
-use crate::framebuffer::target::{DirtyRect, PhysicalLayerView, UiFrameTarget};
+use crate::framebuffer::target::{
+    DirtyRect, PhysicalLayerBacking, PhysicalLayerCopyDecision, PhysicalLayerCopyTrace,
+    PhysicalLayerView, UiFrameTarget, shift_physical_rect,
+};
 use crate::ui_display::{
     CrtContentRect, CrtFontExperiment, CrtFontFamily, CrtUiMetrics, ResolvedOutputRoute, UiDisplay,
     UiLayoutGeometry,
 };
-use mister_magik_framebuffer_scenes::{OutputRotation, Rgb565OutputLayout, Rgb565SurfaceMut};
+use mister_magik_framebuffer_scenes::{
+    OutputRotation, Rgb565OutputLayout, Rgb565Rect, Rgb565RegionLayout, Rgb565RegionSurfaceMut,
+    Rgb565SurfaceMut,
+};
 use slint::platform::software_renderer::Rgb565Pixel;
+
+pub use crate::arcade_physical_layer::{
+    PersistentArcadeLayerDiagnostic, PersistentOrientedArcadeLayer,
+    PersistentOrientedArcadeLayerKey,
+};
 
 pub const ARCADE_LIST_X: usize = 8;
 pub const ARCADE_LIST_Y: usize = 56;
@@ -503,7 +512,6 @@ pub struct ArcadeListRenderer {
     persistent_oriented_layer: PersistentOrientedArcadeLayer,
     last_update_reason: ArcadeListUpdateReason,
     persistent_composition_trace: PersistentArcadeCompositionTrace,
-    persistent_copy_trace: PersistentArcadeCopyTrace,
 }
 
 /// Style identity carried by the persistent physical Arcade layer.
@@ -511,16 +519,6 @@ pub struct ArcadeListRenderer {
 pub enum PersistentArcadeLayerStyle {
     Hdmi,
     Crt,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct PersistentOrientedArcadeLayerKey {
-    pub geometry: ArcadeListGeometry,
-    pub visible_height: usize,
-    pub output: Rgb565OutputLayout,
-    pub style: PersistentArcadeLayerStyle,
-    pub catalog_generation: u64,
-    pub ring_origin: usize,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -628,214 +626,99 @@ pub struct PersistentArcadeCompositionTrace {
     pub rebuild_reason: PersistentArcadeRebuildReason,
     pub elapsed_us: u64,
     pub written_pixels: u64,
+    pub allocated_bytes: u64,
 }
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub enum PersistentArcadeCopyDecision {
-    #[default]
-    None,
-    SparseDiff,
-    MirrorRecovery,
-    FullCopy,
-    DenseScroll,
-    ScrollRecovery,
+pub type PersistentArcadeCopyDecision = PhysicalLayerCopyDecision;
+pub type PersistentArcadeCopyTrace = PhysicalLayerCopyTrace;
+
+enum ArcadeOrientedTarget<'a> {
+    Output {
+        pixels: &'a mut [Rgb565Pixel],
+        layout: Rgb565OutputLayout,
+    },
+    Region {
+        backing: &'a mut PhysicalLayerBacking,
+        layout: Rgb565RegionLayout,
+    },
 }
 
-impl PersistentArcadeCopyDecision {
-    pub fn label(self) -> &'static str {
+impl ArcadeOrientedTarget<'_> {
+    fn output_layout(&self) -> Rgb565OutputLayout {
         match self {
-            Self::None => "none",
-            Self::SparseDiff => "sparse-diff",
-            Self::MirrorRecovery => "mirror-recovery",
-            Self::FullCopy => "full-copy",
-            Self::DenseScroll => "dense-scroll",
-            Self::ScrollRecovery => "scroll-recovery",
+            Self::Output { layout, .. } => *layout,
+            Self::Region { layout, .. } => layout.output(),
         }
     }
-}
 
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub struct PersistentArcadeCopyTrace {
-    pub decision: PersistentArcadeCopyDecision,
-    pub diff_safe: bool,
-    pub mirror_valid: bool,
-    pub compare_us: u64,
-    pub write_us: u64,
-    pub mirror_refresh_us: u64,
-    pub compared_pixels: u64,
-    pub written_pixels: u64,
-    pub mirror_refresh_pixels: u64,
-    pub changed_rows: u32,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct PersistentArcadeLayerDiagnostic {
-    pub key: Option<PersistentOrientedArcadeLayerKey>,
-    pub rect: Option<DirtyRect>,
-    pub stride: usize,
-    pub pixels: usize,
-}
-
-/// Inactive physical Arcade content layer used by the incremental presenter.
-///
-/// The content buffer intentionally contains only normal, non-inverted list
-/// pixels. Selection fill/text/frame are tracked as a separate aperture so a
-/// scroll operation never treats inverted pixels as ordinary list content.
-pub struct PersistentOrientedArcadeLayer {
-    content: Vec<Rgb565Pixel>,
-    key: Option<PersistentOrientedArcadeLayerKey>,
-    selection_aperture: Option<DirtyRect>,
-    slot_mirrors: [PersistentArcadeSlotMirror; 2],
-    full_rebuild: bool,
-}
-
-#[derive(Default)]
-struct PersistentArcadeSlotMirror {
-    rect: Option<DirtyRect>,
-    pixels: Vec<Rgb565Pixel>,
-}
-
-impl Default for PersistentOrientedArcadeLayer {
-    fn default() -> Self {
-        Self {
-            content: Vec::new(),
-            key: None,
-            selection_aperture: None,
-            slot_mirrors: std::array::from_fn(|_| PersistentArcadeSlotMirror::default()),
-            full_rebuild: true,
-        }
-    }
-}
-
-impl PersistentOrientedArcadeLayer {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    pub fn ensure(
+    #[allow(clippy::too_many_arguments)]
+    fn copy_rect_strided(
         &mut self,
-        geometry: ArcadeListGeometry,
-        visible_height: usize,
-        output: Rgb565OutputLayout,
-        style: PersistentArcadeLayerStyle,
-        catalog_generation: u64,
-        ring_origin: usize,
+        destination_x: usize,
+        destination_y: usize,
+        width: usize,
+        height: usize,
+        source: &[Rgb565Pixel],
+        source_stride: usize,
+        source_x: usize,
+        source_y: usize,
     ) -> bool {
-        let key = PersistentOrientedArcadeLayerKey {
-            geometry,
-            visible_height,
-            output,
-            style,
-            catalog_generation,
-            ring_origin,
-        };
-        let changed = self.key.map_or(true, |current| {
-            current.geometry != key.geometry
-                || current.visible_height != key.visible_height
-                || current.output != key.output
-                || current.style != key.style
-                || current.catalog_generation != key.catalog_generation
-        }) || self.content.len() != output.len();
-        if changed {
-            self.content.resize(output.len(), Rgb565Pixel(0));
-            self.content.fill(Rgb565Pixel(0));
-            self.selection_aperture = None;
-            for mirror in &mut self.slot_mirrors {
-                mirror.rect = None;
-                mirror.pixels.clear();
+        match self {
+            Self::Output { pixels, layout } => Rgb565SurfaceMut::new(pixels, *layout)
+                .expect("launcher output layout matches its cached target")
+                .copy_rect_strided(
+                    destination_x,
+                    destination_y,
+                    width,
+                    height,
+                    source,
+                    source_stride,
+                    source_x,
+                    source_y,
+                ),
+            Self::Region { backing, layout } => {
+                Rgb565RegionSurfaceMut::new(backing.pixels_mut(), *layout)
+                    .expect("physical layer backing matches its region layout")
+                    .copy_rect_strided(
+                        destination_x,
+                        destination_y,
+                        width,
+                        height,
+                        source,
+                        source_stride,
+                        source_x,
+                        source_y,
+                    )
             }
-            self.full_rebuild = true;
-            self.key = Some(key);
-        } else {
-            self.key = Some(key);
-        }
-        changed
-    }
-
-    pub fn invalidate(&mut self) {
-        self.full_rebuild = true;
-        self.selection_aperture = None;
-        for mirror in &mut self.slot_mirrors {
-            mirror.rect = None;
         }
     }
 
-    pub fn key(&self) -> Option<PersistentOrientedArcadeLayerKey> {
-        self.key
-    }
-
-    pub fn content(&self) -> &[Rgb565Pixel] {
-        &self.content
-    }
-
-    pub fn content_mut(&mut self) -> &mut [Rgb565Pixel] {
-        &mut self.content
-    }
-
-    pub fn physical_rect(&self) -> Option<DirtyRect> {
-        let key = self.key?;
-        let physical =
-            key.output
-                .logical_rect_to_physical(mister_magik_framebuffer_scenes::Rgb565Rect {
-                    x0: key.geometry.x,
-                    y0: key.geometry.y,
-                    x1: key.geometry.x + key.geometry.width,
-                    y1: key.geometry.y + key.visible_height,
-                });
-        Some(DirtyRect {
-            x0: physical.x0,
-            y0: physical.y0,
-            x1: physical.x1,
-            y1: physical.y1,
-        })
-    }
-
-    pub fn view(&self) -> Option<PhysicalLayerView<'_>> {
-        let key = self.key?;
-        PhysicalLayerView::from_frame_region(
-            &self.content,
-            key.output.physical_stride(),
-            key.output.physical_height(),
-            self.physical_rect()?,
-        )
-    }
-
-    pub fn needs_full_rebuild(&self) -> bool {
-        self.full_rebuild
-    }
-
-    pub fn mark_full_rebuild_complete(&mut self) {
-        self.full_rebuild = false;
-    }
-
-    pub fn selection_aperture(&self) -> Option<DirtyRect> {
-        self.selection_aperture
-    }
-
-    pub fn set_selection_aperture(
+    fn shift(
         &mut self,
-        selection_y: usize,
-        selection_height: usize,
-    ) -> Option<DirtyRect> {
-        let key = self.key?;
-        let logical = mister_magik_framebuffer_scenes::Rgb565Rect {
-            x0: key.geometry.x,
-            y0: key.geometry.y.saturating_add(selection_y),
-            x1: key.geometry.x.saturating_add(key.geometry.width),
-            y1: key
-                .geometry
-                .y
-                .saturating_add(selection_y.saturating_add(selection_height)),
-        };
-        let physical = key.output.logical_rect_to_physical(logical);
-        let aperture = DirtyRect {
-            x0: physical.x0,
-            y0: physical.y0,
-            x1: physical.x1,
-            y1: physical.y1,
-        };
-        self.selection_aperture = Some(aperture);
-        Some(aperture)
+        physical_rect: Rgb565Rect,
+        dx: isize,
+        dy: isize,
+        fill: Rgb565Pixel,
+    ) -> bool {
+        match self {
+            Self::Output { pixels, layout } => shift_physical_rect(
+                pixels,
+                layout.physical_stride(),
+                layout.physical_height(),
+                DirtyRect {
+                    x0: physical_rect.x0,
+                    y0: physical_rect.y0,
+                    x1: physical_rect.x1,
+                    y1: physical_rect.y1,
+                },
+                dx,
+                dy,
+                fill,
+            ),
+            Self::Region { backing, layout } => {
+                physical_rect == layout.physical_rect() && backing.shift(dx, dy, fill)
+            }
+        }
     }
 }
 
@@ -965,7 +848,6 @@ impl ArcadeListRenderer {
             persistent_oriented_layer: PersistentOrientedArcadeLayer::new(),
             last_update_reason: ArcadeListUpdateReason::None,
             persistent_composition_trace: PersistentArcadeCompositionTrace::default(),
-            persistent_copy_trace: PersistentArcadeCopyTrace::default(),
         }
     }
 
@@ -1667,28 +1549,23 @@ impl ArcadeListRenderer {
         output_layout: Rgb565OutputLayout,
         redraw_selection_frame: bool,
     ) {
-        self.compose_layer_to_oriented_pixels(
-            target.cached_565_mut(),
-            output_layout,
-            redraw_selection_frame,
-        );
+        let mut target = ArcadeOrientedTarget::Output {
+            pixels: target.cached_565_mut(),
+            layout: output_layout,
+        };
+        self.compose_layer_to_oriented_target(&mut target, redraw_selection_frame);
     }
 
-    fn compose_layer_to_oriented_pixels(
+    fn compose_layer_to_oriented_target(
         &mut self,
-        pixels: &mut [Rgb565Pixel],
-        output_layout: Rgb565OutputLayout,
+        target: &mut ArcadeOrientedTarget<'_>,
         redraw_selection_frame: bool,
     ) -> u64 {
-        self.compose_viewport_band_to_oriented_cached(
-            pixels,
-            output_layout,
-            0,
-            self.visible_height,
-        );
+        self.compose_viewport_band_to_oriented_target(target, 0, self.visible_height);
         if redraw_selection_frame {
-            self.compose_selection_frame_to_oriented_cached(pixels, output_layout);
+            self.compose_selection_frame_to_oriented_target(target);
         }
+        let output_layout = target.output_layout();
         self.oriented_viewport_layout = Some(output_layout);
         (self.width.saturating_mul(self.visible_height) as u64).saturating_add(
             redraw_selection_frame
@@ -1704,27 +1581,26 @@ impl ArcadeListRenderer {
         update: ArcadeListUpdate,
         redraw_selection_frame: bool,
     ) {
-        let _ = self.compose_layer_update_to_oriented_pixels(
-            target.cached_565_mut(),
-            output_layout,
+        let mut target = ArcadeOrientedTarget::Output {
+            pixels: target.cached_565_mut(),
+            layout: output_layout,
+        };
+        let _ = self.compose_layer_update_to_oriented_target(
+            &mut target,
             update,
             redraw_selection_frame,
         );
     }
 
-    fn compose_layer_update_to_oriented_pixels(
+    fn compose_layer_update_to_oriented_target(
         &mut self,
-        pixels: &mut [Rgb565Pixel],
-        output_layout: Rgb565OutputLayout,
+        target: &mut ArcadeOrientedTarget<'_>,
         update: ArcadeListUpdate,
         redraw_selection_frame: bool,
     ) -> (ArcadeListUpdateKind, PersistentArcadeRebuildReason, u64) {
+        let output_layout = target.output_layout();
         let ArcadeListUpdate::Scroll { delta_y, .. } = update else {
-            let written = self.compose_layer_to_oriented_pixels(
-                pixels,
-                output_layout,
-                redraw_selection_frame,
-            );
+            let written = self.compose_layer_to_oriented_target(target, redraw_selection_frame);
             return (
                 ArcadeListUpdateKind::Full,
                 PersistentArcadeRebuildReason::RequestedFull,
@@ -1733,7 +1609,7 @@ impl ArcadeListRenderer {
         };
         let (dx, dy) = output_layout.logical_delta_to_physical(0, delta_y);
         let Some(key) = self.oriented_viewport_layout else {
-            let written = self.compose_layer_to_oriented_pixels(pixels, output_layout, true);
+            let written = self.compose_layer_to_oriented_target(target, true);
             return (
                 ArcadeListUpdateKind::Full,
                 PersistentArcadeRebuildReason::LayoutChanged,
@@ -1756,7 +1632,7 @@ impl ArcadeListRenderer {
             None
         };
         if let Some(reason) = fallback_reason {
-            let written = self.compose_layer_to_oriented_pixels(pixels, output_layout, true);
+            let written = self.compose_layer_to_oriented_target(target, true);
             return (ArcadeListUpdateKind::Full, reason, written);
         }
         let restored_pixels = self
@@ -1764,9 +1640,9 @@ impl ArcadeListRenderer {
             .map(|rect| rect.width().saturating_mul(rect.rows() as usize) as u64)
             .unwrap_or(0);
         if selection_requires_normalization
-            && !self.restore_previous_selection_normal_to_oriented(pixels, output_layout)
+            && !self.restore_previous_selection_normal_to_oriented(target)
         {
-            let written = self.compose_layer_to_oriented_pixels(pixels, output_layout, true);
+            let written = self.compose_layer_to_oriented_target(target, true);
             return (
                 ArcadeListUpdateKind::Full,
                 PersistentArcadeRebuildReason::SelectionRestoreFailed,
@@ -1780,15 +1656,8 @@ impl ArcadeListRenderer {
             y1: self.geometry.y + self.visible_height,
         };
         let physical = output_layout.logical_rect_to_physical(logical);
-        if !shift_oriented_rect(
-            pixels,
-            output_layout,
-            physical,
-            dx,
-            dy,
-            self.style.background_565,
-        ) {
-            let written = self.compose_layer_to_oriented_pixels(pixels, output_layout, true);
+        if !target.shift(physical, dx, dy, self.style.background_565) {
+            let written = self.compose_layer_to_oriented_target(target, true);
             return (
                 ArcadeListUpdateKind::Full,
                 PersistentArcadeRebuildReason::ShiftFailed,
@@ -1801,15 +1670,14 @@ impl ArcadeListRenderer {
         } else {
             0
         };
-        self.compose_viewport_band_to_oriented_cached(pixels, output_layout, exposed_y, exposed);
+        self.compose_viewport_band_to_oriented_target(target, exposed_y, exposed);
         let selection_y = self.selection_y();
-        self.compose_viewport_band_to_oriented_cached(
-            pixels,
-            output_layout,
+        self.compose_viewport_band_to_oriented_target(
+            target,
             selection_y,
             self.style.row_height.max(1) as usize,
         );
-        self.compose_selection_frame_to_oriented_cached(pixels, output_layout);
+        self.compose_selection_frame_to_oriented_target(target);
         self.previous_selection_normal_rect = None;
         self.oriented_viewport_layout = Some(output_layout);
         let shifted_pixels = physical
@@ -1869,6 +1737,16 @@ impl ArcadeListRenderer {
             catalog_generation,
             ring_origin: self.surface_y,
         };
+        let expected_region = Rgb565RegionLayout::new(
+            output_layout,
+            Rgb565Rect {
+                x0: self.geometry.x,
+                y0: self.geometry.y,
+                x1: self.geometry.x + self.width,
+                y1: self.geometry.y + self.visible_height,
+            },
+        )
+        .expect("Arcade layer geometry is within the launcher output");
         let ensure_reason = match layer.key() {
             None => PersistentArcadeRebuildReason::Initial,
             Some(current) if current.geometry != next_key.geometry => {
@@ -1886,7 +1764,7 @@ impl ArcadeListRenderer {
             Some(current) if current.catalog_generation != next_key.catalog_generation => {
                 PersistentArcadeRebuildReason::CatalogGeneration
             }
-            Some(_) if layer.content.len() != output_layout.len() => {
+            Some(_) if layer.content().len() != expected_region.len() => {
                 PersistentArcadeRebuildReason::BufferSize
             }
             Some(_) if layer.needs_full_rebuild() => PersistentArcadeRebuildReason::Invalidated,
@@ -1905,15 +1783,22 @@ impl ArcadeListRenderer {
         } else {
             update
         };
+        let region_layout = layer
+            .region_layout()
+            .expect("ensured physical Arcade layer has a region layout");
+        let mut target = ArcadeOrientedTarget::Region {
+            backing: layer.backing_mut(),
+            layout: region_layout,
+        };
         let (effective_composition, composition_reason, written_pixels) = self
-            .compose_layer_update_to_oriented_pixels(
-                layer.content_mut(),
-                output_layout,
+            .compose_layer_update_to_oriented_target(
+                &mut target,
                 effective_update,
                 matches!(effective_update, ArcadeListUpdate::Full(_)),
             );
         layer.set_selection_aperture(self.selection_y(), self.style.row_height.max(1) as usize);
         layer.mark_full_rebuild_complete();
+        let allocated_bytes = layer.allocated_bytes() as u64;
         self.persistent_oriented_layer = layer;
         self.persistent_composition_trace = PersistentArcadeCompositionTrace {
             requested_update,
@@ -1926,6 +1811,7 @@ impl ArcadeListRenderer {
             },
             elapsed_us: started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64,
             written_pixels,
+            allocated_bytes,
         };
         effective_update
     }
@@ -1934,241 +1820,12 @@ impl ArcadeListRenderer {
         self.persistent_composition_trace
     }
 
-    pub fn persistent_copy_trace(&self) -> PersistentArcadeCopyTrace {
-        self.persistent_copy_trace
-    }
-
     pub fn persistent_oriented_layer_view(&self) -> Option<PhysicalLayerView<'_>> {
         self.persistent_oriented_layer.view()
     }
 
     pub fn persistent_oriented_layer_diagnostic(&self) -> PersistentArcadeLayerDiagnostic {
-        let key = self.persistent_oriented_layer.key();
-        PersistentArcadeLayerDiagnostic {
-            key,
-            rect: self.persistent_oriented_layer.physical_rect(),
-            stride: key.map_or(0, |key| key.output.physical_stride()),
-            pixels: self.persistent_oriented_layer.content().len(),
-        }
-    }
-
-    pub fn copy_persistent_oriented_layer_update_to_hidden(
-        &mut self,
-        hidden: &mut ScanoutSlotsRgb565Framebuffer,
-        slot_index: u8,
-        diff_safe: bool,
-        update: ArcadeListUpdate,
-    ) -> Result<(u32, usize), String> {
-        self.persistent_copy_trace = PersistentArcadeCopyTrace {
-            diff_safe,
-            ..PersistentArcadeCopyTrace::default()
-        };
-        let view = self
-            .persistent_oriented_layer_view()
-            .ok_or_else(|| "physical Arcade layer is not initialized".to_string())?;
-        let layer_rect = view.rect();
-        match update {
-            ArcadeListUpdate::Full(rect) => {
-                if rect != layer_rect {
-                    return Err(format!(
-                        "physical Arcade full rect mismatch: requested={rect:?} backing={layer_rect:?}"
-                    ));
-                }
-                if diff_safe {
-                    return self
-                        .copy_persistent_oriented_layer_diff_to_hidden(hidden, slot_index, rect);
-                }
-                let write_started = Instant::now();
-                let rows = copy_physical_layer_rect_to_hidden(hidden, view, rect);
-                let write_us = elapsed_us(write_started);
-                if rows != rect.rows() {
-                    return Err(format!(
-                        "physical Arcade full copy incomplete: expected_rows={} copied_rows={rows}",
-                        rect.rows()
-                    ));
-                }
-                let mirror_started = Instant::now();
-                self.refresh_persistent_slot_mirror(slot_index, rect)?;
-                let dense_pixels = rect.width().saturating_mul(rect.rows() as usize) as u64;
-                self.persistent_copy_trace = PersistentArcadeCopyTrace {
-                    decision: PersistentArcadeCopyDecision::FullCopy,
-                    diff_safe,
-                    mirror_valid: false,
-                    write_us,
-                    mirror_refresh_us: elapsed_us(mirror_started),
-                    written_pixels: dense_pixels,
-                    mirror_refresh_pixels: dense_pixels,
-                    changed_rows: rows,
-                    ..PersistentArcadeCopyTrace::default()
-                };
-                Ok((
-                    rows,
-                    rect.width().saturating_mul(rows as usize).saturating_mul(2),
-                ))
-            }
-            ArcadeListUpdate::Scroll {
-                delta_x: _,
-                delta_y: _,
-                rect,
-            } => {
-                if rect != layer_rect {
-                    return Err(format!(
-                        "physical Arcade scroll rect mismatch: requested={rect:?} backing={layer_rect:?}"
-                    ));
-                }
-                // Portrait scrolling changes the alternating row fill across
-                // essentially every physical row. The measured sparse path
-                // therefore wrote the whole layer anyway, after paying for a
-                // full comparison and a second full RAM mirror refresh. Keep
-                // the contiguous RAM-to-WC write and invalidate the unused
-                // mirror for this slot instead.
-                let write_started = Instant::now();
-                let rows = copy_physical_layer_rect_to_hidden(hidden, view, rect);
-                let write_us = elapsed_us(write_started);
-                if rows != rect.rows() {
-                    return Err("physical Arcade dense scroll copy incomplete".to_string());
-                }
-                self.invalidate_persistent_slot_mirror(slot_index)?;
-                let dense_pixels = rect.width().saturating_mul(rect.rows() as usize) as u64;
-                self.persistent_copy_trace = PersistentArcadeCopyTrace {
-                    decision: PersistentArcadeCopyDecision::DenseScroll,
-                    diff_safe,
-                    mirror_valid: false,
-                    write_us,
-                    written_pixels: dense_pixels,
-                    changed_rows: rows,
-                    ..PersistentArcadeCopyTrace::default()
-                };
-                Ok((
-                    rows,
-                    rect.width().saturating_mul(rows as usize).saturating_mul(2),
-                ))
-            }
-        }
-    }
-
-    fn invalidate_persistent_slot_mirror(&mut self, slot_index: u8) -> Result<(), String> {
-        let mirror_index = persistent_slot_mirror_index(slot_index)?;
-        self.persistent_oriented_layer.slot_mirrors[mirror_index].rect = None;
-        Ok(())
-    }
-
-    fn refresh_persistent_slot_mirror(
-        &mut self,
-        slot_index: u8,
-        rect: DirtyRect,
-    ) -> Result<(), String> {
-        let mirror_index = persistent_slot_mirror_index(slot_index)?;
-        let key = self
-            .persistent_oriented_layer
-            .key()
-            .ok_or_else(|| "physical Arcade layer has no key".to_string())?;
-        let stride = key.output.physical_stride();
-        let layer = &mut self.persistent_oriented_layer;
-        let content = &layer.content;
-        let mirror = &mut layer.slot_mirrors[mirror_index];
-        mirror.pixels.resize(
-            rect.width().saturating_mul(rect.rows() as usize),
-            Rgb565Pixel(0),
-        );
-        for row in 0..rect.rows() as usize {
-            let source = (rect.y0 + row) * stride + rect.x0;
-            let destination = row * rect.width();
-            mirror.pixels[destination..destination + rect.width()]
-                .copy_from_slice(&content[source..source + rect.width()]);
-        }
-        mirror.rect = Some(rect);
-        Ok(())
-    }
-
-    fn copy_persistent_oriented_layer_diff_to_hidden(
-        &mut self,
-        hidden: &mut ScanoutSlotsRgb565Framebuffer,
-        slot_index: u8,
-        rect: DirtyRect,
-    ) -> Result<(u32, usize), String> {
-        let mirror_index = persistent_slot_mirror_index(slot_index)?;
-        let key = self
-            .persistent_oriented_layer
-            .key()
-            .ok_or_else(|| "physical Arcade layer has no key".to_string())?;
-        let stride = key.output.physical_stride();
-        let content = self.persistent_oriented_layer.content();
-        let mirror = &self.persistent_oriented_layer.slot_mirrors[mirror_index];
-        let dense_len = rect.width().saturating_mul(rect.rows() as usize);
-        if mirror.rect != Some(rect) || mirror.pixels.len() != dense_len {
-            let view = self
-                .persistent_oriented_layer_view()
-                .ok_or_else(|| "physical Arcade layer is not initialized".to_string())?;
-            let write_started = Instant::now();
-            let rows = copy_physical_layer_rect_to_hidden(hidden, view, rect);
-            let write_us = elapsed_us(write_started);
-            if rows != rect.rows() {
-                return Err("physical Arcade mirror recovery copy incomplete".to_string());
-            }
-            let mirror_started = Instant::now();
-            self.refresh_persistent_slot_mirror(slot_index, rect)?;
-            self.persistent_copy_trace = PersistentArcadeCopyTrace {
-                decision: PersistentArcadeCopyDecision::MirrorRecovery,
-                diff_safe: true,
-                mirror_valid: false,
-                write_us,
-                mirror_refresh_us: elapsed_us(mirror_started),
-                written_pixels: dense_len as u64,
-                mirror_refresh_pixels: dense_len as u64,
-                changed_rows: rows,
-                ..PersistentArcadeCopyTrace::default()
-            };
-            return Ok((rows, dense_len.saturating_mul(2)));
-        }
-
-        let mut rows = 0_u32;
-        let mut bytes = 0_usize;
-        let mut compare_us = 0_u64;
-        let mut write_us = 0_u64;
-        for row in 0..rect.rows() as usize {
-            let source = (rect.y0 + row) * stride + rect.x0;
-            let previous = row * rect.width();
-            let current_row = &content[source..source + rect.width()];
-            let previous_row = &mirror.pixels[previous..previous + rect.width()];
-            let compare_started = Instant::now();
-            let span = rgb565_difference_span(current_row, previous_row);
-            compare_us = compare_us.saturating_add(elapsed_us(compare_started));
-            let Some(span) = span else {
-                continue;
-            };
-            let write_started = Instant::now();
-            hidden
-                .copy_rect_565_strided(
-                    rect.x0 + span.start,
-                    rect.y0 + row,
-                    span.end - span.start,
-                    1,
-                    content,
-                    stride,
-                    rect.x0 + span.start,
-                    rect.y0 + row,
-                )
-                .map_err(|error| format!("physical Arcade sparse row copy failed: {error}"))?;
-            write_us = write_us.saturating_add(elapsed_us(write_started));
-            rows = rows.saturating_add(1);
-            bytes = bytes.saturating_add((span.end - span.start).saturating_mul(2));
-        }
-        let mirror_started = Instant::now();
-        self.refresh_persistent_slot_mirror(slot_index, rect)?;
-        self.persistent_copy_trace = PersistentArcadeCopyTrace {
-            decision: PersistentArcadeCopyDecision::SparseDiff,
-            diff_safe: true,
-            mirror_valid: true,
-            compare_us,
-            write_us,
-            mirror_refresh_us: elapsed_us(mirror_started),
-            compared_pixels: dense_len as u64,
-            written_pixels: bytes.saturating_div(2) as u64,
-            mirror_refresh_pixels: dense_len as u64,
-            changed_rows: rows,
-        };
-        Ok((rows, bytes))
+        self.persistent_oriented_layer.diagnostic()
     }
 
     /// Restores the complete viewport from a stationary physical backdrop,
@@ -2611,8 +2268,7 @@ impl ArcadeListRenderer {
 
     fn restore_previous_selection_normal_to_oriented(
         &mut self,
-        target: &mut [Rgb565Pixel],
-        output_layout: Rgb565OutputLayout,
+        target: &mut ArcadeOrientedTarget<'_>,
     ) -> bool {
         let Some(rect) = self.previous_selection_normal_rect else {
             return false;
@@ -2622,10 +2278,7 @@ impl ArcadeListRenderer {
         if self.previous_selection_normal.len() != width.saturating_mul(height) {
             return false;
         }
-        let Ok(mut surface) = Rgb565SurfaceMut::new(target, output_layout) else {
-            return false;
-        };
-        surface.copy_rect_strided(
+        target.copy_rect_strided(
             rect.x0,
             rect.y0,
             width,
@@ -2716,10 +2369,9 @@ impl ArcadeListRenderer {
         );
     }
 
-    fn compose_viewport_band_to_oriented_cached(
+    fn compose_viewport_band_to_oriented_target(
         &mut self,
-        target: &mut [Rgb565Pixel],
-        output_layout: Rgb565OutputLayout,
+        target: &mut ArcadeOrientedTarget<'_>,
         viewport_y: usize,
         h: usize,
     ) {
@@ -2738,27 +2390,13 @@ impl ArcadeListRenderer {
             self.style.selection_frame_y,
             |kind, x, y, w, h| match kind {
                 ArcadeListPresentKind::Normal => {
-                    self.compose_surface_rect_to_oriented_cached(target, output_layout, x, y, w, h)
+                    self.compose_surface_rect_to_oriented_target(target, x, y, w, h)
                 }
                 ArcadeListPresentKind::Inverted => {
                     if self.style.crt_palette || arcade_selection_inversion_enabled() {
-                        self.compose_inverted_surface_rect_to_oriented_cached(
-                            target,
-                            output_layout,
-                            x,
-                            y,
-                            w,
-                            h,
-                        );
+                        self.compose_inverted_surface_rect_to_oriented_target(target, x, y, w, h);
                     } else {
-                        self.compose_surface_rect_to_oriented_cached(
-                            target,
-                            output_layout,
-                            x,
-                            y,
-                            w,
-                            h,
-                        );
+                        self.compose_surface_rect_to_oriented_target(target, x, y, w, h);
                     }
                 }
             },
@@ -2826,10 +2464,9 @@ impl ArcadeListRenderer {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn compose_surface_rect_to_oriented_cached(
+    fn compose_surface_rect_to_oriented_target(
         &mut self,
-        target: &mut [Rgb565Pixel],
-        output_layout: Rgb565OutputLayout,
+        target: &mut ArcadeOrientedTarget<'_>,
         x: usize,
         viewport_y: usize,
         w: usize,
@@ -2839,9 +2476,7 @@ impl ArcadeListRenderer {
         while copied < h {
             let src_y = (self.surface_y + viewport_y + copied) % self.visible_height;
             let copy_h = (h - copied).min(self.visible_height - src_y);
-            let mut surface = Rgb565SurfaceMut::new(target, output_layout)
-                .expect("launcher output layout matches its cached target");
-            let copied_rect = surface.copy_rect_strided(
+            let copied_rect = target.copy_rect_strided(
                 self.geometry.x + x,
                 self.geometry.y + viewport_y + copied,
                 w,
@@ -2905,10 +2540,9 @@ impl ArcadeListRenderer {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn compose_inverted_surface_rect_to_oriented_cached(
+    fn compose_inverted_surface_rect_to_oriented_target(
         &mut self,
-        target: &mut [Rgb565Pixel],
-        output_layout: Rgb565OutputLayout,
+        target: &mut ArcadeOrientedTarget<'_>,
         x: usize,
         viewport_y: usize,
         w: usize,
@@ -2921,10 +2555,8 @@ impl ArcadeListRenderer {
             let target_x = self.geometry.x + x;
             let target_y = self.geometry.y + viewport_y + copied;
             let inverted = self.prepare_inverted_surface_chunk(x, viewport_y + copied, w, copy_h);
-            let mut surface = Rgb565SurfaceMut::new(target, output_layout)
-                .expect("launcher output layout matches its cached target");
             let copied_rect =
-                surface.copy_rect_strided(target_x, target_y, w, copy_h, inverted, w, 0, 0);
+                target.copy_rect_strided(target_x, target_y, w, copy_h, inverted, w, 0, 0);
             debug_assert!(copied_rect);
             copied += copy_h;
         }
@@ -2991,8 +2623,19 @@ impl ArcadeListRenderer {
 
     fn compose_selection_frame_to_oriented_cached(
         &mut self,
-        target: &mut [Rgb565Pixel],
+        pixels: &mut [Rgb565Pixel],
         output_layout: Rgb565OutputLayout,
+    ) {
+        let mut target = ArcadeOrientedTarget::Output {
+            pixels,
+            layout: output_layout,
+        };
+        self.compose_selection_frame_to_oriented_target(&mut target);
+    }
+
+    fn compose_selection_frame_to_oriented_target(
+        &mut self,
+        target: &mut ArcadeOrientedTarget<'_>,
     ) {
         let rect = self.selection_rect();
         let color = self.style.selection_frame_565;
@@ -3002,9 +2645,7 @@ impl ArcadeListRenderer {
         self.selection_horizontal
             .resize(self.width * thickness_y, color);
         self.selection_horizontal.fill(color);
-        let mut surface = Rgb565SurfaceMut::new(target, output_layout)
-            .expect("launcher output layout matches its cached target");
-        let _ = surface.copy_rect_strided(
+        let _ = target.copy_rect_strided(
             rect.x0,
             rect.y0,
             self.width,
@@ -3014,7 +2655,7 @@ impl ArcadeListRenderer {
             0,
             0,
         );
-        let _ = surface.copy_rect_strided(
+        let _ = target.copy_rect_strided(
             rect.x0,
             rect.y1.saturating_sub(thickness_y),
             self.width,
@@ -3026,7 +2667,7 @@ impl ArcadeListRenderer {
         );
         self.selection_vertical.resize(thickness_x * h, color);
         self.selection_vertical.fill(color);
-        let _ = surface.copy_rect_strided(
+        let _ = target.copy_rect_strided(
             rect.x0,
             rect.y0,
             thickness_x,
@@ -3036,7 +2677,7 @@ impl ArcadeListRenderer {
             0,
             0,
         );
-        let _ = surface.copy_rect_strided(
+        let _ = target.copy_rect_strided(
             rect.x1.saturating_sub(thickness_x),
             rect.y0,
             thickness_x,
@@ -3233,77 +2874,6 @@ impl ArcadeListRenderer {
         }
         row.into_iter().map(pixel_to_rgb565).collect()
     }
-}
-
-fn shift_oriented_rect(
-    target: &mut [Rgb565Pixel],
-    output: Rgb565OutputLayout,
-    rect: mister_magik_framebuffer_scenes::Rgb565Rect,
-    dx: isize,
-    dy: isize,
-    fill: Rgb565Pixel,
-) -> bool {
-    let stride = output.physical_stride();
-    if rect.x1 <= rect.x0
-        || rect.y1 <= rect.y0
-        || rect.x1 > output.physical_width()
-        || rect.y1 > output.physical_height()
-        || target.len() < output.len()
-        || (dx != 0 && dy != 0)
-    {
-        return false;
-    }
-    let width = rect.x1 - rect.x0;
-    let height = rect.y1 - rect.y0;
-    if dx != 0 {
-        let distance = dx.unsigned_abs();
-        if distance >= width {
-            return false;
-        }
-        for y in rect.y0..rect.y1 {
-            let row = y * stride;
-            if dx > 0 {
-                target.copy_within(
-                    row + rect.x0..row + rect.x1 - distance,
-                    row + rect.x0 + distance,
-                );
-                target[row + rect.x0..row + rect.x0 + distance].fill(fill);
-            } else {
-                target.copy_within(row + rect.x0 + distance..row + rect.x1, row + rect.x0);
-                target[row + rect.x1 - distance..row + rect.x1].fill(fill);
-            }
-        }
-        return true;
-    }
-    if dy == 0 {
-        return true;
-    }
-    let distance = dy.unsigned_abs();
-    if distance >= height {
-        return false;
-    }
-    if dy > 0 {
-        for row in (0..height - distance).rev() {
-            let source = (rect.y0 + row) * stride + rect.x0;
-            let destination = (rect.y0 + row + distance) * stride + rect.x0;
-            target.copy_within(source..source + width, destination);
-        }
-        for y in rect.y0..rect.y0 + distance {
-            let start = y * stride + rect.x0;
-            target[start..start + width].fill(fill);
-        }
-    } else {
-        for row in 0..height - distance {
-            let source = (rect.y0 + row + distance) * stride + rect.x0;
-            let destination = (rect.y0 + row) * stride + rect.x0;
-            target.copy_within(source..source + width, destination);
-        }
-        for y in rect.y1 - distance..rect.y1 {
-            let start = y * stride + rect.x0;
-            target[start..start + width].fill(fill);
-        }
-    }
-    true
 }
 
 pub fn rendered_filter_content_hash() -> u64 {
@@ -3850,39 +3420,6 @@ fn copy_pixel_to_rgb565_row(src: &[Pixel], dst: &mut [Rgb565Pixel]) {
     }
 }
 
-fn persistent_slot_mirror_index(slot_index: u8) -> Result<usize, String> {
-    match slot_index {
-        1 => Ok(0),
-        2 => Ok(1),
-        _ => Err(format!(
-            "physical Arcade slot index must be 1 or 2, got {slot_index}"
-        )),
-    }
-}
-
-fn elapsed_us(started: Instant) -> u64 {
-    started.elapsed().as_micros().min(u128::from(u64::MAX)) as u64
-}
-
-fn rgb565_difference_span(
-    current: &[Rgb565Pixel],
-    previous: &[Rgb565Pixel],
-) -> Option<std::ops::Range<usize>> {
-    if current.len() != previous.len() {
-        return (!current.is_empty()).then_some(0..current.len());
-    }
-    let start = current
-        .iter()
-        .zip(previous)
-        .position(|(current, previous)| current != previous)?;
-    let end = current
-        .iter()
-        .zip(previous)
-        .rposition(|(current, previous)| current != previous)?
-        .saturating_add(1);
-    Some(start..end)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3903,30 +3440,6 @@ mod tests {
                 )
             })
             .collect()
-    }
-
-    #[test]
-    fn rgb565_difference_span_bounds_only_changed_pixels() {
-        let previous = [
-            Rgb565Pixel(1),
-            Rgb565Pixel(2),
-            Rgb565Pixel(3),
-            Rgb565Pixel(4),
-            Rgb565Pixel(5),
-        ];
-        let mut current = previous;
-        assert_eq!(rgb565_difference_span(&current, &previous), None);
-        current[1] = Rgb565Pixel(9);
-        current[3] = Rgb565Pixel(8);
-        assert_eq!(rgb565_difference_span(&current, &previous), Some(1..4));
-    }
-
-    #[test]
-    fn persistent_slot_mirror_indices_are_exact() {
-        assert_eq!(persistent_slot_mirror_index(1), Ok(0));
-        assert_eq!(persistent_slot_mirror_index(2), Ok(1));
-        assert!(persistent_slot_mirror_index(0).is_err());
-        assert!(persistent_slot_mirror_index(3).is_err());
     }
 
     fn filter_items(labels: &[&str]) -> Vec<ArcadeListItem> {
@@ -4215,10 +3728,16 @@ mod tests {
             .map(|value| Rgb565Pixel(value as u16))
             .collect::<Vec<_>>();
         let before = pixels.clone();
-        assert!(shift_oriented_rect(
+        assert!(shift_physical_rect(
             &mut pixels,
-            output,
-            rect,
+            output.physical_stride(),
+            output.physical_height(),
+            DirtyRect {
+                x0: rect.x0,
+                y0: rect.y0,
+                x1: rect.x1,
+                y1: rect.y1,
+            },
             -1,
             0,
             Rgb565Pixel(0xffff),
@@ -5668,6 +5187,13 @@ mod tests {
                 0,
             ));
             assert!(layer.needs_full_rebuild());
+            assert_eq!(
+                layer.content().len(),
+                layer.physical_rect().unwrap().width()
+                    * layer.physical_rect().unwrap().rows() as usize
+            );
+            assert!(layer.content().len() < output.len());
+            assert_eq!(layer.allocated_bytes(), layer.content().len() * 2);
             let aperture = layer
                 .set_selection_aperture(12, ARCADE_ROW_HEIGHT as usize)
                 .expect("selection aperture");
@@ -5737,12 +5263,22 @@ mod tests {
                     ));
                     renderer.compose_layer_to_oriented_cached(&mut target, output, true);
                     layer.ensure(geometry, 640, output, style, 99, ring_origin);
-                    layer.content_mut().copy_from_slice(target.cached_565());
-                    assert_eq!(
-                        layer.content(),
-                        target.cached_565(),
-                        "physical layer parity failed for style={style:?}, rotation={rotation:?}, ring={ring_origin}"
-                    );
+                    let rect = layer.physical_rect().unwrap();
+                    for row in 0..rect.rows() as usize {
+                        let source = (rect.y0 + row) * output.physical_stride() + rect.x0;
+                        let destination = row * rect.width();
+                        layer.content_mut()[destination..destination + rect.width()]
+                            .copy_from_slice(&target.cached_565()[source..source + rect.width()]);
+                    }
+                    let view = layer.view().unwrap();
+                    for row in 0..rect.rows() as usize {
+                        let source = (rect.y0 + row) * output.physical_stride() + rect.x0;
+                        assert_eq!(
+                            view.row(rect, row).unwrap(),
+                            &target.cached_565()[source..source + rect.width()],
+                            "physical layer parity failed for style={style:?}, rotation={rotation:?}, ring={ring_origin}, row={row}"
+                        );
+                    }
                     layer.mark_full_rebuild_complete();
                 }
             }
@@ -5801,11 +5337,16 @@ mod tests {
             ));
             reference.compose_layer_to_oriented_cached(&mut expected, output, true);
 
-            assert_eq!(
-                incremental.persistent_oriented_layer.content(),
-                expected.cached_565(),
-                "incremental physical layer mismatch for {rotation:?}"
-            );
+            let view = incremental.persistent_oriented_layer_view().unwrap();
+            let rect = view.rect();
+            for row in 0..rect.rows() as usize {
+                let source = (rect.y0 + row) * output.physical_stride() + rect.x0;
+                assert_eq!(
+                    view.row(rect, row).unwrap(),
+                    &expected.cached_565()[source..source + rect.width()],
+                    "incremental physical layer mismatch for {rotation:?}, row={row}"
+                );
+            }
         }
     }
 

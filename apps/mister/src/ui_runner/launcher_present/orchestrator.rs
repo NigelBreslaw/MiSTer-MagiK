@@ -855,29 +855,21 @@ impl PresentationAdapters<FpgaVblankLatchHiddenPresenter> for LivePresentationAd
                             plan.arcade_state_after().map_or(0, |state| state.version);
                         let arcade_backing =
                             arcade_list_renderer.persistent_oriented_layer_diagnostic();
-                        arcade_stats = layer_target
-                            .copy_arcade_list_update_to_hidden(
-                                hidden,
-                                arcade_list_renderer,
-                                plan.slot_index,
-                                plan.arcade_redraw_diff_safe,
-                                update,
-                            )
-                            .map_err(|cause| {
-                                PhysicalOverlayFailure {
-                                    role: PhysicalOverlayRole::Arcade,
-                                    slot_index: plan.slot_index,
-                                    rect: arcade_rect,
-                                    expected_rows: arcade_rect.rows(),
-                                    copied_rows: 0,
-                                    layout_generation: layer_target.output_layout_generation(),
-                                    content_generation: arcade_generation,
-                                    backing_key: format!("{arcade_backing:?}"),
-                                    cause: Some(cause),
-                                }
-                                .to_string()
-                            })?;
-                        arcade_copy_trace = arcade_list_renderer.persistent_copy_trace();
+                        return Err(PhysicalOverlayFailure {
+                            role: PhysicalOverlayRole::Arcade,
+                            slot_index: plan.slot_index,
+                            rect: arcade_rect,
+                            expected_rows: arcade_rect.rows(),
+                            copied_rows: 0,
+                            layout_generation: layer_target.output_layout_generation(),
+                            content_generation: arcade_generation,
+                            backing_key: format!("{arcade_backing:?}"),
+                            cause: Some(
+                                "frame plan requested Arcade without its atomic publication"
+                                    .into(),
+                            ),
+                        }
+                        .to_string());
                     }
                     hidden_arcade_compose_us = started.elapsed().as_micros();
                     drop(arcade_pmu);
