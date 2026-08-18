@@ -275,7 +275,7 @@ impl CrtBackdropState {
     }
 
     #[cfg(feature = "ui-preview")]
-    pub(crate) fn retarget_for_layout(
+    pub fn retarget_for_layout(
         &mut self,
         frame: Option<PreviewFrame<'_>>,
         now: Duration,
@@ -616,6 +616,7 @@ impl CrtBackdropState {
         }
     }
 
+    #[cfg(feature = "ui")]
     fn snap_to_target(&mut self) {
         self.retarget.copy_from_slice(&self.target);
         self.retarget_row_repeats
@@ -848,7 +849,7 @@ fn scale_dimmed_center_crop_mapped_with_logical_size(
 /// Worker-friendly variant that reuses the nearest-neighbour maps between
 /// requests. The destination remains request-owned because it is handed to
 /// the backdrop cache, while the maps are pure scratch state.
-#[cfg(feature = "ui")]
+#[cfg(any(feature = "ui", feature = "ui-preview"))]
 pub(crate) fn prepare_dimmed_rgb565_target_with_maps(
     source: &[Rgb565Pixel],
     source_width: usize,
@@ -897,7 +898,7 @@ pub(crate) fn prepare_dimmed_rgb565_target_with_maps(
     .then_some((pixels, row_repeats))
 }
 
-#[cfg(feature = "ui")]
+#[cfg(any(feature = "ui", feature = "ui-preview"))]
 pub(crate) fn prepare_dimmed_rgb565_target_for_output_with_maps(
     source: &[Rgb565Pixel],
     source_width: usize,
@@ -1347,9 +1348,9 @@ pub fn product_chrome_rects(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ui_display::{
-        ScreenOrientation, UiDisplayPlan, UiFramebufferSizePolicy, UiLayoutGeometry,
-    };
+    #[cfg(feature = "ui")]
+    use crate::ui_display::{ScreenOrientation, UiLayoutGeometry};
+    use crate::ui_display::{UiDisplayPlan, UiFramebufferSizePolicy};
     use mister_magik_core::display::{Crt240Composition, DisplayGeometry};
 
     fn frame<'a>(pixels: &'a [Rgb565Pixel], width: usize, height: usize) -> PreviewFrame<'a> {
