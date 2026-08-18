@@ -73,10 +73,8 @@ only that fixed arm, for example `scripts/agent benchmark
 arcade-velocity-scroll-attribution pprof`. Every arm starts on Home with Arcade
 preselected and enters it with one confirmation; the former Settings-to-Home
 navigation and focus-panning preamble is not part of the workload. The
-unprofiled control and profiler arms use a fixed 20-second hold. This is long
-enough to capture the recurring full-update outliers while avoiding an
-unnecessary second half of identical samples; profiler arms remain
-attribution-only.
+unprofiled control and profiler arms use a fixed 40-second hold; profiler arms
+remain attribution-only.
 The `control-smoke` and `pmu-smoke` arms use the same eight-second workload for
 directional optimization checks; only the full unprofiled `control` arm owns
 cadence qualification.

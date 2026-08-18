@@ -33,7 +33,7 @@ arbitrary command, environment, path, or duration parameters.
 
 | Scenario | Control and instrumented arms | Fixed workload | Retained evidence |
 | --- | --- | --- | --- |
-| `arcade-velocity-scroll-attribution` | unprofiled control, 999 Hz pprof, per-frame Cortex-A9 PMU, and system-wide Streamline arms | Home with Arcade preselected, one confirmation into settled Arcade, then screenshot backdrop changes on the active route, including CRT 240p; fixed 20-second holds | control cadence summary, flamegraph and folded stacks, per-span PMU JSON, APC/archive, shared correlation manifest |
+| `arcade-velocity-scroll-attribution` | unprofiled control, 999 Hz pprof, per-frame Cortex-A9 PMU, and system-wide Streamline arms | Home with Arcade preselected, one confirmation into settled Arcade, then screenshot backdrop changes on the active route, including CRT 240p; fixed 40-second holds | control cadence summary, flamegraph and folded stacks, per-span PMU JSON, APC/archive, shared correlation manifest |
 | `gui-frame-attribution` | independent control, PMU, and system-wide Streamline arms | settled Settings; Home pan right and left; held Arcade scroll with preview changes; settled Arcade at confirmed 1280x720p60 | per-frame TSV, PMU JSON, APC and archive, launcher log, status and presentation snapshots |
 | `system-entry-critical-streamline` | one bounded system-wide Streamline arm | existing direct C64 and SNES entry routes with separate monotonic windows | APC and archive, phase evidence, catalog and presentation snapshots |
 | `transition-streamline` | one bounded system-wide Streamline arm | existing Settings route plus fade and zoom orientation routes in landscape and portrait | APC and archive, per-effect and per-orientation frame evidence |
