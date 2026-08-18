@@ -26,11 +26,7 @@ const DEFAULT_DESCRIPTOR_PATH: &str = "/tmp/mister-magik/ui-automation-session.j
 const DEFAULT_SOCKET_PATH: &str = "/tmp/mister-magik/ui-automation.sock";
 const DEFAULT_FAILURE_PATH: &str = "/tmp/mister-magik/ui-automation-failure.json";
 const MAX_SESSION_AGE: Duration = Duration::from_secs(120);
-// Device telemetry and profiler control share the bounded agent service with
-// automation keepalives. Preserve a short dead-client release while allowing
-// one delayed service window; the immutable descriptor still caps the whole
-// authenticated session at MAX_SESSION_AGE.
-const REQUEST_LEASE: Duration = Duration::from_secs(15);
+const REQUEST_LEASE: Duration = Duration::from_secs(5);
 const CLOCK_SKEW: Duration = Duration::from_secs(10);
 const INTERRUPTED_SYSCALL_RETRIES: usize = 16;
 
@@ -230,7 +226,7 @@ impl LauncherAutomation {
             return self.abort_releasing("unsafe_input_context");
         }
         let expired = self.session.as_ref().is_some_and(|session| {
-            request_lease_expired(session.last_request, now)
+            request_lease_expired(session.last_request, session.press, now)
                 || unix_ms() > session.descriptor.expires_unix_ms
                 || current_main_generation() != Some(session.descriptor.main_generation)
         });
@@ -351,6 +347,7 @@ impl LauncherAutomation {
             push_automation_event(session, button, press_id, InputPhase::Released);
             session.logical_state = PadState::default();
             session.press = None;
+            session.last_request = now;
         }
     }
 
@@ -525,8 +522,19 @@ impl LauncherAutomation {
     }
 }
 
-fn request_lease_expired(last_request: Instant, now: Instant) -> bool {
-    now.saturating_duration_since(last_request) > REQUEST_LEASE
+fn request_lease_expired(
+    last_request: Instant,
+    press: Option<PressLifecycle>,
+    now: Instant,
+) -> bool {
+    let request_deadline = last_request + REQUEST_LEASE;
+    let lease_deadline = match press {
+        Some(PressLifecycle::HeldUntil { deadline, .. }) => {
+            request_deadline.max(deadline + REQUEST_LEASE)
+        }
+        _ => request_deadline,
+    };
+    now > lease_deadline
 }
 
 fn retry_interrupted<T>(mut operation: impl FnMut() -> io::Result<T>) -> io::Result<T> {
@@ -741,15 +749,34 @@ mod tests {
     }
 
     #[test]
-    fn request_lease_tolerates_one_bounded_agent_service_stall() {
+    fn request_lease_covers_an_accepted_hold_then_returns_to_idle_grace() {
         let last_request = Instant::now();
         assert!(!request_lease_expired(
             last_request,
-            last_request + Duration::from_secs(15)
+            None,
+            last_request + REQUEST_LEASE
         ));
         assert!(request_lease_expired(
             last_request,
-            last_request + Duration::from_secs(15) + Duration::from_nanos(1)
+            None,
+            last_request + REQUEST_LEASE + Duration::from_nanos(1)
+        ));
+
+        let hold_deadline = last_request + Duration::from_secs(40);
+        let held = Some(PressLifecycle::HeldUntil {
+            deadline: hold_deadline,
+            button: AutomationButton::Down,
+            press_id: PressId((1_u64 << 63) | 1),
+        });
+        assert!(!request_lease_expired(
+            last_request,
+            held,
+            hold_deadline + REQUEST_LEASE
+        ));
+        assert!(request_lease_expired(
+            last_request,
+            held,
+            hold_deadline + REQUEST_LEASE + Duration::from_nanos(1)
         ));
     }
 
