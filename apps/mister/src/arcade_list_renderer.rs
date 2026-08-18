@@ -1639,8 +1639,9 @@ impl ArcadeListRenderer {
             .key()
             .ok_or_else(|| "physical Arcade layer has no key".to_string())?;
         let stride = key.output.physical_stride();
-        let content = self.persistent_oriented_layer.content();
-        let mirror = &mut self.persistent_oriented_layer.slot_mirrors[mirror_index];
+        let layer = &mut self.persistent_oriented_layer;
+        let content = &layer.content;
+        let mirror = &mut layer.slot_mirrors[mirror_index];
         mirror.pixels.resize(
             rect.width().saturating_mul(rect.rows() as usize),
             Rgb565Pixel(0),
