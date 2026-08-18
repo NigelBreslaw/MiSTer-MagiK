@@ -8862,11 +8862,6 @@ fn profile_installed_arcade_velocity_scroll_streamline(
         streamline_dir.join("capture-manifest.json"),
         format!("{}\n", serde_json::to_string_pretty(&capture_manifest)?),
     )?;
-    let frame_profile_artifact = if output_dir.join("frame-profile.json").is_file() {
-        "frame-profile.json"
-    } else {
-        "profile.json"
-    };
     let summary = json!({
         "schema": "mister-magik-arcade-velocity-scroll-streamline-v1",
         "artifact_status": "passed",
@@ -9276,6 +9271,11 @@ fn summarize_arcade_velocity_scroll(
         "failed"
     };
     let sample_refs = telemetry.iter().collect::<Vec<_>>();
+    let frame_profile_artifact = if output_dir.join("frame-profile.json").is_file() {
+        "frame-profile.json"
+    } else {
+        "profile.json"
+    };
     let summary = json!({
         "schema": "mister-magik-arcade-velocity-scroll-v1",
         "quality_status": quality_status,
