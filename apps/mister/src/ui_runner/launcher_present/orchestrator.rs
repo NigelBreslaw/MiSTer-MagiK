@@ -55,6 +55,26 @@ impl PhysicalOverlayRole {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ArcadeOverlayCopySource {
+    PublishedPhysical,
+    CachedLogical,
+    MissingRequiredPublication,
+}
+
+const fn arcade_overlay_copy_source(
+    publication_available: bool,
+    publication_required: bool,
+) -> ArcadeOverlayCopySource {
+    if publication_available {
+        ArcadeOverlayCopySource::PublishedPhysical
+    } else if publication_required {
+        ArcadeOverlayCopySource::MissingRequiredPublication
+    } else {
+        ArcadeOverlayCopySource::CachedLogical
+    }
+}
+
 #[derive(Debug, Eq, PartialEq)]
 struct PhysicalOverlayFailure {
     role: PhysicalOverlayRole,
@@ -792,84 +812,111 @@ impl PresentationAdapters<FpgaVblankLatchHiddenPresenter> for LivePresentationAd
                         .flatten();
                     let started = Instant::now();
                     let arcade_rect = update.dirty_rect();
-                    if let Some(publication) = arcade_publication {
-                        let view = arcade_list_renderer
-                            .persistent_oriented_layer_view()
-                            .filter(|view| publication.matches_view(*view))
-                            .ok_or_else(|| {
-                                PhysicalOverlayFailure {
-                                    role: PhysicalOverlayRole::Arcade,
-                                    slot_index: plan.slot_index,
-                                    rect: arcade_rect,
-                                    expected_rows: arcade_rect.rows(),
-                                    copied_rows: 0,
-                                    layout_generation: publication.layout_generation(),
-                                    content_generation: publication.content_generation(),
-                                    backing_key: format!("{:?}", publication.backing_key()),
-                                    cause: Some("published Arcade backing changed before copy".into()),
-                                }
-                                .to_string()
-                            })?;
-                        let rows = copy_physical_layer_rect_to_hidden(
-                            hidden,
-                            view,
-                            arcade_rect,
-                        );
-                        require_complete_overlay_copy(
-                            PhysicalOverlayRole::Arcade,
-                            plan.slot_index,
-                            arcade_rect,
-                            rows,
-                            publication.layout_generation(),
-                            publication.content_generation(),
-                            || format!("{:?}", publication.backing_key()),
-                        )?;
-                        arcade_stats = PresentCopyStats {
-                            rows,
-                            bytes: arcade_rect
-                                .width()
-                                .saturating_mul(rows as usize)
-                                .saturating_mul(2),
-                        };
-                        arcade_copy_trace =
-                            crate::arcade_list_renderer::PersistentArcadeCopyTrace {
-                                decision: match update {
-                                    PhysicalLayerUpdate::Full(_) => crate::arcade_list_renderer::PersistentArcadeCopyDecision::FullCopy,
-                                    PhysicalLayerUpdate::Scroll { .. } => crate::arcade_list_renderer::PersistentArcadeCopyDecision::DenseScroll,
-                                },
-                                diff_safe: plan.arcade_redraw_diff_safe,
-                                write_us: started
-                                    .elapsed()
-                                    .as_micros()
-                                    .min(u128::from(u64::MAX))
-                                    as u64,
-                                written_pixels: arcade_rect
+                    match arcade_overlay_copy_source(
+                        arcade_publication.is_some(),
+                        layer_target.arcade_overlay_requires_publication(),
+                    ) {
+                        ArcadeOverlayCopySource::PublishedPhysical => {
+                            let publication = arcade_publication
+                                .expect("published Arcade copy source has a publication");
+                            let view = arcade_list_renderer
+                                .persistent_oriented_layer_view()
+                                .filter(|view| publication.matches_view(*view))
+                                .ok_or_else(|| {
+                                    PhysicalOverlayFailure {
+                                        role: PhysicalOverlayRole::Arcade,
+                                        slot_index: plan.slot_index,
+                                        rect: arcade_rect,
+                                        expected_rows: arcade_rect.rows(),
+                                        copied_rows: 0,
+                                        layout_generation: publication.layout_generation(),
+                                        content_generation: publication.content_generation(),
+                                        backing_key: format!("{:?}", publication.backing_key()),
+                                        cause: Some(
+                                            "published Arcade backing changed before copy".into(),
+                                        ),
+                                    }
+                                    .to_string()
+                                })?;
+                            let rows = copy_physical_layer_rect_to_hidden(
+                                hidden,
+                                view,
+                                arcade_rect,
+                            );
+                            require_complete_overlay_copy(
+                                PhysicalOverlayRole::Arcade,
+                                plan.slot_index,
+                                arcade_rect,
+                                rows,
+                                publication.layout_generation(),
+                                publication.content_generation(),
+                                || format!("{:?}", publication.backing_key()),
+                            )?;
+                            arcade_stats = PresentCopyStats {
+                                rows,
+                                bytes: arcade_rect
                                     .width()
                                     .saturating_mul(rows as usize)
-                                    as u64,
-                                changed_rows: rows,
-                                ..crate::arcade_list_renderer::PersistentArcadeCopyTrace::default()
+                                    .saturating_mul(2),
                             };
-                    } else {
-                        let arcade_generation =
-                            plan.arcade_state_after().map_or(0, |state| state.version);
-                        let arcade_backing =
-                            arcade_list_renderer.persistent_oriented_layer_diagnostic();
-                        return Err(PhysicalOverlayFailure {
-                            role: PhysicalOverlayRole::Arcade,
-                            slot_index: plan.slot_index,
-                            rect: arcade_rect,
-                            expected_rows: arcade_rect.rows(),
-                            copied_rows: 0,
-                            layout_generation: layer_target.output_layout_generation(),
-                            content_generation: arcade_generation,
-                            backing_key: format!("{arcade_backing:?}"),
-                            cause: Some(
-                                "frame plan requested Arcade without its atomic publication"
-                                    .into(),
-                            ),
+                            arcade_copy_trace =
+                                crate::arcade_list_renderer::PersistentArcadeCopyTrace {
+                                    decision: match update {
+                                        PhysicalLayerUpdate::Full(_) => crate::arcade_list_renderer::PersistentArcadeCopyDecision::FullCopy,
+                                        PhysicalLayerUpdate::Scroll { .. } => crate::arcade_list_renderer::PersistentArcadeCopyDecision::DenseScroll,
+                                    },
+                                    diff_safe: plan.arcade_redraw_diff_safe,
+                                    write_us: started
+                                        .elapsed()
+                                        .as_micros()
+                                        .min(u128::from(u64::MAX))
+                                        as u64,
+                                    written_pixels: arcade_rect
+                                        .width()
+                                        .saturating_mul(rows as usize)
+                                        as u64,
+                                    changed_rows: rows,
+                                    ..crate::arcade_list_renderer::PersistentArcadeCopyTrace::default()
+                                };
                         }
-                        .to_string());
+                        ArcadeOverlayCopySource::CachedLogical => {
+                            arcade_stats = layer_target
+                                .copy_cached_arcade_list_update_to_hidden(
+                                    hidden,
+                                    arcade_list_renderer,
+                                    update,
+                                );
+                            require_complete_overlay_copy(
+                                PhysicalOverlayRole::Arcade,
+                                plan.slot_index,
+                                arcade_rect,
+                                arcade_stats.rows,
+                                layer_target.output_layout_generation(),
+                                plan.arcade_state_after().map_or(0, |state| state.version),
+                                || "cached-logical-arcade".into(),
+                            )?;
+                        }
+                        ArcadeOverlayCopySource::MissingRequiredPublication => {
+                            let arcade_generation =
+                                plan.arcade_state_after().map_or(0, |state| state.version);
+                            let arcade_backing =
+                                arcade_list_renderer.persistent_oriented_layer_diagnostic();
+                            return Err(PhysicalOverlayFailure {
+                                role: PhysicalOverlayRole::Arcade,
+                                slot_index: plan.slot_index,
+                                rect: arcade_rect,
+                                expected_rows: arcade_rect.rows(),
+                                copied_rows: 0,
+                                layout_generation: layer_target.output_layout_generation(),
+                                content_generation: arcade_generation,
+                                backing_key: format!("{arcade_backing:?}"),
+                                cause: Some(
+                                    "frame plan requested Arcade without its atomic publication"
+                                        .into(),
+                                ),
+                            }
+                            .to_string());
+                        }
                     }
                     hidden_arcade_compose_us = started.elapsed().as_micros();
                     drop(arcade_pmu);
@@ -1117,6 +1164,22 @@ fn empty_present_result() -> LauncherPresentResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn arcade_overlay_copy_source_preserves_cached_and_published_ownership() {
+        assert_eq!(
+            arcade_overlay_copy_source(false, false),
+            ArcadeOverlayCopySource::CachedLogical
+        );
+        assert_eq!(
+            arcade_overlay_copy_source(true, true),
+            ArcadeOverlayCopySource::PublishedPhysical
+        );
+        assert_eq!(
+            arcade_overlay_copy_source(false, true),
+            ArcadeOverlayCopySource::MissingRequiredPublication
+        );
+    }
 
     #[test]
     fn preview_layer_ownership_requires_the_complete_requested_copy() {

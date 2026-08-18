@@ -676,6 +676,20 @@ impl<'a> LayerTarget<'a> {
         compose_arcade_list_update(self.target, renderer, update)
     }
 
+    pub(super) fn copy_cached_arcade_list_update_to_hidden(
+        &self,
+        hidden: &mut ScanoutSlotsRgb565Framebuffer,
+        renderer: &mut ArcadeListRenderer,
+        update: ArcadeListUpdate,
+    ) -> PresentCopyStats {
+        debug_assert!(!self.layout.is_portrait());
+        copy_arcade_list_update_to_hidden(hidden, renderer, update)
+    }
+
+    pub(super) fn arcade_overlay_requires_publication(&self) -> bool {
+        self.layout.is_portrait()
+    }
+
     pub(super) fn cached_frame_view(&self) -> CachedFrameView<'_> {
         self.target.cached_frame_view()
     }
