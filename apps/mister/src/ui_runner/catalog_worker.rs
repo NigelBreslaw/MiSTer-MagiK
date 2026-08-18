@@ -1606,6 +1606,9 @@ pub(super) fn print_startup_event(start: Instant, name: &str, detail: impl std::
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static POST_PERSIST_FIXTURE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
     fn post_persist_registry_fixture() -> (PathBuf, String) {
         use mister_magik_catalog::arcade_catalog::{ArcadeCatalog, GameSystemEntry};
@@ -1617,9 +1620,10 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .expect("clock after epoch")
             .as_nanos();
+        let sequence = POST_PERSIST_FIXTURE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
         let storage = std::env::temp_dir().join(format!(
-            "mister-magik-post-persist-registry-{}-{nonce}",
-            std::process::id()
+            "mister-magik-post-persist-registry-{}-{nonce}-{sequence}",
+            std::process::id(),
         ));
         let stamp = catalog_stamp::CatalogStamp::from_lines(vec!["post-persist-v1".into()]);
         let fingerprint = stamp.fingerprint_hex();
