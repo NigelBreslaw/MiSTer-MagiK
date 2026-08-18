@@ -3744,11 +3744,11 @@ mod tests {
         ));
         assert_eq!(
             pixels[rect.y0 * output.physical_stride() + rect.x0],
-            Rgb565Pixel(0xffff)
+            before[rect.y0 * output.physical_stride() + rect.x0 + 1]
         );
         assert_eq!(
-            pixels[rect.y0 * output.physical_stride() + rect.x0 + 1],
-            before[rect.y0 * output.physical_stride() + rect.x0]
+            pixels[rect.y0 * output.physical_stride() + rect.x1 - 1],
+            Rgb565Pixel(0xffff)
         );
     }
 

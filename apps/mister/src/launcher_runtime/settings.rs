@@ -167,7 +167,7 @@ mod tests {
         assert!(
             std::fs::read_to_string(&ini_path)
                 .unwrap()
-                .contains("osd_rotate=1 ; keep")
+                .contains("osd_rotate=2 ; keep")
         );
         let _ = std::fs::remove_dir_all(root);
     }

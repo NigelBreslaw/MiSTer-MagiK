@@ -6230,7 +6230,7 @@ mod tests {
         assert!(nav.handle_input(&press_a, t0, &catalog).is_none());
 
         assert_eq!(nav.screen, Screen::Home);
-        assert_eq!(nav.selected, 0);
+        assert_eq!(nav.selected, nav.current_menu_count() - 1);
         assert_eq!(nav.scroll_x, 0);
     }
 

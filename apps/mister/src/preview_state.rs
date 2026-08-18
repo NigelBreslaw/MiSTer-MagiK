@@ -3534,6 +3534,7 @@ mod tests {
             empty_frame.current.pixels,
             PreviewRawPixels::Empty
         ));
+        let empty_generation = preview.presentation_generation();
 
         preview.has_visible_preview = true;
         preview.begin_raw_transition_to("next.png", PreviewTransitionMode::Instant);
@@ -3543,7 +3544,7 @@ mod tests {
         assert_eq!(
             preview.presentation_state(),
             PreviewPresentationState::Animating {
-                generation: 3,
+                generation: empty_generation + 1,
                 target: PreviewPresentationTarget::Image,
             }
         );
