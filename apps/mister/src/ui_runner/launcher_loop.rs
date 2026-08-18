@@ -10402,17 +10402,15 @@ pub(super) fn run_launcher_loop(
         let preview_layer_desired = should_desire_preview_direct_layer(
             wants_preview_layer,
             composition_decision.allow_preview_blit,
+            wants_preview,
             layout.is_portrait() && portrait_preview_worker_pending,
             layer_target.direct_preview_rect().is_some(),
             raw_preview_direct_rect.is_some(),
         );
         let preview_desired = if preview_layer_desired && preview_direct_present_enabled() {
-            let rect = if layout.is_portrait() {
-                layer_target.direct_preview_rect()
-            } else {
-                Some(preview_screen_rect(ui))
-            };
-            rect.map(|rect| DirectLayerState::new(rect, launcher_preview_version))
+            layer_target
+                .direct_preview_rect()
+                .map(|rect| DirectLayerState::new(rect, launcher_preview_version))
         } else {
             None
         };
@@ -11878,6 +11876,7 @@ fn should_desire_direct_layer(wants_layer: bool, composition_allows_layer: bool)
 fn should_desire_preview_direct_layer(
     wants_layer: bool,
     composition_allows_layer: bool,
+    route_wants_preview: bool,
     portrait_worker_pending: bool,
     has_physical_preview: bool,
     has_direct_preview_update: bool,
@@ -11885,7 +11884,7 @@ fn should_desire_preview_direct_layer(
     should_desire_direct_layer(
         wants_layer
             || has_direct_preview_update
-            || (portrait_worker_pending && has_physical_preview),
+            || (route_wants_preview && portrait_worker_pending && has_physical_preview),
         composition_allows_layer,
     )
 }
@@ -17837,19 +17836,26 @@ mod tests {
     #[test]
     fn portrait_preview_layer_stays_owned_while_replacement_is_pending() {
         assert!(should_desire_preview_direct_layer(
-            false, true, true, true, false
+            false, true, true, true, true, false
         ));
         assert!(!should_desire_preview_direct_layer(
-            false, true, false, true, false
+            false, true, false, true, true, false
         ));
         assert!(!should_desire_preview_direct_layer(
-            false, true, true, false, false
+            false, true, true, false, true, false
         ));
         assert!(!should_desire_preview_direct_layer(
-            true, false, true, true, false
+            true, false, true, true, true, false
         ));
         assert!(should_desire_preview_direct_layer(
-            false, true, false, true, true
+            false, true, false, false, true, true
+        ));
+    }
+
+    #[test]
+    fn portrait_preview_layer_retires_when_route_stops_wanting_preview() {
+        assert!(!should_desire_preview_direct_layer(
+            false, true, false, true, true, false
         ));
     }
 
