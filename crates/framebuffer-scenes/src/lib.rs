@@ -5,6 +5,7 @@
 
 use std::error::Error;
 use std::fmt;
+use std::mem::{MaybeUninit, size_of};
 use std::time::Duration;
 
 pub mod navigation;
@@ -295,6 +296,20 @@ impl<P: Copy> Rgb565SurfaceMut<'_, P> {
         {
             return false;
         }
+        let source_copy = slices_overlap(self.pixels, source).then(|| {
+            let mut copy = Vec::with_capacity(width * height);
+            for row in 0..height {
+                let source_start = (source_y + row) * source_stride + source_x;
+                copy.extend_from_slice(&source[source_start..source_start + width]);
+            }
+            copy
+        });
+        let (source, source_stride, source_x, source_y) = source_copy
+            .as_deref()
+            .map_or((source, source_stride, source_x, source_y), |source| {
+                (source, width, 0, 0)
+            });
+
         if self.layout.rotation() == OutputRotation::None {
             for row in 0..height {
                 let source_start = (source_y + row) * source_stride + source_x;
@@ -305,17 +320,92 @@ impl<P: Copy> Rgb565SurfaceMut<'_, P> {
             }
             return true;
         }
-        for row in 0..height {
-            let source_start = (source_y + row) * source_stride + source_x;
-            for column in 0..width {
-                let _ = self.set(
-                    destination_x + column,
-                    destination_y + row,
-                    source[source_start + column],
-                );
+
+        copy_rotated_rgb565_tiled(
+            self.pixels,
+            self.layout,
+            destination_x,
+            destination_y,
+            width,
+            height,
+            source,
+            source_stride,
+            source_x,
+            source_y,
+        );
+        true
+    }
+}
+
+fn slices_overlap<P>(left: &[P], right: &[P]) -> bool {
+    let element_size = size_of::<P>();
+    if element_size == 0 || left.is_empty() || right.is_empty() {
+        return false;
+    }
+    let left_start = left.as_ptr() as usize;
+    let right_start = right.as_ptr() as usize;
+    let left_end = left_start.saturating_add(left.len().saturating_mul(element_size));
+    let right_end = right_start.saturating_add(right.len().saturating_mul(element_size));
+    left_start < right_end && right_start < left_end
+}
+
+#[allow(clippy::too_many_arguments)]
+fn copy_rotated_rgb565_tiled<P: Copy>(
+    destination: &mut [P],
+    layout: Rgb565OutputLayout,
+    destination_x: usize,
+    destination_y: usize,
+    width: usize,
+    height: usize,
+    source: &[P],
+    source_stride: usize,
+    source_x: usize,
+    source_y: usize,
+) {
+    const TILE: usize = 16;
+    let mut tile: [MaybeUninit<P>; TILE * TILE] = [const { MaybeUninit::uninit() }; TILE * TILE];
+
+    for tile_y in (0..height).step_by(TILE) {
+        let tile_height = (height - tile_y).min(TILE);
+        for tile_x in (0..width).step_by(TILE) {
+            let tile_width = (width - tile_x).min(TILE);
+            for row in 0..tile_height {
+                let source_start = (source_y + tile_y + row) * source_stride + source_x + tile_x;
+                for column in 0..tile_width {
+                    tile[row * TILE + column].write(source[source_start + column]);
+                }
+            }
+
+            match layout.rotation() {
+                OutputRotation::Clockwise90 => {
+                    let physical_x_min =
+                        layout.logical_height() - (destination_y + tile_y + tile_height);
+                    for column in 0..tile_width {
+                        let physical_y = destination_x + tile_x + column;
+                        let destination_start =
+                            physical_y * layout.physical_stride() + physical_x_min;
+                        for row in 0..tile_height {
+                            let destination_offset = destination_start + tile_height - 1 - row;
+                            destination[destination_offset] =
+                                unsafe { tile[row * TILE + column].assume_init_read() };
+                        }
+                    }
+                }
+                OutputRotation::CounterClockwise90 => {
+                    for column in 0..tile_width {
+                        let physical_y =
+                            layout.logical_width() - 1 - (destination_x + tile_x + column);
+                        let destination_start =
+                            physical_y * layout.physical_stride() + destination_y + tile_y;
+                        for row in 0..tile_height {
+                            destination[destination_start + row] =
+                                unsafe { tile[row * TILE + column].assume_init_read() };
+                        }
+                    }
+                }
+                OutputRotation::None => unreachable!("identity copies bypass rotation kernels"),
             }
         }
-        true
     }
 }
 
@@ -660,5 +750,150 @@ mod tests {
             assert!(surface.copy_rect_strided(0, 0, 2, 3, &source, 2, 0, 0));
             assert_eq!(physical, expected);
         }
+    }
+
+    fn reference_copy(
+        destination: &mut [Rgb565Pixel],
+        layout: Rgb565OutputLayout,
+        destination_x: usize,
+        destination_y: usize,
+        width: usize,
+        height: usize,
+        source: &[Rgb565Pixel],
+        source_stride: usize,
+        source_x: usize,
+        source_y: usize,
+    ) -> bool {
+        if width == 0 || height == 0 {
+            return true;
+        }
+        if destination_x.saturating_add(width) > layout.logical_width()
+            || destination_y.saturating_add(height) > layout.logical_height()
+            || source_stride == 0
+            || source_y
+                .saturating_add(height - 1)
+                .saturating_mul(source_stride)
+                .saturating_add(source_x)
+                .saturating_add(width)
+                > source.len()
+        {
+            return false;
+        }
+        for row in 0..height {
+            let source_start = (source_y + row) * source_stride + source_x;
+            for column in 0..width {
+                let (physical_x, physical_y) =
+                    layout.logical_to_physical(destination_x + column, destination_y + row);
+                destination[physical_y * layout.physical_stride() + physical_x] =
+                    source[source_start + column];
+            }
+        }
+        true
+    }
+
+    #[test]
+    fn tiled_rotations_match_reference_for_strided_odd_rectangles() {
+        let logical_width = 7;
+        let logical_height = 5;
+        let source_stride = 11;
+        let source = (0..source_stride * 9)
+            .map(|index| Rgb565Pixel((index as u16).wrapping_mul(37)))
+            .collect::<Vec<_>>();
+        let rectangles = [(0, 0, 7, 5), (1, 0, 5, 3), (0, 2, 7, 3), (2, 1, 3, 4)];
+
+        for rotation in [
+            OutputRotation::Clockwise90,
+            OutputRotation::CounterClockwise90,
+        ] {
+            let layout =
+                Rgb565OutputLayout::new(logical_width, logical_height, 11, rotation).unwrap();
+            for &(x, y, width, height) in &rectangles {
+                let mut optimized = vec![Rgb565Pixel(0xdead); layout.len()];
+                let mut expected = optimized.clone();
+                assert!(reference_copy(
+                    &mut expected,
+                    layout,
+                    x,
+                    y,
+                    width,
+                    height,
+                    &source,
+                    source_stride,
+                    2,
+                    1,
+                ));
+                let mut surface = Rgb565SurfaceMut::new(&mut optimized, layout).unwrap();
+                assert!(surface.copy_rect_strided(
+                    x,
+                    y,
+                    width,
+                    height,
+                    &source,
+                    source_stride,
+                    2,
+                    1,
+                ));
+                assert_eq!(
+                    optimized, expected,
+                    "rotation={rotation:?} rect={x},{y},{width},{height}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn rotated_copy_keeps_invalid_bounds_and_clipped_valid_rectangles_stable() {
+        let layout = Rgb565OutputLayout::new(5, 3, 7, OutputRotation::Clockwise90).unwrap();
+        let source = (0..32)
+            .map(|index| Rgb565Pixel(index as u16))
+            .collect::<Vec<_>>();
+        let mut optimized = vec![Rgb565Pixel(0xbeef); layout.len()];
+        let mut expected = optimized.clone();
+        let mut surface = Rgb565SurfaceMut::new(&mut optimized, layout).unwrap();
+        assert!(surface.copy_rect_strided(3, 1, 2, 2, &source, 8, 4, 2));
+        assert!(reference_copy(
+            &mut expected,
+            layout,
+            3,
+            1,
+            2,
+            2,
+            &source,
+            8,
+            4,
+            2,
+        ));
+        assert_eq!(optimized, expected);
+
+        let before = optimized.clone();
+        assert!(!surface.copy_rect_strided(4, 2, 2, 2, &source, 8, 0, 0));
+        assert_eq!(optimized, before);
+    }
+
+    #[test]
+    fn rotated_copy_stages_overlapping_ring_segments() {
+        let layout = Rgb565OutputLayout::new(5, 4, 7, OutputRotation::CounterClockwise90).unwrap();
+        let mut storage = (0..layout.len())
+            .map(|index| Rgb565Pixel((index as u16).wrapping_mul(53)))
+            .collect::<Vec<_>>();
+        let original = storage.clone();
+        let mut expected = original.clone();
+        assert!(reference_copy(
+            &mut expected,
+            layout,
+            1,
+            1,
+            3,
+            2,
+            &original,
+            7,
+            0,
+            0,
+        ));
+
+        let source = unsafe { std::slice::from_raw_parts(storage.as_ptr(), storage.len()) };
+        let mut surface = Rgb565SurfaceMut::new(&mut storage, layout).unwrap();
+        assert!(surface.copy_rect_strided(1, 1, 3, 2, source, 7, 0, 0));
+        assert_eq!(storage, expected);
     }
 }
