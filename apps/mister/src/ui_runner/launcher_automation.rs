@@ -27,6 +27,7 @@ const DEFAULT_SOCKET_PATH: &str = "/tmp/mister-magik/ui-automation.sock";
 const MAX_SESSION_AGE: Duration = Duration::from_secs(120);
 const REQUEST_LEASE: Duration = Duration::from_secs(5);
 const CLOCK_SKEW: Duration = Duration::from_secs(10);
+const INTERRUPTED_SYSCALL_RETRIES: usize = 16;
 
 #[derive(Clone, Debug, Deserialize)]
 struct AutomationSessionDescriptor {
@@ -349,7 +350,7 @@ impl LauncherAutomation {
                     return;
                 };
                 let mut buffer = [0_u8; 4096];
-                match session.socket.recv_from(&mut buffer) {
+                match retry_interrupted(|| session.socket.recv_from(&mut buffer)) {
                     Ok((length, sender)) => Some((buffer[..length].to_vec(), sender)),
                     Err(error) if error.kind() == io::ErrorKind::WouldBlock => None,
                     Err(_) => {
@@ -364,14 +365,15 @@ impl LauncherAutomation {
             let response_socket = self
                 .session
                 .as_ref()
-                .and_then(|session| session.socket.try_clone().ok());
+                .and_then(|session| retry_interrupted(|| session.socket.try_clone()).ok());
             let result = self.handle_request(&bytes, input_enabled, now);
             let response = match result {
                 Ok(value) => json!({"schema":RESPONSE_SCHEMA,"ok":true,"result":value}),
                 Err(error) => json!({"schema":RESPONSE_SCHEMA,"ok":false,"error":error}),
             };
             if let (Some(socket), Some(path)) = (response_socket, sender.as_pathname()) {
-                let _ = socket.send_to(response.to_string().as_bytes(), path);
+                let response = response.to_string();
+                let _ = retry_interrupted(|| socket.send_to(response.as_bytes(), path));
             }
         }
     }
@@ -500,6 +502,21 @@ impl LauncherAutomation {
         self.session = None;
         let _ = fs::remove_file(&self.socket_path);
         let _ = fs::remove_file(&self.descriptor_path);
+    }
+}
+
+fn retry_interrupted<T>(mut operation: impl FnMut() -> io::Result<T>) -> io::Result<T> {
+    let mut retries = 0;
+    loop {
+        match operation() {
+            Err(error)
+                if error.kind() == io::ErrorKind::Interrupted
+                    && retries < INTERRUPTED_SYSCALL_RETRIES =>
+            {
+                retries += 1;
+            }
+            result => return result,
+        }
     }
 }
 
@@ -666,6 +683,31 @@ fn pad_state_has_active_input(state: &PadState) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn automation_socket_io_retries_profiler_interrupts_with_a_bound() {
+        let mut recovering_attempts = 0;
+        let recovered = retry_interrupted(|| {
+            recovering_attempts += 1;
+            if recovering_attempts < 4 {
+                Err(io::Error::from(io::ErrorKind::Interrupted))
+            } else {
+                Ok(7)
+            }
+        })
+        .unwrap();
+        assert_eq!(recovered, 7);
+        assert_eq!(recovering_attempts, 4);
+
+        let mut bounded_attempts = 0;
+        let failure = retry_interrupted::<()>(|| {
+            bounded_attempts += 1;
+            Err(io::Error::from(io::ErrorKind::Interrupted))
+        })
+        .unwrap_err();
+        assert_eq!(failure.kind(), io::ErrorKind::Interrupted);
+        assert_eq!(bounded_attempts, INTERRUPTED_SYSCALL_RETRIES + 1);
+    }
 
     #[test]
     fn button_allowlist_maps_to_logical_pad_state() {
