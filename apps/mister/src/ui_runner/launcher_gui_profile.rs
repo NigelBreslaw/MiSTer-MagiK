@@ -171,27 +171,15 @@ pub(super) const fn gui_latch_copy_span_name(
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum GuiProfilePhase {
-    SettledSettings,
-    HomePanRight,
-    HomePanLeft,
     ArcadeScroll,
     SettledArcade,
 }
 
 impl GuiProfilePhase {
-    const ORDERED: [Self; 5] = [
-        Self::SettledSettings,
-        Self::HomePanRight,
-        Self::HomePanLeft,
-        Self::ArcadeScroll,
-        Self::SettledArcade,
-    ];
+    const ORDERED: [Self; 2] = [Self::ArcadeScroll, Self::SettledArcade];
 
     pub(super) const fn label(self) -> &'static str {
         match self {
-            Self::SettledSettings => "settled-settings",
-            Self::HomePanRight => "home-pan-right",
-            Self::HomePanLeft => "home-pan-left",
             Self::ArcadeScroll => "arcade-scroll",
             Self::SettledArcade => "settled-arcade",
         }
@@ -406,10 +394,6 @@ impl GuiProfilingController {
             return;
         }
         let phase = match (screen, event.action) {
-            ("home", crate::input_event::LogicalAction::Right) => {
-                Some(GuiProfilePhase::HomePanRight)
-            }
-            ("home", crate::input_event::LogicalAction::Left) => Some(GuiProfilePhase::HomePanLeft),
             ("arcade", crate::input_event::LogicalAction::Down) => {
                 Some(GuiProfilePhase::ArcadeScroll)
             }
@@ -432,20 +416,6 @@ impl GuiProfilingController {
             return;
         }
         let phase = match self.state {
-            GuiProfileState::Warmup if screen == "settings" => {
-                let _ = self.request_phase(GuiProfilePhase::SettledSettings, now);
-                Some(GuiProfilePhase::SettledSettings)
-            }
-            GuiProfileState::AwaitingPresentation(GuiProfilePhase::HomePanRight)
-                if screen == "home" =>
-            {
-                Some(GuiProfilePhase::HomePanRight)
-            }
-            GuiProfileState::AwaitingPresentation(GuiProfilePhase::HomePanLeft)
-                if screen == "home" =>
-            {
-                Some(GuiProfilePhase::HomePanLeft)
-            }
             GuiProfileState::AwaitingPresentation(GuiProfilePhase::ArcadeScroll)
                 if screen == "arcade" && !arcade_motion_active && terminal_preview =>
             {
@@ -783,9 +753,9 @@ mod tests {
         let now = Instant::now();
         let mut controller = GuiProfilingController::enabled_for_test(now);
         controller
-            .request_phase(GuiProfilePhase::SettledSettings, now)
+            .request_phase(GuiProfilePhase::ArcadeScroll, now)
             .unwrap();
-        controller.tick(now + PHASE_TIMEOUT);
+        controller.tick(now + ARCADE_SCROLL_PHASE_TIMEOUT);
         assert!(matches!(controller.state, GuiProfileState::Failed(_)));
     }
 
@@ -794,10 +764,7 @@ mod tests {
         let now = Instant::now();
         let mut controller = GuiProfilingController::enabled_for_test(now);
         controller
-            .request_phase(GuiProfilePhase::SettledSettings, now)
-            .unwrap();
-        controller
-            .confirm_phase_presented(GuiProfilePhase::SettledSettings, now, 1_000)
+            .request_phase(GuiProfilePhase::ArcadeScroll, now)
             .unwrap();
         controller.record_frame(
             7,
@@ -912,14 +879,6 @@ mod tests {
     fn arcade_scroll_allows_the_fixed_twenty_second_hold() {
         let now = Instant::now();
         let mut controller = GuiProfilingController::enabled_for_test(now);
-        complete_through(
-            &mut controller,
-            &[
-                GuiProfilePhase::SettledSettings,
-                GuiProfilePhase::HomePanRight,
-                GuiProfilePhase::HomePanLeft,
-            ],
-        );
         let phase_start = now + Duration::from_millis(3);
         controller
             .request_phase(GuiProfilePhase::ArcadeScroll, phase_start)
@@ -947,7 +906,7 @@ mod tests {
         let mut controller = GuiProfilingController::enabled_for_test(now);
         assert!(
             controller
-                .request_phase(GuiProfilePhase::HomePanRight, now)
+                .request_phase(GuiProfilePhase::SettledArcade, now)
                 .is_err()
         );
         assert!(matches!(controller.state, GuiProfileState::Failed(_)));
@@ -1067,19 +1026,6 @@ mod tests {
     fn route_presentations_require_terminal_arcade_preview() {
         let now = Instant::now();
         let mut controller = GuiProfilingController::enabled_for_test(now);
-        controller.observe_route_presentation("settings", false, true, now, 1_000);
-        assert_eq!(
-            controller.state,
-            GuiProfileState::Measuring(GuiProfilePhase::SettledSettings)
-        );
-        controller
-            .request_phase(GuiProfilePhase::HomePanRight, now)
-            .unwrap();
-        controller.observe_route_presentation("home", false, true, now, 2_000);
-        controller
-            .request_phase(GuiProfilePhase::HomePanLeft, now)
-            .unwrap();
-        controller.observe_route_presentation("home", false, true, now, 3_000);
         controller
             .request_phase(GuiProfilePhase::ArcadeScroll, now)
             .unwrap();

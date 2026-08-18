@@ -9527,13 +9527,7 @@ fn validate_gui_profile_route(profile: &Value, pmu: bool) -> Result<()> {
         .get("phase_markers")
         .and_then(Value::as_array)
         .ok_or("GUI profiling route has no phase markers")?;
-    for phase in [
-        "settled-settings",
-        "home-pan-right",
-        "home-pan-left",
-        "arcade-scroll",
-        "settled-arcade",
-    ] {
+    for phase in ["arcade-scroll", "settled-arcade"] {
         for event in ["started", "presented"] {
             if !markers.iter().any(|marker| {
                 marker.get("phase").and_then(Value::as_str) == Some(phase)
@@ -9546,13 +9540,7 @@ fn validate_gui_profile_route(profile: &Value, pmu: bool) -> Result<()> {
     Ok(())
 }
 
-const GUI_PROFILE_PHASES: [&str; 5] = [
-    "settled-settings",
-    "home-pan-right",
-    "home-pan-left",
-    "arcade-scroll",
-    "settled-arcade",
-];
+const GUI_PROFILE_PHASES: [&str; 2] = ["arcade-scroll", "settled-arcade"];
 
 fn gui_profile_payload(route: &Value) -> Result<&Value> {
     let profile = route
@@ -25809,13 +25797,7 @@ mod tests {
 
     #[test]
     fn gui_profile_route_requires_every_fixed_phase_marker() {
-        let phases = [
-            "settled-settings",
-            "home-pan-right",
-            "home-pan-left",
-            "arcade-scroll",
-            "settled-arcade",
-        ];
+        let phases = GUI_PROFILE_PHASES;
         let markers = phases
             .iter()
             .flat_map(|phase| {
