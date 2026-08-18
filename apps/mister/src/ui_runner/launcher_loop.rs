@@ -4996,11 +4996,15 @@ pub(super) fn run_launcher_loop(
     if let Err(error) = orientation_store.reconcile_osd_rotation(nav.settings.screen_orientation) {
         crate::ui_errln!("settings: failed to reconcile MiSTer OSD rotation: {error}");
     }
-    if orientation_benchmark.enabled() {
+    let arcade_benchmark_orientation = std::env::var("MISTER_ARCADE_BENCHMARK_ORIENTATION")
+        .ok()
+        .and_then(|value| ScreenOrientation::parse(&value));
+    if let Some(orientation) = arcade_benchmark_orientation {
+        nav.settings.screen_orientation = orientation;
+    } else if orientation_benchmark.enabled() {
         nav.settings.screen_orientation = ScreenOrientation::Normal;
         nav.settings.reduce_motion = false;
-    }
-    if settings_navigation_benchmark.enabled() {
+    } else if settings_navigation_benchmark.enabled() {
         nav.settings.screen_orientation = settings_navigation_benchmark.orientation();
         nav.settings.reduce_motion = false;
     }
@@ -16464,6 +16468,15 @@ mod tests {
             assert_eq!(
                 launcher_startup_orientation(persisted, None, false, false),
                 persisted
+            );
+            assert_eq!(
+                launcher_startup_orientation(
+                    persisted,
+                    Some(ScreenOrientation::Normal),
+                    false,
+                    false,
+                ),
+                ScreenOrientation::Normal
             );
         }
     }
