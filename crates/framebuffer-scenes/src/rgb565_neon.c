@@ -188,6 +188,16 @@ static inline uint16x8_t blend8(uint16x8_t from, uint16x8_t to, uint16_t alpha) 
     return vcombine_u16(lo, hi);
 }
 
+static inline uint16_t blend1(uint16_t from, uint16_t to, uint16_t alpha) {
+    const uint32_t red_blue = (
+        ((uint32_t)(from & 0xf81f) * (32u - alpha)) +
+        ((uint32_t)(to & 0xf81f) * alpha)) >> 5;
+    const uint32_t green = (
+        ((uint32_t)(from & 0x07e0) * (32u - alpha)) +
+        ((uint32_t)(to & 0x07e0) * alpha)) >> 5;
+    return (uint16_t)((red_blue & 0xf81f) | (green & 0x07e0));
+}
+
 void mister_magik_rgb565_blend(
     uint16_t *destination, const uint16_t *previous, const uint16_t *current,
     size_t start, size_t end, uint16_t alpha
@@ -200,14 +210,27 @@ void mister_magik_rgb565_blend(
         vst1q_u16(destination + index, blend8(from, to, clamped_alpha));
     }
     for (; index < end; ++index) {
-        const uint16_t from = previous[index];
-        const uint16_t to = current[index];
-        const uint32_t red_blue = (
-            ((uint32_t)(from & 0xf81f) * (32u - clamped_alpha)) +
-            ((uint32_t)(to & 0xf81f) * clamped_alpha)) >> 5;
-        const uint32_t green = (
-            ((uint32_t)(from & 0x07e0) * (32u - clamped_alpha)) +
-            ((uint32_t)(to & 0x07e0) * clamped_alpha)) >> 5;
-        destination[index] = (uint16_t)((red_blue & 0xf81f) | (green & 0x07e0));
+        destination[index] = blend1(previous[index], current[index], clamped_alpha);
+    }
+}
+
+void mister_magik_rgb565_blend_black(
+    uint16_t *destination, const uint16_t *pixels,
+    size_t start, size_t end, uint16_t alpha, int fade_in
+) {
+    const uint16_t clamped_alpha = alpha > 32u ? 32u : alpha;
+    const uint16x8_t black = vdupq_n_u16(0);
+    size_t index = start;
+    for (; index + 7 < end; index += 8) {
+        const uint16x8_t source = vld1q_u16(pixels + index);
+        const uint16x8_t from = fade_in ? black : source;
+        const uint16x8_t to = fade_in ? source : black;
+        vst1q_u16(destination + index, blend8(from, to, clamped_alpha));
+    }
+    for (; index < end; ++index) {
+        const uint16_t source = pixels[index];
+        destination[index] = fade_in
+            ? blend1(0, source, clamped_alpha)
+            : blend1(source, 0, clamped_alpha);
     }
 }

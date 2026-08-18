@@ -5,6 +5,9 @@
 
 use crate::framebuffer::target::DirtyRect;
 use crate::visual_composition::{PreviewFrame, PreviewSurface, compose_preview_frame};
+use mister_magik_framebuffer_scenes::{
+    blend_rgb565_black_neon_if_available, blend_rgb565_neon_if_available,
+};
 use slint::platform::software_renderer::Rgb565Pixel;
 use std::time::Duration;
 
@@ -201,13 +204,17 @@ pub fn blend_rgb565_rows_bucketed(
 ) {
     debug_assert!(previous.len() >= destination.len());
     debug_assert!(current.len() >= destination.len());
+    let length = destination.len();
     let alpha = alpha_bucket.min(32);
     if alpha == 0 {
-        destination.copy_from_slice(&previous[..destination.len()]);
+        destination.copy_from_slice(&previous[..length]);
         return;
     }
     if alpha >= 32 {
-        destination.copy_from_slice(&current[..destination.len()]);
+        destination.copy_from_slice(&current[..length]);
+        return;
+    }
+    if blend_rgb565_neon_if_available(destination, previous, current, 0, length, alpha) {
         return;
     }
     for index in 0..destination.len() {
@@ -223,7 +230,27 @@ pub fn blend_rgb565_row_with_black(
 ) {
     debug_assert!(pixels.len() >= destination.len());
     let black = Rgb565Pixel(0);
+    let length = destination.len();
     let alpha = alpha_bucket.min(32);
+    if alpha == 0 {
+        if fade_in {
+            destination.fill(black);
+        } else {
+            destination.copy_from_slice(&pixels[..length]);
+        }
+        return;
+    }
+    if alpha >= 32 {
+        if fade_in {
+            destination.copy_from_slice(&pixels[..length]);
+        } else {
+            destination.fill(black);
+        }
+        return;
+    }
+    if blend_rgb565_black_neon_if_available(destination, pixels, 0, length, alpha, fade_in) {
+        return;
+    }
     for index in 0..destination.len() {
         destination[index] = if fade_in {
             blend_rgb565_bucket(black, pixels[index], alpha)

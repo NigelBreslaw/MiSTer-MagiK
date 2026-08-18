@@ -794,6 +794,58 @@ pub fn blend_rgb565_neon_if_available<P: Copy>(
     }
 }
 
+#[must_use]
+pub fn blend_rgb565_black_neon_if_available<P: Copy>(
+    destination: &mut [P],
+    pixels: &[P],
+    start: usize,
+    end: usize,
+    alpha_bucket: u16,
+    fade_in: bool,
+) -> bool {
+    if !rgb565_neon_enabled()
+        || size_of::<P>() != size_of::<u16>()
+        || align_of::<P>() < align_of::<u16>()
+        || start >= end
+        || end > destination.len()
+        || end > pixels.len()
+        || (destination.as_ptr() as usize) & 1 != 0
+        || (pixels.as_ptr() as usize) & 1 != 0
+    {
+        return false;
+    }
+    #[cfg(all(target_os = "linux", target_arch = "arm"))]
+    {
+        unsafe extern "C" {
+            fn mister_magik_rgb565_blend_black(
+                destination: *mut u16,
+                pixels: *const u16,
+                start: usize,
+                end: usize,
+                alpha: u16,
+                fade_in: i32,
+            );
+        }
+        // SAFETY: the caller validated all slice bounds and alignment.
+        unsafe {
+            mister_magik_rgb565_blend_black(
+                destination.as_mut_ptr().cast(),
+                pixels.as_ptr().cast(),
+                start,
+                end,
+                alpha_bucket,
+                i32::from(fade_in),
+            );
+        }
+        true
+    }
+    #[cfg(not(all(target_os = "linux", target_arch = "arm")))]
+    {
+        let _ = (destination, pixels, start, end, alpha_bucket, fade_in);
+        false
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct SceneGeometry {
     width: usize,
@@ -1410,31 +1462,74 @@ mod tests {
 
     #[cfg(all(target_os = "linux", target_arch = "arm"))]
     #[test]
-    fn neon_blend_matches_scalar_reference() {
-        let previous = (0..97)
-            .map(|index| Rgb565Pixel((index as u16).wrapping_mul(47)))
-            .collect::<Vec<_>>();
-        let current = (0..97)
-            .map(|index| Rgb565Pixel((index as u16).wrapping_mul(71)))
-            .collect::<Vec<_>>();
-        let alpha = 13_u16;
-        let mut expected = previous.clone();
-        for index in 3..94 {
-            let from = previous[index].0;
-            let to = current[index].0;
-            let red_blue = (((from & 0xf81f) * (32 - alpha) + (to & 0xf81f) * alpha) >> 5) & 0xf81f;
-            let green = (((from & 0x07e0) * (32 - alpha) + (to & 0x07e0) * alpha) >> 5) & 0x07e0;
-            expected[index] = Rgb565Pixel(red_blue | green);
+    fn neon_blend_matches_scalar_for_offsets_tails_and_alpha_buckets() {
+        fn scalar(from: Rgb565Pixel, to: Rgb565Pixel, alpha: u16) -> Rgb565Pixel {
+            let from = u32::from(from.0);
+            let to = u32::from(to.0);
+            let alpha = u32::from(alpha.min(32));
+            let inverse = 32 - alpha;
+            let red_blue = (((from & 0xf81f) * inverse + (to & 0xf81f) * alpha) >> 5) & 0xf81f;
+            let green = (((from & 0x07e0) * inverse + (to & 0x07e0) * alpha) >> 5) & 0x07e0;
+            Rgb565Pixel((red_blue | green) as u16)
         }
-        let mut actual = previous.clone();
-        assert!(blend_rgb565_neon_if_available(
-            &mut actual,
-            &previous,
-            &current,
-            3,
-            94,
-            alpha,
-        ));
-        assert_eq!(actual, expected);
+
+        let previous = (0..64)
+            .map(|index| Rgb565Pixel((index as u16).wrapping_mul(977).wrapping_add(13)))
+            .collect::<Vec<_>>();
+        let current = (0..64)
+            .map(|index| Rgb565Pixel((index as u16).wrapping_mul(613).wrapping_add(29)))
+            .collect::<Vec<_>>();
+        for alpha in 0..=32 {
+            for offset in 0..8 {
+                for length in 1..=24 {
+                    let previous = &previous[offset..offset + length];
+                    let current = &current[offset..offset + length];
+                    let expected = previous
+                        .iter()
+                        .zip(current)
+                        .map(|(&from, &to)| scalar(from, to, alpha))
+                        .collect::<Vec<_>>();
+                    let mut actual = vec![Rgb565Pixel(0xdead); length];
+                    assert!(blend_rgb565_neon_if_available(
+                        &mut actual,
+                        previous,
+                        current,
+                        0,
+                        length,
+                        alpha,
+                    ));
+                    assert_eq!(
+                        actual, expected,
+                        "alpha={alpha} offset={offset} length={length}"
+                    );
+
+                    for fade_in in [false, true] {
+                        let expected = previous
+                            .iter()
+                            .map(|&pixel| {
+                                if fade_in {
+                                    scalar(Rgb565Pixel(0), pixel, alpha)
+                                } else {
+                                    scalar(pixel, Rgb565Pixel(0), alpha)
+                                }
+                            })
+                            .collect::<Vec<_>>();
+                        let mut actual = vec![Rgb565Pixel(0xbeef); length];
+                        assert!(blend_rgb565_black_neon_if_available(
+                            &mut actual,
+                            previous,
+                            0,
+                            length,
+                            alpha,
+                            fade_in,
+                        ));
+                        assert_eq!(
+                            actual, expected,
+                            "black alpha={alpha} offset={offset} length={length} fade_in={fade_in}"
+                        );
+                    }
+                }
+            }
+        }
     }
 }
