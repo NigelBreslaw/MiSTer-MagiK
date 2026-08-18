@@ -10049,8 +10049,14 @@ pub(super) fn run_launcher_loop(
                             true,
                         ) {
                             if navigation_transition.settings_physical_space() {
-                                let _ = layer_target
-                                    .compose_arcade_list_update(&mut arcade_list_renderer, update);
+                                // The navigation destination and steady-state presenter share
+                                // this physical layer. Building it here keeps the first Arcade
+                                // input on the incremental path.
+                                let _ = layer_target.compose_arcade_list_direct_layer_snapshot(
+                                    &mut arcade_list_renderer,
+                                    update,
+                                    catalog_version as u64,
+                                );
                             } else {
                                 let _ = layer_target.compose_arcade_list_snapshot_update(
                                     &mut arcade_list_renderer,

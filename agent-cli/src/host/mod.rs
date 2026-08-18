@@ -8178,19 +8178,6 @@ fn run_gui_frame_profile_route_with_pprof(
             },
             "terminal Arcade preview",
         )?;
-        let terminal_checkpoint = terminal_checkpoint
-            .map(|label| {
-                launcher_automation::capture_checkpoint(
-                    config,
-                    &nonce,
-                    release_sequence,
-                    label,
-                    output_dir,
-                )
-            })
-            .transpose()?
-            .map(|checkpoint| serde_json::from_str::<Value>(&checkpoint))
-            .transpose()?;
         let profile_text = wait_for_gui_profile_text(
             config,
             session,
@@ -8210,6 +8197,21 @@ fn run_gui_frame_profile_route_with_pprof(
             }),
         )?;
         validate_gui_profile_route(&profile, pmu)?;
+        // Framebuffer PNG capture is intentionally outside the completed
+        // profiling window because its device I/O can consume refresh time.
+        let terminal_checkpoint = terminal_checkpoint
+            .map(|label| {
+                launcher_automation::capture_checkpoint(
+                    config,
+                    &nonce,
+                    release_sequence,
+                    label,
+                    output_dir,
+                )
+            })
+            .transpose()?
+            .map(|checkpoint| serde_json::from_str::<Value>(&checkpoint))
+            .transpose()?;
         let status_after = read_launcher_status(session)?;
         Ok(json!({
             "schema": "mister-magik-gui-profile-route-v1",

@@ -545,6 +545,48 @@ impl<'a> LayerTarget<'a> {
         )
     }
 
+    pub(super) fn compose_arcade_list_direct_layer_snapshot(
+        &mut self,
+        renderer: &mut ArcadeListRenderer,
+        update: ArcadeListUpdate,
+        catalog_generation: u64,
+    ) -> PresentCopyStats {
+        let (stats, _) =
+            self.compose_arcade_list_direct_layer(renderer, update, catalog_generation);
+        let view = renderer
+            .persistent_oriented_layer_view()
+            .expect("composed physical Arcade layer has a view");
+        assert!(
+            self.copy_physical_layer_snapshot_to_cached(view),
+            "physical Arcade layer does not match the presentation cache"
+        );
+        stats
+    }
+
+    fn copy_physical_layer_snapshot_to_cached(&mut self, view: DirectPreviewView<'_>) -> bool {
+        let output = self.layout.output_layout();
+        let rect = view.rect();
+        let stride = output.physical_stride();
+        if view.stride() != stride
+            || rect.x0 >= rect.x1
+            || rect.y0 >= rect.y1
+            || rect.x1 > stride
+            || rect.y1 > output.physical_height()
+            || view.pixels().len() < output.len()
+            || self.target.cached_565().len() < output.len()
+        {
+            return false;
+        }
+        let source = view.pixels();
+        let destination = self.target.cached_565_mut();
+        for row in rect.y0..rect.y1 {
+            let start = row * stride + rect.x0;
+            let end = start + rect.width();
+            destination[start..end].copy_from_slice(&source[start..end]);
+        }
+        true
+    }
+
     pub(super) fn compose_arcade_list_over_backdrop(
         &mut self,
         renderer: &mut ArcadeListRenderer,
@@ -787,5 +829,50 @@ mod tests {
         let layer_target = LayerTarget::new_oriented(&mut target, layout);
         assert_eq!(layer_target.direct_preview_rect(), Some(published));
         assert_eq!(published, layout.logical_rect_to_composition(logical));
+    }
+
+    #[test]
+    fn physical_layer_snapshot_updates_only_its_published_rect() {
+        let ui = UiDisplay::for_framebuffer(4, 3);
+        let layout = UiLayoutGeometry::for_display(&ui, ScreenOrientation::MonitorClockwise);
+        let output = layout.output_layout();
+        let rect = DirtyRect {
+            x0: 1,
+            y0: 1,
+            x1: 4,
+            y1: 3,
+        };
+        let source = (0..output.len())
+            .map(|index| Rgb565Pixel(index as u16 + 1))
+            .collect::<Vec<_>>();
+        let view = DirectPreviewView::from_frame_region(
+            &source,
+            output.physical_stride(),
+            output.physical_height(),
+            rect,
+        )
+        .unwrap();
+        let untouched = Rgb565Pixel(0xffff);
+        let mut target = UiFrameTarget::cached(FramebufferTargetGeometry::new(
+            output.physical_stride(),
+            output.physical_height(),
+        ));
+        target.cached_565_mut().fill(untouched);
+
+        assert!(
+            LayerTarget::new_oriented(&mut target, layout)
+                .copy_physical_layer_snapshot_to_cached(view)
+        );
+        for y in 0..output.physical_height() {
+            for x in 0..output.physical_stride() {
+                let index = y * output.physical_stride() + x;
+                let expected = if x >= rect.x0 && x < rect.x1 && y >= rect.y0 && y < rect.y1 {
+                    source[index]
+                } else {
+                    untouched
+                };
+                assert_eq!(target.cached_565()[index], expected);
+            }
+        }
     }
 }
