@@ -16,7 +16,7 @@ use crate::framebuffer::present::{
     copy_dense_rect_565, copy_direct_preview_rect_to_hidden, copy_strided_rect_565,
 };
 use crate::framebuffer::scanout_slots::ScanoutSlotsRgb565Framebuffer;
-use crate::framebuffer::target::{DirectPreviewView, DirtyRect, DirtyRectList, UiFrameTarget};
+use crate::framebuffer::target::{DirectPreviewView, DirtyRect, UiFrameTarget};
 use crate::ui_display::{
     CrtContentRect, CrtFontExperiment, CrtFontFamily, CrtUiMetrics, ResolvedOutputRoute, UiDisplay,
     UiLayoutGeometry,
@@ -1597,8 +1597,8 @@ impl ArcadeListRenderer {
                 ))
             }
             ArcadeListUpdate::Scroll {
-                delta_x,
-                delta_y,
+                delta_x: _,
+                delta_y: _,
                 rect,
             } => {
                 if rect != layer_rect {
@@ -1606,47 +1606,17 @@ impl ArcadeListRenderer {
                         "physical Arcade scroll rect mismatch: requested={rect:?} backing={layer_rect:?}"
                     ));
                 }
-                let moved_bytes = hidden
-                    .shift_rect(rect, delta_x, delta_y)
-                    .map_err(|error| format!("physical Arcade hidden shift failed: {error}"))?;
-                if moved_bytes == 0 {
-                    let rows = copy_direct_preview_rect_to_hidden(hidden, view, rect);
-                    if rows != rect.rows() {
-                        return Err("physical Arcade fallback copy incomplete".to_string());
-                    }
-                    return Ok((
-                        rows,
-                        rect.width().saturating_mul(rows as usize).saturating_mul(2),
-                    ));
+                // Hidden scanout slots are write-combined. Reading them for a
+                // memmove is substantially slower than rewriting the dense
+                // final layer from normal RAM.
+                let rows = copy_direct_preview_rect_to_hidden(hidden, view, rect);
+                if rows != rect.rows() {
+                    return Err("physical Arcade scroll copy incomplete".to_string());
                 }
-
-                let mut redraws = physical_scroll_exposed_rects(rect, delta_x, delta_y);
-                if let Some(aperture) = self.persistent_oriented_layer.selection_aperture() {
-                    redraws.push(aperture);
-                    if let Some(shifted) = translate_rect_clipped(aperture, delta_x, delta_y, rect)
-                    {
-                        redraws.push(shifted);
-                    }
-                }
-                let mut rows = 0u32;
-                let mut bytes = moved_bytes;
-                for redraw in redraws.iter() {
-                    let copied = copy_direct_preview_rect_to_hidden(hidden, view, redraw);
-                    if copied != redraw.rows() {
-                        return Err(format!(
-                            "physical Arcade stripe copy incomplete: rect={redraw:?} expected_rows={} copied_rows={copied}",
-                            redraw.rows()
-                        ));
-                    }
-                    rows = rows.saturating_add(copied);
-                    bytes = bytes.saturating_add(
-                        redraw
-                            .width()
-                            .saturating_mul(copied as usize)
-                            .saturating_mul(2),
-                    );
-                }
-                Ok((rows, bytes))
+                Ok((
+                    rows,
+                    rect.width().saturating_mul(rows as usize).saturating_mul(2),
+                ))
             }
         }
     }
@@ -2647,69 +2617,6 @@ impl ArcadeListRenderer {
         }
         row.into_iter().map(pixel_to_rgb565).collect()
     }
-}
-
-fn physical_scroll_exposed_rects(rect: DirtyRect, delta_x: isize, delta_y: isize) -> DirtyRectList {
-    let mut redraws = DirtyRectList::new();
-    let dx = delta_x.unsigned_abs().min(rect.width());
-    if dx != 0 {
-        redraws.push(if delta_x > 0 {
-            DirtyRect {
-                x0: rect.x0,
-                y0: rect.y0,
-                x1: rect.x0 + dx,
-                y1: rect.y1,
-            }
-        } else {
-            DirtyRect {
-                x0: rect.x1 - dx,
-                y0: rect.y0,
-                x1: rect.x1,
-                y1: rect.y1,
-            }
-        });
-    }
-    let dy = delta_y.unsigned_abs().min(rect.rows() as usize);
-    if dy != 0 {
-        redraws.push(if delta_y > 0 {
-            DirtyRect {
-                x0: rect.x0,
-                y0: rect.y0,
-                x1: rect.x1,
-                y1: rect.y0 + dy,
-            }
-        } else {
-            DirtyRect {
-                x0: rect.x0,
-                y0: rect.y1 - dy,
-                x1: rect.x1,
-                y1: rect.y1,
-            }
-        });
-    }
-    redraws
-}
-
-fn translate_rect_clipped(
-    rect: DirtyRect,
-    delta_x: isize,
-    delta_y: isize,
-    bounds: DirtyRect,
-) -> Option<DirtyRect> {
-    fn shifted(value: usize, delta: isize) -> usize {
-        if delta >= 0 {
-            value.saturating_add(delta as usize)
-        } else {
-            value.saturating_sub(delta.unsigned_abs())
-        }
-    }
-    DirtyRect {
-        x0: shifted(rect.x0, delta_x),
-        y0: shifted(rect.y0, delta_y),
-        x1: shifted(rect.x1, delta_x),
-        y1: shifted(rect.y1, delta_y),
-    }
-    .intersection(bounds)
 }
 
 fn shift_oriented_rect(
