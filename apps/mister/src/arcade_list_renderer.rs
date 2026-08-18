@@ -637,6 +637,7 @@ pub enum PersistentArcadeCopyDecision {
     SparseDiff,
     MirrorRecovery,
     FullCopy,
+    DenseScroll,
     ScrollRecovery,
 }
 
@@ -647,6 +648,7 @@ impl PersistentArcadeCopyDecision {
             Self::SparseDiff => "sparse-diff",
             Self::MirrorRecovery => "mirror-recovery",
             Self::FullCopy => "full-copy",
+            Self::DenseScroll => "dense-scroll",
             Self::ScrollRecovery => "scroll-recovery",
         }
     }
@@ -1979,36 +1981,41 @@ impl ArcadeListRenderer {
                         "physical Arcade scroll rect mismatch: requested={rect:?} backing={layer_rect:?}"
                     ));
                 }
-                if diff_safe {
-                    self.copy_persistent_oriented_layer_diff_to_hidden(hidden, slot_index, rect)
-                } else {
-                    let write_started = Instant::now();
-                    let rows = copy_direct_preview_rect_to_hidden(hidden, view, rect);
-                    let write_us = elapsed_us(write_started);
-                    if rows != rect.rows() {
-                        return Err("physical Arcade scroll recovery copy incomplete".to_string());
-                    }
-                    let mirror_started = Instant::now();
-                    self.refresh_persistent_slot_mirror(slot_index, rect)?;
-                    let dense_pixels = rect.width().saturating_mul(rect.rows() as usize) as u64;
-                    self.persistent_copy_trace = PersistentArcadeCopyTrace {
-                        decision: PersistentArcadeCopyDecision::ScrollRecovery,
-                        diff_safe,
-                        mirror_valid: false,
-                        write_us,
-                        mirror_refresh_us: elapsed_us(mirror_started),
-                        written_pixels: dense_pixels,
-                        mirror_refresh_pixels: dense_pixels,
-                        changed_rows: rows,
-                        ..PersistentArcadeCopyTrace::default()
-                    };
-                    Ok((
-                        rows,
-                        rect.width().saturating_mul(rows as usize).saturating_mul(2),
-                    ))
+                // Portrait scrolling changes the alternating row fill across
+                // essentially every physical row. The measured sparse path
+                // therefore wrote the whole layer anyway, after paying for a
+                // full comparison and a second full RAM mirror refresh. Keep
+                // the contiguous RAM-to-WC write and invalidate the unused
+                // mirror for this slot instead.
+                let write_started = Instant::now();
+                let rows = copy_direct_preview_rect_to_hidden(hidden, view, rect);
+                let write_us = elapsed_us(write_started);
+                if rows != rect.rows() {
+                    return Err("physical Arcade dense scroll copy incomplete".to_string());
                 }
+                self.invalidate_persistent_slot_mirror(slot_index)?;
+                let dense_pixels = rect.width().saturating_mul(rect.rows() as usize) as u64;
+                self.persistent_copy_trace = PersistentArcadeCopyTrace {
+                    decision: PersistentArcadeCopyDecision::DenseScroll,
+                    diff_safe,
+                    mirror_valid: false,
+                    write_us,
+                    written_pixels: dense_pixels,
+                    changed_rows: rows,
+                    ..PersistentArcadeCopyTrace::default()
+                };
+                Ok((
+                    rows,
+                    rect.width().saturating_mul(rows as usize).saturating_mul(2),
+                ))
             }
         }
+    }
+
+    fn invalidate_persistent_slot_mirror(&mut self, slot_index: u8) -> Result<(), String> {
+        let mirror_index = persistent_slot_mirror_index(slot_index)?;
+        self.persistent_oriented_layer.slot_mirrors[mirror_index].rect = None;
+        Ok(())
     }
 
     fn refresh_persistent_slot_mirror(

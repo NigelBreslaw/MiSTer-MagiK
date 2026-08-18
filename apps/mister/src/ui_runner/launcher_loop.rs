@@ -8826,7 +8826,7 @@ pub(super) fn run_launcher_loop(
         if composition_decision.force_full_slint_raster {
             request_launcher_redraw!();
         }
-        if composition_decision.clear_direct_layers {
+        if composition_decision.clears_arcade_layer() {
             arcade_list_renderer.invalidate_presented_layer();
             request_launcher_redraw!();
         }
@@ -10461,6 +10461,16 @@ pub(super) fn run_launcher_loop(
             damage.push_if_some(crt_backdrop_full_damage);
             damage
         };
+        if layout.is_portrait()
+            && let Some(arcade_layer) = arcade_desired
+        {
+            // The physical Arcade layer owns these slot pixels while active.
+            // Slint still updates the normal-RAM base cache underneath it, but
+            // copying intersecting base damage into a hidden slot would
+            // destroy that slot's layer identity and force catch-up recovery.
+            cached_damage =
+                subtract_dirty_rects(cached_damage, &DirtyRectList::from_one(arcade_layer.rect));
+        }
         // Retain the v1 telemetry field for schema compatibility. Native Slint
         // and custom layer composition no longer run a post-raster rotation.
         let orientation_damage_rotation_us = 0;

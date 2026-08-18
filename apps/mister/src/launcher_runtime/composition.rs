@@ -112,6 +112,11 @@ pub struct UiCompositionDecision {
 }
 
 impl UiCompositionDecision {
+    pub fn clears_arcade_layer(&self) -> bool {
+        self.clear_direct_layers
+            && (!self.state.allows_direct_layers() || self.retirement_obligations.contains_arcade())
+    }
+
     pub fn status(&self) -> UiCompositionStatus {
         UiCompositionStatus {
             state: self.state.label(),
@@ -165,6 +170,10 @@ impl DirectLayerObligations {
 
     const fn union(self, other: Self) -> Self {
         Self(self.0 | other.0)
+    }
+
+    const fn contains_arcade(self) -> bool {
+        self.0 & Self::ARCADE != 0
     }
 
     pub const fn label(self) -> &'static str {
@@ -581,6 +590,25 @@ mod tests {
         assert!(decision.allow_arcade_list_blit);
         assert!(decision.allow_preview_blit);
         assert_eq!(decision.recovery_count, 0);
+    }
+
+    #[test]
+    fn preview_retirement_does_not_clear_the_arcade_layer() {
+        let mut controller = UiCompositionController::new();
+        acquire_direct_layers(&mut controller);
+
+        let decision = controller.tick(UiCompositionInput {
+            wants_arcade_list: true,
+            wants_preview: false,
+            preview_cache_exact: true,
+            preview_frame_ready: false,
+            ..input(Screen::Arcade)
+        });
+
+        assert_eq!(decision.state, UiCompositionState::MixedArcade);
+        assert_eq!(decision.retirement_obligations.label(), "preview");
+        assert!(decision.clear_direct_layers);
+        assert!(!decision.clears_arcade_layer());
     }
 
     #[test]

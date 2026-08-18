@@ -63,6 +63,7 @@ use crate::visual_composition::{PreviewFrame, PreviewPixels};
 use mister_magik_fb::experiments::effects::framebuffer_effects::{
     EFFECT_SIZES, EffectKind, EffectSize,
 };
+use mister_magik_fb::framebuffer::damage::subtract_dirty_rects;
 use mister_magik_fb::framebuffer::full_frame_latch::{
     LatchCopyPath, LatchFrameBuffers, LatchHardware, wait_for_latch_completion,
 };
