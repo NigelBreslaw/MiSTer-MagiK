@@ -98,7 +98,7 @@ scope = "instrumentation"
 conflicts = []
 sensitivity = "public"
 aliases = []
-documentation = { summary = "Selects a one-shot in-memory launcher orientation for Arcade benchmarks", accepted_values = ["normal", "monitor-clockwise", "monitor-counterclockwise"], value_policy = "reject" }
+documentation = { summary = "Selects a one-shot in-memory launcher orientation for Arcade benchmarks", accepted_values = ["normal", "monitor-clockwise", "monitor-counterclockwise"], value_policy = "document" }
 
 [[control]]
 name = "MISTER_ARCADE_ENTRY_RUN_ID"
