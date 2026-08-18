@@ -2,7 +2,7 @@
 
 <!-- Generated from apps/mister/config/runtime-environment.toml. Do not edit. -->
 
-Registry format: `mister-magik-runtime-environment-v2`. Baseline: 403 literal occurrences, 269 owned names, 7 external/build-time names.
+Registry format: `mister-magik-runtime-environment-v2`. Baseline: 406 literal occurrences, 272 owned names, 7 external/build-time names.
 
 | Name | Classification | Shape | Default behavior | Parser | Typed default | Scope | Conflicts | Sensitivity | Aliases | Documentation | Visibility | Owner |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
@@ -229,6 +229,7 @@ Registry format: `mister-magik-runtime-environment-v2`. Baseline: 403 literal oc
 | `MISTER_RASTER_EFFECTS_HUD` | production | boolean token | uses the owner-defined enabled or disabled default when unset or unrecognized | bool | — | command | — | public | — | Controls raster effects hud behavior; value policy: document | internal runtime | `apps/mister/src/ui_runner/experiments/effects/raster_effects_loop.rs` |
 | `MISTER_RASTER_EFFECTS_SEGMENT_SECS` | production | bounded integer | uses the owner-defined bounded numeric default when unset or invalid | u64 | — | command | — | public | — | Controls raster effects segment secs behavior; value policy: document | internal runtime | `apps/mister/src/ui_runner/experiments/effects/raster_effects_loop.rs` |
 | `MISTER_RASTER_EFFECTS_TRACE` | diagnostic | string, enum, or boolean token | uses the owner-defined value or disabled state when unset | string | — | instrumentation | — | public | — | Controls raster effects trace behavior; value policy: document | developer diagnostic | `apps/mister/src/ui_runner/experiments/effects/raster_effects_loop.rs` |
+| `MISTER_RGB565_NEON` | production | enum token | uses the NEON RGB565 copy kernel unless explicitly disabled | enum | — | command | — | public | — | Selects the RGB565 copy implementation; values: 0, off, false, no, scalar; value policy: document | internal runtime | `mister/platform/runtime/src/framebuffer/scanout_slots.rs` |
 | `MISTER_SATURN_PREVIEW_ARCHIVE` | production | path or path list | uses the owner-defined installed-layout path or disabled state when unset | path | — | command | — | path | — | Controls saturn preview archive behavior; value policy: document | internal runtime | `crates/catalog/src/preview_worker.rs` |
 | `MISTER_SCREENSAVER_SEED` | production | bounded integer | uses the owner-defined bounded numeric default when unset or invalid | u64 | — | command | — | public | — | Controls screensaver seed behavior; value policy: document | internal runtime | `apps/mister/src/process_config.rs` |
 | `MISTER_SCREENSAVER_START_ACTIVE` | production | boolean token | uses the owner-defined enabled or disabled default when unset or unrecognized | bool | — | command | — | public | — | Controls screensaver start active behavior; value policy: document | internal runtime | `apps/mister/src/process_config.rs` |

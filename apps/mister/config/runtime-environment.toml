@@ -11,8 +11,8 @@ source_roots = [
 ]
 
 [baseline]
-literal_occurrences = 403
-unique_names = 269
+literal_occurrences = 406
+unique_names = 272
 external_build_names = 7
 
 [[control]]
@@ -3138,6 +3138,20 @@ conflicts = []
 sensitivity = "public"
 aliases = []
 documentation = { summary = "Controls raster effects trace behavior", accepted_values = [], value_policy = "document" }
+
+[[control]]
+name = "MISTER_RGB565_NEON"
+owner = "mister/platform/runtime/src/framebuffer/scanout_slots.rs"
+classification = "production"
+value_shape = "enum token"
+default_behavior = "uses the NEON RGB565 copy kernel unless explicitly disabled"
+visibility = "internal runtime"
+parser = "enum"
+scope = "command"
+conflicts = []
+sensitivity = "public"
+aliases = []
+documentation = { summary = "Selects the RGB565 copy implementation", accepted_values = ["0", "off", "false", "no", "scalar"], value_policy = "document" }
 
 [[control]]
 name = "MISTER_SATURN_PREVIEW_ARCHIVE"
