@@ -742,15 +742,6 @@ impl NativeDevice {
         })
     }
 
-    pub(crate) fn profile_arcade_velocity_scroll_pprof_smoke(
-        &mut self,
-        output_dir: &Path,
-    ) -> std::result::Result<String, DeviceFailure> {
-        self.benchmark_profile(|config| {
-            profile_installed_arcade_velocity_scroll_pprof_smoke(config, output_dir)
-        })
-    }
-
     pub(crate) fn profile_arcade_velocity_scroll_pmu(
         &mut self,
         output_dir: &Path,
