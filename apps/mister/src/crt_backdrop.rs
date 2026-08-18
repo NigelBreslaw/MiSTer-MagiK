@@ -156,7 +156,11 @@ impl CrtBackdropState {
     }
 
     pub fn pixels(&self) -> &[Rgb565Pixel] {
-        &self.logical_retarget
+        if self.height == self.physical_height {
+            &self.retarget
+        } else {
+            &self.logical_retarget
+        }
     }
 
     pub fn is_transitioning(&self) -> bool {
@@ -595,7 +599,6 @@ impl CrtBackdropState {
 
     fn expand_to_logical(&mut self) {
         if self.height == self.physical_height {
-            self.logical_retarget.copy_from_slice(&self.retarget);
             return;
         }
         for logical_y in 0..self.height {
@@ -2077,6 +2080,28 @@ mod tests {
                 .pixels()
                 .iter()
                 .all(|pixel| *pixel == darken_rgb565(Rgb565Pixel(0xffff)))
+        );
+    }
+
+    #[test]
+    fn equal_height_backdrop_exposes_physical_pixels_without_duplicate_copy() {
+        let mut backdrop = CrtBackdropState::new_with_heights(4, 2, 2);
+        backdrop.retarget.fill(Rgb565Pixel(0x1234));
+        backdrop.logical_retarget.fill(Rgb565Pixel(0xabcd));
+
+        backdrop.expand_to_logical();
+
+        assert!(
+            backdrop
+                .pixels()
+                .iter()
+                .all(|pixel| *pixel == Rgb565Pixel(0x1234))
+        );
+        assert!(
+            backdrop
+                .logical_retarget
+                .iter()
+                .all(|pixel| *pixel == Rgb565Pixel(0xabcd))
         );
     }
 }
