@@ -7825,6 +7825,8 @@ const GUI_PROFILE_REMOTE_COMPLETE: &str = "/tmp/mister-magik/gui-frame-profile.j
 const GUI_PROFILE_DEFAULT_SCROLL_MS: u64 = 900;
 const ARCADE_VELOCITY_SCROLL_DURATION_MS: u64 = 40_000;
 const ARCADE_VELOCITY_SCROLL_TELEMETRY_SECS: u64 = 55;
+const ARCADE_VELOCITY_SCROLL_PPROF_DURATION_MS: u64 = 20_000;
+const ARCADE_VELOCITY_SCROLL_PPROF_TELEMETRY_SECS: u64 = 35;
 const ARCADE_VELOCITY_SCROLL_SMOKE_DURATION_MS: u64 = 8_000;
 const ARCADE_VELOCITY_SCROLL_SMOKE_TELEMETRY_SECS: u64 = 18;
 const ARCADE_VELOCITY_SCROLL_PPROF_REMOTE_DIR: &str =
@@ -7837,7 +7839,7 @@ fn gui_profile_route_launcher_env_with_pprof(
 ) -> Vec<(String, String)> {
     let mut environment = vec![
         ("MISTER_CATALOG_REFRESH".into(), "off".into()),
-        ("MISTER_LAUNCHER_START_SCREEN".into(), "settings".into()),
+        ("MISTER_LAUNCHER_START_SCREEN".into(), "arcade".into()),
         ("MISTER_GUI_FRAME_PROFILE".into(), "1".into()),
         (
             "MISTER_GUI_FRAME_PROFILE_COMPLETE".into(),
@@ -8024,38 +8026,6 @@ fn run_gui_frame_profile_route_with_pprof(
         .to_string();
 
     let run_result = (|| -> Result<Value> {
-        let settled_settings = wait_gui_profile_snapshot(
-            config,
-            &nonce,
-            |snapshot| gui_profile_effective_view(snapshot) == Some("settings"),
-            "settled Settings",
-        )?;
-        modal_input_action(
-            config,
-            &nonce,
-            AutomationAction::Tap(AutomationButton::Home),
-        )?;
-        let settled_home = wait_gui_profile_snapshot(
-            config,
-            &nonce,
-            |snapshot| gui_profile_effective_view(snapshot) == Some("home"),
-            "Home after Settings",
-        )?;
-        let pan_right_sequence = modal_input_action(
-            config,
-            &nonce,
-            AutomationAction::Tap(AutomationButton::Right),
-        )?;
-        modal_input_action(config, &nonce, AutomationAction::ReleaseAll)?;
-        let pan_right = launcher_automation::snapshot(config, &nonce)?;
-        let pan_left_sequence = modal_input_action(
-            config,
-            &nonce,
-            AutomationAction::Tap(AutomationButton::Left),
-        )?;
-        modal_input_action(config, &nonce, AutomationAction::ReleaseAll)?;
-        let pan_left = launcher_automation::snapshot(config, &nonce)?;
-        modal_input_action(config, &nonce, AutomationAction::Tap(AutomationButton::A))?;
         let arcade_entered = wait_gui_profile_snapshot(
             config,
             &nonce,
@@ -8155,15 +8125,9 @@ fn run_gui_frame_profile_route_with_pprof(
             "status": "complete",
             "pmu_requested": pmu,
             "actions": {
-                "pan_right_sequence": pan_right_sequence,
-                "pan_left_sequence": pan_left_sequence,
                 "scroll_sequence": scroll_sequence,
                 "release_sequence": release_sequence,
             },
-            "settled_settings": settled_settings,
-            "settled_home": settled_home,
-            "pan_right": pan_right,
-            "pan_left": pan_left,
             "arcade_entered": arcade_entered,
             "scroll_snapshots": scroll_snapshots,
             "settled_arcade": settled_arcade,
@@ -8373,8 +8337,8 @@ fn profile_installed_arcade_velocity_scroll_pprof(
     profile_installed_arcade_velocity_scroll_pprof_workload(
         config,
         output_dir,
-        ARCADE_VELOCITY_SCROLL_DURATION_MS,
-        ARCADE_VELOCITY_SCROLL_TELEMETRY_SECS,
+        ARCADE_VELOCITY_SCROLL_PPROF_DURATION_MS,
+        ARCADE_VELOCITY_SCROLL_PPROF_TELEMETRY_SECS,
         Duration::ZERO,
         "mister-magik-arcade-velocity-scroll-pprof-v1",
     )
@@ -25578,11 +25542,13 @@ mod tests {
         let pprof = gui_profile_route_launcher_env_with_pprof(
             false,
             Some(ARCADE_VELOCITY_SCROLL_PPROF_REMOTE_DIR),
-            40_000,
+            ARCADE_VELOCITY_SCROLL_PPROF_DURATION_MS,
         );
-        assert!(control.iter().any(|(name, value)| {
-            name == "MISTER_LAUNCHER_START_SCREEN" && value == "settings"
-        }));
+        assert!(
+            control.iter().any(|(name, value)| {
+                name == "MISTER_LAUNCHER_START_SCREEN" && value == "arcade"
+            })
+        );
         assert!(
             control
                 .iter()
@@ -25600,7 +25566,7 @@ mod tests {
         assert!(
             pprof
                 .iter()
-                .any(|(name, value)| { name == "MISTER_PPROF_DURATION_SECS" && value == "40" })
+                .any(|(name, value)| { name == "MISTER_PPROF_DURATION_SECS" && value == "20" })
         );
         let cleanup = gui_profile_route_cleanup_command();
         assert!(cleanup.contains(GUI_PROFILE_REMOTE_COMPLETE));
