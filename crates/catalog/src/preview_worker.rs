@@ -1247,7 +1247,6 @@ struct PreviewArchive {
 
 #[derive(Default)]
 struct PreviewArchiveScratch {
-    raw: Vec<u8>,
     index_pread_file: Option<CachedIndexPreadFile>,
 }
 
@@ -2072,13 +2071,13 @@ fn load_raw565_preview_asset_from_index(
 
     let decode_t = Instant::now();
     let decode_cpu_t = thread_cpu_us();
-    let data = decode_preview_archive_entry_into(&payload, entry, &mut scratch.raw)
+    let words = decode_preview_archive_entry_words(&payload, entry)
         .map_err(|e| format!("preview archive index decode {entry_name}: {e}"))?;
     let decode_us = decode_t.elapsed().as_micros() as u64;
     let decode_cpu_us = elapsed_thread_cpu_us(decode_cpu_t);
     let parse_t = Instant::now();
     let parse_cpu_t = thread_cpu_us();
-    let image = decode_pixel_preview_bytes(entry, data)?;
+    let image = decode_pixel_preview_words(entry, words)?;
     let raw565_parse_us = parse_t.elapsed().as_micros() as u64;
     let raw565_parse_cpu_us = elapsed_thread_cpu_us(parse_cpu_t);
     let total_us = total_t.elapsed().as_micros() as u64;
@@ -2510,7 +2509,7 @@ impl PreviewArchive {
     fn load_timed(
         &self,
         name: &str,
-        scratch: &mut PreviewArchiveScratch,
+        _scratch: &mut PreviewArchiveScratch,
     ) -> Result<Option<LoadedPreviewPixels>, String> {
         let key = name.to_ascii_lowercase();
         let Some(entry) = self.entries.get(&key).copied() else {
@@ -2518,7 +2517,6 @@ impl PreviewArchive {
         };
         let total_t = Instant::now();
         let read_t = Instant::now();
-        let PreviewArchiveScratch { raw, .. } = scratch;
         let start = entry.offset as usize;
         let end = start
             .checked_add(entry.compressed_len)
@@ -2531,13 +2529,13 @@ impl PreviewArchive {
 
         let decode_t = Instant::now();
         let decode_cpu_t = thread_cpu_us();
-        let data = decode_preview_archive_entry_into(compressed_slice, entry, raw)
+        let words = decode_preview_archive_entry_words(compressed_slice, entry)
             .map_err(|e| format!("preview archive lz4 decode {name}: {e}"))?;
         let decode_us = decode_t.elapsed().as_micros() as u64;
         let decode_cpu_us = elapsed_thread_cpu_us(decode_cpu_t);
         let parse_t = Instant::now();
         let parse_cpu_t = thread_cpu_us();
-        let image = decode_pixel_preview_bytes(entry, data)?;
+        let image = decode_pixel_preview_words(entry, words)?;
         let raw565_parse_us = parse_t.elapsed().as_micros() as u64;
         let raw565_parse_cpu_us = elapsed_thread_cpu_us(parse_cpu_t);
         let total_us = total_t.elapsed().as_micros() as u64;
@@ -2604,17 +2602,25 @@ fn elapsed_thread_cpu_us(start: Option<u64>) -> u64 {
         .unwrap_or(0)
 }
 
-fn decode_preview_archive_entry_into<'a>(
-    payload: &'a [u8],
+fn decode_preview_archive_entry_words(
+    payload: &[u8],
     entry: PreviewArchiveEntry,
-    out: &'a mut Vec<u8>,
-) -> Result<&'a [u8], String> {
+) -> Result<Arc<[u16]>, String> {
+    if !entry.raw_len.is_multiple_of(2) {
+        return Err(format!(
+            "preview archive entry has odd RGB565 byte length {}",
+            entry.raw_len
+        ));
+    }
+    let mut words = Arc::<[u16]>::new_uninit_slice(entry.raw_len / 2);
+    let uninit = Arc::get_mut(&mut words).expect("new RGB565 Arc must be uniquely owned");
+    // SAFETY: the uninitialized u16 allocation is aligned for bytes and spans
+    // exactly `raw_len`; successful branches below initialize every byte.
+    let destination =
+        unsafe { std::slice::from_raw_parts_mut(uninit.as_mut_ptr().cast::<u8>(), entry.raw_len) };
     match entry.payload_flag {
         0 => {
-            if out.len() < entry.raw_len {
-                out.resize(entry.raw_len, 0);
-            }
-            let len = lz4_flex::block::decompress_into(payload, &mut out[..entry.raw_len])
+            let len = lz4_flex::block::decompress_into(payload, destination)
                 .map_err(|e| e.to_string())?;
             if len != entry.raw_len {
                 return Err(format!(
@@ -2622,7 +2628,6 @@ fn decode_preview_archive_entry_into<'a>(
                     entry.raw_len
                 ));
             }
-            Ok(&out[..len])
         }
         1 => {
             if payload.len() != entry.raw_len {
@@ -2632,10 +2637,17 @@ fn decode_preview_archive_entry_into<'a>(
                     entry.raw_len
                 ));
             }
-            Ok(payload)
+            destination.copy_from_slice(payload);
         }
-        other => Err(format!("bad preview archive payload flag {other}")),
+        other => return Err(format!("bad preview archive payload flag {other}")),
     }
+    #[cfg(target_endian = "big")]
+    for pixel in destination.chunks_exact_mut(2) {
+        pixel.swap(0, 1);
+    }
+    // SAFETY: every byte was initialized above and big-endian targets were
+    // converted from the archive's little-endian representation in place.
+    Ok(unsafe { words.assume_init() })
 }
 
 #[cfg(test)]
@@ -2674,6 +2686,7 @@ fn decode_lz4_block_entry_into<'a>(
     }
 }
 
+#[cfg(test)]
 fn decode_pixel_preview_bytes(
     entry: PreviewArchiveEntry,
     data: &[u8],
@@ -2695,6 +2708,27 @@ fn decode_pixel_preview_bytes(
     })
 }
 
+fn decode_pixel_preview_words(
+    entry: PreviewArchiveEntry,
+    words: Arc<[u16]>,
+) -> Result<PreviewPixels, String> {
+    validate_entry_geometry(
+        "pixel preview",
+        "<decoded>",
+        entry.width,
+        entry.height,
+        entry.stride_bytes,
+        words.len().saturating_mul(2),
+    )?;
+    Ok(PreviewPixels::Rgb565 {
+        width: entry.width,
+        height: entry.height,
+        stride_bytes: entry.stride_bytes,
+        words,
+    })
+}
+
+#[cfg(test)]
 fn raw565_words_from_le_bytes(data: &[u8], context: &str) -> Result<Vec<u16>, String> {
     if !data.len().is_multiple_of(2) {
         return Err(format!(
@@ -3718,6 +3752,32 @@ mod tests {
                 assert_eq!(height, 1);
                 assert_eq!(stride_bytes, 16);
                 assert_eq!(&words[..3], &[0xf800, 0x07e0, 0x001f]);
+            }
+        }
+    }
+
+    #[test]
+    fn archive_decode_writes_raw_and_lz4_pixels_into_final_words() {
+        let expected = [0xf800, 0x07e0, 0x001f, 0xffff, 0x1234, 0xabcd, 0, 0];
+        let raw = expected
+            .iter()
+            .flat_map(|word| word.to_le_bytes())
+            .collect::<Vec<_>>();
+        for (payload_flag, payload) in [(1, raw.clone()), (0, lz4_flex::block::compress(&raw))] {
+            let entry = PreviewArchiveEntry {
+                raw_len: raw.len(),
+                compressed_len: payload.len(),
+                offset: 0,
+                width: 3,
+                height: 1,
+                stride_bytes: 16,
+                payload_flag,
+            };
+            let words = decode_preview_archive_entry_words(&payload, entry).unwrap();
+            assert_eq!(&*words, &expected);
+            let image = decode_pixel_preview_words(entry, words).unwrap();
+            match image {
+                PreviewPixels::Rgb565 { words, .. } => assert_eq!(&*words, &expected),
             }
         }
     }
