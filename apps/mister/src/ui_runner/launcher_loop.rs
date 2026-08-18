@@ -10399,9 +10399,11 @@ pub(super) fn run_launcher_loop(
         custom_draw_trace.portrait_arcade_list_pixels = portrait_arcade_list_pixels;
         custom_draw_trace.portrait_arcade_list_bytes = portrait_arcade_list_bytes;
         let physical_custom_damage = accepted_screensaver_frame.then_some(this_rect).flatten();
-        let preview_layer_desired = should_desire_direct_layer(
+        let preview_layer_desired = should_desire_preview_direct_layer(
             wants_preview_layer,
             composition_decision.allow_preview_blit,
+            layout.is_portrait() && portrait_preview_worker_pending,
+            layer_target.direct_preview_rect().is_some(),
         );
         let preview_desired = if preview_layer_desired && preview_direct_present_enabled() {
             let rect = if layout.is_portrait() {
@@ -11856,6 +11858,18 @@ fn apply_startup_pending_display(
 
 fn should_desire_direct_layer(wants_layer: bool, composition_allows_layer: bool) -> bool {
     wants_layer && composition_allows_layer
+}
+
+fn should_desire_preview_direct_layer(
+    wants_layer: bool,
+    composition_allows_layer: bool,
+    portrait_worker_pending: bool,
+    has_physical_preview: bool,
+) -> bool {
+    should_desire_direct_layer(
+        wants_layer || (portrait_worker_pending && has_physical_preview),
+        composition_allows_layer,
+    )
 }
 
 fn preview_frame_from_raw<'a>(frame: &'a PreviewRawFrame<'a>) -> PreviewFrame<'a> {
@@ -17800,6 +17814,18 @@ mod tests {
         assert!(!should_desire_direct_layer(false, true));
         assert!(!should_desire_direct_layer(true, false));
         assert!(!should_desire_direct_layer(false, false));
+    }
+
+    #[test]
+    fn portrait_preview_layer_stays_owned_while_replacement_is_pending() {
+        assert!(should_desire_preview_direct_layer(false, true, true, true));
+        assert!(!should_desire_preview_direct_layer(
+            false, true, false, true
+        ));
+        assert!(!should_desire_preview_direct_layer(
+            false, true, true, false
+        ));
+        assert!(!should_desire_preview_direct_layer(true, false, true, true));
     }
 
     #[test]
