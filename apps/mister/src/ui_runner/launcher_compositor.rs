@@ -157,18 +157,16 @@ impl<'a> LayerTarget<'a> {
         if !self.layout.is_portrait() {
             return self.clear_cached_preview();
         }
-        let logical_rect = preview_screen_rect(&self.drawing_ui);
-        let mut surface = mister_magik_framebuffer_scenes::Rgb565SurfaceMut::new(
-            self.target.cached_565_mut(),
-            self.layout.output_layout(),
-        )
-        .expect("launcher output layout matches its cached target");
-        for y in logical_rect.y0..logical_rect.y1 {
-            for x in logical_rect.x0..logical_rect.x1 {
-                let _ = surface.set(x, y, Rgb565Pixel(0));
-            }
+        let rect = self
+            .layout
+            .logical_rect_to_composition(preview_screen_rect(&self.drawing_ui));
+        let stride = self.layout.composition_w();
+        let cached = self.target.cached_565_mut();
+        for y in rect.y0..rect.y1 {
+            let row = y * stride;
+            cached[row + rect.x0..row + rect.x1].fill(Rgb565Pixel(0));
         }
-        self.layout.logical_rect_to_composition(logical_rect)
+        rect
     }
 
     pub(super) fn render_screensaver(
@@ -687,6 +685,44 @@ mod tests {
         let inside = rect.y0 * ui.render_w() + rect.x0;
         assert_eq!(target.cached_565()[inside], Rgb565Pixel(0));
         assert_eq!(target.cached_565()[0], green);
+    }
+
+    #[test]
+    fn portrait_preview_clear_matches_logical_mapping_for_both_rotations() {
+        let ui = UiDisplay::for_framebuffer(960, 540);
+        for orientation in [
+            ScreenOrientation::MonitorClockwise,
+            ScreenOrientation::MonitorCounterclockwise,
+        ] {
+            let layout = UiLayoutGeometry::for_display(&ui, orientation);
+            let logical_rect = preview_screen_rect(&UiDisplay::for_framebuffer(
+                layout.logical_w(),
+                layout.logical_h(),
+            ));
+            let original = (0..ui.render_w() * ui.render_h())
+                .map(|index| Rgb565Pixel((index as u16).wrapping_mul(17) | 1))
+                .collect::<Vec<_>>();
+            let mut expected = original.clone();
+            let mut surface = mister_magik_framebuffer_scenes::Rgb565SurfaceMut::new(
+                &mut expected,
+                layout.output_layout(),
+            )
+            .unwrap();
+            for y in logical_rect.y0..logical_rect.y1 {
+                for x in logical_rect.x0..logical_rect.x1 {
+                    assert!(surface.set(x, y, Rgb565Pixel(0)));
+                }
+            }
+
+            let mut target =
+                UiFrameTarget::cached(FramebufferTargetGeometry::new(ui.render_w(), ui.render_h()));
+            target.cached_565_mut().copy_from_slice(&original);
+            let cleared =
+                LayerTarget::new_oriented(&mut target, layout).clear_presentation_preview();
+
+            assert_eq!(cleared, layout.logical_rect_to_composition(logical_rect));
+            assert_eq!(target.cached_565(), expected);
+        }
     }
 
     #[test]
