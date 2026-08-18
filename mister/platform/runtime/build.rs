@@ -6,14 +6,18 @@ mod c_build_support;
 
 fn main() {
     println!("cargo:rustc-check-cfg=cfg(mister_arm_neon_decimator)");
+    println!("cargo:rustc-check-cfg=cfg(mister_arm_neon_scanout_copy)");
     println!("cargo:rerun-if-changed=src/framebuffer/downsample_neon.c");
+    println!("cargo:rerun-if-changed=src/framebuffer/scanout_copy_neon.c");
     println!("cargo:rerun-if-changed=c_build_support.rs");
     #[cfg(feature = "ui")]
     {
         if std::env::var("TARGET").as_deref() == Ok("armv7-unknown-linux-gnueabihf") {
             println!("cargo:rustc-cfg=mister_arm_neon_decimator");
+            println!("cargo:rustc-cfg=mister_arm_neon_scanout_copy");
             c_build()
                 .file("src/framebuffer/downsample_neon.c")
+                .file("src/framebuffer/scanout_copy_neon.c")
                 .flag("-std=c11")
                 .flag("-O3")
                 .flag("-mtune=cortex-a9")

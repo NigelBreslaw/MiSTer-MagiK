@@ -24,6 +24,8 @@ use crate::framebuffer::vertical_scale::{
     Rgb565FrameView, VerticalRect, VerticalRgb565Transform, VerticalSampling,
 };
 use slint::platform::software_renderer::Rgb565Pixel;
+#[cfg(mister_arm_neon_scanout_copy)]
+use std::sync::OnceLock;
 
 pub struct ScanoutSlotsRgb565Framebuffer {
     inner: HiddenScanoutFramebuffer,
@@ -329,11 +331,53 @@ fn copy_rect_565_strided_pixels(
     src_x: usize,
     src_y: usize,
 ) {
+    #[cfg(mister_arm_neon_scanout_copy)]
+    if scanout_neon_copy_enabled() {
+        unsafe extern "C" {
+            fn mister_magik_scanout_copy_rgb565_rect_neon(
+                destination: *mut u16,
+                destination_stride: usize,
+                source: *const u16,
+                source_stride: usize,
+                width: usize,
+                height: usize,
+            );
+        }
+        let destination_offset = y.saturating_mul(dst_stride_pixels).saturating_add(x);
+        let source_offset = src_y
+            .saturating_mul(src_stride_pixels)
+            .saturating_add(src_x);
+        // SAFETY: the public copy entry point validated both rectangles, the
+        // hidden mapping and source cannot overlap, and RGB565 pixels are
+        // transparent u16 words with compatible alignment.
+        unsafe {
+            mister_magik_scanout_copy_rgb565_rect_neon(
+                dst.as_mut_ptr().add(destination_offset).cast::<u16>(),
+                dst_stride_pixels,
+                src.as_ptr().add(source_offset).cast::<u16>(),
+                src_stride_pixels,
+                w,
+                h,
+            );
+        }
+        return;
+    }
     for row in 0..h {
         let src_start = (src_y + row) * src_stride_pixels + src_x;
         let dst_start = (y + row) * dst_stride_pixels + x;
         dst[dst_start..dst_start + w].copy_from_slice(&src[src_start..src_start + w]);
     }
+}
+
+#[cfg(mister_arm_neon_scanout_copy)]
+fn scanout_neon_copy_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        !matches!(
+            std::env::var("MISTER_RGB565_NEON").ok().as_deref(),
+            Some("0" | "off" | "false" | "no" | "scalar")
+        )
+    })
 }
 
 #[cfg(test)]
