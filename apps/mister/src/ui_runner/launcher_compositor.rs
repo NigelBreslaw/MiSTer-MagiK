@@ -3,6 +3,7 @@
 
 use super::launcher_screensaver::ScreensaverRenderTrace;
 use super::*;
+use mister_magik_framebuffer_scenes::OutputRotation;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum LauncherPresentBackend {
@@ -652,6 +653,33 @@ impl<'a> LayerTarget<'a> {
 
     pub(super) fn direct_preview_rect(&self) -> Option<DirtyRect> {
         self.direct_preview_view().map(DirectPreviewView::rect)
+    }
+
+    pub(super) fn direct_preview_backing_diagnostic(
+        &self,
+    ) -> mister_magik_fb::framebuffer::target::DirectPreviewBackingDiagnostic {
+        self.target
+            .direct_preview_backing_diagnostic(self.layout.is_portrait())
+    }
+
+    pub(super) fn output_layout_generation(&self) -> u64 {
+        let output = self.layout.output_layout();
+        let rotation = match output.rotation() {
+            OutputRotation::None => 0_u64,
+            OutputRotation::Clockwise90 => 1,
+            OutputRotation::CounterClockwise90 => 2,
+        };
+        [
+            output.logical_width() as u64,
+            output.logical_height() as u64,
+            output.physical_stride() as u64,
+            output.physical_height() as u64,
+            rotation,
+        ]
+        .into_iter()
+        .fold(0xcbf2_9ce4_8422_2325, |hash, value| {
+            (hash ^ value).wrapping_mul(0x0000_0100_0000_01b3)
+        })
     }
 }
 

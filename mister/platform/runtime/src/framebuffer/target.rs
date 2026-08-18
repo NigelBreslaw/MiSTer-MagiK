@@ -362,6 +362,15 @@ struct OrientedPreviewCacheKey {
     output: Rgb565OutputLayout,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DirectPreviewBackingDiagnostic {
+    pub rect: Option<DirtyRect>,
+    pub stride: usize,
+    pub pixels: usize,
+    pub cache_token: Option<u64>,
+    pub output: Option<Rgb565OutputLayout>,
+}
+
 impl UiFrameTarget {
     pub fn cached(geometry: FramebufferTargetGeometry) -> Self {
         Self {
@@ -689,6 +698,31 @@ impl UiFrameTarget {
         self.physical_direct_preview_rect
             .zip(self.physical_direct_preview_cache)
             .map(|(rect, _)| DirectPreviewView::dense(&self.physical_direct_preview, rect))
+    }
+
+    pub fn direct_preview_backing_diagnostic(
+        &self,
+        physical: bool,
+    ) -> DirectPreviewBackingDiagnostic {
+        if physical {
+            DirectPreviewBackingDiagnostic {
+                rect: self.physical_direct_preview_rect,
+                stride: self
+                    .physical_direct_preview_rect
+                    .map_or(0, DirtyRect::width),
+                pixels: self.physical_direct_preview.len(),
+                cache_token: self.physical_direct_preview_cache.map(|key| key.token),
+                output: self.physical_direct_preview_cache.map(|key| key.output),
+            }
+        } else {
+            DirectPreviewBackingDiagnostic {
+                rect: self.direct_preview_rect,
+                stride: self.direct_preview_rect.map_or(0, DirtyRect::width),
+                pixels: self.direct_preview.len(),
+                cache_token: None,
+                output: None,
+            }
+        }
     }
 
     pub fn cached_565_mut(&mut self) -> &mut [Rgb565Pixel] {

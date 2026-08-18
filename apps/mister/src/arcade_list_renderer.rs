@@ -668,6 +668,14 @@ pub struct PersistentArcadeCopyTrace {
     pub changed_rows: u32,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PersistentArcadeLayerDiagnostic {
+    pub key: Option<PersistentOrientedArcadeLayerKey>,
+    pub rect: Option<DirtyRect>,
+    pub stride: usize,
+    pub pixels: usize,
+}
+
 /// Inactive physical Arcade content layer used by the incremental presenter.
 ///
 /// The content buffer intentionally contains only normal, non-inverted list
@@ -1932,6 +1940,16 @@ impl ArcadeListRenderer {
 
     pub fn persistent_oriented_layer_view(&self) -> Option<DirectPreviewView<'_>> {
         self.persistent_oriented_layer.view()
+    }
+
+    pub fn persistent_oriented_layer_diagnostic(&self) -> PersistentArcadeLayerDiagnostic {
+        let key = self.persistent_oriented_layer.key();
+        PersistentArcadeLayerDiagnostic {
+            key,
+            rect: self.persistent_oriented_layer.physical_rect(),
+            stride: key.map_or(0, |key| key.output.physical_stride()),
+            pixels: self.persistent_oriented_layer.content().len(),
+        }
     }
 
     pub fn copy_persistent_oriented_layer_update_to_hidden(

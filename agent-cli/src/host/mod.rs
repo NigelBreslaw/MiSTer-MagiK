@@ -8178,7 +8178,7 @@ fn run_gui_frame_profile_route_with_pprof(
             },
             "terminal Arcade preview",
         )?;
-        let profile_text = wait_for_gui_profile_text(
+        wait_for_gui_profile_file(
             config,
             session,
             &nonce,
@@ -8186,19 +8186,9 @@ fn run_gui_frame_profile_route_with_pprof(
             Duration::from_secs(10),
             "GUI profiling completion",
         )?;
-        let profile: Value = serde_json::from_str(&profile_text)?;
-        get(
-            session,
-            GUI_PROFILE_REMOTE_COMPLETE,
-            &output_dir.join(if pprof_remote_dir.is_some() {
-                "frame-profile.json"
-            } else {
-                "profile.json"
-            }),
-        )?;
-        validate_gui_profile_route(&profile, pmu)?;
-        // Framebuffer PNG capture is intentionally outside the completed
-        // profiling window because its device I/O can consume refresh time.
+        // Keep the automation lease alive until the terminal checkpoint has
+        // been captured. Frame profiles are large enough that streaming one
+        // through an SSH command can exceed the launcher's request lease.
         let terminal_checkpoint = terminal_checkpoint
             .map(|label| {
                 launcher_automation::capture_checkpoint(
@@ -8212,6 +8202,14 @@ fn run_gui_frame_profile_route_with_pprof(
             .transpose()?
             .map(|checkpoint| serde_json::from_str::<Value>(&checkpoint))
             .transpose()?;
+        let profile_path = output_dir.join(if pprof_remote_dir.is_some() {
+            "frame-profile.json"
+        } else {
+            "profile.json"
+        });
+        get(session, GUI_PROFILE_REMOTE_COMPLETE, &profile_path)?;
+        let profile: Value = serde_json::from_str(&fs::read_to_string(&profile_path)?)?;
+        validate_gui_profile_route(&profile, pmu)?;
         let status_after = read_launcher_status(session)?;
         Ok(json!({
             "schema": "mister-magik-gui-profile-route-v1",
@@ -9595,19 +9593,20 @@ fn wait_for_remote_text(
     }
 }
 
-fn wait_for_gui_profile_text(
+fn wait_for_gui_profile_file(
     config: &NativeDeviceConfig,
     session: &Session,
     nonce: &str,
     path: &str,
     timeout: Duration,
     label: &str,
-) -> Result<String> {
+) -> Result<()> {
     let started = Instant::now();
     let mut next_keepalive = Instant::now();
     loop {
-        if let Some(text) = remote_read(session, path) {
-            return Ok(text);
+        let probe = exec(session, &format!("test -s {}", sh(path)), true)?;
+        if probe.rc == 0 {
+            return Ok(());
         }
         if started.elapsed() >= timeout {
             return Err(format!("timed out waiting for {label}").into());

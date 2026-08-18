@@ -153,6 +153,16 @@ pub struct LatchPresentPlan {
     arcade_after: Option<DirectLayerState>,
 }
 
+impl LatchPresentPlan {
+    pub const fn preview_state_after(self) -> Option<DirectLayerState> {
+        self.preview_after
+    }
+
+    pub const fn arcade_state_after(self) -> Option<DirectLayerState> {
+        self.arcade_after
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct TwoBufferLatchState {
     slots: [LatchSlotCoherency; 2],

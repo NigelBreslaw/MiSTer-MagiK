@@ -40,14 +40,80 @@ const LATCH_RETRY_DELAYS: [Duration; 4] = [
 ];
 const MAX_AUTO_RETRY_ATTEMPTS: u8 = LATCH_RETRY_DELAYS.len() as u8;
 
-fn require_complete_direct_preview_copy(rect: DirtyRect, copied_rows: u32) -> Result<(), String> {
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PhysicalOverlayRole {
+    Preview,
+    Arcade,
+}
+
+impl PhysicalOverlayRole {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Preview => "preview",
+            Self::Arcade => "arcade",
+        }
+    }
+}
+
+#[derive(Debug, Eq, PartialEq)]
+struct PhysicalOverlayFailure {
+    role: PhysicalOverlayRole,
+    slot_index: u8,
+    rect: DirtyRect,
+    expected_rows: u32,
+    copied_rows: u32,
+    layout_generation: u64,
+    content_generation: u64,
+    backing_key: String,
+    cause: Option<String>,
+}
+
+impl std::fmt::Display for PhysicalOverlayFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "physical overlay copy failed: role={} slot={} rect={:?} expected_rows={} copied_rows={} layout_generation={} content_generation={} backing_key={}",
+            self.role.label(),
+            self.slot_index,
+            self.rect,
+            self.expected_rows,
+            self.copied_rows,
+            self.layout_generation,
+            self.content_generation,
+            self.backing_key,
+        )?;
+        if let Some(cause) = &self.cause {
+            write!(formatter, " cause={cause}")?;
+        }
+        Ok(())
+    }
+}
+
+fn require_complete_overlay_copy(
+    role: PhysicalOverlayRole,
+    slot_index: u8,
+    rect: DirtyRect,
+    copied_rows: u32,
+    layout_generation: u64,
+    content_generation: u64,
+    backing_key: impl FnOnce() -> String,
+) -> Result<(), String> {
     let expected_rows = rect.rows();
     if copied_rows == expected_rows {
         Ok(())
     } else {
-        Err(format!(
-            "direct preview ownership copy incomplete: rect={rect:?} expected_rows={expected_rows} copied_rows={copied_rows}"
-        ))
+        Err(PhysicalOverlayFailure {
+            role,
+            slot_index,
+            rect,
+            expected_rows,
+            copied_rows,
+            layout_generation,
+            content_generation,
+            backing_key: backing_key(),
+            cause: None,
+        }
+        .to_string())
     }
 }
 
@@ -671,7 +737,15 @@ impl PresentationAdapters<FpgaVblankLatchHiddenPresenter> for LivePresentationAd
                         layer_target.copy_direct_preview_rect_to_hidden(hidden, rect);
                     hidden_preview_compose_us = started.elapsed().as_micros();
                     drop(preview_pmu);
-                    require_complete_direct_preview_copy(rect, direct_preview_rows)?;
+                    require_complete_overlay_copy(
+                        PhysicalOverlayRole::Preview,
+                        plan.slot_index,
+                        rect,
+                        direct_preview_rows,
+                        layer_target.output_layout_generation(),
+                        plan.preview_state_after().map_or(0, |state| state.version),
+                        || format!("{:?}", layer_target.direct_preview_backing_diagnostic()),
+                    )?;
                 }
                 if let Some(update) = plan.arcade_redraw {
                     let arcade_pmu = self
@@ -681,13 +755,33 @@ impl PresentationAdapters<FpgaVblankLatchHiddenPresenter> for LivePresentationAd
                         })
                         .flatten();
                     let started = Instant::now();
-                    arcade_stats = layer_target.copy_arcade_list_update_to_hidden(
-                        hidden,
-                        arcade_list_renderer,
-                        plan.slot_index,
-                        plan.arcade_redraw_diff_safe,
-                        update,
-                    )?;
+                    let arcade_rect = update.dirty_rect();
+                    let arcade_generation =
+                        plan.arcade_state_after().map_or(0, |state| state.version);
+                    let arcade_backing =
+                        arcade_list_renderer.persistent_oriented_layer_diagnostic();
+                    arcade_stats = layer_target
+                        .copy_arcade_list_update_to_hidden(
+                            hidden,
+                            arcade_list_renderer,
+                            plan.slot_index,
+                            plan.arcade_redraw_diff_safe,
+                            update,
+                        )
+                        .map_err(|cause| {
+                            PhysicalOverlayFailure {
+                                role: PhysicalOverlayRole::Arcade,
+                                slot_index: plan.slot_index,
+                                rect: arcade_rect,
+                                expected_rows: arcade_rect.rows(),
+                                copied_rows: 0,
+                                layout_generation: layer_target.output_layout_generation(),
+                                content_generation: arcade_generation,
+                                backing_key: format!("{arcade_backing:?}"),
+                                cause: Some(cause),
+                            }
+                            .to_string()
+                        })?;
                     arcade_copy_trace = arcade_list_renderer.persistent_copy_trace();
                     hidden_arcade_compose_us = started.elapsed().as_micros();
                     drop(arcade_pmu);
@@ -945,10 +1039,47 @@ mod tests {
             y1: 24,
         };
 
-        assert!(require_complete_direct_preview_copy(rect, 4).is_ok());
-        let error = require_complete_direct_preview_copy(rect, 0).unwrap_err();
+        assert!(
+            require_complete_overlay_copy(PhysicalOverlayRole::Preview, 2, rect, 4, 17, 23, || {
+                "preview-cache-5".into()
+            },)
+            .is_ok()
+        );
+        let error =
+            require_complete_overlay_copy(PhysicalOverlayRole::Preview, 2, rect, 0, 17, 23, || {
+                "preview-cache-5".into()
+            })
+            .unwrap_err();
+        assert!(error.contains("role=preview slot=2"));
         assert!(error.contains("expected_rows=4 copied_rows=0"));
-        assert!(require_complete_direct_preview_copy(rect, 3).is_err());
+        assert!(error.contains("layout_generation=17 content_generation=23"));
+        assert!(error.contains("backing_key=preview-cache-5"));
+    }
+
+    #[test]
+    fn arcade_overlay_failure_preserves_role_and_source_cause() {
+        let failure = PhysicalOverlayFailure {
+            role: PhysicalOverlayRole::Arcade,
+            slot_index: 1,
+            rect: DirtyRect {
+                x0: 4,
+                y0: 8,
+                x1: 44,
+                y1: 28,
+            },
+            expected_rows: 20,
+            copied_rows: 0,
+            layout_generation: 31,
+            content_generation: 47,
+            backing_key: "arcade-ring-9".into(),
+            cause: Some("physical Arcade full copy incomplete".into()),
+        }
+        .to_string();
+
+        assert!(failure.contains("role=arcade slot=1"));
+        assert!(failure.contains("layout_generation=31 content_generation=47"));
+        assert!(failure.contains("backing_key=arcade-ring-9"));
+        assert!(failure.contains("cause=physical Arcade full copy incomplete"));
     }
 
     #[test]
