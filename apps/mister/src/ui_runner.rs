@@ -170,6 +170,7 @@ mod launcher_screensaver_pipeline;
 mod launcher_startup_intro;
 #[allow(dead_code)]
 mod launcher_worker_intents;
+mod portrait_preview_compositor;
 #[allow(dead_code)]
 mod raw565_preview_renderer;
 #[allow(dead_code)]
@@ -216,6 +217,7 @@ use mister_magik_mister_runtime::framebuffer::latch_state::{
     DirectLayerState, LatchFramePlan as LauncherFramePlan, LatchPresentPlan, LayerOffset,
     TwoBufferLatchState,
 };
+use portrait_preview_compositor::*;
 use raw565_preview_renderer::*;
 use screenshot_media_update_session::*;
 use tear_pattern_loop::*;

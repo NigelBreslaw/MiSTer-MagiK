@@ -18,6 +18,7 @@ pub enum RuntimeThreadRole {
     LibraryWalkerForeground,
     PreviewSelected,
     PreviewPrefetch,
+    PreviewCompositor,
     CrtBackdropPrepare,
     MediaWorker,
     MediaDownload,
@@ -47,6 +48,7 @@ impl RuntimeThreadRole {
             Self::LibraryWalkerForeground => "library-walker-foreground",
             Self::PreviewSelected => "preview-selected",
             Self::PreviewPrefetch => "preview-prefetch",
+            Self::PreviewCompositor => "preview-compositor",
             Self::CrtBackdropPrepare => "crt-backdrop-prepare",
             Self::MediaWorker => "media-worker",
             Self::MediaDownload => "media-download",
@@ -84,7 +86,9 @@ impl RuntimeThreadRole {
                 RuntimeThreadPolicy::new(0, ThreadAffinity::AllOnline)
             }
             Self::LibraryWalker => RuntimeThreadPolicy::new(10, ThreadAffinity::Cpu0),
-            Self::PreviewSelected => RuntimeThreadPolicy::new(0, ThreadAffinity::Cpu0),
+            Self::PreviewSelected | Self::PreviewCompositor => {
+                RuntimeThreadPolicy::new(0, ThreadAffinity::Cpu0)
+            }
             Self::PreviewPrefetch | Self::CrtBackdropPrepare => {
                 RuntimeThreadPolicy::new(10, ThreadAffinity::Cpu0)
             }

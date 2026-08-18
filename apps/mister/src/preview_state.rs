@@ -569,6 +569,65 @@ pub struct PreviewRawTransitionFrame<'a> {
     pub duration_denominator: u32,
 }
 
+#[derive(Clone)]
+pub struct OwnedPreviewRawFrame {
+    pixels: Option<(Arc<[u16]>, usize)>,
+    pub source_w: u32,
+    pub source_h: u32,
+    pub display_w: u32,
+    pub display_h: u32,
+}
+
+impl OwnedPreviewRawFrame {
+    pub fn borrowed(&self) -> PreviewRawFrame<'_> {
+        PreviewRawFrame {
+            pixels: self
+                .pixels
+                .as_ref()
+                .map(|(words, stride_pixels)| PreviewRawPixels::Rgb565 {
+                    pixels: rgb565_words_as_pixels(words),
+                    stride_pixels: *stride_pixels,
+                })
+                .unwrap_or(PreviewRawPixels::Empty),
+            source_w: self.source_w,
+            source_h: self.source_h,
+            display_w: self.display_w,
+            display_h: self.display_h,
+        }
+    }
+
+    pub(crate) fn empty() -> Self {
+        Self {
+            pixels: None,
+            source_w: 1,
+            source_h: 1,
+            display_w: ARCADE_PREVIEW_BOX_W,
+            display_h: ARCADE_PREVIEW_BOX_H,
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct OwnedPreviewRawTransitionFrame {
+    pub previous: Option<OwnedPreviewRawFrame>,
+    pub current: OwnedPreviewRawFrame,
+    pub transition_id: u64,
+    pub duration_numerator: u32,
+    pub duration_denominator: u32,
+}
+
+impl OwnedPreviewRawTransitionFrame {
+    pub fn borrowed(&self) -> PreviewRawTransitionFrame<'_> {
+        PreviewRawTransitionFrame {
+            previous: self.previous.as_ref().map(OwnedPreviewRawFrame::borrowed),
+            current: self.current.borrowed(),
+            transition_id: self.transition_id,
+            duration_numerator: self.duration_numerator,
+            duration_denominator: self.duration_denominator,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PreviewTransitionMode {
     CrossFade,
@@ -798,6 +857,20 @@ impl PreviewState {
                     stride_pixels: *stride_pixels,
                 },
             },
+            source_w: image.source_w,
+            source_h: image.source_h,
+            display_w: image.display_w,
+            display_h: image.display_h,
+        }
+    }
+
+    fn owned_raw_frame_from_image(image: &PreviewImage) -> OwnedPreviewRawFrame {
+        let PreviewImagePixels::Rgb565 {
+            words,
+            stride_pixels,
+        } = &image.pixels;
+        OwnedPreviewRawFrame {
+            pixels: Some((Arc::clone(words), *stride_pixels)),
             source_w: image.source_w,
             source_h: image.source_h,
             display_w: image.display_w,
@@ -1128,6 +1201,28 @@ impl PreviewState {
                 })
             });
         Some(PreviewRawTransitionFrame {
+            previous,
+            current,
+            transition_id: self.raw_transition_id,
+            duration_numerator: self.raw_transition_duration_numerator,
+            duration_denominator: self.raw_transition_duration_denominator,
+        })
+    }
+
+    pub fn owned_raw_transition_frame(&self) -> Option<OwnedPreviewRawTransitionFrame> {
+        let current = if self.has_visible_preview {
+            Self::owned_raw_frame_from_image(self.cache.peek(&self.visible_preview_key)?)
+        } else if self.previous_image.is_some() || self.raw_dirty {
+            OwnedPreviewRawFrame::empty()
+        } else {
+            return None;
+        };
+        let previous = self
+            .previous_image
+            .as_ref()
+            .map(|image| Self::owned_raw_frame_from_image(image))
+            .or_else(|| self.previous_was_empty.then(OwnedPreviewRawFrame::empty));
+        Some(OwnedPreviewRawTransitionFrame {
             previous,
             current,
             transition_id: self.raw_transition_id,

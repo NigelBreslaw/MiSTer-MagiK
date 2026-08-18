@@ -5005,6 +5005,13 @@ pub(super) fn run_launcher_loop(
         nav.settings.reduce_motion = false;
     }
     let mut layout = UiLayoutGeometry::for_display(ui, nav.settings.screen_orientation);
+    let mut portrait_preview_compositor = match PortraitPreviewCompositor::start() {
+        Ok(worker) => Some(worker),
+        Err(error) => {
+            crate::ui_errln!("portrait_preview_compositor_start_failed: {error}");
+            None
+        }
+    };
     nav.set_portrait_layout(layout.is_portrait());
     if crt_layout {
         nav.set_arcade_row_height(crt_arcade_row_height(
@@ -9851,18 +9858,26 @@ pub(super) fn run_launcher_loop(
         } else {
             None
         };
-        let (raw_preview, preview_transition_trace) =
-            if wants_preview && composition_decision.allow_preview_blit && !memory_guard.active() {
-                layer_target.blit_raw_preview_if_needed(
-                    &mut preview,
-                    &mut preview_transition,
-                    loop_start.duration_since(run_start),
-                    logical_slint_rect,
-                    full_frame_present,
-                )
-            } else {
-                (None, PreviewTransitionTrace::default())
-            };
+        let (
+            raw_preview,
+            preview_transition_trace,
+            portrait_preview_worker_pending,
+            portrait_preview_worker_telemetry,
+        ) = if wants_preview && composition_decision.allow_preview_blit && !memory_guard.active() {
+            layer_target.blit_raw_preview_if_needed(
+                &mut preview,
+                &mut preview_transition,
+                loop_start.duration_since(run_start),
+                logical_slint_rect,
+                full_frame_present,
+                portrait_preview_compositor.as_mut(),
+            )
+        } else {
+            (None, PreviewTransitionTrace::default(), false, None)
+        };
+        if portrait_preview_worker_pending {
+            request_launcher_redraw!();
+        }
         drop(gui_preview_pmu);
         let preview_blit_us = preview_blit_start.elapsed().as_micros();
         let portrait_preview_rotation_pixels = if layout.is_portrait() {
@@ -10187,6 +10202,30 @@ pub(super) fn run_launcher_loop(
             preview_blit_us,
             portrait_preview_rotation_pixels,
             portrait_preview_blend_pixels,
+            portrait_preview_worker_queue_replacements: portrait_preview_worker_telemetry
+                .as_ref()
+                .map(|telemetry| telemetry.queue_replacements)
+                .unwrap_or(0),
+            portrait_preview_worker_result_replacements: portrait_preview_worker_telemetry
+                .as_ref()
+                .map(|telemetry| telemetry.result_replacements)
+                .unwrap_or(0),
+            portrait_preview_worker_stale_results: portrait_preview_worker_telemetry
+                .as_ref()
+                .map(|telemetry| telemetry.stale_results)
+                .unwrap_or(0),
+            portrait_preview_worker_age_us: portrait_preview_worker_telemetry
+                .as_ref()
+                .map(|telemetry| telemetry.worker_age_us)
+                .unwrap_or(0),
+            portrait_preview_worker_generation_lag: portrait_preview_worker_telemetry
+                .as_ref()
+                .map(|telemetry| telemetry.generation_lag)
+                .unwrap_or(0),
+            portrait_preview_worker_affinity_status: portrait_preview_worker_telemetry
+                .as_ref()
+                .map(|telemetry| telemetry.affinity_status)
+                .unwrap_or("inactive"),
             crt_backdrop_prepare_us: crt_backdrop_work_trace.prepare_us,
             crt_backdrop_prepare_pixels: crt_backdrop_work_trace.prepare_pixels,
             crt_backdrop_blend_us: crt_backdrop_work_trace.blend_us,
@@ -10936,6 +10975,24 @@ pub(super) fn run_launcher_loop(
             presented_frame
                 .custom_draw_trace
                 .portrait_preview_blend_pixels,
+            presented_frame
+                .custom_draw_trace
+                .portrait_preview_worker_queue_replacements,
+            presented_frame
+                .custom_draw_trace
+                .portrait_preview_worker_result_replacements,
+            presented_frame
+                .custom_draw_trace
+                .portrait_preview_worker_stale_results,
+            presented_frame
+                .custom_draw_trace
+                .portrait_preview_worker_age_us,
+            presented_frame
+                .custom_draw_trace
+                .portrait_preview_worker_generation_lag,
+            presented_frame
+                .custom_draw_trace
+                .portrait_preview_worker_affinity_status,
         );
         let launcher_response_present_receipt = LauncherResponsePresentReceipt {
             post_accepted_at_us: crate::input_hub::monotonic_us(),

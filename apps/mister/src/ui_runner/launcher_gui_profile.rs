@@ -548,6 +548,12 @@ impl GuiProfilingController {
         portrait_arcade_list_bytes: u64,
         portrait_preview_rotation_pixels: u64,
         portrait_preview_blend_pixels: u64,
+        portrait_preview_worker_queue_replacements: u64,
+        portrait_preview_worker_result_replacements: u64,
+        portrait_preview_worker_stale_results: u64,
+        portrait_preview_worker_age_us: u64,
+        portrait_preview_worker_generation_lag: u64,
+        portrait_preview_worker_affinity_status: &'static str,
     ) {
         if !self.active() {
             return;
@@ -581,6 +587,17 @@ impl GuiProfilingController {
         record["portrait_arcade_list_bytes"] = json!(portrait_arcade_list_bytes);
         record["portrait_preview_rotation_pixels"] = json!(portrait_preview_rotation_pixels);
         record["portrait_preview_blend_pixels"] = json!(portrait_preview_blend_pixels);
+        record["portrait_preview_worker_queue_replacements"] =
+            json!(portrait_preview_worker_queue_replacements);
+        record["portrait_preview_worker_result_replacements"] =
+            json!(portrait_preview_worker_result_replacements);
+        record["portrait_preview_worker_stale_results"] =
+            json!(portrait_preview_worker_stale_results);
+        record["portrait_preview_worker_age_us"] = json!(portrait_preview_worker_age_us);
+        record["portrait_preview_worker_generation_lag"] =
+            json!(portrait_preview_worker_generation_lag);
+        record["portrait_preview_worker_affinity_status"] =
+            json!(portrait_preview_worker_affinity_status);
     }
 
     pub(super) fn record_latch(
@@ -768,7 +785,7 @@ mod tests {
         );
         controller.record_frame_work(
             7, 8_500, 3_000, 220, 307_200, 180, 307_200, 11, 307_200, 12, 100_000, 80_000, 20_000,
-            4, true, 7, 11, "exact", 12_345, 24_690, 2_048, 1_024,
+            4, true, 7, 11, "exact", 12_345, 24_690, 2_048, 1_024, 3, 2, 1, 4_500, 0, "applied",
         );
         assert_eq!(controller.frames[0]["wall_us"], 8_500);
         assert_eq!(controller.frames[0]["vsync_us"], 3_000);
@@ -798,6 +815,18 @@ mod tests {
             2_048
         );
         assert_eq!(controller.frames[0]["portrait_preview_blend_pixels"], 1_024);
+        assert_eq!(
+            controller.frames[0]["portrait_preview_worker_queue_replacements"],
+            3
+        );
+        assert_eq!(
+            controller.frames[0]["portrait_preview_worker_age_us"],
+            4_500
+        );
+        assert_eq!(
+            controller.frames[0]["portrait_preview_worker_affinity_status"],
+            "applied"
+        );
     }
 
     #[test]

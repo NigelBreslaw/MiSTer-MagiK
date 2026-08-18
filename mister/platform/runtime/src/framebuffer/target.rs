@@ -533,6 +533,27 @@ impl UiFrameTarget {
         Some(physical_rect)
     }
 
+    pub fn adopt_physical_direct_preview(
+        &mut self,
+        pixels: &mut Vec<Rgb565Pixel>,
+        rect: DirtyRect,
+        output: Rgb565OutputLayout,
+        token: u64,
+    ) -> bool {
+        let expected = rect.width().saturating_mul(rect.rows() as usize);
+        if rect.width() == 0 || rect.rows() == 0 || pixels.len() != expected {
+            return false;
+        }
+        std::mem::swap(&mut self.physical_direct_preview, pixels);
+        self.physical_direct_preview_rect = Some(rect);
+        self.physical_direct_preview_cache = Some(OrientedPreviewCacheKey {
+            token,
+            rect,
+            output,
+        });
+        true
+    }
+
     pub fn compose_direct_preview_rect(&mut self, rect: DirtyRect) -> u32 {
         let Some(backing_rect) = self.direct_preview_rect else {
             return 0;

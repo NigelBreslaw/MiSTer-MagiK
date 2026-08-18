@@ -285,7 +285,13 @@ impl<'a> LayerTarget<'a> {
         elapsed: Duration,
         slint_dirty: Option<DirtyRect>,
         full_frame_present: bool,
-    ) -> (Option<RawPreviewPresent>, PreviewTransitionTrace) {
+        worker: Option<&mut PortraitPreviewCompositor>,
+    ) -> (
+        Option<RawPreviewPresent>,
+        PreviewTransitionTrace,
+        bool,
+        Option<PortraitPreviewWorkerTelemetry>,
+    ) {
         let drawing_ui = &self.drawing_ui;
         let raw_dirty_before = preview.raw_dirty();
         let slint_touched_preview = full_frame_present
@@ -295,6 +301,68 @@ impl<'a> LayerTarget<'a> {
                 ))
                 .is_some()
             });
+        if self.layout.is_portrait()
+            && let Some(worker) = worker
+        {
+            let raw_dirty = preview.take_raw_dirty();
+            let snapshot = preview.owned_raw_transition_frame();
+            let borrowed = snapshot.as_ref().map(|frame| frame.borrowed());
+            let mut trace = transition.update(borrowed.as_ref(), elapsed);
+            let Some(snapshot) = snapshot else {
+                return (
+                    None,
+                    trace,
+                    false,
+                    Some(worker.telemetry(preview.presentation_generation())),
+                );
+            };
+            let token = oriented_preview_cache_token(
+                preview.presentation_generation(),
+                snapshot.transition_id,
+                trace,
+            );
+            let key = PortraitPreviewWorkKey {
+                layout: self.layout.output_layout(),
+                generation: preview.presentation_generation(),
+                token,
+            };
+            if let Some(mut result) = worker.take_current(key) {
+                trace.fade = result.fade;
+                let adopted = self.target.adopt_physical_direct_preview(
+                    &mut result.pixels,
+                    result.rect,
+                    key.layout,
+                    key.token,
+                );
+                let rect = adopted.then_some(result.rect);
+                worker.recycle(result.pixels);
+                return (
+                    rect.map(RawPreviewPresent::Direct),
+                    trace,
+                    false,
+                    Some(worker.telemetry(key.generation)),
+                );
+            }
+            let needs_work = raw_dirty
+                || slint_touched_preview
+                || trace.active
+                || preview.presentation_requires_present();
+            if needs_work {
+                worker.submit(PortraitPreviewRequest::new(
+                    key,
+                    snapshot,
+                    trace.effect,
+                    trace.progress,
+                    trace.active,
+                ));
+            }
+            return (
+                None,
+                trace,
+                needs_work,
+                Some(worker.telemetry(key.generation)),
+            );
+        }
         let (present, trace) = blit_raw_preview_if_needed(
             self.target,
             drawing_ui,
@@ -326,9 +394,14 @@ impl<'a> LayerTarget<'a> {
                 raw_dirty_before || slint_touched_preview,
             );
             drop(rotation_pmu);
-            return (physical_rect.map(RawPreviewPresent::Direct), trace);
+            return (
+                physical_rect.map(RawPreviewPresent::Direct),
+                trace,
+                false,
+                None,
+            );
         }
-        (present, trace)
+        (present, trace, false, None)
     }
 
     pub(super) fn compose_exact_preview(
