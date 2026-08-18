@@ -632,6 +632,7 @@ impl PresentationAdapters<FpgaVblankLatchHiddenPresenter> for LivePresentationAd
                 0,
                 0,
                 PresentCopyStats::default(),
+                crate::arcade_list_renderer::PersistentArcadeCopyTrace::default(),
                 None,
                 None,
             );
