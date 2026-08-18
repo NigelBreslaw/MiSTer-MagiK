@@ -12,6 +12,7 @@ use mister_magik_fb::preview_transition::{
     blend_rgb565_row_with_black as blend_565_row_with_black,
     blend_rgb565_rows_bucketed as blend_565_row_bucketed,
 };
+use mister_magik_framebuffer_scenes::{Rgb565OutputLayout, Rgb565SurfaceMut};
 use std::sync::OnceLock;
 use std::time::Instant;
 
@@ -45,6 +46,58 @@ impl PreviewSurface {
 
 pub(super) fn preview_screen_rect(ui: &UiDisplay) -> DirtyRect {
     mister_magik_fb::visual_composition::hdmi_preview_rect(ui.render_w(), ui.render_h())
+}
+
+pub(super) fn compose_cut_frame_oriented(
+    destination: &mut [Rgb565Pixel],
+    ui: &UiDisplay,
+    screen: DirtyRect,
+    output: Rgb565OutputLayout,
+    frame: &PreviewRawFrame<'_>,
+    alpha_bucket: u8,
+) -> Option<PreviewFadeTrace> {
+    let wall_start = Instant::now();
+    let cpu_start = thread_cpu_us();
+    let black = <Rgb565Pixel as TargetPixel>::from_rgb(0, 0, 0);
+    destination.fill(black);
+    let rect = if matches!(frame.pixels, PreviewRawPixels::Empty) {
+        screen
+    } else {
+        let view = raw565_view(frame, screen, 0)?;
+        if view.display_w != view.source_w || view.display_h != view.source_h {
+            return None;
+        }
+        let rect = raw565_view_screen_rect(&view, ui, screen)?;
+        let source_x = (rect.x0 as isize - view.x).try_into().ok()?;
+        let source_y = (rect.y0 as isize - view.y).try_into().ok()?;
+        let copied = Rgb565SurfaceMut::new(destination, output)
+            .ok()?
+            .copy_rect_strided(
+                rect.x0.saturating_sub(screen.x0),
+                rect.y0.saturating_sub(screen.y0),
+                rect.width(),
+                rect.rows() as usize,
+                view.pixels,
+                view.stride_pixels,
+                source_x,
+                source_y,
+            );
+        if !copied {
+            return None;
+        }
+        rect
+    };
+    Some(PreviewFadeTrace {
+        wall_us: wall_start.elapsed().as_micros().min(u128::from(u64::MAX)) as u64,
+        cpu_us: elapsed_thread_cpu_us(cpu_start),
+        pixels: rect
+            .width()
+            .saturating_mul(rect.rows() as usize)
+            .min(u32::MAX as usize) as u32,
+        rows: rect.rows(),
+        path: PreviewFadePath::Cut,
+        alpha_bucket,
+    })
 }
 
 fn centered_preview_origin(
@@ -1827,6 +1880,75 @@ mod tests {
             Raw565PreviewRenderer::compose_frame(&mut cached, &ui, &frame, false),
             None
         );
+    }
+
+    #[test]
+    fn oriented_cut_frame_matches_logical_then_rotate_reference() {
+        let ui = UiDisplay::for_framebuffer(UI_FB_W, UI_FB_H);
+        let screen = preview_screen_rect(&ui);
+        let pixels = [
+            Rgb565Pixel(0xf800),
+            Rgb565Pixel(0x07e0),
+            Rgb565Pixel(0x001f),
+            Rgb565Pixel(0xffff),
+        ];
+        let frame = PreviewRawFrame {
+            pixels: PreviewRawPixels::Rgb565 {
+                pixels: &pixels,
+                stride_pixels: 2,
+            },
+            source_w: 2,
+            source_h: 2,
+            display_w: 2,
+            display_h: 2,
+        };
+        let mut logical = vec![Rgb565Pixel(0); screen.width() * screen.rows() as usize];
+        Raw565PreviewRenderer::compose_frame_strided(
+            &mut logical,
+            &ui,
+            &frame,
+            true,
+            PreviewSurface {
+                x0: screen.x0,
+                y0: screen.y0,
+                stride: screen.width(),
+            },
+        )
+        .unwrap();
+
+        for rotation in [
+            mister_magik_framebuffer_scenes::OutputRotation::Clockwise90,
+            mister_magik_framebuffer_scenes::OutputRotation::CounterClockwise90,
+        ] {
+            let output = Rgb565OutputLayout::new(
+                screen.width(),
+                screen.rows() as usize,
+                screen.rows() as usize,
+                rotation,
+            )
+            .unwrap();
+            let mut expected = vec![Rgb565Pixel(0); output.len()];
+            assert!(
+                Rgb565SurfaceMut::new(&mut expected, output)
+                    .unwrap()
+                    .copy_rect_strided(
+                        0,
+                        0,
+                        screen.width(),
+                        screen.rows() as usize,
+                        &logical,
+                        screen.width(),
+                        0,
+                        0,
+                    )
+            );
+            let mut actual = vec![Rgb565Pixel(0x1234); output.len()];
+            let trace =
+                compose_cut_frame_oriented(&mut actual, &ui, screen, output, &frame, 32).unwrap();
+            assert_eq!(actual, expected);
+            assert_eq!(trace.path, PreviewFadePath::Cut);
+            assert_eq!(trace.alpha_bucket, 32);
+        }
     }
 
     #[test]

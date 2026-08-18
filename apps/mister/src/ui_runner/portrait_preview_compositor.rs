@@ -1,7 +1,9 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use super::raw565_preview_renderer::{PreviewSurface, Raw565PreviewRenderer, preview_screen_rect};
+use super::raw565_preview_renderer::{
+    PreviewSurface, Raw565PreviewRenderer, compose_cut_frame_oriented, preview_screen_rect,
+};
 use super::*;
 use crate::preview_state::OwnedPreviewRawTransitionFrame;
 use mister_magik_catalog::runtime_thread::{
@@ -222,11 +224,57 @@ fn compose_request(
     let output = request.key.layout;
     let ui = UiDisplay::for_framebuffer(output.logical_width(), output.logical_height());
     let screen = preview_screen_rect(&ui);
+    let frame = request.frame.borrowed();
+    let mapped = output.logical_rect_to_physical(Rgb565Rect {
+        x0: screen.x0,
+        y0: screen.y0,
+        x1: screen.x1,
+        y1: screen.y1,
+    });
+    let rect = DirtyRect {
+        x0: mapped.x0,
+        y0: mapped.y0,
+        x1: mapped.x1,
+        y1: mapped.y1,
+    };
+    let local_output = Rgb565OutputLayout::new(
+        screen.width(),
+        screen.rows() as usize,
+        rect.width(),
+        output.rotation(),
+    )
+    .map_err(|error| error.to_string())?;
+    physical.resize(local_output.len(), Rgb565Pixel(0));
+    let alpha = (request.progress.clamp(0.0, 1.0) * 255.0).round() as u8;
+    let cut_frame = if !request.active {
+        Some((&frame.current, 0, false))
+    } else if alpha == 0 {
+        frame.previous.as_ref().map(|previous| (previous, 0, true))
+    } else if alpha == 255 {
+        Some((&frame.current, 32, true))
+    } else {
+        None
+    };
+    if let Some((cut_frame, alpha_bucket, report_cut)) = cut_frame
+        && let Some(cut_trace) =
+            compose_cut_frame_oriented(physical, &ui, screen, local_output, cut_frame, alpha_bucket)
+    {
+        return Ok(PortraitPreviewResult {
+            key: request.key,
+            rect,
+            pixels: std::mem::take(physical),
+            fade: report_cut.then_some(cut_trace).unwrap_or_default(),
+            age_us: request
+                .submitted_at
+                .elapsed()
+                .as_micros()
+                .min(u128::from(u64::MAX)) as u64,
+        });
+    }
     logical.resize(
         screen.width().saturating_mul(screen.rows() as usize),
         Rgb565Pixel(0),
     );
-    let frame = request.frame.borrowed();
     let fade = if request.active {
         Raw565PreviewRenderer::compose_transition_strided(
             logical,
@@ -256,26 +304,6 @@ fn compose_request(
         .ok_or_else(|| "preview frame composition returned no rectangle".to_string())?;
         PreviewFadeTrace::default()
     };
-    let mapped = output.logical_rect_to_physical(Rgb565Rect {
-        x0: screen.x0,
-        y0: screen.y0,
-        x1: screen.x1,
-        y1: screen.y1,
-    });
-    let rect = DirtyRect {
-        x0: mapped.x0,
-        y0: mapped.y0,
-        x1: mapped.x1,
-        y1: mapped.y1,
-    };
-    let local_output = Rgb565OutputLayout::new(
-        screen.width(),
-        screen.rows() as usize,
-        rect.width(),
-        output.rotation(),
-    )
-    .map_err(|error| error.to_string())?;
-    physical.resize(local_output.len(), Rgb565Pixel(0));
     let copied = Rgb565SurfaceMut::new(physical, local_output)
         .map_err(|error| error.to_string())?
         .copy_rect_strided(
