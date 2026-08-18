@@ -284,12 +284,12 @@ impl<'a> LayerTarget<'a> {
         elapsed: Duration,
         slint_dirty: Option<DirtyRect>,
         full_frame_present: bool,
-        worker: Option<&mut PortraitPreviewCompositor>,
+        worker: Option<&mut PreviewCompositor>,
     ) -> (
         Option<RawPreviewPresent>,
         PreviewTransitionTrace,
         bool,
-        Option<PortraitPreviewWorkerTelemetry>,
+        Option<PreviewCompositorTelemetry>,
     ) {
         let drawing_ui = &self.drawing_ui;
         let raw_dirty_before = preview.raw_dirty();
@@ -300,9 +300,7 @@ impl<'a> LayerTarget<'a> {
                 ))
                 .is_some()
             });
-        if self.layout.is_portrait()
-            && let Some(worker) = worker
-        {
+        if let Some(worker) = worker {
             let raw_dirty = preview.take_raw_dirty();
             let snapshot = preview.owned_raw_transition_frame();
             let borrowed = snapshot.as_ref().map(|frame| frame.borrowed());
@@ -320,19 +318,26 @@ impl<'a> LayerTarget<'a> {
                 snapshot.transition_id,
                 trace,
             );
-            let key = PortraitPreviewWorkKey {
+            let key = PreviewCompositionWorkKey {
                 layout: self.layout.output_layout(),
                 generation: preview.presentation_generation(),
                 token,
             };
             if let Some(mut result) = worker.take_current(key) {
                 trace.fade = result.fade;
-                let adopted = self.target.adopt_physical_direct_preview(
-                    &mut result.pixels,
-                    result.rect,
-                    key.layout,
-                    key.token,
-                );
+                let adopted = match key.layout.rotation() {
+                    OutputRotation::None => self
+                        .target
+                        .adopt_direct_preview(&mut result.pixels, result.rect),
+                    OutputRotation::Clockwise90 | OutputRotation::CounterClockwise90 => {
+                        self.target.adopt_physical_direct_preview(
+                            &mut result.pixels,
+                            result.rect,
+                            key.layout,
+                            key.token,
+                        )
+                    }
+                };
                 let rect = adopted.then_some(result.rect);
                 worker.recycle(result.pixels);
                 return (
@@ -347,7 +352,7 @@ impl<'a> LayerTarget<'a> {
                 || trace.active
                 || preview.presentation_requires_present();
             if needs_work {
-                worker.queue(PortraitPreviewRequest::new(
+                worker.queue(PreviewCompositionRequest::new(
                     key,
                     snapshot,
                     trace.effect,

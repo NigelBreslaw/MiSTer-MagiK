@@ -822,6 +822,18 @@ impl UiFrameTarget {
         self.physical_preview.adopt(pixels, rect, output, token)
     }
 
+    pub fn adopt_direct_preview(&mut self, pixels: &mut Vec<Rgb565Pixel>, rect: DirtyRect) -> bool {
+        let expected = rect.width().saturating_mul(rect.rows() as usize);
+        if rect.width() == 0 || rect.rows() == 0 || pixels.len() != expected {
+            return false;
+        }
+        std::mem::swap(&mut self.direct_preview, pixels);
+        self.direct_preview_rect = Some(rect);
+        self.oriented_preview_cache = None;
+        self.physical_preview.invalidate();
+        true
+    }
+
     pub fn compose_direct_preview_rect(&mut self, rect: DirtyRect) -> u32 {
         let Some(backing_rect) = self.direct_preview_rect else {
             return 0;
@@ -1231,6 +1243,23 @@ mod tests {
             &[Rgb565Pixel(9); 6]
         );
         assert!(pixels.is_empty());
+    }
+
+    #[test]
+    fn identity_worker_adoption_uses_the_dense_direct_preview_backing() {
+        let mut target = UiFrameTarget::cached(FramebufferTargetGeometry::new(6, 4));
+        let preview_rect = rect(2, 1, 5, 3);
+        let expected = (1..=6).map(Rgb565Pixel).collect::<Vec<_>>();
+        let mut pixels = expected.clone();
+
+        assert!(target.adopt_direct_preview(&mut pixels, preview_rect));
+        assert!(pixels.is_empty());
+        let view = target
+            .direct_preview_view()
+            .expect("identity preview backing");
+        assert_eq!(view.rect(), preview_rect);
+        assert_eq!(view.stride(), preview_rect.width());
+        assert_eq!(view.pixels(), expected);
     }
 
     #[test]

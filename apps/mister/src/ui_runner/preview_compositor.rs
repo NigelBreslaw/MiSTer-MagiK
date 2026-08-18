@@ -9,19 +9,21 @@ use crate::preview_state::OwnedPreviewRawTransitionFrame;
 use mister_magik_catalog::runtime_thread::{
     RuntimeThreadPolicyReport, RuntimeThreadRole, apply_runtime_thread_policy,
 };
-use mister_magik_framebuffer_scenes::{Rgb565OutputLayout, Rgb565Rect, Rgb565SurfaceMut};
+use mister_magik_framebuffer_scenes::{
+    OutputRotation, Rgb565OutputLayout, Rgb565Rect, Rgb565SurfaceMut,
+};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::JoinHandle;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) struct PortraitPreviewWorkKey {
+pub(super) struct PreviewCompositionWorkKey {
     pub(super) layout: Rgb565OutputLayout,
     pub(super) generation: u64,
     pub(super) token: u64,
 }
 
-pub(super) struct PortraitPreviewRequest {
-    pub(super) key: PortraitPreviewWorkKey,
+pub(super) struct PreviewCompositionRequest {
+    pub(super) key: PreviewCompositionWorkKey,
     pub(super) frame: OwnedPreviewRawTransitionFrame,
     pub(super) effect: PreviewTransitionEffect,
     pub(super) progress: f32,
@@ -29,9 +31,9 @@ pub(super) struct PortraitPreviewRequest {
     submitted_at: Instant,
 }
 
-impl PortraitPreviewRequest {
+impl PreviewCompositionRequest {
     pub(super) fn new(
-        key: PortraitPreviewWorkKey,
+        key: PreviewCompositionWorkKey,
         frame: OwnedPreviewRawTransitionFrame,
         effect: PreviewTransitionEffect,
         progress: f32,
@@ -48,8 +50,8 @@ impl PortraitPreviewRequest {
     }
 }
 
-pub(super) struct PortraitPreviewResult {
-    pub(super) key: PortraitPreviewWorkKey,
+pub(super) struct PreviewCompositionResult {
+    pub(super) key: PreviewCompositionWorkKey,
     pub(super) rect: DirtyRect,
     pub(super) pixels: Vec<Rgb565Pixel>,
     pub(super) fade: PreviewFadeTrace,
@@ -57,7 +59,7 @@ pub(super) struct PortraitPreviewResult {
 }
 
 #[derive(Clone, Debug, Default)]
-pub(super) struct PortraitPreviewWorkerTelemetry {
+pub(super) struct PreviewCompositorTelemetry {
     pub(super) queue_replacements: u64,
     pub(super) result_replacements: u64,
     pub(super) stale_results: u64,
@@ -68,8 +70,8 @@ pub(super) struct PortraitPreviewWorkerTelemetry {
 
 #[derive(Default)]
 struct WorkerState {
-    request: Option<PortraitPreviewRequest>,
-    result: Option<PortraitPreviewResult>,
+    request: Option<PreviewCompositionRequest>,
+    result: Option<PreviewCompositionResult>,
     recycled: Vec<Vec<Rgb565Pixel>>,
     shutdown: bool,
     queue_replacements: u64,
@@ -84,13 +86,13 @@ struct SharedWorker {
     ready: Condvar,
 }
 
-pub(super) struct PortraitPreviewCompositor {
+pub(super) struct PreviewCompositor {
     shared: Arc<SharedWorker>,
     thread: Option<JoinHandle<()>>,
-    last_submitted: Option<PortraitPreviewWorkKey>,
+    last_submitted: Option<PreviewCompositionWorkKey>,
 }
 
-impl PortraitPreviewCompositor {
+impl PreviewCompositor {
     pub(super) fn start() -> Result<Self, String> {
         let shared = Arc::new(SharedWorker {
             state: Mutex::new(WorkerState::default()),
@@ -100,7 +102,7 @@ impl PortraitPreviewCompositor {
         let thread = std::thread::Builder::new()
             .name("preview-compositor".to_string())
             .spawn(move || run_worker(worker_shared))
-            .map_err(|error| format!("start portrait preview compositor: {error}"))?;
+            .map_err(|error| format!("start preview compositor: {error}"))?;
         Ok(Self {
             shared,
             thread: Some(thread),
@@ -108,7 +110,7 @@ impl PortraitPreviewCompositor {
         })
     }
 
-    pub(super) fn queue(&mut self, request: PortraitPreviewRequest) {
+    pub(super) fn queue(&mut self, request: PreviewCompositionRequest) {
         if self.last_submitted == Some(request.key) {
             return;
         }
@@ -125,8 +127,8 @@ impl PortraitPreviewCompositor {
 
     pub(super) fn take_current(
         &self,
-        expected: PortraitPreviewWorkKey,
-    ) -> Option<PortraitPreviewResult> {
+        expected: PreviewCompositionWorkKey,
+    ) -> Option<PreviewCompositionResult> {
         let mut state = self.shared.state.lock().unwrap_or_else(|e| e.into_inner());
         let result = state.result.take()?;
         if result.key != expected {
@@ -144,7 +146,7 @@ impl PortraitPreviewCompositor {
         }
     }
 
-    pub(super) fn telemetry(&self, current_generation: u64) -> PortraitPreviewWorkerTelemetry {
+    pub(super) fn telemetry(&self, current_generation: u64) -> PreviewCompositorTelemetry {
         let state = self.shared.state.lock().unwrap_or_else(|e| e.into_inner());
         let pending_generation = state
             .request
@@ -152,7 +154,7 @@ impl PortraitPreviewCompositor {
             .map(|request| request.key.generation)
             .or_else(|| state.result.as_ref().map(|result| result.key.generation))
             .unwrap_or(current_generation);
-        PortraitPreviewWorkerTelemetry {
+        PreviewCompositorTelemetry {
             queue_replacements: state.queue_replacements,
             result_replacements: state.result_replacements,
             stale_results: state.stale_results,
@@ -167,7 +169,7 @@ impl PortraitPreviewCompositor {
     }
 }
 
-impl Drop for PortraitPreviewCompositor {
+impl Drop for PreviewCompositor {
     fn drop(&mut self) {
         {
             let mut state = self.shared.state.lock().unwrap_or_else(|e| e.into_inner());
@@ -211,16 +213,16 @@ fn run_worker(shared: Arc<SharedWorker>) {
                     state.recycled.push(replaced.pixels);
                 }
             }
-            Err(error) => crate::ui_errln!("portrait_preview_compositor_failed: {error}"),
+            Err(error) => crate::ui_errln!("preview_compositor_failed: {error}"),
         }
     }
 }
 
 fn compose_request(
-    request: PortraitPreviewRequest,
+    request: PreviewCompositionRequest,
     logical: &mut Vec<Rgb565Pixel>,
     physical: &mut Vec<Rgb565Pixel>,
-) -> Result<PortraitPreviewResult, String> {
+) -> Result<PreviewCompositionResult, String> {
     let output = request.key.layout;
     let ui = UiDisplay::for_framebuffer(output.logical_width(), output.logical_height());
     let screen = preview_screen_rect(&ui);
@@ -259,7 +261,7 @@ fn compose_request(
         && let Some(cut_trace) =
             compose_cut_frame_oriented(physical, &ui, screen, local_output, cut_frame, alpha_bucket)
     {
-        return Ok(PortraitPreviewResult {
+        return Ok(PreviewCompositionResult {
             key: request.key,
             rect,
             pixels: std::mem::take(physical),
@@ -271,13 +273,19 @@ fn compose_request(
                 .min(u128::from(u64::MAX)) as u64,
         });
     }
-    logical.resize(
+    let identity_output = output.rotation() == OutputRotation::None;
+    let composed = if identity_output {
+        &mut *physical
+    } else {
+        &mut *logical
+    };
+    composed.resize(
         screen.width().saturating_mul(screen.rows() as usize),
         Rgb565Pixel(0),
     );
     let fade = if request.active {
         Raw565PreviewRenderer::compose_transition_strided(
-            logical,
+            composed,
             &ui,
             &frame,
             request.effect,
@@ -291,7 +299,7 @@ fn compose_request(
         .1
     } else {
         Raw565PreviewRenderer::compose_frame_strided(
-            logical,
+            composed,
             &ui,
             &frame.current,
             true,
@@ -304,6 +312,19 @@ fn compose_request(
         .ok_or_else(|| "preview frame composition returned no rectangle".to_string())?;
         PreviewFadeTrace::default()
     };
+    if identity_output {
+        return Ok(PreviewCompositionResult {
+            key: request.key,
+            rect,
+            pixels: std::mem::take(physical),
+            fade,
+            age_us: request
+                .submitted_at
+                .elapsed()
+                .as_micros()
+                .min(u128::from(u64::MAX)) as u64,
+        });
+    }
     let copied = Rgb565SurfaceMut::new(physical, local_output)
         .map_err(|error| error.to_string())?
         .copy_rect_strided(
@@ -319,7 +340,7 @@ fn compose_request(
     if !copied {
         return Err("preview physical rotation failed".to_string());
     }
-    Ok(PortraitPreviewResult {
+    Ok(PreviewCompositionResult {
         key: request.key,
         rect,
         pixels: std::mem::take(physical),
@@ -343,7 +364,7 @@ mod tests {
             state: Mutex::new(WorkerState::default()),
             ready: Condvar::new(),
         });
-        let key = |generation| PortraitPreviewWorkKey {
+        let key = |generation| PreviewCompositionWorkKey {
             layout: Rgb565OutputLayout::new(
                 3,
                 4,
@@ -361,20 +382,20 @@ mod tests {
             duration_numerator: 1,
             duration_denominator: 1,
         };
-        let compositor = PortraitPreviewCompositor {
+        let compositor = PreviewCompositor {
             shared,
             thread: None,
             last_submitted: None,
         };
         let mut compositor = compositor;
-        compositor.queue(PortraitPreviewRequest::new(
+        compositor.queue(PreviewCompositionRequest::new(
             key(1),
             frame.clone(),
             PreviewTransitionEffect::Fade,
             1.0,
             false,
         ));
-        compositor.queue(PortraitPreviewRequest::new(
+        compositor.queue(PreviewCompositionRequest::new(
             key(2),
             frame,
             PreviewTransitionEffect::Fade,
@@ -384,5 +405,39 @@ mod tests {
         let state = compositor.shared.state.lock().unwrap();
         assert_eq!(state.queue_replacements, 1);
         assert_eq!(state.request.as_ref().unwrap().key.generation, 2);
+    }
+
+    #[test]
+    fn identity_layout_composes_directly_into_dense_result_storage() {
+        let layout = Rgb565OutputLayout::new(960, 540, 960, OutputRotation::None).unwrap();
+        let key = PreviewCompositionWorkKey {
+            layout,
+            generation: 7,
+            token: 11,
+        };
+        let frame = OwnedPreviewRawTransitionFrame {
+            previous: None,
+            current: OwnedPreviewRawFrame::empty(),
+            transition_id: 1,
+            duration_numerator: 1,
+            duration_denominator: 1,
+        };
+        let mut logical = Vec::new();
+        let mut physical = Vec::new();
+
+        let result = compose_request(
+            PreviewCompositionRequest::new(key, frame, PreviewTransitionEffect::Fade, 0.5, true),
+            &mut logical,
+            &mut physical,
+        )
+        .unwrap();
+
+        assert!(logical.is_empty());
+        assert_eq!(result.key, key);
+        assert_eq!(
+            result.pixels.len(),
+            result.rect.width() * result.rect.rows() as usize
+        );
+        assert!(result.pixels.iter().all(|pixel| *pixel == Rgb565Pixel(0)));
     }
 }

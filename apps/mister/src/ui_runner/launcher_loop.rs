@@ -5009,13 +5009,8 @@ pub(super) fn run_launcher_loop(
         nav.settings.reduce_motion = false;
     }
     let mut layout = UiLayoutGeometry::for_display(ui, nav.settings.screen_orientation);
-    let mut portrait_preview_compositor = match PortraitPreviewCompositor::start() {
-        Ok(worker) => Some(worker),
-        Err(error) => {
-            crate::ui_errln!("portrait_preview_compositor_start_failed: {error}");
-            None
-        }
-    };
+    let mut preview_compositor = None;
+    let mut preview_compositor_start_attempted = false;
     nav.set_portrait_layout(layout.is_portrait());
     if crt_layout {
         nav.set_arcade_row_height(crt_arcade_row_height(
@@ -9872,11 +9867,24 @@ pub(super) fn run_launcher_loop(
         } else {
             None
         };
+        if should_start_preview_compositor(
+            wants_preview,
+            preview_route.allows_hdmi_preview(),
+            composition_decision.allow_preview_blit,
+            memory_guard.active(),
+            preview_compositor_start_attempted,
+        ) {
+            preview_compositor_start_attempted = true;
+            match PreviewCompositor::start() {
+                Ok(worker) => preview_compositor = Some(worker),
+                Err(error) => crate::ui_errln!("preview_compositor_start_failed: {error}"),
+            }
+        }
         let (
             raw_preview,
             preview_transition_trace,
-            portrait_preview_worker_pending,
-            portrait_preview_worker_telemetry,
+            preview_compositor_pending,
+            preview_compositor_telemetry,
         ) = if wants_preview && composition_decision.allow_preview_blit && !memory_guard.active() {
             layer_target.blit_raw_preview_if_needed(
                 &mut preview,
@@ -9884,12 +9892,12 @@ pub(super) fn run_launcher_loop(
                 loop_start.duration_since(run_start),
                 logical_slint_rect,
                 full_frame_present,
-                portrait_preview_compositor.as_mut(),
+                preview_compositor.as_mut(),
             )
         } else {
             (None, PreviewTransitionTrace::default(), false, None)
         };
-        if portrait_preview_worker_pending {
+        if preview_compositor_pending {
             request_launcher_redraw!();
         }
         drop(gui_preview_pmu);
@@ -10232,27 +10240,27 @@ pub(super) fn run_launcher_loop(
             preview_blit_us,
             portrait_preview_rotation_pixels,
             portrait_preview_blend_pixels,
-            portrait_preview_worker_queue_replacements: portrait_preview_worker_telemetry
+            portrait_preview_worker_queue_replacements: preview_compositor_telemetry
                 .as_ref()
                 .map(|telemetry| telemetry.queue_replacements)
                 .unwrap_or(0),
-            portrait_preview_worker_result_replacements: portrait_preview_worker_telemetry
+            portrait_preview_worker_result_replacements: preview_compositor_telemetry
                 .as_ref()
                 .map(|telemetry| telemetry.result_replacements)
                 .unwrap_or(0),
-            portrait_preview_worker_stale_results: portrait_preview_worker_telemetry
+            portrait_preview_worker_stale_results: preview_compositor_telemetry
                 .as_ref()
                 .map(|telemetry| telemetry.stale_results)
                 .unwrap_or(0),
-            portrait_preview_worker_age_us: portrait_preview_worker_telemetry
+            portrait_preview_worker_age_us: preview_compositor_telemetry
                 .as_ref()
                 .map(|telemetry| telemetry.worker_age_us)
                 .unwrap_or(0),
-            portrait_preview_worker_generation_lag: portrait_preview_worker_telemetry
+            portrait_preview_worker_generation_lag: preview_compositor_telemetry
                 .as_ref()
                 .map(|telemetry| telemetry.generation_lag)
                 .unwrap_or(0),
-            portrait_preview_worker_affinity_status: portrait_preview_worker_telemetry
+            portrait_preview_worker_affinity_status: preview_compositor_telemetry
                 .as_ref()
                 .map(|telemetry| telemetry.affinity_status)
                 .unwrap_or("inactive"),
@@ -10451,7 +10459,7 @@ pub(super) fn run_launcher_loop(
             wants_preview_layer,
             composition_decision.allow_preview_blit,
             wants_preview,
-            layout.is_portrait() && portrait_preview_worker_pending,
+            preview_compositor_pending,
             layer_target.direct_preview_rect().is_some(),
             raw_preview_direct_rect.is_some(),
         );
@@ -10769,7 +10777,7 @@ pub(super) fn run_launcher_loop(
             pacing_trace,
         } = present_cycle;
         record_launcher_frame_phase!(LauncherFramePhase::FrameSubmitted);
-        if let Some(worker) = portrait_preview_compositor.as_ref() {
+        if let Some(worker) = preview_compositor.as_ref() {
             worker.release_queued();
         }
         let readiness_source_evidence = presentation.readiness_source_evidence.clone();
@@ -11901,18 +11909,32 @@ fn should_desire_direct_layer(wants_layer: bool, composition_allows_layer: bool)
     wants_layer && composition_allows_layer
 }
 
+fn should_start_preview_compositor(
+    wants_preview: bool,
+    hdmi_preview_route: bool,
+    composition_allows_preview: bool,
+    memory_guard_active: bool,
+    start_attempted: bool,
+) -> bool {
+    wants_preview
+        && hdmi_preview_route
+        && composition_allows_preview
+        && !memory_guard_active
+        && !start_attempted
+}
+
 fn should_desire_preview_direct_layer(
     wants_layer: bool,
     composition_allows_layer: bool,
     route_wants_preview: bool,
-    portrait_worker_pending: bool,
-    has_physical_preview: bool,
+    compositor_pending: bool,
+    has_preview_backing: bool,
     has_direct_preview_update: bool,
 ) -> bool {
     should_desire_direct_layer(
         wants_layer
             || has_direct_preview_update
-            || (route_wants_preview && portrait_worker_pending && has_physical_preview),
+            || (route_wants_preview && compositor_pending && has_preview_backing),
         composition_allows_layer,
     )
 }
@@ -17871,7 +17893,7 @@ mod tests {
     }
 
     #[test]
-    fn portrait_preview_layer_stays_owned_while_replacement_is_pending() {
+    fn preview_layer_stays_owned_while_replacement_is_pending() {
         assert!(should_desire_preview_direct_layer(
             false, true, true, true, true, false
         ));
@@ -17890,9 +17912,28 @@ mod tests {
     }
 
     #[test]
-    fn portrait_preview_layer_retires_when_route_stops_wanting_preview() {
+    fn preview_layer_retires_when_route_stops_wanting_preview() {
         assert!(!should_desire_preview_direct_layer(
             false, true, false, true, true, false
+        ));
+    }
+
+    #[test]
+    fn preview_compositor_starts_once_only_for_an_active_hdmi_preview() {
+        assert!(should_start_preview_compositor(
+            true, true, true, false, false
+        ));
+        assert!(!should_start_preview_compositor(
+            true, false, true, false, false
+        ));
+        assert!(!should_start_preview_compositor(
+            false, true, true, false, false
+        ));
+        assert!(!should_start_preview_compositor(
+            true, true, true, false, true
+        ));
+        assert!(!should_start_preview_compositor(
+            true, true, true, true, false
         ));
     }
 
