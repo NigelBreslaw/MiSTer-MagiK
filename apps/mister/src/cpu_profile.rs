@@ -579,7 +579,7 @@ mod imp {
             started: Instant,
             first_frame: u64,
         },
-        Complete,
+        Finalizing,
         Failed,
     }
 
@@ -754,48 +754,80 @@ mod imp {
             };
             let (first_frame, last_frame) =
                 screensaver_profile_frame_bounds(first_frame, next_frame);
-            match finish(Some(profiler)) {
-                Ok(Some(summary)) => {
-                    let trigger = self
-                        .trigger
-                        .expect("active bounded profile must retain its trigger");
-                    let metadata = json!({
-                        "schema": trigger.schema(),
-                        "trigger": trigger.label(),
-                        "state": "complete",
-                        "duration_secs": summary.duration_secs,
-                        "hz": summary.hz,
-                        "sample_stacks": summary.sample_stacks,
-                        "sample_hits": summary.sample_hits,
-                        "out_path": summary.out_path,
-                        "bytes": summary.bytes,
-                        "first_frame": first_frame,
-                        "last_frame": last_frame,
-                        "orientations": (trigger == BoundedProfileTrigger::SettingsNavigationTransitions)
-                            .then_some(["normal", "monitor-counterclockwise"]),
-                        "route": include_orientation_route.then_some([
-                            "normal",
-                            "monitor-clockwise",
-                            "monitor-counterclockwise",
-                            "normal",
-                            "monitor-counterclockwise",
-                            "monitor-clockwise",
-                            "normal",
-                        ]),
-                        "effects": include_orientation_route.then_some([
-                            "brightness-fade",
-                            "center-pixel-zoom",
-                        ]),
-                    });
-                    if let Err(error) = self.write_completion(&metadata.to_string()) {
-                        self.fail(&format!("completion-write-failed:{error}"));
-                        return;
+            let trigger = self
+                .trigger
+                .expect("active bounded profile must retain its trigger");
+            let complete_path = self.complete_path.clone();
+            let worker = std::thread::Builder::new()
+                .name("bounded-profile".into())
+                .spawn(move || {
+                    let result = finish(Some(profiler));
+                    let metadata = match &result {
+                        Ok(Some(summary)) => json!({
+                            "schema": trigger.schema(),
+                            "trigger": trigger.label(),
+                            "state": "complete",
+                            "duration_secs": summary.duration_secs,
+                            "hz": summary.hz,
+                            "sample_stacks": summary.sample_stacks,
+                            "sample_hits": summary.sample_hits,
+                            "out_path": summary.out_path,
+                            "bytes": summary.bytes,
+                            "first_frame": first_frame,
+                            "last_frame": last_frame,
+                            "orientations": (trigger == BoundedProfileTrigger::SettingsNavigationTransitions)
+                                .then_some(["normal", "monitor-counterclockwise"]),
+                            "route": include_orientation_route.then_some([
+                                "normal",
+                                "monitor-clockwise",
+                                "monitor-counterclockwise",
+                                "normal",
+                                "monitor-counterclockwise",
+                                "monitor-clockwise",
+                                "normal",
+                            ]),
+                            "effects": include_orientation_route.then_some([
+                                "brightness-fade",
+                                "center-pixel-zoom",
+                            ]),
+                        }),
+                        Ok(None) => json!({
+                            "schema": trigger.schema(),
+                            "trigger": trigger.label(),
+                            "state": "failed",
+                            "error": "profiler-produced-no-summary",
+                        }),
+                        Err(error) => json!({
+                            "schema": trigger.schema(),
+                            "trigger": trigger.label(),
+                            "state": "failed",
+                            "error": error,
+                        }),
+                    };
+                    let completion = write_bounded_completion(
+                        complete_path.as_deref(),
+                        &metadata.to_string(),
+                    );
+                    match (result, completion) {
+                        (Ok(Some(_)), Ok(())) => {
+                            set_screensaver_profile_state(ScreensaverProfileState::Complete);
+                        }
+                        (result, completion) => {
+                            if let Err(error) = result {
+                                crate::ui_errln!("bounded cpu profile failed: {error}");
+                            }
+                            if let Err(error) = completion {
+                                crate::ui_errln!(
+                                    "bounded cpu profile completion write failed: {error}"
+                                );
+                            }
+                            set_screensaver_profile_state(ScreensaverProfileState::Failed);
+                        }
                     }
-                    self.state = State::Complete;
-                    set_screensaver_profile_state(ScreensaverProfileState::Complete);
-                }
-                Ok(None) => self.fail("profiler-produced-no-summary"),
-                Err(error) => self.fail(&error),
+                });
+            match worker {
+                Ok(_) => self.state = State::Finalizing,
+                Err(error) => self.fail(&format!("profile-worker-spawn-failed:{error}")),
             }
         }
 
@@ -807,21 +839,21 @@ mod imp {
                 "state": "failed",
                 "error": error,
             });
-            let _ = self.write_completion(&metadata.to_string());
+            let _ = write_bounded_completion(self.complete_path.as_deref(), &metadata.to_string());
             self.state = State::Failed;
             set_screensaver_profile_state(ScreensaverProfileState::Failed);
             crate::ui_errln!("screensaver cpu profile failed: {error}");
         }
+    }
 
-        fn write_completion(&self, text: &str) -> Result<(), String> {
-            let Some(path) = self.complete_path.as_deref() else {
-                return Err("MISTER_PPROF_COMPLETE is missing".into());
-            };
-            if let Some(parent) = std::path::Path::new(path).parent() {
-                fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-            }
-            fs::write(path, format!("{text}\n")).map_err(|error| error.to_string())
+    fn write_bounded_completion(path: Option<&str>, text: &str) -> Result<(), String> {
+        let Some(path) = path else {
+            return Err("MISTER_PPROF_COMPLETE is missing".into());
+        };
+        if let Some(parent) = std::path::Path::new(path).parent() {
+            fs::create_dir_all(parent).map_err(|error| error.to_string())?;
         }
+        fs::write(path, format!("{text}\n")).map_err(|error| error.to_string())
     }
 }
 
