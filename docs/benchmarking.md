@@ -67,14 +67,16 @@ route, including CRT 240p. The unprofiled `arcade-velocity-scroll` run owns
 physical cadence and repeated-vblank qualification. The single
 `arcade-velocity-scroll-attribution` scenario runs the control, pprof, PMU,
 and Streamline arms sequentially and writes one correlation manifest. A typed
-optional arm (`control`, `control-smoke`, `pprof`, `pmu`,
+optional arm (`control`, `control-smoke`, `turbo`, `pprof`, `pmu`,
 `pmu-smoke`, or `streamline`) runs
 only that fixed arm, for example `scripts/agent benchmark
 arcade-velocity-scroll-attribution pprof`. Every arm starts on Home with Arcade
 preselected and enters it with one confirmation; the former Settings-to-Home
 navigation and focus-panning preamble is not part of the workload. The
-unprofiled control and profiler arms use a fixed 40-second hold; profiler arms
-remain attribution-only.
+unprofiled control, turbo, and profiler arms use a fixed 40-second hold;
+profiler arms remain attribution-only. The `turbo` arm primes the production
+turbo gesture with a quick Down tap, then holds Down at the 720 px/s turbo
+speed; it does not use the synthetic benchmark-only bounce helper.
 The `control-smoke` and `pmu-smoke` arms use the same eight-second workload for
 directional optimization checks; only the full unprofiled `control` arm owns
 cadence qualification.

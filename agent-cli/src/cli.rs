@@ -898,6 +898,7 @@ mod tests {
         for arm in [
             "control",
             "control-smoke",
+            "turbo",
             "pprof",
             "pmu",
             "pmu-smoke",

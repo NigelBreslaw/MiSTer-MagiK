@@ -106,6 +106,7 @@ impl BenchmarkScenario {
 pub enum ArcadeVelocityScrollArm {
     Control,
     ControlSmoke,
+    Turbo,
     Pprof,
     Pmu,
     PmuSmoke,
@@ -118,6 +119,7 @@ impl ArcadeVelocityScrollArm {
         match self {
             Self::Control => "control",
             Self::ControlSmoke => "control-smoke",
+            Self::Turbo => "turbo",
             Self::Pprof => "pprof",
             Self::Pmu => "pmu",
             Self::PmuSmoke => "pmu-smoke",

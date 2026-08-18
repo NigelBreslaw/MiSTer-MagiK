@@ -733,6 +733,15 @@ impl NativeDevice {
         })
     }
 
+    pub(crate) fn profile_arcade_velocity_scroll_turbo(
+        &mut self,
+        output_dir: &Path,
+    ) -> std::result::Result<String, DeviceFailure> {
+        self.benchmark_profile(|config| {
+            profile_installed_arcade_velocity_scroll_turbo(config, output_dir)
+        })
+    }
+
     pub(crate) fn profile_arcade_velocity_scroll_pprof(
         &mut self,
         output_dir: &Path,
@@ -7834,6 +7843,21 @@ const ARCADE_VELOCITY_SCROLL_PPROF_REMOTE_DIR: &str =
 const GUI_PROFILE_AUTOMATION_MARGIN_SECS: u64 = 80;
 const GUI_PROFILE_AUTOMATION_MAX_SECS: u64 = 120;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ArcadeVelocityScrollInputMode {
+    Held,
+    Turbo,
+}
+
+impl ArcadeVelocityScrollInputMode {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Held => "held",
+            Self::Turbo => "turbo",
+        }
+    }
+}
+
 fn gui_profile_automation_ttl_secs(scroll_duration_ms: u64) -> u64 {
     scroll_duration_ms
         .div_ceil(1_000)
@@ -7977,6 +8001,27 @@ fn run_gui_frame_profile_route(
         terminal_checkpoint,
         None,
         Duration::ZERO,
+        ArcadeVelocityScrollInputMode::Held,
+    )
+}
+
+fn run_gui_frame_profile_route_turbo(
+    config: &NativeDeviceConfig,
+    session: &Session,
+    output_dir: &Path,
+    scroll_duration_ms: u64,
+    terminal_checkpoint: Option<&str>,
+) -> Result<Value> {
+    run_gui_frame_profile_route_with_pprof(
+        config,
+        session,
+        output_dir,
+        false,
+        scroll_duration_ms,
+        terminal_checkpoint,
+        None,
+        Duration::ZERO,
+        ArcadeVelocityScrollInputMode::Turbo,
     )
 }
 
@@ -7989,6 +8034,7 @@ fn run_gui_frame_profile_route_with_pprof(
     terminal_checkpoint: Option<&str>,
     pprof_remote_dir: Option<&str>,
     pprof_finalization_probe: Duration,
+    input_mode: ArcadeVelocityScrollInputMode,
 ) -> Result<Value> {
     fs::create_dir_all(output_dir)?;
     exec_checked(
@@ -8076,6 +8122,15 @@ fn run_gui_frame_profile_route_with_pprof(
             },
             "settled Arcade entry",
         )?;
+        let turbo_prime_sequence = if input_mode == ArcadeVelocityScrollInputMode::Turbo {
+            Some(modal_input_action(
+                config,
+                &nonce,
+                AutomationAction::Tap(AutomationButton::Down),
+            )?)
+        } else {
+            None
+        };
         let scroll_sequence = modal_input_action(
             config,
             &nonce,
@@ -8164,7 +8219,9 @@ fn run_gui_frame_profile_route_with_pprof(
                 "arcade_enter_sequence": arcade_enter_sequence,
                 "scroll_sequence": scroll_sequence,
                 "release_sequence": release_sequence,
+                "turbo_prime_sequence": turbo_prime_sequence,
             },
+            "input_mode": input_mode.label(),
             "home_ready": home_ready,
             "arcade_entered": arcade_entered,
             "scroll_snapshots": scroll_snapshots,
@@ -8203,6 +8260,7 @@ fn profile_installed_arcade_velocity_scroll(
         ARCADE_VELOCITY_SCROLL_DURATION_MS,
         ARCADE_VELOCITY_SCROLL_TELEMETRY_SECS,
         None,
+        ArcadeVelocityScrollInputMode::Held,
     )
 }
 
@@ -8216,6 +8274,21 @@ fn profile_installed_arcade_velocity_scroll_control_smoke(
         ARCADE_VELOCITY_SCROLL_SMOKE_DURATION_MS,
         ARCADE_VELOCITY_SCROLL_SMOKE_TELEMETRY_SECS,
         Some("mister-magik-arcade-velocity-scroll-control-smoke-v1"),
+        ArcadeVelocityScrollInputMode::Held,
+    )
+}
+
+fn profile_installed_arcade_velocity_scroll_turbo(
+    config: &NativeDeviceConfig,
+    output_dir: &Path,
+) -> Result<String> {
+    profile_installed_arcade_velocity_scroll_workload(
+        config,
+        output_dir,
+        ARCADE_VELOCITY_SCROLL_DURATION_MS,
+        ARCADE_VELOCITY_SCROLL_TELEMETRY_SECS,
+        None,
+        ArcadeVelocityScrollInputMode::Turbo,
     )
 }
 
@@ -8225,6 +8298,7 @@ fn profile_installed_arcade_velocity_scroll_workload(
     scroll_duration_ms: u64,
     telemetry_secs: u64,
     artifact_schema: Option<&str>,
+    input_mode: ArcadeVelocityScrollInputMode,
 ) -> Result<String> {
     let session = connect_with(&config.connection, 10)?;
     let capability = exec_checked_output(
@@ -8269,14 +8343,23 @@ fn profile_installed_arcade_velocity_scroll_workload(
         )
         .map_err(|error| error.to_string())
     });
-    let route_result = run_gui_frame_profile_route(
-        config,
-        &session,
-        output_dir,
-        false,
-        scroll_duration_ms,
-        Some("terminal-arcade"),
-    );
+    let route_result = match input_mode {
+        ArcadeVelocityScrollInputMode::Held => run_gui_frame_profile_route(
+            config,
+            &session,
+            output_dir,
+            false,
+            scroll_duration_ms,
+            Some("terminal-arcade"),
+        ),
+        ArcadeVelocityScrollInputMode::Turbo => run_gui_frame_profile_route_turbo(
+            config,
+            &session,
+            output_dir,
+            scroll_duration_ms,
+            Some("terminal-arcade"),
+        ),
+    };
     let telemetry_result: Result<Vec<Value>> = match telemetry_thread.join() {
         Ok(Ok(telemetry)) => Ok(telemetry),
         Ok(Err(error)) => Err(error.into()),
@@ -8293,13 +8376,14 @@ fn profile_installed_arcade_velocity_scroll_workload(
                 output_dir.join("telemetry.jsonl"),
                 format!("{telemetry_text}\n"),
             )?;
-            let route_summary = summarize_arcade_velocity_scroll(
+            let mut route_summary = summarize_arcade_velocity_scroll(
                 output_dir,
                 &route,
                 &telemetry,
                 &display_mode,
                 scroll_duration_ms,
             )?;
+            route_summary["input_mode"] = json!(input_mode.label());
             Ok(match artifact_schema {
                 Some(schema) => json!({
                     "schema": schema,
@@ -8451,6 +8535,7 @@ fn profile_installed_arcade_velocity_scroll_pprof_workload(
         Some("terminal-arcade"),
         Some(ARCADE_VELOCITY_SCROLL_PPROF_REMOTE_DIR),
         finalization_probe,
+        ArcadeVelocityScrollInputMode::Held,
     );
     let telemetry_result: Result<Vec<Value>> = match telemetry_thread.join() {
         Ok(Ok(telemetry)) => Ok(telemetry),

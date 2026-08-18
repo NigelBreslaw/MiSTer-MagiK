@@ -503,6 +503,14 @@ impl GuiProfilingController {
             _ => None,
         };
         if let Some(phase) = phase {
+            if matches!(
+                self.state,
+                GuiProfileState::AwaitingPresentation(active)
+                    | GuiProfileState::Measuring(active)
+                    if active == phase
+            ) {
+                return;
+            }
             let _ = self.request_phase(phase, now);
         }
     }
@@ -950,6 +958,30 @@ mod tests {
             .unwrap();
         controller.tick(now + ARCADE_SCROLL_PHASE_TIMEOUT);
         assert!(matches!(controller.state, GuiProfileState::Failed(_)));
+    }
+
+    #[test]
+    fn automated_turbo_repress_keeps_arcade_scroll_phase_active() {
+        let now = Instant::now();
+        let mut controller = GuiProfilingController::enabled_for_test(now);
+        let event = crate::input_event::InputEvent {
+            source: crate::input_event::InputSourceId {
+                kind: crate::input_event::InputSourceKind::Automation,
+                instance: 1,
+            },
+            source_epoch: crate::input_event::SourceEpoch(1),
+            sequence: 1,
+            press_id: crate::input_event::PressId(1),
+            captured_at_us: 1,
+            action: crate::input_event::LogicalAction::Down,
+            phase: crate::input_event::InputPhase::Pressed,
+        };
+        controller.observe_route_action("arcade", event, now);
+        controller.observe_route_action("arcade", event, now + Duration::from_millis(50));
+        assert_eq!(
+            controller.state,
+            GuiProfileState::AwaitingPresentation(GuiProfilePhase::ArcadeScroll)
+        );
     }
 
     #[test]

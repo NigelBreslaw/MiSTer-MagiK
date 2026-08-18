@@ -50,6 +50,7 @@ enum BenchmarkProfile {
     GuiFrameAttribution,
     ArcadeVelocityScroll,
     ArcadeVelocityScrollControlSmoke,
+    ArcadeVelocityScrollTurbo,
     ArcadeVelocityScrollPprof,
     ArcadeVelocityScrollPmu,
     ArcadeVelocityScrollPmuSmoke,
@@ -138,6 +139,9 @@ impl BenchmarkDevice for DeviceClient {
             }
             BenchmarkProfile::ArcadeVelocityScrollControlSmoke => {
                 device.profile_arcade_velocity_scroll_control_smoke(&output_dir)
+            }
+            BenchmarkProfile::ArcadeVelocityScrollTurbo => {
+                device.profile_arcade_velocity_scroll_turbo(&output_dir)
             }
             BenchmarkProfile::ArcadeVelocityScrollPprof => {
                 device.profile_arcade_velocity_scroll_pprof(&output_dir)
@@ -1169,6 +1173,10 @@ fn execute_arcade_velocity_scroll_arm(
             BenchmarkProfile::ArcadeVelocityScrollControlSmoke,
             "mister-magik-arcade-velocity-scroll-control-smoke-v1",
         ),
+        ArcadeVelocityScrollArm::Turbo => (
+            BenchmarkProfile::ArcadeVelocityScrollTurbo,
+            "mister-magik-arcade-velocity-scroll-v1",
+        ),
         ArcadeVelocityScrollArm::Pprof => (
             BenchmarkProfile::ArcadeVelocityScrollPprof,
             "mister-magik-arcade-velocity-scroll-pprof-v1",
@@ -1199,7 +1207,7 @@ fn execute_arcade_velocity_scroll_arm(
     let summary: Value = serde_json::from_str(&detail).map_err(|error| error.to_string())?;
     let schema_valid = summary.get("schema").and_then(Value::as_str) == Some(schema);
     let artifact_valid = match arm {
-        ArcadeVelocityScrollArm::Control => {
+        ArcadeVelocityScrollArm::Control | ArcadeVelocityScrollArm::Turbo => {
             matches!(summary.get("quality_status"), Some(Value::String(_)))
         }
         ArcadeVelocityScrollArm::ControlSmoke => {
@@ -1223,7 +1231,10 @@ fn execute_arcade_velocity_scroll_arm(
             "selected_arm": arm.label(),
             "summary": summary,
             "output_dir": output_dir,
-            "performance_authority": if arm == ArcadeVelocityScrollArm::Control {
+            "performance_authority": if matches!(
+                arm,
+                ArcadeVelocityScrollArm::Control | ArcadeVelocityScrollArm::Turbo
+            ) {
                 "unprofiled control"
             } else {
                 "diagnostic attribution only"
