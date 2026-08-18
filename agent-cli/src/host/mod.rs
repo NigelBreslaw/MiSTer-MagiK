@@ -724,6 +724,33 @@ impl NativeDevice {
         })
     }
 
+    pub(crate) fn profile_arcade_velocity_scroll_pprof(
+        &mut self,
+        output_dir: &Path,
+    ) -> std::result::Result<String, DeviceFailure> {
+        self.benchmark_profile(|config| {
+            profile_installed_arcade_velocity_scroll_pprof(config, output_dir)
+        })
+    }
+
+    pub(crate) fn profile_arcade_velocity_scroll_pmu(
+        &mut self,
+        output_dir: &Path,
+    ) -> std::result::Result<String, DeviceFailure> {
+        self.benchmark_profile(|config| {
+            profile_installed_arcade_velocity_scroll_pmu(config, output_dir)
+        })
+    }
+
+    pub(crate) fn profile_arcade_velocity_scroll_streamline(
+        &mut self,
+        output_dir: &Path,
+    ) -> std::result::Result<String, DeviceFailure> {
+        self.benchmark_profile(|config| {
+            profile_installed_arcade_velocity_scroll_streamline(config, output_dir)
+        })
+    }
+
     pub(crate) fn profile_arcade_velocity_scroll_attribution(
         &mut self,
         output_dir: &Path,
@@ -7786,6 +7813,7 @@ const ARCADE_VELOCITY_SCROLL_PPROF_REMOTE_DIR: &str =
 fn gui_profile_route_launcher_env_with_pprof(
     pmu: bool,
     pprof_remote_dir: Option<&str>,
+    scroll_duration_ms: u64,
 ) -> Vec<(String, String)> {
     let mut environment = vec![
         ("MISTER_CATALOG_REFRESH".into(), "off".into()),
@@ -7812,6 +7840,10 @@ fn gui_profile_route_launcher_env_with_pprof(
                 "arcade-velocity-scroll".into(),
             ),
             ("MISTER_PPROF_HZ".into(), "999".into()),
+            (
+                "MISTER_PPROF_DURATION_SECS".into(),
+                scroll_duration_ms.div_ceil(1_000).to_string(),
+            ),
             (
                 "MISTER_PPROF_OUT".into(),
                 format!("{remote_dir}/flamegraph.svg"),
@@ -7904,7 +7936,11 @@ fn run_gui_frame_profile_route_with_pprof(
     restart_launcher_with_one_shot_env(
         session,
         LauncherRestartOptions {
-            env_vars: gui_profile_route_launcher_env_with_pprof(pmu, pprof_remote_dir),
+            env_vars: gui_profile_route_launcher_env_with_pprof(
+                pmu,
+                pprof_remote_dir,
+                scroll_duration_ms,
+            ),
             timeout_secs: 45,
             remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str().into(),
             ..LauncherRestartOptions::default()
@@ -8004,6 +8040,14 @@ fn run_gui_frame_profile_route_with_pprof(
             thread::sleep(Duration::from_millis(250).min(
                 Duration::from_millis(scroll_duration_ms).saturating_sub(hold_started.elapsed()),
             ));
+        }
+        if let Some(remote_dir) = pprof_remote_dir {
+            let _ = wait_for_remote_text(
+                session,
+                &format!("{remote_dir}/profile.json"),
+                Duration::from_secs(10),
+                "Arcade velocity-scroll pprof finalization",
+            )?;
         }
         let release_sequence = modal_input_action(config, &nonce, AutomationAction::ReleaseAll)?;
         let settled_arcade = wait_gui_profile_snapshot(
@@ -25340,8 +25384,13 @@ mod tests {
 
     #[test]
     fn gui_profile_route_environment_is_fixed_and_pmu_is_independent() {
-        let control = gui_profile_route_launcher_env_with_pprof(false, None);
-        let pmu = gui_profile_route_launcher_env_with_pprof(true, None);
+        let control = gui_profile_route_launcher_env_with_pprof(false, None, 40_000);
+        let pmu = gui_profile_route_launcher_env_with_pprof(true, None, 40_000);
+        let pprof = gui_profile_route_launcher_env_with_pprof(
+            false,
+            Some(ARCADE_VELOCITY_SCROLL_PPROF_REMOTE_DIR),
+            40_000,
+        );
         assert!(control.iter().any(|(name, value)| {
             name == "MISTER_LAUNCHER_START_SCREEN" && value == "settings"
         }));
@@ -25358,6 +25407,11 @@ mod tests {
         assert!(
             pmu.iter()
                 .any(|(name, value)| name == "MISTER_PMU_PROFILE" && value == "1")
+        );
+        assert!(
+            pprof
+                .iter()
+                .any(|(name, value)| { name == "MISTER_PPROF_DURATION_SECS" && value == "40" })
         );
         let cleanup = gui_profile_route_cleanup_command();
         assert!(cleanup.contains(GUI_PROFILE_REMOTE_COMPLETE));

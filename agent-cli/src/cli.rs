@@ -8,7 +8,7 @@ use crate::compile_time::CompileTimeCommand;
 use crate::dependencies::DependenciesCommand;
 use crate::fpga::FpgaCommand;
 use crate::live_particles::LiveParticlesCommand;
-use crate::model::{BenchmarkScenario, Scope};
+use crate::model::{ArcadeVelocityScrollArm, BenchmarkScenario, Scope};
 use crate::startup_particles::{SceneLabCommand, StartupParticlesCommand};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
@@ -67,6 +67,8 @@ pub enum Command {
     Benchmark {
         #[arg(value_enum, default_value_t)]
         scenario: BenchmarkScenario,
+        #[arg(value_enum)]
+        arm: Option<ArcadeVelocityScrollArm>,
     },
     Capture {
         #[command(subcommand)]
@@ -878,6 +880,7 @@ mod tests {
             "launcher-response-attribution",
             "gui-frame-attribution",
             "arcade-velocity-scroll",
+            "arcade-velocity-scroll-attribution",
             "transition-streamline",
             "agent-observer-attribution",
             "agent-io-attribution",
@@ -892,6 +895,26 @@ mod tests {
         for scenario in accepted {
             assert!(Cli::try_parse_from(["agent-cli", "benchmark", scenario]).is_ok());
         }
+        for arm in ["control", "pprof", "pmu", "streamline"] {
+            assert!(
+                Cli::try_parse_from([
+                    "agent-cli",
+                    "benchmark",
+                    "arcade-velocity-scroll-attribution",
+                    arm,
+                ])
+                .is_ok()
+            );
+        }
+        assert!(
+            Cli::try_parse_from([
+                "agent-cli",
+                "benchmark",
+                "arcade-velocity-scroll-attribution",
+                "unknown",
+            ])
+            .is_err()
+        );
         assert!(Cli::try_parse_from(["agent-cli", "benchmark", "particle-demo-01"]).is_err());
         assert!(Cli::try_parse_from(["agent-cli", "benchmark", "firework-visual"]).is_err());
         assert!(Cli::try_parse_from(["agent-cli", "benchmark", "--duration", "10"]).is_err());

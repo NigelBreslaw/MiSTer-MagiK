@@ -3,7 +3,7 @@
 
 use crate::device::DeviceClient;
 use crate::error::AgentResult;
-use crate::model::{BenchmarkScenario, Outcome};
+use crate::model::{ArcadeVelocityScrollArm, BenchmarkScenario, Outcome};
 use crate::progress::{EventKind, Reporter};
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
@@ -12,9 +12,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub fn execute(
     repository: &Path,
     scenario: BenchmarkScenario,
+    arm: Option<ArcadeVelocityScrollArm>,
     reporter: &mut Reporter<'_>,
 ) -> AgentResult<Outcome> {
-    require_clean_installed_commit(repository, scenario, reporter)
+    require_clean_installed_commit(repository, scenario, arm, reporter)
 }
 
 trait BenchmarkDevice {
@@ -48,6 +49,9 @@ enum BenchmarkProfile {
     LauncherResponseAttribution,
     GuiFrameAttribution,
     ArcadeVelocityScroll,
+    ArcadeVelocityScrollPprof,
+    ArcadeVelocityScrollPmu,
+    ArcadeVelocityScrollStreamline,
     ArcadeVelocityScrollAttribution,
     TransitionStreamline,
     AgentObserverAttribution,
@@ -130,6 +134,15 @@ impl BenchmarkDevice for DeviceClient {
             BenchmarkProfile::ArcadeVelocityScroll => {
                 device.profile_arcade_velocity_scroll(&output_dir)
             }
+            BenchmarkProfile::ArcadeVelocityScrollPprof => {
+                device.profile_arcade_velocity_scroll_pprof(&output_dir)
+            }
+            BenchmarkProfile::ArcadeVelocityScrollPmu => {
+                device.profile_arcade_velocity_scroll_pmu(&output_dir)
+            }
+            BenchmarkProfile::ArcadeVelocityScrollStreamline => {
+                device.profile_arcade_velocity_scroll_streamline(&output_dir)
+            }
             BenchmarkProfile::ArcadeVelocityScrollAttribution => {
                 device.profile_arcade_velocity_scroll_attribution(&output_dir)
             }
@@ -178,8 +191,14 @@ impl BenchmarkDevice for DeviceClient {
 fn require_clean_installed_commit(
     repository: &Path,
     scenario: BenchmarkScenario,
+    arm: Option<ArcadeVelocityScrollArm>,
     reporter: &mut Reporter<'_>,
 ) -> AgentResult<Outcome> {
+    if arm.is_some() && scenario != BenchmarkScenario::ArcadeVelocityScrollAttribution {
+        return Err(
+            "benchmark arm is supported only for arcade-velocity-scroll-attribution".into(),
+        );
+    }
     let head = crate::git::value(repository, &["rev-parse", "HEAD"])?;
     if !crate::git::value(repository, &["status", "--porcelain"])?.is_empty() {
         return Err("benchmark requires a clean exact-commit worktree".into());
@@ -317,9 +336,17 @@ fn require_clean_installed_commit(
         BenchmarkScenario::ArcadeVelocityScroll => {
             execute_arcade_velocity_scroll(&mut device, manifest, output_dir, reporter)
         }
-        BenchmarkScenario::ArcadeVelocityScrollAttribution => {
-            execute_arcade_velocity_scroll_attribution(&mut device, manifest, output_dir, reporter)
-        }
+        BenchmarkScenario::ArcadeVelocityScrollAttribution => match arm {
+            Some(arm) => {
+                execute_arcade_velocity_scroll_arm(&mut device, manifest, output_dir, reporter, arm)
+            }
+            None => execute_arcade_velocity_scroll_attribution(
+                &mut device,
+                manifest,
+                output_dir,
+                reporter,
+            ),
+        },
         BenchmarkScenario::TransitionStreamline => execute_attribution_capture(
             &mut device,
             manifest,
@@ -1111,6 +1138,77 @@ fn execute_arcade_velocity_scroll_attribution(
             "summary": summary,
             "output_dir": output_dir,
             "performance_authority": "unprofiled control arm only",
+        }))
+        .map_err(|error| error.to_string())?,
+        Some(100),
+    )?;
+    Ok(Outcome::Passed)
+}
+
+fn execute_arcade_velocity_scroll_arm(
+    device: &mut impl BenchmarkDevice,
+    manifest: String,
+    output_dir: PathBuf,
+    reporter: &mut Reporter<'_>,
+    arm: ArcadeVelocityScrollArm,
+) -> AgentResult<Outcome> {
+    let (profile, schema) = match arm {
+        ArcadeVelocityScrollArm::Control => (
+            BenchmarkProfile::ArcadeVelocityScroll,
+            "mister-magik-arcade-velocity-scroll-v1",
+        ),
+        ArcadeVelocityScrollArm::Pprof => (
+            BenchmarkProfile::ArcadeVelocityScrollPprof,
+            "mister-magik-arcade-velocity-scroll-pprof-v1",
+        ),
+        ArcadeVelocityScrollArm::Pmu => (
+            BenchmarkProfile::ArcadeVelocityScrollPmu,
+            "mister-magik-arcade-velocity-scroll-pmu-v1",
+        ),
+        ArcadeVelocityScrollArm::Streamline => (
+            BenchmarkProfile::ArcadeVelocityScrollStreamline,
+            "mister-magik-arcade-velocity-scroll-streamline-v1",
+        ),
+    };
+    reporter.emit(
+        EventKind::Progress,
+        "arcade-velocity-scroll-attribution",
+        &format!(
+            "collecting only the fixed {} arm without changing the active route",
+            arm.label()
+        ),
+        Some(25),
+    )?;
+    let detail = device.profile(profile, output_dir.clone())?;
+    let summary: Value = serde_json::from_str(&detail).map_err(|error| error.to_string())?;
+    let schema_valid = summary.get("schema").and_then(Value::as_str) == Some(schema);
+    let artifact_valid = match arm {
+        ArcadeVelocityScrollArm::Control => {
+            matches!(summary.get("quality_status"), Some(Value::String(_)))
+        }
+        _ => summary.get("artifact_status").and_then(Value::as_str) == Some("passed"),
+    };
+    if !schema_valid || !artifact_valid {
+        return Err(format!(
+            "Arcade velocity-scroll {} arm did not produce complete {schema} evidence",
+            arm.label()
+        )
+        .into());
+    }
+    device.verify_health()?;
+    reporter.emit(
+        EventKind::Progress,
+        "benchmark-result",
+        &serde_json::to_string(&json!({
+            "installed_manifest": manifest,
+            "selected_arm": arm.label(),
+            "summary": summary,
+            "output_dir": output_dir,
+            "performance_authority": if arm == ArcadeVelocityScrollArm::Control {
+                "unprofiled control"
+            } else {
+                "diagnostic attribution only"
+            },
         }))
         .map_err(|error| error.to_string())?,
         Some(100),

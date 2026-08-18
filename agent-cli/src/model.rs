@@ -102,6 +102,26 @@ impl BenchmarkScenario {
     }
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq, clap::ValueEnum)]
+pub enum ArcadeVelocityScrollArm {
+    Control,
+    Pprof,
+    Pmu,
+    Streamline,
+}
+
+impl ArcadeVelocityScrollArm {
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Control => "control",
+            Self::Pprof => "pprof",
+            Self::Pmu => "pmu",
+            Self::Streamline => "streamline",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Risk {
