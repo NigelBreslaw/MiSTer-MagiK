@@ -105,9 +105,11 @@ impl BenchmarkScenario {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, clap::ValueEnum)]
 pub enum ArcadeVelocityScrollArm {
     Control,
+    ControlSmoke,
     Pprof,
     PprofSmoke,
     Pmu,
+    PmuSmoke,
     Streamline,
 }
 
@@ -116,9 +118,11 @@ impl ArcadeVelocityScrollArm {
     pub const fn label(self) -> &'static str {
         match self {
             Self::Control => "control",
+            Self::ControlSmoke => "control-smoke",
             Self::Pprof => "pprof",
             Self::PprofSmoke => "pprof-smoke",
             Self::Pmu => "pmu",
+            Self::PmuSmoke => "pmu-smoke",
             Self::Streamline => "streamline",
         }
     }

@@ -724,6 +724,15 @@ impl NativeDevice {
         })
     }
 
+    pub(crate) fn profile_arcade_velocity_scroll_control_smoke(
+        &mut self,
+        output_dir: &Path,
+    ) -> std::result::Result<String, DeviceFailure> {
+        self.benchmark_profile(|config| {
+            profile_installed_arcade_velocity_scroll_control_smoke(config, output_dir)
+        })
+    }
+
     pub(crate) fn profile_arcade_velocity_scroll_pprof(
         &mut self,
         output_dir: &Path,
@@ -748,6 +757,15 @@ impl NativeDevice {
     ) -> std::result::Result<String, DeviceFailure> {
         self.benchmark_profile(|config| {
             profile_installed_arcade_velocity_scroll_pmu(config, output_dir)
+        })
+    }
+
+    pub(crate) fn profile_arcade_velocity_scroll_pmu_smoke(
+        &mut self,
+        output_dir: &Path,
+    ) -> std::result::Result<String, DeviceFailure> {
+        self.benchmark_profile(|config| {
+            profile_installed_arcade_velocity_scroll_pmu_smoke(config, output_dir)
         })
     }
 
@@ -7816,6 +7834,8 @@ const GUI_PROFILE_REMOTE_COMPLETE: &str = "/tmp/mister-magik/gui-frame-profile.j
 const GUI_PROFILE_DEFAULT_SCROLL_MS: u64 = 900;
 const ARCADE_VELOCITY_SCROLL_DURATION_MS: u64 = 40_000;
 const ARCADE_VELOCITY_SCROLL_TELEMETRY_SECS: u64 = 55;
+const ARCADE_VELOCITY_SCROLL_SMOKE_DURATION_MS: u64 = 8_000;
+const ARCADE_VELOCITY_SCROLL_SMOKE_TELEMETRY_SECS: u64 = 18;
 const ARCADE_VELOCITY_SCROLL_PPROF_SMOKE_DURATION_MS: u64 = 8_000;
 const ARCADE_VELOCITY_SCROLL_PPROF_SMOKE_TELEMETRY_SECS: u64 = 18;
 const ARCADE_VELOCITY_SCROLL_PPROF_SMOKE_FINALIZATION_PROBE: Duration = Duration::from_secs(6);
@@ -8185,6 +8205,35 @@ fn profile_installed_arcade_velocity_scroll(
     config: &NativeDeviceConfig,
     output_dir: &Path,
 ) -> Result<String> {
+    profile_installed_arcade_velocity_scroll_workload(
+        config,
+        output_dir,
+        ARCADE_VELOCITY_SCROLL_DURATION_MS,
+        ARCADE_VELOCITY_SCROLL_TELEMETRY_SECS,
+        None,
+    )
+}
+
+fn profile_installed_arcade_velocity_scroll_control_smoke(
+    config: &NativeDeviceConfig,
+    output_dir: &Path,
+) -> Result<String> {
+    profile_installed_arcade_velocity_scroll_workload(
+        config,
+        output_dir,
+        ARCADE_VELOCITY_SCROLL_SMOKE_DURATION_MS,
+        ARCADE_VELOCITY_SCROLL_SMOKE_TELEMETRY_SECS,
+        Some("mister-magik-arcade-velocity-scroll-control-smoke-v1"),
+    )
+}
+
+fn profile_installed_arcade_velocity_scroll_workload(
+    config: &NativeDeviceConfig,
+    output_dir: &Path,
+    scroll_duration_ms: u64,
+    telemetry_secs: u64,
+    artifact_schema: Option<&str>,
+) -> Result<String> {
     let session = connect_with(&config.connection, 10)?;
     let capability = exec_checked_output(
         &session,
@@ -8222,7 +8271,7 @@ fn profile_installed_arcade_velocity_scroll(
     let telemetry_thread = thread::spawn(move || {
         agent_telemetry_for_duration_with_mode(
             &telemetry_endpoint,
-            Duration::from_secs(ARCADE_VELOCITY_SCROLL_TELEMETRY_SECS),
+            Duration::from_secs(telemetry_secs),
             100,
             "off",
         )
@@ -8233,7 +8282,7 @@ fn profile_installed_arcade_velocity_scroll(
         &session,
         output_dir,
         false,
-        ARCADE_VELOCITY_SCROLL_DURATION_MS,
+        scroll_duration_ms,
         Some("terminal-arcade"),
     );
     let telemetry_result: Result<Vec<Value>> = match telemetry_thread.join() {
@@ -8252,7 +8301,23 @@ fn profile_installed_arcade_velocity_scroll(
                 output_dir.join("telemetry.jsonl"),
                 format!("{telemetry_text}\n"),
             )?;
-            summarize_arcade_velocity_scroll(output_dir, &route, &telemetry, &display_mode)
+            let route_summary = summarize_arcade_velocity_scroll(
+                output_dir,
+                &route,
+                &telemetry,
+                &display_mode,
+                scroll_duration_ms,
+            )?;
+            Ok(match artifact_schema {
+                Some(schema) => json!({
+                    "schema": schema,
+                    "artifact_status": "passed",
+                    "display_mode": display_mode,
+                    "scroll_duration_ms": scroll_duration_ms,
+                    "route": route_summary,
+                }),
+                None => route_summary,
+            })
         }
         (Err(route), Ok(_)) => Err(route),
         (Ok(_), Err(telemetry)) => Err(telemetry),
@@ -8451,8 +8516,13 @@ fn profile_installed_arcade_velocity_scroll_pprof_workload(
                     &output_dir.join(artifact),
                 )?;
             }
-            let summary =
-                summarize_arcade_velocity_scroll(output_dir, &route, &telemetry, &display_mode)?;
+            let summary = summarize_arcade_velocity_scroll(
+                output_dir,
+                &route,
+                &telemetry,
+                &display_mode,
+                scroll_duration_ms,
+            )?;
             Ok(json!({
                 "schema": artifact_schema,
                 "artifact_status": "passed",
@@ -8533,6 +8603,35 @@ fn profile_installed_arcade_velocity_scroll_pmu(
     config: &NativeDeviceConfig,
     output_dir: &Path,
 ) -> Result<String> {
+    profile_installed_arcade_velocity_scroll_pmu_workload(
+        config,
+        output_dir,
+        ARCADE_VELOCITY_SCROLL_DURATION_MS,
+        ARCADE_VELOCITY_SCROLL_TELEMETRY_SECS,
+        "mister-magik-arcade-velocity-scroll-pmu-v1",
+    )
+}
+
+fn profile_installed_arcade_velocity_scroll_pmu_smoke(
+    config: &NativeDeviceConfig,
+    output_dir: &Path,
+) -> Result<String> {
+    profile_installed_arcade_velocity_scroll_pmu_workload(
+        config,
+        output_dir,
+        ARCADE_VELOCITY_SCROLL_SMOKE_DURATION_MS,
+        ARCADE_VELOCITY_SCROLL_SMOKE_TELEMETRY_SECS,
+        "mister-magik-arcade-velocity-scroll-pmu-smoke-v1",
+    )
+}
+
+fn profile_installed_arcade_velocity_scroll_pmu_workload(
+    config: &NativeDeviceConfig,
+    output_dir: &Path,
+    scroll_duration_ms: u64,
+    telemetry_secs: u64,
+    artifact_schema: &str,
+) -> Result<String> {
     let session = connect_with(&config.connection, 10)?;
     let capability = exec_checked_output(
         &session,
@@ -8568,7 +8667,7 @@ fn profile_installed_arcade_velocity_scroll_pmu(
     let telemetry_thread = thread::spawn(move || {
         agent_telemetry_for_duration_with_mode(
             &telemetry_endpoint,
-            Duration::from_secs(ARCADE_VELOCITY_SCROLL_TELEMETRY_SECS),
+            Duration::from_secs(telemetry_secs),
             100,
             "off",
         )
@@ -8579,7 +8678,7 @@ fn profile_installed_arcade_velocity_scroll_pmu(
         &session,
         output_dir,
         true,
-        ARCADE_VELOCITY_SCROLL_DURATION_MS,
+        scroll_duration_ms,
         Some("terminal-arcade"),
     );
     let telemetry_result: Result<Vec<Value>> = match telemetry_thread.join() {
@@ -8612,12 +8711,18 @@ fn profile_installed_arcade_velocity_scroll_pmu(
             {
                 return Err("Arcade velocity-scroll PMU profile is incomplete".into());
             }
-            let route_summary =
-                summarize_arcade_velocity_scroll(output_dir, &route, &telemetry, &display_mode)?;
+            let route_summary = summarize_arcade_velocity_scroll(
+                output_dir,
+                &route,
+                &telemetry,
+                &display_mode,
+                scroll_duration_ms,
+            )?;
             Ok(json!({
-                "schema": "mister-magik-arcade-velocity-scroll-pmu-v1",
+                "schema": artifact_schema,
                 "artifact_status": "passed",
                 "display_mode": display_mode,
+                "scroll_duration_ms": scroll_duration_ms,
                 "route": route_summary,
                 "pmu": pmu,
             }))
@@ -8779,6 +8884,7 @@ fn profile_installed_arcade_velocity_scroll_streamline(
         &streamline_arm.route,
         &telemetry,
         &display_mode,
+        ARCADE_VELOCITY_SCROLL_DURATION_MS,
     )?;
     let capture_manifest = streamline_capture_manifest(
         &installed_identity,
@@ -8922,6 +9028,7 @@ fn summarize_arcade_velocity_scroll(
     route: &Value,
     telemetry: &[Value],
     display_mode: &str,
+    expected_duration_ms: u64,
 ) -> Result<Value> {
     use std::fmt::Write as _;
 
@@ -9159,7 +9266,7 @@ fn summarize_arcade_velocity_scroll(
         .and_then(Value::as_u64)
         .unwrap_or(0);
     let mut quality_failures = Vec::new();
-    if phase_duration_us < ARCADE_VELOCITY_SCROLL_DURATION_MS * 1_000 {
+    if phase_duration_us < expected_duration_ms * 1_000 {
         quality_failures.push("scroll-window-shorter-than-40-seconds");
     }
     if physical_fps < minimum_physical_fps {
@@ -9207,7 +9314,7 @@ fn summarize_arcade_velocity_scroll(
         "display_mode": display_mode,
         "screen_orientation": screen_orientation,
         "ending_screen_orientation": ending_screen_orientation,
-        "hold_duration_ms": ARCADE_VELOCITY_SCROLL_DURATION_MS,
+        "hold_duration_ms": expected_duration_ms,
         "phase_duration_us": phase_duration_us,
         "frames": frames.len(),
         "submitted_fps": submitted_fps,

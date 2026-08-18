@@ -67,11 +67,15 @@ route, including CRT 240p. The unprofiled `arcade-velocity-scroll` run owns
 physical cadence and repeated-vblank qualification. The single
 `arcade-velocity-scroll-attribution` scenario runs the control, pprof, PMU,
 and Streamline arms sequentially and writes one correlation manifest. A typed
-optional arm (`control`, `pprof`, `pprof-smoke`, `pmu`, or `streamline`) runs
+optional arm (`control`, `control-smoke`, `pprof`, `pprof-smoke`, `pmu`,
+`pmu-smoke`, or `streamline`) runs
 only that fixed arm, for example `scripts/agent benchmark
 arcade-velocity-scroll-attribution pprof`. The `pprof-smoke` arm uses an eight-second scroll and a
 fixed six-second keepalive probe to exercise profiler finalization across the
 five-second automation lease before the full 40-second evidence run.
+The `control-smoke` and `pmu-smoke` arms use the same eight-second workload for
+directional optimization checks; only the full unprofiled `control` arm owns
+cadence qualification.
 None of these scenarios changes the display mode or restores a different mode.
 
 `modal-input` restarts the coherently installed Dev launcher with a one-shot,
