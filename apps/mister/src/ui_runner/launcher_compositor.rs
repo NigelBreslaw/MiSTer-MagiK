@@ -408,6 +408,22 @@ impl<'a> LayerTarget<'a> {
         hidden: &mut ScanoutSlotsRgb565Framebuffer,
         rect: DirtyRect,
     ) -> u32 {
+        if self.layout.is_portrait() {
+            let cached = self.target.cached_frame_view();
+            return hidden
+                .copy_rect_565_strided(
+                    rect.x0,
+                    rect.y0,
+                    rect.width(),
+                    rect.rows() as usize,
+                    cached.pixels(),
+                    cached.stride(),
+                    rect.x0,
+                    rect.y0,
+                )
+                .map(|_| rect.rows())
+                .unwrap_or(0);
+        }
         self.target
             .direct_preview_view()
             .map(|view| copy_direct_preview_rect_to_hidden(hidden, view, rect))
