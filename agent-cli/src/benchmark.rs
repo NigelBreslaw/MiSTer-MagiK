@@ -58,10 +58,6 @@ enum BenchmarkProfile {
     LauncherResponseAttribution,
     GuiFrameAttribution,
     ArcadeVelocityScroll,
-    ArcadeVelocityScrollTurbo,
-    ArcadeVelocityScrollPprof,
-    ArcadeVelocityScrollPmu,
-    ArcadeVelocityScrollStreamline,
     ArcadeVelocityScrollAttribution,
     TransitionStreamline,
     AgentObserverAttribution,
@@ -143,18 +139,6 @@ impl BenchmarkDevice for DeviceClient {
             }
             BenchmarkProfile::ArcadeVelocityScroll => {
                 device.profile_arcade_velocity_scroll(&output_dir)
-            }
-            BenchmarkProfile::ArcadeVelocityScrollTurbo => {
-                device.profile_arcade_velocity_scroll_turbo(&output_dir)
-            }
-            BenchmarkProfile::ArcadeVelocityScrollPprof => {
-                device.profile_arcade_velocity_scroll_pprof(&output_dir)
-            }
-            BenchmarkProfile::ArcadeVelocityScrollPmu => {
-                device.profile_arcade_velocity_scroll_pmu(&output_dir)
-            }
-            BenchmarkProfile::ArcadeVelocityScrollStreamline => {
-                device.profile_arcade_velocity_scroll_streamline(&output_dir)
             }
             BenchmarkProfile::ArcadeVelocityScrollAttribution => {
                 device.profile_arcade_velocity_scroll_attribution(&output_dir)
@@ -1189,27 +1173,13 @@ fn execute_arcade_velocity_scroll_arm(
     spec: ArcadeVelocityScrollRunSpec,
 ) -> AgentResult<Outcome> {
     let arm = spec.arm;
-    let (profile, schema) = match arm {
-        ArcadeVelocityScrollArm::Control => (
-            BenchmarkProfile::ArcadeVelocityScroll,
-            "mister-magik-arcade-velocity-scroll-v1",
-        ),
-        ArcadeVelocityScrollArm::Turbo => (
-            BenchmarkProfile::ArcadeVelocityScrollTurbo,
-            "mister-magik-arcade-velocity-scroll-v1",
-        ),
-        ArcadeVelocityScrollArm::Pprof => (
-            BenchmarkProfile::ArcadeVelocityScrollPprof,
-            "mister-magik-arcade-velocity-scroll-pprof-v1",
-        ),
-        ArcadeVelocityScrollArm::Pmu => (
-            BenchmarkProfile::ArcadeVelocityScrollPmu,
-            "mister-magik-arcade-velocity-scroll-pmu-v1",
-        ),
-        ArcadeVelocityScrollArm::Streamline => (
-            BenchmarkProfile::ArcadeVelocityScrollStreamline,
-            "mister-magik-arcade-velocity-scroll-streamline-v1",
-        ),
+    let schema = match arm {
+        ArcadeVelocityScrollArm::Control | ArcadeVelocityScrollArm::Turbo => {
+            "mister-magik-arcade-velocity-scroll-v1"
+        }
+        ArcadeVelocityScrollArm::Pprof => "mister-magik-arcade-velocity-scroll-pprof-v1",
+        ArcadeVelocityScrollArm::Pmu => "mister-magik-arcade-velocity-scroll-pmu-v1",
+        ArcadeVelocityScrollArm::Streamline => "mister-magik-arcade-velocity-scroll-streamline-v1",
     };
     reporter.emit(
         EventKind::Progress,
@@ -1221,7 +1191,6 @@ fn execute_arcade_velocity_scroll_arm(
         ),
         Some(25),
     )?;
-    let _legacy_profile_dispatch = profile;
     let detail = device.profile_arcade_velocity_scroll(spec, output_dir.clone())?;
     let summary: Value = serde_json::from_str(&detail).map_err(|error| error.to_string())?;
     let schema_valid = summary.get("schema").and_then(Value::as_str) == Some(schema);

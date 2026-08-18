@@ -738,42 +738,6 @@ impl NativeDevice {
         })
     }
 
-    pub(crate) fn profile_arcade_velocity_scroll_turbo(
-        &mut self,
-        output_dir: &Path,
-    ) -> std::result::Result<String, DeviceFailure> {
-        self.benchmark_profile(|config| {
-            profile_installed_arcade_velocity_scroll_turbo(config, output_dir)
-        })
-    }
-
-    pub(crate) fn profile_arcade_velocity_scroll_pprof(
-        &mut self,
-        output_dir: &Path,
-    ) -> std::result::Result<String, DeviceFailure> {
-        self.benchmark_profile(|config| {
-            profile_installed_arcade_velocity_scroll_pprof(config, output_dir)
-        })
-    }
-
-    pub(crate) fn profile_arcade_velocity_scroll_pmu(
-        &mut self,
-        output_dir: &Path,
-    ) -> std::result::Result<String, DeviceFailure> {
-        self.benchmark_profile(|config| {
-            profile_installed_arcade_velocity_scroll_pmu(config, output_dir)
-        })
-    }
-
-    pub(crate) fn profile_arcade_velocity_scroll_streamline(
-        &mut self,
-        output_dir: &Path,
-    ) -> std::result::Result<String, DeviceFailure> {
-        self.benchmark_profile(|config| {
-            profile_installed_arcade_velocity_scroll_streamline(config, output_dir)
-        })
-    }
-
     pub(crate) fn profile_arcade_velocity_scroll_attribution(
         &mut self,
         output_dir: &Path,
@@ -8685,21 +8649,6 @@ fn profile_installed_arcade_velocity_scroll(
         ARCADE_VELOCITY_SCROLL_TELEMETRY_SECS,
         None,
         ArcadeRunInputMode::Held,
-        None,
-    )
-}
-
-fn profile_installed_arcade_velocity_scroll_turbo(
-    config: &NativeDeviceConfig,
-    output_dir: &Path,
-) -> Result<String> {
-    profile_installed_arcade_velocity_scroll_workload(
-        config,
-        output_dir,
-        ARCADE_VELOCITY_SCROLL_DURATION_MS,
-        ARCADE_VELOCITY_SCROLL_TELEMETRY_SECS,
-        None,
-        ArcadeRunInputMode::Turbo,
         None,
     )
 }

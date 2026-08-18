@@ -5,6 +5,9 @@ use serde_json::json;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use super::launcher_compositor::LauncherPresentResult;
+use super::launcher_frame_accounting::LauncherCustomDrawTrace;
+
 const ENABLE_ENV: &str = "MISTER_GUI_FRAME_PROFILE";
 const COMPLETE_ENV: &str = "MISTER_GUI_FRAME_PROFILE_COMPLETE";
 const PMU_ENV: &str = "MISTER_GUI_FRAME_PROFILE_PMU";
@@ -166,6 +169,57 @@ pub(super) const fn gui_latch_copy_span_name(
         "gui.latch.catch-up-restoration"
     } else {
         "gui.latch.base-damage-copy"
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(super) struct GuiPhysicalLayerPresentationTrace {
+    preview_rows: u32,
+    hidden_copied_bytes: u64,
+    preview_hidden_compose_us: u64,
+    arcade_hidden_compose_us: u64,
+    preview_present_us: u64,
+    arcade_present_us: u64,
+}
+
+impl From<&LauncherPresentResult> for GuiPhysicalLayerPresentationTrace {
+    fn from(presentation: &LauncherPresentResult) -> Self {
+        Self {
+            preview_rows: presentation.direct_preview_rows,
+            hidden_copied_bytes: presentation.main_present_hidden_copied_bytes as u64,
+            preview_hidden_compose_us: u128_to_u64_saturating(
+                presentation.hidden_preview_compose_us,
+            ),
+            arcade_hidden_compose_us: u128_to_u64_saturating(presentation.hidden_arcade_compose_us),
+            preview_present_us: u128_to_u64_saturating(presentation.direct_preview_present_us),
+            arcade_present_us: u128_to_u64_saturating(presentation.arcade_list_present_us),
+        }
+    }
+}
+
+pub(super) struct GuiFrameWorkRecord<'a> {
+    pub(super) frame: u64,
+    pub(super) wall_us: u128,
+    pub(super) vsync_us: u128,
+    pub(super) custom_draw: &'a LauncherCustomDrawTrace,
+    pub(super) physical_layer_presentation: GuiPhysicalLayerPresentationTrace,
+}
+
+impl<'a> GuiFrameWorkRecord<'a> {
+    pub(super) fn from_traces(
+        frame: u64,
+        wall_us: u128,
+        vsync_us: u128,
+        custom_draw: &'a LauncherCustomDrawTrace,
+        presentation: &LauncherPresentResult,
+    ) -> Self {
+        Self {
+            frame,
+            wall_us,
+            vsync_us,
+            custom_draw,
+            physical_layer_presentation: presentation.into(),
+        }
     }
 }
 
@@ -605,42 +659,18 @@ impl GuiProfilingController {
         }));
     }
 
-    pub(super) fn record_frame_work(
-        &mut self,
-        frame: u64,
-        wall_us: u128,
-        vsync_us: u128,
-        crt_backdrop_prepare_us: u64,
-        crt_backdrop_prepare_pixels: u32,
-        crt_backdrop_blend_us: u64,
-        crt_backdrop_blend_pixels: u32,
-        crt_backdrop_copy_us: u64,
-        crt_backdrop_copy_pixels: u32,
-        crt_backdrop_list_overlay_us: u64,
-        crt_backdrop_list_overlay_pixels: u32,
-        crt_backdrop_list_restore_pixels: u32,
-        crt_backdrop_list_foreground_pixels: u32,
-        crt_backdrop_alpha_bucket: u8,
-        crt_backdrop_active: bool,
-        crt_backdrop_selected: usize,
-        crt_backdrop_transition_id: u64,
-        crt_backdrop_cache_state: &'static str,
-        portrait_arcade_list_pixels: u64,
-        portrait_arcade_list_bytes: u64,
-        persistent_arcade_composition:
-            crate::arcade_list_renderer::PersistentArcadeCompositionTrace,
-        portrait_preview_rotation_pixels: u64,
-        portrait_preview_blend_pixels: u64,
-        portrait_preview_worker_queue_replacements: u64,
-        portrait_preview_worker_result_replacements: u64,
-        portrait_preview_worker_stale_results: u64,
-        portrait_preview_worker_age_us: u64,
-        portrait_preview_worker_generation_lag: u64,
-        portrait_preview_worker_affinity_status: &'static str,
-    ) {
+    pub(super) fn record_frame_work(&mut self, input: GuiFrameWorkRecord<'_>) {
         if !self.active() {
             return;
         }
+        let GuiFrameWorkRecord {
+            frame,
+            wall_us,
+            vsync_us,
+            custom_draw,
+            physical_layer_presentation,
+        } = input;
+        let persistent_arcade_composition = custom_draw.persistent_arcade_composition;
         let Some(record) =
             self.frames.iter_mut().rev().find(|record| {
                 record.get("frame").and_then(serde_json::Value::as_u64) == Some(frame)
@@ -651,23 +681,26 @@ impl GuiProfilingController {
         };
         record["wall_us"] = json!(wall_us.min(u128::from(u64::MAX)) as u64);
         record["vsync_us"] = json!(vsync_us.min(u128::from(u64::MAX)) as u64);
-        record["crt_backdrop_prepare_us"] = json!(crt_backdrop_prepare_us);
-        record["crt_backdrop_prepare_pixels"] = json!(crt_backdrop_prepare_pixels);
-        record["crt_backdrop_blend_us"] = json!(crt_backdrop_blend_us);
-        record["crt_backdrop_blend_pixels"] = json!(crt_backdrop_blend_pixels);
-        record["crt_backdrop_copy_us"] = json!(crt_backdrop_copy_us);
-        record["crt_backdrop_copy_pixels"] = json!(crt_backdrop_copy_pixels);
-        record["crt_backdrop_list_overlay_us"] = json!(crt_backdrop_list_overlay_us);
-        record["crt_backdrop_list_overlay_pixels"] = json!(crt_backdrop_list_overlay_pixels);
-        record["crt_backdrop_list_restore_pixels"] = json!(crt_backdrop_list_restore_pixels);
-        record["crt_backdrop_list_foreground_pixels"] = json!(crt_backdrop_list_foreground_pixels);
-        record["crt_backdrop_alpha_bucket"] = json!(crt_backdrop_alpha_bucket);
-        record["crt_backdrop_active"] = json!(crt_backdrop_active);
-        record["crt_backdrop_selected"] = json!(crt_backdrop_selected);
-        record["crt_backdrop_transition_id"] = json!(crt_backdrop_transition_id);
-        record["crt_backdrop_cache_state"] = json!(crt_backdrop_cache_state);
-        record["portrait_arcade_list_pixels"] = json!(portrait_arcade_list_pixels);
-        record["portrait_arcade_list_bytes"] = json!(portrait_arcade_list_bytes);
+        record["crt_backdrop_prepare_us"] = json!(custom_draw.crt_backdrop_prepare_us);
+        record["crt_backdrop_prepare_pixels"] = json!(custom_draw.crt_backdrop_prepare_pixels);
+        record["crt_backdrop_blend_us"] = json!(custom_draw.crt_backdrop_blend_us);
+        record["crt_backdrop_blend_pixels"] = json!(custom_draw.crt_backdrop_blend_pixels);
+        record["crt_backdrop_copy_us"] = json!(custom_draw.crt_backdrop_copy_us);
+        record["crt_backdrop_copy_pixels"] = json!(custom_draw.crt_backdrop_copy_pixels);
+        record["crt_backdrop_list_overlay_us"] = json!(custom_draw.crt_backdrop_list_overlay_us);
+        record["crt_backdrop_list_overlay_pixels"] =
+            json!(custom_draw.crt_backdrop_list_overlay_pixels);
+        record["crt_backdrop_list_restore_pixels"] =
+            json!(custom_draw.crt_backdrop_list_restore_pixels);
+        record["crt_backdrop_list_foreground_pixels"] =
+            json!(custom_draw.crt_backdrop_list_foreground_pixels);
+        record["crt_backdrop_alpha_bucket"] = json!(custom_draw.crt_backdrop_alpha_bucket);
+        record["crt_backdrop_active"] = json!(custom_draw.crt_backdrop_active);
+        record["crt_backdrop_selected"] = json!(custom_draw.crt_backdrop_selected);
+        record["crt_backdrop_transition_id"] = json!(custom_draw.crt_backdrop_transition_id);
+        record["crt_backdrop_cache_state"] = json!(custom_draw.crt_backdrop_cache_state);
+        record["portrait_arcade_list_pixels"] = json!(custom_draw.portrait_arcade_list_pixels);
+        record["portrait_arcade_list_bytes"] = json!(custom_draw.portrait_arcade_list_bytes);
         record["portrait_arcade_requested_update"] =
             json!(persistent_arcade_composition.requested_update.label());
         record["portrait_arcade_requested_reason"] =
@@ -679,19 +712,45 @@ impl GuiProfilingController {
         record["portrait_arcade_compose_us"] = json!(persistent_arcade_composition.elapsed_us);
         record["portrait_arcade_composed_pixels"] =
             json!(persistent_arcade_composition.written_pixels);
-        record["portrait_preview_rotation_pixels"] = json!(portrait_preview_rotation_pixels);
-        record["portrait_preview_blend_pixels"] = json!(portrait_preview_blend_pixels);
+        record["portrait_preview_rotation_pixels"] =
+            json!(custom_draw.portrait_preview_rotation_pixels);
+        record["portrait_preview_blend_pixels"] = json!(custom_draw.portrait_preview_blend_pixels);
         record["portrait_preview_worker_queue_replacements"] =
-            json!(portrait_preview_worker_queue_replacements);
+            json!(custom_draw.portrait_preview_worker_queue_replacements);
         record["portrait_preview_worker_result_replacements"] =
-            json!(portrait_preview_worker_result_replacements);
+            json!(custom_draw.portrait_preview_worker_result_replacements);
         record["portrait_preview_worker_stale_results"] =
-            json!(portrait_preview_worker_stale_results);
-        record["portrait_preview_worker_age_us"] = json!(portrait_preview_worker_age_us);
+            json!(custom_draw.portrait_preview_worker_stale_results);
+        record["portrait_preview_worker_age_us"] =
+            json!(custom_draw.portrait_preview_worker_age_us);
         record["portrait_preview_worker_generation_lag"] =
-            json!(portrait_preview_worker_generation_lag);
+            json!(custom_draw.portrait_preview_worker_generation_lag);
         record["portrait_preview_worker_affinity_status"] =
-            json!(portrait_preview_worker_affinity_status);
+            json!(custom_draw.portrait_preview_worker_affinity_status);
+        record["physical_layers"] = json!({
+            "arcade": {
+                "pixels": custom_draw.portrait_arcade_list_pixels,
+                "bytes": custom_draw.portrait_arcade_list_bytes,
+                "requested_update": persistent_arcade_composition.requested_update.label(),
+                "requested_reason": persistent_arcade_composition.requested_reason.label(),
+                "effective_update": persistent_arcade_composition.effective_update.label(),
+                "rebuild_reason": persistent_arcade_composition.rebuild_reason.label(),
+                "compose_us": persistent_arcade_composition.elapsed_us,
+                "composed_pixels": persistent_arcade_composition.written_pixels,
+                "hidden_compose_us": physical_layer_presentation.arcade_hidden_compose_us,
+                "present_us": physical_layer_presentation.arcade_present_us,
+            },
+            "preview": {
+                "rotation_pixels": custom_draw.portrait_preview_rotation_pixels,
+                "blend_pixels": custom_draw.portrait_preview_blend_pixels,
+                "hidden_compose_us": physical_layer_presentation.preview_hidden_compose_us,
+                "present_us": physical_layer_presentation.preview_present_us,
+                "copied_rows": physical_layer_presentation.preview_rows,
+            },
+            "presentation": {
+                "hidden_copied_bytes": physical_layer_presentation.hidden_copied_bytes,
+            },
+        });
     }
 
     pub(super) fn finalize_frame_timing(&mut self, frame: u64, timing: GuiFrameTimingTrace) {
@@ -999,37 +1058,48 @@ mod tests {
             GuiRasterProfilePhase::Ordinary,
             Vec::new(),
         );
-        controller.record_frame_work(
-            7,
-            8_500,
-            3_000,
-            220,
-            307_200,
-            180,
-            307_200,
-            11,
-            307_200,
-            12,
-            100_000,
-            80_000,
-            20_000,
-            4,
-            true,
-            7,
-            11,
-            "exact",
-            12_345,
-            24_690,
-            crate::arcade_list_renderer::PersistentArcadeCompositionTrace::default(),
-            2_048,
-            1_024,
-            3,
-            2,
-            1,
-            4_500,
-            0,
-            "applied",
-        );
+        let custom_draw = LauncherCustomDrawTrace {
+            crt_backdrop_prepare_us: 220,
+            crt_backdrop_prepare_pixels: 307_200,
+            crt_backdrop_blend_us: 180,
+            crt_backdrop_blend_pixels: 307_200,
+            crt_backdrop_copy_us: 11,
+            crt_backdrop_copy_pixels: 307_200,
+            crt_backdrop_list_overlay_us: 12,
+            crt_backdrop_list_overlay_pixels: 100_000,
+            crt_backdrop_list_restore_pixels: 80_000,
+            crt_backdrop_list_foreground_pixels: 20_000,
+            crt_backdrop_alpha_bucket: 4,
+            crt_backdrop_active: true,
+            crt_backdrop_selected: 7,
+            crt_backdrop_transition_id: 11,
+            crt_backdrop_cache_state: "exact",
+            portrait_arcade_list_pixels: 12_345,
+            portrait_arcade_list_bytes: 24_690,
+            portrait_preview_rotation_pixels: 2_048,
+            portrait_preview_blend_pixels: 1_024,
+            portrait_preview_worker_queue_replacements: 3,
+            portrait_preview_worker_result_replacements: 2,
+            portrait_preview_worker_stale_results: 1,
+            portrait_preview_worker_age_us: 4_500,
+            portrait_preview_worker_generation_lag: 0,
+            portrait_preview_worker_affinity_status: "applied",
+            ..LauncherCustomDrawTrace::default()
+        };
+        controller.record_frame_work(GuiFrameWorkRecord {
+            frame: 7,
+            wall_us: 8_500,
+            vsync_us: 3_000,
+            custom_draw: &custom_draw,
+            physical_layer_presentation: GuiPhysicalLayerPresentationTrace {
+                preview_rows: 12,
+                hidden_copied_bytes: 64,
+                preview_hidden_compose_us: 13,
+                arcade_hidden_compose_us: 14,
+                preview_present_us: 15,
+                arcade_present_us: 16,
+            },
+        });
         controller.record_latch(
             7,
             64,
@@ -1098,6 +1168,44 @@ mod tests {
             controller.frames[0]["portrait_preview_worker_affinity_status"],
             "applied"
         );
+        assert_eq!(
+            controller.frames[0]["physical_layers"]["arcade"]["pixels"],
+            12_345
+        );
+        assert_eq!(
+            controller.frames[0]["physical_layers"]["arcade"]["bytes"],
+            24_690
+        );
+        assert_eq!(
+            controller.frames[0]["physical_layers"]["arcade"]["hidden_compose_us"],
+            14
+        );
+        assert_eq!(
+            controller.frames[0]["physical_layers"]["preview"]["rotation_pixels"],
+            controller.frames[0]["portrait_preview_rotation_pixels"]
+        );
+        assert_eq!(
+            controller.frames[0]["physical_layers"]["presentation"]["hidden_copied_bytes"],
+            64
+        );
+    }
+
+    #[test]
+    fn frame_work_for_an_unrecorded_frame_counts_as_record_loss() {
+        let now = Instant::now();
+        let mut controller = GuiProfilingController::enabled_for_test(now);
+        controller
+            .request_phase(GuiProfilePhase::ArcadeScroll, now)
+            .unwrap();
+        let custom_draw = LauncherCustomDrawTrace::default();
+        controller.record_frame_work(GuiFrameWorkRecord {
+            frame: 99,
+            wall_us: 1,
+            vsync_us: 1,
+            custom_draw: &custom_draw,
+            physical_layer_presentation: GuiPhysicalLayerPresentationTrace::default(),
+        });
+        assert_eq!(controller.dropped_frames, 1);
     }
 
     #[test]

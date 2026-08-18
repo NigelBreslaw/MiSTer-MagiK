@@ -10958,6 +10958,17 @@ pub(super) fn run_launcher_loop(
             prepare_us,
             presented_copied_rows,
         );
+        gui_profiling.record_frame_work(GuiFrameWorkRecord::from_traces(
+            frames,
+            frame_t4.saturating_duration_since(loop_start).as_micros(),
+            presentation.vsync_us_override.unwrap_or_else(|| {
+                frame_t3
+                    .saturating_duration_since(custom_draw_done)
+                    .as_micros()
+            }),
+            &custom_draw_trace,
+            &presentation,
+        ));
         let mut presented_frame = LauncherFrameSnapshotBuilder {
             identity: LauncherFrameIdentity {
                 frames,
@@ -11027,69 +11038,6 @@ pub(super) fn run_launcher_loop(
             },
         }
         .build();
-        gui_profiling.record_frame_work(
-            frames,
-            (presented_frame.frame_t4 - presented_frame.loop_start).as_micros(),
-            presented_frame.vsync_us_override.unwrap_or_else(|| {
-                (presented_frame.frame_t3 - presented_frame.custom_draw_done).as_micros()
-            }),
-            presented_frame.custom_draw_trace.crt_backdrop_prepare_us,
-            presented_frame
-                .custom_draw_trace
-                .crt_backdrop_prepare_pixels,
-            presented_frame.custom_draw_trace.crt_backdrop_blend_us,
-            presented_frame.custom_draw_trace.crt_backdrop_blend_pixels,
-            presented_frame.custom_draw_trace.crt_backdrop_copy_us,
-            presented_frame.custom_draw_trace.crt_backdrop_copy_pixels,
-            presented_frame
-                .custom_draw_trace
-                .crt_backdrop_list_overlay_us,
-            presented_frame
-                .custom_draw_trace
-                .crt_backdrop_list_overlay_pixels,
-            presented_frame
-                .custom_draw_trace
-                .crt_backdrop_list_restore_pixels,
-            presented_frame
-                .custom_draw_trace
-                .crt_backdrop_list_foreground_pixels,
-            presented_frame.custom_draw_trace.crt_backdrop_alpha_bucket,
-            presented_frame.custom_draw_trace.crt_backdrop_active,
-            presented_frame.custom_draw_trace.crt_backdrop_selected,
-            presented_frame.custom_draw_trace.crt_backdrop_transition_id,
-            presented_frame.custom_draw_trace.crt_backdrop_cache_state,
-            presented_frame
-                .custom_draw_trace
-                .portrait_arcade_list_pixels,
-            presented_frame.custom_draw_trace.portrait_arcade_list_bytes,
-            presented_frame
-                .custom_draw_trace
-                .persistent_arcade_composition,
-            presented_frame
-                .custom_draw_trace
-                .portrait_preview_rotation_pixels,
-            presented_frame
-                .custom_draw_trace
-                .portrait_preview_blend_pixels,
-            presented_frame
-                .custom_draw_trace
-                .portrait_preview_worker_queue_replacements,
-            presented_frame
-                .custom_draw_trace
-                .portrait_preview_worker_result_replacements,
-            presented_frame
-                .custom_draw_trace
-                .portrait_preview_worker_stale_results,
-            presented_frame
-                .custom_draw_trace
-                .portrait_preview_worker_age_us,
-            presented_frame
-                .custom_draw_trace
-                .portrait_preview_worker_generation_lag,
-            presented_frame
-                .custom_draw_trace
-                .portrait_preview_worker_affinity_status,
-        );
         let launcher_response_present_receipt = LauncherResponsePresentReceipt {
             post_accepted_at_us: crate::input_hub::monotonic_us(),
             post_accepted_execution: launcher_response_trace.execution_stamp(),
