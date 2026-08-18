@@ -308,6 +308,11 @@ impl<'a> LayerTarget<'a> {
         if self.layout.is_portrait()
             && let Some(RawPreviewPresent::Direct(rect)) = present
         {
+            let physical_backing_rect = self
+                .layout
+                .logical_rect_to_composition(preview_screen_rect(&self.drawing_ui));
+            self.target
+                .ensure_physical_direct_preview_rect(physical_backing_rect);
             let transition_id = preview
                 .raw_transition_frame()
                 .map(|frame| frame.transition_id)
@@ -328,7 +333,9 @@ impl<'a> LayerTarget<'a> {
             drop(rotation_pmu);
             let physical_rect = self.layout.logical_rect_to_composition(rect);
             if rows > 0 {
-                return (Some(RawPreviewPresent::Cached(physical_rect)), trace);
+                self.target
+                    .copy_cached_rect_to_physical_direct_preview(physical_rect);
+                return (Some(RawPreviewPresent::Direct(physical_rect)), trace);
             }
             return (None, trace);
         }
@@ -354,9 +361,16 @@ impl<'a> LayerTarget<'a> {
                     .target
                     .compose_direct_preview_rect_oriented(rect, self.layout.output_layout());
                 drop(rotation_pmu);
+                let physical_backing_rect = self
+                    .layout
+                    .logical_rect_to_composition(preview_screen_rect(&self.drawing_ui));
+                self.target
+                    .ensure_physical_direct_preview_rect(physical_backing_rect);
                 let physical_rect = self.layout.logical_rect_to_composition(rect);
                 if rows > 0 {
-                    Some(RawPreviewPresent::Cached(physical_rect))
+                    self.target
+                        .copy_cached_rect_to_physical_direct_preview(physical_rect);
+                    Some(RawPreviewPresent::Direct(physical_rect))
                 } else {
                     None
                 }

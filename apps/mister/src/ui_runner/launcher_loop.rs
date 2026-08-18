@@ -10340,19 +10340,18 @@ pub(super) fn run_launcher_loop(
             wants_preview_layer,
             composition_decision.allow_preview_blit,
         );
-        let preview_desired =
-            if !layout.is_portrait() && preview_layer_desired && preview_direct_present_enabled() {
-                Some(DirectLayerState::new(
-                    if layout.is_portrait() {
-                        layout.logical_rect_to_composition(preview_screen_rect(ui))
-                    } else {
-                        preview_screen_rect(ui)
-                    },
-                    launcher_preview_version,
-                ))
-            } else {
-                None
-            };
+        let preview_desired = if preview_layer_desired && preview_direct_present_enabled() {
+            Some(DirectLayerState::new(
+                if layout.is_portrait() {
+                    layout.logical_rect_to_composition(preview_screen_rect(ui))
+                } else {
+                    preview_screen_rect(ui)
+                },
+                launcher_preview_version,
+            ))
+        } else {
+            None
+        };
         let arcade_desired = if !layout.is_portrait()
             && !crt_layout
             && should_desire_direct_layer(
