@@ -8146,8 +8146,10 @@ fn run_gui_frame_profile_route_with_pprof(
             .transpose()?
             .map(|checkpoint| serde_json::from_str::<Value>(&checkpoint))
             .transpose()?;
-        let profile_text = wait_for_remote_text(
+        let profile_text = wait_for_gui_profile_text(
+            config,
             session,
+            &nonce,
             GUI_PROFILE_REMOTE_COMPLETE,
             Duration::from_secs(10),
             "GUI profiling completion",
@@ -9520,6 +9522,32 @@ fn wait_for_remote_text(
         }
         if started.elapsed() >= timeout {
             return Err(format!("timed out waiting for {label}").into());
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+}
+
+fn wait_for_gui_profile_text(
+    config: &NativeDeviceConfig,
+    session: &Session,
+    nonce: &str,
+    path: &str,
+    timeout: Duration,
+    label: &str,
+) -> Result<String> {
+    let started = Instant::now();
+    let mut next_keepalive = Instant::now();
+    loop {
+        if let Some(text) = remote_read(session, path) {
+            return Ok(text);
+        }
+        if started.elapsed() >= timeout {
+            return Err(format!("timed out waiting for {label}").into());
+        }
+        if Instant::now() >= next_keepalive {
+            launcher_automation::snapshot(config, nonce)
+                .map_err(|error| format!("keep GUI profiling automation session alive: {error}"))?;
+            next_keepalive = Instant::now() + Duration::from_secs(1);
         }
         thread::sleep(Duration::from_millis(20));
     }

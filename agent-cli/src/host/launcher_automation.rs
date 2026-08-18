@@ -296,13 +296,23 @@ pub(super) fn capture_checkpoint(
 
 pub(super) fn end(config: &NativeDeviceConfig, nonce: &str) -> Result<String> {
     validate_nonce(nonce)?;
-    let result = agent_result(
+    let result = match agent_result(
         config,
         "launcher_automation_request",
         json!({"nonce":nonce,"kind":"end"}),
         Duration::from_secs(3),
-    )?;
+    ) {
+        Ok(result) => result,
+        Err(error) if automation_end_socket_missing(&error.to_string()) => {
+            return Ok(serde_json::to_string(&json!({"already_ended": true}))?);
+        }
+        Err(error) => return Err(error),
+    };
     Ok(serde_json::to_string(&result)?)
+}
+
+fn automation_end_socket_missing(error: &str) -> bool {
+    error.contains("send automation request: No such file or directory")
 }
 
 pub(super) fn ensure_installed_alpha_launcher(
@@ -1440,6 +1450,16 @@ mod tests {
         }
         snapshot["semantic"] = Value::Null;
         assert!(validate_snapshot(&snapshot).is_err());
+    }
+
+    #[test]
+    fn automation_end_treats_missing_socket_as_idempotent_cleanup() {
+        assert!(automation_end_socket_missing(
+            "device_operation_failed: send automation request: No such file or directory (os error 2)"
+        ));
+        assert!(!automation_end_socket_missing(
+            "device_operation_failed: receive automation response: Resource temporarily unavailable"
+        ));
     }
 
     #[test]
