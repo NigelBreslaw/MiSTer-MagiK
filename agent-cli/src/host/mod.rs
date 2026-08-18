@@ -7923,7 +7923,7 @@ fn wait_gui_profile_pprof_finalization(
     minimum_probe: Duration,
 ) -> Result<String> {
     let started = Instant::now();
-    let timeout = Duration::from_secs(10);
+    let timeout = Duration::from_secs(30);
     let mut completion = None;
     let mut next_keepalive = Instant::now();
     loop {
@@ -8081,6 +8081,7 @@ fn run_gui_frame_profile_route_with_pprof(
                 Duration::from_millis(scroll_duration_ms).saturating_sub(hold_started.elapsed()),
             ));
         }
+        let release_sequence = modal_input_action(config, &nonce, AutomationAction::ReleaseAll)?;
         if let Some(remote_dir) = pprof_remote_dir {
             let _ = wait_gui_profile_pprof_finalization(
                 config,
@@ -8090,7 +8091,6 @@ fn run_gui_frame_profile_route_with_pprof(
                 pprof_finalization_probe,
             )?;
         }
-        let release_sequence = modal_input_action(config, &nonce, AutomationAction::ReleaseAll)?;
         let settled_arcade = wait_gui_profile_snapshot(
             config,
             &nonce,
