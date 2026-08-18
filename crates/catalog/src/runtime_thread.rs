@@ -67,7 +67,13 @@ impl RuntimeThreadRole {
 
     pub fn default_policy(self) -> RuntimeThreadPolicy {
         match self {
-            Self::LauncherUi => RuntimeThreadPolicy::new(-10, ThreadAffinity::Cpu1),
+            // The latch confirmation read runs immediately after vblank. A
+            // normal-policy deschedule here can consume most of the following
+            // refresh even though the read itself needs only hundreds of CPU
+            // microseconds, so keep the bounded, vblank-waiting UI loop ahead
+            // of ordinary CPU1 work.
+            Self::LauncherUi => RuntimeThreadPolicy::new(-10, ThreadAffinity::Cpu1)
+                .with_scheduler(ThreadScheduler::RoundRobin { priority: 10 }),
             // The input proxy IRQ/wake path can leave a runnable CPU0 reader
             // behind tens of milliseconds of kernel/catalog work.  Keep the
             // reader with the latency-critical launcher work on CPU1; the
@@ -559,6 +565,7 @@ mod tests {
         assert_eq!(
             RuntimeThreadRole::LauncherUi.default_policy(),
             RuntimeThreadPolicy::new(-10, ThreadAffinity::Cpu1)
+                .with_scheduler(ThreadScheduler::RoundRobin { priority: 10 })
         );
     }
 
@@ -695,10 +702,13 @@ mod tests {
             ),
         ];
         for (role, nice, affinity) in expected {
-            assert_eq!(
-                role.default_policy(),
-                RuntimeThreadPolicy::new(nice, affinity)
-            );
+            let expected_policy = RuntimeThreadPolicy::new(nice, affinity);
+            let expected_policy = if role == RuntimeThreadRole::LauncherUi {
+                expected_policy.with_scheduler(ThreadScheduler::RoundRobin { priority: 10 })
+            } else {
+                expected_policy
+            };
+            assert_eq!(role.default_policy(), expected_policy);
         }
     }
 
