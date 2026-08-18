@@ -895,7 +895,7 @@ mod tests {
         for scenario in accepted {
             assert!(Cli::try_parse_from(["agent-cli", "benchmark", scenario]).is_ok());
         }
-        for arm in ["control", "pprof", "pmu", "streamline"] {
+        for arm in ["control", "pprof", "pprof-smoke", "pmu", "streamline"] {
             assert!(
                 Cli::try_parse_from([
                     "agent-cli",

@@ -733,6 +733,15 @@ impl NativeDevice {
         })
     }
 
+    pub(crate) fn profile_arcade_velocity_scroll_pprof_smoke(
+        &mut self,
+        output_dir: &Path,
+    ) -> std::result::Result<String, DeviceFailure> {
+        self.benchmark_profile(|config| {
+            profile_installed_arcade_velocity_scroll_pprof_smoke(config, output_dir)
+        })
+    }
+
     pub(crate) fn profile_arcade_velocity_scroll_pmu(
         &mut self,
         output_dir: &Path,
@@ -7807,6 +7816,9 @@ const GUI_PROFILE_REMOTE_COMPLETE: &str = "/tmp/mister-magik/gui-frame-profile.j
 const GUI_PROFILE_DEFAULT_SCROLL_MS: u64 = 900;
 const ARCADE_VELOCITY_SCROLL_DURATION_MS: u64 = 40_000;
 const ARCADE_VELOCITY_SCROLL_TELEMETRY_SECS: u64 = 55;
+const ARCADE_VELOCITY_SCROLL_PPROF_SMOKE_DURATION_MS: u64 = 8_000;
+const ARCADE_VELOCITY_SCROLL_PPROF_SMOKE_TELEMETRY_SECS: u64 = 18;
+const ARCADE_VELOCITY_SCROLL_PPROF_SMOKE_FINALIZATION_PROBE: Duration = Duration::from_secs(6);
 const ARCADE_VELOCITY_SCROLL_PPROF_REMOTE_DIR: &str =
     "/tmp/mister-magik/arcade-velocity-scroll-pprof";
 
@@ -7893,6 +7905,36 @@ fn wait_gui_profile_snapshot(
     }
 }
 
+fn wait_gui_profile_pprof_finalization(
+    config: &NativeDeviceConfig,
+    session: &Session,
+    nonce: &str,
+    remote_path: &str,
+    minimum_probe: Duration,
+) -> Result<String> {
+    let started = Instant::now();
+    let timeout = Duration::from_secs(10);
+    let mut completion = None;
+    let mut next_keepalive = Instant::now();
+    loop {
+        if completion.is_none() {
+            completion = remote_read(session, remote_path);
+        }
+        if completion.is_some() && started.elapsed() >= minimum_probe {
+            return Ok(completion.expect("checked pprof completion"));
+        }
+        if started.elapsed() >= timeout {
+            return Err("timed out waiting for Arcade velocity-scroll pprof finalization".into());
+        }
+        if Instant::now() >= next_keepalive {
+            launcher_automation::snapshot(config, nonce)
+                .map_err(|error| format!("keep Arcade pprof automation session alive: {error}"))?;
+            next_keepalive = Instant::now() + Duration::from_secs(1);
+        }
+        thread::sleep(Duration::from_millis(20));
+    }
+}
+
 fn gui_profile_effective_view(snapshot: &Value) -> Option<&str> {
     snapshot
         .pointer("/semantic/effective_view")
@@ -7915,6 +7957,7 @@ fn run_gui_frame_profile_route(
         scroll_duration_ms,
         terminal_checkpoint,
         None,
+        Duration::ZERO,
     )
 }
 
@@ -7926,6 +7969,7 @@ fn run_gui_frame_profile_route_with_pprof(
     scroll_duration_ms: u64,
     terminal_checkpoint: Option<&str>,
     pprof_remote_dir: Option<&str>,
+    pprof_finalization_probe: Duration,
 ) -> Result<Value> {
     fs::create_dir_all(output_dir)?;
     exec_checked(
@@ -8042,11 +8086,12 @@ fn run_gui_frame_profile_route_with_pprof(
             ));
         }
         if let Some(remote_dir) = pprof_remote_dir {
-            let _ = wait_for_remote_text(
+            let _ = wait_gui_profile_pprof_finalization(
+                config,
                 session,
+                &nonce,
                 &format!("{remote_dir}/profile.json"),
-                Duration::from_secs(10),
-                "Arcade velocity-scroll pprof finalization",
+                pprof_finalization_probe,
             )?;
         }
         let release_sequence = modal_input_action(config, &nonce, AutomationAction::ReleaseAll)?;
@@ -8270,6 +8315,38 @@ fn profile_installed_arcade_velocity_scroll_pprof(
     config: &NativeDeviceConfig,
     output_dir: &Path,
 ) -> Result<String> {
+    profile_installed_arcade_velocity_scroll_pprof_workload(
+        config,
+        output_dir,
+        ARCADE_VELOCITY_SCROLL_DURATION_MS,
+        ARCADE_VELOCITY_SCROLL_TELEMETRY_SECS,
+        Duration::ZERO,
+        "mister-magik-arcade-velocity-scroll-pprof-v1",
+    )
+}
+
+fn profile_installed_arcade_velocity_scroll_pprof_smoke(
+    config: &NativeDeviceConfig,
+    output_dir: &Path,
+) -> Result<String> {
+    profile_installed_arcade_velocity_scroll_pprof_workload(
+        config,
+        output_dir,
+        ARCADE_VELOCITY_SCROLL_PPROF_SMOKE_DURATION_MS,
+        ARCADE_VELOCITY_SCROLL_PPROF_SMOKE_TELEMETRY_SECS,
+        ARCADE_VELOCITY_SCROLL_PPROF_SMOKE_FINALIZATION_PROBE,
+        "mister-magik-arcade-velocity-scroll-pprof-smoke-v1",
+    )
+}
+
+fn profile_installed_arcade_velocity_scroll_pprof_workload(
+    config: &NativeDeviceConfig,
+    output_dir: &Path,
+    scroll_duration_ms: u64,
+    telemetry_secs: u64,
+    finalization_probe: Duration,
+    artifact_schema: &str,
+) -> Result<String> {
     let session = connect_with(&config.connection, 10)?;
     let capability = exec_checked_output(
         &session,
@@ -8316,7 +8393,7 @@ fn profile_installed_arcade_velocity_scroll_pprof(
     let telemetry_thread = thread::spawn(move || {
         agent_telemetry_for_duration_with_mode(
             &telemetry_endpoint,
-            Duration::from_secs(ARCADE_VELOCITY_SCROLL_TELEMETRY_SECS),
+            Duration::from_secs(telemetry_secs),
             100,
             "off",
         )
@@ -8327,9 +8404,10 @@ fn profile_installed_arcade_velocity_scroll_pprof(
         &session,
         output_dir,
         false,
-        ARCADE_VELOCITY_SCROLL_DURATION_MS,
+        scroll_duration_ms,
         Some("terminal-arcade"),
         Some(ARCADE_VELOCITY_SCROLL_PPROF_REMOTE_DIR),
+        finalization_probe,
     );
     let telemetry_result: Result<Vec<Value>> = match telemetry_thread.join() {
         Ok(Ok(telemetry)) => Ok(telemetry),
@@ -8376,9 +8454,11 @@ fn profile_installed_arcade_velocity_scroll_pprof(
             let summary =
                 summarize_arcade_velocity_scroll(output_dir, &route, &telemetry, &display_mode)?;
             Ok(json!({
-                "schema": "mister-magik-arcade-velocity-scroll-pprof-v1",
+                "schema": artifact_schema,
                 "artifact_status": "passed",
                 "display_mode": display_mode,
+                "scroll_duration_ms": scroll_duration_ms,
+                "minimum_finalization_probe_ms": finalization_probe.as_millis(),
                 "route": summary,
                 "pprof": profile,
             }))

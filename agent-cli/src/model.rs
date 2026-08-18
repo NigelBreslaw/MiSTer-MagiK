@@ -106,6 +106,7 @@ impl BenchmarkScenario {
 pub enum ArcadeVelocityScrollArm {
     Control,
     Pprof,
+    PprofSmoke,
     Pmu,
     Streamline,
 }
@@ -116,6 +117,7 @@ impl ArcadeVelocityScrollArm {
         match self {
             Self::Control => "control",
             Self::Pprof => "pprof",
+            Self::PprofSmoke => "pprof-smoke",
             Self::Pmu => "pmu",
             Self::Streamline => "streamline",
         }

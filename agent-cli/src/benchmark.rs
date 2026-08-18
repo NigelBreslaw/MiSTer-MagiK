@@ -50,6 +50,7 @@ enum BenchmarkProfile {
     GuiFrameAttribution,
     ArcadeVelocityScroll,
     ArcadeVelocityScrollPprof,
+    ArcadeVelocityScrollPprofSmoke,
     ArcadeVelocityScrollPmu,
     ArcadeVelocityScrollStreamline,
     ArcadeVelocityScrollAttribution,
@@ -136,6 +137,9 @@ impl BenchmarkDevice for DeviceClient {
             }
             BenchmarkProfile::ArcadeVelocityScrollPprof => {
                 device.profile_arcade_velocity_scroll_pprof(&output_dir)
+            }
+            BenchmarkProfile::ArcadeVelocityScrollPprofSmoke => {
+                device.profile_arcade_velocity_scroll_pprof_smoke(&output_dir)
             }
             BenchmarkProfile::ArcadeVelocityScrollPmu => {
                 device.profile_arcade_velocity_scroll_pmu(&output_dir)
@@ -1160,6 +1164,10 @@ fn execute_arcade_velocity_scroll_arm(
         ArcadeVelocityScrollArm::Pprof => (
             BenchmarkProfile::ArcadeVelocityScrollPprof,
             "mister-magik-arcade-velocity-scroll-pprof-v1",
+        ),
+        ArcadeVelocityScrollArm::PprofSmoke => (
+            BenchmarkProfile::ArcadeVelocityScrollPprofSmoke,
+            "mister-magik-arcade-velocity-scroll-pprof-smoke-v1",
         ),
         ArcadeVelocityScrollArm::Pmu => (
             BenchmarkProfile::ArcadeVelocityScrollPmu,
