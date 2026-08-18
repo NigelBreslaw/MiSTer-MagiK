@@ -1397,6 +1397,9 @@ pub fn invalidate_preview_archive_metadata_cache(reason: &str) {
     if let Ok(mut cached) = preview_archive_sidecar_index_cache().lock() {
         cached.clear();
     }
+    if let Ok(mut cached) = resolved_preview_archive_path_cache().lock() {
+        cached.clear();
+    }
     if preview_trace_enabled() {
         crate::catalog_errln!(
             "preview_trace metadata_cache event=forced_invalidation reason={reason}"
@@ -1911,13 +1914,27 @@ fn resolve_preview_archive_path(preview_archive_path: &str) -> String {
     let Some(system) = system_from_legacy_archive_path(path) else {
         return preview_archive_path.to_string();
     };
+    if let Ok(cache) = resolved_preview_archive_path_cache().lock()
+        && let Some(resolved) = cache.get(preview_archive_path)
+    {
+        return resolved.clone();
+    }
     let root = path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
         .map(Path::to_path_buf)
         .unwrap_or_else(default_screenshot_asset_dir);
-    preferred_archive_path_for_system(&root, system)
-        .unwrap_or_else(|| preview_archive_path.to_string())
+    let resolved = preferred_archive_path_for_system(&root, system)
+        .unwrap_or_else(|| preview_archive_path.to_string());
+    if let Ok(mut cache) = resolved_preview_archive_path_cache().lock() {
+        cache.insert(preview_archive_path.to_string(), resolved.clone());
+    }
+    resolved
+}
+
+fn resolved_preview_archive_path_cache() -> &'static Mutex<HashMap<String, String>> {
+    static PATHS: OnceLock<Mutex<HashMap<String, String>>> = OnceLock::new();
+    PATHS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 fn auto_archive_path_for_system(root: &Path, system: &str) -> Option<String> {
@@ -4189,7 +4206,18 @@ mod tests {
             index_calls_after_first
         );
 
+        let resolved_cache_key = format!("test-resolved-{path_text}");
+        resolved_preview_archive_path_cache()
+            .lock()
+            .unwrap()
+            .insert(resolved_cache_key.clone(), path_text.clone());
         invalidate_preview_archive_metadata_cache("test_media_generation_changed");
+        assert!(
+            !resolved_preview_archive_path_cache()
+                .lock()
+                .unwrap()
+                .contains_key(&resolved_cache_key)
+        );
         let third = preview_archive_sidecar_index(&path)
             .expect("reload after invalidation")
             .expect("sidecar index");
