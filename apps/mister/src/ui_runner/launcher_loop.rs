@@ -5212,7 +5212,7 @@ pub(super) fn run_launcher_loop(
     let mut crt_backdrop = CrtBackdropController::for_display(ui);
     let mut launcher_preview_version = 1u64;
     let mut launcher_arcade_version = 1u64;
-    let mut launcher_arcade_scroll_offset = 0i64;
+    let mut launcher_arcade_scroll_offset = LayerOffset::ZERO;
     let mut arcade_drawer_view_cache = ArcadeDrawerViewCache::default();
     let mut composition = UiCompositionController::new();
     let mut cpu = process_entry_cpu_profile.or_else(|| cpu_profile::start(profile_config.cpu()));
@@ -10268,14 +10268,8 @@ pub(super) fn run_launcher_loop(
         if raw_preview_direct_rect.is_some() {
             launcher_preview_version = launcher_preview_version.wrapping_add(1).max(1);
         }
-        if matches!(arcade_list_rect, Some(ArcadeListUpdate::Full(_))) {
-            launcher_arcade_version = launcher_arcade_version.wrapping_add(1).max(1);
-            launcher_arcade_scroll_offset = 0;
-        } else if let Some(ArcadeListUpdate::Scroll { delta_y, .. }) = arcade_list_rect {
-            launcher_arcade_scroll_offset =
-                launcher_arcade_scroll_offset.saturating_add(delta_y as i64);
-        }
         let mut physical_arcade_rect = None;
+        let mut direct_arcade_update = None;
         let cached_arcade_rect = if crt_backdrop_eligible {
             arcade_list_rect
                 .or_else(|| {
@@ -10312,23 +10306,45 @@ pub(super) fn run_launcher_loop(
                         Some(rect)
                     }
                 })
-        } else if crt_layout || layout.is_portrait() {
+        } else if layout.is_portrait() {
+            arcade_list_rect.and_then(|update| {
+                let (composition, physical_update) = layer_target.compose_arcade_list_direct_layer(
+                    &mut arcade_list_renderer,
+                    update,
+                    catalog_version as u64,
+                );
+                portrait_arcade_list_bytes = composition.bytes as u64;
+                portrait_arcade_list_pixels = composition.bytes.saturating_div(2) as u64;
+                direct_arcade_update = Some(physical_update);
+                None
+            })
+        } else if crt_layout {
             arcade_list_rect.and_then(|update| {
                 let rect = arcade_update_dirty_rect(&update);
                 let composition =
                     layer_target.compose_arcade_list_update(&mut arcade_list_renderer, update);
                 portrait_arcade_list_bytes = composition.bytes as u64;
                 portrait_arcade_list_pixels = composition.bytes.saturating_div(2) as u64;
-                if layout.is_portrait() {
-                    physical_arcade_rect = Some(layout.logical_rect_to_composition(rect));
-                    None
-                } else {
-                    Some(rect)
-                }
+                Some(rect)
             })
         } else {
             None
         };
+        let layer_arcade_update = direct_arcade_update.or(arcade_list_rect);
+        if matches!(layer_arcade_update, Some(ArcadeListUpdate::Full(_))) {
+            launcher_arcade_version = launcher_arcade_version.wrapping_add(1).max(1);
+            launcher_arcade_scroll_offset = LayerOffset::ZERO;
+        } else if let Some(ArcadeListUpdate::Scroll {
+            delta_x, delta_y, ..
+        }) = layer_arcade_update
+        {
+            launcher_arcade_scroll_offset.x = launcher_arcade_scroll_offset
+                .x
+                .saturating_add(delta_x as i64);
+            launcher_arcade_scroll_offset.y = launcher_arcade_scroll_offset
+                .y
+                .saturating_add(delta_y as i64);
+        }
         custom_draw_trace.crt_backdrop_copy_us = crt_backdrop_copy_us;
         custom_draw_trace.crt_backdrop_copy_pixels = crt_backdrop_copy_pixels;
         custom_draw_trace.crt_backdrop_list_overlay_us = crt_backdrop_list_overlay_us;
@@ -10350,16 +10366,22 @@ pub(super) fn run_launcher_loop(
         } else {
             None
         };
-        let arcade_desired = if !layout.is_portrait()
-            && !crt_layout
+        let arcade_desired = if !crt_layout
             && should_desire_direct_layer(
                 wants_arcade_list,
                 composition_decision.allow_arcade_list_blit,
             ) {
-            Some(
-                DirectLayerState::new(arcade_list_renderer.dirty_rect(), launcher_arcade_version)
-                    .with_content_offset(LayerOffset::new(0, launcher_arcade_scroll_offset)),
-            )
+            let rect = if layout.is_portrait() {
+                arcade_list_renderer
+                    .persistent_oriented_layer_view()
+                    .map(DirectPreviewView::rect)
+            } else {
+                Some(arcade_list_renderer.dirty_rect())
+            };
+            rect.map(|rect| {
+                DirectLayerState::new(rect, launcher_arcade_version)
+                    .with_content_offset(launcher_arcade_scroll_offset)
+            })
         } else {
             None
         };
@@ -10555,8 +10577,10 @@ pub(super) fn run_launcher_loop(
             preview_desired,
             raw_preview_direct_rect,
             arcade_desired,
-            if crt_layout || layout.is_portrait() {
+            if crt_layout {
                 None
+            } else if layout.is_portrait() {
+                direct_arcade_update
             } else {
                 arcade_list_rect
             },

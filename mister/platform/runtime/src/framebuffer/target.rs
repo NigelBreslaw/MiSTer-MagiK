@@ -214,6 +214,9 @@ impl<'a> CachedFrameView<'a> {
 pub struct DirectPreviewView<'a> {
     pixels: &'a [Rgb565Pixel],
     rect: DirtyRect,
+    stride: usize,
+    src_x: usize,
+    src_y: usize,
 }
 
 #[derive(Clone, Copy)]
@@ -225,6 +228,39 @@ pub(crate) struct StridedFrameRegion<'a> {
 }
 
 impl<'a> DirectPreviewView<'a> {
+    fn dense(pixels: &'a [Rgb565Pixel], rect: DirtyRect) -> Self {
+        Self {
+            pixels,
+            rect,
+            stride: rect.width(),
+            src_x: 0,
+            src_y: 0,
+        }
+    }
+
+    pub fn from_frame_region(
+        pixels: &'a [Rgb565Pixel],
+        stride: usize,
+        height: usize,
+        rect: DirtyRect,
+    ) -> Option<Self> {
+        if rect.x0 >= rect.x1
+            || rect.y0 >= rect.y1
+            || rect.x1 > stride
+            || rect.y1 > height
+            || pixels.len() < stride.checked_mul(height)?
+        {
+            return None;
+        }
+        Some(Self {
+            pixels,
+            rect,
+            stride,
+            src_x: rect.x0,
+            src_y: rect.y0,
+        })
+    }
+
     pub fn pixels(self) -> &'a [Rgb565Pixel] {
         self.pixels
     }
@@ -234,7 +270,7 @@ impl<'a> DirectPreviewView<'a> {
     }
 
     pub fn stride(self) -> usize {
-        self.rect.width()
+        self.stride
     }
 
     pub(crate) fn region(self, rect: DirtyRect) -> Option<StridedFrameRegion<'a>> {
@@ -244,8 +280,8 @@ impl<'a> DirectPreviewView<'a> {
         Some(StridedFrameRegion {
             pixels: self.pixels,
             stride: self.stride(),
-            src_x: rect.x0 - self.rect.x0,
-            src_y: rect.y0 - self.rect.y0,
+            src_x: self.src_x + rect.x0 - self.rect.x0,
+            src_y: self.src_y + rect.y0 - self.rect.y0,
         })
     }
 }
@@ -624,19 +660,14 @@ impl UiFrameTarget {
     }
 
     pub fn direct_preview_view(&self) -> Option<DirectPreviewView<'_>> {
-        self.direct_preview_rect.map(|rect| DirectPreviewView {
-            pixels: &self.direct_preview,
-            rect,
-        })
+        self.direct_preview_rect
+            .map(|rect| DirectPreviewView::dense(&self.direct_preview, rect))
     }
 
     pub fn physical_direct_preview_view(&self) -> Option<DirectPreviewView<'_>> {
         self.physical_direct_preview_rect
             .zip(self.physical_direct_preview_cache)
-            .map(|(rect, _)| DirectPreviewView {
-                pixels: &self.physical_direct_preview,
-                rect,
-            })
+            .map(|(rect, _)| DirectPreviewView::dense(&self.physical_direct_preview, rect))
     }
 
     pub fn cached_565_mut(&mut self) -> &mut [Rgb565Pixel] {
@@ -942,6 +973,13 @@ mod tests {
         assert_eq!(preview.pixels(), &[Rgb565Pixel(7); 8]);
         assert!(preview.region(rect(3, 1, 5, 2)).is_some());
         assert!(preview.region(rect(1, 1, 5, 2)).is_none());
+
+        let region =
+            DirectPreviewView::from_frame_region(target.cached_565(), 8, 4, rect(2, 1, 6, 3))
+                .expect("strided frame region");
+        let subregion = region.region(rect(3, 2, 5, 3)).unwrap();
+        assert_eq!(region.stride(), 8);
+        assert_eq!((subregion.src_x, subregion.src_y), (3, 2));
     }
 
     #[test]

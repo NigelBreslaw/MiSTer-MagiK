@@ -232,6 +232,35 @@ impl ScanoutSlotsRgb565Framebuffer {
         Ok(w * h * std::mem::size_of::<Rgb565Pixel>())
     }
 
+    pub fn shift_rect(
+        &mut self,
+        rect: DirtyRect,
+        delta_x: isize,
+        delta_y: isize,
+    ) -> Result<usize, ScanoutSlotsError> {
+        if rect.x1 > self.width() || rect.y1 > self.height() {
+            return Err(ScanoutSlotsError::InvalidGeometry(format!(
+                "shift rect x0={} y0={} x1={} y1={} exceeds {}x{}",
+                rect.x0,
+                rect.y0,
+                rect.x1,
+                rect.y1,
+                self.width(),
+                self.height()
+            )));
+        }
+        let moved_width = rect.width().saturating_sub(delta_x.unsigned_abs());
+        let moved_height = (rect.rows() as usize).saturating_sub(delta_y.unsigned_abs());
+        if moved_width == 0 || moved_height == 0 {
+            return Ok(0);
+        }
+        let stride = self.stride_pixels();
+        shift_rect_pixels(self.buffer_mut(), stride, rect, delta_x, delta_y);
+        Ok(moved_width
+            .saturating_mul(moved_height)
+            .saturating_mul(std::mem::size_of::<Rgb565Pixel>()))
+    }
+
     pub fn slot(&self) -> &ScanoutSlotLayout {
         self.inner.slot()
     }
@@ -336,11 +365,78 @@ fn copy_rect_565_strided_pixels(
     }
 }
 
+fn shift_rect_pixels(
+    pixels: &mut [Rgb565Pixel],
+    stride: usize,
+    rect: DirtyRect,
+    delta_x: isize,
+    delta_y: isize,
+) {
+    let shift_x = delta_x.unsigned_abs();
+    let shift_y = delta_y.unsigned_abs();
+    let copy_width = rect.width().saturating_sub(shift_x);
+    let copy_height = (rect.rows() as usize).saturating_sub(shift_y);
+    if copy_width == 0 || copy_height == 0 {
+        return;
+    }
+    let (source_x, destination_x) = if delta_x >= 0 {
+        (rect.x0, rect.x0 + shift_x)
+    } else {
+        (rect.x0 + shift_x, rect.x0)
+    };
+    let mut copy_row = |source_y: usize| {
+        let destination_y = if delta_y >= 0 {
+            source_y + shift_y
+        } else {
+            source_y - shift_y
+        };
+        let source_start = source_y * stride + source_x;
+        let destination_start = destination_y * stride + destination_x;
+        pixels.copy_within(source_start..source_start + copy_width, destination_start);
+    };
+    if delta_y > 0 {
+        for source_y in (rect.y0..rect.y0 + copy_height).rev() {
+            copy_row(source_y);
+        }
+    } else {
+        for source_y in rect.y0 + shift_y..rect.y0 + shift_y + copy_height {
+            copy_row(source_y);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::framebuffer::target::DirtyRect;
 
     use super::*;
+
+    #[test]
+    fn physical_rect_shift_handles_both_axes_and_overlap_direction() {
+        let mut pixels = (0..30).map(Rgb565Pixel).collect::<Vec<_>>();
+        let original = pixels.clone();
+        let rect = DirtyRect {
+            x0: 1,
+            y0: 1,
+            x1: 5,
+            y1: 4,
+        };
+
+        shift_rect_pixels(&mut pixels, 6, rect, 1, 1);
+        for y in 2..4 {
+            for x in 2..5 {
+                assert_eq!(pixels[y * 6 + x], original[(y - 1) * 6 + x - 1]);
+            }
+        }
+
+        let shifted = pixels.clone();
+        shift_rect_pixels(&mut pixels, 6, rect, -1, -1);
+        for y in 1..3 {
+            for x in 1..4 {
+                assert_eq!(pixels[y * 6 + x], shifted[(y + 1) * 6 + x + 1]);
+            }
+        }
+    }
 
     fn layout() -> ScanoutSlotsLayout {
         ScanoutSlotsLayout {

@@ -432,6 +432,48 @@ impl<'a> LayerTarget<'a> {
         }
     }
 
+    pub(super) fn compose_arcade_list_direct_layer(
+        &mut self,
+        renderer: &mut ArcadeListRenderer,
+        update: ArcadeListUpdate,
+        catalog_generation: u64,
+    ) -> (PresentCopyStats, ArcadeListUpdate) {
+        let effective = renderer.compose_persistent_oriented_layer(
+            self.layout.output_layout(),
+            update,
+            catalog_generation,
+        );
+        let physical_rect = renderer
+            .persistent_oriented_layer_view()
+            .expect("composed physical Arcade layer has a view")
+            .rect();
+        let physical_update = match effective {
+            ArcadeListUpdate::Full(_) => ArcadeListUpdate::Full(physical_rect),
+            ArcadeListUpdate::Scroll {
+                delta_x, delta_y, ..
+            } => {
+                let (delta_x, delta_y) = self
+                    .layout
+                    .output_layout()
+                    .logical_delta_to_physical(delta_x, delta_y);
+                ArcadeListUpdate::Scroll {
+                    delta_x,
+                    delta_y,
+                    rect: physical_rect,
+                }
+            }
+        };
+        (
+            PresentCopyStats {
+                rows: physical_update.dirty_rect().rows(),
+                bytes: renderer
+                    .present_pixels(&effective, matches!(effective, ArcadeListUpdate::Full(_)))
+                    * 2,
+            },
+            physical_update,
+        )
+    }
+
     pub(super) fn compose_arcade_list_over_backdrop(
         &mut self,
         renderer: &mut ArcadeListRenderer,
@@ -462,8 +504,14 @@ impl<'a> LayerTarget<'a> {
         hidden: &mut ScanoutSlotsRgb565Framebuffer,
         renderer: &mut ArcadeListRenderer,
         update: ArcadeListUpdate,
-    ) -> PresentCopyStats {
-        copy_arcade_list_update_to_hidden(hidden, renderer, update)
+    ) -> Result<PresentCopyStats, String> {
+        if self.layout.is_portrait() {
+            let (rows, bytes) =
+                renderer.copy_persistent_oriented_layer_update_to_hidden(hidden, update)?;
+            Ok(PresentCopyStats { rows, bytes })
+        } else {
+            Ok(copy_arcade_list_update_to_hidden(hidden, renderer, update))
+        }
     }
 
     pub(super) fn cached_frame_view(&self) -> CachedFrameView<'_> {

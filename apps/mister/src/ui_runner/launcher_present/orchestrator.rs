@@ -682,7 +682,7 @@ impl PresentationAdapters<FpgaVblankLatchHiddenPresenter> for LivePresentationAd
                         hidden,
                         arcade_list_renderer,
                         update,
-                    );
+                    )?;
                     hidden_arcade_compose_us = started.elapsed().as_micros();
                     drop(arcade_pmu);
                 }
