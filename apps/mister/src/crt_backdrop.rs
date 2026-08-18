@@ -1276,19 +1276,22 @@ fn copy_rgb565_row_preserving(
     preserved_colors: &[Rgb565Pixel],
 ) {
     let width = destination.len().min(source.len());
-    let mut overlapping = None;
+    let mut first_overlap = None;
+    let mut second_overlap = None;
     let mut overlap_count = 0usize;
     for &(x0, y0, x1, y1) in protected_rects {
         if row >= y0 && row < y1 {
             overlap_count += 1;
-            if overlap_count == 1 {
-                overlapping = Some((x0, x1));
+            match overlap_count {
+                1 => first_overlap = Some((x0, x1)),
+                2 => second_overlap = Some((x0, x1)),
+                _ => {}
             }
         }
     }
     // Most backdrop rows do not intersect the protected chrome. Keep that
     // common path to one slice copy instead of walking every protected rect.
-    match (overlap_count, overlapping) {
+    match (overlap_count, first_overlap) {
         (0, _) => {
             destination[..width].copy_from_slice(&source[..width]);
             return;
@@ -1308,6 +1311,38 @@ fn copy_rgb565_row_preserving(
             return;
         }
         _ => {}
+    }
+    if let (2, Some(mut first), Some(mut second)) = (overlap_count, first_overlap, second_overlap) {
+        first.0 = first.0.min(width);
+        first.1 = first.1.min(width).max(first.0);
+        second.0 = second.0.min(width);
+        second.1 = second.1.min(width).max(second.0);
+        if second.0 < first.0 {
+            std::mem::swap(&mut first, &mut second);
+        }
+        destination[..first.0].copy_from_slice(&source[..first.0]);
+        copy_rgb565_preserving_colors(destination, source, first.0, first.1, preserved_colors);
+        if second.0 <= first.1 {
+            copy_rgb565_preserving_colors(
+                destination,
+                source,
+                first.1,
+                second.1.max(first.1),
+                preserved_colors,
+            );
+        } else {
+            destination[first.1..second.0].copy_from_slice(&source[first.1..second.0]);
+            copy_rgb565_preserving_colors(
+                destination,
+                source,
+                second.0,
+                second.1,
+                preserved_colors,
+            );
+        }
+        let end = first.1.max(second.1);
+        destination[end..width].copy_from_slice(&source[end..width]);
+        return;
     }
     if !preserved_colors.is_empty() {
         for index in 0..width {
@@ -1332,6 +1367,24 @@ fn copy_rgb565_row_preserving(
         cursor = cursor.max(protected_end);
     }
     destination[cursor..width].copy_from_slice(&source[cursor..width]);
+}
+
+#[inline(always)]
+fn copy_rgb565_preserving_colors(
+    destination: &mut [Rgb565Pixel],
+    source: &[Rgb565Pixel],
+    start: usize,
+    end: usize,
+    preserved_colors: &[Rgb565Pixel],
+) {
+    if preserved_colors.is_empty() {
+        return;
+    }
+    for index in start..end {
+        if !preserved_colors.contains(&destination[index]) {
+            destination[index] = source[index];
+        }
+    }
 }
 
 fn duration_us(duration: Duration) -> u64 {
@@ -2007,6 +2060,31 @@ mod tests {
         assert_eq!(destination[1], CRT_PRODUCT_HEADER_TEXT);
         assert_eq!(destination[2], CRT_PRODUCT_FOOTER_TEXT);
         assert_eq!(destination[3], source[3]);
+    }
+
+    #[test]
+    fn two_rotated_chrome_bands_preserve_only_text_pixels() {
+        let marker = Rgb565Pixel(0xf81f);
+        let source = [Rgb565Pixel(0x1234); 10];
+        let mut destination = [marker; 10];
+        destination[1] = CRT_PRODUCT_HEADER_TEXT;
+        destination[8] = CRT_PRODUCT_FOOTER_TEXT;
+
+        copy_rgb565_row_preserving(
+            &mut destination,
+            &source,
+            0,
+            &[(1, 0, 3, 1), (7, 0, 9, 1)],
+            CRT_PRODUCT_TEXT_COLORS,
+        );
+
+        assert_eq!(destination[1], CRT_PRODUCT_HEADER_TEXT);
+        assert_eq!(destination[8], CRT_PRODUCT_FOOTER_TEXT);
+        for (index, pixel) in destination.iter().enumerate() {
+            if !matches!(index, 1 | 8) {
+                assert_eq!(*pixel, source[index], "pixel {index}");
+            }
+        }
     }
 
     #[test]
