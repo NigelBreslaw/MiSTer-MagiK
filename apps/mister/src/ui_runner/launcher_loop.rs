@@ -10691,6 +10691,9 @@ pub(super) fn run_launcher_loop(
             pacing_trace,
         } = present_cycle;
         record_launcher_frame_phase!(LauncherFramePhase::FrameSubmitted);
+        if let Some(worker) = portrait_preview_compositor.as_ref() {
+            worker.release_queued();
+        }
         let readiness_source_evidence = presentation.readiness_source_evidence.clone();
         gui_profiling.record_latch(
             frames,

@@ -106,7 +106,7 @@ impl PortraitPreviewCompositor {
         })
     }
 
-    pub(super) fn submit(&mut self, request: PortraitPreviewRequest) {
+    pub(super) fn queue(&mut self, request: PortraitPreviewRequest) {
         if self.last_submitted == Some(request.key) {
             return;
         }
@@ -115,6 +115,9 @@ impl PortraitPreviewCompositor {
         if state.request.replace(request).is_some() {
             state.queue_replacements = state.queue_replacements.saturating_add(1);
         }
+    }
+
+    pub(super) fn release_queued(&self) {
         self.shared.ready.notify_one();
     }
 
@@ -336,14 +339,14 @@ mod tests {
             last_submitted: None,
         };
         let mut compositor = compositor;
-        compositor.submit(PortraitPreviewRequest::new(
+        compositor.queue(PortraitPreviewRequest::new(
             key(1),
             frame.clone(),
             PreviewTransitionEffect::Fade,
             1.0,
             false,
         ));
-        compositor.submit(PortraitPreviewRequest::new(
+        compositor.queue(PortraitPreviewRequest::new(
             key(2),
             frame,
             PreviewTransitionEffect::Fade,

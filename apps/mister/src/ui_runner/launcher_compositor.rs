@@ -348,7 +348,7 @@ impl<'a> LayerTarget<'a> {
                 || trace.active
                 || preview.presentation_requires_present();
             if needs_work {
-                worker.submit(PortraitPreviewRequest::new(
+                worker.queue(PortraitPreviewRequest::new(
                     key,
                     snapshot,
                     trace.effect,
