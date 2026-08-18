@@ -863,9 +863,9 @@ dependencies = [
 
 [[package]]
 name = "error-code"
-version = "3.3.2"
+version = "3.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dea2df4cf52843e0452895c455a1a2cfbb842a1e7329671acf418fdc53ed4c59"
+checksum = "0b5343afd4a8365a643ac588dab4cf234a190c7f6c88c9f6dd6ffe00837661b7"
 
 [[package]]
 name = "euclid"
@@ -2257,6 +2257,10 @@ name = "mister-magik-core"
 version = "0.1.0"
 
 [[package]]
+name = "mister-magik-framebuffer-scenes"
+version = "0.1.0"
+
+[[package]]
 name = "mister-magik-framebuffer-stream"
 version = "0.1.0"
 
@@ -2274,6 +2278,7 @@ dependencies = [
  "lz4_flex",
  "mister-magik-catalog",
  "mister-magik-core",
+ "mister-magik-framebuffer-scenes",
  "mister-magik-framebuffer-stream",
  "mister-magik-latch-contract",
  "mister-magik-scanout-contract",
@@ -4824,9 +4829,9 @@ dependencies = [
 
 [[package]]
 name = "zerovec-derive"
-version = "0.11.4"
+version = "0.11.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "47402523226a02bfe5230160dc3ccc089aa6f6f19e7fcbb4e6f824bbb1b4aa62"
+checksum = "9f212a141d820099d57ffafb9569be9617a6f27d3dc881fbee8fb56642f917a9"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -4884,9 +4889,9 @@ dependencies = [
 
 [[package]]
 name = "zvariant_utils"
-version = "4.0.0"
+version = "4.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "629d80ece222cad20fe0e8741be493c4ab166acf3b85341bdc2cdbcfd8f3c2d6"
+checksum = "6b84ebb462416c27cdb97f2e7f5f0ccc844da1fe2ecc7121e1b690b41318bf42"
 dependencies = [
  "proc-macro2",
  "quote",

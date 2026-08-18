@@ -283,9 +283,7 @@ impl<'a> LayerTarget<'a> {
                 mister_magik_perf_events::sampled_span("gui.custom.preview-rotation");
             let rows = self
                 .target
-                .compose_direct_preview_rect_mapped(rect, |x, y| {
-                    self.layout.logical_pixel_to_composition(x, y)
-                });
+                .compose_direct_preview_rect_oriented(rect, self.layout.output_layout());
             drop(rotation_pmu);
             return (
                 (rows > 0).then(|| {
@@ -314,9 +312,7 @@ impl<'a> LayerTarget<'a> {
                     mister_magik_perf_events::sampled_span("gui.custom.preview-rotation");
                 let rows = self
                     .target
-                    .compose_direct_preview_rect_mapped(rect, |x, y| {
-                        self.layout.logical_pixel_to_composition(x, y)
-                    });
+                    .compose_direct_preview_rect_oriented(rect, self.layout.output_layout());
                 drop(rotation_pmu);
                 (rows > 0).then(|| {
                     RawPreviewPresent::Cached(self.layout.logical_rect_to_composition(rect))

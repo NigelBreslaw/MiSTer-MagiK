@@ -3,6 +3,7 @@
 
 pub use crate::framebuffer::damage::{DirtyRect, DirtyRectList, subtract_dirty_rects};
 use crate::framebuffer::format::production_label;
+use mister_magik_framebuffer_scenes::{Rgb565OutputLayout, Rgb565SurfaceMut};
 use slint::platform::software_renderer::{PhysicalRegion, Rgb565Pixel, SoftwareRenderer};
 use std::sync::OnceLock;
 
@@ -445,6 +446,37 @@ impl UiFrameTarget {
         rect.rows()
     }
 
+    pub fn compose_direct_preview_rect_oriented(
+        &mut self,
+        rect: DirtyRect,
+        output: Rgb565OutputLayout,
+    ) -> u32 {
+        let Some(backing_rect) = self.direct_preview_rect else {
+            return 0;
+        };
+        if !backing_rect.contains(rect) {
+            return 0;
+        }
+        let source_stride = backing_rect.width();
+        let source_x = rect.x0 - backing_rect.x0;
+        let source_y = rect.y0 - backing_rect.y0;
+        let copied = Rgb565SurfaceMut::new(&mut self.cached, output)
+            .ok()
+            .is_some_and(|mut surface| {
+                surface.copy_rect_strided(
+                    rect.x0,
+                    rect.y0,
+                    rect.width(),
+                    rect.height(),
+                    &self.direct_preview,
+                    source_stride,
+                    source_x,
+                    source_y,
+                )
+            });
+        copied.then_some(rect.rows()).unwrap_or(0)
+    }
+
     pub fn cached_frame_view(&self) -> CachedFrameView<'_> {
         let height = if self.cached_stride == 0 {
             0
@@ -601,6 +633,39 @@ mod tests {
 
         assert_eq!(
             target.compose_direct_preview_rect_mapped(preview_rect, |x, y| (y, 2 - x)),
+            2
+        );
+        assert_eq!(target.cached_565()[2 * 4], Rgb565Pixel(1));
+        assert_eq!(target.cached_565()[1 * 4], Rgb565Pixel(2));
+        assert_eq!(target.cached_565()[0], Rgb565Pixel(3));
+        assert_eq!(target.cached_565()[2 * 4 + 1], Rgb565Pixel(4));
+        assert_eq!(target.cached_565()[1 * 4 + 1], Rgb565Pixel(5));
+        assert_eq!(target.cached_565()[1], Rgb565Pixel(6));
+    }
+
+    #[test]
+    fn direct_preview_can_be_composed_through_an_oriented_layout() {
+        let mut target = UiFrameTarget::cached(FramebufferTargetGeometry::new(4, 3));
+        let preview_rect = rect(0, 0, 3, 2);
+        let (preview, _) = target.direct_preview_565_rect_mut(preview_rect);
+        preview.copy_from_slice(&[
+            Rgb565Pixel(1),
+            Rgb565Pixel(2),
+            Rgb565Pixel(3),
+            Rgb565Pixel(4),
+            Rgb565Pixel(5),
+            Rgb565Pixel(6),
+        ]);
+        let output = Rgb565OutputLayout::new(
+            3,
+            2,
+            4,
+            mister_magik_framebuffer_scenes::OutputRotation::Clockwise90,
+        )
+        .unwrap();
+
+        assert_eq!(
+            target.compose_direct_preview_rect_oriented(preview_rect, output),
             2
         );
         assert_eq!(target.cached_565()[2 * 4], Rgb565Pixel(1));
