@@ -50,6 +50,27 @@ pub(super) struct LayerTarget<'a> {
     drawing_ui: UiDisplay,
 }
 
+fn oriented_preview_cache_token(
+    presentation_generation: u64,
+    transition_id: u64,
+    trace: PreviewTransitionTrace,
+) -> u64 {
+    let mut token = presentation_generation
+        .rotate_left(17)
+        .wrapping_add(transition_id.rotate_right(11));
+    for byte in trace.effect.label().bytes() {
+        token = token.rotate_left(5) ^ u64::from(byte);
+    }
+    if trace.active {
+        token = token
+            .wrapping_mul(0x9e37_79b9_7f4a_7c15)
+            .wrapping_add(u64::from(trace.fade.alpha_bucket));
+    } else {
+        token ^= 0xa5a5_5a5a_3c3c_c3c3;
+    }
+    token
+}
+
 impl<'a> LayerTarget<'a> {
     pub(super) fn new(target: &'a mut UiFrameTarget, ui: &'a UiDisplay) -> Self {
         Self {
@@ -266,6 +287,14 @@ impl<'a> LayerTarget<'a> {
         full_frame_present: bool,
     ) -> (Option<RawPreviewPresent>, PreviewTransitionTrace) {
         let drawing_ui = &self.drawing_ui;
+        let raw_dirty_before = preview.raw_dirty();
+        let slint_touched_preview = full_frame_present
+            || slint_dirty.is_some_and(|rect| {
+                rect.intersection(super::raw565_preview_renderer::preview_screen_rect(
+                    drawing_ui,
+                ))
+                .is_some()
+            });
         let (present, trace) = blit_raw_preview_if_needed(
             self.target,
             drawing_ui,
@@ -279,11 +308,23 @@ impl<'a> LayerTarget<'a> {
         if self.layout.is_portrait()
             && let Some(RawPreviewPresent::Direct(rect)) = present
         {
+            let transition_id = preview
+                .raw_transition_frame()
+                .map(|frame| frame.transition_id)
+                .unwrap_or(0);
+            let token = oriented_preview_cache_token(
+                preview.presentation_generation(),
+                transition_id,
+                trace,
+            );
             let rotation_pmu =
                 mister_magik_perf_events::sampled_span("gui.custom.preview-rotation");
-            let rows = self
-                .target
-                .compose_direct_preview_rect_oriented(rect, self.layout.output_layout());
+            let rows = self.target.compose_direct_preview_rect_oriented_cached(
+                rect,
+                self.layout.output_layout(),
+                token,
+                raw_dirty_before || slint_touched_preview,
+            );
             drop(rotation_pmu);
             return (
                 (rows > 0).then(|| {

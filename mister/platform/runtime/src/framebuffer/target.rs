@@ -312,6 +312,14 @@ pub struct UiFrameTarget {
     cached_stride: usize,
     direct_preview: Vec<Rgb565Pixel>,
     direct_preview_rect: Option<DirtyRect>,
+    oriented_preview_cache: Option<OrientedPreviewCacheKey>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct OrientedPreviewCacheKey {
+    token: u64,
+    rect: DirtyRect,
+    output: Rgb565OutputLayout,
 }
 
 impl UiFrameTarget {
@@ -321,6 +329,7 @@ impl UiFrameTarget {
             cached_stride: geometry.render_w(),
             direct_preview: Vec::new(),
             direct_preview_rect: None,
+            oriented_preview_cache: None,
         }
     }
 
@@ -388,11 +397,18 @@ impl UiFrameTarget {
     pub fn direct_preview_565_rect_mut(&mut self, rect: DirtyRect) -> (&mut [Rgb565Pixel], usize) {
         let stride = rect.width();
         let len = stride * (rect.y1 - rect.y0);
+        if self.direct_preview_rect != Some(rect) {
+            self.oriented_preview_cache = None;
+        }
         if self.direct_preview.len() != len {
             self.direct_preview.resize(len, Rgb565Pixel(0));
         }
         self.direct_preview_rect = Some(rect);
         (&mut self.direct_preview, stride)
+    }
+
+    pub fn invalidate_oriented_preview_cache(&mut self) {
+        self.oriented_preview_cache = None;
     }
 
     pub fn compose_direct_preview_rect(&mut self, rect: DirtyRect) -> u32 {
@@ -451,10 +467,28 @@ impl UiFrameTarget {
         rect: DirtyRect,
         output: Rgb565OutputLayout,
     ) -> u32 {
+        self.compose_direct_preview_rect_oriented_cached(rect, output, 0, true)
+    }
+
+    pub fn compose_direct_preview_rect_oriented_cached(
+        &mut self,
+        rect: DirtyRect,
+        output: Rgb565OutputLayout,
+        token: u64,
+        force: bool,
+    ) -> u32 {
         let Some(backing_rect) = self.direct_preview_rect else {
             return 0;
         };
         if !backing_rect.contains(rect) {
+            return 0;
+        }
+        let key = OrientedPreviewCacheKey {
+            token,
+            rect,
+            output,
+        };
+        if !force && self.oriented_preview_cache == Some(key) {
             return 0;
         }
         let source_stride = backing_rect.width();
@@ -474,7 +508,12 @@ impl UiFrameTarget {
                     source_y,
                 )
             });
-        copied.then_some(rect.rows()).unwrap_or(0)
+        if copied {
+            self.oriented_preview_cache = Some(key);
+            rect.rows()
+        } else {
+            0
+        }
     }
 
     pub fn cached_frame_view(&self) -> CachedFrameView<'_> {
@@ -674,6 +713,43 @@ mod tests {
         assert_eq!(target.cached_565()[2 * 4 + 1], Rgb565Pixel(4));
         assert_eq!(target.cached_565()[1 * 4 + 1], Rgb565Pixel(5));
         assert_eq!(target.cached_565()[1], Rgb565Pixel(6));
+    }
+
+    #[test]
+    fn oriented_preview_cache_skips_unchanged_generation_and_accepts_forced_repaint() {
+        let mut target = UiFrameTarget::cached(FramebufferTargetGeometry::new(4, 3));
+        let preview_rect = rect(0, 0, 3, 2);
+        target
+            .direct_preview_565_rect_mut(preview_rect)
+            .0
+            .copy_from_slice(&[
+                Rgb565Pixel(1),
+                Rgb565Pixel(2),
+                Rgb565Pixel(3),
+                Rgb565Pixel(4),
+                Rgb565Pixel(5),
+                Rgb565Pixel(6),
+            ]);
+        let output = Rgb565OutputLayout::new(
+            3,
+            2,
+            4,
+            mister_magik_framebuffer_scenes::OutputRotation::Clockwise90,
+        )
+        .unwrap();
+
+        assert_eq!(
+            target.compose_direct_preview_rect_oriented_cached(preview_rect, output, 7, true,),
+            2
+        );
+        assert_eq!(
+            target.compose_direct_preview_rect_oriented_cached(preview_rect, output, 7, false,),
+            0
+        );
+        assert_eq!(
+            target.compose_direct_preview_rect_oriented_cached(preview_rect, output, 7, true,),
+            2
+        );
     }
 
     #[test]
