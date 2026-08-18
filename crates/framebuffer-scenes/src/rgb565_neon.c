@@ -5,40 +5,47 @@
 #include <stddef.h>
 #include <stdint.h>
 
+static inline void transpose4(uint16x4_t rows[4], uint16x4_t columns[4]) {
+    const uint16x4x2_t t0 = vtrn_u16(rows[0], rows[1]);
+    const uint16x4x2_t t1 = vtrn_u16(rows[2], rows[3]);
+    const uint32x2x2_t t2 = vtrn_u32(
+        vreinterpret_u32_u16(t0.val[0]), vreinterpret_u32_u16(t1.val[0]));
+    const uint32x2x2_t t3 = vtrn_u32(
+        vreinterpret_u32_u16(t0.val[1]), vreinterpret_u32_u16(t1.val[1]));
+    columns[0] = vreinterpret_u16_u32(t2.val[0]);
+    columns[1] = vreinterpret_u16_u32(t3.val[0]);
+    columns[2] = vreinterpret_u16_u32(t2.val[1]);
+    columns[3] = vreinterpret_u16_u32(t3.val[1]);
+}
+
 static inline void transpose8(uint16x8_t rows[8], uint16x8_t columns[8]) {
-    const uint16x8x2_t t0 = vtrnq_u16(rows[0], rows[1]);
-    const uint16x8x2_t t1 = vtrnq_u16(rows[2], rows[3]);
-    const uint16x8x2_t t2 = vtrnq_u16(rows[4], rows[5]);
-    const uint16x8x2_t t3 = vtrnq_u16(rows[6], rows[7]);
-    const uint32x4x2_t t4 = vtrnq_u32(
-        vreinterpretq_u32_u16(t0.val[0]), vreinterpretq_u32_u16(t1.val[0]));
-    const uint32x4x2_t t5 = vtrnq_u32(
-        vreinterpretq_u32_u16(t0.val[1]), vreinterpretq_u32_u16(t1.val[1]));
-    const uint32x4x2_t t6 = vtrnq_u32(
-        vreinterpretq_u32_u16(t2.val[0]), vreinterpretq_u32_u16(t3.val[0]));
-    const uint32x4x2_t t7 = vtrnq_u32(
-        vreinterpretq_u32_u16(t2.val[1]), vreinterpretq_u32_u16(t3.val[1]));
-    const uint64x2x2_t t8 = vtrnq_u64(
-        vreinterpretq_u64_u32(t4.val[0]), vreinterpretq_u64_u32(t6.val[0]));
-    const uint64x2x2_t t9 = vtrnq_u64(
-        vreinterpretq_u64_u32(t4.val[1]), vreinterpretq_u64_u32(t6.val[1]));
-    const uint64x2x2_t t10 = vtrnq_u64(
-        vreinterpretq_u64_u32(t5.val[0]), vreinterpretq_u64_u32(t7.val[0]));
-    const uint64x2x2_t t11 = vtrnq_u64(
-        vreinterpretq_u64_u32(t5.val[1]), vreinterpretq_u64_u32(t7.val[1]));
-    columns[0] = vreinterpretq_u16_u64(t8.val[0]);
-    columns[1] = vreinterpretq_u16_u64(t9.val[0]);
-    columns[2] = vreinterpretq_u16_u64(t8.val[1]);
-    columns[3] = vreinterpretq_u16_u64(t9.val[1]);
-    columns[4] = vreinterpretq_u16_u64(t10.val[0]);
-    columns[5] = vreinterpretq_u16_u64(t11.val[0]);
-    columns[6] = vreinterpretq_u16_u64(t10.val[1]);
-    columns[7] = vreinterpretq_u16_u64(t11.val[1]);
+    uint16x4_t top_rows[4];
+    uint16x4_t bottom_rows[4];
+    uint16x4_t top_columns[4];
+    uint16x4_t bottom_columns[4];
+    for (size_t row = 0; row < 4; ++row) {
+        top_rows[row] = vget_low_u16(rows[row]);
+        bottom_rows[row] = vget_low_u16(rows[row + 4]);
+    }
+    transpose4(top_rows, top_columns);
+    transpose4(bottom_rows, bottom_columns);
+    for (size_t column = 0; column < 4; ++column) {
+        columns[column] = vcombine_u16(top_columns[column], bottom_columns[column]);
+    }
+    for (size_t row = 0; row < 4; ++row) {
+        top_rows[row] = vget_high_u16(rows[row]);
+        bottom_rows[row] = vget_high_u16(rows[row + 4]);
+    }
+    transpose4(top_rows, top_columns);
+    transpose4(bottom_rows, bottom_columns);
+    for (size_t column = 0; column < 4; ++column) {
+        columns[column + 4] = vcombine_u16(top_columns[column], bottom_columns[column]);
+    }
 }
 
 static inline uint16x8_t reverse8(uint16x8_t value) {
     const uint16x8_t reversed = vrev64q_u16(value);
-    return vcombine_u16(vget_high(reversed), vget_low(reversed));
+    return vcombine_u16(vget_high_u16(reversed), vget_low_u16(reversed));
 }
 
 static inline void rotate_scalar(
@@ -154,10 +161,10 @@ void mister_magik_rgb565_rotate_counter_clockwise(
 
 static inline uint16x8_t blend8(uint16x8_t from, uint16x8_t to, uint16_t alpha) {
     const uint16_t inverse = (uint16_t)(32u - alpha);
-    const uint16x4_t from_lo = vget_low(from);
-    const uint16x4_t from_hi = vget_high(from);
-    const uint16x4_t to_lo = vget_low(to);
-    const uint16x4_t to_hi = vget_high(to);
+    const uint16x4_t from_lo = vget_low_u16(from);
+    const uint16x4_t from_hi = vget_high_u16(from);
+    const uint16x4_t to_lo = vget_low_u16(to);
+    const uint16x4_t to_hi = vget_high_u16(to);
     const uint16x4_t red_blue_mask = vdup_n_u16(0xf81f);
     const uint16x4_t green_mask = vdup_n_u16(0x07e0);
     const uint16x4_t lo = vorr_u16(
