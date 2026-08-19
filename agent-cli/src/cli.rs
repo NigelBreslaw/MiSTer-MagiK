@@ -881,6 +881,7 @@ mod tests {
             "launcher-response",
             "launcher-response-attribution",
             "gui-frame-attribution",
+            "scheduler-trace",
             "arcade-velocity-scroll",
             "arcade-velocity-scroll-attribution",
             "transition-streamline",

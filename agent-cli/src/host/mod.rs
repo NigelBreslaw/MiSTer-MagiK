@@ -36,9 +36,11 @@ mod latch_v5_qualification;
 mod launcher_automation;
 mod live_particles;
 mod media;
+mod performance_attribution;
 mod platform_deploy;
 mod remote;
 mod startup_particles;
+mod tracefs;
 
 pub(crate) use startup_particles::SceneLabRequest;
 
@@ -717,6 +719,15 @@ impl NativeDevice {
         output_dir: &Path,
     ) -> std::result::Result<String, DeviceFailure> {
         self.benchmark_profile(|config| profile_installed_gui_frame_attribution(config, output_dir))
+    }
+
+    pub(crate) fn profile_scheduler_trace(
+        &mut self,
+        output_dir: &Path,
+    ) -> std::result::Result<String, DeviceFailure> {
+        self.benchmark_profile(|config| {
+            performance_attribution::profile_installed_scheduler_trace(config, output_dir)
+        })
     }
 
     pub(crate) fn profile_arcade_velocity_scroll(

@@ -33,6 +33,7 @@ Supported scenarios:
 - `launcher-response`
 - `launcher-response-attribution`
 - `gui-frame-attribution`
+- `scheduler-trace`
 - `arcade-velocity-scroll`
 - `arcade-velocity-scroll-attribution`
 - `system-entry-critical-streamline`
@@ -209,6 +210,15 @@ Settings through Home pan right/left and held Arcade scroll to a terminal
 preview and confirmed settled Arcade frame. Artifact validity is independent
 from control-arm product quality; every arm restores the ordinary launcher and
 the scenario restores the original confirmed display mode.
+
+`scheduler-trace` runs that same fixed 1280x720p60 GUI route inside an isolated,
+bounded native tracefs instance. It records scheduler switches, wakeups,
+migrations, IRQs, and softirqs without modifying the global tracer or requiring
+an uploaded target binary. The summary attributes on-CPU time, runnable delay,
+preemption, CPU placement, dual-core overlap, and interrupt cost. Buffer
+overruns, missing core events, identity drift, or incomplete cleanup invalidate
+the artifact. The trace remains diagnostic-only; the unprofiled route owns
+product-quality conclusions.
 
 `input-latency-lab` is the fixed diagnostic experiment for attributing
 intermittent launcher response, not a release qualification. It switches the
