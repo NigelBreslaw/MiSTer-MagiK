@@ -58,6 +58,7 @@ enum BenchmarkProfile {
     LauncherResponseAttribution,
     GuiFrameAttribution,
     SchedulerTrace,
+    StorageAttribution,
     ArcadeVelocityScroll,
     ArcadeVelocityScrollAttribution,
     TransitionStreamline,
@@ -139,6 +140,7 @@ impl BenchmarkDevice for DeviceClient {
                 device.profile_gui_frame_attribution(&output_dir)
             }
             BenchmarkProfile::SchedulerTrace => device.profile_scheduler_trace(&output_dir),
+            BenchmarkProfile::StorageAttribution => device.profile_storage_attribution(&output_dir),
             BenchmarkProfile::ArcadeVelocityScroll => {
                 device.profile_arcade_velocity_scroll(&output_dir)
             }
@@ -359,6 +361,15 @@ fn require_clean_installed_commit(
             BenchmarkProfile::SchedulerTrace,
             "scheduler-trace",
             "mister-magik-scheduler-trace-v1",
+        ),
+        BenchmarkScenario::StorageAttribution => execute_attribution_capture(
+            &mut device,
+            manifest,
+            output_dir,
+            reporter,
+            BenchmarkProfile::StorageAttribution,
+            "storage-attribution",
+            "mister-magik-storage-attribution-v1",
         ),
         BenchmarkScenario::ArcadeVelocityScroll => {
             execute_arcade_velocity_scroll(&mut device, manifest, output_dir, reporter)
@@ -802,6 +813,7 @@ fn particle_scene_lab_command(scenario: BenchmarkScenario) -> Option<&'static st
         | BenchmarkScenario::LauncherResponseAttribution
         | BenchmarkScenario::GuiFrameAttribution
         | BenchmarkScenario::SchedulerTrace
+        | BenchmarkScenario::StorageAttribution
         | BenchmarkScenario::ArcadeVelocityScroll
         | BenchmarkScenario::ArcadeVelocityScrollAttribution
         | BenchmarkScenario::TransitionStreamline

@@ -730,6 +730,15 @@ impl NativeDevice {
         })
     }
 
+    pub(crate) fn profile_storage_attribution(
+        &mut self,
+        output_dir: &Path,
+    ) -> std::result::Result<String, DeviceFailure> {
+        self.benchmark_profile(|config| {
+            performance_attribution::profile_installed_storage_attribution(config, output_dir)
+        })
+    }
+
     pub(crate) fn profile_arcade_velocity_scroll(
         &mut self,
         output_dir: &Path,

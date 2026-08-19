@@ -34,6 +34,7 @@ Supported scenarios:
 - `launcher-response-attribution`
 - `gui-frame-attribution`
 - `scheduler-trace`
+- `storage-attribution`
 - `arcade-velocity-scroll`
 - `arcade-velocity-scroll-attribution`
 - `system-entry-critical-streamline`
@@ -219,6 +220,16 @@ preemption, CPU placement, dual-core overlap, and interrupt cost. Buffer
 overruns, missing core events, identity drift, or incomplete cleanup invalidate
 the artifact. The trace remains diagnostic-only; the unprofiled route owns
 product-quality conclusions.
+
+`storage-attribution` runs the production `library-refresh` workload against
+the normal configured sources while redirecting every writable catalog path to
+the fixed Dev-only `storage-attribution-benchmark` directory on `/media/fat`.
+It combines process-I/O samples, backing-MMC block statistics, block tracepoints,
+and available metadata/sync syscall tracepoints. The workflow caps the isolated
+output at 512 MiB and 20 minutes, validates the generated catalog, removes the
+exact benchmark root on every path, and proves that the installed identity and
+production catalog registry did not change. It is diagnostic attribution, not
+a storage or product-quality gate.
 
 `input-latency-lab` is the fixed diagnostic experiment for attributing
 intermittent launcher response, not a release qualification. It switches the

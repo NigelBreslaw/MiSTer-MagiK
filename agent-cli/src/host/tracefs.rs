@@ -2,16 +2,16 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use super::*;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 const TRACEFS_MOUNT: &str = "/sys/kernel/tracing";
-const TRACE_BUFFER_KB: u64 = 4_096;
-const TRACE_MAX_BYTES: u64 = 32 * 1024 * 1024;
+const TRACE_MAX_BYTES: u64 = 64 * 1024 * 1024;
 
 pub(super) const SCHEDULER_TRACE_SPEC: TracefsCaptureSpec = TracefsCaptureSpec {
     label: "scheduler trace",
     instance: "mister-magik-scheduler",
     remote_root: "/tmp/mister-magik/scheduler-trace",
+    buffer_kb: 4_096,
     required_events: &[
         "sched:sched_switch",
         "sched:sched_wakeup",
@@ -32,11 +32,43 @@ pub(super) const SCHEDULER_TRACE_SPEC: TracefsCaptureSpec = TracefsCaptureSpec {
     ],
 };
 
+pub(super) const STORAGE_TRACE_SPEC: TracefsCaptureSpec = TracefsCaptureSpec {
+    label: "storage attribution trace",
+    instance: "mister-magik-storage",
+    remote_root: "/tmp/mister-magik/storage-attribution",
+    buffer_kb: 16_384,
+    required_events: &[
+        "block:block_rq_issue",
+        "block:block_rq_complete",
+        "sched:sched_process_fork",
+        "sched:sched_process_exit",
+    ],
+    optional_events: &[
+        "syscalls:sys_enter_openat",
+        "syscalls:sys_exit_openat",
+        "syscalls:sys_enter_getdents64",
+        "syscalls:sys_exit_getdents64",
+        "syscalls:sys_enter_fsync",
+        "syscalls:sys_exit_fsync",
+        "syscalls:sys_enter_fdatasync",
+        "syscalls:sys_exit_fdatasync",
+        "syscalls:sys_enter_renameat",
+        "syscalls:sys_exit_renameat",
+        "syscalls:sys_enter_renameat2",
+        "syscalls:sys_exit_renameat2",
+        "syscalls:sys_enter_mkdirat",
+        "syscalls:sys_exit_mkdirat",
+        "syscalls:sys_enter_unlinkat",
+        "syscalls:sys_exit_unlinkat",
+    ],
+};
+
 #[derive(Clone, Copy)]
 pub(super) struct TracefsCaptureSpec {
     pub(super) label: &'static str,
     pub(super) instance: &'static str,
     pub(super) remote_root: &'static str,
+    pub(super) buffer_kb: u64,
     pub(super) required_events: &'static [&'static str],
     pub(super) optional_events: &'static [&'static str],
 }
@@ -203,7 +235,7 @@ fn tracefs_prepare_command(spec: TracefsCaptureSpec) -> String {
         capabilities = capabilities,
         checks = checks,
         enables = enables,
-        buffer_kb = TRACE_BUFFER_KB,
+        buffer_kb = spec.buffer_kb,
     )
 }
 
@@ -250,6 +282,7 @@ fn tracefs_cleanup_command(spec: TracefsCaptureSpec) -> String {
 struct ParsedEvent {
     timestamp_ns: u64,
     cpu: usize,
+    context_pid: u32,
     name: String,
     payload: String,
 }
@@ -467,8 +500,108 @@ pub(super) fn summarize_scheduler_trace(
     ))
 }
 
+pub(super) fn summarize_storage_trace(trace: &str, stats: &str, root_pid: u32) -> Result<Value> {
+    if root_pid == 0 {
+        return Err("storage trace root PID is zero".into());
+    }
+    let mut events = trace.lines().filter_map(parse_event).collect::<Vec<_>>();
+    if events.is_empty() {
+        return Err("storage trace contains no parseable events".into());
+    }
+    events.sort_by_key(|event| (event.timestamp_ns, event.cpu));
+    let start_ns = events
+        .iter()
+        .find(|event| {
+            event.name == "tracing_mark_write" && event.payload.contains("mister-magik-start")
+        })
+        .map(|event| event.timestamp_ns)
+        .unwrap_or(events[0].timestamp_ns);
+    let end_ns = events
+        .iter()
+        .rev()
+        .find(|event| {
+            event.name == "tracing_mark_write" && event.payload.contains("mister-magik-end")
+        })
+        .map(|event| event.timestamp_ns)
+        .unwrap_or_else(|| events.last().expect("non-empty").timestamp_ns);
+    if end_ns <= start_ns {
+        return Err("storage trace timestamps are not increasing".into());
+    }
+    let overruns = trace_overruns(stats)?;
+    if overruns != 0 {
+        return Err(format!("storage trace reported {overruns} buffer overruns").into());
+    }
+    let mut descendants = BTreeSet::from([root_pid]);
+    let mut open = HashMap::<(u32, String), u64>::new();
+    let mut syscalls = BTreeMap::<String, Vec<u64>>::new();
+    let mut block_issue = 0u64;
+    let mut block_complete = 0u64;
+    for event in events
+        .iter()
+        .filter(|event| event.timestamp_ns >= start_ns && event.timestamp_ns <= end_ns)
+    {
+        if event.name == "sched_process_fork" {
+            let parent = field_u32(&event.payload, "parent_pid").unwrap_or(0);
+            let child = field_u32(&event.payload, "child_pid").unwrap_or(0);
+            if descendants.contains(&parent) && child != 0 {
+                descendants.insert(child);
+            }
+            continue;
+        }
+        match event.name.as_str() {
+            "block_rq_issue" => block_issue += 1,
+            "block_rq_complete" => block_complete += 1,
+            name if name.starts_with("sys_enter_") && descendants.contains(&event.context_pid) => {
+                let syscall = name.trim_start_matches("sys_enter_").to_owned();
+                open.insert((event.context_pid, syscall), event.timestamp_ns);
+            }
+            name if name.starts_with("sys_exit_") && descendants.contains(&event.context_pid) => {
+                let syscall = name.trim_start_matches("sys_exit_").to_owned();
+                if let Some(started) = open.remove(&(event.context_pid, syscall.clone())) {
+                    syscalls
+                        .entry(syscall)
+                        .or_default()
+                        .push(event.timestamp_ns.saturating_sub(started));
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut syscall_rows = syscalls.into_iter().collect::<Vec<_>>();
+    for (_, durations) in &mut syscall_rows {
+        durations.sort_unstable();
+    }
+    syscall_rows
+        .sort_by_key(|(_, durations)| std::cmp::Reverse(durations.iter().copied().sum::<u64>()));
+    Ok(json!({
+        "duration_us": (end_ns - start_ns) / 1_000,
+        "event_count": events.len(),
+        "trace_overruns": overruns,
+        "root_pid": root_pid,
+        "descendant_tids": descendants,
+        "block": {
+            "request_issues": block_issue,
+            "request_completions": block_complete,
+        },
+        "syscalls": syscall_rows.into_iter().map(|(name, durations)| {
+            let total_ns = durations.iter().sum::<u64>();
+            json!({
+                "name": name,
+                "count": durations.len(),
+                "total_us": total_ns / 1_000,
+                "median_us": percentile(&durations, 50) / 1_000,
+                "p95_us": percentile(&durations, 95) / 1_000,
+                "p99_us": percentile(&durations, 99) / 1_000,
+                "max_us": durations.last().copied().unwrap_or(0) / 1_000,
+            })
+        }).collect::<Vec<_>>(),
+    }))
+}
+
 fn parse_event(line: &str) -> Option<ParsedEvent> {
     let open = line.find('[')?;
+    let context = line[..open].trim().split_whitespace().last()?;
+    let context_pid = context.rsplit_once('-')?.1.parse::<u32>().ok()?;
     let close = line[open + 1..].find(']')? + open + 1;
     let cpu = line[open + 1..close].trim().parse::<usize>().ok()?;
     let remainder = &line[close + 1..];
@@ -481,6 +614,7 @@ fn parse_event(line: &str) -> Option<ParsedEvent> {
     Some(ParsedEvent {
         timestamp_ns,
         cpu,
+        context_pid,
         name: name.trim().to_owned(),
         payload: payload.trim().to_owned(),
     })
@@ -700,6 +834,28 @@ mod tests {
         assert!(summarize_scheduler_trace("", "overrun: 0").is_err());
         let trace = "a-1 [000] .... 1.000000000: sched_switch: prev_comm=a prev_pid=1 prev_prio=1 prev_state=R ==> next_comm=b next_pid=2 next_prio=1\na-1 [000] .... 1.100000000: sched_switch: prev_comm=b prev_pid=2 prev_prio=1 prev_state=S ==> next_comm=a next_pid=1 next_prio=1\n";
         assert!(summarize_scheduler_trace(trace, "overrun: 1").is_err());
+    }
+
+    #[test]
+    fn storage_parser_tracks_descendant_syscalls_and_block_requests() {
+        let trace = r#"
+ marker-1 [000] .... 20.000000000: tracing_mark_write: mister-magik-start
+ app-40 [000] .... 20.001000000: sched_process_fork: comm=app pid=40 child_comm=worker child_pid=41
+ worker-41 [001] .... 20.002000000: sys_enter_fsync: fd=7
+ mmcqd-8 [000] .... 20.002500000: block_rq_issue: 179,0 W 0 () 8 + 8 [worker]
+ mmcqd-8 [000] .... 20.003000000: block_rq_complete: 179,0 W () 8 + 8 [0]
+ worker-41 [001] .... 20.004000000: sys_exit_fsync: 0x0
+ other-99 [000] .... 20.005000000: sys_enter_read: fd=3
+ other-99 [000] .... 20.006000000: sys_exit_read: 4
+ marker-1 [000] .... 20.007000000: tracing_mark_write: mister-magik-end
+"#;
+        let summary =
+            summarize_storage_trace(trace, "overrun: 0\ncommit overrun: 0\n", 40).unwrap();
+        assert_eq!(summary["block"]["request_issues"], 1);
+        assert_eq!(summary["block"]["request_completions"], 1);
+        assert_eq!(summary["syscalls"].as_array().map(Vec::len), Some(1));
+        assert_eq!(summary["syscalls"][0]["name"], "fsync");
+        assert_eq!(summary["syscalls"][0]["max_us"], 2_000);
     }
 
     #[test]
