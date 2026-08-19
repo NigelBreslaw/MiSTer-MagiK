@@ -12,6 +12,7 @@ use mister_magik_catalog::{
     arcade_catalog::{self, ArcadeCatalog},
     catalog_stamp, catalog_summary,
 };
+use serde_json::json;
 use std::fs::OpenOptions;
 use std::os::fd::AsRawFd;
 use std::path::Path;
