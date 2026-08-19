@@ -2049,7 +2049,7 @@ fn execute_catalog_build_rebuild(
     reporter.emit(
         EventKind::Progress,
         "profile",
-        "benchmarking bounded real Arcade and SNES catalog build/rebuild",
+        "benchmarking bounded real Arcade, SNES, and C64 catalog build/rebuild",
         Some(35),
     )?;
     let detail = device.profile(BenchmarkProfile::CatalogBuildRebuild, output_dir.clone())?;
@@ -2072,11 +2072,11 @@ fn execute_catalog_build_rebuild(
 
 fn evaluate_catalog_build_rebuild_summary(summary: &Value) -> AgentResult<()> {
     if summary.get("schema").and_then(Value::as_str)
-        != Some("mister-magik-catalog-build-rebuild-v1")
+        != Some("mister-magik-catalog-build-rebuild-v2")
         || summary.get("scenario").and_then(Value::as_str) != Some("catalog-build-rebuild")
         || summary.get("status").and_then(Value::as_str) != Some("passed")
     {
-        return Err("catalog build/rebuild benchmark summary is not a passing v1 report".into());
+        return Err("catalog build/rebuild benchmark summary is not a passing v2 report".into());
     }
     let samples = summary
         .get("samples")
@@ -2088,6 +2088,20 @@ fn evaluate_catalog_build_rebuild_summary(summary: &Value) -> AgentResult<()> {
             samples.len()
         )
         .into());
+    }
+    if summary
+        .pointer("/configuration/unmeasured_warmups")
+        .and_then(Value::as_u64)
+        != Some(1)
+        || summary
+            .pointer("/production_registry/unchanged")
+            .and_then(Value::as_bool)
+            != Some(true)
+    {
+        return Err(
+            "catalog build/rebuild benchmark lacks warm-up or registry preservation evidence"
+                .into(),
+        );
     }
     if samples.iter().any(|sample| {
         sample.get("status").and_then(Value::as_str) != Some("passed")
@@ -2751,9 +2765,11 @@ mod tests {
             })
         };
         let passing = json!({
-            "schema": "mister-magik-catalog-build-rebuild-v1",
+            "schema": "mister-magik-catalog-build-rebuild-v2",
             "scenario": "catalog-build-rebuild",
             "status": "passed",
+            "configuration": {"unmeasured_warmups": 1},
+            "production_registry": {"unchanged": true},
             "samples": [sample(), sample(), sample()],
         });
         assert!(evaluate_catalog_build_rebuild_summary(&passing).is_ok());

@@ -5264,6 +5264,7 @@ const CATALOG_BUILD_REBUILD_REMOTE_DIR: &str =
 const CATALOG_BUILD_REBUILD_SOURCE_DIR: &str = "/tmp/mister-magik/catalog-build-rebuild-source";
 const CATALOG_BUILD_REBUILD_ARCADE_ROOT: &str = "/media/fat/_Arcade";
 const CATALOG_BUILD_REBUILD_SNES_ROOT: &str = "/media/fat/games/SNES";
+const CATALOG_BUILD_REBUILD_C64_ROOT: &str = "/media/fat/games/C64";
 const CATALOG_BUILD_REBUILD_SAMPLES: usize = 3;
 const SYSTEM_ENTRY_TRACE_REMOTE: &str = "/tmp/mister-magik/system-entry.tsv";
 const SYSTEM_ENTRY_PROFILE_REMOTE: &str = "/tmp/mister-magik/system-entry-profile.json";
@@ -15233,12 +15234,21 @@ fn profile_installed_catalog_build_rebuild(
         .ok_or("device boot id is unavailable")?
         .trim()
         .to_string();
+    let card_identity = remote_read(&session, "/sys/block/mmcblk0/device/cid")
+        .map(|identity| identity.trim().to_string());
+    let production_registry_before = catalog_production_registry_identity(&session)?;
     fs::create_dir_all(output_dir)?;
 
     let run_result = (|| -> Result<Value> {
         let mut samples = Vec::with_capacity(CATALOG_BUILD_REBUILD_SAMPLES);
-        for sample_index in 1..=CATALOG_BUILD_REBUILD_SAMPLES {
-            let sample_dir = output_dir.join(format!("sample-{sample_index}"));
+        for run_index in 0..=CATALOG_BUILD_REBUILD_SAMPLES {
+            let measured = run_index != 0;
+            let sample_index = run_index.max(1);
+            let sample_dir = if measured {
+                output_dir.join(format!("sample-{sample_index}"))
+            } else {
+                output_dir.join("warmup")
+            };
             fs::create_dir_all(&sample_dir)?;
             exec_checked(
                 &session,
@@ -15291,8 +15301,9 @@ fn profile_installed_catalog_build_rebuild(
             } else {
                 "failed"
             };
-            samples.push(json!({
+            let sample = json!({
                 "sample": sample_index,
+                "measured": measured,
                 "status": status,
                 "fresh": fresh,
                 "rebuild": rebuild,
@@ -15301,7 +15312,15 @@ fn profile_installed_catalog_build_rebuild(
                     "rebuild_snes_games": rebuild_snes,
                     "snes_game_delta": snes_game_delta,
                 },
-            }));
+            });
+            if measured {
+                samples.push(sample);
+            } else {
+                fs::write(
+                    sample_dir.join("warmup.json"),
+                    format!("{}\n", serde_json::to_string_pretty(&sample)?),
+                )?;
+            }
         }
         let mut fresh_complete = samples
             .iter()
@@ -15330,16 +15349,19 @@ fn profile_installed_catalog_build_rebuild(
             "failed"
         };
         Ok(json!({
-            "schema": "mister-magik-catalog-build-rebuild-v1",
+            "schema": "mister-magik-catalog-build-rebuild-v2",
             "scenario": "catalog-build-rebuild",
             "status": status,
             "configuration": {
                 "samples": CATALOG_BUILD_REBUILD_SAMPLES,
+                "unmeasured_warmups": 1,
                 "arcade_root": CATALOG_BUILD_REBUILD_ARCADE_ROOT,
                 "snes_root": CATALOG_BUILD_REBUILD_SNES_ROOT,
+                "c64_root": CATALOG_BUILD_REBUILD_C64_ROOT,
                 "delta_root": format!("{CATALOG_BUILD_REBUILD_SOURCE_DIR}/fixture"),
                 "catalog_root": CATALOG_BUILD_REBUILD_REMOTE_DIR,
                 "publication_filesystem": "exfat",
+                "page_cache_policy": "observed; unchanged",
             },
             "aggregate": {
                 "fresh_complete_median_ms": median_u64(&fresh_complete),
@@ -15348,6 +15370,7 @@ fn profile_installed_catalog_build_rebuild(
             "samples": samples,
             "manifest": parse_manifest_evidence(&manifest),
             "boot_id": boot_id,
+            "card_identity": card_identity,
         }))
     })();
 
@@ -15365,7 +15388,7 @@ fn profile_installed_catalog_build_rebuild(
         "clean bounded catalog build/rebuild state",
         &catalog_build_rebuild_cleanup_command(),
     );
-    let summary = match (run_result, cleanup_result, restart_result) {
+    let mut summary = match (run_result, cleanup_result, restart_result) {
         (Ok(summary), Ok(()), Ok(())) => summary,
         (Err(error), _, Ok(())) => return Err(error),
         (Ok(_), Err(error), Ok(())) => return Err(error),
@@ -15392,6 +15415,22 @@ fn profile_installed_catalog_build_rebuild(
     if final_manifest != manifest {
         return Err("installed platform manifest changed during catalog benchmark".into());
     }
+    let production_registry_after = catalog_production_registry_identity(&session)?;
+    let production_registry_unchanged = production_registry_after == production_registry_before;
+    if !production_registry_unchanged {
+        return Err("production catalog registry changed during isolated catalog benchmark".into());
+    }
+    let summary_object = summary
+        .as_object_mut()
+        .ok_or("catalog build/rebuild summary is not an object")?;
+    summary_object.insert(
+        "production_registry".into(),
+        json!({
+            "before": production_registry_before,
+            "after": production_registry_after,
+            "unchanged": production_registry_unchanged,
+        }),
+    );
     fs::write(
         output_dir.join("summary.json"),
         format!("{}\n", serde_json::to_string_pretty(&summary)?),
@@ -15642,7 +15681,7 @@ const CATALOG_DURABILITY_FUNCTION_GRAPH_SPEC: tracefs::TracefsCaptureSpec =
 const CATALOG_ATTRIBUTION_REMOTE_DIR: &str =
     "/media/fat/mister-magik-dev/catalog-attribution-benchmark";
 const CATALOG_ATTRIBUTION_WORK_DIR: &str = "/tmp/mister-magik/catalog-attribution";
-const CATALOG_ATTRIBUTION_C64_ROOT: &str = "/media/fat/games/C64";
+const CATALOG_ATTRIBUTION_C64_ROOT: &str = CATALOG_BUILD_REBUILD_C64_ROOT;
 
 fn catalog_attribution_prepare_command() -> String {
     format!(
@@ -18670,11 +18709,12 @@ fn catalog_lifecycle_launcher_env() -> Vec<(String, String)> {
 fn catalog_build_rebuild_prepare_command() -> String {
     let safety = platform_safety_script();
     format!(
-        "set -eu; root={root}; source={source}; test -d {arcade}; test -d {snes}; test -r {snes}; rm -rf \"$root\" \"$source\"; mkdir -p \"$root\" \"$source/fixture/games/SNES\" \"$source/sqlite-build\" \"$source/diagnostics\"; printf '%s\\n' 'MISTER-MAGIK-CATALOG-BENCH-SNES-00000001' > \"$source/fixture/games/SNES/Synthetic SNES 00000001.sfc\"; {safety}",
+        "set -eu; root={root}; source={source}; test -d {arcade}; test -d {snes}; test -r {snes}; test -d {c64}; test -r {c64}; rm -rf \"$root\" \"$source\"; mkdir -p \"$root\" \"$source/fixture/games/SNES\" \"$source/sqlite-build\" \"$source/diagnostics\"; printf '%s\\n' 'MISTER-MAGIK-CATALOG-BENCH-SNES-00000001' > \"$source/fixture/games/SNES/Synthetic SNES 00000001.sfc\"; {safety}",
         root = sh(CATALOG_BUILD_REBUILD_REMOTE_DIR),
         source = sh(CATALOG_BUILD_REBUILD_SOURCE_DIR),
         arcade = sh(CATALOG_BUILD_REBUILD_ARCADE_ROOT),
         snes = sh(CATALOG_BUILD_REBUILD_SNES_ROOT),
+        c64 = sh(CATALOG_BUILD_REBUILD_C64_ROOT),
         safety = safety,
     )
 }
@@ -18697,7 +18737,7 @@ fn catalog_build_rebuild_runtime_command(subcommand: &str) -> String {
             "{CATALOG_BUILD_REBUILD_ARCADE_ROOT}|/media/fat/games|{source}/fixture"
         )),
         allowlist = sh(&format!(
-            "{CATALOG_BUILD_REBUILD_ARCADE_ROOT}:{CATALOG_BUILD_REBUILD_SNES_ROOT}:{source}/fixture/games/SNES"
+            "{CATALOG_BUILD_REBUILD_ARCADE_ROOT}:{CATALOG_BUILD_REBUILD_SNES_ROOT}:{CATALOG_BUILD_REBUILD_C64_ROOT}:{source}/fixture/games/SNES"
         )),
         catalog = sh(&format!("{root}/catalog-v3")),
         library = sh(&format!("{root}/library.sqlite3")),
@@ -18740,7 +18780,7 @@ fn catalog_build_rebuild_launcher_env() -> Vec<(String, String)> {
         (
             "MISTER_LIBRARY_TARGET_ALLOWLIST".into(),
             format!(
-                "{CATALOG_BUILD_REBUILD_ARCADE_ROOT}:{CATALOG_BUILD_REBUILD_SNES_ROOT}:{source}/fixture/games/SNES"
+                "{CATALOG_BUILD_REBUILD_ARCADE_ROOT}:{CATALOG_BUILD_REBUILD_SNES_ROOT}:{CATALOG_BUILD_REBUILD_C64_ROOT}:{source}/fixture/games/SNES"
             ),
         ),
         (
@@ -18779,6 +18819,16 @@ fn catalog_build_rebuild_launcher_env() -> Vec<(String, String)> {
         ("MISTER_LAUNCHER_START_SYSTEM".into(), "arcade".into()),
         ("MISTER_PREVIEW_ARCHIVE_WARM_SKIP".into(), "1".into()),
     ]
+}
+
+fn catalog_production_registry_identity(session: &Session) -> Result<String> {
+    let command = "set -eu; for path in /media/fat/mister-magik/catalog-v3/registry/manifest-a.json /media/fat/mister-magik/catalog-v3/registry/manifest-b.json /media/fat/mister-magik-dev/catalog-v3/registry/manifest-a.json /media/fat/mister-magik-dev/catalog-v3/registry/manifest-b.json; do if test -f \"$path\"; then printf '%s\\t' \"$path\"; sha256sum \"$path\" | cut -d' ' -f1; else printf '%s\\tmissing\\n' \"$path\"; fi; done";
+    Ok(
+        exec_checked_output(session, "hash production catalog registries", command)?
+            .stdout
+            .trim()
+            .to_string(),
+    )
 }
 
 fn catalog_full_build_rebuild_launcher_env() -> Vec<(String, String)> {
@@ -32350,6 +32400,7 @@ H: Handlers=event3 js0"#
             .expect("bounded target allowlist");
         assert!(allowlist.contains(CATALOG_BUILD_REBUILD_ARCADE_ROOT));
         assert!(allowlist.contains(CATALOG_BUILD_REBUILD_SNES_ROOT));
+        assert!(allowlist.contains(CATALOG_BUILD_REBUILD_C64_ROOT));
         assert!(allowlist.contains("fixture/games/SNES"));
         assert!(env.iter().all(|(key, _)| {
             key != "MISTER_LAUNCHER_INPUT_SCRIPT"
@@ -32362,6 +32413,7 @@ H: Handlers=event3 js0"#
         let prepare = catalog_build_rebuild_prepare_command();
         assert!(prepare.contains(CATALOG_BUILD_REBUILD_ARCADE_ROOT));
         assert!(prepare.contains(CATALOG_BUILD_REBUILD_SNES_ROOT));
+        assert!(prepare.contains(CATALOG_BUILD_REBUILD_C64_ROOT));
         assert!(prepare.contains("Synthetic SNES 00000001.sfc"));
         let mutation = catalog_build_rebuild_mutation_command();
         assert!(mutation.contains("Synthetic SNES 00000002.sfc"));
