@@ -1096,6 +1096,7 @@ impl ArcadeListRenderer {
             delta_x: 0,
             delta_y: content_delta as isize,
             rect: self.dirty_rect(),
+            repair_rect: None,
         })
     }
 
@@ -1191,6 +1192,7 @@ impl ArcadeListRenderer {
             delta_x: 0,
             delta_y: content_delta as isize,
             rect: self.dirty_rect(),
+            repair_rect: None,
         })
     }
 
@@ -1818,7 +1820,12 @@ impl ArcadeListRenderer {
             written_pixels,
             allocated_bytes,
         };
-        effective_update
+        match effective_composition {
+            ArcadeListUpdateKind::Full | ArcadeListUpdateKind::None => {
+                ArcadeListUpdate::Full(self.dirty_rect())
+            }
+            ArcadeListUpdateKind::Scroll => effective_update,
+        }
     }
 
     pub fn persistent_composition_trace(&self) -> PersistentArcadeCompositionTrace {
@@ -1827,6 +1834,10 @@ impl ArcadeListRenderer {
 
     pub fn persistent_oriented_layer_view(&self) -> Option<PhysicalLayerView<'_>> {
         self.persistent_oriented_layer.view()
+    }
+
+    pub fn persistent_oriented_layer_selection_aperture(&self) -> Option<DirtyRect> {
+        self.persistent_oriented_layer.selection_aperture()
     }
 
     pub fn take_persistent_oriented_layer_backing(&mut self) -> Option<PhysicalLayerBacking> {
@@ -4989,6 +5000,7 @@ mod tests {
                         x1: ARCADE_LIST_W,
                         y1: ARCADE_LIST_H,
                     },
+                    repair_rect: None,
                 },
                 ARCADE_LIST_W,
                 false

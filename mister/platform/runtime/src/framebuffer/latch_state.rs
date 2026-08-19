@@ -258,6 +258,7 @@ pub enum PhysicalLayerUpdate {
         delta_x: isize,
         delta_y: isize,
         rect: DirtyRect,
+        repair_rect: Option<DirtyRect>,
     },
 }
 
@@ -267,6 +268,90 @@ impl PhysicalLayerUpdate {
             Self::Full(rect) | Self::Scroll { rect, .. } => rect,
         }
     }
+
+    pub const fn repair_rect(self) -> Option<DirtyRect> {
+        match self {
+            Self::Full(_) => None,
+            Self::Scroll { repair_rect, .. } => repair_rect,
+        }
+    }
+
+    pub fn write_rects(self) -> DirtyRectList {
+        let rect = self.dirty_rect();
+        let Self::Scroll {
+            delta_x,
+            delta_y,
+            repair_rect,
+            ..
+        } = self
+        else {
+            return DirtyRectList::from_one(rect);
+        };
+        if (delta_x == 0 && delta_y == 0)
+            || delta_x.unsigned_abs() >= rect.width()
+            || delta_y.unsigned_abs() >= rect.rows() as usize
+        {
+            return DirtyRectList::from_one(rect);
+        }
+        let mut damage = DirtyRectList::new();
+        if delta_x > 0 {
+            damage.push(DirtyRect {
+                x0: rect.x0,
+                y0: rect.y0,
+                x1: rect.x0 + delta_x as usize,
+                y1: rect.y1,
+            });
+        } else if delta_x < 0 {
+            damage.push(DirtyRect {
+                x0: rect.x1 - delta_x.unsigned_abs(),
+                y0: rect.y0,
+                x1: rect.x1,
+                y1: rect.y1,
+            });
+        }
+        if delta_y > 0 {
+            damage.push(DirtyRect {
+                x0: rect.x0,
+                y0: rect.y0,
+                x1: rect.x1,
+                y1: rect.y0 + delta_y as usize,
+            });
+        } else if delta_y < 0 {
+            damage.push(DirtyRect {
+                x0: rect.x0,
+                y0: rect.y1 - delta_y.unsigned_abs(),
+                x1: rect.x1,
+                y1: rect.y1,
+            });
+        }
+        if let Some(repair) = repair_rect.and_then(|repair| repair.intersection(rect)) {
+            damage.push(repair);
+            damage.push_if_some(translate_rect_clipped(repair, delta_x, delta_y, rect));
+        }
+        damage
+    }
+}
+
+fn translate_rect_clipped(
+    rect: DirtyRect,
+    delta_x: isize,
+    delta_y: isize,
+    bounds: DirtyRect,
+) -> Option<DirtyRect> {
+    let translate = |value: usize, delta: isize| -> usize {
+        if delta < 0 {
+            value.saturating_sub(delta.unsigned_abs())
+        } else {
+            value.saturating_add(delta as usize)
+        }
+    };
+    DirtyRect {
+        x0: translate(rect.x0, delta_x),
+        y0: translate(rect.y0, delta_y),
+        x1: translate(rect.x1, delta_x),
+        y1: translate(rect.y1, delta_y),
+    }
+    .intersection(bounds)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -824,6 +909,7 @@ fn direct_layer_redraw_update(
                     .saturating_sub(current.content_offset.y)
                     .clamp(isize::MIN as i64, isize::MAX as i64) as isize,
                 rect: desired.rect,
+                repair_rect: dirty.and_then(PhysicalLayerUpdate::repair_rect),
             })
         } else if intersects_restore {
             Some(PhysicalLayerUpdate::Full(desired.rect))
@@ -1957,6 +2043,7 @@ mod tests {
                     delta_x: 0,
                     delta_y: -1,
                     rect: arcade,
+                    repair_rect: None,
                 }),
             ))
             .expect("changed plan");
@@ -2027,19 +2114,65 @@ mod tests {
     #[test]
     fn matching_arcade_generation_accumulates_scroll_for_older_slot() {
         let arcade = rect(0, 0, 4, 3);
+        let repair = rect(1, 1, 3, 2);
         let current = layer(arcade, 7).with_content_offset(LayerOffset::new(0, -3));
         let desired = layer(arcade, 7).with_content_offset(LayerOffset::new(0, -11));
 
         assert!(!direct_layer_needs_restore(Some(current), Some(desired)));
 
         assert_eq!(
-            direct_layer_redraw_update(current.into(), desired.into(), None, true, false),
+            direct_layer_redraw_update(
+                current.into(),
+                desired.into(),
+                Some(PhysicalLayerUpdate::Scroll {
+                    delta_x: 0,
+                    delta_y: -4,
+                    rect: arcade,
+                    repair_rect: Some(repair),
+                }),
+                true,
+                false,
+            ),
             Some(PhysicalLayerUpdate::Scroll {
                 delta_x: 0,
                 delta_y: -8,
                 rect: arcade,
+                repair_rect: Some(repair),
             })
         );
+    }
+
+    #[test]
+    fn physical_scroll_describes_exposed_stripes_and_selection_repairs() {
+        let update = PhysicalLayerUpdate::Scroll {
+            delta_x: -2,
+            delta_y: 3,
+            rect: rect(10, 20, 20, 30),
+            repair_rect: Some(rect(13, 23, 17, 25)),
+        };
+
+        assert_eq!(
+            update.write_rects().to_vec(),
+            vec![
+                rect(18, 20, 20, 30),
+                rect(10, 20, 20, 23),
+                rect(13, 23, 17, 25),
+                rect(11, 26, 15, 28),
+            ]
+        );
+    }
+
+    #[test]
+    fn physical_scroll_larger_than_layer_requires_full_write() {
+        let layer = rect(10, 20, 20, 30);
+        let update = PhysicalLayerUpdate::Scroll {
+            delta_x: -10,
+            delta_y: 0,
+            rect: layer,
+            repair_rect: Some(rect(13, 23, 17, 25)),
+        };
+
+        assert_eq!(update.write_rects().to_vec(), vec![layer]);
     }
 
     #[test]
@@ -2054,6 +2187,7 @@ mod tests {
                 delta_x: 13,
                 delta_y: -8,
                 rect: arcade,
+                repair_rect: None,
             })
         );
     }

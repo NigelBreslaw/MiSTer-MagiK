@@ -622,6 +622,7 @@ impl<'a> LayerTarget<'a> {
                     delta_x,
                     delta_y,
                     rect: physical_rect,
+                    repair_rect: renderer.persistent_oriented_layer_selection_aperture(),
                 }
             }
         };
