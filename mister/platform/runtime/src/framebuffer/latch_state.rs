@@ -610,20 +610,38 @@ impl TwoBufferLatchState {
             layer_intersects_restore(input.preview_desired, &restore_rects);
         let arcade_intersects_restore =
             layer_intersects_restore(input.arcade_desired, &restore_rects);
+        let retained_publications = &self.slot_publications[slot_offset(slot_index)];
+        let preview_publication_changed = input.layer_ownership[PhysicalLayerRole::Preview.index()]
+            == PhysicalLayerOwnership::Published
+            && !same_publication_identity(
+                retained_publications[PhysicalLayerRole::Preview.index()].as_ref(),
+                input.preview_publication.as_ref(),
+            );
+        let arcade_publication_changed = input.layer_ownership[PhysicalLayerRole::Arcade.index()]
+            == PhysicalLayerOwnership::Published
+            && !same_publication_identity(
+                retained_publications[PhysicalLayerRole::Arcade.index()].as_ref(),
+                input.arcade_publication.as_ref(),
+            );
+        let arcade_publication_requires_full =
+            arcade_publication_changed && input.arcade_dirty.is_none();
 
         let preview_redraw = direct_layer_redraw_rect(
             slot.layers[PhysicalLayerRole::Preview.index()],
             input.preview_desired,
             input.preview_dirty,
             preview_intersects_restore,
+            preview_publication_changed,
         );
         let arcade_redraw = direct_layer_redraw_update(
             slot.layers[PhysicalLayerRole::Arcade.index()],
             input.arcade_desired,
             input.arcade_dirty,
             arcade_intersects_restore,
+            arcade_publication_requires_full,
         );
         let arcade_redraw_diff_safe = !arcade_intersects_restore
+            && !arcade_publication_requires_full
             && slot.layers[PhysicalLayerRole::Arcade.index()].is_some_and(|current| {
                 input.arcade_desired.is_some_and(|desired| {
                     current.rect == desired.rect && current.version == desired.version
@@ -670,9 +688,10 @@ fn direct_layer_redraw_rect(
     desired: Option<PhysicalLayerState>,
     dirty: Option<DirtyRect>,
     intersects_restore: bool,
+    publication_changed: bool,
 ) -> Option<DirtyRect> {
     let desired = desired?;
-    if current != Some(desired) || intersects_restore {
+    if current != Some(desired) || intersects_restore || publication_changed {
         Some(desired.rect)
     } else {
         dirty
@@ -684,8 +703,12 @@ fn direct_layer_redraw_update(
     desired: Option<PhysicalLayerState>,
     dirty: Option<PhysicalLayerUpdate>,
     intersects_restore: bool,
+    publication_requires_full: bool,
 ) -> Option<PhysicalLayerUpdate> {
     let desired = desired?;
+    if publication_requires_full {
+        return Some(PhysicalLayerUpdate::Full(desired.rect));
+    }
     if let Some(current) = current {
         if current.rect != desired.rect || current.version != desired.version {
             Some(PhysicalLayerUpdate::Full(desired.rect))
@@ -726,6 +749,22 @@ fn layer_intersects_restore(
 
 fn direct_layer_update_rect(update: &PhysicalLayerUpdate) -> DirtyRect {
     update.dirty_rect()
+}
+
+fn same_publication_identity(
+    retained: Option<&PhysicalLayerPublication>,
+    desired: Option<&PhysicalLayerPublication>,
+) -> bool {
+    match (retained, desired) {
+        (None, None) => true,
+        (Some(retained), Some(desired)) => {
+            retained.role() == desired.role()
+                && retained.layout_generation() == desired.layout_generation()
+                && retained.layout_epoch() == desired.layout_epoch()
+                && retained.content_generation() == desired.content_generation()
+        }
+        _ => false,
+    }
 }
 
 fn first_publication_mismatch(input: &LatchFramePlan) -> Option<PhysicalLayerRole> {
@@ -1207,6 +1246,53 @@ mod tests {
             state.retained_publication_generation(2, PhysicalLayerRole::Preview),
             Some(1)
         );
+    }
+
+    #[test]
+    fn one_frame_arcade_publication_change_reaches_both_slots() {
+        let mut state = TwoBufferLatchState::new(WIDTH, HEIGHT);
+        let arcade = rect(0, 0, 3, 2);
+        let generation_one = publication(PhysicalLayerRole::Arcade, arcade, 1);
+
+        for _ in 0..2 {
+            all_writable(&mut state);
+            let plan = state
+                .plan_next(publication_input(None, Some(generation_one.clone())))
+                .expect("seed Arcade publication in both slots");
+            assert_eq!(plan.arcade_redraw, Some(PhysicalLayerUpdate::Full(arcade)));
+            state.mark_post_success(plan);
+        }
+
+        let generation_two = publication(PhysicalLayerRole::Arcade, arcade, 2);
+        all_writable(&mut state);
+        let changed = state
+            .plan_next(publication_input(None, Some(generation_two.clone())))
+            .expect("publish changed Arcade content");
+        assert_eq!(
+            changed.arcade_redraw,
+            Some(PhysicalLayerUpdate::Full(arcade))
+        );
+        state.mark_post_success(changed);
+
+        let unchanged = generation_two
+            .for_frame(generation_two.state(), None)
+            .expect("quiet publication");
+        all_writable(&mut state);
+        let catch_up = state
+            .plan_next(publication_input(None, Some(unchanged.clone())))
+            .expect("catch up alternate hidden slot");
+        assert_eq!(
+            catch_up.arcade_redraw,
+            Some(PhysicalLayerUpdate::Full(arcade))
+        );
+        assert!(!catch_up.arcade_redraw_diff_safe);
+        state.mark_post_success(catch_up);
+
+        all_writable(&mut state);
+        let settled = state
+            .plan_next(publication_input(None, Some(unchanged)))
+            .expect("both hidden slots now contain the publication");
+        assert_eq!(settled.arcade_redraw, None);
     }
 
     #[test]
@@ -1799,7 +1885,7 @@ mod tests {
         assert!(!direct_layer_needs_restore(Some(current), Some(desired)));
 
         assert_eq!(
-            direct_layer_redraw_update(current.into(), desired.into(), None, true),
+            direct_layer_redraw_update(current.into(), desired.into(), None, true, false),
             Some(PhysicalLayerUpdate::Scroll {
                 delta_x: 0,
                 delta_y: -8,
@@ -1815,7 +1901,7 @@ mod tests {
         let desired = layer(arcade, 7).with_content_offset(LayerOffset::new(9, -2));
 
         assert_eq!(
-            direct_layer_redraw_update(current.into(), desired.into(), None, false),
+            direct_layer_redraw_update(current.into(), desired.into(), None, false, false),
             Some(PhysicalLayerUpdate::Scroll {
                 delta_x: 13,
                 delta_y: -8,
