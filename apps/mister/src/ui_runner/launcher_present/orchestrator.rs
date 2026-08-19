@@ -236,6 +236,39 @@ fn copy_published_arcade_with_mirror(
         ));
     }
     let dense_pixels = rect.width().saturating_mul(rect.rows() as usize);
+    if matches!(update, PhysicalLayerUpdate::Scroll { .. }) {
+        // A physical scroll changes most destination pixels. Reading the
+        // write-combined scanout slot is prohibitively slow, while comparing
+        // against and refreshing a normal-RAM mirror cannot reduce the dense
+        // write. Keep the safe source-to-slot copy and skip both mirror costs.
+        mirror.invalidate();
+        let write_started = Instant::now();
+        let (rows, written_pixels) = copy_published_overlay_rects(
+            hidden,
+            publication,
+            PhysicalOverlayRole::Arcade,
+            slot_index,
+            DirtyRectList::from_one(rect),
+        )?;
+        let write_us = write_started
+            .elapsed()
+            .as_micros()
+            .min(u128::from(u64::MAX)) as u64;
+        return Ok((
+            PresentCopyStats {
+                rows,
+                bytes: written_pixels.saturating_mul(2),
+            },
+            PhysicalLayerCopyTrace {
+                decision: PhysicalLayerCopyDecision::ScrollRecovery,
+                diff_safe,
+                write_us,
+                written_pixels: written_pixels as u64,
+                changed_rows: rows,
+                ..PhysicalLayerCopyTrace::default()
+            },
+        ));
+    }
     let mirror_valid =
         diff_safe && mirror.rect == Some(rect) && mirror.pixels.len() == dense_pixels;
     let mut compare_us = 0_u64;
@@ -328,8 +361,6 @@ fn copy_published_arcade_with_mirror(
         PhysicalLayerCopyDecision::FullCopy
     } else if diff_safe {
         PhysicalLayerCopyDecision::MirrorRecovery
-    } else if matches!(update, PhysicalLayerUpdate::Scroll { .. }) {
-        PhysicalLayerCopyDecision::ScrollRecovery
     } else {
         PhysicalLayerCopyDecision::FullCopy
     };
