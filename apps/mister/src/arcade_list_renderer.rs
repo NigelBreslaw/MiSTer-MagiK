@@ -19,7 +19,7 @@ use crate::framebuffer::present::{copy_dense_rect_565, copy_strided_rect_565};
 use crate::framebuffer::scanout_slots::ScanoutSlotsRgb565Framebuffer;
 use crate::framebuffer::target::{
     DirtyRect, PhysicalLayerBacking, PhysicalLayerCopyDecision, PhysicalLayerCopyTrace,
-    PhysicalLayerView, UiFrameTarget, shift_physical_rect,
+    PhysicalLayerView, UiFrameTarget, collect_rgb565_row_spans, shift_physical_rect,
 };
 use crate::ui_display::{
     CrtContentRect, CrtFontExperiment, CrtFontFamily, CrtUiMetrics, ResolvedOutputRoute, UiDisplay,
@@ -493,6 +493,7 @@ pub struct ArcadeListRenderer {
     surface_selected_text_runs: Vec<Vec<(usize, usize)>>,
     band_scratch: Vec<Pixel>,
     selection_invert_scratch: Vec<Rgb565Pixel>,
+    hidden_layer_scratch: Vec<Rgb565Pixel>,
     previous_selection_normal: Vec<Rgb565Pixel>,
     previous_selection_normal_rect: Option<DirtyRect>,
     selection_horizontal: Vec<Rgb565Pixel>,
@@ -825,6 +826,7 @@ impl ArcadeListRenderer {
             surface_selected_text_runs: vec![Vec::new(); ARCADE_LIST_H],
             band_scratch: Vec::new(),
             selection_invert_scratch: Vec::new(),
+            hidden_layer_scratch: Vec::new(),
             previous_selection_normal: Vec::new(),
             previous_selection_normal_rect: None,
             selection_horizontal: Vec::new(),
@@ -2341,6 +2343,171 @@ impl ArcadeListRenderer {
         if redraw_selection_frame {
             self.copy_selection_frame_to_hidden(hidden);
         }
+    }
+
+    fn compose_hidden_layer_pixels(&self, pixels: &mut Vec<Rgb565Pixel>) {
+        let pixel_count = self.width.saturating_mul(self.visible_height);
+        pixels.resize(pixel_count, self.style.background_565);
+        for viewport_y in 0..self.visible_height {
+            let source_y = (self.surface_y + viewport_y) % self.visible_height;
+            let source = source_y * self.width;
+            let destination = viewport_y * self.width;
+            pixels[destination..destination + self.width]
+                .copy_from_slice(&self.surface[source..source + self.width]);
+        }
+
+        let selection_y = self.selection_y().min(self.visible_height);
+        let selection_bottom = selection_y
+            .saturating_add(self.style.row_height.max(1) as usize)
+            .min(self.visible_height);
+        let frame_x = self.style.selection_frame_x.min(self.width / 2);
+        let frame_y = self
+            .style
+            .selection_frame_y
+            .min(selection_bottom.saturating_sub(selection_y) / 2);
+        if self.style.crt_palette || arcade_selection_inversion_enabled() {
+            for row in selection_y.saturating_add(frame_y)..selection_bottom.saturating_sub(frame_y)
+            {
+                let start = row * self.width + frame_x;
+                let end = (row + 1) * self.width - frame_x;
+                for pixel in &mut pixels[start..end] {
+                    *pixel = selected_aperture_pixel_with_style(*pixel, self.style);
+                }
+            }
+        }
+        for row in selection_y..selection_y.saturating_add(frame_y) {
+            pixels[row * self.width..(row + 1) * self.width].fill(self.style.selection_frame_565);
+        }
+        for row in selection_bottom.saturating_sub(frame_y)..selection_bottom {
+            pixels[row * self.width..(row + 1) * self.width].fill(self.style.selection_frame_565);
+        }
+        for row in selection_y.saturating_add(frame_y)..selection_bottom.saturating_sub(frame_y) {
+            let start = row * self.width;
+            pixels[start..start + frame_x].fill(self.style.selection_frame_565);
+            pixels[start + self.width - frame_x..start + self.width]
+                .fill(self.style.selection_frame_565);
+        }
+    }
+
+    pub(crate) fn copy_layer_to_hidden_with_slot_mirror(
+        &mut self,
+        hidden: &mut ScanoutSlotsRgb565Framebuffer,
+        update: ArcadeListUpdate,
+        diff_safe: bool,
+        mirror_pixels: &mut Vec<Rgb565Pixel>,
+        row_spans: &mut Vec<(usize, usize, usize)>,
+        mirror_geometry_valid: bool,
+    ) -> Result<(u32, usize, PhysicalLayerCopyTrace), String> {
+        let rect = self.dirty_rect();
+        if update.dirty_rect() != rect {
+            return Err(format!(
+                "logical Arcade update rect mismatch: requested={:?} renderer={rect:?}",
+                update.dirty_rect()
+            ));
+        }
+        let pixel_count = self.width.saturating_mul(self.visible_height);
+        let mirror_valid = diff_safe
+            && mirror_geometry_valid
+            && mirror_pixels.len() == pixel_count
+            && matches!(update, ArcadeListUpdate::Scroll { .. });
+        let mut scratch = std::mem::take(&mut self.hidden_layer_scratch);
+        self.compose_hidden_layer_pixels(&mut scratch);
+        let result = (|| {
+            let mut compare_us = 0_u64;
+            if mirror_valid {
+                let compare_started = Instant::now();
+                let span_pixels =
+                    collect_rgb565_row_spans(&scratch, mirror_pixels, self.width, row_spans)
+                        .ok_or_else(|| {
+                            "logical Arcade slot mirror geometry is invalid".to_string()
+                        })?;
+                compare_us = compare_started
+                    .elapsed()
+                    .as_micros()
+                    .min(u128::from(u64::MAX)) as u64;
+                if span_pixels.saturating_mul(2) < pixel_count {
+                    let write_started = Instant::now();
+                    for &(row, x0, x1) in row_spans.iter() {
+                        hidden
+                            .copy_rect_565_strided(
+                                self.geometry.x + x0,
+                                self.geometry.y + row,
+                                x1 - x0,
+                                1,
+                                &scratch,
+                                self.width,
+                                x0,
+                                row,
+                            )
+                            .map_err(|error| {
+                                format!("logical Arcade sparse hidden copy failed: {error}")
+                            })?;
+                    }
+                    let write_us = write_started
+                        .elapsed()
+                        .as_micros()
+                        .min(u128::from(u64::MAX)) as u64;
+                    return Ok((
+                        row_spans.len().min(u32::MAX as usize) as u32,
+                        span_pixels.saturating_mul(2),
+                        PhysicalLayerCopyTrace {
+                            decision: PhysicalLayerCopyDecision::SparseDiff,
+                            diff_safe,
+                            mirror_valid: true,
+                            compare_us,
+                            write_us,
+                            compared_pixels: pixel_count as u64,
+                            written_pixels: span_pixels as u64,
+                            changed_rows: row_spans.len().min(u32::MAX as usize) as u32,
+                            ..PhysicalLayerCopyTrace::default()
+                        },
+                    ));
+                }
+            }
+
+            let write_started = Instant::now();
+            hidden
+                .copy_rect_565_strided(
+                    self.geometry.x,
+                    self.geometry.y,
+                    self.width,
+                    self.visible_height,
+                    &scratch,
+                    self.width,
+                    0,
+                    0,
+                )
+                .map_err(|error| format!("logical Arcade dense hidden copy failed: {error}"))?;
+            let write_us = write_started
+                .elapsed()
+                .as_micros()
+                .min(u128::from(u64::MAX)) as u64;
+            Ok((
+                rect.rows(),
+                pixel_count.saturating_mul(2),
+                PhysicalLayerCopyTrace {
+                    decision: if matches!(update, ArcadeListUpdate::Scroll { .. }) && !mirror_valid
+                    {
+                        PhysicalLayerCopyDecision::MirrorRecovery
+                    } else {
+                        PhysicalLayerCopyDecision::FullCopy
+                    },
+                    diff_safe,
+                    mirror_valid,
+                    compare_us,
+                    write_us,
+                    compared_pixels: if mirror_valid { pixel_count as u64 } else { 0 },
+                    written_pixels: pixel_count as u64,
+                    changed_rows: rect.rows(),
+                    ..PhysicalLayerCopyTrace::default()
+                },
+            ))
+        })();
+        if result.is_ok() {
+            std::mem::swap(mirror_pixels, &mut scratch);
+        }
+        self.hidden_layer_scratch = scratch;
+        result
     }
 
     fn copy_viewport_band_to_fb0(
@@ -3987,6 +4154,32 @@ mod tests {
                     "logical arcade pixel ({x}, {y})"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn hidden_layer_scratch_matches_existing_landscape_compositor() {
+        let mut renderer = ArcadeListRenderer::new();
+        for (index, pixel) in renderer.surface.iter_mut().enumerate() {
+            *pixel = if index.is_multiple_of(11) {
+                renderer.style.background_565
+            } else {
+                Rgb565Pixel(index as u16)
+            };
+        }
+        let mut target = UiFrameTarget::cached(FramebufferTargetGeometry::new(1280, 720));
+        renderer.compose_layer_to_cached(&mut target, true);
+        let mut scratch = Vec::new();
+        renderer.compose_hidden_layer_pixels(&mut scratch);
+
+        for row in 0..renderer.visible_height {
+            let cached = (renderer.geometry.y + row) * 1280 + renderer.geometry.x;
+            let dense = row * renderer.width;
+            assert_eq!(
+                &target.cached_565()[cached..cached + renderer.width],
+                &scratch[dense..dense + renderer.width],
+                "landscape Arcade row {row}"
+            );
         }
     }
 

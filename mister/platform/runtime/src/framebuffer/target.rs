@@ -257,6 +257,41 @@ pub struct PhysicalLayerCopyTrace {
     pub changed_rows: u32,
 }
 
+pub fn collect_rgb565_row_spans(
+    current: &[Rgb565Pixel],
+    previous: &[Rgb565Pixel],
+    width: usize,
+    spans: &mut Vec<(usize, usize, usize)>,
+) -> Option<usize> {
+    if width == 0 || current.len() != previous.len() || !current.len().is_multiple_of(width) {
+        return None;
+    }
+    spans.clear();
+    let mut span_pixels = 0_usize;
+    for (row, (current, previous)) in current
+        .chunks_exact(width)
+        .zip(previous.chunks_exact(width))
+        .enumerate()
+    {
+        let first = current
+            .iter()
+            .zip(previous)
+            .position(|(current, previous)| current != previous);
+        let Some(first) = first else {
+            continue;
+        };
+        let last = current
+            .iter()
+            .zip(previous)
+            .rposition(|(current, previous)| current != previous)
+            .expect("a differing row has a final difference")
+            + 1;
+        spans.push((row, first, last));
+        span_pixels = span_pixels.saturating_add(last - first);
+    }
+    Some(span_pixels)
+}
+
 /// Owned dense pixels for one physical composition-space rectangle.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PhysicalLayerBacking {

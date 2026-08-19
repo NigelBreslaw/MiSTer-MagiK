@@ -76,7 +76,8 @@ use mister_magik_fb::framebuffer::route::LauncherFramebufferRoute;
 use mister_magik_fb::framebuffer::target::{
     CachedFrameView, DirtyRect, DirtyRectList, FramebufferTargetGeometry,
     PhysicalLayerCopyDecision, PhysicalLayerCopyTrace, PhysicalLayerView, UiFrameTarget, blend_565,
-    build_launcher_present_plan_from_layers, dirty_rect, dirty_rects, format_dirty_rect,
+    build_launcher_present_plan_from_layers, collect_rgb565_row_spans, dirty_rect, dirty_rects,
+    format_dirty_rect,
 };
 use mister_magik_fb::framebuffer::{
     format::rgb565_stride_bytes,

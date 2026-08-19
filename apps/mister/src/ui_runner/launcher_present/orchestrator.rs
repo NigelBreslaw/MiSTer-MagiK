@@ -184,41 +184,6 @@ fn refresh_physical_layer_mirror(
     true
 }
 
-fn collect_physical_layer_row_spans(
-    current: &[Rgb565Pixel],
-    previous: &[Rgb565Pixel],
-    width: usize,
-    spans: &mut Vec<(usize, usize, usize)>,
-) -> Option<usize> {
-    if width == 0 || current.len() != previous.len() || !current.len().is_multiple_of(width) {
-        return None;
-    }
-    spans.clear();
-    let mut span_pixels = 0_usize;
-    for (row, (current, previous)) in current
-        .chunks_exact(width)
-        .zip(previous.chunks_exact(width))
-        .enumerate()
-    {
-        let first = current
-            .iter()
-            .zip(previous)
-            .position(|(current, previous)| current != previous);
-        let Some(first) = first else {
-            continue;
-        };
-        let last = current
-            .iter()
-            .zip(previous)
-            .rposition(|(current, previous)| current != previous)
-            .expect("a differing row has a final difference")
-            + 1;
-        spans.push((row, first, last));
-        span_pixels = span_pixels.saturating_add(last - first);
-    }
-    Some(span_pixels)
-}
-
 fn copy_published_arcade_with_mirror(
     hidden: &mut ScanoutSlotsRgb565Framebuffer,
     publication: &PhysicalLayerPublication,
@@ -274,7 +239,7 @@ fn copy_published_arcade_with_mirror(
     let mut compare_us = 0_u64;
     if mirror_valid {
         let compare_started = Instant::now();
-        let span_pixels = collect_physical_layer_row_spans(
+        let span_pixels = collect_rgb565_row_spans(
             view.pixels(),
             &mirror.pixels,
             rect.width(),
@@ -1058,20 +1023,34 @@ impl PresentationAdapters<FpgaVblankLatchHiddenPresenter> for LivePresentationAd
                             )?;
                         }
                         ArcadeOverlayCopySource::CachedLogical => {
-                            arcade_stats = layer_target.copy_cached_arcade_list_update_to_hidden(
+                            match layer_target.copy_cached_arcade_list_update_to_hidden(
                                 hidden,
                                 arcade_list_renderer,
                                 update,
-                            );
-                            require_complete_overlay_copy(
-                                PhysicalOverlayRole::Arcade,
-                                plan.slot_index,
-                                arcade_rect,
-                                arcade_stats.rows,
-                                layer_target.output_layout_generation(),
-                                plan.arcade_state_after().map_or(0, |state| state.version),
-                                || "cached-logical-arcade".into(),
-                            )?;
+                                plan.arcade_redraw_diff_safe,
+                                arcade_mirror,
+                            ) {
+                                Ok((stats, trace)) => {
+                                    arcade_stats = stats;
+                                    arcade_copy_trace = trace;
+                                }
+                                Err(cause) => {
+                                    return Err(PhysicalOverlayFailure {
+                                        role: PhysicalOverlayRole::Arcade,
+                                        slot_index: plan.slot_index,
+                                        rect: arcade_rect,
+                                        expected_rows: arcade_rect.rows(),
+                                        copied_rows: 0,
+                                        layout_generation: layer_target.output_layout_generation(),
+                                        content_generation: plan
+                                            .arcade_state_after()
+                                            .map_or(0, |state| state.version),
+                                        backing_key: "cached-logical-arcade".into(),
+                                        cause: Some(cause),
+                                    }
+                                    .to_string());
+                                }
+                            }
                         }
                         ArcadeOverlayCopySource::MissingRequiredPublication => {
                             let arcade_generation =
@@ -1877,7 +1856,7 @@ mod tests {
         let mut spans = Vec::new();
 
         assert_eq!(
-            collect_physical_layer_row_spans(&current, &previous, 4, &mut spans),
+            collect_rgb565_row_spans(&current, &previous, 4, &mut spans),
             Some(4)
         );
         assert_eq!(spans, [(0, 1, 2), (1, 0, 3)]);
@@ -1887,7 +1866,7 @@ mod tests {
     fn physical_layer_row_spans_reject_mismatched_mirrors() {
         let mut spans = vec![(9, 9, 9)];
         assert_eq!(
-            collect_physical_layer_row_spans(
+            collect_rgb565_row_spans(
                 &[Rgb565Pixel(1), Rgb565Pixel(2)],
                 &[Rgb565Pixel(1)],
                 2,
