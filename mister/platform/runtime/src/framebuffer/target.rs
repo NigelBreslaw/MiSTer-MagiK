@@ -266,17 +266,28 @@ pub struct PhysicalLayerBacking {
 }
 
 impl PhysicalLayerBacking {
+    pub fn from_dense_pixels(rect: DirtyRect, pixels: Vec<Rgb565Pixel>) -> Option<Self> {
+        let stride = rect.width();
+        if stride == 0
+            || rect.rows() == 0
+            || pixels.len() != stride.checked_mul(rect.rows() as usize)?
+        {
+            return None;
+        }
+        Some(Self {
+            rect,
+            stride,
+            pixels,
+        })
+    }
+
     pub fn new(rect: DirtyRect, fill: Rgb565Pixel) -> Option<Self> {
         if rect.x0 >= rect.x1 || rect.y0 >= rect.y1 {
             return None;
         }
         let stride = rect.width();
         let len = stride.checked_mul(rect.rows() as usize)?;
-        Some(Self {
-            rect,
-            stride,
-            pixels: vec![fill; len],
-        })
+        Self::from_dense_pixels(rect, vec![fill; len])
     }
 
     pub fn ensure(&mut self, rect: DirtyRect, fill: Rgb565Pixel) -> bool {

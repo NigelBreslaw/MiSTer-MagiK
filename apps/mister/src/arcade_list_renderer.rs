@@ -1829,6 +1829,17 @@ impl ArcadeListRenderer {
         self.persistent_oriented_layer.view()
     }
 
+    pub fn take_persistent_oriented_layer_backing(&mut self) -> Option<PhysicalLayerBacking> {
+        self.persistent_oriented_layer.take_backing()
+    }
+
+    pub fn restore_persistent_oriented_layer_backing(
+        &mut self,
+        backing: PhysicalLayerBacking,
+    ) -> bool {
+        self.persistent_oriented_layer.restore_backing(backing)
+    }
+
     pub fn persistent_oriented_layer_diagnostic(&self) -> PersistentArcadeLayerDiagnostic {
         self.persistent_oriented_layer.diagnostic()
     }

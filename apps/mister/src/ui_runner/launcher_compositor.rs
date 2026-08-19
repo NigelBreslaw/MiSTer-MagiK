@@ -636,19 +636,23 @@ impl<'a> LayerTarget<'a> {
     ) -> (PresentCopyStats, Option<PhysicalLayerPublication>) {
         let (stats, physical_update) =
             self.compose_arcade_list_direct_layer(renderer, update, catalog_generation);
-        let publication = renderer.persistent_oriented_layer_view().and_then(|view| {
-            let state =
-                PhysicalLayerState::new(view.rect(), version).with_content_offset(content_offset);
-            PhysicalLayerPublication::capture(
-                PhysicalLayerRole::Arcade,
-                self.output_layout_generation(),
-                self.output_layout_epoch(),
-                content_generation,
-                state,
-                Some(physical_update),
-                view,
-            )
-        });
+        let publication = renderer
+            .persistent_oriented_layer_view()
+            .map(PhysicalLayerView::rect)
+            .zip(renderer.take_persistent_oriented_layer_backing())
+            .and_then(|(rect, backing)| {
+                let state =
+                    PhysicalLayerState::new(rect, version).with_content_offset(content_offset);
+                PhysicalLayerPublication::capture_owned(
+                    PhysicalLayerRole::Arcade,
+                    self.output_layout_generation(),
+                    self.output_layout_epoch(),
+                    content_generation,
+                    state,
+                    Some(physical_update),
+                    backing,
+                )
+            });
         if let Some(publication) = publication.as_ref() {
             assert!(
                 self.copy_physical_layer_snapshot_to_cached(publication),
@@ -711,20 +715,35 @@ impl<'a> LayerTarget<'a> {
 
     pub(super) fn capture_arcade_publication(
         &self,
-        renderer: &ArcadeListRenderer,
+        renderer: &mut ArcadeListRenderer,
         state: PhysicalLayerState,
         update: Option<PhysicalLayerUpdate>,
         content_generation: u64,
     ) -> Option<PhysicalLayerPublication> {
-        PhysicalLayerPublication::capture(
+        let backing = renderer.take_persistent_oriented_layer_backing()?;
+        PhysicalLayerPublication::capture_owned(
             PhysicalLayerRole::Arcade,
             self.output_layout_generation(),
             self.output_layout_epoch(),
             content_generation,
             state,
             update,
-            renderer.persistent_oriented_layer_view()?,
+            backing,
         )
+    }
+
+    pub(super) fn reclaim_arcade_publication(
+        &self,
+        renderer: &mut ArcadeListRenderer,
+        publication: &mut Option<PhysicalLayerPublication>,
+    ) -> bool {
+        let Some(current) = publication.take() else {
+            return renderer.persistent_oriented_layer_view().is_some();
+        };
+        match current.try_into_backing() {
+            Ok(backing) => renderer.restore_persistent_oriented_layer_backing(backing),
+            Err(_) => false,
+        }
     }
 
     pub(super) fn compose_arcade_list_over_backdrop(

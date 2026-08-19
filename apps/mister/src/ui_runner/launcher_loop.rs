@@ -10108,6 +10108,10 @@ pub(super) fn run_launcher_loop(
                             true,
                         ) {
                             if navigation_transition.settings_physical_space() {
+                                let _ = layer_target.reclaim_arcade_publication(
+                                    &mut arcade_list_renderer,
+                                    &mut launcher_arcade_publication,
+                                );
                                 launcher_arcade_content_generation =
                                     launcher_arcade_content_generation.wrapping_add(1).max(1);
                                 let (_, publication) = layer_target
@@ -10442,6 +10446,10 @@ pub(super) fn run_launcher_loop(
                 })
         } else if layout.is_portrait() {
             arcade_list_rect.and_then(|update| {
+                let _ = layer_target.reclaim_arcade_publication(
+                    &mut arcade_list_renderer,
+                    &mut launcher_arcade_publication,
+                );
                 let (composition, physical_update) = layer_target.compose_arcade_list_direct_layer(
                     &mut arcade_list_renderer,
                     update,
@@ -10489,7 +10497,7 @@ pub(super) fn run_launcher_loop(
             let state = PhysicalLayerState::new(rect, launcher_arcade_version)
                 .with_content_offset(launcher_arcade_scroll_offset);
             launcher_arcade_publication = layer_target.capture_arcade_publication(
-                &arcade_list_renderer,
+                &mut arcade_list_renderer,
                 state,
                 Some(update),
                 launcher_arcade_content_generation,

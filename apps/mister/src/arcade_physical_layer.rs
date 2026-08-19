@@ -154,6 +154,31 @@ impl PersistentOrientedArcadeLayer {
         self.backing.as_ref().map(PhysicalLayerBacking::view)
     }
 
+    pub fn take_backing(&mut self) -> Option<PhysicalLayerBacking> {
+        self.backing.take()
+    }
+
+    pub fn restore_backing(&mut self, backing: PhysicalLayerBacking) -> bool {
+        if self
+            .region_layout
+            .is_none_or(|layout| layout.len() != backing.pixels().len())
+            || self.region_layout.is_some_and(|layout| {
+                let rect = layout.physical_rect();
+                backing.rect()
+                    != DirtyRect {
+                        x0: rect.x0,
+                        y0: rect.y0,
+                        x1: rect.x1,
+                        y1: rect.y1,
+                    }
+            })
+        {
+            return false;
+        }
+        self.backing = Some(backing);
+        true
+    }
+
     pub fn needs_full_rebuild(&self) -> bool {
         self.full_rebuild
     }

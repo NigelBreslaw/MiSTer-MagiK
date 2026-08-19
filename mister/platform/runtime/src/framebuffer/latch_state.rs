@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use super::damage::TwoSlotDamageLedger;
-use super::target::{DirtyRect, DirtyRectList, PhysicalLayerView, subtract_dirty_rects};
+use super::target::{
+    DirtyRect, DirtyRectList, PhysicalLayerBacking, PhysicalLayerView, subtract_dirty_rects,
+};
 use slint::platform::software_renderer::Rgb565Pixel;
 use std::fmt;
 use std::sync::Arc;
@@ -46,24 +48,23 @@ pub struct PhysicalLayerBackingKey {
 
 #[derive(Clone)]
 struct PhysicalLayerPublicationBacking {
-    pixels: Arc<[Rgb565Pixel]>,
-    rect: DirtyRect,
+    backing: Arc<PhysicalLayerBacking>,
 }
 
 impl fmt::Debug for PhysicalLayerPublicationBacking {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("PhysicalLayerPublicationBacking")
-            .field("rect", &self.rect)
-            .field("pixel_count", &self.pixels.len())
-            .field("source_address", &(self.pixels.as_ptr() as usize))
+            .field("rect", &self.backing.rect())
+            .field("pixel_count", &self.backing.pixels().len())
+            .field("source_address", &(self.backing.pixels().as_ptr() as usize))
             .finish()
     }
 }
 
 impl PartialEq for PhysicalLayerPublicationBacking {
     fn eq(&self, other: &Self) -> bool {
-        self.rect == other.rect && Arc::ptr_eq(&self.pixels, &other.pixels)
+        Arc::ptr_eq(&self.backing, &other.backing)
     }
 }
 
@@ -104,16 +105,45 @@ impl PhysicalLayerPublication {
         for row in 0..state.rect.rows() as usize {
             pixels.extend_from_slice(view.row(state.rect, row)?);
         }
-        let pixels: Arc<[Rgb565Pixel]> = pixels.into();
+        let backing = PhysicalLayerBacking::from_dense_pixels(state.rect, pixels)?;
+        Self::capture_owned(
+            role,
+            layout_generation,
+            layout_epoch,
+            content_generation,
+            state,
+            update,
+            backing,
+        )
+    }
+
+    pub fn capture_owned(
+        role: PhysicalLayerRole,
+        layout_generation: u64,
+        layout_epoch: u64,
+        content_generation: u64,
+        state: PhysicalLayerState,
+        update: Option<PhysicalLayerUpdate>,
+        backing: PhysicalLayerBacking,
+    ) -> Option<Self> {
+        if layout_generation == 0
+            || layout_epoch == 0
+            || content_generation == 0
+            || state.rect != backing.rect()
+            || update.is_some_and(|update| update.dirty_rect() != state.rect)
+        {
+            return None;
+        }
+        let backing = Arc::new(backing);
         let backing_key = PhysicalLayerBackingKey {
             role,
             layout_generation,
             layout_epoch,
             content_generation,
             rect: state.rect,
-            stride: state.rect.width(),
-            pixel_count: pixels.len(),
-            source_address: pixels.as_ptr() as usize,
+            stride: backing.stride(),
+            pixel_count: backing.pixels().len(),
+            source_address: backing.pixels().as_ptr() as usize,
         };
         Some(Self {
             role,
@@ -123,10 +153,7 @@ impl PhysicalLayerPublication {
             state,
             update,
             backing_key,
-            backing: PhysicalLayerPublicationBacking {
-                pixels,
-                rect: state.rect,
-            },
+            backing: PhysicalLayerPublicationBacking { backing },
         })
     }
 
@@ -176,7 +203,52 @@ impl PhysicalLayerPublication {
     }
 
     pub fn view(&self) -> PhysicalLayerView<'_> {
-        PhysicalLayerView::dense(&self.backing.pixels, self.backing.rect)
+        self.backing.backing.view()
+    }
+
+    pub fn try_into_backing(self) -> Result<PhysicalLayerBacking, Self> {
+        let Self {
+            role,
+            layout_generation,
+            layout_epoch,
+            content_generation,
+            state,
+            update,
+            backing_key,
+            backing: PhysicalLayerPublicationBacking { backing },
+        } = self;
+        match Arc::try_unwrap(backing) {
+            Ok(backing) => Ok(backing),
+            Err(backing) => Err(Self {
+                role,
+                layout_generation,
+                layout_epoch,
+                content_generation,
+                state,
+                update,
+                backing_key,
+                backing: PhysicalLayerPublicationBacking { backing },
+            }),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PhysicalLayerPublicationIdentity {
+    role: PhysicalLayerRole,
+    layout_generation: u64,
+    layout_epoch: u64,
+    content_generation: u64,
+}
+
+impl From<&PhysicalLayerPublication> for PhysicalLayerPublicationIdentity {
+    fn from(publication: &PhysicalLayerPublication) -> Self {
+        Self {
+            role: publication.role(),
+            layout_generation: publication.layout_generation(),
+            layout_epoch: publication.layout_epoch(),
+            content_generation: publication.content_generation(),
+        }
     }
 }
 
@@ -449,7 +521,7 @@ pub struct TwoBufferLatchState {
     base_damage: TwoSlotDamageLedger,
     next_slot_index: u8,
     planned_publications: [Option<PhysicalLayerPublication>; PhysicalLayerRole::COUNT],
-    slot_publications: [[Option<PhysicalLayerPublication>; PhysicalLayerRole::COUNT]; 2],
+    slot_publications: [[Option<PhysicalLayerPublicationIdentity>; PhysicalLayerRole::COUNT]; 2],
     latest_publication_generation: [Option<(u64, u64)>; PhysicalLayerRole::COUNT],
 }
 
@@ -538,7 +610,9 @@ impl TwoBufferLatchState {
         selected.layers[PhysicalLayerRole::Arcade.index()] = plan.arcade_after;
         selected.hardware = LatchSlotHardwareState::Unknown;
         let slot_offset = slot_offset(slot_index);
-        self.slot_publications[slot_offset] = std::mem::take(&mut self.planned_publications);
+        self.slot_publications[slot_offset] =
+            std::array::from_fn(|index| self.planned_publications[index].as_ref().map(Into::into));
+        self.planned_publications.fill(None);
         self.next_slot_index = other_slot(slot_index);
     }
 
@@ -586,8 +660,7 @@ impl TwoBufferLatchState {
         role: PhysicalLayerRole,
     ) -> Option<u64> {
         self.slot_publications[slot_offset(slot_index)][physical_layer_role_offset(role)]
-            .as_ref()
-            .map(PhysicalLayerPublication::content_generation)
+            .map(|publication| publication.content_generation)
     }
 
     pub fn restore_bytes_for_slot(&self, slot_index: u8) -> usize {
@@ -788,16 +861,16 @@ fn direct_layer_update_rect(update: &PhysicalLayerUpdate) -> DirtyRect {
 }
 
 fn same_publication_identity(
-    retained: Option<&PhysicalLayerPublication>,
+    retained: Option<&PhysicalLayerPublicationIdentity>,
     desired: Option<&PhysicalLayerPublication>,
 ) -> bool {
     match (retained, desired) {
         (None, None) => true,
         (Some(retained), Some(desired)) => {
-            retained.role() == desired.role()
-                && retained.layout_generation() == desired.layout_generation()
-                && retained.layout_epoch() == desired.layout_epoch()
-                && retained.content_generation() == desired.content_generation()
+            retained.role == desired.role()
+                && retained.layout_generation == desired.layout_generation()
+                && retained.layout_epoch == desired.layout_epoch()
+                && retained.content_generation == desired.content_generation()
         }
         _ => false,
     }
@@ -1173,6 +1246,40 @@ mod tests {
         assert_ne!(
             publication.backing_key().source_address,
             source.as_ptr() as usize
+        );
+    }
+
+    #[test]
+    fn successful_post_retains_identity_without_retaining_backing() {
+        let preview = rect(0, 0, 2, 2);
+        let backing = PhysicalLayerBacking::new(preview, Rgb565Pixel(0x2345)).unwrap();
+        let source_address = backing.pixels().as_ptr() as usize;
+        let publication = PhysicalLayerPublication::capture_owned(
+            PhysicalLayerRole::Preview,
+            7,
+            1,
+            4,
+            layer(preview, 1),
+            Some(PhysicalLayerUpdate::Full(preview)),
+            backing,
+        )
+        .expect("zero-copy publication");
+        assert_eq!(publication.backing_key().source_address, source_address);
+        let reclaim = publication.clone();
+        let mut state = TwoBufferLatchState::new(WIDTH, HEIGHT);
+        all_writable(&mut state);
+        let plan = state
+            .plan_next(publication_input(Some(publication), None))
+            .expect("publication plan");
+        state.mark_post_success(plan);
+
+        let reclaimed = reclaim
+            .try_into_backing()
+            .expect("slot coherency retains identity, not the pixel lease");
+        assert_eq!(reclaimed.pixels().as_ptr() as usize, source_address);
+        assert_eq!(
+            state.retained_publication_generation(1, PhysicalLayerRole::Preview),
+            Some(4)
         );
     }
 
