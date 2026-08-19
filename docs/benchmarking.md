@@ -109,6 +109,18 @@ by checking Home, System Hub, Arcade, search, Settings, dialogs, screensaver,
 and transition endpoints across normal/clockwise/counterclockwise HDMI and
 240p/288p portrait CRT layouts.
 
+The shared-composition campaign's final device qualification is deliberately
+limited to six 40-second `turbo` controls: `hdmi-landscape`,
+`hdmi-portrait-left`, `hdmi1080-landscape`, `hdmi1080-portrait-left`,
+`crt240-portrait-left`, and `crt288-portrait-left`. This covers both 720p and
+1080p HDMI in landscape and portrait while avoiding a redundant second device
+run for the opposite portrait rotation. Portrait-right remains a supported
+benchmark route and is covered by deterministic host pixel/ownership parity.
+Every qualifying control requires settled cadence endpoints, authoritative
+FPGA-latched terminal scanout, zero repeated refreshes, latch drops, sequence
+gaps, ownership loss, or profiling record loss, and the route-specific FPS and
+foreground-work budgets.
+
 `modal-input` restarts the coherently installed Dev launcher with a one-shot,
 fixed test request and a catalog copied below
 `/tmp/mister-magik/modal-input-benchmark`. It presents the real catalog upgrade
