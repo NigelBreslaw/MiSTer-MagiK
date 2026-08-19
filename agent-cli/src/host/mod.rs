@@ -811,6 +811,15 @@ impl NativeDevice {
         self.benchmark_profile(|config| profile_installed_catalog_build_rebuild(config, output_dir))
     }
 
+    pub(crate) fn profile_catalog_full_build_rebuild(
+        &mut self,
+        output_dir: &Path,
+    ) -> std::result::Result<String, DeviceFailure> {
+        self.benchmark_profile(|config| {
+            profile_installed_catalog_full_build_rebuild(config, output_dir)
+        })
+    }
+
     pub(crate) fn profile_system_entry(
         &mut self,
         output_dir: &Path,
@@ -15152,6 +15161,8 @@ fn profile_installed_catalog_build_rebuild(
                 &sample_dir,
                 "fresh",
                 None,
+                catalog_build_rebuild_launcher_env,
+                catalog_build_rebuild_runtime_command,
             )?;
             let fresh_generation = fresh
                 .pointer("/catalog/generation")
@@ -15171,6 +15182,8 @@ fn profile_installed_catalog_build_rebuild(
                 &sample_dir,
                 "rebuild",
                 Some(fresh_generation),
+                catalog_build_rebuild_launcher_env,
+                catalog_build_rebuild_runtime_command,
             )?;
             let rebuild_snes = catalog_system_games(&rebuild["catalog"], "snes")?;
             let snes_game_delta = i64::try_from(rebuild_snes)? - i64::try_from(fresh_snes)?;
@@ -15289,6 +15302,133 @@ fn profile_installed_catalog_build_rebuild(
     fs::write(
         output_dir.join("report.md"),
         catalog_build_rebuild_report(&summary)?,
+    )?;
+    serde_json::to_string(&summary).map_err(Into::into)
+}
+
+fn profile_installed_catalog_full_build_rebuild(
+    config: &NativeDeviceConfig,
+    output_dir: &Path,
+) -> Result<String> {
+    let session = connect_with(&config.connection, 10)?;
+    let endpoint = config.agent()?.clone();
+    let manifest = remote_read(&session, LOCAL_MAIN_MANIFEST_REMOTE)
+        .ok_or("development platform manifest is missing")?;
+    let boot_id = remote_read(&session, "/proc/sys/kernel/random/boot_id")
+        .ok_or("device boot id is unavailable")?
+        .trim()
+        .to_string();
+    fs::create_dir_all(output_dir)?;
+
+    let run_result = (|| -> Result<Value> {
+        exec_checked(
+            &session,
+            "prepare whole-card catalog build/rebuild sample",
+            &catalog_build_rebuild_prepare_command(),
+        )?;
+        let fresh = run_catalog_build_rebuild_leg(
+            config,
+            &session,
+            &endpoint,
+            output_dir,
+            "fresh",
+            None,
+            catalog_full_build_rebuild_launcher_env,
+            catalog_full_build_rebuild_runtime_command,
+        )?;
+        let fresh_generation = fresh
+            .pointer("/catalog/generation")
+            .and_then(Value::as_u64)
+            .ok_or("whole-card fresh leg has no generation")?;
+        let rebuild = run_catalog_build_rebuild_leg(
+            config,
+            &session,
+            &endpoint,
+            output_dir,
+            "rebuild",
+            Some(fresh_generation),
+            catalog_full_build_rebuild_launcher_env,
+            catalog_full_build_rebuild_runtime_command,
+        )?;
+        let catalog_counts_identical = fresh.pointer("/catalog/systems")
+            == rebuild.pointer("/catalog/systems")
+            && fresh.pointer("/catalog/total_games") == rebuild.pointer("/catalog/total_games");
+        let status = if catalog_counts_identical {
+            "passed"
+        } else {
+            "failed"
+        };
+        Ok(json!({
+            "schema": "mister-magik-catalog-full-build-rebuild-v1",
+            "scenario": "catalog-full-build-rebuild",
+            "status": status,
+            "configuration": {
+                "samples": 1,
+                "source_policy": "normal configured library sources",
+                "catalog_root": CATALOG_BUILD_REBUILD_REMOTE_DIR,
+                "publication_filesystem": "exfat",
+                "page_cache_policy": "unchanged",
+            },
+            "fresh": fresh,
+            "rebuild": rebuild,
+            "validation": {
+                "catalog_counts_identical": catalog_counts_identical,
+            },
+            "manifest": parse_manifest_evidence(&manifest),
+            "boot_id": boot_id,
+        }))
+    })();
+
+    let restart_result = launcher_restart(
+        &session,
+        &LauncherRestartOptions {
+            clear_env: true,
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str().into(),
+            timeout_secs: CATALOG_LIFECYCLE_FIRST_VISIBLE_TIMEOUT_SECS,
+            ..LauncherRestartOptions::default()
+        },
+    );
+    let cleanup_result = exec_checked(
+        &session,
+        "clean whole-card catalog build/rebuild state",
+        &catalog_build_rebuild_cleanup_command(),
+    );
+    let summary = match (run_result, cleanup_result, restart_result) {
+        (Ok(summary), Ok(()), Ok(())) => summary,
+        (Err(error), _, Ok(())) => return Err(error),
+        (Ok(_), Err(error), Ok(())) => return Err(error),
+        (Ok(_), _, Err(error)) => return Err(error),
+        (Err(run), cleanup, restart) => {
+            return Err(format!(
+                "{run}; cleanup={:?}; launcher_restore={:?}",
+                cleanup.err(),
+                restart.err()
+            )
+            .into());
+        }
+    };
+
+    drop(session);
+    let session = connect_with(&config.connection, 10)?;
+    let final_boot_id = remote_read(&session, "/proc/sys/kernel/random/boot_id")
+        .ok_or("device boot id is unavailable after whole-card catalog benchmark")?;
+    if final_boot_id.trim() != boot_id {
+        return Err("device rebooted during whole-card catalog benchmark".into());
+    }
+    let final_manifest = remote_read(&session, LOCAL_MAIN_MANIFEST_REMOTE)
+        .ok_or("development platform manifest is missing after whole-card catalog benchmark")?;
+    if final_manifest != manifest {
+        return Err(
+            "installed platform manifest changed during whole-card catalog benchmark".into(),
+        );
+    }
+    fs::write(
+        output_dir.join("summary.json"),
+        format!("{}\n", serde_json::to_string_pretty(&summary)?),
+    )?;
+    fs::write(
+        output_dir.join("report.md"),
+        catalog_full_build_rebuild_report(&summary)?,
     )?;
     serde_json::to_string(&summary).map_err(Into::into)
 }
@@ -17363,6 +17503,23 @@ fn catalog_build_rebuild_runtime_command(subcommand: &str) -> String {
     )
 }
 
+fn catalog_full_build_rebuild_runtime_command(subcommand: &str) -> String {
+    let root = CATALOG_BUILD_REBUILD_REMOTE_DIR;
+    let source = CATALOG_BUILD_REBUILD_SOURCE_DIR;
+    format!(
+        "env MISTER_SHARDED_CATALOG_DIR={catalog} MISTER_LIBRARY_SQLITE={library} MISTER_LIBRARY_SQLITE_BUILD_DIR={sqlite_build} MISTER_ARCADE_BOOTSTRAP_INDEX={bootstrap} MISTER_LIBRARY_REFRESH_LOCK={refresh_lock} MISTER_CATALOG_BUILDER_LOCK={builder_lock} MISTER_CATALOG_READY_SNAPSHOT={ready_snapshot} MISTER_CATALOG_DIAGNOSTICS_DIR={diagnostics} MISTER_MAGIK_FOREGROUND_LIBRARY_REFRESH=1 {gui} {subcommand}",
+        catalog = sh(&format!("{root}/catalog-v3")),
+        library = sh(&format!("{root}/library.sqlite3")),
+        sqlite_build = sh(&format!("{source}/sqlite-build")),
+        bootstrap = sh(&format!("{root}/arcade-bootstrap.nav.lz4b")),
+        refresh_lock = sh(&format!("{source}/library-refresh.lock")),
+        builder_lock = sh(&format!("{source}/catalog-builder.lock")),
+        ready_snapshot = sh(&format!("{source}/catalog-ready.snapshot")),
+        diagnostics = sh(&format!("{source}/diagnostics")),
+        gui = sh(DEVELOPMENT_GUI_REMOTE),
+    )
+}
+
 fn catalog_build_rebuild_launcher_env() -> Vec<(String, String)> {
     let root = CATALOG_BUILD_REBUILD_REMOTE_DIR;
     let source = CATALOG_BUILD_REBUILD_SOURCE_DIR;
@@ -17416,6 +17573,15 @@ fn catalog_build_rebuild_launcher_env() -> Vec<(String, String)> {
     ]
 }
 
+fn catalog_full_build_rebuild_launcher_env() -> Vec<(String, String)> {
+    catalog_build_rebuild_launcher_env()
+        .into_iter()
+        .filter(|(key, _)| {
+            key != "MISTER_LIBRARY_ROOTS" && key != "MISTER_LIBRARY_TARGET_ALLOWLIST"
+        })
+        .collect()
+}
+
 fn run_catalog_build_rebuild_leg(
     config: &NativeDeviceConfig,
     session: &Session,
@@ -17423,12 +17589,14 @@ fn run_catalog_build_rebuild_leg(
     sample_dir: &Path,
     label: &str,
     minimum_generation: Option<u64>,
+    launcher_env: fn() -> Vec<(String, String)>,
+    runtime_command: fn(&str) -> String,
 ) -> Result<Value> {
     let started = Instant::now();
     restart_launcher_with_one_shot_env(
         session,
         LauncherRestartOptions {
-            env_vars: catalog_build_rebuild_launcher_env(),
+            env_vars: launcher_env(),
             timeout_secs: CATALOG_LIFECYCLE_FIRST_VISIBLE_TIMEOUT_SECS,
             remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str().into(),
             ..LauncherRestartOptions::default()
@@ -17529,11 +17697,7 @@ fn run_catalog_build_rebuild_leg(
         {
             return Err(format!("{label} catalog did not become visible: {status}").into());
         }
-        let inspect = exec(
-            session,
-            &catalog_build_rebuild_runtime_command("catalog-v3-inspect"),
-            true,
-        )?;
+        let inspect = exec(session, &runtime_command("catalog-v3-inspect"), true)?;
         if exec_failure_message("catalog build/rebuild inspect", &inspect).is_none()
             && let Ok(catalog) = parse_catalog_lifecycle_inspect(&inspect.stdout)
             && minimum_generation.is_none_or(|generation| {
@@ -17769,6 +17933,38 @@ fn catalog_build_rebuild_report(summary: &Value) -> Result<String> {
             .unwrap_or(0),
     ));
     Ok(report)
+}
+
+fn catalog_full_build_rebuild_report(summary: &Value) -> Result<String> {
+    let fresh_ms = summary
+        .pointer("/fresh/timing/complete_ms")
+        .and_then(Value::as_u64)
+        .ok_or("whole-card report has no fresh completion time")?;
+    let first_visible_ms = summary
+        .pointer("/fresh/timing/first_visible_ms")
+        .and_then(Value::as_u64)
+        .ok_or("whole-card report has no first-visible time")?;
+    let rebuild_ms = summary
+        .pointer("/rebuild/timing/complete_ms")
+        .and_then(Value::as_u64)
+        .ok_or("whole-card report has no rebuild completion time")?;
+    let systems = summary
+        .pointer("/fresh/catalog/systems")
+        .and_then(Value::as_array)
+        .ok_or("whole-card report has no system counts")?;
+    let games = summary
+        .pointer("/fresh/catalog/total_games")
+        .and_then(Value::as_u64)
+        .ok_or("whole-card report has no game count")?;
+    Ok(format!(
+        "# Whole-card catalog build/rebuild benchmark\n\n- Status: **{}**\n- Fresh first visible: {first_visible_ms} ms\n- Fresh complete: {fresh_ms} ms\n- Forced rebuild complete: {rebuild_ms} ms\n- Systems: {}\n- Games: {games}\n- Catalog counts identical: {}\n- Page-cache policy: unchanged\n",
+        summary["status"].as_str().unwrap_or("failed"),
+        systems.len(),
+        summary
+            .pointer("/validation/catalog_counts_identical")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+    ))
 }
 
 const ORIENTATION_TRANSITION_REMOTE_DIR: &str = "/tmp/mister-magik/orientation-transitions";
@@ -30837,6 +31033,21 @@ H: Handlers=event3 js0"#
         let cleanup = catalog_build_rebuild_cleanup_command();
         assert!(cleanup.contains(CATALOG_BUILD_REBUILD_REMOTE_DIR));
         assert!(cleanup.contains(CATALOG_BUILD_REBUILD_SOURCE_DIR));
+    }
+
+    #[test]
+    fn whole_card_catalog_uses_configured_sources_with_isolated_outputs() {
+        let env = catalog_full_build_rebuild_launcher_env();
+        assert!(env.iter().all(|(key, _)| {
+            key != "MISTER_LIBRARY_ROOTS" && key != "MISTER_LIBRARY_TARGET_ALLOWLIST"
+        }));
+        assert!(env.iter().any(|(key, value)| {
+            key == "MISTER_SHARDED_CATALOG_DIR"
+                && value.starts_with(CATALOG_BUILD_REBUILD_REMOTE_DIR)
+        }));
+        let inspect = catalog_full_build_rebuild_runtime_command("catalog-v3-inspect");
+        assert!(inspect.contains(CATALOG_BUILD_REBUILD_REMOTE_DIR));
+        assert!(!inspect.contains("MISTER_LIBRARY_ROOTS="));
     }
 
     #[test]

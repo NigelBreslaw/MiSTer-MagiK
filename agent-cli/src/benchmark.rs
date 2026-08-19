@@ -44,6 +44,7 @@ enum BenchmarkProfile {
     SearchUi,
     CatalogLifecycle,
     CatalogBuildRebuild,
+    CatalogFullBuildRebuild,
     SystemEntry,
     SystemEntryCritical,
     SystemEntryCriticalConfirm,
@@ -110,6 +111,9 @@ impl BenchmarkDevice for DeviceClient {
             BenchmarkProfile::CatalogLifecycle => device.profile_catalog_lifecycle(&output_dir),
             BenchmarkProfile::CatalogBuildRebuild => {
                 device.profile_catalog_build_rebuild(&output_dir)
+            }
+            BenchmarkProfile::CatalogFullBuildRebuild => {
+                device.profile_catalog_full_build_rebuild(&output_dir)
             }
             BenchmarkProfile::SystemEntry => device.profile_system_entry(&output_dir),
             BenchmarkProfile::SystemEntryCritical => {
@@ -285,6 +289,9 @@ fn require_clean_installed_commit(
         }
         BenchmarkScenario::CatalogBuildRebuild => {
             execute_catalog_build_rebuild(&mut device, manifest, output_dir, reporter)
+        }
+        BenchmarkScenario::CatalogFullBuildRebuild => {
+            execute_catalog_full_build_rebuild(&mut device, manifest, output_dir, reporter)
         }
         BenchmarkScenario::SystemEntry => {
             execute_system_entry(&mut device, manifest, output_dir, reporter)
@@ -813,6 +820,7 @@ fn particle_scene_lab_command(scenario: BenchmarkScenario) -> Option<&'static st
         | BenchmarkScenario::ColdBootPprof
         | BenchmarkScenario::CatalogLifecycle
         | BenchmarkScenario::CatalogBuildRebuild
+        | BenchmarkScenario::CatalogFullBuildRebuild
         | BenchmarkScenario::SystemEntry
         | BenchmarkScenario::SystemEntryCritical
         | BenchmarkScenario::SystemEntryCriticalConfirm
@@ -2010,6 +2018,65 @@ fn evaluate_catalog_build_rebuild_summary(summary: &Value) -> AgentResult<()> {
     Ok(())
 }
 
+fn execute_catalog_full_build_rebuild(
+    device: &mut impl BenchmarkDevice,
+    manifest: String,
+    output_dir: std::path::PathBuf,
+    reporter: &mut Reporter<'_>,
+) -> AgentResult<Outcome> {
+    reporter.emit(
+        EventKind::Progress,
+        "profile",
+        "benchmarking one isolated whole-card fresh build and forced rebuild",
+        Some(35),
+    )?;
+    let detail = device.profile(
+        BenchmarkProfile::CatalogFullBuildRebuild,
+        output_dir.clone(),
+    )?;
+    let summary: Value = serde_json::from_str(&detail).map_err(|error| error.to_string())?;
+    device.verify_health()?;
+    evaluate_catalog_full_build_rebuild_summary(&summary)?;
+    reporter.emit(
+        EventKind::Progress,
+        "benchmark-result",
+        &serde_json::to_string(&json!({
+            "installed_manifest": manifest,
+            "summary": summary,
+            "output_dir": output_dir,
+        }))
+        .map_err(|error| error.to_string())?,
+        Some(100),
+    )?;
+    Ok(Outcome::Passed)
+}
+
+fn evaluate_catalog_full_build_rebuild_summary(summary: &Value) -> AgentResult<()> {
+    if summary.get("schema").and_then(Value::as_str)
+        != Some("mister-magik-catalog-full-build-rebuild-v1")
+        || summary.get("scenario").and_then(Value::as_str) != Some("catalog-full-build-rebuild")
+        || summary.get("status").and_then(Value::as_str) != Some("passed")
+    {
+        return Err("whole-card catalog benchmark summary is not a passing v1 report".into());
+    }
+    if summary
+        .pointer("/fresh/catalog/valid")
+        .and_then(Value::as_bool)
+        != Some(true)
+        || summary
+            .pointer("/rebuild/catalog/valid")
+            .and_then(Value::as_bool)
+            != Some(true)
+        || summary
+            .pointer("/validation/catalog_counts_identical")
+            .and_then(Value::as_bool)
+            != Some(true)
+    {
+        return Err("whole-card catalog benchmark failed catalog validation".into());
+    }
+    Ok(())
+}
+
 fn evaluate_catalog_lifecycle_summary(summary: &Value) -> AgentResult<()> {
     if summary.get("schema").and_then(Value::as_str) != Some("mister-magik-installed-benchmark-v3")
     {
@@ -2551,6 +2618,22 @@ mod tests {
         let mut failed = passing;
         failed["samples"][1]["validation"]["snes_game_delta"] = json!(0);
         assert!(evaluate_catalog_build_rebuild_summary(&failed).is_err());
+    }
+
+    #[test]
+    fn whole_card_catalog_requires_matching_valid_counts() {
+        let passing = json!({
+            "schema": "mister-magik-catalog-full-build-rebuild-v1",
+            "scenario": "catalog-full-build-rebuild",
+            "status": "passed",
+            "fresh": {"catalog": {"valid": true}},
+            "rebuild": {"catalog": {"valid": true}},
+            "validation": {"catalog_counts_identical": true},
+        });
+        assert!(evaluate_catalog_full_build_rebuild_summary(&passing).is_ok());
+        let mut failed = passing;
+        failed["validation"]["catalog_counts_identical"] = json!(false);
+        assert!(evaluate_catalog_full_build_rebuild_summary(&failed).is_err());
     }
 
     #[test]

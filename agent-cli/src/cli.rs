@@ -860,6 +860,7 @@ mod tests {
             "screensaver",
             "catalog-lifecycle",
             "catalog-build-rebuild",
+            "catalog-full-build-rebuild",
             "system-entry",
             "system-entry-critical",
             "system-entry-critical-confirm",
