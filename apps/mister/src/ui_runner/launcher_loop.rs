@@ -9252,6 +9252,8 @@ pub(super) fn run_launcher_loop(
             update_slint_animations(animation_clock);
         }
         let mut layer_target = LayerTarget::new_oriented_with_epoch(target, layout, layout_epoch);
+        let reclaimed_preview_publication =
+            layer_target.reclaim_preview_publication(&mut launcher_preview_publication);
         let cpu_t1 = FrameAnalyticsCpuStamp::capture(frame_analytics_mode);
         let frame_t1 = Instant::now();
         retiring_screensaver_pipelines.retain_mut(|pipeline| !pipeline.poll_stopped());
@@ -10405,6 +10407,12 @@ pub(super) fn run_launcher_loop(
                     launcher_preview_version,
                 );
             }
+        } else if let Some((state, content_generation)) = reclaimed_preview_publication
+            && !crt_layout
+            && launcher_preview_publication.is_none()
+        {
+            launcher_preview_publication =
+                layer_target.capture_preview_publication(state, None, content_generation);
         }
         let mut physical_arcade_rect = None;
         let mut direct_arcade_update = None;
@@ -10528,7 +10536,7 @@ pub(super) fn run_launcher_loop(
             composition_decision.allow_preview_blit,
             wants_preview,
             preview_compositor_pending,
-            layer_target.direct_preview_rect().is_some(),
+            launcher_preview_publication.is_some() || layer_target.direct_preview_rect().is_some(),
             raw_preview_direct_rect.is_some(),
         );
         let mut preview_publication =

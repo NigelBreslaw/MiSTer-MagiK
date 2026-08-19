@@ -708,20 +708,42 @@ impl<'a> LayerTarget<'a> {
     }
 
     pub(super) fn capture_preview_publication(
-        &self,
+        &mut self,
         state: PhysicalLayerState,
         update: Option<PhysicalLayerUpdate>,
         content_generation: u64,
     ) -> Option<PhysicalLayerPublication> {
-        PhysicalLayerPublication::capture(
+        let backing = self
+            .target
+            .take_preview_publication_backing(self.layout.is_portrait())?;
+        PhysicalLayerPublication::capture_owned(
             PhysicalLayerRole::Preview,
             self.output_layout_generation(),
             self.output_layout_epoch(),
             content_generation,
             state,
             update,
-            self.direct_preview_view()?,
+            backing,
         )
+    }
+
+    pub(super) fn reclaim_preview_publication(
+        &mut self,
+        publication: &mut Option<PhysicalLayerPublication>,
+    ) -> Option<(PhysicalLayerState, u64)> {
+        let current = publication.take()?;
+        if current.role() != PhysicalLayerRole::Preview
+            || current.layout_generation() != self.output_layout_generation()
+            || current.layout_epoch() != self.output_layout_epoch()
+        {
+            return None;
+        }
+        let state = current.state();
+        let content_generation = current.content_generation();
+        let backing = current.try_into_backing().ok()?;
+        self.target
+            .restore_preview_publication_backing(self.layout.is_portrait(), backing)
+            .then_some((state, content_generation))
     }
 
     pub(super) fn capture_arcade_publication(

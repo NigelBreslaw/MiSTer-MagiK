@@ -318,6 +318,10 @@ impl PhysicalLayerBacking {
         &mut self.pixels
     }
 
+    pub fn into_dense_pixels(self) -> Vec<Rgb565Pixel> {
+        self.pixels
+    }
+
     pub fn allocated_bytes(&self) -> usize {
         self.pixels
             .capacity()
@@ -688,8 +692,22 @@ impl PhysicalPreviewLayerOwner {
 
     fn view(&self) -> Option<PhysicalLayerView<'_>> {
         self.rect
+            .filter(|rect| self.pixels.len() == rect.width().saturating_mul(rect.rows() as usize))
             .zip(self.cache_key)
             .map(|(rect, _)| PhysicalLayerView::dense(&self.pixels, rect))
+    }
+
+    fn take_backing(&mut self) -> Option<PhysicalLayerBacking> {
+        let rect = self.rect?;
+        PhysicalLayerBacking::from_dense_pixels(rect, std::mem::take(&mut self.pixels))
+    }
+
+    fn restore_backing(&mut self, backing: PhysicalLayerBacking) -> bool {
+        if self.rect != Some(backing.rect()) {
+            return false;
+        }
+        self.pixels = backing.into_dense_pixels();
+        true
     }
 
     fn matches(&self, rect: DirtyRect, output: Rgb565OutputLayout, token: u64) -> bool {
@@ -845,6 +863,32 @@ impl UiFrameTarget {
         true
     }
 
+    pub fn take_preview_publication_backing(
+        &mut self,
+        physical: bool,
+    ) -> Option<PhysicalLayerBacking> {
+        if physical {
+            return self.physical_preview.take_backing();
+        }
+        let rect = self.direct_preview_rect?;
+        PhysicalLayerBacking::from_dense_pixels(rect, std::mem::take(&mut self.direct_preview))
+    }
+
+    pub fn restore_preview_publication_backing(
+        &mut self,
+        physical: bool,
+        backing: PhysicalLayerBacking,
+    ) -> bool {
+        if physical {
+            return self.physical_preview.restore_backing(backing);
+        }
+        if self.direct_preview_rect != Some(backing.rect()) {
+            return false;
+        }
+        self.direct_preview = backing.into_dense_pixels();
+        true
+    }
+
     pub fn compose_direct_preview_rect(&mut self, rect: DirtyRect) -> u32 {
         let Some(backing_rect) = self.direct_preview_rect else {
             return 0;
@@ -944,6 +988,9 @@ impl UiFrameTarget {
 
     pub fn direct_preview_view(&self) -> Option<PhysicalLayerView<'_>> {
         self.direct_preview_rect
+            .filter(|rect| {
+                self.direct_preview.len() == rect.width().saturating_mul(rect.rows() as usize)
+            })
             .map(|rect| PhysicalLayerView::dense(&self.direct_preview, rect))
     }
 
@@ -1254,6 +1301,41 @@ mod tests {
             &[Rgb565Pixel(9); 6]
         );
         assert!(pixels.is_empty());
+    }
+
+    #[test]
+    fn preview_publication_backing_transfers_without_pixel_copy() {
+        let mut target = UiFrameTarget::cached(FramebufferTargetGeometry::new(3, 4));
+        let output = Rgb565OutputLayout::new(
+            4,
+            3,
+            3,
+            mister_magik_framebuffer_scenes::OutputRotation::Clockwise90,
+        )
+        .unwrap();
+        let physical_rect = rect(0, 1, 2, 4);
+        let mut pixels = vec![Rgb565Pixel(9); 6];
+        assert!(target.adopt_physical_direct_preview(&mut pixels, physical_rect, output, 17,));
+        let source_address = target
+            .physical_direct_preview_view()
+            .unwrap()
+            .pixels()
+            .as_ptr() as usize;
+
+        let backing = target
+            .take_preview_publication_backing(true)
+            .expect("publication backing");
+        assert_eq!(backing.pixels().as_ptr() as usize, source_address);
+        assert!(target.physical_direct_preview_view().is_none());
+        assert!(target.restore_preview_publication_backing(true, backing));
+        assert_eq!(
+            target
+                .physical_direct_preview_view()
+                .unwrap()
+                .pixels()
+                .as_ptr() as usize,
+            source_address
+        );
     }
 
     #[test]
