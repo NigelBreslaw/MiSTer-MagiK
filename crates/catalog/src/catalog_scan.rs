@@ -449,12 +449,24 @@ fn scan_targets_for_plan(
         }
     }
     for header in plan.game_dir_headers() {
+        if excluded_targets
+            .iter()
+            .any(|excluded| same_library_path(excluded, &header.path))
+        {
+            continue;
+        }
         let key = header.path.display().to_string().to_ascii_lowercase();
         if seen.insert(key) {
             targets.push(PlannedScanTarget::Runtime(header.clone()));
         }
     }
     for header in plan.all_game_dir_headers() {
+        if excluded_targets
+            .iter()
+            .any(|excluded| same_library_path(excluded, &header.path))
+        {
+            continue;
+        }
         let key = header.path.display().to_string().to_ascii_lowercase();
         if seen.insert(key) {
             targets.push(PlannedScanTarget::FactsOnly(header.clone()));
@@ -1899,6 +1911,32 @@ mod tests {
                 .any(|target| { target.path == arcade && target.kind == ScanTargetKind::Static })
         );
         assert!(dirs >= 1);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn planned_scan_exclusions_cover_every_target_kind() {
+        let root = unique_temp_dir("planned-target-exclusions");
+        std::fs::create_dir_all(root.join("_Console")).expect("create console cores");
+        std::fs::create_dir_all(root.join("games/NES")).expect("create NES games");
+        std::fs::create_dir_all(root.join("games/SNES")).expect("create SNES games");
+        std::fs::write(root.join("_Console/NES_20260101.rbf"), b"core").expect("write NES core");
+        std::fs::write(root.join("_Console/SNES_20260101.rbf"), b"core").expect("write SNES core");
+        std::fs::write(root.join("games/NES/Game.nes"), b"rom").expect("write NES game");
+        std::fs::write(root.join("games/SNES/Game.sfc"), b"rom").expect("write SNES game");
+        let roots = vec![root.display().to_string()];
+        let plan = CatalogScanPlan::for_roots(&roots);
+        let descriptors = planned_scan_target_descriptors(&roots, &plan, &[root.join("games/NES")]);
+        assert!(
+            descriptors
+                .iter()
+                .all(|target| !same_library_path(&target.path, &root.join("games/NES")))
+        );
+        assert!(
+            descriptors
+                .iter()
+                .any(|target| same_library_path(&target.path, &root.join("games/SNES")))
+        );
         let _ = std::fs::remove_dir_all(root);
     }
 

@@ -17420,7 +17420,7 @@ fn catalog_build_rebuild_launcher_env() -> Vec<(String, String)> {
 
 fn catalog_build_rebuild_input_script() -> String {
     std::iter::repeat_n("wait:600", 2)
-        .chain(std::iter::repeat_n("down", 6_000))
+        .chain(std::iter::repeat_n("down", 1_200))
         .collect::<Vec<_>>()
         .join(",")
 }
@@ -30752,7 +30752,7 @@ H: Handlers=event3 js0"#
             .map(|(_, value)| value.as_str())
             .expect("catalog scroll input script");
         assert!(input_script.starts_with("wait:600,wait:600,down"));
-        assert_eq!(input_script.matches("down").count(), 6_000);
+        assert_eq!(input_script.matches("down").count(), 1_200);
         assert!(env.iter().any(|(key, value)| {
             key == "MISTER_SHARDED_CATALOG_DIR"
                 && value.starts_with(CATALOG_BUILD_REBUILD_REMOTE_DIR)
