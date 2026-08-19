@@ -644,6 +644,7 @@ fn run_catalog_builder_in_process(
         Ok(()) if state.handshake_seen && state.terminal_seen => {}
         Ok(()) => {
             state.catalog_profile.fail("incomplete-event-sequence");
+            state.finish_catalog_pmu("incomplete-event-sequence");
             send_builder_failure(
                 tx,
                 plan,
@@ -657,6 +658,7 @@ fn run_catalog_builder_in_process(
         Err(_) if state.terminal_seen => {}
         Err(error) => {
             state.catalog_profile.fail("builder-runtime-failure");
+            state.finish_catalog_pmu("builder-runtime-failure");
             send_builder_failure(
                 tx,
                 plan,
@@ -672,6 +674,8 @@ struct EmbeddedBuilderEventState {
     terminal_seen: bool,
     catalog_ready_seen: bool,
     catalog_profile: crate::cpu_profile::CatalogBuildProfiler,
+    catalog_pmu_active: bool,
+    catalog_pmu_finished: bool,
 }
 
 impl Default for EmbeddedBuilderEventState {
@@ -681,6 +685,72 @@ impl Default for EmbeddedBuilderEventState {
             terminal_seen: false,
             catalog_ready_seen: false,
             catalog_profile: crate::cpu_profile::CatalogBuildProfiler::capture_process(),
+            catalog_pmu_active: false,
+            catalog_pmu_finished: false,
+        }
+    }
+}
+
+impl EmbeddedBuilderEventState {
+    fn begin_catalog_pmu(&mut self) {
+        if std::env::var("MISTER_PMU_PROFILE").as_deref() != Ok("1") {
+            return;
+        }
+        mister_magik_perf_events::clear_process_profiles();
+        self.catalog_pmu_active = true;
+    }
+
+    fn finish_catalog_pmu(&mut self, outcome: &'static str) {
+        if !self.catalog_pmu_active || self.catalog_pmu_finished {
+            return;
+        }
+        self.catalog_pmu_finished = true;
+        mister_magik_perf_events::submit_thread_profile("catalog-builder");
+        let profile = mister_magik_perf_events::take_process_profiles();
+        let Some(root) = std::env::var_os("MISTER_CATALOG_DIAGNOSTICS_DIR") else {
+            crate::ui_errln!("catalog PMU profile missing diagnostics directory");
+            return;
+        };
+        let path = std::path::PathBuf::from(root).join("catalog-pmu.json");
+        if let Err(error) = std::thread::Builder::new()
+            .name("catalog-pmu-profile".into())
+            .spawn(move || {
+                let status = if profile.dropped_profiles == 0
+                    && !profile.profiles.is_empty()
+                    && profile.profiles.iter().all(|entry| {
+                        entry.profile.failure.is_none()
+                            && entry.profile.dropped_spans == 0
+                            && !entry.profile.records.is_empty()
+                    }) {
+                    "complete"
+                } else {
+                    "failed"
+                };
+                let value = json!({
+                    "schema": "mister-magik-catalog-build-pmu-v1",
+                    "state": status,
+                    "outcome": outcome,
+                    "profile": profile,
+                });
+                let result = path
+                    .parent()
+                    .ok_or_else(|| "catalog PMU path has no parent".to_string())
+                    .and_then(|parent| {
+                        std::fs::create_dir_all(parent).map_err(|error| error.to_string())
+                    })
+                    .and_then(|()| {
+                        serde_json::to_vec_pretty(&value).map_err(|error| error.to_string())
+                    })
+                    .and_then(|mut encoded| {
+                        encoded.push(b'\n');
+                        std::fs::write(&path, encoded).map_err(|error| error.to_string())
+                    });
+                if let Err(error) = result {
+                    crate::ui_errln!("catalog PMU profile write failed: {error}");
+                }
+            })
+        {
+            crate::ui_errln!("catalog PMU profile writer spawn failed: {error}");
         }
     }
 }
@@ -711,6 +781,7 @@ fn handle_embedded_builder_event_with_paths(
             if !state.handshake_seen && operation == expected_operation =>
         {
             state.catalog_profile.begin(&operation);
+            state.begin_catalog_pmu();
             state.handshake_seen = true;
         }
         CatalogBuilderEvent::Handshake { operation, .. } => {
@@ -845,10 +916,12 @@ fn handle_embedded_builder_event_with_paths(
         }
         CatalogBuilderEvent::Persisted { summary, .. } => {
             state.catalog_profile.persisted();
+            state.finish_catalog_pmu("persisted");
             send_persisted_catalog(tx, root, summary, catalog_paths);
         }
         CatalogBuilderEvent::Unchanged { summary, .. } => {
             state.catalog_profile.unchanged();
+            state.finish_catalog_pmu("unchanged");
             let _ = tx.send(CatalogWorkerMessage::Unchanged {
                 summary: refresh_summary(summary),
             });
@@ -861,6 +934,7 @@ fn handle_embedded_builder_event_with_paths(
         }
         CatalogBuilderEvent::Failure { stage, error, .. } => {
             state.catalog_profile.fail("builder-reported-failure");
+            state.finish_catalog_pmu("failed");
             state.terminal_seen = true;
             send_builder_failure(
                 tx,
