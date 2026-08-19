@@ -5,7 +5,6 @@ use super::damage::TwoSlotDamageLedger;
 use super::target::{
     DirtyRect, DirtyRectList, PhysicalLayerBacking, PhysicalLayerView, subtract_dirty_rects,
 };
-use slint::platform::software_renderer::Rgb565Pixel;
 use std::fmt;
 use std::sync::Arc;
 
