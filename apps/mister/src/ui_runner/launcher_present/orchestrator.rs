@@ -1023,34 +1023,20 @@ impl PresentationAdapters<FpgaVblankLatchHiddenPresenter> for LivePresentationAd
                             )?;
                         }
                         ArcadeOverlayCopySource::CachedLogical => {
-                            match layer_target.copy_cached_arcade_list_update_to_hidden(
+                            arcade_stats = layer_target.copy_cached_arcade_list_update_to_hidden(
                                 hidden,
                                 arcade_list_renderer,
                                 update,
-                                plan.arcade_redraw_diff_safe,
-                                arcade_mirror,
-                            ) {
-                                Ok((stats, trace)) => {
-                                    arcade_stats = stats;
-                                    arcade_copy_trace = trace;
-                                }
-                                Err(cause) => {
-                                    return Err(PhysicalOverlayFailure {
-                                        role: PhysicalOverlayRole::Arcade,
-                                        slot_index: plan.slot_index,
-                                        rect: arcade_rect,
-                                        expected_rows: arcade_rect.rows(),
-                                        copied_rows: 0,
-                                        layout_generation: layer_target.output_layout_generation(),
-                                        content_generation: plan
-                                            .arcade_state_after()
-                                            .map_or(0, |state| state.version),
-                                        backing_key: "cached-logical-arcade".into(),
-                                        cause: Some(cause),
-                                    }
-                                    .to_string());
-                                }
-                            }
+                            );
+                            require_complete_overlay_copy(
+                                PhysicalOverlayRole::Arcade,
+                                plan.slot_index,
+                                arcade_rect,
+                                arcade_stats.rows,
+                                layer_target.output_layout_generation(),
+                                plan.arcade_state_after().map_or(0, |state| state.version),
+                                || "cached-logical-arcade".into(),
+                            )?;
                         }
                         ArcadeOverlayCopySource::MissingRequiredPublication => {
                             let arcade_generation =

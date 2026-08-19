@@ -819,29 +819,9 @@ impl<'a> LayerTarget<'a> {
         hidden: &mut ScanoutSlotsRgb565Framebuffer,
         renderer: &mut ArcadeListRenderer,
         update: ArcadeListUpdate,
-        diff_safe: bool,
-        mirror: &mut PhysicalLayerSlotMirror,
-    ) -> Result<(PresentCopyStats, PhysicalLayerCopyTrace), String> {
+    ) -> PresentCopyStats {
         debug_assert!(!self.layout.is_portrait());
-        let rect = renderer.dirty_rect();
-        let mirror_geometry_valid = mirror.rect == Some(rect);
-        match renderer.copy_layer_to_hidden_with_slot_mirror(
-            hidden,
-            update,
-            diff_safe,
-            &mut mirror.pixels,
-            &mut mirror.row_spans,
-            mirror_geometry_valid,
-        ) {
-            Ok((rows, bytes, trace)) => {
-                mirror.rect = Some(rect);
-                Ok((PresentCopyStats { rows, bytes }, trace))
-            }
-            Err(error) => {
-                mirror.invalidate();
-                Err(error)
-            }
-        }
+        copy_arcade_list_update_to_hidden(hidden, renderer, update)
     }
 
     pub(super) fn arcade_overlay_requires_publication(&self) -> bool {
