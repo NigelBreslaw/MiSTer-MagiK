@@ -17438,6 +17438,8 @@ fn run_catalog_build_rebuild_leg(
     let mut statuses = Vec::new();
     let mut telemetry = Vec::new();
     let mut automation_nonce = None;
+    let mut automation_hold_sent = false;
+    let mut interaction_origin_selection = None;
     let mut interaction_started = false;
     let mut interaction_telemetry_start = None;
     let (catalog, inspect_log, final_status) = loop {
@@ -17487,7 +17489,7 @@ fn run_catalog_build_rebuild_leg(
                 );
             }
         }
-        if !interaction_started
+        if !automation_hold_sent
             && status.get("input_enabled").and_then(Value::as_bool) == Some(true)
             && let Some(nonce) = automation_nonce.as_deref()
         {
@@ -17499,11 +17501,19 @@ fn run_catalog_build_rebuild_leg(
                     duration_ms: mister_magik_agent_protocol::LAUNCHER_AUTOMATION_MAX_HOLD_MS,
                 },
             )?;
+            interaction_origin_selection = status.get("arcade_selected").and_then(Value::as_u64);
+            automation_hold_sent = true;
+        }
+        if automation_hold_sent
+            && !interaction_started
+            && interaction_origin_selection.is_some()
+            && status.get("arcade_selected").and_then(Value::as_u64) != interaction_origin_selection
+        {
             interaction_telemetry_start = Some(telemetry.len());
             interaction_started = true;
         }
         statuses.push(status.clone());
-        let (telemetry_duration, telemetry_cadence_ms) = if interaction_started {
+        let (telemetry_duration, telemetry_cadence_ms) = if automation_hold_sent {
             (Duration::from_millis(250), 50)
         } else {
             (Duration::from_secs(1), 250)
@@ -17572,11 +17582,8 @@ fn run_catalog_build_rebuild_leg(
     let interaction_telemetry = interaction_telemetry_start
         .and_then(|start| telemetry.get(start..))
         .unwrap_or(&telemetry);
-    let ui = catalog_build_rebuild_ui_summary(
-        &statuses,
-        interaction_telemetry,
-        minimum_generation.is_none(),
-    )?;
+    let ui =
+        catalog_build_rebuild_ui_summary(&statuses, interaction_telemetry, interaction_started)?;
     Ok(json!({
         "timing": {
             "first_visible_ms": first_visible_ms,
