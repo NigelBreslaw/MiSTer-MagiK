@@ -178,6 +178,7 @@ pub(crate) struct LibraryScan {
     pub(crate) discoveries: Vec<GameDiscovery>,
     pub(crate) discover_us: u64,
     pub(crate) classify_us: u64,
+    pub(crate) attribution: crate::library_indexer::CatalogScanAttribution,
 }
 
 pub struct LibraryCatalogLoad {
@@ -358,6 +359,10 @@ impl LibraryScanArtifact {
 impl LibraryRamScanArtifact {
     pub fn stats(&self) -> &LibraryScanStats {
         &self.stats
+    }
+
+    pub fn scan_attribution_detail(&self) -> String {
+        self.scan.attribution.compact_detail()
     }
 
     pub fn catalog(&self, root: impl AsRef<Path>) -> ArcadeCatalog {

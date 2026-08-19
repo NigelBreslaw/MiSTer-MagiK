@@ -215,6 +215,67 @@ struct ResumeScan {
     pending_bytes: usize,
 }
 
+#[derive(Clone, Debug, Default)]
+pub(crate) struct ResumeValidationAttribution {
+    pub(crate) enabled: bool,
+    pub(crate) committed_state_present: bool,
+    pub(crate) committed_state_seeded: bool,
+    pub(crate) open_us: u64,
+    pub(crate) validation_us: u64,
+    pub(crate) committed_targets: usize,
+    pub(crate) validated_targets: usize,
+    pub(crate) reused_targets: usize,
+    pub(crate) invalidated_targets: usize,
+    pub(crate) unavailable_targets: usize,
+    pub(crate) error_targets: usize,
+    pub(crate) setup_errors: usize,
+    pub(crate) namespace: catalog_scan::NamespaceRouteAttribution,
+}
+
+#[derive(Clone, Debug, Default)]
+pub(crate) struct CatalogScanAttribution {
+    pub(crate) plan_us: u64,
+    pub(crate) resume_us: u64,
+    pub(crate) prepared_payload_us: u64,
+    pub(crate) execution_pipeline_us: u64,
+    pub(crate) post_pipeline_us: u64,
+    pub(crate) accounted_us: u64,
+    pub(crate) unattributed_us: u64,
+    pub(crate) total_us: u64,
+    pub(crate) resume: ResumeValidationAttribution,
+    pub(crate) execution: catalog_scan::NamespaceRouteAttribution,
+}
+
+impl CatalogScanAttribution {
+    pub(crate) fn compact_detail(&self) -> String {
+        format!(
+            "scan_total_us={} scan_accounted_us={} scan_unattributed_us={} scan_plan_us={} scan_resume_us={} scan_prepared_payload_us={} scan_execution_pipeline_us={} scan_post_pipeline_us={} resume_enabled={} resume_state_present={} resume_state_seeded={} resume_open_us={} resume_validation_us={} resume_committed={} resume_validated={} resume_reused={} resume_invalidated={} resume_unavailable={} resume_errors={} resume_setup_errors={} {} {}",
+            self.total_us,
+            self.accounted_us,
+            self.unattributed_us,
+            self.plan_us,
+            self.resume_us,
+            self.prepared_payload_us,
+            self.execution_pipeline_us,
+            self.post_pipeline_us,
+            u8::from(self.resume.enabled),
+            u8::from(self.resume.committed_state_present),
+            u8::from(self.resume.committed_state_seeded),
+            self.resume.open_us,
+            self.resume.validation_us,
+            self.resume.committed_targets,
+            self.resume.validated_targets,
+            self.resume.reused_targets,
+            self.resume.invalidated_targets,
+            self.resume.unavailable_targets,
+            self.resume.error_targets,
+            self.resume.setup_errors,
+            self.resume.namespace.compact_detail("validation"),
+            self.execution.compact_detail("execution"),
+        )
+    }
+}
+
 const RESUME_CHECKPOINT_TARGET_BATCH: usize = 16;
 const RESUME_CHECKPOINT_MAX_BYTES: usize = 2 * 1024 * 1024;
 
@@ -328,9 +389,15 @@ fn prepare_resume_scan(
     excluded_targets: &[PathBuf],
     priority: LibraryScanPriority,
     durable_resume: bool,
-) -> Option<ResumeScan> {
+) -> (Option<ResumeScan>, ResumeValidationAttribution) {
+    let open_started = Instant::now();
+    let mut attribution = ResumeValidationAttribution {
+        enabled: durable_resume,
+        ..ResumeValidationAttribution::default()
+    };
     if !durable_resume {
-        return None;
+        attribution.open_us = open_started.elapsed().as_micros() as u64;
+        return (None, attribution);
     }
     let descriptors =
         catalog_scan::planned_scan_target_descriptors(&cfg.roots, plan, excluded_targets);
@@ -358,11 +425,16 @@ fn prepare_resume_scan(
     let path = crate::catalog_config::default_build_progress_path();
     let committed_path = crate::catalog_config::default_builder_state_path();
     let had_committed_state = committed_path.exists();
-    if let Err(error) = crate::build_progress::seed_from_committed(&committed_path, &path) {
-        crate::catalog_logln!(
-            "catalog_resume_tsv\tphase=committed-state-disabled\treason={}",
-            error.replace(['\t', '\n'], " ")
-        );
+    attribution.committed_state_present = had_committed_state;
+    match crate::build_progress::seed_from_committed(&committed_path, &path) {
+        Ok(seeded) => attribution.committed_state_seeded = seeded,
+        Err(error) => {
+            crate::catalog_logln!(
+                "catalog_resume_tsv\tphase=committed-state-disabled\treason={}",
+                error.replace(['\t', '\n'], " ")
+            );
+            attribution.setup_errors = attribution.setup_errors.saturating_add(1);
+        }
     }
     let (journal, status) = match crate::build_progress::BuildProgressJournal::open_or_create(
         &path, &contract, &targets,
@@ -373,7 +445,9 @@ fn prepare_resume_scan(
                 "catalog_resume_tsv\tphase=journal-disabled\treason={}",
                 error.replace(['\t', '\n'], " ")
             );
-            return None;
+            attribution.open_us = open_started.elapsed().as_micros() as u64;
+            attribution.setup_errors = attribution.setup_errors.saturating_add(1);
+            return (None, attribution);
         }
     };
     let completed: HashMap<_, _> = journal
@@ -382,11 +456,23 @@ fn prepare_resume_scan(
         .into_iter()
         .map(|target| (target.target.ordinal, target))
         .collect();
-    let fingerprints = if completed.is_empty() {
-        HashMap::new()
+    attribution.committed_targets = completed.len();
+    let validation_started = Instant::now();
+    let (fingerprints, validation_namespace) = if completed.is_empty() {
+        (
+            HashMap::new(),
+            catalog_scan::NamespaceRouteAttribution::default(),
+        )
     } else {
         validate_target_fingerprints(cfg, plan, excluded_targets, priority, &completed)
     };
+    attribution.validation_us = validation_started.elapsed().as_micros() as u64;
+    attribution.validated_targets = fingerprints.len();
+    attribution.unavailable_targets = completed.len().saturating_sub(fingerprints.len());
+    attribution.error_targets = attribution
+        .error_targets
+        .saturating_add(validation_namespace.aborted_targets);
+    attribution.namespace = validation_namespace;
     let reusable: HashMap<u32, crate::build_progress::CompletedTarget> = completed
         .iter()
         .filter(|(ordinal, saved)| fingerprints.get(ordinal) == Some(&saved.input_fingerprint))
@@ -398,6 +484,8 @@ fn prepare_resume_scan(
         .filter(|ordinal| !reusable.contains_key(ordinal))
         .copied()
         .collect::<BTreeSet<_>>();
+    attribution.reused_targets = reusable.len();
+    attribution.invalidated_targets = invalidated_targets.len();
     let affected_systems = completed
         .iter()
         .filter(|(ordinal, _)| invalidated_targets.contains(ordinal))
@@ -425,7 +513,8 @@ fn prepare_resume_scan(
         pending_bytes: 0,
     };
     report_resume(&state, "journal-open", 0, &format!("{status:?}"));
-    Some(state)
+    attribution.open_us = open_started.elapsed().as_micros() as u64;
+    (Some(state), attribution)
 }
 
 fn target_output_systems(output_json: &str) -> BTreeSet<String> {
@@ -447,7 +536,10 @@ fn validate_target_fingerprints(
     excluded_targets: &[PathBuf],
     priority: LibraryScanPriority,
     completed: &HashMap<u32, crate::build_progress::CompletedTarget>,
-) -> HashMap<u32, String> {
+) -> (
+    HashMap<u32, String>,
+    catalog_scan::NamespaceRouteAttribution,
+) {
     let descriptors =
         catalog_scan::planned_scan_target_descriptors(cfg.roots.as_slice(), plan, excluded_targets);
     let completed_paths: BTreeSet<_> = completed
@@ -463,23 +555,21 @@ fn validate_target_fingerprints(
             })
             .map(|descriptor| descriptor.path.clone()),
     );
-    let rx = match priority {
-        LibraryScanPriority::Background => catalog_scan::discover_files_pipelined_with_plan(
-            cfg.roots.clone(),
-            plan.clone(),
-            validation_exclusions,
-            crate::runtime_thread::RuntimeThreadRole::LibraryWalker,
-        ),
+    let role = match priority {
+        LibraryScanPriority::Background => crate::runtime_thread::RuntimeThreadRole::LibraryWalker,
         LibraryScanPriority::Foreground => {
-            catalog_scan::discover_files_pipelined_foreground_with_plan(
-                cfg.roots.clone(),
-                plan.clone(),
-                validation_exclusions,
-            )
+            crate::runtime_thread::RuntimeThreadRole::LibraryWalkerForeground
         }
     };
+    let rx = catalog_scan::discover_files_pipelined_for_resume_validation(
+        cfg.roots.clone(),
+        plan.clone(),
+        validation_exclusions,
+        role,
+    );
     let mut current: Option<(u32, Fingerprint)> = None;
     let mut fingerprints = HashMap::new();
+    let mut attribution = catalog_scan::NamespaceRouteAttribution::default();
     while let Ok(event) = rx.recv() {
         match event {
             DiscoveryEvent::TargetStart(descriptor) => {
@@ -520,10 +610,16 @@ fn validate_target_fingerprints(
                     fingerprints.insert(ordinal, fingerprint.finish());
                 }
             }
-            DiscoveryEvent::Done { .. } => break,
+            DiscoveryEvent::Done {
+                attribution: route_attribution,
+                ..
+            } => {
+                attribution = route_attribution;
+                break;
+            }
         }
     }
-    fingerprints
+    (fingerprints, attribution)
 }
 
 #[derive(Default)]
@@ -665,9 +761,10 @@ fn scan_library_with_progress_and_events(
     let plan = launch_profiles::CatalogScanPlan::for_roots(&cfg.roots);
     apply_configured_target_allowlist(&cfg.roots, &plan, &mut excluded_targets);
     crate::cooperative_work::checkpoint();
+    let plan_us = plan_t.elapsed().as_micros() as u64;
     library_db::report_library_scan_timing(
         "catalog_scan_plan",
-        plan_t.elapsed().as_micros() as u64,
+        plan_us,
         format!(
             "base_profiles={} installed_cores={} runtime_dirs={}",
             plan.base_profiles().len(),
@@ -675,7 +772,10 @@ fn scan_library_with_progress_and_events(
             plan.game_dir_headers().len(),
         ),
     );
-    let mut resume = prepare_resume_scan(cfg, &plan, &excluded_targets, priority, durable_resume);
+    let resume_started = Instant::now();
+    let (mut resume, resume_attribution) =
+        prepare_resume_scan(cfg, &plan, &excluded_targets, priority, durable_resume);
+    let resume_us = resume_started.elapsed().as_micros() as u64;
     if let (Some(state), Some(report)) = (resume.as_ref(), scan_events.as_mut()) {
         report(LibraryScanEvent::ReconciliationPlanReady {
             system_ids: state.affected_systems.clone(),
@@ -686,16 +786,18 @@ fn scan_library_with_progress_and_events(
         catalog_scan::planned_scan_target_descriptors(&cfg.roots, &plan, &excluded_targets).len();
     let prepared_payload_t = Instant::now();
     let prepared_payload_index = PreparedPayloadIndex::from_library_roots(&cfg.roots);
+    let prepared_payload_us = prepared_payload_t.elapsed().as_micros() as u64;
     crate::cooperative_work::checkpoint();
     library_db::report_library_scan_timing(
         "prepared_payload_index",
-        prepared_payload_t.elapsed().as_micros() as u64,
+        prepared_payload_us,
         format!(
             "files={} complete_roots={}",
             prepared_payload_index.file_count(),
             prepared_payload_index.complete_root_count(),
         ),
     );
+    let pipeline_started = Instant::now();
     let rx = match priority {
         LibraryScanPriority::Background => catalog_scan::discover_files_pipelined_with_plan(
             cfg.roots.clone(),
@@ -714,6 +816,7 @@ fn scan_library_with_progress_and_events(
     let mut game_dir_facts = Vec::with_capacity(plan.game_dir_headers().len());
     let mut profiles = plan.base_profiles().to_vec();
     let mut discover_us = 0;
+    let mut execution_attribution = catalog_scan::NamespaceRouteAttribution::default();
 
     let mut normal_files = Vec::new();
     let mut containers = Vec::new();
@@ -926,9 +1029,12 @@ fn scan_library_with_progress_and_events(
                 }
             }
             DiscoveryEvent::Done {
-                discover_us: us, ..
+                discover_us: us,
+                attribution,
+                ..
             } => {
                 discover_us = us;
+                execution_attribution = attribution;
                 break;
             }
         };
@@ -1105,6 +1211,8 @@ fn scan_library_with_progress_and_events(
             }
         }
     }
+    let execution_pipeline_us = pipeline_started.elapsed().as_micros() as u64;
+    let post_pipeline_started = Instant::now();
     if let Some(state) = resume.as_mut() {
         flush_target_checkpoints(state);
     }
@@ -1190,6 +1298,34 @@ fn scan_library_with_progress_and_events(
         }
         CoverageAuditMode::Deferred => Vec::new(),
     };
+    let post_pipeline_us = post_pipeline_started.elapsed().as_micros() as u64;
+    let total_us = discover_t.elapsed().as_micros() as u64;
+    let accounted_us = plan_us
+        .saturating_add(resume_us)
+        .saturating_add(prepared_payload_us)
+        .saturating_add(execution_pipeline_us)
+        .saturating_add(post_pipeline_us);
+    let attribution = CatalogScanAttribution {
+        plan_us,
+        resume_us,
+        prepared_payload_us,
+        execution_pipeline_us,
+        post_pipeline_us,
+        accounted_us,
+        unattributed_us: total_us.saturating_sub(accounted_us),
+        total_us,
+        resume: resume_attribution,
+        execution: execution_attribution,
+    };
+    library_db::report_library_scan_timing(
+        "scan_attribution",
+        total_us,
+        attribution.compact_detail(),
+    );
+    crate::catalog_logln!(
+        "catalog_scan_attribution_tsv\t{}",
+        attribution.compact_detail()
+    );
     LibraryScan {
         version: SCHEMA_VERSION,
         scanned_at_unix: library_db::unix_now_secs(),
@@ -1205,6 +1341,7 @@ fn scan_library_with_progress_and_events(
         discoveries,
         discover_us,
         classify_us: classify_t.elapsed().as_micros() as u64,
+        attribution,
     }
 }
 
@@ -1442,5 +1579,47 @@ mod timing_tests {
         assert_eq!(arcade.calls, 2);
         assert_eq!(arcade.max_us, 30);
         assert_eq!(timing.file_discovery_breakdown["c64"]["crt"].calls, 1);
+    }
+
+    #[test]
+    fn scan_attribution_reports_non_overlapping_accounting_and_resume_results() {
+        let attribution = CatalogScanAttribution {
+            plan_us: 10,
+            resume_us: 20,
+            prepared_payload_us: 30,
+            execution_pipeline_us: 40,
+            post_pipeline_us: 50,
+            accounted_us: 150,
+            unattributed_us: 5,
+            total_us: 155,
+            resume: ResumeValidationAttribution {
+                enabled: true,
+                committed_state_present: true,
+                committed_state_seeded: true,
+                open_us: 20,
+                validation_us: 12,
+                committed_targets: 4,
+                validated_targets: 3,
+                reused_targets: 2,
+                invalidated_targets: 2,
+                unavailable_targets: 1,
+                error_targets: 1,
+                setup_errors: 0,
+                namespace: catalog_scan::NamespaceRouteAttribution::default(),
+            },
+            execution: catalog_scan::NamespaceRouteAttribution::default(),
+        };
+
+        let detail = attribution.compact_detail();
+        assert_eq!(
+            attribution.accounted_us + attribution.unattributed_us,
+            attribution.total_us
+        );
+        assert!(detail.contains("scan_unattributed_us=5"));
+        assert!(detail.contains("resume_committed=4"));
+        assert!(detail.contains("resume_reused=2"));
+        assert!(detail.contains("resume_unavailable=1"));
+        assert!(detail.contains("validation_targets=0"));
+        assert!(detail.contains("execution_targets=0"));
     }
 }

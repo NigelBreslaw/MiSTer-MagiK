@@ -14,7 +14,7 @@ use crate::namespace_walk::{
     self, NamespaceEntry, NamespaceEntryKind, NamespaceSignatureCapture, NamespaceWalkStats,
 };
 use crate::runtime_thread::{RuntimeThreadRole, apply_runtime_thread_policy};
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::fs::File;
 use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
@@ -30,6 +30,138 @@ const MAX_RUNTIME_DIRECTORY_BUFFERED_FILES: usize = 65_536;
 const ZIP_CENTRAL_DIRECTORY_BUFFER_BYTES: usize = 64 * 1024;
 const ZIP_CENTRAL_DIRECTORY_MAX_BUFFER_BYTES: u64 = 8 * 1024 * 1024;
 const ZIP_SKIP_BUFFER_BYTES: usize = 4 * 1024;
+const SLOWEST_WALK_TARGETS: usize = 10;
+
+#[derive(Clone, Debug, Default)]
+pub(crate) struct SlowWalkTarget {
+    pub(crate) path: String,
+    pub(crate) elapsed_us: u64,
+    pub(crate) dirs: usize,
+    pub(crate) files: usize,
+    pub(crate) candidates: usize,
+}
+
+#[derive(Clone, Debug, Default)]
+pub(crate) struct NamespaceRouteAttribution {
+    pub(crate) targets: usize,
+    pub(crate) aborted_targets: usize,
+    pub(crate) dirs: usize,
+    pub(crate) files: usize,
+    pub(crate) candidates: usize,
+    pub(crate) target_elapsed_us: u64,
+    pub(crate) producer_us: u64,
+    pub(crate) sync_send_us: u64,
+    pub(crate) sync_sends: usize,
+    pub(crate) sync_slow_sends: usize,
+    pub(crate) sync_send_max_us: u64,
+    pub(crate) dir_opens: usize,
+    pub(crate) read_calls: usize,
+    pub(crate) read_bytes: u64,
+    pub(crate) type_stats: usize,
+    pub(crate) captured_entries: usize,
+    pub(crate) backends: BTreeMap<String, usize>,
+    pub(crate) fallbacks: BTreeMap<String, usize>,
+    pub(crate) slowest_targets: Vec<SlowWalkTarget>,
+}
+
+impl NamespaceRouteAttribution {
+    fn record(&mut self, path: &Path, stats: &WalkTargetStats) {
+        self.targets = self.targets.saturating_add(1);
+        self.aborted_targets = self
+            .aborted_targets
+            .saturating_add(usize::from(stats.aborted));
+        self.dirs = self.dirs.saturating_add(stats.dirs);
+        self.files = self.files.saturating_add(stats.files);
+        self.candidates = self.candidates.saturating_add(stats.candidates);
+        self.target_elapsed_us = self.target_elapsed_us.saturating_add(stats.elapsed_us);
+        self.dir_opens = self.dir_opens.saturating_add(stats.namespace.dir_opens);
+        self.read_calls = self.read_calls.saturating_add(stats.namespace.read_calls);
+        self.read_bytes = self.read_bytes.saturating_add(stats.namespace.read_bytes);
+        self.type_stats = self.type_stats.saturating_add(stats.namespace.type_stats);
+        self.captured_entries = self
+            .captured_entries
+            .saturating_add(stats.namespace.captured_entries);
+        *self
+            .backends
+            .entry(stats.namespace.backend.to_string())
+            .or_default() += 1;
+        if let Some(reason) = stats.namespace.fallback_reason.as_ref() {
+            *self.fallbacks.entry(reason.clone()).or_default() += 1;
+        }
+        self.slowest_targets.push(SlowWalkTarget {
+            path: path.display().to_string(),
+            elapsed_us: stats.elapsed_us,
+            dirs: stats.dirs,
+            files: stats.files,
+            candidates: stats.candidates,
+        });
+        self.slowest_targets.sort_unstable_by(|a, b| {
+            b.elapsed_us
+                .cmp(&a.elapsed_us)
+                .then_with(|| a.path.cmp(&b.path))
+        });
+        self.slowest_targets.truncate(SLOWEST_WALK_TARGETS);
+    }
+
+    fn finish_pipeline(&mut self, producer_us: u64, send: &SyncSendStats) {
+        self.producer_us = producer_us;
+        self.sync_send_us = send.elapsed_us;
+        self.sync_sends = send.sends;
+        self.sync_slow_sends = send.slow_sends;
+        self.sync_send_max_us = send.max_us;
+    }
+
+    pub(crate) fn compact_detail(&self, prefix: &str) -> String {
+        let backends = bounded_map_detail(&self.backends);
+        let fallbacks = bounded_map_detail(&self.fallbacks);
+        let slowest = self
+            .slowest_targets
+            .iter()
+            .map(|target| {
+                format!(
+                    "{}:{}:{}:{}:{}",
+                    target.path.replace([' ', '\t', '\n', ','], "_"),
+                    target.elapsed_us,
+                    target.dirs,
+                    target.files,
+                    target.candidates
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(",");
+        format!(
+            "{prefix}_targets={} {prefix}_aborted={} {prefix}_dirs={} {prefix}_files={} {prefix}_candidates={} {prefix}_target_us={} {prefix}_producer_us={} {prefix}_send_us={} {prefix}_sends={} {prefix}_slow_sends={} {prefix}_send_max_us={} {prefix}_dir_opens={} {prefix}_reads={} {prefix}_read_bytes={} {prefix}_type_stats={} {prefix}_captured={} {prefix}_backends={backends} {prefix}_fallbacks={fallbacks} {prefix}_slowest={slowest}",
+            self.targets,
+            self.aborted_targets,
+            self.dirs,
+            self.files,
+            self.candidates,
+            self.target_elapsed_us,
+            self.producer_us,
+            self.sync_send_us,
+            self.sync_sends,
+            self.sync_slow_sends,
+            self.sync_send_max_us,
+            self.dir_opens,
+            self.read_calls,
+            self.read_bytes,
+            self.type_stats,
+            self.captured_entries,
+        )
+    }
+}
+
+fn bounded_map_detail(values: &BTreeMap<String, usize>) -> String {
+    if values.is_empty() {
+        return "none".to_string();
+    }
+    values
+        .iter()
+        .take(8)
+        .map(|(key, value)| format!("{}:{value}", key.replace([' ', '\t', '\n', ','], "_")))
+        .collect::<Vec<_>>()
+        .join(",")
+}
 
 pub(crate) struct FoundFile {
     pub(crate) path: PathBuf,
@@ -132,7 +264,11 @@ pub(crate) enum DiscoveryEvent {
     GameDirFacts(GameDirFact),
     RuntimeDirectory(RuntimeDirectoryCandidates),
     TargetComplete(ScanTargetDescriptor),
-    Done { dirs: usize, discover_us: u64 },
+    Done {
+        dirs: usize,
+        discover_us: u64,
+        attribution: NamespaceRouteAttribution,
+    },
 }
 
 struct WalkTargetStats {
@@ -187,11 +323,12 @@ pub(crate) fn discover_files_pipelined_foreground_with_plan(
     plan: CatalogScanPlan,
     excluded_targets: Vec<PathBuf>,
 ) -> mpsc::Receiver<DiscoveryEvent> {
-    discover_files_pipelined_with_plan(
+    discover_files_pipelined_with_plan_and_phase(
         roots,
         plan,
         excluded_targets,
         RuntimeThreadRole::LibraryWalkerForeground,
+        crate::pmu_phase::WALK_EXECUTION,
     )
 }
 
@@ -201,6 +338,37 @@ pub(crate) fn discover_files_pipelined_with_plan(
     excluded_targets: Vec<PathBuf>,
     role: RuntimeThreadRole,
 ) -> mpsc::Receiver<DiscoveryEvent> {
+    discover_files_pipelined_with_plan_and_phase(
+        roots,
+        plan,
+        excluded_targets,
+        role,
+        crate::pmu_phase::WALK_EXECUTION,
+    )
+}
+
+pub(crate) fn discover_files_pipelined_for_resume_validation(
+    roots: Vec<String>,
+    plan: CatalogScanPlan,
+    excluded_targets: Vec<PathBuf>,
+    role: RuntimeThreadRole,
+) -> mpsc::Receiver<DiscoveryEvent> {
+    discover_files_pipelined_with_plan_and_phase(
+        roots,
+        plan,
+        excluded_targets,
+        role,
+        crate::pmu_phase::WALK_RESUME_VALIDATION,
+    )
+}
+
+fn discover_files_pipelined_with_plan_and_phase(
+    roots: Vec<String>,
+    plan: CatalogScanPlan,
+    excluded_targets: Vec<PathBuf>,
+    role: RuntimeThreadRole,
+    pmu_phase: &'static str,
+) -> mpsc::Receiver<DiscoveryEvent> {
     let (tx, rx) = mpsc::sync_channel(DISCOVERY_EVENT_BUFFER);
     std::thread::Builder::new()
         .name("library-walker".to_string())
@@ -209,13 +377,15 @@ pub(crate) fn discover_files_pipelined_with_plan(
             let _background_scope = (role == RuntimeThreadRole::LibraryWalker)
                 .then(crate::cooperative_work::BackgroundScope::enter);
             let t = Instant::now();
-            let walk_pmu = mister_magik_perf_events::sampled_span(crate::pmu_phase::WALK);
-            let dirs = walk_index_candidates_with_plan(&roots, &plan, &excluded_targets, &tx);
+            let walk_pmu = mister_magik_perf_events::sampled_span(pmu_phase);
+            let (dirs, attribution) =
+                walk_index_candidates_with_plan(&roots, &plan, &excluded_targets, &tx);
             drop(walk_pmu);
             mister_magik_perf_events::submit_thread_profile("library-walker");
             let _ = tx.send(DiscoveryEvent::Done {
                 dirs,
                 discover_us: t.elapsed().as_micros() as u64,
+                attribution,
             });
         })
         .expect("spawn library-walker");
@@ -242,6 +412,7 @@ fn discover_files_pipelined_with_role(
             let _ = tx.send(DiscoveryEvent::Done {
                 dirs,
                 discover_us: t.elapsed().as_micros() as u64,
+                attribution: NamespaceRouteAttribution::default(),
             });
         })
         .expect("spawn library-walker");
@@ -324,7 +495,7 @@ fn walk_index_candidates_with_plan(
     plan: &CatalogScanPlan,
     excluded_targets: &[PathBuf],
     tx: &mpsc::SyncSender<DiscoveryEvent>,
-) -> usize {
+) -> (usize, NamespaceRouteAttribution) {
     let profiles = plan.base_profiles();
     let candidate_exts = source_index_extensions(profiles);
     let targets = scan_targets_for_plan(roots, plan, profiles, excluded_targets);
@@ -342,6 +513,7 @@ fn walk_index_candidates_with_plan(
     let mut dirs = 0usize;
     let mut producer_us = 0u64;
     let mut send_stats = SyncSendStats::default();
+    let mut attribution = NamespaceRouteAttribution::default();
     for (ordinal, target) in targets.into_iter().enumerate() {
         let mut target_send_stats = SyncSendStats::default();
         let descriptor = target.descriptor(ordinal);
@@ -390,6 +562,7 @@ fn walk_index_candidates_with_plan(
                 stats
             }
         };
+        attribution.record(&descriptor.path, &stats);
         dirs += stats.dirs;
         if stats.aborted {
             send_stats.add(&target_send_stats);
@@ -402,7 +575,8 @@ fn walk_index_candidates_with_plan(
         send_stats.add(&target_send_stats);
     }
     report_walker_pipeline_breakdown(producer_us, &send_stats);
-    dirs
+    attribution.finish_pipeline(producer_us, &send_stats);
+    (dirs, attribution)
 }
 
 impl PlannedScanTarget {
@@ -1869,7 +2043,7 @@ mod tests {
         let roots = vec![root.display().to_string()];
         let plan = CatalogScanPlan::for_roots(&roots);
         let (tx, rx) = std::sync::mpsc::sync_channel(DISCOVERY_EVENT_BUFFER);
-        let dirs = walk_index_candidates_with_plan(&roots, &plan, &[], &tx);
+        let (dirs, attribution) = walk_index_candidates_with_plan(&roots, &plan, &[], &tx);
         drop(tx);
 
         let mut open = None;
@@ -1897,6 +2071,9 @@ mod tests {
         }
 
         assert!(open.is_none(), "last target must be complete");
+        assert_eq!(attribution.targets, completed.len());
+        assert_eq!(attribution.aborted_targets, 0);
+        assert!(!attribution.slowest_targets.is_empty());
         assert!(!completed.is_empty());
         assert_eq!(
             completed
@@ -1912,6 +2089,46 @@ mod tests {
         );
         assert!(dirs >= 1);
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn namespace_attribution_bounds_and_orders_slowest_targets() {
+        let mut attribution = NamespaceRouteAttribution::default();
+        for index in 0..(SLOWEST_WALK_TARGETS + 3) {
+            attribution.record(
+                Path::new(&format!("/games/system-{index}")),
+                &WalkTargetStats {
+                    dirs: index,
+                    files: index * 2,
+                    candidates: index * 3,
+                    elapsed_us: index as u64,
+                    aborted: index == 2,
+                    namespace: NamespaceWalkStats {
+                        backend: "fd-relative",
+                        fallback_reason: (index == 1).then(|| "fixture-fallback".to_string()),
+                        dir_opens: 1,
+                        read_calls: 2,
+                        read_bytes: 3,
+                        type_stats: 4,
+                        captured_entries: 5,
+                        target_signature: None,
+                    },
+                },
+            );
+        }
+
+        assert_eq!(attribution.targets, SLOWEST_WALK_TARGETS + 3);
+        assert_eq!(attribution.aborted_targets, 1);
+        assert_eq!(attribution.slowest_targets.len(), SLOWEST_WALK_TARGETS);
+        assert_eq!(
+            attribution.slowest_targets[0].elapsed_us,
+            (SLOWEST_WALK_TARGETS + 2) as u64
+        );
+        assert_eq!(
+            attribution.backends.get("fd-relative"),
+            Some(&(SLOWEST_WALK_TARGETS + 3))
+        );
+        assert_eq!(attribution.fallbacks.get("fixture-fallback"), Some(&1));
     }
 
     #[test]

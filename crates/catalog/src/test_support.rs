@@ -544,6 +544,7 @@ pub(crate) fn sqlite_scan_with_normal_files(paths: &[&str]) -> LibraryScan {
         discoveries: Vec::new(),
         discover_us: 0,
         classify_us: 0,
+        attribution: crate::library_indexer::CatalogScanAttribution::default(),
     }
 }
 
@@ -563,6 +564,7 @@ pub(crate) fn sqlite_scan_with_discoveries(discoveries: Vec<GameDiscovery>) -> L
         discoveries,
         discover_us: 0,
         classify_us: 0,
+        attribution: crate::library_indexer::CatalogScanAttribution::default(),
     }
 }
 

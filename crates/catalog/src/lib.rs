@@ -88,6 +88,8 @@ pub mod work_coordinator;
 
 pub(crate) mod pmu_phase {
     pub const WALK: &str = "catalog.walk";
+    pub const WALK_EXECUTION: &str = "catalog.scan.execution-walk";
+    pub const WALK_RESUME_VALIDATION: &str = "catalog.scan.resume-validation";
     #[cfg(feature = "builder")]
     pub const SHARD_NAVIGATION: &str = "catalog.shard.navigation";
     #[cfg(feature = "builder")]
@@ -112,6 +114,8 @@ pub(crate) mod pmu_phase {
             assert_eq!(
                 [
                     WALK,
+                    WALK_EXECUTION,
+                    WALK_RESUME_VALIDATION,
                     SHARD_NAVIGATION,
                     SHARD_SQLITE_SCHEMA,
                     SHARD_GAMES,
@@ -122,6 +126,8 @@ pub(crate) mod pmu_phase {
                 ],
                 [
                     "catalog.walk",
+                    "catalog.scan.execution-walk",
+                    "catalog.scan.resume-validation",
                     "catalog.shard.navigation",
                     "catalog.shard.sqlite-schema",
                     "catalog.shard.games",

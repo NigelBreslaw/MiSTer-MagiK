@@ -1251,16 +1251,18 @@ impl BuilderBackend for SystemBuilderBackend {
                 self.durable_resume,
             )?,
         };
+        let scan_attribution = scanned.scan_attribution_detail();
         let stats = scanned.stats();
         let detail = format!(
-            "scan_us={} discover_us={} classify_us={} discoveries={} normal_files={} containers={} entries={} arcade_bootstrap_reused={arcade_bootstrap_reused}",
+            "scan_us={} discover_us={} classify_us={} discoveries={} normal_files={} containers={} entries={} arcade_bootstrap_reused={arcade_bootstrap_reused} {}",
             stats.scan_us,
             stats.discover_us,
             stats.classify_us,
             stats.discoveries,
             stats.normal_files,
             stats.containers,
-            stats.entries
+            stats.entries,
+            scan_attribution,
         );
         report_catalog_memory("scan-complete");
         Ok(StageOutput {
