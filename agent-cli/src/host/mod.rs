@@ -5266,6 +5266,7 @@ const CATALOG_BUILD_REBUILD_ARCADE_ROOT: &str = "/media/fat/_Arcade";
 const CATALOG_BUILD_REBUILD_SNES_ROOT: &str = "/media/fat/games/SNES";
 const CATALOG_BUILD_REBUILD_C64_ROOT: &str = "/media/fat/games/C64";
 const CATALOG_BUILD_REBUILD_SAMPLES: usize = 3;
+const CATALOG_BUILD_REBUILD_INTERACTION_SECS: u64 = 40;
 const SYSTEM_ENTRY_TRACE_REMOTE: &str = "/tmp/mister-magik/system-entry.tsv";
 const SYSTEM_ENTRY_PROFILE_REMOTE: &str = "/tmp/mister-magik/system-entry-profile.json";
 const SYSTEM_ENTRY_PPROF_SVG_REMOTE: &str = "/tmp/mister-magik/system-entry-pprof.svg";
@@ -18877,7 +18878,10 @@ fn run_catalog_build_rebuild_leg(
     let mut automation_hold_sent = false;
     let mut interaction_origin_selection = None;
     let mut interaction_started = false;
+    let mut interaction_started_at = None;
     let mut interaction_telemetry_start = None;
+    let mut interaction_telemetry_end = None;
+    let mut interaction_complete = false;
     let (mut catalog, inspect_log, final_status) = loop {
         let status = read_launcher_status(session)?;
         if first_visible_ms.is_none()
@@ -18890,53 +18894,49 @@ fn run_catalog_build_rebuild_leg(
                     > 0)
         {
             first_visible_ms = Some(started.elapsed().as_millis() as u64);
-            if exercise_arcade_ui && minimum_generation.is_none() {
-                let build_version = status
-                    .pointer("/build/version")
-                    .and_then(Value::as_str)
-                    .ok_or("catalog benchmark launcher status has no build version")?
-                    .to_owned();
-                let source_revision = status
-                    .pointer("/build/source_revision")
-                    .and_then(Value::as_str)
-                    .ok_or("catalog benchmark launcher status has no source revision")?
-                    .to_owned();
-                let main_status: Value = serde_json::from_str(
-                    &remote_read(session, MAIN_STATUS_REMOTE)
-                        .ok_or("catalog benchmark Main status is missing")?,
-                )?;
-                let main_generation = main_status
-                    .get("main_generation")
-                    .and_then(Value::as_u64)
-                    .ok_or("catalog benchmark Main status has no generation")?;
-                let begun: Value = serde_json::from_str(&launcher_automation::begin(
-                    config,
-                    &build_version,
-                    &source_revision,
-                    main_generation,
-                    120,
-                )?)?;
-                automation_nonce = Some(
-                    begun
-                        .get("nonce")
-                        .and_then(Value::as_str)
-                        .ok_or("catalog benchmark automation begin has no nonce")?
-                        .to_owned(),
-                );
-            }
         }
         if !automation_hold_sent
             && status.get("input_enabled").and_then(Value::as_bool) == Some(true)
-            && let Some(nonce) = automation_nonce.as_deref()
+            && exercise_arcade_ui
+            && minimum_generation.is_none()
         {
+            let build_version = status
+                .pointer("/build/version")
+                .and_then(Value::as_str)
+                .ok_or("catalog benchmark launcher status has no build version")?;
+            let source_revision = status
+                .pointer("/build/source_revision")
+                .and_then(Value::as_str)
+                .ok_or("catalog benchmark launcher status has no source revision")?;
+            let main_status: Value = serde_json::from_str(
+                &remote_read(session, MAIN_STATUS_REMOTE)
+                    .ok_or("catalog benchmark Main status is missing")?,
+            )?;
+            let main_generation = main_status
+                .get("main_generation")
+                .and_then(Value::as_u64)
+                .ok_or("catalog benchmark Main status has no generation")?;
+            let begun: Value = serde_json::from_str(&launcher_automation::begin(
+                config,
+                build_version,
+                source_revision,
+                main_generation,
+                CATALOG_BUILD_REBUILD_INTERACTION_SECS + 20,
+            )?)?;
+            let nonce = begun
+                .get("nonce")
+                .and_then(Value::as_str)
+                .ok_or("catalog benchmark automation begin has no nonce")?
+                .to_owned();
             launcher_automation::send_action(
                 config,
-                nonce,
+                &nonce,
                 &AutomationAction::Hold {
                     button: AutomationButton::Down,
-                    duration_ms: mister_magik_agent_protocol::LAUNCHER_AUTOMATION_MAX_HOLD_MS,
+                    duration_ms: CATALOG_BUILD_REBUILD_INTERACTION_SECS * 1_000,
                 },
             )?;
+            automation_nonce = Some(nonce);
             interaction_origin_selection = status.get("arcade_selected").and_then(Value::as_u64);
             automation_hold_sent = true;
         }
@@ -18947,18 +18947,32 @@ fn run_catalog_build_rebuild_leg(
         {
             interaction_telemetry_start = Some(telemetry.len());
             interaction_started = true;
+            interaction_started_at = Some(Instant::now());
         }
         statuses.push(status.clone());
-        let (telemetry_duration, telemetry_cadence_ms) = if automation_hold_sent {
-            (Duration::from_millis(250), 50)
-        } else {
-            (Duration::from_secs(1), 250)
-        };
+        let (telemetry_duration, telemetry_cadence_ms) =
+            if automation_hold_sent && !interaction_complete {
+                (Duration::from_millis(250), 50)
+            } else {
+                (Duration::from_secs(1), 250)
+            };
         telemetry.extend(agent_telemetry_for_duration_at_cadence(
             endpoint,
             telemetry_duration,
             telemetry_cadence_ms,
         )?);
+        if !interaction_complete
+            && interaction_started_at.is_some_and(|started| {
+                started.elapsed() >= Duration::from_secs(CATALOG_BUILD_REBUILD_INTERACTION_SECS)
+            })
+        {
+            interaction_telemetry_end = Some(telemetry.len());
+            interaction_complete = true;
+            if let Some(nonce) = automation_nonce.as_deref() {
+                let _ =
+                    launcher_automation::send_action(config, nonce, &AutomationAction::ReleaseAll);
+            }
+        }
         if first_visible_ms.is_none()
             && started.elapsed()
                 >= Duration::from_secs(CATALOG_LIFECYCLE_FIRST_VISIBLE_TIMEOUT_SECS)
@@ -19021,7 +19035,9 @@ fn run_catalog_build_rebuild_leg(
         let _ = launcher_automation::end(config, nonce);
     }
     let interaction_telemetry = interaction_telemetry_start
-        .and_then(|start| telemetry.get(start..))
+        .and_then(|start| {
+            telemetry.get(start..interaction_telemetry_end.unwrap_or(telemetry.len()))
+        })
         .unwrap_or(&telemetry);
     let ui =
         catalog_build_rebuild_ui_summary(&statuses, interaction_telemetry, interaction_started)?;
