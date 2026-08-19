@@ -330,15 +330,27 @@ pub(crate) fn write_system_shard_with_durability(
     drop(games_pmu);
     let search_index_pmu =
         mister_magik_perf_events::sampled_span(crate::pmu_phase::SHARD_SEARCH_INDEX);
-    let autocomplete_words = crate::persisted_search::populate(&transaction, &data.games)
+    let search = crate::persisted_search::populate(&transaction, &data.games)
         .map_err(|error| SystemShardError::new("write", error.to_string()))?;
+    crate::catalog_logln!(
+        "catalog_search_build_tsv\tsystem={}\tdocuments={}\twords={}\trow_loop_us={}\tautocomplete_insert_us={}\toptimize_us={}\tautomerge_restore_us={}\tintegrity_us={}\ttotal_us={}",
+        data.system_id.as_str(),
+        data.games.len(),
+        search.words,
+        search.row_loop_us,
+        search.autocomplete_insert_us,
+        search.optimize_us,
+        search.automerge_restore_us,
+        search.integrity_us,
+        search.total_us,
+    );
     for (key, value) in [
         (
             "search_schema_version",
             crate::persisted_search::SEARCH_SCHEMA_VERSION.to_string(),
         ),
         ("search_document_count", data.games.len().to_string()),
-        ("autocomplete_word_count", autocomplete_words.to_string()),
+        ("autocomplete_word_count", search.words.to_string()),
     ] {
         transaction
             .execute(

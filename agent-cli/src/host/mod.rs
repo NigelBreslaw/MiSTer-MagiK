@@ -19080,7 +19080,7 @@ fn catalog_logical_fingerprint(catalog: &Value) -> Result<String> {
 }
 
 fn catalog_phase_evidence(log: &str) -> Value {
-    const RECORDS: [&str; 8] = [
+    const RECORDS: [&str; 9] = [
         "startup_timing",
         "catalog_scan_attribution_tsv",
         "library_scan_timing",
@@ -19089,6 +19089,7 @@ fn catalog_phase_evidence(log: &str) -> Value {
         "catalog_v3_persist_phases_tsv",
         "catalog_v3_shard_phase_tsv",
         "catalog_memory_tsv",
+        "catalog_search_build_tsv",
     ];
     let mut records = Vec::new();
     for line in log.lines() {

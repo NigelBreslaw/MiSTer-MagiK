@@ -99,6 +99,14 @@ pub(crate) mod pmu_phase {
     #[cfg(feature = "builder")]
     pub const SHARD_SEARCH_INDEX: &str = "catalog.shard.search-index";
     #[cfg(feature = "builder")]
+    pub const SEARCH_ROWS: &str = "catalog.shard.search.rows";
+    #[cfg(feature = "builder")]
+    pub const SEARCH_AUTOCOMPLETE_INSERT: &str = "catalog.shard.search.autocomplete-insert";
+    #[cfg(feature = "builder")]
+    pub const SEARCH_OPTIMIZE: &str = "catalog.shard.search.optimize";
+    #[cfg(feature = "builder")]
+    pub const SEARCH_INTEGRITY: &str = "catalog.shard.search.integrity";
+    #[cfg(feature = "builder")]
     pub const SHARD_COMMIT: &str = "catalog.shard.commit";
     #[cfg(feature = "builder")]
     pub const SHARD_VALIDATE: &str = "catalog.shard.validate";
@@ -120,6 +128,10 @@ pub(crate) mod pmu_phase {
                     SHARD_SQLITE_SCHEMA,
                     SHARD_GAMES,
                     SHARD_SEARCH_INDEX,
+                    SEARCH_ROWS,
+                    SEARCH_AUTOCOMPLETE_INSERT,
+                    SEARCH_OPTIMIZE,
+                    SEARCH_INTEGRITY,
                     SHARD_COMMIT,
                     SHARD_VALIDATE,
                     PUBLISH_COPY_HASH,
@@ -132,6 +144,10 @@ pub(crate) mod pmu_phase {
                     "catalog.shard.sqlite-schema",
                     "catalog.shard.games",
                     "catalog.shard.search-index",
+                    "catalog.shard.search.rows",
+                    "catalog.shard.search.autocomplete-insert",
+                    "catalog.shard.search.optimize",
+                    "catalog.shard.search.integrity",
                     "catalog.shard.commit",
                     "catalog.shard.validate",
                     "catalog.publish.copy-hash",

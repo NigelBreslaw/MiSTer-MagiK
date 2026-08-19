@@ -323,12 +323,25 @@ pub(crate) fn create_schema(connection: &Connection) -> Result<(), PersistedSear
 }
 
 #[cfg(feature = "builder")]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct PersistedSearchBuildOutcome {
+    pub(crate) words: usize,
+    pub(crate) row_loop_us: u64,
+    pub(crate) autocomplete_insert_us: u64,
+    pub(crate) optimize_us: u64,
+    pub(crate) automerge_restore_us: u64,
+    pub(crate) integrity_us: u64,
+    pub(crate) total_us: u64,
+}
+
+#[cfg(feature = "builder")]
 pub(crate) fn populate(
     connection: &Connection,
     games: &[crate::system_shard::SystemGame],
-) -> Result<usize, PersistedSearchError> {
+) -> Result<PersistedSearchBuildOutcome, PersistedSearchError> {
     use std::collections::BTreeMap;
 
+    let total_started = Instant::now();
     connection
         .execute(
             "INSERT INTO game_search_fts(game_search_fts,rank) VALUES ('automerge',0)",
@@ -344,6 +357,8 @@ pub(crate) fn populate(
         )
         .map_err(|error| PersistedSearchError::with("prepare search rows", error))?;
     let mut words = BTreeMap::<String, AutocompleteStats>::new();
+    let row_loop_started = Instant::now();
+    let row_loop_pmu = mister_magik_perf_events::sampled_span(crate::pmu_phase::SEARCH_ROWS);
     for (ordinal, game) in games.iter().enumerate() {
         let title = normalize_search_text(&game.title);
         let manufacturer = normalize_search_text(&game.manufacturer);
@@ -408,7 +423,12 @@ pub(crate) fn populate(
         }
     }
     drop(insert_search);
+    drop(row_loop_pmu);
+    let row_loop_us = elapsed_us(row_loop_started);
 
+    let autocomplete_insert_started = Instant::now();
+    let autocomplete_insert_pmu =
+        mister_magik_perf_events::sampled_span(crate::pmu_phase::SEARCH_AUTOCOMPLETE_INSERT);
     let mut insert_word = connection
         .prepare("INSERT INTO autocomplete_words(word,source_rank,score) VALUES (?1,?2,?3)")
         .map_err(|error| PersistedSearchError::with("prepare autocomplete rows", error))?;
@@ -418,25 +438,44 @@ pub(crate) fn populate(
             .map_err(|error| PersistedSearchError::with("insert autocomplete row", error))?;
     }
     drop(insert_word);
+    drop(autocomplete_insert_pmu);
+    let autocomplete_insert_us = elapsed_us(autocomplete_insert_started);
+    let optimize_started = Instant::now();
+    let optimize_pmu = mister_magik_perf_events::sampled_span(crate::pmu_phase::SEARCH_OPTIMIZE);
     connection
         .execute(
             "INSERT INTO game_search_fts(game_search_fts) VALUES ('optimize')",
             [],
         )
         .map_err(|error| PersistedSearchError::with("optimize FTS index", error))?;
+    drop(optimize_pmu);
+    let optimize_us = elapsed_us(optimize_started);
+    let automerge_restore_started = Instant::now();
     connection
         .execute(
             "INSERT INTO game_search_fts(game_search_fts,rank) VALUES ('automerge',4)",
             [],
         )
         .map_err(|error| PersistedSearchError::with("restore FTS automerge", error))?;
+    let automerge_restore_us = elapsed_us(automerge_restore_started);
+    let integrity_started = Instant::now();
+    let integrity_pmu = mister_magik_perf_events::sampled_span(crate::pmu_phase::SEARCH_INTEGRITY);
     connection
         .execute(
             "INSERT INTO game_search_fts(game_search_fts) VALUES ('integrity-check')",
             [],
         )
         .map_err(|error| PersistedSearchError::with("check FTS integrity", error))?;
-    Ok(words.len())
+    drop(integrity_pmu);
+    Ok(PersistedSearchBuildOutcome {
+        words: words.len(),
+        row_loop_us,
+        autocomplete_insert_us,
+        optimize_us,
+        automerge_restore_us,
+        integrity_us: elapsed_us(integrity_started),
+        total_us: elapsed_us(total_started),
+    })
 }
 
 pub(crate) fn validate(
