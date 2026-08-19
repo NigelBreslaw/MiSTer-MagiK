@@ -72,7 +72,7 @@ pub(super) fn profile_installed_scheduler_trace(
             "path": "scheduler-trace.txt",
             "sha256": retained.sha256,
             "clock": "mono",
-            "buffer_kb_per_cpu": 4096,
+            "buffer_kb_per_cpu": SCHEDULER_TRACE_SPEC.buffer_kb,
             "capabilities": parse_trace_capabilities(&retained.capabilities),
             "stats": "trace-stats.txt",
         });

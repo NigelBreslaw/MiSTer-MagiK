@@ -11,7 +11,7 @@ pub(super) const SCHEDULER_TRACE_SPEC: TracefsCaptureSpec = TracefsCaptureSpec {
     label: "scheduler trace",
     instance: "mister-magik-scheduler",
     remote_root: "/tmp/mister-magik/scheduler-trace",
-    buffer_kb: 4_096,
+    buffer_kb: 16_384,
     required_events: &[
         "sched:sched_switch",
         "sched:sched_wakeup",
