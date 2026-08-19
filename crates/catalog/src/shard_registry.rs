@@ -258,22 +258,18 @@ fn publish_system_artifacts_with_options(
             }
         }
     } else {
+        let hash_started = Instant::now();
         let sqlite_hash = file_checksum(staged_sqlite)?;
         let navigation_hash = file_checksum(staged_navigation)?;
         let navpack_hash = file_checksum(&staged_navpack)?;
+        let hash_time = hash_started.elapsed();
         fs::rename(staged_sqlite, &target_sqlite)
             .map_err(|error| RegistryError::with("publish immutable SQLite", error))?;
         fs::rename(staged_navigation, &target_navigation)
             .map_err(|error| RegistryError::with("publish immutable navigation", error))?;
         fs::rename(&staged_navpack, &target_navpack)
             .map_err(|error| RegistryError::with("publish immutable NavPack", error))?;
-        (
-            sqlite_hash,
-            navigation_hash,
-            navpack_hash,
-            Duration::ZERO,
-            0,
-        )
+        (sqlite_hash, navigation_hash, navpack_hash, hash_time, 0)
     };
     if sync_target_directory {
         sync_directory(target_directory)?;
@@ -309,6 +305,9 @@ pub(crate) fn publish_prevalidated_system_artifacts_deferred(
     games: u64,
     limits: RegistryLimits,
 ) -> Result<ArtifactPublication, RegistryError> {
+    let on_media_staging = storage_root.join("staging");
+    let copy_staged = !staged_sqlite.starts_with(&on_media_staging)
+        || !staged_navigation.starts_with(&on_media_staging);
     publish_system_artifacts_with_options(
         storage_root,
         staged_sqlite,
@@ -319,7 +318,7 @@ pub(crate) fn publish_prevalidated_system_artifacts_deferred(
         limits,
         false,
         false,
-        true,
+        copy_staged,
     )
 }
 
@@ -1161,6 +1160,59 @@ mod tests {
 
     #[test]
     #[cfg(feature = "builder")]
+    fn deferred_publication_renames_on_media_staging_without_copying() {
+        let root = temporary_root("deferred-rename");
+        let system_id = SystemId::parse("snes").unwrap();
+        let staging = root.join("staging/run-1");
+        let (sqlite, navigation) = stage_generation(&staging, &system_id, 1);
+
+        let publication = publish_prevalidated_system_artifacts_deferred(
+            &root,
+            &sqlite,
+            &navigation,
+            &system_id,
+            1,
+            1,
+            limits(),
+        )
+        .unwrap();
+
+        assert_eq!(publication.copied_bytes, 0);
+        assert!(!sqlite.exists());
+        assert!(!navigation.exists());
+        assert!(root.join(publication.generation.sqlite_path).is_file());
+        assert!(root.join(publication.generation.navigation_path).is_file());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    #[cfg(feature = "builder")]
+    fn deferred_publication_still_copies_external_staging() {
+        let root = temporary_root("deferred-copy-target");
+        let external = temporary_root("deferred-copy-source");
+        let system_id = SystemId::parse("snes").unwrap();
+        let (sqlite, navigation) = stage_generation(&external, &system_id, 1);
+
+        let publication = publish_prevalidated_system_artifacts_deferred(
+            &root,
+            &sqlite,
+            &navigation,
+            &system_id,
+            1,
+            1,
+            limits(),
+        )
+        .unwrap();
+
+        assert!(publication.copied_bytes > 0);
+        assert!(sqlite.exists());
+        assert!(navigation.exists());
+        fs::remove_dir_all(root).unwrap();
+        fs::remove_dir_all(external).unwrap();
+    }
+
+    #[test]
+    #[cfg(feature = "builder")]
     fn uncommitted_generation_does_not_replace_the_old_manifest() {
         let root = temporary_root("manifest-last");
         let system_id = SystemId::parse("snes").unwrap();
@@ -1308,7 +1360,26 @@ mod tests {
         generation: u64,
     ) -> PublishedGeneration {
         let staging = root.join("staging").join(format!("run-{generation}"));
-        fs::create_dir_all(&staging).unwrap();
+        let (sqlite, navigation) = stage_generation(&staging, system_id, generation);
+        publish_system_artifacts(
+            root,
+            &sqlite,
+            &navigation,
+            system_id,
+            generation,
+            1,
+            limits(),
+        )
+        .unwrap()
+    }
+
+    #[cfg(feature = "builder")]
+    fn stage_generation(
+        staging: &Path,
+        system_id: &SystemId,
+        generation: u64,
+    ) -> (PathBuf, PathBuf) {
+        fs::create_dir_all(staging).unwrap();
         let sqlite = staging.join("system.sqlite3");
         let navigation = staging.join("system.nav.lz4b");
         let data = SystemShardData {
@@ -1323,16 +1394,7 @@ mod tests {
             }],
         };
         write_system_shard(&sqlite, &navigation, &data, limits().shard).unwrap();
-        publish_system_artifacts(
-            root,
-            &sqlite,
-            &navigation,
-            system_id,
-            generation,
-            1,
-            limits(),
-        )
-        .unwrap()
+        (sqlite, navigation)
     }
 
     #[cfg(feature = "builder")]
