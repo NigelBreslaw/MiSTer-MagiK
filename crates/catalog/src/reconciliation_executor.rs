@@ -263,7 +263,7 @@ pub fn execute_reconciliation_with_events(
         .iter()
         .filter(|planned| planned.action == PlannedSystemAction::Rebuild)
         .collect::<Vec<_>>();
-    let pipeline_enabled = resume_journal.is_none() && current.is_none() && rebuilds.len() > 1;
+    let pipeline_enabled = current.is_none() && saved_systems.is_empty() && rebuilds.len() > 1;
     let completed_shards = if pipeline_enabled {
         worker_count = 2;
         for planned in &rebuilds {
@@ -287,6 +287,13 @@ pub fn execute_reconciliation_with_events(
         pipeline_fallbacks = pipeline.fallbacks;
         shard_build_wall_time = pipeline.build_time;
         shard_publication_wall_time = pipeline.publish_time;
+        if let Some(journal) = resume_journal.as_mut() {
+            sync_artifact_batch(storage_root)
+                .map_err(|error| ReconciliationError::new("shard-checkpoint", error.to_string()))?;
+            for shard in &pipeline.completed {
+                checkpoint_published_shard(storage_root, journal, shard, limits)?;
+            }
+        }
         for shard in &pipeline.completed {
             emit(ReconciliationEvent::SystemPrepared {
                 system_id: shard.system.system_id.clone(),
@@ -392,34 +399,7 @@ pub fn execute_reconciliation_with_events(
                         sync_artifact_batch(storage_root).map_err(|error| {
                             ReconciliationError::new("shard-checkpoint", error.to_string())
                         })?;
-                        validate_published_system(storage_root, &shard.system, limits).map_err(
-                            |error| ReconciliationError::new("shard-checkpoint", error.to_string()),
-                        )?;
-                        let active = &shard.system.active;
-                        journal
-                            .record_shard(&crate::build_progress::CompletedShard {
-                                system_id: shard.system.system_id.as_str().to_string(),
-                                generation: active.generation,
-                                sqlite_path: active.sqlite_path.display().to_string(),
-                                navigation_path: active.navigation_path.display().to_string(),
-                                content_hash: format!(
-                                    "{}:{}",
-                                    active.sqlite_hash, active.navigation_hash
-                                ),
-                                manifest_system_json: serde_json::to_string(&shard.system)
-                                    .map_err(|error| {
-                                        ReconciliationError::new(
-                                            "shard-checkpoint",
-                                            error.to_string(),
-                                        )
-                                    })?,
-                            })
-                            .map_err(|error| ReconciliationError::new("shard-checkpoint", error))?;
-                        crate::catalog_logln!(
-                            "catalog_resume_tsv\tphase=shard-committed\tsystem_id={}\tgeneration={}\treason=durable",
-                            shard.system.system_id.as_str(),
-                            expected_generation
-                        );
+                        checkpoint_published_shard(storage_root, journal, &shard, limits)?;
                     }
                     shard_build_wall_time += shard.elapsed.saturating_sub(shard.publish_time);
                     shard_publication_wall_time += shard.publish_time;
@@ -520,6 +500,34 @@ pub fn execute_reconciliation_with_events(
         rebuilt,
         removed,
     })
+}
+
+fn checkpoint_published_shard(
+    storage_root: &Path,
+    journal: &mut crate::build_progress::BuildProgressJournal,
+    shard: &CompletedShard,
+    limits: RegistryLimits,
+) -> Result<(), ReconciliationError> {
+    validate_published_system(storage_root, &shard.system, limits)
+        .map_err(|error| ReconciliationError::new("shard-checkpoint", error.to_string()))?;
+    let active = &shard.system.active;
+    journal
+        .record_shard(&crate::build_progress::CompletedShard {
+            system_id: shard.system.system_id.as_str().to_string(),
+            generation: active.generation,
+            sqlite_path: active.sqlite_path.display().to_string(),
+            navigation_path: active.navigation_path.display().to_string(),
+            content_hash: format!("{}:{}", active.sqlite_hash, active.navigation_hash),
+            manifest_system_json: serde_json::to_string(&shard.system)
+                .map_err(|error| ReconciliationError::new("shard-checkpoint", error.to_string()))?,
+        })
+        .map_err(|error| ReconciliationError::new("shard-checkpoint", error))?;
+    crate::catalog_logln!(
+        "catalog_resume_tsv\tphase=shard-committed\tsystem_id={}\tgeneration={}\treason=durable",
+        shard.system.system_id.as_str(),
+        active.generation
+    );
+    Ok(())
 }
 
 fn saved_system_matches(
@@ -1592,6 +1600,11 @@ mod tests {
         .unwrap();
 
         assert_eq!(materializer.calls, 2);
+        let journal = crate::build_progress::BuildProgressJournal::open_for_projection(
+            &crate::build_progress::path_for_root(&root),
+        )
+        .unwrap();
+        assert_eq!(journal.completed_shards().unwrap().len(), 2);
         fs::remove_dir_all(root).unwrap();
     }
 
