@@ -349,6 +349,7 @@ impl CrtBackdropController {
         let selected_changed = self.selected != Some(selected);
         let transition_changed = self.transition_id != transition_id;
         let prepared_changed = self.prepared_revision != self.revision;
+        let mut backdrop_state_changed = false;
         if selected_changed
             || transition_changed
             || prepared_changed
@@ -357,20 +358,21 @@ impl CrtBackdropController {
         {
             if let Some(source) = source.as_ref() {
                 self.request_prepare(source, layout);
-                let prepared = self.prepared_target(source, layout);
-                self.state
-                    .retarget_prepared(prepared, now, instant_transition);
+                if let Some(prepared) = self.prepared_target(source, layout) {
+                    self.state
+                        .retarget_prepared(Some(prepared), now, instant_transition);
+                    backdrop_state_changed = true;
+                }
             } else {
                 self.state.clear_plain();
+                backdrop_state_changed = true;
             }
             self.selected = Some(selected);
             self.transition_id = transition_id;
             self.prepared_revision = self.revision;
         }
 
-        let compose_full = selected_changed
-            || transition_changed
-            || prepared_changed
+        let compose_full = backdrop_state_changed
             || layout_changed
             || !self.was_eligible
             || force_full_repaint
@@ -536,6 +538,83 @@ mod tests {
         assert!(!controller.poll());
         assert!(controller.cache.is_empty());
         assert!(!controller.pending.contains(&identity));
+    }
+
+    #[test]
+    fn pending_replacement_keeps_the_previous_backdrop_without_repainting() {
+        let display = UiDisplay::for_plan(
+            UiDisplayPlan::from_mister_ini_text(
+                "[MiSTer]\ndirect_video=1\nmenu_pal=0\nforced_scandoubler=0\n",
+            )
+            .expect("CRT240 display plan"),
+        );
+        let layout = UiLayoutGeometry::for_display(&display, ScreenOrientation::Normal);
+        let metrics = CrtUiMetrics::for_display(&display);
+        let arcade_layout = CrtArcadeLayout::for_layout(layout, metrics, false);
+        let mut controller = CrtBackdropController::for_display(&display).expect("CRT backdrop");
+        let (request_tx, request_rx) = sync_channel(PREPARE_QUEUE_CAP);
+        let (_result_tx, result_rx) = sync_channel(PREPARE_QUEUE_CAP);
+        controller.worker = PrepareWorker {
+            tx: request_tx,
+            rx: result_rx,
+        };
+        let previous_source = [Rgb565Pixel(0xffff); 4];
+        controller.state.retarget(
+            Some(PreviewFrame {
+                pixels: PreviewPixels::Rgb565 {
+                    pixels: &previous_source,
+                    stride_pixels: 2,
+                },
+                source_width: 2,
+                source_height: 2,
+                display_width: 2,
+                display_height: 2,
+            }),
+            Duration::ZERO,
+        );
+        let settled_at = CRT_BACKDROP_FADE_DURATION + Duration::from_millis(1);
+        let _ = controller.state.compose(settled_at);
+        controller.selected = Some(0);
+        controller.was_eligible = true;
+        controller.active_layout = Some(BackdropLayoutIdentity::for_layout(layout));
+        controller.prepared_revision = controller.revision;
+        let previous_pixels = controller.state.pixels().to_vec();
+        let sentinel = Rgb565Pixel(0xf81f);
+        let mut destination = vec![sentinel; controller.width() * controller.height()];
+        let replacement = BackdropSource {
+            key: "replacement".to_string(),
+            epoch: 2,
+            words: Arc::from(vec![0_u16; 4]),
+            source_width: 2,
+            source_height: 2,
+            stride_pixels: 2,
+        };
+
+        let frame = controller.compose(
+            true,
+            false,
+            true,
+            1,
+            Some(9),
+            Some(replacement.clone()),
+            settled_at,
+            &mut destination,
+            layout,
+            arcade_layout,
+            metrics,
+        );
+
+        assert!(!frame.full_damage);
+        assert!(destination.iter().all(|pixel| *pixel == sentinel));
+        assert_eq!(controller.state.pixels(), previous_pixels);
+        assert_eq!(controller.selected, Some(1));
+        assert_eq!(controller.transition_id, Some(9));
+        assert!(
+            controller
+                .pending
+                .contains(&controller.prepared_identity(&replacement, layout))
+        );
+        assert!(request_rx.try_recv().is_ok());
     }
 
     #[test]
