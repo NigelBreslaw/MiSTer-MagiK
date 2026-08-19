@@ -4915,6 +4915,7 @@ pub(super) fn run_launcher_loop(
         orientation_benchmark.fail("benchmark-effect-is-missing-or-invalid");
     }
     let mut orientation_benchmark_completed_at = None;
+    let mut orientation_benchmark_terminal_status_requested = false;
     let orientation_benchmark_requires_analytics =
         launcher_env_flag("MISTER_ORIENTATION_TRANSITIONS_REQUIRE_ANALYTICS");
     let mut latch_v5_qualification =
@@ -11880,14 +11881,20 @@ pub(super) fn run_launcher_loop(
                         "orientation_transition_benchmark_pmu_write_failed error={error}"
                     );
                 }
+            }
+        }
+        if let Some(completed) = orientation_benchmark_completed_at {
+            let elapsed = completed.elapsed();
+            if elapsed >= Duration::from_millis(300)
+                && !orientation_benchmark_terminal_status_requested
+            {
+                orientation_benchmark_terminal_status_requested = true;
                 frame_accounting.request_status_write();
                 request_launcher_redraw!();
             }
-        }
-        if orientation_benchmark_completed_at
-            .is_some_and(|completed| completed.elapsed() >= Duration::from_millis(500))
-        {
-            break;
+            if elapsed >= Duration::from_millis(800) {
+                break;
+            }
         }
         if orientation_benchmark.failed() {
             if let Some(directory) = orientation_transition_benchmark_evidence_dir()
