@@ -664,11 +664,13 @@ impl TwoBufferLatchState {
 
     pub fn restore_bytes_for_slot(&self, slot_index: u8) -> usize {
         let slot = self.slot(slot_index);
-        let mut bytes = self.base_damage.invalid_bytes(slot_index);
+        let mut restore_rects = self.base_damage.plan(slot_index);
         for layer in slot.layers.iter().flatten() {
-            bytes = bytes.saturating_add(rect_bytes(layer.rect));
+            let uncovered =
+                subtract_dirty_rects(DirtyRectList::from_one(layer.rect), &restore_rects);
+            restore_rects.extend_from(&uncovered);
         }
-        bytes
+        restore_rects.total_rgb565_bytes()
     }
 
     pub fn writable_slot_index(&self) -> Option<u8> {
@@ -953,12 +955,6 @@ fn push_without_covered_rect(target: &mut DirtyRectList, rect: DirtyRect) {
     if !target.iter().any(|existing| existing.contains(rect)) {
         target.push(rect);
     }
-}
-
-fn rect_bytes(rect: DirtyRect) -> usize {
-    rect.width()
-        .saturating_mul(rect.rows() as usize)
-        .saturating_mul(super::format::RGB565_BYTES_PER_PIXEL)
 }
 
 #[cfg(test)]
@@ -2200,6 +2196,19 @@ mod tests {
 
         assert_eq!(
             state.restore_bytes_for_slot(plan.slot_index),
+            WIDTH * HEIGHT * std::mem::size_of::<Rgb565Pixel>()
+        );
+    }
+
+    #[test]
+    fn restore_byte_estimate_unions_base_and_layer_damage() {
+        let mut state = TwoBufferLatchState::new(WIDTH, HEIGHT);
+        state.slots[0].layers[PhysicalLayerRole::Preview.index()] =
+            Some(layer(rect(1, 0, 4, 2), 1));
+        state.slots[0].layers[PhysicalLayerRole::Arcade.index()] = Some(layer(rect(0, 1, 3, 3), 1));
+
+        assert_eq!(
+            state.restore_bytes_for_slot(1),
             WIDTH * HEIGHT * std::mem::size_of::<Rgb565Pixel>()
         );
     }
