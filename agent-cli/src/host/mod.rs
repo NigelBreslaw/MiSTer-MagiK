@@ -18993,12 +18993,14 @@ fn run_catalog_build_rebuild_leg(
         let inspect = exec(session, &runtime_command("catalog-v3-inspect"), true)?;
         if exec_failure_message("catalog build/rebuild inspect", &inspect).is_none()
             && let Ok(catalog) = parse_catalog_lifecycle_inspect(&inspect.stdout)
+            // An unchanged forced rebuild may correctly retain its generation.
+            // Completion is authoritative here; only reject a rollback.
             && minimum_generation.is_none_or(|generation| {
                 catalog
                     .get("generation")
                     .and_then(Value::as_u64)
                     .unwrap_or(0)
-                    > generation
+                    >= generation
             })
             && status.get("catalog_refresh_done").and_then(Value::as_bool) == Some(true)
         {
