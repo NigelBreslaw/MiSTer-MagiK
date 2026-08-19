@@ -1443,6 +1443,93 @@ mod tests {
     }
 
     #[test]
+    fn orientation_epochs_replace_both_roles_in_both_slots_and_allow_normal_rollback() {
+        let mut state = TwoBufferLatchState::new(WIDTH, HEIGHT);
+        let preview = rect(0, 0, 2, 2);
+        let arcade = rect(2, 0, 4, 3);
+        let layouts = [
+            (0x95ee_f91e_e662_524f, 1_u64),
+            (0x0d0a_857f_79bb_b25c, 2_u64),
+            (0xf6c3_8018_d8ef_319a, 3_u64),
+            (0x95ee_f91e_e662_524f, 4_u64),
+        ];
+
+        for (layout_generation, layout_epoch) in layouts {
+            let preview_generation = layout_epoch * 10 + 1;
+            let arcade_generation = layout_epoch * 10 + 2;
+            let preview_publication = publication_with_layout(
+                PhysicalLayerRole::Preview,
+                preview,
+                layout_generation,
+                layout_epoch,
+                preview_generation,
+            );
+            let arcade_publication = publication_with_layout(
+                PhysicalLayerRole::Arcade,
+                arcade,
+                layout_generation,
+                layout_epoch,
+                arcade_generation,
+            );
+
+            for _ in 0..2 {
+                all_writable(&mut state);
+                let plan = state
+                    .plan_next(publication_input(
+                        Some(preview_publication.clone()),
+                        Some(arcade_publication.clone()),
+                    ))
+                    .expect("orientation epoch must replace both physical roles");
+                assert_eq!(plan.preview_redraw, Some(preview));
+                assert_eq!(plan.arcade_redraw, Some(PhysicalLayerUpdate::Full(arcade)));
+                state.mark_post_success(plan);
+            }
+
+            for slot in [1, 2] {
+                assert_eq!(
+                    state.retained_publication_generation(slot, PhysicalLayerRole::Preview),
+                    Some(preview_generation)
+                );
+                assert_eq!(
+                    state.retained_publication_generation(slot, PhysicalLayerRole::Arcade),
+                    Some(arcade_generation)
+                );
+            }
+        }
+
+        let stale_preview = publication_with_layout(
+            PhysicalLayerRole::Preview,
+            preview,
+            layouts[2].0,
+            layouts[2].1,
+            999,
+        );
+        assert!(matches!(
+            state.plan_next(publication_input(Some(stale_preview), None)),
+            Err(LatchPlanError::StalePublication {
+                offered_layout_epoch: 3,
+                latest_layout_epoch: 4,
+                ..
+            })
+        ));
+
+        for _ in 0..2 {
+            all_writable(&mut state);
+            let retired = state
+                .plan_next(publication_input(None, None))
+                .expect("orientation rollback layers must retire from each slot");
+            assert!(retired.preview_state_after().is_none());
+            assert!(retired.arcade_state_after().is_none());
+            state.mark_post_success(retired);
+        }
+        for slot in [1, 2] {
+            for role in [PhysicalLayerRole::Preview, PhysicalLayerRole::Arcade] {
+                assert_eq!(state.retained_publication_generation(slot, role), None);
+            }
+        }
+    }
+
+    #[test]
     fn failed_post_discards_selected_slot_publication_only() {
         let mut state = TwoBufferLatchState::new(WIDTH, HEIGHT);
         all_writable(&mut state);
