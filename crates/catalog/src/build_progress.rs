@@ -12,7 +12,9 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const FILE_NAME: &str = "build-progress.sqlite3";
-const COMMITTED_FILE_NAME: &str = "builder-state.sqlite3";
+// This cache must not share a path with `incremental_inputs::InputFactStore`.
+// They are independent SQLite schemas with different lifecycle owners.
+const COMMITTED_FILE_NAME: &str = "target-output-cache.sqlite3";
 const SCHEMA_VERSION: u32 = 2;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -659,6 +661,20 @@ mod tests {
                 ..BuildStats::default()
             },
         }
+    }
+
+    #[test]
+    fn committed_target_cache_has_unique_schema_ownership() {
+        let root = Path::new("/catalog-v3");
+
+        assert_eq!(
+            committed_path_for_root(root),
+            root.join("state/target-output-cache.sqlite3")
+        );
+        assert_ne!(
+            committed_path_for_root(root),
+            root.join("state/builder-state.sqlite3")
+        );
     }
 
     #[test]
