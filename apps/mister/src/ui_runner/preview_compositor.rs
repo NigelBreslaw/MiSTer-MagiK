@@ -501,7 +501,7 @@ fn compose_worker_rotation(
     logical: &[Rgb565Pixel],
     screen: DirtyRect,
 ) -> bool {
-    Rgb565SurfaceMut::new(destination, output).is_ok_and(|surface| {
+    Rgb565SurfaceMut::new(destination, output).is_ok_and(|mut surface| {
         surface.copy_rect_strided(
             0,
             0,
