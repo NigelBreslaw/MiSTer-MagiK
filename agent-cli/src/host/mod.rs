@@ -820,6 +820,37 @@ impl NativeDevice {
         })
     }
 
+    pub(crate) fn profile_catalog_attribution_control(
+        &mut self,
+        output_dir: &Path,
+    ) -> std::result::Result<String, DeviceFailure> {
+        self.benchmark_profile(|config| {
+            profile_installed_catalog_attribution(
+                config,
+                output_dir,
+                CatalogAttributionArm::Control,
+            )
+        })
+    }
+
+    pub(crate) fn profile_catalog_attribution_pprof(
+        &mut self,
+        output_dir: &Path,
+    ) -> std::result::Result<String, DeviceFailure> {
+        self.benchmark_profile(|config| {
+            profile_installed_catalog_attribution(config, output_dir, CatalogAttributionArm::Pprof)
+        })
+    }
+
+    pub(crate) fn profile_catalog_attribution_pmu(
+        &mut self,
+        output_dir: &Path,
+    ) -> std::result::Result<String, DeviceFailure> {
+        self.benchmark_profile(|config| {
+            profile_installed_catalog_attribution(config, output_dir, CatalogAttributionArm::Pmu)
+        })
+    }
+
     pub(crate) fn profile_system_entry(
         &mut self,
         output_dir: &Path,
@@ -15162,7 +15193,7 @@ fn profile_installed_catalog_build_rebuild(
                 "fresh",
                 None,
                 true,
-                catalog_build_rebuild_launcher_env,
+                catalog_build_rebuild_launcher_env(),
                 catalog_build_rebuild_runtime_command,
             )?;
             let fresh_generation = fresh
@@ -15184,7 +15215,7 @@ fn profile_installed_catalog_build_rebuild(
                 "rebuild",
                 Some(fresh_generation),
                 true,
-                catalog_build_rebuild_launcher_env,
+                catalog_build_rebuild_launcher_env(),
                 catalog_build_rebuild_runtime_command,
             )?;
             let rebuild_snes = catalog_system_games(&rebuild["catalog"], "snes")?;
@@ -15336,7 +15367,7 @@ fn profile_installed_catalog_full_build_rebuild(
             "fresh",
             None,
             false,
-            catalog_full_build_rebuild_launcher_env,
+            catalog_full_build_rebuild_launcher_env(),
             catalog_full_build_rebuild_runtime_command,
         )?;
         exec_checked(
@@ -15352,7 +15383,7 @@ fn profile_installed_catalog_full_build_rebuild(
             "warm-clean",
             None,
             false,
-            catalog_full_build_rebuild_launcher_env,
+            catalog_full_build_rebuild_launcher_env(),
             catalog_full_build_rebuild_runtime_command,
         )?;
         let warm_clean_generation = warm_clean
@@ -15367,7 +15398,7 @@ fn profile_installed_catalog_full_build_rebuild(
             "rebuild",
             Some(warm_clean_generation),
             false,
-            catalog_full_build_rebuild_launcher_env,
+            catalog_full_build_rebuild_launcher_env(),
             catalog_full_build_rebuild_runtime_command,
         )?;
         let fingerprints = [
@@ -15461,6 +15492,381 @@ fn profile_installed_catalog_full_build_rebuild(
     fs::write(
         output_dir.join("report.md"),
         catalog_full_build_rebuild_report(&summary)?,
+    )?;
+    serde_json::to_string(&summary).map_err(Into::into)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CatalogAttributionArm {
+    Control,
+    Pprof,
+    Pmu,
+}
+
+impl CatalogAttributionArm {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Control => "control",
+            Self::Pprof => "pprof",
+            Self::Pmu => "pmu",
+        }
+    }
+}
+
+const CATALOG_ATTRIBUTION_REMOTE_DIR: &str =
+    "/media/fat/mister-magik-dev/catalog-attribution-benchmark";
+const CATALOG_ATTRIBUTION_WORK_DIR: &str = "/tmp/mister-magik/catalog-attribution";
+const CATALOG_ATTRIBUTION_C64_ROOT: &str = "/media/fat/games/C64";
+
+fn catalog_attribution_prepare_command() -> String {
+    format!(
+        "set -eu; rm -rf {root} {work}; test -d {arcade}; test -d {snes}; test -d {c64}; mkdir -p {root} {work}/diagnostics {work}/sqlite-build; test -d {root}; test -d {work}",
+        root = sh(CATALOG_ATTRIBUTION_REMOTE_DIR),
+        work = sh(CATALOG_ATTRIBUTION_WORK_DIR),
+        arcade = sh(CATALOG_BUILD_REBUILD_ARCADE_ROOT),
+        snes = sh(CATALOG_BUILD_REBUILD_SNES_ROOT),
+        c64 = sh(CATALOG_ATTRIBUTION_C64_ROOT),
+    )
+}
+
+fn catalog_attribution_cleanup_command() -> String {
+    format!(
+        "set -eu; rm -rf {root} {work}; test ! -e {root}; test ! -e {work}",
+        root = sh(CATALOG_ATTRIBUTION_REMOTE_DIR),
+        work = sh(CATALOG_ATTRIBUTION_WORK_DIR),
+    )
+}
+
+fn catalog_attribution_launcher_env(arm: CatalogAttributionArm) -> Vec<(String, String)> {
+    let root = CATALOG_ATTRIBUTION_REMOTE_DIR;
+    let work = CATALOG_ATTRIBUTION_WORK_DIR;
+    let diagnostics = format!("{work}/diagnostics");
+    let mut env = vec![
+        ("MISTER_CATALOG_REFRESH".into(), "force".into()),
+        (
+            "MISTER_LIBRARY_ROOTS".into(),
+            format!("{CATALOG_BUILD_REBUILD_ARCADE_ROOT}|/media/fat/games"),
+        ),
+        (
+            "MISTER_LIBRARY_TARGET_ALLOWLIST".into(),
+            format!(
+                "{CATALOG_BUILD_REBUILD_ARCADE_ROOT}:{CATALOG_BUILD_REBUILD_SNES_ROOT}:{CATALOG_ATTRIBUTION_C64_ROOT}"
+            ),
+        ),
+        (
+            "MISTER_SHARDED_CATALOG_DIR".into(),
+            format!("{root}/catalog-v3"),
+        ),
+        (
+            "MISTER_LIBRARY_SQLITE".into(),
+            format!("{root}/library.sqlite3"),
+        ),
+        (
+            "MISTER_LIBRARY_SQLITE_BUILD_DIR".into(),
+            format!("{work}/sqlite-build"),
+        ),
+        (
+            "MISTER_ARCADE_BOOTSTRAP_INDEX".into(),
+            format!("{root}/arcade-bootstrap.nav.lz4b"),
+        ),
+        (
+            "MISTER_LIBRARY_REFRESH_LOCK".into(),
+            format!("{work}/library-refresh.lock"),
+        ),
+        (
+            "MISTER_CATALOG_BUILDER_LOCK".into(),
+            format!("{work}/catalog-builder.lock"),
+        ),
+        (
+            "MISTER_CATALOG_READY_SNAPSHOT".into(),
+            format!("{work}/catalog-ready.snapshot"),
+        ),
+        ("MISTER_CATALOG_DIAGNOSTICS_DIR".into(), diagnostics.clone()),
+        ("MISTER_LAUNCHER_START_SCREEN".into(), "arcade".into()),
+        ("MISTER_LAUNCHER_START_SYSTEM".into(), "arcade".into()),
+        ("MISTER_PREVIEW_ARCHIVE_WARM_SKIP".into(), "1".into()),
+    ];
+    match arm {
+        CatalogAttributionArm::Pprof => env.extend([
+            ("MISTER_PPROF".into(), "1".into()),
+            ("MISTER_PPROF_TRIGGER".into(), "catalog-build".into()),
+            ("MISTER_PPROF_HZ".into(), "99".into()),
+            ("MISTER_PPROF_DURATION_SECS".into(), "600".into()),
+            (
+                "MISTER_PPROF_OUT".into(),
+                format!("{diagnostics}/catalog-pprof.svg"),
+            ),
+            (
+                "MISTER_PPROF_FOLDED_OUT".into(),
+                format!("{diagnostics}/catalog-pprof.folded"),
+            ),
+            (
+                "MISTER_PPROF_COMPLETE".into(),
+                format!("{diagnostics}/catalog-pprof.json"),
+            ),
+        ]),
+        CatalogAttributionArm::Pmu => env.extend([
+            ("MISTER_PMU_PROFILE".into(), "1".into()),
+            ("MISTER_PMU_SAMPLE_EVERY".into(), "1".into()),
+            ("MISTER_PMU_RECORD_LIMIT".into(), "4096".into()),
+        ]),
+        _ => {}
+    }
+    env
+}
+
+fn catalog_attribution_runtime_command(subcommand: &str) -> String {
+    let root = CATALOG_ATTRIBUTION_REMOTE_DIR;
+    let work = CATALOG_ATTRIBUTION_WORK_DIR;
+    format!(
+        "env MISTER_LIBRARY_ROOTS={roots} MISTER_LIBRARY_TARGET_ALLOWLIST={allowlist} MISTER_SHARDED_CATALOG_DIR={catalog} MISTER_LIBRARY_SQLITE={library} MISTER_LIBRARY_SQLITE_BUILD_DIR={sqlite_build} MISTER_ARCADE_BOOTSTRAP_INDEX={bootstrap} MISTER_LIBRARY_REFRESH_LOCK={refresh_lock} MISTER_CATALOG_BUILDER_LOCK={builder_lock} MISTER_CATALOG_READY_SNAPSHOT={ready_snapshot} MISTER_CATALOG_DIAGNOSTICS_DIR={diagnostics} MISTER_MAGIK_FOREGROUND_LIBRARY_REFRESH=1 {gui} {subcommand}",
+        roots = sh(&format!(
+            "{CATALOG_BUILD_REBUILD_ARCADE_ROOT}|/media/fat/games"
+        )),
+        allowlist = sh(&format!(
+            "{CATALOG_BUILD_REBUILD_ARCADE_ROOT}:{CATALOG_BUILD_REBUILD_SNES_ROOT}:{CATALOG_ATTRIBUTION_C64_ROOT}"
+        )),
+        catalog = sh(&format!("{root}/catalog-v3")),
+        library = sh(&format!("{root}/library.sqlite3")),
+        sqlite_build = sh(&format!("{work}/sqlite-build")),
+        bootstrap = sh(&format!("{root}/arcade-bootstrap.nav.lz4b")),
+        refresh_lock = sh(&format!("{work}/library-refresh.lock")),
+        builder_lock = sh(&format!("{work}/catalog-builder.lock")),
+        ready_snapshot = sh(&format!("{work}/catalog-ready.snapshot")),
+        diagnostics = sh(&format!("{work}/diagnostics")),
+        gui = sh(DEVELOPMENT_GUI_REMOTE),
+    )
+}
+
+fn profile_installed_catalog_attribution(
+    config: &NativeDeviceConfig,
+    output_dir: &Path,
+    arm: CatalogAttributionArm,
+) -> Result<String> {
+    let session = connect_with(&config.connection, 10)?;
+    let endpoint = config.agent()?.clone();
+    let manifest = remote_read(&session, LOCAL_MAIN_MANIFEST_REMOTE)
+        .ok_or("development platform manifest is missing")?;
+    let boot_id = remote_read(&session, "/proc/sys/kernel/random/boot_id")
+        .ok_or("device boot id is unavailable")?
+        .trim()
+        .to_string();
+    fs::create_dir_all(output_dir)?;
+    let sample_count = usize::from(arm == CatalogAttributionArm::Control) * 2 + 1;
+
+    let run_result = (|| -> Result<Value> {
+        let mut samples = Vec::with_capacity(sample_count);
+        for sample_number in 1..=sample_count {
+            let sample_dir = output_dir.join(format!("sample-{sample_number}"));
+            fs::create_dir_all(&sample_dir)?;
+            samples.push(run_catalog_attribution_pair(
+                config,
+                &session,
+                &endpoint,
+                &sample_dir,
+                arm,
+            )?);
+        }
+        let fingerprint = samples
+            .first()
+            .and_then(|sample| sample.pointer("/fresh/catalog/logical_fingerprint"))
+            .cloned()
+            .ok_or("catalog attribution has no logical fingerprint")?;
+        let all_identical = samples.iter().all(|sample| {
+            sample.pointer("/fresh/catalog/logical_fingerprint") == Some(&fingerprint)
+                && sample.pointer("/rebuild/catalog/logical_fingerprint") == Some(&fingerprint)
+        });
+        let profiles_complete = samples.iter().all(|sample| {
+            arm == CatalogAttributionArm::Control
+                || (sample
+                    .pointer("/fresh/profile/state")
+                    .and_then(Value::as_str)
+                    == Some("complete")
+                    && sample
+                        .pointer("/rebuild/profile/state")
+                        .and_then(Value::as_str)
+                        == Some("complete"))
+        });
+        let status = if all_identical && profiles_complete {
+            "passed"
+        } else {
+            "failed"
+        };
+        Ok(json!({
+            "schema": "mister-magik-catalog-attribution-arm-v1",
+            "arm": arm.label(),
+            "status": status,
+            "configuration": {
+                "samples": sample_count,
+                "roots": [CATALOG_BUILD_REBUILD_ARCADE_ROOT, CATALOG_BUILD_REBUILD_SNES_ROOT, CATALOG_ATTRIBUTION_C64_ROOT],
+                "real_content_only": true,
+                "publication_filesystem": "exfat",
+                "timing_authority": arm == CatalogAttributionArm::Control,
+            },
+            "samples": samples,
+            "validation": {
+                "logical_fingerprint": fingerprint,
+                "catalog_fingerprints_identical": all_identical,
+                "profiles_complete": profiles_complete,
+            },
+            "manifest": parse_manifest_evidence(&manifest),
+            "boot_id": boot_id,
+        }))
+    })();
+    finish_catalog_attribution_profile(&session, run_result, output_dir, &manifest, &boot_id)
+}
+
+fn run_catalog_attribution_pair(
+    config: &NativeDeviceConfig,
+    session: &Session,
+    endpoint: &AgentEndpoint,
+    sample_dir: &Path,
+    arm: CatalogAttributionArm,
+) -> Result<Value> {
+    exec_checked(
+        session,
+        "prepare matched catalog attribution sample",
+        &catalog_attribution_prepare_command(),
+    )?;
+    let mut fresh = run_catalog_build_rebuild_leg(
+        config,
+        session,
+        endpoint,
+        sample_dir,
+        "fresh",
+        None,
+        false,
+        catalog_attribution_launcher_env(arm),
+        catalog_attribution_runtime_command,
+    )?;
+    let fresh_profile = collect_catalog_attribution_profile(session, sample_dir, "fresh", arm)?;
+    let generation = fresh
+        .pointer("/catalog/generation")
+        .and_then(Value::as_u64)
+        .ok_or("catalog attribution fresh leg has no generation")?;
+    let mut rebuild = run_catalog_build_rebuild_leg(
+        config,
+        session,
+        endpoint,
+        sample_dir,
+        "rebuild",
+        Some(generation),
+        false,
+        catalog_attribution_launcher_env(arm),
+        catalog_attribution_runtime_command,
+    )?;
+    let rebuild_profile = collect_catalog_attribution_profile(session, sample_dir, "rebuild", arm)?;
+    fresh["profile"] = fresh_profile;
+    rebuild["profile"] = rebuild_profile;
+    Ok(json!({"fresh": fresh, "rebuild": rebuild}))
+}
+
+fn collect_catalog_attribution_profile(
+    session: &Session,
+    output_dir: &Path,
+    label: &str,
+    arm: CatalogAttributionArm,
+) -> Result<Value> {
+    let diagnostics = format!("{CATALOG_ATTRIBUTION_WORK_DIR}/diagnostics");
+    let (remote_json, expected_schema) = match arm {
+        CatalogAttributionArm::Pprof => (
+            format!("{diagnostics}/catalog-pprof.json"),
+            "mister-magik-catalog-build-pprof-v1",
+        ),
+        CatalogAttributionArm::Pmu => (
+            format!("{diagnostics}/catalog-pmu.json"),
+            "mister-magik-catalog-build-pmu-v1",
+        ),
+        _ => return Ok(Value::Null),
+    };
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let profile = loop {
+        if let Some(raw) = remote_read(session, &remote_json)
+            && let Ok(value) = serde_json::from_str::<Value>(raw.trim())
+            && value.get("schema").and_then(Value::as_str) == Some(expected_schema)
+        {
+            break value;
+        }
+        if Instant::now() >= deadline {
+            return Err(format!("{label} {arm:?} profile did not finalize").into());
+        }
+        thread::sleep(Duration::from_millis(100));
+    };
+    if profile.get("state").and_then(Value::as_str) != Some("complete") {
+        return Err(format!("{label} {arm:?} profile failed: {profile}").into());
+    }
+    fs::write(
+        output_dir.join(format!("{label}-{}-profile.json", arm.label())),
+        format!("{}\n", serde_json::to_string_pretty(&profile)?),
+    )?;
+    if arm == CatalogAttributionArm::Pprof {
+        for (remote_name, local_suffix) in [
+            ("catalog-pprof.svg", "flamegraph.svg"),
+            ("catalog-pprof.folded", "stacks.folded"),
+        ] {
+            get(
+                session,
+                &format!("{diagnostics}/{remote_name}"),
+                &output_dir.join(format!("{label}-{local_suffix}")),
+            )?;
+        }
+    }
+    exec_checked(
+        session,
+        "clear collected catalog profile artifacts",
+        &format!("rm -f {}/*", sh(&diagnostics)),
+    )?;
+    Ok(profile)
+}
+
+fn finish_catalog_attribution_profile(
+    session: &Session,
+    run_result: Result<Value>,
+    output_dir: &Path,
+    manifest: &str,
+    boot_id: &str,
+) -> Result<String> {
+    let launcher_restore = launcher_restart(
+        session,
+        &LauncherRestartOptions {
+            clear_env: true,
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str().into(),
+            timeout_secs: CATALOG_LIFECYCLE_FIRST_VISIBLE_TIMEOUT_SECS,
+            ..LauncherRestartOptions::default()
+        },
+    );
+    let cleanup = exec_checked(
+        session,
+        "clean matched catalog attribution state",
+        &catalog_attribution_cleanup_command(),
+    );
+    let summary = match (run_result, cleanup, launcher_restore) {
+        (Ok(summary), Ok(()), Ok(())) => summary,
+        (Err(error), _, Ok(())) => return Err(error),
+        (Ok(_), Err(error), Ok(())) | (Ok(_), Ok(()), Err(error)) => return Err(error),
+        (run, cleanup, restore) => {
+            return Err(format!(
+                "catalog attribution failed: run={:?}; cleanup={:?}; restore={:?}",
+                run.err(),
+                cleanup.err(),
+                restore.err()
+            )
+            .into());
+        }
+    };
+    let final_boot_id = remote_read(session, "/proc/sys/kernel/random/boot_id")
+        .ok_or("device boot id unavailable after catalog attribution")?;
+    if final_boot_id.trim() != boot_id {
+        return Err("device rebooted during catalog attribution".into());
+    }
+    let final_manifest = remote_read(session, LOCAL_MAIN_MANIFEST_REMOTE)
+        .ok_or("development manifest unavailable after catalog attribution")?;
+    if final_manifest != manifest {
+        return Err("installed platform changed during catalog attribution".into());
+    }
+    fs::write(
+        output_dir.join("summary.json"),
+        format!("{}\n", serde_json::to_string_pretty(&summary)?),
     )?;
     serde_json::to_string(&summary).map_err(Into::into)
 }
@@ -17622,14 +18028,14 @@ fn run_catalog_build_rebuild_leg(
     label: &str,
     minimum_generation: Option<u64>,
     exercise_arcade_ui: bool,
-    launcher_env: fn() -> Vec<(String, String)>,
+    launcher_env: Vec<(String, String)>,
     runtime_command: fn(&str) -> String,
 ) -> Result<Value> {
     let started = Instant::now();
     restart_launcher_with_one_shot_env(
         session,
         LauncherRestartOptions {
-            env_vars: launcher_env(),
+            env_vars: launcher_env,
             timeout_secs: CATALOG_LIFECYCLE_FIRST_VISIBLE_TIMEOUT_SECS,
             remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str().into(),
             ..LauncherRestartOptions::default()

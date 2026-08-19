@@ -45,6 +45,9 @@ enum BenchmarkProfile {
     CatalogLifecycle,
     CatalogBuildRebuild,
     CatalogFullBuildRebuild,
+    CatalogAttributionControl,
+    CatalogAttributionPprof,
+    CatalogAttributionPmu,
     SystemEntry,
     SystemEntryCritical,
     SystemEntryCriticalConfirm,
@@ -114,6 +117,15 @@ impl BenchmarkDevice for DeviceClient {
             }
             BenchmarkProfile::CatalogFullBuildRebuild => {
                 device.profile_catalog_full_build_rebuild(&output_dir)
+            }
+            BenchmarkProfile::CatalogAttributionControl => {
+                device.profile_catalog_attribution_control(&output_dir)
+            }
+            BenchmarkProfile::CatalogAttributionPprof => {
+                device.profile_catalog_attribution_pprof(&output_dir)
+            }
+            BenchmarkProfile::CatalogAttributionPmu => {
+                device.profile_catalog_attribution_pmu(&output_dir)
             }
             BenchmarkProfile::SystemEntry => device.profile_system_entry(&output_dir),
             BenchmarkProfile::SystemEntryCritical => {
@@ -293,6 +305,30 @@ fn require_clean_installed_commit(
         BenchmarkScenario::CatalogFullBuildRebuild => {
             execute_catalog_full_build_rebuild(&mut device, manifest, output_dir, reporter)
         }
+        BenchmarkScenario::CatalogAttributionControl => execute_catalog_attribution(
+            &mut device,
+            manifest,
+            output_dir,
+            reporter,
+            BenchmarkProfile::CatalogAttributionControl,
+            "control",
+        ),
+        BenchmarkScenario::CatalogAttributionPprof => execute_catalog_attribution(
+            &mut device,
+            manifest,
+            output_dir,
+            reporter,
+            BenchmarkProfile::CatalogAttributionPprof,
+            "pprof",
+        ),
+        BenchmarkScenario::CatalogAttributionPmu => execute_catalog_attribution(
+            &mut device,
+            manifest,
+            output_dir,
+            reporter,
+            BenchmarkProfile::CatalogAttributionPmu,
+            "pmu",
+        ),
         BenchmarkScenario::SystemEntry => {
             execute_system_entry(&mut device, manifest, output_dir, reporter)
         }
@@ -821,6 +857,9 @@ fn particle_scene_lab_command(scenario: BenchmarkScenario) -> Option<&'static st
         | BenchmarkScenario::CatalogLifecycle
         | BenchmarkScenario::CatalogBuildRebuild
         | BenchmarkScenario::CatalogFullBuildRebuild
+        | BenchmarkScenario::CatalogAttributionControl
+        | BenchmarkScenario::CatalogAttributionPprof
+        | BenchmarkScenario::CatalogAttributionPmu
         | BenchmarkScenario::SystemEntry
         | BenchmarkScenario::SystemEntryCritical
         | BenchmarkScenario::SystemEntryCriticalConfirm
@@ -2081,6 +2120,49 @@ fn evaluate_catalog_full_build_rebuild_summary(summary: &Value) -> AgentResult<(
             != Some(true)
     {
         return Err("whole-card catalog benchmark failed catalog validation".into());
+    }
+    Ok(())
+}
+
+fn execute_catalog_attribution(
+    device: &mut impl BenchmarkDevice,
+    manifest: String,
+    output_dir: PathBuf,
+    reporter: &mut Reporter<'_>,
+    profile: BenchmarkProfile,
+    arm: &str,
+) -> AgentResult<Outcome> {
+    reporter.emit(
+        EventKind::Progress,
+        "profile",
+        &format!("capturing catalog {arm} attribution"),
+        Some(35),
+    )?;
+    let detail = device.profile(profile, output_dir.clone())?;
+    let summary: Value = serde_json::from_str(&detail).map_err(|error| error.to_string())?;
+    device.verify_health()?;
+    evaluate_catalog_attribution_summary(&summary, arm)?;
+    reporter.emit(
+        EventKind::Progress,
+        "benchmark-result",
+        &serde_json::to_string(&json!({
+            "installed_manifest": manifest,
+            "summary": summary,
+            "output_dir": output_dir,
+        }))
+        .map_err(|error| error.to_string())?,
+        Some(100),
+    )?;
+    Ok(Outcome::Passed)
+}
+
+fn evaluate_catalog_attribution_summary(summary: &Value, arm: &str) -> AgentResult<()> {
+    if summary.get("schema").and_then(Value::as_str)
+        != Some("mister-magik-catalog-attribution-arm-v1")
+        || summary.get("arm").and_then(Value::as_str) != Some(arm)
+        || summary.get("status").and_then(Value::as_str) != Some("passed")
+    {
+        return Err(format!("catalog {arm} attribution is not a passing v1 arm").into());
     }
     Ok(())
 }
