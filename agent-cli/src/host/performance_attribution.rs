@@ -196,6 +196,11 @@ pub(super) fn profile_installed_storage_attribution(
     }
 
     let run_result = (|| -> Result<Value> {
+        exec_checked(
+            &session,
+            "suspend launcher for isolated storage attribution",
+            &acknowledged_main_command("mister_magik_suspend"),
+        )?;
         capture.start()?;
         let connection = config.connection.clone();
         let command = storage_workload_command(&mount.block_device);
