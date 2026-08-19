@@ -18879,6 +18879,7 @@ fn run_catalog_build_rebuild_leg(
     let mut interaction_origin_selection = None;
     let mut interaction_started = false;
     let mut interaction_started_at = None;
+    let mut interaction_baseline_index = None;
     let mut interaction_telemetry_start = None;
     let mut interaction_telemetry_end = None;
     let mut interaction_complete = false;
@@ -18899,6 +18900,10 @@ fn run_catalog_build_rebuild_leg(
             && status.get("input_enabled").and_then(Value::as_bool) == Some(true)
             && exercise_arcade_ui
             && minimum_generation.is_none()
+            && let Some(settled_index) = telemetry.iter().rposition(|sample| {
+                parse_host_presentation_snapshot(sample)
+                    .is_some_and(|snapshot| snapshot.magik_ownership && !snapshot.pending)
+            })
         {
             let build_version = status
                 .pointer("/build/version")
@@ -18937,6 +18942,7 @@ fn run_catalog_build_rebuild_leg(
                 },
             )?;
             automation_nonce = Some(nonce);
+            interaction_baseline_index = Some(settled_index);
             interaction_origin_selection = status.get("arcade_selected").and_then(Value::as_u64);
             automation_hold_sent = true;
         }
@@ -18945,7 +18951,7 @@ fn run_catalog_build_rebuild_leg(
             && interaction_origin_selection.is_some()
             && status.get("arcade_selected").and_then(Value::as_u64) != interaction_origin_selection
         {
-            interaction_telemetry_start = Some(telemetry.len());
+            interaction_telemetry_start = interaction_baseline_index;
             interaction_started = true;
             interaction_started_at = Some(Instant::now());
         }
