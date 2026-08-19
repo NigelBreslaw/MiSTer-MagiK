@@ -322,11 +322,13 @@ pub(crate) fn discover_files_pipelined_foreground_with_plan(
     roots: Vec<String>,
     plan: CatalogScanPlan,
     excluded_targets: Vec<PathBuf>,
+    prevalidated_targets: Vec<PathBuf>,
 ) -> mpsc::Receiver<DiscoveryEvent> {
     discover_files_pipelined_with_plan_and_phase(
         roots,
         plan,
         excluded_targets,
+        prevalidated_targets,
         RuntimeThreadRole::LibraryWalkerForeground,
         crate::pmu_phase::WALK_EXECUTION,
     )
@@ -336,12 +338,14 @@ pub(crate) fn discover_files_pipelined_with_plan(
     roots: Vec<String>,
     plan: CatalogScanPlan,
     excluded_targets: Vec<PathBuf>,
+    prevalidated_targets: Vec<PathBuf>,
     role: RuntimeThreadRole,
 ) -> mpsc::Receiver<DiscoveryEvent> {
     discover_files_pipelined_with_plan_and_phase(
         roots,
         plan,
         excluded_targets,
+        prevalidated_targets,
         role,
         crate::pmu_phase::WALK_EXECUTION,
     )
@@ -357,6 +361,7 @@ pub(crate) fn discover_files_pipelined_for_resume_validation(
         roots,
         plan,
         excluded_targets,
+        Vec::new(),
         role,
         crate::pmu_phase::WALK_RESUME_VALIDATION,
     )
@@ -366,6 +371,7 @@ fn discover_files_pipelined_with_plan_and_phase(
     roots: Vec<String>,
     plan: CatalogScanPlan,
     excluded_targets: Vec<PathBuf>,
+    prevalidated_targets: Vec<PathBuf>,
     role: RuntimeThreadRole,
     pmu_phase: &'static str,
 ) -> mpsc::Receiver<DiscoveryEvent> {
@@ -378,8 +384,13 @@ fn discover_files_pipelined_with_plan_and_phase(
                 .then(crate::cooperative_work::BackgroundScope::enter);
             let t = Instant::now();
             let walk_pmu = mister_magik_perf_events::sampled_span(pmu_phase);
-            let (dirs, attribution) =
-                walk_index_candidates_with_plan(&roots, &plan, &excluded_targets, &tx);
+            let (dirs, attribution) = walk_index_candidates_with_plan(
+                &roots,
+                &plan,
+                &excluded_targets,
+                &prevalidated_targets,
+                &tx,
+            );
             drop(walk_pmu);
             mister_magik_perf_events::submit_thread_profile("library-walker");
             let _ = tx.send(DiscoveryEvent::Done {
@@ -494,6 +505,7 @@ fn walk_index_candidates_with_plan(
     roots: &[String],
     plan: &CatalogScanPlan,
     excluded_targets: &[PathBuf],
+    prevalidated_targets: &[PathBuf],
     tx: &mpsc::SyncSender<DiscoveryEvent>,
 ) -> (usize, NamespaceRouteAttribution) {
     let profiles = plan.base_profiles();
@@ -519,6 +531,26 @@ fn walk_index_candidates_with_plan(
         let descriptor = target.descriptor(ordinal);
         if !target_send_stats.send(tx, DiscoveryEvent::TargetStart(descriptor.clone())) {
             break;
+        }
+        if prevalidated_targets
+            .iter()
+            .any(|path| same_library_path(path, &descriptor.path))
+        {
+            library_db::report_library_scan_timing(
+                "walk_target_reused",
+                0,
+                format!(
+                    "ordinal={} path={}",
+                    descriptor.ordinal,
+                    descriptor.path.display()
+                ),
+            );
+            if !target_send_stats.send(tx, DiscoveryEvent::TargetComplete(descriptor)) {
+                send_stats.add(&target_send_stats);
+                break;
+            }
+            send_stats.add(&target_send_stats);
+            continue;
         }
         let stats = match target {
             PlannedScanTarget::Static {
@@ -2043,7 +2075,7 @@ mod tests {
         let roots = vec![root.display().to_string()];
         let plan = CatalogScanPlan::for_roots(&roots);
         let (tx, rx) = std::sync::mpsc::sync_channel(DISCOVERY_EVENT_BUFFER);
-        let (dirs, attribution) = walk_index_candidates_with_plan(&roots, &plan, &[], &tx);
+        let (dirs, attribution) = walk_index_candidates_with_plan(&roots, &plan, &[], &[], &tx);
         drop(tx);
 
         let mut open = None;
@@ -2088,6 +2120,30 @@ mod tests {
                 .any(|target| { target.path == arcade && target.kind == ScanTargetKind::Static })
         );
         assert!(dirs >= 1);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn prevalidated_target_keeps_boundaries_without_second_walk() {
+        let root = unique_temp_dir("planned-target-prevalidated");
+        let arcade = root.join("_Arcade");
+        std::fs::create_dir_all(&arcade).expect("create arcade dir");
+        std::fs::write(arcade.join("game.mra"), "<misterromdescription/>")
+            .expect("write arcade launcher");
+        let roots = vec![root.display().to_string()];
+        let plan = CatalogScanPlan::for_roots(&roots);
+        let (tx, rx) = std::sync::mpsc::sync_channel(DISCOVERY_EVENT_BUFFER);
+
+        let (dirs, attribution) =
+            walk_index_candidates_with_plan(&roots, &plan, &[], &[arcade], &tx);
+        drop(tx);
+        let events = rx.try_iter().collect::<Vec<_>>();
+
+        assert_eq!(dirs, 0);
+        assert_eq!(attribution.targets, 0);
+        assert_eq!(events.len(), 2);
+        assert!(matches!(events[0], DiscoveryEvent::TargetStart(_)));
+        assert!(matches!(events[1], DiscoveryEvent::TargetComplete(_)));
         let _ = std::fs::remove_dir_all(root);
     }
 

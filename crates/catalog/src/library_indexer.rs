@@ -797,12 +797,23 @@ fn scan_library_with_progress_and_events(
             prepared_payload_index.complete_root_count(),
         ),
     );
+    let prevalidated_targets = resume
+        .as_ref()
+        .map(|state| {
+            state
+                .reusable
+                .values()
+                .map(|saved| PathBuf::from(&saved.target.path))
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
     let pipeline_started = Instant::now();
     let rx = match priority {
         LibraryScanPriority::Background => catalog_scan::discover_files_pipelined_with_plan(
             cfg.roots.clone(),
             plan.clone(),
             excluded_targets,
+            prevalidated_targets,
             crate::runtime_thread::RuntimeThreadRole::LibraryWalker,
         ),
         LibraryScanPriority::Foreground => {
@@ -810,6 +821,7 @@ fn scan_library_with_progress_and_events(
                 cfg.roots.clone(),
                 plan.clone(),
                 excluded_targets,
+                prevalidated_targets,
             )
         }
     };
