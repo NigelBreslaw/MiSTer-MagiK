@@ -15161,6 +15161,7 @@ fn profile_installed_catalog_build_rebuild(
                 &sample_dir,
                 "fresh",
                 None,
+                true,
                 catalog_build_rebuild_launcher_env,
                 catalog_build_rebuild_runtime_command,
             )?;
@@ -15182,6 +15183,7 @@ fn profile_installed_catalog_build_rebuild(
                 &sample_dir,
                 "rebuild",
                 Some(fresh_generation),
+                true,
                 catalog_build_rebuild_launcher_env,
                 catalog_build_rebuild_runtime_command,
             )?;
@@ -15333,6 +15335,7 @@ fn profile_installed_catalog_full_build_rebuild(
             output_dir,
             "fresh",
             None,
+            false,
             catalog_full_build_rebuild_launcher_env,
             catalog_full_build_rebuild_runtime_command,
         )?;
@@ -15347,6 +15350,7 @@ fn profile_installed_catalog_full_build_rebuild(
             output_dir,
             "rebuild",
             Some(fresh_generation),
+            false,
             catalog_full_build_rebuild_launcher_env,
             catalog_full_build_rebuild_runtime_command,
         )?;
@@ -17589,6 +17593,7 @@ fn run_catalog_build_rebuild_leg(
     sample_dir: &Path,
     label: &str,
     minimum_generation: Option<u64>,
+    exercise_arcade_ui: bool,
     launcher_env: fn() -> Vec<(String, String)>,
     runtime_command: fn(&str) -> String,
 ) -> Result<Value> {
@@ -17622,7 +17627,7 @@ fn run_catalog_build_rebuild_leg(
                     > 0)
         {
             first_visible_ms = Some(started.elapsed().as_millis() as u64);
-            if minimum_generation.is_none() {
+            if exercise_arcade_ui && minimum_generation.is_none() {
                 let build_version = status
                     .pointer("/build/version")
                     .and_then(Value::as_str)
