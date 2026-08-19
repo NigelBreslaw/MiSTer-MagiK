@@ -66,8 +66,9 @@ Supported scenarios:
 
 The Arcade velocity-scroll profiling scenarios default to the active display
 route. A typed arm also accepts `--route active`, `--route hdmi-landscape`,
-`--route hdmi-portrait-left`, `--route crt240-portrait-left`, or
-`--route crt288-portrait-left`. Explicit routes select the display
+`--route hdmi-portrait-left`, `--route hdmi-portrait-right`,
+`--route crt240-portrait-left`, `--route crt240-portrait-right`,
+`--route crt288-portrait-left`, or `--route crt288-portrait-right`. Explicit routes select the display
 transactionally and apply orientation only to the benchmark launcher's
 in-memory state. On success or failure the runner restores and verifies the
 exact original display mode, `MiSTer.ini`, settings file, launcher environment,
@@ -88,6 +89,12 @@ turbo gesture with a quick Down tap, then holds Down at the 720 px/s turbo
 speed; it does not use the synthetic benchmark-only bounce helper.
 All Arcade arms use the full 40-second workload. The control and turbo arms
 own cadence qualification; profiler arms remain attribution-only.
+
+The optional `--duration-seconds N` argument is accepted only by the single-arm
+`arcade-velocity-scroll-attribution` route and is bounded to 5–120 seconds. It
+defaults to 40 seconds. Unprofiled runs shorter than 40 seconds are directional
+development evidence; only unprofiled runs of at least 40 seconds can qualify
+cadence. Every artifact records the requested duration and evidence authority.
 
 Optimization campaigns establish one compatible baseline immediately before a
 route/profiler is first changed and compare later artifacts to that baseline;

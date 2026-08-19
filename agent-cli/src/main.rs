@@ -194,8 +194,16 @@ fn dispatch(
             scenario,
             arm,
             route,
+            duration_seconds,
         } => {
-            return agent_cli::benchmark::execute(repository, *scenario, *arm, *route, reporter);
+            return agent_cli::benchmark::execute(
+                repository,
+                *scenario,
+                *arm,
+                *route,
+                *duration_seconds,
+                reporter,
+            );
         }
         CliCommand::Capture {
             command:

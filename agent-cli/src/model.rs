@@ -121,8 +121,11 @@ pub enum ArcadeVelocityScrollRoute {
     Active,
     HdmiLandscape,
     HdmiPortraitLeft,
+    HdmiPortraitRight,
     Crt240PortraitLeft,
+    Crt240PortraitRight,
     Crt288PortraitLeft,
+    Crt288PortraitRight,
 }
 
 impl ArcadeVelocityScrollRoute {
@@ -132,8 +135,11 @@ impl ArcadeVelocityScrollRoute {
             Self::Active => "active",
             Self::HdmiLandscape => "hdmi-landscape",
             Self::HdmiPortraitLeft => "hdmi-portrait-left",
+            Self::HdmiPortraitRight => "hdmi-portrait-right",
             Self::Crt240PortraitLeft => "crt240-portrait-left",
+            Self::Crt240PortraitRight => "crt240-portrait-right",
             Self::Crt288PortraitLeft => "crt288-portrait-left",
+            Self::Crt288PortraitRight => "crt288-portrait-right",
         }
     }
 
@@ -141,9 +147,11 @@ impl ArcadeVelocityScrollRoute {
     pub const fn display_mode(self) -> Option<&'static str> {
         match self {
             Self::Active => None,
-            Self::HdmiLandscape | Self::HdmiPortraitLeft => Some("hdmi-1280x720p60"),
-            Self::Crt240PortraitLeft => Some("crt-240p60"),
-            Self::Crt288PortraitLeft => Some("crt-288p50"),
+            Self::HdmiLandscape | Self::HdmiPortraitLeft | Self::HdmiPortraitRight => {
+                Some("hdmi-1280x720p60")
+            }
+            Self::Crt240PortraitLeft | Self::Crt240PortraitRight => Some("crt-240p60"),
+            Self::Crt288PortraitLeft | Self::Crt288PortraitRight => Some("crt-288p50"),
         }
     }
 
@@ -154,6 +162,9 @@ impl ArcadeVelocityScrollRoute {
             Self::HdmiLandscape => Some("normal"),
             Self::HdmiPortraitLeft | Self::Crt240PortraitLeft | Self::Crt288PortraitLeft => {
                 Some("monitor-counterclockwise")
+            }
+            Self::HdmiPortraitRight | Self::Crt240PortraitRight | Self::Crt288PortraitRight => {
+                Some("monitor-clockwise")
             }
         }
     }
@@ -203,6 +214,32 @@ impl ArcadeVelocityScrollRunSpec {
                 ArcadeVelocityScrollInputMode::Held
             },
         }
+    }
+
+    #[must_use]
+    pub const fn with_duration_seconds(mut self, duration_seconds: u64) -> Self {
+        self.duration_ms = duration_seconds.saturating_mul(1_000);
+        self.telemetry_secs = duration_seconds.saturating_add(15);
+        self
+    }
+}
+
+#[cfg(test)]
+mod arcade_velocity_scroll_run_spec_tests {
+    use super::*;
+
+    #[test]
+    fn duration_override_updates_workload_and_telemetry_window() {
+        let spec = ArcadeVelocityScrollRunSpec::new(
+            ArcadeVelocityScrollArm::Turbo,
+            ArcadeVelocityScrollRoute::HdmiPortraitRight,
+        )
+        .with_duration_seconds(20);
+
+        assert_eq!(spec.duration_ms, 20_000);
+        assert_eq!(spec.telemetry_secs, 35);
+        assert_eq!(spec.route.display_mode(), Some("hdmi-1280x720p60"));
+        assert_eq!(spec.route.orientation(), Some("monitor-clockwise"));
     }
 }
 

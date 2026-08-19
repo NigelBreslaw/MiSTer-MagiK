@@ -8479,8 +8479,11 @@ fn arcade_velocity_scroll_effective_route(display_mode: &str, orientation: &str)
     match (display_mode, orientation) {
         ("hdmi-1280x720p60", "Normal") => "hdmi-landscape",
         ("hdmi-1280x720p60", "Monitor left (counterclockwise)") => "hdmi-portrait-left",
+        ("hdmi-1280x720p60", "Monitor right (clockwise)") => "hdmi-portrait-right",
         ("crt-240p60", "Monitor left (counterclockwise)") => "crt240-portrait-left",
+        ("crt-240p60", "Monitor right (clockwise)") => "crt240-portrait-right",
         ("crt-288p50", "Monitor left (counterclockwise)") => "crt288-portrait-left",
+        ("crt-288p50", "Monitor right (clockwise)") => "crt288-portrait-right",
         _ => "active",
     }
 }
@@ -8613,6 +8616,8 @@ fn profile_installed_arcade_velocity_scroll_run(
         "requested_route": spec.route.label(),
         "requested_display_mode": spec.route.display_mode(),
         "requested_orientation": spec.route.orientation(),
+        "duration_ms": spec.duration_ms,
+        "evidence_authority": arcade_velocity_scroll_evidence_authority(spec),
         "original_display_mode": snapshot.display_mode.id,
         "effective_route": effective_route,
         "effective_display_mode": effective_display_mode,
@@ -8644,6 +8649,8 @@ fn profile_installed_arcade_velocity_scroll_run(
         .map(str::to_owned)
         .ok_or("Arcade benchmark summary lost its effective orientation")?;
     summary["requested_route"] = json!(spec.route.label());
+    summary["requested_duration_ms"] = json!(spec.duration_ms);
+    summary["evidence_authority"] = json!(arcade_velocity_scroll_evidence_authority(spec));
     summary["effective_route"] = json!(arcade_velocity_scroll_effective_route(
         summary["display_mode"].as_str().unwrap_or_default(),
         &effective_orientation,
@@ -8656,6 +8663,16 @@ fn profile_installed_arcade_velocity_scroll_run(
         format!("{}\n", serde_json::to_string_pretty(&summary)?),
     )?;
     serde_json::to_string(&summary).map_err(Into::into)
+}
+
+fn arcade_velocity_scroll_evidence_authority(spec: ArcadeVelocityScrollRunSpec) -> &'static str {
+    if !matches!(spec.profiler, ArcadeVelocityScrollProfiler::None) {
+        "attribution-only"
+    } else if spec.duration_ms >= 40_000 {
+        "qualification"
+    } else {
+        "directional"
+    }
 }
 
 fn profile_installed_arcade_velocity_scroll(
@@ -30818,12 +30835,24 @@ H: Handlers=event3 js0"#
             "hdmi-portrait-left"
         );
         assert_eq!(
+            arcade_velocity_scroll_effective_route("hdmi-1280x720p60", "Monitor right (clockwise)"),
+            "hdmi-portrait-right"
+        );
+        assert_eq!(
             arcade_velocity_scroll_effective_route("crt-240p60", "Monitor left (counterclockwise)"),
             "crt240-portrait-left"
         );
         assert_eq!(
+            arcade_velocity_scroll_effective_route("crt-240p60", "Monitor right (clockwise)"),
+            "crt240-portrait-right"
+        );
+        assert_eq!(
             arcade_velocity_scroll_effective_route("crt-288p50", "Monitor left (counterclockwise)"),
             "crt288-portrait-left"
+        );
+        assert_eq!(
+            arcade_velocity_scroll_effective_route("crt-288p50", "Monitor right (clockwise)"),
+            "crt288-portrait-right"
         );
         assert_eq!(
             arcade_velocity_scroll_effective_route(

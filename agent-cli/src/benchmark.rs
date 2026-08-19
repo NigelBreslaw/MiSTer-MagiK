@@ -17,9 +17,10 @@ pub fn execute(
     scenario: BenchmarkScenario,
     arm: Option<ArcadeVelocityScrollArm>,
     route: ArcadeVelocityScrollRoute,
+    duration_seconds: u64,
     reporter: &mut Reporter<'_>,
 ) -> AgentResult<Outcome> {
-    require_clean_installed_commit(repository, scenario, arm, route, reporter)
+    require_clean_installed_commit(repository, scenario, arm, route, duration_seconds, reporter)
 }
 
 trait BenchmarkDevice {
@@ -202,6 +203,7 @@ fn require_clean_installed_commit(
     scenario: BenchmarkScenario,
     arm: Option<ArcadeVelocityScrollArm>,
     route: ArcadeVelocityScrollRoute,
+    duration_seconds: u64,
     reporter: &mut Reporter<'_>,
 ) -> AgentResult<Outcome> {
     if arm.is_some() && scenario != BenchmarkScenario::ArcadeVelocityScrollAttribution {
@@ -218,6 +220,11 @@ fn require_clean_installed_commit(
     }
     if route != ArcadeVelocityScrollRoute::Active && arm.is_none() {
         return Err("an explicit Arcade benchmark route requires one profiler arm".into());
+    }
+    if duration_seconds != 40 && scenario != BenchmarkScenario::ArcadeVelocityScrollAttribution {
+        return Err(
+            "--duration-seconds is supported only for arcade-velocity-scroll-attribution".into(),
+        );
     }
     let head = crate::git::value(repository, &["rev-parse", "HEAD"])?;
     if !crate::git::value(repository, &["status", "--porcelain"])?.is_empty() {
@@ -380,7 +387,8 @@ fn require_clean_installed_commit(
                 manifest,
                 output_dir,
                 reporter,
-                ArcadeVelocityScrollRunSpec::new(arm, route),
+                ArcadeVelocityScrollRunSpec::new(arm, route)
+                    .with_duration_seconds(duration_seconds),
             ),
             None => execute_arcade_velocity_scroll_attribution(
                 &mut device,
@@ -1209,8 +1217,9 @@ fn execute_arcade_velocity_scroll_arm(
         EventKind::Progress,
         "arcade-velocity-scroll-attribution",
         &format!(
-            "collecting only the fixed {} arm on the {} route",
+            "collecting only the {} arm for {} seconds on the {} route",
             arm.label(),
+            spec.duration_ms / 1_000,
             spec.route.label(),
         ),
         Some(25),
@@ -1244,8 +1253,13 @@ fn execute_arcade_velocity_scroll_arm(
             "performance_authority": if matches!(
                 arm,
                 ArcadeVelocityScrollArm::Control | ArcadeVelocityScrollArm::Turbo
-            ) {
+            ) && spec.duration_ms >= 40_000 {
                 "unprofiled control"
+            } else if matches!(
+                arm,
+                ArcadeVelocityScrollArm::Control | ArcadeVelocityScrollArm::Turbo
+            ) {
+                "directional development evidence"
             } else {
                 "diagnostic attribution only"
             },

@@ -71,6 +71,12 @@ pub enum Command {
         arm: Option<ArcadeVelocityScrollArm>,
         #[arg(long, value_enum, default_value_t)]
         route: ArcadeVelocityScrollRoute,
+        #[arg(
+            long,
+            default_value_t = 40,
+            value_parser = clap::value_parser!(u64).range(5..=120)
+        )]
+        duration_seconds: u64,
     },
     Capture {
         #[command(subcommand)]
@@ -914,8 +920,11 @@ mod tests {
             "active",
             "hdmi-landscape",
             "hdmi-portrait-left",
+            "hdmi-portrait-right",
             "crt240-portrait-left",
+            "crt240-portrait-right",
             "crt288-portrait-left",
+            "crt288-portrait-right",
         ] {
             assert!(
                 Cli::try_parse_from([
@@ -929,6 +938,30 @@ mod tests {
                 .is_ok()
             );
         }
+        assert!(
+            Cli::try_parse_from([
+                "agent-cli",
+                "benchmark",
+                "arcade-velocity-scroll-attribution",
+                "turbo",
+                "--route",
+                "hdmi-portrait-left",
+                "--duration-seconds",
+                "20",
+            ])
+            .is_ok()
+        );
+        assert!(
+            Cli::try_parse_from([
+                "agent-cli",
+                "benchmark",
+                "arcade-velocity-scroll-attribution",
+                "turbo",
+                "--duration-seconds",
+                "4",
+            ])
+            .is_err()
+        );
         assert!(
             Cli::try_parse_from([
                 "agent-cli",
