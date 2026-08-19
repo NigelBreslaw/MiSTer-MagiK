@@ -6,6 +6,8 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 const TRACEFS_MOUNT: &str = "/sys/kernel/tracing";
 const TRACE_MAX_BYTES: u64 = 64 * 1024 * 1024;
+const FUNCTION_GRAPH_BUFFER_KB: u64 = 16_384;
+const FUNCTION_GRAPH_MAX_DEPTH: u8 = 4;
 
 pub(super) const SCHEDULER_TRACE_SPEC: TracefsCaptureSpec = TracefsCaptureSpec {
     label: "scheduler trace",
@@ -30,6 +32,7 @@ pub(super) const SCHEDULER_TRACE_SPEC: TracefsCaptureSpec = TracefsCaptureSpec {
         "block:block_rq_issue",
         "block:block_rq_complete",
     ],
+    mode: TracefsCaptureMode::Events,
 };
 
 pub(super) const STORAGE_TRACE_SPEC: TracefsCaptureSpec = TracefsCaptureSpec {
@@ -61,7 +64,26 @@ pub(super) const STORAGE_TRACE_SPEC: TracefsCaptureSpec = TracefsCaptureSpec {
         "syscalls:sys_enter_unlinkat",
         "syscalls:sys_exit_unlinkat",
     ],
+    mode: TracefsCaptureMode::Events,
 };
+
+#[derive(Clone, Copy)]
+pub(super) struct TracefsFunctionGroup {
+    pub(super) label: &'static str,
+    pub(super) functions: &'static [&'static str],
+}
+
+#[derive(Clone, Copy)]
+pub(super) enum TracefsCaptureMode {
+    Events,
+    #[expect(
+        dead_code,
+        reason = "used by the catalog function-graph benchmark slice"
+    )]
+    FunctionGraph {
+        function_groups: &'static [TracefsFunctionGroup],
+    },
+}
 
 #[derive(Clone, Copy)]
 pub(super) struct TracefsCaptureSpec {
@@ -71,6 +93,30 @@ pub(super) struct TracefsCaptureSpec {
     pub(super) buffer_kb: u64,
     pub(super) required_events: &'static [&'static str],
     pub(super) optional_events: &'static [&'static str],
+    pub(super) mode: TracefsCaptureMode,
+}
+
+impl TracefsCaptureSpec {
+    #[expect(
+        dead_code,
+        reason = "used by the catalog function-graph benchmark slice"
+    )]
+    pub(super) const fn function_graph(
+        label: &'static str,
+        instance: &'static str,
+        remote_root: &'static str,
+        function_groups: &'static [TracefsFunctionGroup],
+    ) -> Self {
+        Self {
+            label,
+            instance,
+            remote_root,
+            buffer_kb: FUNCTION_GRAPH_BUFFER_KB,
+            required_events: &[],
+            optional_events: &[],
+            mode: TracefsCaptureMode::FunctionGraph { function_groups },
+        }
+    }
 }
 
 pub(super) struct TracefsCapture<'a> {
@@ -100,6 +146,7 @@ impl<'a> TracefsCapture<'a> {
     }
 
     pub(super) fn prepare(&self) -> Result<()> {
+        validate_tracefs_spec(self.spec)?;
         fs::create_dir_all(self.output_dir)?;
         exec_checked(
             self.session,
@@ -172,6 +219,10 @@ impl<'a> TracefsCapture<'a> {
             self.output_dir.join("trace-capabilities.tsv"),
             &capabilities,
         )?;
+        let overruns = trace_overruns(&stats)?;
+        if overruns != 0 {
+            return Err(format!("{} trace has {overruns} overrun records", self.spec.label).into());
+        }
         let sha256 = file_sha256(raw_path.clone())?;
         Ok(RetainedTrace {
             raw_path,
@@ -190,6 +241,59 @@ impl<'a> TracefsCapture<'a> {
     }
 }
 
+fn validate_tracefs_spec(spec: TracefsCaptureSpec) -> Result<()> {
+    if spec.instance.is_empty()
+        || !spec
+            .instance
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    {
+        return Err(format!("invalid tracefs instance name {}", spec.instance).into());
+    }
+    if spec.buffer_kb == 0 {
+        return Err("tracefs buffer size must be non-zero".into());
+    }
+    if let TracefsCaptureMode::FunctionGraph { function_groups } = spec.mode {
+        if spec.buffer_kb != FUNCTION_GRAPH_BUFFER_KB {
+            return Err(format!(
+                "function-graph buffer must be {FUNCTION_GRAPH_BUFFER_KB} KiB per CPU"
+            )
+            .into());
+        }
+        if !spec.required_events.is_empty() || !spec.optional_events.is_empty() {
+            return Err("function-graph captures cannot also enable trace events".into());
+        }
+        if function_groups.is_empty() {
+            return Err("function-graph capture requires an allowlisted function group".into());
+        }
+        for group in function_groups {
+            if group.label.is_empty()
+                || !group
+                    .label
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+                || group.functions.is_empty()
+            {
+                return Err("function-graph capture has an invalid function group".into());
+            }
+            for function in group.functions {
+                if function.is_empty()
+                    || !function
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.'))
+                {
+                    return Err(format!(
+                        "function-graph group {} contains an invalid function name",
+                        group.label
+                    )
+                    .into());
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 fn event_enable_path(instance: &str, event: &str) -> String {
     let (system, name) = event.split_once(':').expect("static trace event");
     format!("{TRACEFS_MOUNT}/instances/{instance}/events/{system}/{name}/enable")
@@ -203,29 +307,59 @@ fn tracefs_prepare_command(spec: TracefsCaptureSpec) -> String {
     let instance = sh(&format!("{TRACEFS_MOUNT}/instances/{}", spec.instance));
     let mut checks = String::new();
     let mut enables = String::new();
-    for event in spec.required_events {
-        checks.push_str(&format!(
-            "grep -qx {event} {mount}/available_events; printf '%s\\t%s\\n' {event} required >> {capabilities}; ",
-            event = sh(event),
-            mount = sh(TRACEFS_MOUNT),
-            capabilities = capabilities,
-        ));
-        enables.push_str(&format!(
-            "printf '1\\n' > {path}; ",
-            path = sh(&event_enable_path(spec.instance, event)),
-        ));
-    }
-    for event in spec.optional_events {
-        checks.push_str(&format!(
-            "if grep -qx {event} {mount}/available_events; then printf '%s\\t%s\\n' {event} enabled >> {capabilities}; printf '1\\n' > {path}; else printf '%s\\t%s\\n' {event} missing >> {capabilities}; fi; ",
-            event = sh(event),
-            mount = sh(TRACEFS_MOUNT),
-            capabilities = capabilities,
-            path = sh(&event_enable_path(spec.instance, event)),
-        ));
-    }
+    let tracer_setup = match spec.mode {
+        TracefsCaptureMode::Events => {
+            for event in spec.required_events {
+                checks.push_str(&format!(
+                    "grep -qx {event} {mount}/available_events; printf '%s\\t%s\\n' {event} required >> {capabilities}; ",
+                    event = sh(event),
+                    mount = sh(TRACEFS_MOUNT),
+                    capabilities = capabilities,
+                ));
+                enables.push_str(&format!(
+                    "printf '1\\n' > {path}; ",
+                    path = sh(&event_enable_path(spec.instance, event)),
+                ));
+            }
+            for event in spec.optional_events {
+                checks.push_str(&format!(
+                    "if grep -qx {event} {mount}/available_events; then printf '%s\\t%s\\n' {event} enabled >> {capabilities}; printf '1\\n' > {path}; else printf '%s\\t%s\\n' {event} missing >> {capabilities}; fi; ",
+                    event = sh(event),
+                    mount = sh(TRACEFS_MOUNT),
+                    capabilities = capabilities,
+                    path = sh(&event_enable_path(spec.instance, event)),
+                ));
+            }
+            format!("{enables} test \"$(cat {instance}/current_tracer)\" = nop")
+        }
+        TracefsCaptureMode::FunctionGraph { function_groups } => {
+            let resolved = sh(&format!("{}/resolved-functions.txt", spec.remote_root));
+            checks.push_str(&format!(
+                "grep -qw function_graph {mount}/available_tracers; test -r {mount}/available_filter_functions; test -w {instance}/set_graph_function; test -w {instance}/max_graph_depth; printf '%s\\t%s\\n' tracer:function_graph required >> {capabilities}; : > {resolved}; ",
+                mount = sh(TRACEFS_MOUNT),
+            ));
+            for group in function_groups {
+                let candidates = group
+                    .functions
+                    .iter()
+                    .map(|function| sh(function))
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                checks.push_str(&format!(
+                    "group_found=0; for function in {candidates}; do if awk -v wanted=\"$function\" '$1 == wanted {{ found=1 }} END {{ exit !found }}' {mount}/available_filter_functions; then printf '%s\\n' \"$function\" >> {resolved}; printf 'function:%s:%s\\tresolved\\n' {group_label} \"$function\" >> {capabilities}; group_found=1; fi; done; test \"$group_found\" = 1; printf '%s\\t%s\\n' {group_capability} resolved >> {capabilities}; ",
+                    mount = sh(TRACEFS_MOUNT),
+                    group_label = sh(group.label),
+                    group_capability = sh(&format!("function-group:{}", group.label)),
+                ));
+            }
+            format!(
+                "sort -u {resolved} > {resolved}.sorted; mv {resolved}.sorted {resolved}; test -s {resolved}; cat {resolved} > {instance}/set_graph_function; printf '{depth}\\n' > {instance}/max_graph_depth; printf 'function_graph\\n' > {instance}/current_tracer; test \"$(cat {instance}/current_tracer)\" = function_graph; test \"$(cat {instance}/max_graph_depth)\" = {depth}",
+                depth = FUNCTION_GRAPH_MAX_DEPTH,
+            )
+        }
+    };
     format!(
-        "set -eu; root={root}; mkdir -p \"$root\"; current=$(awk '$2 == \"{mount_path}\" && $3 == \"tracefs\" {{ print }}' /proc/mounts); if test -z \"$current\"; then mount -t tracefs tracefs {mount}; awk '$2 == \"{mount_path}\" && $3 == \"tracefs\" {{ print }}' /proc/mounts > {mount_marker}; test -s {mount_marker}; fi; test -d {mount}/instances; test ! -e {instance}; mkdir {instance}; printf '%s\\n' {instance} > {instance_marker}; : > {capabilities}; {checks} grep -qw mono {instance}/trace_clock; printf 'mono\\n' > {instance}/trace_clock; printf 'nop\\n' > {instance}/current_tracer; printf '{buffer_kb}\\n' > {instance}/buffer_size_kb; printf '0\\n' > {instance}/tracing_on; printf '0\\n' > {instance}/events/enable; : > {instance}/trace; {enables} test \"$(cat {instance}/tracing_on)\" = 0",
+        "set -eu; root={root}; mkdir -p \"$root\"; current=$(awk '$2 == \"{mount_path}\" && $3 == \"tracefs\" {{ print }}' /proc/mounts); if test -z \"$current\"; then mount -t tracefs tracefs {mount}; awk '$2 == \"{mount_path}\" && $3 == \"tracefs\" {{ print }}' /proc/mounts > {mount_marker}; test -s {mount_marker}; fi; test -d {mount}/instances; test ! -e {instance}; mkdir {instance}; printf '%s\\n' {instance} > {instance_marker}; : > {capabilities}; grep -qw mono {instance}/trace_clock; printf 'mono\\n' > {instance}/trace_clock; printf 'nop\\n' > {instance}/current_tracer; printf '{buffer_kb}\\n' > {instance}/buffer_size_kb; printf '0\\n' > {instance}/tracing_on; printf '0\\n' > {instance}/events/enable; : > {instance}/trace; {checks} {tracer_setup}; test \"$(cat {instance}/tracing_on)\" = 0",
         root = root,
         mount_path = TRACEFS_MOUNT,
         mount = sh(TRACEFS_MOUNT),
@@ -234,16 +368,21 @@ fn tracefs_prepare_command(spec: TracefsCaptureSpec) -> String {
         instance_marker = instance_marker,
         capabilities = capabilities,
         checks = checks,
-        enables = enables,
+        tracer_setup = tracer_setup,
         buffer_kb = spec.buffer_kb,
     )
 }
 
 fn tracefs_control_command(spec: TracefsCaptureSpec, start: bool) -> String {
     let instance = sh(&format!("{TRACEFS_MOUNT}/instances/{}", spec.instance));
+    let tracer = match spec.mode {
+        TracefsCaptureMode::Events => "nop",
+        TracefsCaptureMode::FunctionGraph { .. } => "function_graph",
+    };
     if start {
         format!(
-            "set -eu; test -d {instance}; test \"$(cat {instance}/tracing_on)\" = 0; : > {instance}/trace; printf '1\\n' > {instance}/tracing_on; printf 'mister-magik-start\\n' > {instance}/trace_marker; test \"$(cat {instance}/tracing_on)\" = 1",
+            "set -eu; test -d {instance}; test \"$(cat {instance}/current_tracer)\" = {tracer}; test \"$(cat {instance}/tracing_on)\" = 0; : > {instance}/trace; printf '1\\n' > {instance}/tracing_on; printf 'mister-magik-start\\n' > {instance}/trace_marker; test \"$(cat {instance}/tracing_on)\" = 1",
+            tracer = sh(tracer),
         )
     } else {
         format!(
@@ -268,7 +407,7 @@ fn tracefs_cleanup_command(spec: TracefsCaptureSpec) -> String {
     let instance_path = format!("{TRACEFS_MOUNT}/instances/{}", spec.instance);
     let instance = sh(&instance_path);
     format!(
-        "set -eu; root={root}; current=$(awk '$2 == \"{mount_path}\" && $3 == \"tracefs\" {{ print }}' /proc/mounts); if test -n \"$current\" && test -e {instance}; then test -f {instance_marker}; test \"$(cat {instance_marker})\" = {instance}; printf '0\\n' > {instance}/tracing_on; printf '0\\n' > {instance}/events/enable; : > {instance}/trace; i=0; while ! rmdir {instance} 2>/dev/null && test \"$i\" -lt 50; do i=$((i+1)); sleep 0.1; done; test ! -e {instance}; fi; if test -f {mount_marker}; then current=$(awk '$2 == \"{mount_path}\" && $3 == \"tracefs\" {{ print }}' /proc/mounts); owned=$(cat {mount_marker}); if test -n \"$current\"; then test \"$current\" = \"$owned\"; i=0; while ! umount {mount} 2>/dev/null && test \"$i\" -lt 50; do i=$((i+1)); sleep 0.1; done; current=$(awk '$2 == \"{mount_path}\" && $3 == \"tracefs\" {{ print }}' /proc/mounts); test -z \"$current\"; fi; fi; rm -rf \"$root\"; test ! -e \"$root\"",
+        "set -eu; root={root}; current=$(awk '$2 == \"{mount_path}\" && $3 == \"tracefs\" {{ print }}' /proc/mounts); if test -n \"$current\" && test -e {instance}; then test -f {instance_marker}; test \"$(cat {instance_marker})\" = {instance}; printf '0\\n' > {instance}/tracing_on; printf '0\\n' > {instance}/events/enable; printf 'nop\\n' > {instance}/current_tracer; if test -e {instance}/set_graph_function; then : > {instance}/set_graph_function; fi; if test -e {instance}/max_graph_depth; then printf '0\\n' > {instance}/max_graph_depth; fi; : > {instance}/trace; i=0; while ! rmdir {instance} 2>/dev/null && test \"$i\" -lt 50; do i=$((i+1)); sleep 0.1; done; test ! -e {instance}; fi; if test -f {mount_marker}; then current=$(awk '$2 == \"{mount_path}\" && $3 == \"tracefs\" {{ print }}' /proc/mounts); owned=$(cat {mount_marker}); if test -n \"$current\"; then test \"$current\" = \"$owned\"; i=0; while ! umount {mount} 2>/dev/null && test \"$i\" -lt 50; do i=$((i+1)); sleep 0.1; done; current=$(awk '$2 == \"{mount_path}\" && $3 == \"tracefs\" {{ print }}' /proc/mounts); test -z \"$current\"; fi; fi; rm -rf \"$root\"; test ! -e \"$root\"",
         root = root,
         mount_path = TRACEFS_MOUNT,
         instance = instance,
@@ -677,14 +816,20 @@ fn close_span(
 
 fn trace_overruns(stats: &str) -> Result<u64> {
     let mut total = 0u64;
+    let mut seen = false;
     for line in stats.lines() {
         let line = line.trim();
         if let Some(value) = line.strip_prefix("overrun:") {
+            seen = true;
             total = total.saturating_add(value.trim().parse::<u64>()?);
         }
         if let Some(value) = line.strip_prefix("commit overrun:") {
+            seen = true;
             total = total.saturating_add(value.trim().parse::<u64>()?);
         }
+    }
+    if !seen {
+        return Err("trace statistics contain no overrun counters".into());
     }
     Ok(total)
 }
@@ -871,5 +1016,68 @@ mod tests {
         assert!(cleanup.contains("owned-tracefs.mount"));
         assert!(retain.contains(&TRACE_MAX_BYTES.to_string()));
         assert!(!prepare.contains("/media/fat"));
+    }
+
+    #[test]
+    fn function_graph_commands_resolve_allowlisted_groups_and_restore_nop() {
+        const GROUPS: &[TracefsFunctionGroup] = &[
+            TracefsFunctionGroup {
+                label: "directory-walk",
+                functions: &["iterate_dir", "vfs_readdir"],
+            },
+            TracefsFunctionGroup {
+                label: "durability",
+                functions: &["vfs_fsync", "generic_file_fsync"],
+            },
+        ];
+        let spec = TracefsCaptureSpec::function_graph(
+            "catalog function graph",
+            "mister-magik-catalog-graph",
+            "/tmp/mister-magik/catalog-function-graph",
+            GROUPS,
+        );
+        validate_tracefs_spec(spec).unwrap();
+        let prepare = tracefs_prepare_command(spec);
+        let start = tracefs_control_command(spec, true);
+        let cleanup = tracefs_cleanup_command(spec);
+        assert!(prepare.contains("available_tracers"));
+        assert!(prepare.contains("available_filter_functions"));
+        assert!(prepare.contains("function-group:directory-walk"));
+        assert!(prepare.contains("function-group:durability"));
+        assert!(prepare.contains("set_graph_function"));
+        assert!(prepare.contains("max_graph_depth"));
+        assert!(prepare.contains(&FUNCTION_GRAPH_MAX_DEPTH.to_string()));
+        assert!(prepare.contains(&FUNCTION_GRAPH_BUFFER_KB.to_string()));
+        assert!(start.contains("function_graph"));
+        assert!(cleanup.contains("current_tracer"));
+        assert!(cleanup.contains("printf 'nop"));
+        assert!(cleanup.contains("rmdir"));
+    }
+
+    #[test]
+    fn function_graph_spec_rejects_unbounded_or_unsafe_filters() {
+        const EMPTY_GROUPS: &[TracefsFunctionGroup] = &[];
+        const UNSAFE_GROUPS: &[TracefsFunctionGroup] = &[TracefsFunctionGroup {
+            label: "unsafe",
+            functions: &["vfs_*"],
+        }];
+        assert!(
+            validate_tracefs_spec(TracefsCaptureSpec::function_graph(
+                "empty",
+                "mister-magik-empty",
+                "/tmp/mister-magik/empty",
+                EMPTY_GROUPS,
+            ))
+            .is_err()
+        );
+        assert!(
+            validate_tracefs_spec(TracefsCaptureSpec::function_graph(
+                "unsafe",
+                "mister-magik-unsafe",
+                "/tmp/mister-magik/unsafe",
+                UNSAFE_GROUPS,
+            ))
+            .is_err()
+        );
     }
 }
