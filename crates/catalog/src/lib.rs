@@ -103,6 +103,8 @@ pub(crate) mod pmu_phase {
     #[cfg(feature = "builder")]
     pub const SEARCH_AUTOCOMPLETE_INSERT: &str = "catalog.shard.search.autocomplete-insert";
     #[cfg(feature = "builder")]
+    pub const SEARCH_AUTOCOMPLETE_SORT: &str = "catalog.shard.search.autocomplete-sort";
+    #[cfg(feature = "builder")]
     pub const SEARCH_OPTIMIZE: &str = "catalog.shard.search.optimize";
     #[cfg(feature = "builder")]
     pub const SEARCH_INTEGRITY: &str = "catalog.shard.search.integrity";
@@ -130,6 +132,7 @@ pub(crate) mod pmu_phase {
                     SHARD_SEARCH_INDEX,
                     SEARCH_ROWS,
                     SEARCH_AUTOCOMPLETE_INSERT,
+                    SEARCH_AUTOCOMPLETE_SORT,
                     SEARCH_OPTIMIZE,
                     SEARCH_INTEGRITY,
                     SHARD_COMMIT,
@@ -146,6 +149,7 @@ pub(crate) mod pmu_phase {
                     "catalog.shard.search-index",
                     "catalog.shard.search.rows",
                     "catalog.shard.search.autocomplete-insert",
+                    "catalog.shard.search.autocomplete-sort",
                     "catalog.shard.search.optimize",
                     "catalog.shard.search.integrity",
                     "catalog.shard.commit",

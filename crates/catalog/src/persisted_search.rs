@@ -327,6 +327,7 @@ pub(crate) fn create_schema(connection: &Connection) -> Result<(), PersistedSear
 pub(crate) struct PersistedSearchBuildOutcome {
     pub(crate) words: usize,
     pub(crate) row_loop_us: u64,
+    pub(crate) autocomplete_sort_us: u64,
     pub(crate) autocomplete_insert_us: u64,
     pub(crate) optimize_us: u64,
     pub(crate) automerge_restore_us: u64,
@@ -339,7 +340,7 @@ pub(crate) fn populate(
     connection: &Connection,
     games: &[crate::system_shard::SystemGame],
 ) -> Result<PersistedSearchBuildOutcome, PersistedSearchError> {
-    use std::collections::BTreeMap;
+    use std::collections::HashMap;
 
     let total_started = Instant::now();
     connection
@@ -356,7 +357,7 @@ pub(crate) fn populate(
              ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
         )
         .map_err(|error| PersistedSearchError::with("prepare search rows", error))?;
-    let mut words = BTreeMap::<String, AutocompleteStats>::new();
+    let mut words = HashMap::<String, AutocompleteStats>::new();
     let row_loop_started = Instant::now();
     let row_loop_pmu = mister_magik_perf_events::sampled_span(crate::pmu_phase::SEARCH_ROWS);
     for (ordinal, game) in games.iter().enumerate() {
@@ -416,6 +417,14 @@ pub(crate) fn populate(
     drop(insert_search);
     drop(row_loop_pmu);
     let row_loop_us = elapsed_us(row_loop_started);
+    let word_count = words.len();
+    let autocomplete_sort_started = Instant::now();
+    let autocomplete_sort_pmu =
+        mister_magik_perf_events::sampled_span(crate::pmu_phase::SEARCH_AUTOCOMPLETE_SORT);
+    let mut ordered_words = words.into_iter().collect::<Vec<_>>();
+    ordered_words.sort_unstable_by(|left, right| left.0.cmp(&right.0));
+    drop(autocomplete_sort_pmu);
+    let autocomplete_sort_us = elapsed_us(autocomplete_sort_started);
 
     let autocomplete_insert_started = Instant::now();
     let autocomplete_insert_pmu =
@@ -423,7 +432,7 @@ pub(crate) fn populate(
     let mut insert_word = connection
         .prepare("INSERT INTO autocomplete_words(word,source_rank,score) VALUES (?1,?2,?3)")
         .map_err(|error| PersistedSearchError::with("prepare autocomplete rows", error))?;
-    for (word, stats) in &words {
+    for (word, stats) in &ordered_words {
         insert_word
             .execute(rusqlite::params![word, stats.source_rank, stats.score])
             .map_err(|error| PersistedSearchError::with("insert autocomplete row", error))?;
@@ -459,8 +468,9 @@ pub(crate) fn populate(
         .map_err(|error| PersistedSearchError::with("check FTS integrity", error))?;
     drop(integrity_pmu);
     Ok(PersistedSearchBuildOutcome {
-        words: words.len(),
+        words: word_count,
         row_loop_us,
+        autocomplete_sort_us,
         autocomplete_insert_us,
         optimize_us,
         automerge_restore_us,
@@ -594,7 +604,7 @@ struct AutocompleteStats {
 
 #[cfg(feature = "builder")]
 fn add_normalized_words(
-    words: &mut std::collections::BTreeMap<String, AutocompleteStats>,
+    words: &mut std::collections::HashMap<String, AutocompleteStats>,
     normalized: &str,
     source: AutocompleteSource,
 ) {
@@ -605,7 +615,7 @@ fn add_normalized_words(
 
 #[cfg(feature = "builder")]
 fn add_normalized_word(
-    words: &mut std::collections::BTreeMap<String, AutocompleteStats>,
+    words: &mut std::collections::HashMap<String, AutocompleteStats>,
     normalized: &str,
     source: AutocompleteSource,
 ) {
