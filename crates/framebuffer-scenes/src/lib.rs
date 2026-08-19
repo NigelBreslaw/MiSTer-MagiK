@@ -647,8 +647,17 @@ fn copy_rotated_rgb565_neon<P: Copy>(
     _destination: &mut [P],
     _layout: Rgb565OutputLayout,
     _source: &[P],
-    _spec: RotatedCopySpec,
+    spec: RotatedCopySpec,
 ) -> bool {
+    let _ = (
+        spec.destination_x,
+        spec.destination_y,
+        spec.width,
+        spec.height,
+        spec.source_stride,
+        spec.source_x,
+        spec.source_y,
+    );
     false
 }
 
