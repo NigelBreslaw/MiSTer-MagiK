@@ -295,41 +295,60 @@ impl PhysicalLayerUpdate {
         }
         let mut damage = DirtyRectList::new();
         if delta_x > 0 {
-            damage.push(DirtyRect {
-                x0: rect.x0,
-                y0: rect.y0,
-                x1: rect.x0 + delta_x as usize,
-                y1: rect.y1,
-            });
+            push_uncovered_damage(
+                &mut damage,
+                DirtyRect {
+                    x0: rect.x0,
+                    y0: rect.y0,
+                    x1: rect.x0 + delta_x as usize,
+                    y1: rect.y1,
+                },
+            );
         } else if delta_x < 0 {
-            damage.push(DirtyRect {
-                x0: rect.x1 - delta_x.unsigned_abs(),
-                y0: rect.y0,
-                x1: rect.x1,
-                y1: rect.y1,
-            });
+            push_uncovered_damage(
+                &mut damage,
+                DirtyRect {
+                    x0: rect.x1 - delta_x.unsigned_abs(),
+                    y0: rect.y0,
+                    x1: rect.x1,
+                    y1: rect.y1,
+                },
+            );
         }
         if delta_y > 0 {
-            damage.push(DirtyRect {
-                x0: rect.x0,
-                y0: rect.y0,
-                x1: rect.x1,
-                y1: rect.y0 + delta_y as usize,
-            });
+            push_uncovered_damage(
+                &mut damage,
+                DirtyRect {
+                    x0: rect.x0,
+                    y0: rect.y0,
+                    x1: rect.x1,
+                    y1: rect.y0 + delta_y as usize,
+                },
+            );
         } else if delta_y < 0 {
-            damage.push(DirtyRect {
-                x0: rect.x0,
-                y0: rect.y1 - delta_y.unsigned_abs(),
-                x1: rect.x1,
-                y1: rect.y1,
-            });
+            push_uncovered_damage(
+                &mut damage,
+                DirtyRect {
+                    x0: rect.x0,
+                    y0: rect.y1 - delta_y.unsigned_abs(),
+                    x1: rect.x1,
+                    y1: rect.y1,
+                },
+            );
         }
         if let Some(repair) = repair_rect.and_then(|repair| repair.intersection(rect)) {
-            damage.push(repair);
-            damage.push_if_some(translate_rect_clipped(repair, delta_x, delta_y, rect));
+            push_uncovered_damage(&mut damage, repair);
+            if let Some(translated) = translate_rect_clipped(repair, delta_x, delta_y, rect) {
+                push_uncovered_damage(&mut damage, translated);
+            }
         }
         damage
     }
+}
+
+fn push_uncovered_damage(damage: &mut DirtyRectList, rect: DirtyRect) {
+    let uncovered = subtract_dirty_rects(DirtyRectList::from_one(rect), damage);
+    damage.extend_from(&uncovered);
 }
 
 fn translate_rect_clipped(
@@ -2173,6 +2192,54 @@ mod tests {
         };
 
         assert_eq!(update.write_rects().to_vec(), vec![layer]);
+    }
+
+    #[test]
+    fn physical_scroll_repairs_shifted_selection_pixels() {
+        let layer = full();
+        let repair = rect(1, 1, 3, 2);
+        let update = PhysicalLayerUpdate::Scroll {
+            delta_x: -1,
+            delta_y: 0,
+            rect: layer,
+            repair_rect: Some(repair),
+        };
+        let normal = (1..=WIDTH * HEIGHT)
+            .map(|value| Rgb565Pixel(value as u16))
+            .collect::<Vec<_>>();
+        let mut previous = normal.clone();
+        fill_rect(&mut previous, repair, Rgb565Pixel(0xffff));
+        let mut desired = normal;
+        assert!(crate::framebuffer::target::shift_physical_rect(
+            &mut desired,
+            WIDTH,
+            HEIGHT,
+            layer,
+            -1,
+            0,
+            Rgb565Pixel(0),
+        ));
+        fill_rect(&mut desired, rect(3, 0, 4, 3), Rgb565Pixel(0x1234));
+        fill_rect(&mut desired, repair, Rgb565Pixel(0xeeee));
+
+        assert!(crate::framebuffer::target::shift_physical_rect(
+            &mut previous,
+            WIDTH,
+            HEIGHT,
+            layer,
+            -1,
+            0,
+            Rgb565Pixel(0),
+        ));
+        for damage in update.write_rects().iter() {
+            for y in damage.y0..damage.y1 {
+                let start = y * WIDTH + damage.x0;
+                let end = start + damage.width();
+                previous[start..end].copy_from_slice(&desired[start..end]);
+            }
+        }
+
+        assert_eq!(previous, desired);
     }
 
     #[test]

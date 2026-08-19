@@ -137,6 +137,78 @@ fn require_complete_overlay_copy(
     }
 }
 
+fn copy_published_overlay_rects(
+    hidden: &mut ScanoutSlotsRgb565Framebuffer,
+    publication: &PhysicalLayerPublication,
+    role: PhysicalOverlayRole,
+    slot_index: u8,
+    rects: DirtyRectList,
+) -> Result<(u32, usize), String> {
+    let view = publication.view();
+    let mut rows = 0_u32;
+    let mut pixels = 0_usize;
+    for rect in rects.iter() {
+        let copied_rows = copy_physical_layer_rect_to_hidden(hidden, view, rect);
+        require_complete_overlay_copy(
+            role,
+            slot_index,
+            rect,
+            copied_rows,
+            publication.layout_generation(),
+            publication.content_generation(),
+            || format!("{:?}", publication.backing_key()),
+        )?;
+        rows = rows.saturating_add(copied_rows);
+        pixels = pixels.saturating_add(rect.width().saturating_mul(copied_rows as usize));
+    }
+    Ok((rows, pixels))
+}
+
+fn shift_published_layer_in_hidden(
+    hidden: &mut ScanoutSlotsRgb565Framebuffer,
+    update: PhysicalLayerUpdate,
+) -> Option<usize> {
+    let PhysicalLayerUpdate::Scroll {
+        delta_x,
+        delta_y,
+        rect,
+        ..
+    } = update
+    else {
+        return None;
+    };
+    let width = rect.width();
+    let height = rect.rows() as usize;
+    if (delta_x == 0 && delta_y == 0)
+        || (delta_x != 0 && delta_y != 0)
+        || delta_x.unsigned_abs() >= width
+        || delta_y.unsigned_abs() >= height
+    {
+        return None;
+    }
+    let shifted_pixels = if delta_x != 0 {
+        width
+            .saturating_sub(delta_x.unsigned_abs())
+            .saturating_mul(height)
+    } else {
+        height
+            .saturating_sub(delta_y.unsigned_abs())
+            .saturating_mul(width)
+    };
+    let stride = hidden.stride_pixels();
+    let hidden_height = hidden.height();
+    mister_magik_fb::framebuffer::target::shift_physical_rect(
+        hidden.pixels_mut(),
+        stride,
+        hidden_height,
+        rect,
+        delta_x,
+        delta_y,
+        Rgb565Pixel(0),
+    )
+    .then_some(shifted_pixels)
+}
+
 pub(in crate::ui_runner) struct LauncherPresenter<L = FpgaVblankLatchHiddenPresenter> {
     state: LauncherPresenterState<L>,
     failure_transitions: u64,
@@ -803,45 +875,64 @@ impl PresentationAdapters<FpgaVblankLatchHiddenPresenter> for LivePresentationAd
                         ArcadeOverlayCopySource::PublishedPhysical => {
                             let publication = arcade_publication
                                 .expect("published Arcade copy source has a publication");
-                            let view = publication.view();
-                            let rows = copy_physical_layer_rect_to_hidden(
-                                hidden,
-                                view,
-                                arcade_rect,
-                            );
-                            require_complete_overlay_copy(
-                                PhysicalOverlayRole::Arcade,
-                                plan.slot_index,
-                                arcade_rect,
-                                rows,
-                                publication.layout_generation(),
-                                publication.content_generation(),
-                                || format!("{:?}", publication.backing_key()),
-                            )?;
+                            let (decision, shifted_pixels, rows, copied_pixels) =
+                                if matches!(update, PhysicalLayerUpdate::Scroll { .. })
+                                    && plan.arcade_redraw_diff_safe
+                                    && let Some(shifted_pixels) =
+                                        shift_published_layer_in_hidden(hidden, update)
+                                {
+                                    let (rows, copied_pixels) = copy_published_overlay_rects(
+                                        hidden,
+                                        publication,
+                                        PhysicalOverlayRole::Arcade,
+                                        plan.slot_index,
+                                        update.write_rects(),
+                                    )?;
+                                    (
+                                        crate::arcade_list_renderer::PersistentArcadeCopyDecision::DenseScroll,
+                                        shifted_pixels,
+                                        rows,
+                                        copied_pixels,
+                                    )
+                                } else {
+                                    let (rows, copied_pixels) = copy_published_overlay_rects(
+                                        hidden,
+                                        publication,
+                                        PhysicalOverlayRole::Arcade,
+                                        plan.slot_index,
+                                        DirtyRectList::from_one(arcade_rect),
+                                    )?;
+                                    (
+                                        match update {
+                                            PhysicalLayerUpdate::Full(_) => crate::arcade_list_renderer::PersistentArcadeCopyDecision::FullCopy,
+                                            PhysicalLayerUpdate::Scroll { .. } => crate::arcade_list_renderer::PersistentArcadeCopyDecision::ScrollRecovery,
+                                        },
+                                        0,
+                                        rows,
+                                        copied_pixels,
+                                    )
+                                };
+                            let written_pixels = shifted_pixels.saturating_add(copied_pixels);
+                            let changed_rows = if shifted_pixels > 0 {
+                                arcade_rect.rows()
+                            } else {
+                                rows
+                            };
                             arcade_stats = PresentCopyStats {
-                                rows,
-                                bytes: arcade_rect
-                                    .width()
-                                    .saturating_mul(rows as usize)
-                                    .saturating_mul(2),
+                                rows: changed_rows,
+                                bytes: written_pixels.saturating_mul(2),
                             };
                             arcade_copy_trace =
                                 crate::arcade_list_renderer::PersistentArcadeCopyTrace {
-                                    decision: match update {
-                                        PhysicalLayerUpdate::Full(_) => crate::arcade_list_renderer::PersistentArcadeCopyDecision::FullCopy,
-                                        PhysicalLayerUpdate::Scroll { .. } => crate::arcade_list_renderer::PersistentArcadeCopyDecision::DenseScroll,
-                                    },
+                                    decision,
                                     diff_safe: plan.arcade_redraw_diff_safe,
                                     write_us: started
                                         .elapsed()
                                         .as_micros()
                                         .min(u128::from(u64::MAX))
                                         as u64,
-                                    written_pixels: arcade_rect
-                                        .width()
-                                        .saturating_mul(rows as usize)
-                                        as u64,
-                                    changed_rows: rows,
+                                    written_pixels: written_pixels as u64,
+                                    changed_rows,
                                     ..crate::arcade_list_renderer::PersistentArcadeCopyTrace::default()
                                 };
                         }
