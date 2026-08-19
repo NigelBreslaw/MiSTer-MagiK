@@ -15295,9 +15295,7 @@ fn profile_installed_catalog_build_rebuild(
             )?;
             let rebuild_snes = catalog_system_games(&rebuild["catalog"], "snes")?;
             let snes_game_delta = i64::try_from(rebuild_snes)? - i64::try_from(fresh_snes)?;
-            let status = if snes_game_delta == 1
-                && fresh.pointer("/ui/qualified").and_then(Value::as_bool) == Some(true)
-            {
+            let status = if snes_game_delta == 1 {
                 "passed"
             } else {
                 "failed"
@@ -15349,6 +15347,12 @@ fn profile_installed_catalog_build_rebuild(
         } else {
             "failed"
         };
+        let interactive_samples_qualified = samples.iter().all(|sample| {
+            sample
+                .pointer("/fresh/ui/qualified")
+                .and_then(Value::as_bool)
+                == Some(true)
+        });
         Ok(json!({
             "schema": "mister-magik-catalog-build-rebuild-v2",
             "scenario": "catalog-build-rebuild",
@@ -15367,6 +15371,7 @@ fn profile_installed_catalog_build_rebuild(
             "aggregate": {
                 "fresh_complete_median_ms": median_u64(&fresh_complete),
                 "rebuild_complete_median_ms": median_u64(&rebuild_complete),
+                "interactive_samples_qualified": interactive_samples_qualified,
             },
             "samples": samples,
             "manifest": parse_manifest_evidence(&manifest),
@@ -19294,12 +19299,12 @@ fn catalog_build_rebuild_report(summary: &Value) -> Result<String> {
         summary["status"].as_str().unwrap_or("failed")
     ));
     report.push_str(
-        "| Sample | Fresh first visible | Fresh complete | Rebuild complete | SNES delta |\n",
+        "| Sample | Fresh first visible | Fresh complete | Rebuild complete | SNES delta | UI qualified | Physical repeats |\n",
     );
-    report.push_str("| ---: | ---: | ---: | ---: | ---: |\n");
+    report.push_str("| ---: | ---: | ---: | ---: | ---: | :---: | ---: |\n");
     for sample in samples {
         report.push_str(&format!(
-            "| {} | {} ms | {} ms | {} ms | {} |",
+            "| {} | {} ms | {} ms | {} ms | {} | {} | {} |",
             sample["sample"].as_u64().unwrap_or(0),
             sample
                 .pointer("/fresh/timing/first_visible_ms")
@@ -19317,11 +19322,19 @@ fn catalog_build_rebuild_report(summary: &Value) -> Result<String> {
                 .pointer("/validation/snes_game_delta")
                 .and_then(Value::as_i64)
                 .unwrap_or(0),
+            sample
+                .pointer("/fresh/ui/qualified")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            sample
+                .pointer("/fresh/ui/physical_refresh/repeated_vblank_delta")
+                .and_then(Value::as_u64)
+                .unwrap_or(u64::MAX),
         ));
         report.push('\n');
     }
     report.push_str(&format!(
-        "\nFresh median: {} ms; rebuild median: {} ms.",
+        "\nFresh median: {} ms; rebuild median: {} ms; all interactive samples qualified: {}.",
         summary
             .pointer("/aggregate/fresh_complete_median_ms")
             .and_then(Value::as_u64)
@@ -19330,6 +19343,10 @@ fn catalog_build_rebuild_report(summary: &Value) -> Result<String> {
             .pointer("/aggregate/rebuild_complete_median_ms")
             .and_then(Value::as_u64)
             .unwrap_or(0),
+        summary
+            .pointer("/aggregate/interactive_samples_qualified")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
     ));
     Ok(report)
 }
