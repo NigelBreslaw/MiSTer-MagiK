@@ -170,6 +170,10 @@ pub fn execute_reconciliation_with_events(
         ));
     }
     if plan.is_unchanged() {
+        crate::catalog_logln!(
+            "catalog_v3_reconciliation_tsv\tgeneration={}\trebuilt=0\tmaterialize_us=0\tshard_workers=0\tshard_batch_us=0\tshard_build_wall_us=0\tshard_publication_wall_us=0\tshard_write_us=0\tartifact_publish_us=0\tartifact_copy_hash_us=0\tartifact_publish_bytes=0\tpipeline_overlap_us=0\tpipeline_queue_wait_us=0\tpipeline_peak_in_flight=0\tpipeline_fallbacks=0\tbarrier_us=0\tmanifest_us=0\tslowest_system=none\tslowest_us=0",
+            actual_generation.unwrap_or(0)
+        );
         return Ok(ReconciliationOutcome::Unchanged {
             generation: actual_generation,
         });
