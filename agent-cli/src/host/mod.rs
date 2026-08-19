@@ -9876,11 +9876,7 @@ fn summarize_arcade_velocity_scroll(
     writeln!(report, "Quality: **{}**\n", quality_status)?;
     writeln!(report, "- Active mode: `{display_mode}`")?;
     writeln!(report, "- Screen orientation: `{screen_orientation}`")?;
-    writeln!(
-        report,
-        "- Fixed hold: {} ms",
-        ARCADE_VELOCITY_SCROLL_DURATION_MS
-    )?;
+    writeln!(report, "- Fixed hold: {expected_duration_ms} ms")?;
     writeln!(report, "- Physical FPS: {:.3}", physical_fps)?;
     writeln!(report, "- Minimum physical FPS: {minimum_physical_fps:.1}")?;
     writeln!(report, "- Physical dropped frames: {dropped_frames}")?;
