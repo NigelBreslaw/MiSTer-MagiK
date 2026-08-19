@@ -342,7 +342,7 @@ fn tracefs_prepare_command(spec: TracefsCaptureSpec) -> String {
         TracefsCaptureMode::FunctionGraph { function_groups } => {
             let resolved = sh(&format!("{}/resolved-functions.txt", spec.remote_root));
             checks.push_str(&format!(
-                "if grep -qw function_graph {mount}/available_tracers; then printf '%s\\t%s\\n' tracer:function_graph available >> {capabilities}; else printf '%s\\t%s\\n' tracer:function_graph missing >> {capabilities}; exit 1; fi; if test -r {mount}/available_filter_functions; then printf '%s\\t%s\\n' available_filter_functions readable >> {capabilities}; else printf '%s\\t%s\\n' available_filter_functions missing >> {capabilities}; exit 1; fi; if test -w {instance}/max_graph_depth; then printf '%s\\t%s\\n' max_graph_depth writable >> {capabilities}; else printf '%s\\t%s\\n' max_graph_depth missing >> {capabilities}; exit 1; fi; if test -w {instance}/set_graph_function; then graph_filter={instance}/set_graph_function; filter_name=set_graph_function; elif test -w {instance}/set_ftrace_filter; then graph_filter={instance}/set_ftrace_filter; filter_name=set_ftrace_filter; else printf '%s\\t%s\\n' function_filter missing >> {capabilities}; exit 1; fi; printf 'filter:%s\\tresolved\\n' \"$filter_name\" >> {capabilities}; : > {resolved}; ",
+                "if grep -qw function_graph {mount}/available_tracers; then printf '%s\\t%s\\n' tracer:function_graph available >> {capabilities}; else printf '%s\\t%s\\n' tracer:function_graph missing >> {capabilities}; exit 1; fi; if test -r {mount}/available_filter_functions; then printf '%s\\t%s\\n' available_filter_functions readable >> {capabilities}; else printf '%s\\t%s\\n' available_filter_functions missing >> {capabilities}; exit 1; fi; if test -w {instance}/max_graph_depth; then max_depth_supported=1; printf '%s\\t%s\\n' max_graph_depth writable >> {capabilities}; else max_depth_supported=0; printf '%s\\t%s\\n' max_graph_depth missing >> {capabilities}; fi; if test \"$max_depth_supported\" = 1 && test -w {instance}/set_graph_function; then graph_filter={instance}/set_graph_function; filter_name=set_graph_function; elif test -w {instance}/set_ftrace_filter; then graph_filter={instance}/set_ftrace_filter; filter_name=set_ftrace_filter; else printf '%s\\t%s\\n' function_filter missing >> {capabilities}; exit 1; fi; if test \"$max_depth_supported\" = 0; then test \"$filter_name\" = set_ftrace_filter; printf '%s\\t%s\\n' depth_bound exact-function-filter >> {capabilities}; fi; printf 'filter:%s\\tresolved\\n' \"$filter_name\" >> {capabilities}; : > {resolved}; ",
                 mount = sh(TRACEFS_MOUNT),
             ));
             for group in function_groups {
@@ -360,7 +360,7 @@ fn tracefs_prepare_command(spec: TracefsCaptureSpec) -> String {
                 ));
             }
             format!(
-                "sort -u {resolved} > {resolved}.sorted; mv {resolved}.sorted {resolved}; test -s {resolved}; cat {resolved} > \"$graph_filter\"; printf '{depth}\\n' > {instance}/max_graph_depth; printf 'function_graph\\n' > {instance}/current_tracer; test \"$(cat {instance}/current_tracer)\" = function_graph; test \"$(cat {instance}/max_graph_depth)\" = {depth}",
+                "sort -u {resolved} > {resolved}.sorted; mv {resolved}.sorted {resolved}; test -s {resolved}; cat {resolved} > \"$graph_filter\"; if test \"$max_depth_supported\" = 1; then printf '{depth}\\n' > {instance}/max_graph_depth; fi; printf 'function_graph\\n' > {instance}/current_tracer; test \"$(cat {instance}/current_tracer)\" = function_graph; if test \"$max_depth_supported\" = 1; then test \"$(cat {instance}/max_graph_depth)\" = {depth}; fi",
                 depth = FUNCTION_GRAPH_MAX_DEPTH,
             )
         }
@@ -1135,6 +1135,8 @@ mod tests {
         assert!(prepare.contains("function-group:durability"));
         assert!(prepare.contains("set_graph_function"));
         assert!(prepare.contains("set_ftrace_filter"));
+        assert!(prepare.contains("depth_bound"));
+        assert!(prepare.contains("exact-function-filter"));
         assert!(prepare.contains("max_graph_depth"));
         assert!(prepare.contains(&FUNCTION_GRAPH_MAX_DEPTH.to_string()));
         assert!(prepare.contains(&FUNCTION_GRAPH_BUFFER_KB.to_string()));
