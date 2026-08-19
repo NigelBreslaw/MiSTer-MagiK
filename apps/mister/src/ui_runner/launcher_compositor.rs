@@ -48,6 +48,7 @@ impl LauncherPresentStatus {
 pub(super) struct LayerTarget<'a> {
     target: &'a mut UiFrameTarget,
     layout: UiLayoutGeometry,
+    layout_epoch: u64,
     drawing_ui: UiDisplay,
 }
 
@@ -77,6 +78,7 @@ impl<'a> LayerTarget<'a> {
         Self {
             target,
             layout: UiLayoutGeometry::for_display(ui, ScreenOrientation::Normal),
+            layout_epoch: 1,
             drawing_ui: UiDisplay::for_framebuffer(ui.render_w(), ui.render_h()),
         }
     }
@@ -85,6 +87,21 @@ impl<'a> LayerTarget<'a> {
         Self {
             target,
             layout,
+            layout_epoch: 1,
+            drawing_ui: UiDisplay::for_framebuffer(layout.logical_w(), layout.logical_h()),
+        }
+    }
+
+    pub(super) fn new_oriented_with_epoch(
+        target: &'a mut UiFrameTarget,
+        layout: UiLayoutGeometry,
+        layout_epoch: u64,
+    ) -> Self {
+        debug_assert_ne!(layout_epoch, 0);
+        Self {
+            target,
+            layout,
+            layout_epoch,
             drawing_ui: UiDisplay::for_framebuffer(layout.logical_w(), layout.logical_h()),
         }
     }
@@ -499,6 +516,7 @@ impl<'a> LayerTarget<'a> {
         let current = current.filter(|publication| {
             publication.role() == PhysicalLayerRole::Preview
                 && publication.layout_generation() == layout_generation
+                && publication.layout_epoch() == self.output_layout_epoch()
                 && self
                     .target
                     .physical_direct_preview_view()
@@ -527,6 +545,7 @@ impl<'a> LayerTarget<'a> {
     ) -> bool {
         if publication.role() != PhysicalLayerRole::Preview
             || publication.layout_generation() != self.output_layout_generation()
+            || publication.layout_epoch() != self.output_layout_epoch()
         {
             return false;
         }
@@ -634,6 +653,7 @@ impl<'a> LayerTarget<'a> {
             PhysicalLayerPublication::capture(
                 PhysicalLayerRole::Arcade,
                 self.output_layout_generation(),
+                self.output_layout_epoch(),
                 content_generation,
                 state,
                 Some(physical_update),
@@ -660,7 +680,9 @@ impl<'a> LayerTarget<'a> {
         view: PhysicalLayerView<'_>,
     ) -> bool {
         let output = self.layout.output_layout();
-        if publication.layout_generation() != self.output_layout_generation() {
+        if publication.layout_generation() != self.output_layout_generation()
+            || publication.layout_epoch() != self.output_layout_epoch()
+        {
             return false;
         }
         if !publication.matches_view(view) {
@@ -698,6 +720,7 @@ impl<'a> LayerTarget<'a> {
         PhysicalLayerPublication::capture(
             PhysicalLayerRole::Preview,
             self.output_layout_generation(),
+            self.output_layout_epoch(),
             content_generation,
             state,
             update,
@@ -715,6 +738,7 @@ impl<'a> LayerTarget<'a> {
         PhysicalLayerPublication::capture(
             PhysicalLayerRole::Arcade,
             self.output_layout_generation(),
+            self.output_layout_epoch(),
             content_generation,
             state,
             update,
@@ -819,6 +843,10 @@ impl<'a> LayerTarget<'a> {
         .fold(0xcbf2_9ce4_8422_2325, |hash, value| {
             (hash ^ value).wrapping_mul(0x0000_0100_0000_01b3)
         })
+    }
+
+    pub(super) const fn output_layout_epoch(&self) -> u64 {
+        self.layout_epoch
     }
 }
 
@@ -1094,6 +1122,7 @@ mod tests {
         let publication = PhysicalLayerPublication::capture(
             PhysicalLayerRole::Arcade,
             layer_target.output_layout_generation(),
+            layer_target.output_layout_epoch(),
             9,
             PhysicalLayerState::new(rect, 3),
             Some(PhysicalLayerUpdate::Full(rect)),

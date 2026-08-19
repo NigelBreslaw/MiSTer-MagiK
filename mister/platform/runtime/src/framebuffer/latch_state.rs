@@ -33,6 +33,7 @@ impl PhysicalLayerRole {
 pub struct PhysicalLayerBackingKey {
     pub role: PhysicalLayerRole,
     pub layout_generation: u64,
+    pub layout_epoch: u64,
     pub content_generation: u64,
     pub rect: DirtyRect,
     pub stride: usize,
@@ -44,6 +45,7 @@ pub struct PhysicalLayerBackingKey {
 pub struct PhysicalLayerPublication {
     role: PhysicalLayerRole,
     layout_generation: u64,
+    layout_epoch: u64,
     content_generation: u64,
     state: PhysicalLayerState,
     update: Option<PhysicalLayerUpdate>,
@@ -54,12 +56,14 @@ impl PhysicalLayerPublication {
     pub fn capture(
         role: PhysicalLayerRole,
         layout_generation: u64,
+        layout_epoch: u64,
         content_generation: u64,
         state: PhysicalLayerState,
         update: Option<PhysicalLayerUpdate>,
         view: PhysicalLayerView<'_>,
     ) -> Option<Self> {
         if layout_generation == 0
+            || layout_epoch == 0
             || content_generation == 0
             || state.rect != view.rect()
             || update.is_some_and(|update| update.dirty_rect() != state.rect)
@@ -69,6 +73,7 @@ impl PhysicalLayerPublication {
         let backing_key = PhysicalLayerBackingKey {
             role,
             layout_generation,
+            layout_epoch,
             content_generation,
             rect: state.rect,
             stride: view.stride(),
@@ -78,6 +83,7 @@ impl PhysicalLayerPublication {
         Some(Self {
             role,
             layout_generation,
+            layout_epoch,
             content_generation,
             state,
             update,
@@ -108,6 +114,10 @@ impl PhysicalLayerPublication {
 
     pub const fn layout_generation(&self) -> u64 {
         self.layout_generation
+    }
+
+    pub const fn layout_epoch(&self) -> u64 {
+        self.layout_epoch
     }
 
     pub const fn content_generation(&self) -> u64 {
@@ -372,6 +382,21 @@ pub struct LatchPresentPlan {
     arcade_after: Option<PhysicalLayerState>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LatchPlanError {
+    PublicationMismatch {
+        role: PhysicalLayerRole,
+    },
+    StalePublication {
+        role: PhysicalLayerRole,
+        latest_layout_epoch: u64,
+        latest_content_generation: u64,
+        offered_layout_epoch: u64,
+        offered_content_generation: u64,
+    },
+    NoWritableSlot,
+}
+
 impl LatchPresentPlan {
     pub const fn preview_state_after(self) -> Option<PhysicalLayerState> {
         self.preview_after
@@ -449,22 +474,24 @@ impl TwoBufferLatchState {
         }
     }
 
-    pub fn plan_next(&mut self, input: LatchFramePlan) -> Option<LatchPresentPlan> {
-        if !frame_publications_match(&input) || self.contains_stale_publication(&input) {
-            return None;
+    pub fn plan_next(&mut self, input: LatchFramePlan) -> Result<LatchPresentPlan, LatchPlanError> {
+        if let Some(role) = first_publication_mismatch(&input) {
+            return Err(LatchPlanError::PublicationMismatch { role });
+        }
+        if let Some(error) = self.stale_publication_error(&input) {
+            return Err(error);
         }
         self.base_damage.record_damage(&input.cached_damage);
-        let slot_index = self.select_writable_slot()?;
+        let slot_index = self
+            .select_writable_slot()
+            .ok_or(LatchPlanError::NoWritableSlot)?;
         self.planned_publications[0] = input.preview_publication.clone();
         self.planned_publications[1] = input.arcade_publication.clone();
         for publication in self.planned_publications.iter().flatten() {
             self.latest_publication_generation[physical_layer_role_offset(publication.role())] =
-                Some((
-                    publication.layout_generation(),
-                    publication.content_generation(),
-                ));
+                Some((publication.layout_epoch(), publication.content_generation()));
         }
-        Some(self.plan_for_slot(slot_index, input))
+        Ok(self.plan_for_slot(slot_index, input))
     }
 
     pub fn mark_post_success(&mut self, plan: LatchPresentPlan) {
@@ -495,21 +522,24 @@ impl TwoBufferLatchState {
         self.planned_publications[physical_layer_role_offset(role)].as_ref()
     }
 
-    fn contains_stale_publication(&self, input: &LatchFramePlan) -> bool {
+    fn stale_publication_error(&self, input: &LatchFramePlan) -> Option<LatchPlanError> {
         [
             input.preview_publication.as_ref(),
             input.arcade_publication.as_ref(),
         ]
         .into_iter()
         .flatten()
-        .any(|publication| {
-            self.latest_publication_generation[physical_layer_role_offset(publication.role())]
-                .is_some_and(|latest| {
-                    (
-                        publication.layout_generation(),
-                        publication.content_generation(),
-                    ) < latest
-                })
+        .find_map(|publication| {
+            let latest =
+                self.latest_publication_generation[physical_layer_role_offset(publication.role())]?;
+            let offered = (publication.layout_epoch(), publication.content_generation());
+            (offered < latest).then_some(LatchPlanError::StalePublication {
+                role: publication.role(),
+                latest_layout_epoch: latest.0,
+                latest_content_generation: latest.1,
+                offered_layout_epoch: offered.0,
+                offered_content_generation: offered.1,
+            })
         })
     }
 
@@ -698,20 +728,26 @@ fn direct_layer_update_rect(update: &PhysicalLayerUpdate) -> DirtyRect {
     update.dirty_rect()
 }
 
-fn frame_publications_match(input: &LatchFramePlan) -> bool {
-    layer_publication_matches(
+fn first_publication_mismatch(input: &LatchFramePlan) -> Option<PhysicalLayerRole> {
+    if !layer_publication_matches(
         input.layer_ownership[PhysicalLayerRole::Preview.index()],
         input.preview_desired,
         input.preview_dirty.map(PhysicalLayerUpdate::Full),
         input.preview_publication.as_ref(),
         PhysicalLayerRole::Preview,
-    ) && layer_publication_matches(
+    ) {
+        return Some(PhysicalLayerRole::Preview);
+    }
+    if !layer_publication_matches(
         input.layer_ownership[PhysicalLayerRole::Arcade.index()],
         input.arcade_desired,
         input.arcade_dirty,
         input.arcade_publication.as_ref(),
         PhysicalLayerRole::Arcade,
-    )
+    ) {
+        return Some(PhysicalLayerRole::Arcade);
+    }
+    None
 }
 
 fn layer_publication_matches(
@@ -802,11 +838,22 @@ mod tests {
         rect: DirtyRect,
         content_generation: u64,
     ) -> PhysicalLayerPublication {
+        publication_with_layout(role, rect, 7, 1, content_generation)
+    }
+
+    fn publication_with_layout(
+        role: PhysicalLayerRole,
+        rect: DirtyRect,
+        layout_generation: u64,
+        layout_epoch: u64,
+        content_generation: u64,
+    ) -> PhysicalLayerPublication {
         let pixels =
             vec![Rgb565Pixel(content_generation as u16); rect.width() * rect.rows() as usize];
         PhysicalLayerPublication::capture(
             role,
-            7,
+            layout_generation,
+            layout_epoch,
             content_generation,
             layer(rect, 1),
             Some(PhysicalLayerUpdate::Full(rect)),
@@ -895,7 +942,12 @@ mod tests {
             layer_ownership: [PhysicalLayerOwnership::Published; PhysicalLayerRole::COUNT],
         };
 
-        assert!(state.plan_next(input).is_none());
+        assert_eq!(
+            state.plan_next(input),
+            Err(LatchPlanError::PublicationMismatch {
+                role: PhysicalLayerRole::Arcade,
+            })
+        );
     }
 
     fn full() -> DirtyRect {
@@ -1037,14 +1089,65 @@ mod tests {
             .unwrap();
         state.mark_post_success(current);
 
-        assert!(
-            state
-                .plan_next(publication_input(
-                    Some(publication(PhysicalLayerRole::Preview, preview, 3)),
-                    None
-                ))
-                .is_none()
+        assert_eq!(
+            state.plan_next(publication_input(
+                Some(publication(PhysicalLayerRole::Preview, preview, 3)),
+                None
+            )),
+            Err(LatchPlanError::StalePublication {
+                role: PhysicalLayerRole::Preview,
+                latest_layout_epoch: 1,
+                latest_content_generation: 4,
+                offered_layout_epoch: 1,
+                offered_content_generation: 3,
+            })
         );
+    }
+
+    #[test]
+    fn newer_layout_epoch_is_not_ordered_by_layout_hash() {
+        let mut state = TwoBufferLatchState::new(WIDTH, HEIGHT);
+        all_writable(&mut state);
+        let preview = rect(0, 0, 2, 2);
+        let first = publication_with_layout(
+            PhysicalLayerRole::Preview,
+            preview,
+            0x95ee_f91e_e662_524f,
+            1,
+            9,
+        );
+        let first = state
+            .plan_next(publication_input(Some(first), None))
+            .unwrap();
+        state.mark_post_success(first);
+
+        let rotated = publication_with_layout(
+            PhysicalLayerRole::Preview,
+            preview,
+            0x0d0a_857f_79bb_b25c,
+            2,
+            1,
+        );
+        let rotated = state
+            .plan_next(publication_input(Some(rotated), None))
+            .expect("new epoch must supersede a numerically larger layout hash");
+        state.mark_post_success(rotated);
+
+        let old_epoch = publication_with_layout(
+            PhysicalLayerRole::Preview,
+            preview,
+            0xffff_ffff_ffff_ffff,
+            1,
+            99,
+        );
+        assert!(matches!(
+            state.plan_next(publication_input(Some(old_epoch), None)),
+            Err(LatchPlanError::StalePublication {
+                offered_layout_epoch: 1,
+                latest_layout_epoch: 2,
+                ..
+            })
+        ));
     }
 
     #[test]

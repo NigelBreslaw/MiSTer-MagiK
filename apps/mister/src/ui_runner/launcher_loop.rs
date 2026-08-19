@@ -4697,6 +4697,21 @@ const fn screensaver_catalog_busy(worker_running: bool, refresh_done: bool) -> b
     worker_running || !refresh_done
 }
 
+fn replace_layout(
+    layout: &mut UiLayoutGeometry,
+    layout_epoch: &mut u64,
+    next_layout: UiLayoutGeometry,
+) -> bool {
+    if next_layout == *layout {
+        return false;
+    }
+    *layout_epoch = layout_epoch
+        .checked_add(1)
+        .expect("physical layout epoch exhausted");
+    *layout = next_layout;
+    true
+}
+
 fn apply_orientation_layout(
     app: &slint_ui::launcher::Launcher,
     window: &Rc<MisterSoftwareWindow>,
@@ -4704,11 +4719,13 @@ fn apply_orientation_layout(
     orientation: ScreenOrientation,
     nav: &mut LauncherNav,
     layout: &mut UiLayoutGeometry,
+    layout_epoch: &mut u64,
     navigation_transition: &mut NavigationTransitionRuntime,
 ) {
     nav.settings.screen_orientation = orientation;
     nav.sync_orientation_selection();
-    *layout = UiLayoutGeometry::for_display(ui, orientation);
+    let next_layout = UiLayoutGeometry::for_display(ui, orientation);
+    replace_layout(layout, layout_epoch, next_layout);
     nav.set_portrait_layout(layout.is_portrait());
     if ui.output_route().is_crt() {
         let metrics = crate::ui_display::CrtUiMetrics::for_display(ui);
@@ -4759,6 +4776,7 @@ fn begin_orientation_transition(
     reduce_motion: bool,
     nav: &mut LauncherNav,
     layout: &mut UiLayoutGeometry,
+    layout_epoch: &mut u64,
     navigation_transition: &mut NavigationTransitionRuntime,
     full_screen_transition: &mut FullScreenTransitionStateChart,
     orientation_transition_generation: &mut Option<FullScreenTransitionGeneration>,
@@ -4780,7 +4798,16 @@ fn begin_orientation_transition(
     let animated = orientation_transition.start(from, to, target.cached_565(), now, reduce_motion);
     let source_snapshot_us = source_snapshot_started.elapsed().as_micros();
     let layout_started = Instant::now();
-    apply_orientation_layout(app, window, ui, to, nav, layout, navigation_transition);
+    apply_orientation_layout(
+        app,
+        window,
+        ui,
+        to,
+        nav,
+        layout,
+        layout_epoch,
+        navigation_transition,
+    );
     *orientation_preparation_trace = OrientationPreparationTrace {
         begin_us: begin_started.elapsed().as_micros(),
         source_snapshot_us,
@@ -5009,6 +5036,7 @@ pub(super) fn run_launcher_loop(
         nav.settings.reduce_motion = false;
     }
     let mut layout = UiLayoutGeometry::for_display(ui, nav.settings.screen_orientation);
+    let mut layout_epoch = 1_u64;
     let mut preview_compositor = None;
     let mut preview_compositor_start_attempted = false;
     nav.set_portrait_layout(layout.is_portrait());
@@ -5915,6 +5943,7 @@ pub(super) fn run_launcher_loop(
                 false,
                 &mut nav,
                 &mut layout,
+                &mut layout_epoch,
                 &mut navigation_transition,
                 &mut full_screen_transition,
                 &mut orientation_transition_generation,
@@ -5980,6 +6009,7 @@ pub(super) fn run_launcher_loop(
                         nav.settings.reduce_motion,
                         &mut nav,
                         &mut layout,
+                        &mut layout_epoch,
                         &mut navigation_transition,
                         &mut full_screen_transition,
                         &mut orientation_transition_generation,
@@ -7386,6 +7416,7 @@ pub(super) fn run_launcher_loop(
                                 orientation,
                                 &mut nav,
                                 &mut layout,
+                                &mut layout_epoch,
                                 &mut navigation_transition,
                             );
                             full_bridge_dirty = true;
@@ -7998,6 +8029,7 @@ pub(super) fn run_launcher_loop(
                                             nav.settings.reduce_motion,
                                             &mut nav,
                                             &mut layout,
+                                            &mut layout_epoch,
                                             &mut navigation_transition,
                                             &mut full_screen_transition,
                                             &mut orientation_transition_generation,
@@ -8054,6 +8086,7 @@ pub(super) fn run_launcher_loop(
                                             nav.settings.reduce_motion,
                                             &mut nav,
                                             &mut layout,
+                                            &mut layout_epoch,
                                             &mut navigation_transition,
                                             &mut full_screen_transition,
                                             &mut orientation_transition_generation,
@@ -9214,7 +9247,7 @@ pub(super) fn run_launcher_loop(
         if full_screen_transition_policy_before_render.advance_slint_timers {
             update_slint_animations(animation_clock);
         }
-        let mut layer_target = LayerTarget::new_oriented(target, layout);
+        let mut layer_target = LayerTarget::new_oriented_with_epoch(target, layout, layout_epoch);
         let cpu_t1 = FrameAnalyticsCpuStamp::capture(frame_analytics_mode);
         let frame_t1 = Instant::now();
         retiring_screensaver_pipelines.retain_mut(|pipeline| !pipeline.poll_stopped());
@@ -10481,6 +10514,7 @@ pub(super) fn run_launcher_loop(
                     .as_ref()
                     .filter(|publication| {
                         publication.layout_generation() == layer_target.output_layout_generation()
+                            && publication.layout_epoch() == layer_target.output_layout_epoch()
                             && layer_target
                                 .direct_preview_view()
                                 .is_some_and(|view| publication.matches_view(view))
@@ -10507,6 +10541,7 @@ pub(super) fn run_launcher_loop(
                 .as_ref()
                 .filter(|publication| {
                     publication.layout_generation() == layer_target.output_layout_generation()
+                        && publication.layout_epoch() == layer_target.output_layout_epoch()
                         && arcade_list_renderer
                             .persistent_oriented_layer_view()
                             .is_some_and(|view| publication.matches_view(view))
@@ -13798,6 +13833,7 @@ mod tests {
         let mut publication = PhysicalLayerPublication::capture(
             PhysicalLayerRole::Preview,
             3,
+            1,
             9,
             PhysicalLayerState::new(layer, 4),
             None,
@@ -16584,6 +16620,37 @@ mod tests {
                 ScreenOrientation::Normal
             );
         }
+    }
+
+    #[test]
+    pub(super) fn layout_epoch_advances_for_each_directed_orientation_change() {
+        let ui = UiDisplay::for_framebuffer(1280, 720);
+        let mut layout = UiLayoutGeometry::for_display(&ui, ScreenOrientation::Normal);
+        let mut epoch = 1;
+
+        for (expected_epoch, orientation) in [
+            (2, ScreenOrientation::MonitorClockwise),
+            (3, ScreenOrientation::MonitorCounterclockwise),
+            (4, ScreenOrientation::Normal),
+            (5, ScreenOrientation::MonitorCounterclockwise),
+            (6, ScreenOrientation::MonitorClockwise),
+            (7, ScreenOrientation::Normal),
+        ] {
+            assert!(replace_layout(
+                &mut layout,
+                &mut epoch,
+                UiLayoutGeometry::for_display(&ui, orientation),
+            ));
+            assert_eq!(epoch, expected_epoch);
+            assert_eq!(layout.orientation(), orientation);
+        }
+
+        assert!(!replace_layout(
+            &mut layout,
+            &mut epoch,
+            UiLayoutGeometry::for_display(&ui, ScreenOrientation::Normal),
+        ));
+        assert_eq!(epoch, 7);
     }
 
     #[test]

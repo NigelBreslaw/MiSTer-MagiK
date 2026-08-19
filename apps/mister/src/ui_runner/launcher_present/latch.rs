@@ -635,7 +635,7 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
 
         let current_damage_bytes = input.cached_damage().total_rgb565_bytes();
         let mut plan = self.latch_state.plan_next(input.clone());
-        if plan.is_none() && before_status.pending() {
+        if matches!(plan, Err(LatchPlanError::NoWritableSlot)) && before_status.pending() {
             let settle_started = Instant::now();
             while settle_started.elapsed() < TRANSIENT_PENDING_SETTLE_TIMEOUT {
                 std::thread::sleep(Duration::from_millis(1));
@@ -644,19 +644,31 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
                 before_status = before_sample.status;
                 status_us = status_us.saturating_add(retry_started.elapsed().as_micros() as u64);
                 plan = self.latch_state.plan_next(input.clone());
-                if plan.is_some() || !before_status.pending() {
+                if !matches!(plan, Err(LatchPlanError::NoWritableSlot)) || !before_status.pending()
+                {
                     break;
                 }
             }
         }
-        let plan = plan.ok_or_else(|| {
-            LatchFailure::runtime(
-                LatchFailureStage::PostVerification,
-                LatchFailureReason::NoWritableHiddenBuffer,
-                "both hidden buffers are active or pending",
-            )
-            .with_wire_diagnostics(rejected_wire_diagnostics(before_sample.diagnostics))
-        })?;
+        let plan = match plan {
+            Ok(plan) => plan,
+            Err(LatchPlanError::NoWritableSlot) => {
+                return Err(LatchFailure::runtime(
+                    LatchFailureStage::PostVerification,
+                    LatchFailureReason::NoWritableHiddenBuffer,
+                    "both hidden buffers are active or pending",
+                )
+                .with_wire_diagnostics(rejected_wire_diagnostics(before_sample.diagnostics)));
+            }
+            Err(error) => {
+                return Err(LatchFailure::runtime(
+                    LatchFailureStage::PostVerification,
+                    LatchFailureReason::OverlayComposeFailed,
+                    format!("physical publication planning rejected: {error:?}"),
+                )
+                .with_wire_diagnostics(rejected_wire_diagnostics(before_sample.diagnostics)));
+            }
+        };
         let buffer_index = plan.slot_index;
         let preview_publication = self
             .latch_state
