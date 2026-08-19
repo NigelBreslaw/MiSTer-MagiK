@@ -643,6 +643,7 @@ fn run_catalog_builder_in_process(
     match result {
         Ok(()) if state.handshake_seen && state.terminal_seen => {}
         Ok(()) => {
+            state.catalog_profile.fail("incomplete-event-sequence");
             send_builder_failure(
                 tx,
                 plan,
@@ -655,6 +656,7 @@ fn run_catalog_builder_in_process(
         }
         Err(_) if state.terminal_seen => {}
         Err(error) => {
+            state.catalog_profile.fail("builder-runtime-failure");
             send_builder_failure(
                 tx,
                 plan,
@@ -665,11 +667,22 @@ fn run_catalog_builder_in_process(
     }
 }
 
-#[derive(Default)]
 struct EmbeddedBuilderEventState {
     handshake_seen: bool,
     terminal_seen: bool,
     catalog_ready_seen: bool,
+    catalog_profile: crate::cpu_profile::CatalogBuildProfiler,
+}
+
+impl Default for EmbeddedBuilderEventState {
+    fn default() -> Self {
+        Self {
+            handshake_seen: false,
+            terminal_seen: false,
+            catalog_ready_seen: false,
+            catalog_profile: crate::cpu_profile::CatalogBuildProfiler::capture_process(),
+        }
+    }
 }
 
 fn handle_embedded_builder_event_with_paths(
@@ -683,6 +696,7 @@ fn handle_embedded_builder_event_with_paths(
     state: &mut EmbeddedBuilderEventState,
 ) {
     if !state.handshake_seen && !matches!(event, CatalogBuilderEvent::Handshake { .. }) {
+        state.catalog_profile.fail("event-before-handshake");
         send_builder_failure(
             tx,
             plan,
@@ -696,9 +710,12 @@ fn handle_embedded_builder_event_with_paths(
         CatalogBuilderEvent::Handshake { operation, .. }
             if !state.handshake_seen && operation == expected_operation =>
         {
+            state.catalog_profile.begin(&operation);
             state.handshake_seen = true;
         }
-        CatalogBuilderEvent::Handshake { .. } => {
+        CatalogBuilderEvent::Handshake { operation, .. } => {
+            state.catalog_profile.begin(&operation);
+            state.catalog_profile.fail("invalid-handshake");
             send_builder_failure(
                 tx,
                 plan,
@@ -827,9 +844,11 @@ fn handle_embedded_builder_event_with_paths(
             }
         }
         CatalogBuilderEvent::Persisted { summary, .. } => {
+            state.catalog_profile.persisted();
             send_persisted_catalog(tx, root, summary, catalog_paths);
         }
         CatalogBuilderEvent::Unchanged { summary, .. } => {
+            state.catalog_profile.unchanged();
             let _ = tx.send(CatalogWorkerMessage::Unchanged {
                 summary: refresh_summary(summary),
             });
@@ -841,6 +860,7 @@ fn handle_embedded_builder_event_with_paths(
             });
         }
         CatalogBuilderEvent::Failure { stage, error, .. } => {
+            state.catalog_profile.fail("builder-reported-failure");
             state.terminal_seen = true;
             send_builder_failure(
                 tx,

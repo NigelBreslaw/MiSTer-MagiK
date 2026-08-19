@@ -20,6 +20,7 @@ const COLD_BOOT_TRIGGER: &str = "cold-boot";
 const SYSTEM_ENTRY_TRIGGER: &str = "system-entry";
 const LAUNCHER_RESPONSE_TRIGGER: &str = "launcher-response";
 const ARCADE_VELOCITY_SCROLL_TRIGGER: &str = "arcade-velocity-scroll";
+const CATALOG_BUILD_TRIGGER: &str = "catalog-build";
 const PPROF: &str = "MISTER_PPROF";
 const PPROF_TRIGGER: &str = "MISTER_PPROF_TRIGGER";
 const PPROF_DURATION_SECS: &str = "MISTER_PPROF_DURATION_SECS";
@@ -39,6 +40,7 @@ enum BoundedProfileTrigger {
     OrientationTransitionZoom,
     LauncherResponse,
     ArcadeVelocityScroll,
+    CatalogBuild,
     LaunchReturn,
     ColdBoot,
 }
@@ -54,6 +56,7 @@ impl BoundedProfileTrigger {
             Self::OrientationTransitionZoom => ORIENTATION_TRANSITION_ZOOM_TRIGGER,
             Self::LauncherResponse => LAUNCHER_RESPONSE_TRIGGER,
             Self::ArcadeVelocityScroll => ARCADE_VELOCITY_SCROLL_TRIGGER,
+            Self::CatalogBuild => CATALOG_BUILD_TRIGGER,
             Self::LaunchReturn => LAUNCH_RETURN_TRIGGER,
             Self::ColdBoot => COLD_BOOT_TRIGGER,
         }
@@ -71,6 +74,7 @@ impl BoundedProfileTrigger {
             Self::OrientationTransitionZoom => "mister-magik-orientation-transition-zoom-pprof-v1",
             Self::LauncherResponse => "mister-magik-launcher-response-pprof-v1",
             Self::ArcadeVelocityScroll => "mister-magik-arcade-velocity-scroll-pprof-v1",
+            Self::CatalogBuild => "mister-magik-catalog-build-pprof-v1",
             Self::LaunchReturn => "mister-magik-launch-return-pprof-v1",
             Self::ColdBoot => "mister-magik-cold-boot-pprof-v1",
         }
@@ -140,11 +144,16 @@ impl CpuProfileConfig {
     pub fn capture_with<'a>(mut get: impl FnMut(&str) -> Option<&'a str>) -> Self {
         let enabled_value = get(PPROF);
         let trigger_value = get(PPROF_TRIGGER);
+        let trigger = bounded_profile_trigger_from_values(enabled_value, trigger_value);
         Self {
             enabled: enabled_value == Some("1"),
-            trigger: bounded_profile_trigger_from_values(enabled_value, trigger_value),
+            trigger,
             system_entry: system_entry_profile_requested_from_values(enabled_value, trigger_value),
-            duration: screensaver_profile_duration_from_value(get(PPROF_DURATION_SECS)),
+            duration: if trigger == Some(BoundedProfileTrigger::CatalogBuild) {
+                catalog_build_profile_timeout_from_value(get(PPROF_DURATION_SECS))
+            } else {
+                screensaver_profile_duration_from_value(get(PPROF_DURATION_SECS))
+            },
             warmup: screensaver_profile_warmup_from_value(get(PPROF_WARMUP_SECS)),
             hz: get(PPROF_HZ)
                 .and_then(|value| value.parse().ok())
@@ -171,6 +180,10 @@ impl CpuProfileConfig {
 
     pub fn cold_boot_requested(&self) -> bool {
         self.trigger == Some(BoundedProfileTrigger::ColdBoot)
+    }
+
+    fn catalog_build_requested(&self) -> bool {
+        self.trigger == Some(BoundedProfileTrigger::CatalogBuild)
     }
 
     #[cfg(feature = "profile")]
@@ -207,6 +220,7 @@ fn bounded_profile_trigger_from_values(
         }
         Some(LAUNCHER_RESPONSE_TRIGGER) => Some(BoundedProfileTrigger::LauncherResponse),
         Some(ARCADE_VELOCITY_SCROLL_TRIGGER) => Some(BoundedProfileTrigger::ArcadeVelocityScroll),
+        Some(CATALOG_BUILD_TRIGGER) => Some(BoundedProfileTrigger::CatalogBuild),
         Some(LAUNCH_RETURN_TRIGGER) => Some(BoundedProfileTrigger::LaunchReturn),
         Some(COLD_BOOT_TRIGGER) => Some(BoundedProfileTrigger::ColdBoot),
         _ => None,
@@ -228,6 +242,15 @@ fn screensaver_profile_duration_from_value(value: Option<&str>) -> Duration {
             .and_then(|value| value.parse::<u64>().ok())
             .unwrap_or(DEFAULT_SCREENSAVER_PROFILE_SECS)
             .clamp(1, 300),
+    )
+}
+
+fn catalog_build_profile_timeout_from_value(value: Option<&str>) -> Duration {
+    Duration::from_secs(
+        value
+            .and_then(|value| value.parse::<u64>().ok())
+            .unwrap_or(600)
+            .clamp(1, 1_200),
     )
 }
 
@@ -568,6 +591,185 @@ mod imp {
         Ok(bytes)
     }
 
+    struct CatalogBuildSession {
+        profiler: Option<CpuProfiler>,
+        operation: Option<String>,
+        finished: bool,
+    }
+
+    pub struct CatalogBuildProfiler {
+        config: CpuProfileConfig,
+        session: std::sync::Arc<std::sync::Mutex<CatalogBuildSession>>,
+    }
+
+    impl CatalogBuildProfiler {
+        pub fn capture_process() -> Self {
+            let values: std::collections::BTreeMap<String, String> = std::env::vars().collect();
+            let config =
+                CpuProfileConfig::capture_with(|name| values.get(name).map(String::as_str));
+            Self {
+                config,
+                session: std::sync::Arc::new(std::sync::Mutex::new(CatalogBuildSession {
+                    profiler: None,
+                    operation: None,
+                    finished: false,
+                })),
+            }
+        }
+
+        pub fn begin(&mut self, operation: &str) {
+            if !self.config.catalog_build_requested() {
+                return;
+            }
+            if self.session.lock().map_or(true, |session| {
+                session.operation.is_some() || session.finished
+            }) {
+                return;
+            }
+            let profiler = start_enabled(&self.config);
+            {
+                let Ok(mut session) = self.session.lock() else {
+                    crate::ui_errln!("catalog-build cpu profile session lock poisoned");
+                    return;
+                };
+                if session.operation.is_some() || session.finished {
+                    return;
+                }
+                session.operation = Some(operation.to_owned());
+                session.profiler = profiler;
+            }
+            if self
+                .session
+                .lock()
+                .ok()
+                .is_some_and(|session| session.profiler.is_none())
+            {
+                finish_catalog_build_async(
+                    self.session.clone(),
+                    self.config.complete_path.clone(),
+                    "failed",
+                    "profiler-start-failed",
+                );
+                return;
+            }
+
+            let session = self.session.clone();
+            let complete_path = self.config.complete_path.clone();
+            let timeout = self.config.duration;
+            if let Err(error) = std::thread::Builder::new()
+                .name("catalog-build-timeout".into())
+                .spawn(move || {
+                    std::thread::sleep(timeout);
+                    finalize_catalog_build(session, complete_path, "failed", "timeout");
+                })
+            {
+                crate::ui_errln!("catalog-build cpu profile watchdog spawn failed: {error}");
+                self.fail("watchdog-spawn-failed");
+            }
+        }
+
+        pub fn persisted(&mut self) {
+            self.finish("complete", "persisted");
+        }
+
+        pub fn unchanged(&mut self) {
+            self.finish("complete", "unchanged");
+        }
+
+        pub fn fail(&mut self, reason: &'static str) {
+            self.finish("failed", reason);
+        }
+
+        fn finish(&mut self, state: &'static str, outcome: &'static str) {
+            if !self.config.catalog_build_requested() {
+                return;
+            }
+            finish_catalog_build_async(
+                self.session.clone(),
+                self.config.complete_path.clone(),
+                state,
+                outcome,
+            );
+        }
+    }
+
+    fn finish_catalog_build_async(
+        session: std::sync::Arc<std::sync::Mutex<CatalogBuildSession>>,
+        complete_path: Option<String>,
+        state: &'static str,
+        outcome: &'static str,
+    ) {
+        if let Err(error) = std::thread::Builder::new()
+            .name("catalog-build-profile".into())
+            .spawn(move || finalize_catalog_build(session, complete_path, state, outcome))
+        {
+            crate::ui_errln!("catalog-build cpu profile finalizer spawn failed: {error}");
+        }
+    }
+
+    fn finalize_catalog_build(
+        session: std::sync::Arc<std::sync::Mutex<CatalogBuildSession>>,
+        complete_path: Option<String>,
+        state: &str,
+        outcome: &str,
+    ) {
+        let (profiler, operation) = {
+            let Ok(mut session) = session.lock() else {
+                crate::ui_errln!("catalog-build cpu profile session lock poisoned");
+                return;
+            };
+            if session.finished || session.operation.is_none() {
+                return;
+            }
+            session.finished = true;
+            (session.profiler.take(), session.operation.take())
+        };
+        let result = finish(profiler);
+        let mut metadata = match &result {
+            Ok(Some(summary)) => json!({
+                "schema": "mister-magik-catalog-build-pprof-v1",
+                "state": state,
+                "outcome": outcome,
+                "duration_secs": summary.duration_secs,
+                "hz": summary.hz,
+                "sample_stacks": summary.sample_stacks,
+                "sample_hits": summary.sample_hits,
+                "out_path": summary.out_path,
+                "bytes": summary.bytes,
+            }),
+            Ok(None) => json!({
+                "schema": "mister-magik-catalog-build-pprof-v1",
+                "state": "failed",
+                "outcome": outcome,
+                "error": "profiler-produced-no-summary",
+            }),
+            Err(error) => json!({
+                "schema": "mister-magik-catalog-build-pprof-v1",
+                "state": "failed",
+                "outcome": outcome,
+                "error": error,
+            }),
+        };
+        metadata["operation"] = json!(operation);
+        match complete_path {
+            Some(path) => {
+                if let Some(parent) = std::path::Path::new(&path).parent()
+                    && let Err(error) = fs::create_dir_all(parent)
+                {
+                    crate::ui_errln!("catalog-build completion directory failed: {error}");
+                    return;
+                }
+                if let Err(error) = fs::write(path, format!("{metadata}\n")) {
+                    crate::ui_errln!("catalog-build completion write failed: {error}");
+                }
+            }
+            None => crate::ui_errln!("catalog-build cpu profile missing MISTER_PPROF_COMPLETE"),
+        }
+        if let Err(error) = result {
+            crate::ui_errln!("catalog-build cpu profile failed: {error}");
+        }
+    }
+
     enum State {
         Disabled,
         Waiting,
@@ -859,8 +1061,9 @@ mod imp {
 
 #[cfg(feature = "profile")]
 pub use imp::{
-    CpuProfiler, ScreensaverProfiler, finish, finish_cold_boot_async, finish_launch_return_async,
-    finish_system_entry_async, start, start_process_entry, start_system_entry,
+    CatalogBuildProfiler, CpuProfiler, ScreensaverProfiler, finish, finish_cold_boot_async,
+    finish_launch_return_async, finish_system_entry_async, start, start_process_entry,
+    start_system_entry,
 };
 
 #[cfg(not(feature = "profile"))]
@@ -971,12 +1174,29 @@ mod stub {
 
         pub fn poll(&mut self, _next_frame: u64) {}
     }
+
+    pub struct CatalogBuildProfiler;
+
+    impl CatalogBuildProfiler {
+        pub fn capture_process() -> Self {
+            Self
+        }
+
+        pub fn begin(&mut self, _operation: &str) {}
+
+        pub fn persisted(&mut self) {}
+
+        pub fn unchanged(&mut self) {}
+
+        pub fn fail(&mut self, _reason: &'static str) {}
+    }
 }
 
 #[cfg(not(feature = "profile"))]
 pub use stub::{
-    CpuProfiler, ScreensaverProfiler, finish, finish_cold_boot_async, finish_launch_return_async,
-    finish_system_entry_async, start, start_process_entry, start_system_entry,
+    CatalogBuildProfiler, CpuProfiler, ScreensaverProfiler, finish, finish_cold_boot_async,
+    finish_launch_return_async, finish_system_entry_async, start, start_process_entry,
+    start_system_entry,
 };
 
 #[cfg(feature = "diagnostics")]
@@ -1017,6 +1237,18 @@ mod tests {
             Duration::from_secs(300)
         );
         assert_eq!(screensaver_profile_warmup_from_value(None), Duration::ZERO);
+    }
+
+    #[test]
+    fn catalog_build_profile_timeout_covers_whole_card_builds_and_is_bounded() {
+        assert_eq!(
+            catalog_build_profile_timeout_from_value(None),
+            Duration::from_secs(600)
+        );
+        assert_eq!(
+            catalog_build_profile_timeout_from_value(Some("9999")),
+            Duration::from_secs(1_200)
+        );
     }
 
     #[test]
@@ -1062,6 +1294,10 @@ mod tests {
         assert_eq!(
             bounded_profile_trigger_from_values(Some("1"), Some("arcade-velocity-scroll")),
             Some(BoundedProfileTrigger::ArcadeVelocityScroll)
+        );
+        assert_eq!(
+            bounded_profile_trigger_from_values(Some("1"), Some("catalog-build")),
+            Some(BoundedProfileTrigger::CatalogBuild)
         );
         assert_eq!(
             bounded_profile_trigger_from_values(Some("0"), Some("navigation-transitions")),
