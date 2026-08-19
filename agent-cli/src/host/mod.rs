@@ -9365,7 +9365,9 @@ fn profile_installed_arcade_velocity_scroll_streamline_workload(
         &display_mode,
         scroll_duration_ms,
     )?;
-    let capture_manifest = streamline_capture_manifest(
+    let symbol_image =
+        retain_streamline_gui_symbol_image(&session, &streamline_dir, &installed_identity)?;
+    let mut capture_manifest = streamline_capture_manifest(
         &installed_identity,
         &streamline_arm.gatord_version,
         &gatord_sha256,
@@ -9373,6 +9375,7 @@ fn profile_installed_arcade_velocity_scroll_streamline_workload(
         streamline_arm.capture_started_monotonic_ns,
         streamline_arm.capture_ended_monotonic_ns,
     );
+    capture_manifest["symbol_images"] = json!([symbol_image.clone()]);
     fs::write(
         streamline_dir.join("capture-manifest.json"),
         format!("{}\n", serde_json::to_string_pretty(&capture_manifest)?),
@@ -9390,6 +9393,7 @@ fn profile_installed_arcade_velocity_scroll_streamline_workload(
             "capture": "streamline/mister-magik.apc",
             "archive": format!("streamline/{}", ARCADE_VELOCITY_SCROLL_STREAMLINE_CAPTURE.archive_file),
             "capture_manifest": "streamline/capture-manifest.json",
+            "symbol_image": symbol_image,
             "system_wide": true,
             "correlation_clock": "CLOCK_MONOTONIC",
         },
@@ -12877,6 +12881,54 @@ fn streamline_installed_identity(
         )?,
         agent_version,
     })
+}
+
+const STREAMLINE_GUI_PHASE_SYMBOLS: [&[u8]; 4] = [
+    b"mister_magik_preview_worker_compose",
+    b"mister_magik_preview_worker_cut",
+    b"mister_magik_preview_worker_blend",
+    b"mister_magik_preview_worker_rotation",
+];
+
+fn retain_streamline_gui_symbol_image(
+    session: &Session,
+    output_dir: &Path,
+    identity: &StreamlineInstalledIdentity,
+) -> Result<Value> {
+    let symbols_dir = output_dir.join("symbols");
+    fs::create_dir_all(&symbols_dir)?;
+    let image = symbols_dir.join("mister-magik-fb");
+    get(session, DEVELOPMENT_GUI_REMOTE, &image)?;
+    let image_sha256 = file_sha256(image.clone())?;
+    if image_sha256 != identity.gui_sha256 {
+        return Err(
+            "retained Streamline GUI symbol image does not match installed identity".into(),
+        );
+    }
+    let bytes = fs::read(&image)?;
+    if bytes.is_empty() {
+        return Err("retained Streamline GUI symbol image is empty".into());
+    }
+    if let Some(symbol) = STREAMLINE_GUI_PHASE_SYMBOLS
+        .iter()
+        .find(|symbol| !contains_ascii(&bytes, symbol))
+    {
+        return Err(format!(
+            "retained Streamline GUI image does not expose expected phase symbol {}",
+            String::from_utf8_lossy(symbol)
+        )
+        .into());
+    }
+    Ok(json!({
+        "path": "streamline/symbols/mister-magik-fb",
+        "sha256": image_sha256,
+        "bytes": bytes.len(),
+        "application_symbols_resolvable": true,
+        "phase_symbols": STREAMLINE_GUI_PHASE_SYMBOLS
+            .iter()
+            .map(|symbol| String::from_utf8_lossy(symbol).into_owned())
+            .collect::<Vec<_>>(),
+    }))
 }
 
 fn streamline_remote_size(session: &Session, label: &str, path: &str) -> Result<u64> {

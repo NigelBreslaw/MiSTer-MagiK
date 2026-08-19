@@ -5,7 +5,9 @@ use super::raw565_preview_renderer::{
     PreviewSurface, Raw565PreviewRenderer, compose_cut_frame_oriented, preview_screen_rect,
 };
 use super::*;
-use crate::preview_state::OwnedPreviewRawTransitionFrame;
+use crate::preview_state::{
+    OwnedPreviewRawTransitionFrame, PreviewRawFrame, PreviewRawTransitionFrame,
+};
 use mister_magik_catalog::runtime_thread::{
     RuntimeThreadPolicyReport, RuntimeThreadRole, apply_runtime_thread_policy,
 };
@@ -324,6 +326,8 @@ fn run_worker(shared: Arc<SharedWorker>) {
     }
 }
 
+#[unsafe(export_name = "mister_magik_preview_worker_compose")]
+#[inline(never)]
 fn compose_request(
     request: PreviewCompositionRequest,
     logical: &mut Vec<Rgb565Pixel>,
@@ -366,14 +370,8 @@ fn compose_request(
     if let Some((cut_frame, alpha_bucket, report_cut)) = cut_frame
         && let Some(cut_trace) = {
             let cut_pmu = mister_magik_perf_events::sampled_span("gui.worker.preview-cut");
-            let result = compose_cut_frame_oriented(
-                physical,
-                &ui,
-                screen,
-                local_output,
-                cut_frame,
-                alpha_bucket,
-            );
+            let result =
+                compose_worker_cut(physical, &ui, screen, local_output, cut_frame, alpha_bucket);
             drop(cut_pmu);
             result
         }
@@ -401,35 +399,15 @@ fn compose_request(
         Rgb565Pixel(0),
     );
     let blend_pmu = mister_magik_perf_events::sampled_span("gui.worker.preview-blend");
-    let fade = if request.active {
-        Raw565PreviewRenderer::compose_transition_strided(
-            composed,
-            &ui,
-            &frame,
-            request.effect,
-            request.progress,
-            PreviewSurface {
-                x0: screen.x0,
-                y0: screen.y0,
-                stride: screen.width(),
-            },
-        )
-        .1
-    } else {
-        Raw565PreviewRenderer::compose_frame_strided(
-            composed,
-            &ui,
-            &frame.current,
-            true,
-            PreviewSurface {
-                x0: screen.x0,
-                y0: screen.y0,
-                stride: screen.width(),
-            },
-        )
-        .ok_or_else(|| "preview frame composition returned no rectangle".to_string())?;
-        PreviewFadeTrace::default()
-    };
+    let fade = compose_worker_blend(
+        composed,
+        &ui,
+        &frame,
+        request.effect,
+        request.progress,
+        request.active,
+        screen,
+    )?;
     drop(blend_pmu);
     if identity_output {
         return Ok(PreviewCompositionResult {
@@ -445,18 +423,7 @@ fn compose_request(
         });
     }
     let rotation_pmu = mister_magik_perf_events::sampled_span("gui.worker.preview-rotation");
-    let copied = Rgb565SurfaceMut::new(physical, local_output)
-        .map_err(|error| error.to_string())?
-        .copy_rect_strided(
-            0,
-            0,
-            screen.width(),
-            screen.rows() as usize,
-            logical,
-            screen.width(),
-            0,
-            0,
-        );
+    let copied = compose_worker_rotation(physical, local_output, logical, screen);
     drop(rotation_pmu);
     if !copied {
         return Err("preview physical rotation failed".to_string());
@@ -471,6 +438,80 @@ fn compose_request(
             .elapsed()
             .as_micros()
             .min(u128::from(u64::MAX)) as u64,
+    })
+}
+
+#[unsafe(export_name = "mister_magik_preview_worker_cut")]
+#[inline(never)]
+fn compose_worker_cut(
+    destination: &mut [Rgb565Pixel],
+    ui: &UiDisplay,
+    screen: DirtyRect,
+    output: Rgb565OutputLayout,
+    frame: &PreviewRawFrame<'_>,
+    alpha_bucket: u8,
+) -> Option<PreviewFadeTrace> {
+    compose_cut_frame_oriented(destination, ui, screen, output, frame, alpha_bucket)
+}
+
+#[unsafe(export_name = "mister_magik_preview_worker_blend")]
+#[inline(never)]
+fn compose_worker_blend(
+    destination: &mut [Rgb565Pixel],
+    ui: &UiDisplay,
+    frame: &PreviewRawTransitionFrame<'_>,
+    effect: PreviewTransitionEffect,
+    progress: f32,
+    active: bool,
+    screen: DirtyRect,
+) -> Result<PreviewFadeTrace, String> {
+    let surface = PreviewSurface {
+        x0: screen.x0,
+        y0: screen.y0,
+        stride: screen.width(),
+    };
+    if active {
+        Ok(Raw565PreviewRenderer::compose_transition_strided(
+            destination,
+            ui,
+            frame,
+            effect,
+            progress,
+            surface,
+        )
+        .1)
+    } else {
+        Raw565PreviewRenderer::compose_frame_strided(
+            destination,
+            ui,
+            &frame.current,
+            true,
+            surface,
+        )
+        .ok_or_else(|| "preview frame composition returned no rectangle".to_string())?;
+        Ok(PreviewFadeTrace::default())
+    }
+}
+
+#[unsafe(export_name = "mister_magik_preview_worker_rotation")]
+#[inline(never)]
+fn compose_worker_rotation(
+    destination: &mut [Rgb565Pixel],
+    output: Rgb565OutputLayout,
+    logical: &[Rgb565Pixel],
+    screen: DirtyRect,
+) -> bool {
+    Rgb565SurfaceMut::new(destination, output).is_ok_and(|surface| {
+        surface.copy_rect_strided(
+            0,
+            0,
+            screen.width(),
+            screen.rows() as usize,
+            logical,
+            screen.width(),
+            0,
+            0,
+        )
     })
 }
 
