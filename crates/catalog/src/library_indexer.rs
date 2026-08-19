@@ -203,7 +203,7 @@ impl TargetOffsets {
 
 struct ResumeScan {
     journal: crate::build_progress::BuildProgressJournal,
-    reusable: HashMap<u32, crate::build_progress::CompletedTarget>,
+    reusable: HashMap<u32, TargetOutput>,
     invalidated_targets: BTreeSet<u32>,
     affected_systems: Vec<String>,
     all_published_systems: bool,
@@ -387,10 +387,20 @@ fn prepare_resume_scan(
     } else {
         validate_target_fingerprints(cfg, plan, excluded_targets, priority, &completed)
     };
-    let reusable: HashMap<u32, crate::build_progress::CompletedTarget> = completed
+    let reusable: HashMap<u32, TargetOutput> = completed
         .iter()
         .filter(|(ordinal, saved)| fingerprints.get(ordinal) == Some(&saved.input_fingerprint))
-        .map(|(ordinal, saved)| (*ordinal, saved.clone()))
+        .filter_map(|(ordinal, saved)| match serde_json::from_str(&saved.output_json) {
+            Ok(output) => Some((*ordinal, output)),
+            Err(error) => {
+                crate::catalog_logln!(
+                    "catalog_resume_tsv\tphase=target-invalidated\ttarget_ordinal={}\treason={}",
+                    ordinal,
+                    format!("decode-error:{error}").replace(['\t', '\n'], " ")
+                );
+                None
+            }
+        })
         .collect();
     let durable_completed = completed.len();
     let invalidated_targets = completed
@@ -696,18 +706,32 @@ fn scan_library_with_progress_and_events(
             prepared_payload_index.complete_root_count(),
         ),
     );
+    let reusable_target_ordinals = resume
+        .as_ref()
+        .map(|state| {
+            state
+                .reusable
+                .keys()
+                .map(|ordinal| *ordinal as usize)
+                .collect()
+        })
+        .unwrap_or_default();
     let rx = match priority {
-        LibraryScanPriority::Background => catalog_scan::discover_files_pipelined_with_plan(
-            cfg.roots.clone(),
-            plan.clone(),
-            excluded_targets,
-            crate::runtime_thread::RuntimeThreadRole::LibraryWalker,
-        ),
-        LibraryScanPriority::Foreground => {
-            catalog_scan::discover_files_pipelined_foreground_with_plan(
+        LibraryScanPriority::Background => {
+            catalog_scan::discover_files_pipelined_with_plan_and_reusable_targets(
                 cfg.roots.clone(),
                 plan.clone(),
                 excluded_targets,
+                reusable_target_ordinals,
+                crate::runtime_thread::RuntimeThreadRole::LibraryWalker,
+            )
+        }
+        LibraryScanPriority::Foreground => {
+            catalog_scan::discover_files_pipelined_foreground_with_plan_and_reusable_targets(
+                cfg.roots.clone(),
+                plan.clone(),
+                excluded_targets,
+                reusable_target_ordinals,
             )
         }
     };
@@ -784,48 +808,33 @@ fn scan_library_with_progress_and_events(
                         "fingerprint-changed",
                     );
                 }
-                if let Some(saved) = resume
+                if let Some(output) = resume
                     .as_mut()
                     .and_then(|state| state.reusable.remove(&(descriptor.ordinal as u32)))
                 {
-                    match serde_json::from_str::<TargetOutput>(&saved.output_json) {
-                        Ok(output) => {
-                            let first = discoveries.len();
-                            game_dir_facts.extend(output.game_dir_facts);
-                            normal_files.extend(output.normal_files);
-                            containers.extend(output.containers);
-                            entries.extend(output.entries);
-                            ignored_files = ignored_files.saturating_add(output.ignored_files);
-                            discoveries.extend(output.discoveries);
-                            profiles = plan.finalize_profiles(&game_dir_facts);
-                            report_resumed_systems(
-                                &discoveries[first..],
-                                &mut discovered_systems,
-                                &mut scanning_systems,
-                                &mut scan_events,
-                            );
-                            skip_target = true;
-                            if let Some(state) = resume.as_mut() {
-                                state.reused += 1;
-                                report_resume(
-                                    state,
-                                    "target-reused",
-                                    descriptor.ordinal,
-                                    "fingerprint-match",
-                                );
-                            }
-                        }
-                        Err(error) => {
-                            if let Some(state) = resume.as_mut() {
-                                state.invalidated += 1;
-                                report_resume(
-                                    state,
-                                    "target-invalidated",
-                                    descriptor.ordinal,
-                                    &format!("decode-error:{error}"),
-                                );
-                            }
-                        }
+                    let first = discoveries.len();
+                    game_dir_facts.extend(output.game_dir_facts);
+                    normal_files.extend(output.normal_files);
+                    containers.extend(output.containers);
+                    entries.extend(output.entries);
+                    ignored_files = ignored_files.saturating_add(output.ignored_files);
+                    discoveries.extend(output.discoveries);
+                    profiles = plan.finalize_profiles(&game_dir_facts);
+                    report_resumed_systems(
+                        &discoveries[first..],
+                        &mut discovered_systems,
+                        &mut scanning_systems,
+                        &mut scan_events,
+                    );
+                    skip_target = true;
+                    if let Some(state) = resume.as_mut() {
+                        state.reused += 1;
+                        report_resume(
+                            state,
+                            "target-reused",
+                            descriptor.ordinal,
+                            "fingerprint-match",
+                        );
                     }
                 }
                 target_descriptor = Some(descriptor);
