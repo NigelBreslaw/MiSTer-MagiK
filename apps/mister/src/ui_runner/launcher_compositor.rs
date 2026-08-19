@@ -1061,7 +1061,7 @@ mod tests {
     }
 
     #[test]
-    fn navigation_snapshot_uses_only_the_matching_preview_publication() {
+    fn navigation_snapshot_uses_the_publications_immutable_preview_backing() {
         let ui = UiDisplay::for_framebuffer(4, 3);
         let layout = UiLayoutGeometry::for_display(&ui, ScreenOrientation::MonitorClockwise);
         let logical = DirtyRect {
@@ -1122,7 +1122,26 @@ mod tests {
             layout.output_layout(),
             12,
         ));
-        assert!(!layer_target.copy_preview_publication_to_cached(&publication));
+        layer_target.target.cached_565_mut().fill(Rgb565Pixel(0));
+        assert!(layer_target.copy_preview_publication_to_cached(&publication));
+        let copied = layer_target
+            .presentation_frame_view()
+            .pixels()
+            .iter()
+            .enumerate()
+            .filter_map(|(index, pixel)| {
+                let x = index % 4;
+                let y = index / 4;
+                (x >= physical.x0 && x < physical.x1 && y >= physical.y0 && y < physical.y1)
+                    .then_some(*pixel)
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(copied, expected);
+        assert!(layer_target.target.physical_direct_preview_matches(
+            physical,
+            layout.output_layout(),
+            12,
+        ));
     }
 
     #[test]
