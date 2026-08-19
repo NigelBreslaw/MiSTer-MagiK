@@ -50,6 +50,7 @@ enum BenchmarkProfile {
     CatalogAttributionPmu,
     CatalogAttributionStorage,
     CatalogAttributionFunctionGraph,
+    CatalogAttributionStreamline,
     SystemEntry,
     SystemEntryCritical,
     SystemEntryCriticalConfirm,
@@ -134,6 +135,9 @@ impl BenchmarkDevice for DeviceClient {
             }
             BenchmarkProfile::CatalogAttributionFunctionGraph => {
                 device.profile_catalog_attribution_function_graph(&output_dir)
+            }
+            BenchmarkProfile::CatalogAttributionStreamline => {
+                device.profile_catalog_attribution_streamline(&output_dir)
             }
             BenchmarkProfile::SystemEntry => device.profile_system_entry(&output_dir),
             BenchmarkProfile::SystemEntryCritical => {
@@ -352,6 +356,14 @@ fn require_clean_installed_commit(
             reporter,
             BenchmarkProfile::CatalogAttributionFunctionGraph,
             "function-graph",
+        ),
+        BenchmarkScenario::CatalogAttributionStreamline => execute_catalog_attribution(
+            &mut device,
+            manifest,
+            output_dir,
+            reporter,
+            BenchmarkProfile::CatalogAttributionStreamline,
+            "streamline",
         ),
         BenchmarkScenario::SystemEntry => {
             execute_system_entry(&mut device, manifest, output_dir, reporter)
@@ -886,6 +898,7 @@ fn particle_scene_lab_command(scenario: BenchmarkScenario) -> Option<&'static st
         | BenchmarkScenario::CatalogAttributionPmu
         | BenchmarkScenario::CatalogAttributionStorage
         | BenchmarkScenario::CatalogAttributionFunctionGraph
+        | BenchmarkScenario::CatalogAttributionStreamline
         | BenchmarkScenario::SystemEntry
         | BenchmarkScenario::SystemEntryCritical
         | BenchmarkScenario::SystemEntryCriticalConfirm

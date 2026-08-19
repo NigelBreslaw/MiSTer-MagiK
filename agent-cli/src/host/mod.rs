@@ -877,6 +877,19 @@ impl NativeDevice {
         })
     }
 
+    pub(crate) fn profile_catalog_attribution_streamline(
+        &mut self,
+        output_dir: &Path,
+    ) -> std::result::Result<String, DeviceFailure> {
+        self.benchmark_profile(|config| {
+            profile_installed_catalog_attribution(
+                config,
+                output_dir,
+                CatalogAttributionArm::Streamline,
+            )
+        })
+    }
+
     pub(crate) fn profile_system_entry(
         &mut self,
         output_dir: &Path,
@@ -11189,6 +11202,20 @@ const AGENT_IO_STREAMLINE_CAPTURE: SystemWideStreamlineCaptureSpec =
         max_duration_seconds: 180,
     };
 
+const CATALOG_FRESH_STREAMLINE_CAPTURE: SystemWideStreamlineCaptureSpec =
+    SystemWideStreamlineCaptureSpec {
+        label: "catalog fresh Streamline",
+        archive_file: "mister-magik-catalog-fresh.apc.tar.gz",
+        max_duration_seconds: 300,
+    };
+
+const CATALOG_REBUILD_STREAMLINE_CAPTURE: SystemWideStreamlineCaptureSpec =
+    SystemWideStreamlineCaptureSpec {
+        label: "catalog rebuild Streamline",
+        archive_file: "mister-magik-catalog-rebuild.apc.tar.gz",
+        max_duration_seconds: 300,
+    };
+
 struct SystemWideStreamlineCapture<'a> {
     session: &'a Session,
     connection: ConnectionConfig,
@@ -15529,6 +15556,7 @@ enum CatalogAttributionArm {
     Pmu,
     Storage,
     FunctionGraph,
+    Streamline,
 }
 
 impl CatalogAttributionArm {
@@ -15539,6 +15567,7 @@ impl CatalogAttributionArm {
             Self::Pmu => "pmu",
             Self::Storage => "storage",
             Self::FunctionGraph => "function-graph",
+            Self::Streamline => "streamline",
         }
     }
 }
@@ -15742,6 +15771,9 @@ fn profile_installed_catalog_attribution(
                     ("durability", CATALOG_DURABILITY_FUNCTION_GRAPH_SPEC),
                 ],
             );
+        }
+        CatalogAttributionArm::Streamline => {
+            return profile_catalog_attribution_streamline(config, output_dir);
         }
         CatalogAttributionArm::Control
         | CatalogAttributionArm::Pprof
@@ -15994,6 +16026,161 @@ fn run_catalog_attribution_trace_leg(
         "capabilities": retained.capabilities.lines().collect::<Vec<_>>(),
         "summary": summary,
         "raw_trace": retained.raw_path.file_name().and_then(|name| name.to_str()),
+    });
+    Ok(leg)
+}
+
+fn profile_catalog_attribution_streamline(
+    config: &NativeDeviceConfig,
+    output_dir: &Path,
+) -> Result<String> {
+    let gatord = streamline_gatord_path(env::var_os("MISTER_GATORD_PATH"))?;
+    let metadata = fs::metadata(&gatord)?;
+    if !metadata.is_file() || metadata.len() == 0 || metadata.len() > 64 * 1024 * 1024 {
+        return Err("MISTER_GATORD_PATH must name a non-empty file no larger than 64 MiB".into());
+    }
+    let gatord_sha256 = file_sha256(gatord.clone())?;
+    let session = connect_with(&config.connection, 30)?;
+    let endpoint = config.agent()?.clone();
+    let manifest = remote_read(&session, LOCAL_MAIN_MANIFEST_REMOTE)
+        .ok_or("development platform manifest is missing")?;
+    let boot_id = remote_read(&session, "/proc/sys/kernel/random/boot_id")
+        .ok_or("device boot id is unavailable")?
+        .trim()
+        .to_string();
+    fs::create_dir_all(output_dir)?;
+    let run_result = (|| -> Result<Value> {
+        exec_checked(
+            &session,
+            "prepare Streamline catalog attribution sample",
+            &catalog_attribution_prepare_command(),
+        )?;
+        let fresh = run_catalog_attribution_streamline_leg(
+            config,
+            &session,
+            &endpoint,
+            &gatord,
+            &output_dir.join("fresh"),
+            "fresh",
+            None,
+            CATALOG_FRESH_STREAMLINE_CAPTURE,
+        )?;
+        let generation = fresh
+            .pointer("/catalog/generation")
+            .and_then(Value::as_u64)
+            .ok_or("Streamline fresh leg has no catalog generation")?;
+        let rebuild = run_catalog_attribution_streamline_leg(
+            config,
+            &session,
+            &endpoint,
+            &gatord,
+            &output_dir.join("rebuild"),
+            "rebuild",
+            Some(generation),
+            CATALOG_REBUILD_STREAMLINE_CAPTURE,
+        )?;
+        let fingerprint = fresh
+            .pointer("/catalog/logical_fingerprint")
+            .cloned()
+            .ok_or("Streamline fresh leg has no logical fingerprint")?;
+        let identical = rebuild.pointer("/catalog/logical_fingerprint") == Some(&fingerprint);
+        let profiles_complete = [&fresh, &rebuild]
+            .into_iter()
+            .all(|leg| leg.pointer("/profile/state").and_then(Value::as_str) == Some("complete"));
+        Ok(json!({
+            "schema": "mister-magik-catalog-attribution-arm-v1",
+            "arm": "streamline",
+            "status": if identical && profiles_complete { "passed" } else { "failed" },
+            "configuration": {
+                "samples": 1,
+                "roots": [CATALOG_BUILD_REBUILD_ARCADE_ROOT, CATALOG_BUILD_REBUILD_SNES_ROOT, CATALOG_ATTRIBUTION_C64_ROOT],
+                "real_content_only": true,
+                "publication_filesystem": "exfat",
+                "timing_authority": false,
+                "max_duration_seconds_per_leg": 300,
+            },
+            "samples": [{"fresh": fresh, "rebuild": rebuild}],
+            "validation": {
+                "logical_fingerprint": fingerprint,
+                "catalog_fingerprints_identical": identical,
+                "profiles_complete": profiles_complete,
+            },
+            "streamline": {"gatord_sha256": gatord_sha256},
+            "manifest": parse_manifest_evidence(&manifest),
+            "boot_id": boot_id,
+        }))
+    })();
+    finish_catalog_attribution_profile(&session, run_result, output_dir, &manifest, &boot_id)
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "explicit matched Streamline leg context"
+)]
+fn run_catalog_attribution_streamline_leg(
+    config: &NativeDeviceConfig,
+    session: &Session,
+    endpoint: &AgentEndpoint,
+    gatord: &Path,
+    output_dir: &Path,
+    label: &str,
+    minimum_generation: Option<u64>,
+    spec: SystemWideStreamlineCaptureSpec,
+) -> Result<Value> {
+    fs::create_dir_all(output_dir)?;
+    let capture = SystemWideStreamlineCapture::new(session, &config.connection, output_dir, spec);
+    let gatord_version = capture.prepare(gatord)?;
+    let capture_thread = capture.start();
+    let run_result = (|| -> Result<(Value, u64, u64)> {
+        capture.wait_ready(Duration::from_secs(10))?;
+        let started = capture.monotonic_ns(&format!("catalog {label} capture start"))?;
+        let leg = run_catalog_build_rebuild_leg(
+            config,
+            session,
+            endpoint,
+            output_dir,
+            label,
+            minimum_generation,
+            false,
+            catalog_attribution_launcher_env(CatalogAttributionArm::Streamline),
+            catalog_attribution_runtime_command,
+        )?;
+        let ended = capture.monotonic_ns(&format!("catalog {label} capture end"))?;
+        Ok((leg, started, ended))
+    })();
+    let capture_result = capture.stop(capture_thread);
+    let log_result = capture.retain_log();
+    let package_result = capture_result
+        .as_ref()
+        .map_err(|error| error.to_string())
+        .and_then(|()| capture.package_extract().map_err(|error| error.to_string()));
+    let cleanup_result = capture.cleanup();
+    let ((mut leg, started_monotonic_ns, ended_monotonic_ns), archive_sha256) = match (
+        run_result,
+        package_result,
+        log_result,
+        cleanup_result,
+    ) {
+        (Ok(run), Ok(archive), Ok(()), Ok(())) => (run, archive),
+        (run, package, log, cleanup) => {
+            return Err(format!(
+                "catalog {label} Streamline capture failed: run={:?}; package={:?}; log={:?}; cleanup={:?}",
+                run.err(),
+                package.err(),
+                log.err(),
+                cleanup.err(),
+            )
+            .into());
+        }
+    };
+    leg["profile"] = json!({
+        "state": "complete",
+        "gatord_version": gatord_version,
+        "archive": spec.archive_file,
+        "archive_sha256": archive_sha256,
+        "capture_started_monotonic_ns": started_monotonic_ns,
+        "capture_ended_monotonic_ns": ended_monotonic_ns,
+        "capture_duration_ns": ended_monotonic_ns.saturating_sub(started_monotonic_ns),
     });
     Ok(leg)
 }
