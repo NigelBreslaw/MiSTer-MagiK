@@ -182,6 +182,7 @@ impl CpuProfileConfig {
         self.trigger == Some(BoundedProfileTrigger::ColdBoot)
     }
 
+    #[cfg(feature = "profile")]
     fn catalog_build_requested(&self) -> bool {
         self.trigger == Some(BoundedProfileTrigger::CatalogBuild)
     }
