@@ -3758,7 +3758,7 @@ mod tests {
 
     #[test]
     fn archive_decode_writes_raw_and_lz4_pixels_into_final_words() {
-        let expected = [0xf800, 0x07e0, 0x001f, 0xffff, 0x1234, 0xabcd, 0, 0];
+        let expected: [u16; 8] = [0xf800, 0x07e0, 0x001f, 0xffff, 0x1234, 0xabcd, 0, 0];
         let raw = expected
             .iter()
             .flat_map(|word| word.to_le_bytes())
