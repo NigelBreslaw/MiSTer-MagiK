@@ -10519,9 +10519,6 @@ pub(super) fn run_launcher_loop(
                     .filter(|publication| {
                         publication.layout_generation() == layer_target.output_layout_generation()
                             && publication.layout_epoch() == layer_target.output_layout_epoch()
-                            && layer_target
-                                .direct_preview_view()
-                                .is_some_and(|view| publication.matches_view(view))
                     })
                     .and_then(|publication| {
                         publication.for_frame(
@@ -10546,9 +10543,6 @@ pub(super) fn run_launcher_loop(
                 .filter(|publication| {
                     publication.layout_generation() == layer_target.output_layout_generation()
                         && publication.layout_epoch() == layer_target.output_layout_epoch()
-                        && arcade_list_renderer
-                            .persistent_oriented_layer_view()
-                            .is_some_and(|view| publication.matches_view(view))
                 })
                 .and_then(|publication| {
                     publication.for_frame(publication.state(), direct_arcade_update)

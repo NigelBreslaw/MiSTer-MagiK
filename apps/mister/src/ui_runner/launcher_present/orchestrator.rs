@@ -755,23 +755,7 @@ impl PresentationAdapters<FpgaVblankLatchHiddenPresenter> for LivePresentationAd
                     let started = Instant::now();
                     let (layout_generation, content_generation, backing_key) =
                         if let Some(publication) = preview_publication {
-                            let view = layer_target
-                                .direct_preview_view()
-                                .filter(|view| publication.matches_view(*view))
-                                .ok_or_else(|| {
-                                    PhysicalOverlayFailure {
-                                        role: PhysicalOverlayRole::Preview,
-                                        slot_index: plan.slot_index,
-                                        rect,
-                                        expected_rows: rect.rows(),
-                                        copied_rows: 0,
-                                        layout_generation: publication.layout_generation(),
-                                        content_generation: publication.content_generation(),
-                                        backing_key: format!("{:?}", publication.backing_key()),
-                                        cause: Some("published preview backing changed before copy".into()),
-                                    }
-                                    .to_string()
-                                })?;
+                            let view = publication.view();
                             direct_preview_rows = copy_physical_layer_rect_to_hidden(
                                 hidden,
                                 view,
@@ -819,25 +803,7 @@ impl PresentationAdapters<FpgaVblankLatchHiddenPresenter> for LivePresentationAd
                         ArcadeOverlayCopySource::PublishedPhysical => {
                             let publication = arcade_publication
                                 .expect("published Arcade copy source has a publication");
-                            let view = arcade_list_renderer
-                                .persistent_oriented_layer_view()
-                                .filter(|view| publication.matches_view(*view))
-                                .ok_or_else(|| {
-                                    PhysicalOverlayFailure {
-                                        role: PhysicalOverlayRole::Arcade,
-                                        slot_index: plan.slot_index,
-                                        rect: arcade_rect,
-                                        expected_rows: arcade_rect.rows(),
-                                        copied_rows: 0,
-                                        layout_generation: publication.layout_generation(),
-                                        content_generation: publication.content_generation(),
-                                        backing_key: format!("{:?}", publication.backing_key()),
-                                        cause: Some(
-                                            "published Arcade backing changed before copy".into(),
-                                        ),
-                                    }
-                                    .to_string()
-                                })?;
+                            let view = publication.view();
                             let rows = copy_physical_layer_rect_to_hidden(
                                 hidden,
                                 view,

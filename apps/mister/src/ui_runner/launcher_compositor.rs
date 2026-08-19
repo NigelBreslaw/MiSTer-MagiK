@@ -517,10 +517,6 @@ impl<'a> LayerTarget<'a> {
             publication.role() == PhysicalLayerRole::Preview
                 && publication.layout_generation() == layout_generation
                 && publication.layout_epoch() == self.output_layout_epoch()
-                && self
-                    .target
-                    .physical_direct_preview_view()
-                    .is_some_and(|view| publication.matches_view(view))
         });
         let publication = if changed || current.is_none() {
             *version = version.wrapping_add(1).max(1);
@@ -549,14 +545,7 @@ impl<'a> LayerTarget<'a> {
         {
             return false;
         }
-        let Some(view) = self.target.physical_direct_preview_view() else {
-            return false;
-        };
-        if !publication.matches_view(view) {
-            return false;
-        }
-        let rect = view.rect();
-        self.target.compose_physical_direct_preview_rect(rect) == rect.rows()
+        self.copy_physical_layer_snapshot_to_cached(publication)
     }
 
     pub(super) fn compose_direct_preview_rect(&mut self, rect: DirtyRect) -> u32 {
@@ -662,12 +651,7 @@ impl<'a> LayerTarget<'a> {
         });
         if let Some(publication) = publication.as_ref() {
             assert!(
-                self.copy_physical_layer_snapshot_to_cached(
-                    publication,
-                    renderer
-                        .persistent_oriented_layer_view()
-                        .expect("published Arcade layer has a view")
-                ),
+                self.copy_physical_layer_snapshot_to_cached(publication),
                 "physical Arcade publication does not match the presentation cache"
             );
         }
@@ -677,7 +661,6 @@ impl<'a> LayerTarget<'a> {
     fn copy_physical_layer_snapshot_to_cached(
         &mut self,
         publication: &PhysicalLayerPublication,
-        view: PhysicalLayerView<'_>,
     ) -> bool {
         let output = self.layout.output_layout();
         if publication.layout_generation() != self.output_layout_generation()
@@ -685,9 +668,7 @@ impl<'a> LayerTarget<'a> {
         {
             return false;
         }
-        if !publication.matches_view(view) {
-            return false;
-        }
+        let view = publication.view();
         let rect = view.rect();
         let stride = output.physical_stride();
         if rect.x0 >= rect.x1
@@ -1130,7 +1111,7 @@ mod tests {
         )
         .unwrap();
 
-        assert!(layer_target.copy_physical_layer_snapshot_to_cached(&publication, view));
+        assert!(layer_target.copy_physical_layer_snapshot_to_cached(&publication));
         for y in 0..output.physical_height() {
             for x in 0..output.physical_stride() {
                 let index = y * output.physical_stride() + x;

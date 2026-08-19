@@ -3,6 +3,9 @@
 
 use super::damage::TwoSlotDamageLedger;
 use super::target::{DirtyRect, DirtyRectList, PhysicalLayerView, subtract_dirty_rects};
+use slint::platform::software_renderer::Rgb565Pixel;
+use std::fmt;
+use std::sync::Arc;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PhysicalLayerRole {
@@ -41,6 +44,31 @@ pub struct PhysicalLayerBackingKey {
     pub source_address: usize,
 }
 
+#[derive(Clone)]
+struct PhysicalLayerPublicationBacking {
+    pixels: Arc<[Rgb565Pixel]>,
+    rect: DirtyRect,
+}
+
+impl fmt::Debug for PhysicalLayerPublicationBacking {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("PhysicalLayerPublicationBacking")
+            .field("rect", &self.rect)
+            .field("pixel_count", &self.pixels.len())
+            .field("source_address", &(self.pixels.as_ptr() as usize))
+            .finish()
+    }
+}
+
+impl PartialEq for PhysicalLayerPublicationBacking {
+    fn eq(&self, other: &Self) -> bool {
+        self.rect == other.rect && Arc::ptr_eq(&self.pixels, &other.pixels)
+    }
+}
+
+impl Eq for PhysicalLayerPublicationBacking {}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PhysicalLayerPublication {
     role: PhysicalLayerRole,
@@ -50,6 +78,7 @@ pub struct PhysicalLayerPublication {
     state: PhysicalLayerState,
     update: Option<PhysicalLayerUpdate>,
     backing_key: PhysicalLayerBackingKey,
+    backing: PhysicalLayerPublicationBacking,
 }
 
 impl PhysicalLayerPublication {
@@ -70,15 +99,21 @@ impl PhysicalLayerPublication {
         {
             return None;
         }
+        let mut pixels =
+            Vec::with_capacity(state.rect.width().checked_mul(state.rect.rows() as usize)?);
+        for row in 0..state.rect.rows() as usize {
+            pixels.extend_from_slice(view.row(state.rect, row)?);
+        }
+        let pixels: Arc<[Rgb565Pixel]> = pixels.into();
         let backing_key = PhysicalLayerBackingKey {
             role,
             layout_generation,
             layout_epoch,
             content_generation,
             rect: state.rect,
-            stride: view.stride(),
-            pixel_count: view.pixels().len(),
-            source_address: view.pixels().as_ptr() as usize,
+            stride: state.rect.width(),
+            pixel_count: pixels.len(),
+            source_address: pixels.as_ptr() as usize,
         };
         Some(Self {
             role,
@@ -88,6 +123,10 @@ impl PhysicalLayerPublication {
             state,
             update,
             backing_key,
+            backing: PhysicalLayerPublicationBacking {
+                pixels,
+                rect: state.rect,
+            },
         })
     }
 
@@ -136,11 +175,8 @@ impl PhysicalLayerPublication {
         self.backing_key
     }
 
-    pub fn matches_view(&self, view: PhysicalLayerView<'_>) -> bool {
-        view.rect() == self.state.rect
-            && view.stride() == self.backing_key.stride
-            && view.pixels().len() == self.backing_key.pixel_count
-            && view.pixels().as_ptr() as usize == self.backing_key.source_address
+    pub fn view(&self) -> PhysicalLayerView<'_> {
+        PhysicalLayerView::dense(&self.backing.pixels, self.backing.rect)
     }
 }
 
@@ -1112,6 +1148,31 @@ mod tests {
         assert_eq!(
             state.retained_publication_generation(2, PhysicalLayerRole::Preview),
             Some(2)
+        );
+    }
+
+    #[test]
+    fn publication_pixels_are_immutable_after_source_reuse() {
+        let preview = rect(1, 0, 4, 2);
+        let expected = vec![Rgb565Pixel(0x1234); preview.width() * preview.rows() as usize];
+        let mut source = expected.clone();
+        let publication = PhysicalLayerPublication::capture(
+            PhysicalLayerRole::Preview,
+            7,
+            1,
+            3,
+            layer(preview, 1),
+            Some(PhysicalLayerUpdate::Full(preview)),
+            PhysicalLayerView::dense(&source, preview),
+        )
+        .expect("owned publication");
+
+        source.fill(Rgb565Pixel(0xffff));
+
+        assert_eq!(publication.view().pixels(), expected);
+        assert_ne!(
+            publication.backing_key().source_address,
+            source.as_ptr() as usize
         );
     }
 
