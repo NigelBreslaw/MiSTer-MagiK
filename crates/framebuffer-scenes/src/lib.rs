@@ -1396,8 +1396,10 @@ mod tests {
             .collect::<Vec<_>>();
         let mut optimized = vec![Rgb565Pixel(0xbeef); layout.len()];
         let mut expected = optimized.clone();
-        let mut surface = Rgb565SurfaceMut::new(&mut optimized, layout).unwrap();
-        assert!(surface.copy_rect_strided(3, 1, 2, 2, &source, 8, 4, 2));
+        {
+            let mut surface = Rgb565SurfaceMut::new(&mut optimized, layout).unwrap();
+            assert!(surface.copy_rect_strided(3, 1, 2, 2, &source, 8, 4, 2));
+        }
         assert!(reference_copy(
             &mut expected,
             layout,
@@ -1413,7 +1415,10 @@ mod tests {
         assert_eq!(optimized, expected);
 
         let before = optimized.clone();
-        assert!(!surface.copy_rect_strided(4, 2, 2, 2, &source, 8, 0, 0));
+        {
+            let mut surface = Rgb565SurfaceMut::new(&mut optimized, layout).unwrap();
+            assert!(!surface.copy_rect_strided(4, 2, 2, 2, &source, 8, 0, 0));
+        }
         assert_eq!(optimized, before);
     }
 
