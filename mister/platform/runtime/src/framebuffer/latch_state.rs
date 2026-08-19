@@ -322,19 +322,48 @@ struct LatchSlotCoherency {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LatchFramePlan {
     cached_damage: DirtyRectList,
-    preview_desired: Option<PhysicalLayerState>,
-    preview_dirty: Option<DirtyRect>,
-    arcade_desired: Option<PhysicalLayerState>,
-    arcade_dirty: Option<PhysicalLayerUpdate>,
-    preview_publication: Option<PhysicalLayerPublication>,
-    arcade_publication: Option<PhysicalLayerPublication>,
-    layer_ownership: [PhysicalLayerOwnership; PhysicalLayerRole::COUNT],
+    layers: [PhysicalLayerFrame; PhysicalLayerRole::COUNT],
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum PhysicalLayerOwnership {
     Cached,
     Published,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PhysicalLayerFrame {
+    desired: Option<PhysicalLayerState>,
+    update: Option<PhysicalLayerUpdate>,
+    publication: Option<PhysicalLayerPublication>,
+    ownership: PhysicalLayerOwnership,
+}
+
+impl PhysicalLayerFrame {
+    fn cached(desired: Option<PhysicalLayerState>, update: Option<PhysicalLayerUpdate>) -> Self {
+        Self {
+            desired,
+            update,
+            publication: None,
+            ownership: PhysicalLayerOwnership::Cached,
+        }
+    }
+
+    fn published(role: PhysicalLayerRole, publication: Option<PhysicalLayerPublication>) -> Self {
+        debug_assert!(
+            publication
+                .as_ref()
+                .is_none_or(|publication| publication.role() == role)
+        );
+        Self {
+            desired: publication.as_ref().map(PhysicalLayerPublication::state),
+            update: publication
+                .as_ref()
+                .and_then(PhysicalLayerPublication::update),
+            publication,
+            ownership: PhysicalLayerOwnership::Published,
+        }
+    }
 }
 
 impl LatchFramePlan {
@@ -347,13 +376,13 @@ impl LatchFramePlan {
     ) -> Self {
         Self {
             cached_damage,
-            preview_desired,
-            preview_dirty,
-            arcade_desired,
-            arcade_dirty,
-            preview_publication: None,
-            arcade_publication: None,
-            layer_ownership: [PhysicalLayerOwnership::Cached; PhysicalLayerRole::COUNT],
+            layers: [
+                PhysicalLayerFrame::cached(
+                    preview_desired,
+                    preview_dirty.map(PhysicalLayerUpdate::Full),
+                ),
+                PhysicalLayerFrame::cached(arcade_desired, arcade_dirty),
+            ],
         }
     }
 
@@ -362,28 +391,12 @@ impl LatchFramePlan {
         preview: Option<PhysicalLayerPublication>,
         arcade: Option<PhysicalLayerPublication>,
     ) -> Self {
-        debug_assert!(
-            preview
-                .as_ref()
-                .is_none_or(|publication| { publication.role() == PhysicalLayerRole::Preview })
-        );
-        debug_assert!(
-            arcade
-                .as_ref()
-                .is_none_or(|publication| { publication.role() == PhysicalLayerRole::Arcade })
-        );
         Self {
             cached_damage,
-            preview_desired: preview.as_ref().map(PhysicalLayerPublication::state),
-            preview_dirty: preview
-                .as_ref()
-                .and_then(PhysicalLayerPublication::update)
-                .map(PhysicalLayerUpdate::dirty_rect),
-            arcade_desired: arcade.as_ref().map(PhysicalLayerPublication::state),
-            arcade_dirty: arcade.as_ref().and_then(PhysicalLayerPublication::update),
-            preview_publication: preview,
-            arcade_publication: arcade,
-            layer_ownership: [PhysicalLayerOwnership::Published; PhysicalLayerRole::COUNT],
+            layers: [
+                PhysicalLayerFrame::published(PhysicalLayerRole::Preview, preview),
+                PhysicalLayerFrame::published(PhysicalLayerRole::Arcade, arcade),
+            ],
         }
     }
 
@@ -393,25 +406,11 @@ impl LatchFramePlan {
         arcade_desired: Option<PhysicalLayerState>,
         arcade_dirty: Option<PhysicalLayerUpdate>,
     ) -> Self {
-        debug_assert!(
-            preview
-                .as_ref()
-                .is_none_or(|publication| publication.role() == PhysicalLayerRole::Preview)
-        );
         Self {
             cached_damage,
-            preview_desired: preview.as_ref().map(PhysicalLayerPublication::state),
-            preview_dirty: preview
-                .as_ref()
-                .and_then(PhysicalLayerPublication::update)
-                .map(PhysicalLayerUpdate::dirty_rect),
-            arcade_desired,
-            arcade_dirty,
-            preview_publication: preview,
-            arcade_publication: None,
-            layer_ownership: [
-                PhysicalLayerOwnership::Published,
-                PhysicalLayerOwnership::Cached,
+            layers: [
+                PhysicalLayerFrame::published(PhysicalLayerRole::Preview, preview),
+                PhysicalLayerFrame::cached(arcade_desired, arcade_dirty),
             ],
         }
     }
@@ -421,41 +420,35 @@ impl LatchFramePlan {
     }
 
     pub fn preview_dirty(&self) -> Option<DirtyRect> {
-        self.preview_dirty
+        self.layer(PhysicalLayerRole::Preview)
+            .update
+            .map(PhysicalLayerUpdate::dirty_rect)
     }
 
     pub fn arcade_dirty(&self) -> Option<PhysicalLayerUpdate> {
-        self.arcade_dirty
+        self.layer(PhysicalLayerRole::Arcade).update
     }
 
-    pub fn for_fb0_recovery(self, full_rect: DirtyRect) -> Self {
-        Self {
-            cached_damage: DirtyRectList::from_one(full_rect),
-            preview_dirty: self.preview_desired.map(|layer| layer.rect),
-            arcade_dirty: self
-                .arcade_desired
-                .map(|layer| PhysicalLayerUpdate::Full(layer.rect)),
-            preview_publication: self.preview_publication.as_ref().and_then(|publication| {
-                publication.for_frame(
-                    publication.state(),
-                    Some(PhysicalLayerUpdate::Full(publication.state().rect)),
-                )
-            }),
-            arcade_publication: self.arcade_publication.as_ref().and_then(|publication| {
-                publication.for_frame(
-                    publication.state(),
-                    Some(PhysicalLayerUpdate::Full(publication.state().rect)),
-                )
-            }),
-            ..self
+    pub fn for_fb0_recovery(mut self, full_rect: DirtyRect) -> Self {
+        self.cached_damage = DirtyRectList::from_one(full_rect);
+        for layer in &mut self.layers {
+            layer.update = layer
+                .desired
+                .map(|state| PhysicalLayerUpdate::Full(state.rect));
+            layer.publication = layer
+                .publication
+                .as_ref()
+                .and_then(|publication| publication.for_frame(publication.state(), layer.update));
         }
+        self
     }
 
     pub fn publication(&self, role: PhysicalLayerRole) -> Option<&PhysicalLayerPublication> {
-        match role {
-            PhysicalLayerRole::Preview => self.preview_publication.as_ref(),
-            PhysicalLayerRole::Arcade => self.arcade_publication.as_ref(),
-        }
+        self.layer(role).publication.as_ref()
+    }
+
+    fn layer(&self, role: PhysicalLayerRole) -> &PhysicalLayerFrame {
+        &self.layers[role.index()]
     }
 
     #[cfg(test)]
@@ -592,8 +585,8 @@ impl TwoBufferLatchState {
         let slot_index = self
             .select_writable_slot()
             .ok_or(LatchPlanError::NoWritableSlot)?;
-        self.planned_publications[0] = input.preview_publication.clone();
-        self.planned_publications[1] = input.arcade_publication.clone();
+        self.planned_publications =
+            std::array::from_fn(|index| input.layers[index].publication.clone());
         for publication in self.planned_publications.iter().flatten() {
             self.latest_publication_generation[physical_layer_role_offset(publication.role())] =
                 Some((publication.layout_epoch(), publication.content_generation()));
@@ -632,24 +625,22 @@ impl TwoBufferLatchState {
     }
 
     fn stale_publication_error(&self, input: &LatchFramePlan) -> Option<LatchPlanError> {
-        [
-            input.preview_publication.as_ref(),
-            input.arcade_publication.as_ref(),
-        ]
-        .into_iter()
-        .flatten()
-        .find_map(|publication| {
-            let latest =
-                self.latest_publication_generation[physical_layer_role_offset(publication.role())]?;
-            let offered = (publication.layout_epoch(), publication.content_generation());
-            (offered < latest).then_some(LatchPlanError::StalePublication {
-                role: publication.role(),
-                latest_layout_epoch: latest.0,
-                latest_content_generation: latest.1,
-                offered_layout_epoch: offered.0,
-                offered_content_generation: offered.1,
+        input
+            .layers
+            .iter()
+            .filter_map(|layer| layer.publication.as_ref())
+            .find_map(|publication| {
+                let latest = self.latest_publication_generation
+                    [physical_layer_role_offset(publication.role())]?;
+                let offered = (publication.layout_epoch(), publication.content_generation());
+                (offered < latest).then_some(LatchPlanError::StalePublication {
+                    role: publication.role(),
+                    latest_layout_epoch: latest.0,
+                    latest_content_generation: latest.1,
+                    offered_layout_epoch: offered.0,
+                    offered_content_generation: offered.1,
+                })
             })
-        })
     }
 
     #[cfg(test)]
@@ -695,15 +686,17 @@ impl TwoBufferLatchState {
 
     fn plan_for_slot(&self, slot_index: u8, input: LatchFramePlan) -> LatchPresentPlan {
         let slot = self.slot(slot_index);
+        let preview = input.layer(PhysicalLayerRole::Preview);
+        let arcade = input.layer(PhysicalLayerRole::Arcade);
         let mut restore_rects = self.base_damage.plan(slot_index);
 
         let restore_preview = direct_layer_needs_restore(
             slot.layers[PhysicalLayerRole::Preview.index()],
-            input.preview_desired,
+            preview.desired,
         );
         let restore_arcade = direct_layer_needs_restore(
             slot.layers[PhysicalLayerRole::Arcade.index()],
-            input.arcade_desired,
+            arcade.desired,
         );
         if restore_preview {
             if let Some(preview) = slot.layers[PhysicalLayerRole::Preview.index()] {
@@ -716,44 +709,40 @@ impl TwoBufferLatchState {
             }
         }
 
-        let preview_intersects_restore =
-            layer_intersects_restore(input.preview_desired, &restore_rects);
-        let arcade_intersects_restore =
-            layer_intersects_restore(input.arcade_desired, &restore_rects);
+        let preview_intersects_restore = layer_intersects_restore(preview.desired, &restore_rects);
+        let arcade_intersects_restore = layer_intersects_restore(arcade.desired, &restore_rects);
         let retained_publications = &self.slot_publications[slot_offset(slot_index)];
-        let preview_publication_changed = input.layer_ownership[PhysicalLayerRole::Preview.index()]
-            == PhysicalLayerOwnership::Published
+        let preview_publication_changed = preview.ownership == PhysicalLayerOwnership::Published
             && !same_publication_identity(
                 retained_publications[PhysicalLayerRole::Preview.index()].as_ref(),
-                input.preview_publication.as_ref(),
+                preview.publication.as_ref(),
             );
-        let arcade_publication_changed = input.layer_ownership[PhysicalLayerRole::Arcade.index()]
-            == PhysicalLayerOwnership::Published
+        let arcade_publication_changed = arcade.ownership == PhysicalLayerOwnership::Published
             && !same_publication_identity(
                 retained_publications[PhysicalLayerRole::Arcade.index()].as_ref(),
-                input.arcade_publication.as_ref(),
+                arcade.publication.as_ref(),
             );
         let arcade_publication_requires_full =
-            arcade_publication_changed && input.arcade_dirty.is_none();
+            arcade_publication_changed && arcade.update.is_none();
 
         let preview_redraw = direct_layer_redraw_rect(
             slot.layers[PhysicalLayerRole::Preview.index()],
-            input.preview_desired,
-            input.preview_dirty,
+            preview.desired,
+            preview.update.map(PhysicalLayerUpdate::dirty_rect),
             preview_intersects_restore,
             preview_publication_changed,
         );
         let arcade_redraw = direct_layer_redraw_update(
             slot.layers[PhysicalLayerRole::Arcade.index()],
-            input.arcade_desired,
-            input.arcade_dirty,
+            arcade.desired,
+            arcade.update,
             arcade_intersects_restore,
             arcade_publication_requires_full,
         );
         let arcade_redraw_diff_safe = !arcade_intersects_restore
             && !arcade_publication_requires_full
             && slot.layers[PhysicalLayerRole::Arcade.index()].is_some_and(|current| {
-                input.arcade_desired.is_some_and(|desired| {
+                arcade.desired.is_some_and(|desired| {
                     current.rect == desired.rect && current.version == desired.version
                 })
             });
@@ -768,8 +757,8 @@ impl TwoBufferLatchState {
             preview_redraw,
             arcade_redraw,
             arcade_redraw_diff_safe,
-            preview_after: input.preview_desired,
-            arcade_after: input.arcade_desired,
+            preview_after: preview.desired,
+            arcade_after: arcade.desired,
         }
     }
 
@@ -878,23 +867,17 @@ fn same_publication_identity(
 }
 
 fn first_publication_mismatch(input: &LatchFramePlan) -> Option<PhysicalLayerRole> {
-    if !layer_publication_matches(
-        input.layer_ownership[PhysicalLayerRole::Preview.index()],
-        input.preview_desired,
-        input.preview_dirty.map(PhysicalLayerUpdate::Full),
-        input.preview_publication.as_ref(),
-        PhysicalLayerRole::Preview,
-    ) {
-        return Some(PhysicalLayerRole::Preview);
-    }
-    if !layer_publication_matches(
-        input.layer_ownership[PhysicalLayerRole::Arcade.index()],
-        input.arcade_desired,
-        input.arcade_dirty,
-        input.arcade_publication.as_ref(),
-        PhysicalLayerRole::Arcade,
-    ) {
-        return Some(PhysicalLayerRole::Arcade);
+    for role in PhysicalLayerRole::ALL {
+        let layer = input.layer(role);
+        if !layer_publication_matches(
+            layer.ownership,
+            layer.desired,
+            layer.update,
+            layer.publication.as_ref(),
+            role,
+        ) {
+            return Some(role);
+        }
     }
     None
 }
@@ -1076,13 +1059,15 @@ mod tests {
 
         let input = LatchFramePlan {
             cached_damage: DirtyRectList::new(),
-            preview_desired: None,
-            preview_dirty: None,
-            arcade_desired: Some(layer(arcade, 1)),
-            arcade_dirty: Some(PhysicalLayerUpdate::Full(arcade)),
-            preview_publication: None,
-            arcade_publication: None,
-            layer_ownership: [PhysicalLayerOwnership::Published; PhysicalLayerRole::COUNT],
+            layers: [
+                PhysicalLayerFrame::published(PhysicalLayerRole::Preview, None),
+                PhysicalLayerFrame {
+                    desired: Some(layer(arcade, 1)),
+                    update: Some(PhysicalLayerUpdate::Full(arcade)),
+                    publication: None,
+                    ownership: PhysicalLayerOwnership::Published,
+                },
+            ],
         };
 
         assert_eq!(
