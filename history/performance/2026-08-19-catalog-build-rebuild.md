@@ -20,6 +20,33 @@ The duplicate durable-target walk experiment was rejected and reverted. It
 changed rebuild median from 18.927 s to 18.825 s, only 102 ms or 0.5%, and did
 not justify the extra resume-path complexity.
 
+## Whole-Card Confirmation
+
+The typed `catalog-full-build-rebuild` scenario then removed only an isolated
+output catalog, used every normally configured library source on the card, and
+preserved the completed fresh result for a forced same-boot rebuild. It did not
+drop the Linux page cache. The installed runtime remained `95542f01d` for both
+legs.
+
+| Metric | Result |
+|---|---:|
+| Fresh Arcade first visible | **9.437 s** |
+| Fresh whole-card completion | 272.112 s (4m 32.112s) |
+| Forced same-boot rebuild | 169.457 s (2m 49.457s) |
+| Published content | 69 systems, 39,791 games |
+| Fresh/rebuild count parity | exact |
+
+Evidence: [whole-card summary](../../build/agent-benchmarks/catalog-full-build-rebuild/1787160204/summary.json).
+
+This confirms that the retained Arcade reuse still delivers a usable Arcade
+catalog in under ten seconds even when the remaining 68 systems are scanned.
+It does not make the complete whole-card catalog a sub-ten-second operation.
+The 102.655 s gap between the fresh and immediately following rebuild is a new
+optimization signal, but it cannot yet be assigned wholly to page-cache warmth,
+durable namespace reuse, or first-publication work because this scenario does
+not expose those phase boundaries. The rebuild's 169.457 s is in the same band
+as the earlier 172.63-174.63 s warm whole-card attribution runs.
+
 ## Workload And Evidence Contract
 
 The typed scenario is `scripts/agent benchmark catalog-build-rebuild`.
@@ -112,6 +139,19 @@ Commit: `f5f9ea063`.
 - [x] Deliver the production-feature ARM binary and pass smoke validation.
 - [x] Pass the final three-sample real-card benchmark.
 
+### Whole-card confirmation harness
+
+Commits: `907460f28`, `c5ff459b6`.
+
+- [x] Add a typed one-sample whole-card fresh-plus-rebuild scenario.
+- [x] Redirect every generated catalog artifact to isolated exFAT paths.
+- [x] Use the normal configured roots without a target allowlist.
+- [x] Preserve the fresh catalog for a forced newer rebuild generation.
+- [x] Require exact system and game-count parity between both legs.
+- [x] Keep UI scrolling qualification in the bounded scenario rather than
+  racing it into the whole-card timing measurement.
+- [x] Verify installed manifest and boot identity remain unchanged.
+
 ## Next Optimization Ideas From The New Data
 
 1. **Make the pre-input deadline explicit.** The retained build now completes
@@ -145,7 +185,15 @@ Commit: `f5f9ea063`.
    2-3-second deadline margin is best won in scan, shard construction, exFAT
    publication, or launcher adoption without using a full-card run.
 
-The priority order is 2, then a bounded version of 1, then 3. Idea 2 has the
-strongest deterministic byte-level evidence. Idea 1 can guarantee first-boot
-ordering but must remain animation-slack-aware. Idea 3 has the largest rebuild
-ceiling and the highest correctness risk.
+5. **Split first-publication cost from warm rebuild cost.** The whole-card pair
+   exposed a 102.655 s fresh/rebuild gap on one boot. Extend the typed scenario
+   with existing catalog phase markers and namespace-snapshot hit counts, then
+   repeat alternating isolated-output and preserved-output legs. This will show
+   whether the next large win belongs in cold exFAT discovery, initial shard
+   construction, or snapshot seeding instead of inferring it from one total.
+
+Run the instrumentation in 5 before another whole-card implementation. The
+optimization priority remains 2, then a bounded version of 1, then 3. Idea 2
+has the strongest deterministic byte-level evidence. Idea 1 can guarantee
+first-boot ordering but must remain animation-slack-aware. Idea 3 has the
+largest rebuild ceiling and the highest correctness risk.
