@@ -1614,6 +1614,20 @@ aliases = []
 documentation = { summary = "Controls library roots behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
+name = "MISTER_LIBRARY_TARGET_ALLOWLIST"
+owner = "crates/catalog/src/library_indexer.rs"
+classification = "diagnostic"
+value_shape = "path or path list"
+default_behavior = "does not restrict planned catalog targets when unset"
+visibility = "internal runtime"
+parser = "path"
+scope = "command"
+conflicts = []
+sensitivity = "path"
+aliases = []
+documentation = { summary = "Restricts catalog walker targets for bounded diagnostics", accepted_values = [], value_policy = "document" }
+
+[[control]]
 name = "MISTER_LIBRARY_SOFTWARE_HASH"
 owner = "crates/catalog/src/software_identity.rs"
 classification = "production"
