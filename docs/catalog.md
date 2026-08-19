@@ -253,10 +253,7 @@ Initial and warm builds keep disposable durable progress in
 targets are committed atomically with their eligible-input fingerprints. After
 a launcher handoff terminates MagiK, the next launcher re-enumerates target
 metadata, hydrates exact matches without reparsing or classifying them, and
-continues with new or changed targets under the same build ID. A matching
-target emits only its stable start/complete boundaries during the assembly
-scan; its filesystem is not traversed a second time after fingerprint
-validation. Scan outputs
+continues with new or changed targets under the same build ID. Scan outputs
 are committed in bounded groups of at most 16 targets or 2 MiB of encoded
 output, whichever comes first. This preserves atomic resume boundaries without
 paying an exFAT durability barrier for every small directory. Completed,

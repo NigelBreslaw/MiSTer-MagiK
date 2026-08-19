@@ -14,7 +14,7 @@ use crate::namespace_walk::{
     self, NamespaceEntry, NamespaceEntryKind, NamespaceSignatureCapture, NamespaceWalkStats,
 };
 use crate::runtime_thread::{RuntimeThreadRole, apply_runtime_thread_policy};
-use std::collections::{BTreeSet, HashSet};
+use std::collections::HashSet;
 use std::fs::File;
 use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
@@ -195,41 +195,10 @@ pub(crate) fn discover_files_pipelined_foreground_with_plan(
     )
 }
 
-pub(crate) fn discover_files_pipelined_foreground_with_plan_and_reusable_targets(
-    roots: Vec<String>,
-    plan: CatalogScanPlan,
-    excluded_targets: Vec<PathBuf>,
-    reusable_target_ordinals: BTreeSet<usize>,
-) -> mpsc::Receiver<DiscoveryEvent> {
-    discover_files_pipelined_with_plan_and_reusable_targets(
-        roots,
-        plan,
-        excluded_targets,
-        reusable_target_ordinals,
-        RuntimeThreadRole::LibraryWalkerForeground,
-    )
-}
-
 pub(crate) fn discover_files_pipelined_with_plan(
     roots: Vec<String>,
     plan: CatalogScanPlan,
     excluded_targets: Vec<PathBuf>,
-    role: RuntimeThreadRole,
-) -> mpsc::Receiver<DiscoveryEvent> {
-    discover_files_pipelined_with_plan_and_reusable_targets(
-        roots,
-        plan,
-        excluded_targets,
-        BTreeSet::new(),
-        role,
-    )
-}
-
-pub(crate) fn discover_files_pipelined_with_plan_and_reusable_targets(
-    roots: Vec<String>,
-    plan: CatalogScanPlan,
-    excluded_targets: Vec<PathBuf>,
-    reusable_target_ordinals: BTreeSet<usize>,
     role: RuntimeThreadRole,
 ) -> mpsc::Receiver<DiscoveryEvent> {
     let (tx, rx) = mpsc::sync_channel(DISCOVERY_EVENT_BUFFER);
@@ -241,13 +210,7 @@ pub(crate) fn discover_files_pipelined_with_plan_and_reusable_targets(
                 .then(crate::cooperative_work::BackgroundScope::enter);
             let t = Instant::now();
             let walk_pmu = mister_magik_perf_events::sampled_span(crate::pmu_phase::WALK);
-            let dirs = walk_index_candidates_with_plan(
-                &roots,
-                &plan,
-                &excluded_targets,
-                &reusable_target_ordinals,
-                &tx,
-            );
+            let dirs = walk_index_candidates_with_plan(&roots, &plan, &excluded_targets, &tx);
             drop(walk_pmu);
             mister_magik_perf_events::submit_thread_profile("library-walker");
             let _ = tx.send(DiscoveryEvent::Done {
@@ -360,7 +323,6 @@ fn walk_index_candidates_with_plan(
     roots: &[String],
     plan: &CatalogScanPlan,
     excluded_targets: &[PathBuf],
-    reusable_target_ordinals: &BTreeSet<usize>,
     tx: &mpsc::SyncSender<DiscoveryEvent>,
 ) -> usize {
     let profiles = plan.base_profiles();
@@ -385,14 +347,6 @@ fn walk_index_candidates_with_plan(
         let descriptor = target.descriptor(ordinal);
         if !target_send_stats.send(tx, DiscoveryEvent::TargetStart(descriptor.clone())) {
             break;
-        }
-        if reusable_target_ordinals.contains(&ordinal) {
-            if !target_send_stats.send(tx, DiscoveryEvent::TargetComplete(descriptor)) {
-                send_stats.add(&target_send_stats);
-                break;
-            }
-            send_stats.add(&target_send_stats);
-            continue;
         }
         let stats = match target {
             PlannedScanTarget::Static {
@@ -1915,7 +1869,7 @@ mod tests {
         let roots = vec![root.display().to_string()];
         let plan = CatalogScanPlan::for_roots(&roots);
         let (tx, rx) = std::sync::mpsc::sync_channel(DISCOVERY_EVENT_BUFFER);
-        let dirs = walk_index_candidates_with_plan(&roots, &plan, &[], &BTreeSet::new(), &tx);
+        let dirs = walk_index_candidates_with_plan(&roots, &plan, &[], &tx);
         drop(tx);
 
         let mut open = None;
@@ -1957,43 +1911,6 @@ mod tests {
                 .any(|target| { target.path == arcade && target.kind == ScanTargetKind::Static })
         );
         assert!(dirs >= 1);
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn planned_scan_emits_only_boundaries_for_reusable_targets() {
-        let root = unique_temp_dir("planned-reusable-target");
-        let arcade = root.join("_Arcade");
-        std::fs::create_dir_all(&arcade).expect("create arcade dir");
-        std::fs::write(arcade.join("game.mra"), "<misterromdescription/>")
-            .expect("write arcade launcher");
-
-        let roots = vec![root.display().to_string()];
-        let plan = CatalogScanPlan::for_roots(&roots);
-        let descriptor = planned_scan_target_descriptors(&roots, &plan, &[])
-            .into_iter()
-            .find(|target| target.path == arcade)
-            .expect("Arcade target");
-        let reusable = BTreeSet::from([descriptor.ordinal]);
-        let (tx, rx) = std::sync::mpsc::sync_channel(DISCOVERY_EVENT_BUFFER);
-
-        walk_index_candidates_with_plan(&roots, &plan, &[], &reusable, &tx);
-        drop(tx);
-
-        let events = rx.try_iter().collect::<Vec<_>>();
-        let start = events
-            .iter()
-            .position(|event| {
-                matches!(event, DiscoveryEvent::TargetStart(target) if target == &descriptor)
-            })
-            .expect("reusable target start");
-        let complete = events
-            .iter()
-            .position(|event| {
-                matches!(event, DiscoveryEvent::TargetComplete(target) if target == &descriptor)
-            })
-            .expect("reusable target completion");
-        assert_eq!(complete, start + 1, "reusable target must have no payload");
         let _ = std::fs::remove_dir_all(root);
     }
 
