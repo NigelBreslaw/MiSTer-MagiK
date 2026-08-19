@@ -43,6 +43,7 @@ enum BenchmarkProfile {
     Search,
     SearchUi,
     CatalogLifecycle,
+    CatalogBuildRebuild,
     SystemEntry,
     SystemEntryCritical,
     SystemEntryCriticalConfirm,
@@ -107,6 +108,9 @@ impl BenchmarkDevice for DeviceClient {
             BenchmarkProfile::Search => device.profile_search(&output_dir),
             BenchmarkProfile::SearchUi => device.verify_search_ui(&output_dir),
             BenchmarkProfile::CatalogLifecycle => device.profile_catalog_lifecycle(&output_dir),
+            BenchmarkProfile::CatalogBuildRebuild => {
+                device.profile_catalog_build_rebuild(&output_dir)
+            }
             BenchmarkProfile::SystemEntry => device.profile_system_entry(&output_dir),
             BenchmarkProfile::SystemEntryCritical => {
                 device.profile_system_entry_critical(&output_dir)
@@ -278,6 +282,9 @@ fn require_clean_installed_commit(
         }
         BenchmarkScenario::CatalogLifecycle => {
             execute_catalog_lifecycle(&mut device, manifest, output_dir, reporter)
+        }
+        BenchmarkScenario::CatalogBuildRebuild => {
+            execute_catalog_build_rebuild(&mut device, manifest, output_dir, reporter)
         }
         BenchmarkScenario::SystemEntry => {
             execute_system_entry(&mut device, manifest, output_dir, reporter)
@@ -805,6 +812,7 @@ fn particle_scene_lab_command(scenario: BenchmarkScenario) -> Option<&'static st
         | BenchmarkScenario::ColdBoot
         | BenchmarkScenario::ColdBootPprof
         | BenchmarkScenario::CatalogLifecycle
+        | BenchmarkScenario::CatalogBuildRebuild
         | BenchmarkScenario::SystemEntry
         | BenchmarkScenario::SystemEntryCritical
         | BenchmarkScenario::SystemEntryCriticalConfirm
@@ -1933,6 +1941,75 @@ fn execute_catalog_lifecycle(
     Ok(Outcome::Passed)
 }
 
+fn execute_catalog_build_rebuild(
+    device: &mut impl BenchmarkDevice,
+    manifest: String,
+    output_dir: std::path::PathBuf,
+    reporter: &mut Reporter<'_>,
+) -> AgentResult<Outcome> {
+    reporter.emit(
+        EventKind::Progress,
+        "profile",
+        "benchmarking bounded real Arcade and SNES catalog build/rebuild",
+        Some(35),
+    )?;
+    let detail = device.profile(BenchmarkProfile::CatalogBuildRebuild, output_dir.clone())?;
+    let summary: Value = serde_json::from_str(&detail).map_err(|error| error.to_string())?;
+    device.verify_health()?;
+    evaluate_catalog_build_rebuild_summary(&summary)?;
+    reporter.emit(
+        EventKind::Progress,
+        "benchmark-result",
+        &serde_json::to_string(&json!({
+            "installed_manifest": manifest,
+            "summary": summary,
+            "output_dir": output_dir,
+        }))
+        .map_err(|error| error.to_string())?,
+        Some(100),
+    )?;
+    Ok(Outcome::Passed)
+}
+
+fn evaluate_catalog_build_rebuild_summary(summary: &Value) -> AgentResult<()> {
+    if summary.get("schema").and_then(Value::as_str)
+        != Some("mister-magik-catalog-build-rebuild-v1")
+        || summary.get("scenario").and_then(Value::as_str) != Some("catalog-build-rebuild")
+        || summary.get("status").and_then(Value::as_str) != Some("passed")
+    {
+        return Err("catalog build/rebuild benchmark summary is not a passing v1 report".into());
+    }
+    let samples = summary
+        .get("samples")
+        .and_then(Value::as_array)
+        .ok_or("catalog build/rebuild benchmark summary has no samples")?;
+    if samples.len() != 3 {
+        return Err(format!(
+            "catalog build/rebuild benchmark expected three samples, received {}",
+            samples.len()
+        )
+        .into());
+    }
+    if samples.iter().any(|sample| {
+        sample.get("status").and_then(Value::as_str) != Some("passed")
+            || sample
+                .pointer("/fresh/catalog/valid")
+                .and_then(Value::as_bool)
+                != Some(true)
+            || sample
+                .pointer("/rebuild/catalog/valid")
+                .and_then(Value::as_bool)
+                != Some(true)
+            || sample
+                .pointer("/validation/snes_game_delta")
+                .and_then(Value::as_i64)
+                != Some(1)
+    }) {
+        return Err("catalog build/rebuild benchmark contains a failed sample".into());
+    }
+    Ok(())
+}
+
 fn evaluate_catalog_lifecycle_summary(summary: &Value) -> AgentResult<()> {
     if summary.get("schema").and_then(Value::as_str) != Some("mister-magik-installed-benchmark-v3")
     {
@@ -2452,6 +2529,28 @@ mod tests {
         dropped["startup_intro"]["cadence"]["qualified"] = json!(true);
         dropped["startup_intro"]["latch_protocol"]["qualified"] = json!(false);
         assert!(evaluate_catalog_lifecycle_summary(&dropped).is_err());
+    }
+
+    #[test]
+    fn catalog_build_rebuild_requires_three_passing_delta_samples() {
+        let sample = || {
+            json!({
+                "status": "passed",
+                "fresh": {"catalog": {"valid": true}},
+                "rebuild": {"catalog": {"valid": true}},
+                "validation": {"snes_game_delta": 1},
+            })
+        };
+        let passing = json!({
+            "schema": "mister-magik-catalog-build-rebuild-v1",
+            "scenario": "catalog-build-rebuild",
+            "status": "passed",
+            "samples": [sample(), sample(), sample()],
+        });
+        assert!(evaluate_catalog_build_rebuild_summary(&passing).is_ok());
+        let mut failed = passing;
+        failed["samples"][1]["validation"]["snes_game_delta"] = json!(0);
+        assert!(evaluate_catalog_build_rebuild_summary(&failed).is_err());
     }
 
     #[test]

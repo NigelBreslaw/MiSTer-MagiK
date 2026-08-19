@@ -859,6 +859,7 @@ mod tests {
         let accepted = [
             "screensaver",
             "catalog-lifecycle",
+            "catalog-build-rebuild",
             "system-entry",
             "system-entry-critical",
             "system-entry-critical-confirm",

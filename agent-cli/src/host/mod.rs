@@ -14,7 +14,7 @@ use rusqlite::{Connection, OpenFlags, params};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use ssh2::Session;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::env;
 use std::fs::{self, OpenOptions};
 use std::io::{self, IsTerminal, Read, Write};
@@ -802,6 +802,13 @@ impl NativeDevice {
         output_dir: &Path,
     ) -> std::result::Result<String, DeviceFailure> {
         self.benchmark_profile(|config| profile_installed_catalog_lifecycle(config, output_dir))
+    }
+
+    pub(crate) fn profile_catalog_build_rebuild(
+        &mut self,
+        output_dir: &Path,
+    ) -> std::result::Result<String, DeviceFailure> {
+        self.benchmark_profile(|config| profile_installed_catalog_build_rebuild(config, output_dir))
     }
 
     pub(crate) fn profile_system_entry(
@@ -5166,6 +5173,12 @@ fn parse_crt_trial_status(output: &str) -> Result<&str> {
 
 const SCREENSAVER_PROFILE_REMOTE_DIR: &str = "/tmp/mister-magik/screensaver-profile";
 const CATALOG_LIFECYCLE_REMOTE_DIR: &str = "/tmp/mister-magik/catalog-lifecycle-benchmark";
+const CATALOG_BUILD_REBUILD_REMOTE_DIR: &str =
+    "/media/fat/mister-magik-dev/catalog-benchmarks/catalog-build-rebuild";
+const CATALOG_BUILD_REBUILD_SOURCE_DIR: &str = "/tmp/mister-magik/catalog-build-rebuild-source";
+const CATALOG_BUILD_REBUILD_ARCADE_ROOT: &str = "/media/fat/_Arcade";
+const CATALOG_BUILD_REBUILD_SNES_ROOT: &str = "/media/fat/games/SNES";
+const CATALOG_BUILD_REBUILD_SAMPLES: usize = 3;
 const SYSTEM_ENTRY_TRACE_REMOTE: &str = "/tmp/mister-magik/system-entry.tsv";
 const SYSTEM_ENTRY_PROFILE_REMOTE: &str = "/tmp/mister-magik/system-entry-profile.json";
 const SYSTEM_ENTRY_PPROF_SVG_REMOTE: &str = "/tmp/mister-magik/system-entry-pprof.svg";
@@ -15108,6 +15121,172 @@ fn profile_installed_catalog_lifecycle(
     serde_json::to_string(&summary).map_err(Into::into)
 }
 
+fn profile_installed_catalog_build_rebuild(
+    config: &NativeDeviceConfig,
+    output_dir: &Path,
+) -> Result<String> {
+    let session = connect_with(&config.connection, 10)?;
+    let endpoint = config.agent()?.clone();
+    let manifest = remote_read(&session, LOCAL_MAIN_MANIFEST_REMOTE)
+        .ok_or("development platform manifest is missing")?;
+    let boot_id = remote_read(&session, "/proc/sys/kernel/random/boot_id")
+        .ok_or("device boot id is unavailable")?
+        .trim()
+        .to_string();
+    fs::create_dir_all(output_dir)?;
+
+    let run_result = (|| -> Result<Value> {
+        let mut samples = Vec::with_capacity(CATALOG_BUILD_REBUILD_SAMPLES);
+        for sample_index in 1..=CATALOG_BUILD_REBUILD_SAMPLES {
+            let sample_dir = output_dir.join(format!("sample-{sample_index}"));
+            fs::create_dir_all(&sample_dir)?;
+            exec_checked(
+                &session,
+                "prepare bounded catalog build/rebuild sample",
+                &catalog_build_rebuild_prepare_command(),
+            )?;
+            let fresh =
+                run_catalog_build_rebuild_leg(&session, &endpoint, &sample_dir, "fresh", None)?;
+            let fresh_generation = fresh
+                .pointer("/catalog/generation")
+                .and_then(Value::as_u64)
+                .ok_or("fresh catalog benchmark leg has no generation")?;
+            let fresh_snes = catalog_system_games(&fresh["catalog"], "snes")?;
+
+            exec_checked(
+                &session,
+                "mutate isolated SNES catalog delta",
+                &catalog_build_rebuild_mutation_command(),
+            )?;
+            let rebuild = run_catalog_build_rebuild_leg(
+                &session,
+                &endpoint,
+                &sample_dir,
+                "rebuild",
+                Some(fresh_generation),
+            )?;
+            let rebuild_snes = catalog_system_games(&rebuild["catalog"], "snes")?;
+            let snes_game_delta = i64::try_from(rebuild_snes)? - i64::try_from(fresh_snes)?;
+            let status = if snes_game_delta == 1
+                && fresh.pointer("/ui/qualified").and_then(Value::as_bool) == Some(true)
+                && rebuild.pointer("/ui/qualified").and_then(Value::as_bool) == Some(true)
+            {
+                "passed"
+            } else {
+                "failed"
+            };
+            samples.push(json!({
+                "sample": sample_index,
+                "status": status,
+                "fresh": fresh,
+                "rebuild": rebuild,
+                "validation": {
+                    "fresh_snes_games": fresh_snes,
+                    "rebuild_snes_games": rebuild_snes,
+                    "snes_game_delta": snes_game_delta,
+                },
+            }));
+        }
+        let mut fresh_complete = samples
+            .iter()
+            .filter_map(|sample| {
+                sample
+                    .pointer("/fresh/timing/complete_ms")
+                    .and_then(Value::as_u64)
+            })
+            .collect::<Vec<_>>();
+        let mut rebuild_complete = samples
+            .iter()
+            .filter_map(|sample| {
+                sample
+                    .pointer("/rebuild/timing/complete_ms")
+                    .and_then(Value::as_u64)
+            })
+            .collect::<Vec<_>>();
+        fresh_complete.sort_unstable();
+        rebuild_complete.sort_unstable();
+        let status = if samples
+            .iter()
+            .all(|sample| sample.get("status").and_then(Value::as_str) == Some("passed"))
+        {
+            "passed"
+        } else {
+            "failed"
+        };
+        Ok(json!({
+            "schema": "mister-magik-catalog-build-rebuild-v1",
+            "scenario": "catalog-build-rebuild",
+            "status": status,
+            "configuration": {
+                "samples": CATALOG_BUILD_REBUILD_SAMPLES,
+                "arcade_root": CATALOG_BUILD_REBUILD_ARCADE_ROOT,
+                "snes_root": CATALOG_BUILD_REBUILD_SNES_ROOT,
+                "delta_root": format!("{CATALOG_BUILD_REBUILD_SOURCE_DIR}/fixture"),
+                "catalog_root": CATALOG_BUILD_REBUILD_REMOTE_DIR,
+                "publication_filesystem": "exfat",
+            },
+            "aggregate": {
+                "fresh_complete_median_ms": median_u64(&fresh_complete),
+                "rebuild_complete_median_ms": median_u64(&rebuild_complete),
+            },
+            "samples": samples,
+            "manifest": parse_manifest_evidence(&manifest),
+            "boot_id": boot_id,
+        }))
+    })();
+
+    let restart_result = launcher_restart(
+        &session,
+        &LauncherRestartOptions {
+            clear_env: true,
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str().into(),
+            timeout_secs: CATALOG_LIFECYCLE_FIRST_VISIBLE_TIMEOUT_SECS,
+            ..LauncherRestartOptions::default()
+        },
+    );
+    let cleanup_result = exec_checked(
+        &session,
+        "clean bounded catalog build/rebuild state",
+        &catalog_build_rebuild_cleanup_command(),
+    );
+    let summary = match (run_result, cleanup_result, restart_result) {
+        (Ok(summary), Ok(()), Ok(())) => summary,
+        (Err(error), _, Ok(())) => return Err(error),
+        (Ok(_), Err(error), Ok(())) => return Err(error),
+        (Ok(_), _, Err(error)) => return Err(error),
+        (Err(run), cleanup, restart) => {
+            return Err(format!(
+                "{run}; cleanup={:?}; launcher_restore={:?}",
+                cleanup.err(),
+                restart.err()
+            )
+            .into());
+        }
+    };
+
+    drop(session);
+    let session = connect_with(&config.connection, 10)?;
+    let final_boot_id = remote_read(&session, "/proc/sys/kernel/random/boot_id")
+        .ok_or("device boot id is unavailable after catalog benchmark")?;
+    if final_boot_id.trim() != boot_id {
+        return Err("device rebooted during catalog build/rebuild benchmark".into());
+    }
+    let final_manifest = remote_read(&session, LOCAL_MAIN_MANIFEST_REMOTE)
+        .ok_or("development platform manifest is missing after catalog benchmark")?;
+    if final_manifest != manifest {
+        return Err("installed platform manifest changed during catalog benchmark".into());
+    }
+    fs::write(
+        output_dir.join("summary.json"),
+        format!("{}\n", serde_json::to_string_pretty(&summary)?),
+    )?;
+    fs::write(
+        output_dir.join("report.md"),
+        catalog_build_rebuild_report(&summary)?,
+    )?;
+    serde_json::to_string(&summary).map_err(Into::into)
+}
+
 const LAUNCH_RETURN_GATE_REMOTE: &str = "/tmp/mister-magik/launch-return-benchmark-gate";
 const LAUNCH_RETURN_STATE_REMOTE: &str = "/tmp/mister-magik/launcher-return-state.json";
 const LAUNCH_RETURN_PROFILE_REMOTE_DIR: &str = "/tmp/mister-magik/launch-return-profile";
@@ -17132,6 +17311,371 @@ fn catalog_lifecycle_launcher_env() -> Vec<(String, String)> {
             format!("{root}/diagnostics"),
         ),
     ]
+}
+
+fn catalog_build_rebuild_prepare_command() -> String {
+    let safety = platform_safety_script();
+    format!(
+        "set -eu; root={root}; source={source}; test -d {arcade}; test -d {snes}; test -r {snes}; rm -rf \"$root\" \"$source\"; mkdir -p \"$root\" \"$source/fixture/games/SNES\" \"$source/sqlite-build\" \"$source/diagnostics\"; printf '%s\\n' 'MISTER-MAGIK-CATALOG-BENCH-SNES-00000001' > \"$source/fixture/games/SNES/Synthetic SNES 00000001.sfc\"; {safety}",
+        root = sh(CATALOG_BUILD_REBUILD_REMOTE_DIR),
+        source = sh(CATALOG_BUILD_REBUILD_SOURCE_DIR),
+        arcade = sh(CATALOG_BUILD_REBUILD_ARCADE_ROOT),
+        snes = sh(CATALOG_BUILD_REBUILD_SNES_ROOT),
+        safety = safety,
+    )
+}
+
+fn catalog_build_rebuild_mutation_command() -> String {
+    format!(
+        "set -eu; path={path}; test ! -e \"$path\"; printf '%s\\n' 'MISTER-MAGIK-CATALOG-BENCH-SNES-00000002' > \"$path\"; test -s \"$path\"",
+        path = sh(&format!(
+            "{CATALOG_BUILD_REBUILD_SOURCE_DIR}/fixture/games/SNES/Synthetic SNES 00000002.sfc"
+        )),
+    )
+}
+
+fn catalog_build_rebuild_runtime_command(subcommand: &str) -> String {
+    let root = CATALOG_BUILD_REBUILD_REMOTE_DIR;
+    let source = CATALOG_BUILD_REBUILD_SOURCE_DIR;
+    format!(
+        "env MISTER_LIBRARY_ROOTS={roots} MISTER_SHARDED_CATALOG_DIR={catalog} MISTER_LIBRARY_SQLITE={library} MISTER_LIBRARY_SQLITE_BUILD_DIR={sqlite_build} MISTER_ARCADE_BOOTSTRAP_INDEX={bootstrap} MISTER_LIBRARY_REFRESH_LOCK={refresh_lock} MISTER_CATALOG_BUILDER_LOCK={builder_lock} MISTER_CATALOG_READY_SNAPSHOT={ready_snapshot} MISTER_CATALOG_DIAGNOSTICS_DIR={diagnostics} MISTER_MAGIK_FOREGROUND_LIBRARY_REFRESH=1 {gui} {subcommand}",
+        roots = sh(&format!(
+            "{CATALOG_BUILD_REBUILD_ARCADE_ROOT}|{CATALOG_BUILD_REBUILD_SNES_ROOT}|{source}/fixture"
+        )),
+        catalog = sh(&format!("{root}/catalog-v3")),
+        library = sh(&format!("{root}/library.sqlite3")),
+        sqlite_build = sh(&format!("{source}/sqlite-build")),
+        bootstrap = sh(&format!("{root}/arcade-bootstrap.nav.lz4b")),
+        refresh_lock = sh(&format!("{source}/library-refresh.lock")),
+        builder_lock = sh(&format!("{source}/catalog-builder.lock")),
+        ready_snapshot = sh(&format!("{source}/catalog-ready.snapshot")),
+        diagnostics = sh(&format!("{source}/diagnostics")),
+        gui = sh(DEVELOPMENT_GUI_REMOTE),
+    )
+}
+
+fn catalog_build_rebuild_launcher_env() -> Vec<(String, String)> {
+    let root = CATALOG_BUILD_REBUILD_REMOTE_DIR;
+    let source = CATALOG_BUILD_REBUILD_SOURCE_DIR;
+    vec![
+        ("MISTER_CATALOG_REFRESH".into(), "force".into()),
+        (
+            "MISTER_LIBRARY_ROOTS".into(),
+            format!(
+                "{CATALOG_BUILD_REBUILD_ARCADE_ROOT}|{CATALOG_BUILD_REBUILD_SNES_ROOT}|{source}/fixture"
+            ),
+        ),
+        (
+            "MISTER_SHARDED_CATALOG_DIR".into(),
+            format!("{root}/catalog-v3"),
+        ),
+        (
+            "MISTER_LIBRARY_SQLITE".into(),
+            format!("{root}/library.sqlite3"),
+        ),
+        (
+            "MISTER_LIBRARY_SQLITE_BUILD_DIR".into(),
+            format!("{source}/sqlite-build"),
+        ),
+        (
+            "MISTER_ARCADE_BOOTSTRAP_INDEX".into(),
+            format!("{root}/arcade-bootstrap.nav.lz4b"),
+        ),
+        (
+            "MISTER_LIBRARY_REFRESH_LOCK".into(),
+            format!("{source}/library-refresh.lock"),
+        ),
+        (
+            "MISTER_CATALOG_BUILDER_LOCK".into(),
+            format!("{source}/catalog-builder.lock"),
+        ),
+        (
+            "MISTER_CATALOG_READY_SNAPSHOT".into(),
+            format!("{source}/catalog-ready.snapshot"),
+        ),
+        (
+            "MISTER_CATALOG_DIAGNOSTICS_DIR".into(),
+            format!("{source}/diagnostics"),
+        ),
+        ("MISTER_LAUNCHER_START_SCREEN".into(), "arcade".into()),
+        ("MISTER_LAUNCHER_START_SYSTEM".into(), "arcade".into()),
+        (
+            "MISTER_LAUNCHER_BENCH_SCENARIO".into(),
+            "held-scroll".into(),
+        ),
+        ("MISTER_PREVIEW_ARCHIVE_WARM_SKIP".into(), "1".into()),
+    ]
+}
+
+fn run_catalog_build_rebuild_leg(
+    session: &Session,
+    endpoint: &AgentEndpoint,
+    sample_dir: &Path,
+    label: &str,
+    minimum_generation: Option<u64>,
+) -> Result<Value> {
+    let started = Instant::now();
+    restart_launcher_with_one_shot_env(
+        session,
+        LauncherRestartOptions {
+            env_vars: catalog_build_rebuild_launcher_env(),
+            timeout_secs: CATALOG_LIFECYCLE_FIRST_VISIBLE_TIMEOUT_SECS,
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str().into(),
+            ..LauncherRestartOptions::default()
+        },
+    )?;
+    let mut first_visible_ms = None;
+    let mut statuses = Vec::new();
+    let mut telemetry = Vec::new();
+    let (catalog, inspect_log, final_status) = loop {
+        let status = read_launcher_status(session)?;
+        if first_visible_ms.is_none()
+            && status.get("catalog_ready").and_then(Value::as_bool) == Some(true)
+            && status
+                .get("catalog_games")
+                .and_then(Value::as_u64)
+                .unwrap_or(0)
+                > 0
+        {
+            first_visible_ms = Some(started.elapsed().as_millis() as u64);
+        }
+        statuses.push(status.clone());
+        telemetry.extend(agent_telemetry_for_duration(
+            endpoint,
+            Duration::from_secs(1),
+        )?);
+        if first_visible_ms.is_none()
+            && started.elapsed()
+                >= Duration::from_secs(CATALOG_LIFECYCLE_FIRST_VISIBLE_TIMEOUT_SECS)
+        {
+            return Err(format!("{label} catalog did not become visible: {status}").into());
+        }
+        let inspect = exec(
+            session,
+            &catalog_build_rebuild_runtime_command("catalog-v3-inspect"),
+            true,
+        )?;
+        if exec_failure_message("catalog build/rebuild inspect", &inspect).is_none()
+            && let Ok(catalog) = parse_catalog_lifecycle_inspect(&inspect.stdout)
+            && minimum_generation.is_none_or(|generation| {
+                catalog
+                    .get("generation")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0)
+                    > generation
+            })
+            && status.get("catalog_refresh_done").and_then(Value::as_bool) == Some(true)
+        {
+            break (catalog, inspect.stdout, status);
+        }
+        if started.elapsed() >= Duration::from_secs(CATALOG_LIFECYCLE_COMPLETE_TIMEOUT_SECS) {
+            return Err(format!(
+                "{label} catalog did not complete within {} seconds; status={status}",
+                CATALOG_LIFECYCLE_COMPLETE_TIMEOUT_SECS
+            )
+            .into());
+        }
+    };
+    let complete_ms = started.elapsed().as_millis() as u64;
+    fs::write(
+        sample_dir.join(format!("{label}-catalog-inspect.tsv")),
+        inspect_log,
+    )?;
+    fs::write(
+        sample_dir.join(format!("{label}-launcher-status.json")),
+        format!("{}\n", serde_json::to_string_pretty(&final_status)?),
+    )?;
+    fs::write(
+        sample_dir.join(format!("{label}-telemetry.jsonl")),
+        format!(
+            "{}\n",
+            telemetry
+                .iter()
+                .map(serde_json::to_string)
+                .collect::<std::result::Result<Vec<_>, _>>()?
+                .join("\n")
+        ),
+    )?;
+    let ui = catalog_build_rebuild_ui_summary(&statuses, &telemetry)?;
+    Ok(json!({
+        "timing": {
+            "first_visible_ms": first_visible_ms,
+            "complete_ms": complete_ms,
+        },
+        "catalog": catalog,
+        "ui": ui,
+    }))
+}
+
+fn catalog_build_rebuild_ui_summary(statuses: &[Value], telemetry: &[Value]) -> Result<Value> {
+    let final_status = statuses.last().cloned().unwrap_or(Value::Null);
+    let physical_refresh = catalog_build_rebuild_physical_refresh(telemetry)?;
+    let repeated_vblanks = physical_refresh
+        .get("repeated_vblank_delta")
+        .and_then(Value::as_u64)
+        .unwrap_or(u64::MAX);
+    let first_latch_drops = statuses
+        .first()
+        .and_then(|status| status.get("latch_drop_count"))
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    let latch_drops = final_status
+        .get("latch_drop_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(u64::MAX)
+        .saturating_sub(first_latch_drops);
+    let selections = statuses
+        .iter()
+        .filter_map(|status| status.get("arcade_selected").and_then(Value::as_u64))
+        .collect::<BTreeSet<_>>();
+    let qualified = repeated_vblanks == 0
+        && physical_refresh
+            .get("ownership_loss_delta")
+            .and_then(Value::as_u64)
+            == Some(0)
+        && latch_drops == 0
+        && selections.len() >= 2;
+    Ok(json!({
+        "qualified": qualified,
+        "physical_refresh": physical_refresh,
+        "latch_drops": latch_drops,
+        "distinct_arcade_selections": selections.len(),
+        "status_samples": statuses.len(),
+        "frame_budget": final_status.get("frame_budget").cloned().unwrap_or(Value::Null),
+    }))
+}
+
+fn catalog_build_rebuild_physical_refresh(telemetry: &[Value]) -> Result<Value> {
+    let snapshots = telemetry
+        .iter()
+        .filter_map(parse_host_presentation_snapshot)
+        .filter(|snapshot| {
+            snapshot.magik_ownership
+                && !snapshot.pending
+                && snapshot.owned_vblank_count
+                    == snapshot
+                        .presented_vblank_count
+                        .wrapping_add(snapshot.repeated_vblank_count)
+        })
+        .collect::<Vec<_>>();
+    let start = snapshots
+        .first()
+        .copied()
+        .ok_or("catalog benchmark has no initial settled FPGA presentation snapshot")?;
+    let end = snapshots
+        .last()
+        .copied()
+        .ok_or("catalog benchmark has no final settled FPGA presentation snapshot")?;
+    let elapsed_us = end
+        .captured_monotonic_us
+        .checked_sub(start.captured_monotonic_us)
+        .filter(|elapsed| *elapsed > 0)
+        .ok_or("catalog benchmark has insufficient FPGA snapshot separation")?;
+    let mut refresh_periods = telemetry
+        .iter()
+        .filter_map(|sample| {
+            sample
+                .pointer("/launcher/vsync_period_us")
+                .and_then(Value::as_u64)
+        })
+        .filter(|period| *period > 0)
+        .collect::<Vec<_>>();
+    refresh_periods.sort_unstable();
+    let refresh_period_us = median_u64(&refresh_periods)
+        .ok_or("catalog benchmark telemetry has no physical refresh period")?;
+    let delta = mister_magik_latch_contract::validate_presentation_telemetry_window(
+        start,
+        end,
+        elapsed_us,
+        refresh_period_us,
+    )
+    .map_err(|error| format!("catalog benchmark FPGA presentation window is invalid: {error}"))?;
+    Ok(json!({
+        "schema": "mister-magik-frame-evidence-v6",
+        "source": "fpga-owned-vblank-telemetry",
+        "available": true,
+        "refresh_period_us": refresh_period_us,
+        "elapsed_us": delta.elapsed_us,
+        "owned_vblank_delta": delta.owned_vblank_delta,
+        "presented_vblank_delta": delta.presented_vblank_delta,
+        "repeated_vblank_delta": delta.repeated_vblank_delta,
+        "ownership_loss_delta": delta.ownership_loss_delta,
+        "dropped_frames": delta.repeated_vblank_delta,
+        "endpoints_settled": !start.pending && !end.pending,
+    }))
+}
+
+fn catalog_system_games(catalog: &Value, system_id: &str) -> Result<u64> {
+    catalog
+        .get("systems")
+        .and_then(Value::as_array)
+        .and_then(|systems| {
+            systems
+                .iter()
+                .find(|system| system.get("system").and_then(Value::as_str) == Some(system_id))
+        })
+        .and_then(|system| system.get("games"))
+        .and_then(Value::as_u64)
+        .ok_or_else(|| format!("catalog has no {system_id} game count").into())
+}
+
+fn catalog_build_rebuild_cleanup_command() -> String {
+    format!(
+        "set -eu; rm -rf {root} {source}; test ! -e {root}; test ! -e {source}",
+        root = sh(CATALOG_BUILD_REBUILD_REMOTE_DIR),
+        source = sh(CATALOG_BUILD_REBUILD_SOURCE_DIR),
+    )
+}
+
+fn catalog_build_rebuild_report(summary: &Value) -> Result<String> {
+    let samples = summary
+        .get("samples")
+        .and_then(Value::as_array)
+        .ok_or("catalog build/rebuild report has no samples")?;
+    let mut report = String::from("# Catalog build/rebuild benchmark\n\n");
+    report.push_str(&format!(
+        "Status: **{}**\n\n",
+        summary["status"].as_str().unwrap_or("failed")
+    ));
+    report.push_str(
+        "| Sample | Fresh first visible | Fresh complete | Rebuild complete | SNES delta |\n",
+    );
+    report.push_str("| ---: | ---: | ---: | ---: | ---: |\n");
+    for sample in samples {
+        report.push_str(&format!(
+            "| {} | {} ms | {} ms | {} ms | {} |",
+            sample["sample"].as_u64().unwrap_or(0),
+            sample
+                .pointer("/fresh/timing/first_visible_ms")
+                .and_then(Value::as_u64)
+                .unwrap_or(0),
+            sample
+                .pointer("/fresh/timing/complete_ms")
+                .and_then(Value::as_u64)
+                .unwrap_or(0),
+            sample
+                .pointer("/rebuild/timing/complete_ms")
+                .and_then(Value::as_u64)
+                .unwrap_or(0),
+            sample
+                .pointer("/validation/snes_game_delta")
+                .and_then(Value::as_i64)
+                .unwrap_or(0),
+        ));
+        report.push('\n');
+    }
+    report.push_str(&format!(
+        "\nFresh median: {} ms; rebuild median: {} ms.",
+        summary
+            .pointer("/aggregate/fresh_complete_median_ms")
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
+        summary
+            .pointer("/aggregate/rebuild_complete_median_ms")
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
+    ));
+    Ok(report)
 }
 
 const ORIENTATION_TRANSITION_REMOTE_DIR: &str = "/tmp/mister-magik/orientation-transitions";
@@ -30159,6 +30703,36 @@ H: Handlers=event3 js0"#
             key != "MISTER_LAUNCHER_INPUT_SCRIPT"
                 && key != "MISTER_LAUNCHER_INPUT_SCRIPT_WAIT_FRAMES"
         }));
+    }
+
+    #[test]
+    fn catalog_build_rebuild_roots_are_bounded_and_real() {
+        let env = catalog_build_rebuild_launcher_env();
+        let roots = env
+            .iter()
+            .find(|(key, _)| key == "MISTER_LIBRARY_ROOTS")
+            .map(|(_, value)| value.as_str())
+            .expect("bounded library roots");
+        assert_eq!(
+            roots,
+            format!(
+                "{CATALOG_BUILD_REBUILD_ARCADE_ROOT}|{CATALOG_BUILD_REBUILD_SNES_ROOT}|{CATALOG_BUILD_REBUILD_SOURCE_DIR}/fixture"
+            )
+        );
+        assert!(!roots.split('|').any(|root| root == "/media/fat/games"));
+        assert!(env.iter().any(|(key, value)| {
+            key == "MISTER_SHARDED_CATALOG_DIR"
+                && value.starts_with(CATALOG_BUILD_REBUILD_REMOTE_DIR)
+        }));
+        let prepare = catalog_build_rebuild_prepare_command();
+        assert!(prepare.contains(CATALOG_BUILD_REBUILD_ARCADE_ROOT));
+        assert!(prepare.contains(CATALOG_BUILD_REBUILD_SNES_ROOT));
+        assert!(prepare.contains("Synthetic SNES 00000001.sfc"));
+        let mutation = catalog_build_rebuild_mutation_command();
+        assert!(mutation.contains("Synthetic SNES 00000002.sfc"));
+        let cleanup = catalog_build_rebuild_cleanup_command();
+        assert!(cleanup.contains(CATALOG_BUILD_REBUILD_REMOTE_DIR));
+        assert!(cleanup.contains(CATALOG_BUILD_REBUILD_SOURCE_DIR));
     }
 
     #[test]
