@@ -317,7 +317,7 @@ impl<'a> LayerTarget<'a> {
                 ))
                 .is_some()
             });
-        if let Some(worker) = worker {
+        if let Some(worker) = worker.filter(|worker| worker.available()) {
             let raw_dirty = preview.take_raw_dirty();
             let snapshot = preview.owned_raw_transition_frame();
             let borrowed = snapshot.as_ref().map(|frame| frame.borrowed());
@@ -355,19 +355,30 @@ impl<'a> LayerTarget<'a> {
                         )
                     }
                 };
-                let rect = adopted.then_some(result.rect);
                 worker.recycle(result.pixels);
-                return (
-                    rect.map(RawPreviewPresent::Direct),
-                    trace,
-                    false,
-                    Some(worker.telemetry(key.generation)),
-                );
+                if adopted {
+                    return (
+                        Some(RawPreviewPresent::Direct(result.rect)),
+                        trace,
+                        false,
+                        Some(worker.telemetry(key.generation)),
+                    );
+                }
+                worker.note_adoption_failed(key);
+                let queued = worker.queue(PreviewCompositionRequest::new(
+                    key,
+                    snapshot,
+                    trace.effect,
+                    trace.progress,
+                    trace.active,
+                ));
+                return (None, trace, queued, Some(worker.telemetry(key.generation)));
             }
             let needs_work = raw_dirty
                 || slint_touched_preview
                 || trace.active
-                || preview.presentation_requires_present();
+                || preview.presentation_requires_present()
+                || worker.needs_retry(key);
             if needs_work {
                 worker.queue(PreviewCompositionRequest::new(
                     key,

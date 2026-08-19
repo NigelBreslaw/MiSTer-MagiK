@@ -10306,6 +10306,17 @@ pub(super) fn run_launcher_loop(
                 .as_ref()
                 .map(|telemetry| telemetry.affinity_status)
                 .unwrap_or("inactive"),
+            portrait_preview_worker_errors: preview_compositor_telemetry
+                .as_ref()
+                .map(|telemetry| telemetry.worker_errors)
+                .unwrap_or(0),
+            portrait_preview_worker_adoption_failures: preview_compositor_telemetry
+                .as_ref()
+                .map(|telemetry| telemetry.adoption_failures)
+                .unwrap_or(0),
+            portrait_preview_worker_alive: preview_compositor_telemetry
+                .as_ref()
+                .is_some_and(|telemetry| telemetry.worker_alive),
             crt_backdrop_prepare_us: crt_backdrop_work_trace.prepare_us,
             crt_backdrop_prepare_pixels: crt_backdrop_work_trace.prepare_pixels,
             crt_backdrop_blend_us: crt_backdrop_work_trace.blend_us,

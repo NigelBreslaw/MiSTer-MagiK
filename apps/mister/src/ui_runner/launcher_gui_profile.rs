@@ -729,6 +729,11 @@ impl GuiProfilingController {
             json!(custom_draw.portrait_preview_worker_generation_lag);
         record["portrait_preview_worker_affinity_status"] =
             json!(custom_draw.portrait_preview_worker_affinity_status);
+        record["portrait_preview_worker_errors"] =
+            json!(custom_draw.portrait_preview_worker_errors);
+        record["portrait_preview_worker_adoption_failures"] =
+            json!(custom_draw.portrait_preview_worker_adoption_failures);
+        record["portrait_preview_worker_alive"] = json!(custom_draw.portrait_preview_worker_alive);
         record["physical_layers"] = json!({
             "arcade": {
                 "pixels": custom_draw.portrait_arcade_list_pixels,

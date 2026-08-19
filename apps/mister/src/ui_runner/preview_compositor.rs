@@ -12,6 +12,7 @@ use mister_magik_catalog::runtime_thread::{
 use mister_magik_framebuffer_scenes::{
     OutputRotation, Rgb565OutputLayout, Rgb565Rect, Rgb565SurfaceMut,
 };
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::JoinHandle;
 
@@ -66,6 +67,9 @@ pub(super) struct PreviewCompositorTelemetry {
     pub(super) worker_age_us: u64,
     pub(super) generation_lag: u64,
     pub(super) affinity_status: &'static str,
+    pub(super) worker_errors: u64,
+    pub(super) adoption_failures: u64,
+    pub(super) worker_alive: bool,
 }
 
 #[derive(Default)]
@@ -79,6 +83,12 @@ struct WorkerState {
     stale_results: u64,
     latest_age_us: u64,
     affinity: Option<RuntimeThreadPolicyReport>,
+    failed_key: Option<PreviewCompositionWorkKey>,
+    worker_errors: u64,
+    adoption_failures: u64,
+    consecutive_failures: u8,
+    worker_alive: bool,
+    disabled: bool,
 }
 
 struct SharedWorker {
@@ -101,7 +111,20 @@ impl PreviewCompositor {
         let worker_shared = Arc::clone(&shared);
         let thread = std::thread::Builder::new()
             .name("preview-compositor".to_string())
-            .spawn(move || run_worker(worker_shared))
+            .spawn(move || {
+                let panicked =
+                    catch_unwind(AssertUnwindSafe(|| run_worker(Arc::clone(&worker_shared))))
+                        .is_err();
+                let mut state = worker_shared
+                    .state
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner());
+                state.worker_alive = false;
+                if panicked {
+                    state.worker_errors = state.worker_errors.saturating_add(1);
+                    state.disabled = true;
+                }
+            })
             .map_err(|error| format!("start preview compositor: {error}"))?;
         Ok(Self {
             shared,
@@ -110,15 +133,23 @@ impl PreviewCompositor {
         })
     }
 
-    pub(super) fn queue(&mut self, request: PreviewCompositionRequest) {
-        if self.last_submitted == Some(request.key) {
-            return;
+    pub(super) fn queue(&mut self, request: PreviewCompositionRequest) -> bool {
+        let mut state = self.shared.state.lock().unwrap_or_else(|e| e.into_inner());
+        if state.disabled || !state.worker_alive {
+            return false;
+        }
+        let retry = state.failed_key == Some(request.key);
+        if self.last_submitted == Some(request.key) && !retry {
+            return false;
+        }
+        if retry {
+            state.failed_key = None;
         }
         self.last_submitted = Some(request.key);
-        let mut state = self.shared.state.lock().unwrap_or_else(|e| e.into_inner());
         if state.request.replace(request).is_some() {
             state.queue_replacements = state.queue_replacements.saturating_add(1);
         }
+        true
     }
 
     pub(super) fn release_queued(&self) {
@@ -146,6 +177,27 @@ impl PreviewCompositor {
         }
     }
 
+    pub(super) fn available(&self) -> bool {
+        let state = self.shared.state.lock().unwrap_or_else(|e| e.into_inner());
+        state.worker_alive && !state.disabled
+    }
+
+    pub(super) fn needs_retry(&self, key: PreviewCompositionWorkKey) -> bool {
+        let state = self.shared.state.lock().unwrap_or_else(|e| e.into_inner());
+        state.failed_key == Some(key)
+    }
+
+    pub(super) fn note_adoption_failed(&mut self, key: PreviewCompositionWorkKey) {
+        self.last_submitted = None;
+        let mut state = self.shared.state.lock().unwrap_or_else(|e| e.into_inner());
+        state.failed_key = Some(key);
+        state.adoption_failures = state.adoption_failures.saturating_add(1);
+        state.consecutive_failures = state.consecutive_failures.saturating_add(1);
+        if state.consecutive_failures >= 3 {
+            state.disabled = true;
+        }
+    }
+
     pub(super) fn telemetry(&self, current_generation: u64) -> PreviewCompositorTelemetry {
         let state = self.shared.state.lock().unwrap_or_else(|e| e.into_inner());
         let pending_generation = state
@@ -165,6 +217,9 @@ impl PreviewCompositor {
                 .as_ref()
                 .map(|report| report.affinity_status)
                 .unwrap_or("pending"),
+            worker_errors: state.worker_errors,
+            adoption_failures: state.adoption_failures,
+            worker_alive: state.worker_alive && !state.disabled,
         }
     }
 }
@@ -187,6 +242,7 @@ fn run_worker(shared: Arc<SharedWorker>) {
     {
         let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
         state.affinity = Some(affinity);
+        state.worker_alive = true;
     }
     let mut logical = Vec::new();
     loop {
@@ -203,17 +259,31 @@ fn run_worker(shared: Arc<SharedWorker>) {
                 state.recycled.pop().unwrap_or_default(),
             )
         };
+        let key = request.key;
         let result = compose_request(request, &mut logical, &mut physical);
         let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
         match result {
             Ok(result) => {
+                state.failed_key = None;
+                state.consecutive_failures = 0;
                 state.latest_age_us = result.age_us;
                 if let Some(replaced) = state.result.replace(result) {
                     state.result_replacements = state.result_replacements.saturating_add(1);
                     state.recycled.push(replaced.pixels);
                 }
             }
-            Err(error) => crate::ui_errln!("preview_compositor_failed: {error}"),
+            Err(error) => {
+                state.failed_key = Some(key);
+                state.worker_errors = state.worker_errors.saturating_add(1);
+                state.consecutive_failures = state.consecutive_failures.saturating_add(1);
+                if state.recycled.len() < 2 {
+                    state.recycled.push(physical);
+                }
+                if state.consecutive_failures >= 3 {
+                    state.disabled = true;
+                }
+                crate::ui_errln!("preview_compositor_failed: {error}");
+            }
         }
     }
 }
@@ -360,8 +430,12 @@ mod tests {
 
     #[test]
     fn latest_request_replaces_unstarted_work() {
+        let state = WorkerState {
+            worker_alive: true,
+            ..WorkerState::default()
+        };
         let shared = Arc::new(SharedWorker {
-            state: Mutex::new(WorkerState::default()),
+            state: Mutex::new(state),
             ready: Condvar::new(),
         });
         let key = |generation| PreviewCompositionWorkKey {
@@ -388,23 +462,74 @@ mod tests {
             last_submitted: None,
         };
         let mut compositor = compositor;
-        compositor.queue(PreviewCompositionRequest::new(
+        assert!(compositor.queue(PreviewCompositionRequest::new(
             key(1),
             frame.clone(),
             PreviewTransitionEffect::Fade,
             1.0,
             false,
-        ));
-        compositor.queue(PreviewCompositionRequest::new(
+        )));
+        assert!(compositor.queue(PreviewCompositionRequest::new(
             key(2),
             frame,
             PreviewTransitionEffect::Fade,
             1.0,
             false,
-        ));
+        )));
         let state = compositor.shared.state.lock().unwrap();
         assert_eq!(state.queue_replacements, 1);
         assert_eq!(state.request.as_ref().unwrap().key.generation, 2);
+    }
+
+    #[test]
+    fn failed_key_can_be_submitted_again() {
+        let state = WorkerState {
+            worker_alive: true,
+            ..WorkerState::default()
+        };
+        let shared = Arc::new(SharedWorker {
+            state: Mutex::new(state),
+            ready: Condvar::new(),
+        });
+        let mut compositor = PreviewCompositor {
+            shared,
+            thread: None,
+            last_submitted: None,
+        };
+        let key = PreviewCompositionWorkKey {
+            layout: Rgb565OutputLayout::new(4, 3, 4, OutputRotation::None).unwrap(),
+            generation: 3,
+            token: 5,
+        };
+        let request = || {
+            PreviewCompositionRequest::new(
+                key,
+                OwnedPreviewRawTransitionFrame {
+                    previous: None,
+                    current: OwnedPreviewRawFrame::empty(),
+                    transition_id: 1,
+                    duration_numerator: 1,
+                    duration_denominator: 1,
+                },
+                PreviewTransitionEffect::Fade,
+                1.0,
+                false,
+            )
+        };
+
+        assert!(compositor.queue(request()));
+        {
+            let mut state = compositor.shared.state.lock().unwrap();
+            state.request = None;
+            state.failed_key = Some(key);
+            state.worker_errors = 1;
+        }
+
+        assert!(compositor.needs_retry(key));
+        assert!(compositor.queue(request()));
+        let state = compositor.shared.state.lock().unwrap();
+        assert_eq!(state.request.as_ref().map(|request| request.key), Some(key));
+        assert_eq!(state.worker_errors, 1);
     }
 
     #[test]
