@@ -369,6 +369,7 @@ pub(crate) fn populate(
             .players
             .map(crate::arcade_catalog::player_count_label)
             .unwrap_or_default();
+        let autocomplete_players = normalize_search_text(&players);
         let year = game.year.map(|year| year.to_string()).unwrap_or_default();
         let decade = game
             .year
@@ -394,32 +395,22 @@ pub(crate) fn populate(
             ])
             .map_err(|error| PersistedSearchError::with("insert search row", error))?;
 
-        add_words(&mut words, &game.title, AutocompleteSource::Title);
-        add_words(&mut words, &game.manufacturer, AutocompleteSource::Metadata);
-        add_words(
-            &mut words,
-            &crate::arcade_catalog::canonical_control_label(&game.control),
-            AutocompleteSource::Metadata,
-        );
-        if let Some(players) = game.players {
-            add_word(
+        add_normalized_words(&mut words, &title, AutocompleteSource::Title);
+        add_normalized_words(&mut words, &manufacturer, AutocompleteSource::Metadata);
+        add_normalized_words(&mut words, &control, AutocompleteSource::Metadata);
+        if !autocomplete_players.is_empty() {
+            add_normalized_word(
                 &mut words,
-                &crate::arcade_catalog::player_count_label(players),
+                &autocomplete_players,
                 AutocompleteSource::Metadata,
             );
         }
-        add_words(
-            &mut words,
-            game_basename(&game.launch_ref),
-            AutocompleteSource::Path,
-        );
-        if let Some(year) = game.year {
-            add_word(&mut words, &year.to_string(), AutocompleteSource::Metadata);
-            add_word(
-                &mut words,
-                &format!("{}0s", year / 10),
-                AutocompleteSource::Metadata,
-            );
+        add_normalized_words(&mut words, &path, AutocompleteSource::Path);
+        if !year.is_empty() {
+            add_normalized_word(&mut words, &year, AutocompleteSource::Metadata);
+        }
+        if !decade.is_empty() {
+            add_normalized_word(&mut words, &decade, AutocompleteSource::Metadata);
         }
     }
     drop(insert_search);
@@ -602,24 +593,23 @@ struct AutocompleteStats {
 }
 
 #[cfg(feature = "builder")]
-fn add_words(
+fn add_normalized_words(
     words: &mut std::collections::BTreeMap<String, AutocompleteStats>,
-    value: &str,
+    normalized: &str,
     source: AutocompleteSource,
 ) {
-    for word in normalize_search_text(value).split_whitespace() {
-        add_word(words, word, source);
+    for word in normalized.split_whitespace() {
+        add_normalized_word(words, word, source);
     }
 }
 
 #[cfg(feature = "builder")]
-fn add_word(
+fn add_normalized_word(
     words: &mut std::collections::BTreeMap<String, AutocompleteStats>,
-    value: &str,
+    normalized: &str,
     source: AutocompleteSource,
 ) {
-    let word = normalize_search_text(value);
-    if word.len() < 2 || is_noisy_autocomplete_word(&word) {
+    if normalized.len() < 2 || is_noisy_autocomplete_word(normalized) {
         return;
     }
     let (score, source_rank) = match source {
@@ -627,7 +617,7 @@ fn add_word(
         AutocompleteSource::Metadata => (4, 2),
         AutocompleteSource::Path => (1, 1),
     };
-    let stats = words.entry(word).or_default();
+    let stats = words.entry(normalized.to_string()).or_default();
     stats.score += score;
     stats.source_rank = stats.source_rank.max(source_rank);
 }
