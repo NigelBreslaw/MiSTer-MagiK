@@ -16366,8 +16366,23 @@ fn profile_catalog_attribution_report(output_dir: &Path) -> Result<String> {
     let mut fingerprints = BTreeSet::new();
     let mut measurements = Vec::new();
     let mut artifact_manifest = Vec::new();
+    let mut negative_results = Vec::new();
+    let mut control_fingerprint = None::<String>;
+    let mut required_arms_complete = true;
     for (arm, scenario) in ARMS {
-        let (run_dir, summary) = latest_catalog_attribution_arm(benchmark_root, scenario, arm)?;
+        let Some((run_dir, summary)) =
+            latest_catalog_attribution_arm(benchmark_root, scenario, arm)?
+        else {
+            arms.insert(arm.to_owned(), json!({"status": "unavailable"}));
+            negative_results.push(json!({
+                "arm": arm,
+                "result": "no-completed-summary",
+            }));
+            if matches!(arm, "control" | "pmu" | "storage" | "streamline") {
+                required_arms_complete = false;
+            }
+            continue;
+        };
         let revision = summary
             .pointer("/manifest/magik_revision")
             .and_then(Value::as_str)
@@ -16378,6 +16393,25 @@ fn profile_catalog_attribution_report(output_dir: &Path) -> Result<String> {
             .ok_or_else(|| format!("catalog {arm} summary has no logical fingerprint"))?;
         revisions.insert(revision.to_owned());
         fingerprints.insert(fingerprint.to_owned());
+        if arm == "control" {
+            control_fingerprint = Some(fingerprint.to_owned());
+        }
+        let matches_control = control_fingerprint.as_deref() == Some(fingerprint);
+        let arm_passed = summary.get("status").and_then(Value::as_str) == Some("passed");
+        if !arm_passed || !matches_control {
+            negative_results.push(json!({
+                "arm": arm,
+                "result": if !arm_passed { "arm-failed" } else { "catalog-fingerprint-mismatch" },
+                "arm_status": summary.get("status"),
+                "logical_fingerprint": fingerprint,
+                "control_fingerprint": control_fingerprint,
+            }));
+        }
+        if matches!(arm, "control" | "pmu" | "storage" | "streamline")
+            && (!arm_passed || !matches_control)
+        {
+            required_arms_complete = false;
+        }
         measurements.extend(normalized_catalog_attribution_measurements(arm, &summary));
         let artifacts = catalog_attribution_artifact_manifest(benchmark_root, &run_dir)?;
         artifact_manifest.extend(artifacts.iter().cloned());
@@ -16394,13 +16428,15 @@ fn profile_catalog_attribution_report(output_dir: &Path) -> Result<String> {
                 "boot_id": summary.get("boot_id"),
                 "manifest": summary.get("manifest"),
                 "logical_fingerprint": fingerprint,
+                "status": summary.get("status"),
+                "matches_control_fingerprint": matches_control,
                 "artifact_count": artifacts.len(),
             }),
         );
     }
     let consistent_revision = revisions.len() == 1;
     let consistent_catalog = fingerprints.len() == 1;
-    let status = if consistent_revision && consistent_catalog {
+    let status = if consistent_revision && required_arms_complete {
         "passed"
     } else {
         "failed"
@@ -16420,13 +16456,14 @@ fn profile_catalog_attribution_report(output_dir: &Path) -> Result<String> {
         "invariants": {
             "one_magik_revision": consistent_revision,
             "one_logical_catalog": consistent_catalog,
+            "required_exact_arms_complete": required_arms_complete,
             "magik_revisions": revisions,
             "logical_fingerprints": fingerprints,
         },
         "arms": arms,
         "normalized_measurements": measurements,
         "artifact_manifest": artifact_manifest,
-        "negative_result_ledger": [],
+        "negative_result_ledger": negative_results,
     });
     fs::write(
         output_dir.join("summary.json"),
@@ -16447,9 +16484,12 @@ fn latest_catalog_attribution_arm(
     benchmark_root: &Path,
     scenario: &str,
     expected_arm: &str,
-) -> Result<(PathBuf, Value)> {
+) -> Result<Option<(PathBuf, Value)>> {
     let scenario_dir = benchmark_root.join(scenario);
-    let mut runs = fs::read_dir(&scenario_dir)?
+    let Ok(entries) = fs::read_dir(&scenario_dir) else {
+        return Ok(None);
+    };
+    let mut runs = entries
         .filter_map(std::result::Result::ok)
         .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
         .collect::<Vec<_>>();
@@ -16465,12 +16505,11 @@ fn latest_catalog_attribution_arm(
         if summary.get("schema").and_then(Value::as_str)
             == Some("mister-magik-catalog-attribution-arm-v1")
             && summary.get("arm").and_then(Value::as_str) == Some(expected_arm)
-            && summary.get("status").and_then(Value::as_str) == Some("passed")
         {
-            return Ok((run.path(), summary));
+            return Ok(Some((run.path(), summary)));
         }
     }
-    Err(format!("no passing {expected_arm} catalog attribution run exists").into())
+    Ok(None)
 }
 
 fn normalized_catalog_attribution_measurements(arm: &str, summary: &Value) -> Vec<Value> {
@@ -16571,6 +16610,16 @@ fn catalog_attribution_evidence_report(summary: &Value) -> Result<String> {
             .map(Vec::len)
             .unwrap_or(0)
     )?;
+    if let Some(negative) = summary
+        .get("negative_result_ledger")
+        .and_then(Value::as_array)
+        && !negative.is_empty()
+    {
+        writeln!(report, "\n## Negative results\n")?;
+        for result in negative {
+            writeln!(report, "- `{}`", result)?;
+        }
+    }
     Ok(report)
 }
 
