@@ -1,0 +1,93 @@
+{
+  "schema": "mister-magik-catalog-optimization-evidence-v1",
+  "recorded_at": "2026-08-20",
+  "qualified_revision": "dd6e5136884ff47143a2ce75accaf3d757904e67",
+  "workload": {
+    "scenario": "catalog-full-build-rebuild",
+    "source_policy": "normal configured library sources",
+    "publication_filesystem": "exfat",
+    "systems": 69,
+    "games": 39791,
+    "logical_fingerprint": "57c8be72c0fa0277eb654221f919428d3f2f2be4e64ea00d78ae500081665cc5",
+    "page_cache_policy": "unchanged"
+  },
+  "qualified_result": {
+    "status": "passed",
+    "first_observed_clean_wall_ms": 231120,
+    "warm_clean_wall_ms": 247302,
+    "forced_rebuild_wall_ms": 116592,
+    "first_observed_clean_builder_us": 165758547,
+    "warm_clean_builder_us": 167083166,
+    "forced_rebuild_builder_us": 98882887,
+    "first_observed_arcade_visible_ms": 26414,
+    "warm_arcade_visible_ms": 25534,
+    "rebuild_arcade_visible_ms": 2289,
+    "catalog_fingerprints_identical": true,
+    "phase_evidence_complete": true
+  },
+  "reference_result": {
+    "revision_relation": "pre-campaign qualified whole-card result",
+    "fresh_wall_ms": 272112,
+    "forced_rebuild_wall_ms": 169457,
+    "systems": 69,
+    "games": 39791,
+    "catalog_counts_identical": true
+  },
+  "qualified_phase_facts": {
+    "fresh_shard_workers": 2,
+    "fresh_pipeline_overlap_us": 18600717,
+    "fresh_artifact_publish_bytes": 73313125,
+    "fresh_artifact_copy_hash_us": 24802335,
+    "warm_shard_workers": 2,
+    "warm_pipeline_overlap_us": 19354006,
+    "rebuild_resume_enabled": false,
+    "rebuild_scan_us": 65149944,
+    "rebuild_prepare_wall_us": 17450805,
+    "rebuild_projection_us": 7625066,
+    "rebuild_scanner_cache_us": 5267757
+  },
+  "negative_results": [
+    {
+      "revision": "29486b15c45ff47d5b0aa7c16aa314ce78b28a53",
+      "result": "target-output replay rejected for rebuilds",
+      "forced_rebuild_wall_ms": 204644,
+      "forced_rebuild_builder_us": 191047799,
+      "resume_open_us": 123064665,
+      "resume_validation_us": 38874018,
+      "reused_targets": 159,
+      "reason": "cache open and decode cost exceeded the execution walk it replaced"
+    },
+    {
+      "revision": "c79f7ddc82ebc7abc224a43ea9a97b51c8d541fd",
+      "result": "fresh pipeline was inactive",
+      "fresh_shard_workers": 1,
+      "reason": "an open durable journal incorrectly disabled the pipeline"
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "build/agent-benchmarks/catalog-full-build-rebuild/1787178482/summary.json",
+      "sha256": "37f8c9cc01c26b549b4057794e7d3e904c04330455f57a415e8c9223b972fa0c"
+    },
+    {
+      "path": "build/agent-benchmarks/catalog-full-build-rebuild/1787178482/report.md",
+      "sha256": "850fb7347696c0e4e82036a9211a3b2f1096e54ba2a18cf3fea5e049e73ddd79"
+    },
+    {
+      "path": "build/agent-benchmarks/catalog-full-build-rebuild/1787178482/fresh-launcher.log",
+      "sha256": "87f8d16e3f53ecfd1c936ac747513520ab400b799ac2270f09faaa69b1a9a0b6"
+    },
+    {
+      "path": "build/agent-benchmarks/catalog-full-build-rebuild/1787178482/warm-clean-launcher.log",
+      "sha256": "57fb85bfd8801ce538d52e6189998af62ea82f544422f2164490f45c8046e244"
+    },
+    {
+      "path": "build/agent-benchmarks/catalog-full-build-rebuild/1787178482/rebuild-launcher.log",
+      "sha256": "dbcff68e67e566908eb1bac669e4d97f80acf46e23eb293817f4cd161e07df95"
+    },
+    {
+      "path": "build/agent-benchmarks/catalog-full-build-rebuild/1787160204/summary.json",
+      "sha256": "0c53fe6906350eea9b328a691b704e32658019eb258703ecdeb8eb761dbc68f7"
+    }
+  ]
+}
