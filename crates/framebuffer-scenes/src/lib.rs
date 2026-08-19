@@ -283,6 +283,11 @@ impl Rgb565RegionLayout {
     }
 
     #[must_use]
+    pub const fn is_empty(self) -> bool {
+        self.len() == 0
+    }
+
+    #[must_use]
     pub const fn allocated_bytes(self) -> usize {
         self.len().saturating_mul(size_of::<Rgb565Pixel>())
     }
@@ -534,19 +539,33 @@ fn rgb565_neon_enabled() -> bool {
     })
 }
 
-#[cfg(all(target_os = "linux", target_arch = "arm"))]
-fn copy_rotated_rgb565_neon<P: Copy>(
-    destination: &mut [P],
-    layout: Rgb565OutputLayout,
+#[derive(Clone, Copy)]
+struct RotatedCopySpec {
     destination_x: usize,
     destination_y: usize,
     width: usize,
     height: usize,
-    source: &[P],
     source_stride: usize,
     source_x: usize,
     source_y: usize,
+}
+
+#[cfg(all(target_os = "linux", target_arch = "arm"))]
+fn copy_rotated_rgb565_neon<P: Copy>(
+    destination: &mut [P],
+    layout: Rgb565OutputLayout,
+    source: &[P],
+    spec: RotatedCopySpec,
 ) -> bool {
+    let RotatedCopySpec {
+        destination_x,
+        destination_y,
+        width,
+        height,
+        source_stride,
+        source_x,
+        source_y,
+    } = spec;
     if !rgb565_neon_enabled()
         || size_of::<P>() != size_of::<u16>()
         || align_of::<P>() < align_of::<u16>()
@@ -627,14 +646,8 @@ fn copy_rotated_rgb565_neon<P: Copy>(
 fn copy_rotated_rgb565_neon<P: Copy>(
     _destination: &mut [P],
     _layout: Rgb565OutputLayout,
-    _destination_x: usize,
-    _destination_y: usize,
-    _width: usize,
-    _height: usize,
     _source: &[P],
-    _source_stride: usize,
-    _source_x: usize,
-    _source_y: usize,
+    _spec: RotatedCopySpec,
 ) -> bool {
     false
 }
@@ -655,14 +668,16 @@ fn copy_rotated_rgb565_tiled<P: Copy>(
     if copy_rotated_rgb565_neon(
         destination,
         layout,
-        destination_x,
-        destination_y,
-        width,
-        height,
         source,
-        source_stride,
-        source_x,
-        source_y,
+        RotatedCopySpec {
+            destination_x,
+            destination_y,
+            width,
+            height,
+            source_stride,
+            source_x,
+            source_y,
+        },
     ) {
         return;
     }
@@ -1302,15 +1317,18 @@ mod tests {
     fn reference_copy(
         destination: &mut [Rgb565Pixel],
         layout: Rgb565OutputLayout,
-        destination_x: usize,
-        destination_y: usize,
-        width: usize,
-        height: usize,
         source: &[Rgb565Pixel],
-        source_stride: usize,
-        source_x: usize,
-        source_y: usize,
+        spec: RotatedCopySpec,
     ) -> bool {
+        let RotatedCopySpec {
+            destination_x,
+            destination_y,
+            width,
+            height,
+            source_stride,
+            source_x,
+            source_y,
+        } = spec;
         if width == 0 || height == 0 {
             return true;
         }
@@ -1360,14 +1378,16 @@ mod tests {
                 assert!(reference_copy(
                     &mut expected,
                     layout,
-                    x,
-                    y,
-                    width,
-                    height,
                     &source,
-                    source_stride,
-                    2,
-                    1,
+                    RotatedCopySpec {
+                        destination_x: x,
+                        destination_y: y,
+                        width,
+                        height,
+                        source_stride,
+                        source_x: 2,
+                        source_y: 1,
+                    },
                 ));
                 let mut surface = Rgb565SurfaceMut::new(&mut optimized, layout).unwrap();
                 assert!(surface.copy_rect_strided(
@@ -1403,14 +1423,16 @@ mod tests {
         assert!(reference_copy(
             &mut expected,
             layout,
-            3,
-            1,
-            2,
-            2,
             &source,
-            8,
-            4,
-            2,
+            RotatedCopySpec {
+                destination_x: 3,
+                destination_y: 1,
+                width: 2,
+                height: 2,
+                source_stride: 8,
+                source_x: 4,
+                source_y: 2,
+            },
         ));
         assert_eq!(optimized, expected);
 
@@ -1433,14 +1455,16 @@ mod tests {
         assert!(reference_copy(
             &mut expected,
             layout,
-            1,
-            1,
-            3,
-            2,
             &original,
-            7,
-            0,
-            0,
+            RotatedCopySpec {
+                destination_x: 1,
+                destination_y: 1,
+                width: 3,
+                height: 2,
+                source_stride: 7,
+                source_x: 0,
+                source_y: 0,
+            },
         ));
 
         let source = unsafe { std::slice::from_raw_parts(storage.as_ptr(), storage.len()) };
@@ -1460,7 +1484,18 @@ mod tests {
         let mut neon = scalar.clone();
         copy_rotated_rgb565_scalar(&mut scalar, layout, 2, 1, 9, 7, &source, 19, 3, 4);
         assert!(copy_rotated_rgb565_neon(
-            &mut neon, layout, 2, 1, 9, 7, &source, 19, 3, 4,
+            &mut neon,
+            layout,
+            &source,
+            RotatedCopySpec {
+                destination_x: 2,
+                destination_y: 1,
+                width: 9,
+                height: 7,
+                source_stride: 19,
+                source_x: 3,
+                source_y: 4,
+            },
         ));
         assert_eq!(neon, scalar);
     }
