@@ -2177,18 +2177,29 @@ impl ArcadeListRenderer {
             || backdrop.len() < output.len()
             || damage_words_per_row == 0
             || damage.len() < viewport.height().saturating_mul(damage_words_per_row)
+            || viewport.x0 != self.geometry.x
+            || viewport.y0 != self.geometry.y
+            || viewport.width() != self.width
+            || viewport.height() != self.visible_height
         {
             return (0, 0);
         }
         let mut restored = 0_u32;
         let mut foreground = 0_u32;
+        let selection_y = self.selection_y();
+        let selection_bottom = selection_y + self.style.row_height.max(1) as usize;
+        let offset_step = match output.rotation() {
+            OutputRotation::None => 1,
+            OutputRotation::Clockwise90 => output.physical_stride() as isize,
+            OutputRotation::CounterClockwise90 => -(output.physical_stride() as isize),
+        };
         for viewport_y in 0..viewport.height() {
             let logical_y = viewport.y0 + viewport_y;
-            let offset_step = match output.rotation() {
-                OutputRotation::None => 1,
-                OutputRotation::Clockwise90 => output.physical_stride() as isize,
-                OutputRotation::CounterClockwise90 => -(output.physical_stride() as isize),
-            };
+            let source_y = (self.surface_y + viewport_y) % self.visible_height;
+            let source_base = source_y * self.width;
+            let selected = viewport_y >= selection_y && viewport_y < selection_bottom;
+            let selected_text_runs = &self.surface_selected_text_runs[source_y];
+            let mut selected_text_run = 0_usize;
             for word_x in 0..damage_words_per_row {
                 let mut pending = damage[viewport_y * damage_words_per_row + word_x];
                 while pending != 0 {
@@ -2198,13 +2209,32 @@ impl ArcadeListRenderer {
                     if local_x >= viewport.width() {
                         continue;
                     }
-                    let logical_x = viewport.x0 + local_x;
                     let physical_offset = (output
                         .physical_offset(viewport.x0 + word_x * u64::BITS as usize, logical_y)
                         as isize
                         + bit as isize * offset_step)
                         as usize;
-                    let desired = self.crt_overlay_pixel(logical_x, logical_y);
+                    let source_pixel = self.surface[source_base + local_x];
+                    let desired = if selected && self.style.crt_palette {
+                        while selected_text_run < selected_text_runs.len()
+                            && selected_text_runs[selected_text_run].1 <= local_x
+                        {
+                            selected_text_run += 1;
+                        }
+                        let is_text = selected_text_runs
+                            .get(selected_text_run)
+                            .is_some_and(|&(x0, x1)| local_x >= x0 && local_x < x1);
+                        Some(if is_text {
+                            self.style.selection_text_565
+                        } else {
+                            self.style.selection_fill_565
+                        })
+                    } else if selected {
+                        Some(selected_aperture_pixel_with_style(source_pixel, self.style))
+                    } else {
+                        (!is_arcade_unselected_overlay_fill_pixel(source_pixel, self.style))
+                            .then_some(source_pixel)
+                    };
                     let pixel = desired.unwrap_or(backdrop[physical_offset]);
                     if destination[physical_offset] == pixel {
                         continue;
@@ -2219,33 +2249,6 @@ impl ArcadeListRenderer {
             }
         }
         (restored, foreground)
-    }
-
-    fn crt_overlay_pixel(&self, logical_x: usize, logical_y: usize) -> Option<Rgb565Pixel> {
-        let local_x = logical_x.checked_sub(self.geometry.x)?;
-        let viewport_y = logical_y.checked_sub(self.geometry.y)?;
-        if local_x >= self.width || viewport_y >= self.visible_height {
-            return None;
-        }
-        let source_y = (self.surface_y + viewport_y) % self.visible_height;
-        let source_pixel = self.surface[source_y * self.width + local_x];
-        let selection_y = self.selection_y();
-        let selected = viewport_y >= selection_y
-            && viewport_y < selection_y + self.style.row_height.max(1) as usize;
-        if selected && self.style.crt_palette {
-            let is_text = self.surface_selected_text_runs[source_y]
-                .iter()
-                .any(|&(x0, x1)| local_x >= x0 && local_x < x1);
-            return Some(if is_text {
-                self.style.selection_text_565
-            } else {
-                self.style.selection_fill_565
-            });
-        }
-        if selected {
-            return Some(selected_aperture_pixel_with_style(source_pixel, self.style));
-        }
-        (!is_arcade_unselected_overlay_fill_pixel(source_pixel, self.style)).then_some(source_pixel)
     }
 
     fn compose_rotated_crt_layer_over_backdrop(
