@@ -260,7 +260,9 @@ fn run_worker(shared: Arc<SharedWorker>) {
             )
         };
         let key = request.key;
+        let request_pmu = mister_magik_perf_events::sampled_span("gui.worker.preview-composition");
         let result = compose_request(request, &mut logical, &mut physical);
+        drop(request_pmu);
         let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
         match result {
             Ok(result) => {
@@ -328,8 +330,19 @@ fn compose_request(
         None
     };
     if let Some((cut_frame, alpha_bucket, report_cut)) = cut_frame
-        && let Some(cut_trace) =
-            compose_cut_frame_oriented(physical, &ui, screen, local_output, cut_frame, alpha_bucket)
+        && let Some(cut_trace) = {
+            let cut_pmu = mister_magik_perf_events::sampled_span("gui.worker.preview-cut");
+            let result = compose_cut_frame_oriented(
+                physical,
+                &ui,
+                screen,
+                local_output,
+                cut_frame,
+                alpha_bucket,
+            );
+            drop(cut_pmu);
+            result
+        }
     {
         return Ok(PreviewCompositionResult {
             key: request.key,
@@ -353,6 +366,7 @@ fn compose_request(
         screen.width().saturating_mul(screen.rows() as usize),
         Rgb565Pixel(0),
     );
+    let blend_pmu = mister_magik_perf_events::sampled_span("gui.worker.preview-blend");
     let fade = if request.active {
         Raw565PreviewRenderer::compose_transition_strided(
             composed,
@@ -382,6 +396,7 @@ fn compose_request(
         .ok_or_else(|| "preview frame composition returned no rectangle".to_string())?;
         PreviewFadeTrace::default()
     };
+    drop(blend_pmu);
     if identity_output {
         return Ok(PreviewCompositionResult {
             key: request.key,
@@ -395,6 +410,7 @@ fn compose_request(
                 .min(u128::from(u64::MAX)) as u64,
         });
     }
+    let rotation_pmu = mister_magik_perf_events::sampled_span("gui.worker.preview-rotation");
     let copied = Rgb565SurfaceMut::new(physical, local_output)
         .map_err(|error| error.to_string())?
         .copy_rect_strided(
@@ -407,6 +423,7 @@ fn compose_request(
             0,
             0,
         );
+    drop(rotation_pmu);
     if !copied {
         return Err("preview physical rotation failed".to_string());
     }
