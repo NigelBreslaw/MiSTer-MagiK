@@ -230,8 +230,31 @@ pub(in crate::ui_runner) struct FpgaVblankLatchHiddenPresenter<B = PluginLatchFr
     negotiated_capabilities: Option<mister_magik_latch_contract::LatchCapabilities>,
     last_committed_buffer: Option<u8>,
     latch_state: TwoBufferLatchState,
+    arcade_slot_mirrors: [PhysicalLayerSlotMirror; 2],
     direct_generation: u64,
     outstanding_direct_grant: Option<HiddenSlotRenderGrant>,
+}
+
+#[derive(Default)]
+pub(in crate::ui_runner) struct PhysicalLayerSlotMirror {
+    pub(in crate::ui_runner) rect: Option<DirtyRect>,
+    pub(in crate::ui_runner) pixels: Vec<Rgb565Pixel>,
+    pub(in crate::ui_runner) row_spans: Vec<(usize, usize, usize)>,
+}
+
+impl PhysicalLayerSlotMirror {
+    pub(in crate::ui_runner) fn invalidate(&mut self) {
+        self.rect = None;
+        self.row_spans.clear();
+    }
+}
+
+const fn physical_slot_mirror_index(slot_index: u8) -> usize {
+    match slot_index {
+        1 => 0,
+        2 => 1,
+        _ => panic!("hidden latch slot index must be 1 or 2"),
+    }
 }
 
 #[derive(Debug)]
@@ -390,6 +413,7 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
             negotiated_capabilities: None,
             last_committed_buffer: None,
             latch_state: TwoBufferLatchState::new(render_width, render_height),
+            arcade_slot_mirrors: std::array::from_fn(|_| PhysicalLayerSlotMirror::default()),
             direct_generation: 0,
             outstanding_direct_grant: None,
         }
@@ -522,7 +546,7 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
         status_us = status_us.saturating_add(receipt.status_us);
         self.outstanding_direct_grant = None;
         self.last_committed_buffer = Some(grant.slot_index);
-        self.latch_state.invalidate_all();
+        self.invalidate_layer_coherency();
         self.hidden_active_verified = true;
         Ok(FpgaVblankLatchHiddenPresentStats {
             copied_bytes: 0,
@@ -556,7 +580,14 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
         self.direct_generation = self.direct_generation.wrapping_add(1).max(1);
         self.outstanding_direct_grant = None;
         self.last_committed_buffer = None;
+        self.invalidate_layer_coherency();
+    }
+
+    fn invalidate_layer_coherency(&mut self) {
         self.latch_state.invalidate_all();
+        for mirror in &mut self.arcade_slot_mirrors {
+            mirror.invalidate();
+        }
     }
 
     fn verify_capabilities<H: LatchHardware>(
@@ -616,6 +647,7 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
             LatchPresentPlan,
             Option<&PhysicalLayerPublication>,
             Option<&PhysicalLayerPublication>,
+            &mut PhysicalLayerSlotMirror,
         ) -> Result<(), String>,
     {
         if self.disabled {
@@ -748,6 +780,7 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
                 }
                 Err(e) => {
                     self.latch_state.mark_attempt_failed(buffer_index);
+                    self.arcade_slot_mirrors[physical_slot_mirror_index(buffer_index)].invalidate();
                     return Err(LatchFailure::runtime(
                         LatchFailureStage::FrameCopy,
                         LatchFailureReason::FrameCopyFailed,
@@ -764,8 +797,10 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
             plan,
             preview_publication.as_ref(),
             arcade_publication.as_ref(),
+            &mut self.arcade_slot_mirrors[physical_slot_mirror_index(buffer_index)],
         ) {
             self.latch_state.mark_attempt_failed(buffer_index);
+            self.arcade_slot_mirrors[physical_slot_mirror_index(buffer_index)].invalidate();
             return Err(LatchFailure::runtime(
                 LatchFailureStage::OverlayCompose,
                 LatchFailureReason::OverlayComposeFailed,
@@ -800,6 +835,7 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
             Ok(receipt) => receipt,
             Err(failure) => {
                 self.latch_state.mark_attempt_failed(buffer_index);
+                self.arcade_slot_mirrors[physical_slot_mirror_index(buffer_index)].invalidate();
                 if failure.reason == LatchFailureReason::FpgaStatusUnsupported {
                     self.disabled = true;
                 }
@@ -988,7 +1024,7 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
                 expected_height,
                 expected_stride,
             }) => {
-                self.latch_state.invalidate_all();
+                self.invalidate_layer_coherency();
                 self.hidden_active_verified = false;
                 return Err(LatchFailure::runtime(
                     LatchFailureStage::PostVerification,
@@ -1009,7 +1045,7 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
 
     fn apply_latch_status_sync(&mut self, sync: LatchStatusSync) {
         if sync.recovered_non_hidden_active {
-            self.latch_state.invalidate_all();
+            self.invalidate_layer_coherency();
             self.hidden_active_verified = false;
         }
         if sync.hidden_active_verified {
@@ -1626,7 +1662,7 @@ mod tests {
             hardware,
             display,
             false,
-            |_, _, _, _| Ok(()),
+            |_, _, _, _, _| Ok(()),
         )
     }
 
@@ -1653,7 +1689,7 @@ mod tests {
                 &mut hardware,
                 &mut display,
                 false,
-                |_, _, _, _| {
+                |_, _, _, _, _| {
                     events.borrow_mut().push(TestEvent::Overlay);
                     Ok(())
                 },
@@ -1898,7 +1934,7 @@ mod tests {
                 &mut hardware,
                 &mut display,
                 false,
-                |hidden, _, _, _| {
+                |hidden, _, _, _, _| {
                     hidden.pixels[0] = Rgb565Pixel(0x5aa5);
                     Ok(())
                 },

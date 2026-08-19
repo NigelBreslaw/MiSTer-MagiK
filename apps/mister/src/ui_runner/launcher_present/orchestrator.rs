@@ -164,49 +164,194 @@ fn copy_published_overlay_rects(
     Ok((rows, pixels))
 }
 
-fn shift_published_layer_in_hidden(
-    hidden: &mut ScanoutSlotsRgb565Framebuffer,
-    update: PhysicalLayerUpdate,
+fn refresh_physical_layer_mirror(
+    mirror: &mut PhysicalLayerSlotMirror,
+    publication: &PhysicalLayerPublication,
+) -> bool {
+    let view = publication.view();
+    let rect = view.rect();
+    let len = rect.width().saturating_mul(rect.rows() as usize);
+    mirror.pixels.resize(len, Rgb565Pixel(0));
+    for row in 0..rect.rows() as usize {
+        let Some(source) = view.row(rect, row) else {
+            mirror.invalidate();
+            return false;
+        };
+        let start = row * rect.width();
+        mirror.pixels[start..start + rect.width()].copy_from_slice(source);
+    }
+    mirror.rect = Some(rect);
+    true
+}
+
+fn collect_physical_layer_row_spans(
+    current: &[Rgb565Pixel],
+    previous: &[Rgb565Pixel],
+    width: usize,
+    spans: &mut Vec<(usize, usize, usize)>,
 ) -> Option<usize> {
-    let PhysicalLayerUpdate::Scroll {
-        delta_x,
-        delta_y,
-        rect,
-        ..
-    } = update
-    else {
-        return None;
-    };
-    let width = rect.width();
-    let height = rect.rows() as usize;
-    if (delta_x == 0 && delta_y == 0)
-        || (delta_x != 0 && delta_y != 0)
-        || delta_x.unsigned_abs() >= width
-        || delta_y.unsigned_abs() >= height
-    {
+    if width == 0 || current.len() != previous.len() || !current.len().is_multiple_of(width) {
         return None;
     }
-    let shifted_pixels = if delta_x != 0 {
-        width
-            .saturating_sub(delta_x.unsigned_abs())
-            .saturating_mul(height)
+    spans.clear();
+    let mut span_pixels = 0_usize;
+    for (row, (current, previous)) in current
+        .chunks_exact(width)
+        .zip(previous.chunks_exact(width))
+        .enumerate()
+    {
+        let first = current
+            .iter()
+            .zip(previous)
+            .position(|(current, previous)| current != previous);
+        let Some(first) = first else {
+            continue;
+        };
+        let last = current
+            .iter()
+            .zip(previous)
+            .rposition(|(current, previous)| current != previous)
+            .expect("a differing row has a final difference")
+            + 1;
+        spans.push((row, first, last));
+        span_pixels = span_pixels.saturating_add(last - first);
+    }
+    Some(span_pixels)
+}
+
+fn copy_published_arcade_with_mirror(
+    hidden: &mut ScanoutSlotsRgb565Framebuffer,
+    publication: &PhysicalLayerPublication,
+    mirror: &mut PhysicalLayerSlotMirror,
+    slot_index: u8,
+    diff_safe: bool,
+    update: PhysicalLayerUpdate,
+) -> Result<(PresentCopyStats, PhysicalLayerCopyTrace), String> {
+    let view = publication.view();
+    let rect = update.dirty_rect();
+    if view.rect() != rect {
+        return Err(format!(
+            "physical Arcade update rect mismatch: requested={rect:?} backing={:?}",
+            view.rect()
+        ));
+    }
+    let dense_pixels = rect.width().saturating_mul(rect.rows() as usize);
+    let mirror_valid =
+        diff_safe && mirror.rect == Some(rect) && mirror.pixels.len() == dense_pixels;
+    let mut compare_us = 0_u64;
+    if mirror_valid {
+        let compare_started = Instant::now();
+        let span_pixels = collect_physical_layer_row_spans(
+            view.pixels(),
+            &mirror.pixels,
+            rect.width(),
+            &mut mirror.row_spans,
+        )
+        .ok_or_else(|| "physical Arcade mirror geometry is invalid".to_string())?;
+        compare_us = compare_started
+            .elapsed()
+            .as_micros()
+            .min(u128::from(u64::MAX)) as u64;
+        if span_pixels.saturating_mul(2) < dense_pixels {
+            let write_started = Instant::now();
+            let mut rows = 0_u32;
+            for &(row, x0, x1) in &mirror.row_spans {
+                let damage = DirtyRect {
+                    x0: rect.x0 + x0,
+                    y0: rect.y0 + row,
+                    x1: rect.x0 + x1,
+                    y1: rect.y0 + row + 1,
+                };
+                let (copied_rows, _) = copy_published_overlay_rects(
+                    hidden,
+                    publication,
+                    PhysicalOverlayRole::Arcade,
+                    slot_index,
+                    DirtyRectList::from_one(damage),
+                )?;
+                rows = rows.saturating_add(copied_rows);
+            }
+            let write_us = write_started
+                .elapsed()
+                .as_micros()
+                .min(u128::from(u64::MAX)) as u64;
+            let mirror_started = Instant::now();
+            if !refresh_physical_layer_mirror(mirror, publication) {
+                return Err("physical Arcade mirror refresh failed".into());
+            }
+            let mirror_refresh_us = mirror_started
+                .elapsed()
+                .as_micros()
+                .min(u128::from(u64::MAX)) as u64;
+            return Ok((
+                PresentCopyStats {
+                    rows,
+                    bytes: span_pixels.saturating_mul(2),
+                },
+                PhysicalLayerCopyTrace {
+                    decision: PhysicalLayerCopyDecision::SparseDiff,
+                    diff_safe,
+                    mirror_valid: true,
+                    compare_us,
+                    write_us,
+                    mirror_refresh_us,
+                    compared_pixels: dense_pixels as u64,
+                    written_pixels: span_pixels as u64,
+                    mirror_refresh_pixels: dense_pixels as u64,
+                    changed_rows: rows,
+                },
+            ));
+        }
+    }
+
+    let write_started = Instant::now();
+    let (rows, written_pixels) = copy_published_overlay_rects(
+        hidden,
+        publication,
+        PhysicalOverlayRole::Arcade,
+        slot_index,
+        DirtyRectList::from_one(rect),
+    )?;
+    let write_us = write_started
+        .elapsed()
+        .as_micros()
+        .min(u128::from(u64::MAX)) as u64;
+    let mirror_started = Instant::now();
+    if !refresh_physical_layer_mirror(mirror, publication) {
+        return Err("physical Arcade mirror recovery failed".into());
+    }
+    let mirror_refresh_us = mirror_started
+        .elapsed()
+        .as_micros()
+        .min(u128::from(u64::MAX)) as u64;
+    let decision = if mirror_valid {
+        PhysicalLayerCopyDecision::FullCopy
+    } else if diff_safe {
+        PhysicalLayerCopyDecision::MirrorRecovery
+    } else if matches!(update, PhysicalLayerUpdate::Scroll { .. }) {
+        PhysicalLayerCopyDecision::ScrollRecovery
     } else {
-        height
-            .saturating_sub(delta_y.unsigned_abs())
-            .saturating_mul(width)
+        PhysicalLayerCopyDecision::FullCopy
     };
-    let stride = hidden.stride_pixels();
-    let hidden_height = hidden.height();
-    mister_magik_fb::framebuffer::target::shift_physical_rect(
-        hidden.pixels_mut(),
-        stride,
-        hidden_height,
-        rect,
-        delta_x,
-        delta_y,
-        Rgb565Pixel(0),
-    )
-    .then_some(shifted_pixels)
+    Ok((
+        PresentCopyStats {
+            rows,
+            bytes: written_pixels.saturating_mul(2),
+        },
+        PhysicalLayerCopyTrace {
+            decision,
+            diff_safe,
+            mirror_valid,
+            compare_us,
+            write_us,
+            mirror_refresh_us,
+            written_pixels: written_pixels as u64,
+            compared_pixels: if mirror_valid { dense_pixels as u64 } else { 0 },
+            mirror_refresh_pixels: dense_pixels as u64,
+            changed_rows: rows,
+            ..PhysicalLayerCopyTrace::default()
+        },
+    ))
 }
 
 pub(in crate::ui_runner) struct LauncherPresenter<L = FpgaVblankLatchHiddenPresenter> {
@@ -814,7 +959,7 @@ impl PresentationAdapters<FpgaVblankLatchHiddenPresenter> for LivePresentationAd
             hardware,
             self.display,
             self.profile_latch_phases,
-            |hidden, plan, preview_publication, arcade_publication| {
+            |hidden, plan, preview_publication, arcade_publication, arcade_mirror| {
                 preview_redraw_rect = plan.preview_redraw;
                 arcade_redraw_update = plan.arcade_redraw;
                 if let Some(rect) = plan.preview_redraw {
@@ -828,11 +973,8 @@ impl PresentationAdapters<FpgaVblankLatchHiddenPresenter> for LivePresentationAd
                     let (layout_generation, content_generation, backing_key) =
                         if let Some(publication) = preview_publication {
                             let view = publication.view();
-                            direct_preview_rows = copy_physical_layer_rect_to_hidden(
-                                hidden,
-                                view,
-                                rect,
-                            );
+                            direct_preview_rows =
+                                copy_physical_layer_rect_to_hidden(hidden, view, rect);
                             (
                                 publication.layout_generation(),
                                 publication.content_generation(),
@@ -875,74 +1017,21 @@ impl PresentationAdapters<FpgaVblankLatchHiddenPresenter> for LivePresentationAd
                         ArcadeOverlayCopySource::PublishedPhysical => {
                             let publication = arcade_publication
                                 .expect("published Arcade copy source has a publication");
-                            let (decision, shifted_pixels, rows, copied_pixels) =
-                                if matches!(update, PhysicalLayerUpdate::Scroll { .. })
-                                    && plan.arcade_redraw_diff_safe
-                                    && let Some(shifted_pixels) =
-                                        shift_published_layer_in_hidden(hidden, update)
-                                {
-                                    let (rows, copied_pixels) = copy_published_overlay_rects(
-                                        hidden,
-                                        publication,
-                                        PhysicalOverlayRole::Arcade,
-                                        plan.slot_index,
-                                        update.write_rects(),
-                                    )?;
-                                    (
-                                        crate::arcade_list_renderer::PersistentArcadeCopyDecision::DenseScroll,
-                                        shifted_pixels,
-                                        rows,
-                                        copied_pixels,
-                                    )
-                                } else {
-                                    let (rows, copied_pixels) = copy_published_overlay_rects(
-                                        hidden,
-                                        publication,
-                                        PhysicalOverlayRole::Arcade,
-                                        plan.slot_index,
-                                        DirtyRectList::from_one(arcade_rect),
-                                    )?;
-                                    (
-                                        match update {
-                                            PhysicalLayerUpdate::Full(_) => crate::arcade_list_renderer::PersistentArcadeCopyDecision::FullCopy,
-                                            PhysicalLayerUpdate::Scroll { .. } => crate::arcade_list_renderer::PersistentArcadeCopyDecision::ScrollRecovery,
-                                        },
-                                        0,
-                                        rows,
-                                        copied_pixels,
-                                    )
-                                };
-                            let written_pixels = shifted_pixels.saturating_add(copied_pixels);
-                            let changed_rows = if shifted_pixels > 0 {
-                                arcade_rect.rows()
-                            } else {
-                                rows
-                            };
-                            arcade_stats = PresentCopyStats {
-                                rows: changed_rows,
-                                bytes: written_pixels.saturating_mul(2),
-                            };
-                            arcade_copy_trace =
-                                crate::arcade_list_renderer::PersistentArcadeCopyTrace {
-                                    decision,
-                                    diff_safe: plan.arcade_redraw_diff_safe,
-                                    write_us: started
-                                        .elapsed()
-                                        .as_micros()
-                                        .min(u128::from(u64::MAX))
-                                        as u64,
-                                    written_pixels: written_pixels as u64,
-                                    changed_rows,
-                                    ..crate::arcade_list_renderer::PersistentArcadeCopyTrace::default()
-                                };
+                            (arcade_stats, arcade_copy_trace) = copy_published_arcade_with_mirror(
+                                hidden,
+                                publication,
+                                arcade_mirror,
+                                plan.slot_index,
+                                plan.arcade_redraw_diff_safe,
+                                update,
+                            )?;
                         }
                         ArcadeOverlayCopySource::CachedLogical => {
-                            arcade_stats = layer_target
-                                .copy_cached_arcade_list_update_to_hidden(
-                                    hidden,
-                                    arcade_list_renderer,
-                                    update,
-                                );
+                            arcade_stats = layer_target.copy_cached_arcade_list_update_to_hidden(
+                                hidden,
+                                arcade_list_renderer,
+                                update,
+                            );
                             require_complete_overlay_copy(
                                 PhysicalOverlayRole::Arcade,
                                 plan.slot_index,
@@ -1730,5 +1819,50 @@ mod tests {
             presenter.schedule_automatic_retry_at(origin);
             assert_eq!(presenter.next_retry_at, Some(origin + delay));
         }
+    }
+
+    #[test]
+    fn physical_layer_row_spans_bound_each_changed_row() {
+        let previous = [
+            Rgb565Pixel(1),
+            Rgb565Pixel(2),
+            Rgb565Pixel(3),
+            Rgb565Pixel(4),
+            Rgb565Pixel(5),
+            Rgb565Pixel(6),
+            Rgb565Pixel(7),
+            Rgb565Pixel(8),
+        ];
+        let current = [
+            Rgb565Pixel(1),
+            Rgb565Pixel(9),
+            Rgb565Pixel(3),
+            Rgb565Pixel(4),
+            Rgb565Pixel(0),
+            Rgb565Pixel(6),
+            Rgb565Pixel(0),
+            Rgb565Pixel(8),
+        ];
+        let mut spans = Vec::new();
+
+        assert_eq!(
+            collect_physical_layer_row_spans(&current, &previous, 4, &mut spans),
+            Some(4)
+        );
+        assert_eq!(spans, [(0, 1, 2), (1, 0, 3)]);
+    }
+
+    #[test]
+    fn physical_layer_row_spans_reject_mismatched_mirrors() {
+        let mut spans = vec![(9, 9, 9)];
+        assert_eq!(
+            collect_physical_layer_row_spans(
+                &[Rgb565Pixel(1), Rgb565Pixel(2)],
+                &[Rgb565Pixel(1)],
+                2,
+                &mut spans,
+            ),
+            None
+        );
     }
 }
