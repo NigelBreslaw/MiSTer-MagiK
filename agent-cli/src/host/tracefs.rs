@@ -151,13 +151,28 @@ impl<'a> TracefsCapture<'a> {
             &tracefs_prepare_command(self.spec),
         );
         if let Err(error) = result {
+            let capabilities = remote_read(
+                self.session,
+                &format!("{}/capabilities.tsv", self.spec.remote_root),
+            )
+            .unwrap_or_else(|| "unavailable".into());
+            let resolved = remote_read(
+                self.session,
+                &format!("{}/resolved-functions.txt", self.spec.remote_root),
+            )
+            .unwrap_or_else(|| "unavailable".into());
             let cleanup = exec_checked(
                 self.session,
                 &format!("clean failed {} preparation", self.spec.label),
                 &tracefs_cleanup_command(self.spec),
             );
             return match cleanup {
-                Ok(()) => Err(error),
+                Ok(()) => Err(format!(
+                    "{error}; capabilities={}; resolved_functions={}",
+                    capabilities.trim(),
+                    resolved.trim(),
+                )
+                .into()),
                 Err(cleanup) => Err(format!(
                     "{} preparation failed: {error}; cleanup failed: {cleanup}",
                     self.spec.label
@@ -327,7 +342,7 @@ fn tracefs_prepare_command(spec: TracefsCaptureSpec) -> String {
         TracefsCaptureMode::FunctionGraph { function_groups } => {
             let resolved = sh(&format!("{}/resolved-functions.txt", spec.remote_root));
             checks.push_str(&format!(
-                "grep -qw function_graph {mount}/available_tracers; test -r {mount}/available_filter_functions; test -w {instance}/set_graph_function; test -w {instance}/max_graph_depth; printf '%s\\t%s\\n' tracer:function_graph required >> {capabilities}; : > {resolved}; ",
+                "grep -qw function_graph {mount}/available_tracers; test -r {mount}/available_filter_functions; test -w {instance}/max_graph_depth; if test -w {instance}/set_graph_function; then graph_filter={instance}/set_graph_function; filter_name=set_graph_function; elif test -w {instance}/set_ftrace_filter; then graph_filter={instance}/set_ftrace_filter; filter_name=set_ftrace_filter; else exit 1; fi; printf '%s\\t%s\\n' tracer:function_graph required >> {capabilities}; printf 'filter:%s\\tresolved\\n' \"$filter_name\" >> {capabilities}; : > {resolved}; ",
                 mount = sh(TRACEFS_MOUNT),
             ));
             for group in function_groups {
@@ -345,7 +360,7 @@ fn tracefs_prepare_command(spec: TracefsCaptureSpec) -> String {
                 ));
             }
             format!(
-                "sort -u {resolved} > {resolved}.sorted; mv {resolved}.sorted {resolved}; test -s {resolved}; cat {resolved} > {instance}/set_graph_function; printf '{depth}\\n' > {instance}/max_graph_depth; printf 'function_graph\\n' > {instance}/current_tracer; test \"$(cat {instance}/current_tracer)\" = function_graph; test \"$(cat {instance}/max_graph_depth)\" = {depth}",
+                "sort -u {resolved} > {resolved}.sorted; mv {resolved}.sorted {resolved}; test -s {resolved}; cat {resolved} > \"$graph_filter\"; printf '{depth}\\n' > {instance}/max_graph_depth; printf 'function_graph\\n' > {instance}/current_tracer; test \"$(cat {instance}/current_tracer)\" = function_graph; test \"$(cat {instance}/max_graph_depth)\" = {depth}",
                 depth = FUNCTION_GRAPH_MAX_DEPTH,
             )
         }
@@ -399,7 +414,7 @@ fn tracefs_cleanup_command(spec: TracefsCaptureSpec) -> String {
     let instance_path = format!("{TRACEFS_MOUNT}/instances/{}", spec.instance);
     let instance = sh(&instance_path);
     format!(
-        "set -eu; root={root}; current=$(awk '$2 == \"{mount_path}\" && $3 == \"tracefs\" {{ print }}' /proc/mounts); if test -n \"$current\" && test -e {instance}; then test -f {instance_marker}; test \"$(cat {instance_marker})\" = {instance}; printf '0\\n' > {instance}/tracing_on; printf '0\\n' > {instance}/events/enable; printf 'nop\\n' > {instance}/current_tracer; if test -e {instance}/set_graph_function; then : > {instance}/set_graph_function; fi; if test -e {instance}/max_graph_depth; then printf '0\\n' > {instance}/max_graph_depth; fi; : > {instance}/trace; i=0; while ! rmdir {instance} 2>/dev/null && test \"$i\" -lt 50; do i=$((i+1)); sleep 0.1; done; test ! -e {instance}; fi; if test -f {mount_marker}; then current=$(awk '$2 == \"{mount_path}\" && $3 == \"tracefs\" {{ print }}' /proc/mounts); owned=$(cat {mount_marker}); if test -n \"$current\"; then test \"$current\" = \"$owned\"; i=0; while ! umount {mount} 2>/dev/null && test \"$i\" -lt 50; do i=$((i+1)); sleep 0.1; done; current=$(awk '$2 == \"{mount_path}\" && $3 == \"tracefs\" {{ print }}' /proc/mounts); test -z \"$current\"; fi; fi; rm -rf \"$root\"; test ! -e \"$root\"",
+        "set -eu; root={root}; current=$(awk '$2 == \"{mount_path}\" && $3 == \"tracefs\" {{ print }}' /proc/mounts); if test -n \"$current\" && test -e {instance}; then test -f {instance_marker}; test \"$(cat {instance_marker})\" = {instance}; printf '0\\n' > {instance}/tracing_on; printf '0\\n' > {instance}/events/enable; printf 'nop\\n' > {instance}/current_tracer; if test -e {instance}/set_graph_function; then : > {instance}/set_graph_function; fi; if test -e {instance}/set_ftrace_filter; then : > {instance}/set_ftrace_filter; fi; if test -e {instance}/max_graph_depth; then printf '0\\n' > {instance}/max_graph_depth; fi; : > {instance}/trace; i=0; while ! rmdir {instance} 2>/dev/null && test \"$i\" -lt 50; do i=$((i+1)); sleep 0.1; done; test ! -e {instance}; fi; if test -f {mount_marker}; then current=$(awk '$2 == \"{mount_path}\" && $3 == \"tracefs\" {{ print }}' /proc/mounts); owned=$(cat {mount_marker}); if test -n \"$current\"; then test \"$current\" = \"$owned\"; i=0; while ! umount {mount} 2>/dev/null && test \"$i\" -lt 50; do i=$((i+1)); sleep 0.1; done; current=$(awk '$2 == \"{mount_path}\" && $3 == \"tracefs\" {{ print }}' /proc/mounts); test -z \"$current\"; fi; fi; rm -rf \"$root\"; test ! -e \"$root\"",
         root = root,
         mount_path = TRACEFS_MOUNT,
         instance = instance,
@@ -1119,6 +1134,7 @@ mod tests {
         assert!(prepare.contains("function-group:directory-walk"));
         assert!(prepare.contains("function-group:durability"));
         assert!(prepare.contains("set_graph_function"));
+        assert!(prepare.contains("set_ftrace_filter"));
         assert!(prepare.contains("max_graph_depth"));
         assert!(prepare.contains(&FUNCTION_GRAPH_MAX_DEPTH.to_string()));
         assert!(prepare.contains(&FUNCTION_GRAPH_BUFFER_KB.to_string()));
