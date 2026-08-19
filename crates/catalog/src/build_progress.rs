@@ -96,11 +96,10 @@ pub fn committed_path_for_root(storage_root: &Path) -> PathBuf {
     storage_root.join("state").join(COMMITTED_FILE_NAME)
 }
 
-/// Seed a new resumable run from the last successfully published scan facts.
+/// Move the last successfully published scan facts into the resumable journal.
 ///
-/// The committed copy is immutable for the duration of a run. All checkpoints
-/// go to `progress_path`, so an interrupted or failed run cannot advance the
-/// facts used by the next reconciliation.
+/// Both paths must share a directory so the rename is atomic. An interrupted
+/// run leaves the journal at `progress_path`, where `open_or_create` resumes it.
 pub fn seed_from_committed(committed_path: &Path, progress_path: &Path) -> Result<bool, String> {
     if progress_path.exists() || !committed_path.exists() {
         return Ok(false);
@@ -109,9 +108,10 @@ pub fn seed_from_committed(committed_path: &Path, progress_path: &Path) -> Resul
         std::fs::create_dir_all(parent)
             .map_err(|error| format!("create build progress dir {}: {error}", parent.display()))?;
     }
-    std::fs::copy(committed_path, progress_path).map_err(|error| {
+    require_shared_parent(committed_path, progress_path)?;
+    std::fs::rename(committed_path, progress_path).map_err(|error| {
         format!(
-            "seed build progress {} from {}: {error}",
+            "move build progress {} from {}: {error}",
             progress_path.display(),
             committed_path.display()
         )
@@ -158,31 +158,15 @@ pub fn commit_successful_state(
         .map_err(|error| format!("clear generation-specific shard checkpoints: {error}"))?;
     drop(conn);
 
-    let temp_path = committed_path.with_extension("sqlite3.tmp");
-    match std::fs::remove_file(&temp_path) {
-        Ok(()) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-        Err(error) => {
-            return Err(format!(
-                "remove stale committed builder state {}: {error}",
-                temp_path.display()
-            ));
-        }
-    }
-    std::fs::copy(progress_path, &temp_path).map_err(|error| {
-        format!(
-            "stage committed builder state {}: {error}",
-            temp_path.display()
-        )
-    })?;
-    let staged = std::fs::OpenOptions::new()
+    require_shared_parent(progress_path, committed_path)?;
+    let progress = std::fs::OpenOptions::new()
         .read(true)
-        .open(&temp_path)
-        .map_err(|error| format!("open staged builder state {}: {error}", temp_path.display()))?;
-    staged
+        .open(progress_path)
+        .map_err(|error| format!("open build progress {}: {error}", progress_path.display()))?;
+    progress
         .sync_all()
-        .map_err(|error| format!("sync staged builder state {}: {error}", temp_path.display()))?;
-    std::fs::rename(&temp_path, committed_path).map_err(|error| {
+        .map_err(|error| format!("sync build progress {}: {error}", progress_path.display()))?;
+    std::fs::rename(progress_path, committed_path).map_err(|error| {
         format!(
             "publish committed builder state {}: {error}",
             committed_path.display()
@@ -190,6 +174,18 @@ pub fn commit_successful_state(
     })?;
     crate::sqlite_catalog::sync_parent_dir(committed_path);
     Ok(true)
+}
+
+fn require_shared_parent(left: &Path, right: &Path) -> Result<(), String> {
+    if left.parent() == right.parent() && left.parent().is_some() {
+        Ok(())
+    } else {
+        Err(format!(
+            "build progress paths must share a parent: {} and {}",
+            left.display(),
+            right.display()
+        ))
+    }
 }
 
 pub fn remove(path: &Path) -> Result<(), String> {
@@ -922,7 +918,11 @@ mod tests {
         drop(journal);
 
         assert!(commit_successful_state(&progress, &committed, 3).unwrap());
+        assert!(!progress.exists());
+        assert!(committed.exists());
         assert!(seed_from_committed(&committed, &resumed).unwrap());
+        assert!(!committed.exists());
+        assert!(resumed.exists());
         let mut bound_contract = contract();
         bound_contract.active_manifest_generation = Some(3);
         let journal =
