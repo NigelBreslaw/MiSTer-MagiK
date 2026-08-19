@@ -15252,9 +15252,11 @@ fn profile_installed_catalog_build_rebuild(
                 &sample_dir,
                 "fresh",
                 None,
-                true,
-                catalog_build_rebuild_launcher_env(),
-                catalog_build_rebuild_runtime_command,
+                CatalogBuildRebuildLegOptions {
+                    exercise_arcade_ui: true,
+                    launcher_env: catalog_build_rebuild_launcher_env(),
+                    runtime_command: catalog_build_rebuild_runtime_command,
+                },
             )?;
             let fresh_generation = fresh
                 .pointer("/catalog/generation")
@@ -15274,9 +15276,11 @@ fn profile_installed_catalog_build_rebuild(
                 &sample_dir,
                 "rebuild",
                 Some(fresh_generation),
-                true,
-                catalog_build_rebuild_launcher_env(),
-                catalog_build_rebuild_runtime_command,
+                CatalogBuildRebuildLegOptions {
+                    exercise_arcade_ui: true,
+                    launcher_env: catalog_build_rebuild_launcher_env(),
+                    runtime_command: catalog_build_rebuild_runtime_command,
+                },
             )?;
             let rebuild_snes = catalog_system_games(&rebuild["catalog"], "snes")?;
             let snes_game_delta = i64::try_from(rebuild_snes)? - i64::try_from(fresh_snes)?;
@@ -15426,9 +15430,11 @@ fn profile_installed_catalog_full_build_rebuild(
             output_dir,
             "fresh",
             None,
-            false,
-            catalog_full_build_rebuild_launcher_env(),
-            catalog_full_build_rebuild_runtime_command,
+            CatalogBuildRebuildLegOptions {
+                exercise_arcade_ui: false,
+                launcher_env: catalog_full_build_rebuild_launcher_env(),
+                runtime_command: catalog_full_build_rebuild_runtime_command,
+            },
         )?;
         exec_checked(
             &session,
@@ -15442,9 +15448,11 @@ fn profile_installed_catalog_full_build_rebuild(
             output_dir,
             "warm-clean",
             None,
-            false,
-            catalog_full_build_rebuild_launcher_env(),
-            catalog_full_build_rebuild_runtime_command,
+            CatalogBuildRebuildLegOptions {
+                exercise_arcade_ui: false,
+                launcher_env: catalog_full_build_rebuild_launcher_env(),
+                runtime_command: catalog_full_build_rebuild_runtime_command,
+            },
         )?;
         let warm_clean_generation = warm_clean
             .pointer("/catalog/generation")
@@ -15457,9 +15465,11 @@ fn profile_installed_catalog_full_build_rebuild(
             output_dir,
             "rebuild",
             Some(warm_clean_generation),
-            false,
-            catalog_full_build_rebuild_launcher_env(),
-            catalog_full_build_rebuild_runtime_command,
+            CatalogBuildRebuildLegOptions {
+                exercise_arcade_ui: false,
+                launcher_env: catalog_full_build_rebuild_launcher_env(),
+                runtime_command: catalog_full_build_rebuild_runtime_command,
+            },
         )?;
         let fingerprints = [
             fresh.pointer("/catalog/logical_fingerprint"),
@@ -15990,9 +16000,11 @@ fn run_catalog_attribution_trace_leg(
         sample_dir,
         label,
         minimum_generation,
-        false,
-        catalog_attribution_launcher_env(arm),
-        catalog_attribution_runtime_command,
+        CatalogBuildRebuildLegOptions {
+            exercise_arcade_ui: false,
+            launcher_env: catalog_attribution_launcher_env(arm),
+            runtime_command: catalog_attribution_runtime_command,
+        },
     );
     let stop_result = capture.stop();
     let retain_result = stop_result
@@ -16148,9 +16160,11 @@ fn run_catalog_attribution_streamline_leg(
             output_dir,
             label,
             minimum_generation,
-            false,
-            catalog_attribution_launcher_env(CatalogAttributionArm::Streamline),
-            catalog_attribution_runtime_command,
+            CatalogBuildRebuildLegOptions {
+                exercise_arcade_ui: false,
+                launcher_env: catalog_attribution_launcher_env(CatalogAttributionArm::Streamline),
+                runtime_command: catalog_attribution_runtime_command,
+            },
         )?;
         let ended = capture.monotonic_ns(&format!("catalog {label} capture end"))?;
         Ok((leg, started, ended))
@@ -16211,9 +16225,11 @@ fn run_catalog_attribution_pair(
         sample_dir,
         "fresh",
         None,
-        false,
-        catalog_attribution_launcher_env(arm),
-        catalog_attribution_runtime_command,
+        CatalogBuildRebuildLegOptions {
+            exercise_arcade_ui: false,
+            launcher_env: catalog_attribution_launcher_env(arm),
+            runtime_command: catalog_attribution_runtime_command,
+        },
     )?;
     let fresh_profile = collect_catalog_attribution_profile(session, sample_dir, "fresh", arm)?;
     let generation = fresh
@@ -16227,9 +16243,11 @@ fn run_catalog_attribution_pair(
         sample_dir,
         "rebuild",
         Some(generation),
-        false,
-        catalog_attribution_launcher_env(arm),
-        catalog_attribution_runtime_command,
+        CatalogBuildRebuildLegOptions {
+            exercise_arcade_ui: false,
+            launcher_env: catalog_attribution_launcher_env(arm),
+            runtime_command: catalog_attribution_runtime_command,
+        },
     )?;
     let rebuild_profile = collect_catalog_attribution_profile(session, sample_dir, "rebuild", arm)?;
     fresh["profile"] = fresh_profile;
@@ -18772,6 +18790,12 @@ fn catalog_full_build_rebuild_launcher_env() -> Vec<(String, String)> {
         .collect()
 }
 
+struct CatalogBuildRebuildLegOptions {
+    exercise_arcade_ui: bool,
+    launcher_env: Vec<(String, String)>,
+    runtime_command: fn(&str) -> String,
+}
+
 fn run_catalog_build_rebuild_leg(
     config: &NativeDeviceConfig,
     session: &Session,
@@ -18779,10 +18803,13 @@ fn run_catalog_build_rebuild_leg(
     sample_dir: &Path,
     label: &str,
     minimum_generation: Option<u64>,
-    exercise_arcade_ui: bool,
-    launcher_env: Vec<(String, String)>,
-    runtime_command: fn(&str) -> String,
+    options: CatalogBuildRebuildLegOptions,
 ) -> Result<Value> {
+    let CatalogBuildRebuildLegOptions {
+        exercise_arcade_ui,
+        launcher_env,
+        runtime_command,
+    } = options;
     let started = Instant::now();
     restart_launcher_with_one_shot_env(
         session,
