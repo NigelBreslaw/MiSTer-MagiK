@@ -1,0 +1,92 @@
+{
+  "schema": "mister-magik-catalog-attribution-evidence-index-v1",
+  "captured_at_unix": 1787165638,
+  "installed_magik_revision": "4eb3280730c55990e8fb1d126fc83f9064069223",
+  "analysis_commit": "02fbeee716ef1056096aa89b415fb1dca5e2d4db",
+  "boot_id": "31656dfc-2fe2-469c-8810-e3da26fffff6",
+  "workload": {
+    "roots": [
+      "/media/fat/_Arcade",
+      "/media/fat/games/SNES",
+      "/media/fat/games/C64"
+    ],
+    "real_content_only": true,
+    "publication_filesystem": "exfat",
+    "systems": {
+      "arcade": 968,
+      "c64": 15089,
+      "snes": 1802
+    },
+    "total_games": 17859,
+    "control_logical_fingerprint": "f7817d39524439cc35091180e706dec65d4328fb9b1ed7bea4ffc56e5309d965"
+  },
+  "control_ms": {
+    "fresh_first_visible": [23738, 10010, 9938],
+    "fresh_complete": [79980, 68257, 67641],
+    "rebuild_first_visible": [2238, 2175, 2157],
+    "rebuild_complete": [49942, 48328, 48762],
+    "fresh_first_visible_median": 10010,
+    "fresh_complete_median": 68257,
+    "rebuild_first_visible_median": 2175,
+    "rebuild_complete_median": 48762
+  },
+  "representative_phase_us": {
+    "fresh_scan": 20529264,
+    "fresh_import": 26204223,
+    "fresh_projection": 19962690,
+    "fresh_post_persist_tail": 9113415,
+    "rebuild_scan": 19642420,
+    "rebuild_import": 13411982,
+    "rebuild_projection": 6588415,
+    "rebuild_post_persist_tail": 6776271,
+    "rebuild_resume_validation": 3,
+    "rebuild_resume_committed_targets": 0,
+    "rebuild_resume_reused_targets": 0
+  },
+  "representative_resources": {
+    "fresh_cpu0_average_pct": 62.53,
+    "fresh_cpu1_average_pct": 20.16,
+    "rebuild_cpu0_average_pct": 63.54,
+    "rebuild_cpu1_average_pct": 6.39,
+    "fresh_max_rss_kb": 105796,
+    "rebuild_max_rss_kb": 82784,
+    "storage_fresh_block_requests": 4809,
+    "storage_rebuild_block_requests": 5326,
+    "storage_trace_overruns": 0
+  },
+  "artifact_index": {
+    "path": "build/agent-benchmarks/catalog-attribution-report/1787165638/evidence-manifest.json",
+    "sha256": "0fa4bff2736b301db93f42e5a2749c33b7c1ae3cbd7919b4d9d4c35bcf3942ae",
+    "artifact_count": 91,
+    "summaries": {
+      "control": "dbf19661e72c617bbf086d5b982669b186e71d7f81774229a24b8ee3f85e6a19",
+      "pprof": "377f0fd5879c97908ea51b2db20dd476dc6d8095a401ca93f2d9a78ceb8d890a",
+      "pmu": "5274b7c662e9221823650aac702116c9a4017a70d3f4af2c231e078a030808e8",
+      "storage": "6aa7ea9fd1021f282e785ce19802a230fd7fce4fabc64efffeccf9b80ffc8098",
+      "streamline": "85abad18a66e25cdcc140c8005469679bdd1ea36121a3fb3e295ae6205b9b99a"
+    }
+  },
+  "negative_results": [
+    {
+      "arm": "pprof",
+      "result": "observer changed catalog fingerprint",
+      "control_fingerprint": "f7817d39524439cc35091180e706dec65d4328fb9b1ed7bea4ffc56e5309d965",
+      "retained_pprof_fingerprint": "91507c2f9d465ae643c65632bc4021b9ea7f72d6220252f60ab7b8afe659bb70"
+    },
+    {
+      "arm": "function_graph",
+      "result": "kernel advertises function_graph globally but rejects it in an owned tracefs instance",
+      "global_tracer_available": true,
+      "available_filter_functions": true,
+      "per_instance_max_graph_depth": false,
+      "exact_filter_symbols_accepted": 9,
+      "per_instance_current_tracer_rejected": true
+    },
+    {
+      "arm": "storage",
+      "result": "syscall tracepoints unavailable; block request events retained",
+      "required_block_events_available": true,
+      "syscall_tracepoints_available": false
+    }
+  ]
+}
