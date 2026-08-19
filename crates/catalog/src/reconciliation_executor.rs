@@ -263,10 +263,7 @@ pub fn execute_reconciliation_with_events(
         .iter()
         .filter(|planned| planned.action == PlannedSystemAction::Rebuild)
         .collect::<Vec<_>>();
-    let pipeline_enabled = resume_journal.is_none()
-        && current.is_none()
-        && rebuilds.len() > 1
-        && !crate::cooperative_work::in_background_scope();
+    let pipeline_enabled = resume_journal.is_none() && current.is_none() && rebuilds.len() > 1;
     let completed_shards = if pipeline_enabled {
         worker_count = 2;
         for planned in &rebuilds {
@@ -615,7 +612,7 @@ fn execute_fresh_pipeline(
         let publisher = scope.spawn(move || {
             if background {
                 crate::runtime_thread::apply_runtime_thread_policy(
-                    crate::runtime_thread::RuntimeThreadRole::CatalogWorker,
+                    crate::runtime_thread::RuntimeThreadRole::CatalogShardPublisher,
                 );
             }
             let _background_scope =
@@ -1578,8 +1575,8 @@ mod tests {
     }
 
     #[test]
-    fn background_replacement_without_a_manifest_remains_sequential() {
-        let root = temporary_root("background-sequential");
+    fn background_replacement_without_a_manifest_uses_the_fresh_pipeline() {
+        let root = temporary_root("background-pipeline");
         let _background = crate::cooperative_work::BackgroundScope::enter();
         let mut materializer = SequentialProbeMaterializer {
             root: root.clone(),

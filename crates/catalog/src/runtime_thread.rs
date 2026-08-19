@@ -11,6 +11,7 @@ pub enum RuntimeThreadRole {
     InputReader,
     InputDiscovery,
     CatalogWorker,
+    CatalogShardPublisher,
     SystemEntryPrepare,
     CatalogForeground,
     SearchIndex,
@@ -41,6 +42,7 @@ impl RuntimeThreadRole {
             Self::InputReader => "input-reader",
             Self::InputDiscovery => "input-discovery",
             Self::CatalogWorker => "catalog-worker",
+            Self::CatalogShardPublisher => "catalog-shard-publisher",
             Self::SystemEntryPrepare => "system-entry-prepare",
             Self::CatalogForeground => "catalog-foreground",
             Self::SearchIndex => "search-index",
@@ -83,6 +85,7 @@ impl RuntimeThreadRole {
             // navigation capture, so keep it away from the launcher/input CPU.
             Self::InputDiscovery => RuntimeThreadPolicy::new(10, ThreadAffinity::Cpu0),
             Self::CatalogWorker => RuntimeThreadPolicy::new(5, ThreadAffinity::Cpu0),
+            Self::CatalogShardPublisher => RuntimeThreadPolicy::new(10, ThreadAffinity::Cpu1),
             Self::SystemEntryPrepare => RuntimeThreadPolicy::new(0, ThreadAffinity::Cpu0),
             // Initial index construction is part of making a newly published
             // catalog fully usable. Give it both A9 cores until the P4
@@ -637,6 +640,11 @@ mod tests {
             (RuntimeThreadRole::InputReader, -15, ThreadAffinity::Cpu1),
             (RuntimeThreadRole::InputDiscovery, 10, ThreadAffinity::Cpu0),
             (RuntimeThreadRole::CatalogWorker, 5, ThreadAffinity::Cpu0),
+            (
+                RuntimeThreadRole::CatalogShardPublisher,
+                10,
+                ThreadAffinity::Cpu1,
+            ),
             (
                 RuntimeThreadRole::SystemEntryPrepare,
                 0,
