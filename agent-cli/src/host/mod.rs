@@ -8480,6 +8480,8 @@ fn arcade_velocity_scroll_effective_route(display_mode: &str, orientation: &str)
         ("hdmi-1280x720p60", "Normal") => "hdmi-landscape",
         ("hdmi-1280x720p60", "Monitor left (counterclockwise)") => "hdmi-portrait-left",
         ("hdmi-1280x720p60", "Monitor right (clockwise)") => "hdmi-portrait-right",
+        ("hdmi-1920x1080p60", "Normal") => "hdmi1080-landscape",
+        ("hdmi-1920x1080p60", "Monitor left (counterclockwise)") => "hdmi1080-portrait-left",
         ("crt-240p60", "Monitor left (counterclockwise)") => "crt240-portrait-left",
         ("crt-240p60", "Monitor right (clockwise)") => "crt240-portrait-right",
         ("crt-288p50", "Monitor left (counterclockwise)") => "crt288-portrait-left",
@@ -30839,6 +30841,17 @@ H: Handlers=event3 js0"#
             "hdmi-portrait-right"
         );
         assert_eq!(
+            arcade_velocity_scroll_effective_route("hdmi-1920x1080p60", "Normal"),
+            "hdmi1080-landscape"
+        );
+        assert_eq!(
+            arcade_velocity_scroll_effective_route(
+                "hdmi-1920x1080p60",
+                "Monitor left (counterclockwise)"
+            ),
+            "hdmi1080-portrait-left"
+        );
+        assert_eq!(
             arcade_velocity_scroll_effective_route("crt-240p60", "Monitor left (counterclockwise)"),
             "crt240-portrait-left"
         );
@@ -30853,13 +30866,6 @@ H: Handlers=event3 js0"#
         assert_eq!(
             arcade_velocity_scroll_effective_route("crt-288p50", "Monitor right (clockwise)"),
             "crt288-portrait-right"
-        );
-        assert_eq!(
-            arcade_velocity_scroll_effective_route(
-                "hdmi-1920x1080p60",
-                "Monitor left (counterclockwise)"
-            ),
-            "active"
         );
     }
 

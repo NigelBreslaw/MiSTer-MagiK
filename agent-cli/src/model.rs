@@ -122,6 +122,8 @@ pub enum ArcadeVelocityScrollRoute {
     HdmiLandscape,
     HdmiPortraitLeft,
     HdmiPortraitRight,
+    Hdmi1080Landscape,
+    Hdmi1080PortraitLeft,
     Crt240PortraitLeft,
     Crt240PortraitRight,
     Crt288PortraitLeft,
@@ -136,6 +138,8 @@ impl ArcadeVelocityScrollRoute {
             Self::HdmiLandscape => "hdmi-landscape",
             Self::HdmiPortraitLeft => "hdmi-portrait-left",
             Self::HdmiPortraitRight => "hdmi-portrait-right",
+            Self::Hdmi1080Landscape => "hdmi1080-landscape",
+            Self::Hdmi1080PortraitLeft => "hdmi1080-portrait-left",
             Self::Crt240PortraitLeft => "crt240-portrait-left",
             Self::Crt240PortraitRight => "crt240-portrait-right",
             Self::Crt288PortraitLeft => "crt288-portrait-left",
@@ -150,6 +154,7 @@ impl ArcadeVelocityScrollRoute {
             Self::HdmiLandscape | Self::HdmiPortraitLeft | Self::HdmiPortraitRight => {
                 Some("hdmi-1280x720p60")
             }
+            Self::Hdmi1080Landscape | Self::Hdmi1080PortraitLeft => Some("hdmi-1920x1080p60"),
             Self::Crt240PortraitLeft | Self::Crt240PortraitRight => Some("crt-240p60"),
             Self::Crt288PortraitLeft | Self::Crt288PortraitRight => Some("crt-288p50"),
         }
@@ -159,10 +164,11 @@ impl ArcadeVelocityScrollRoute {
     pub const fn orientation(self) -> Option<&'static str> {
         match self {
             Self::Active => None,
-            Self::HdmiLandscape => Some("normal"),
+            Self::HdmiLandscape | Self::Hdmi1080Landscape => Some("normal"),
             Self::HdmiPortraitLeft | Self::Crt240PortraitLeft | Self::Crt288PortraitLeft => {
                 Some("monitor-counterclockwise")
             }
+            Self::Hdmi1080PortraitLeft => Some("monitor-counterclockwise"),
             Self::HdmiPortraitRight | Self::Crt240PortraitRight | Self::Crt288PortraitRight => {
                 Some("monitor-clockwise")
             }

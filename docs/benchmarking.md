@@ -67,6 +67,7 @@ Supported scenarios:
 The Arcade velocity-scroll profiling scenarios default to the active display
 route. A typed arm also accepts `--route active`, `--route hdmi-landscape`,
 `--route hdmi-portrait-left`, `--route hdmi-portrait-right`,
+`--route hdmi1080-landscape`, `--route hdmi1080-portrait-left`,
 `--route crt240-portrait-left`, `--route crt240-portrait-right`,
 `--route crt288-portrait-left`, or `--route crt288-portrait-right`. Explicit routes select the display
 transactionally and apply orientation only to the benchmark launcher's

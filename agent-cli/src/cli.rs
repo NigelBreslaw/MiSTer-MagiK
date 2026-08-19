@@ -921,6 +921,8 @@ mod tests {
             "hdmi-landscape",
             "hdmi-portrait-left",
             "hdmi-portrait-right",
+            "hdmi1080-landscape",
+            "hdmi1080-portrait-left",
             "crt240-portrait-left",
             "crt240-portrait-right",
             "crt288-portrait-left",
