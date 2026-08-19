@@ -31,6 +31,8 @@ use crate::preview_state::PreviewApplyTrace;
 use crate::preview_worker;
 #[cfg(test)]
 use mister_magik_catalog::catalog_summary;
+#[cfg(test)]
+use mister_magik_fb::framebuffer::target::PhysicalLayerBacking;
 use mister_magik_fb::process_config::{ScreensaverStartMode, ScriptedInputConfig};
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::io::{Read, Write};
@@ -13867,15 +13869,16 @@ mod tests {
             x1: 7,
             y1: 5,
         };
-        let pixels = vec![Rgb565Pixel(0x1234); layer.width() * layer.rows() as usize];
-        let mut publication = PhysicalLayerPublication::capture(
+        let backing = PhysicalLayerBacking::new(layer, Rgb565Pixel(0x1234))
+            .expect("test layer has nonempty geometry");
+        let mut publication = PhysicalLayerPublication::capture_owned(
             PhysicalLayerRole::Preview,
             3,
             1,
             9,
             PhysicalLayerState::new(layer, 4),
             None,
-            PhysicalLayerView::dense(&pixels, layer),
+            backing,
         );
 
         let shielded =
