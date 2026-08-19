@@ -890,6 +890,13 @@ impl NativeDevice {
         })
     }
 
+    pub(crate) fn profile_catalog_attribution_report(
+        &mut self,
+        output_dir: &Path,
+    ) -> std::result::Result<String, DeviceFailure> {
+        self.benchmark_profile(|_| profile_catalog_attribution_report(output_dir))
+    }
+
     pub(crate) fn profile_system_entry(
         &mut self,
         output_dir: &Path,
@@ -16338,6 +16345,233 @@ fn finish_catalog_attribution_profile(
         format!("{}\n", serde_json::to_string_pretty(&summary)?),
     )?;
     serde_json::to_string(&summary).map_err(Into::into)
+}
+
+fn profile_catalog_attribution_report(output_dir: &Path) -> Result<String> {
+    const ARMS: [(&str, &str); 6] = [
+        ("control", "catalog-attribution-control"),
+        ("pprof", "catalog-attribution-pprof"),
+        ("pmu", "catalog-attribution-pmu"),
+        ("storage", "catalog-attribution-storage"),
+        ("function-graph", "catalog-attribution-function-graph"),
+        ("streamline", "catalog-attribution-streamline"),
+    ];
+    let benchmark_root = output_dir
+        .ancestors()
+        .nth(2)
+        .ok_or("catalog attribution report output has no benchmark root")?;
+    fs::create_dir_all(output_dir)?;
+    let mut arms = serde_json::Map::new();
+    let mut revisions = BTreeSet::new();
+    let mut fingerprints = BTreeSet::new();
+    let mut measurements = Vec::new();
+    let mut artifact_manifest = Vec::new();
+    for (arm, scenario) in ARMS {
+        let (run_dir, summary) = latest_catalog_attribution_arm(benchmark_root, scenario, arm)?;
+        let revision = summary
+            .pointer("/manifest/magik_revision")
+            .and_then(Value::as_str)
+            .ok_or_else(|| format!("catalog {arm} summary has no MagiK revision"))?;
+        let fingerprint = summary
+            .pointer("/validation/logical_fingerprint")
+            .and_then(Value::as_str)
+            .ok_or_else(|| format!("catalog {arm} summary has no logical fingerprint"))?;
+        revisions.insert(revision.to_owned());
+        fingerprints.insert(fingerprint.to_owned());
+        measurements.extend(normalized_catalog_attribution_measurements(arm, &summary));
+        let artifacts = catalog_attribution_artifact_manifest(benchmark_root, &run_dir)?;
+        artifact_manifest.extend(artifacts.iter().cloned());
+        let relative_run = run_dir
+            .strip_prefix(benchmark_root)
+            .unwrap_or(&run_dir)
+            .display()
+            .to_string();
+        arms.insert(
+            arm.to_owned(),
+            json!({
+                "run_dir": relative_run,
+                "summary_sha256": file_sha256(run_dir.join("summary.json"))?,
+                "boot_id": summary.get("boot_id"),
+                "manifest": summary.get("manifest"),
+                "logical_fingerprint": fingerprint,
+                "artifact_count": artifacts.len(),
+            }),
+        );
+    }
+    let consistent_revision = revisions.len() == 1;
+    let consistent_catalog = fingerprints.len() == 1;
+    let status = if consistent_revision && consistent_catalog {
+        "passed"
+    } else {
+        "failed"
+    };
+    let summary = json!({
+        "schema": "mister-magik-catalog-attribution-arm-v1",
+        "arm": "report",
+        "status": status,
+        "evidence_schema": "mister-magik-catalog-attribution-evidence-v1",
+        "evidence_policy": {
+            "recommendations_included": false,
+            "control_is_timing_authority": true,
+            "profiled_arms_are_attribution_only": true,
+            "real_arcade_required": true,
+            "bounded_roots": [CATALOG_BUILD_REBUILD_ARCADE_ROOT, CATALOG_BUILD_REBUILD_SNES_ROOT, CATALOG_ATTRIBUTION_C64_ROOT],
+        },
+        "invariants": {
+            "one_magik_revision": consistent_revision,
+            "one_logical_catalog": consistent_catalog,
+            "magik_revisions": revisions,
+            "logical_fingerprints": fingerprints,
+        },
+        "arms": arms,
+        "normalized_measurements": measurements,
+        "artifact_manifest": artifact_manifest,
+        "negative_result_ledger": [],
+    });
+    fs::write(
+        output_dir.join("summary.json"),
+        format!("{}\n", serde_json::to_string_pretty(&summary)?),
+    )?;
+    fs::write(
+        output_dir.join("evidence-manifest.json"),
+        format!("{}\n", serde_json::to_string_pretty(&summary)?),
+    )?;
+    fs::write(
+        output_dir.join("report.md"),
+        catalog_attribution_evidence_report(&summary)?,
+    )?;
+    serde_json::to_string(&summary).map_err(Into::into)
+}
+
+fn latest_catalog_attribution_arm(
+    benchmark_root: &Path,
+    scenario: &str,
+    expected_arm: &str,
+) -> Result<(PathBuf, Value)> {
+    let scenario_dir = benchmark_root.join(scenario);
+    let mut runs = fs::read_dir(&scenario_dir)?
+        .filter_map(std::result::Result::ok)
+        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
+        .collect::<Vec<_>>();
+    runs.sort_by_key(|entry| std::cmp::Reverse(entry.file_name()));
+    for run in runs {
+        let summary_path = run.path().join("summary.json");
+        let Ok(raw) = fs::read_to_string(&summary_path) else {
+            continue;
+        };
+        let Ok(summary) = serde_json::from_str::<Value>(&raw) else {
+            continue;
+        };
+        if summary.get("schema").and_then(Value::as_str)
+            == Some("mister-magik-catalog-attribution-arm-v1")
+            && summary.get("arm").and_then(Value::as_str) == Some(expected_arm)
+            && summary.get("status").and_then(Value::as_str) == Some("passed")
+        {
+            return Ok((run.path(), summary));
+        }
+    }
+    Err(format!("no passing {expected_arm} catalog attribution run exists").into())
+}
+
+fn normalized_catalog_attribution_measurements(arm: &str, summary: &Value) -> Vec<Value> {
+    let mut rows = Vec::new();
+    let Some(samples) = summary.get("samples").and_then(Value::as_array) else {
+        return rows;
+    };
+    for (sample_index, sample) in samples.iter().enumerate() {
+        for leg in ["fresh", "rebuild"] {
+            let Some(value) = sample.get(leg) else {
+                continue;
+            };
+            rows.push(json!({
+                "arm": arm,
+                "sample": sample_index + 1,
+                "leg": leg,
+                "first_visible_ms": value.pointer("/timing/first_visible_ms"),
+                "complete_ms": value.pointer("/timing/complete_ms"),
+                "total_games": value.pointer("/catalog/total_games"),
+                "systems": value.pointer("/catalog/systems"),
+                "phase_evidence_complete": value.pointer("/phase_evidence/complete"),
+                "phase_record_count": value.pointer("/phase_evidence/records").and_then(Value::as_array).map(Vec::len),
+                "ui": value.get("ui"),
+                "profile_state": value.pointer("/profile/state"),
+            }));
+        }
+    }
+    rows
+}
+
+fn catalog_attribution_artifact_manifest(root: &Path, run_dir: &Path) -> Result<Vec<Value>> {
+    fn visit(root: &Path, directory: &Path, output: &mut Vec<Value>) -> Result<()> {
+        for entry in fs::read_dir(directory)? {
+            let entry = entry?;
+            let path = entry.path();
+            let metadata = entry.metadata()?;
+            if metadata.is_dir() {
+                visit(root, &path, output)?;
+            } else if metadata.is_file() {
+                output.push(json!({
+                    "path": path.strip_prefix(root).unwrap_or(&path).display().to_string(),
+                    "bytes": metadata.len(),
+                    "sha256": file_sha256(path)?,
+                }));
+                if output.len() > 10_000 {
+                    return Err("catalog attribution artifact manifest exceeds 10000 files".into());
+                }
+            }
+        }
+        Ok(())
+    }
+    let mut output = Vec::new();
+    visit(root, run_dir, &mut output)?;
+    output.sort_by(|left, right| {
+        left.get("path")
+            .and_then(Value::as_str)
+            .cmp(&right.get("path").and_then(Value::as_str))
+    });
+    Ok(output)
+}
+
+fn catalog_attribution_evidence_report(summary: &Value) -> Result<String> {
+    use std::fmt::Write as _;
+
+    let mut report = String::from("# Catalog attribution evidence\n\n");
+    writeln!(report, "Status: `{}`\n", summary["status"])?;
+    writeln!(
+        report,
+        "This is an immutable factual index. It contains no optimization recommendations; the control arm is the only timing authority.\n"
+    )?;
+    writeln!(
+        report,
+        "| Arm | Sample | Leg | First visible | Complete | Games |"
+    )?;
+    writeln!(report, "|---|---:|---|---:|---:|---:|")?;
+    if let Some(rows) = summary
+        .get("normalized_measurements")
+        .and_then(Value::as_array)
+    {
+        for row in rows {
+            writeln!(
+                report,
+                "| {} | {} | {} | {} ms | {} ms | {} |",
+                row["arm"].as_str().unwrap_or("unknown"),
+                row["sample"].as_u64().unwrap_or(0),
+                row["leg"].as_str().unwrap_or("unknown"),
+                row["first_visible_ms"].as_u64().unwrap_or(0),
+                row["complete_ms"].as_u64().unwrap_or(0),
+                row["total_games"].as_u64().unwrap_or(0),
+            )?;
+        }
+    }
+    writeln!(
+        report,
+        "\nArtifact files: `{}` (each retained with SHA-256).",
+        summary["artifact_manifest"]
+            .as_array()
+            .map(Vec::len)
+            .unwrap_or(0)
+    )?;
+    Ok(report)
 }
 
 const LAUNCH_RETURN_GATE_REMOTE: &str = "/tmp/mister-magik/launch-return-benchmark-gate";
@@ -32073,6 +32307,32 @@ H: Handlers=event3 js0"#
         let inspect = catalog_full_build_rebuild_runtime_command("catalog-v3-inspect");
         assert!(inspect.contains(CATALOG_BUILD_REBUILD_REMOTE_DIR));
         assert!(!inspect.contains("MISTER_LIBRARY_ROOTS="));
+    }
+
+    #[test]
+    fn catalog_attribution_uses_real_bounded_roots_and_normalizes_legs() {
+        let env = catalog_attribution_launcher_env(CatalogAttributionArm::Control);
+        let allowlist = env
+            .iter()
+            .find(|(key, _)| key == "MISTER_LIBRARY_TARGET_ALLOWLIST")
+            .map(|(_, value)| value.as_str())
+            .unwrap();
+        assert!(allowlist.contains(CATALOG_BUILD_REBUILD_ARCADE_ROOT));
+        assert!(allowlist.contains(CATALOG_BUILD_REBUILD_SNES_ROOT));
+        assert!(allowlist.contains(CATALOG_ATTRIBUTION_C64_ROOT));
+        assert!(!allowlist.contains("fixture"));
+        let rows = normalized_catalog_attribution_measurements(
+            "control",
+            &json!({
+                "samples": [{
+                    "fresh": {"timing": {"first_visible_ms": 5, "complete_ms": 10}, "catalog": {"total_games": 7}},
+                    "rebuild": {"timing": {"first_visible_ms": 3, "complete_ms": 8}, "catalog": {"total_games": 7}},
+                }]
+            }),
+        );
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0]["leg"], "fresh");
+        assert_eq!(rows[1]["complete_ms"], 8);
     }
 
     #[test]
