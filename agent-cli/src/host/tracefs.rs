@@ -542,7 +542,9 @@ pub(super) fn summarize_storage_trace(trace: &str, stats: &str, root_pid: u32) -
         .filter(|event| event.timestamp_ns >= start_ns && event.timestamp_ns <= end_ns)
     {
         if event.name == "sched_process_fork" {
-            let parent = field_u32(&event.payload, "parent_pid").unwrap_or(0);
+            let parent = field_u32(&event.payload, "parent_pid")
+                .or_else(|| field_u32(&event.payload, "pid"))
+                .unwrap_or(0);
             let child = field_u32(&event.payload, "child_pid").unwrap_or(0);
             if descendants.contains(&parent) && child != 0 {
                 descendants.insert(child);
