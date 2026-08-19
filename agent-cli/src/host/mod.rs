@@ -17338,9 +17338,12 @@ fn catalog_build_rebuild_runtime_command(subcommand: &str) -> String {
     let root = CATALOG_BUILD_REBUILD_REMOTE_DIR;
     let source = CATALOG_BUILD_REBUILD_SOURCE_DIR;
     format!(
-        "env MISTER_LIBRARY_ROOTS={roots} MISTER_SHARDED_CATALOG_DIR={catalog} MISTER_LIBRARY_SQLITE={library} MISTER_LIBRARY_SQLITE_BUILD_DIR={sqlite_build} MISTER_ARCADE_BOOTSTRAP_INDEX={bootstrap} MISTER_LIBRARY_REFRESH_LOCK={refresh_lock} MISTER_CATALOG_BUILDER_LOCK={builder_lock} MISTER_CATALOG_READY_SNAPSHOT={ready_snapshot} MISTER_CATALOG_DIAGNOSTICS_DIR={diagnostics} MISTER_MAGIK_FOREGROUND_LIBRARY_REFRESH=1 {gui} {subcommand}",
+        "env MISTER_LIBRARY_ROOTS={roots} MISTER_LIBRARY_TARGET_ALLOWLIST={allowlist} MISTER_SHARDED_CATALOG_DIR={catalog} MISTER_LIBRARY_SQLITE={library} MISTER_LIBRARY_SQLITE_BUILD_DIR={sqlite_build} MISTER_ARCADE_BOOTSTRAP_INDEX={bootstrap} MISTER_LIBRARY_REFRESH_LOCK={refresh_lock} MISTER_CATALOG_BUILDER_LOCK={builder_lock} MISTER_CATALOG_READY_SNAPSHOT={ready_snapshot} MISTER_CATALOG_DIAGNOSTICS_DIR={diagnostics} MISTER_MAGIK_FOREGROUND_LIBRARY_REFRESH=1 {gui} {subcommand}",
         roots = sh(&format!(
-            "{CATALOG_BUILD_REBUILD_ARCADE_ROOT}|{CATALOG_BUILD_REBUILD_SNES_ROOT}|{source}/fixture"
+            "{CATALOG_BUILD_REBUILD_ARCADE_ROOT}|/media/fat/games|{source}/fixture"
+        )),
+        allowlist = sh(&format!(
+            "{CATALOG_BUILD_REBUILD_ARCADE_ROOT}:{CATALOG_BUILD_REBUILD_SNES_ROOT}:{source}/fixture/games/SNES"
         )),
         catalog = sh(&format!("{root}/catalog-v3")),
         library = sh(&format!("{root}/library.sqlite3")),
@@ -17361,8 +17364,12 @@ fn catalog_build_rebuild_launcher_env() -> Vec<(String, String)> {
         ("MISTER_CATALOG_REFRESH".into(), "force".into()),
         (
             "MISTER_LIBRARY_ROOTS".into(),
+            format!("{CATALOG_BUILD_REBUILD_ARCADE_ROOT}|/media/fat/games|{source}/fixture"),
+        ),
+        (
+            "MISTER_LIBRARY_TARGET_ALLOWLIST".into(),
             format!(
-                "{CATALOG_BUILD_REBUILD_ARCADE_ROOT}|{CATALOG_BUILD_REBUILD_SNES_ROOT}|{source}/fixture"
+                "{CATALOG_BUILD_REBUILD_ARCADE_ROOT}:{CATALOG_BUILD_REBUILD_SNES_ROOT}:{source}/fixture/games/SNES"
             ),
         ),
         (
@@ -30716,10 +30723,17 @@ H: Handlers=event3 js0"#
         assert_eq!(
             roots,
             format!(
-                "{CATALOG_BUILD_REBUILD_ARCADE_ROOT}|{CATALOG_BUILD_REBUILD_SNES_ROOT}|{CATALOG_BUILD_REBUILD_SOURCE_DIR}/fixture"
+                "{CATALOG_BUILD_REBUILD_ARCADE_ROOT}|/media/fat/games|{CATALOG_BUILD_REBUILD_SOURCE_DIR}/fixture"
             )
         );
-        assert!(!roots.split('|').any(|root| root == "/media/fat/games"));
+        let allowlist = env
+            .iter()
+            .find(|(key, _)| key == "MISTER_LIBRARY_TARGET_ALLOWLIST")
+            .map(|(_, value)| value.as_str())
+            .expect("bounded target allowlist");
+        assert!(allowlist.contains(CATALOG_BUILD_REBUILD_ARCADE_ROOT));
+        assert!(allowlist.contains(CATALOG_BUILD_REBUILD_SNES_ROOT));
+        assert!(allowlist.contains("fixture/games/SNES"));
         assert!(env.iter().any(|(key, value)| {
             key == "MISTER_SHARDED_CATALOG_DIR"
                 && value.starts_with(CATALOG_BUILD_REBUILD_REMOTE_DIR)

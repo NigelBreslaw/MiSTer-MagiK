@@ -611,11 +611,46 @@ struct LibraryScanExecution<'a> {
     durable_resume: bool,
 }
 
+fn apply_configured_target_allowlist(
+    roots: &[String],
+    plan: &launch_profiles::CatalogScanPlan,
+    excluded_targets: &mut Vec<PathBuf>,
+) {
+    let Some(value) = std::env::var_os("MISTER_LIBRARY_TARGET_ALLOWLIST") else {
+        return;
+    };
+    let allowed = std::env::split_paths(&value)
+        .map(|path| path.to_string_lossy().to_ascii_lowercase())
+        .filter(|path| !path.is_empty())
+        .collect::<BTreeSet<_>>();
+    if allowed.is_empty() {
+        return;
+    }
+    let descriptors = catalog_scan::planned_scan_target_descriptors(roots, plan, excluded_targets);
+    let mut added = 0usize;
+    for descriptor in descriptors {
+        let key = descriptor.path.to_string_lossy().to_ascii_lowercase();
+        if !allowed.contains(&key)
+            && !excluded_targets
+                .iter()
+                .any(|path| path.to_string_lossy().eq_ignore_ascii_case(&key))
+        {
+            excluded_targets.push(descriptor.path);
+            added = added.saturating_add(1);
+        }
+    }
+    library_db::report_library_scan_timing(
+        "catalog_target_allowlist",
+        0,
+        format!("allowed={} excluded={added}", allowed.len()),
+    );
+}
+
 fn scan_library_with_progress_and_events(
     execution: LibraryScanExecution<'_>,
     mut progress: ProgressCallback<'_>,
     mut scan_events: ScanEventCallback<'_>,
-    excluded_targets: Vec<PathBuf>,
+    mut excluded_targets: Vec<PathBuf>,
 ) -> LibraryScan {
     let LibraryScanExecution {
         cfg,
@@ -628,6 +663,7 @@ fn scan_library_with_progress_and_events(
     let discover_t = Instant::now();
     let plan_t = Instant::now();
     let plan = launch_profiles::CatalogScanPlan::for_roots(&cfg.roots);
+    apply_configured_target_allowlist(&cfg.roots, &plan, &mut excluded_targets);
     crate::cooperative_work::checkpoint();
     library_db::report_library_scan_timing(
         "catalog_scan_plan",
