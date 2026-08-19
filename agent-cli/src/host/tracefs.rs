@@ -76,10 +76,6 @@ pub(super) struct TracefsFunctionGroup {
 #[derive(Clone, Copy)]
 pub(super) enum TracefsCaptureMode {
     Events,
-    #[expect(
-        dead_code,
-        reason = "used by the catalog function-graph benchmark slice"
-    )]
     FunctionGraph {
         function_groups: &'static [TracefsFunctionGroup],
     },
@@ -97,10 +93,6 @@ pub(super) struct TracefsCaptureSpec {
 }
 
 impl TracefsCaptureSpec {
-    #[expect(
-        dead_code,
-        reason = "used by the catalog function-graph benchmark slice"
-    )]
     pub(super) const fn function_graph(
         label: &'static str,
         instance: &'static str,
@@ -740,6 +732,88 @@ pub(super) fn summarize_storage_trace(trace: &str, stats: &str, root_pid: u32) -
     }))
 }
 
+pub(super) fn summarize_function_graph_trace(trace: &str, stats: &str) -> Result<Value> {
+    let overruns = trace_overruns(stats)?;
+    if overruns != 0 {
+        return Err(format!("function graph reported {overruns} buffer overruns").into());
+    }
+    let mut calls = BTreeMap::<String, (u64, u64, u64)>::new();
+    let mut traced_lines = 0u64;
+    for line in trace.lines() {
+        let Some((left, right)) = line.split_once('|') else {
+            continue;
+        };
+        let Some(function) = function_graph_function(right) else {
+            continue;
+        };
+        traced_lines += 1;
+        let duration_ns = function_graph_duration_ns(left).unwrap_or(0);
+        let entry = calls.entry(function).or_default();
+        entry.0 += 1;
+        entry.1 = entry.1.saturating_add(duration_ns);
+        entry.2 = entry.2.max(duration_ns);
+    }
+    if calls.is_empty() {
+        return Err("function graph contains no parseable function records".into());
+    }
+    let mut functions = calls
+        .into_iter()
+        .map(|(function, (records, total_ns, max_ns))| {
+            json!({
+                "function": function,
+                "records": records,
+                "timed_total_us": total_ns / 1_000,
+                "timed_max_us": max_ns / 1_000,
+            })
+        })
+        .collect::<Vec<_>>();
+    functions.sort_by_key(|row| {
+        std::cmp::Reverse(
+            row.get("timed_total_us")
+                .and_then(Value::as_u64)
+                .unwrap_or(0),
+        )
+    });
+    functions.truncate(25);
+    Ok(json!({
+        "trace_overruns": overruns,
+        "parsed_records": traced_lines,
+        "top_functions": functions,
+        "duration_semantics": "function_graph inclusive durations when emitted; entry-only records have zero duration",
+    }))
+}
+
+fn function_graph_function(right: &str) -> Option<String> {
+    let right = right.trim();
+    if let Some(comment) = right.strip_prefix("} /* ") {
+        return comment.strip_suffix(" */").map(str::to_owned);
+    }
+    let open = right.find('(')?;
+    let name = right[..open].trim();
+    (!name.is_empty()
+        && name
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.')))
+    .then(|| name.to_owned())
+}
+
+fn function_graph_duration_ns(left: &str) -> Option<u64> {
+    let fields = left.split_whitespace().collect::<Vec<_>>();
+    let unit = *fields.last()?;
+    let value = fields
+        .get(fields.len().checked_sub(2)?)?
+        .parse::<f64>()
+        .ok()?;
+    let multiplier = match unit {
+        "ns" => 1.0,
+        "us" => 1_000.0,
+        "ms" => 1_000_000.0,
+        "s" => 1_000_000_000.0,
+        _ => return None,
+    };
+    Some((value * multiplier) as u64)
+}
+
 fn parse_event(line: &str) -> Option<ParsedEvent> {
     let open = line.find('[')?;
     let context = line[..open].split_whitespace().last()?;
@@ -1052,6 +1126,21 @@ mod tests {
         assert!(cleanup.contains("current_tracer"));
         assert!(cleanup.contains("printf 'nop"));
         assert!(cleanup.contains("rmdir"));
+    }
+
+    #[test]
+    fn function_graph_parser_ranks_timed_functions() {
+        let trace = r#"
+ 0)               |  iterate_dir() {
+ 0)   4.250 us    |  } /* iterate_dir */
+ 1)   1.500 us    |  vfs_fsync();
+"#;
+        let summary =
+            summarize_function_graph_trace(trace, "overrun: 0\ncommit overrun: 0\n").unwrap();
+        assert_eq!(summary["parsed_records"], 3);
+        assert_eq!(summary["top_functions"][0]["function"], "iterate_dir");
+        assert_eq!(summary["top_functions"][0]["timed_total_us"], 4);
+        assert_eq!(summary["top_functions"][1]["function"], "vfs_fsync");
     }
 
     #[test]

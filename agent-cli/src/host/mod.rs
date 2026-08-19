@@ -851,6 +851,32 @@ impl NativeDevice {
         })
     }
 
+    pub(crate) fn profile_catalog_attribution_storage(
+        &mut self,
+        output_dir: &Path,
+    ) -> std::result::Result<String, DeviceFailure> {
+        self.benchmark_profile(|config| {
+            profile_installed_catalog_attribution(
+                config,
+                output_dir,
+                CatalogAttributionArm::Storage,
+            )
+        })
+    }
+
+    pub(crate) fn profile_catalog_attribution_function_graph(
+        &mut self,
+        output_dir: &Path,
+    ) -> std::result::Result<String, DeviceFailure> {
+        self.benchmark_profile(|config| {
+            profile_installed_catalog_attribution(
+                config,
+                output_dir,
+                CatalogAttributionArm::FunctionGraph,
+            )
+        })
+    }
+
     pub(crate) fn profile_system_entry(
         &mut self,
         output_dir: &Path,
@@ -15501,6 +15527,8 @@ enum CatalogAttributionArm {
     Control,
     Pprof,
     Pmu,
+    Storage,
+    FunctionGraph,
 }
 
 impl CatalogAttributionArm {
@@ -15509,9 +15537,61 @@ impl CatalogAttributionArm {
             Self::Control => "control",
             Self::Pprof => "pprof",
             Self::Pmu => "pmu",
+            Self::Storage => "storage",
+            Self::FunctionGraph => "function-graph",
         }
     }
 }
+
+const CATALOG_NAMESPACE_FUNCTION_GROUPS: &[tracefs::TracefsFunctionGroup] =
+    &[tracefs::TracefsFunctionGroup {
+        label: "namespace",
+        functions: &[
+            "iterate_dir",
+            "vfs_readdir",
+            "filldir",
+            "filldir64",
+            "vfs_getattr",
+            "vfs_statx",
+            "filename_lookup",
+            "path_lookupat",
+            "link_path_walk",
+            "walk_component",
+            "lookup_fast",
+            "lookup_slow",
+        ],
+    }];
+const CATALOG_DURABILITY_FUNCTION_GROUPS: &[tracefs::TracefsFunctionGroup] =
+    &[tracefs::TracefsFunctionGroup {
+        label: "durability",
+        functions: &[
+            "vfs_write",
+            "__vfs_write",
+            "do_sync_write",
+            "vfs_fsync_range",
+            "vfs_fsync",
+            "do_fsync",
+            "vfs_rename",
+            "vfs_rename2",
+            "do_renameat2",
+            "generic_file_fsync",
+            "exfat_sync_file",
+        ],
+    }];
+const CATALOG_NAMESPACE_FUNCTION_GRAPH_SPEC: tracefs::TracefsCaptureSpec =
+    tracefs::TracefsCaptureSpec::function_graph(
+        "catalog namespace function graph",
+        "mister-magik-catalog-namespace",
+        "/tmp/mister-magik/catalog-namespace-function-graph",
+        CATALOG_NAMESPACE_FUNCTION_GROUPS,
+    );
+const CATALOG_DURABILITY_FUNCTION_GRAPH_SPEC: tracefs::TracefsCaptureSpec =
+    tracefs::TracefsCaptureSpec::function_graph(
+        "catalog durability function graph",
+        "mister-magik-catalog-durability",
+        "/tmp/mister-magik/catalog-durability-function-graph",
+        CATALOG_DURABILITY_FUNCTION_GROUPS,
+    );
 
 const CATALOG_ATTRIBUTION_REMOTE_DIR: &str =
     "/media/fat/mister-magik-dev/catalog-attribution-benchmark";
@@ -15643,6 +15723,30 @@ fn profile_installed_catalog_attribution(
     output_dir: &Path,
     arm: CatalogAttributionArm,
 ) -> Result<String> {
+    match arm {
+        CatalogAttributionArm::Storage => {
+            return profile_catalog_attribution_trace(
+                config,
+                output_dir,
+                arm,
+                &[("storage", tracefs::STORAGE_TRACE_SPEC)],
+            );
+        }
+        CatalogAttributionArm::FunctionGraph => {
+            return profile_catalog_attribution_trace(
+                config,
+                output_dir,
+                arm,
+                &[
+                    ("namespace", CATALOG_NAMESPACE_FUNCTION_GRAPH_SPEC),
+                    ("durability", CATALOG_DURABILITY_FUNCTION_GRAPH_SPEC),
+                ],
+            );
+        }
+        CatalogAttributionArm::Control
+        | CatalogAttributionArm::Pprof
+        | CatalogAttributionArm::Pmu => {}
+    }
     let session = connect_with(&config.connection, 10)?;
     let endpoint = config.agent()?.clone();
     let manifest = remote_read(&session, LOCAL_MAIN_MANIFEST_REMOTE)
@@ -15714,6 +15818,184 @@ fn profile_installed_catalog_attribution(
         }))
     })();
     finish_catalog_attribution_profile(&session, run_result, output_dir, &manifest, &boot_id)
+}
+
+fn profile_catalog_attribution_trace(
+    config: &NativeDeviceConfig,
+    output_dir: &Path,
+    arm: CatalogAttributionArm,
+    captures: &[(&str, tracefs::TracefsCaptureSpec)],
+) -> Result<String> {
+    let session = connect_with(&config.connection, 10)?;
+    let endpoint = config.agent()?.clone();
+    let manifest = remote_read(&session, LOCAL_MAIN_MANIFEST_REMOTE)
+        .ok_or("development platform manifest is missing")?;
+    let boot_id = remote_read(&session, "/proc/sys/kernel/random/boot_id")
+        .ok_or("device boot id is unavailable")?
+        .trim()
+        .to_string();
+    fs::create_dir_all(output_dir)?;
+    let run_result = (|| -> Result<Value> {
+        let mut capture_runs = Vec::with_capacity(captures.len());
+        for (capture_label, spec) in captures {
+            let sample_dir = output_dir.join(capture_label);
+            fs::create_dir_all(&sample_dir)?;
+            capture_runs.push(run_catalog_attribution_trace_pair(
+                config,
+                &session,
+                &endpoint,
+                &sample_dir,
+                arm,
+                *spec,
+            )?);
+        }
+        let fingerprint = capture_runs
+            .first()
+            .and_then(|sample| sample.pointer("/fresh/catalog/logical_fingerprint"))
+            .cloned()
+            .ok_or("catalog trace attribution has no logical fingerprint")?;
+        let all_identical = capture_runs.iter().all(|sample| {
+            sample.pointer("/fresh/catalog/logical_fingerprint") == Some(&fingerprint)
+                && sample.pointer("/rebuild/catalog/logical_fingerprint") == Some(&fingerprint)
+        });
+        let profiles_complete = capture_runs.iter().all(|sample| {
+            sample
+                .pointer("/fresh/profile/state")
+                .and_then(Value::as_str)
+                == Some("complete")
+                && sample
+                    .pointer("/rebuild/profile/state")
+                    .and_then(Value::as_str)
+                    == Some("complete")
+        });
+        Ok(json!({
+            "schema": "mister-magik-catalog-attribution-arm-v1",
+            "arm": arm.label(),
+            "status": if all_identical && profiles_complete { "passed" } else { "failed" },
+            "configuration": {
+                "samples": captures.len(),
+                "roots": [CATALOG_BUILD_REBUILD_ARCADE_ROOT, CATALOG_BUILD_REBUILD_SNES_ROOT, CATALOG_ATTRIBUTION_C64_ROOT],
+                "real_content_only": true,
+                "publication_filesystem": "exfat",
+                "timing_authority": false,
+                "capture_labels": captures.iter().map(|(label, _)| *label).collect::<Vec<_>>(),
+            },
+            "samples": capture_runs,
+            "validation": {
+                "logical_fingerprint": fingerprint,
+                "catalog_fingerprints_identical": all_identical,
+                "profiles_complete": profiles_complete,
+            },
+            "manifest": parse_manifest_evidence(&manifest),
+            "boot_id": boot_id,
+        }))
+    })();
+    finish_catalog_attribution_profile(&session, run_result, output_dir, &manifest, &boot_id)
+}
+
+fn run_catalog_attribution_trace_pair(
+    config: &NativeDeviceConfig,
+    session: &Session,
+    endpoint: &AgentEndpoint,
+    sample_dir: &Path,
+    arm: CatalogAttributionArm,
+    spec: tracefs::TracefsCaptureSpec,
+) -> Result<Value> {
+    exec_checked(
+        session,
+        "prepare traced catalog attribution sample",
+        &catalog_attribution_prepare_command(),
+    )?;
+    let fresh = run_catalog_attribution_trace_leg(
+        config, session, endpoint, sample_dir, "fresh", None, arm, spec,
+    )?;
+    let generation = fresh
+        .pointer("/catalog/generation")
+        .and_then(Value::as_u64)
+        .ok_or("traced catalog fresh leg has no generation")?;
+    let rebuild = run_catalog_attribution_trace_leg(
+        config,
+        session,
+        endpoint,
+        sample_dir,
+        "rebuild",
+        Some(generation),
+        arm,
+        spec,
+    )?;
+    Ok(json!({"fresh": fresh, "rebuild": rebuild}))
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "explicit matched trace leg context"
+)]
+fn run_catalog_attribution_trace_leg(
+    config: &NativeDeviceConfig,
+    session: &Session,
+    endpoint: &AgentEndpoint,
+    sample_dir: &Path,
+    label: &str,
+    minimum_generation: Option<u64>,
+    arm: CatalogAttributionArm,
+    spec: tracefs::TracefsCaptureSpec,
+) -> Result<Value> {
+    let trace_dir = sample_dir.join(format!("{label}-trace"));
+    let capture = tracefs::TracefsCapture::new(session, &trace_dir, spec);
+    capture.prepare()?;
+    capture.start()?;
+    let leg_result = run_catalog_build_rebuild_leg(
+        config,
+        session,
+        endpoint,
+        sample_dir,
+        label,
+        minimum_generation,
+        false,
+        catalog_attribution_launcher_env(arm),
+        catalog_attribution_runtime_command,
+    );
+    let stop_result = capture.stop();
+    let retain_result = stop_result
+        .as_ref()
+        .map_err(|error| error.to_string())
+        .and_then(|()| {
+            capture
+                .retain("trace.txt")
+                .map_err(|error| error.to_string())
+        });
+    let cleanup_result = capture.cleanup();
+    let mut leg = leg_result?;
+    stop_result?;
+    let retained = retain_result.map_err(|error| -> Box<dyn std::error::Error> { error.into() })?;
+    cleanup_result?;
+    let trace = fs::read_to_string(&retained.raw_path)?;
+    let summary = match arm {
+        CatalogAttributionArm::Storage => {
+            let pid = leg
+                .get("launcher_pid")
+                .and_then(Value::as_u64)
+                .and_then(|pid| u32::try_from(pid).ok())
+                .ok_or("storage attribution leg has no launcher PID")?;
+            tracefs::summarize_storage_trace(&trace, &retained.stats, pid)?
+        }
+        CatalogAttributionArm::FunctionGraph => {
+            tracefs::summarize_function_graph_trace(&trace, &retained.stats)?
+        }
+        _ => return Err("non-trace catalog arm reached trace capture".into()),
+    };
+    fs::write(
+        trace_dir.join("summary.json"),
+        format!("{}\n", serde_json::to_string_pretty(&summary)?),
+    )?;
+    leg["profile"] = json!({
+        "state": "complete",
+        "trace_sha256": retained.sha256,
+        "capabilities": retained.capabilities.lines().collect::<Vec<_>>(),
+        "summary": summary,
+        "raw_trace": retained.raw_path.file_name().and_then(|name| name.to_str()),
+    });
+    Ok(leg)
 }
 
 fn run_catalog_attribution_pair(
@@ -18197,6 +18479,7 @@ fn run_catalog_build_rebuild_leg(
     let ui =
         catalog_build_rebuild_ui_summary(&statuses, interaction_telemetry, interaction_started)?;
     Ok(json!({
+        "launcher_pid": final_status.get("pid"),
         "timing": {
             "first_visible_ms": first_visible_ms,
             "complete_ms": complete_ms,

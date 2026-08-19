@@ -48,6 +48,8 @@ enum BenchmarkProfile {
     CatalogAttributionControl,
     CatalogAttributionPprof,
     CatalogAttributionPmu,
+    CatalogAttributionStorage,
+    CatalogAttributionFunctionGraph,
     SystemEntry,
     SystemEntryCritical,
     SystemEntryCriticalConfirm,
@@ -126,6 +128,12 @@ impl BenchmarkDevice for DeviceClient {
             }
             BenchmarkProfile::CatalogAttributionPmu => {
                 device.profile_catalog_attribution_pmu(&output_dir)
+            }
+            BenchmarkProfile::CatalogAttributionStorage => {
+                device.profile_catalog_attribution_storage(&output_dir)
+            }
+            BenchmarkProfile::CatalogAttributionFunctionGraph => {
+                device.profile_catalog_attribution_function_graph(&output_dir)
             }
             BenchmarkProfile::SystemEntry => device.profile_system_entry(&output_dir),
             BenchmarkProfile::SystemEntryCritical => {
@@ -328,6 +336,22 @@ fn require_clean_installed_commit(
             reporter,
             BenchmarkProfile::CatalogAttributionPmu,
             "pmu",
+        ),
+        BenchmarkScenario::CatalogAttributionStorage => execute_catalog_attribution(
+            &mut device,
+            manifest,
+            output_dir,
+            reporter,
+            BenchmarkProfile::CatalogAttributionStorage,
+            "storage",
+        ),
+        BenchmarkScenario::CatalogAttributionFunctionGraph => execute_catalog_attribution(
+            &mut device,
+            manifest,
+            output_dir,
+            reporter,
+            BenchmarkProfile::CatalogAttributionFunctionGraph,
+            "function-graph",
         ),
         BenchmarkScenario::SystemEntry => {
             execute_system_entry(&mut device, manifest, output_dir, reporter)
@@ -860,6 +884,8 @@ fn particle_scene_lab_command(scenario: BenchmarkScenario) -> Option<&'static st
         | BenchmarkScenario::CatalogAttributionControl
         | BenchmarkScenario::CatalogAttributionPprof
         | BenchmarkScenario::CatalogAttributionPmu
+        | BenchmarkScenario::CatalogAttributionStorage
+        | BenchmarkScenario::CatalogAttributionFunctionGraph
         | BenchmarkScenario::SystemEntry
         | BenchmarkScenario::SystemEntryCritical
         | BenchmarkScenario::SystemEntryCriticalConfirm
