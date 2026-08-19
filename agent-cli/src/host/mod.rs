@@ -9749,6 +9749,7 @@ fn summarize_arcade_velocity_scroll(
         .pointer("/worker_profiles/dropped_profiles")
         .and_then(Value::as_u64)
         .unwrap_or(0);
+    let terminal_scanout_authoritative = arcade_velocity_scroll_terminal_is_authoritative(route);
     let mut quality_failures = Vec::new();
     if phase_duration_us < expected_duration_ms * 1_000 {
         quality_failures.push("scroll-window-shorter-than-requested-duration");
@@ -9791,6 +9792,9 @@ fn summarize_arcade_velocity_scroll(
     }
     if screen_orientation != ending_screen_orientation {
         quality_failures.push("screen-orientation-changed");
+    }
+    if !terminal_scanout_authoritative {
+        quality_failures.push("terminal-capture-not-authoritative-scanout");
     }
     let quality_status = if quality_failures.is_empty() {
         "passed"
@@ -9865,6 +9869,7 @@ fn summarize_arcade_velocity_scroll(
             "software_cadence_source": "gui-presentation-stamps",
             "physical_cadence_source": "fpga-owned-vblank-telemetry",
             "foreground_phase_timing": "not-collected-to-avoid-observer-effect",
+            "terminal_scanout_authoritative": terminal_scanout_authoritative,
         },
         "status_publishing": status_publishing_summary(&[], &sample_refs),
         "terminal_checkpoint": route.get("terminal_checkpoint").cloned().unwrap_or(Value::Null),
@@ -9946,6 +9951,17 @@ fn summarize_arcade_velocity_scroll(
     )?;
     fs::write(output_dir.join("report.md"), report)?;
     Ok(summary)
+}
+
+fn arcade_velocity_scroll_terminal_is_authoritative(route: &Value) -> bool {
+    route
+        .pointer("/terminal_checkpoint/capture/authoritative_scanout")
+        .and_then(Value::as_bool)
+        == Some(true)
+        && route
+            .pointer("/terminal_checkpoint/capture_source")
+            .and_then(Value::as_str)
+            == Some("fpga-latched-scanout-slots")
 }
 
 fn arcade_velocity_scroll_orientations(route: &Value) -> Result<(&str, &str)> {
@@ -30998,6 +31014,31 @@ H: Handlers=event3 js0"#
             arcade_velocity_scroll_orientations(&route).unwrap(),
             ("Normal", "Monitor right (clockwise)")
         );
+    }
+
+    #[test]
+    fn arcade_velocity_scroll_requires_an_authoritative_terminal_scanout() {
+        let authoritative = json!({
+            "terminal_checkpoint": {
+                "capture_source": "fpga-latched-scanout-slots",
+                "capture": { "authoritative_scanout": true },
+            },
+        });
+        assert!(arcade_velocity_scroll_terminal_is_authoritative(
+            &authoritative
+        ));
+
+        let mut framebuffer_only = authoritative.clone();
+        framebuffer_only["terminal_checkpoint"]["capture_source"] = json!("framebuffer-memory");
+        assert!(!arcade_velocity_scroll_terminal_is_authoritative(
+            &framebuffer_only
+        ));
+
+        let mut unconfirmed = authoritative;
+        unconfirmed["terminal_checkpoint"]["capture"]["authoritative_scanout"] = json!(false);
+        assert!(!arcade_velocity_scroll_terminal_is_authoritative(
+            &unconfirmed
+        ));
     }
 
     const MAME_1942_FIXTURE: &str = r#"<?xml version="1.0"?>
