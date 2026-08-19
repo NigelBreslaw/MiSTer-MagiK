@@ -9751,7 +9751,7 @@ fn summarize_arcade_velocity_scroll(
         .unwrap_or(0);
     let mut quality_failures = Vec::new();
     if phase_duration_us < expected_duration_ms * 1_000 {
-        quality_failures.push("scroll-window-shorter-than-40-seconds");
+        quality_failures.push("scroll-window-shorter-than-requested-duration");
     }
     if physical_fps < minimum_physical_fps {
         quality_failures.push(arcade_velocity_scroll_fps_failure(minimum_physical_fps));
@@ -9766,6 +9766,13 @@ fn summarize_arcade_velocity_scroll(
     }
     if ownership_losses != 0 {
         quality_failures.push("presentation-ownership-loss");
+    }
+    if physical_refresh
+        .pointer("/presentation_telemetry/endpoints_settled")
+        .and_then(Value::as_bool)
+        != Some(true)
+    {
+        quality_failures.push("presentation-endpoints-not-settled");
     }
     if latch_drop_delta != 0 {
         quality_failures.push("latch-drops");
@@ -20588,6 +20595,7 @@ fn authoritative_presentation_window(
             snapshot.captured_monotonic_us >= first_completion_us
                 && snapshot.captured_monotonic_us <= last_completion_us
                 && snapshot.magik_ownership
+                && !snapshot.pending
                 && snapshot.owned_vblank_count
                     == snapshot
                         .presented_vblank_count
@@ -20605,20 +20613,9 @@ fn authoritative_presentation_window(
         .checked_sub(start.captured_monotonic_us)
         .filter(|elapsed| *elapsed > 0)
         .ok_or_else(|| format!("FPGA cadence run {run} has insufficient snapshot separation"))?;
-    // The counters describe completed physical refreshes even when a new post is
-    // pending. Normalize only the endpoint protocol bit for the cumulative-window
-    // validator and retain the observed pending state in the evidence below.
-    let settled_start = HostPresentationTelemetrySnapshot {
-        pending: false,
-        ..start
-    };
-    let settled_end = HostPresentationTelemetrySnapshot {
-        pending: false,
-        ..end
-    };
     let delta = mister_magik_latch_contract::validate_presentation_telemetry_window(
-        settled_start,
-        settled_end,
+        start,
+        end,
         elapsed_us,
         refresh_period_us,
     )
@@ -25636,6 +25633,43 @@ fn unix_secs() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn presentation_sample(captured_monotonic_us: u64, count: u32, pending: bool) -> Value {
+        json!({
+            "presentation": {
+                "schema": "mister-magik-presentation-telemetry-snapshot-v1",
+                "source": "fpga-owned-vblank-telemetry",
+                "available": true,
+                "captured_monotonic_us": captured_monotonic_us,
+                "owned_vblank_count": count,
+                "presented_vblank_count": count,
+                "repeated_vblank_count": 0,
+                "ownership_loss_count": 0,
+                "magik_ownership": true,
+                "pending": pending,
+            }
+        })
+    }
+
+    #[test]
+    fn authoritative_presentation_window_uses_settled_endpoints_only() {
+        let samples = [
+            presentation_sample(100_000, 100, true),
+            presentation_sample(116_666, 101, false),
+            presentation_sample(133_332, 102, false),
+            presentation_sample(149_998, 103, true),
+        ];
+
+        let evidence =
+            authoritative_presentation_window(1, &samples, 100_000, 149_998, 16_666).unwrap();
+
+        assert_eq!(evidence["start_captured_monotonic_us"], 116_666);
+        assert_eq!(evidence["end_captured_monotonic_us"], 133_332);
+        assert_eq!(evidence["start_pending"], false);
+        assert_eq!(evidence["end_pending"], false);
+        assert_eq!(evidence["endpoints_settled"], true);
+        assert_eq!(evidence["presented_vblank_delta"], 1);
+    }
 
     #[test]
     fn system_entry_registry_parser_reads_summary_rows_without_opening_shards() {
