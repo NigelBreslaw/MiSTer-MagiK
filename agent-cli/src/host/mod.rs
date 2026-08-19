@@ -17438,6 +17438,7 @@ fn run_catalog_build_rebuild_leg(
     let mut statuses = Vec::new();
     let mut telemetry = Vec::new();
     let mut automation_nonce = None;
+    let mut interaction_started = false;
     let mut interaction_telemetry_start = None;
     let (catalog, inspect_log, final_status) = loop {
         let status = read_launcher_status(session)?;
@@ -17451,57 +17452,66 @@ fn run_catalog_build_rebuild_leg(
                     > 0)
         {
             first_visible_ms = Some(started.elapsed().as_millis() as u64);
+            if minimum_generation.is_none() {
+                let build_version = status
+                    .pointer("/build/version")
+                    .and_then(Value::as_str)
+                    .ok_or("catalog benchmark launcher status has no build version")?
+                    .to_owned();
+                let source_revision = status
+                    .pointer("/build/source_revision")
+                    .and_then(Value::as_str)
+                    .ok_or("catalog benchmark launcher status has no source revision")?
+                    .to_owned();
+                let main_status: Value = serde_json::from_str(
+                    &remote_read(session, MAIN_STATUS_REMOTE)
+                        .ok_or("catalog benchmark Main status is missing")?,
+                )?;
+                let main_generation = main_status
+                    .get("main_generation")
+                    .and_then(Value::as_u64)
+                    .ok_or("catalog benchmark Main status has no generation")?;
+                let begun: Value = serde_json::from_str(&launcher_automation::begin(
+                    config,
+                    &build_version,
+                    &source_revision,
+                    main_generation,
+                    120,
+                )?)?;
+                automation_nonce = Some(
+                    begun
+                        .get("nonce")
+                        .and_then(Value::as_str)
+                        .ok_or("catalog benchmark automation begin has no nonce")?
+                        .to_owned(),
+                );
+            }
         }
-        if minimum_generation.is_none()
-            && automation_nonce.is_none()
-            && first_visible_ms.is_some()
+        if !interaction_started
             && status.get("input_enabled").and_then(Value::as_bool) == Some(true)
+            && let Some(nonce) = automation_nonce.as_deref()
         {
-            let build_version = status
-                .pointer("/build/version")
-                .and_then(Value::as_str)
-                .ok_or("catalog benchmark launcher status has no build version")?
-                .to_owned();
-            let source_revision = status
-                .pointer("/build/source_revision")
-                .and_then(Value::as_str)
-                .ok_or("catalog benchmark launcher status has no source revision")?
-                .to_owned();
-            let main_status: Value = serde_json::from_str(
-                &remote_read(session, MAIN_STATUS_REMOTE)
-                    .ok_or("catalog benchmark Main status is missing")?,
-            )?;
-            let main_generation = main_status
-                .get("main_generation")
-                .and_then(Value::as_u64)
-                .ok_or("catalog benchmark Main status has no generation")?;
-            let begun: Value = serde_json::from_str(&launcher_automation::begin(
-                config,
-                &build_version,
-                &source_revision,
-                main_generation,
-                120,
-            )?)?;
-            let nonce = begun
-                .get("nonce")
-                .and_then(Value::as_str)
-                .ok_or("catalog benchmark automation begin has no nonce")?
-                .to_owned();
             launcher_automation::send_action(
                 config,
-                &nonce,
+                nonce,
                 &AutomationAction::Hold {
                     button: AutomationButton::Down,
                     duration_ms: mister_magik_agent_protocol::LAUNCHER_AUTOMATION_MAX_HOLD_MS,
                 },
             )?;
             interaction_telemetry_start = Some(telemetry.len());
-            automation_nonce = Some(nonce);
+            interaction_started = true;
         }
         statuses.push(status.clone());
-        telemetry.extend(agent_telemetry_for_duration(
+        let (telemetry_duration, telemetry_cadence_ms) = if interaction_started {
+            (Duration::from_millis(250), 50)
+        } else {
+            (Duration::from_secs(1), 250)
+        };
+        telemetry.extend(agent_telemetry_for_duration_at_cadence(
             endpoint,
-            Duration::from_secs(1),
+            telemetry_duration,
+            telemetry_cadence_ms,
         )?);
         if first_visible_ms.is_none()
             && started.elapsed()
