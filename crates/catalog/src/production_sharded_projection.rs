@@ -1212,6 +1212,53 @@ mod tests {
     }
 
     #[test]
+    fn canonical_preview_rows_do_not_publish_a_repair_generation() {
+        let root = std::env::temp_dir().join(format!(
+            "mister-magik-preview-availability-canonical-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let state = fixture_state();
+        let fingerprint = state.stamp.fingerprint_hex();
+        let stable_path = crate::preview_worker::preview_archive_path_for_system("arcade");
+        let mut present = game("Present", "/arcade/present.mra", "arcade");
+        present.preview_asset_key = "present".into();
+        present.preview_archive_path = stable_path.into();
+        present.has_preview = true;
+        let mut absent = game("Absent", "/arcade/absent.mra", "arcade");
+        absent.preview_asset_key = "absent".into();
+        let catalog = ArcadeCatalog::new(
+            PathBuf::from("/fixture"),
+            vec![present, absent],
+            vec![GameSystemEntry {
+                id: "arcade".to_string(),
+                title: "Arcade".to_string(),
+                count: 2,
+            }],
+        );
+        publish_bound_production_projection(&root, &catalog, &fingerprint, limits()).unwrap();
+        crate::catalog_state::write(&crate::catalog_state::path_for_root(&root), &state).unwrap();
+        let pack = root.join("arcade-pack.mmlz4b");
+        write_preview_sidecar_index(&pack, &["present.rgb565"]);
+
+        let unchanged = reconcile_production_preview_availability(
+            &root,
+            &SystemId::parse("arcade").unwrap(),
+            &pack,
+            limits(),
+        )
+        .unwrap();
+
+        assert_eq!(unchanged.previous_generation, 1);
+        assert_eq!(unchanged.generation, 1);
+        assert_eq!(unchanged.available_rows, 1);
+        assert_eq!(unchanged.changed_rows, 0);
+        assert_eq!(read_latest_manifest(&root, limits()).unwrap().generation, 1);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn preview_availability_reconciliation_rejects_missing_index_without_publication() {
         let root = std::env::temp_dir().join(format!(
             "mister-magik-preview-availability-missing-{}",

@@ -46,8 +46,12 @@ impl LauncherPreviewAsset {
         asset_key: impl Into<String>,
         available: bool,
     ) -> Self {
-        let archive_path = archive_path.into();
         let asset_key = asset_key.into();
+        let archive_path = if available && !asset_key.is_empty() {
+            archive_path.into()
+        } else {
+            String::new()
+        };
         Self {
             available,
             archive_path,
@@ -887,6 +891,19 @@ mod tests {
     use super::*;
     use crate::prepared_collections::{PreparedCollectionId, PreparedLaunchProvenance};
     use crate::test_support::*;
+
+    #[test]
+    fn unavailable_preview_preserves_key_but_clears_archive_path() {
+        let preview = LauncherPreviewAsset::with_availability(
+            "/media/fat/mister-magik/screenshots/snes-screenshots.mmlz4b",
+            "chrono-trigger",
+            false,
+        );
+
+        assert_eq!(preview.asset_key, "chrono-trigger");
+        assert!(preview.archive_path.is_empty());
+        assert!(!preview.has_preview());
+    }
 
     fn lynx_row(
         title: &str,

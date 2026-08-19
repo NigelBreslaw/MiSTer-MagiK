@@ -2110,9 +2110,11 @@ impl CatalogProjectionBuildContext<'_> {
             let preview = if preview_key.is_empty() {
                 LauncherPreviewAsset::none()
             } else {
-                LauncherPreviewAsset::new(
+                let available = self.preview_paths.has_entry(&system_id, &preview_key);
+                LauncherPreviewAsset::with_availability(
                     preview_worker::preview_archive_path_for_system(&system_id),
                     preview_key,
+                    available,
                 )
             };
             (
@@ -2185,10 +2187,6 @@ impl CatalogProjectionBuildContext<'_> {
             {
                 row.game.title = metadata.title.clone().into();
             }
-            row.game.has_preview = row.game.has_preview
-                && self
-                    .preview_paths
-                    .has_entry(&system_id, row.game.preview_asset_key.as_ref());
         }
         Some(CatalogProjectionForDiscovery {
             row,
