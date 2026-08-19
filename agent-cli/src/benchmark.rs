@@ -2053,22 +2053,30 @@ fn execute_catalog_full_build_rebuild(
 
 fn evaluate_catalog_full_build_rebuild_summary(summary: &Value) -> AgentResult<()> {
     if summary.get("schema").and_then(Value::as_str)
-        != Some("mister-magik-catalog-full-build-rebuild-v1")
+        != Some("mister-magik-catalog-full-build-rebuild-v2")
         || summary.get("scenario").and_then(Value::as_str) != Some("catalog-full-build-rebuild")
         || summary.get("status").and_then(Value::as_str) != Some("passed")
     {
-        return Err("whole-card catalog benchmark summary is not a passing v1 report".into());
+        return Err("whole-card catalog benchmark summary is not a passing v2 report".into());
     }
     if summary
-        .pointer("/fresh/catalog/valid")
+        .pointer("/first_observed_clean/catalog/valid")
         .and_then(Value::as_bool)
         != Some(true)
+        || summary
+            .pointer("/warm_clean/catalog/valid")
+            .and_then(Value::as_bool)
+            != Some(true)
         || summary
             .pointer("/rebuild/catalog/valid")
             .and_then(Value::as_bool)
             != Some(true)
         || summary
-            .pointer("/validation/catalog_counts_identical")
+            .pointer("/validation/catalog_fingerprints_identical")
+            .and_then(Value::as_bool)
+            != Some(true)
+        || summary
+            .pointer("/validation/phase_evidence_complete")
             .and_then(Value::as_bool)
             != Some(true)
     {
@@ -2623,16 +2631,20 @@ mod tests {
     #[test]
     fn whole_card_catalog_requires_matching_valid_counts() {
         let passing = json!({
-            "schema": "mister-magik-catalog-full-build-rebuild-v1",
+            "schema": "mister-magik-catalog-full-build-rebuild-v2",
             "scenario": "catalog-full-build-rebuild",
             "status": "passed",
-            "fresh": {"catalog": {"valid": true}},
+            "first_observed_clean": {"catalog": {"valid": true}},
+            "warm_clean": {"catalog": {"valid": true}},
             "rebuild": {"catalog": {"valid": true}},
-            "validation": {"catalog_counts_identical": true},
+            "validation": {
+                "catalog_fingerprints_identical": true,
+                "phase_evidence_complete": true
+            },
         });
         assert!(evaluate_catalog_full_build_rebuild_summary(&passing).is_ok());
         let mut failed = passing;
-        failed["validation"]["catalog_counts_identical"] = json!(false);
+        failed["validation"]["catalog_fingerprints_identical"] = json!(false);
         assert!(evaluate_catalog_full_build_rebuild_summary(&failed).is_err());
     }
 

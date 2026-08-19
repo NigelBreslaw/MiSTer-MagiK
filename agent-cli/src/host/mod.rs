@@ -15339,44 +15339,72 @@ fn profile_installed_catalog_full_build_rebuild(
             catalog_full_build_rebuild_launcher_env,
             catalog_full_build_rebuild_runtime_command,
         )?;
-        let fresh_generation = fresh
+        exec_checked(
+            &session,
+            "prepare warm clean whole-card catalog sample",
+            &catalog_build_rebuild_prepare_command(),
+        )?;
+        let warm_clean = run_catalog_build_rebuild_leg(
+            config,
+            &session,
+            &endpoint,
+            output_dir,
+            "warm-clean",
+            None,
+            false,
+            catalog_full_build_rebuild_launcher_env,
+            catalog_full_build_rebuild_runtime_command,
+        )?;
+        let warm_clean_generation = warm_clean
             .pointer("/catalog/generation")
             .and_then(Value::as_u64)
-            .ok_or("whole-card fresh leg has no generation")?;
+            .ok_or("whole-card warm clean leg has no generation")?;
         let rebuild = run_catalog_build_rebuild_leg(
             config,
             &session,
             &endpoint,
             output_dir,
             "rebuild",
-            Some(fresh_generation),
+            Some(warm_clean_generation),
             false,
             catalog_full_build_rebuild_launcher_env,
             catalog_full_build_rebuild_runtime_command,
         )?;
-        let catalog_counts_identical = fresh.pointer("/catalog/systems")
-            == rebuild.pointer("/catalog/systems")
-            && fresh.pointer("/catalog/total_games") == rebuild.pointer("/catalog/total_games");
-        let status = if catalog_counts_identical {
+        let fingerprints = [
+            fresh.pointer("/catalog/logical_fingerprint"),
+            warm_clean.pointer("/catalog/logical_fingerprint"),
+            rebuild.pointer("/catalog/logical_fingerprint"),
+        ];
+        let catalog_fingerprints_identical =
+            fingerprints[0].is_some() && fingerprints.windows(2).all(|pair| pair[0] == pair[1]);
+        let phase_evidence_complete = [&fresh, &warm_clean, &rebuild].into_iter().all(|leg| {
+            leg.pointer("/phase_evidence/complete")
+                .and_then(Value::as_bool)
+                == Some(true)
+        });
+        let status = if catalog_fingerprints_identical && phase_evidence_complete {
             "passed"
         } else {
             "failed"
         };
         Ok(json!({
-            "schema": "mister-magik-catalog-full-build-rebuild-v1",
+            "schema": "mister-magik-catalog-full-build-rebuild-v2",
             "scenario": "catalog-full-build-rebuild",
             "status": status,
             "configuration": {
                 "samples": 1,
+                "legs": ["first-observed-clean", "warm-clean", "forced-rebuild"],
                 "source_policy": "normal configured library sources",
                 "catalog_root": CATALOG_BUILD_REBUILD_REMOTE_DIR,
                 "publication_filesystem": "exfat",
                 "page_cache_policy": "unchanged",
             },
-            "fresh": fresh,
+            "first_observed_clean": fresh,
+            "warm_clean": warm_clean,
             "rebuild": rebuild,
             "validation": {
-                "catalog_counts_identical": catalog_counts_identical,
+                "catalog_fingerprints_identical": catalog_fingerprints_identical,
+                "phase_evidence_complete": phase_evidence_complete,
             },
             "manifest": parse_manifest_evidence(&manifest),
             "boot_id": boot_id,
@@ -17615,7 +17643,7 @@ fn run_catalog_build_rebuild_leg(
     let mut interaction_origin_selection = None;
     let mut interaction_started = false;
     let mut interaction_telemetry_start = None;
-    let (catalog, inspect_log, final_status) = loop {
+    let (mut catalog, inspect_log, final_status) = loop {
         let status = read_launcher_status(session)?;
         if first_visible_ms.is_none()
             && status.get("catalog_ready").and_then(Value::as_bool) == Some(true)
@@ -17744,6 +17772,15 @@ fn run_catalog_build_rebuild_leg(
                 .join("\n")
         ),
     )?;
+    let launcher_log = remote_read(session, "/tmp/mister-magik-slint.log")
+        .ok_or_else(|| format!("{label} catalog benchmark has no launcher log"))?;
+    fs::write(
+        sample_dir.join(format!("{label}-launcher.log")),
+        &launcher_log,
+    )?;
+    let phase_evidence = catalog_phase_evidence(&launcher_log);
+    let logical_fingerprint = catalog_logical_fingerprint(&catalog)?;
+    catalog["logical_fingerprint"] = json!(logical_fingerprint);
     if let Some(nonce) = automation_nonce.as_deref() {
         let _ = launcher_automation::send_action(config, nonce, &AutomationAction::ReleaseAll);
         let _ = launcher_automation::end(config, nonce);
@@ -17759,8 +17796,107 @@ fn run_catalog_build_rebuild_leg(
             "complete_ms": complete_ms,
         },
         "catalog": catalog,
+        "phase_evidence": phase_evidence,
         "ui": ui,
     }))
+}
+
+fn catalog_logical_fingerprint(catalog: &Value) -> Result<String> {
+    let logical = json!({
+        "systems": catalog
+            .get("systems")
+            .cloned()
+            .ok_or("catalog fingerprint has no systems")?,
+        "total_games": catalog
+            .get("total_games")
+            .cloned()
+            .ok_or("catalog fingerprint has no total game count")?,
+    });
+    let encoded = serde_json::to_vec(&logical)?;
+    Ok(encode_hex(&Sha256::digest(encoded)))
+}
+
+fn catalog_phase_evidence(log: &str) -> Value {
+    const RECORDS: [&str; 8] = [
+        "startup_timing",
+        "catalog_scan_attribution_tsv",
+        "library_scan_timing",
+        "catalog_v3_projection_phases_tsv",
+        "catalog_v3_reconciliation_tsv",
+        "catalog_v3_persist_phases_tsv",
+        "catalog_v3_shard_phase_tsv",
+        "catalog_memory_tsv",
+    ];
+    let mut records = Vec::new();
+    for line in log.lines() {
+        let Some((marker, offset)) = RECORDS
+            .iter()
+            .find_map(|marker| line.find(marker).map(|offset| (*marker, offset)))
+        else {
+            continue;
+        };
+        let fields = line[offset..].split('\t').collect::<Vec<_>>();
+        let mut metrics = serde_json::Map::new();
+        let mut name = None;
+        let mut observed_at_us: Option<u64> = None;
+        for (index, field) in fields.iter().enumerate().skip(1) {
+            if marker == "startup_timing" && index == 1 {
+                name = Some((*field).to_owned());
+                continue;
+            }
+            if marker == "startup_timing" && index == 2 {
+                observed_at_us = field
+                    .strip_suffix("us")
+                    .and_then(|value| value.parse().ok());
+                continue;
+            }
+            for token in field.split_ascii_whitespace() {
+                if let Some((key, value)) = token.split_once('=') {
+                    metrics.insert(key.to_owned(), catalog_phase_metric(value));
+                }
+            }
+            if name.is_none() && !field.contains('=') {
+                name = Some((*field).to_owned());
+            }
+        }
+        records.push(json!({
+            "record": marker,
+            "name": name,
+            "observed_at_us": observed_at_us,
+            "metrics": metrics,
+        }));
+    }
+    let has = |record: &str, name: Option<&str>| {
+        records.iter().any(|value| {
+            value.get("record").and_then(Value::as_str) == Some(record)
+                && name.is_none_or(|name| value.get("name").and_then(Value::as_str) == Some(name))
+        })
+    };
+    let required = json!({
+        "scan_complete": has("startup_timing", Some("library_scan_complete")),
+        "builder_persisted": has("startup_timing", Some("builder_persisted")),
+        "scan_attribution": has("catalog_scan_attribution_tsv", None),
+        "projection": has("catalog_v3_projection_phases_tsv", None),
+        "reconciliation": has("catalog_v3_reconciliation_tsv", None),
+        "persist": has("catalog_v3_persist_phases_tsv", None),
+    });
+    let complete = required
+        .as_object()
+        .is_some_and(|required| required.values().all(|value| value == &Value::Bool(true)));
+    json!({
+        "schema": "mister-magik-catalog-phase-evidence-v1",
+        "complete": complete,
+        "required": required,
+        "records": records,
+    })
+}
+
+fn catalog_phase_metric(value: &str) -> Value {
+    let value = value.trim_end_matches(',');
+    value
+        .parse::<u64>()
+        .map(Value::from)
+        .unwrap_or_else(|_| Value::String(value.to_owned()))
 }
 
 fn catalog_build_rebuild_ui_summary(
@@ -17941,32 +18077,40 @@ fn catalog_build_rebuild_report(summary: &Value) -> Result<String> {
 }
 
 fn catalog_full_build_rebuild_report(summary: &Value) -> Result<String> {
-    let fresh_ms = summary
-        .pointer("/fresh/timing/complete_ms")
+    let first_observed_ms = summary
+        .pointer("/first_observed_clean/timing/complete_ms")
         .and_then(Value::as_u64)
-        .ok_or("whole-card report has no fresh completion time")?;
+        .ok_or("whole-card report has no first observed completion time")?;
     let first_visible_ms = summary
-        .pointer("/fresh/timing/first_visible_ms")
+        .pointer("/first_observed_clean/timing/first_visible_ms")
         .and_then(Value::as_u64)
         .ok_or("whole-card report has no first-visible time")?;
+    let warm_clean_ms = summary
+        .pointer("/warm_clean/timing/complete_ms")
+        .and_then(Value::as_u64)
+        .ok_or("whole-card report has no warm clean completion time")?;
     let rebuild_ms = summary
         .pointer("/rebuild/timing/complete_ms")
         .and_then(Value::as_u64)
         .ok_or("whole-card report has no rebuild completion time")?;
     let systems = summary
-        .pointer("/fresh/catalog/systems")
+        .pointer("/first_observed_clean/catalog/systems")
         .and_then(Value::as_array)
         .ok_or("whole-card report has no system counts")?;
     let games = summary
-        .pointer("/fresh/catalog/total_games")
+        .pointer("/first_observed_clean/catalog/total_games")
         .and_then(Value::as_u64)
         .ok_or("whole-card report has no game count")?;
     Ok(format!(
-        "# Whole-card catalog build/rebuild benchmark\n\n- Status: **{}**\n- Fresh first visible: {first_visible_ms} ms\n- Fresh complete: {fresh_ms} ms\n- Forced rebuild complete: {rebuild_ms} ms\n- Systems: {}\n- Games: {games}\n- Catalog counts identical: {}\n- Page-cache policy: unchanged\n",
+        "# Whole-card catalog build/rebuild benchmark\n\n- Status: **{}**\n- First observed Arcade visible: {first_visible_ms} ms\n- First observed clean completion: {first_observed_ms} ms\n- Warm clean completion: {warm_clean_ms} ms\n- Forced rebuild completion: {rebuild_ms} ms\n- Systems: {}\n- Games: {games}\n- Catalog fingerprints identical: {}\n- Phase evidence complete: {}\n- Page-cache policy: observed sequence; unchanged\n",
         summary["status"].as_str().unwrap_or("failed"),
         systems.len(),
         summary
-            .pointer("/validation/catalog_counts_identical")
+            .pointer("/validation/catalog_fingerprints_identical")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        summary
+            .pointer("/validation/phase_evidence_complete")
             .and_then(Value::as_bool)
             .unwrap_or(false),
     ))
@@ -31053,6 +31197,45 @@ H: Handlers=event3 js0"#
         let inspect = catalog_full_build_rebuild_runtime_command("catalog-v3-inspect");
         assert!(inspect.contains(CATALOG_BUILD_REBUILD_REMOTE_DIR));
         assert!(!inspect.contains("MISTER_LIBRARY_ROOTS="));
+    }
+
+    #[test]
+    fn catalog_phase_evidence_requires_all_authoritative_boundaries() {
+        let log = "startup_timing\tlibrary_scan_complete\t100us\tscan_us=90\n\
+startup_timing\tbuilder_persisted\t200us\telapsed_us=190\n\
+catalog_scan_attribution_tsv\tvalidation_us=10 execution_walk_us=70\n\
+catalog_v3_projection_phases_tsv\tplanning_us=1\treconciliation_us=2\ttotal_us=3\n\
+catalog_v3_reconciliation_tsv\tgeneration=2\trebuilt=3\n\
+catalog_v3_persist_phases_tsv\tprojection_us=4\tscanner_cache_us=5\n";
+        let evidence = catalog_phase_evidence(log);
+        assert_eq!(evidence["complete"], true);
+        assert_eq!(evidence["required"]["scan_complete"], true);
+        assert!(evidence["records"].as_array().unwrap().len() >= 6);
+
+        let incomplete = catalog_phase_evidence(
+            &log.replace("catalog_v3_persist_phases_tsv", "missing_persist_record"),
+        );
+        assert_eq!(incomplete["complete"], false);
+    }
+
+    #[test]
+    fn catalog_logical_fingerprint_ignores_generation() {
+        let mut first = json!({
+            "generation": 7,
+            "systems": [{"system": "arcade", "role": "arcade", "games": 968}],
+            "total_games": 968,
+        });
+        let mut second = first.clone();
+        second["generation"] = json!(9);
+        assert_eq!(
+            catalog_logical_fingerprint(&first).unwrap(),
+            catalog_logical_fingerprint(&second).unwrap()
+        );
+        first["total_games"] = json!(969);
+        assert_ne!(
+            catalog_logical_fingerprint(&first).unwrap(),
+            catalog_logical_fingerprint(&second).unwrap()
+        );
     }
 
     #[test]
