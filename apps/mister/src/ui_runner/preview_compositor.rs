@@ -89,6 +89,8 @@ struct WorkerState {
     consecutive_failures: u8,
     worker_alive: bool,
     disabled: bool,
+    profile_flush_requested: u64,
+    profile_flush_completed: u64,
 }
 
 struct SharedWorker {
@@ -222,6 +224,24 @@ impl PreviewCompositor {
             worker_alive: state.worker_alive && !state.disabled,
         }
     }
+
+    pub(super) fn flush_pmu_profile(&self, timeout: Duration) -> bool {
+        let mut state = self.shared.state.lock().unwrap_or_else(|e| e.into_inner());
+        if !state.worker_alive {
+            return false;
+        }
+        let requested = state.profile_flush_requested.saturating_add(1);
+        state.profile_flush_requested = requested;
+        self.shared.ready.notify_one();
+        let (state, _) = self
+            .shared
+            .ready
+            .wait_timeout_while(state, timeout, |state| {
+                state.worker_alive && state.profile_flush_completed < requested
+            })
+            .unwrap_or_else(|error| error.into_inner());
+        state.profile_flush_completed >= requested
+    }
 }
 
 impl Drop for PreviewCompositor {
@@ -248,11 +268,25 @@ fn run_worker(shared: Arc<SharedWorker>) {
     loop {
         let (request, mut physical) = {
             let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
-            while state.request.is_none() && !state.shutdown {
+            while state.request.is_none()
+                && !state.shutdown
+                && state.profile_flush_completed == state.profile_flush_requested
+            {
                 state = shared.ready.wait(state).unwrap_or_else(|e| e.into_inner());
             }
             if state.shutdown {
+                drop(state);
+                mister_magik_perf_events::submit_thread_profile("preview-compositor");
                 return;
+            }
+            if state.profile_flush_completed < state.profile_flush_requested {
+                let requested = state.profile_flush_requested;
+                drop(state);
+                mister_magik_perf_events::submit_thread_profile("preview-compositor");
+                let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
+                state.profile_flush_completed = requested;
+                shared.ready.notify_all();
+                continue;
             }
             (
                 state.request.take().expect("worker request"),

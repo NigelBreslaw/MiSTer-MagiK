@@ -11490,6 +11490,13 @@ pub(super) fn run_launcher_loop(
                         .as_ref()
                         .is_some_and(CrtBackdropController::is_transitioning),
                 );
+                if gui_profiling.pmu_requested()
+                    && gui_profiling.settled_arcade_phase_pending()
+                    && let Some(worker) = preview_compositor.as_ref()
+                    && !worker.flush_pmu_profile(Duration::from_millis(100))
+                {
+                    crate::ui_errln!("preview_compositor_pmu_flush_timeout");
+                }
                 gui_profiling.observe_route_presentation(
                     screen_label(nav.screen),
                     nav.arcade.is_scroll_active(),

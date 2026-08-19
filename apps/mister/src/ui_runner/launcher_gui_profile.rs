@@ -445,6 +445,10 @@ impl GuiProfilingController {
         )
     }
 
+    pub(super) fn pmu_requested(&self) -> bool {
+        self.pmu_requested
+    }
+
     pub(super) fn needs_presentation(&self) -> bool {
         matches!(self.state, GuiProfileState::AwaitingPresentation(_))
     }
