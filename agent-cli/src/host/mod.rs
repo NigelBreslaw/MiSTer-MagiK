@@ -17575,7 +17575,7 @@ fn catalog_build_rebuild_physical_refresh(telemetry: &[Value]) -> Result<Value> 
         .iter()
         .filter_map(|sample| {
             sample
-                .pointer("/launcher/vsync_period_us")
+                .pointer("/launcher/frame_budget/budget_us")
                 .and_then(Value::as_u64)
         })
         .filter(|period| *period > 0)
