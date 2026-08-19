@@ -195,9 +195,14 @@ catalog is projected into per-system immutable artifacts and committed through
 the registry. Only the final complete generation is catalog authority. The
 bootstrap index is a disposable startup accelerator: it is published atomically
 after a valid first-visible snapshot, refreshed from the completed full catalog,
-and never used to suppress the authoritative background scan. That scan audits
-weak filesystem stamps and replaces any initially stale projection during the
-same launch.
+and never substitutes for authoritative scan facts. When first-visible Arcade
+came from a live scan, the builder merges that already-audited RAM artifact into
+the full scan and excludes only the identical Arcade target from the second
+filesystem walk. A retained-index hit has no reusable scan artifact, so the
+authoritative scan still visits Arcade normally. If the process stops between
+first-visible and publication, the next process either repeats the live Arcade
+scan or rebuilds the complete target journal; it never treats the mini-nav as a
+durable scan checkpoint.
 
 The standalone catalog-builder command retains its foreground-through-first-
 visible policy. The embedded cold launcher instead selects
