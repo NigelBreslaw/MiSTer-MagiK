@@ -1,0 +1,110 @@
+{
+  "schema": "mister-magik-performance-attribution-evidence-v1",
+  "captured_on": "2026-08-19",
+  "device": {
+    "soc": "dual-core Cortex-A9",
+    "filesystem": "exfat",
+    "mount": "/media/fat",
+    "block_device": "mmcblk0",
+    "mount_options": "rw,noatime,nodiratime",
+    "display_mode": "hdmi-1280x720p60",
+    "boot_id": "320651eb-ca64-4e2c-87d5-ca270a05f726"
+  },
+  "installed_identity": {
+    "magik_revision": "2acb549bf627bff697af8fef6c2f689017dd59a4",
+    "gui_sha256": "85c7b631115887e958ee314230596282aae587cdf685b69c27d4410d4d0c5e27",
+    "platform_manifest_sha256": "0e1754927cd9141d4f49149a158905dd39fa14de3889b8254cce15f551f9b7c4"
+  },
+  "scheduler_captures": [
+    {
+      "capture_id": "1787120541",
+      "duration_us": 7301334,
+      "cpu_task_busy_pct": [18.2918, 45.4484],
+      "dual_core_overlap_pct": 9.4945,
+      "usb_irq_count": 58399,
+      "usb_handler_us": 579330,
+      "main_runnable_p99_us": 59,
+      "main_switches": 13690,
+      "frame_max_us": 16572,
+      "dropped_frames": 0,
+      "trace_overruns": 0,
+      "trace_sha256": "17942f2d2687dad31bfc6ec84b9e545d6cdf4d6460990731ff136c562d09b146"
+    },
+    {
+      "capture_id": "1787120590",
+      "duration_us": 7383400,
+      "cpu_task_busy_pct": [18.0646, 45.4461],
+      "dual_core_overlap_pct": 9.9454,
+      "usb_irq_count": 59058,
+      "usb_handler_us": 583604,
+      "main_runnable_p99_us": 56,
+      "main_switches": 13778,
+      "frame_max_us": 16570,
+      "dropped_frames": 0,
+      "trace_overruns": 0,
+      "trace_sha256": "0388e69f1a038f07d7c76389b34f189b1708358cf055e3af97895b126fa81b09"
+    },
+    {
+      "capture_id": "1787120676",
+      "duration_us": 7053249,
+      "cpu_task_busy_pct": [17.5388, 47.8315],
+      "dual_core_overlap_pct": 9.8879,
+      "usb_irq_count": 56415,
+      "usb_handler_us": 561704,
+      "main_runnable_p99_us": 62,
+      "main_switches": 13686,
+      "frame_max_us": 16592,
+      "dropped_frames": 0,
+      "trace_overruns": 0,
+      "trace_sha256": "2fee49bca4d0b780340343368d04583193a499bf215916710c302e1c053c75bb"
+    }
+  ],
+  "storage_captures": [
+    {
+      "capture_id": "1787120840",
+      "cache_condition": "first-pass-colder-metadata-cache",
+      "duration_us": 233290000,
+      "walk_us": 93501000,
+      "scan_us": 127799219,
+      "import_us": 77981427,
+      "process_read_bytes": 209164288,
+      "process_write_bytes": 183324672,
+      "block_request_issues": 76397,
+      "artifact_copy_hash_us": 8293551,
+      "trace_overruns": 0,
+      "trace_sha256": "53de70a2356bfb1801c1d792e8ec51569e5ddb499d873112d289b10dd7e4738f"
+    },
+    {
+      "capture_id": "1787121193",
+      "cache_condition": "warm-metadata-cache",
+      "duration_us": 174630000,
+      "walk_us": 39588000,
+      "scan_us": 70396673,
+      "import_us": 77303503,
+      "process_read_bytes": 168725504,
+      "process_write_bytes": 183312384,
+      "block_request_issues": 21404,
+      "artifact_copy_hash_us": 8416212,
+      "trace_overruns": 0,
+      "trace_sha256": "b027ff2f216013d418271ee8d929f64cf7c557b647d840dc73bdb29ecec16640"
+    },
+    {
+      "capture_id": "1787121486",
+      "cache_condition": "warm-metadata-cache",
+      "duration_us": 172630000,
+      "walk_us": 38272000,
+      "scan_us": 68978385,
+      "import_us": 77106528,
+      "process_read_bytes": 166487552,
+      "process_write_bytes": 183230464,
+      "block_request_issues": 22085,
+      "artifact_copy_hash_us": 8181895,
+      "trace_overruns": 0,
+      "trace_sha256": "968bd18818793084fcff41cccd38ed3ce0280a195aba20ff6b965208ee45d42a"
+    }
+  ],
+  "raw_artifact_roots": [
+    "build/agent-benchmarks/scheduler-trace",
+    "build/agent-benchmarks/storage-attribution"
+  ]
+}
