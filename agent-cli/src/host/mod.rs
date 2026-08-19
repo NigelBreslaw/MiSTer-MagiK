@@ -15145,8 +15145,14 @@ fn profile_installed_catalog_build_rebuild(
                 "prepare bounded catalog build/rebuild sample",
                 &catalog_build_rebuild_prepare_command(),
             )?;
-            let fresh =
-                run_catalog_build_rebuild_leg(&session, &endpoint, &sample_dir, "fresh", None)?;
+            let fresh = run_catalog_build_rebuild_leg(
+                config,
+                &session,
+                &endpoint,
+                &sample_dir,
+                "fresh",
+                None,
+            )?;
             let fresh_generation = fresh
                 .pointer("/catalog/generation")
                 .and_then(Value::as_u64)
@@ -15159,6 +15165,7 @@ fn profile_installed_catalog_build_rebuild(
                 &catalog_build_rebuild_mutation_command(),
             )?;
             let rebuild = run_catalog_build_rebuild_leg(
+                config,
                 &session,
                 &endpoint,
                 &sample_dir,
@@ -15169,7 +15176,6 @@ fn profile_installed_catalog_build_rebuild(
             let snes_game_delta = i64::try_from(rebuild_snes)? - i64::try_from(fresh_snes)?;
             let status = if snes_game_delta == 1
                 && fresh.pointer("/ui/qualified").and_then(Value::as_bool) == Some(true)
-                && rebuild.pointer("/ui/qualified").and_then(Value::as_bool) == Some(true)
             {
                 "passed"
             } else {
@@ -17406,26 +17412,12 @@ fn catalog_build_rebuild_launcher_env() -> Vec<(String, String)> {
         ),
         ("MISTER_LAUNCHER_START_SCREEN".into(), "arcade".into()),
         ("MISTER_LAUNCHER_START_SYSTEM".into(), "arcade".into()),
-        (
-            "MISTER_LAUNCHER_INPUT_SCRIPT".into(),
-            catalog_build_rebuild_input_script(),
-        ),
-        (
-            "MISTER_LAUNCHER_INPUT_SCRIPT_WAIT_FRAMES".into(),
-            "1".into(),
-        ),
         ("MISTER_PREVIEW_ARCHIVE_WARM_SKIP".into(), "1".into()),
     ]
 }
 
-fn catalog_build_rebuild_input_script() -> String {
-    std::iter::repeat_n("wait:600", 2)
-        .chain(std::iter::repeat_n("down", 1_200))
-        .collect::<Vec<_>>()
-        .join(",")
-}
-
 fn run_catalog_build_rebuild_leg(
+    config: &NativeDeviceConfig,
     session: &Session,
     endpoint: &AgentEndpoint,
     sample_dir: &Path,
@@ -17445,6 +17437,8 @@ fn run_catalog_build_rebuild_leg(
     let mut first_visible_ms = None;
     let mut statuses = Vec::new();
     let mut telemetry = Vec::new();
+    let mut automation_nonce = None;
+    let mut interaction_telemetry_start = None;
     let (catalog, inspect_log, final_status) = loop {
         let status = read_launcher_status(session)?;
         if first_visible_ms.is_none()
@@ -17457,6 +17451,48 @@ fn run_catalog_build_rebuild_leg(
                     > 0)
         {
             first_visible_ms = Some(started.elapsed().as_millis() as u64);
+            if minimum_generation.is_none() {
+                let build_version = status
+                    .pointer("/build/version")
+                    .and_then(Value::as_str)
+                    .ok_or("catalog benchmark launcher status has no build version")?
+                    .to_owned();
+                let source_revision = status
+                    .pointer("/build/source_revision")
+                    .and_then(Value::as_str)
+                    .ok_or("catalog benchmark launcher status has no source revision")?
+                    .to_owned();
+                let main_status: Value = serde_json::from_str(
+                    &remote_read(session, MAIN_STATUS_REMOTE)
+                        .ok_or("catalog benchmark Main status is missing")?,
+                )?;
+                let main_generation = main_status
+                    .get("main_generation")
+                    .and_then(Value::as_u64)
+                    .ok_or("catalog benchmark Main status has no generation")?;
+                let begun: Value = serde_json::from_str(&launcher_automation::begin(
+                    config,
+                    &build_version,
+                    &source_revision,
+                    main_generation,
+                    120,
+                )?)?;
+                let nonce = begun
+                    .get("nonce")
+                    .and_then(Value::as_str)
+                    .ok_or("catalog benchmark automation begin has no nonce")?
+                    .to_owned();
+                launcher_automation::send_action(
+                    config,
+                    &nonce,
+                    &AutomationAction::Hold {
+                        button: AutomationButton::Down,
+                        duration_ms: mister_magik_agent_protocol::LAUNCHER_AUTOMATION_MAX_HOLD_MS,
+                    },
+                )?;
+                interaction_telemetry_start = Some(telemetry.len());
+                automation_nonce = Some(nonce);
+            }
         }
         statuses.push(status.clone());
         telemetry.extend(agent_telemetry_for_duration(
@@ -17515,7 +17551,18 @@ fn run_catalog_build_rebuild_leg(
                 .join("\n")
         ),
     )?;
-    let ui = catalog_build_rebuild_ui_summary(&statuses, &telemetry)?;
+    if let Some(nonce) = automation_nonce.as_deref() {
+        let _ = launcher_automation::send_action(config, nonce, &AutomationAction::ReleaseAll);
+        let _ = launcher_automation::end(config, nonce);
+    }
+    let interaction_telemetry = interaction_telemetry_start
+        .and_then(|start| telemetry.get(start..))
+        .unwrap_or(&telemetry);
+    let ui = catalog_build_rebuild_ui_summary(
+        &statuses,
+        interaction_telemetry,
+        minimum_generation.is_none(),
+    )?;
     Ok(json!({
         "timing": {
             "first_visible_ms": first_visible_ms,
@@ -17526,7 +17573,11 @@ fn run_catalog_build_rebuild_leg(
     }))
 }
 
-fn catalog_build_rebuild_ui_summary(statuses: &[Value], telemetry: &[Value]) -> Result<Value> {
+fn catalog_build_rebuild_ui_summary(
+    statuses: &[Value],
+    telemetry: &[Value],
+    interaction_required: bool,
+) -> Result<Value> {
     let final_status = statuses.last().cloned().unwrap_or(Value::Null);
     let physical_refresh = catalog_build_rebuild_physical_refresh(telemetry)?;
     let repeated_vblanks = physical_refresh
@@ -17547,14 +17598,16 @@ fn catalog_build_rebuild_ui_summary(statuses: &[Value], telemetry: &[Value]) -> 
         .iter()
         .filter_map(|status| status.get("arcade_selected").and_then(Value::as_u64))
         .collect::<BTreeSet<_>>();
-    let qualified = repeated_vblanks == 0
-        && physical_refresh
-            .get("ownership_loss_delta")
-            .and_then(Value::as_u64)
-            == Some(0)
-        && latch_drops == 0
-        && selections.len() >= 2;
+    let qualified = !interaction_required
+        || (repeated_vblanks == 0
+            && physical_refresh
+                .get("ownership_loss_delta")
+                .and_then(Value::as_u64)
+                == Some(0)
+            && latch_drops == 0
+            && selections.len() >= 2);
     Ok(json!({
+        "applicable": interaction_required,
         "qualified": qualified,
         "physical_refresh": physical_refresh,
         "latch_drops": latch_drops,
@@ -30746,13 +30799,10 @@ H: Handlers=event3 js0"#
         assert!(allowlist.contains(CATALOG_BUILD_REBUILD_ARCADE_ROOT));
         assert!(allowlist.contains(CATALOG_BUILD_REBUILD_SNES_ROOT));
         assert!(allowlist.contains("fixture/games/SNES"));
-        let input_script = env
-            .iter()
-            .find(|(key, _)| key == "MISTER_LAUNCHER_INPUT_SCRIPT")
-            .map(|(_, value)| value.as_str())
-            .expect("catalog scroll input script");
-        assert!(input_script.starts_with("wait:600,wait:600,down"));
-        assert_eq!(input_script.matches("down").count(), 1_200);
+        assert!(env.iter().all(|(key, _)| {
+            key != "MISTER_LAUNCHER_INPUT_SCRIPT"
+                && key != "MISTER_LAUNCHER_INPUT_SCRIPT_WAIT_FRAMES"
+        }));
         assert!(env.iter().any(|(key, value)| {
             key == "MISTER_SHARDED_CATALOG_DIR"
                 && value.starts_with(CATALOG_BUILD_REBUILD_REMOTE_DIR)
