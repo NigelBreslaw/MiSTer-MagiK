@@ -75,11 +75,17 @@ cached-frame ownership; it does not adopt HDMI direct-layer semantics.
 Only portrait-left is device-qualified. The opposite rotation remains covered
 by host pixel and ownership parity. HDMI is qualified at both output modes.
 
-| Route | Artifact | Physical FPS | Foreground P99 | Repeats / drops / gaps / ownership / record loss | Terminal | Result |
+| Route | Artifact | Physical FPS | Foreground P99 | Repeats / drops / latch / gaps / ownership / record loss | Terminal | Result |
 | --- | --- | ---: | ---: | --- | --- | --- |
-| 720p landscape | pending | — | — | — | — | pending |
-| 720p portrait-left | pending | — | — | — | — | pending |
-| 1080p landscape | pending | — | — | — | — | pending |
-| 1080p portrait-left | pending | — | — | — | — | pending |
-| CRT 240p portrait-left | pending | — | — | — | — | pending |
-| CRT 288p portrait-left | pending | — | — | — | — | pending |
+| 720p landscape | `1787136283` | 59.995 | 7.687 ms | 0 / 0 / 0 / 0 / 0 / 0 | FPGA-latched | PASS |
+| 720p portrait-left | `1787136368` | 60.005 | 12.321 ms | 0 / 0 / 0 / 0 / 0 / 0 | FPGA-latched | PASS |
+| 1080p landscape | `1787136454` | 60.004 | 6.606 ms | 0 / 0 / 0 / 0 / 0 / 0 | FPGA-latched | PASS |
+| 1080p portrait-left | `1787136541` | 59.997 | 9.440 ms | 0 / 0 / 0 / 0 / 0 / 0 | FPGA-latched | PASS |
+| CRT 240p portrait-left | `1787136630` | 60.055 | 9.473 ms | 0 / 0 / 0 / 0 / 0 / 0 | FPGA-latched | PASS |
+| CRT 288p portrait-left | `1787136721` | 50.429 | 10.159 ms | 0 / 0 / 0 / 0 / 0 / 0 | FPGA-latched | PASS |
+
+All six artifacts have `evidence_authority=qualification`, a requested and
+measured 40-second hold, settled presentation endpoints, and exact route
+restoration. The runner restored the original 720p HDMI mode plus the original
+`MiSTer.ini`, settings, launcher environment, installed manifest, boot identity,
+and launcher health after every leg.
