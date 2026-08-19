@@ -498,7 +498,7 @@ pub struct ArcadeListRenderer {
     previous_selection_normal_rect: Option<DirtyRect>,
     selection_horizontal: Vec<Rgb565Pixel>,
     selection_vertical: Vec<Rgb565Pixel>,
-    crt_overlay_damage_scratch: Vec<u64>,
+    crt_overlay_damage_scratch: Vec<Rgb565Rect>,
     row_cache_epoch: u64,
     row_fingerprint_epoch: u64,
     row_fingerprint_cache: HashMap<usize, CachedArcadeRowFingerprint>,
@@ -2061,28 +2061,27 @@ impl ArcadeListRenderer {
         let started = Instant::now();
         let viewport = key.viewport;
         let mut damage = std::mem::take(&mut self.crt_overlay_damage_scratch);
-        damage.resize(output_layout.len().div_ceil(u64::BITS as usize), 0);
-        damage.fill(0);
+        damage.clear();
         for rect in &plan.stale_glyph_spans {
-            mark_crt_overlay_damage(&mut damage, output_layout, viewport, *rect);
+            push_crt_overlay_damage_rows(&mut damage, viewport, *rect);
         }
         for rect in &plan.exposed_stripes {
-            mark_crt_overlay_damage(&mut damage, output_layout, viewport, *rect);
+            push_crt_overlay_damage_rows(&mut damage, viewport, *rect);
         }
         if let Some(rect) = plan.selection_union {
-            mark_crt_overlay_damage(&mut damage, output_layout, viewport, rect);
+            push_crt_overlay_damage_rows(&mut damage, viewport, rect);
         }
         let foreground_spans = self.crt_overlay_foreground_spans();
         for rect in &foreground_spans {
-            mark_crt_overlay_damage(&mut damage, output_layout, viewport, *rect);
+            push_crt_overlay_damage_rows(&mut damage, viewport, *rect);
         }
-        mark_crt_overlay_damage(&mut damage, output_layout, viewport, key.selection);
+        push_crt_overlay_damage_rows(&mut damage, viewport, key.selection);
+        coalesce_crt_overlay_damage_rows(&mut damage);
 
         let (restored_pixels, foreground_pixels) = self.reconcile_crt_overlay_damage(
             target.cached_565_mut(),
             backdrop,
             output_layout,
-            viewport,
             &damage,
         );
         self.crt_overlay_damage_scratch = damage;
@@ -2167,48 +2166,36 @@ impl ArcadeListRenderer {
         destination: &mut [Rgb565Pixel],
         backdrop: &[Rgb565Pixel],
         output: Rgb565OutputLayout,
-        viewport: Rgb565Rect,
-        damage: &[u64],
+        damage: &[Rgb565Rect],
     ) -> (u32, u32) {
-        if destination.len() < output.len()
-            || backdrop.len() < output.len()
-            || damage.len().saturating_mul(u64::BITS as usize) < output.len()
-        {
+        if destination.len() < output.len() || backdrop.len() < output.len() {
             return (0, 0);
         }
-        let physical = output.logical_rect_to_physical(viewport);
         let mut restored = 0_u32;
         let mut foreground = 0_u32;
-        for (word_index, &word) in damage.iter().enumerate() {
-            let mut pending = word;
-            while pending != 0 {
-                let bit = pending.trailing_zeros() as usize;
-                let offset = word_index * u64::BITS as usize + bit;
-                pending &= pending - 1;
-                if offset >= output.len() {
-                    continue;
-                }
-                let physical_y = offset / output.physical_stride();
-                let physical_x = offset - physical_y * output.physical_stride();
-                if physical_x < physical.x0
-                    || physical_x >= physical.x1
-                    || physical_y < physical.y0
-                    || physical_y >= physical.y1
-                {
-                    continue;
-                }
-                let (logical_x, logical_y) = output.physical_to_logical(physical_x, physical_y);
+        for span in damage {
+            let logical_y = span.y0;
+            let mut offset = output.physical_offset(span.x0, logical_y) as isize;
+            let offset_step = match output.rotation() {
+                OutputRotation::None => 1,
+                OutputRotation::Clockwise90 => output.physical_stride() as isize,
+                OutputRotation::CounterClockwise90 => -(output.physical_stride() as isize),
+            };
+            for logical_x in span.x0..span.x1 {
                 let desired = self.crt_overlay_pixel(logical_x, logical_y);
-                let pixel = desired.unwrap_or(backdrop[offset]);
-                if destination[offset] == pixel {
+                let physical_offset = offset as usize;
+                let pixel = desired.unwrap_or(backdrop[physical_offset]);
+                if destination[physical_offset] == pixel {
+                    offset += offset_step;
                     continue;
                 }
-                destination[offset] = pixel;
+                destination[physical_offset] = pixel;
                 if desired.is_some() {
                     foreground = foreground.saturating_add(1);
                 } else {
                     restored = restored.saturating_add(1);
                 }
+                offset += offset_step;
             }
         }
         (restored, foreground)
@@ -3290,15 +3277,11 @@ impl ArcadeListRenderer {
     }
 }
 
-fn mark_crt_overlay_damage(
-    damage: &mut [u64],
-    output: Rgb565OutputLayout,
+fn push_crt_overlay_damage_rows(
+    damage: &mut Vec<Rgb565Rect>,
     viewport: Rgb565Rect,
     rect: Rgb565Rect,
 ) {
-    if damage.len().saturating_mul(u64::BITS as usize) < output.len() {
-        return;
-    }
     let logical = Rgb565Rect {
         x0: rect.x0.max(viewport.x0),
         y0: rect.y0.max(viewport.y0),
@@ -3308,14 +3291,32 @@ fn mark_crt_overlay_damage(
     if logical.x0 >= logical.x1 || logical.y0 >= logical.y1 {
         return;
     }
-    let physical = output.logical_rect_to_physical(logical);
-    for physical_y in physical.y0..physical.y1 {
-        let start = physical_y * output.physical_stride() + physical.x0;
-        let end = start + physical.x1.saturating_sub(physical.x0);
-        for offset in start..end {
-            damage[offset / u64::BITS as usize] |= 1_u64 << (offset % u64::BITS as usize);
-        }
+    for y in logical.y0..logical.y1 {
+        damage.push(Rgb565Rect {
+            x0: logical.x0,
+            y0: y,
+            x1: logical.x1,
+            y1: y + 1,
+        });
     }
+}
+
+fn coalesce_crt_overlay_damage_rows(damage: &mut Vec<Rgb565Rect>) {
+    damage.sort_unstable_by_key(|rect| (rect.y0, rect.x0, rect.x1));
+    let mut merged_len = 0_usize;
+    for read in 0..damage.len() {
+        let current = damage[read];
+        if merged_len > 0 {
+            let previous = &mut damage[merged_len - 1];
+            if previous.y0 == current.y0 && current.x0 <= previous.x1 {
+                previous.x1 = previous.x1.max(current.x1);
+                continue;
+            }
+        }
+        damage[merged_len] = current;
+        merged_len += 1;
+    }
+    damage.truncate(merged_len);
 }
 
 pub fn rendered_filter_content_hash() -> u64 {
