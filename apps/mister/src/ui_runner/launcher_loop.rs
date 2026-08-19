@@ -5925,8 +5925,11 @@ pub(super) fn run_launcher_loop(
         }
         if (!orientation_benchmark_requires_analytics
             || frame_accounting.frame_analytics_mode() != FrameAnalyticsMode::Off)
-            && let Some(leg) =
-                orientation_benchmark.take_next_leg(nav.settings.screen_orientation, frames)
+            && let Some(leg) = orientation_benchmark.take_next_leg(
+                nav.settings.screen_orientation,
+                frames,
+                loop_start,
+            )
         {
             if !orientation_transition.set_effect(leg.effect) {
                 orientation_benchmark.fail("benchmark-effect-changed-during-transition");

@@ -6,7 +6,9 @@
 use super::orientation_transition::OrientationTransitionEffect;
 use crate::settings::ScreenOrientation;
 use mister_magik_latch_contract::PresentationTelemetry;
-use std::time::Instant;
+use std::time::{Duration, Instant};
+
+const INITIAL_PRESENTATION_SETTLE: Duration = Duration::from_millis(500);
 
 pub const ORIENTATION_TRANSITION_BENCHMARK_ROUTE: [ScreenOrientation; 7] = [
     ScreenOrientation::Normal,
@@ -88,6 +90,7 @@ pub struct OrientationTransitionBenchmark {
     phase: BenchmarkPhase,
     effect: OrientationTransitionEffect,
     next_leg: usize,
+    first_leg_ready_at: Option<Instant>,
     start_frame: u64,
     rendered_endpoint_frame: u64,
     presentation_start: Option<OrientationTransitionPresentationCapture>,
@@ -106,6 +109,7 @@ impl OrientationTransitionBenchmark {
             },
             effect,
             next_leg: 0,
+            first_leg_ready_at: None,
             start_frame: 0,
             rendered_endpoint_frame: 0,
             presentation_start: None,
@@ -163,6 +167,7 @@ impl OrientationTransitionBenchmark {
                     self.fail("initial-orientation-is-not-normal");
                 } else if sequence != 0 {
                     self.phase = BenchmarkPhase::Ready;
+                    self.first_leg_ready_at = Some(captured_at + INITIAL_PRESENTATION_SETTLE);
                 }
                 None
             }
@@ -226,8 +231,15 @@ impl OrientationTransitionBenchmark {
         &mut self,
         current: ScreenOrientation,
         frame: u64,
+        now: Instant,
     ) -> Option<OrientationTransitionBenchmarkLeg> {
         if self.phase != BenchmarkPhase::Ready {
+            return None;
+        }
+        if self
+            .first_leg_ready_at
+            .is_some_and(|ready_at| now < ready_at)
+        {
             return None;
         }
         let Some(leg) = self.leg(self.next_leg) else {
@@ -242,6 +254,7 @@ impl OrientationTransitionBenchmark {
         self.rendered_endpoint_frame = 0;
         self.presentation_start = None;
         self.presentation_error = None;
+        self.first_leg_ready_at = None;
         self.phase = BenchmarkPhase::Transitioning;
         Some(leg)
     }
@@ -339,14 +352,24 @@ mod tests {
     fn every_leg_waits_for_a_confirmed_endpoint() {
         let effect = OrientationTransitionEffect::CenterPixelZoom;
         let mut benchmark = OrientationTransitionBenchmark::new(true, effect);
+        let initial_at = Instant::now();
         assert!(
             benchmark
                 .note_confirmed_presentation(
                     ScreenOrientation::Normal,
                     10,
                     1,
-                    Instant::now(),
+                    initial_at,
                     Ok(presentation_telemetry(1)),
+                )
+                .is_none()
+        );
+        assert!(
+            benchmark
+                .take_next_leg(
+                    ScreenOrientation::Normal,
+                    11,
+                    initial_at + INITIAL_PRESENTATION_SETTLE - Duration::from_millis(1),
                 )
                 .is_none()
         );
@@ -354,12 +377,20 @@ mod tests {
         for index in 0..ORIENTATION_TRANSITION_BENCHMARK_LEGS {
             let pair = &ORIENTATION_TRANSITION_BENCHMARK_ROUTE[index..=index + 1];
             let leg = benchmark
-                .take_next_leg(pair[0], 11 + index as u64 * 3)
+                .take_next_leg(
+                    pair[0],
+                    11 + index as u64 * 3,
+                    initial_at + INITIAL_PRESENTATION_SETTLE + Duration::from_secs(index as u64),
+                )
                 .unwrap();
             assert_eq!(leg.index, index);
             assert_eq!(leg.effect, effect);
             assert_eq!(benchmark.active_leg(), None);
-            assert!(benchmark.take_next_leg(pair[0], 12).is_none());
+            assert!(
+                benchmark
+                    .take_next_leg(pair[0], 12, initial_at + Duration::from_secs(10))
+                    .is_none()
+            );
             let started_at = Instant::now();
             benchmark.capture_presentation_start(
                 started_at,
@@ -388,7 +419,7 @@ mod tests {
         );
         assert!(
             benchmark
-                .take_next_leg(ScreenOrientation::Normal, 99)
+                .take_next_leg(ScreenOrientation::Normal, 99, Instant::now())
                 .is_none()
         );
     }
@@ -397,17 +428,22 @@ mod tests {
     fn mismatched_source_fails_without_starting_an_extra_leg() {
         let mut benchmark =
             OrientationTransitionBenchmark::new(true, OrientationTransitionEffect::BrightnessFade);
+        let initial_at = Instant::now();
         benchmark.note_confirmed_presentation(
             ScreenOrientation::Normal,
             1,
             1,
-            Instant::now(),
+            initial_at,
             Ok(presentation_telemetry(1)),
         );
 
         assert!(
             benchmark
-                .take_next_leg(ScreenOrientation::MonitorClockwise, 2)
+                .take_next_leg(
+                    ScreenOrientation::MonitorClockwise,
+                    2,
+                    initial_at + INITIAL_PRESENTATION_SETTLE,
+                )
                 .is_none()
         );
         assert!(benchmark.failed());
@@ -433,7 +469,7 @@ mod tests {
         assert!(!benchmark.complete());
         assert!(
             benchmark
-                .take_next_leg(ScreenOrientation::Normal, 2)
+                .take_next_leg(ScreenOrientation::Normal, 2, Instant::now())
                 .is_none()
         );
     }
