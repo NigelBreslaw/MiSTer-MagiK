@@ -271,27 +271,40 @@ pub fn execute(
             repository,
             *target,
             *edit,
-            target_dir,
-            candidate_output,
-            baseline.as_deref(),
-            output,
-            next_baseline,
+            CompileTimeCampaignPaths {
+                target_dir,
+                candidate_output,
+                baseline: baseline.as_deref(),
+                output,
+                next_baseline,
+            },
             reporter,
         ),
     }
+}
+
+struct CompileTimeCampaignPaths<'a> {
+    target_dir: &'a Path,
+    candidate_output: &'a Path,
+    baseline: Option<&'a Path>,
+    output: &'a Path,
+    next_baseline: &'a Path,
 }
 
 fn campaign(
     repository: &Path,
     target: CompileTimeTarget,
     edit: CompileTimeEdit,
-    target_dir: &Path,
-    candidate_output: &Path,
-    baseline: Option<&Path>,
-    output: &Path,
-    next_baseline: &Path,
+    paths: CompileTimeCampaignPaths<'_>,
     reporter: &mut Reporter<'_>,
 ) -> AgentResult<()> {
+    let CompileTimeCampaignPaths {
+        target_dir,
+        candidate_output,
+        baseline,
+        output,
+        next_baseline,
+    } = paths;
     validate_target_dir(repository, target_dir, true)?;
     for (label, path) in [
         ("candidate output", candidate_output),

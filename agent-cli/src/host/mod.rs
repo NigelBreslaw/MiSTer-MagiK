@@ -2347,6 +2347,30 @@ struct RuntimeDeliveryActions<'a> {
     artwork_expected_sha256: &'a str,
 }
 
+impl RuntimeDeliveryActions<'_> {
+    fn deploy_magik_bundle(&self, metrics: &mut DeliveryTransferMetrics) -> Result<()> {
+        let total_t = Instant::now();
+        let validate_t = Instant::now();
+        let transaction = MagikDeployTransaction::validate_bundle(
+            self.local,
+            self.remote,
+            self.manifest_local,
+            self.manifest_remote,
+            self.expected_sha256,
+        )?;
+        let validate_ms = validate_t.elapsed().as_millis();
+        let report = transaction.run_ssh(
+            self.session,
+            self.config.connection.host(),
+            validate_ms,
+            total_t,
+            metrics,
+        )?;
+        report.print();
+        Ok(())
+    }
+}
+
 impl CoherentDeliveryActions for RuntimeDeliveryActions<'_> {
     fn timing_lane(&self) -> Option<DeliveryLane> {
         Some(DeliveryLane::Runtime)
@@ -2396,17 +2420,7 @@ impl CoherentDeliveryActions for RuntimeDeliveryActions<'_> {
             ),
         )
         .map_err(device_failure)?;
-        deploy_magik_bundle(
-            self.session,
-            self.config.connection.host(),
-            self.local,
-            self.remote,
-            self.manifest_local,
-            self.manifest_remote,
-            self.expected_sha256,
-            metrics,
-        )
-        .map_err(device_failure)
+        self.deploy_magik_bundle(metrics).map_err(device_failure)
     }
 
     fn activate(&mut self) -> std::result::Result<(), DeviceFailure> {
@@ -7942,8 +7956,10 @@ fn wait_gui_profile_pprof_finalization(
         if completion.is_none() {
             completion = remote_read(session, remote_path);
         }
-        if completion.is_some() && started.elapsed() >= minimum_probe {
-            return Ok(completion.expect("checked pprof completion"));
+        if started.elapsed() >= minimum_probe
+            && let Some(completion) = completion
+        {
+            return Ok(completion);
         }
         if started.elapsed() >= timeout {
             return Err("timed out waiting for Arcade velocity-scroll pprof finalization".into());
@@ -7976,13 +7992,15 @@ fn run_gui_frame_profile_route(
         config,
         session,
         output_dir,
-        pmu,
-        scroll_duration_ms,
-        terminal_checkpoint,
-        None,
-        Duration::ZERO,
-        ArcadeRunInputMode::Held,
-        startup_orientation,
+        GuiFrameProfileRouteSpec {
+            pmu,
+            scroll_duration_ms,
+            terminal_checkpoint,
+            pprof_remote_dir: None,
+            pprof_finalization_probe: Duration::ZERO,
+            input_mode: ArcadeRunInputMode::Held,
+            startup_orientation,
+        },
     )
 }
 
@@ -7998,28 +8016,43 @@ fn run_gui_frame_profile_route_turbo(
         config,
         session,
         output_dir,
-        false,
-        scroll_duration_ms,
-        terminal_checkpoint,
-        None,
-        Duration::ZERO,
-        ArcadeRunInputMode::Turbo,
-        startup_orientation,
+        GuiFrameProfileRouteSpec {
+            pmu: false,
+            scroll_duration_ms,
+            terminal_checkpoint,
+            pprof_remote_dir: None,
+            pprof_finalization_probe: Duration::ZERO,
+            input_mode: ArcadeRunInputMode::Turbo,
+            startup_orientation,
+        },
     )
+}
+
+struct GuiFrameProfileRouteSpec<'a> {
+    pmu: bool,
+    scroll_duration_ms: u64,
+    terminal_checkpoint: Option<&'a str>,
+    pprof_remote_dir: Option<&'a str>,
+    pprof_finalization_probe: Duration,
+    input_mode: ArcadeRunInputMode,
+    startup_orientation: Option<&'a str>,
 }
 
 fn run_gui_frame_profile_route_with_pprof(
     config: &NativeDeviceConfig,
     session: &Session,
     output_dir: &Path,
-    pmu: bool,
-    scroll_duration_ms: u64,
-    terminal_checkpoint: Option<&str>,
-    pprof_remote_dir: Option<&str>,
-    pprof_finalization_probe: Duration,
-    input_mode: ArcadeRunInputMode,
-    startup_orientation: Option<&str>,
+    spec: GuiFrameProfileRouteSpec<'_>,
 ) -> Result<Value> {
+    let GuiFrameProfileRouteSpec {
+        pmu,
+        scroll_duration_ms,
+        terminal_checkpoint,
+        pprof_remote_dir,
+        pprof_finalization_probe,
+        input_mode,
+        startup_orientation,
+    } = spec;
     fs::create_dir_all(output_dir)?;
     exec_checked(
         session,
@@ -8936,13 +8969,15 @@ fn profile_installed_arcade_velocity_scroll_pprof_workload(
         config,
         &session,
         output_dir,
-        false,
-        scroll_duration_ms,
-        Some("terminal-arcade"),
-        Some(ARCADE_VELOCITY_SCROLL_PPROF_REMOTE_DIR),
-        finalization_probe,
-        ArcadeRunInputMode::Held,
-        startup_orientation,
+        GuiFrameProfileRouteSpec {
+            pmu: false,
+            scroll_duration_ms,
+            terminal_checkpoint: Some("terminal-arcade"),
+            pprof_remote_dir: Some(ARCADE_VELOCITY_SCROLL_PPROF_REMOTE_DIR),
+            pprof_finalization_probe: finalization_probe,
+            input_mode: ArcadeRunInputMode::Held,
+            startup_orientation,
+        },
     );
     retain_arcade_velocity_scroll_failure_context(&session, output_dir, &route_result)?;
     let telemetry_result: Result<Vec<Value>> = match telemetry_thread.join() {
@@ -22284,31 +22319,6 @@ fn write_mame_metadata_db(
     }
     tx.commit()?;
     fs::rename(tmp, path)?;
-    Ok(())
-}
-
-fn deploy_magik_bundle(
-    sess: &Session,
-    remote_host: &str,
-    local: &Path,
-    remote: &str,
-    manifest_local: &Path,
-    manifest_remote: &str,
-    expected_sha256: &str,
-    metrics: &mut DeliveryTransferMetrics,
-) -> Result<()> {
-    let total_t = Instant::now();
-    let validate_t = Instant::now();
-    let transaction = MagikDeployTransaction::validate_bundle(
-        local,
-        remote,
-        manifest_local,
-        manifest_remote,
-        expected_sha256,
-    )?;
-    let validate_ms = validate_t.elapsed().as_millis();
-    let report = transaction.run_ssh(sess, remote_host, validate_ms, total_t, metrics)?;
-    report.print();
     Ok(())
 }
 

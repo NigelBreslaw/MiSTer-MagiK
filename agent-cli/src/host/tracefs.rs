@@ -431,11 +431,12 @@ pub(super) fn summarize_scheduler_trace(
         }
     }
     for (cpu, current) in running.into_iter().enumerate() {
-        if let Some((pid, began)) = current {
-            if pid != 0 && end_ns > began {
-                threads.entry(pid).or_default().on_cpu_ns += end_ns - began;
-                busy_intervals[cpu].push((began, end_ns));
-            }
+        if let Some((pid, began)) = current
+            && pid != 0
+            && end_ns > began
+        {
+            threads.entry(pid).or_default().on_cpu_ns += end_ns - began;
+            busy_intervals[cpu].push((began, end_ns));
         }
     }
 
@@ -600,7 +601,7 @@ pub(super) fn summarize_storage_trace(trace: &str, stats: &str, root_pid: u32) -
 
 fn parse_event(line: &str) -> Option<ParsedEvent> {
     let open = line.find('[')?;
-    let context = line[..open].trim().split_whitespace().last()?;
+    let context = line[..open].split_whitespace().last()?;
     let context_pid = context.rsplit_once('-')?.1.parse::<u32>().ok()?;
     let close = line[open + 1..].find(']')? + open + 1;
     let cpu = line[open + 1..close].trim().parse::<usize>().ok()?;
@@ -636,7 +637,7 @@ fn parse_timestamp_ns(value: &str) -> Option<u64> {
 
 fn field_text<'a>(payload: &'a str, key: &str) -> Option<&'a str> {
     let start = payload.find(&format!("{key}="))? + key.len() + 1;
-    Some(payload[start..].split_whitespace().next()?)
+    payload[start..].split_whitespace().next()
 }
 
 fn field_u32(payload: &str, key: &str) -> Option<u32> {

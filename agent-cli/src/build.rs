@@ -952,7 +952,7 @@ impl<'session, 'repository, 'spec> ProcessBuildActions<'session, 'repository, 's
         let mut files = Vec::new();
         collect_files(&release_dir, &release_dir, &mut files);
         let release_dir_bytes = files.iter().map(|file| file.bytes).sum();
-        files.sort_by(|left, right| right.bytes.cmp(&left.bytes));
+        files.sort_by_key(|file| std::cmp::Reverse(file.bytes));
         files.truncate(12);
         self.attribution = Some(BuildArtifactAttribution {
             artifact: self.spec.artifact.display().to_string(),
