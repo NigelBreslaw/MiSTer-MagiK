@@ -15637,11 +15637,12 @@ impl CatalogAttributionArm {
 const CATALOG_NAMESPACE_FUNCTION_GROUPS: &[tracefs::TracefsFunctionGroup] =
     &[tracefs::TracefsFunctionGroup {
         label: "namespace",
+        // Prefer leaf callbacks: legacy kernels cannot bound function-graph depth.
         functions: &[
+            "filldir64",
+            "filldir",
             "iterate_dir",
             "vfs_readdir",
-            "filldir",
-            "filldir64",
             "vfs_getattr",
             "vfs_statx",
             "filename_lookup",
