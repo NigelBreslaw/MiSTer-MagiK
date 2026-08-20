@@ -201,9 +201,28 @@ pub(crate) fn discovery_from_profile_file_with_prepared_index(
     profiles: &[LaunchProfile],
     prepared_index: Option<&prepared_collections::PreparedPayloadIndex>,
 ) -> GameDiscovery {
+    discovery_from_profile_file_with_prepared_index_and_mra_metadata(
+        file,
+        profile,
+        rule,
+        profiles,
+        prepared_index,
+        None,
+    )
+}
+
+pub(crate) fn discovery_from_profile_file_with_prepared_index_and_mra_metadata(
+    file: &FoundFile,
+    profile: &LaunchProfile,
+    rule: &PayloadRule,
+    profiles: &[LaunchProfile],
+    prepared_index: Option<&prepared_collections::PreparedPayloadIndex>,
+    prefetched_mra: Option<Option<media_metadata::MraMetadata>>,
+) -> GameDiscovery {
     let source_path = file.path.display().to_string();
     if file.ext == "mra"
-        && let Some(mra) = media_metadata::read_mra_metadata(&file.path)
+        && let Some(mra) =
+            prefetched_mra.unwrap_or_else(|| media_metadata::read_mra_metadata(&file.path))
     {
         let core_id = mra
             .rbf

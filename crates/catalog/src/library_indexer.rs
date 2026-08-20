@@ -13,7 +13,7 @@ use crate::catalog_scan::{self, DiscoveryEvent};
 use crate::core_audit;
 use crate::game_discovery::{
     GameDiscovery, catalog_system_id_for_discovery, discovery_from_profile_archive_entry,
-    discovery_from_profile_file_with_prepared_index,
+    discovery_from_profile_file_with_prepared_index_and_mra_metadata,
 };
 use crate::launch_profiles::{self, PayloadDisposition, PayloadRule, ProfilePathClass};
 use crate::library_db::{
@@ -25,10 +25,13 @@ use crate::prepared_collections::PreparedPayloadIndex;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
 const SCAN_PROGRESS_CANDIDATE_BATCH: usize = 50;
 const BOOTSTRAP_PROGRESS_BATCH: usize = 50;
+const ARCADE_MRA_READ_WORKERS: usize = 4;
 pub(crate) struct LibraryIndexer<'a> {
     cfg: &'a BenchConfig,
     archive_reader: crate::catalog_config::ArchiveReaderConfig,
@@ -707,6 +710,62 @@ struct LibraryScanExecution<'a> {
     durable_resume: bool,
 }
 
+fn is_arcade_bootstrap_scan(roots: &[String], durable_resume: bool) -> bool {
+    !durable_resume
+        && roots.len() == 1
+        && roots[0].eq_ignore_ascii_case(crate::arcade_catalog::DEFAULT_ARCADE_ROOT)
+}
+
+fn prefetch_arcade_mra_metadata(
+    events: &[DiscoveryEvent],
+) -> HashMap<PathBuf, Option<media_metadata::MraMetadata>> {
+    let paths = events
+        .iter()
+        .filter_map(|event| match event {
+            DiscoveryEvent::File(file) if file.ext.eq_ignore_ascii_case("mra") => {
+                Some(file.path.clone())
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    if paths.is_empty() {
+        return HashMap::new();
+    }
+
+    let worker_count = ARCADE_MRA_READ_WORKERS.min(paths.len());
+    let next = AtomicUsize::new(0);
+    let results = Mutex::new(Vec::with_capacity(paths.len()));
+    std::thread::scope(|scope| {
+        for worker in 0..worker_count {
+            let paths = &paths;
+            let next = &next;
+            let results = &results;
+            let _ = std::thread::Builder::new()
+                .name(format!("arcade-mra-read-{worker}"))
+                .spawn_scoped(scope, move || {
+                    crate::runtime_thread::apply_runtime_thread_policy(
+                        crate::runtime_thread::RuntimeThreadRole::LibraryWalker,
+                    );
+                    loop {
+                        let index = next.fetch_add(1, Ordering::Relaxed);
+                        let Some(path) = paths.get(index) else {
+                            break;
+                        };
+                        let metadata = media_metadata::read_mra_metadata(path);
+                        if let Ok(mut results) = results.lock() {
+                            results.push((path.clone(), metadata));
+                        }
+                    }
+                });
+        }
+    });
+    results
+        .into_inner()
+        .unwrap_or_default()
+        .into_iter()
+        .collect()
+}
+
 fn apply_configured_target_allowlist(
     roots: &[String],
     plan: &launch_profiles::CatalogScanPlan,
@@ -825,6 +884,29 @@ fn scan_library_with_progress_and_events(
             )
         }
     };
+    let mut buffered_events = None;
+    let mut prefetched_arcade_mra = HashMap::new();
+    if is_arcade_bootstrap_scan(&cfg.roots, durable_resume) {
+        let events = rx.iter().collect::<Vec<_>>();
+        let prefetch_t = Instant::now();
+        prefetched_arcade_mra = prefetch_arcade_mra_metadata(&events);
+        let successes = prefetched_arcade_mra
+            .values()
+            .filter(|metadata| metadata.is_some())
+            .count();
+        library_db::report_library_scan_timing(
+            "arcade_mra_prefetch",
+            prefetch_t.elapsed().as_micros() as u64,
+            format!(
+                "files={} successes={} failures={} workers={}",
+                prefetched_arcade_mra.len(),
+                successes,
+                prefetched_arcade_mra.len().saturating_sub(successes),
+                ARCADE_MRA_READ_WORKERS.min(prefetched_arcade_mra.len()),
+            ),
+        );
+        buffered_events = Some(events.into_iter());
+    }
     let mut game_dir_facts = Vec::with_capacity(plan.game_dir_headers().len());
     let mut profiles = plan.base_profiles().to_vec();
     let mut discover_us = 0;
@@ -847,7 +929,14 @@ fn scan_library_with_progress_and_events(
     let mut skip_target = false;
     let mut target_checkpointable = true;
     let mut last_target_heartbeat = Instant::now();
-    while let Ok(event) = rx.recv() {
+    loop {
+        let event = match buffered_events.as_mut() {
+            Some(events) => events.next(),
+            None => rx.recv().ok(),
+        };
+        let Some(event) = event else {
+            break;
+        };
         crate::cooperative_work::checkpoint();
         if last_target_heartbeat.elapsed() >= std::time::Duration::from_secs(30)
             && let Some(descriptor) = target_descriptor.as_ref()
@@ -1125,13 +1214,21 @@ fn scan_library_with_progress_and_events(
                         path: f.path.display().to_string(),
                     });
                     let discovery_t = Instant::now();
-                    discoveries.push(discovery_from_profile_file_with_prepared_index(
-                        &f,
-                        profile,
-                        &payload_rule,
-                        &profiles,
-                        Some(&prepared_payload_index),
-                    ));
+                    let prefetched_mra = f
+                        .ext
+                        .eq_ignore_ascii_case("mra")
+                        .then(|| prefetched_arcade_mra.remove(&f.path))
+                        .flatten();
+                    discoveries.push(
+                        discovery_from_profile_file_with_prepared_index_and_mra_metadata(
+                            &f,
+                            profile,
+                            &payload_rule,
+                            &profiles,
+                            Some(&prepared_payload_index),
+                            prefetched_mra,
+                        ),
+                    );
                     timing.record_file_discovery(
                         profile.id.as_str(),
                         f.ext.as_str(),
@@ -1575,6 +1672,22 @@ mod timing_tests {
         assert_eq!(file_discovery_source_class("mra"), "mra-metadata");
         assert_eq!(file_discovery_source_class("MGL"), "mgl-metadata");
         assert_eq!(file_discovery_source_class("crt"), "path-derived");
+    }
+
+    #[test]
+    fn parallel_mra_reads_are_limited_to_non_resumable_arcade_bootstrap() {
+        assert!(is_arcade_bootstrap_scan(
+            &[crate::arcade_catalog::DEFAULT_ARCADE_ROOT.to_string()],
+            false,
+        ));
+        assert!(!is_arcade_bootstrap_scan(
+            &[crate::arcade_catalog::DEFAULT_ARCADE_ROOT.to_string()],
+            true,
+        ));
+        assert!(!is_arcade_bootstrap_scan(
+            &["/media/fat/games/SNES".to_string()],
+            false,
+        ));
     }
 
     #[test]
