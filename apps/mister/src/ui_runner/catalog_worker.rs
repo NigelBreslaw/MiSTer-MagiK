@@ -781,12 +781,12 @@ fn handle_embedded_builder_event_with_paths(
         CatalogBuilderEvent::Handshake { operation, .. }
             if !state.handshake_seen && operation == expected_operation =>
         {
-            state.catalog_profile.begin(&operation);
+            state.catalog_profile.arm(&operation);
             state.begin_catalog_pmu();
             state.handshake_seen = true;
         }
         CatalogBuilderEvent::Handshake { operation, .. } => {
-            state.catalog_profile.begin(&operation);
+            state.catalog_profile.arm(&operation);
             state.catalog_profile.fail("invalid-handshake");
             send_builder_failure(
                 tx,
@@ -870,6 +870,11 @@ fn handle_embedded_builder_event_with_paths(
             });
         }
         CatalogBuilderEvent::Timing { name, detail, .. } => {
+            if name == "library_scan_complete" {
+                // SIGPROF destabilizes directory iteration on the MiSTer exFAT kernel.
+                // PMU and function-graph captures retain scan attribution.
+                state.catalog_profile.begin(expected_operation);
+            }
             let _ = tx.send(CatalogWorkerMessage::Timing { name, detail });
         }
         CatalogBuilderEvent::FreshCleanupStarted { .. } => {

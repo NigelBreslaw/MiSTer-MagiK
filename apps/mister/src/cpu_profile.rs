@@ -618,12 +618,30 @@ mod imp {
             }
         }
 
+        pub fn arm(&mut self, operation: &str) {
+            if !self.config.catalog_build_requested() {
+                return;
+            }
+            let Ok(mut session) = self.session.lock() else {
+                crate::ui_errln!("catalog-build cpu profile session lock poisoned");
+                return;
+            };
+            if session.operation.is_none() && !session.finished {
+                session.operation = Some(operation.to_owned());
+            }
+        }
+
         pub fn begin(&mut self, operation: &str) {
             if !self.config.catalog_build_requested() {
                 return;
             }
             if self.session.lock().map_or(true, |session| {
-                session.operation.is_some() || session.finished
+                session.profiler.is_some()
+                    || session.finished
+                    || session
+                        .operation
+                        .as_deref()
+                        .is_some_and(|armed| armed != operation)
             }) {
                 return;
             }
@@ -633,10 +651,12 @@ mod imp {
                     crate::ui_errln!("catalog-build cpu profile session lock poisoned");
                     return;
                 };
-                if session.operation.is_some() || session.finished {
+                if session.profiler.is_some() || session.finished {
                     return;
                 }
-                session.operation = Some(operation.to_owned());
+                if session.operation.is_none() {
+                    session.operation = Some(operation.to_owned());
+                }
                 session.profiler = profiler;
             }
             if self
@@ -678,6 +698,7 @@ mod imp {
         }
 
         pub fn fail(&mut self, reason: &'static str) {
+            self.arm("unknown");
             self.finish("failed", reason);
         }
 
@@ -729,6 +750,7 @@ mod imp {
         let mut metadata = match &result {
             Ok(Some(summary)) => json!({
                 "schema": "mister-magik-catalog-build-pprof-v1",
+                "scope": "post-scan",
                 "state": state,
                 "outcome": outcome,
                 "duration_secs": summary.duration_secs,
@@ -740,12 +762,14 @@ mod imp {
             }),
             Ok(None) => json!({
                 "schema": "mister-magik-catalog-build-pprof-v1",
+                "scope": "post-scan",
                 "state": "failed",
                 "outcome": outcome,
                 "error": "profiler-produced-no-summary",
             }),
             Err(error) => json!({
                 "schema": "mister-magik-catalog-build-pprof-v1",
+                "scope": "post-scan",
                 "state": "failed",
                 "outcome": outcome,
                 "error": error,
@@ -1182,6 +1206,8 @@ mod stub {
         pub fn capture_process() -> Self {
             Self
         }
+
+        pub fn arm(&mut self, _operation: &str) {}
 
         pub fn begin(&mut self, _operation: &str) {}
 
