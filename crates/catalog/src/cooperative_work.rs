@@ -133,10 +133,6 @@ pub(crate) fn checkpoint() {
     ));
 }
 
-pub(crate) fn current_work_mode() -> CatalogWorkMode {
-    CatalogWorkMode::from_raw(WORK_MODE.load(Ordering::Acquire))
-}
-
 pub(crate) fn in_background_scope() -> bool {
     BACKGROUND_SCOPE_DEPTH.with(|depth| depth.get() != 0)
 }
