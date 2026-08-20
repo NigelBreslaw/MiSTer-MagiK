@@ -251,7 +251,7 @@ fn row_count(conn: &Connection, table: &str) -> Result<u64, String> {
 
 impl BuildProgressJournal {
     pub fn open_for_projection(path: &Path) -> Result<Self, String> {
-        let conn = Connection::open(path)
+        let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
             .map_err(|error| format!("open build progress {}: {error}", path.display()))?;
         configure(&conn)?;
         let version: String = meta(&conn, "schema_version")?;
@@ -671,6 +671,14 @@ mod tests {
             committed_path_for_root(root),
             root.join("state/builder-state.sqlite3")
         );
+    }
+
+    #[test]
+    fn projection_probe_does_not_create_a_missing_journal() {
+        let path = temp_path("missing-projection-journal");
+
+        assert!(BuildProgressJournal::open_for_projection(&path).is_err());
+        assert!(!path.exists());
     }
 
     #[test]
