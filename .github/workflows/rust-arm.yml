@@ -211,9 +211,9 @@ jobs:
             !apps/mister/target/ci-fast/incremental
             apps/mister/target/armv7-unknown-linux-gnueabihf/ci-fast
             !apps/mister/target/armv7-unknown-linux-gnueabihf/ci-fast/incremental
-          key: target-arm-v3-${{ runner.os }}-${{ runner.arch }}-armv7-unknown-linux-gnueabihf-ci-fast-${{ steps.cache-id.outputs.cross_abi }}-${{ steps.cache-id.outputs.arm_target }}
-          restore-keys: |
-            target-arm-v3-${{ runner.os }}-${{ runner.arch }}-armv7-unknown-linux-gnueabihf-ci-fast-${{ steps.cache-id.outputs.cross_abi }}-
+          # Actions caches are immutable. Keep this dependency baseline exact-only:
+          # a rolling restore prefix would copy stale Cargo artifacts into every new key.
+          key: target-arm-v4-${{ runner.os }}-${{ runner.arch }}-armv7-unknown-linux-gnueabihf-ci-fast-${{ steps.cache-id.outputs.cross_abi }}-${{ steps.cache-id.outputs.arm_build_cache }}
 
       - name: Build ARM binary
         env:
@@ -221,6 +221,29 @@ jobs:
         run: |
           docker image inspect "${{ steps.cache-id.outputs.cross_image }}" >/dev/null
           MISTER_ARM_BUILD_BACKEND=cross scripts/agent build runtime-ci
+
+      - name: Report ARM cache footprint
+        if: always()
+        shell: bash
+        run: |
+          {
+            echo "### ARM target cache footprint"
+            echo
+            echo "| Path | Uncompressed size |"
+            echo "| --- | ---: |"
+            for path in \
+              apps/mister/target/ci-fast \
+              apps/mister/target/armv7-unknown-linux-gnueabihf/ci-fast
+            do
+              if [[ -d "$path" ]]; then
+                kib="$(du -sk "$path" | awk '{print $1}')"
+                mib="$(( (kib + 1023) / 1024 ))"
+                printf '| `%s` | %s MiB |\n' "$path" "$mib"
+              else
+                printf '| `%s` | not present |\n' "$path"
+              fi
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload Cargo timings
         if: always()
