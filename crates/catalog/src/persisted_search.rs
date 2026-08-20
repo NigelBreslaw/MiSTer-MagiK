@@ -459,8 +459,9 @@ pub(crate) fn populate(
                 &document.compact_path,
             ]);
         }
+        let insert_sql = search_insert_sql(documents.len());
         connection
-            .prepare_cached(&search_insert_sql(documents.len()))
+            .prepare(&insert_sql)
             .map_err(|error| PersistedSearchError::with("prepare search batch", error))?
             .execute(rusqlite::params_from_iter(parameters))
             .map_err(|error| PersistedSearchError::with("insert search batch", error))?;
