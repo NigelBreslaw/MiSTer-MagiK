@@ -16006,8 +16006,8 @@ fn catalog_attribution_launcher_env(arm: CatalogAttributionArm) -> Vec<(String, 
             format!("{work}/catalog-ready.snapshot"),
         ),
         ("MISTER_CATALOG_DIAGNOSTICS_DIR".into(), diagnostics.clone()),
-        ("MISTER_LAUNCHER_START_SCREEN".into(), "arcade".into()),
-        ("MISTER_LAUNCHER_START_SYSTEM".into(), "arcade".into()),
+        ("MISTER_LAUNCHER_START_SCREEN".into(), "home".into()),
+        ("MISTER_HOME_SELECTED_INDEX".into(), "0".into()),
         ("MISTER_PREVIEW_ARCHIVE_WARM_SKIP".into(), "1".into()),
     ];
     match arm {
@@ -19091,8 +19091,8 @@ fn catalog_build_rebuild_launcher_env() -> Vec<(String, String)> {
             "MISTER_CATALOG_DIAGNOSTICS_DIR".into(),
             format!("{source}/diagnostics"),
         ),
-        ("MISTER_LAUNCHER_START_SCREEN".into(), "arcade".into()),
-        ("MISTER_LAUNCHER_START_SYSTEM".into(), "arcade".into()),
+        ("MISTER_LAUNCHER_START_SCREEN".into(), "home".into()),
+        ("MISTER_HOME_SELECTED_INDEX".into(), "0".into()),
         ("MISTER_PREVIEW_ARCHIVE_WARM_SKIP".into(), "1".into()),
     ]
 }
@@ -19306,6 +19306,12 @@ fn run_catalog_build_rebuild_leg(
     )?;
     let launcher_log = remote_read(session, "/tmp/mister-magik-slint.log")
         .ok_or_else(|| format!("{label} catalog benchmark has no launcher log"))?;
+    if !catalog_benchmark_presented_home_arcade(&launcher_log) {
+        return Err(format!(
+            "{label} catalog benchmark did not present Home with the Arcade system selected"
+        )
+        .into());
+    }
     fs::write(
         sample_dir.join(format!("{label}-launcher.log")),
         &launcher_log,
@@ -19334,6 +19340,24 @@ fn run_catalog_build_rebuild_leg(
         "phase_evidence": phase_evidence,
         "ui": ui,
     }))
+}
+
+fn catalog_benchmark_presented_home_arcade(log: &str) -> bool {
+    let mut selected_arcade = false;
+    let mut presented_home = false;
+    for line in log.lines() {
+        if line.contains("\tlauncher_home_selected_index_applied\t")
+            && line
+                .split_ascii_whitespace()
+                .any(|field| field == "selected=0")
+        {
+            selected_arcade = true;
+        }
+        if line.contains("\tlauncher_first_frame_presented\t") && line.contains("screen=home") {
+            presented_home = true;
+        }
+    }
+    selected_arcade && presented_home
 }
 
 fn catalog_logical_fingerprint(catalog: &Value) -> Result<String> {
@@ -32715,6 +32739,12 @@ H: Handlers=event3 js0"#
     #[test]
     fn catalog_build_rebuild_roots_are_bounded_and_real() {
         let env = catalog_build_rebuild_launcher_env();
+        assert!(env.contains(&("MISTER_LAUNCHER_START_SCREEN".into(), "home".into())));
+        assert!(env.contains(&("MISTER_HOME_SELECTED_INDEX".into(), "0".into())));
+        assert!(
+            env.iter()
+                .all(|(key, _)| key != "MISTER_LAUNCHER_START_SYSTEM")
+        );
         let roots = env
             .iter()
             .find(|(key, _)| key == "MISTER_LIBRARY_ROOTS")
@@ -32756,8 +32786,29 @@ H: Handlers=event3 js0"#
     }
 
     #[test]
+    fn catalog_benchmark_requires_home_with_arcade_selected() {
+        let correct = concat!(
+            "1\tlauncher_home_selected_index_applied\tselected=0\n",
+            "2\tlauncher_first_frame_presented\tscreen=home\n",
+        );
+        assert!(catalog_benchmark_presented_home_arcade(correct));
+        assert!(!catalog_benchmark_presented_home_arcade(
+            &correct.replace("selected=0", "selected=10")
+        ));
+        assert!(!catalog_benchmark_presented_home_arcade(
+            &correct.replace("screen=home", "screen=arcade")
+        ));
+    }
+
+    #[test]
     fn whole_card_catalog_uses_configured_sources_with_isolated_outputs() {
         let env = catalog_full_build_rebuild_launcher_env();
+        assert!(env.contains(&("MISTER_LAUNCHER_START_SCREEN".into(), "home".into())));
+        assert!(env.contains(&("MISTER_HOME_SELECTED_INDEX".into(), "0".into())));
+        assert!(
+            env.iter()
+                .all(|(key, _)| key != "MISTER_LAUNCHER_START_SYSTEM")
+        );
         assert!(env.iter().all(|(key, _)| {
             key != "MISTER_LIBRARY_ROOTS" && key != "MISTER_LIBRARY_TARGET_ALLOWLIST"
         }));
@@ -32773,6 +32824,12 @@ H: Handlers=event3 js0"#
     #[test]
     fn catalog_attribution_uses_real_bounded_roots_and_normalizes_legs() {
         let env = catalog_attribution_launcher_env(CatalogAttributionArm::Control);
+        assert!(env.contains(&("MISTER_LAUNCHER_START_SCREEN".into(), "home".into())));
+        assert!(env.contains(&("MISTER_HOME_SELECTED_INDEX".into(), "0".into())));
+        assert!(
+            env.iter()
+                .all(|(key, _)| key != "MISTER_LAUNCHER_START_SYSTEM")
+        );
         let allowlist = env
             .iter()
             .find(|(key, _)| key == "MISTER_LIBRARY_TARGET_ALLOWLIST")
