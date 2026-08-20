@@ -191,23 +191,8 @@ pub(crate) fn discovery_from_profile_file(
     rule: &PayloadRule,
     profiles: &[LaunchProfile],
 ) -> GameDiscovery {
-    discovery_from_profile_file_with_prepared_index(file, profile, rule, profiles, None)
-}
-
-pub(crate) fn discovery_from_profile_file_with_prepared_index(
-    file: &FoundFile,
-    profile: &LaunchProfile,
-    rule: &PayloadRule,
-    profiles: &[LaunchProfile],
-    prepared_index: Option<&prepared_collections::PreparedPayloadIndex>,
-) -> GameDiscovery {
     discovery_from_profile_file_with_prepared_index_and_mra_metadata(
-        file,
-        profile,
-        rule,
-        profiles,
-        prepared_index,
-        None,
+        file, profile, rule, profiles, None, None,
     )
 }
 
