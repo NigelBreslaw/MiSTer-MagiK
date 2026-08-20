@@ -274,6 +274,69 @@ pub struct LibraryRamScanArtifact {
     pub(crate) preferred_discoveries: BTreeMap<String, usize>,
 }
 
+pub struct LibraryAuditedScanArtifact {
+    scan: LibraryScan,
+    stats: LibraryScanStats,
+    preferred_discoveries: BTreeMap<String, usize>,
+    catalog_state: crate::catalog_state::CatalogState,
+    audit_us: u64,
+    stamp_us: u64,
+    audit_stamp_worker_us: u64,
+}
+
+impl LibraryAuditedScanArtifact {
+    pub fn catalog_state(&self) -> &crate::catalog_state::CatalogState {
+        &self.catalog_state
+    }
+
+    pub fn stats(&self) -> &LibraryScanStats {
+        &self.stats
+    }
+
+    pub fn complete_catalog_background_with_progress(
+        mut self,
+        root: impl AsRef<Path>,
+        progress: &mut dyn FnMut(&str, &str),
+    ) -> Result<
+        (
+            LibraryPreparedState,
+            ArcadeCatalog,
+            CatalogPrepareTiming,
+            crate::scanner_cache::ScannerCacheState,
+        ),
+        String,
+    > {
+        apply_runtime_thread_policy(RuntimeThreadRole::CatalogWorker);
+        let wall_t = std::time::Instant::now();
+        release_non_projection_scan_facts(&mut self.scan);
+        let (catalog, timing, scanner_cache) = build_catalog_from_scan_with_preferred_and_progress(
+            root.as_ref(),
+            &self.scan,
+            &self.preferred_discoveries,
+            progress,
+        );
+        Ok((
+            LibraryPreparedState {
+                catalog_state: self.catalog_state,
+                stats: self.stats,
+            },
+            catalog,
+            CatalogPrepareTiming {
+                audit_us: self.audit_us,
+                stamp_us: self.stamp_us,
+                audit_stamp_worker_us: self.audit_stamp_worker_us,
+                catalog_us: timing.total_us,
+                metadata_us: timing.metadata_us,
+                projection_rows_us: timing.projection_rows_us,
+                indexes_us: timing.indexes_us,
+                wall_us: wall_t.elapsed().as_micros() as u64,
+                overlapped_us: 0,
+            },
+            scanner_cache,
+        ))
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct CatalogPrepareTiming {
     pub audit_us: u64,
@@ -367,6 +430,31 @@ impl LibraryRamScanArtifact {
 
     pub fn catalog(&self, root: impl AsRef<Path>) -> ArcadeCatalog {
         build_catalog_from_scan(root, &self.scan)
+    }
+
+    pub fn complete_coverage_audit_for_decision(mut self) -> LibraryAuditedScanArtifact {
+        apply_runtime_thread_policy(RuntimeThreadRole::CatalogWorker);
+        let worker_t = std::time::Instant::now();
+        let (audit_rows, stamp, audit_us, stamp_us) = coverage_audit_and_stamp(&self.scan);
+        let audit_stamp_worker_us = worker_t.elapsed().as_micros() as u64;
+        self.scan.audit_rows = audit_rows;
+        report_library_scan_timing(
+            "coverage_audit_deferred",
+            audit_us,
+            format!("rows={}", self.scan.audit_rows.len()),
+        );
+        self.stats.scan_us = self.stats.scan_us.saturating_add(audit_us);
+        self.stats.audit_rows = self.scan.audit_rows.len();
+        let catalog_state = catalog_state_from_scan(&self.scan, &self.stats, stamp);
+        LibraryAuditedScanArtifact {
+            scan: self.scan,
+            stats: self.stats,
+            preferred_discoveries: self.preferred_discoveries,
+            catalog_state,
+            audit_us,
+            stamp_us,
+            audit_stamp_worker_us,
+        }
     }
 
     pub fn save_default_sqlite_with_catalog_projection(
@@ -3150,6 +3238,17 @@ mod tests {
 
         assert_eq!(ram_artifact.stats().audit_rows, 0);
         assert_eq!(ram_artifact.catalog("/media/fat/_Arcade").len(), 1);
+
+        let early_identity = ram_artifact.clone().complete_coverage_audit_for_decision();
+        let expected_state = ram_artifact
+            .clone()
+            .complete_coverage_audit()
+            .catalog_state();
+        assert_eq!(early_identity.catalog_state(), &expected_state);
+        assert_eq!(
+            early_identity.stats().audit_rows,
+            expected_state.stats.audit_rows
+        );
 
         let artifact = ram_artifact.complete_coverage_audit();
         assert!(!artifact.scan.audit_rows.is_empty());
