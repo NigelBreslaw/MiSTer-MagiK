@@ -1052,13 +1052,67 @@ fn shard_build_root_for_available(
     games: &[SystemGame],
     available: Option<u64>,
 ) -> PathBuf {
-    if cfg!(target_os = "linux")
-        && storage_root.starts_with(Path::new("/media/fat"))
-        && available.is_some_and(|available| available >= estimated_shard_build_bytes(games))
-    {
+    let requested = std::env::var_os("MISTER_CATALOG_SHARD_STAGING");
+    let policy = match shard_staging_policy_from_value(requested.as_deref()) {
+        Ok(policy) => policy,
+        Err(value) => {
+            crate::catalog_logln!(
+                "catalog_shard_staging_tsv\trequested={}\tselected=auto\treason=invalid-value",
+                value.replace(['\t', '\n'], " ")
+            );
+            ShardStagingPolicy::Auto
+        }
+    };
+    let estimated = estimated_shard_build_bytes(games);
+    let device = cfg!(target_os = "linux") && storage_root.starts_with(Path::new("/media/fat"));
+    let tmpfs_has_capacity = available.is_some_and(|available| available >= estimated);
+    let use_tmpfs = device && policy != ShardStagingPolicy::OnMedia && tmpfs_has_capacity;
+    let selected = if use_tmpfs { "tmpfs" } else { "on-media" };
+    crate::catalog_logln!(
+        "catalog_shard_staging_tsv\trequested={}\tselected={}\tavailable_bytes={}\testimated_bytes={}\tdevice={}\treason={}",
+        policy.label(),
+        selected,
+        available.unwrap_or(0),
+        estimated,
+        u8::from(device),
+        if policy == ShardStagingPolicy::Tmpfs && !tmpfs_has_capacity {
+            "capacity-fallback"
+        } else {
+            "selected"
+        }
+    );
+    if use_tmpfs {
         PathBuf::from("/tmp/mister-magik/catalog-v3-build")
     } else {
         storage_root.join("staging")
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ShardStagingPolicy {
+    Auto,
+    Tmpfs,
+    OnMedia,
+}
+
+impl ShardStagingPolicy {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Tmpfs => "tmpfs",
+            Self::OnMedia => "on-media",
+        }
+    }
+}
+
+fn shard_staging_policy_from_value(
+    value: Option<&std::ffi::OsStr>,
+) -> Result<ShardStagingPolicy, String> {
+    match value.and_then(std::ffi::OsStr::to_str) {
+        None | Some("") | Some("auto") => Ok(ShardStagingPolicy::Auto),
+        Some("tmpfs") => Ok(ShardStagingPolicy::Tmpfs),
+        Some("on-media") => Ok(ShardStagingPolicy::OnMedia),
+        Some(value) => Err(value.to_string()),
     }
 }
 
@@ -1528,6 +1582,23 @@ mod tests {
             shard_build_root_for_available(device, &[game("One")], Some(0)),
             device.join("staging")
         );
+    }
+
+    #[test]
+    fn shard_staging_policy_is_typed_and_defaults_to_auto() {
+        assert_eq!(
+            shard_staging_policy_from_value(None).unwrap(),
+            ShardStagingPolicy::Auto
+        );
+        assert_eq!(
+            shard_staging_policy_from_value(Some(std::ffi::OsStr::new("tmpfs"))).unwrap(),
+            ShardStagingPolicy::Tmpfs
+        );
+        assert_eq!(
+            shard_staging_policy_from_value(Some(std::ffi::OsStr::new("on-media"))).unwrap(),
+            ShardStagingPolicy::OnMedia
+        );
+        assert!(shard_staging_policy_from_value(Some(std::ffi::OsStr::new("sometimes"))).is_err());
     }
 
     #[test]

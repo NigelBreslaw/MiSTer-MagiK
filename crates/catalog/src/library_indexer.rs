@@ -216,6 +216,43 @@ struct ResumeScan {
     committed: usize,
     pending: Vec<crate::build_progress::CompletedTarget>,
     pending_bytes: usize,
+    checkpoint: CheckpointAttribution,
+}
+
+#[derive(Clone, Debug, Default)]
+struct CheckpointAttribution {
+    enabled: bool,
+    snapshot_us: u64,
+    encode_us: u64,
+    decode_us: u64,
+    queued_targets: usize,
+    queued_bytes: usize,
+    batches: usize,
+    begin_us: u64,
+    rows_us: u64,
+    commit_us: u64,
+    write_us: u64,
+    errors: usize,
+}
+
+impl CheckpointAttribution {
+    fn compact_detail(&self) -> String {
+        format!(
+            "enabled={} snapshot_us={} encode_us={} decode_us={} queued_targets={} queued_bytes={} batches={} begin_us={} rows_us={} commit_us={} write_us={} errors={}",
+            u8::from(self.enabled),
+            self.snapshot_us,
+            self.encode_us,
+            self.decode_us,
+            self.queued_targets,
+            self.queued_bytes,
+            self.batches,
+            self.begin_us,
+            self.rows_us,
+            self.commit_us,
+            self.write_us,
+            self.errors,
+        )
+    }
 }
 
 #[derive(Clone, Debug, Default)]
@@ -358,8 +395,22 @@ fn flush_target_checkpoints(state: &mut ResumeScan) {
         .last()
         .map_or(0, |completed| completed.target.ordinal as usize);
     match state.journal.checkpoint_targets(&pending) {
-        Ok(()) => {
+        Ok(attribution) => {
             state.committed += count;
+            state.checkpoint.batches = state.checkpoint.batches.saturating_add(1);
+            state.checkpoint.begin_us = state
+                .checkpoint
+                .begin_us
+                .saturating_add(attribution.begin_us);
+            state.checkpoint.rows_us = state.checkpoint.rows_us.saturating_add(attribution.rows_us);
+            state.checkpoint.commit_us = state
+                .checkpoint
+                .commit_us
+                .saturating_add(attribution.commit_us);
+            state.checkpoint.write_us = state
+                .checkpoint
+                .write_us
+                .saturating_add(attribution.total_us);
             report_resume(
                 state,
                 "targets-committed",
@@ -367,7 +418,10 @@ fn flush_target_checkpoints(state: &mut ResumeScan) {
                 &format!("durable-batch:{count}"),
             );
         }
-        Err(error) => report_resume(state, "checkpoint-failed", ordinal, &error),
+        Err(error) => {
+            state.checkpoint.errors = state.checkpoint.errors.saturating_add(1);
+            report_resume(state, "checkpoint-failed", ordinal, &error);
+        }
     }
 }
 
@@ -377,6 +431,11 @@ fn queue_target_checkpoint(
 ) {
     state.pending_bytes = state
         .pending_bytes
+        .saturating_add(completed.output_json.len());
+    state.checkpoint.queued_targets = state.checkpoint.queued_targets.saturating_add(1);
+    state.checkpoint.queued_bytes = state
+        .checkpoint
+        .queued_bytes
         .saturating_add(completed.output_json.len());
     state.pending.push(completed);
     if state.pending.len() >= RESUME_CHECKPOINT_TARGET_BATCH
@@ -453,8 +512,10 @@ fn prepare_resume_scan(
             return (None, attribution);
         }
     };
-    let completed: HashMap<_, _> = journal
-        .completed_targets()
+    let decode_started = Instant::now();
+    let decoded = journal.completed_targets();
+    let decode_us = decode_started.elapsed().as_micros() as u64;
+    let completed: HashMap<_, _> = decoded
         .unwrap_or_default()
         .into_iter()
         .map(|target| (target.target.ordinal, target))
@@ -514,6 +575,11 @@ fn prepare_resume_scan(
         committed: durable_completed,
         pending: Vec::with_capacity(RESUME_CHECKPOINT_TARGET_BATCH),
         pending_bytes: 0,
+        checkpoint: CheckpointAttribution {
+            enabled: true,
+            decode_us,
+            ..CheckpointAttribution::default()
+        },
     };
     report_resume(&state, "journal-open", 0, &format!("{status:?}"));
     attribution.open_us = open_started.elapsed().as_micros() as u64;
@@ -928,6 +994,10 @@ fn scan_library_with_progress_and_events(
     let mut target_fingerprint = Fingerprint::new();
     let mut skip_target = false;
     let mut target_checkpointable = true;
+    let mut checkpoint_attribution = CheckpointAttribution {
+        enabled: durable_resume,
+        ..CheckpointAttribution::default()
+    };
     let mut last_target_heartbeat = Instant::now();
     loop {
         let event = match buffered_events.as_mut() {
@@ -1040,6 +1110,7 @@ fn scan_library_with_progress_and_events(
                     && target_checkpointable
                     && let (Some(offsets), Some(state)) = (target_offsets, resume.as_mut())
                 {
+                    let snapshot_started = Instant::now();
                     let output = TargetOutput {
                         game_dir_facts: game_dir_facts[offsets.facts..].to_vec(),
                         normal_files: normal_files[offsets.files..].to_vec(),
@@ -1048,8 +1119,17 @@ fn scan_library_with_progress_and_events(
                         ignored_files: ignored_files.saturating_sub(offsets.ignored),
                         discoveries: discoveries[offsets.discoveries..].to_vec(),
                     };
+                    state.checkpoint.snapshot_us = state
+                        .checkpoint
+                        .snapshot_us
+                        .saturating_add(snapshot_started.elapsed().as_micros() as u64);
+                    let encode_started = Instant::now();
                     match serde_json::to_string(&output) {
                         Ok(output_json) => {
+                            state.checkpoint.encode_us = state
+                                .checkpoint
+                                .encode_us
+                                .saturating_add(encode_started.elapsed().as_micros() as u64);
                             let completed = crate::build_progress::CompletedTarget {
                                 target: progress_target(&descriptor),
                                 input_fingerprint: target_fingerprint.finish(),
@@ -1064,12 +1144,19 @@ fn scan_library_with_progress_and_events(
                             };
                             queue_target_checkpoint(state, completed);
                         }
-                        Err(error) => report_resume(
-                            state,
-                            "checkpoint-failed",
-                            descriptor.ordinal,
-                            &format!("encode-error:{error}"),
-                        ),
+                        Err(error) => {
+                            state.checkpoint.encode_us = state
+                                .checkpoint
+                                .encode_us
+                                .saturating_add(encode_started.elapsed().as_micros() as u64);
+                            state.checkpoint.errors = state.checkpoint.errors.saturating_add(1);
+                            report_resume(
+                                state,
+                                "checkpoint-failed",
+                                descriptor.ordinal,
+                                &format!("encode-error:{error}"),
+                            );
+                        }
                     }
                 }
                 report_scan_target(
@@ -1324,7 +1411,12 @@ fn scan_library_with_progress_and_events(
     let post_pipeline_started = Instant::now();
     if let Some(state) = resume.as_mut() {
         flush_target_checkpoints(state);
+        checkpoint_attribution = state.checkpoint.clone();
     }
+    crate::catalog_logln!(
+        "catalog_checkpoint_tsv\t{}",
+        checkpoint_attribution.compact_detail()
+    );
     let _ = target_descriptor;
     if discover_us == 0 {
         discover_us = discover_t.elapsed().as_micros() as u64;

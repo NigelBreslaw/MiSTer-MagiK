@@ -9,6 +9,7 @@
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const FILE_NAME: &str = "build-progress.sqlite3";
@@ -86,6 +87,16 @@ pub struct BuildProgressJournal {
     path: PathBuf,
     conn: Connection,
     build_id: String,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct CheckpointWriteAttribution {
+    pub targets: usize,
+    pub bytes: usize,
+    pub begin_us: u64,
+    pub rows_us: u64,
+    pub commit_us: u64,
+    pub total_us: u64,
 }
 
 pub fn path_for_root(storage_root: &Path) -> PathBuf {
@@ -322,20 +333,34 @@ impl BuildProgressJournal {
     }
 
     /// Atomically makes all output for one target resumable.
-    pub fn checkpoint_target(&mut self, completed: &CompletedTarget) -> Result<(), String> {
+    pub fn checkpoint_target(
+        &mut self,
+        completed: &CompletedTarget,
+    ) -> Result<CheckpointWriteAttribution, String> {
         self.checkpoint_targets(std::slice::from_ref(completed))
     }
 
     /// Atomically makes a bounded group of target outputs resumable with one
     /// durable SQLite commit. Callers bound both row count and encoded bytes.
-    pub fn checkpoint_targets(&mut self, completed: &[CompletedTarget]) -> Result<(), String> {
+    pub fn checkpoint_targets(
+        &mut self,
+        completed: &[CompletedTarget],
+    ) -> Result<CheckpointWriteAttribution, String> {
+        let total_started = Instant::now();
         if completed.is_empty() {
-            return Ok(());
+            return Ok(CheckpointWriteAttribution::default());
         }
+        let bytes = completed
+            .iter()
+            .map(|target| target.output_json.len())
+            .sum();
+        let begin_started = Instant::now();
         let tx = self
             .conn
             .transaction()
             .map_err(|error| format!("begin target checkpoint batch: {error}"))?;
+        let begin_us = elapsed_us(begin_started);
+        let rows_started = Instant::now();
         for completed in completed {
             let expected = tx
                 .query_row(
@@ -370,8 +395,18 @@ impl BuildProgressJournal {
             )
             .map_err(|error| format!("write target checkpoint: {error}"))?;
         }
+        let rows_us = elapsed_us(rows_started);
+        let commit_started = Instant::now();
         tx.commit()
-            .map_err(|error| format!("commit target checkpoint batch: {error}"))
+            .map_err(|error| format!("commit target checkpoint batch: {error}"))?;
+        Ok(CheckpointWriteAttribution {
+            targets: completed.len(),
+            bytes,
+            begin_us,
+            rows_us,
+            commit_us: elapsed_us(commit_started),
+            total_us: elapsed_us(total_started),
+        })
     }
 
     pub fn record_shard(&mut self, shard: &CompletedShard) -> Result<(), String> {
@@ -570,6 +605,10 @@ fn configure(conn: &Connection) -> Result<(), String> {
     )
     .map_err(|error| format!("configure build progress: {error}"))?;
     Ok(())
+}
+
+fn elapsed_us(started: Instant) -> u64 {
+    u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX)
 }
 
 fn meta(conn: &Connection, key: &str) -> Result<String, String> {
