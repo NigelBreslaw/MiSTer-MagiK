@@ -23,7 +23,9 @@ use crate::library_db::{
 use crate::media_metadata;
 use crate::prepared_collections::PreparedPayloadIndex;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeSet, HashMap};
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -337,45 +339,113 @@ impl CatalogScanAttribution {
 const RESUME_CHECKPOINT_TARGET_BATCH: usize = 16;
 const RESUME_CHECKPOINT_MAX_BYTES: usize = 2 * 1024 * 1024;
 
-struct Fingerprint(u64);
+const TARGET_SIGNATURE_VERSION: u32 = 2;
+
+struct Fingerprint {
+    records: Vec<Vec<u8>>,
+    exact: bool,
+}
 
 impl Fingerprint {
     fn new() -> Self {
-        Self(0xcbf29ce484222325)
+        Self {
+            records: Vec::new(),
+            exact: true,
+        }
     }
 
     fn for_descriptor(descriptor: &catalog_scan::ScanTargetDescriptor) -> Self {
         let mut value = Self::new();
-        value.bytes(descriptor.path.to_string_lossy().as_bytes());
-        value.bytes(format!("{:?}", descriptor.kind).as_bytes());
+        value.record(b"target", path_bytes(&descriptor.path));
+        value.record(b"kind", format!("{:?}", descriptor.kind).as_bytes());
         value
     }
 
-    fn bytes(&mut self, bytes: &[u8]) {
-        for byte in bytes {
-            self.0 ^= u64::from(*byte);
-            self.0 = self.0.wrapping_mul(0x100000001b3);
-        }
-        self.0 ^= 0xff;
-        self.0 = self.0.wrapping_mul(0x100000001b3);
+    fn record(&mut self, kind: &[u8], bytes: &[u8]) {
+        let mut record = Vec::with_capacity(kind.len() + bytes.len() + 16);
+        record.extend_from_slice(&(kind.len() as u64).to_le_bytes());
+        record.extend_from_slice(kind);
+        record.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
+        record.extend_from_slice(bytes);
+        self.records.push(record);
     }
 
     fn file(&mut self, file: &catalog_scan::FoundFile) {
-        self.bytes(file.path.to_string_lossy().as_bytes());
-        self.bytes(file.ext.as_bytes());
-        self.bytes(&file.size.to_le_bytes());
-        self.bytes(&file.mtime_secs.to_le_bytes());
+        let mut metadata = Vec::new();
+        metadata.extend_from_slice(path_bytes(&file.path));
+        metadata.push(0);
+        metadata.extend_from_slice(file.ext.as_bytes());
+        metadata.extend_from_slice(&file.size.to_le_bytes());
+        metadata.extend_from_slice(&file.mtime_secs.to_le_bytes());
+        self.record(b"file", &metadata);
+        match file.ext.to_ascii_lowercase().as_str() {
+            "mra" | "mgl" => match std::fs::read(&file.path) {
+                Ok(bytes) => self.record(b"semantic-content", &bytes),
+                Err(_) => self.exact = false,
+            },
+            "zip" => match zip_catalog_listing_bytes(&file.path) {
+                Ok(bytes) => self.record(b"archive-listing", &bytes),
+                Err(_) => self.exact = false,
+            },
+            "7z" | "lha" | "lzh" | "rar" => self.exact = false,
+            _ => {}
+        }
     }
 
     fn facts(&mut self, facts: &crate::catalog_discovery::GameDirFact) {
         if let Ok(encoded) = serde_json::to_vec(facts) {
-            self.bytes(&encoded);
+            self.record(b"facts", &encoded);
+        } else {
+            self.exact = false;
         }
     }
 
-    fn finish(&self) -> String {
-        format!("{:016x}", self.0)
+    fn finish(&mut self) -> Option<String> {
+        if !self.exact {
+            return None;
+        }
+        self.records.sort_unstable();
+        let mut digest = Sha256::new();
+        digest.update(TARGET_SIGNATURE_VERSION.to_le_bytes());
+        for record in &self.records {
+            digest.update((record.len() as u64).to_le_bytes());
+            digest.update(record);
+        }
+        Some(hex_digest(digest.finalize()))
     }
+}
+
+#[cfg(unix)]
+fn path_bytes(path: &Path) -> &[u8] {
+    use std::os::unix::ffi::OsStrExt as _;
+    path.as_os_str().as_bytes()
+}
+
+#[cfg(not(unix))]
+fn path_bytes(path: &Path) -> &[u8] {
+    path.as_os_str().to_str().unwrap_or("").as_bytes()
+}
+
+fn zip_catalog_listing_bytes(path: &Path) -> Result<Vec<u8>, String> {
+    let mut file = std::fs::File::open(path).map_err(|error| error.to_string())?;
+    let len = file.metadata().map_err(|error| error.to_string())?.len();
+    let tail_len = len.min(66_000) as usize;
+    file.seek(SeekFrom::End(-(tail_len as i64)))
+        .map_err(|error| error.to_string())?;
+    let mut tail = vec![0; tail_len];
+    file.read_exact(&mut tail)
+        .map_err(|error| error.to_string())?;
+    Ok(tail)
+}
+
+fn hex_digest(bytes: impl AsRef<[u8]>) -> String {
+    let bytes = bytes.as_ref();
+    let mut encoded = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        use std::fmt::Write as _;
+        let _ = write!(encoded, "{byte:02x}");
+    }
+    encoded
 }
 
 fn progress_target(
@@ -383,7 +453,11 @@ fn progress_target(
 ) -> crate::build_progress::ScanTarget {
     crate::build_progress::ScanTarget {
         ordinal: descriptor.ordinal as u32,
-        key: format!("{:?}:{}", descriptor.kind, descriptor.path.display()),
+        key: format!(
+            "{:?}:{}",
+            descriptor.kind,
+            hex_digest(path_bytes(&descriptor.path))
+        ),
         path: descriptor.path.display().to_string(),
     }
 }
@@ -482,6 +556,7 @@ fn prepare_resume_scan(
     excluded_targets: &[PathBuf],
     priority: LibraryScanPriority,
     durable_resume: bool,
+    prepared_payload_contract: &str,
 ) -> (Option<ResumeScan>, ResumeValidationAttribution) {
     let open_started = Instant::now();
     let mut attribution = ResumeValidationAttribution {
@@ -514,6 +589,10 @@ fn prepare_resume_scan(
         namespace_backend: std::env::var("MISTER_NAMESPACE_BACKEND")
             .unwrap_or_else(|_| "default".to_string()),
         projection_contract: crate::sharded_catalog::PRODUCTION_PROJECTION_CONTRACT.to_string(),
+        target_signature_version: TARGET_SIGNATURE_VERSION,
+        prepared_collection_version:
+            crate::prepared_collections::PREPARED_COLLECTION_ADAPTER_VERSION,
+        prepared_payload_contract: prepared_payload_contract.to_string(),
     };
     let path = crate::catalog_config::default_build_progress_path();
     let committed_path = crate::catalog_config::default_builder_state_path();
@@ -544,7 +623,7 @@ fn prepare_resume_scan(
         }
     };
     let decode_started = Instant::now();
-    let decoded = journal.completed_targets();
+    let decoded = journal.completed_target_metadata();
     let decode_us = decode_started.elapsed().as_micros() as u64;
     let completed: HashMap<_, _> = decoded
         .unwrap_or_default()
@@ -568,11 +647,27 @@ fn prepare_resume_scan(
         .error_targets
         .saturating_add(validation_namespace.aborted_targets);
     attribution.namespace = validation_namespace;
-    let reusable: HashMap<u32, crate::build_progress::CompletedTarget> = completed
-        .iter()
-        .filter(|(ordinal, saved)| fingerprints.get(ordinal) == Some(&saved.input_fingerprint))
-        .map(|(ordinal, saved)| (*ordinal, saved.clone()))
-        .collect();
+    let mut reusable = HashMap::new();
+    let mut decode_errors = 0usize;
+    for (ordinal, saved) in &completed {
+        if fingerprints.get(ordinal) != Some(&saved.input_fingerprint) {
+            continue;
+        }
+        match journal.read_completed_target(saved) {
+            Ok(target) => {
+                reusable.insert(*ordinal, target);
+            }
+            Err(error) => {
+                decode_errors = decode_errors.saturating_add(1);
+                crate::catalog_logln!(
+                    "catalog_resume_tsv\tphase=target-frame-invalid\ttarget_ordinal={}\treason={}",
+                    ordinal,
+                    error.replace(['\t', '\n'], " ")
+                );
+            }
+        }
+    }
+    attribution.error_targets = attribution.error_targets.saturating_add(decode_errors);
     let durable_completed = completed.len();
     let invalidated_targets = completed
         .keys()
@@ -584,7 +679,7 @@ fn prepare_resume_scan(
     let affected_systems = completed
         .iter()
         .filter(|(ordinal, _)| invalidated_targets.contains(ordinal))
-        .flat_map(|(_, completed)| target_output_systems(&completed.output_json))
+        .flat_map(|(_, completed)| completed.affected_systems.iter().cloned())
         .collect::<BTreeSet<_>>()
         .into_iter()
         .collect();
@@ -617,25 +712,12 @@ fn prepare_resume_scan(
     (Some(state), attribution)
 }
 
-fn target_output_systems(output_json: &str) -> BTreeSet<String> {
-    serde_json::from_str::<TargetOutput>(output_json)
-        .map(|output| {
-            output
-                .discoveries
-                .iter()
-                .map(catalog_system_id_for_discovery)
-                .filter(|system_id| is_reportable_catalog_system_id(system_id))
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
 fn validate_target_fingerprints(
     cfg: &BenchConfig,
     plan: &launch_profiles::CatalogScanPlan,
     excluded_targets: &[PathBuf],
     priority: LibraryScanPriority,
-    completed: &HashMap<u32, crate::build_progress::CompletedTarget>,
+    completed: &HashMap<u32, crate::build_progress::CompletedTargetMetadata>,
 ) -> (
     HashMap<u32, String>,
     catalog_scan::NamespaceRouteAttribution,
@@ -673,13 +755,10 @@ fn validate_target_fingerprints(
     while let Ok(event) = rx.recv() {
         match event {
             DiscoveryEvent::TargetStart(descriptor) => {
-                let original = completed.values().find(|saved| {
-                    saved.target.path == descriptor.path.to_string_lossy()
-                        && saved
-                            .target
-                            .key
-                            .starts_with(&format!("{:?}:", descriptor.kind))
-                });
+                let current_target = progress_target(&descriptor);
+                let original = completed
+                    .values()
+                    .find(|saved| saved.target.key == current_target.key);
                 current = original.map(|saved| {
                     (
                         saved.target.ordinal,
@@ -706,8 +785,10 @@ fn validate_target_fingerprints(
                 }
             }
             DiscoveryEvent::TargetComplete(_) => {
-                if let Some((ordinal, fingerprint)) = current.take() {
-                    fingerprints.insert(ordinal, fingerprint.finish());
+                if let Some((ordinal, mut fingerprint)) = current.take() {
+                    if let Some(signature) = fingerprint.finish() {
+                        fingerprints.insert(ordinal, signature);
+                    }
                 }
             }
             DiscoveryEvent::Done {
@@ -928,21 +1009,10 @@ fn scan_library_with_progress_and_events(
             plan.game_dir_headers().len(),
         ),
     );
-    let resume_started = Instant::now();
-    let (mut resume, resume_attribution) =
-        prepare_resume_scan(cfg, &plan, &excluded_targets, priority, durable_resume);
-    let resume_us = resume_started.elapsed().as_micros() as u64;
-    if let (Some(state), Some(report)) = (resume.as_ref(), scan_events.as_mut()) {
-        report(LibraryScanEvent::ReconciliationPlanReady {
-            system_ids: state.affected_systems.clone(),
-            all_published_systems: state.all_published_systems,
-        });
-    }
-    let target_count =
-        catalog_scan::planned_scan_target_descriptors(&cfg.roots, &plan, &excluded_targets).len();
     let prepared_payload_t = Instant::now();
     let prepared_payload_index = PreparedPayloadIndex::from_library_roots(&cfg.roots);
     let prepared_payload_us = prepared_payload_t.elapsed().as_micros() as u64;
+    let prepared_payload_contract = prepared_payload_index.contract_signature();
     crate::cooperative_work::checkpoint();
     library_db::report_library_scan_timing(
         "prepared_payload_index",
@@ -953,6 +1023,24 @@ fn scan_library_with_progress_and_events(
             prepared_payload_index.complete_root_count(),
         ),
     );
+    let resume_started = Instant::now();
+    let (mut resume, resume_attribution) = prepare_resume_scan(
+        cfg,
+        &plan,
+        &excluded_targets,
+        priority,
+        durable_resume,
+        &prepared_payload_contract,
+    );
+    let resume_us = resume_started.elapsed().as_micros() as u64;
+    if let (Some(state), Some(report)) = (resume.as_ref(), scan_events.as_mut()) {
+        report(LibraryScanEvent::ReconciliationPlanReady {
+            system_ids: state.affected_systems.clone(),
+            all_published_systems: state.all_published_systems,
+        });
+    }
+    let target_count =
+        catalog_scan::planned_scan_target_descriptors(&cfg.roots, &plan, &excluded_targets).len();
     let prevalidated_targets = resume
         .as_ref()
         .map(|state| {
@@ -1161,19 +1249,37 @@ fn scan_library_with_progress_and_events(
                                 .checkpoint
                                 .encode_us
                                 .saturating_add(encode_started.elapsed().as_micros() as u64);
-                            let completed = crate::build_progress::CompletedTarget {
-                                target: progress_target(&descriptor),
-                                input_fingerprint: target_fingerprint.finish(),
-                                output_json,
-                                accumulated_stats: crate::build_progress::BuildStats {
-                                    normal_files: normal_files.len() as u64,
-                                    containers: containers.len() as u64,
-                                    entries: entries.len() as u64,
-                                    audit_rows: 0,
-                                    discoveries: discoveries.len() as u64,
-                                },
-                            };
-                            queue_target_checkpoint(state, completed);
+                            if let Some(input_fingerprint) = target_fingerprint.finish() {
+                                let affected_systems = discoveries[offsets.discoveries..]
+                                    .iter()
+                                    .map(catalog_system_id_for_discovery)
+                                    .filter(|system_id| is_reportable_catalog_system_id(system_id))
+                                    .collect::<BTreeSet<_>>()
+                                    .into_iter()
+                                    .collect();
+                                let completed = crate::build_progress::CompletedTarget {
+                                    target: progress_target(&descriptor),
+                                    input_fingerprint,
+                                    output_json,
+                                    accumulated_stats: crate::build_progress::BuildStats {
+                                        normal_files: normal_files.len() as u64,
+                                        containers: containers.len() as u64,
+                                        entries: entries.len() as u64,
+                                        audit_rows: 0,
+                                        discoveries: discoveries.len() as u64,
+                                    },
+                                    affected_systems,
+                                };
+                                queue_target_checkpoint(state, completed);
+                            } else {
+                                state.checkpoint.errors = state.checkpoint.errors.saturating_add(1);
+                                report_resume(
+                                    state,
+                                    "checkpoint-skipped",
+                                    descriptor.ordinal,
+                                    "exact-signature-unavailable",
+                                );
+                            }
                         }
                         Err(error) => {
                             state.checkpoint.encode_us = state
@@ -1678,27 +1784,75 @@ fn bootstrap_library_progress(
 #[cfg(test)]
 mod incremental_planning_tests {
     use super::*;
+    use std::fs;
 
     #[test]
-    fn completed_target_dependencies_preserve_exact_system_ids() {
-        let output = TargetOutput {
-            game_dir_facts: Vec::new(),
-            normal_files: Vec::new(),
-            containers: Vec::new(),
-            entries: Vec::new(),
-            ignored_files: 0,
-            discoveries: vec![crate::test_support::mra_discovery(1, "Robotron")],
-        };
-
-        assert_eq!(
-            target_output_systems(&serde_json::to_string(&output).unwrap()),
-            BTreeSet::from(["arcade".to_string()])
-        );
+    fn canonical_target_signature_ignores_enumeration_order() {
+        let files = [
+            catalog_scan::FoundFile {
+                path: PathBuf::from("/media/fat/games/SNES/a.sfc"),
+                ext: "sfc".into(),
+                size: 1,
+                mtime_secs: 2,
+            },
+            catalog_scan::FoundFile {
+                path: PathBuf::from("/media/fat/games/SNES/b.sfc"),
+                ext: "sfc".into(),
+                size: 3,
+                mtime_secs: 4,
+            },
+        ];
+        let mut forward = Fingerprint::new();
+        forward.file(&files[0]);
+        forward.file(&files[1]);
+        let mut reverse = Fingerprint::new();
+        reverse.file(&files[1]);
+        reverse.file(&files[0]);
+        assert_eq!(forward.finish(), reverse.finish());
     }
 
     #[test]
-    fn corrupt_target_dependencies_force_no_false_exact_match() {
-        assert!(target_output_systems("{not-json").is_empty());
+    fn same_size_mra_replacement_changes_exact_signature() {
+        let root = std::env::temp_dir().join(format!(
+            "mister-magik-signature-{}-{}",
+            std::process::id(),
+            library_db::unix_now_secs()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("game.mra");
+        fs::write(&path, b"first").unwrap();
+        let found = || catalog_scan::FoundFile {
+            path: path.clone(),
+            ext: "mra".into(),
+            size: 5,
+            mtime_secs: 1,
+        };
+        let mut before = Fingerprint::new();
+        before.file(&found());
+        fs::write(&path, b"other").unwrap();
+        let mut after = Fingerprint::new();
+        after.file(&found());
+        assert_ne!(before.finish(), after.finish());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn case_only_path_change_changes_exact_signature() {
+        let mut lower = Fingerprint::new();
+        lower.file(&catalog_scan::FoundFile {
+            path: PathBuf::from("/media/fat/games/SNES/game.sfc"),
+            ext: "sfc".into(),
+            size: 1,
+            mtime_secs: 1,
+        });
+        let mut upper = Fingerprint::new();
+        upper.file(&catalog_scan::FoundFile {
+            path: PathBuf::from("/media/fat/games/SNES/GAME.sfc"),
+            ext: "sfc".into(),
+            size: 1,
+            mtime_secs: 1,
+        });
+        assert_ne!(lower.finish(), upper.finish());
     }
 }
 

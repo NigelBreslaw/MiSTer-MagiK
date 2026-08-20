@@ -23,7 +23,7 @@ const METADATA_FILE_NAME: &str = "metadata.sqlite3";
 const FRAME_FILE_NAME: &str = "target-outputs.lz4";
 const LEGACY_PROGRESS_FILE_NAME: &str = "build-progress.sqlite3";
 const LEGACY_COMMITTED_FILE_NAME: &str = "target-output-cache.sqlite3";
-const SCHEMA_VERSION: u32 = 3;
+const SCHEMA_VERSION: u32 = 4;
 const MAX_TARGET_OUTPUT_BYTES: usize = 256 * 1024 * 1024;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -36,6 +36,9 @@ pub struct BuildContract {
     pub taxonomy_version: String,
     pub namespace_backend: String,
     pub projection_contract: String,
+    pub target_signature_version: u32,
+    pub prepared_collection_version: u32,
+    pub prepared_payload_contract: String,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
@@ -62,6 +65,19 @@ pub struct CompletedTarget {
     /// interpret payload/container/entry/discovery facts.
     pub output_json: String,
     pub accumulated_stats: BuildStats,
+    pub affected_systems: Vec<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CompletedTargetMetadata {
+    pub target: ScanTarget,
+    pub input_fingerprint: String,
+    pub accumulated_stats: BuildStats,
+    pub affected_systems: Vec<String>,
+    frame_offset: u64,
+    frame_len: u64,
+    raw_len: u64,
+    frame_sha256: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -320,7 +336,7 @@ impl BuildProgressJournal {
             build_id: meta(&conn, "build_id")?,
             conn,
         };
-        journal.completed_targets()?;
+        journal.completed_target_metadata()?;
         journal.completed_shards()?;
         Ok(journal)
     }
@@ -348,11 +364,19 @@ impl BuildProgressJournal {
     }
 
     pub fn completed_targets(&self) -> Result<Vec<CompletedTarget>, String> {
+        self.completed_target_metadata()?
+            .into_iter()
+            .map(|metadata| self.read_completed_target(&metadata))
+            .collect()
+    }
+
+    pub fn completed_target_metadata(&self) -> Result<Vec<CompletedTargetMetadata>, String> {
         let mut stmt = self
             .conn
             .prepare(
                 "SELECT t.ordinal,t.target_key,t.path,c.input_fingerprint,
-                    c.frame_offset,c.frame_len,c.raw_len,c.frame_sha256,c.stats_json
+                    c.frame_offset,c.frame_len,c.raw_len,c.frame_sha256,c.stats_json,
+                    c.affected_systems_json
              FROM scan_targets t JOIN completed_targets c USING(ordinal) ORDER BY t.ordinal",
             )
             .map_err(|error| format!("prepare completed targets: {error}"))?;
@@ -368,6 +392,7 @@ impl BuildProgressJournal {
                     row.get::<_, i64>(6)?,
                     row.get::<_, String>(7)?,
                     row.get::<_, String>(8)?,
+                    row.get::<_, String>(9)?,
                 ))
             })
             .map_err(|error| format!("read completed targets: {error}"))?;
@@ -382,23 +407,42 @@ impl BuildProgressJournal {
                 raw_len,
                 frame_sha256,
                 stats_json,
+                affected_systems_json,
             ) = row.map_err(|error| format!("read completed target: {error}"))?;
             let accumulated_stats = serde_json::from_str(&stats_json)
                 .map_err(|error| format!("decode completed target stats: {error}"))?;
-            let output_json = self.read_target_frame(
-                checked_frame_value(frame_offset, "offset")?,
-                checked_frame_value(frame_len, "length")?,
-                checked_frame_value(raw_len, "raw length")?,
-                &frame_sha256,
-            )?;
-            Ok(CompletedTarget {
+            let affected_systems = serde_json::from_str(&affected_systems_json)
+                .map_err(|error| format!("decode completed target systems: {error}"))?;
+            Ok(CompletedTargetMetadata {
                 target: ScanTarget { ordinal, key, path },
                 input_fingerprint,
-                output_json,
                 accumulated_stats,
+                affected_systems,
+                frame_offset: checked_frame_value(frame_offset, "offset")?,
+                frame_len: checked_frame_value(frame_len, "length")?,
+                raw_len: checked_frame_value(raw_len, "raw length")?,
+                frame_sha256,
             })
         })
         .collect()
+    }
+
+    pub fn read_completed_target(
+        &self,
+        metadata: &CompletedTargetMetadata,
+    ) -> Result<CompletedTarget, String> {
+        Ok(CompletedTarget {
+            target: metadata.target.clone(),
+            input_fingerprint: metadata.input_fingerprint.clone(),
+            output_json: self.read_target_frame(
+                metadata.frame_offset,
+                metadata.frame_len,
+                metadata.raw_len,
+                &metadata.frame_sha256,
+            )?,
+            accumulated_stats: metadata.accumulated_stats.clone(),
+            affected_systems: metadata.affected_systems.clone(),
+        })
     }
 
     fn read_target_frame(
@@ -534,14 +578,18 @@ impl BuildProgressJournal {
             }
             let stats_json = serde_json::to_string(&completed.accumulated_stats)
                 .map_err(|error| format!("encode target stats: {error}"))?;
+            let affected_systems_json = serde_json::to_string(&completed.affected_systems)
+                .map_err(|error| format!("encode target systems: {error}"))?;
             tx.execute(
                 "INSERT INTO completed_targets(
-                     ordinal,input_fingerprint,frame_offset,frame_len,raw_len,frame_sha256,stats_json
-                 ) VALUES(?1,?2,?3,?4,?5,?6,?7)
+                     ordinal,input_fingerprint,frame_offset,frame_len,raw_len,frame_sha256,stats_json,
+                     affected_systems_json
+                 ) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)
                  ON CONFLICT(ordinal) DO UPDATE SET input_fingerprint=excluded.input_fingerprint,
                      frame_offset=excluded.frame_offset,frame_len=excluded.frame_len,
                      raw_len=excluded.raw_len,frame_sha256=excluded.frame_sha256,
-                     stats_json=excluded.stats_json",
+                     stats_json=excluded.stats_json,
+                     affected_systems_json=excluded.affected_systems_json",
                 params![
                     completed.target.ordinal,
                     completed.input_fingerprint,
@@ -549,7 +597,8 @@ impl BuildProgressJournal {
                     frame_len,
                     raw_len,
                     frame_sha256,
-                    stats_json
+                    stats_json,
+                    affected_systems_json
                 ],
             )
             .map_err(|error| format!("write target checkpoint: {error}"))?;
@@ -625,7 +674,8 @@ impl BuildProgressJournal {
              CREATE TABLE completed_targets(ordinal INTEGER PRIMARY KEY REFERENCES scan_targets(ordinal),
                  input_fingerprint TEXT NOT NULL,frame_offset INTEGER NOT NULL,
                  frame_len INTEGER NOT NULL,raw_len INTEGER NOT NULL,
-                 frame_sha256 TEXT NOT NULL,stats_json TEXT NOT NULL);
+                 frame_sha256 TEXT NOT NULL,stats_json TEXT NOT NULL,
+                 affected_systems_json TEXT NOT NULL);
              CREATE TABLE completed_shards(system_id TEXT PRIMARY KEY,shard_json TEXT NOT NULL) WITHOUT ROWID;"
         ).map_err(|error| format!("create build progress schema: {error}"))?;
         let build_id = new_build_id();
@@ -691,13 +741,14 @@ impl BuildProgressJournal {
         if !frame_path(path).is_file() {
             return Err("target frame file is missing".to_string());
         }
-        // Decode every durable row now; corrupt recovery data is disposable.
+        // Open is metadata-only. A target frame is decoded only after the
+        // caller has independently validated its current input signature.
         let journal = Self {
             path: path.to_path_buf(),
             conn,
             build_id,
         };
-        journal.completed_targets()?;
+        journal.completed_target_metadata()?;
         journal.completed_shards()?;
         Ok(journal)
     }
@@ -716,7 +767,8 @@ fn reconcile_targets(
     {
         let mut stmt = conn
             .prepare(
-                "SELECT ordinal,input_fingerprint,frame_offset,frame_len,raw_len,frame_sha256,stats_json
+                "SELECT ordinal,input_fingerprint,frame_offset,frame_len,raw_len,frame_sha256,stats_json,
+                        affected_systems_json
                  FROM completed_targets",
             )
             .map_err(|error| format!("prepare target reconciliation: {error}"))?;
@@ -730,16 +782,25 @@ fn reconcile_targets(
                     row.get::<_, i64>(4)?,
                     row.get::<_, String>(5)?,
                     row.get::<_, String>(6)?,
+                    row.get::<_, String>(7)?,
                 ))
             })
             .map_err(|error| format!("read target reconciliation: {error}"))?;
         for row in rows {
-            let (ordinal, fingerprint, offset, frame_len, raw_len, frame_sha256, stats) =
+            let (ordinal, fingerprint, offset, frame_len, raw_len, frame_sha256, stats, systems) =
                 row.map_err(|error| format!("read target reconciliation row: {error}"))?;
             if let Some(target) = stored.iter().find(|target| target.ordinal == ordinal) {
                 saved.insert(
                     (target.key.clone(), target.path.clone()),
-                    (fingerprint, offset, frame_len, raw_len, frame_sha256, stats),
+                    (
+                        fingerprint,
+                        offset,
+                        frame_len,
+                        raw_len,
+                        frame_sha256,
+                        stats,
+                        systems,
+                    ),
                 );
             }
         }
@@ -757,13 +818,14 @@ fn reconcile_targets(
             params![target.ordinal, target.key, target.path],
         )
         .map_err(|error| format!("reconcile scan target: {error}"))?;
-        if let Some((fingerprint, offset, frame_len, raw_len, frame_sha256, stats)) =
+        if let Some((fingerprint, offset, frame_len, raw_len, frame_sha256, stats, systems)) =
             saved.get(&(target.key.clone(), target.path.clone()))
         {
             tx.execute(
                 "INSERT INTO completed_targets(
-                     ordinal,input_fingerprint,frame_offset,frame_len,raw_len,frame_sha256,stats_json
-                 ) VALUES(?1,?2,?3,?4,?5,?6,?7)",
+                     ordinal,input_fingerprint,frame_offset,frame_len,raw_len,frame_sha256,stats_json,
+                     affected_systems_json
+                 ) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",
                 params![
                     target.ordinal,
                     fingerprint,
@@ -771,7 +833,8 @@ fn reconcile_targets(
                     frame_len,
                     raw_len,
                     frame_sha256,
-                    stats
+                    stats,
+                    systems
                 ],
             )
             .map_err(|error| format!("restore reconciled target: {error}"))?;
@@ -877,6 +940,9 @@ mod tests {
             taxonomy_version: "t1".into(),
             namespace_backend: "native".into(),
             projection_contract: "v3".into(),
+            target_signature_version: 2,
+            prepared_collection_version: 5,
+            prepared_payload_contract: "prepared".into(),
         }
     }
     fn targets() -> Vec<ScanTarget> {
@@ -895,6 +961,7 @@ mod tests {
                 normal_files: 1,
                 ..BuildStats::default()
             },
+            affected_systems: vec!["arcade".into()],
         }
     }
 
@@ -991,7 +1058,7 @@ mod tests {
     }
 
     #[test]
-    fn truncated_committed_frame_recreates_disposable_bundle() {
+    fn truncated_committed_frame_is_rejected_only_when_selected() {
         let path = temp_path("build-progress-frame-truncated");
         let (mut journal, _) =
             BuildProgressJournal::open_or_create(&path, &contract(), &targets()).unwrap();
@@ -1006,8 +1073,10 @@ mod tests {
 
         let (journal, status) =
             BuildProgressJournal::open_or_create(&path, &contract(), &targets()).unwrap();
-        assert!(matches!(status, OpenStatus::Recreated { .. }));
-        assert!(journal.completed_targets().unwrap().is_empty());
+        assert_eq!(status, OpenStatus::Resumed);
+        let metadata = journal.completed_target_metadata().unwrap();
+        assert_eq!(metadata.len(), 1);
+        assert!(journal.read_completed_target(&metadata[0]).is_err());
         remove(&path).unwrap();
     }
 
@@ -1068,6 +1137,7 @@ mod tests {
                 input_fingerprint: "first-fingerprint".into(),
                 output_json: "{}".into(),
                 accumulated_stats: BuildStats::default(),
+                affected_systems: vec!["first".into()],
             },
             CompletedTarget {
                 target: ScanTarget {
@@ -1077,6 +1147,7 @@ mod tests {
                 input_fingerprint: "second-fingerprint".into(),
                 output_json: "{}".into(),
                 accumulated_stats: BuildStats::default(),
+                affected_systems: vec!["second".into()],
             },
         ];
 
@@ -1198,6 +1269,7 @@ mod tests {
                         discoveries: (ordinal + 1) as u64,
                         ..BuildStats::default()
                     },
+                    affected_systems: vec![format!("system-{ordinal}")],
                 })
                 .unwrap();
         }

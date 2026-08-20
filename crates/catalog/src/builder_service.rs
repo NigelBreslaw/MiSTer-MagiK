@@ -664,12 +664,9 @@ fn run_with_backend_policy<B: BuilderBackend>(
 }
 
 fn operation_uses_durable_resume(operation: BuilderOperation) -> bool {
-    // Checkpoint fresh construction for interruption recovery. Rebuild replay
-    // is deliberately disabled: decoding the whole-card cache costs more than
-    // the execution walk it replaces on exFAT.
     matches!(
         operation,
-        BuilderOperation::Build | BuilderOperation::FreshBuild
+        BuilderOperation::Build | BuilderOperation::Rebuild | BuilderOperation::FreshBuild
     )
 }
 
@@ -1952,7 +1949,7 @@ mod tests {
         assert!(!full_build_runs_in_background(BuilderOperation::Build));
         assert!(!full_build_runs_in_background(BuilderOperation::FreshBuild));
         assert!(operation_uses_durable_resume(BuilderOperation::Build));
-        assert!(!operation_uses_durable_resume(BuilderOperation::Rebuild));
+        assert!(operation_uses_durable_resume(BuilderOperation::Rebuild));
         assert!(!operation_uses_durable_resume(BuilderOperation::RebuildAll));
         assert!(operation_uses_durable_resume(BuilderOperation::FreshBuild));
         assert!(operation_allows_post_scan_unchanged(

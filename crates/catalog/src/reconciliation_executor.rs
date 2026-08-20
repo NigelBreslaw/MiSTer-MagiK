@@ -1420,6 +1420,9 @@ mod tests {
             taxonomy_version: "1".into(),
             namespace_backend: "fixture".into(),
             projection_contract: "1".into(),
+            target_signature_version: 2,
+            prepared_collection_version: 5,
+            prepared_payload_contract: "fixture".into(),
         };
         let journal = crate::build_progress::BuildProgressJournal::open_or_create(
             &progress_path,
