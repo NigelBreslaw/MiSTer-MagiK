@@ -908,14 +908,11 @@ fn classify_runtime_batch_parallel(
     {
         return None;
     }
-    let target_profile = launch_profiles::profile_for_game_dir(profiles, header_name)?;
-    if !target_profile.collection_rules.is_empty()
-        || !target_profile.archive_entry_rules.is_empty()
-        || files.iter().any(|file| {
-            matches!(file.ext.as_str(), "mra" | "mgl" | "hdf")
-                || ArchiveFormat::from_ext(&file.ext).is_some()
-        })
-    {
+    launch_profiles::profile_for_game_dir(profiles, header_name)?;
+    if files.iter().any(|file| {
+        matches!(file.ext.as_str(), "mra" | "mgl" | "hdf")
+            || ArchiveFormat::from_ext(&file.ext).is_some()
+    }) {
         return None;
     }
 
