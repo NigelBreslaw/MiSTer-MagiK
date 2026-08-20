@@ -512,6 +512,9 @@ impl BuildProgressJournal {
         let begin_us = elapsed_us(begin_started);
         let rows_started = Instant::now();
         for (completed, frame_offset, frame_len, raw_len, frame_sha256) in frame_rows {
+            let frame_offset = sqlite_frame_value(frame_offset, "offset")?;
+            let frame_len = sqlite_frame_value(frame_len, "length")?;
+            let raw_len = sqlite_frame_value(raw_len, "raw length")?;
             let expected = tx
                 .query_row(
                     "SELECT target_key,path FROM scan_targets WHERE ordinal=?1",
@@ -788,6 +791,10 @@ fn configure(conn: &Connection) -> Result<(), String> {
 
 fn checked_frame_value(value: i64, label: &str) -> Result<u64, String> {
     u64::try_from(value).map_err(|_| format!("target frame {label} is negative"))
+}
+
+fn sqlite_frame_value(value: u64, label: &str) -> Result<i64, String> {
+    i64::try_from(value).map_err(|_| format!("target frame {label} exceeds SQLite integer"))
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
