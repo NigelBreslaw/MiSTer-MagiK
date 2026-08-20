@@ -426,7 +426,7 @@ fn print_benchmark_capabilities() {
 
 fn run_catalog_corpus_inventory() {
     let roots = mister_magik_catalog::catalog_config::library_roots_from_env();
-    crate::ui_print!(
+    crate::ui_log!(
         "{}",
         mister_magik_catalog::catalog_corpus_inventory_tsv(&roots)
     );
