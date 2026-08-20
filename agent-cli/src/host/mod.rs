@@ -19352,9 +19352,12 @@ fn catalog_logical_fingerprint(catalog: &Value) -> Result<String> {
 }
 
 fn catalog_phase_evidence(log: &str) -> Value {
-    const RECORDS: [&str; 11] = [
+    const RECORDS: [&str; 14] = [
         "startup_timing",
         "catalog_scan_attribution_tsv",
+        "catalog_scan_handoff_tsv",
+        "catalog_target_handoff_tsv",
+        "catalog_system_finality_tsv",
         "catalog_target_checkpoint_io_tsv",
         "catalog_shard_staging_tsv",
         "library_scan_timing",
@@ -19420,6 +19423,9 @@ fn catalog_phase_evidence(log: &str) -> Value {
         "builder_terminal": post_scan_unchanged
             || has("startup_timing", Some("builder_persisted")),
         "scan_attribution": has("catalog_scan_attribution_tsv", None),
+        "scan_handoff": has("catalog_scan_handoff_tsv", None),
+        "target_handoff": has("catalog_target_handoff_tsv", None),
+        "system_finality": has("catalog_system_finality_tsv", None),
         "checkpoint": has("catalog_target_checkpoint_io_tsv", None),
         "shard_staging": post_scan_unchanged || has("catalog_shard_staging_tsv", None),
         "projection": post_scan_unchanged || has("catalog_v3_projection_phases_tsv", None),
@@ -19430,7 +19436,7 @@ fn catalog_phase_evidence(log: &str) -> Value {
         .as_object()
         .is_some_and(|required| required.values().all(|value| value == &Value::Bool(true)));
     json!({
-        "schema": "mister-magik-catalog-phase-evidence-v3",
+        "schema": "mister-magik-catalog-phase-evidence-v4",
         "complete": complete,
         "completion_mode": if post_scan_unchanged {
             "post-scan-unchanged"
@@ -32804,6 +32810,9 @@ H: Handlers=event3 js0"#
         let log = "startup_timing\tlibrary_scan_complete\t100us\tscan_us=90\n\
 startup_timing\tbuilder_persisted\t200us\telapsed_us=190\n\
 catalog_scan_attribution_tsv\tvalidation_us=10 execution_walk_us=70\n\
+catalog_scan_handoff_tsv\tloop_us=80 receive_wait_us=30 consumer_active_us=50\n\
+catalog_target_handoff_tsv\tordinal=0 ready_us=70 systems=arcade\n\
+catalog_system_finality_tsv\tsystem=arcade last_target_ordinal=0 ready_us=70 targets=1\n\
 catalog_target_checkpoint_io_tsv\tenabled=1 snapshot_us=2 encode_us=3 write_us=4\n\
 catalog_shard_staging_tsv\trequested=auto selected=tmpfs\n\
 catalog_v3_projection_phases_tsv\tplanning_us=1\treconciliation_us=2\ttotal_us=3\n\
@@ -32822,6 +32831,9 @@ catalog_v3_persist_phases_tsv\tprojection_us=4\tscanner_cache_us=5\n";
         let unchanged = catalog_phase_evidence(
             "startup_timing\tlibrary_scan_complete\t100us\tscan_us=90\n\
              catalog_scan_attribution_tsv\tvalidation_us=10 execution_walk_us=70\n\
+             catalog_scan_handoff_tsv\tloop_us=80 receive_wait_us=30 consumer_active_us=50\n\
+             catalog_target_handoff_tsv\tordinal=0 ready_us=70 systems=arcade\n\
+             catalog_system_finality_tsv\tsystem=arcade last_target_ordinal=0 ready_us=70 targets=1\n\
              catalog_target_checkpoint_io_tsv\tenabled=0 snapshot_us=0 encode_us=0 write_us=0\n\
              startup_timing\tbuilder_post_scan_unchanged\t200us\tstatus=unchanged elapsed_us=12\n",
         );

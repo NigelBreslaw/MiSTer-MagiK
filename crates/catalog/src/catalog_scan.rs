@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::time::Instant;
 
-const DISCOVERY_EVENT_BUFFER: usize = 8192;
+pub(crate) const DISCOVERY_EVENT_BUFFER: usize = 8192;
 /// A runtime directory normally contributes a small set of candidate records.
 /// Keep that transient buffer bounded; the overflow path deliberately re-walks
 /// just that directory after its facts have selected a profile, rather than

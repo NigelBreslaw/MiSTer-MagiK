@@ -23,7 +23,7 @@ use crate::library_db::{
 use crate::media_metadata;
 use crate::prepared_collections::PreparedPayloadIndex;
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -162,6 +162,42 @@ struct ScanTimingStats {
     collection_listing_us: u64,
     collection_listing_count: usize,
     file_discovery_breakdown: HashMap<String, HashMap<String, FileDiscoveryTimingBucket>>,
+}
+
+#[derive(Default)]
+struct ScanHandoffAttribution {
+    receive_wait_us: u64,
+    consumer_active_us: u64,
+    events: usize,
+    file_events: usize,
+    facts_events: usize,
+    runtime_events: usize,
+    target_events: usize,
+    files: usize,
+    max_batch: usize,
+}
+
+impl ScanHandoffAttribution {
+    fn compact_detail(&self, loop_us: u64) -> String {
+        let accounted_us = self
+            .receive_wait_us
+            .saturating_add(self.consumer_active_us)
+            .min(loop_us);
+        format!(
+            "loop_us={loop_us} receive_wait_us={} consumer_active_us={} unattributed_us={} events={} file_events={} facts_events={} runtime_events={} target_events={} files={} max_batch={} channel_capacity={}",
+            self.receive_wait_us,
+            self.consumer_active_us,
+            loop_us.saturating_sub(accounted_us),
+            self.events,
+            self.file_events,
+            self.facts_events,
+            self.runtime_events,
+            self.target_events,
+            self.files,
+            self.max_batch,
+            catalog_scan::DISCOVERY_EVENT_BUFFER,
+        )
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -1029,15 +1065,24 @@ fn scan_library_with_progress_and_events(
         enabled: durable_resume,
         ..CheckpointAttribution::default()
     };
+    let mut handoff_attribution = ScanHandoffAttribution::default();
+    let mut system_finality = BTreeMap::<String, (usize, u64, usize)>::new();
     let mut last_target_heartbeat = Instant::now();
+    let handoff_loop_started = Instant::now();
     loop {
+        let receive_started = Instant::now();
         let event = match buffered_events.as_mut() {
             Some(events) => events.next(),
             None => rx.recv().ok(),
         };
+        handoff_attribution.receive_wait_us = handoff_attribution
+            .receive_wait_us
+            .saturating_add(receive_started.elapsed().as_micros() as u64);
         let Some(event) = event else {
             break;
         };
+        handoff_attribution.events = handoff_attribution.events.saturating_add(1);
+        let consumer_active_started = Instant::now();
         crate::cooperative_work::checkpoint();
         if last_target_heartbeat.elapsed() >= std::time::Duration::from_secs(30)
             && let Some(descriptor) = target_descriptor.as_ref()
@@ -1053,8 +1098,11 @@ fn scan_library_with_progress_and_events(
             );
             last_target_heartbeat = Instant::now();
         }
+        let mut done = false;
         let files = match event {
             DiscoveryEvent::TargetStart(descriptor) => {
+                handoff_attribution.target_events =
+                    handoff_attribution.target_events.saturating_add(1);
                 report_scan_target(
                     &mut scan_events,
                     &descriptor,
@@ -1137,6 +1185,51 @@ fn scan_library_with_progress_and_events(
                 Vec::new()
             }
             DiscoveryEvent::TargetComplete(descriptor) => {
+                handoff_attribution.target_events =
+                    handoff_attribution.target_events.saturating_add(1);
+                let ready_us = pipeline_started.elapsed().as_micros() as u64;
+                let offsets = target_offsets.unwrap_or_else(|| {
+                    TargetOffsets::capture(
+                        &game_dir_facts,
+                        &normal_files,
+                        &containers,
+                        &entries,
+                        ignored_files,
+                        &discoveries,
+                    )
+                });
+                let target_systems = discoveries[offsets.discoveries..]
+                    .iter()
+                    .map(catalog_system_id_for_discovery)
+                    .filter(|system| is_reportable_catalog_system_id(system))
+                    .collect::<BTreeSet<_>>();
+                for system in &target_systems {
+                    system_finality
+                        .entry(system.clone())
+                        .and_modify(|entry| {
+                            entry.0 = descriptor.ordinal;
+                            entry.1 = ready_us;
+                            entry.2 = entry.2.saturating_add(1);
+                        })
+                        .or_insert((descriptor.ordinal, ready_us, 1));
+                }
+                crate::catalog_logln!(
+                    "catalog_target_handoff_tsv\tordinal={}\tkind={:?}\tready_us={}\tdiscoveries={}\tsystems={}\tpath={}",
+                    descriptor.ordinal,
+                    descriptor.kind,
+                    ready_us,
+                    discoveries.len().saturating_sub(offsets.discoveries),
+                    if target_systems.is_empty() {
+                        "none".to_string()
+                    } else {
+                        target_systems.into_iter().collect::<Vec<_>>().join(",")
+                    },
+                    descriptor
+                        .path
+                        .display()
+                        .to_string()
+                        .replace(['\t', '\n', '\r'], "_"),
+                );
                 if !skip_target
                     && target_checkpointable
                     && let (Some(offsets), Some(state)) = (target_offsets, resume.as_mut())
@@ -1206,6 +1299,7 @@ fn scan_library_with_progress_and_events(
                 Vec::new()
             }
             DiscoveryEvent::File(file) => {
+                handoff_attribution.file_events = handoff_attribution.file_events.saturating_add(1);
                 if skip_target {
                     Vec::new()
                 } else {
@@ -1214,6 +1308,8 @@ fn scan_library_with_progress_and_events(
                 }
             }
             DiscoveryEvent::GameDirFacts(facts) => {
+                handoff_attribution.facts_events =
+                    handoff_attribution.facts_events.saturating_add(1);
                 if !skip_target {
                     target_fingerprint.facts(&facts);
                     game_dir_facts.push(facts);
@@ -1221,30 +1317,33 @@ fn scan_library_with_progress_and_events(
                 Vec::new()
             }
             DiscoveryEvent::RuntimeDirectory(runtime) => {
+                handoff_attribution.runtime_events =
+                    handoff_attribution.runtime_events.saturating_add(1);
                 if skip_target {
-                    continue;
-                }
-                target_fingerprint.facts(&runtime.facts);
-                if runtime.overflowed {
-                    target_checkpointable = false;
-                }
-                for file in &runtime.files {
-                    target_fingerprint.file(file);
-                }
-                game_dir_facts.push(runtime.facts);
-                profiles = plan.finalize_profiles(&game_dir_facts);
-                if runtime.overflowed {
-                    library_db::report_library_scan_timing(
-                        "runtime_buffer_overflow",
-                        0,
-                        format!("path={}", runtime.header.path.display()),
-                    );
-                    catalog_scan::collect_runtime_candidates_after_overflow(
-                        &runtime.header,
-                        &profiles,
-                    )
+                    Vec::new()
                 } else {
-                    runtime.files
+                    target_fingerprint.facts(&runtime.facts);
+                    if runtime.overflowed {
+                        target_checkpointable = false;
+                    }
+                    for file in &runtime.files {
+                        target_fingerprint.file(file);
+                    }
+                    game_dir_facts.push(runtime.facts);
+                    profiles = plan.finalize_profiles(&game_dir_facts);
+                    if runtime.overflowed {
+                        library_db::report_library_scan_timing(
+                            "runtime_buffer_overflow",
+                            0,
+                            format!("path={}", runtime.header.path.display()),
+                        );
+                        catalog_scan::collect_runtime_candidates_after_overflow(
+                            &runtime.header,
+                            &profiles,
+                        )
+                    } else {
+                        runtime.files
+                    }
                 }
             }
             DiscoveryEvent::Done {
@@ -1254,9 +1353,12 @@ fn scan_library_with_progress_and_events(
             } => {
                 discover_us = us;
                 execution_attribution = attribution;
-                break;
+                done = true;
+                Vec::new()
             }
         };
+        handoff_attribution.files = handoff_attribution.files.saturating_add(files.len());
+        handoff_attribution.max_batch = handoff_attribution.max_batch.max(files.len());
         for f in files {
             if idx.is_multiple_of(16) {
                 crate::cooperative_work::checkpoint();
@@ -1437,6 +1539,26 @@ fn scan_library_with_progress_and_events(
                 );
             }
         }
+        handoff_attribution.consumer_active_us = handoff_attribution
+            .consumer_active_us
+            .saturating_add(consumer_active_started.elapsed().as_micros() as u64);
+        if done {
+            break;
+        }
+    }
+    let handoff_loop_us = handoff_loop_started.elapsed().as_micros() as u64;
+    crate::catalog_logln!(
+        "catalog_scan_handoff_tsv\t{}",
+        handoff_attribution.compact_detail(handoff_loop_us)
+    );
+    for (system, (last_target_ordinal, ready_us, targets)) in system_finality {
+        crate::catalog_logln!(
+            "catalog_system_finality_tsv\tsystem={}\tlast_target_ordinal={}\tready_us={}\ttargets={}\tsemantics=observed-last-contributor",
+            system,
+            last_target_ordinal,
+            ready_us,
+            targets,
+        );
     }
     let execution_pipeline_us = pipeline_started.elapsed().as_micros() as u64;
     let post_pipeline_started = Instant::now();
@@ -1758,6 +1880,29 @@ fn is_bootstrap_launcher_path(path: &Path) -> bool {
 #[cfg(test)]
 mod timing_tests {
     use super::*;
+
+    #[test]
+    fn scan_handoff_accounting_is_bounded_and_reports_batch_shape() {
+        let attribution = ScanHandoffAttribution {
+            receive_wait_us: 30,
+            consumer_active_us: 55,
+            events: 4,
+            file_events: 2,
+            facts_events: 0,
+            runtime_events: 1,
+            target_events: 1,
+            files: 65,
+            max_batch: 64,
+        };
+
+        let detail = attribution.compact_detail(80);
+
+        assert!(detail.contains("receive_wait_us=30"));
+        assert!(detail.contains("consumer_active_us=55"));
+        assert!(detail.contains("unattributed_us=0"));
+        assert!(detail.contains("files=65"));
+        assert!(detail.contains("max_batch=64"));
+    }
 
     #[test]
     fn catalog_progress_reports_valid_systems_but_not_the_unknown_sentinel() {
