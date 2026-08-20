@@ -262,14 +262,6 @@ fn nav_selection_feedback_target(nav: &LauncherNav) -> Option<SelectionFeedbackT
             .copied()
             .unwrap_or("unknown"),
         )),
-        Screen::Arcade if nav.arcade_filter.drawer_open => Some(SelectionFeedbackTarget::new(
-            format!(
-                "arcade-filter:{}:{:?}",
-                nav.active_collection_id().unwrap_or("none"),
-                nav.arcade_filter.level
-            ),
-            format!("option:{}", nav.arcade_filter.selected),
-        )),
         Screen::Arcade
             if nav.arcade_search.is_active(&nav.arcade_filter.active)
                 && nav.arcade_search.pane == launcher::ArcadeSearchPane::Keyboard =>
@@ -9960,26 +9952,6 @@ pub(super) fn run_launcher_loop(
                 )
             };
             let update = if nav.arcade_filter.drawer_open {
-                let feedback_surface = format!(
-                    "arcade-filter:{}:{:?}",
-                    nav.active_collection_id().unwrap_or("none"),
-                    nav.arcade_filter.level
-                );
-                let mut acknowledged_indices = bridge_models
-                    .selection_feedback_stamp()
-                    .entries
-                    .into_iter()
-                    .filter(|entry| entry.target.surface == feedback_surface)
-                    .filter_map(|entry| {
-                        entry
-                            .target
-                            .item
-                            .strip_prefix("option:")
-                            .and_then(|index| index.parse::<usize>().ok())
-                    })
-                    .collect::<Vec<_>>();
-                acknowledged_indices.sort_unstable();
-                arcade_list_renderer.set_filter_acknowledged_indices(acknowledged_indices);
                 let items = arcade_drawer_view_cache.items(&catalog, &nav, catalog_version);
                 arcade_list_renderer.draw_filter_items(
                     items,
@@ -9988,7 +9960,6 @@ pub(super) fn run_launcher_loop(
                     force_arcade_redraw,
                 )
             } else {
-                arcade_list_renderer.set_filter_acknowledged_indices(Vec::new());
                 arcade_list_renderer.draw(
                     active_arcade_games,
                     nav.arcade.selected,
@@ -14245,12 +14216,7 @@ mod tests {
         assert_eq!(nav_selection_feedback_target(&nav), None);
         nav.arcade_filter.drawer_open = true;
         nav.arcade_filter.selected = 3;
-        assert_eq!(
-            nav_selection_feedback_target(&nav)
-                .expect("filter drawer target")
-                .item,
-            "option:3"
-        );
+        assert_eq!(nav_selection_feedback_target(&nav), None);
         nav.arcade_filter.drawer_open = false;
         nav.arcade_filter.active = arcade_catalog::ArcadeFilter::Search;
         nav.arcade_search.pane = launcher::ArcadeSearchPane::Keyboard;

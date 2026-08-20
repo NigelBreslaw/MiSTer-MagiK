@@ -504,7 +504,6 @@ pub struct ArcadeListRenderer {
     surface_y: usize,
     last_draw: Option<ArcadeListDrawKey>,
     last_filter_draw: Option<ArcadeFilterListDrawKey>,
-    filter_acknowledged_indices: Vec<usize>,
     geometry: ArcadeListGeometry,
     width: usize,
     visible_height: usize,
@@ -836,7 +835,6 @@ impl ArcadeListRenderer {
             surface_y: 0,
             last_draw: None,
             last_filter_draw: None,
-            filter_acknowledged_indices: Vec::new(),
             geometry: ArcadeListGeometry::NORMAL,
             width: ARCADE_LIST_W,
             visible_height: ARCADE_LIST_H,
@@ -860,10 +858,6 @@ impl ArcadeListRenderer {
         let mut rect = self.geometry.dirty_rect();
         rect.y1 = rect.y0 + self.visible_height;
         rect
-    }
-
-    pub fn set_filter_acknowledged_indices(&mut self, indices: Vec<usize>) {
-        self.filter_acknowledged_indices = indices;
     }
 
     pub fn width(&self) -> usize {
@@ -1118,7 +1112,7 @@ impl ArcadeListRenderer {
         let key = ArcadeFilterListDrawKey {
             len: items.len(),
             visual_px,
-            content_hash: arcade_filter_content_hash(items, &self.filter_acknowledged_indices),
+            content_hash: arcade_filter_content_hash(items),
             visible_hash: arcade_filter_visible_window_hash(
                 items,
                 visual_px,
@@ -1325,8 +1319,7 @@ impl ArcadeListRenderer {
             if clip_y1 <= clip_y0 {
                 continue;
             }
-            let acknowledged = self.filter_acknowledged_indices.binary_search(&idx).is_ok();
-            let row = self.render_filter_row(item, idx, acknowledged);
+            let row = self.render_filter_row(item, idx);
             let copy_h = (clip_y1 - clip_y0) as usize;
             let src_y = (clip_y0 - y) as usize;
             for row_y in 0..copy_h {
@@ -3076,18 +3069,10 @@ impl ArcadeListRenderer {
         row.into_iter().map(pixel_to_rgb565).collect()
     }
 
-    fn render_filter_row(
-        &mut self,
-        item: &ArcadeListItem,
-        idx: usize,
-        acknowledged: bool,
-    ) -> Vec<Rgb565Pixel> {
+    fn render_filter_row(&mut self, item: &ArcadeListItem, idx: usize) -> Vec<Rgb565Pixel> {
         let row_height = self.style.row_height as usize;
         let mut row = vec![Pixel(0); self.width * row_height];
         draw_arcade_row_background_with_style(&mut row, self.width, idx, self.style);
-        if acknowledged {
-            row.fill(Pixel(0x00203a36));
-        }
         let reserved = if item.count.is_some() { 68 } else { 24 };
         let title = self
             .title_font
@@ -3459,7 +3444,7 @@ fn arcade_filter_visible_window_hash(
     hash
 }
 
-fn arcade_filter_content_hash(items: &[ArcadeListItem], acknowledged_indices: &[usize]) -> u64 {
+fn arcade_filter_content_hash(items: &[ArcadeListItem]) -> u64 {
     let mut hash = ARCADE_LIST_HASH_OFFSET;
     arcade_hash_usize(&mut hash, items.len());
     for (idx, item) in items.iter().enumerate() {
@@ -3467,9 +3452,6 @@ fn arcade_filter_content_hash(items: &[ArcadeListItem], acknowledged_indices: &[
         arcade_hash_bytes(&mut hash, item.title.as_bytes());
         arcade_hash_usize(&mut hash, item.count.unwrap_or(usize::MAX));
         arcade_hash_bytes(&mut hash, &[item.active as u8]);
-    }
-    for index in acknowledged_indices {
-        arcade_hash_usize(&mut hash, *index);
     }
     hash
 }
