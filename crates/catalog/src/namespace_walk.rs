@@ -364,6 +364,7 @@ mod linux {
     use std::path::Path;
 
     const GETDENTS_BUFFER_BYTES: usize = 128 * 1024;
+    const GETDENTS_TRANSIENT_RETRIES: usize = 3;
     const DIRENT64_HEADER_BYTES: usize = 19;
     const MAX_CAPTURED_ENTRIES: usize = 65_536;
     const MAX_CAPTURED_PATH_BYTES: usize = 16 * 1024 * 1024;
@@ -560,6 +561,7 @@ mod linux {
             .try_reserve_exact(GETDENTS_BUFFER_BYTES)
             .map_err(|error| format!("capture allocation: getdents buffer: {error}"))?;
         buffer.resize(GETDENTS_BUFFER_BYTES, 0u8);
+        let mut transient_retries = 0usize;
         loop {
             crate::cooperative_work::checkpoint();
             let read = unsafe {
@@ -572,12 +574,24 @@ mod linux {
             };
             stats.read_calls = stats.read_calls.saturating_add(1);
             if read < 0 {
+                let error = io::Error::last_os_error();
+                if should_retry_getdents(&error, transient_retries) {
+                    transient_retries = transient_retries.saturating_add(1);
+                    crate::catalog_logln!(
+                        "namespace_walk_retry_tsv\toperation=getdents64\tpath={}\terror={}\tattempt={}",
+                        directory_path.display(),
+                        error,
+                        transient_retries
+                    );
+                    continue;
+                }
                 return Err(format!(
                     "getdents64 {}: {}",
                     directory_path.display(),
-                    io::Error::last_os_error()
+                    error
                 ));
             }
+            transient_retries = 0;
             if read == 0 {
                 return Ok(());
             }
@@ -760,6 +774,16 @@ mod linux {
 
     fn c_string(bytes: &[u8], description: &str) -> Result<CString, String> {
         CString::new(bytes).map_err(|_| format!("NUL in {description}"))
+    }
+
+    fn should_retry_getdents(error: &io::Error, retries: usize) -> bool {
+        retries < GETDENTS_TRANSIENT_RETRIES
+            && matches!(error.raw_os_error(), Some(libc::EINTR) | Some(libc::ENOENT))
+    }
+
+    #[cfg(test)]
+    pub(super) fn should_retry_getdents_for_test(error: i32, retries: usize) -> bool {
+        should_retry_getdents(&io::Error::from_raw_os_error(error), retries)
     }
 
     fn stat_entry(directory: RawFd, name: &CString, path: &Path) -> Result<libc::stat, String> {
@@ -1105,5 +1129,14 @@ mod tests {
         assert!(error.starts_with("capture budget:"));
 
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn fd_getdents_retries_only_bounded_transient_errors() {
+        assert!(linux::should_retry_getdents_for_test(libc::EINTR, 0));
+        assert!(linux::should_retry_getdents_for_test(libc::ENOENT, 2));
+        assert!(!linux::should_retry_getdents_for_test(libc::ENOENT, 3));
+        assert!(!linux::should_retry_getdents_for_test(libc::EIO, 0));
     }
 }
