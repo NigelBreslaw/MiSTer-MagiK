@@ -8,15 +8,23 @@
 
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use std::fs::{self, File, OpenOptions};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const FILE_NAME: &str = "build-progress.sqlite3";
+const FILE_NAME: &str = "build-progress-v3";
 // This cache must not share a path with `incremental_inputs::InputFactStore`.
 // They are independent SQLite schemas with different lifecycle owners.
-const COMMITTED_FILE_NAME: &str = "target-output-cache.sqlite3";
-const SCHEMA_VERSION: u32 = 2;
+const COMMITTED_FILE_NAME: &str = "target-output-cache-v3";
+const METADATA_FILE_NAME: &str = "metadata.sqlite3";
+const FRAME_FILE_NAME: &str = "target-outputs.lz4";
+const LEGACY_PROGRESS_FILE_NAME: &str = "build-progress.sqlite3";
+const LEGACY_COMMITTED_FILE_NAME: &str = "target-output-cache.sqlite3";
+const SCHEMA_VERSION: u32 = 3;
+const MAX_TARGET_OUTPUT_BYTES: usize = 256 * 1024 * 1024;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct BuildContract {
@@ -84,6 +92,7 @@ pub enum OpenStatus {
 }
 
 pub struct BuildProgressJournal {
+    /// Bundle directory containing metadata and sequential target frames.
     path: PathBuf,
     conn: Connection,
     build_id: String,
@@ -92,8 +101,12 @@ pub struct BuildProgressJournal {
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct CheckpointWriteAttribution {
     pub targets: usize,
-    pub bytes: usize,
+    pub raw_bytes: usize,
+    pub frame_bytes: usize,
     pub begin_us: u64,
+    pub compress_us: u64,
+    pub append_us: u64,
+    pub sync_us: u64,
     pub rows_us: u64,
     pub commit_us: u64,
     pub total_us: u64,
@@ -105,6 +118,26 @@ pub fn path_for_root(storage_root: &Path) -> PathBuf {
 
 pub fn committed_path_for_root(storage_root: &Path) -> PathBuf {
     storage_root.join("state").join(COMMITTED_FILE_NAME)
+}
+
+fn metadata_path(bundle: &Path) -> PathBuf {
+    bundle.join(METADATA_FILE_NAME)
+}
+
+fn frame_path(bundle: &Path) -> PathBuf {
+    bundle.join(FRAME_FILE_NAME)
+}
+
+fn remove_legacy_siblings(bundle: &Path) {
+    let Some(parent) = bundle.parent() else {
+        return;
+    };
+    for name in [LEGACY_PROGRESS_FILE_NAME, LEGACY_COMMITTED_FILE_NAME] {
+        let path = parent.join(name);
+        if path.is_file() {
+            let _ = fs::remove_file(path);
+        }
+    }
 }
 
 /// Move the last successfully published scan facts into the resumable journal.
@@ -152,7 +185,7 @@ pub fn commit_successful_state(
             )
         })?;
     }
-    let conn = Connection::open(progress_path)
+    let conn = Connection::open(metadata_path(progress_path))
         .map_err(|error| format!("open successful build progress: {error}"))?;
     configure(&conn)?;
     let mut contract: BuildContract = serde_json::from_str(&meta(&conn, "contract")?)
@@ -170,13 +203,20 @@ pub fn commit_successful_state(
     drop(conn);
 
     require_shared_parent(progress_path, committed_path)?;
-    let progress = std::fs::OpenOptions::new()
+    let progress = OpenOptions::new()
         .read(true)
-        .open(progress_path)
+        .open(metadata_path(progress_path))
         .map_err(|error| format!("open build progress {}: {error}", progress_path.display()))?;
     progress
         .sync_all()
         .map_err(|error| format!("sync build progress {}: {error}", progress_path.display()))?;
+    let frames = OpenOptions::new()
+        .read(true)
+        .open(frame_path(progress_path))
+        .map_err(|error| format!("open target frames {}: {error}", progress_path.display()))?;
+    frames
+        .sync_all()
+        .map_err(|error| format!("sync target frames {}: {error}", progress_path.display()))?;
     std::fs::rename(progress_path, committed_path).map_err(|error| {
         format!(
             "publish committed builder state {}: {error}",
@@ -200,7 +240,12 @@ fn require_shared_parent(left: &Path, right: &Path) -> Result<(), String> {
 }
 
 pub fn remove(path: &Path) -> Result<(), String> {
-    match std::fs::remove_file(path) {
+    let result = if path.is_dir() {
+        fs::remove_dir_all(path)
+    } else {
+        fs::remove_file(path)
+    };
+    match result {
         Ok(()) => {
             crate::sqlite_catalog::sync_parent_dir(path);
             Ok(())
@@ -218,7 +263,7 @@ pub fn read_summary(path: &Path) -> Result<Option<BuildProgressSummary>, String>
         return Ok(None);
     }
     let conn = Connection::open_with_flags(
-        path,
+        metadata_path(path),
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
     )
     .map_err(|error| format!("open build progress summary {}: {error}", path.display()))?;
@@ -262,8 +307,9 @@ fn row_count(conn: &Connection, table: &str) -> Result<u64, String> {
 
 impl BuildProgressJournal {
     pub fn open_for_projection(path: &Path) -> Result<Self, String> {
-        let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE)
-            .map_err(|error| format!("open build progress {}: {error}", path.display()))?;
+        let conn =
+            Connection::open_with_flags(metadata_path(path), OpenFlags::SQLITE_OPEN_READ_WRITE)
+                .map_err(|error| format!("open build progress {}: {error}", path.display()))?;
         configure(&conn)?;
         let version: String = meta(&conn, "schema_version")?;
         if version != SCHEMA_VERSION.to_string() {
@@ -283,6 +329,7 @@ impl BuildProgressJournal {
         contract: &BuildContract,
         targets: &[ScanTarget],
     ) -> Result<(Self, OpenStatus), String> {
+        remove_legacy_siblings(path);
         if path.exists() {
             match Self::open_existing(path, contract, targets) {
                 Ok(journal) => return Ok((journal, OpenStatus::Resumed)),
@@ -301,10 +348,14 @@ impl BuildProgressJournal {
     }
 
     pub fn completed_targets(&self) -> Result<Vec<CompletedTarget>, String> {
-        let mut stmt = self.conn.prepare(
-            "SELECT t.ordinal,t.target_key,t.path,c.input_fingerprint,c.output_json,c.stats_json
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT t.ordinal,t.target_key,t.path,c.input_fingerprint,
+                    c.frame_offset,c.frame_len,c.raw_len,c.frame_sha256,c.stats_json
              FROM scan_targets t JOIN completed_targets c USING(ordinal) ORDER BY t.ordinal",
-        ).map_err(|error| format!("prepare completed targets: {error}"))?;
+            )
+            .map_err(|error| format!("prepare completed targets: {error}"))?;
         let rows = stmt
             .query_map([], |row| {
                 Ok((
@@ -312,16 +363,34 @@ impl BuildProgressJournal {
                     row.get::<_, String>(1)?,
                     row.get::<_, String>(2)?,
                     row.get::<_, String>(3)?,
-                    row.get::<_, String>(4)?,
-                    row.get::<_, String>(5)?,
+                    row.get::<_, i64>(4)?,
+                    row.get::<_, i64>(5)?,
+                    row.get::<_, i64>(6)?,
+                    row.get::<_, String>(7)?,
+                    row.get::<_, String>(8)?,
                 ))
             })
             .map_err(|error| format!("read completed targets: {error}"))?;
         rows.map(|row| {
-            let (ordinal, key, path, input_fingerprint, output_json, stats_json) =
-                row.map_err(|error| format!("read completed target: {error}"))?;
+            let (
+                ordinal,
+                key,
+                path,
+                input_fingerprint,
+                frame_offset,
+                frame_len,
+                raw_len,
+                frame_sha256,
+                stats_json,
+            ) = row.map_err(|error| format!("read completed target: {error}"))?;
             let accumulated_stats = serde_json::from_str(&stats_json)
                 .map_err(|error| format!("decode completed target stats: {error}"))?;
+            let output_json = self.read_target_frame(
+                checked_frame_value(frame_offset, "offset")?,
+                checked_frame_value(frame_len, "length")?,
+                checked_frame_value(raw_len, "raw length")?,
+                &frame_sha256,
+            )?;
             Ok(CompletedTarget {
                 target: ScanTarget { ordinal, key, path },
                 input_fingerprint,
@@ -330,6 +399,50 @@ impl BuildProgressJournal {
             })
         })
         .collect()
+    }
+
+    fn read_target_frame(
+        &self,
+        offset: u64,
+        frame_len: u64,
+        raw_len: u64,
+        expected_sha256: &str,
+    ) -> Result<String, String> {
+        let frame_len = usize::try_from(frame_len)
+            .map_err(|_| "target frame length exceeds address space".to_string())?;
+        let raw_len = usize::try_from(raw_len)
+            .map_err(|_| "target raw length exceeds address space".to_string())?;
+        if frame_len == 0 || raw_len > MAX_TARGET_OUTPUT_BYTES {
+            return Err("target frame has invalid bounds".to_string());
+        }
+        let mut frames = File::open(frame_path(&self.path))
+            .map_err(|error| format!("open target frames: {error}"))?;
+        let available = frames
+            .metadata()
+            .map_err(|error| format!("stat target frames: {error}"))?
+            .len();
+        if offset
+            .checked_add(frame_len as u64)
+            .is_none_or(|end| end > available)
+        {
+            return Err("target frame extends past committed data".to_string());
+        }
+        frames
+            .seek(SeekFrom::Start(offset))
+            .map_err(|error| format!("seek target frame: {error}"))?;
+        let mut encoded = vec![0; frame_len];
+        frames
+            .read_exact(&mut encoded)
+            .map_err(|error| format!("read target frame: {error}"))?;
+        if sha256_hex(&encoded) != expected_sha256 {
+            return Err("target frame checksum mismatch".to_string());
+        }
+        let decoded = lz4_flex::decompress_size_prepended(&encoded)
+            .map_err(|error| format!("decompress target frame: {error}"))?;
+        if decoded.len() != raw_len || decoded.len() > MAX_TARGET_OUTPUT_BYTES {
+            return Err("target frame decoded length mismatch".to_string());
+        }
+        String::from_utf8(decoded).map_err(|error| format!("decode target frame UTF-8: {error}"))
     }
 
     /// Atomically makes all output for one target resumable.
@@ -350,10 +463,47 @@ impl BuildProgressJournal {
         if completed.is_empty() {
             return Ok(CheckpointWriteAttribution::default());
         }
-        let bytes = completed
+        let raw_bytes = completed
             .iter()
             .map(|target| target.output_json.len())
             .sum();
+        let compress_started = Instant::now();
+        let encoded = completed
+            .iter()
+            .map(|target| lz4_flex::compress_prepend_size(target.output_json.as_bytes()))
+            .collect::<Vec<_>>();
+        let compress_us = elapsed_us(compress_started);
+        let frame_bytes = encoded.iter().map(Vec::len).sum();
+        let append_started = Instant::now();
+        let mut frames = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .read(true)
+            .open(frame_path(&self.path))
+            .map_err(|error| format!("open target frame append: {error}"))?;
+        let mut offset = frames
+            .seek(SeekFrom::End(0))
+            .map_err(|error| format!("seek target frame append: {error}"))?;
+        let mut frame_rows = Vec::with_capacity(completed.len());
+        for (target, encoded) in completed.iter().zip(&encoded) {
+            frames
+                .write_all(encoded)
+                .map_err(|error| format!("append target frame: {error}"))?;
+            frame_rows.push((
+                target,
+                offset,
+                encoded.len() as u64,
+                target.output_json.len() as u64,
+                sha256_hex(encoded),
+            ));
+            offset = offset.saturating_add(encoded.len() as u64);
+        }
+        let append_us = elapsed_us(append_started);
+        let sync_started = Instant::now();
+        frames
+            .sync_data()
+            .map_err(|error| format!("sync target frames: {error}"))?;
+        let sync_us = elapsed_us(sync_started);
         let begin_started = Instant::now();
         let tx = self
             .conn
@@ -361,7 +511,7 @@ impl BuildProgressJournal {
             .map_err(|error| format!("begin target checkpoint batch: {error}"))?;
         let begin_us = elapsed_us(begin_started);
         let rows_started = Instant::now();
-        for completed in completed {
+        for (completed, frame_offset, frame_len, raw_len, frame_sha256) in frame_rows {
             let expected = tx
                 .query_row(
                     "SELECT target_key,path FROM scan_targets WHERE ordinal=?1",
@@ -382,14 +532,20 @@ impl BuildProgressJournal {
             let stats_json = serde_json::to_string(&completed.accumulated_stats)
                 .map_err(|error| format!("encode target stats: {error}"))?;
             tx.execute(
-                "INSERT INTO completed_targets(ordinal,input_fingerprint,output_json,stats_json)
-                 VALUES(?1,?2,?3,?4)
+                "INSERT INTO completed_targets(
+                     ordinal,input_fingerprint,frame_offset,frame_len,raw_len,frame_sha256,stats_json
+                 ) VALUES(?1,?2,?3,?4,?5,?6,?7)
                  ON CONFLICT(ordinal) DO UPDATE SET input_fingerprint=excluded.input_fingerprint,
-                     output_json=excluded.output_json,stats_json=excluded.stats_json",
+                     frame_offset=excluded.frame_offset,frame_len=excluded.frame_len,
+                     raw_len=excluded.raw_len,frame_sha256=excluded.frame_sha256,
+                     stats_json=excluded.stats_json",
                 params![
                     completed.target.ordinal,
                     completed.input_fingerprint,
-                    completed.output_json,
+                    frame_offset,
+                    frame_len,
+                    raw_len,
+                    frame_sha256,
                     stats_json
                 ],
             )
@@ -401,8 +557,12 @@ impl BuildProgressJournal {
             .map_err(|error| format!("commit target checkpoint batch: {error}"))?;
         Ok(CheckpointWriteAttribution {
             targets: completed.len(),
-            bytes,
+            raw_bytes,
+            frame_bytes,
             begin_us,
+            compress_us,
+            append_us,
+            sync_us,
             rows_us,
             commit_us: elapsed_us(commit_started),
             total_us: elapsed_us(total_started),
@@ -448,19 +608,21 @@ impl BuildProgressJournal {
         targets: &[ScanTarget],
     ) -> Result<Self, String> {
         validate_targets(targets)?;
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|error| {
-                format!("create build progress dir {}: {error}", parent.display())
-            })?;
-        }
-        let conn = Connection::open(path)
+        fs::create_dir_all(path)
+            .map_err(|error| format!("create build progress bundle {}: {error}", path.display()))?;
+        File::create(frame_path(path))
+            .and_then(|frames| frames.sync_all())
+            .map_err(|error| format!("create target frame file {}: {error}", path.display()))?;
+        let conn = Connection::open(metadata_path(path))
             .map_err(|error| format!("create build progress {}: {error}", path.display()))?;
         configure(&conn)?;
         conn.execute_batch(
             "CREATE TABLE progress_meta(key TEXT PRIMARY KEY,value TEXT NOT NULL) WITHOUT ROWID;
              CREATE TABLE scan_targets(ordinal INTEGER PRIMARY KEY,target_key TEXT NOT NULL UNIQUE,path TEXT NOT NULL);
              CREATE TABLE completed_targets(ordinal INTEGER PRIMARY KEY REFERENCES scan_targets(ordinal),
-                 input_fingerprint TEXT NOT NULL,output_json TEXT NOT NULL,stats_json TEXT NOT NULL);
+                 input_fingerprint TEXT NOT NULL,frame_offset INTEGER NOT NULL,
+                 frame_len INTEGER NOT NULL,raw_len INTEGER NOT NULL,
+                 frame_sha256 TEXT NOT NULL,stats_json TEXT NOT NULL);
              CREATE TABLE completed_shards(system_id TEXT PRIMARY KEY,shard_json TEXT NOT NULL) WITHOUT ROWID;"
         ).map_err(|error| format!("create build progress schema: {error}"))?;
         let build_id = new_build_id();
@@ -506,7 +668,7 @@ impl BuildProgressJournal {
         targets: &[ScanTarget],
     ) -> Result<Self, String> {
         validate_targets(targets)?;
-        let mut conn = Connection::open(path)
+        let mut conn = Connection::open(metadata_path(path))
             .map_err(|error| format!("open build progress {}: {error}", path.display()))?;
         configure(&conn)?;
         let version: String = meta(&conn, "schema_version")?;
@@ -523,6 +685,9 @@ impl BuildProgressJournal {
             reconcile_targets(&mut conn, &stored_targets, targets)?;
         }
         let build_id = meta(&conn, "build_id")?;
+        if !frame_path(path).is_file() {
+            return Err("target frame file is missing".to_string());
+        }
         // Decode every durable row now; corrupt recovery data is disposable.
         let journal = Self {
             path: path.to_path_buf(),
@@ -548,7 +713,8 @@ fn reconcile_targets(
     {
         let mut stmt = conn
             .prepare(
-                "SELECT ordinal,input_fingerprint,output_json,stats_json FROM completed_targets",
+                "SELECT ordinal,input_fingerprint,frame_offset,frame_len,raw_len,frame_sha256,stats_json
+                 FROM completed_targets",
             )
             .map_err(|error| format!("prepare target reconciliation: {error}"))?;
         let rows = stmt
@@ -556,18 +722,21 @@ fn reconcile_targets(
                 Ok((
                     row.get::<_, u32>(0)?,
                     row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, String>(3)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, i64>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, String>(6)?,
                 ))
             })
             .map_err(|error| format!("read target reconciliation: {error}"))?;
         for row in rows {
-            let (ordinal, fingerprint, output, stats) =
+            let (ordinal, fingerprint, offset, frame_len, raw_len, frame_sha256, stats) =
                 row.map_err(|error| format!("read target reconciliation row: {error}"))?;
             if let Some(target) = stored.iter().find(|target| target.ordinal == ordinal) {
                 saved.insert(
                     (target.key.clone(), target.path.clone()),
-                    (fingerprint, output, stats),
+                    (fingerprint, offset, frame_len, raw_len, frame_sha256, stats),
                 );
             }
         }
@@ -585,12 +754,22 @@ fn reconcile_targets(
             params![target.ordinal, target.key, target.path],
         )
         .map_err(|error| format!("reconcile scan target: {error}"))?;
-        if let Some((fingerprint, output, stats)) =
+        if let Some((fingerprint, offset, frame_len, raw_len, frame_sha256, stats)) =
             saved.get(&(target.key.clone(), target.path.clone()))
         {
             tx.execute(
-                "INSERT INTO completed_targets(ordinal,input_fingerprint,output_json,stats_json) VALUES(?1,?2,?3,?4)",
-                params![target.ordinal, fingerprint, output, stats],
+                "INSERT INTO completed_targets(
+                     ordinal,input_fingerprint,frame_offset,frame_len,raw_len,frame_sha256,stats_json
+                 ) VALUES(?1,?2,?3,?4,?5,?6,?7)",
+                params![
+                    target.ordinal,
+                    fingerprint,
+                    offset,
+                    frame_len,
+                    raw_len,
+                    frame_sha256,
+                    stats
+                ],
             )
             .map_err(|error| format!("restore reconciled target: {error}"))?;
         }
@@ -605,6 +784,20 @@ fn configure(conn: &Connection) -> Result<(), String> {
     )
     .map_err(|error| format!("configure build progress: {error}"))?;
     Ok(())
+}
+
+fn checked_frame_value(value: i64, label: &str) -> Result<u64, String> {
+    u64::try_from(value).map_err(|_| format!("target frame {label} is negative"))
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    let digest = Sha256::digest(bytes);
+    let mut encoded = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        use std::fmt::Write as _;
+        let _ = write!(encoded, "{byte:02x}");
+    }
+    encoded
 }
 
 fn elapsed_us(started: Instant) -> u64 {
@@ -704,7 +897,7 @@ mod tests {
 
         assert_eq!(
             committed_path_for_root(root),
-            root.join("state/target-output-cache.sqlite3")
+            root.join("state/target-output-cache-v3")
         );
         assert_ne!(
             committed_path_for_root(root),
@@ -746,7 +939,10 @@ mod tests {
             BuildProgressJournal::open_or_create(&path, &contract(), &targets()).unwrap();
         assert_eq!(status, OpenStatus::Created);
         let id = journal.build_id().to_string();
-        journal.checkpoint_target(&completed()).unwrap();
+        let attribution = journal.checkpoint_target(&completed()).unwrap();
+        assert_eq!(attribution.targets, 1);
+        assert_eq!(attribution.raw_bytes, completed().output_json.len());
+        assert!(attribution.frame_bytes > 0);
         let shard = CompletedShard {
             system_id: "arcade".into(),
             generation: 4,
@@ -763,6 +959,48 @@ mod tests {
         assert_eq!(journal.build_id(), id);
         assert_eq!(journal.completed_targets().unwrap(), vec![completed()]);
         assert_eq!(journal.completed_shards().unwrap(), vec![shard]);
+        remove(&path).unwrap();
+    }
+
+    #[test]
+    fn uncommitted_frame_tail_is_ignored() {
+        let path = temp_path("build-progress-frame-tail");
+        let (mut journal, _) =
+            BuildProgressJournal::open_or_create(&path, &contract(), &targets()).unwrap();
+        journal.checkpoint_target(&completed()).unwrap();
+        drop(journal);
+        OpenOptions::new()
+            .append(true)
+            .open(frame_path(&path))
+            .unwrap()
+            .write_all(b"uncommitted-tail")
+            .unwrap();
+
+        let (journal, status) =
+            BuildProgressJournal::open_or_create(&path, &contract(), &targets()).unwrap();
+        assert_eq!(status, OpenStatus::Resumed);
+        assert_eq!(journal.completed_targets().unwrap(), vec![completed()]);
+        remove(&path).unwrap();
+    }
+
+    #[test]
+    fn truncated_committed_frame_recreates_disposable_bundle() {
+        let path = temp_path("build-progress-frame-truncated");
+        let (mut journal, _) =
+            BuildProgressJournal::open_or_create(&path, &contract(), &targets()).unwrap();
+        journal.checkpoint_target(&completed()).unwrap();
+        drop(journal);
+        OpenOptions::new()
+            .write(true)
+            .open(frame_path(&path))
+            .unwrap()
+            .set_len(1)
+            .unwrap();
+
+        let (journal, status) =
+            BuildProgressJournal::open_or_create(&path, &contract(), &targets()).unwrap();
+        assert!(matches!(status, OpenStatus::Recreated { .. }));
+        assert!(journal.completed_targets().unwrap().is_empty());
         remove(&path).unwrap();
     }
 
@@ -843,7 +1081,8 @@ mod tests {
     #[test]
     fn corrupt_journal_is_discarded() {
         let path = temp_path("build-progress-corrupt");
-        std::fs::write(&path, b"not sqlite").unwrap();
+        fs::create_dir_all(&path).unwrap();
+        fs::write(metadata_path(&path), b"not sqlite").unwrap();
         let (journal, status) =
             BuildProgressJournal::open_or_create(&path, &contract(), &targets()).unwrap();
         assert!(matches!(status, OpenStatus::Recreated { .. }));
@@ -858,7 +1097,7 @@ mod tests {
         let (journal, _) =
             BuildProgressJournal::open_or_create(&path, &contract(), &targets()).unwrap();
         drop(journal);
-        let conn = Connection::open(&path).unwrap();
+        let conn = Connection::open(metadata_path(&path)).unwrap();
         conn.execute(
             "UPDATE progress_meta SET value='999' WHERE key='schema_version'",
             [],

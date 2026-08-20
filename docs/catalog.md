@@ -51,7 +51,12 @@ catalog-v3/
     catalog-state.sqlite3
     scanner-cache.sqlite3
     builder-state.sqlite3
-    build-progress.sqlite3
+    target-output-cache-v3/
+      metadata.sqlite3
+      target-outputs.lz4
+    build-progress-v3/
+      metadata.sqlite3
+      target-outputs.lz4
   catalog.binding.json
 ```
 
@@ -107,7 +112,7 @@ ambiguous, schema-incompatible, or manifest-mismatched state conservatively
 selects all published systems. Planner state is committed only after the new
 manifest, binding, scanner cache, and catalog state are durable.
 
-`state/build-progress.sqlite3` is an interruption journal for an in-progress
+`state/build-progress-v3/` is an interruption journal for an in-progress
 initial or warm build. It is bound to the active and intended generations,
 semantic contract, and target fingerprints. Matching completed targets and
 prepared shards can be resumed after launching a game terminates the launcher;
@@ -248,15 +253,15 @@ it does not depend on successful first-visible publication to make that
 transition. Standalone administrative builds remain all-core and normal
 priority until their first-visible snapshot is published and retained.
 
-Initial and warm builds keep disposable durable progress in
-`catalog-v3/state/build-progress.sqlite3`. Completed scan
-targets are committed atomically with their eligible-input fingerprints. After
-a launcher handoff terminates MagiK, the next launcher re-enumerates target
-metadata, hydrates exact matches without reparsing or classifying them, and
-continues with new or changed targets under the same build ID. Scan outputs
-are committed in bounded groups of at most 16 targets or 2 MiB of encoded
-output, whichever comes first. This preserves atomic resume boundaries without
-paying an exFAT durability barrier for every small directory. Completed,
+Initial builds keep disposable durable progress in
+`catalog-v3/state/build-progress-v3/`. Small SQLite metadata rows point into an
+append-only LZ4 frame file; frame bytes are synchronized before their metadata
+transaction becomes durable. After a launcher handoff terminates MagiK, the
+next launcher validates and hydrates exact completed targets under the same
+build ID. Scan outputs are committed in bounded groups of at most 16 targets
+or 2 MiB of raw output, whichever comes first. An uncommitted frame tail is
+ignored, while invalid bounds, hashes, or decompression discard disposable
+recovery state. Completed,
 unpublished system shards are likewise hash- and schema-checked before reuse.
 Resumable first-build shard publication is deliberately sequential: each shard
 is synced, validated, and journaled before the next begins. Warm replacement

@@ -174,6 +174,16 @@ struct TargetOutput {
     discoveries: Vec<GameDiscovery>,
 }
 
+#[derive(Serialize)]
+struct BorrowedTargetOutput<'a> {
+    game_dir_facts: &'a [crate::catalog_discovery::GameDirFact],
+    normal_files: &'a [LibraryPayloadFile],
+    containers: &'a [crate::library_db::LibraryContainer],
+    entries: &'a [crate::library_db::LibraryContainerEntry],
+    ignored_files: usize,
+    discoveries: &'a [GameDiscovery],
+}
+
 #[derive(Clone, Copy)]
 struct TargetOffsets {
     facts: usize,
@@ -227,8 +237,12 @@ struct CheckpointAttribution {
     decode_us: u64,
     queued_targets: usize,
     queued_bytes: usize,
+    frame_bytes: usize,
     batches: usize,
     begin_us: u64,
+    compress_us: u64,
+    append_us: u64,
+    sync_us: u64,
     rows_us: u64,
     commit_us: u64,
     write_us: u64,
@@ -238,15 +252,19 @@ struct CheckpointAttribution {
 impl CheckpointAttribution {
     fn compact_detail(&self) -> String {
         format!(
-            "enabled={} snapshot_us={} encode_us={} decode_us={} queued_targets={} queued_bytes={} batches={} begin_us={} rows_us={} commit_us={} write_us={} errors={}",
+            "enabled={} snapshot_us={} encode_us={} decode_us={} queued_targets={} queued_bytes={} frame_bytes={} batches={} begin_us={} compress_us={} append_us={} sync_us={} rows_us={} commit_us={} write_us={} errors={}",
             u8::from(self.enabled),
             self.snapshot_us,
             self.encode_us,
             self.decode_us,
             self.queued_targets,
             self.queued_bytes,
+            self.frame_bytes,
             self.batches,
             self.begin_us,
+            self.compress_us,
+            self.append_us,
+            self.sync_us,
             self.rows_us,
             self.commit_us,
             self.write_us,
@@ -398,10 +416,23 @@ fn flush_target_checkpoints(state: &mut ResumeScan) {
         Ok(attribution) => {
             state.committed += count;
             state.checkpoint.batches = state.checkpoint.batches.saturating_add(1);
+            state.checkpoint.frame_bytes = state
+                .checkpoint
+                .frame_bytes
+                .saturating_add(attribution.frame_bytes);
             state.checkpoint.begin_us = state
                 .checkpoint
                 .begin_us
                 .saturating_add(attribution.begin_us);
+            state.checkpoint.compress_us = state
+                .checkpoint
+                .compress_us
+                .saturating_add(attribution.compress_us);
+            state.checkpoint.append_us = state
+                .checkpoint
+                .append_us
+                .saturating_add(attribution.append_us);
+            state.checkpoint.sync_us = state.checkpoint.sync_us.saturating_add(attribution.sync_us);
             state.checkpoint.rows_us = state.checkpoint.rows_us.saturating_add(attribution.rows_us);
             state.checkpoint.commit_us = state
                 .checkpoint
@@ -1111,13 +1142,13 @@ fn scan_library_with_progress_and_events(
                     && let (Some(offsets), Some(state)) = (target_offsets, resume.as_mut())
                 {
                     let snapshot_started = Instant::now();
-                    let output = TargetOutput {
-                        game_dir_facts: game_dir_facts[offsets.facts..].to_vec(),
-                        normal_files: normal_files[offsets.files..].to_vec(),
-                        containers: containers[offsets.containers..].to_vec(),
-                        entries: entries[offsets.entries..].to_vec(),
+                    let output = BorrowedTargetOutput {
+                        game_dir_facts: &game_dir_facts[offsets.facts..],
+                        normal_files: &normal_files[offsets.files..],
+                        containers: &containers[offsets.containers..],
+                        entries: &entries[offsets.entries..],
                         ignored_files: ignored_files.saturating_sub(offsets.ignored),
-                        discoveries: discoveries[offsets.discoveries..].to_vec(),
+                        discoveries: &discoveries[offsets.discoveries..],
                     };
                     state.checkpoint.snapshot_us = state
                         .checkpoint
