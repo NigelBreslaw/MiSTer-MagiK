@@ -473,15 +473,18 @@ pub(crate) fn populate(
     let mut document_build_us = 0u64;
     let mut fts_insert_us = 0u64;
     let mut pipeline_wait_us = 0u64;
+    let main_background_scope = crate::cooperative_work::BackgroundScope::enter();
     std::thread::scope(|scope| -> Result<(), PersistedSearchError> {
         let (sender, receiver) = std::sync::mpsc::sync_channel::<PreparedSearchBatch>(1);
         let producer = std::thread::Builder::new()
             .name("catalog-search-docs".to_string())
             .spawn_scoped(scope, move || {
                 crate::runtime_thread::apply_runtime_thread_policy(
-                    crate::runtime_thread::RuntimeThreadRole::SearchIndex,
+                    crate::runtime_thread::RuntimeThreadRole::LibraryWalker,
                 );
+                let _background_scope = crate::cooperative_work::BackgroundScope::enter();
                 for (batch_index, chunk) in games.chunks(SEARCH_PIPELINE_BATCH).enumerate() {
+                    crate::cooperative_work::checkpoint();
                     let batch = prepare_search_batch(
                         batch_index.saturating_mul(SEARCH_PIPELINE_BATCH),
                         chunk,
@@ -500,6 +503,7 @@ pub(crate) fn populate(
                 Err(_) => break,
             };
             pipeline_wait_us = pipeline_wait_us.saturating_add(elapsed_us(wait_started));
+            crate::cooperative_work::checkpoint();
             batches = batches.saturating_add(1);
             document_build_us = document_build_us.saturating_add(batch.build_us);
             if failure.is_some() {
@@ -545,6 +549,7 @@ pub(crate) fn populate(
         }
         Ok(())
     })?;
+    drop(main_background_scope);
     drop(insert_search);
     drop(row_loop_pmu);
     let row_loop_us = elapsed_us(row_loop_started);
