@@ -1414,7 +1414,7 @@ fn scan_library_with_progress_and_events(
         checkpoint_attribution = state.checkpoint.clone();
     }
     crate::catalog_logln!(
-        "catalog_checkpoint_tsv\t{}",
+        "catalog_target_checkpoint_io_tsv\t{}",
         checkpoint_attribution.compact_detail()
     );
     let _ = target_descriptor;

@@ -19092,7 +19092,7 @@ fn catalog_phase_evidence(log: &str) -> Value {
     const RECORDS: [&str; 11] = [
         "startup_timing",
         "catalog_scan_attribution_tsv",
-        "catalog_checkpoint_tsv",
+        "catalog_target_checkpoint_io_tsv",
         "catalog_shard_staging_tsv",
         "library_scan_timing",
         "catalog_v3_projection_phases_tsv",
@@ -19157,7 +19157,7 @@ fn catalog_phase_evidence(log: &str) -> Value {
         "builder_terminal": post_scan_unchanged
             || has("startup_timing", Some("builder_persisted")),
         "scan_attribution": has("catalog_scan_attribution_tsv", None),
-        "checkpoint": has("catalog_checkpoint_tsv", None),
+        "checkpoint": has("catalog_target_checkpoint_io_tsv", None),
         "shard_staging": post_scan_unchanged || has("catalog_shard_staging_tsv", None),
         "projection": post_scan_unchanged || has("catalog_v3_projection_phases_tsv", None),
         "reconciliation": post_scan_unchanged || has("catalog_v3_reconciliation_tsv", None),
@@ -32541,7 +32541,7 @@ H: Handlers=event3 js0"#
         let log = "startup_timing\tlibrary_scan_complete\t100us\tscan_us=90\n\
 startup_timing\tbuilder_persisted\t200us\telapsed_us=190\n\
 catalog_scan_attribution_tsv\tvalidation_us=10 execution_walk_us=70\n\
-catalog_checkpoint_tsv\tenabled=1 snapshot_us=2 encode_us=3 write_us=4\n\
+catalog_target_checkpoint_io_tsv\tenabled=1 snapshot_us=2 encode_us=3 write_us=4\n\
 catalog_shard_staging_tsv\trequested=auto selected=tmpfs\n\
 catalog_v3_projection_phases_tsv\tplanning_us=1\treconciliation_us=2\ttotal_us=3\n\
 catalog_v3_reconciliation_tsv\tgeneration=2\trebuilt=3\n\
@@ -32559,7 +32559,7 @@ catalog_v3_persist_phases_tsv\tprojection_us=4\tscanner_cache_us=5\n";
         let unchanged = catalog_phase_evidence(
             "startup_timing\tlibrary_scan_complete\t100us\tscan_us=90\n\
              catalog_scan_attribution_tsv\tvalidation_us=10 execution_walk_us=70\n\
-             catalog_checkpoint_tsv\tenabled=0 snapshot_us=0 encode_us=0 write_us=0\n\
+             catalog_target_checkpoint_io_tsv\tenabled=0 snapshot_us=0 encode_us=0 write_us=0\n\
              startup_timing\tbuilder_post_scan_unchanged\t200us\tstatus=unchanged elapsed_us=12\n",
         );
         assert_eq!(unchanged["complete"], true);
