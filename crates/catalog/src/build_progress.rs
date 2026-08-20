@@ -843,10 +843,6 @@ fn sqlite_frame_value(value: u64, label: &str) -> Result<i64, String> {
     i64::try_from(value).map_err(|_| format!("target frame {label} exceeds SQLite integer"))
 }
 
-fn sha256_hex(bytes: &[u8]) -> String {
-    hex_bytes(&Sha256::digest(bytes))
-}
-
 fn hex_bytes(bytes: &[u8]) -> String {
     let mut encoded = String::with_capacity(bytes.len() * 2);
     for byte in bytes {
