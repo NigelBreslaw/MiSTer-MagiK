@@ -29,6 +29,7 @@ use crate::input_state::PadState;
 use crate::launcher_presentation::SelectionFeedbackTarget;
 use crate::preview_state::PreviewApplyTrace;
 use crate::preview_worker;
+use mister_magik_catalog::builder_service::CatalogWorkMode;
 #[cfg(test)]
 use mister_magik_catalog::catalog_summary;
 #[cfg(test)]
@@ -41,6 +42,8 @@ use std::sync::mpsc::{Sender, channel};
 
 const DEFAULT_CATALOG_BACKGROUND_VALIDATION_DELAY: Duration = Duration::from_secs(2);
 const CATALOG_READY_STATIONARY_EDGE_SETTLE: Duration = Duration::from_millis(250);
+const CATALOG_IDLE_BURST_SETTLE: Duration = Duration::from_millis(150);
+const CATALOG_IDLE_BURST_SLEEP_LIMIT: Duration = Duration::from_millis(250);
 const LIBRARY_CHANGED_TEST_ACTION_SETTLE: Duration = Duration::from_millis(1200);
 const LAUNCHER_INPUT_SCRIPT_PRESS_FRAMES: usize = 2;
 const LAUNCHER_INPUT_SCRIPT_RELEASE_FRAMES: usize = 6;
@@ -3759,10 +3762,41 @@ fn expand_home_pan_dirty_rect(
     Some(dirty.map_or(band, |rect| rect.union(band)))
 }
 
-fn launcher_idle_sleep_duration(pacer: &VsyncPacer) -> Duration {
-    let frame_period = Duration::from_micros(pacer.period_us().max(1));
+fn launcher_idle_sleep_duration(pacer: &VsyncPacer, work_mode: CatalogWorkMode) -> Duration {
+    let frame_period = if work_mode == CatalogWorkMode::DualCoreBurst {
+        CATALOG_IDLE_BURST_SLEEP_LIMIT
+    } else {
+        Duration::from_micros(pacer.period_us().max(1))
+    };
     slint::platform::duration_until_next_timer_update()
         .map_or(frame_period, |timer| frame_period.min(timer))
+}
+
+fn launcher_catalog_work_mode(
+    first_visible: bool,
+    interaction_active: bool,
+    visible_animation_active: bool,
+    now: Instant,
+    idle_candidate_since: &mut Option<Instant>,
+) -> CatalogWorkMode {
+    if !first_visible {
+        *idle_candidate_since = None;
+        return CatalogWorkMode::Cpu0;
+    }
+    if interaction_active {
+        *idle_candidate_since = None;
+        return CatalogWorkMode::Paused;
+    }
+    if visible_animation_active {
+        *idle_candidate_since = None;
+        return CatalogWorkMode::Cpu0;
+    }
+    let idle_since = idle_candidate_since.get_or_insert(now);
+    if now.saturating_duration_since(*idle_since) >= CATALOG_IDLE_BURST_SETTLE {
+        CatalogWorkMode::DualCoreBurst
+    } else {
+        CatalogWorkMode::Cpu0
+    }
 }
 
 #[derive(Debug)]
@@ -5833,6 +5867,7 @@ pub(super) fn run_launcher_loop(
         .as_ref()
         .map(crate::input_hub::InputObservationProbe::observe)
         .unwrap_or_default();
+    let mut catalog_idle_candidate_since = None;
     #[cfg(test)]
     let mut launcher_frame_phase_observer = LauncherFramePhaseObserver::default();
     macro_rules! record_launcher_frame_phase {
@@ -6377,12 +6412,24 @@ pub(super) fn run_launcher_loop(
         if scheduler.system_entry_prepare_active() {
             background_work_allowed = false;
         }
-        // System entry is the only foreground CPU0 lease. Validation and
-        // indexing resume as soon as its terminal result has been adopted.
-        let catalog_worker_work_allowed = !scheduler.system_entry_prepare_active();
-        mister_magik_catalog::builder_service::set_background_heavy_work_allowed(
-            catalog_worker_work_allowed,
+        let catalog_interaction_active = scheduler.system_entry_prepare_active()
+            || !background_work_allowed
+            || directional_input_held
+            || latency_critical_input_pending
+            || navigation_transition.is_active()
+            || orientation_transition.is_active()
+            || full_screen_transition_owned_at_loop_start
+            || nav.arcade.is_scroll_active()
+            || (nav.arcade_filter.drawer_open && nav.arcade_filter.is_scroll_active());
+        let catalog_work_mode = launcher_catalog_work_mode(
+            frame_accounting.first_visible_copy_done(),
+            catalog_interaction_active,
+            startup_intro.is_some() || slint_animation_active,
+            loop_start,
+            &mut catalog_idle_candidate_since,
         );
+        mister_magik_catalog::builder_service::set_catalog_work_mode(catalog_work_mode);
+        let catalog_worker_work_allowed = catalog_work_mode != CatalogWorkMode::Paused;
         scheduler.tick_catalog_progress(catalog_worker_work_allowed, loop_start);
         if background_work_allowed
             && let Some(request) = nav.take_arcade_search_request(&catalog, catalog_version)
@@ -9161,8 +9208,8 @@ pub(super) fn run_launcher_loop(
                 .record_scheduler_interval("idle-accounting", scheduler_phase);
             record_launcher_frame_phase!(LauncherFramePhase::IdleWait);
             let idle_sleep = input_latency_lab.time_until_next_work().map_or_else(
-                || launcher_idle_sleep_duration(&pacer),
-                |lab| launcher_idle_sleep_duration(&pacer).min(lab),
+                || launcher_idle_sleep_duration(&pacer, catalog_work_mode),
+                |lab| launcher_idle_sleep_duration(&pacer, catalog_work_mode).min(lab),
             );
             let idle_sleep = catalog_scan_blink
                 .time_until_toggle(loop_start)
@@ -11964,7 +12011,7 @@ pub(super) fn run_launcher_loop(
     }
     // Preserve the continuous background permission for a later launcher run
     // in the same process (notably host tests and diagnostic runners).
-    mister_magik_catalog::builder_service::set_background_heavy_work_allowed(true);
+    mister_magik_catalog::builder_service::set_catalog_work_mode(CatalogWorkMode::Cpu0);
     frame_accounting.finish_preview_scroll_trace();
     let elapsed = run_start.elapsed().as_secs_f64();
     crate::ui_logln!(
@@ -17354,6 +17401,45 @@ mod tests {
         intent.wake_reasons = LauncherWakeReasons::default();
         intent.startup_input_enabled = false;
         assert!(!intent.can_sleep());
+    }
+
+    #[test]
+    pub(super) fn catalog_work_pauses_for_interaction_and_bursts_after_static_settle() {
+        let started = Instant::now();
+        let mut idle_since = None;
+        assert_eq!(
+            launcher_catalog_work_mode(false, false, false, started, &mut idle_since),
+            CatalogWorkMode::Cpu0
+        );
+        assert_eq!(
+            launcher_catalog_work_mode(true, true, false, started, &mut idle_since),
+            CatalogWorkMode::Paused
+        );
+        assert_eq!(
+            launcher_catalog_work_mode(true, false, false, started, &mut idle_since),
+            CatalogWorkMode::Cpu0
+        );
+        assert_eq!(
+            launcher_catalog_work_mode(
+                true,
+                false,
+                false,
+                started + CATALOG_IDLE_BURST_SETTLE,
+                &mut idle_since,
+            ),
+            CatalogWorkMode::DualCoreBurst
+        );
+        assert_eq!(
+            launcher_catalog_work_mode(
+                true,
+                false,
+                true,
+                started + CATALOG_IDLE_BURST_SETTLE,
+                &mut idle_since,
+            ),
+            CatalogWorkMode::Cpu0
+        );
+        assert!(idle_since.is_none());
     }
 
     #[test]
