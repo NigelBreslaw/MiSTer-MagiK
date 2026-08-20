@@ -19,7 +19,7 @@ use std::fs::OpenOptions;
 use std::fs::{self, File};
 use std::io::Read;
 #[cfg(feature = "builder")]
-use std::io::Write;
+use std::io::{Seek, SeekFrom, Write};
 use std::path::{Component, Path, PathBuf};
 #[cfg(feature = "builder")]
 use std::time::{Duration, Instant};
