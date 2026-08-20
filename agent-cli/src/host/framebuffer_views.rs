@@ -260,7 +260,10 @@ mod tests {
         let mut rgb = vec![0; width * height * 3];
         for y in 0..height {
             let value = u8::try_from(y % 251).unwrap();
-            for pixel in rgb[y * width * 3..(y + 1) * width * 3].chunks_exact_mut(3) {
+            for pixel in rgb[y * width * 3..(y + 1) * width * 3]
+                .as_chunks_mut::<3>()
+                .0
+            {
                 pixel.copy_from_slice(&[value, value.wrapping_add(1), value.wrapping_add(2)]);
             }
         }

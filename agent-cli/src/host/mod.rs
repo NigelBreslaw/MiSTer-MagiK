@@ -7894,7 +7894,7 @@ fn validate_input_integrity_trace(trace: &Value, enforce_latency: bool) -> Resul
     if physical.len() != (INPUT_INTEGRITY_EXPECTED_PRESSES * 2) as usize {
         return Err("input integrity trace event count is wrong".into());
     }
-    for (pair_index, pair) in physical.chunks_exact(2).enumerate() {
+    for (pair_index, pair) in physical.as_chunks::<2>().0.iter().enumerate() {
         let press = pair[0];
         let release = pair[1];
         if press["kind"] != "initial"
