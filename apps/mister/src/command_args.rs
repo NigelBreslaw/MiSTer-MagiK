@@ -21,6 +21,7 @@ impl CommandSpec {
 }
 
 pub const CATALOG_INSPECT_COMMAND: &str = "catalog-v3-inspect";
+pub const CATALOG_CORPUS_INVENTORY_COMMAND: &str = "catalog-corpus-inventory";
 pub const CATALOG_REGISTRY_REPORT_COMMAND: &str = "catalog-v3-registry-report";
 
 pub const COMMANDS: &[CommandSpec] = &[
@@ -76,6 +77,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     CommandSpec::new("pmu-probe", CommandKind::PreFpga),
     CommandSpec::new("pmu-profile", CommandKind::PreFpga),
     CommandSpec::new("search-bench", CommandKind::PreFpga),
+    CommandSpec::new(CATALOG_CORPUS_INVENTORY_COMMAND, CommandKind::PreFpga),
     #[cfg(feature = "bench-tools")]
     CommandSpec::new("media-bench-download", CommandKind::PreFpga),
     #[cfg(feature = "bench-tools")]

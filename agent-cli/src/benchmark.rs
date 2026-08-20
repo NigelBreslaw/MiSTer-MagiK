@@ -45,6 +45,7 @@ enum BenchmarkProfile {
     CatalogLifecycle,
     CatalogBuildRebuild,
     CatalogFullBuildRebuild,
+    CatalogCorpusInventory,
     CatalogAttributionControl,
     CatalogAttributionPprof,
     CatalogAttributionPmu,
@@ -121,6 +122,9 @@ impl BenchmarkDevice for DeviceClient {
             }
             BenchmarkProfile::CatalogFullBuildRebuild => {
                 device.profile_catalog_full_build_rebuild(&output_dir)
+            }
+            BenchmarkProfile::CatalogCorpusInventory => {
+                device.profile_catalog_corpus_inventory(&output_dir)
             }
             BenchmarkProfile::CatalogAttributionControl => {
                 device.profile_catalog_attribution_control(&output_dir)
@@ -320,6 +324,9 @@ fn require_clean_installed_commit(
         }
         BenchmarkScenario::CatalogFullBuildRebuild => {
             execute_catalog_full_build_rebuild(&mut device, manifest, output_dir, reporter)
+        }
+        BenchmarkScenario::CatalogCorpusInventory => {
+            execute_catalog_corpus_inventory(&mut device, manifest, output_dir, reporter)
         }
         BenchmarkScenario::CatalogAttributionControl => execute_catalog_attribution(
             &mut device,
@@ -905,6 +912,7 @@ fn particle_scene_lab_command(scenario: BenchmarkScenario) -> Option<&'static st
         | BenchmarkScenario::CatalogLifecycle
         | BenchmarkScenario::CatalogBuildRebuild
         | BenchmarkScenario::CatalogFullBuildRebuild
+        | BenchmarkScenario::CatalogCorpusInventory
         | BenchmarkScenario::CatalogAttributionControl
         | BenchmarkScenario::CatalogAttributionPprof
         | BenchmarkScenario::CatalogAttributionPmu
@@ -2142,6 +2150,41 @@ fn execute_catalog_full_build_rebuild(
     let summary: Value = serde_json::from_str(&detail).map_err(|error| error.to_string())?;
     device.verify_health()?;
     evaluate_catalog_full_build_rebuild_summary(&summary)?;
+    reporter.emit(
+        EventKind::Progress,
+        "benchmark-result",
+        &serde_json::to_string(&json!({
+            "installed_manifest": manifest,
+            "summary": summary,
+            "output_dir": output_dir,
+        }))
+        .map_err(|error| error.to_string())?,
+        Some(100),
+    )?;
+    Ok(Outcome::Passed)
+}
+
+fn execute_catalog_corpus_inventory(
+    device: &mut impl BenchmarkDevice,
+    manifest: String,
+    output_dir: PathBuf,
+    reporter: &mut Reporter<'_>,
+) -> AgentResult<Outcome> {
+    reporter.emit(
+        EventKind::Progress,
+        "profile",
+        "inventorying production-planned catalog targets without publication",
+        Some(35),
+    )?;
+    let detail = device.profile(BenchmarkProfile::CatalogCorpusInventory, output_dir.clone())?;
+    let summary: Value = serde_json::from_str(&detail).map_err(|error| error.to_string())?;
+    device.verify_health()?;
+    if summary.get("schema").and_then(Value::as_str)
+        != Some("mister-magik-catalog-corpus-inventory-summary-v1")
+        || summary.get("status").and_then(Value::as_str) != Some("passed")
+    {
+        return Err("catalog corpus inventory is not a passing v1 report".into());
+    }
     reporter.emit(
         EventKind::Progress,
         "benchmark-result",

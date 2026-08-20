@@ -29,6 +29,7 @@
 //!     fpga-latch-pattern
 //!                        fill scanout slots and vblank-latch them in FPGA
 //!     catalog-v3-inspect validate the registry, shards, state, and scanner cache
+//!     catalog-corpus-inventory inventory production-planned scan targets only
 //!     catalog-v3-registry-report list system counts without opening system shards
 //!     search-bench       benchmark persisted Arcade FTS5 search
 //!     hbmame-metadata-from-library
@@ -376,6 +377,7 @@ fn dispatch_pre_fpga(
         "pmu-probe" => pmu_probe::run(),
         "pmu-profile" => pmu_profile::run(args.get(2..).unwrap_or_default()),
         "search-bench" => search_bench::run(),
+        command_args::CATALOG_CORPUS_INVENTORY_COMMAND => run_catalog_corpus_inventory(),
         #[cfg(feature = "bench-tools")]
         "media-bench-download" => media_bench_download::run(),
         #[cfg(feature = "bench-tools")]
@@ -420,6 +422,14 @@ fn dispatch_pre_fpga(
 
 fn print_benchmark_capabilities() {
     crate::ui_logln!("{}", benchmark_capabilities());
+}
+
+fn run_catalog_corpus_inventory() {
+    let roots = mister_magik_catalog::catalog_config::library_roots_from_env();
+    crate::ui_print!(
+        "{}",
+        mister_magik_catalog::catalog_corpus_inventory_tsv(&roots)
+    );
 }
 
 fn benchmark_capabilities() -> serde_json::Value {

@@ -820,6 +820,15 @@ impl NativeDevice {
         })
     }
 
+    pub(crate) fn profile_catalog_corpus_inventory(
+        &mut self,
+        output_dir: &Path,
+    ) -> std::result::Result<String, DeviceFailure> {
+        self.benchmark_profile(|config| {
+            profile_installed_catalog_corpus_inventory(config, output_dir)
+        })
+    }
+
     pub(crate) fn profile_catalog_attribution_control(
         &mut self,
         output_dir: &Path,
@@ -15609,6 +15618,249 @@ fn profile_installed_catalog_full_build_rebuild(
         catalog_full_build_rebuild_report(&summary)?,
     )?;
     serde_json::to_string(&summary).map_err(Into::into)
+}
+
+fn profile_installed_catalog_corpus_inventory(
+    config: &NativeDeviceConfig,
+    output_dir: &Path,
+) -> Result<String> {
+    let session = connect_with(&config.connection, 10)?;
+    let boot_id = remote_read(&session, "/proc/sys/kernel/random/boot_id")
+        .ok_or("device boot id is unavailable")?
+        .trim()
+        .to_string();
+    fs::create_dir_all(output_dir)?;
+    let inventory = exec_checked_output(
+        &session,
+        "inventory production catalog corpus",
+        &development_gui_command("catalog-corpus-inventory"),
+    )?
+    .stdout;
+    fs::write(output_dir.join("inventory.tsv"), &inventory)?;
+    let targets = parse_catalog_corpus_inventory(&inventory)?;
+    let selected = select_catalog_benchmark_corpus(&targets)?;
+    let final_boot_id = remote_read(&session, "/proc/sys/kernel/random/boot_id")
+        .ok_or("device boot id is unavailable after catalog corpus inventory")?;
+    if final_boot_id.trim() != boot_id {
+        return Err("device rebooted during catalog corpus inventory".into());
+    }
+    let summary = json!({
+        "schema": "mister-magik-catalog-corpus-inventory-summary-v1",
+        "scenario": "catalog-corpus-inventory",
+        "status": "passed",
+        "boot_id": boot_id,
+        "target_count": targets.len(),
+        "targets": targets,
+        "corpus": selected,
+        "artifacts": { "inventory_tsv": "inventory.tsv" },
+    });
+    fs::write(
+        output_dir.join("summary.json"),
+        format!("{}\n", serde_json::to_string_pretty(&summary)?),
+    )?;
+    fs::write(
+        output_dir.join("corpus-manifest.json"),
+        format!("{}\n", serde_json::to_string_pretty(&summary["corpus"])?),
+    )?;
+    serde_json::to_string(&summary).map_err(Into::into)
+}
+
+fn parse_catalog_corpus_inventory(output: &str) -> Result<Vec<Value>> {
+    let header_valid = output.lines().any(|line| {
+        line.starts_with("catalog_corpus_inventory_tsv\t")
+            && line.contains("schema=mister-magik-catalog-corpus-inventory-v1")
+    });
+    if !header_valid {
+        return Err("catalog corpus inventory has no valid v1 header".into());
+    }
+    let mut targets = Vec::new();
+    for line in output
+        .lines()
+        .filter(|line| line.starts_with("catalog_corpus_target_tsv\t"))
+    {
+        let fields = line
+            .split('\t')
+            .skip(1)
+            .filter_map(|field| field.split_once('='))
+            .collect::<BTreeMap<_, _>>();
+        let required = |key: &str| {
+            fields
+                .get(key)
+                .copied()
+                .ok_or_else(|| format!("catalog corpus target is missing {key}"))
+        };
+        let number = |key: &str| -> Result<u64> {
+            required(key)?
+                .parse::<u64>()
+                .map_err(|error| format!("invalid catalog corpus {key}: {error}").into())
+        };
+        targets.push(json!({
+            "ordinal": number("ordinal")?,
+            "kind": required("kind")?,
+            "system": required("system")?,
+            "profile": required("profile")?,
+            "path": required("path")?,
+            "dirs": number("dirs")?,
+            "files": number("files")?,
+            "candidates": number("candidates")?,
+            "elapsed_us": number("elapsed_us")?,
+            "mechanisms": required("mechanisms")?.split(',').collect::<Vec<_>>(),
+            "extensions": required("extensions")?,
+            "namespace_backend": required("namespace_backend")?,
+            "namespace_dir_opens": number("namespace_dir_opens")?,
+            "namespace_reads": number("namespace_reads")?,
+            "namespace_bytes": number("namespace_bytes")?,
+            "namespace_fallback": required("namespace_fallback")?,
+        }));
+    }
+    if targets.is_empty() {
+        return Err("catalog corpus inventory reported no targets".into());
+    }
+    Ok(targets)
+}
+
+fn select_catalog_benchmark_corpus(targets: &[Value]) -> Result<Value> {
+    const MANDATORY_SYSTEMS: [&str; 3] = ["arcade", "snes", "c64"];
+    const COVERAGE_CLASSES: [&str; 5] = [
+        "prepared-collection",
+        "archive",
+        "runtime",
+        "facts-only",
+        "mgl",
+    ];
+    const MAX_CORE_TARGETS: usize = 6;
+    let mut selected = Vec::<Value>::new();
+    let mut selected_paths = BTreeSet::<String>::new();
+    for system in MANDATORY_SYSTEMS {
+        let target = targets
+            .iter()
+            .filter(|target| target.get("system").and_then(Value::as_str) == Some(system))
+            .max_by_key(|target| {
+                target
+                    .get("elapsed_us")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0)
+            })
+            .ok_or_else(|| format!("catalog corpus has no mandatory {system} target"))?;
+        select_catalog_corpus_target(target, &mut selected, &mut selected_paths);
+    }
+    for mechanism in COVERAGE_CLASSES {
+        if selected.len() == MAX_CORE_TARGETS {
+            break;
+        }
+        let already_covered = selected.iter().any(|target| {
+            target["mechanisms"]
+                .as_array()
+                .is_some_and(|values| values.iter().any(|value| value.as_str() == Some(mechanism)))
+        });
+        if already_covered {
+            continue;
+        }
+        if let Some(target) = targets
+            .iter()
+            .filter(|target| {
+                target["mechanisms"].as_array().is_some_and(|values| {
+                    values.iter().any(|value| value.as_str() == Some(mechanism))
+                })
+            })
+            .filter(|target| {
+                target["path"]
+                    .as_str()
+                    .is_some_and(|path| !selected_paths.contains(path))
+            })
+            .max_by_key(|target| {
+                target
+                    .get("elapsed_us")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0)
+            })
+        {
+            select_catalog_corpus_target(target, &mut selected, &mut selected_paths);
+        }
+    }
+    if selected.len() < MAX_CORE_TARGETS {
+        let mut slowest = targets.iter().collect::<Vec<_>>();
+        slowest.sort_by_key(|target| {
+            std::cmp::Reverse(
+                target
+                    .get("elapsed_us")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0),
+            )
+        });
+        for target in slowest {
+            if selected.len() == MAX_CORE_TARGETS {
+                break;
+            }
+            select_catalog_corpus_target(target, &mut selected, &mut selected_paths);
+        }
+    }
+    let overlays = json!({
+        "checkpoint_heavy": slowest_catalog_target_paths(targets, 3, |_| true),
+        "archive_prepared": slowest_catalog_target_paths(targets, 3, |target| {
+            catalog_target_has_mechanism(target, "archive")
+                || catalog_target_has_mechanism(target, "prepared-collection")
+        }),
+        "namespace_stress": slowest_catalog_target_paths(targets, 3, |target| {
+            target.get("files").and_then(Value::as_u64).unwrap_or(0) > 0
+        }),
+        "search_publication": slowest_catalog_target_paths(targets, 3, |target| {
+            target.get("candidates").and_then(Value::as_u64).unwrap_or(0) > 0
+        }),
+    });
+    Ok(json!({
+        "schema": "mister-magik-catalog-benchmark-corpus-v1",
+        "selection_policy": "mandatory Arcade/SNES/C64, then uncovered discovery mechanisms, then slowest unique targets",
+        "max_core_targets": MAX_CORE_TARGETS,
+        "core_targets": selected,
+        "overlays": overlays,
+    }))
+}
+
+fn select_catalog_corpus_target(
+    target: &Value,
+    selected: &mut Vec<Value>,
+    selected_paths: &mut BTreeSet<String>,
+) {
+    let Some(path) = target.get("path").and_then(Value::as_str) else {
+        return;
+    };
+    if selected_paths.insert(path.to_string()) {
+        selected.push(target.clone());
+    }
+}
+
+fn catalog_target_has_mechanism(target: &Value, mechanism: &str) -> bool {
+    target["mechanisms"]
+        .as_array()
+        .is_some_and(|values| values.iter().any(|value| value.as_str() == Some(mechanism)))
+}
+
+fn slowest_catalog_target_paths(
+    targets: &[Value],
+    limit: usize,
+    predicate: impl Fn(&Value) -> bool,
+) -> Vec<String> {
+    let mut matching = targets
+        .iter()
+        .filter(|target| predicate(target))
+        .collect::<Vec<_>>();
+    matching.sort_by_key(|target| {
+        std::cmp::Reverse(
+            target
+                .get("elapsed_us")
+                .and_then(Value::as_u64)
+                .unwrap_or(0),
+        )
+    });
+    let mut paths = BTreeSet::new();
+    matching
+        .into_iter()
+        .filter_map(|target| target.get("path").and_then(Value::as_str))
+        .filter(|path| paths.insert((*path).to_string()))
+        .take(limit)
+        .map(str::to_string)
+        .collect()
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -32795,6 +33047,36 @@ catalog_v3_persist_phases_tsv\tprojection_us=4\tscanner_cache_us=5\n";
             parse_catalog_lifecycle_inspect("catalog_v3_summary_tsv\tvalid=1\tgeneration=7")
                 .is_err()
         );
+    }
+
+    #[test]
+    fn catalog_corpus_inventory_selects_mandatory_and_missing_mechanisms() {
+        let inventory = [
+            "catalog_corpus_inventory_tsv\tschema=mister-magik-catalog-corpus-inventory-v1\troots=2\tprofiles=6\ttargets=6\telapsed_us=10",
+            "catalog_corpus_target_tsv\tordinal=0\tkind=static\tsystem=arcade\tprofile=arcade\tpath=/media/fat/_Arcade\tdirs=1\tfiles=2\tcandidates=2\telapsed_us=10\tmechanisms=static,mra,flat\textensions=mra:2\tnamespace_backend=fd-relative\tnamespace_dir_opens=1\tnamespace_reads=1\tnamespace_bytes=64\tnamespace_fallback=none",
+            "catalog_corpus_target_tsv\tordinal=1\tkind=static\tsystem=snes\tprofile=snes\tpath=/media/fat/games/SNES\tdirs=2\tfiles=3\tcandidates=3\telapsed_us=20\tmechanisms=static,nested\textensions=sfc:3\tnamespace_backend=fd-relative\tnamespace_dir_opens=2\tnamespace_reads=2\tnamespace_bytes=128\tnamespace_fallback=none",
+            "catalog_corpus_target_tsv\tordinal=2\tkind=static\tsystem=c64\tprofile=c64\tpath=/media/fat/games/C64\tdirs=3\tfiles=4\tcandidates=4\telapsed_us=30\tmechanisms=static,archive,nested\textensions=zip:4\tnamespace_backend=fd-relative\tnamespace_dir_opens=3\tnamespace_reads=3\tnamespace_bytes=192\tnamespace_fallback=none",
+            "catalog_corpus_target_tsv\tordinal=3\tkind=runtime\tsystem=gba\tprofile=runtime-gba\tpath=/media/fat/games/GBA\tdirs=1\tfiles=5\tcandidates=5\telapsed_us=40\tmechanisms=runtime,flat\textensions=gba:5\tnamespace_backend=fd-relative\tnamespace_dir_opens=1\tnamespace_reads=1\tnamespace_bytes=64\tnamespace_fallback=none",
+            "catalog_corpus_target_tsv\tordinal=4\tkind=facts-only\tsystem=x68000\tprofile=x68000\tpath=/media/fat/_Computer/X68000 Games\tdirs=4\tfiles=6\tcandidates=0\telapsed_us=50\tmechanisms=facts-only,prepared-collection,nested\textensions=dim:0\tnamespace_backend=fd-relative\tnamespace_dir_opens=4\tnamespace_reads=4\tnamespace_bytes=256\tnamespace_fallback=none",
+            "catalog_corpus_target_tsv\tordinal=5\tkind=static\tsystem=neogeo-cd\tprofile=neogeo-cd\tpath=/media/fat/games/NeoGeo-CD\tdirs=1\tfiles=7\tcandidates=7\telapsed_us=60\tmechanisms=static,mgl,flat\textensions=mgl:7\tnamespace_backend=fd-relative\tnamespace_dir_opens=1\tnamespace_reads=1\tnamespace_bytes=64\tnamespace_fallback=none",
+        ]
+        .join("\n");
+
+        let targets = parse_catalog_corpus_inventory(&inventory).expect("parse inventory");
+        let corpus = select_catalog_benchmark_corpus(&targets).expect("select corpus");
+        let core = corpus["core_targets"].as_array().expect("core targets");
+
+        assert_eq!(core.len(), 6);
+        for system in ["arcade", "snes", "c64"] {
+            assert!(core.iter().any(|target| target["system"] == system));
+        }
+        for mechanism in ["runtime", "prepared-collection", "mgl"] {
+            assert!(core.iter().any(|target| {
+                target["mechanisms"]
+                    .as_array()
+                    .is_some_and(|values| values.iter().any(|value| value == mechanism))
+            }));
+        }
     }
 
     #[test]

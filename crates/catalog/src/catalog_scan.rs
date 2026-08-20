@@ -489,6 +489,144 @@ enum PlannedScanTarget {
     FactsOnly(GameDirHeader),
 }
 
+/// Inventory the targets selected by the production scan planner without
+/// classifying games or publishing catalog state.
+pub fn catalog_corpus_inventory_tsv(roots: &[String]) -> String {
+    let started = Instant::now();
+    let plan = CatalogScanPlan::for_roots(roots);
+    let profiles = plan.base_profiles();
+    let candidate_exts = source_index_extensions(profiles);
+    let targets = scan_targets_for_plan(roots, &plan, profiles, &[]);
+    let target_count = targets.len();
+    let mut rows = Vec::with_capacity(target_count);
+
+    for (ordinal, target) in targets.into_iter().enumerate() {
+        let descriptor = target.descriptor(ordinal);
+        let profile = profile_for_path(profiles, &descriptor.path);
+        let mut extensions = BTreeMap::<String, usize>::new();
+        let (stats, has_archives) = match target {
+            PlannedScanTarget::Static {
+                path,
+                game_dir_header,
+            } => {
+                let (stats, facts) = scan_target_candidates_with_facts(
+                    &path,
+                    profiles,
+                    &candidate_exts,
+                    game_dir_header.as_ref(),
+                    |file| {
+                        *extensions.entry(file.ext).or_default() += 1;
+                        true
+                    },
+                );
+                let has_archives = facts.as_ref().is_some_and(|facts| facts.has_zip_files)
+                    || extensions.keys().any(|ext| is_archive_extension(ext));
+                (stats, has_archives)
+            }
+            PlannedScanTarget::Runtime(header) => {
+                let (stats, candidates) = scan_runtime_target_candidates(&header, &plan);
+                for file in &candidates.files {
+                    *extensions.entry(file.ext.clone()).or_default() += 1;
+                }
+                let has_archives = candidates.facts.has_zip_files
+                    || extensions.keys().any(|ext| is_archive_extension(ext));
+                (stats, has_archives)
+            }
+            PlannedScanTarget::FactsOnly(header) => {
+                let (stats, facts) = scan_game_dir_facts_only(&header);
+                for ext in facts.payload_extensions {
+                    extensions.entry(ext).or_default();
+                }
+                (stats, facts.has_zip_files)
+            }
+        };
+        let mechanisms = corpus_mechanisms(
+            descriptor.kind,
+            &descriptor.path,
+            profile,
+            &extensions,
+            has_archives,
+            stats.dirs,
+        );
+        rows.push(format!(
+            "catalog_corpus_target_tsv\tordinal={ordinal}\tkind={}\tsystem={}\tprofile={}\tpath={}\tdirs={}\tfiles={}\tcandidates={}\telapsed_us={}\tmechanisms={}\textensions={}\tnamespace_backend={}\tnamespace_dir_opens={}\tnamespace_reads={}\tnamespace_bytes={}\tnamespace_fallback={}",
+            scan_target_kind_label(descriptor.kind),
+            profile.map_or("unknown", |profile| profile.system_id.as_str()),
+            profile.map_or("unknown", |profile| profile.id.as_str()),
+            tsv_value(&descriptor.path.display().to_string()),
+            stats.dirs,
+            stats.files,
+            stats.candidates,
+            stats.elapsed_us,
+            mechanisms.join(","),
+            bounded_map_detail(&extensions),
+            stats.namespace.backend,
+            stats.namespace.dir_opens,
+            stats.namespace.read_calls,
+            stats.namespace.read_bytes,
+            tsv_value(stats.namespace.fallback_reason.as_deref().unwrap_or("none")),
+        ));
+    }
+
+    let mut out = format!(
+        "catalog_corpus_inventory_tsv\tschema=mister-magik-catalog-corpus-inventory-v1\troots={}\tprofiles={}\ttargets={}\telapsed_us={}\n",
+        roots.len(),
+        profiles.len(),
+        target_count,
+        started.elapsed().as_micros(),
+    );
+    for row in rows {
+        out.push_str(&row);
+        out.push('\n');
+    }
+    out
+}
+
+fn scan_target_kind_label(kind: ScanTargetKind) -> &'static str {
+    match kind {
+        ScanTargetKind::Static => "static",
+        ScanTargetKind::Runtime => "runtime",
+        ScanTargetKind::FactsOnly => "facts-only",
+    }
+}
+
+fn corpus_mechanisms(
+    kind: ScanTargetKind,
+    path: &Path,
+    profile: Option<&LaunchProfile>,
+    extensions: &BTreeMap<String, usize>,
+    has_archives: bool,
+    dirs: usize,
+) -> Vec<&'static str> {
+    let mut mechanisms = vec![scan_target_kind_label(kind)];
+    if extensions.contains_key("mra") {
+        mechanisms.push("mra");
+    }
+    if extensions.contains_key("mgl") {
+        mechanisms.push("mgl");
+    }
+    if has_archives {
+        mechanisms.push("archive");
+    }
+    if profile.is_some_and(|profile| !profile.collection_rules.is_empty())
+        || path
+            .components()
+            .any(|part| part.as_os_str().to_string_lossy().contains("X68000 Games"))
+    {
+        mechanisms.push("prepared-collection");
+    }
+    mechanisms.push(if dirs > 1 { "nested" } else { "flat" });
+    mechanisms
+}
+
+fn is_archive_extension(extension: &str) -> bool {
+    matches!(extension, "zip" | "7z" | "lha" | "lzh" | "rar")
+}
+
+fn tsv_value(value: &str) -> String {
+    value.replace(['\t', '\n', '\r'], "_")
+}
+
 pub(crate) fn planned_scan_target_descriptors(
     roots: &[String],
     plan: &CatalogScanPlan,
@@ -1978,6 +2116,33 @@ mod tests {
             Path::new("/media/fat/games/NeoGeo"),
             Path::new("/media/fat/games/NeoGeo-CD")
         ));
+    }
+
+    #[test]
+    fn corpus_inventory_reports_real_routes_and_candidate_mechanisms() {
+        let root = unique_temp_dir("catalog-corpus-inventory");
+        let arcade = root.join("_Arcade");
+        let snes = root.join("games/SNES/Nested");
+        std::fs::create_dir_all(&arcade).expect("create arcade dir");
+        std::fs::create_dir_all(&snes).expect("create snes dir");
+        std::fs::write(
+            arcade.join("Inventory Game.mra"),
+            "<misterromdescription />",
+        )
+        .expect("write mra");
+        std::fs::write(snes.join("Inventory Game.sfc"), "rom").expect("write rom");
+
+        let report = catalog_corpus_inventory_tsv(&[root.display().to_string()]);
+
+        assert!(report.contains(
+            "catalog_corpus_inventory_tsv\tschema=mister-magik-catalog-corpus-inventory-v1"
+        ));
+        assert!(report.contains("system=arcade"));
+        assert!(report.contains("mechanisms=static,mra,flat"));
+        assert!(report.contains("system=snes"));
+        assert!(report.contains("extensions=sfc:1"));
+        assert!(report.contains("mechanisms=static,nested"));
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

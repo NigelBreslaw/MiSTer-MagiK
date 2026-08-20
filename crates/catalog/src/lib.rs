@@ -28,6 +28,7 @@ pub mod catalog_navigation;
 mod catalog_progress;
 mod catalog_projection;
 mod catalog_scan;
+pub use catalog_scan::catalog_corpus_inventory_tsv;
 pub mod catalog_stamp;
 pub mod catalog_state;
 pub mod catalog_store;
