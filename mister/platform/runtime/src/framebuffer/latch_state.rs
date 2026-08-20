@@ -912,6 +912,12 @@ fn direct_layer_redraw_update(
     if publication_requires_full {
         return Some(PhysicalLayerUpdate::Full(desired.rect));
     }
+    if matches!(dirty, Some(PhysicalLayerUpdate::Full(_))) {
+        // A content replacement supersedes scroll catch-up for an older slot.
+        // Treating the offset delta as a scroll would shift pixels from the
+        // replacement publication as though they belonged to the old content.
+        return Some(PhysicalLayerUpdate::Full(desired.rect));
+    }
     if let Some(current) = current {
         if current.rect != desired.rect || current.version != desired.version {
             Some(PhysicalLayerUpdate::Full(desired.rect))
@@ -2215,6 +2221,70 @@ mod tests {
             Some(PhysicalLayerUpdate::Full(arcade))
         );
         assert!(content_update.arcade_redraw_diff_safe);
+    }
+
+    #[test]
+    fn full_arcade_content_update_overrides_pending_slot_scroll_catch_up() {
+        let arcade = rect(0, 0, 4, 3);
+        let initial = layer(arcade, 7);
+        let scrolled = initial.with_content_offset(LayerOffset::new(0, -1));
+        let mut state = TwoBufferLatchState::new(WIDTH, HEIGHT);
+
+        for _ in 0..2 {
+            all_writable(&mut state);
+            let seed = state
+                .plan_next(input(
+                    None,
+                    None,
+                    None,
+                    Some(initial),
+                    Some(PhysicalLayerUpdate::Full(arcade)),
+                ))
+                .expect("seed Arcade content in both slots");
+            state.mark_post_success(seed);
+        }
+
+        all_writable(&mut state);
+        let scroll = state
+            .plan_next(input(
+                None,
+                None,
+                None,
+                Some(scrolled),
+                Some(PhysicalLayerUpdate::Scroll {
+                    delta_x: 0,
+                    delta_y: -1,
+                    rect: arcade,
+                    repair_rect: None,
+                }),
+            ))
+            .expect("scroll one hidden slot");
+        assert_eq!(
+            scroll.arcade_redraw,
+            Some(PhysicalLayerUpdate::Scroll {
+                delta_x: 0,
+                delta_y: -1,
+                rect: arcade,
+                repair_rect: None,
+            })
+        );
+        state.mark_post_success(scroll);
+
+        all_writable(&mut state);
+        let replacement = state
+            .plan_next(input(
+                None,
+                None,
+                None,
+                Some(scrolled),
+                Some(PhysicalLayerUpdate::Full(arcade)),
+            ))
+            .expect("replace content while the alternate slot still needs scroll catch-up");
+        assert_eq!(
+            replacement.arcade_redraw,
+            Some(PhysicalLayerUpdate::Full(arcade))
+        );
+        assert!(replacement.arcade_redraw_diff_safe);
     }
 
     #[test]
