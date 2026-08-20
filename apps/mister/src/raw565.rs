@@ -36,7 +36,7 @@ pub fn decode_raw565(data: &[u8]) -> Result<Raw565Image, String> {
     }
 
     let mut words = Vec::with_capacity(stride_bytes / 2 * height);
-    for chunk in data[RAW565_HEADER_LEN..].chunks_exact(2) {
+    for chunk in data[RAW565_HEADER_LEN..].as_chunks::<2>().0 {
         words.push(u16::from_le_bytes([chunk[0], chunk[1]]));
     }
     Ok(Raw565Image {

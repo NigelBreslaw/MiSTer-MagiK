@@ -95,7 +95,9 @@ impl SnesArtwork {
         }
         let colour_len = rgb_stride * height;
         let colours = payload[..colour_len]
-            .chunks_exact(2)
+            .as_chunks::<2>()
+            .0
+            .iter()
             .map(|pixel| u16::from_le_bytes([pixel[0], pixel[1]]))
             .collect();
         Ok(Self {
