@@ -696,7 +696,7 @@ stateDiagram-v2
     ClassifyEntry --> WarmCatalog: valid catalog
     ClassifyEntry --> ReturnFromGame: Main return flag + launch return state
 
-    ColdNoCatalog --> IntroVisible: start catalog build immediately on CPU0
+    ColdNoCatalog --> IntroVisible: start catalog build immediately on both A9 cores
     IntroVisible --> CaptureLauncher: existing launcher_reveal_ready transition
     CaptureLauncher --> RevealLauncher: 20s confirmed-refresh endpoint
 
@@ -721,7 +721,9 @@ stateDiagram-v2
 ```
 
 Only cold boot without a valid catalog or retained Arcade projection shows the
-20-second first-run particle intro while catalog work runs on CPU0. Its logical
+20-second first-run particle intro while catalog work may burst across both A9
+cores. Once the launcher is interactive, visible motion confines catalog work
+to CPU0 and scrolling parks it completely. The intro's logical
 clock advances only after the posted sequence is active at a confirmed physical
 refresh. HDMI uses full particle density; the four resolved CRT routes render
 half density at their native framebuffer geometry with the complete 16:9 scene

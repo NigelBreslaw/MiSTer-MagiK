@@ -24,8 +24,10 @@ catalog storage.
   its replacement.
 - Report queued, scanning, prepared, and failed activity per system rather than
   treating the whole catalog as one binary scan.
-- Keep every post-reveal scan and rebuild phase continuously on CPU0 at
-  background priority so UI work on the display core remains responsive.
+- Pause catalog work during launcher scrolling or navigation motion. Before
+  first reveal, and after a stationary idle settle, allow bounded catalog work
+  to burst across both A9 cores; visible post-reveal animation confines it to
+  CPU0.
 - Keep catalog construction testable and benchmarkable without Slint, the
   framebuffer, Main, or a complete MiSTer installation.
 

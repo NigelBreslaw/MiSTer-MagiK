@@ -3779,13 +3779,18 @@ fn launcher_catalog_work_mode(
     now: Instant,
     idle_candidate_since: &mut Option<Instant>,
 ) -> CatalogWorkMode {
-    if !first_visible {
-        *idle_candidate_since = None;
-        return CatalogWorkMode::Cpu0;
-    }
     if interaction_active {
         *idle_candidate_since = None;
         return CatalogWorkMode::Paused;
+    }
+    // Before the launcher becomes interactive there is no scroll latency to
+    // protect. Give incomplete first-run catalog work both A9 cores, even
+    // while the intro is visible, so Arcade and the remaining systems become
+    // usable as soon as possible. Once input is enabled, visible motion keeps
+    // catalog work on CPU0 and actual interaction parks it completely.
+    if !first_visible {
+        *idle_candidate_since = None;
+        return CatalogWorkMode::DualCoreBurst;
     }
     if visible_animation_active {
         *idle_candidate_since = None;
@@ -17481,8 +17486,8 @@ mod tests {
         let started = Instant::now();
         let mut idle_since = None;
         assert_eq!(
-            launcher_catalog_work_mode(false, false, false, started, &mut idle_since),
-            CatalogWorkMode::Cpu0
+            launcher_catalog_work_mode(false, false, true, started, &mut idle_since),
+            CatalogWorkMode::DualCoreBurst
         );
         assert_eq!(
             launcher_catalog_work_mode(true, true, false, started, &mut idle_since),
