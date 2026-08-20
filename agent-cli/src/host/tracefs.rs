@@ -8,6 +8,7 @@ const TRACEFS_MOUNT: &str = "/sys/kernel/tracing";
 const TRACE_MAX_BYTES: u64 = 64 * 1024 * 1024;
 const FUNCTION_GRAPH_BUFFER_KB: u64 = 16_384;
 const FUNCTION_GRAPH_MAX_DEPTH: u8 = 4;
+const FUNCTION_GRAPH_GLOBAL_LOCK: &str = "/tmp/mister-magik/tracefs-function-graph.lock";
 
 pub(super) const SCHEDULER_TRACE_SPEC: TracefsCaptureSpec = TracefsCaptureSpec {
     label: "scheduler trace",
@@ -306,7 +307,47 @@ fn event_enable_path(instance: &str, event: &str) -> String {
     format!("{TRACEFS_MOUNT}/instances/{instance}/events/{system}/{name}/enable")
 }
 
+fn tracefs_global_function_graph_prepare_command(
+    spec: TracefsCaptureSpec,
+    function_groups: &[TracefsFunctionGroup],
+) -> String {
+    let root = sh(spec.remote_root);
+    let mount = sh(TRACEFS_MOUNT);
+    let mount_marker = sh(&format!("{}/owned-tracefs.mount", spec.remote_root));
+    let capabilities = sh(&format!("{}/capabilities.tsv", spec.remote_root));
+    let resolved = sh(&format!("{}/resolved-functions.txt", spec.remote_root));
+    let capture_base = sh(&format!("{}/capture-base", spec.remote_root));
+    let global_lock_marker = sh(&format!("{}/owned-global-lock", spec.remote_root));
+    let global_marker = sh(&format!("{}/owned-global-function-graph", spec.remote_root));
+    let original_clock = sh(&format!("{}/original-trace-clock", spec.remote_root));
+    let original_buffer = sh(&format!("{}/original-buffer-size-kb", spec.remote_root));
+    let lock = sh(FUNCTION_GRAPH_GLOBAL_LOCK);
+    let mut resolve = String::new();
+    for group in function_groups {
+        let candidates = group
+            .functions
+            .iter()
+            .map(|function| sh(function))
+            .collect::<Vec<_>>()
+            .join(" ");
+        resolve.push_str(&format!(
+            "group_found=0; for function in {candidates}; do if awk -v wanted=\"$function\" '$1 == wanted {{ found=1 }} END {{ exit !found }}' {mount}/available_filter_functions; then if printf '%s\\n' \"$function\" >> \"$graph_filter\" 2>/dev/null; then printf '%s\\n' \"$function\" >> {resolved}; printf 'function:%s:%s\\taccepted\\n' {group_label} \"$function\" >> {capabilities}; group_found=1; else printf 'function:%s:%s\\trejected\\n' {group_label} \"$function\" >> {capabilities}; fi; fi; done; test \"$group_found\" = 1; printf '%s\\t%s\\n' {group_capability} resolved >> {capabilities}; ",
+            group_label = sh(group.label),
+            group_capability = sh(&format!("function-group:{}", group.label)),
+        ));
+    }
+    format!(
+        "set -eu; root={root}; mkdir -p \"$root\" /tmp/mister-magik; current=$(awk '$2 == \"{mount_path}\" && $3 == \"tracefs\" {{ print }}' /proc/mounts); if test -z \"$current\"; then mount -t tracefs tracefs {mount}; awk '$2 == \"{mount_path}\" && $3 == \"tracefs\" {{ print }}' /proc/mounts > {mount_marker}; test -s {mount_marker}; fi; mkdir {lock}; printf '%s\\n' {root} > {lock}/owner; printf '%s\\n' {lock} > {global_lock_marker}; : > {capabilities}; printf '%s\\t%s\\n' backend global-legacy >> {capabilities}; grep -qw function_graph {mount}/available_tracers; printf '%s\\t%s\\n' tracer:function_graph available >> {capabilities}; test -r {mount}/available_filter_functions; printf '%s\\t%s\\n' available_filter_functions readable >> {capabilities}; test \"$(cat {mount}/tracing_on)\" = 0; test \"$(cat {mount}/current_tracer)\" = nop; test \"$(cat {mount}/events/enable)\" = 0; test ! -s {mount}/set_ftrace_filter; if test -e {mount}/set_graph_function; then test ! -s {mount}/set_graph_function; fi; grep -q '^# entries-in-buffer/entries-written: 0/0' {mount}/trace; sed -n 's/.*\\[\\([^]]*\\)\\].*/\\1/p' {mount}/trace_clock > {original_clock}; test -s {original_clock}; cat {mount}/buffer_size_kb > {original_buffer}; test -s {original_buffer}; printf '%s\\n' {mount} > {capture_base}; printf '%s\\n' {mount} > {global_marker}; grep -qw mono {mount}/trace_clock; printf 'mono\\n' > {mount}/trace_clock; printf '{buffer_kb}\\n' > {mount}/buffer_size_kb; printf '0\\n' > {mount}/tracing_on; printf '0\\n' > {mount}/events/enable; printf 'nop\\n' > {mount}/current_tracer; : > {mount}/trace; if test -w {mount}/max_graph_depth && test -w {mount}/set_graph_function; then max_depth_supported=1; graph_filter={mount}/set_graph_function; filter_name=set_graph_function; printf '%s\\t%s\\n' max_graph_depth writable >> {capabilities}; else max_depth_supported=0; graph_filter={mount}/set_ftrace_filter; filter_name=set_ftrace_filter; printf '%s\\t%s\\n' max_graph_depth missing >> {capabilities}; printf '%s\\t%s\\n' depth_bound exact-function-filter >> {capabilities}; fi; printf 'filter:%s\\tresolved\\n' \"$filter_name\" >> {capabilities}; : > {resolved}; : > \"$graph_filter\"; {resolve} sort -u {resolved} > {resolved}.sorted; mv {resolved}.sorted {resolved}; test -s {resolved}; if test \"$max_depth_supported\" = 1; then printf '{depth}\\n' > {mount}/max_graph_depth; fi; printf 'function_graph\\n' > {mount}/current_tracer; test \"$(cat {mount}/current_tracer)\" = function_graph; test \"$(cat {mount}/tracing_on)\" = 0",
+        mount_path = TRACEFS_MOUNT,
+        buffer_kb = spec.buffer_kb,
+        depth = FUNCTION_GRAPH_MAX_DEPTH,
+    )
+}
+
 fn tracefs_prepare_command(spec: TracefsCaptureSpec) -> String {
+    if let TracefsCaptureMode::FunctionGraph { function_groups } = spec.mode {
+        return tracefs_global_function_graph_prepare_command(spec, function_groups);
+    }
     let root = sh(spec.remote_root);
     let mount_marker = sh(&format!("{}/owned-tracefs.mount", spec.remote_root));
     let instance_marker = sh(&format!("{}/owned-instance", spec.remote_root));
@@ -381,6 +422,19 @@ fn tracefs_prepare_command(spec: TracefsCaptureSpec) -> String {
 }
 
 fn tracefs_control_command(spec: TracefsCaptureSpec, start: bool) -> String {
+    if matches!(spec.mode, TracefsCaptureMode::FunctionGraph { .. }) {
+        let root = sh(spec.remote_root);
+        let lock = sh(FUNCTION_GRAPH_GLOBAL_LOCK);
+        let action = if start {
+            "test \"$(cat \"$base/current_tracer\")\" = function_graph; test \"$(cat \"$base/tracing_on\")\" = 0; : > \"$base/trace\"; printf '1\\n' > \"$base/tracing_on\"; printf 'mister-magik-start\\n' > \"$base/trace_marker\"; test \"$(cat \"$base/tracing_on\")\" = 1"
+        } else {
+            "printf 'mister-magik-end\\n' > \"$base/trace_marker\"; printf '0\\n' > \"$base/tracing_on\"; test \"$(cat \"$base/tracing_on\")\" = 0"
+        };
+        return format!(
+            "set -eu; root={root}; test -f \"$root/owned-global-function-graph\"; test -d {lock}; test \"$(cat {lock}/owner)\" = \"$root\"; base=$(cat \"$root/capture-base\"); test \"$base\" = {mount}; {action}",
+            mount = sh(TRACEFS_MOUNT),
+        );
+    }
     let instance = sh(&format!("{TRACEFS_MOUNT}/instances/{}", spec.instance));
     let tracer = match spec.mode {
         TracefsCaptureMode::Events => "nop",
@@ -400,6 +454,14 @@ fn tracefs_control_command(spec: TracefsCaptureSpec, start: bool) -> String {
 
 fn tracefs_retain_command(spec: TracefsCaptureSpec) -> String {
     let root = sh(spec.remote_root);
+    if matches!(spec.mode, TracefsCaptureMode::FunctionGraph { .. }) {
+        let lock = sh(FUNCTION_GRAPH_GLOBAL_LOCK);
+        return format!(
+            "set -eu; root={root}; test -d {lock}; test \"$(cat {lock}/owner)\" = \"$root\"; base=$(cat \"$root/capture-base\"); test \"$base\" = {mount}; test \"$(cat \"$base/tracing_on\")\" = 0; cat \"$base/trace\" > \"$root/trace.txt\"; bytes=$(wc -c < \"$root/trace.txt\"); test \"$bytes\" -gt 0; test \"$bytes\" -le {max_bytes}; : > \"$root/trace-stats.txt\"; for stats in \"$base\"/per_cpu/cpu*/stats; do printf '== %s ==\\n' \"$stats\" >> \"$root/trace-stats.txt\"; cat \"$stats\" >> \"$root/trace-stats.txt\"; done; test -s \"$root/trace-stats.txt\"",
+            mount = sh(TRACEFS_MOUNT),
+            max_bytes = TRACE_MAX_BYTES,
+        );
+    }
     let instance = sh(&format!("{TRACEFS_MOUNT}/instances/{}", spec.instance));
     format!(
         "set -eu; test \"$(cat {instance}/tracing_on)\" = 0; cat {instance}/trace > {root}/trace.txt; bytes=$(wc -c < {root}/trace.txt); test \"$bytes\" -gt 0; test \"$bytes\" -le {max_bytes}; : > {root}/trace-stats.txt; for stats in {instance}/per_cpu/cpu*/stats; do printf '== %s ==\\n' \"$stats\" >> {root}/trace-stats.txt; cat \"$stats\" >> {root}/trace-stats.txt; done; test -s {root}/trace-stats.txt",
@@ -410,6 +472,18 @@ fn tracefs_retain_command(spec: TracefsCaptureSpec) -> String {
 fn tracefs_cleanup_command(spec: TracefsCaptureSpec) -> String {
     let root = sh(spec.remote_root);
     let mount_marker = sh(&format!("{}/owned-tracefs.mount", spec.remote_root));
+    if matches!(spec.mode, TracefsCaptureMode::FunctionGraph { .. }) {
+        let global_marker = sh(&format!("{}/owned-global-function-graph", spec.remote_root));
+        let global_lock_marker = sh(&format!("{}/owned-global-lock", spec.remote_root));
+        let original_clock = sh(&format!("{}/original-trace-clock", spec.remote_root));
+        let original_buffer = sh(&format!("{}/original-buffer-size-kb", spec.remote_root));
+        let lock = sh(FUNCTION_GRAPH_GLOBAL_LOCK);
+        return format!(
+            "set -eu; root={root}; current=$(awk '$2 == \"{mount_path}\" && $3 == \"tracefs\" {{ print }}' /proc/mounts); if test -f {global_marker}; then test -n \"$current\"; test -d {lock}; test -f {global_lock_marker}; test \"$(cat {global_lock_marker})\" = {lock}; test \"$(cat {lock}/owner)\" = \"$root\"; base=$(cat {global_marker}); test \"$base\" = {mount}; printf '0\\n' > \"$base/tracing_on\"; printf '0\\n' > \"$base/events/enable\"; printf 'nop\\n' > \"$base/current_tracer\"; if test -e \"$base/set_graph_function\"; then : > \"$base/set_graph_function\"; fi; if test -e \"$base/set_ftrace_filter\"; then : > \"$base/set_ftrace_filter\"; fi; if test -e \"$base/max_graph_depth\"; then printf '0\\n' > \"$base/max_graph_depth\"; fi; : > \"$base/trace\"; test -s {original_clock}; cat {original_clock} > \"$base/trace_clock\"; test -s {original_buffer}; cat {original_buffer} > \"$base/buffer_size_kb\"; fi; if test -f {global_lock_marker}; then test -d {lock}; test \"$(cat {global_lock_marker})\" = {lock}; test \"$(cat {lock}/owner)\" = \"$root\"; rm {lock}/owner; rmdir {lock}; fi; if test -f {mount_marker}; then current=$(awk '$2 == \"{mount_path}\" && $3 == \"tracefs\" {{ print }}' /proc/mounts); owned=$(cat {mount_marker}); if test -n \"$current\"; then test \"$current\" = \"$owned\"; i=0; while ! umount {mount} 2>/dev/null && test \"$i\" -lt 50; do i=$((i+1)); sleep 0.1; done; current=$(awk '$2 == \"{mount_path}\" && $3 == \"tracefs\" {{ print }}' /proc/mounts); test -z \"$current\"; fi; fi; rm -rf \"$root\"; test ! -e \"$root\"",
+            mount_path = TRACEFS_MOUNT,
+            mount = sh(TRACEFS_MOUNT),
+        );
+    }
     let instance_marker = sh(&format!("{}/owned-instance", spec.remote_root));
     let instance_path = format!("{TRACEFS_MOUNT}/instances/{}", spec.instance);
     let instance = sh(&instance_path);
@@ -1108,7 +1182,7 @@ mod tests {
     }
 
     #[test]
-    fn function_graph_commands_resolve_allowlisted_groups_and_restore_nop() {
+    fn function_graph_commands_guard_global_state_and_restore_it() {
         const GROUPS: &[TracefsFunctionGroup] = &[
             TracefsFunctionGroup {
                 label: "directory-walk",
@@ -1131,6 +1205,12 @@ mod tests {
         let cleanup = tracefs_cleanup_command(spec);
         assert!(prepare.contains("available_tracers"));
         assert!(prepare.contains("available_filter_functions"));
+        assert!(prepare.contains("backend global-legacy"));
+        assert!(prepare.contains(FUNCTION_GRAPH_GLOBAL_LOCK));
+        assert!(prepare.contains("owned-global-function-graph"));
+        assert!(prepare.contains("original-trace-clock"));
+        assert!(prepare.contains("original-buffer-size-kb"));
+        assert!(prepare.contains("entries-in-buffer/entries-written: 0/0"));
         assert!(prepare.contains("function-group:directory-walk"));
         assert!(prepare.contains("function-group:durability"));
         assert!(prepare.contains("set_graph_function"));
@@ -1141,8 +1221,11 @@ mod tests {
         assert!(prepare.contains(&FUNCTION_GRAPH_MAX_DEPTH.to_string()));
         assert!(prepare.contains(&FUNCTION_GRAPH_BUFFER_KB.to_string()));
         assert!(start.contains("function_graph"));
+        assert!(start.contains("capture-base"));
         assert!(cleanup.contains("current_tracer"));
         assert!(cleanup.contains("printf 'nop"));
+        assert!(cleanup.contains("original-trace-clock"));
+        assert!(cleanup.contains("original-buffer-size-kb"));
         assert!(cleanup.contains("rmdir"));
     }
 
