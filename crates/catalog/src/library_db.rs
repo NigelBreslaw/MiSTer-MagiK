@@ -2264,17 +2264,13 @@ impl CatalogProjectionBuildContext<'_> {
                 prepared: discovery.prepared,
             },
         );
-        if is_arcade {
-            if let Some(identity_id) = mame_identity_for_discovery(discovery)
-                && let Some(metadata) = mister_arcade_metadata_for_discovery(
-                    self.arcade_metadata,
-                    discovery,
-                    &identity_id,
-                )
-                && !metadata.title.is_empty()
-            {
-                row.game.title = metadata.title.clone().into();
-            }
+        if is_arcade
+            && let Some(identity_id) = mame_identity_for_discovery(discovery)
+            && let Some(metadata) =
+                mister_arcade_metadata_for_discovery(self.arcade_metadata, discovery, &identity_id)
+            && !metadata.title.is_empty()
+        {
+            row.game.title = metadata.title.clone().into();
         }
         Some(CatalogProjectionForDiscovery {
             row,

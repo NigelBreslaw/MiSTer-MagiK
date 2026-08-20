@@ -1377,7 +1377,7 @@ impl BuilderBackend for SystemBuilderBackend {
                             "builder_post_scan_unchanged".into(),
                             format!(
                                 "status=continue elapsed_us={elapsed_us} reason=summary-unavailable error={}",
-                                error.replace('\t', " ").replace('\n', " ")
+                                error.replace(['\t', '\n'], " ")
                             ),
                         )],
                     });
@@ -1388,16 +1388,10 @@ impl BuilderBackend for SystemBuilderBackend {
         let reason = if !current_projection {
             match repair {
                 Ok(status) => format!("projection-{}", status.label()),
-                Err(error) => format!(
-                    "projection-error-{}",
-                    error.replace('\t', " ").replace('\n', " ")
-                ),
+                Err(error) => format!("projection-error-{}", error.replace(['\t', '\n'], " ")),
             }
         } else if let Err(error) = stored {
-            format!(
-                "state-unavailable-{}",
-                error.replace('\t', " ").replace('\n', " ")
-            )
+            format!("state-unavailable-{}", error.replace(['\t', '\n'], " "))
         } else {
             "state-changed".to_string()
         };

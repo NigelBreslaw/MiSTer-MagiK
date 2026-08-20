@@ -2737,7 +2737,7 @@ fn raw565_words_from_le_bytes(data: &[u8], context: &str) -> Result<Vec<u16>, St
         ));
     }
     let mut words = Vec::with_capacity(data.len() / 2);
-    for chunk in data.chunks_exact(2) {
+    for chunk in data.as_chunks::<2>().0 {
         words.push(u16::from_le_bytes([chunk[0], chunk[1]]));
     }
     Ok(words)

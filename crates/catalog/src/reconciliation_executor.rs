@@ -616,7 +616,7 @@ fn execute_fresh_pipeline(
     nonce: u128,
     limits: RegistryLimits,
     materializer: &mut impl ReconciliationMaterializer,
-    mut resume_journal: Option<&mut crate::build_progress::BuildProgressJournal>,
+    resume_journal: Option<&mut crate::build_progress::BuildProgressJournal>,
 ) -> Result<FreshPipelineOutcome, ReconciliationError> {
     let pipeline_started = Instant::now();
     let background = crate::cooperative_work::in_background_scope();
@@ -804,7 +804,7 @@ fn execute_fresh_pipeline(
         let publish_time = completed
             .iter()
             .fold(Duration::ZERO, |total, shard| total + shard.publish_time);
-        if let Some(journal) = resume_journal.as_deref_mut()
+        if let Some(journal) = resume_journal
             && !completed.is_empty()
         {
             sync_artifact_batch(storage_root)

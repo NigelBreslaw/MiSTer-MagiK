@@ -84,7 +84,7 @@ pub fn parse_main_recent(data: &[u8]) -> Result<Vec<LegacyRecentRecord>, String>
         return Err("legacy recent file has a truncated record".to_string());
     }
     let mut records = Vec::new();
-    for record in data.chunks_exact(RECENT_RECORD_BYTES) {
+    for record in data.as_chunks::<RECENT_RECORD_BYTES>().0 {
         let dir = nul_terminated(&record[..1024], "directory")?;
         let name = nul_terminated(&record[1024..1280], "name")?;
         let title = nul_terminated(&record[1280..], "label")?;

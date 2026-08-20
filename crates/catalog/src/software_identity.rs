@@ -818,7 +818,7 @@ pub(crate) fn rom_hash_candidates(list_name: &str, bytes: &[u8]) -> Vec<Vec<u8>>
 
 pub(crate) fn swap_pairs(bytes: &[u8]) -> Vec<u8> {
     let mut out = bytes.to_vec();
-    for chunk in out.chunks_exact_mut(2) {
+    for chunk in out.as_chunks_mut::<2>().0 {
         chunk.swap(0, 1);
     }
     out
@@ -826,7 +826,7 @@ pub(crate) fn swap_pairs(bytes: &[u8]) -> Vec<u8> {
 
 pub(crate) fn swap_words(bytes: &[u8]) -> Vec<u8> {
     let mut out = bytes.to_vec();
-    for chunk in out.chunks_exact_mut(4) {
+    for chunk in out.as_chunks_mut::<4>().0 {
         chunk.swap(0, 2);
         chunk.swap(1, 3);
     }
@@ -835,7 +835,7 @@ pub(crate) fn swap_words(bytes: &[u8]) -> Vec<u8> {
 
 pub(crate) fn reverse_words(bytes: &[u8]) -> Vec<u8> {
     let mut out = bytes.to_vec();
-    for chunk in out.chunks_exact_mut(4) {
+    for chunk in out.as_chunks_mut::<4>().0 {
         chunk.reverse();
     }
     out
