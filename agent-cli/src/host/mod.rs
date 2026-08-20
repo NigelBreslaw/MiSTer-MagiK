@@ -16042,6 +16042,12 @@ fn catalog_attribution_launcher_env(arm: CatalogAttributionArm) -> Vec<(String, 
             value.to_string_lossy().into_owned(),
         ));
     }
+    if let Some(value) = env::var_os("MISTER_BENCH_CATALOG_ARTIFACT_COPY") {
+        env.push((
+            "MISTER_CATALOG_ARTIFACT_COPY".into(),
+            value.to_string_lossy().into_owned(),
+        ));
+    }
     env
 }
 

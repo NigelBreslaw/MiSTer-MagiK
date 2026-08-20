@@ -329,6 +329,14 @@ fn copy_staged_artifact(
     label: &'static str,
     expected: u64,
 ) -> Result<CopiedArtifact, RegistryError> {
+    let mode =
+        artifact_copy_mode_from_value(std::env::var_os("MISTER_CATALOG_ARTIFACT_COPY").as_deref())
+            .map_err(|value| {
+                RegistryError::new(
+                    "publish-artifact",
+                    format!("invalid artifact copy mode {value}"),
+                )
+            })?;
     let temporary = target.with_file_name(format!(
         ".{}.tmp.{}",
         target
@@ -350,22 +358,37 @@ fn copy_staged_artifact(
         .write(true)
         .open(&temporary)
         .map_err(|error| RegistryError::with("create artifact copy", error))?;
+    if mode == ArtifactCopyMode::Preallocated {
+        output
+            .set_len(expected)
+            .map_err(|error| RegistryError::with("preallocate artifact copy", error))?;
+        output
+            .seek(SeekFrom::Start(0))
+            .map_err(|error| RegistryError::with("rewind preallocated artifact", error))?;
+    }
     let mut copied = 0_u64;
     let mut hash = 0xcbf2_9ce4_8422_2325u64;
     let mut buffer = [0_u8; 256 * 1024];
     let copy_hash_started = Instant::now();
-    loop {
-        let read = input
-            .read(&mut buffer)
-            .map_err(|error| RegistryError::with("read staged artifact", error))?;
-        if read == 0 {
-            break;
+    if mode == ArtifactCopyMode::CopyFileRange {
+        copied = copy_file_range_all(&input, &output, expected)?;
+        hash = u64::from_str_radix(&file_checksum(&temporary)?, 16)
+            .map_err(|error| RegistryError::new("publish-artifact", error.to_string()))?;
+    } else {
+        loop {
+            crate::cooperative_work::checkpoint();
+            let read = input
+                .read(&mut buffer)
+                .map_err(|error| RegistryError::with("read staged artifact", error))?;
+            if read == 0 {
+                break;
+            }
+            output
+                .write_all(&buffer[..read])
+                .map_err(|error| RegistryError::with("copy staged artifact", error))?;
+            copied = copied.saturating_add(read as u64);
+            update_checksum(&mut hash, &buffer[..read]);
         }
-        output
-            .write_all(&buffer[..read])
-            .map_err(|error| RegistryError::with("copy staged artifact", error))?;
-        copied = copied.saturating_add(read as u64);
-        update_checksum(&mut hash, &buffer[..read]);
     }
     if copied != expected {
         return Err(RegistryError::new(
@@ -374,6 +397,13 @@ fn copy_staged_artifact(
         ));
     }
     let copy_hash_time = copy_hash_started.elapsed();
+    crate::catalog_logln!(
+        "catalog_artifact_copy_tsv\tlabel={}\tmode={}\tbytes={}\telapsed_us={}",
+        label,
+        mode.label(),
+        copied,
+        copy_hash_time.as_micros(),
+    );
     drop(output);
     fs::rename(&temporary, target)
         .map_err(|error| RegistryError::with("commit copied artifact", error))?;
@@ -383,6 +413,82 @@ fn copy_staged_artifact(
         hash: format!("{hash:016x}"),
         copy_hash_time,
     })
+}
+
+#[cfg(feature = "builder")]
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum ArtifactCopyMode {
+    #[default]
+    Buffered,
+    Preallocated,
+    CopyFileRange,
+}
+
+#[cfg(feature = "builder")]
+impl ArtifactCopyMode {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Buffered => "buffered",
+            Self::Preallocated => "preallocated",
+            Self::CopyFileRange => "copy-file-range",
+        }
+    }
+}
+
+#[cfg(feature = "builder")]
+fn artifact_copy_mode_from_value(
+    value: Option<&std::ffi::OsStr>,
+) -> Result<ArtifactCopyMode, String> {
+    match value.and_then(std::ffi::OsStr::to_str) {
+        None | Some("") | Some("buffered") => Ok(ArtifactCopyMode::Buffered),
+        Some("preallocated") => Ok(ArtifactCopyMode::Preallocated),
+        Some("copy-file-range") => Ok(ArtifactCopyMode::CopyFileRange),
+        Some(value) => Err(value.to_string()),
+    }
+}
+
+#[cfg(all(feature = "builder", target_os = "linux"))]
+fn copy_file_range_all(input: &File, output: &File, expected: u64) -> Result<u64, RegistryError> {
+    use std::os::fd::AsRawFd;
+
+    let mut copied = 0u64;
+    while copied < expected {
+        crate::cooperative_work::checkpoint();
+        let remaining = expected.saturating_sub(copied).min(256 * 1024) as usize;
+        let written = unsafe {
+            libc::copy_file_range(
+                input.as_raw_fd(),
+                std::ptr::null_mut(),
+                output.as_raw_fd(),
+                std::ptr::null_mut(),
+                remaining,
+                0,
+            )
+        };
+        if written < 0 {
+            return Err(RegistryError::with(
+                "copy artifact with copy_file_range",
+                std::io::Error::last_os_error(),
+            ));
+        }
+        if written == 0 {
+            break;
+        }
+        copied = copied.saturating_add(written as u64);
+    }
+    Ok(copied)
+}
+
+#[cfg(all(feature = "builder", not(target_os = "linux")))]
+fn copy_file_range_all(
+    _input: &File,
+    _output: &File,
+    _expected: u64,
+) -> Result<u64, RegistryError> {
+    Err(RegistryError::new(
+        "copy artifact with copy_file_range",
+        "copy_file_range is only available on Linux",
+    ))
 }
 
 #[cfg(feature = "builder")]
@@ -1135,6 +1241,24 @@ mod tests {
         assert_eq!(copied.hash, file_checksum(&source).unwrap());
         assert_eq!(fs::read(target).unwrap(), bytes);
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    #[cfg(feature = "builder")]
+    fn artifact_copy_modes_are_typed_and_default_to_buffered() {
+        assert_eq!(
+            artifact_copy_mode_from_value(None).unwrap(),
+            ArtifactCopyMode::Buffered
+        );
+        assert_eq!(
+            artifact_copy_mode_from_value(Some(std::ffi::OsStr::new("preallocated"))).unwrap(),
+            ArtifactCopyMode::Preallocated
+        );
+        assert_eq!(
+            artifact_copy_mode_from_value(Some(std::ffi::OsStr::new("copy-file-range"))).unwrap(),
+            ArtifactCopyMode::CopyFileRange
+        );
+        assert!(artifact_copy_mode_from_value(Some(std::ffi::OsStr::new("automatic"))).is_err());
     }
 
     #[test]
