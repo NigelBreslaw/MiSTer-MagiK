@@ -3,7 +3,6 @@
 
 //! Shared metadata for collections that provide their own one-click launch artifacts.
 
-use sha2::{Digest, Sha256};
 use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::fmt;
@@ -67,28 +66,6 @@ impl PreparedPayloadIndex {
 
     pub(crate) fn complete_root_count(&self) -> usize {
         self.complete_roots.len()
-    }
-
-    pub(crate) fn contract_signature(&self) -> String {
-        let mut records = self
-            .exact_files
-            .iter()
-            .map(|path| prepared_path_bytes(path).to_vec())
-            .collect::<Vec<_>>();
-        records.sort_unstable();
-        let mut digest = Sha256::new();
-        digest.update(PREPARED_COLLECTION_ADAPTER_VERSION.to_le_bytes());
-        for record in records {
-            digest.update((record.len() as u64).to_le_bytes());
-            digest.update(record);
-        }
-        let bytes = digest.finalize();
-        let mut encoded = String::with_capacity(bytes.len() * 2);
-        for byte in bytes {
-            use std::fmt::Write as _;
-            let _ = write!(encoded, "{byte:02x}");
-        }
-        encoded
     }
 
     pub(crate) fn lookup_stats(&self) -> PreparedPayloadIndexStats {
@@ -252,17 +229,6 @@ impl PreparedPayloadIndex {
         self.live_fallbacks
             .set(self.live_fallbacks.get().saturating_add(1));
     }
-}
-
-#[cfg(unix)]
-fn prepared_path_bytes(path: &Path) -> &[u8] {
-    use std::os::unix::ffi::OsStrExt as _;
-    path.as_os_str().as_bytes()
-}
-
-#[cfg(not(unix))]
-fn prepared_path_bytes(path: &Path) -> &[u8] {
-    path.as_os_str().to_str().unwrap_or("").as_bytes()
 }
 
 fn lexically_normalized_path(path: &Path) -> PathBuf {
