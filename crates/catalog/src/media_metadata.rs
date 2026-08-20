@@ -454,9 +454,17 @@ fn apply_mra_metadata_event(
 ) -> bool {
     match event {
         Event::Start(e) => {
+            // The MRA metadata contract places the descriptive header before
+            // the first ROM payload. ROM elements can contain a large number
+            // of parts and patches, none of which affect catalog projection,
+            // so do not pull that payload from exFAT during discovery.
+            if e.name().as_ref().eq_ignore_ascii_case(b"rom") {
+                return false;
+            }
             *field = mra_metadata_field(e.name().as_ref());
             field_text.clear();
         }
+        Event::Empty(e) if e.name().as_ref().eq_ignore_ascii_case(b"rom") => return false,
         Event::Text(e) => {
             if field.is_some()
                 && let Ok(value) = e.xml10_content()
@@ -999,6 +1007,49 @@ mod tests {
         assert_eq!(metadata.name.as_deref(), Some("Fast Game"));
         assert_eq!(metadata.rbf.as_deref(), Some("Arcade"));
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn mra_metadata_parser_stops_before_rom_payload_bytes() {
+        use std::cell::Cell;
+        use std::io::{BufReader, Cursor, Read};
+        use std::rc::Rc;
+
+        struct CountingReader {
+            cursor: Cursor<Vec<u8>>,
+            bytes_read: Rc<Cell<usize>>,
+        }
+
+        impl Read for CountingReader {
+            fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+                let read = self.cursor.read(buf)?;
+                self.bytes_read.set(self.bytes_read.get() + read);
+                Ok(read)
+            }
+        }
+
+        let mut document = br#"<misterromdescription>
+            <name>Fast Game</name>
+            <rbf>Arcade</rbf>
+            <platform>Arcade</platform>
+            <rom index="0">"#
+            .to_vec();
+        document.extend(std::iter::repeat_n(b'x', 128 * 1024));
+        document.extend_from_slice(b"</rom></misterromdescription>");
+        let document_len = document.len();
+        let bytes_read = Rc::new(Cell::new(0));
+        let reader = CountingReader {
+            cursor: Cursor::new(document),
+            bytes_read: Rc::clone(&bytes_read),
+        };
+
+        let metadata = parse_mra_metadata_xml_reader(BufReader::with_capacity(512, reader))
+            .expect("MRA metadata");
+
+        assert_eq!(metadata.name.as_deref(), Some("Fast Game"));
+        assert_eq!(metadata.rbf.as_deref(), Some("Arcade"));
+        assert_eq!(metadata.platform.as_deref(), Some("Arcade"));
+        assert!(bytes_read.get() < document_len / 100);
     }
 
     #[test]
