@@ -21,6 +21,7 @@ const SYSTEM_ENTRY_TRIGGER: &str = "system-entry";
 const LAUNCHER_RESPONSE_TRIGGER: &str = "launcher-response";
 const ARCADE_VELOCITY_SCROLL_TRIGGER: &str = "arcade-velocity-scroll";
 const CATALOG_BUILD_TRIGGER: &str = "catalog-build";
+const CATALOG_BUILD_FULL_TRIGGER: &str = "catalog-build-full";
 const PPROF: &str = "MISTER_PPROF";
 const PPROF_TRIGGER: &str = "MISTER_PPROF_TRIGGER";
 const PPROF_DURATION_SECS: &str = "MISTER_PPROF_DURATION_SECS";
@@ -138,6 +139,7 @@ pub struct CpuProfileConfig {
     out_path: String,
     folded_out_path: Option<String>,
     complete_path: Option<String>,
+    catalog_build_full: bool,
 }
 
 impl CpuProfileConfig {
@@ -161,6 +163,8 @@ impl CpuProfileConfig {
             out_path: get(PPROF_OUT).unwrap_or("/tmp/mister-pprof.svg").to_owned(),
             folded_out_path: get(PPROF_FOLDED_OUT).map(str::to_owned),
             complete_path: get(PPROF_COMPLETE).map(str::to_owned),
+            catalog_build_full: enabled_value == Some("1")
+                && trigger_value == Some(CATALOG_BUILD_FULL_TRIGGER),
         }
     }
 
@@ -221,7 +225,9 @@ fn bounded_profile_trigger_from_values(
         }
         Some(LAUNCHER_RESPONSE_TRIGGER) => Some(BoundedProfileTrigger::LauncherResponse),
         Some(ARCADE_VELOCITY_SCROLL_TRIGGER) => Some(BoundedProfileTrigger::ArcadeVelocityScroll),
-        Some(CATALOG_BUILD_TRIGGER) => Some(BoundedProfileTrigger::CatalogBuild),
+        Some(CATALOG_BUILD_TRIGGER | CATALOG_BUILD_FULL_TRIGGER) => {
+            Some(BoundedProfileTrigger::CatalogBuild)
+        }
         Some(LAUNCH_RETURN_TRIGGER) => Some(BoundedProfileTrigger::LaunchReturn),
         Some(COLD_BOOT_TRIGGER) => Some(BoundedProfileTrigger::ColdBoot),
         _ => None,
@@ -596,6 +602,7 @@ mod imp {
         profiler: Option<CpuProfiler>,
         operation: Option<String>,
         finished: bool,
+        scope: &'static str,
     }
 
     pub struct CatalogBuildProfiler {
@@ -608,12 +615,18 @@ mod imp {
             let values: std::collections::BTreeMap<String, String> = std::env::vars().collect();
             let config =
                 CpuProfileConfig::capture_with(|name| values.get(name).map(String::as_str));
+            let scope = if config.catalog_build_full {
+                "full-build"
+            } else {
+                "post-scan"
+            };
             Self {
                 config,
                 session: std::sync::Arc::new(std::sync::Mutex::new(CatalogBuildSession {
                     profiler: None,
                     operation: None,
                     finished: false,
+                    scope,
                 })),
             }
         }
@@ -628,6 +641,10 @@ mod imp {
             };
             if session.operation.is_none() && !session.finished {
                 session.operation = Some(operation.to_owned());
+            }
+            drop(session);
+            if self.config.catalog_build_full {
+                self.begin(operation);
             }
         }
 
@@ -735,7 +752,7 @@ mod imp {
         state: &str,
         outcome: &str,
     ) {
-        let (profiler, operation) = {
+        let (profiler, operation, scope) = {
             let Ok(mut session) = session.lock() else {
                 crate::ui_errln!("catalog-build cpu profile session lock poisoned");
                 return;
@@ -744,13 +761,17 @@ mod imp {
                 return;
             }
             session.finished = true;
-            (session.profiler.take(), session.operation.take())
+            (
+                session.profiler.take(),
+                session.operation.take(),
+                session.scope,
+            )
         };
         let result = finish(profiler);
         let mut metadata = match &result {
             Ok(Some(summary)) => json!({
                 "schema": "mister-magik-catalog-build-pprof-v1",
-                "scope": "post-scan",
+                "scope": scope,
                 "state": state,
                 "outcome": outcome,
                 "duration_secs": summary.duration_secs,
@@ -762,14 +783,14 @@ mod imp {
             }),
             Ok(None) => json!({
                 "schema": "mister-magik-catalog-build-pprof-v1",
-                "scope": "post-scan",
+                "scope": scope,
                 "state": "failed",
                 "outcome": outcome,
                 "error": "profiler-produced-no-summary",
             }),
             Err(error) => json!({
                 "schema": "mister-magik-catalog-build-pprof-v1",
-                "scope": "post-scan",
+                "scope": scope,
                 "state": "failed",
                 "outcome": outcome,
                 "error": error,
@@ -1324,6 +1345,10 @@ mod tests {
         );
         assert_eq!(
             bounded_profile_trigger_from_values(Some("1"), Some("catalog-build")),
+            Some(BoundedProfileTrigger::CatalogBuild)
+        );
+        assert_eq!(
+            bounded_profile_trigger_from_values(Some("1"), Some("catalog-build-full")),
             Some(BoundedProfileTrigger::CatalogBuild)
         );
         assert_eq!(

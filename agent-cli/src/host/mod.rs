@@ -16013,7 +16013,7 @@ fn catalog_attribution_launcher_env(arm: CatalogAttributionArm) -> Vec<(String, 
     match arm {
         CatalogAttributionArm::Pprof => env.extend([
             ("MISTER_PPROF".into(), "1".into()),
-            ("MISTER_PPROF_TRIGGER".into(), "catalog-build".into()),
+            ("MISTER_PPROF_TRIGGER".into(), "catalog-build-full".into()),
             ("MISTER_PPROF_HZ".into(), "99".into()),
             ("MISTER_PPROF_DURATION_SECS".into(), "600".into()),
             (
