@@ -19352,12 +19352,13 @@ fn catalog_logical_fingerprint(catalog: &Value) -> Result<String> {
 }
 
 fn catalog_phase_evidence(log: &str) -> Value {
-    const RECORDS: [&str; 14] = [
+    const RECORDS: [&str; 15] = [
         "startup_timing",
         "catalog_scan_attribution_tsv",
         "catalog_scan_handoff_tsv",
         "catalog_target_handoff_tsv",
         "catalog_system_finality_tsv",
+        "catalog_runtime_classification_tsv",
         "catalog_target_checkpoint_io_tsv",
         "catalog_shard_staging_tsv",
         "library_scan_timing",

@@ -32,6 +32,7 @@ use std::time::Instant;
 const SCAN_PROGRESS_CANDIDATE_BATCH: usize = 50;
 const BOOTSTRAP_PROGRESS_BATCH: usize = 50;
 const ARCADE_MRA_READ_WORKERS: usize = 4;
+const PARALLEL_RUNTIME_MIN_FILES: usize = 4096;
 pub(crate) struct LibraryIndexer<'a> {
     cfg: &'a BenchConfig,
     archive_reader: crate::catalog_config::ArchiveReaderConfig,
@@ -175,6 +176,22 @@ struct ScanHandoffAttribution {
     target_events: usize,
     files: usize,
     max_batch: usize,
+}
+
+#[derive(Default)]
+struct RuntimeClassificationOutput {
+    normal_files: Vec<LibraryPayloadFile>,
+    ignored_files: usize,
+    discoveries: Vec<GameDiscovery>,
+    candidates: usize,
+    first_candidate_path: Option<String>,
+    timing: ScanTimingStats,
+}
+
+struct ParallelRuntimeClassification {
+    output: RuntimeClassificationOutput,
+    main_us: u64,
+    helper_us: u64,
 }
 
 impl ScanHandoffAttribution {
@@ -766,6 +783,48 @@ struct FileDiscoveryTimingBucket {
 }
 
 impl ScanTimingStats {
+    fn merge(&mut self, other: Self) {
+        self.profile_match_us = self.profile_match_us.saturating_add(other.profile_match_us);
+        self.profile_match_count = self
+            .profile_match_count
+            .saturating_add(other.profile_match_count);
+        self.file_discovery_us = self
+            .file_discovery_us
+            .saturating_add(other.file_discovery_us);
+        self.file_discovery_count = self
+            .file_discovery_count
+            .saturating_add(other.file_discovery_count);
+        self.archive_toc_us = self.archive_toc_us.saturating_add(other.archive_toc_us);
+        self.archive_toc_count = self
+            .archive_toc_count
+            .saturating_add(other.archive_toc_count);
+        self.installed_collection_us = self
+            .installed_collection_us
+            .saturating_add(other.installed_collection_us);
+        self.installed_collection_count = self
+            .installed_collection_count
+            .saturating_add(other.installed_collection_count);
+        self.collection_listing_us = self
+            .collection_listing_us
+            .saturating_add(other.collection_listing_us);
+        self.collection_listing_count = self
+            .collection_listing_count
+            .saturating_add(other.collection_listing_count);
+        for (profile, extensions) in other.file_discovery_breakdown {
+            for (extension, other_bucket) in extensions {
+                let bucket = self
+                    .file_discovery_breakdown
+                    .entry(profile.clone())
+                    .or_default()
+                    .entry(extension)
+                    .or_default();
+                bucket.elapsed_us = bucket.elapsed_us.saturating_add(other_bucket.elapsed_us);
+                bucket.calls = bucket.calls.saturating_add(other_bucket.calls);
+                bucket.max_us = bucket.max_us.max(other_bucket.max_us);
+            }
+        }
+    }
+
     fn record_file_discovery(&mut self, profile_id: &str, extension: &str, elapsed_us: u64) {
         self.file_discovery_us = self.file_discovery_us.saturating_add(elapsed_us);
         self.file_discovery_count = self.file_discovery_count.saturating_add(1);
@@ -832,6 +891,193 @@ fn file_discovery_source_class(extension: &str) -> &'static str {
         "mgl-metadata"
     } else {
         "path-derived"
+    }
+}
+
+fn classify_runtime_batch_parallel(
+    header_name: &str,
+    files: &[catalog_scan::FoundFile],
+    profiles: &[launch_profiles::LaunchProfile],
+    prepared_payload_index: &PreparedPayloadIndex,
+    priority: LibraryScanPriority,
+) -> Option<ParallelRuntimeClassification> {
+    if !matches!(priority, LibraryScanPriority::Background)
+        || files.len() < PARALLEL_RUNTIME_MIN_FILES
+        || crate::cooperative_work::current_work_mode()
+            != crate::cooperative_work::CatalogWorkMode::DualCoreBurst
+    {
+        return None;
+    }
+    let target_profile = launch_profiles::profile_for_game_dir(profiles, header_name)?;
+    if !target_profile.collection_rules.is_empty()
+        || !target_profile.archive_entry_rules.is_empty()
+        || files.iter().any(|file| {
+            matches!(file.ext.as_str(), "mra" | "mgl" | "hdf")
+                || ArchiveFormat::from_ext(&file.ext).is_some()
+        })
+    {
+        return None;
+    }
+
+    let split = files.len().div_ceil(2);
+    let (main_files, helper_files) = files.split_at(split);
+    if helper_files.is_empty() {
+        return None;
+    }
+    let main_index = prepared_payload_index.fork_for_parallel_read();
+    let helper_index = prepared_payload_index.fork_for_parallel_read();
+    let (main, helper) = std::thread::scope(|scope| {
+        let helper = std::thread::Builder::new()
+            .name("catalog-classify".to_string())
+            .spawn_scoped(scope, move || {
+                crate::runtime_thread::apply_runtime_thread_policy(
+                    crate::runtime_thread::RuntimeThreadRole::LibraryWalker,
+                );
+                let _background_scope = crate::cooperative_work::BackgroundScope::enter();
+                let started = Instant::now();
+                let output = classify_simple_runtime_slice(helper_files, profiles, &helper_index);
+                (
+                    output,
+                    helper_index.lookup_stats(),
+                    started.elapsed().as_micros() as u64,
+                )
+            })
+            .ok()?;
+        let _background_scope = crate::cooperative_work::BackgroundScope::enter();
+        let main_started = Instant::now();
+        let main_output = classify_simple_runtime_slice(main_files, profiles, &main_index);
+        let main_us = main_started.elapsed().as_micros() as u64;
+        let main_stats = main_index.lookup_stats();
+        let (helper_output, helper_stats, helper_us) = helper.join().ok()?;
+        Some((
+            (main_output, main_stats, main_us),
+            (helper_output, helper_stats, helper_us),
+        ))
+    })?;
+    let (Some(mut output), main_stats, main_us) = main else {
+        return None;
+    };
+    let (Some(helper_output), helper_stats, helper_us) = helper else {
+        return None;
+    };
+    output.merge(helper_output);
+    prepared_payload_index.merge_lookup_stats(main_stats);
+    prepared_payload_index.merge_lookup_stats(helper_stats);
+    Some(ParallelRuntimeClassification {
+        output,
+        main_us,
+        helper_us,
+    })
+}
+
+fn classify_simple_runtime_slice(
+    files: &[catalog_scan::FoundFile],
+    profiles: &[launch_profiles::LaunchProfile],
+    prepared_payload_index: &PreparedPayloadIndex,
+) -> Option<RuntimeClassificationOutput> {
+    let mut output = RuntimeClassificationOutput::default();
+    for (offset, file) in files.iter().enumerate() {
+        if offset.is_multiple_of(16) {
+            crate::cooperative_work::checkpoint();
+        }
+        if !catalog_scan::is_index_candidate(profiles, &file.path, &file.ext) {
+            continue;
+        }
+        output.candidates = output.candidates.saturating_add(1);
+        if output.first_candidate_path.is_none() {
+            output.first_candidate_path = Some(file.path.display().to_string());
+        }
+        let profile_match_started = Instant::now();
+        let profile_match = catalog_scan::classify_profile_path(profiles, &file.path);
+        output.timing.profile_match_us = output
+            .timing
+            .profile_match_us
+            .saturating_add(profile_match_started.elapsed().as_micros() as u64);
+        output.timing.profile_match_count = output.timing.profile_match_count.saturating_add(1);
+        match profile_match {
+            Some((
+                profile,
+                ProfilePathClass::Payload {
+                    rule:
+                        payload_rule @ PayloadRule {
+                            disposition: PayloadDisposition::Playable,
+                            ..
+                        },
+                },
+            )) => {
+                if media_metadata::is_amigavision_save_media_path(&file.path) {
+                    output.ignored_files = output.ignored_files.saturating_add(1);
+                    continue;
+                }
+                let installed_started = Instant::now();
+                let installed =
+                    media_metadata::installed_amigavision_discoveries_from_hdf(file, profile);
+                output.timing.installed_collection_us = output
+                    .timing
+                    .installed_collection_us
+                    .saturating_add(installed_started.elapsed().as_micros() as u64);
+                output.timing.installed_collection_count =
+                    output.timing.installed_collection_count.saturating_add(1);
+                if let Some(installed) = installed {
+                    output.ignored_files = output.ignored_files.saturating_add(1);
+                    output.discoveries.extend(installed);
+                    continue;
+                }
+                output.normal_files.push(LibraryPayloadFile {
+                    path: file.path.display().to_string(),
+                });
+                let discovery_started = Instant::now();
+                output.discoveries.push(
+                    discovery_from_profile_file_with_prepared_index_and_mra_metadata(
+                        file,
+                        profile,
+                        &payload_rule,
+                        profiles,
+                        Some(prepared_payload_index),
+                        None,
+                    ),
+                );
+                output.timing.record_file_discovery(
+                    profile.id.as_str(),
+                    file.ext.as_str(),
+                    discovery_started.elapsed().as_micros() as u64,
+                );
+            }
+            Some((
+                _,
+                ProfilePathClass::Payload {
+                    rule:
+                        PayloadRule {
+                            disposition: PayloadDisposition::AttachedMedia,
+                            ..
+                        },
+                },
+            )) => {
+                output.normal_files.push(LibraryPayloadFile {
+                    path: file.path.display().to_string(),
+                });
+                output.ignored_files = output.ignored_files.saturating_add(1);
+            }
+            Some((_, ProfilePathClass::Ignored { .. })) => {
+                output.ignored_files = output.ignored_files.saturating_add(1);
+            }
+            Some((_, ProfilePathClass::NotMatched)) | None => {}
+            Some((_, ProfilePathClass::Collection { .. })) => return None,
+        }
+    }
+    Some(output)
+}
+
+impl RuntimeClassificationOutput {
+    fn merge(&mut self, other: Self) {
+        if self.first_candidate_path.is_none() {
+            self.first_candidate_path = other.first_candidate_path.clone();
+        }
+        self.normal_files.extend(other.normal_files);
+        self.ignored_files = self.ignored_files.saturating_add(other.ignored_files);
+        self.discoveries.extend(other.discoveries);
+        self.candidates = self.candidates.saturating_add(other.candidates);
+        self.timing.merge(other.timing);
     }
 }
 
@@ -1322,6 +1568,7 @@ fn scan_library_with_progress_and_events(
                 if skip_target {
                     Vec::new()
                 } else {
+                    let runtime_header_name = runtime.header.name.clone();
                     target_fingerprint.facts(&runtime.facts);
                     if runtime.overflowed {
                         target_checkpointable = false;
@@ -1331,7 +1578,7 @@ fn scan_library_with_progress_and_events(
                     }
                     game_dir_facts.push(runtime.facts);
                     profiles = plan.finalize_profiles(&game_dir_facts);
-                    if runtime.overflowed {
+                    let runtime_files = if runtime.overflowed {
                         library_db::report_library_scan_timing(
                             "runtime_buffer_overflow",
                             0,
@@ -1343,6 +1590,89 @@ fn scan_library_with_progress_and_events(
                         )
                     } else {
                         runtime.files
+                    };
+                    let parallel_started = Instant::now();
+                    if let Some(parallel) = classify_runtime_batch_parallel(
+                        &runtime_header_name,
+                        &runtime_files,
+                        &profiles,
+                        &prepared_payload_index,
+                        priority,
+                    ) {
+                        let elapsed_us = parallel_started.elapsed().as_micros() as u64;
+                        let ParallelRuntimeClassification {
+                            output,
+                            main_us,
+                            helper_us,
+                        } = parallel;
+                        let RuntimeClassificationOutput {
+                            normal_files: batch_normal_files,
+                            ignored_files: batch_ignored_files,
+                            discoveries: batch_discoveries,
+                            candidates: batch_candidates,
+                            first_candidate_path,
+                            timing: batch_timing,
+                        } = output;
+                        handoff_attribution.files = handoff_attribution
+                            .files
+                            .saturating_add(runtime_files.len());
+                        handoff_attribution.max_batch =
+                            handoff_attribution.max_batch.max(runtime_files.len());
+                        if idx == 0
+                            && let Some(path) = first_candidate_path.as_deref()
+                        {
+                            library_db::report_library_scan_timing(
+                                "first_candidate",
+                                classify_t.elapsed().as_micros() as u64,
+                                format!("path={path}"),
+                            );
+                        }
+                        let discoveries_before = discoveries.len();
+                        idx = idx.saturating_add(batch_candidates);
+                        normal_files.extend(batch_normal_files);
+                        ignored_files = ignored_files.saturating_add(batch_ignored_files);
+                        discoveries.extend(batch_discoveries);
+                        timing.merge(batch_timing);
+                        report_new_discovered_systems(
+                            &discoveries[discoveries_before..],
+                            &mut discovered_systems,
+                            &mut scan_events,
+                        );
+                        report_new_scanning_systems(
+                            &discoveries[discoveries_before..],
+                            &mut scanning_systems,
+                            &mut scan_events,
+                        );
+                        if discoveries.len() > discoveries_before && !first_discovery_reported {
+                            first_discovery_reported = true;
+                            library_db::report_library_scan_timing(
+                                "first_discovery",
+                                classify_t.elapsed().as_micros() as u64,
+                                format!(
+                                    "candidate={} discoveries={} path={}",
+                                    idx,
+                                    discoveries.len(),
+                                    first_candidate_path.as_deref().unwrap_or("unknown"),
+                                ),
+                            );
+                        }
+                        report_catalog_progress(
+                            &mut progress,
+                            CatalogProgress::classifying_games_found(discoveries.len()),
+                        );
+                        crate::catalog_logln!(
+                            "catalog_runtime_classification_tsv\tmode=dual-core\tsystem={}\tfiles={}\tcandidates={}\telapsed_us={}\tmain_us={}\thelper_us={}\tsplit={}\tcooperative=epoch-gated",
+                            runtime_header_name.replace(['\t', '\n', '\r'], "_"),
+                            runtime_files.len(),
+                            batch_candidates,
+                            elapsed_us,
+                            main_us,
+                            helper_us,
+                            runtime_files.len().div_ceil(2),
+                        );
+                        Vec::new()
+                    } else {
+                        runtime_files
                     }
                 }
             }
@@ -1902,6 +2232,61 @@ mod timing_tests {
         assert!(detail.contains("unattributed_us=0"));
         assert!(detail.contains("files=65"));
         assert!(detail.contains("max_batch=64"));
+    }
+
+    #[test]
+    fn dual_core_runtime_classification_preserves_serial_order_and_stats() {
+        let _gate_lock = crate::cooperative_work::TEST_LOCK.lock().unwrap();
+        crate::cooperative_work::set_work_mode(
+            crate::cooperative_work::CatalogWorkMode::DualCoreBurst,
+        );
+        let profiles = vec![
+            launch_profiles::generic_manifest_profile_for_game_dir("C64")
+                .expect("C64 runtime profile"),
+        ];
+        let files = (0..PARALLEL_RUNTIME_MIN_FILES)
+            .map(|index| catalog_scan::FoundFile {
+                path: PathBuf::from(format!("/media/fat/games/C64/Game {index:05}.d64")),
+                ext: "d64".to_string(),
+                size: 174_848,
+                mtime_secs: 1,
+            })
+            .collect::<Vec<_>>();
+        let serial_index = PreparedPayloadIndex::default();
+        let serial = classify_simple_runtime_slice(&files, &profiles, &serial_index)
+            .expect("serial classification");
+        let parallel_index = PreparedPayloadIndex::default();
+
+        let parallel = classify_runtime_batch_parallel(
+            "C64",
+            &files,
+            &profiles,
+            &parallel_index,
+            LibraryScanPriority::Background,
+        )
+        .expect("parallel classification");
+        crate::cooperative_work::set_work_mode(crate::cooperative_work::CatalogWorkMode::Cpu0);
+
+        assert_eq!(parallel.output.candidates, serial.candidates);
+        assert_eq!(parallel.output.ignored_files, serial.ignored_files);
+        assert_eq!(
+            parallel
+                .output
+                .normal_files
+                .iter()
+                .map(|file| file.path.as_str())
+                .collect::<Vec<_>>(),
+            serial
+                .normal_files
+                .iter()
+                .map(|file| file.path.as_str())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            serde_json::to_vec(&parallel.output.discoveries).unwrap(),
+            serde_json::to_vec(&serial.discoveries).unwrap()
+        );
+        assert_eq!(parallel_index.lookup_stats(), serial_index.lookup_stats());
     }
 
     #[test]

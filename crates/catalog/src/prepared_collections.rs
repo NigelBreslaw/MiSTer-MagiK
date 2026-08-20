@@ -47,6 +47,37 @@ enum FilePresence {
 }
 
 impl PreparedPayloadIndex {
+    pub(crate) fn fork_for_parallel_read(&self) -> Self {
+        Self {
+            exact_files: self.exact_files.clone(),
+            ascii_files: self.ascii_files.clone(),
+            ascii_collisions: self.ascii_collisions.clone(),
+            complete_roots: self
+                .complete_roots
+                .iter()
+                .map(|root| CompletePayloadRoot {
+                    exact: root.exact.clone(),
+                    ascii: root.ascii.clone(),
+                })
+                .collect(),
+            ..Self::default()
+        }
+    }
+
+    pub(crate) fn merge_lookup_stats(&self, stats: PreparedPayloadIndexStats) {
+        self.lookup_files
+            .set(self.lookup_files.get().saturating_add(stats.files));
+        self.lookup_missing
+            .set(self.lookup_missing.get().saturating_add(stats.missing));
+        self.lookup_unknown
+            .set(self.lookup_unknown.get().saturating_add(stats.unknown));
+        self.live_fallbacks.set(
+            self.live_fallbacks
+                .get()
+                .saturating_add(stats.live_fallbacks),
+        );
+    }
+
     pub(crate) fn from_library_roots(roots: &[String]) -> Self {
         let mut index = Self::default();
         for storage_root in storage_roots_for_library_roots(roots) {
