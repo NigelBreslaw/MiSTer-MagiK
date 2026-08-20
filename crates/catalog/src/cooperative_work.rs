@@ -9,10 +9,43 @@
 //! first-visible work never enters a background scope.
 
 use std::cell::Cell;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
+use std::sync::{Condvar, Mutex, OnceLock};
 
-static BACKGROUND_ALLOWED: AtomicBool = AtomicBool::new(true);
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[repr(u8)]
+pub enum CatalogWorkMode {
+    #[default]
+    Cpu0 = 0,
+    Paused = 1,
+    DualCoreBurst = 2,
+}
+
+impl CatalogWorkMode {
+    fn from_raw(value: u8) -> Self {
+        match value {
+            1 => Self::Paused,
+            2 => Self::DualCoreBurst,
+            _ => Self::Cpu0,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct CatalogWorkGateSnapshot {
+    pub mode: CatalogWorkMode,
+    pub epoch: u64,
+    pub checkpoints: u64,
+    pub park_count: u64,
+    pub parked_threads: u64,
+}
+
+static WORK_MODE: AtomicU8 = AtomicU8::new(CatalogWorkMode::Cpu0 as u8);
+static WORK_EPOCH: AtomicU64 = AtomicU64::new(0);
+static CHECKPOINTS: AtomicU64 = AtomicU64::new(0);
+static PARK_COUNT: AtomicU64 = AtomicU64::new(0);
+static PARKED_THREADS: AtomicU64 = AtomicU64::new(0);
+static PAUSE_SIGNAL: OnceLock<(Mutex<()>, Condvar)> = OnceLock::new();
 #[cfg(test)]
 pub(crate) static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
@@ -22,7 +55,37 @@ thread_local! {
 
 #[cfg(any(feature = "builder", test))]
 pub(crate) fn set_background_allowed(allowed: bool) {
-    BACKGROUND_ALLOWED.store(allowed, Ordering::Release);
+    set_work_mode(if allowed {
+        CatalogWorkMode::Cpu0
+    } else {
+        CatalogWorkMode::Paused
+    });
+}
+
+pub(crate) fn set_work_mode(mode: CatalogWorkMode) -> u64 {
+    let previous = WORK_MODE.swap(mode as u8, Ordering::AcqRel);
+    let epoch = if previous == mode as u8 {
+        WORK_EPOCH.load(Ordering::Acquire)
+    } else {
+        WORK_EPOCH.fetch_add(1, Ordering::AcqRel).saturating_add(1)
+    };
+    if mode != CatalogWorkMode::Paused {
+        PAUSE_SIGNAL
+            .get_or_init(|| (Mutex::new(()), Condvar::new()))
+            .1
+            .notify_all();
+    }
+    epoch
+}
+
+pub(crate) fn work_gate_snapshot() -> CatalogWorkGateSnapshot {
+    CatalogWorkGateSnapshot {
+        mode: CatalogWorkMode::from_raw(WORK_MODE.load(Ordering::Acquire)),
+        epoch: WORK_EPOCH.load(Ordering::Acquire),
+        checkpoints: CHECKPOINTS.load(Ordering::Relaxed),
+        park_count: PARK_COUNT.load(Ordering::Relaxed),
+        parked_threads: PARKED_THREADS.load(Ordering::Acquire),
+    }
 }
 
 pub(crate) struct BackgroundScope;
@@ -45,9 +108,20 @@ pub(crate) fn checkpoint() {
     if !background {
         return;
     }
-    while !BACKGROUND_ALLOWED.load(Ordering::Acquire) {
-        std::thread::sleep(Duration::from_millis(4));
+    CHECKPOINTS.fetch_add(1, Ordering::Relaxed);
+    if CatalogWorkMode::from_raw(WORK_MODE.load(Ordering::Acquire)) != CatalogWorkMode::Paused {
+        return;
     }
+    let (lock, signal) = PAUSE_SIGNAL.get_or_init(|| (Mutex::new(()), Condvar::new()));
+    let mut guard = lock.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    PARK_COUNT.fetch_add(1, Ordering::Relaxed);
+    PARKED_THREADS.fetch_add(1, Ordering::AcqRel);
+    while CatalogWorkMode::from_raw(WORK_MODE.load(Ordering::Acquire)) == CatalogWorkMode::Paused {
+        guard = signal
+            .wait(guard)
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+    }
+    PARKED_THREADS.fetch_sub(1, Ordering::AcqRel);
 }
 
 pub(crate) fn in_background_scope() -> bool {
@@ -84,5 +158,17 @@ mod tests {
         set_background_allowed(false);
         checkpoint();
         set_background_allowed(true);
+    }
+
+    #[test]
+    fn work_gate_epochs_change_only_when_mode_changes() {
+        let _test_lock = super::TEST_LOCK.lock().unwrap();
+        set_work_mode(CatalogWorkMode::Cpu0);
+        let before = work_gate_snapshot();
+        assert_eq!(set_work_mode(CatalogWorkMode::Cpu0), before.epoch);
+        let burst_epoch = set_work_mode(CatalogWorkMode::DualCoreBurst);
+        assert_eq!(burst_epoch, before.epoch + 1);
+        assert_eq!(work_gate_snapshot().mode, CatalogWorkMode::DualCoreBurst);
+        set_work_mode(CatalogWorkMode::Cpu0);
     }
 }

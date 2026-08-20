@@ -40,10 +40,20 @@ pub enum BuilderExecutionPolicy {
     BackgroundContinuous,
 }
 
+pub use crate::cooperative_work::{CatalogWorkGateSnapshot, CatalogWorkMode};
+
 /// Controls cooperative catalog checkpoints. Production launcher policy keeps
 /// this enabled continuously; tests may close it to exercise checkpoint safety.
 pub fn set_background_heavy_work_allowed(allowed: bool) {
     crate::cooperative_work::set_background_allowed(allowed);
+}
+
+pub fn set_catalog_work_mode(mode: CatalogWorkMode) -> u64 {
+    crate::cooperative_work::set_work_mode(mode)
+}
+
+pub fn catalog_work_gate_snapshot() -> CatalogWorkGateSnapshot {
+    crate::cooperative_work::work_gate_snapshot()
 }
 
 fn wait_for_background_heavy_work_enabled(enabled: bool) {
