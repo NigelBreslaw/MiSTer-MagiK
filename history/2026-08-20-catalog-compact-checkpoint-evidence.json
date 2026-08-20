@@ -1,0 +1,116 @@
+{
+  "schema": "mister-magik-catalog-compact-checkpoint-evidence-v1",
+  "recorded_at": "2026-08-20",
+  "starting_revision": "0fc7b19fcefe7b3d6f28fa5c43ed06e7e81c15d4",
+  "qualified_revision": "9fe598fdcddccf7c2ef9525d56b994e46427176d",
+  "device": {
+    "boot_id": "6ae23e81-cbe1-49ed-9870-af9dc630f89e",
+    "card_identity": "035344534435313285ba35d46e0191cd",
+    "card_identity_provenance": "last typed CID observation before the final reboot; the full-card v1 summary does not carry the CID field",
+    "main_sha256": "14ebc0c1b216bb649b84865a9ebffda7d5b7880cc3fa2a1f4b0538673539d2c1",
+    "gui_sha256": "a74b656a171d5b4479be6d784a595e04029b01ca6338b0e52f92e10b44547d21",
+    "scanout_module_sha256": "910d81ac03467e58ee93e48811dfb28e2fff21012192fb658c288c9dc2f50003",
+    "latch_rbf_sha256": "7484e004b3c6e089d9d377658633e435703bc1a224943b06215df9a9bccef4e7"
+  },
+  "bounded_workload": {
+    "roots": [
+      "/media/fat/_Arcade",
+      "/media/fat/games/SNES",
+      "/media/fat/games/C64"
+    ],
+    "systems": 3,
+    "games": 17859,
+    "samples": 3,
+    "publication_filesystem": "exfat",
+    "logical_fingerprint": "f7817d39524439cc35091180e706dec65d4328fb9b1ed7bea4ffc56e5309d965"
+  },
+  "retained": [
+    {
+      "commit": "1627a12a2",
+      "subject": "Store target outputs in compact checkpoint frames",
+      "supporting_fixes": ["17ea7b78a", "a8c2bf334", "5778fd447"],
+      "checkpoint_write_parent_median_us": 7417846,
+      "checkpoint_write_candidate_median_us": 364825,
+      "checkpoint_write_change_percent": -95.1,
+      "fresh_parent_median_ms": 60868,
+      "fresh_candidate_median_ms": 54232,
+      "fresh_change_percent": -10.9,
+      "raw_target_bytes": 11646487,
+      "compressed_frame_bytes": 1241786,
+      "scan_complete_rss_parent_median_kib": 60712,
+      "scan_complete_rss_candidate_median_kib": 63904
+    }
+  ],
+  "rejected": [
+    {
+      "commit": "981e121a6",
+      "hypothesis": "exact target replay",
+      "parent_rebuild_median_ms": 20413,
+      "candidate_rebuild_median_ms": 25751,
+      "reused_targets": 2,
+      "result": "failed operation gate"
+    },
+    {
+      "measured_revision": "43f747cba1ed44f7325d9506582831d58ec17d37",
+      "branch_commit": "ba3532c92",
+      "hypothesis": "bincode replay correction",
+      "candidate_rebuild_median_ms": 25360,
+      "result": "failed correction; correction and replay explicitly reverted by 954c01af5 and 432675924"
+    },
+    {
+      "commit": "a906f2a51",
+      "hypothesis": "64-row FTS batches",
+      "c64_row_loop_parent_median_us": 2960645,
+      "c64_row_loop_candidate_median_us": 4132797,
+      "result": "target phase regressed; explicitly reverted by 15c454797 and 9fe598fdc"
+    },
+    {
+      "revision": "9fe598fdcddccf7c2ef9525d56b994e46427176d",
+      "hypothesis": "generation-private on-media staging",
+      "tmpfs_publication_median_us": 4153836,
+      "on_media_publication_median_us": 592551,
+      "tmpfs_shard_build_median_us": 11074910,
+      "on_media_shard_build_median_us": 25051145,
+      "tmpfs_fresh_median_ms": 54232,
+      "on_media_fresh_median_ms": 62210,
+      "result": "publication won but whole operation regressed; production auto selection unchanged"
+    }
+  ],
+  "final_bounded": {
+    "run_id": "1787235413",
+    "fresh_median_ms": 49598,
+    "rebuild_median_ms": 15450,
+    "arcade_first_visible_median_ms": 8679,
+    "scan_complete_rss_median_kib": 64572,
+    "status": "passed"
+  },
+  "whole_card": {
+    "starting_run_id": "1787230104",
+    "qualified_run_id": "1787235630",
+    "systems": 69,
+    "games": 39791,
+    "logical_fingerprint": "57c8be72c0fa0277eb654221f919428d3f2f2be4e64ea00d78ae500081665cc5",
+    "first_observed_clean_ms": 223667,
+    "warm_clean_ms": 156219,
+    "forced_rebuild_ms": 67930,
+    "status": "passed",
+    "catalog_fingerprints_identical": true,
+    "phase_evidence_complete": true
+  },
+  "artifacts": [
+    {"path": "build/agent-benchmarks/catalog-attribution-control/1787229841/summary.json", "sha256": "b6462e6c8e422942683aa20eeb97baf57dbcf2ee3fd2e3e1afaf905c5280d635"},
+    {"path": "build/agent-benchmarks/catalog-attribution-control/1787231117/summary.json", "sha256": "f9e645c18cdb3499119ca0c731b0a17f32e235b0bb2488fbec5815fe8cb21228"},
+    {"path": "build/agent-benchmarks/catalog-attribution-control/1787232255/summary.json", "sha256": "214f032ea2ab5a4c53a09dfc8e4f6bf81b700651014e3c1ee20657b024f9247b"},
+    {"path": "build/agent-benchmarks/catalog-attribution-control/1787233422/summary.json", "sha256": "83b83f5b014480ca31d8c28a61c6f0c530f552834f97ac9af13dff5741eb7185"},
+    {"path": "build/agent-benchmarks/catalog-attribution-control/1787234122/summary.json", "sha256": "3d2fd71064b890dd52478121dc1f2929ed131242957a71d9cf503b17c677b109"},
+    {"path": "build/agent-benchmarks/catalog-attribution-control/1787234706/summary.json", "sha256": "c6f6dfd34e9838c7978ec1a1da33e7669214bcc8b048d58fb28ba288863e90aa"},
+    {"path": "build/agent-benchmarks/catalog-attribution-control/1787235144/summary.json", "sha256": "06fe57d52f76fde290732a781193083a8b40ac8db014c87ccb21eed0fe271e4c"},
+    {"path": "build/agent-benchmarks/catalog-attribution-control/1787235413/summary.json", "sha256": "96fa8c8827f623bc9d330fcac6282751535f909ae81c810207ef762dfbcfc3cc"},
+    {"path": "build/agent-benchmarks/catalog-full-build-rebuild/1787230104/summary.json", "sha256": "0ba2217337fdfec2c0b1ffe7f2c4ad46d47aea54f512a12e1698cf2cb887b1bb"},
+    {"path": "build/agent-benchmarks/catalog-full-build-rebuild/1787235630/summary.json", "sha256": "e81dce5a65d8b33455f410c296abfd6ed4e69be65431372afe7f965babfc4864"},
+    {"path": "build/agent-benchmarks/catalog-full-build-rebuild/1787235630/fresh-launcher.log", "sha256": "9621f48ce1233808f62107ba037f51631cf073115fa9b94759068224fc3a3770"},
+    {"path": "build/agent-benchmarks/catalog-full-build-rebuild/1787235630/warm-clean-launcher.log", "sha256": "ea050e9d44bb2470b899b041c9cb519c93b20f8ce7d0fbb3602c37faa213a9a1"},
+    {"path": "build/agent-benchmarks/catalog-full-build-rebuild/1787235630/rebuild-launcher.log", "sha256": "102b8d19a908339909cd837e3506c974227a35229c75840d0d11513826cc305d"},
+    {"path": "build/agent-benchmarks/catalog-build-rebuild/1787173051/summary.json", "sha256": "01a3feae2185e846ea332c79a97e565f2a4c92237b66a01d9262619141ae8b22", "purpose": "typed card CID provenance"}
+  ]
+}
