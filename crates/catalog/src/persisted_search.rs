@@ -15,6 +15,8 @@ use std::time::Instant;
 pub const SEARCH_SCHEMA_VERSION: u32 = 1;
 
 const SEARCH_WEIGHTS: &str = "10.0,9.0,8.0,7.0,7.0,6.0,6.8,6.5,6.0,4.0,3.5";
+#[cfg(feature = "builder")]
+const SEARCH_PIPELINE_BATCH: usize = 256;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PersistedSearchMatch {
@@ -326,6 +328,10 @@ pub(crate) fn create_schema(connection: &Connection) -> Result<(), PersistedSear
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct PersistedSearchBuildOutcome {
     pub(crate) words: usize,
+    pub(crate) batches: usize,
+    pub(crate) document_build_us: u64,
+    pub(crate) fts_insert_us: u64,
+    pub(crate) pipeline_wait_us: u64,
     pub(crate) row_loop_us: u64,
     pub(crate) autocomplete_sort_us: u64,
     pub(crate) autocomplete_insert_us: u64,
@@ -333,6 +339,109 @@ pub(crate) struct PersistedSearchBuildOutcome {
     pub(crate) automerge_restore_us: u64,
     pub(crate) integrity_us: u64,
     pub(crate) total_us: u64,
+}
+
+#[cfg(feature = "builder")]
+struct PreparedSearchDocument {
+    ordinal: usize,
+    title: String,
+    compact_title: String,
+    manufacturer: String,
+    compact_manufacturer: String,
+    control: String,
+    compact_control: String,
+    players: String,
+    year: String,
+    decade: String,
+    path: String,
+    compact_path: String,
+}
+
+#[cfg(feature = "builder")]
+struct PreparedSearchBatch {
+    documents: Vec<PreparedSearchDocument>,
+    words: std::collections::HashMap<String, AutocompleteStats>,
+    build_us: u64,
+}
+
+#[cfg(feature = "builder")]
+fn prepare_search_batch(
+    first_ordinal: usize,
+    games: &[crate::system_shard::SystemGame],
+) -> PreparedSearchBatch {
+    use std::collections::HashMap;
+
+    let started = Instant::now();
+    let mut documents = Vec::with_capacity(games.len());
+    let mut words = HashMap::<String, AutocompleteStats>::new();
+    for (offset, game) in games.iter().enumerate() {
+        let title = normalize_search_text(&game.title);
+        let manufacturer = normalize_search_text(&game.manufacturer);
+        let control = normalize_search_text(&crate::arcade_catalog::canonical_control_label(
+            &game.control,
+        ));
+        let players = game
+            .players
+            .map(crate::arcade_catalog::player_count_label)
+            .unwrap_or_default();
+        let autocomplete_players = normalize_search_text(&players);
+        let year = game.year.map(|year| year.to_string()).unwrap_or_default();
+        let decade = game
+            .year
+            .map(|year| format!("{}0s", year / 10))
+            .unwrap_or_default();
+        let path = normalize_search_text(game_basename(&game.launch_ref));
+
+        add_normalized_words(&mut words, &title, AutocompleteSource::Title);
+        add_normalized_words(&mut words, &manufacturer, AutocompleteSource::Metadata);
+        add_normalized_words(&mut words, &control, AutocompleteSource::Metadata);
+        if !autocomplete_players.is_empty() {
+            add_normalized_word(
+                &mut words,
+                &autocomplete_players,
+                AutocompleteSource::Metadata,
+            );
+        }
+        add_normalized_words(&mut words, &path, AutocompleteSource::Path);
+        if !year.is_empty() {
+            add_normalized_word(&mut words, &year, AutocompleteSource::Metadata);
+        }
+        if !decade.is_empty() {
+            add_normalized_word(&mut words, &decade, AutocompleteSource::Metadata);
+        }
+
+        documents.push(PreparedSearchDocument {
+            ordinal: first_ordinal.saturating_add(offset),
+            compact_title: compact_if_different(&title),
+            title,
+            compact_manufacturer: compact_if_different(&manufacturer),
+            manufacturer,
+            compact_control: compact_if_different(&control),
+            control,
+            players,
+            year,
+            decade,
+            compact_path: compact_if_different(&path),
+            path,
+        });
+    }
+    PreparedSearchBatch {
+        documents,
+        words,
+        build_us: elapsed_us(started),
+    }
+}
+
+#[cfg(feature = "builder")]
+fn merge_autocomplete_words(
+    destination: &mut std::collections::HashMap<String, AutocompleteStats>,
+    source: std::collections::HashMap<String, AutocompleteStats>,
+) {
+    for (word, source_stats) in source {
+        let stats = destination.entry(word).or_default();
+        stats.score += source_stats.score;
+        stats.source_rank = stats.source_rank.max(source_stats.source_rank);
+    }
 }
 
 #[cfg(feature = "builder")]
@@ -357,63 +466,85 @@ pub(crate) fn populate(
              ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12)",
         )
         .map_err(|error| PersistedSearchError::with("prepare search rows", error))?;
-    let mut words = HashMap::<String, AutocompleteStats>::new();
     let row_loop_started = Instant::now();
     let row_loop_pmu = mister_magik_perf_events::sampled_span(crate::pmu_phase::SEARCH_ROWS);
-    for (ordinal, game) in games.iter().enumerate() {
-        let title = normalize_search_text(&game.title);
-        let manufacturer = normalize_search_text(&game.manufacturer);
-        let control = normalize_search_text(&crate::arcade_catalog::canonical_control_label(
-            &game.control,
-        ));
-        let players = game
-            .players
-            .map(crate::arcade_catalog::player_count_label)
-            .unwrap_or_default();
-        let autocomplete_players = normalize_search_text(&players);
-        let year = game.year.map(|year| year.to_string()).unwrap_or_default();
-        let decade = game
-            .year
-            .map(|year| format!("{}0s", year / 10))
-            .unwrap_or_default();
-        let path = normalize_search_text(game_basename(&game.launch_ref));
-        insert_search
-            .execute(rusqlite::params![
-                i64::try_from(ordinal + 1).map_err(|_| PersistedSearchError::new(
-                    "game ordinal exceeds SQLite integer"
-                ))?,
-                title,
-                compact_if_different(&title),
-                manufacturer,
-                compact_if_different(&manufacturer),
-                control,
-                compact_if_different(&control),
-                players,
-                year,
-                decade,
-                path,
-                compact_if_different(&path),
-            ])
-            .map_err(|error| PersistedSearchError::with("insert search row", error))?;
-
-        add_normalized_words(&mut words, &title, AutocompleteSource::Title);
-        add_normalized_words(&mut words, &manufacturer, AutocompleteSource::Metadata);
-        add_normalized_words(&mut words, &control, AutocompleteSource::Metadata);
-        if !autocomplete_players.is_empty() {
-            add_normalized_word(
-                &mut words,
-                &autocomplete_players,
-                AutocompleteSource::Metadata,
-            );
+    let mut words = HashMap::<String, AutocompleteStats>::new();
+    let mut batches = 0usize;
+    let mut document_build_us = 0u64;
+    let mut fts_insert_us = 0u64;
+    let mut pipeline_wait_us = 0u64;
+    std::thread::scope(|scope| -> Result<(), PersistedSearchError> {
+        let (sender, receiver) = std::sync::mpsc::sync_channel::<PreparedSearchBatch>(1);
+        let producer = std::thread::Builder::new()
+            .name("catalog-search-docs".to_string())
+            .spawn_scoped(scope, move || {
+                crate::runtime_thread::apply_runtime_thread_policy(
+                    crate::runtime_thread::RuntimeThreadRole::SearchIndex,
+                );
+                for (batch_index, chunk) in games.chunks(SEARCH_PIPELINE_BATCH).enumerate() {
+                    let batch = prepare_search_batch(
+                        batch_index.saturating_mul(SEARCH_PIPELINE_BATCH),
+                        chunk,
+                    );
+                    if sender.send(batch).is_err() {
+                        break;
+                    }
+                }
+            })
+            .map_err(|error| PersistedSearchError::with("spawn search document producer", error))?;
+        let mut failure = None;
+        loop {
+            let wait_started = Instant::now();
+            let batch = match receiver.recv() {
+                Ok(batch) => batch,
+                Err(_) => break,
+            };
+            pipeline_wait_us = pipeline_wait_us.saturating_add(elapsed_us(wait_started));
+            batches = batches.saturating_add(1);
+            document_build_us = document_build_us.saturating_add(batch.build_us);
+            if failure.is_some() {
+                continue;
+            }
+            merge_autocomplete_words(&mut words, batch.words);
+            let insert_started = Instant::now();
+            for document in batch.documents {
+                let rowid = match i64::try_from(document.ordinal.saturating_add(1)) {
+                    Ok(rowid) => rowid,
+                    Err(_) => {
+                        failure = Some(PersistedSearchError::new(
+                            "game ordinal exceeds SQLite integer",
+                        ));
+                        break;
+                    }
+                };
+                if let Err(error) = insert_search.execute(rusqlite::params![
+                    rowid,
+                    document.title,
+                    document.compact_title,
+                    document.manufacturer,
+                    document.compact_manufacturer,
+                    document.control,
+                    document.compact_control,
+                    document.players,
+                    document.year,
+                    document.decade,
+                    document.path,
+                    document.compact_path,
+                ]) {
+                    failure = Some(PersistedSearchError::with("insert search row", error));
+                    break;
+                }
+            }
+            fts_insert_us = fts_insert_us.saturating_add(elapsed_us(insert_started));
         }
-        add_normalized_words(&mut words, &path, AutocompleteSource::Path);
-        if !year.is_empty() {
-            add_normalized_word(&mut words, &year, AutocompleteSource::Metadata);
+        producer
+            .join()
+            .map_err(|_| PersistedSearchError::new("search document producer panicked"))?;
+        if let Some(error) = failure {
+            return Err(error);
         }
-        if !decade.is_empty() {
-            add_normalized_word(&mut words, &decade, AutocompleteSource::Metadata);
-        }
-    }
+        Ok(())
+    })?;
     drop(insert_search);
     drop(row_loop_pmu);
     let row_loop_us = elapsed_us(row_loop_started);
@@ -469,6 +600,10 @@ pub(crate) fn populate(
     drop(integrity_pmu);
     Ok(PersistedSearchBuildOutcome {
         words: word_count,
+        batches,
+        document_build_us,
+        fts_insert_us,
+        pipeline_wait_us,
         row_loop_us,
         autocomplete_sort_us,
         autocomplete_insert_us,
@@ -596,7 +731,7 @@ enum AutocompleteSource {
 }
 
 #[cfg(feature = "builder")]
-#[derive(Default)]
+#[derive(Debug, Default, Eq, PartialEq)]
 struct AutocompleteStats {
     source_rank: u8,
     score: u32,
@@ -752,6 +887,33 @@ mod tests {
             .unwrap();
         assert_eq!(automerge, 4);
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn prepared_search_pipeline_preserves_batch_boundary_ordinals_and_words() {
+        let games = (0..=SEARCH_PIPELINE_BATCH)
+            .map(|ordinal| SystemGame {
+                stable_key: format!("game-{ordinal}"),
+                title: format!("Pokémon Game-{ordinal}"),
+                launch_ref: format!("/media/fat/games/C64/Game-{ordinal}.d64"),
+                manufacturer: "Commodore, Inc.".to_string(),
+                ..SystemGame::default()
+            })
+            .collect::<Vec<_>>();
+        let first = prepare_search_batch(0, &games[..SEARCH_PIPELINE_BATCH]);
+        let tail = prepare_search_batch(SEARCH_PIPELINE_BATCH, &games[SEARCH_PIPELINE_BATCH..]);
+
+        assert_eq!(first.documents.len(), SEARCH_PIPELINE_BATCH);
+        assert_eq!(first.documents[0].ordinal, 0);
+        assert_eq!(first.documents[SEARCH_PIPELINE_BATCH - 1].ordinal, 255);
+        assert_eq!(tail.documents.len(), 1);
+        assert_eq!(tail.documents[0].ordinal, 256);
+        assert_eq!(tail.documents[0].title, "pok mon game 256");
+
+        let mut merged = first.words;
+        merge_autocomplete_words(&mut merged, tail.words);
+        let complete = prepare_search_batch(0, &games);
+        assert_eq!(merged, complete.words);
     }
 
     #[test]
