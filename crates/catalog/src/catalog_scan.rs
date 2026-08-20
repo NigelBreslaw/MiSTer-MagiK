@@ -918,7 +918,10 @@ fn scan_target_candidates_with_facts(
         None,
         root_policy,
         signature_capture,
-        should_ignore_path,
+        |path| {
+            should_ignore_path(path)
+                || crate::prepared_collections::neon68k_duplicate_alias_path(target, path)
+        },
         |entry| {
             let p = entry.path.as_path();
             if entry.kind == NamespaceEntryKind::Directory {
@@ -1427,8 +1430,8 @@ fn scan_targets_for_roots(roots: &[String], profiles: &[LaunchProfile]) -> Vec<P
 }
 
 fn push_prepared_collection_targets(targets: &mut Vec<PathBuf>, configured_root: &Path) {
-    if let Some(root) =
-        crate::prepared_collections::neon68k_launcher_root_for_library_root(configured_root)
+    for root in
+        crate::prepared_collections::neon68k_launcher_roots_for_library_root(configured_root)
     {
         push_scan_target(targets, root);
     }
@@ -3402,7 +3405,7 @@ mod tests {
     fn explicit_arcade_root_does_not_pull_in_prepared_computer_collection() {
         let root = unique_temp_dir("explicit-arcade-target");
         let arcade = root.join("_Arcade");
-        let prepared = root.join("_Computer/X68000 Games");
+        let prepared = root.join("_Computer/_X68000 Games");
         std::fs::create_dir_all(&arcade).expect("create Arcade");
         std::fs::create_dir_all(&prepared).expect("create prepared collection");
 
@@ -3417,15 +3420,15 @@ mod tests {
     #[test]
     fn scanner_discovers_preinstalled_x68000_game_mgls_under_computer() {
         let root = unique_temp_dir("neon68k-mgl-scan");
-        let launcher_dir = root.join("_Computer/X68000 Games/Minor Bugs");
-        let payload_dir = root.join("games/X68000");
+        let launcher_dir = root.join("_Computer/_X68000 Games/Minor Bugs");
+        let payload_dir = root.join("games/X68000/media/Akumajou Dracula");
         std::fs::create_dir_all(&launcher_dir).expect("create launcher dir");
         std::fs::create_dir_all(&payload_dir).expect("create payload dir");
-        std::fs::write(payload_dir.join("Akumajou.hdf"), b"hdf").expect("write HDF");
+        std::fs::write(payload_dir.join("Akumajou Dracula.hdf"), b"hdf").expect("write HDF");
         let mgl = launcher_dir.join("Akumajou Dracula.mgl");
         std::fs::write(
             &mgl,
-            r#"<mistergamedescription><rbf>X68000</rbf><setname>Akumajou</setname><file path="../../../games/X68000/Akumajou.hdf"/></mistergamedescription>"#,
+            r#"<mistergamedescription><rbf>_Computer/X68000</rbf><setname>Akumajou</setname><file index="2" path="media/Akumajou Dracula/Akumajou Dracula.hdf"/></mistergamedescription>"#,
         )
         .expect("write MGL");
         let cfg = BenchConfig {
@@ -3457,24 +3460,26 @@ mod tests {
 
         let root = unique_temp_dir("neon68k-root-symlink-scan");
         let launcher_source = root.join("launcher-source");
-        let payload_dir = root.join("games/X68000");
-        std::fs::create_dir_all(&launcher_source).expect("create launcher source");
+        let canonical_group = launcher_source.join("_Keyboard and Mouse");
+        let genre_group = launcher_source.join("_Genre/_Platformer - 2D");
+        let payload_dir = root.join("games/X68000/media/Akumajou Dracula");
+        std::fs::create_dir_all(&canonical_group).expect("create canonical group");
+        std::fs::create_dir_all(&genre_group).expect("create genre alias group");
         std::fs::create_dir_all(&payload_dir).expect("create payload dir");
         std::fs::create_dir_all(root.join("_Computer")).expect("create computer dir");
-        std::fs::write(payload_dir.join("Akumajou.hdf"), b"hdf").expect("write HDF");
-        let mgl = launcher_source.join("Akumajou Dracula.mgl");
-        std::fs::write(
-            &mgl,
-            r#"<mistergamedescription><rbf>X68000</rbf><setname>Akumajou</setname><file path="../../games/X68000/Akumajou.hdf"/></mistergamedescription>"#,
-        )
-        .expect("write MGL");
+        std::fs::write(payload_dir.join("Akumajou Dracula.hdf"), b"hdf").expect("write HDF");
+        let mgl_document = r#"<mistergamedescription><rbf>_Computer/X68000</rbf><setname>Akumajou</setname><file index="2" path="media/Akumajou Dracula/Akumajou Dracula.hdf"/></mistergamedescription>"#;
+        let mgl = canonical_group.join("Akumajou Dracula.mgl");
+        std::fs::write(&mgl, mgl_document).expect("write MGL");
+        std::fs::write(genre_group.join("Akumajou Dracula.mgl"), mgl_document)
+            .expect("write genre alias MGL");
         let duplicate_dir = root.join("duplicate-collection");
         std::fs::create_dir_all(&duplicate_dir).expect("create duplicate collection");
         std::fs::write(duplicate_dir.join("Duplicate.mgl"), b"duplicate")
             .expect("write duplicate MGL");
         symlink(&duplicate_dir, launcher_source.join("Collection"))
             .expect("create nested collection symlink");
-        let launcher_root = root.join("_Computer/X68000 Games");
+        let launcher_root = root.join("_Computer/_X68000 Games");
         symlink(&launcher_source, &launcher_root).expect("create launcher root symlink");
         let cfg = BenchConfig {
             roots: vec![root.display().to_string()],
@@ -3497,16 +3502,14 @@ mod tests {
         assert_eq!(
             prepared[0].launch_ref,
             launcher_root
-                .join("Akumajou Dracula.mgl")
+                .join("_Keyboard and Mouse/Akumajou Dracula.mgl")
                 .display()
                 .to_string()
         );
-        assert!(
-            !scan
-                .discoveries
-                .iter()
-                .any(|discovery| { discovery.launch_ref.contains("Collection/Duplicate.mgl") })
-        );
+        assert!(!scan.discoveries.iter().any(|discovery| {
+            discovery.launch_ref.contains("_Genre")
+                || discovery.launch_ref.contains("Collection/Duplicate.mgl")
+        }));
         let _ = std::fs::remove_dir_all(root);
     }
 

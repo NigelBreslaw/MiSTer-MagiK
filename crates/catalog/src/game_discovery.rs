@@ -278,6 +278,8 @@ pub(crate) fn discovery_from_profile_file_with_prepared_index_and_mra_metadata(
                     || prepared_collections::resolve_0mhz_payload_path(&file.path, payload),
                     |index| index.resolve_0mhz_payload_path(&file.path, payload),
                 )
+            } else if profile.id == "neon68k" {
+                prepared_collections::resolve_neon68k_payload_path(&file.path, payload)
             } else {
                 media_metadata::resolve_mgl_payload_path(&file.path, payload)
             };

@@ -489,7 +489,9 @@ pub(crate) fn validate_neon68k_mgl(path: &Path) -> Result<MglInspection, String>
 pub(crate) fn is_neon68k_launcher_root(path: &Path) -> bool {
     path.file_name()
         .and_then(|name| name.to_str())
-        .is_some_and(|name| name.eq_ignore_ascii_case("X68000 Games"))
+        .is_some_and(|name| {
+            name.eq_ignore_ascii_case("_X68000 Games") || name.eq_ignore_ascii_case("X68000 Games")
+        })
         && path
             .parent()
             .and_then(Path::file_name)
@@ -508,7 +510,7 @@ pub(crate) fn neon68k_launcher_root_is_available(path: &Path) -> bool {
         || is_followable_neon68k_launcher_root_symlink(path)
 }
 
-pub(crate) fn neon68k_launcher_root_for_library_root(configured_root: &Path) -> Option<PathBuf> {
+pub(crate) fn neon68k_launcher_roots_for_library_root(configured_root: &Path) -> Vec<PathBuf> {
     let name = configured_root
         .file_name()
         .and_then(|name| name.to_str())
@@ -519,19 +521,23 @@ pub(crate) fn neon68k_launcher_root_for_library_root(configured_root: &Path) -> 
         "_DOS Games",
         "_Console (autoboot)",
         "_LLAPI",
+        "_X68000 Games",
         "X68000 Games",
     ]
     .iter()
     .any(|candidate| name.eq_ignore_ascii_case(candidate))
     {
-        return None;
+        return Vec::new();
     }
     let storage_root = if name.eq_ignore_ascii_case("games") {
         configured_root.parent().unwrap_or(configured_root)
     } else {
         configured_root
     };
-    Some(storage_root.join("_Computer/X68000 Games"))
+    vec![
+        storage_root.join("_Computer/_X68000 Games"),
+        storage_root.join("_Computer/X68000 Games"),
+    ]
 }
 
 pub(crate) fn neon68k_payload_signature_for_library_root(
@@ -547,6 +553,7 @@ pub(crate) fn neon68k_payload_signature_for_library_root(
         "_DOS Games",
         "_Console (autoboot)",
         "_LLAPI",
+        "_X68000 Games",
         "X68000 Games",
     ]
     .iter()
@@ -560,6 +567,16 @@ pub(crate) fn neon68k_payload_signature_for_library_root(
         configured_root.join("games")
     };
     Some(games_root.join("X68000/boot3.vhd"))
+}
+
+pub(crate) fn neon68k_duplicate_alias_path(root: &Path, path: &Path) -> bool {
+    is_neon68k_launcher_root(root)
+        && path
+            .strip_prefix(root)
+            .ok()
+            .and_then(|relative| relative.components().next())
+            .and_then(|component| component.as_os_str().to_str())
+            .is_some_and(|component| component.eq_ignore_ascii_case("_Genre"))
 }
 
 pub(crate) fn validate_neon68k_mgl_inspection(
@@ -582,7 +599,7 @@ pub(crate) fn validate_neon68k_mgl_inspection(
     }
     let mut hdf_count = 0usize;
     for action in &inspection.files {
-        let payload = resolve_mgl_payload_path(path, &action.path);
+        let payload = resolve_neon68k_payload_path(path, &action.path);
         if !payload.is_file() {
             return Err(format!(
                 "Neon68K MGL payload is missing: {}",
@@ -601,6 +618,29 @@ pub(crate) fn validate_neon68k_mgl_inspection(
         return Err("Neon68K MGL has no HDF mount action".to_string());
     }
     Ok(())
+}
+
+pub(crate) fn resolve_neon68k_payload_path(mgl_path: &Path, payload: &str) -> PathBuf {
+    let local = resolve_mgl_payload_path(mgl_path, payload);
+    if local.is_file() {
+        return local;
+    }
+    let Some(storage_root) = mgl_path.ancestors().find_map(|ancestor| {
+        ancestor
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.eq_ignore_ascii_case("_Computer"))
+            .then(|| ancestor.parent())
+            .flatten()
+    }) else {
+        return local;
+    };
+    let collection_payload = storage_root.join("games/X68000").join(payload);
+    if collection_payload.is_file() {
+        collection_payload
+    } else {
+        local
+    }
 }
 
 pub(crate) fn neon68k_source_category(path: &Path) -> Option<String> {
@@ -708,7 +748,7 @@ pub fn validate_prepared_launch_path(path: &Path) -> Result<bool, String> {
         validate_0mhz_mgl(path)?;
         return Ok(true);
     }
-    if is_mgl && path_has_component(path, "X68000 Games") {
+    if is_mgl && path_has_neon68k_launcher_component(path) {
         validate_neon68k_mgl(path)?;
         return Ok(true);
     }
@@ -765,7 +805,7 @@ pub(crate) fn diagnostic_for_candidate(
                 reason,
             });
     }
-    if is_mgl && path_has_component(path, "X68000 Games") {
+    if is_mgl && path_has_neon68k_launcher_component(path) {
         return validate_neon68k_mgl(path)
             .err()
             .map(|reason| PreparedLaunchDiagnostic {
@@ -800,6 +840,15 @@ fn path_has_component(path: &Path, expected: &str) -> bool {
             .as_os_str()
             .to_str()
             .is_some_and(|component| component.eq_ignore_ascii_case(expected))
+    })
+}
+
+fn path_has_neon68k_launcher_component(path: &Path) -> bool {
+    path.components().any(|component| {
+        component.as_os_str().to_str().is_some_and(|value| {
+            value.eq_ignore_ascii_case("_X68000 Games")
+                || value.eq_ignore_ascii_case("X68000 Games")
+        })
     })
 }
 
@@ -1078,6 +1127,31 @@ mod tests {
                 .contains("payload is missing")
         );
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn neon68k_validation_resolves_current_split_layout() {
+        let storage = fixture_dir("neon68k-split-layout");
+        let launcher_dir = storage.join("_Computer/_X68000 Games/_Keyboard and Mouse");
+        let payload = storage.join("games/X68000/media/After Burner 2/After Burner 2.hdf");
+        std::fs::create_dir_all(&launcher_dir).expect("create launcher dir");
+        std::fs::create_dir_all(payload.parent().expect("payload parent"))
+            .expect("create payload dir");
+        std::fs::write(&payload, b"hdf").expect("write payload");
+        let mgl = launcher_dir.join("After Burner 2.mgl");
+        std::fs::write(
+            &mgl,
+            r#"<mistergamedescription><rbf>_computer/X68000</rbf><file index="2" path="media/After Burner 2/After Burner 2.hdf"/><setname same_dir="1">X68K-After_Burner_2</setname><reset delay="1"/></mistergamedescription>"#,
+        )
+        .expect("write MGL");
+
+        let inspection = validate_neon68k_mgl(&mgl).expect("validate current Neon68K layout");
+
+        assert_eq!(
+            resolve_neon68k_payload_path(&mgl, &inspection.files[0].path),
+            payload
+        );
+        let _ = std::fs::remove_dir_all(storage);
     }
 
     #[test]

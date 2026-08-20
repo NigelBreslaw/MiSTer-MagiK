@@ -96,10 +96,9 @@ fn audit_prepared_collections(roots: &[String], rows: &mut BTreeMap<String, Cata
         return;
     }
     let neon68k_launcher_available = roots.iter().any(|root| {
-        crate::prepared_collections::neon68k_launcher_root_for_library_root(Path::new(root))
-            .is_some_and(|path| {
-                crate::prepared_collections::neon68k_launcher_root_is_available(&path)
-            })
+        crate::prepared_collections::neon68k_launcher_roots_for_library_root(Path::new(root))
+            .into_iter()
+            .any(|path| crate::prepared_collections::neon68k_launcher_root_is_available(&path))
     });
     if neon68k_launcher_available {
         return;
@@ -109,7 +108,7 @@ fn audit_prepared_collections(roots: &[String], rows: &mut BTreeMap<String, Cata
         CatalogAuditRow {
             core_id: "X68000".to_string(),
             core_path: "_Computer/X68000".to_string(),
-            expected_game_dir: "_Computer/X68000 Games".to_string(),
+            expected_game_dir: "_Computer/_X68000 Games".to_string(),
             extensions: "mgl".to_string(),
             mount_kind: "mgl".to_string(),
             source: "prepared-collection".to_string(),
@@ -531,7 +530,7 @@ mod tests {
         );
 
         assert!(rows.iter().any(|row| {
-            row.expected_game_dir == "_Computer/X68000 Games"
+            row.expected_game_dir == "_Computer/_X68000 Games"
                 && row.catalog_status == "uncataloged"
                 && row.reason == "neon68k-launcher-root-missing-or-unreadable"
         }));
@@ -550,7 +549,7 @@ mod tests {
         std::fs::create_dir_all(&launcher_source).expect("create launcher source");
         std::fs::create_dir_all(root.join("_Computer")).expect("create computer dir");
         std::fs::write(payload_dir.join("boot3.vhd"), b"boot").expect("write Neon68K boot");
-        symlink(&launcher_source, root.join("_Computer/X68000 Games"))
+        symlink(&launcher_source, root.join("_Computer/_X68000 Games"))
             .expect("create launcher symlink");
 
         let rows = audit_catalog_coverage(

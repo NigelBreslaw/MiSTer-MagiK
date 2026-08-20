@@ -6,7 +6,7 @@ MagiK can reuse launch artifacts supplied by collections that are already instal
 
 - **AmigaVision / MegaAGS**: discovers complete modern or legacy installations, indexes their game and demo listings, writes the exact selected title to the installation-local `shared/ags_boot`, and launches the real Amiga MGL.
 - **0MHz**: validates AO486 per-game MGL files under `_DOS Games`, including every referenced file and a reset action, then gives the original MGL to Main unchanged.
-- **Neon68K**: discovers per-game MGL files under `_Computer/X68000 Games`, validates X68000, setname, and HDF references, and preserves compatibility-folder metadata. That exact launcher root may be a symlink; traversal follows only the root link and continues to ignore every nested symlink so MiSTer collection aliases cannot duplicate discoveries or expand the scan.
+- **Neon68K**: discovers per-game MGL files under the current `_Computer/_X68000 Games` root and the legacy `_Computer/X68000 Games` root, validates X68000, setname, and HDF references, and preserves compatibility-folder metadata. Either exact launcher root may be a symlink; traversal follows only that root link, ignores every nested symlink, and prunes the real `_Genre` alias tree so MiSTer collection views cannot duplicate discoveries or expand unrelated scans.
 - **OneLoad64**: recognizes signed collection directory layouts, indexes primary and MultiLoad64 CRTs, excludes dump/alternative/extras trees, and loads CRTs through C64 file index 1.
 
 Raw and generic entries remain visible. When prepared and generic rows have the same title and system, the prepared row sorts first.

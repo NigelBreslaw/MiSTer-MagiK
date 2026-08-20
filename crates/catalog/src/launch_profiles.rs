@@ -1771,7 +1771,7 @@ fn neon68k_mgl_profile() -> LaunchProfile {
         title: "X68000 Games".into(),
         core_name: "X68000".into(),
         core_path: Some("_Computer/X68000".into()),
-        game_dirs: str_vec(&["X68000 Games"]),
+        game_dirs: str_vec(&["_X68000 Games", "X68000 Games"]),
         payload_rules: vec![launcher_payload_rule()],
         archive_entry_rules: Vec::new(),
         collection_rules: Vec::new(),

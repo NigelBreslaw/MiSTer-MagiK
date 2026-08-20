@@ -137,7 +137,8 @@ fn append_prepared_collection_root_signatures(lines: &mut Vec<String>, roots: &[
     {
         for (name, path) in [
             ("0mhz-root", root.join("_DOS Games")),
-            ("neon68k-root", root.join("_Computer/X68000 Games")),
+            ("neon68k-root", root.join("_Computer/_X68000 Games")),
+            ("neon68k-legacy-root", root.join("_Computer/X68000 Games")),
             ("oneload64-root", root.join("games/C64")),
         ] {
             append_path_signature(lines, name, idx, &path);
