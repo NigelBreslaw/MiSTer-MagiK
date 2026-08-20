@@ -1505,8 +1505,12 @@ fn catalog_stamp_check_at(
     let profiles =
         launch_profiles::active_profiles_for_roots_with_facts(&installed_cores, &game_dirs);
     let audit_t = Instant::now();
-    let audit_rows =
-        core_audit::audit_catalog_coverage_from_facts(&profiles, &installed_cores, &game_dirs);
+    let audit_rows = core_audit::audit_catalog_coverage_from_facts(
+        &cfg.roots,
+        &profiles,
+        &installed_cores,
+        &game_dirs,
+    );
     catalog_checkpoint::report_checkpoint_timing(
         "coverage_audit_fallback",
         audit_t.elapsed().as_micros() as u64,

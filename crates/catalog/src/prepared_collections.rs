@@ -12,7 +12,7 @@ use std::sync::{Mutex, OnceLock};
 
 use crate::media_metadata::{MglInspection, inspect_mgl, resolve_mgl_payload_path};
 
-pub const PREPARED_COLLECTION_ADAPTER_VERSION: u32 = 5;
+pub const PREPARED_COLLECTION_ADAPTER_VERSION: u32 = 6;
 
 #[derive(Default)]
 pub(crate) struct PreparedPayloadIndex {
@@ -484,6 +484,82 @@ pub(crate) fn validate_neon68k_mgl(path: &Path) -> Result<MglInspection, String>
     let inspection = inspect_mgl(path)?;
     validate_neon68k_mgl_inspection(path, &inspection)?;
     Ok(inspection)
+}
+
+pub(crate) fn is_neon68k_launcher_root(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.eq_ignore_ascii_case("X68000 Games"))
+        && path
+            .parent()
+            .and_then(Path::file_name)
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.eq_ignore_ascii_case("_Computer"))
+}
+
+pub(crate) fn is_followable_neon68k_launcher_root_symlink(path: &Path) -> bool {
+    is_neon68k_launcher_root(path)
+        && std::fs::symlink_metadata(path).is_ok_and(|metadata| metadata.file_type().is_symlink())
+        && std::fs::metadata(path).is_ok_and(|metadata| metadata.is_dir())
+}
+
+pub(crate) fn neon68k_launcher_root_is_available(path: &Path) -> bool {
+    std::fs::symlink_metadata(path).is_ok_and(|metadata| metadata.is_dir())
+        || is_followable_neon68k_launcher_root_symlink(path)
+}
+
+pub(crate) fn neon68k_launcher_root_for_library_root(configured_root: &Path) -> Option<PathBuf> {
+    let name = configured_root
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default();
+    if [
+        "_Arcade",
+        "_Games",
+        "_DOS Games",
+        "_Console (autoboot)",
+        "_LLAPI",
+        "X68000 Games",
+    ]
+    .iter()
+    .any(|candidate| name.eq_ignore_ascii_case(candidate))
+    {
+        return None;
+    }
+    let storage_root = if name.eq_ignore_ascii_case("games") {
+        configured_root.parent().unwrap_or(configured_root)
+    } else {
+        configured_root
+    };
+    Some(storage_root.join("_Computer/X68000 Games"))
+}
+
+pub(crate) fn neon68k_payload_signature_for_library_root(
+    configured_root: &Path,
+) -> Option<PathBuf> {
+    let name = configured_root
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or_default();
+    if [
+        "_Arcade",
+        "_Games",
+        "_DOS Games",
+        "_Console (autoboot)",
+        "_LLAPI",
+        "X68000 Games",
+    ]
+    .iter()
+    .any(|candidate| name.eq_ignore_ascii_case(candidate))
+    {
+        return None;
+    }
+    let games_root = if name.eq_ignore_ascii_case("games") {
+        configured_root.to_path_buf()
+    } else {
+        configured_root.join("games")
+    };
+    Some(games_root.join("X68000/boot3.vhd"))
 }
 
 pub(crate) fn validate_neon68k_mgl_inspection(

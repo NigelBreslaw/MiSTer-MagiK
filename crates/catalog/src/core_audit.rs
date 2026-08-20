@@ -11,6 +11,7 @@ use crate::launch_profiles::{
     self, LaunchProfile, PayloadDisposition, RuleSourceKind, RuntimeProfileDecision,
 };
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct CatalogAuditRow {
@@ -70,10 +71,11 @@ pub(crate) fn audit_catalog_coverage(
 ) -> Vec<CatalogAuditRow> {
     let installed_cores = catalog_discovery::installed_cores_for_roots(roots);
     let game_dirs = catalog_discovery::top_level_game_dirs_for_roots(roots);
-    audit_catalog_coverage_from_facts(profiles, &installed_cores, &game_dirs)
+    audit_catalog_coverage_from_facts(roots, profiles, &installed_cores, &game_dirs)
 }
 
 pub(crate) fn audit_catalog_coverage_from_facts(
+    roots: &[String],
     profiles: &[LaunchProfile],
     installed_cores: &[catalog_discovery::InstalledCore],
     game_dirs: &[catalog_discovery::GameDirFact],
@@ -81,7 +83,40 @@ pub(crate) fn audit_catalog_coverage_from_facts(
     let mut rows = BTreeMap::<String, CatalogAuditRow>::new();
     audit_installed_cores(installed_cores, profiles, &mut rows);
     audit_game_directories(game_dirs, installed_cores, profiles, &mut rows);
+    audit_prepared_collections(roots, &mut rows);
     rows.into_values().collect()
+}
+
+fn audit_prepared_collections(roots: &[String], rows: &mut BTreeMap<String, CatalogAuditRow>) {
+    let neon68k_payload_present = roots.iter().any(|root| {
+        crate::prepared_collections::neon68k_payload_signature_for_library_root(Path::new(root))
+            .is_some_and(|path| path.is_file())
+    });
+    if !neon68k_payload_present {
+        return;
+    }
+    let neon68k_launcher_available = roots.iter().any(|root| {
+        crate::prepared_collections::neon68k_launcher_root_for_library_root(Path::new(root))
+            .is_some_and(|path| {
+                crate::prepared_collections::neon68k_launcher_root_is_available(&path)
+            })
+    });
+    if neon68k_launcher_available {
+        return;
+    }
+    insert_audit_row(
+        rows,
+        CatalogAuditRow {
+            core_id: "X68000".to_string(),
+            core_path: "_Computer/X68000".to_string(),
+            expected_game_dir: "_Computer/X68000 Games".to_string(),
+            extensions: "mgl".to_string(),
+            mount_kind: "mgl".to_string(),
+            source: "prepared-collection".to_string(),
+            catalog_status: "uncataloged".to_string(),
+            reason: "neon68k-launcher-root-missing-or-unreadable".to_string(),
+        },
+    );
 }
 
 fn audit_installed_cores(
@@ -449,6 +484,7 @@ mod tests {
 
         std::fs::remove_file(&zip).expect("remove zip after primary walk");
         let rows = audit_catalog_coverage_from_facts(
+            &roots,
             &launch_profiles::builtin_profiles(),
             &installed_cores,
             &game_dirs,
@@ -478,6 +514,54 @@ mod tests {
             !rows
                 .iter()
                 .any(|row| { row.reason.contains("._Packed SMS Games.zip") })
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn neon68k_boot_volume_without_launchers_is_actionable() {
+        let root = unique_temp_dir("audit-neon68k-missing-launchers");
+        let payload_dir = root.join("games/X68000");
+        std::fs::create_dir_all(&payload_dir).expect("create X68000 payload dir");
+        std::fs::write(payload_dir.join("boot3.vhd"), b"boot").expect("write Neon68K boot");
+
+        let rows = audit_catalog_coverage(
+            &[root.display().to_string()],
+            &launch_profiles::builtin_profiles(),
+        );
+
+        assert!(rows.iter().any(|row| {
+            row.expected_game_dir == "_Computer/X68000 Games"
+                && row.catalog_status == "uncataloged"
+                && row.reason == "neon68k-launcher-root-missing-or-unreadable"
+        }));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn neon68k_followable_launcher_symlink_satisfies_audit() {
+        use std::os::unix::fs::symlink;
+
+        let root = unique_temp_dir("audit-neon68k-linked-launchers");
+        let payload_dir = root.join("games/X68000");
+        let launcher_source = root.join("launcher-source");
+        std::fs::create_dir_all(&payload_dir).expect("create X68000 payload dir");
+        std::fs::create_dir_all(&launcher_source).expect("create launcher source");
+        std::fs::create_dir_all(root.join("_Computer")).expect("create computer dir");
+        std::fs::write(payload_dir.join("boot3.vhd"), b"boot").expect("write Neon68K boot");
+        symlink(&launcher_source, root.join("_Computer/X68000 Games"))
+            .expect("create launcher symlink");
+
+        let rows = audit_catalog_coverage(
+            &[root.display().to_string()],
+            &launch_profiles::builtin_profiles(),
+        );
+
+        assert!(
+            !rows
+                .iter()
+                .any(|row| { row.reason == "neon68k-launcher-root-missing-or-unreadable" })
         );
         let _ = std::fs::remove_dir_all(root);
     }

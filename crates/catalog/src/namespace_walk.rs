@@ -36,6 +36,13 @@ pub(crate) enum NamespaceSignatureCapture {
     TargetAndDepthOneDirectories,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) enum NamespaceRootPolicy {
+    #[default]
+    NoFollow,
+    FollowSymlink,
+}
+
 impl NamespaceSignatureCapture {
     fn target(self) -> bool {
         matches!(self, Self::Target | Self::TargetAndDepthOneDirectories)
@@ -110,6 +117,24 @@ pub(crate) fn visit_with_signature_capture(
     max_depth: Option<usize>,
     signature_capture: NamespaceSignatureCapture,
     ignore: impl Fn(&Path) -> bool,
+    visitor: impl FnMut(&NamespaceEntry) -> bool,
+) -> NamespaceWalkStats {
+    visit_with_root_policy_and_signature_capture(
+        target,
+        max_depth,
+        NamespaceRootPolicy::NoFollow,
+        signature_capture,
+        ignore,
+        visitor,
+    )
+}
+
+pub(crate) fn visit_with_root_policy_and_signature_capture(
+    target: &Path,
+    max_depth: Option<usize>,
+    root_policy: NamespaceRootPolicy,
+    signature_capture: NamespaceSignatureCapture,
+    ignore: impl Fn(&Path) -> bool,
     mut visitor: impl FnMut(&NamespaceEntry) -> bool,
 ) -> NamespaceWalkStats {
     let requested =
@@ -118,6 +143,7 @@ pub(crate) fn visit_with_signature_capture(
         return visit_walkdir(
             target,
             max_depth,
+            root_policy,
             signature_capture,
             &ignore,
             &mut visitor,
@@ -127,7 +153,8 @@ pub(crate) fn visit_with_signature_capture(
 
     #[cfg(target_os = "linux")]
     if requested == "fd-relative" || requested == "auto" {
-        match linux::collect_fd_relative(target, max_depth, signature_capture, &ignore) {
+        match linux::collect_fd_relative(target, max_depth, root_policy, signature_capture, &ignore)
+        {
             Ok(capture) => {
                 for entry in &capture.entries {
                     if !visitor(entry) {
@@ -140,6 +167,7 @@ pub(crate) fn visit_with_signature_capture(
                 return visit_walkdir(
                     target,
                     max_depth,
+                    root_policy,
                     signature_capture,
                     &ignore,
                     &mut visitor,
@@ -153,6 +181,7 @@ pub(crate) fn visit_with_signature_capture(
         return visit_walkdir(
             target,
             max_depth,
+            root_policy,
             signature_capture,
             &ignore,
             &mut visitor,
@@ -168,6 +197,7 @@ pub(crate) fn visit_with_signature_capture(
     visit_walkdir(
         target,
         max_depth,
+        root_policy,
         signature_capture,
         &ignore,
         &mut visitor,
@@ -240,6 +270,7 @@ fn stable_directory_signature(
 fn visit_walkdir(
     target: &Path,
     max_depth: Option<usize>,
+    root_policy: NamespaceRootPolicy,
     signature_capture: NamespaceSignatureCapture,
     ignore: &dyn Fn(&Path) -> bool,
     visitor: &mut dyn FnMut(&NamespaceEntry) -> bool,
@@ -247,7 +278,7 @@ fn visit_walkdir(
 ) -> NamespaceWalkStats {
     let mut builder = walkdir::WalkDir::new(target)
         .follow_links(false)
-        .follow_root_links(false);
+        .follow_root_links(root_policy == NamespaceRootPolicy::FollowSymlink);
     if let Some(max_depth) = max_depth {
         builder = builder.max_depth(max_depth);
     }
@@ -301,10 +332,13 @@ fn visit_walkdir(
         }
     }
     let target_signature = if signature_capture.target() {
-        let after = std::fs::symlink_metadata(target)
-            .ok()
-            .filter(|metadata| metadata.is_dir())
-            .and_then(|metadata| metadata_signature(metadata.len(), metadata.modified().ok()));
+        let after = match root_policy {
+            NamespaceRootPolicy::NoFollow => std::fs::symlink_metadata(target),
+            NamespaceRootPolicy::FollowSymlink => std::fs::metadata(target),
+        }
+        .ok()
+        .filter(|metadata| metadata.is_dir())
+        .and_then(|metadata| metadata_signature(metadata.len(), metadata.modified().ok()));
         stable_directory_signature(target_signature_before, after)
     } else {
         None
@@ -354,8 +388,8 @@ fn unix_timestamp_nanos(seconds: i64, nanos: i64) -> i64 {
 #[cfg(target_os = "linux")]
 mod linux {
     use super::{
-        DirectorySignatureProbe, NamespaceEntry, NamespaceEntryKind, NamespaceSignatureCapture,
-        NamespaceWalkStats, is_zip_path, unix_timestamp_nanos,
+        DirectorySignatureProbe, NamespaceEntry, NamespaceEntryKind, NamespaceRootPolicy,
+        NamespaceSignatureCapture, NamespaceWalkStats, is_zip_path, unix_timestamp_nanos,
     };
     use std::ffi::{CString, OsString};
     use std::io;
@@ -394,12 +428,14 @@ mod linux {
     pub(super) fn collect_fd_relative(
         target: &Path,
         max_depth: Option<usize>,
+        root_policy: NamespaceRootPolicy,
         signature_capture: NamespaceSignatureCapture,
         ignore: &dyn Fn(&Path) -> bool,
     ) -> Result<NamespaceCapture, String> {
         collect_fd_relative_with_budget(
             target,
             max_depth,
+            root_policy,
             signature_capture,
             ignore,
             CaptureBudget::default(),
@@ -466,6 +502,7 @@ mod linux {
     fn collect_fd_relative_with_budget(
         target: &Path,
         max_depth: Option<usize>,
+        root_policy: NamespaceRootPolicy,
         signature_capture: NamespaceSignatureCapture,
         ignore: &dyn Fn(&Path) -> bool,
         budget: CaptureBudget,
@@ -489,10 +526,15 @@ mod linux {
             return Err("capture budget: zero open directory fds".to_string());
         }
         let target_name = c_string(target.as_os_str().as_bytes(), "target path")?;
+        let no_follow = if root_policy == NamespaceRootPolicy::NoFollow {
+            libc::O_NOFOLLOW
+        } else {
+            0
+        };
         let raw_fd = unsafe {
             libc::open(
                 target_name.as_ptr(),
-                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC | libc::O_NOFOLLOW,
+                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC | no_follow,
             )
         };
         if raw_fd < 0 {
@@ -826,6 +868,7 @@ mod linux {
         collect_fd_relative_with_budget(
             target,
             max_depth,
+            NamespaceRootPolicy::NoFollow,
             signature_capture,
             ignore,
             CaptureBudget {
@@ -855,6 +898,7 @@ mod tests {
         let stats = visit_walkdir(
             root,
             max_depth,
+            NamespaceRootPolicy::NoFollow,
             NamespaceSignatureCapture::None,
             ignore,
             &mut |entry| {
@@ -898,6 +942,41 @@ mod tests {
         let (entries, _) = walkdir_snapshot(&link, None, &|_| false);
         assert!(entries.is_empty());
 
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn root_only_policy_follows_root_but_not_nested_symlinks() {
+        use std::os::unix::fs::symlink;
+
+        let dir = unique_temp_dir("namespace-root-only-symlink");
+        let launchers = dir.join("launchers");
+        let duplicate = dir.join("duplicate");
+        fs::create_dir_all(&launchers).unwrap();
+        fs::create_dir_all(&duplicate).unwrap();
+        fs::write(launchers.join("Game.mgl"), b"mgl").unwrap();
+        fs::write(duplicate.join("Duplicate.mgl"), b"mgl").unwrap();
+        symlink(&duplicate, launchers.join("Collection")).unwrap();
+        let root = dir.join("root");
+        symlink(&launchers, &root).unwrap();
+
+        let mut paths = Vec::new();
+        visit_with_root_policy_and_signature_capture(
+            &root,
+            None,
+            NamespaceRootPolicy::FollowSymlink,
+            NamespaceSignatureCapture::None,
+            |_| false,
+            |entry| {
+                paths.push(entry.path.clone());
+                true
+            },
+        );
+
+        assert!(paths.contains(&root.join("Game.mgl")));
+        assert!(paths.contains(&root.join("Collection")));
+        assert!(!paths.contains(&root.join("Collection/Duplicate.mgl")));
         fs::remove_dir_all(dir).unwrap();
     }
 
@@ -1030,19 +1109,24 @@ mod tests {
         max_depth: Option<usize>,
         ignore: &dyn Fn(&Path) -> bool,
     ) -> Snapshot {
-        let mut entries =
-            linux::collect_fd_relative(root, max_depth, NamespaceSignatureCapture::None, ignore)
-                .unwrap()
-                .entries
-                .into_iter()
-                .map(|entry| {
-                    (
-                        entry.path.strip_prefix(root).unwrap().to_path_buf(),
-                        entry.kind,
-                        entry.zip_signature,
-                    )
-                })
-                .collect::<Vec<_>>();
+        let mut entries = linux::collect_fd_relative(
+            root,
+            max_depth,
+            NamespaceRootPolicy::NoFollow,
+            NamespaceSignatureCapture::None,
+            ignore,
+        )
+        .unwrap()
+        .entries
+        .into_iter()
+        .map(|entry| {
+            (
+                entry.path.strip_prefix(root).unwrap().to_path_buf(),
+                entry.kind,
+                entry.zip_signature,
+            )
+        })
+        .collect::<Vec<_>>();
         entries.sort_by(|left, right| left.0.cmp(&right.0));
         entries
     }

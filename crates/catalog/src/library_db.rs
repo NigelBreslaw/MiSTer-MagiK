@@ -683,6 +683,7 @@ fn coverage_audit_and_stamp(
     crate::cooperative_work::checkpoint();
     let audit_t = std::time::Instant::now();
     let audit_rows = core_audit::audit_catalog_coverage_from_facts(
+        &scan.roots,
         &scan.profiles,
         &scan.installed_cores,
         &scan.game_dir_facts,
@@ -3327,6 +3328,7 @@ mod tests {
         let current_cores = crate::catalog_discovery::installed_cores_for_roots(&roots);
         let current_game_dirs = crate::catalog_discovery::top_level_game_dirs_for_roots(&roots);
         let current_audit = core_audit::audit_catalog_coverage_from_facts(
+            &roots,
             &profiles,
             &current_cores,
             &current_game_dirs,

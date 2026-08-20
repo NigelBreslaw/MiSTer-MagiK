@@ -1639,6 +1639,7 @@ fn scan_library_with_progress_and_events(
         CoverageAuditMode::Inline => {
             let audit_t = Instant::now();
             let audit_rows = core_audit::audit_catalog_coverage_from_facts(
+                &cfg.roots,
                 &profiles,
                 plan.installed_cores(),
                 &game_dir_facts,

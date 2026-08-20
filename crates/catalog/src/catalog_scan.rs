@@ -11,7 +11,8 @@ use crate::library_db::{
     self, ArchiveFormat, ArchiveScanStatus, LibraryContainer, LibraryContainerEntry,
 };
 use crate::namespace_walk::{
-    self, NamespaceEntry, NamespaceEntryKind, NamespaceSignatureCapture, NamespaceWalkStats,
+    self, NamespaceEntry, NamespaceEntryKind, NamespaceRootPolicy, NamespaceSignatureCapture,
+    NamespaceWalkStats,
 };
 use crate::runtime_thread::{RuntimeThreadRole, apply_runtime_thread_policy};
 use std::collections::{BTreeMap, HashSet};
@@ -906,9 +907,16 @@ fn scan_target_candidates_with_facts(
     } else {
         NamespaceSignatureCapture::None
     };
-    let namespace_stats = namespace_walk::visit_with_signature_capture(
+    let root_policy =
+        if crate::prepared_collections::is_followable_neon68k_launcher_root_symlink(target) {
+            NamespaceRootPolicy::FollowSymlink
+        } else {
+            NamespaceRootPolicy::NoFollow
+        };
+    let namespace_stats = namespace_walk::visit_with_root_policy_and_signature_capture(
         target,
         None,
+        root_policy,
         signature_capture,
         should_ignore_path,
         |entry| {
@@ -1395,7 +1403,9 @@ fn scan_targets_for_roots(roots: &[String], profiles: &[LaunchProfile]) -> Vec<P
     let mut targets = Vec::new();
     for root in roots {
         let path = Path::new(root);
-        if !is_real_dir(path) {
+        if !is_real_dir(path)
+            && !crate::prepared_collections::is_followable_neon68k_launcher_root_symlink(path)
+        {
             continue;
         }
         if is_direct_scan_root(path, profiles) {
@@ -1417,15 +1427,11 @@ fn scan_targets_for_roots(roots: &[String], profiles: &[LaunchProfile]) -> Vec<P
 }
 
 fn push_prepared_collection_targets(targets: &mut Vec<PathBuf>, configured_root: &Path) {
-    let storage_root = if ["games", "_Arcade", "_Games", "_DOS Games", "_LLAPI"]
-        .iter()
-        .any(|name| path_name_eq(configured_root, name))
+    if let Some(root) =
+        crate::prepared_collections::neon68k_launcher_root_for_library_root(configured_root)
     {
-        configured_root.parent().unwrap_or(configured_root)
-    } else {
-        configured_root
-    };
-    push_scan_target(targets, storage_root.join("_Computer").join("X68000 Games"));
+        push_scan_target(targets, root);
+    }
 }
 
 fn push_profile_game_dirs(
@@ -1447,7 +1453,9 @@ fn push_profile_game_dirs(
 }
 
 fn push_scan_target(targets: &mut Vec<PathBuf>, path: PathBuf) {
-    if is_real_dir(&path) {
+    if is_real_dir(&path)
+        || crate::prepared_collections::is_followable_neon68k_launcher_root_symlink(&path)
+    {
         targets.push(path);
     }
 }
@@ -3438,6 +3446,66 @@ mod tests {
         assert_eq!(
             discovery.prepared.map(|value| value.collection_id),
             Some(crate::prepared_collections::PreparedCollectionId::Neon68k)
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scanner_follows_only_neon68k_launcher_root_symlink() {
+        use std::os::unix::fs::symlink;
+
+        let root = unique_temp_dir("neon68k-root-symlink-scan");
+        let launcher_source = root.join("launcher-source");
+        let payload_dir = root.join("games/X68000");
+        std::fs::create_dir_all(&launcher_source).expect("create launcher source");
+        std::fs::create_dir_all(&payload_dir).expect("create payload dir");
+        std::fs::create_dir_all(root.join("_Computer")).expect("create computer dir");
+        std::fs::write(payload_dir.join("Akumajou.hdf"), b"hdf").expect("write HDF");
+        let mgl = launcher_source.join("Akumajou Dracula.mgl");
+        std::fs::write(
+            &mgl,
+            r#"<mistergamedescription><rbf>X68000</rbf><setname>Akumajou</setname><file path="../../games/X68000/Akumajou.hdf"/></mistergamedescription>"#,
+        )
+        .expect("write MGL");
+        let duplicate_dir = root.join("duplicate-collection");
+        std::fs::create_dir_all(&duplicate_dir).expect("create duplicate collection");
+        std::fs::write(duplicate_dir.join("Duplicate.mgl"), b"duplicate")
+            .expect("write duplicate MGL");
+        symlink(&duplicate_dir, launcher_source.join("Collection"))
+            .expect("create nested collection symlink");
+        let launcher_root = root.join("_Computer/X68000 Games");
+        symlink(&launcher_source, &launcher_root).expect("create launcher root symlink");
+        let cfg = BenchConfig {
+            roots: vec![root.display().to_string()],
+            sqlite_path: root.join("library.sqlite3"),
+        };
+
+        let scan = scan_library(&cfg);
+        let prepared = scan
+            .discoveries
+            .iter()
+            .filter(|discovery| {
+                discovery.prepared.is_some_and(|prepared| {
+                    prepared.collection_id
+                        == crate::prepared_collections::PreparedCollectionId::Neon68k
+                })
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(prepared.len(), 1);
+        assert_eq!(
+            prepared[0].launch_ref,
+            launcher_root
+                .join("Akumajou Dracula.mgl")
+                .display()
+                .to_string()
+        );
+        assert!(
+            !scan
+                .discoveries
+                .iter()
+                .any(|discovery| { discovery.launch_ref.contains("Collection/Duplicate.mgl") })
         );
         let _ = std::fs::remove_dir_all(root);
     }
