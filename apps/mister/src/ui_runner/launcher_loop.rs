@@ -5333,7 +5333,7 @@ pub(super) fn run_launcher_loop(
     let mut crt_backdrop = CrtBackdropController::for_display(ui);
     let mut crt_arcade_overlay = CrtArcadeOverlayState::new();
     let mut launcher_preview_version = 1u64;
-    let launcher_arcade_version = 1u64;
+    let mut launcher_arcade_version = 1u64;
     let mut launcher_arcade_scroll_offset = LayerOffset::ZERO;
     let mut launcher_arcade_content_generation = 1u64;
     let mut launcher_preview_publication: Option<PhysicalLayerPublication> = None;
@@ -10608,16 +10608,13 @@ pub(super) fn run_launcher_loop(
             None
         };
         let layer_arcade_update = direct_arcade_update.or(arcade_list_rect);
-        if let Some(ArcadeListUpdate::Scroll {
-            delta_x, delta_y, ..
-        }) = layer_arcade_update
-        {
-            launcher_arcade_scroll_offset.x = launcher_arcade_scroll_offset
-                .x
-                .saturating_add(delta_x as i64);
-            launcher_arcade_scroll_offset.y = launcher_arcade_scroll_offset
-                .y
-                .saturating_add(delta_y as i64);
+        if !crt_layout {
+            update_arcade_physical_layer_tracking(
+                &mut launcher_arcade_version,
+                &mut launcher_arcade_scroll_offset,
+                layer_arcade_update,
+                layout.is_portrait(),
+            );
         }
         if layout.is_portrait()
             && let Some(update) = direct_arcade_update
@@ -13845,6 +13842,26 @@ fn should_draw_arcade_overlay(
     !launching && nav.screen == Screen::Arcade && active_arcade_games_available
 }
 
+fn update_arcade_physical_layer_tracking(
+    version: &mut u64,
+    content_offset: &mut LayerOffset,
+    update: Option<ArcadeListUpdate>,
+    publication_tracks_content_generation: bool,
+) {
+    match update {
+        Some(ArcadeListUpdate::Full(_)) if !publication_tracks_content_generation => {
+            *version = version.wrapping_add(1).max(1);
+        }
+        Some(ArcadeListUpdate::Scroll {
+            delta_x, delta_y, ..
+        }) => {
+            content_offset.x = content_offset.x.saturating_add(delta_x as i64);
+            content_offset.y = content_offset.y.saturating_add(delta_y as i64);
+        }
+        _ => {}
+    }
+}
+
 fn effective_lock_screen(
     lock_screen: Option<Screen>,
     catalog_ready: bool,
@@ -15536,6 +15553,52 @@ mod tests {
         assert!(first.allow_arcade_list_blit);
         assert!(full_present.allow_arcade_list_blit);
         assert!(arcade_list_needs_forced_redraw(&renderer, None, true));
+    }
+
+    #[test]
+    fn landscape_full_arcade_update_advances_layer_identity_for_both_slots() {
+        let rect = DirtyRect {
+            x0: 0,
+            y0: 0,
+            x1: 4,
+            y1: 3,
+        };
+        let mut landscape_version = 1;
+        let mut landscape_offset = LayerOffset::ZERO;
+
+        update_arcade_physical_layer_tracking(
+            &mut landscape_version,
+            &mut landscape_offset,
+            Some(ArcadeListUpdate::Full(rect)),
+            false,
+        );
+        assert_eq!(landscape_version, 2);
+        assert_eq!(landscape_offset, LayerOffset::ZERO);
+
+        update_arcade_physical_layer_tracking(
+            &mut landscape_version,
+            &mut landscape_offset,
+            Some(ArcadeListUpdate::Scroll {
+                delta_x: -2,
+                delta_y: 3,
+                rect,
+                repair_rect: None,
+            }),
+            false,
+        );
+        assert_eq!(landscape_version, 2);
+        assert_eq!(landscape_offset, LayerOffset::new(-2, 3));
+
+        let mut portrait_version = 1;
+        let mut portrait_offset = LayerOffset::ZERO;
+        update_arcade_physical_layer_tracking(
+            &mut portrait_version,
+            &mut portrait_offset,
+            Some(ArcadeListUpdate::Full(rect)),
+            true,
+        );
+        assert_eq!(portrait_version, 1);
+        assert_eq!(portrait_offset, LayerOffset::ZERO);
     }
 
     #[test]
