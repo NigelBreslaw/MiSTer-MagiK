@@ -204,6 +204,18 @@ struct StageOutput<T> {
 }
 
 #[derive(Clone, Debug)]
+enum PostScanDecision<T> {
+    Continue(T),
+    Unchanged(BuilderSummary),
+}
+
+#[derive(Clone, Debug)]
+struct PostScanOutput<T> {
+    decision: PostScanDecision<T>,
+    timings: Vec<(String, String)>,
+}
+
+#[derive(Clone, Debug)]
 enum CheckDecision {
     Unchanged(BuilderSummary),
     Changed {
@@ -249,6 +261,15 @@ trait BuilderBackend {
         progress: &mut dyn FnMut(&str, &str),
         scan_event: &mut dyn FnMut(crate::library_db::LibraryScanEvent),
     ) -> Result<StageOutput<Self::Scan>, String>;
+    fn decide_after_scan(
+        &mut self,
+        scan: Self::Scan,
+    ) -> Result<PostScanOutput<Self::Scan>, StageFailure> {
+        Ok(PostScanOutput {
+            decision: PostScanDecision::Continue(scan),
+            timings: Vec::new(),
+        })
+    }
     fn prepare(
         &mut self,
         scan: Self::Scan,
@@ -493,6 +514,20 @@ fn run_with_backend_policy<B: BuilderBackend>(
     .map_err(|error| fail(protocol, "scan", error, emit))?;
     drop(scan_pmu);
     emit_timings(protocol, scanned.timings, emit);
+    let post_scan = backend
+        .decide_after_scan(scanned.value)
+        .map_err(|failure| fail(protocol, failure.stage, failure.error, emit))?;
+    emit_timings(protocol, post_scan.timings, emit);
+    let scanned = match post_scan.decision {
+        PostScanDecision::Continue(scanned) => scanned,
+        PostScanDecision::Unchanged(summary) => {
+            emit(CatalogBuilderEvent::Unchanged { protocol, summary });
+            snapshot_cleanup.remove_now();
+            crate::catalog_logln!("catalog_builder_event_tsv\tevent=Done");
+            emit(CatalogBuilderEvent::Done { protocol });
+            return Ok(());
+        }
+    };
     wait_for_background_heavy_work_enabled(background_build);
     let prepare_pmu = mister_magik_perf_events::sampled_span("catalog.prepare");
     let prepared = {
@@ -507,7 +542,7 @@ fn run_with_backend_policy<B: BuilderBackend>(
             });
         };
         backend
-            .prepare(scanned.value, &mut prepare_progress)
+            .prepare(scanned, &mut prepare_progress)
             .map_err(|error| fail(protocol, "prepare-catalog", error, emit))?
     };
     drop(prepare_pmu);
@@ -1828,6 +1863,7 @@ mod tests {
         fail_stage: Option<&'static str>,
         cleanup_removed: usize,
         check_unchanged: bool,
+        post_scan_unchanged: bool,
         bootstrap_first_visible: bool,
         calls: Vec<&'static str>,
         bootstrap_background_scopes: Vec<bool>,
@@ -1917,6 +1953,27 @@ mod tests {
             Ok(StageOutput {
                 value: (),
                 timings: vec![("library_scan_complete".into(), "fixture".into())],
+            })
+        }
+
+        fn decide_after_scan(
+            &mut self,
+            scan: Self::Scan,
+        ) -> Result<PostScanOutput<Self::Scan>, StageFailure> {
+            self.calls.push("post-scan-decision");
+            self.fail("post-scan-decision")
+                .map_err(|error| StageFailure::new("post-scan-decision", error))?;
+            Ok(PostScanOutput {
+                decision: if self.post_scan_unchanged {
+                    PostScanDecision::Unchanged(BuilderSummary {
+                        skipped: true,
+                        discoveries: 2,
+                        ..BuilderSummary::default()
+                    })
+                } else {
+                    PostScanDecision::Continue(scan)
+                },
+                timings: vec![("builder_post_scan_decision".into(), "fixture".into())],
             })
         }
 
@@ -2115,6 +2172,7 @@ mod tests {
             backend.calls,
             [
                 "scan",
+                "post-scan-decision",
                 "prepare-catalog",
                 "snapshot",
                 "retain-first-visible",
@@ -2178,6 +2236,7 @@ mod tests {
                 "snapshot",
                 "retain-first-visible",
                 "scan",
+                "post-scan-decision",
                 "prepare-catalog",
                 "persist",
                 "build-duration"
@@ -2323,10 +2382,56 @@ mod tests {
     }
 
     #[test]
+    fn unchanged_post_scan_decision_skips_prepare_snapshot_and_persist() {
+        let config = fixture_config("post-scan-unchanged");
+        let snapshot = config.snapshot_path.clone();
+        let mut backend = FakeBackend {
+            post_scan_unchanged: true,
+            ..FakeBackend::default()
+        };
+        let mut events = Vec::new();
+
+        run_with_backend(
+            BuilderOperation::Rebuild,
+            config,
+            &mut backend,
+            &mut |event| events.push(event),
+        )
+        .unwrap();
+
+        assert_eq!(backend.calls, ["scan", "post-scan-decision"]);
+        assert!(!snapshot.exists());
+        assert!(events.iter().any(|event| {
+            matches!(
+                event,
+                CatalogBuilderEvent::Timing { name, .. }
+                    if name == "builder_post_scan_decision"
+            )
+        }));
+        assert!(events.iter().any(|event| {
+            matches!(
+                event,
+                CatalogBuilderEvent::Unchanged { summary, .. }
+                    if summary.skipped && summary.discoveries == 2
+            )
+        }));
+        assert!(matches!(
+            events.last(),
+            Some(CatalogBuilderEvent::Done { .. })
+        ));
+        assert!(
+            !events
+                .iter()
+                .any(|event| matches!(event, CatalogBuilderEvent::Persisted { .. }))
+        );
+    }
+
+    #[test]
     fn every_backend_failure_emits_one_staged_failure_and_cleans_snapshot() {
         for stage in [
             "fresh-cleanup",
             "scan",
+            "post-scan-decision",
             "prepare-catalog",
             "snapshot",
             "persist",
