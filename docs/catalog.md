@@ -1,9 +1,10 @@
 # Catalog V3
 
 Catalog V3 is the only production catalog used by MiSTer MagiK. Its public
-registry, state, binding, and scanner-cache schemas are version **1**; the
-mini-navigation and NavPack schemas are version **2** and the SQLite shard
-schema is version **4**. There is no global summary or global navigation file.
+registry, state, binding, scanner-cache, and persisted-search schemas are
+version **1**; mini-navigation is version **3**, NavPack is version **2**, and
+the SQLite shard schema is version **5**. The canonical catalog schema/build
+identity is **67/17**. There is no global summary or global navigation file.
 JSON mini-navigation remains a build and integrity artifact; interactive system
 entry accepts only the active generation's checked NavPack.
 
@@ -141,6 +142,14 @@ When a valid published catalog already exists, normal startup does not scan the
 library or reconcile changed inputs. Users explicitly request catalog updates
 with Settings → **Rebuild Database**; first-run construction still starts
 automatically when no valid catalog exists.
+
+An update whose public format descriptor is unchanged reuses that published
+catalog directly. An explicitly recognized predecessor format is classified as
+upgrade-required and rebuilt under the current descriptor; incomplete or
+incompatible disposable `build-progress-v3` and `target-output-cache-v3` state
+is discarded independently. The previous published generation remains the
+publication/recovery authority, but a current reader does not expose an older
+incompatible generation while its replacement is being built.
 
 Activating a non-resident collection schedules one foreground request on the
 long-lived CPU0 `SystemEntryPrepare` worker. It opens the active
