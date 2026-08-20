@@ -536,12 +536,12 @@ fn queue_target_checkpoint(
 ) {
     state.pending_bytes = state
         .pending_bytes
-        .saturating_add(completed.output_json.len());
+        .saturating_add(completed.output_frame.len());
     state.checkpoint.queued_targets = state.checkpoint.queued_targets.saturating_add(1);
     state.checkpoint.queued_bytes = state
         .checkpoint
         .queued_bytes
-        .saturating_add(completed.output_json.len());
+        .saturating_add(completed.output_frame.len());
     state.pending.push(completed);
     if state.pending.len() >= RESUME_CHECKPOINT_TARGET_BATCH
         || state.pending_bytes >= RESUME_CHECKPOINT_MAX_BYTES
@@ -1181,8 +1181,11 @@ fn scan_library_with_progress_and_events(
                     .as_mut()
                     .and_then(|state| state.reusable.remove(&(descriptor.ordinal as u32)))
                 {
-                    match serde_json::from_str::<TargetOutput>(&saved.output_json) {
-                        Ok(output) => {
+                    match bincode::serde::decode_from_slice::<TargetOutput, _>(
+                        &saved.output_frame,
+                        bincode::config::standard(),
+                    ) {
+                        Ok((output, consumed)) if consumed == saved.output_frame.len() => {
                             let first = discoveries.len();
                             game_dir_facts.extend(output.game_dir_facts);
                             normal_files.extend(output.normal_files);
@@ -1205,6 +1208,17 @@ fn scan_library_with_progress_and_events(
                                     "target-reused",
                                     descriptor.ordinal,
                                     "fingerprint-match",
+                                );
+                            }
+                        }
+                        Ok(_) => {
+                            if let Some(state) = resume.as_mut() {
+                                state.invalidated += 1;
+                                report_resume(
+                                    state,
+                                    "target-invalidated",
+                                    descriptor.ordinal,
+                                    "decode-error:trailing-frame-bytes",
                                 );
                             }
                         }
@@ -1243,8 +1257,8 @@ fn scan_library_with_progress_and_events(
                         .snapshot_us
                         .saturating_add(snapshot_started.elapsed().as_micros() as u64);
                     let encode_started = Instant::now();
-                    match serde_json::to_string(&output) {
-                        Ok(output_json) => {
+                    match bincode::serde::encode_to_vec(&output, bincode::config::standard()) {
+                        Ok(output_frame) => {
                             state.checkpoint.encode_us = state
                                 .checkpoint
                                 .encode_us
@@ -1260,7 +1274,7 @@ fn scan_library_with_progress_and_events(
                                 let completed = crate::build_progress::CompletedTarget {
                                     target: progress_target(&descriptor),
                                     input_fingerprint,
-                                    output_json,
+                                    output_frame,
                                     accumulated_stats: crate::build_progress::BuildStats {
                                         normal_files: normal_files.len() as u64,
                                         containers: containers.len() as u64,
@@ -1853,6 +1867,50 @@ mod incremental_planning_tests {
             mtime_secs: 1,
         });
         assert_ne!(lower.finish(), upper.finish());
+    }
+
+    #[test]
+    fn add_remove_rename_and_archive_listing_changes_are_detected() {
+        let file = |path: &str| catalog_scan::FoundFile {
+            path: PathBuf::from(path),
+            ext: "sfc".into(),
+            size: 1,
+            mtime_secs: 1,
+        };
+        let mut original = Fingerprint::new();
+        original.file(&file("/games/SNES/one.sfc"));
+        let original = original.finish();
+        let mut added = Fingerprint::new();
+        added.file(&file("/games/SNES/one.sfc"));
+        added.file(&file("/games/SNES/two.sfc"));
+        assert_ne!(original, added.finish());
+        let mut renamed = Fingerprint::new();
+        renamed.file(&file("/games/SNES/renamed.sfc"));
+        assert_ne!(original, renamed.finish());
+        let mut removed = Fingerprint::new();
+        assert_ne!(original, removed.finish());
+
+        let root = std::env::temp_dir().join(format!(
+            "mister-magik-archive-signature-{}-{}",
+            std::process::id(),
+            library_db::unix_now_secs()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let archive = root.join("games.zip");
+        fs::write(&archive, b"central-directory-one").unwrap();
+        let found = || catalog_scan::FoundFile {
+            path: archive.clone(),
+            ext: "zip".into(),
+            size: 21,
+            mtime_secs: 1,
+        };
+        let mut before = Fingerprint::new();
+        before.file(&found());
+        fs::write(&archive, b"central-directory-two").unwrap();
+        let mut after = Fingerprint::new();
+        after.file(&found());
+        assert_ne!(before.finish(), after.finish());
+        fs::remove_dir_all(root).unwrap();
     }
 }
 

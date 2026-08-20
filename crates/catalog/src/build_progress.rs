@@ -23,7 +23,7 @@ const METADATA_FILE_NAME: &str = "metadata.sqlite3";
 const FRAME_FILE_NAME: &str = "target-outputs.lz4";
 const LEGACY_PROGRESS_FILE_NAME: &str = "build-progress.sqlite3";
 const LEGACY_COMMITTED_FILE_NAME: &str = "target-output-cache.sqlite3";
-const SCHEMA_VERSION: u32 = 4;
+const SCHEMA_VERSION: u32 = 5;
 const MAX_TARGET_OUTPUT_BYTES: usize = 256 * 1024 * 1024;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -61,9 +61,9 @@ pub struct ScanTarget {
 pub struct CompletedTarget {
     pub target: ScanTarget,
     pub input_fingerprint: String,
-    /// Versioned scanner-owned JSON. The journal deliberately does not
-    /// interpret payload/container/entry/discovery facts.
-    pub output_json: String,
+    /// Versioned scanner-owned binary payload. The journal deliberately does
+    /// not interpret payload/container/entry/discovery facts.
+    pub output_frame: Vec<u8>,
     pub accumulated_stats: BuildStats,
     pub affected_systems: Vec<String>,
 }
@@ -434,7 +434,7 @@ impl BuildProgressJournal {
         Ok(CompletedTarget {
             target: metadata.target.clone(),
             input_fingerprint: metadata.input_fingerprint.clone(),
-            output_json: self.read_target_frame(
+            output_frame: self.read_target_frame(
                 metadata.frame_offset,
                 metadata.frame_len,
                 metadata.raw_len,
@@ -451,7 +451,7 @@ impl BuildProgressJournal {
         frame_len: u64,
         raw_len: u64,
         expected_sha256: &str,
-    ) -> Result<String, String> {
+    ) -> Result<Vec<u8>, String> {
         let frame_len = usize::try_from(frame_len)
             .map_err(|_| "target frame length exceeds address space".to_string())?;
         let raw_len = usize::try_from(raw_len)
@@ -486,7 +486,7 @@ impl BuildProgressJournal {
         if decoded.len() != raw_len || decoded.len() > MAX_TARGET_OUTPUT_BYTES {
             return Err("target frame decoded length mismatch".to_string());
         }
-        String::from_utf8(decoded).map_err(|error| format!("decode target frame UTF-8: {error}"))
+        Ok(decoded)
     }
 
     /// Atomically makes all output for one target resumable.
@@ -509,12 +509,12 @@ impl BuildProgressJournal {
         }
         let raw_bytes = completed
             .iter()
-            .map(|target| target.output_json.len())
+            .map(|target| target.output_frame.len())
             .sum();
         let compress_started = Instant::now();
         let encoded = completed
             .iter()
-            .map(|target| lz4_flex::compress_prepend_size(target.output_json.as_bytes()))
+            .map(|target| lz4_flex::compress_prepend_size(&target.output_frame))
             .collect::<Vec<_>>();
         let compress_us = elapsed_us(compress_started);
         let frame_bytes = encoded.iter().map(Vec::len).sum();
@@ -537,7 +537,7 @@ impl BuildProgressJournal {
                 target,
                 offset,
                 encoded.len() as u64,
-                target.output_json.len() as u64,
+                target.output_frame.len() as u64,
                 sha256_hex(encoded),
             ));
             offset = offset.saturating_add(encoded.len() as u64);
@@ -956,7 +956,7 @@ mod tests {
         CompletedTarget {
             target: targets().remove(0),
             input_fingerprint: "abc".into(),
-            output_json: r#"{"files":1}"#.into(),
+            output_frame: br#"{"files":1}"#.to_vec(),
             accumulated_stats: BuildStats {
                 normal_files: 1,
                 ..BuildStats::default()
@@ -1015,7 +1015,7 @@ mod tests {
         let id = journal.build_id().to_string();
         let attribution = journal.checkpoint_target(&completed()).unwrap();
         assert_eq!(attribution.targets, 1);
-        assert_eq!(attribution.raw_bytes, completed().output_json.len());
+        assert_eq!(attribution.raw_bytes, completed().output_frame.len());
         assert!(attribution.frame_bytes > 0);
         let shard = CompletedShard {
             system_id: "arcade".into(),
@@ -1135,7 +1135,7 @@ mod tests {
             CompletedTarget {
                 target: targets[0].clone(),
                 input_fingerprint: "first-fingerprint".into(),
-                output_json: "{}".into(),
+                output_frame: b"{}".to_vec(),
                 accumulated_stats: BuildStats::default(),
                 affected_systems: vec!["first".into()],
             },
@@ -1145,7 +1145,7 @@ mod tests {
                     ..targets[1].clone()
                 },
                 input_fingerprint: "second-fingerprint".into(),
-                output_json: "{}".into(),
+                output_frame: b"{}".to_vec(),
                 accumulated_stats: BuildStats::default(),
                 affected_systems: vec!["second".into()],
             },
@@ -1264,7 +1264,7 @@ mod tests {
                 .checkpoint_target(&CompletedTarget {
                     target: targets[ordinal as usize].clone(),
                     input_fingerprint: format!("fingerprint-{ordinal}"),
-                    output_json: format!(r#"{{"target":{ordinal}}}"#),
+                    output_frame: format!(r#"{{"target":{ordinal}}}"#).into_bytes(),
                     accumulated_stats: BuildStats {
                         discoveries: (ordinal + 1) as u64,
                         ..BuildStats::default()
