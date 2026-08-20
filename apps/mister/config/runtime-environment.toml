@@ -353,6 +353,21 @@ aliases = []
 documentation = { summary = "Controls camera effects trace behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
+name = "MISTER_CATALOG_ARTIFACT_COPY"
+owner = "crates/catalog/src/shard_registry.rs"
+classification = "benchmark"
+value_shape = "enum token"
+default_behavior = "uses buffered copy-and-hash publication when unset"
+visibility = "benchmark only"
+parser = "enum"
+typed_default = "buffered"
+scope = "instrumentation"
+conflicts = []
+sensitivity = "public"
+aliases = []
+documentation = { summary = "Selects the catalog artifact copy implementation for benchmark comparison", accepted_values = ["buffered", "preallocated", "copy-file-range"], value_policy = "document" }
+
+[[control]]
 name = "MISTER_CATALOG_BACKGROUND_DELAY_MS"
 owner = "apps/mister/src/ui_runner/launcher_loop.rs"
 classification = "production"
@@ -463,6 +478,21 @@ conflicts = []
 sensitivity = "public"
 aliases = []
 documentation = { summary = "Controls catalog refresh behavior", accepted_values = [], value_policy = "document" }
+
+[[control]]
+name = "MISTER_CATALOG_SHARD_STAGING"
+owner = "crates/catalog/src/reconciliation_executor.rs"
+classification = "benchmark"
+value_shape = "enum token"
+default_behavior = "automatically selects tmpfs when supported and sufficiently sized, otherwise generation-private on-media staging"
+visibility = "benchmark only"
+parser = "enum"
+typed_default = "auto"
+scope = "instrumentation"
+conflicts = []
+sensitivity = "public"
+aliases = []
+documentation = { summary = "Selects the catalog shard staging route for benchmark comparison", accepted_values = ["auto", "tmpfs", "on-media"], value_policy = "document" }
 
 [[control]]
 name = "MISTER_CATALOG_TRACE"
