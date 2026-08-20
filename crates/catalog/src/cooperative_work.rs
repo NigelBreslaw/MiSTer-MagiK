@@ -141,6 +141,7 @@ pub(crate) fn in_background_scope() -> bool {
 mod tests {
     use super::*;
     use std::sync::mpsc;
+    use std::time::Duration;
 
     #[test]
     fn background_scope_pauses_and_resumes_without_restarting() {
