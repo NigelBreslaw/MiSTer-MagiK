@@ -69,12 +69,9 @@ pub fn execute_with_changes(
         reporter.emit(EventKind::Progress, "plan", "Nothing to check", Some(100))?;
         return Ok(Outcome::NoOp);
     }
-    let command = match &plan.request {
-        crate::model::AssuranceRequest::PrePush { .. } => "pre-push",
-        crate::model::AssuranceRequest::CiHostAssurance { .. } => "ci host-assurance",
-        _ => "check",
-    };
-    let collect_all = collect_all_failures(&plan.request);
+    let policy = ExecutionPolicy::for_request(&plan.request);
+    let command = policy.command;
+    let collect_all = policy.collect_all;
     let fingerprints = FingerprintContext::new(repository, &plan.operations, changes)?;
     let mut failures = Vec::new();
     let mut phase = None;
@@ -107,8 +104,7 @@ pub fn execute_with_changes(
                 &plan.operations[start..index],
                 &fingerprints,
                 reporter,
-                command,
-                collect_all,
+                policy,
             )?;
             if !batch_failures.is_empty() {
                 if !collect_all {
@@ -214,12 +210,29 @@ enum OperationRunError {
     Infrastructure(String),
 }
 
-const fn collect_all_failures(request: &crate::model::AssuranceRequest) -> bool {
-    matches!(
-        request,
-        crate::model::AssuranceRequest::PrePush { .. }
-            | crate::model::AssuranceRequest::CiHostAssurance { .. }
-    )
+#[derive(Clone, Copy, Debug)]
+struct ExecutionPolicy {
+    command: &'static str,
+    collect_all: bool,
+}
+
+impl ExecutionPolicy {
+    const fn for_request(request: &crate::model::AssuranceRequest) -> Self {
+        match request {
+            crate::model::AssuranceRequest::PrePush { .. } => Self {
+                command: "pre-push",
+                collect_all: true,
+            },
+            crate::model::AssuranceRequest::CiHostAssurance { .. } => Self {
+                command: "ci host-assurance",
+                collect_all: true,
+            },
+            crate::model::AssuranceRequest::Plan { .. } => Self {
+                command: "check",
+                collect_all: false,
+            },
+        }
+    }
 }
 
 impl From<String> for OperationRunError {
@@ -358,9 +371,9 @@ fn run_builtin_batch(
     operations: &[Operation],
     fingerprints: &FingerprintContext,
     reporter: &mut Reporter<'_>,
-    command: &str,
-    collect_all: bool,
+    policy: ExecutionPolicy,
 ) -> Result<Vec<CheckFailure>, String> {
+    let command = policy.command;
     let mut pending = Vec::new();
     let mut failures = Vec::new();
     for operation in operations {
@@ -428,7 +441,7 @@ fn run_builtin_batch(
                 evidence.release_validation(&operation.id, fingerprint, request_id)?;
             }
         }
-        if !collect_all && !failures.is_empty() {
+        if !policy.collect_all && !failures.is_empty() {
             for (operation, _, cache) in &pending {
                 if let Some(fingerprint) = cache {
                     evidence.release_validation(&operation.id, fingerprint, request_id)?;
@@ -1171,15 +1184,24 @@ mod tests {
 
     #[test]
     fn pre_push_and_ci_collect_failures_but_plan_does_not() {
-        assert!(collect_all_failures(&AssuranceRequest::PrePush {
-            remote: "origin".into(),
-        }));
-        assert!(collect_all_failures(&AssuranceRequest::CiHostAssurance {
-            scope: Scope::WorkingTree,
-        }));
-        assert!(!collect_all_failures(&AssuranceRequest::Plan {
-            scope: Scope::WorkingTree,
-        }));
+        assert!(
+            ExecutionPolicy::for_request(&AssuranceRequest::PrePush {
+                remote: "origin".into(),
+            })
+            .collect_all
+        );
+        assert!(
+            ExecutionPolicy::for_request(&AssuranceRequest::CiHostAssurance {
+                scope: Scope::WorkingTree,
+            })
+            .collect_all
+        );
+        assert!(
+            !ExecutionPolicy::for_request(&AssuranceRequest::Plan {
+                scope: Scope::WorkingTree,
+            })
+            .collect_all
+        );
     }
 
     #[test]
