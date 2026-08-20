@@ -502,9 +502,8 @@ pub fn catalog_corpus_inventory_tsv(roots: &[String]) -> String {
 
     for (ordinal, target) in targets.into_iter().enumerate() {
         let descriptor = target.descriptor(ordinal);
-        let profile = profile_for_path(profiles, &descriptor.path);
         let mut extensions = BTreeMap::<String, usize>::new();
-        let (stats, has_archives) = match target {
+        let (stats, has_archives, profile) = match target {
             PlannedScanTarget::Static {
                 path,
                 game_dir_header,
@@ -521,7 +520,11 @@ pub fn catalog_corpus_inventory_tsv(roots: &[String]) -> String {
                 );
                 let has_archives = facts.as_ref().is_some_and(|facts| facts.has_zip_files)
                     || extensions.keys().any(|ext| is_archive_extension(ext));
-                (stats, has_archives)
+                (
+                    stats,
+                    has_archives,
+                    profile_for_path(profiles, &descriptor.path).cloned(),
+                )
             }
             PlannedScanTarget::Runtime(header) => {
                 let (stats, candidates) = scan_runtime_target_candidates(&header, &plan);
@@ -530,20 +533,23 @@ pub fn catalog_corpus_inventory_tsv(roots: &[String]) -> String {
                 }
                 let has_archives = candidates.facts.has_zip_files
                     || extensions.keys().any(|ext| is_archive_extension(ext));
-                (stats, has_archives)
+                let profile = plan.profile_for_game_dir_facts(&candidates.facts);
+                (stats, has_archives, profile)
             }
             PlannedScanTarget::FactsOnly(header) => {
                 let (stats, facts) = scan_game_dir_facts_only(&header);
+                let profile = plan.profile_for_game_dir_facts(&facts);
                 for ext in facts.payload_extensions {
                     extensions.entry(ext).or_default();
                 }
-                (stats, facts.has_zip_files)
+                let has_archives = facts.has_zip_files;
+                (stats, has_archives, profile)
             }
         };
         let mechanisms = corpus_mechanisms(
             descriptor.kind,
             &descriptor.path,
-            profile,
+            profile.as_ref(),
             &extensions,
             has_archives,
             stats.dirs,
@@ -551,8 +557,12 @@ pub fn catalog_corpus_inventory_tsv(roots: &[String]) -> String {
         rows.push(format!(
             "catalog_corpus_target_tsv\tordinal={ordinal}\tkind={}\tsystem={}\tprofile={}\tpath={}\tdirs={}\tfiles={}\tcandidates={}\telapsed_us={}\tmechanisms={}\textensions={}\tnamespace_backend={}\tnamespace_dir_opens={}\tnamespace_reads={}\tnamespace_bytes={}\tnamespace_fallback={}",
             scan_target_kind_label(descriptor.kind),
-            profile.map_or("unknown", |profile| profile.system_id.as_str()),
-            profile.map_or("unknown", |profile| profile.id.as_str()),
+            profile
+                .as_ref()
+                .map_or("unknown", |profile| profile.system_id.as_str()),
+            profile
+                .as_ref()
+                .map_or("unknown", |profile| profile.id.as_str()),
             tsv_value(&descriptor.path.display().to_string()),
             stats.dirs,
             stats.files,
@@ -2123,14 +2133,19 @@ mod tests {
         let root = unique_temp_dir("catalog-corpus-inventory");
         let arcade = root.join("_Arcade");
         let snes = root.join("games/SNES/Nested");
+        let c64 = root.join("games/C64");
         std::fs::create_dir_all(&arcade).expect("create arcade dir");
         std::fs::create_dir_all(&snes).expect("create snes dir");
+        std::fs::create_dir_all(root.join("_Computer")).expect("create computer dir");
+        std::fs::create_dir_all(&c64).expect("create c64 dir");
+        std::fs::write(root.join("_Computer/C64.rbf"), "core").expect("write c64 core");
         std::fs::write(
             arcade.join("Inventory Game.mra"),
             "<misterromdescription />",
         )
         .expect("write mra");
         std::fs::write(snes.join("Inventory Game.sfc"), "rom").expect("write rom");
+        std::fs::write(c64.join("Inventory Game.d64"), "disk").expect("write c64 disk");
 
         let report = catalog_corpus_inventory_tsv(&[root.display().to_string()]);
 
@@ -2142,6 +2157,8 @@ mod tests {
         assert!(report.contains("system=snes"));
         assert!(report.contains("extensions=sfc:1"));
         assert!(report.contains("mechanisms=static,nested"));
+        assert!(report.contains("system=c64"));
+        assert!(report.contains("extensions=d64:1"));
         let _ = std::fs::remove_dir_all(root);
     }
 
