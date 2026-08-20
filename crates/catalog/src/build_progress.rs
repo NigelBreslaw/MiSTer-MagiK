@@ -251,7 +251,7 @@ fn row_count(conn: &Connection, table: &str) -> Result<u64, String> {
 
 impl BuildProgressJournal {
     pub fn open_for_projection(path: &Path) -> Result<Self, String> {
-        let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+        let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE)
             .map_err(|error| format!("open build progress {}: {error}", path.display()))?;
         configure(&conn)?;
         let version: String = meta(&conn, "schema_version")?;
@@ -679,6 +679,25 @@ mod tests {
 
         assert!(BuildProgressJournal::open_for_projection(&path).is_err());
         assert!(!path.exists());
+    }
+
+    #[test]
+    fn projection_probe_keeps_an_existing_journal_writable() {
+        let path = temp_path("writable-projection-journal");
+        drop(BuildProgressJournal::open_or_create(&path, &contract(), &targets()).unwrap());
+        let mut journal = BuildProgressJournal::open_for_projection(&path).unwrap();
+        journal
+            .record_shard(&CompletedShard {
+                system_id: "arcade".into(),
+                generation: 1,
+                sqlite_path: "systems/arcade/1.sqlite3".into(),
+                navigation_path: "systems/arcade/1.nav".into(),
+                content_hash: "abc".into(),
+                manifest_system_json: "{}".into(),
+            })
+            .unwrap();
+        drop(journal);
+        remove(&path).unwrap();
     }
 
     #[test]
