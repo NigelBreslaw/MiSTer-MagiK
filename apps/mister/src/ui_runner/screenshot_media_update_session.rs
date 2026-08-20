@@ -185,18 +185,25 @@ impl ScreenshotMediaUpdateSession {
     ) -> ScreenshotMediaUpdateEffects {
         let mut effects = ScreenshotMediaUpdateEffects::default();
         effects.event("catalog_system_discovered", format!("system={system_id}"));
-        // Discovery means the scanner has found playable content for this
-        // system. Queue its pack immediately rather than waiting for the full
-        // catalog build and a later idle seed pass; the worker performs all
-        // manifest and download work off the UI thread.
+        if let Some(gate) = media_gate.filter(|gate| gate.active) {
+            self.catalog_seed_pending = true;
+            if self.catalog_seed_defer_reason != Some(gate.reason) {
+                self.catalog_seed_defer_reason = Some(gate.reason);
+                effects.event(
+                    "screenshot_media_catalog_defer",
+                    format!("reason={}", gate.reason),
+                );
+            }
+            return effects;
+        }
+        // Once the catalog gate is open, discovery can queue its pack without
+        // competing with first-visible MRA reads or full catalog publication.
         effects.push(ScreenshotMediaUpdateEffect::EnsureWorker {
             mode: "discovered-system",
         });
-        let hard_block = media_gate
-            .filter(|gate| gate.active && matches!(gate.reason, "low-memory" | "launch-handoff"));
         effects.push(ScreenshotMediaUpdateEffect::SetInteractionActive {
-            active: hard_block.is_some(),
-            reason: hard_block.map_or("system-discovered", |gate| gate.reason),
+            active: false,
+            reason: "system-discovered",
         });
         effects.push(ScreenshotMediaUpdateEffect::EnsureSystem { system_id });
         effects
@@ -443,20 +450,24 @@ mod tests {
     }
 
     #[test]
-    fn discovered_system_starts_worker_immediately_even_when_gate_is_active() {
+    fn discovered_system_defers_worker_until_the_catalog_gate_opens() {
         let mut session = ScreenshotMediaUpdateSession::default();
 
         let active = session.handle_catalog_system_discovered(
             "neogeo".to_string(),
             Some(MediaInteractionGate {
                 active: true,
-                reason: "startup",
+                reason: "catalog-build",
             }),
         );
-        assert_eq!(
-            effect_names(active),
-            vec!["event", "ensure-worker", "set-interaction", "ensure-system"]
-        );
+        assert_eq!(effect_names(active), vec!["event", "event"]);
+        assert!(session.catalog_seed_pending);
+
+        let ready = session.apply_gate(MediaInteractionGate {
+            active: false,
+            reason: "idle",
+        });
+        assert_eq!(effect_names(ready), vec!["ensure-catalog-systems"]);
         assert!(!session.catalog_seed_pending);
 
         let unavailable = session.handle_catalog_system_discovered("arcade".to_string(), None);
