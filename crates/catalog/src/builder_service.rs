@@ -151,6 +151,7 @@ pub fn run_with_execution_policy_and_fault_control_and_paths(
         durable_resume: operation_uses_durable_resume(operation),
         post_reveal_background: false,
         force_all_systems: operation == BuilderOperation::RebuildAll,
+        allow_post_scan_unchanged: operation_allows_post_scan_unchanged(operation),
         arcade_bootstrap_scan: None,
         fault_control,
         paths: paths.clone(),
@@ -244,6 +245,7 @@ impl StageFailure {
 
 trait BuilderBackend {
     type Scan;
+    type PreparedScan;
     type Prepared;
 
     fn fresh_cleanup(&mut self) -> Result<usize, String>;
@@ -264,15 +266,10 @@ trait BuilderBackend {
     fn decide_after_scan(
         &mut self,
         scan: Self::Scan,
-    ) -> Result<PostScanOutput<Self::Scan>, StageFailure> {
-        Ok(PostScanOutput {
-            decision: PostScanDecision::Continue(scan),
-            timings: Vec::new(),
-        })
-    }
+    ) -> Result<PostScanOutput<Self::PreparedScan>, StageFailure>;
     fn prepare(
         &mut self,
-        scan: Self::Scan,
+        scan: Self::PreparedScan,
         progress: &mut dyn FnMut(&str, &str),
     ) -> Result<StageOutput<Self::Prepared>, String>;
     fn games(&self, prepared: &Self::Prepared) -> usize;
@@ -676,6 +673,10 @@ fn operation_uses_durable_resume(operation: BuilderOperation) -> bool {
     )
 }
 
+fn operation_allows_post_scan_unchanged(operation: BuilderOperation) -> bool {
+    operation == BuilderOperation::Rebuild
+}
+
 fn initial_build_role(operation: BuilderOperation) -> RuntimeThreadRole {
     if matches!(
         operation,
@@ -906,11 +907,17 @@ enum BootstrapSource {
     FullBuild,
 }
 
+enum ProductionPostScan {
+    Raw(library_db::LibraryRamScanArtifact),
+    Audited(library_db::LibraryAuditedScanArtifact),
+}
+
 struct SystemBuilderBackend {
     bootstrap_first_visible: bool,
     durable_resume: bool,
     post_reveal_background: bool,
     force_all_systems: bool,
+    allow_post_scan_unchanged: bool,
     arcade_bootstrap_scan: Option<library_db::LibraryRamScanArtifact>,
     fault_control: Box<dyn crate::fs_fault::DirectResetFaultControl + Send>,
     paths: CatalogPaths,
@@ -1040,6 +1047,7 @@ fn validate_v3_catalog_storage_path(storage: &Path) -> Result<(), String> {
 
 impl BuilderBackend for SystemBuilderBackend {
     type Scan = library_db::LibraryRamScanArtifact;
+    type PreparedScan = ProductionPostScan;
     type Prepared = PreparedBuild;
 
     fn fresh_cleanup(&mut self) -> Result<usize, String> {
@@ -1306,18 +1314,109 @@ impl BuilderBackend for SystemBuilderBackend {
         })
     }
 
-    fn prepare(
+    fn decide_after_scan(
         &mut self,
         scan: Self::Scan,
+    ) -> Result<PostScanOutput<Self::PreparedScan>, StageFailure> {
+        if !self.allow_post_scan_unchanged {
+            return Ok(PostScanOutput {
+                decision: PostScanDecision::Continue(ProductionPostScan::Raw(scan)),
+                timings: vec![(
+                    "builder_post_scan_unchanged".into(),
+                    "status=disabled reason=operation".into(),
+                )],
+            });
+        }
+
+        let started = Instant::now();
+        let audited = scan.complete_coverage_audit_for_decision();
+        let state_path = crate::catalog_state::path_for_root(self.paths.sharded_catalog_dir());
+        let repair = inspect_v3_before_source_check(self.paths.sharded_catalog_dir());
+        let stored = crate::catalog_state::read(&state_path);
+        let state_matches = stored
+            .as_ref()
+            .is_ok_and(|stored| stored == audited.catalog_state());
+        let current_projection = matches!(&repair, Ok(ProductionRepairStatus::Current));
+        let elapsed_us = started.elapsed().as_micros();
+
+        if current_projection && state_matches {
+            match crate::library_db::sharded_cached_summary(
+                self.paths.sharded_catalog_dir(),
+                audited.stats().scan_us,
+            ) {
+                Ok(mut summary) => {
+                    summary.skipped = true;
+                    summary.discover_us = audited.stats().discover_us;
+                    summary.classify_us = audited.stats().classify_us;
+                    return Ok(PostScanOutput {
+                        decision: PostScanDecision::Unchanged(BuilderSummary::from(summary)),
+                        timings: vec![(
+                            "builder_post_scan_unchanged".into(),
+                            format!(
+                                "status=unchanged elapsed_us={elapsed_us} scan_us={} stamp={}",
+                                audited.stats().scan_us,
+                                audited.catalog_state().stamp.fingerprint_hex(),
+                            ),
+                        )],
+                    });
+                }
+                Err(error) => {
+                    return Ok(PostScanOutput {
+                        decision: PostScanDecision::Continue(ProductionPostScan::Audited(audited)),
+                        timings: vec![(
+                            "builder_post_scan_unchanged".into(),
+                            format!(
+                                "status=continue elapsed_us={elapsed_us} reason=summary-unavailable error={}",
+                                error.replace('\t', " ").replace('\n', " ")
+                            ),
+                        )],
+                    });
+                }
+            }
+        }
+
+        let reason = if !current_projection {
+            match repair {
+                Ok(status) => format!("projection-{}", status.label()),
+                Err(error) => format!(
+                    "projection-error-{}",
+                    error.replace('\t', " ").replace('\n', " ")
+                ),
+            }
+        } else if let Err(error) = stored {
+            format!(
+                "state-unavailable-{}",
+                error.replace('\t', " ").replace('\n', " ")
+            )
+        } else {
+            "state-changed".to_string()
+        };
+        Ok(PostScanOutput {
+            decision: PostScanDecision::Continue(ProductionPostScan::Audited(audited)),
+            timings: vec![(
+                "builder_post_scan_unchanged".into(),
+                format!("status=continue elapsed_us={elapsed_us} reason={reason}"),
+            )],
+        })
+    }
+
+    fn prepare(
+        &mut self,
+        scan: Self::PreparedScan,
         progress: &mut dyn FnMut(&str, &str),
     ) -> Result<StageOutput<Self::Prepared>, String> {
         let root = crate::arcade_catalog::DEFAULT_ARCADE_ROOT;
         let background_full_build = self.post_reveal_background;
-        let (prepared_state, catalog, timing, scanner_cache) = if background_full_build {
-            scan.complete_coverage_audit_and_catalog_background_with_progress(root, progress)?
-        } else {
-            scan.complete_coverage_audit_and_catalog_foreground_with_progress(root, progress)?
-        };
+        let (prepared_state, catalog, timing, scanner_cache) =
+            match scan {
+                ProductionPostScan::Audited(scan) => {
+                    scan.complete_catalog_background_with_progress(root, progress)?
+                }
+                ProductionPostScan::Raw(scan) if background_full_build => scan
+                    .complete_coverage_audit_and_catalog_background_with_progress(root, progress)?,
+                ProductionPostScan::Raw(scan) => scan
+                    .complete_coverage_audit_and_catalog_foreground_with_progress(root, progress)?,
+            };
         let load_us = timing.catalog_us;
         let persistence = PreparedPersistence::from_prepared(prepared_state);
         trim_catalog_allocator("prepare-complete");
@@ -1856,6 +1955,17 @@ mod tests {
         assert!(!operation_uses_durable_resume(BuilderOperation::Rebuild));
         assert!(!operation_uses_durable_resume(BuilderOperation::RebuildAll));
         assert!(operation_uses_durable_resume(BuilderOperation::FreshBuild));
+        assert!(operation_allows_post_scan_unchanged(
+            BuilderOperation::Rebuild
+        ));
+        for operation in [
+            BuilderOperation::Check,
+            BuilderOperation::Build,
+            BuilderOperation::RebuildAll,
+            BuilderOperation::FreshBuild,
+        ] {
+            assert!(!operation_allows_post_scan_unchanged(operation));
+        }
     }
 
     #[derive(Default)]
@@ -1886,6 +1996,7 @@ mod tests {
 
     impl BuilderBackend for FakeBackend {
         type Scan = ();
+        type PreparedScan = ();
         type Prepared = ();
 
         fn fresh_cleanup(&mut self) -> Result<usize, String> {
