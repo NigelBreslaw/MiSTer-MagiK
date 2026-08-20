@@ -466,7 +466,7 @@ impl BuildProgressJournal {
             }
             decoded.extend_from_slice(&chunk);
         }
-        if format!("{:x}", digest.finalize()) != expected_sha256 {
+        if hex_bytes(&digest.finalize()) != expected_sha256 {
             return Err("target frame checksum mismatch".to_string());
         }
         if decoded.len() != raw_len {
@@ -542,7 +542,7 @@ impl BuildProgressJournal {
                 frame_offset,
                 offset.saturating_sub(frame_offset),
                 target.output_json.len() as u64,
-                format!("{:x}", digest.finalize()),
+                hex_bytes(&digest.finalize()),
             ));
         }
         let sync_started = Instant::now();
@@ -844,9 +844,12 @@ fn sqlite_frame_value(value: u64, label: &str) -> Result<i64, String> {
 }
 
 fn sha256_hex(bytes: &[u8]) -> String {
-    let digest = Sha256::digest(bytes);
-    let mut encoded = String::with_capacity(digest.len() * 2);
-    for byte in digest {
+    hex_bytes(&Sha256::digest(bytes))
+}
+
+fn hex_bytes(bytes: &[u8]) -> String {
+    let mut encoded = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
         use std::fmt::Write as _;
         let _ = write!(encoded, "{byte:02x}");
     }
