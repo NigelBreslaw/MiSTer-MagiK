@@ -19138,20 +19138,31 @@ fn catalog_phase_evidence(log: &str) -> Value {
                 && name.is_none_or(|name| value.get("name").and_then(Value::as_str) == Some(name))
         })
     };
+    let post_scan_unchanged = records.iter().any(|value| {
+        value.get("record").and_then(Value::as_str) == Some("startup_timing")
+            && value.get("name").and_then(Value::as_str) == Some("builder_post_scan_unchanged")
+            && value.pointer("/metrics/status").and_then(Value::as_str) == Some("unchanged")
+    });
     let required = json!({
         "scan_complete": has("startup_timing", Some("library_scan_complete")),
-        "builder_persisted": has("startup_timing", Some("builder_persisted")),
+        "builder_terminal": post_scan_unchanged
+            || has("startup_timing", Some("builder_persisted")),
         "scan_attribution": has("catalog_scan_attribution_tsv", None),
-        "projection": has("catalog_v3_projection_phases_tsv", None),
-        "reconciliation": has("catalog_v3_reconciliation_tsv", None),
-        "persist": has("catalog_v3_persist_phases_tsv", None),
+        "projection": post_scan_unchanged || has("catalog_v3_projection_phases_tsv", None),
+        "reconciliation": post_scan_unchanged || has("catalog_v3_reconciliation_tsv", None),
+        "persist": post_scan_unchanged || has("catalog_v3_persist_phases_tsv", None),
     });
     let complete = required
         .as_object()
         .is_some_and(|required| required.values().all(|value| value == &Value::Bool(true)));
     json!({
-        "schema": "mister-magik-catalog-phase-evidence-v1",
+        "schema": "mister-magik-catalog-phase-evidence-v2",
         "complete": complete,
+        "completion_mode": if post_scan_unchanged {
+            "post-scan-unchanged"
+        } else {
+            "persisted"
+        },
         "required": required,
         "records": records,
     })
@@ -32522,6 +32533,24 @@ catalog_v3_persist_phases_tsv\tprojection_us=4\tscanner_cache_us=5\n";
             &log.replace("catalog_v3_persist_phases_tsv", "missing_persist_record"),
         );
         assert_eq!(incomplete["complete"], false);
+
+        let unchanged = catalog_phase_evidence(
+            "startup_timing\tlibrary_scan_complete\t100us\tscan_us=90\n\
+             catalog_scan_attribution_tsv\tvalidation_us=10 execution_walk_us=70\n\
+             startup_timing\tbuilder_post_scan_unchanged\t200us\tstatus=unchanged elapsed_us=12\n",
+        );
+        assert_eq!(unchanged["complete"], true);
+        assert_eq!(unchanged["completion_mode"], "post-scan-unchanged");
+        assert_eq!(unchanged["required"]["builder_terminal"], true);
+        assert!(
+            !unchanged["records"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|record| {
+                    record.get("name").and_then(Value::as_str) == Some("builder_persisted")
+                })
+        );
     }
 
     #[test]
