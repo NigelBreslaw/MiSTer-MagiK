@@ -1,0 +1,174 @@
+{
+  "schema": "mister-magik-catalog-optimization-qualification-v2",
+  "recorded_at": "2026-08-20",
+  "qualified_revision": "99f6b36399563ed8b5aef883f93a7ca8921e0402",
+  "device": {
+    "boot_id": "6ae23e81-cbe1-49ed-9870-af9dc630f89e",
+    "card_identity": "035344534435313285ba35d46e0191cd",
+    "publication_filesystem": "exfat",
+    "main_sha256": "14ebc0c1b216bb649b84865a9ebffda7d5b7880cc3fa2a1f4b0538673539d2c1",
+    "gui_sha256": "22e77667f4e4041eec703e6a771f4e7363abdc34075eb666bf6058c949495226",
+    "scanout_module_sha256": "910d81ac03467e58ee93e48811dfb28e2fff21012192fb658c288c9dc2f50003",
+    "latch_rbf_sha256": "7484e004b3c6e089d9d377658633e435703bc1a224943b06215df9a9bccef4e7"
+  },
+  "bounded_qualification": {
+    "scenario": "catalog-build-rebuild",
+    "status": "passed",
+    "roots": [
+      "/media/fat/_Arcade",
+      "/media/fat/games/SNES",
+      "/media/fat/games/C64"
+    ],
+    "unmeasured_warmups": 1,
+    "samples": 3,
+    "fresh_complete_median_ms": 91260,
+    "rebuild_complete_median_ms": 30248,
+    "fresh_first_visible_ms": [9793, 9198, 9227],
+    "fresh_complete_ms": [92235, 91260, 90050],
+    "rebuild_first_visible_ms": [2295, 2148, 2574],
+    "rebuild_complete_ms": [30248, 29632, 30398],
+    "fresh_games": 17860,
+    "rebuild_games": 17861,
+    "fresh_logical_fingerprint": "c4b2446c6c6226561bae0c930dea65b4273e8e491a5e82d6b2d3eff664fb1cc7",
+    "rebuild_logical_fingerprint": "838d48f2d5ddea5e0cd7d08a94ca898de506d90d93557fea8930e0ea3567d09a",
+    "expected_snes_delta_per_sample": 1,
+    "interactive_samples_qualified": true,
+    "production_registry_unchanged": true
+  },
+  "whole_card_qualification": {
+    "scenario": "catalog-full-build-rebuild",
+    "status": "passed",
+    "source_policy": "normal configured library sources",
+    "page_cache_policy": "unchanged",
+    "systems": 69,
+    "games": 39791,
+    "logical_fingerprint": "57c8be72c0fa0277eb654221f919428d3f2f2be4e64ea00d78ae500081665cc5",
+    "catalog_fingerprints_identical": true,
+    "phase_evidence_complete": true,
+    "first_observed_clean": {
+      "first_visible_ms": 8095,
+      "complete_ms": 219913,
+      "builder_us": 140343266,
+      "scan_us": 64996648,
+      "peak_hwm_kb": 133768
+    },
+    "warm_clean": {
+      "first_visible_ms": 14464,
+      "complete_ms": 165110,
+      "builder_us": 123018761,
+      "scan_us": 50099739,
+      "peak_hwm_kb": 144328
+    },
+    "forced_rebuild": {
+      "first_visible_ms": 2316,
+      "complete_ms": 66071,
+      "builder_us": 47694298,
+      "post_scan_unchanged_us": 542768,
+      "scan_us": 46920558,
+      "peak_hwm_kb": 61848
+    }
+  },
+  "reference_comparisons": [
+    {
+      "source": "history/2026-08-20-catalog-optimization-evidence.json",
+      "revision": "dd6e5136884ff47143a2ce75accaf3d757904e67",
+      "first_observed_clean_ms": 231120,
+      "warm_clean_ms": 247302,
+      "forced_rebuild_ms": 116592
+    },
+    {
+      "source": "pre-campaign qualified whole-card result",
+      "first_observed_clean_ms": 272112,
+      "forced_rebuild_ms": 169457
+    }
+  ],
+  "negative_results": [
+    {
+      "revisions": ["3b1a10997", "67e699230"],
+      "result": "preallocated artifact copy route rejected",
+      "facts": "copy/hash improved 25.3 percent, but publication regressed 31 percent and fresh completion regressed 3.65 percent"
+    },
+    {
+      "result": "copy_file_range artifact route rejected",
+      "facts": "the destination exFAT filesystem returned EINVAL; the launcher error frame was captured at /private/tmp/catalog-copy-error-raw.png"
+    },
+    {
+      "candidate_revision": "f78a976e188b50cfe914a5a6f7c43d5f05297515",
+      "revert_revision": "5e9b56b55",
+      "result": "parallel runtime classification rejected",
+      "facts": "fresh completion improved 1.6 percent, rebuild completion regressed 3.0 percent, and first-visible regressed 11.9 percent"
+    },
+    {
+      "candidate_revision": "e44cd93961f6bae95eceb47c824cfa6fc0ae232d",
+      "revert_revision": "99f6b36399563ed8b5aef883f93a7ca8921e0402",
+      "result": "single global autocomplete accumulator rejected",
+      "facts": "same-Rust-1.98 C64 row-loop improved 3.45 percent and total search improved 2.37 percent, below the 5 percent phase gate; exact catalogs and RSS gate passed"
+    },
+    {
+      "result": "Arcade MRA fusion not implemented",
+      "facts": "the existing four-worker MRA prefetch measured about 0.465 to 0.629 seconds, below the 2 percent whole-operation opportunity gate"
+    },
+    {
+      "result": "first final bounded qualification attempt rejected",
+      "facts": "the observer produced zero telemetry samples and published no summary; the single canonical retry passed"
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "build/agent-benchmarks/catalog-build-rebuild/1787250465/summary.json",
+      "sha256": "332fe15efa36848b1d2ee4f102b4fcc9626da1d9777a2b9007dc17c9a30ada7b"
+    },
+    {
+      "path": "build/agent-benchmarks/catalog-build-rebuild/1787250465/report.md",
+      "sha256": "864d8438c4f5d52cb62a27c7896a447168874e549fc381595aac5dfdb1e024bb"
+    },
+    {
+      "path": "build/agent-benchmarks/catalog-full-build-rebuild/1787249732/summary.json",
+      "sha256": "b8b5c590eb07a4a3b68d4ec8a5ef330a91ba303c324e29e4db2a106ce30e0c36"
+    },
+    {
+      "path": "build/agent-benchmarks/catalog-full-build-rebuild/1787249732/report.md",
+      "sha256": "8af856e72707fcacd1a9f9c02a443ac95727f0839d7a71bfc51f03df0efd80c8"
+    },
+    {
+      "path": "build/agent-benchmarks/catalog-full-build-rebuild/1787249732/fresh-launcher.log",
+      "sha256": "f5838b26f2e8e885e3dedb3fa16051bf091c709b488939027d12bf51e78d85a3"
+    },
+    {
+      "path": "build/agent-benchmarks/catalog-full-build-rebuild/1787249732/warm-clean-launcher.log",
+      "sha256": "217b4e47868f3db157d83a410d6c49acbd3709a61ad4be242811a4c43e665e94"
+    },
+    {
+      "path": "build/agent-benchmarks/catalog-full-build-rebuild/1787249732/rebuild-launcher.log",
+      "sha256": "79e28804ca22820c71808337cf762325208e7010685e6690ad10d57e49dcbdaf"
+    },
+    {
+      "path": "build/agent-benchmarks/catalog-attribution-control/1787249376/summary.json",
+      "sha256": "2b082f37732966ceeec942c9b093cefe48121031ef891bff6557f2026aae6660"
+    },
+    {
+      "path": "/private/tmp/mister-slint-deliver-fe9503/build/agent-benchmarks/catalog-attribution-control/1787248991/summary.json",
+      "sha256": "ccb3afc499fa41c2a164b26e590a45be56d00d793afec37a002274cddecaf87e"
+    },
+    {
+      "path": "/private/tmp/mister-slint-deliver-fe9503/build/agent-benchmarks/catalog-corpus-inventory/1787242415/summary.json",
+      "sha256": "eb785e96939372ae5cb04d2c8feea548302527740146eca46be766fc8791b8fc"
+    },
+    {
+      "path": "/private/tmp/mister-slint-deliver-fe9503/build/agent-benchmarks/catalog-attribution-pprof/1787242944/summary.json",
+      "sha256": "6b5ab69d90e7a8b3423176147644c9c7792450e20e523a8dac111b1c091be10e"
+    },
+    {
+      "path": "/private/tmp/mister-slint-deliver-fe9503/build/agent-benchmarks/catalog-attribution-function-graph/1787243349/summary.json",
+      "sha256": "781479a9461181a1930394454d99997915f50434fff6d069686df0618c30c5da"
+    },
+    {
+      "path": "history/2026-08-20-catalog-optimization-evidence.json",
+      "sha256": "e973be059d7c0cf5e7961747389c63059b6c601acec8facb36604a8a245f23a5"
+    },
+    {
+      "path": "history/2026-08-19-catalog-attribution-evidence.json",
+      "sha256": "5beb85dbc5bf1a39982985d976311e81060700d318e5ef1f8f6c26e3b5fd66df"
+    }
+  ]
+}
