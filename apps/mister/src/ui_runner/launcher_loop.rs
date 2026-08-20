@@ -3800,6 +3800,51 @@ fn launcher_catalog_work_mode(
 }
 
 #[derive(Debug)]
+struct CatalogWorkModeTelemetry {
+    mode: CatalogWorkMode,
+    changed_at: Instant,
+    cpu0_us: u64,
+    paused_us: u64,
+    burst_us: u64,
+    transitions: u64,
+}
+
+impl CatalogWorkModeTelemetry {
+    fn new(now: Instant) -> Self {
+        Self {
+            mode: CatalogWorkMode::Cpu0,
+            changed_at: now,
+            cpu0_us: 0,
+            paused_us: 0,
+            burst_us: 0,
+            transitions: 0,
+        }
+    }
+
+    fn observe(&mut self, mode: CatalogWorkMode, now: Instant) -> bool {
+        if mode == self.mode {
+            return false;
+        }
+        self.account(now);
+        self.mode = mode;
+        self.changed_at = now;
+        self.transitions = self.transitions.saturating_add(1);
+        true
+    }
+
+    fn account(&mut self, now: Instant) {
+        let elapsed = u64::try_from(now.saturating_duration_since(self.changed_at).as_micros())
+            .unwrap_or(u64::MAX);
+        match self.mode {
+            CatalogWorkMode::Cpu0 => self.cpu0_us = self.cpu0_us.saturating_add(elapsed),
+            CatalogWorkMode::Paused => self.paused_us = self.paused_us.saturating_add(elapsed),
+            CatalogWorkMode::DualCoreBurst => self.burst_us = self.burst_us.saturating_add(elapsed),
+        }
+        self.changed_at = now;
+    }
+}
+
+#[derive(Debug)]
 struct CatalogScanBlink {
     dot_visible: bool,
     next_toggle_at: Option<Instant>,
@@ -5868,6 +5913,7 @@ pub(super) fn run_launcher_loop(
         .map(crate::input_hub::InputObservationProbe::observe)
         .unwrap_or_default();
     let mut catalog_idle_candidate_since = None;
+    let mut catalog_work_telemetry = CatalogWorkModeTelemetry::new(run_start);
     #[cfg(test)]
     let mut launcher_frame_phase_observer = LauncherFramePhaseObserver::default();
     macro_rules! record_launcher_frame_phase {
@@ -6428,7 +6474,21 @@ pub(super) fn run_launcher_loop(
             loop_start,
             &mut catalog_idle_candidate_since,
         );
-        mister_magik_catalog::builder_service::set_catalog_work_mode(catalog_work_mode);
+        let catalog_work_epoch =
+            mister_magik_catalog::builder_service::set_catalog_work_mode(catalog_work_mode);
+        if catalog_work_telemetry.observe(catalog_work_mode, loop_start) {
+            let gate = mister_magik_catalog::builder_service::catalog_work_gate_snapshot();
+            crate::ui_logln!(
+                "catalog_work_mode_tsv\tmode={:?}\tepoch={}\tinteraction={}\tvisible_animation={}\tparked_threads={}\tpark_count={}\tcheckpoints={}",
+                catalog_work_mode,
+                catalog_work_epoch,
+                u8::from(catalog_interaction_active),
+                u8::from(startup_intro.is_some() || slint_animation_active),
+                gate.parked_threads,
+                gate.park_count,
+                gate.checkpoints,
+            );
+        }
         let catalog_worker_work_allowed = catalog_work_mode != CatalogWorkMode::Paused;
         scheduler.tick_catalog_progress(catalog_worker_work_allowed, loop_start);
         if background_work_allowed
@@ -12011,6 +12071,19 @@ pub(super) fn run_launcher_loop(
     }
     // Preserve the continuous background permission for a later launcher run
     // in the same process (notably host tests and diagnostic runners).
+    catalog_work_telemetry.account(Instant::now());
+    let gate = mister_magik_catalog::builder_service::catalog_work_gate_snapshot();
+    crate::ui_logln!(
+        "catalog_work_mode_summary_tsv\ttransitions={}\tcpu0_us={}\tpaused_us={}\tburst_us={}\tepoch={}\tpark_count={}\tparked_threads={}\tcheckpoints={}",
+        catalog_work_telemetry.transitions,
+        catalog_work_telemetry.cpu0_us,
+        catalog_work_telemetry.paused_us,
+        catalog_work_telemetry.burst_us,
+        gate.epoch,
+        gate.park_count,
+        gate.parked_threads,
+        gate.checkpoints,
+    );
     mister_magik_catalog::builder_service::set_catalog_work_mode(CatalogWorkMode::Cpu0);
     frame_accounting.finish_preview_scroll_trace();
     let elapsed = run_start.elapsed().as_secs_f64();
@@ -17440,6 +17513,23 @@ mod tests {
             CatalogWorkMode::Cpu0
         );
         assert!(idle_since.is_none());
+    }
+
+    #[test]
+    pub(super) fn catalog_work_telemetry_accounts_each_mode_without_overlap() {
+        let started = Instant::now();
+        let mut telemetry = CatalogWorkModeTelemetry::new(started);
+        assert!(telemetry.observe(CatalogWorkMode::Paused, started + Duration::from_millis(2)));
+        assert!(telemetry.observe(
+            CatalogWorkMode::DualCoreBurst,
+            started + Duration::from_millis(5)
+        ));
+        telemetry.account(started + Duration::from_millis(11));
+
+        assert_eq!(telemetry.cpu0_us, 2_000);
+        assert_eq!(telemetry.paused_us, 3_000);
+        assert_eq!(telemetry.burst_us, 6_000);
+        assert_eq!(telemetry.transitions, 2);
     }
 
     #[test]
