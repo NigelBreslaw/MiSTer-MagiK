@@ -332,7 +332,7 @@ fn tracefs_global_function_graph_prepare_command(
             .collect::<Vec<_>>()
             .join(" ");
         resolve.push_str(&format!(
-            "group_found=0; for function in {candidates}; do if awk -v wanted=\"$function\" '$1 == wanted {{ found=1 }} END {{ exit !found }}' {mount}/available_filter_functions; then if printf '%s\\n' \"$function\" >> \"$graph_filter\" 2>/dev/null; then printf '%s\\n' \"$function\" >> {resolved}; printf 'function:%s:%s\\taccepted\\n' {group_label} \"$function\" >> {capabilities}; group_found=1; else printf 'function:%s:%s\\trejected\\n' {group_label} \"$function\" >> {capabilities}; fi; fi; done; test \"$group_found\" = 1; printf '%s\\t%s\\n' {group_capability} resolved >> {capabilities}; ",
+            "group_found=0; for function in {candidates}; do if test \"$group_found\" = 0 && awk -v wanted=\"$function\" '$1 == wanted {{ found=1 }} END {{ exit !found }}' {mount}/available_filter_functions; then if printf '%s\\n' \"$function\" >> \"$graph_filter\" 2>/dev/null; then printf '%s\\n' \"$function\" >> {resolved}; printf 'function:%s:%s\\taccepted\\n' {group_label} \"$function\" >> {capabilities}; group_found=1; else printf 'function:%s:%s\\trejected\\n' {group_label} \"$function\" >> {capabilities}; fi; fi; done; test \"$group_found\" = 1; printf '%s\\t%s\\n' {group_capability} resolved >> {capabilities}; ",
             group_label = sh(group.label),
             group_capability = sh(&format!("function-group:{}", group.label)),
         ));
@@ -1216,6 +1216,7 @@ mod tests {
         assert!(prepare.contains("entries-in-buffer/entries-written: 0/0"));
         assert!(prepare.contains("function-group:directory-walk"));
         assert!(prepare.contains("function-group:durability"));
+        assert!(prepare.contains("group_found\" = 0"));
         assert!(prepare.contains("set_graph_function"));
         assert!(prepare.contains("set_ftrace_filter"));
         assert!(prepare.contains("depth_bound"));

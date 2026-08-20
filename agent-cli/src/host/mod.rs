@@ -15656,17 +15656,17 @@ const CATALOG_DURABILITY_FUNCTION_GROUPS: &[tracefs::TracefsFunctionGroup] =
     &[tracefs::TracefsFunctionGroup {
         label: "durability",
         functions: &[
-            "vfs_write",
-            "__vfs_write",
-            "do_sync_write",
             "vfs_fsync_range",
             "vfs_fsync",
             "do_fsync",
+            "generic_file_fsync",
+            "exfat_sync_file",
             "vfs_rename",
             "vfs_rename2",
             "do_renameat2",
-            "generic_file_fsync",
-            "exfat_sync_file",
+            "vfs_write",
+            "__vfs_write",
+            "do_sync_write",
         ],
     }];
 const CATALOG_NAMESPACE_FUNCTION_GRAPH_SPEC: tracefs::TracefsCaptureSpec =
