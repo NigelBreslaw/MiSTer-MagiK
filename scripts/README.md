@@ -22,8 +22,9 @@ Normal repository work uses bounded Rust analyzer diagnostics where applicable,
 explicit-path `git add`, ordinary `git commit`, and `git push`; the pre-commit
 hook runs the bootstrap-free Python fast gate under its ten-second deadline.
 The pre-push hook enters `agent-cli` for full affected assurance before
-committed work reaches the remote. Committed runtime/platform work then uses
-`deliver`.
+committed work reaches the remote. Pre-push and CI run every selected check
+after individual failures, then return one actionable end-of-run report for
+all failures. Committed runtime/platform work then uses `deliver`.
 Performance and diagnosis use the flag-free `benchmark` and `diagnose`
 commands.
 

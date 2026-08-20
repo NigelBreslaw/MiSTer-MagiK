@@ -36,8 +36,9 @@ The normal feature loop is edit with bounded analyzer feedback where applicable,
 explicit `git add -- PATH...`, `git commit -m MESSAGE`, and `git push`. The
 bootstrap-free Python pre-commit hook performs the fail-closed ten-second
 policy, whitespace, syntax, and formatting gate. The pre-push hook enters
-`agent-cli` for full affected assurance of a clean `HEAD`; CI remains
-authoritative.
+`agent-cli` for full affected assurance of a clean `HEAD`; pre-push and CI
+continue through every selected check and return one actionable end-of-run
+failure report. CI remains authoritative.
 Runtime or platform changes then use `scripts/agent deliver`. Delivery uses the
 exact clean local app commit. Platform delivery resolves the latest qualified
 GitHub platform release and stages its Main, scanout kernel module, and latch

@@ -69,12 +69,14 @@ pub fn execute_with_changes(
         reporter.emit(EventKind::Progress, "plan", "Nothing to check", Some(100))?;
         return Ok(Outcome::NoOp);
     }
-    let command = match plan.request {
+    let command = match &plan.request {
         crate::model::AssuranceRequest::PrePush { .. } => "pre-push",
         crate::model::AssuranceRequest::CiHostAssurance { .. } => "ci host-assurance",
         _ => "check",
     };
+    let collect_all = collect_all_failures(&plan.request);
     let fingerprints = FingerprintContext::new(repository, &plan.operations, changes)?;
+    let mut failures = Vec::new();
     let mut phase = None;
     let mut index = 0;
     while index < plan.operations.len() {
@@ -98,7 +100,7 @@ pub fn execute_with_changes(
             {
                 index += 1;
             }
-            run_builtin_batch(
+            let batch_failures = run_builtin_batch(
                 evidence,
                 request_id,
                 repository,
@@ -106,7 +108,19 @@ pub fn execute_with_changes(
                 &fingerprints,
                 reporter,
                 command,
+                collect_all,
             )?;
+            if !batch_failures.is_empty() {
+                if !collect_all {
+                    return Err(render_single_failure(
+                        evidence,
+                        request_id,
+                        command,
+                        &batch_failures[0],
+                    )?);
+                }
+                failures.extend(batch_failures);
+            }
             continue;
         }
         let heartbeat = operation_heartbeat(operation);
@@ -144,14 +158,29 @@ pub fn execute_with_changes(
             operation,
             command,
             heartbeat,
-            &format!("{command}: failed"),
             reporter,
             cache.as_deref(),
         ) {
             if let Some(fingerprint) = cache.as_ref() {
                 evidence.release_validation(&operation.id, fingerprint, request_id)?;
             }
-            return Err(error);
+            match error {
+                OperationRunError::Failure(detail) => {
+                    let failure = CheckFailure {
+                        title: operation.title.clone(),
+                        detail,
+                    };
+                    if !collect_all {
+                        return Err(render_single_failure(
+                            evidence, request_id, command, &failure,
+                        )?);
+                    }
+                    failures.push(failure);
+                    index += 1;
+                    continue;
+                }
+                OperationRunError::Infrastructure(error) => return Err(error),
+            }
         }
         if operation.risk == crate::model::Risk::ReadOnly
             && let Some(fingerprint) = cache
@@ -161,8 +190,84 @@ pub fn execute_with_changes(
         }
         index += 1;
     }
+    if !failures.is_empty() {
+        return Err(render_failure_report(
+            command,
+            plan.operations.len(),
+            &failures,
+            request_id,
+        ));
+    }
     reporter.emit(EventKind::Completed, command, "passed", Some(100))?;
     Ok(Outcome::Passed)
+}
+
+#[derive(Debug)]
+struct CheckFailure {
+    title: String,
+    detail: String,
+}
+
+#[derive(Debug)]
+enum OperationRunError {
+    Failure(String),
+    Infrastructure(String),
+}
+
+const fn collect_all_failures(request: &crate::model::AssuranceRequest) -> bool {
+    matches!(
+        request,
+        crate::model::AssuranceRequest::PrePush { .. }
+            | crate::model::AssuranceRequest::CiHostAssurance { .. }
+    )
+}
+
+impl From<String> for OperationRunError {
+    fn from(error: String) -> Self {
+        Self::Infrastructure(error)
+    }
+}
+
+fn render_failure_report(
+    command: &str,
+    total: usize,
+    failures: &[CheckFailure],
+    request_id: &str,
+) -> String {
+    use std::fmt::Write as _;
+
+    let mut report = format!(
+        "{command}: {} of {total} selected checks failed",
+        failures.len()
+    );
+    for (index, failure) in failures.iter().enumerate() {
+        let _ = write!(report, "\n\n{}. {}", index + 1, failure.title);
+        for line in failure.detail.lines() {
+            let _ = write!(report, "\n   {line}");
+        }
+    }
+    let _ = write!(report, "\n\nnext: scripts/agent run show {request_id}");
+    report
+}
+
+fn render_single_failure(
+    evidence: &Evidence,
+    request_id: &str,
+    command: &str,
+    failure: &CheckFailure,
+) -> Result<String, String> {
+    let next = if failure.detail.contains("error: network_required") {
+        format!(
+            "rerun with network access: {}",
+            crate::shell::agent_retry_command(&evidence.request_args(request_id)?)
+        )
+    } else {
+        format!("scripts/agent run show {request_id}")
+    };
+    Ok(format!(
+        "{command}: failed — {}\n{}\nnext: {next}",
+        failure.title, failure.detail
+    ))
 }
 
 const fn workflow_phase_label(phase: WorkflowPhase) -> &'static str {
@@ -254,8 +359,10 @@ fn run_builtin_batch(
     fingerprints: &FingerprintContext,
     reporter: &mut Reporter<'_>,
     command: &str,
-) -> Result<(), String> {
+    collect_all: bool,
+) -> Result<Vec<CheckFailure>, String> {
     let mut pending = Vec::new();
+    let mut failures = Vec::new();
     for operation in operations {
         let cache = operation_cache_key(operation, fingerprints)?;
         if let Some(fingerprint) = cache.as_ref() {
@@ -297,29 +404,40 @@ fn run_builtin_batch(
         let results = run_parallel_ordered(chunk, limit, |(_, builtin, _)| {
             crate::checks::run(*builtin, repository)
         });
-        let mut first_error = None;
         for ((operation, _, cache), result) in chunk.iter().zip(results) {
             if let Err(error) = result {
-                let detail = format!("{command}: failed — {}\nerror: {error}", operation.title);
                 if let Some(fingerprint) = cache {
                     evidence.release_validation(&operation.id, fingerprint, request_id)?;
                 }
-                first_error.get_or_insert(detail);
+                let log_path = evidence.log_path(request_id, &operation.id);
+                std::fs::write(&log_path, &error).map_err(|write_error| {
+                    format!(
+                        "cannot write builtin failure log {}: {write_error}",
+                        log_path.display()
+                    )
+                })?;
+                failures.push(CheckFailure {
+                    title: operation.title.clone(),
+                    detail: format!(
+                        "error: check_failure\nsummary: {error}\nlog: {}",
+                        log_path.display()
+                    ),
+                });
             } else if let Some(fingerprint) = cache {
                 evidence.cache_validation_success(&operation.id, fingerprint)?;
                 evidence.release_validation(&operation.id, fingerprint, request_id)?;
             }
         }
-        if let Some(error) = first_error {
+        if !collect_all && !failures.is_empty() {
             for (operation, _, cache) in &pending {
                 if let Some(fingerprint) = cache {
                     evidence.release_validation(&operation.id, fingerprint, request_id)?;
                 }
             }
-            return Err(error);
+            break;
         }
     }
-    Ok(())
+    Ok(failures)
 }
 
 fn run_parallel_ordered<T: Sync>(
@@ -539,16 +657,30 @@ fn run_operation(
     operation: &Operation,
     phase: &str,
     heartbeat: &str,
-    failure_position: &str,
     reporter: &mut Reporter<'_>,
     fingerprint: Option<&str>,
-) -> Result<(), String> {
+) -> Result<(), OperationRunError> {
     if let Some(builtin) = operation.builtin {
-        return crate::checks::execute(builtin, repository, reporter)
-            .map_err(|error| format!("{failure_position} — {}\nerror: {error}", operation.title));
+        return match crate::checks::execute(builtin, repository, reporter) {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                let log_path = evidence.log_path(request_id, &operation.id);
+                std::fs::write(&log_path, &error).map_err(|write_error| {
+                    OperationRunError::Infrastructure(format!(
+                        "cannot write builtin failure log {}: {write_error}",
+                        log_path.display()
+                    ))
+                })?;
+                Err(OperationRunError::Failure(format!(
+                    "error: check_failure\nsummary: {error}\nlog: {}",
+                    log_path.display()
+                )))
+            }
+        };
     }
     let log_path = evidence.log_path(request_id, &operation.id);
-    File::create(&log_path).map_err(|error| error.to_string())?;
+    File::create(&log_path)
+        .map_err(|error| OperationRunError::Infrastructure(error.to_string()))?;
     let cargo_dependency = is_cargo_dependency_operation(operation);
     let first_args = if cargo_dependency {
         cargo_args(&operation.args, true)
@@ -598,25 +730,19 @@ fn run_operation(
             return Ok(());
         }
         let online_output = read_log_from(&log_path, online_start)?;
-        return Err(failure_message(
-            evidence,
+        return Err(OperationRunError::Failure(failure_message(
             operation,
-            request_id,
             &log_path,
             online_status.code().unwrap_or(1),
             &online_output,
-            failure_position,
-        )?);
+        )?));
     }
-    Err(failure_message(
-        evidence,
+    Err(OperationRunError::Failure(failure_message(
         operation,
-        request_id,
         &log_path,
         first_status.code().unwrap_or(1),
         &first_output,
-        failure_position,
-    )?)
+    )?))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -632,12 +758,13 @@ fn run_attempt(
     args: &[String],
     attempt: &str,
     fingerprint: Option<&str>,
-) -> Result<std::process::ExitStatus, String> {
+) -> Result<std::process::ExitStatus, OperationRunError> {
     let mut log = OpenOptions::new()
         .append(true)
         .open(log_path)
-        .map_err(|error| error.to_string())?;
-    writeln!(log, "=== agent-cli attempt: {attempt} ===").map_err(|error| error.to_string())?;
+        .map_err(|error| OperationRunError::Infrastructure(error.to_string()))?;
+    writeln!(log, "=== agent-cli attempt: {attempt} ===")
+        .map_err(|error| OperationRunError::Infrastructure(error.to_string()))?;
     let started = now_ms();
     let command_id = evidence.begin_command(
         request_id,
@@ -657,13 +784,22 @@ fn run_attempt(
     if attempt == "network-fallback" {
         command.env("CARGO_NET_RETRY", "0");
     }
-    let mut child = command
-        .stdout(Stdio::from(
-            log.try_clone().map_err(|error| error.to_string())?,
-        ))
+    let child = command
+        .stdout(Stdio::from(log.try_clone().map_err(|error| {
+            OperationRunError::Infrastructure(error.to_string())
+        })?))
         .stderr(Stdio::from(log))
-        .spawn()
-        .map_err(|error| error.to_string())?;
+        .spawn();
+    let mut child = match child {
+        Ok(child) => child,
+        Err(error) => {
+            evidence.finish_command(command_id, started, 127)?;
+            return Err(OperationRunError::Failure(format!(
+                "error: command_launch_failed\nsummary: {error}\nlog: {}",
+                log_path.display()
+            )));
+        }
+    };
     let status = crate::process::wait(
         &mut child,
         None,
@@ -782,26 +918,14 @@ fn is_dependency_fetch_failure(lower: &str) -> bool {
 }
 
 fn failure_message(
-    evidence: &Evidence,
     operation: &Operation,
-    request_id: &str,
     log_path: &Path,
     code: i32,
     output: &str,
-    failure_position: &str,
 ) -> Result<String, String> {
     let classification = failure_classification(operation, code, output);
-    let next = if classification == "network_required" {
-        format!(
-            "rerun with network access: {}",
-            crate::shell::agent_retry_command(&evidence.request_args(request_id)?)
-        )
-    } else {
-        format!("scripts/agent run show {request_id}")
-    };
     Ok(format!(
-        "{failure_position} — {}\nerror: {classification} (exit {code})\nsummary: {}\nlog: {}\nnext: {next}",
-        operation.title,
+        "error: {classification} (exit {code})\nsummary: {}\nlog: {}",
         log_tail(log_path)?,
         log_path.display()
     ))
@@ -1011,7 +1135,7 @@ mod tests {
     }
 
     #[test]
-    fn cheap_failure_prevents_host_operation_from_starting() {
+    fn non_assurance_request_remains_fail_fast() {
         let (root, failing) = fake_cargo("#!/bin/sh\nexit 1\n");
         let marker = root.join("host-ran");
         let host = root.join("host");
@@ -1043,6 +1167,153 @@ mod tests {
         assert!(execute(&evidence, &request.id, &root, &plan, &mut reporter).is_err());
         assert!(!marker.exists());
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn pre_push_and_ci_collect_failures_but_plan_does_not() {
+        assert!(collect_all_failures(&AssuranceRequest::PrePush {
+            remote: "origin".into(),
+        }));
+        assert!(collect_all_failures(&AssuranceRequest::CiHostAssurance {
+            scope: Scope::WorkingTree,
+        }));
+        assert!(!collect_all_failures(&AssuranceRequest::Plan {
+            scope: Scope::WorkingTree,
+        }));
+    }
+
+    #[test]
+    fn ci_runs_later_phases_and_reports_all_failures_in_plan_order() {
+        let (root, cheap_program) = fake_cargo("#!/bin/sh\necho 'cheap lint failed' >&2\nexit 2\n");
+        let host_marker = root.join("host-ran");
+        let host_program = root.join("host-check");
+        fs::write(
+            &host_program,
+            format!("#!/bin/sh\ntouch '{}'\n", host_marker.display()),
+        )
+        .unwrap();
+        let expensive_marker = root.join("expensive-ran");
+        let expensive_program = root.join("expensive-check");
+        fs::write(
+            &expensive_program,
+            format!(
+                "#!/bin/sh\ntouch '{}'\necho 'test result: failed' >&2\nexit 7\n",
+                expensive_marker.display()
+            ),
+        )
+        .unwrap();
+        for program in [&host_program, &expensive_program] {
+            let mut permissions = fs::metadata(program).unwrap().permissions();
+            permissions.set_mode(0o755);
+            fs::set_permissions(program, permissions).unwrap();
+        }
+
+        let evidence = Evidence::open_at(&root.join("state")).unwrap();
+        let request = RawRequest {
+            id: "collect-all-run".into(),
+            args: vec!["agent-cli".into(), "ci".into(), "host-assurance".into()],
+            started_ms: now_ms(),
+            started: Instant::now(),
+        };
+        evidence.begin_request(&request).unwrap();
+
+        let mut cheap = test_operation(&cheap_program);
+        cheap.id = "cheap.lint".into();
+        cheap.title = "Cheap lint".into();
+        cheap.phase = WorkflowPhase::Cheap;
+        cheap.action = ActionKind::Script;
+        cheap.args.clear();
+
+        let mut host = test_operation(&host_program);
+        host.id = "host.success".into();
+        host.title = "Host success".into();
+        host.action = ActionKind::Script;
+        host.args.clear();
+
+        let mut missing = test_operation(&root.join("missing-check"));
+        missing.id = "expensive.missing".into();
+        missing.title = "Missing tool".into();
+        missing.phase = WorkflowPhase::Expensive;
+        missing.action = ActionKind::Script;
+        missing.args.clear();
+
+        let mut expensive = test_operation(&expensive_program);
+        expensive.id = "expensive.test".into();
+        expensive.title = "Late test".into();
+        expensive.phase = WorkflowPhase::Expensive;
+        expensive.action = ActionKind::Script;
+        expensive.args = vec!["test".into()];
+
+        let plan = Plan {
+            request: AssuranceRequest::CiHostAssurance {
+                scope: Scope::WorkingTree,
+            },
+            operations: vec![cheap.clone(), host.clone(), missing, expensive],
+            external_requirements: Vec::new(),
+        };
+        let mut reporter = Reporter::new(&evidence, OutputFormat::Human, &request.id);
+        let error = execute(&evidence, &request.id, &root, &plan, &mut reporter).unwrap_err();
+
+        assert!(host_marker.exists());
+        assert!(expensive_marker.exists());
+        assert!(error.contains("ci host-assurance: 3 of 4 selected checks failed"));
+        let cheap_position = error.find("1. Cheap lint").unwrap();
+        let missing_position = error.find("2. Missing tool").unwrap();
+        let expensive_position = error.find("3. Late test").unwrap();
+        assert!(cheap_position < missing_position && missing_position < expensive_position);
+        assert!(error.contains("error: command_launch_failed"));
+        assert!(error.contains("error: test_failure (exit 7)"));
+        assert_eq!(
+            error
+                .matches("next: scripts/agent run show collect-all-run")
+                .count(),
+            1
+        );
+
+        let fingerprints = FingerprintContext::new(&root, &plan.operations, &[]).unwrap();
+        let host_cache = operation_cache_key(&host, &fingerprints).unwrap().unwrap();
+        let cheap_cache = operation_cache_key(&cheap, &fingerprints).unwrap().unwrap();
+        assert!(
+            evidence
+                .has_cached_validation_success(&host.id, &host_cache)
+                .unwrap()
+        );
+        assert!(
+            !evidence
+                .has_cached_validation_success(&cheap.id, &cheap_cache)
+                .unwrap()
+        );
+        assert!(
+            evidence
+                .validation_owner(&cheap.id, &cheap_cache)
+                .unwrap()
+                .is_none()
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn combined_report_orders_builtin_and_command_failures_with_one_next_action() {
+        let failures = vec![
+            CheckFailure {
+                title: "Builtin lint".into(),
+                detail: "error: check_failure\nsummary: policy mismatch\nlog: builtin.log".into(),
+            },
+            CheckFailure {
+                title: "Command test".into(),
+                detail: "error: test_failure (exit 1)\nsummary: failed assertion\nlog: test.log"
+                    .into(),
+            },
+        ];
+        let report = render_failure_report("pre-push", 5, &failures, "report-run");
+        assert!(report.contains("pre-push: 2 of 5 selected checks failed"));
+        assert!(report.find("1. Builtin lint").unwrap() < report.find("2. Command test").unwrap());
+        assert_eq!(
+            report
+                .matches("next: scripts/agent run show report-run")
+                .count(),
+            1
+        );
     }
 
     #[test]
@@ -1115,9 +1386,8 @@ mod tests {
         let (result, detail, _) = execute_fake_cargo(script);
         let error = result.unwrap_err();
         assert!(error.contains("error: network_required"));
-        assert!(error.contains(
-            "rerun with network access: scripts/agent ci host-assurance --paths fixture.rs"
-        ));
+        assert!(error.contains("next: scripts/agent run show test-run"));
+        assert!(!error.contains("rerun with network access"));
         assert_eq!(detail.commands.len(), 2);
     }
 
