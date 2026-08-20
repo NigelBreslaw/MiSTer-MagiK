@@ -360,20 +360,23 @@ struct PreparedSearchDocument {
 #[cfg(feature = "builder")]
 struct PreparedSearchBatch {
     documents: Vec<PreparedSearchDocument>,
-    words: std::collections::HashMap<String, AutocompleteStats>,
     build_us: u64,
+}
+
+#[cfg(feature = "builder")]
+enum PreparedSearchMessage {
+    Batch(PreparedSearchBatch),
+    Words(std::collections::HashMap<String, AutocompleteStats>),
 }
 
 #[cfg(feature = "builder")]
 fn prepare_search_batch(
     first_ordinal: usize,
     games: &[crate::system_shard::SystemGame],
+    words: &mut std::collections::HashMap<String, AutocompleteStats>,
 ) -> PreparedSearchBatch {
-    use std::collections::HashMap;
-
     let started = Instant::now();
     let mut documents = Vec::with_capacity(games.len());
-    let mut words = HashMap::<String, AutocompleteStats>::new();
     for (offset, game) in games.iter().enumerate() {
         let title = normalize_search_text(&game.title);
         let manufacturer = normalize_search_text(&game.manufacturer);
@@ -392,22 +395,18 @@ fn prepare_search_batch(
             .unwrap_or_default();
         let path = normalize_search_text(game_basename(&game.launch_ref));
 
-        add_normalized_words(&mut words, &title, AutocompleteSource::Title);
-        add_normalized_words(&mut words, &manufacturer, AutocompleteSource::Metadata);
-        add_normalized_words(&mut words, &control, AutocompleteSource::Metadata);
+        add_normalized_words(words, &title, AutocompleteSource::Title);
+        add_normalized_words(words, &manufacturer, AutocompleteSource::Metadata);
+        add_normalized_words(words, &control, AutocompleteSource::Metadata);
         if !autocomplete_players.is_empty() {
-            add_normalized_word(
-                &mut words,
-                &autocomplete_players,
-                AutocompleteSource::Metadata,
-            );
+            add_normalized_word(words, &autocomplete_players, AutocompleteSource::Metadata);
         }
-        add_normalized_words(&mut words, &path, AutocompleteSource::Path);
+        add_normalized_words(words, &path, AutocompleteSource::Path);
         if !year.is_empty() {
-            add_normalized_word(&mut words, &year, AutocompleteSource::Metadata);
+            add_normalized_word(words, &year, AutocompleteSource::Metadata);
         }
         if !decade.is_empty() {
-            add_normalized_word(&mut words, &decade, AutocompleteSource::Metadata);
+            add_normalized_word(words, &decade, AutocompleteSource::Metadata);
         }
 
         documents.push(PreparedSearchDocument {
@@ -427,20 +426,7 @@ fn prepare_search_batch(
     }
     PreparedSearchBatch {
         documents,
-        words,
         build_us: elapsed_us(started),
-    }
-}
-
-#[cfg(feature = "builder")]
-fn merge_autocomplete_words(
-    destination: &mut std::collections::HashMap<String, AutocompleteStats>,
-    source: std::collections::HashMap<String, AutocompleteStats>,
-) {
-    for (word, source_stats) in source {
-        let stats = destination.entry(word).or_default();
-        stats.score += source_stats.score;
-        stats.source_rank = stats.source_rank.max(source_stats.source_rank);
     }
 }
 
@@ -475,7 +461,7 @@ pub(crate) fn populate(
     let mut pipeline_wait_us = 0u64;
     let main_background_scope = crate::cooperative_work::BackgroundScope::enter();
     std::thread::scope(|scope| -> Result<(), PersistedSearchError> {
-        let (sender, receiver) = std::sync::mpsc::sync_channel::<PreparedSearchBatch>(1);
+        let (sender, receiver) = std::sync::mpsc::sync_channel::<PreparedSearchMessage>(1);
         let producer = std::thread::Builder::new()
             .name("catalog-search-docs".to_string())
             .spawn_scoped(scope, move || {
@@ -483,33 +469,42 @@ pub(crate) fn populate(
                     crate::runtime_thread::RuntimeThreadRole::LibraryWalker,
                 );
                 let _background_scope = crate::cooperative_work::BackgroundScope::enter();
+                let mut producer_words = HashMap::<String, AutocompleteStats>::new();
                 for (batch_index, chunk) in games.chunks(SEARCH_PIPELINE_BATCH).enumerate() {
                     crate::cooperative_work::checkpoint();
                     let batch = prepare_search_batch(
                         batch_index.saturating_mul(SEARCH_PIPELINE_BATCH),
                         chunk,
+                        &mut producer_words,
                     );
-                    if sender.send(batch).is_err() {
-                        break;
+                    if sender.send(PreparedSearchMessage::Batch(batch)).is_err() {
+                        return;
                     }
                 }
+                let _ = sender.send(PreparedSearchMessage::Words(producer_words));
             })
             .map_err(|error| PersistedSearchError::with("spawn search document producer", error))?;
         let mut failure = None;
         loop {
             let wait_started = Instant::now();
-            let batch = match receiver.recv() {
-                Ok(batch) => batch,
+            let message = match receiver.recv() {
+                Ok(message) => message,
                 Err(_) => break,
             };
             pipeline_wait_us = pipeline_wait_us.saturating_add(elapsed_us(wait_started));
+            let batch = match message {
+                PreparedSearchMessage::Batch(batch) => batch,
+                PreparedSearchMessage::Words(producer_words) => {
+                    words = producer_words;
+                    continue;
+                }
+            };
             crate::cooperative_work::checkpoint();
             batches = batches.saturating_add(1);
             document_build_us = document_build_us.saturating_add(batch.build_us);
             if failure.is_some() {
                 continue;
             }
-            merge_autocomplete_words(&mut words, batch.words);
             let insert_started = Instant::now();
             for document in batch.documents {
                 let rowid = match i64::try_from(document.ordinal.saturating_add(1)) {
@@ -905,8 +900,13 @@ mod tests {
                 ..SystemGame::default()
             })
             .collect::<Vec<_>>();
-        let first = prepare_search_batch(0, &games[..SEARCH_PIPELINE_BATCH]);
-        let tail = prepare_search_batch(SEARCH_PIPELINE_BATCH, &games[SEARCH_PIPELINE_BATCH..]);
+        let mut split_words = std::collections::HashMap::new();
+        let first = prepare_search_batch(0, &games[..SEARCH_PIPELINE_BATCH], &mut split_words);
+        let tail = prepare_search_batch(
+            SEARCH_PIPELINE_BATCH,
+            &games[SEARCH_PIPELINE_BATCH..],
+            &mut split_words,
+        );
 
         assert_eq!(first.documents.len(), SEARCH_PIPELINE_BATCH);
         assert_eq!(first.documents[0].ordinal, 0);
@@ -915,10 +915,9 @@ mod tests {
         assert_eq!(tail.documents[0].ordinal, 256);
         assert_eq!(tail.documents[0].title, "pok mon game 256");
 
-        let mut merged = first.words;
-        merge_autocomplete_words(&mut merged, tail.words);
-        let complete = prepare_search_batch(0, &games);
-        assert_eq!(merged, complete.words);
+        let mut complete_words = std::collections::HashMap::new();
+        let _complete = prepare_search_batch(0, &games, &mut complete_words);
+        assert_eq!(split_words, complete_words);
     }
 
     #[test]
