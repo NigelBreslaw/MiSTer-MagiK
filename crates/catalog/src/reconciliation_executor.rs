@@ -282,8 +282,17 @@ pub fn execute_reconciliation_with_events(
             nonce,
             limits,
             materializer,
-        )
-        .inspect_err(|_| remove_planned_generation(storage_root, &rebuilds, expected_generation))?;
+            resume_journal.as_mut(),
+        );
+        let pipeline = match pipeline {
+            Ok(pipeline) => pipeline,
+            Err(error) => {
+                if resume_journal.is_none() {
+                    remove_planned_generation(storage_root, &rebuilds, expected_generation);
+                }
+                return Err(error);
+            }
+        };
         materialize_time += pipeline.materialize_time;
         pipeline_overlap = pipeline.overlap;
         pipeline_queue_wait = pipeline.queue_wait;
@@ -291,13 +300,6 @@ pub fn execute_reconciliation_with_events(
         pipeline_fallbacks = pipeline.fallbacks;
         shard_build_wall_time = pipeline.build_time;
         shard_publication_wall_time = pipeline.publish_time;
-        if let Some(journal) = resume_journal.as_mut() {
-            sync_artifact_batch(storage_root)
-                .map_err(|error| ReconciliationError::new("shard-checkpoint", error.to_string()))?;
-            for shard in &pipeline.completed {
-                checkpoint_published_shard(storage_root, journal, shard, limits)?;
-            }
-        }
         for shard in &pipeline.completed {
             emit(ReconciliationEvent::SystemPrepared {
                 system_id: shard.system.system_id.clone(),
@@ -614,6 +616,7 @@ fn execute_fresh_pipeline(
     nonce: u128,
     limits: RegistryLimits,
     materializer: &mut impl ReconciliationMaterializer,
+    mut resume_journal: Option<&mut crate::build_progress::BuildProgressJournal>,
 ) -> Result<FreshPipelineOutcome, ReconciliationError> {
     let pipeline_started = Instant::now();
     let background = crate::cooperative_work::in_background_scope();
@@ -776,14 +779,17 @@ fn execute_fresh_pipeline(
         }
 
         drop(staged_tx);
-        while failure.is_none() && in_flight > 0 {
+        while in_flight > 0 {
             if let Err(error) = receive_published_shard(
                 &completed_rx,
                 &mut completed,
                 &mut in_flight,
                 &mut queue_wait,
             ) {
-                failure = Some(error);
+                if failure.is_none() {
+                    failure = Some(error);
+                }
+                break;
             }
         }
         let publisher_result = publisher
@@ -795,13 +801,22 @@ fn execute_fresh_pipeline(
                 Err(error) => Some(error),
             };
         }
+        let publish_time = completed
+            .iter()
+            .fold(Duration::ZERO, |total, shard| total + shard.publish_time);
+        if let Some(journal) = resume_journal.as_deref_mut()
+            && !completed.is_empty()
+        {
+            sync_artifact_batch(storage_root)
+                .map_err(|error| ReconciliationError::new("shard-checkpoint", error.to_string()))?;
+            for shard in &completed {
+                checkpoint_published_shard(storage_root, journal, shard, limits)?;
+            }
+        }
         if let Some(error) = failure {
             return Err(error);
         }
 
-        let publish_time = completed
-            .iter()
-            .fold(Duration::ZERO, |total, shard| total + shard.publish_time);
         let serial_time = materialize_time
             .saturating_add(build_time)
             .saturating_add(publish_time);
@@ -1618,7 +1633,8 @@ mod tests {
         };
 
         let outcome =
-            execute_fresh_pipeline(&root, &borrowed, 1, 99, limits(), &mut materializer).unwrap();
+            execute_fresh_pipeline(&root, &borrowed, 1, 99, limits(), &mut materializer, None)
+                .unwrap();
 
         assert_eq!(outcome.completed.len(), 71);
         assert_eq!(outcome.peak_in_flight, 2);
@@ -1660,11 +1676,28 @@ mod tests {
     #[test]
     fn background_replacement_without_a_manifest_uses_the_fresh_pipeline() {
         let root = temporary_root("background-pipeline");
-        let _background = crate::cooperative_work::BackgroundScope::enter();
-        let mut materializer = SequentialProbeMaterializer {
-            root: root.clone(),
-            calls: 0,
+        let progress_path = crate::build_progress::path_for_root(&root);
+        let contract = crate::build_progress::BuildContract {
+            active_manifest_generation: None,
+            roots: vec!["/fixture".into()],
+            path_mapping: Vec::new(),
+            scanner_version: 1,
+            profile_version: "1".into(),
+            taxonomy_version: "1".into(),
+            namespace_backend: "fixture".into(),
+            projection_contract: "1".into(),
         };
+        drop(
+            crate::build_progress::BuildProgressJournal::open_or_create(
+                &progress_path,
+                &contract,
+                &[],
+            )
+            .unwrap()
+            .0,
+        );
+        let _background = crate::cooperative_work::BackgroundScope::enter();
+        let mut materializer = FixtureMaterializer::new();
 
         execute_reconciliation(
             &root,
@@ -1674,11 +1707,10 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(materializer.calls, 2);
-        let journal = crate::build_progress::BuildProgressJournal::open_for_projection(
-            &crate::build_progress::path_for_root(&root),
-        )
-        .unwrap();
+        assert_eq!(materializer.calls, vec![system("c64"), system("snes")]);
+        let journal =
+            crate::build_progress::BuildProgressJournal::open_for_projection(&progress_path)
+                .unwrap();
         assert_eq!(journal.completed_shards().unwrap().len(), 2);
         fs::remove_dir_all(root).unwrap();
     }
@@ -1780,41 +1812,6 @@ mod tests {
     struct StreamingFixtureMaterializer {
         root: PathBuf,
         calls: usize,
-    }
-
-    struct SequentialProbeMaterializer {
-        root: PathBuf,
-        calls: usize,
-    }
-
-    impl ReconciliationMaterializer for SequentialProbeMaterializer {
-        fn materialize(
-            &mut self,
-            system_id: &SystemId,
-            _generation: u64,
-        ) -> Result<MaterializedSystem, ReconciliationError> {
-            if self.calls == 1 {
-                assert!(
-                    self.root.join("systems/c64/1.sqlite3").exists(),
-                    "background replacement started a second build before publication"
-                );
-            }
-            self.calls += 1;
-            Ok(MaterializedSystem {
-                system_id: system_id.clone(),
-                display_title: system_id.as_str().to_string(),
-                section: "Fixture".to_string(),
-                family: "Fixture".to_string(),
-                order: 0,
-                producers: vec![ScanUnitId::parse("fixture-root").unwrap()],
-                projection_stats: None,
-                games: vec![game("One")],
-            })
-        }
-
-        fn commit_facts(&mut self) -> Result<(), ReconciliationError> {
-            Ok(())
-        }
     }
 
     impl ReconciliationMaterializer for StreamingFixtureMaterializer {

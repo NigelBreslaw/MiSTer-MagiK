@@ -2137,8 +2137,10 @@ mod tests {
         std::fs::create_dir_all(&arcade).expect("create arcade dir");
         std::fs::create_dir_all(&snes).expect("create snes dir");
         std::fs::create_dir_all(root.join("_Computer")).expect("create computer dir");
+        std::fs::create_dir_all(root.join("_Console")).expect("create console dir");
         std::fs::create_dir_all(&c64).expect("create c64 dir");
         std::fs::write(root.join("_Computer/C64.rbf"), "core").expect("write c64 core");
+        std::fs::write(root.join("_Console/SNES.rbf"), "core").expect("write snes core");
         std::fs::write(
             arcade.join("Inventory Game.mra"),
             "<misterromdescription />",

@@ -1097,7 +1097,8 @@ fn game_entry_from_row(
 ) -> rusqlite::Result<ArcadeGameEntry> {
     let system_id: String = row.get(GAME_ENTRY_SYSTEM_ID)?;
     let preview_asset_key: String = row.get(GAME_ENTRY_PREVIEW_ASSET_KEY)?;
-    let preview_archive_path = if preview_asset_key.is_empty() {
+    let has_preview = row.get::<_, i64>(GAME_ENTRY_HAS_PREVIEW)? != 0;
+    let preview_archive_path = if !has_preview || preview_asset_key.is_empty() {
         std::sync::Arc::<str>::from("")
     } else {
         preview_archive_paths_by_system
@@ -1111,7 +1112,7 @@ fn game_entry_from_row(
         mra_path: row.get::<_, String>(GAME_ENTRY_LAUNCH_REF)?.into(),
         preview_archive_path,
         preview_asset_key: preview_asset_key.into(),
-        has_preview: row.get::<_, i64>(GAME_ENTRY_HAS_PREVIEW)? != 0,
+        has_preview,
         system_id: system_id.into(),
         year: optional_year_from_row(row, GAME_ENTRY_YEAR)?,
         manufacturer: row
