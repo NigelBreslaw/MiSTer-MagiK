@@ -3,7 +3,14 @@
 
 //! Runtime thread scheduling policy for production background work.
 
+use std::cell::Cell;
 use std::sync::OnceLock;
+
+thread_local! {
+    static CURRENT_ROLE: Cell<Option<RuntimeThreadRole>> = const { Cell::new(None) };
+    static CATALOG_AFFINITY_MODE: Cell<Option<crate::cooperative_work::CatalogWorkMode>> =
+        const { Cell::new(None) };
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RuntimeThreadRole {
@@ -200,6 +207,8 @@ impl ThreadAffinity {
 }
 
 pub fn apply_runtime_thread_policy(role: RuntimeThreadRole) -> RuntimeThreadPolicyReport {
+    CURRENT_ROLE.with(|current| current.set(Some(role)));
+    CATALOG_AFFINITY_MODE.with(|mode| mode.set(None));
     let thread_name = std::thread::current()
         .name()
         .unwrap_or("unnamed")
@@ -238,11 +247,53 @@ pub fn apply_runtime_thread_policy_override(
     role: RuntimeThreadRole,
     policy: RuntimeThreadPolicy,
 ) -> RuntimeThreadPolicyReport {
+    CURRENT_ROLE.with(|current| current.set(Some(role)));
+    CATALOG_AFFINITY_MODE.with(|mode| mode.set(None));
     let thread_name = std::thread::current()
         .name()
         .unwrap_or("unnamed")
         .to_string();
     apply_runtime_thread_policy_with(role, policy, &thread_name)
+}
+
+pub(crate) fn apply_catalog_work_mode_affinity(mode: crate::cooperative_work::CatalogWorkMode) {
+    if policy_disabled() || affinity_disabled() {
+        return;
+    }
+    let affinity = CURRENT_ROLE.with(|role| catalog_mode_affinity(role.get(), mode));
+    let Some(affinity) = affinity else {
+        return;
+    };
+    let changed = CATALOG_AFFINITY_MODE.with(|current| {
+        if current.get() == Some(mode) {
+            false
+        } else {
+            current.set(Some(mode));
+            true
+        }
+    });
+    if changed {
+        let _ = apply_affinity(affinity);
+    }
+}
+
+fn catalog_mode_affinity(
+    role: Option<RuntimeThreadRole>,
+    mode: crate::cooperative_work::CatalogWorkMode,
+) -> Option<ThreadAffinity> {
+    if !matches!(
+        role,
+        Some(RuntimeThreadRole::CatalogWorker | RuntimeThreadRole::LibraryWalker)
+    ) {
+        return None;
+    }
+    Some(
+        if mode == crate::cooperative_work::CatalogWorkMode::DualCoreBurst {
+            ThreadAffinity::AllOnline
+        } else {
+            ThreadAffinity::Cpu0
+        },
+    )
 }
 
 fn apply_runtime_thread_policy_with(
@@ -597,6 +648,35 @@ mod tests {
             } else {
                 assert!(role.default_policy().nice >= 5);
             }
+        }
+    }
+
+    #[test]
+    fn idle_burst_widens_only_catalog_compute_roles() {
+        use crate::cooperative_work::CatalogWorkMode;
+
+        for role in [
+            RuntimeThreadRole::CatalogWorker,
+            RuntimeThreadRole::LibraryWalker,
+        ] {
+            assert_eq!(
+                catalog_mode_affinity(Some(role), CatalogWorkMode::DualCoreBurst),
+                Some(ThreadAffinity::AllOnline)
+            );
+            assert_eq!(
+                catalog_mode_affinity(Some(role), CatalogWorkMode::Paused),
+                Some(ThreadAffinity::Cpu0)
+            );
+        }
+        for role in [
+            RuntimeThreadRole::LauncherUi,
+            RuntimeThreadRole::CatalogShardPublisher,
+            RuntimeThreadRole::SystemEntryPrepare,
+        ] {
+            assert_eq!(
+                catalog_mode_affinity(Some(role), CatalogWorkMode::DualCoreBurst),
+                None
+            );
         }
     }
 

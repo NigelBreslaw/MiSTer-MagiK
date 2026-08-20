@@ -109,7 +109,9 @@ pub(crate) fn checkpoint() {
         return;
     }
     CHECKPOINTS.fetch_add(1, Ordering::Relaxed);
-    if CatalogWorkMode::from_raw(WORK_MODE.load(Ordering::Acquire)) != CatalogWorkMode::Paused {
+    let mode = CatalogWorkMode::from_raw(WORK_MODE.load(Ordering::Acquire));
+    crate::runtime_thread::apply_catalog_work_mode_affinity(mode);
+    if mode != CatalogWorkMode::Paused {
         return;
     }
     let (lock, signal) = PAUSE_SIGNAL.get_or_init(|| (Mutex::new(()), Condvar::new()));
@@ -122,6 +124,9 @@ pub(crate) fn checkpoint() {
             .unwrap_or_else(|poisoned| poisoned.into_inner());
     }
     PARKED_THREADS.fetch_sub(1, Ordering::AcqRel);
+    crate::runtime_thread::apply_catalog_work_mode_affinity(CatalogWorkMode::from_raw(
+        WORK_MODE.load(Ordering::Acquire),
+    ));
 }
 
 pub(crate) fn in_background_scope() -> bool {
