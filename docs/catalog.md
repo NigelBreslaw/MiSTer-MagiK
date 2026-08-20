@@ -255,8 +255,11 @@ priority until their first-visible snapshot is published and retained.
 
 Initial builds keep disposable durable progress in
 `catalog-v3/state/build-progress-v3/`. Small SQLite metadata rows point into an
-append-only LZ4 frame file; frame bytes are synchronized before their metadata
-transaction becomes durable. After a launcher handoff terminates MagiK, the
+append-only LZ4 frame file. Large target output is partitioned into sequential
+256 KiB raw records so compression, hashing, append, pause checks, and reopen do
+not allocate a second target-sized compressed buffer. Frame bytes are
+synchronized before their metadata transaction becomes durable. After a
+launcher handoff terminates MagiK, the
 next launcher validates and hydrates exact completed targets under the same
 build ID. Scan outputs are committed in bounded groups of at most 16 targets
 or 2 MiB of raw output, whichever comes first. An uncommitted frame tail is

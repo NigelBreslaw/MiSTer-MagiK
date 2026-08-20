@@ -23,8 +23,10 @@ const METADATA_FILE_NAME: &str = "metadata.sqlite3";
 const FRAME_FILE_NAME: &str = "target-outputs.lz4";
 const LEGACY_PROGRESS_FILE_NAME: &str = "build-progress.sqlite3";
 const LEGACY_COMMITTED_FILE_NAME: &str = "target-output-cache.sqlite3";
-const SCHEMA_VERSION: u32 = 3;
+const SCHEMA_VERSION: u32 = 4;
 const MAX_TARGET_OUTPUT_BYTES: usize = 256 * 1024 * 1024;
+const TARGET_FRAME_CHUNK_BYTES: usize = 256 * 1024;
+const MAX_ENCODED_CHUNK_BYTES: usize = TARGET_FRAME_CHUNK_BYTES * 2;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct BuildContract {
@@ -430,16 +432,44 @@ impl BuildProgressJournal {
         frames
             .seek(SeekFrom::Start(offset))
             .map_err(|error| format!("seek target frame: {error}"))?;
-        let mut encoded = vec![0; frame_len];
-        frames
-            .read_exact(&mut encoded)
-            .map_err(|error| format!("read target frame: {error}"))?;
-        if sha256_hex(&encoded) != expected_sha256 {
+        let mut remaining = frame_len;
+        let mut decoded = Vec::with_capacity(raw_len);
+        let mut digest = Sha256::new();
+        while remaining != 0 {
+            crate::cooperative_work::checkpoint();
+            if remaining < size_of::<u32>() {
+                return Err("target frame has a truncated chunk header".to_string());
+            }
+            let mut header = [0u8; size_of::<u32>()];
+            frames
+                .read_exact(&mut header)
+                .map_err(|error| format!("read target frame chunk header: {error}"))?;
+            digest.update(header);
+            remaining -= header.len();
+            let encoded_len = u32::from_le_bytes(header) as usize;
+            if encoded_len == 0 || encoded_len > MAX_ENCODED_CHUNK_BYTES || encoded_len > remaining
+            {
+                return Err("target frame has invalid chunk bounds".to_string());
+            }
+            let mut encoded = vec![0; encoded_len];
+            frames
+                .read_exact(&mut encoded)
+                .map_err(|error| format!("read target frame chunk: {error}"))?;
+            digest.update(&encoded);
+            remaining -= encoded_len;
+            let chunk = lz4_flex::decompress_size_prepended(&encoded)
+                .map_err(|error| format!("decompress target frame chunk: {error}"))?;
+            if chunk.len() > TARGET_FRAME_CHUNK_BYTES
+                || decoded.len().saturating_add(chunk.len()) > raw_len
+            {
+                return Err("target frame chunk exceeds decoded bounds".to_string());
+            }
+            decoded.extend_from_slice(&chunk);
+        }
+        if format!("{:x}", digest.finalize()) != expected_sha256 {
             return Err("target frame checksum mismatch".to_string());
         }
-        let decoded = lz4_flex::decompress_size_prepended(&encoded)
-            .map_err(|error| format!("decompress target frame: {error}"))?;
-        if decoded.len() != raw_len || decoded.len() > MAX_TARGET_OUTPUT_BYTES {
+        if decoded.len() != raw_len {
             return Err("target frame decoded length mismatch".to_string());
         }
         String::from_utf8(decoded).map_err(|error| format!("decode target frame UTF-8: {error}"))
@@ -467,14 +497,9 @@ impl BuildProgressJournal {
             .iter()
             .map(|target| target.output_json.len())
             .sum();
-        let compress_started = Instant::now();
-        let encoded = completed
-            .iter()
-            .map(|target| lz4_flex::compress_prepend_size(target.output_json.as_bytes()))
-            .collect::<Vec<_>>();
-        let compress_us = elapsed_us(compress_started);
-        let frame_bytes = encoded.iter().map(Vec::len).sum();
-        let append_started = Instant::now();
+        let mut compress_us = 0u64;
+        let mut append_us = 0u64;
+        let mut frame_bytes = 0usize;
         let mut frames = OpenOptions::new()
             .create(true)
             .append(true)
@@ -485,20 +510,41 @@ impl BuildProgressJournal {
             .seek(SeekFrom::End(0))
             .map_err(|error| format!("seek target frame append: {error}"))?;
         let mut frame_rows = Vec::with_capacity(completed.len());
-        for (target, encoded) in completed.iter().zip(&encoded) {
-            frames
-                .write_all(encoded)
-                .map_err(|error| format!("append target frame: {error}"))?;
+        for target in completed {
+            let frame_offset = offset;
+            let mut digest = Sha256::new();
+            for chunk in target
+                .output_json
+                .as_bytes()
+                .chunks(TARGET_FRAME_CHUNK_BYTES)
+            {
+                crate::cooperative_work::checkpoint();
+                let compress_started = Instant::now();
+                let encoded = lz4_flex::compress_prepend_size(chunk);
+                compress_us = compress_us.saturating_add(elapsed_us(compress_started));
+                let encoded_len = u32::try_from(encoded.len())
+                    .map_err(|_| "encoded target frame chunk is too large".to_string())?;
+                let header = encoded_len.to_le_bytes();
+                let append_started = Instant::now();
+                frames
+                    .write_all(&header)
+                    .and_then(|()| frames.write_all(&encoded))
+                    .map_err(|error| format!("append target frame chunk: {error}"))?;
+                append_us = append_us.saturating_add(elapsed_us(append_started));
+                digest.update(header);
+                digest.update(&encoded);
+                let record_len = header.len().saturating_add(encoded.len());
+                frame_bytes = frame_bytes.saturating_add(record_len);
+                offset = offset.saturating_add(record_len as u64);
+            }
             frame_rows.push((
                 target,
-                offset,
-                encoded.len() as u64,
+                frame_offset,
+                offset.saturating_sub(frame_offset),
                 target.output_json.len() as u64,
-                sha256_hex(encoded),
+                format!("{:x}", digest.finalize()),
             ));
-            offset = offset.saturating_add(encoded.len() as u64);
         }
-        let append_us = elapsed_us(append_started);
         let sync_started = Instant::now();
         frames
             .sync_data()
@@ -966,6 +1012,39 @@ mod tests {
         assert_eq!(journal.build_id(), id);
         assert_eq!(journal.completed_targets().unwrap(), vec![completed()]);
         assert_eq!(journal.completed_shards().unwrap(), vec![shard]);
+        remove(&path).unwrap();
+    }
+
+    #[test]
+    fn large_target_frame_round_trips_as_bounded_records() {
+        let path = temp_path("build-progress-chunked-frame");
+        let (mut journal, _) =
+            BuildProgressJournal::open_or_create(&path, &contract(), &targets()).unwrap();
+        let mut large = completed();
+        large.output_json = "x".repeat(TARGET_FRAME_CHUNK_BYTES * 2 + 17);
+        let attribution = journal.checkpoint_target(&large).unwrap();
+        drop(journal);
+
+        let mut frames = File::open(frame_path(&path)).unwrap();
+        let mut records = 0usize;
+        loop {
+            let mut header = [0u8; size_of::<u32>()];
+            match frames.read_exact(&mut header) {
+                Ok(()) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => break,
+                Err(error) => panic!("read chunk header: {error}"),
+            }
+            let encoded_len = u32::from_le_bytes(header) as usize;
+            assert!(encoded_len <= MAX_ENCODED_CHUNK_BYTES);
+            frames.seek(SeekFrom::Current(encoded_len as i64)).unwrap();
+            records += 1;
+        }
+        assert_eq!(records, 3);
+        assert_eq!(attribution.raw_bytes, large.output_json.len());
+        let (journal, status) =
+            BuildProgressJournal::open_or_create(&path, &contract(), &targets()).unwrap();
+        assert_eq!(status, OpenStatus::Resumed);
+        assert_eq!(journal.completed_targets().unwrap(), vec![large]);
         remove(&path).unwrap();
     }
 
