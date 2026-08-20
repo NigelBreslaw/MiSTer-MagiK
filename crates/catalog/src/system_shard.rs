@@ -333,12 +333,10 @@ pub(crate) fn write_system_shard_with_durability(
     let search = crate::persisted_search::populate(&transaction, &data.games)
         .map_err(|error| SystemShardError::new("write", error.to_string()))?;
     crate::catalog_logln!(
-        "catalog_search_build_tsv\tsystem={}\tdocuments={}\twords={}\tbatches={}\trows={}\trow_loop_us={}\tautocomplete_sort_us={}\tautocomplete_insert_us={}\toptimize_us={}\tautomerge_restore_us={}\tintegrity_us={}\ttotal_us={}",
+        "catalog_search_build_tsv\tsystem={}\tdocuments={}\twords={}\trow_loop_us={}\tautocomplete_sort_us={}\tautocomplete_insert_us={}\toptimize_us={}\tautomerge_restore_us={}\tintegrity_us={}\ttotal_us={}",
         data.system_id.as_str(),
         data.games.len(),
         search.words,
-        search.batches,
-        search.rows,
         search.row_loop_us,
         search.autocomplete_sort_us,
         search.autocomplete_insert_us,
