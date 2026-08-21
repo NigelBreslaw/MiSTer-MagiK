@@ -14,7 +14,62 @@ pub const LAUNCHER_AUTOMATION_CAPABILITY: &str = "launcher-automation-v1";
 pub const LAUNCHER_AUTOMATION_MAX_HOLD_MS: u64 = 40_000;
 pub const ALPHA_CANDIDATE_INSTALL_CAPABILITY: &str = "alpha-candidate-install-v1";
 pub const SCREENSAVER_FRAME_EVIDENCE_CAPABILITY: &str = "screensaver-frame-evidence-v6";
+pub const RUNTIME_UPLOAD_COMMAND: &str = "runtime_upload_v1";
+pub const RUNTIME_UPLOAD_CAPABILITY: &str = "runtime-upload-v1";
+pub const RUNTIME_UPLOAD_SCHEMA: &str = "mister-magik-runtime-upload-v1";
+pub const MAX_RUNTIME_UPLOAD_BYTES: u64 = 128 * 1024 * 1024;
 pub const MAX_BINARY_PAYLOAD_BYTES: u64 = 512 * 1024 * 1024;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RuntimeUploadSpec {
+    pub payload_bytes: u64,
+    pub sha256: String,
+}
+
+impl RuntimeUploadSpec {
+    pub fn from_args(args: &Value) -> Result<Self, String> {
+        let object = args
+            .as_object()
+            .ok_or_else(|| "runtime upload args must be an object".to_string())?;
+        if object.len() != 2
+            || !object.contains_key("payload_bytes")
+            || !object.contains_key("sha256")
+        {
+            return Err("runtime upload args require exactly payload_bytes and sha256".to_string());
+        }
+        let payload_bytes = object["payload_bytes"].as_u64().ok_or_else(|| {
+            "runtime upload payload_bytes must be an unsigned integer".to_string()
+        })?;
+        if payload_bytes == 0 || payload_bytes > MAX_RUNTIME_UPLOAD_BYTES {
+            return Err(format!(
+                "runtime upload payload_bytes must be between 1 and {MAX_RUNTIME_UPLOAD_BYTES}"
+            ));
+        }
+        let sha256 = object["sha256"]
+            .as_str()
+            .ok_or_else(|| "runtime upload sha256 must be a string".to_string())?;
+        if sha256.len() != 64
+            || !sha256
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+        {
+            return Err(
+                "runtime upload sha256 must be 64 lowercase hexadecimal characters".to_string(),
+            );
+        }
+        Ok(Self {
+            payload_bytes,
+            sha256: sha256.to_string(),
+        })
+    }
+
+    pub fn args(&self) -> Value {
+        json!({
+            "payload_bytes": self.payload_bytes,
+            "sha256": self.sha256,
+        })
+    }
+}
 
 pub fn request(token: &str, id: u64, command: &str, args: Value) -> Value {
     json!({ "token": token, "id": id, "cmd": command, "args": args })
@@ -292,6 +347,29 @@ mod tests {
         );
         assert!(binary_payload_len(&json!({})).is_err());
         assert!(binary_payload_len(&json!({"payload_bytes": "4"})).is_err());
+    }
+
+    #[test]
+    fn runtime_upload_spec_is_exact_and_bounded() {
+        let sha256 = "a".repeat(64);
+        let spec = RuntimeUploadSpec::from_args(&json!({
+            "payload_bytes": 31_593_184,
+            "sha256": sha256,
+        }))
+        .unwrap();
+        assert_eq!(spec.payload_bytes, 31_593_184);
+        assert_eq!(RuntimeUploadSpec::from_args(&spec.args()).unwrap(), spec);
+
+        for invalid in [
+            json!({}),
+            json!({"payload_bytes": 1, "sha256": "a".repeat(64), "extra": true}),
+            json!({"payload_bytes": 0, "sha256": "a".repeat(64)}),
+            json!({"payload_bytes": MAX_RUNTIME_UPLOAD_BYTES + 1, "sha256": "a".repeat(64)}),
+            json!({"payload_bytes": 1, "sha256": "A".repeat(64)}),
+            json!({"payload_bytes": 1, "sha256": "g".repeat(64)}),
+        ] {
+            assert!(RuntimeUploadSpec::from_args(&invalid).is_err(), "{invalid}");
+        }
     }
 
     #[test]

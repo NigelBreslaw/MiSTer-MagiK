@@ -33,6 +33,8 @@ use serde_json::{Value, json};
 mod alpha_candidate;
 #[cfg(target_os = "linux")]
 mod launcher_automation;
+#[cfg(any(target_os = "linux", test))]
+mod runtime_upload;
 #[cfg(target_os = "linux")]
 mod scanout_slots_contract;
 
@@ -1557,6 +1559,9 @@ mod linux {
                 false,
             ),
             Ok(line) => {
+                if maybe_handle_runtime_upload_v1(&line, &token, &mut reader, &mut stream) {
+                    return;
+                }
                 if maybe_handle_framebuffer_stream_v1(&line, &token, &mut stream) {
                     return;
                 }
@@ -1592,6 +1597,101 @@ mod linux {
             Err(err) => unavailable_failure_response(None, &format!("read error: {err}")),
         };
         let _ = writeln!(stream, "{response}");
+    }
+
+    fn maybe_handle_runtime_upload_v1(
+        line: &str,
+        token: &str,
+        reader: &mut impl Read,
+        stream: &mut TcpStream,
+    ) -> bool {
+        if serde_json::from_str::<Value>(line.trim())
+            .ok()
+            .and_then(|value| value.get("cmd").and_then(Value::as_str).map(str::to_owned))
+            .as_deref()
+            != Some(mister_magik_agent_protocol::RUNTIME_UPLOAD_COMMAND)
+        {
+            return false;
+        }
+
+        let request = match parse_control_request(line, token, CONTROL_AUTH_DISABLED) {
+            Ok(request) => request,
+            Err(error) => {
+                let response = if error.message == "unauthorized" {
+                    authentication_failure_response(error.id)
+                } else {
+                    failure_response(
+                        error.id,
+                        &error.message,
+                        mister_magik_agent_protocol::FailureCode::InvalidRequest,
+                        mister_magik_agent_protocol::FailurePhase::Request,
+                        mister_magik_agent_protocol::RetryPolicy::Never,
+                        false,
+                    )
+                };
+                let _ = writeln!(stream, "{response}");
+                return true;
+            }
+        };
+        let spec = match mister_magik_agent_protocol::RuntimeUploadSpec::from_args(&request.args) {
+            Ok(spec) => spec,
+            Err(error) => {
+                let response = failure_response(
+                    request.id,
+                    &error,
+                    mister_magik_agent_protocol::FailureCode::InvalidRequest,
+                    mister_magik_agent_protocol::FailurePhase::Request,
+                    mister_magik_agent_protocol::RetryPolicy::Never,
+                    false,
+                );
+                let _ = writeln!(stream, "{response}");
+                return true;
+            }
+        };
+
+        let installed = mister_magik_platform_manifest_contract::DEVELOPMENT_PATHS;
+        let paths = crate::runtime_upload::UploadPaths {
+            lock: Path::new(installed.root).join("deploy.lock"),
+            upload: PathBuf::from(format!("{}.upload", installed.gui)),
+            part: PathBuf::from(format!("{}.upload.part", installed.gui)),
+        };
+        let response = match crate::runtime_upload::receive(reader, &spec, &paths) {
+            Ok(result) => response(
+                request.id,
+                true,
+                Some(json!({
+                    "schema": mister_magik_agent_protocol::RUNTIME_UPLOAD_SCHEMA,
+                    "payload_bytes": result.payload_bytes,
+                    "sha256": result.sha256,
+                    "receive_ms": result.receive_ms,
+                    "bytes_per_second": result.bytes_per_second,
+                })),
+                None,
+            ),
+            Err(error) => match error.kind {
+                crate::runtime_upload::UploadFailureKind::Busy => {
+                    busy_failure_response(request.id, &error.message)
+                }
+                crate::runtime_upload::UploadFailureKind::Artifact => failure_response(
+                    request.id,
+                    &error.message,
+                    mister_magik_agent_protocol::FailureCode::ArtifactMismatch,
+                    mister_magik_agent_protocol::FailurePhase::Artifact,
+                    mister_magik_agent_protocol::RetryPolicy::ReconcileThenRetry,
+                    false,
+                ),
+                crate::runtime_upload::UploadFailureKind::Operation => failure_response(
+                    request.id,
+                    &error.message,
+                    mister_magik_agent_protocol::FailureCode::OperationFailed,
+                    mister_magik_agent_protocol::FailurePhase::Operation,
+                    mister_magik_agent_protocol::RetryPolicy::ReconcileThenRetry,
+                    false,
+                ),
+            },
+        };
+        let _ = writeln!(stream, "{response}");
+        true
     }
 
     pub(super) fn read_control_request(
