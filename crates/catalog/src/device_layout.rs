@@ -179,6 +179,7 @@ pub struct CatalogPaths {
     library_sqlite: PathBuf,
     mame_sqlite: PathBuf,
     hbmame_sqlite: PathBuf,
+    arcade_updater_index: PathBuf,
     preview_cache_dir: PathBuf,
     media_asset_dir: PathBuf,
     user_state_sqlite: PathBuf,
@@ -207,6 +208,7 @@ impl CatalogPaths {
             hbmame_sqlite: overrides
                 .hbmame_sqlite
                 .unwrap_or_else(|| device.app_path("hbmame.sqlite3")),
+            arcade_updater_index: device.app_path(crate::arcade_updater_index::FILE_NAME),
             preview_cache_dir: overrides
                 .preview_cache_dir
                 .unwrap_or_else(|| device.app_path("assets")),
@@ -238,6 +240,10 @@ impl CatalogPaths {
 
     pub fn hbmame_sqlite(&self) -> &Path {
         &self.hbmame_sqlite
+    }
+
+    pub fn arcade_updater_index(&self) -> &Path {
+        &self.arcade_updater_index
     }
 
     pub fn preview_cache_dir(&self) -> &Path {
@@ -382,6 +388,10 @@ mod tests {
         assert_eq!(
             defaults.mame_sqlite(),
             Path::new("/tmp/card/mister-magik/mame.sqlite3")
+        );
+        assert_eq!(
+            defaults.arcade_updater_index(),
+            Path::new("/tmp/card/mister-magik/arcade-updater-index-v1.lz4b")
         );
         assert_eq!(
             defaults.preview_cache_dir(),

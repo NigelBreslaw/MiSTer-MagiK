@@ -652,7 +652,7 @@ fn dispatch(
                             hbmame_tag,
                             hbmame_sha,
                             arcade_database_sha,
-                            &arcade_updater_revisions,
+                            arcade_updater_revisions,
                         )?;
                         if let Some(path) = github_output {
                             append_github_output(

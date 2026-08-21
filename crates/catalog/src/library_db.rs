@@ -1226,6 +1226,7 @@ pub(crate) fn scan_arcade_bootstrap_ram_foreground_with_paths(
     };
     Ok(
         CatalogRefreshPipeline::with_archive_cache(&cfg, archive_cache)
+            .with_arcade_updater_index(paths.arcade_updater_index())
             .scan_ram_artifact_foreground_with_events(progress, scan_events),
     )
 }
@@ -1261,6 +1262,7 @@ pub(crate) fn scan_arcade_bootstrap_ram_background_with_paths(
     };
     Ok(
         CatalogRefreshPipeline::with_archive_cache(&cfg, archive_cache)
+            .with_arcade_updater_index(paths.arcade_updater_index())
             .scan_ram_artifact_with_events_and_durable_resume(progress, scan_events, false),
     )
 }

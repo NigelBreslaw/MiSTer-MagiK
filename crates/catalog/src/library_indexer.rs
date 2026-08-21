@@ -105,6 +105,7 @@ pub(crate) struct LibraryIndexer<'a> {
     archive_reader: crate::catalog_config::ArchiveReaderConfig,
     priority: LibraryScanPriority,
     durable_resume: bool,
+    arcade_updater_index: Option<PathBuf>,
 }
 
 impl<'a> LibraryIndexer<'a> {
@@ -121,6 +122,7 @@ impl<'a> LibraryIndexer<'a> {
             archive_reader,
             priority: LibraryScanPriority::Background,
             durable_resume: library_db::env_bool("MISTER_CATALOG_DURABLE_RESUME"),
+            arcade_updater_index: None,
         }
     }
 
@@ -133,11 +135,17 @@ impl<'a> LibraryIndexer<'a> {
             archive_reader,
             priority: LibraryScanPriority::Foreground,
             durable_resume: library_db::env_bool("MISTER_CATALOG_DURABLE_RESUME"),
+            arcade_updater_index: None,
         }
     }
 
     pub(crate) fn with_durable_resume(mut self, durable_resume: bool) -> Self {
         self.durable_resume = durable_resume;
+        self
+    }
+
+    pub(crate) fn with_arcade_updater_index(mut self, path: &Path) -> Self {
+        self.arcade_updater_index = Some(path.to_path_buf());
         self
     }
 
@@ -158,6 +166,7 @@ impl<'a> LibraryIndexer<'a> {
                 priority: self.priority,
                 audit_mode: CoverageAuditMode::Inline,
                 durable_resume: self.durable_resume,
+                arcade_updater_index: self.arcade_updater_index.as_deref(),
             },
             progress,
             scan_events,
@@ -190,6 +199,7 @@ impl<'a> LibraryIndexer<'a> {
                 priority: self.priority,
                 audit_mode: CoverageAuditMode::Deferred,
                 durable_resume: self.durable_resume,
+                arcade_updater_index: self.arcade_updater_index.as_deref(),
             },
             progress,
             scan_events,
@@ -909,6 +919,7 @@ struct LibraryScanExecution<'a> {
     priority: LibraryScanPriority,
     audit_mode: CoverageAuditMode,
     durable_resume: bool,
+    arcade_updater_index: Option<&'a Path>,
 }
 
 fn is_arcade_bootstrap_scan(roots: &[String], durable_resume: bool) -> bool {
@@ -917,28 +928,80 @@ fn is_arcade_bootstrap_scan(roots: &[String], durable_resume: bool) -> bool {
         && roots[0].eq_ignore_ascii_case(crate::arcade_catalog::DEFAULT_ARCADE_ROOT)
 }
 
+struct ArcadeMraPrefetch {
+    metadata: HashMap<PathBuf, Option<media_metadata::MraMetadata>>,
+    index_status: &'static str,
+    index_hits: usize,
+    index_misses: usize,
+    fallback_reads: usize,
+    index_load_us: u64,
+}
+
 fn prefetch_arcade_mra_metadata(
     events: &[DiscoveryEvent],
-) -> HashMap<PathBuf, Option<media_metadata::MraMetadata>> {
+    updater_index_path: Option<&Path>,
+) -> ArcadeMraPrefetch {
     let paths = events
         .iter()
         .filter_map(|event| match event {
             DiscoveryEvent::File(file) if file.ext.eq_ignore_ascii_case("mra") => {
-                Some(file.path.clone())
+                Some((file.path.clone(), file.size))
             }
             _ => None,
         })
         .collect::<Vec<_>>();
     if paths.is_empty() {
-        return HashMap::new();
+        return ArcadeMraPrefetch {
+            metadata: HashMap::new(),
+            index_status: "unused",
+            index_hits: 0,
+            index_misses: 0,
+            fallback_reads: 0,
+            index_load_us: 0,
+        };
     }
 
-    let worker_count = ARCADE_MRA_READ_WORKERS.min(paths.len());
+    let load_started = Instant::now();
+    let loaded_index = updater_index_path
+        .and_then(|path| crate::arcade_updater_index::ArcadeUpdaterIndex::read(path).ok());
+    let index_load_us = load_started.elapsed().as_micros() as u64;
+    let index_status = if loaded_index.is_some() {
+        "loaded"
+    } else if updater_index_path.is_some() {
+        "invalid-or-missing"
+    } else {
+        "not-configured"
+    };
+    let indexed_rows = loaded_index
+        .map(|index| {
+            index
+                .rows
+                .into_iter()
+                .map(|row| (row.path.to_ascii_lowercase(), row))
+                .collect::<HashMap<_, _>>()
+        })
+        .unwrap_or_default();
+    let mut metadata = HashMap::with_capacity(paths.len());
+    let mut fallback_paths = Vec::new();
+    let mut index_hits = 0usize;
+    for (path, size) in paths {
+        let indexed = arcade_updater_key(&path)
+            .and_then(|key| indexed_rows.get(&key))
+            .filter(|row| size == row.size);
+        if let Some(row) = indexed {
+            metadata.insert(path, Some(row.header.clone()));
+            index_hits = index_hits.saturating_add(1);
+        } else {
+            fallback_paths.push(path);
+        }
+    }
+
+    let worker_count = ARCADE_MRA_READ_WORKERS.min(fallback_paths.len());
     let next = AtomicUsize::new(0);
-    let results = Mutex::new(Vec::with_capacity(paths.len()));
+    let results = Mutex::new(Vec::with_capacity(fallback_paths.len()));
     std::thread::scope(|scope| {
         for worker in 0..worker_count {
-            let paths = &paths;
+            let paths = &fallback_paths;
             let next = &next;
             let results = &results;
             let _ = std::thread::Builder::new()
@@ -960,11 +1023,26 @@ fn prefetch_arcade_mra_metadata(
                 });
         }
     });
-    results
-        .into_inner()
-        .unwrap_or_default()
-        .into_iter()
-        .collect()
+    metadata.extend(results.into_inner().unwrap_or_default());
+    ArcadeMraPrefetch {
+        metadata,
+        index_status,
+        index_hits,
+        index_misses: fallback_paths.len(),
+        fallback_reads: fallback_paths.len(),
+        index_load_us,
+    }
+}
+
+fn arcade_updater_key(path: &Path) -> Option<String> {
+    let components = path
+        .components()
+        .map(|component| component.as_os_str().to_str())
+        .collect::<Option<Vec<_>>>()?;
+    let arcade = components
+        .iter()
+        .position(|component| component.eq_ignore_ascii_case("_Arcade"))?;
+    Some(components[arcade..].join("/").to_ascii_lowercase())
 }
 
 fn apply_configured_target_allowlist(
@@ -1014,6 +1092,7 @@ fn scan_library_with_progress_and_events(
         priority,
         audit_mode,
         durable_resume,
+        arcade_updater_index,
     } = execution;
     crate::cooperative_work::checkpoint();
     let discover_t = Instant::now();
@@ -1099,7 +1178,8 @@ fn scan_library_with_progress_and_events(
     if is_arcade_bootstrap_scan(&cfg.roots, durable_resume) {
         let events = rx.iter().collect::<Vec<_>>();
         let prefetch_t = Instant::now();
-        prefetched_arcade_mra = prefetch_arcade_mra_metadata(&events);
+        let prefetch = prefetch_arcade_mra_metadata(&events, arcade_updater_index);
+        prefetched_arcade_mra = prefetch.metadata;
         let successes = prefetched_arcade_mra
             .values()
             .filter(|metadata| metadata.is_some())
@@ -1108,11 +1188,16 @@ fn scan_library_with_progress_and_events(
             "arcade_mra_prefetch",
             prefetch_t.elapsed().as_micros() as u64,
             format!(
-                "files={} successes={} failures={} workers={}",
+                "files={} successes={} failures={} workers={} index_status={} index_hits={} index_misses={} fallback_reads={} index_load_us={}",
                 prefetched_arcade_mra.len(),
                 successes,
                 prefetched_arcade_mra.len().saturating_sub(successes),
-                ARCADE_MRA_READ_WORKERS.min(prefetched_arcade_mra.len()),
+                ARCADE_MRA_READ_WORKERS.min(prefetch.fallback_reads),
+                prefetch.index_status,
+                prefetch.index_hits,
+                prefetch.index_misses,
+                prefetch.fallback_reads,
+                prefetch.index_load_us,
             ),
         );
         buffered_events = Some(events.into_iter());
@@ -2006,6 +2091,28 @@ fn is_bootstrap_launcher_path(path: &Path) -> bool {
 mod timing_tests {
     use super::*;
 
+    fn updater_index(
+        row: crate::arcade_updater_index::ArcadeUpdaterRow,
+    ) -> crate::arcade_updater_index::ArcadeUpdaterIndex {
+        crate::arcade_updater_index::ArcadeUpdaterIndex {
+            sources: [
+                "alternatives",
+                "arcade-offset",
+                "coinop",
+                "distribution",
+                "jtcores",
+            ]
+            .into_iter()
+            .map(|id| crate::arcade_updater_index::ArcadeUpdaterSource {
+                id: id.to_string(),
+                revision: "a".repeat(40),
+                database_sha256: "b".repeat(64),
+            })
+            .collect(),
+            rows: vec![row],
+        }
+    }
+
     #[test]
     fn scan_handoff_accounting_is_bounded_and_reports_batch_shape() {
         let attribution = ScanHandoffAttribution {
@@ -2081,6 +2188,59 @@ mod timing_tests {
             &["/media/fat/games/SNES".to_string()],
             false,
         ));
+    }
+
+    #[test]
+    fn updater_index_supplies_matching_metadata_and_size_changes_fall_back() {
+        let root = std::env::temp_dir().join(format!(
+            "mister-magik-arcade-updater-prefetch-{}",
+            std::process::id()
+        ));
+        let arcade = root.join("_Arcade");
+        std::fs::create_dir_all(&arcade).unwrap();
+        let mra = arcade.join("Fixture.mra");
+        let local = b"<misterromdescription><name>Local</name></misterromdescription>";
+        std::fs::write(&mra, local).unwrap();
+        let index_path = root.join("arcade-updater-index-v1.lz4b");
+        updater_index(crate::arcade_updater_index::ArcadeUpdaterRow {
+            path: "_Arcade/Fixture.mra".to_string(),
+            source_id: "distribution".to_string(),
+            size: local.len() as u64,
+            md5: "c".repeat(32),
+            header: media_metadata::MraMetadata {
+                name: Some("Indexed".to_string()),
+                ..media_metadata::MraMetadata::default()
+            },
+            primary_rom: media_metadata::PrimaryRomRequirement::None,
+        })
+        .write(&index_path)
+        .unwrap();
+        let event = || {
+            vec![DiscoveryEvent::File(crate::catalog_scan::FoundFile {
+                path: mra.clone(),
+                ext: "mra".to_string(),
+                size: std::fs::metadata(&mra).unwrap().len(),
+                mtime_secs: 0,
+            })]
+        };
+
+        let indexed = prefetch_arcade_mra_metadata(&event(), Some(&index_path));
+        assert_eq!(indexed.index_hits, 1);
+        assert_eq!(indexed.fallback_reads, 0);
+        assert_eq!(
+            indexed.metadata[&mra].as_ref().unwrap().name.as_deref(),
+            Some("Indexed")
+        );
+
+        std::fs::write(&mra, [local.as_slice(), b" "].concat()).unwrap();
+        let fallback = prefetch_arcade_mra_metadata(&event(), Some(&index_path));
+        assert_eq!(fallback.index_hits, 0);
+        assert_eq!(fallback.fallback_reads, 1);
+        assert_eq!(
+            fallback.metadata[&mra].as_ref().unwrap().name.as_deref(),
+            Some("Local")
+        );
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

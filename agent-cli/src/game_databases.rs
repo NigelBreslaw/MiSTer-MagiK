@@ -489,16 +489,15 @@ fn validate_manifest(payload: &Value) -> AgentResult<()> {
         {
             return classified("invalid_database_manifest", "Arcade updater format");
         }
-        for pointer in ["/sources/arcade_updater/sha256"] {
-            require_hex(
-                pointer,
-                payload
-                    .pointer(pointer)
-                    .and_then(Value::as_str)
-                    .unwrap_or_default(),
-                64,
-            )?;
-        }
+        let pointer = "/sources/arcade_updater/sha256";
+        require_hex(
+            pointer,
+            payload
+                .pointer(pointer)
+                .and_then(Value::as_str)
+                .unwrap_or_default(),
+            64,
+        )?;
         require_hex(
             "/sources/arcade_updater/builder_sha",
             payload

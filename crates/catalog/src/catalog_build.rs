@@ -24,6 +24,7 @@ pub(crate) struct CatalogRefreshPipeline<'a> {
     cfg: &'a BenchConfig,
     archive_reader: crate::catalog_config::ArchiveReaderConfig,
     sqlite_build_dir_override: Option<PathBuf>,
+    arcade_updater_index: Option<PathBuf>,
 }
 
 impl<'a> CatalogRefreshPipeline<'a> {
@@ -32,6 +33,7 @@ impl<'a> CatalogRefreshPipeline<'a> {
             cfg,
             archive_reader: crate::catalog_config::ArchiveReaderConfig::default(),
             sqlite_build_dir_override: None,
+            arcade_updater_index: None,
         }
     }
 
@@ -45,6 +47,20 @@ impl<'a> CatalogRefreshPipeline<'a> {
             sqlite_build_dir_override: archive_cache
                 .sqlite_build_dir_override()
                 .map(Path::to_path_buf),
+            arcade_updater_index: None,
+        }
+    }
+
+    #[cfg(feature = "builder")]
+    pub(crate) fn with_arcade_updater_index(mut self, path: &Path) -> Self {
+        self.arcade_updater_index = Some(path.to_path_buf());
+        self
+    }
+
+    fn configure_arcade_updater_index(&self, indexer: LibraryIndexer<'a>) -> LibraryIndexer<'a> {
+        match self.arcade_updater_index.as_deref() {
+            Some(path) => indexer.with_arcade_updater_index(path),
+            None => indexer,
         }
     }
 
@@ -120,7 +136,10 @@ impl<'a> CatalogRefreshPipeline<'a> {
         scan_events: ScanEventCallback<'_>,
     ) -> LibraryRamScanArtifact {
         self.scan_ram_artifact_with_events_using(
-            LibraryIndexer::foreground_with_archive_reader(self.cfg, self.archive_reader.clone()),
+            self.configure_arcade_updater_index(LibraryIndexer::foreground_with_archive_reader(
+                self.cfg,
+                self.archive_reader.clone(),
+            )),
             progress,
             scan_events,
         )
@@ -147,8 +166,10 @@ impl<'a> CatalogRefreshPipeline<'a> {
         durable_resume: bool,
     ) -> LibraryRamScanArtifact {
         self.scan_ram_artifact_with_events_using(
-            LibraryIndexer::with_archive_reader(self.cfg, self.archive_reader.clone())
-                .with_durable_resume(durable_resume),
+            self.configure_arcade_updater_index(
+                LibraryIndexer::with_archive_reader(self.cfg, self.archive_reader.clone())
+                    .with_durable_resume(durable_resume),
+            ),
             progress,
             scan_events,
         )
