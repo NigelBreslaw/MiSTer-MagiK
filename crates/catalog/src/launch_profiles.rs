@@ -522,22 +522,6 @@ impl CatalogScanPlan {
                     .any(|dir| dir.eq_ignore_ascii_case(&game_dir.name))
             })
     }
-
-    /// Returns the only system a directory can contribute through its stable
-    /// name/core binding, without assuming that it contains playable payloads.
-    pub(crate) fn potential_system_for_game_dir_header(
-        &self,
-        game_dir: &catalog_discovery::GameDirHeader,
-    ) -> Option<String> {
-        let candidates = runtime_core_candidates_by_dir_name(&game_dir.name, &self.installed_cores);
-        let systems = candidates
-            .iter()
-            .map(|candidate| runtime_system_binding_for_header(game_dir, candidate.core).0)
-            .collect::<BTreeSet<_>>();
-        (systems.len() == 1)
-            .then(|| systems.into_iter().next())
-            .flatten()
-    }
 }
 
 pub fn active_profiles_for_roots(roots: &[String]) -> Vec<LaunchProfile> {
@@ -1330,7 +1314,18 @@ fn runtime_profile_for_extensions(
             "Runtime top-level games folder matched an installed core with known payload extensions",
         ),
     };
-    let (id, distinct_variant) = runtime_system_binding_for_header(game_dir, core);
+    let core_id = canonical_core_id(&core.core_id).to_ascii_lowercase();
+    let distinct_variant = catalog_discovery::compact_system_name(&game_dir.name)
+        == catalog_discovery::compact_system_name(&core.core_id)
+        || matches!(
+            catalog_discovery::compact_system_name(&game_dir.name).as_str(),
+            "fds" | "supergrafx" | "tgfx16" | "tgfx16cd"
+        );
+    let id = if distinct_variant {
+        crate::library_db::normalize_id(&game_dir.name)
+    } else {
+        core_id
+    };
     LaunchProfile {
         id: format!("runtime-{id}"),
         category: crate::catalog_classify::platform_kind_for_system(&id)
@@ -1360,25 +1355,6 @@ fn runtime_profile_for_extensions(
             "Runtime top-level games folder matched an installed core",
         ),
     }
-}
-
-fn runtime_system_binding_for_header(
-    game_dir: &catalog_discovery::GameDirHeader,
-    core: &catalog_discovery::InstalledCore,
-) -> (String, bool) {
-    let core_id = canonical_core_id(&core.core_id).to_ascii_lowercase();
-    let distinct_variant = catalog_discovery::compact_system_name(&game_dir.name)
-        == catalog_discovery::compact_system_name(&core.core_id)
-        || matches!(
-            catalog_discovery::compact_system_name(&game_dir.name).as_str(),
-            "fds" | "supergrafx" | "tgfx16" | "tgfx16cd"
-        );
-    let system_id = if distinct_variant {
-        crate::library_db::normalize_id(&game_dir.name)
-    } else {
-        core_id
-    };
-    (system_id, distinct_variant)
 }
 
 fn runtime_payload_extensions_for_core(core_id: &str) -> Option<Vec<String>> {
@@ -2309,35 +2285,6 @@ mod tests {
             .expect("runtime gameboy profile from collected facts");
         assert_eq!(gameboy.game_dirs, vec!["Loose"]);
         assert_eq!(profiles, expected_profiles);
-        let _ = std::fs::remove_dir_all(root);
-    }
-
-    #[test]
-    fn catalog_scan_plan_resolves_only_unique_runtime_directory_bindings() {
-        let root = unique_temp_dir("catalog-scan-plan-runtime-binding");
-        std::fs::create_dir_all(root.join("_Computer")).expect("create computer cores");
-        std::fs::create_dir_all(root.join("games/C64")).expect("create c64 games");
-        std::fs::create_dir_all(root.join("games/Unclassified")).expect("create unknown games");
-        std::fs::write(root.join("_Computer/C64_20260630.rbf"), b"rbf").expect("write c64 core");
-
-        let roots = vec![root.display().to_string()];
-        let plan = CatalogScanPlan::for_roots(&roots);
-        let c64 = plan
-            .all_game_dir_headers()
-            .iter()
-            .find(|header| header.name == "C64")
-            .expect("c64 header");
-        let unknown = plan
-            .all_game_dir_headers()
-            .iter()
-            .find(|header| header.name == "Unclassified")
-            .expect("unknown header");
-
-        assert_eq!(
-            plan.potential_system_for_game_dir_header(c64).as_deref(),
-            Some("c64")
-        );
-        assert_eq!(plan.potential_system_for_game_dir_header(unknown), None);
         let _ = std::fs::remove_dir_all(root);
     }
 
