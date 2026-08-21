@@ -1040,8 +1040,11 @@ impl NativeDevice {
         &mut self,
         output_dir: &Path,
         pprof: bool,
+        fresh_catalog: bool,
     ) -> std::result::Result<String, DeviceFailure> {
-        self.benchmark_profile(|config| profile_installed_cold_boot(config, output_dir, pprof))
+        self.benchmark_profile(|config| {
+            profile_installed_cold_boot(config, output_dir, pprof, fresh_catalog)
+        })
     }
 
     pub(crate) fn profile_navigation_transitions(
@@ -17100,9 +17103,10 @@ fn profile_installed_cold_boot(
     config: &NativeDeviceConfig,
     output_dir: &Path,
     pprof: bool,
+    fresh_catalog: bool,
 ) -> Result<String> {
     fs::create_dir_all(output_dir)?;
-    let run_result = profile_installed_cold_boot_run(config, output_dir, pprof);
+    let run_result = profile_installed_cold_boot_run(config, output_dir, pprof, fresh_catalog);
     if !pprof {
         return run_result;
     }
@@ -17137,6 +17141,7 @@ fn profile_installed_cold_boot_run(
     config: &NativeDeviceConfig,
     output_dir: &Path,
     pprof: bool,
+    fresh_catalog: bool,
 ) -> Result<String> {
     fs::create_dir_all(output_dir)?;
     let session = connect_with(&config.connection, 10)?;
@@ -17151,6 +17156,9 @@ fn profile_installed_cold_boot_run(
         "cold-boot benchmark safety preflight",
         &cold_boot_profile_preflight_command(),
     )?;
+    if fresh_catalog {
+        purge_development_library_data(&session)?;
+    }
     if pprof {
         let capability = exec_checked_output(
             &session,
@@ -17403,6 +17411,7 @@ fn profile_installed_cold_boot_run(
         "host_reboot_issue_ms": host_reboot_issue_ms,
         "host_recovery_elapsed_ms": host_recovery_elapsed_ms,
         "launcher_ready": launcher_ready,
+        "fresh_catalog": fresh_catalog,
         "screen": launcher_status.get("screen"),
         "effective_view": launcher_status.get("effective_view"),
         "capture_verified": true,
@@ -27483,6 +27492,12 @@ fn run_catalog_rom_audit(sess: &Session, output: &Path) -> Result<()> {
 
 fn purge_development_library_data_and_reboot() -> Result<()> {
     let session = connect(10)?;
+    purge_development_library_data(&session)?;
+    drop(session);
+    agent_reboot_wait(&[])
+}
+
+fn purge_development_library_data(session: &Session) -> Result<()> {
     let preflight = format!(
         "set -eu; pidof MiSTer_MagiKDev >/dev/null; test -x {gui}; test ! -e /tmp/mister-magik/reboot-unstable; {safety}",
         gui = sh(DEVELOPMENT_GUI_REMOTE),
@@ -27544,8 +27559,7 @@ fn purge_development_library_data_and_reboot() -> Result<()> {
     )?;
     let active_ms = wait_main_launcher_active(&session, Duration::from_secs(20))?;
     println!("Dev library purge Main active after {active_ms}ms");
-    drop(session);
-    agent_reboot_wait(&[])
+    Ok(())
 }
 
 fn catalog_query(args: &[String]) -> Result<()> {

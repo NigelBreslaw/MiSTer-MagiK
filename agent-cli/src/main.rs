@@ -206,6 +206,7 @@ fn dispatch(
             arm,
             route,
             duration_seconds,
+            fresh_catalog,
         } => {
             return agent_cli::benchmark::execute(
                 repository,
@@ -213,6 +214,7 @@ fn dispatch(
                 *arm,
                 *route,
                 *duration_seconds,
+                *fresh_catalog,
                 reporter,
             );
         }

@@ -18,9 +18,18 @@ pub fn execute(
     arm: Option<ArcadeVelocityScrollArm>,
     route: ArcadeVelocityScrollRoute,
     duration_seconds: u64,
+    fresh_catalog: bool,
     reporter: &mut Reporter<'_>,
 ) -> AgentResult<Outcome> {
-    require_clean_installed_commit(repository, scenario, arm, route, duration_seconds, reporter)
+    require_clean_installed_commit(
+        repository,
+        scenario,
+        arm,
+        route,
+        duration_seconds,
+        fresh_catalog,
+        reporter,
+    )
 }
 
 trait BenchmarkDevice {
@@ -77,8 +86,7 @@ enum BenchmarkProfile {
     AgentIoAttribution,
     InputLatencyLab,
     LauncherResponseStreamline,
-    ColdBoot,
-    ColdBootPprof,
+    ColdBoot { pprof: bool, fresh_catalog: bool },
     NavigationTransitions,
     SettingsNavigation,
     SettingsNavigationPprof,
@@ -201,8 +209,10 @@ impl BenchmarkDevice for DeviceClient {
             BenchmarkProfile::LauncherResponseStreamline => {
                 device.profile_launcher_response_streamline(&output_dir)
             }
-            BenchmarkProfile::ColdBoot => device.profile_cold_boot(&output_dir, false),
-            BenchmarkProfile::ColdBootPprof => device.profile_cold_boot(&output_dir, true),
+            BenchmarkProfile::ColdBoot {
+                pprof,
+                fresh_catalog,
+            } => device.profile_cold_boot(&output_dir, pprof, fresh_catalog),
             BenchmarkProfile::NavigationTransitions => {
                 device.profile_navigation_transitions(&output_dir)
             }
@@ -244,6 +254,7 @@ fn require_clean_installed_commit(
     arm: Option<ArcadeVelocityScrollArm>,
     route: ArcadeVelocityScrollRoute,
     duration_seconds: u64,
+    fresh_catalog: bool,
     reporter: &mut Reporter<'_>,
 ) -> AgentResult<Outcome> {
     if arm.is_some() && scenario != BenchmarkScenario::ArcadeVelocityScrollAttribution {
@@ -265,6 +276,14 @@ fn require_clean_installed_commit(
         return Err(
             "--duration-seconds is supported only for arcade-velocity-scroll-attribution".into(),
         );
+    }
+    if fresh_catalog
+        && !matches!(
+            scenario,
+            BenchmarkScenario::ColdBoot | BenchmarkScenario::ColdBootPprof
+        )
+    {
+        return Err("--fresh-catalog is supported only for cold-boot benchmarks".into());
     }
     let head = crate::git::value(repository, &["rev-parse", "HEAD"])?;
     if !crate::git::value(repository, &["status", "--porcelain"])?.is_empty() {
@@ -535,12 +554,22 @@ fn require_clean_installed_commit(
         BenchmarkScenario::LauncherResponseStreamline => {
             execute_launcher_response_streamline(&mut device, manifest, output_dir, reporter)
         }
-        BenchmarkScenario::ColdBoot => {
-            execute_cold_boot(&mut device, manifest, output_dir, reporter, false)
-        }
-        BenchmarkScenario::ColdBootPprof => {
-            execute_cold_boot(&mut device, manifest, output_dir, reporter, true)
-        }
+        BenchmarkScenario::ColdBoot => execute_cold_boot(
+            &mut device,
+            manifest,
+            output_dir,
+            reporter,
+            false,
+            fresh_catalog,
+        ),
+        BenchmarkScenario::ColdBootPprof => execute_cold_boot(
+            &mut device,
+            manifest,
+            output_dir,
+            reporter,
+            true,
+            fresh_catalog,
+        ),
         BenchmarkScenario::NavigationTransitions => {
             execute_navigation_transitions(&mut device, manifest, output_dir, reporter)
         }
@@ -1591,6 +1620,7 @@ fn execute_cold_boot(
     output_dir: std::path::PathBuf,
     reporter: &mut Reporter<'_>,
     pprof: bool,
+    fresh_catalog: bool,
 ) -> AgentResult<Outcome> {
     reporter.emit(
         EventKind::Progress,
@@ -1602,14 +1632,13 @@ fn execute_cold_boot(
         },
         Some(35),
     )?;
-    let profile = if pprof {
-        BenchmarkProfile::ColdBootPprof
-    } else {
-        BenchmarkProfile::ColdBoot
+    let profile = BenchmarkProfile::ColdBoot {
+        pprof,
+        fresh_catalog,
     };
     let detail = device.profile(profile, output_dir.clone())?;
     let summary: Value = serde_json::from_str(&detail).map_err(|error| error.to_string())?;
-    evaluate_cold_boot_summary(&summary, pprof)?;
+    evaluate_cold_boot_summary(&summary, pprof, fresh_catalog)?;
     device.verify_health()?;
     reporter.emit(
         EventKind::Progress,
@@ -1625,7 +1654,11 @@ fn execute_cold_boot(
     Ok(Outcome::Passed)
 }
 
-fn evaluate_cold_boot_summary(summary: &Value, pprof: bool) -> AgentResult<()> {
+fn evaluate_cold_boot_summary(
+    summary: &Value,
+    pprof: bool,
+    fresh_catalog: bool,
+) -> AgentResult<()> {
     if summary.get("schema").and_then(Value::as_str) != Some("mister-magik-cold-boot-benchmark-v1")
         || summary.get("timing_class").and_then(Value::as_str)
             != Some("device-monotonic-instrumented-installed-dev")
@@ -1658,6 +1691,25 @@ fn evaluate_cold_boot_summary(summary: &Value, pprof: bool) -> AgentResult<()> {
         || summary.get("launcher_ready").and_then(Value::as_bool) != Some(true)
     {
         return Err("cold-boot benchmark did not verify the visible launcher".into());
+    }
+    if summary.get("fresh_catalog").and_then(Value::as_bool) != Some(fresh_catalog) {
+        return Err("cold-boot benchmark reported the wrong catalog mode".into());
+    }
+    if fresh_catalog
+        && !summary
+            .pointer("/timeline/magik_startup_events")
+            .and_then(Value::as_array)
+            .is_some_and(|events| {
+                events.iter().any(|event| {
+                    event.get("event").and_then(Value::as_str) == Some("startup_entry_classified")
+                        && event
+                            .get("detail")
+                            .and_then(Value::as_str)
+                            .is_some_and(|detail| detail.contains("mode=cold_no_catalog"))
+                })
+            })
+    {
+        return Err("cold-boot benchmark did not enter the fresh-catalog startup path".into());
     }
     if pprof
         && (summary.pointer("/profile/state").and_then(Value::as_str) != Some("complete")
@@ -3011,6 +3063,7 @@ mod tests {
             "timing_class": "device-monotonic-instrumented-installed-dev",
             "launcher_ready": true,
             "capture_verified": true,
+            "fresh_catalog": false,
             "timeline": {
                 "agent_start_us": 1,
                 "initial_main_entry_us": 2,
@@ -3022,21 +3075,31 @@ mod tests {
                 "first_launcher_present_us": 8,
             }
         });
-        evaluate_cold_boot_summary(&passing, false).unwrap();
+        evaluate_cold_boot_summary(&passing, false, false).unwrap();
 
         let mut unordered = passing.clone();
         unordered["timeline"]["launcher_exec_us"] = json!(9);
-        assert!(evaluate_cold_boot_summary(&unordered, false).is_err());
+        assert!(evaluate_cold_boot_summary(&unordered, false, false).is_err());
 
         let mut missing_capture = passing.clone();
         missing_capture["capture_verified"] = json!(false);
-        assert!(evaluate_cold_boot_summary(&missing_capture, false).is_err());
+        assert!(evaluate_cold_boot_summary(&missing_capture, false, false).is_err());
 
         let mut profiled = passing.clone();
         profiled["profile"] = json!({"state": "complete", "sample_hits": 42});
-        evaluate_cold_boot_summary(&profiled, true).unwrap();
+        evaluate_cold_boot_summary(&profiled, true, false).unwrap();
         profiled["profile"]["sample_hits"] = json!(0);
-        assert!(evaluate_cold_boot_summary(&profiled, true).is_err());
+        assert!(evaluate_cold_boot_summary(&profiled, true, false).is_err());
+
+        let mut fresh = passing;
+        fresh["fresh_catalog"] = json!(true);
+        fresh["timeline"]["magik_startup_events"] = json!([{
+            "event": "startup_entry_classified",
+            "detail": "mode=cold_no_catalog",
+        }]);
+        evaluate_cold_boot_summary(&fresh, false, true).unwrap();
+        fresh["timeline"]["magik_startup_events"] = json!([]);
+        assert!(evaluate_cold_boot_summary(&fresh, false, true).is_err());
     }
 
     #[test]

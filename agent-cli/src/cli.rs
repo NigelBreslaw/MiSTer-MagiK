@@ -84,6 +84,11 @@ pub enum Command {
             value_parser = clap::value_parser!(u64).range(5..=120)
         )]
         duration_seconds: u64,
+        #[arg(
+            long,
+            help = "Purge the Dev catalog inside a cold-boot benchmark transaction"
+        )]
+        fresh_catalog: bool,
     },
     Capture {
         #[command(subcommand)]
@@ -947,6 +952,22 @@ mod tests {
         for scenario in accepted {
             assert!(Cli::try_parse_from(["agent-cli", "benchmark", scenario]).is_ok());
         }
+        assert!(
+            Cli::try_parse_from(["agent-cli", "benchmark", "cold-boot", "--fresh-catalog"]).is_ok()
+        );
+        assert!(
+            Cli::try_parse_from([
+                "agent-cli",
+                "benchmark",
+                "cold-boot-pprof",
+                "--fresh-catalog"
+            ])
+            .is_ok()
+        );
+        assert!(
+            Cli::try_parse_from(["agent-cli", "benchmark", "screensaver", "--fresh-catalog"])
+                .is_ok()
+        );
         for arm in ["control", "turbo", "pprof", "pmu", "streamline"] {
             assert!(
                 Cli::try_parse_from([
