@@ -1809,6 +1809,15 @@ struct CatalogBuildSources<'a> {
     discovery_history: Option<sqlite_catalog::DiscoveryHistory>,
 }
 
+fn requires_mame_software_metadata(
+    scan: &LibraryScan,
+    discoveries: &BTreeMap<String, usize>,
+) -> bool {
+    discoveries
+        .values()
+        .any(|index| catalog_system_id_for_discovery(&scan.discoveries[*index]) != "arcade")
+}
+
 #[cfg(test)]
 fn build_catalog_from_scan_with_sources(
     root: impl AsRef<Path>,
@@ -1910,11 +1919,15 @@ fn build_catalog_from_scan_with_sources_and_preferred_and_progress(
         .collect::<HashSet<_>>();
     let arcade_setnames =
         arcade_metadata_setnames(discoveries.values().map(|index| &scan.discoveries[*index]));
-    let software_metadata = with_catalog_progress_heartbeat(
-        progress,
-        "Preparing library — loading software metadata",
-        || load_mame_software_metadata(sources.mame_sqlite_path),
-    );
+    let software_metadata = if requires_mame_software_metadata(scan, discoveries) {
+        with_catalog_progress_heartbeat(
+            progress,
+            "Preparing library — loading software metadata",
+            || load_mame_software_metadata(sources.mame_sqlite_path),
+        )
+    } else {
+        MameSoftwareMetadata::default()
+    };
     let arcade_metadata = with_catalog_progress_heartbeat(
         progress,
         "Preparing library — loading arcade metadata",
@@ -2954,6 +2967,32 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(titles, ["Aq Renkan Awa", "Out of This World"]);
+    }
+
+    #[test]
+    fn only_non_arcade_projection_requires_mame_software_metadata() {
+        let arcade_scan = sqlite_scan_with_discoveries(vec![mra_discovery(1, "Puck Man")]);
+        let arcade_preferred = preferred_playable_discovery_indices_by_key(
+            &arcade_scan.discoveries,
+            &covered_payload_paths(&arcade_scan.discoveries),
+        );
+        assert!(!requires_mame_software_metadata(
+            &arcade_scan,
+            &arcade_preferred
+        ));
+
+        let mut console = mra_discovery(2, "Console Game");
+        console.platform_id = "megadrive".to_string();
+        console.category = "Console".to_string();
+        let mixed_scan = sqlite_scan_with_discoveries(vec![mra_discovery(1, "Puck Man"), console]);
+        let mixed_preferred = preferred_playable_discovery_indices_by_key(
+            &mixed_scan.discoveries,
+            &covered_payload_paths(&mixed_scan.discoveries),
+        );
+        assert!(requires_mame_software_metadata(
+            &mixed_scan,
+            &mixed_preferred
+        ));
     }
 
     fn raw_arcade_zip_set(path: &str, setname: &str) -> GameDiscovery {

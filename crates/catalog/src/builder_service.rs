@@ -1251,8 +1251,15 @@ impl BuilderBackend for SystemBuilderBackend {
                 (
                     "builder_first_visible_prepare".into(),
                     format!(
-                        "wall_us={} audit_us={} stamp_us={} catalog_us={} games={}",
-                        timing.wall_us, timing.audit_us, timing.stamp_us, timing.catalog_us, games,
+                        "wall_us={} audit_us={} stamp_us={} catalog_us={} metadata_us={} projection_rows_us={} indexes_us={} games={}",
+                        timing.wall_us,
+                        timing.audit_us,
+                        timing.stamp_us,
+                        timing.catalog_us,
+                        timing.metadata_us,
+                        timing.projection_rows_us,
+                        timing.indexes_us,
+                        games,
                     ),
                 ),
             ],
