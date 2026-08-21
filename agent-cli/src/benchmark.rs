@@ -2080,11 +2080,11 @@ fn execute_catalog_build_rebuild(
 
 fn evaluate_catalog_build_rebuild_summary(summary: &Value) -> AgentResult<()> {
     if summary.get("schema").and_then(Value::as_str)
-        != Some("mister-magik-catalog-build-rebuild-v2")
+        != Some("mister-magik-catalog-build-rebuild-v3")
         || summary.get("scenario").and_then(Value::as_str) != Some("catalog-build-rebuild")
         || summary.get("status").and_then(Value::as_str) != Some("passed")
     {
-        return Err("catalog build/rebuild benchmark summary is not a passing v2 report".into());
+        return Err("catalog build/rebuild benchmark summary is not a passing v3 report".into());
     }
     let samples = summary
         .get("samples")
@@ -2121,6 +2121,8 @@ fn evaluate_catalog_build_rebuild_summary(summary: &Value) -> AgentResult<()> {
                 .pointer("/rebuild/catalog/valid")
                 .and_then(Value::as_bool)
                 != Some(true)
+            || !catalog_identity_complete(&sample["fresh"]["catalog"])
+            || !catalog_identity_complete(&sample["rebuild"]["catalog"])
             || sample
                 .pointer("/validation/snes_game_delta")
                 .and_then(Value::as_i64)
@@ -2201,26 +2203,33 @@ fn execute_catalog_corpus_inventory(
 
 fn evaluate_catalog_full_build_rebuild_summary(summary: &Value) -> AgentResult<()> {
     if summary.get("schema").and_then(Value::as_str)
-        != Some("mister-magik-catalog-full-build-rebuild-v2")
+        != Some("mister-magik-catalog-full-build-rebuild-v3")
         || summary.get("scenario").and_then(Value::as_str) != Some("catalog-full-build-rebuild")
         || summary.get("status").and_then(Value::as_str) != Some("passed")
     {
-        return Err("whole-card catalog benchmark summary is not a passing v2 report".into());
+        return Err("whole-card catalog benchmark summary is not a passing v3 report".into());
     }
     if summary
         .pointer("/first_observed_clean/catalog/valid")
         .and_then(Value::as_bool)
         != Some(true)
+        || !catalog_identity_complete(&summary["first_observed_clean"]["catalog"])
         || summary
             .pointer("/warm_clean/catalog/valid")
             .and_then(Value::as_bool)
             != Some(true)
+        || !catalog_identity_complete(&summary["warm_clean"]["catalog"])
         || summary
             .pointer("/rebuild/catalog/valid")
             .and_then(Value::as_bool)
             != Some(true)
+        || !catalog_identity_complete(&summary["rebuild"]["catalog"])
         || summary
-            .pointer("/validation/catalog_fingerprints_identical")
+            .pointer("/validation/exact_identities_identical")
+            .and_then(Value::as_bool)
+            != Some(true)
+        || summary
+            .pointer("/validation/artifact_sets_valid")
             .and_then(Value::as_bool)
             != Some(true)
         || summary
@@ -2231,6 +2240,26 @@ fn evaluate_catalog_full_build_rebuild_summary(summary: &Value) -> AgentResult<(
         return Err("whole-card catalog benchmark failed catalog validation".into());
     }
     Ok(())
+}
+
+fn catalog_identity_complete(catalog: &Value) -> bool {
+    [
+        "identity_sha256",
+        "ordering_sha256",
+        "launch_sha256",
+        "search_sha256",
+        "artifact_set_sha256",
+    ]
+    .into_iter()
+    .all(|field| {
+        catalog
+            .get(field)
+            .and_then(Value::as_str)
+            .is_some_and(|digest| digest.len() == 64)
+    }) && catalog
+        .get("artifacts")
+        .and_then(Value::as_array)
+        .is_some_and(|artifacts| !artifacts.is_empty())
 }
 
 fn execute_catalog_attribution(
@@ -2799,16 +2828,27 @@ mod tests {
 
     #[test]
     fn catalog_build_rebuild_requires_three_passing_delta_samples() {
+        let catalog = || {
+            json!({
+                "valid": true,
+                "identity_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+                "ordering_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+                "launch_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+                "search_sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+                "artifact_set_sha256": "5555555555555555555555555555555555555555555555555555555555555555",
+                "artifacts": [{"sha256": "6666666666666666666666666666666666666666666666666666666666666666"}],
+            })
+        };
         let sample = || {
             json!({
                 "status": "passed",
-                "fresh": {"catalog": {"valid": true}},
-                "rebuild": {"catalog": {"valid": true}},
+                "fresh": {"catalog": catalog()},
+                "rebuild": {"catalog": catalog()},
                 "validation": {"snes_game_delta": 1},
             })
         };
         let passing = json!({
-            "schema": "mister-magik-catalog-build-rebuild-v2",
+            "schema": "mister-magik-catalog-build-rebuild-v3",
             "scenario": "catalog-build-rebuild",
             "status": "passed",
             "configuration": {"unmeasured_warmups": 1},
@@ -2823,21 +2863,33 @@ mod tests {
 
     #[test]
     fn whole_card_catalog_requires_matching_valid_counts() {
+        let catalog = || {
+            json!({
+                "valid": true,
+                "identity_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+                "ordering_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+                "launch_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+                "search_sha256": "4444444444444444444444444444444444444444444444444444444444444444",
+                "artifact_set_sha256": "5555555555555555555555555555555555555555555555555555555555555555",
+                "artifacts": [{"sha256": "6666666666666666666666666666666666666666666666666666666666666666"}],
+            })
+        };
         let passing = json!({
-            "schema": "mister-magik-catalog-full-build-rebuild-v2",
+            "schema": "mister-magik-catalog-full-build-rebuild-v3",
             "scenario": "catalog-full-build-rebuild",
             "status": "passed",
-            "first_observed_clean": {"catalog": {"valid": true}},
-            "warm_clean": {"catalog": {"valid": true}},
-            "rebuild": {"catalog": {"valid": true}},
+            "first_observed_clean": {"catalog": catalog()},
+            "warm_clean": {"catalog": catalog()},
+            "rebuild": {"catalog": catalog()},
             "validation": {
-                "catalog_fingerprints_identical": true,
+                "exact_identities_identical": true,
+                "artifact_sets_valid": true,
                 "phase_evidence_complete": true
             },
         });
         assert!(evaluate_catalog_full_build_rebuild_summary(&passing).is_ok());
         let mut failed = passing;
-        failed["validation"]["catalog_fingerprints_identical"] = json!(false);
+        failed["validation"]["exact_identities_identical"] = json!(false);
         assert!(evaluate_catalog_full_build_rebuild_summary(&failed).is_err());
     }
 

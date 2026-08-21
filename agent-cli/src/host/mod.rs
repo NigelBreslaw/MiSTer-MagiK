@@ -15363,7 +15363,7 @@ fn profile_installed_catalog_build_rebuild(
                 == Some(true)
         });
         Ok(json!({
-            "schema": "mister-magik-catalog-build-rebuild-v2",
+            "schema": "mister-magik-catalog-build-rebuild-v3",
             "scenario": "catalog-build-rebuild",
             "status": status,
             "configuration": {
@@ -15525,25 +15525,27 @@ fn profile_installed_catalog_full_build_rebuild(
                 runtime_command: catalog_full_build_rebuild_runtime_command,
             },
         )?;
-        let fingerprints = [
-            fresh.pointer("/catalog/logical_fingerprint"),
-            warm_clean.pointer("/catalog/logical_fingerprint"),
-            rebuild.pointer("/catalog/logical_fingerprint"),
-        ];
-        let catalog_fingerprints_identical =
-            fingerprints[0].is_some() && fingerprints.windows(2).all(|pair| pair[0] == pair[1]);
+        let identities = [&fresh, &warm_clean, &rebuild]
+            .map(|leg| catalog_exact_identity(&leg["catalog"]))
+            .into_iter()
+            .collect::<Result<Vec<_>>>()?;
+        let exact_identities_identical = identities.windows(2).all(|pair| pair[0] == pair[1]);
+        let artifact_sets_valid = [&fresh, &warm_clean, &rebuild]
+            .into_iter()
+            .all(|leg| catalog_artifact_set_valid(&leg["catalog"]));
         let phase_evidence_complete = [&fresh, &warm_clean, &rebuild].into_iter().all(|leg| {
             leg.pointer("/phase_evidence/complete")
                 .and_then(Value::as_bool)
                 == Some(true)
         });
-        let status = if catalog_fingerprints_identical && phase_evidence_complete {
+        let status = if exact_identities_identical && artifact_sets_valid && phase_evidence_complete
+        {
             "passed"
         } else {
             "failed"
         };
         Ok(json!({
-            "schema": "mister-magik-catalog-full-build-rebuild-v2",
+            "schema": "mister-magik-catalog-full-build-rebuild-v3",
             "scenario": "catalog-full-build-rebuild",
             "status": status,
             "configuration": {
@@ -15558,7 +15560,8 @@ fn profile_installed_catalog_full_build_rebuild(
             "warm_clean": warm_clean,
             "rebuild": rebuild,
             "validation": {
-                "catalog_fingerprints_identical": catalog_fingerprints_identical,
+                "exact_identities_identical": exact_identities_identical,
+                "artifact_sets_valid": artifact_sets_valid,
                 "phase_evidence_complete": phase_evidence_complete,
             },
             "manifest": parse_manifest_evidence(&manifest),
@@ -19361,18 +19364,47 @@ fn catalog_benchmark_presented_home_arcade(log: &str) -> bool {
 }
 
 fn catalog_logical_fingerprint(catalog: &Value) -> Result<String> {
-    let logical = json!({
-        "systems": catalog
-            .get("systems")
-            .cloned()
-            .ok_or("catalog fingerprint has no systems")?,
-        "total_games": catalog
-            .get("total_games")
-            .cloned()
-            .ok_or("catalog fingerprint has no total game count")?,
-    });
+    let logical = catalog_exact_identity(catalog)?;
     let encoded = serde_json::to_vec(&logical)?;
     Ok(encode_hex(&Sha256::digest(encoded)))
+}
+
+fn catalog_exact_identity(catalog: &Value) -> Result<Value> {
+    let mut identity = serde_json::Map::new();
+    for field in [
+        "identity_sha256",
+        "ordering_sha256",
+        "launch_sha256",
+        "search_sha256",
+    ] {
+        let digest = catalog
+            .get(field)
+            .and_then(Value::as_str)
+            .filter(|digest| digest.len() == 64)
+            .ok_or_else(|| format!("catalog identity has no valid {field}"))?;
+        identity.insert(field.into(), json!(digest));
+    }
+    Ok(Value::Object(identity))
+}
+
+fn catalog_artifact_set_valid(catalog: &Value) -> bool {
+    catalog
+        .get("artifact_set_sha256")
+        .and_then(Value::as_str)
+        .is_some_and(|digest| digest.len() == 64)
+        && catalog
+            .get("artifacts")
+            .and_then(Value::as_array)
+            .is_some_and(|artifacts| {
+                !artifacts.is_empty()
+                    && artifacts.iter().all(|artifact| {
+                        artifact
+                            .get("sha256")
+                            .and_then(Value::as_str)
+                            .is_some_and(|digest| digest.len() == 64)
+                            && artifact.get("bytes").and_then(Value::as_u64).is_some()
+                    })
+            })
 }
 
 fn catalog_phase_evidence(log: &str) -> Value {
@@ -19695,11 +19727,15 @@ fn catalog_full_build_rebuild_report(summary: &Value) -> Result<String> {
         .and_then(Value::as_u64)
         .ok_or("whole-card report has no game count")?;
     Ok(format!(
-        "# Whole-card catalog build/rebuild benchmark\n\n- Status: **{}**\n- First observed Arcade visible: {first_visible_ms} ms\n- First observed clean completion: {first_observed_ms} ms\n- Warm clean completion: {warm_clean_ms} ms\n- Forced rebuild completion: {rebuild_ms} ms\n- Systems: {}\n- Games: {games}\n- Catalog fingerprints identical: {}\n- Phase evidence complete: {}\n- Page-cache policy: observed sequence; unchanged\n",
+        "# Whole-card catalog build/rebuild benchmark\n\n- Status: **{}**\n- First observed Arcade visible: {first_visible_ms} ms\n- First observed clean completion: {first_observed_ms} ms\n- Warm clean completion: {warm_clean_ms} ms\n- Forced rebuild completion: {rebuild_ms} ms\n- Systems: {}\n- Games: {games}\n- Exact catalog identities identical: {}\n- Artifact sets valid: {}\n- Phase evidence complete: {}\n- Page-cache policy: observed sequence; unchanged\n",
         summary["status"].as_str().unwrap_or("failed"),
         systems.len(),
         summary
-            .pointer("/validation/catalog_fingerprints_identical")
+            .pointer("/validation/exact_identities_identical")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        summary
+            .pointer("/validation/artifact_sets_valid")
             .and_then(Value::as_bool)
             .unwrap_or(false),
         summary
@@ -21571,7 +21607,9 @@ fn parse_catalog_lifecycle_inspect(output: &str) -> Result<Value> {
     let mut valid = false;
     let mut generation = None;
     let mut total_games = None;
+    let mut digests = serde_json::Map::new();
     let mut systems = Vec::new();
+    let mut artifacts = Vec::new();
     for line in output.lines() {
         let mut fields = line.split('\t');
         match fields.next() {
@@ -21580,12 +21618,29 @@ fn parse_catalog_lifecycle_inspect(output: &str) -> Result<Value> {
                     .filter_map(|field| field.split_once('='))
                     .collect::<std::collections::BTreeMap<_, _>>();
                 valid = values.get("valid").copied() == Some("1");
+                if values.get("schema").copied() != Some("2") {
+                    return Err("catalog lifecycle inspection is not schema 2".into());
+                }
                 generation = values
                     .get("generation")
                     .and_then(|value| value.parse::<u64>().ok());
                 total_games = values
                     .get("total_games")
                     .and_then(|value| value.parse::<u64>().ok());
+                for field in [
+                    "identity_sha256",
+                    "ordering_sha256",
+                    "launch_sha256",
+                    "search_sha256",
+                    "artifact_set_sha256",
+                ] {
+                    let digest = values
+                        .get(field)
+                        .copied()
+                        .filter(|digest| digest.len() == 64)
+                        .ok_or_else(|| format!("catalog lifecycle summary has no valid {field}"))?;
+                    digests.insert(field.into(), json!(digest));
+                }
             }
             Some("catalog_v3_system_tsv") => {
                 let values = fields
@@ -21602,6 +21657,26 @@ fn parse_catalog_lifecycle_inspect(output: &str) -> Result<Value> {
                     "system": system,
                     "games": games,
                     "role": values.get("role").copied().unwrap_or("unknown"),
+                    "source_games": values.get("source_games").and_then(|value| value.parse::<u64>().ok()),
+                    "visible_families": values.get("visible_families").and_then(|value| value.parse::<u64>().ok()),
+                    "collapsed_variants": values.get("collapsed_variants").and_then(|value| value.parse::<u64>().ok()),
+                }));
+            }
+            Some("catalog_v3_artifact_tsv") => {
+                let values = fields
+                    .filter_map(|field| field.split_once('='))
+                    .collect::<std::collections::BTreeMap<_, _>>();
+                let sha256 = values
+                    .get("sha256")
+                    .copied()
+                    .filter(|digest| digest.len() == 64)
+                    .ok_or("catalog artifact row has no valid sha256")?;
+                artifacts.push(json!({
+                    "system": values.get("system").copied().unwrap_or(""),
+                    "kind": values.get("kind").copied().unwrap_or("unknown"),
+                    "path": values.get("path").copied().unwrap_or(""),
+                    "bytes": values.get("bytes").ok_or("catalog artifact row has no byte count")?.parse::<u64>()?,
+                    "sha256": sha256,
                 }));
             }
             _ => {}
@@ -21610,12 +21685,18 @@ fn parse_catalog_lifecycle_inspect(output: &str) -> Result<Value> {
     if !valid {
         return Err("catalog lifecycle inspection did not report valid=1".into());
     }
-    Ok(json!({
+    let mut summary = json!({
         "valid": true,
         "generation": generation.ok_or("catalog lifecycle inspection has no generation")?,
         "total_games": total_games.ok_or("catalog lifecycle inspection has no total game count")?,
         "systems": systems,
-    }))
+        "artifacts": artifacts,
+    });
+    summary
+        .as_object_mut()
+        .expect("catalog summary object")
+        .extend(digests);
+    Ok(summary)
 }
 
 fn summarize_startup_intro_telemetry(telemetry: &[Value], display: &Value) -> Result<Value> {
@@ -32914,6 +32995,10 @@ catalog_v3_persist_phases_tsv\tprojection_us=4\tscanner_cache_us=5\n";
             "generation": 7,
             "systems": [{"system": "arcade", "role": "arcade", "games": 968}],
             "total_games": 968,
+            "identity_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+            "ordering_sha256": "2222222222222222222222222222222222222222222222222222222222222222",
+            "launch_sha256": "3333333333333333333333333333333333333333333333333333333333333333",
+            "search_sha256": "4444444444444444444444444444444444444444444444444444444444444444",
         });
         let mut second = first.clone();
         second["generation"] = json!(9);
@@ -32921,7 +33006,8 @@ catalog_v3_persist_phases_tsv\tprojection_us=4\tscanner_cache_us=5\n";
             catalog_logical_fingerprint(&first).unwrap(),
             catalog_logical_fingerprint(&second).unwrap()
         );
-        first["total_games"] = json!(969);
+        first["identity_sha256"] =
+            json!("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
         assert_ne!(
             catalog_logical_fingerprint(&first).unwrap(),
             catalog_logical_fingerprint(&second).unwrap()
@@ -33103,9 +33189,10 @@ catalog_v3_persist_phases_tsv\tprojection_us=4\tscanner_cache_us=5\n";
     #[test]
     fn catalog_lifecycle_inspection_preserves_per_system_counts() {
         let parsed = parse_catalog_lifecycle_inspect(
-            "catalog_v3_summary_tsv\tvalid=1\tschema=1\tgeneration=7\tsystems=2\ttotal_games=44\n\
-             catalog_v3_system_tsv\tsystem=atari2600\trole=console\tgeneration=7\tregistry_games=3\tshard_games=3\n\
-             catalog_v3_system_tsv\tsystem=arcade\trole=arcade\tgeneration=7\tregistry_games=41\tshard_games=41\n",
+            "catalog_v3_summary_tsv\tvalid=1\tschema=2\tgeneration=7\tsystems=2\ttotal_games=44\tidentity_sha256=1111111111111111111111111111111111111111111111111111111111111111\tordering_sha256=2222222222222222222222222222222222222222222222222222222222222222\tlaunch_sha256=3333333333333333333333333333333333333333333333333333333333333333\tsearch_sha256=4444444444444444444444444444444444444444444444444444444444444444\tartifact_set_sha256=5555555555555555555555555555555555555555555555555555555555555555\n\
+             catalog_v3_system_tsv\tsystem=atari2600\trole=console\tgeneration=7\tregistry_games=3\tshard_games=3\tsource_games=4\tvisible_families=3\tcollapsed_variants=1\n\
+             catalog_v3_system_tsv\tsystem=arcade\trole=arcade\tgeneration=7\tregistry_games=41\tshard_games=41\n\
+             catalog_v3_artifact_tsv\tsystem=arcade\tkind=sqlite\tpath=/catalog/gen-7/arcade.sqlite3\tbytes=4096\tsha256=6666666666666666666666666666666666666666666666666666666666666666\n",
         )
         .unwrap();
         assert_eq!(parsed["valid"], true);
@@ -33113,19 +33200,23 @@ catalog_v3_persist_phases_tsv\tprojection_us=4\tscanner_cache_us=5\n";
         assert_eq!(parsed["total_games"], 44);
         assert_eq!(parsed["systems"][0]["system"], "atari2600");
         assert_eq!(parsed["systems"][0]["games"], 3);
+        assert_eq!(parsed["systems"][0]["collapsed_variants"], 1);
+        assert_eq!(parsed["artifacts"][0]["bytes"], 4096);
     }
 
     #[test]
     fn catalog_lifecycle_inspection_rejects_invalid_or_incomplete_output() {
         assert!(
             parse_catalog_lifecycle_inspect(
-                "catalog_v3_summary_tsv\tvalid=0\tgeneration=7\ttotal_games=44"
+                "catalog_v3_summary_tsv\tvalid=0\tschema=2\tgeneration=7\ttotal_games=44"
             )
             .is_err()
         );
         assert!(
-            parse_catalog_lifecycle_inspect("catalog_v3_summary_tsv\tvalid=1\tgeneration=7")
-                .is_err()
+            parse_catalog_lifecycle_inspect(
+                "catalog_v3_summary_tsv\tvalid=1\tschema=2\tgeneration=7"
+            )
+            .is_err()
         );
     }
 
