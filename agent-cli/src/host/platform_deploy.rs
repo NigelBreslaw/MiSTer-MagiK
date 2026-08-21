@@ -136,13 +136,7 @@ impl PlatformDeployTransaction {
         sess: &Session,
         metrics: &mut DeliveryTransferMetrics,
     ) -> Result<PlatformDeployReport> {
-        self.run_with(
-            &SshDeployRemote {
-                sess,
-                remote_host: None,
-            },
-            metrics,
-        )
+        self.run_with(&SshDeployRemote { sess, agent: None }, metrics)
     }
 
     pub(super) fn run_with<R: DeployRemote>(
@@ -351,13 +345,7 @@ impl DatabaseDeployTransaction {
         sess: &Session,
         metrics: &mut DeliveryTransferMetrics,
     ) -> Result<PlatformDeployReport> {
-        self.run_with(
-            &SshDeployRemote {
-                sess,
-                remote_host: None,
-            },
-            metrics,
-        )
+        self.run_with(&SshDeployRemote { sess, agent: None }, metrics)
     }
 
     fn run_with<R: DeployRemote>(

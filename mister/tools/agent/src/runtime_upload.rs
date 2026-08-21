@@ -149,7 +149,11 @@ fn receive_to_part(
         ));
     }
 
-    let actual_sha256 = format!("{:x}", hasher.finalize());
+    let actual_sha256 = hasher
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
     if actual_sha256 != spec.sha256 {
         return Err(UploadFailure::artifact(format!(
             "runtime payload SHA-256 mismatch expected={} actual={actual_sha256}",
@@ -234,7 +238,10 @@ mod tests {
     fn spec(payload: &[u8]) -> RuntimeUploadSpec {
         RuntimeUploadSpec {
             payload_bytes: payload.len() as u64,
-            sha256: format!("{:x}", Sha256::digest(payload)),
+            sha256: Sha256::digest(payload)
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect(),
         }
     }
 

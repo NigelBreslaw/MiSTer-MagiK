@@ -4,9 +4,9 @@
 use serde_json::{Value, json};
 
 pub const PORT: u16 = 7498;
-// Version 26 permits the closed launcher-automation bridge to hold one logical
-// input for the fixed 40-second Arcade velocity-scroll benchmark.
-pub const AGENT_VERSION: u64 = 26;
+// Version 27 advertises bounded, authenticated Runtime staging over the
+// existing outbound host-to-agent connection.
+pub const AGENT_VERSION: u64 = 27;
 pub const PROTOCOL_VERSION: u64 = 2;
 pub const FRAMEBUFFER_CAPTURE_CAPABILITY: &str = "framebuffer-capture-v2";
 pub const DEVICE_TELEMETRY_CAPABILITY: &str = "device-telemetry-v2";

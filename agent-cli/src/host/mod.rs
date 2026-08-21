@@ -30,7 +30,6 @@ mod arcade_database;
 mod crt_qualification;
 mod discovery;
 mod framebuffer_views;
-mod http_transfer;
 mod installed_layout;
 mod latch_v5_qualification;
 mod launcher_automation;
@@ -48,11 +47,11 @@ pub(crate) use startup_particles::SceneLabRequest;
 use agent_client::{
     AGENT_PORT, AgentEndpoint, agent_framebuffer_capture_stream,
     agent_framebuffer_stream_for_duration, agent_library_snapshot_stream, agent_request,
-    agent_request_at, agent_request_with_liveness, agent_telemetry_for_duration,
-    agent_telemetry_for_duration_at_cadence, agent_telemetry_for_duration_with_mode,
-    agent_telemetry_until_screensaver_profile_complete, bootstrap_agent_with,
+    agent_request_at, agent_request_with_liveness, agent_runtime_upload_at,
+    agent_telemetry_for_duration, agent_telemetry_for_duration_at_cadence,
+    agent_telemetry_for_duration_with_mode, agent_telemetry_until_screensaver_profile_complete,
+    bootstrap_agent_with,
 };
-use http_transfer::{OneShotHttpArtifactServer, curl_fetch_command};
 use platform_deploy::*;
 use remote::{
     ConnectionConfig, ExecOutput, acknowledged_main_command, connect, connect_with,
@@ -2484,7 +2483,7 @@ impl RuntimeDeliveryActions<'_> {
         let validate_ms = validate_t.elapsed().as_millis();
         let report = transaction.run_ssh(
             self.session,
-            self.config.connection.host(),
+            self.config.agent()?,
             validate_ms,
             total_t,
             metrics,
@@ -2524,7 +2523,7 @@ impl CoherentDeliveryActions for RuntimeDeliveryActions<'_> {
         put_measured(
             &SshDeployRemote {
                 sess: self.session,
-                remote_host: None,
+                agent: None,
             },
             self.artwork_local,
             &artwork_upload,
@@ -2999,7 +2998,7 @@ impl CoherentDeliveryActions for LocalMainDeliveryActions<'_> {
         put_measured(
             &SshDeployRemote {
                 sess: &session,
-                remote_host: None,
+                agent: None,
             },
             self.local,
             &format!("{LOCAL_MAIN_REMOTE}.upload"),
@@ -3010,7 +3009,7 @@ impl CoherentDeliveryActions for LocalMainDeliveryActions<'_> {
         put_measured(
             &SshDeployRemote {
                 sess: &session,
-                remote_host: None,
+                agent: None,
             },
             self.manifest_local,
             &format!("{LOCAL_MAIN_MANIFEST_REMOTE}.upload"),
@@ -25377,11 +25376,14 @@ struct MagikDeployReport {
     transfer_ms: u64,
     binary_transport: BinaryTransport,
     binary_transfer_ms: u64,
+    agent_receive_ms: Option<u64>,
+    agent_bytes_per_second: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum BinaryTransport {
-    Http,
+    AgentStream,
+    AgentStreamReconciled,
     Sftp,
     SftpFallback,
 }
@@ -25389,7 +25391,8 @@ enum BinaryTransport {
 impl BinaryTransport {
     fn label(self) -> &'static str {
         match self {
-            Self::Http => "http",
+            Self::AgentStream => "agent-stream",
+            Self::AgentStreamReconciled => "agent-stream-reconciled",
             Self::Sftp => "sftp",
             Self::SftpFallback => "sftp-fallback",
         }
@@ -25444,7 +25447,7 @@ impl MagikDeployTransaction {
     fn run_ssh(
         &self,
         sess: &Session,
-        remote_host: &str,
+        agent: &AgentEndpoint,
         validate_ms: u128,
         total_t: Instant,
         metrics: &mut DeliveryTransferMetrics,
@@ -25452,7 +25455,7 @@ impl MagikDeployTransaction {
         self.run_with(
             &SshDeployRemote {
                 sess,
-                remote_host: Some(remote_host),
+                agent: Some(agent),
             },
             validate_ms,
             total_t,
@@ -25484,11 +25487,12 @@ impl MagikDeployTransaction {
 
             let upload_t = Instant::now();
             let transfer_before = metrics.upload_ms;
-            let (binary_transport, binary_transfer_ms) = put_runtime_binary_measured(
+            let (binary_upload, binary_transfer_ms) = put_runtime_binary_measured(
                 remote,
                 &self.local,
                 &self.upload,
                 self.local_bytes,
+                &self.expected_sha256,
                 metrics,
             )?;
             let manifest_bytes = fs::metadata(&self.manifest.local)?.len();
@@ -25531,8 +25535,10 @@ impl MagikDeployTransaction {
                 transferred_files: 2,
                 transferred_bytes: self.local_bytes.saturating_add(manifest_bytes),
                 transfer_ms,
-                binary_transport,
+                binary_transport: binary_upload.transport,
                 binary_transfer_ms,
+                agent_receive_ms: binary_upload.agent_receive_ms,
+                agent_bytes_per_second: binary_upload.agent_bytes_per_second,
             })
         })();
 
@@ -25552,7 +25558,13 @@ impl MagikDeployTransaction {
         self.exec_phase(
             remote,
             "prepare",
-            &format!("mkdir -p {}; : > {}", sh(&self.remote_dir), sh(&self.lock)),
+            &format!(
+                "mkdir -p {}; rm -f {} {}; : > {}",
+                sh(&self.remote_dir),
+                sh(&self.upload),
+                sh(&format!("{}.part", self.upload)),
+                sh(&self.lock)
+            ),
         )?;
         Ok(start.elapsed().as_millis())
     }
@@ -25625,8 +25637,9 @@ impl MagikDeployTransaction {
             remote,
             "cleanup",
             &format!(
-                "rm -f {} {}{manifest_upload}",
+                "rm -f {} {} {}{manifest_upload}",
                 sh(&self.upload),
+                sh(&format!("{}.part", self.upload)),
                 sh(&self.lock)
             ),
         )?;
@@ -25661,9 +25674,27 @@ trait DeployRemote {
         local: &Path,
         remote: &str,
         _bytes: u64,
-    ) -> Result<BinaryTransport> {
+        _sha256: &str,
+    ) -> Result<BinaryUploadResult> {
         self.put(local, remote)?;
-        Ok(BinaryTransport::Sftp)
+        Ok(BinaryUploadResult::sftp(BinaryTransport::Sftp))
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct BinaryUploadResult {
+    transport: BinaryTransport,
+    agent_receive_ms: Option<u64>,
+    agent_bytes_per_second: Option<u64>,
+}
+
+impl BinaryUploadResult {
+    fn sftp(transport: BinaryTransport) -> Self {
+        Self {
+            transport,
+            agent_receive_ms: None,
+            agent_bytes_per_second: None,
+        }
     }
 }
 
@@ -25693,10 +25724,11 @@ fn put_runtime_binary_measured<R: DeployRemote>(
     local: &Path,
     destination: &str,
     bytes: u64,
+    sha256: &str,
     metrics: &mut DeliveryTransferMetrics,
-) -> Result<(BinaryTransport, u64)> {
+) -> Result<(BinaryUploadResult, u64)> {
     let started = Instant::now();
-    let result = remote.put_runtime_binary(local, destination, bytes);
+    let result = remote.put_runtime_binary(local, destination, bytes, sha256);
     let elapsed = elapsed_millis(started);
     metrics.upload_ms = metrics.upload_ms.saturating_add(elapsed);
     if result.is_ok() {
@@ -25708,7 +25740,7 @@ fn put_runtime_binary_measured<R: DeployRemote>(
 
 struct SshDeployRemote<'a> {
     sess: &'a Session,
-    remote_host: Option<&'a str>,
+    agent: Option<&'a AgentEndpoint>,
 }
 
 impl DeployRemote for SshDeployRemote<'_> {
@@ -25725,54 +25757,52 @@ impl DeployRemote for SshDeployRemote<'_> {
         local: &Path,
         remote: &str,
         bytes: u64,
-    ) -> Result<BinaryTransport> {
-        let Some(remote_host) = self.remote_host else {
+        sha256: &str,
+    ) -> Result<BinaryUploadResult> {
+        let Some(agent) = self.agent else {
             self.put(local, remote)?;
-            return Ok(BinaryTransport::Sftp);
+            return Ok(BinaryUploadResult::sftp(BinaryTransport::Sftp));
         };
-        let server = match OneShotHttpArtifactServer::start(remote_host, local) {
-            Ok(server) => server,
-            Err(_) => {
+        match agent_runtime_upload_at(agent, local, bytes, sha256, Duration::from_secs(120)) {
+            Ok(result) => Ok(BinaryUploadResult {
+                transport: BinaryTransport::AgentStream,
+                agent_receive_ms: Some(result.receive_ms),
+                agent_bytes_per_second: Some(result.bytes_per_second),
+            }),
+            Err(upload_error) => {
+                let reconcile = self.exec(&format!(
+                    "if test -f {0} && test \"$(wc -c < {0})\" = {1} && test \"$(sha256sum {0} | awk '{{print $1}}')\" = {2}; then echo exact; else echo mismatch; fi",
+                    sh(remote),
+                    bytes,
+                    sh(sha256),
+                ))?;
+                if reconcile.rc == 0 && reconcile.stdout.trim() == "exact" {
+                    return Ok(BinaryUploadResult::sftp(
+                        BinaryTransport::AgentStreamReconciled,
+                    ));
+                }
+                let part = format!("{remote}.part");
+                let cleanup = self.exec(&format!(
+                    "rm -f {0} {1}; test ! -e {0}; test ! -e {1}",
+                    sh(remote),
+                    sh(&part),
+                ))?;
+                if cleanup.rc != 0 {
+                    return Err(format!(
+                        "runtime agent upload failed ({upload_error}); reconciliation cleanup failed rc={} output={}",
+                        cleanup.rc,
+                        cleanup.stdout.trim()
+                    )
+                    .into());
+                }
+                eprintln!(
+                    "runtime agent upload failed; reconciled staging and using one SFTP fallback: {upload_error}"
+                );
                 self.put(local, remote)?;
-                return Ok(BinaryTransport::SftpFallback);
+                Ok(BinaryUploadResult::sftp(BinaryTransport::SftpFallback))
             }
-        };
-        put_runtime_binary_over_http(self, server, local, remote, bytes)
-    }
-}
-
-fn put_runtime_binary_over_http<R: DeployRemote>(
-    remote: &R,
-    server: OneShotHttpArtifactServer,
-    local: &Path,
-    destination: &str,
-    bytes: u64,
-) -> Result<BinaryTransport> {
-    let output = remote.exec(&curl_fetch_command(server.url(), destination, bytes))?;
-    if output.rc == 0 {
-        let served = server.finish()?;
-        if served.bytes != bytes {
-            return Err(format!(
-                "delivery HTTP byte count mismatch expected={bytes} served={}",
-                served.bytes
-            )
-            .into());
         }
-        return Ok(BinaryTransport::Http);
     }
-
-    server.cancel()?;
-    let cleanup = remote.exec(&format!("rm -f {0}; test ! -e {0}", sh(destination)))?;
-    if cleanup.rc != 0 {
-        return Err(format!(
-            "delivery HTTP fallback cleanup failed rc={} output={}",
-            cleanup.rc,
-            cleanup.stdout.trim()
-        )
-        .into());
-    }
-    remote.put(local, destination)?;
-    Ok(BinaryTransport::SftpFallback)
 }
 
 fn deploy_fifo_command<R: DeployRemote>(remote: &R, command: &str) -> Result<()> {
@@ -25789,7 +25819,7 @@ impl MagikDeployReport {
         let finish_ms = self.swap_ms + self.chmod_size_ms;
         let resume_size_ms = self.resume_ms + self.chmod_size_ms;
         println!(
-            "deploy_runtime_bundle local={} remote={} local_bytes={} remote_bytes={} total_ms={} prepare_ms={} suspend_ms={} put_ms={} finish_ms={} resume_size_ms={} validate_ms={} upload_ms={} swap_ms={} chmod_size_ms={} resume_ms={} cleanup_ms={} transferred_files={} transferred_bytes={} transfer_ms={} binary_transport={} binary_transfer_ms={}",
+            "deploy_runtime_bundle local={} remote={} local_bytes={} remote_bytes={} total_ms={} prepare_ms={} suspend_ms={} put_ms={} finish_ms={} resume_size_ms={} validate_ms={} upload_ms={} swap_ms={} chmod_size_ms={} resume_ms={} cleanup_ms={} transferred_files={} transferred_bytes={} transfer_ms={} binary_transport={} binary_transfer_ms={} agent_receive_ms={} agent_bytes_per_second={}",
             self.local.display(),
             self.remote,
             self.local_bytes,
@@ -25811,6 +25841,10 @@ impl MagikDeployReport {
             self.transfer_ms,
             self.binary_transport.label(),
             self.binary_transfer_ms,
+            self.agent_receive_ms
+                .map_or_else(|| "n/a".to_string(), |value| value.to_string()),
+            self.agent_bytes_per_second
+                .map_or_else(|| "n/a".to_string(), |value| value.to_string()),
         );
     }
 }
@@ -31419,39 +31453,6 @@ H: Handlers=event3 js0"#
         assert_eq!(report.binary_transport, BinaryTransport::Sftp);
         let _ = fs::remove_file(local);
         let _ = fs::remove_file(manifest);
-    }
-
-    #[test]
-    fn failed_http_pull_cleans_staging_before_one_sftp_fallback() {
-        let local = temp_path("deploy-http-fallback-bin");
-        fs::write(&local, b"abc").unwrap();
-        let server = OneShotHttpArtifactServer::start_bound(
-            &local,
-            "127.0.0.1".parse().unwrap(),
-            "token",
-            Duration::from_secs(1),
-        )
-        .unwrap();
-        let mut remote = scripted_deploy_remote(3);
-        remote.fail_command_containing = Some("curl");
-
-        let transport = put_runtime_binary_over_http(
-            &remote,
-            server,
-            &local,
-            "/media/fat/mister-magik-dev/mister-magik-fb.upload",
-            3,
-        )
-        .unwrap();
-
-        assert_eq!(transport, BinaryTransport::SftpFallback);
-        let events = remote.events();
-        assert!(events[0].contains("curl"));
-        assert!(events[1].starts_with("rm -f "));
-        assert!(events[1].contains("test ! -e"));
-        assert!(events[2].starts_with("put "));
-        assert_eq!(events.len(), 3);
-        let _ = fs::remove_file(local);
     }
 
     #[test]
