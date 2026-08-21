@@ -17012,6 +17012,8 @@ const LAUNCH_RETURN_ONCE_GAME: &str = "/media/fat/_Arcade/1943 Kai Midway Kaisen
 const LAUNCH_RETURN_ONCE_STEP_DEADLINE_MS: u64 = 2_000;
 
 const COLD_BOOT_PROFILE_REMOTE_DIR: &str = "/tmp/mister-magik/cold-boot-profile";
+const COLD_BOOT_FRESH_ARCADE_INDEX: &str =
+    "/tmp/mister-magik/cold-boot-fresh-arcade-bootstrap.nav.lz4b";
 
 fn cold_boot_profile_preflight_command() -> String {
     let verify = installed_platform_verify_command(Layout::Development);
@@ -17025,24 +17027,34 @@ fn cold_boot_profile_preflight_command() -> String {
     ])
 }
 
-fn cold_boot_pprof_launcher_env() -> Vec<(String, String)> {
-    vec![
-        ("MISTER_PPROF".into(), "1".into()),
-        ("MISTER_PPROF_TRIGGER".into(), "cold-boot".into()),
-        ("MISTER_PPROF_HZ".into(), "999".into()),
-        (
-            "MISTER_PPROF_OUT".into(),
-            format!("{COLD_BOOT_PROFILE_REMOTE_DIR}/flamegraph.svg"),
-        ),
-        (
-            "MISTER_PPROF_FOLDED_OUT".into(),
-            format!("{COLD_BOOT_PROFILE_REMOTE_DIR}/stacks.folded"),
-        ),
-        (
-            "MISTER_PPROF_COMPLETE".into(),
-            format!("{COLD_BOOT_PROFILE_REMOTE_DIR}/profile.json"),
-        ),
-    ]
+fn cold_boot_launcher_env(pprof: bool, fresh_catalog: bool) -> Vec<(String, String)> {
+    let mut env = Vec::new();
+    if fresh_catalog {
+        env.push((
+            "MISTER_ARCADE_BOOTSTRAP_INDEX".into(),
+            COLD_BOOT_FRESH_ARCADE_INDEX.into(),
+        ));
+    }
+    if pprof {
+        env.extend([
+            ("MISTER_PPROF".into(), "1".into()),
+            ("MISTER_PPROF_TRIGGER".into(), "cold-boot".into()),
+            ("MISTER_PPROF_HZ".into(), "999".into()),
+            (
+                "MISTER_PPROF_OUT".into(),
+                format!("{COLD_BOOT_PROFILE_REMOTE_DIR}/flamegraph.svg"),
+            ),
+            (
+                "MISTER_PPROF_FOLDED_OUT".into(),
+                format!("{COLD_BOOT_PROFILE_REMOTE_DIR}/stacks.folded"),
+            ),
+            (
+                "MISTER_PPROF_COMPLETE".into(),
+                format!("{COLD_BOOT_PROFILE_REMOTE_DIR}/profile.json"),
+            ),
+        ]);
+    }
+    env
 }
 
 fn parse_boot_events(text: &str) -> Result<Vec<Value>> {
@@ -17107,29 +17119,30 @@ fn profile_installed_cold_boot(
 ) -> Result<String> {
     fs::create_dir_all(output_dir)?;
     let run_result = profile_installed_cold_boot_run(config, output_dir, pprof, fresh_catalog);
-    if !pprof {
+    if !pprof && !fresh_catalog {
         return run_result;
     }
-    let cleanup_result = cleanup_cold_boot_pprof(config);
+    let cleanup_result = cleanup_cold_boot_profile(config);
     match (run_result, cleanup_result) {
         (Ok(summary), Ok(())) => Ok(summary),
         (Err(error), Ok(())) => Err(error),
-        (Ok(_), Err(error)) => Err(format!("cold-boot pprof cleanup failed: {error}").into()),
+        (Ok(_), Err(error)) => Err(format!("cold-boot cleanup failed: {error}").into()),
         (Err(run), Err(cleanup)) => {
-            Err(format!("{run}; cold-boot pprof cleanup failed: {cleanup}").into())
+            Err(format!("{run}; cold-boot cleanup failed: {cleanup}").into())
         }
     }
 }
 
-fn cleanup_cold_boot_pprof(config: &NativeDeviceConfig) -> Result<()> {
+fn cleanup_cold_boot_profile(config: &NativeDeviceConfig) -> Result<()> {
     let session = connect_with(&config.connection, 10)?;
     let safety = platform_safety_script();
     exec_checked(
         &session,
-        "cold-boot pprof cleanup",
+        "cold-boot cleanup",
         &format!(
-            "set -eu; rm -f {env}; rm -rf {profile}; test ! -e {env}; {safety}",
+            "set -eu; rm -f {env} {fresh_index}; rm -rf {profile}; test ! -e {env}; {safety}",
             env = sh(DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str()),
+            fresh_index = sh(COLD_BOOT_FRESH_ARCADE_INDEX),
             profile = sh(COLD_BOOT_PROFILE_REMOTE_DIR),
             safety = safety,
         ),
@@ -17182,16 +17195,25 @@ fn profile_installed_cold_boot_run(
                 sh(COLD_BOOT_PROFILE_REMOTE_DIR)
             ),
         )?;
+    }
+    if fresh_catalog {
+        exec_checked(
+            &session,
+            "clear fresh cold-boot Arcade index",
+            &format!("rm -f {}", sh(COLD_BOOT_FRESH_ARCADE_INDEX)),
+        )?;
+    }
+    if pprof || fresh_catalog {
         put_bytes(
             &session,
             DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str(),
             one_shot_launcher_env_text(
-                &cold_boot_pprof_launcher_env(),
+                &cold_boot_launcher_env(pprof, fresh_catalog),
                 DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str(),
             )
             .as_bytes(),
         )?;
-        exec_checked(&session, "sync cold-boot pprof one-shot state", "sync")?;
+        exec_checked(&session, "sync cold-boot one-shot state", "sync")?;
     }
 
     let host_started = Instant::now();
@@ -30262,6 +30284,25 @@ video_mode=14
 
         assert!(text.contains("export MISTER_CATALOG_REFRESH='off'"));
         assert!(text.ends_with("rm -f '/media/fat/mister-magik-dev/launcher.env'\n"));
+    }
+
+    #[test]
+    fn fresh_cold_boot_uses_an_empty_volatile_arcade_index() {
+        let env = cold_boot_launcher_env(false, true);
+        assert_eq!(
+            env,
+            [(
+                "MISTER_ARCADE_BOOTSTRAP_INDEX".into(),
+                COLD_BOOT_FRESH_ARCADE_INDEX.into(),
+            )]
+        );
+
+        let profiled = cold_boot_launcher_env(true, true);
+        assert!(profiled.contains(&(
+            "MISTER_ARCADE_BOOTSTRAP_INDEX".into(),
+            COLD_BOOT_FRESH_ARCADE_INDEX.into(),
+        )));
+        assert!(profiled.contains(&("MISTER_PPROF_TRIGGER".into(), "cold-boot".into())));
     }
 
     #[test]
