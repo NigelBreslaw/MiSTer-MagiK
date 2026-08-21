@@ -32,6 +32,74 @@ use std::time::Instant;
 const SCAN_PROGRESS_CANDIDATE_BATCH: usize = 50;
 const BOOTSTRAP_PROGRESS_BATCH: usize = 50;
 const ARCADE_MRA_READ_WORKERS: usize = 4;
+
+struct ContributorClosure {
+    expected: BTreeMap<usize, Option<String>>,
+    remaining_unknown: usize,
+    remaining_by_system: BTreeMap<String, usize>,
+    discovered: BTreeSet<String>,
+    closed: BTreeSet<String>,
+    sound: bool,
+}
+
+impl ContributorClosure {
+    fn new(expected: impl IntoIterator<Item = (usize, Option<String>)>) -> Self {
+        let expected = expected.into_iter().collect::<BTreeMap<_, _>>();
+        let remaining_unknown = expected.values().filter(|system| system.is_none()).count();
+        let mut remaining_by_system = BTreeMap::<String, usize>::new();
+        for system in expected.values().flatten() {
+            *remaining_by_system.entry(system.clone()).or_default() += 1;
+        }
+        Self {
+            expected,
+            remaining_unknown,
+            remaining_by_system,
+            discovered: BTreeSet::new(),
+            closed: BTreeSet::new(),
+            sound: true,
+        }
+    }
+
+    fn complete(&mut self, ordinal: usize, observed: &BTreeSet<String>) -> Vec<String> {
+        self.discovered.extend(observed.iter().cloned());
+        match self.expected.get(&ordinal).cloned().flatten() {
+            Some(expected) => {
+                if observed.iter().any(|system| system != &expected) {
+                    self.sound = false;
+                }
+                if let Some(remaining) = self.remaining_by_system.get_mut(&expected) {
+                    *remaining = remaining.saturating_sub(1);
+                }
+            }
+            None => self.remaining_unknown = self.remaining_unknown.saturating_sub(1),
+        }
+        if !self.sound || self.remaining_unknown != 0 {
+            return Vec::new();
+        }
+        let ready = self
+            .discovered
+            .iter()
+            .filter(|system| {
+                !self.closed.contains(*system)
+                    && self.remaining_by_system.get(*system).copied().unwrap_or(0) == 0
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        self.closed.extend(ready.iter().cloned());
+        ready
+    }
+
+    fn compact_detail(&self) -> String {
+        format!(
+            "sound={} remaining_unknown={} closed={} discovered={}",
+            u8::from(self.sound),
+            self.remaining_unknown,
+            self.closed.len(),
+            self.discovered.len(),
+        )
+    }
+}
+
 pub(crate) struct LibraryIndexer<'a> {
     cfg: &'a BenchConfig,
     archive_reader: crate::catalog_config::ArchiveReaderConfig,
@@ -974,8 +1042,17 @@ fn scan_library_with_progress_and_events(
             all_published_systems: state.all_published_systems,
         });
     }
-    let target_count =
-        catalog_scan::planned_scan_target_descriptors(&cfg.roots, &plan, &excluded_targets).len();
+    let target_descriptors =
+        catalog_scan::planned_scan_target_descriptors(&cfg.roots, &plan, &excluded_targets);
+    let target_count = target_descriptors.len();
+    let mut contributor_closure =
+        ContributorClosure::new(target_descriptors.iter().map(|descriptor| {
+            (
+                descriptor.ordinal,
+                catalog_scan::profile_for_path(plan.base_profiles(), &descriptor.path)
+                    .map(|profile| profile.system_id.clone()),
+            )
+        }));
     let prepared_payload_t = Instant::now();
     let prepared_payload_index = PreparedPayloadIndex::from_library_roots(&cfg.roots);
     let prepared_payload_us = prepared_payload_t.elapsed().as_micros() as u64;
@@ -1203,6 +1280,14 @@ fn scan_library_with_progress_and_events(
                     .map(catalog_system_id_for_discovery)
                     .filter(|system| is_reportable_catalog_system_id(system))
                     .collect::<BTreeSet<_>>();
+                for system in contributor_closure.complete(descriptor.ordinal, &target_systems) {
+                    crate::catalog_logln!(
+                        "catalog_system_closure_tsv\tsystem={}\tready_us={}\ttarget_ordinal={}\tremaining_unknown=0\tsemantics=conservative-contributor-set",
+                        system,
+                        ready_us,
+                        descriptor.ordinal,
+                    );
+                }
                 for system in &target_systems {
                     system_finality
                         .entry(system.clone())
@@ -1560,6 +1645,10 @@ fn scan_library_with_progress_and_events(
             targets,
         );
     }
+    crate::catalog_logln!(
+        "catalog_contributor_closure_tsv\t{}",
+        contributor_closure.compact_detail()
+    );
     let execution_pipeline_us = pipeline_started.elapsed().as_micros() as u64;
     let post_pipeline_started = Instant::now();
     if let Some(state) = resume.as_mut() {
@@ -1822,6 +1911,41 @@ mod incremental_planning_tests {
     #[test]
     fn corrupt_target_dependencies_force_no_false_exact_match() {
         assert!(target_output_systems("{not-json").is_empty());
+    }
+
+    #[test]
+    fn contributor_closure_waits_for_unknown_targets() {
+        let mut closure = ContributorClosure::new([
+            (0, Some("arcade".to_string())),
+            (1, None),
+            (2, Some("snes".to_string())),
+        ]);
+
+        assert!(
+            closure
+                .complete(0, &BTreeSet::from(["arcade".to_string()]))
+                .is_empty()
+        );
+        assert_eq!(
+            closure.complete(1, &BTreeSet::new()),
+            vec!["arcade".to_string()]
+        );
+        assert_eq!(
+            closure.complete(2, &BTreeSet::from(["snes".to_string()])),
+            vec!["snes".to_string()]
+        );
+    }
+
+    #[test]
+    fn contributor_closure_fails_closed_on_unexpected_system() {
+        let mut closure = ContributorClosure::new([(0, Some("snes".to_string()))]);
+
+        assert!(
+            closure
+                .complete(0, &BTreeSet::from(["nes".to_string()]))
+                .is_empty()
+        );
+        assert!(closure.compact_detail().contains("sound=0"));
     }
 }
 

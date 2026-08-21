@@ -19419,12 +19419,13 @@ fn catalog_artifact_set_valid(catalog: &Value) -> bool {
 }
 
 fn catalog_phase_evidence(log: &str) -> Value {
-    const RECORDS: [&str; 14] = [
+    const RECORDS: [&str; 15] = [
         "startup_timing",
         "catalog_scan_attribution_tsv",
         "catalog_scan_handoff_tsv",
         "catalog_target_handoff_tsv",
         "catalog_system_finality_tsv",
+        "catalog_contributor_closure_tsv",
         "catalog_target_checkpoint_io_tsv",
         "catalog_shard_staging_tsv",
         "library_scan_timing",
