@@ -2255,6 +2255,11 @@ fn with_catalog_progress_heartbeat<T: Send>(
     std::thread::scope(|scope| {
         let (result_tx, result_rx) = std::sync::mpsc::sync_channel(1);
         scope.spawn(move || {
+            apply_runtime_thread_policy(if background {
+                RuntimeThreadRole::CatalogWorker
+            } else {
+                CATALOG_PREPARE_WORKER_ROLE
+            });
             let _background_scope =
                 background.then(crate::cooperative_work::BackgroundScope::enter);
             crate::cooperative_work::checkpoint();
