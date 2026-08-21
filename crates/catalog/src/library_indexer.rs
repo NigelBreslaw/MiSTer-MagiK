@@ -1049,8 +1049,7 @@ fn scan_library_with_progress_and_events(
         ContributorClosure::new(target_descriptors.iter().map(|descriptor| {
             (
                 descriptor.ordinal,
-                catalog_scan::profile_for_path(plan.base_profiles(), &descriptor.path)
-                    .map(|profile| profile.system_id.clone()),
+                catalog_scan::planned_contributor_system(&plan, descriptor),
             )
         }));
     let prepared_payload_t = Instant::now();

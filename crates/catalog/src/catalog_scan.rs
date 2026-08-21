@@ -650,6 +650,25 @@ pub(crate) fn planned_scan_target_descriptors(
         .collect()
 }
 
+/// Returns the exact system a planned target can contribute to before payload
+/// inspection, or `None` when the target must conservatively remain global.
+pub(crate) fn planned_contributor_system(
+    plan: &CatalogScanPlan,
+    descriptor: &ScanTargetDescriptor,
+) -> Option<String> {
+    planned_system_for_path(plan, &descriptor.path)
+}
+
+fn planned_system_for_path(plan: &CatalogScanPlan, path: &Path) -> Option<String> {
+    if let Some(profile) = profile_for_path(plan.base_profiles(), path) {
+        return Some(profile.system_id.clone());
+    }
+    plan.all_game_dir_headers()
+        .iter()
+        .find(|header| same_library_path(&header.path, path))
+        .and_then(|header| plan.potential_system_for_game_dir_header(header))
+}
+
 fn walk_index_candidates_with_plan(
     roots: &[String],
     plan: &CatalogScanPlan,
@@ -827,6 +846,13 @@ fn scan_targets_for_plan(
             targets.push(PlannedScanTarget::FactsOnly(header.clone()));
         }
     }
+    // Unknown contributors conservatively block every system from reaching
+    // finality. Drain them first so exact per-system targets can close in scan
+    // order without weakening the contributor-set proof.
+    targets.sort_by_key(|target| {
+        let descriptor = target.descriptor(0);
+        u8::from(planned_contributor_system(plan, &descriptor).is_some())
+    });
     targets
 }
 
@@ -2405,6 +2431,30 @@ mod tests {
                 .iter()
                 .any(|target| same_library_path(&target.path, &root.join("games/SNES")))
         );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn planned_scan_drains_unknown_contributors_before_exact_systems() {
+        let root = unique_temp_dir("planned-target-contributor-order");
+        std::fs::create_dir_all(root.join("_Console")).expect("create console cores");
+        std::fs::create_dir_all(root.join("games/SNES")).expect("create SNES games");
+        std::fs::create_dir_all(root.join("games/Unclassified")).expect("create unknown games");
+        std::fs::write(root.join("_Console/SNES_20260101.rbf"), b"core").expect("write SNES core");
+        std::fs::write(root.join("games/SNES/Game.sfc"), b"rom").expect("write SNES game");
+        let roots = vec![root.display().to_string()];
+        let plan = CatalogScanPlan::for_roots(&roots);
+        let descriptors = planned_scan_target_descriptors(&roots, &plan, &[]);
+        let unknown = descriptors
+            .iter()
+            .position(|target| target.path.ends_with("Unclassified"))
+            .expect("unknown target");
+        let snes = descriptors
+            .iter()
+            .position(|target| target.path.ends_with("SNES"))
+            .expect("SNES target");
+
+        assert!(unknown < snes);
         let _ = std::fs::remove_dir_all(root);
     }
 
