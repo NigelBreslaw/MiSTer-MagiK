@@ -145,6 +145,10 @@ pub fn inspect_catalog(storage: &std::path::Path) -> Result<String, String> {
         for query in qualification_queries(&full_shard.games) {
             search_queries.push((summary.system_id.as_str().to_string(), query));
         }
+        let sqlite_hash = artifact_sha256(&storage.join(&manifest_system.active.sqlite_path))?;
+        let navigation_hash =
+            artifact_sha256(&storage.join(&manifest_system.active.navigation_path))?;
+        let navpack_hash = artifact_sha256(&storage.join(&navpack.path))?;
         append_artifact(
             &mut artifacts,
             &mut artifact_set,
@@ -152,7 +156,7 @@ pub fn inspect_catalog(storage: &std::path::Path) -> Result<String, String> {
             "sqlite",
             &manifest_system.active.sqlite_path,
             manifest_system.active.sqlite_bytes,
-            &manifest_system.active.sqlite_hash,
+            &sqlite_hash,
         );
         append_artifact(
             &mut artifacts,
@@ -161,7 +165,7 @@ pub fn inspect_catalog(storage: &std::path::Path) -> Result<String, String> {
             "navigation",
             &manifest_system.active.navigation_path,
             manifest_system.active.navigation_bytes,
-            &manifest_system.active.navigation_hash,
+            &navigation_hash,
         );
         append_artifact(
             &mut artifacts,
@@ -170,7 +174,7 @@ pub fn inspect_catalog(storage: &std::path::Path) -> Result<String, String> {
             "navpack",
             &navpack.path,
             navpack.bytes,
-            &navpack.hash,
+            &navpack_hash,
         );
         let preview_keys = system
             .games()
@@ -273,6 +277,25 @@ fn hex_digest(digest: Sha256) -> String {
         .iter()
         .map(|byte| format!("{byte:02x}"))
         .collect()
+}
+
+fn artifact_sha256(path: &std::path::Path) -> Result<String, String> {
+    use std::io::Read;
+
+    let mut file = std::fs::File::open(path)
+        .map_err(|error| format!("open artifact {}: {error}", path.display()))?;
+    let mut digest = Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let bytes = file
+            .read(&mut buffer)
+            .map_err(|error| format!("read artifact {}: {error}", path.display()))?;
+        if bytes == 0 {
+            break;
+        }
+        digest.update(&buffer[..bytes]);
+    }
+    Ok(hex_digest(digest))
 }
 
 fn append_artifact(
@@ -564,6 +587,15 @@ mod tests {
         assert!(report.contains("\tsearch_sha256="));
         assert!(report.contains("\tartifact_set_sha256="));
         assert!(report.contains("catalog_v3_artifact_tsv\tsystem=atarilynx\tkind=sqlite\t"));
+        assert!(
+            report
+                .lines()
+                .filter(|line| line.starts_with("catalog_v3_artifact_tsv"))
+                .all(|line| line
+                    .split('\t')
+                    .find_map(|field| field.strip_prefix("sha256="))
+                    .is_some_and(|digest| digest.len() == 64))
+        );
         std::fs::remove_dir_all(root.join("systems")).expect("remove system artifacts");
         let registry_report = inspect_registry(&root).expect("inspect registry without shards");
         assert!(registry_report.contains(&format!(
