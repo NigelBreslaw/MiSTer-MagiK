@@ -2,6 +2,6 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 [toolchain]
-channel = "1.97.1"
+channel = "1.98.0"
 components = ["rustfmt", "clippy"]
 targets = ["armv7-unknown-linux-gnueabihf"]
