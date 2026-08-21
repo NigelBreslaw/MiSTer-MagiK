@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use mister_magik_perf_events::{
-    CounterDelta, CounterGroup, PmuFailure, PmuOpenDiagnostics, event_metadata,
+    CounterDelta, CounterGroup, HardwareEvent, PmuFailure, PmuOpenDiagnostics, event_metadata,
 };
 use serde_json::{Value, json};
 
@@ -20,7 +20,7 @@ pub fn run() {
 pub fn probe() -> Value {
     let (group, diagnostics) = CounterGroup::open_with_diagnostics();
     match measure_probe(group) {
-        Ok((delta, checksum, read_format, scope)) if valid_probe(delta) => json!({
+        Ok((delta, checksum, read_format, scope)) if valid_probe(&delta) => json!({
             "schema": "mister-magik-pmu-probe-v1",
             "status": "ok",
             "target": {
@@ -38,7 +38,7 @@ pub fn probe() -> Value {
                 "words": PROBE_WORDS,
                 "checksum": checksum,
             },
-            "sample": sample_json(delta),
+            "sample": sample_json(&delta),
             "diagnostics": diagnostics,
             "failure": Value::Null,
         }),
@@ -60,7 +60,7 @@ pub fn probe() -> Value {
                 "words": PROBE_WORDS,
                 "checksum": checksum,
             },
-            "sample": sample_json(delta),
+            "sample": sample_json(&delta),
             "diagnostics": diagnostics,
             "failure": {
                 "stage": "validate-sample",
@@ -110,15 +110,24 @@ fn measure_probe(
     Ok((span.finish()?.counters, checksum, read_format, scope))
 }
 
-fn valid_probe(delta: CounterDelta) -> bool {
-    delta.counters.cycles > 0 && delta.counters.instructions > 0
+fn valid_probe(delta: &CounterDelta) -> bool {
+    delta
+        .counters
+        .get(HardwareEvent::Cycles)
+        .unwrap_or_default()
+        > 0
+        && delta
+            .counters
+            .get(HardwareEvent::Instructions)
+            .unwrap_or_default()
+            > 0
 }
 
-fn sample_json(delta: CounterDelta) -> Value {
+fn sample_json(delta: &CounterDelta) -> Value {
     json!({
         "time_enabled_ns": delta.time_enabled_ns,
         "time_running_ns": delta.time_running_ns,
-        "counters": delta.counters,
+        "counters": &delta.counters,
         "derived": {
             "instructions_per_cycle": delta.instructions_per_cycle(),
             "cycles_per_instruction": delta.cycles_per_instruction(),
@@ -159,15 +168,14 @@ mod tests {
     fn sample_validation_requires_running_cycles_and_instructions() {
         let valid = CounterDelta {
             time_running_ns: 1,
-            counters: CounterValues {
-                cycles: 2,
-                instructions: 1,
-                ..CounterValues::default()
-            },
+            counters: CounterValues::from([
+                (HardwareEvent::Cycles, 2),
+                (HardwareEvent::Instructions, 1),
+            ]),
             ..CounterDelta::default()
         };
-        assert!(valid_probe(valid));
-        assert!(!valid_probe(CounterDelta::default()));
+        assert!(valid_probe(&valid));
+        assert!(!valid_probe(&CounterDelta::default()));
     }
 
     #[test]

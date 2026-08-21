@@ -279,14 +279,17 @@ impl ParticlePmu {
         match counters.snapshot() {
             Ok(finished) => {
                 let delta = finished.delta_from(started).counters;
+                use mister_magik_perf_events::HardwareEvent;
                 ParticlePmuSample {
                     available: true,
-                    cycles: delta.cycles,
-                    instructions: delta.instructions,
-                    cache_references: delta.l1d_accesses,
-                    cache_misses: delta.l1d_refills,
-                    branch_instructions: delta.branches,
-                    branch_misses: delta.branch_mispredicts,
+                    cycles: delta.get(HardwareEvent::Cycles).unwrap_or_default(),
+                    instructions: delta.get(HardwareEvent::Instructions).unwrap_or_default(),
+                    cache_references: delta.get(HardwareEvent::L1dAccesses).unwrap_or_default(),
+                    cache_misses: delta.get(HardwareEvent::L1dRefills).unwrap_or_default(),
+                    branch_instructions: delta.get(HardwareEvent::Branches).unwrap_or_default(),
+                    branch_misses: delta
+                        .get(HardwareEvent::BranchMispredicts)
+                        .unwrap_or_default(),
                 }
             }
             Err(_) => {

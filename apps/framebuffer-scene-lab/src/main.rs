@@ -808,12 +808,12 @@ fn run_screenshot_pmu(archive_path: &Path, evidence_dir: &Path) -> Result<(), St
                 .collect::<Vec<_>>();
             let summary = serde_json::json!({
                 "samples": records.len(),
-                "cycles": pmu_counter_summary(records.iter().map(|record| record.counters.counters.cycles)),
-                "instructions": pmu_counter_summary(records.iter().map(|record| record.counters.counters.instructions)),
-                "l1d_accesses": pmu_counter_summary(records.iter().map(|record| record.counters.counters.l1d_accesses)),
-                "l1d_refills": pmu_counter_summary(records.iter().map(|record| record.counters.counters.l1d_refills)),
-                "branches": pmu_counter_summary(records.iter().map(|record| record.counters.counters.branches)),
-                "branch_mispredicts": pmu_counter_summary(records.iter().map(|record| record.counters.counters.branch_mispredicts)),
+                "cycles": pmu_counter_summary(records.iter().filter_map(|record| record.counters.counters.get(mister_magik_perf_events::HardwareEvent::Cycles))),
+                "instructions": pmu_counter_summary(records.iter().filter_map(|record| record.counters.counters.get(mister_magik_perf_events::HardwareEvent::Instructions))),
+                "l1d_accesses": pmu_counter_summary(records.iter().filter_map(|record| record.counters.counters.get(mister_magik_perf_events::HardwareEvent::L1dAccesses))),
+                "l1d_refills": pmu_counter_summary(records.iter().filter_map(|record| record.counters.counters.get(mister_magik_perf_events::HardwareEvent::L1dRefills))),
+                "branches": pmu_counter_summary(records.iter().filter_map(|record| record.counters.counters.get(mister_magik_perf_events::HardwareEvent::Branches))),
+                "branch_mispredicts": pmu_counter_summary(records.iter().filter_map(|record| record.counters.counters.get(mister_magik_perf_events::HardwareEvent::BranchMispredicts))),
             });
             (name.to_owned(), summary)
         })
@@ -841,7 +841,18 @@ fn run_screenshot_pmu(archive_path: &Path, evidence_dir: &Path) -> Result<(), St
                 == SCREENSHOT_PMU_FRAMES as usize
         })
         && profile.records.iter().all(|record| {
-            record.counters.counters.cycles > 0 && record.counters.counters.instructions > 0
+            record
+                .counters
+                .counters
+                .get(mister_magik_perf_events::HardwareEvent::Cycles)
+                .unwrap_or_default()
+                > 0
+                && record
+                    .counters
+                    .counters
+                    .get(mister_magik_perf_events::HardwareEvent::Instructions)
+                    .unwrap_or_default()
+                    > 0
         })
         && profile_json
             .get("read_format")

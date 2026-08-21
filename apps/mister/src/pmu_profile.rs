@@ -460,15 +460,30 @@ fn aggregate_process_profile(
         .iter()
         .flat_map(|entry| entry.profile.records.iter())
     {
-        let counters = record.counters.counters;
-        aggregate.cycles = aggregate.cycles.saturating_add(counters.cycles);
-        aggregate.instructions = aggregate.instructions.saturating_add(counters.instructions);
-        aggregate.l1d_accesses = aggregate.l1d_accesses.saturating_add(counters.l1d_accesses);
-        aggregate.l1d_refills = aggregate.l1d_refills.saturating_add(counters.l1d_refills);
-        aggregate.branches = aggregate.branches.saturating_add(counters.branches);
-        aggregate.branch_mispredicts = aggregate
-            .branch_mispredicts
-            .saturating_add(counters.branch_mispredicts);
+        use mister_magik_perf_events::HardwareEvent;
+        let counters = &record.counters.counters;
+        aggregate.cycles = aggregate
+            .cycles
+            .saturating_add(counters.get(HardwareEvent::Cycles).unwrap_or_default());
+        aggregate.instructions = aggregate.instructions.saturating_add(
+            counters
+                .get(HardwareEvent::Instructions)
+                .unwrap_or_default(),
+        );
+        aggregate.l1d_accesses = aggregate
+            .l1d_accesses
+            .saturating_add(counters.get(HardwareEvent::L1dAccesses).unwrap_or_default());
+        aggregate.l1d_refills = aggregate
+            .l1d_refills
+            .saturating_add(counters.get(HardwareEvent::L1dRefills).unwrap_or_default());
+        aggregate.branches = aggregate
+            .branches
+            .saturating_add(counters.get(HardwareEvent::Branches).unwrap_or_default());
+        aggregate.branch_mispredicts = aggregate.branch_mispredicts.saturating_add(
+            counters
+                .get(HardwareEvent::BranchMispredicts)
+                .unwrap_or_default(),
+        );
     }
     aggregate.instructions_per_cycle = ratio(aggregate.instructions, aggregate.cycles);
     aggregate.l1d_refill_ratio = ratio(aggregate.l1d_refills, aggregate.l1d_accesses);
@@ -518,14 +533,17 @@ mod tests {
             records: vec![mister_magik_perf_events::SpanRecord {
                 name: "catalog.scan".into(),
                 counters: mister_magik_perf_events::CounterDelta {
-                    counters: mister_magik_perf_events::CounterValues {
-                        cycles: 20,
-                        instructions: 10,
-                        l1d_accesses: 4,
-                        l1d_refills: 1,
-                        branches: 5,
-                        branch_mispredicts: 1,
-                    },
+                    counters: mister_magik_perf_events::CounterValues::from([
+                        (mister_magik_perf_events::HardwareEvent::Cycles, 20),
+                        (mister_magik_perf_events::HardwareEvent::Instructions, 10),
+                        (mister_magik_perf_events::HardwareEvent::L1dAccesses, 4),
+                        (mister_magik_perf_events::HardwareEvent::L1dRefills, 1),
+                        (mister_magik_perf_events::HardwareEvent::Branches, 5),
+                        (
+                            mister_magik_perf_events::HardwareEvent::BranchMispredicts,
+                            1,
+                        ),
+                    ]),
                     ..mister_magik_perf_events::CounterDelta::default()
                 },
             }],

@@ -16,7 +16,7 @@ use std::marker::PhantomData;
 use std::rc::Rc;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 
-const EVENT_SET: [HardwareEvent; 6] = [
+const GENERAL_EVENTS: [HardwareEvent; 6] = [
     HardwareEvent::Cycles,
     HardwareEvent::Instructions,
     HardwareEvent::L1dAccesses,
@@ -24,6 +24,34 @@ const EVENT_SET: [HardwareEvent; 6] = [
     HardwareEvent::Branches,
     HardwareEvent::BranchMispredicts,
 ];
+
+const CORTEX_A9_NEON_EVENTS: [HardwareEvent; 7] = [
+    HardwareEvent::Cycles,
+    HardwareEvent::SpeculativeInstructions,
+    HardwareEvent::NeonInstructions,
+    HardwareEvent::NeonClockCycles,
+    HardwareEvent::DataDependentStallCycles,
+    HardwareEvent::L1dAccesses,
+    HardwareEvent::L1dRefills,
+];
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum CounterSet {
+    #[default]
+    General,
+    CortexA9Neon,
+}
+
+impl CounterSet {
+    #[must_use]
+    pub const fn events(self) -> &'static [HardwareEvent] {
+        match self {
+            Self::General => &GENERAL_EVENTS,
+            Self::CortexA9Neon => &CORTEX_A9_NEON_EVENTS,
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(rename_all = "kebab-case")]
@@ -34,6 +62,10 @@ pub enum HardwareEvent {
     L1dRefills,
     Branches,
     BranchMispredicts,
+    SpeculativeInstructions,
+    NeonInstructions,
+    NeonClockCycles,
+    DataDependentStallCycles,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -78,6 +110,17 @@ pub struct PmuOpenDiagnostics {
 
 impl HardwareEvent {
     #[must_use]
+    pub const fn perf_type(self) -> u32 {
+        match self {
+            Self::SpeculativeInstructions
+            | Self::NeonInstructions
+            | Self::NeonClockCycles
+            | Self::DataDependentStallCycles => 4,
+            _ => 0,
+        }
+    }
+
+    #[must_use]
     pub const fn perf_config(self) -> u64 {
         match self {
             Self::Cycles => 0,
@@ -86,6 +129,10 @@ impl HardwareEvent {
             Self::L1dRefills => 3,
             Self::Branches => 4,
             Self::BranchMispredicts => 5,
+            Self::SpeculativeInstructions => 0x68,
+            Self::NeonInstructions => 0x74,
+            Self::NeonClockCycles => 0x8c,
+            Self::DataDependentStallCycles => 0x61,
         }
     }
 
@@ -98,6 +145,10 @@ impl HardwareEvent {
             Self::L1dRefills => "l1d-refills",
             Self::Branches => "branches",
             Self::BranchMispredicts => "branch-mispredicts",
+            Self::SpeculativeInstructions => "speculative-instructions",
+            Self::NeonInstructions => "neon-instructions",
+            Self::NeonClockCycles => "neon-clock-cycles",
+            Self::DataDependentStallCycles => "data-dependent-stall-cycles",
         }
     }
 }
@@ -111,7 +162,7 @@ pub struct EventMetadata {
 }
 
 #[must_use]
-pub const fn event_metadata() -> [EventMetadata; EVENT_SET.len()] {
+pub const fn event_metadata() -> [EventMetadata; GENERAL_EVENTS.len()] {
     [
         EventMetadata {
             event: HardwareEvent::Cycles,
@@ -150,6 +201,36 @@ pub const fn event_metadata() -> [EventMetadata; EVENT_SET.len()] {
             semantic: "branch mispredicts",
         },
     ]
+}
+
+#[must_use]
+pub fn event_metadata_for(counter_set: CounterSet) -> Vec<EventMetadata> {
+    counter_set
+        .events()
+        .iter()
+        .copied()
+        .map(|event| EventMetadata {
+            event,
+            perf_type: event.perf_type(),
+            perf_config: event.perf_config(),
+            semantic: match event {
+                HardwareEvent::Cycles => "CPU cycles",
+                HardwareEvent::Instructions => "instructions",
+                HardwareEvent::L1dAccesses => "Cortex-A9 L1 data-cache accesses",
+                HardwareEvent::L1dRefills => "Cortex-A9 L1 data-cache refills",
+                HardwareEvent::Branches => "branches",
+                HardwareEvent::BranchMispredicts => "branch mispredicts",
+                HardwareEvent::SpeculativeInstructions => {
+                    "Cortex-A9 instructions speculatively executed"
+                }
+                HardwareEvent::NeonInstructions => "Cortex-A9 NEON instructions",
+                HardwareEvent::NeonClockCycles => "Cortex-A9 cycles with the NEON clock enabled",
+                HardwareEvent::DataDependentStallCycles => {
+                    "Cortex-A9 cycles stalled on a data dependency"
+                }
+            },
+        })
+        .collect()
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -207,45 +288,47 @@ impl fmt::Display for PmuFailure {
 
 impl std::error::Error for PmuFailure {}
 
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-pub struct CounterValues {
-    pub cycles: u64,
-    pub instructions: u64,
-    pub l1d_accesses: u64,
-    pub l1d_refills: u64,
-    pub branches: u64,
-    pub branch_mispredicts: u64,
-}
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(transparent)]
+pub struct CounterValues(BTreeMap<HardwareEvent, u64>);
 
 impl CounterValues {
     #[cfg(any(target_os = "linux", test))]
     fn set(&mut self, event: HardwareEvent, value: u64) {
-        match event {
-            HardwareEvent::Cycles => self.cycles = value,
-            HardwareEvent::Instructions => self.instructions = value,
-            HardwareEvent::L1dAccesses => self.l1d_accesses = value,
-            HardwareEvent::L1dRefills => self.l1d_refills = value,
-            HardwareEvent::Branches => self.branches = value,
-            HardwareEvent::BranchMispredicts => self.branch_mispredicts = value,
-        }
+        self.0.insert(event, value);
     }
 
-    fn saturating_sub(self, earlier: Self) -> Self {
-        Self {
-            cycles: self.cycles.saturating_sub(earlier.cycles),
-            instructions: self.instructions.saturating_sub(earlier.instructions),
-            l1d_accesses: self.l1d_accesses.saturating_sub(earlier.l1d_accesses),
-            l1d_refills: self.l1d_refills.saturating_sub(earlier.l1d_refills),
-            branches: self.branches.saturating_sub(earlier.branches),
-            branch_mispredicts: self
-                .branch_mispredicts
-                .saturating_sub(earlier.branch_mispredicts),
+    #[must_use]
+    pub fn get(&self, event: HardwareEvent) -> Option<u64> {
+        self.0.get(&event).copied()
+    }
+
+    #[must_use]
+    pub fn iter(&self) -> impl Iterator<Item = (HardwareEvent, u64)> + '_ {
+        self.0.iter().map(|(event, value)| (*event, *value))
+    }
+
+    fn saturating_sub(&self, earlier: &Self) -> Self {
+        let mut values = BTreeMap::new();
+        for (event, value) in &self.0 {
+            if let Some(earlier) = earlier.0.get(event) {
+                values.insert(*event, value.saturating_sub(*earlier));
+            }
         }
+        Self(values)
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+impl<const N: usize> From<[(HardwareEvent, u64); N]> for CounterValues {
+    fn from(values: [(HardwareEvent, u64); N]) -> Self {
+        Self(values.into_iter().collect())
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct CounterSnapshot {
+    #[serde(default)]
+    pub counter_set: CounterSet,
     pub time_enabled_ns: u64,
     pub time_running_ns: u64,
     pub counters: CounterValues,
@@ -255,15 +338,18 @@ impl CounterSnapshot {
     #[must_use]
     pub fn delta_from(self, earlier: Self) -> CounterDelta {
         CounterDelta {
+            counter_set: self.counter_set,
             time_enabled_ns: self.time_enabled_ns.saturating_sub(earlier.time_enabled_ns),
             time_running_ns: self.time_running_ns.saturating_sub(earlier.time_running_ns),
-            counters: self.counters.saturating_sub(earlier.counters),
+            counters: self.counters.saturating_sub(&earlier.counters),
         }
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct CounterDelta {
+    #[serde(default)]
+    pub counter_set: CounterSet,
     pub time_enabled_ns: u64,
     pub time_running_ns: u64,
     pub counters: CounterValues,
@@ -271,23 +357,31 @@ pub struct CounterDelta {
 
 impl CounterDelta {
     #[must_use]
-    pub fn instructions_per_cycle(self) -> f64 {
-        ratio(self.counters.instructions, self.counters.cycles)
+    pub fn instructions_per_cycle(&self) -> f64 {
+        self.ratio(HardwareEvent::Instructions, HardwareEvent::Cycles)
     }
 
     #[must_use]
-    pub fn cycles_per_instruction(self) -> f64 {
-        ratio(self.counters.cycles, self.counters.instructions)
+    pub fn cycles_per_instruction(&self) -> f64 {
+        self.ratio(HardwareEvent::Cycles, HardwareEvent::Instructions)
     }
 
     #[must_use]
-    pub fn l1d_refill_percent(self) -> f64 {
-        ratio(self.counters.l1d_refills, self.counters.l1d_accesses) * 100.0
+    pub fn l1d_refill_percent(&self) -> f64 {
+        self.ratio(HardwareEvent::L1dRefills, HardwareEvent::L1dAccesses) * 100.0
     }
 
     #[must_use]
-    pub fn branch_mispredict_percent(self) -> f64 {
-        ratio(self.counters.branch_mispredicts, self.counters.branches) * 100.0
+    pub fn branch_mispredict_percent(&self) -> f64 {
+        self.ratio(HardwareEvent::BranchMispredicts, HardwareEvent::Branches) * 100.0
+    }
+
+    #[must_use]
+    pub fn ratio(&self, numerator: HardwareEvent, denominator: HardwareEvent) -> f64 {
+        match (self.counters.get(numerator), self.counters.get(denominator)) {
+            (Some(numerator), Some(denominator)) => ratio(numerator, denominator),
+            _ => 0.0,
+        }
     }
 }
 
@@ -595,7 +689,9 @@ impl SampledSpan {
             return;
         }
         THREAD_COLLECTOR.with(|collector| {
-            collector.borrow_mut().finish(self.name, self.started);
+            collector
+                .borrow_mut()
+                .finish(self.name, self.started.clone());
         });
         self.finished = true;
     }
@@ -630,9 +726,13 @@ pub struct CounterGroup {
 
 impl CounterGroup {
     pub fn open() -> Result<Self, PmuFailure> {
+        Self::open_set(CounterSet::General)
+    }
+
+    pub fn open_set(counter_set: CounterSet) -> Result<Self, PmuFailure> {
         #[cfg(target_os = "linux")]
         {
-            linux::LinuxCounterGroup::open().map(|inner| Self { inner })
+            linux::LinuxCounterGroup::open(counter_set).map(|inner| Self { inner })
         }
         #[cfg(not(target_os = "linux"))]
         {
@@ -643,9 +743,16 @@ impl CounterGroup {
     }
 
     pub fn open_with_diagnostics() -> (Result<Self, PmuFailure>, PmuOpenDiagnostics) {
+        Self::open_set_with_diagnostics(CounterSet::General)
+    }
+
+    pub fn open_set_with_diagnostics(
+        counter_set: CounterSet,
+    ) -> (Result<Self, PmuFailure>, PmuOpenDiagnostics) {
         #[cfg(target_os = "linux")]
         {
-            let (inner, diagnostics) = linux::LinuxCounterGroup::open_with_diagnostics();
+            let (inner, diagnostics) =
+                linux::LinuxCounterGroup::open_with_diagnostics(counter_set);
             (inner.map(|inner| Self { inner }), diagnostics)
         }
         #[cfg(not(target_os = "linux"))]
@@ -709,6 +816,7 @@ impl CounterGroup {
 #[cfg(any(target_os = "linux", test))]
 fn decode_group_read(
     words: &[u64],
+    counter_set: CounterSet,
     event_ids: &BTreeMap<u64, HardwareEvent>,
 ) -> Result<CounterSnapshot, PmuFailure> {
     let expected_words = 3 + event_ids.len() * 2;
@@ -746,6 +854,7 @@ fn decode_group_read(
         return Err(PmuFailure::malformed("group read omitted an event"));
     }
     Ok(CounterSnapshot {
+        counter_set,
         time_enabled_ns: words[1],
         time_running_ns: words[2],
         counters,
@@ -753,21 +862,26 @@ fn decode_group_read(
 }
 
 #[cfg(any(target_os = "linux", test))]
-fn decode_ordered_group_read(words: &[u64]) -> Result<CounterSnapshot, PmuFailure> {
-    if words.len() != EVENT_SET.len() + 1 || words[0] != EVENT_SET.len() as u64 {
+fn decode_ordered_group_read(
+    words: &[u64],
+    counter_set: CounterSet,
+) -> Result<CounterSnapshot, PmuFailure> {
+    let events = counter_set.events();
+    if words.len() != events.len() + 1 || words[0] != events.len() as u64 {
         return Err(PmuFailure::malformed(format!(
             "ordered group read reported {} words and {} events, expected {} words and {} events",
             words.len(),
             words.first().copied().unwrap_or(0),
-            EVENT_SET.len() + 1,
-            EVENT_SET.len()
+            events.len() + 1,
+            events.len()
         )));
     }
     let mut counters = CounterValues::default();
-    for (event, value) in EVENT_SET.into_iter().zip(words[1..].iter().copied()) {
+    for (event, value) in events.iter().copied().zip(words[1..].iter().copied()) {
         counters.set(event, value);
     }
     Ok(CounterSnapshot {
+        counter_set,
         time_enabled_ns: 0,
         time_running_ns: 0,
         counters,
@@ -777,13 +891,12 @@ fn decode_ordered_group_read(words: &[u64]) -> Result<CounterSnapshot, PmuFailur
 #[cfg(target_os = "linux")]
 mod linux {
     use super::{
-        CounterScope, CounterSnapshot, EVENT_SET, GroupReadFormat, HardwareEvent, PmuEnvironment,
+        CounterScope, CounterSet, CounterSnapshot, GroupReadFormat, HardwareEvent, PmuEnvironment,
         PmuFailure, PmuOpenAttempt, PmuOpenDiagnostics, decode_group_read,
         decode_ordered_group_read,
     };
     use std::collections::BTreeMap;
 
-    const PERF_TYPE_HARDWARE: u32 = 0;
     const PERF_FORMAT_TOTAL_TIME_ENABLED: u64 = 1;
     const PERF_FORMAT_TOTAL_TIME_RUNNING: u64 = 1 << 1;
     const PERF_FORMAT_ID: u64 = 1 << 2;
@@ -797,7 +910,6 @@ mod linux {
     const PERF_EVENT_IOC_RESET: libc::c_ulong = 0x2403;
     const PERF_EVENT_IOC_ID: libc::c_ulong = 0x8008_2407;
     const PERF_IOC_FLAG_GROUP: libc::c_ulong = 1;
-    const GROUP_READ_WORDS: usize = 3 + EVENT_SET.len() * 2;
 
     #[repr(C)]
     #[derive(Default)]
@@ -821,6 +933,7 @@ mod linux {
     pub(super) struct LinuxCounterGroup {
         descriptors: Vec<Descriptor>,
         event_ids: BTreeMap<u64, HardwareEvent>,
+        counter_set: CounterSet,
         read_format: GroupReadFormat,
         scope: CounterScope,
     }
@@ -834,11 +947,13 @@ mod linux {
     }
 
     impl LinuxCounterGroup {
-        pub(super) fn open() -> Result<Self, PmuFailure> {
-            Self::open_matrix(None)
+        pub(super) fn open(counter_set: CounterSet) -> Result<Self, PmuFailure> {
+            Self::open_matrix(counter_set, None)
         }
 
-        pub(super) fn open_with_diagnostics() -> (Result<Self, PmuFailure>, PmuOpenDiagnostics) {
+        pub(super) fn open_with_diagnostics(
+            counter_set: CounterSet,
+        ) -> (Result<Self, PmuFailure>, PmuOpenDiagnostics) {
             let mut diagnostics = PmuOpenDiagnostics {
                 environment: read_environment(),
                 attempts: Vec::new(),
@@ -869,11 +984,14 @@ mod linux {
                     PERF_ATTR_DISABLED | PERF_ATTR_EXCLUDE_KERNEL | PERF_ATTR_EXCLUDE_HYPERVISOR,
                 ),
             ]);
-            let group = Self::open_matrix(Some(&mut diagnostics.attempts));
+            let group = Self::open_matrix(counter_set, Some(&mut diagnostics.attempts));
             (group, diagnostics)
         }
 
-        fn open_matrix(mut attempts: Option<&mut Vec<PmuOpenAttempt>>) -> Result<Self, PmuFailure> {
+        fn open_matrix(
+            counter_set: CounterSet,
+            mut attempts: Option<&mut Vec<PmuOpenAttempt>>,
+        ) -> Result<Self, PmuFailure> {
             let options = [
                 OpenOptions {
                     read_format: GroupReadFormat::IdsAndTimes,
@@ -896,7 +1014,7 @@ mod linux {
             ];
             let mut last_failure = None;
             for options in options {
-                match Self::open_with_options(options) {
+                match Self::open_with_options(counter_set, options) {
                     Ok(group) => {
                         if let Some(attempts) = attempts.as_deref_mut() {
                             attempts.push(group_attempt(options, None));
@@ -920,21 +1038,29 @@ mod linux {
             Err(last_failure.expect("PMU open matrix is nonempty"))
         }
 
-        fn open_with_options(options: OpenOptions) -> Result<Self, PmuFailure> {
+        fn open_with_options(
+            counter_set: CounterSet,
+            options: OpenOptions,
+        ) -> Result<Self, PmuFailure> {
             debug_assert_eq!(std::mem::size_of::<PerfEventAttr>(), 64);
             let leader = open_event(HardwareEvent::Cycles, -1, options)?;
             let mut group = Self {
                 descriptors: vec![Descriptor { fd: leader }],
                 event_ids: BTreeMap::new(),
+                counter_set,
                 read_format: options.read_format,
                 scope: options.scope,
             };
-            for event in EVENT_SET.iter().copied().skip(1) {
+            for event in counter_set.events().iter().copied().skip(1) {
                 let descriptor = open_event(event, leader, options)?;
                 group.descriptors.push(Descriptor { fd: descriptor });
             }
             if options.read_format == GroupReadFormat::IdsAndTimes {
-                for (descriptor, event) in group.descriptors.iter().zip(EVENT_SET) {
+                for (descriptor, event) in group
+                    .descriptors
+                    .iter()
+                    .zip(counter_set.events().iter().copied())
+                {
                     let id = event_id(descriptor.fd, event)?;
                     if group.event_ids.insert(id, event).is_some() {
                         return Err(PmuFailure::malformed(format!(
@@ -964,8 +1090,8 @@ mod linux {
         }
 
         fn snapshot_with_ids_and_times(&self) -> Result<CounterSnapshot, PmuFailure> {
-            let mut words = [0_u64; GROUP_READ_WORDS];
-            let expected_bytes = std::mem::size_of_val(&words);
+            let mut words = vec![0_u64; 3 + self.counter_set.events().len() * 2];
+            let expected_bytes = std::mem::size_of_val(words.as_slice());
             // SAFETY: `words` is writable for exactly `expected_bytes`, and the
             // leader descriptor remains owned by this group for the call.
             let read_bytes = unsafe {
@@ -987,12 +1113,12 @@ mod linux {
                     "group read returned {read_bytes} bytes, expected {expected_bytes}"
                 )));
             }
-            decode_group_read(&words, &self.event_ids)
+            decode_group_read(&words, self.counter_set, &self.event_ids)
         }
 
         fn snapshot_ordered_values(&self) -> Result<CounterSnapshot, PmuFailure> {
-            let mut words = [0_u64; EVENT_SET.len() + 1];
-            let expected_bytes = std::mem::size_of_val(&words);
+            let mut words = vec![0_u64; self.counter_set.events().len() + 1];
+            let expected_bytes = std::mem::size_of_val(words.as_slice());
             // SAFETY: `words` is writable for exactly `expected_bytes`, and the
             // leader descriptor remains owned by this group for the call.
             let read_bytes = unsafe {
@@ -1014,7 +1140,7 @@ mod linux {
                     "ordered group read returned {read_bytes} bytes, expected {expected_bytes}"
                 )));
             }
-            decode_ordered_group_read(&words)
+            decode_ordered_group_read(&words, self.counter_set)
         }
 
         fn ioctl_group(
@@ -1059,7 +1185,7 @@ mod linux {
 
     fn cycle_attribute_attempt(name: &str, read_format: u64, flags: u64) -> PmuOpenAttempt {
         let attributes = PerfEventAttr {
-            event_type: PERF_TYPE_HARDWARE,
+            event_type: HardwareEvent::Cycles.perf_type(),
             size: std::mem::size_of::<PerfEventAttr>() as u32,
             config: HardwareEvent::Cycles.perf_config(),
             read_format,
@@ -1153,7 +1279,7 @@ mod linux {
         options: OpenOptions,
     ) -> Result<libc::c_int, PmuFailure> {
         let attributes = PerfEventAttr {
-            event_type: PERF_TYPE_HARDWARE,
+            event_type: event.perf_type(),
             size: 64,
             config: event.perf_config(),
             read_format: match options.read_format {
@@ -1256,7 +1382,7 @@ mod tests {
     static PROCESS_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     fn ids() -> BTreeMap<u64, HardwareEvent> {
-        EVENT_SET
+        GENERAL_EVENTS
             .into_iter()
             .enumerate()
             .map(|(index, event)| (100 + index as u64, event))
@@ -1268,69 +1394,72 @@ mod tests {
         let words = [
             6, 1_000, 900, 30, 102, 60, 100, 3, 105, 20, 104, 45, 101, 4, 103,
         ];
-        let snapshot = decode_group_read(&words, &ids()).unwrap();
+        let snapshot = decode_group_read(&words, CounterSet::General, &ids()).unwrap();
         assert_eq!(snapshot.time_enabled_ns, 1_000);
         assert_eq!(snapshot.time_running_ns, 900);
-        assert_eq!(snapshot.counters.cycles, 60);
-        assert_eq!(snapshot.counters.instructions, 45);
-        assert_eq!(snapshot.counters.l1d_accesses, 30);
-        assert_eq!(snapshot.counters.l1d_refills, 4);
-        assert_eq!(snapshot.counters.branches, 20);
-        assert_eq!(snapshot.counters.branch_mispredicts, 3);
+        assert_eq!(snapshot.counters.get(HardwareEvent::Cycles), Some(60));
+        assert_eq!(snapshot.counters.get(HardwareEvent::Instructions), Some(45));
+        assert_eq!(snapshot.counters.get(HardwareEvent::L1dAccesses), Some(30));
+        assert_eq!(snapshot.counters.get(HardwareEvent::L1dRefills), Some(4));
+        assert_eq!(snapshot.counters.get(HardwareEvent::Branches), Some(20));
+        assert_eq!(snapshot.counters.get(HardwareEvent::BranchMispredicts), Some(3));
     }
 
     #[test]
     fn malformed_group_reads_are_rejected() {
-        assert!(decode_group_read(&[6, 1, 1], &ids()).is_err());
+        assert!(decode_group_read(&[6, 1, 1], CounterSet::General, &ids()).is_err());
         let mut wrong_count = [0_u64; 15];
         wrong_count[0] = 5;
-        assert!(decode_group_read(&wrong_count, &ids()).is_err());
+        assert!(decode_group_read(&wrong_count, CounterSet::General, &ids()).is_err());
         let unknown = [6, 1, 1, 1, 999, 1, 100, 1, 101, 1, 102, 1, 103, 1, 104];
-        assert!(decode_group_read(&unknown, &ids()).is_err());
+        assert!(decode_group_read(&unknown, CounterSet::General, &ids()).is_err());
     }
 
     #[test]
     fn legacy_ordered_group_reads_preserve_declared_event_order() {
-        let snapshot = decode_ordered_group_read(&[6, 60, 45, 30, 4, 20, 3]).unwrap();
-        assert_eq!(snapshot.counters.cycles, 60);
-        assert_eq!(snapshot.counters.instructions, 45);
-        assert_eq!(snapshot.counters.l1d_accesses, 30);
-        assert_eq!(snapshot.counters.l1d_refills, 4);
-        assert_eq!(snapshot.counters.branches, 20);
-        assert_eq!(snapshot.counters.branch_mispredicts, 3);
-        assert!(decode_ordered_group_read(&[5, 1, 2, 3, 4, 5]).is_err());
+        let snapshot =
+            decode_ordered_group_read(&[6, 60, 45, 30, 4, 20, 3], CounterSet::General).unwrap();
+        assert_eq!(snapshot.counters.get(HardwareEvent::Cycles), Some(60));
+        assert_eq!(snapshot.counters.get(HardwareEvent::Instructions), Some(45));
+        assert_eq!(snapshot.counters.get(HardwareEvent::L1dAccesses), Some(30));
+        assert_eq!(snapshot.counters.get(HardwareEvent::L1dRefills), Some(4));
+        assert_eq!(snapshot.counters.get(HardwareEvent::Branches), Some(20));
+        assert_eq!(snapshot.counters.get(HardwareEvent::BranchMispredicts), Some(3));
+        assert!(decode_ordered_group_read(&[5, 1, 2, 3, 4, 5], CounterSet::General).is_err());
     }
 
     #[test]
     fn counter_deltas_saturate_and_ratios_are_bounded_by_zero_denominators() {
         let earlier = CounterSnapshot {
+            counter_set: CounterSet::General,
             time_enabled_ns: 100,
             time_running_ns: 80,
-            counters: CounterValues {
-                cycles: 100,
-                instructions: 60,
-                l1d_accesses: 20,
-                l1d_refills: 5,
-                branches: 10,
-                branch_mispredicts: 2,
-            },
+            counters: CounterValues::from([
+                (HardwareEvent::Cycles, 100),
+                (HardwareEvent::Instructions, 60),
+                (HardwareEvent::L1dAccesses, 20),
+                (HardwareEvent::L1dRefills, 5),
+                (HardwareEvent::Branches, 10),
+                (HardwareEvent::BranchMispredicts, 2),
+            ]),
         };
         let later = CounterSnapshot {
+            counter_set: CounterSet::General,
             time_enabled_ns: 90,
             time_running_ns: 90,
-            counters: CounterValues {
-                cycles: 160,
-                instructions: 105,
-                l1d_accesses: 30,
-                l1d_refills: 7,
-                branches: 15,
-                branch_mispredicts: 3,
-            },
+            counters: CounterValues::from([
+                (HardwareEvent::Cycles, 160),
+                (HardwareEvent::Instructions, 105),
+                (HardwareEvent::L1dAccesses, 30),
+                (HardwareEvent::L1dRefills, 7),
+                (HardwareEvent::Branches, 15),
+                (HardwareEvent::BranchMispredicts, 3),
+            ]),
         };
         let delta = later.delta_from(earlier);
         assert_eq!(delta.time_enabled_ns, 0);
         assert_eq!(delta.time_running_ns, 10);
-        assert_eq!(delta.counters.cycles, 60);
+        assert_eq!(delta.counters.get(HardwareEvent::Cycles), Some(60));
         assert_eq!(delta.instructions_per_cycle(), 0.75);
         assert_eq!(delta.l1d_refill_percent(), 20.0);
         assert_eq!(CounterDelta::default().cycles_per_instruction(), 0.0);
@@ -1340,34 +1469,46 @@ mod tests {
     fn overlapping_spans_form_independent_nested_deltas() {
         let outer_start = CounterSnapshot::default();
         let inner_start = CounterSnapshot {
+            counter_set: CounterSet::General,
             time_enabled_ns: 10,
             time_running_ns: 8,
-            counters: CounterValues {
-                cycles: 100,
-                instructions: 70,
-                ..CounterValues::default()
-            },
+            counters: CounterValues::from([
+                (HardwareEvent::Cycles, 100),
+                (HardwareEvent::Instructions, 70),
+            ]),
         };
         let inner_end = CounterSnapshot {
+            counter_set: CounterSet::General,
             time_enabled_ns: 20,
             time_running_ns: 16,
-            counters: CounterValues {
-                cycles: 180,
-                instructions: 130,
-                ..CounterValues::default()
-            },
+            counters: CounterValues::from([
+                (HardwareEvent::Cycles, 180),
+                (HardwareEvent::Instructions, 130),
+            ]),
         };
         let outer_end = CounterSnapshot {
+            counter_set: CounterSet::General,
             time_enabled_ns: 30,
             time_running_ns: 24,
-            counters: CounterValues {
-                cycles: 240,
-                instructions: 170,
-                ..CounterValues::default()
-            },
+            counters: CounterValues::from([
+                (HardwareEvent::Cycles, 240),
+                (HardwareEvent::Instructions, 170),
+            ]),
         };
-        assert_eq!(inner_end.delta_from(inner_start).counters.cycles, 80);
-        assert_eq!(outer_end.delta_from(outer_start).counters.cycles, 240);
+        assert_eq!(
+            inner_end
+                .delta_from(inner_start)
+                .counters
+                .get(HardwareEvent::Cycles),
+            Some(80)
+        );
+        assert_eq!(
+            outer_end
+                .delta_from(outer_start)
+                .counters
+                .get(HardwareEvent::Cycles),
+            None
+        );
     }
 
     #[test]
@@ -1383,7 +1524,7 @@ mod tests {
         };
         let value = serde_json::to_value(span).unwrap();
         assert_eq!(value["name"], "outer");
-        assert!(value["counters"]["counters"]["cycles"].is_number());
+        assert!(value["counters"]["counters"].as_object().unwrap().is_empty());
     }
 
     #[test]
@@ -1392,6 +1533,11 @@ mod tests {
         assert_eq!(metadata.len(), 6);
         assert_eq!(metadata[2].semantic, "Cortex-A9 L1 data-cache accesses");
         assert_eq!(metadata[3].semantic, "Cortex-A9 L1 data-cache refills");
+        let neon = event_metadata_for(CounterSet::CortexA9Neon);
+        assert_eq!(neon.len(), 7);
+        assert_eq!(neon[2].event, HardwareEvent::NeonInstructions);
+        assert_eq!(neon[2].perf_type, 4);
+        assert_eq!(neon[2].perf_config, 0x74);
     }
 
     #[test]
