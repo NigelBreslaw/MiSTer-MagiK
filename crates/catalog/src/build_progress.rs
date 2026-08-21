@@ -619,20 +619,35 @@ impl BuildProgressJournal {
     }
 
     pub fn record_shard(&mut self, shard: &CompletedShard) -> Result<(), String> {
-        let json = serde_json::to_string(shard)
-            .map_err(|error| format!("encode completed shard: {error}"))?;
+        self.record_shards(std::slice::from_ref(shard))
+    }
+
+    pub fn record_shards(&mut self, shards: &[CompletedShard]) -> Result<(), String> {
+        if shards.is_empty() {
+            return Ok(());
+        }
+        let encoded = shards
+            .iter()
+            .map(|shard| {
+                serde_json::to_string(shard)
+                    .map(|json| (shard.system_id.as_str(), json))
+                    .map_err(|error| format!("encode completed shard: {error}"))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         let tx = self
             .conn
             .transaction()
-            .map_err(|error| format!("begin shard checkpoint: {error}"))?;
-        tx.execute(
-            "INSERT INTO completed_shards(system_id,shard_json) VALUES(?1,?2)
-                    ON CONFLICT(system_id) DO UPDATE SET shard_json=excluded.shard_json",
-            params![shard.system_id, json],
-        )
-        .map_err(|error| format!("write shard checkpoint: {error}"))?;
+            .map_err(|error| format!("begin shard checkpoint batch: {error}"))?;
+        for (system_id, json) in encoded {
+            tx.execute(
+                "INSERT INTO completed_shards(system_id,shard_json) VALUES(?1,?2)
+                        ON CONFLICT(system_id) DO UPDATE SET shard_json=excluded.shard_json",
+                params![system_id, json],
+            )
+            .map_err(|error| format!("write shard checkpoint: {error}"))?;
+        }
         tx.commit()
-            .map_err(|error| format!("commit shard checkpoint: {error}"))
+            .map_err(|error| format!("commit shard checkpoint batch: {error}"))
     }
 
     pub fn completed_shards(&self) -> Result<Vec<CompletedShard>, String> {
@@ -1003,14 +1018,24 @@ mod tests {
             content_hash: "def".into(),
             manifest_system_json: "{}".into(),
         };
-        journal.record_shard(&shard).unwrap();
+        let snes = CompletedShard {
+            system_id: "snes".into(),
+            generation: 4,
+            sqlite_path: "systems/snes/4.sqlite3".into(),
+            navigation_path: "systems/snes/4.nav".into(),
+            content_hash: "ghi".into(),
+            manifest_system_json: "{}".into(),
+        };
+        journal
+            .record_shards(&[shard.clone(), snes.clone()])
+            .unwrap();
         drop(journal);
         let (journal, status) =
             BuildProgressJournal::open_or_create(&path, &contract(), &targets()).unwrap();
         assert_eq!(status, OpenStatus::Resumed);
         assert_eq!(journal.build_id(), id);
         assert_eq!(journal.completed_targets().unwrap(), vec![completed()]);
-        assert_eq!(journal.completed_shards().unwrap(), vec![shard]);
+        assert_eq!(journal.completed_shards().unwrap(), vec![shard, snes]);
         remove(&path).unwrap();
     }
 
