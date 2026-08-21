@@ -533,6 +533,10 @@ impl NativeDevice {
                         let session = connect(10)?;
                         run_catalog_inspect(&session, &[])
                     }
+                    CatalogCommand::RomAudit(args) => {
+                        let session = connect(10)?;
+                        run_catalog_rom_audit(&session, &args.out)
+                    }
                     CatalogCommand::Query(args) => catalog_query(&device_strings([
                         "--database",
                         &args.database,
@@ -27442,6 +27446,37 @@ fn run_catalog_inspect(sess: &Session, args: &[String]) -> Result<()> {
     }
     if let Some(error) = exec_failure_message("catalog inspect", &out) {
         return Err(error.into());
+    }
+    Ok(())
+}
+
+fn run_catalog_rom_audit(sess: &Session, output: &Path) -> Result<()> {
+    let status_text = remote_read(sess, MAIN_STATUS_REMOTE)
+        .ok_or("active Main status is unavailable for Arcade ROM audit")?;
+    let status: Value = serde_json::from_str(&status_text)?;
+    let binary = active_installed_gui_binary(&status)?;
+    let command = remote_subcommand(binary, "catalog-arcade-rom-audit", &[]);
+    let out = exec(sess, &command, true)?;
+    if !out.stderr.trim().is_empty() {
+        eprint!("[stderr] {}", out.stderr);
+    }
+    if let Some(error) = exec_failure_message("Arcade ROM visibility audit", &out) {
+        return Err(error.into());
+    }
+    if let Some(parent) = output
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(output, &out.stdout)?;
+    println!("arcade_rom_visibility_report={}", output.display());
+    if let Some(summary) = out
+        .stdout
+        .lines()
+        .find(|line| line.starts_with("arcade_rom_visibility_summary_tsv\t"))
+    {
+        println!("{summary}");
     }
     Ok(())
 }

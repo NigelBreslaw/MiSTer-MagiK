@@ -21,6 +21,7 @@ impl CommandSpec {
 }
 
 pub const CATALOG_INSPECT_COMMAND: &str = "catalog-v3-inspect";
+pub const CATALOG_ROM_AUDIT_COMMAND: &str = "catalog-arcade-rom-audit";
 pub const CATALOG_CORPUS_INVENTORY_COMMAND: &str = "catalog-corpus-inventory";
 pub const CATALOG_REGISTRY_REPORT_COMMAND: &str = "catalog-v3-registry-report";
 
@@ -87,6 +88,7 @@ pub const COMMANDS: &[CommandSpec] = &[
     #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
     CommandSpec::new("preview-index-refresh-bench", CommandKind::PreFpga),
     CommandSpec::new(CATALOG_INSPECT_COMMAND, CommandKind::PreFpga),
+    CommandSpec::new(CATALOG_ROM_AUDIT_COMMAND, CommandKind::PreFpga),
     CommandSpec::new(CATALOG_REGISTRY_REPORT_COMMAND, CommandKind::PreFpga),
     #[cfg(feature = "diagnostics")]
     CommandSpec::new("hbmame-metadata-from-library", CommandKind::PreFpga),

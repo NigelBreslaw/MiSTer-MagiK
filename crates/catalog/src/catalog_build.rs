@@ -25,6 +25,7 @@ pub(crate) struct CatalogRefreshPipeline<'a> {
     archive_reader: crate::catalog_config::ArchiveReaderConfig,
     sqlite_build_dir_override: Option<PathBuf>,
     arcade_updater_index: Option<PathBuf>,
+    enforce_arcade_rom_presence: bool,
 }
 
 impl<'a> CatalogRefreshPipeline<'a> {
@@ -34,6 +35,7 @@ impl<'a> CatalogRefreshPipeline<'a> {
             archive_reader: crate::catalog_config::ArchiveReaderConfig::default(),
             sqlite_build_dir_override: None,
             arcade_updater_index: None,
+            enforce_arcade_rom_presence: true,
         }
     }
 
@@ -48,6 +50,7 @@ impl<'a> CatalogRefreshPipeline<'a> {
                 .sqlite_build_dir_override()
                 .map(Path::to_path_buf),
             arcade_updater_index: None,
+            enforce_arcade_rom_presence: true,
         }
     }
 
@@ -57,11 +60,18 @@ impl<'a> CatalogRefreshPipeline<'a> {
         self
     }
 
+    #[cfg(feature = "builder")]
+    pub(crate) fn with_arcade_rom_presence(mut self, enforce: bool) -> Self {
+        self.enforce_arcade_rom_presence = enforce;
+        self
+    }
+
     fn configure_arcade_updater_index(&self, indexer: LibraryIndexer<'a>) -> LibraryIndexer<'a> {
-        match self.arcade_updater_index.as_deref() {
+        let indexer = match self.arcade_updater_index.as_deref() {
             Some(path) => indexer.with_arcade_updater_index(path),
             None => indexer,
-        }
+        };
+        indexer.with_arcade_rom_presence(self.enforce_arcade_rom_presence)
     }
 
     pub(crate) fn rebuild_with_events(

@@ -1210,6 +1210,162 @@ pub(crate) fn scan_arcade_bootstrap_ram_foreground_with_paths(
     )
 }
 
+#[cfg(feature = "builder")]
+pub fn audit_arcade_rom_visibility_with_paths(
+    paths: &crate::device_layout::CatalogPaths,
+    archive_cache: &crate::catalog_config::ArchiveCacheConfig,
+) -> Result<String, String> {
+    use crate::arcade_rom_inventory::RomEligibility;
+    use crate::media_metadata::{PrimaryRomRequirement, RomNamespace};
+
+    let root = crate::arcade_catalog::DEFAULT_ARCADE_ROOT;
+    let cfg = BenchConfig {
+        roots: vec![root.to_string()],
+        sqlite_path: paths.library_sqlite().to_path_buf(),
+    };
+    let filtered = CatalogRefreshPipeline::with_archive_cache(&cfg, archive_cache)
+        .with_arcade_updater_index(paths.arcade_updater_index())
+        .scan_ram_artifact_foreground_with_events(None, None)
+        .catalog(root);
+    let unfiltered = CatalogRefreshPipeline::with_archive_cache(&cfg, archive_cache)
+        .with_arcade_updater_index(paths.arcade_updater_index())
+        .with_arcade_rom_presence(false)
+        .scan_ram_artifact_foreground_with_events(None, None)
+        .catalog(root);
+    let filtered_keys = filtered
+        .games
+        .iter()
+        .map(|game| {
+            (
+                game.system_id.to_ascii_lowercase(),
+                game.title.to_ascii_lowercase(),
+            )
+        })
+        .collect::<HashSet<_>>();
+    let unfiltered_keys = unfiltered
+        .games
+        .iter()
+        .map(|game| {
+            (
+                game.system_id.to_ascii_lowercase(),
+                game.title.to_ascii_lowercase(),
+            )
+        })
+        .collect::<HashSet<_>>();
+    let mut old_only = unfiltered
+        .games
+        .iter()
+        .filter(|game| {
+            !filtered_keys.contains(&(
+                game.system_id.to_ascii_lowercase(),
+                game.title.to_ascii_lowercase(),
+            ))
+        })
+        .collect::<Vec<_>>();
+    old_only.sort_by_cached_key(|game| game.title.to_ascii_lowercase());
+    let filtered_only = filtered
+        .games
+        .iter()
+        .filter(|game| {
+            !unfiltered_keys.contains(&(
+                game.system_id.to_ascii_lowercase(),
+                game.title.to_ascii_lowercase(),
+            ))
+        })
+        .count();
+
+    let updater_rows =
+        crate::arcade_updater_index::ArcadeUpdaterIndex::read(paths.arcade_updater_index())
+            .map(|index| {
+                index
+                    .rows
+                    .into_iter()
+                    .map(|row| (row.path.to_ascii_lowercase(), row))
+                    .collect::<HashMap<_, _>>()
+            })
+            .unwrap_or_default();
+    let inventory = crate::arcade_rom_inventory::ArcadeRomInventory::from_library_roots(&cfg.roots);
+    let mut false_negatives = 0usize;
+    let mut rows = String::new();
+    for game in &old_only {
+        let path = Path::new(game.mra_path.as_ref());
+        let key = arcade_updater_audit_key(path);
+        let indexed = key
+            .as_deref()
+            .and_then(|key| updater_rows.get(key))
+            .filter(|row| {
+                std::fs::metadata(path)
+                    .map(|metadata| metadata.len() == row.size)
+                    .unwrap_or(false)
+            });
+        let requirement = indexed
+            .map(|row| row.primary_rom.clone())
+            .or_else(|| {
+                crate::media_metadata::inspect_mra_path(path)
+                    .ok()
+                    .map(|inspection| inspection.primary_rom)
+            })
+            .unwrap_or(PrimaryRomRequirement::Ambiguous);
+        let eligibility = inventory.eligibility(&requirement);
+        let present = eligibility == RomEligibility::Eligible;
+        false_negatives += usize::from(present);
+        let (namespace, archive) = match &requirement {
+            PrimaryRomRequirement::None => ("embedded", String::new()),
+            PrimaryRomRequirement::Archive { namespace, setname } => (
+                match namespace {
+                    RomNamespace::Mame => "mame",
+                    RomNamespace::Hbmame => "hbmame",
+                },
+                format!("{setname}.zip"),
+            ),
+            PrimaryRomRequirement::Ambiguous => ("ambiguous", String::new()),
+        };
+        rows.push_str(&format!(
+            "arcade_rom_visibility_row_tsv\ttitle={}\tlaunch_ref={}\tnamespace={}\tprimary_archive={}\teligibility={}\tpresent={}\tindex_match={}\n",
+            sanitize_catalog_audit_field(&game.title),
+            sanitize_catalog_audit_field(&game.mra_path),
+            namespace,
+            sanitize_catalog_audit_field(&archive),
+            match eligibility {
+                RomEligibility::Eligible => "eligible",
+                RomEligibility::Missing => "missing",
+                RomEligibility::Ambiguous => "ambiguous",
+            },
+            u8::from(present),
+            u8::from(indexed.is_some()),
+        ));
+    }
+    let summary = format!(
+        "arcade_rom_visibility_summary_tsv\tunfiltered_games={}\tfiltered_games={}\told_only={}\tfiltered_only={}\tfalse_negatives={}\tmame_roms={}\thbmame_roms={}\tinventory_fingerprint={}\n",
+        unfiltered.len(),
+        filtered.len(),
+        old_only.len(),
+        filtered_only,
+        false_negatives,
+        inventory.counts().0,
+        inventory.counts().1,
+        inventory.fingerprint(),
+    );
+    Ok(summary + &rows)
+}
+
+#[cfg(feature = "builder")]
+fn arcade_updater_audit_key(path: &Path) -> Option<String> {
+    let components = path
+        .components()
+        .map(|component| component.as_os_str().to_str())
+        .collect::<Option<Vec<_>>>()?;
+    let arcade = components
+        .iter()
+        .position(|component| component.eq_ignore_ascii_case("_Arcade"))?;
+    Some(components[arcade..].join("/").to_ascii_lowercase())
+}
+
+#[cfg(feature = "builder")]
+fn sanitize_catalog_audit_field(value: &str) -> String {
+    value.replace(['\t', '\r', '\n'], " ")
+}
+
 /// CPU0-confined variant used while the first-run animation owns CPU1.
 pub fn scan_arcade_bootstrap_ram_background_with_events(
     progress: ProgressCallback<'_>,

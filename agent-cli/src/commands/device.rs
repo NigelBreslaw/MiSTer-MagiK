@@ -344,10 +344,17 @@ pub struct CrtFontAbCaptureArgs {
 #[derive(Debug, Subcommand)]
 pub enum CatalogCommand {
     Inspect,
+    RomAudit(CatalogRomAuditArgs),
     Query(CatalogQueryArgs),
     Cores,
     /// Delete the Dev catalog and screenshot packs, then perform one supervised reboot.
     Purge(CatalogPurgeArgs),
+}
+
+#[derive(Debug, Args)]
+pub struct CatalogRomAuditArgs {
+    #[arg(long)]
+    pub(crate) out: PathBuf,
 }
 
 #[derive(Debug, Args)]

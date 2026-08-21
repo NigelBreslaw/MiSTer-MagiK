@@ -389,6 +389,10 @@ fn dispatch_pre_fpga(
         command_args::CATALOG_INSPECT_COMMAND => {
             run_catalog_v3_inspect(process_config.catalog_paths())
         }
+        command_args::CATALOG_ROM_AUDIT_COMMAND => run_catalog_arcade_rom_audit(
+            process_config.catalog_paths(),
+            process_config.archive_cache(),
+        ),
         command_args::CATALOG_REGISTRY_REPORT_COMMAND => {
             run_catalog_v3_registry_report(process_config.catalog_paths())
         }
@@ -469,6 +473,19 @@ fn run_catalog_v3_inspect(paths: &mister_magik_catalog::device_layout::CatalogPa
         Ok(report) => crate::ui_log!("{report}"),
         Err(error) => {
             crate::ui_errln!("catalog_v3_summary_tsv\tvalid=0\terror={error}");
+            std::process::exit(1);
+        }
+    }
+}
+
+fn run_catalog_arcade_rom_audit(
+    paths: &mister_magik_catalog::device_layout::CatalogPaths,
+    archive_cache: &mister_magik_catalog::catalog_config::ArchiveCacheConfig,
+) {
+    match library_db::audit_arcade_rom_visibility_with_paths(paths, archive_cache) {
+        Ok(report) => crate::ui_log!("{report}"),
+        Err(error) => {
+            crate::ui_errln!("arcade_rom_visibility_summary_tsv\tvalid=0\terror={error}");
             std::process::exit(1);
         }
     }

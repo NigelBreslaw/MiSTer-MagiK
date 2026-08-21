@@ -106,6 +106,7 @@ pub(crate) struct LibraryIndexer<'a> {
     priority: LibraryScanPriority,
     durable_resume: bool,
     arcade_updater_index: Option<PathBuf>,
+    enforce_arcade_rom_presence: bool,
 }
 
 impl<'a> LibraryIndexer<'a> {
@@ -123,6 +124,7 @@ impl<'a> LibraryIndexer<'a> {
             priority: LibraryScanPriority::Background,
             durable_resume: library_db::env_bool("MISTER_CATALOG_DURABLE_RESUME"),
             arcade_updater_index: None,
+            enforce_arcade_rom_presence: true,
         }
     }
 
@@ -136,6 +138,7 @@ impl<'a> LibraryIndexer<'a> {
             priority: LibraryScanPriority::Foreground,
             durable_resume: library_db::env_bool("MISTER_CATALOG_DURABLE_RESUME"),
             arcade_updater_index: None,
+            enforce_arcade_rom_presence: true,
         }
     }
 
@@ -146,6 +149,11 @@ impl<'a> LibraryIndexer<'a> {
 
     pub(crate) fn with_arcade_updater_index(mut self, path: &Path) -> Self {
         self.arcade_updater_index = Some(path.to_path_buf());
+        self
+    }
+
+    pub(crate) fn with_arcade_rom_presence(mut self, enforce: bool) -> Self {
+        self.enforce_arcade_rom_presence = enforce;
         self
     }
 
@@ -167,6 +175,7 @@ impl<'a> LibraryIndexer<'a> {
                 audit_mode: CoverageAuditMode::Inline,
                 durable_resume: self.durable_resume,
                 arcade_updater_index: self.arcade_updater_index.as_deref(),
+                enforce_arcade_rom_presence: self.enforce_arcade_rom_presence,
             },
             progress,
             scan_events,
@@ -200,6 +209,7 @@ impl<'a> LibraryIndexer<'a> {
                 audit_mode: CoverageAuditMode::Deferred,
                 durable_resume: self.durable_resume,
                 arcade_updater_index: self.arcade_updater_index.as_deref(),
+                enforce_arcade_rom_presence: self.enforce_arcade_rom_presence,
             },
             progress,
             scan_events,
@@ -924,6 +934,7 @@ struct LibraryScanExecution<'a> {
     audit_mode: CoverageAuditMode,
     durable_resume: bool,
     arcade_updater_index: Option<&'a Path>,
+    enforce_arcade_rom_presence: bool,
 }
 
 fn is_arcade_bootstrap_scan(roots: &[String], durable_resume: bool) -> bool {
@@ -1157,6 +1168,7 @@ fn scan_library_with_progress_and_events(
         audit_mode,
         durable_resume,
         arcade_updater_index,
+        enforce_arcade_rom_presence,
     } = execution;
     crate::cooperative_work::checkpoint();
     let discover_t = Instant::now();
@@ -1709,6 +1721,10 @@ fn scan_library_with_progress_and_events(
                         };
                         match rom_inventory.eligibility(&inspection.primary_rom) {
                             crate::arcade_rom_inventory::RomEligibility::Eligible => {
+                                arcade_mra_eligible = arcade_mra_eligible.saturating_add(1);
+                                Some(Some(inspection.header))
+                            }
+                            _ if !enforce_arcade_rom_presence => {
                                 arcade_mra_eligible = arcade_mra_eligible.saturating_add(1);
                                 Some(Some(inspection.header))
                             }
