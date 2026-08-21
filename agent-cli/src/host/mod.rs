@@ -20,7 +20,7 @@ use std::fs::{self, OpenOptions};
 use std::io::{self, IsTerminal, Read, Write};
 use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::LazyLock;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -11184,6 +11184,8 @@ const STREAMLINE_REMOTE_LOG: &str = "/tmp/mister-magik/streamline-capture/gatord
 const STREAMLINE_REMOTE_READY: &str = "/tmp/mister-magik/streamline-capture/gatord.ready";
 const STREAMLINE_TRACEFS_MOUNT: &str = "/sys/kernel/tracing";
 const STREAMLINE_TRACEFS_MARKER: &str = "/tmp/mister-magik/streamline-capture/owned-tracefs.mount";
+const CORTEX_A9_NEON_GATOR_COUNTERS: &str = "ARMv7_Cortex_A9_ccnt,ARMv7_Cortex_A9_cnt0:0x68,ARMv7_Cortex_A9_cnt1:0x74,ARMv7_Cortex_A9_cnt2:0x8c,ARMv7_Cortex_A9_cnt3:0x61,ARMv7_Cortex_A9_cnt4:0x04,ARMv7_Cortex_A9_cnt5:0x03";
+const STREAMLINE_ANALYZER_TIMEOUT: Duration = Duration::from_secs(120);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum StreamlineWorkload {
@@ -11520,6 +11522,13 @@ fn profile_installed_streamline(
         "sample_rate": "low",
         "exclude_kernel": false,
         "call_stack_unwinding": false,
+        "counter_set": "cortex-a9-neon",
+        "counters": CORTEX_A9_NEON_GATOR_COUNTERS.split(',').collect::<Vec<_>>(),
+        "analysis": if output_dir.join("streamline-analysis/summary.json").is_file() {
+            "generated"
+        } else {
+            "not-requested"
+        },
     });
     fs::write(
         output_dir.join("summary.json"),
@@ -13221,6 +13230,8 @@ fn streamline_capture_manifest(
         "capture_ended_monotonic_ns": ended_monotonic_ns,
         "capture_duration_ns": ended_monotonic_ns.saturating_sub(started_monotonic_ns),
         "capture_mode": "system-wide-low-kernel-no-unwind",
+        "counter_set": "cortex-a9-neon",
+        "counters": CORTEX_A9_NEON_GATOR_COUNTERS.split(',').collect::<Vec<_>>(),
         "max_duration_seconds": spec.max_duration_seconds,
         "system_wide": true,
         "exclude_kernel": false,
@@ -13265,12 +13276,16 @@ fn streamline_prepare_command() -> String {
 
 fn streamline_capture_command(workload: StreamlineWorkload) -> String {
     let app = match workload {
-        StreamlineWorkload::Screensaver => development_gui_command("pmu-profile screensaver"),
+        StreamlineWorkload::Screensaver => format!(
+            "MISTER_PMU_PROFILE=1 MISTER_PMU_COUNTER_SET=cortex-a9-neon MISTER_PMU_SAMPLE_EVERY=1 {}",
+            development_gui_command("pmu-profile screensaver")
+        ),
     };
     let invocation = format!(
-        "{gatord} --output {apc} --max-duration 10 --sample-rate low --system-wide no --exclude-kernel no --call-stack-unwinding no --stop-on-exit yes --capture-log --app {app}",
+        "{gatord} --output {apc} --max-duration 10 --sample-rate low --system-wide no --exclude-kernel no --call-stack-unwinding no --stop-on-exit yes --capture-log --counters {counters} --app {app}",
         gatord = sh(STREAMLINE_REMOTE_GATORD),
         apc = sh(STREAMLINE_REMOTE_APC),
+        counters = sh(CORTEX_A9_NEON_GATOR_COUNTERS),
     );
     format!(
         "set +e; {invocation} & pid=$!; printf '%s\\n' \"$pid\" > {pid_file}; wait \"$pid\"; rc=$?; rm -f {pid_file}; exit \"$rc\"",
@@ -13281,10 +13296,11 @@ fn streamline_capture_command(workload: StreamlineWorkload) -> String {
 
 fn streamline_system_wide_capture_command(spec: SystemWideStreamlineCaptureSpec) -> String {
     let invocation = format!(
-        "{gatord} --output {apc} --max-duration {max_duration} --sample-rate low --system-wide=yes --exclude-kernel=no --call-stack-unwinding=no --capture-log",
+        "{gatord} --output {apc} --max-duration {max_duration} --sample-rate low --system-wide=yes --exclude-kernel=no --call-stack-unwinding=no --capture-log --counters {counters}",
         gatord = sh(STREAMLINE_REMOTE_GATORD),
         apc = sh(STREAMLINE_REMOTE_APC),
         max_duration = spec.max_duration_seconds,
+        counters = sh(CORTEX_A9_NEON_GATOR_COUNTERS),
     );
     format!(
         "set -eu; tracefs={tracefs}; marker={marker}; current=$(awk '$2 == \"{tracefs_path}\" && $3 == \"tracefs\" {{ print }}' /proc/mounts); if test -z \"$current\"; then mount -t tracefs tracefs \"$tracefs\"; awk '$2 == \"{tracefs_path}\" && $3 == \"tracefs\" {{ print }}' /proc/mounts > \"$marker\"; test -s \"$marker\"; fi; set +e; {invocation} >{log} 2>&1 </dev/null & pid=$!; printf '%s\\n' \"$pid\" > {pid_file}; i=0; while test \"$i\" -lt 100; do if ! kill -0 \"$pid\" 2>/dev/null; then wait \"$pid\"; rc=$?; cat {log} >&2 || true; exit \"$rc\"; fi; if test -d {apc}; then printf 'ready\\n' > {ready}; break; fi; i=$((i+1)); sleep 0.1; done; if test ! -f {ready}; then kill -TERM \"$pid\" 2>/dev/null || true; wait \"$pid\"; cat {log} >&2 || true; exit 22; fi; wait \"$pid\"; exit $?",
@@ -13392,6 +13408,83 @@ fn extract_streamline_archive(archive: &Path, output_dir: &Path) -> Result<()> {
     if !capture.is_dir() || fs::read_dir(&capture)?.next().is_none() {
         return Err("extracted Streamline capture is empty".into());
     }
+    analyze_streamline_capture(&capture, output_dir)?;
+    Ok(())
+}
+
+fn analyze_streamline_capture(capture: &Path, output_dir: &Path) -> Result<()> {
+    let Some(analyzer) = env::var_os("MISTER_STREAMLINE_ANALYZER_PATH") else {
+        return Ok(());
+    };
+    let analyzer = PathBuf::from(analyzer);
+    if !analyzer.is_absolute() {
+        return Err("MISTER_STREAMLINE_ANALYZER_PATH must be an absolute path".into());
+    }
+    let metadata = fs::metadata(&analyzer)?;
+    if !metadata.is_file() || metadata.len() == 0 {
+        return Err("MISTER_STREAMLINE_ANALYZER_PATH must name a non-empty regular file".into());
+    }
+    let analysis_dir = output_dir.join("streamline-analysis");
+    fs::create_dir_all(&analysis_dir)?;
+    let stdout_path = analysis_dir.join("sl-analyze.stdout.log");
+    let stderr_path = analysis_dir.join("sl-analyze.stderr.log");
+    let stdout = fs::File::create(&stdout_path)?;
+    let stderr = fs::File::create(&stderr_path)?;
+    let mut child = Command::new(&analyzer)
+        .arg("-o")
+        .arg(&analysis_dir)
+        .arg(capture)
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(stdout))
+        .stderr(Stdio::from(stderr))
+        .spawn()?;
+    let started = Instant::now();
+    let status = loop {
+        if let Some(status) = child.try_wait()? {
+            break status;
+        }
+        if started.elapsed() >= STREAMLINE_ANALYZER_TIMEOUT {
+            child.kill()?;
+            let _ = child.wait();
+            return Err(format!(
+                "sl-analyze exceeded the {} second timeout; see {}",
+                STREAMLINE_ANALYZER_TIMEOUT.as_secs(),
+                stderr_path.display()
+            )
+            .into());
+        }
+        thread::sleep(Duration::from_millis(100));
+    };
+    if !status.success() {
+        return Err(format!(
+            "sl-analyze failed with {status}; see {}",
+            stderr_path.display()
+        )
+        .into());
+    }
+    let csv_files = fs::read_dir(&analysis_dir)?
+        .filter_map(std::result::Result::ok)
+        .filter_map(|entry| entry.file_name().into_string().ok())
+        .filter(|name| name.ends_with(".csv"))
+        .collect::<Vec<_>>();
+    if csv_files.is_empty() {
+        return Err("sl-analyze completed without producing CSV output".into());
+    }
+    fs::write(
+        analysis_dir.join("summary.json"),
+        format!(
+            "{}\n",
+            serde_json::to_string_pretty(&json!({
+                "schema": "mister-magik-streamline-analysis-v1",
+                "status": "passed",
+                "analyzer": analyzer,
+                "capture": capture,
+                "output_directory": analysis_dir,
+                "csv_files": csv_files,
+                "timeout_seconds": STREAMLINE_ANALYZER_TIMEOUT.as_secs(),
+            }))?
+        ),
+    )?;
     Ok(())
 }
 
@@ -29121,6 +29214,10 @@ mod tests {
         assert!(command.contains("--stop-on-exit yes"));
         assert!(command.ends_with("exit \"$rc\""));
         assert!(command.contains("pmu-profile screensaver"));
+        assert!(command.contains("MISTER_PMU_COUNTER_SET=cortex-a9-neon"));
+        assert!(command.contains("--counters"));
+        assert!(command.contains("ARMv7_Cortex_A9_cnt1:0x74"));
+        assert!(command.contains("ARMv7_Cortex_A9_cnt2:0x8c"));
     }
 
     #[test]
@@ -29133,6 +29230,8 @@ mod tests {
         assert!(start.contains("--exclude-kernel=no"));
         assert!(start.contains("--call-stack-unwinding=no"));
         assert!(!start.contains("--app"));
+        assert!(start.contains("--counters"));
+        assert!(start.contains("ARMv7_Cortex_A9_cnt1:0x74"));
         assert!(!start.contains("nohup"));
         assert!(start.contains("wait \"$pid\""));
         assert!(start.contains(STREAMLINE_REMOTE_PID));

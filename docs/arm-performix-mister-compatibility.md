@@ -92,7 +92,10 @@ does not need recompilation.
 The typed workflow is Dev-only. It uploads to `/tmp`, captures the fixed
 `pmu-profile screensaver` workload for at most ten seconds, uses the low sample
 rate, includes kernel execution because this PMUv1 rejects privilege exclusion,
-and disables call-stack unwinding. It retrieves both an extracted
+and disables call-stack unwinding. Every capture explicitly programs the
+Cortex-A9 cycle counter plus raw events `0x68`, `0x74`, `0x8c`, `0x61`, `0x04`,
+and `0x03`; the app workload selects the matching runtime counter set. It
+retrieves both an extracted
 `mister-magik.apc` directory and its SHA-256-verified archive, then removes the
 remote daemon and capture. Cleanup may terminate only the PID recorded by this
 capture and only while `/proc/PID/exe` still resolves to the uploaded daemon.
@@ -122,6 +125,21 @@ cleanup. It never persists the mount in boot configuration.
 The host keeps the collector's SSH channel open for the capture lifetime while
 an independent channel drives the input route; `gatord` is never orphaned into
 an unowned remote session.
+
+Optional headless analysis is opt-in and never launches the Streamline GUI:
+
+```text
+MISTER_GATORD_PATH=/absolute/path/to/gatord \
+MISTER_STREAMLINE_ANALYZER_PATH=/absolute/path/to/sl-analyze \
+scripts/agent benchmark streamline
+```
+
+The analyzer path must be absolute and name a non-empty regular file. The host
+pre-creates `streamline-analysis/`, passes it with explicit `-o`, redirects both
+streams to retained log files, and enforces a 120-second timeout. It never uses
+`--no-output`. A successful run must produce CSV output and a structured
+analysis summary; any analyzer failure invalidates the benchmark without
+changing or opening the original APC in the GUI.
 
 The combined diagnostic command uses the same explicit daemon and makes this
 system timeline a required fifth arm rather than an optional add-on:
