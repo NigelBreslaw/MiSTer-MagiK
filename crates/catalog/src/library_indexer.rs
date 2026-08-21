@@ -942,6 +942,9 @@ struct ArcadeMraPrefetch {
     index_hits: usize,
     index_misses: usize,
     fallback_reads: usize,
+    identity_stats: usize,
+    identity_stat_failures: usize,
+    identity_stat_us: u64,
     index_load_us: u64,
 }
 
@@ -969,6 +972,9 @@ fn prefetch_arcade_mra_metadata(
             index_hits: 0,
             index_misses: 0,
             fallback_reads: 0,
+            identity_stats: 0,
+            identity_stat_failures: 0,
+            identity_stat_us: 0,
             index_load_us: 0,
         };
     }
@@ -1007,12 +1013,31 @@ fn prefetch_arcade_mra_metadata(
     let mut inspections = HashMap::with_capacity(paths.len());
     let mut fallback_paths = Vec::new();
     let mut index_hits = 0usize;
+    let mut identity_stats = 0usize;
+    let mut identity_stat_failures = 0usize;
+    let mut identity_stat_us = 0u64;
     for (path, size) in paths {
         let indexed = arcade_updater_key(&path)
             .and_then(|key| indexed_rows.get(&key))
+            .filter(|row| row.primary_rom != media_metadata::PrimaryRomRequirement::Ambiguous)
             .filter(|row| {
-                size == row.size
-                    && row.primary_rom != media_metadata::PrimaryRomRequirement::Ambiguous
+                let observed_size = if size == 0 {
+                    let stat_started = Instant::now();
+                    identity_stats = identity_stats.saturating_add(1);
+                    let observed = std::fs::metadata(&path).map(|metadata| metadata.len());
+                    identity_stat_us =
+                        identity_stat_us.saturating_add(stat_started.elapsed().as_micros() as u64);
+                    match observed {
+                        Ok(observed) => observed,
+                        Err(_) => {
+                            identity_stat_failures = identity_stat_failures.saturating_add(1);
+                            return false;
+                        }
+                    }
+                } else {
+                    size
+                };
+                observed_size == row.size
             });
         if let Some(row) = indexed {
             inspections.insert(
@@ -1066,6 +1091,9 @@ fn prefetch_arcade_mra_metadata(
         index_hits,
         index_misses: fallback_paths.len(),
         fallback_reads: fallback_paths.len(),
+        identity_stats,
+        identity_stat_failures,
+        identity_stat_us,
         index_load_us,
     }
 }
@@ -1237,7 +1265,7 @@ fn scan_library_with_progress_and_events(
             "arcade_mra_prefetch",
             prefetch_t.elapsed().as_micros() as u64,
             format!(
-                "files={} successes={} failures={} workers={} index_status={} index_path={} index_error={} index_rows={} index_file_sha256={} index_hits={} index_misses={} fallback_reads={} index_load_us={}",
+                "files={} successes={} failures={} workers={} index_status={} index_path={} index_error={} index_rows={} index_file_sha256={} index_hits={} index_misses={} fallback_reads={} identity_stats={} identity_stat_failures={} identity_stat_us={} index_load_us={}",
                 prefetched_arcade_mra.len(),
                 successes,
                 prefetched_arcade_mra.len().saturating_sub(successes),
@@ -1255,6 +1283,9 @@ fn scan_library_with_progress_and_events(
                 prefetch.index_hits,
                 prefetch.index_misses,
                 prefetch.fallback_reads,
+                prefetch.identity_stats,
+                prefetch.identity_stat_failures,
+                prefetch.identity_stat_us,
                 prefetch.index_load_us,
             ),
         );
@@ -2326,7 +2357,7 @@ mod timing_tests {
             vec![DiscoveryEvent::File(crate::catalog_scan::FoundFile {
                 path: mra.clone(),
                 ext: "mra".to_string(),
-                size: std::fs::metadata(&mra).unwrap().len(),
+                size: 0,
                 mtime_secs: 0,
             })]
         };
@@ -2342,6 +2373,8 @@ mod timing_tests {
         assert!(indexed.index_error.is_none());
         assert_eq!(indexed.index_hits, 1);
         assert_eq!(indexed.fallback_reads, 0);
+        assert_eq!(indexed.identity_stats, 1);
+        assert_eq!(indexed.identity_stat_failures, 0);
         assert_eq!(
             indexed.inspections[&mra]
                 .as_ref()
@@ -2356,6 +2389,7 @@ mod timing_tests {
         let fallback = prefetch_arcade_mra_metadata(&event(), Some(&index_path));
         assert_eq!(fallback.index_hits, 0);
         assert_eq!(fallback.fallback_reads, 1);
+        assert_eq!(fallback.identity_stats, 1);
         assert_eq!(
             fallback.inspections[&mra]
                 .as_ref()
