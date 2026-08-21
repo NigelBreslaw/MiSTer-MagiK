@@ -17163,6 +17163,45 @@ fn cleanup_cold_boot_profile(config: &NativeDeviceConfig) -> Result<()> {
     Ok(())
 }
 
+fn collect_cold_boot_pprof(session: &Session, output_dir: &Path) -> Result<Value> {
+    let remote_complete = format!("{COLD_BOOT_PROFILE_REMOTE_DIR}/profile.json");
+    let metadata_text =
+        wait_launch_return_artifact(session, &remote_complete, Duration::from_secs(10))?;
+    let metadata: Value = serde_json::from_str(metadata_text.trim())?;
+    if metadata.get("schema").and_then(Value::as_str) != Some("mister-magik-cold-boot-pprof-v1")
+        || metadata.get("state").and_then(Value::as_str) != Some("complete")
+        || metadata
+            .get("sample_hits")
+            .and_then(Value::as_i64)
+            .unwrap_or(0)
+            <= 0
+    {
+        return Err("cold-boot pprof produced no CPU samples".into());
+    }
+    let svg = remote_read(
+        session,
+        &format!("{COLD_BOOT_PROFILE_REMOTE_DIR}/flamegraph.svg"),
+    )
+    .filter(|text| !text.trim().is_empty())
+    .ok_or("cold-boot pprof flamegraph is missing")?;
+    let folded = remote_read(
+        session,
+        &format!("{COLD_BOOT_PROFILE_REMOTE_DIR}/stacks.folded"),
+    )
+    .filter(|text| !text.trim().is_empty())
+    .ok_or("cold-boot pprof folded stacks are missing")?;
+    if !folded.contains("mister_magik") && !folded.contains("slint::") {
+        return Err("cold-boot pprof folded stacks have no resolved application symbols".into());
+    }
+    fs::write(output_dir.join("flamegraph.svg"), svg)?;
+    fs::write(output_dir.join("stacks.folded"), folded)?;
+    fs::write(
+        output_dir.join("profile.json"),
+        format!("{}\n", serde_json::to_string_pretty(&metadata)?),
+    )?;
+    Ok(metadata)
+}
+
 fn profile_installed_cold_boot_run(
     config: &NativeDeviceConfig,
     output_dir: &Path,
@@ -17261,17 +17300,42 @@ fn profile_installed_cold_boot_run(
         .ok_or("cold-boot benchmark has no launcher status")?;
     let main_status: Value = serde_json::from_str(&main_status_text)?;
     let launcher_status: Value = serde_json::from_str(&launcher_status_text)?;
-    let agent_diagnostics = agent_request_at(
-        config.agent()?,
-        "diagnostics",
-        json!({}),
-        Duration::from_secs(10),
-    )?
-    .response
-    .get("result")
-    .cloned()
-    .ok_or("cold-boot benchmark has no agent diagnostics")?;
-    let dmesg = exec(&session, "dmesg", true)?;
+    let profile = if pprof {
+        Some(collect_cold_boot_pprof(&session, output_dir)?)
+    } else {
+        None
+    };
+    let diagnostics_request = || {
+        agent_request_at(
+            config.agent()?,
+            "diagnostics",
+            json!({}),
+            Duration::from_secs(10),
+        )
+    };
+    let agent_diagnostics_response = match diagnostics_request() {
+        Ok(response) => response,
+        Err(first) => {
+            thread::sleep(Duration::from_millis(250));
+            diagnostics_request().map_err(|retry| {
+                format!("cold-boot agent diagnostics failed: first={first}; retry={retry}")
+            })?
+        }
+    };
+    let agent_diagnostics = agent_diagnostics_response
+        .response
+        .get("result")
+        .cloned()
+        .ok_or("cold-boot benchmark has no agent diagnostics")?;
+    let dmesg = match exec(&session, "dmesg", true) {
+        Ok(output) => output,
+        Err(first) => {
+            thread::sleep(Duration::from_millis(250));
+            exec(&session, "dmesg", true).map_err(|retry| {
+                format!("cold-boot dmesg transport failed: first={first}; retry={retry}")
+            })?
+        }
+    };
     if let Some(message) = exec_failure_message("cold-boot dmesg", &dmesg) {
         return Err(message.into());
     }
@@ -17281,49 +17345,6 @@ fn profile_installed_cold_boot_run(
         remote_read(&session, "/tmp/mister-magik-boot-analytics.tsv").unwrap_or_default();
     let events = parse_boot_events(&events_text)?;
     let startup_events = parse_magik_startup_events(&launcher_log);
-    let profile = if pprof {
-        let remote_complete = format!("{COLD_BOOT_PROFILE_REMOTE_DIR}/profile.json");
-        let metadata_text =
-            wait_launch_return_artifact(&session, &remote_complete, Duration::from_secs(10))?;
-        let metadata: Value = serde_json::from_str(metadata_text.trim())?;
-        if metadata.get("schema").and_then(Value::as_str) != Some("mister-magik-cold-boot-pprof-v1")
-            || metadata.get("state").and_then(Value::as_str) != Some("complete")
-            || metadata
-                .get("sample_hits")
-                .and_then(Value::as_i64)
-                .unwrap_or(0)
-                <= 0
-        {
-            return Err("cold-boot pprof produced no CPU samples".into());
-        }
-        let svg = remote_read(
-            &session,
-            &format!("{COLD_BOOT_PROFILE_REMOTE_DIR}/flamegraph.svg"),
-        )
-        .filter(|text| !text.trim().is_empty())
-        .ok_or("cold-boot pprof flamegraph is missing")?;
-        let folded = remote_read(
-            &session,
-            &format!("{COLD_BOOT_PROFILE_REMOTE_DIR}/stacks.folded"),
-        )
-        .filter(|text| !text.trim().is_empty())
-        .ok_or("cold-boot pprof folded stacks are missing")?;
-        if !folded.contains("mister_magik") && !folded.contains("slint::") {
-            return Err(
-                "cold-boot pprof folded stacks have no resolved application symbols".into(),
-            );
-        }
-        fs::write(output_dir.join("flamegraph.svg"), svg)?;
-        fs::write(output_dir.join("stacks.folded"), folded)?;
-        fs::write(
-            output_dir.join("profile.json"),
-            format!("{}\n", serde_json::to_string_pretty(&metadata)?),
-        )?;
-        Some(metadata)
-    } else {
-        None
-    };
-
     let agent_timeline = agent_diagnostics
         .pointer("/timeline/events")
         .and_then(Value::as_array)
@@ -17374,7 +17395,17 @@ fn profile_installed_cold_boot_run(
         return Err(format!("cold-boot timestamps are zero or unordered: {ordered:?}").into());
     }
 
-    let capture = request_framebuffer_png_at_when_latched(config.agent()?, Duration::from_secs(3))?;
+    let capture_request =
+        || request_framebuffer_png_at_when_latched(config.agent()?, Duration::from_secs(3));
+    let capture = match capture_request() {
+        Ok(capture) => capture,
+        Err(first) => {
+            thread::sleep(Duration::from_millis(250));
+            capture_request().map_err(|retry| {
+                format!("cold-boot framebuffer capture failed: first={first}; retry={retry}")
+            })?
+        }
+    };
     validate_visible_launcher_capture(&capture)?;
     fs::write(output_dir.join("boot-rgb565.png"), &capture.png)?;
     fs::write(
