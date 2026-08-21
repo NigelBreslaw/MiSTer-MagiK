@@ -6,9 +6,10 @@
 use crate::catalog_scan::FoundFile;
 use crate::game_discovery::{DiscoveryConfidence, DiscoverySourceKind, GameDiscovery};
 use crate::launch_profiles::{CollectionListing, CollectionRule, LaunchProfile};
+#[cfg(test)]
+use crate::library_db::MRA_PREFIX_BYTES;
 use crate::library_db::{
-    AMIGAVISION_GAME_LAUNCH_PREFIX, AMIGAVISION_LAUNCHER_REF, MRA_PREFIX_BYTES,
-    amigavision_installed_listings,
+    AMIGAVISION_GAME_LAUNCH_PREFIX, AMIGAVISION_LAUNCHER_REF, amigavision_installed_listings,
 };
 use crate::prepared_collections::{PreparedCollectionId, PreparedLaunchProvenance};
 use quick_xml::Reader as XmlReader;
@@ -303,6 +304,7 @@ pub(crate) struct MglInspection {
     pub(crate) reset_count: usize,
 }
 
+#[cfg(test)]
 pub(crate) fn read_mra_metadata(path: &Path) -> Option<MraMetadata> {
     let file = File::open(path).ok()?;
     parse_mra_metadata_xml_reader(BufReader::new(file.take(MRA_PREFIX_BYTES as u64)))

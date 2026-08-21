@@ -49,16 +49,17 @@ use crate::runtime_thread::{RuntimeThreadRole, apply_runtime_thread_policy};
 use crate::software_identity::{
     ArcadeMachineMetadata, MachineMetadataRows, MameSoftwareMetadata, PreviewArchivePaths,
     SoftwareHashCache, console_preview_asset, load_arcade_machine_metadata_for_fallbacks,
-    load_arcade_machine_metadata_for_setnames, load_mame_machine_metadata_for_setnames,
-    load_mame_software_metadata, mame_identity_for_discovery, mame_identity_projection,
-    mame_software_identity_for_discovery, mister_arcade_metadata_for_discovery,
-    software_list_for_platform, write_simple_mame_metadata_db,
+    load_mame_machine_metadata_for_setnames, load_mame_software_metadata,
+    mame_identity_for_discovery, mame_identity_projection, mame_software_identity_for_discovery,
+    mister_arcade_metadata_for_discovery, software_list_for_platform,
+    write_simple_mame_metadata_db,
 };
 use crate::sqlite_catalog;
 use rusqlite::Connection;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
+#[cfg(test)]
 pub(crate) const MRA_PREFIX_BYTES: usize = 160 * 1024;
 pub type ScanEventCallback<'a> = Option<&'a mut dyn FnMut(LibraryScanEvent)>;
 
