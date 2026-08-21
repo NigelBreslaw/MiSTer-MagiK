@@ -125,6 +125,37 @@ trigger. After scan completion, roughly 20 s of global preparation remains, and
 fresh shard recovery records are still committed near the end of the shard
 pipeline. The retained optimization shortens that exposure by about eight
 seconds but does not make closed systems independently durable. Bounded
-mid-pipeline shard checkpoints remain a separate experiment because extra
-exFAT synchronization barriers could trade recovery progress for worse cold
-creation time.
+mid-pipeline shard checkpoints were therefore measured next, with their extra
+exFAT synchronization barriers treated as an explicit cold-creation tradeoff.
+
+## Bounded restart-recovery checkpoints
+
+Revision `82d498ad6` accepts a small cold-build cost in exchange for materially
+better recovery when MagiK exits before first catalog publication. The fresh
+pipeline now synchronizes and journals each eight-shard batch, then flushes the
+final tail on handled completion. Resume keeps the existing full validation of
+every saved shard, and the manifest remains the sole reader authority.
+
+`build/agent-benchmarks/catalog-full-build-rebuild/1787313788/summary.json`
+passed on the exact installed revision:
+
+| Cold product metric | Single-checkpoint candidate | Eight-shard checkpoints | Delta |
+|---|---:|---:|---:|
+| Builder persisted | 107.418 s | 107.902 s | +0.485 s (+0.45%) |
+| Fresh shard batch | 31.749 s | 32.383 s | +0.634 s (+2.00%) |
+| First visible | 9.941 s | 8.876 s | -1.065 s |
+| Peak HWM | 142,108 KiB | 133,732 KiB | -8,376 KiB |
+
+Against the qualified pre-optimization baseline, the retained cold builder
+improvement remains 7.478 s (6.48%), and the fresh shard phase remains 7.477 s
+(18.76%) faster. The run recorded durable totals of 8, 16, 24, 32, 40, 48,
+56, 64, and 69 shards. A sudden exit can therefore discard only the current
+eight-shard durability window plus any publication already in the two-slot
+pipeline, rather than all 69 completed shards.
+
+All legs retained 69 systems and 40,059 games with identical exact identities
+and valid artifact sets. X68000 retained 273 source games, 269 visible families,
+and four intended collapses. Warm peak HWM was 140,608 KiB, below the 144,328
+KiB gate. Outer harness completion varied to 202.526 s cold, 167.406 s warm,
+and 59.369 s rebuild; the stable product builder and shard-phase clocks isolate
+the checkpoint cost from that scan and post-build variance.
