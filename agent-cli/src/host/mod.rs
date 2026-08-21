@@ -17166,7 +17166,7 @@ fn cleanup_cold_boot_profile(config: &NativeDeviceConfig) -> Result<()> {
 fn collect_cold_boot_pprof(session: &Session, output_dir: &Path) -> Result<Value> {
     let remote_complete = format!("{COLD_BOOT_PROFILE_REMOTE_DIR}/profile.json");
     let metadata_text =
-        wait_launch_return_artifact(session, &remote_complete, Duration::from_secs(10))?;
+        wait_launch_return_artifact(session, &remote_complete, Duration::from_secs(30))?;
     let metadata: Value = serde_json::from_str(metadata_text.trim())?;
     if metadata.get("schema").and_then(Value::as_str) != Some("mister-magik-cold-boot-pprof-v1")
         || metadata.get("state").and_then(Value::as_str) != Some("complete")
