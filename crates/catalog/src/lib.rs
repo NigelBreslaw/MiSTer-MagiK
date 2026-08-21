@@ -6,6 +6,7 @@
 #[cfg(feature = "builder")]
 mod arcade_bootstrap_index;
 pub mod arcade_catalog;
+mod arcade_rom_inventory;
 pub mod archive_member;
 mod atomic_publish;
 mod bounded_lz4;

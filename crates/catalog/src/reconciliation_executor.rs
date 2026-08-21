@@ -1532,6 +1532,7 @@ mod tests {
             taxonomy_version: "1".into(),
             namespace_backend: "fixture".into(),
             projection_contract: "1".into(),
+            rom_inventory_fingerprint: "fixture-roms".into(),
         };
         let journal = crate::build_progress::BuildProgressJournal::open_or_create(
             &progress_path,
@@ -1783,6 +1784,7 @@ mod tests {
             taxonomy_version: "1".into(),
             namespace_backend: "fixture".into(),
             projection_contract: "1".into(),
+            rom_inventory_fingerprint: "fixture-roms".into(),
         };
         drop(
             crate::build_progress::BuildProgressJournal::open_or_create(

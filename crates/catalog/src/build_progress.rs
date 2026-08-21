@@ -38,6 +38,7 @@ pub struct BuildContract {
     pub taxonomy_version: String,
     pub namespace_backend: String,
     pub projection_contract: String,
+    pub rom_inventory_fingerprint: String,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
@@ -937,6 +938,7 @@ mod tests {
             taxonomy_version: "t1".into(),
             namespace_backend: "native".into(),
             projection_contract: "v3".into(),
+            rom_inventory_fingerprint: "roms-v1".into(),
         }
     }
     fn targets() -> Vec<ScanTarget> {

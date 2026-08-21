@@ -628,6 +628,10 @@ fn prepare_resume_scan(
         namespace_backend: std::env::var("MISTER_NAMESPACE_BACKEND")
             .unwrap_or_else(|_| "default".to_string()),
         projection_contract: crate::sharded_catalog::PRODUCTION_PROJECTION_CONTRACT.to_string(),
+        rom_inventory_fingerprint:
+            crate::arcade_rom_inventory::ArcadeRomInventory::from_library_roots(&cfg.roots)
+                .fingerprint()
+                .to_string(),
     };
     let path = crate::catalog_config::default_build_progress_path();
     let committed_path = crate::catalog_config::default_builder_state_path();
@@ -929,7 +933,7 @@ fn is_arcade_bootstrap_scan(roots: &[String], durable_resume: bool) -> bool {
 }
 
 struct ArcadeMraPrefetch {
-    metadata: HashMap<PathBuf, Option<media_metadata::MraMetadata>>,
+    inspections: HashMap<PathBuf, Option<media_metadata::MraInspection>>,
     index_status: &'static str,
     index_hits: usize,
     index_misses: usize,
@@ -952,7 +956,7 @@ fn prefetch_arcade_mra_metadata(
         .collect::<Vec<_>>();
     if paths.is_empty() {
         return ArcadeMraPrefetch {
-            metadata: HashMap::new(),
+            inspections: HashMap::new(),
             index_status: "unused",
             index_hits: 0,
             index_misses: 0,
@@ -981,15 +985,24 @@ fn prefetch_arcade_mra_metadata(
                 .collect::<HashMap<_, _>>()
         })
         .unwrap_or_default();
-    let mut metadata = HashMap::with_capacity(paths.len());
+    let mut inspections = HashMap::with_capacity(paths.len());
     let mut fallback_paths = Vec::new();
     let mut index_hits = 0usize;
     for (path, size) in paths {
         let indexed = arcade_updater_key(&path)
             .and_then(|key| indexed_rows.get(&key))
-            .filter(|row| size == row.size);
+            .filter(|row| {
+                size == row.size
+                    && row.primary_rom != media_metadata::PrimaryRomRequirement::Ambiguous
+            });
         if let Some(row) = indexed {
-            metadata.insert(path, Some(row.header.clone()));
+            inspections.insert(
+                path,
+                Some(media_metadata::MraInspection {
+                    header: row.header.clone(),
+                    primary_rom: row.primary_rom.clone(),
+                }),
+            );
             index_hits = index_hits.saturating_add(1);
         } else {
             fallback_paths.push(path);
@@ -1015,17 +1028,17 @@ fn prefetch_arcade_mra_metadata(
                         let Some(path) = paths.get(index) else {
                             break;
                         };
-                        let metadata = media_metadata::read_mra_metadata(path);
+                        let inspection = media_metadata::inspect_mra_path(path).ok();
                         if let Ok(mut results) = results.lock() {
-                            results.push((path.clone(), metadata));
+                            results.push((path.clone(), inspection));
                         }
                     }
                 });
         }
     });
-    metadata.extend(results.into_inner().unwrap_or_default());
+    inspections.extend(results.into_inner().unwrap_or_default());
     ArcadeMraPrefetch {
-        metadata,
+        inspections,
         index_status,
         index_hits,
         index_misses: fallback_paths.len(),
@@ -1174,15 +1187,28 @@ fn scan_library_with_progress_and_events(
         }
     };
     let mut buffered_events = None;
+    let rom_inventory =
+        crate::arcade_rom_inventory::ArcadeRomInventory::from_library_roots(&cfg.roots);
+    let (mame_roms, hbmame_roms) = rom_inventory.counts();
+    library_db::report_library_scan_timing(
+        "arcade_rom_inventory",
+        rom_inventory.scan_us,
+        format!(
+            "mame={} hbmame={} fingerprint={}",
+            mame_roms,
+            hbmame_roms,
+            rom_inventory.fingerprint()
+        ),
+    );
     let mut prefetched_arcade_mra = HashMap::new();
     if is_arcade_bootstrap_scan(&cfg.roots, durable_resume) {
         let events = rx.iter().collect::<Vec<_>>();
         let prefetch_t = Instant::now();
         let prefetch = prefetch_arcade_mra_metadata(&events, arcade_updater_index);
-        prefetched_arcade_mra = prefetch.metadata;
+        prefetched_arcade_mra = prefetch.inspections;
         let successes = prefetched_arcade_mra
             .values()
-            .filter(|metadata| metadata.is_some())
+            .filter(|inspection| inspection.is_some())
             .count();
         library_db::report_library_scan_timing(
             "arcade_mra_prefetch",
@@ -1212,6 +1238,10 @@ fn scan_library_with_progress_and_events(
     let mut entries = Vec::new();
     let mut ignored_files = 0usize;
     let mut discoveries = Vec::new();
+    let mut arcade_mra_eligible = 0usize;
+    let mut arcade_mra_missing_rom = 0usize;
+    let mut arcade_mra_ambiguous = 0usize;
+    let mut arcade_mra_malformed = 0usize;
     let classify_t = Instant::now();
     let mut timing = ScanTimingStats::default();
     let mut idx = 0usize;
@@ -1604,11 +1634,35 @@ fn scan_library_with_progress_and_events(
                         path: f.path.display().to_string(),
                     });
                     let discovery_t = Instant::now();
-                    let prefetched_mra = f
-                        .ext
-                        .eq_ignore_ascii_case("mra")
-                        .then(|| prefetched_arcade_mra.remove(&f.path))
-                        .flatten();
+                    let prefetched_mra = if f.ext.eq_ignore_ascii_case("mra") {
+                        let inspection = match prefetched_arcade_mra.remove(&f.path) {
+                            Some(inspection) => inspection,
+                            None => media_metadata::inspect_mra_path(&f.path).ok(),
+                        };
+                        let Some(inspection) = inspection else {
+                            arcade_mra_malformed = arcade_mra_malformed.saturating_add(1);
+                            ignored_files = ignored_files.saturating_add(1);
+                            continue;
+                        };
+                        match rom_inventory.eligibility(&inspection.primary_rom) {
+                            crate::arcade_rom_inventory::RomEligibility::Eligible => {
+                                arcade_mra_eligible = arcade_mra_eligible.saturating_add(1);
+                                Some(Some(inspection.header))
+                            }
+                            crate::arcade_rom_inventory::RomEligibility::Missing => {
+                                arcade_mra_missing_rom = arcade_mra_missing_rom.saturating_add(1);
+                                ignored_files = ignored_files.saturating_add(1);
+                                continue;
+                            }
+                            crate::arcade_rom_inventory::RomEligibility::Ambiguous => {
+                                arcade_mra_ambiguous = arcade_mra_ambiguous.saturating_add(1);
+                                ignored_files = ignored_files.saturating_add(1);
+                                continue;
+                            }
+                        }
+                    } else {
+                        None
+                    };
                     discoveries.push(
                         discovery_from_profile_file_with_prepared_index_and_mra_metadata(
                             &f,
@@ -1775,6 +1829,14 @@ fn scan_library_with_progress_and_events(
         format!("files={}", timing.file_discovery_count),
     );
     timing.report_file_discovery_breakdown();
+    library_db::report_library_scan_timing(
+        "arcade_rom_filter",
+        0,
+        format!(
+            "eligible={} missing={} ambiguous={} malformed={}",
+            arcade_mra_eligible, arcade_mra_missing_rom, arcade_mra_ambiguous, arcade_mra_malformed,
+        ),
+    );
     let prepared_lookup = prepared_payload_index.lookup_stats();
     library_db::report_library_scan_timing(
         "prepared_payload_lookup",
@@ -2228,7 +2290,12 @@ mod timing_tests {
         assert_eq!(indexed.index_hits, 1);
         assert_eq!(indexed.fallback_reads, 0);
         assert_eq!(
-            indexed.metadata[&mra].as_ref().unwrap().name.as_deref(),
+            indexed.inspections[&mra]
+                .as_ref()
+                .unwrap()
+                .header
+                .name
+                .as_deref(),
             Some("Indexed")
         );
 
@@ -2237,7 +2304,12 @@ mod timing_tests {
         assert_eq!(fallback.index_hits, 0);
         assert_eq!(fallback.fallback_reads, 1);
         assert_eq!(
-            fallback.metadata[&mra].as_ref().unwrap().name.as_deref(),
+            fallback.inspections[&mra]
+                .as_ref()
+                .unwrap()
+                .header
+                .name
+                .as_deref(),
             Some("Local")
         );
         let _ = std::fs::remove_dir_all(root);

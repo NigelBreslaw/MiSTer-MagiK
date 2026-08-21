@@ -191,25 +191,6 @@ impl<'a> CatalogRefreshPipeline<'a> {
         )
     }
 
-    #[cfg(feature = "builder")]
-    pub(crate) fn scan_ram_artifact_with_reused_prefix_and_durable_resume(
-        &self,
-        reused: LibraryRamScanArtifact,
-        excluded_targets: Vec<PathBuf>,
-        progress: ProgressCallback<'_>,
-        scan_events: ScanEventCallback<'_>,
-        durable_resume: bool,
-    ) -> LibraryRamScanArtifact {
-        self.scan_ram_artifact_with_reused_prefix_using(
-            LibraryIndexer::with_archive_reader(self.cfg, self.archive_reader.clone())
-                .with_durable_resume(durable_resume),
-            reused,
-            excluded_targets,
-            progress,
-            scan_events,
-        )
-    }
-
     pub(crate) fn scan_ram_artifact_foreground_with_reused_prefix(
         &self,
         reused: LibraryRamScanArtifact,
@@ -219,25 +200,6 @@ impl<'a> CatalogRefreshPipeline<'a> {
     ) -> LibraryRamScanArtifact {
         self.scan_ram_artifact_with_reused_prefix_using(
             LibraryIndexer::foreground_with_archive_reader(self.cfg, self.archive_reader.clone()),
-            reused,
-            excluded_targets,
-            progress,
-            scan_events,
-        )
-    }
-
-    #[cfg(feature = "builder")]
-    pub(crate) fn scan_ram_artifact_foreground_with_reused_prefix_and_durable_resume(
-        &self,
-        reused: LibraryRamScanArtifact,
-        excluded_targets: Vec<PathBuf>,
-        progress: ProgressCallback<'_>,
-        scan_events: ScanEventCallback<'_>,
-        durable_resume: bool,
-    ) -> LibraryRamScanArtifact {
-        self.scan_ram_artifact_with_reused_prefix_using(
-            LibraryIndexer::foreground_with_archive_reader(self.cfg, self.archive_reader.clone())
-                .with_durable_resume(durable_resume),
             reused,
             excluded_targets,
             progress,

@@ -304,6 +304,12 @@ pub(crate) fn read_mra_metadata(path: &Path) -> Option<MraMetadata> {
     parse_mra_metadata_xml_reader(BufReader::new(file.take(MRA_PREFIX_BYTES as u64)))
 }
 
+pub(crate) fn inspect_mra_path(path: &Path) -> Result<MraInspection, String> {
+    let bytes =
+        std::fs::read(path).map_err(|error| format!("read MRA {}: {error}", path.display()))?;
+    inspect_mra_bytes(&bytes)
+}
+
 pub(crate) fn parse_mra_metadata_bytes(data: &[u8]) -> Option<MraMetadata> {
     parse_mra_metadata_xml_reader(BufReader::new(data))
 }

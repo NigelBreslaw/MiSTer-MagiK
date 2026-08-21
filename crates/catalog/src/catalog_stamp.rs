@@ -110,6 +110,12 @@ pub(crate) fn compute_catalog_stamp_for_paths_with_audit(
         append_path_signature(&mut lines, "root", idx, Path::new(root));
     }
     append_prepared_collection_root_signatures(&mut lines, roots);
+    let rom_inventory = crate::arcade_rom_inventory::ArcadeRomInventory::from_library_roots(roots);
+    let (mame_roms, hbmame_roms) = rom_inventory.counts();
+    lines.push(format!(
+        "arcade-rom-inventory\t{}\t{mame_roms}\t{hbmame_roms}",
+        rom_inventory.fingerprint()
+    ));
     lines.push("stamp-targets\t0".to_string());
     lines.push(format!("core-audit\t{}", audit_rows.len()));
     for (idx, row) in audit_rows.iter().enumerate() {

@@ -4,7 +4,7 @@ Catalog V3 is the only production catalog used by MiSTer MagiK. Its public
 registry, state, binding, scanner-cache, and persisted-search schemas are
 version **1**; mini-navigation is version **3**, NavPack is version **2**, and
 the SQLite shard schema is version **5**. The canonical catalog schema/build
-identity is **67/17**. There is no global summary or global navigation file.
+identity is **67/18**. There is no global summary or global navigation file.
 JSON mini-navigation remains a build and integrity artifact; interactive system
 entry accepts only the active generation's checked NavPack.
 
@@ -69,6 +69,15 @@ set for every system, including sizes, hashes, metadata, generation, and game
 count.
 Readers choose the newest completely valid slot. Partially written generations
 are unreachable.
+
+Arcade discovery inventories ZIP filenames in Main-compatible `games/mame`,
+`games/hbmame`, `_Arcade/mame`, and `_Arcade/hbmame` directories. An MRA that
+declares an external primary set is visible only when that set ZIP exists in
+the matching namespace; archives are not opened on the startup path. Embedded
+MRAs remain visible, while malformed or ambiguous external requirements fail
+closed. The sorted filename fingerprint participates in catalog, bootstrap,
+and interrupted-build identities so adding or removing a ROM invalidates
+retained eligibility.
 
 `catalog.binding.json` binds the active registry generation and the
 `rich-game-v2` projection contract to the canonical fingerprint in

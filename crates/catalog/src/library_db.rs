@@ -1154,28 +1154,6 @@ pub(crate) fn scan_library_ram_foreground_with_paths(
     )
 }
 
-#[cfg(feature = "builder")]
-pub(crate) fn scan_library_ram_foreground_with_paths_reusing_arcade(
-    paths: &crate::device_layout::CatalogPaths,
-    archive_cache: &crate::catalog_config::ArchiveCacheConfig,
-    arcade: LibraryRamScanArtifact,
-    progress: ProgressCallback<'_>,
-    scan_events: ScanEventCallback<'_>,
-    durable_resume: bool,
-) -> Result<LibraryRamScanArtifact, String> {
-    let cfg = BenchConfig::production_with_paths(paths);
-    Ok(
-        CatalogRefreshPipeline::with_archive_cache(&cfg, archive_cache)
-            .scan_ram_artifact_foreground_with_reused_prefix_and_durable_resume(
-                arcade,
-                vec![PathBuf::from(crate::arcade_catalog::DEFAULT_ARCADE_ROOT)],
-                progress,
-                scan_events,
-                durable_resume,
-            ),
-    )
-}
-
 pub fn scan_library_ram_foreground_with_roots(
     roots: Vec<PathBuf>,
     progress: ProgressCallback<'_>,
@@ -1294,28 +1272,6 @@ pub(crate) fn scan_library_ram_background_with_paths(
     Ok(
         CatalogRefreshPipeline::with_archive_cache(&cfg, archive_cache)
             .scan_ram_artifact_with_events_and_durable_resume(
-                progress,
-                scan_events,
-                durable_resume,
-            ),
-    )
-}
-
-#[cfg(feature = "builder")]
-pub(crate) fn scan_library_ram_background_with_paths_reusing_arcade(
-    paths: &crate::device_layout::CatalogPaths,
-    archive_cache: &crate::catalog_config::ArchiveCacheConfig,
-    arcade: LibraryRamScanArtifact,
-    progress: ProgressCallback<'_>,
-    scan_events: ScanEventCallback<'_>,
-    durable_resume: bool,
-) -> Result<LibraryRamScanArtifact, String> {
-    let cfg = BenchConfig::production_with_paths(paths);
-    Ok(
-        CatalogRefreshPipeline::with_archive_cache(&cfg, archive_cache)
-            .scan_ram_artifact_with_reused_prefix_and_durable_resume(
-                arcade,
-                vec![PathBuf::from(crate::arcade_catalog::DEFAULT_ARCADE_ROOT)],
                 progress,
                 scan_events,
                 durable_resume,

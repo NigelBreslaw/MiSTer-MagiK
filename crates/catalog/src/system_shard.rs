@@ -12,7 +12,7 @@ use std::error::Error;
 use std::fmt;
 use std::fs;
 use std::path::Path;
-#[cfg(target_os = "linux")]
+#[cfg(all(feature = "builder", target_os = "linux"))]
 use std::time::Instant;
 
 const NAVIGATION_HEADER_MAX_BYTES: usize = 256;

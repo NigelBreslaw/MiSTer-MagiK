@@ -1265,38 +1265,18 @@ impl BuilderBackend for SystemBuilderBackend {
         scan_event: &mut dyn FnMut(library_db::LibraryScanEvent),
     ) -> Result<StageOutput<Self::Scan>, String> {
         let mut scan_events = |event: library_db::LibraryScanEvent| scan_event(event);
-        let arcade_bootstrap_scan = self.arcade_bootstrap_scan.take();
-        let arcade_bootstrap_reused = arcade_bootstrap_scan.is_some();
+        let arcade_bootstrap_was_published = self.arcade_bootstrap_scan.take().is_some();
+        let arcade_bootstrap_reused = false;
         let background_full_build = self.post_reveal_background;
-        let scanned = match (background_full_build, arcade_bootstrap_scan) {
-            (true, Some(arcade)) => {
-                library_db::scan_library_ram_background_with_paths_reusing_arcade(
-                    &self.paths,
-                    &self.archive_cache,
-                    arcade,
-                    Some(progress),
-                    Some(&mut scan_events),
-                    self.durable_resume,
-                )?
-            }
-            (false, Some(arcade)) => {
-                library_db::scan_library_ram_foreground_with_paths_reusing_arcade(
-                    &self.paths,
-                    &self.archive_cache,
-                    arcade,
-                    Some(progress),
-                    Some(&mut scan_events),
-                    self.durable_resume,
-                )?
-            }
-            (true, None) => library_db::scan_library_ram_background_with_paths(
+        let scanned = match background_full_build {
+            true => library_db::scan_library_ram_background_with_paths(
                 &self.paths,
                 &self.archive_cache,
                 Some(progress),
                 Some(&mut scan_events),
                 self.durable_resume,
             )?,
-            (false, None) => library_db::scan_library_ram_foreground_with_paths(
+            false => library_db::scan_library_ram_foreground_with_paths(
                 &self.paths,
                 &self.archive_cache,
                 Some(progress),
@@ -1307,7 +1287,7 @@ impl BuilderBackend for SystemBuilderBackend {
         let scan_attribution = scanned.scan_attribution_detail();
         let stats = scanned.stats();
         let detail = format!(
-            "scan_us={} discover_us={} classify_us={} discoveries={} normal_files={} containers={} entries={} arcade_bootstrap_reused={arcade_bootstrap_reused} {}",
+            "scan_us={} discover_us={} classify_us={} discoveries={} normal_files={} containers={} entries={} arcade_bootstrap_published={arcade_bootstrap_was_published} arcade_bootstrap_reused={arcade_bootstrap_reused} {}",
             stats.scan_us,
             stats.discover_us,
             stats.classify_us,
