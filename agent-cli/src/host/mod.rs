@@ -15245,6 +15245,7 @@ fn profile_installed_catalog_build_rebuild(
     config: &NativeDeviceConfig,
     output_dir: &Path,
 ) -> Result<String> {
+    let _signal_guard = AttendedOperationSignalGuard::install();
     let session = connect_with(&config.connection, 10)?;
     let endpoint = config.agent()?.clone();
     let manifest = remote_read(&session, LOCAL_MAIN_MANIFEST_REMOTE)
@@ -15261,6 +15262,7 @@ fn profile_installed_catalog_build_rebuild(
     let run_result = (|| -> Result<Value> {
         let mut samples = Vec::with_capacity(CATALOG_BUILD_REBUILD_SAMPLES);
         for run_index in 0..=CATALOG_BUILD_REBUILD_SAMPLES {
+            require_catalog_benchmark_active("bounded catalog sample preparation")?;
             let measured = run_index != 0;
             let sample_index = run_index.max(1);
             let sample_dir = if measured {
@@ -15293,6 +15295,7 @@ fn profile_installed_catalog_build_rebuild(
                 .ok_or("fresh catalog benchmark leg has no generation")?;
             let fresh_snes = catalog_system_games(&fresh["catalog"], "snes")?;
 
+            require_catalog_benchmark_active("bounded catalog delta mutation")?;
             exec_checked(
                 &session,
                 "mutate isolated SNES catalog delta",
@@ -15412,20 +15415,7 @@ fn profile_installed_catalog_build_rebuild(
         "clean bounded catalog build/rebuild state",
         &catalog_build_rebuild_cleanup_command(),
     );
-    let mut summary = match (run_result, cleanup_result, restart_result) {
-        (Ok(summary), Ok(()), Ok(())) => summary,
-        (Err(error), _, Ok(())) => return Err(error),
-        (Ok(_), Err(error), Ok(())) => return Err(error),
-        (Ok(_), _, Err(error)) => return Err(error),
-        (Err(run), cleanup, restart) => {
-            return Err(format!(
-                "{run}; cleanup={:?}; launcher_restore={:?}",
-                cleanup.err(),
-                restart.err()
-            )
-            .into());
-        }
-    };
+    let mut summary = finish_catalog_benchmark_profile(run_result, cleanup_result, restart_result)?;
 
     drop(session);
     let session = connect_with(&config.connection, 10)?;
@@ -15470,6 +15460,7 @@ fn profile_installed_catalog_full_build_rebuild(
     config: &NativeDeviceConfig,
     output_dir: &Path,
 ) -> Result<String> {
+    let _signal_guard = AttendedOperationSignalGuard::install();
     let session = connect_with(&config.connection, 10)?;
     let endpoint = config.agent()?.clone();
     let manifest = remote_read(&session, LOCAL_MAIN_MANIFEST_REMOTE)
@@ -15481,6 +15472,7 @@ fn profile_installed_catalog_full_build_rebuild(
     fs::create_dir_all(output_dir)?;
 
     let run_result = (|| -> Result<Value> {
+        require_catalog_benchmark_active("whole-card catalog sample preparation")?;
         exec_checked(
             &session,
             "prepare whole-card catalog build/rebuild sample",
@@ -15499,6 +15491,7 @@ fn profile_installed_catalog_full_build_rebuild(
                 runtime_command: catalog_full_build_rebuild_runtime_command,
             },
         )?;
+        require_catalog_benchmark_active("whole-card warm clean preparation")?;
         exec_checked(
             &session,
             "prepare warm clean whole-card catalog sample",
@@ -15521,6 +15514,7 @@ fn profile_installed_catalog_full_build_rebuild(
             .pointer("/catalog/generation")
             .and_then(Value::as_u64)
             .ok_or("whole-card warm clean leg has no generation")?;
+        require_catalog_benchmark_active("whole-card rebuild")?;
         let rebuild = run_catalog_build_rebuild_leg(
             config,
             &session,
@@ -15592,20 +15586,7 @@ fn profile_installed_catalog_full_build_rebuild(
         "clean whole-card catalog build/rebuild state",
         &catalog_build_rebuild_cleanup_command(),
     );
-    let summary = match (run_result, cleanup_result, restart_result) {
-        (Ok(summary), Ok(()), Ok(())) => summary,
-        (Err(error), _, Ok(())) => return Err(error),
-        (Ok(_), Err(error), Ok(())) => return Err(error),
-        (Ok(_), _, Err(error)) => return Err(error),
-        (Err(run), cleanup, restart) => {
-            return Err(format!(
-                "{run}; cleanup={:?}; launcher_restore={:?}",
-                cleanup.err(),
-                restart.err()
-            )
-            .into());
-        }
-    };
+    let summary = finish_catalog_benchmark_profile(run_result, cleanup_result, restart_result)?;
 
     drop(session);
     let session = connect_with(&config.connection, 10)?;
@@ -15630,6 +15611,38 @@ fn profile_installed_catalog_full_build_rebuild(
         catalog_full_build_rebuild_report(&summary)?,
     )?;
     serde_json::to_string(&summary).map_err(Into::into)
+}
+
+fn finish_catalog_benchmark_profile<T>(
+    run: Result<T>,
+    cleanup: Result<()>,
+    launcher_restore: Result<()>,
+) -> Result<T> {
+    let cleanup_error = cleanup.err().map(|error| error.to_string());
+    let restore_error = launcher_restore.err().map(|error| error.to_string());
+    match run {
+        Ok(value) if cleanup_error.is_none() && restore_error.is_none() => Ok(value),
+        Ok(_) => Err(format!(
+            "catalog benchmark finalization failed: cleanup={}; launcher_restore={}",
+            cleanup_error.as_deref().unwrap_or("ok"),
+            restore_error.as_deref().unwrap_or("ok"),
+        )
+        .into()),
+        Err(run_error) => Err(format!(
+            "{run_error}; catalog benchmark finalization: cleanup={}; launcher_restore={}",
+            cleanup_error.as_deref().unwrap_or("ok"),
+            restore_error.as_deref().unwrap_or("ok"),
+        )
+        .into()),
+    }
+}
+
+fn require_catalog_benchmark_active(stage: &str) -> Result<()> {
+    if attended_operation_interrupted() {
+        Err(format!("catalog benchmark interrupted before {stage}").into())
+    } else {
+        Ok(())
+    }
 }
 
 fn profile_installed_catalog_corpus_inventory(
@@ -16096,6 +16109,7 @@ fn profile_installed_catalog_attribution(
     output_dir: &Path,
     arm: CatalogAttributionArm,
 ) -> Result<String> {
+    let _signal_guard = AttendedOperationSignalGuard::install();
     match arm {
         CatalogAttributionArm::Storage => {
             return profile_catalog_attribution_trace(
@@ -16277,6 +16291,7 @@ fn run_catalog_attribution_trace_pair(
     arm: CatalogAttributionArm,
     spec: tracefs::TracefsCaptureSpec,
 ) -> Result<Value> {
+    require_catalog_benchmark_active("traced catalog attribution preparation")?;
     exec_checked(
         session,
         "prepare traced catalog attribution sample",
@@ -16396,6 +16411,7 @@ fn profile_catalog_attribution_streamline(
         .to_string();
     fs::create_dir_all(output_dir)?;
     let run_result = (|| -> Result<Value> {
+        require_catalog_benchmark_active("Streamline catalog attribution preparation")?;
         exec_checked(
             &session,
             "prepare Streamline catalog attribution sample",
@@ -16540,6 +16556,7 @@ fn run_catalog_attribution_pair(
     sample_dir: &Path,
     arm: CatalogAttributionArm,
 ) -> Result<Value> {
+    require_catalog_benchmark_active("matched catalog attribution preparation")?;
     exec_checked(
         session,
         "prepare matched catalog attribution sample",
@@ -16602,6 +16619,7 @@ fn collect_catalog_attribution_profile(
     };
     let deadline = Instant::now() + Duration::from_secs(30);
     let profile = loop {
+        require_catalog_benchmark_active("catalog attribution profile finalization")?;
         if let Some(raw) = remote_read(session, &remote_json)
             && let Ok(value) = serde_json::from_str::<Value>(raw.trim())
             && value.get("schema").and_then(Value::as_str) == Some(expected_schema)
@@ -16661,20 +16679,7 @@ fn finish_catalog_attribution_profile(
         "clean matched catalog attribution state",
         &catalog_attribution_cleanup_command(),
     );
-    let summary = match (run_result, cleanup, launcher_restore) {
-        (Ok(summary), Ok(()), Ok(())) => summary,
-        (Err(error), _, Ok(())) => return Err(error),
-        (Ok(_), Err(error), Ok(())) | (Ok(_), Ok(()), Err(error)) => return Err(error),
-        (run, cleanup, restore) => {
-            return Err(format!(
-                "catalog attribution failed: run={:?}; cleanup={:?}; restore={:?}",
-                run.err(),
-                cleanup.err(),
-                restore.err()
-            )
-            .into());
-        }
-    };
+    let summary = finish_catalog_benchmark_profile(run_result, cleanup, launcher_restore)?;
     let final_boot_id = remote_read(session, "/proc/sys/kernel/random/boot_id")
         .ok_or("device boot id unavailable after catalog attribution")?;
     if final_boot_id.trim() != boot_id {
@@ -19148,6 +19153,11 @@ fn run_catalog_build_rebuild_leg(
         launcher_env,
         runtime_command,
     } = options;
+    if attended_operation_interrupted() {
+        return Err(
+            format!("{label} catalog benchmark interrupted before launcher restart").into(),
+        );
+    }
     let started = Instant::now();
     restart_launcher_with_one_shot_env(
         session,
@@ -19170,190 +19180,199 @@ fn run_catalog_build_rebuild_leg(
     let mut interaction_telemetry_start = None;
     let mut interaction_telemetry_end = None;
     let mut interaction_complete = false;
-    let (mut catalog, inspect_log, final_status) = loop {
-        let status = read_launcher_status(session)?;
-        if first_visible_ms.is_none()
-            && status.get("catalog_ready").and_then(Value::as_bool) == Some(true)
-            && (minimum_generation.is_some()
-                || status
-                    .get("catalog_games")
+    let run_result = (|| -> Result<Value> {
+        let (mut catalog, inspect_log, final_status) = loop {
+            if attended_operation_interrupted() {
+                return Err(format!("{label} catalog benchmark interrupted").into());
+            }
+            let status = read_launcher_status(session)?;
+            if first_visible_ms.is_none()
+                && status.get("catalog_ready").and_then(Value::as_bool) == Some(true)
+                && (minimum_generation.is_some()
+                    || status
+                        .get("catalog_games")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0)
+                        > 0)
+            {
+                first_visible_ms = Some(started.elapsed().as_millis() as u64);
+            }
+            if !automation_hold_sent
+                && status.get("input_enabled").and_then(Value::as_bool) == Some(true)
+                && exercise_arcade_ui
+                && minimum_generation.is_none()
+                && let Some(settled_index) = telemetry.iter().rposition(|sample| {
+                    parse_host_presentation_snapshot(sample)
+                        .is_some_and(|snapshot| snapshot.magik_ownership && !snapshot.pending)
+                })
+            {
+                let build_version = status
+                    .pointer("/build/version")
+                    .and_then(Value::as_str)
+                    .ok_or("catalog benchmark launcher status has no build version")?;
+                let source_revision = status
+                    .pointer("/build/source_revision")
+                    .and_then(Value::as_str)
+                    .ok_or("catalog benchmark launcher status has no source revision")?;
+                let main_status: Value = serde_json::from_str(
+                    &remote_read(session, MAIN_STATUS_REMOTE)
+                        .ok_or("catalog benchmark Main status is missing")?,
+                )?;
+                let main_generation = main_status
+                    .get("main_generation")
                     .and_then(Value::as_u64)
-                    .unwrap_or(0)
-                    > 0)
-        {
-            first_visible_ms = Some(started.elapsed().as_millis() as u64);
-        }
-        if !automation_hold_sent
-            && status.get("input_enabled").and_then(Value::as_bool) == Some(true)
-            && exercise_arcade_ui
-            && minimum_generation.is_none()
-            && let Some(settled_index) = telemetry.iter().rposition(|sample| {
-                parse_host_presentation_snapshot(sample)
-                    .is_some_and(|snapshot| snapshot.magik_ownership && !snapshot.pending)
-            })
-        {
-            let build_version = status
-                .pointer("/build/version")
-                .and_then(Value::as_str)
-                .ok_or("catalog benchmark launcher status has no build version")?;
-            let source_revision = status
-                .pointer("/build/source_revision")
-                .and_then(Value::as_str)
-                .ok_or("catalog benchmark launcher status has no source revision")?;
-            let main_status: Value = serde_json::from_str(
-                &remote_read(session, MAIN_STATUS_REMOTE)
-                    .ok_or("catalog benchmark Main status is missing")?,
-            )?;
-            let main_generation = main_status
-                .get("main_generation")
-                .and_then(Value::as_u64)
-                .ok_or("catalog benchmark Main status has no generation")?;
-            let begun: Value = serde_json::from_str(&launcher_automation::begin(
-                config,
-                build_version,
-                source_revision,
-                main_generation,
-                CATALOG_BUILD_REBUILD_INTERACTION_SECS + 20,
-            )?)?;
-            let nonce = begun
-                .get("nonce")
-                .and_then(Value::as_str)
-                .ok_or("catalog benchmark automation begin has no nonce")?
-                .to_owned();
-            launcher_automation::send_action(
-                config,
-                &nonce,
-                &AutomationAction::Hold {
-                    button: AutomationButton::Down,
-                    duration_ms: CATALOG_BUILD_REBUILD_INTERACTION_SECS * 1_000,
-                },
-            )?;
-            automation_nonce = Some(nonce);
-            interaction_baseline_index = Some(settled_index);
-            interaction_origin_selection = status.get("arcade_selected").and_then(Value::as_u64);
-            automation_hold_sent = true;
-        }
-        if automation_hold_sent
-            && !interaction_started
-            && interaction_origin_selection.is_some()
-            && status.get("arcade_selected").and_then(Value::as_u64) != interaction_origin_selection
-        {
-            interaction_telemetry_start = interaction_baseline_index;
-            interaction_started = true;
-            interaction_started_at = Some(Instant::now());
-        }
-        statuses.push(status.clone());
-        let (telemetry_duration, telemetry_cadence_ms) =
-            if automation_hold_sent && !interaction_complete {
-                (Duration::from_millis(250), 50)
-            } else {
-                (Duration::from_secs(1), 250)
-            };
-        telemetry.extend(agent_telemetry_for_duration_at_cadence(
-            endpoint,
-            telemetry_duration,
-            telemetry_cadence_ms,
-        )?);
-        if !interaction_complete
-            && interaction_started_at.is_some_and(|started| {
-                started.elapsed() >= Duration::from_secs(CATALOG_BUILD_REBUILD_INTERACTION_SECS)
-            })
-        {
-            interaction_telemetry_end = Some(telemetry.len());
-            interaction_complete = true;
-            if let Some(nonce) = automation_nonce.as_deref() {
-                let _ =
-                    launcher_automation::send_action(config, nonce, &AutomationAction::ReleaseAll);
+                    .ok_or("catalog benchmark Main status has no generation")?;
+                let begun: Value = serde_json::from_str(&launcher_automation::begin(
+                    config,
+                    build_version,
+                    source_revision,
+                    main_generation,
+                    CATALOG_BUILD_REBUILD_INTERACTION_SECS + 20,
+                )?)?;
+                let nonce = begun
+                    .get("nonce")
+                    .and_then(Value::as_str)
+                    .ok_or("catalog benchmark automation begin has no nonce")?
+                    .to_owned();
+                automation_nonce = Some(nonce.clone());
+                launcher_automation::send_action(
+                    config,
+                    &nonce,
+                    &AutomationAction::Hold {
+                        button: AutomationButton::Down,
+                        duration_ms: CATALOG_BUILD_REBUILD_INTERACTION_SECS * 1_000,
+                    },
+                )?;
+                interaction_baseline_index = Some(settled_index);
+                interaction_origin_selection =
+                    status.get("arcade_selected").and_then(Value::as_u64);
+                automation_hold_sent = true;
             }
-        }
-        if first_visible_ms.is_none()
-            && started.elapsed()
-                >= Duration::from_secs(CATALOG_LIFECYCLE_FIRST_VISIBLE_TIMEOUT_SECS)
-        {
-            return Err(format!("{label} catalog did not become visible: {status}").into());
-        }
-        if status.get("catalog_refresh_done").and_then(Value::as_bool) == Some(true) {
-            let inspect = exec(session, &runtime_command("catalog-v3-inspect"), true)?;
-            if let Some(error) = exec_failure_message("catalog build/rebuild inspect", &inspect) {
-                return Err(format!(
-                    "{label} catalog refresh completed but inspection failed: {error}"
-                )
-                .into());
+            if automation_hold_sent
+                && !interaction_started
+                && interaction_origin_selection.is_some()
+                && status.get("arcade_selected").and_then(Value::as_u64)
+                    != interaction_origin_selection
+            {
+                interaction_telemetry_start = interaction_baseline_index;
+                interaction_started = true;
+                interaction_started_at = Some(Instant::now());
             }
-            let catalog = parse_catalog_lifecycle_inspect(&inspect.stdout).map_err(|error| {
+            statuses.push(status.clone());
+            let (telemetry_duration, telemetry_cadence_ms) =
+                if automation_hold_sent && !interaction_complete {
+                    (Duration::from_millis(250), 50)
+                } else {
+                    (Duration::from_secs(1), 250)
+                };
+            telemetry.extend(agent_telemetry_for_duration_at_cadence(
+                endpoint,
+                telemetry_duration,
+                telemetry_cadence_ms,
+            )?);
+            if !interaction_complete
+                && interaction_started_at.is_some_and(|started| {
+                    started.elapsed() >= Duration::from_secs(CATALOG_BUILD_REBUILD_INTERACTION_SECS)
+                })
+            {
+                interaction_telemetry_end = Some(telemetry.len());
+                interaction_complete = true;
+                if let Some(nonce) = automation_nonce.as_deref() {
+                    let _ = launcher_automation::send_action(
+                        config,
+                        nonce,
+                        &AutomationAction::ReleaseAll,
+                    );
+                }
+            }
+            if first_visible_ms.is_none()
+                && started.elapsed()
+                    >= Duration::from_secs(CATALOG_LIFECYCLE_FIRST_VISIBLE_TIMEOUT_SECS)
+            {
+                return Err(format!("{label} catalog did not become visible: {status}").into());
+            }
+            if status.get("catalog_refresh_done").and_then(Value::as_bool) == Some(true) {
+                let inspect = exec(session, &runtime_command("catalog-v3-inspect"), true)?;
+                if let Some(error) = exec_failure_message("catalog build/rebuild inspect", &inspect)
+                {
+                    return Err(format!(
+                        "{label} catalog refresh completed but inspection failed: {error}"
+                    )
+                    .into());
+                }
+                let catalog = parse_catalog_lifecycle_inspect(&inspect.stdout).map_err(|error| {
                 format!(
                     "{label} catalog refresh completed with invalid inspection: {error}; output={}",
                     inspect.stdout.trim()
                 )
             })?;
-            // An unchanged forced rebuild may correctly retain its generation.
-            // Completion is authoritative here; only reject a rollback.
-            if minimum_generation.is_some_and(|generation| {
-                catalog
-                    .get("generation")
-                    .and_then(Value::as_u64)
-                    .unwrap_or(0)
-                    < generation
-            }) {
-                return Err(format!("{label} catalog generation rolled back").into());
+                // An unchanged forced rebuild may correctly retain its generation.
+                // Completion is authoritative here; only reject a rollback.
+                if minimum_generation.is_some_and(|generation| {
+                    catalog
+                        .get("generation")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0)
+                        < generation
+                }) {
+                    return Err(format!("{label} catalog generation rolled back").into());
+                }
+                break (catalog, inspect.stdout, status);
             }
-            break (catalog, inspect.stdout, status);
-        }
-        if started.elapsed() >= Duration::from_secs(CATALOG_LIFECYCLE_COMPLETE_TIMEOUT_SECS) {
+            if started.elapsed() >= Duration::from_secs(CATALOG_LIFECYCLE_COMPLETE_TIMEOUT_SECS) {
+                return Err(format!(
+                    "{label} catalog did not complete within {} seconds; status={status}",
+                    CATALOG_LIFECYCLE_COMPLETE_TIMEOUT_SECS
+                )
+                .into());
+            }
+        };
+        let complete_ms = started.elapsed().as_millis() as u64;
+        fs::write(
+            sample_dir.join(format!("{label}-catalog-inspect.tsv")),
+            inspect_log,
+        )?;
+        fs::write(
+            sample_dir.join(format!("{label}-launcher-status.json")),
+            format!("{}\n", serde_json::to_string_pretty(&final_status)?),
+        )?;
+        fs::write(
+            sample_dir.join(format!("{label}-telemetry.jsonl")),
+            format!(
+                "{}\n",
+                telemetry
+                    .iter()
+                    .map(serde_json::to_string)
+                    .collect::<std::result::Result<Vec<_>, _>>()?
+                    .join("\n")
+            ),
+        )?;
+        let launcher_log = remote_read(session, "/tmp/mister-magik-slint.log")
+            .ok_or_else(|| format!("{label} catalog benchmark has no launcher log"))?;
+        if !catalog_benchmark_presented_home_arcade(&launcher_log) {
             return Err(format!(
-                "{label} catalog did not complete within {} seconds; status={status}",
-                CATALOG_LIFECYCLE_COMPLETE_TIMEOUT_SECS
+                "{label} catalog benchmark did not present Home with the Arcade system selected"
             )
             .into());
         }
-    };
-    let complete_ms = started.elapsed().as_millis() as u64;
-    fs::write(
-        sample_dir.join(format!("{label}-catalog-inspect.tsv")),
-        inspect_log,
-    )?;
-    fs::write(
-        sample_dir.join(format!("{label}-launcher-status.json")),
-        format!("{}\n", serde_json::to_string_pretty(&final_status)?),
-    )?;
-    fs::write(
-        sample_dir.join(format!("{label}-telemetry.jsonl")),
-        format!(
-            "{}\n",
-            telemetry
-                .iter()
-                .map(serde_json::to_string)
-                .collect::<std::result::Result<Vec<_>, _>>()?
-                .join("\n")
-        ),
-    )?;
-    let launcher_log = remote_read(session, "/tmp/mister-magik-slint.log")
-        .ok_or_else(|| format!("{label} catalog benchmark has no launcher log"))?;
-    if !catalog_benchmark_presented_home_arcade(&launcher_log) {
-        return Err(format!(
-            "{label} catalog benchmark did not present Home with the Arcade system selected"
-        )
-        .into());
-    }
-    fs::write(
-        sample_dir.join(format!("{label}-launcher.log")),
-        &launcher_log,
-    )?;
-    let phase_evidence = catalog_phase_evidence(&launcher_log);
-    let logical_fingerprint = catalog_logical_fingerprint(&catalog)?;
-    catalog["logical_fingerprint"] = json!(logical_fingerprint);
-    if let Some(nonce) = automation_nonce.as_deref() {
-        let _ = launcher_automation::send_action(config, nonce, &AutomationAction::ReleaseAll);
-        let _ = launcher_automation::end(config, nonce);
-    }
-    let interaction_telemetry = interaction_telemetry_start
-        .and_then(|start| {
-            telemetry.get(start..interaction_telemetry_end.unwrap_or(telemetry.len()))
-        })
-        .unwrap_or(&telemetry);
-    let ui =
-        catalog_build_rebuild_ui_summary(&statuses, interaction_telemetry, interaction_started)?;
-    Ok(json!({
+        fs::write(
+            sample_dir.join(format!("{label}-launcher.log")),
+            &launcher_log,
+        )?;
+        let phase_evidence = catalog_phase_evidence(&launcher_log);
+        let logical_fingerprint = catalog_logical_fingerprint(&catalog)?;
+        catalog["logical_fingerprint"] = json!(logical_fingerprint);
+        let interaction_telemetry = interaction_telemetry_start
+            .and_then(|start| {
+                telemetry.get(start..interaction_telemetry_end.unwrap_or(telemetry.len()))
+            })
+            .unwrap_or(&telemetry);
+        let ui = catalog_build_rebuild_ui_summary(
+            &statuses,
+            interaction_telemetry,
+            interaction_started,
+        )?;
+        Ok(json!({
         "launcher_pid": final_status.get("pid"),
         "timing": {
             "first_visible_ms": first_visible_ms,
@@ -19362,7 +19381,37 @@ fn run_catalog_build_rebuild_leg(
         "catalog": catalog,
         "phase_evidence": phase_evidence,
         "ui": ui,
-    }))
+        }))
+    })();
+    let automation_cleanup =
+        finish_catalog_benchmark_automation(config, automation_nonce.as_deref());
+    match (run_result, automation_cleanup) {
+        (Ok(result), Ok(())) => Ok(result),
+        (Err(run), Ok(())) => Err(run),
+        (Ok(_), Err(cleanup)) => Err(cleanup),
+        (Err(run), Err(cleanup)) => {
+            Err(format!("{run}; catalog automation cleanup failed: {cleanup}").into())
+        }
+    }
+}
+
+fn finish_catalog_benchmark_automation(
+    config: &NativeDeviceConfig,
+    nonce: Option<&str>,
+) -> Result<()> {
+    let Some(nonce) = nonce else {
+        return Ok(());
+    };
+    let release = launcher_automation::send_action(config, nonce, &AutomationAction::ReleaseAll);
+    let end = launcher_automation::end(config, nonce).map(|_| ());
+    match (release, end) {
+        (Ok(_), Ok(())) => Ok(()),
+        (Err(release), Ok(())) => Err(format!("input release failed: {release}").into()),
+        (Ok(_), Err(end)) => Err(format!("automation end failed: {end}").into()),
+        (Err(release), Err(end)) => {
+            Err(format!("input release failed: {release}; automation end failed: {end}").into())
+        }
+    }
 }
 
 fn catalog_benchmark_presented_home_arcade(log: &str) -> bool {
@@ -32933,6 +32982,21 @@ H: Handlers=event3 js0"#
         assert!(!catalog_benchmark_presented_home_arcade(
             &correct.replace("screen=home", "screen=arcade")
         ));
+    }
+
+    #[test]
+    fn catalog_benchmark_finalization_preserves_run_cleanup_and_restore_failures() {
+        let run: Result<()> = Err("run interrupted".into());
+        let cleanup: Result<()> = Err("cleanup failed".into());
+        let restore: Result<()> = Err("restore failed".into());
+
+        let error = finish_catalog_benchmark_profile(run, cleanup, restore)
+            .expect_err("combined benchmark failure")
+            .to_string();
+
+        assert!(error.contains("run interrupted"));
+        assert!(error.contains("cleanup failed"));
+        assert!(error.contains("restore failed"));
     }
 
     #[test]
