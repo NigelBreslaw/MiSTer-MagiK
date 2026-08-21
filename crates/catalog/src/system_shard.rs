@@ -12,6 +12,7 @@ use std::error::Error;
 use std::fmt;
 use std::fs;
 use std::path::Path;
+use std::time::Instant;
 
 const NAVIGATION_HEADER_MAX_BYTES: usize = 256;
 const NAVIGATION_SCHEMA_KEY: &[u8] = b"schema_version";
@@ -396,8 +397,17 @@ pub(crate) fn write_system_shard_with_durability(
     let generation = data.generation;
     drop(data);
     #[cfg(target_os = "linux")]
-    unsafe {
-        libc::malloc_trim(0);
+    {
+        let trim_started = Instant::now();
+        let trim_pmu =
+            mister_magik_perf_events::sampled_span(crate::pmu_phase::SHARD_ALLOCATOR_TRIM);
+        let released = unsafe { libc::malloc_trim(0) };
+        drop(trim_pmu);
+        crate::catalog_logln!(
+            "catalog_shard_allocator_trim_tsv\tsystem={}\telapsed_us={}\treleased={released}",
+            system_id,
+            trim_started.elapsed().as_micros(),
+        );
     }
     let validate_pmu = mister_magik_perf_events::sampled_span(crate::pmu_phase::SHARD_VALIDATE);
     let loaded = open_system_shard(sqlite_path, navigation_path, &system_id, generation, limits);

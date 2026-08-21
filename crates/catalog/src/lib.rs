@@ -112,6 +112,8 @@ pub(crate) mod pmu_phase {
     #[cfg(feature = "builder")]
     pub const SHARD_COMMIT: &str = "catalog.shard.commit";
     #[cfg(feature = "builder")]
+    pub const SHARD_ALLOCATOR_TRIM: &str = "catalog.shard.allocator-trim";
+    #[cfg(feature = "builder")]
     pub const SHARD_VALIDATE: &str = "catalog.shard.validate";
     #[cfg(feature = "builder")]
     pub const PUBLISH_COPY_HASH: &str = "catalog.publish.copy-hash";
@@ -137,6 +139,7 @@ pub(crate) mod pmu_phase {
                     SEARCH_OPTIMIZE,
                     SEARCH_INTEGRITY,
                     SHARD_COMMIT,
+                    SHARD_ALLOCATOR_TRIM,
                     SHARD_VALIDATE,
                     PUBLISH_COPY_HASH,
                 ],
@@ -154,6 +157,7 @@ pub(crate) mod pmu_phase {
                     "catalog.shard.search.optimize",
                     "catalog.shard.search.integrity",
                     "catalog.shard.commit",
+                    "catalog.shard.allocator-trim",
                     "catalog.shard.validate",
                     "catalog.publish.copy-hash",
                 ]
