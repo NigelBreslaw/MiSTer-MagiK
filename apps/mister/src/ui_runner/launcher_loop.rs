@@ -1960,6 +1960,7 @@ struct LauncherResponseTrace {
     expected_confirmed: usize,
     expected_feedback_hidden: usize,
     hidden_feedback_count: usize,
+    cancelled_feedback_count: usize,
     outstanding_feedback: HashSet<u64>,
     complete: bool,
     frame_trace_finalize_pending: bool,
@@ -2007,6 +2008,7 @@ struct LauncherResponseTraceSnapshot {
     expected_confirmed: usize,
     expected_feedback_hidden: usize,
     hidden_feedback_count: usize,
+    cancelled_feedback_count: usize,
     outstanding_feedback_count: usize,
     complete: bool,
     execution_enabled: bool,
@@ -2089,6 +2091,7 @@ impl LauncherResponseTrace {
             expected_confirmed,
             expected_feedback_hidden,
             hidden_feedback_count: 0,
+            cancelled_feedback_count: 0,
             outstanding_feedback: HashSet::new(),
             complete: false,
             frame_trace_finalize_pending: false,
@@ -2134,6 +2137,7 @@ impl LauncherResponseTrace {
             expected_confirmed: 0,
             expected_feedback_hidden: 0,
             hidden_feedback_count: 0,
+            cancelled_feedback_count: 0,
             outstanding_feedback: HashSet::new(),
             complete: false,
             frame_trace_finalize_pending: false,
@@ -2427,6 +2431,15 @@ impl LauncherResponseTrace {
                     Some(u64::try_from(visible_for.as_micros()).unwrap_or(u64::MAX)),
                 )
             }
+            crate::launcher_presentation::SelectionFeedbackConfirmation::Cancelled {
+                event_id,
+                target,
+                ..
+            } => {
+                self.outstanding_feedback.remove(event_id);
+                self.cancelled_feedback_count = self.cancelled_feedback_count.saturating_add(1);
+                ("cancelled", *event_id, target, None)
+            }
         };
         self.feedback_records.push(LauncherResponseFeedbackRecord {
             phase,
@@ -2573,7 +2586,10 @@ impl LauncherResponseTrace {
             .filter(|record| record.disposition == "confirmed")
             .count();
         if confirmed >= self.expected_confirmed
-            && self.hidden_feedback_count >= self.expected_feedback_hidden
+            && self
+                .hidden_feedback_count
+                .saturating_add(self.cancelled_feedback_count)
+                >= self.expected_feedback_hidden
             && self.outstanding_feedback.is_empty()
         {
             self.complete = true;
@@ -2673,6 +2689,7 @@ impl LauncherResponseTrace {
             expected_confirmed: self.expected_confirmed,
             expected_feedback_hidden: self.expected_feedback_hidden,
             hidden_feedback_count: self.hidden_feedback_count,
+            cancelled_feedback_count: self.cancelled_feedback_count,
             outstanding_feedback_count: self.outstanding_feedback.len(),
             complete: self.complete,
             execution_enabled: self.execution_enabled,
@@ -2719,6 +2736,7 @@ impl LauncherResponseTrace {
                 expected_confirmed: self.expected_confirmed,
                 expected_feedback_hidden: self.expected_feedback_hidden,
                 hidden_feedback_count: self.hidden_feedback_count,
+                cancelled_feedback_count: self.cancelled_feedback_count,
                 outstanding_feedback_count: self.outstanding_feedback.len(),
                 complete: false,
                 execution_enabled: self.execution_enabled,
@@ -2780,6 +2798,7 @@ impl LauncherResponseTraceSnapshot {
         self.expected_confirmed = next.expected_confirmed;
         self.expected_feedback_hidden = next.expected_feedback_hidden;
         self.hidden_feedback_count = next.hidden_feedback_count;
+        self.cancelled_feedback_count = next.cancelled_feedback_count;
         self.outstanding_feedback_count = next.outstanding_feedback_count;
         self.queue_high_water = next.queue_high_water;
         if next.input_reader_policy.is_some() {
@@ -3005,6 +3024,7 @@ impl LauncherResponseTraceSnapshot {
                     "expected_feedback_hidden": self.expected_feedback_hidden,
                     "confirmed": self.records.iter().filter(|record| record.disposition == "confirmed").count(),
                     "feedback_hidden": self.hidden_feedback_count,
+                    "feedback_cancelled": self.cancelled_feedback_count,
                     "outstanding_feedback": self.outstanding_feedback_count,
                 },
                 "runtime": build_identity,
@@ -11796,6 +11816,18 @@ pub(super) fn run_launcher_loop(
                         frames,
                         confirmed_present_sequence,
                     ),
+                    crate::launcher_presentation::SelectionFeedbackConfirmation::Cancelled {
+                        event_id,
+                        target,
+                        ..
+                    } => crate::ui_logln!(
+                        "selection_feedback phase=cancelled event={} surface={} item={} frame={} sequence={}",
+                        event_id,
+                        target.surface,
+                        target.item,
+                        frames,
+                        confirmed_present_sequence,
+                    ),
                 }
             }
         }
@@ -14631,13 +14663,24 @@ mod tests {
             45,
             11,
         );
+        trace.record_feedback_confirmation(
+            &crate::launcher_presentation::SelectionFeedbackConfirmation::Cancelled {
+                event_id: 10,
+                target: SelectionFeedbackTarget::new("menu:computers", "apple-ii"),
+                confirmed_at: visible_at + Duration::from_millis(85),
+            },
+            46,
+            12,
+        );
 
-        assert_eq!(trace.feedback_records.len(), 2);
+        assert_eq!(trace.feedback_records.len(), 3);
         assert_eq!(trace.feedback_records[0].phase, "visible");
         assert_eq!(trace.feedback_records[0].confirmed_frame, 40);
         assert_eq!(trace.feedback_records[1].phase, "hidden");
         assert_eq!(trace.feedback_records[1].dwell_us, Some(84_000));
         assert_eq!(trace.feedback_records[1].confirmed_sequence, 11);
+        assert_eq!(trace.feedback_records[2].phase, "cancelled");
+        assert_eq!(trace.cancelled_feedback_count, 1);
     }
 
     #[test]

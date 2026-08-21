@@ -74,6 +74,11 @@ pub enum SelectionFeedbackConfirmation {
         visible_for: Duration,
         confirmed_at: Instant,
     },
+    Cancelled {
+        event_id: u64,
+        target: SelectionFeedbackTarget,
+        confirmed_at: Instant,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -87,7 +92,7 @@ struct ActiveSelectionFeedback {
 struct PendingSelectionFeedbackRemoval {
     event_id: u64,
     target: SelectionFeedbackTarget,
-    visible_since: Instant,
+    visible_since: Option<Instant>,
     requested_revision: u64,
 }
 
@@ -106,13 +111,8 @@ impl SelectionFeedback {
         if self.surface.as_deref() == surface {
             return false;
         }
-        let changed = !self.active.is_empty() || !self.pending_removals.is_empty();
-        self.active.clear();
-        self.pending_removals.clear();
+        let changed = self.retire_active();
         self.surface = surface.map(str::to_string);
-        if changed {
-            self.bump_revision();
-        }
         changed
     }
 
@@ -122,18 +122,45 @@ impl SelectionFeedback {
         }
         self.next_event_id = self.next_event_id.wrapping_add(1).max(1);
         let event_id = self.next_event_id;
-        self.pending_removals.retain(|entry| entry.target != target);
-        if let Some(entry) = self.active.iter_mut().find(|entry| entry.target == target) {
-            entry.event_id = event_id;
-            entry.visible_since = None;
-        } else {
-            self.active.push(ActiveSelectionFeedback {
-                event_id,
-                target,
-                visible_since: None,
+        let replaced = self
+            .active
+            .iter()
+            .position(|entry| entry.target == target)
+            .map(|index| self.active.remove(index));
+        self.active.push(ActiveSelectionFeedback {
+            event_id,
+            target,
+            visible_since: None,
+        });
+        self.bump_revision();
+        if let Some(replaced) = replaced {
+            self.pending_removals.push(PendingSelectionFeedbackRemoval {
+                event_id: replaced.event_id,
+                target: replaced.target,
+                visible_since: replaced.visible_since,
+                requested_revision: self.revision,
             });
         }
+        true
+    }
+
+    fn retire_active(&mut self) -> bool {
+        if self.active.is_empty() {
+            return false;
+        }
         self.bump_revision();
+        let requested_revision = self.revision;
+        self.pending_removals
+            .extend(
+                self.active
+                    .drain(..)
+                    .map(|entry| PendingSelectionFeedbackRemoval {
+                        event_id: entry.event_id,
+                        target: entry.target,
+                        visible_since: entry.visible_since,
+                        requested_revision,
+                    }),
+            );
         true
     }
 
@@ -153,16 +180,16 @@ impl SelectionFeedback {
         }
         self.bump_revision();
         self.pending_removals
-            .extend(expired.into_iter().map(|entry| {
-                PendingSelectionFeedbackRemoval {
-                    event_id: entry.event_id,
-                    target: entry.target,
-                    visible_since: entry
-                        .visible_since
-                        .expect("only physically visible feedback can expire"),
-                    requested_revision: self.revision,
-                }
-            }));
+            .extend(
+                expired
+                    .into_iter()
+                    .map(|entry| PendingSelectionFeedbackRemoval {
+                        event_id: entry.event_id,
+                        target: entry.target,
+                        visible_since: entry.visible_since,
+                        requested_revision: self.revision,
+                    }),
+            );
         true
     }
 
@@ -199,23 +226,42 @@ impl SelectionFeedback {
                     target: active.target.clone(),
                     confirmed_at,
                 });
-            }
-        }
-        self.pending_removals.retain(|entry| {
-            let hidden = entry.requested_revision <= stamp.revision
-                && !stamp
-                    .entries
-                    .iter()
-                    .any(|stamped| stamped.target == entry.target);
-            if hidden {
-                confirmations.push(SelectionFeedbackConfirmation::Hidden {
-                    event_id: entry.event_id,
-                    target: entry.target.clone(),
-                    visible_for: confirmed_at.saturating_duration_since(entry.visible_since),
+            } else if let Some(pending) = self.pending_removals.iter_mut().find(|entry| {
+                entry.event_id == stamped.event_id
+                    && entry.target == stamped.target
+                    && entry.requested_revision > stamp.revision
+                    && entry.visible_since.is_none()
+            }) {
+                pending.visible_since = Some(confirmed_at);
+                confirmations.push(SelectionFeedbackConfirmation::Visible {
+                    event_id: pending.event_id,
+                    target: pending.target.clone(),
                     confirmed_at,
                 });
             }
-            !hidden
+        }
+        self.pending_removals.retain(|entry| {
+            let removed = entry.requested_revision <= stamp.revision
+                && !stamp.entries.iter().any(|stamped| {
+                    stamped.event_id == entry.event_id && stamped.target == entry.target
+                });
+            if removed {
+                if let Some(visible_since) = entry.visible_since {
+                    confirmations.push(SelectionFeedbackConfirmation::Hidden {
+                        event_id: entry.event_id,
+                        target: entry.target.clone(),
+                        visible_for: confirmed_at.saturating_duration_since(visible_since),
+                        confirmed_at,
+                    });
+                } else {
+                    confirmations.push(SelectionFeedbackConfirmation::Cancelled {
+                        event_id: entry.event_id,
+                        target: entry.target.clone(),
+                        confirmed_at,
+                    });
+                }
+            }
+            !removed
         });
         confirmations
     }
@@ -814,7 +860,14 @@ mod tests {
             .find(|entry| entry.target.item == "apple-ii")
             .expect("re-entered Apple II feedback");
         assert_eq!(apple_event.event_id, 3);
-        feedback.confirm(&reentry_stamp, origin + Duration::from_millis(70));
+        let confirmations = feedback.confirm(&reentry_stamp, origin + Duration::from_millis(70));
+        assert!(matches!(
+            confirmations.as_slice(),
+            [
+                SelectionFeedbackConfirmation::Visible { event_id: 3, .. },
+                SelectionFeedbackConfirmation::Hidden { event_id: 1, .. }
+            ]
+        ));
 
         assert!(!feedback.expire_due(origin + Duration::from_millis(129)));
         assert!(feedback.expire_due(origin + Duration::from_millis(150)));
@@ -823,7 +876,7 @@ mod tests {
     }
 
     #[test]
-    fn replacing_surface_clears_feedback_without_creating_a_pulse() {
+    fn replacing_surface_cancels_feedback_proven_never_visible() {
         let mut feedback = SelectionFeedback::default();
         feedback.register(target("apple-ii"));
         assert_eq!(feedback.stamp().entries.len(), 1);
@@ -833,7 +886,74 @@ mod tests {
             item: "nintendo".to_string(),
         };
         assert!(feedback.sync_surface(Some(&other)));
-        assert!(feedback.stamp().entries.is_empty());
+        let removal_stamp = feedback.stamp();
+        assert!(removal_stamp.entries.is_empty());
+        assert!(matches!(
+            feedback.confirm(&removal_stamp, Instant::now()).as_slice(),
+            [SelectionFeedbackConfirmation::Cancelled { event_id: 1, .. }]
+        ));
+    }
+
+    #[test]
+    fn replacing_surface_retires_physically_visible_feedback() {
+        let mut feedback = SelectionFeedback::default();
+        let origin = Instant::now();
+        feedback.register(target("apple-ii"));
+        let visible_stamp = feedback.stamp();
+        feedback.confirm(&visible_stamp, origin);
+
+        let other = SelectionFeedbackTarget::new("menu:consoles", "nintendo");
+        assert!(feedback.sync_surface(Some(&other)));
+        let removal_stamp = feedback.stamp();
+        assert!(matches!(
+            feedback
+                .confirm(&removal_stamp, origin + Duration::from_millis(5))
+                .as_slice(),
+            [SelectionFeedbackConfirmation::Hidden { event_id: 1, .. }]
+        ));
+    }
+
+    #[test]
+    fn in_flight_visibility_survives_surface_retirement() {
+        let mut feedback = SelectionFeedback::default();
+        let origin = Instant::now();
+        feedback.register(target("apple-ii"));
+        let visible_stamp = feedback.stamp();
+
+        let other = SelectionFeedbackTarget::new("menu:consoles", "nintendo");
+        assert!(feedback.sync_surface(Some(&other)));
+        let removal_stamp = feedback.stamp();
+        assert!(matches!(
+            feedback.confirm(&visible_stamp, origin).as_slice(),
+            [SelectionFeedbackConfirmation::Visible { event_id: 1, .. }]
+        ));
+        assert!(matches!(
+            feedback
+                .confirm(&removal_stamp, origin + Duration::from_millis(5))
+                .as_slice(),
+            [SelectionFeedbackConfirmation::Hidden { event_id: 1, .. }]
+        ));
+    }
+
+    #[test]
+    fn repeated_surface_changes_preserve_pending_retirement() {
+        let mut feedback = SelectionFeedback::default();
+        let origin = Instant::now();
+        feedback.register(target("apple-ii"));
+        let visible_stamp = feedback.stamp();
+        feedback.confirm(&visible_stamp, origin);
+
+        let consoles = SelectionFeedbackTarget::new("menu:consoles", "nintendo");
+        let settings = SelectionFeedbackTarget::new("settings", "audio");
+        assert!(feedback.sync_surface(Some(&consoles)));
+        assert!(!feedback.sync_surface(Some(&settings)));
+        let removal_stamp = feedback.stamp();
+        assert!(matches!(
+            feedback
+                .confirm(&removal_stamp, origin + Duration::from_millis(5))
+                .as_slice(),
+            [SelectionFeedbackConfirmation::Hidden { event_id: 1, .. }]
+        ));
     }
 
     #[test]
