@@ -24337,6 +24337,9 @@ fn reboot_remote_command(mode: RebootMode) -> String {
 fn issue_reboot(sess: &Session, mode: RebootMode) -> Result<String> {
     let command = reboot_remote_command(mode);
     let out = exec(sess, &command, true)?;
+    if let Some(message) = exec_failure_message("reboot request", &out) {
+        return Err(message.into());
+    }
     let mode = out.stdout.trim();
     if mode.is_empty() {
         Ok("unknown".to_string())
@@ -26228,13 +26231,11 @@ fn agent_reboot_wait(args: &[String]) -> Result<()> {
     let timeout_secs = 120.0;
     let mode = reboot_mode.label();
     let issue_t = Instant::now();
-    let reply = agent_request("reboot", json!({"mode": mode}), Duration::from_secs(2))?;
+    let session = connect(10)?;
+    let reply = issue_reboot(&session, reboot_mode)?;
     let issue_ms = issue_t.elapsed().as_millis();
-    println!(
-        "agent reboot issued to {} after {issue_ms}ms: {}",
-        host(),
-        serde_json::to_string(reply.response.get("result").unwrap_or(&Value::Null))?
-    );
+    println!("reboot issued to {} after {issue_ms}ms: {reply}", host());
+    drop(session);
 
     let start = Instant::now();
     let mut down_ms = None;
@@ -26755,6 +26756,30 @@ fn wait_launcher_ready_after(
         format!("launcher did not restart after pid {previous_pid}; last launcher pid={last_pid}")
             .into(),
     )
+}
+
+fn wait_main_launcher_active(sess: &Session, timeout: Duration) -> Result<u128> {
+    let started = Instant::now();
+    let mut last_state = String::new();
+    while started.elapsed() < timeout {
+        let main = remote_read(sess, MAIN_STATUS_REMOTE)
+            .and_then(|text| serde_json::from_str::<Value>(&text).ok());
+        last_state = main
+            .as_ref()
+            .and_then(|status| status.get("launcher_state"))
+            .and_then(Value::as_str)
+            .unwrap_or("missing")
+            .to_string();
+        if last_state == "LauncherActive" {
+            return Ok(started.elapsed().as_millis());
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    Err(format!(
+        "Main did not return to LauncherActive after {}ms; last launcher_state={last_state}",
+        timeout.as_millis()
+    )
+    .into())
 }
 
 fn launcher_ready_status(
@@ -27300,6 +27325,13 @@ fn purge_development_library_data_and_reboot() -> Result<()> {
     }
     println!("{summary}");
     exec_checked(&session, "sync Dev library purge", "sync")?;
+    exec_checked(
+        &session,
+        "Dev library purge resume before reboot",
+        &acknowledged_main_command("mister_magik_resume"),
+    )?;
+    let active_ms = wait_main_launcher_active(&session, Duration::from_secs(20))?;
+    println!("Dev library purge Main active after {active_ms}ms");
     drop(session);
     agent_reboot_wait(&[])
 }
