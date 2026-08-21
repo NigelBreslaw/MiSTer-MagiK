@@ -821,6 +821,8 @@ impl CounterGroup {
     }
 
     pub fn open_set(counter_set: CounterSet) -> Result<Self, PmuFailure> {
+        #[cfg(not(target_os = "linux"))]
+        let _ = counter_set;
         #[cfg(target_os = "linux")]
         {
             linux::LinuxCounterGroup::open(counter_set).map(|inner| Self { inner })
@@ -840,6 +842,8 @@ impl CounterGroup {
     pub fn open_set_with_diagnostics(
         counter_set: CounterSet,
     ) -> (Result<Self, PmuFailure>, PmuOpenDiagnostics) {
+        #[cfg(not(target_os = "linux"))]
+        let _ = counter_set;
         #[cfg(target_os = "linux")]
         {
             let (inner, diagnostics) =
