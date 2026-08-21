@@ -63,6 +63,13 @@ pub enum Command {
     Deliver {
         #[arg(value_enum)]
         target: Option<DeliverTarget>,
+        #[arg(
+            long,
+            value_name = "PATH",
+            conflicts_with = "target",
+            help = "Use a locally verified game-database release directory for Dev delivery"
+        )]
+        game_databases_release_dir: Option<PathBuf>,
     },
     Benchmark {
         #[arg(value_enum, default_value_t)]
@@ -851,9 +858,28 @@ mod tests {
     }
 
     #[test]
-    fn deliver_is_flag_free_and_git_independent() {
+    fn deliver_accepts_only_the_bounded_local_database_input() {
         assert!(Cli::try_parse_from(["agent-cli", "deliver"]).is_ok());
         assert!(Cli::try_parse_from(["agent-cli", "deliver", "local-main"]).is_ok());
+        assert!(
+            Cli::try_parse_from([
+                "agent-cli",
+                "deliver",
+                "--game-databases-release-dir",
+                "build/game-databases"
+            ])
+            .is_ok()
+        );
+        assert!(
+            Cli::try_parse_from([
+                "agent-cli",
+                "deliver",
+                "local-main",
+                "--game-databases-release-dir",
+                "build/game-databases"
+            ])
+            .is_err()
+        );
         assert!(Cli::try_parse_from(["agent-cli", "deliver", "--local-main"]).is_err());
         assert!(Cli::try_parse_from(["agent-cli", "deliver", "--fast"]).is_err());
         assert!(Cli::try_parse_from(["agent-cli", "deliver", "-m", "message"]).is_err());

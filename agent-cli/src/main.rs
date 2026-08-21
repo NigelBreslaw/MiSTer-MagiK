@@ -186,9 +186,20 @@ fn dispatch(
             }
             return Ok(outcome);
         }
-        CliCommand::Deliver { target: None } => return deliver(evidence, repository, reporter),
+        CliCommand::Deliver {
+            target: None,
+            game_databases_release_dir,
+        } => {
+            return deliver(
+                evidence,
+                repository,
+                game_databases_release_dir.as_deref(),
+                reporter,
+            );
+        }
         CliCommand::Deliver {
             target: Some(DeliverTarget::LocalMain),
+            ..
         } => return deliver_local_main(repository, reporter),
         CliCommand::Benchmark {
             scenario,
@@ -961,10 +972,11 @@ fn write_github_output(
 fn deliver(
     evidence: &Evidence,
     repository: &std::path::Path,
+    game_databases_release_dir: Option<&std::path::Path>,
     reporter: &mut Reporter<'_>,
 ) -> AgentResult<Outcome> {
     let total_started = Instant::now();
-    let delivery = deliver_inner(evidence, repository, reporter);
+    let delivery = deliver_inner(evidence, repository, game_databases_release_dir, reporter);
     reporter.emit(
         EventKind::Progress,
         "cleanup",
@@ -1003,6 +1015,7 @@ fn deliver(
 fn deliver_inner(
     _evidence: &Evidence,
     repository: &std::path::Path,
+    game_databases_release_dir: Option<&std::path::Path>,
     reporter: &mut Reporter<'_>,
 ) -> AgentResult<agent_cli::delivery::DeliveryExecution> {
     let preflight_started = Instant::now();
@@ -1016,7 +1029,7 @@ fn deliver_inner(
     })();
     emit_delivery_timing(reporter, "preflight", preflight.is_ok(), preflight_started)?;
     let sha = preflight?;
-    agent_cli::delivery::execute(repository, &sha, reporter)
+    agent_cli::delivery::execute(repository, &sha, game_databases_release_dir, reporter)
 }
 
 fn emit_delivery_timing(

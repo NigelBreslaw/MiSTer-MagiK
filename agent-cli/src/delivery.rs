@@ -278,12 +278,14 @@ impl DeliveryDevice for DeviceClient {
 pub fn execute(
     repository: &Path,
     expected_commit: &str,
+    game_databases_release_dir: Option<&Path>,
     reporter: &mut Reporter<'_>,
 ) -> AgentResult<DeliveryExecution> {
     execute_with_device(
         repository,
         expected_commit,
         None,
+        game_databases_release_dir,
         reporter,
         DeviceClient::default(),
     )
@@ -293,6 +295,7 @@ fn execute_with_device<D: DeliveryDevice>(
     repository: &Path,
     expected_commit: &str,
     platform_candidate: Option<crate::platform_ci::Candidate>,
+    game_databases_release_dir: Option<&Path>,
     reporter: &mut Reporter<'_>,
     device: D,
 ) -> AgentResult<DeliveryExecution> {
@@ -325,6 +328,7 @@ fn execute_with_device<D: DeliveryDevice>(
         build_timings: Vec::new(),
         build_attribution: None,
         timing_samples: Vec::new(),
+        game_databases_release_dir: game_databases_release_dir.map(Path::to_path_buf),
         stage: repository
             .join("build/agent-deploy/stage")
             .join(expected_commit),
@@ -572,6 +576,7 @@ struct ProcessActions<'a, D = DeviceClient> {
     build_timings: Vec<crate::build::BuildTimingSample>,
     build_attribution: Option<crate::build::BuildArtifactAttribution>,
     timing_samples: Vec<crate::host::DeliveryTimingSample>,
+    game_databases_release_dir: Option<PathBuf>,
     stage: PathBuf,
     device: D,
 }
@@ -668,7 +673,11 @@ impl<D> ProcessActions<'_, D> {
     }
 
     fn prepare_databases(&self) -> AgentResult<()> {
-        prepare_stage_databases(self.repository, &self.stage)?;
+        prepare_stage_databases(
+            self.repository,
+            &self.stage,
+            self.game_databases_release_dir.as_deref(),
+        )?;
         if self.decision == DeliveryDecision::Platform {
             generate_platform_manifest(
                 self.repository,
@@ -859,9 +868,22 @@ fn prepare_stage_files(
     Ok(candidate_main_revision.to_owned())
 }
 
-fn prepare_stage_databases(repository: &Path, stage: &Path) -> AgentResult<()> {
+fn prepare_stage_databases(
+    repository: &Path,
+    stage: &Path,
+    local_release: Option<&Path>,
+) -> AgentResult<()> {
     let databases = stage.join("databases");
-    prepare_game_databases(repository, &databases)?;
+    if let Some(local_release) = local_release {
+        let local_release = if local_release.is_absolute() {
+            local_release.to_path_buf()
+        } else {
+            repository.join(local_release)
+        };
+        extract_game_databases(repository, &local_release, &databases)?;
+    } else {
+        prepare_game_databases(repository, &databases)?;
+    }
     for name in [
         "mame.sqlite3",
         "hbmame.sqlite3",
@@ -1450,6 +1472,7 @@ mod tests {
             build_timings: Vec::new(),
             build_attribution: None,
             timing_samples: Vec::new(),
+            game_databases_release_dir: None,
             stage: PathBuf::from("stage"),
             device,
         }
