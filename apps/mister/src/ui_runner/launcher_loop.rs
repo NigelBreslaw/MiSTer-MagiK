@@ -5795,20 +5795,14 @@ pub(super) fn run_launcher_loop(
         && launcher_presenter.startup_intro_native_hidden_slots_available(ui)
     {
         match PreparedStartupIntro::new(ui) {
-            Ok(prepared) => match launcher_presenter.take_direct_hidden_frame_buffers() {
-                Ok(buffers) => {
-                    print_startup_event(
-                        start,
-                        "startup_intro_started",
-                        format!("width={} height={} fps=60", ui.fb_w(), ui.fb_h()),
-                    );
-                    Some(prepared.attach(buffers))
-                }
-                Err(failure) => {
-                    launcher_presenter.fail_latch_completion(failure);
-                    None
-                }
-            },
+            Ok(prepared) => {
+                print_startup_event(
+                    start,
+                    "startup_intro_started",
+                    format!("width={} height={} fps=60", ui.fb_w(), ui.fb_h()),
+                );
+                Some(prepared.start())
+            }
             Err(error) => {
                 crate::ui_errln!("startup intro preparation failed: {error}");
                 None
@@ -9445,13 +9439,17 @@ pub(super) fn run_launcher_loop(
             navigation_transition.settings_physical_space(),
         ) {
             let mut direct_render_timing = None;
-            match launcher_presenter.try_render_direct_hidden_frame(f, display_session, |pixels| {
-                let started = Instant::now();
-                let start_phase_us = pacer.age_since_last_hit_us(started);
-                let rendered = navigation_transition.render_into(pixels).is_ok();
-                direct_render_timing = Some((started, Instant::now(), start_phase_us));
-                rendered
-            }) {
+            match launcher_presenter.try_render_direct_hidden_frame(
+                f,
+                display_session,
+                |_, pixels| {
+                    let started = Instant::now();
+                    let start_phase_us = pacer.age_since_last_hit_us(started);
+                    let rendered = navigation_transition.render_into(pixels).is_ok();
+                    direct_render_timing = Some((started, Instant::now(), start_phase_us));
+                    rendered
+                },
+            ) {
                 Ok(Some(completed)) => {
                     let (direct_render_started, direct_render_completed, start_phase_us) =
                         direct_render_timing.expect("successful source carrier was timed");
@@ -9478,13 +9476,17 @@ pub(super) fn run_launcher_loop(
             orientation_transition.destination_ready(),
         ) {
             let mut direct_render_timing = None;
-            match launcher_presenter.try_render_direct_hidden_frame(f, display_session, |pixels| {
-                let started = Instant::now();
-                let start_phase_us = pacer.age_since_last_hit_us(started);
-                let rendered = orientation_transition.copy_source_into(pixels);
-                direct_render_timing = Some((started, Instant::now(), start_phase_us));
-                rendered
-            }) {
+            match launcher_presenter.try_render_direct_hidden_frame(
+                f,
+                display_session,
+                |_, pixels| {
+                    let started = Instant::now();
+                    let start_phase_us = pacer.age_since_last_hit_us(started);
+                    let rendered = orientation_transition.copy_source_into(pixels);
+                    direct_render_timing = Some((started, Instant::now(), start_phase_us));
+                    rendered
+                },
+            ) {
                 Ok(Some(completed)) => {
                     let (direct_render_started, direct_render_completed, start_phase_us) =
                         direct_render_timing.expect("successful orientation carrier was timed");
@@ -9533,36 +9535,45 @@ pub(super) fn run_launcher_loop(
                 }
             }
             if startup_intro_failure.is_none() {
-                match launcher_presenter
-                    .try_issue_startup_intro_hidden_slot_render_grant(f, display_session)
-                {
-                    Ok(Some(grant)) => match intro
-                        .render_grant(grant, launcher_readiness.needs_source_evidence())
-                    {
-                        Ok(completed) => {
-                            completed_hidden_frame_for_present = Some(completed);
-                            accepted_startup_intro_frame = true;
+                let mut source_evidence = None;
+                let mut render_error = None;
+                match launcher_presenter.try_render_startup_intro_hidden_frame(
+                    f,
+                    display_session,
+                    |grant, pixels| match intro.render_into(
+                        grant,
+                        pixels,
+                        launcher_readiness.needs_source_evidence(),
+                    ) {
+                        Ok(evidence) => {
+                            source_evidence = evidence;
+                            true
                         }
-                        Err(error) => startup_intro_failure = Some(error),
+                        Err(error) => {
+                            render_error = Some(error);
+                            false
+                        }
                     },
+                ) {
+                    Ok(Some(mut completed)) => {
+                        completed.source_evidence = source_evidence;
+                        completed_hidden_frame_for_present = Some(completed);
+                        accepted_startup_intro_frame = true;
+                    }
                     Ok(None) => {}
                     Err(failure) => {
                         launcher_presenter.fail_latch_completion(failure);
                         startup_intro_failure = Some("hidden-slot grant failed".into());
                     }
                 }
+                if startup_intro_failure.is_none() {
+                    startup_intro_failure = render_error;
+                }
             }
         }
         if let Some(error) = startup_intro_failure.take() {
             crate::ui_errln!("startup intro stopped: {error}");
-            if let Some(mut intro) = startup_intro.take() {
-                let returned = intro.take_buffers();
-                if let Err(failure) =
-                    launcher_presenter.restore_direct_hidden_frame_buffers(returned)
-                {
-                    launcher_presenter.fail_latch_completion(failure);
-                }
-            }
+            startup_intro = None;
             launcher_presenter.invalidate_external_hidden_mode();
             full_frame_present = true;
             window.request_redraw();
@@ -10276,7 +10287,7 @@ pub(super) fn run_launcher_loop(
                     match launcher_presenter.try_render_direct_hidden_frame(
                         f,
                         display_session,
-                        |pixels| {
+                        |_, pixels| {
                             let started = Instant::now();
                             let start_phase_us = pacer.age_since_last_hit_us(started);
                             let rendered = navigation_transition.render_into(pixels).is_ok();
@@ -11635,14 +11646,8 @@ pub(super) fn run_launcher_loop(
                     let cadence_error = authoritative_cadence.error.as_deref().unwrap_or("none");
                     frame_accounting.record_startup_intro_cadence(authoritative_cadence.clone());
                     let restored = intro.restore_handoff_snapshot(&mut layer_target);
-                    let returned = intro.take_buffers();
                     if !restored {
                         crate::ui_errln!("startup intro handoff cache geometry mismatch");
-                    }
-                    if let Err(failure) =
-                        launcher_presenter.restore_direct_hidden_frame_buffers(returned)
-                    {
-                        launcher_presenter.fail_latch_completion(failure);
                     }
                     launcher_presenter.invalidate_external_hidden_mode();
                     startup_intro = None;
@@ -12035,11 +12040,7 @@ pub(super) fn run_launcher_loop(
         let _ = launcher_response_trace.record_scheduler_interval("frame-tail", scheduler_phase);
         record_launcher_frame_phase!(LauncherFramePhase::FrameFinished);
     }
-    if let Some(mut intro) = startup_intro.take() {
-        let returned = intro.take_buffers();
-        if let Err(failure) = launcher_presenter.restore_direct_hidden_frame_buffers(returned) {
-            launcher_presenter.fail_latch_completion(failure);
-        }
+    if startup_intro.take().is_some() {
         launcher_presenter.invalidate_external_hidden_mode();
     }
     // Preserve the continuous background permission for a later launcher run

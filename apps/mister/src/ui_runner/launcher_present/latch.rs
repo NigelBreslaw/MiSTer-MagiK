@@ -214,7 +214,7 @@ fn hidden_buffer_base(
 }
 
 pub(in crate::ui_runner) struct FpgaVblankLatchHiddenPresenter<B = PluginLatchFrameBuffers> {
-    buffers: Option<B>,
+    buffers: B,
     base1: u32,
     base2: u32,
     disabled: bool,
@@ -308,25 +308,6 @@ impl FpgaVblankLatchHiddenPresenter<PluginLatchFrameBuffers> {
         ))
     }
 
-    pub(in crate::ui_runner) fn take_direct_frame_buffers(
-        &mut self,
-    ) -> Result<PluginLatchFrameBuffers, LatchFailure> {
-        if self.outstanding_direct_grant.is_some() {
-            return Err(LatchFailure::runtime(
-                LatchFailureStage::BufferMap,
-                LatchFailureReason::NoWritableHiddenBuffer,
-                "cannot transfer hidden mappings with an outstanding direct grant",
-            ));
-        }
-        self.buffers.take().ok_or_else(|| {
-            LatchFailure::runtime(
-                LatchFailureStage::BufferMap,
-                LatchFailureReason::ScanoutMapFailed,
-                "hidden mappings are already owned by a direct renderer",
-            )
-        })
-    }
-
     pub(in crate::ui_runner) fn try_render_direct_hidden_frame<H, R>(
         &mut self,
         hardware: &mut H,
@@ -335,18 +316,45 @@ impl FpgaVblankLatchHiddenPresenter<PluginLatchFrameBuffers> {
     ) -> Result<Option<CompletedHiddenFrame>, LatchFailure>
     where
         H: LatchHardware,
-        R: FnOnce(&mut [Rgb565Pixel]) -> bool,
+        R: FnOnce(HiddenSlotRenderGrant, &mut [Rgb565Pixel]) -> bool,
     {
-        let Some(grant) = self.try_issue_hidden_slot_render_grant(hardware, display_session)?
+        self.try_render_hidden_frame(hardware, display_session, true, render)
+    }
+
+    pub(in crate::ui_runner) fn try_render_startup_intro_hidden_frame<H, R>(
+        &mut self,
+        hardware: &mut H,
+        display_session: &mut LauncherDisplaySession,
+        render: R,
+    ) -> Result<Option<CompletedHiddenFrame>, LatchFailure>
+    where
+        H: LatchHardware,
+        R: FnOnce(HiddenSlotRenderGrant, &mut [Rgb565Pixel]) -> bool,
+    {
+        self.try_render_hidden_frame(hardware, display_session, false, render)
+    }
+
+    fn try_render_hidden_frame<H, R>(
+        &mut self,
+        hardware: &mut H,
+        display_session: &mut LauncherDisplaySession,
+        require_identity_geometry: bool,
+        render: R,
+    ) -> Result<Option<CompletedHiddenFrame>, LatchFailure>
+    where
+        H: LatchHardware,
+        R: FnOnce(HiddenSlotRenderGrant, &mut [Rgb565Pixel]) -> bool,
+    {
+        let Some(grant) = self.try_issue_external_hidden_slot_render_grant(
+            hardware,
+            display_session,
+            require_identity_geometry,
+        )?
         else {
             return Ok(None);
         };
-        let buffer = self
-            .buffers
-            .as_mut()
-            .expect("hidden mappings available for direct transition rendering")
-            .buffer_mut(grant.slot_index);
-        if !render(buffer.pixels_mut()) {
+        let buffer = self.buffers.buffer_mut(grant.slot_index);
+        if !render(grant, buffer.pixels_mut()) {
             self.outstanding_direct_grant = None;
             return Ok(None);
         }
@@ -355,32 +363,6 @@ impl FpgaVblankLatchHiddenPresenter<PluginLatchFrameBuffers> {
             grant,
             source_evidence: None,
         }))
-    }
-
-    pub(in crate::ui_runner) fn restore_direct_frame_buffers(
-        &mut self,
-        returned: Option<PluginLatchFrameBuffers>,
-    ) -> Result<(), LatchFailure> {
-        if self.buffers.is_some() {
-            return Err(LatchFailure::runtime(
-                LatchFailureStage::BufferMap,
-                LatchFailureReason::ScanoutMapFailed,
-                "hidden mappings returned while presenter mappings are still active",
-            ));
-        }
-        let buffers = match returned {
-            Some(buffers) => buffers,
-            None => PluginLatchFrameBuffers::open(self.width, self.height)?,
-        };
-        if buffers.base_addr(1) != self.base1 || buffers.base_addr(2) != self.base2 {
-            return Err(LatchFailure::runtime(
-                LatchFailureStage::ModuleLayout,
-                LatchFailureReason::ScanoutLayoutMismatch,
-                "returned hidden mappings do not match the presenter's physical slots",
-            ));
-        }
-        self.buffers = Some(buffers);
-        Ok(())
     }
 }
 
@@ -397,7 +379,7 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
         let base1 = buffers.base_addr(1);
         let base2 = buffers.base_addr(2);
         Self {
-            buffers: Some(buffers),
+            buffers,
             base1,
             base2,
             disabled: false,
@@ -428,9 +410,7 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
     }
 
     fn buffers(&self) -> &B {
-        self.buffers
-            .as_ref()
-            .expect("hidden mappings must be restored before copied presentation")
+        &self.buffers
     }
 
     pub(in crate::ui_runner) fn exact_identity_geometry(&self) -> bool {
@@ -443,16 +423,6 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
         display_session: &mut LauncherDisplaySession,
     ) -> Result<Option<HiddenSlotRenderGrant>, LatchFailure> {
         self.try_issue_external_hidden_slot_render_grant(hardware, display_session, true)
-    }
-
-    pub(in crate::ui_runner) fn try_issue_startup_intro_hidden_slot_render_grant<
-        H: LatchHardware,
-    >(
-        &mut self,
-        hardware: &mut H,
-        display_session: &mut LauncherDisplaySession,
-    ) -> Result<Option<HiddenSlotRenderGrant>, LatchFailure> {
-        self.try_issue_external_hidden_slot_render_grant(hardware, display_session, false)
     }
 
     fn try_issue_external_hidden_slot_render_grant<H: LatchHardware>(
@@ -893,9 +863,10 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
         &self,
         buffer_index: u8,
     ) -> Option<Rgb565FrameView<'_>> {
-        self.buffers
-            .as_ref()
-            .map(|buffers| buffers.frame_view(buffer_index, self.width, self.height))
+        Some(
+            self.buffers
+                .frame_view(buffer_index, self.width, self.height),
+        )
     }
 
     pub(in crate::ui_runner) fn buffer_base_addr(&self, buffer_index: u8) -> u32 {
@@ -903,9 +874,7 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
     }
 
     pub(in crate::ui_runner) fn publish_requested_full_snapshot(&self) -> bool {
-        if self.buffers.is_none()
-            || !mister_magik_fb::framebuffer::stream::adaptive_full_snapshot_due()
-        {
+        if !mister_magik_fb::framebuffer::stream::adaptive_full_snapshot_due() {
             return false;
         }
         let Some(buffer_index) = self.last_committed_buffer else {
@@ -1711,7 +1680,7 @@ mod tests {
     }
 
     #[test]
-    fn external_hidden_grant_posts_while_mappings_are_owned_by_the_worker() {
+    fn direct_hidden_render_posts_while_presenter_keeps_mapping_ownership() {
         let mut presenter = presenter();
         let mut hardware = FakeHardware {
             statuses: vec![
@@ -1723,13 +1692,15 @@ mod tests {
             ..FakeHardware::default()
         };
         let mut display = display_session();
-        let worker_buffers = presenter.buffers.take().expect("loan mappings to worker");
-
-        let grant = presenter
-            .try_issue_hidden_slot_render_grant(&mut hardware, &mut display)
+        let completed = presenter
+            .try_render_direct_hidden_frame(&mut hardware, &mut display, |grant, pixels| {
+                assert_eq!(grant.slot_index, 2);
+                pixels[0] = Rgb565Pixel(0x5aa5);
+                true
+            })
             .unwrap()
-            .expect("inactive slot grant");
-        assert_eq!(grant.slot_index, 2);
+            .expect("inactive slot render");
+        let grant = completed.grant;
         assert!(
             presenter
                 .try_issue_hidden_slot_render_grant(&mut hardware, &mut display)
@@ -1738,15 +1709,7 @@ mod tests {
         );
 
         let stats = presenter
-            .present_completed_hidden_frame(
-                CompletedHiddenFrame {
-                    grant,
-                    source_evidence: None,
-                },
-                &mut hardware,
-                &mut display,
-                false,
-            )
+            .present_completed_hidden_frame(completed, &mut hardware, &mut display, false)
             .unwrap();
         assert_eq!(stats.copy_path, LatchCopyPath::ExternalDirect);
         assert_eq!(stats.copied_bytes, 0);
@@ -1767,7 +1730,10 @@ mod tests {
                 )
                 .is_err()
         );
-        presenter.buffers = Some(worker_buffers);
+        assert_eq!(
+            presenter.buffers.buffer_mut(2).pixels[0],
+            Rgb565Pixel(0x5aa5)
+        );
     }
 
     #[test]
@@ -1786,10 +1752,11 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
-        let grant = presenter
-            .try_issue_startup_intro_hidden_slot_render_grant(&mut hardware, &mut display)
+        let completed = presenter
+            .try_render_startup_intro_hidden_frame(&mut hardware, &mut display, |_, _| true)
             .unwrap()
-            .expect("startup intro native slot grant");
+            .expect("startup intro native slot render");
+        let grant = completed.grant;
 
         assert_eq!((grant.width, grant.height), (WIDTH, HEIGHT));
         assert_eq!(grant.stride_pixels, WIDTH);
@@ -1889,7 +1856,7 @@ mod tests {
             .try_issue_hidden_slot_render_grant(&mut hardware, &mut display)
             .unwrap()
             .expect("inactive slot grant");
-        let buffers = presenter.buffers.as_mut().expect("presenter owns buffers");
+        let buffers = &mut presenter.buffers;
         buffers.buffer_mut(grant.slot_index).pixels[0] = Rgb565Pixel(0x5aa5);
         FakeBuffers::publish_writes(buffers.buffer_mut(grant.slot_index));
 

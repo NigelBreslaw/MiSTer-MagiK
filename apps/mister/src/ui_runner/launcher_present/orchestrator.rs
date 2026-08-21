@@ -558,7 +558,7 @@ impl LauncherPresenter<FpgaVblankLatchHiddenPresenter> {
         render: R,
     ) -> Result<Option<CompletedHiddenFrame>, LatchFailure>
     where
-        R: FnOnce(&mut [Rgb565Pixel]) -> bool,
+        R: FnOnce(HiddenSlotRenderGrant, &mut [Rgb565Pixel]) -> bool,
     {
         match &mut self.state {
             LauncherPresenterState::Latch(latch) => {
@@ -568,47 +568,20 @@ impl LauncherPresenter<FpgaVblankLatchHiddenPresenter> {
         }
     }
 
-    pub(in crate::ui_runner) fn try_issue_startup_intro_hidden_slot_render_grant(
+    pub(in crate::ui_runner) fn try_render_startup_intro_hidden_frame<R>(
         &mut self,
         hardware: &mut Fpga,
         display: &mut LauncherDisplaySession,
-    ) -> Result<Option<HiddenSlotRenderGrant>, LatchFailure> {
+        render: R,
+    ) -> Result<Option<CompletedHiddenFrame>, LatchFailure>
+    where
+        R: FnOnce(HiddenSlotRenderGrant, &mut [Rgb565Pixel]) -> bool,
+    {
         match &mut self.state {
             LauncherPresenterState::Latch(latch) => {
-                latch.try_issue_startup_intro_hidden_slot_render_grant(hardware, display)
+                latch.try_render_startup_intro_hidden_frame(hardware, display, render)
             }
             LauncherPresenterState::ExplicitFb0 | LauncherPresenterState::Frozen { .. } => Ok(None),
-        }
-    }
-
-    pub(in crate::ui_runner) fn take_direct_hidden_frame_buffers(
-        &mut self,
-    ) -> Result<PluginLatchFrameBuffers, LatchFailure> {
-        match &mut self.state {
-            LauncherPresenterState::Latch(latch) => latch.take_direct_frame_buffers(),
-            LauncherPresenterState::ExplicitFb0 | LauncherPresenterState::Frozen { .. } => {
-                Err(LatchFailure::runtime(
-                    LatchFailureStage::BufferMap,
-                    LatchFailureReason::ScanoutMapFailed,
-                    "direct hidden mappings require an active latch presenter",
-                ))
-            }
-        }
-    }
-
-    pub(in crate::ui_runner) fn restore_direct_hidden_frame_buffers(
-        &mut self,
-        returned: Option<PluginLatchFrameBuffers>,
-    ) -> Result<(), LatchFailure> {
-        match &mut self.state {
-            LauncherPresenterState::Latch(latch) => latch.restore_direct_frame_buffers(returned),
-            LauncherPresenterState::ExplicitFb0 | LauncherPresenterState::Frozen { .. } => {
-                Err(LatchFailure::runtime(
-                    LatchFailureStage::BufferMap,
-                    LatchFailureReason::ScanoutMapFailed,
-                    "direct hidden mappings returned without an active latch presenter",
-                ))
-            }
         }
     }
 

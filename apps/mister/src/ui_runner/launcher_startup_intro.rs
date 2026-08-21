@@ -19,11 +19,10 @@ impl PreparedStartupIntro {
         })
     }
 
-    pub(super) fn attach(self, buffers: PluginLatchFrameBuffers) -> StartupIntroSession {
+    pub(super) fn start(self) -> StartupIntroSession {
         let refresh_period_us = self.playback.refresh_period_us();
         StartupIntroSession {
             playback: self.playback,
-            buffers: Some(buffers),
             refresh_period_us,
             confirmed_frames: 0,
             expected_refresh_intervals: 0,
@@ -38,7 +37,6 @@ impl PreparedStartupIntro {
 
 pub(super) struct StartupIntroSession {
     playback: StartupIntroPlayback,
-    buffers: Option<PluginLatchFrameBuffers>,
     refresh_period_us: u64,
     confirmed_frames: u64,
     expected_refresh_intervals: u64,
@@ -84,11 +82,12 @@ impl StartupIntroSession {
         self.playback.poll_launcher_snapshot_preparation()
     }
 
-    pub(super) fn render_grant(
+    pub(super) fn render_into(
         &mut self,
         grant: HiddenSlotRenderGrant,
+        pixels: &mut [Rgb565Pixel],
         capture_readiness_source: bool,
-    ) -> Result<CompletedHiddenFrame, String> {
+    ) -> Result<Option<SourceFrameEvidence>, String> {
         let geometry = self.playback.geometry();
         if grant.width != geometry.width()
             || grant.height != geometry.height()
@@ -107,20 +106,13 @@ impl StartupIntroSession {
             .slot_index
             .checked_sub(1)
             .ok_or("startup intro received invalid hidden slot zero")?;
-        let buffers = self
-            .buffers
-            .as_mut()
-            .ok_or("startup intro hidden mappings are unavailable")?;
-        let buffer = buffers.buffer_mut(grant.slot_index);
         self.playback
-            .render_into(buffer.pixels_mut(), slot, grant.stride_pixels)?;
-        let source_evidence =
-            hidden_frame_source_evidence(buffer.pixels(), grant, capture_readiness_source);
-        buffer.publish_writes();
-        Ok(CompletedHiddenFrame {
+            .render_into(pixels, slot, grant.stride_pixels)?;
+        Ok(hidden_frame_source_evidence(
+            pixels,
             grant,
-            source_evidence,
-        })
+            capture_readiness_source,
+        ))
     }
 
     /// Advances only after the latch reports this sequence active at the
@@ -258,10 +250,6 @@ impl StartupIntroSession {
         target.restore_presentation_cached(self.playback.handoff_snapshot())
     }
 
-    pub(super) fn take_buffers(&mut self) -> Option<PluginLatchFrameBuffers> {
-        self.buffers.take()
-    }
-
     #[cfg(test)]
     pub(super) fn frame(&self) -> u64 {
         self.playback.frame()
@@ -356,7 +344,6 @@ mod tests {
         let refresh_period_us = prepared.playback.refresh_period_us();
         StartupIntroSession {
             playback: prepared.playback,
-            buffers: None,
             refresh_period_us,
             confirmed_frames: 0,
             expected_refresh_intervals: 0,
