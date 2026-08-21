@@ -27503,14 +27503,14 @@ fn purge_development_library_data(session: &Session) -> Result<()> {
         gui = sh(DEVELOPMENT_GUI_REMOTE),
         safety = platform_safety_script(),
     );
-    exec_checked(&session, "Dev library purge preflight", &preflight)?;
+    exec_checked(session, "Dev library purge preflight", &preflight)?;
     exec_checked(
-        &session,
+        session,
         "Dev library purge suspend",
         &acknowledged_main_command("mister_magik_suspend"),
     )?;
     let purge = exec_checked_output(
-        &session,
+        session,
         "Dev catalog and screenshot purge",
         &format!(
             "{} purge-library-data --confirm",
@@ -27521,7 +27521,7 @@ fn purge_development_library_data(session: &Session) -> Result<()> {
         Ok(output) => output,
         Err(error) => {
             let resume = exec_checked(
-                &session,
+                session,
                 "Dev library purge recovery resume",
                 &acknowledged_main_command("mister_magik_resume"),
             );
@@ -27540,7 +27540,7 @@ fn purge_development_library_data(session: &Session) -> Result<()> {
             && line.contains("\tscreenshot_removed=")
     }) {
         let resume = exec_checked(
-            &session,
+            session,
             "Dev library purge invalid-output recovery resume",
             &acknowledged_main_command("mister_magik_resume"),
         );
@@ -27551,13 +27551,13 @@ fn purge_development_library_data(session: &Session) -> Result<()> {
         };
     }
     println!("{summary}");
-    exec_checked(&session, "sync Dev library purge", "sync")?;
+    exec_checked(session, "sync Dev library purge", "sync")?;
     exec_checked(
-        &session,
+        session,
         "Dev library purge resume before reboot",
         &acknowledged_main_command("mister_magik_resume"),
     )?;
-    let active_ms = wait_main_launcher_active(&session, Duration::from_secs(20))?;
+    let active_ms = wait_main_launcher_active(session, Duration::from_secs(20))?;
     println!("Dev library purge Main active after {active_ms}ms");
     Ok(())
 }
