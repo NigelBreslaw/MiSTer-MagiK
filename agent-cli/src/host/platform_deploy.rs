@@ -51,6 +51,11 @@ pub(super) fn platform_deploy_files() -> Vec<(&'static str, String)> {
             app_path(Layout::Development, "hbmame.sqlite3").expect("static installed path"),
         ),
         (
+            "arcade-updater-index-v1.lz4b",
+            app_path(Layout::Development, "arcade-updater-index-v1.lz4b")
+                .expect("static installed path"),
+        ),
+        (
             "game-databases-manifest.json",
             app_path(Layout::Development, "game-databases-manifest.json")
                 .expect("static installed path"),
@@ -208,7 +213,10 @@ impl PlatformDeployTransaction {
                 .filter(|name| {
                     matches!(
                         *name,
-                        "mame.sqlite3" | "hbmame.sqlite3" | "game-databases-manifest.json"
+                        "mame.sqlite3"
+                            | "hbmame.sqlite3"
+                            | "arcade-updater-index-v1.lz4b"
+                            | "game-databases-manifest.json"
                     )
                 })
             {

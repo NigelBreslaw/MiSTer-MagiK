@@ -358,6 +358,8 @@ pub enum GameDatabaseCommand {
         hbmame_sha: String,
         #[arg(long)]
         arcade_database_sha: String,
+        #[arg(long = "arcade-updater-revision", value_name = "ID=SHA")]
+        arcade_updater_revisions: Vec<String>,
         #[arg(long)]
         github_output: Option<PathBuf>,
     },

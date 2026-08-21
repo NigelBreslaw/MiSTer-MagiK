@@ -633,6 +633,7 @@ fn dispatch(
                         hbmame_tag,
                         hbmame_sha,
                         arcade_database_sha,
+                        arcade_updater_revisions,
                         github_output,
                     } => {
                         let current = manifest
@@ -651,6 +652,7 @@ fn dispatch(
                             hbmame_tag,
                             hbmame_sha,
                             arcade_database_sha,
+                            &arcade_updater_revisions,
                         )?;
                         if let Some(path) = github_output {
                             append_github_output(
@@ -662,6 +664,7 @@ fn dispatch(
                                     "mame_changed",
                                     "hbmame_changed",
                                     "arcade_database_changed",
+                                    "arcade_updater_changed",
                                     "update_needed",
                                 ],
                             )?;

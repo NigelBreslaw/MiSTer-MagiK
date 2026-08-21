@@ -320,14 +320,16 @@ pub fn update_plan(
     hbmame_tag: &str,
     hbmame_sha: &str,
     arcade_database_sha: &str,
+    arcade_updater_revisions: &[String],
 ) -> AgentResult<Value> {
     validate_tags(mame_tag, hbmame_tag)?;
     require_hex("mame_sha", mame_sha, 40)?;
     require_hex("hbmame_sha", hbmame_sha, 40)?;
     require_hex("arcade_database_sha", arcade_database_sha, 40)?;
+    let arcade_updater_revisions = parse_updater_revisions(arcade_updater_revisions)?;
     let Some(current) = current else {
         return Ok(
-            json!({"current_version":0,"next_version":1,"mame_changed":true,"hbmame_changed":true,"arcade_database_changed":true,"update_needed":true}),
+            json!({"current_version":0,"next_version":1,"mame_changed":true,"hbmame_changed":true,"arcade_database_changed":true,"arcade_updater_changed":true,"update_needed":true}),
         );
     };
     validate_manifest(current)?;
@@ -339,10 +341,63 @@ pub fn update_plan(
         || current.pointer("/sources/hbmame/sha") != Some(&Value::String(hbmame_sha.into()));
     let arcade_database_changed = current.pointer("/sources/arcade_database/sha")
         != Some(&Value::String(arcade_database_sha.into()));
+    let current_updater_revisions = current
+        .pointer("/sources/arcade_updater/sources")
+        .and_then(Value::as_array)
+        .map(|sources| {
+            sources
+                .iter()
+                .filter_map(|source| {
+                    Some((
+                        source.get("id")?.as_str()?.to_owned(),
+                        source.get("revision")?.as_str()?.to_owned(),
+                    ))
+                })
+                .collect::<BTreeMap<_, _>>()
+        });
+    let arcade_updater_changed =
+        current_updater_revisions.as_ref() != Some(&arcade_updater_revisions);
     let version = current["release_version"].as_u64().unwrap();
     Ok(
-        json!({"current_version":version,"next_version":version+1,"mame_changed":mame_changed,"hbmame_changed":hbmame_changed,"arcade_database_changed":arcade_database_changed,"update_needed":mame_changed||hbmame_changed||arcade_database_changed}),
+        json!({"current_version":version,"next_version":version+1,"mame_changed":mame_changed,"hbmame_changed":hbmame_changed,"arcade_database_changed":arcade_database_changed,"arcade_updater_changed":arcade_updater_changed,"update_needed":mame_changed||hbmame_changed||arcade_database_changed||arcade_updater_changed}),
     )
+}
+
+fn parse_updater_revisions(values: &[String]) -> AgentResult<BTreeMap<String, String>> {
+    const IDS: [&str; 5] = [
+        "distribution",
+        "alternatives",
+        "jtcores",
+        "coinop",
+        "arcade-offset",
+    ];
+    let mut revisions = BTreeMap::new();
+    for value in values {
+        let (id, revision) = value
+            .split_once('=')
+            .ok_or_else(|| AgentError::Classified {
+                code: "invalid_database_identity",
+                detail: format!("arcade updater revision: {value}"),
+            })?;
+        if !IDS.contains(&id)
+            || revisions
+                .insert(id.to_owned(), revision.to_owned())
+                .is_some()
+        {
+            return classified(
+                "invalid_database_identity",
+                format!("arcade updater source: {id}"),
+            );
+        }
+        require_hex("arcade_updater_revision", revision, 40)?;
+    }
+    if revisions.len() != IDS.len() {
+        return classified(
+            "invalid_database_identity",
+            "all five Arcade updater revisions are required",
+        );
+    }
+    Ok(revisions)
 }
 
 fn validate_manifest(payload: &Value) -> AgentResult<()> {
@@ -776,6 +831,20 @@ fn classified<T>(code: &'static str, detail: impl Into<String>) -> AgentResult<T
 mod tests {
     use super::*;
 
+    fn updater_revisions() -> Vec<String> {
+        [
+            "distribution",
+            "alternatives",
+            "jtcores",
+            "coinop",
+            "arcade-offset",
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(index, id)| format!("{id}={}", format!("{:x}", index + 1).repeat(40)))
+        .collect()
+    }
+
     #[test]
     fn update_plan_starts_at_version_one() {
         let result = update_plan(
@@ -785,6 +854,7 @@ mod tests {
             "tag24532",
             &"b".repeat(40),
             &"c".repeat(40),
+            &updater_revisions(),
         )
         .unwrap();
         assert_eq!(result["next_version"], 1);
@@ -817,6 +887,7 @@ mod tests {
             "tag24532",
             &"d".repeat(40),
             &"f".repeat(40),
+            &updater_revisions(),
         )
         .unwrap();
 
@@ -824,7 +895,19 @@ mod tests {
         assert_eq!(result["mame_changed"], false);
         assert_eq!(result["hbmame_changed"], false);
         assert_eq!(result["arcade_database_changed"], true);
+        assert_eq!(result["arcade_updater_changed"], true);
         assert_eq!(result["update_needed"], true);
+    }
+
+    #[test]
+    fn updater_revision_contract_requires_each_canonical_source_once() {
+        assert!(parse_updater_revisions(&updater_revisions()).is_ok());
+        let mut incomplete = updater_revisions();
+        incomplete.pop();
+        assert!(parse_updater_revisions(&incomplete).is_err());
+        let mut duplicate = updater_revisions();
+        duplicate[4] = duplicate[0].clone();
+        assert!(parse_updater_revisions(&duplicate).is_err());
     }
 
     #[test]

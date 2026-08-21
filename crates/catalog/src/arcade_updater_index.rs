@@ -98,11 +98,28 @@ impl ArcadeUpdaterIndex {
     }
 
     fn validate(&self) -> Result<(), String> {
-        if self.sources.is_empty() {
-            return Err("Arcade updater index has no sources".to_string());
+        let expected_sources = [
+            "alternatives",
+            "arcade-offset",
+            "coinop",
+            "distribution",
+            "jtcores",
+        ];
+        if self
+            .sources
+            .iter()
+            .map(|source| source.id.as_str())
+            .ne(expected_sources)
+        {
+            return Err("Arcade updater index does not contain the canonical sources".to_string());
         }
         if self.sources.windows(2).any(|pair| pair[0].id >= pair[1].id) {
             return Err("Arcade updater sources are not uniquely sorted".to_string());
+        }
+        for source in &self.sources {
+            if !is_lower_hex(&source.revision, 40) || !is_lower_hex(&source.database_sha256, 64) {
+                return Err(format!("invalid Arcade updater source {}", source.id));
+            }
         }
         if self
             .rows
@@ -114,14 +131,24 @@ impl ArcadeUpdaterIndex {
         for row in &self.rows {
             if !row.path.starts_with("_Arcade/")
                 || !row.path.to_ascii_lowercase().ends_with(".mra")
-                || row.md5.len() != 32
-                || !row.md5.bytes().all(|byte| byte.is_ascii_hexdigit())
+                || !is_lower_hex(&row.md5, 32)
+                || self
+                    .sources
+                    .binary_search_by(|source| source.id.as_str().cmp(row.source_id.as_str()))
+                    .is_err()
             {
                 return Err(format!("invalid Arcade updater row {}", row.path));
             }
         }
         Ok(())
     }
+}
+
+fn is_lower_hex(value: &str, length: usize) -> bool {
+    value.len() == length
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_uppercase())
 }
 
 fn payload_digest(
@@ -143,11 +170,20 @@ mod tests {
 
     fn index() -> ArcadeUpdaterIndex {
         ArcadeUpdaterIndex {
-            sources: vec![ArcadeUpdaterSource {
-                id: "distribution".to_string(),
+            sources: [
+                "alternatives",
+                "arcade-offset",
+                "coinop",
+                "distribution",
+                "jtcores",
+            ]
+            .into_iter()
+            .map(|id| ArcadeUpdaterSource {
+                id: id.to_string(),
                 revision: "a".repeat(40),
                 database_sha256: "b".repeat(64),
-            }],
+            })
+            .collect(),
             rows: vec![ArcadeUpdaterRow {
                 path: "_Arcade/Puck Man.mra".to_string(),
                 source_id: "distribution".to_string(),

@@ -4,6 +4,8 @@
 name: Promote MiSTer MagiK Game Databases
 
 on:
+  schedule:
+    - cron: "17 2 * * *"
   workflow_dispatch:
     inputs:
       force_mame_rebuild:
@@ -32,6 +34,7 @@ jobs:
       mame-changed: ${{ steps.plan.outputs.mame_changed }}
       hbmame-changed: ${{ steps.plan.outputs.hbmame_changed }}
       arcade-database-changed: ${{ steps.plan.outputs.arcade_database_changed }}
+      arcade-updater-changed: ${{ steps.plan.outputs.arcade_updater_changed }}
       mame-tag: ${{ steps.upstream.outputs.mame_tag }}
       mame-sha: ${{ steps.upstream.outputs.mame_sha }}
       mame-listxml-asset: ${{ steps.upstream.outputs.mame_listxml_asset }}
@@ -39,6 +42,10 @@ jobs:
       hbmame-tag: ${{ steps.upstream.outputs.hbmame_tag }}
       hbmame-sha: ${{ steps.upstream.outputs.hbmame_sha }}
       arcade-database-sha: ${{ steps.upstream.outputs.arcade_database_sha }}
+      distribution-sha: ${{ steps.upstream.outputs.distribution_sha }}
+      jtcores-sha: ${{ steps.upstream.outputs.jtcores_sha }}
+      coinop-sha: ${{ steps.upstream.outputs.coinop_sha }}
+      arcade-offset-sha: ${{ steps.upstream.outputs.arcade_offset_sha }}
     steps:
       - name: Refuse non-main dispatch
         if: github.ref != 'refs/heads/main'
@@ -80,6 +87,12 @@ jobs:
           hbmame_sha="$(gh api "repos/Robbbert/hbmame/commits/$hbmame_tag" --jq .sha)"
           arcade_database_sha="$(gh api repos/MiSTer-devel/ArcadeDatabase_MiSTer/commits/main --jq .sha)"
           test "$arcade_database_sha" != null
+          distribution_sha="$(gh api repos/MiSTer-devel/Distribution_MiSTer/commits/main --jq .sha)"
+          jtcores_sha="$(gh api repos/jotego/jtcores_mister/commits/main --jq .sha)"
+          coinop_sha="$(gh api repos/Coin-OpCollection/Distribution-MiSTerFPGA/commits/db --jq .sha)"
+          arcade_offset_sha="$(gh api repos/Toryalai1/Arcade_Offset/commits/db --jq .sha)"
+          test "$distribution_sha" != null && test "$jtcores_sha" != null
+          test "$coinop_sha" != null && test "$arcade_offset_sha" != null
 
           echo "mame_tag=$mame_tag" >> "$GITHUB_OUTPUT"
           echo "mame_sha=$mame_sha" >> "$GITHUB_OUTPUT"
@@ -88,6 +101,10 @@ jobs:
           echo "hbmame_tag=$hbmame_tag" >> "$GITHUB_OUTPUT"
           echo "hbmame_sha=$hbmame_sha" >> "$GITHUB_OUTPUT"
           echo "arcade_database_sha=$arcade_database_sha" >> "$GITHUB_OUTPUT"
+          echo "distribution_sha=$distribution_sha" >> "$GITHUB_OUTPUT"
+          echo "jtcores_sha=$jtcores_sha" >> "$GITHUB_OUTPUT"
+          echo "coinop_sha=$coinop_sha" >> "$GITHUB_OUTPUT"
+          echo "arcade_offset_sha=$arcade_offset_sha" >> "$GITHUB_OUTPUT"
 
       - name: Download and verify current numbered release
         id: current
@@ -123,6 +140,10 @@ jobs:
           HBMAME_TAG: ${{ steps.upstream.outputs.hbmame_tag }}
           HBMAME_SHA: ${{ steps.upstream.outputs.hbmame_sha }}
           ARCADE_DATABASE_SHA: ${{ steps.upstream.outputs.arcade_database_sha }}
+          DISTRIBUTION_SHA: ${{ steps.upstream.outputs.distribution_sha }}
+          JTCORES_SHA: ${{ steps.upstream.outputs.jtcores_sha }}
+          COINOP_SHA: ${{ steps.upstream.outputs.coinop_sha }}
+          ARCADE_OFFSET_SHA: ${{ steps.upstream.outputs.arcade_offset_sha }}
         run: |
           set -euo pipefail
           args=()
@@ -133,6 +154,11 @@ jobs:
             --mame-tag "$MAME_TAG" --mame-sha "$MAME_SHA" \
             --hbmame-tag "$HBMAME_TAG" --hbmame-sha "$HBMAME_SHA" \
             --arcade-database-sha "$ARCADE_DATABASE_SHA" \
+            --arcade-updater-revision "distribution=$DISTRIBUTION_SHA" \
+            --arcade-updater-revision "alternatives=$DISTRIBUTION_SHA" \
+            --arcade-updater-revision "jtcores=$JTCORES_SHA" \
+            --arcade-updater-revision "coinop=$COINOP_SHA" \
+            --arcade-updater-revision "arcade-offset=$ARCADE_OFFSET_SHA" \
             --github-output "$GITHUB_OUTPUT"
           if [ "$FORCE_MAME_REBUILD" = true ]; then
             echo "mame_changed=true" >> "$GITHUB_OUTPUT"
@@ -147,6 +173,7 @@ jobs:
           MAME_CHANGED: ${{ steps.plan.outputs.mame_changed }}
           HBMAME_CHANGED: ${{ steps.plan.outputs.hbmame_changed }}
           ARCADE_DATABASE_CHANGED: ${{ steps.plan.outputs.arcade_database_changed }}
+          ARCADE_UPDATER_CHANGED: ${{ steps.plan.outputs.arcade_updater_changed }}
           MAME_TAG: ${{ steps.upstream.outputs.mame_tag }}
           HBMAME_TAG: ${{ steps.upstream.outputs.hbmame_tag }}
         run: |
@@ -154,11 +181,89 @@ jobs:
             echo "## Game database promotion"
             echo
             if [ "$UPDATE_NEEDED" = true ]; then
-              echo "Preparing v$NEXT_VERSION (current v$CURRENT_VERSION): MAME changed=$MAME_CHANGED, HBMAME changed=$HBMAME_CHANGED, ArcadeDatabase changed=$ARCADE_DATABASE_CHANGED."
+              echo "Preparing v$NEXT_VERSION (current v$CURRENT_VERSION): MAME changed=$MAME_CHANGED, HBMAME changed=$HBMAME_CHANGED, ArcadeDatabase changed=$ARCADE_DATABASE_CHANGED, updater Arcade changed=$ARCADE_UPDATER_CHANGED."
             else
               echo "Game databases v$CURRENT_VERSION are already up to date ($MAME_TAG, $HBMAME_TAG)."
             fi
           } >> "$GITHUB_STEP_SUMMARY"
+
+  build-updater-arcade:
+    name: Build Update_All Arcade index
+    runs-on: ubuntu-24.04
+    needs: inspect
+    if: needs.inspect.outputs.arcade-updater-changed == 'true'
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: ./.github/actions/setup-agent-cli
+
+      - name: Download pinned updater databases and source trees
+        env:
+          DISTRIBUTION_SHA: ${{ needs.inspect.outputs.distribution-sha }}
+          JTCORES_SHA: ${{ needs.inspect.outputs.jtcores-sha }}
+          COINOP_SHA: ${{ needs.inspect.outputs.coinop-sha }}
+          ARCADE_OFFSET_SHA: ${{ needs.inspect.outputs.arcade-offset-sha }}
+        run: |
+          set -euo pipefail
+          mkdir -p build/updater build/sources
+          curl -fsSL https://raw.githubusercontent.com/MiSTer-devel/Distribution_MiSTer/main/db.json.zip -o build/updater/distribution.zip
+          curl -fsSL https://raw.githubusercontent.com/jotego/jtcores_mister/main/jtbindb.json.zip -o build/updater/jtcores.zip
+          curl -fsSL https://raw.githubusercontent.com/Coin-OpCollection/Distribution-MiSTerFPGA/db/db.json.zip -o build/updater/coinop.zip
+          curl -fsSL https://raw.githubusercontent.com/Toryalai1/Arcade_Offset/db/arcadeoffsetdb.json.zip -o build/updater/arcade-offset.zip
+          unzip -p build/updater/distribution.zip > build/updater/distribution.json
+          unzip -p build/updater/jtcores.zip > build/updater/jtcores.json
+          unzip -p build/updater/coinop.zip > build/updater/coinop.json
+          unzip -p build/updater/arcade-offset.zip > build/updater/arcade-offset.json
+
+          distribution_ref="$(jq -r '.base_files_url | capture("/(?<sha>[0-9a-f]{40})/").sha' build/updater/distribution.json)"
+          jtcores_ref="$(jq -r '.base_files_url | capture("/(?<sha>[0-9a-f]{40})/").sha' build/updater/jtcores.json)"
+          coinop_ref="$(jq -r '.base_files_url | capture("/(?<sha>[0-9a-f]{40})/").sha' build/updater/coinop.json)"
+          arcade_offset_ref="$(jq -r '[.files[].url? // empty][0] | capture("/(?<sha>[0-9a-f]{40})/").sha' build/updater/arcade-offset.json)"
+          for source in distribution jtcores coinop arcade-offset; do
+            git init -q "build/sources/$source"
+          done
+          git -C build/sources/distribution remote add origin https://github.com/MiSTer-devel/Distribution_MiSTer.git
+          git -C build/sources/jtcores remote add origin https://github.com/jotego/jtcores_mister.git
+          git -C build/sources/coinop remote add origin https://github.com/Coin-OpCollection/Distribution-MiSTerFPGA.git
+          git -C build/sources/arcade-offset remote add origin https://github.com/Toryalai1/Arcade_Offset.git
+          git -C build/sources/distribution fetch -q --depth 1 origin "$distribution_ref"
+          git -C build/sources/jtcores fetch -q --depth 1 origin "$jtcores_ref"
+          git -C build/sources/coinop fetch -q --depth 1 origin "$coinop_ref"
+          git -C build/sources/arcade-offset fetch -q --depth 1 origin "$arcade_offset_ref"
+          git -C build/sources/distribution checkout -q --detach FETCH_HEAD
+          git -C build/sources/jtcores checkout -q --detach FETCH_HEAD
+          git -C build/sources/coinop checkout -q --detach FETCH_HEAD
+          git -C build/sources/arcade-offset checkout -q --detach FETCH_HEAD
+
+          python3 scripts/release/databases/build-alternatives-database.py \
+            build/sources/distribution build/updater/alternatives.json
+          jq -n \
+            --arg distribution "$DISTRIBUTION_SHA" --arg jtcores "$JTCORES_SHA" \
+            --arg coinop "$COINOP_SHA" --arg offset "$ARCADE_OFFSET_SHA" \
+            --arg root "$GITHUB_WORKSPACE" \
+            '{format:"mister-magik-arcade-updater-inputs-v1",sources:[
+              {id:"distribution",revision:$distribution,database:($root+"/build/updater/distribution.json"),roots:[$root+"/build/sources/distribution"]},
+              {id:"alternatives",revision:$distribution,database:($root+"/build/updater/alternatives.json"),roots:[$root+"/build/sources/distribution"]},
+              {id:"jtcores",revision:$jtcores,database:($root+"/build/updater/jtcores.json"),roots:[$root+"/build/sources/jtcores",$root+"/build/sources/distribution"]},
+              {id:"coinop",revision:$coinop,database:($root+"/build/updater/coinop.json"),roots:[$root+"/build/sources/coinop",$root+"/build/sources/jtcores",$root+"/build/sources/distribution"]},
+              {id:"arcade-offset",revision:$offset,database:($root+"/build/updater/arcade-offset.json"),roots:[$root+"/build/sources/arcade-offset/release"]}
+            ]}' > build/updater/inputs.json
+
+      - name: Build and verify updater Arcade index
+        run: |
+          scripts/agent ci game-databases build-updater-arcade \
+            --input-manifest build/updater/inputs.json \
+            --out build/arcade-updater-index-v1.lz4b | tee build/updater-summary.json
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: game-databases-updater-arcade
+          path: |
+            build/arcade-updater-index-v1.lz4b
+            build/updater-summary.json
+          if-no-files-found: error
+          retention-days: 7
 
   build-mame:
     name: Build MAME metadata database
@@ -252,13 +357,14 @@ jobs:
   assemble:
     name: Assemble numbered game-database release
     runs-on: ubuntu-24.04
-    needs: [inspect, build-mame, build-hbmame-listxml]
+    needs: [inspect, build-mame, build-hbmame-listxml, build-updater-arcade]
     if: |
       always() &&
       needs.inspect.result == 'success' &&
       needs.inspect.outputs.update-needed == 'true' &&
       (needs.build-mame.result == 'success' || needs.build-mame.result == 'skipped') &&
-      (needs.build-hbmame-listxml.result == 'success' || needs.build-hbmame-listxml.result == 'skipped')
+      (needs.build-hbmame-listxml.result == 'success' || needs.build-hbmame-listxml.result == 'skipped') &&
+      (needs.build-updater-arcade.result == 'success' || needs.build-updater-arcade.result == 'skipped')
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
@@ -287,6 +393,20 @@ jobs:
           if unzip -Z1 "$archive" | grep -qx ArcadeDatabase.csv; then
             unzip -q "$archive" ArcadeDatabase.csv ArcadeDatabase-LICENSE.txt -d build/current
           fi
+          if unzip -Z1 "$archive" | grep -qx arcade-updater-index-v1.lz4b; then
+            unzip -q "$archive" arcade-updater-index-v1.lz4b -d build/current
+          fi
+
+      - name: Download rebuilt updater Arcade index
+        if: needs.inspect.outputs.arcade-updater-changed == 'true'
+        uses: actions/download-artifact@v8
+        with:
+          name: game-databases-updater-arcade
+          path: build
+
+      - name: Reuse unchanged updater Arcade index
+        if: needs.inspect.outputs.arcade-updater-changed != 'true'
+        run: cp build/current/arcade-updater-index-v1.lz4b build/arcade-updater-index-v1.lz4b
 
       - name: Download rebuilt MAME database
         if: needs.inspect.outputs.mame-changed == 'true'
@@ -364,6 +484,7 @@ jobs:
             --arcade-database-license build/ArcadeDatabase-LICENSE.txt \
             --arcade-database-sha '${{ needs.inspect.outputs.arcade-database-sha }}' \
             --arcade-database-builder-sha "$arcade_database_builder_sha" \
+            --arcade-updater-index build/arcade-updater-index-v1.lz4b \
             --output build/game-databases
 
       - uses: actions/upload-artifact@v7

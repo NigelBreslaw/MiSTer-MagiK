@@ -855,6 +855,7 @@ fn prepare_stage_databases(
     for name in [
         "mame.sqlite3",
         "hbmame.sqlite3",
+        "arcade-updater-index-v1.lz4b",
         "game-databases-manifest.json",
     ] {
         copy(databases.join(name), stage.join(name))?;

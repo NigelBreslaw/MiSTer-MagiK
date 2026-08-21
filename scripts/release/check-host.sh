@@ -118,6 +118,37 @@ database.execute(
 database.commit()
 PY
 printf 'GPL-3.0-or-later fixture\n' >"$WORK/ArcadeDatabase-LICENSE.txt"
+mkdir -p "$WORK/updater-source/_Arcade"
+printf '<misterromdescription><name>Fixture</name><setname>fixture</setname><rom zip="fixture.zip"/></misterromdescription>\n' \
+  >"$WORK/updater-source/_Arcade/Fixture.mra"
+python3 - "$WORK" <<'PY'
+import hashlib
+import json
+import pathlib
+import sys
+
+work = pathlib.Path(sys.argv[1]).resolve()
+mra = work / "updater-source" / "_Arcade" / "Fixture.mra"
+data = mra.read_bytes()
+sources = []
+for position, source_id in enumerate(("distribution", "alternatives", "jtcores", "coinop", "arcade-offset"), 4):
+    database = work / f"{source_id}.json"
+    database.write_text(json.dumps({"files": {"_Arcade/Fixture.mra": {
+        "hash": hashlib.md5(data, usedforsecurity=False).hexdigest(), "size": len(data)
+    }}}))
+    sources.append({
+        "id": source_id,
+        "revision": format(position, "x") * 40,
+        "database": str(database),
+        "roots": [str(work / "updater-source")],
+    })
+(work / "updater-inputs.json").write_text(json.dumps({
+    "format": "mister-magik-arcade-updater-inputs-v1", "sources": sources
+}))
+PY
+scripts/agent ci game-databases build-updater-arcade \
+  --input-manifest "$WORK/updater-inputs.json" \
+  --out "$WORK/arcade-updater-index-v1.lz4b" >/dev/null
 
 scripts/agent ci game-databases create \
   --mame-sqlite "$WORK/mame.sqlite3" --hbmame-sqlite "$WORK/hbmame.sqlite3" \
@@ -132,6 +163,7 @@ scripts/agent ci game-databases create \
   --arcade-database-license "$WORK/ArcadeDatabase-LICENSE.txt" \
   --arcade-database-sha 3333333333333333333333333333333333333333 \
   --arcade-database-builder-sha "$(git rev-parse HEAD)" \
+  --arcade-updater-index "$WORK/arcade-updater-index-v1.lz4b" \
   --output "$WORK/game-databases" >/dev/null
 
 if [[ -f "$MAIN_BIN" ]]; then
@@ -213,6 +245,7 @@ required = {
     manager_path,
     f"{root}/mame.sqlite3",
     f"{root}/hbmame.sqlite3",
+    f"{root}/arcade-updater-index-v1.lz4b",
     f"{root}/assets/snes/snes-small-v1.rgb565a",
     manifest_path,
     f"{root}/platform-bundle-v0.2.json",

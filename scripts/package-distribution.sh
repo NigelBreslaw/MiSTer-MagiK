@@ -98,6 +98,7 @@ The zip is laid out relative to the MiSTer SD-card root:
   $PUBLIC_MANAGER_RELATIVE
   $PUBLIC_ROOT_RELATIVE/mame.sqlite3
   $PUBLIC_ROOT_RELATIVE/hbmame.sqlite3
+  $PUBLIC_ROOT_RELATIVE/arcade-updater-index-v1.lz4b
   $PUBLIC_ROOT_RELATIVE/assets/...     when --asset-pack is provided
   $PUBLIC_MAIN_RELATIVE
   $PUBLIC_ROOT_RELATIVE/$PLATFORM_V3_FILE_NAME
@@ -218,6 +219,7 @@ trap 'rm -rf "$DATABASE_TMP"' EXIT
   "$GAME_DATABASES_RELEASE_DIR" --output "$DATABASE_TMP" >/dev/null
 MAME_SQLITE="$DATABASE_TMP/mame.sqlite3"
 HBMAME_SQLITE="$DATABASE_TMP/hbmame.sqlite3"
+ARCADE_UPDATER_INDEX="$DATABASE_TMP/arcade-updater-index-v1.lz4b"
 GAME_DATABASES_MANIFEST="$DATABASE_TMP/game-databases-manifest.json"
 ARCADE_DATABASE_CSV="$DATABASE_TMP/ArcadeDatabase.csv"
 ARCADE_DATABASE_LICENSE="$DATABASE_TMP/ArcadeDatabase-LICENSE.txt"
@@ -355,6 +357,7 @@ cp "$MAME_SQLITE" "$STAGE/$PUBLIC_ROOT_RELATIVE/mame.sqlite3"
 if [[ -n "$HBMAME_SQLITE" ]]; then
   cp "$HBMAME_SQLITE" "$STAGE/$PUBLIC_ROOT_RELATIVE/hbmame.sqlite3"
 fi
+cp "$ARCADE_UPDATER_INDEX" "$STAGE/$PUBLIC_ROOT_RELATIVE/arcade-updater-index-v1.lz4b"
 
 ACTUAL_SNES_ARTWORK_SHA256="$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' "$SNES_ARTWORK")"
 if [[ "$ACTUAL_SNES_ARTWORK_SHA256" != "$SNES_ARTWORK_SHA256" ]]; then
