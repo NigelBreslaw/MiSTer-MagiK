@@ -45,3 +45,86 @@ causal whole-wall improvement, so no performance claim is retained.
 Evidence is in
 `build/agent-benchmarks/catalog-full-build-rebuild/1787306191/summary.json` and
 the adjacent per-leg launcher logs.
+
+## Follow-up profiling and retained cold-build improvement
+
+Wall timing alone did not support the wildcard-order result. A matched PMU
+screen of refined runtime contributor scheduling regressed fresh creation from
+100.129 s to 104.927 s while increasing cycles by 3.34% and instructions by
+5.53%. PC-88 traversal alone varied from 4.151 s to 14.671 s. Revisions
+`413638d80` and `c0667c6f1` retain that failed hypothesis and its revert.
+
+The profiler instead identified a fixed post-publication gap. Each fresh shard
+was already reopened and fully validated by the writer, copied or renamed
+while hashing, and synchronized as a batch. Recovery checkpointing then opened
+and fully validated all 69 published shards again before committing 69 journal
+rows in 69 transactions. Resume independently validates every recorded shard
+before reuse, and readers remain gated by the manifest-last publication.
+
+The retained implementation therefore:
+
+- records a durable shard batch in one SQLite transaction (`0975dbdd0`);
+- omits only the immediate duplicate validation before that journal write
+  (`4fd0e82fb`);
+- retains writer validation, artifact hashing, the artifact durability barrier,
+  resume validation, and manifest-last authority;
+- profiles allocator trimming explicitly (`ac41eeef7`, `e79d38fa8`) and leaves
+  its policy unchanged after measuring only 0.284 s across the 69 fresh shards.
+
+### PMU campaign
+
+The behavior-matched instrumented baseline is
+`build/agent-benchmarks/pmu-profile/1787309786/summary.json`. The final candidate
+screen and confirmations are `1787310873`, `1787312414`, and `1787312726`.
+
+| Metric | Instrumented baseline | Candidate samples | Candidate median | Delta |
+|---|---:|---:|---:|---:|
+| Fresh operation | 102.715 s | 90.166 / 97.392 / 94.948 s | 94.948 s | -7.767 s (-7.56%) |
+| Fresh shard batch | 33.387 s | 25.738 / 25.805 / 25.887 s | 25.805 s | -7.582 s (-22.71%) |
+| Changed shard batch | 1.293 s | 1.106 / 1.298 / 1.104 s | 1.106 s | -0.187 s (-14.46%) |
+| Rebuild-all shard batch | 27.287 s | 28.217 / 27.371 / 28.473 s | 28.217 s | +0.930 s (+3.41%) |
+
+Fresh peak HWM remained between 113,496 and 114,776 KiB. Every suite passed
+the exact +1 SNES mutation, preserved rebuild-all counts, produced complete PMU
+profiles, and cleaned its isolated root. Whole changed-rebuild and rebuild-all
+wall times remained dominated by scan variance; the changed shard phase itself
+improved, while the rebuild-all shard phase showed a small secondary regression.
+
+### Unprofiled whole-card evidence
+
+`build/agent-benchmarks/catalog-full-build-rebuild/1787311532/summary.json`
+passed at `4fd0e82fb`:
+
+| Leg | Complete | First visible | Builder persisted |
+|---|---:|---:|---:|
+| First observed clean | 126.293 s | 9.941 s | 107.418 s |
+| Warm clean | 132.990 s | 13.688 s | — |
+| Forced rebuild | 71.234 s | 2.706 s | — |
+
+Against the qualified `1787300445` cold builder time of 115.380 s, first
+creation improved by 7.962 s (6.90%). Its fresh shard batch improved from
+39.861 s to 31.749 s, a causal 8.111 s (20.35%) reduction. Peak HWM was
+142,108 KiB, below the 144,328 KiB gate. All three legs retained 69 systems,
+40,059 games, exact row/order/launch/search identity and artifact sets. X68000
+retained 273 source games, 269 visible families, and four intended collapses.
+
+Two additional full-sequence attempts failed after launcher restoration because
+the bounded telemetry collector returned no samples. Two `catalog-lifecycle`
+attempts likewise completed restoration but captured no authoritative startup
+intro cadence. They are neither catalog passes nor failures and are not counted
+as confirmation evidence.
+
+## Interruption exposure
+
+Completed scan targets are durable in batches of at most 16 targets or 2 MiB;
+the recorded whole-card run committed all 160 targets in 14 batches. Launching a
+game during scanning can therefore lose only the uncommitted target tail.
+
+System contributor closure is still telemetry rather than a reconciliation
+trigger. After scan completion, roughly 20 s of global preparation remains, and
+fresh shard recovery records are still committed near the end of the shard
+pipeline. The retained optimization shortens that exposure by about eight
+seconds but does not make closed systems independently durable. Bounded
+mid-pipeline shard checkpoints remain a separate experiment because extra
+exFAT synchronization barriers could trade recovery progress for worse cold
+creation time.
