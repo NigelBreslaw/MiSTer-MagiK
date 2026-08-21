@@ -260,11 +260,10 @@ pub(crate) fn apply_catalog_work_mode_affinity(mode: crate::cooperative_work::Ca
     if policy_disabled() || affinity_disabled() {
         return;
     }
-    let role = CURRENT_ROLE.with(Cell::get);
-    let Some(affinity) = catalog_mode_affinity(role, mode) else {
+    let affinity = CURRENT_ROLE.with(|role| catalog_mode_affinity(role.get(), mode));
+    let Some(affinity) = affinity else {
         return;
     };
-    let nice = catalog_mode_nice(role, mode).unwrap_or(0);
     let changed = CATALOG_AFFINITY_MODE.with(|current| {
         if current.get() == Some(mode) {
             false
@@ -274,13 +273,7 @@ pub(crate) fn apply_catalog_work_mode_affinity(mode: crate::cooperative_work::Ca
         }
     });
     if changed {
-        let nice_status = apply_nice(nice);
-        let affinity_status = apply_affinity(affinity);
-        crate::catalog_logln!(
-            "catalog_work_thread_policy_tsv\trole={}\tmode={mode:?}\tnice={nice}\taffinity={}\tnice_status={nice_status}\taffinity_status={affinity_status}",
-            role.map_or("unknown", RuntimeThreadRole::label),
-            affinity.label(),
-        );
+        let _ = apply_affinity(affinity);
     }
 }
 
@@ -299,25 +292,6 @@ fn catalog_mode_affinity(
             ThreadAffinity::AllOnline
         } else {
             ThreadAffinity::Cpu0
-        },
-    )
-}
-
-fn catalog_mode_nice(
-    role: Option<RuntimeThreadRole>,
-    mode: crate::cooperative_work::CatalogWorkMode,
-) -> Option<i32> {
-    let role = role.filter(|role| {
-        matches!(
-            role,
-            RuntimeThreadRole::CatalogWorker | RuntimeThreadRole::LibraryWalker
-        )
-    })?;
-    Some(
-        if mode == crate::cooperative_work::CatalogWorkMode::DualCoreBurst {
-            0
-        } else {
-            role.default_policy().nice
         },
     )
 }
@@ -693,14 +667,6 @@ mod tests {
                 catalog_mode_affinity(Some(role), CatalogWorkMode::Paused),
                 Some(ThreadAffinity::Cpu0)
             );
-            assert_eq!(
-                catalog_mode_nice(Some(role), CatalogWorkMode::DualCoreBurst),
-                Some(0)
-            );
-            assert_eq!(
-                catalog_mode_nice(Some(role), CatalogWorkMode::Paused),
-                Some(role.default_policy().nice)
-            );
         }
         for role in [
             RuntimeThreadRole::LauncherUi,
@@ -709,10 +675,6 @@ mod tests {
         ] {
             assert_eq!(
                 catalog_mode_affinity(Some(role), CatalogWorkMode::DualCoreBurst),
-                None
-            );
-            assert_eq!(
-                catalog_mode_nice(Some(role), CatalogWorkMode::DualCoreBurst),
                 None
             );
         }
