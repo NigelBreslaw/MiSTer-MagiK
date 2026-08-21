@@ -47,3 +47,15 @@ It passed `exact_identities_identical`, `artifact_sets_valid`, and
 Evidence is in
 `build/agent-benchmarks/catalog-full-build-rebuild/1787299534/summary.json` and
 the adjacent per-leg inspection, launcher, telemetry, and Markdown report files.
+
+## Contributor-closure qualification
+
+Revision `6419d2e775e3f543d1d56a197dc192727f3b7ac0` added conservative
+contributor-set closure telemetry without starting early shard work. A second
+whole-card run passed with 74 discovered systems closed, zero unknown
+contributors remaining, and `sound=1` on the complete scan in every leg. Exact
+identities and artifact sets remained equal.
+
+The closure-qualified run completed in 197.555 s fresh, 144.541 s warm clean,
+and 54.039 s forced rebuild. Evidence is in
+`build/agent-benchmarks/catalog-full-build-rebuild/1787300445/summary.json`.
