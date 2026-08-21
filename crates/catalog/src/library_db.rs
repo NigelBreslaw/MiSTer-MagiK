@@ -1263,7 +1263,7 @@ pub fn audit_arcade_rom_visibility_with_paths(
         })
         .collect::<Vec<_>>();
     old_only.sort_by_cached_key(|game| game.title.to_ascii_lowercase());
-    let filtered_only = filtered
+    let mut filtered_only = filtered
         .games
         .iter()
         .filter(|game| {
@@ -1272,7 +1272,8 @@ pub fn audit_arcade_rom_visibility_with_paths(
                 game.title.to_ascii_lowercase(),
             ))
         })
-        .count();
+        .collect::<Vec<_>>();
+    filtered_only.sort_by_cached_key(|game| game.title.to_ascii_lowercase());
 
     let updater_rows =
         crate::arcade_updater_index::ArcadeUpdaterIndex::read(paths.arcade_updater_index())
@@ -1287,60 +1288,65 @@ pub fn audit_arcade_rom_visibility_with_paths(
     let inventory = crate::arcade_rom_inventory::ArcadeRomInventory::from_library_roots(&cfg.roots);
     let mut false_negatives = 0usize;
     let mut rows = String::new();
-    for game in &old_only {
-        let path = Path::new(game.mra_path.as_ref());
-        let key = arcade_updater_audit_key(path);
-        let indexed = key
-            .as_deref()
-            .and_then(|key| updater_rows.get(key))
-            .filter(|row| {
-                std::fs::metadata(path)
-                    .map(|metadata| metadata.len() == row.size)
-                    .unwrap_or(false)
-            });
-        let requirement = indexed
-            .map(|row| row.primary_rom.clone())
-            .or_else(|| {
-                crate::media_metadata::inspect_mra_path(path)
-                    .ok()
-                    .map(|inspection| inspection.primary_rom)
-            })
-            .unwrap_or(PrimaryRomRequirement::Ambiguous);
-        let eligibility = inventory.eligibility(&requirement);
-        let present = eligibility == RomEligibility::Eligible;
-        false_negatives += usize::from(present);
-        let (namespace, archive) = match &requirement {
-            PrimaryRomRequirement::None => ("embedded", String::new()),
-            PrimaryRomRequirement::Archive { namespace, setname } => (
-                match namespace {
-                    RomNamespace::Mame => "mame",
-                    RomNamespace::Hbmame => "hbmame",
+    for (direction, games) in [("old-only", &old_only), ("filtered-only", &filtered_only)] {
+        for game in games {
+            let path = Path::new(game.mra_path.as_ref());
+            let key = arcade_updater_audit_key(path);
+            let indexed = key
+                .as_deref()
+                .and_then(|key| updater_rows.get(key))
+                .filter(|row| {
+                    std::fs::metadata(path)
+                        .map(|metadata| metadata.len() == row.size)
+                        .unwrap_or(false)
+                });
+            let requirement = indexed
+                .map(|row| row.primary_rom.clone())
+                .or_else(|| {
+                    crate::media_metadata::inspect_mra_path(path)
+                        .ok()
+                        .map(|inspection| inspection.primary_rom)
+                })
+                .unwrap_or(PrimaryRomRequirement::Ambiguous);
+            let eligibility = inventory.eligibility(&requirement);
+            let present = eligibility == RomEligibility::Eligible;
+            if direction == "old-only" {
+                false_negatives += usize::from(present);
+            }
+            let (namespace, archive) = match &requirement {
+                PrimaryRomRequirement::None => ("embedded", String::new()),
+                PrimaryRomRequirement::Archive { namespace, setname } => (
+                    match namespace {
+                        RomNamespace::Mame => "mame",
+                        RomNamespace::Hbmame => "hbmame",
+                    },
+                    format!("{setname}.zip"),
+                ),
+                PrimaryRomRequirement::Ambiguous => ("ambiguous", String::new()),
+            };
+            rows.push_str(&format!(
+                "arcade_rom_visibility_row_tsv\tdirection={}\ttitle={}\tlaunch_ref={}\tnamespace={}\tprimary_archive={}\teligibility={}\tpresent={}\tindex_match={}\n",
+                direction,
+                sanitize_catalog_audit_field(&game.title),
+                sanitize_catalog_audit_field(&game.mra_path),
+                namespace,
+                sanitize_catalog_audit_field(&archive),
+                match eligibility {
+                    RomEligibility::Eligible => "eligible",
+                    RomEligibility::Missing => "missing",
+                    RomEligibility::Ambiguous => "ambiguous",
                 },
-                format!("{setname}.zip"),
-            ),
-            PrimaryRomRequirement::Ambiguous => ("ambiguous", String::new()),
-        };
-        rows.push_str(&format!(
-            "arcade_rom_visibility_row_tsv\ttitle={}\tlaunch_ref={}\tnamespace={}\tprimary_archive={}\teligibility={}\tpresent={}\tindex_match={}\n",
-            sanitize_catalog_audit_field(&game.title),
-            sanitize_catalog_audit_field(&game.mra_path),
-            namespace,
-            sanitize_catalog_audit_field(&archive),
-            match eligibility {
-                RomEligibility::Eligible => "eligible",
-                RomEligibility::Missing => "missing",
-                RomEligibility::Ambiguous => "ambiguous",
-            },
-            u8::from(present),
-            u8::from(indexed.is_some()),
-        ));
+                u8::from(present),
+                u8::from(indexed.is_some()),
+            ));
+        }
     }
     let summary = format!(
         "arcade_rom_visibility_summary_tsv\tunfiltered_games={}\tfiltered_games={}\told_only={}\tfiltered_only={}\tfalse_negatives={}\tmame_roms={}\thbmame_roms={}\tinventory_fingerprint={}\n",
         unfiltered.len(),
         filtered.len(),
         old_only.len(),
-        filtered_only,
+        filtered_only.len(),
         false_negatives,
         inventory.counts().0,
         inventory.counts().1,
