@@ -94,6 +94,10 @@ impl LatchFrameBuffers for PluginLatchFrameBuffers {
         }
     }
 
+    fn pixels_mut(buffer: &mut Self::Buffer) -> &mut [Rgb565Pixel] {
+        buffer.pixels_mut()
+    }
+
     fn frame_view(&self, slot_index: u8, width: usize, height: usize) -> Rgb565FrameView<'_> {
         let buffer = if slot_index == 1 {
             &self.buffer1
@@ -307,7 +311,9 @@ impl FpgaVblankLatchHiddenPresenter<PluginLatchFrameBuffers> {
             ui.vertical_sampling(),
         ))
     }
+}
 
+impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
     pub(in crate::ui_runner) fn try_render_direct_hidden_frame<H, R>(
         &mut self,
         hardware: &mut H,
@@ -354,11 +360,11 @@ impl FpgaVblankLatchHiddenPresenter<PluginLatchFrameBuffers> {
             return Ok(None);
         };
         let buffer = self.buffers.buffer_mut(grant.slot_index);
-        if !render(grant, buffer.pixels_mut()) {
+        if !render(grant, B::pixels_mut(buffer)) {
             self.outstanding_direct_grant = None;
             return Ok(None);
         }
-        buffer.publish_writes();
+        B::publish_writes(buffer);
         Ok(Some(CompletedHiddenFrame {
             grant,
             source_evidence: None,
@@ -721,11 +727,7 @@ impl<B: LatchFrameBuffers> FpgaVblankLatchHiddenPresenter<B> {
         let full_copy = rect_list_contains(plan.restore_rects, self.full_rect());
         let catchup_bytes = plan.restore_rects.total_rgb565_bytes();
         let base_addr = self.base_addr(buffer_index);
-        let buffer = self
-            .buffers
-            .as_mut()
-            .expect("hidden mappings must be restored before copied presentation")
-            .buffer_mut(buffer_index);
+        let buffer = self.buffers.buffer_mut(buffer_index);
         let copy_start = Instant::now();
         let copy_pmu = profile_latch_phases
             .then(|| {
@@ -1363,6 +1365,10 @@ mod tests {
 
         fn buffer_mut(&mut self, slot_index: u8) -> &mut Self::Buffer {
             &mut self.buffers[usize::from(slot_index - 1)]
+        }
+
+        fn pixels_mut(buffer: &mut Self::Buffer) -> &mut [Rgb565Pixel] {
+            &mut buffer.pixels
         }
 
         fn frame_view(&self, slot_index: u8, width: usize, height: usize) -> Rgb565FrameView<'_> {

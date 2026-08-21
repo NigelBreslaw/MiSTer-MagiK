@@ -5,7 +5,7 @@ use super::super::*;
 use crate::ui_runner::launcher_pacing::LauncherPacingTrace;
 use crate::ui_runner::launcher_readiness::{PostedSourceFrameEvidence, SourceFrameEvidence};
 use mister_magik_fb::framebuffer::vsync::VsyncPace;
-use mister_magik_fb::latch_readiness::{LatchFailure, LatchFailureReason, LatchFailureStage};
+use mister_magik_fb::latch_readiness::LatchFailure;
 
 enum LauncherPresenterState<L> {
     ExplicitFb0,

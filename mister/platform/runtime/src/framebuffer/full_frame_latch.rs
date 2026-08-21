@@ -17,6 +17,8 @@ use crate::latch_readiness::{
     LatchFailure, LatchFailureReason, LatchFailureStage, LatchPostDiagnostics,
     LatchRejectionObservation, LatchWireDecision, LatchWireDiagnostics,
 };
+#[cfg(feature = "ui")]
+use slint::platform::software_renderer::Rgb565Pixel;
 use std::io;
 use std::time::{Duration, Instant};
 
@@ -191,6 +193,7 @@ pub trait LatchFrameBuffers {
 
     fn base_addr(&self, slot_index: u8) -> u32;
     fn buffer_mut(&mut self, slot_index: u8) -> &mut Self::Buffer;
+    fn pixels_mut(buffer: &mut Self::Buffer) -> &mut [Rgb565Pixel];
     fn frame_view(&self, slot_index: u8, width: usize, height: usize) -> Rgb565FrameView<'_>;
     fn copy_rect(
         buffer: &mut Self::Buffer,
