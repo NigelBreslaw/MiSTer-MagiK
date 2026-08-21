@@ -553,6 +553,41 @@ fn checkpoint_published_shards(
     Ok(())
 }
 
+const FRESH_SHARD_CHECKPOINT_BATCH: usize = 8;
+
+fn checkpoint_ready_fresh_shards(
+    storage_root: &Path,
+    journal: Option<&mut crate::build_progress::BuildProgressJournal>,
+    completed: &[CompletedShard],
+    checkpointed: &mut usize,
+    force: bool,
+) -> Result<(), ReconciliationError> {
+    let Some(journal) = journal else {
+        return Ok(());
+    };
+    let available = completed.len().saturating_sub(*checkpointed);
+    let count = if force {
+        available
+    } else {
+        available / FRESH_SHARD_CHECKPOINT_BATCH * FRESH_SHARD_CHECKPOINT_BATCH
+    };
+    if count == 0 {
+        return Ok(());
+    }
+    let end = checkpointed.saturating_add(count);
+    sync_artifact_batch(storage_root)
+        .map_err(|error| ReconciliationError::new("shard-checkpoint", error.to_string()))?;
+    checkpoint_published_shards(journal, &completed[*checkpointed..end])?;
+    crate::catalog_logln!(
+        "catalog_resume_tsv\tphase=shard-batch-committed\tcount={}\ttotal={}\tforce={}",
+        count,
+        end,
+        force
+    );
+    *checkpointed = end;
+    Ok(())
+}
+
 fn saved_system_matches(
     storage_root: &Path,
     saved: &ManifestSystem,
@@ -662,6 +697,8 @@ fn execute_fresh_pipeline(
         let mut queue_wait = Duration::ZERO;
         let mut fallbacks = 0_usize;
         let mut failure = None;
+        let mut checkpointed = 0_usize;
+        let mut resume_journal = resume_journal;
 
         for planned in rebuilds {
             crate::cooperative_work::checkpoint();
@@ -671,6 +708,16 @@ fn execute_fresh_pipeline(
                     &mut completed,
                     &mut in_flight,
                     &mut queue_wait,
+                ) {
+                    failure = Some(error);
+                    break;
+                }
+                if let Err(error) = checkpoint_ready_fresh_shards(
+                    storage_root,
+                    resume_journal.as_deref_mut(),
+                    &completed,
+                    &mut checkpointed,
+                    false,
                 ) {
                     failure = Some(error);
                     break;
@@ -752,7 +799,19 @@ fn execute_fresh_pipeline(
             if staged_on_media {
                 fallbacks += 1;
                 match publish_staged_shard(storage_root, generation, limits, staged) {
-                    Ok(shard) => completed.push(shard),
+                    Ok(shard) => {
+                        completed.push(shard);
+                        if let Err(error) = checkpoint_ready_fresh_shards(
+                            storage_root,
+                            resume_journal.as_deref_mut(),
+                            &completed,
+                            &mut checkpointed,
+                            false,
+                        ) {
+                            failure = Some(error);
+                            break;
+                        }
+                    }
                     Err(error) => {
                         failure = Some(error);
                         break;
@@ -790,6 +849,17 @@ fn execute_fresh_pipeline(
                     }
                 }
             }
+            if failure.is_none()
+                && let Err(error) = checkpoint_ready_fresh_shards(
+                    storage_root,
+                    resume_journal.as_deref_mut(),
+                    &completed,
+                    &mut checkpointed,
+                    false,
+                )
+            {
+                failure = Some(error);
+            }
             if failure.is_some() {
                 break;
             }
@@ -802,6 +872,18 @@ fn execute_fresh_pipeline(
                 &mut completed,
                 &mut in_flight,
                 &mut queue_wait,
+            ) {
+                if failure.is_none() {
+                    failure = Some(error);
+                }
+                break;
+            }
+            if let Err(error) = checkpoint_ready_fresh_shards(
+                storage_root,
+                resume_journal.as_deref_mut(),
+                &completed,
+                &mut checkpointed,
+                false,
             ) {
                 if failure.is_none() {
                     failure = Some(error);
@@ -821,13 +903,13 @@ fn execute_fresh_pipeline(
         let publish_time = completed
             .iter()
             .fold(Duration::ZERO, |total, shard| total + shard.publish_time);
-        if let Some(journal) = resume_journal
-            && !completed.is_empty()
-        {
-            sync_artifact_batch(storage_root)
-                .map_err(|error| ReconciliationError::new("shard-checkpoint", error.to_string()))?;
-            checkpoint_published_shards(journal, &completed)?;
-        }
+        checkpoint_ready_fresh_shards(
+            storage_root,
+            resume_journal.as_deref_mut(),
+            &completed,
+            &mut checkpointed,
+            true,
+        )?;
         if let Some(error) = failure {
             return Err(error);
         }
