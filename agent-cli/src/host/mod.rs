@@ -27213,19 +27213,17 @@ fn write_string_pointer(out_dir: &Path, name: &str, value: Option<&Value>) -> Re
     Ok(())
 }
 
-fn active_route_status_binary(status: &Value) -> Result<&'static str> {
+fn active_installed_gui_binary(status: &Value) -> Result<&'static str> {
     if status.get("launcher_state").and_then(Value::as_str) != Some("LauncherActive") {
-        return Err("display route readback requires an active launcher".into());
+        return Err("active runtime selection requires an active launcher".into());
     }
     if status.get("fpga_owner").and_then(Value::as_str) != Some("magik") {
-        return Err("display route readback requires MagiK to own the FPGA".into());
+        return Err("active runtime selection requires MagiK to own the FPGA".into());
     }
     match status.get("executable_path").and_then(Value::as_str) {
         Some(LOCAL_MAIN_REMOTE) => Ok(DEVELOPMENT_GUI_REMOTE),
         Some(PUBLIC_MAIN_REMOTE) => Ok(PUBLIC_GUI_REMOTE),
-        Some(path) => {
-            Err(format!("unsupported active Main executable for route readback: {path}").into())
-        }
+        Some(path) => Err(format!("unsupported active Main executable: {path}").into()),
         None => Err("active Main status does not identify its executable".into()),
     }
 }
@@ -27234,7 +27232,7 @@ fn display_route_status(sess: &Session) -> Result<()> {
     let status_text = remote_read(sess, MAIN_STATUS_REMOTE)
         .ok_or("active Main status is unavailable for display route readback")?;
     let status: Value = serde_json::from_str(&status_text)?;
-    let binary = active_route_status_binary(&status)?;
+    let binary = active_installed_gui_binary(&status)?;
     for (label, subcommand) in [
         ("display route readback", "read"),
         ("latched framebuffer readback", "fpga-latch-report"),
@@ -27256,8 +27254,11 @@ fn run_catalog_inspect(sess: &Session, args: &[String]) -> Result<()> {
     if !args.is_empty() {
         return Err("usage: scripts/agent device catalog inspect".into());
     }
-    let binary = configured_remote_path("MISTER_MAGIK_BIN", PUBLIC_GUI_REMOTE);
-    let command = remote_subcommand(&binary, "catalog-v3-inspect", args);
+    let status_text = remote_read(sess, MAIN_STATUS_REMOTE)
+        .ok_or("active Main status is unavailable for catalog inspection")?;
+    let status: Value = serde_json::from_str(&status_text)?;
+    let binary = active_installed_gui_binary(&status)?;
+    let command = remote_subcommand(binary, "catalog-v3-inspect", args);
     let out = exec(sess, &command, true)?;
     print!("{}", out.stdout);
     if !out.stderr.trim().is_empty() {
@@ -30080,14 +30081,14 @@ video_mode=14
     }
 
     #[test]
-    fn route_status_selects_only_the_active_fpga_owner_runtime() {
+    fn active_gui_selection_routes_dev_and_public_runtime_commands() {
         let dev = json!({
             "launcher_state": "LauncherActive",
             "fpga_owner": "magik",
             "executable_path": "/media/fat/MiSTer_MagiKDev"
         });
         assert_eq!(
-            active_route_status_binary(&dev).unwrap(),
+            active_installed_gui_binary(&dev).unwrap(),
             "/media/fat/mister-magik-dev/mister-magik-fb"
         );
 
@@ -30097,7 +30098,7 @@ video_mode=14
             "executable_path": "/media/fat/MiSTer_MagiK"
         });
         assert_eq!(
-            active_route_status_binary(&public).unwrap(),
+            active_installed_gui_binary(&public).unwrap(),
             "/media/fat/mister-magik/mister-magik-fb"
         );
 
@@ -30113,7 +30114,7 @@ video_mode=14
                 "executable_path": "/media/fat/MiSTer_MagiKDev"
             }),
         ] {
-            assert!(active_route_status_binary(&unavailable).is_err());
+            assert!(active_installed_gui_binary(&unavailable).is_err());
         }
     }
 
