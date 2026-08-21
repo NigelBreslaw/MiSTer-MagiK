@@ -296,6 +296,7 @@ fn add_path_operations(
         || path.starts_with("apps/mister/src")
         || path.starts_with("mister/platform/runtime/src")
         || path.starts_with("mister/tools/agent/src")
+        || path.starts_with("agent-cli/src/host")
         || matches!(
             path.to_str(),
             Some(
@@ -2546,6 +2547,7 @@ mod tests {
             },
             vec![
                 "apps/mister/src/launcher.rs".into(),
+                "agent-cli/src/host/agent_client.rs".into(),
                 "agent-cli/src/progress.rs".into(),
                 "mister/tools/agent/src/main.rs".into(),
             ],

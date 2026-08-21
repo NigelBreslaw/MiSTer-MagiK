@@ -24,6 +24,16 @@ delivery, benchmarking, diagnosis, and release acceptance use the typed Rust
 state machines. Credentials or authentication failures are reported immediately
 with one next action; they are never repaired by printing or replacing secrets.
 
+Runtime delivery uses the internal `runtime-upload-v1` capability. Its request
+header declares only `payload_bytes` and a canonical lowercase `sha256`,
+followed by the raw bytes on the same authenticated TCP connection. The agent
+bounds the payload at 128 MiB, owns at most a 64 KiB copy buffer, requires the
+Dev deploy lock, and atomically stages only the canonical `.upload` path. It
+does not suspend, activate, chmod, or update the platform manifest; the
+coherent host transaction retains those responsibilities. Continuous device
+telemetry and framebuffer analytics keep their existing authenticated agent
+stream protocols and do not use this upload command.
+
 For physical recovery, delete `/etc/init.d/S00magik-agent` from a mounted SD card.
 For boot-loop recovery, follow `docs/device.md` and clear every arming path before
 another network attempt.

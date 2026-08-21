@@ -1222,6 +1222,7 @@ fn check_device_crate_root_ownership(repository: &Path) -> Result<(), String> {
 }
 
 fn check_executable_boundaries(repository: &Path) -> Result<(), String> {
+    check_host_inbound_listeners(repository)?;
     let portable = read(repository, "crates/magik-core/src/launcher_effects.rs")?;
     require_fragments(
         "portable_launcher_effects",
@@ -1384,6 +1385,29 @@ fn check_executable_boundaries(repository: &Path) -> Result<(), String> {
         &[],
     )?;
     Ok(())
+}
+
+fn check_host_inbound_listeners(repository: &Path) -> Result<(), String> {
+    for path in repository_files(repository)?.into_iter().filter(|path| {
+        path.starts_with("agent-cli/src/host")
+            && path.extension().and_then(|extension| extension.to_str()) == Some("rs")
+    }) {
+        let source = fs::read_to_string(repository.join(&path))
+            .map_err(|error| format!("cannot read {}: {error}", path.display()))?;
+        if let Some(fragment) = host_inbound_listener_fragment(&source) {
+            return Err(format!(
+                "host_inbound_listener_forbidden: {} contains {fragment}",
+                path.display()
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn host_inbound_listener_fragment(source: &str) -> Option<&'static str> {
+    ["TcpListener", "UdpSocket::bind", "bind(\"0.0.0.0"]
+        .into_iter()
+        .find(|fragment| source.contains(fragment))
 }
 
 fn executable_error_flattening_returned(device_agent: &str, cli: &str) -> bool {
@@ -2308,6 +2332,22 @@ documentation = { summary = "Volatile fixture token", accepted_values = ["do-not
             "failure_response(id, error)",
             "fn run() -> Result<ExitCode, String> { reporter.emit(EventKind::Failed, \"request\", &error.to_string(), None); }",
         ));
+    }
+
+    #[test]
+    fn host_inbound_listener_guard_allows_clients_and_rejects_accept_sites() {
+        assert_eq!(
+            host_inbound_listener_fragment("TcpStream::connect_timeout(&addr, timeout)"),
+            None
+        );
+        assert_eq!(
+            host_inbound_listener_fragment("TcpListener::bind((address, 0))"),
+            Some("TcpListener")
+        );
+        assert_eq!(
+            host_inbound_listener_fragment("UdpSocket::bind(\"0.0.0.0:0\")"),
+            Some("UdpSocket::bind")
+        );
     }
 
     #[test]

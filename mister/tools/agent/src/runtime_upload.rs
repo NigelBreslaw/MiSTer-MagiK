@@ -169,11 +169,11 @@ fn receive_to_part(
     })?;
 
     let receive_ms = started.elapsed().as_millis().try_into().unwrap_or(u64::MAX);
-    let bytes_per_second = if receive_ms == 0 {
-        spec.payload_bytes.saturating_mul(1_000)
-    } else {
-        spec.payload_bytes.saturating_mul(1_000) / receive_ms
-    };
+    let bytes_per_second = spec
+        .payload_bytes
+        .saturating_mul(1_000)
+        .checked_div(receive_ms)
+        .unwrap_or_else(|| spec.payload_bytes.saturating_mul(1_000));
     Ok(UploadResult {
         payload_bytes: spec.payload_bytes,
         sha256: actual_sha256,
@@ -279,12 +279,9 @@ mod tests {
         let fixture = Fixture::new();
         fs::remove_file(&fixture.paths.lock).unwrap();
         let payload = b"runtime";
-        assert_eq!(
-            receive(&mut Cursor::new(payload), &spec(payload), &fixture.paths)
-                .unwrap_err()
-                .kind,
-            UploadFailureKind::Busy
-        );
+        let error = receive(&mut Cursor::new(payload), &spec(payload), &fixture.paths).unwrap_err();
+        assert_eq!(error.kind, UploadFailureKind::Busy);
+        assert!(error.message.contains("deploy lock"));
 
         File::create(&fixture.paths.lock).unwrap();
         File::create(&fixture.paths.upload).unwrap();

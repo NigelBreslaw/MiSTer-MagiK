@@ -93,14 +93,18 @@ never deployment health evidence. The host tool intentionally exposes no
 generic remote shell, file upload, directory upload, or binary deployment
 subcommand; fixed typed operations own all device mutation.
 
-The large Runtime executable is transferred byte-for-byte by a one-shot HTTP
-listener bound to the host route used for the MiSTer. The listener exposes only
-an unpredictable single-use path and is stopped before activation continues.
-The device bounds the raw download by the expected byte count, and the normal
-transaction verifies its SHA-256 before swapping it into place. If the HTTP
-fetch fails, delivery removes and confirms removal of the partial staging file
-before one fallback through the existing SFTP transport. Artwork and manifests
-remain on SFTP.
+The large Runtime executable is transferred byte-for-byte over the existing
+authenticated agent connection initiated by the host. The v1 receiver accepts
+only the declared byte count and lowercase SHA-256, requires the active Dev
+deploy lock, and can stage only the canonical `mister-magik-fb.upload`; it
+cannot activate a binary or alter its manifest. The host shuts down its write
+side after the payload so the agent can reject truncation and surplus data,
+then the normal transaction independently verifies SHA-256 before swapping the
+binary and regenerated manifest together. An ambiguous transfer result is
+reconciled by exact staged size and hash. A mismatch is removed and confirmed
+absent before one SFTP fallback. Artwork and manifests remain on SFTP. The host
+opens no inbound transfer listener, avoiding the macOS incoming-connection
+permission path.
 
 The attended release gate qualifies whichever MagiK layout is currently active.
 Its display phase reboots through the fixed boundary matrix: presets 10, 13,
