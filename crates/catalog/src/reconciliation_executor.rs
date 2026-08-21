@@ -405,7 +405,7 @@ pub fn execute_reconciliation_with_events(
                         sync_artifact_batch(storage_root).map_err(|error| {
                             ReconciliationError::new("shard-checkpoint", error.to_string())
                         })?;
-                        checkpoint_published_shard(storage_root, journal, &shard, limits)?;
+                        checkpoint_published_shard(journal, &shard)?;
                     }
                     shard_build_wall_time += shard.elapsed.saturating_sub(shard.publish_time);
                     shard_publication_wall_time += shard.publish_time;
@@ -509,25 +509,24 @@ pub fn execute_reconciliation_with_events(
 }
 
 fn checkpoint_published_shard(
-    storage_root: &Path,
     journal: &mut crate::build_progress::BuildProgressJournal,
     shard: &CompletedShard,
-    limits: RegistryLimits,
 ) -> Result<(), ReconciliationError> {
-    checkpoint_published_shards(storage_root, journal, std::slice::from_ref(shard), limits)
+    checkpoint_published_shards(journal, std::slice::from_ref(shard))
 }
 
 fn checkpoint_published_shards(
-    storage_root: &Path,
     journal: &mut crate::build_progress::BuildProgressJournal,
     shards: &[CompletedShard],
-    limits: RegistryLimits,
 ) -> Result<(), ReconciliationError> {
+    // The writer has already reopened and fully validated each staging shard,
+    // publication copied or renamed those exact bytes while hashing them, and
+    // the caller synchronized the artifact batch before reaching this point.
+    // Resume validates every recorded shard again before reuse, so reopening
+    // all artifacts here would only duplicate work on the cold critical path.
     let completed = shards
         .iter()
         .map(|shard| {
-            validate_published_system(storage_root, &shard.system, limits)
-                .map_err(|error| ReconciliationError::new("shard-checkpoint", error.to_string()))?;
             let active = &shard.system.active;
             Ok(crate::build_progress::CompletedShard {
                 system_id: shard.system.system_id.as_str().to_string(),
@@ -827,7 +826,7 @@ fn execute_fresh_pipeline(
         {
             sync_artifact_batch(storage_root)
                 .map_err(|error| ReconciliationError::new("shard-checkpoint", error.to_string()))?;
-            checkpoint_published_shards(storage_root, journal, &completed, limits)?;
+            checkpoint_published_shards(journal, &completed)?;
         }
         if let Some(error) = failure {
             return Err(error);
