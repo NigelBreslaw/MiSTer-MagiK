@@ -51,6 +51,14 @@ impl CounterSet {
             Self::CortexA9Neon => &CORTEX_A9_NEON_EVENTS,
         }
     }
+
+    #[must_use]
+    pub fn from_profile_token(value: Option<&str>) -> Self {
+        match value {
+            Some("cortex-a9-neon") | Some("neon") => Self::CortexA9Neon,
+            _ => Self::General,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
@@ -378,11 +386,71 @@ impl CounterDelta {
 
     #[must_use]
     pub fn ratio(&self, numerator: HardwareEvent, denominator: HardwareEvent) -> f64 {
-        match (self.counters.get(numerator), self.counters.get(denominator)) {
-            (Some(numerator), Some(denominator)) => ratio(numerator, denominator),
-            _ => 0.0,
+        self.ratio_if_measured(numerator, denominator)
+            .unwrap_or_default()
+    }
+
+    #[must_use]
+    pub fn ratio_if_measured(
+        &self,
+        numerator: HardwareEvent,
+        denominator: HardwareEvent,
+    ) -> Option<f64> {
+        Some(ratio(
+            self.counters.get(numerator)?,
+            self.counters.get(denominator)?,
+        ))
+    }
+
+    #[must_use]
+    pub fn derived_metrics(&self) -> DerivedMetrics {
+        DerivedMetrics {
+            instructions_per_cycle: self
+                .ratio_if_measured(HardwareEvent::Instructions, HardwareEvent::Cycles),
+            l1d_refill_ratio: self
+                .ratio_if_measured(HardwareEvent::L1dRefills, HardwareEvent::L1dAccesses),
+            branch_mispredict_ratio: self
+                .ratio_if_measured(HardwareEvent::BranchMispredicts, HardwareEvent::Branches),
+            speculative_instructions_per_cycle: self.ratio_if_measured(
+                HardwareEvent::SpeculativeInstructions,
+                HardwareEvent::Cycles,
+            ),
+            neon_instruction_share: self.ratio_if_measured(
+                HardwareEvent::NeonInstructions,
+                HardwareEvent::SpeculativeInstructions,
+            ),
+            neon_instructions_per_active_cycle: self.ratio_if_measured(
+                HardwareEvent::NeonInstructions,
+                HardwareEvent::NeonClockCycles,
+            ),
+            neon_clock_duty: self
+                .ratio_if_measured(HardwareEvent::NeonClockCycles, HardwareEvent::Cycles),
+            data_dependent_stall_ratio: self.ratio_if_measured(
+                HardwareEvent::DataDependentStallCycles,
+                HardwareEvent::Cycles,
+            ),
         }
     }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
+pub struct DerivedMetrics {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub instructions_per_cycle: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub l1d_refill_ratio: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub branch_mispredict_ratio: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub speculative_instructions_per_cycle: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub neon_instruction_share: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub neon_instructions_per_active_cycle: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub neon_clock_duty: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub data_dependent_stall_ratio: Option<f64>,
 }
 
 fn ratio(numerator: u64, denominator: u64) -> f64 {
@@ -393,19 +461,22 @@ fn ratio(numerator: u64, denominator: u64) -> f64 {
     }
 }
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct SpanRecord {
     pub name: String,
     pub counters: CounterDelta,
+    pub derived: DerivedMetrics,
 }
 
 const DEFAULT_SAMPLE_EVERY: u64 = 16;
 const DEFAULT_RECORD_LIMIT: usize = 4_096;
 const PROCESS_PROFILE_LIMIT: usize = 16;
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct ThreadProfile {
     pub schema: &'static str,
+    #[serde(default)]
+    pub counter_set: CounterSet,
     pub enabled: bool,
     pub sample_every: u64,
     pub attempted_spans: u64,
@@ -416,13 +487,13 @@ pub struct ThreadProfile {
     pub scope: Option<CounterScope>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct SubmittedThreadProfile {
     pub label: String,
     pub profile: ThreadProfile,
 }
 
-#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct ProcessProfileBatch {
     pub profiles: Vec<SubmittedThreadProfile>,
     pub dropped_profiles: u64,
@@ -466,12 +537,14 @@ static PROCESS_COLLECTOR: OnceLock<Mutex<ProcessCollector>> = OnceLock::new();
 static PROCESS_CONFIG: OnceLock<PmuProfileConfig> = OnceLock::new();
 
 const PMU_PROFILE: &str = "MISTER_PMU_PROFILE";
+const PMU_COUNTER_SET: &str = "MISTER_PMU_COUNTER_SET";
 const PMU_SAMPLE_EVERY: &str = "MISTER_PMU_SAMPLE_EVERY";
 const PMU_RECORD_LIMIT: &str = "MISTER_PMU_RECORD_LIMIT";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PmuProfileConfig {
     enabled: bool,
+    counter_set: CounterSet,
     sample_every: u64,
     record_limit: usize,
 }
@@ -480,6 +553,7 @@ impl PmuProfileConfig {
     pub fn capture_with<'a>(mut get: impl FnMut(&str) -> Option<&'a str>) -> Self {
         Self {
             enabled: get(PMU_PROFILE) == Some("1"),
+            counter_set: CounterSet::from_profile_token(get(PMU_COUNTER_SET)),
             sample_every: bounded_value(get(PMU_SAMPLE_EVERY), DEFAULT_SAMPLE_EVERY, 1, 10_000),
             record_limit: bounded_value(
                 get(PMU_RECORD_LIMIT),
@@ -506,6 +580,7 @@ fn process_collector() -> MutexGuard<'static, ProcessCollector> {
 
 struct ThreadCollector {
     enabled: bool,
+    counter_set: CounterSet,
     sample_every: u64,
     record_limit: usize,
     attempted_spans: u64,
@@ -524,12 +599,23 @@ impl ThreadCollector {
             let values: std::collections::BTreeMap<String, String> = std::env::vars().collect();
             PmuProfileConfig::capture_with(|name| values.get(name).map(String::as_str))
         });
-        Self::new(config.enabled, config.sample_every, config.record_limit)
+        Self::new(
+            config.enabled,
+            config.counter_set,
+            config.sample_every,
+            config.record_limit,
+        )
     }
 
-    fn new(enabled: bool, sample_every: u64, record_limit: usize) -> Self {
+    fn new(
+        enabled: bool,
+        counter_set: CounterSet,
+        sample_every: u64,
+        record_limit: usize,
+    ) -> Self {
         Self {
             enabled,
+            counter_set,
             sample_every,
             record_limit,
             attempted_spans: 0,
@@ -554,7 +640,7 @@ impl ThreadCollector {
             return None;
         }
         if self.group.is_none() {
-            match CounterGroup::open() {
+            match CounterGroup::open_set(self.counter_set) {
                 Ok(group) => {
                     self.read_format = Some(group.read_format());
                     self.scope = Some(group.scope());
@@ -587,9 +673,11 @@ impl ThreadCollector {
         };
         match group.snapshot() {
             Ok(finished) if self.records.len() < self.record_limit => {
+                let counters = finished.delta_from(started);
                 self.records.push(SpanRecord {
                     name: name.to_owned(),
-                    counters: finished.delta_from(started),
+                    derived: counters.derived_metrics(),
+                    counters,
                 })
             }
             Ok(_) => self.dropped_spans = self.dropped_spans.saturating_add(1),
@@ -602,7 +690,8 @@ impl ThreadCollector {
 
     fn take(&mut self) -> ThreadProfile {
         let profile = ThreadProfile {
-            schema: "mister-magik-pmu-thread-profile-v1",
+            schema: "mister-magik-pmu-thread-profile-v2",
+            counter_set: self.counter_set,
             enabled: self.enabled,
             sample_every: self.sample_every,
             attempted_spans: self.attempted_spans,
@@ -712,9 +801,11 @@ pub struct NamedSpan<'a> {
 impl NamedSpan<'_> {
     pub fn finish(self) -> Result<SpanRecord, PmuFailure> {
         let finished = self.group.snapshot()?;
+        let counters = finished.delta_from(self.started);
         Ok(SpanRecord {
             name: self.name,
-            counters: finished.delta_from(self.started),
+            derived: counters.derived_metrics(),
+            counters,
         })
     }
 }
@@ -1375,7 +1466,15 @@ mod tests {
         assert!(config.enabled);
         assert_eq!(config.sample_every, 1);
         assert_eq!(config.record_limit, 65_536);
+        assert_eq!(config.counter_set, CounterSet::General);
         assert!(!PmuProfileConfig::capture_with(|_| None).enabled);
+        let neon = [(PMU_COUNTER_SET, "cortex-a9-neon")]
+            .into_iter()
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(
+            PmuProfileConfig::capture_with(|name| neon.get(name).copied()).counter_set,
+            CounterSet::CortexA9Neon
+        );
     }
     use std::sync::Mutex;
 
@@ -1521,6 +1620,7 @@ mod tests {
         let span = SpanRecord {
             name: "outer".to_owned(),
             counters: CounterDelta::default(),
+            derived: DerivedMetrics::default(),
         };
         let value = serde_json::to_value(span).unwrap();
         assert_eq!(value["name"], "outer");
@@ -1541,8 +1641,33 @@ mod tests {
     }
 
     #[test]
+    fn neon_derived_metrics_require_their_measured_events() {
+        let delta = CounterDelta {
+            counter_set: CounterSet::CortexA9Neon,
+            counters: CounterValues::from([
+                (HardwareEvent::Cycles, 200),
+                (HardwareEvent::SpeculativeInstructions, 100),
+                (HardwareEvent::NeonInstructions, 25),
+                (HardwareEvent::NeonClockCycles, 50),
+                (HardwareEvent::DataDependentStallCycles, 20),
+                (HardwareEvent::L1dAccesses, 40),
+                (HardwareEvent::L1dRefills, 4),
+            ]),
+            ..CounterDelta::default()
+        };
+        let derived = delta.derived_metrics();
+        assert_eq!(derived.speculative_instructions_per_cycle, Some(0.5));
+        assert_eq!(derived.neon_instruction_share, Some(0.25));
+        assert_eq!(derived.neon_instructions_per_active_cycle, Some(0.5));
+        assert_eq!(derived.neon_clock_duty, Some(0.25));
+        assert_eq!(derived.data_dependent_stall_ratio, Some(0.1));
+        assert_eq!(derived.l1d_refill_ratio, Some(0.1));
+        assert_eq!(derived.instructions_per_cycle, None);
+    }
+
+    #[test]
     fn collector_samples_each_name_independently_and_drains_records() {
-        let mut collector = ThreadCollector::new(true, 2, 1);
+        let mut collector = ThreadCollector::new(true, CounterSet::General, 2, 1);
         collector.group = None;
         assert_eq!(collector.sample_every, 2);
         assert_eq!(collector.record_limit, 1);
@@ -1554,13 +1679,14 @@ mod tests {
         assert_eq!(collector.calls_by_name["second"], 1);
         let profile = collector.take();
         assert!(profile.enabled);
-        assert_eq!(profile.schema, "mister-magik-pmu-thread-profile-v1");
+        assert_eq!(profile.schema, "mister-magik-pmu-thread-profile-v2");
         assert!(collector.calls_by_name.is_empty());
     }
 
     fn test_profile(enabled: bool) -> ThreadProfile {
         ThreadProfile {
-            schema: "mister-magik-pmu-thread-profile-v1",
+            schema: "mister-magik-pmu-thread-profile-v2",
+            counter_set: CounterSet::General,
             enabled,
             sample_every: 1,
             attempted_spans: 0,
@@ -1623,7 +1749,8 @@ mod tests {
         let workers = ["walker", "publisher"].map(|label| {
             std::thread::spawn(move || {
                 THREAD_COLLECTOR.with(|collector| {
-                    *collector.borrow_mut() = ThreadCollector::new(true, 1, 1);
+                    *collector.borrow_mut() =
+                        ThreadCollector::new(true, CounterSet::General, 1, 1);
                 });
                 submit_thread_profile(label);
             })

@@ -11052,7 +11052,7 @@ fn pmu_installed_identity(manifest: &str) -> Result<Value> {
 
 fn validate_installed_pmu_workload(workload: &str, summary: &Value) -> Result<()> {
     if workload == "probe" {
-        if summary.get("schema").and_then(Value::as_str) == Some("mister-magik-pmu-probe-v1")
+        if summary.get("schema").and_then(Value::as_str) == Some("mister-magik-pmu-probe-v2")
             && summary.get("status").and_then(Value::as_str) == Some("ok")
         {
             return Ok(());

@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use mister_magik_perf_events::{
-    CounterDelta, CounterGroup, HardwareEvent, PmuFailure, PmuOpenDiagnostics, event_metadata,
+    CounterDelta, CounterGroup, CounterSet, HardwareEvent, PmuFailure, PmuOpenDiagnostics,
+    event_metadata_for,
 };
 use serde_json::{Value, json};
 
@@ -18,10 +19,12 @@ pub fn run() {
 }
 
 pub fn probe() -> Value {
-    let (group, diagnostics) = CounterGroup::open_with_diagnostics();
+    let value = std::env::var("MISTER_PMU_COUNTER_SET").ok();
+    let counter_set = CounterSet::from_profile_token(value.as_deref());
+    let (group, diagnostics) = CounterGroup::open_set_with_diagnostics(counter_set);
     match measure_probe(group) {
         Ok((delta, checksum, read_format, scope)) if valid_probe(&delta) => json!({
-            "schema": "mister-magik-pmu-probe-v1",
+            "schema": "mister-magik-pmu-probe-v2",
             "status": "ok",
             "target": {
                 "architecture": std::env::consts::ARCH,
@@ -31,8 +34,9 @@ pub fn probe() -> Value {
                 "multiplexed": false,
                 "read_format": read_format,
                 "counter_scope": scope,
+                "counter_set": counter_set,
             },
-            "events": event_metadata(),
+            "events": event_metadata_for(counter_set),
             "workload": {
                 "iterations": PROBE_ITERATIONS,
                 "words": PROBE_WORDS,
@@ -43,7 +47,7 @@ pub fn probe() -> Value {
             "failure": Value::Null,
         }),
         Ok((delta, checksum, read_format, scope)) => json!({
-            "schema": "mister-magik-pmu-probe-v1",
+            "schema": "mister-magik-pmu-probe-v2",
             "status": "failed",
             "target": {
                 "architecture": std::env::consts::ARCH,
@@ -53,8 +57,9 @@ pub fn probe() -> Value {
                 "multiplexed": false,
                 "read_format": read_format,
                 "counter_scope": scope,
+                "counter_set": counter_set,
             },
-            "events": event_metadata(),
+            "events": event_metadata_for(counter_set),
             "workload": {
                 "iterations": PROBE_ITERATIONS,
                 "words": PROBE_WORDS,
@@ -66,10 +71,10 @@ pub fn probe() -> Value {
                 "stage": "validate-sample",
                 "event": Value::Null,
                 "errno": Value::Null,
-                "message": "probe produced zero cycles or instructions",
+                "message": "probe produced zero cycles or instruction events",
             },
         }),
-        Err(failure) => failed_probe(failure, diagnostics),
+        Err(failure) => failed_probe(counter_set, failure, diagnostics),
     }
 }
 
@@ -116,11 +121,12 @@ fn valid_probe(delta: &CounterDelta) -> bool {
         .get(HardwareEvent::Cycles)
         .unwrap_or_default()
         > 0
-        && delta
-            .counters
-            .get(HardwareEvent::Instructions)
-            .unwrap_or_default()
-            > 0
+        && [
+            HardwareEvent::Instructions,
+            HardwareEvent::SpeculativeInstructions,
+        ]
+        .into_iter()
+        .any(|event| delta.counters.get(event).unwrap_or_default() > 0)
 }
 
 fn sample_json(delta: &CounterDelta) -> Value {
@@ -137,9 +143,13 @@ fn sample_json(delta: &CounterDelta) -> Value {
     })
 }
 
-fn failed_probe(failure: PmuFailure, diagnostics: PmuOpenDiagnostics) -> Value {
+fn failed_probe(
+    counter_set: CounterSet,
+    failure: PmuFailure,
+    diagnostics: PmuOpenDiagnostics,
+) -> Value {
     json!({
-        "schema": "mister-magik-pmu-probe-v1",
+        "schema": "mister-magik-pmu-probe-v2",
         "status": "failed",
         "target": {
             "architecture": std::env::consts::ARCH,
@@ -147,8 +157,9 @@ fn failed_probe(failure: PmuFailure, diagnostics: PmuOpenDiagnostics) -> Value {
             "scope": "calling-thread-user-and-kernel",
             "grouped": true,
             "multiplexed": false,
+            "counter_set": counter_set,
         },
-        "events": event_metadata(),
+        "events": event_metadata_for(counter_set),
         "workload": {
             "iterations": PROBE_ITERATIONS,
             "words": PROBE_WORDS,
@@ -181,6 +192,7 @@ mod tests {
     #[test]
     fn failure_report_preserves_structured_details() {
         let report = failed_probe(
+            CounterSet::General,
             PmuFailure {
                 stage: "open-event".to_owned(),
                 event: Some(mister_magik_perf_events::HardwareEvent::Cycles),

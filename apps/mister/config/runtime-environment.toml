@@ -2470,6 +2470,20 @@ aliases = []
 documentation = { summary = "Controls particle simd behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
+name = "MISTER_PMU_COUNTER_SET"
+owner = "crates/perf-events/src/lib.rs"
+classification = "diagnostic"
+value_shape = "enum token"
+default_behavior = "uses general when unset or unrecognized"
+visibility = "developer diagnostic"
+parser = "enum"
+scope = "instrumentation"
+conflicts = []
+sensitivity = "public"
+aliases = []
+documentation = { summary = "Selects the grouped PMU event set", accepted_values = ["general", "cortex-a9-neon"], value_policy = "reject unknown values to the general default" }
+
+[[control]]
 name = "MISTER_PMU_PROFILE"
 owner = "crates/perf-events/src/lib.rs"
 classification = "diagnostic"

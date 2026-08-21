@@ -744,6 +744,20 @@ Derived ratios use the grouped counters from one calling thread and interval:
 - L1D refill ratio is `L1D refills / L1D accesses`.
 - Branch-mispredict ratio is `branch mispredicts / branches`.
 
+Set `MISTER_PMU_COUNTER_SET=cortex-a9-neon` to replace the general group with
+the non-multiplexed Cortex-A9 attribution group: cycles, speculative
+instructions (`0x68`), NEON instructions (`0x74`), NEON-clock-active cycles
+(`0x8c`), data-dependent stall cycles (`0x61`), L1D accesses, and L1D refills.
+The v2 thread profile records the selected set and serializes only counters
+that the kernel actually returned. Its per-span derived data adds:
+
+- speculative IPC (`speculative instructions / cycles`);
+- NEON instruction share (`NEON instructions / speculative instructions`);
+- NEON throughput while active (`NEON instructions / NEON-clock-active cycles`);
+- NEON clock duty (`NEON-clock-active cycles / cycles`);
+- data-dependent stall ratio (`data-dependent stall cycles / cycles`);
+- L1D refill ratio (`L1D refills / L1D accesses`).
+
 PMU counters attribute CPU work; wall time remains the optimization outcome.
 Filesystem and SQLite waits can dominate elapsed time without accumulating
 corresponding calling-thread cycles. The PMU-enabled workload is therefore not

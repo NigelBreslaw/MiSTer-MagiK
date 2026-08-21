@@ -126,6 +126,10 @@ struct CatalogOperationReport {
 struct CatalogPmuAggregate {
     cycles: u64,
     instructions: u64,
+    speculative_instructions: u64,
+    neon_instructions: u64,
+    neon_clock_cycles: u64,
+    data_dependent_stall_cycles: u64,
     l1d_accesses: u64,
     l1d_refills: u64,
     branches: u64,
@@ -133,6 +137,11 @@ struct CatalogPmuAggregate {
     instructions_per_cycle: f64,
     l1d_refill_ratio: f64,
     branch_mispredict_ratio: f64,
+    speculative_instructions_per_cycle: f64,
+    neon_instruction_share: f64,
+    neon_instructions_per_active_cycle: f64,
+    neon_clock_duty: f64,
+    data_dependent_stall_ratio: f64,
 }
 
 #[derive(Default)]
@@ -470,6 +479,27 @@ fn aggregate_process_profile(
                 .get(HardwareEvent::Instructions)
                 .unwrap_or_default(),
         );
+        aggregate.speculative_instructions = aggregate.speculative_instructions.saturating_add(
+            counters
+                .get(HardwareEvent::SpeculativeInstructions)
+                .unwrap_or_default(),
+        );
+        aggregate.neon_instructions = aggregate.neon_instructions.saturating_add(
+            counters
+                .get(HardwareEvent::NeonInstructions)
+                .unwrap_or_default(),
+        );
+        aggregate.neon_clock_cycles = aggregate.neon_clock_cycles.saturating_add(
+            counters
+                .get(HardwareEvent::NeonClockCycles)
+                .unwrap_or_default(),
+        );
+        aggregate.data_dependent_stall_cycles =
+            aggregate.data_dependent_stall_cycles.saturating_add(
+                counters
+                    .get(HardwareEvent::DataDependentStallCycles)
+                    .unwrap_or_default(),
+            );
         aggregate.l1d_accesses = aggregate
             .l1d_accesses
             .saturating_add(counters.get(HardwareEvent::L1dAccesses).unwrap_or_default());
@@ -488,6 +518,17 @@ fn aggregate_process_profile(
     aggregate.instructions_per_cycle = ratio(aggregate.instructions, aggregate.cycles);
     aggregate.l1d_refill_ratio = ratio(aggregate.l1d_refills, aggregate.l1d_accesses);
     aggregate.branch_mispredict_ratio = ratio(aggregate.branch_mispredicts, aggregate.branches);
+    aggregate.speculative_instructions_per_cycle =
+        ratio(aggregate.speculative_instructions, aggregate.cycles);
+    aggregate.neon_instruction_share = ratio(
+        aggregate.neon_instructions,
+        aggregate.speculative_instructions,
+    );
+    aggregate.neon_instructions_per_active_cycle =
+        ratio(aggregate.neon_instructions, aggregate.neon_clock_cycles);
+    aggregate.neon_clock_duty = ratio(aggregate.neon_clock_cycles, aggregate.cycles);
+    aggregate.data_dependent_stall_ratio =
+        ratio(aggregate.data_dependent_stall_cycles, aggregate.cycles);
     aggregate
 }
 
@@ -525,7 +566,8 @@ mod tests {
 
     fn populated_thread_profile() -> mister_magik_perf_events::ThreadProfile {
         mister_magik_perf_events::ThreadProfile {
-            schema: "mister-magik-pmu-thread-profile-v1",
+            schema: "mister-magik-pmu-thread-profile-v2",
+            counter_set: mister_magik_perf_events::CounterSet::General,
             enabled: true,
             sample_every: 1,
             attempted_spans: 1,
@@ -546,6 +588,7 @@ mod tests {
                     ]),
                     ..mister_magik_perf_events::CounterDelta::default()
                 },
+                derived: mister_magik_perf_events::DerivedMetrics::default(),
             }],
             failure: None,
             read_format: None,
@@ -556,7 +599,8 @@ mod tests {
     #[test]
     fn profile_status_requires_enabled_nonempty_failure_free_evidence() {
         let empty = mister_magik_perf_events::ThreadProfile {
-            schema: "mister-magik-pmu-thread-profile-v1",
+            schema: "mister-magik-pmu-thread-profile-v2",
+            counter_set: mister_magik_perf_events::CounterSet::General,
             enabled: true,
             sample_every: 1,
             attempted_spans: 1,
