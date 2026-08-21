@@ -6,6 +6,7 @@
 use crate::catalog_classify::{PlatformKind, platform_kind_for_system};
 use crate::catalog_config;
 use crate::sharded_catalog::CatalogReader;
+use sha2::{Digest, Sha256};
 
 pub fn inspect_production_registry() -> Result<String, String> {
     inspect_registry(&catalog_config::default_sharded_catalog_path())
@@ -69,6 +70,12 @@ pub fn inspect_catalog(storage: &std::path::Path) -> Result<String, String> {
     let mut navpack_systems = 0usize;
     let mut navpack_bytes = 0u64;
     let mut rows = String::new();
+    let mut artifacts = String::new();
+    let mut identity = Sha256::new();
+    let mut ordering = Sha256::new();
+    let mut launches = Sha256::new();
+    let mut artifact_set = Sha256::new();
+    let mut search_queries = Vec::<(String, String)>::new();
     for summary in registry.systems() {
         let system = reader
             .open_system(&summary.system_id)
@@ -128,6 +135,43 @@ pub fn inspect_catalog(storage: &std::path::Path) -> Result<String, String> {
             },
         );
         validate_visible_system_rows(&summary.system_id, &full_shard.games)?;
+        append_text(&mut identity, summary.system_id.as_str());
+        append_text(&mut ordering, summary.system_id.as_str());
+        for game in &full_shard.games {
+            append_json(&mut identity, game)?;
+            append_text(&mut ordering, &game.stable_key);
+            append_json(&mut launches, &game.launch_plan)?;
+        }
+        for query in qualification_queries(&full_shard.games) {
+            search_queries.push((summary.system_id.as_str().to_string(), query));
+        }
+        append_artifact(
+            &mut artifacts,
+            &mut artifact_set,
+            summary.system_id.as_str(),
+            "sqlite",
+            &manifest_system.active.sqlite_path,
+            manifest_system.active.sqlite_bytes,
+            &manifest_system.active.sqlite_hash,
+        );
+        append_artifact(
+            &mut artifacts,
+            &mut artifact_set,
+            summary.system_id.as_str(),
+            "navigation",
+            &manifest_system.active.navigation_path,
+            manifest_system.active.navigation_bytes,
+            &manifest_system.active.navigation_hash,
+        );
+        append_artifact(
+            &mut artifacts,
+            &mut artifact_set,
+            summary.system_id.as_str(),
+            "navpack",
+            &navpack.path,
+            navpack.bytes,
+            &navpack.hash,
+        );
         let preview_keys = system
             .games()
             .iter()
@@ -183,8 +227,9 @@ pub fn inspect_catalog(storage: &std::path::Path) -> Result<String, String> {
             "V3 manifest/registry total mismatch: {manifest_total} != {total_games}"
         ));
     }
+    let search = search_identity(storage, limits, &search_queries)?;
     let mut output = format!(
-        "catalog_v3_summary_tsv\tvalid=1\tschema=1\tgeneration={}\tsystems={}\ttotal_games={}\tnavpack_systems={}\tnavpack_bytes={}\tarcade_resident_games={}\tstate_discoveries={}\tarcade_roles={}\tconsole_roles={}\tcomputer_roles={}\tfingerprint={}\n",
+        "catalog_v3_summary_tsv\tvalid=1\tschema=2\tgeneration={}\tsystems={}\ttotal_games={}\tnavpack_systems={}\tnavpack_bytes={}\tarcade_resident_games={}\tstate_discoveries={}\tarcade_roles={}\tconsole_roles={}\tcomputer_roles={}\tfingerprint={}\tidentity_sha256={}\tordering_sha256={}\tlaunch_sha256={}\tsearch_sha256={}\tartifact_set_sha256={}\n",
         manifest.generation,
         manifest.systems.len(),
         total_games,
@@ -196,9 +241,106 @@ pub fn inspect_catalog(storage: &std::path::Path) -> Result<String, String> {
         role_console,
         role_computer,
         fingerprint,
+        hex_digest(identity),
+        hex_digest(ordering),
+        hex_digest(launches),
+        search,
+        hex_digest(artifact_set),
     );
     output.push_str(&rows);
+    output.push_str(&artifacts);
     Ok(output)
+}
+
+fn append_json<T: serde::Serialize>(digest: &mut Sha256, value: &T) -> Result<(), String> {
+    let bytes = serde_json::to_vec(value).map_err(|error| error.to_string())?;
+    append_bytes(digest, &bytes);
+    Ok(())
+}
+
+fn append_text(digest: &mut Sha256, value: &str) {
+    append_bytes(digest, value.as_bytes());
+}
+
+fn append_bytes(digest: &mut Sha256, value: &[u8]) {
+    digest.update((value.len() as u64).to_le_bytes());
+    digest.update(value);
+}
+
+fn hex_digest(digest: Sha256) -> String {
+    digest
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
+fn append_artifact(
+    rows: &mut String,
+    digest: &mut Sha256,
+    system_id: &str,
+    kind: &str,
+    path: &std::path::Path,
+    bytes: u64,
+    hash: &str,
+) {
+    let path = path.display().to_string();
+    for value in [system_id, kind, path.as_str(), hash] {
+        append_text(digest, value);
+    }
+    digest.update(bytes.to_le_bytes());
+    rows.push_str(&format!(
+        "catalog_v3_artifact_tsv\tsystem={system_id}\tkind={kind}\tpath={path}\tbytes={bytes}\tsha256={hash}\n"
+    ));
+}
+
+fn qualification_queries(games: &[crate::system_shard::SystemGame]) -> Vec<String> {
+    if games.is_empty() {
+        return Vec::new();
+    }
+    [0, games.len() / 2, games.len() - 1]
+        .into_iter()
+        .filter_map(|index| {
+            let normalized = crate::persisted_search::normalize_search_text(&games[index].title);
+            let query = normalized
+                .split_whitespace()
+                .find(|word| word.len() >= 2)?
+                .to_string();
+            Some(query)
+        })
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect()
+}
+
+fn search_identity(
+    storage: &std::path::Path,
+    limits: crate::shard_registry::RegistryLimits,
+    queries: &[(String, String)],
+) -> Result<String, String> {
+    let catalog = crate::persisted_search::PersistedSearchCatalog::open(storage, limits)
+        .map_err(|error| error.to_string())?;
+    let mut digest = Sha256::new();
+    for (system_id, query) in queries {
+        append_text(&mut digest, system_id);
+        append_text(&mut digest, query);
+        let result = catalog
+            .search(std::slice::from_ref(system_id), query)
+            .map_err(|error| error.to_string())?;
+        for matched in result.matches {
+            append_text(&mut digest, &matched.system_id);
+            digest.update((matched.ordinal as u64).to_le_bytes());
+            digest.update(matched.rank.to_bits().to_le_bytes());
+        }
+        if let Some(autocomplete) = result.autocomplete {
+            append_text(&mut digest, &autocomplete.word);
+            digest.update([autocomplete.source_rank]);
+            digest.update(autocomplete.score.to_le_bytes());
+        } else {
+            append_text(&mut digest, "");
+        }
+    }
+    Ok(hex_digest(digest))
 }
 
 fn validate_navpack_rows(
@@ -416,6 +558,12 @@ mod tests {
             "\tpreview_keys=2\tavailable_previews=1\tsource_games=5\tvisible_families=3\tcollapsed_variants=2"
         ));
         assert!(report.contains("\tnavpack_systems=1\t"));
+        assert!(report.contains("\tidentity_sha256="));
+        assert!(report.contains("\tordering_sha256="));
+        assert!(report.contains("\tlaunch_sha256="));
+        assert!(report.contains("\tsearch_sha256="));
+        assert!(report.contains("\tartifact_set_sha256="));
+        assert!(report.contains("catalog_v3_artifact_tsv\tsystem=atarilynx\tkind=sqlite\t"));
         std::fs::remove_dir_all(root.join("systems")).expect("remove system artifacts");
         let registry_report = inspect_registry(&root).expect("inspect registry without shards");
         assert!(registry_report.contains(&format!(
