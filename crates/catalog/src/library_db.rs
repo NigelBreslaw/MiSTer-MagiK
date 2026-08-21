@@ -2634,9 +2634,11 @@ fn catalog_arcade_projection_fields_for_discovery(
     arcade_metadata: &ArcadeMachineMetadata,
 ) -> (String, String, String, ArcadeGameMetadataKey) {
     if let Some(metadata) = &discovery.arcade_updater_metadata {
-        let parent = (metadata.family_id != metadata.identity_id)
-            .then(|| metadata.family_id.clone())
-            .unwrap_or_default();
+        let parent = if metadata.family_id != metadata.identity_id {
+            metadata.family_id.clone()
+        } else {
+            String::new()
+        };
         return (
             metadata.identity_id.clone(),
             parent,
