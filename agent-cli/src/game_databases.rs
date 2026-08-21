@@ -89,17 +89,27 @@ pub fn create(request: &Create<'_>) -> AgentResult<PathBuf> {
         request.arcade_database_sha,
         &arcade_csv_sha256,
     )?;
-    let updater_index = mister_magik_catalog::arcade_updater_index::ArcadeUpdaterIndex::read(
+    let mut updater_index = mister_magik_catalog::arcade_updater_index::ArcadeUpdaterIndex::read(
         request.arcade_updater_index,
     )?;
-    let updater_index_sha256 = digest(request.arcade_updater_index)?;
     fs::create_dir_all(request.output).map_err(|error| error.to_string())?;
+    updater_index.enrich_catalog_metadata(request.mame, request.hbmame);
+    let updater_catalog_metadata_rows = updater_index
+        .rows
+        .iter()
+        .filter(|row| row.catalog_metadata.is_some())
+        .count();
+    let enriched_updater_index = request
+        .output
+        .join(".arcade-updater-index-v1.enriched.lz4b");
+    updater_index.write(&enriched_updater_index)?;
+    let updater_index_sha256 = digest(&enriched_updater_index)?;
     let entries = vec![
         file_entry(DATABASES[0], request.mame)?,
         file_entry(DATABASES[1], request.hbmame)?,
         file_entry(ARCADE_DATABASE_CSV, request.arcade_database_csv)?,
         file_entry(ARCADE_DATABASE_LICENSE, request.arcade_database_license)?,
-        file_entry(ARCADE_UPDATER_INDEX, request.arcade_updater_index)?,
+        file_entry(ARCADE_UPDATER_INDEX, &enriched_updater_index)?,
     ];
     let payload = json!({
         "format": FORMAT,
@@ -119,6 +129,7 @@ pub fn create(request: &Create<'_>) -> AgentResult<PathBuf> {
                 "format": mister_magik_catalog::arcade_updater_index::FORMAT,
                 "sha256": updater_index_sha256,
                 "sources": updater_index.sources,
+                "catalog_metadata_rows": updater_catalog_metadata_rows,
                 "builder_sha": request.arcade_updater_builder_sha
             }
         },
@@ -132,7 +143,7 @@ pub fn create(request: &Create<'_>) -> AgentResult<PathBuf> {
         (DATABASES[1], request.hbmame),
         (ARCADE_DATABASE_CSV, request.arcade_database_csv),
         (ARCADE_DATABASE_LICENSE, request.arcade_database_license),
-        (ARCADE_UPDATER_INDEX, request.arcade_updater_index),
+        (ARCADE_UPDATER_INDEX, enriched_updater_index.as_path()),
     ] {
         checksums.push_str(&format!("{}  {name}\n", digest(path)?));
     }
@@ -151,7 +162,7 @@ pub fn create(request: &Create<'_>) -> AgentResult<PathBuf> {
         (DATABASES[1], request.hbmame),
         (ARCADE_DATABASE_CSV, request.arcade_database_csv),
         (ARCADE_DATABASE_LICENSE, request.arcade_database_license),
-        (ARCADE_UPDATER_INDEX, request.arcade_updater_index),
+        (ARCADE_UPDATER_INDEX, enriched_updater_index.as_path()),
     ] {
         writer
             .start_file(name, options)
@@ -179,6 +190,7 @@ pub fn create(request: &Create<'_>) -> AgentResult<PathBuf> {
         Some(&request.output.join(MANIFEST)),
         Some(&request.output.join(CHECKSUMS)),
     )?;
+    fs::remove_file(&enriched_updater_index).map_err(|error| error.to_string())?;
     Ok(archive)
 }
 
@@ -252,6 +264,21 @@ pub fn verify(
             return classified(
                 "invalid_database_manifest",
                 "Arcade updater sources differ from the index",
+            );
+        }
+        let metadata_rows = index
+            .rows
+            .iter()
+            .filter(|row| row.catalog_metadata.is_some())
+            .count() as u64;
+        if payload
+            .pointer("/sources/arcade_updater/catalog_metadata_rows")
+            .and_then(Value::as_u64)
+            .is_some_and(|expected| expected != metadata_rows)
+        {
+            return classified(
+                "invalid_database_manifest",
+                "Arcade updater catalog metadata count differs from the index",
             );
         }
     }
