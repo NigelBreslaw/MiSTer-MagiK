@@ -1603,9 +1603,10 @@ fn evaluate_launcher_response_summary(summary: &Value) -> AgentResult<()> {
 }
 
 fn evaluate_input_integrity_summary(summary: &Value) -> AgentResult<()> {
+    let protocol = summary.get("protocol").and_then(Value::as_u64);
     if summary.get("schema").and_then(Value::as_str) != Some("mister-magik-input-integrity-v2")
         || summary.get("status").and_then(Value::as_str) != Some("passed")
-        || summary.get("protocol").and_then(Value::as_u64) != Some(2)
+        || !matches!(protocol, Some(2 | 3))
         || summary.get("lost_actions").and_then(Value::as_u64) != Some(0)
         || summary.get("duplicated_actions").and_then(Value::as_u64) != Some(0)
         || summary.get("proxy_write_failures").and_then(Value::as_u64) != Some(0)
@@ -2734,6 +2735,12 @@ mod tests {
             "sequence_gaps": 0,
         });
         evaluate_input_integrity_summary(&passing).unwrap();
+        let mut proxy_v3 = passing.clone();
+        proxy_v3["protocol"] = json!(3);
+        evaluate_input_integrity_summary(&proxy_v3).unwrap();
+        let mut unsupported = passing.clone();
+        unsupported["protocol"] = json!(4);
+        assert!(evaluate_input_integrity_summary(&unsupported).is_err());
         let mut failed = passing;
         failed["lost_actions"] = json!(1);
         assert!(evaluate_input_integrity_summary(&failed).is_err());
