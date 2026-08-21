@@ -60,6 +60,7 @@ Supported scenarios:
 - `orientation-transition-zoom`
 - `orientation-transition-fade-pprof`
 - `orientation-transition-zoom-pprof`
+- `neon-attribution`
 - `pmu-profile`
 - `search`
 - `streamline`
@@ -763,6 +764,17 @@ Filesystem and SQLite waits can dominate elapsed time without accumulating
 corresponding calling-thread cycles. The PMU-enabled workload is therefore not
 a cadence or final correctness qualification. Two PMU-off `catalog-lifecycle`
 runs with zero FPGA physical dropped frames remain the final device gate.
+
+`scripts/agent benchmark neon-attribution` is the fixed cross-path NEON
+campaign. It runs the probe, screensaver, search, and catalog span suite with
+`cortex-a9-neon`, then runs the Arcade velocity-scroll GUI profile in normal
+landscape and monitor-counterclockwise portrait modes. The two GUI legs expose
+the compositor, list rotation, overlay copy, blend, latch-copy, and presentation
+spans that surround the production RGB565/NEON routes. Every nested profile must
+declare `cortex-a9-neon`; mixed or missing counter-set provenance invalidates the
+campaign. Evidence is retained under
+`build/agent-benchmarks/neon-attribution/<timestamp>/` with separate runtime,
+landscape, and portrait artifacts plus the combined v1 summary.
 
 Catalog optimization campaigns use two clean baseline PMU suites. Each
 single-hypothesis commit receives one screening run and, only if promising, two

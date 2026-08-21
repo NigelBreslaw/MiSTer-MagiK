@@ -94,6 +94,7 @@ enum BenchmarkProfile {
     OrientationTransitionZoom,
     OrientationTransitionFadePprof,
     OrientationTransitionZoomPprof,
+    NeonAttribution,
     Pmu,
     Streamline,
 }
@@ -234,6 +235,7 @@ impl BenchmarkDevice for DeviceClient {
             BenchmarkProfile::OrientationTransitionZoomPprof => {
                 device.profile_orientation_transition(&output_dir, "center-pixel-zoom", true)
             }
+            BenchmarkProfile::NeonAttribution => device.profile_neon_attribution(&output_dir),
             BenchmarkProfile::Pmu => device.profile_pmu(&output_dir),
             BenchmarkProfile::Streamline => device.profile_streamline(&output_dir),
         })
@@ -625,6 +627,9 @@ fn require_clean_installed_commit(
             "center-pixel-zoom",
             true,
         ),
+        BenchmarkScenario::NeonAttribution => {
+            execute_neon_attribution(&mut device, manifest, output_dir, reporter)
+        }
         BenchmarkScenario::PmuProfile => execute_pmu(&mut device, manifest, output_dir, reporter),
         BenchmarkScenario::Search => execute_search(&mut device, manifest, output_dir, reporter),
         BenchmarkScenario::Streamline => {
@@ -720,6 +725,41 @@ fn execute_pmu(
     let detail = device.profile(BenchmarkProfile::Pmu, output_dir.clone())?;
     let summary: Value = serde_json::from_str(&detail).map_err(|error| error.to_string())?;
     evaluate_pmu_summary(&summary)?;
+    device.verify_health()?;
+    reporter.emit(
+        EventKind::Progress,
+        "benchmark-result",
+        &serde_json::to_string(&json!({
+            "installed_manifest": manifest,
+            "summary": summary,
+            "output_dir": output_dir,
+        }))
+        .map_err(|error| error.to_string())?,
+        Some(100),
+    )?;
+    Ok(Outcome::Passed)
+}
+
+fn execute_neon_attribution(
+    device: &mut impl BenchmarkDevice,
+    manifest: String,
+    output_dir: PathBuf,
+    reporter: &mut Reporter<'_>,
+) -> AgentResult<Outcome> {
+    reporter.emit(
+        EventKind::Progress,
+        "profile",
+        "profiling fixed Cortex-A9 NEON workloads",
+        Some(20),
+    )?;
+    let detail = device.profile(BenchmarkProfile::NeonAttribution, output_dir.clone())?;
+    let summary: Value = serde_json::from_str(&detail).map_err(|error| error.to_string())?;
+    if summary.get("schema").and_then(Value::as_str) != Some("mister-magik-neon-attribution-v1")
+        || summary.get("status").and_then(Value::as_str) != Some("passed")
+        || summary.get("counter_set").and_then(Value::as_str) != Some("cortex-a9-neon")
+    {
+        return Err("NEON attribution campaign returned an unusable report".into());
+    }
     device.verify_health()?;
     reporter.emit(
         EventKind::Progress,
@@ -980,6 +1020,7 @@ fn particle_scene_lab_command(scenario: BenchmarkScenario) -> Option<&'static st
         | BenchmarkScenario::OrientationTransitionZoom
         | BenchmarkScenario::OrientationTransitionFadePprof
         | BenchmarkScenario::OrientationTransitionZoomPprof
+        | BenchmarkScenario::NeonAttribution
         | BenchmarkScenario::PmuProfile
         | BenchmarkScenario::Search => None,
     }

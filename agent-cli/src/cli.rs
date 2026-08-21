@@ -924,6 +924,7 @@ mod tests {
             "orientation-transition-zoom",
             "orientation-transition-fade-pprof",
             "orientation-transition-zoom-pprof",
+            "neon-attribution",
             "pmu-profile",
             "launch-return",
             "launch-return-once",

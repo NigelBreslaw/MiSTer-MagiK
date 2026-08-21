@@ -701,7 +701,14 @@ impl NativeDevice {
         &mut self,
         output_dir: &Path,
     ) -> std::result::Result<String, DeviceFailure> {
-        self.benchmark_profile(|config| profile_installed_pmu(config, output_dir))
+        self.benchmark_profile(|config| profile_installed_pmu(config, output_dir, "general"))
+    }
+
+    pub(crate) fn profile_neon_attribution(
+        &mut self,
+        output_dir: &Path,
+    ) -> std::result::Result<String, DeviceFailure> {
+        self.benchmark_profile(|config| profile_installed_neon_attribution(config, output_dir))
     }
 
     pub(crate) fn profile_streamline(
@@ -8027,6 +8034,7 @@ fn gui_profile_route_launcher_env_with_pprof(
         environment.extend([
             ("MISTER_GUI_FRAME_PROFILE_PMU".into(), "1".into()),
             ("MISTER_PMU_PROFILE".into(), "1".into()),
+            ("MISTER_PMU_COUNTER_SET".into(), "cortex-a9-neon".into()),
             ("MISTER_PMU_SAMPLE_EVERY".into(), "1".into()),
             ("MISTER_PMU_RECORD_LIMIT".into(), "65536".into()),
         ]);
@@ -9359,6 +9367,7 @@ fn profile_installed_arcade_velocity_scroll_pmu_workload(
             {
                 return Err("Arcade velocity-scroll PMU profile is incomplete".into());
             }
+            validate_pmu_counter_set(&pmu, "cortex-a9-neon")?;
             let route_summary = summarize_arcade_velocity_scroll(
                 output_dir,
                 &route,
@@ -10966,7 +10975,11 @@ fn profile_installed_search(config: &NativeDeviceConfig, output_dir: &Path) -> R
 
 const CATALOG_PMU_REMOTE_DIR: &str = "/tmp/mister-magik/pmu-catalog-benchmark";
 
-fn profile_installed_pmu(config: &NativeDeviceConfig, output_dir: &Path) -> Result<String> {
+fn profile_installed_pmu(
+    config: &NativeDeviceConfig,
+    output_dir: &Path,
+    counter_set: &str,
+) -> Result<String> {
     const WORKLOADS: [&str; 4] = ["probe", "screensaver", "search", "catalog"];
     let session = connect_with(&config.connection, 10)?;
     fs::create_dir_all(output_dir)?;
@@ -10994,9 +11007,10 @@ fn profile_installed_pmu(config: &NativeDeviceConfig, output_dir: &Path) -> Resu
         let mut summaries = Vec::with_capacity(WORKLOADS.len());
         for workload in WORKLOADS {
             let command = format!(
-                "MISTER_PMU_PROFILE=1 MISTER_PMU_SAMPLE_EVERY=1 MISTER_PMU_RECORD_LIMIT=4096 {gui} pmu-profile {}",
+                "MISTER_PMU_PROFILE=1 MISTER_PMU_COUNTER_SET={counter_set} MISTER_PMU_SAMPLE_EVERY=1 MISTER_PMU_RECORD_LIMIT=4096 {gui} pmu-profile {}",
                 sh(workload),
-                gui = sh(DEVELOPMENT_GUI_REMOTE)
+                gui = sh(DEVELOPMENT_GUI_REMOTE),
+                counter_set = sh(counter_set),
             );
             let output = exec(&session, &command, true)?;
             let mut log = output.stdout.clone();
@@ -11007,7 +11021,7 @@ fn profile_installed_pmu(config: &NativeDeviceConfig, output_dir: &Path) -> Resu
             }
             let summary = last_json_line(&output.stdout)
                 .ok_or_else(|| format!("installed PMU workload {workload} returned no JSON"))?;
-            validate_installed_pmu_workload(workload, &summary)?;
+            validate_installed_pmu_workload(workload, &summary, counter_set)?;
             fs::write(
                 output_dir.join(format!("{workload}.json")),
                 format!("{}\n", serde_json::to_string_pretty(&summary)?),
@@ -11020,6 +11034,7 @@ fn profile_installed_pmu(config: &NativeDeviceConfig, output_dir: &Path) -> Resu
             "sample_every": 1,
             "record_limit": 4096,
             "installed_identity": installed_identity,
+            "counter_set": counter_set,
             "workloads": summaries,
         }))
     })();
@@ -11042,6 +11057,54 @@ fn profile_installed_pmu(config: &NativeDeviceConfig, output_dir: &Path) -> Resu
     serde_json::to_string(&suite).map_err(Into::into)
 }
 
+fn profile_installed_neon_attribution(
+    config: &NativeDeviceConfig,
+    output_dir: &Path,
+) -> Result<String> {
+    fs::create_dir_all(output_dir)?;
+    let pmu: Value = serde_json::from_str(&profile_installed_pmu(
+        config,
+        &output_dir.join("runtime-spans"),
+        "cortex-a9-neon",
+    )?)?;
+    let landscape: Value =
+        serde_json::from_str(&profile_installed_arcade_velocity_scroll_pmu_workload(
+            config,
+            &output_dir.join("arcade-landscape"),
+            ARCADE_VELOCITY_SCROLL_DURATION_MS,
+            ARCADE_VELOCITY_SCROLL_TELEMETRY_SECS,
+            "mister-magik-neon-arcade-landscape-v1",
+            Some("normal"),
+        )?)?;
+    let portrait: Value =
+        serde_json::from_str(&profile_installed_arcade_velocity_scroll_pmu_workload(
+            config,
+            &output_dir.join("arcade-portrait-left"),
+            ARCADE_VELOCITY_SCROLL_DURATION_MS,
+            ARCADE_VELOCITY_SCROLL_TELEMETRY_SECS,
+            "mister-magik-neon-arcade-portrait-left-v1",
+            Some("monitor-counterclockwise"),
+        )?)?;
+    for artifact in [&pmu, &landscape, &portrait] {
+        validate_pmu_counter_set(artifact, "cortex-a9-neon")?;
+    }
+    let summary = json!({
+        "schema": "mister-magik-neon-attribution-v1",
+        "status": "passed",
+        "counter_set": "cortex-a9-neon",
+        "profiles": {
+            "runtime_spans": pmu,
+            "arcade_landscape": landscape,
+            "arcade_portrait_left": portrait,
+        },
+    });
+    fs::write(
+        output_dir.join("summary.json"),
+        format!("{}\n", serde_json::to_string_pretty(&summary)?),
+    )?;
+    serde_json::to_string(&summary).map_err(Into::into)
+}
+
 fn pmu_installed_identity(manifest: &str) -> Result<Value> {
     Ok(json!({
         "manifest_sha256": encode_hex(&Sha256::digest(manifest.as_bytes())),
@@ -11050,11 +11113,16 @@ fn pmu_installed_identity(manifest: &str) -> Result<Value> {
     }))
 }
 
-fn validate_installed_pmu_workload(workload: &str, summary: &Value) -> Result<()> {
+fn validate_installed_pmu_workload(
+    workload: &str,
+    summary: &Value,
+    counter_set: &str,
+) -> Result<()> {
     if workload == "probe" {
         if summary.get("schema").and_then(Value::as_str) == Some("mister-magik-pmu-probe-v2")
             && summary.get("status").and_then(Value::as_str) == Some("ok")
         {
+            validate_pmu_counter_set(summary, counter_set)?;
             return Ok(());
         }
         return Err("installed PMU probe did not produce authoritative counters".into());
@@ -11066,7 +11134,8 @@ fn validate_installed_pmu_workload(workload: &str, summary: &Value) -> Result<()
         return Err(format!("installed PMU workload {workload} returned unusable evidence").into());
     }
     if workload == "catalog" {
-        return validate_catalog_pmu_workload(summary);
+        validate_catalog_pmu_workload(summary)?;
+        return validate_pmu_counter_set(summary, counter_set);
     }
     if summary.pointer("/profile/enabled").and_then(Value::as_bool) != Some(true)
         || summary
@@ -11075,6 +11144,35 @@ fn validate_installed_pmu_workload(workload: &str, summary: &Value) -> Result<()
             .is_none_or(Vec::is_empty)
     {
         return Err(format!("installed PMU workload {workload} returned unusable evidence").into());
+    }
+    validate_pmu_counter_set(summary, counter_set)
+}
+
+fn validate_pmu_counter_set(value: &Value, expected: &str) -> Result<()> {
+    fn visit(value: &Value, counter_sets: &mut Vec<String>) {
+        match value {
+            Value::Object(object) => {
+                if let Some(counter_set) = object.get("counter_set").and_then(Value::as_str) {
+                    counter_sets.push(counter_set.to_owned());
+                }
+                for value in object.values() {
+                    visit(value, counter_sets);
+                }
+            }
+            Value::Array(values) => {
+                for value in values {
+                    visit(value, counter_sets);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut counter_sets = Vec::new();
+    visit(value, &mut counter_sets);
+    if counter_sets.is_empty() || counter_sets.iter().any(|value| value != expected) {
+        return Err(
+            format!("PMU artifact counter sets {counter_sets:?} do not match {expected}").into(),
+        );
     }
     Ok(())
 }
@@ -29201,6 +29299,25 @@ mod tests {
             identity["manifest_sha256"],
             encode_hex(&Sha256::digest(manifest.as_bytes()))
         );
+    }
+
+    #[test]
+    fn pmu_counter_set_validation_rejects_missing_or_mixed_provenance() {
+        let matching = json!({
+            "profile": {
+                "counter_set": "cortex-a9-neon",
+                "nested": [{"counter_set": "cortex-a9-neon"}],
+            }
+        });
+        validate_pmu_counter_set(&matching, "cortex-a9-neon").unwrap();
+        assert!(validate_pmu_counter_set(&json!({}), "cortex-a9-neon").is_err());
+        let mixed = json!({
+            "profiles": [
+                {"counter_set": "cortex-a9-neon"},
+                {"counter_set": "general"},
+            ]
+        });
+        assert!(validate_pmu_counter_set(&mixed, "cortex-a9-neon").is_err());
     }
 
     #[test]
