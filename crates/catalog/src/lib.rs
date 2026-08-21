@@ -52,6 +52,24 @@ pub mod library_db;
 mod library_indexer;
 pub mod media_identity;
 mod media_metadata;
+pub mod mra_header {
+    //! Bounded MRA header parsing shared by release tooling and the device scanner.
+
+    pub use crate::media_metadata::{
+        MraInspection, MraMetadata as MraHeader, PrimaryRomRequirement, RomNamespace,
+    };
+
+    /// Parse only the descriptive MRA prefix used by catalog discovery.
+    pub fn parse(bytes: &[u8]) -> Option<MraHeader> {
+        crate::media_metadata::parse_mra_metadata_bytes(bytes)
+    }
+
+    /// Inspect the complete MRA for catalog metadata and its primary ROM archive.
+    pub fn inspect(bytes: &[u8]) -> Result<MraInspection, String> {
+        crate::media_metadata::inspect_mra_bytes(bytes)
+    }
+}
+pub mod arcade_updater_index;
 #[cfg(feature = "builder")]
 pub mod multi_system_projection;
 mod namespace_walk;

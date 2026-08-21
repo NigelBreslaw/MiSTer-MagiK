@@ -509,6 +509,18 @@ fn dispatch(
                     Some(30),
                 )?;
                 match command {
+                    GameDatabaseCommand::BuildUpdaterArcade {
+                        input_manifest,
+                        out,
+                    } => {
+                        agent_cli::commands::ci::run_local_host(vec![
+                            "arcade-updater-index-build".to_owned(),
+                            "--input-manifest".to_owned(),
+                            input_manifest.to_string_lossy().into_owned(),
+                            "--out".to_owned(),
+                            out.to_string_lossy().into_owned(),
+                        ])?;
+                    }
                     GameDatabaseCommand::BuildMame {
                         out,
                         listxml,
@@ -564,6 +576,7 @@ fn dispatch(
                         arcade_database_license,
                         arcade_database_sha,
                         arcade_database_builder_sha,
+                        arcade_updater_index,
                         output,
                     } => {
                         let archive = agent_cli::game_databases::create(
@@ -583,6 +596,7 @@ fn dispatch(
                                 arcade_database_license,
                                 arcade_database_sha,
                                 arcade_database_builder_sha,
+                                arcade_updater_index,
                                 output,
                             },
                         )?;

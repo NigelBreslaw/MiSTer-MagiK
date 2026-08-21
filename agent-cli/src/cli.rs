@@ -271,6 +271,12 @@ pub enum PlatformBundleCommand {
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize, Subcommand)]
 pub enum GameDatabaseCommand {
+    BuildUpdaterArcade {
+        #[arg(long)]
+        input_manifest: PathBuf,
+        #[arg(long)]
+        out: PathBuf,
+    },
     BuildMame {
         #[arg(long)]
         out: PathBuf,
@@ -322,6 +328,8 @@ pub enum GameDatabaseCommand {
         arcade_database_sha: String,
         #[arg(long)]
         arcade_database_builder_sha: String,
+        #[arg(long)]
+        arcade_updater_index: PathBuf,
         #[arg(long)]
         output: PathBuf,
     },

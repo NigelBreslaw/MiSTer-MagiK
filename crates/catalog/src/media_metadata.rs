@@ -239,15 +239,37 @@ fn contains_any(haystack: &str, needles: &[&str]) -> bool {
     needles.iter().any(|needle| haystack.contains(needle))
 }
 
-#[derive(Default)]
-pub(crate) struct MraMetadata {
-    pub(crate) name: Option<String>,
-    pub(crate) rbf: Option<String>,
-    pub(crate) platform: Option<String>,
-    pub(crate) manufacturer: Option<String>,
-    pub(crate) year: Option<String>,
-    pub(crate) setname: Option<String>,
-    pub(crate) parent: Option<String>,
+#[derive(Clone, Debug, Default, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct MraMetadata {
+    pub name: Option<String>,
+    pub rbf: Option<String>,
+    pub platform: Option<String>,
+    pub manufacturer: Option<String>,
+    pub year: Option<String>,
+    pub setname: Option<String>,
+    pub parent: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd, serde::Deserialize, serde::Serialize)]
+pub enum RomNamespace {
+    Mame,
+    Hbmame,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub enum PrimaryRomRequirement {
+    None,
+    Archive {
+        namespace: RomNamespace,
+        setname: String,
+    },
+    Ambiguous,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct MraInspection {
+    pub header: MraMetadata,
+    pub primary_rom: PrimaryRomRequirement,
 }
 
 #[derive(Default)]
@@ -280,6 +302,148 @@ pub(crate) struct MglInspection {
 pub(crate) fn read_mra_metadata(path: &Path) -> Option<MraMetadata> {
     let file = File::open(path).ok()?;
     parse_mra_metadata_xml_reader(BufReader::new(file.take(MRA_PREFIX_BYTES as u64)))
+}
+
+pub(crate) fn parse_mra_metadata_bytes(data: &[u8]) -> Option<MraMetadata> {
+    parse_mra_metadata_xml_reader(BufReader::new(data))
+}
+
+pub(crate) fn inspect_mra_bytes(data: &[u8]) -> Result<MraInspection, String> {
+    let header = parse_mra_metadata_bytes(data).ok_or("missing MRA metadata")?;
+    let mut archives = Vec::<(RomNamespace, String)>::new();
+    let text = String::from_utf8_lossy(data);
+    let lower = text.to_ascii_lowercase();
+    if !lower.contains("<misterromdescription") {
+        return Err("missing misterromdescription root".to_string());
+    }
+    for tag in tolerant_mra_rom_tags(&text, &lower) {
+        for archive in tolerant_xml_attribute(tag, "zip")
+            .into_iter()
+            .flat_map(|value| {
+                value
+                    .split('|')
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>()
+            })
+        {
+            if let Some(candidate) = normalize_rom_archive(&archive) {
+                archives.push(candidate);
+            }
+        }
+    }
+    archives.sort();
+    archives.dedup();
+    let primary_rom = if archives.is_empty() {
+        PrimaryRomRequirement::None
+    } else if let Some(setname) = header
+        .setname
+        .as_deref()
+        .map(normalize_rom_setname)
+        .filter(|setname| !setname.is_empty())
+    {
+        let matches = archives
+            .iter()
+            .filter(|(_, candidate)| candidate == &setname)
+            .cloned()
+            .collect::<Vec<_>>();
+        match matches.as_slice() {
+            [(namespace, setname)] => PrimaryRomRequirement::Archive {
+                namespace: namespace.clone(),
+                setname: setname.clone(),
+            },
+            _ => PrimaryRomRequirement::Ambiguous,
+        }
+    } else {
+        match archives.as_slice() {
+            [(namespace, setname)] => PrimaryRomRequirement::Archive {
+                namespace: namespace.clone(),
+                setname: setname.clone(),
+            },
+            _ => PrimaryRomRequirement::Ambiguous,
+        }
+    };
+    Ok(MraInspection {
+        header,
+        primary_rom,
+    })
+}
+
+fn tolerant_mra_rom_tags<'a>(text: &'a str, lower: &str) -> Vec<&'a str> {
+    let mut tags = Vec::new();
+    let mut offset = 0usize;
+    while let Some(relative) = lower[offset..].find('<') {
+        let start = offset + relative;
+        let Some(end_relative) = lower[start..].find('>') else {
+            break;
+        };
+        let end = start + end_relative + 1;
+        let tag_lower = &lower[start + 1..end - 1].trim_start();
+        let name_end = tag_lower
+            .find(|character: char| character.is_ascii_whitespace() || character == '/')
+            .unwrap_or(tag_lower.len());
+        if matches!(&tag_lower[..name_end], "rom" | "part") {
+            tags.push(&text[start..end]);
+        }
+        offset = end;
+    }
+    tags
+}
+
+fn tolerant_xml_attribute<'a>(tag: &'a str, name: &str) -> Option<&'a str> {
+    let lower = tag.to_ascii_lowercase();
+    let bytes = lower.as_bytes();
+    let mut offset = 0usize;
+    while let Some(relative) = lower[offset..].find(name) {
+        let start = offset + relative;
+        let before_ok = start == 0 || !bytes[start - 1].is_ascii_alphanumeric();
+        let mut cursor = start + name.len();
+        let after_ok = cursor >= bytes.len() || !bytes[cursor].is_ascii_alphanumeric();
+        if before_ok && after_ok {
+            while bytes.get(cursor).is_some_and(u8::is_ascii_whitespace) {
+                cursor += 1;
+            }
+            if bytes.get(cursor) == Some(&b'=') {
+                cursor += 1;
+                while bytes.get(cursor).is_some_and(u8::is_ascii_whitespace) {
+                    cursor += 1;
+                }
+                let quote = *bytes.get(cursor)?;
+                if matches!(quote, b'\'' | b'"') {
+                    let value_start = cursor + 1;
+                    let value_end = bytes[value_start..]
+                        .iter()
+                        .position(|byte| *byte == quote)?
+                        + value_start;
+                    return tag.get(value_start..value_end);
+                }
+            }
+        }
+        offset = start + name.len();
+    }
+    None
+}
+
+fn normalize_rom_archive(value: &str) -> Option<(RomNamespace, String)> {
+    let normalized = value.trim().trim_start_matches('/').replace('\\', "/");
+    let lower = normalized.to_ascii_lowercase();
+    let namespace = if lower.starts_with("hbmame/") {
+        RomNamespace::Hbmame
+    } else {
+        RomNamespace::Mame
+    };
+    let filename = lower.rsplit('/').next()?;
+    let setname = filename.strip_suffix(".zip")?;
+    if setname.is_empty() {
+        None
+    } else {
+        Some((namespace, normalize_rom_setname(setname)))
+    }
+}
+
+fn normalize_rom_setname(value: &str) -> String {
+    value.trim().trim_end_matches(".zip").to_ascii_lowercase()
 }
 
 pub(crate) fn read_mgl_metadata(path: &Path) -> Option<MglMetadata> {
@@ -1007,6 +1171,57 @@ mod tests {
         assert_eq!(metadata.name.as_deref(), Some("Fast Game"));
         assert_eq!(metadata.rbf.as_deref(), Some("Arcade"));
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn mra_inspection_prefers_setname_over_parent_and_bios_archives() {
+        let inspection = inspect_mra_bytes(
+            br#"<misterromdescription>
+                <name>Dragon World 3</name><setname>drgw3105</setname>
+                <rom zip="pgm.zip|drgw3.zip|drgw3105.zip"><part name="game.bin"/></rom>
+            </misterromdescription>"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            inspection.primary_rom,
+            PrimaryRomRequirement::Archive {
+                namespace: RomNamespace::Mame,
+                setname: "drgw3105".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn mra_inspection_respects_hbmame_and_rejects_ambiguous_requirements() {
+        let hbmame = inspect_mra_bytes(
+            br#"<misterromdescription><setname>asteroid01</setname>
+                <rom zip="/hbmame/asteroid01.zip"><part/></rom>
+            </misterromdescription>"#,
+        )
+        .unwrap();
+        assert_eq!(
+            hbmame.primary_rom,
+            PrimaryRomRequirement::Archive {
+                namespace: RomNamespace::Hbmame,
+                setname: "asteroid01".to_string(),
+            }
+        );
+
+        let ambiguous = inspect_mra_bytes(
+            br#"<misterromdescription><rom zip="one.zip|two.zip"><part/></rom></misterromdescription>"#,
+        )
+        .unwrap();
+        assert_eq!(ambiguous.primary_rom, PrimaryRomRequirement::Ambiguous);
+    }
+
+    #[test]
+    fn mra_inspection_preserves_embedded_rom_launchers() {
+        let inspection = inspect_mra_bytes(
+            br#"<misterromdescription><name>Embedded</name><rom index="0"><part>00</part></rom></misterromdescription>"#,
+        )
+        .unwrap();
+        assert_eq!(inspection.primary_rom, PrimaryRomRequirement::None);
     }
 
     #[test]

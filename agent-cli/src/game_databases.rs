@@ -13,13 +13,15 @@ use std::path::{Path, PathBuf};
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipWriter};
 
-pub const FORMAT: &str = "mister-magik-game-databases-manifest-v2";
+pub const FORMAT: &str = "mister-magik-game-databases-manifest-v3";
+pub const PREVIOUS_FORMAT: &str = "mister-magik-game-databases-manifest-v2";
 pub const LEGACY_FORMAT: &str = "mister-magik-game-databases-manifest-v1";
 pub const MANIFEST: &str = "game-databases-manifest.json";
 pub const CHECKSUMS: &str = "SHA256SUMS";
 const DATABASES: [&str; 2] = ["mame.sqlite3", "hbmame.sqlite3"];
 const ARCADE_DATABASE_CSV: &str = "ArcadeDatabase.csv";
 const ARCADE_DATABASE_LICENSE: &str = "ArcadeDatabase-LICENSE.txt";
+const ARCADE_UPDATER_INDEX: &str = mister_magik_catalog::arcade_updater_index::FILE_NAME;
 
 pub struct Create<'a> {
     pub mame: &'a Path,
@@ -37,6 +39,7 @@ pub struct Create<'a> {
     pub arcade_database_license: &'a Path,
     pub arcade_database_sha: &'a str,
     pub arcade_database_builder_sha: &'a str,
+    pub arcade_updater_index: &'a Path,
     pub output: &'a Path,
 }
 
@@ -75,12 +78,17 @@ pub fn create(request: &Create<'_>) -> AgentResult<PathBuf> {
         request.arcade_database_sha,
         &arcade_csv_sha256,
     )?;
+    let updater_index = mister_magik_catalog::arcade_updater_index::ArcadeUpdaterIndex::read(
+        request.arcade_updater_index,
+    )?;
+    let updater_index_sha256 = digest(request.arcade_updater_index)?;
     fs::create_dir_all(request.output).map_err(|error| error.to_string())?;
     let entries = vec![
         file_entry(DATABASES[0], request.mame)?,
         file_entry(DATABASES[1], request.hbmame)?,
         file_entry(ARCADE_DATABASE_CSV, request.arcade_database_csv)?,
         file_entry(ARCADE_DATABASE_LICENSE, request.arcade_database_license)?,
+        file_entry(ARCADE_UPDATER_INDEX, request.arcade_updater_index)?,
     ];
     let payload = json!({
         "format": FORMAT,
@@ -95,6 +103,12 @@ pub fn create(request: &Create<'_>) -> AgentResult<PathBuf> {
                 "csv_sha256": arcade_csv_sha256,
                 "license_sha256": arcade_license_sha256,
                 "builder_sha": request.arcade_database_builder_sha
+            },
+            "arcade_updater": {
+                "format": mister_magik_catalog::arcade_updater_index::FORMAT,
+                "sha256": updater_index_sha256,
+                "sources": updater_index.sources,
+                "builder_sha": request.arcade_database_builder_sha
             }
         },
         "files": entries,
@@ -107,6 +121,7 @@ pub fn create(request: &Create<'_>) -> AgentResult<PathBuf> {
         (DATABASES[1], request.hbmame),
         (ARCADE_DATABASE_CSV, request.arcade_database_csv),
         (ARCADE_DATABASE_LICENSE, request.arcade_database_license),
+        (ARCADE_UPDATER_INDEX, request.arcade_updater_index),
     ] {
         checksums.push_str(&format!("{}  {name}\n", digest(path)?));
     }
@@ -125,6 +140,7 @@ pub fn create(request: &Create<'_>) -> AgentResult<PathBuf> {
         (DATABASES[1], request.hbmame),
         (ARCADE_DATABASE_CSV, request.arcade_database_csv),
         (ARCADE_DATABASE_LICENSE, request.arcade_database_license),
+        (ARCADE_UPDATER_INDEX, request.arcade_updater_index),
     ] {
         writer
             .start_file(name, options)
@@ -202,8 +218,31 @@ pub fn verify(
     }
     verify_file_entries(&payload, &files)?;
     verify_checksums(&files)?;
-    if payload["format"] == FORMAT {
+    if has_arcade_database(&payload) {
         verify_arcade_database_source_files(&payload, &files)?;
+    }
+    if payload["format"] == FORMAT {
+        let index = mister_magik_catalog::arcade_updater_index::ArcadeUpdaterIndex::decode(
+            &files[ARCADE_UPDATER_INDEX],
+        )?;
+        let expected_sha256 = payload
+            .pointer("/sources/arcade_updater/sha256")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if digest_bytes(&files[ARCADE_UPDATER_INDEX]) != expected_sha256 {
+            return classified(
+                "database_source_checksum",
+                "Arcade updater index does not match its manifest SHA-256",
+            );
+        }
+        if serde_json::to_value(&index.sources).map_err(|error| error.to_string())?
+            != payload["sources"]["arcade_updater"]["sources"]
+        {
+            return classified(
+                "invalid_database_manifest",
+                "Arcade updater sources differ from the index",
+            );
+        }
     }
     with_extracted_databases(&files, |mame, hbmame| {
         validate_database(
@@ -212,7 +251,7 @@ pub fn verify(
             payload.pointer("/sources/mame/tag").and_then(Value::as_str),
         )?;
         validate_database(hbmame, DatabaseKind::Hbmame, None)?;
-        if payload["format"] == FORMAT {
+        if has_arcade_database(&payload) {
             validate_arcade_database(
                 mame,
                 payload
@@ -309,7 +348,7 @@ pub fn update_plan(
 fn validate_manifest(payload: &Value) -> AgentResult<()> {
     if !matches!(
         payload["format"].as_str(),
-        Some(FORMAT) | Some(LEGACY_FORMAT)
+        Some(FORMAT) | Some(PREVIOUS_FORMAT) | Some(LEGACY_FORMAT)
     ) || payload["release_version"]
         .as_u64()
         .is_none_or(|value| value == 0)
@@ -348,7 +387,7 @@ fn validate_manifest(payload: &Value) -> AgentResult<()> {
             .unwrap_or_default(),
         64,
     )?;
-    if payload["format"] == FORMAT {
+    if has_arcade_database(payload) {
         if payload
             .pointer("/sources/arcade_database/repository")
             .and_then(Value::as_str)
@@ -387,13 +426,57 @@ fn validate_manifest(payload: &Value) -> AgentResult<()> {
             )?;
         }
     }
+    if payload["format"] == FORMAT {
+        if payload
+            .pointer("/sources/arcade_updater/format")
+            .and_then(Value::as_str)
+            != Some(mister_magik_catalog::arcade_updater_index::FORMAT)
+        {
+            return classified("invalid_database_manifest", "Arcade updater format");
+        }
+        for pointer in ["/sources/arcade_updater/sha256"] {
+            require_hex(
+                pointer,
+                payload
+                    .pointer(pointer)
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
+                64,
+            )?;
+        }
+        require_hex(
+            "/sources/arcade_updater/builder_sha",
+            payload
+                .pointer("/sources/arcade_updater/builder_sha")
+                .and_then(Value::as_str)
+                .unwrap_or_default(),
+            40,
+        )?;
+        if payload
+            .pointer("/sources/arcade_updater/sources")
+            .and_then(Value::as_array)
+            .is_none_or(Vec::is_empty)
+        {
+            return classified("invalid_database_manifest", "Arcade updater sources");
+        }
+    }
     Ok(())
+}
+
+fn has_arcade_database(payload: &Value) -> bool {
+    matches!(
+        payload["format"].as_str(),
+        Some(FORMAT) | Some(PREVIOUS_FORMAT)
+    )
 }
 
 fn expected_archive_members(payload: &Value) -> Vec<&'static str> {
     let mut members = vec![DATABASES[0], DATABASES[1], MANIFEST, CHECKSUMS];
-    if payload["format"] == FORMAT {
+    if has_arcade_database(payload) {
         members.extend([ARCADE_DATABASE_CSV, ARCADE_DATABASE_LICENSE]);
+    }
+    if payload["format"] == FORMAT {
+        members.push(ARCADE_UPDATER_INDEX);
     }
     members
 }
@@ -479,6 +562,16 @@ fn verify_file_entries(payload: &Value, files: &BTreeMap<String, Vec<u8>>) -> Ag
         .as_array()
         .ok_or("manifest files are missing")?;
     let expected_files: BTreeSet<_> = if payload["format"] == FORMAT {
+        [
+            DATABASES[0],
+            DATABASES[1],
+            ARCADE_DATABASE_CSV,
+            ARCADE_DATABASE_LICENSE,
+            ARCADE_UPDATER_INDEX,
+        ]
+        .into_iter()
+        .collect()
+    } else if payload["format"] == PREVIOUS_FORMAT {
         [
             DATABASES[0],
             DATABASES[1],
@@ -775,6 +868,10 @@ mod tests {
         );
         assert_eq!(
             expected_archive_members(&json!({"format": FORMAT})).len(),
+            7
+        );
+        assert_eq!(
+            expected_archive_members(&json!({"format": PREVIOUS_FORMAT})).len(),
             6
         );
     }

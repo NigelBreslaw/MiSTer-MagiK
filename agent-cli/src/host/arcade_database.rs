@@ -377,7 +377,7 @@ fn optional_integer(value: &str, field: &str) -> Result<Option<i64>> {
     }
 }
 
-fn normalize_key(value: &str) -> String {
+pub(super) fn normalize_key(value: &str) -> String {
     let mut normalized = String::new();
     let mut last_dash = false;
     for character in value.trim().chars().flat_map(char::to_lowercase) {

@@ -41,6 +41,7 @@ mod platform_deploy;
 mod remote;
 mod startup_particles;
 mod tracefs;
+mod updater_arcade;
 
 pub(crate) use startup_particles::SceneLabRequest;
 
@@ -3759,6 +3760,14 @@ pub(crate) fn run_local_data_args(mut args: Vec<String>) -> Result<()> {
                 .ok_or("arcade-database-import needs --source-sha <commit>")?;
             let summary =
                 arcade_database::import(Path::new(&sqlite), Path::new(&csv), &source_sha)?;
+            println!("{}", serde_json::to_string(&summary)?);
+        }
+        "arcade-updater-index-build" => {
+            let input_manifest = option_value(&args, "--input-manifest")
+                .ok_or("arcade-updater-index-build needs --input-manifest <inputs.json>")?;
+            let output = option_value(&args, "--out")
+                .ok_or("arcade-updater-index-build needs --out <index.lz4b>")?;
+            let summary = updater_arcade::build(Path::new(&input_manifest), Path::new(&output))?;
             println!("{}", serde_json::to_string(&summary)?);
         }
         other => return Err(format!("unknown local data operation: {other}").into()),
