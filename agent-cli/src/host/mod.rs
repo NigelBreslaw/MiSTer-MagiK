@@ -629,6 +629,19 @@ impl NativeDevice {
         .map(|_| ())
     }
 
+    pub(crate) fn deliver_databases(
+        &mut self,
+        stage: &Path,
+    ) -> std::result::Result<(), DeviceFailure> {
+        let prepared = self.prepare(DeviceAccess::AGENT_MUTATION)?;
+        let transaction = DatabaseDeployTransaction::validate(stage).map_err(device_failure)?;
+        let session = connect_with(&prepared.config.connection, 10).map_err(device_failure)?;
+        transaction
+            .run(&session, &mut DeliveryTransferMetrics::default())
+            .map(|_| ())
+            .map_err(device_failure)
+    }
+
     pub(crate) fn deliver_platform(
         &mut self,
         stage: &Path,

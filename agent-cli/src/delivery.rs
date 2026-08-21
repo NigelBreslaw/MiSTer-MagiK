@@ -213,6 +213,7 @@ trait DeliveryDevice {
         delivery: RuntimeDelivery,
         timings: &mut Vec<crate::host::DeliveryTimingSample>,
     ) -> AgentResult<()>;
+    fn deliver_databases(&mut self, stage: PathBuf) -> AgentResult<()>;
     fn deliver_platform(
         &mut self,
         stage: PathBuf,
@@ -258,6 +259,10 @@ impl DeliveryDevice for DeviceClient {
                 timings,
             )
         })
+    }
+
+    fn deliver_databases(&mut self, stage: PathBuf) -> AgentResult<()> {
+        self.mutate(|device| device.deliver_databases(&stage))
     }
 
     fn deliver_platform(
@@ -663,13 +668,17 @@ impl<D> ProcessActions<'_, D> {
     }
 
     fn prepare_databases(&self) -> AgentResult<()> {
-        prepare_stage_databases(
-            self.repository,
-            &self.stage,
-            self.main_revision
-                .as_deref()
-                .ok_or("local staging did not record the Main revision")?,
-        )
+        prepare_stage_databases(self.repository, &self.stage)?;
+        if self.decision == DeliveryDecision::Platform {
+            generate_platform_manifest(
+                self.repository,
+                &self.stage,
+                self.main_revision
+                    .as_deref()
+                    .ok_or("local staging did not record the Main revision")?,
+            )?;
+        }
+        Ok(())
     }
 }
 
@@ -749,13 +758,14 @@ impl<D: DeliveryDevice> DeliveryActions for ProcessActions<'_, D> {
             },
             Phase::DatabasePreparation => self.prepare_databases(),
             Phase::Snapshot => Ok(()),
-            Phase::RemoteInventoryUpload => {
-                let expected_sha256 = self
-                    .artifact_sha256
-                    .clone()
-                    .ok_or("qualified runtime identity is missing")?;
-                match self.decision {
-                    DeliveryDecision::Runtime => self.device.deliver_runtime(
+            Phase::RemoteInventoryUpload => match self.decision {
+                DeliveryDecision::Runtime => {
+                    let expected_sha256 = self
+                        .artifact_sha256
+                        .clone()
+                        .ok_or("qualified runtime identity is missing")?;
+                    self.device.deliver_databases(self.stage.clone())?;
+                    self.device.deliver_runtime(
                         RuntimeDelivery {
                             local: self.repository.join(self.deployment.build.artifact()),
                             manifest_local: self.stage.join(crate::platform_manifest::FILE_NAME),
@@ -768,15 +778,21 @@ impl<D: DeliveryDevice> DeliveryActions for ProcessActions<'_, D> {
                                     .into(),
                         },
                         &mut self.timing_samples,
-                    ),
-                    DeliveryDecision::Platform => self.device.deliver_platform(
+                    )
+                }
+                DeliveryDecision::Platform => {
+                    let expected_sha256 = self
+                        .artifact_sha256
+                        .clone()
+                        .ok_or("qualified runtime identity is missing")?;
+                    self.device.deliver_platform(
                         self.stage.clone(),
                         expected_sha256,
                         &mut self.timing_samples,
-                    ),
-                    DeliveryDecision::NoOp => Ok(()),
+                    )
                 }
-            }
+                DeliveryDecision::NoOp => self.device.deliver_databases(self.stage.clone()),
+            },
             Phase::Activate | Phase::RebootIfNeeded | Phase::Smoke | Phase::Complete => Ok(()),
         }
     }
@@ -784,20 +800,18 @@ impl<D: DeliveryDevice> DeliveryActions for ProcessActions<'_, D> {
     fn should_run(&self, phase: Phase) -> bool {
         match phase {
             Phase::GithubResolution => true,
-            Phase::ManagerQualification | Phase::DatabasePreparation => {
-                self.decision == DeliveryDecision::Platform
+            Phase::ManagerQualification => self.decision == DeliveryDecision::Platform,
+            Phase::DatabasePreparation | Phase::RemoteInventoryUpload => true,
+            Phase::RuntimeBuild | Phase::LocalStaging | Phase::Snapshot => {
+                self.decision != DeliveryDecision::NoOp
             }
-            Phase::RuntimeBuild
-            | Phase::LocalStaging
-            | Phase::Snapshot
-            | Phase::RemoteInventoryUpload => self.decision != DeliveryDecision::NoOp,
             Phase::Activate | Phase::RebootIfNeeded | Phase::Smoke => false,
             _ => true,
         }
     }
 
     fn is_complete(&self) -> bool {
-        self.decision == DeliveryDecision::NoOp
+        false
     }
 
     fn record_timing(&mut self, sample: DeliveryPhaseTiming) {
@@ -845,11 +859,7 @@ fn prepare_stage_files(
     Ok(candidate_main_revision.to_owned())
 }
 
-fn prepare_stage_databases(
-    repository: &Path,
-    stage: &Path,
-    main_revision: &str,
-) -> AgentResult<()> {
+fn prepare_stage_databases(repository: &Path, stage: &Path) -> AgentResult<()> {
     let databases = stage.join("databases");
     prepare_game_databases(repository, &databases)?;
     for name in [
@@ -864,7 +874,7 @@ fn prepare_stage_databases(
         databases.join("SHA256SUMS"),
         stage.join("game-databases-SHA256SUMS"),
     )?;
-    generate_platform_manifest(repository, stage, main_revision)
+    Ok(())
 }
 
 fn copy(from: PathBuf, to: PathBuf) -> AgentResult<()> {
@@ -980,6 +990,7 @@ mod tests {
 
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     enum DeliveryCall {
+        Databases,
         Runtime,
         Platform,
     }
@@ -1029,6 +1040,11 @@ mod tests {
         ) -> AgentResult<()> {
             self.0.borrow_mut().push(DeliveryCall::Runtime);
             timings.extend(sample_timings(crate::host::DeliveryLane::Runtime));
+            Ok(())
+        }
+
+        fn deliver_databases(&mut self, _stage: PathBuf) -> AgentResult<()> {
+            self.0.borrow_mut().push(DeliveryCall::Databases);
             Ok(())
         }
 
@@ -1255,7 +1271,7 @@ mod tests {
         actions.run(Phase::RemoteInventoryUpload).unwrap();
         assert!(matches!(
             requests.borrow().as_slice(),
-            [DeliveryCall::Runtime]
+            [DeliveryCall::Databases, DeliveryCall::Runtime]
         ));
         assert_eq!(
             actions.timing_samples,
@@ -1272,7 +1288,6 @@ mod tests {
         );
         for phase in [
             Phase::ManagerQualification,
-            Phase::DatabasePreparation,
             Phase::RebootIfNeeded,
             Phase::Activate,
             Phase::Smoke,
@@ -1285,11 +1300,12 @@ mod tests {
         assert!(actions.should_run(Phase::GithubResolution));
         assert!(actions.should_run(Phase::RuntimeBuild));
         assert!(actions.should_run(Phase::LocalStaging));
+        assert!(actions.should_run(Phase::DatabasePreparation));
         assert!(actions.should_run(Phase::RemoteInventoryUpload));
     }
 
     #[test]
-    fn no_op_delivery_has_no_transfer_or_smoke_samples() {
+    fn no_op_delivery_still_reconciles_database_artifacts() {
         let requests = Rc::new(RefCell::new(Vec::new()));
         let mut actions = scenario_actions(
             crate::deploy::DeploymentKind::Runtime,
@@ -1297,9 +1313,14 @@ mod tests {
         );
         actions.decision = DeliveryDecision::NoOp;
 
-        assert!(!actions.should_run(Phase::RemoteInventoryUpload));
+        assert!(actions.should_run(Phase::DatabasePreparation));
+        assert!(actions.should_run(Phase::RemoteInventoryUpload));
+        actions.run(Phase::RemoteInventoryUpload).unwrap();
         assert!(actions.timing_samples.is_empty());
-        assert!(requests.borrow().is_empty());
+        assert!(matches!(
+            requests.borrow().as_slice(),
+            [DeliveryCall::Databases]
+        ));
     }
 
     #[test]

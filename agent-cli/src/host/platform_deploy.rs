@@ -22,7 +22,7 @@ pub(super) fn installed_platform_verify_command(layout: Layout) -> String {
 
 pub(super) fn platform_deploy_files() -> Vec<(&'static str, String)> {
     let installed = paths(Layout::Development);
-    vec![
+    let mut files = vec![
         ("mister-magik-fb", installed.gui.to_owned()),
         ("mister-magik-manager", installed.manager.to_owned()),
         ("MiSTer_MagiKDev", installed.main.to_owned()),
@@ -43,29 +43,6 @@ pub(super) fn platform_deploy_files() -> Vec<(&'static str, String)> {
             installed.latch_metadata.to_owned(),
         ),
         (
-            "mame.sqlite3",
-            app_path(Layout::Development, "mame.sqlite3").expect("static installed path"),
-        ),
-        (
-            "hbmame.sqlite3",
-            app_path(Layout::Development, "hbmame.sqlite3").expect("static installed path"),
-        ),
-        (
-            "arcade-updater-index-v1.lz4b",
-            app_path(Layout::Development, "arcade-updater-index-v1.lz4b")
-                .expect("static installed path"),
-        ),
-        (
-            "game-databases-manifest.json",
-            app_path(Layout::Development, "game-databases-manifest.json")
-                .expect("static installed path"),
-        ),
-        (
-            "game-databases-SHA256SUMS",
-            app_path(Layout::Development, "game-databases-SHA256SUMS")
-                .expect("static installed path"),
-        ),
-        (
             "assets/snes/snes-small-v1.rgb565a",
             app_path(Layout::Development, "assets/snes/snes-small-v1.rgb565a")
                 .expect("static installed path"),
@@ -74,7 +51,27 @@ pub(super) fn platform_deploy_files() -> Vec<(&'static str, String)> {
             "platform-v3.manifest",
             app_path(Layout::Development, "platform-v3.manifest").expect("static installed path"),
         ),
+    ];
+    files.splice(7..7, database_deploy_files());
+    files
+}
+
+pub(super) fn database_deploy_files() -> Vec<(&'static str, String)> {
+    [
+        "mame.sqlite3",
+        "hbmame.sqlite3",
+        "arcade-updater-index-v1.lz4b",
+        "game-databases-SHA256SUMS",
+        "game-databases-manifest.json",
     ]
+    .into_iter()
+    .map(|name| {
+        (
+            name,
+            app_path(Layout::Development, name).expect("static installed path"),
+        )
+    })
+    .collect()
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -82,6 +79,9 @@ pub(super) struct PlatformDeployTransaction {
     pub(super) stage: PathBuf,
     pub(super) files: Vec<PlatformDeployFile>,
 }
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct DatabaseDeployTransaction(PlatformDeployTransaction);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct PlatformDeployFile {
@@ -101,14 +101,22 @@ pub(super) struct PlatformDeployReport {
 
 impl PlatformDeployTransaction {
     pub(super) fn validate(stage: &Path) -> Result<Self> {
+        Self::validate_files(stage, platform_deploy_files(), "platform")
+    }
+
+    fn validate_files(
+        stage: &Path,
+        deploy_files: Vec<(&'static str, String)>,
+        label: &str,
+    ) -> Result<Self> {
         if !stage.is_dir() {
-            return Err(format!("platform stage is missing: {}", stage.display()).into());
+            return Err(format!("{label} stage is missing: {}", stage.display()).into());
         }
         let mut files = Vec::new();
-        for (relative, remote) in platform_deploy_files() {
+        for (relative, remote) in deploy_files {
             let local = stage.join(relative);
             if !local.is_file() {
-                return Err(format!("platform stage is missing {relative}").into());
+                return Err(format!("{label} stage is missing {relative}").into());
             }
             files.push(PlatformDeployFile {
                 bytes: fs::metadata(&local)?.len(),
@@ -330,6 +338,154 @@ impl PlatformDeployTransaction {
             "set -eu; {safety}; {require_snapshot}; {verify} rollback() {{ {rollback} mv -f /media/fat/MiSTer.ini.platform-rollback /media/fat/MiSTer.ini 2>/dev/null || true; sync; }}; trap rollback EXIT INT TERM; {activate} {chmod} sync; {finish}"
         )
     }
+}
+
+impl DatabaseDeployTransaction {
+    pub(super) fn validate(stage: &Path) -> Result<Self> {
+        PlatformDeployTransaction::validate_files(stage, database_deploy_files(), "database")
+            .map(Self)
+    }
+
+    pub(super) fn run(
+        &self,
+        sess: &Session,
+        metrics: &mut DeliveryTransferMetrics,
+    ) -> Result<PlatformDeployReport> {
+        self.run_with(
+            &SshDeployRemote {
+                sess,
+                remote_host: None,
+            },
+            metrics,
+        )
+    }
+
+    fn run_with<R: DeployRemote>(
+        &self,
+        remote: &R,
+        metrics: &mut DeliveryTransferMetrics,
+    ) -> Result<PlatformDeployReport> {
+        let transaction = &self.0;
+        let inventory = remote.exec(&transaction.inventory_command())?;
+        if let Some(message) = exec_failure_message("database inventory", &inventory) {
+            return Err(message.into());
+        }
+        let installed = transaction.parse_inventory(&inventory.stdout)?;
+        let changed = transaction
+            .files
+            .iter()
+            .zip(installed)
+            .filter_map(|(file, installed)| {
+                (installed.as_deref() != Some(&file.sha256)).then_some(file)
+            })
+            .collect::<Vec<_>>();
+        let mut report = PlatformDeployReport {
+            changed_files: changed.len(),
+            skipped_files: transaction.files.len().saturating_sub(changed.len()),
+            transferred_bytes: changed.iter().map(|file| file.bytes).sum(),
+            transfer_ms: 0,
+        };
+        if changed.is_empty() {
+            println!(
+                "database deploy ok stage={} changed_files=0 skipped_files={} transferred_bytes=0 transfer_ms=0",
+                transaction.stage.display(),
+                report.skipped_files,
+            );
+            return Ok(report);
+        }
+
+        let transfer_before = metrics.upload_ms;
+        for file in &changed {
+            put_measured(
+                remote,
+                &file.local,
+                &format!("{}.upload", file.remote),
+                file.bytes,
+                metrics,
+            )?;
+        }
+        report.transfer_ms = metrics.upload_ms.saturating_sub(transfer_before);
+        let output = remote.exec(&database_activation_script(&changed))?;
+        if let Some(message) = exec_failure_message("database activation", &output) {
+            return Err(message.into());
+        }
+        println!(
+            "database deploy ok stage={} changed_files={} skipped_files={} transferred_bytes={} transfer_ms={}",
+            transaction.stage.display(),
+            report.changed_files,
+            report.skipped_files,
+            report.transferred_bytes,
+            report.transfer_ms,
+        );
+        Ok(report)
+    }
+}
+
+fn database_activation_script(changed: &[&PlatformDeployFile]) -> String {
+    let mut snapshot = String::new();
+    let mut verify = String::new();
+    let mut activate = String::new();
+    let mut rollback = String::new();
+    let mut stale = String::new();
+    let mut cleanup = String::new();
+    for file in changed {
+        let parent = Path::new(&file.remote)
+            .parent()
+            .expect("database deploy path must have a parent");
+        snapshot.push_str(&format!(
+            "mkdir -p {parent}; if test -e {path}; then cp -p {path} {backup}; else : > {missing}; fi; ",
+            parent = sh(&parent.to_string_lossy()),
+            path = sh(&file.remote),
+            backup = sh(&format!("{}.rollback", file.remote)),
+            missing = sh(&format!("{}.rollback-missing", file.remote)),
+        ));
+        verify.push_str(&format!(
+            "actual=$(sha256sum {upload} | awk '{{print $1}}'); test \"$actual\" = {expected}; ",
+            upload = sh(&format!("{}.upload", file.remote)),
+            expected = sh(&file.sha256),
+        ));
+        rollback.push_str(&format!(
+            "if test -e {backup}; then mv -f {backup} {path}; elif test -e {missing}; then rm -f {path} {missing}; fi; rm -f {upload}; ",
+            path = sh(&file.remote),
+            backup = sh(&format!("{}.rollback", file.remote)),
+            missing = sh(&format!("{}.rollback-missing", file.remote)),
+            upload = sh(&format!("{}.upload", file.remote)),
+        ));
+        stale.push_str(&format!(
+            "rm -f {backup} {missing}; ",
+            backup = sh(&format!("{}.rollback", file.remote)),
+            missing = sh(&format!("{}.rollback-missing", file.remote)),
+        ));
+        cleanup.push_str(&format!(
+            "rm -f {backup} {missing} {upload}; ",
+            backup = sh(&format!("{}.rollback", file.remote)),
+            missing = sh(&format!("{}.rollback-missing", file.remote)),
+            upload = sh(&format!("{}.upload", file.remote)),
+        ));
+    }
+    for file in changed.iter().filter(|file| {
+        !file.remote.ends_with("game-databases-SHA256SUMS")
+            && !file.remote.ends_with("game-databases-manifest.json")
+    }) {
+        activate.push_str(&format!(
+            "mv -f {upload} {path}; ",
+            upload = sh(&format!("{}.upload", file.remote)),
+            path = sh(&file.remote),
+        ));
+    }
+    for suffix in ["game-databases-SHA256SUMS", "game-databases-manifest.json"] {
+        if let Some(file) = changed.iter().find(|file| file.remote.ends_with(suffix)) {
+            activate.push_str(&format!(
+                "mv -f {upload} {path}; ",
+                upload = sh(&format!("{}.upload", file.remote)),
+                path = sh(&file.remote),
+            ));
+        }
+    }
+    let safety = platform_safety_script();
+    format!(
+        "set -eu; {safety}; {stale} rollback() {{ {rollback} sync; }}; trap rollback EXIT INT TERM; {snapshot} {verify} {activate} sync; trap - EXIT INT TERM; {cleanup} sync"
+    )
 }
 
 fn checked_deploy_output(label: &str, output: ExecOutput) -> Result<ExecOutput> {
