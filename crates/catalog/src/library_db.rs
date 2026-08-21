@@ -51,7 +51,8 @@ use crate::software_identity::{
     SoftwareHashCache, console_preview_asset, load_arcade_machine_metadata_for_setnames,
     load_mame_machine_metadata_for_setnames, load_mame_software_metadata,
     mame_identity_for_discovery, mame_identity_projection, mame_software_identity_for_discovery,
-    mister_arcade_metadata_for_discovery, write_simple_mame_metadata_db,
+    mister_arcade_metadata_for_discovery, software_list_for_platform,
+    write_simple_mame_metadata_db,
 };
 use crate::sqlite_catalog;
 use rusqlite::Connection;
@@ -1813,12 +1814,9 @@ fn requires_mame_software_metadata(
     scan: &LibraryScan,
     discoveries: &BTreeMap<String, usize>,
 ) -> bool {
-    discoveries.values().any(|index| {
-        !matches!(
-            catalog_system_id_for_discovery(&scan.discoveries[*index]).as_str(),
-            "arcade" | "neogeo"
-        )
-    })
+    discoveries
+        .values()
+        .any(|index| software_list_for_platform(&scan.discoveries[*index].platform_id).is_some())
 }
 
 #[cfg(test)]
@@ -2973,7 +2971,7 @@ mod tests {
     }
 
     #[test]
-    fn only_non_arcade_projection_requires_mame_software_metadata() {
+    fn only_software_list_projection_requires_mame_software_metadata() {
         let arcade_scan = sqlite_scan_with_discoveries(vec![mra_discovery(1, "Puck Man")]);
         let arcade_preferred = preferred_playable_discovery_indices_by_key(
             &arcade_scan.discoveries,
