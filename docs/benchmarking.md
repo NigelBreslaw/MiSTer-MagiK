@@ -147,7 +147,8 @@ confirmed focus feedback. Schema v2 has no v1 compatibility parser. It drives
 the exact Computers route from Acorn through Apple II, Commodore, Atari,
 Sinclair, CoCo 2, DOS, Japanese, and Other with a 100 ms baseline plus rotated
 50/57/64/71 ms start-to-start schedules. It also covers discrete System Hub and
-Settings focus and Arcade press-to-first-motion through Main proxy v2.
+Settings focus and Arcade press-to-first-motion through supported Main proxy
+protocol v2 or sequence-tagged laboratory protocol v3.
 
 Each eligible destination must have one exact pulse-on and pulse-off active
 latch sequence with at least 80,000 µs between their physical confirmations.

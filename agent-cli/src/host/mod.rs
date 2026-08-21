@@ -5357,12 +5357,15 @@ fn verify_installed_input_integrity(
     let main_before: Value = serde_json::from_str(
         &remote_read(&session, MAIN_STATUS_REMOTE).ok_or("Main status is missing")?,
     )?;
-    if main_before
+    let input_proxy_protocol = main_before
         .get("input_proxy_protocol")
         .and_then(Value::as_u64)
-        != Some(2)
-    {
-        return Err("input integrity requires Main proxy protocol v2".into());
+        .ok_or("input integrity Main status omitted the input proxy protocol")?;
+    if !matches!(input_proxy_protocol, 2 | 3) {
+        return Err(format!(
+            "input integrity requires Main proxy protocol v2 or v3, got {input_proxy_protocol}"
+        )
+        .into());
     }
     let idle = run_input_integrity_scenario(&session, "idle", "off", None, false)?;
     let stress =
@@ -5393,8 +5396,8 @@ fn verify_installed_input_integrity(
     let summary = json!({
         "schema": "mister-magik-input-integrity-v2",
         "status": status,
-        "protocol": 2,
-        "path": "uinput -> Main mapping -> Main proxy v2 -> kernel evdev -> InputCapture -> InputRouter",
+        "protocol": input_proxy_protocol,
+        "path": format!("uinput -> Main mapping -> Main proxy v{input_proxy_protocol} -> kernel evdev -> InputCapture -> InputRouter"),
         "scenarios": [idle, stress],
         "expected_initial_presses_per_scenario": INPUT_INTEGRITY_EXPECTED_PRESSES,
         "lost_actions": 0,
