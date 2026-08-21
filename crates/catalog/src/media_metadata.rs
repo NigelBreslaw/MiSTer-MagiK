@@ -316,14 +316,14 @@ pub(crate) fn parse_mra_metadata_bytes(data: &[u8]) -> Option<MraMetadata> {
 
 pub(crate) fn inspect_mra_bytes(data: &[u8]) -> Result<MraInspection, String> {
     let header = parse_mra_metadata_bytes(data).ok_or("missing MRA metadata")?;
-    let mut archives = Vec::<(RomNamespace, String)>::new();
+    let mut archive_groups = Vec::<Vec<(RomNamespace, String)>>::new();
     let text = String::from_utf8_lossy(data);
     let lower = text.to_ascii_lowercase();
     if !lower.contains("<misterromdescription") {
         return Err("missing misterromdescription root".to_string());
     }
     for tag in tolerant_mra_rom_tags(&text, &lower) {
-        for archive in tolerant_xml_attribute(tag, "zip")
+        let archives = tolerant_xml_attribute(tag, "zip")
             .into_iter()
             .flat_map(|value| {
                 value
@@ -333,12 +333,13 @@ pub(crate) fn inspect_mra_bytes(data: &[u8]) -> Result<MraInspection, String> {
                     .map(str::to_owned)
                     .collect::<Vec<_>>()
             })
-        {
-            if let Some(candidate) = normalize_rom_archive(&archive) {
-                archives.push(candidate);
-            }
+            .filter_map(|archive| normalize_rom_archive(&archive))
+            .collect::<Vec<_>>();
+        if !archives.is_empty() {
+            archive_groups.push(archives);
         }
     }
+    let mut archives = archive_groups.iter().flatten().cloned().collect::<Vec<_>>();
     archives.sort();
     archives.dedup();
     let primary_rom = if archives.is_empty() {
@@ -359,6 +360,13 @@ pub(crate) fn inspect_mra_bytes(data: &[u8]) -> Result<MraInspection, String> {
                 namespace: namespace.clone(),
                 setname: setname.clone(),
             },
+            [] if archive_groups.len() == 1 => {
+                let (namespace, setname) = &archive_groups[0][0];
+                PrimaryRomRequirement::Archive {
+                    namespace: namespace.clone(),
+                    setname: setname.clone(),
+                }
+            }
             _ => PrimaryRomRequirement::Ambiguous,
         }
     } else {
@@ -1196,6 +1204,38 @@ mod tests {
                 setname: "drgw3105".to_string(),
             }
         );
+    }
+
+    #[test]
+    fn mra_inspection_uses_first_archive_when_setname_is_only_display_identity() {
+        let inspection = inspect_mra_bytes(
+            br#"<misterromdescription>
+                <name>Space Demon</name><setname>SpaceDemon</setname>
+                <rom zip="spacedem.zip|spacefb.zip|bios.zip"><part name="game.bin"/></rom>
+            </misterromdescription>"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            inspection.primary_rom,
+            PrimaryRomRequirement::Archive {
+                namespace: RomNamespace::Mame,
+                setname: "spacedem".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn mra_inspection_keeps_multiple_unmatched_archive_declarations_ambiguous() {
+        let inspection = inspect_mra_bytes(
+            br#"<misterromdescription><setname>display-id</setname>
+                <rom zip="one.zip|parent.zip"><part/></rom>
+                <rom zip="two.zip"><part/></rom>
+            </misterromdescription>"#,
+        )
+        .unwrap();
+
+        assert_eq!(inspection.primary_rom, PrimaryRomRequirement::Ambiguous);
     }
 
     #[test]
