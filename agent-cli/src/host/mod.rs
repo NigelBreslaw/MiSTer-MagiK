@@ -19263,20 +19263,31 @@ fn run_catalog_build_rebuild_leg(
         {
             return Err(format!("{label} catalog did not become visible: {status}").into());
         }
-        let inspect = exec(session, &runtime_command("catalog-v3-inspect"), true)?;
-        if exec_failure_message("catalog build/rebuild inspect", &inspect).is_none()
-            && let Ok(catalog) = parse_catalog_lifecycle_inspect(&inspect.stdout)
+        if status.get("catalog_refresh_done").and_then(Value::as_bool) == Some(true) {
+            let inspect = exec(session, &runtime_command("catalog-v3-inspect"), true)?;
+            if let Some(error) = exec_failure_message("catalog build/rebuild inspect", &inspect) {
+                return Err(format!(
+                    "{label} catalog refresh completed but inspection failed: {error}"
+                )
+                .into());
+            }
+            let catalog = parse_catalog_lifecycle_inspect(&inspect.stdout).map_err(|error| {
+                format!(
+                    "{label} catalog refresh completed with invalid inspection: {error}; output={}",
+                    inspect.stdout.trim()
+                )
+            })?;
             // An unchanged forced rebuild may correctly retain its generation.
             // Completion is authoritative here; only reject a rollback.
-            && minimum_generation.is_none_or(|generation| {
+            if minimum_generation.is_some_and(|generation| {
                 catalog
                     .get("generation")
                     .and_then(Value::as_u64)
                     .unwrap_or(0)
-                    >= generation
-            })
-            && status.get("catalog_refresh_done").and_then(Value::as_bool) == Some(true)
-        {
+                    < generation
+            }) {
+                return Err(format!("{label} catalog generation rolled back").into());
+            }
             break (catalog, inspect.stdout, status);
         }
         if started.elapsed() >= Duration::from_secs(CATALOG_LIFECYCLE_COMPLETE_TIMEOUT_SECS) {
