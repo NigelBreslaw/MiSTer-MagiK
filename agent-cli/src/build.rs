@@ -1995,7 +1995,7 @@ mod tests {
                 .filter_map(|(key, value)| value.map(|value| (key.to_owned(), value.to_owned())))
                 .collect();
             let expected_config = repository.join("apps/mister/Cross.toml").into_os_string();
-            let expected_toolchain = OsString::from("1.97.1");
+            let expected_toolchain = OsString::from("1.98.0");
             assert_eq!(
                 environment.get(OsStr::new("CROSS_CONFIG")),
                 Some(&expected_config)

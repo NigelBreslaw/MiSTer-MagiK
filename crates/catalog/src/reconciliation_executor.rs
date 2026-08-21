@@ -905,7 +905,7 @@ fn execute_fresh_pipeline(
             .fold(Duration::ZERO, |total, shard| total + shard.publish_time);
         checkpoint_ready_fresh_shards(
             storage_root,
-            resume_journal.as_deref_mut(),
+            resume_journal,
             &completed,
             &mut checkpointed,
             true,

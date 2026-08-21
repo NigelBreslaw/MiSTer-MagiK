@@ -111,7 +111,7 @@ pub(crate) mod pmu_phase {
     pub const SEARCH_INTEGRITY: &str = "catalog.shard.search.integrity";
     #[cfg(feature = "builder")]
     pub const SHARD_COMMIT: &str = "catalog.shard.commit";
-    #[cfg(feature = "builder")]
+    #[cfg(all(feature = "builder", any(test, target_os = "linux")))]
     pub const SHARD_ALLOCATOR_TRIM: &str = "catalog.shard.allocator-trim";
     #[cfg(feature = "builder")]
     pub const SHARD_VALIDATE: &str = "catalog.shard.validate";
