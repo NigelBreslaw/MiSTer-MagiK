@@ -1891,7 +1891,7 @@ fn wait_authenticated_agent_ready(
             config.agent().map_err(device_failure)?,
             "ping",
             json!({}),
-            Duration::from_millis(500),
+            Duration::from_millis(1_500),
         ) {
             Ok(_) => return Ok(()),
             Err(error) => last = error.to_string(),
@@ -17202,7 +17202,7 @@ fn profile_installed_cold_boot_run(
     if !wait_down_with(&config.connection, 40.0) || wait_up_with(&config.connection, 120.0)? != 0 {
         return Err("device did not complete the cold-boot profile reboot".into());
     }
-    wait_authenticated_agent_ready(config, Duration::from_secs(30))
+    wait_authenticated_agent_ready(config, Duration::from_secs(60))
         .map_err(|error| format!("{error:?}"))?;
     let session = connect_with(&config.connection, 10)?;
     wait_launcher_ready(&session, Instant::now(), Duration::from_secs(45))?;
