@@ -265,7 +265,7 @@ mod png_capture {
             let source_row = &raw[y * geometry.stride..(y + 1) * geometry.stride];
             match geometry.bpp {
                 16 => {
-                    for pixel in source_row[..geometry.width * 2].chunks_exact(2) {
+                    for pixel in source_row[..geometry.width * 2].as_chunks::<2>().0 {
                         let value = u16::from_le_bytes([pixel[0], pixel[1]]);
                         let r5 = (value >> 11) & 0x1f;
                         let g6 = (value >> 5) & 0x3f;
@@ -278,7 +278,7 @@ mod png_capture {
                     }
                 }
                 32 => {
-                    for pixel in source_row[..geometry.width * 4].chunks_exact(4) {
+                    for pixel in source_row[..geometry.width * 4].as_chunks::<4>().0 {
                         row.extend_from_slice(&[pixel[2], pixel[1], pixel[0]]);
                     }
                 }
@@ -6620,7 +6620,7 @@ mod tests {
             let encoded = png_capture::encode(&raw, geometry).unwrap();
             let (_, _, decoded) = decode_truecolor_png(&encoded.bytes);
             let mut expected = vec![0];
-            for pixel in raw.chunks_exact(4) {
+            for pixel in raw.as_chunks::<4>().0 {
                 expected.extend_from_slice(&[pixel[2], pixel[1], pixel[0]]);
             }
             assert_eq!(decoded, expected);
