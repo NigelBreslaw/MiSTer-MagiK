@@ -1813,9 +1813,12 @@ fn requires_mame_software_metadata(
     scan: &LibraryScan,
     discoveries: &BTreeMap<String, usize>,
 ) -> bool {
-    discoveries
-        .values()
-        .any(|index| catalog_system_id_for_discovery(&scan.discoveries[*index]) != "arcade")
+    discoveries.values().any(|index| {
+        !matches!(
+            catalog_system_id_for_discovery(&scan.discoveries[*index]).as_str(),
+            "arcade" | "neogeo"
+        )
+    })
 }
 
 #[cfg(test)]
@@ -2981,7 +2984,19 @@ mod tests {
             &arcade_preferred
         ));
 
-        let mut console = mra_discovery(2, "Console Game");
+        let mut neogeo = mra_discovery(2, "Neo Geo Game");
+        neogeo.platform_id = "neogeo".to_string();
+        let neogeo_scan = sqlite_scan_with_discoveries(vec![neogeo]);
+        let neogeo_preferred = preferred_playable_discovery_indices_by_key(
+            &neogeo_scan.discoveries,
+            &covered_payload_paths(&neogeo_scan.discoveries),
+        );
+        assert!(!requires_mame_software_metadata(
+            &neogeo_scan,
+            &neogeo_preferred
+        ));
+
+        let mut console = mra_discovery(3, "Console Game");
         console.platform_id = "megadrive".to_string();
         console.category = "Console".to_string();
         let mixed_scan = sqlite_scan_with_discoveries(vec![mra_discovery(1, "Puck Man"), console]);
