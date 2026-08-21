@@ -154,6 +154,7 @@ jobs:
             --mame-tag "$MAME_TAG" --mame-sha "$MAME_SHA" \
             --hbmame-tag "$HBMAME_TAG" --hbmame-sha "$HBMAME_SHA" \
             --arcade-database-sha "$ARCADE_DATABASE_SHA" \
+            --arcade-updater-builder-sha "$GITHUB_SHA" \
             --arcade-updater-revision "distribution=$DISTRIBUTION_SHA" \
             --arcade-updater-revision "alternatives=$DISTRIBUTION_SHA" \
             --arcade-updater-revision "jtcores=$JTCORES_SHA" \
@@ -457,6 +458,7 @@ jobs:
           mame_builder_sha="$GITHUB_SHA"
           hbmame_builder_sha="$GITHUB_SHA"
           arcade_database_builder_sha="$GITHUB_SHA"
+          arcade_updater_builder_sha="$GITHUB_SHA"
           if [ '${{ needs.inspect.outputs.mame-changed }}' = true ]; then
             mame_listxml_sha256="$(cat build/mame-listxml.sha256)"
           else
@@ -468,6 +470,9 @@ jobs:
           fi
           if [ '${{ needs.inspect.outputs.mame-changed }}' != true ] && [ '${{ needs.inspect.outputs.arcade-database-changed }}' != true ]; then
             arcade_database_builder_sha="$(jq -r '.sources.arcade_database.builder_sha' build/current/game-databases-manifest.json)"
+          fi
+          if [ '${{ needs.inspect.outputs.arcade-updater-changed }}' != true ]; then
+            arcade_updater_builder_sha="$(jq -r '.sources.arcade_updater.builder_sha' build/current/game-databases-manifest.json)"
           fi
           scripts/agent ci game-databases create \
             --mame-sqlite build/mame.sqlite3 --hbmame-sqlite build/hbmame.sqlite3 \
@@ -484,6 +489,7 @@ jobs:
             --arcade-database-license build/ArcadeDatabase-LICENSE.txt \
             --arcade-database-sha '${{ needs.inspect.outputs.arcade-database-sha }}' \
             --arcade-database-builder-sha "$arcade_database_builder_sha" \
+            --arcade-updater-builder-sha "$arcade_updater_builder_sha" \
             --arcade-updater-index build/arcade-updater-index-v1.lz4b \
             --output build/game-databases
 

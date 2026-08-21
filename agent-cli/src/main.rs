@@ -576,6 +576,7 @@ fn dispatch(
                         arcade_database_license,
                         arcade_database_sha,
                         arcade_database_builder_sha,
+                        arcade_updater_builder_sha,
                         arcade_updater_index,
                         output,
                     } => {
@@ -596,6 +597,7 @@ fn dispatch(
                                 arcade_database_license,
                                 arcade_database_sha,
                                 arcade_database_builder_sha,
+                                arcade_updater_builder_sha,
                                 arcade_updater_index,
                                 output,
                             },
@@ -633,6 +635,7 @@ fn dispatch(
                         hbmame_tag,
                         hbmame_sha,
                         arcade_database_sha,
+                        arcade_updater_builder_sha,
                         arcade_updater_revisions,
                         github_output,
                     } => {
@@ -652,7 +655,10 @@ fn dispatch(
                             hbmame_tag,
                             hbmame_sha,
                             arcade_database_sha,
-                            arcade_updater_revisions,
+                            agent_cli::game_databases::ArcadeUpdaterPlanIdentity {
+                                builder_sha: arcade_updater_builder_sha,
+                                revisions: arcade_updater_revisions,
+                            },
                         )?;
                         if let Some(path) = github_output {
                             append_github_output(

@@ -329,6 +329,8 @@ pub enum GameDatabaseCommand {
         #[arg(long)]
         arcade_database_builder_sha: String,
         #[arg(long)]
+        arcade_updater_builder_sha: String,
+        #[arg(long)]
         arcade_updater_index: PathBuf,
         #[arg(long)]
         output: PathBuf,
@@ -358,6 +360,8 @@ pub enum GameDatabaseCommand {
         hbmame_sha: String,
         #[arg(long)]
         arcade_database_sha: String,
+        #[arg(long)]
+        arcade_updater_builder_sha: String,
         #[arg(long = "arcade-updater-revision", value_name = "ID=SHA")]
         arcade_updater_revisions: Vec<String>,
         #[arg(long)]

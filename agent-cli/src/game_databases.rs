@@ -39,8 +39,14 @@ pub struct Create<'a> {
     pub arcade_database_license: &'a Path,
     pub arcade_database_sha: &'a str,
     pub arcade_database_builder_sha: &'a str,
+    pub arcade_updater_builder_sha: &'a str,
     pub arcade_updater_index: &'a Path,
     pub output: &'a Path,
+}
+
+pub struct ArcadeUpdaterPlanIdentity<'a> {
+    pub builder_sha: &'a str,
+    pub revisions: &'a [String],
 }
 
 pub fn create(request: &Create<'_>) -> AgentResult<PathBuf> {
@@ -60,6 +66,11 @@ pub fn create(request: &Create<'_>) -> AgentResult<PathBuf> {
         (
             "arcade_database_builder_sha",
             request.arcade_database_builder_sha,
+            40,
+        ),
+        (
+            "arcade_updater_builder_sha",
+            request.arcade_updater_builder_sha,
             40,
         ),
         ("listxml_sha256", request.listxml_sha256, 64),
@@ -108,7 +119,7 @@ pub fn create(request: &Create<'_>) -> AgentResult<PathBuf> {
                 "format": mister_magik_catalog::arcade_updater_index::FORMAT,
                 "sha256": updater_index_sha256,
                 "sources": updater_index.sources,
-                "builder_sha": request.arcade_database_builder_sha
+                "builder_sha": request.arcade_updater_builder_sha
             }
         },
         "files": entries,
@@ -320,13 +331,14 @@ pub fn update_plan(
     hbmame_tag: &str,
     hbmame_sha: &str,
     arcade_database_sha: &str,
-    arcade_updater_revisions: &[String],
+    arcade_updater: ArcadeUpdaterPlanIdentity<'_>,
 ) -> AgentResult<Value> {
     validate_tags(mame_tag, hbmame_tag)?;
     require_hex("mame_sha", mame_sha, 40)?;
     require_hex("hbmame_sha", hbmame_sha, 40)?;
     require_hex("arcade_database_sha", arcade_database_sha, 40)?;
-    let arcade_updater_revisions = parse_updater_revisions(arcade_updater_revisions)?;
+    require_hex("arcade_updater_builder_sha", arcade_updater.builder_sha, 40)?;
+    let arcade_updater_revisions = parse_updater_revisions(arcade_updater.revisions)?;
     let Some(current) = current else {
         return Ok(
             json!({"current_version":0,"next_version":1,"mame_changed":true,"hbmame_changed":true,"arcade_database_changed":true,"arcade_updater_changed":true,"update_needed":true}),
@@ -355,8 +367,10 @@ pub fn update_plan(
                 })
                 .collect::<BTreeMap<_, _>>()
         });
-    let arcade_updater_changed =
-        current_updater_revisions.as_ref() != Some(&arcade_updater_revisions);
+    let arcade_updater_changed = current_updater_revisions.as_ref()
+        != Some(&arcade_updater_revisions)
+        || current.pointer("/sources/arcade_updater/builder_sha")
+            != Some(&Value::String(arcade_updater.builder_sha.into()));
     let version = current["release_version"].as_u64().unwrap();
     Ok(
         json!({"current_version":version,"next_version":version+1,"mame_changed":mame_changed,"hbmame_changed":hbmame_changed,"arcade_database_changed":arcade_database_changed,"arcade_updater_changed":arcade_updater_changed,"update_needed":mame_changed||hbmame_changed||arcade_database_changed||arcade_updater_changed}),
@@ -853,7 +867,10 @@ mod tests {
             "tag24532",
             &"b".repeat(40),
             &"c".repeat(40),
-            &updater_revisions(),
+            ArcadeUpdaterPlanIdentity {
+                builder_sha: &"d".repeat(40),
+                revisions: &updater_revisions(),
+            },
         )
         .unwrap();
         assert_eq!(result["next_version"], 1);
@@ -886,7 +903,10 @@ mod tests {
             "tag24532",
             &"d".repeat(40),
             &"f".repeat(40),
-            &updater_revisions(),
+            ArcadeUpdaterPlanIdentity {
+                builder_sha: &"a".repeat(40),
+                revisions: &updater_revisions(),
+            },
         )
         .unwrap();
 
@@ -894,6 +914,55 @@ mod tests {
         assert_eq!(result["mame_changed"], false);
         assert_eq!(result["hbmame_changed"], false);
         assert_eq!(result["arcade_database_changed"], true);
+        assert_eq!(result["arcade_updater_changed"], true);
+        assert_eq!(result["update_needed"], true);
+    }
+
+    #[test]
+    fn updater_builder_change_schedules_only_the_updater() {
+        let revisions = updater_revisions();
+        let sources = revisions
+            .iter()
+            .map(|value| {
+                let (id, revision) = value.split_once('=').unwrap();
+                json!({"id": id, "revision": revision})
+            })
+            .collect::<Vec<_>>();
+        let current = json!({
+            "format": FORMAT,
+            "release_version": 4,
+            "sources": {
+                "mame": {"tag":"mame0288","sha":"a".repeat(40),"builder_sha":"b".repeat(40),"listxml_sha256":"c".repeat(64)},
+                "hbmame": {"tag":"tag24532","sha":"d".repeat(40),"builder_sha":"e".repeat(40)},
+                "arcade_database": {
+                    "repository":"MiSTer-devel/ArcadeDatabase_MiSTer","path":ARCADE_DATABASE_CSV,
+                    "sha":"f".repeat(40),"builder_sha":"a".repeat(40),
+                    "csv_sha256":"b".repeat(64),"license_sha256":"c".repeat(64)
+                },
+                "arcade_updater": {
+                    "format":mister_magik_catalog::arcade_updater_index::FORMAT,
+                    "sha256":"d".repeat(64),"builder_sha":"e".repeat(40),"sources":sources
+                }
+            }
+        });
+
+        let result = update_plan(
+            Some(&current),
+            "mame0288",
+            &"a".repeat(40),
+            "tag24532",
+            &"d".repeat(40),
+            &"f".repeat(40),
+            ArcadeUpdaterPlanIdentity {
+                builder_sha: &"f".repeat(40),
+                revisions: &revisions,
+            },
+        )
+        .unwrap();
+
+        assert_eq!(result["mame_changed"], false);
+        assert_eq!(result["hbmame_changed"], false);
+        assert_eq!(result["arcade_database_changed"], false);
         assert_eq!(result["arcade_updater_changed"], true);
         assert_eq!(result["update_needed"], true);
     }
