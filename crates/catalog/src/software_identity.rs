@@ -12,6 +12,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;
+use std::time::Instant;
 
 pub(crate) type MachineMetadataRow = (
     String,
@@ -353,10 +354,32 @@ pub(crate) fn load_arcade_machine_metadata_for_setnames(
     hbmame_path: &Path,
     setnames: &HashSet<String>,
 ) -> ArcadeMachineMetadata {
+    let total_started = Instant::now();
+    let mame_started = Instant::now();
+    let mame = load_mame_machine_metadata_for_setnames(mame_path, setnames);
+    let mame_us = mame_started.elapsed().as_micros() as u64;
+    let hbmame_started = Instant::now();
+    let hbmame = load_mame_machine_metadata_for_setnames(hbmame_path, setnames);
+    let hbmame_us = hbmame_started.elapsed().as_micros() as u64;
+    let mister_started = Instant::now();
+    let mister = load_mister_arcade_metadata(mame_path);
+    let mister_us = mister_started.elapsed().as_micros() as u64;
+    eprintln!(
+        "library_scan_timing\tarcade_metadata_sources\t{}\trequested={} mame_rows={} hbmame_rows={} mister_setnames={} mister_mra_names={} mame_us={} hbmame_us={} mister_us={}",
+        total_started.elapsed().as_micros(),
+        setnames.len(),
+        mame.len(),
+        hbmame.len(),
+        mister.mister_by_setname.len(),
+        mister.mister_by_mra_name.len(),
+        mame_us,
+        hbmame_us,
+        mister_us,
+    );
     ArcadeMachineMetadata {
-        mame: load_mame_machine_metadata_for_setnames(mame_path, setnames),
-        hbmame: load_mame_machine_metadata_for_setnames(hbmame_path, setnames),
-        ..load_mister_arcade_metadata(mame_path)
+        mame,
+        hbmame,
+        ..mister
     }
 }
 
