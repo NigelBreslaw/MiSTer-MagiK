@@ -10348,6 +10348,10 @@ fn gui_counter_ratio(numerator: u64, denominator: u64) -> f64 {
 struct GuiPmuCounters {
     cycles: u64,
     instructions: u64,
+    speculative_instructions: u64,
+    neon_instructions: u64,
+    neon_clock_cycles: u64,
+    data_dependent_stall_cycles: u64,
     l1d_accesses: u64,
     l1d_refills: u64,
     branches: u64,
@@ -10363,34 +10367,68 @@ impl GuiPmuCounters {
         self.instructions = self
             .instructions
             .saturating_add(counters["instructions"].as_u64().unwrap_or(0));
-        self.l1d_accesses = self
-            .l1d_accesses
-            .saturating_add(counters["l1d_accesses"].as_u64().unwrap_or(0));
-        self.l1d_refills = self
-            .l1d_refills
-            .saturating_add(counters["l1d_refills"].as_u64().unwrap_or(0));
+        self.speculative_instructions = self
+            .speculative_instructions
+            .saturating_add(counters["speculative-instructions"].as_u64().unwrap_or(0));
+        self.neon_instructions = self
+            .neon_instructions
+            .saturating_add(counters["neon-instructions"].as_u64().unwrap_or(0));
+        self.neon_clock_cycles = self
+            .neon_clock_cycles
+            .saturating_add(counters["neon-clock-cycles"].as_u64().unwrap_or(0));
+        self.data_dependent_stall_cycles = self.data_dependent_stall_cycles.saturating_add(
+            counters["data-dependent-stall-cycles"]
+                .as_u64()
+                .unwrap_or(0),
+        );
+        self.l1d_accesses = self.l1d_accesses.saturating_add(counter_value(
+            counters,
+            "l1d-accesses",
+            "l1d_accesses",
+        ));
+        self.l1d_refills =
+            self.l1d_refills
+                .saturating_add(counter_value(counters, "l1d-refills", "l1d_refills"));
         self.branches = self
             .branches
             .saturating_add(counters["branches"].as_u64().unwrap_or(0));
-        self.branch_mispredicts = self
-            .branch_mispredicts
-            .saturating_add(counters["branch_mispredicts"].as_u64().unwrap_or(0));
+        self.branch_mispredicts = self.branch_mispredicts.saturating_add(counter_value(
+            counters,
+            "branch-mispredicts",
+            "branch_mispredicts",
+        ));
     }
 
     fn summary(self, frame_count: usize) -> Value {
         json!({
             "cycles": self.cycles,
             "instructions": self.instructions,
+            "speculative_instructions": self.speculative_instructions,
+            "neon_instructions": self.neon_instructions,
+            "neon_clock_cycles": self.neon_clock_cycles,
+            "data_dependent_stall_cycles": self.data_dependent_stall_cycles,
             "l1d_accesses": self.l1d_accesses,
             "l1d_refills": self.l1d_refills,
             "branches": self.branches,
             "branch_mispredicts": self.branch_mispredicts,
             "cycles_per_frame": gui_counter_ratio(self.cycles, frame_count as u64),
             "instructions_per_cycle": gui_counter_ratio(self.instructions, self.cycles),
+            "speculative_instructions_per_cycle": gui_counter_ratio(self.speculative_instructions, self.cycles),
+            "neon_instruction_share": gui_counter_ratio(self.neon_instructions, self.speculative_instructions),
+            "neon_instructions_per_active_cycle": gui_counter_ratio(self.neon_instructions, self.neon_clock_cycles),
+            "neon_clock_duty": gui_counter_ratio(self.neon_clock_cycles, self.cycles),
+            "data_dependent_stall_ratio": gui_counter_ratio(self.data_dependent_stall_cycles, self.cycles),
             "l1d_refill_ratio": gui_counter_ratio(self.l1d_refills, self.l1d_accesses),
             "branch_mispredict_ratio": gui_counter_ratio(self.branch_mispredicts, self.branches),
         })
     }
+}
+
+fn counter_value(counters: &Value, name: &str, legacy_name: &str) -> u64 {
+    counters[name]
+        .as_u64()
+        .or_else(|| counters[legacy_name].as_u64())
+        .unwrap_or(0)
 }
 
 fn gui_pmu_summary(profile: &Value) -> Result<Value> {
@@ -29813,10 +29851,40 @@ mod tests {
             summary["pmu"]["counters"]["total"]["instructions_per_cycle"],
             0.75
         );
+        assert_eq!(summary["pmu"]["counters"]["total"]["l1d_refill_ratio"], 0.1);
+        assert_eq!(
+            summary["pmu"]["counters"]["total"]["branch_mispredict_ratio"],
+            0.1
+        );
         assert_eq!(
             summary["control"]["copy_amplification"]["invalid_to_damage_ratio"],
             1.0
         );
+    }
+
+    #[test]
+    fn gui_pmu_summary_reports_event_keyed_neon_metrics() {
+        let record = json!({
+            "counters": {
+                "counters": {
+                    "cycles": 100,
+                    "speculative-instructions": 80,
+                    "neon-instructions": 20,
+                    "neon-clock-cycles": 50,
+                    "data-dependent-stall-cycles": 25,
+                    "l1d-accesses": 10,
+                    "l1d-refills": 2,
+                }
+            }
+        });
+        let mut counters = GuiPmuCounters::default();
+        counters.add_record(&record);
+        let summary = counters.summary(1);
+        assert_eq!(summary["neon_instruction_share"], 0.25);
+        assert_eq!(summary["neon_instructions_per_active_cycle"], 0.4);
+        assert_eq!(summary["neon_clock_duty"], 0.5);
+        assert_eq!(summary["data_dependent_stall_ratio"], 0.25);
+        assert_eq!(summary["l1d_refill_ratio"], 0.2);
     }
 
     #[test]
