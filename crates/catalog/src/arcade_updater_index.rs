@@ -85,9 +85,14 @@ impl ArcadeUpdaterIndex {
     }
 
     pub fn read(path: &Path) -> Result<Self, String> {
+        Self::read_with_file_sha256(path).map(|(index, _)| index)
+    }
+
+    pub fn read_with_file_sha256(path: &Path) -> Result<(Self, String), String> {
         let bytes = std::fs::read(path)
             .map_err(|error| format!("read Arcade updater index {}: {error}", path.display()))?;
-        Self::decode(&bytes)
+        let file_sha256 = hex(&Sha256::digest(&bytes));
+        Self::decode(&bytes).map(|index| (index, file_sha256))
     }
 
     pub fn write(&self, path: &Path) -> Result<u64, String> {
@@ -214,5 +219,22 @@ mod tests {
         decoded[position] = b'x';
         let corrupt = lz4_flex::compress_prepend_size(&decoded);
         assert!(ArcadeUpdaterIndex::decode(&corrupt).is_err());
+    }
+
+    #[test]
+    fn file_identity_matches_the_encoded_sidecar() {
+        let path = std::env::temp_dir().join(format!(
+            "mister-magik-arcade-updater-index-{}-{}.lz4b",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        ));
+        let encoded = index().encode().unwrap();
+        std::fs::write(&path, &encoded).unwrap();
+
+        let (loaded, sha256) = ArcadeUpdaterIndex::read_with_file_sha256(&path).unwrap();
+
+        let _ = std::fs::remove_file(path);
+        assert_eq!(loaded, index());
+        assert_eq!(sha256, hex(&Sha256::digest(encoded)));
     }
 }

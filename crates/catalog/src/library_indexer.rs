@@ -935,6 +935,10 @@ fn is_arcade_bootstrap_scan(roots: &[String], durable_resume: bool) -> bool {
 struct ArcadeMraPrefetch {
     inspections: HashMap<PathBuf, Option<media_metadata::MraInspection>>,
     index_status: &'static str,
+    index_path: Option<String>,
+    index_error: Option<String>,
+    index_rows: usize,
+    index_file_sha256: Option<String>,
     index_hits: usize,
     index_misses: usize,
     fallback_reads: usize,
@@ -958,6 +962,10 @@ fn prefetch_arcade_mra_metadata(
         return ArcadeMraPrefetch {
             inspections: HashMap::new(),
             index_status: "unused",
+            index_path: updater_index_path.map(|path| path.display().to_string()),
+            index_error: None,
+            index_rows: 0,
+            index_file_sha256: None,
             index_hits: 0,
             index_misses: 0,
             fallback_reads: 0,
@@ -966,16 +974,27 @@ fn prefetch_arcade_mra_metadata(
     }
 
     let load_started = Instant::now();
-    let loaded_index = updater_index_path
-        .and_then(|path| crate::arcade_updater_index::ArcadeUpdaterIndex::read(path).ok());
-    let index_load_us = load_started.elapsed().as_micros() as u64;
-    let index_status = if loaded_index.is_some() {
-        "loaded"
-    } else if updater_index_path.is_some() {
-        "invalid-or-missing"
-    } else {
-        "not-configured"
+    let index_path = updater_index_path.map(|path| path.display().to_string());
+    let (loaded_index, index_status, index_error, index_file_sha256) = match updater_index_path {
+        None => (None, "disabled", None, None),
+        Some(path) => {
+            match crate::arcade_updater_index::ArcadeUpdaterIndex::read_with_file_sha256(path) {
+                Ok((index, sha256)) => (Some(index), "loaded", None, Some(sha256)),
+                Err(error) => {
+                    let status = if std::fs::metadata(path).is_err_and(|metadata_error| {
+                        metadata_error.kind() == std::io::ErrorKind::NotFound
+                    }) {
+                        "missing"
+                    } else {
+                        "invalid"
+                    };
+                    (None, status, Some(error), None)
+                }
+            }
+        }
     };
+    let index_load_us = load_started.elapsed().as_micros() as u64;
+    let index_rows = loaded_index.as_ref().map_or(0, |index| index.rows.len());
     let indexed_rows = loaded_index
         .map(|index| {
             index
@@ -1040,6 +1059,10 @@ fn prefetch_arcade_mra_metadata(
     ArcadeMraPrefetch {
         inspections,
         index_status,
+        index_path,
+        index_error,
+        index_rows,
+        index_file_sha256,
         index_hits,
         index_misses: fallback_paths.len(),
         fallback_reads: fallback_paths.len(),
@@ -1214,12 +1237,21 @@ fn scan_library_with_progress_and_events(
             "arcade_mra_prefetch",
             prefetch_t.elapsed().as_micros() as u64,
             format!(
-                "files={} successes={} failures={} workers={} index_status={} index_hits={} index_misses={} fallback_reads={} index_load_us={}",
+                "files={} successes={} failures={} workers={} index_status={} index_path={} index_error={} index_rows={} index_file_sha256={} index_hits={} index_misses={} fallback_reads={} index_load_us={}",
                 prefetched_arcade_mra.len(),
                 successes,
                 prefetched_arcade_mra.len().saturating_sub(successes),
                 ARCADE_MRA_READ_WORKERS.min(prefetch.fallback_reads),
                 prefetch.index_status,
+                prefetch.index_path.as_deref().unwrap_or("none"),
+                prefetch
+                    .index_error
+                    .as_deref()
+                    .map(sanitize_arcade_index_metric)
+                    .as_deref()
+                    .unwrap_or("none"),
+                prefetch.index_rows,
+                prefetch.index_file_sha256.as_deref().unwrap_or("none"),
                 prefetch.index_hits,
                 prefetch.index_misses,
                 prefetch.fallback_reads,
@@ -1936,6 +1968,19 @@ fn scan_library_with_progress_and_events(
     }
 }
 
+fn sanitize_arcade_index_metric(value: &str) -> String {
+    value
+        .chars()
+        .map(|character| {
+            if character.is_ascii_whitespace() {
+                '_'
+            } else {
+                character
+            }
+        })
+        .collect()
+}
+
 fn report_scan_target(
     scan_events: &mut ScanEventCallback<'_>,
     descriptor: &crate::catalog_scan::ScanTargetDescriptor,
@@ -2287,6 +2332,14 @@ mod timing_tests {
         };
 
         let indexed = prefetch_arcade_mra_metadata(&event(), Some(&index_path));
+        assert_eq!(indexed.index_status, "loaded");
+        assert_eq!(
+            indexed.index_path.as_deref(),
+            Some(index_path.to_str().unwrap())
+        );
+        assert_eq!(indexed.index_rows, 1);
+        assert_eq!(indexed.index_file_sha256.as_deref().map(str::len), Some(64));
+        assert!(indexed.index_error.is_none());
         assert_eq!(indexed.index_hits, 1);
         assert_eq!(indexed.fallback_reads, 0);
         assert_eq!(
@@ -2312,6 +2365,18 @@ mod timing_tests {
                 .as_deref(),
             Some("Local")
         );
+
+        let missing = prefetch_arcade_mra_metadata(&event(), Some(&root.join("missing.lz4b")));
+        assert_eq!(missing.index_status, "missing");
+        assert!(missing.index_error.is_some());
+        assert_eq!(missing.fallback_reads, 1);
+
+        let invalid_path = root.join("invalid.lz4b");
+        std::fs::write(&invalid_path, b"invalid").unwrap();
+        let invalid = prefetch_arcade_mra_metadata(&event(), Some(&invalid_path));
+        assert_eq!(invalid.index_status, "invalid");
+        assert!(invalid.index_error.is_some());
+        assert_eq!(invalid.fallback_reads, 1);
         let _ = std::fs::remove_dir_all(root);
     }
 

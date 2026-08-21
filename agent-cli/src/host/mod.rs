@@ -15285,6 +15285,7 @@ fn profile_installed_catalog_build_rebuild(
                 None,
                 CatalogBuildRebuildLegOptions {
                     exercise_arcade_ui: true,
+                    require_updater_index: false,
                     launcher_env: catalog_build_rebuild_launcher_env(),
                     runtime_command: catalog_build_rebuild_runtime_command,
                 },
@@ -15310,6 +15311,7 @@ fn profile_installed_catalog_build_rebuild(
                 Some(fresh_generation),
                 CatalogBuildRebuildLegOptions {
                     exercise_arcade_ui: true,
+                    require_updater_index: false,
                     launcher_env: catalog_build_rebuild_launcher_env(),
                     runtime_command: catalog_build_rebuild_runtime_command,
                 },
@@ -15487,6 +15489,7 @@ fn profile_installed_catalog_full_build_rebuild(
             None,
             CatalogBuildRebuildLegOptions {
                 exercise_arcade_ui: false,
+                require_updater_index: true,
                 launcher_env: catalog_full_build_rebuild_launcher_env(),
                 runtime_command: catalog_full_build_rebuild_runtime_command,
             },
@@ -15506,6 +15509,7 @@ fn profile_installed_catalog_full_build_rebuild(
             None,
             CatalogBuildRebuildLegOptions {
                 exercise_arcade_ui: false,
+                require_updater_index: true,
                 launcher_env: catalog_full_build_rebuild_launcher_env(),
                 runtime_command: catalog_full_build_rebuild_runtime_command,
             },
@@ -15524,6 +15528,7 @@ fn profile_installed_catalog_full_build_rebuild(
             Some(warm_clean_generation),
             CatalogBuildRebuildLegOptions {
                 exercise_arcade_ui: false,
+                require_updater_index: true,
                 launcher_env: catalog_full_build_rebuild_launcher_env(),
                 runtime_command: catalog_full_build_rebuild_runtime_command,
             },
@@ -16344,6 +16349,7 @@ fn run_catalog_attribution_trace_leg(
         minimum_generation,
         CatalogBuildRebuildLegOptions {
             exercise_arcade_ui: false,
+            require_updater_index: true,
             launcher_env: catalog_attribution_launcher_env(arm),
             runtime_command: catalog_attribution_runtime_command,
         },
@@ -16505,6 +16511,7 @@ fn run_catalog_attribution_streamline_leg(
             minimum_generation,
             CatalogBuildRebuildLegOptions {
                 exercise_arcade_ui: false,
+                require_updater_index: true,
                 launcher_env: catalog_attribution_launcher_env(CatalogAttributionArm::Streamline),
                 runtime_command: catalog_attribution_runtime_command,
             },
@@ -16571,6 +16578,7 @@ fn run_catalog_attribution_pair(
         None,
         CatalogBuildRebuildLegOptions {
             exercise_arcade_ui: false,
+            require_updater_index: true,
             launcher_env: catalog_attribution_launcher_env(arm),
             runtime_command: catalog_attribution_runtime_command,
         },
@@ -16589,6 +16597,7 @@ fn run_catalog_attribution_pair(
         Some(generation),
         CatalogBuildRebuildLegOptions {
             exercise_arcade_ui: false,
+            require_updater_index: true,
             launcher_env: catalog_attribution_launcher_env(arm),
             runtime_command: catalog_attribution_runtime_command,
         },
@@ -19135,6 +19144,7 @@ fn catalog_full_build_rebuild_launcher_env() -> Vec<(String, String)> {
 
 struct CatalogBuildRebuildLegOptions {
     exercise_arcade_ui: bool,
+    require_updater_index: bool,
     launcher_env: Vec<(String, String)>,
     runtime_command: fn(&str) -> String,
 }
@@ -19150,6 +19160,7 @@ fn run_catalog_build_rebuild_leg(
 ) -> Result<Value> {
     let CatalogBuildRebuildLegOptions {
         exercise_arcade_ui,
+        require_updater_index,
         launcher_env,
         runtime_command,
     } = options;
@@ -19180,6 +19191,8 @@ fn run_catalog_build_rebuild_leg(
     let mut interaction_telemetry_start = None;
     let mut interaction_telemetry_end = None;
     let mut interaction_complete = false;
+    let mut updater_index_evidence = None;
+    let mut updater_index_inspected_after_first_visible = false;
     let run_result = (|| -> Result<Value> {
         let (mut catalog, inspect_log, final_status) = loop {
             if attended_operation_interrupted() {
@@ -19196,6 +19209,17 @@ fn run_catalog_build_rebuild_leg(
                         > 0)
             {
                 first_visible_ms = Some(started.elapsed().as_millis() as u64);
+            }
+            if first_visible_ms.is_some() && !updater_index_inspected_after_first_visible {
+                updater_index_inspected_after_first_visible = true;
+                if let Some(log) = remote_read(session, "/tmp/mister-magik-slint.log")
+                    && let Some(evidence) = catalog_updater_index_evidence(&log)
+                {
+                    if require_updater_index {
+                        validate_catalog_updater_index_evidence(&evidence)?;
+                    }
+                    updater_index_evidence = Some(evidence);
+                }
             }
             if !automation_hold_sent
                 && status.get("input_enabled").and_then(Value::as_bool) == Some(true)
@@ -19349,6 +19373,15 @@ fn run_catalog_build_rebuild_leg(
         )?;
         let launcher_log = remote_read(session, "/tmp/mister-magik-slint.log")
             .ok_or_else(|| format!("{label} catalog benchmark has no launcher log"))?;
+        if updater_index_evidence.is_none() {
+            updater_index_evidence = catalog_updater_index_evidence(&launcher_log);
+        }
+        if require_updater_index {
+            let evidence = updater_index_evidence.as_ref().ok_or_else(|| {
+                format!("{label} catalog benchmark has no updater-index prefetch evidence")
+            })?;
+            validate_catalog_updater_index_evidence(evidence)?;
+        }
         if !catalog_benchmark_presented_home_arcade(&launcher_log) {
             return Err(format!(
                 "{label} catalog benchmark did not present Home with the Arcade system selected"
@@ -19380,6 +19413,7 @@ fn run_catalog_build_rebuild_leg(
         },
         "catalog": catalog,
         "phase_evidence": phase_evidence,
+        "updater_index": updater_index_evidence,
         "ui": ui,
         }))
     })();
@@ -19580,6 +19614,77 @@ fn catalog_phase_metric(value: &str) -> Value {
         .parse::<u64>()
         .map(Value::from)
         .unwrap_or_else(|_| Value::String(value.to_owned()))
+}
+
+fn catalog_updater_index_evidence(log: &str) -> Option<Value> {
+    const PREFIX: &str = "library_scan_timing\tarcade_mra_prefetch\t";
+    log.lines().rev().find_map(|line| {
+        let offset = line.find(PREFIX)?;
+        let mut fields = line[offset..].split('\t');
+        (fields.next()? == "library_scan_timing").then_some(())?;
+        (fields.next()? == "arcade_mra_prefetch").then_some(())?;
+        let prefetch_us = fields.next()?.parse::<u64>().ok()?;
+        let mut metrics = serde_json::Map::new();
+        for token in fields.flat_map(str::split_ascii_whitespace) {
+            if let Some((key, value)) = token.split_once('=') {
+                metrics.insert(key.to_owned(), catalog_phase_metric(value));
+            }
+        }
+        Some(json!({
+            "schema": "mister-magik-arcade-updater-index-evidence-v1",
+            "prefetch_us": prefetch_us,
+            "status": metrics.get("index_status"),
+            "path": metrics.get("index_path"),
+            "error": metrics.get("index_error"),
+            "rows": metrics.get("index_rows"),
+            "file_sha256": metrics.get("index_file_sha256"),
+            "hits": metrics.get("index_hits"),
+            "misses": metrics.get("index_misses"),
+            "fallback_reads": metrics.get("fallback_reads"),
+            "files": metrics.get("files"),
+            "index_load_us": metrics.get("index_load_us"),
+        }))
+    })
+}
+
+fn validate_catalog_updater_index_evidence(evidence: &Value) -> Result<()> {
+    let status = evidence
+        .get("status")
+        .and_then(Value::as_str)
+        .unwrap_or("missing-evidence");
+    if status != "loaded" {
+        let path = evidence
+            .get("path")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown");
+        let reason = evidence
+            .get("error")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown");
+        return Err(format!(
+            "whole-card catalog qualification requires the active updater index: status={status} path={path} reason={reason}"
+        )
+        .into());
+    }
+    let rows = evidence.get("rows").and_then(Value::as_u64).unwrap_or(0);
+    let files = evidence.get("files").and_then(Value::as_u64).unwrap_or(0);
+    let hits = evidence.get("hits").and_then(Value::as_u64).unwrap_or(0);
+    let file_sha256 = evidence
+        .get("file_sha256")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if rows == 0 || file_sha256.len() != 64 {
+        return Err(
+            "whole-card catalog qualification has incomplete updater-index identity".into(),
+        );
+    }
+    if files > 0 && hits == 0 {
+        return Err(format!(
+            "whole-card catalog qualification matched no installed MRAs against {rows} updater-index rows"
+        )
+        .into());
+    }
+    Ok(())
 }
 
 fn catalog_build_rebuild_ui_summary(
@@ -32997,6 +33102,42 @@ H: Handlers=event3 js0"#
         assert!(error.contains("run interrupted"));
         assert!(error.contains("cleanup failed"));
         assert!(error.contains("restore failed"));
+    }
+
+    #[test]
+    fn whole_card_catalog_requires_loaded_used_updater_index_evidence() {
+        let log = concat!(
+            "1\tlibrary_scan_timing\tarcade_mra_prefetch\t7906000\t",
+            "files=3004 successes=3004 failures=0 workers=8 ",
+            "index_status=loaded index_path=/media/fat/mister-magik-dev/app/arcade-updater-index-v1.lz4b ",
+            "index_error=none index_rows=968 ",
+            "index_file_sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa ",
+            "index_hits=967 index_misses=2037 fallback_reads=2037 index_load_us=14000\n",
+        );
+        let evidence = catalog_updater_index_evidence(log).expect("updater index evidence");
+
+        validate_catalog_updater_index_evidence(&evidence).unwrap();
+        assert_eq!(evidence["status"], "loaded");
+        assert_eq!(evidence["rows"], 968);
+        assert_eq!(evidence["hits"], 967);
+        assert_eq!(evidence["fallback_reads"], 2037);
+        assert_eq!(evidence["index_load_us"], 14000);
+
+        let invalid = log.replace("index_status=loaded", "index_status=invalid");
+        let error = validate_catalog_updater_index_evidence(
+            &catalog_updater_index_evidence(&invalid).unwrap(),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("status=invalid"));
+
+        let unused = log.replace("index_hits=967", "index_hits=0");
+        let error = validate_catalog_updater_index_evidence(
+            &catalog_updater_index_evidence(&unused).unwrap(),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("matched no installed MRAs"));
     }
 
     #[test]
