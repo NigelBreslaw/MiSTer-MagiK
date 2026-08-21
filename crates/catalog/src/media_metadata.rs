@@ -124,6 +124,7 @@ fn amigavision_launcher_discovery(file: &FoundFile, profile: &LaunchProfile) -> 
         year: None,
         setname: None,
         parent: None,
+        arcade_updater_metadata: None,
         covered_payload_path: None,
         prepared: amigavision_prepared_provenance(file),
         confidence: DiscoveryConfidence::CatalogMetadata,
@@ -199,6 +200,7 @@ pub(crate) fn collection_discoveries_from_listing_text(
             year: None,
             setname: None,
             parent: None,
+            arcade_updater_metadata: None,
             covered_payload_path: None,
             prepared: amigavision_prepared_provenance(file),
             confidence: DiscoveryConfidence::CatalogMetadata,
@@ -270,6 +272,8 @@ pub enum PrimaryRomRequirement {
 pub struct MraInspection {
     pub header: MraMetadata,
     pub primary_rom: PrimaryRomRequirement,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub catalog_metadata: Option<crate::arcade_updater_index::ArcadeUpdaterCatalogMetadata>,
 }
 
 #[derive(Default)]
@@ -381,6 +385,7 @@ pub(crate) fn inspect_mra_bytes(data: &[u8]) -> Result<MraInspection, String> {
     Ok(MraInspection {
         header,
         primary_rom,
+        catalog_metadata: None,
     })
 }
 

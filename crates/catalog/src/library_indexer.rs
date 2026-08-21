@@ -1056,6 +1056,7 @@ fn prefetch_arcade_mra_metadata(
                 Some(media_metadata::MraInspection {
                     header: row.header.clone(),
                     primary_rom: row.primary_rom.clone(),
+                    catalog_metadata: row.catalog_metadata.clone(),
                 }),
             );
             index_hits = index_hits.saturating_add(1);
@@ -1722,11 +1723,11 @@ fn scan_library_with_progress_and_events(
                         match rom_inventory.eligibility(&inspection.primary_rom) {
                             crate::arcade_rom_inventory::RomEligibility::Eligible => {
                                 arcade_mra_eligible = arcade_mra_eligible.saturating_add(1);
-                                Some(Some(inspection.header))
+                                Some(Some(inspection))
                             }
                             _ if !enforce_arcade_rom_presence => {
                                 arcade_mra_eligible = arcade_mra_eligible.saturating_add(1);
-                                Some(Some(inspection.header))
+                                Some(Some(inspection))
                             }
                             crate::arcade_rom_inventory::RomEligibility::Missing => {
                                 arcade_mra_missing_rom = arcade_mra_missing_rom.saturating_add(1);
@@ -2366,6 +2367,13 @@ mod timing_tests {
                 ..media_metadata::MraMetadata::default()
             },
             primary_rom: media_metadata::PrimaryRomRequirement::None,
+            catalog_metadata: Some(crate::arcade_updater_index::ArcadeUpdaterCatalogMetadata {
+                identity_id: "fixture".to_string(),
+                family_id: "fixture-parent".to_string(),
+                title: "Indexed title".to_string(),
+                category: "Platform".to_string(),
+                ..crate::arcade_updater_index::ArcadeUpdaterCatalogMetadata::default()
+            }),
         })
         .write(&index_path)
         .unwrap();
@@ -2400,6 +2408,15 @@ mod timing_tests {
                 .as_deref(),
             Some("Indexed")
         );
+        assert_eq!(
+            indexed.inspections[&mra]
+                .as_ref()
+                .unwrap()
+                .catalog_metadata
+                .as_ref()
+                .map(|metadata| metadata.family_id.as_str()),
+            Some("fixture-parent")
+        );
 
         std::fs::write(&mra, [local.as_slice(), b" "].concat()).unwrap();
         let fallback = prefetch_arcade_mra_metadata(&event(), Some(&index_path));
@@ -2414,6 +2431,13 @@ mod timing_tests {
                 .name
                 .as_deref(),
             Some("Local")
+        );
+        assert!(
+            fallback.inspections[&mra]
+                .as_ref()
+                .unwrap()
+                .catalog_metadata
+                .is_none()
         );
 
         let missing = prefetch_arcade_mra_metadata(&event(), Some(&root.join("missing.lz4b")));

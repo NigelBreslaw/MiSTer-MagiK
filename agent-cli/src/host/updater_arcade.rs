@@ -116,6 +116,7 @@ pub(super) fn build(input_manifest: &Path, output: &Path) -> Result<Value, Strin
                     md5,
                     header: inspection.header,
                     primary_rom: inspection.primary_rom,
+                    catalog_metadata: None,
                 },
             );
             count = count.saturating_add(1);

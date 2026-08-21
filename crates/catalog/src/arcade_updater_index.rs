@@ -28,6 +28,20 @@ pub struct ArcadeUpdaterRow {
     pub md5: String,
     pub header: MraHeader,
     pub primary_rom: PrimaryRomRequirement,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub catalog_metadata: Option<ArcadeUpdaterCatalogMetadata>,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq, Deserialize, Serialize)]
+pub struct ArcadeUpdaterCatalogMetadata {
+    pub identity_id: String,
+    pub family_id: String,
+    pub title: String,
+    pub year: Option<u16>,
+    pub manufacturer: String,
+    pub category: String,
+    pub players: Option<u8>,
+    pub control: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Deserialize, Serialize)]
@@ -144,8 +158,39 @@ impl ArcadeUpdaterIndex {
             {
                 return Err(format!("invalid Arcade updater row {}", row.path));
             }
+            if row.catalog_metadata.as_ref().is_some_and(|metadata| {
+                metadata.identity_id.is_empty()
+                    || metadata.family_id.is_empty()
+                    || metadata.title.is_empty()
+            }) {
+                return Err(format!(
+                    "incomplete Arcade catalog metadata for {}",
+                    row.path
+                ));
+            }
         }
         Ok(())
+    }
+
+    pub fn enrich_catalog_metadata(&mut self, mame_path: &Path, hbmame_path: &Path) {
+        let setnames = self
+            .rows
+            .iter()
+            .filter_map(|row| row.header.setname.as_deref())
+            .map(crate::library_db::normalize_id)
+            .collect();
+        let metadata = crate::software_identity::load_arcade_machine_metadata_for_setnames(
+            mame_path,
+            hbmame_path,
+            &setnames,
+        );
+        for row in &mut self.rows {
+            row.catalog_metadata = crate::software_identity::updater_arcade_catalog_metadata(
+                &row.path,
+                &row.header,
+                &metadata,
+            );
+        }
     }
 }
 
@@ -202,6 +247,7 @@ mod tests {
                     namespace: RomNamespace::Mame,
                     setname: "puckman".to_string(),
                 },
+                catalog_metadata: None,
             }],
         }
     }

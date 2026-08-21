@@ -30,6 +30,9 @@ pub(crate) struct GameDiscovery {
     pub(crate) year: Option<u16>,
     pub(crate) setname: Option<String>,
     pub(crate) parent: Option<String>,
+    #[serde(default)]
+    pub(crate) arcade_updater_metadata:
+        Option<crate::arcade_updater_index::ArcadeUpdaterCatalogMetadata>,
     pub(crate) covered_payload_path: Option<String>,
     pub(crate) prepared: Option<PreparedLaunchProvenance>,
     pub(crate) confidence: DiscoveryConfidence,
@@ -202,13 +205,18 @@ pub(crate) fn discovery_from_profile_file_with_prepared_index_and_mra_metadata(
     rule: &PayloadRule,
     profiles: &[LaunchProfile],
     prepared_index: Option<&prepared_collections::PreparedPayloadIndex>,
-    prefetched_mra: Option<Option<media_metadata::MraMetadata>>,
+    prefetched_mra: Option<Option<media_metadata::MraInspection>>,
 ) -> GameDiscovery {
     let source_path = file.path.display().to_string();
     if file.ext == "mra"
-        && let Some(mra) =
-            prefetched_mra.unwrap_or_else(|| media_metadata::read_mra_metadata(&file.path))
+        && let Some(inspection) =
+            prefetched_mra.unwrap_or_else(|| media_metadata::inspect_mra_path(&file.path).ok())
     {
+        let media_metadata::MraInspection {
+            header: mra,
+            catalog_metadata,
+            ..
+        } = inspection;
         let core_id = mra
             .rbf
             .as_deref()
@@ -237,6 +245,7 @@ pub(crate) fn discovery_from_profile_file_with_prepared_index_and_mra_metadata(
             year: mra.year.and_then(|s| s.parse::<u16>().ok()),
             setname: mra.setname,
             parent: mra.parent,
+            arcade_updater_metadata: catalog_metadata,
             covered_payload_path: None,
             prepared: None,
             confidence: if mra.platform.is_some() {
@@ -344,6 +353,7 @@ pub(crate) fn discovery_from_profile_file_with_prepared_index_and_mra_metadata(
             year: None,
             setname,
             parent: None,
+            arcade_updater_metadata: None,
             covered_payload_path,
             prepared,
             confidence: DiscoveryConfidence::PayloadPath,
@@ -381,6 +391,7 @@ pub(crate) fn discovery_from_profile_file_with_prepared_index_and_mra_metadata(
         year: None,
         setname: payload_setname,
         parent: None,
+        arcade_updater_metadata: None,
         covered_payload_path: None,
         prepared,
         confidence: profile_confidence(rule),
@@ -406,6 +417,7 @@ pub(crate) fn discovery_from_profile_archive_entry(
         year: None,
         setname: media_metadata::parenthesized_setname(&entry.entry_path),
         parent: None,
+        arcade_updater_metadata: None,
         covered_payload_path: None,
         prepared: None,
         confidence: match rule.provenance.kind {
@@ -815,6 +827,7 @@ mod tests {
                 year: None,
                 setname: None,
                 parent: None,
+                arcade_updater_metadata: None,
                 covered_payload_path: Some("/media/fat/games/NES/Mario.nes".to_string()),
                 prepared: None,
                 confidence: DiscoveryConfidence::PayloadPath,
@@ -852,6 +865,7 @@ mod tests {
             year: None,
             setname: None,
             parent: None,
+            arcade_updater_metadata: None,
             covered_payload_path: None,
             prepared: None,
             confidence: DiscoveryConfidence::MraCore,

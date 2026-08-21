@@ -7138,6 +7138,7 @@ mod tests {
             year: None,
             setname: Some("kof99".to_string()),
             parent: None,
+            arcade_updater_metadata: None,
             covered_payload_path: None,
             prepared: None,
             confidence: crate::game_discovery::DiscoveryConfidence::ArchiveToc,

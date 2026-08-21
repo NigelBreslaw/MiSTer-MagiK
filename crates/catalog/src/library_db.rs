@@ -48,11 +48,11 @@ use crate::preview_worker;
 use crate::runtime_thread::{RuntimeThreadRole, apply_runtime_thread_policy};
 use crate::software_identity::{
     ArcadeMachineMetadata, MachineMetadataRows, MameSoftwareMetadata, PreviewArchivePaths,
-    SoftwareHashCache, console_preview_asset, load_arcade_machine_metadata_for_setnames,
-    load_mame_machine_metadata_for_setnames, load_mame_software_metadata,
-    mame_identity_for_discovery, mame_identity_projection, mame_software_identity_for_discovery,
-    mister_arcade_metadata_for_discovery, software_list_for_platform,
-    write_simple_mame_metadata_db,
+    SoftwareHashCache, console_preview_asset, load_arcade_machine_metadata_for_fallbacks,
+    load_arcade_machine_metadata_for_setnames, load_mame_machine_metadata_for_setnames,
+    load_mame_software_metadata, mame_identity_for_discovery, mame_identity_projection,
+    mame_software_identity_for_discovery, mister_arcade_metadata_for_discovery,
+    software_list_for_platform, write_simple_mame_metadata_db,
 };
 use crate::sqlite_catalog;
 use rusqlite::Connection;
@@ -2082,6 +2082,8 @@ fn build_catalog_from_scan_with_sources_and_preferred_and_progress(
         .collect::<HashSet<_>>();
     let arcade_setnames =
         arcade_metadata_setnames(discoveries.values().map(|index| &scan.discoveries[*index]));
+    let arcade_mra_names =
+        arcade_metadata_mra_names(discoveries.values().map(|index| &scan.discoveries[*index]));
     let software_metadata = if requires_mame_software_metadata(scan, discoveries) {
         with_catalog_progress_heartbeat(
             progress,
@@ -2095,10 +2097,11 @@ fn build_catalog_from_scan_with_sources_and_preferred_and_progress(
         progress,
         "Preparing library — loading arcade metadata",
         || {
-            load_arcade_machine_metadata_for_setnames(
+            load_arcade_machine_metadata_for_fallbacks(
                 sources.mame_sqlite_path,
                 sources.hbmame_sqlite_path,
                 &arcade_setnames,
+                &arcade_mra_names,
             )
         },
     );
@@ -2405,12 +2408,22 @@ impl CatalogProjectionBuildContext<'_> {
             },
         );
         if is_arcade
-            && let Some(identity_id) = mame_identity_for_discovery(discovery)
-            && let Some(metadata) =
-                mister_arcade_metadata_for_discovery(self.arcade_metadata, discovery, &identity_id)
-            && !metadata.title.is_empty()
+            && let Some(title) = discovery
+                .arcade_updater_metadata
+                .as_ref()
+                .map(|metadata| metadata.title.as_str())
+                .or_else(|| {
+                    let identity_id = mame_identity_for_discovery(discovery)?;
+                    mister_arcade_metadata_for_discovery(
+                        self.arcade_metadata,
+                        discovery,
+                        &identity_id,
+                    )
+                    .map(|metadata| metadata.title.as_str())
+                })
+            && !title.is_empty()
         {
-            row.game.title = metadata.title.clone().into();
+            row.game.title = title.into();
         }
         Some(CatalogProjectionForDiscovery {
             row,
@@ -2589,7 +2602,28 @@ fn arcade_metadata_setnames<'a>(
     discoveries: impl Iterator<Item = &'a GameDiscovery>,
 ) -> HashSet<String> {
     discoveries
+        .filter(|discovery| discovery.arcade_updater_metadata.is_none())
         .filter_map(mame_identity_for_discovery)
+        .collect()
+}
+
+fn arcade_metadata_mra_names<'a>(
+    discoveries: impl Iterator<Item = &'a GameDiscovery>,
+) -> HashSet<String> {
+    discoveries
+        .filter(|discovery| discovery.arcade_updater_metadata.is_none())
+        .filter(|discovery| {
+            matches!(
+                discovery.source_kind,
+                crate::game_discovery::DiscoverySourceKind::Mra
+            )
+        })
+        .filter_map(|discovery| {
+            Path::new(&discovery.source_path)
+                .file_name()
+                .and_then(|name| name.to_str())
+                .map(str::to_ascii_lowercase)
+        })
         .collect()
 }
 
@@ -2598,6 +2632,23 @@ fn catalog_arcade_projection_fields_for_discovery(
     discovery: &GameDiscovery,
     arcade_metadata: &ArcadeMachineMetadata,
 ) -> (String, String, String, ArcadeGameMetadataKey) {
+    if let Some(metadata) = &discovery.arcade_updater_metadata {
+        let parent = (metadata.family_id != metadata.identity_id)
+            .then(|| metadata.family_id.clone())
+            .unwrap_or_default();
+        return (
+            metadata.identity_id.clone(),
+            parent,
+            metadata.family_id.clone(),
+            ArcadeGameMetadataKey {
+                year: metadata.year,
+                manufacturer: metadata.manufacturer.clone(),
+                category: metadata.category.clone(),
+                players: metadata.players,
+                control: metadata.control.clone(),
+            },
+        );
+    }
     if let Some(identity_id) = mame_identity_for_discovery(discovery) {
         let (family_id, _, year, manufacturer, players, control, _) = mame_identity_projection(
             &identity_id,
@@ -3190,10 +3241,68 @@ mod tests {
             year: None,
             setname: Some(setname.to_string()),
             parent: None,
+            arcade_updater_metadata: None,
             covered_payload_path: None,
             prepared: None,
             confidence: crate::game_discovery::DiscoveryConfidence::PayloadPath,
         }
+    }
+
+    #[test]
+    fn updater_arcade_metadata_matches_sqlite_projection_fields() {
+        let mut discovery = mra_discovery(1, "Puck Man (Japan)");
+        discovery.source_path = "/media/fat/_Arcade/Puck Man (Japan).mra".to_string();
+        discovery.launch_ref = discovery.source_path.clone();
+        discovery.setname = Some("puckmanj".to_string());
+        discovery.parent = Some("puckman".to_string());
+        let mut metadata = ArcadeMachineMetadata::default();
+        metadata.mame.insert(
+            "puckmanj".to_string(),
+            crate::software_identity::MameMachineMetadata {
+                parent_setname: Some("puckman".to_string()),
+                title: "Puck Man (Japan)".to_string(),
+                year: Some("1980".to_string()),
+                manufacturer: Some("Namco".to_string()),
+                players: Some(2),
+                control: Some("joystick".to_string()),
+            },
+        );
+        metadata.mister_by_setname.insert(
+            "puckmanj".to_string(),
+            crate::software_identity::MisterArcadeMetadata {
+                title: "Puck Man (JP)".to_string(),
+                category: "Maze".to_string(),
+                year: Some(1980),
+                manufacturer: "Namco".to_string(),
+                players: Some(2),
+                control: "4-way joystick".to_string(),
+            },
+        );
+        let legacy = catalog_arcade_projection_fields_for_discovery(
+            "arcade:puckmanj",
+            &discovery,
+            &metadata,
+        );
+        discovery.arcade_updater_metadata =
+            crate::software_identity::updater_arcade_catalog_metadata(
+                &discovery.source_path,
+                &crate::mra_header::MraHeader {
+                    name: Some(discovery.title.clone()),
+                    setname: discovery.setname.clone(),
+                    parent: discovery.parent.clone(),
+                    ..crate::mra_header::MraHeader::default()
+                },
+                &metadata,
+            );
+        let indexed = catalog_arcade_projection_fields_for_discovery(
+            "arcade:puckmanj",
+            &discovery,
+            &ArcadeMachineMetadata::default(),
+        );
+
+        assert_eq!(indexed, legacy);
+        assert!(arcade_metadata_setnames([&discovery].into_iter()).is_empty());
+        assert!(arcade_metadata_mra_names([&discovery].into_iter()).is_empty());
     }
 
     #[test]
@@ -3710,6 +3819,7 @@ mod tests {
             year: None,
             setname: None,
             parent: None,
+            arcade_updater_metadata: None,
             covered_payload_path: None,
             prepared: None,
             confidence: DiscoveryConfidence::ArchiveToc,
@@ -3732,6 +3842,7 @@ mod tests {
             year: None,
             setname: None,
             parent: None,
+            arcade_updater_metadata: None,
             covered_payload_path: None,
             prepared: None,
             confidence: DiscoveryConfidence::CatalogMetadata,
@@ -3753,6 +3864,7 @@ mod tests {
             year: None,
             setname: None,
             parent: None,
+            arcade_updater_metadata: None,
             covered_payload_path: None,
             prepared: None,
             confidence: DiscoveryConfidence::CatalogMetadata,
