@@ -4719,7 +4719,20 @@ fn wait_delivery_health(session: &Session, layout: &str, timeout: Duration) -> R
     let mut attempts = 0_u32;
     loop {
         attempts = attempts.saturating_add(1);
-        let output = exec(session, &command, true)?;
+        let output = match exec(session, &command, true) {
+            Ok(output) => output,
+            Err(_) if started.elapsed() < timeout => {
+                thread::sleep(Duration::from_millis(250));
+                continue;
+            }
+            Err(error) => {
+                return Err(format!(
+                    "delivery health transport failed after {attempts} attempts and {}ms: {error}",
+                    started.elapsed().as_millis()
+                )
+                .into());
+            }
+        };
         if let Some(error) = exec_failure_message("delivery health", &output) {
             if started.elapsed() >= timeout {
                 return Err(format!(
