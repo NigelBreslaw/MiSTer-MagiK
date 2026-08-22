@@ -990,6 +990,11 @@ mod imp {
             self.complete(next_frame, false);
         }
 
+        pub fn navigation_transition_keepalive_required(&self) -> bool {
+            self.trigger == Some(BoundedProfileTrigger::NavigationTransitions)
+                && matches!(self.state, State::Warming { .. } | State::Active { .. })
+        }
+
         fn complete(&mut self, next_frame: u64, include_orientation_route: bool) {
             let state = std::mem::replace(&mut self.state, State::Failed);
             let State::Active {
@@ -1205,6 +1210,10 @@ mod stub {
         pub fn begin_settings_navigation_transition(&mut self, _first_frame: u64) {}
 
         pub fn complete_settings_navigation_transitions(&mut self, _next_frame: u64) {}
+
+        pub fn navigation_transition_keepalive_required(&self) -> bool {
+            false
+        }
 
         pub fn begin_orientation_transitions(&mut self, _first_frame: u64) {}
 

@@ -6052,6 +6052,9 @@ pub(super) fn run_launcher_loop(
         gui_profiling.tick(Instant::now());
         let mut scheduler_phase = launcher_response_trace.scheduler_boundary();
         screensaver_cpu_profile.poll(frames);
+        if screensaver_cpu_profile.navigation_transition_keepalive_required() {
+            window.request_redraw();
+        }
         if catalog_publication_test.wait_for_first_frame_release(Instant::now(), start) {
             std::thread::sleep(Duration::from_millis(16));
             continue;
