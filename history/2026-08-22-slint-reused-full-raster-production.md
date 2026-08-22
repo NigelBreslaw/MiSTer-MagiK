@@ -101,3 +101,11 @@ A focused diagnostic keepalive recovery was delivered and tested at revision
 profiler never reached the warming/active state where a keepalive could apply.
 The recovery was therefore reverted. The dominant unresolved phase is earlier:
 the scripted route does not arm the bounded navigation profiler.
+
+After the explicit recovery revert, final Dev revision
+`405caabef6aa981b883545963f6a5fbe5dce9580` was delivered and rerun through
+ordinary selector-free `settled-composition`. It reported 17,553us combined
+recovery work, 942us subsequent recovery, zero duplicate full recovery rasters,
+the authoritative terminal PNG hash, and zero presentation faults:
+
+- `build/agent-benchmarks/settled-composition/1787400104/summary.json`
