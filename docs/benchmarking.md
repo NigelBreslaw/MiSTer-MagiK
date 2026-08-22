@@ -134,12 +134,14 @@ Catalog refresh is always off and is never forced by this scenario.
 
 `search` runs three complete `pac`, `street`, `capcom`, and `2 player` suites
 against one validated catalog generation, then qualifies one request through
-the production launcher dispatch path. Exact system IDs, ordinals, rank bits,
+the production launcher UI path. Exact system IDs, ordinals, rank bits,
 and autocomplete contents are hashed for every query. The timing report
 separates SQLite open, statement preparation, execution, and Rust work and
 records opens, prepares, faults, RSS, and HWM. The UI prerequisite is established
 by a fresh launcher with catalog refresh off; the scenario never enables forced
-background catalog work.
+background catalog work. The UI report records whether the request used the
+resident catalog projection or created a persisted-search worker; zero worker
+creation is valid when the resident projection owns the result.
 
 The Arcade velocity-scroll profiling scenarios default to the active display
 route. A typed arm also accepts `--route active`, `--route hdmi-landscape`,

@@ -2311,11 +2311,6 @@ fn evaluate_search_ui_summary(summary: &Value) -> AgentResult<()> {
         || summary.get("status").and_then(Value::as_str) != Some("ready")
         || summary.get("query").and_then(Value::as_str) != Some("A")
         || summary.get("results").and_then(Value::as_u64).unwrap_or(0) == 0
-        || summary
-            .get("worker_threads")
-            .and_then(Value::as_u64)
-            .unwrap_or(0)
-            == 0
     {
         return Err("persisted search UI verification did not reach ready results".into());
     }

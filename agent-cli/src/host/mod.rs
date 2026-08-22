@@ -15787,7 +15787,8 @@ fn verify_installed_search_ui(config: &NativeDeviceConfig, output_dir: &Path) ->
                     "query": "A",
                     "results": status["arcade_search_results"],
                     "elapsed_ms": started.elapsed().as_millis() as u64,
-                    "worker_threads": worker_threads,
+                    "worker_threads_observed": worker_threads,
+                    "result_source": if worker_threads == 0 { "resident-catalog" } else { "persisted-search-worker" },
                 }));
             }
             if status.get("arcade_search_status").and_then(Value::as_str) == Some("failed") {
