@@ -256,23 +256,23 @@ mod tests {
             .split_whitespace()
             .collect::<String>();
         let phase_start = source
-            .find("letmutroute_pending_launcher_input=||->bool{")
+            .find("let(input_phase_yielded,input_batch_empty)='input_phase:{")
             .expect("launcher input phase start");
-        let invocation = source[phase_start..]
-            .find("letinput_phase_yielded=route_pending_launcher_input();")
+        let phase_end = source[phase_start..]
+            .find("ifinput_phase_yielded{continue;}")
             .map(|offset| phase_start + offset)
-            .expect("launcher input phase invocation");
+            .expect("launcher input phase end");
         for marker in [
             "record_launcher_frame_phase!(LauncherFramePhase::InputCaptured)",
             "record_launcher_frame_phase!(LauncherFramePhase::InputConsumed)",
             "record_launcher_frame_phase!(LauncherFramePhase::InputRouted)",
         ] {
-            let offset = source[phase_start..invocation]
+            let offset = source[phase_start..phase_end]
                 .find(marker)
                 .unwrap_or_else(|| panic!("input phase omitted {marker}"));
-            assert!(phase_start + offset < invocation);
+            assert!(phase_start + offset < phase_end);
         }
-        assert!(source[invocation..].contains("ifinput_phase_yielded{continue;}"));
+        assert!(source[phase_start..phase_end].contains("(false,input_batch_empty)"));
     }
 
     #[test]
@@ -281,13 +281,13 @@ mod tests {
             .split_whitespace()
             .collect::<String>();
         let phase_start = source
-            .find("letmutroute_pending_launcher_input=||->bool{")
+            .find("let(input_phase_yielded,input_batch_empty)='input_phase:{")
             .expect("launcher input phase start");
-        let invocation = source[phase_start..]
-            .find("letinput_phase_yielded=route_pending_launcher_input();")
+        let phase_end = source[phase_start..]
+            .find("ifinput_phase_yielded{continue;}")
             .map(|offset| phase_start + offset)
-            .expect("launcher input phase invocation");
-        let phase = &source[phase_start..invocation];
+            .expect("launcher input phase end");
+        let phase = &source[phase_start..phase_end];
         for operation in [
             "pad.drain_input_batch()",
             "input_router.accept_batch(&input_batch)",

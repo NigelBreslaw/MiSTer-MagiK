@@ -7219,7 +7219,7 @@ pub(super) fn run_launcher_loop(
         scheduler_phase = launcher_response_trace
             .record_scheduler_interval("pre-input-view-housekeeping", scheduler_phase);
         record_launcher_frame_phase!(LauncherFramePhase::PreInputMaintenance);
-        let mut route_pending_launcher_input = || -> bool {
+        let (input_phase_yielded, input_batch_empty) = 'input_phase: {
             // Drain immediately before routing so catalog, timer, lifecycle,
             // and bridge housekeeping cannot sit between capture and dispatch.
             let drained_input = pad.drain_input_batch();
@@ -7227,6 +7227,7 @@ pub(super) fn run_launcher_loop(
             input_observation = drained_input.observation;
             launcher_response_trace.observe_drained_input(&drained_input);
             let input_batch = drained_input.batch;
+            let input_batch_empty = input_batch.events.is_empty();
             let input_route_pmu = launcher_response_trace.input_pmu_span(
                 !input_batch.events.is_empty(),
                 "launcher-response.input-route",
@@ -7366,7 +7367,7 @@ pub(super) fn run_launcher_loop(
                     record_launcher_frame_phase!(LauncherFramePhase::InputConsumed);
                     request_launcher_redraw!();
                     record_launcher_frame_phase!(LauncherFramePhase::Yielded);
-                    return true;
+                    break 'input_phase (true, input_batch_empty);
                 }
                 let active_device = pad.active_device();
                 let info = pad.info().clone();
@@ -8516,10 +8517,8 @@ pub(super) fn run_launcher_loop(
             record_launcher_frame_phase!(LauncherFramePhase::InputRouted);
             scheduler_phase =
                 launcher_response_trace.record_scheduler_interval("input-route", scheduler_phase);
-            false
+            (false, input_batch_empty)
         };
-        let input_phase_yielded = route_pending_launcher_input();
-        drop(route_pending_launcher_input);
         if input_phase_yielded {
             continue;
         }
@@ -9238,7 +9237,7 @@ pub(super) fn run_launcher_loop(
         scheduler_phase = launcher_response_trace
             .record_scheduler_interval("post-projection-background", scheduler_phase);
         if should_restart_for_urgent_input(
-            input_batch.events.is_empty(),
+            input_batch_empty,
             latency_critical_input_pending,
             input_observation_probe
                 .as_ref()
@@ -9906,7 +9905,7 @@ pub(super) fn run_launcher_loop(
         );
         if can_preempt_disposable_home_raster(
             nav.screen,
-            input_batch.events.is_empty(),
+            input_batch_empty,
             latency_critical_input_pending,
             input_observation_probe
                 .as_ref()
