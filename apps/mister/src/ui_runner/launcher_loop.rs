@@ -11631,6 +11631,7 @@ pub(super) fn run_launcher_loop(
                         scheduler_phase,
                     );
                     if route_input_early {
+                        drop(layer_target);
                         early_input_change_checkpoint = Some(EarlyInputChangeCheckpoint {
                             label: "latch-wait",
                             observed_at_us: crate::input_hub::monotonic_us(),
@@ -11648,7 +11649,11 @@ pub(super) fn run_launcher_loop(
                             early_input_change_checkpoint
                         );
                         input_routed_during_latch_wait = !input_batch_empty_during_wait;
-                        navigation_source_bridge_sync_pending |= input_routed_during_latch_wait;
+                        navigation_source_bridge_sync_pending |= input_routed_during_latch_wait
+                            || full_bridge_dirty
+                            || light_bridge_dirty;
+                        layer_target =
+                            LayerTarget::new_oriented_with_epoch(target, layout, layout_epoch);
                         request_launcher_redraw!();
                         pacer.wait()
                     } else {
