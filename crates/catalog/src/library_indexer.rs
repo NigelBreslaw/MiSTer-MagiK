@@ -316,6 +316,12 @@ struct TargetOffsets {
     entries: usize,
     ignored: usize,
     discoveries: usize,
+    candidates: usize,
+    arcade_mra_eligible: usize,
+    arcade_mra_missing_rom: usize,
+    arcade_mra_ambiguous: usize,
+    arcade_mra_malformed: usize,
+    first_discovery_reported: bool,
 }
 
 impl TargetOffsets {
@@ -334,7 +340,61 @@ impl TargetOffsets {
             entries: entries.len(),
             ignored,
             discoveries: discoveries.len(),
+            candidates: 0,
+            arcade_mra_eligible: 0,
+            arcade_mra_missing_rom: 0,
+            arcade_mra_ambiguous: 0,
+            arcade_mra_malformed: 0,
+            first_discovery_reported: false,
         }
+    }
+
+    fn with_counters(
+        mut self,
+        candidates: usize,
+        arcade_mra_eligible: usize,
+        arcade_mra_missing_rom: usize,
+        arcade_mra_ambiguous: usize,
+        arcade_mra_malformed: usize,
+        first_discovery_reported: bool,
+    ) -> Self {
+        self.candidates = candidates;
+        self.arcade_mra_eligible = arcade_mra_eligible;
+        self.arcade_mra_missing_rom = arcade_mra_missing_rom;
+        self.arcade_mra_ambiguous = arcade_mra_ambiguous;
+        self.arcade_mra_malformed = arcade_mra_malformed;
+        self.first_discovery_reported = first_discovery_reported;
+        self
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn rollback<F, N, C, E, D>(
+        self,
+        facts: &mut Vec<F>,
+        files: &mut Vec<N>,
+        containers: &mut Vec<C>,
+        entries: &mut Vec<E>,
+        ignored: &mut usize,
+        discoveries: &mut Vec<D>,
+        candidates: &mut usize,
+        arcade_mra_eligible: &mut usize,
+        arcade_mra_missing_rom: &mut usize,
+        arcade_mra_ambiguous: &mut usize,
+        arcade_mra_malformed: &mut usize,
+        first_discovery_reported: &mut bool,
+    ) {
+        facts.truncate(self.facts);
+        files.truncate(self.files);
+        containers.truncate(self.containers);
+        entries.truncate(self.entries);
+        *ignored = self.ignored;
+        discoveries.truncate(self.discoveries);
+        *candidates = self.candidates;
+        *arcade_mra_eligible = self.arcade_mra_eligible;
+        *arcade_mra_missing_rom = self.arcade_mra_missing_rom;
+        *arcade_mra_ambiguous = self.arcade_mra_ambiguous;
+        *arcade_mra_malformed = self.arcade_mra_malformed;
+        *first_discovery_reported = self.first_discovery_reported;
     }
 }
 
@@ -812,6 +872,21 @@ fn validate_target_fingerprints(
                     (
                         saved.target.ordinal,
                         Fingerprint::for_descriptor(&descriptor),
+                    )
+                });
+            }
+            DiscoveryEvent::TargetRestart(restart) => {
+                let original = completed.values().find(|saved| {
+                    saved.target.path == restart.descriptor.path.to_string_lossy()
+                        && saved
+                            .target
+                            .key
+                            .starts_with(&format!("{:?}:", restart.descriptor.kind))
+                });
+                current = original.map(|saved| {
+                    (
+                        saved.target.ordinal,
+                        Fingerprint::for_descriptor(&restart.descriptor),
                     )
                 });
             }
@@ -1324,8 +1399,8 @@ fn scan_library_with_progress_and_events(
     let mut first_discovery_reported = false;
     let mut discovered_systems = BTreeSet::new();
     let mut scanning_systems = BTreeSet::new();
-    let mut target_descriptor = None;
-    let mut target_offsets = None;
+    let mut target_descriptor: Option<catalog_scan::ScanTargetDescriptor> = None;
+    let mut target_offsets: Option<TargetOffsets> = None;
     let mut target_consumer_started_at: Option<Instant> = None;
     let mut target_consumer_first_work_us = None;
     let mut target_fingerprint = Fingerprint::new();
@@ -1349,6 +1424,37 @@ fn scan_library_with_progress_and_events(
             .receive_wait_us
             .saturating_add(receive_started.elapsed().as_micros() as u64);
         let Some(event) = event else {
+            if let (Some(descriptor), Some(offsets)) = (target_descriptor.as_ref(), target_offsets)
+            {
+                offsets.rollback(
+                    &mut game_dir_facts,
+                    &mut normal_files,
+                    &mut containers,
+                    &mut entries,
+                    &mut ignored_files,
+                    &mut discoveries,
+                    &mut idx,
+                    &mut arcade_mra_eligible,
+                    &mut arcade_mra_missing_rom,
+                    &mut arcade_mra_ambiguous,
+                    &mut arcade_mra_malformed,
+                    &mut first_discovery_reported,
+                );
+                crate::catalog_logln!(
+                    "catalog_target_abort_tsv\tordinal={}\treason=channel-terminated\tdiscoveries={}\tpath={}",
+                    descriptor.ordinal,
+                    discoveries.len(),
+                    descriptor
+                        .path
+                        .display()
+                        .to_string()
+                        .replace(['\t', '\n', '\r', ' '], "_"),
+                );
+                panic!(
+                    "catalog discovery channel terminated inside target {}",
+                    descriptor.ordinal
+                );
+            }
             break;
         };
         if target_consumer_first_work_us.is_none()
@@ -1382,6 +1488,10 @@ fn scan_library_with_progress_and_events(
         let mut done = false;
         let files = match event {
             DiscoveryEvent::TargetStart(descriptor) => {
+                assert!(
+                    target_descriptor.is_none(),
+                    "catalog target started before the prior target completed"
+                );
                 handoff_attribution.target_events =
                     handoff_attribution.target_events.saturating_add(1);
                 report_scan_target(
@@ -1396,14 +1506,24 @@ fn scan_library_with_progress_and_events(
                 last_target_heartbeat = Instant::now();
                 target_fingerprint = Fingerprint::for_descriptor(&descriptor);
                 target_checkpointable = true;
-                target_offsets = Some(TargetOffsets::capture(
-                    &game_dir_facts,
-                    &normal_files,
-                    &containers,
-                    &entries,
-                    ignored_files,
-                    &discoveries,
-                ));
+                target_offsets = Some(
+                    TargetOffsets::capture(
+                        &game_dir_facts,
+                        &normal_files,
+                        &containers,
+                        &entries,
+                        ignored_files,
+                        &discoveries,
+                    )
+                    .with_counters(
+                        idx,
+                        arcade_mra_eligible,
+                        arcade_mra_missing_rom,
+                        arcade_mra_ambiguous,
+                        arcade_mra_malformed,
+                        first_discovery_reported,
+                    ),
+                );
                 skip_target = false;
                 if let Some(state) = resume.as_mut()
                     && state
@@ -1467,20 +1587,74 @@ fn scan_library_with_progress_and_events(
                 target_consumer_first_work_us = None;
                 Vec::new()
             }
+            DiscoveryEvent::TargetRestart(restart) => {
+                handoff_attribution.target_events =
+                    handoff_attribution.target_events.saturating_add(1);
+                let active = target_descriptor
+                    .as_ref()
+                    .expect("catalog target restart must follow TargetStart");
+                assert_eq!(
+                    active, &restart.descriptor,
+                    "catalog target restart identity must match the active target"
+                );
+                let offsets =
+                    target_offsets.expect("catalog target restart must retain target offsets");
+                offsets.rollback(
+                    &mut game_dir_facts,
+                    &mut normal_files,
+                    &mut containers,
+                    &mut entries,
+                    &mut ignored_files,
+                    &mut discoveries,
+                    &mut idx,
+                    &mut arcade_mra_eligible,
+                    &mut arcade_mra_missing_rom,
+                    &mut arcade_mra_ambiguous,
+                    &mut arcade_mra_malformed,
+                    &mut first_discovery_reported,
+                );
+                profiles = plan.finalize_profiles(&game_dir_facts);
+                target_fingerprint = Fingerprint::for_descriptor(&restart.descriptor);
+                target_checkpointable = true;
+                skip_target = false;
+                target_consumer_started_at = Some(Instant::now());
+                target_consumer_first_work_us = None;
+                crate::catalog_logln!(
+                    "catalog_target_restart_tsv\tordinal={}\treason={}\tdiscoveries={}\tpath={}",
+                    restart.descriptor.ordinal,
+                    restart.reason.replace(['\t', '\n', '\r', ' '], "_"),
+                    discoveries.len(),
+                    restart
+                        .descriptor
+                        .path
+                        .display()
+                        .to_string()
+                        .replace(['\t', '\n', '\r', ' '], "_"),
+                );
+                report_scan_target(
+                    &mut scan_events,
+                    &restart.descriptor,
+                    target_count,
+                    priority,
+                    "restarted",
+                    restart.descriptor.ordinal,
+                    discoveries.len(),
+                );
+                Vec::new()
+            }
             DiscoveryEvent::TargetComplete(descriptor) => {
                 handoff_attribution.target_events =
                     handoff_attribution.target_events.saturating_add(1);
                 let ready_us = pipeline_started.elapsed().as_micros() as u64;
-                let offsets = target_offsets.unwrap_or_else(|| {
-                    TargetOffsets::capture(
-                        &game_dir_facts,
-                        &normal_files,
-                        &containers,
-                        &entries,
-                        ignored_files,
-                        &discoveries,
-                    )
-                });
+                let active = target_descriptor
+                    .as_ref()
+                    .expect("catalog target completion must follow TargetStart");
+                assert_eq!(
+                    active, &descriptor,
+                    "catalog target completion identity must match the active target"
+                );
+                let offsets =
+                    target_offsets.expect("catalog target completion must retain target offsets");
                 let target_systems = discoveries[offsets.discoveries..]
                     .iter()
                     .map(catalog_system_id_for_discovery)
@@ -1899,7 +2073,7 @@ fn scan_library_with_progress_and_events(
         "catalog_target_checkpoint_io_tsv\t{}",
         checkpoint_attribution.compact_detail()
     );
-    let _ = target_descriptor;
+    debug_assert!(target_descriptor.is_none());
     if discover_us == 0 {
         discover_us = discover_t.elapsed().as_micros() as u64;
     }
@@ -2489,6 +2663,190 @@ mod timing_tests {
         assert_eq!(arcade.calls, 2);
         assert_eq!(arcade.max_us, 30);
         assert_eq!(timing.file_discovery_breakdown["c64"]["crt"].calls, 1);
+    }
+
+    fn assert_target_restart_rolls_back(stage: &str) {
+        let offsets = TargetOffsets {
+            facts: 1,
+            files: 1,
+            containers: 1,
+            entries: 1,
+            ignored: 1,
+            discoveries: 1,
+            candidates: 1,
+            arcade_mra_eligible: 1,
+            arcade_mra_missing_rom: 1,
+            arcade_mra_ambiguous: 1,
+            arcade_mra_malformed: 1,
+            first_discovery_reported: false,
+        };
+        let mut facts = vec![1];
+        let mut files = vec![1];
+        let mut containers = vec![1];
+        let mut entries = vec![1];
+        let mut discoveries = vec![1];
+        match stage {
+            "before-first-entry" => {}
+            "mid-directory" => {
+                facts.push(2);
+                files.push(2);
+                discoveries.push(2);
+            }
+            "after-archive" => {
+                containers.push(2);
+                entries.push(2);
+                discoveries.push(2);
+            }
+            "before-completion" => {
+                facts.push(2);
+                files.push(2);
+                containers.push(2);
+                entries.push(2);
+                discoveries.push(2);
+            }
+            _ => unreachable!("unknown restart fixture"),
+        }
+        let mut ignored = 9;
+        let mut candidates = 9;
+        let mut arcade_mra_eligible = 9;
+        let mut arcade_mra_missing_rom = 9;
+        let mut arcade_mra_ambiguous = 9;
+        let mut arcade_mra_malformed = 9;
+        let mut first_discovery_reported = true;
+
+        offsets.rollback(
+            &mut facts,
+            &mut files,
+            &mut containers,
+            &mut entries,
+            &mut ignored,
+            &mut discoveries,
+            &mut candidates,
+            &mut arcade_mra_eligible,
+            &mut arcade_mra_missing_rom,
+            &mut arcade_mra_ambiguous,
+            &mut arcade_mra_malformed,
+            &mut first_discovery_reported,
+        );
+
+        assert_eq!(facts, vec![1]);
+        assert_eq!(files, vec![1]);
+        assert_eq!(containers, vec![1]);
+        assert_eq!(entries, vec![1]);
+        assert_eq!(discoveries, vec![1]);
+        assert_eq!(ignored, 1);
+        assert_eq!(candidates, 1);
+        assert_eq!(arcade_mra_eligible, 1);
+        assert_eq!(arcade_mra_missing_rom, 1);
+        assert_eq!(arcade_mra_ambiguous, 1);
+        assert_eq!(arcade_mra_malformed, 1);
+        assert!(!first_discovery_reported);
+    }
+
+    #[test]
+    fn target_restart_before_first_entry_preserves_prior_output() {
+        assert_target_restart_rolls_back("before-first-entry");
+    }
+
+    #[test]
+    fn target_restart_mid_directory_discards_partial_output() {
+        assert_target_restart_rolls_back("mid-directory");
+    }
+
+    #[test]
+    fn target_restart_after_archive_discards_container_output() {
+        assert_target_restart_rolls_back("after-archive");
+    }
+
+    #[test]
+    fn target_restart_before_completion_resets_every_counter() {
+        assert_target_restart_rolls_back("before-completion");
+    }
+
+    #[test]
+    fn injected_restart_produces_byte_identical_target_output() {
+        let offsets = TargetOffsets {
+            facts: 1,
+            files: 1,
+            containers: 1,
+            entries: 1,
+            ignored: 1,
+            discoveries: 1,
+            candidates: 1,
+            arcade_mra_eligible: 1,
+            arcade_mra_missing_rom: 0,
+            arcade_mra_ambiguous: 0,
+            arcade_mra_malformed: 0,
+            first_discovery_reported: true,
+        };
+        let baseline = serde_json::to_vec(&(
+            vec![1, 2],
+            vec![1, 2],
+            vec![1, 2],
+            vec![1, 2],
+            2usize,
+            vec![1, 2],
+        ))
+        .unwrap();
+        let mut facts = vec![1, 99];
+        let mut files = vec![1, 99];
+        let mut containers = vec![1, 99];
+        let mut entries = vec![1, 99];
+        let mut ignored = 9;
+        let mut discoveries = vec![1, 99];
+        let mut candidates = 9;
+        let mut eligible = 9;
+        let mut missing = 9;
+        let mut ambiguous = 9;
+        let mut malformed = 9;
+        let mut first_reported = false;
+        offsets.rollback(
+            &mut facts,
+            &mut files,
+            &mut containers,
+            &mut entries,
+            &mut ignored,
+            &mut discoveries,
+            &mut candidates,
+            &mut eligible,
+            &mut missing,
+            &mut ambiguous,
+            &mut malformed,
+            &mut first_reported,
+        );
+        facts.push(2);
+        files.push(2);
+        containers.push(2);
+        entries.push(2);
+        ignored += 1;
+        discoveries.push(2);
+        let restarted =
+            serde_json::to_vec(&(facts, files, containers, entries, ignored, discoveries)).unwrap();
+
+        assert_eq!(restarted, baseline);
+    }
+
+    #[test]
+    fn target_restart_cannot_close_contributors_or_publish_checkpoints() {
+        let source = include_str!("library_indexer.rs")
+            .split_whitespace()
+            .collect::<String>();
+        let restart = source
+            .find("DiscoveryEvent::TargetRestart(restart)=>{")
+            .expect("restart event arm");
+        let complete = source[restart..]
+            .find("DiscoveryEvent::TargetComplete(descriptor)=>{")
+            .map(|offset| restart + offset)
+            .expect("completion event arm");
+        let restart_arm = &source[restart..complete];
+        let complete_arm = &source[complete..];
+
+        assert!(!restart_arm.contains("contributor_closure.complete"));
+        assert!(!restart_arm.contains("queue_target_checkpoint"));
+        assert!(!restart_arm.contains("system_finality.entry"));
+        assert!(complete_arm.contains("contributor_closure.complete"));
+        assert!(complete_arm.contains("queue_target_checkpoint"));
+        assert!(complete_arm.contains("system_finality.entry"));
     }
 
     #[test]

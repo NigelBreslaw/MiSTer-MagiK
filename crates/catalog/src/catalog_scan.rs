@@ -215,6 +215,15 @@ pub(crate) struct ScanTargetDescriptor {
     pub(crate) kind: ScanTargetKind,
 }
 
+/// Requests that the consumer discard every output produced since the
+/// matching `TargetStart` and wait for the same target to begin again.
+/// Whole-target capture never emits this event.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct TargetRestart {
+    pub(crate) descriptor: ScanTargetDescriptor,
+    pub(crate) reason: String,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ScanTargetKind {
     Static,
@@ -234,7 +243,9 @@ pub(crate) fn precount_discovery_candidates(roots: &[String]) -> (usize, usize, 
     let mut dirs = 0usize;
     while let Ok(event) = rx.recv() {
         match event {
-            DiscoveryEvent::TargetStart(_) | DiscoveryEvent::TargetComplete(_) => {}
+            DiscoveryEvent::TargetStart(_)
+            | DiscoveryEvent::TargetRestart(_)
+            | DiscoveryEvent::TargetComplete(_) => {}
             DiscoveryEvent::File(_) => candidates += 1,
             DiscoveryEvent::GameDirFacts(_) => {}
             DiscoveryEvent::RuntimeDirectory(runtime) => candidates += runtime.files.len(),
@@ -286,6 +297,11 @@ fn path_components_str(path: &Path) -> impl Iterator<Item = &str> {
 
 pub(crate) enum DiscoveryEvent {
     TargetStart(ScanTargetDescriptor),
+    #[expect(
+        dead_code,
+        reason = "restart handoff is a neutral prerequisite until the streaming experiment"
+    )]
+    TargetRestart(TargetRestart),
     File(FoundFile),
     GameDirFacts(GameDirFact),
     RuntimeDirectory(RuntimeDirectoryCandidates),
@@ -2265,7 +2281,9 @@ mod tests {
         let found = rx
             .try_iter()
             .map(|event| match event {
-                DiscoveryEvent::TargetStart(_) | DiscoveryEvent::TargetComplete(_) => {
+                DiscoveryEvent::TargetStart(_)
+                | DiscoveryEvent::TargetRestart(_)
+                | DiscoveryEvent::TargetComplete(_) => {
                     unreachable!("direct walk does not emit planned target boundaries")
                 }
                 DiscoveryEvent::File(file) => file.path,
@@ -2334,6 +2352,9 @@ mod tests {
                     let started = open.take().expect("target completion must have a start");
                     assert_eq!(descriptor, started);
                     completed.push(descriptor);
+                }
+                DiscoveryEvent::TargetRestart(_) => {
+                    unreachable!("whole-target capture never restarts")
                 }
                 DiscoveryEvent::File(_)
                 | DiscoveryEvent::GameDirFacts(_)
