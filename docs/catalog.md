@@ -382,7 +382,9 @@ negative-sidecar cache must first pass the typed preview-work opportunity gate;
 production does not pay coordination or invalidation overhead merely because
 the benchmark can observe the workers. Preview attribution resolves the final
 archive path and resize policy before comparing keys and never enables catalog
-refresh.
+refresh. The 2026-08-22 production corpus recorded zero collisions and zero
+duplicate work across 503 requests, so in-flight deduplication remains closed
+until a changed corpus passes the documented opportunity gate.
 
 ## Compatibility And Recovery
 
