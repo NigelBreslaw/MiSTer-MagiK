@@ -2789,13 +2789,7 @@ impl LauncherResponseTrace {
             .iter()
             .filter(|record| record.disposition == "confirmed")
             .count();
-        let records = self
-            .records
-            .iter()
-            .filter(|record| record.disposition == "confirmed")
-            .skip(self.partial_confirmed_sent)
-            .cloned()
-            .collect();
+        let records = self.records.clone();
         let feedback_count = self.feedback_records.len();
         let feedback_records = self.feedback_records[self.partial_feedback_sent..].to_vec();
         let lab_count = self.lab_records.len();
@@ -2867,7 +2861,7 @@ impl LauncherResponseTraceSnapshot {
         debug_assert!(!self.complete && !next.complete);
         debug_assert_eq!(self.run_id, next.run_id);
         debug_assert_eq!(self.execution_enabled, next.execution_enabled);
-        self.records.extend(next.records);
+        self.records = next.records;
         self.feedback_records.extend(next.feedback_records);
         self.lab_records.extend(next.lab_records);
         self.refresh_period_us = next.refresh_period_us;
@@ -14943,6 +14937,22 @@ mod tests {
     fn launcher_response_partial_snapshot_streams_bounded_lab_records_only() {
         let nav = LauncherNav::new();
         let mut trace = LauncherResponseTrace::enabled_for_test(&nav);
+        let mut event = normalized_test_press(LogicalAction::Right);
+        event.source.kind = InputSourceKind::MainProxy;
+        trace.record_route(
+            event,
+            InputOutcome::Dispatch {
+                event,
+                context: ContextId {
+                    target: FocusTarget {
+                        kind: InputContextKind::Screen,
+                        owner: 1,
+                    },
+                    generation: 1,
+                },
+                kind: DispatchKind::Initial,
+            },
+        );
         trace
             .catalog_phases
             .push(serde_json::json!({"phase": "catalog"}));
@@ -14951,16 +14961,19 @@ mod tests {
             .push(serde_json::json!({"phase": "scheduler"}));
         trace.lab_records.push(serde_json::json!({"phase": "lab"}));
 
-        let (partial, _, _, lab_count) = trace.partial_snapshot();
+        let (mut partial, _, _, lab_count) = trace.partial_snapshot();
         assert!(partial.catalog_phases.is_empty());
         assert!(partial.scheduler_phases.is_empty());
         assert_eq!(lab_count, 1);
         assert_eq!(partial.lab_records.len(), 1);
-        assert_eq!(
-            serde_json::from_str::<serde_json::Value>(&partial.payload())
-                .expect("partial response trace payload")["completion"]["state"],
-            "running"
-        );
+        let payload = serde_json::from_str::<serde_json::Value>(&partial.payload())
+            .expect("partial response trace payload");
+        assert_eq!(payload["completion"]["state"], "running");
+        assert_eq!(payload["records"][0]["disposition"], "dispatched");
+
+        let (next, _, _, _) = trace.partial_snapshot();
+        partial.merge_partial(next);
+        assert_eq!(partial.records.len(), 1);
 
         trace.complete = true;
         let complete = trace.snapshot();
