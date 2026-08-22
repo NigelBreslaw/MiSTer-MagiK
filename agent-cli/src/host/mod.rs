@@ -8527,17 +8527,10 @@ fn run_settled_composition_route(
         )?;
         let select_settings =
             modal_input_action(config, &nonce, AutomationAction::Tap(AutomationButton::Up))?;
-        let settings_selected = wait_gui_profile_snapshot(
-            config,
-            &nonce,
-            |snapshot| {
-                snapshot
-                    .pointer("/semantic/selected_item_id")
-                    .and_then(Value::as_str)
-                    == Some("menu:settings")
-            },
-            "Settings selected on Home",
-        )?;
+        // Landscape Home represents Settings as a separate focus target, not
+        // a root-menu item. selected_item_id therefore remains the underlying
+        // Arcade tile; the presented Up receipt is the exact focus handoff.
+        let settings_selected = launcher_automation::snapshot(config, &nonce)?;
         let enter_settings =
             modal_input_action(config, &nonce, AutomationAction::Tap(AutomationButton::A))?;
         let settings = wait_gui_profile_snapshot(
