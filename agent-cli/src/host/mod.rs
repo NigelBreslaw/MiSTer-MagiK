@@ -5403,9 +5403,17 @@ fn verify_installed_input_integrity(
         )
         .into());
     }
-    let idle = run_input_integrity_scenario(&session, "idle", "off", None, false)?;
-    let stress =
-        run_input_integrity_scenario(&session, "catalog-cpu-stall", "force", Some(500), true)?;
+    let idle = run_input_integrity_scenario(&session, "idle", "off", None, false, "down")?;
+    let stress = run_input_integrity_scenario(
+        &session,
+        "catalog-cpu-stall",
+        "force",
+        Some(500),
+        true,
+        "down",
+    )?;
+    let horizontal =
+        run_input_integrity_scenario(&session, "horizontal-idle", "off", None, false, "right")?;
     let launcher = read_launcher_status(&session)?;
     let main_after: Value = serde_json::from_str(
         &remote_read(&session, MAIN_STATUS_REMOTE).ok_or("Main status is missing after run")?,
@@ -5434,7 +5442,7 @@ fn verify_installed_input_integrity(
         "status": status,
         "protocol": input_proxy_protocol,
         "path": format!("uinput -> Main mapping -> Main proxy v{input_proxy_protocol} -> kernel evdev -> InputCapture -> InputRouter"),
-        "scenarios": [idle, stress],
+        "scenarios": [idle, stress, horizontal],
         "expected_initial_presses_per_scenario": INPUT_INTEGRITY_EXPECTED_PRESSES,
         "lost_actions": 0,
         "duplicated_actions": 0,
@@ -8103,8 +8111,10 @@ fn parse_catalog_adoption_max_us(events: &str) -> Option<u64> {
         .max()
 }
 
-fn run_input_integrity_driver(session: &Session, load: bool) -> Result<()> {
-    let mode = if load {
+fn run_input_integrity_driver(session: &Session, load: bool, action: &str) -> Result<()> {
+    let mode = if action == "right" {
+        "qualification-right"
+    } else if load {
         "qualification-load"
     } else {
         "qualification"
@@ -8125,6 +8135,7 @@ fn run_input_integrity_scenario(
     catalog_refresh: &str,
     stall_ms: Option<u64>,
     cpu_load: bool,
+    action: &str,
 ) -> Result<Value> {
     let mut env_vars = vec![
         ("MISTER_CATALOG_REFRESH".into(), catalog_refresh.into()),
@@ -8152,13 +8163,14 @@ fn run_input_integrity_scenario(
     {
         return Err("input integrity stress scenario missed the active catalog refresh".into());
     }
-    run_input_integrity_driver(session, cpu_load)?;
+    run_input_integrity_driver(session, cpu_load, action)?;
     let trace = wait_input_integrity_trace(session, Duration::from_secs(5))?;
-    validate_input_integrity_trace(&trace, stall_ms.is_none())?;
+    validate_input_integrity_trace(&trace, stall_ms.is_none(), action)?;
     Ok(json!({
         "label": label,
         "catalog_refresh": catalog_refresh,
         "cpu_load": cpu_load,
+        "action": action,
         "ui_stall_ms": stall_ms.unwrap_or(0),
         "trace": trace,
     }))
@@ -8185,11 +8197,12 @@ fn wait_input_integrity_trace(session: &Session, timeout: Duration) -> Result<Va
                 || "trace file was absent or invalid".to_string(),
                 |trace| {
                     format!(
-                        "presses={} releases={} repeats={} final_down_held={}",
+                        "presses={} releases={} repeats={} final_down_held={} final_right_held={}",
                         trace["initial_presses"].as_u64().unwrap_or(0),
                         trace["releases"].as_u64().unwrap_or(0),
                         trace["repeats"].as_u64().unwrap_or(0),
                         trace["final_down_held"].as_bool().unwrap_or(false),
+                        trace["final_right_held"].as_bool().unwrap_or(false),
                     )
                 },
             );
@@ -8201,12 +8214,21 @@ fn wait_input_integrity_trace(session: &Session, timeout: Duration) -> Result<Va
     }
 }
 
-fn validate_input_integrity_trace(trace: &Value, enforce_latency: bool) -> Result<()> {
+fn validate_input_integrity_trace(
+    trace: &Value,
+    enforce_latency: bool,
+    expected_action: &str,
+) -> Result<()> {
+    let final_held_field = if expected_action == "right" {
+        "final_right_held"
+    } else {
+        "final_down_held"
+    };
     if trace.get("schema").and_then(Value::as_str) != Some("mister-magik-input-integrity-trace-v1")
         || trace.get("initial_presses").and_then(Value::as_u64)
             != Some(INPUT_INTEGRITY_EXPECTED_PRESSES)
         || trace.get("releases").and_then(Value::as_u64) != Some(INPUT_INTEGRITY_EXPECTED_PRESSES)
-        || trace.get("final_down_held").and_then(Value::as_bool) != Some(false)
+        || trace.get(final_held_field).and_then(Value::as_bool) != Some(false)
         || trace.get("repeats").and_then(Value::as_u64).unwrap_or(0) == 0
         || trace
             .get("queue_high_water")
@@ -8221,12 +8243,12 @@ fn validate_input_integrity_trace(trace: &Value, enforce_latency: bool) -> Resul
                 > 16_667)
     {
         return Err(format!(
-            "input integrity trace summary failed: schema={} presses={} releases={} repeats={} final_down_held={} queue_high_water={} dispatch_p99_us={} latency_gate={enforce_latency}",
+            "input integrity trace summary failed: schema={} presses={} releases={} repeats={} final_held_field={final_held_field} final_held={} queue_high_water={} dispatch_p99_us={} latency_gate={enforce_latency}",
             trace["schema"].as_str().unwrap_or("missing"),
             trace["initial_presses"].as_u64().unwrap_or(0),
             trace["releases"].as_u64().unwrap_or(0),
             trace["repeats"].as_u64().unwrap_or(0),
-            trace["final_down_held"].as_bool().unwrap_or(false),
+            trace[final_held_field].as_bool().unwrap_or(false),
             trace["queue_high_water"].as_u64().unwrap_or(0),
             trace["dispatch_p99_us"].as_u64().unwrap_or(0),
         )
@@ -8248,8 +8270,8 @@ fn validate_input_integrity_trace(trace: &Value, enforce_latency: bool) -> Resul
             || press["phase"] != "pressed"
             || release["kind"] != "release"
             || release["phase"] != "released"
-            || press["action"] != "down"
-            || release["action"] != "down"
+            || press["action"] != expected_action
+            || release["action"] != expected_action
             || press["press_id"] != release["press_id"]
             || release["sequence"].as_u64()
                 != press["sequence"].as_u64().map(|sequence| sequence + 1)

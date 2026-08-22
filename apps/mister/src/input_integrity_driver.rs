@@ -54,17 +54,22 @@ impl DriverPlan {
     fn parse(args: &[String]) -> Result<Self, String> {
         if matches!(
             args.first().map(String::as_str),
-            Some("qualification" | "qualification-load")
+            Some("qualification" | "qualification-load" | "qualification-right")
         ) {
+            let mode = args.first().map(String::as_str);
             return Ok(Self {
-                key_code: 108,
+                key_code: if mode == Some("qualification-right") {
+                    106
+                } else {
+                    108
+                },
                 pulse_ms: 0,
                 gap_ms: 0,
                 start_delay_ms: 0,
                 start_at_us: 0,
                 count: 109,
                 qualification: true,
-                cpu_load: args.first().map(String::as_str) == Some("qualification-load"),
+                cpu_load: mode == Some("qualification-load"),
                 sequence: DriverSequence::Pulses,
             });
         }
@@ -519,6 +524,10 @@ mod tests {
                 .unwrap()
                 .cpu_load
         );
+        let horizontal = DriverPlan::parse(&["qualification-right".to_string()]).unwrap();
+        assert!(horizontal.qualification);
+        assert_eq!(horizontal.key_code, 106);
+        assert!(!horizontal.cpu_load);
         assert_eq!(
             DriverPlan::parse(&["launcher-response".to_string()])
                 .unwrap()

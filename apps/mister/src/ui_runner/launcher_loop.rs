@@ -3283,6 +3283,7 @@ impl InputIntegrityTrace {
             "releases": self.releases,
             "repeats": self.repeats,
             "final_down_held": router.action_held(LogicalAction::Down),
+            "final_right_held": router.action_held(LogicalAction::Right),
             "queue_high_water": self.queue_high_water,
             "dispatch_p99_us": latencies.get(p99_index).copied().unwrap_or(0),
             "dispatch_max_us": latencies.last().copied().unwrap_or(0),

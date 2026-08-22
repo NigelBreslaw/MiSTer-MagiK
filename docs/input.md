@@ -79,8 +79,10 @@ scenario. Linux delivers 100 taps cycling through 5, 10, 20, and 40 ms, a rapid
 burst, and a 500 ms hold to Main. Main applies the real mapping and contributor
 aggregation, and the resulting actions travel through Main proxy protocol v2
 or the sequence-tagged protocol v3 laboratory path, kernel evdev,
-`InputCapture`, and `InputRouter`. It runs once idle and once during a forced
-catalog refresh, CPU contention, and a deliberate 500 ms UI stall.
+`InputCapture`, and `InputRouter`. It runs Down once idle and once during a
+forced catalog refresh, CPU contention, and a deliberate 500 ms UI stall. A
+third idle arm repeats the exact qualification on Right so both D-pad axes must
+forward every neutral release and subsequent press.
 
 The launcher records a bounded event trace. The gate requires the exact ordered
 press/release pairs, matching press IDs, final neutral state, working menu
