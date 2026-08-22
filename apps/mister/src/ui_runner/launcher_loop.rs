@@ -54,13 +54,20 @@ const SETTINGS_NAVIGATION_STATUS_DRAIN_LIMIT: Duration = Duration::from_secs(2);
 const SQLITE_HEADER: &[u8; 16] = b"SQLite format 3\0";
 const MODAL_INPUT_TEST_ROOT: &str = "/tmp/mister-magik/modal-input-benchmark";
 
-fn bridge_model_retained_policy_from_values(route: Option<&str>, policy: Option<&str>) -> bool {
-    route == Some("bridge-churn") && policy == Some("retained")
+fn bridge_model_retained_policy_from_values(
+    route: Option<&str>,
+    response_trace: Option<&str>,
+    policy: Option<&str>,
+) -> bool {
+    (route == Some("bridge-churn") || response_trace == Some("1")) && policy == Some("retained")
 }
 
 fn bridge_model_retained_policy() -> bool {
     bridge_model_retained_policy_from_values(
         std::env::var("MISTER_GUI_FRAME_PROFILE_ROUTE")
+            .ok()
+            .as_deref(),
+        std::env::var("MISTER_LAUNCHER_RESPONSE_TRACE")
             .ok()
             .as_deref(),
         std::env::var("MISTER_BRIDGE_MODEL_POLICY").ok().as_deref(),
@@ -75,18 +82,27 @@ mod bridge_model_retained_policy_tests {
     fn selector_is_consumed_only_by_the_bridge_churn_route() {
         assert!(bridge_model_retained_policy_from_values(
             Some("bridge-churn"),
+            None,
+            Some("retained")
+        ));
+        assert!(bridge_model_retained_policy_from_values(
+            None,
+            Some("1"),
             Some("retained")
         ));
         assert!(!bridge_model_retained_policy_from_values(
+            None,
             None,
             Some("retained")
         ));
         assert!(!bridge_model_retained_policy_from_values(
             Some("bridge-churn"),
+            None,
             None
         ));
         assert!(!bridge_model_retained_policy_from_values(
             Some("settled-composition"),
+            None,
             Some("retained")
         ));
     }

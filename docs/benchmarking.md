@@ -31,6 +31,7 @@ Supported scenarios:
 - `cold-boot-pprof`
 - `input-integrity`
 - `launcher-response`
+- `launcher-response-retained`
 - `launcher-response-attribution`
 - `gui-frame-attribution`
 - `settled-composition`
@@ -167,8 +168,10 @@ restored. Evidence is retained below
 `build/agent-benchmarks/bridge-model-churn/<timestamp>/`.
 The `bridge-model-churn-retained` arm consumes the one-shot
 `MISTER_BRIDGE_MODEL_POLICY=retained` selector only while the bridge-churn route
-is active. Ordinary launches and the baseline arm remain on replacement
-behavior. The candidate retains the media `VecModel`, coalesces only
+or an exact launcher-response trace is active. Ordinary launches and both
+baseline arms remain on replacement behavior. `launcher-response-retained`
+applies the same selector to the production interaction qualification without
+changing ordinary launcher policy. The candidate retains the media `VecModel`, coalesces only
 nonterminal progress to 100 ms, publishes completion/failure immediately,
 updates only previous/current menu rows when feedback identity is stable, and
 avoids `SharedString` construction for unchanged bridge values.

@@ -75,6 +75,7 @@ enum BenchmarkProfile {
     ModalInput,
     InputIntegrity,
     LauncherResponse,
+    LauncherResponseRetained,
     LauncherResponseAttribution,
     GuiFrameAttribution,
     SettledComposition,
@@ -186,6 +187,9 @@ impl BenchmarkDevice for DeviceClient {
             BenchmarkProfile::ModalInput => device.verify_modal_input(&output_dir),
             BenchmarkProfile::InputIntegrity => device.verify_input_integrity(&output_dir),
             BenchmarkProfile::LauncherResponse => device.verify_launcher_response(&output_dir),
+            BenchmarkProfile::LauncherResponseRetained => {
+                device.verify_launcher_response_retained(&output_dir)
+            }
             BenchmarkProfile::LauncherResponseAttribution => {
                 device.profile_launcher_response_attribution(&output_dir)
             }
@@ -488,6 +492,15 @@ fn require_clean_installed_commit(
         BenchmarkScenario::LauncherResponse => {
             execute_launcher_response(&mut device, manifest, output_dir, reporter)
         }
+        BenchmarkScenario::LauncherResponseRetained => execute_attribution_capture(
+            &mut device,
+            manifest,
+            output_dir,
+            reporter,
+            BenchmarkProfile::LauncherResponseRetained,
+            "launcher-response-retained",
+            "mister-magik-launcher-response-v2",
+        ),
         BenchmarkScenario::LauncherResponseAttribution => {
             execute_launcher_response_attribution(&mut device, manifest, output_dir, reporter)
         }
@@ -1037,6 +1050,7 @@ fn particle_scene_lab_command(scenario: BenchmarkScenario) -> Option<&'static st
         | BenchmarkScenario::ModalInput
         | BenchmarkScenario::InputIntegrity
         | BenchmarkScenario::LauncherResponse
+        | BenchmarkScenario::LauncherResponseRetained
         | BenchmarkScenario::LauncherResponseAttribution
         | BenchmarkScenario::GuiFrameAttribution
         | BenchmarkScenario::SettledComposition

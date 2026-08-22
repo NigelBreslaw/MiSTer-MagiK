@@ -933,6 +933,7 @@ mod tests {
             "modal-input",
             "input-integrity",
             "launcher-response",
+            "launcher-response-retained",
             "launcher-response-attribution",
             "gui-frame-attribution",
             "settled-composition",

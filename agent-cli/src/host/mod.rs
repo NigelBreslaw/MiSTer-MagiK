@@ -1031,7 +1031,18 @@ impl NativeDevice {
         &mut self,
         output_dir: &Path,
     ) -> std::result::Result<String, DeviceFailure> {
-        self.benchmark_profile(|config| verify_installed_launcher_response(config, output_dir))
+        self.benchmark_profile(|config| {
+            verify_installed_launcher_response(config, output_dir, false)
+        })
+    }
+
+    pub(crate) fn verify_launcher_response_retained(
+        &mut self,
+        output_dir: &Path,
+    ) -> std::result::Result<String, DeviceFailure> {
+        self.benchmark_profile(|config| {
+            verify_installed_launcher_response(config, output_dir, true)
+        })
     }
 
     pub(crate) fn verify_input_latency_lab(
@@ -5454,6 +5465,7 @@ fn verify_installed_input_integrity(
 fn verify_installed_launcher_response(
     config: &NativeDeviceConfig,
     output_dir: &Path,
+    retained: bool,
 ) -> Result<String> {
     let isolated_profile = std::env::var("MISTER_LAUNCHER_RESPONSE_ISOLATED_PROFILE")
         .ok()
@@ -5512,6 +5524,7 @@ fn verify_installed_launcher_response(
                     "idle-round-trip",
                     "off",
                     true,
+                    retained,
                 )?);
             } else {
                 scenario_values.push(run_launcher_response_scenario(
@@ -5520,6 +5533,7 @@ fn verify_installed_launcher_response(
                     "idle",
                     "off",
                     false,
+                    retained,
                 )?);
                 scenario_values.push(run_launcher_response_scenario(
                     &session,
@@ -5527,6 +5541,7 @@ fn verify_installed_launcher_response(
                     "catalog",
                     "force",
                     false,
+                    retained,
                 )?);
             }
         }
@@ -5600,6 +5615,7 @@ fn verify_installed_launcher_response(
         input_response_passed && pulse_passed && integrity_passed && background_adoption_passed;
     let summary = json!({
         "schema": "mister-magik-launcher-response-v2",
+        "bridge_model_policy": if retained { "retained" } else { "replacement" },
         "status": if passed { "passed" } else { "failed" },
         "protocol": input_proxy_protocol,
         "routes": if isolated_profile {
@@ -5740,6 +5756,7 @@ fn profile_installed_launcher_response_attribution(
                 arm.label(),
                 "off",
                 true,
+                false,
                 Some(&instrumentation),
             )?;
             validate_launcher_response_attribution_arm(arm, &route)?;
@@ -6920,6 +6937,7 @@ fn run_launcher_response_scenario(
     label: &str,
     catalog_refresh: &str,
     isolated_profile: bool,
+    retained: bool,
 ) -> Result<Value> {
     run_launcher_response_scenario_with_instrumentation(
         session,
@@ -6927,6 +6945,7 @@ fn run_launcher_response_scenario(
         label,
         catalog_refresh,
         isolated_profile,
+        retained,
         None,
     )
 }
@@ -6937,6 +6956,7 @@ fn run_launcher_response_scenario_with_instrumentation(
     label: &str,
     catalog_refresh: &str,
     isolated_profile: bool,
+    retained: bool,
     instrumentation: Option<&LauncherResponseInstrumentation<'_>>,
 ) -> Result<Value> {
     let main_before: Value = serde_json::from_str(
@@ -6955,6 +6975,7 @@ fn run_launcher_response_scenario_with_instrumentation(
             interval_ms,
             start_delay_ms,
             isolated_profile,
+            retained,
             instrumentation,
         )?;
         computers_sweeps.push(if isolated_profile {
@@ -7322,6 +7343,7 @@ fn run_launcher_response_computers_sweep(
     interval_ms: u64,
     start_delay_ms: u64,
     isolated_profile: bool,
+    retained: bool,
     instrumentation: Option<&LauncherResponseInstrumentation<'_>>,
 ) -> Result<Value> {
     let run_id = format!(
@@ -7351,6 +7373,9 @@ fn run_launcher_response_computers_sweep(
     ];
     if isolated_profile {
         env_vars.push(("MISTER_PROFILE".into(), "full".into()));
+    }
+    if retained {
+        env_vars.push(("MISTER_BRIDGE_MODEL_POLICY".into(), "retained".into()));
     }
     if let Some(instrumentation) = instrumentation {
         env_vars.extend(launcher_response_attribution_env(
@@ -12603,8 +12628,14 @@ fn profile_installed_launcher_response_streamline(
         let capture_thread = capture.start();
         capture.wait_ready(Duration::from_secs(10))?;
         let capture_started_monotonic_ns = capture.monotonic_ns("capture start")?;
-        let route_result =
-            run_launcher_response_scenario(&session, "60-hz", "streamline-round-trip", "off", true);
+        let route_result = run_launcher_response_scenario(
+            &session,
+            "60-hz",
+            "streamline-round-trip",
+            "off",
+            true,
+            false,
+        );
         let capture_result = capture.stop(capture_thread);
         let capture_ended_monotonic_ns = capture.monotonic_ns("capture end")?;
         capture.retain_log()?;
