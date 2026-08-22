@@ -373,6 +373,9 @@ impl UinputDevice {
                         std::thread::sleep(Duration::from_millis(plan.gap_ms));
                     }
                 }
+                if plan.sequence == DriverSequence::ComputersEnterSweep {
+                    std::thread::sleep(Duration::from_millis(500));
+                }
                 return Ok(());
             }
             DriverSequence::ComputersRoundTrip | DriverSequence::ComputersEnterRoundTrip => {
@@ -399,9 +402,12 @@ impl UinputDevice {
                     } else {
                         self.pulse(computers_round_trip_key(index), plan.pulse_ms)?;
                     }
-                    if plan.start_at_us == 0 && index + 1 < plan.count {
+                    if plan.start_at_us == 0 && index + 1 < measured_count {
                         std::thread::sleep(Duration::from_millis(plan.gap_ms));
                     }
+                }
+                if plan.sequence == DriverSequence::ComputersEnterRoundTrip {
+                    std::thread::sleep(Duration::from_millis(500));
                 }
                 return Ok(());
             }
