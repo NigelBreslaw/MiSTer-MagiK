@@ -12226,8 +12226,16 @@ fn profile_installed_rom_identity_hashing(
     }
     let execution_order = [
         ("baseline-a", "whole-file", "whole-file-scalar-crc32"),
-        ("candidate-a", "streaming", "streaming-table-crc32"),
-        ("candidate-b", "streaming", "streaming-table-crc32"),
+        (
+            "candidate-a",
+            "streaming",
+            "streaming-slicing-by-eight-crc32",
+        ),
+        (
+            "candidate-b",
+            "streaming",
+            "streaming-slicing-by-eight-crc32",
+        ),
         ("baseline-b", "whole-file", "whole-file-scalar-crc32"),
     ];
     let mut baselines = Vec::with_capacity(2);

@@ -1057,13 +1057,13 @@ pub(crate) fn crc32(bytes: &[u8]) -> u32 {
 }
 
 #[cfg(feature = "builder")]
-const CRC32_TABLE: [u32; 256] = build_crc32_table();
+const CRC32_TABLES: [[u32; 256]; 8] = build_crc32_tables();
 
 #[cfg(feature = "builder")]
-const fn build_crc32_table() -> [u32; 256] {
-    let mut table = [0u32; 256];
+const fn build_crc32_tables() -> [[u32; 256]; 8] {
+    let mut tables = [[0u32; 256]; 8];
     let mut index = 0usize;
-    while index < table.len() {
+    while index < tables[0].len() {
         let mut crc = index as u32;
         let mut bit = 0;
         while bit < 8 {
@@ -1071,10 +1071,20 @@ const fn build_crc32_table() -> [u32; 256] {
             crc = (crc >> 1) ^ (0xedb8_8320 & mask);
             bit += 1;
         }
-        table[index] = crc;
+        tables[0][index] = crc;
         index += 1;
     }
-    table
+    let mut slice = 1usize;
+    while slice < tables.len() {
+        index = 0;
+        while index < tables[slice].len() {
+            let crc = tables[slice - 1][index];
+            tables[slice][index] = (crc >> 8) ^ tables[0][(crc & 0xff) as usize];
+            index += 1;
+        }
+        slice += 1;
+    }
+    tables
 }
 
 #[cfg(feature = "builder")]
@@ -1098,9 +1108,21 @@ impl Default for IncrementalCrc32 {
 impl IncrementalCrc32 {
     fn update(&mut self, bytes: &[u8]) {
         let mut crc = self.state;
-        for &byte in bytes {
+        let chunks = bytes.as_chunks::<8>();
+        for chunk in chunks.0 {
+            crc ^= u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+            crc = CRC32_TABLES[7][(crc & 0xff) as usize]
+                ^ CRC32_TABLES[6][((crc >> 8) & 0xff) as usize]
+                ^ CRC32_TABLES[5][((crc >> 16) & 0xff) as usize]
+                ^ CRC32_TABLES[4][((crc >> 24) & 0xff) as usize]
+                ^ CRC32_TABLES[3][chunk[4] as usize]
+                ^ CRC32_TABLES[2][chunk[5] as usize]
+                ^ CRC32_TABLES[1][chunk[6] as usize]
+                ^ CRC32_TABLES[0][chunk[7] as usize];
+        }
+        for &byte in chunks.1 {
             let index = ((crc ^ u32::from(byte)) & 0xff) as usize;
-            crc = (crc >> 8) ^ CRC32_TABLE[index];
+            crc = (crc >> 8) ^ CRC32_TABLES[0][index];
         }
         self.state = crc;
         self.length = self.length.saturating_add(bytes.len() as u64);
@@ -1187,7 +1209,11 @@ impl StreamingRomCandidateHasher {
                         carry.clear();
                     }
                 }
-                let chunks = bytes[start..].as_chunks::<4>();
+                let octets = bytes[start..].as_chunks::<8>();
+                for chunk in octets.0 {
+                    update_n64_transform_octets(pairs, words, reversed, chunk);
+                }
+                let chunks = octets.1.as_chunks::<4>();
                 for chunk in chunks.0 {
                     update_n64_transforms(pairs, words, reversed, chunk);
                 }
@@ -1248,6 +1274,25 @@ fn update_n64_transforms(
     pairs.update(&[chunk[1], chunk[0], chunk[3], chunk[2]]);
     words.update(&[chunk[2], chunk[3], chunk[0], chunk[1]]);
     reversed.update(&[chunk[3], chunk[2], chunk[1], chunk[0]]);
+}
+
+#[cfg(feature = "builder")]
+#[inline]
+fn update_n64_transform_octets(
+    pairs: &mut IncrementalCrc32,
+    words: &mut IncrementalCrc32,
+    reversed: &mut IncrementalCrc32,
+    chunk: &[u8; 8],
+) {
+    pairs.update(&[
+        chunk[1], chunk[0], chunk[3], chunk[2], chunk[5], chunk[4], chunk[7], chunk[6],
+    ]);
+    words.update(&[
+        chunk[2], chunk[3], chunk[0], chunk[1], chunk[6], chunk[7], chunk[4], chunk[5],
+    ]);
+    reversed.update(&[
+        chunk[3], chunk[2], chunk[1], chunk[0], chunk[7], chunk[6], chunk[5], chunk[4],
+    ]);
 }
 
 pub(crate) fn parse_hex_u32(value: &str) -> Option<u32> {
@@ -1541,7 +1586,7 @@ impl RomIdentityBenchmarkImplementation {
     fn label(self) -> &'static str {
         match self {
             Self::WholeFile => "whole-file-scalar-crc32",
-            Self::Streaming => "streaming-table-crc32",
+            Self::Streaming => "streaming-slicing-by-eight-crc32",
         }
     }
 }
