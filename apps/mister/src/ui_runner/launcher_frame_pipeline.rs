@@ -229,11 +229,11 @@ mod tests {
         let source = include_str!("launcher_loop.rs")
             .split_whitespace()
             .collect::<String>();
+        let loop_start = source.find("'launcher:while").expect("launcher loop");
+        let source = &source[loop_start..];
         let phases = [
             LauncherFramePhase::Begin,
             LauncherFramePhase::PreInputMaintenance,
-            LauncherFramePhase::InputCaptured,
-            LauncherFramePhase::InputRouted,
             LauncherFramePhase::FramePlanned,
             LauncherFramePhase::FrameSubmitted,
             LauncherFramePhase::FrameAccounted,
@@ -256,10 +256,10 @@ mod tests {
             .split_whitespace()
             .collect::<String>();
         let phase_start = source
-            .find("let(input_phase_yielded,input_batch_empty)='input_phase:{")
+            .find("macro_rules!run_launcher_input_phase")
             .expect("launcher input phase start");
         let phase_end = source[phase_start..]
-            .find("ifinput_phase_yielded{continue;}")
+            .find("'launcher:while")
             .map(|offset| phase_start + offset)
             .expect("launcher input phase end");
         for marker in [
@@ -281,10 +281,10 @@ mod tests {
             .split_whitespace()
             .collect::<String>();
         let phase_start = source
-            .find("let(input_phase_yielded,input_batch_empty)='input_phase:{")
+            .find("macro_rules!run_launcher_input_phase")
             .expect("launcher input phase start");
         let phase_end = source[phase_start..]
-            .find("ifinput_phase_yielded{continue;}")
+            .find("'launcher:while")
             .map(|offset| phase_start + offset)
             .expect("launcher input phase end");
         let phase = &source[phase_start..phase_end];
@@ -299,6 +299,33 @@ mod tests {
         ] {
             assert!(phase.contains(operation), "input phase omitted {operation}");
         }
+    }
+
+    #[test]
+    fn early_route_is_selected_before_maintenance_and_current_fallback_remains_after_it() {
+        let source = include_str!("launcher_loop.rs")
+            .split_whitespace()
+            .collect::<String>();
+        let loop_start = source.find("'launcher:while").expect("launcher loop");
+        let source = &source[loop_start..];
+        let early_guard = source
+            .find("ifroute_input_early&&input_pending_before_route{")
+            .expect("early input selector guard");
+        let early_call = source[early_guard..]
+            .find("run_launcher_input_phase!()")
+            .map(|offset| early_guard + offset)
+            .expect("early input phase invocation");
+        let maintenance = source
+            .find("record_launcher_frame_phase!(LauncherFramePhase::PreInputMaintenance)")
+            .expect("pre-input maintenance boundary");
+        let fallback = source[maintenance..]
+            .find("run_launcher_input_phase!()")
+            .map(|offset| maintenance + offset)
+            .expect("current input phase fallback");
+
+        assert!(early_guard < early_call);
+        assert!(early_call < maintenance);
+        assert!(maintenance < fallback);
     }
 
     #[test]

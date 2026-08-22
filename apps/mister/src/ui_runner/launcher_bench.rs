@@ -19,6 +19,7 @@ const HOME_SELECTED_INDEX: &str = "MISTER_HOME_SELECTED_INDEX";
 const AUTO_LAUNCH_SELECTED: &str = "MISTER_LAUNCHER_AUTO_LAUNCH_SELECTED";
 const ORIENTATION_PMU_COMPLETE: &str = "MISTER_ORIENTATION_PMU_COMPLETE";
 const LAUNCH_RETURN_PMU_HANDOFF_OUT: &str = "MISTER_LAUNCH_RETURN_PMU_HANDOFF_OUT";
+const INPUT_ROUTE_POLICY: &str = "MISTER_INPUT_ROUTE_POLICY";
 
 #[derive(Clone, Debug)]
 pub struct LauncherBenchmarkConfig {
@@ -37,6 +38,7 @@ pub struct LauncherBenchmarkConfig {
     auto_launch_selected: bool,
     orientation_pmu_completion: Option<String>,
     launch_return_pmu_handoff_out: Option<String>,
+    route_input_early: bool,
 }
 
 impl Default for LauncherBenchmarkConfig {
@@ -57,6 +59,7 @@ impl Default for LauncherBenchmarkConfig {
             auto_launch_selected: false,
             orientation_pmu_completion: None,
             launch_return_pmu_handoff_out: None,
+            route_input_early: false,
         }
     }
 }
@@ -92,6 +95,7 @@ impl LauncherBenchmarkConfig {
             auto_launch_selected: get(AUTO_LAUNCH_SELECTED).is_some_and(benchmark_flag),
             orientation_pmu_completion: get(ORIENTATION_PMU_COMPLETE).map(str::to_owned),
             launch_return_pmu_handoff_out: get(LAUNCH_RETURN_PMU_HANDOFF_OUT).map(str::to_owned),
+            route_input_early: route_input_early_from_value(get(INPUT_ROUTE_POLICY)),
         }
     }
 
@@ -127,6 +131,21 @@ impl LauncherBenchmarkConfig {
     }
     pub(super) fn launch_return_pmu_handoff_out(&self) -> Option<&str> {
         self.launch_return_pmu_handoff_out.as_deref()
+    }
+    pub(super) fn route_input_early(&self) -> bool {
+        self.route_input_early
+    }
+}
+
+fn route_input_early_from_value(value: Option<&str>) -> bool {
+    #[cfg(not(feature = "bench-tools"))]
+    {
+        let _ = value;
+        false
+    }
+    #[cfg(feature = "bench-tools")]
+    {
+        value == Some("early")
     }
 }
 
@@ -758,10 +777,28 @@ mod tests {
     #[test]
     #[cfg(not(feature = "bench-tools"))]
     fn production_config_cannot_arm_a_benchmark_scenario() {
-        let values = std::collections::BTreeMap::from([(BENCH_SCENARIO, "rapid-taps")]);
+        let values = std::collections::BTreeMap::from([
+            (BENCH_SCENARIO, "rapid-taps"),
+            (INPUT_ROUTE_POLICY, "early"),
+        ]);
         let config = LauncherBenchmarkConfig::capture_with(|name| values.get(name).copied());
 
         assert_eq!(config.scenario(), None);
+        assert!(!config.route_input_early());
+    }
+
+    #[test]
+    #[cfg(feature = "bench-tools")]
+    fn benchmark_build_requires_the_exact_early_input_policy() {
+        let early = LauncherBenchmarkConfig::capture_with(|name| {
+            (name == INPUT_ROUTE_POLICY).then_some("early")
+        });
+        let invalid = LauncherBenchmarkConfig::capture_with(|name| {
+            (name == INPUT_ROUTE_POLICY).then_some("true")
+        });
+
+        assert!(early.route_input_early());
+        assert!(!invalid.route_input_early());
     }
 
     fn empty_catalog() -> ArcadeCatalog {

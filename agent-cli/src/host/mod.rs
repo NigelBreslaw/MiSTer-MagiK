@@ -5822,15 +5822,17 @@ struct InputLatencyLabArmSpec {
     runtime_arm: &'static str,
     catalog_refresh: &'static str,
     reader_policy: &'static str,
+    input_route_policy: &'static str,
     reader_schedstat: bool,
 }
 
-const INPUT_LATENCY_LAB_ARMS: [InputLatencyLabArmSpec; 9] = [
+const INPUT_LATENCY_LAB_ARMS: [InputLatencyLabArmSpec; 10] = [
     InputLatencyLabArmSpec {
         label: "baseline",
         runtime_arm: "baseline",
         catalog_refresh: "off",
         reader_policy: "current",
+        input_route_policy: "current",
         reader_schedstat: true,
     },
     InputLatencyLabArmSpec {
@@ -5838,6 +5840,15 @@ const INPUT_LATENCY_LAB_ARMS: [InputLatencyLabArmSpec; 9] = [
         runtime_arm: "baseline",
         catalog_refresh: "force",
         reader_policy: "current",
+        input_route_policy: "current",
+        reader_schedstat: true,
+    },
+    InputLatencyLabArmSpec {
+        label: "real-forced-catalog-early-route",
+        runtime_arm: "baseline",
+        catalog_refresh: "force",
+        reader_policy: "current",
+        input_route_policy: "early",
         reader_schedstat: true,
     },
     InputLatencyLabArmSpec {
@@ -5845,6 +5856,7 @@ const INPUT_LATENCY_LAB_ARMS: [InputLatencyLabArmSpec; 9] = [
         runtime_arm: "monolithic-16ms",
         catalog_refresh: "off",
         reader_policy: "current",
+        input_route_policy: "current",
         reader_schedstat: false,
     },
     InputLatencyLabArmSpec {
@@ -5852,6 +5864,7 @@ const INPUT_LATENCY_LAB_ARMS: [InputLatencyLabArmSpec; 9] = [
         runtime_arm: "monolithic-64ms",
         catalog_refresh: "off",
         reader_policy: "current",
+        input_route_policy: "current",
         reader_schedstat: false,
     },
     InputLatencyLabArmSpec {
@@ -5859,6 +5872,7 @@ const INPUT_LATENCY_LAB_ARMS: [InputLatencyLabArmSpec; 9] = [
         runtime_arm: "cooperative-2ms",
         catalog_refresh: "off",
         reader_policy: "current",
+        input_route_policy: "current",
         reader_schedstat: false,
     },
     InputLatencyLabArmSpec {
@@ -5866,6 +5880,7 @@ const INPUT_LATENCY_LAB_ARMS: [InputLatencyLabArmSpec; 9] = [
         runtime_arm: "cooperative-1ms",
         catalog_refresh: "off",
         reader_policy: "current",
+        input_route_policy: "current",
         reader_schedstat: false,
     },
     InputLatencyLabArmSpec {
@@ -5873,6 +5888,7 @@ const INPUT_LATENCY_LAB_ARMS: [InputLatencyLabArmSpec; 9] = [
         runtime_arm: "baseline",
         catalog_refresh: "force",
         reader_policy: "cpu1-nice",
+        input_route_policy: "current",
         reader_schedstat: false,
     },
     InputLatencyLabArmSpec {
@@ -5880,6 +5896,7 @@ const INPUT_LATENCY_LAB_ARMS: [InputLatencyLabArmSpec; 9] = [
         runtime_arm: "baseline",
         catalog_refresh: "force",
         reader_policy: "cpu0-rr",
+        input_route_policy: "current",
         reader_schedstat: false,
     },
     InputLatencyLabArmSpec {
@@ -5887,6 +5904,7 @@ const INPUT_LATENCY_LAB_ARMS: [InputLatencyLabArmSpec; 9] = [
         runtime_arm: "baseline",
         catalog_refresh: "force",
         reader_policy: "cpu1-rr",
+        input_route_policy: "current",
         reader_schedstat: false,
     },
 ];
@@ -6119,6 +6137,10 @@ fn run_input_latency_lab_arm(
                     spec.reader_policy.into(),
                 ),
                 (
+                    "MISTER_INPUT_ROUTE_POLICY".into(),
+                    spec.input_route_policy.into(),
+                ),
+                (
                     "MISTER_INPUT_LATENCY_LAB_READER_SCHEDSTAT".into(),
                     if spec.reader_schedstat { "1" } else { "0" }.into(),
                 ),
@@ -6294,6 +6316,7 @@ fn summarize_incomplete_input_latency_lab_arm(
         "runtime_arm": spec.runtime_arm,
         "catalog_refresh": spec.catalog_refresh,
         "reader_policy_arm": spec.reader_policy,
+        "input_route_policy": spec.input_route_policy,
         "trace_file": format!("{}-trace.json", spec.label),
         "driver_file": format!("{}-driver.json", spec.label),
         "main_trace_file": format!("{}-main-trace.json", spec.label),
@@ -6785,6 +6808,7 @@ fn summarize_input_latency_lab_arm(
         "runtime_arm": spec.runtime_arm,
         "catalog_refresh": spec.catalog_refresh,
         "reader_policy_arm": spec.reader_policy,
+        "input_route_policy": spec.input_route_policy,
         "trace_file": format!("{}-trace.json", spec.label),
         "driver_file": format!("{}-driver.json", spec.label),
         "main_trace_file": format!("{}-main-trace.json", spec.label),
@@ -29421,6 +29445,7 @@ mod tests {
             runtime_arm: "baseline",
             catalog_refresh: "off",
             reader_policy: "current",
+            input_route_policy: "current",
             reader_schedstat: true,
         };
         let partial_trace = json!({
