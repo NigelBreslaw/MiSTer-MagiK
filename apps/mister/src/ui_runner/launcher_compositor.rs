@@ -134,28 +134,6 @@ impl<'a> LayerTarget<'a> {
     ) -> (Option<DirtyRect>, DirtyRectList, bool) {
         let mut slint_dirty = None;
         let mut slint_damage = DirtyRectList::new();
-        let rendered = window.draw_full_frame_if_needed(|renderer| {
-            let region = self.target.render(renderer);
-            slint_dirty = dirty_rect(
-                &region,
-                self.layout.composition_w(),
-                self.layout.composition_h(),
-            );
-            slint_damage = dirty_rects(
-                &region,
-                self.layout.composition_w(),
-                self.layout.composition_h(),
-            );
-        });
-        (slint_dirty, slint_damage, rendered)
-    }
-
-    pub(super) fn render_slint_full_preserving_cache(
-        &mut self,
-        window: &MisterSoftwareWindow,
-    ) -> (Option<DirtyRect>, DirtyRectList, bool) {
-        let mut slint_dirty = None;
-        let mut slint_damage = DirtyRectList::new();
         let rendered = window.draw_full_frame_preserving_cache_if_needed(
             self.layout.logical_w(),
             self.layout.logical_h(),
@@ -174,18 +152,6 @@ impl<'a> LayerTarget<'a> {
             },
         );
         (slint_dirty, slint_damage, rendered)
-    }
-
-    pub(super) fn render_slint_full_with_cache_policy(
-        &mut self,
-        window: &MisterSoftwareWindow,
-        preserve_cache: bool,
-    ) -> (Option<DirtyRect>, DirtyRectList, bool) {
-        if preserve_cache {
-            self.render_slint_full_preserving_cache(window)
-        } else {
-            self.render_slint_full(window)
-        }
     }
 
     pub(super) fn render_black(&mut self) -> DirtyRect {

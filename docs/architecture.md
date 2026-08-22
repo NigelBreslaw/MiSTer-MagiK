@@ -468,10 +468,13 @@ presentation remain route-owned.
 Navigation capture has its own composition phase. `NavigationTransition` owns
 the source snapshot and playback while direct layers are suppressed. After the
 navigation intent commits and its destination layers are available, the
-controller enters `NavigationDestination`. That state forces Slint to raster a
-complete new RGB565 base buffer, composes the Arcade list and preview when
-needed, and only then permits the transition destination snapshot. This keeps
-first entry behavior independent of Slint's reused-buffer dirty history.
+controller enters `NavigationDestination`. That state marks the complete
+logical region dirty and forces Slint to raster every pixel of the reusable
+RGB565 base buffer while refreshing its partial-render cache, then composes the
+Arcade list and preview before permitting the transition destination snapshot.
+Correctness therefore remains independent of prior damage history without
+forcing a duplicate full raster on the next ordinary render. NewBuffer is
+reserved for a genuinely new or discontinuous backing store.
 
 Full-screen transition render policy is centralized in
 `FullScreenTransitionStateChart`. Product runtimes continue to own navigation,

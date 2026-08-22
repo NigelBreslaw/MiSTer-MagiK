@@ -937,7 +937,6 @@ mod tests {
             "launcher-response-attribution",
             "gui-frame-attribution",
             "settled-composition",
-            "settled-composition-reused-cache",
             "bridge-model-churn",
             "bridge-model-churn-retained",
             "scheduler-trace",

@@ -157,11 +157,11 @@ The route restores the original Home selection and display mode, and leaves
 favorite state unchanged. Evidence is retained below
 `build/agent-benchmarks/settled-composition/<timestamp>/`.
 
-`settled-composition-reused-cache` runs the identical fixed route with the
-production-off cache-preserving full-raster candidate. It consumes the policy
-only while the settled-composition profiling route is armed; ordinary launcher
-starts retain the NewBuffer fallback. Compare paired summaries by the aggregate
-`full_raster_recovery.combined_raster_us` and require identical terminal pixels,
+Production full rasters retain Slint's partial-render cache while repainting the
+complete reusable RGB565 backing buffer. The summary reports this as the
+`reused-buffer` policy. NewBuffer remains an explicit fallback only for a newly
+allocated or otherwise discontinuous backing store. Qualification uses
+`full_raster_recovery.combined_raster_us` and requires identical terminal pixels,
 zero duplicate full recovery rasters, and unchanged cadence.
 
 `bridge-model-churn` is the unprofiled exact-device authority for repeated

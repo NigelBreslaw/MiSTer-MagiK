@@ -1,5 +1,10 @@
 # Reused-buffer full raster experiment — 2026-08-22
 
+> Superseded by `2026-08-22-slint-reused-full-raster-production.md`. The
+> immediate following physical frame measured here did not invoke Slint, so it
+> could not qualify partial-cache recovery. The corrected three-pair campaign
+> measured a 48.0% median combined improvement and retained the candidate.
+
 ## Authority
 
 - Installed experiment revision: `58286b11821fb460daee73e72337173fe37a8dbd`

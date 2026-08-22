@@ -1,0 +1,56 @@
+# Cache-preserving full raster production qualification — 2026-08-22
+
+## Authority
+
+- Installed experiment revision: `6972d97cdd77e4311cbcaefa64fd9bd3a34a4b2a`
+- Main revision: `639d3694e1b93660020e9587cd0fe27f0170ce4c`
+- Display: `hdmi-1280x720p60`
+- Performance authority: unprofiled installed Dev runtime
+- Control policy: `NewBuffer`
+- Candidate policy: full-region dirty marking with `ReusedBuffer`
+
+The corrected benchmark retains the immediate physical frame, then continues
+through the first real ordinary Slint render. It reports every forced-full
+raster through that first render, resetting the window if another forced raster
+supersedes it.
+
+## Paired exact-device results
+
+| Pair | Order | NewBuffer combined | Reused combined | Delta |
+| --- | --- | ---: | ---: | ---: |
+| 1 | control, candidate | 32,767us | 17,819us | -14,948us (-45.6%) |
+| 2 | candidate, control | 33,557us | 17,364us | -16,193us (-48.3%) |
+| 3 | control, candidate | 34,347us | 17,450us | -16,897us (-49.2%) |
+| Median | alternating | 33,557us | 17,450us | -16,107us (-48.0%) |
+
+Median forced-raster time moved from 16,201us to 16,504us, a 303us (1.9%)
+cost for retaining and refreshing the partial-render cache. Median subsequent
+recovery raster time fell from 16,751us to 946us, a 15,805us (94.4%)
+improvement. Duplicate full recovery rasters fell from two to zero in every
+candidate run.
+
+The Settings destination-through-recovery median improved from 20,129us to
+12,931us, a 7,198us (35.8%) reduction.
+
+## Correctness and disposition
+
+All six arms produced the identical authoritative terminal Settings PNG hash:
+`42e7ef05f7510300246df562e67c54c9de481cf6abc70651db0917e40eabd58c`.
+Every arm passed with zero physical repeated vblanks, latch drops, ownership
+losses, sequence gaps, or phase outliers.
+
+The earlier 4.8% rejection compared the forced Settings destination with an
+immediate physical frame that did not invoke Slint. It therefore did not test
+cache recovery. The corrected metric proves a 48.0% median improvement and
+passes the 20% gate in all three paired runs. Promote cache-preserving full
+raster for reusable backing buffers. Retain `NewBuffer` only as the explicit
+fallback for newly allocated or otherwise discontinuous backing storage.
+
+## Artifacts
+
+- Pair 1 control: `build/agent-benchmarks/settled-composition/1787398700/summary.json`
+- Pair 1 candidate: `build/agent-benchmarks/settled-composition-reused-cache/1787398730/summary.json`
+- Pair 2 candidate: `build/agent-benchmarks/settled-composition-reused-cache/1787398763/summary.json`
+- Pair 2 control: `build/agent-benchmarks/settled-composition/1787398786/summary.json`
+- Pair 3 control: `build/agent-benchmarks/settled-composition/1787398817/summary.json`
+- Pair 3 candidate: `build/agent-benchmarks/settled-composition-reused-cache/1787398839/summary.json`

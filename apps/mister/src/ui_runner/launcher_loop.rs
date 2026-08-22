@@ -54,24 +54,6 @@ const SETTINGS_NAVIGATION_STATUS_DRAIN_LIMIT: Duration = Duration::from_secs(2);
 const SQLITE_HEADER: &[u8; 16] = b"SQLite format 3\0";
 const MODAL_INPUT_TEST_ROOT: &str = "/tmp/mister-magik/modal-input-benchmark";
 
-fn preserve_slint_cache_on_full_raster_from_values(
-    route: Option<&str>,
-    policy: Option<&str>,
-) -> bool {
-    route == Some("settled-composition") && policy == Some("reused-buffer")
-}
-
-fn preserve_slint_cache_on_full_raster() -> bool {
-    preserve_slint_cache_on_full_raster_from_values(
-        std::env::var("MISTER_GUI_FRAME_PROFILE_ROUTE")
-            .ok()
-            .as_deref(),
-        std::env::var("MISTER_SETTLED_FULL_RASTER_POLICY")
-            .ok()
-            .as_deref(),
-    )
-}
-
 fn custom_damage_invalidation_comparison(
     bounding_rect: Option<DirtyRect>,
     damage: &DirtyRectList,
@@ -5482,7 +5464,6 @@ pub(super) fn run_launcher_loop(
     let mut launcher_arcade_publication: Option<PhysicalLayerPublication> = None;
     let mut arcade_drawer_view_cache = ArcadeDrawerViewCache::default();
     let mut composition = UiCompositionController::new();
-    let preserve_slint_cache_on_full_raster = preserve_slint_cache_on_full_raster();
     let mut cpu = process_entry_cpu_profile.or_else(|| cpu_profile::start(profile_config.cpu()));
     let mut system_entry_cpu_profile = None;
     let mut screensaver_cpu_profile =
@@ -9950,8 +9931,7 @@ pub(super) fn run_launcher_loop(
         } else if full_screen_transition_policy_before_render.force_live_raster {
             gui_raster_phase = gui_raster_profile_phase(true, true);
             let gui_raster_pmu = gui_profiling.phase_span(gui_raster_phase.span_name());
-            let (dirty, damage, rendered) = layer_target
-                .render_slint_full_with_cache_policy(&window, preserve_slint_cache_on_full_raster);
+            let (dirty, damage, rendered) = layer_target.render_slint_full(&window);
             drop(gui_raster_pmu);
             slint_damage = damage;
             full_screen_transition_release_raster_rendered = rendered;
@@ -9975,10 +9955,7 @@ pub(super) fn run_launcher_loop(
                 gui_raster_phase = gui_raster_profile_phase(true, true);
                 let gui_raster_pmu = gui_profiling.phase_span(gui_raster_phase.span_name());
                 let controlled_raster_started = Instant::now();
-                let (dirty, damage, rendered) = layer_target.render_slint_full_with_cache_policy(
-                    &window,
-                    preserve_slint_cache_on_full_raster,
-                );
+                let (dirty, damage, rendered) = layer_target.render_slint_full(&window);
                 drop(gui_raster_pmu);
                 if full_screen_transition.owner() == Some(FullScreenTransitionOwner::Orientation) {
                     orientation_controlled_slint_raster_us =
@@ -10018,8 +9995,7 @@ pub(super) fn run_launcher_loop(
         } else if composition_decision.force_full_slint_raster || crt_backdrop_leaving {
             gui_raster_phase = gui_raster_profile_phase(true, true);
             let gui_raster_pmu = gui_profiling.phase_span(gui_raster_phase.span_name());
-            let (dirty, damage, _) = layer_target
-                .render_slint_full_with_cache_policy(&window, preserve_slint_cache_on_full_raster);
+            let (dirty, damage, _) = layer_target.render_slint_full(&window);
             drop(gui_raster_pmu);
             slint_damage = damage;
             dirty
@@ -14274,22 +14250,6 @@ fn apply_home_selected(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn reused_full_raster_selector_is_consumed_only_by_settled_composition() {
-        assert!(preserve_slint_cache_on_full_raster_from_values(
-            Some("settled-composition"),
-            Some("reused-buffer"),
-        ));
-        assert!(!preserve_slint_cache_on_full_raster_from_values(
-            None,
-            Some("reused-buffer"),
-        ));
-        assert!(!preserve_slint_cache_on_full_raster_from_values(
-            Some("settled-composition"),
-            None,
-        ));
-    }
 
     #[test]
     fn disjoint_damage_exposes_bounding_box_false_positive() {

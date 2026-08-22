@@ -40,7 +40,7 @@ impl MisterSoftwareWindow {
         }
     }
 
-    pub fn draw_full_frame_if_needed(
+    pub fn draw_full_frame_resetting_cache_if_needed(
         &self,
         render_callback: impl FnOnce(&SoftwareRenderer),
     ) -> bool {
@@ -58,7 +58,8 @@ impl MisterSoftwareWindow {
     /// Repaints every logical pixel while retaining Slint's partial-render cache.
     ///
     /// The caller must pass the same reusable backing buffer. A newly allocated or
-    /// otherwise discontinuous backing store must use `draw_full_frame_if_needed`.
+    /// otherwise discontinuous backing store must use
+    /// `draw_full_frame_resetting_cache_if_needed`.
     pub fn draw_full_frame_preserving_cache_if_needed(
         &self,
         logical_width: usize,
