@@ -1972,6 +1972,7 @@ struct LauncherResponseTrace {
     last_partial_flush_at: Instant,
     partial_confirmed_sent: usize,
     partial_feedback_sent: usize,
+    partial_lab_sent: usize,
     dirty: bool,
 }
 
@@ -2103,6 +2104,7 @@ impl LauncherResponseTrace {
             last_partial_flush_at: Instant::now(),
             partial_confirmed_sent: 0,
             partial_feedback_sent: 0,
+            partial_lab_sent: 0,
             dirty: enabled,
         }
     }
@@ -2151,6 +2153,7 @@ impl LauncherResponseTrace {
                 .unwrap_or_else(Instant::now),
             partial_confirmed_sent: 0,
             partial_feedback_sent: 0,
+            partial_lab_sent: 0,
             dirty: false,
         }
     }
@@ -2710,7 +2713,7 @@ impl LauncherResponseTrace {
         }
     }
 
-    fn partial_snapshot(&self) -> (LauncherResponseTraceSnapshot, usize, usize) {
+    fn partial_snapshot(&self) -> (LauncherResponseTraceSnapshot, usize, usize, usize) {
         let confirmed_count = self
             .records
             .iter()
@@ -2725,6 +2728,8 @@ impl LauncherResponseTrace {
             .collect();
         let feedback_count = self.feedback_records.len();
         let feedback_records = self.feedback_records[self.partial_feedback_sent..].to_vec();
+        let lab_count = self.lab_records.len();
+        let lab_records = self.lab_records[self.partial_lab_sent..].to_vec();
         (
             LauncherResponseTraceSnapshot {
                 records,
@@ -2743,11 +2748,12 @@ impl LauncherResponseTrace {
                 queue_high_water: self.queue_high_water,
                 catalog_phases: Vec::new(),
                 scheduler_phases: Vec::new(),
-                lab_records: Vec::new(),
+                lab_records,
                 input_reader_policy: self.input_reader_policy.clone(),
             },
             confirmed_count,
             feedback_count,
+            lab_count,
         )
     }
 
@@ -2763,8 +2769,8 @@ impl LauncherResponseTrace {
         let (snapshot, partial_counts) = if self.complete {
             (self.snapshot(), None)
         } else {
-            let (snapshot, confirmed_count, feedback_count) = self.partial_snapshot();
-            (snapshot, Some((confirmed_count, feedback_count)))
+            let (snapshot, confirmed_count, feedback_count, lab_count) = self.partial_snapshot();
+            (snapshot, Some((confirmed_count, feedback_count, lab_count)))
         };
         if self.writer.as_ref().is_some_and(|writer| {
             writer
@@ -2775,9 +2781,10 @@ impl LauncherResponseTrace {
                 .is_ok()
         }) || self.writer.is_none()
         {
-            if let Some((confirmed_count, feedback_count)) = partial_counts {
+            if let Some((confirmed_count, feedback_count, lab_count)) = partial_counts {
                 self.partial_confirmed_sent = confirmed_count;
                 self.partial_feedback_sent = feedback_count;
+                self.partial_lab_sent = lab_count;
             }
             self.dirty = false;
             self.last_partial_flush_at = Instant::now();
@@ -2792,6 +2799,7 @@ impl LauncherResponseTraceSnapshot {
         debug_assert_eq!(self.execution_enabled, next.execution_enabled);
         self.records.extend(next.records);
         self.feedback_records.extend(next.feedback_records);
+        self.lab_records.extend(next.lab_records);
         self.refresh_period_us = next.refresh_period_us;
         self.presentation_start = self.presentation_start.or(next.presentation_start);
         self.presentation_end = next.presentation_end;
@@ -14927,7 +14935,7 @@ mod tests {
     }
 
     #[test]
-    fn launcher_response_partial_snapshot_omits_large_diagnostic_vectors() {
+    fn launcher_response_partial_snapshot_streams_bounded_lab_records_only() {
         let nav = LauncherNav::new();
         let mut trace = LauncherResponseTrace::enabled_for_test(&nav);
         trace
@@ -14938,10 +14946,11 @@ mod tests {
             .push(serde_json::json!({"phase": "scheduler"}));
         trace.lab_records.push(serde_json::json!({"phase": "lab"}));
 
-        let (partial, _, _) = trace.partial_snapshot();
+        let (partial, _, _, lab_count) = trace.partial_snapshot();
         assert!(partial.catalog_phases.is_empty());
         assert!(partial.scheduler_phases.is_empty());
-        assert!(partial.lab_records.is_empty());
+        assert_eq!(lab_count, 1);
+        assert_eq!(partial.lab_records.len(), 1);
         assert_eq!(
             serde_json::from_str::<serde_json::Value>(&partial.payload())
                 .expect("partial response trace payload")["completion"]["state"],
@@ -14975,11 +14984,18 @@ mod tests {
             40,
             6,
         );
-        let (mut accumulated, confirmed_count, feedback_count) = trace.partial_snapshot();
+        trace
+            .lab_records
+            .push(serde_json::json!({"phase": "first"}));
+        let (mut accumulated, confirmed_count, feedback_count, lab_count) =
+            trace.partial_snapshot();
         assert_eq!(confirmed_count, 0);
         assert_eq!(feedback_count, 1);
+        assert_eq!(lab_count, 1);
         assert_eq!(accumulated.feedback_records.len(), 1);
+        assert_eq!(accumulated.lab_records.len(), 1);
         trace.partial_feedback_sent = feedback_count;
+        trace.partial_lab_sent = lab_count;
 
         trace.record_feedback_confirmation(
             &crate::launcher_presentation::SelectionFeedbackConfirmation::Hidden {
@@ -14991,12 +15007,18 @@ mod tests {
             45,
             11,
         );
-        let (next, _, feedback_count) = trace.partial_snapshot();
+        trace
+            .lab_records
+            .push(serde_json::json!({"phase": "second"}));
+        let (next, _, feedback_count, lab_count) = trace.partial_snapshot();
         assert_eq!(feedback_count, 2);
+        assert_eq!(lab_count, 2);
         assert_eq!(next.feedback_records.len(), 1);
+        assert_eq!(next.lab_records.len(), 1);
 
         accumulated.merge_partial(next);
         assert_eq!(accumulated.feedback_records.len(), 2);
+        assert_eq!(accumulated.lab_records.len(), 2);
         assert_eq!(accumulated.feedback_records[0].phase, "visible");
         assert_eq!(accumulated.feedback_records[1].phase, "hidden");
     }
