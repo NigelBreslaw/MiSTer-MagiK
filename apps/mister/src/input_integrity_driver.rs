@@ -368,7 +368,14 @@ impl UinputDevice {
                 }
                 std::thread::sleep(Duration::from_millis(plan.start_delay_ms));
                 for index in 0..8 {
-                    self.pulse(106, plan.pulse_ms)?;
+                    self.pulse(
+                        if plan.sequence == DriverSequence::ComputersEnterSweep {
+                            computers_sweep_key(index)
+                        } else {
+                            106
+                        },
+                        plan.pulse_ms,
+                    )?;
                     if index < 7 {
                         std::thread::sleep(Duration::from_millis(plan.gap_ms));
                     }
@@ -516,6 +523,10 @@ fn computers_round_trip_key(index: u32) -> u16 {
     }
 }
 
+fn computers_sweep_key(index: u32) -> u16 {
+    if index.is_multiple_of(2) { 106 } else { 105 }
+}
+
 fn set_abs_range(descriptor: &mut [u8; UINPUT_USER_DEV_SIZE], code: u16, min: i32, max: i32) {
     let index = usize::from(code);
     descriptor[92 + index * 4..96 + index * 4].copy_from_slice(&max.to_ne_bytes());
@@ -606,6 +617,10 @@ mod tests {
         assert_eq!(enter_sweep.sequence, DriverSequence::ComputersEnterSweep);
         assert_eq!(enter_sweep.count, 9);
         assert_eq!(enter_sweep.start_delay_ms, 7);
+        assert_eq!(
+            (0..8).map(computers_sweep_key).collect::<Vec<_>>(),
+            vec![106, 105, 106, 105, 106, 105, 106, 105]
+        );
         let isolated =
             DriverPlan::parse(&["computers-sweep", "600", "455"].map(str::to_string)).unwrap();
         assert_eq!(isolated.gap_ms, 560);
