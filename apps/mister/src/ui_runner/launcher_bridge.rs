@@ -120,7 +120,7 @@ pub(super) fn init_launcher_bridge(app: &slint_ui::launcher::Launcher, pad: &Pad
     bridge.set_arcade_preview_display_width(0);
     bridge.set_arcade_preview_display_height(0);
     LauncherStatusPresenter::new(&bridge).init();
-    sync_bridge_pad_launcher(&bridge, pad);
+    sync_bridge_pad_launcher(app, pad);
 }
 
 pub(super) fn sync_settings_bridge(
@@ -774,7 +774,7 @@ pub(super) fn sync_bridge_launcher(
         .map(|started| started.elapsed().as_micros())
         .unwrap_or(0);
     bridge.set_startup_visible(false);
-    sync_bridge_pad_launcher(&bridge, pad);
+    sync_bridge_pad_launcher(app, pad);
     let clock_text = SharedString::from(launcher_clock_text());
     app.global::<slint_ui::launcher::NavigationView>()
         .set_clock_text(clock_text);
@@ -798,7 +798,7 @@ pub(super) fn sync_bridge_launcher(
             nav.arcade.is_turbo_active(),
         );
     }
-    sync_setup_bridge(&bridge, pad, setup);
+    sync_setup_bridge(app, pad, setup);
     LauncherBridgeSyncTiming {
         model_projection_us,
     }

@@ -142,6 +142,54 @@ export global InformationView {
     in property <string> database-build;
 }
 
+export global InputView {
+    in property <bool> dpad-up;
+    in property <bool> dpad-down;
+    in property <bool> dpad-left;
+    in property <bool> dpad-right;
+    in property <bool> button-a;
+    in property <bool> button-b;
+    in property <bool> button-x;
+    in property <bool> button-y;
+    in property <bool> button-l;
+    in property <bool> button-r;
+    in property <bool> button-zl;
+    in property <bool> button-zr;
+    in property <bool> button-select;
+    in property <bool> button-start;
+    in property <bool> button-l3;
+    in property <bool> button-r3;
+    in property <bool> button-home;
+    in property <bool> button-capture;
+    in property <InputAvailability> capture-availability;
+    in property <float> left-x;
+    in property <float> left-y;
+    in property <float> right-x;
+    in property <float> right-y;
+    in property <string> device-label;
+    in property <string> device-name;
+    in property <string> usb-port;
+    in property <string> usb-id;
+    in property <string> serial-id;
+    in property <string> js-counts;
+    in property <string> pressed-now;
+    in property <string> last-event-label;
+    in property <string> last-raw-event;
+    in property <InputAvailability> input-availability;
+    in property <string> fault-notice;
+}
+
+export global SetupView {
+    in property <SetupPhase> phase;
+    in property <string> title;
+    in property <string> subtitle;
+    in property <[SetupEntry]> entries;
+    in property <int> selected-entry-index;
+    in property <[SetupField]> fields;
+    in property <string> name;
+    in property <string> kind-label;
+}
+
 export global MisterBridge {
     in-out property <bool> dpad-up;
     in-out property <bool> dpad-down;

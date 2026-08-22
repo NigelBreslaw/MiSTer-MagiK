@@ -7455,6 +7455,13 @@ pub(super) fn run_launcher_loop(
                 )
             });
             bridge.set_input_fault_notice(input_notice.unwrap_or_default().into());
+            let input = app.global::<slint_ui::launcher::InputView>();
+            input.set_fault_notice(input_notice.unwrap_or_default().into());
+            input.set_input_availability(if input_notice.is_some() {
+                slint_ui::launcher::InputAvailability::Unavailable
+            } else {
+                slint_ui::launcher::InputAvailability::Available
+            });
             frame_accounting.set_automation_action_sequence(launcher_automation.action_sequence());
 
             let application_input_enabled =
@@ -7482,6 +7489,12 @@ pub(super) fn run_launcher_loop(
                     "Controller disconnected. Press a button after reconnecting to restart setup."
                         .into(),
                 );
+                    input.set_fault_notice(
+                        "Controller disconnected. Press a button after reconnecting to restart setup."
+                            .into(),
+                    );
+                    input
+                        .set_input_availability(slint_ui::launcher::InputAvailability::Unavailable);
                     full_bridge_dirty = true;
                 }
 

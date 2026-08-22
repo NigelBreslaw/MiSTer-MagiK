@@ -80,10 +80,12 @@ mod macos {
     use mister_magik_ui::launcher::FeedbackView;
     use mister_magik_ui::launcher::{
         AboutSection, ArcadeGame, ChoiceOption, HomeFocus, HomeScrollPhase, InformationView,
-        Launcher, LauncherScreen, MenuItem, MenuItemKind, MenuItemPresentation, MenuItemStatus,
-        MisterBridge, MisterUi, NavigationTransitionState as ViewNavigationTransitionState,
-        NavigationView, ScreenOrientation as ViewScreenOrientation, ScreensaverSetting,
-        ScreenshotPackProgress, SettingsPopup, SettingsSection, SettingsView, SystemHubSection,
+        InputAvailability, InputView, Launcher, LauncherScreen, MenuItem, MenuItemKind,
+        MenuItemPresentation, MenuItemStatus, MisterBridge, MisterUi,
+        NavigationTransitionState as ViewNavigationTransitionState, NavigationView,
+        ScreenOrientation as ViewScreenOrientation, ScreensaverSetting, ScreenshotPackProgress,
+        SettingsPopup, SettingsSection, SettingsView, SetupEntry, SetupField,
+        SetupPhase as ViewSetupPhase, SetupView, SystemHubSection,
     };
     use sha2::{Digest, Sha256};
     use slint::platform::software_renderer::{RepaintBufferType, Rgb565Pixel};
@@ -4013,6 +4015,96 @@ mod macos {
         ]);
         settings.set_license_lines(license_lines);
         settings.set_license_titles(strings(&mister_magik_fb::licenses::LICENSE_TITLES));
+        sync_preview_input_view(launcher);
+    }
+
+    fn sync_preview_input_view(launcher: &Launcher) {
+        let bridge = launcher.global::<MisterBridge>();
+        let input = launcher.global::<InputView>();
+        input.set_dpad_up(bridge.get_dpad_up());
+        input.set_dpad_down(bridge.get_dpad_down());
+        input.set_dpad_left(bridge.get_dpad_left());
+        input.set_dpad_right(bridge.get_dpad_right());
+        input.set_button_a(bridge.get_btn_a());
+        input.set_button_b(bridge.get_btn_b());
+        input.set_button_x(bridge.get_btn_x());
+        input.set_button_y(bridge.get_btn_y());
+        input.set_button_l(bridge.get_btn_l());
+        input.set_button_r(bridge.get_btn_r());
+        input.set_button_zl(bridge.get_btn_zl());
+        input.set_button_zr(bridge.get_btn_zr());
+        input.set_button_select(bridge.get_btn_select());
+        input.set_button_start(bridge.get_btn_start());
+        input.set_button_l3(bridge.get_btn_l3());
+        input.set_button_r3(bridge.get_btn_r3());
+        input.set_button_home(bridge.get_btn_home());
+        input.set_button_capture(bridge.get_btn_capture());
+        input.set_capture_availability(if bridge.get_capture_available() {
+            InputAvailability::Available
+        } else {
+            InputAvailability::Unavailable
+        });
+        input.set_left_x(bridge.get_left_x());
+        input.set_left_y(bridge.get_left_y());
+        input.set_right_x(bridge.get_right_x());
+        input.set_right_y(bridge.get_right_y());
+        input.set_device_label(bridge.get_device_label());
+        input.set_device_name(bridge.get_device_name());
+        input.set_usb_port(bridge.get_usb_port());
+        input.set_usb_id(bridge.get_usb_id());
+        input.set_serial_id(bridge.get_serial_id());
+        input.set_js_counts(bridge.get_js_counts());
+        input.set_pressed_now(bridge.get_pressed_now());
+        input.set_last_event_label(bridge.get_last_event_label());
+        input.set_last_raw_event(bridge.get_last_raw_event());
+        input.set_fault_notice(bridge.get_input_fault_notice());
+        input.set_input_availability(if bridge.get_input_fault_notice().is_empty() {
+            InputAvailability::Available
+        } else {
+            InputAvailability::Unavailable
+        });
+    }
+
+    fn sync_preview_setup_view(launcher: &Launcher) {
+        let bridge = launcher.global::<MisterBridge>();
+        let setup = launcher.global::<SetupView>();
+        setup.set_phase(match bridge.get_setup_phase() {
+            0 => ViewSetupPhase::None,
+            1 => ViewSetupPhase::Detected,
+            2 => ViewSetupPhase::NewOrExisting,
+            3 => ViewSetupPhase::PickExisting,
+            4 => ViewSetupPhase::Configure,
+            5 => ViewSetupPhase::NameKind,
+            value => panic!("unknown preview setup phase {value}"),
+        });
+        setup.set_title(bridge.get_setup_title());
+        setup.set_subtitle(bridge.get_setup_subtitle());
+        setup.set_selected_entry_index(bridge.get_setup_selected());
+        setup.set_entries(ModelRc::new(VecModel::from(
+            (0..bridge.get_setup_list().row_count())
+                .filter_map(|index| {
+                    Some(SetupEntry {
+                        id: format!("preview-setup-{index}").into(),
+                        label: bridge.get_setup_list().row_data(index)?,
+                    })
+                })
+                .collect::<Vec<_>>(),
+        )));
+        setup.set_fields(ModelRc::new(VecModel::from(
+            (0..bridge
+                .get_setup_config_labels()
+                .row_count()
+                .min(bridge.get_setup_config_values().row_count()))
+                .filter_map(|index| {
+                    Some(SetupField {
+                        label: bridge.get_setup_config_labels().row_data(index)?,
+                        value: bridge.get_setup_config_values().row_data(index)?,
+                    })
+                })
+                .collect::<Vec<_>>(),
+        )));
+        setup.set_name(bridge.get_setup_name());
+        setup.set_kind_label(bridge.get_setup_kind_label());
     }
 
     fn apply_scenario(launcher: &Launcher, scenario: Scenario) {
@@ -4125,6 +4217,8 @@ mod macos {
             }
             _ => {}
         }
+        sync_preview_input_view(launcher);
+        sync_preview_setup_view(launcher);
         launcher.window().request_redraw();
     }
 
@@ -4516,6 +4610,27 @@ mod macos {
             }
         }
 
+        fn assert_input_setup_dual_projection(launcher: &Launcher) {
+            let bridge = launcher.global::<MisterBridge>();
+            let input = launcher.global::<InputView>();
+            assert_eq!(input.get_dpad_up(), bridge.get_dpad_up());
+            assert_eq!(input.get_dpad_down(), bridge.get_dpad_down());
+            assert_eq!(input.get_button_a(), bridge.get_btn_a());
+            assert_eq!(input.get_button_b(), bridge.get_btn_b());
+            assert_eq!(input.get_device_name(), bridge.get_device_name());
+            let setup = launcher.global::<SetupView>();
+            assert_eq!(
+                setup.get_phase() != ViewSetupPhase::None,
+                bridge.get_setup_visible()
+            );
+            assert_eq!(setup.get_title(), bridge.get_setup_title());
+            assert_eq!(setup.get_subtitle(), bridge.get_setup_subtitle());
+            assert_eq!(
+                setup.get_selected_entry_index(),
+                bridge.get_setup_selected()
+            );
+        }
+
         fn manifest_scenario(scenario: SceneScenario) -> Scenario {
             match scenario {
                 SceneScenario::Home | SceneScenario::NavigationTransitionMidpoint => Scenario::Home,
@@ -4545,6 +4660,7 @@ mod macos {
                 apply_scenario(&launcher, manifest_scenario(scene.scenario));
                 assert_navigation_projection(&launcher);
                 assert_settings_projection(&launcher);
+                assert_input_setup_dual_projection(&launcher);
                 let snapshot = bridge_semantic_snapshot(&launcher);
                 if let Some(expected) = expected_by_scenario.get(&scene.scenario) {
                     assert_eq!(&snapshot, expected, "semantic drift in {}", scene.id);
@@ -4599,12 +4715,14 @@ mod macos {
                 presenter.sync(&production, &nav, &fixtures.catalog, Some(1), false);
                 assert_navigation_projection(&production);
                 assert_settings_projection(&production);
+                assert_input_setup_dual_projection(&production);
 
                 let preview = Launcher::new().expect("preview launcher fixture");
                 initialize_bridge(&preview, DisplayProfile::Hdmi);
                 apply_scenario(&preview, Scenario::from_screen(screen));
                 assert_navigation_projection(&preview);
                 assert_settings_projection(&preview);
+                assert_input_setup_dual_projection(&preview);
 
                 let production_snapshot = bridge_semantic_snapshot(&production);
                 let preview_snapshot = bridge_semantic_snapshot(&preview);
