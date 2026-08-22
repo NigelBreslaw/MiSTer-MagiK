@@ -12218,31 +12218,86 @@ fn profile_installed_rom_identity_hashing(
     let capability = last_json_line(&capability.stdout)
         .ok_or("installed benchmark capability output contains no JSON report")?;
     if capability
-        .get("rom-identity-benchmark-v1")
+        .get("rom-identity-benchmark-v2")
         .and_then(Value::as_bool)
         != Some(true)
     {
-        return Err("installed app does not support rom-identity-benchmark-v1".into());
+        return Err("installed app does not support rom-identity-benchmark-v2".into());
     }
-    let output = exec(
-        &session,
-        &development_gui_command("rom-identity-bench"),
-        true,
-    )?;
-    let mut log = output.stdout.clone();
-    log.push_str(&output.stderr);
-    fs::write(output_dir.join("rom-identity-bench.log"), &log)?;
-    if let Some(message) = exec_failure_message("installed ROM identity benchmark", &output) {
-        return Err(message.into());
+    let execution_order = [
+        ("baseline-a", "whole-file", "whole-file-scalar-crc32"),
+        ("candidate-a", "streaming", "streaming-table-crc32"),
+        ("candidate-b", "streaming", "streaming-table-crc32"),
+        ("baseline-b", "whole-file", "whole-file-scalar-crc32"),
+    ];
+    let mut baselines = Vec::with_capacity(2);
+    let mut candidates = Vec::with_capacity(2);
+    for (label, mode, implementation) in execution_order.iter().copied() {
+        let output = exec(
+            &session,
+            &development_gui_command(&format!("rom-identity-bench {mode}")),
+            true,
+        )?;
+        let mut log = output.stdout.clone();
+        log.push_str(&output.stderr);
+        fs::write(output_dir.join(format!("{label}.log")), &log)?;
+        if let Some(message) = exec_failure_message("installed ROM identity benchmark", &output) {
+            return Err(format!("{label}: {message}").into());
+        }
+        let arm = last_json_line(&output.stdout)
+            .ok_or_else(|| format!("installed ROM identity benchmark {label} returned no JSON"))?;
+        if arm.get("schema").and_then(Value::as_str)
+            != Some("mister-magik-rom-identity-benchmark-v1")
+            || arm.get("status").and_then(Value::as_str) != Some("passed")
+            || arm.get("implementation").and_then(Value::as_str) != Some(implementation)
+        {
+            return Err(format!(
+                "installed ROM identity benchmark {label} returned an invalid arm"
+            )
+            .into());
+        }
+        fs::write(
+            output_dir.join(format!("{label}.json")),
+            format!("{}\n", serde_json::to_string_pretty(&arm)?),
+        )?;
+        if mode == "streaming" {
+            candidates.push(arm);
+        } else {
+            baselines.push(arm);
+        }
     }
-    let summary = last_json_line(&output.stdout)
-        .ok_or("installed ROM identity benchmark returned no JSON")?;
-    if summary.get("schema").and_then(Value::as_str)
-        != Some("mister-magik-rom-identity-benchmark-v1")
-        || summary.get("status").and_then(Value::as_str) != Some("passed")
-    {
-        return Err("installed ROM identity benchmark returned a non-passing report".into());
+    let expected_result = baselines[0]
+        .get("result_sha256")
+        .and_then(Value::as_str)
+        .ok_or("ROM identity baseline has no result hash")?
+        .to_owned();
+    let expected_cache = baselines[0]
+        .get("software_hash_cache_sha256")
+        .and_then(Value::as_str)
+        .ok_or("ROM identity baseline has no cache hash")?
+        .to_owned();
+    for arm in baselines.iter().chain(&candidates) {
+        if arm.get("result_sha256").and_then(Value::as_str) != Some(expected_result.as_str())
+            || arm
+                .get("software_hash_cache_sha256")
+                .and_then(Value::as_str)
+                != Some(expected_cache.as_str())
+        {
+            return Err("ROM identity baseline and streaming results differ".into());
+        }
     }
+    let summary = json!({
+        "schema": "mister-magik-rom-identity-comparison-v1",
+        "status": "passed",
+        "execution_order": execution_order.map(|(label, mode, _)| json!({
+            "label": label,
+            "mode": mode,
+        })),
+        "baseline_runs": baselines,
+        "candidate_runs": candidates,
+        "result_sha256": expected_result,
+        "software_hash_cache_sha256": expected_cache,
+    });
     fs::write(
         output_dir.join("summary.json"),
         format!("{}\n", serde_json::to_string_pretty(&summary)?),

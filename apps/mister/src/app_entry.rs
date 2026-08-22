@@ -378,7 +378,7 @@ fn dispatch_pre_fpga(
         "pmu-probe" => pmu_probe::run(),
         "pmu-profile" => pmu_profile::run(args.get(2..).unwrap_or_default()),
         "search-bench" => search_bench::run(),
-        "rom-identity-bench" => run_rom_identity_benchmark(),
+        "rom-identity-bench" => run_rom_identity_benchmark(args.get(2..).unwrap_or_default()),
         command_args::CATALOG_CORPUS_INVENTORY_COMMAND => run_catalog_corpus_inventory(),
         #[cfg(feature = "bench-tools")]
         "media-bench-download" => media_bench_download::run(),
@@ -438,8 +438,21 @@ fn run_catalog_corpus_inventory() {
     );
 }
 
-fn run_rom_identity_benchmark() {
-    match mister_magik_catalog::rom_identity_benchmark_report() {
+fn run_rom_identity_benchmark(args: &[String]) {
+    let implementation = match args {
+        [] => mister_magik_catalog::RomIdentityBenchmarkImplementation::WholeFile,
+        [mode] if mode == "whole-file" => {
+            mister_magik_catalog::RomIdentityBenchmarkImplementation::WholeFile
+        }
+        [mode] if mode == "streaming" => {
+            mister_magik_catalog::RomIdentityBenchmarkImplementation::Streaming
+        }
+        _ => {
+            crate::ui_errln!("rom-identity-bench accepts only whole-file or streaming");
+            std::process::exit(2);
+        }
+    };
+    match mister_magik_catalog::rom_identity_benchmark_report(implementation) {
         Ok(report) => crate::ui_logln!("{report}"),
         Err(error) => {
             crate::ui_errln!("ROM identity benchmark failed: {error}");
@@ -465,6 +478,7 @@ fn benchmark_capabilities() -> serde_json::Value {
         "pmu-profile-v2": true,
         "persisted-search-v1": true,
         "rom-identity-benchmark-v1": true,
+        "rom-identity-benchmark-v2": true,
         "input-integrity-driver-v1": true,
         "arcade-velocity-scroll-v1": true,
         "arcade-velocity-scroll-attribution-v1": true,

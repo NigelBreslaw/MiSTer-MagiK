@@ -1056,6 +1056,200 @@ pub(crate) fn crc32(bytes: &[u8]) -> u32 {
     !crc
 }
 
+#[cfg(feature = "builder")]
+const CRC32_TABLE: [u32; 256] = build_crc32_table();
+
+#[cfg(feature = "builder")]
+const fn build_crc32_table() -> [u32; 256] {
+    let mut table = [0u32; 256];
+    let mut index = 0usize;
+    while index < table.len() {
+        let mut crc = index as u32;
+        let mut bit = 0;
+        while bit < 8 {
+            let mask = 0u32.wrapping_sub(crc & 1);
+            crc = (crc >> 1) ^ (0xedb8_8320 & mask);
+            bit += 1;
+        }
+        table[index] = crc;
+        index += 1;
+    }
+    table
+}
+
+#[cfg(feature = "builder")]
+#[derive(Clone, Debug)]
+struct IncrementalCrc32 {
+    state: u32,
+    length: u64,
+}
+
+#[cfg(feature = "builder")]
+impl Default for IncrementalCrc32 {
+    fn default() -> Self {
+        Self {
+            state: 0xffff_ffff,
+            length: 0,
+        }
+    }
+}
+
+#[cfg(feature = "builder")]
+impl IncrementalCrc32 {
+    fn update(&mut self, bytes: &[u8]) {
+        let mut crc = self.state;
+        for &byte in bytes {
+            let index = ((crc ^ u32::from(byte)) & 0xff) as usize;
+            crc = (crc >> 8) ^ CRC32_TABLE[index];
+        }
+        self.state = crc;
+        self.length = self.length.saturating_add(bytes.len() as u64);
+    }
+
+    fn finish(&self) -> (u64, u32) {
+        (self.length, !self.state)
+    }
+}
+
+#[cfg(feature = "builder")]
+#[derive(Clone, Debug)]
+enum StreamingRomCandidateHasher {
+    Linear {
+        stripped: Option<(usize, IncrementalCrc32)>,
+        raw: IncrementalCrc32,
+        offset: usize,
+    },
+    N64 {
+        raw: IncrementalCrc32,
+        pairs: IncrementalCrc32,
+        words: IncrementalCrc32,
+        reversed: IncrementalCrc32,
+        carry: Vec<u8>,
+    },
+}
+
+#[cfg(feature = "builder")]
+impl StreamingRomCandidateHasher {
+    fn new(list_name: &str, file_size: u64, prefix: &[u8]) -> Self {
+        if list_name == "n64" {
+            return Self::N64 {
+                raw: IncrementalCrc32::default(),
+                pairs: IncrementalCrc32::default(),
+                words: IncrementalCrc32::default(),
+                reversed: IncrementalCrc32::default(),
+                carry: Vec::with_capacity(3),
+            };
+        }
+        let stripped = match list_name {
+            "nes" if file_size > 16 && prefix.starts_with(b"NES\x1a") => Some(16),
+            "snes" if file_size > 512 => Some(512),
+            "lynx" if file_size > 64 && prefix.starts_with(b"LYNX") => Some(64),
+            _ => None,
+        }
+        .map(|skip| (skip, IncrementalCrc32::default()));
+        Self::Linear {
+            stripped,
+            raw: IncrementalCrc32::default(),
+            offset: 0,
+        }
+    }
+
+    fn update(&mut self, bytes: &[u8]) {
+        match self {
+            Self::Linear {
+                stripped,
+                raw,
+                offset,
+            } => {
+                raw.update(bytes);
+                if let Some((skip, state)) = stripped {
+                    let start = skip.saturating_sub(*offset).min(bytes.len());
+                    state.update(&bytes[start..]);
+                }
+                *offset = offset.saturating_add(bytes.len());
+            }
+            Self::N64 {
+                raw,
+                pairs,
+                words,
+                reversed,
+                carry,
+            } => {
+                raw.update(bytes);
+                let mut start = 0usize;
+                if !carry.is_empty() {
+                    let needed = 4usize.saturating_sub(carry.len());
+                    let copied = needed.min(bytes.len());
+                    carry.extend_from_slice(&bytes[..copied]);
+                    start = copied;
+                    if carry.len() == 4 {
+                        update_n64_transforms(pairs, words, reversed, carry);
+                        carry.clear();
+                    }
+                }
+                let chunks = bytes[start..].as_chunks::<4>();
+                for chunk in chunks.0 {
+                    update_n64_transforms(pairs, words, reversed, chunk);
+                }
+                carry.extend_from_slice(chunks.1);
+            }
+        }
+    }
+
+    fn finish(mut self) -> Vec<(u64, u32)> {
+        let mut candidates = match &mut self {
+            Self::Linear { stripped, raw, .. } => {
+                let mut candidates = Vec::with_capacity(2);
+                if let Some((_, state)) = stripped {
+                    candidates.push(state.finish());
+                }
+                candidates.push(raw.finish());
+                candidates
+            }
+            Self::N64 {
+                raw,
+                pairs,
+                words,
+                reversed,
+                carry,
+            } => {
+                if carry.len() >= 2 {
+                    pairs.update(&[carry[1], carry[0]]);
+                    if carry.len() == 3 {
+                        pairs.update(&carry[2..]);
+                    }
+                } else {
+                    pairs.update(carry);
+                }
+                words.update(carry);
+                reversed.update(carry);
+                vec![
+                    raw.finish(),
+                    pairs.finish(),
+                    words.finish(),
+                    reversed.finish(),
+                ]
+            }
+        };
+        candidates.dedup();
+        candidates
+    }
+}
+
+#[cfg(feature = "builder")]
+#[inline]
+fn update_n64_transforms(
+    pairs: &mut IncrementalCrc32,
+    words: &mut IncrementalCrc32,
+    reversed: &mut IncrementalCrc32,
+    chunk: &[u8],
+) {
+    debug_assert_eq!(chunk.len(), 4);
+    pairs.update(&[chunk[1], chunk[0], chunk[3], chunk[2]]);
+    words.update(&[chunk[2], chunk[3], chunk[0], chunk[1]]);
+    reversed.update(&[chunk[3], chunk[2], chunk[1], chunk[0]]);
+}
+
 pub(crate) fn parse_hex_u32(value: &str) -> Option<u32> {
     u32::from_str_radix(value.trim(), 16).ok()
 }
@@ -1336,6 +1530,23 @@ struct RomIdentityBenchmarkInput {
 }
 
 #[cfg(feature = "builder")]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RomIdentityBenchmarkImplementation {
+    WholeFile,
+    Streaming,
+}
+
+#[cfg(feature = "builder")]
+impl RomIdentityBenchmarkImplementation {
+    fn label(self) -> &'static str {
+        match self {
+            Self::WholeFile => "whole-file-scalar-crc32",
+            Self::Streaming => "streaming-table-crc32",
+        }
+    }
+}
+
+#[cfg(feature = "builder")]
 struct CountingReader<'a> {
     file: &'a mut File,
     read_calls: u64,
@@ -1353,7 +1564,9 @@ impl Read for CountingReader<'_> {
 }
 
 #[cfg(feature = "builder")]
-pub fn rom_identity_benchmark_report() -> Result<serde_json::Value, String> {
+pub fn rom_identity_benchmark_report(
+    implementation: RomIdentityBenchmarkImplementation,
+) -> Result<serde_json::Value, String> {
     use serde_json::json;
     use sha2::{Digest, Sha256};
     use walkdir::WalkDir;
@@ -1472,7 +1685,14 @@ pub fn rom_identity_benchmark_report() -> Result<serde_json::Value, String> {
         if input.list_name == "lynx" {
             production_default_selected = production_default_selected.saturating_add(1);
         }
-        let case = benchmark_current_rom_identity(&input, &metadata, &software_hash_cache)?;
+        let case = match implementation {
+            RomIdentityBenchmarkImplementation::WholeFile => {
+                benchmark_current_rom_identity(&input, &metadata, &software_hash_cache)?
+            }
+            RomIdentityBenchmarkImplementation::Streaming => {
+                benchmark_streaming_rom_identity(&input, &metadata, &software_hash_cache)?
+            }
+        };
         result_digest.update(input.list_name.as_bytes());
         result_digest.update(input.path.as_os_str().as_encoded_bytes());
         result_digest.update(input.size.to_le_bytes());
@@ -1504,7 +1724,7 @@ pub fn rom_identity_benchmark_report() -> Result<serde_json::Value, String> {
     Ok(json!({
         "schema": "mister-magik-rom-identity-benchmark-v1",
         "status": "passed",
-        "implementation": "whole-file-scalar-crc32",
+        "implementation": implementation.label(),
         "production_default_policy": "lynx-only",
         "roots": roots,
         "scan_roots": scan_roots,
@@ -1672,6 +1892,280 @@ fn benchmark_current_rom_identity(
         },
         "pmu_attribution": pmu,
     }))
+}
+
+#[cfg(feature = "builder")]
+#[derive(Clone, Debug)]
+struct StreamingHashMetrics {
+    open_us: u64,
+    read_us: u64,
+    process_us: u64,
+    checkpoint_us: u64,
+    checkpoint_max_us: u64,
+    checkpoint_count: u64,
+    total_us: u64,
+    bytes_read: u64,
+    read_calls: u64,
+    buffer_allocation_bytes: usize,
+}
+
+#[cfg(feature = "builder")]
+fn stream_rom_candidate_hashes(
+    input: &RomIdentityBenchmarkInput,
+) -> Result<(Vec<(u64, u32)>, StreamingHashMetrics), String> {
+    const BUFFER_BYTES: usize = 256 * 1024;
+
+    let total_started = Instant::now();
+    let open_started = Instant::now();
+    let mut file = File::open(&input.path)
+        .map_err(|error| format!("open benchmark ROM {}: {error}", input.path.display()))?;
+    let open_us = open_started.elapsed().as_micros() as u64;
+    let mut buffer = vec![0u8; BUFFER_BYTES];
+    let mut read_us = 0u64;
+    let mut process_us = 0u64;
+    let mut checkpoint_us = 0u64;
+    let mut checkpoint_max_us = 0u64;
+    let mut checkpoint_count = 0u64;
+    let mut bytes_read = 0u64;
+    let mut read_calls = 0u64;
+
+    let prefix_bytes = usize::try_from(input.size.min(4)).unwrap_or(4);
+    let mut filled = 0usize;
+    while filled < prefix_bytes {
+        let started = Instant::now();
+        let bytes = file
+            .read(&mut buffer[filled..])
+            .map_err(|error| format!("read benchmark ROM {}: {error}", input.path.display()))?;
+        read_us = read_us.saturating_add(started.elapsed().as_micros() as u64);
+        read_calls = read_calls.saturating_add(1);
+        if bytes == 0 {
+            break;
+        }
+        filled += bytes;
+        bytes_read = bytes_read.saturating_add(bytes as u64);
+    }
+    let mut hasher =
+        StreamingRomCandidateHasher::new(input.list_name, input.size, &buffer[..filled.min(4)]);
+    if filled > 0 {
+        let started = Instant::now();
+        hasher.update(&buffer[..filled]);
+        process_us = process_us.saturating_add(started.elapsed().as_micros() as u64);
+        streaming_hash_checkpoint(
+            &mut checkpoint_us,
+            &mut checkpoint_max_us,
+            &mut checkpoint_count,
+        );
+    }
+    loop {
+        let started = Instant::now();
+        let bytes = file
+            .read(&mut buffer)
+            .map_err(|error| format!("read benchmark ROM {}: {error}", input.path.display()))?;
+        read_us = read_us.saturating_add(started.elapsed().as_micros() as u64);
+        read_calls = read_calls.saturating_add(1);
+        if bytes == 0 {
+            break;
+        }
+        bytes_read = bytes_read.saturating_add(bytes as u64);
+        let started = Instant::now();
+        hasher.update(&buffer[..bytes]);
+        process_us = process_us.saturating_add(started.elapsed().as_micros() as u64);
+        streaming_hash_checkpoint(
+            &mut checkpoint_us,
+            &mut checkpoint_max_us,
+            &mut checkpoint_count,
+        );
+    }
+    if bytes_read != input.size {
+        return Err(format!(
+            "benchmark ROM changed size while streaming {}",
+            input.path.display()
+        ));
+    }
+    let started = Instant::now();
+    let candidates = hasher.finish();
+    process_us = process_us.saturating_add(started.elapsed().as_micros() as u64);
+    Ok((
+        candidates,
+        StreamingHashMetrics {
+            open_us,
+            read_us,
+            process_us,
+            checkpoint_us,
+            checkpoint_max_us,
+            checkpoint_count,
+            total_us: total_started.elapsed().as_micros() as u64,
+            bytes_read,
+            read_calls,
+            buffer_allocation_bytes: buffer.capacity(),
+        },
+    ))
+}
+
+#[cfg(feature = "builder")]
+fn streaming_hash_checkpoint(total_us: &mut u64, max_us: &mut u64, count: &mut u64) {
+    let started = Instant::now();
+    crate::cooperative_work::checkpoint();
+    let elapsed_us = started.elapsed().as_micros() as u64;
+    *total_us = total_us.saturating_add(elapsed_us);
+    *max_us = (*max_us).max(elapsed_us);
+    *count = count.saturating_add(1);
+}
+
+#[cfg(feature = "builder")]
+fn benchmark_streaming_rom_identity(
+    input: &RomIdentityBenchmarkInput,
+    metadata: &MameSoftwareMetadata,
+    software_hash_cache: &SoftwareHashCache,
+) -> Result<serde_json::Value, String> {
+    use serde_json::json;
+
+    let rss_before_kb = proc_status_kb("VmRSS");
+    let hwm_before_kb = proc_status_kb("VmHWM");
+    let faults_before = process_faults();
+    let cpu_start = current_cpu();
+    let total_started = Instant::now();
+    let (candidate_hashes, metrics) = stream_rom_candidate_hashes(input)?;
+    let lookup_started = Instant::now();
+    let matched = candidate_hashes
+        .iter()
+        .enumerate()
+        .find_map(|(index, (size, crc))| {
+            metadata
+                .hash_index
+                .get(&(input.list_name.to_string(), *size, *crc))
+                .and_then(|names| names.first())
+                .cloned()
+                .map(|identity| (index, identity))
+        });
+    let identity = matched.as_ref().map(|(_, identity)| identity.clone());
+    let lookup_us = lookup_started.elapsed().as_micros() as u64;
+    let family_id = identity.as_ref().and_then(|software_name| {
+        metadata
+            .items
+            .get(&(input.list_name.to_string(), software_name.clone()))
+            .map(|item| {
+                item.parent_name
+                    .as_deref()
+                    .filter(|parent| !parent.trim().is_empty())
+                    .unwrap_or(software_name)
+                    .to_string()
+            })
+    });
+    let cache_key = software_hash_cache_key(input.list_name, input.path.to_string_lossy().as_ref());
+    let cached_identity = cache_key
+        .as_ref()
+        .and_then(|key| software_hash_cache.entries.get(key));
+    let total_us = total_started.elapsed().as_micros() as u64;
+    let bounded_production_validation = input.list_name == "lynx" && input.size < 4 * 1024 * 1024;
+    let pmu = if bounded_production_validation {
+        benchmark_streaming_rom_identity_pmu(input, metadata)
+    } else {
+        json!({
+            "available": false,
+            "reason": "bounded-to-small-production-default-case",
+        })
+    };
+    let faults_after = process_faults();
+    Ok(json!({
+        "list_name": input.list_name,
+        "path": input.path,
+        "size_bytes": input.size,
+        "size_class": rom_benchmark_size_class(input.size),
+        "production_default": input.list_name == "lynx",
+        "production_parity_executed": false,
+        "identity": identity,
+        "family_id": family_id,
+        "matched_candidate_index": matched.as_ref().map(|(index, _)| index),
+        "matched_candidate_rank": matched.as_ref().map(|(index, _)| index + 1),
+        "software_cache": {
+            "key_available": cache_key.is_some(),
+            "entry_present": cached_identity.is_some(),
+            "identity": cached_identity.cloned().flatten(),
+        },
+        "candidates": candidate_hashes.iter().enumerate().map(|(index, (size, crc))| json!({
+            "index": index,
+            "size_bytes": size,
+            "crc32": format!("{crc:08x}"),
+        })).collect::<Vec<_>>(),
+        "metrics": {
+            "open_us": metrics.open_us,
+            "read_us": metrics.read_us,
+            "transform_us": 0,
+            "crc_us": metrics.process_us,
+            "transform_crc_us": metrics.process_us,
+            "lookup_us": lookup_us,
+            "total_us": total_us,
+            "stream_total_us": metrics.total_us,
+            "bytes_read": metrics.bytes_read,
+            "read_calls": metrics.read_calls,
+            "whole_file_allocation_bytes": 0,
+            "candidate_allocation_bytes": 0,
+            "read_buffer_allocation_bytes": metrics.buffer_allocation_bytes,
+            "checkpoint_count": metrics.checkpoint_count,
+            "checkpoint_total_us": metrics.checkpoint_us,
+            "checkpoint_max_us": metrics.checkpoint_max_us,
+            "minor_page_faults": faults_after.0.saturating_sub(faults_before.0),
+            "major_page_faults": faults_after.1.saturating_sub(faults_before.1),
+            "rss_before_kb": rss_before_kb,
+            "rss_after_kb": proc_status_kb("VmRSS"),
+            "hwm_before_kb": hwm_before_kb,
+            "hwm_after_kb": proc_status_kb("VmHWM"),
+            "cpu_start": cpu_start,
+            "cpu_end": current_cpu(),
+        },
+        "pmu_attribution": pmu,
+    }))
+}
+
+#[cfg(feature = "builder")]
+fn benchmark_streaming_rom_identity_pmu(
+    input: &RomIdentityBenchmarkInput,
+    metadata: &MameSoftwareMetadata,
+) -> serde_json::Value {
+    use serde_json::json;
+
+    let (group, diagnostics) = mister_magik_perf_events::CounterGroup::open_with_diagnostics();
+    let Ok(group) = group else {
+        return json!({"available": false, "diagnostics": diagnostics});
+    };
+    let Ok(started) = group.snapshot() else {
+        return json!({"available": false, "diagnostics": diagnostics});
+    };
+    let wall_started = Instant::now();
+    let result = stream_rom_candidate_hashes(input).map(|(candidates, _)| {
+        candidates.iter().find_map(|(size, crc)| {
+            metadata
+                .hash_index
+                .get(&(input.list_name.to_string(), *size, *crc))
+                .and_then(|names| names.first())
+                .cloned()
+        })
+    });
+    let wall_us = wall_started.elapsed().as_micros() as u64;
+    match (result, group.snapshot()) {
+        (Ok(identity), Ok(finished)) => {
+            let counters = finished.delta_from(started);
+            json!({
+                "available": true,
+                "wall_us": wall_us,
+                "identity": identity,
+                "ipc": counters.instructions_per_cycle(),
+                "counters": counters,
+                "diagnostics": diagnostics,
+            })
+        }
+        (Err(error), _) => json!({
+            "available": false,
+            "error": error,
+            "diagnostics": diagnostics,
+        }),
+        (_, Err(error)) => json!({
+            "available": false,
+            "error": error.to_string(),
+            "diagnostics": diagnostics,
+        }),
+    }
 }
 
 #[cfg(feature = "builder")]
@@ -1975,6 +2469,51 @@ mod tests {
             vec![root.join("games/Atari Lynx"), root.join("games/SNES")]
         );
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(feature = "builder")]
+    #[test]
+    fn incremental_crc32_matches_the_scalar_oracle() {
+        let bytes = (0..4099)
+            .map(|index| ((index * 37 + index / 11) & 0xff) as u8)
+            .collect::<Vec<_>>();
+        for chunk_bytes in [1, 2, 3, 4, 17, 255, 256, 1023] {
+            let mut incremental = IncrementalCrc32::default();
+            for chunk in bytes.chunks(chunk_bytes) {
+                incremental.update(chunk);
+            }
+            assert_eq!(incremental.finish(), (bytes.len() as u64, crc32(&bytes)));
+        }
+    }
+
+    #[cfg(feature = "builder")]
+    #[test]
+    fn streaming_rom_candidates_match_whole_file_candidates_across_boundaries() {
+        let mut nes = b"NES\x1a".to_vec();
+        nes.extend((4..211).map(|index| (index * 13) as u8));
+        let mut lynx = b"LYNX".to_vec();
+        lynx.extend((4..193).map(|index| (index * 17) as u8));
+        let snes = (0..777).map(|index| (index * 19) as u8).collect::<Vec<_>>();
+        let n64 = (0..1031)
+            .map(|index| (index * 23) as u8)
+            .collect::<Vec<_>>();
+        for (list_name, bytes) in [("nes", nes), ("lynx", lynx), ("snes", snes), ("n64", n64)] {
+            let expected = rom_hash_candidates(list_name, &bytes)
+                .iter()
+                .map(|candidate| (candidate.len() as u64, crc32(candidate)))
+                .collect::<Vec<_>>();
+            for chunk_bytes in [1, 2, 3, 5, 17, 256] {
+                let mut streaming = StreamingRomCandidateHasher::new(
+                    list_name,
+                    bytes.len() as u64,
+                    &bytes[..bytes.len().min(4)],
+                );
+                for chunk in bytes.chunks(chunk_bytes) {
+                    streaming.update(chunk);
+                }
+                assert_eq!(streaming.finish(), expected, "{list_name}/{chunk_bytes}");
+            }
+        }
     }
 
     #[test]

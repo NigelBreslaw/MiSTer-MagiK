@@ -2171,26 +2171,28 @@ fn execute_rom_identity_hashing(
 
 fn evaluate_rom_identity_hashing_summary(summary: &Value) -> AgentResult<()> {
     if summary.get("schema").and_then(Value::as_str)
-        != Some("mister-magik-rom-identity-benchmark-v1")
+        != Some("mister-magik-rom-identity-comparison-v1")
         || summary.get("status").and_then(Value::as_str) != Some("passed")
     {
-        return Err("ROM identity benchmark is not a passing v1 report".into());
+        return Err("ROM identity benchmark is not a passing comparison report".into());
     }
-    if summary
-        .get("case_count")
-        .and_then(Value::as_u64)
-        .unwrap_or(0)
-        == 0
-    {
-        return Err("ROM identity benchmark selected no production files".into());
-    }
-    if summary
-        .get("production_default_selected")
-        .and_then(Value::as_u64)
-        .unwrap_or(0)
-        == 0
-    {
-        return Err("ROM identity benchmark selected no production-default Lynx files".into());
+    for field in ["baseline_runs", "candidate_runs"] {
+        let runs = summary
+            .get(field)
+            .and_then(Value::as_array)
+            .ok_or_else(|| format!("ROM identity comparison has no {field}"))?;
+        if runs.len() != 2
+            || runs.iter().any(|run| {
+                run.get("case_count").and_then(Value::as_u64).unwrap_or(0) == 0
+                    || run
+                        .get("production_default_selected")
+                        .and_then(Value::as_u64)
+                        .unwrap_or(0)
+                        == 0
+            })
+        {
+            return Err(format!("ROM identity comparison has invalid {field}").into());
+        }
     }
     Ok(())
 }
@@ -3297,19 +3299,18 @@ mod tests {
 
     #[test]
     fn rom_identity_evaluator_requires_production_default_cases() {
-        let passing = json!({
-            "schema": "mister-magik-rom-identity-benchmark-v1",
-            "status": "passed",
+        let arm = json!({
             "case_count": 3,
             "production_default_selected": 1,
         });
+        let passing = json!({
+            "schema": "mister-magik-rom-identity-comparison-v1",
+            "status": "passed",
+            "baseline_runs": [arm.clone(), arm.clone()],
+            "candidate_runs": [arm.clone(), arm],
+        });
         evaluate_rom_identity_hashing_summary(&passing).unwrap();
-        for field in [
-            "schema",
-            "status",
-            "case_count",
-            "production_default_selected",
-        ] {
+        for field in ["schema", "status", "baseline_runs", "candidate_runs"] {
             let mut invalid = passing.clone();
             invalid[field] = Value::Null;
             assert!(evaluate_rom_identity_hashing_summary(&invalid).is_err());

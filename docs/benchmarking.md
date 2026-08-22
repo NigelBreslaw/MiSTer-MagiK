@@ -85,6 +85,14 @@ production-default Lynx case so transformed opt-in ROMs cannot exhaust the
 typed operation timeout. The scenario neither starts catalog work nor enables
 forced background refresh.
 
+During the streaming experiment, the typed host workflow consumes the app's
+closed `whole-file` and `streaming` ROM-identity selectors in the balanced order
+baseline A, candidate A, candidate B, baseline B. Each arm runs in a separate
+process so RSS/HWM remains comparable. The host accepts the comparison only when
+all candidate CRC, identity, family, rank, and software-cache hashes equal both
+whole-file arms. The selector does not affect catalog construction or the
+production matcher.
+
 The Arcade velocity-scroll profiling scenarios default to the active display
 route. A typed arm also accepts `--route active`, `--route hdmi-landscape`,
 `--route hdmi-portrait-left`, `--route hdmi-portrait-right`,
