@@ -697,6 +697,13 @@ impl NativeDevice {
         self.benchmark_profile(|config| profile_installed_search(config, output_dir))
     }
 
+    pub(crate) fn profile_rom_identity_hashing(
+        &mut self,
+        output_dir: &Path,
+    ) -> std::result::Result<String, DeviceFailure> {
+        self.benchmark_profile(|config| profile_installed_rom_identity_hashing(config, output_dir))
+    }
+
     pub(crate) fn profile_pmu(
         &mut self,
         output_dir: &Path,
@@ -12189,6 +12196,52 @@ fn profile_installed_search(config: &NativeDeviceConfig, output_dir: &Path) -> R
         last_json_line(&output.stdout).ok_or("installed search benchmark returned no JSON")?;
     if summary.get("schema").and_then(Value::as_str) != Some("mister-magik-search-benchmark-v1") {
         return Err("installed search benchmark returned the wrong schema".into());
+    }
+    fs::write(
+        output_dir.join("summary.json"),
+        format!("{}\n", serde_json::to_string_pretty(&summary)?),
+    )?;
+    serde_json::to_string(&summary).map_err(Into::into)
+}
+
+fn profile_installed_rom_identity_hashing(
+    config: &NativeDeviceConfig,
+    output_dir: &Path,
+) -> Result<String> {
+    let session = connect_with(&config.connection, 10)?;
+    fs::create_dir_all(output_dir)?;
+    let capability = exec_checked_output(
+        &session,
+        "installed benchmark capability",
+        DEVELOPMENT_BENCHMARK_CAPABILITIES_COMMAND.as_str(),
+    )?;
+    let capability = last_json_line(&capability.stdout)
+        .ok_or("installed benchmark capability output contains no JSON report")?;
+    if capability
+        .get("rom-identity-benchmark-v1")
+        .and_then(Value::as_bool)
+        != Some(true)
+    {
+        return Err("installed app does not support rom-identity-benchmark-v1".into());
+    }
+    let output = exec(
+        &session,
+        &development_gui_command("rom-identity-bench"),
+        true,
+    )?;
+    let mut log = output.stdout.clone();
+    log.push_str(&output.stderr);
+    fs::write(output_dir.join("rom-identity-bench.log"), &log)?;
+    if let Some(message) = exec_failure_message("installed ROM identity benchmark", &output) {
+        return Err(message.into());
+    }
+    let summary = last_json_line(&output.stdout)
+        .ok_or("installed ROM identity benchmark returned no JSON")?;
+    if summary.get("schema").and_then(Value::as_str)
+        != Some("mister-magik-rom-identity-benchmark-v1")
+        || summary.get("status").and_then(Value::as_str) != Some("passed")
+    {
+        return Err("installed ROM identity benchmark returned a non-passing report".into());
     }
     fs::write(
         output_dir.join("summary.json"),

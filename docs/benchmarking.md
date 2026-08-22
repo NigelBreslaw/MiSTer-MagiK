@@ -66,8 +66,19 @@ Supported scenarios:
 - `orientation-transition-zoom-pprof`
 - `neon-attribution`
 - `pmu-profile`
+- `rom-identity-hashing`
 - `search`
 - `streamline`
+
+`rom-identity-hashing` is a read-only exact-device authority for the current
+whole-file ROM identity implementation. It selects deterministic small, medium,
+and large production files for Lynx, NES, SNES, Mega Drive, and N64 where those
+classes exist, records I/O, transformation, scalar CRC, lookup, faults, RSS/HWM,
+CPU placement, and PMU attribution, and hashes every candidate and result. Lynx
+is reported separately because it is the only production-default full-ROM hash
+policy; all other systems are opportunity context and cannot justify promotion
+on their own. The scenario neither starts catalog work nor enables forced
+background refresh.
 
 The Arcade velocity-scroll profiling scenarios default to the active display
 route. A typed arm also accepts `--route active`, `--route hdmi-landscape`,

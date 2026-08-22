@@ -950,6 +950,7 @@ mod tests {
             "launcher-response-streamline",
             "cold-boot",
             "cold-boot-pprof",
+            "rom-identity-hashing",
             "search",
             "streamline",
         ];

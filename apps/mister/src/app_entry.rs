@@ -35,6 +35,7 @@
 //!     hbmame-metadata-from-library
 //!                        build supplemental HBMAME metadata from parsed MRA parents
 //!   Bench tools (`--features bench-tools`):
+//!     rom-identity-bench benchmark production ROM identity hashing
 //!     media-bench-download
 //!                        benchmark screenshot pack downloads and variant decoding
 //!     media-bench-save   benchmark screenshot pack save/publish paths
@@ -377,6 +378,8 @@ fn dispatch_pre_fpga(
         "pmu-probe" => pmu_probe::run(),
         "pmu-profile" => pmu_profile::run(args.get(2..).unwrap_or_default()),
         "search-bench" => search_bench::run(),
+        #[cfg(feature = "bench-tools")]
+        "rom-identity-bench" => run_rom_identity_benchmark(),
         command_args::CATALOG_CORPUS_INVENTORY_COMMAND => run_catalog_corpus_inventory(),
         #[cfg(feature = "bench-tools")]
         "media-bench-download" => media_bench_download::run(),
@@ -436,6 +439,17 @@ fn run_catalog_corpus_inventory() {
     );
 }
 
+#[cfg(feature = "bench-tools")]
+fn run_rom_identity_benchmark() {
+    match mister_magik_catalog::rom_identity_benchmark_report() {
+        Ok(report) => crate::ui_logln!("{report}"),
+        Err(error) => {
+            crate::ui_errln!("ROM identity benchmark failed: {error}");
+            std::process::exit(1);
+        }
+    }
+}
+
 fn benchmark_capabilities() -> serde_json::Value {
     let mut capabilities = serde_json::json!({
         "schema": "mister-magik-benchmark-capabilities-v1",
@@ -452,6 +466,7 @@ fn benchmark_capabilities() -> serde_json::Value {
         "pmu-profile-v1": true,
         "pmu-profile-v2": true,
         "persisted-search-v1": true,
+        "rom-identity-benchmark-v1": cfg!(feature = "bench-tools"),
         "input-integrity-driver-v1": true,
         "arcade-velocity-scroll-v1": true,
         "arcade-velocity-scroll-attribution-v1": true,

@@ -66,6 +66,7 @@ pub enum BenchmarkScenario {
     OrientationTransitionZoomPprof,
     NeonAttribution,
     PmuProfile,
+    RomIdentityHashing,
     Search,
     Streamline,
 }
@@ -130,6 +131,7 @@ impl BenchmarkScenario {
             Self::OrientationTransitionZoomPprof => "orientation-transition-zoom-pprof",
             Self::NeonAttribution => "neon-attribution",
             Self::PmuProfile => "pmu-profile",
+            Self::RomIdentityHashing => "rom-identity-hashing",
             Self::Search => "search",
             Self::Streamline => "streamline",
         }

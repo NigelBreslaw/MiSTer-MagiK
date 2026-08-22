@@ -12,6 +12,8 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;
+#[cfg(feature = "builder")]
+use std::path::PathBuf;
 use std::time::Instant;
 
 pub(crate) type MachineMetadataRow = (
@@ -1325,6 +1327,478 @@ pub(crate) fn preview_platform_for_software_list(list_name: &str) -> &str {
     }
 }
 
+#[cfg(feature = "builder")]
+#[derive(Clone, Debug)]
+struct RomIdentityBenchmarkInput {
+    list_name: &'static str,
+    path: PathBuf,
+    size: u64,
+}
+
+#[cfg(feature = "builder")]
+struct CountingReader<'a> {
+    file: &'a mut File,
+    read_calls: u64,
+    bytes_read: u64,
+}
+
+#[cfg(feature = "builder")]
+impl Read for CountingReader<'_> {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        let bytes = self.file.read(buffer)?;
+        self.read_calls = self.read_calls.saturating_add(1);
+        self.bytes_read = self.bytes_read.saturating_add(bytes as u64);
+        Ok(bytes)
+    }
+}
+
+#[cfg(feature = "builder")]
+pub fn rom_identity_benchmark_report() -> Result<serde_json::Value, String> {
+    use serde_json::json;
+    use sha2::{Digest, Sha256};
+    use walkdir::WalkDir;
+
+    let report_started = Instant::now();
+    let roots = crate::catalog_config::library_roots_from_env();
+    let selection_started = Instant::now();
+    let mut eligible = BTreeMap::<&'static str, Vec<RomIdentityBenchmarkInput>>::new();
+    let mut walk_errors = 0u64;
+    for root in &roots {
+        for entry in WalkDir::new(root).follow_links(true).max_depth(16) {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(_) => {
+                    walk_errors = walk_errors.saturating_add(1);
+                    continue;
+                }
+            };
+            if !entry.file_type().is_file() {
+                continue;
+            }
+            let path = entry.path();
+            let Some(list_name) = rom_benchmark_list_for_path(path) else {
+                continue;
+            };
+            let Ok(metadata) = entry.metadata() else {
+                walk_errors = walk_errors.saturating_add(1);
+                continue;
+            };
+            if metadata.len() == 0 {
+                continue;
+            }
+            eligible
+                .entry(list_name)
+                .or_default()
+                .push(RomIdentityBenchmarkInput {
+                    list_name,
+                    path: path.to_path_buf(),
+                    size: metadata.len(),
+                });
+        }
+    }
+    let eligible_counts = eligible
+        .iter()
+        .map(|(list, files)| ((*list).to_string(), files.len()))
+        .collect::<BTreeMap<_, _>>();
+    let production_default_eligible = eligible.get("lynx").map_or(0, Vec::len);
+    let mut selected = Vec::new();
+    for files in eligible.values_mut() {
+        files.sort_by(|left, right| {
+            left.size
+                .cmp(&right.size)
+                .then_with(|| left.path.cmp(&right.path))
+        });
+        for size_class in ["small", "medium", "large"] {
+            let class = files
+                .iter()
+                .filter(|input| rom_benchmark_size_class(input.size) == size_class)
+                .collect::<Vec<_>>();
+            if let Some(input) = class.get(class.len() / 2) {
+                selected.push((*input).clone());
+            }
+        }
+    }
+    selected.sort_by(|left, right| {
+        left.list_name
+            .cmp(right.list_name)
+            .then_with(|| left.size.cmp(&right.size))
+            .then_with(|| left.path.cmp(&right.path))
+    });
+    let selection_us = selection_started.elapsed().as_micros() as u64;
+    if selected.is_empty() {
+        return Err("ROM identity benchmark found no hash-eligible production files".to_string());
+    }
+
+    let metadata_started = Instant::now();
+    let metadata = load_mame_software_metadata(&crate::catalog_config::default_mame_sqlite_path());
+    let metadata_load_us = metadata_started.elapsed().as_micros() as u64;
+    let scanner_cache_path = crate::scanner_cache::default_path();
+    let software_hash_cache = SoftwareHashCache::load(&scanner_cache_path);
+    let software_hash_cache_sha256 = rom_benchmark_cache_digest(&software_hash_cache);
+    let production_default_catalog_hash_entries = software_hash_cache
+        .entries
+        .keys()
+        .filter(|key| key.list_name == software_hash_cache_namespace("lynx"))
+        .count();
+    let rss_before_kb = proc_status_kb("VmRSS");
+    let hwm_before_kb = proc_status_kb("VmHWM");
+    let mut cases = Vec::with_capacity(selected.len());
+    let mut result_digest = Sha256::new();
+    result_digest.update(software_hash_cache_sha256.as_bytes());
+    let mut production_default_selected = 0usize;
+    for input in selected {
+        if input.list_name == "lynx" {
+            production_default_selected = production_default_selected.saturating_add(1);
+        }
+        let case = benchmark_current_rom_identity(&input, &metadata, &software_hash_cache)?;
+        result_digest.update(input.list_name.as_bytes());
+        result_digest.update(input.path.as_os_str().as_encoded_bytes());
+        result_digest.update(input.size.to_le_bytes());
+        result_digest.update(
+            serde_json::to_vec(&case.get("candidates").cloned().unwrap_or_default())
+                .map_err(|error| format!("encode ROM benchmark digest: {error}"))?,
+        );
+        if let Some(identity) = case.get("identity").and_then(serde_json::Value::as_str) {
+            result_digest.update(identity.as_bytes());
+        }
+        for field in [
+            "family_id",
+            "matched_candidate_index",
+            "matched_candidate_rank",
+        ] {
+            result_digest.update(
+                serde_json::to_vec(&case.get(field).cloned().unwrap_or_default())
+                    .map_err(|error| format!("encode ROM benchmark {field}: {error}"))?,
+            );
+        }
+        result_digest.update(
+            serde_json::to_vec(&case.get("software_cache").cloned().unwrap_or_default())
+                .map_err(|error| format!("encode ROM benchmark cache result: {error}"))?,
+        );
+        cases.push(case);
+    }
+    let rss_after_kb = proc_status_kb("VmRSS");
+    let hwm_after_kb = proc_status_kb("VmHWM");
+    Ok(json!({
+        "schema": "mister-magik-rom-identity-benchmark-v1",
+        "status": "passed",
+        "implementation": "whole-file-scalar-crc32",
+        "production_default_policy": "lynx-only",
+        "roots": roots,
+        "selection_us": selection_us,
+        "metadata_load_us": metadata_load_us,
+        "walk_errors": walk_errors,
+        "eligible_counts": eligible_counts,
+        "production_default_eligible": production_default_eligible,
+        "production_default_selected": production_default_selected,
+        "production_default_catalog_hash_entries": production_default_catalog_hash_entries,
+        "software_hash_cache_path": scanner_cache_path,
+        "software_hash_cache_entries": software_hash_cache.entries.len(),
+        "software_hash_cache_sha256": software_hash_cache_sha256,
+        "case_count": cases.len(),
+        "cases": cases,
+        "result_sha256": format!("{:x}", result_digest.finalize()),
+        "rss_before_kb": rss_before_kb,
+        "rss_after_kb": rss_after_kb,
+        "hwm_before_kb": hwm_before_kb,
+        "hwm_after_kb": hwm_after_kb,
+        "total_us": report_started.elapsed().as_micros() as u64,
+    }))
+}
+
+#[cfg(feature = "builder")]
+fn benchmark_current_rom_identity(
+    input: &RomIdentityBenchmarkInput,
+    metadata: &MameSoftwareMetadata,
+    software_hash_cache: &SoftwareHashCache,
+) -> Result<serde_json::Value, String> {
+    use serde_json::json;
+
+    let rss_before_kb = proc_status_kb("VmRSS");
+    let hwm_before_kb = proc_status_kb("VmHWM");
+    let faults_before = process_faults();
+    let cpu_start = current_cpu();
+    let total_started = Instant::now();
+    let open_started = Instant::now();
+    let mut file = File::open(&input.path)
+        .map_err(|error| format!("open benchmark ROM {}: {error}", input.path.display()))?;
+    let open_us = open_started.elapsed().as_micros() as u64;
+    let read_started = Instant::now();
+    let allocation_bytes = usize::try_from(input.size)
+        .map_err(|_| format!("benchmark ROM is too large: {}", input.path.display()))?;
+    let mut bytes = Vec::with_capacity(allocation_bytes);
+    let mut reader = CountingReader {
+        file: &mut file,
+        read_calls: 0,
+        bytes_read: 0,
+    };
+    reader
+        .read_to_end(&mut bytes)
+        .map_err(|error| format!("read benchmark ROM {}: {error}", input.path.display()))?;
+    let read_calls = reader.read_calls;
+    let bytes_read = reader.bytes_read;
+    let read_us = read_started.elapsed().as_micros() as u64;
+    if bytes.len() as u64 != input.size {
+        return Err(format!(
+            "benchmark ROM changed size while reading {}",
+            input.path.display()
+        ));
+    }
+    let transform_started = Instant::now();
+    let candidates = rom_hash_candidates(input.list_name, &bytes);
+    let transform_us = transform_started.elapsed().as_micros() as u64;
+    let candidate_allocation_bytes = candidates.iter().map(Vec::len).sum::<usize>();
+    let crc_started = Instant::now();
+    let candidate_hashes = candidates
+        .iter()
+        .map(|candidate| (candidate.len() as u64, crc32(candidate)))
+        .collect::<Vec<_>>();
+    let crc_us = crc_started.elapsed().as_micros() as u64;
+    let lookup_started = Instant::now();
+    let matched = candidate_hashes
+        .iter()
+        .enumerate()
+        .find_map(|(index, (size, crc))| {
+            metadata
+                .hash_index
+                .get(&(input.list_name.to_string(), *size, *crc))
+                .and_then(|names| names.first())
+                .cloned()
+                .map(|identity| (index, identity))
+        });
+    let identity = matched.as_ref().map(|(_, identity)| identity.clone());
+    let lookup_us = lookup_started.elapsed().as_micros() as u64;
+    let family_id = identity.as_ref().and_then(|software_name| {
+        metadata
+            .items
+            .get(&(input.list_name.to_string(), software_name.clone()))
+            .map(|item| {
+                item.parent_name
+                    .as_deref()
+                    .filter(|parent| !parent.trim().is_empty())
+                    .unwrap_or(software_name)
+                    .to_string()
+            })
+    });
+    let cache_key = software_hash_cache_key(input.list_name, input.path.to_string_lossy().as_ref());
+    let cached_identity = cache_key
+        .as_ref()
+        .and_then(|key| software_hash_cache.entries.get(key));
+    let total_us = total_started.elapsed().as_micros() as u64;
+    let production_identity = match_software_by_full_rom_hash(
+        input.path.to_string_lossy().as_ref(),
+        input.list_name,
+        metadata,
+    );
+    if identity != production_identity {
+        return Err(format!(
+            "diagnostic and production identity differ for {}",
+            input.path.display()
+        ));
+    }
+    let pmu = benchmark_rom_identity_pmu(input, metadata);
+    let faults_after = process_faults();
+    Ok(json!({
+        "list_name": input.list_name,
+        "path": input.path,
+        "size_bytes": input.size,
+        "size_class": rom_benchmark_size_class(input.size),
+        "production_default": input.list_name == "lynx",
+        "identity": identity,
+        "family_id": family_id,
+        "matched_candidate_index": matched.as_ref().map(|(index, _)| index),
+        "matched_candidate_rank": matched.as_ref().map(|(index, _)| index + 1),
+        "software_cache": {
+            "key_available": cache_key.is_some(),
+            "entry_present": cached_identity.is_some(),
+            "identity": cached_identity.cloned().flatten(),
+        },
+        "candidates": candidate_hashes.iter().enumerate().map(|(index, (size, crc))| json!({
+            "index": index,
+            "size_bytes": size,
+            "crc32": format!("{crc:08x}"),
+        })).collect::<Vec<_>>(),
+        "metrics": {
+            "open_us": open_us,
+            "read_us": read_us,
+            "transform_us": transform_us,
+            "crc_us": crc_us,
+            "lookup_us": lookup_us,
+            "total_us": total_us,
+            "bytes_read": bytes_read,
+            "read_calls": read_calls,
+            "whole_file_allocation_bytes": bytes.capacity(),
+            "candidate_allocation_bytes": candidate_allocation_bytes,
+            "minor_page_faults": faults_after.0.saturating_sub(faults_before.0),
+            "major_page_faults": faults_after.1.saturating_sub(faults_before.1),
+            "rss_before_kb": rss_before_kb,
+            "rss_after_kb": proc_status_kb("VmRSS"),
+            "hwm_before_kb": hwm_before_kb,
+            "hwm_after_kb": proc_status_kb("VmHWM"),
+            "cpu_start": cpu_start,
+            "cpu_end": current_cpu(),
+        },
+        "pmu_attribution": pmu,
+    }))
+}
+
+#[cfg(feature = "builder")]
+fn benchmark_rom_identity_pmu(
+    input: &RomIdentityBenchmarkInput,
+    metadata: &MameSoftwareMetadata,
+) -> serde_json::Value {
+    use serde_json::json;
+
+    let (group, diagnostics) = mister_magik_perf_events::CounterGroup::open_with_diagnostics();
+    let Ok(group) = group else {
+        return json!({"available": false, "diagnostics": diagnostics});
+    };
+    let Ok(started) = group.snapshot() else {
+        return json!({"available": false, "diagnostics": diagnostics});
+    };
+    let wall_started = Instant::now();
+    let identity = match_software_by_full_rom_hash(
+        input.path.to_string_lossy().as_ref(),
+        input.list_name,
+        metadata,
+    );
+    let wall_us = wall_started.elapsed().as_micros() as u64;
+    match group.snapshot() {
+        Ok(finished) => {
+            let counters = finished.delta_from(started);
+            json!({
+                "available": true,
+                "wall_us": wall_us,
+                "identity": identity,
+                "ipc": counters.instructions_per_cycle(),
+                "counters": counters,
+                "diagnostics": diagnostics,
+            })
+        }
+        Err(error) => json!({
+            "available": false,
+            "error": error.to_string(),
+            "diagnostics": diagnostics,
+        }),
+    }
+}
+
+#[cfg(feature = "builder")]
+fn rom_benchmark_list_for_path(path: &Path) -> Option<&'static str> {
+    let extension = path.extension()?.to_str()?.to_ascii_lowercase();
+    match extension.as_str() {
+        "lnx" => Some("lynx"),
+        "nes" => Some("nes"),
+        "sfc" | "smc" => Some("snes"),
+        "z64" | "n64" | "v64" => Some("n64"),
+        "md" | "gen" => Some("megadriv"),
+        "bin"
+            if path
+                .to_string_lossy()
+                .to_ascii_lowercase()
+                .contains("megadrive")
+                || path
+                    .to_string_lossy()
+                    .to_ascii_lowercase()
+                    .contains("genesis") =>
+        {
+            Some("megadriv")
+        }
+        _ => None,
+    }
+}
+
+#[cfg(feature = "builder")]
+fn rom_benchmark_size_class(size: u64) -> &'static str {
+    if size < 4 * 1024 * 1024 {
+        "small"
+    } else if size < 32 * 1024 * 1024 {
+        "medium"
+    } else {
+        "large"
+    }
+}
+
+#[cfg(feature = "builder")]
+fn rom_benchmark_cache_digest(cache: &SoftwareHashCache) -> String {
+    use sha2::{Digest, Sha256};
+
+    let mut entries = cache.entries.iter().collect::<Vec<_>>();
+    entries.sort_by(|(left, _), (right, _)| {
+        left.list_name
+            .cmp(&right.list_name)
+            .then_with(|| left.file_path.cmp(&right.file_path))
+            .then_with(|| left.size.cmp(&right.size))
+            .then_with(|| left.mtime_secs.cmp(&right.mtime_secs))
+    });
+    let mut digest = Sha256::new();
+    for (key, identity) in entries {
+        digest.update(key.list_name.as_bytes());
+        digest.update([0]);
+        digest.update(key.file_path.as_bytes());
+        digest.update([0]);
+        digest.update(key.size.to_le_bytes());
+        digest.update(key.mtime_secs.to_le_bytes());
+        match identity {
+            Some(identity) => {
+                digest.update([1]);
+                digest.update(identity.as_bytes());
+            }
+            None => digest.update([0]),
+        }
+    }
+    format!("{:x}", digest.finalize())
+}
+
+#[cfg(feature = "builder")]
+fn proc_status_kb(key: &str) -> u64 {
+    let Ok(text) = std::fs::read_to_string("/proc/self/status") else {
+        return 0;
+    };
+    text.lines()
+        .find_map(|line| {
+            let (line_key, rest) = line.split_once(':')?;
+            (line_key == key).then(|| {
+                rest.split_whitespace()
+                    .next()
+                    .and_then(|value| value.parse::<u64>().ok())
+                    .unwrap_or(0)
+            })
+        })
+        .unwrap_or(0)
+}
+
+#[cfg(all(feature = "builder", target_os = "linux"))]
+fn process_faults() -> (u64, u64) {
+    let mut usage = std::mem::MaybeUninit::<libc::rusage>::zeroed();
+    // SAFETY: getrusage initializes the complete rusage structure on success.
+    if unsafe { libc::getrusage(libc::RUSAGE_SELF, usage.as_mut_ptr()) } != 0 {
+        return (0, 0);
+    }
+    // SAFETY: the successful getrusage call initialized usage.
+    let usage = unsafe { usage.assume_init() };
+    (
+        u64::try_from(usage.ru_minflt).unwrap_or(0),
+        u64::try_from(usage.ru_majflt).unwrap_or(0),
+    )
+}
+
+#[cfg(all(feature = "builder", not(target_os = "linux")))]
+fn process_faults() -> (u64, u64) {
+    (0, 0)
+}
+
+#[cfg(all(feature = "builder", target_os = "linux"))]
+fn current_cpu() -> i32 {
+    // SAFETY: sched_getcpu has no pointer arguments or caller-side invariants.
+    unsafe { libc::sched_getcpu() }
+}
+
+#[cfg(all(feature = "builder", not(target_os = "linux")))]
+fn current_cpu() -> i32 {
+    -1
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1336,6 +1810,44 @@ mod tests {
         write_sqlite_scan_with_mame_and_preview_pack,
     };
     use crate::test_support::*;
+
+    #[cfg(feature = "builder")]
+    #[test]
+    fn rom_identity_benchmark_classifies_supported_production_files() {
+        assert_eq!(
+            rom_benchmark_list_for_path(Path::new("/media/fat/games/Atari Lynx/Game.LNX")),
+            Some("lynx")
+        );
+        assert_eq!(
+            rom_benchmark_list_for_path(Path::new("/media/fat/games/NES/Game.nes")),
+            Some("nes")
+        );
+        assert_eq!(
+            rom_benchmark_list_for_path(Path::new("/media/fat/games/SNES/Game.smc")),
+            Some("snes")
+        );
+        assert_eq!(
+            rom_benchmark_list_for_path(Path::new("/media/fat/games/N64/Game.v64")),
+            Some("n64")
+        );
+        assert_eq!(
+            rom_benchmark_list_for_path(Path::new("/media/fat/games/MegaDrive/Game.bin")),
+            Some("megadriv")
+        );
+        assert_eq!(
+            rom_benchmark_list_for_path(Path::new("/media/fat/games/SMS/Game.sms")),
+            None
+        );
+    }
+
+    #[cfg(feature = "builder")]
+    #[test]
+    fn rom_identity_benchmark_uses_fixed_size_classes() {
+        assert_eq!(rom_benchmark_size_class(4 * 1024 * 1024 - 1), "small");
+        assert_eq!(rom_benchmark_size_class(4 * 1024 * 1024), "medium");
+        assert_eq!(rom_benchmark_size_class(32 * 1024 * 1024 - 1), "medium");
+        assert_eq!(rom_benchmark_size_class(32 * 1024 * 1024), "large");
+    }
 
     #[test]
     fn mister_arcade_matching_prefers_mra_filename_then_setname() {

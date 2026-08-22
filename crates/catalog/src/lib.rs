@@ -96,6 +96,8 @@ pub mod scanner_cache;
 pub mod shard_registry;
 pub mod sharded_catalog;
 mod software_identity;
+#[cfg(feature = "builder")]
+pub use software_identity::rom_identity_benchmark_report;
 mod sqlite_catalog;
 pub mod sqlite_inspect;
 #[cfg(feature = "builder")]

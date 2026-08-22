@@ -49,6 +49,7 @@ trait BenchmarkDevice {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum BenchmarkProfile {
     Screensaver,
+    RomIdentityHashing,
     Search,
     SearchUi,
     CatalogLifecycle,
@@ -127,6 +128,9 @@ impl BenchmarkDevice for DeviceClient {
     fn profile(&mut self, profile: BenchmarkProfile, output_dir: PathBuf) -> AgentResult<String> {
         self.mutate(|device| match profile {
             BenchmarkProfile::Screensaver => device.profile_screensaver(&output_dir),
+            BenchmarkProfile::RomIdentityHashing => {
+                device.profile_rom_identity_hashing(&output_dir)
+            }
             BenchmarkProfile::Search => device.profile_search(&output_dir),
             BenchmarkProfile::SearchUi => device.verify_search_ui(&output_dir),
             BenchmarkProfile::CatalogLifecycle => device.profile_catalog_lifecycle(&output_dir),
@@ -679,6 +683,9 @@ fn require_clean_installed_commit(
             execute_neon_attribution(&mut device, manifest, output_dir, reporter)
         }
         BenchmarkScenario::PmuProfile => execute_pmu(&mut device, manifest, output_dir, reporter),
+        BenchmarkScenario::RomIdentityHashing => {
+            execute_rom_identity_hashing(&mut device, manifest, output_dir, reporter)
+        }
         BenchmarkScenario::Search => execute_search(&mut device, manifest, output_dir, reporter),
         BenchmarkScenario::Streamline => {
             execute_streamline(&mut device, manifest, output_dir, reporter)
@@ -1074,6 +1081,7 @@ fn particle_scene_lab_command(scenario: BenchmarkScenario) -> Option<&'static st
         | BenchmarkScenario::OrientationTransitionZoomPprof
         | BenchmarkScenario::NeonAttribution
         | BenchmarkScenario::PmuProfile
+        | BenchmarkScenario::RomIdentityHashing
         | BenchmarkScenario::Search => None,
     }
 }
@@ -2129,6 +2137,62 @@ fn execute_search(
         Some(100),
     )?;
     Ok(Outcome::Passed)
+}
+
+fn execute_rom_identity_hashing(
+    device: &mut impl BenchmarkDevice,
+    manifest: String,
+    output_dir: std::path::PathBuf,
+    reporter: &mut Reporter<'_>,
+) -> AgentResult<Outcome> {
+    reporter.emit(
+        EventKind::Progress,
+        "profile",
+        "measuring production ROM identity hashing",
+        Some(30),
+    )?;
+    let detail = device.profile(BenchmarkProfile::RomIdentityHashing, output_dir.clone())?;
+    let summary: Value = serde_json::from_str(&detail).map_err(|error| error.to_string())?;
+    evaluate_rom_identity_hashing_summary(&summary)?;
+    device.verify_health()?;
+    reporter.emit(
+        EventKind::Progress,
+        "benchmark-result",
+        &serde_json::to_string(&json!({
+            "installed_manifest": manifest,
+            "summary": summary,
+            "output_dir": output_dir,
+        }))
+        .map_err(|error| error.to_string())?,
+        Some(100),
+    )?;
+    Ok(Outcome::Passed)
+}
+
+fn evaluate_rom_identity_hashing_summary(summary: &Value) -> AgentResult<()> {
+    if summary.get("schema").and_then(Value::as_str)
+        != Some("mister-magik-rom-identity-benchmark-v1")
+        || summary.get("status").and_then(Value::as_str) != Some("passed")
+    {
+        return Err("ROM identity benchmark is not a passing v1 report".into());
+    }
+    if summary
+        .get("case_count")
+        .and_then(Value::as_u64)
+        .unwrap_or(0)
+        == 0
+    {
+        return Err("ROM identity benchmark selected no production files".into());
+    }
+    if summary
+        .get("production_default_selected")
+        .and_then(Value::as_u64)
+        .unwrap_or(0)
+        == 0
+    {
+        return Err("ROM identity benchmark selected no production-default Lynx files".into());
+    }
+    Ok(())
 }
 
 fn evaluate_search_summary(summary: &Value) -> AgentResult<()> {
@@ -3228,6 +3292,27 @@ mod tests {
             let mut invalid = ui.clone();
             invalid[field] = Value::Null;
             assert!(evaluate_search_ui_summary(&invalid).is_err());
+        }
+    }
+
+    #[test]
+    fn rom_identity_evaluator_requires_production_default_cases() {
+        let passing = json!({
+            "schema": "mister-magik-rom-identity-benchmark-v1",
+            "status": "passed",
+            "case_count": 3,
+            "production_default_selected": 1,
+        });
+        evaluate_rom_identity_hashing_summary(&passing).unwrap();
+        for field in [
+            "schema",
+            "status",
+            "case_count",
+            "production_default_selected",
+        ] {
+            let mut invalid = passing.clone();
+            invalid[field] = Value::Null;
+            assert!(evaluate_rom_identity_hashing_summary(&invalid).is_err());
         }
     }
 }
