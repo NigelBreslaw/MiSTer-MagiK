@@ -186,7 +186,7 @@ fn classified(path: &Path) -> bool {
     crate::components::classify(path).is_some()
 }
 
-const LAUNCHER_VISUAL_MATRIX_ENABLED: bool = false;
+const LAUNCHER_VISUAL_MATRIX_ENABLED: bool = true;
 
 fn launcher_visual_matrix_affected(path: &Path) -> bool {
     path.starts_with("apps/mister/ui")
@@ -1013,6 +1013,59 @@ fn add_path_operations(
             ],
         ));
     }
+    if path.starts_with("apps/mister/src")
+        || path.starts_with("apps/mister/ui")
+        || path.starts_with("apps/mister/examples")
+        || matches!(
+            path.to_str(),
+            Some(
+                "scripts/checks/check-launcher-contract.py"
+                    | "scripts/tests/test-launcher-contract.py"
+            )
+        )
+    {
+        add(with_inputs(
+            op(
+                "scripts.launcher-contract",
+                "Check typed shared launcher contract",
+                "python3",
+                &[
+                    "scripts/checks/check-launcher-contract.py",
+                    "--repository",
+                    ".",
+                    "--all",
+                ],
+                "MiSTer launcher Rust or Slint source changed",
+            ),
+            &[
+                "apps/mister/src",
+                "apps/mister/ui",
+                "apps/mister/examples",
+                "scripts/checks/check-launcher-contract.py",
+                "scripts/tests/test-launcher-contract.py",
+            ],
+        ));
+    }
+    if matches!(
+        path.to_str(),
+        Some(
+            "scripts/checks/check-launcher-contract.py" | "scripts/tests/test-launcher-contract.py"
+        )
+    ) {
+        add(with_inputs(
+            op(
+                "scripts.launcher-contract-tests",
+                "Test typed shared launcher contract",
+                "python3",
+                &["scripts/tests/test-launcher-contract.py"],
+                "launcher contract tooling changed",
+            ),
+            &[
+                "scripts/checks/check-launcher-contract.py",
+                "scripts/tests/test-launcher-contract.py",
+            ],
+        ));
+    }
     if matches!(
         path.to_str(),
         Some(
@@ -1832,6 +1885,35 @@ mod tests {
     }
 
     #[test]
+    fn launcher_sources_select_the_typed_contract_once() {
+        let plan = affected_plan(
+            AssuranceRequest::Plan {
+                scope: Scope::Paths(vec![]),
+            },
+            vec![
+                "apps/mister/ui/launcher.slint".into(),
+                "apps/mister/src/launcher_presentation.rs".into(),
+                "scripts/checks/check-launcher-contract.py".into(),
+            ],
+        )
+        .unwrap();
+        assert_eq!(
+            plan.operations
+                .iter()
+                .filter(|operation| operation.id == "scripts.launcher-contract")
+                .count(),
+            1
+        );
+        assert_eq!(
+            plan.operations
+                .iter()
+                .filter(|operation| operation.id == "scripts.launcher-contract-tests")
+                .count(),
+            1
+        );
+    }
+
+    #[test]
     fn imported_slint_changes_select_compilation_and_dependency_contract_once() {
         let plan = affected_plan(
             AssuranceRequest::Plan {
@@ -1968,15 +2050,14 @@ mod tests {
             assert_eq!(operation.inputs, MISTER_APP_COMPILED_INPUTS);
         }
         assert!(
-            !plan
-                .operations
+            plan.operations
                 .iter()
                 .any(|operation| operation.id == "app.launcher-visual-matrix")
         );
     }
 
     #[test]
-    fn launcher_visual_matrix_is_temporarily_disabled_for_every_owned_seam() {
+    fn launcher_visual_matrix_selects_every_owned_seam() {
         for path in [
             "apps/mister/ui/launcher.slint",
             "apps/mister/src/launcher_presentation.rs",
@@ -1994,10 +2075,10 @@ mod tests {
             )
             .unwrap_or_else(|error| panic!("cannot plan {path}: {error}"));
             assert!(
-                !plan
-                    .operations
+                plan.operations
                     .iter()
-                    .any(|operation| operation.id == "app.launcher-visual-matrix")
+                    .any(|operation| operation.id == "app.launcher-visual-matrix"),
+                "visual matrix not selected for {path}"
             );
         }
     }
