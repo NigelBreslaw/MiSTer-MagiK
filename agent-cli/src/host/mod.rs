@@ -6131,11 +6131,11 @@ fn run_input_latency_lab_arm(
         &format!("computers-round-trip-at {epoch_us} 600 4"),
     )?;
     validate_input_latency_lab_driver(&driver, epoch_us)?;
-    wait_launcher_response_completion(
+    let completion_result = wait_launcher_response_completion(
         session,
         LAUNCHER_RESPONSE_COMPLETE_REMOTE,
         Duration::from_secs(15),
-    )?;
+    );
     exec_checked(
         session,
         "flush Main input latency trace",
@@ -6146,11 +6146,45 @@ fn run_input_latency_lab_arm(
             .ok_or("Main input latency trace is missing")?,
     )?;
     validate_main_input_latency_trace(&main_trace, &run_id)?;
-    let mut trace = read_completed_launcher_response_trace(session, &run_id)?;
-    validate_launcher_response_trace(&trace)?;
     let main_after: Value = serde_json::from_str(
         &remote_read(session, MAIN_STATUS_REMOTE).ok_or("Main status is missing after arm")?,
     )?;
+    if let Err(completion_error) = completion_result {
+        let mut partial_trace = serde_json::from_str::<Value>(
+            &remote_read(session, LAUNCHER_RESPONSE_COMPLETE_REMOTE)
+                .or_else(|| remote_read(session, LAUNCHER_RESPONSE_TRACE_REMOTE))
+                .ok_or("incomplete input latency arm omitted its partial launcher trace")?,
+        )?;
+        partial_trace["installed_manifest"] = Value::String(
+            remote_read(session, LOCAL_MAIN_MANIFEST_REMOTE)
+                .ok_or("input latency laboratory installed manifest is missing")?,
+        );
+        partial_trace["input_proxy_protocol"] = main_after["input_proxy_protocol"].clone();
+        partial_trace["main_input_trace"] = main_trace.clone();
+        partial_trace["display"] = read_launcher_status(session)?["display"].clone();
+        fs::write(
+            output_dir.join(format!("{}-trace.json", spec.label)),
+            format!("{}\n", serde_json::to_string_pretty(&partial_trace)?),
+        )?;
+        fs::write(
+            output_dir.join(format!("{}-driver.json", spec.label)),
+            format!("{}\n", serde_json::to_string_pretty(&driver)?),
+        )?;
+        fs::write(
+            output_dir.join(format!("{}-main-trace.json", spec.label)),
+            format!("{}\n", serde_json::to_string_pretty(&main_trace)?),
+        )?;
+        return Ok(summarize_incomplete_input_latency_lab_arm(
+            spec,
+            &partial_trace,
+            &main_trace,
+            &main_before,
+            &main_after,
+            &completion_error.to_string(),
+        ));
+    }
+    let mut trace = read_completed_launcher_response_trace(session, &run_id)?;
+    validate_launcher_response_trace(&trace)?;
     trace["installed_manifest"] = Value::String(
         remote_read(session, LOCAL_MAIN_MANIFEST_REMOTE)
             .ok_or("input latency laboratory installed manifest is missing")?,
@@ -6184,10 +6218,19 @@ fn validate_main_input_latency_trace(trace: &Value, run_id: &str) -> Result<()> 
     let records = trace["records"]
         .as_array()
         .ok_or("Main input latency trace omitted records")?;
+    let sequences = records
+        .iter()
+        .filter_map(|record| record["sequence"].as_u64())
+        .collect::<Vec<_>>();
     let valid = trace["schema"] == "mister-magik-main-input-trace-v1"
         && trace["run_id"] == run_id
         && trace["protocol"].as_u64() == Some(3)
         && trace["dropped"].as_u64() == Some(0)
+        && records.len() == 128
+        && sequences.len() == records.len()
+        && sequences
+            .windows(2)
+            .all(|pair| pair[1] == pair[0].saturating_add(1))
         && records.iter().all(|record| {
             let ordered = [
                 record["kernel_event_at_us"].as_u64(),
@@ -6210,6 +6253,50 @@ fn validate_main_input_latency_trace(trace: &Value, run_id: &str) -> Result<()> 
         return Err(format!("Main input latency trace is invalid: {trace}").into());
     }
     Ok(())
+}
+
+fn summarize_incomplete_input_latency_lab_arm(
+    spec: InputLatencyLabArmSpec,
+    partial_trace: &Value,
+    main_trace: &Value,
+    main_before: &Value,
+    main_after: &Value,
+    completion_error: &str,
+) -> Value {
+    let records = main_trace["records"].as_array();
+    let counter_delta = |field: &str| {
+        main_after[field]
+            .as_u64()
+            .unwrap_or(u64::MAX)
+            .saturating_sub(main_before[field].as_u64().unwrap_or(0))
+    };
+    json!({
+        "label": spec.label,
+        "runtime_arm": spec.runtime_arm,
+        "catalog_refresh": spec.catalog_refresh,
+        "reader_policy_arm": spec.reader_policy,
+        "trace_file": format!("{}-trace.json", spec.label),
+        "driver_file": format!("{}-driver.json", spec.label),
+        "main_trace_file": format!("{}-main-trace.json", spec.label),
+        "response_completion_status": "failed",
+        "response_completion_error": completion_error,
+        "completion": partial_trace["completion"],
+        "pipeline_status": "incomplete-response",
+        "main_trace_status": "passed",
+        "main_trace_record_count": records.map_or(0, Vec::len),
+        "pipeline_eagain_count": records.into_iter().flatten()
+            .filter_map(|record| record["eagain_count"].as_u64()).sum::<u64>(),
+        "input_reader_policy": partial_trace["input_reader_policy"],
+        "input_integrity_status": "failed",
+        "pulse_status": "failed",
+        "background_work_status": "failed",
+        "first_eligible_vblank_status": "failed",
+        "catalog_attribution_status": "failed",
+        "product_quality_status": "failed",
+        "proxy_write_failures": counter_delta("input_proxy_write_failures"),
+        "journal_overflows": counter_delta("input_proxy_journal_overflows"),
+        "sequence_gaps": counter_delta("input_proxy_desyncs"),
+    })
 }
 
 fn wait_input_latency_lab_ready(
@@ -6682,6 +6769,7 @@ fn summarize_input_latency_lab_arm(
         "trace_file": format!("{}-trace.json", spec.label),
         "driver_file": format!("{}-driver.json", spec.label),
         "main_trace_file": format!("{}-main-trace.json", spec.label),
+        "response_completion_status": "passed",
         "input_integrity_status": pass_fail(input_integrity),
         "pulse_status": pass_fail(pulse_passed),
         "background_work_status": pass_fail(background_work_passed),
@@ -6706,6 +6794,8 @@ fn summarize_input_latency_lab_arm(
         "skipped_background_units": skipped_work,
         "driver_emission_lateness_us": driver_lateness_us,
         "pipeline_status": "passed",
+        "main_trace_status": "passed",
+        "main_trace_record_count": main_trace["records"].as_array().map_or(0, Vec::len),
         "input_reader_policy": trace["input_reader_policy"],
         "input_reader_policy_status": pass_fail(reader_policy_applied),
         "input_reader_capture_status": pass_fail(reader_capture_passed),
@@ -29251,6 +29341,86 @@ mod tests {
         validate_input_latency_lab_driver(&driver, epoch_us).unwrap();
         driver["pulses"][17]["scheduled_at_us"] = json!(epoch_us);
         assert!(validate_input_latency_lab_driver(&driver, epoch_us).is_err());
+    }
+
+    #[test]
+    fn input_latency_lab_main_trace_requires_all_contiguous_proxy_records() {
+        let run_id = "input-latency-baseline-test";
+        let records = (1_u64..=128)
+            .map(|sequence| {
+                json!({
+                    "sequence": sequence,
+                    "kernel_event_at_us": sequence * 10,
+                    "poll_woke_at_us": sequence * 10 + 1,
+                    "main_read_at_us": sequence * 10 + 2,
+                    "mapped_at_us": sequence * 10 + 3,
+                    "journaled_at_us": sequence * 10 + 4,
+                    "first_write_at_us": sequence * 10 + 5,
+                    "completed_write_at_us": sequence * 10 + 6,
+                    "eagain_count": 0,
+                })
+            })
+            .collect::<Vec<_>>();
+        let mut trace = json!({
+            "schema": "mister-magik-main-input-trace-v1",
+            "run_id": run_id,
+            "protocol": 3,
+            "dropped": 0,
+            "records": records,
+        });
+        validate_main_input_latency_trace(&trace, run_id).unwrap();
+
+        trace["records"][64]["sequence"] = json!(66);
+        assert!(validate_main_input_latency_trace(&trace, run_id).is_err());
+        trace["records"][64]["sequence"] = json!(65);
+        trace["records"].as_array_mut().unwrap().pop();
+        assert!(validate_main_input_latency_trace(&trace, run_id).is_err());
+    }
+
+    #[test]
+    fn incomplete_input_latency_arm_retains_main_evidence_without_claiming_pass() {
+        let spec = InputLatencyLabArmSpec {
+            label: "baseline",
+            runtime_arm: "baseline",
+            catalog_refresh: "off",
+            reader_policy: "current",
+            reader_schedstat: true,
+        };
+        let partial_trace = json!({
+            "completion": {"confirmed": 62, "feedback_hidden": 61},
+            "input_reader_policy": {"requested": "current", "applied": true},
+        });
+        let main_trace = json!({
+            "records": [
+                {"eagain_count": 0},
+                {"eagain_count": 2},
+            ],
+        });
+        let before = json!({
+            "input_proxy_write_failures": 3,
+            "input_proxy_journal_overflows": 5,
+            "input_proxy_desyncs": 7,
+        });
+        let after = json!({
+            "input_proxy_write_failures": 3,
+            "input_proxy_journal_overflows": 5,
+            "input_proxy_desyncs": 7,
+        });
+        let summary = summarize_incomplete_input_latency_lab_arm(
+            spec,
+            &partial_trace,
+            &main_trace,
+            &before,
+            &after,
+            "timed out",
+        );
+        assert_eq!(summary["response_completion_status"], "failed");
+        assert_eq!(summary["pipeline_status"], "incomplete-response");
+        assert_eq!(summary["main_trace_status"], "passed");
+        assert_eq!(summary["main_trace_record_count"], 2);
+        assert_eq!(summary["pipeline_eagain_count"], 2);
+        assert_eq!(summary["completion"]["confirmed"], 62);
+        assert_eq!(summary["product_quality_status"], "failed");
     }
 
     fn passing_catalog_pmu_summary() -> Value {
