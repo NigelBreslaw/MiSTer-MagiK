@@ -1012,7 +1012,7 @@ pub(crate) fn chd_raw_sha1_from_header(header: &[u8]) -> Option<String> {
     Some(library_db::hex_lower(&header[range]))
 }
 
-#[cfg(any(test, feature = "builder"))]
+#[cfg(test)]
 pub(crate) fn rom_hash_candidates(list_name: &str, bytes: &[u8]) -> Vec<Vec<u8>> {
     let mut out = Vec::new();
     match list_name {
@@ -1047,7 +1047,7 @@ pub(crate) fn rom_hash_candidates(list_name: &str, bytes: &[u8]) -> Vec<Vec<u8>>
     out
 }
 
-#[cfg(any(test, feature = "builder"))]
+#[cfg(test)]
 pub(crate) fn swap_pairs(bytes: &[u8]) -> Vec<u8> {
     let mut out = bytes.to_vec();
     for chunk in out.as_chunks_mut::<2>().0 {
@@ -1056,7 +1056,7 @@ pub(crate) fn swap_pairs(bytes: &[u8]) -> Vec<u8> {
     out
 }
 
-#[cfg(any(test, feature = "builder"))]
+#[cfg(test)]
 pub(crate) fn swap_words(bytes: &[u8]) -> Vec<u8> {
     let mut out = bytes.to_vec();
     for chunk in out.as_chunks_mut::<4>().0 {
@@ -1066,7 +1066,7 @@ pub(crate) fn swap_words(bytes: &[u8]) -> Vec<u8> {
     out
 }
 
-#[cfg(any(test, feature = "builder"))]
+#[cfg(test)]
 pub(crate) fn reverse_words(bytes: &[u8]) -> Vec<u8> {
     let mut out = bytes.to_vec();
     for chunk in out.as_chunks_mut::<4>().0 {
@@ -1075,7 +1075,7 @@ pub(crate) fn reverse_words(bytes: &[u8]) -> Vec<u8> {
     out
 }
 
-#[cfg(any(test, feature = "builder"))]
+#[cfg(test)]
 pub(crate) fn crc32(bytes: &[u8]) -> u32 {
     let mut crc = 0xffff_ffffu32;
     for &byte in bytes {
@@ -1598,23 +1598,6 @@ struct RomIdentityBenchmarkInput {
 }
 
 #[cfg(feature = "builder")]
-struct CountingReader<'a> {
-    file: &'a mut File,
-    read_calls: u64,
-    bytes_read: u64,
-}
-
-#[cfg(feature = "builder")]
-impl Read for CountingReader<'_> {
-    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
-        let bytes = self.file.read(buffer)?;
-        self.read_calls = self.read_calls.saturating_add(1);
-        self.bytes_read = self.bytes_read.saturating_add(bytes as u64);
-        Ok(bytes)
-    }
-}
-
-#[cfg(feature = "builder")]
 pub fn rom_identity_benchmark_report() -> Result<serde_json::Value, String> {
     use serde_json::json;
     use sha2::{Digest, Sha256};
@@ -1788,151 +1771,6 @@ pub fn rom_identity_benchmark_report() -> Result<serde_json::Value, String> {
         "hwm_before_kb": hwm_before_kb,
         "hwm_after_kb": hwm_after_kb,
         "total_us": report_started.elapsed().as_micros() as u64,
-    }))
-}
-
-#[cfg(feature = "builder")]
-fn benchmark_current_rom_identity(
-    input: &RomIdentityBenchmarkInput,
-    metadata: &MameSoftwareMetadata,
-    software_hash_cache: &SoftwareHashCache,
-) -> Result<serde_json::Value, String> {
-    use serde_json::json;
-
-    let rss_before_kb = proc_status_kb("VmRSS");
-    let hwm_before_kb = proc_status_kb("VmHWM");
-    let faults_before = process_faults();
-    let cpu_start = current_cpu();
-    let total_started = Instant::now();
-    let open_started = Instant::now();
-    let mut file = File::open(&input.path)
-        .map_err(|error| format!("open benchmark ROM {}: {error}", input.path.display()))?;
-    let open_us = open_started.elapsed().as_micros() as u64;
-    let read_started = Instant::now();
-    let allocation_bytes = usize::try_from(input.size)
-        .map_err(|_| format!("benchmark ROM is too large: {}", input.path.display()))?;
-    let mut bytes = Vec::with_capacity(allocation_bytes);
-    let mut reader = CountingReader {
-        file: &mut file,
-        read_calls: 0,
-        bytes_read: 0,
-    };
-    reader
-        .read_to_end(&mut bytes)
-        .map_err(|error| format!("read benchmark ROM {}: {error}", input.path.display()))?;
-    let read_calls = reader.read_calls;
-    let bytes_read = reader.bytes_read;
-    let read_us = read_started.elapsed().as_micros() as u64;
-    if bytes.len() as u64 != input.size {
-        return Err(format!(
-            "benchmark ROM changed size while reading {}",
-            input.path.display()
-        ));
-    }
-    let transform_started = Instant::now();
-    let candidates = rom_hash_candidates(input.list_name, &bytes);
-    let transform_us = transform_started.elapsed().as_micros() as u64;
-    let candidate_allocation_bytes = candidates.iter().map(Vec::len).sum::<usize>();
-    let crc_started = Instant::now();
-    let candidate_hashes = candidates
-        .iter()
-        .map(|candidate| (candidate.len() as u64, crc32(candidate)))
-        .collect::<Vec<_>>();
-    let crc_us = crc_started.elapsed().as_micros() as u64;
-    let lookup_started = Instant::now();
-    let matched = candidate_hashes
-        .iter()
-        .enumerate()
-        .find_map(|(index, (size, crc))| {
-            metadata
-                .hash_index
-                .get(&(input.list_name.to_string(), *size, *crc))
-                .and_then(|names| names.first())
-                .cloned()
-                .map(|identity| (index, identity))
-        });
-    let identity = matched.as_ref().map(|(_, identity)| identity.clone());
-    let lookup_us = lookup_started.elapsed().as_micros() as u64;
-    let family_id = identity.as_ref().and_then(|software_name| {
-        metadata
-            .items
-            .get(&(input.list_name.to_string(), software_name.clone()))
-            .map(|item| {
-                item.parent_name
-                    .as_deref()
-                    .filter(|parent| !parent.trim().is_empty())
-                    .unwrap_or(software_name)
-                    .to_string()
-            })
-    });
-    let cache_key = software_hash_cache_key(input.list_name, input.path.to_string_lossy().as_ref());
-    let cached_identity = cache_key
-        .as_ref()
-        .and_then(|key| software_hash_cache.entries.get(key));
-    let total_us = total_started.elapsed().as_micros() as u64;
-    let bounded_production_validation = input.list_name == "lynx" && input.size < 4 * 1024 * 1024;
-    let pmu = if bounded_production_validation {
-        let production_identity = match_software_by_full_rom_hash(
-            input.path.to_string_lossy().as_ref(),
-            input.list_name,
-            metadata,
-        );
-        if identity != production_identity {
-            return Err(format!(
-                "diagnostic and production identity differ for {}",
-                input.path.display()
-            ));
-        }
-        benchmark_rom_identity_pmu(input, metadata)
-    } else {
-        json!({
-            "available": false,
-            "reason": "bounded-to-small-production-default-case",
-        })
-    };
-    let faults_after = process_faults();
-    Ok(json!({
-        "list_name": input.list_name,
-        "path": input.path,
-        "size_bytes": input.size,
-        "size_class": rom_benchmark_size_class(input.size),
-        "production_default": input.list_name == "lynx",
-        "production_parity_executed": bounded_production_validation,
-        "identity": identity,
-        "family_id": family_id,
-        "matched_candidate_index": matched.as_ref().map(|(index, _)| index),
-        "matched_candidate_rank": matched.as_ref().map(|(index, _)| index + 1),
-        "software_cache": {
-            "key_available": cache_key.is_some(),
-            "entry_present": cached_identity.is_some(),
-            "identity": cached_identity.cloned().flatten(),
-        },
-        "candidates": candidate_hashes.iter().enumerate().map(|(index, (size, crc))| json!({
-            "index": index,
-            "size_bytes": size,
-            "crc32": format!("{crc:08x}"),
-        })).collect::<Vec<_>>(),
-        "metrics": {
-            "open_us": open_us,
-            "read_us": read_us,
-            "transform_us": transform_us,
-            "crc_us": crc_us,
-            "lookup_us": lookup_us,
-            "total_us": total_us,
-            "bytes_read": bytes_read,
-            "read_calls": read_calls,
-            "whole_file_allocation_bytes": bytes.capacity(),
-            "candidate_allocation_bytes": candidate_allocation_bytes,
-            "minor_page_faults": faults_after.0.saturating_sub(faults_before.0),
-            "major_page_faults": faults_after.1.saturating_sub(faults_before.1),
-            "rss_before_kb": rss_before_kb,
-            "rss_after_kb": proc_status_kb("VmRSS"),
-            "hwm_before_kb": hwm_before_kb,
-            "hwm_after_kb": proc_status_kb("VmHWM"),
-            "cpu_start": cpu_start,
-            "cpu_end": current_cpu(),
-        },
-        "pmu_attribution": pmu,
     }))
 }
 
@@ -2201,47 +2039,6 @@ fn benchmark_streaming_rom_identity_pmu(
             "diagnostics": diagnostics,
         }),
         (_, Err(error)) => json!({
-            "available": false,
-            "error": error.to_string(),
-            "diagnostics": diagnostics,
-        }),
-    }
-}
-
-#[cfg(feature = "builder")]
-fn benchmark_rom_identity_pmu(
-    input: &RomIdentityBenchmarkInput,
-    metadata: &MameSoftwareMetadata,
-) -> serde_json::Value {
-    use serde_json::json;
-
-    let (group, diagnostics) = mister_magik_perf_events::CounterGroup::open_with_diagnostics();
-    let Ok(group) = group else {
-        return json!({"available": false, "diagnostics": diagnostics});
-    };
-    let Ok(started) = group.snapshot() else {
-        return json!({"available": false, "diagnostics": diagnostics});
-    };
-    let wall_started = Instant::now();
-    let identity = match_software_by_full_rom_hash(
-        input.path.to_string_lossy().as_ref(),
-        input.list_name,
-        metadata,
-    );
-    let wall_us = wall_started.elapsed().as_micros() as u64;
-    match group.snapshot() {
-        Ok(finished) => {
-            let counters = finished.delta_from(started);
-            json!({
-                "available": true,
-                "wall_us": wall_us,
-                "identity": identity,
-                "ipc": counters.instructions_per_cycle(),
-                "counters": counters,
-                "diagnostics": diagnostics,
-            })
-        }
-        Err(error) => json!({
             "available": false,
             "error": error.to_string(),
             "diagnostics": diagnostics,
