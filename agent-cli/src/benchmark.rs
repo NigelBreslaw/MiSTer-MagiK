@@ -77,6 +77,7 @@ enum BenchmarkProfile {
     LauncherResponse,
     LauncherResponseAttribution,
     GuiFrameAttribution,
+    SettledComposition,
     SchedulerTrace,
     StorageAttribution,
     ArcadeVelocityScroll,
@@ -189,6 +190,7 @@ impl BenchmarkDevice for DeviceClient {
             BenchmarkProfile::GuiFrameAttribution => {
                 device.profile_gui_frame_attribution(&output_dir)
             }
+            BenchmarkProfile::SettledComposition => device.profile_settled_composition(&output_dir),
             BenchmarkProfile::SchedulerTrace => device.profile_scheduler_trace(&output_dir),
             BenchmarkProfile::StorageAttribution => device.profile_storage_attribution(&output_dir),
             BenchmarkProfile::ArcadeVelocityScroll => {
@@ -486,6 +488,15 @@ fn require_clean_installed_commit(
         BenchmarkScenario::GuiFrameAttribution => {
             execute_gui_frame_attribution(&mut device, manifest, output_dir, reporter)
         }
+        BenchmarkScenario::SettledComposition => execute_attribution_capture(
+            &mut device,
+            manifest,
+            output_dir,
+            reporter,
+            BenchmarkProfile::SettledComposition,
+            "settled-composition",
+            "mister-magik-settled-composition-v1",
+        ),
         BenchmarkScenario::SchedulerTrace => execute_attribution_capture(
             &mut device,
             manifest,
@@ -1004,6 +1015,7 @@ fn particle_scene_lab_command(scenario: BenchmarkScenario) -> Option<&'static st
         | BenchmarkScenario::LauncherResponse
         | BenchmarkScenario::LauncherResponseAttribution
         | BenchmarkScenario::GuiFrameAttribution
+        | BenchmarkScenario::SettledComposition
         | BenchmarkScenario::SchedulerTrace
         | BenchmarkScenario::StorageAttribution
         | BenchmarkScenario::ArcadeVelocityScroll

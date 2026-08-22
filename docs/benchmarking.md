@@ -134,6 +134,18 @@ catalog and all one-shot environment state are removed before the ordinary Dev
 launcher is restored; the installed manifest and device boot ID must remain
 unchanged.
 
+`settled-composition` is the unprofiled authority for steady modal ownership
+and the two-frame cost of a full-raster navigation destination. It opens the
+real Arcade favorite confirmation without accepting it, waits for eight
+frames after direct-layer retirement has a matching physical receipt, then
+cancels the dialog and drives Home → Settings. The destination frame and its
+immediately following frame are reported separately with composition state,
+retirement generation/receipt, full-present reason, Slint damage and raster
+time, custom-layer work, latch-copy bytes, and protocol-v5 cadence. The route
+restores the original Home selection and display mode, and leaves favorite
+state unchanged. Evidence is retained below
+`build/agent-benchmarks/settled-composition/<timestamp>/`.
+
 `navigation-transitions` runs the fixed scripted route Home → Arcade → Home →
 Consoles → System → Consoles → Home with the Super-Scaler POC enabled. It
 records per-frame process CPU, transition and overlay cost, snapshot locking,

@@ -745,6 +745,13 @@ impl NativeDevice {
         self.benchmark_profile(|config| profile_installed_gui_frame_attribution(config, output_dir))
     }
 
+    pub(crate) fn profile_settled_composition(
+        &mut self,
+        output_dir: &Path,
+    ) -> std::result::Result<String, DeviceFailure> {
+        self.benchmark_profile(|config| profile_installed_settled_composition(config, output_dir))
+    }
+
     pub(crate) fn profile_scheduler_trace(
         &mut self,
         output_dir: &Path,
@@ -8206,6 +8213,22 @@ fn gui_profile_route_launcher_env_with_pprof(
     environment
 }
 
+fn settled_composition_launcher_env() -> Vec<(String, String)> {
+    vec![
+        ("MISTER_CATALOG_REFRESH".into(), "off".into()),
+        ("MISTER_LAUNCHER_START_SCREEN".into(), "home".into()),
+        ("MISTER_GUI_FRAME_PROFILE".into(), "1".into()),
+        (
+            "MISTER_GUI_FRAME_PROFILE_COMPLETE".into(),
+            GUI_PROFILE_REMOTE_COMPLETE.into(),
+        ),
+        (
+            "MISTER_GUI_FRAME_PROFILE_ROUTE".into(),
+            "settled-composition".into(),
+        ),
+    ]
+}
+
 fn gui_profile_route_cleanup_command() -> String {
     let safety = platform_safety_script();
     format!(
@@ -8274,6 +8297,337 @@ fn gui_profile_effective_view(snapshot: &Value) -> Option<&str> {
     snapshot
         .pointer("/semantic/effective_view")
         .and_then(Value::as_str)
+}
+
+fn settled_composition_frame_metrics(frame: &Value) -> Value {
+    json!({
+        "frame": frame["frame"],
+        "phase": frame["phase"],
+        "composition": frame["composition"],
+        "slint_raster": frame["slint_raster"],
+        "slint_damage_rects": frame["slint_damage_rects"],
+        "slint_render_us": frame["slint_render_us"],
+        "custom_draw_us": frame["custom_draw_us"],
+        "copied_bytes": frame.pointer("/latch/copied_bytes").cloned().unwrap_or(Value::Null),
+        "copied_rectangles": frame.pointer("/latch/copied_rectangles").cloned().unwrap_or(Value::Null),
+        "presentation": frame["presentation"],
+    })
+}
+
+fn summarize_settled_composition_profile(profile: &Value) -> Result<Value> {
+    if profile.get("schema").and_then(Value::as_str) != Some("mister-magik-gui-profiling-window-v1")
+        || profile.get("state").and_then(Value::as_str) != Some("complete")
+        || profile.get("dropped_frame_records").and_then(Value::as_u64) != Some(0)
+    {
+        return Err("settled composition route did not produce a complete frame profile".into());
+    }
+    let frames = profile
+        .get("frames")
+        .and_then(Value::as_array)
+        .ok_or("settled composition profile has no frames")?;
+    let settled_modal = frames
+        .iter()
+        .filter(|frame| {
+            frame.get("phase").and_then(Value::as_str) == Some("modal-over-arcade")
+                && frame.pointer("/composition/state").and_then(Value::as_str)
+                    == Some("modal-over-arcade")
+                && frame
+                    .pointer("/composition/retirement_state")
+                    .and_then(Value::as_str)
+                    == Some("idle")
+                && frame
+                    .pointer("/composition/retirement_receipt")
+                    .and_then(Value::as_str)
+                    .is_some_and(|receipt| !receipt.is_empty())
+        })
+        .collect::<Vec<_>>();
+    if settled_modal.len() < 8 {
+        return Err(format!(
+            "settled composition profile has only {} retirement-confirmed modal frames",
+            settled_modal.len()
+        )
+        .into());
+    }
+    let destination = frames
+        .iter()
+        .find(|frame| {
+            frame.get("phase").and_then(Value::as_str) == Some("settings-destination")
+                && frame.pointer("/composition/state").and_then(Value::as_str)
+                    == Some("navigation-destination")
+                && frame.get("slint_raster").and_then(Value::as_str) == Some("forced-full")
+        })
+        .ok_or("settled composition profile omitted the forced Settings destination frame")?;
+    let following = frames
+        .iter()
+        .find(|frame| frame.get("phase").and_then(Value::as_str) == Some("settings-following"))
+        .ok_or("settled composition profile omitted the following Settings frame")?;
+    let destination_frame = destination["frame"]
+        .as_u64()
+        .ok_or("Settings destination frame has no sequence")?;
+    let following_frame = following["frame"]
+        .as_u64()
+        .ok_or("following Settings frame has no sequence")?;
+    if following_frame != destination_frame.saturating_add(1) {
+        return Err(format!(
+            "Settings following frame is not immediate: destination={destination_frame} following={following_frame}"
+        )
+        .into());
+    }
+    let sum = |field: &str, selected: &[&Value]| -> u64 {
+        selected
+            .iter()
+            .filter_map(|frame| frame.get(field).and_then(Value::as_u64))
+            .sum()
+    };
+    let modal_full_presents = settled_modal
+        .iter()
+        .filter(|frame| {
+            frame
+                .pointer("/composition/full_frame_present")
+                .and_then(Value::as_bool)
+                == Some(true)
+        })
+        .count();
+    let modal_copy_bytes = settled_modal
+        .iter()
+        .filter_map(|frame| frame.pointer("/latch/copied_bytes").and_then(Value::as_u64))
+        .sum::<u64>();
+    Ok(json!({
+        "modal_over_arcade": {
+            "retirement_confirmed_frames": settled_modal.len(),
+            "steady_full_presents": modal_full_presents,
+            "steady_slint_raster_us": sum("slint_render_us", &settled_modal),
+            "steady_custom_draw_us": sum("custom_draw_us", &settled_modal),
+            "steady_copy_bytes": modal_copy_bytes,
+            "frames": settled_modal.into_iter().map(settled_composition_frame_metrics).collect::<Vec<_>>(),
+        },
+        "home_to_settings": {
+            "destination": settled_composition_frame_metrics(destination),
+            "following": settled_composition_frame_metrics(following),
+            "two_frame_raster_us": destination["slint_render_us"].as_u64().unwrap_or(0)
+                .saturating_add(following["slint_render_us"].as_u64().unwrap_or(0)),
+            "two_frame_copy_bytes": destination.pointer("/latch/copied_bytes").and_then(Value::as_u64).unwrap_or(0)
+                .saturating_add(following.pointer("/latch/copied_bytes").and_then(Value::as_u64).unwrap_or(0)),
+        },
+        "presentation": gui_presentation_summary(profile)?,
+    }))
+}
+
+fn run_settled_composition_route(
+    config: &NativeDeviceConfig,
+    session: &Session,
+    output_dir: &Path,
+) -> Result<Value> {
+    fs::create_dir_all(output_dir)?;
+    exec_checked(
+        session,
+        "prepare settled composition route",
+        &gui_profile_route_cleanup_command(),
+    )?;
+    restart_launcher_with_one_shot_env(
+        session,
+        LauncherRestartOptions {
+            env_vars: settled_composition_launcher_env(),
+            timeout_secs: 45,
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str().into(),
+            ..LauncherRestartOptions::default()
+        },
+    )?;
+    let status = read_launcher_status(session)?;
+    let main_status: Value = serde_json::from_str(
+        &remote_read(session, MAIN_STATUS_REMOTE).ok_or("Main status is missing")?,
+    )?;
+    let begin = launcher_automation::begin(
+        config,
+        status
+            .pointer("/build/version")
+            .and_then(Value::as_str)
+            .ok_or("settled composition status has no build version")?,
+        status
+            .pointer("/build/source_revision")
+            .and_then(Value::as_str)
+            .ok_or("settled composition status has no source revision")?,
+        main_status
+            .get("main_generation")
+            .and_then(Value::as_u64)
+            .ok_or("settled composition Main status has no generation")?,
+        45,
+    )?;
+    let begin: Value = serde_json::from_str(&begin)?;
+    let nonce = begin["nonce"]
+        .as_str()
+        .ok_or("settled composition automation has no nonce")?
+        .to_owned();
+    let route_result = (|| -> Result<Value> {
+        let initial = wait_gui_profile_snapshot(
+            config,
+            &nonce,
+            |snapshot| {
+                gui_profile_effective_view(snapshot) == Some("home")
+                    && snapshot
+                        .pointer("/semantic/selected_item_id")
+                        .and_then(Value::as_str)
+                        == Some("menu:arcade")
+                    && snapshot
+                        .pointer("/semantic/navigation_transition_active")
+                        .and_then(Value::as_bool)
+                        == Some(false)
+            },
+            "settled composition initial Home",
+        )?;
+        let enter_arcade =
+            modal_input_action(config, &nonce, AutomationAction::Tap(AutomationButton::A))?;
+        let arcade = wait_gui_profile_snapshot(
+            config,
+            &nonce,
+            |snapshot| {
+                gui_profile_effective_view(snapshot) == Some("arcade")
+                    && snapshot
+                        .pointer("/semantic/navigation_transition_active")
+                        .and_then(Value::as_bool)
+                        == Some(false)
+            },
+            "settled Arcade before favorite dialog",
+        )?;
+        let open_modal =
+            modal_input_action(config, &nonce, AutomationAction::Tap(AutomationButton::X))?;
+        let modal = wait_gui_profile_snapshot(
+            config,
+            &nonce,
+            |snapshot| {
+                snapshot
+                    .pointer("/semantic/dialog_message")
+                    .and_then(Value::as_str)
+                    .is_some_and(|message| message.contains("Favorite"))
+                    && snapshot
+                        .pointer("/semantic/composition_state")
+                        .and_then(Value::as_str)
+                        == Some("modal-over-arcade")
+            },
+            "favorite confirmation over Arcade",
+        )?;
+        let modal_hold_started = Instant::now();
+        let mut modal_hold = Vec::new();
+        while modal_hold_started.elapsed() < Duration::from_millis(750) {
+            modal_hold.push(launcher_automation::snapshot(config, &nonce)?);
+            thread::sleep(Duration::from_millis(50));
+        }
+        let cancel_modal =
+            modal_input_action(config, &nonce, AutomationAction::Tap(AutomationButton::B))?;
+        let return_home = modal_input_action(
+            config,
+            &nonce,
+            AutomationAction::Tap(AutomationButton::Home),
+        )?;
+        let home = wait_gui_profile_snapshot(
+            config,
+            &nonce,
+            |snapshot| gui_profile_effective_view(snapshot) == Some("home"),
+            "Home before Settings destination",
+        )?;
+        let select_settings =
+            modal_input_action(config, &nonce, AutomationAction::Tap(AutomationButton::Up))?;
+        let settings_selected = wait_gui_profile_snapshot(
+            config,
+            &nonce,
+            |snapshot| {
+                snapshot
+                    .pointer("/semantic/selected_item_id")
+                    .and_then(Value::as_str)
+                    == Some("menu:settings")
+            },
+            "Settings selected on Home",
+        )?;
+        let enter_settings =
+            modal_input_action(config, &nonce, AutomationAction::Tap(AutomationButton::A))?;
+        let settings = wait_gui_profile_snapshot(
+            config,
+            &nonce,
+            |snapshot| {
+                gui_profile_effective_view(snapshot) == Some("settings")
+                    && snapshot
+                        .get("presented_action_sequence")
+                        .and_then(Value::as_u64)
+                        .is_some_and(|presented| presented >= enter_settings)
+            },
+            "physically presented Settings destination",
+        )?;
+        wait_for_gui_profile_file(
+            config,
+            session,
+            &nonce,
+            GUI_PROFILE_REMOTE_COMPLETE,
+            Duration::from_secs(10),
+            "settled composition completion",
+        )?;
+        let profile_path = output_dir.join("profile.json");
+        get(session, GUI_PROFILE_REMOTE_COMPLETE, &profile_path)?;
+        let profile: Value = serde_json::from_str(&fs::read_to_string(&profile_path)?)?;
+        let metrics = summarize_settled_composition_profile(&profile)?;
+
+        let leave_settings =
+            modal_input_action(config, &nonce, AutomationAction::Tap(AutomationButton::B))?;
+        let home_after = wait_gui_profile_snapshot(
+            config,
+            &nonce,
+            |snapshot| gui_profile_effective_view(snapshot) == Some("home"),
+            "Home restoration after Settings",
+        )?;
+        let restore_arcade_selection = modal_input_action(
+            config,
+            &nonce,
+            AutomationAction::Tap(AutomationButton::Down),
+        )?;
+        let restored = wait_gui_profile_snapshot(
+            config,
+            &nonce,
+            |snapshot| {
+                gui_profile_effective_view(snapshot) == Some("home")
+                    && snapshot
+                        .pointer("/semantic/selected_item_id")
+                        .and_then(Value::as_str)
+                        == Some("menu:arcade")
+                    && snapshot
+                        .pointer("/semantic/dialog_message")
+                        .and_then(Value::as_str)
+                        .is_none_or(str::is_empty)
+            },
+            "exact initial Home navigation state",
+        )?;
+        Ok(json!({
+            "schema": "mister-magik-settled-composition-route-v1",
+            "actions": {
+                "enter_arcade": enter_arcade,
+                "open_modal": open_modal,
+                "cancel_modal": cancel_modal,
+                "return_home": return_home,
+                "select_settings": select_settings,
+                "enter_settings": enter_settings,
+                "leave_settings": leave_settings,
+                "restore_arcade_selection": restore_arcade_selection,
+            },
+            "initial": initial,
+            "arcade": arcade,
+            "modal": modal,
+            "modal_hold": modal_hold,
+            "home": home,
+            "settings_selected": settings_selected,
+            "settings": settings,
+            "home_after": home_after,
+            "restored": restored,
+            "profile": profile,
+            "metrics": metrics,
+        }))
+    })();
+    let end_result = launcher_automation::end(config, &nonce).map(|_| ());
+    match (route_result, end_result) {
+        (Ok(route), Ok(())) => Ok(route),
+        (Err(route), Ok(())) => Err(route),
+        (Ok(_), Err(end)) => Err(format!("settled composition cleanup failed: {end}").into()),
+        (Err(route), Err(end)) => {
+            Err(format!("{route}; settled composition cleanup failed: {end}").into())
+        }
+    }
 }
 
 fn run_gui_frame_profile_route(
@@ -11969,6 +12323,109 @@ fn profile_installed_launcher_response_streamline(
         "exclude_kernel": false,
         "call_stack_unwinding": false,
         "route": route,
+    });
+    fs::write(
+        output_dir.join("summary.json"),
+        format!("{}\n", serde_json::to_string_pretty(&summary)?),
+    )?;
+    serde_json::to_string(&summary).map_err(Into::into)
+}
+
+fn profile_installed_settled_composition(
+    config: &NativeDeviceConfig,
+    output_dir: &Path,
+) -> Result<String> {
+    fs::create_dir_all(output_dir)?;
+    let session = connect_with(&config.connection, 10)?;
+    let manifest = remote_read(&session, LOCAL_MAIN_MANIFEST_REMOTE)
+        .ok_or("development manifest is unavailable before settled composition")?;
+    let boot_id = remote_read(&session, "/proc/sys/kernel/random/boot_id")
+        .ok_or("device boot id is unavailable before settled composition")?;
+    let original_reply = exec_checked_output(
+        &session,
+        "query settled composition display mode",
+        &acknowledged_main_command("mister_magik_display_get_v1"),
+    )?;
+    if parse_display_reply_pending(original_reply.stdout.trim())?.is_some() {
+        return Err("settled composition cannot start during a display transaction".into());
+    }
+    let original_id = parse_display_reply_active(original_reply.stdout.trim())?;
+    let original_mode = DISPLAY_MATRIX_MODES
+        .iter()
+        .find(|mode| mode.id == original_id)
+        .copied()
+        .ok_or_else(|| format!("settled composition cannot restore unknown mode {original_id}"))?;
+    let capture_mode = DISPLAY_MATRIX_MODES
+        .iter()
+        .find(|mode| mode.id == "hdmi-1280x720p60")
+        .copied()
+        .ok_or("missing settled composition display mode")?;
+    drop(session);
+    apply_confirmed_display_mode(config, capture_mode, "settled composition")?;
+    let session = connect_with(&config.connection, 10)?;
+    let route_result = run_settled_composition_route(config, &session, output_dir);
+    if let Some(log) = remote_read(&session, "/tmp/mister-magik-slint.log") {
+        fs::write(output_dir.join("launcher.log"), log)?;
+    }
+    let launcher_restore = launcher_restart(
+        &session,
+        &LauncherRestartOptions {
+            clear_env: true,
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str().into(),
+            timeout_secs: 45,
+            ..LauncherRestartOptions::default()
+        },
+    );
+    let route_cleanup = exec_checked(
+        &session,
+        "clean settled composition route state",
+        &gui_profile_route_cleanup_command(),
+    );
+    drop(session);
+    let display_restore =
+        apply_confirmed_display_mode(config, original_mode, "settled composition restoration");
+    let route = match (
+        route_result,
+        launcher_restore,
+        route_cleanup,
+        display_restore,
+    ) {
+        (Ok(route), Ok(()), Ok(()), Ok(())) => route,
+        (route, launcher, cleanup, display) => {
+            return Err(format!(
+                "settled composition failed: route={:?}; launcher_restore={:?}; cleanup={:?}; display_restore={:?}",
+                route.err(),
+                launcher.err(),
+                cleanup.err(),
+                display.err()
+            )
+            .into());
+        }
+    };
+    let session = connect_with(&config.connection, 10)?;
+    let final_manifest = remote_read(&session, LOCAL_MAIN_MANIFEST_REMOTE)
+        .ok_or("development manifest is unavailable after settled composition")?;
+    let final_boot_id = remote_read(&session, "/proc/sys/kernel/random/boot_id")
+        .ok_or("device boot id is unavailable after settled composition")?;
+    if final_manifest != manifest || final_boot_id != boot_id {
+        return Err("installed identity changed during settled composition".into());
+    }
+    let summary = json!({
+        "schema": "mister-magik-settled-composition-v1",
+        "artifact_status": "passed",
+        "product_quality_status": route.pointer("/metrics/presentation/quality_status")
+            .cloned().unwrap_or_else(|| json!("unknown")),
+        "performance_authority": "unprofiled-installed-dev",
+        "display_mode": capture_mode.id,
+        "identity": {
+            "boot_id": boot_id.trim(),
+            "manifest": parse_manifest_evidence(&manifest),
+        },
+        "route": route,
+        "artifacts": {
+            "profile": "profile.json",
+            "launcher_log": "launcher.log",
+        },
     });
     fs::write(
         output_dir.join("summary.json"),
@@ -30017,6 +30474,71 @@ mod tests {
         let mut missing = passing;
         missing["phase_markers"].as_array_mut().unwrap().pop();
         assert!(validate_gui_profile_route(&missing, false).is_err());
+    }
+
+    #[test]
+    fn settled_composition_summary_requires_retirement_and_adjacent_settings_frames() {
+        let frame = |sequence: u64, phase: &str, state: &str, raster: &str| {
+            json!({
+                "frame": sequence,
+                "phase": phase,
+                "monotonic_us": sequence * 16_667,
+                "slint_raster": raster,
+                "slint_render_us": 100,
+                "custom_draw_us": 10,
+                "slint_damage_rects": [[0, 0, 1280, 720]],
+                "composition": {
+                    "state": state,
+                    "retirement_state": "idle",
+                    "retirement_receipt": "sequence=7 slot=1 route_epoch=2 carrier=full-slint",
+                    "full_frame_present": true,
+                    "full_present_reason": "composition-forced-present",
+                },
+                "latch": {"copied_bytes": 1_843_200, "copied_rectangles": 1},
+                "presentation": {
+                    "owned_vblank_count": sequence,
+                    "presented_vblank_count": sequence,
+                    "repeated_vblank_count": 0,
+                    "ownership_loss_count": 0,
+                    "latch_drop_count": 0,
+                    "active_sequence": sequence,
+                    "magik_ownership": true,
+                },
+            })
+        };
+        let mut frames = (1..=8)
+            .map(|sequence| {
+                frame(
+                    sequence,
+                    "modal-over-arcade",
+                    "modal-over-arcade",
+                    "ordinary",
+                )
+            })
+            .collect::<Vec<_>>();
+        frames.push(frame(
+            9,
+            "settings-destination",
+            "navigation-destination",
+            "forced-full",
+        ));
+        frames.push(frame(10, "settings-following", "full-slint", "ordinary"));
+        let profile = json!({
+            "schema": "mister-magik-gui-profiling-window-v1",
+            "state": "complete",
+            "dropped_frame_records": 0,
+            "frames": frames,
+        });
+        let summary = summarize_settled_composition_profile(&profile).unwrap();
+        assert_eq!(
+            summary["modal_over_arcade"]["retirement_confirmed_frames"],
+            8
+        );
+        assert_eq!(summary["home_to_settings"]["two_frame_raster_us"], 200);
+
+        let mut missing = profile;
+        missing["frames"].as_array_mut().unwrap().pop();
+        assert!(summarize_settled_composition_profile(&missing).is_err());
     }
 
     fn gui_attribution_test_route(pmu: bool, repeated_vblank_count: u64) -> Value {

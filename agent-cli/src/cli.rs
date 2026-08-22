@@ -935,6 +935,7 @@ mod tests {
             "launcher-response",
             "launcher-response-attribution",
             "gui-frame-attribution",
+            "settled-composition",
             "scheduler-trace",
             "storage-attribution",
             "arcade-velocity-scroll",
