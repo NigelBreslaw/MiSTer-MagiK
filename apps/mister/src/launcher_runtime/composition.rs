@@ -15,6 +15,13 @@ pub enum UiCompositionState {
     Recovering,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ModalCarrierPolicy {
+    #[default]
+    Always,
+    RetirementReceiptScoped,
+}
+
 impl UiCompositionState {
     pub fn label(self) -> &'static str {
         match self {
@@ -243,6 +250,7 @@ struct DirectLayerRetirement {
 
 #[derive(Debug)]
 pub struct UiCompositionController {
+    modal_carrier_policy: ModalCarrierPolicy,
     state: UiCompositionState,
     recovery_count: u64,
     last_invariant_kind: String,
@@ -250,12 +258,18 @@ pub struct UiCompositionController {
     owned_direct_layers: DirectLayerObligations,
     retirement_generation: u64,
     retirement: Option<DirectLayerRetirement>,
+    last_retirement_generation: Option<u64>,
     last_retirement_receipt: Option<DirectLayerPresentationReceipt>,
 }
 
 impl UiCompositionController {
     pub fn new() -> Self {
+        Self::with_modal_carrier_policy(ModalCarrierPolicy::Always)
+    }
+
+    pub fn with_modal_carrier_policy(modal_carrier_policy: ModalCarrierPolicy) -> Self {
         Self {
+            modal_carrier_policy,
             state: UiCompositionState::FullSlint,
             recovery_count: 0,
             last_invariant_kind: String::new(),
@@ -263,6 +277,7 @@ impl UiCompositionController {
             owned_direct_layers: DirectLayerObligations::default(),
             retirement_generation: 0,
             retirement: None,
+            last_retirement_generation: None,
             last_retirement_receipt: None,
         }
     }
@@ -275,7 +290,7 @@ impl UiCompositionController {
         let recovered_from = (previous == UiCompositionState::Recovering && invariant.is_none())
             .then_some(requested_state);
 
-        let (state, force_full_slint_present, force_full_slint_raster, clear_direct_layers) =
+        let (state, mut force_full_slint_present, force_full_slint_raster, clear_direct_layers) =
             if let Some(invariant) = invariant {
                 self.state = UiCompositionState::Recovering;
                 self.recovery_count = self.recovery_count.saturating_add(1);
@@ -371,6 +386,17 @@ impl UiCompositionController {
             .retirement
             .and_then(|retirement| retirement.receipt)
             .or(self.last_retirement_receipt);
+        if self.modal_carrier_policy == ModalCarrierPolicy::RetirementReceiptScoped
+            && state == UiCompositionState::ModalOverArcade
+            && previous == state
+            && self.retirement.is_none()
+            && self.last_retirement_generation == Some(self.retirement_generation)
+            && self
+                .last_retirement_receipt
+                .is_some_and(|receipt| receipt.carrier == DirectLayerCarrier::Modal)
+        {
+            force_full_slint_present = false;
+        }
 
         UiCompositionDecision {
             state,
@@ -411,6 +437,7 @@ impl UiCompositionController {
         match (generation, self.retirement) {
             (Some(generation), Some(retirement)) if generation == retirement.generation => {
                 self.owned_direct_layers = desired;
+                self.last_retirement_generation = Some(generation);
                 self.last_retirement_receipt = Some(receipt);
                 self.retirement = None;
                 true
@@ -1036,6 +1063,60 @@ mod tests {
         assert!(decision.clear_direct_layers);
         assert!(decision.force_full_slint_present);
         assert_eq!(decision.recovery_count, 0);
+    }
+
+    #[test]
+    fn receipt_scoped_modal_carrier_waits_for_matching_physical_retirement() {
+        let mut controller = UiCompositionController::with_modal_carrier_policy(
+            ModalCarrierPolicy::RetirementReceiptScoped,
+        );
+        acquire_direct_layers(&mut controller);
+        let pending = controller.tick(UiCompositionInput {
+            confirm_visible: true,
+            ..input(Screen::Arcade)
+        });
+        let generation = pending.retirement_generation.expect("retirement");
+        assert!(pending.force_full_slint_present);
+
+        let delayed = controller.tick(UiCompositionInput {
+            confirm_visible: true,
+            ..input(Screen::Arcade)
+        });
+        assert!(delayed.force_full_slint_present);
+        assert!(!controller.confirm_presented_layers(
+            Some(generation.saturating_add(1)),
+            delayed.direct_layers_desired,
+            receipt(2, DirectLayerCarrier::Modal),
+        ));
+        assert!(
+            controller
+                .tick(UiCompositionInput {
+                    confirm_visible: true,
+                    ..input(Screen::Arcade)
+                })
+                .force_full_slint_present
+        );
+
+        assert!(controller.mark_retirement_uncertain(generation));
+        let uncertain = controller.tick(UiCompositionInput {
+            confirm_visible: true,
+            ..input(Screen::Arcade)
+        });
+        assert!(uncertain.force_full_slint_present);
+        assert!(controller.reconcile_retirement(
+            generation,
+            uncertain.direct_layers_desired,
+            receipt(4, DirectLayerCarrier::Modal),
+        ));
+
+        let settled = controller.tick(UiCompositionInput {
+            confirm_visible: true,
+            ..input(Screen::Arcade)
+        });
+        assert!(!settled.force_full_slint_present);
+        assert!(!settled.clear_direct_layers);
+        assert_eq!(settled.status().retirement_state, "idle");
+        assert_eq!(settled.status().retirement_receipt_sequence, 4);
     }
 
     #[test]
