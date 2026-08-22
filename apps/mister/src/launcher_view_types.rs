@@ -13,6 +13,30 @@ use crate::setup_nav::SetupPhase as DomainSetupPhase;
 use crate::ui_display::ScreenOrientation as DomainScreenOrientation;
 use mister_magik_ui::launcher as view;
 
+fn display_choice(
+    mode: Option<&mister_magik_mister_runtime::display_resolution::DisplayResolution>,
+) -> view::ChoiceOption {
+    mode.map_or_else(view::ChoiceOption::default, |mode| view::ChoiceOption {
+        id: mode.id.into(),
+        label: mode.label.into(),
+    })
+}
+
+pub fn active_display_choice(runtime_index: usize) -> view::ChoiceOption {
+    display_choice(
+        mister_magik_mister_runtime::display_resolution::DISPLAY_RESOLUTIONS.get(runtime_index),
+    )
+}
+
+pub fn selected_display_choice(runtime_index: usize) -> view::ChoiceOption {
+    crate::launcher::settings_display_selection_index(runtime_index)
+        .map_or_else(view::ChoiceOption::default, settings_display_choice)
+}
+
+pub fn settings_display_choice(settings_index: usize) -> view::ChoiceOption {
+    display_choice(crate::launcher::settings_display_resolution(settings_index))
+}
+
 pub const fn launcher_screen(value: Screen) -> view::LauncherScreen {
     match value {
         Screen::Home => view::LauncherScreen::Home,
@@ -214,6 +238,24 @@ mod tests {
         assert_eq!(
             confirmation_kind(Some(ConfirmAction::RemoveFavourite)),
             view::ConfirmationKind::RemoveFavourite
+        );
+    }
+
+    #[test]
+    fn active_display_identity_is_not_confused_with_the_filtered_settings_index() {
+        let runtime_index = mister_magik_mister_runtime::display_resolution::DISPLAY_RESOLUTIONS
+            .iter()
+            .position(|mode| mode.id == "crt-480p60")
+            .expect("CRT 480p runtime mode");
+
+        assert_eq!(
+            active_display_choice(runtime_index).id.as_str(),
+            "crt-480p60"
+        );
+        assert!(selected_display_choice(runtime_index).id.is_empty());
+        assert_ne!(
+            settings_display_choice(runtime_index).id.as_str(),
+            "crt-480p60"
         );
     }
 }

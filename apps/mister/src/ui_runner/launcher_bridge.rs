@@ -127,18 +127,15 @@ pub(super) fn sync_settings_bridge(
         nav.display_combo_open,
         nav.orientation_combo_open,
     ));
-    let display_choice = |index| {
-        launcher::settings_display_resolution(index).map_or_else(
-            slint_ui::launcher::ChoiceOption::default,
-            |mode| slint_ui::launcher::ChoiceOption {
-                id: mode.id.into(),
-                label: mode.label.into(),
-            },
-        )
-    };
-    settings.set_active_display(display_choice(nav.display_selected));
-    settings.set_selected_display(display_choice(nav.display_selected));
-    settings.set_highlighted_display(display_choice(nav.display_highlighted));
+    settings.set_active_display(crate::launcher_view_types::active_display_choice(
+        nav.display_selected,
+    ));
+    settings.set_selected_display(crate::launcher_view_types::selected_display_choice(
+        nav.display_selected,
+    ));
+    settings.set_highlighted_display(crate::launcher_view_types::settings_display_choice(
+        nav.display_highlighted,
+    ));
     settings.set_display_confirm_remaining(nav.display_confirm_remaining as i32);
     settings.set_active_orientation(crate::launcher_view_types::screen_orientation(
         nav.settings.screen_orientation,

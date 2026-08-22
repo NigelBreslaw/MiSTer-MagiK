@@ -10,9 +10,11 @@ use crate::arcade_catalog::{ArcadeCatalog, ArcadeGameView};
 use crate::launcher::{CatalogMenuItemStatus, DisplayTransactionPhase, LauncherNav, Screen};
 use crate::launcher_taxonomy::LauncherMenuItemKind;
 use crate::launcher_view_types::{
-    about_section, arcade_list_mode, arcade_search_pane, arcade_search_status,
-    display_transaction_state, home_focus, home_scroll_phase, launcher_screen, orientation_at,
-    screen_orientation, screensaver_setting, settings_popup, settings_section, system_hub_section,
+    about_section, active_display_choice, arcade_list_mode, arcade_search_pane,
+    arcade_search_status, display_transaction_state, home_focus, home_scroll_phase,
+    launcher_screen, orientation_at, screen_orientation, screensaver_setting,
+    selected_display_choice, settings_display_choice, settings_popup, settings_section,
+    system_hub_section,
 };
 use mister_magik_ui::launcher::{
     ArcadeLoadState, ArcadeSearchMode, ArcadeView, ChoiceOption, FeedbackView, Launcher, MenuItem,
@@ -564,9 +566,9 @@ impl LauncherViewPresenters {
             settings,
             get_selected_display,
             set_selected_display,
-            display_choice(nav.display_selected)
+            selected_display_choice(nav.display_selected)
         );
-        let active_display = display_choice(nav.display_selected);
+        let active_display = active_display_choice(nav.display_selected);
         set_if_changed!(
             settings,
             get_active_display,
@@ -577,7 +579,7 @@ impl LauncherViewPresenters {
             settings,
             get_highlighted_display,
             set_highlighted_display,
-            display_choice(nav.display_highlighted)
+            settings_display_choice(nav.display_highlighted)
         );
         set_if_changed!(
             settings,
@@ -915,15 +917,6 @@ fn sync_menu_item_presentation_row(
         bridge_churn_record_row_mutations(1);
         model.set_row_data(index, row);
     }
-}
-
-fn display_choice(index: usize) -> ChoiceOption {
-    crate::launcher::settings_display_resolution(index).map_or_else(ChoiceOption::default, |mode| {
-        ChoiceOption {
-            id: mode.id.into(),
-            label: mode.label.into(),
-        }
-    })
 }
 
 fn settings_transaction_phase(

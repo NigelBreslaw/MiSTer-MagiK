@@ -868,6 +868,34 @@ mod macos {
             } else {
                 SettingsPopup::None
             });
+            if self.display_profile.is_crt() {
+                let display = self.display_profile.display();
+                let geometry = UiLayoutGeometry::for_display(&display, self.orientation);
+                let content = geometry.content_rect();
+                let arcade = CrtArcadeLayout::for_layout(
+                    geometry,
+                    CrtUiMetrics::for_display(&display),
+                    self.launcher_nav
+                        .arcade_search
+                        .is_active(&self.launcher_nav.arcade_filter.active),
+                );
+                let relative = |rect: mister_magik_fb::ui_display::CrtContentRect| LayoutRect {
+                    x: rect.x.saturating_sub(content.x) as i32,
+                    y: rect.y.saturating_sub(content.y) as i32,
+                    width: rect.width as i32,
+                    height: rect.height as i32,
+                };
+                layout.set_arcade_list(LayoutRect {
+                    x: arcade.list.x as i32,
+                    y: arcade.list.y as i32,
+                    width: arcade.list.width as i32,
+                    height: arcade.list.height as i32,
+                });
+                layout.set_crt_header(relative(arcade.header));
+                layout.set_crt_footer(relative(arcade.footer));
+                layout.set_crt_keyboard(arcade.search_keyboard.map(relative).unwrap_or_default());
+                return;
+            }
             if !self.orientation.is_portrait() {
                 return;
             }
@@ -5017,6 +5045,27 @@ mod macos {
                     font_family
                 );
                 assert_eq!(CrtUiMetrics::for_display(&display).body_font, body_font);
+            }
+        }
+
+        #[test]
+        fn selectable_display_profiles_resolve_to_the_same_launcher_setting() {
+            for profile in [
+                DisplayProfile::Hdmi,
+                DisplayProfile::Crt240p,
+                DisplayProfile::Crt288p,
+            ] {
+                let runtime_mode =
+                    &mister_magik_mister_runtime::display_resolution::DISPLAY_RESOLUTIONS
+                        [profile.display_resolution_index()];
+                let settings_index = profile
+                    .settings_display_resolution_index()
+                    .expect("preview mode is present in launcher settings");
+                let settings_mode = settings_display_resolutions()
+                    .nth(settings_index)
+                    .expect("preview settings index resolves to a mode");
+
+                assert_eq!(settings_mode.id, runtime_mode.id);
             }
         }
 
