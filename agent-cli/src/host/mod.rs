@@ -7690,7 +7690,6 @@ fn run_launcher_response_arcade_route(
     let mut env_vars = vec![
         ("MISTER_CATALOG_REFRESH".into(), catalog_refresh.into()),
         ("MISTER_LAUNCHER_START_SCREEN".into(), "arcade".into()),
-        ("MISTER_LAUNCHER_START_SYSTEM".into(), "snes".into()),
         ("MISTER_LAUNCHER_RESPONSE_TRACE".into(), "1".into()),
         ("MISTER_LAUNCHER_RESPONSE_RUN_ID".into(), run_id.clone()),
         (
