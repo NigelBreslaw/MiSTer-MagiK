@@ -11843,6 +11843,7 @@ pub(super) fn run_launcher_loop(
                     nav.arcade.is_scroll_active(),
                     terminal_preview,
                     confirm_visible,
+                    redraw_pending_for_trace && gui_raster_phase == GuiRasterProfilePhase::Ordinary,
                     &composition_status,
                     Instant::now(),
                     crate::input_hub::monotonic_us(),

@@ -260,6 +260,7 @@ pub(super) enum GuiProfilePhase {
     ModalOverArcade,
     SettingsDestination,
     SettingsFollowing,
+    SettingsCacheRecovery,
     MediaProgress,
     MenuSelection,
     LightBridge,
@@ -267,11 +268,12 @@ pub(super) enum GuiProfilePhase {
 
 impl GuiProfilePhase {
     const ARCADE_VELOCITY_ORDERED: [Self; 2] = [Self::ArcadeScroll, Self::SettledArcade];
-    const SETTLED_COMPOSITION_ORDERED: [Self; 4] = [
+    const SETTLED_COMPOSITION_ORDERED: [Self; 5] = [
         Self::CustomDamage,
         Self::ModalOverArcade,
         Self::SettingsDestination,
         Self::SettingsFollowing,
+        Self::SettingsCacheRecovery,
     ];
     const BRIDGE_CHURN_ORDERED: [Self; 3] =
         [Self::MediaProgress, Self::MenuSelection, Self::LightBridge];
@@ -284,6 +286,7 @@ impl GuiProfilePhase {
             Self::ModalOverArcade => "modal-over-arcade",
             Self::SettingsDestination => "settings-destination",
             Self::SettingsFollowing => "settings-following",
+            Self::SettingsCacheRecovery => "settings-cache-recovery",
             Self::MediaProgress => "media-progress",
             Self::MenuSelection => "menu-selection",
             Self::LightBridge => "light-bridge",
@@ -699,6 +702,7 @@ impl GuiProfilingController {
         arcade_motion_active: bool,
         terminal_preview: bool,
         confirm_visible: bool,
+        actual_slint_raster: bool,
         composition: &crate::launcher_runtime::composition::UiCompositionStatus,
         now: Instant,
         monotonic_us: u64,
@@ -751,6 +755,13 @@ impl GuiProfilingController {
             {
                 Some(GuiProfilePhase::SettingsFollowing)
             }
+            GuiProfileState::AwaitingPresentation(GuiProfilePhase::SettingsCacheRecovery)
+                if screen == "settings"
+                    && composition.state == "full-slint"
+                    && actual_slint_raster =>
+            {
+                Some(GuiProfilePhase::SettingsCacheRecovery)
+            }
             _ => None,
         };
         let Some(phase) = phase else {
@@ -766,6 +777,9 @@ impl GuiProfilingController {
                 }
                 GuiProfilePhase::SettingsDestination => {
                     let _ = self.request_phase(GuiProfilePhase::SettingsFollowing, now);
+                }
+                GuiProfilePhase::SettingsFollowing => {
+                    let _ = self.request_phase(GuiProfilePhase::SettingsCacheRecovery, now);
                 }
                 _ => {}
             }
@@ -1260,6 +1274,7 @@ mod tests {
             false,
             true,
             false,
+            false,
             &crate::launcher_runtime::composition::UiCompositionStatus {
                 state: "mixed-arcade",
                 retirement_state: "idle",
@@ -1288,6 +1303,7 @@ mod tests {
                 false,
                 true,
                 true,
+                false,
                 &modal,
                 now,
                 1_000 + frame,
@@ -1297,7 +1313,8 @@ mod tests {
                 GuiProfileState::AwaitingPresentation(GuiProfilePhase::ModalOverArcade)
             );
         }
-        controller.observe_route_presentation(8, "arcade", false, true, true, &modal, now, 1_008);
+        controller
+            .observe_route_presentation(8, "arcade", false, true, true, false, &modal, now, 1_008);
         assert_eq!(
             controller.state,
             GuiProfileState::Measuring(GuiProfilePhase::ModalOverArcade)
@@ -1317,6 +1334,7 @@ mod tests {
             false,
             false,
             false,
+            false,
             &destination,
             now,
             2_000,
@@ -1331,9 +1349,29 @@ mod tests {
             false,
             false,
             false,
+            false,
             &crate::launcher_runtime::composition::UiCompositionStatus::default(),
             now,
             2_001,
+        );
+        assert_eq!(
+            controller.state,
+            GuiProfileState::AwaitingPresentation(GuiProfilePhase::SettingsCacheRecovery)
+        );
+        let full_slint = crate::launcher_runtime::composition::UiCompositionStatus {
+            state: "full-slint",
+            ..crate::launcher_runtime::composition::UiCompositionStatus::default()
+        };
+        controller.observe_route_presentation(
+            22,
+            "settings",
+            false,
+            false,
+            false,
+            true,
+            &full_slint,
+            now,
+            2_002,
         );
         assert_eq!(controller.state, GuiProfileState::Complete);
     }
@@ -1831,6 +1869,7 @@ mod tests {
             false,
             false,
             false,
+            false,
             &composition,
             now,
             4_000,
@@ -1845,6 +1884,7 @@ mod tests {
             false,
             true,
             false,
+            false,
             &composition,
             now,
             5_000,
@@ -1858,6 +1898,7 @@ mod tests {
             "arcade",
             false,
             true,
+            false,
             false,
             &composition,
             now,

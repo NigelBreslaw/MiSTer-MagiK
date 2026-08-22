@@ -8567,10 +8567,12 @@ fn settled_composition_frame_metrics(frame: &Value) -> Value {
     json!({
         "frame": frame["frame"],
         "phase": frame["phase"],
+        "logical_change_class": frame["logical_change_class"],
         "composition": frame["composition"],
         "slint_raster": frame["slint_raster"],
         "slint_damage_rects": frame["slint_damage_rects"],
         "slint_render_us": frame["slint_render_us"],
+        "redraw_pending": frame["redraw_pending"],
         "custom_draw_us": frame["custom_draw_us"],
         "copied_bytes": frame.pointer("/latch/copied_bytes").cloned().unwrap_or(Value::Null),
         "copied_rectangles": frame.pointer("/latch/copied_rectangles").cloned().unwrap_or(Value::Null),
@@ -8579,6 +8581,54 @@ fn settled_composition_frame_metrics(frame: &Value) -> Value {
         "invalid_bytes": frame.pointer("/latch/invalid_bytes").cloned().unwrap_or(Value::Null),
         "presentation": frame["presentation"],
     })
+}
+
+fn settled_full_raster_recovery_windows(frames: &[Value]) -> Vec<Value> {
+    let mut forced: Option<&Value> = None;
+    let mut windows = Vec::new();
+    for frame in frames {
+        match frame.get("slint_raster").and_then(Value::as_str) {
+            Some("forced-full")
+                if frame
+                    .get("slint_render_us")
+                    .and_then(Value::as_u64)
+                    .is_some() =>
+            {
+                forced = Some(frame);
+            }
+            Some("ordinary")
+                if forced.is_some()
+                    && frame.get("redraw_pending").and_then(Value::as_bool) == Some(true)
+                    && frame
+                        .get("slint_render_us")
+                        .and_then(Value::as_u64)
+                        .is_some() =>
+            {
+                let forced_frame = forced.take().expect("checked above");
+                let forced_raster_us = forced_frame["slint_render_us"].as_u64().unwrap_or(0);
+                let recovery_raster_us = frame["slint_render_us"].as_u64().unwrap_or(0);
+                let forced_sequence = forced_frame["frame"].as_u64().unwrap_or(0);
+                let recovery_sequence = frame["frame"].as_u64().unwrap_or(0);
+                let recovery_full_screen_damage = frame
+                    .get("slint_damage_rects")
+                    .and_then(Value::as_array)
+                    .is_some_and(|rects| {
+                        rects.iter().any(|rect| rect == &json!([0, 0, 1280, 720]))
+                    });
+                windows.push(json!({
+                    "forced": settled_composition_frame_metrics(forced_frame),
+                    "recovery": settled_composition_frame_metrics(frame),
+                    "frame_gap": recovery_sequence.saturating_sub(forced_sequence),
+                    "forced_raster_us": forced_raster_us,
+                    "recovery_raster_us": recovery_raster_us,
+                    "combined_raster_us": forced_raster_us.saturating_add(recovery_raster_us),
+                    "recovery_full_screen_damage": recovery_full_screen_damage,
+                }));
+            }
+            _ => {}
+        }
+    }
+    windows
 }
 
 fn settled_modal_receipt_convergence_copy(frame: &Value) -> bool {
@@ -8653,6 +8703,17 @@ fn summarize_settled_composition_profile(profile: &Value) -> Result<Value> {
         .iter()
         .find(|frame| frame.get("phase").and_then(Value::as_str) == Some("settings-following"))
         .ok_or("settled composition profile omitted the following Settings frame")?;
+    let cache_recovery = frames
+        .iter()
+        .find(|frame| {
+            frame.get("phase").and_then(Value::as_str) == Some("settings-cache-recovery")
+                && frame.pointer("/composition/state").and_then(Value::as_str) == Some("full-slint")
+                && frame.get("slint_raster").and_then(Value::as_str) == Some("ordinary")
+                && frame.get("redraw_pending").and_then(Value::as_bool) == Some(true)
+        })
+        .ok_or(
+            "settled composition profile omitted the first real Settings cache-recovery raster",
+        )?;
     let destination_frame = destination["frame"]
         .as_u64()
         .ok_or("Settings destination frame has no sequence")?;
@@ -8697,6 +8758,16 @@ fn summarize_settled_composition_profile(profile: &Value) -> Result<Value> {
         .iter()
         .filter_map(|frame| frame.pointer("/latch/copied_bytes").and_then(Value::as_u64))
         .sum::<u64>();
+    let recovery_windows = settled_full_raster_recovery_windows(frames);
+    if recovery_windows.is_empty() {
+        return Err("settled composition profile has no forced-full cache-recovery window".into());
+    }
+    let recovery_sum = |field: &str| {
+        recovery_windows
+            .iter()
+            .filter_map(|window| window.get(field).and_then(Value::as_u64))
+            .sum::<u64>()
+    };
     Ok(json!({
         "modal_over_arcade": {
             "retirement_confirmed_frames": settled_modal.len(),
@@ -8713,10 +8784,24 @@ fn summarize_settled_composition_profile(profile: &Value) -> Result<Value> {
         "home_to_settings": {
             "destination": settled_composition_frame_metrics(destination),
             "following": settled_composition_frame_metrics(following),
+            "cache_recovery": settled_composition_frame_metrics(cache_recovery),
             "two_frame_raster_us": destination["slint_render_us"].as_u64().unwrap_or(0)
                 .saturating_add(following["slint_render_us"].as_u64().unwrap_or(0)),
+            "destination_to_recovery_raster_us": destination["slint_render_us"].as_u64().unwrap_or(0)
+                .saturating_add(following["slint_render_us"].as_u64().unwrap_or(0))
+                .saturating_add(cache_recovery["slint_render_us"].as_u64().unwrap_or(0)),
             "two_frame_copy_bytes": destination.pointer("/latch/copied_bytes").and_then(Value::as_u64).unwrap_or(0)
                 .saturating_add(following.pointer("/latch/copied_bytes").and_then(Value::as_u64).unwrap_or(0)),
+        },
+        "full_raster_recovery": {
+            "window_count": recovery_windows.len(),
+            "forced_raster_us": recovery_sum("forced_raster_us"),
+            "recovery_raster_us": recovery_sum("recovery_raster_us"),
+            "combined_raster_us": recovery_sum("combined_raster_us"),
+            "duplicate_full_raster_count": recovery_windows.iter()
+                .filter(|window| window.get("recovery_full_screen_damage").and_then(Value::as_bool) == Some(true))
+                .count(),
+            "windows": recovery_windows,
         },
         "presentation": gui_presentation_summary(profile)?,
     }))
@@ -31326,6 +31411,7 @@ mod tests {
                 "monotonic_us": sequence * 16_667,
                 "slint_raster": raster,
                 "slint_render_us": 100,
+                "redraw_pending": true,
                 "custom_draw_us": 10,
                 "slint_damage_rects": [[0, 0, 1280, 720]],
                 "composition": {
@@ -31364,6 +31450,12 @@ mod tests {
             "forced-full",
         ));
         frames.push(frame(10, "settings-following", "full-slint", "ordinary"));
+        frames.push(frame(
+            11,
+            "settings-cache-recovery",
+            "full-slint",
+            "ordinary",
+        ));
         let profile = json!({
             "schema": "mister-magik-gui-profiling-window-v1",
             "state": "complete",
@@ -31376,6 +31468,12 @@ mod tests {
             8
         );
         assert_eq!(summary["home_to_settings"]["two_frame_raster_us"], 200);
+        assert_eq!(
+            summary["home_to_settings"]["destination_to_recovery_raster_us"],
+            300
+        );
+        assert_eq!(summary["full_raster_recovery"]["window_count"], 1);
+        assert_eq!(summary["full_raster_recovery"]["combined_raster_us"], 200);
 
         let mut converging = profile.clone();
         for (index, frame) in converging["frames"]

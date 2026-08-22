@@ -139,7 +139,7 @@ launcher is restored; the installed manifest and device boot ID must remain
 unchanged.
 
 `settled-composition` is the unprofiled authority for steady modal ownership
-and the two-frame cost of a full-raster navigation destination. It opens the
+and the cache-recovery cost of a full-raster navigation destination. It opens the
 real Arcade filter drawer first to capture disjoint Slint chrome damage while
 custom layers remain active, then opens the favorite confirmation without
 accepting it and waits for eight
@@ -147,7 +147,11 @@ frames after direct-layer retirement has a matching physical receipt, then
 cancels the dialog and drives Home → Settings. The destination frame and its
 immediately following frame are reported separately with composition state,
 retirement generation/receipt, full-present reason, Slint damage and raster
-time, custom-layer work, latch-copy bytes, and protocol-v5 cadence. An
+time, custom-layer work, latch-copy bytes, and protocol-v5 cadence. Because the
+immediate physical frame can present without invoking Slint, capture continues
+until the first real ordinary Slint raster in settled Settings. The summary
+also reports every forced-full raster through its first subsequent real Slint
+render, resetting the window if another forced raster supersedes it. An
 authoritative terminal Settings PNG and its hash support pixel-parity checks.
 The route restores the original Home selection and display mode, and leaves
 favorite state unchanged. Evidence is retained below
