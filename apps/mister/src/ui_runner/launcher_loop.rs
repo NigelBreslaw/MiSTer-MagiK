@@ -3921,6 +3921,7 @@ impl CatalogScanBlink {
 
 fn can_preempt_home_latch_wait(
     screen: Screen,
+    allow_in_flight_response: bool,
     response_frame_stamped: bool,
     feedback_frame_stamped: bool,
     transition_active: bool,
@@ -3930,8 +3931,8 @@ fn can_preempt_home_latch_wait(
     startup_intro_frame_posted: bool,
 ) -> bool {
     screen == Screen::Home
-        && !response_frame_stamped
-        && !feedback_frame_stamped
+        && (allow_in_flight_response || !response_frame_stamped)
+        && (allow_in_flight_response || !feedback_frame_stamped)
         && !transition_active
         && !screensaver_active
         && !direct_layer_state_active
@@ -11536,6 +11537,7 @@ pub(super) fn run_launcher_loop(
             .enabled()
             .then(|| frame_accounting.runtime_status_submitted_sequence())
             .unwrap_or_default();
+        let mut input_routed_during_latch_wait = false;
         if latch_trace_flush_deferred {
             let finish_timing = frame_accounting.finish_frame_before_trace(
                 &presented_frame,
@@ -11598,6 +11600,7 @@ pub(super) fn run_launcher_loop(
                 .record_scheduler_interval("post-submit-accounting", scheduler_phase);
             let interruptible_home_wait = can_preempt_home_latch_wait(
                 nav.screen,
+                route_input_early,
                 launcher_response_frame_stamp.is_some(),
                 !selection_feedback_stamp.entries.is_empty(),
                 navigation_transition.is_active()
@@ -11627,10 +11630,33 @@ pub(super) fn run_launcher_loop(
                         "latch-confirmation-wait-interrupted",
                         scheduler_phase,
                     );
-                    record_launcher_frame_phase!(LauncherFramePhase::ConfirmationInterrupted);
-                    request_launcher_redraw!();
-                    record_launcher_frame_phase!(LauncherFramePhase::Yielded);
-                    continue 'launcher;
+                    if route_input_early {
+                        early_input_change_checkpoint = Some(EarlyInputChangeCheckpoint {
+                            label: "latch-wait",
+                            observed_at_us: crate::input_hub::monotonic_us(),
+                        });
+                        let (_, input_batch_empty_during_wait) = run_launcher_input_phase!(
+                            'launcher,
+                            scheduler_phase,
+                            loop_start,
+                            route_input_early,
+                            pad_changed_for_input,
+                            setup_active,
+                            effective_view,
+                            full_bridge_dirty,
+                            light_bridge_dirty,
+                            early_input_change_checkpoint
+                        );
+                        input_routed_during_latch_wait = !input_batch_empty_during_wait;
+                        navigation_source_bridge_sync_pending |= input_routed_during_latch_wait;
+                        request_launcher_redraw!();
+                        pacer.wait()
+                    } else {
+                        record_launcher_frame_phase!(LauncherFramePhase::ConfirmationInterrupted);
+                        request_launcher_redraw!();
+                        record_launcher_frame_phase!(LauncherFramePhase::Yielded);
+                        continue 'launcher;
+                    }
                 }
             };
             let completion_timeout = Duration::from_micros(pacer.period_us().saturating_mul(3) / 2);
@@ -12169,11 +12195,13 @@ pub(super) fn run_launcher_loop(
             request_launcher_redraw!();
         }
         latch_v5_qualification.write_state_if_due(Instant::now());
-        if if latch_backend_active {
-            accepted_and_active_confirmed
-        } else {
-            visible_frame_presented
-        } {
+        if !input_routed_during_latch_wait
+            && if latch_backend_active {
+                accepted_and_active_confirmed
+            } else {
+                visible_frame_presented
+            }
+        {
             latency_critical_input_pending = false;
         }
         frames += 1;
@@ -14625,12 +14653,14 @@ mod tests {
             false,
             false,
             false,
+            false,
         ));
         for blocked in 0..7 {
             let mut conditions = [false; 7];
             conditions[blocked] = true;
             assert!(!can_preempt_home_latch_wait(
                 Screen::Home,
+                false,
                 conditions[0],
                 conditions[1],
                 conditions[2],
@@ -14645,6 +14675,29 @@ mod tests {
             false,
             false,
             false,
+            false,
+            false,
+            false,
+            false,
+            false,
+        ));
+        assert!(can_preempt_home_latch_wait(
+            Screen::Home,
+            true,
+            true,
+            true,
+            false,
+            false,
+            false,
+            false,
+            false,
+        ));
+        assert!(!can_preempt_home_latch_wait(
+            Screen::Home,
+            true,
+            true,
+            true,
+            true,
             false,
             false,
             false,
