@@ -151,6 +151,11 @@ until direct-layer retirement has a matching physical receipt. The summary
 separates any required invalid-slot convergence copy from recurring steady
 modal work while retaining the total retirement-confirmed byte count.
 
+`settled-composition-reused-cache` is the production-off Item 10 arm for the
+same fixed route. It marks the full logical region dirty while retaining
+Slint's reused-buffer dependency cache. Only this diagnostic route consumes
+the selector; ordinary production full rasters retain the new-buffer policy.
+
 `navigation-transitions` runs the fixed scripted route Home → Arcade → Home →
 Consoles → System → Consoles → Home with the Super-Scaler POC enabled. It
 records per-frame process CPU, transition and overlay cost, snapshot locking,

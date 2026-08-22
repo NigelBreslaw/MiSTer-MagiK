@@ -3,7 +3,7 @@
 
 use slint::platform::software_renderer::{RenderingRotation, RepaintBufferType, SoftwareRenderer};
 use slint::platform::{Platform, WindowAdapter};
-use slint::{PhysicalSize, Window};
+use slint::{LogicalPosition, LogicalRect, LogicalSize, PhysicalSize, Window};
 use std::cell::Cell;
 use std::rc::{Rc, Weak};
 use std::time::{Duration, Instant};
@@ -52,6 +52,28 @@ impl MisterSoftwareWindow {
             .set_repaint_buffer_type(RepaintBufferType::NewBuffer);
         render_callback(&self.renderer);
         self.renderer.set_repaint_buffer_type(previous);
+        true
+    }
+
+    pub fn draw_full_frame_reused_if_needed(
+        &self,
+        logical_width: usize,
+        logical_height: usize,
+        render_callback: impl FnOnce(&SoftwareRenderer),
+    ) -> bool {
+        use i_slint_core::renderer::RendererSealed;
+
+        if !self.redraw_pending.replace(false) {
+            return false;
+        }
+        self.renderer.mark_dirty_region(
+            LogicalRect::new(
+                LogicalPosition::default(),
+                LogicalSize::new(logical_width as f32, logical_height as f32),
+            )
+            .into(),
+        );
+        render_callback(&self.renderer);
         true
     }
 
@@ -314,6 +336,27 @@ impl Platform for MisterPlatform {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use slint::ComponentHandle;
+    use slint::platform::software_renderer::Rgb565Pixel;
+
+    slint::slint! {
+        component ReusedRasterProbe inherits Window {
+            in property <length> tile-x;
+            in property <bool> tile-visible: true;
+            width: 64px;
+            height: 48px;
+            background: black;
+
+            Rectangle {
+                x: root.tile-x;
+                y: 8px;
+                width: 8px;
+                height: 8px;
+                visible: root.tile-visible;
+                background: red;
+            }
+        }
+    }
 
     #[test]
     fn software_window_redraw_state_is_authoritative() {
@@ -328,6 +371,56 @@ mod tests {
         assert!(rendered);
         assert!(!window.redraw_pending());
         assert!(!window.draw_if_needed(|_| panic!("idle window rendered")));
+    }
+
+    #[test]
+    fn reused_full_raster_refreshes_moved_deleted_and_rotated_content() {
+        let window = MisterSoftwareWindow::new(RepaintBufferType::ReusedBuffer);
+        let _ = slint::platform::set_platform(Box::new(MisterPlatform::new(
+            window.clone(),
+            Some(Rc::new(Cell::new(Duration::ZERO))),
+        )));
+        let ui = ReusedRasterProbe::new().expect("probe component");
+        window.set_size(PhysicalSize::new(64, 48));
+        ui.set_tile_x(4.0);
+        ui.show().expect("show probe");
+
+        let mut pixels = vec![Rgb565Pixel(0); 64 * 48];
+        assert!(window.draw_if_needed(|renderer| {
+            renderer.render(&mut pixels, 64);
+        }));
+        assert_ne!(pixels[8 * 64 + 4].0, 0);
+
+        ui.set_tile_x(20.0);
+        assert!(window.draw_full_frame_reused_if_needed(64, 48, |renderer| {
+            assert_eq!(
+                renderer.repaint_buffer_type(),
+                RepaintBufferType::ReusedBuffer
+            );
+            renderer.render(&mut pixels, 64);
+        }));
+        assert_eq!(pixels[8 * 64 + 4].0, 0);
+        assert_ne!(pixels[8 * 64 + 20].0, 0);
+
+        ui.set_tile_visible(false);
+        assert!(window.draw_if_needed(|renderer| {
+            renderer.render(&mut pixels, 64);
+        }));
+        assert_eq!(pixels[8 * 64 + 20].0, 0);
+
+        for (rotation, width, height, stride) in [
+            (RenderingRotation::NoRotation, 64, 48, 64),
+            (RenderingRotation::Rotate90, 48, 64, 48),
+            (RenderingRotation::Rotate270, 48, 64, 48),
+        ] {
+            window.set_rendering_rotation(rotation);
+            WindowAdapter::request_redraw(window.as_ref());
+            assert!(window.draw_full_frame_reused_if_needed(64, 48, |renderer| {
+                let region = renderer.render(&mut pixels, stride);
+                assert_eq!(region.bounding_box_size().width, width);
+                assert_eq!(region.bounding_box_size().height, height);
+            }));
+        }
     }
 
     #[test]

@@ -749,7 +749,18 @@ impl NativeDevice {
         &mut self,
         output_dir: &Path,
     ) -> std::result::Result<String, DeviceFailure> {
-        self.benchmark_profile(|config| profile_installed_settled_composition(config, output_dir))
+        self.benchmark_profile(|config| {
+            profile_installed_settled_composition(config, output_dir, false)
+        })
+    }
+
+    pub(crate) fn profile_settled_composition_reused_cache(
+        &mut self,
+        output_dir: &Path,
+    ) -> std::result::Result<String, DeviceFailure> {
+        self.benchmark_profile(|config| {
+            profile_installed_settled_composition(config, output_dir, true)
+        })
     }
 
     pub(crate) fn profile_scheduler_trace(
@@ -8213,8 +8224,8 @@ fn gui_profile_route_launcher_env_with_pprof(
     environment
 }
 
-fn settled_composition_launcher_env() -> Vec<(String, String)> {
-    vec![
+fn settled_composition_launcher_env(reused_cache: bool) -> Vec<(String, String)> {
+    let mut environment = vec![
         ("MISTER_CATALOG_REFRESH".into(), "off".into()),
         ("MISTER_LAUNCHER_START_SCREEN".into(), "home".into()),
         ("MISTER_GUI_FRAME_PROFILE".into(), "1".into()),
@@ -8226,7 +8237,14 @@ fn settled_composition_launcher_env() -> Vec<(String, String)> {
             "MISTER_GUI_FRAME_PROFILE_ROUTE".into(),
             "settled-composition".into(),
         ),
-    ]
+    ];
+    if reused_cache {
+        environment.push((
+            "MISTER_SETTLED_FULL_RASTER_POLICY".into(),
+            "reused-buffer".into(),
+        ));
+    }
+    environment
 }
 
 fn gui_profile_route_cleanup_command() -> String {
@@ -8462,6 +8480,7 @@ fn run_settled_composition_route(
     config: &NativeDeviceConfig,
     session: &Session,
     output_dir: &Path,
+    reused_cache: bool,
 ) -> Result<Value> {
     fs::create_dir_all(output_dir)?;
     exec_checked(
@@ -8472,7 +8491,7 @@ fn run_settled_composition_route(
     restart_launcher_with_one_shot_env(
         session,
         LauncherRestartOptions {
-            env_vars: settled_composition_launcher_env(),
+            env_vars: settled_composition_launcher_env(reused_cache),
             timeout_secs: 45,
             remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str().into(),
             ..LauncherRestartOptions::default()
@@ -8608,6 +8627,14 @@ fn run_settled_composition_route(
         get(session, GUI_PROFILE_REMOTE_COMPLETE, &profile_path)?;
         let profile: Value = serde_json::from_str(&fs::read_to_string(&profile_path)?)?;
         let metrics = summarize_settled_composition_profile(&profile)?;
+        let terminal_settings: Value =
+            serde_json::from_str(&launcher_automation::capture_checkpoint(
+                config,
+                &nonce,
+                enter_settings,
+                "terminal-settings",
+                output_dir,
+            )?)?;
 
         let leave_settings =
             modal_input_action(config, &nonce, AutomationAction::Tap(AutomationButton::B))?;
@@ -8657,6 +8684,7 @@ fn run_settled_composition_route(
             "home": home,
             "settings_selected": settings_selected,
             "settings": settings,
+            "terminal_settings": terminal_settings,
             "home_after": home_after,
             "restored": restored,
             "profile": profile,
@@ -12378,6 +12406,7 @@ fn profile_installed_launcher_response_streamline(
 fn profile_installed_settled_composition(
     config: &NativeDeviceConfig,
     output_dir: &Path,
+    reused_cache: bool,
 ) -> Result<String> {
     fs::create_dir_all(output_dir)?;
     let session = connect_with(&config.connection, 10)?;
@@ -12407,7 +12436,7 @@ fn profile_installed_settled_composition(
     drop(session);
     apply_confirmed_display_mode(config, capture_mode, "settled composition")?;
     let session = connect_with(&config.connection, 10)?;
-    let route_result = run_settled_composition_route(config, &session, output_dir);
+    let route_result = run_settled_composition_route(config, &session, output_dir, reused_cache);
     if let Some(log) = remote_read(&session, "/tmp/mister-magik-slint.log") {
         fs::write(output_dir.join("launcher.log"), log)?;
     }
@@ -12461,6 +12490,7 @@ fn profile_installed_settled_composition(
             .cloned().unwrap_or_else(|| json!("unknown")),
         "performance_authority": "unprofiled-installed-dev",
         "modal_carrier_policy": "receipt-scoped",
+        "full_raster_policy": if reused_cache { "reused-buffer" } else { "new-buffer" },
         "display_mode": capture_mode.id,
         "identity": {
             "boot_id": boot_id.trim(),
@@ -12470,6 +12500,8 @@ fn profile_installed_settled_composition(
         "artifacts": {
             "profile": "profile.json",
             "launcher_log": "launcher.log",
+            "terminal_settings_png": "terminal-settings.png",
+            "terminal_settings_metadata": "terminal-settings.json",
         },
     });
     fs::write(

@@ -78,6 +78,7 @@ enum BenchmarkProfile {
     LauncherResponseAttribution,
     GuiFrameAttribution,
     SettledComposition,
+    SettledCompositionReusedCache,
     SchedulerTrace,
     StorageAttribution,
     ArcadeVelocityScroll,
@@ -191,6 +192,9 @@ impl BenchmarkDevice for DeviceClient {
                 device.profile_gui_frame_attribution(&output_dir)
             }
             BenchmarkProfile::SettledComposition => device.profile_settled_composition(&output_dir),
+            BenchmarkProfile::SettledCompositionReusedCache => {
+                device.profile_settled_composition_reused_cache(&output_dir)
+            }
             BenchmarkProfile::SchedulerTrace => device.profile_scheduler_trace(&output_dir),
             BenchmarkProfile::StorageAttribution => device.profile_storage_attribution(&output_dir),
             BenchmarkProfile::ArcadeVelocityScroll => {
@@ -495,6 +499,15 @@ fn require_clean_installed_commit(
             reporter,
             BenchmarkProfile::SettledComposition,
             "settled-composition",
+            "mister-magik-settled-composition-v1",
+        ),
+        BenchmarkScenario::SettledCompositionReusedCache => execute_attribution_capture(
+            &mut device,
+            manifest,
+            output_dir,
+            reporter,
+            BenchmarkProfile::SettledCompositionReusedCache,
+            "settled-composition-reused-cache",
             "mister-magik-settled-composition-v1",
         ),
         BenchmarkScenario::SchedulerTrace => execute_attribution_capture(
@@ -1016,6 +1029,7 @@ fn particle_scene_lab_command(scenario: BenchmarkScenario) -> Option<&'static st
         | BenchmarkScenario::LauncherResponseAttribution
         | BenchmarkScenario::GuiFrameAttribution
         | BenchmarkScenario::SettledComposition
+        | BenchmarkScenario::SettledCompositionReusedCache
         | BenchmarkScenario::SchedulerTrace
         | BenchmarkScenario::StorageAttribution
         | BenchmarkScenario::ArcadeVelocityScroll
