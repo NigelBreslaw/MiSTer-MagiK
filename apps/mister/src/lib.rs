@@ -103,6 +103,8 @@ pub mod launcher_presentation;
 #[cfg(any(feature = "ui", feature = "ui-preview"))]
 pub mod launcher_runtime;
 pub mod launcher_taxonomy;
+#[cfg(any(feature = "ui", feature = "ui-preview"))]
+pub mod launcher_view_types;
 pub mod licenses;
 #[cfg(all(feature = "ui-preview", target_os = "macos"))]
 pub mod macos_preview_content;

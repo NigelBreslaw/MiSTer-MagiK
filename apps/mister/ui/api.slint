@@ -11,6 +11,62 @@ export enum PreviewStatus {
     ready,
 }
 
+// Shared semantic vocabulary. Finite launcher state crosses the Rust/Slint
+// boundary as enums; integers remain reserved for counts, geometry, timing,
+// percentages, and indices into dynamic models.
+export enum LauncherScreen { home, system-hub, controller, arcade, settings, screensaver-settings, about, licenses, info }
+export enum SystemHubSection { games, recent, favourites }
+export enum HomeFocus { menu, settings }
+export enum HomeScrollPhase { idle, held, repeating }
+export enum NavigationTransitionState { idle, active }
+export enum SettingsSection { display, orientation, screensaver, reduce-motion, exit, rebuild, about }
+export enum SettingsPopup { none, display-resolution, screen-orientation }
+export enum DisplayTransactionState { idle, provisional, persisting, failed }
+export enum ScreenOrientation { normal, monitor-clockwise, monitor-counterclockwise }
+export enum ScreensaverSetting { enabled, delay, preview }
+export enum AboutSection { information, licenses }
+export enum InputAvailability { available, unavailable }
+export enum SetupPhase { none, detected, new-or-existing, pick-existing, configure, name-kind }
+export enum ArcadeListMode { games, recent, favourites }
+export enum ArcadeLoadState { ready, loading }
+export enum ArcadeSearchMode { inactive, active }
+export enum ArcadeSearchStatus { idle, searching, ready, failed }
+export enum ArcadeSearchPane { keyboard, results }
+export enum PreviewState { empty, loading, ready, unavailable }
+export enum CatalogActivity { idle, background, foreground }
+export enum ProgressMode { indeterminate, determinate }
+export enum MediaPackState { queued, downloading, complete, failed }
+export enum ConfirmationKind {
+    none,
+    exit-to-mister,
+    rebuild-database,
+    restart,
+    library-changed,
+    library-update-failed,
+    display-resolution,
+    display-resolution-error,
+    screen-orientation,
+    add-favourite,
+    remove-favourite,
+}
+export enum DialogChoice { cancel, confirm }
+export enum LoadingState { idle, active }
+export enum NavigationDirection { up, down, left, right }
+
+export struct ChoiceOption { id: string, label: string }
+export struct SetupEntry { id: string, label: string }
+export struct SetupField { label: string, value: string }
+export struct MediaPackRow {
+    system: string,
+    image-size: string,
+    state: MediaPackState,
+    phase-label: string,
+    percent: int,
+    bytes-label: string,
+    pack-position: string,
+}
+export struct LayoutRect { x: int, y: int, width: int, height: int }
+
 export struct ScreenshotPackProgress {
     system: string,
     image-size: string,
