@@ -17455,7 +17455,7 @@ fn wait_for_catalog_resume_checkpoint(session: &Session, started: Instant) -> Re
             line.contains("catalog_resume_tsv") && line.contains("phase=targets-committed")
         }) {
             let progress_dir = format!(
-                "{}/catalog-v3/state/catalog-build-progress-v3",
+                "{}/catalog-v3/state/build-progress-v3",
                 CATALOG_BUILD_REBUILD_REMOTE_DIR
             );
             let disk = exec_checked_output(
