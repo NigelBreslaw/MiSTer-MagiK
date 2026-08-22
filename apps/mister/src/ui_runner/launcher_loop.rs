@@ -3961,6 +3961,30 @@ fn should_restart_for_urgent_input(
     current_batch_empty && !latency_critical_frame_pending && input_changed_since_drain
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct EarlyInputChangeCheckpoint {
+    label: &'static str,
+    observed_at_us: u64,
+}
+
+fn note_early_input_change(
+    enabled: bool,
+    probe: Option<&crate::input_hub::InputObservationProbe>,
+    drained_observation: crate::input_hub::InputObservation,
+    checkpoint: &mut Option<EarlyInputChangeCheckpoint>,
+    label: &'static str,
+) {
+    if enabled
+        && checkpoint.is_none()
+        && probe.is_some_and(|probe| probe.changed_since(drained_observation))
+    {
+        *checkpoint = Some(EarlyInputChangeCheckpoint {
+            label,
+            observed_at_us: crate::input_hub::monotonic_us(),
+        });
+    }
+}
+
 fn pad_state_has_active_input(state: &PadState) -> bool {
     state.dpad_up
         || state.dpad_down
@@ -5944,7 +5968,8 @@ pub(super) fn run_launcher_loop(
             $setup_active:ident,
             $effective_view:ident,
             $full_bridge_dirty:ident,
-            $light_bridge_dirty:ident
+            $light_bridge_dirty:ident,
+            $early_input_change_checkpoint:ident
         ) => {{
 'input_phase: {
             // Drain immediately before routing so catalog, timer, lifecycle,
@@ -5953,6 +5978,22 @@ pub(super) fn run_launcher_loop(
             record_launcher_frame_phase!(LauncherFramePhase::InputCaptured);
             input_observation = drained_input.observation;
             launcher_response_trace.observe_drained_input(&drained_input);
+            if $route_input_early && !drained_input.batch.events.is_empty() {
+                let first_publication = drained_input.publications.first().copied();
+                launcher_response_trace.record_lab(Some(serde_json::json!({
+                    "phase": "early-input-drain-attribution",
+                    "first_changed_checkpoint": $early_input_change_checkpoint
+                        .map(|checkpoint| checkpoint.label),
+                    "first_changed_at_us": $early_input_change_checkpoint
+                        .map(|checkpoint| checkpoint.observed_at_us),
+                    "first_published_at_us": first_publication
+                        .map(|publication| publication.published_at_us),
+                    "first_proxy_sequence": first_publication
+                        .and_then(|publication| publication.proxy_sequence),
+                    "drained_at_us": crate::input_hub::monotonic_us(),
+                    "observation_generation": drained_input.observation.generation(),
+                })));
+            }
             let input_batch = drained_input.batch;
             let input_batch_empty = input_batch.events.is_empty();
             let input_route_pmu = launcher_response_trace.input_pmu_span(
@@ -7316,6 +7357,11 @@ pub(super) fn run_launcher_loop(
         let mut light_bridge_dirty = false;
         let mut pad_changed_for_input = None;
         let mut early_input_phase_result = None;
+        let mut early_input_change_checkpoint =
+            input_pending_before_route.then(|| EarlyInputChangeCheckpoint {
+                label: "after-timers",
+                observed_at_us: crate::input_hub::monotonic_us(),
+            });
         if route_input_early && input_pending_before_route {
             pad_changed_for_input = if effective_view.accepts_application_input()
                 && lifecycle.startup_input_enabled()
@@ -7333,7 +7379,8 @@ pub(super) fn run_launcher_loop(
                 setup_active,
                 effective_view,
                 full_bridge_dirty,
-                light_bridge_dirty
+                light_bridge_dirty,
+                early_input_change_checkpoint
             );
             if result.0 {
                 continue;
@@ -7547,6 +7594,13 @@ pub(super) fn run_launcher_loop(
         }
         scheduler_phase = launcher_response_trace
             .record_scheduler_interval("pre-input-timers-feedback", scheduler_phase);
+        note_early_input_change(
+            route_input_early,
+            input_observation_probe.as_ref(),
+            input_observation,
+            &mut early_input_change_checkpoint,
+            "timers-feedback",
+        );
         let frame_analytics_mode = frame_accounting.frame_analytics_mode();
         let cpu_loop_start = FrameAnalyticsCpuStamp::capture(frame_analytics_mode);
         let arcade_visual_index_at_loop_start = nav.arcade.visual_index;
@@ -7720,6 +7774,13 @@ pub(super) fn run_launcher_loop(
         }
         scheduler_phase = launcher_response_trace
             .record_scheduler_interval("pre-input-lifecycle-state", scheduler_phase);
+        note_early_input_change(
+            route_input_early,
+            input_observation_probe.as_ref(),
+            input_observation,
+            &mut early_input_change_checkpoint,
+            "lifecycle-state",
+        );
         if early_input_phase_result.is_none() {
             pad_changed_for_input = if effective_view.accepts_application_input()
                 && lifecycle.startup_input_enabled()
@@ -7731,6 +7792,13 @@ pub(super) fn run_launcher_loop(
         }
         scheduler_phase = launcher_response_trace
             .record_scheduler_interval("pre-input-raw-device-poll", scheduler_phase);
+        note_early_input_change(
+            route_input_early,
+            input_observation_probe.as_ref(),
+            input_observation,
+            &mut early_input_change_checkpoint,
+            "raw-device-poll",
+        );
         if background_work_allowed && let Some(sample) = memory_guard.tick(loop_start) {
             if sample.changed {
                 runtime_status::event(
@@ -7822,6 +7890,13 @@ pub(super) fn run_launcher_loop(
 
         scheduler_phase = launcher_response_trace
             .record_scheduler_interval("pre-input-readiness-maintenance", scheduler_phase);
+        note_early_input_change(
+            route_input_early,
+            input_observation_probe.as_ref(),
+            input_observation,
+            &mut early_input_change_checkpoint,
+            "readiness-maintenance",
+        );
 
         let catalog_worker_trace_start = prepare_trace_enabled.then(Instant::now);
         let slint_animation_active = app.window().has_active_animations();
@@ -8096,6 +8171,13 @@ pub(super) fn run_launcher_loop(
         }
         scheduler_phase =
             launcher_response_trace.record_scheduler_interval("pre-input-catalog", scheduler_phase);
+        note_early_input_change(
+            route_input_early,
+            input_observation_probe.as_ref(),
+            input_observation,
+            &mut early_input_change_checkpoint,
+            "catalog",
+        );
         if maybe_present_modal_input_test_dialog(
             &mut modal_input_test_dialog_pending,
             catalog_ready,
@@ -8133,6 +8215,13 @@ pub(super) fn run_launcher_loop(
         }
         scheduler_phase =
             launcher_response_trace.record_scheduler_interval("pre-input-media", scheduler_phase);
+        note_early_input_change(
+            route_input_early,
+            input_observation_probe.as_ref(),
+            input_observation,
+            &mut early_input_change_checkpoint,
+            "media",
+        );
 
         if let Some(completion) = scheduler.poll_launch_completion(Instant::now()) {
             match completion {
@@ -8199,6 +8288,13 @@ pub(super) fn run_launcher_loop(
         }
         scheduler_phase = launcher_response_trace
             .record_scheduler_interval("pre-input-launch-lifecycle", scheduler_phase);
+        note_early_input_change(
+            route_input_early,
+            input_observation_probe.as_ref(),
+            input_observation,
+            &mut early_input_change_checkpoint,
+            "launch-lifecycle",
+        );
 
         if arcade_screen_pending && arcade_navigation_ready(catalog_ready, &catalog) {
             let before = LauncherBridgeKey::from_nav(&nav);
@@ -8368,6 +8464,13 @@ pub(super) fn run_launcher_loop(
 
         scheduler_phase = launcher_response_trace
             .record_scheduler_interval("pre-input-navigation", scheduler_phase);
+        note_early_input_change(
+            route_input_early,
+            input_observation_probe.as_ref(),
+            input_observation,
+            &mut early_input_change_checkpoint,
+            "navigation",
+        );
 
         latch_v5_qualification.poll_control(loop_start);
         latch_v5_qualification.observe_catalog_worker(
@@ -8429,6 +8532,13 @@ pub(super) fn run_launcher_loop(
 
         scheduler_phase = launcher_response_trace
             .record_scheduler_interval("pre-input-qualification", scheduler_phase);
+        note_early_input_change(
+            route_input_early,
+            input_observation_probe.as_ref(),
+            input_observation,
+            &mut early_input_change_checkpoint,
+            "qualification",
+        );
 
         if let Some(scenario) = launcher_bench_scenario {
             let latch_failure_active = launcher_presenter.latch_failure().is_some();
@@ -8525,6 +8635,13 @@ pub(super) fn run_launcher_loop(
 
         scheduler_phase = launcher_response_trace
             .record_scheduler_interval("pre-input-benchmark", scheduler_phase);
+        note_early_input_change(
+            route_input_early,
+            input_observation_probe.as_ref(),
+            input_observation,
+            &mut early_input_change_checkpoint,
+            "benchmark",
+        );
 
         if let Some(screen) = effective_lock_screen(lock_screen, catalog_ready, &catalog) {
             nav.screen = screen;
@@ -8578,6 +8695,13 @@ pub(super) fn run_launcher_loop(
 
         scheduler_phase = launcher_response_trace
             .record_scheduler_interval("pre-input-view-housekeeping", scheduler_phase);
+        note_early_input_change(
+            route_input_early,
+            input_observation_probe.as_ref(),
+            input_observation,
+            &mut early_input_change_checkpoint,
+            "view-housekeeping",
+        );
         record_launcher_frame_phase!(LauncherFramePhase::PreInputMaintenance);
         let (input_phase_yielded, input_batch_empty) =
             if let Some(result) = early_input_phase_result.take() {
@@ -8592,7 +8716,8 @@ pub(super) fn run_launcher_loop(
                     setup_active,
                     effective_view,
                     full_bridge_dirty,
-                    light_bridge_dirty
+                    light_bridge_dirty,
+                    early_input_change_checkpoint
                 )
             };
         if input_phase_yielded {
