@@ -1012,6 +1012,7 @@ pub(crate) fn chd_raw_sha1_from_header(header: &[u8]) -> Option<String> {
     Some(library_db::hex_lower(&header[range]))
 }
 
+#[cfg(any(test, feature = "builder"))]
 pub(crate) fn rom_hash_candidates(list_name: &str, bytes: &[u8]) -> Vec<Vec<u8>> {
     let mut out = Vec::new();
     match list_name {
@@ -1046,6 +1047,7 @@ pub(crate) fn rom_hash_candidates(list_name: &str, bytes: &[u8]) -> Vec<Vec<u8>>
     out
 }
 
+#[cfg(any(test, feature = "builder"))]
 pub(crate) fn swap_pairs(bytes: &[u8]) -> Vec<u8> {
     let mut out = bytes.to_vec();
     for chunk in out.as_chunks_mut::<2>().0 {
@@ -1054,6 +1056,7 @@ pub(crate) fn swap_pairs(bytes: &[u8]) -> Vec<u8> {
     out
 }
 
+#[cfg(any(test, feature = "builder"))]
 pub(crate) fn swap_words(bytes: &[u8]) -> Vec<u8> {
     let mut out = bytes.to_vec();
     for chunk in out.as_chunks_mut::<4>().0 {
@@ -1063,6 +1066,7 @@ pub(crate) fn swap_words(bytes: &[u8]) -> Vec<u8> {
     out
 }
 
+#[cfg(any(test, feature = "builder"))]
 pub(crate) fn reverse_words(bytes: &[u8]) -> Vec<u8> {
     let mut out = bytes.to_vec();
     for chunk in out.as_chunks_mut::<4>().0 {
@@ -1071,6 +1075,7 @@ pub(crate) fn reverse_words(bytes: &[u8]) -> Vec<u8> {
     out
 }
 
+#[cfg(any(test, feature = "builder"))]
 pub(crate) fn crc32(bytes: &[u8]) -> u32 {
     let mut crc = 0xffff_ffffu32;
     for &byte in bytes {
