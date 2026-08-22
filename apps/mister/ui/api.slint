@@ -61,15 +61,6 @@ export struct MediaPackRow {
 }
 export struct LayoutRect { x: int, y: int, width: int, height: int }
 
-export struct ScreenshotPackProgress {
-    system: string,
-    image-size: string,
-    phase: string,
-    percent: int,
-    bytes-label: string,
-    pack-position: string,
-}
-
 // Host-owned launcher navigation shared by the independent CRT and HDMI
 // presentation trees. Models preserve their Rust-owned retained identity.
 export global NavigationView {
@@ -214,6 +205,7 @@ export global ArcadeView {
 
 export global CatalogView {
     in property <CatalogActivity> activity;
+    in property <bool> background-activity-visible;
     in property <ProgressMode> progress-mode;
     in property <string> message;
     in property <string> title;
@@ -241,20 +233,10 @@ export global OverlayView {
 }
 
 export global MisterBridge {
-    // Full-screen boot splash, cleared after the first launcher state sync.
-    in-out property <bool> startup-visible;
     // Rust-owned physically confirmed focus acknowledgements. The revision is
     // an explicit Slint dependency; the callback resolves stable surface/item IDs.
     in-out property <int> selection-feedback-revision;
     pure callback selection-feedback-query(string, string, int) -> bool;
-    // Confirmation dialog.
-    in-out property <bool> confirm-visible;
-    in-out property <string> confirm-title;
-    in-out property <string> confirm-message;
-    in-out property <string> confirm-left-label;
-    in-out property <string> confirm-right-label;
-    // Dialog focus: 0=cancel, 1=confirm.
-    in-out property <int> confirm-selected;
     // Rust-painted arcade list geometry, in logical pixels.
     in-out property <int> arcade-list-x;
     in-out property <int> arcade-list-y;
@@ -276,21 +258,5 @@ export global MisterBridge {
     in-out property <int> arcade-preview-box-y;
     in-out property <int> arcade-preview-box-width;
     in-out property <int> arcade-preview-box-height;
-    // Background startup catalog scan.
-    in-out property <bool> catalog-scan-visible;
-    in-out property <string> catalog-scan-message;
-    in-out property <string> catalog-scan-title;
-    in-out property <string> catalog-scan-detail;
-    // -1 means indeterminate.
-    in-out property <int> catalog-scan-percent: -1;
-    in-out property <[ScreenshotPackProgress]> media-pack-progresses;
-    in-out property <string> media-pack-summary;
-    // Small global badge for background catalog validation while cached UI is usable.
-    in-out property <bool> catalog-background-scan-visible;
-    // Rust-owned 500 ms blink phase shared by catalog scan indicators.
-    in-out property <bool> catalog-scan-dot-visible: true;
-    // Non-empty while launching a game - full-screen loading overlay.
-    in-out property <string> loading-message;
-    in-out property <string> loading-detail;
     callback quit-requested();
 }

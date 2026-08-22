@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { MisterUi } from "../mister_window.slint";
-import { LauncherScreen, MisterBridge, NavigationView, SettingsPopup, SettingsView, SetupPhase, SetupView } from "../api.slint";
+import { CatalogActivity, CatalogView, ConfirmationKind, LauncherScreen, LoadingState, MediaView, NavigationView, OverlayView, SettingsPopup, SettingsView, SetupPhase, SetupView } from "../api.slint";
 import { CrtTheme } from "../components/crt_ui.slint";
 import { CrtControllerPanel } from "../views/crt/controller_panel.slint";
 import { SetupOverlay } from "crt_setup.slint";
@@ -45,14 +45,14 @@ export component CrtLauncherUi inherits Rectangle {
         if NavigationView.screen == LauncherScreen.screensaver-settings : ScreensaverSettingsScreen { }
         if NavigationView.screen == LauncherScreen.system-hub : SystemHubScreen { }
 
-        if MisterBridge.catalog-background-scan-visible : BackgroundScanBadge { }
+        if CatalogView.background-activity-visible : BackgroundScanBadge { }
         if SetupView.phase != SetupPhase.none : SetupOverlay { }
-        if !MisterBridge.catalog-scan-visible && MisterBridge.media-pack-progresses.length > 0 : MediaProgressPopup {
+        if CatalogView.activity != CatalogActivity.foreground && MediaView.rows.length > 0 : MediaProgressPopup {
         }
-        if MisterBridge.catalog-scan-visible : CatalogScanPopup { }
-        if MisterBridge.confirm-visible : ConfirmDialog { }
+        if CatalogView.activity == CatalogActivity.foreground : CatalogScanPopup { }
+        if OverlayView.confirmation-kind != ConfirmationKind.none : ConfirmDialog { }
         if SettingsView.popup != SettingsPopup.none : CrtComboBoxOverlay { }
-        if MisterBridge.loading-message != "" : LoadingOverlay { }
-        if MisterBridge.startup-visible : StartupSplash { }
+        if OverlayView.loading-state == LoadingState.active : LoadingOverlay { }
+        if OverlayView.startup-state == LoadingState.active : StartupSplash { }
     }
 }

@@ -27,24 +27,28 @@ macro_rules! set_bridge_string_if_changed {
 
 fn load_snes_artwork_image() -> Option<slint::Image> {
     let active = mister_magik_fb::snes_artwork::active_asset_path();
-    let artwork = mister_magik_fb::snes_artwork::SnesArtwork::load(&active).or_else(|active_error| {
-        #[cfg(feature = "ui-preview")]
-        {
-            let repository = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("assets/snes/snes-small-v1.rgb565a");
-            return mister_magik_fb::snes_artwork::SnesArtwork::load(&repository).map_err(|repository_error| {
-                crate::ui_errln!(
+    let artwork = mister_magik_fb::snes_artwork::SnesArtwork::load(&active)
+        .or_else(|active_error| {
+            #[cfg(feature = "ui-preview")]
+            {
+                let repository = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("assets/snes/snes-small-v1.rgb565a");
+                return mister_magik_fb::snes_artwork::SnesArtwork::load(&repository).map_err(
+                    |repository_error| {
+                        crate::ui_errln!(
                     "SNES artwork unavailable: active={active_error}; repository={repository_error}"
                 );
-                repository_error
-            });
-        }
-        #[cfg(not(feature = "ui-preview"))]
-        {
-            crate::ui_errln!("SNES artwork unavailable: {active_error}");
-            Err(active_error)
-        }
-    }).ok()?;
+                        repository_error
+                    },
+                );
+            }
+            #[cfg(not(feature = "ui-preview"))]
+            {
+                crate::ui_errln!("SNES artwork unavailable: {active_error}");
+                Err(active_error)
+            }
+        })
+        .ok()?;
     let pixels = artwork.rgba8_bytes();
     let buffer = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
         &pixels,
@@ -65,7 +69,6 @@ pub(super) fn init_launcher_bridge(app: &slint_ui::launcher::Launcher, pad: &Pad
     let bridge = app.global::<slint_ui::launcher::MisterBridge>();
     let navigation = app.global::<slint_ui::launcher::NavigationView>();
     let information = app.global::<slint_ui::launcher::InformationView>();
-    bridge.set_startup_visible(true);
     navigation.set_screen(slint_ui::launcher::LauncherScreen::Home);
     if let Some(image) = load_snes_artwork_image() {
         navigation.set_system_artwork(image);
@@ -82,12 +85,6 @@ pub(super) fn init_launcher_bridge(app: &slint_ui::launcher::Launcher, pad: &Pad
     information.set_kernel_version(kernel_version);
     let database_build = SharedString::from(last_database_build());
     information.set_database_build(database_build);
-    bridge.set_confirm_visible(false);
-    bridge.set_confirm_title("".into());
-    bridge.set_confirm_message("".into());
-    bridge.set_confirm_left_label("".into());
-    bridge.set_confirm_right_label("".into());
-    bridge.set_confirm_selected(0);
     let overlay = app.global::<slint_ui::launcher::OverlayView>();
     overlay.set_confirmation_kind(slint_ui::launcher::ConfirmationKind::None);
     overlay.set_selected_choice(slint_ui::launcher::DialogChoice::Cancel);
@@ -118,68 +115,8 @@ pub(super) fn init_launcher_bridge(app: &slint_ui::launcher::Launcher, pad: &Pad
     arcade.set_preview_state(slint_ui::launcher::PreviewState::Empty);
     arcade.set_preview_title("".into());
     arcade.set_preview_run_label(preview_run_label().into());
-    LauncherStatusPresenter::new(&bridge).init();
-    sync_catalog_compat_projection(app);
+    LauncherStatusPresenter::new(app).init();
     sync_bridge_pad_launcher(app, pad);
-}
-
-pub(super) fn sync_catalog_compat_projection(app: &slint_ui::launcher::Launcher) {
-    let bridge = app.global::<slint_ui::launcher::MisterBridge>();
-    let catalog = app.global::<slint_ui::launcher::CatalogView>();
-    catalog.set_activity(if bridge.get_catalog_scan_visible() {
-        slint_ui::launcher::CatalogActivity::Foreground
-    } else if bridge.get_catalog_background_scan_visible() {
-        slint_ui::launcher::CatalogActivity::Background
-    } else {
-        slint_ui::launcher::CatalogActivity::Idle
-    });
-    catalog.set_progress_mode(if bridge.get_catalog_scan_percent() < 0 {
-        slint_ui::launcher::ProgressMode::Indeterminate
-    } else {
-        slint_ui::launcher::ProgressMode::Determinate
-    });
-    catalog.set_message(bridge.get_catalog_scan_message());
-    catalog.set_title(bridge.get_catalog_scan_title());
-    catalog.set_detail(bridge.get_catalog_scan_detail());
-    catalog.set_percent(bridge.get_catalog_scan_percent().max(0));
-    catalog.set_progress_dot_visible(bridge.get_catalog_scan_dot_visible());
-}
-
-fn sync_overlay_compat_projection(app: &slint_ui::launcher::Launcher, nav: &LauncherNav) {
-    let bridge = app.global::<slint_ui::launcher::MisterBridge>();
-    let overlay = app.global::<slint_ui::launcher::OverlayView>();
-    let kind = if bridge.get_confirm_visible() {
-        let typed = crate::launcher_view_types::confirmation_kind(nav.confirm_action);
-        if typed == slint_ui::launcher::ConfirmationKind::None {
-            slint_ui::launcher::ConfirmationKind::LibraryUpdateFailed
-        } else {
-            typed
-        }
-    } else {
-        slint_ui::launcher::ConfirmationKind::None
-    };
-    overlay.set_confirmation_kind(kind);
-    overlay.set_selected_choice(if bridge.get_confirm_selected() == 0 {
-        slint_ui::launcher::DialogChoice::Cancel
-    } else {
-        slint_ui::launcher::DialogChoice::Confirm
-    });
-    overlay.set_confirmation_title(bridge.get_confirm_title());
-    overlay.set_confirmation_message(bridge.get_confirm_message());
-    overlay.set_cancel_label(bridge.get_confirm_left_label());
-    overlay.set_confirm_label(bridge.get_confirm_right_label());
-    overlay.set_loading_state(if bridge.get_loading_message().is_empty() {
-        slint_ui::launcher::LoadingState::Idle
-    } else {
-        slint_ui::launcher::LoadingState::Active
-    });
-    overlay.set_loading_message(bridge.get_loading_message());
-    overlay.set_loading_detail(bridge.get_loading_detail());
-    overlay.set_startup_state(if bridge.get_startup_visible() {
-        slint_ui::launcher::LoadingState::Active
-    } else {
-        slint_ui::launcher::LoadingState::Idle
-    });
 }
 
 pub(super) fn sync_settings_bridge(
@@ -187,7 +124,6 @@ pub(super) fn sync_settings_bridge(
     nav: &LauncherNav,
     lifecycle: &LauncherLifecycle,
 ) {
-    let bridge = app.global::<slint_ui::launcher::MisterBridge>();
     let navigation = app.global::<slint_ui::launcher::NavigationView>();
     let screen = crate::launcher_view_types::launcher_screen(nav.screen);
     if navigation.get_screen() != screen {
@@ -247,7 +183,11 @@ pub(super) fn sync_settings_bridge(
             )
         )
     {
-        sync_launcher_confirm_bridge(&bridge, nav, lifecycle);
+        sync_launcher_confirm_bridge(
+            &app.global::<slint_ui::launcher::OverlayView>(),
+            nav,
+            lifecycle,
+        );
     }
 }
 
@@ -439,13 +379,13 @@ impl CatalogScanBridgeStatus {
     }
 }
 
-pub(super) struct LauncherStatusPresenter<'a, 'b> {
-    bridge: &'a slint_ui::launcher::MisterBridge<'b>,
+pub(super) struct LauncherStatusPresenter<'a> {
+    app: &'a slint_ui::launcher::Launcher,
 }
 
-impl<'a, 'b> LauncherStatusPresenter<'a, 'b> {
-    pub(super) fn new(bridge: &'a slint_ui::launcher::MisterBridge<'b>) -> Self {
-        Self { bridge }
+impl<'a> LauncherStatusPresenter<'a> {
+    pub(super) fn new(app: &'a slint_ui::launcher::Launcher) -> Self {
+        Self { app }
     }
 
     pub(super) fn init(&self) {
@@ -462,58 +402,83 @@ impl<'a, 'b> LauncherStatusPresenter<'a, 'b> {
     }
 
     pub(super) fn sync_loading(&self, message: impl AsRef<str>, detail: impl AsRef<str>) {
-        set_bridge_string_if_changed!(
-            self.bridge,
-            get_loading_message,
-            set_loading_message,
-            message
-        );
-        set_bridge_string_if_changed!(self.bridge, get_loading_detail, set_loading_detail, detail);
+        let overlay = self.app.global::<slint_ui::launcher::OverlayView>();
+        let message = message.as_ref();
+        overlay.set_loading_state(if message.is_empty() {
+            slint_ui::launcher::LoadingState::Idle
+        } else {
+            slint_ui::launcher::LoadingState::Active
+        });
+        overlay.set_loading_message(message.into());
+        overlay.set_loading_detail(detail.as_ref().into());
     }
 
     pub(super) fn sync_catalog_scan(&self, status: CatalogScanBridgeStatus) {
-        self.bridge.set_catalog_scan_visible(status.visible);
-        self.bridge
-            .set_catalog_background_scan_visible(status.background_visible);
-        self.bridge.set_catalog_scan_message(status.message);
-        self.bridge.set_catalog_scan_title(status.title);
-        self.bridge.set_catalog_scan_detail(status.detail);
-        self.bridge.set_catalog_scan_percent(status.percent);
+        let catalog = self.app.global::<slint_ui::launcher::CatalogView>();
+        catalog.set_activity(if status.visible {
+            slint_ui::launcher::CatalogActivity::Foreground
+        } else if status.background_visible {
+            slint_ui::launcher::CatalogActivity::Background
+        } else {
+            slint_ui::launcher::CatalogActivity::Idle
+        });
+        catalog.set_background_activity_visible(status.background_visible);
+        catalog.set_message(status.message);
+        catalog.set_title(status.title);
+        catalog.set_detail(status.detail);
+        catalog.set_progress_mode(if status.percent < 0 {
+            slint_ui::launcher::ProgressMode::Indeterminate
+        } else {
+            slint_ui::launcher::ProgressMode::Determinate
+        });
+        catalog.set_percent(status.percent.max(0));
     }
 
     pub(super) fn clear_catalog_scan(&self) {
-        self.bridge.set_catalog_scan_visible(false);
-        self.bridge.set_catalog_background_scan_visible(false);
-        self.bridge.set_catalog_scan_title("".into());
-        self.bridge.set_catalog_scan_detail("".into());
-        self.bridge.set_catalog_scan_percent(-1);
+        let catalog = self.app.global::<slint_ui::launcher::CatalogView>();
+        catalog.set_activity(slint_ui::launcher::CatalogActivity::Idle);
+        catalog.set_background_activity_visible(false);
+        catalog.set_title("".into());
+        catalog.set_detail("".into());
+        catalog.set_progress_mode(slint_ui::launcher::ProgressMode::Indeterminate);
+        catalog.set_percent(0);
     }
 
     pub(super) fn sync_catalog_background_scan_visible(&self, visible: bool) {
-        self.bridge.set_catalog_background_scan_visible(visible);
+        let catalog = self.app.global::<slint_ui::launcher::CatalogView>();
+        catalog.set_background_activity_visible(visible);
+        if catalog.get_activity() != slint_ui::launcher::CatalogActivity::Foreground {
+            catalog.set_activity(if visible {
+                slint_ui::launcher::CatalogActivity::Background
+            } else {
+                slint_ui::launcher::CatalogActivity::Idle
+            });
+        }
     }
 
     pub(super) fn sync_catalog_scan_detail(&self, detail: impl Into<SharedString>) {
-        self.bridge.set_catalog_scan_detail(detail.into());
+        self.app
+            .global::<slint_ui::launcher::CatalogView>()
+            .set_detail(detail.into());
     }
 
     pub(super) fn sync_media_progresses(
         &self,
-        progresses: ModelRc<slint_ui::launcher::ScreenshotPackProgress>,
+        progresses: ModelRc<slint_ui::launcher::MediaPackRow>,
         summary: impl AsRef<str>,
     ) {
         crate::launcher_presentation::bridge_churn_record_model_replacements(1);
         crate::launcher_presentation::bridge_churn_record_shared_strings(1);
-        self.bridge.set_media_pack_progresses(progresses);
-        self.bridge
-            .set_media_pack_summary(SharedString::from(summary.as_ref()));
+        let media = self.app.global::<slint_ui::launcher::MediaView>();
+        media.set_rows(progresses);
+        media.set_summary(SharedString::from(summary.as_ref()));
     }
 }
 
-fn empty_media_pack_progress_model() -> ModelRc<slint_ui::launcher::ScreenshotPackProgress> {
-    ModelRc::new(VecModel::from(Vec::<
-        slint_ui::launcher::ScreenshotPackProgress,
-    >::new()))
+fn empty_media_pack_progress_model() -> ModelRc<slint_ui::launcher::MediaPackRow> {
+    ModelRc::new(VecModel::from(
+        Vec::<slint_ui::launcher::MediaPackRow>::new(),
+    ))
 }
 
 pub(super) fn sync_bridge(app: &slint_ui::controller::ControllerTest, pad: &PadPool) {
@@ -521,143 +486,123 @@ pub(super) fn sync_bridge(app: &slint_ui::controller::ControllerTest, pad: &PadP
 }
 
 pub(super) fn sync_confirm_bridge(
-    bridge: &slint_ui::launcher::MisterBridge,
+    bridge: &slint_ui::launcher::OverlayView,
     action: Option<launcher::ConfirmAction>,
 ) {
     let text = confirm_bridge_text(action);
-    set_bridge_string_if_changed!(bridge, get_confirm_title, set_confirm_title, text.title);
     set_bridge_string_if_changed!(
         bridge,
-        get_confirm_message,
-        set_confirm_message,
+        get_confirmation_title,
+        set_confirmation_title,
+        text.title
+    );
+    set_bridge_string_if_changed!(
+        bridge,
+        get_confirmation_message,
+        set_confirmation_message,
         text.message
     );
+    set_bridge_string_if_changed!(bridge, get_cancel_label, set_cancel_label, text.left_label);
     set_bridge_string_if_changed!(
         bridge,
-        get_confirm_left_label,
-        set_confirm_left_label,
-        text.left_label
-    );
-    set_bridge_string_if_changed!(
-        bridge,
-        get_confirm_right_label,
-        set_confirm_right_label,
+        get_confirm_label,
+        set_confirm_label,
         text.right_label
     );
 }
 
 fn sync_launcher_confirm_bridge(
-    bridge: &slint_ui::launcher::MisterBridge,
+    bridge: &slint_ui::launcher::OverlayView,
     nav: &LauncherNav,
     lifecycle: &LauncherLifecycle,
 ) {
     if let Some(dialog) = lifecycle.view().launch_failure_dialog() {
-        set_bridge_if_changed!(bridge, get_confirm_visible, set_confirm_visible, true);
-        set_bridge_if_changed!(bridge, get_confirm_selected, set_confirm_selected, 0);
+        bridge.set_confirmation_kind(slint_ui::launcher::ConfirmationKind::LibraryUpdateFailed);
+        bridge.set_selected_choice(slint_ui::launcher::DialogChoice::Cancel);
         set_bridge_string_if_changed!(
             bridge,
-            get_confirm_title,
-            set_confirm_title,
+            get_confirmation_title,
+            set_confirmation_title,
             dialog.title.as_str()
         );
         set_bridge_string_if_changed!(
             bridge,
-            get_confirm_message,
-            set_confirm_message,
+            get_confirmation_message,
+            set_confirmation_message,
             dialog.message
         );
-        set_bridge_string_if_changed!(
-            bridge,
-            get_confirm_left_label,
-            set_confirm_left_label,
-            "Back"
-        );
-        set_bridge_string_if_changed!(bridge, get_confirm_right_label, set_confirm_right_label, "");
+        set_bridge_string_if_changed!(bridge, get_cancel_label, set_cancel_label, "Back");
+        set_bridge_string_if_changed!(bridge, get_confirm_label, set_confirm_label, "");
         return;
     }
     if let Some(dialog) = lifecycle.view().catalog_recovery_dialog() {
-        set_bridge_if_changed!(bridge, get_confirm_visible, set_confirm_visible, true);
-        set_bridge_if_changed!(
-            bridge,
-            get_confirm_selected,
-            set_confirm_selected,
-            dialog.selected.selected_index()
-        );
-        set_bridge_string_if_changed!(bridge, get_confirm_title, set_confirm_title, dialog.title);
+        bridge.set_confirmation_kind(slint_ui::launcher::ConfirmationKind::LibraryChanged);
+        bridge.set_selected_choice(if dialog.selected.selected_index() == 0 {
+            slint_ui::launcher::DialogChoice::Cancel
+        } else {
+            slint_ui::launcher::DialogChoice::Confirm
+        });
         set_bridge_string_if_changed!(
             bridge,
-            get_confirm_message,
-            set_confirm_message,
+            get_confirmation_title,
+            set_confirmation_title,
+            dialog.title
+        );
+        set_bridge_string_if_changed!(
+            bridge,
+            get_confirmation_message,
+            set_confirmation_message,
             dialog.message.as_str()
         );
         set_bridge_string_if_changed!(
             bridge,
-            get_confirm_left_label,
-            set_confirm_left_label,
+            get_cancel_label,
+            set_cancel_label,
             dialog.left_label
         );
         set_bridge_string_if_changed!(
             bridge,
-            get_confirm_right_label,
-            set_confirm_right_label,
+            get_confirm_label,
+            set_confirm_label,
             dialog.right_label
         );
         return;
     }
-    set_bridge_if_changed!(
-        bridge,
-        get_confirm_visible,
-        set_confirm_visible,
-        nav.confirm_action.is_some()
-    );
-    set_bridge_if_changed!(
-        bridge,
-        get_confirm_selected,
-        set_confirm_selected,
-        nav.confirm_selected as i32
-    );
+    bridge.set_confirmation_kind(crate::launcher_view_types::confirmation_kind(
+        nav.confirm_action,
+    ));
+    bridge.set_selected_choice(if nav.confirm_selected == 0 {
+        slint_ui::launcher::DialogChoice::Cancel
+    } else {
+        slint_ui::launcher::DialogChoice::Confirm
+    });
     sync_confirm_bridge(bridge, nav.confirm_action);
     if nav.confirm_action == Some(launcher::ConfirmAction::DisplayResolution) {
         let label = format!("Cancel ({})", nav.display_confirm_remaining);
-        set_bridge_string_if_changed!(
-            bridge,
-            get_confirm_left_label,
-            set_confirm_left_label,
-            &label
-        );
+        set_bridge_string_if_changed!(bridge, get_cancel_label, set_cancel_label, &label);
         if nav.display_confirm_busy {
             set_bridge_string_if_changed!(
                 bridge,
-                get_confirm_message,
-                set_confirm_message,
+                get_confirmation_message,
+                set_confirmation_message,
                 "Saving the new resolution…"
             );
-            set_bridge_string_if_changed!(
-                bridge,
-                get_confirm_right_label,
-                set_confirm_right_label,
-                "Saving…"
-            );
+            set_bridge_string_if_changed!(bridge, get_confirm_label, set_confirm_label, "Saving…");
         } else if let Some(error) = nav.display_error.as_deref() {
             let message = format!("Could not save the resolution: {error}. Retry or cancel.");
             set_bridge_string_if_changed!(
                 bridge,
-                get_confirm_title,
-                set_confirm_title,
+                get_confirmation_title,
+                set_confirmation_title,
                 "Resolution change failed"
             );
             set_bridge_string_if_changed!(
                 bridge,
-                get_confirm_message,
-                set_confirm_message,
+                get_confirmation_message,
+                set_confirmation_message,
                 &message
             );
-            set_bridge_string_if_changed!(
-                bridge,
-                get_confirm_right_label,
-                set_confirm_right_label,
-                "Retry"
-            );
+            set_bridge_string_if_changed!(bridge, get_confirm_label, set_confirm_label, "Retry");
         }
     } else if nav.confirm_action == Some(launcher::ConfirmAction::ScreenOrientation) {
         let label = if nav.orientation_error.is_some() {
@@ -665,50 +610,40 @@ fn sync_launcher_confirm_bridge(
         } else {
             format!("Cancel ({})", nav.orientation_confirm_remaining)
         };
-        set_bridge_string_if_changed!(
-            bridge,
-            get_confirm_left_label,
-            set_confirm_left_label,
-            &label
-        );
+        set_bridge_string_if_changed!(bridge, get_cancel_label, set_cancel_label, &label);
         if nav.orientation_confirm_busy {
             set_bridge_string_if_changed!(
                 bridge,
-                get_confirm_message,
-                set_confirm_message,
+                get_confirmation_message,
+                set_confirmation_message,
                 "Saving the launcher and MiSTer OSD orientation…"
             );
-            set_bridge_string_if_changed!(
-                bridge,
-                get_confirm_right_label,
-                set_confirm_right_label,
-                "Saving…"
-            );
+            set_bridge_string_if_changed!(bridge, get_confirm_label, set_confirm_label, "Saving…");
         } else if let Some(error) = nav.orientation_error.as_deref() {
             let message =
                 format!("Could not save the screen orientation: {error}. Retry or cancel.");
             set_bridge_string_if_changed!(
                 bridge,
-                get_confirm_title,
-                set_confirm_title,
+                get_confirmation_title,
+                set_confirmation_title,
                 "Orientation change failed"
             );
             set_bridge_string_if_changed!(
                 bridge,
-                get_confirm_message,
-                set_confirm_message,
+                get_confirmation_message,
+                set_confirmation_message,
                 &message
             );
-            set_bridge_string_if_changed!(
-                bridge,
-                get_confirm_right_label,
-                set_confirm_right_label,
-                "Retry"
-            );
+            set_bridge_string_if_changed!(bridge, get_confirm_label, set_confirm_label, "Retry");
         }
     } else if nav.confirm_action == Some(launcher::ConfirmAction::DisplayResolutionError) {
         if let Some(error) = nav.display_error.as_deref() {
-            set_bridge_string_if_changed!(bridge, get_confirm_message, set_confirm_message, error);
+            set_bridge_string_if_changed!(
+                bridge,
+                get_confirmation_message,
+                set_confirmation_message,
+                error
+            );
         }
     }
 }
@@ -825,15 +760,20 @@ pub(super) fn sync_bridge_launcher(
     let model_projection_us = model_started
         .map(|started| started.elapsed().as_micros())
         .unwrap_or(0);
-    bridge.set_startup_visible(false);
+    app.global::<slint_ui::launcher::OverlayView>()
+        .set_startup_state(slint_ui::launcher::LoadingState::Idle);
     sync_bridge_pad_launcher(app, pad);
     let clock_text = SharedString::from(launcher_clock_text());
     app.global::<slint_ui::launcher::NavigationView>()
         .set_clock_text(clock_text);
     sync_arcade_list_geometry_bridge(&bridge, nav, ui);
     let active_games_loading = active_system_games_loading(catalog, nav);
-    sync_launcher_confirm_bridge(&bridge, nav, lifecycle);
-    LauncherStatusPresenter::new(&bridge).sync_loading(loading_message, loading_detail);
+    sync_launcher_confirm_bridge(
+        &app.global::<slint_ui::launcher::OverlayView>(),
+        nav,
+        lifecycle,
+    );
+    LauncherStatusPresenter::new(app).sync_loading(loading_message, loading_detail);
     if nav.screen == Screen::Arcade
         && !nav.uses_crt_layout()
         && !active_games_loading
@@ -851,8 +791,6 @@ pub(super) fn sync_bridge_launcher(
         );
     }
     sync_setup_bridge(app, pad, setup);
-    sync_catalog_compat_projection(app);
-    sync_overlay_compat_projection(app, nav);
     LauncherBridgeSyncTiming {
         model_projection_us,
     }
@@ -881,8 +819,12 @@ pub(super) fn sync_bridge_launcher_light(
     let bridge = app.global::<slint_ui::launcher::MisterBridge>();
     let active_games_loading = active_system_games_loading(catalog, nav);
     sync_arcade_list_geometry_bridge_if_changed(&bridge, nav, ui);
-    sync_launcher_confirm_bridge(&bridge, nav, lifecycle);
-    let status_presenter = LauncherStatusPresenter::new(&bridge);
+    sync_launcher_confirm_bridge(
+        &app.global::<slint_ui::launcher::OverlayView>(),
+        nav,
+        lifecycle,
+    );
+    let status_presenter = LauncherStatusPresenter::new(app);
     status_presenter.sync_loading(loading_message, loading_detail);
     if nav.screen == Screen::Arcade
         && !nav.uses_crt_layout()
@@ -900,8 +842,6 @@ pub(super) fn sync_bridge_launcher_light(
             nav.arcade.is_turbo_active(),
         );
     }
-    sync_catalog_compat_projection(app);
-    sync_overlay_compat_projection(app, nav);
     LauncherBridgeSyncTiming {
         model_projection_us,
     }
@@ -1199,16 +1139,16 @@ impl BridgeChurnPlayback {
                     full_bridge_dirty,
                 );
                 if self.step + 1 == BRIDGE_CHURN_MEDIA_UPDATES {
-                    let bridge = app.global::<slint_ui::launcher::MisterBridge>();
-                    let model = bridge.get_media_pack_progresses();
+                    let media = app.global::<slint_ui::launcher::MediaView>();
+                    let model = media.get_rows();
                     self.media_bridge_terminal = Some(json!({
                         "rows": (0..model.row_count()).filter_map(|index| model.row_data(index)).map(|row| json!({
                             "system": row.system.as_str(),
-                            "phase": row.phase.as_str(),
+                            "phase": row.phase_label.as_str(),
                             "percent": row.percent,
                             "pack_position": row.pack_position.as_str(),
                         })).collect::<Vec<_>>(),
-                        "summary": bridge.get_media_pack_summary().as_str(),
+                        "summary": media.get_summary().as_str(),
                     }));
                 }
                 self.pending_presentation = true;
@@ -1223,8 +1163,7 @@ impl BridgeChurnPlayback {
                 self.pending_presentation = true;
             }
             BridgeChurnPlaybackStage::Restore => {
-                let bridge = app.global::<slint_ui::launcher::MisterBridge>();
-                LauncherStatusPresenter::new(&bridge)
+                LauncherStatusPresenter::new(app)
                     .sync_media_progresses(empty_media_pack_progress_model(), "");
                 models.republish_cached_menu_models(app);
                 app.global::<slint_ui::launcher::NavigationView>()
@@ -1879,7 +1818,6 @@ mod tests {
     fn light_bridge_sync_refreshes_active_system_header() {
         init_test_slint_platform();
         let app = slint_ui::launcher::Launcher::new().expect("launcher component");
-        let bridge = app.global::<slint_ui::launcher::MisterBridge>();
         let arcade = app.global::<slint_ui::launcher::ArcadeView>();
         arcade.set_active_title("AcornAtom".into());
         arcade.set_active_count(0);
@@ -1945,18 +1883,28 @@ mod tests {
             },
             &mut effects,
         );
-        sync_launcher_confirm_bridge(&bridge, &nav, &lifecycle);
-        assert!(bridge.get_confirm_visible());
-        assert_eq!(bridge.get_confirm_title().as_str(), "Catalog unavailable");
+        let overlay = app.global::<slint_ui::launcher::OverlayView>();
+        sync_launcher_confirm_bridge(&overlay, &nav, &lifecycle);
+        assert_ne!(
+            overlay.get_confirmation_kind(),
+            slint_ui::launcher::ConfirmationKind::None
+        );
+        assert_eq!(
+            overlay.get_confirmation_title().as_str(),
+            "Catalog unavailable"
+        );
         assert!(
-            bridge
-                .get_confirm_message()
+            overlay
+                .get_confirmation_message()
                 .as_str()
                 .contains("database disk image is malformed")
         );
-        assert_eq!(bridge.get_confirm_left_label().as_str(), "Exit to MiSTer");
-        assert_eq!(bridge.get_confirm_right_label().as_str(), "Full rebuild");
-        assert_eq!(bridge.get_confirm_selected(), 0);
+        assert_eq!(overlay.get_cancel_label().as_str(), "Exit to MiSTer");
+        assert_eq!(overlay.get_confirm_label().as_str(), "Full rebuild");
+        assert_eq!(
+            overlay.get_selected_choice(),
+            slint_ui::launcher::DialogChoice::Cancel
+        );
     }
 
     #[test]

@@ -5,11 +5,11 @@ import { Spleen6x12, Spleen6x12Size } from "../components/spleen_6x12.slint";
 import { Jersey25 } from "../components/jersey_25.slint";
 
 import { MisterUi } from "../mister_window.slint";
-import { MisterBridge, ScreenshotPackProgress } from "../api.slint";
+import { CatalogView, DialogChoice, FeedbackView, MediaPackRow, MediaPackState, MediaView, OverlayView } from "../api.slint";
 import { CrtTheme } from "../components/crt_ui.slint";
 
 component CrtProgressRow inherits Rectangle {
-    in property <ScreenshotPackProgress> pack;
+    in property <MediaPackRow> pack;
     height: MisterUi.footer-height;
     background: CrtTheme.panel-alt;
     border-width: MisterUi.border;
@@ -21,14 +21,14 @@ component CrtProgressRow inherits Rectangle {
         spacing: MisterUi.grid-x;
         cross-axis-alignment: center;
         Spleen6x12 {
-            text: root.pack.system + "  " + root.pack.phase;
+            text: root.pack.system + "  " + root.pack.phase-label;
             color: CrtTheme.text;
             size: MisterUi.crt-body-font;
             overflow: elide;
             horizontal-stretch: 1;
         }
         Spleen6x12 {
-            text: root.pack.percent < 0 ? "..." : root.pack.percent + "%";
+            text: root.pack.state == MediaPackState.queued ? "..." : root.pack.percent + "%";
             color: CrtTheme.muted;
             size: MisterUi.crt-body-font;
         }
@@ -72,7 +72,7 @@ export component CatalogScanPopup inherits Rectangle {
 
             Spleen6x12 {
                 width: root.scan-content-width;
-                text: MisterBridge.catalog-scan-message;
+                text: CatalogView.message;
                 color: CrtTheme.text;
                 size: MisterUi.crt-body-font;
                 horizontal-alignment: center;
@@ -81,7 +81,7 @@ export component CatalogScanPopup inherits Rectangle {
 
             Spleen6x12 {
                 width: root.scan-content-width;
-                text: MisterBridge.catalog-scan-title;
+                text: CatalogView.title;
                 color: #d7eef8;
                 size: MisterUi.crt-body-font;
                 horizontal-alignment: center;
@@ -89,25 +89,25 @@ export component CatalogScanPopup inherits Rectangle {
 
             Spleen6x12 {
                 width: root.scan-content-width;
-                text: MisterBridge.catalog-scan-detail;
+                text: CatalogView.detail;
                 color: CrtTheme.muted;
                 size: MisterUi.crt-body-font;
                 horizontal-alignment: center;
                 wrap: word-wrap;
             }
 
-            if MisterBridge.media-pack-progresses.length > 0 : VerticalLayout {
+            if MediaView.rows.length > 0 : VerticalLayout {
                 width: root.scan-progress-width;
                 spacing: 5px;
 
                 Spleen6x12 {
-                    text: MisterBridge.media-pack-summary;
+                    text: MediaView.summary;
                     color: #d7eef8;
                     size: MisterUi.crt-body-font;
                     horizontal-alignment: center;
                 }
 
-                for pack in MisterBridge.media-pack-progresses: CrtProgressRow {
+                for pack in MediaView.rows: CrtProgressRow {
                     pack: pack;
                 }
             }
@@ -136,13 +136,13 @@ export component MediaProgressPopup inherits Rectangle {
         spacing: 5px;
 
         Spleen6x12 {
-            text: MisterBridge.media-pack-summary;
+            text: MediaView.summary;
             color: #d7eef8;
             size: MisterUi.crt-body-font;
             horizontal-alignment: center;
         }
 
-        for pack in MisterBridge.media-pack-progresses: CrtProgressRow {
+        for pack in MediaView.rows: CrtProgressRow {
             pack: pack;
         }
     }
@@ -187,7 +187,7 @@ export component BackgroundScanBadge inherits Rectangle {
         }
         Spleen6x12 {
             text: ".";
-            color: MisterBridge.catalog-scan-dot-visible ? #d7eef8 : transparent;
+            color: CatalogView.progress-dot-visible ? #d7eef8 : transparent;
             size: MisterUi.crt-body-font;
             horizontal-alignment: center;
             vertical-alignment: center;
@@ -239,13 +239,13 @@ export component ConfirmDialog inherits Rectangle {
             spacing: MisterUi.grid-y;
 
             if !root.narrow-portrait : Jersey25 {
-                text: MisterBridge.confirm-title;
+                text: OverlayView.confirmation-title;
                 color: CrtTheme.accent;
                 horizontal-alignment: center;
                 wrap: word-wrap;
             }
             if root.narrow-portrait : Spleen6x12 {
-                text: MisterBridge.confirm-title;
+                text: OverlayView.confirmation-title;
                 color: CrtTheme.accent;
                 size: Spleen6x12Size.px8;
                 horizontal-alignment: center;
@@ -253,7 +253,7 @@ export component ConfirmDialog inherits Rectangle {
             }
 
             Spleen6x12 {
-                text: MisterBridge.confirm-message;
+                text: OverlayView.confirmation-message;
                 color: CrtTheme.text;
                 size: root.narrow-portrait ? Spleen6x12Size.px8 : MisterUi.crt-body-font;
                 horizontal-alignment: center;
@@ -266,16 +266,16 @@ export component ConfirmDialog inherits Rectangle {
                 height: 32px;
                 spacing: MisterUi.grid-x;
 
-                if MisterBridge.confirm-left-label != "" : CompactDialogButton {
-                    label: MisterBridge.confirm-left-label;
-                    focused: MisterBridge.confirm-selected == 0;
-                    acknowledged: MisterBridge.selection-feedback-query("", "left", MisterBridge.selection-feedback-revision);
+                if OverlayView.cancel-label != "" : CompactDialogButton {
+                    label: OverlayView.cancel-label;
+                    focused: OverlayView.selected-choice == DialogChoice.cancel;
+                    acknowledged: FeedbackView.acknowledged("", "left", FeedbackView.revision);
                 }
 
-                if MisterBridge.confirm-right-label != "" : CompactDialogButton {
-                    label: MisterBridge.confirm-right-label;
-                    focused: MisterBridge.confirm-selected == 1;
-                    acknowledged: MisterBridge.selection-feedback-query("", "right", MisterBridge.selection-feedback-revision);
+                if OverlayView.confirm-label != "" : CompactDialogButton {
+                    label: OverlayView.confirm-label;
+                    focused: OverlayView.selected-choice == DialogChoice.confirm;
+                    acknowledged: FeedbackView.acknowledged("", "right", FeedbackView.revision);
                 }
             }
         }
@@ -290,19 +290,19 @@ export component LoadingOverlay inherits Rectangle {
         spacing: 12px;
 
         if !MisterUi.portrait-layout : Jersey25 {
-            text: MisterBridge.loading-message;
+            text: OverlayView.loading-message;
             color: CrtTheme.text;
             horizontal-alignment: center;
         }
         if MisterUi.portrait-layout : Spleen6x12 {
-            text: MisterBridge.loading-message;
+            text: OverlayView.loading-message;
             color: CrtTheme.text;
             size: MisterUi.window-width < 400 ? Spleen6x12Size.px8 : Spleen6x12Size.px16;
             horizontal-alignment: center;
         }
 
         Spleen6x12 {
-            text: MisterBridge.loading-detail != "" ? MisterBridge.loading-detail : "Please wait...";
+            text: OverlayView.loading-detail != "" ? OverlayView.loading-detail : "Please wait...";
             color: CrtTheme.muted;
             size: MisterUi.portrait-layout ? Spleen6x12Size.px8 : MisterUi.crt-body-font;
             horizontal-alignment: center;

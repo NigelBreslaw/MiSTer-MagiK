@@ -49,8 +49,7 @@ pub(super) fn sync_launcher_worker_ui_intent(
         LauncherWorkerUiIntent::None => return false,
         intent => intent,
     };
-    let bridge = app.global::<slint_ui::launcher::MisterBridge>();
-    let status_presenter = LauncherStatusPresenter::new(&bridge);
+    let status_presenter = LauncherStatusPresenter::new(app);
     match intent {
         LauncherWorkerUiIntent::None => unreachable!("handled before bridge lookup"),
         LauncherWorkerUiIntent::CatalogScan(status) => {
@@ -78,7 +77,6 @@ pub(super) fn sync_launcher_worker_ui_intent(
             return sync_media_progress_bridge(app, rows, summary, terminal);
         }
     }
-    sync_catalog_compat_projection(app);
     true
 }
 
@@ -86,8 +84,7 @@ const MEDIA_PROGRESS_COALESCE_INTERVAL: Duration = Duration::from_millis(100);
 
 #[derive(Default)]
 struct MediaProgressBridge {
-    model: Option<Rc<VecModel<slint_ui::launcher::ScreenshotPackProgress>>>,
-    typed_model: Option<Rc<VecModel<slint_ui::launcher::MediaPackRow>>>,
+    model: Option<Rc<VecModel<slint_ui::launcher::MediaPackRow>>>,
     rows: Vec<MediaProgressDisplayRow>,
     summary: String,
     last_publication: Option<Instant>,
@@ -108,7 +105,6 @@ fn sync_media_progress_bridge(
     summary: String,
     terminal: bool,
 ) -> bool {
-    let bridge = app.global::<slint_ui::launcher::MisterBridge>();
     let media = app.global::<slint_ui::launcher::MediaView>();
     MEDIA_PROGRESS_BRIDGE.with(|state| {
         let mut state = state.borrow_mut();
@@ -125,10 +121,6 @@ fn sync_media_progress_bridge(
             .model
             .get_or_insert_with(|| Rc::new(VecModel::from(Vec::new())))
             .clone();
-        let typed_model = state
-            .typed_model
-            .get_or_insert_with(|| Rc::new(VecModel::from(Vec::new())))
-            .clone();
         let same_identity = state.rows.len() == rows.len()
             && state
                 .rows
@@ -140,19 +132,13 @@ fn sync_media_progress_bridge(
         if same_identity {
             for (index, row) in rows.iter().enumerate() {
                 if state.rows.get(index) != Some(row) {
-                    model.set_row_data(index, media_progress_slint_row(row));
-                    typed_model.set_row_data(index, media_progress_typed_row(row));
+                    model.set_row_data(index, media_progress_typed_row(row));
                     allocated_rows = allocated_rows.saturating_add(1);
                     crate::launcher_presentation::bridge_churn_record_row_mutations(1);
                 }
             }
         } else {
             model.set_vec(
-                rows.iter()
-                    .map(media_progress_slint_row)
-                    .collect::<Vec<_>>(),
-            );
-            typed_model.set_vec(
                 rows.iter()
                     .map(media_progress_typed_row)
                     .collect::<Vec<_>>(),
@@ -169,12 +155,10 @@ fn sync_media_progress_bridge(
         }
         if publish_model {
             crate::launcher_presentation::bridge_churn_record_model_replacements(1);
-            bridge.set_media_pack_progresses(ModelRc::from(model.clone()));
-            media.set_rows(ModelRc::from(typed_model.clone()));
+            media.set_rows(ModelRc::from(model.clone()));
         }
         if state.summary != summary {
             crate::launcher_presentation::bridge_churn_record_shared_strings(1);
-            bridge.set_media_pack_summary(SharedString::from(summary.as_str()));
             media.set_summary(SharedString::from(summary.as_str()));
         }
         state.rows = rows;
@@ -518,7 +502,7 @@ impl MediaProgressDisplay {
     }
 
     #[cfg(test)]
-    fn model(&self) -> ModelRc<slint_ui::launcher::ScreenshotPackProgress> {
+    fn model(&self) -> ModelRc<slint_ui::launcher::MediaPackRow> {
         media_progress_model(&self.active.values().take(3).cloned().collect::<Vec<_>>())
     }
 
@@ -554,11 +538,11 @@ impl MediaProgressDisplay {
 
 fn media_progress_model(
     rows: &[MediaProgressDisplayRow],
-) -> ModelRc<slint_ui::launcher::ScreenshotPackProgress> {
+) -> ModelRc<slint_ui::launcher::MediaPackRow> {
     let allocation_started = Instant::now();
     let rows = rows
         .iter()
-        .map(media_progress_slint_row)
+        .map(media_progress_typed_row)
         .collect::<Vec<_>>();
     crate::launcher_presentation::bridge_churn_record_row_allocations(rows.len() as u64);
     crate::launcher_presentation::bridge_churn_record_model_allocation_us(
@@ -567,21 +551,8 @@ fn media_progress_model(
     ModelRc::new(VecModel::from(rows))
 }
 
-fn media_progress_slint_row(
-    row: &MediaProgressDisplayRow,
-) -> slint_ui::launcher::ScreenshotPackProgress {
-    crate::launcher_presentation::bridge_churn_record_shared_strings(6);
-    slint_ui::launcher::ScreenshotPackProgress {
-        system: mister_magik_catalog::catalog_classify::system_title(&row.system).into(),
-        image_size: row.image_size.clone().into(),
-        phase: row.phase.clone().into(),
-        percent: row.percent,
-        bytes_label: row.bytes_label.clone().into(),
-        pack_position: row.pack_position.clone().into(),
-    }
-}
-
 fn media_progress_typed_row(row: &MediaProgressDisplayRow) -> slint_ui::launcher::MediaPackRow {
+    crate::launcher_presentation::bridge_churn_record_shared_strings(6);
     slint_ui::launcher::MediaPackRow {
         system: mister_magik_catalog::catalog_classify::system_title(&row.system).into(),
         image_size: row.image_size.clone().into(),

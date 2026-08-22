@@ -3,12 +3,12 @@
 
 import { Start2P, Start2PSize } from "start2p.slint";
 
-import { ScreenshotPackProgress } from "../api.slint";
+import { MediaPackRow, MediaPackState } from "../api.slint";
 
-export component ScreenshotPackProgressRow inherits Rectangle {
-    in property <ScreenshotPackProgress> pack;
+export component MediaPackProgressRow inherits Rectangle {
+    in property <MediaPackRow> pack;
     property <int> clamped-percent: Math.max(0, Math.min(100, pack.percent));
-    property <bool> determinate: pack.percent >= 0;
+    property <bool> determinate: pack.state != MediaPackState.queued;
 
     height: 24px;
     background: transparent;
@@ -28,7 +28,7 @@ export component ScreenshotPackProgressRow inherits Rectangle {
 
             Start2P {
                 width: 86px;
-                text: root.pack.phase;
+                text: root.pack.phase-label;
                 color: #06d6a0;
                 size: Start2PSize.px8;
             }

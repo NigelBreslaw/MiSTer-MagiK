@@ -1728,15 +1728,18 @@ struct LauncherStatusTextSnapshot {
 }
 
 impl LauncherStatusTextSnapshot {
-    fn from_bridge(bridge: &slint_ui::launcher::MisterBridge<'_>) -> Self {
+    fn from_views(
+        catalog: &slint_ui::launcher::CatalogView<'_>,
+        overlay: &slint_ui::launcher::OverlayView<'_>,
+    ) -> Self {
         Self {
-            catalog_scan_message: bridge.get_catalog_scan_message(),
-            catalog_scan_title: bridge.get_catalog_scan_title(),
-            catalog_scan_detail: bridge.get_catalog_scan_detail(),
-            confirm_title: bridge.get_confirm_title(),
-            confirm_message: bridge.get_confirm_message(),
-            confirm_left_label: bridge.get_confirm_left_label(),
-            confirm_right_label: bridge.get_confirm_right_label(),
+            catalog_scan_message: catalog.get_message(),
+            catalog_scan_title: catalog.get_title(),
+            catalog_scan_detail: catalog.get_detail(),
+            confirm_title: overlay.get_confirmation_title(),
+            confirm_message: overlay.get_confirmation_message(),
+            confirm_left_label: overlay.get_cancel_label(),
+            confirm_right_label: overlay.get_confirm_label(),
         }
     }
 
@@ -5791,7 +5794,6 @@ pub(super) fn run_launcher_loop(
         }
     }
     nav.set_arcade_exit_locked(return_capsule_active);
-    let bridge = app.global::<slint_ui::launcher::MisterBridge>();
     apply_home_selected(&mut nav, &catalog, benchmark_config.home_selected(), start);
     let bridge_systems_t = Instant::now();
     let mut arcade_screen_pending = (start_screen == Screen::Arcade
@@ -5845,7 +5847,7 @@ pub(super) fn run_launcher_loop(
     } else {
         "No cached catalog; scanning library...".to_string()
     };
-    LauncherStatusPresenter::new(&bridge).sync_catalog_scan(CatalogScanBridgeStatus::new(
+    LauncherStatusPresenter::new(&app).sync_catalog_scan(CatalogScanBridgeStatus::new(
         initial_catalog_scan_visible(
             catalog_ready,
             arcade_catalog_required_at_start,
@@ -6886,8 +6888,10 @@ pub(super) fn run_launcher_loop(
             scheduler.poll_media(&mut media_events);
             for message in media_events.drain() {
                 media_message_seen = true;
-                let bridge = app.global::<slint_ui::launcher::MisterBridge>();
-                let catalog_scan_visible = bridge.get_catalog_scan_visible();
+                let catalog_scan_visible = app
+                    .global::<slint_ui::launcher::CatalogView>()
+                    .get_activity()
+                    == slint_ui::launcher::CatalogActivity::Foreground;
                 let effects =
                     media_session.handle_worker_message(message, catalog_scan_visible, loop_start);
                 apply_screenshot_media_update_effects(
@@ -8713,8 +8717,7 @@ pub(super) fn run_launcher_loop(
                 full_bridge_dirty = true;
             }
             if startup_intro_prepare_live_launcher {
-                let bridge = app.global::<slint_ui::launcher::MisterBridge>();
-                LauncherStatusPresenter::new(&bridge).clear_catalog_scan();
+                LauncherStatusPresenter::new(&app).clear_catalog_scan();
                 let clock_text = launcher_clock_text();
                 set_launcher_clock_text(&app, &clock_text);
                 last_clock_text = clock_text;
@@ -8875,19 +8878,27 @@ pub(super) fn run_launcher_loop(
             prepare_trace.media_gate_us = trace_start.elapsed().as_micros();
         }
 
-        let bridge = app.global::<slint_ui::launcher::MisterBridge>();
-        let catalog_scan_visible = bridge.get_catalog_scan_visible();
-        let catalog_scan_percent = bridge.get_catalog_scan_percent();
-        let catalog_background_scan_visible = bridge.get_catalog_background_scan_visible();
+        let catalog_view = app.global::<slint_ui::launcher::CatalogView>();
+        let overlay_view = app.global::<slint_ui::launcher::OverlayView>();
+        let catalog_scan_visible =
+            catalog_view.get_activity() == slint_ui::launcher::CatalogActivity::Foreground;
+        let catalog_scan_percent = catalog_view.get_percent();
+        let catalog_background_scan_visible = catalog_view.get_background_activity_visible();
         if let Some(dot_visible) = catalog_scan_blink.update(
             catalog_scan_visible || catalog_background_scan_visible,
             loop_start,
         ) {
-            bridge.set_catalog_scan_dot_visible(dot_visible);
+            catalog_view.set_progress_dot_visible(dot_visible);
             request_launcher_redraw!();
         }
-        let confirm_visible = bridge.get_confirm_visible();
-        let confirm_selected = bridge.get_confirm_selected();
+        let confirm_visible =
+            overlay_view.get_confirmation_kind() != slint_ui::launcher::ConfirmationKind::None;
+        let confirm_selected =
+            if overlay_view.get_selected_choice() == slint_ui::launcher::DialogChoice::Cancel {
+                0
+            } else {
+                1
+            };
         let status_write_due = frame_accounting.status_write_due();
         let status_snapshot_due = status_write_due
             && !navigation_transition.is_active()
@@ -8895,8 +8906,8 @@ pub(super) fn run_launcher_loop(
         let status_string_copy_start = (status_snapshot_due
             && frame_accounting.preview_scroll_trace_enabled())
         .then(Instant::now);
-        let status_text =
-            status_snapshot_due.then(|| LauncherStatusTextSnapshot::from_bridge(&bridge));
+        let status_text = status_snapshot_due
+            .then(|| LauncherStatusTextSnapshot::from_views(&catalog_view, &overlay_view));
         let status_string_copy_us = status_string_copy_start
             .map(|start| start.elapsed().as_micros())
             .unwrap_or(0);
@@ -9191,7 +9202,6 @@ pub(super) fn run_launcher_loop(
                     nav.active_arcade_game_at(&catalog, selected_system_id, nav.arcade.selected)
                 })
                 .flatten();
-            let bridge = app.global::<slint_ui::launcher::MisterBridge>();
             launcher_automation.observe_state(AutomationSemanticState {
                 screen_orientation: nav.settings.screen_orientation.label().to_string(),
                 effective_view: effective_view.label().to_string(),
@@ -9226,8 +9236,8 @@ pub(super) fn run_launcher_loop(
                     "none"
                 }
                 .to_string(),
-                dialog_title: bridge.get_confirm_title().to_string(),
-                dialog_message: bridge.get_confirm_message().to_string(),
+                dialog_title: overlay_view.get_confirmation_title().to_string(),
+                dialog_message: overlay_view.get_confirmation_message().to_string(),
                 dialog_selected: confirm_selected,
                 drawer_open: nav.arcade_filter.drawer_open,
                 drawer_level: nav.arcade_filter.title().to_string(),
@@ -13088,10 +13098,15 @@ fn reapply_pending_launch_return_state(
 }
 
 fn sync_startup_visibility(app: &slint_ui::launcher::Launcher, lifecycle: &LauncherLifecycle) {
-    let bridge = app.global::<slint_ui::launcher::MisterBridge>();
+    let overlay = app.global::<slint_ui::launcher::OverlayView>();
     let visible = lifecycle.startup_should_show_splash();
-    if bridge.get_startup_visible() != visible {
-        bridge.set_startup_visible(visible);
+    let state = if visible {
+        slint_ui::launcher::LoadingState::Active
+    } else {
+        slint_ui::launcher::LoadingState::Idle
+    };
+    if overlay.get_startup_state() != state {
+        overlay.set_startup_state(state);
     }
 }
 

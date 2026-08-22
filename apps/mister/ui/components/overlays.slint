@@ -5,10 +5,10 @@ import { Start2P, Start2PSize } from "start2p.slint";
 import { Nocive15, Nocive15Size } from "nocive_15.slint";
 
 import { MisterUi } from "../mister_window.slint";
-import { MisterBridge } from "../api.slint";
+import { CatalogView, DialogChoice, FeedbackView, MediaView, OverlayView } from "../api.slint";
 import { OsdSideLabel } from "launcher_chrome.slint";
 import { CrtTheme } from "crt_ui.slint";
-import { ScreenshotPackProgressRow } from "progress.slint";
+import { MediaPackProgressRow } from "progress.slint";
 
 export component CatalogScanPopup inherits Rectangle {
     property <length> scan-osd-width: MisterUi.compact-layout ? 0px : 56px;
@@ -50,7 +50,7 @@ export component CatalogScanPopup inherits Rectangle {
 
             Start2P {
                 width: root.scan-content-width;
-                text: MisterBridge.catalog-scan-message;
+                text: CatalogView.message;
                 color: #e8e0f0;
                 size: MisterUi.crt-body-font;
                 horizontal-alignment: center;
@@ -59,7 +59,7 @@ export component CatalogScanPopup inherits Rectangle {
 
             Start2P {
                 width: root.scan-content-width;
-                text: MisterBridge.catalog-scan-title;
+                text: CatalogView.title;
                 color: #d7eef8;
                 size: MisterUi.crt-body-font;
                 horizontal-alignment: center;
@@ -67,25 +67,25 @@ export component CatalogScanPopup inherits Rectangle {
 
             Start2P {
                 width: root.scan-content-width;
-                text: MisterBridge.catalog-scan-detail;
+                text: CatalogView.detail;
                 color: #9080a8;
                 size: MisterUi.crt-body-font;
                 horizontal-alignment: center;
                 wrap: word-wrap;
             }
 
-            if MisterBridge.media-pack-progresses.length > 0 : VerticalLayout {
+            if MediaView.rows.length > 0 : VerticalLayout {
                 width: root.scan-progress-width;
                 spacing: 5px;
 
                 Start2P {
-                    text: MisterBridge.media-pack-summary;
+                    text: MediaView.summary;
                     color: #d7eef8;
                     size: Start2PSize.px8;
                     horizontal-alignment: center;
                 }
 
-                for pack in MisterBridge.media-pack-progresses: ScreenshotPackProgressRow {
+                for pack in MediaView.rows: MediaPackProgressRow {
                     pack: pack;
                 }
             }
@@ -114,13 +114,13 @@ export component MediaProgressPopup inherits Rectangle {
         spacing: 5px;
 
         Start2P {
-            text: MisterBridge.media-pack-summary;
+            text: MediaView.summary;
             color: #d7eef8;
             size: Start2PSize.px8;
             horizontal-alignment: center;
         }
 
-        for pack in MisterBridge.media-pack-progresses: ScreenshotPackProgressRow {
+        for pack in MediaView.rows: MediaPackProgressRow {
             pack: pack;
         }
     }
@@ -166,7 +166,7 @@ export component BackgroundScanBadge inherits Rectangle {
         }
         Start2P {
             text: ".";
-            color: MisterBridge.catalog-scan-dot-visible ? #d7eef8 : transparent;
+            color: CatalogView.progress-dot-visible ? #d7eef8 : transparent;
             size: Start2PSize.px8;
             horizontal-alignment: center;
             vertical-alignment: center;
@@ -212,7 +212,7 @@ export component ConfirmDialog inherits Rectangle {
             spacing: MisterUi.grid;
 
             Start2P {
-                text: MisterBridge.confirm-title;
+                text: OverlayView.confirmation-title;
                 color: CrtTheme.accent;
                 size: MisterUi.crt-heading-font;
                 horizontal-alignment: center;
@@ -220,7 +220,7 @@ export component ConfirmDialog inherits Rectangle {
             }
 
             Start2P {
-                text: MisterBridge.confirm-message;
+                text: OverlayView.confirmation-message;
                 color: CrtTheme.text;
                 size: MisterUi.crt-body-font;
                 horizontal-alignment: center;
@@ -233,16 +233,16 @@ export component ConfirmDialog inherits Rectangle {
                 height: 32px;
                 spacing: MisterUi.grid;
 
-                if MisterBridge.confirm-left-label != "" : CompactDialogButton {
-                    label: MisterBridge.confirm-left-label;
-                    focused: MisterBridge.confirm-selected == 0;
-                    acknowledged: MisterBridge.selection-feedback-query("", "left", MisterBridge.selection-feedback-revision);
+                if OverlayView.cancel-label != "" : CompactDialogButton {
+                    label: OverlayView.cancel-label;
+                    focused: OverlayView.selected-choice == DialogChoice.cancel;
+                    acknowledged: FeedbackView.acknowledged("", "left", FeedbackView.revision);
                 }
 
-                if MisterBridge.confirm-right-label != "" : CompactDialogButton {
-                    label: MisterBridge.confirm-right-label;
-                    focused: MisterBridge.confirm-selected == 1;
-                    acknowledged: MisterBridge.selection-feedback-query("", "right", MisterBridge.selection-feedback-revision);
+                if OverlayView.confirm-label != "" : CompactDialogButton {
+                    label: OverlayView.confirm-label;
+                    focused: OverlayView.selected-choice == DialogChoice.confirm;
+                    acknowledged: FeedbackView.acknowledged("", "right", FeedbackView.revision);
                 }
             }
         }
@@ -257,14 +257,14 @@ export component LoadingOverlay inherits Rectangle {
         spacing: 12px;
 
         Nocive15 {
-            text: MisterBridge.loading-message;
+            text: OverlayView.loading-message;
             color: #e8e0f0;
             size: Nocive15Size.px15;
             horizontal-alignment: center;
         }
 
         Start2P {
-            text: MisterBridge.loading-detail != "" ? MisterBridge.loading-detail : "Please wait...";
+            text: OverlayView.loading-detail != "" ? OverlayView.loading-detail : "Please wait...";
             color: #9080a8;
             size: Start2PSize.px8;
             horizontal-alignment: center;
