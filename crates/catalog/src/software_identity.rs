@@ -1360,10 +1360,37 @@ pub fn rom_identity_benchmark_report() -> Result<serde_json::Value, String> {
 
     let report_started = Instant::now();
     let roots = crate::catalog_config::library_roots_from_env();
+    let scanner_cache_path = crate::scanner_cache::default_path();
+    let software_hash_cache = SoftwareHashCache::load(&scanner_cache_path);
+    let software_hash_cache_sha256 = rom_benchmark_cache_digest(&software_hash_cache);
+    let production_default_catalog_hash_entries = software_hash_cache
+        .entries
+        .keys()
+        .filter(|key| key.list_name == software_hash_cache_namespace("lynx"))
+        .count();
     let selection_started = Instant::now();
     let mut eligible = BTreeMap::<&'static str, Vec<RomIdentityBenchmarkInput>>::new();
+    let mut seen_paths = std::collections::BTreeSet::new();
+    for key in software_hash_cache
+        .entries
+        .keys()
+        .filter(|key| key.list_name == software_hash_cache_namespace("lynx"))
+    {
+        let path = PathBuf::from(&key.file_path);
+        if key.size > 0 && path.is_file() && seen_paths.insert(path.clone()) {
+            eligible
+                .entry("lynx")
+                .or_default()
+                .push(RomIdentityBenchmarkInput {
+                    list_name: "lynx",
+                    path,
+                    size: key.size,
+                });
+        }
+    }
+    let scan_roots = rom_benchmark_scan_roots(&roots);
     let mut walk_errors = 0u64;
-    for root in &roots {
+    for root in &scan_roots {
         for entry in WalkDir::new(root).follow_links(true).max_depth(16) {
             let entry = match entry {
                 Ok(entry) => entry,
@@ -1379,6 +1406,9 @@ pub fn rom_identity_benchmark_report() -> Result<serde_json::Value, String> {
             let Some(list_name) = rom_benchmark_list_for_path(path) else {
                 continue;
             };
+            if !seen_paths.insert(path.to_path_buf()) {
+                continue;
+            }
             let Ok(metadata) = entry.metadata() else {
                 walk_errors = walk_errors.saturating_add(1);
                 continue;
@@ -1432,14 +1462,6 @@ pub fn rom_identity_benchmark_report() -> Result<serde_json::Value, String> {
     let metadata_started = Instant::now();
     let metadata = load_mame_software_metadata(&crate::catalog_config::default_mame_sqlite_path());
     let metadata_load_us = metadata_started.elapsed().as_micros() as u64;
-    let scanner_cache_path = crate::scanner_cache::default_path();
-    let software_hash_cache = SoftwareHashCache::load(&scanner_cache_path);
-    let software_hash_cache_sha256 = rom_benchmark_cache_digest(&software_hash_cache);
-    let production_default_catalog_hash_entries = software_hash_cache
-        .entries
-        .keys()
-        .filter(|key| key.list_name == software_hash_cache_namespace("lynx"))
-        .count();
     let rss_before_kb = proc_status_kb("VmRSS");
     let hwm_before_kb = proc_status_kb("VmHWM");
     let mut cases = Vec::with_capacity(selected.len());
@@ -1485,6 +1507,7 @@ pub fn rom_identity_benchmark_report() -> Result<serde_json::Value, String> {
         "implementation": "whole-file-scalar-crc32",
         "production_default_policy": "lynx-only",
         "roots": roots,
+        "scan_roots": scan_roots,
         "selection_us": selection_us,
         "metadata_load_us": metadata_load_us,
         "walk_errors": walk_errors,
@@ -1709,6 +1732,83 @@ fn rom_benchmark_list_for_path(path: &Path) -> Option<&'static str> {
 }
 
 #[cfg(feature = "builder")]
+fn rom_benchmark_scan_roots(roots: &[PathBuf]) -> Vec<PathBuf> {
+    let mut candidates = std::collections::BTreeSet::new();
+    for root in roots {
+        collect_rom_benchmark_system_dirs(root, &mut candidates);
+        if root
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| canonical_rom_benchmark_dir(name) == "games")
+        {
+            continue;
+        }
+        let games = root.join("games");
+        if games.is_dir() {
+            collect_rom_benchmark_system_dirs(&games, &mut candidates);
+        }
+    }
+    candidates.into_iter().collect()
+}
+
+#[cfg(feature = "builder")]
+fn collect_rom_benchmark_system_dirs(
+    root: &Path,
+    candidates: &mut std::collections::BTreeSet<PathBuf>,
+) {
+    if root
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(rom_benchmark_system_dir)
+    {
+        candidates.insert(root.to_path_buf());
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir()
+            && entry
+                .file_name()
+                .to_str()
+                .is_some_and(rom_benchmark_system_dir)
+        {
+            candidates.insert(path);
+        }
+    }
+}
+
+#[cfg(feature = "builder")]
+fn rom_benchmark_system_dir(name: &str) -> bool {
+    matches!(
+        canonical_rom_benchmark_dir(name).as_str(),
+        "atarilynx"
+            | "lynx"
+            | "nes"
+            | "nintendoentertainmentsystem"
+            | "snes"
+            | "supernintendo"
+            | "supernintendoentertainmentsystem"
+            | "n64"
+            | "nintendo64"
+            | "megadrive"
+            | "segamegadrive"
+            | "genesis"
+            | "segagenesis"
+    )
+}
+
+#[cfg(feature = "builder")]
+fn canonical_rom_benchmark_dir(name: &str) -> String {
+    name.chars()
+        .filter(|character| character.is_ascii_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
+}
+
+#[cfg(feature = "builder")]
 fn rom_benchmark_size_class(size: u64) -> &'static str {
     if size < 4 * 1024 * 1024 {
         "small"
@@ -1847,6 +1947,23 @@ mod tests {
         assert_eq!(rom_benchmark_size_class(4 * 1024 * 1024), "medium");
         assert_eq!(rom_benchmark_size_class(32 * 1024 * 1024 - 1), "medium");
         assert_eq!(rom_benchmark_size_class(32 * 1024 * 1024), "large");
+    }
+
+    #[cfg(feature = "builder")]
+    #[test]
+    fn rom_identity_benchmark_scans_only_target_system_directories() {
+        let root = unique_temp_dir("rom-identity-scan-roots");
+        for directory in ["games/Atari Lynx", "games/SNES", "games/Amiga"] {
+            std::fs::create_dir_all(root.join(directory)).expect("create system directory");
+        }
+
+        let roots = rom_benchmark_scan_roots(std::slice::from_ref(&root));
+
+        assert_eq!(
+            roots,
+            vec![root.join("games/Atari Lynx"), root.join("games/SNES")]
+        );
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

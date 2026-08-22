@@ -77,7 +77,9 @@ classes exist, records I/O, transformation, scalar CRC, lookup, faults, RSS/HWM,
 CPU placement, and PMU attribution, and hashes every candidate and result. Lynx
 is reported separately because it is the only production-default full-ROM hash
 policy; all other systems are opportunity context and cannot justify promotion
-on their own. The scenario neither starts catalog work nor enables forced
+on their own. Candidate discovery uses the authoritative software-hash cache and
+the five target system directories; it must not traverse the complete library
+namespace. The scenario neither starts catalog work nor enables forced
 background refresh.
 
 The Arcade velocity-scroll profiling scenarios default to the active display
