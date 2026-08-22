@@ -63,6 +63,53 @@ pub const fn navigation_transition_state(active: bool) -> view::NavigationTransi
     }
 }
 
+pub const fn settings_section(index: usize) -> view::SettingsSection {
+    match index {
+        0 => view::SettingsSection::Display,
+        1 => view::SettingsSection::Orientation,
+        2 => view::SettingsSection::Screensaver,
+        3 => view::SettingsSection::ReduceMotion,
+        4 => view::SettingsSection::Exit,
+        5 => view::SettingsSection::Rebuild,
+        6 => view::SettingsSection::About,
+        _ => panic!("settings selection is outside its finite domain"),
+    }
+}
+
+pub const fn settings_popup(display_open: bool, orientation_open: bool) -> view::SettingsPopup {
+    match (display_open, orientation_open) {
+        (false, false) => view::SettingsPopup::None,
+        (true, false) => view::SettingsPopup::DisplayResolution,
+        (false, true) => view::SettingsPopup::ScreenOrientation,
+        (true, true) => panic!("settings popups are mutually exclusive"),
+    }
+}
+
+pub const fn screensaver_setting(index: usize) -> view::ScreensaverSetting {
+    match index {
+        0 => view::ScreensaverSetting::Enabled,
+        1 => view::ScreensaverSetting::Delay,
+        2 => view::ScreensaverSetting::Preview,
+        _ => panic!("screensaver selection is outside its finite domain"),
+    }
+}
+
+pub const fn about_section(index: usize) -> view::AboutSection {
+    match index {
+        0 => view::AboutSection::Information,
+        1 => view::AboutSection::Licenses,
+        _ => panic!("about selection is outside its finite domain"),
+    }
+}
+
+pub fn orientation_at(index: usize) -> view::ScreenOrientation {
+    let orientation = DomainScreenOrientation::ALL
+        .get(index)
+        .copied()
+        .expect("orientation selection is outside its finite domain");
+    screen_orientation(orientation)
+}
+
 pub const fn screen_orientation(value: DomainScreenOrientation) -> view::ScreenOrientation {
     match value {
         DomainScreenOrientation::Normal => view::ScreenOrientation::Normal,

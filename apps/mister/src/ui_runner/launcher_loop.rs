@@ -1052,8 +1052,11 @@ fn set_launcher_update_available(app: &slint_ui::launcher::Launcher, available: 
 }
 
 fn set_launcher_present_mode_label(app: &slint_ui::launcher::Launcher, value: &str) {
+    let value = slint::SharedString::from(value);
     app.global::<slint_ui::launcher::NavigationView>()
-        .set_present_mode_label(value.into());
+        .set_present_mode_label(value.clone());
+    app.global::<slint_ui::launcher::InformationView>()
+        .set_present_mode_label(value);
 }
 
 fn begin_navigation_full_screen_transition(

@@ -64,6 +64,7 @@ pub(super) fn open_pads() -> PadPool {
 pub(super) fn init_launcher_bridge(app: &slint_ui::launcher::Launcher, pad: &PadPool) {
     let bridge = app.global::<slint_ui::launcher::MisterBridge>();
     let navigation = app.global::<slint_ui::launcher::NavigationView>();
+    let information = app.global::<slint_ui::launcher::InformationView>();
     bridge.set_startup_visible(true);
     navigation.set_screen(slint_ui::launcher::LauncherScreen::Home);
     if let Some(image) = load_snes_artwork_image() {
@@ -73,10 +74,16 @@ pub(super) fn init_launcher_bridge(app: &slint_ui::launcher::Launcher, pad: &Pad
         navigation.set_system_artwork_available(false);
     }
     let build_label = SharedString::from(build_label());
-    navigation.set_build_label(build_label);
+    navigation.set_build_label(build_label.clone());
+    information.set_build_label(build_label);
     navigation.set_present_mode_label("Mode=/dev/fb0".into());
-    bridge.set_info_kernel_version(kernel_version().into());
-    bridge.set_info_database_build(last_database_build().into());
+    information.set_present_mode_label("Mode=/dev/fb0".into());
+    let kernel_version = SharedString::from(kernel_version());
+    bridge.set_info_kernel_version(kernel_version.clone());
+    information.set_kernel_version(kernel_version);
+    let database_build = SharedString::from(last_database_build());
+    bridge.set_info_database_build(database_build.clone());
+    information.set_database_build(database_build);
     bridge.set_settings_selected(0);
     bridge.set_about_selected(0);
     bridge.set_display_options(ModelRc::new(VecModel::from(

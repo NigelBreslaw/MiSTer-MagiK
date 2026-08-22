@@ -107,6 +107,40 @@ export global FeedbackView {
     pure callback acknowledged(string, string, int) -> bool;
 }
 
+export global SettingsView {
+    in property <SettingsSection> section;
+    in property <SettingsPopup> popup;
+    in property <[ChoiceOption]> display-options;
+    in property <ChoiceOption> active-display;
+    in property <ChoiceOption> selected-display;
+    in property <ChoiceOption> highlighted-display;
+    in property <DisplayTransactionState> display-transaction;
+    in property <int> display-confirm-remaining;
+    in property <[ChoiceOption]> orientation-options;
+    in property <ScreenOrientation> active-orientation;
+    in property <ScreenOrientation> selected-orientation;
+    in property <ScreenOrientation> highlighted-orientation;
+    in property <DisplayTransactionState> orientation-transaction;
+    in property <int> orientation-confirm-remaining;
+    in property <bool> simple-joystick-handling;
+    in property <bool> reduce-motion;
+    in property <ScreensaverSetting> screensaver-setting;
+    in property <bool> screensaver-enabled;
+    in property <int> screensaver-delay-minutes;
+    in property <AboutSection> about-section;
+    in property <int> selected-license-index;
+    in property <bool> license-expanded;
+    in property <int> license-scroll-y;
+    in property <[string]> license-lines;
+}
+
+export global InformationView {
+    in property <string> build-label;
+    in property <string> present-mode-label;
+    in property <string> kernel-version;
+    in property <string> database-build;
+}
+
 export global MisterBridge {
     in-out property <bool> dpad-up;
     in-out property <bool> dpad-down;

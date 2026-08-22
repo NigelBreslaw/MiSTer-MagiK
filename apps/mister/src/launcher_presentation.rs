@@ -8,15 +8,18 @@
 
 use crate::arcade_catalog::{ArcadeCatalog, ArcadeGameView};
 use crate::launcher::{
-    ArcadeSearchPane, ArcadeSearchStatus, CatalogMenuItemStatus, LauncherNav, Screen,
+    ArcadeSearchPane, ArcadeSearchStatus, CatalogMenuItemStatus, DisplayTransactionPhase,
+    LauncherNav, Screen,
 };
 use crate::launcher_taxonomy::LauncherMenuItemKind;
 use crate::launcher_view_types::{
-    home_focus, home_scroll_phase, launcher_screen, system_hub_section,
+    about_section, display_transaction_state, home_focus, home_scroll_phase, launcher_screen,
+    orientation_at, screen_orientation, screensaver_setting, settings_popup, settings_section,
+    system_hub_section,
 };
 use mister_magik_ui::launcher::{
-    FeedbackView, Launcher, MenuItem, MenuItemKind, MenuItemPresentation, MenuItemStatus,
-    MisterBridge, NavigationView,
+    ChoiceOption, FeedbackView, Launcher, MenuItem, MenuItemKind, MenuItemPresentation,
+    MenuItemStatus, MisterBridge, NavigationView, SettingsView,
 };
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 use std::cell::{Cell, RefCell};
@@ -416,6 +419,8 @@ pub struct LauncherBridgePresenter {
     projected_selection_feedback: SelectionFeedbackStamp,
     published_selection_feedback: Rc<RefCell<SelectionFeedbackStamp>>,
     selection_feedback_callback_installed: bool,
+    display_options: Option<Rc<VecModel<ChoiceOption>>>,
+    orientation_options: Option<Rc<VecModel<ChoiceOption>>>,
 }
 
 impl LauncherBridgePresenter {
@@ -497,6 +502,197 @@ impl LauncherBridgePresenter {
             get_system_hub_favourites_count,
             set_system_hub_favourites_count,
             nav.favourite_count() as i32
+        );
+        let settings = app.global::<SettingsView>();
+        if self.display_options.is_none() {
+            let choices = crate::launcher::settings_display_resolutions()
+                .map(|mode| ChoiceOption {
+                    id: mode.id.into(),
+                    label: mode.label.into(),
+                })
+                .collect::<Vec<_>>();
+            bridge.set_display_options(ModelRc::new(VecModel::from(
+                choices
+                    .iter()
+                    .map(|choice| choice.label.clone())
+                    .collect::<Vec<_>>(),
+            )));
+            self.display_options = Some(Rc::new(VecModel::from(choices)));
+            settings.set_display_options(ModelRc::from(
+                self.display_options
+                    .as_ref()
+                    .expect("display choices initialized")
+                    .clone(),
+            ));
+        }
+        if self.orientation_options.is_none() {
+            let choices = crate::settings::ScreenOrientation::ALL
+                .iter()
+                .map(|orientation| ChoiceOption {
+                    id: orientation.id().into(),
+                    label: orientation.label().into(),
+                })
+                .collect::<Vec<_>>();
+            bridge.set_orientation_options(ModelRc::new(VecModel::from(
+                choices
+                    .iter()
+                    .map(|choice| choice.label.clone())
+                    .collect::<Vec<_>>(),
+            )));
+            self.orientation_options = Some(Rc::new(VecModel::from(choices)));
+            settings.set_orientation_options(ModelRc::from(
+                self.orientation_options
+                    .as_ref()
+                    .expect("orientation choices initialized")
+                    .clone(),
+            ));
+        }
+        set_if_changed!(
+            settings,
+            get_section,
+            set_section,
+            settings_section(nav.settings_selected)
+        );
+        set_if_changed!(
+            settings,
+            get_popup,
+            set_popup,
+            settings_popup(nav.display_combo_open, nav.orientation_combo_open)
+        );
+        set_if_changed!(
+            settings,
+            get_selected_display,
+            set_selected_display,
+            display_choice(nav.display_selected)
+        );
+        let active_display = display_choice(nav.display_selected);
+        set_if_changed!(
+            settings,
+            get_active_display,
+            set_active_display,
+            active_display.clone()
+        );
+        set_string_if_changed!(
+            bridge,
+            get_display_active_label,
+            set_display_active_label,
+            active_display.label
+        );
+        set_if_changed!(
+            settings,
+            get_highlighted_display,
+            set_highlighted_display,
+            display_choice(nav.display_highlighted)
+        );
+        set_if_changed!(
+            settings,
+            get_display_transaction,
+            set_display_transaction,
+            display_transaction_state(settings_transaction_phase(
+                nav.display_confirm_remaining,
+                nav.display_confirm_busy,
+                nav.display_error.as_deref()
+            ))
+        );
+        set_if_changed!(
+            settings,
+            get_display_confirm_remaining,
+            set_display_confirm_remaining,
+            nav.display_confirm_remaining as i32
+        );
+        set_if_changed!(
+            settings,
+            get_active_orientation,
+            set_active_orientation,
+            screen_orientation(nav.settings.screen_orientation)
+        );
+        set_string_if_changed!(
+            bridge,
+            get_orientation_active_label,
+            set_orientation_active_label,
+            nav.settings.screen_orientation.label()
+        );
+        set_if_changed!(
+            settings,
+            get_selected_orientation,
+            set_selected_orientation,
+            orientation_at(nav.orientation_selected)
+        );
+        set_if_changed!(
+            settings,
+            get_highlighted_orientation,
+            set_highlighted_orientation,
+            orientation_at(nav.orientation_highlighted)
+        );
+        set_if_changed!(
+            settings,
+            get_orientation_transaction,
+            set_orientation_transaction,
+            display_transaction_state(settings_transaction_phase(
+                nav.orientation_confirm_remaining,
+                nav.orientation_confirm_busy,
+                nav.orientation_error.as_deref()
+            ))
+        );
+        set_if_changed!(
+            settings,
+            get_orientation_confirm_remaining,
+            set_orientation_confirm_remaining,
+            nav.orientation_confirm_remaining as i32
+        );
+        set_if_changed!(
+            settings,
+            get_simple_joystick_handling,
+            set_simple_joystick_handling,
+            nav.settings.simple_joystick_handling
+        );
+        set_if_changed!(
+            settings,
+            get_reduce_motion,
+            set_reduce_motion,
+            nav.settings.reduce_motion
+        );
+        set_if_changed!(
+            settings,
+            get_screensaver_setting,
+            set_screensaver_setting,
+            screensaver_setting(nav.screensaver_selected)
+        );
+        set_if_changed!(
+            settings,
+            get_screensaver_enabled,
+            set_screensaver_enabled,
+            nav.settings.screensaver_enabled
+        );
+        set_if_changed!(
+            settings,
+            get_screensaver_delay_minutes,
+            set_screensaver_delay_minutes,
+            nav.settings.screensaver_delay_minutes as i32
+        );
+        set_if_changed!(
+            settings,
+            get_about_section,
+            set_about_section,
+            about_section(nav.about_selected)
+        );
+        set_if_changed!(
+            settings,
+            get_selected_license_index,
+            set_selected_license_index,
+            nav.licenses_selected as i32
+        );
+        set_if_changed!(
+            settings,
+            get_license_expanded,
+            set_license_expanded,
+            nav.licenses_expanded
+        );
+        set_if_changed!(
+            settings,
+            get_license_scroll_y,
+            set_license_scroll_y,
+            nav.licenses_scroll_y()
         );
         set_if_changed!(
             bridge,
@@ -583,7 +779,9 @@ impl LauncherBridgePresenter {
             nav.licenses_scroll_y()
         );
         if self.license_lines_index != Some(nav.licenses_selected) {
-            bridge.set_license_lines(self.license_lines(nav.licenses_selected));
+            let lines = self.license_lines(nav.licenses_selected);
+            settings.set_license_lines(lines.clone());
+            bridge.set_license_lines(lines);
         }
 
         if let Some(catalog_version) = catalog_version {
@@ -803,6 +1001,31 @@ fn sync_menu_item_presentation_row(
         row.acknowledged = acknowledged;
         bridge_churn_record_row_mutations(1);
         model.set_row_data(index, row);
+    }
+}
+
+fn display_choice(index: usize) -> ChoiceOption {
+    crate::launcher::settings_display_resolution(index).map_or_else(ChoiceOption::default, |mode| {
+        ChoiceOption {
+            id: mode.id.into(),
+            label: mode.label.into(),
+        }
+    })
+}
+
+fn settings_transaction_phase(
+    remaining: u8,
+    busy: bool,
+    error: Option<&str>,
+) -> DisplayTransactionPhase {
+    if error.is_some() {
+        DisplayTransactionPhase::Failed
+    } else if busy {
+        DisplayTransactionPhase::Persisting
+    } else if remaining > 0 {
+        DisplayTransactionPhase::Provisional
+    } else {
+        DisplayTransactionPhase::Idle
     }
 }
 
