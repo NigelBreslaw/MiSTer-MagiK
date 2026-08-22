@@ -4351,9 +4351,160 @@ mod macos {
     mod tests {
         use super::*;
         use mister_magik_fb::launcher_runtime::navigation_transition::NavigationTransitionGeometry;
+        use std::collections::BTreeMap;
         use std::sync::atomic::AtomicU64;
 
         static NEXT_CAPTURE_PATH: AtomicU64 = AtomicU64::new(0);
+
+        #[derive(Clone, Debug, PartialEq, Eq)]
+        struct LegacyBridgeSemanticSnapshot {
+            screen_mode: i32,
+            settings_selected: i32,
+            arcade_search_active: bool,
+            arcade_search_status: i32,
+            arcade_search_pane: i32,
+            setup_visible: bool,
+            setup_phase: i32,
+            catalog_scan_visible: bool,
+            catalog_scan_percent: i32,
+            media_progress_rows: usize,
+            confirm_visible: bool,
+            loading_visible: bool,
+            input_active: bool,
+        }
+
+        fn legacy_bridge_semantic_snapshot(launcher: &Launcher) -> LegacyBridgeSemanticSnapshot {
+            let bridge = launcher.global::<MisterBridge>();
+            LegacyBridgeSemanticSnapshot {
+                screen_mode: bridge.get_screen_mode(),
+                settings_selected: bridge.get_settings_selected(),
+                arcade_search_active: bridge.get_arcade_search_active(),
+                arcade_search_status: bridge.get_arcade_search_status(),
+                arcade_search_pane: bridge.get_arcade_search_pane(),
+                setup_visible: bridge.get_setup_visible(),
+                setup_phase: bridge.get_setup_phase(),
+                catalog_scan_visible: bridge.get_catalog_scan_visible(),
+                catalog_scan_percent: bridge.get_catalog_scan_percent(),
+                media_progress_rows: bridge.get_media_pack_progresses().row_count(),
+                confirm_visible: bridge.get_confirm_visible(),
+                loading_visible: !bridge.get_loading_message().is_empty(),
+                input_active: bridge.get_dpad_up()
+                    || bridge.get_dpad_down()
+                    || bridge.get_dpad_left()
+                    || bridge.get_dpad_right()
+                    || bridge.get_btn_a()
+                    || bridge.get_btn_b(),
+            }
+        }
+
+        fn manifest_scenario(scenario: SceneScenario) -> Scenario {
+            match scenario {
+                SceneScenario::Home | SceneScenario::NavigationTransitionMidpoint => Scenario::Home,
+                SceneScenario::Arcade => Scenario::Arcade,
+                SceneScenario::Settings => Scenario::Settings,
+                SceneScenario::ControllerSetup => Scenario::ControllerSetup,
+                SceneScenario::CatalogScan => Scenario::CatalogScan,
+            }
+        }
+
+        fn init_test_slint_platform() {
+            let window = MisterSoftwareWindow::new(RepaintBufferType::ReusedBuffer);
+            let fixed_time = Some(Rc::new(Cell::new(Duration::ZERO)));
+            let _ =
+                slint::platform::set_platform(Box::new(MisterPlatform::new(window, fixed_time)));
+        }
+
+        #[test]
+        fn every_manifest_scene_has_profile_independent_legacy_semantics() {
+            init_test_slint_platform();
+            let manifest = launcher_scene_manifest().expect("launcher scene manifest");
+            let mut expected_by_scenario = BTreeMap::new();
+
+            for scene in manifest.scenes {
+                let launcher = Launcher::new().expect("launcher");
+                initialize_bridge(&launcher.global::<MisterBridge>(), DisplayProfile::Hdmi);
+                apply_scenario(&launcher, manifest_scenario(scene.scenario));
+                let snapshot = legacy_bridge_semantic_snapshot(&launcher);
+                if let Some(expected) = expected_by_scenario.get(&scene.scenario) {
+                    assert_eq!(&snapshot, expected, "semantic drift in {}", scene.id);
+                } else {
+                    expected_by_scenario.insert(scene.scenario, snapshot);
+                }
+            }
+
+            assert_eq!(expected_by_scenario.len(), 6);
+        }
+
+        #[test]
+        fn representative_legacy_states_are_distinguishable_without_rendering() {
+            init_test_slint_platform();
+            let cases = [
+                (Scenario::ArcadeSearch, "arcade-search"),
+                (Scenario::ControllerSetup, "controller-setup"),
+                (Scenario::CatalogScan, "catalog-scan"),
+                (Scenario::MediaProgress, "media-progress"),
+                (Scenario::Confirm, "confirmation"),
+                (Scenario::Loading, "loading"),
+            ];
+            let mut snapshots = Vec::new();
+
+            for (scenario, label) in cases {
+                let launcher = Launcher::new().expect("launcher");
+                initialize_bridge(&launcher.global::<MisterBridge>(), DisplayProfile::Hdmi);
+                apply_scenario(&launcher, scenario);
+                let snapshot = legacy_bridge_semantic_snapshot(&launcher);
+                assert!(
+                    !snapshots.contains(&snapshot),
+                    "{label} collapsed onto another semantic state"
+                );
+                snapshots.push(snapshot);
+            }
+        }
+
+        #[test]
+        fn production_and_preview_presenters_share_navigation_fixture_semantics() {
+            init_test_slint_platform();
+            for screen in [Screen::Home, Screen::Settings, Screen::Arcade] {
+                let (fixtures, mut nav) = prepared_nav();
+                match screen {
+                    Screen::Home => nav.go_root(),
+                    Screen::Settings => nav.screen = Screen::Settings,
+                    Screen::Arcade => assert!(nav.open_default_arcade(&fixtures.catalog)),
+                    _ => unreachable!(),
+                }
+
+                let production = Launcher::new().expect("production launcher fixture");
+                let mut presenter = LauncherBridgePresenter::default();
+                presenter.sync(&production, &nav, &fixtures.catalog, Some(1), false);
+
+                let preview = Launcher::new().expect("preview launcher fixture");
+                initialize_bridge(&preview.global::<MisterBridge>(), DisplayProfile::Hdmi);
+                apply_scenario(&preview, Scenario::from_screen(screen));
+
+                let production_snapshot = legacy_bridge_semantic_snapshot(&production);
+                let preview_snapshot = legacy_bridge_semantic_snapshot(&preview);
+                assert_eq!(
+                    production_snapshot.screen_mode,
+                    preview_snapshot.screen_mode
+                );
+                assert_eq!(
+                    production_snapshot.settings_selected,
+                    preview_snapshot.settings_selected
+                );
+                assert_eq!(
+                    production_snapshot.arcade_search_active,
+                    preview_snapshot.arcade_search_active
+                );
+                assert_eq!(
+                    production_snapshot.arcade_search_status,
+                    preview_snapshot.arcade_search_status
+                );
+                assert_eq!(
+                    production_snapshot.arcade_search_pane,
+                    preview_snapshot.arcade_search_pane
+                );
+            }
+        }
 
         #[test]
         fn rgb565_primary_channels_expand_to_xrgb8888() {
