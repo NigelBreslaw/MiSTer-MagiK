@@ -88,6 +88,11 @@ pub(super) fn init_launcher_bridge(app: &slint_ui::launcher::Launcher, pad: &Pad
     bridge.set_confirm_left_label("".into());
     bridge.set_confirm_right_label("".into());
     bridge.set_confirm_selected(0);
+    let overlay = app.global::<slint_ui::launcher::OverlayView>();
+    overlay.set_confirmation_kind(slint_ui::launcher::ConfirmationKind::None);
+    overlay.set_selected_choice(slint_ui::launcher::DialogChoice::Cancel);
+    overlay.set_loading_state(slint_ui::launcher::LoadingState::Idle);
+    overlay.set_startup_state(slint_ui::launcher::LoadingState::Active);
     let development_build = mister_magik_catalog::device_layout::DeviceLayout::current()
         == mister_magik_catalog::device_layout::DeviceLayout::Dev;
     navigation.set_development_build(development_build);
@@ -114,7 +119,67 @@ pub(super) fn init_launcher_bridge(app: &slint_ui::launcher::Launcher, pad: &Pad
     arcade.set_preview_title("".into());
     arcade.set_preview_run_label(preview_run_label().into());
     LauncherStatusPresenter::new(&bridge).init();
+    sync_catalog_compat_projection(app);
     sync_bridge_pad_launcher(app, pad);
+}
+
+pub(super) fn sync_catalog_compat_projection(app: &slint_ui::launcher::Launcher) {
+    let bridge = app.global::<slint_ui::launcher::MisterBridge>();
+    let catalog = app.global::<slint_ui::launcher::CatalogView>();
+    catalog.set_activity(if bridge.get_catalog_scan_visible() {
+        slint_ui::launcher::CatalogActivity::Foreground
+    } else if bridge.get_catalog_background_scan_visible() {
+        slint_ui::launcher::CatalogActivity::Background
+    } else {
+        slint_ui::launcher::CatalogActivity::Idle
+    });
+    catalog.set_progress_mode(if bridge.get_catalog_scan_percent() < 0 {
+        slint_ui::launcher::ProgressMode::Indeterminate
+    } else {
+        slint_ui::launcher::ProgressMode::Determinate
+    });
+    catalog.set_message(bridge.get_catalog_scan_message());
+    catalog.set_title(bridge.get_catalog_scan_title());
+    catalog.set_detail(bridge.get_catalog_scan_detail());
+    catalog.set_percent(bridge.get_catalog_scan_percent().max(0));
+    catalog.set_progress_dot_visible(bridge.get_catalog_scan_dot_visible());
+}
+
+fn sync_overlay_compat_projection(app: &slint_ui::launcher::Launcher, nav: &LauncherNav) {
+    let bridge = app.global::<slint_ui::launcher::MisterBridge>();
+    let overlay = app.global::<slint_ui::launcher::OverlayView>();
+    let kind = if bridge.get_confirm_visible() {
+        let typed = crate::launcher_view_types::confirmation_kind(nav.confirm_action);
+        if typed == slint_ui::launcher::ConfirmationKind::None {
+            slint_ui::launcher::ConfirmationKind::LibraryUpdateFailed
+        } else {
+            typed
+        }
+    } else {
+        slint_ui::launcher::ConfirmationKind::None
+    };
+    overlay.set_confirmation_kind(kind);
+    overlay.set_selected_choice(if bridge.get_confirm_selected() == 0 {
+        slint_ui::launcher::DialogChoice::Cancel
+    } else {
+        slint_ui::launcher::DialogChoice::Confirm
+    });
+    overlay.set_confirmation_title(bridge.get_confirm_title());
+    overlay.set_confirmation_message(bridge.get_confirm_message());
+    overlay.set_cancel_label(bridge.get_confirm_left_label());
+    overlay.set_confirm_label(bridge.get_confirm_right_label());
+    overlay.set_loading_state(if bridge.get_loading_message().is_empty() {
+        slint_ui::launcher::LoadingState::Idle
+    } else {
+        slint_ui::launcher::LoadingState::Active
+    });
+    overlay.set_loading_message(bridge.get_loading_message());
+    overlay.set_loading_detail(bridge.get_loading_detail());
+    overlay.set_startup_state(if bridge.get_startup_visible() {
+        slint_ui::launcher::LoadingState::Active
+    } else {
+        slint_ui::launcher::LoadingState::Idle
+    });
 }
 
 pub(super) fn sync_settings_bridge(
@@ -786,6 +851,8 @@ pub(super) fn sync_bridge_launcher(
         );
     }
     sync_setup_bridge(app, pad, setup);
+    sync_catalog_compat_projection(app);
+    sync_overlay_compat_projection(app, nav);
     LauncherBridgeSyncTiming {
         model_projection_us,
     }
@@ -833,6 +900,8 @@ pub(super) fn sync_bridge_launcher_light(
             nav.arcade.is_turbo_active(),
         );
     }
+    sync_catalog_compat_projection(app);
+    sync_overlay_compat_projection(app, nav);
     LauncherBridgeSyncTiming {
         model_projection_us,
     }

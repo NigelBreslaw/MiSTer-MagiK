@@ -212,6 +212,34 @@ export global ArcadeView {
     in property <int> preview-display-height;
 }
 
+export global CatalogView {
+    in property <CatalogActivity> activity;
+    in property <ProgressMode> progress-mode;
+    in property <string> message;
+    in property <string> title;
+    in property <string> detail;
+    in property <int> percent;
+    in property <bool> progress-dot-visible: true;
+}
+
+export global MediaView {
+    in property <string> summary;
+    in property <[MediaPackRow]> rows;
+}
+
+export global OverlayView {
+    in property <ConfirmationKind> confirmation-kind;
+    in property <DialogChoice> selected-choice;
+    in property <string> confirmation-title;
+    in property <string> confirmation-message;
+    in property <string> cancel-label;
+    in property <string> confirm-label;
+    in property <LoadingState> loading-state;
+    in property <string> loading-message;
+    in property <string> loading-detail;
+    in property <LoadingState> startup-state;
+}
+
 export global MisterBridge {
     // Full-screen boot splash, cleared after the first launcher state sync.
     in-out property <bool> startup-visible;

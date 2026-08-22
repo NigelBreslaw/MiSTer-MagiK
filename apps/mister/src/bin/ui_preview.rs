@@ -81,11 +81,12 @@ mod macos {
     use mister_magik_ui::launcher::{
         AboutSection, ArcadeGame, ArcadeLoadState, ArcadeSearchMode,
         ArcadeSearchPane as ViewArcadeSearchPane, ArcadeSearchStatus as ViewArcadeSearchStatus,
-        ArcadeView, ChoiceOption, HomeFocus, HomeScrollPhase, InformationView, InputAvailability,
-        InputView, Launcher, LauncherScreen, MenuItem, MenuItemKind, MenuItemPresentation,
-        MenuItemStatus, MisterBridge, MisterUi,
-        NavigationTransitionState as ViewNavigationTransitionState, NavigationView,
-        PreviewState as ViewPreviewState, ScreenOrientation as ViewScreenOrientation,
+        ArcadeView, CatalogActivity, CatalogView, ChoiceOption, ConfirmationKind, DialogChoice,
+        HomeFocus, HomeScrollPhase, InformationView, InputAvailability, InputView, Launcher,
+        LauncherScreen, LoadingState, MediaPackRow, MediaPackState, MediaView, MenuItem,
+        MenuItemKind, MenuItemPresentation, MenuItemStatus, MisterBridge, MisterUi,
+        NavigationTransitionState as ViewNavigationTransitionState, NavigationView, OverlayView,
+        PreviewState as ViewPreviewState, ProgressMode, ScreenOrientation as ViewScreenOrientation,
         ScreensaverSetting, ScreenshotPackProgress, SettingsPopup, SettingsSection, SettingsView,
         SetupEntry, SetupField, SetupPhase as ViewSetupPhase, SetupView, SystemHubSection,
     };
@@ -4020,6 +4021,86 @@ mod macos {
         settings.set_license_lines(license_lines);
         settings.set_license_titles(strings(&mister_magik_fb::licenses::LICENSE_TITLES));
         arcade.set_preview_run_label("Press A to launch".into());
+        sync_preview_overlay_views(launcher);
+    }
+
+    fn sync_preview_overlay_views(launcher: &Launcher) {
+        let bridge = launcher.global::<MisterBridge>();
+        let catalog = launcher.global::<CatalogView>();
+        catalog.set_activity(if bridge.get_catalog_scan_visible() {
+            CatalogActivity::Foreground
+        } else if bridge.get_catalog_background_scan_visible() {
+            CatalogActivity::Background
+        } else {
+            CatalogActivity::Idle
+        });
+        catalog.set_progress_mode(if bridge.get_catalog_scan_percent() < 0 {
+            ProgressMode::Indeterminate
+        } else {
+            ProgressMode::Determinate
+        });
+        catalog.set_message(bridge.get_catalog_scan_message());
+        catalog.set_title(bridge.get_catalog_scan_title());
+        catalog.set_detail(bridge.get_catalog_scan_detail());
+        catalog.set_percent(bridge.get_catalog_scan_percent().max(0));
+        catalog.set_progress_dot_visible(bridge.get_catalog_scan_dot_visible());
+
+        let legacy_rows = bridge.get_media_pack_progresses();
+        launcher
+            .global::<MediaView>()
+            .set_rows(ModelRc::new(VecModel::from(
+                (0..legacy_rows.row_count())
+                    .filter_map(|index| legacy_rows.row_data(index))
+                    .map(|row| MediaPackRow {
+                        system: row.system,
+                        image_size: row.image_size,
+                        state: if row.phase.as_str().contains("fail") {
+                            MediaPackState::Failed
+                        } else if matches!(row.phase.as_str(), "Downloaded" | "Complete") {
+                            MediaPackState::Complete
+                        } else if row.phase.as_str() == "Queued" {
+                            MediaPackState::Queued
+                        } else {
+                            MediaPackState::Downloading
+                        },
+                        phase_label: row.phase,
+                        percent: row.percent,
+                        bytes_label: row.bytes_label,
+                        pack_position: row.pack_position,
+                    })
+                    .collect::<Vec<_>>(),
+            )));
+        launcher
+            .global::<MediaView>()
+            .set_summary(bridge.get_media_pack_summary());
+
+        let overlay = launcher.global::<OverlayView>();
+        overlay.set_confirmation_kind(if bridge.get_confirm_visible() {
+            ConfirmationKind::RebuildDatabase
+        } else {
+            ConfirmationKind::None
+        });
+        overlay.set_selected_choice(if bridge.get_confirm_selected() == 0 {
+            DialogChoice::Cancel
+        } else {
+            DialogChoice::Confirm
+        });
+        overlay.set_confirmation_title(bridge.get_confirm_title());
+        overlay.set_confirmation_message(bridge.get_confirm_message());
+        overlay.set_cancel_label(bridge.get_confirm_left_label());
+        overlay.set_confirm_label(bridge.get_confirm_right_label());
+        overlay.set_loading_state(if bridge.get_loading_message().is_empty() {
+            LoadingState::Idle
+        } else {
+            LoadingState::Active
+        });
+        overlay.set_loading_message(bridge.get_loading_message());
+        overlay.set_loading_detail(bridge.get_loading_detail());
+        overlay.set_startup_state(if bridge.get_startup_visible() {
+            LoadingState::Active
+        } else {
+            LoadingState::Idle
+        });
     }
 
     fn apply_scenario(launcher: &Launcher, scenario: Scenario) {
@@ -4159,6 +4240,7 @@ mod macos {
             }
             _ => {}
         }
+        sync_preview_overlay_views(launcher);
         launcher.window().request_redraw();
     }
 
@@ -4585,6 +4667,32 @@ mod macos {
             }
         }
 
+        fn assert_overlay_dual_projection(launcher: &Launcher) {
+            let bridge = launcher.global::<MisterBridge>();
+            let catalog = launcher.global::<CatalogView>();
+            assert_eq!(
+                catalog.get_activity() == CatalogActivity::Foreground,
+                bridge.get_catalog_scan_visible()
+            );
+            assert_eq!(
+                catalog.get_activity() == CatalogActivity::Background,
+                bridge.get_catalog_background_scan_visible()
+            );
+            assert_eq!(catalog.get_message(), bridge.get_catalog_scan_message());
+            assert_eq!(catalog.get_title(), bridge.get_catalog_scan_title());
+            assert_eq!(catalog.get_detail(), bridge.get_catalog_scan_detail());
+            assert_eq!(
+                launcher.global::<MediaView>().get_rows().row_count(),
+                bridge.get_media_pack_progresses().row_count()
+            );
+            let overlay = launcher.global::<OverlayView>();
+            assert_eq!(
+                overlay.get_confirmation_kind() != ConfirmationKind::None,
+                bridge.get_confirm_visible()
+            );
+            assert_eq!(overlay.get_loading_message(), bridge.get_loading_message());
+        }
+
         fn manifest_scenario(scenario: SceneScenario) -> Scenario {
             match scenario {
                 SceneScenario::Home | SceneScenario::NavigationTransitionMidpoint => Scenario::Home,
@@ -4616,6 +4724,7 @@ mod macos {
                 assert_settings_projection(&launcher);
                 assert_input_setup_projection(&launcher);
                 assert_arcade_projection(&launcher);
+                assert_overlay_dual_projection(&launcher);
                 let snapshot = bridge_semantic_snapshot(&launcher);
                 if let Some(expected) = expected_by_scenario.get(&scene.scenario) {
                     assert_eq!(&snapshot, expected, "semantic drift in {}", scene.id);
@@ -4686,6 +4795,7 @@ mod macos {
                 assert_settings_projection(&production);
                 assert_input_setup_projection(&production);
                 assert_arcade_projection(&production);
+                assert_overlay_dual_projection(&production);
 
                 let preview = Launcher::new().expect("preview launcher fixture");
                 initialize_bridge(&preview, DisplayProfile::Hdmi);
@@ -4694,6 +4804,7 @@ mod macos {
                 assert_settings_projection(&preview);
                 assert_input_setup_projection(&preview);
                 assert_arcade_projection(&preview);
+                assert_overlay_dual_projection(&preview);
 
                 let production_snapshot = bridge_semantic_snapshot(&production);
                 let preview_snapshot = bridge_semantic_snapshot(&preview);

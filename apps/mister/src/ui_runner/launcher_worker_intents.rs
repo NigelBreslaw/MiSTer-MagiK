@@ -75,9 +75,10 @@ pub(super) fn sync_launcher_worker_ui_intent(
             summary,
             terminal,
         } => {
-            return sync_media_progress_bridge(&bridge, rows, summary, terminal);
+            return sync_media_progress_bridge(app, rows, summary, terminal);
         }
     }
+    sync_catalog_compat_projection(app);
     true
 }
 
@@ -86,6 +87,7 @@ const MEDIA_PROGRESS_COALESCE_INTERVAL: Duration = Duration::from_millis(100);
 #[derive(Default)]
 struct MediaProgressBridge {
     model: Option<Rc<VecModel<slint_ui::launcher::ScreenshotPackProgress>>>,
+    typed_model: Option<Rc<VecModel<slint_ui::launcher::MediaPackRow>>>,
     rows: Vec<MediaProgressDisplayRow>,
     summary: String,
     last_publication: Option<Instant>,
@@ -101,11 +103,13 @@ pub(super) fn reset_media_progress_bridge() {
 }
 
 fn sync_media_progress_bridge(
-    bridge: &slint_ui::launcher::MisterBridge,
+    app: &slint_ui::launcher::Launcher,
     rows: Vec<MediaProgressDisplayRow>,
     summary: String,
     terminal: bool,
 ) -> bool {
+    let bridge = app.global::<slint_ui::launcher::MisterBridge>();
+    let media = app.global::<slint_ui::launcher::MediaView>();
     MEDIA_PROGRESS_BRIDGE.with(|state| {
         let mut state = state.borrow_mut();
         let now = Instant::now();
@@ -121,6 +125,10 @@ fn sync_media_progress_bridge(
             .model
             .get_or_insert_with(|| Rc::new(VecModel::from(Vec::new())))
             .clone();
+        let typed_model = state
+            .typed_model
+            .get_or_insert_with(|| Rc::new(VecModel::from(Vec::new())))
+            .clone();
         let same_identity = state.rows.len() == rows.len()
             && state
                 .rows
@@ -133,6 +141,7 @@ fn sync_media_progress_bridge(
             for (index, row) in rows.iter().enumerate() {
                 if state.rows.get(index) != Some(row) {
                     model.set_row_data(index, media_progress_slint_row(row));
+                    typed_model.set_row_data(index, media_progress_typed_row(row));
                     allocated_rows = allocated_rows.saturating_add(1);
                     crate::launcher_presentation::bridge_churn_record_row_mutations(1);
                 }
@@ -141,6 +150,11 @@ fn sync_media_progress_bridge(
             model.set_vec(
                 rows.iter()
                     .map(media_progress_slint_row)
+                    .collect::<Vec<_>>(),
+            );
+            typed_model.set_vec(
+                rows.iter()
+                    .map(media_progress_typed_row)
                     .collect::<Vec<_>>(),
             );
             allocated_rows = rows.len();
@@ -156,10 +170,12 @@ fn sync_media_progress_bridge(
         if publish_model {
             crate::launcher_presentation::bridge_churn_record_model_replacements(1);
             bridge.set_media_pack_progresses(ModelRc::from(model.clone()));
+            media.set_rows(ModelRc::from(typed_model.clone()));
         }
         if state.summary != summary {
             crate::launcher_presentation::bridge_churn_record_shared_strings(1);
             bridge.set_media_pack_summary(SharedString::from(summary.as_str()));
+            media.set_summary(SharedString::from(summary.as_str()));
         }
         state.rows = rows;
         state.summary = summary;
@@ -559,6 +575,29 @@ fn media_progress_slint_row(
         system: mister_magik_catalog::catalog_classify::system_title(&row.system).into(),
         image_size: row.image_size.clone().into(),
         phase: row.phase.clone().into(),
+        percent: row.percent,
+        bytes_label: row.bytes_label.clone().into(),
+        pack_position: row.pack_position.clone().into(),
+    }
+}
+
+fn media_progress_typed_row(row: &MediaProgressDisplayRow) -> slint_ui::launcher::MediaPackRow {
+    slint_ui::launcher::MediaPackRow {
+        system: mister_magik_catalog::catalog_classify::system_title(&row.system).into(),
+        image_size: row.image_size.clone().into(),
+        state: if row.phase.contains("fail") || row.phase.contains("error") {
+            slint_ui::launcher::MediaPackState::Failed
+        } else if matches!(
+            row.phase.as_str(),
+            "downloaded" | "current" | "checked" | "done"
+        ) {
+            slint_ui::launcher::MediaPackState::Complete
+        } else if matches!(row.phase.as_str(), "queued" | "pending") {
+            slint_ui::launcher::MediaPackState::Queued
+        } else {
+            slint_ui::launcher::MediaPackState::Downloading
+        },
+        phase_label: row.phase.clone().into(),
         percent: row.percent,
         bytes_label: row.bytes_label.clone().into(),
         pack_position: row.pack_position.clone().into(),
