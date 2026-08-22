@@ -49,6 +49,7 @@ trait BenchmarkDevice {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum BenchmarkProfile {
     Screensaver,
+    MediaPackPersistence,
     RomIdentityHashing,
     Search,
     SearchUi,
@@ -128,6 +129,9 @@ impl BenchmarkDevice for DeviceClient {
     fn profile(&mut self, profile: BenchmarkProfile, output_dir: PathBuf) -> AgentResult<String> {
         self.mutate(|device| match profile {
             BenchmarkProfile::Screensaver => device.profile_screensaver(&output_dir),
+            BenchmarkProfile::MediaPackPersistence => {
+                device.profile_media_pack_persistence(&output_dir)
+            }
             BenchmarkProfile::RomIdentityHashing => {
                 device.profile_rom_identity_hashing(&output_dir)
             }
@@ -683,6 +687,9 @@ fn require_clean_installed_commit(
             execute_neon_attribution(&mut device, manifest, output_dir, reporter)
         }
         BenchmarkScenario::PmuProfile => execute_pmu(&mut device, manifest, output_dir, reporter),
+        BenchmarkScenario::MediaPackPersistence => {
+            execute_media_pack_persistence(&mut device, manifest, output_dir, reporter)
+        }
         BenchmarkScenario::RomIdentityHashing => {
             execute_rom_identity_hashing(&mut device, manifest, output_dir, reporter)
         }
@@ -1081,6 +1088,7 @@ fn particle_scene_lab_command(scenario: BenchmarkScenario) -> Option<&'static st
         | BenchmarkScenario::OrientationTransitionZoomPprof
         | BenchmarkScenario::NeonAttribution
         | BenchmarkScenario::PmuProfile
+        | BenchmarkScenario::MediaPackPersistence
         | BenchmarkScenario::RomIdentityHashing
         | BenchmarkScenario::Search => None,
     }
@@ -2167,6 +2175,70 @@ fn execute_rom_identity_hashing(
         Some(100),
     )?;
     Ok(Outcome::Passed)
+}
+
+fn execute_media_pack_persistence(
+    device: &mut impl BenchmarkDevice,
+    manifest: String,
+    output_dir: std::path::PathBuf,
+    reporter: &mut Reporter<'_>,
+) -> AgentResult<Outcome> {
+    reporter.emit(
+        EventKind::Progress,
+        "profile",
+        "measuring raw media-pack persistence",
+        Some(30),
+    )?;
+    let detail = device.profile(BenchmarkProfile::MediaPackPersistence, output_dir.clone())?;
+    let summary: Value = serde_json::from_str(&detail).map_err(|error| error.to_string())?;
+    evaluate_media_pack_persistence_summary(&summary)?;
+    device.verify_health()?;
+    reporter.emit(
+        EventKind::Progress,
+        "benchmark-result",
+        &serde_json::to_string(&json!({
+            "installed_manifest": manifest,
+            "summary": summary,
+            "output_dir": output_dir,
+        }))
+        .map_err(|error| error.to_string())?,
+        Some(100),
+    )?;
+    Ok(Outcome::Passed)
+}
+
+fn evaluate_media_pack_persistence_summary(summary: &Value) -> AgentResult<()> {
+    if summary.get("schema").and_then(Value::as_str)
+        != Some("mister-magik-media-pack-persistence-v1")
+        || summary.get("status").and_then(Value::as_str) != Some("passed")
+        || summary.get("save_strategy").and_then(Value::as_str) != Some("staged")
+        || summary.get("decode_ms").and_then(Value::as_u64) != Some(0)
+    {
+        return Err("media-pack persistence benchmark is not a passing staged report".into());
+    }
+    let rows = summary
+        .get("rows")
+        .and_then(Value::as_array)
+        .ok_or("media-pack persistence report has no rows")?;
+    if rows.len() < 9
+        || rows.iter().any(|row| {
+            row.get("result").and_then(Value::as_str) != Some("bench-ok")
+                || row.get("pack_sha256").and_then(Value::as_str).is_none()
+                || row
+                    .pointer("/bytes/tmpfs")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0)
+                    == 0
+                || row
+                    .pointer("/bytes/exfat")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0)
+                    == 0
+        })
+    {
+        return Err("media-pack persistence report has incomplete representative rows".into());
+    }
+    Ok(())
 }
 
 fn evaluate_rom_identity_hashing_summary(summary: &Value) -> AgentResult<()> {
@@ -3314,6 +3386,28 @@ mod tests {
             let mut invalid = passing.clone();
             invalid[field] = Value::Null;
             assert!(evaluate_rom_identity_hashing_summary(&invalid).is_err());
+        }
+    }
+
+    #[test]
+    fn media_pack_persistence_evaluator_requires_staged_representative_rows() {
+        let row = json!({
+            "result": "bench-ok",
+            "pack_sha256": "a".repeat(64),
+            "bytes": {"tmpfs": 1, "exfat": 1},
+        });
+        let passing = json!({
+            "schema": "mister-magik-media-pack-persistence-v1",
+            "status": "passed",
+            "save_strategy": "staged",
+            "decode_ms": 0,
+            "rows": vec![row; 9],
+        });
+        evaluate_media_pack_persistence_summary(&passing).unwrap();
+        for field in ["schema", "status", "save_strategy", "decode_ms", "rows"] {
+            let mut invalid = passing.clone();
+            invalid[field] = Value::Null;
+            assert!(evaluate_media_pack_persistence_summary(&invalid).is_err());
         }
     }
 }

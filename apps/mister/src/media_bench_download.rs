@@ -102,14 +102,18 @@ where
     let config = parse_args(args)?;
     let manifest_text = fetch_text(&config.manifest_url)?;
     let manifest = parse_manifest_json(&config.manifest_url, &manifest_text)?;
-    let packs: Vec<_> = manifest
+    let mut packs: Vec<_> = manifest
         .packs
         .iter()
         .filter(|pack| {
             pack.image_size == config.image_size
-                && (config.system == "all" || pack.id == config.system)
+                && (matches!(config.system.as_str(), "all" | "representative")
+                    || pack.id == config.system)
         })
         .collect();
+    if config.system == "representative" {
+        packs = representative_packs(packs);
+    }
     if packs.is_empty() {
         return Err(format!(
             "manifest has no packs for system={} image_size={}",
@@ -117,6 +121,9 @@ where
         ));
     }
     crate::ui_logln!("{HEADER}");
+    let rss_before_kb = proc_status_kb("VmRSS");
+    let hwm_before_kb = proc_status_kb("VmHWM");
+    let mut reports = Vec::new();
     for pack in packs {
         let local_path = PathBuf::from(size_qualified_pack_path(
             &config.asset_dir.display().to_string(),
@@ -140,9 +147,53 @@ where
             let label = format!("{}-{:02}", config.label, iteration);
             let row = run_one(&config, pack, variant, &local_path, &label)?;
             crate::ui_logln!("{}", row.to_tsv());
+            reports.push(row.to_json(pack, config.save_strategy));
         }
     }
+    crate::ui_logln!(
+        "{}",
+        serde_json::json!({
+            "schema": "mister-magik-media-pack-persistence-v1",
+            "status": "passed",
+            "save_strategy": config.save_strategy.label(),
+            "production_format": "raw-mmlz4b",
+            "decode_ms": 0,
+            "representative_policy": if config.system == "representative" {
+                "small-median-largest"
+            } else {
+                "explicit-system-selection"
+            },
+            "row_count": reports.len(),
+            "rows": reports,
+            "process": {
+                "rss_before_kb": rss_before_kb,
+                "rss_after_kb": proc_status_kb("VmRSS"),
+                "hwm_before_kb": hwm_before_kb,
+                "hwm_after_kb": proc_status_kb("VmHWM"),
+            },
+        })
+    );
     Ok(())
+}
+
+fn representative_packs(mut packs: Vec<&MediaPack>) -> Vec<&MediaPack> {
+    packs.sort_by(|left, right| {
+        left.raw
+            .bytes
+            .cmp(&right.raw.bytes)
+            .then_with(|| left.id.cmp(&right.id))
+    });
+    let mut selected = Vec::with_capacity(3.min(packs.len()));
+    for index in [0, packs.len() / 2, packs.len().saturating_sub(1)] {
+        if let Some(pack) = packs.get(index)
+            && selected
+                .iter()
+                .all(|selected: &&MediaPack| selected.id != pack.id)
+        {
+            selected.push(*pack);
+        }
+    }
+    selected
 }
 
 fn parse_args<I>(args: I) -> Result<BenchConfig, String>
@@ -172,7 +223,9 @@ where
                 config.manifest_url = args.next().ok_or("--manifest-url requires a URL")?;
             }
             "--system" => {
-                config.system = args.next().ok_or("--system requires id|all")?;
+                config.system = args
+                    .next()
+                    .ok_or("--system requires id|all|representative")?;
             }
             "--variants" => {
                 config.variant =
@@ -228,7 +281,7 @@ where
 
 fn print_usage() {
     crate::ui_logln!(
-        "usage: mister-magik-fb media-bench-download --system ID [--variant identity] --iterations N [--prime-cache] [--save-strategy staged|stream-fat]"
+        "usage: mister-magik-fb media-bench-download --system ID|all|representative [--variant identity] --iterations N [--prime-cache] [--save-strategy staged|stream-fat]"
     );
 }
 
@@ -978,6 +1031,53 @@ impl BenchRow {
             tsv(&self.result),
         )
     }
+
+    fn to_json(&self, pack: &MediaPack, strategy: SaveStrategy) -> Value {
+        serde_json::json!({
+            "label": self.label,
+            "system": self.system,
+            "variant": self.variant,
+            "pack_bytes": pack.raw.bytes,
+            "pack_sha256": pack.raw.sha256,
+            "index": pack.index.as_ref().map(|index| serde_json::json!({
+                "bytes": index.bytes,
+                "sha256": index.sha256,
+                "download_overlap_ms": Value::Null,
+                "overlap_status": "not-exercised-by-isolated-pack-persistence-arm",
+            })),
+            "timing_ms": {
+                "network_and_destination_write": self.download_ms,
+                "decode": 0,
+                "verification": self.verify_ms,
+                "save_and_publish": self.save_ms,
+                "total_flow": self.total_ms,
+            },
+            "bytes": {
+                "network": self.encoded_bytes,
+                "tmpfs": if strategy == SaveStrategy::Staged { self.encoded_bytes } else { 0 },
+                "exfat": self.decoded_bytes,
+            },
+            "throughput_mbps": {
+                "network": self.wire_mbps,
+                "total_flow": self.decoded_mbps,
+            },
+            "exfat_writer_concurrency": 1,
+            "etag": self.etag,
+            "content_encoding": self.content_encoding,
+            "cf_cache_status": self.cf_cache_status,
+            "result": self.result,
+        })
+    }
+}
+
+fn proc_status_kb(field: &str) -> Option<u64> {
+    fs::read_to_string("/proc/self/status")
+        .ok()?
+        .lines()
+        .find_map(|line| {
+            let (key, value) = line.split_once(':')?;
+            (key == field).then(|| value.split_whitespace().next()?.parse().ok())?
+        })
 }
 
 fn tsv(value: &str) -> String {
@@ -1063,6 +1163,28 @@ mod tests {
         assert_eq!(config.iterations, 10);
         assert!(config.prime_cache);
         assert_eq!(config.save_strategy, SaveStrategy::StreamFat);
+    }
+
+    #[test]
+    fn representative_selection_uses_small_median_and_largest_packs() {
+        let mut packs = (0..5)
+            .map(|index| {
+                let mut pack = test_pack();
+                pack.id = format!("system-{index}");
+                pack.raw.bytes = (index + 1) * 100;
+                pack
+            })
+            .collect::<Vec<_>>();
+        packs.reverse();
+
+        let selected = representative_packs(packs.iter().collect());
+        assert_eq!(
+            selected
+                .iter()
+                .map(|pack| pack.raw.bytes)
+                .collect::<Vec<_>>(),
+            vec![100, 300, 500]
+        );
     }
 
     #[test]

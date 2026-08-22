@@ -704,6 +704,15 @@ impl NativeDevice {
         self.benchmark_profile(|config| profile_installed_rom_identity_hashing(config, output_dir))
     }
 
+    pub(crate) fn profile_media_pack_persistence(
+        &mut self,
+        output_dir: &Path,
+    ) -> std::result::Result<String, DeviceFailure> {
+        self.benchmark_profile(|config| {
+            profile_installed_media_pack_persistence(config, output_dir)
+        })
+    }
+
     pub(crate) fn profile_pmu(
         &mut self,
         output_dir: &Path,
@@ -12196,6 +12205,57 @@ fn profile_installed_search(config: &NativeDeviceConfig, output_dir: &Path) -> R
         last_json_line(&output.stdout).ok_or("installed search benchmark returned no JSON")?;
     if summary.get("schema").and_then(Value::as_str) != Some("mister-magik-search-benchmark-v1") {
         return Err("installed search benchmark returned the wrong schema".into());
+    }
+    fs::write(
+        output_dir.join("summary.json"),
+        format!("{}\n", serde_json::to_string_pretty(&summary)?),
+    )?;
+    serde_json::to_string(&summary).map_err(Into::into)
+}
+
+fn profile_installed_media_pack_persistence(
+    config: &NativeDeviceConfig,
+    output_dir: &Path,
+) -> Result<String> {
+    let session = connect_with(&config.connection, 10)?;
+    fs::create_dir_all(output_dir)?;
+    let capability = exec_checked_output(
+        &session,
+        "installed benchmark capability",
+        DEVELOPMENT_BENCHMARK_CAPABILITIES_COMMAND.as_str(),
+    )?;
+    let capability = last_json_line(&capability.stdout)
+        .ok_or("installed benchmark capability output contains no JSON report")?;
+    if capability
+        .get("media-pack-persistence-v1")
+        .and_then(Value::as_bool)
+        != Some(true)
+    {
+        return Err("installed app does not support media-pack-persistence-v1".into());
+    }
+    let output = exec(
+        &session,
+        &development_gui_command(
+            "media-bench-download --system representative --iterations 3 --prime-cache --save-strategy staged --label baseline",
+        ),
+        true,
+    )?;
+    let mut log = output.stdout.clone();
+    log.push_str(&output.stderr);
+    fs::write(output_dir.join("staged.log"), &log)?;
+    if let Some(message) =
+        exec_failure_message("installed media-pack persistence benchmark", &output)
+    {
+        return Err(message.into());
+    }
+    let summary = last_json_line(&output.stdout)
+        .ok_or("installed media-pack persistence benchmark returned no JSON")?;
+    if summary.get("schema").and_then(Value::as_str)
+        != Some("mister-magik-media-pack-persistence-v1")
+        || summary.get("status").and_then(Value::as_str) != Some("passed")
+        || summary.get("save_strategy").and_then(Value::as_str) != Some("staged")
+    {
+        return Err("installed media-pack persistence benchmark returned an invalid report".into());
     }
     fs::write(
         output_dir.join("summary.json"),

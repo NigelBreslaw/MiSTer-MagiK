@@ -468,6 +468,7 @@ fn benchmark_capabilities() -> serde_json::Value {
         "pmu-profile-v1": true,
         "pmu-profile-v2": true,
         "persisted-search-v1": true,
+        "media-pack-persistence-v1": true,
         "rom-identity-benchmark-v1": true,
         "rom-identity-benchmark-v3": true,
         "input-integrity-driver-v1": true,

@@ -66,6 +66,7 @@ Supported scenarios:
 - `orientation-transition-zoom-pprof`
 - `neon-attribution`
 - `pmu-profile`
+- `media-pack-persistence`
 - `rom-identity-hashing`
 - `search`
 - `streamline`
@@ -87,6 +88,19 @@ production-default Lynx case so transformed opt-in ROMs cannot exhaust the
 typed operation timeout. The retired whole-file/streaming selector is not
 available. The scenario neither starts catalog work nor enables forced
 background refresh.
+
+`media-pack-persistence` is the read-only exact-device authority for the raw
+`.mmlz4b` download/save flow. It selects the small, median, and largest pack for
+the configured production image size, primes the remote cache, and runs three
+isolated staged controls through `media-bench-download`. Benchmark artifacts
+use hidden, timestamped paths and are removed after every arm; authoritative
+pack, index, and media-state files are never replaced. The report records raw
+network/tmpfs/exFAT bytes, coupled network-and-destination-write time,
+verification, save/publication, total flow, throughput, process RSS/HWM, and
+that production decode time is zero. Index metadata and single-writer policy
+are recorded; the isolated persistence arm deliberately does not download the
+sidecar, so index overlap is explicitly reported as unexercised. Catalog refresh
+remains off and is never forced for this scenario.
 
 The Arcade velocity-scroll profiling scenarios default to the active display
 route. A typed arm also accepts `--route active`, `--route hdmi-landscape`,
