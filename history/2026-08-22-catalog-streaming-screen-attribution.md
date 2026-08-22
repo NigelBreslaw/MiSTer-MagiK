@@ -47,3 +47,34 @@ explicit pending-entry/path-byte ceiling. Any ceiling or syscall failure must
 still emit `TargetRestart` before WalkDir fallback. The screen is far below
 every performance gate, so no confirmation runs are justified for the failed
 implementation.
+
+## Bounded recovery result
+
+The no-reread task-stack recovery was screened at revision
+`7d138cfa32cdb6ad725697ea8dc27c74551c5b55`:
+
+- Control: `build/agent-benchmarks/storage-attribution/1787369076/summary.json`
+- Recovery: `build/agent-benchmarks/storage-attribution/1787369339/summary.json`
+
+| Measure | Fresh control | Recovery | Delta |
+|---|---:|---:|---:|
+| Whole workload | 142.110s | 149.840s | +7.730s (+5.4%) |
+| Catalog scan | 72.731s | 77.354s | +4.622s (+6.4%) |
+| Namespace producer | 56.942s | 64.466s | +7.524s (+13.2%) |
+| Channel wait | 8.459s | 5.474s | -2.985s (-35.3%) |
+| Consumer wait | 12.844s | 14.906s | +2.062s (+16.1%) |
+| Consumer active | 57.529s | 60.044s | +2.515s (+4.4%) |
+| Walker read bytes | 6,218,536 | 6,218,536 | 0 (0.0%) |
+| Walker read calls | 20,548 | 20,548 | 0 (0.0%) |
+| Device read bytes | 218,915,840 | 229,176,320 | +10,260,480 (+4.7%) |
+| Buffer allocations | 11,649 | 1,631 | -10,018 (-86.0%) |
+| Peak buffered bytes | 978,524 | 292,877 | -685,647 (-70.1%) |
+| HWM | 115,300 KiB | 115,364 KiB | +64 KiB (+0.1%) |
+
+The recovery again preserved all behavior and artifact hashes with zero
+fallbacks or restarts. It removed the diagnosed read amplification, but the
+task-stack/path-copy overhead increased producer and consumer work and missed
+both the 5% scan-improvement gate and 2% whole-operation gate. It achieved less
+than 80% of either gate, so the roadmap does not permit a second recovery. The
+streaming selector and implementation are explicitly reverted; restartable
+target handoff remains as a neutral correctness prerequisite.

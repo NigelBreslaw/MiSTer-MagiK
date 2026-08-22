@@ -12,7 +12,7 @@ use crate::library_db::{
 };
 use crate::namespace_walk::{
     self, NamespaceEntry, NamespaceEntryKind, NamespaceRootPolicy, NamespaceSignatureCapture,
-    NamespaceVisit, NamespaceWalkStats,
+    NamespaceWalkStats,
 };
 use crate::runtime_thread::{RuntimeThreadRole, apply_runtime_thread_policy};
 use std::collections::{BTreeMap, HashSet};
@@ -297,6 +297,10 @@ fn path_components_str(path: &Path) -> impl Iterator<Item = &str> {
 
 pub(crate) enum DiscoveryEvent {
     TargetStart(ScanTargetDescriptor),
+    #[expect(
+        dead_code,
+        reason = "restart handoff is a neutral prerequisite until the streaming experiment"
+    )]
     TargetRestart(TargetRestart),
     File(FoundFile),
     GameDirFacts(GameDirFact),
@@ -743,27 +747,15 @@ fn walk_index_candidates_with_plan(
                 path,
                 game_dir_header,
             } => {
-                let send = std::cell::RefCell::new(&mut target_send_stats);
-                let (stats, facts) = scan_target_candidates_with_facts_restartable(
+                let (stats, facts) = scan_target_candidates_with_facts(
                     &path,
                     profiles,
                     &candidate_exts,
                     game_dir_header.as_ref(),
-                    |file| send.borrow_mut().send(tx, DiscoveryEvent::File(file)),
-                    |reason| {
-                        send.borrow_mut().send(
-                            tx,
-                            DiscoveryEvent::TargetRestart(TargetRestart {
-                                descriptor: descriptor.clone(),
-                                reason,
-                            }),
-                        )
-                    },
+                    |file| target_send_stats.send(tx, DiscoveryEvent::File(file)),
                 );
-                drop(send);
                 let in_target_send_us = target_send_stats.elapsed_us;
-                if !stats.aborted
-                    && let Some(facts) = facts
+                if let Some(facts) = facts
                     && !target_send_stats.send(tx, DiscoveryEvent::GameDirFacts(facts))
                 {
                     break;
@@ -774,19 +766,8 @@ fn walk_index_candidates_with_plan(
                 stats
             }
             PlannedScanTarget::Runtime(header) => {
-                let (stats, candidates) =
-                    scan_runtime_target_candidates_restartable(&header, plan, |reason| {
-                        target_send_stats.send(
-                            tx,
-                            DiscoveryEvent::TargetRestart(TargetRestart {
-                                descriptor: descriptor.clone(),
-                                reason,
-                            }),
-                        )
-                    });
-                if !stats.aborted
-                    && !target_send_stats.send(tx, DiscoveryEvent::RuntimeDirectory(candidates))
-                {
+                let (stats, candidates) = scan_runtime_target_candidates(&header, plan);
+                if !target_send_stats.send(tx, DiscoveryEvent::RuntimeDirectory(candidates)) {
                     break;
                 }
                 producer_us = producer_us.saturating_add(stats.elapsed_us);
@@ -794,18 +775,8 @@ fn walk_index_candidates_with_plan(
                 stats
             }
             PlannedScanTarget::FactsOnly(header) => {
-                let (stats, facts) = scan_game_dir_facts_only_restartable(&header, |reason| {
-                    target_send_stats.send(
-                        tx,
-                        DiscoveryEvent::TargetRestart(TargetRestart {
-                            descriptor: descriptor.clone(),
-                            reason,
-                        }),
-                    )
-                });
-                if !stats.aborted
-                    && !target_send_stats.send(tx, DiscoveryEvent::GameDirFacts(facts))
-                {
+                let (stats, facts) = scan_game_dir_facts_only(&header);
+                if !target_send_stats.send(tx, DiscoveryEvent::GameDirFacts(facts)) {
                     break;
                 }
                 producer_us = producer_us.saturating_add(stats.elapsed_us);
@@ -955,25 +926,7 @@ fn scan_target_candidates_with_facts(
     profiles: &[LaunchProfile],
     candidate_exts: &HashSet<String>,
     game_dir_header: Option<&GameDirHeader>,
-    emit: impl FnMut(FoundFile) -> bool,
-) -> (WalkTargetStats, Option<GameDirFact>) {
-    scan_target_candidates_with_facts_restartable(
-        target,
-        profiles,
-        candidate_exts,
-        game_dir_header,
-        emit,
-        |_| true,
-    )
-}
-
-fn scan_target_candidates_with_facts_restartable(
-    target: &Path,
-    profiles: &[LaunchProfile],
-    candidate_exts: &HashSet<String>,
-    game_dir_header: Option<&GameDirHeader>,
     mut emit: impl FnMut(FoundFile) -> bool,
-    mut restart: impl FnMut(String) -> bool,
 ) -> (WalkTargetStats, Option<GameDirFact>) {
     let target_t = Instant::now();
     let mut dirs = 1usize;
@@ -981,8 +934,17 @@ fn scan_target_candidates_with_facts_restartable(
     let mut candidates = 0usize;
     let mut aborted = false;
     let mut nested_directory_seen = false;
-    let mut facts: Option<GameDirFact>;
-    let signature_capture = if game_dir_header.is_some() {
+    let mut facts = game_dir_header.map(|header| GameDirFact {
+        name: header.name.clone(),
+        path: header.path.clone(),
+        signature: header.signature,
+        has_payload_files: false,
+        has_zip_files: false,
+        direct_zip_paths: Vec::new(),
+        nested_probe_signatures: Vec::new(),
+        payload_extensions: std::collections::BTreeSet::new(),
+    });
+    let signature_capture = if facts.is_some() {
         NamespaceSignatureCapture::Target
     } else {
         NamespaceSignatureCapture::None
@@ -993,20 +955,7 @@ fn scan_target_candidates_with_facts_restartable(
         } else {
             NamespaceRootPolicy::NoFollow
         };
-    let new_facts = || {
-        game_dir_header.map(|header| GameDirFact {
-            name: header.name.clone(),
-            path: header.path.clone(),
-            signature: header.signature,
-            has_payload_files: false,
-            has_zip_files: false,
-            direct_zip_paths: Vec::new(),
-            nested_probe_signatures: Vec::new(),
-            payload_extensions: std::collections::BTreeSet::new(),
-        })
-    };
-    facts = new_facts();
-    let namespace_stats = namespace_walk::visit_restartable_with_root_policy_and_signature_capture(
+    let namespace_stats = namespace_walk::visit_with_root_policy_and_signature_capture(
         target,
         None,
         root_policy,
@@ -1015,22 +964,7 @@ fn scan_target_candidates_with_facts_restartable(
             should_ignore_path(path)
                 || crate::prepared_collections::neon68k_duplicate_alias_path(target, path)
         },
-        |event| {
-            let entry = match event {
-                NamespaceVisit::Entry(entry) => entry,
-                NamespaceVisit::Restart(reason) => {
-                    dirs = 1;
-                    files = 0;
-                    candidates = 0;
-                    nested_directory_seen = false;
-                    facts = new_facts();
-                    if !restart(reason.to_string()) {
-                        aborted = true;
-                        return false;
-                    }
-                    return true;
-                }
-            };
+        |entry| {
             let p = entry.path.as_path();
             if entry.kind == NamespaceEntryKind::Directory {
                 dirs += 1;
@@ -1125,14 +1059,6 @@ fn scan_runtime_target_candidates(
     header: &GameDirHeader,
     plan: &CatalogScanPlan,
 ) -> (WalkTargetStats, RuntimeDirectoryCandidates) {
-    scan_runtime_target_candidates_restartable(header, plan, |_| true)
-}
-
-fn scan_runtime_target_candidates_restartable(
-    header: &GameDirHeader,
-    plan: &CatalogScanPlan,
-    mut restart: impl FnMut(String) -> bool,
-) -> (WalkTargetStats, RuntimeDirectoryCandidates) {
     let target_t = Instant::now();
     let mut dirs = 1usize;
     let mut files_seen = 0usize;
@@ -1143,87 +1069,67 @@ fn scan_runtime_target_candidates_restartable(
     let mut payload_extensions = std::collections::BTreeSet::new();
     let mut shallow_files = Vec::new();
     let mut deep_roots = Vec::new();
-    let mut aborted = false;
 
-    let shallow_namespace_stats =
-        namespace_walk::visit_restartable_with_root_policy_and_signature_capture(
-            &header.path,
-            Some(2),
-            NamespaceRootPolicy::NoFollow,
-            NamespaceSignatureCapture::TargetAndDepthOneDirectories,
-            should_ignore_path,
-            |event| {
-                let entry = match event {
-                    NamespaceVisit::Entry(entry) => entry,
-                    NamespaceVisit::Restart(reason) => {
-                        dirs = 1;
-                        files_seen = 0;
-                        has_payload_files = false;
-                        has_zip_files = false;
-                        direct_zip_paths.clear();
-                        nested_probe_signatures.clear();
-                        payload_extensions.clear();
-                        shallow_files.clear();
-                        deep_roots.clear();
-                        let accepted = restart(reason.to_string());
-                        aborted |= !accepted;
-                        return accepted;
-                    }
-                };
-                let path = entry.path.as_path();
-                if entry.kind == NamespaceEntryKind::Directory {
-                    dirs += 1;
-                    let depth = path
-                        .strip_prefix(&header.path)
-                        .ok()
-                        .map(|relative| relative.components().count());
-                    if depth == Some(1) {
-                        nested_probe_signatures.push((
-                            path.to_path_buf(),
-                            crate::catalog_discovery::GameDirSignature::from_namespace_signature(
-                                entry.directory_signature,
-                            ),
-                        ));
-                    } else if depth == Some(2) {
-                        deep_roots.push(path.to_path_buf());
-                    }
-                    return true;
+    let shallow_namespace_stats = namespace_walk::visit_with_signature_capture(
+        &header.path,
+        Some(2),
+        NamespaceSignatureCapture::TargetAndDepthOneDirectories,
+        should_ignore_path,
+        |entry| {
+            let path = entry.path.as_path();
+            if entry.kind == NamespaceEntryKind::Directory {
+                dirs += 1;
+                let depth = path
+                    .strip_prefix(&header.path)
+                    .ok()
+                    .map(|relative| relative.components().count());
+                if depth == Some(1) {
+                    nested_probe_signatures.push((
+                        path.to_path_buf(),
+                        crate::catalog_discovery::GameDirSignature::from_namespace_signature(
+                            entry.directory_signature,
+                        ),
+                    ));
+                } else if depth == Some(2) {
+                    deep_roots.push(path.to_path_buf());
                 }
-                if entry.kind != NamespaceEntryKind::File {
-                    return true;
+                return true;
+            }
+            if entry.kind != NamespaceEntryKind::File {
+                return true;
+            }
+            files_seen += 1;
+            let ext = path
+                .extension()
+                .and_then(|value| value.to_str())
+                .unwrap_or("")
+                .to_ascii_lowercase();
+            if ext.eq_ignore_ascii_case("zip") {
+                has_zip_files = true;
+                if path
+                    .strip_prefix(&header.path)
+                    .ok()
+                    .is_some_and(|relative| relative.components().count() == 1)
+                {
+                    direct_zip_paths.push(path.to_path_buf());
                 }
-                files_seen += 1;
-                let ext = path
-                    .extension()
-                    .and_then(|value| value.to_str())
-                    .unwrap_or("")
-                    .to_ascii_lowercase();
-                if ext.eq_ignore_ascii_case("zip") {
-                    has_zip_files = true;
-                    if path
-                        .strip_prefix(&header.path)
-                        .ok()
-                        .is_some_and(|relative| relative.components().count() == 1)
-                    {
-                        direct_zip_paths.push(path.to_path_buf());
-                    }
-                } else {
-                    has_payload_files = true;
-                    if !ext.is_empty() {
-                        payload_extensions.insert(ext.clone());
-                    }
+            } else {
+                has_payload_files = true;
+                if !ext.is_empty() {
+                    payload_extensions.insert(ext.clone());
                 }
-                let (size, mtime_secs) = candidate_signature_for_namespace_entry(entry, &ext);
-                let file = FoundFile {
-                    path: path.to_path_buf(),
-                    ext,
-                    size,
-                    mtime_secs,
-                };
-                shallow_files.push(file);
-                true
-            },
-        );
+            }
+            let (size, mtime_secs) = candidate_signature_for_namespace_entry(entry, &ext);
+            let file = FoundFile {
+                path: path.to_path_buf(),
+                ext,
+                size,
+                mtime_secs,
+            };
+            shallow_files.push(file);
+            true
+        },
+    );
     let target_signature = shallow_namespace_stats.target_signature;
     let mut namespace_stats = shallow_namespace_stats;
     direct_zip_paths.sort_by_cached_key(|path| path.to_string_lossy().to_ascii_lowercase());
@@ -1249,7 +1155,7 @@ fn scan_runtime_target_candidates_restartable(
                 files: files_seen,
                 candidates: 0,
                 elapsed_us: target_t.elapsed().as_micros() as u64,
-                aborted,
+                aborted: false,
                 namespace: namespace_stats,
             },
             RuntimeDirectoryCandidates {
@@ -1268,61 +1174,38 @@ fn scan_runtime_target_candidates_restartable(
         push_runtime_candidate(&mut files, &mut overflowed, &candidate_exts, &profile, file);
     }
     for root in deep_roots {
-        let dirs_before = dirs;
-        let files_seen_before = files_seen;
-        let files_before = files.len();
-        let overflowed_before = overflowed;
         let deep_namespace_stats =
-            namespace_walk::visit_restartable_with_root_policy_and_signature_capture(
-                &root,
-                None,
-                NamespaceRootPolicy::NoFollow,
-                NamespaceSignatureCapture::None,
-                should_ignore_path,
-                |event| {
-                    let entry = match event {
-                        NamespaceVisit::Entry(entry) => entry,
-                        NamespaceVisit::Restart(reason) => {
-                            dirs = dirs_before;
-                            files_seen = files_seen_before;
-                            files.truncate(files_before);
-                            overflowed = overflowed_before;
-                            let accepted = restart(reason.to_string());
-                            aborted |= !accepted;
-                            return accepted;
-                        }
-                    };
-                    let path = entry.path.as_path();
-                    if entry.kind == NamespaceEntryKind::Directory {
-                        dirs += 1;
-                        return true;
-                    }
-                    if entry.kind != NamespaceEntryKind::File {
-                        return true;
-                    }
-                    files_seen += 1;
-                    let ext = path
-                        .extension()
-                        .and_then(|value| value.to_str())
-                        .unwrap_or("")
-                        .to_ascii_lowercase();
-                    let (size, mtime_secs) = candidate_signature_for_namespace_entry(entry, &ext);
-                    let file = FoundFile {
-                        path: path.to_path_buf(),
-                        ext,
-                        size,
-                        mtime_secs,
-                    };
-                    push_runtime_candidate(
-                        &mut files,
-                        &mut overflowed,
-                        &candidate_exts,
-                        &profile,
-                        file,
-                    );
-                    true
-                },
-            );
+            namespace_walk::visit(&root, None, should_ignore_path, |entry| {
+                let path = entry.path.as_path();
+                if entry.kind == NamespaceEntryKind::Directory {
+                    dirs += 1;
+                    return true;
+                }
+                if entry.kind != NamespaceEntryKind::File {
+                    return true;
+                }
+                files_seen += 1;
+                let ext = path
+                    .extension()
+                    .and_then(|value| value.to_str())
+                    .unwrap_or("")
+                    .to_ascii_lowercase();
+                let (size, mtime_secs) = candidate_signature_for_namespace_entry(entry, &ext);
+                let file = FoundFile {
+                    path: path.to_path_buf(),
+                    ext,
+                    size,
+                    mtime_secs,
+                };
+                push_runtime_candidate(
+                    &mut files,
+                    &mut overflowed,
+                    &candidate_exts,
+                    &profile,
+                    file,
+                );
+                true
+            });
         namespace_stats.add(&deep_namespace_stats);
     }
     let stats = WalkTargetStats {
@@ -1330,7 +1213,7 @@ fn scan_runtime_target_candidates_restartable(
         files: files_seen,
         candidates: files.len(),
         elapsed_us: target_t.elapsed().as_micros() as u64,
-        aborted,
+        aborted: false,
         namespace: namespace_stats,
     };
     library_db::report_library_scan_timing(
@@ -1377,13 +1260,6 @@ fn push_runtime_candidate(
 }
 
 fn scan_game_dir_facts_only(header: &GameDirHeader) -> (WalkTargetStats, GameDirFact) {
-    scan_game_dir_facts_only_restartable(header, |_| true)
-}
-
-fn scan_game_dir_facts_only_restartable(
-    header: &GameDirHeader,
-    mut restart: impl FnMut(String) -> bool,
-) -> (WalkTargetStats, GameDirFact) {
     let target_t = Instant::now();
     let mut dirs = 1usize;
     let mut files = 0usize;
@@ -1392,29 +1268,12 @@ fn scan_game_dir_facts_only_restartable(
     let mut direct_zip_paths = Vec::new();
     let mut nested_probe_signatures = Vec::new();
     let mut payload_extensions = std::collections::BTreeSet::new();
-    let mut aborted = false;
-    let namespace_stats = namespace_walk::visit_restartable_with_root_policy_and_signature_capture(
+    let namespace_stats = namespace_walk::visit_with_signature_capture(
         &header.path,
         Some(2),
-        NamespaceRootPolicy::NoFollow,
         NamespaceSignatureCapture::TargetAndDepthOneDirectories,
         should_ignore_path,
-        |event| {
-            let entry = match event {
-                NamespaceVisit::Entry(entry) => entry,
-                NamespaceVisit::Restart(reason) => {
-                    dirs = 1;
-                    files = 0;
-                    has_payload_files = false;
-                    has_zip_files = false;
-                    direct_zip_paths.clear();
-                    nested_probe_signatures.clear();
-                    payload_extensions.clear();
-                    let accepted = restart(reason.to_string());
-                    aborted |= !accepted;
-                    return accepted;
-                }
-            };
+        |entry| {
             let path = entry.path.as_path();
             if entry.kind == NamespaceEntryKind::Directory {
                 dirs += 1;
@@ -1470,7 +1329,7 @@ fn scan_game_dir_facts_only_restartable(
             files,
             candidates: 0,
             elapsed_us: target_t.elapsed().as_micros() as u64,
-            aborted,
+            aborted: false,
             namespace: namespace_stats,
         },
         GameDirFact {
