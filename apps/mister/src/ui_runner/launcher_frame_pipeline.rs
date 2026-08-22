@@ -312,14 +312,14 @@ mod tests {
             .find("ifroute_input_early&&input_pending_before_route{")
             .expect("early input selector guard");
         let early_call = source[early_guard..]
-            .find("run_launcher_input_phase!()")
+            .find("run_launcher_input_phase!(")
             .map(|offset| early_guard + offset)
             .expect("early input phase invocation");
         let maintenance = source
             .find("record_launcher_frame_phase!(LauncherFramePhase::PreInputMaintenance)")
             .expect("pre-input maintenance boundary");
         let fallback = source[maintenance..]
-            .find("run_launcher_input_phase!()")
+            .find("run_launcher_input_phase!(")
             .map(|offset| maintenance + offset)
             .expect("current input phase fallback");
 

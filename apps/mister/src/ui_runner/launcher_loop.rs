@@ -5935,7 +5935,17 @@ pub(super) fn run_launcher_loop(
         }};
     }
     macro_rules! run_launcher_input_phase {
-        () => {{
+        (
+            $launcher:lifetime,
+            $scheduler_phase:ident,
+            $loop_start:ident,
+            $route_input_early:ident,
+            $pad_changed_for_input:ident,
+            $setup_active:ident,
+            $effective_view:ident,
+            $full_bridge_dirty:ident,
+            $light_bridge_dirty:ident
+        ) => {{
 'input_phase: {
             // Drain immediately before routing so catalog, timer, lifecycle,
             // and bridge housekeeping cannot sit between capture and dispatch.
@@ -5956,12 +5966,12 @@ pub(super) fn run_launcher_loop(
             {
                 std::thread::sleep(Duration::from_millis(stall_ms));
             }
-            let pad_changed = pad_changed_for_input
+            let pad_changed = $pad_changed_for_input
                 .take()
-                .unwrap_or_else(|| pad.poll_with_debug_labels(setup_active));
+                .unwrap_or_else(|| pad.poll_with_debug_labels($setup_active));
             let frame_now = Instant::now();
             let mut current_input_events = VecDeque::new();
-            let incoming_input_events = if route_input_early {
+            let incoming_input_events = if $route_input_early {
                 reusable_early_input_events.clear();
                 &mut reusable_early_input_events
             } else {
@@ -5987,7 +5997,7 @@ pub(super) fn run_launcher_loop(
             if input_batch_healthy {
                 incoming_input_events.extend(launcher_automation.poll_events(
                     &physical_for_automation,
-                    effective_view.accepts_application_input() && lifecycle.startup_input_enabled(),
+                    $effective_view.accepts_application_input() && lifecycle.startup_input_enabled(),
                     setup.is_active(),
                     frame_now,
                 ));
@@ -6050,7 +6060,7 @@ pub(super) fn run_launcher_loop(
             frame_accounting.set_automation_action_sequence(launcher_automation.action_sequence());
 
             let application_input_enabled =
-                effective_view.accepts_application_input() && lifecycle.startup_input_enabled();
+                $effective_view.accepts_application_input() && lifecycle.startup_input_enabled();
             if !application_input_enabled {
                 let disabled = launcher_input_focus(false, false, false, false, false, false, &nav);
                 input_router.set_focus(disabled);
@@ -6073,7 +6083,7 @@ pub(super) fn run_launcher_loop(
                     "Controller disconnected. Press a button after reconnecting to restart setup."
                         .into(),
                 );
-                    full_bridge_dirty = true;
+                    $full_bridge_dirty = true;
                 }
 
                 let raw_screensaver_input_activity =
@@ -6177,7 +6187,7 @@ pub(super) fn run_launcher_loop(
                         let Some(setup_info) = pad.info_for_device(&target_device).cloned() else {
                             setup.cancel_disconnected();
                             setup_disconnect_notice = true;
-                            full_bridge_dirty = true;
+                            $full_bridge_dirty = true;
                             continue;
                         };
                         let setup_action = routed_event_this_loop
@@ -6213,7 +6223,7 @@ pub(super) fn run_launcher_loop(
                             }
                         }
                         let setup_after = SetupBridgeKey::from_setup(&setup);
-                        full_bridge_dirty |= pad_changed || setup_before != setup_after;
+                        $full_bridge_dirty |= pad_changed || setup_before != setup_after;
                     } else if launcher_bench_scenario.is_none()
                         || launcher_bench_launch_handoff
                         || (launcher_bench_after_input_script && !launcher_bench_active)
@@ -6224,7 +6234,7 @@ pub(super) fn run_launcher_loop(
                             if setup.is_active() {
                                 setup_disconnect_notice = false;
                             }
-                            full_bridge_dirty |= setup_before != SetupBridgeKey::from_setup(&setup);
+                            $full_bridge_dirty |= setup_before != SetupBridgeKey::from_setup(&setup);
                         }
                         if !setup.is_active() {
                             let nav_before = LauncherBridgeKey::from_nav(&nav);
@@ -6271,7 +6281,7 @@ pub(super) fn run_launcher_loop(
                                     &mut layout_epoch,
                                     &mut navigation_transition,
                                 );
-                                full_bridge_dirty = true;
+                                $full_bridge_dirty = true;
                                 request_launcher_redraw!();
                             }
                             let lifecycle_view = lifecycle.view();
@@ -6326,7 +6336,7 @@ pub(super) fn run_launcher_loop(
                                         &mut scheduler,
                                         start,
                                     );
-                                    full_bridge_dirty = true;
+                                    $full_bridge_dirty = true;
                                 }
                                 None
                             } else if scheduler.should_request_benchmark_launch()
@@ -6454,7 +6464,7 @@ pub(super) fn run_launcher_loop(
                                             committed: true,
                                             status_quiesce_started_at: None,
                                         });
-                                    full_bridge_dirty = true;
+                                    $full_bridge_dirty = true;
                                     request_launcher_redraw!();
                                 } else if started {
                                     navigation_transition.settle_at_destination();
@@ -6492,7 +6502,7 @@ pub(super) fn run_launcher_loop(
                                                 &lifecycle,
                                                 start,
                                             );
-                                            full_bridge_dirty |= entry.bridge_dirty;
+                                            $full_bridge_dirty |= entry.bridge_dirty;
                                             if entry.pending.is_some() {
                                                 pending_collection_entry = entry.pending;
                                             }
@@ -6641,7 +6651,7 @@ pub(super) fn run_launcher_loop(
                                                     committed: false,
                                                     status_quiesce_started_at: None,
                                                 });
-                                            full_bridge_dirty = true;
+                                            $full_bridge_dirty = true;
                                             request_launcher_redraw!();
                                         } else if navigation_runtime_started {
                                             navigation_transition.settle_at_destination();
@@ -6670,7 +6680,7 @@ pub(super) fn run_launcher_loop(
                                                         ),
                                                     );
                                                 }
-                                                full_bridge_dirty = true;
+                                                $full_bridge_dirty = true;
                                                 request_launcher_redraw!();
                                             }
                                         }
@@ -6732,15 +6742,15 @@ pub(super) fn run_launcher_loop(
                                             &mut scheduler,
                                             &mut lifecycle,
                                             &mut lifecycle_effects,
-                                            &mut full_bridge_dirty,
+                                            &mut $full_bridge_dirty,
                                             &mut startup_intro_catalog_ui_replay,
                                             &mut startup_intro_catalog_shells_pending,
                                             false,
-                                            loop_start,
+                                            $loop_start,
                                             start,
                                         );
                                         request_launcher_redraw!();
-                                        continue 'launcher;
+                                        continue $launcher;
                                     }
                                     LauncherAction::Restart => {
                                         loading_title = "Shutting down…".to_string();
@@ -6773,7 +6783,7 @@ pub(super) fn run_launcher_loop(
                                         );
                                         std::thread::sleep(Duration::from_millis(250));
                                         match launcher::reboot_mister() {
-                                            Ok(()) => continue 'launcher,
+                                            Ok(()) => continue $launcher,
                                             Err(e) => {
                                                 crate::ui_errln!("restart failed: {e}");
                                                 loading_title.clear();
@@ -6799,15 +6809,15 @@ pub(super) fn run_launcher_loop(
                                             &mut scheduler,
                                             &mut lifecycle,
                                             &mut lifecycle_effects,
-                                            &mut full_bridge_dirty,
+                                            &mut $full_bridge_dirty,
                                             &mut startup_intro_catalog_ui_replay,
                                             &mut startup_intro_catalog_shells_pending,
                                             false,
-                                            loop_start,
+                                            $loop_start,
                                             start,
                                         );
                                         request_launcher_redraw!();
-                                        continue 'launcher;
+                                        continue $launcher;
                                     }
                                     LauncherAction::RebuildLibrary => {
                                         let effects =
@@ -6829,15 +6839,15 @@ pub(super) fn run_launcher_loop(
                                             &mut scheduler,
                                             &mut lifecycle,
                                             &mut lifecycle_effects,
-                                            &mut full_bridge_dirty,
+                                            &mut $full_bridge_dirty,
                                             &mut startup_intro_catalog_ui_replay,
                                             &mut startup_intro_catalog_shells_pending,
                                             false,
-                                            loop_start,
+                                            $loop_start,
                                             start,
                                         );
                                         request_launcher_redraw!();
-                                        continue 'launcher;
+                                        continue $launcher;
                                     }
                                     LauncherAction::ApplyDisplayResolution => {
                                         if let Some(id) = event.path.as_deref() {
@@ -6924,7 +6934,7 @@ pub(super) fn run_launcher_loop(
                                                 );
                                             }
                                             orientation_full_redraw_pending = true;
-                                            full_bridge_dirty = true;
+                                            $full_bridge_dirty = true;
                                         }
                                     }
                                     LauncherAction::ConfirmScreenOrientation => {
@@ -6978,7 +6988,7 @@ pub(super) fn run_launcher_loop(
                                         nav.orientation_confirm_busy = false;
                                         nav.orientation_error = None;
                                         orientation_full_redraw_pending = true;
-                                        full_bridge_dirty = true;
+                                        $full_bridge_dirty = true;
                                     }
                                     LauncherAction::PreviewScreensaver => {
                                         if !screensaver.preview_active {
@@ -6992,7 +7002,7 @@ pub(super) fn run_launcher_loop(
                                             );
                                         }
                                         request_launcher_redraw!();
-                                        continue 'launcher;
+                                        continue $launcher;
                                     }
                                     LauncherAction::PersistSettings => {
                                         if let Some(settings) = event.settings.as_ref() {
@@ -7027,7 +7037,7 @@ pub(super) fn run_launcher_loop(
                                                 })
                                                 .unwrap_or(0);
                                             user_state_session.set_favourite(game, favourite, now);
-                                            full_bridge_dirty = true;
+                                            $full_bridge_dirty = true;
                                             request_launcher_redraw!();
                                         }
                                     }
@@ -7144,9 +7154,9 @@ pub(super) fn run_launcher_loop(
                                 );
                             }
                             if pad_changed && nav.screen == Screen::Controller {
-                                full_bridge_dirty = true;
+                                $full_bridge_dirty = true;
                             } else if pad_changed && !dirty_opt {
-                                full_bridge_dirty = true;
+                                $full_bridge_dirty = true;
                             }
                             if nav_before != nav_after {
                                 if nav_before.screen == Screen::Home
@@ -7176,9 +7186,9 @@ pub(super) fn run_launcher_loop(
                                     || nav_before.screen != nav_after.screen
                                     || nav_before.menu_id != nav_after.menu_id
                                 {
-                                    full_bridge_dirty = true;
+                                    $full_bridge_dirty = true;
                                 } else {
-                                    light_bridge_dirty = true;
+                                    $light_bridge_dirty = true;
                                 }
                             }
                         }
@@ -7193,7 +7203,7 @@ pub(super) fn run_launcher_loop(
                             selection_feedback_after.as_ref(),
                         );
                     if feedback_surface_changed || feedback_registered {
-                        full_bridge_dirty = true;
+                        $full_bridge_dirty = true;
                         request_launcher_redraw!();
                     }
                     if final_input_tick {
@@ -7238,8 +7248,8 @@ pub(super) fn run_launcher_loop(
             launcher_response_trace.record_lab(input_latency_lab.arm_if_computers_ready(&nav));
             drop(input_route_pmu);
             record_launcher_frame_phase!(LauncherFramePhase::InputRouted);
-            scheduler_phase =
-                launcher_response_trace.record_scheduler_interval("input-route", scheduler_phase);
+            $scheduler_phase =
+                launcher_response_trace.record_scheduler_interval("input-route", $scheduler_phase);
             (false, input_batch_empty)
         }
         }};
@@ -7315,7 +7325,17 @@ pub(super) fn run_launcher_loop(
             } else {
                 None
             };
-            let result = run_launcher_input_phase!();
+            let result = run_launcher_input_phase!(
+                'launcher,
+                scheduler_phase,
+                loop_start,
+                route_input_early,
+                pad_changed_for_input,
+                setup_active,
+                effective_view,
+                full_bridge_dirty,
+                light_bridge_dirty
+            );
             if result.0 {
                 continue;
             }
@@ -8564,7 +8584,17 @@ pub(super) fn run_launcher_loop(
             if let Some(result) = early_input_phase_result.take() {
                 result
             } else {
-                run_launcher_input_phase!()
+                run_launcher_input_phase!(
+                    'launcher,
+                    scheduler_phase,
+                    loop_start,
+                    route_input_early,
+                    pad_changed_for_input,
+                    setup_active,
+                    effective_view,
+                    full_bridge_dirty,
+                    light_bridge_dirty
+                )
             };
         if input_phase_yielded {
             continue;
