@@ -1,6 +1,6 @@
 {
   "schema": "mister-magik-launcher-visual-baseline-v1",
-  "source_commit": "ec67c135aea4aa51feb5ae9712a88a2b48acc9b5",
+  "source_commit": "9f030ee3ad0b8b649892d6367f341c9be4ce8dcb",
   "scene_manifest_sha256": "d53a60a81a87d0bbe7d895028837dc379075d878e98b10b9bb188e4ebe86e896",
   "review": {
     "owner": "Codex (visual review delegated by Nigel Breslaw)",
@@ -22,8 +22,8 @@
   "scenes": [
     {
       "id": "crt-240p-arcade",
-      "rgb565_hash": "7b49f9a9d81968f4",
-      "provenance_sha256": "393cc148f6da7e33817d901dc4200380d8aa94ba945965120f332c5c8c5cab12",
+      "rgb565_hash": "27f82ac8a3620ed8",
+      "provenance_sha256": "b5ec1acd708621530831ba061ecef7f76e375ff7897db2287f67e2f6efc7d013",
       "scenario": "arcade",
       "frame": 0,
       "fixed_time_us": 16666,
@@ -88,8 +88,8 @@
     },
     {
       "id": "crt-arcade",
-      "rgb565_hash": "be0f5aa86d015d9b",
-      "provenance_sha256": "f7c1bf6c2cf7d70da3bb1a2afc8b346a528a4517ef0ae62321e37f9cf1063937",
+      "rgb565_hash": "1d7d5436cd655704",
+      "provenance_sha256": "5a897aa7e605012d361b00c0faf47f7c53816bd6caa8b1baa160e6a3bd0744b8",
       "scenario": "arcade",
       "frame": 0,
       "fixed_time_us": 16666,
