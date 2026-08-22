@@ -311,7 +311,6 @@ impl CounterValues {
         self.0.get(&event).copied()
     }
 
-    #[must_use]
     pub fn iter(&self) -> impl Iterator<Item = (HardwareEvent, u64)> + '_ {
         self.0.iter().map(|(event, value)| (*event, *value))
     }
@@ -607,12 +606,7 @@ impl ThreadCollector {
         )
     }
 
-    fn new(
-        enabled: bool,
-        counter_set: CounterSet,
-        sample_every: u64,
-        record_limit: usize,
-    ) -> Self {
+    fn new(enabled: bool, counter_set: CounterSet, sample_every: u64, record_limit: usize) -> Self {
         Self {
             enabled,
             counter_set,
@@ -846,8 +840,7 @@ impl CounterGroup {
         let _ = counter_set;
         #[cfg(target_os = "linux")]
         {
-            let (inner, diagnostics) =
-                linux::LinuxCounterGroup::open_with_diagnostics(counter_set);
+            let (inner, diagnostics) = linux::LinuxCounterGroup::open_with_diagnostics(counter_set);
             (inner.map(|inner| Self { inner }), diagnostics)
         }
         #[cfg(not(target_os = "linux"))]
@@ -930,9 +923,9 @@ fn decode_group_read(
     }
     let mut counters = CounterValues::default();
     let mut seen = BTreeMap::new();
-    for pair in words[3..].chunks_exact(2) {
-        let value = pair[0];
-        let id = pair[1];
+    let (pairs, remainder) = words[3..].as_chunks::<2>();
+    debug_assert!(remainder.is_empty());
+    for &[value, id] in pairs {
         let event = event_ids
             .get(&id)
             .copied()
@@ -1505,7 +1498,10 @@ mod tests {
         assert_eq!(snapshot.counters.get(HardwareEvent::L1dAccesses), Some(30));
         assert_eq!(snapshot.counters.get(HardwareEvent::L1dRefills), Some(4));
         assert_eq!(snapshot.counters.get(HardwareEvent::Branches), Some(20));
-        assert_eq!(snapshot.counters.get(HardwareEvent::BranchMispredicts), Some(3));
+        assert_eq!(
+            snapshot.counters.get(HardwareEvent::BranchMispredicts),
+            Some(3)
+        );
     }
 
     #[test]
@@ -1527,7 +1523,10 @@ mod tests {
         assert_eq!(snapshot.counters.get(HardwareEvent::L1dAccesses), Some(30));
         assert_eq!(snapshot.counters.get(HardwareEvent::L1dRefills), Some(4));
         assert_eq!(snapshot.counters.get(HardwareEvent::Branches), Some(20));
-        assert_eq!(snapshot.counters.get(HardwareEvent::BranchMispredicts), Some(3));
+        assert_eq!(
+            snapshot.counters.get(HardwareEvent::BranchMispredicts),
+            Some(3)
+        );
         assert!(decode_ordered_group_read(&[5, 1, 2, 3, 4, 5], CounterSet::General).is_err());
     }
 
@@ -1628,7 +1627,12 @@ mod tests {
         };
         let value = serde_json::to_value(span).unwrap();
         assert_eq!(value["name"], "outer");
-        assert!(value["counters"]["counters"].as_object().unwrap().is_empty());
+        assert!(
+            value["counters"]["counters"]
+                .as_object()
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
@@ -1753,8 +1757,7 @@ mod tests {
         let workers = ["walker", "publisher"].map(|label| {
             std::thread::spawn(move || {
                 THREAD_COLLECTOR.with(|collector| {
-                    *collector.borrow_mut() =
-                        ThreadCollector::new(true, CounterSet::General, 1, 1);
+                    *collector.borrow_mut() = ThreadCollector::new(true, CounterSet::General, 1, 1);
                 });
                 submit_thread_profile(label);
             })

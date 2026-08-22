@@ -2481,7 +2481,7 @@ scope = "instrumentation"
 conflicts = []
 sensitivity = "public"
 aliases = []
-documentation = { summary = "Selects the grouped PMU event set", accepted_values = ["general", "cortex-a9-neon"], value_policy = "reject unknown values to the general default" }
+documentation = { summary = "Selects the grouped PMU event set; unknown values use the general default", accepted_values = ["general", "cortex-a9-neon"], value_policy = "document" }
 
 [[control]]
 name = "MISTER_PMU_PROFILE"
