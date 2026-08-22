@@ -95,3 +95,9 @@ unrelated benchmark-runner issue:
 
 - `build/agent-benchmarks/navigation-transitions/1787399468/`
 - `build/agent-benchmarks/navigation-transitions/1787399534/`
+
+A focused diagnostic keepalive recovery was delivered and tested at revision
+`42f4b2309869a6a552c8e93745bb16689aafaefc`. It also timed out, proving the
+profiler never reached the warming/active state where a keepalive could apply.
+The recovery was therefore reverted. The dominant unresolved phase is earlier:
+the scripted route does not arm the bounded navigation profiler.
