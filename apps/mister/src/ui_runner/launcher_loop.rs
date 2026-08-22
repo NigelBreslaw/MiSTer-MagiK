@@ -1038,6 +1038,34 @@ fn sync_navigation_transition_active(
     if bridge.get_navigation_transition_active() != active {
         bridge.set_navigation_transition_active(active);
     }
+    let navigation = app.global::<slint_ui::launcher::NavigationView>();
+    let state = crate::launcher_view_types::navigation_transition_state(active);
+    if navigation.get_transition_state() != state {
+        navigation.set_transition_state(state);
+    }
+}
+
+fn set_launcher_clock_text(app: &slint_ui::launcher::Launcher, value: &str) {
+    let value = slint::SharedString::from(value);
+    app.global::<slint_ui::launcher::MisterBridge>()
+        .set_clock_text(value.clone());
+    app.global::<slint_ui::launcher::NavigationView>()
+        .set_clock_text(value);
+}
+
+fn set_launcher_update_available(app: &slint_ui::launcher::Launcher, available: bool) {
+    app.global::<slint_ui::launcher::MisterBridge>()
+        .set_update_available(available);
+    app.global::<slint_ui::launcher::NavigationView>()
+        .set_update_available(available);
+}
+
+fn set_launcher_present_mode_label(app: &slint_ui::launcher::Launcher, value: &str) {
+    let value = slint::SharedString::from(value);
+    app.global::<slint_ui::launcher::MisterBridge>()
+        .set_present_mode_label(value.clone());
+    app.global::<slint_ui::launcher::NavigationView>()
+        .set_present_mode_label(value);
 }
 
 fn begin_navigation_full_screen_transition(
@@ -5778,12 +5806,20 @@ pub(super) fn run_launcher_loop(
     let mut arcade_screen_pending = (start_screen == Screen::Arcade
         || lock_screen == Some(Screen::Arcade))
         && !arcade_navigation_ready(catalog_ready, &catalog);
-    bridge.set_menu_title(nav.current_menu_title().into());
-    bridge.set_menu_breadcrumb(nav.current_menu_breadcrumb().into());
-    bridge.set_update_available(false);
+    let navigation = app.global::<slint_ui::launcher::NavigationView>();
+    let menu_title = slint::SharedString::from(nav.current_menu_title());
+    let menu_breadcrumb = slint::SharedString::from(nav.current_menu_breadcrumb());
+    bridge.set_menu_title(menu_title.clone());
+    navigation.set_menu_title(menu_title);
+    bridge.set_menu_breadcrumb(menu_breadcrumb.clone());
+    navigation.set_menu_breadcrumb(menu_breadcrumb);
+    set_launcher_update_available(&app, false);
     let menu_items = bridge_models.menu_items(&nav, catalog_version);
-    bridge.set_menu_item_presentation(bridge_models.menu_item_presentation());
-    bridge.set_menu_items(menu_items);
+    let menu_item_presentation = bridge_models.menu_item_presentation();
+    bridge.set_menu_item_presentation(menu_item_presentation.clone());
+    navigation.set_menu_item_presentation(menu_item_presentation);
+    bridge.set_menu_items(menu_items.clone());
+    navigation.set_menu_items(menu_items);
     let mut update_check = UpdateCheck::start(should_check_for_updates(
         launcher_bench_scenario.is_some(),
         bridge.get_dev_mode(),
@@ -6540,15 +6576,13 @@ pub(super) fn run_launcher_loop(
             } else if dirty_opt {
                 let clock_text = launcher_clock_text();
                 if clock_text != last_clock_text {
-                    let bridge = app.global::<slint_ui::launcher::MisterBridge>();
-                    bridge.set_clock_text(clock_text.clone().into());
+                    set_launcher_clock_text(&app, &clock_text);
                     last_clock_text = clock_text;
                     light_bridge_dirty = true;
                 }
             } else {
                 let clock_text = launcher_clock_text();
-                let bridge = app.global::<slint_ui::launcher::MisterBridge>();
-                bridge.set_clock_text(clock_text.clone().into());
+                set_launcher_clock_text(&app, &clock_text);
                 last_clock_text = clock_text;
                 full_bridge_dirty = true;
             }
@@ -6559,8 +6593,7 @@ pub(super) fn run_launcher_loop(
             .unwrap_or(0);
         if background_work_allowed && let Some(available) = update_check.try_recv() {
             if available {
-                let bridge = app.global::<slint_ui::launcher::MisterBridge>();
-                bridge.set_update_available(true);
+                set_launcher_update_available(&app, true);
                 light_bridge_dirty = true;
                 runtime_status::event("update_available", "source=downloader_mister_magik");
             }
@@ -8695,7 +8728,7 @@ pub(super) fn run_launcher_loop(
                 let bridge = app.global::<slint_ui::launcher::MisterBridge>();
                 LauncherStatusPresenter::new(&bridge).clear_catalog_scan();
                 let clock_text = launcher_clock_text();
-                bridge.set_clock_text(clock_text.clone().into());
+                set_launcher_clock_text(&app, &clock_text);
                 last_clock_text = clock_text;
                 last_clock_update = Instant::now();
                 window.request_redraw();
@@ -11250,14 +11283,13 @@ pub(super) fn run_launcher_loop(
         if let Some(failure) = launcher_presenter.latch_failure() {
             frame_accounting.record_latch_failure(failure);
         }
-        app.global::<slint_ui::launcher::MisterBridge>()
-            .set_present_mode_label(
-                present_mode_label_for_backend_status(
-                    presentation.main_present_backend,
-                    presentation.main_present_status,
-                )
-                .into(),
-            );
+        set_launcher_present_mode_label(
+            &app,
+            present_mode_label_for_backend_status(
+                presentation.main_present_backend,
+                presentation.main_present_status,
+            ),
+        );
         let post_present_wait_us = if presentation.main_present_backend.is_latch() {
             presentation.vsync_us_override.unwrap_or(0)
         } else {

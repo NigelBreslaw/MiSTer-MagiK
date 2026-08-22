@@ -27,6 +27,42 @@ pub const fn launcher_screen(value: Screen) -> view::LauncherScreen {
     }
 }
 
+pub const fn system_hub_section(index: usize) -> view::SystemHubSection {
+    match index {
+        0 => view::SystemHubSection::Games,
+        1 => view::SystemHubSection::Recent,
+        2 => view::SystemHubSection::Favourites,
+        3 => view::SystemHubSection::Information,
+        _ => panic!("system hub selection is outside its finite domain"),
+    }
+}
+
+pub const fn home_focus(settings_focused: bool) -> view::HomeFocus {
+    if settings_focused {
+        view::HomeFocus::Settings
+    } else {
+        view::HomeFocus::Menu
+    }
+}
+
+pub const fn home_scroll_phase(held: bool, repeating: bool) -> view::HomeScrollPhase {
+    if repeating {
+        view::HomeScrollPhase::Repeating
+    } else if held {
+        view::HomeScrollPhase::Held
+    } else {
+        view::HomeScrollPhase::Idle
+    }
+}
+
+pub const fn navigation_transition_state(active: bool) -> view::NavigationTransitionState {
+    if active {
+        view::NavigationTransitionState::Active
+    } else {
+        view::NavigationTransitionState::Idle
+    }
+}
+
 pub const fn screen_orientation(value: DomainScreenOrientation) -> view::ScreenOrientation {
     match value {
         DomainScreenOrientation::Normal => view::ScreenOrientation::Normal,
@@ -111,6 +147,7 @@ mod tests {
             launcher_screen(Screen::SystemHub),
             view::LauncherScreen::SystemHub
         );
+        assert_eq!(system_hub_section(3), view::SystemHubSection::Information);
         assert_eq!(
             setup_phase(DomainSetupPhase::NameKind),
             view::SetupPhase::NameKind

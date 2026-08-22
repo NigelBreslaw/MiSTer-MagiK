@@ -63,21 +63,29 @@ pub(super) fn open_pads() -> PadPool {
 
 pub(super) fn init_launcher_bridge(app: &slint_ui::launcher::Launcher, pad: &PadPool) {
     let bridge = app.global::<slint_ui::launcher::MisterBridge>();
+    let navigation = app.global::<slint_ui::launcher::NavigationView>();
     bridge.set_startup_visible(true);
     bridge.set_screen_mode(0);
+    navigation.set_screen(slint_ui::launcher::LauncherScreen::Home);
     bridge.set_system_hub_selected(0);
     bridge.set_system_hub_games_count(0);
     bridge.set_system_hub_recent_count(0);
     bridge.set_system_hub_favourites_count(0);
     if let Some(image) = load_snes_artwork_image() {
-        bridge.set_snes_artwork(image);
+        bridge.set_snes_artwork(image.clone());
         bridge.set_snes_artwork_visible(true);
+        navigation.set_system_artwork(image);
+        navigation.set_system_artwork_available(true);
     } else {
         bridge.set_snes_artwork_visible(false);
+        navigation.set_system_artwork_available(false);
     }
     bridge.set_effective_view("home".into());
-    bridge.set_build_label(build_label().into());
+    let build_label = SharedString::from(build_label());
+    bridge.set_build_label(build_label.clone());
+    navigation.set_build_label(build_label);
     bridge.set_present_mode_label("Mode=/dev/fb0".into());
+    navigation.set_present_mode_label("Mode=/dev/fb0".into());
     bridge.set_info_kernel_version(kernel_version().into());
     bridge.set_info_database_build(last_database_build().into());
     bridge.set_selected_index(0);
@@ -109,16 +117,18 @@ pub(super) fn init_launcher_bridge(app: &slint_ui::launcher::Launcher, pad: &Pad
     bridge.set_confirm_selected(0);
     bridge.set_menu_title("MiSTer MagiK".into());
     bridge.set_menu_breadcrumb("".into());
-    bridge.set_dev_mode(
-        mister_magik_catalog::device_layout::DeviceLayout::current()
-            == mister_magik_catalog::device_layout::DeviceLayout::Dev,
-    );
-    bridge.set_menu_items(ModelRc::new(VecModel::from(Vec::<
-        slint_ui::launcher::MenuItem,
-    >::new())));
-    bridge.set_menu_item_presentation(ModelRc::new(VecModel::from(Vec::<
+    let development_build = mister_magik_catalog::device_layout::DeviceLayout::current()
+        == mister_magik_catalog::device_layout::DeviceLayout::Dev;
+    bridge.set_dev_mode(development_build);
+    navigation.set_development_build(development_build);
+    let menu_items = ModelRc::new(VecModel::from(Vec::<slint_ui::launcher::MenuItem>::new()));
+    let menu_item_presentation = ModelRc::new(VecModel::from(Vec::<
         slint_ui::launcher::MenuItemPresentation,
-    >::new())));
+    >::new()));
+    bridge.set_menu_items(menu_items.clone());
+    navigation.set_menu_items(menu_items);
+    bridge.set_menu_item_presentation(menu_item_presentation.clone());
+    navigation.set_menu_item_presentation(menu_item_presentation);
     bridge.set_home_scroll_repeat_active(false);
     bridge.set_home_scroll_held(false);
     bridge.set_home_scroll_x(0);
@@ -873,7 +883,10 @@ pub(super) fn sync_bridge_launcher(
         .unwrap_or(0);
     bridge.set_startup_visible(false);
     sync_bridge_pad_launcher(&bridge, pad);
-    bridge.set_clock_text(launcher_clock_text().into());
+    let clock_text = SharedString::from(launcher_clock_text());
+    bridge.set_clock_text(clock_text.clone());
+    app.global::<slint_ui::launcher::NavigationView>()
+        .set_clock_text(clock_text);
     bridge.set_system_hub_selected(nav.system_hub_selected as i32);
     let active_label = mister_magik_mister_runtime::display_resolution::DISPLAY_RESOLUTIONS
         .get(nav.display_selected)

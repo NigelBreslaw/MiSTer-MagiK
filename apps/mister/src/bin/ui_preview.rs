@@ -77,8 +77,10 @@ mod macos {
     use mister_magik_fb::visual_platform::{MisterPlatform, MisterSoftwareWindow};
     use mister_magik_framebuffer_scenes::Rgb565SurfaceMut;
     use mister_magik_ui::launcher::{
-        ArcadeGame, Launcher, MenuItem, MenuItemKind, MenuItemPresentation, MenuItemStatus,
-        MisterBridge, MisterUi, ScreenshotPackProgress,
+        ArcadeGame, FeedbackView, HomeFocus, HomeScrollPhase, Launcher, LauncherScreen, MenuItem,
+        MenuItemKind, MenuItemPresentation, MenuItemStatus, MisterBridge, MisterUi,
+        NavigationTransitionState as ViewNavigationTransitionState, NavigationView,
+        ScreenshotPackProgress, SystemHubSection,
     };
     use sha2::{Digest, Sha256};
     use slint::platform::software_renderer::{RepaintBufferType, Rgb565Pixel};
@@ -174,7 +176,7 @@ mod macos {
         let ui = launcher.global::<MisterUi>();
         configure_display_profile(&ui, options.display_profile, options.orientation);
         let bridge = launcher.global::<MisterBridge>();
-        initialize_bridge(&bridge, options.display_profile);
+        initialize_bridge(&launcher, options.display_profile);
         launcher.show()?;
         slint_window.request_redraw();
 
@@ -573,14 +575,18 @@ mod macos {
                 &Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/snes/snes-small-v1.rgb565a"),
             ) {
                 let pixels = artwork.rgba8_bytes();
-                bridge.set_snes_artwork(slint::Image::from_rgba8(slint::SharedPixelBuffer::<
-                    slint::Rgba8Pixel,
-                >::clone_from_slice(
-                    &pixels,
-                    artwork.width as u32,
-                    artwork.height as u32,
-                )));
+                let image = slint::Image::from_rgba8(
+                    slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
+                        &pixels,
+                        artwork.width as u32,
+                        artwork.height as u32,
+                    ),
+                );
+                bridge.set_snes_artwork(image.clone());
                 bridge.set_snes_artwork_visible(true);
+                let navigation = launcher.global::<NavigationView>();
+                navigation.set_system_artwork(image);
+                navigation.set_system_artwork_available(true);
             }
             bridge.set_orientation_active_label(orientation.label().into());
             bridge.set_orientation_selected(launcher_nav.orientation_selected as i32);
@@ -615,9 +621,14 @@ mod macos {
             let card_connected = content
                 .card()
                 .is_none_or(|layout| layout.card_root.is_dir());
+            let build_label =
+                SharedString::from(format!("Mac visual preview · {}", content.label()));
             launcher
                 .global::<MisterBridge>()
-                .set_build_label(format!("Mac visual preview · {}", content.label()).into());
+                .set_build_label(build_label.clone());
+            launcher
+                .global::<NavigationView>()
+                .set_build_label(build_label);
             let navigation_motion_enabled =
                 force_navigation_motion || !launcher_nav.settings.reduce_motion;
             let mut application = Self {
@@ -870,9 +881,25 @@ mod macos {
 
         fn update_selection(&self) {
             let bridge = self.launcher.global::<MisterBridge>();
+            let navigation = self.launcher.global::<NavigationView>();
             bridge.set_selected_index(self.selection as i32);
             bridge.set_system_hub_selected(self.selection as i32);
             bridge.set_settings_focused(self.settings_focused);
+            navigation.set_home_selected_index(self.selection as i32);
+            navigation.set_home_focus(if self.settings_focused {
+                HomeFocus::Settings
+            } else {
+                HomeFocus::Menu
+            });
+            if self.scenario == Scenario::SystemHub {
+                navigation.set_system_hub_section(match self.selection {
+                    0 => SystemHubSection::Games,
+                    1 => SystemHubSection::Recent,
+                    2 => SystemHubSection::Favourites,
+                    3 => SystemHubSection::Information,
+                    _ => unreachable!("system hub selection is bounded to four cards"),
+                });
+            }
             bridge.set_settings_selected(self.selection as i32);
             bridge.set_about_selected(self.selection as i32);
             bridge.set_licenses_selected(self.selection as i32);
@@ -1402,6 +1429,13 @@ mod macos {
             if bridge.get_navigation_transition_active() != active {
                 bridge.set_navigation_transition_active(active);
             }
+            self.launcher
+                .global::<NavigationView>()
+                .set_transition_state(if active {
+                    ViewNavigationTransitionState::Active
+                } else {
+                    ViewNavigationTransitionState::Idle
+                });
         }
 
         fn compose_navigation_transition(&mut self) {
@@ -3871,10 +3905,15 @@ mod macos {
         composition
     }
 
-    fn initialize_bridge(bridge: &MisterBridge, display_profile: DisplayProfile) {
+    fn initialize_bridge(launcher: &Launcher, display_profile: DisplayProfile) {
+        let bridge = launcher.global::<MisterBridge>();
+        let navigation = launcher.global::<NavigationView>();
         bridge.set_clock_text("12:34".into());
         bridge.set_build_label("Mac visual preview".into());
         bridge.set_present_mode_label("RGB565 host composition".into());
+        navigation.set_clock_text("12:34".into());
+        navigation.set_build_label("Mac visual preview".into());
+        navigation.set_present_mode_label("RGB565 host composition".into());
         bridge.set_capture_available(true);
         bridge.set_device_label("Controller 1".into());
         bridge.set_device_name("Fixture Gamepad".into());
@@ -3922,6 +3961,7 @@ mod macos {
 
     fn apply_scenario(launcher: &Launcher, scenario: Scenario) {
         let bridge = launcher.global::<MisterBridge>();
+        let navigation = launcher.global::<NavigationView>();
         reset_transient_bridge(&bridge);
         bridge.set_screen_mode(match scenario {
             Scenario::Controller | Scenario::ControllerSetup => 1,
@@ -3933,6 +3973,19 @@ mod macos {
             Scenario::Info => 6,
             Scenario::ScreensaverSettings => 7,
             _ => 0,
+        });
+        navigation.set_screen(match scenario {
+            Scenario::Controller | Scenario::ControllerSetup => LauncherScreen::Controller,
+            Scenario::SystemHub => LauncherScreen::SystemHub,
+            Scenario::Arcade | Scenario::ArcadeSearch | Scenario::ArcadeCrossfade => {
+                LauncherScreen::Arcade
+            }
+            Scenario::Settings | Scenario::OrientationChoice => LauncherScreen::Settings,
+            Scenario::About => LauncherScreen::About,
+            Scenario::Licenses => LauncherScreen::Licenses,
+            Scenario::Info => LauncherScreen::Info,
+            Scenario::ScreensaverSettings => LauncherScreen::ScreensaverSettings,
+            _ => LauncherScreen::Home,
         });
         bridge.set_effective_view(
             match scenario {
@@ -3952,13 +4005,24 @@ mod macos {
         bridge.set_menu_title("MiSTer MagiK".into());
         bridge.set_menu_breadcrumb("Systems".into());
         bridge.set_dev_mode(true);
+        navigation.set_menu_title("MiSTer MagiK".into());
+        navigation.set_menu_breadcrumb("Systems".into());
+        navigation.set_development_build(true);
         if !scenario.uses_launcher_navigation() {
             let menu_items = home_menu_items();
-            bridge.set_menu_item_presentation(home_menu_presentation(menu_items.row_count()));
-            bridge.set_menu_items(menu_items);
+            let presentation = home_menu_presentation(menu_items.row_count());
+            bridge.set_menu_item_presentation(presentation.clone());
+            navigation.set_menu_item_presentation(presentation);
+            bridge.set_menu_items(menu_items.clone());
+            navigation.set_menu_items(menu_items);
         }
         bridge.set_selected_index(0);
         bridge.set_settings_focused(false);
+        navigation.set_home_selected_index(0);
+        navigation.set_home_focus(HomeFocus::Menu);
+        navigation.set_home_scroll_phase(HomeScrollPhase::Idle);
+        navigation.set_home_scroll_x(0);
+        navigation.set_transition_state(ViewNavigationTransitionState::Idle);
         bridge.set_settings_selected(0);
         bridge.set_about_selected(0);
         bridge.set_licenses_selected(0);
@@ -3973,6 +4037,10 @@ mod macos {
         bridge.set_system_hub_games_count(1_482);
         bridge.set_system_hub_recent_count(12);
         bridge.set_system_hub_favourites_count(28);
+        navigation.set_system_hub_section(SystemHubSection::Games);
+        navigation.set_system_hub_games_count(1_482);
+        navigation.set_system_hub_recent_count(12);
+        navigation.set_system_hub_favourites_count(28);
 
         match scenario {
             Scenario::Startup => bridge.set_startup_visible(true),
@@ -4397,6 +4465,49 @@ mod macos {
             }
         }
 
+        fn assert_navigation_dual_projection(launcher: &Launcher) {
+            let bridge = launcher.global::<MisterBridge>();
+            let navigation = launcher.global::<NavigationView>();
+            let expected_screen = match bridge.get_screen_mode() {
+                0 => LauncherScreen::Home,
+                1 => LauncherScreen::Controller,
+                2 => LauncherScreen::Arcade,
+                3 => LauncherScreen::Settings,
+                4 => LauncherScreen::About,
+                5 => LauncherScreen::Licenses,
+                6 => LauncherScreen::Info,
+                7 => LauncherScreen::ScreensaverSettings,
+                8 => LauncherScreen::SystemHub,
+                value => panic!("unknown legacy screen mode {value}"),
+            };
+            assert_eq!(navigation.get_screen(), expected_screen);
+            assert_eq!(
+                navigation.get_home_selected_index(),
+                bridge.get_selected_index()
+            );
+            assert_eq!(
+                navigation.get_home_focus(),
+                if bridge.get_settings_focused() {
+                    HomeFocus::Settings
+                } else {
+                    HomeFocus::Menu
+                }
+            );
+            assert_eq!(navigation.get_home_scroll_x(), bridge.get_home_scroll_x());
+            assert_eq!(
+                navigation.get_menu_items().row_count(),
+                bridge.get_menu_items().row_count()
+            );
+            assert_eq!(
+                navigation.get_menu_item_presentation().row_count(),
+                bridge.get_menu_item_presentation().row_count()
+            );
+            assert_eq!(
+                launcher.global::<FeedbackView>().get_revision(),
+                bridge.get_selection_feedback_revision()
+            );
+        }
+
         fn manifest_scenario(scenario: SceneScenario) -> Scenario {
             match scenario {
                 SceneScenario::Home | SceneScenario::NavigationTransitionMidpoint => Scenario::Home,
@@ -4422,8 +4533,9 @@ mod macos {
 
             for scene in manifest.scenes {
                 let launcher = Launcher::new().expect("launcher");
-                initialize_bridge(&launcher.global::<MisterBridge>(), DisplayProfile::Hdmi);
+                initialize_bridge(&launcher, DisplayProfile::Hdmi);
                 apply_scenario(&launcher, manifest_scenario(scene.scenario));
+                assert_navigation_dual_projection(&launcher);
                 let snapshot = legacy_bridge_semantic_snapshot(&launcher);
                 if let Some(expected) = expected_by_scenario.get(&scene.scenario) {
                     assert_eq!(&snapshot, expected, "semantic drift in {}", scene.id);
@@ -4450,7 +4562,7 @@ mod macos {
 
             for (scenario, label) in cases {
                 let launcher = Launcher::new().expect("launcher");
-                initialize_bridge(&launcher.global::<MisterBridge>(), DisplayProfile::Hdmi);
+                initialize_bridge(&launcher, DisplayProfile::Hdmi);
                 apply_scenario(&launcher, scenario);
                 let snapshot = legacy_bridge_semantic_snapshot(&launcher);
                 assert!(
@@ -4476,10 +4588,12 @@ mod macos {
                 let production = Launcher::new().expect("production launcher fixture");
                 let mut presenter = LauncherBridgePresenter::default();
                 presenter.sync(&production, &nav, &fixtures.catalog, Some(1), false);
+                assert_navigation_dual_projection(&production);
 
                 let preview = Launcher::new().expect("preview launcher fixture");
-                initialize_bridge(&preview.global::<MisterBridge>(), DisplayProfile::Hdmi);
+                initialize_bridge(&preview, DisplayProfile::Hdmi);
                 apply_scenario(&preview, Scenario::from_screen(screen));
+                assert_navigation_dual_projection(&preview);
 
                 let production_snapshot = legacy_bridge_semantic_snapshot(&production);
                 let preview_snapshot = legacy_bridge_semantic_snapshot(&preview);

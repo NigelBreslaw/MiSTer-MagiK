@@ -11,8 +11,12 @@ use crate::launcher::{
     ArcadeSearchPane, ArcadeSearchStatus, CatalogMenuItemStatus, LauncherNav, Screen,
 };
 use crate::launcher_taxonomy::LauncherMenuItemKind;
+use crate::launcher_view_types::{
+    home_focus, home_scroll_phase, launcher_screen, system_hub_section,
+};
 use mister_magik_ui::launcher::{
-    Launcher, MenuItem, MenuItemKind, MenuItemPresentation, MenuItemStatus, MisterBridge,
+    FeedbackView, Launcher, MenuItem, MenuItemKind, MenuItemPresentation, MenuItemStatus,
+    MisterBridge, NavigationView,
 };
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 use std::cell::{Cell, RefCell};
@@ -291,6 +295,16 @@ macro_rules! set_string_if_changed {
     }};
 }
 
+macro_rules! set_view_string_if_changed {
+    ($view:expr, $getter:ident, $setter:ident, $value:expr) => {{
+        let source = $value;
+        let source = AsRef::<str>::as_ref(&source);
+        if $view.$getter().as_str() != source {
+            $view.$setter(SharedString::from(source));
+        }
+    }};
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) struct BridgeChurnCounters {
     pub(crate) model_replacements: u64,
@@ -414,6 +428,76 @@ impl LauncherBridgePresenter {
         defer_arcade_overlay: bool,
     ) {
         let bridge = app.global::<MisterBridge>();
+        let navigation = app.global::<NavigationView>();
+        set_if_changed!(
+            navigation,
+            get_screen,
+            set_screen,
+            launcher_screen(nav.screen)
+        );
+        set_if_changed!(
+            navigation,
+            get_home_selected_index,
+            set_home_selected_index,
+            nav.selected as i32
+        );
+        set_if_changed!(
+            navigation,
+            get_home_focus,
+            set_home_focus,
+            home_focus(nav.settings_focused)
+        );
+        set_if_changed!(
+            navigation,
+            get_home_scroll_phase,
+            set_home_scroll_phase,
+            home_scroll_phase(
+                nav.home_horizontal_held(),
+                nav.home_horizontal_repeat_active()
+            )
+        );
+        set_if_changed!(
+            navigation,
+            get_home_scroll_x,
+            set_home_scroll_x,
+            nav.scroll_x
+        );
+        set_view_string_if_changed!(
+            navigation,
+            get_menu_title,
+            set_menu_title,
+            nav.current_menu_title()
+        );
+        set_view_string_if_changed!(
+            navigation,
+            get_menu_breadcrumb,
+            set_menu_breadcrumb,
+            nav.current_menu_breadcrumb()
+        );
+        set_if_changed!(
+            navigation,
+            get_system_hub_section,
+            set_system_hub_section,
+            system_hub_section(nav.system_hub_selected)
+        );
+        set_if_changed!(
+            navigation,
+            get_system_hub_games_count,
+            set_system_hub_games_count,
+            catalog.system_game_count("snes") as i32
+        );
+        set_if_changed!(
+            navigation,
+            get_system_hub_recent_count,
+            set_system_hub_recent_count,
+            nav.recent_count() as i32
+        );
+        set_if_changed!(
+            navigation,
+            get_system_hub_favourites_count,
+            set_system_hub_favourites_count,
+            nav.favourite_count() as i32
+        );
         set_if_changed!(
             bridge,
             get_screen_mode,
@@ -549,13 +633,16 @@ impl LauncherBridgePresenter {
             let key = (catalog_version, nav.current_menu_id().to_string());
             if self.menu_items_key.as_ref() != Some(&key) {
                 let menu_items = self.menu_items(nav, catalog_version);
+                let menu_item_presentation = self.menu_item_presentation();
                 bridge_churn_record_model_replacements(2);
-                bridge.set_menu_item_presentation(self.menu_item_presentation());
+                navigation.set_menu_item_presentation(menu_item_presentation.clone());
+                navigation.set_menu_items(menu_items.clone());
+                bridge.set_menu_item_presentation(menu_item_presentation);
                 bridge.set_menu_items(menu_items);
             }
         }
         self.sync_menu_item_state(nav);
-        self.publish_selection_feedback(&bridge);
+        self.publish_selection_feedback(&bridge, &app.global::<FeedbackView>());
 
         let games = active_game_view(catalog, nav);
         let (title, count) = active_header(catalog, nav, games.len());
@@ -710,13 +797,19 @@ impl LauncherBridgePresenter {
         self.projected_selection_feedback = stamp;
     }
 
-    fn publish_selection_feedback(&mut self, bridge: &MisterBridge) {
+    fn publish_selection_feedback(&mut self, bridge: &MisterBridge, feedback: &FeedbackView) {
         if !self.selection_feedback_callback_installed {
             let published = self.published_selection_feedback.clone();
             bridge.on_selection_feedback_query(move |surface, item, _revision| {
                 published.borrow().entries.iter().any(|entry| {
                     (surface.is_empty() || entry.target.surface == surface.as_str())
                         && entry.target.item == item.as_str()
+                })
+            });
+            let published = self.published_selection_feedback.clone();
+            feedback.on_acknowledged(move |surface, item, _revision| {
+                published.borrow().entries.iter().any(|entry| {
+                    entry.target.surface == surface.as_str() && entry.target.item == item.as_str()
                 })
             });
             self.selection_feedback_callback_installed = true;
@@ -726,6 +819,7 @@ impl LauncherBridgePresenter {
                 self.projected_selection_feedback.clone();
             bridge
                 .set_selection_feedback_revision(self.projected_selection_feedback.revision as i32);
+            feedback.set_revision(self.projected_selection_feedback.revision as i32);
         }
     }
 }

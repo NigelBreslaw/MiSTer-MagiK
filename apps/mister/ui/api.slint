@@ -15,7 +15,7 @@ export enum PreviewStatus {
 // boundary as enums; integers remain reserved for counts, geometry, timing,
 // percentages, and indices into dynamic models.
 export enum LauncherScreen { home, system-hub, controller, arcade, settings, screensaver-settings, about, licenses, info }
-export enum SystemHubSection { games, recent, favourites }
+export enum SystemHubSection { games, recent, favourites, information }
 export enum HomeFocus { menu, settings }
 export enum HomeScrollPhase { idle, held, repeating }
 export enum NavigationTransitionState { idle, active }
@@ -74,6 +74,37 @@ export struct ScreenshotPackProgress {
     percent: int,
     bytes-label: string,
     pack-position: string,
+}
+
+// Host-owned launcher navigation shared by the independent CRT and HDMI
+// presentation trees. Models preserve their Rust-owned retained identity.
+export global NavigationView {
+    in property <LauncherScreen> screen;
+    in property <string> menu-title: "MiSTer MagiK";
+    in property <string> menu-breadcrumb;
+    in property <SystemHubSection> system-hub-section;
+    in property <int> system-hub-games-count;
+    in property <int> system-hub-recent-count;
+    in property <int> system-hub-favourites-count;
+    in property <image> system-artwork;
+    in property <bool> system-artwork-available;
+    in property <HomeFocus> home-focus;
+    in property <int> home-selected-index;
+    in property <HomeScrollPhase> home-scroll-phase;
+    in property <int> home-scroll-x;
+    in property <NavigationTransitionState> transition-state;
+    in property <bool> update-available;
+    in property <bool> development-build;
+    in property <string> clock-text;
+    in property <string> build-label;
+    in property <string> present-mode-label;
+    in property <[MenuItem]> menu-items;
+    in property <[MenuItemPresentation]> menu-item-presentation;
+}
+
+export global FeedbackView {
+    in property <int> revision;
+    pure callback acknowledged(string, string, int) -> bool;
 }
 
 export global MisterBridge {
