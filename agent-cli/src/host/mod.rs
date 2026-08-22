@@ -5931,8 +5931,28 @@ fn verify_installed_input_latency_lab(
         apply_confirmed_display_mode(config, lab_mode, "input latency laboratory")?;
         let session = connect_with(&config.connection, 10)?;
         for spec in INPUT_LATENCY_LAB_ARMS {
-            let evidence = run_input_latency_lab_arm(&session, output_dir, spec)?;
-            arms.push(evidence);
+            let mut setup_attempt = 1_u64;
+            loop {
+                match run_input_latency_lab_arm(&session, output_dir, spec) {
+                    Ok(mut evidence) => {
+                        evidence["setup_attempts"] = json!(setup_attempt);
+                        evidence["input_epoch_late_retries"] = json!(setup_attempt - 1);
+                        arms.push(evidence);
+                        break;
+                    }
+                    Err(error)
+                        if setup_attempt == 1
+                            && input_latency_lab_epoch_was_late(&error.to_string()) =>
+                    {
+                        eprintln!(
+                            "input-latency-lab: {} epoch was late; retrying the arm once",
+                            spec.label
+                        );
+                        setup_attempt += 1;
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
         }
         Ok(())
     })();
@@ -6037,6 +6057,10 @@ fn verify_installed_input_latency_lab(
         format!("{}\n", serde_json::to_string_pretty(&summary)?),
     )?;
     serde_json::to_string(&summary).map_err(Into::into)
+}
+
+fn input_latency_lab_epoch_was_late(error: &str) -> bool {
+    error.contains("scheduled input epoch is more than 50 ms late")
 }
 
 fn run_input_latency_lab_arm(
@@ -29341,6 +29365,19 @@ mod tests {
         validate_input_latency_lab_driver(&driver, epoch_us).unwrap();
         driver["pulses"][17]["scheduled_at_us"] = json!(epoch_us);
         assert!(validate_input_latency_lab_driver(&driver, epoch_us).is_err());
+    }
+
+    #[test]
+    fn input_latency_lab_retries_only_the_explicit_late_epoch_failure() {
+        assert!(input_latency_lab_epoch_was_late(
+            "input latency laboratory driver failed: scheduled input epoch is more than 50 ms late"
+        ));
+        assert!(!input_latency_lab_epoch_was_late(
+            "input latency laboratory driver failed: input write failed"
+        ));
+        assert!(!input_latency_lab_epoch_was_late(
+            "Main input latency trace is missing"
+        ));
     }
 
     #[test]
