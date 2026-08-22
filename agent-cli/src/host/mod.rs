@@ -7400,13 +7400,20 @@ fn run_launcher_response_computers_sweep(
     } else {
         format!("computers-sweep {interval_ms} {start_delay_ms}")
     };
-    run_launcher_response_driver(session, &driver)?;
-    wait_launcher_response_completion(
+    let driver_evidence = run_launcher_response_driver_evidence(session, &driver)?;
+    validate_launcher_response_driver_evidence(
+        &driver_evidence,
+        if isolated_profile { 32 } else { 8 },
+    )?;
+    if let Err(error) = wait_launcher_response_completion(
         session,
         LAUNCHER_RESPONSE_COMPLETE_REMOTE,
         Duration::from_secs(10),
-    )?;
+    ) {
+        return Err(format!("{error}; driver={driver_evidence}").into());
+    }
     let mut trace = read_completed_launcher_response_trace(session, &run_id)?;
+    trace["driver"] = driver_evidence;
     if let Some(instrumentation) = instrumentation {
         collect_launcher_response_attribution_artifacts(
             session,
@@ -7950,16 +7957,34 @@ fn percentile_nearest_rank(values: &[u64], percentile: usize) -> u64 {
     values[(values.len() * percentile).div_ceil(100).saturating_sub(1)]
 }
 
-fn run_launcher_response_driver(session: &Session, arguments: &str) -> Result<()> {
-    exec_checked(
-        session,
-        "launcher response input",
-        &format!(
-            "{} {arguments}",
-            development_gui_command("input-integrity-driver")
-        ),
-    )?;
-    Ok(())
+fn validate_launcher_response_driver_evidence(driver: &Value, expected_count: u64) -> Result<()> {
+    let pulses = driver["pulses"]
+        .as_array()
+        .ok_or("launcher response driver omitted pulse evidence")?;
+    let valid = driver["schema"] == "mister-magik-input-integrity-driver-v1"
+        && driver["status"] == "passed"
+        && driver["count"].as_u64() == Some(expected_count)
+        && pulses.len() == expected_count as usize
+        && pulses.iter().enumerate().all(|(ordinal, pulse)| {
+            pulse["ordinal"].as_u64() == Some(ordinal as u64)
+                && pulse["write_started_at_us"]
+                    .as_u64()
+                    .zip(pulse["emitted_at_us"].as_u64())
+                    .is_some_and(|(started, emitted)| started <= emitted)
+                && pulse["emitted_at_us"]
+                    .as_u64()
+                    .zip(pulse["released_at_us"].as_u64())
+                    .is_some_and(|(emitted, released)| emitted <= released)
+        });
+    if valid {
+        Ok(())
+    } else {
+        Err(format!("launcher response driver evidence is invalid: {driver}").into())
+    }
+}
+
+fn run_launcher_response_driver(session: &Session, arguments: &str) -> Result<Value> {
+    run_launcher_response_driver_evidence(session, arguments)
 }
 
 fn enter_computers_acorn_for_benchmark(session: &Session) -> Result<()> {
@@ -30396,6 +30421,29 @@ mod tests {
         ];
         assert_eq!(percentile_nearest_rank(&values, 95), 19);
         assert_eq!(percentile_nearest_rank(&[], 95), u64::MAX);
+    }
+
+    #[test]
+    fn launcher_response_driver_requires_every_ordered_pulse() {
+        let pulses = (0_u64..8)
+            .map(|ordinal| {
+                json!({
+                    "ordinal": ordinal,
+                    "write_started_at_us": 1_000 + ordinal * 100,
+                    "emitted_at_us": 1_010 + ordinal * 100,
+                    "released_at_us": 1_050 + ordinal * 100,
+                })
+            })
+            .collect::<Vec<_>>();
+        let mut driver = json!({
+            "schema": "mister-magik-input-integrity-driver-v1",
+            "status": "passed",
+            "count": 8,
+            "pulses": pulses,
+        });
+        validate_launcher_response_driver_evidence(&driver, 8).unwrap();
+        driver["pulses"][6]["ordinal"] = json!(5);
+        assert!(validate_launcher_response_driver_evidence(&driver, 8).is_err());
     }
 
     #[test]
