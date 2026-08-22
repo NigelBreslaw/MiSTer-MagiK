@@ -251,6 +251,57 @@ mod tests {
     }
 
     #[test]
+    fn launcher_input_phase_keeps_capture_route_and_yield_inside_one_boundary() {
+        let source = include_str!("launcher_loop.rs")
+            .split_whitespace()
+            .collect::<String>();
+        let phase_start = source
+            .find("letmutroute_pending_launcher_input=||->bool{")
+            .expect("launcher input phase start");
+        let invocation = source[phase_start..]
+            .find("letinput_phase_yielded=route_pending_launcher_input();")
+            .map(|offset| phase_start + offset)
+            .expect("launcher input phase invocation");
+        for marker in [
+            "record_launcher_frame_phase!(LauncherFramePhase::InputCaptured)",
+            "record_launcher_frame_phase!(LauncherFramePhase::InputConsumed)",
+            "record_launcher_frame_phase!(LauncherFramePhase::InputRouted)",
+        ] {
+            let offset = source[phase_start..invocation]
+                .find(marker)
+                .unwrap_or_else(|| panic!("input phase omitted {marker}"));
+            assert!(phase_start + offset < invocation);
+        }
+        assert!(source[invocation..].contains("ifinput_phase_yielded{continue;}"));
+    }
+
+    #[test]
+    fn launcher_input_phase_preserves_router_and_state_parity_operations() {
+        let source = include_str!("launcher_loop.rs")
+            .split_whitespace()
+            .collect::<String>();
+        let phase_start = source
+            .find("letmutroute_pending_launcher_input=||->bool{")
+            .expect("launcher input phase start");
+        let invocation = source[phase_start..]
+            .find("letinput_phase_yielded=route_pending_launcher_input();")
+            .map(|offset| phase_start + offset)
+            .expect("launcher input phase invocation");
+        let phase = &source[phase_start..invocation];
+        for operation in [
+            "pad.drain_input_batch()",
+            "input_router.accept_batch(&input_batch)",
+            "input_router.consume_remaining_batch(",
+            "input_router.set_focus(",
+            "input_router.route_event(",
+            "input_router.tick_repeat(",
+            "launcher_response_trace.observe_state(",
+        ] {
+            assert!(phase.contains(operation), "input phase omitted {operation}");
+        }
+    }
+
+    #[test]
     fn production_latch_hooks_preserve_account_confirm_and_readiness_order() {
         let source = include_str!("launcher_loop.rs")
             .split_whitespace()

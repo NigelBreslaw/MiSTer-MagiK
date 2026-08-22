@@ -7219,178 +7219,180 @@ pub(super) fn run_launcher_loop(
         scheduler_phase = launcher_response_trace
             .record_scheduler_interval("pre-input-view-housekeeping", scheduler_phase);
         record_launcher_frame_phase!(LauncherFramePhase::PreInputMaintenance);
-        // Drain immediately before routing so catalog, timer, lifecycle, and
-        // bridge housekeeping cannot sit between capture and dispatch.
-        let drained_input = pad.drain_input_batch();
-        record_launcher_frame_phase!(LauncherFramePhase::InputCaptured);
-        input_observation = drained_input.observation;
-        launcher_response_trace.observe_drained_input(&drained_input);
-        let input_batch = drained_input.batch;
-        let input_route_pmu = launcher_response_trace.input_pmu_span(
-            !input_batch.events.is_empty(),
-            "launcher-response.input-route",
-        );
-        input_integrity_trace.observe_batch(&input_batch);
-        launcher_response_trace.record_lab(input_latency_lab.before_input_route());
-        if !input_batch.events.is_empty()
-            && let Some(stall_ms) = input_integrity_stall.take()
-        {
-            std::thread::sleep(Duration::from_millis(stall_ms));
-        }
-        let pad_changed = pad_changed_for_input
-            .take()
-            .unwrap_or_else(|| pad.poll_with_debug_labels(setup_active));
-        let frame_now = Instant::now();
-        let mut incoming_input_events = VecDeque::new();
-        let mut screensaver_wake = false;
-        let input_batch_healthy = match input_router.accept_batch(&input_batch) {
-            Ok(()) => {
-                input_fault_notice = None;
-                incoming_input_events.extend(input_batch.events.iter().copied());
-                true
-            }
-            Err(fault) => {
-                input_fault_notice = Some(fault.notice());
-                false
-            }
-        };
-        let mut physical_for_automation = PadState::default();
-        for action in crate::input_event::LogicalAction::ALL {
-            physical_for_automation
-                .set_logical_action(action, input_batch.held_after_last.is_held(action));
-        }
-        if input_batch_healthy {
-            incoming_input_events.extend(launcher_automation.poll_events(
-                &physical_for_automation,
-                effective_view.accepts_application_input() && lifecycle.startup_input_enabled(),
-                setup.is_active(),
-                frame_now,
-            ));
-            if let Some(event) = settings_navigation_benchmark.event_for(
-                nav.screen,
-                nav.settings_focused,
-                nav.settings_selected,
-                full_screen_transition.state() == FullScreenTransitionState::Live,
-                frame_now
-                    .saturating_duration_since(start)
-                    .as_micros()
-                    .min(u64::MAX as u128) as u64,
-            ) {
-                incoming_input_events.push_back(event);
-            }
-            if let Some(event) = library_changed_dialog_test.event_for(&nav, frame_now, start) {
-                incoming_input_events.push_back(event);
-            }
-            if let Some(event) = launcher_input_script.event_for(
-                frame_now
-                    .saturating_duration_since(start)
-                    .as_micros()
-                    .min(u64::MAX as u128) as u64,
-            ) {
-                incoming_input_events.push_back(event);
-            }
-        }
-        for event in incoming_input_events.iter().copied() {
-            gui_profiling.observe_route_action(screen_label(nav.screen), event, frame_now);
-            if nav.screen == Screen::Arcade
-                && event.action == LogicalAction::Down
-                && event.phase == InputPhase::Pressed
-                && gui_profiling.arcade_scroll_phase_started()
+        let mut route_pending_launcher_input = || -> bool {
+            // Drain immediately before routing so catalog, timer, lifecycle,
+            // and bridge housekeeping cannot sit between capture and dispatch.
+            let drained_input = pad.drain_input_batch();
+            record_launcher_frame_phase!(LauncherFramePhase::InputCaptured);
+            input_observation = drained_input.observation;
+            launcher_response_trace.observe_drained_input(&drained_input);
+            let input_batch = drained_input.batch;
+            let input_route_pmu = launcher_response_trace.input_pmu_span(
+                !input_batch.events.is_empty(),
+                "launcher-response.input-route",
+            );
+            input_integrity_trace.observe_batch(&input_batch);
+            launcher_response_trace.record_lab(input_latency_lab.before_input_route());
+            if !input_batch.events.is_empty()
+                && let Some(stall_ms) = input_integrity_stall.take()
             {
-                screensaver_cpu_profile.begin_arcade_velocity_scroll(frames.saturating_add(1));
+                std::thread::sleep(Duration::from_millis(stall_ms));
             }
-        }
-        if screensaver.active {
-            while let Some(event) = incoming_input_events.pop_front() {
-                let focus = launcher_input_focus(true, true, false, false, false, false, &nav);
-                let outcome = input_router.route_event(event, focus, frame_now);
-                if matches!(outcome, InputOutcome::WakeScreensaver { .. }) {
-                    latency_critical_input_pending = true;
-                    screensaver_wake = true;
-                    let _ = input_router.consume_remaining_batch(
-                        incoming_input_events.drain(..),
-                        ConsumedReason::ExclusiveBatch,
-                    );
-                    break;
+            let pad_changed = pad_changed_for_input
+                .take()
+                .unwrap_or_else(|| pad.poll_with_debug_labels(setup_active));
+            let frame_now = Instant::now();
+            let mut incoming_input_events = VecDeque::new();
+            let mut screensaver_wake = false;
+            let input_batch_healthy = match input_router.accept_batch(&input_batch) {
+                Ok(()) => {
+                    input_fault_notice = None;
+                    incoming_input_events.extend(input_batch.events.iter().copied());
+                    true
+                }
+                Err(fault) => {
+                    input_fault_notice = Some(fault.notice());
+                    false
+                }
+            };
+            let mut physical_for_automation = PadState::default();
+            for action in crate::input_event::LogicalAction::ALL {
+                physical_for_automation
+                    .set_logical_action(action, input_batch.held_after_last.is_held(action));
+            }
+            if input_batch_healthy {
+                incoming_input_events.extend(launcher_automation.poll_events(
+                    &physical_for_automation,
+                    effective_view.accepts_application_input() && lifecycle.startup_input_enabled(),
+                    setup.is_active(),
+                    frame_now,
+                ));
+                if let Some(event) = settings_navigation_benchmark.event_for(
+                    nav.screen,
+                    nav.settings_focused,
+                    nav.settings_selected,
+                    full_screen_transition.state() == FullScreenTransitionState::Live,
+                    frame_now
+                        .saturating_duration_since(start)
+                        .as_micros()
+                        .min(u64::MAX as u128) as u64,
+                ) {
+                    incoming_input_events.push_back(event);
+                }
+                if let Some(event) = library_changed_dialog_test.event_for(&nav, frame_now, start) {
+                    incoming_input_events.push_back(event);
+                }
+                if let Some(event) = launcher_input_script.event_for(
+                    frame_now
+                        .saturating_duration_since(start)
+                        .as_micros()
+                        .min(u64::MAX as u128) as u64,
+                ) {
+                    incoming_input_events.push_back(event);
                 }
             }
-        }
-        let bridge = app.global::<slint_ui::launcher::MisterBridge>();
-        let input_notice = input_fault_notice.or_else(|| {
-            setup_disconnect_notice.then_some(
-                "Controller disconnected. Press a button after reconnecting to restart setup.",
-            )
-        });
-        bridge.set_input_fault_notice(input_notice.unwrap_or_default().into());
-        frame_accounting.set_automation_action_sequence(launcher_automation.action_sequence());
-
-        let application_input_enabled =
-            effective_view.accepts_application_input() && lifecycle.startup_input_enabled();
-        if !application_input_enabled {
-            let disabled = launcher_input_focus(false, false, false, false, false, false, &nav);
-            input_router.set_focus(disabled);
-            for event in incoming_input_events.drain(..) {
-                let _ = input_router.route_event(event, disabled, frame_now);
+            for event in incoming_input_events.iter().copied() {
+                gui_profiling.observe_route_action(screen_label(nav.screen), event, frame_now);
+                if nav.screen == Screen::Arcade
+                    && event.action == LogicalAction::Down
+                    && event.phase == InputPhase::Pressed
+                    && gui_profiling.arcade_scroll_phase_started()
+                {
+                    screensaver_cpu_profile.begin_arcade_velocity_scroll(frames.saturating_add(1));
+                }
             }
-        }
+            if screensaver.active {
+                while let Some(event) = incoming_input_events.pop_front() {
+                    let focus = launcher_input_focus(true, true, false, false, false, false, &nav);
+                    let outcome = input_router.route_event(event, focus, frame_now);
+                    if matches!(outcome, InputOutcome::WakeScreensaver { .. }) {
+                        latency_critical_input_pending = true;
+                        screensaver_wake = true;
+                        let _ = input_router.consume_remaining_batch(
+                            incoming_input_events.drain(..),
+                            ConsumedReason::ExclusiveBatch,
+                        );
+                        break;
+                    }
+                }
+            }
+            let bridge = app.global::<slint_ui::launcher::MisterBridge>();
+            let input_notice = input_fault_notice.or_else(|| {
+                setup_disconnect_notice.then_some(
+                    "Controller disconnected. Press a button after reconnecting to restart setup.",
+                )
+            });
+            bridge.set_input_fault_notice(input_notice.unwrap_or_default().into());
+            frame_accounting.set_automation_action_sequence(launcher_automation.action_sequence());
 
-        if application_input_enabled {
-            if setup.is_active()
-                && setup
-                    .target_device
-                    .as_ref()
-                    .is_none_or(|device| pad.info_for_device(device).is_none())
-            {
-                crate::ui_errln!("controller setup: target disconnected; closing setup flow");
-                setup.cancel_disconnected();
-                setup_disconnect_notice = true;
-                bridge.set_input_fault_notice(
+            let application_input_enabled =
+                effective_view.accepts_application_input() && lifecycle.startup_input_enabled();
+            if !application_input_enabled {
+                let disabled = launcher_input_focus(false, false, false, false, false, false, &nav);
+                input_router.set_focus(disabled);
+                for event in incoming_input_events.drain(..) {
+                    let _ = input_router.route_event(event, disabled, frame_now);
+                }
+            }
+
+            if application_input_enabled {
+                if setup.is_active()
+                    && setup
+                        .target_device
+                        .as_ref()
+                        .is_none_or(|device| pad.info_for_device(device).is_none())
+                {
+                    crate::ui_errln!("controller setup: target disconnected; closing setup flow");
+                    setup.cancel_disconnected();
+                    setup_disconnect_notice = true;
+                    bridge.set_input_fault_notice(
                     "Controller disconnected. Press a button after reconnecting to restart setup."
                         .into(),
                 );
-                full_bridge_dirty = true;
-            }
+                    full_bridge_dirty = true;
+                }
 
-            let raw_screensaver_input_activity =
-                pad.user_activity() || launcher_automation.active();
-            let physical_input_held =
-                input_batch_healthy && pad_state_has_active_input(&physical_for_automation);
-            let screensaver_input_held =
-                screensaver.input_held_for_control(screensaver_wake, physical_input_held);
-            if screensaver.handle_input(
-                frame_now,
-                screensaver_input_held,
-                raw_screensaver_input_activity,
-            ) {
-                record_launcher_frame_phase!(LauncherFramePhase::InputConsumed);
-                request_launcher_redraw!();
-                record_launcher_frame_phase!(LauncherFramePhase::Yielded);
-                continue;
-            }
-            let active_device = pad.active_device();
-            let info = pad.info().clone();
-            let proxy_latest_captured_at_us =
-                input_batch.events.last().map(|event| event.captured_at_us);
+                let raw_screensaver_input_activity =
+                    pad.user_activity() || launcher_automation.active();
+                let physical_input_held =
+                    input_batch_healthy && pad_state_has_active_input(&physical_for_automation);
+                let screensaver_input_held =
+                    screensaver.input_held_for_control(screensaver_wake, physical_input_held);
+                if screensaver.handle_input(
+                    frame_now,
+                    screensaver_input_held,
+                    raw_screensaver_input_activity,
+                ) {
+                    record_launcher_frame_phase!(LauncherFramePhase::InputConsumed);
+                    request_launcher_redraw!();
+                    record_launcher_frame_phase!(LauncherFramePhase::Yielded);
+                    return true;
+                }
+                let active_device = pad.active_device();
+                let info = pad.info().clone();
+                let proxy_latest_captured_at_us =
+                    input_batch.events.last().map(|event| event.captured_at_us);
 
-            loop {
-                let lifecycle_view = lifecycle.view();
-                let focus = launcher_input_focus(
-                    true,
-                    false,
-                    lifecycle_view.launch_failure_dialog().is_some()
-                        || lifecycle_view.catalog_recovery_dialog().is_some(),
-                    setup.is_active(),
-                    nav.confirm_action.is_some(),
-                    navigation_transition.is_active()
-                        || orientation_transition.is_active()
-                        || full_screen_transition.state() != FullScreenTransitionState::Live,
-                    &nav,
-                );
-                input_router.set_focus(focus);
-                let mut final_input_tick = false;
-                let mut input_dispatch_now = frame_now;
-                let routed_event_this_loop =
-                    if let Some(event) = incoming_input_events.pop_front() {
+                loop {
+                    let lifecycle_view = lifecycle.view();
+                    let focus = launcher_input_focus(
+                        true,
+                        false,
+                        lifecycle_view.launch_failure_dialog().is_some()
+                            || lifecycle_view.catalog_recovery_dialog().is_some(),
+                        setup.is_active(),
+                        nav.confirm_action.is_some(),
+                        navigation_transition.is_active()
+                            || orientation_transition.is_active()
+                            || full_screen_transition.state() != FullScreenTransitionState::Live,
+                        &nav,
+                    );
+                    input_router.set_focus(focus);
+                    let mut final_input_tick = false;
+                    let mut input_dispatch_now = frame_now;
+                    let routed_event_this_loop = if let Some(event) =
+                        incoming_input_events.pop_front()
+                    {
                         if event.source.kind == InputSourceKind::MainProxy
                             && let Some(latest) = proxy_latest_captured_at_us
                         {
@@ -7430,235 +7432,238 @@ pub(super) fn run_launcher_loop(
                         final_input_tick = true;
                         None
                     };
-                let mut launcher_state = PadState::default();
-                for action in crate::input_event::LogicalAction::ALL {
-                    launcher_state.set_logical_action(action, input_router.action_held(action));
-                }
-                let selection_feedback_before =
-                    discrete_selection_feedback_target(&nav, &setup, &lifecycle);
-                let selection_feedback_input =
-                    accepted_selection_feedback_input(routed_event_this_loop.as_ref());
+                    let mut launcher_state = PadState::default();
+                    for action in crate::input_event::LogicalAction::ALL {
+                        launcher_state.set_logical_action(action, input_router.action_held(action));
+                    }
+                    let selection_feedback_before =
+                        discrete_selection_feedback_target(&nav, &setup, &lifecycle);
+                    let selection_feedback_input =
+                        accepted_selection_feedback_input(routed_event_this_loop.as_ref());
 
-                if launcher_bench_scenario.is_none()
-                    && !settings_navigation_benchmark.enabled()
-                    && setup.is_active()
-                {
-                    let setup_before = SetupBridgeKey::from_setup(&setup);
-                    let target_device = setup
-                        .target_device
-                        .clone()
-                        .expect("active setup has an exact device identity");
-                    let Some(setup_info) = pad.info_for_device(&target_device).cloned() else {
-                        setup.cancel_disconnected();
-                        setup_disconnect_notice = true;
-                        full_bridge_dirty = true;
-                        continue;
-                    };
-                    let setup_action = routed_event_this_loop.map_or(SetupAction::None, |event| {
-                        setup.handle_action(&event, frame_now, &setup_info, pad.db())
-                    });
-                    match setup_action {
-                        SetupAction::None => {}
-                        SetupAction::RegisterNew => {
-                            if let Err(e) = pad.register_new(&target_device) {
-                                crate::ui_errln!("controller setup: register new: {e}");
-                            }
-                        }
-                        SetupAction::ClaimExisting { list_index } => {
-                            if let Err(e) = pad.claim_existing(&target_device, list_index) {
-                                crate::ui_errln!("controller setup: claim existing: {e}");
-                            }
-                        }
-                        SetupAction::SaveFinish { label, kind } => {
-                            if let Err(e) = pad.finish_setup(&target_device, label, kind) {
-                                crate::ui_errln!("controller setup: save: {e}");
-                            } else if let Some(info) = pad.info_for_device(&target_device) {
-                                crate::ui_errln!(
-                                    "controller setup: saved \"{}\" ({})",
-                                    pad.db().display_label(info),
-                                    kind.as_str()
-                                );
-                            }
-                            setup.advance_to_next_pad(&pad);
-                        }
-                        SetupAction::Done => {
-                            setup.advance_to_next_pad(&pad);
-                        }
-                    }
-                    let setup_after = SetupBridgeKey::from_setup(&setup);
-                    full_bridge_dirty |= pad_changed || setup_before != setup_after;
-                } else if launcher_bench_scenario.is_none()
-                    || launcher_bench_launch_handoff
-                    || (launcher_bench_after_input_script && !launcher_bench_active)
-                {
-                    if AUTO_CONTROLLER_SETUP_ENABLED && pad_changed {
+                    if launcher_bench_scenario.is_none()
+                        && !settings_navigation_benchmark.enabled()
+                        && setup.is_active()
+                    {
                         let setup_before = SetupBridgeKey::from_setup(&setup);
-                        setup.maybe_open(&info, active_device.clone(), pad.db(), true);
-                        if setup.is_active() {
-                            setup_disconnect_notice = false;
-                        }
-                        full_bridge_dirty |= setup_before != SetupBridgeKey::from_setup(&setup);
-                    }
-                    if !setup.is_active() {
-                        let nav_before = LauncherBridgeKey::from_nav(&nav);
-                        let arcade_selected_before_input = nav.arcade.selected;
-                        if transition_picker_enabled && nav.screen == Screen::Arcade {
-                            let left = routed_event_this_loop.as_ref().is_some_and(|event| {
-                                event.phase == InputPhase::Pressed
-                                    && event.action == LogicalAction::Left
-                            });
-                            let right = routed_event_this_loop.as_ref().is_some_and(|event| {
-                                event.phase == InputPhase::Pressed
-                                    && event.action == LogicalAction::Right
-                            });
-                            let changed = if left {
-                                preview_transition.cycle_picker(-1)
-                            } else if right {
-                                preview_transition.cycle_picker(1)
-                            } else {
-                                false
-                            };
-                            if changed {
-                                crate::ui_logln!(
-                                    "preview_transition_picker={}",
-                                    preview_transition
-                                        .current_label(frame_now.duration_since(run_start))
-                                );
-                                request_launcher_redraw!();
-                            }
-                        }
-                        if let Some(orientation) = settings_navigation_benchmark
-                            .take_orientation_change(
-                                nav.screen,
-                                full_screen_transition.state() == FullScreenTransitionState::Live,
-                            )
-                        {
-                            apply_orientation_layout(
-                                &app,
-                                &window,
-                                ui,
-                                orientation,
-                                &mut nav,
-                                &mut layout,
-                                &mut layout_epoch,
-                                &mut navigation_transition,
-                            );
+                        let target_device = setup
+                            .target_device
+                            .clone()
+                            .expect("active setup has an exact device identity");
+                        let Some(setup_info) = pad.info_for_device(&target_device).cloned() else {
+                            setup.cancel_disconnected();
+                            setup_disconnect_notice = true;
                             full_bridge_dirty = true;
-                            request_launcher_redraw!();
-                        }
-                        let lifecycle_view = lifecycle.view();
-                        let launch_failure_visible =
-                            lifecycle_view.launch_failure_dialog().is_some();
-                        let recovery_dialog_visible =
-                            lifecycle_view.catalog_recovery_dialog().is_some();
-                        let pending_collection_cancelled =
-                            cancel_pending_collection_entry_for_input(
-                                &mut pending_collection_entry,
-                                &mut nav,
-                                routed_event_this_loop.as_ref(),
-                                start,
-                            );
-                        if pending_collection_cancelled {
-                            preview.cancel_system_entry_preview();
-                            arcade_entry_latency.cancel_enter();
-                            if navigation_transition.is_active() {
-                                let now_us = frame_now
-                                    .saturating_duration_since(start)
-                                    .as_micros()
-                                    .min(u64::MAX as u128)
-                                    as u64;
-                                navigation_transition.request_reverse(now_us);
+                            continue;
+                        };
+                        let setup_action = routed_event_this_loop
+                            .map_or(SetupAction::None, |event| {
+                                setup.handle_action(&event, frame_now, &setup_info, pad.db())
+                            });
+                        match setup_action {
+                            SetupAction::None => {}
+                            SetupAction::RegisterNew => {
+                                if let Err(e) = pad.register_new(&target_device) {
+                                    crate::ui_errln!("controller setup: register new: {e}");
+                                }
+                            }
+                            SetupAction::ClaimExisting { list_index } => {
+                                if let Err(e) = pad.claim_existing(&target_device, list_index) {
+                                    crate::ui_errln!("controller setup: claim existing: {e}");
+                                }
+                            }
+                            SetupAction::SaveFinish { label, kind } => {
+                                if let Err(e) = pad.finish_setup(&target_device, label, kind) {
+                                    crate::ui_errln!("controller setup: save: {e}");
+                                } else if let Some(info) = pad.info_for_device(&target_device) {
+                                    crate::ui_errln!(
+                                        "controller setup: saved \"{}\" ({})",
+                                        pad.db().display_label(info),
+                                        kind.as_str()
+                                    );
+                                }
+                                setup.advance_to_next_pad(&pad);
+                            }
+                            SetupAction::Done => {
+                                setup.advance_to_next_pad(&pad);
                             }
                         }
-                        let settings_transition_source = (!launch_failure_visible
-                            && !recovery_dialog_visible
-                            && !navigation_transition.is_active()
-                            && navigation_transition.enabled()
-                            && settings_navigation_input_candidate(
-                                nav.screen,
-                                routed_event_this_loop.as_ref(),
-                            ))
-                        .then(|| (nav.screen, nav.navigation_transition_state()));
-                        let event = if orientation_transition.is_active()
-                            || full_screen_transition.owner()
-                                == Some(FullScreenTransitionOwner::Orientation)
-                        {
-                            None
-                        } else if navigation_transition.is_active() {
-                            None
-                        } else if launch_failure_visible || recovery_dialog_visible {
-                            if let Some(input) = route_lifecycle_dialog_input(
-                                routed_event_this_loop.as_ref(),
-                                launch_failure_visible,
-                                recovery_dialog_visible,
-                            ) {
-                                lifecycle.handle(input, &mut lifecycle_effects);
-                                apply_lifecycle_effects(
-                                    &mut lifecycle_effects,
-                                    &mut scheduler,
-                                    start,
+                        let setup_after = SetupBridgeKey::from_setup(&setup);
+                        full_bridge_dirty |= pad_changed || setup_before != setup_after;
+                    } else if launcher_bench_scenario.is_none()
+                        || launcher_bench_launch_handoff
+                        || (launcher_bench_after_input_script && !launcher_bench_active)
+                    {
+                        if AUTO_CONTROLLER_SETUP_ENABLED && pad_changed {
+                            let setup_before = SetupBridgeKey::from_setup(&setup);
+                            setup.maybe_open(&info, active_device.clone(), pad.db(), true);
+                            if setup.is_active() {
+                                setup_disconnect_notice = false;
+                            }
+                            full_bridge_dirty |= setup_before != SetupBridgeKey::from_setup(&setup);
+                        }
+                        if !setup.is_active() {
+                            let nav_before = LauncherBridgeKey::from_nav(&nav);
+                            let arcade_selected_before_input = nav.arcade.selected;
+                            if transition_picker_enabled && nav.screen == Screen::Arcade {
+                                let left = routed_event_this_loop.as_ref().is_some_and(|event| {
+                                    event.phase == InputPhase::Pressed
+                                        && event.action == LogicalAction::Left
+                                });
+                                let right = routed_event_this_loop.as_ref().is_some_and(|event| {
+                                    event.phase == InputPhase::Pressed
+                                        && event.action == LogicalAction::Right
+                                });
+                                let changed = if left {
+                                    preview_transition.cycle_picker(-1)
+                                } else if right {
+                                    preview_transition.cycle_picker(1)
+                                } else {
+                                    false
+                                };
+                                if changed {
+                                    crate::ui_logln!(
+                                        "preview_transition_picker={}",
+                                        preview_transition
+                                            .current_label(frame_now.duration_since(run_start))
+                                    );
+                                    request_launcher_redraw!();
+                                }
+                            }
+                            if let Some(orientation) = settings_navigation_benchmark
+                                .take_orientation_change(
+                                    nav.screen,
+                                    full_screen_transition.state()
+                                        == FullScreenTransitionState::Live,
+                                )
+                            {
+                                apply_orientation_layout(
+                                    &app,
+                                    &window,
+                                    ui,
+                                    orientation,
+                                    &mut nav,
+                                    &mut layout,
+                                    &mut layout_epoch,
+                                    &mut navigation_transition,
                                 );
                                 full_bridge_dirty = true;
+                                request_launcher_redraw!();
                             }
-                            None
-                        } else if scheduler.should_request_benchmark_launch()
-                            && catalog_ready
-                            && !launcher_bench_waiting_for_initial_preview
-                            && nav.screen == Screen::Arcade
-                        {
-                            active_system(&catalog, &nav)
-                                .and_then(|system| {
-                                    nav.active_arcade_game_at(
-                                        &catalog,
-                                        &system.id,
-                                        nav.arcade.selected,
-                                    )
-                                })
-                                .map(|game| launcher::LauncherEvent {
-                                    action: LauncherAction::LaunchGame,
-                                    path: Some(game.mra_path.to_string()),
-                                    settings: None,
-                                })
-                        } else if auto_launch_selected
-                            && !auto_launch_selected_done
-                            && launcher_auto_launch_gate_ready(auto_launch_gate.as_deref())
-                            && catalog_ready
-                            && nav.screen == Screen::Arcade
-                        {
-                            let event = active_system(&catalog, &nav)
-                                .and_then(|system| {
-                                    nav.active_arcade_game_at(
-                                        &catalog,
-                                        &system.id,
-                                        nav.arcade.selected,
-                                    )
-                                })
-                                .map(|game| launcher::LauncherEvent {
-                                    action: LauncherAction::LaunchGame,
-                                    path: Some(game.mra_path.to_string()),
-                                    settings: None,
-                                });
-                            auto_launch_selected_done = event.is_some();
-                            event
-                        } else if scheduler.launch_benchmark_enabled() {
-                            None
-                        } else if let Some(input_event) = routed_event_this_loop.as_ref() {
-                            nav.handle_action_with_navigation_intents(
-                                input_event,
-                                input_dispatch_now,
-                                &catalog,
-                            )
-                        } else if final_input_tick {
-                            nav.handle_held_tick_with_navigation_intents(
-                                &launcher_state,
-                                frame_now,
-                                &catalog,
-                            )
-                        } else {
-                            None
-                        };
-                        let event =
-                            if !final_input_tick && focus.target.kind == InputContextKind::Screen {
+                            let lifecycle_view = lifecycle.view();
+                            let launch_failure_visible =
+                                lifecycle_view.launch_failure_dialog().is_some();
+                            let recovery_dialog_visible =
+                                lifecycle_view.catalog_recovery_dialog().is_some();
+                            let pending_collection_cancelled =
+                                cancel_pending_collection_entry_for_input(
+                                    &mut pending_collection_entry,
+                                    &mut nav,
+                                    routed_event_this_loop.as_ref(),
+                                    start,
+                                );
+                            if pending_collection_cancelled {
+                                preview.cancel_system_entry_preview();
+                                arcade_entry_latency.cancel_enter();
+                                if navigation_transition.is_active() {
+                                    let now_us = frame_now
+                                        .saturating_duration_since(start)
+                                        .as_micros()
+                                        .min(u64::MAX as u128)
+                                        as u64;
+                                    navigation_transition.request_reverse(now_us);
+                                }
+                            }
+                            let settings_transition_source = (!launch_failure_visible
+                                && !recovery_dialog_visible
+                                && !navigation_transition.is_active()
+                                && navigation_transition.enabled()
+                                && settings_navigation_input_candidate(
+                                    nav.screen,
+                                    routed_event_this_loop.as_ref(),
+                                ))
+                            .then(|| (nav.screen, nav.navigation_transition_state()));
+                            let event = if orientation_transition.is_active()
+                                || full_screen_transition.owner()
+                                    == Some(FullScreenTransitionOwner::Orientation)
+                            {
+                                None
+                            } else if navigation_transition.is_active() {
+                                None
+                            } else if launch_failure_visible || recovery_dialog_visible {
+                                if let Some(input) = route_lifecycle_dialog_input(
+                                    routed_event_this_loop.as_ref(),
+                                    launch_failure_visible,
+                                    recovery_dialog_visible,
+                                ) {
+                                    lifecycle.handle(input, &mut lifecycle_effects);
+                                    apply_lifecycle_effects(
+                                        &mut lifecycle_effects,
+                                        &mut scheduler,
+                                        start,
+                                    );
+                                    full_bridge_dirty = true;
+                                }
+                                None
+                            } else if scheduler.should_request_benchmark_launch()
+                                && catalog_ready
+                                && !launcher_bench_waiting_for_initial_preview
+                                && nav.screen == Screen::Arcade
+                            {
+                                active_system(&catalog, &nav)
+                                    .and_then(|system| {
+                                        nav.active_arcade_game_at(
+                                            &catalog,
+                                            &system.id,
+                                            nav.arcade.selected,
+                                        )
+                                    })
+                                    .map(|game| launcher::LauncherEvent {
+                                        action: LauncherAction::LaunchGame,
+                                        path: Some(game.mra_path.to_string()),
+                                        settings: None,
+                                    })
+                            } else if auto_launch_selected
+                                && !auto_launch_selected_done
+                                && launcher_auto_launch_gate_ready(auto_launch_gate.as_deref())
+                                && catalog_ready
+                                && nav.screen == Screen::Arcade
+                            {
+                                let event = active_system(&catalog, &nav)
+                                    .and_then(|system| {
+                                        nav.active_arcade_game_at(
+                                            &catalog,
+                                            &system.id,
+                                            nav.arcade.selected,
+                                        )
+                                    })
+                                    .map(|game| launcher::LauncherEvent {
+                                        action: LauncherAction::LaunchGame,
+                                        path: Some(game.mra_path.to_string()),
+                                        settings: None,
+                                    });
+                                auto_launch_selected_done = event.is_some();
+                                event
+                            } else if scheduler.launch_benchmark_enabled() {
+                                None
+                            } else if let Some(input_event) = routed_event_this_loop.as_ref() {
+                                nav.handle_action_with_navigation_intents(
+                                    input_event,
+                                    input_dispatch_now,
+                                    &catalog,
+                                )
+                            } else if final_input_tick {
+                                nav.handle_held_tick_with_navigation_intents(
+                                    &launcher_state,
+                                    frame_now,
+                                    &catalog,
+                                )
+                            } else {
+                                None
+                            };
+                            let event = if !final_input_tick
+                                && focus.target.kind == InputContextKind::Screen
+                            {
                                 event.or_else(|| {
                                     nav.handle_held_tick_with_navigation_intents(
                                         &launcher_state,
@@ -7669,434 +7674,484 @@ pub(super) fn run_launcher_loop(
                             } else {
                                 event
                             };
-                        if let Some((source_screen, source_state)) = settings_transition_source
-                            && let Some((route, direction)) =
-                                settings_page_transition(source_screen, nav.screen)
-                        {
-                            let now_us = frame_now
-                                .saturating_duration_since(start)
-                                .as_micros()
-                                .min(u64::MAX as u128)
-                                as u64;
-                            let source = target.cached_565();
-                            let axis = match nav.settings.screen_orientation {
-                                ScreenOrientation::Normal => SettingsPageTransitionAxis::Horizontal,
-                                ScreenOrientation::MonitorCounterclockwise => {
-                                    SettingsPageTransitionAxis::Vertical
-                                }
-                                ScreenOrientation::MonitorClockwise => {
-                                    SettingsPageTransitionAxis::VerticalReversed
-                                }
-                            };
-                            let started = navigation_transition.begin_settings_page_physical(
-                                route,
-                                direction,
-                                axis,
-                                ui.render_w(),
-                                ui.render_h(),
-                                source,
-                                now_us,
-                            );
-                            let started = started.unwrap_or(false);
-                            if started
-                                && begin_navigation_full_screen_transition(
-                                    &mut full_screen_transition,
-                                    &mut navigation_transition_generation,
-                                )
+                            if let Some((source_screen, source_state)) = settings_transition_source
+                                && let Some((route, direction)) =
+                                    settings_page_transition(source_screen, nav.screen)
                             {
-                                settings_navigation_benchmark.note_started(
+                                let now_us = frame_now
+                                    .saturating_duration_since(start)
+                                    .as_micros()
+                                    .min(u64::MAX as u128)
+                                    as u64;
+                                let source = target.cached_565();
+                                let axis = match nav.settings.screen_orientation {
+                                    ScreenOrientation::Normal => {
+                                        SettingsPageTransitionAxis::Horizontal
+                                    }
+                                    ScreenOrientation::MonitorCounterclockwise => {
+                                        SettingsPageTransitionAxis::Vertical
+                                    }
+                                    ScreenOrientation::MonitorClockwise => {
+                                        SettingsPageTransitionAxis::VerticalReversed
+                                    }
+                                };
+                                let started = navigation_transition.begin_settings_page_physical(
                                     route,
                                     direction,
-                                    source_screen,
-                                    nav.screen,
-                                    frames,
+                                    axis,
+                                    ui.render_w(),
+                                    ui.render_h(),
+                                    source,
+                                    now_us,
                                 );
-                                pending_navigation_transition = Some(PendingNavigationTransition {
-                                    event: launcher::LauncherEvent {
-                                        action: LauncherAction::NavigateBack,
-                                        path: None,
-                                        settings: None,
-                                    },
-                                    source_state,
-                                    source_was_arcade: false,
-                                    committed: true,
-                                    status_quiesce_started_at: None,
-                                });
-                                full_bridge_dirty = true;
-                                request_launcher_redraw!();
-                            } else if started {
-                                navigation_transition.settle_at_destination();
-                                let _ = navigation_transition.complete();
-                            }
-                        }
-                        if let Some(event) = event {
-                            match event.action {
-                                LauncherAction::OpenMenu
-                                | LauncherAction::OpenCollection
-                                | LauncherAction::NavigateBack
-                                | LauncherAction::NavigateHome => {
-                                    let collection_id = (event.action
-                                        == LauncherAction::OpenCollection)
-                                        .then(|| event.path.clone())
-                                        .flatten();
-                                    if let Some(collection_id) = collection_id.as_deref()
-                                        && !collection_has_resident_rows(&catalog, collection_id)
-                                    {
-                                        let requested_at = Instant::now();
-                                        let entry = begin_cold_collection_entry(
-                                            &mut scheduler,
-                                            &mut nav,
-                                            &mut preview,
-                                            &catalog,
-                                            catalog_version,
-                                            collection_id,
-                                            requested_at,
-                                            "open-collection-intent",
-                                            false,
-                                            &mut arcade_entry_latency,
-                                            &lifecycle,
-                                            start,
-                                        );
-                                        full_bridge_dirty |= entry.bridge_dirty;
-                                        if entry.pending.is_some() {
-                                            pending_collection_entry = entry.pending;
-                                        }
-                                    }
-
-                                    let transition_spec =
-                                        navigation_transition_for_intent(&nav, &event);
-                                    if transition_spec.is_some()
-                                        && nav.screen == Screen::Arcade
-                                        && !crt_layout
-                                    {
-                                        if !layout.is_portrait() {
-                                            arcade_list_renderer
-                                                .compose_layer_to_cached(target, true);
-                                            let _ = target.compose_direct_preview_rect(
-                                                preview_screen_rect(ui),
-                                            );
-                                        }
-                                    }
-                                    let navigation_runtime_started =
-                                        transition_spec.is_some_and(|(edge, direction)| {
-                                            let geometry = match direction {
-                                                NavigationTransitionDirection::Forward => {
-                                                    let root_menu = nav.current_menu_id()
-                                                        == crate::launcher_taxonomy::ROOT_MENU_ID;
-                                                    let selected_label = nav
-                                                        .current_menu_items()
-                                                        .get(nav.selected)
-                                                        .map(|item| item.title.as_str())
-                                                        .unwrap_or("");
-                                                    Some(if crt_layout {
-                                                        let content = layout.content_rect();
-                                                        crt_navigation_geometry(
-                                                            layout.logical_w(),
-                                                            layout.logical_h(),
-                                                            CrtNavigationLayout {
-                                                                content_x: content.x,
-                                                                content_y: content.y,
-                                                                content_width: content.width,
-                                                                content_height: content.height,
-                                                                grid_x: crt_metrics.grid_x.max(1)
-                                                                    as usize,
-                                                                grid_y: crt_metrics.grid_y.max(1)
-                                                                    as usize,
-                                                                header_height: crt_metrics
-                                                                    .header_height
-                                                                    .max(1)
-                                                                    as usize,
-                                                                footer_height: crt_metrics
-                                                                    .footer_height
-                                                                    .max(1)
-                                                                    as usize,
-                                                                heading_font_height: crt_metrics
-                                                                    .heading_font
-                                                                    .pixels()
-                                                                    .max(1)
-                                                                    as usize,
-                                                                title_font_height: crt_metrics
-                                                                    .card_title_font
-                                                                    .pixels()
-                                                                    .max(1)
-                                                                    as usize,
-                                                                detail_font_height: crt_metrics
-                                                                    .card_detail_font
-                                                                    .pixels()
-                                                                    .max(1)
-                                                                    as usize,
-                                                                game_row_height: crt_metrics
-                                                                    .game_row_height
-                                                                    .max(1)
-                                                                    as usize,
-                                                            },
-                                                            nav.selected,
-                                                            nav.current_menu_items().len(),
-                                                            root_menu,
-                                                            edge,
-                                                            selected_label,
-                                                        )
-                                                    } else {
-                                                        hdmi_navigation_geometry(
-                                                            layout.logical_w(),
-                                                            layout.logical_h(),
-                                                            nav.selected,
-                                                            nav.scroll_x,
-                                                            root_menu,
-                                                            edge,
-                                                            selected_label,
-                                                        )
-                                                    })
-                                                }
-                                                NavigationTransitionDirection::Reverse => {
-                                                    navigation_transition.geometry_for_reverse(edge)
-                                                }
-                                            };
-                                            geometry.is_some_and(|geometry| {
-                                                let started = if layout.is_portrait() {
-                                                    navigation_transition.begin_physical(
-                                                        edge,
-                                                        direction,
-                                                        navigation_geometry_to_composition(
-                                                            layout, geometry,
-                                                        ),
-                                                        geometry,
-                                                        layout.composition_w(),
-                                                        layout.composition_h(),
-                                                        target.cached_565(),
-                                                        frame_now
-                                                            .saturating_duration_since(start)
-                                                            .as_micros()
-                                                            .min(u64::MAX as u128)
-                                                            as u64,
-                                                    )
-                                                } else {
-                                                    navigation_transition.begin(
-                                                        edge,
-                                                        direction,
-                                                        geometry,
-                                                        target.cached_565(),
-                                                        frame_now
-                                                            .saturating_duration_since(start)
-                                                            .as_micros()
-                                                            .min(u64::MAX as u128)
-                                                            as u64,
-                                                    )
-                                                };
-                                                started.unwrap_or(false)
-                                            })
+                                let started = started.unwrap_or(false);
+                                if started
+                                    && begin_navigation_full_screen_transition(
+                                        &mut full_screen_transition,
+                                        &mut navigation_transition_generation,
+                                    )
+                                {
+                                    settings_navigation_benchmark.note_started(
+                                        route,
+                                        direction,
+                                        source_screen,
+                                        nav.screen,
+                                        frames,
+                                    );
+                                    pending_navigation_transition =
+                                        Some(PendingNavigationTransition {
+                                            event: launcher::LauncherEvent {
+                                                action: LauncherAction::NavigateBack,
+                                                path: None,
+                                                settings: None,
+                                            },
+                                            source_state,
+                                            source_was_arcade: false,
+                                            committed: true,
+                                            status_quiesce_started_at: None,
                                         });
-                                    let transition_started = navigation_runtime_started
-                                        && begin_navigation_full_screen_transition(
-                                            &mut full_screen_transition,
-                                            &mut navigation_transition_generation,
-                                        );
-                                    if transition_started {
-                                        let source_state = nav.navigation_transition_state();
-                                        pending_navigation_transition =
-                                            Some(PendingNavigationTransition {
-                                                event: event.clone(),
-                                                source_state,
-                                                source_was_arcade: nav.screen == Screen::Arcade,
-                                                committed: false,
-                                                status_quiesce_started_at: None,
-                                            });
-                                        full_bridge_dirty = true;
-                                        request_launcher_redraw!();
-                                    } else if navigation_runtime_started {
-                                        navigation_transition.settle_at_destination();
-                                        let _ = navigation_transition.complete();
-                                    } else if collection_id.is_none()
-                                        || collection_id.as_deref().is_some_and(|collection_id| {
-                                            collection_has_resident_rows(&catalog, collection_id)
-                                        })
-                                    {
-                                        if nav.commit_navigation_intent(&event, &catalog) {
-                                            if let Some(collection_id) = collection_id.as_deref() {
-                                                print_startup_event(
-                                                    start,
-                                                    "catalog_system_entry_immediate",
-                                                    format!(
-                                                        "system={collection_id} resident_rows={}",
-                                                        catalog.system_game_count(collection_id)
-                                                    ),
+                                    full_bridge_dirty = true;
+                                    request_launcher_redraw!();
+                                } else if started {
+                                    navigation_transition.settle_at_destination();
+                                    let _ = navigation_transition.complete();
+                                }
+                            }
+                            if let Some(event) = event {
+                                match event.action {
+                                    LauncherAction::OpenMenu
+                                    | LauncherAction::OpenCollection
+                                    | LauncherAction::NavigateBack
+                                    | LauncherAction::NavigateHome => {
+                                        let collection_id = (event.action
+                                            == LauncherAction::OpenCollection)
+                                            .then(|| event.path.clone())
+                                            .flatten();
+                                        if let Some(collection_id) = collection_id.as_deref()
+                                            && !collection_has_resident_rows(
+                                                &catalog,
+                                                collection_id,
+                                            )
+                                        {
+                                            let requested_at = Instant::now();
+                                            let entry = begin_cold_collection_entry(
+                                                &mut scheduler,
+                                                &mut nav,
+                                                &mut preview,
+                                                &catalog,
+                                                catalog_version,
+                                                collection_id,
+                                                requested_at,
+                                                "open-collection-intent",
+                                                false,
+                                                &mut arcade_entry_latency,
+                                                &lifecycle,
+                                                start,
+                                            );
+                                            full_bridge_dirty |= entry.bridge_dirty;
+                                            if entry.pending.is_some() {
+                                                pending_collection_entry = entry.pending;
+                                            }
+                                        }
+
+                                        let transition_spec =
+                                            navigation_transition_for_intent(&nav, &event);
+                                        if transition_spec.is_some()
+                                            && nav.screen == Screen::Arcade
+                                            && !crt_layout
+                                        {
+                                            if !layout.is_portrait() {
+                                                arcade_list_renderer
+                                                    .compose_layer_to_cached(target, true);
+                                                let _ = target.compose_direct_preview_rect(
+                                                    preview_screen_rect(ui),
                                                 );
                                             }
+                                        }
+                                        let navigation_runtime_started = transition_spec
+                                            .is_some_and(|(edge, direction)| {
+                                                let geometry = match direction {
+                                                    NavigationTransitionDirection::Forward => {
+                                                        let root_menu = nav.current_menu_id()
+                                                        == crate::launcher_taxonomy::ROOT_MENU_ID;
+                                                        let selected_label = nav
+                                                            .current_menu_items()
+                                                            .get(nav.selected)
+                                                            .map(|item| item.title.as_str())
+                                                            .unwrap_or("");
+                                                        Some(if crt_layout {
+                                                            let content = layout.content_rect();
+                                                            crt_navigation_geometry(
+                                                                layout.logical_w(),
+                                                                layout.logical_h(),
+                                                                CrtNavigationLayout {
+                                                                    content_x: content.x,
+                                                                    content_y: content.y,
+                                                                    content_width: content.width,
+                                                                    content_height: content.height,
+                                                                    grid_x: crt_metrics
+                                                                        .grid_x
+                                                                        .max(1)
+                                                                        as usize,
+                                                                    grid_y: crt_metrics
+                                                                        .grid_y
+                                                                        .max(1)
+                                                                        as usize,
+                                                                    header_height: crt_metrics
+                                                                        .header_height
+                                                                        .max(1)
+                                                                        as usize,
+                                                                    footer_height: crt_metrics
+                                                                        .footer_height
+                                                                        .max(1)
+                                                                        as usize,
+                                                                    heading_font_height: crt_metrics
+                                                                        .heading_font
+                                                                        .pixels()
+                                                                        .max(1)
+                                                                        as usize,
+                                                                    title_font_height: crt_metrics
+                                                                        .card_title_font
+                                                                        .pixels()
+                                                                        .max(1)
+                                                                        as usize,
+                                                                    detail_font_height: crt_metrics
+                                                                        .card_detail_font
+                                                                        .pixels()
+                                                                        .max(1)
+                                                                        as usize,
+                                                                    game_row_height: crt_metrics
+                                                                        .game_row_height
+                                                                        .max(1)
+                                                                        as usize,
+                                                                },
+                                                                nav.selected,
+                                                                nav.current_menu_items().len(),
+                                                                root_menu,
+                                                                edge,
+                                                                selected_label,
+                                                            )
+                                                        } else {
+                                                            hdmi_navigation_geometry(
+                                                                layout.logical_w(),
+                                                                layout.logical_h(),
+                                                                nav.selected,
+                                                                nav.scroll_x,
+                                                                root_menu,
+                                                                edge,
+                                                                selected_label,
+                                                            )
+                                                        })
+                                                    }
+                                                    NavigationTransitionDirection::Reverse => {
+                                                        navigation_transition
+                                                            .geometry_for_reverse(edge)
+                                                    }
+                                                };
+                                                geometry.is_some_and(|geometry| {
+                                                    let started = if layout.is_portrait() {
+                                                        navigation_transition.begin_physical(
+                                                            edge,
+                                                            direction,
+                                                            navigation_geometry_to_composition(
+                                                                layout, geometry,
+                                                            ),
+                                                            geometry,
+                                                            layout.composition_w(),
+                                                            layout.composition_h(),
+                                                            target.cached_565(),
+                                                            frame_now
+                                                                .saturating_duration_since(start)
+                                                                .as_micros()
+                                                                .min(u64::MAX as u128)
+                                                                as u64,
+                                                        )
+                                                    } else {
+                                                        navigation_transition.begin(
+                                                            edge,
+                                                            direction,
+                                                            geometry,
+                                                            target.cached_565(),
+                                                            frame_now
+                                                                .saturating_duration_since(start)
+                                                                .as_micros()
+                                                                .min(u64::MAX as u128)
+                                                                as u64,
+                                                        )
+                                                    };
+                                                    started.unwrap_or(false)
+                                                })
+                                            });
+                                        let transition_started = navigation_runtime_started
+                                            && begin_navigation_full_screen_transition(
+                                                &mut full_screen_transition,
+                                                &mut navigation_transition_generation,
+                                            );
+                                        if transition_started {
+                                            let source_state = nav.navigation_transition_state();
+                                            pending_navigation_transition =
+                                                Some(PendingNavigationTransition {
+                                                    event: event.clone(),
+                                                    source_state,
+                                                    source_was_arcade: nav.screen == Screen::Arcade,
+                                                    committed: false,
+                                                    status_quiesce_started_at: None,
+                                                });
                                             full_bridge_dirty = true;
                                             request_launcher_redraw!();
+                                        } else if navigation_runtime_started {
+                                            navigation_transition.settle_at_destination();
+                                            let _ = navigation_transition.complete();
+                                        } else if collection_id.is_none()
+                                            || collection_id.as_deref().is_some_and(
+                                                |collection_id| {
+                                                    collection_has_resident_rows(
+                                                        &catalog,
+                                                        collection_id,
+                                                    )
+                                                },
+                                            )
+                                        {
+                                            if nav.commit_navigation_intent(&event, &catalog) {
+                                                if let Some(collection_id) =
+                                                    collection_id.as_deref()
+                                                {
+                                                    print_startup_event(
+                                                        start,
+                                                        "catalog_system_entry_immediate",
+                                                        format!(
+                                                            "system={collection_id} resident_rows={}",
+                                                            catalog
+                                                                .system_game_count(collection_id)
+                                                        ),
+                                                    );
+                                                }
+                                                full_bridge_dirty = true;
+                                                request_launcher_redraw!();
+                                            }
                                         }
                                     }
-                                }
-                                LauncherAction::ExitToMister => {
-                                    loading_title = "Exit to MiSTer".to_string();
-                                    sync_bridge_launcher(
-                                        &app,
-                                        &pad,
-                                        &nav,
-                                        &lifecycle,
-                                        &setup,
-                                        scheduler.visible_loading_title(&loading_title),
-                                        "Return to MiSTer MagiK after reboot",
-                                        &catalog,
-                                        &mut preview,
-                                        &mut bridge_models,
-                                        catalog_version,
-                                        false,
-                                        false,
-                                        ui,
-                                    );
-                                    window.request_redraw();
-                                    update_slint_animations(animation_clock);
-                                    let _ = render_immediate_launcher_frame(window, target, layout);
-                                    let _pace = pacer.wait();
-                                    copy_cached_rows_565(
-                                        disp,
-                                        target.cached_frame_view(),
-                                        0,
-                                        ui.render_h(),
-                                    );
-                                    match launcher::exit_to_mister() {
-                                        Ok(()) => std::process::exit(0),
-                                        Err(e) => {
-                                            crate::ui_errln!("exit to MiSTer failed: {e}");
-                                            loading_title.clear();
+                                    LauncherAction::ExitToMister => {
+                                        loading_title = "Exit to MiSTer".to_string();
+                                        sync_bridge_launcher(
+                                            &app,
+                                            &pad,
+                                            &nav,
+                                            &lifecycle,
+                                            &setup,
+                                            scheduler.visible_loading_title(&loading_title),
+                                            "Return to MiSTer MagiK after reboot",
+                                            &catalog,
+                                            &mut preview,
+                                            &mut bridge_models,
+                                            catalog_version,
+                                            false,
+                                            false,
+                                            ui,
+                                        );
+                                        window.request_redraw();
+                                        update_slint_animations(animation_clock);
+                                        let _ =
+                                            render_immediate_launcher_frame(window, target, layout);
+                                        let _pace = pacer.wait();
+                                        copy_cached_rows_565(
+                                            disp,
+                                            target.cached_frame_view(),
+                                            0,
+                                            ui.render_h(),
+                                        );
+                                        match launcher::exit_to_mister() {
+                                            Ok(()) => std::process::exit(0),
+                                            Err(e) => {
+                                                crate::ui_errln!("exit to MiSTer failed: {e}");
+                                                loading_title.clear();
+                                            }
                                         }
                                     }
-                                }
-                                LauncherAction::RebuildDatabase => {
-                                    let effects =
-                                        catalog_session.rebuild_database(arcade_root.clone());
-                                    apply_catalog_session_effects(
-                                        effects,
-                                        preview_route,
-                                        &mut launcher_response_trace,
-                                        &app,
-                                        &mut nav,
-                                        &mut catalog,
-                                        &mut catalog_ready,
-                                        &mut catalog_version,
-                                        &mut return_capsule_active,
-                                        &mut catalog_generation,
-                                        &mut launch_return_session,
-                                        &mut preview,
-                                        &mut media_session,
-                                        &mut scheduler,
-                                        &mut lifecycle,
-                                        &mut lifecycle_effects,
-                                        &mut full_bridge_dirty,
-                                        &mut startup_intro_catalog_ui_replay,
-                                        &mut startup_intro_catalog_shells_pending,
-                                        false,
-                                        loop_start,
-                                        start,
-                                    );
-                                    request_launcher_redraw!();
-                                    continue 'launcher;
-                                }
-                                LauncherAction::Restart => {
-                                    loading_title = "Shutting down…".to_string();
-                                    sync_bridge_launcher(
-                                        &app,
-                                        &pad,
-                                        &nav,
-                                        &lifecycle,
-                                        &setup,
-                                        scheduler.visible_loading_title(&loading_title),
-                                        "Restarting MiSTer",
-                                        &catalog,
-                                        &mut preview,
-                                        &mut bridge_models,
-                                        catalog_version,
-                                        false,
-                                        false,
-                                        ui,
-                                    );
-                                    window.request_redraw();
-                                    update_slint_animations(animation_clock);
-                                    let _ = render_immediate_launcher_frame(window, target, layout);
-                                    let _pace = pacer.wait();
-                                    copy_cached_rows_565(
-                                        disp,
-                                        target.cached_frame_view(),
-                                        0,
-                                        ui.render_h(),
-                                    );
-                                    std::thread::sleep(Duration::from_millis(250));
-                                    match launcher::reboot_mister() {
-                                        Ok(()) => continue 'launcher,
-                                        Err(e) => {
-                                            crate::ui_errln!("restart failed: {e}");
-                                            loading_title.clear();
+                                    LauncherAction::RebuildDatabase => {
+                                        let effects =
+                                            catalog_session.rebuild_database(arcade_root.clone());
+                                        apply_catalog_session_effects(
+                                            effects,
+                                            preview_route,
+                                            &mut launcher_response_trace,
+                                            &app,
+                                            &mut nav,
+                                            &mut catalog,
+                                            &mut catalog_ready,
+                                            &mut catalog_version,
+                                            &mut return_capsule_active,
+                                            &mut catalog_generation,
+                                            &mut launch_return_session,
+                                            &mut preview,
+                                            &mut media_session,
+                                            &mut scheduler,
+                                            &mut lifecycle,
+                                            &mut lifecycle_effects,
+                                            &mut full_bridge_dirty,
+                                            &mut startup_intro_catalog_ui_replay,
+                                            &mut startup_intro_catalog_shells_pending,
+                                            false,
+                                            loop_start,
+                                            start,
+                                        );
+                                        request_launcher_redraw!();
+                                        continue 'launcher;
+                                    }
+                                    LauncherAction::Restart => {
+                                        loading_title = "Shutting down…".to_string();
+                                        sync_bridge_launcher(
+                                            &app,
+                                            &pad,
+                                            &nav,
+                                            &lifecycle,
+                                            &setup,
+                                            scheduler.visible_loading_title(&loading_title),
+                                            "Restarting MiSTer",
+                                            &catalog,
+                                            &mut preview,
+                                            &mut bridge_models,
+                                            catalog_version,
+                                            false,
+                                            false,
+                                            ui,
+                                        );
+                                        window.request_redraw();
+                                        update_slint_animations(animation_clock);
+                                        let _ =
+                                            render_immediate_launcher_frame(window, target, layout);
+                                        let _pace = pacer.wait();
+                                        copy_cached_rows_565(
+                                            disp,
+                                            target.cached_frame_view(),
+                                            0,
+                                            ui.render_h(),
+                                        );
+                                        std::thread::sleep(Duration::from_millis(250));
+                                        match launcher::reboot_mister() {
+                                            Ok(()) => continue 'launcher,
+                                            Err(e) => {
+                                                crate::ui_errln!("restart failed: {e}");
+                                                loading_title.clear();
+                                            }
                                         }
                                     }
-                                }
-                                LauncherAction::ContinueWithStaleLibrary => {
-                                    let effects = catalog_session.continue_with_stale_library();
-                                    apply_catalog_session_effects(
-                                        effects,
-                                        preview_route,
-                                        &mut launcher_response_trace,
-                                        &app,
-                                        &mut nav,
-                                        &mut catalog,
-                                        &mut catalog_ready,
-                                        &mut catalog_version,
-                                        &mut return_capsule_active,
-                                        &mut catalog_generation,
-                                        &mut launch_return_session,
-                                        &mut preview,
-                                        &mut media_session,
-                                        &mut scheduler,
-                                        &mut lifecycle,
-                                        &mut lifecycle_effects,
-                                        &mut full_bridge_dirty,
-                                        &mut startup_intro_catalog_ui_replay,
-                                        &mut startup_intro_catalog_shells_pending,
-                                        false,
-                                        loop_start,
-                                        start,
-                                    );
-                                    request_launcher_redraw!();
-                                    continue 'launcher;
-                                }
-                                LauncherAction::RebuildLibrary => {
-                                    let effects =
-                                        catalog_session.rebuild_library(arcade_root.clone());
-                                    apply_catalog_session_effects(
-                                        effects,
-                                        preview_route,
-                                        &mut launcher_response_trace,
-                                        &app,
-                                        &mut nav,
-                                        &mut catalog,
-                                        &mut catalog_ready,
-                                        &mut catalog_version,
-                                        &mut return_capsule_active,
-                                        &mut catalog_generation,
-                                        &mut launch_return_session,
-                                        &mut preview,
-                                        &mut media_session,
-                                        &mut scheduler,
-                                        &mut lifecycle,
-                                        &mut lifecycle_effects,
-                                        &mut full_bridge_dirty,
-                                        &mut startup_intro_catalog_ui_replay,
-                                        &mut startup_intro_catalog_shells_pending,
-                                        false,
-                                        loop_start,
-                                        start,
-                                    );
-                                    request_launcher_redraw!();
-                                    continue 'launcher;
-                                }
-                                LauncherAction::ApplyDisplayResolution => {
-                                    if let Some(id) = event.path.as_deref() {
-                                        let result = launcher::apply_display_resolution(id);
+                                    LauncherAction::ContinueWithStaleLibrary => {
+                                        let effects = catalog_session.continue_with_stale_library();
+                                        apply_catalog_session_effects(
+                                            effects,
+                                            preview_route,
+                                            &mut launcher_response_trace,
+                                            &app,
+                                            &mut nav,
+                                            &mut catalog,
+                                            &mut catalog_ready,
+                                            &mut catalog_version,
+                                            &mut return_capsule_active,
+                                            &mut catalog_generation,
+                                            &mut launch_return_session,
+                                            &mut preview,
+                                            &mut media_session,
+                                            &mut scheduler,
+                                            &mut lifecycle,
+                                            &mut lifecycle_effects,
+                                            &mut full_bridge_dirty,
+                                            &mut startup_intro_catalog_ui_replay,
+                                            &mut startup_intro_catalog_shells_pending,
+                                            false,
+                                            loop_start,
+                                            start,
+                                        );
+                                        request_launcher_redraw!();
+                                        continue 'launcher;
+                                    }
+                                    LauncherAction::RebuildLibrary => {
+                                        let effects =
+                                            catalog_session.rebuild_library(arcade_root.clone());
+                                        apply_catalog_session_effects(
+                                            effects,
+                                            preview_route,
+                                            &mut launcher_response_trace,
+                                            &app,
+                                            &mut nav,
+                                            &mut catalog,
+                                            &mut catalog_ready,
+                                            &mut catalog_version,
+                                            &mut return_capsule_active,
+                                            &mut catalog_generation,
+                                            &mut launch_return_session,
+                                            &mut preview,
+                                            &mut media_session,
+                                            &mut scheduler,
+                                            &mut lifecycle,
+                                            &mut lifecycle_effects,
+                                            &mut full_bridge_dirty,
+                                            &mut startup_intro_catalog_ui_replay,
+                                            &mut startup_intro_catalog_shells_pending,
+                                            false,
+                                            loop_start,
+                                            start,
+                                        );
+                                        request_launcher_redraw!();
+                                        continue 'launcher;
+                                    }
+                                    LauncherAction::ApplyDisplayResolution => {
+                                        if let Some(id) = event.path.as_deref() {
+                                            let result = launcher::apply_display_resolution(id);
+                                            pacer.rearm_after_display_mode_change();
+                                            if let Err(error) = result {
+                                                crate::ui_errln!("display apply failed: {error}");
+                                                nav.display_error = Some(format!(
+                                                    "Could not apply the selected resolution: {error}"
+                                                ));
+                                                nav.confirm_action = Some(
+                                                    launcher::ConfirmAction::DisplayResolutionError,
+                                                );
+                                                nav.confirm_selected = 0;
+                                            }
+                                        }
+                                    }
+                                    LauncherAction::ConfirmDisplayResolution => {
+                                        nav.display_confirm_busy = true;
+                                        nav.display_error = None;
+                                        nav.confirm_action =
+                                            Some(launcher::ConfirmAction::DisplayResolution);
+                                        let result_tx = display_confirm_tx.clone();
+                                        std::thread::spawn(move || {
+                                            let result =
+                                                launcher::confirm_display_resolution_and_wait(
+                                                    Duration::from_secs(12),
+                                                );
+                                            let _ = result_tx.send(result);
+                                        });
+                                    }
+                                    LauncherAction::CancelDisplayResolution => {
+                                        let result = launcher::cancel_display_resolution();
                                         pacer.rearm_after_display_mode_change();
                                         if let Err(error) = result {
-                                            crate::ui_errln!("display apply failed: {error}");
+                                            crate::ui_errln!("display rollback failed: {error}");
                                             nav.display_error = Some(format!(
-                                                "Could not apply the selected resolution: {error}"
+                                                "Could not restore the previous resolution: {error}"
                                             ));
                                             nav.confirm_action = Some(
                                                 launcher::ConfirmAction::DisplayResolutionError,
@@ -8104,382 +8159,370 @@ pub(super) fn run_launcher_loop(
                                             nav.confirm_selected = 0;
                                         }
                                     }
-                                }
-                                LauncherAction::ConfirmDisplayResolution => {
-                                    nav.display_confirm_busy = true;
-                                    nav.display_error = None;
-                                    nav.confirm_action =
-                                        Some(launcher::ConfirmAction::DisplayResolution);
-                                    let result_tx = display_confirm_tx.clone();
-                                    std::thread::spawn(move || {
-                                        let result = launcher::confirm_display_resolution_and_wait(
-                                            Duration::from_secs(12),
-                                        );
-                                        let _ = result_tx.send(result);
-                                    });
-                                }
-                                LauncherAction::CancelDisplayResolution => {
-                                    let result = launcher::cancel_display_resolution();
-                                    pacer.rearm_after_display_mode_change();
-                                    if let Err(error) = result {
-                                        crate::ui_errln!("display rollback failed: {error}");
-                                        nav.display_error = Some(format!(
-                                            "Could not restore the previous resolution: {error}"
-                                        ));
-                                        nav.confirm_action =
-                                            Some(launcher::ConfirmAction::DisplayResolutionError);
-                                        nav.confirm_selected = 0;
+                                    LauncherAction::ApplyScreenOrientation => {
+                                        if let Some(orientation) =
+                                            event.path.as_deref().and_then(ScreenOrientation::parse)
+                                            && orientation != nav.settings.screen_orientation
+                                        {
+                                            let previous = nav.settings.screen_orientation;
+                                            orientation_previous = Some(previous);
+                                            nav.orientation_confirm_busy = false;
+                                            nav.orientation_error = None;
+                                            arm_orientation_confirmation(&mut nav);
+                                            orientation_confirm_deadline = None;
+                                            let animated = begin_orientation_transition(
+                                                &app,
+                                                window,
+                                                ui,
+                                                target,
+                                                previous,
+                                                orientation,
+                                                frame_now,
+                                                nav.settings.reduce_motion,
+                                                &mut nav,
+                                                &mut layout,
+                                                &mut layout_epoch,
+                                                &mut navigation_transition,
+                                                &mut full_screen_transition,
+                                                &mut orientation_transition_generation,
+                                                &mut orientation_transition,
+                                                &mut orientation_transition_intent,
+                                                &mut orientation_preparation_trace,
+                                                OrientationTransitionIntent::Confirm,
+                                            );
+                                            if !animated {
+                                                let _ = orientation_transition.take_completion();
+                                                orientation_confirm_deadline = Some(
+                                                    Instant::now()
+                                                        + Duration::from_secs(u64::from(
+                                                            launcher::DISPLAY_CONFIRM_SECONDS,
+                                                        )),
+                                                );
+                                            }
+                                            orientation_full_redraw_pending = true;
+                                            full_bridge_dirty = true;
+                                        }
                                     }
-                                }
-                                LauncherAction::ApplyScreenOrientation => {
-                                    if let Some(orientation) =
-                                        event.path.as_deref().and_then(ScreenOrientation::parse)
-                                        && orientation != nav.settings.screen_orientation
-                                    {
-                                        let previous = nav.settings.screen_orientation;
-                                        orientation_previous = Some(previous);
+                                    LauncherAction::ConfirmScreenOrientation => {
+                                        orientation_confirm_deadline = None;
+                                        nav.orientation_confirm_remaining = 0;
+                                        nav.orientation_confirm_busy = true;
+                                        nav.orientation_error = None;
+                                        nav.confirm_action =
+                                            Some(launcher::ConfirmAction::ScreenOrientation);
+                                        nav.confirm_selected = 1;
+                                        let confirmed = nav.settings.clone();
+                                        let mut previous = confirmed.clone();
+                                        previous.screen_orientation = orientation_previous
+                                            .unwrap_or(confirmed.screen_orientation);
+                                        let result_tx = orientation_confirm_tx.clone();
+                                        let store = orientation_store.clone();
+                                        std::thread::spawn(move || {
+                                            let result = store
+                                                .save_confirmed(&previous, &confirmed)
+                                                .map_err(|error| error.to_string());
+                                            let _ = result_tx.send(result);
+                                        });
+                                    }
+                                    LauncherAction::CancelScreenOrientation => {
+                                        if let Some(previous) = orientation_previous.take() {
+                                            let from = nav.settings.screen_orientation;
+                                            let animated = begin_orientation_transition(
+                                                &app,
+                                                window,
+                                                ui,
+                                                target,
+                                                from,
+                                                previous,
+                                                frame_now,
+                                                nav.settings.reduce_motion,
+                                                &mut nav,
+                                                &mut layout,
+                                                &mut layout_epoch,
+                                                &mut navigation_transition,
+                                                &mut full_screen_transition,
+                                                &mut orientation_transition_generation,
+                                                &mut orientation_transition,
+                                                &mut orientation_transition_intent,
+                                                &mut orientation_preparation_trace,
+                                                OrientationTransitionIntent::Rollback,
+                                            );
+                                            let _ = animated;
+                                        }
+                                        orientation_confirm_deadline = None;
+                                        nav.orientation_confirm_remaining = 0;
                                         nav.orientation_confirm_busy = false;
                                         nav.orientation_error = None;
-                                        arm_orientation_confirmation(&mut nav);
-                                        orientation_confirm_deadline = None;
-                                        let animated = begin_orientation_transition(
-                                            &app,
-                                            window,
-                                            ui,
-                                            target,
-                                            previous,
-                                            orientation,
-                                            frame_now,
-                                            nav.settings.reduce_motion,
-                                            &mut nav,
-                                            &mut layout,
-                                            &mut layout_epoch,
-                                            &mut navigation_transition,
-                                            &mut full_screen_transition,
-                                            &mut orientation_transition_generation,
-                                            &mut orientation_transition,
-                                            &mut orientation_transition_intent,
-                                            &mut orientation_preparation_trace,
-                                            OrientationTransitionIntent::Confirm,
-                                        );
-                                        if !animated {
-                                            let _ = orientation_transition.take_completion();
-                                            orientation_confirm_deadline = Some(
-                                                Instant::now()
-                                                    + Duration::from_secs(u64::from(
-                                                        launcher::DISPLAY_CONFIRM_SECONDS,
-                                                    )),
-                                            );
-                                        }
                                         orientation_full_redraw_pending = true;
                                         full_bridge_dirty = true;
                                     }
-                                }
-                                LauncherAction::ConfirmScreenOrientation => {
-                                    orientation_confirm_deadline = None;
-                                    nav.orientation_confirm_remaining = 0;
-                                    nav.orientation_confirm_busy = true;
-                                    nav.orientation_error = None;
-                                    nav.confirm_action =
-                                        Some(launcher::ConfirmAction::ScreenOrientation);
-                                    nav.confirm_selected = 1;
-                                    let confirmed = nav.settings.clone();
-                                    let mut previous = confirmed.clone();
-                                    previous.screen_orientation = orientation_previous
-                                        .unwrap_or(confirmed.screen_orientation);
-                                    let result_tx = orientation_confirm_tx.clone();
-                                    let store = orientation_store.clone();
-                                    std::thread::spawn(move || {
-                                        let result = store
-                                            .save_confirmed(&previous, &confirmed)
-                                            .map_err(|error| error.to_string());
-                                        let _ = result_tx.send(result);
-                                    });
-                                }
-                                LauncherAction::CancelScreenOrientation => {
-                                    if let Some(previous) = orientation_previous.take() {
-                                        let from = nav.settings.screen_orientation;
-                                        let animated = begin_orientation_transition(
-                                            &app,
-                                            window,
-                                            ui,
-                                            target,
-                                            from,
-                                            previous,
-                                            frame_now,
-                                            nav.settings.reduce_motion,
-                                            &mut nav,
-                                            &mut layout,
-                                            &mut layout_epoch,
-                                            &mut navigation_transition,
-                                            &mut full_screen_transition,
-                                            &mut orientation_transition_generation,
-                                            &mut orientation_transition,
-                                            &mut orientation_transition_intent,
-                                            &mut orientation_preparation_trace,
-                                            OrientationTransitionIntent::Rollback,
-                                        );
-                                        let _ = animated;
-                                    }
-                                    orientation_confirm_deadline = None;
-                                    nav.orientation_confirm_remaining = 0;
-                                    nav.orientation_confirm_busy = false;
-                                    nav.orientation_error = None;
-                                    orientation_full_redraw_pending = true;
-                                    full_bridge_dirty = true;
-                                }
-                                LauncherAction::PreviewScreensaver => {
-                                    if !screensaver.preview_active {
-                                        screensaver.preview(frame_now);
-                                        screensaver_show_started = Some(frame_now);
-                                        screensaver_first_render_logged = false;
-                                        screensaver_first_present_logged = false;
-                                        screensaver_first_card_present_logged = false;
-                                        crate::ui_logln!(
-                                            "screensaver_startup_timing milestone=show_pressed elapsed_us=0"
-                                        );
-                                    }
-                                    request_launcher_redraw!();
-                                    continue 'launcher;
-                                }
-                                LauncherAction::PersistSettings => {
-                                    if let Some(settings) = event.settings.as_ref() {
-                                        navigation_transition.set_enabled(
-                                            ui.render_w(),
-                                            ui.render_h(),
-                                            !settings.reduce_motion,
-                                        );
-                                        if let Err(error) = settings_store.save(settings) {
-                                            crate::ui_errln!(
-                                                "settings: failed to save launcher settings: {error}"
+                                    LauncherAction::PreviewScreensaver => {
+                                        if !screensaver.preview_active {
+                                            screensaver.preview(frame_now);
+                                            screensaver_show_started = Some(frame_now);
+                                            screensaver_first_render_logged = false;
+                                            screensaver_first_present_logged = false;
+                                            screensaver_first_card_present_logged = false;
+                                            crate::ui_logln!(
+                                                "screensaver_startup_timing milestone=show_pressed elapsed_us=0"
                                             );
                                         }
-                                    }
-                                }
-                                LauncherAction::AddFavourite | LauncherAction::RemoveFavourite => {
-                                    let favourite = event.action == LauncherAction::AddFavourite;
-                                    if let Some(launch_ref) = event.path.as_deref()
-                                        && let Some(game) =
-                                            catalog.user_game_identity_for_ref(launch_ref)
-                                    {
-                                        nav.reconcile_favourite_state(
-                                            &catalog, launch_ref, favourite,
-                                        );
-                                        let now = std::time::SystemTime::now()
-                                            .duration_since(std::time::UNIX_EPOCH)
-                                            .ok()
-                                            .and_then(|duration| {
-                                                i64::try_from(duration.as_secs()).ok()
-                                            })
-                                            .unwrap_or(0);
-                                        user_state_session.set_favourite(game, favourite, now);
-                                        full_bridge_dirty = true;
                                         request_launcher_redraw!();
+                                        continue 'launcher;
                                     }
+                                    LauncherAction::PersistSettings => {
+                                        if let Some(settings) = event.settings.as_ref() {
+                                            navigation_transition.set_enabled(
+                                                ui.render_w(),
+                                                ui.render_h(),
+                                                !settings.reduce_motion,
+                                            );
+                                            if let Err(error) = settings_store.save(settings) {
+                                                crate::ui_errln!(
+                                                    "settings: failed to save launcher settings: {error}"
+                                                );
+                                            }
+                                        }
+                                    }
+                                    LauncherAction::AddFavourite
+                                    | LauncherAction::RemoveFavourite => {
+                                        let favourite =
+                                            event.action == LauncherAction::AddFavourite;
+                                        if let Some(launch_ref) = event.path.as_deref()
+                                            && let Some(game) =
+                                                catalog.user_game_identity_for_ref(launch_ref)
+                                        {
+                                            nav.reconcile_favourite_state(
+                                                &catalog, launch_ref, favourite,
+                                            );
+                                            let now = std::time::SystemTime::now()
+                                                .duration_since(std::time::UNIX_EPOCH)
+                                                .ok()
+                                                .and_then(|duration| {
+                                                    i64::try_from(duration.as_secs()).ok()
+                                                })
+                                                .unwrap_or(0);
+                                            user_state_session.set_favourite(game, favourite, now);
+                                            full_bridge_dirty = true;
+                                            request_launcher_redraw!();
+                                        }
+                                    }
+                                    LauncherAction::LaunchGame => {}
                                 }
-                                LauncherAction::LaunchGame => {}
-                            }
-                            if event.action == LauncherAction::LaunchGame {
-                                let Some(mra) = event.path else {
-                                    continue;
-                                };
-                                let lifecycle_step = lifecycle.handle(
-                                    LauncherLifecycleInput::LaunchRequested {
-                                        launch_ref: mra.clone(),
-                                    },
-                                    &mut lifecycle_effects,
-                                );
-                                if !matches!(
-                                    lifecycle_step.state,
-                                    LauncherLifecycleState::Launching {
-                                        phase: LaunchingPhase::LoadingFramePending { ref launch_ref },
-                                    } if launch_ref == &mra
-                                ) {
-                                    apply_lifecycle_effects(
-                                        &mut lifecycle_effects,
-                                        &mut scheduler,
-                                        start,
-                                    );
-                                    continue;
-                                }
-                                if !scheduler.begin_launch(
-                                    &nav,
-                                    &catalog,
-                                    catalog_generation.durable.as_deref(),
-                                    &mra,
-                                    Instant::now(),
-                                ) {
-                                    lifecycle.handle(
-                                        LauncherLifecycleInput::LaunchFailed {
-                                            title: launcher::game_title(&catalog, &mra),
-                                            kind: launcher::LaunchFailureKind::Internal,
-                                            detail: "launch scheduler rejected request".to_string(),
+                                if event.action == LauncherAction::LaunchGame {
+                                    let Some(mra) = event.path else {
+                                        continue;
+                                    };
+                                    let lifecycle_step = lifecycle.handle(
+                                        LauncherLifecycleInput::LaunchRequested {
+                                            launch_ref: mra.clone(),
                                         },
                                         &mut lifecycle_effects,
                                     );
+                                    if !matches!(
+                                        lifecycle_step.state,
+                                        LauncherLifecycleState::Launching {
+                                            phase: LaunchingPhase::LoadingFramePending { ref launch_ref },
+                                        } if launch_ref == &mra
+                                    ) {
+                                        apply_lifecycle_effects(
+                                            &mut lifecycle_effects,
+                                            &mut scheduler,
+                                            start,
+                                        );
+                                        continue;
+                                    }
+                                    if !scheduler.begin_launch(
+                                        &nav,
+                                        &catalog,
+                                        catalog_generation.durable.as_deref(),
+                                        &mra,
+                                        Instant::now(),
+                                    ) {
+                                        lifecycle.handle(
+                                            LauncherLifecycleInput::LaunchFailed {
+                                                title: launcher::game_title(&catalog, &mra),
+                                                kind: launcher::LaunchFailureKind::Internal,
+                                                detail: "launch scheduler rejected request"
+                                                    .to_string(),
+                                            },
+                                            &mut lifecycle_effects,
+                                        );
+                                        apply_lifecycle_effects(
+                                            &mut lifecycle_effects,
+                                            &mut scheduler,
+                                            start,
+                                        );
+                                        continue;
+                                    }
                                     apply_lifecycle_effects(
                                         &mut lifecycle_effects,
                                         &mut scheduler,
                                         start,
                                     );
-                                    continue;
+                                    sync_bridge_launcher(
+                                        &app,
+                                        &pad,
+                                        &nav,
+                                        &lifecycle,
+                                        &setup,
+                                        scheduler.launch_loading_title(),
+                                        "",
+                                        &catalog,
+                                        &mut preview,
+                                        &mut bridge_models,
+                                        catalog_version,
+                                        false,
+                                        false,
+                                        ui,
+                                    );
+                                    window.request_redraw();
+                                    update_slint_animations(animation_clock);
+                                    let _ = render_immediate_launcher_frame(window, target, layout);
+                                    let _pace = pacer.wait();
+                                    copy_cached_rows_565(
+                                        disp,
+                                        target.cached_frame_view(),
+                                        0,
+                                        ui.render_h(),
+                                    );
+                                    let loading_presented = Instant::now();
+                                    lifecycle.loading_frame_presented(
+                                        loading_presented,
+                                        &mut lifecycle_effects,
+                                    );
+                                    apply_lifecycle_effects(
+                                        &mut lifecycle_effects,
+                                        &mut scheduler,
+                                        start,
+                                    );
+                                    request_launcher_redraw!();
                                 }
-                                apply_lifecycle_effects(
-                                    &mut lifecycle_effects,
-                                    &mut scheduler,
-                                    start,
-                                );
-                                sync_bridge_launcher(
-                                    &app,
-                                    &pad,
-                                    &nav,
-                                    &lifecycle,
-                                    &setup,
-                                    scheduler.launch_loading_title(),
-                                    "",
-                                    &catalog,
-                                    &mut preview,
-                                    &mut bridge_models,
-                                    catalog_version,
-                                    false,
-                                    false,
-                                    ui,
-                                );
-                                window.request_redraw();
-                                update_slint_animations(animation_clock);
-                                let _ = render_immediate_launcher_frame(window, target, layout);
-                                let _pace = pacer.wait();
-                                copy_cached_rows_565(
-                                    disp,
-                                    target.cached_frame_view(),
-                                    0,
-                                    ui.render_h(),
-                                );
-                                let loading_presented = Instant::now();
-                                lifecycle.loading_frame_presented(
-                                    loading_presented,
-                                    &mut lifecycle_effects,
-                                );
-                                apply_lifecycle_effects(
-                                    &mut lifecycle_effects,
-                                    &mut scheduler,
-                                    start,
-                                );
-                                request_launcher_redraw!();
                             }
-                        }
-                        let nav_after = LauncherBridgeKey::from_nav(&nav);
-                        if nav_before != nav_after {
-                            if let Some(entry) = pending_collection_entry.take() {
-                                preview.cancel_system_entry_preview();
-                                nav.catalog_system_hydration_finished(&entry.collection_id);
-                                print_startup_event(
-                                    start,
-                                    "catalog_system_entry_cancelled",
-                                    format!(
-                                        "system={} reason=navigation-changed",
-                                        entry.collection_id
-                                    ),
+                            let nav_after = LauncherBridgeKey::from_nav(&nav);
+                            if nav_before != nav_after {
+                                if let Some(entry) = pending_collection_entry.take() {
+                                    preview.cancel_system_entry_preview();
+                                    nav.catalog_system_hydration_finished(&entry.collection_id);
+                                    print_startup_event(
+                                        start,
+                                        "catalog_system_entry_cancelled",
+                                        format!(
+                                            "system={} reason=navigation-changed",
+                                            entry.collection_id
+                                        ),
+                                    );
+                                }
+                                media_session.note_nav_change(
+                                    &nav_before,
+                                    &nav_after,
+                                    Instant::now(),
                                 );
                             }
-                            media_session.note_nav_change(&nav_before, &nav_after, Instant::now());
-                        }
-                        if pad_changed && nav.screen == Screen::Controller {
-                            full_bridge_dirty = true;
-                        } else if pad_changed && !dirty_opt {
-                            full_bridge_dirty = true;
-                        }
-                        if nav_before != nav_after {
-                            if nav_before.screen == Screen::Home
-                                && nav_after.screen == Screen::Arcade
-                            {
-                                arcade_entry_latency.record_enter_input(
-                                    start, frame_now, &lifecycle, &catalog, &nav,
-                                );
-                                if !active_system_games_loading(&catalog, &nav) {
-                                    if let Some(system) = active_system(&catalog, &nav) {
-                                        if catalog.system_game_count(&system.id) > 0 {
-                                            arcade_entry_latency.record_rows_ready(
-                                                start, frame_now, &lifecycle, &catalog, &nav,
-                                            );
+                            if pad_changed && nav.screen == Screen::Controller {
+                                full_bridge_dirty = true;
+                            } else if pad_changed && !dirty_opt {
+                                full_bridge_dirty = true;
+                            }
+                            if nav_before != nav_after {
+                                if nav_before.screen == Screen::Home
+                                    && nav_after.screen == Screen::Arcade
+                                {
+                                    arcade_entry_latency.record_enter_input(
+                                        start, frame_now, &lifecycle, &catalog, &nav,
+                                    );
+                                    if !active_system_games_loading(&catalog, &nav) {
+                                        if let Some(system) = active_system(&catalog, &nav) {
+                                            if catalog.system_game_count(&system.id) > 0 {
+                                                arcade_entry_latency.record_rows_ready(
+                                                    start, frame_now, &lifecycle, &catalog, &nav,
+                                                );
+                                            }
                                         }
                                     }
+                                } else if nav_before.screen == Screen::Arcade
+                                    && nav_after.screen == Screen::Arcade
+                                    && arcade_selected_before_input != nav.arcade.selected
+                                {
+                                    arcade_entry_latency.record_first_nav_input(
+                                        start, frame_now, &lifecycle, &catalog, &nav,
+                                    );
                                 }
-                            } else if nav_before.screen == Screen::Arcade
-                                && nav_after.screen == Screen::Arcade
-                                && arcade_selected_before_input != nav.arcade.selected
-                            {
-                                arcade_entry_latency.record_first_nav_input(
-                                    start, frame_now, &lifecycle, &catalog, &nav,
-                                );
-                            }
-                            if !dirty_opt
-                                || nav_before.screen != nav_after.screen
-                                || nav_before.menu_id != nav_after.menu_id
-                            {
-                                full_bridge_dirty = true;
-                            } else {
-                                light_bridge_dirty = true;
+                                if !dirty_opt
+                                    || nav_before.screen != nav_after.screen
+                                    || nav_before.menu_id != nav_after.menu_id
+                                {
+                                    full_bridge_dirty = true;
+                                } else {
+                                    light_bridge_dirty = true;
+                                }
                             }
                         }
                     }
-                }
-                let selection_feedback_after =
-                    discrete_selection_feedback_target(&nav, &setup, &lifecycle);
-                let feedback_surface_changed = bridge_models
-                    .sync_selection_feedback_surface(selection_feedback_after.as_ref());
-                let feedback_registered = selection_feedback_input
-                    && bridge_models.note_selection_feedback_change(
-                        selection_feedback_before.as_ref(),
-                        selection_feedback_after.as_ref(),
-                    );
-                if feedback_surface_changed || feedback_registered {
-                    full_bridge_dirty = true;
-                    request_launcher_redraw!();
-                }
-                if final_input_tick {
-                    break;
-                }
-                launcher_response_trace.observe_state(&nav, navigation_transition.is_active());
-            }
-            input_integrity_trace.flush_if_due(Instant::now(), &input_router);
-
-            if let Some(screen) = effective_lock_screen(lock_screen, catalog_ready, &catalog) {
-                nav.screen = screen;
-            }
-        } else {
-            if let Some(action) = scheduler.launch_runtime_action(Instant::now()) {
-                match action {
-                    LaunchHandoffRuntimeAction::ArcadeCoreRunning => {
-                        crate::ui_logln!("arcade core running — handing off to MiSTer");
-                        std::process::exit(0);
-                    }
-                    LaunchHandoffRuntimeAction::TimedOut => {
-                        crate::ui_errln!("game launch timed out");
-                        lifecycle.handle(
-                            LauncherLifecycleInput::LaunchTimedOut,
-                            &mut lifecycle_effects,
+                    let selection_feedback_after =
+                        discrete_selection_feedback_target(&nav, &setup, &lifecycle);
+                    let feedback_surface_changed = bridge_models
+                        .sync_selection_feedback_surface(selection_feedback_after.as_ref());
+                    let feedback_registered = selection_feedback_input
+                        && bridge_models.note_selection_feedback_change(
+                            selection_feedback_before.as_ref(),
+                            selection_feedback_after.as_ref(),
                         );
-                        apply_lifecycle_effects(&mut lifecycle_effects, &mut scheduler, start);
-                        if scheduler.stop_spawned_mister_for_recovery() {
-                            if let Err(e) = display_session.recover_after_launch_failure(frames, f)
-                            {
-                                crate::ui_errln!(
-                                    "failed to recover Slint framebuffer route after launch timeout: {e}"
-                                );
-                            }
+                    if feedback_surface_changed || feedback_registered {
+                        full_bridge_dirty = true;
+                        request_launcher_redraw!();
+                    }
+                    if final_input_tick {
+                        break;
+                    }
+                    launcher_response_trace.observe_state(&nav, navigation_transition.is_active());
+                }
+                input_integrity_trace.flush_if_due(Instant::now(), &input_router);
+
+                if let Some(screen) = effective_lock_screen(lock_screen, catalog_ready, &catalog) {
+                    nav.screen = screen;
+                }
+            } else {
+                if let Some(action) = scheduler.launch_runtime_action(Instant::now()) {
+                    match action {
+                        LaunchHandoffRuntimeAction::ArcadeCoreRunning => {
+                            crate::ui_logln!("arcade core running — handing off to MiSTer");
+                            std::process::exit(0);
                         }
-                        std::process::exit(1);
+                        LaunchHandoffRuntimeAction::TimedOut => {
+                            crate::ui_errln!("game launch timed out");
+                            lifecycle.handle(
+                                LauncherLifecycleInput::LaunchTimedOut,
+                                &mut lifecycle_effects,
+                            );
+                            apply_lifecycle_effects(&mut lifecycle_effects, &mut scheduler, start);
+                            if scheduler.stop_spawned_mister_for_recovery() {
+                                if let Err(e) =
+                                    display_session.recover_after_launch_failure(frames, f)
+                                {
+                                    crate::ui_errln!(
+                                        "failed to recover Slint framebuffer route after launch timeout: {e}"
+                                    );
+                                }
+                            }
+                            std::process::exit(1);
+                        }
                     }
                 }
             }
-        }
 
-        launcher_response_trace.record_lab(input_latency_lab.arm_if_computers_ready(&nav));
-        drop(input_route_pmu);
-        record_launcher_frame_phase!(LauncherFramePhase::InputRouted);
-        scheduler_phase =
-            launcher_response_trace.record_scheduler_interval("input-route", scheduler_phase);
+            launcher_response_trace.record_lab(input_latency_lab.arm_if_computers_ready(&nav));
+            drop(input_route_pmu);
+            record_launcher_frame_phase!(LauncherFramePhase::InputRouted);
+            scheduler_phase =
+                launcher_response_trace.record_scheduler_interval("input-route", scheduler_phase);
+            false
+        };
+        let input_phase_yielded = route_pending_launcher_input();
+        drop(route_pending_launcher_input);
+        if input_phase_yielded {
+            continue;
+        }
         let interaction_projection_pmu = launcher_response_trace.input_pmu_span(
             latency_critical_input_pending,
             "launcher-response.interaction-projection",
