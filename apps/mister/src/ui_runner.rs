@@ -173,6 +173,7 @@ mod launcher_screensaver;
 #[allow(dead_code)]
 mod launcher_screensaver_pipeline;
 mod launcher_startup_intro;
+mod launcher_ui_actions;
 #[allow(dead_code)]
 mod launcher_worker_intents;
 mod preview_compositor;

@@ -16,6 +16,7 @@ use super::launcher_pacing::{
     LauncherPhaseAlignment,
 };
 use super::launcher_screensaver::ScreensaverRenderTrace;
+use super::launcher_ui_actions::LauncherUiActionsAdapter;
 use super::launcher_worker_intents::reset_media_progress_bridge;
 use super::launcher_worker_intents::{
     LauncherWorkerUiIntent, apply_launcher_worker_ui_intent, catalog_scan_message,
@@ -5096,6 +5097,7 @@ pub(super) fn run_launcher_loop(
     process_entry_cpu_profile: Option<cpu_profile::CpuProfiler>,
     launcher_config: mister_magik_fb::process_config::LauncherProcessConfig,
 ) {
+    let _launcher_ui_actions = LauncherUiActionsAdapter::install(&app);
     let start = Instant::now();
     let startup_monotonic_us = monotonic_clock_us().unwrap_or(0);
     let mut frames = 0u64;

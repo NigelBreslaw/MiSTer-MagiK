@@ -243,6 +243,34 @@ export global LauncherLayout {
     in property <LayoutRect> crt-keyboard;
 }
 
+// UI-originated intents. Callbacks enqueue bounded typed actions in Rust;
+// they never write projected state or perform platform effects directly.
+export global LauncherActions {
+    callback navigate(NavigationDirection);
+    callback activate();
+    callback back();
+    callback home();
+    callback select-menu-item(string);
+    callback select-system-hub(SystemHubSection);
+    callback select-settings-section(SettingsSection);
+    callback select-display-option(string);
+    callback select-orientation(ScreenOrientation);
+    callback select-screensaver-setting(ScreensaverSetting);
+    callback set-screensaver-enabled(bool);
+    callback set-screensaver-delay(int);
+    callback set-reduce-motion(bool);
+    callback set-simple-joystick-handling(bool);
+    callback select-about-section(AboutSection);
+    callback select-license(int);
+    callback select-arcade-game(string);
+    callback select-arcade-search-pane(ArcadeSearchPane);
+    callback select-arcade-search-key(int);
+    callback select-setup-entry(int);
+    callback choose-confirmation(DialogChoice);
+    callback dismiss-overlay();
+    callback quit();
+}
+
 export global MisterBridge {
     // Rust-owned physically confirmed focus acknowledgements. The revision is
     // an explicit Slint dependency; the callback resolves stable surface/item IDs.
