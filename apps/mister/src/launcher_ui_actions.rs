@@ -1,14 +1,21 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-use super::*;
+use crate::arcade_catalog::{ArcadeCatalog, ArcadeGameView};
+use crate::input_event::{InputPhase, InputSourceKind, LogicalAction};
+use crate::launcher::{self, LauncherAction, LauncherNav};
+use crate::ui_display::ScreenOrientation;
+use mister_magik_ui as slint_ui;
+use slint::{ComponentHandle, Model};
 use std::cell::RefCell;
 use std::collections::VecDeque;
+use std::rc::Rc;
+use std::time::Instant;
 
 const LAUNCHER_UI_ACTION_CAPACITY: usize = 64;
 
 #[derive(Clone, Debug, PartialEq)]
-pub(super) enum LauncherUiAction {
+pub enum LauncherUiAction {
     Navigate(slint_ui::launcher::NavigationDirection),
     Activate,
     Back,
@@ -40,12 +47,12 @@ struct LauncherUiActionState {
     rejected: u64,
 }
 
-pub(super) struct LauncherUiActionsAdapter {
-    _state: Rc<RefCell<LauncherUiActionState>>,
+pub struct LauncherUiActionsAdapter {
+    state: Rc<RefCell<LauncherUiActionState>>,
 }
 
 impl LauncherUiActionsAdapter {
-    pub(super) fn install(app: &slint_ui::launcher::Launcher) -> Self {
+    pub fn install(app: &slint_ui::launcher::Launcher) -> Self {
         let state = Rc::new(RefCell::new(LauncherUiActionState::default()));
         let actions = app.global::<slint_ui::launcher::LauncherActions>();
 
@@ -54,18 +61,259 @@ impl LauncherUiActionsAdapter {
         bind_settings_actions(app, &actions, &state);
         bind_indexed_actions(app, &actions, &state);
 
-        Self { _state: state }
+        Self { state }
+    }
+
+    pub fn has_pending(&self) -> bool {
+        !self.state.borrow().pending.is_empty()
+    }
+
+    pub fn pop_front(&self) -> Option<LauncherUiAction> {
+        self.state.borrow_mut().pending.pop_front()
+    }
+
+    pub fn pop_routable(&self, allowed: bool) -> Option<LauncherUiAction> {
+        let mut state = self.state.borrow_mut();
+        let action = state.pending.pop_front();
+        if action.is_some() && !allowed {
+            state.rejected = state.rejected.saturating_add(1);
+            return None;
+        }
+        action
+    }
+
+    pub fn deny_all(&self) {
+        let mut state = self.state.borrow_mut();
+        state.rejected = state
+            .rejected
+            .saturating_add(state.pending.len().try_into().unwrap_or(u64::MAX));
+        state.pending.clear();
+    }
+
+    pub fn discard_all(&self) {
+        self.state.borrow_mut().pending.clear();
     }
 
     #[cfg(test)]
     fn drain_for_test(&self) -> Vec<LauncherUiAction> {
-        self._state.borrow_mut().pending.drain(..).collect()
+        self.state.borrow_mut().pending.drain(..).collect()
     }
 
     #[cfg(test)]
     fn rejected_for_test(&self) -> u64 {
-        self._state.borrow().rejected
+        self.state.borrow().rejected
     }
+}
+
+impl LauncherUiAction {
+    pub fn input_event(
+        &self,
+        sequence: u64,
+        captured_at_us: u64,
+    ) -> Option<crate::input_event::InputEvent> {
+        let action = match self {
+            Self::Navigate(slint_ui::launcher::NavigationDirection::Up) => LogicalAction::Up,
+            Self::Navigate(slint_ui::launcher::NavigationDirection::Down) => LogicalAction::Down,
+            Self::Navigate(slint_ui::launcher::NavigationDirection::Left) => LogicalAction::Left,
+            Self::Navigate(slint_ui::launcher::NavigationDirection::Right) => LogicalAction::Right,
+            Self::Activate => LogicalAction::Activate,
+            Self::Back | Self::DismissOverlay => LogicalAction::Back,
+            Self::Home => LogicalAction::Home,
+            _ => return None,
+        };
+        Some(crate::input_event::InputEvent {
+            source: crate::input_event::InputSourceId {
+                kind: InputSourceKind::Ui,
+                instance: 0,
+            },
+            source_epoch: crate::input_event::SourceEpoch(0),
+            sequence,
+            press_id: crate::input_event::PressId(sequence),
+            captured_at_us,
+            action,
+            phase: InputPhase::Pressed,
+        })
+    }
+}
+
+pub fn apply_navigation_action(
+    action: LauncherUiAction,
+    nav: &mut LauncherNav,
+    catalog: &ArcadeCatalog,
+    frame_now: Instant,
+) -> Option<launcher::LauncherEvent> {
+    match action {
+        LauncherUiAction::SelectMenuItem(id) => {
+            if let Some(index) = nav
+                .current_menu_items()
+                .iter()
+                .position(|item| item.id == id)
+            {
+                nav.selected = index;
+            }
+            None
+        }
+        LauncherUiAction::SelectSystemHub(section) => {
+            nav.system_hub_selected = match section {
+                slint_ui::launcher::SystemHubSection::Games => 0,
+                slint_ui::launcher::SystemHubSection::Recent => 1,
+                slint_ui::launcher::SystemHubSection::Favourites => 2,
+                slint_ui::launcher::SystemHubSection::Information => 3,
+            };
+            None
+        }
+        LauncherUiAction::SelectSettingsSection(section) => {
+            nav.settings_selected = match section {
+                slint_ui::launcher::SettingsSection::Display => 0,
+                slint_ui::launcher::SettingsSection::Orientation => 1,
+                slint_ui::launcher::SettingsSection::Screensaver => 2,
+                slint_ui::launcher::SettingsSection::ReduceMotion => 3,
+                slint_ui::launcher::SettingsSection::Exit => 4,
+                slint_ui::launcher::SettingsSection::Rebuild => 5,
+                slint_ui::launcher::SettingsSection::About => 6,
+            };
+            None
+        }
+        LauncherUiAction::SelectDisplayOption(id) => {
+            let highlighted = launcher::settings_display_resolution_index(&id)?;
+            nav.display_combo_open = false;
+            nav.display_highlighted = highlighted;
+            let mode = launcher::settings_display_resolution(highlighted)?;
+            if mister_magik_mister_runtime::display_resolution::DISPLAY_RESOLUTIONS
+                .get(nav.display_selected)
+                .is_some_and(|selected| selected.id == mode.id)
+            {
+                return None;
+            }
+            Some(launcher::LauncherEvent {
+                action: LauncherAction::ApplyDisplayResolution,
+                path: Some(mode.id.to_string()),
+                settings: None,
+            })
+        }
+        LauncherUiAction::SelectOrientation(orientation) => {
+            let index = match orientation {
+                slint_ui::launcher::ScreenOrientation::Normal => 0,
+                slint_ui::launcher::ScreenOrientation::MonitorClockwise => 1,
+                slint_ui::launcher::ScreenOrientation::MonitorCounterclockwise => 2,
+            };
+            nav.orientation_combo_open = false;
+            nav.orientation_highlighted = index;
+            if nav.orientation_selected == index {
+                return None;
+            }
+            Some(launcher::LauncherEvent {
+                action: LauncherAction::ApplyScreenOrientation,
+                path: Some(ScreenOrientation::ALL[index].id().to_string()),
+                settings: None,
+            })
+        }
+        LauncherUiAction::SelectScreensaverSetting(setting) => {
+            nav.screensaver_selected = match setting {
+                slint_ui::launcher::ScreensaverSetting::Enabled => 0,
+                slint_ui::launcher::ScreensaverSetting::Delay => 1,
+                slint_ui::launcher::ScreensaverSetting::Preview => 2,
+            };
+            None
+        }
+        LauncherUiAction::SetScreensaverEnabled(enabled) => {
+            persist_settings(nav, |settings| settings.screensaver_enabled = enabled)
+        }
+        LauncherUiAction::SetScreensaverDelay(minutes) => persist_settings(nav, |settings| {
+            settings.screensaver_delay_minutes = minutes as u8;
+        }),
+        LauncherUiAction::SetReduceMotion(enabled) => {
+            persist_settings(nav, |settings| settings.reduce_motion = enabled)
+        }
+        LauncherUiAction::SetSimpleJoystickHandling(enabled) => persist_settings(nav, |settings| {
+            settings.simple_joystick_handling = enabled;
+        }),
+        LauncherUiAction::SelectAboutSection(section) => {
+            nav.about_selected = match section {
+                slint_ui::launcher::AboutSection::Information => 0,
+                slint_ui::launcher::AboutSection::Licenses => 1,
+            };
+            None
+        }
+        LauncherUiAction::SelectLicense(index) => {
+            nav.licenses_selected = index;
+            None
+        }
+        LauncherUiAction::SelectArcadeGame(id) => {
+            let collection_id = nav.active_collection_scope_id(catalog).to_string();
+            let games: ArcadeGameView<'_> = nav.active_arcade_game_view(catalog, &collection_id);
+            if let Some(index) = games.iter().position(|game| game.mra_path.as_ref() == id) {
+                nav.arcade.restore_position(
+                    index,
+                    index as i32 * nav.arcade.row_height(),
+                    games.len(),
+                );
+            }
+            None
+        }
+        LauncherUiAction::SelectArcadeSearchPane(pane) => {
+            nav.arcade_search.pane = match pane {
+                slint_ui::launcher::ArcadeSearchPane::Keyboard => {
+                    launcher::ArcadeSearchPane::Keyboard
+                }
+                slint_ui::launcher::ArcadeSearchPane::Results => {
+                    launcher::ArcadeSearchPane::Results
+                }
+            };
+            None
+        }
+        LauncherUiAction::SelectArcadeSearchKey(index) => {
+            nav.arcade_search.selected_key = index;
+            None
+        }
+        LauncherUiAction::ChooseConfirmation(choice) => {
+            nav.confirm_selected = match choice {
+                slint_ui::launcher::DialogChoice::Cancel => 0,
+                slint_ui::launcher::DialogChoice::Confirm => 1,
+            };
+            let event = crate::input_event::InputEvent {
+                source: crate::input_event::InputSourceId {
+                    kind: InputSourceKind::Ui,
+                    instance: 0,
+                },
+                source_epoch: crate::input_event::SourceEpoch(0),
+                sequence: 0,
+                press_id: crate::input_event::PressId(0),
+                captured_at_us: 0,
+                action: LogicalAction::Activate,
+                phase: InputPhase::Pressed,
+            };
+            nav.handle_action_with_navigation_intents(&event, frame_now, catalog)
+        }
+        LauncherUiAction::Quit => Some(launcher::LauncherEvent {
+            action: LauncherAction::ExitToMister,
+            path: None,
+            settings: None,
+        }),
+        LauncherUiAction::SelectSetupEntry(_)
+        | LauncherUiAction::Navigate(_)
+        | LauncherUiAction::Activate
+        | LauncherUiAction::Back
+        | LauncherUiAction::Home
+        | LauncherUiAction::DismissOverlay => None,
+    }
+}
+
+fn persist_settings(
+    nav: &mut LauncherNav,
+    update: impl FnOnce(&mut crate::settings::MagikSettings),
+) -> Option<launcher::LauncherEvent> {
+    let mut next = nav.settings.clone();
+    update(&mut next);
+    if next == nav.settings {
+        return None;
+    }
+    nav.settings = next.clone();
+    Some(launcher::LauncherEvent {
+        action: LauncherAction::PersistSettings,
+        path: None,
+        settings: Some(next),
+    })
 }
 
 fn enqueue(state: &Rc<RefCell<LauncherUiActionState>>, action: LauncherUiAction) {
@@ -310,7 +558,11 @@ fn projected_arcade_id_exists(app: &slint_ui::launcher::Launcher, id: &str) -> b
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::visual_platform::{MisterPlatform, MisterSoftwareWindow};
+    use slint::platform::software_renderer::RepaintBufferType;
+    use slint::{ModelRc, VecModel};
     use std::cell::Cell;
+    use std::time::Duration;
 
     fn launcher() -> slint_ui::launcher::Launcher {
         let window = MisterSoftwareWindow::new(RepaintBufferType::ReusedBuffer);
@@ -386,5 +638,24 @@ mod tests {
 
         assert_eq!(adapter.drain_for_test().len(), LAUNCHER_UI_ACTION_CAPACITY);
         assert_eq!(adapter.rejected_for_test(), 3);
+    }
+
+    #[test]
+    fn transition_focus_denies_actions_and_navigation_uses_the_ui_source() {
+        let app = launcher();
+        let adapter = LauncherUiActionsAdapter::install(&app);
+        let actions = app.global::<slint_ui::launcher::LauncherActions>();
+        actions.invoke_activate();
+        assert_eq!(adapter.pop_routable(false), None);
+        assert_eq!(adapter.rejected_for_test(), 1);
+
+        actions.invoke_navigate(slint_ui::launcher::NavigationDirection::Left);
+        let action = adapter.pop_routable(true).expect("routable UI action");
+        let event = action.input_event(7, 11).expect("navigation input event");
+        assert_eq!(event.source.kind, InputSourceKind::Ui);
+        assert_eq!(event.sequence, 7);
+        assert_eq!(event.captured_at_us, 11);
+        assert_eq!(event.action, LogicalAction::Left);
+        assert_eq!(event.phase, InputPhase::Pressed);
     }
 }

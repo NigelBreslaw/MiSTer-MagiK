@@ -57,6 +57,7 @@ mod macos {
     use mister_magik_fb::launcher_taxonomy::{
         CONSOLES_MENU_ID, LauncherMenuItemKind, ROOT_MENU_ID,
     };
+    use mister_magik_fb::launcher_ui_actions::{LauncherUiActionsAdapter, apply_navigation_action};
     use mister_magik_fb::macos_preview_content::{
         ContentMode, PreviewContent, default_settings_path, resolve_preview_content,
     };
@@ -441,6 +442,7 @@ mod macos {
         launcher_input_sequence: u64,
         launcher_press_sequence: u64,
         launcher_epoch: Instant,
+        launcher_ui_actions: LauncherUiActionsAdapter,
         bridge_presenter: LauncherBridgePresenter,
         content: PreviewContent,
         catalog: ArcadeCatalog,
@@ -643,6 +645,7 @@ mod macos {
                 .set_build_label(build_label);
             let navigation_motion_enabled =
                 force_navigation_motion || !launcher_nav.settings.reduce_motion;
+            let launcher_ui_actions = LauncherUiActionsAdapter::install(&launcher);
             let mut application = Self {
                 launcher,
                 slint_window,
@@ -669,6 +672,7 @@ mod macos {
                     directional_policy: DirectionalPolicy::HomeContinuous,
                 }),
                 launcher_epoch: Instant::now(),
+                launcher_ui_actions,
                 bridge_presenter: LauncherBridgePresenter::default(),
                 content,
                 catalog,
@@ -1213,6 +1217,7 @@ mod macos {
             let now_us = self.fixed_time.get().as_micros().min(u64::MAX as u128) as u64;
             loop {
                 if self.navigation_transition.is_active() {
+                    self.launcher_ui_actions.deny_all();
                     let request = preview_input_focus(&self.launcher_nav, true);
                     self.input_router.set_focus(request);
                     while let Some(event) = self.launcher_input_events.pop_front() {
@@ -1243,6 +1248,7 @@ mod macos {
                 let request = preview_input_focus(&self.launcher_nav, false);
                 self.input_router.set_focus(request);
                 let mut final_tick = false;
+                let mut direct_ui_action = None;
                 let routed_event = if let Some(event) = self.launcher_input_events.pop_front() {
                     match self.input_router.route_event(event, request, frame_now) {
                         InputOutcome::Dispatch { event, .. } => Some(event),
@@ -1254,6 +1260,18 @@ mod macos {
                         InputOutcome::Released { .. }
                         | InputOutcome::WakeScreensaver { .. }
                         | InputOutcome::Consumed { .. } => None,
+                    }
+                } else if let Some(action) = self.launcher_ui_actions.pop_front() {
+                    self.launcher_input_sequence =
+                        self.launcher_input_sequence.saturating_add(1).max(1);
+                    if let Some(event) = action.input_event(
+                        self.launcher_input_sequence,
+                        self.fixed_time.get().as_micros().min(u64::MAX as u128) as u64,
+                    ) {
+                        Some(event)
+                    } else {
+                        direct_ui_action = Some(action);
+                        None
                     }
                 } else if let Some(InputOutcome::Dispatch { event, .. }) =
                     self.input_router.tick_repeat(frame_now)
@@ -1297,6 +1315,13 @@ mod macos {
                         input_event,
                         frame_now,
                         &self.catalog,
+                    )
+                } else if let Some(action) = direct_ui_action.take() {
+                    apply_navigation_action(
+                        action,
+                        &mut self.launcher_nav,
+                        &self.catalog,
+                        frame_now,
                     )
                 } else if final_tick {
                     self.launcher_nav.handle_held_tick_with_navigation_intents(

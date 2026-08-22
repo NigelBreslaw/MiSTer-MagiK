@@ -62,6 +62,7 @@ pub enum InputSourceKind {
     MainProxy,
     RawDevice,
     SetupKeyboard,
+    Ui,
     Automation,
     Preview,
 }

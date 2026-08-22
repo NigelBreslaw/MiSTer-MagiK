@@ -16,7 +16,6 @@ use super::launcher_pacing::{
     LauncherPhaseAlignment,
 };
 use super::launcher_screensaver::ScreensaverRenderTrace;
-use super::launcher_ui_actions::LauncherUiActionsAdapter;
 use super::launcher_worker_intents::reset_media_progress_bridge;
 use super::launcher_worker_intents::{
     LauncherWorkerUiIntent, apply_launcher_worker_ui_intent, catalog_scan_message,
@@ -29,6 +28,9 @@ use super::*;
 use crate::input_event::{InputPhase, InputSourceKind, LogicalAction};
 use crate::input_state::PadState;
 use crate::launcher_presentation::SelectionFeedbackTarget;
+use crate::launcher_ui_actions::{
+    LauncherUiAction, LauncherUiActionsAdapter, apply_navigation_action,
+};
 use crate::preview_state::PreviewApplyTrace;
 use crate::preview_worker;
 use mister_magik_catalog::builder_service::CatalogWorkMode;
@@ -1028,6 +1030,44 @@ fn route_lifecycle_dialog_input(
         None
     };
     input
+}
+
+fn lifecycle_dialog_ui_inputs(
+    action: &LauncherUiAction,
+    launch_failure_visible: bool,
+    recovery_dialog_visible: bool,
+) -> Option<Vec<LauncherLifecycleInput>> {
+    if launch_failure_visible {
+        return matches!(
+            action,
+            LauncherUiAction::ChooseConfirmation(_)
+                | LauncherUiAction::DismissOverlay
+                | LauncherUiAction::Back
+                | LauncherUiAction::Home
+        )
+        .then(|| vec![LauncherLifecycleInput::LaunchFailureAcknowledge]);
+    }
+    if !recovery_dialog_visible {
+        return None;
+    }
+    match action {
+        LauncherUiAction::ChooseConfirmation(slint_ui::launcher::DialogChoice::Cancel) => {
+            Some(vec![
+                LauncherLifecycleInput::CatalogRecoveryLeft,
+                LauncherLifecycleInput::CatalogRecoveryConfirm,
+            ])
+        }
+        LauncherUiAction::ChooseConfirmation(slint_ui::launcher::DialogChoice::Confirm) => {
+            Some(vec![
+                LauncherLifecycleInput::CatalogRecoveryRight,
+                LauncherLifecycleInput::CatalogRecoveryConfirm,
+            ])
+        }
+        LauncherUiAction::DismissOverlay | LauncherUiAction::Back | LauncherUiAction::Home => {
+            Some(vec![LauncherLifecycleInput::CatalogRecoveryCancel])
+        }
+        _ => None,
+    }
 }
 
 fn sync_navigation_transition_active(
@@ -5097,8 +5137,9 @@ pub(super) fn run_launcher_loop(
     process_entry_cpu_profile: Option<cpu_profile::CpuProfiler>,
     launcher_config: mister_magik_fb::process_config::LauncherProcessConfig,
 ) {
-    let _launcher_ui_actions = LauncherUiActionsAdapter::install(&app);
+    let launcher_ui_actions = LauncherUiActionsAdapter::install(&app);
     let start = Instant::now();
+    let mut ui_action_sequence = 0u64;
     let startup_monotonic_us = monotonic_clock_us().unwrap_or(0);
     let mut frames = 0u64;
     let profile_config = launcher_config.profiles().clone();
@@ -7360,7 +7401,8 @@ pub(super) fn run_launcher_loop(
             input_observation = drained_input.observation;
             launcher_response_trace.observe_drained_input(&drained_input);
             let input_batch = drained_input.batch;
-            let input_batch_empty = input_batch.events.is_empty();
+            let input_batch_empty =
+                input_batch.events.is_empty() && !launcher_ui_actions.has_pending();
             let input_route_pmu = launcher_response_trace.input_pmu_span(
                 !input_batch.events.is_empty(),
                 "launcher-response.input-route",
@@ -7471,6 +7513,7 @@ pub(super) fn run_launcher_loop(
             let application_input_enabled =
                 effective_view.accepts_application_input() && lifecycle.startup_input_enabled();
             if !application_input_enabled {
+                launcher_ui_actions.discard_all();
                 let disabled = launcher_input_focus(false, false, false, false, false, false, &nav);
                 input_router.set_focus(disabled);
                 for event in incoming_input_events.drain(..) {
@@ -7498,17 +7541,21 @@ pub(super) fn run_launcher_loop(
                     full_bridge_dirty = true;
                 }
 
+                let ui_input_pending = launcher_ui_actions.has_pending();
                 let raw_screensaver_input_activity =
-                    pad.user_activity() || launcher_automation.active();
+                    pad.user_activity() || launcher_automation.active() || ui_input_pending;
                 let physical_input_held =
                     input_batch_healthy && pad_state_has_active_input(&physical_for_automation);
-                let screensaver_input_held =
-                    screensaver.input_held_for_control(screensaver_wake, physical_input_held);
+                let screensaver_input_held = screensaver.input_held_for_control(
+                    screensaver_wake,
+                    physical_input_held || ui_input_pending,
+                );
                 if screensaver.handle_input(
                     frame_now,
                     screensaver_input_held,
                     raw_screensaver_input_activity,
                 ) {
+                    launcher_ui_actions.discard_all();
                     record_launcher_frame_phase!(LauncherFramePhase::InputConsumed);
                     request_launcher_redraw!();
                     record_launcher_frame_phase!(LauncherFramePhase::Yielded);
@@ -7536,6 +7583,7 @@ pub(super) fn run_launcher_loop(
                     input_router.set_focus(focus);
                     let mut final_input_tick = false;
                     let mut input_dispatch_now = frame_now;
+                    let mut direct_ui_action_this_loop = None;
                     let routed_event_this_loop = if let Some(event) =
                         incoming_input_events.pop_front()
                     {
@@ -7566,6 +7614,24 @@ pub(super) fn run_launcher_loop(
                             InputOutcome::WakeScreensaver { .. }
                             | InputOutcome::Consumed { .. } => None,
                         }
+                    } else if let Some(action) = launcher_ui_actions
+                        .pop_routable(focus.target.kind != InputContextKind::Transition)
+                    {
+                        ui_action_sequence = ui_action_sequence.saturating_add(1);
+                        if let Some(event) = action.input_event(
+                            ui_action_sequence,
+                            frame_now
+                                .saturating_duration_since(start)
+                                .as_micros()
+                                .min(u64::MAX as u128) as u64,
+                        ) {
+                            latency_critical_input_pending = true;
+                            Some(event)
+                        } else {
+                            latency_critical_input_pending = true;
+                            direct_ui_action_this_loop = Some(action);
+                            None
+                        }
                     } else if focus.target.kind != InputContextKind::Transition
                         && let Some(outcome @ InputOutcome::Dispatch { event, .. }) =
                             input_router.tick_repeat(frame_now)
@@ -7585,7 +7651,8 @@ pub(super) fn run_launcher_loop(
                     let selection_feedback_before =
                         discrete_selection_feedback_target(&nav, &setup, &lifecycle);
                     let selection_feedback_input =
-                        accepted_selection_feedback_input(routed_event_this_loop.as_ref());
+                        accepted_selection_feedback_input(routed_event_this_loop.as_ref())
+                            || direct_ui_action_this_loop.is_some();
 
                     if launcher_bench_scenario.is_none()
                         && !settings_navigation_benchmark.enabled()
@@ -7602,6 +7669,11 @@ pub(super) fn run_launcher_loop(
                             full_bridge_dirty = true;
                             continue;
                         };
+                        if let Some(LauncherUiAction::SelectSetupEntry(index)) =
+                            direct_ui_action_this_loop.as_ref()
+                        {
+                            setup.list_index = *index;
+                        }
                         let setup_action = routed_event_this_loop
                             .map_or(SetupAction::None, |event| {
                                 setup.handle_action(&event, frame_now, &setup_info, pad.db())
@@ -7737,12 +7809,25 @@ pub(super) fn run_launcher_loop(
                             } else if navigation_transition.is_active() {
                                 None
                             } else if launch_failure_visible || recovery_dialog_visible {
-                                if let Some(input) = route_lifecycle_dialog_input(
+                                let ui_inputs =
+                                    direct_ui_action_this_loop.as_ref().and_then(|action| {
+                                        lifecycle_dialog_ui_inputs(
+                                            action,
+                                            launch_failure_visible,
+                                            recovery_dialog_visible,
+                                        )
+                                    });
+                                let routed_input = route_lifecycle_dialog_input(
                                     routed_event_this_loop.as_ref(),
                                     launch_failure_visible,
                                     recovery_dialog_visible,
-                                ) {
-                                    lifecycle.handle(input, &mut lifecycle_effects);
+                                );
+                                if let Some(inputs) =
+                                    ui_inputs.or_else(|| routed_input.map(|input| vec![input]))
+                                {
+                                    for input in inputs {
+                                        lifecycle.handle(input, &mut lifecycle_effects);
+                                    }
                                     apply_lifecycle_effects(
                                         &mut lifecycle_effects,
                                         &mut scheduler,
@@ -7797,6 +7882,13 @@ pub(super) fn run_launcher_loop(
                                     input_event,
                                     input_dispatch_now,
                                     &catalog,
+                                )
+                            } else if let Some(action) = direct_ui_action_this_loop.take() {
+                                apply_navigation_action(
+                                    action,
+                                    &mut nav,
+                                    &catalog,
+                                    input_dispatch_now,
                                 )
                             } else if final_input_tick {
                                 nav.handle_held_tick_with_navigation_intents(
