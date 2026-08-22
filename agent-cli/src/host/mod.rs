@@ -8552,8 +8552,26 @@ fn run_settled_composition_route(
             "Arcade filter drawer open",
         )?;
         thread::sleep(Duration::from_millis(250));
-        let close_drawer =
+        let drawer_to_top =
             modal_input_action(config, &nonce, AutomationAction::Tap(AutomationButton::B))?;
+        let drawer_top = wait_gui_profile_snapshot(
+            config,
+            &nonce,
+            |snapshot| {
+                gui_profile_effective_view(snapshot) == Some("arcade")
+                    && snapshot
+                        .pointer("/semantic/drawer_open")
+                        .and_then(Value::as_bool)
+                        == Some(true)
+                    && snapshot
+                        .pointer("/semantic/drawer_level")
+                        .and_then(Value::as_str)
+                        == Some("Filters")
+            },
+            "Arcade filter drawer top level",
+        )?;
+        let close_drawer =
+            modal_input_action(config, &nonce, AutomationAction::Tap(AutomationButton::A))?;
         let drawer_closed = wait_gui_profile_snapshot(
             config,
             &nonce,
@@ -8683,6 +8701,7 @@ fn run_settled_composition_route(
             "actions": {
                 "enter_arcade": enter_arcade,
                 "open_drawer": open_drawer,
+                "drawer_to_top": drawer_to_top,
                 "close_drawer": close_drawer,
                 "open_modal": open_modal,
                 "cancel_modal": cancel_modal,
@@ -8695,6 +8714,7 @@ fn run_settled_composition_route(
             "initial": initial,
             "arcade": arcade,
             "drawer_open": drawer_open,
+            "drawer_top": drawer_top,
             "drawer_closed": drawer_closed,
             "modal": modal,
             "modal_hold": modal_hold,
