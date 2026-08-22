@@ -7647,6 +7647,7 @@ fn run_launcher_response_focus_route(
         None,
     )?;
     let driver_evidence = run_launcher_response_driver(session, driver)?;
+    validate_launcher_response_driver_evidence(&driver_evidence, expected_records as u64)?;
     if let Err(error) = wait_launcher_response_completion(
         session,
         LAUNCHER_RESPONSE_COMPLETE_REMOTE,
@@ -7720,6 +7721,7 @@ fn run_launcher_response_arcade_route(
         None,
     )?;
     let driver_evidence = run_launcher_response_driver(session, "down 10 1 1")?;
+    validate_launcher_response_driver_evidence(&driver_evidence, 1)?;
     if let Err(error) = wait_launcher_response_completion(
         session,
         LAUNCHER_RESPONSE_COMPLETE_REMOTE,

@@ -26,7 +26,7 @@ const UI_SET_ABSBIT: libc::c_ulong = 0x4004_5567;
 const UI_DEV_CREATE: libc::c_ulong = 0x0000_5501;
 const UI_DEV_DESTROY: libc::c_ulong = 0x0000_5502;
 const UINPUT_USER_DEV_SIZE: usize = 1116;
-const COMPUTERS_ACTIVATION_SETTLE_MS: u64 = 3_000;
+const MAIN_INPUT_DEVICE_SETTLE_MS: u64 = 3_000;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct DriverPlan {
@@ -173,13 +173,14 @@ impl DriverPlan {
             args.first().map(String::as_str),
             Some("transition-right" | "transition-back" | "launcher-response")
         ) {
+            let launcher_response = args.first().map(String::as_str) == Some("launcher-response");
             return Ok(Self {
                 key_code: 28,
                 pulse_ms: 10,
                 gap_ms: 50,
                 start_delay_ms: 0,
                 start_at_us: 0,
-                count: 1,
+                count: if launcher_response { 17 } else { 1 },
                 qualification: false,
                 cpu_load: false,
                 sequence: match args.first().map(String::as_str) {
@@ -354,6 +355,7 @@ impl UinputDevice {
                 );
             }
             DriverSequence::LauncherResponse => {
+                std::thread::sleep(Duration::from_millis(MAIN_INPUT_DEVICE_SETTLE_MS));
                 for _ in 0..4 {
                     for (key_code, pulse_ms) in [(106, 5), (105, 10), (108, 20), (103, 40)] {
                         self.pulse(key_code, pulse_ms)?;
@@ -365,7 +367,7 @@ impl UinputDevice {
             DriverSequence::ComputersSweep | DriverSequence::ComputersEnterSweep => {
                 if plan.sequence == DriverSequence::ComputersEnterSweep {
                     self.pulse(28, 10)?;
-                    std::thread::sleep(Duration::from_millis(COMPUTERS_ACTIVATION_SETTLE_MS));
+                    std::thread::sleep(Duration::from_millis(MAIN_INPUT_DEVICE_SETTLE_MS));
                 }
                 std::thread::sleep(Duration::from_millis(plan.start_delay_ms));
                 for index in 0..8 {
@@ -389,7 +391,7 @@ impl UinputDevice {
             DriverSequence::ComputersRoundTrip | DriverSequence::ComputersEnterRoundTrip => {
                 let measured_count = if plan.sequence == DriverSequence::ComputersEnterRoundTrip {
                     self.pulse(28, 10)?;
-                    std::thread::sleep(Duration::from_millis(COMPUTERS_ACTIVATION_SETTLE_MS));
+                    std::thread::sleep(Duration::from_millis(MAIN_INPUT_DEVICE_SETTLE_MS));
                     plan.count - 1
                 } else {
                     plan.count
@@ -600,6 +602,12 @@ mod tests {
                 .unwrap()
                 .sequence,
             DriverSequence::LauncherResponse
+        );
+        assert_eq!(
+            DriverPlan::parse(&["launcher-response".to_string()])
+                .unwrap()
+                .count,
+            17
         );
         assert_eq!(
             DriverPlan::parse(&["computers-sweep", "57", "7"].map(str::to_string))
