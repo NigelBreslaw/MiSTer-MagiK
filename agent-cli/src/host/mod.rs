@@ -756,7 +756,18 @@ impl NativeDevice {
         &mut self,
         output_dir: &Path,
     ) -> std::result::Result<String, DeviceFailure> {
-        self.benchmark_profile(|config| profile_installed_bridge_model_churn(config, output_dir))
+        self.benchmark_profile(|config| {
+            profile_installed_bridge_model_churn(config, output_dir, false)
+        })
+    }
+
+    pub(crate) fn profile_bridge_model_churn_retained(
+        &mut self,
+        output_dir: &Path,
+    ) -> std::result::Result<String, DeviceFailure> {
+        self.benchmark_profile(|config| {
+            profile_installed_bridge_model_churn(config, output_dir, true)
+        })
     }
 
     pub(crate) fn profile_scheduler_trace(
@@ -8236,8 +8247,8 @@ fn settled_composition_launcher_env() -> Vec<(String, String)> {
     ]
 }
 
-fn bridge_model_churn_launcher_env() -> Vec<(String, String)> {
-    vec![
+fn bridge_model_churn_launcher_env(retained: bool) -> Vec<(String, String)> {
+    let mut environment = vec![
         ("MISTER_CATALOG_REFRESH".into(), "off".into()),
         ("MISTER_LAUNCHER_START_SCREEN".into(), "home".into()),
         ("MISTER_GUI_FRAME_PROFILE".into(), "1".into()),
@@ -8249,7 +8260,11 @@ fn bridge_model_churn_launcher_env() -> Vec<(String, String)> {
             "MISTER_GUI_FRAME_PROFILE_ROUTE".into(),
             "bridge-churn".into(),
         ),
-    ]
+    ];
+    if retained {
+        environment.push(("MISTER_BRIDGE_MODEL_POLICY".into(), "retained".into()));
+    }
+    environment
 }
 
 fn gui_profile_route_cleanup_command() -> String {
@@ -8542,6 +8557,18 @@ fn summarize_bridge_model_churn_profile(profile: &Value) -> Result<Value> {
         return Err("bridge model churn media terminal contents are invalid".into());
     }
     if playback
+        .pointer("/media_bridge_terminal/summary")
+        .and_then(Value::as_str)
+        != Some("screenshots 0 active · 2/3 done · 1 failed")
+        || playback
+            .pointer("/media_bridge_terminal/rows")
+            .and_then(Value::as_array)
+            .map(Vec::len)
+            != Some(3)
+    {
+        return Err("bridge model churn published media terminal contents are invalid".into());
+    }
+    if playback
         .pointer("/menu_terminal/rows")
         .and_then(Value::as_u64)
         != Some(128)
@@ -8590,6 +8617,7 @@ fn run_bridge_model_churn_route(
     config: &NativeDeviceConfig,
     session: &Session,
     output_dir: &Path,
+    retained: bool,
 ) -> Result<Value> {
     fs::create_dir_all(output_dir)?;
     exec_checked(
@@ -8600,7 +8628,7 @@ fn run_bridge_model_churn_route(
     restart_launcher_with_one_shot_env(
         session,
         LauncherRestartOptions {
-            env_vars: bridge_model_churn_launcher_env(),
+            env_vars: bridge_model_churn_launcher_env(retained),
             timeout_secs: 45,
             remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str().into(),
             ..LauncherRestartOptions::default()
@@ -12797,6 +12825,7 @@ fn profile_installed_settled_composition(
 fn profile_installed_bridge_model_churn(
     config: &NativeDeviceConfig,
     output_dir: &Path,
+    retained: bool,
 ) -> Result<String> {
     fs::create_dir_all(output_dir)?;
     let session = connect_with(&config.connection, 10)?;
@@ -12826,7 +12855,7 @@ fn profile_installed_bridge_model_churn(
     drop(session);
     apply_confirmed_display_mode(config, capture_mode, "bridge model churn")?;
     let session = connect_with(&config.connection, 10)?;
-    let route_result = run_bridge_model_churn_route(config, &session, output_dir);
+    let route_result = run_bridge_model_churn_route(config, &session, output_dir, retained);
     if let Some(log) = remote_read(&session, "/tmp/mister-magik-slint.log") {
         fs::write(output_dir.join("launcher.log"), log)?;
     }
@@ -12879,6 +12908,7 @@ fn profile_installed_bridge_model_churn(
         "product_quality_status": route.pointer("/metrics/presentation/quality_status")
             .cloned().unwrap_or_else(|| json!("unknown")),
         "performance_authority": "unprofiled-installed-dev",
+        "bridge_model_policy": if retained { "retained" } else { "replacement" },
         "display_mode": capture_mode.id,
         "identity": {
             "boot_id": boot_id.trim(),

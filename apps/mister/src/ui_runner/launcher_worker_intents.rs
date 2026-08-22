@@ -12,8 +12,9 @@ pub(super) enum LauncherWorkerUiIntent {
     HideCatalogBackgroundScan,
     InfoDatabaseBuild(String),
     MediaProgress {
-        progresses: ModelRc<slint_ui::launcher::ScreenshotPackProgress>,
+        rows: Vec<MediaProgressDisplayRow>,
         summary: String,
+        terminal: bool,
     },
 }
 
@@ -68,13 +69,107 @@ pub(super) fn sync_launcher_worker_ui_intent(
             bridge.set_info_database_build(value.into());
         }
         LauncherWorkerUiIntent::MediaProgress {
-            progresses,
+            rows,
             summary,
+            terminal,
         } => {
-            status_presenter.sync_media_progresses(progresses, summary);
+            return sync_media_progress_bridge(&bridge, &status_presenter, rows, summary, terminal);
         }
     }
     true
+}
+
+const MEDIA_PROGRESS_COALESCE_INTERVAL: Duration = Duration::from_millis(100);
+
+#[derive(Default)]
+struct RetainedMediaProgressBridge {
+    model: Option<Rc<VecModel<slint_ui::launcher::ScreenshotPackProgress>>>,
+    rows: Vec<MediaProgressDisplayRow>,
+    summary: String,
+    last_publication: Option<Instant>,
+}
+
+thread_local! {
+    static RETAINED_MEDIA_PROGRESS_BRIDGE: RefCell<RetainedMediaProgressBridge> =
+        RefCell::new(RetainedMediaProgressBridge::default());
+}
+
+pub(super) fn reset_retained_media_progress_bridge() {
+    RETAINED_MEDIA_PROGRESS_BRIDGE.with(|state| *state.borrow_mut() = Default::default());
+}
+
+fn sync_media_progress_bridge(
+    bridge: &slint_ui::launcher::MisterBridge,
+    presenter: &LauncherStatusPresenter<'_, '_>,
+    rows: Vec<MediaProgressDisplayRow>,
+    summary: String,
+    terminal: bool,
+) -> bool {
+    if !crate::launcher_presentation::bridge_model_retained_policy_enabled() {
+        let model = media_progress_model(&rows);
+        presenter.sync_media_progresses(model, summary);
+        return true;
+    }
+    RETAINED_MEDIA_PROGRESS_BRIDGE.with(|state| {
+        let mut state = state.borrow_mut();
+        let now = Instant::now();
+        if !terminal
+            && state.last_publication.is_some_and(|published| {
+                now.duration_since(published) < MEDIA_PROGRESS_COALESCE_INTERVAL
+            })
+        {
+            return false;
+        }
+        let publish_model = state.model.is_none();
+        let model = state
+            .model
+            .get_or_insert_with(|| Rc::new(VecModel::from(Vec::new())))
+            .clone();
+        let same_identity = state.rows.len() == rows.len()
+            && state
+                .rows
+                .iter()
+                .zip(&rows)
+                .all(|(before, after)| before.system == after.system);
+        let allocation_started = Instant::now();
+        let mut allocated_rows = 0usize;
+        if same_identity {
+            for (index, row) in rows.iter().enumerate() {
+                if state.rows.get(index) != Some(row) {
+                    model.set_row_data(index, media_progress_slint_row(row));
+                    allocated_rows = allocated_rows.saturating_add(1);
+                    crate::launcher_presentation::bridge_churn_record_row_mutations(1);
+                }
+            }
+        } else {
+            model.set_vec(
+                rows.iter()
+                    .map(media_progress_slint_row)
+                    .collect::<Vec<_>>(),
+            );
+            allocated_rows = rows.len();
+        }
+        if allocated_rows > 0 {
+            crate::launcher_presentation::bridge_churn_record_row_allocations(
+                allocated_rows as u64,
+            );
+            crate::launcher_presentation::bridge_churn_record_model_allocation_us(
+                allocation_started.elapsed().as_micros(),
+            );
+        }
+        if publish_model {
+            crate::launcher_presentation::bridge_churn_record_model_replacements(1);
+            bridge.set_media_pack_progresses(ModelRc::from(model.clone()));
+        }
+        if state.summary != summary {
+            crate::launcher_presentation::bridge_churn_record_shared_strings(1);
+            bridge.set_media_pack_summary(SharedString::from(summary.as_str()));
+        }
+        state.rows = rows;
+        state.summary = summary;
+        state.last_publication = Some(now);
+        true
+    })
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -293,18 +388,19 @@ impl MediaProgressDisplay {
         if !self.apply(event) {
             return LauncherWorkerUiIntent::None;
         }
-        self.sync_intent()
+        self.sync_intent(event.phase == "failed" || media_progress_download_done_event(event))
     }
 
     pub(super) fn clear_intent(&mut self) -> LauncherWorkerUiIntent {
         self.clear();
-        self.sync_intent()
+        self.sync_intent(true)
     }
 
-    fn sync_intent(&self) -> LauncherWorkerUiIntent {
+    fn sync_intent(&self, terminal: bool) -> LauncherWorkerUiIntent {
         LauncherWorkerUiIntent::MediaProgress {
-            progresses: self.model(),
+            rows: self.active.values().take(3).cloned().collect(),
             summary: self.summary(),
+            terminal,
         }
     }
 
@@ -409,29 +505,9 @@ impl MediaProgressDisplay {
         self.requested_count = 0;
     }
 
+    #[cfg(test)]
     fn model(&self) -> ModelRc<slint_ui::launcher::ScreenshotPackProgress> {
-        let allocation_started = Instant::now();
-        let rows = self
-            .active
-            .values()
-            .take(3)
-            .map(|row| slint_ui::launcher::ScreenshotPackProgress {
-                system: mister_magik_catalog::catalog_classify::system_title(&row.system).into(),
-                image_size: row.image_size.clone().into(),
-                phase: row.phase.clone().into(),
-                percent: row.percent,
-                bytes_label: row.bytes_label.clone().into(),
-                pack_position: row.pack_position.clone().into(),
-            })
-            .collect::<Vec<_>>();
-        crate::launcher_presentation::bridge_churn_record_row_allocations(rows.len() as u64);
-        crate::launcher_presentation::bridge_churn_record_shared_strings(
-            rows.len().saturating_mul(6) as u64,
-        );
-        crate::launcher_presentation::bridge_churn_record_model_allocation_us(
-            allocation_started.elapsed().as_micros(),
-        );
-        ModelRc::new(VecModel::from(rows))
+        media_progress_model(&self.active.values().take(3).cloned().collect::<Vec<_>>())
     }
 
     pub(super) fn summary(&self) -> String {
@@ -461,6 +537,35 @@ impl MediaProgressDisplay {
         let failed = self.failed.len();
         let total = self.requested_count.max(active + done + failed);
         (active, done, failed, total)
+    }
+}
+
+fn media_progress_model(
+    rows: &[MediaProgressDisplayRow],
+) -> ModelRc<slint_ui::launcher::ScreenshotPackProgress> {
+    let allocation_started = Instant::now();
+    let rows = rows
+        .iter()
+        .map(media_progress_slint_row)
+        .collect::<Vec<_>>();
+    crate::launcher_presentation::bridge_churn_record_row_allocations(rows.len() as u64);
+    crate::launcher_presentation::bridge_churn_record_model_allocation_us(
+        allocation_started.elapsed().as_micros(),
+    );
+    ModelRc::new(VecModel::from(rows))
+}
+
+fn media_progress_slint_row(
+    row: &MediaProgressDisplayRow,
+) -> slint_ui::launcher::ScreenshotPackProgress {
+    crate::launcher_presentation::bridge_churn_record_shared_strings(6);
+    slint_ui::launcher::ScreenshotPackProgress {
+        system: mister_magik_catalog::catalog_classify::system_title(&row.system).into(),
+        image_size: row.image_size.clone().into(),
+        phase: row.phase.clone().into(),
+        percent: row.percent,
+        bytes_label: row.bytes_label.clone().into(),
+        pack_position: row.pack_position.clone().into(),
     }
 }
 

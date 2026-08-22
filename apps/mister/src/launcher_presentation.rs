@@ -282,10 +282,19 @@ macro_rules! set_if_changed {
 
 macro_rules! set_string_if_changed {
     ($bridge:expr, $getter:ident, $setter:ident, $value:expr) => {{
-        bridge_churn_record_shared_strings(1);
-        let value: SharedString = ($value).into();
-        if $bridge.$getter() != value {
-            $bridge.$setter(value);
+        let source = $value;
+        let source = AsRef::<str>::as_ref(&source);
+        if bridge_model_retained_policy_enabled() {
+            if $bridge.$getter().as_str() != source {
+                bridge_churn_record_shared_strings(1);
+                $bridge.$setter(SharedString::from(source));
+            }
+        } else {
+            bridge_churn_record_shared_strings(1);
+            let value = SharedString::from(source);
+            if $bridge.$getter() != value {
+                $bridge.$setter(value);
+            }
         }
     }};
 }
@@ -318,6 +327,7 @@ impl BridgeChurnCounters {
 }
 
 thread_local! {
+    static BRIDGE_MODEL_RETAINED_POLICY: Cell<bool> = const { Cell::new(false) };
     static BRIDGE_CHURN_ENABLED: Cell<bool> = const { Cell::new(false) };
     static BRIDGE_CHURN_COUNTERS: RefCell<BridgeChurnCounters> = const {
         RefCell::new(BridgeChurnCounters {
@@ -328,6 +338,14 @@ thread_local! {
             model_allocation_us: 0,
         })
     };
+}
+
+pub(crate) fn set_bridge_model_retained_policy(enabled: bool) {
+    BRIDGE_MODEL_RETAINED_POLICY.with(|policy| policy.set(enabled));
+}
+
+pub(crate) fn bridge_model_retained_policy_enabled() -> bool {
+    BRIDGE_MODEL_RETAINED_POLICY.with(Cell::get)
 }
 
 pub(crate) fn bridge_churn_begin() {
@@ -687,24 +705,17 @@ impl LauncherBridgePresenter {
             return;
         }
         if let Some(model) = self.menu_item_presentation.as_ref() {
-            for index in 0..model.row_count() {
-                if let Some(mut row) = model.row_data(index) {
-                    let selected = index == nav.selected;
-                    let item_id = nav
-                        .current_menu_items()
-                        .get(index)
-                        .map(|item| item.id.as_str())
-                        .unwrap_or_default();
-                    let acknowledged = stamp.entries.iter().any(|entry| {
-                        entry.target.surface == nav.current_menu_id()
-                            && entry.target.item == item_id
-                    });
-                    if row.selected != selected || row.acknowledged != acknowledged {
-                        row.selected = selected;
-                        row.acknowledged = acknowledged;
-                        bridge_churn_record_row_mutations(1);
-                        model.set_row_data(index, row);
-                    }
+            if bridge_model_retained_policy_enabled() && self.projected_selection_feedback == stamp
+            {
+                if let Some(previous) = self.projected_selected_index {
+                    sync_menu_item_presentation_row(model, nav, &stamp, previous);
+                }
+                if self.projected_selected_index != Some(nav.selected) {
+                    sync_menu_item_presentation_row(model, nav, &stamp, nav.selected);
+                }
+            } else {
+                for index in 0..model.row_count() {
+                    sync_menu_item_presentation_row(model, nav, &stamp, index);
                 }
             }
         }
@@ -729,6 +740,33 @@ impl LauncherBridgePresenter {
             bridge
                 .set_selection_feedback_revision(self.projected_selection_feedback.revision as i32);
         }
+    }
+}
+
+fn sync_menu_item_presentation_row(
+    model: &VecModel<MenuItemPresentation>,
+    nav: &LauncherNav,
+    stamp: &SelectionFeedbackStamp,
+    index: usize,
+) {
+    let Some(mut row) = model.row_data(index) else {
+        return;
+    };
+    let selected = index == nav.selected;
+    let item_id = nav
+        .current_menu_items()
+        .get(index)
+        .map(|item| item.id.as_str())
+        .unwrap_or_default();
+    let acknowledged = stamp
+        .entries
+        .iter()
+        .any(|entry| entry.target.surface == nav.current_menu_id() && entry.target.item == item_id);
+    if row.selected != selected || row.acknowledged != acknowledged {
+        row.selected = selected;
+        row.acknowledged = acknowledged;
+        bridge_churn_record_row_mutations(1);
+        model.set_row_data(index, row);
     }
 }
 

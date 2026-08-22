@@ -35,6 +35,7 @@ Supported scenarios:
 - `gui-frame-attribution`
 - `settled-composition`
 - `bridge-model-churn`
+- `bridge-model-churn-retained`
 - `scheduler-trace`
 - `storage-attribution`
 - `arcade-velocity-scroll`
@@ -164,6 +165,13 @@ and clears benchmark media before completing. The original semantic Home state,
 display mode, installed manifest, boot identity, and ordinary launcher are
 restored. Evidence is retained below
 `build/agent-benchmarks/bridge-model-churn/<timestamp>/`.
+The `bridge-model-churn-retained` arm consumes the one-shot
+`MISTER_BRIDGE_MODEL_POLICY=retained` selector only while the bridge-churn route
+is active. Ordinary launches and the baseline arm remain on replacement
+behavior. The candidate retains the media `VecModel`, coalesces only
+nonterminal progress to 100 ms, publishes completion/failure immediately,
+updates only previous/current menu rows when feedback identity is stable, and
+avoids `SharedString` construction for unchanged bridge values.
 
 Production modal carriers are receipt-scoped: the entry carrier remains forced
 until direct-layer retirement has a matching physical receipt. The summary

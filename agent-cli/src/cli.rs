@@ -937,6 +937,7 @@ mod tests {
             "gui-frame-attribution",
             "settled-composition",
             "bridge-model-churn",
+            "bridge-model-churn-retained",
             "scheduler-trace",
             "storage-attribution",
             "arcade-velocity-scroll",
