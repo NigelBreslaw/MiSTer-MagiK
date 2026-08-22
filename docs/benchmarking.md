@@ -106,7 +106,7 @@ renames, and parent-syncs after verification. The staged/direct selector is
 retired. Catalog refresh remains off and is never forced for this scenario.
 
 `catalog-resume-validation` is the exact-device authority for interrupted
-initial-build recovery. Each of three paired baseline/walker-native samples creates an isolated missing
+initial-build recovery. Each of three samples creates an isolated missing
 catalog, waits until the production builder has synced at least one durable
 target checkpoint, and then interrupts it with an ordinary Dev launcher
 restart. The restarted launcher receives the same isolated catalog contract and
@@ -116,10 +116,10 @@ decode, validation walk, bounded-channel wait, validation consumer work, and
 recovered-output decode, together with namespace I/O and RSS/HWM evidence. It
 never uses direct-reset fault injection and does not set the forced-background
 catalog option; the absent isolated catalog invokes genuine first-build policy.
-The walker-native arm is a consumed production-off selector that computes the
-same target fingerprints on the joined LibraryWalker without a per-entry
-channel. Production remains on the event pipeline until the recovery gate and
-all mutation controls pass.
+Resume validation computes the same target fingerprints on the joined
+LibraryWalker without a per-entry channel. The retired event path remains only
+in parity assurance so future fingerprint changes must agree with the
+production walker-native result.
 
 The Arcade velocity-scroll profiling scenarios default to the active display
 route. A typed arm also accepts `--route active`, `--route hdmi-landscape`,

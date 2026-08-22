@@ -545,31 +545,6 @@ impl CatalogScanAttribution {
 const RESUME_CHECKPOINT_TARGET_BATCH: usize = 16;
 const RESUME_CHECKPOINT_MAX_BYTES: usize = 2 * 1024 * 1024;
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum ResumeValidationBackend {
-    EventPipeline,
-    WalkerNative,
-}
-
-impl ResumeValidationBackend {
-    fn capture_process() -> Self {
-        match std::env::var("MISTER_CATALOG_RESUME_VALIDATION_BACKEND")
-            .ok()
-            .as_deref()
-        {
-            Some("walker-native") => Self::WalkerNative,
-            _ => Self::EventPipeline,
-        }
-    }
-
-    fn label(self) -> &'static str {
-        match self {
-            Self::EventPipeline => "event-pipeline",
-            Self::WalkerNative => "walker-native",
-        }
-    }
-}
-
 fn progress_target(
     descriptor: &catalog_scan::ScanTargetDescriptor,
 ) -> crate::build_progress::ScanTarget {
@@ -751,32 +726,21 @@ fn prepare_resume_scan(
         .collect();
     attribution.committed_targets = completed.len();
     let validation_started = Instant::now();
-    let validation_backend = ResumeValidationBackend::capture_process();
-    attribution.validation_backend = validation_backend.label();
+    attribution.validation_backend = "walker-native";
     let (fingerprints, validation_namespace) = if completed.is_empty() {
         (
             HashMap::new(),
             catalog_scan::NamespaceRouteAttribution::default(),
         )
     } else {
-        match validation_backend {
-            ResumeValidationBackend::EventPipeline => validate_target_fingerprints_from_events(
-                cfg,
-                plan,
-                excluded_targets,
-                priority,
-                &completed,
-                &mut attribution,
-            ),
-            ResumeValidationBackend::WalkerNative => validate_target_fingerprints_in_walker(
-                cfg,
-                plan,
-                excluded_targets,
-                priority,
-                &completed,
-                &mut attribution,
-            ),
-        }
+        validate_target_fingerprints_in_walker(
+            cfg,
+            plan,
+            excluded_targets,
+            priority,
+            &completed,
+            &mut attribution,
+        )
     };
     attribution.validation_us = validation_started.elapsed().as_micros() as u64;
     attribution.validated_targets = fingerprints.len();
@@ -844,135 +808,6 @@ fn target_output_systems(output_json: &str) -> BTreeSet<String> {
                 .collect()
         })
         .unwrap_or_default()
-}
-
-fn validate_target_fingerprints_from_events(
-    cfg: &BenchConfig,
-    plan: &launch_profiles::CatalogScanPlan,
-    excluded_targets: &[PathBuf],
-    priority: LibraryScanPriority,
-    completed: &HashMap<u32, crate::build_progress::CompletedTarget>,
-    attribution: &mut ResumeValidationAttribution,
-) -> (
-    HashMap<u32, String>,
-    catalog_scan::NamespaceRouteAttribution,
-) {
-    let descriptors =
-        catalog_scan::planned_scan_target_descriptors(cfg.roots.as_slice(), plan, excluded_targets);
-    let completed_paths: BTreeSet<_> = completed
-        .values()
-        .map(|saved| saved.target.path.as_str())
-        .collect();
-    let mut validation_exclusions = excluded_targets.to_vec();
-    validation_exclusions.extend(
-        descriptors
-            .iter()
-            .filter(|descriptor| {
-                !completed_paths.contains(descriptor.path.to_string_lossy().as_ref())
-            })
-            .map(|descriptor| descriptor.path.clone()),
-    );
-    let role = match priority {
-        LibraryScanPriority::Background => crate::runtime_thread::RuntimeThreadRole::LibraryWalker,
-        LibraryScanPriority::Foreground => {
-            crate::runtime_thread::RuntimeThreadRole::LibraryWalkerForeground
-        }
-    };
-    let rx = catalog_scan::discover_files_pipelined_for_resume_validation(
-        cfg.roots.clone(),
-        plan.clone(),
-        validation_exclusions,
-        role,
-    );
-    let mut current: Option<(u32, Fingerprint)> = None;
-    let mut fingerprints = HashMap::new();
-    let mut namespace_attribution = catalog_scan::NamespaceRouteAttribution::default();
-    loop {
-        let receive_started = Instant::now();
-        let Ok(event) = rx.recv() else {
-            break;
-        };
-        attribution.validation_receive_wait_us = attribution
-            .validation_receive_wait_us
-            .saturating_add(receive_started.elapsed().as_micros() as u64);
-        attribution.validation_events = attribution.validation_events.saturating_add(1);
-        let consumer_started = Instant::now();
-        match event {
-            DiscoveryEvent::TargetStart(descriptor) => {
-                let original = completed.values().find(|saved| {
-                    saved.target.path == descriptor.path.to_string_lossy()
-                        && saved
-                            .target
-                            .key
-                            .starts_with(&format!("{:?}:", descriptor.kind))
-                });
-                current = original.map(|saved| {
-                    (
-                        saved.target.ordinal,
-                        Fingerprint::for_descriptor(&descriptor),
-                    )
-                });
-            }
-            DiscoveryEvent::TargetRestart(restart) => {
-                let original = completed.values().find(|saved| {
-                    saved.target.path == restart.descriptor.path.to_string_lossy()
-                        && saved
-                            .target
-                            .key
-                            .starts_with(&format!("{:?}:", restart.descriptor.kind))
-                });
-                current = original.map(|saved| {
-                    (
-                        saved.target.ordinal,
-                        Fingerprint::for_descriptor(&restart.descriptor),
-                    )
-                });
-            }
-            DiscoveryEvent::File(file) => {
-                attribution.validation_file_events =
-                    attribution.validation_file_events.saturating_add(1);
-                if let Some((_, fingerprint)) = current.as_mut() {
-                    fingerprint.file(&file);
-                }
-            }
-            DiscoveryEvent::GameDirFacts(facts) => {
-                attribution.validation_facts_events =
-                    attribution.validation_facts_events.saturating_add(1);
-                if let Some((_, fingerprint)) = current.as_mut() {
-                    fingerprint.facts(&facts);
-                }
-            }
-            DiscoveryEvent::RuntimeDirectory(runtime) => {
-                attribution.validation_runtime_events =
-                    attribution.validation_runtime_events.saturating_add(1);
-                if let Some((_, fingerprint)) = current.as_mut() {
-                    fingerprint.facts(&runtime.facts);
-                    for file in &runtime.files {
-                        fingerprint.file(file);
-                    }
-                }
-            }
-            DiscoveryEvent::TargetComplete(_) => {
-                if let Some((ordinal, fingerprint)) = current.take() {
-                    fingerprints.insert(ordinal, fingerprint.finish());
-                }
-            }
-            DiscoveryEvent::Done {
-                attribution: route_attribution,
-                ..
-            } => {
-                namespace_attribution = route_attribution;
-                attribution.validation_consumer_us = attribution
-                    .validation_consumer_us
-                    .saturating_add(consumer_started.elapsed().as_micros() as u64);
-                break;
-            }
-        }
-        attribution.validation_consumer_us = attribution
-            .validation_consumer_us
-            .saturating_add(consumer_started.elapsed().as_micros() as u64);
-    }
-    (fingerprints, namespace_attribution)
 }
 
 fn validate_target_fingerprints_in_walker(

@@ -138,6 +138,9 @@ splits progress-journal open, compact-frame decode, fingerprint-validation
 producer/channel/consumer work, and target-output decode. It uses an isolated
 catalog root and a naturally missing first-boot catalog; it must not enable the
 forced-background refresh option or touch the production registry.
+Production resume validation fingerprints targets directly on the joined
+LibraryWalker. It publishes no per-entry discovery events during validation;
+ordinary catalog construction continues to use the bounded discovery channel.
 
 The retired files `library.sqlite3`, `library.summary.json`, and
 `library.nav.lz4b` are not production inputs or outputs. Acceptance fails if a

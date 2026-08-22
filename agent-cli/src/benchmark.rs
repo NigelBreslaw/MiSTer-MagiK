@@ -2384,17 +2384,17 @@ fn execute_catalog_resume_validation(
 
 fn evaluate_catalog_resume_validation_summary(summary: &Value) -> AgentResult<()> {
     if summary.get("schema").and_then(Value::as_str)
-        != Some("mister-magik-catalog-resume-validation-v2")
+        != Some("mister-magik-catalog-resume-validation-v3")
         || summary.get("scenario").and_then(Value::as_str) != Some("catalog-resume-validation")
         || summary.get("status").and_then(Value::as_str) != Some("passed")
     {
-        return Err("catalog resume-validation summary is not a passing v2 report".into());
+        return Err("catalog resume-validation summary is not a passing v3 report".into());
     }
     let samples = summary
         .get("samples")
         .and_then(Value::as_array)
         .ok_or("catalog resume-validation summary has no samples")?;
-    if samples.len() != 6
+    if samples.len() != 3
         || samples.iter().any(|sample| {
             sample
                 .pointer("/resume_metrics/resume_reused")
@@ -2410,15 +2410,17 @@ fn evaluate_catalog_resume_validation_summary(summary: &Value) -> AgentResult<()
             .pointer("/production_registry/unchanged")
             .and_then(Value::as_bool)
             != Some(true)
-        || ["baseline", "walker-native"].into_iter().any(|arm| {
-            samples
-                .iter()
-                .filter(|sample| sample.get("arm").and_then(Value::as_str) == Some(arm))
-                .count()
-                != 3
+        || samples.iter().any(|sample| {
+            sample.get("arm").and_then(Value::as_str) != Some("production")
+                || sample
+                    .pointer("/resume_metrics/resume_validation_backend")
+                    .and_then(Value::as_str)
+                    != Some("walker-native")
         })
     {
-        return Err("catalog resume-validation lacks three paired reusable exact samples".into());
+        return Err(
+            "catalog resume-validation lacks three production reusable exact samples".into(),
+        );
     }
     Ok(())
 }

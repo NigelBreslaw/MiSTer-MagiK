@@ -17300,9 +17300,9 @@ fn profile_installed_catalog_resume_validation(
     fs::create_dir_all(output_dir)?;
 
     let run_result = (|| -> Result<Value> {
-        let mut samples = Vec::with_capacity(CATALOG_BUILD_REBUILD_SAMPLES * 2);
+        let mut samples = Vec::with_capacity(CATALOG_BUILD_REBUILD_SAMPLES);
         for pair_index in 1..=CATALOG_BUILD_REBUILD_SAMPLES {
-            for arm in ["baseline", "walker-native"] {
+            for arm in ["production"] {
                 require_catalog_benchmark_active("resume-validation sample preparation")?;
                 let sample_dir = output_dir.join(format!("pair-{pair_index}-{arm}"));
                 fs::create_dir_all(&sample_dir)?;
@@ -17311,13 +17311,7 @@ fn profile_installed_catalog_resume_validation(
                     "prepare isolated resume-validation sample",
                     &catalog_build_rebuild_prepare_command(),
                 )?;
-                let mut launcher_env = catalog_resume_validation_launcher_env();
-                if arm == "walker-native" {
-                    launcher_env.push((
-                        "MISTER_CATALOG_RESUME_VALIDATION_BACKEND".into(),
-                        "walker-native".into(),
-                    ));
-                }
+                let launcher_env = catalog_resume_validation_launcher_env();
                 let interrupted_started = Instant::now();
                 restart_launcher_with_one_shot_env(
                     &session,
@@ -17392,12 +17386,12 @@ fn profile_installed_catalog_resume_validation(
             "failed"
         };
         Ok(json!({
-            "schema": "mister-magik-catalog-resume-validation-v2",
+            "schema": "mister-magik-catalog-resume-validation-v3",
             "scenario": "catalog-resume-validation",
             "status": status,
             "configuration": {
                 "samples": CATALOG_BUILD_REBUILD_SAMPLES,
-                "arms": ["baseline", "walker-native"],
+                "arms": ["production"],
                 "interruption": "ordinary Dev launcher restart after a synced target checkpoint",
                 "direct_reset": false,
                 "forced_background_catalog": false,

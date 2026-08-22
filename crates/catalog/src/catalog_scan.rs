@@ -439,22 +439,6 @@ pub(crate) fn discover_files_pipelined_with_plan(
     )
 }
 
-pub(crate) fn discover_files_pipelined_for_resume_validation(
-    roots: Vec<String>,
-    plan: CatalogScanPlan,
-    excluded_targets: Vec<PathBuf>,
-    role: RuntimeThreadRole,
-) -> mpsc::Receiver<DiscoveryEvent> {
-    discover_files_pipelined_with_plan_and_phase(
-        roots,
-        plan,
-        excluded_targets,
-        Vec::new(),
-        role,
-        crate::pmu_phase::WALK_RESUME_VALIDATION,
-    )
-}
-
 pub(crate) fn fingerprint_resume_targets(
     roots: Vec<String>,
     plan: CatalogScanPlan,
@@ -2100,11 +2084,13 @@ mod tests {
         .unwrap();
         let roots = vec![root.display().to_string()];
         let plan = CatalogScanPlan::for_roots(&roots);
-        let rx = discover_files_pipelined_for_resume_validation(
+        let rx = discover_files_pipelined_with_plan_and_phase(
             roots.clone(),
             plan.clone(),
             Vec::new(),
+            Vec::new(),
             RuntimeThreadRole::LibraryWalkerForeground,
+            crate::pmu_phase::WALK_RESUME_VALIDATION,
         );
         let mut current = None;
         let mut event_fingerprints = Vec::new();
