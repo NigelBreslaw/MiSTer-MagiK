@@ -2291,6 +2291,7 @@ impl LauncherResponseTrace {
     }
 
     fn record_route(&mut self, event: crate::input_event::InputEvent, outcome: InputOutcome) {
+        self.record_route_outcome(event, outcome);
         if !self.enabled
             || event.source.kind != InputSourceKind::MainProxy
             || event.phase != InputPhase::Pressed
@@ -2647,6 +2648,93 @@ impl LauncherResponseTrace {
             self.lab_records.push(record);
             self.dirty = true;
         }
+    }
+
+    fn record_input_batch_gate(
+        &mut self,
+        batch: &crate::input_event::InputBatch,
+        fault: Option<InputFault>,
+    ) {
+        if !self.enabled
+            || (batch.events.is_empty() && fault.is_none())
+            || self.lab_records.len() == LAUNCHER_RESPONSE_TRACE_LIMIT
+        {
+            return;
+        }
+        let held_after_last = LogicalAction::ALL
+            .into_iter()
+            .filter(|action| batch.held_after_last.is_held(*action))
+            .map(|action| format!("{action:?}").to_ascii_lowercase())
+            .collect::<Vec<_>>();
+        self.lab_records.push(serde_json::json!({
+            "type": "input-batch-gate",
+            "event_count": batch.events.len(),
+            "first_sequence": batch.first_sequence,
+            "last_sequence": batch.last_sequence,
+            "source_epoch": batch.source_epoch.0,
+            "held_after_last": held_after_last,
+            "health": {
+                "protocol": format!("{:?}", batch.health.protocol).to_ascii_lowercase(),
+                "queue_depth": batch.health.queue_depth,
+                "queue_high_water": batch.health.queue_high_water,
+                "overflow_count": batch.health.overflow_count,
+                "desync_count": batch.health.desync_count,
+                "proxy_generation": batch.health.proxy_generation,
+            },
+            "result": fault
+                .map(|fault| format!("rejected-{fault:?}").to_ascii_lowercase())
+                .unwrap_or_else(|| "accepted".to_string()),
+        }));
+        self.dirty = true;
+    }
+
+    fn record_route_outcome(
+        &mut self,
+        event: crate::input_event::InputEvent,
+        outcome: InputOutcome,
+    ) {
+        if !self.enabled
+            || event.source.kind != InputSourceKind::MainProxy
+            || self.lab_records.len() == LAUNCHER_RESPONSE_TRACE_LIMIT
+        {
+            return;
+        }
+        let (result, context) = match outcome {
+            InputOutcome::Dispatch { context, kind, .. } => (
+                match kind {
+                    DispatchKind::Initial => "dispatch-initial".to_string(),
+                    DispatchKind::Repeat => "dispatch-repeat".to_string(),
+                },
+                Some(context),
+            ),
+            InputOutcome::Released { context, .. } => ("released".to_string(), Some(context)),
+            InputOutcome::WakeScreensaver { context, .. } => {
+                ("wake-screensaver".to_string(), Some(context))
+            }
+            InputOutcome::Consumed { reason, .. } => {
+                (format!("consumed-{reason:?}").to_ascii_lowercase(), None)
+            }
+        };
+        self.lab_records.push(serde_json::json!({
+            "type": "input-route-outcome",
+            "sequence": event.sequence,
+            "source_epoch": event.source_epoch.0,
+            "press_id": event.press_id.0,
+            "proxy_sequence": self.proxy_sequences.get(&event.sequence),
+            "captured_at_us": event.captured_at_us,
+            "published_at_us": self.published_at_us.get(&event.sequence),
+            "drained_at_us": self.drained_at_us.get(&event.sequence),
+            "action": format!("{:?}", event.action).to_ascii_lowercase(),
+            "phase": format!("{:?}", event.phase).to_ascii_lowercase(),
+            "result": result,
+            "context": context.map(|context| serde_json::json!({
+                "kind": format!("{:?}", context.target.kind).to_ascii_lowercase(),
+                "owner": context.target.owner,
+                "generation": context.generation,
+            })),
+            "launcher_state": self.state.json(),
+        }));
+        self.dirty = true;
     }
 
     fn update_completion(&mut self) {
@@ -7322,7 +7410,10 @@ pub(super) fn run_launcher_loop(
             let frame_now = Instant::now();
             let mut incoming_input_events = VecDeque::new();
             let mut screensaver_wake = false;
-            let input_batch_healthy = match input_router.accept_batch(&input_batch) {
+            let input_batch_result = input_router.accept_batch(&input_batch);
+            launcher_response_trace
+                .record_input_batch_gate(&input_batch, input_batch_result.as_ref().err().copied());
+            let input_batch_healthy = match input_batch_result {
                 Ok(()) => {
                     input_fault_notice = None;
                     incoming_input_events.extend(input_batch.events.iter().copied());
@@ -7383,6 +7474,7 @@ pub(super) fn run_launcher_loop(
                 while let Some(event) = incoming_input_events.pop_front() {
                     let focus = launcher_input_focus(true, true, false, false, false, false, &nav);
                     let outcome = input_router.route_event(event, focus, frame_now);
+                    launcher_response_trace.record_route(event, outcome);
                     if matches!(outcome, InputOutcome::WakeScreensaver { .. }) {
                         latency_critical_input_pending = true;
                         screensaver_wake = true;
@@ -7409,7 +7501,8 @@ pub(super) fn run_launcher_loop(
                 let disabled = launcher_input_focus(false, false, false, false, false, false, &nav);
                 input_router.set_focus(disabled);
                 for event in incoming_input_events.drain(..) {
-                    let _ = input_router.route_event(event, disabled, frame_now);
+                    let outcome = input_router.route_event(event, disabled, frame_now);
+                    launcher_response_trace.record_route(event, outcome);
                 }
             }
 
@@ -14818,8 +14911,47 @@ mod tests {
             serde_json::from_str(&trace.snapshot().payload()).expect("response trace payload");
         assert_eq!(payload["schema"], "mister-magik-launcher-response-trace-v6");
         assert_eq!(payload["execution_attribution"]["enabled"], true);
+        assert_eq!(payload["lab_records"][0]["type"], "input-route-outcome");
+        assert_eq!(payload["lab_records"][0]["result"], "dispatch-initial");
         assert!(payload["records"][0]["execution"]["stamps"]["drained"].is_object());
         assert!(payload["records"][0]["frame"]["execution"]["intervals"]["raster"].is_object());
+    }
+
+    #[test]
+    fn launcher_response_trace_records_rejected_batches_and_consumed_presses() {
+        let nav = LauncherNav::new();
+        let mut trace = LauncherResponseTrace::enabled_for_test(&nav);
+        let mut event = normalized_test_press(LogicalAction::Right);
+        event.source.kind = InputSourceKind::MainProxy;
+        let batch = crate::input_event::InputBatch {
+            source_epoch: event.source_epoch,
+            first_sequence: Some(event.sequence),
+            last_sequence: Some(event.sequence),
+            events: vec![event],
+            health: crate::input_event::InputHealth {
+                protocol: crate::input_event::InputProtocolHealth::ProxyV2,
+                ..crate::input_event::InputHealth::default()
+            },
+            ..crate::input_event::InputBatch::default()
+        };
+        trace.record_input_batch_gate(&batch, Some(InputFault::Desync));
+        trace.record_route(
+            event,
+            InputOutcome::Consumed {
+                press_id: event.press_id,
+                reason: ConsumedReason::OpposingDirections,
+            },
+        );
+
+        assert!(trace.records.is_empty());
+        assert_eq!(trace.lab_records.len(), 2);
+        assert_eq!(trace.lab_records[0]["type"], "input-batch-gate");
+        assert_eq!(trace.lab_records[0]["result"], "rejected-desync");
+        assert_eq!(trace.lab_records[1]["type"], "input-route-outcome");
+        assert_eq!(
+            trace.lab_records[1]["result"],
+            "consumed-opposingdirections"
+        );
     }
 
     #[test]
@@ -14965,8 +15097,8 @@ mod tests {
         let (mut partial, _, _, lab_count) = trace.partial_snapshot();
         assert!(partial.catalog_phases.is_empty());
         assert!(partial.scheduler_phases.is_empty());
-        assert_eq!(lab_count, 1);
-        assert_eq!(partial.lab_records.len(), 1);
+        assert_eq!(lab_count, 2);
+        assert_eq!(partial.lab_records.len(), 2);
         let payload = serde_json::from_str::<serde_json::Value>(&partial.payload())
             .expect("partial response trace payload");
         assert_eq!(payload["completion"]["state"], "running");
