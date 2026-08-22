@@ -306,7 +306,8 @@ impl UiCompositionController {
                 let entering_screensaver = previous != UiCompositionState::Screensaver
                     && requested_state == UiCompositionState::Screensaver;
                 let clear_layers = entering_screensaver
-                    || (previous.allows_direct_layers()
+                    || (previous != requested_state
+                        && previous.allows_direct_layers()
                         && (!requested_state.allows_direct_layers()
                             || requested_state == UiCompositionState::ModalOverArcade));
                 let force_full_raster =

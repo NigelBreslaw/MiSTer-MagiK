@@ -14855,8 +14855,9 @@ mod tests {
                 .map(|frame| frame.selected.selected_index),
             Some(1)
         );
+        let (snapshot, _, _, _) = trace.partial_snapshot();
         let payload: serde_json::Value =
-            serde_json::from_str(&trace.snapshot().payload()).expect("response trace payload");
+            serde_json::from_str(&snapshot.payload()).expect("response trace payload");
         assert_eq!(payload["schema"], "mister-magik-launcher-response-trace-v6");
         assert_eq!(payload["execution_attribution"]["enabled"], true);
         assert_eq!(payload["lab_records"][0]["type"], "input-route-outcome");
@@ -15060,7 +15061,7 @@ mod tests {
         let complete = trace.snapshot();
         assert_eq!(complete.catalog_phases.len(), 1);
         assert_eq!(complete.scheduler_phases.len(), 1);
-        assert_eq!(complete.lab_records.len(), 1);
+        assert_eq!(complete.lab_records.len(), 2);
         assert_eq!(
             serde_json::from_str::<serde_json::Value>(&complete.payload())
                 .expect("complete response trace payload")["completion"]["state"],
