@@ -42,12 +42,14 @@ enum GuiProfileRoute {
     #[default]
     ArcadeVelocity,
     SettledComposition,
+    BridgeChurn,
 }
 
 impl GuiProfileRoute {
     fn from_value(value: Option<&str>) -> Self {
         match value {
             Some("settled-composition") => Self::SettledComposition,
+            Some("bridge-churn") => Self::BridgeChurn,
             _ => Self::ArcadeVelocity,
         }
     }
@@ -56,6 +58,7 @@ impl GuiProfileRoute {
         match self {
             Self::ArcadeVelocity => &GuiProfilePhase::ARCADE_VELOCITY_ORDERED,
             Self::SettledComposition => &GuiProfilePhase::SETTLED_COMPOSITION_ORDERED,
+            Self::BridgeChurn => &GuiProfilePhase::BRIDGE_CHURN_ORDERED,
         }
     }
 }
@@ -257,6 +260,9 @@ pub(super) enum GuiProfilePhase {
     ModalOverArcade,
     SettingsDestination,
     SettingsFollowing,
+    MediaProgress,
+    MenuSelection,
+    LightBridge,
 }
 
 impl GuiProfilePhase {
@@ -267,6 +273,8 @@ impl GuiProfilePhase {
         Self::SettingsDestination,
         Self::SettingsFollowing,
     ];
+    const BRIDGE_CHURN_ORDERED: [Self; 3] =
+        [Self::MediaProgress, Self::MenuSelection, Self::LightBridge];
 
     pub(super) const fn label(self) -> &'static str {
         match self {
@@ -276,6 +284,9 @@ impl GuiProfilePhase {
             Self::ModalOverArcade => "modal-over-arcade",
             Self::SettingsDestination => "settings-destination",
             Self::SettingsFollowing => "settings-following",
+            Self::MediaProgress => "media-progress",
+            Self::MenuSelection => "menu-selection",
+            Self::LightBridge => "light-bridge",
         }
     }
 
@@ -311,6 +322,7 @@ pub(super) struct GuiProfilingController {
     settled_modal_presentations: u8,
     settings_destination_frame: Option<u64>,
     phase_markers: Vec<serde_json::Value>,
+    bridge_churn_summary: Option<serde_json::Value>,
     last_loop_start: Option<Instant>,
     last_frame_t4: Option<Instant>,
     last_timing_finalized_at: Option<Instant>,
@@ -332,6 +344,11 @@ pub(super) struct GuiFrameTimingTrace {
     pub(super) post_custom_to_present_us: u128,
     pub(super) bridge_sync_us: u128,
     pub(super) bridge_model_projection_us: u128,
+    pub(super) bridge_model_replacements: u64,
+    pub(super) bridge_row_mutations: u64,
+    pub(super) bridge_row_allocations: u64,
+    pub(super) bridge_shared_string_constructions: u64,
+    pub(super) bridge_model_allocation_us: u64,
     pub(super) media_worker_us: u128,
     pub(super) media_gate_us: u128,
     pub(super) preview_schedule_us: u128,
@@ -387,6 +404,13 @@ impl GuiFrameTimingTrace {
                 .as_micros(),
             bridge_sync_us: frame.prepare_trace.bridge_sync_us,
             bridge_model_projection_us: frame.prepare_trace.bridge_model_projection_us,
+            bridge_model_replacements: frame.prepare_trace.bridge_model_replacements,
+            bridge_row_mutations: frame.prepare_trace.bridge_row_mutations,
+            bridge_row_allocations: frame.prepare_trace.bridge_row_allocations,
+            bridge_shared_string_constructions: frame
+                .prepare_trace
+                .bridge_shared_string_constructions,
+            bridge_model_allocation_us: frame.prepare_trace.bridge_model_allocation_us,
             media_worker_us: frame.prepare_trace.media_worker_us,
             media_gate_us: frame.prepare_trace.media_gate_us,
             preview_schedule_us: frame.prepare_trace.preview_schedule_us,
@@ -438,6 +462,7 @@ impl GuiProfilingController {
             settled_modal_presentations: 0,
             settings_destination_frame: None,
             phase_markers: Vec::with_capacity(route.phases().len() * 2),
+            bridge_churn_summary: None,
             last_loop_start: None,
             last_frame_t4: None,
             last_timing_finalized_at: None,
@@ -459,6 +484,7 @@ impl GuiProfilingController {
             settled_modal_presentations: 0,
             settings_destination_frame: None,
             phase_markers: Vec::new(),
+            bridge_churn_summary: None,
             last_loop_start: None,
             last_frame_t4: None,
             last_timing_finalized_at: None,
@@ -481,6 +507,7 @@ impl GuiProfilingController {
             settled_modal_presentations: 0,
             settings_destination_frame: None,
             phase_markers: Vec::new(),
+            bridge_churn_summary: None,
             last_loop_start: None,
             last_frame_t4: None,
             last_timing_finalized_at: None,
@@ -500,6 +527,16 @@ impl GuiProfilingController {
 
     pub(super) fn pmu_requested(&self) -> bool {
         self.pmu_requested
+    }
+
+    pub(super) fn bridge_churn_route(&self) -> bool {
+        self.route == GuiProfileRoute::BridgeChurn
+    }
+
+    pub(super) fn set_bridge_churn_summary(&mut self, summary: serde_json::Value) {
+        if self.bridge_churn_route() {
+            self.bridge_churn_summary = Some(summary);
+        }
     }
 
     pub(super) fn needs_presentation(&self) -> bool {
@@ -616,6 +653,11 @@ impl GuiProfilingController {
                 "arcade",
                 crate::input_event::LogicalAction::Down,
             ) => Some(GuiProfilePhase::ArcadeScroll),
+            (GuiProfileRoute::BridgeChurn, "home", crate::input_event::LogicalAction::Y)
+                if self.state == GuiProfileState::Warmup =>
+            {
+                Some(GuiProfilePhase::MediaProgress)
+            }
             (
                 GuiProfileRoute::SettledComposition,
                 "arcade",
@@ -1000,6 +1042,12 @@ impl GuiProfilingController {
         record["bridge_sync_us"] = json!(u128_to_u64_saturating(timing.bridge_sync_us));
         record["bridge_model_projection_us"] =
             json!(u128_to_u64_saturating(timing.bridge_model_projection_us));
+        record["bridge_model_replacements"] = json!(timing.bridge_model_replacements);
+        record["bridge_row_mutations"] = json!(timing.bridge_row_mutations);
+        record["bridge_row_allocations"] = json!(timing.bridge_row_allocations);
+        record["bridge_shared_string_constructions"] =
+            json!(timing.bridge_shared_string_constructions);
+        record["bridge_model_allocation_us"] = json!(timing.bridge_model_allocation_us);
         record["media_worker_us"] = json!(u128_to_u64_saturating(timing.media_worker_us));
         record["media_gate_us"] = json!(u128_to_u64_saturating(timing.media_gate_us));
         record["preview_schedule_us"] = json!(u128_to_u64_saturating(timing.preview_schedule_us));
@@ -1120,6 +1168,7 @@ impl GuiProfilingController {
         let dropped_frames = self.dropped_frames;
         let pmu_requested = self.pmu_requested;
         let phase_markers = std::mem::take(&mut self.phase_markers);
+        let bridge_churn_summary = self.bridge_churn_summary.take();
         std::thread::spawn(move || {
             let pmu_valid = !pmu_requested
                 || (thread_profile.enabled
@@ -1144,6 +1193,7 @@ impl GuiProfilingController {
                 "frames": frames,
                 "dropped_frame_records": dropped_frames,
                 "phase_markers": phase_markers,
+                "bridge_churn": bridge_churn_summary,
             });
             if let Some(parent) = path.parent() {
                 let _ = std::fs::create_dir_all(parent);
@@ -1533,6 +1583,11 @@ mod tests {
                 post_custom_to_present_us: 50,
                 bridge_sync_us: 60,
                 bridge_model_projection_us: 70,
+                bridge_model_replacements: 1,
+                bridge_row_mutations: 2,
+                bridge_row_allocations: 3,
+                bridge_shared_string_constructions: 4,
+                bridge_model_allocation_us: 5,
                 media_worker_us: 80,
                 media_gate_us: 90,
                 preview_schedule_us: 100,
@@ -1576,6 +1631,11 @@ mod tests {
                 post_custom_to_present_us: 51,
                 bridge_sync_us: 61,
                 bridge_model_projection_us: 71,
+                bridge_model_replacements: 0,
+                bridge_row_mutations: 2,
+                bridge_row_allocations: 0,
+                bridge_shared_string_constructions: 4,
+                bridge_model_allocation_us: 0,
                 media_worker_us: 81,
                 media_gate_us: 91,
                 preview_schedule_us: 101,

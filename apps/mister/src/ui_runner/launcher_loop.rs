@@ -5245,6 +5245,7 @@ pub(super) fn run_launcher_loop(
         input_observation_probe.clone(),
     );
     let mut gui_profiling = GuiProfilingController::from_config(profile_config.gui().clone());
+    let mut bridge_churn_playback = BridgeChurnPlayback::new(gui_profiling.bridge_churn_route());
     let mut input_latency_lab = InputLatencyLab::from_env(input_observation_probe.clone());
     let mut loading_title = String::new();
     let mut last_clock_update = Instant::now() - Duration::from_secs(2);
@@ -6219,6 +6220,7 @@ pub(super) fn run_launcher_loop(
             frame_accounting.preview_scroll_trace_enabled() || frame_analytics_mode.records_wall();
         let mut prepare_trace = LauncherPrepareTrace::default();
         prepare_trace.slint_timer_dispatch_us = slint_timer_dispatch_us;
+        let bridge_churn_frame_start = crate::launcher_presentation::bridge_churn_snapshot();
         if background_work_allowed
             && catalog_ready
             && user_state_catalog_version != Some(catalog_version)
@@ -8569,6 +8571,14 @@ pub(super) fn run_launcher_loop(
             request_launcher_redraw!();
         }
 
+        bridge_churn_playback.apply(
+            gui_profiling.phase(),
+            &app,
+            &nav,
+            &bridge_models,
+            &mut full_bridge_dirty,
+            &mut light_bridge_dirty,
+        );
         let startup_intro_launcher_ui_plan = startup_intro_launcher_ui_plan(
             startup_intro.is_some(),
             lifecycle.startup_status().state,
@@ -8680,6 +8690,14 @@ pub(super) fn run_launcher_loop(
             .map(|started| started.elapsed().as_micros())
             .unwrap_or(0);
         prepare_trace.bridge_model_projection_us = bridge_model_projection_us;
+        let bridge_churn_delta = crate::launcher_presentation::bridge_churn_snapshot()
+            .saturating_sub(bridge_churn_frame_start);
+        prepare_trace.bridge_model_replacements = bridge_churn_delta.model_replacements;
+        prepare_trace.bridge_row_mutations = bridge_churn_delta.row_mutations;
+        prepare_trace.bridge_row_allocations = bridge_churn_delta.row_allocations;
+        prepare_trace.bridge_shared_string_constructions =
+            bridge_churn_delta.shared_string_constructions;
+        prepare_trace.bridge_model_allocation_us = bridge_churn_delta.model_allocation_us;
         let response_projected_at_us = crate::input_hub::monotonic_us();
         let response_projected_execution = launcher_response_trace.execution_stamp();
         drop(interaction_projection_pmu);
@@ -11736,6 +11754,25 @@ pub(super) fn run_launcher_loop(
                     Instant::now(),
                     crate::input_hub::monotonic_us(),
                 );
+                if let Some(transition) = bridge_churn_playback.note_presented() {
+                    let now = Instant::now();
+                    let monotonic_us = crate::input_hub::monotonic_us();
+                    match transition {
+                        BridgeChurnPlaybackTransition::Advance { completed, next } => {
+                            if gui_profiling
+                                .confirm_phase_presented(completed, now, monotonic_us)
+                                .is_ok()
+                            {
+                                let _ = gui_profiling.request_phase(next, now);
+                            }
+                        }
+                        BridgeChurnPlaybackTransition::Finish { completed, summary } => {
+                            gui_profiling.set_bridge_churn_summary(summary);
+                            let _ =
+                                gui_profiling.confirm_phase_presented(completed, now, monotonic_us);
+                        }
+                    }
+                }
                 if gui_profiling.settled_arcade_phase_pending() {
                     screensaver_cpu_profile
                         .complete_arcade_velocity_scroll(frames.saturating_add(1));

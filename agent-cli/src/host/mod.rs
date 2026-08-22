@@ -752,6 +752,13 @@ impl NativeDevice {
         self.benchmark_profile(|config| profile_installed_settled_composition(config, output_dir))
     }
 
+    pub(crate) fn profile_bridge_model_churn(
+        &mut self,
+        output_dir: &Path,
+    ) -> std::result::Result<String, DeviceFailure> {
+        self.benchmark_profile(|config| profile_installed_bridge_model_churn(config, output_dir))
+    }
+
     pub(crate) fn profile_scheduler_trace(
         &mut self,
         output_dir: &Path,
@@ -8229,6 +8236,22 @@ fn settled_composition_launcher_env() -> Vec<(String, String)> {
     ]
 }
 
+fn bridge_model_churn_launcher_env() -> Vec<(String, String)> {
+    vec![
+        ("MISTER_CATALOG_REFRESH".into(), "off".into()),
+        ("MISTER_LAUNCHER_START_SCREEN".into(), "home".into()),
+        ("MISTER_GUI_FRAME_PROFILE".into(), "1".into()),
+        (
+            "MISTER_GUI_FRAME_PROFILE_COMPLETE".into(),
+            GUI_PROFILE_REMOTE_COMPLETE.into(),
+        ),
+        (
+            "MISTER_GUI_FRAME_PROFILE_ROUTE".into(),
+            "bridge-churn".into(),
+        ),
+    ]
+}
+
 fn gui_profile_route_cleanup_command() -> String {
     let safety = platform_safety_script();
     format!(
@@ -8456,6 +8479,230 @@ fn summarize_settled_composition_profile(profile: &Value) -> Result<Value> {
         },
         "presentation": gui_presentation_summary(profile)?,
     }))
+}
+
+fn summarize_bridge_model_churn_profile(profile: &Value) -> Result<Value> {
+    if profile.get("state").and_then(Value::as_str) != Some("complete") {
+        return Err(format!("bridge model churn profile did not complete: {profile}").into());
+    }
+    let frames = profile
+        .get("frames")
+        .and_then(Value::as_array)
+        .ok_or("bridge model churn profile has no frames")?;
+    let phase_metrics = |phase: &str, updates: u64| {
+        let selected = frames
+            .iter()
+            .filter(|frame| frame.get("phase").and_then(Value::as_str) == Some(phase))
+            .collect::<Vec<_>>();
+        let sum = |key: &str| {
+            selected
+                .iter()
+                .filter_map(|frame| frame.get(key).and_then(Value::as_u64))
+                .sum::<u64>()
+        };
+        let bridge_us = sum("bridge_sync_us");
+        let raster_us = sum("slint_render_us");
+        json!({
+            "updates": updates,
+            "frames": selected.len(),
+            "bridge_us": bridge_us,
+            "raster_us": raster_us,
+            "bridge_plus_raster_us": bridge_us.saturating_add(raster_us),
+            "bridge_plus_raster_us_per_update": bridge_us.saturating_add(raster_us) as f64 / updates as f64,
+            "model_replacements": sum("bridge_model_replacements"),
+            "row_mutations": sum("bridge_row_mutations"),
+            "row_allocations": sum("bridge_row_allocations"),
+            "shared_string_constructions": sum("bridge_shared_string_constructions"),
+            "model_allocation_us": sum("bridge_model_allocation_us"),
+            "full_damage_frames": selected.iter().filter(|frame| {
+                frame.get("slint_damage_rects").and_then(Value::as_array).is_some_and(|rects| {
+                    rects.iter().any(|rect| rect.as_array().is_some_and(|values| {
+                        values.get(2).and_then(Value::as_u64) == Some(1280)
+                            && values.get(3).and_then(Value::as_u64) == Some(720)
+                    }))
+                })
+            }).count(),
+            "copied_bytes": selected.iter().filter_map(|frame| frame.pointer("/latch/copied_bytes").and_then(Value::as_u64)).sum::<u64>(),
+        })
+    };
+    let playback = profile
+        .get("bridge_churn")
+        .filter(|value| !value.is_null())
+        .ok_or("bridge model churn profile has no playback summary")?;
+    if playback
+        .pointer("/media_terminal/summary")
+        .and_then(Value::as_str)
+        != Some("screenshots 0 active · 2/3 done · 1 failed")
+        || playback
+            .pointer("/media_terminal/rows")
+            .and_then(Value::as_array)
+            .map(Vec::len)
+            != Some(3)
+    {
+        return Err("bridge model churn media terminal contents are invalid".into());
+    }
+    if playback
+        .pointer("/menu_terminal/rows")
+        .and_then(Value::as_u64)
+        != Some(128)
+        || playback
+            .pointer("/menu_terminal/selected_rows/0")
+            .and_then(Value::as_u64)
+            != Some(63)
+        || playback
+            .pointer("/menu_terminal/selected_rows")
+            .and_then(Value::as_array)
+            .map(Vec::len)
+            != Some(1)
+        || playback
+            .pointer("/menu_terminal/acknowledged_rows")
+            .and_then(Value::as_array)
+            .map(Vec::len)
+            != Some(0)
+    {
+        return Err("bridge model churn menu terminal contents are invalid".into());
+    }
+    if playback
+        .pointer("/terminal/media_rows")
+        .and_then(Value::as_u64)
+        != Some(0)
+        || playback
+            .pointer("/terminal/media_summary")
+            .and_then(Value::as_str)
+            != Some("")
+        || playback
+            .pointer("/terminal/menu_restored")
+            .and_then(Value::as_bool)
+            != Some(true)
+    {
+        return Err("bridge model churn did not restore production bridge contents".into());
+    }
+    Ok(json!({
+        "media_progress": phase_metrics("media-progress", 60),
+        "menu_selection": phase_metrics("menu-selection", 64),
+        "light_bridge": phase_metrics("light-bridge", 64),
+        "playback": playback,
+        "presentation": gui_presentation_summary(profile)?,
+    }))
+}
+
+fn run_bridge_model_churn_route(
+    config: &NativeDeviceConfig,
+    session: &Session,
+    output_dir: &Path,
+) -> Result<Value> {
+    fs::create_dir_all(output_dir)?;
+    exec_checked(
+        session,
+        "prepare bridge model churn route",
+        &gui_profile_route_cleanup_command(),
+    )?;
+    restart_launcher_with_one_shot_env(
+        session,
+        LauncherRestartOptions {
+            env_vars: bridge_model_churn_launcher_env(),
+            timeout_secs: 45,
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str().into(),
+            ..LauncherRestartOptions::default()
+        },
+    )?;
+    let status = read_launcher_status(session)?;
+    let main_status: Value = serde_json::from_str(
+        &remote_read(session, MAIN_STATUS_REMOTE).ok_or("Main status is missing")?,
+    )?;
+    let begin = launcher_automation::begin(
+        config,
+        status
+            .pointer("/build/version")
+            .and_then(Value::as_str)
+            .ok_or("bridge model churn status has no build version")?,
+        status
+            .pointer("/build/source_revision")
+            .and_then(Value::as_str)
+            .ok_or("bridge model churn status has no source revision")?,
+        main_status
+            .get("main_generation")
+            .and_then(Value::as_u64)
+            .ok_or("bridge model churn Main status has no generation")?,
+        45,
+    )?;
+    let begin: Value = serde_json::from_str(&begin)?;
+    let nonce = begin["nonce"]
+        .as_str()
+        .ok_or("bridge model churn automation has no nonce")?
+        .to_owned();
+    let route_result = (|| -> Result<Value> {
+        let initial = wait_gui_profile_snapshot(
+            config,
+            &nonce,
+            |snapshot| {
+                gui_profile_effective_view(snapshot) == Some("home")
+                    && snapshot
+                        .pointer("/semantic/navigation_transition_active")
+                        .and_then(Value::as_bool)
+                        == Some(false)
+            },
+            "bridge model churn initial Home",
+        )?;
+        let start = modal_input_action(config, &nonce, AutomationAction::Tap(AutomationButton::Y))?;
+        wait_for_gui_profile_file(
+            config,
+            session,
+            &nonce,
+            GUI_PROFILE_REMOTE_COMPLETE,
+            Duration::from_secs(15),
+            "bridge model churn completion",
+        )?;
+        let profile_path = output_dir.join("profile.json");
+        get(session, GUI_PROFILE_REMOTE_COMPLETE, &profile_path)?;
+        let profile: Value = serde_json::from_str(&fs::read_to_string(&profile_path)?)?;
+        let metrics = summarize_bridge_model_churn_profile(&profile)?;
+        let terminal = wait_gui_profile_snapshot(
+            config,
+            &nonce,
+            |snapshot| {
+                gui_profile_effective_view(snapshot) == Some("home")
+                    && snapshot
+                        .pointer("/semantic/navigation_transition_active")
+                        .and_then(Value::as_bool)
+                        == Some(false)
+            },
+            "bridge model churn restored Home",
+        )?;
+        let initial_semantic = initial.get("semantic").cloned().unwrap_or(Value::Null);
+        let terminal_semantic = terminal.get("semantic").cloned().unwrap_or(Value::Null);
+        if initial_semantic != terminal_semantic {
+            return Err(format!(
+                "bridge model churn semantic state was not restored: initial={initial_semantic}; terminal={terminal_semantic}"
+            )
+            .into());
+        }
+        let terminal_home: Value = serde_json::from_str(&launcher_automation::capture_checkpoint(
+            config,
+            &nonce,
+            start,
+            "terminal-home",
+            output_dir,
+        )?)?;
+        Ok(json!({
+            "schema": "mister-magik-bridge-model-churn-route-v1",
+            "actions": { "start": start },
+            "initial": initial,
+            "terminal": terminal,
+            "terminal_home": terminal_home,
+            "profile": profile,
+            "metrics": metrics,
+        }))
+    })();
+    let end_result = launcher_automation::end(config, &nonce).map(|_| ());
+    match (route_result, end_result) {
+        (Ok(route), Ok(())) => Ok(route),
+        (Err(route), Ok(())) => Err(route),
+        (Ok(_), Err(end)) => Err(format!("bridge model churn cleanup failed: {end}").into()),
+        (Err(route), Err(end)) => {
+            Err(format!("{route}; bridge model churn cleanup failed: {end}").into())
+        }
+    }
 }
 
 fn run_settled_composition_route(
@@ -12538,6 +12785,111 @@ fn profile_installed_settled_composition(
             "launcher_log": "launcher.log",
             "terminal_settings_png": "terminal-settings.png",
             "terminal_settings_metadata": "terminal-settings.json",
+        },
+    });
+    fs::write(
+        output_dir.join("summary.json"),
+        format!("{}\n", serde_json::to_string_pretty(&summary)?),
+    )?;
+    serde_json::to_string(&summary).map_err(Into::into)
+}
+
+fn profile_installed_bridge_model_churn(
+    config: &NativeDeviceConfig,
+    output_dir: &Path,
+) -> Result<String> {
+    fs::create_dir_all(output_dir)?;
+    let session = connect_with(&config.connection, 10)?;
+    let manifest = remote_read(&session, LOCAL_MAIN_MANIFEST_REMOTE)
+        .ok_or("development manifest is unavailable before bridge model churn")?;
+    let boot_id = remote_read(&session, "/proc/sys/kernel/random/boot_id")
+        .ok_or("device boot id is unavailable before bridge model churn")?;
+    let original_reply = exec_checked_output(
+        &session,
+        "query bridge model churn display mode",
+        &acknowledged_main_command("mister_magik_display_get_v1"),
+    )?;
+    if parse_display_reply_pending(original_reply.stdout.trim())?.is_some() {
+        return Err("bridge model churn cannot start during a display transaction".into());
+    }
+    let original_id = parse_display_reply_active(original_reply.stdout.trim())?;
+    let original_mode = DISPLAY_MATRIX_MODES
+        .iter()
+        .find(|mode| mode.id == original_id)
+        .copied()
+        .ok_or_else(|| format!("bridge model churn cannot restore unknown mode {original_id}"))?;
+    let capture_mode = DISPLAY_MATRIX_MODES
+        .iter()
+        .find(|mode| mode.id == "hdmi-1280x720p60")
+        .copied()
+        .ok_or("missing bridge model churn display mode")?;
+    drop(session);
+    apply_confirmed_display_mode(config, capture_mode, "bridge model churn")?;
+    let session = connect_with(&config.connection, 10)?;
+    let route_result = run_bridge_model_churn_route(config, &session, output_dir);
+    if let Some(log) = remote_read(&session, "/tmp/mister-magik-slint.log") {
+        fs::write(output_dir.join("launcher.log"), log)?;
+    }
+    let launcher_restore = launcher_restart(
+        &session,
+        &LauncherRestartOptions {
+            clear_env: true,
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str().into(),
+            timeout_secs: 45,
+            ..LauncherRestartOptions::default()
+        },
+    );
+    let route_cleanup = exec_checked(
+        &session,
+        "clean bridge model churn route state",
+        &gui_profile_route_cleanup_command(),
+    );
+    drop(session);
+    let display_restore =
+        apply_confirmed_display_mode(config, original_mode, "bridge model churn restoration");
+    let route = match (
+        route_result,
+        launcher_restore,
+        route_cleanup,
+        display_restore,
+    ) {
+        (Ok(route), Ok(()), Ok(()), Ok(())) => route,
+        (route, launcher, cleanup, display) => {
+            return Err(format!(
+                "bridge model churn failed: route={:?}; launcher_restore={:?}; cleanup={:?}; display_restore={:?}",
+                route.err(),
+                launcher.err(),
+                cleanup.err(),
+                display.err()
+            )
+            .into());
+        }
+    };
+    let session = connect_with(&config.connection, 10)?;
+    let final_manifest = remote_read(&session, LOCAL_MAIN_MANIFEST_REMOTE)
+        .ok_or("development manifest is unavailable after bridge model churn")?;
+    let final_boot_id = remote_read(&session, "/proc/sys/kernel/random/boot_id")
+        .ok_or("device boot id is unavailable after bridge model churn")?;
+    if final_manifest != manifest || final_boot_id != boot_id {
+        return Err("installed identity changed during bridge model churn".into());
+    }
+    let summary = json!({
+        "schema": "mister-magik-bridge-model-churn-v1",
+        "artifact_status": "passed",
+        "product_quality_status": route.pointer("/metrics/presentation/quality_status")
+            .cloned().unwrap_or_else(|| json!("unknown")),
+        "performance_authority": "unprofiled-installed-dev",
+        "display_mode": capture_mode.id,
+        "identity": {
+            "boot_id": boot_id.trim(),
+            "manifest": parse_manifest_evidence(&manifest),
+        },
+        "route": route,
+        "artifacts": {
+            "profile": "profile.json",
+            "launcher_log": "launcher.log",
+            "terminal_home_png": "terminal-home.png",
+            "terminal_home_metadata": "terminal-home.json",
         },
     });
     fs::write(

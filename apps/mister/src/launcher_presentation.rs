@@ -15,7 +15,7 @@ use mister_magik_ui::launcher::{
     Launcher, MenuItem, MenuItemKind, MenuItemPresentation, MenuItemStatus, MisterBridge,
 };
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
@@ -282,11 +282,107 @@ macro_rules! set_if_changed {
 
 macro_rules! set_string_if_changed {
     ($bridge:expr, $getter:ident, $setter:ident, $value:expr) => {{
+        bridge_churn_record_shared_strings(1);
         let value: SharedString = ($value).into();
         if $bridge.$getter() != value {
             $bridge.$setter(value);
         }
     }};
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) struct BridgeChurnCounters {
+    pub(crate) model_replacements: u64,
+    pub(crate) row_mutations: u64,
+    pub(crate) row_allocations: u64,
+    pub(crate) shared_string_constructions: u64,
+    pub(crate) model_allocation_us: u64,
+}
+
+impl BridgeChurnCounters {
+    pub(crate) fn saturating_sub(self, earlier: Self) -> Self {
+        Self {
+            model_replacements: self
+                .model_replacements
+                .saturating_sub(earlier.model_replacements),
+            row_mutations: self.row_mutations.saturating_sub(earlier.row_mutations),
+            row_allocations: self.row_allocations.saturating_sub(earlier.row_allocations),
+            shared_string_constructions: self
+                .shared_string_constructions
+                .saturating_sub(earlier.shared_string_constructions),
+            model_allocation_us: self
+                .model_allocation_us
+                .saturating_sub(earlier.model_allocation_us),
+        }
+    }
+}
+
+thread_local! {
+    static BRIDGE_CHURN_ENABLED: Cell<bool> = const { Cell::new(false) };
+    static BRIDGE_CHURN_COUNTERS: RefCell<BridgeChurnCounters> = const {
+        RefCell::new(BridgeChurnCounters {
+            model_replacements: 0,
+            row_mutations: 0,
+            row_allocations: 0,
+            shared_string_constructions: 0,
+            model_allocation_us: 0,
+        })
+    };
+}
+
+pub(crate) fn bridge_churn_begin() {
+    BRIDGE_CHURN_COUNTERS.with(|counters| *counters.borrow_mut() = BridgeChurnCounters::default());
+    BRIDGE_CHURN_ENABLED.with(|enabled| enabled.set(true));
+}
+
+pub(crate) fn bridge_churn_end() -> BridgeChurnCounters {
+    BRIDGE_CHURN_ENABLED.with(|enabled| enabled.set(false));
+    bridge_churn_snapshot()
+}
+
+pub(crate) fn bridge_churn_snapshot() -> BridgeChurnCounters {
+    BRIDGE_CHURN_COUNTERS.with(|counters| *counters.borrow())
+}
+
+pub(crate) fn bridge_churn_record_model_replacements(count: u64) {
+    bridge_churn_record(|counters| {
+        counters.model_replacements = counters.model_replacements.saturating_add(count);
+    });
+}
+
+pub(crate) fn bridge_churn_record_row_mutations(count: u64) {
+    bridge_churn_record(|counters| {
+        counters.row_mutations = counters.row_mutations.saturating_add(count);
+    });
+}
+
+pub(crate) fn bridge_churn_record_row_allocations(count: u64) {
+    bridge_churn_record(|counters| {
+        counters.row_allocations = counters.row_allocations.saturating_add(count);
+    });
+}
+
+pub(crate) fn bridge_churn_record_shared_strings(count: u64) {
+    bridge_churn_record(|counters| {
+        counters.shared_string_constructions =
+            counters.shared_string_constructions.saturating_add(count);
+    });
+}
+
+pub(crate) fn bridge_churn_record_model_allocation_us(elapsed_us: u128) {
+    bridge_churn_record(|counters| {
+        counters.model_allocation_us = counters
+            .model_allocation_us
+            .saturating_add(elapsed_us.min(u128::from(u64::MAX)) as u64);
+    });
+}
+
+fn bridge_churn_record(update: impl FnOnce(&mut BridgeChurnCounters)) {
+    BRIDGE_CHURN_ENABLED.with(|enabled| {
+        if enabled.get() {
+            BRIDGE_CHURN_COUNTERS.with(|counters| update(&mut counters.borrow_mut()));
+        }
+    });
 }
 
 #[derive(Default)]
@@ -448,6 +544,7 @@ impl LauncherBridgePresenter {
             let key = (catalog_version, nav.current_menu_id().to_string());
             if self.menu_items_key.as_ref() != Some(&key) {
                 let menu_items = self.menu_items(nav, catalog_version);
+                bridge_churn_record_model_replacements(2);
                 bridge.set_menu_item_presentation(self.menu_item_presentation());
                 bridge.set_menu_items(menu_items);
             }
@@ -511,6 +608,19 @@ impl LauncherBridgePresenter {
                 .expect("launcher menu presentation initialized")
                 .clone(),
         )
+    }
+
+    pub(crate) fn republish_cached_menu_models(&self, app: &Launcher) {
+        let (Some(items), Some(presentation)) = (
+            self.menu_items.as_ref(),
+            self.menu_item_presentation.as_ref(),
+        ) else {
+            return;
+        };
+        let bridge = app.global::<MisterBridge>();
+        bridge_churn_record_model_replacements(2);
+        bridge.set_menu_items(ModelRc::from(items.clone()));
+        bridge.set_menu_item_presentation(ModelRc::from(presentation.clone()));
     }
 
     pub fn license_lines(&mut self, index: usize) -> ModelRc<SharedString> {
@@ -592,6 +702,7 @@ impl LauncherBridgePresenter {
                     if row.selected != selected || row.acknowledged != acknowledged {
                         row.selected = selected;
                         row.acknowledged = acknowledged;
+                        bridge_churn_record_row_mutations(1);
                         model.set_row_data(index, row);
                     }
                 }
@@ -636,6 +747,7 @@ pub fn screen_mode(screen: Screen) -> i32 {
 }
 
 fn build_menu_items(nav: &LauncherNav) -> Rc<VecModel<MenuItem>> {
+    let allocation_started = Instant::now();
     let rows = nav
         .current_menu_items()
         .iter()
@@ -689,6 +801,9 @@ fn build_menu_items(nav: &LauncherNav) -> Rc<VecModel<MenuItem>> {
             }
         })
         .collect::<Vec<_>>();
+    bridge_churn_record_row_allocations(rows.len() as u64);
+    bridge_churn_record_shared_strings(rows.len().saturating_mul(3) as u64);
+    bridge_churn_record_model_allocation_us(allocation_started.elapsed().as_micros());
     Rc::new(VecModel::from(rows))
 }
 
@@ -696,6 +811,7 @@ fn build_menu_item_presentation(
     nav: &LauncherNav,
     feedback: &SelectionFeedbackStamp,
 ) -> Rc<VecModel<MenuItemPresentation>> {
+    let allocation_started = Instant::now();
     let rows = nav
         .current_menu_items()
         .iter()
@@ -707,6 +823,8 @@ fn build_menu_item_presentation(
             }),
         })
         .collect::<Vec<_>>();
+    bridge_churn_record_row_allocations(rows.len() as u64);
+    bridge_churn_record_model_allocation_us(allocation_started.elapsed().as_micros());
     Rc::new(VecModel::from(rows))
 }
 

@@ -410,6 +410,7 @@ impl MediaProgressDisplay {
     }
 
     fn model(&self) -> ModelRc<slint_ui::launcher::ScreenshotPackProgress> {
+        let allocation_started = Instant::now();
         let rows = self
             .active
             .values()
@@ -423,6 +424,13 @@ impl MediaProgressDisplay {
                 pack_position: row.pack_position.clone().into(),
             })
             .collect::<Vec<_>>();
+        crate::launcher_presentation::bridge_churn_record_row_allocations(rows.len() as u64);
+        crate::launcher_presentation::bridge_churn_record_shared_strings(
+            rows.len().saturating_mul(6) as u64,
+        );
+        crate::launcher_presentation::bridge_churn_record_model_allocation_us(
+            allocation_started.elapsed().as_micros(),
+        );
         ModelRc::new(VecModel::from(rows))
     }
 

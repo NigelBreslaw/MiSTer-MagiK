@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use super::*;
+use serde_json::json;
 
 macro_rules! set_bridge_if_changed {
     ($bridge:expr, $getter:ident, $setter:ident, $value:expr) => {{
@@ -14,6 +15,7 @@ macro_rules! set_bridge_if_changed {
 
 macro_rules! set_bridge_string_if_changed {
     ($bridge:expr, $getter:ident, $setter:ident, $value:expr) => {{
+        crate::launcher_presentation::bridge_churn_record_shared_strings(1);
         let value: SharedString = ($value).into();
         if $bridge.$getter() != value {
             $bridge.$setter(value);
@@ -544,6 +546,8 @@ impl<'a, 'b> LauncherStatusPresenter<'a, 'b> {
         progresses: ModelRc<slint_ui::launcher::ScreenshotPackProgress>,
         summary: impl Into<SharedString>,
     ) {
+        crate::launcher_presentation::bridge_churn_record_model_replacements(1);
+        crate::launcher_presentation::bridge_churn_record_shared_strings(1);
         self.bridge.set_media_pack_progresses(progresses);
         self.bridge.set_media_pack_summary(summary.into());
     }
@@ -1176,6 +1180,331 @@ impl LauncherBridgeKey {
 }
 
 pub(super) type LauncherBridgeModels = LauncherBridgePresenter;
+
+const BRIDGE_CHURN_MEDIA_UPDATES: usize = 60;
+const BRIDGE_CHURN_MENU_ROWS: usize = 128;
+const BRIDGE_CHURN_MENU_UPDATES: usize = 64;
+const BRIDGE_CHURN_LIGHT_UPDATES: usize = 64;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum BridgeChurnPlaybackStage {
+    Idle,
+    MediaProgress,
+    MenuSelection,
+    LightBridge,
+    Restore,
+    Complete,
+}
+
+pub(super) enum BridgeChurnPlaybackTransition {
+    Advance {
+        completed: GuiProfilePhase,
+        next: GuiProfilePhase,
+    },
+    Finish {
+        completed: GuiProfilePhase,
+        summary: serde_json::Value,
+    },
+}
+
+pub(super) struct BridgeChurnPlayback {
+    enabled: bool,
+    stage: BridgeChurnPlaybackStage,
+    step: usize,
+    pending_presentation: bool,
+    phase_started: crate::launcher_presentation::BridgeChurnCounters,
+    restore_started: crate::launcher_presentation::BridgeChurnCounters,
+    phase_results: Vec<serde_json::Value>,
+    media: MediaProgressDisplay,
+    media_terminal: Option<serde_json::Value>,
+    menu_items: Option<Rc<VecModel<slint_ui::launcher::MenuItem>>>,
+    menu_presentation: Option<Rc<VecModel<slint_ui::launcher::MenuItemPresentation>>>,
+    menu_terminal: Option<serde_json::Value>,
+}
+
+impl BridgeChurnPlayback {
+    pub(super) fn new(enabled: bool) -> Self {
+        Self {
+            enabled,
+            stage: BridgeChurnPlaybackStage::Idle,
+            step: 0,
+            pending_presentation: false,
+            phase_started: Default::default(),
+            restore_started: Default::default(),
+            phase_results: Vec::with_capacity(3),
+            media: MediaProgressDisplay::default(),
+            media_terminal: None,
+            menu_items: None,
+            menu_presentation: None,
+            menu_terminal: None,
+        }
+    }
+
+    pub(super) fn apply(
+        &mut self,
+        phase: Option<GuiProfilePhase>,
+        app: &slint_ui::launcher::Launcher,
+        nav: &LauncherNav,
+        models: &LauncherBridgeModels,
+        full_bridge_dirty: &mut bool,
+        light_bridge_dirty: &mut bool,
+    ) {
+        if !self.enabled || self.pending_presentation {
+            return;
+        }
+        if self.stage == BridgeChurnPlaybackStage::Idle {
+            if phase != Some(GuiProfilePhase::MediaProgress) {
+                return;
+            }
+            crate::launcher_presentation::bridge_churn_begin();
+            self.phase_started = crate::launcher_presentation::bridge_churn_snapshot();
+            self.stage = BridgeChurnPlaybackStage::MediaProgress;
+        }
+        match self.stage {
+            BridgeChurnPlaybackStage::Idle | BridgeChurnPlaybackStage::Complete => {}
+            BridgeChurnPlaybackStage::MediaProgress => {
+                let event = bridge_churn_media_event(self.step);
+                apply_launcher_worker_ui_intent(
+                    app,
+                    self.media.progress_intent(&event),
+                    full_bridge_dirty,
+                );
+                self.pending_presentation = true;
+            }
+            BridgeChurnPlaybackStage::MenuSelection => {
+                self.apply_menu_selection(app);
+                *full_bridge_dirty = true;
+                self.pending_presentation = true;
+            }
+            BridgeChurnPlaybackStage::LightBridge => {
+                *light_bridge_dirty = true;
+                self.pending_presentation = true;
+            }
+            BridgeChurnPlaybackStage::Restore => {
+                let bridge = app.global::<slint_ui::launcher::MisterBridge>();
+                LauncherStatusPresenter::new(&bridge)
+                    .sync_media_progresses(empty_media_pack_progress_model(), "");
+                models.republish_cached_menu_models(app);
+                bridge.set_selected_index(nav.selected as i32);
+                *full_bridge_dirty = true;
+                self.pending_presentation = true;
+            }
+        }
+    }
+
+    pub(super) fn note_presented(&mut self) -> Option<BridgeChurnPlaybackTransition> {
+        if !self.enabled || !std::mem::take(&mut self.pending_presentation) {
+            return None;
+        }
+        match self.stage {
+            BridgeChurnPlaybackStage::Idle | BridgeChurnPlaybackStage::Complete => None,
+            BridgeChurnPlaybackStage::MediaProgress => {
+                self.step = self.step.saturating_add(1);
+                if self.step < BRIDGE_CHURN_MEDIA_UPDATES {
+                    return None;
+                }
+                self.media_terminal = Some(json!({
+                    "rows": self.media.active.values().map(|row| json!({
+                        "system": row.system,
+                        "phase": row.phase,
+                        "percent": row.percent,
+                        "pack_position": row.pack_position,
+                    })).collect::<Vec<_>>(),
+                    "summary": self.media.summary(),
+                }));
+                self.finish_phase("media-progress", BRIDGE_CHURN_MEDIA_UPDATES);
+                self.stage = BridgeChurnPlaybackStage::MenuSelection;
+                self.step = 0;
+                self.phase_started = crate::launcher_presentation::bridge_churn_snapshot();
+                Some(BridgeChurnPlaybackTransition::Advance {
+                    completed: GuiProfilePhase::MediaProgress,
+                    next: GuiProfilePhase::MenuSelection,
+                })
+            }
+            BridgeChurnPlaybackStage::MenuSelection => {
+                self.step = self.step.saturating_add(1);
+                if self.step < BRIDGE_CHURN_MENU_UPDATES {
+                    return None;
+                }
+                self.menu_terminal = self.menu_terminal_snapshot();
+                self.finish_phase("menu-selection", BRIDGE_CHURN_MENU_UPDATES);
+                self.stage = BridgeChurnPlaybackStage::LightBridge;
+                self.step = 0;
+                self.phase_started = crate::launcher_presentation::bridge_churn_snapshot();
+                Some(BridgeChurnPlaybackTransition::Advance {
+                    completed: GuiProfilePhase::MenuSelection,
+                    next: GuiProfilePhase::LightBridge,
+                })
+            }
+            BridgeChurnPlaybackStage::LightBridge => {
+                self.step = self.step.saturating_add(1);
+                if self.step < BRIDGE_CHURN_LIGHT_UPDATES {
+                    return None;
+                }
+                self.finish_phase("light-bridge", BRIDGE_CHURN_LIGHT_UPDATES);
+                self.stage = BridgeChurnPlaybackStage::Restore;
+                self.restore_started = crate::launcher_presentation::bridge_churn_snapshot();
+                None
+            }
+            BridgeChurnPlaybackStage::Restore => {
+                let total = crate::launcher_presentation::bridge_churn_end();
+                let restoration = total.saturating_sub(self.restore_started);
+                self.stage = BridgeChurnPlaybackStage::Complete;
+                Some(BridgeChurnPlaybackTransition::Finish {
+                    completed: GuiProfilePhase::LightBridge,
+                    summary: json!({
+                        "schema": "mister-magik-bridge-churn-playback-v1",
+                        "media_terminal": self.media_terminal,
+                        "menu_terminal": self.menu_terminal,
+                        "phase_results": self.phase_results,
+                        "restoration": bridge_churn_counter_json(restoration),
+                        "total": bridge_churn_counter_json(total),
+                        "terminal": {
+                            "media_rows": 0,
+                            "media_summary": "",
+                            "menu_restored": true,
+                        },
+                    }),
+                })
+            }
+        }
+    }
+
+    fn apply_menu_selection(&mut self, app: &slint_ui::launcher::Launcher) {
+        if self.menu_items.is_none() {
+            let allocation_started = Instant::now();
+            let items = (0..BRIDGE_CHURN_MENU_ROWS)
+                .map(|index| slint_ui::launcher::MenuItem {
+                    id: format!("bridge-bench-{index:03}").into(),
+                    label: format!("Bridge benchmark row {index:03}").into(),
+                    subtitle: format!("Deterministic production row {index:03}").into(),
+                    available: true,
+                    node_kind: slint_ui::launcher::MenuItemKind::Collection,
+                    status: slint_ui::launcher::MenuItemStatus::Ready,
+                })
+                .collect::<Vec<_>>();
+            let presentation = (0..BRIDGE_CHURN_MENU_ROWS)
+                .map(|index| slint_ui::launcher::MenuItemPresentation {
+                    selected: index == 0,
+                    acknowledged: false,
+                })
+                .collect::<Vec<_>>();
+            crate::launcher_presentation::bridge_churn_record_row_allocations(
+                items.len().saturating_add(presentation.len()) as u64,
+            );
+            crate::launcher_presentation::bridge_churn_record_shared_strings(
+                items.len().saturating_mul(3) as u64,
+            );
+            crate::launcher_presentation::bridge_churn_record_model_allocation_us(
+                allocation_started.elapsed().as_micros(),
+            );
+            self.menu_items = Some(Rc::new(VecModel::from(items)));
+            self.menu_presentation = Some(Rc::new(VecModel::from(presentation)));
+            let bridge = app.global::<slint_ui::launcher::MisterBridge>();
+            crate::launcher_presentation::bridge_churn_record_model_replacements(2);
+            bridge.set_menu_items(ModelRc::from(
+                self.menu_items.as_ref().expect("benchmark items").clone(),
+            ));
+            bridge.set_menu_item_presentation(ModelRc::from(
+                self.menu_presentation
+                    .as_ref()
+                    .expect("benchmark presentation")
+                    .clone(),
+            ));
+        }
+        let selected = self.step % BRIDGE_CHURN_MENU_ROWS;
+        if let Some(model) = self.menu_presentation.as_ref() {
+            for index in 0..model.row_count() {
+                if let Some(mut row) = model.row_data(index) {
+                    let expected = index == selected;
+                    if row.selected != expected {
+                        row.selected = expected;
+                        crate::launcher_presentation::bridge_churn_record_row_mutations(1);
+                        model.set_row_data(index, row);
+                    }
+                }
+            }
+        }
+        app.global::<slint_ui::launcher::MisterBridge>()
+            .set_selected_index(selected as i32);
+    }
+
+    fn menu_terminal_snapshot(&self) -> Option<serde_json::Value> {
+        let model = self.menu_presentation.as_ref()?;
+        let selected = (0..model.row_count())
+            .filter(|index| model.row_data(*index).is_some_and(|row| row.selected))
+            .collect::<Vec<_>>();
+        let acknowledged = (0..model.row_count())
+            .filter(|index| model.row_data(*index).is_some_and(|row| row.acknowledged))
+            .collect::<Vec<_>>();
+        Some(json!({
+            "rows": model.row_count(),
+            "selected_rows": selected,
+            "acknowledged_rows": acknowledged,
+        }))
+    }
+
+    fn finish_phase(&mut self, phase: &'static str, updates: usize) {
+        let counters = crate::launcher_presentation::bridge_churn_snapshot()
+            .saturating_sub(self.phase_started);
+        self.phase_results.push(json!({
+            "phase": phase,
+            "updates": updates,
+            "counters": bridge_churn_counter_json(counters),
+        }));
+    }
+}
+
+fn bridge_churn_counter_json(
+    counters: crate::launcher_presentation::BridgeChurnCounters,
+) -> serde_json::Value {
+    json!({
+        "model_replacements": counters.model_replacements,
+        "row_mutations": counters.row_mutations,
+        "row_allocations": counters.row_allocations,
+        "shared_string_constructions": counters.shared_string_constructions,
+        "model_allocation_us": counters.model_allocation_us,
+    })
+}
+
+fn bridge_churn_media_event(step: usize) -> MediaProgressEvent {
+    const SYSTEMS: [&str; 3] = ["snes", "megadrive", "neogeo"];
+    let system_index = if step + SYSTEMS.len() >= BRIDGE_CHURN_MEDIA_UPDATES {
+        step + SYSTEMS.len() - BRIDGE_CHURN_MEDIA_UPDATES
+    } else {
+        step % SYSTEMS.len()
+    };
+    let terminal = step + SYSTEMS.len() >= BRIDGE_CHURN_MEDIA_UPDATES;
+    let failed = terminal && system_index == SYSTEMS.len() - 1;
+    let bytes_total = 100_000_000u64;
+    let bytes_done = if terminal {
+        if failed { 75_000_000 } else { bytes_total }
+    } else {
+        ((step / SYSTEMS.len()) as u64 + 1)
+            .saturating_mul(5_000_000)
+            .min(95_000_000)
+    };
+    MediaProgressEvent {
+        system: SYSTEMS[system_index].to_string(),
+        image_size: "320x240".to_string(),
+        variant: "identity".to_string(),
+        phase: if failed {
+            "failed".to_string()
+        } else if terminal {
+            "download_done".to_string()
+        } else if step < SYSTEMS.len() {
+            "download_start".to_string()
+        } else {
+            "download".to_string()
+        },
+        bytes_done,
+        bytes_total,
+        pack_index: system_index + 1,
+        pack_count: SYSTEMS.len(),
+        download_mbps: Some(8.0),
+        detail: String::new(),
+    }
+}
 
 #[cfg(test)]
 mod tests {

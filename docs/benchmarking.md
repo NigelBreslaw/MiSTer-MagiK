@@ -33,6 +33,8 @@ Supported scenarios:
 - `launcher-response`
 - `launcher-response-attribution`
 - `gui-frame-attribution`
+- `settled-composition`
+- `bridge-model-churn`
 - `scheduler-trace`
 - `storage-attribution`
 - `arcade-velocity-scroll`
@@ -148,6 +150,20 @@ authoritative terminal Settings PNG and its hash support pixel-parity checks.
 The route restores the original Home selection and display mode, and leaves
 favorite state unchanged. Evidence is retained below
 `build/agent-benchmarks/settled-composition/<timestamp>/`.
+
+`bridge-model-churn` is the unprofiled exact-device authority for repeated
+production bridge updates. A consumed laboratory route publishes 60 fixed
+media-progress events through `MediaProgressDisplay` and the worker UI intent,
+selects 64 rows in a retained 128-row production Slint model, then requests 64
+unchanged light bridge revisions. Every update waits for physical presentation.
+The profile reports model replacements, row mutations and allocations,
+`SharedString` constructions, model-allocation time, bridge time, Slint raster,
+damage, copied bytes, and cadence per phase. It verifies terminal media summary
+and row contents, selection/accessibility state, then republishes the real menu
+and clears benchmark media before completing. The original semantic Home state,
+display mode, installed manifest, boot identity, and ordinary launcher are
+restored. Evidence is retained below
+`build/agent-benchmarks/bridge-model-churn/<timestamp>/`.
 
 Production modal carriers are receipt-scoped: the entry carrier remains forced
 until direct-layer retirement has a matching physical receipt. The summary
