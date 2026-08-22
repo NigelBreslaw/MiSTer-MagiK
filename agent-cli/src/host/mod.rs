@@ -7117,15 +7117,15 @@ fn run_launcher_response_scenario_with_instrumentation(
     }))
 }
 
-const LAUNCHER_RESPONSE_COMPUTER_IDS: [&str; 8] = [
-    "menu:computers:apple-ii",
-    "menu:computers:commodore",
-    "menu:computers:atari",
-    "menu:computers:sinclair",
-    "menu:computers:coco2",
-    "menu:computers:dos",
-    "menu:computers:japanese",
-    "menu:computers:other",
+const LAUNCHER_RESPONSE_COMPUTER_SELECTION_IDS: [&str; 8] = [
+    "apple-ii",
+    "menu:computers:acorn",
+    "apple-ii",
+    "menu:computers:acorn",
+    "apple-ii",
+    "menu:computers:acorn",
+    "apple-ii",
+    "menu:computers:acorn",
 ];
 
 const LAUNCHER_RESPONSE_ATTRIBUTION_REMOTE_ROOT: &str =
@@ -7550,7 +7550,7 @@ fn summarize_computers_sweep(trace: Value, interval_ms: u64, start_delay_ms: u64
                 .and_then(Value::as_str)
         })
         .collect::<Vec<_>>();
-    let expected = LAUNCHER_RESPONSE_COMPUTER_IDS.to_vec();
+    let expected = LAUNCHER_RESPONSE_COMPUTER_SELECTION_IDS.to_vec();
     let route_status = selected_item_ids == expected;
     let pulse = summarize_launcher_response_pulses(&trace, "menu:computers", &expected)?;
     let final_confirmed_at_us = records
@@ -7561,11 +7561,12 @@ fn summarize_computers_sweep(trace: Value, interval_ms: u64, start_delay_ms: u64
         .as_array()
         .into_iter()
         .flatten()
-        .find(|record| {
+        .filter(|record| {
             record["phase"].as_str() == Some("hidden")
-                && record["item"].as_str() == Some("menu:computers:japanese")
+                && record["item"].as_str() == Some("apple-ii")
         })
-        .and_then(|record| record["confirmed_at_us"].as_u64())
+        .filter_map(|record| record["confirmed_at_us"].as_u64())
+        .max()
         .unwrap_or(0);
     let final_independent = interval_ms >= 80 || final_confirmed_at_us < previous_hidden_at_us;
     Ok(launcher_response_route_summary(
@@ -7932,6 +7933,7 @@ fn summarize_launcher_response_pulses(
     let mut dwell_us = Vec::new();
     let mut exact_lifecycle = events.len() == expected_items.len();
     for ((_, records), expected_item) in events.iter().zip(expected_items.iter()) {
+        let actual_item = records.first().and_then(|record| record["item"].as_str());
         let target_matches = records
             .iter()
             .all(|record| record["item"].as_str() == Some(*expected_item));
@@ -7954,12 +7956,17 @@ fn summarize_launcher_response_pulses(
             let on_frame = visible[0]["confirmed_frame"].as_u64().unwrap_or(u64::MAX);
             let off_frame = hidden[0]["confirmed_frame"].as_u64().unwrap_or(0);
             let dwell = hidden[0]["dwell_us"].as_u64().unwrap_or(0);
-            visible_items.push(*expected_item);
+            if let Some(item) = actual_item {
+                visible_items.push(item);
+            }
             dwell_us.push(dwell);
-            exact_lifecycle &= target_matches && off_frame > on_frame && dwell >= 80_000;
+            exact_lifecycle &=
+                actual_item.is_some() && target_matches && off_frame > on_frame && dwell >= 80_000;
         } else if cancelled.len() == 1 && visible.is_empty() && hidden.is_empty() {
-            cancelled_items.push(*expected_item);
-            exact_lifecycle &= target_matches;
+            if let Some(item) = actual_item {
+                cancelled_items.push(item);
+            }
+            exact_lifecycle &= actual_item.is_some() && target_matches;
         } else {
             exact_lifecycle = false;
         }
@@ -30565,6 +30572,17 @@ mod tests {
         .unwrap();
         assert_eq!(cancelled_summary["status"], "passed");
         assert_eq!(cancelled_summary["cancelled_count"], 1);
+
+        let mismatched = json!({
+            "feedback_records": [
+                {"phase": "visible", "event_id": 1, "surface": "settings", "item": "unexpected", "confirmed_frame": 10},
+                {"phase": "hidden", "event_id": 1, "surface": "settings", "item": "unexpected", "confirmed_frame": 15, "dwell_us": 83_000},
+            ],
+        });
+        let mismatched_summary =
+            summarize_launcher_response_pulses(&mismatched, "settings", &["orientation"]).unwrap();
+        assert_eq!(mismatched_summary["status"], "failed");
+        assert_eq!(mismatched_summary["visible_items"], json!(["unexpected"]));
 
         let mut short = trace;
         short["feedback_records"][3]["dwell_us"] = json!(79_999);
