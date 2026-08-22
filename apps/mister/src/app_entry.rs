@@ -473,6 +473,7 @@ fn benchmark_capabilities() -> serde_json::Value {
         "input-integrity-driver-v1": true,
         "arcade-velocity-scroll-v1": true,
         "arcade-velocity-scroll-attribution-v1": true,
+        "preview-work-attribution-v1": true,
         "system-entry-v1": true,
         "system-entry-profile-v1": cfg!(feature = "profile"),
     });

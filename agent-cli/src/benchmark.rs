@@ -51,6 +51,7 @@ enum BenchmarkProfile {
     Screensaver,
     MediaPackPersistence,
     RomIdentityHashing,
+    PreviewWorkAttribution,
     Search,
     SearchUi,
     CatalogLifecycle,
@@ -135,6 +136,9 @@ impl BenchmarkDevice for DeviceClient {
             }
             BenchmarkProfile::RomIdentityHashing => {
                 device.profile_rom_identity_hashing(&output_dir)
+            }
+            BenchmarkProfile::PreviewWorkAttribution => {
+                device.profile_preview_work_attribution(&output_dir)
             }
             BenchmarkProfile::Search => device.profile_search(&output_dir),
             BenchmarkProfile::SearchUi => device.verify_search_ui(&output_dir),
@@ -370,6 +374,15 @@ fn require_clean_installed_commit(
         BenchmarkScenario::CatalogResumeValidation => {
             execute_catalog_resume_validation(&mut device, manifest, output_dir, reporter)
         }
+        BenchmarkScenario::PreviewWorkAttribution => execute_attribution_capture(
+            &mut device,
+            manifest,
+            output_dir,
+            reporter,
+            BenchmarkProfile::PreviewWorkAttribution,
+            "preview-work-attribution",
+            "mister-magik-preview-work-attribution-v1",
+        ),
         BenchmarkScenario::CatalogFullBuildRebuild => {
             execute_catalog_full_build_rebuild(&mut device, manifest, output_dir, reporter)
         }
@@ -1098,6 +1111,7 @@ fn particle_scene_lab_command(scenario: BenchmarkScenario) -> Option<&'static st
         | BenchmarkScenario::PmuProfile
         | BenchmarkScenario::MediaPackPersistence
         | BenchmarkScenario::RomIdentityHashing
+        | BenchmarkScenario::PreviewWorkAttribution
         | BenchmarkScenario::Search => None,
     }
 }

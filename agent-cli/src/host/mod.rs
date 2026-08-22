@@ -828,6 +828,15 @@ impl NativeDevice {
         })
     }
 
+    pub(crate) fn profile_preview_work_attribution(
+        &mut self,
+        output_dir: &Path,
+    ) -> std::result::Result<String, DeviceFailure> {
+        self.benchmark_profile(|config| {
+            profile_installed_preview_work_attribution(config, output_dir)
+        })
+    }
+
     pub(crate) fn profile_transition_streamline(
         &mut self,
         output_dir: &Path,
@@ -9370,6 +9379,7 @@ fn run_gui_frame_profile_route(
             pprof_finalization_probe: Duration::ZERO,
             input_mode: ArcadeRunInputMode::Held,
             startup_orientation,
+            preview_work_attribution: false,
         },
     )
 }
@@ -9394,6 +9404,7 @@ fn run_gui_frame_profile_route_turbo(
             pprof_finalization_probe: Duration::ZERO,
             input_mode: ArcadeRunInputMode::Turbo,
             startup_orientation,
+            preview_work_attribution: false,
         },
     )
 }
@@ -9406,6 +9417,7 @@ struct GuiFrameProfileRouteSpec<'a> {
     pprof_finalization_probe: Duration,
     input_mode: ArcadeRunInputMode,
     startup_orientation: Option<&'a str>,
+    preview_work_attribution: bool,
 }
 
 fn run_gui_frame_profile_route_with_pprof(
@@ -9422,6 +9434,7 @@ fn run_gui_frame_profile_route_with_pprof(
         pprof_finalization_probe,
         input_mode,
         startup_orientation,
+        preview_work_attribution,
     } = spec;
     fs::create_dir_all(output_dir)?;
     exec_checked(
@@ -9429,15 +9442,19 @@ fn run_gui_frame_profile_route_with_pprof(
         "prepare fixed GUI profiling route",
         &gui_profile_route_cleanup_command(),
     )?;
+    let mut env_vars = gui_profile_route_launcher_env_with_pprof(
+        pmu,
+        pprof_remote_dir,
+        scroll_duration_ms,
+        startup_orientation,
+    );
+    if preview_work_attribution {
+        env_vars.push(("MISTER_PREVIEW_TRACE".into(), "1".into()));
+    }
     restart_launcher_with_one_shot_env(
         session,
         LauncherRestartOptions {
-            env_vars: gui_profile_route_launcher_env_with_pprof(
-                pmu,
-                pprof_remote_dir,
-                scroll_duration_ms,
-                startup_orientation,
-            ),
+            env_vars,
             timeout_secs: 45,
             remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str().into(),
             ..LauncherRestartOptions::default()
@@ -9599,6 +9616,14 @@ fn run_gui_frame_profile_route_with_pprof(
         let profile: Value = serde_json::from_str(&fs::read_to_string(&profile_path)?)?;
         validate_gui_profile_route(&profile, pmu)?;
         let status_after = read_launcher_status(session)?;
+        let preview_work = if preview_work_attribution {
+            let launcher_log = remote_read(session, "/tmp/mister-magik-slint.log")
+                .ok_or("preview attribution launcher log is missing")?;
+            fs::write(output_dir.join("preview-work.log"), &launcher_log)?;
+            parse_preview_work_attribution(&launcher_log)?
+        } else {
+            Value::Null
+        };
         Ok(json!({
             "schema": "mister-magik-gui-profile-route-v1",
             "status": "complete",
@@ -9618,6 +9643,7 @@ fn run_gui_frame_profile_route_with_pprof(
             "profile": profile,
             "status_before": status_before,
             "status_after": status_after,
+            "preview_work_attribution": preview_work,
         }))
     })();
     let end_result = launcher_automation::end(config, &nonce).map(|_| ());
@@ -10347,6 +10373,7 @@ fn profile_installed_arcade_velocity_scroll_pprof_workload(
             pprof_finalization_probe: finalization_probe,
             input_mode: ArcadeRunInputMode::Held,
             startup_orientation,
+            preview_work_attribution: false,
         },
     );
     retain_arcade_velocity_scroll_failure_context(&session, output_dir, &route_result)?;
@@ -10896,6 +10923,443 @@ fn profile_installed_arcade_velocity_scroll_attribution(
     );
     fs::write(output_dir.join("report.md"), report)?;
     serde_json::to_string(&summary).map_err(Into::into)
+}
+
+fn profile_installed_preview_work_attribution(
+    config: &NativeDeviceConfig,
+    output_dir: &Path,
+) -> Result<String> {
+    const SAMPLES_PER_ROUTE: usize = 3;
+    const SCROLL_DURATION_MS: u64 = 5_000;
+
+    fs::create_dir_all(output_dir)?;
+    let _signal_guard = AttendedOperationSignalGuard::install();
+    let session = connect_with(&config.connection, 10)?;
+    let capability = exec_checked_output(
+        &session,
+        "installed preview-work benchmark capability",
+        DEVELOPMENT_BENCHMARK_CAPABILITIES_COMMAND.as_str(),
+    )?;
+    let capability = last_json_line(&capability.stdout)
+        .ok_or("installed benchmark capability output contains no JSON report")?;
+    if capability
+        .get("preview-work-attribution-v1")
+        .and_then(Value::as_bool)
+        != Some(true)
+    {
+        return Err("installed app does not support preview-work-attribution-v1".into());
+    }
+    let manifest = remote_read(&session, LOCAL_MAIN_MANIFEST_REMOTE)
+        .ok_or("development platform manifest is missing")?;
+    let boot_id = remote_read(&session, "/proc/sys/kernel/random/boot_id")
+        .ok_or("device boot id is unavailable")?;
+    let registry = exec_checked_output(
+        &session,
+        "preview-work registry report",
+        DEVELOPMENT_CATALOG_REGISTRY_REPORT_COMMAND.as_str(),
+    )?;
+    let registry = parse_system_entry_registry(&registry.stdout)?;
+    let arcade_games = registry["systems"]
+        .as_array()
+        .and_then(|systems| {
+            systems.iter().find_map(|row| {
+                (row.get("system").and_then(Value::as_str) == Some("arcade"))
+                    .then(|| row.get("games").and_then(Value::as_u64))
+                    .flatten()
+            })
+        })
+        .filter(|games| *games > 0)
+        .ok_or("preview-work benchmark requires a populated Arcade catalog")?;
+
+    let run_result = (|| -> Result<(Vec<Value>, Vec<Value>, Vec<Value>)> {
+        let mut system_entry = Vec::with_capacity(SAMPLES_PER_ROUTE);
+        let mut ordinary_scroll = Vec::with_capacity(SAMPLES_PER_ROUTE);
+        let mut turbo_scroll = Vec::with_capacity(SAMPLES_PER_ROUTE);
+        for sample in 1..=SAMPLES_PER_ROUTE {
+            system_entry.push(run_system_entry_sample(
+                config,
+                &session,
+                &output_dir.join("system-entry"),
+                "arcade",
+                arcade_games,
+                1,
+                sample,
+                SystemEntryInstrumentation::PreviewAttribution,
+            )?);
+        }
+        for sample in 1..=SAMPLES_PER_ROUTE {
+            ordinary_scroll.push(run_gui_frame_profile_route_with_pprof(
+                config,
+                &session,
+                &output_dir.join(format!("ordinary-scroll-{sample}")),
+                GuiFrameProfileRouteSpec {
+                    pmu: false,
+                    scroll_duration_ms: SCROLL_DURATION_MS,
+                    terminal_checkpoint: Some("terminal-arcade"),
+                    pprof_remote_dir: None,
+                    pprof_finalization_probe: Duration::ZERO,
+                    input_mode: ArcadeRunInputMode::Held,
+                    startup_orientation: None,
+                    preview_work_attribution: true,
+                },
+            )?);
+        }
+        for sample in 1..=SAMPLES_PER_ROUTE {
+            turbo_scroll.push(run_gui_frame_profile_route_with_pprof(
+                config,
+                &session,
+                &output_dir.join(format!("turbo-scroll-{sample}")),
+                GuiFrameProfileRouteSpec {
+                    pmu: false,
+                    scroll_duration_ms: SCROLL_DURATION_MS,
+                    terminal_checkpoint: Some("terminal-arcade"),
+                    pprof_remote_dir: None,
+                    pprof_finalization_probe: Duration::ZERO,
+                    input_mode: ArcadeRunInputMode::Turbo,
+                    startup_orientation: None,
+                    preview_work_attribution: true,
+                },
+            )?);
+        }
+        Ok((system_entry, ordinary_scroll, turbo_scroll))
+    })();
+    let restore_result = launcher_restart(
+        &session,
+        &LauncherRestartOptions {
+            clear_env: true,
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str().into(),
+            timeout_secs: 45,
+            ..LauncherRestartOptions::default()
+        },
+    );
+    let (system_entry, ordinary_scroll, turbo_scroll) = match (run_result, restore_result) {
+        (Ok(samples), Ok(())) => samples,
+        (Err(error), Ok(())) => return Err(error),
+        (Ok(_), Err(error)) => {
+            return Err(format!("preview-work launcher restoration failed: {error}").into());
+        }
+        (Err(run), Err(restore)) => {
+            return Err(
+                format!("{run}; preview-work launcher restoration failed: {restore}").into(),
+            );
+        }
+    };
+    let final_manifest = remote_read(&session, LOCAL_MAIN_MANIFEST_REMOTE)
+        .ok_or("development platform manifest is missing after preview-work benchmark")?;
+    let final_boot_id = remote_read(&session, "/proc/sys/kernel/random/boot_id")
+        .ok_or("device boot id is unavailable after preview-work benchmark")?;
+    if final_manifest != manifest || final_boot_id != boot_id {
+        return Err("installed identity changed during preview-work benchmark".into());
+    }
+
+    let system_metrics = system_entry
+        .iter()
+        .map(|sample| sample["preview_work_attribution"].clone())
+        .collect::<Vec<_>>();
+    let ordinary_metrics = ordinary_scroll
+        .iter()
+        .map(|sample| sample["preview_work_attribution"].clone())
+        .collect::<Vec<_>>();
+    let turbo_metrics = turbo_scroll
+        .iter()
+        .map(|sample| sample["preview_work_attribution"].clone())
+        .collect::<Vec<_>>();
+    let all_metrics = system_metrics
+        .iter()
+        .chain(&ordinary_metrics)
+        .chain(&turbo_metrics)
+        .collect::<Vec<_>>();
+    let sum = |field: &str| {
+        all_metrics
+            .iter()
+            .filter_map(|sample| sample.get(field).and_then(Value::as_u64))
+            .sum::<u64>()
+    };
+    let requests = sum("requests");
+    let collisions = sum("simultaneous_selected_prefetch_requests");
+    let duplicate_work = sum("duplicate_decodes") + sum("repeated_missing_sidecar_probes");
+    let measured_work = sum("decodes") + sum("missing_sidecar_probes");
+    let collision_rate_pct = if requests == 0 {
+        0.0
+    } else {
+        collisions as f64 * 100.0 / requests as f64
+    };
+    let duplicate_work_pct = if measured_work == 0 {
+        0.0
+    } else {
+        duplicate_work as f64 * 100.0 / measured_work as f64
+    };
+    let opportunity_gate_passed = collision_rate_pct >= 5.0 || duplicate_work_pct >= 2.0;
+    let selected_entry_ages = system_entry
+        .iter()
+        .filter_map(|sample| {
+            sample
+                .pointer("/preview_timing/request_age_us")
+                .and_then(Value::as_u64)
+        })
+        .collect::<Vec<_>>();
+    let selected_entry_latency = preview_latency_summary(selected_entry_ages);
+    let system_entry_limit_passed = selected_entry_latency["p95"]
+        .as_u64()
+        .is_some_and(|p95| p95 <= 85_000);
+    let summary = json!({
+        "schema": "mister-magik-preview-work-attribution-v1",
+        "artifact_status": "passed",
+        "status": if system_entry_limit_passed { "passed" } else { "failed" },
+        "scenario": "preview-work-attribution",
+        "production_behavior": "separate selected and prefetch workers",
+        "forced_background_catalog": false,
+        "sampling": {
+            "runs_per_route": SAMPLES_PER_ROUTE,
+            "scroll_duration_ms": SCROLL_DURATION_MS,
+        },
+        "routes": {
+            "system_entry": system_metrics,
+            "ordinary_scroll": ordinary_metrics,
+            "turbo_scroll": turbo_metrics,
+        },
+        "aggregate": {
+            "requests": requests,
+            "colliding_requests": collisions,
+            "collision_rate_pct": collision_rate_pct,
+            "duplicate_decodes": sum("duplicate_decodes"),
+            "duplicate_reads": sum("duplicate_reads"),
+            "duplicate_resizes": sum("duplicate_resizes"),
+            "missing_sidecar_probes": sum("missing_sidecar_probes"),
+            "repeated_missing_sidecar_probes": sum("repeated_missing_sidecar_probes"),
+            "duplicate_work_pct": duplicate_work_pct,
+            "worker_cpu_us": sum("worker_cpu_us"),
+            "read_us": sum("read_us"),
+            "decode_us": sum("decode_us"),
+            "resize_us": sum("resize_us"),
+        },
+        "opportunity_gate": {
+            "passed": opportunity_gate_passed,
+            "rule": "duplicate work >=2% or collisions >=5% of requests",
+        },
+        "system_entry_selected_latency_us": selected_entry_latency,
+        "system_entry_limit_us": 85_000,
+        "system_entry_limit_passed": system_entry_limit_passed,
+        "terminal_samples": {
+            "system_entry": system_entry,
+            "ordinary_scroll": ordinary_scroll,
+            "turbo_scroll": turbo_scroll,
+        },
+        "manifest": parse_manifest_evidence(&manifest),
+        "boot_id": boot_id.trim(),
+    });
+    fs::write(
+        output_dir.join("summary.json"),
+        format!("{}\n", serde_json::to_string_pretty(&summary)?),
+    )?;
+    fs::write(
+        output_dir.join("report.md"),
+        preview_work_attribution_report(&summary)?,
+    )?;
+    serde_json::to_string(&summary).map_err(Into::into)
+}
+
+fn preview_work_attribution_report(summary: &Value) -> Result<String> {
+    let aggregate = summary
+        .get("aggregate")
+        .ok_or("preview-work summary has no aggregate")?;
+    Ok(format!(
+        "# Preview-work attribution\n\nStatus: **{}**\n\n- Requests: {}\n- Selected/prefetch collision rate: {:.2}%\n- Duplicate decodes: {}\n- Repeated missing-sidecar probes: {}\n- Duplicate-work share: {:.2}%\n- Opportunity gate: **{}**\n- System-entry selected-preview p95: {} us\n",
+        summary["status"].as_str().unwrap_or("failed"),
+        aggregate["requests"].as_u64().unwrap_or(0),
+        aggregate["collision_rate_pct"].as_f64().unwrap_or(0.0),
+        aggregate["duplicate_decodes"].as_u64().unwrap_or(0),
+        aggregate["repeated_missing_sidecar_probes"]
+            .as_u64()
+            .unwrap_or(0),
+        aggregate["duplicate_work_pct"].as_f64().unwrap_or(0.0),
+        if summary
+            .pointer("/opportunity_gate/passed")
+            .and_then(Value::as_bool)
+            == Some(true)
+        {
+            "passed"
+        } else {
+            "closed"
+        },
+        summary
+            .pointer("/system_entry_selected_latency_us/p95")
+            .and_then(Value::as_u64)
+            .unwrap_or(0),
+    ))
+}
+
+#[derive(Clone, Debug)]
+struct PreviewWorkSpan {
+    generation: u64,
+    priority: String,
+    key: String,
+    started_us: u64,
+    queue_age_us: u64,
+    ended_us: Option<u64>,
+    cache_hit: bool,
+    read_us: u64,
+    decode_us: u64,
+    decode_cpu_us: u64,
+    parse_us: u64,
+    parse_cpu_us: u64,
+    resize_us: u64,
+    source: String,
+}
+
+fn parse_preview_work_attribution(log: &str) -> Result<Value> {
+    const PREFIX: &str = "preview_work_tsv\t";
+    let mut spans = BTreeMap::<u64, PreviewWorkSpan>::new();
+    let mut missing_sidecar_probes = BTreeMap::<String, u64>::new();
+    let mut sidecar_opens = BTreeMap::<String, u64>::new();
+    for line in log.lines() {
+        let Some(offset) = line.find(PREFIX) else {
+            continue;
+        };
+        let fields = line[offset..].split('\t').collect::<Vec<_>>();
+        match fields.get(1).copied() {
+            Some("begin") if fields.len() >= 9 => {
+                let generation = fields[2].parse::<u64>()?;
+                spans.insert(
+                    generation,
+                    PreviewWorkSpan {
+                        generation,
+                        priority: fields[3].to_string(),
+                        started_us: fields[4].parse()?,
+                        queue_age_us: fields[5].parse()?,
+                        key: format!("{}|{}|{}", fields[6], fields[7], fields[8]),
+                        ended_us: None,
+                        cache_hit: false,
+                        read_us: 0,
+                        decode_us: 0,
+                        decode_cpu_us: 0,
+                        parse_us: 0,
+                        parse_cpu_us: 0,
+                        resize_us: 0,
+                        source: "incomplete".into(),
+                    },
+                );
+            }
+            Some("end") if fields.len() >= 13 => {
+                let generation = fields[2].parse::<u64>()?;
+                if let Some(span) = spans.get_mut(&generation) {
+                    span.ended_us = Some(fields[4].parse()?);
+                    span.cache_hit = fields[5] == "1";
+                    span.read_us = fields[6].parse()?;
+                    span.decode_us = fields[7].parse()?;
+                    span.decode_cpu_us = fields[8].parse()?;
+                    span.parse_us = fields[9].parse()?;
+                    span.parse_cpu_us = fields[10].parse()?;
+                    span.resize_us = fields[11].parse()?;
+                    span.source = fields[12].to_string();
+                }
+            }
+            Some("sidecar_probe") if fields.get(2) == Some(&"missing") && fields.len() >= 4 => {
+                *missing_sidecar_probes
+                    .entry(fields[3].to_string())
+                    .or_default() += 1;
+            }
+            Some("sidecar_open") if fields.len() >= 3 => {
+                *sidecar_opens.entry(fields[2].to_string()).or_default() += 1;
+            }
+            _ => {}
+        }
+    }
+    if spans.is_empty() {
+        return Err("preview attribution log contains no work spans".into());
+    }
+
+    let completed = spans
+        .values()
+        .filter(|span| span.ended_us.is_some())
+        .collect::<Vec<_>>();
+    let mut by_key = BTreeMap::<&str, Vec<&PreviewWorkSpan>>::new();
+    for span in &completed {
+        by_key.entry(span.key.as_str()).or_default().push(*span);
+    }
+    let mut colliding_requests = BTreeSet::<u64>::new();
+    let mut duplicate_work = BTreeSet::<u64>::new();
+    for group in by_key.values_mut() {
+        group.sort_by_key(|span| span.started_us);
+        for (index, current) in group.iter().enumerate() {
+            for earlier in &group[..index] {
+                if earlier.ended_us.unwrap_or(earlier.started_us) <= current.started_us {
+                    continue;
+                }
+                if earlier.priority != current.priority {
+                    colliding_requests.insert(earlier.generation);
+                    colliding_requests.insert(current.generation);
+                }
+                if !earlier.cache_hit && !current.cache_hit {
+                    duplicate_work.insert(current.generation);
+                }
+            }
+        }
+    }
+
+    let selected_queue = completed
+        .iter()
+        .filter(|span| span.priority == "selected")
+        .map(|span| span.queue_age_us)
+        .collect::<Vec<_>>();
+    let prefetch_queue = completed
+        .iter()
+        .filter(|span| span.priority == "prefetch")
+        .map(|span| span.queue_age_us)
+        .collect::<Vec<_>>();
+    let repeated_missing_probes = missing_sidecar_probes
+        .values()
+        .map(|count| count.saturating_sub(1))
+        .sum::<u64>();
+    let repeated_sidecar_opens = sidecar_opens
+        .values()
+        .map(|count| count.saturating_sub(1))
+        .sum::<u64>();
+    let requests = spans.len() as u64;
+    let collisions = colliding_requests.len() as u64;
+    Ok(json!({
+        "schema": "mister-magik-preview-work-trace-v1",
+        "requests": requests,
+        "completed_results": completed.len(),
+        "incomplete_requests": spans.len().saturating_sub(completed.len()),
+        "selected_requests": completed.iter().filter(|span| span.priority == "selected").count(),
+        "prefetch_requests": completed.iter().filter(|span| span.priority == "prefetch").count(),
+        "cache_hits": completed.iter().filter(|span| span.cache_hit).count(),
+        "cache_misses": completed.iter().filter(|span| !span.cache_hit).count(),
+        "reads": completed.iter().filter(|span| span.read_us > 0).count(),
+        "decodes": completed.iter().filter(|span| span.decode_us > 0 || span.parse_us > 0).count(),
+        "resizes": completed.iter().filter(|span| span.resize_us > 0).count(),
+        "decoded_cache_insertions": completed.iter().filter(|span| !span.cache_hit && span.source != "failed").count(),
+        "simultaneous_selected_prefetch_requests": collisions,
+        "collision_rate_pct": if requests == 0 { 0.0 } else { collisions as f64 * 100.0 / requests as f64 },
+        "duplicate_decodes": duplicate_work.len(),
+        "duplicate_reads": duplicate_work.iter().filter(|generation| spans.get(generation).is_some_and(|span| span.read_us > 0)).count(),
+        "duplicate_resizes": duplicate_work.iter().filter(|generation| spans.get(generation).is_some_and(|span| span.resize_us > 0)).count(),
+        "missing_sidecar_probes": missing_sidecar_probes.values().sum::<u64>(),
+        "repeated_missing_sidecar_probes": repeated_missing_probes,
+        "sidecar_opens": sidecar_opens.values().sum::<u64>(),
+        "repeated_sidecar_opens": repeated_sidecar_opens,
+        "selected_queue_age_us": preview_latency_summary(selected_queue),
+        "prefetch_queue_age_us": preview_latency_summary(prefetch_queue),
+        "worker_cpu_us": completed.iter().map(|span| span.decode_cpu_us.saturating_add(span.parse_cpu_us)).sum::<u64>(),
+        "read_us": completed.iter().map(|span| span.read_us).sum::<u64>(),
+        "decode_us": completed.iter().map(|span| span.decode_us.saturating_add(span.parse_us)).sum::<u64>(),
+        "resize_us": completed.iter().map(|span| span.resize_us).sum::<u64>(),
+        "unique_keys": by_key.len(),
+    }))
+}
+
+fn preview_latency_summary(mut values: Vec<u64>) -> Value {
+    if values.is_empty() {
+        return json!({"samples": 0, "p50": Value::Null, "p95": Value::Null, "max": Value::Null});
+    }
+    values.sort_unstable();
+    json!({
+        "samples": values.len(),
+        "p50": median_u64(&values),
+        "p95": percentile_nearest_rank(&values, 95),
+        "max": values.last().copied(),
+    })
 }
 
 fn gui_profile_phase_marker_us(profile: &Value, phase: &str, event: &str) -> Result<u64> {
@@ -15341,6 +15805,7 @@ fn system_entry_artifact_prefix(
 enum SystemEntryInstrumentation {
     Normal,
     Profile,
+    PreviewAttribution,
 }
 
 fn profile_installed_system_entry(
@@ -16292,6 +16757,7 @@ fn run_system_entry_sample(
     let pprof_svg_file = format!("{artifact_prefix}-pprof.svg");
     let pprof_folded_file = format!("{artifact_prefix}-pprof.folded");
     let pprof_metadata_file = format!("{artifact_prefix}-pprof.json");
+    let preview_work_file = format!("{artifact_prefix}-preview-work.log");
     let run_result = (|| -> Result<Value> {
         exec_checked(
             session,
@@ -16342,6 +16808,9 @@ fn run_system_entry_sample(
                     SYSTEM_ENTRY_PPROF_COMPLETE_REMOTE.into(),
                 ),
             ]);
+        }
+        if instrumentation == SystemEntryInstrumentation::PreviewAttribution {
+            env_vars.push(("MISTER_PREVIEW_TRACE".into(), "1".into()));
         }
         restart_launcher_with_one_shot_env(
             session,
@@ -16401,6 +16870,15 @@ fn run_system_entry_sample(
         } else {
             None
         };
+        let preview_work_attribution =
+            if instrumentation == SystemEntryInstrumentation::PreviewAttribution {
+                let launcher_log = remote_read(session, "/tmp/mister-magik-slint.log")
+                    .ok_or("system-entry preview attribution launcher log is missing")?;
+                fs::write(output_dir.join(&preview_work_file), &launcher_log)?;
+                parse_preview_work_attribution(&launcher_log)?
+            } else {
+                Value::Null
+            };
         let ready = system_entry_trace_row(&trace, "system_entry_ready_presented")?;
         let destination_prepared =
             system_entry_trace_row(&trace, "system_entry_destination_prepared")?;
@@ -16546,6 +17024,8 @@ fn run_system_entry_sample(
             "catalog_profile": catalog_profile,
             "profile_artifact": catalog_profile.as_ref().map(|_| profile_file),
             "pprof": pprof,
+            "preview_work_attribution": preview_work_attribution,
+            "preview_work_artifact": (instrumentation == SystemEntryInstrumentation::PreviewAttribution).then_some(preview_work_file),
             "cache_provenance": {
                 "catalog": if catalog_resident_at_input { "resident" } else { "cold" },
                 "preview": preview_provenance,
@@ -36806,6 +37286,27 @@ catalog_v3_persist_phases_tsv\tprojection_us=4\tscanner_cache_us=5\n";
         assert!(!arcade_velocity_scroll_terminal_is_authoritative(
             &unconfirmed
         ));
+    }
+
+    #[test]
+    fn preview_work_attribution_counts_only_overlapping_duplicate_misses() {
+        let trace = concat!(
+            "preview_work_tsv\tbegin\t1\tprefetch\t100\t5\t/a.mmlz4b\tgame\thybrid-320x320\n",
+            "preview_work_tsv\tbegin\t2\tselected\t110\t2\t/a.mmlz4b\tgame\thybrid-320x320\n",
+            "preview_work_tsv\tend\t1\tprefetch\t200\t0\t20\t30\t25\t4\t3\t0\tindex_pread\n",
+            "preview_work_tsv\tend\t2\tselected\t210\t0\t21\t31\t26\t5\t4\t0\tindex_pread\n",
+            "preview_work_tsv\tbegin\t3\tselected\t220\t1\t/a.mmlz4b\tgame\thybrid-320x320\n",
+            "preview_work_tsv\tend\t3\tselected\t225\t1\t0\t0\t0\t0\t0\t0\tdecoded_cache\n",
+            "preview_work_tsv\tsidecar_probe\tmissing\t/a.mmlz4b\n",
+            "preview_work_tsv\tsidecar_probe\tmissing\t/a.mmlz4b\n",
+        );
+        let summary = parse_preview_work_attribution(trace).unwrap();
+        assert_eq!(summary["requests"], 3);
+        assert_eq!(summary["simultaneous_selected_prefetch_requests"], 2);
+        assert_eq!(summary["duplicate_decodes"], 1);
+        assert_eq!(summary["duplicate_reads"], 1);
+        assert_eq!(summary["repeated_missing_sidecar_probes"], 1);
+        assert_eq!(summary["cache_hits"], 1);
     }
 
     const MAME_1942_FIXTURE: &str = r#"<?xml version="1.0"?>

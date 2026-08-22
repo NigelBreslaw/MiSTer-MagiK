@@ -953,6 +953,7 @@ mod tests {
             "cold-boot-pprof",
             "media-pack-persistence",
             "rom-identity-hashing",
+            "preview-work-attribution",
             "search",
             "streamline",
         ];

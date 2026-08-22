@@ -69,6 +69,7 @@ pub enum BenchmarkScenario {
     PmuProfile,
     MediaPackPersistence,
     RomIdentityHashing,
+    PreviewWorkAttribution,
     Search,
     Streamline,
 }
@@ -136,6 +137,7 @@ impl BenchmarkScenario {
             Self::PmuProfile => "pmu-profile",
             Self::MediaPackPersistence => "media-pack-persistence",
             Self::RomIdentityHashing => "rom-identity-hashing",
+            Self::PreviewWorkAttribution => "preview-work-attribution",
             Self::Search => "search",
             Self::Streamline => "streamline",
         }

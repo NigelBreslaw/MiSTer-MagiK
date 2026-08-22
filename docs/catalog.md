@@ -375,6 +375,15 @@ tmpfs staging path; network, size, and hash failures are not replayed. The raw
 `.mmlz4b` production format has no decode phase. Index download remains bounded
 and may overlap the pack transfer, but exFAT publication remains serialized.
 
+Selected preview requests use a newest-wins foreground worker while bounded
+prefetch requests use a separate background worker. They share the decoded
+pixel cache, but otherwise load independently. Any future in-flight sharing or
+negative-sidecar cache must first pass the typed preview-work opportunity gate;
+production does not pay coordination or invalidation overhead merely because
+the benchmark can observe the workers. Preview attribution resolves the final
+archive path and resize policy before comparing keys and never enables catalog
+refresh.
+
 ## Compatibility And Recovery
 
 The projection contract and shard schema identify generated catalog formats,

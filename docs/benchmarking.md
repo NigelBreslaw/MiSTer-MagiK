@@ -69,6 +69,7 @@ Supported scenarios:
 - `pmu-profile`
 - `media-pack-persistence`
 - `rom-identity-hashing`
+- `preview-work-attribution`
 - `search`
 - `streamline`
 
@@ -120,6 +121,16 @@ Resume validation computes the same target fingerprints on the joined
 LibraryWalker without a per-entry channel. The retired event path remains only
 in parity assurance so future fingerprint changes must agree with the
 production walker-native result.
+
+`preview-work-attribution` is the exact-device opportunity gate for sharing
+selected and prefetch preview work. It runs three fresh Arcade system-entry
+samples, three ordinary held-scroll samples, and three turbo-scroll samples.
+The arm enables a one-shot trace that records resolved archive, asset, resize,
+queue, read, decode, cache, and sidecar activity without changing the two-worker
+production implementation. An experiment is authorized only when duplicate
+work is at least 2% of measured preview work or collisions cover at least 5% of
+requests. System-entry selected-preview p95 must remain at or below 85 ms.
+Catalog refresh is always off and is never forced by this scenario.
 
 The Arcade velocity-scroll profiling scenarios default to the active display
 route. A typed arm also accepts `--route active`, `--route hdmi-landscape`,

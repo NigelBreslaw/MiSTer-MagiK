@@ -69,6 +69,13 @@ impl PreviewPriority {
             Self::Prefetch { distance } => 1 + distance,
         }
     }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Selected => "selected",
+            Self::Prefetch { .. } => "prefetch",
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -930,6 +937,18 @@ fn load_preview(
     let cache_key = preview_cache_key(&resolved_archive_path, &req.preview_asset_key, resize);
     let mut cache_hit = false;
     let queue_age_us = req.requested_at.elapsed().as_micros() as u64;
+    if preview_trace_enabled() {
+        crate::catalog_errln!(
+            "preview_work_tsv\tbegin\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            req.generation,
+            req.priority.label(),
+            trace_start.elapsed().as_micros(),
+            queue_age_us,
+            resolved_archive_path,
+            req.preview_asset_key,
+            resize.cache_label(),
+        );
+    }
     let loaded_result = if let Some(loaded) = decoded_cache_get(decoded_cache, &cache_key) {
         cache_hit = true;
         Ok(loaded)
@@ -948,6 +967,20 @@ fn load_preview(
     match loaded_result {
         Ok(loaded) => {
             if preview_trace_enabled() {
+                crate::catalog_errln!(
+                    "preview_work_tsv\tend\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+                    req.generation,
+                    req.priority.label(),
+                    trace_start.elapsed().as_micros(),
+                    u8::from(cache_hit),
+                    loaded.timing.read_us,
+                    loaded.timing.decode_us,
+                    loaded.timing.decode_cpu_us,
+                    loaded.timing.raw565_parse_us,
+                    loaded.timing.raw565_parse_cpu_us,
+                    loaded.timing.resize_us,
+                    loaded.timing.load_source.label(),
+                );
                 crate::catalog_errln!(
                     "preview_trace decoded generation={} priority={:?} queue_age_us={} cache_hit={} load_source={} format={} filter={} source={}x{} output={}x{} total_us={} read_us={} decode_us={} decode_cpu_us={} raw565_parse_us={} raw565_parse_cpu_us={} decode_plus_parse_us={} decode_plus_parse_cpu_us={} resize_us={} encoded_bytes={} decoded_bytes={} archive_path={} asset_key={}",
                     req.generation,
@@ -1003,6 +1036,12 @@ fn load_preview(
         }
         Err(e) => {
             if preview_trace_enabled() {
+                crate::catalog_errln!(
+                    "preview_work_tsv\tend\t{}\t{}\t{}\t0\t0\t0\t0\t0\t0\t0\tfailed",
+                    req.generation,
+                    req.priority.label(),
+                    trace_start.elapsed().as_micros(),
+                );
                 crate::catalog_errln!(
                     "preview_trace decode_failed generation={} queue_age_us={} age_us={} archive_path={} asset_key={} error={}",
                     req.generation,
@@ -2152,6 +2191,12 @@ fn preview_archive_sidecar_lookup(
         }
     }
     if !index_path.is_file() {
+        if preview_trace_enabled() {
+            crate::catalog_errln!(
+                "preview_work_tsv\tsidecar_probe\tmissing\t{}",
+                archive_path.display(),
+            );
+        }
         return Ok(None);
     }
     let archive_fingerprint = preview_archive_fingerprint(archive_path)?;
@@ -2381,6 +2426,9 @@ fn read_preview_archive_sidecar_index(
     index_path: &Path,
     archive_bytes: u64,
 ) -> Result<PreviewArchiveSidecarIndex, String> {
+    if preview_trace_enabled() {
+        crate::catalog_errln!("preview_work_tsv\tsidecar_open\t{}", index_path.display());
+    }
     let bytes = std::fs::read(index_path)
         .map_err(|e| format!("read preview archive index {}: {e}", index_path.display()))?;
     if bytes.len() < 84 {
