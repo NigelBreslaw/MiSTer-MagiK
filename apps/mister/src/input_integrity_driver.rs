@@ -26,6 +26,7 @@ const UI_SET_ABSBIT: libc::c_ulong = 0x4004_5567;
 const UI_DEV_CREATE: libc::c_ulong = 0x0000_5501;
 const UI_DEV_DESTROY: libc::c_ulong = 0x0000_5502;
 const UINPUT_USER_DEV_SIZE: usize = 1116;
+const COMPUTERS_ACTIVATION_SETTLE_MS: u64 = 3_000;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct DriverPlan {
@@ -364,7 +365,7 @@ impl UinputDevice {
             DriverSequence::ComputersSweep | DriverSequence::ComputersEnterSweep => {
                 if plan.sequence == DriverSequence::ComputersEnterSweep {
                     self.pulse(28, 10)?;
-                    std::thread::sleep(Duration::from_millis(1_200));
+                    std::thread::sleep(Duration::from_millis(COMPUTERS_ACTIVATION_SETTLE_MS));
                 }
                 std::thread::sleep(Duration::from_millis(plan.start_delay_ms));
                 for index in 0..8 {
@@ -388,7 +389,7 @@ impl UinputDevice {
             DriverSequence::ComputersRoundTrip | DriverSequence::ComputersEnterRoundTrip => {
                 let measured_count = if plan.sequence == DriverSequence::ComputersEnterRoundTrip {
                     self.pulse(28, 10)?;
-                    std::thread::sleep(Duration::from_millis(1_200));
+                    std::thread::sleep(Duration::from_millis(COMPUTERS_ACTIVATION_SETTLE_MS));
                     plan.count - 1
                 } else {
                     plan.count
