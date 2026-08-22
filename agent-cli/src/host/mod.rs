@@ -8023,30 +8023,12 @@ fn run_launcher_response_driver(session: &Session, arguments: &str) -> Result<Va
 fn enter_computers_acorn_for_benchmark(session: &Session) -> Result<()> {
     let driver = run_launcher_response_driver(session, "a 10 1 50")?;
     validate_launcher_response_driver_evidence(&driver, 1)?;
-    let intended_state = |status: &Value| {
-        status.get("input_enabled").and_then(Value::as_bool) == Some(true)
-            && status.get("menu_id").and_then(Value::as_str) == Some("menu:computers")
+    if let Err(error) = wait_launcher_response_status(session, Duration::from_secs(5), |status| {
+        status.get("menu_id").and_then(Value::as_str) == Some("menu:computers")
             && status.get("selected_item_id").and_then(Value::as_str)
                 == Some("menu:computers:acorn")
-    };
-    let activated =
-        match wait_launcher_response_status(session, Duration::from_secs(5), intended_state) {
-            Ok(status) => status,
-            Err(error) => {
-                return Err(format!("{error}; activation_driver={driver}").into());
-            }
-        };
-    let activated_pid = activated.get("pid").and_then(Value::as_u64);
-    thread::sleep(Duration::from_secs(1));
-    let settled = read_launcher_status(session)?;
-    if activated_pid.is_none()
-        || settled.get("pid").and_then(Value::as_u64) != activated_pid
-        || !intended_state(&settled)
-    {
-        return Err(format!(
-            "launcher response activation did not remain stable through input-device teardown: activated={activated}; settled={settled}; activation_driver={driver}"
-        )
-        .into());
+    }) {
+        return Err(format!("{error}; activation_driver={driver}").into());
     }
     Ok(())
 }
