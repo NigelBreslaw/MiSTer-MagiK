@@ -27,6 +27,8 @@ const UI_DEV_CREATE: libc::c_ulong = 0x0000_5501;
 const UI_DEV_DESTROY: libc::c_ulong = 0x0000_5502;
 const UINPUT_USER_DEV_SIZE: usize = 1116;
 const MAIN_INPUT_DEVICE_SETTLE_MS: u64 = 3_000;
+const LAUNCHER_DESTINATION_SETTLE_MS: u64 = 3_000;
+const MAIN_INPUT_RELEASE_DRAIN_MS: u64 = 500;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct DriverPlan {
@@ -243,6 +245,7 @@ pub fn run(args: &[String]) {
     };
     match UinputDevice::create().and_then(|mut device| {
         device.run(plan)?;
+        std::thread::sleep(Duration::from_millis(MAIN_INPUT_RELEASE_DRAIN_MS));
         Ok(std::mem::take(&mut device.pulses))
     }) {
         Ok(pulses) => crate::ui_logln!(
@@ -254,6 +257,8 @@ pub fn run(args: &[String]) {
                 "gap_ms": plan.gap_ms,
                 "start_delay_ms": plan.start_delay_ms,
                 "start_at_us": plan.start_at_us,
+                "device_settle_ms": MAIN_INPUT_DEVICE_SETTLE_MS,
+                "release_drain_ms": MAIN_INPUT_RELEASE_DRAIN_MS,
                 "count": plan.count,
                 "qualification": plan.qualification,
                 "cpu_load": plan.cpu_load,
@@ -308,7 +313,7 @@ impl UinputDevice {
         set_abs_range(&mut descriptor, ABS_HAT0Y, -1, 1);
         file.write_all(&descriptor)?;
         ioctl_no_arg(&file, UI_DEV_CREATE)?;
-        std::thread::sleep(Duration::from_millis(500));
+        std::thread::sleep(Duration::from_millis(MAIN_INPUT_DEVICE_SETTLE_MS));
         Ok(Self {
             file,
             pulses: Vec::new(),
@@ -355,7 +360,6 @@ impl UinputDevice {
                 );
             }
             DriverSequence::LauncherResponse => {
-                std::thread::sleep(Duration::from_millis(MAIN_INPUT_DEVICE_SETTLE_MS));
                 for _ in 0..4 {
                     for (key_code, pulse_ms) in [(106, 5), (105, 10), (108, 20), (103, 40)] {
                         self.pulse(key_code, pulse_ms)?;
@@ -367,7 +371,7 @@ impl UinputDevice {
             DriverSequence::ComputersSweep | DriverSequence::ComputersEnterSweep => {
                 if plan.sequence == DriverSequence::ComputersEnterSweep {
                     self.pulse(28, 10)?;
-                    std::thread::sleep(Duration::from_millis(MAIN_INPUT_DEVICE_SETTLE_MS));
+                    std::thread::sleep(Duration::from_millis(LAUNCHER_DESTINATION_SETTLE_MS));
                 }
                 std::thread::sleep(Duration::from_millis(plan.start_delay_ms));
                 for index in 0..8 {
@@ -383,15 +387,12 @@ impl UinputDevice {
                         std::thread::sleep(Duration::from_millis(plan.gap_ms));
                     }
                 }
-                if plan.sequence == DriverSequence::ComputersEnterSweep {
-                    std::thread::sleep(Duration::from_millis(500));
-                }
                 return Ok(());
             }
             DriverSequence::ComputersRoundTrip | DriverSequence::ComputersEnterRoundTrip => {
                 let measured_count = if plan.sequence == DriverSequence::ComputersEnterRoundTrip {
                     self.pulse(28, 10)?;
-                    std::thread::sleep(Duration::from_millis(MAIN_INPUT_DEVICE_SETTLE_MS));
+                    std::thread::sleep(Duration::from_millis(LAUNCHER_DESTINATION_SETTLE_MS));
                     plan.count - 1
                 } else {
                     plan.count
@@ -415,9 +416,6 @@ impl UinputDevice {
                     if plan.start_at_us == 0 && index + 1 < measured_count {
                         std::thread::sleep(Duration::from_millis(plan.gap_ms));
                     }
-                }
-                if plan.sequence == DriverSequence::ComputersEnterRoundTrip {
-                    std::thread::sleep(Duration::from_millis(500));
                 }
                 return Ok(());
             }
