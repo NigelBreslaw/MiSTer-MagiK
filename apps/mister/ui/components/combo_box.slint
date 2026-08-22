@@ -4,13 +4,23 @@
 import { Start2P, Start2PSize } from "start2p.slint";
 import { Nocive15, Nocive15Size } from "nocive_15.slint";
 
-import { MisterBridge } from "../api.slint";
+import { FeedbackView, ScreenOrientation, SettingsPopup, SettingsView } from "../api.slint";
 import { MisterUi } from "../mister_window.slint";
 
 export component ComboBoxOverlay inherits Rectangle {
-    property <bool> orientation: MisterBridge.orientation-combo-open;
+    property <bool> orientation: SettingsView.popup == SettingsPopup.screen-orientation;
     property <int> option-count: orientation
-        ? MisterBridge.orientation-options.length : MisterBridge.display-options.length;
+        ? SettingsView.orientation-options.length : SettingsView.display-options.length;
+    property <string> selected-id: orientation
+        ? SettingsView.selected-orientation == ScreenOrientation.normal ? "normal"
+        : SettingsView.selected-orientation == ScreenOrientation.monitor-clockwise ? "monitor-clockwise"
+        : "monitor-counterclockwise"
+        : SettingsView.selected-display.id;
+    property <string> highlighted-id: orientation
+        ? SettingsView.highlighted-orientation == ScreenOrientation.normal ? "normal"
+        : SettingsView.highlighted-orientation == ScreenOrientation.monitor-clockwise ? "monitor-clockwise"
+        : "monitor-counterclockwise"
+        : SettingsView.highlighted-display.id;
     background: #000000c8;
     Rectangle {
         width: 94%;
@@ -24,16 +34,16 @@ export component ComboBoxOverlay inherits Rectangle {
             padding: 16px;
             spacing: 4px;
             Nocive15 { text: root.orientation ? "Screen orientation" : "Display resolution"; color: #06d6a0; size: Nocive15Size.px15; horizontal-alignment: center; }
-            for option[index] in root.orientation ? MisterBridge.orientation-options : MisterBridge.display-options : Rectangle {
-                property <bool> acknowledged: MisterBridge.selection-feedback-query(
-                    "", "option:" + index, MisterBridge.selection-feedback-revision);
+            for option[index] in root.orientation ? SettingsView.orientation-options : SettingsView.display-options : Rectangle {
+                property <bool> acknowledged: FeedbackView.acknowledged(
+                    "", "option:" + index, FeedbackView.revision);
                 height: 34px;
-                background: index == (root.orientation ? MisterBridge.orientation-highlighted : MisterBridge.display-highlighted) ? #2a2236 : transparent;
-                border-width: index == (root.orientation ? MisterBridge.orientation-highlighted : MisterBridge.display-highlighted) ? 2px : acknowledged ? 1px : 0px;
+                background: option.id == root.highlighted-id ? #2a2236 : transparent;
+                border-width: option.id == root.highlighted-id ? 2px : acknowledged ? 1px : 0px;
                 border-color: acknowledged ? #4e8f80 : #06d6a0;
                 Start2P {
-                    text: (index == (root.orientation ? MisterBridge.orientation-selected : MisterBridge.display-selected) ? "✓ " : "  ") + option;
-                    color: index == (root.orientation ? MisterBridge.orientation-highlighted : MisterBridge.display-highlighted) ? #06d6a0 : #e8e0f0;
+                    text: (option.id == root.selected-id ? "✓ " : "  ") + option.label;
+                    color: option.id == root.highlighted-id ? #06d6a0 : #e8e0f0;
                     size: Start2PSize.px8;
                     vertical-alignment: center;
                 }

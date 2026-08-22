@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { MisterUi } from "../../mister_window.slint";
-import { MisterBridge, NavigationView } from "../../api.slint";
+import { InformationView } from "../../api.slint";
 import { CrtTheme, CrtHeader, CrtFooter, CrtMenuRow } from "../../components/crt_ui.slint";
 
 export component InfoScreen inherits Rectangle {
@@ -14,10 +14,10 @@ export component InfoScreen inherits Rectangle {
         padding-bottom: MisterUi.grid-y * 2;
         spacing: MisterUi.grid-y;
         CrtHeader { title: "Info"; subtitle: "System details"; status: ""; }
-        CrtMenuRow { vertical-stretch: 1; label: "Build"; detail: NavigationView.build-label; focused: false; }
-        CrtMenuRow { vertical-stretch: 1; label: "Display"; detail: NavigationView.present-mode-label; focused: false; }
-        CrtMenuRow { vertical-stretch: 1; label: "Database"; detail: MisterBridge.info-database-build; focused: false; }
-        CrtMenuRow { vertical-stretch: 1; label: "Kernel"; detail: MisterBridge.info-kernel-version; focused: false; }
+        CrtMenuRow { vertical-stretch: 1; label: "Build"; detail: InformationView.build-label; focused: false; }
+        CrtMenuRow { vertical-stretch: 1; label: "Display"; detail: InformationView.present-mode-label; focused: false; }
+        CrtMenuRow { vertical-stretch: 1; label: "Database"; detail: InformationView.database-build; focused: false; }
+        CrtMenuRow { vertical-stretch: 1; label: "Kernel"; detail: InformationView.kernel-version; focused: false; }
         CrtFooter { left-hint: "B Back"; right-hint: "HOME Launcher"; }
     }
 }

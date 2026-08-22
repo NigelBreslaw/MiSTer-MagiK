@@ -4,7 +4,7 @@
 import { Start2P, Start2PSize } from "../../components/start2p.slint";
 import { Nocive15, Nocive15Size } from "../../components/nocive_15.slint";
 
-import { MisterBridge } from "../../api.slint";
+import { FeedbackView, ScreenOrientation, SettingsSection, SettingsView } from "../../api.slint";
 
 component SettingsRow inherits Rectangle {
     in property <string> label;
@@ -52,51 +52,53 @@ export component SettingsScreen inherits Rectangle {
 
             SettingsRow {
                 label: "Display resolution";
-                detail: MisterBridge.display-active-label;
-                focused: MisterBridge.settings-selected == 0;
-                acknowledged: MisterBridge.selection-feedback-query("settings", "display", MisterBridge.selection-feedback-revision);
+                detail: SettingsView.active-display.label;
+                focused: SettingsView.section == SettingsSection.display;
+                acknowledged: FeedbackView.acknowledged("settings", "display", FeedbackView.revision);
             }
 
             SettingsRow {
                 label: "Screen orientation";
-                detail: MisterBridge.orientation-active-label;
-                focused: MisterBridge.settings-selected == 1;
-                acknowledged: MisterBridge.selection-feedback-query("settings", "orientation", MisterBridge.selection-feedback-revision);
+                detail: SettingsView.active-orientation == ScreenOrientation.normal ? "Normal"
+                    : SettingsView.active-orientation == ScreenOrientation.monitor-clockwise
+                    ? "Monitor right (clockwise)" : "Monitor left (counterclockwise)";
+                focused: SettingsView.section == SettingsSection.orientation;
+                acknowledged: FeedbackView.acknowledged("settings", "orientation", FeedbackView.revision);
             }
 
             SettingsRow {
                 label: "Screensaver";
                 detail: "Configure the idle display";
-                focused: MisterBridge.settings-selected == 2;
-                acknowledged: MisterBridge.selection-feedback-query("settings", "screensaver", MisterBridge.selection-feedback-revision);
+                focused: SettingsView.section == SettingsSection.screensaver;
+                acknowledged: FeedbackView.acknowledged("settings", "screensaver", FeedbackView.revision);
             }
 
             SettingsRow {
                 label: "Reduce motion";
-                detail: MisterBridge.reduce-motion ? "On" : "Off";
-                focused: MisterBridge.settings-selected == 3;
-                acknowledged: MisterBridge.selection-feedback-query("settings", "reduce-motion", MisterBridge.selection-feedback-revision);
+                detail: SettingsView.reduce-motion ? "On" : "Off";
+                focused: SettingsView.section == SettingsSection.reduce-motion;
+                acknowledged: FeedbackView.acknowledged("settings", "reduce-motion", FeedbackView.revision);
             }
 
             SettingsRow {
                 label: "Exit to MiSTer";
                 detail: "Use the stock MiSTer menu until reboot";
-                focused: MisterBridge.settings-selected == 4;
-                acknowledged: MisterBridge.selection-feedback-query("settings", "exit", MisterBridge.selection-feedback-revision);
+                focused: SettingsView.section == SettingsSection.exit;
+                acknowledged: FeedbackView.acknowledged("settings", "exit", FeedbackView.revision);
             }
 
             SettingsRow {
                 label: "Rebuild Database";
                 detail: "Rebuild all library systems";
-                focused: MisterBridge.settings-selected == 5;
-                acknowledged: MisterBridge.selection-feedback-query("settings", "rebuild", MisterBridge.selection-feedback-revision);
+                focused: SettingsView.section == SettingsSection.rebuild;
+                acknowledged: FeedbackView.acknowledged("settings", "rebuild", FeedbackView.revision);
             }
 
             SettingsRow {
                 label: "About";
                 detail: "MiSTer MagiK and Slint";
-                focused: MisterBridge.settings-selected == 6;
-                acknowledged: MisterBridge.selection-feedback-query("settings", "about", MisterBridge.selection-feedback-revision);
+                focused: SettingsView.section == SettingsSection.about;
+                acknowledged: FeedbackView.acknowledged("settings", "about", FeedbackView.revision);
             }
 
             Rectangle { vertical-stretch: 1; background: transparent; }

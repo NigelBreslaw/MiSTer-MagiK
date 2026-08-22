@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { LauncherScreen, MisterBridge, NavigationView } from "../api.slint";
+import { LauncherScreen, MisterBridge, NavigationView, SettingsPopup, SettingsView } from "../api.slint";
 import { ControllerPanel } from "../controller_panel.slint";
 import { SetupOverlay } from "hdmi_setup.slint";
 import { ArcadeListScreen } from "../views/hdmi/arcade_list.slint";
@@ -50,7 +50,7 @@ export component HdmiLauncherUi inherits Rectangle {
     }
     if MisterBridge.catalog-scan-visible : CatalogScanPopup { }
     if MisterBridge.confirm-visible : ConfirmDialog { }
-    if MisterBridge.display-combo-open || MisterBridge.orientation-combo-open : ComboBoxOverlay { }
+    if SettingsView.popup != SettingsPopup.none : ComboBoxOverlay { }
     if MisterBridge.loading-message != "" : LoadingOverlay { }
     if MisterBridge.startup-visible : StartupSplash { }
 }

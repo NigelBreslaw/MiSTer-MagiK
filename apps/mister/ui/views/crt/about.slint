@@ -4,7 +4,7 @@
 import { Spleen6x12 } from "../../components/spleen_6x12.slint";
 
 import { MisterUi } from "../../mister_window.slint";
-import { MisterBridge } from "../../api.slint";
+import { AboutSection, FeedbackView, SettingsView } from "../../api.slint";
 import { CrtTheme, CrtHeader, CrtFooter, CrtMenuRow } from "../../components/crt_ui.slint";
 
 export component AboutScreen inherits Rectangle {
@@ -38,15 +38,15 @@ export component AboutScreen inherits Rectangle {
             vertical-stretch: 1;
             label: "Info";
             detail: "Build and display";
-            focused: MisterBridge.about-selected == 0;
-            acknowledged: MisterBridge.selection-feedback-query("about", "info", MisterBridge.selection-feedback-revision);
+            focused: SettingsView.about-section == AboutSection.information;
+            acknowledged: FeedbackView.acknowledged("about", "info", FeedbackView.revision);
         }
         CrtMenuRow {
             vertical-stretch: 1;
             label: "Licenses";
             detail: "Open source";
-            focused: MisterBridge.about-selected == 1;
-            acknowledged: MisterBridge.selection-feedback-query("about", "licenses", MisterBridge.selection-feedback-revision);
+            focused: SettingsView.about-section == AboutSection.licenses;
+            acknowledged: FeedbackView.acknowledged("about", "licenses", FeedbackView.revision);
         }
         CrtFooter { left-hint: "A Open   B Back"; right-hint: "HOME Launcher"; }
     }

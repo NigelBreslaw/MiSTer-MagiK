@@ -572,7 +572,6 @@ mod macos {
             launcher_nav.display_highlighted = display_profile
                 .settings_display_resolution_index()
                 .unwrap_or(0);
-            let bridge = launcher.global::<MisterBridge>();
             if let Ok(artwork) = mister_magik_fb::snes_artwork::SnesArtwork::load(
                 &Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/snes/snes-small-v1.rgb565a"),
             ) {
@@ -588,9 +587,6 @@ mod macos {
                 navigation.set_system_artwork(image);
                 navigation.set_system_artwork_available(true);
             }
-            bridge.set_orientation_active_label(orientation.label().into());
-            bridge.set_orientation_selected(launcher_nav.orientation_selected as i32);
-            bridge.set_orientation_highlighted(launcher_nav.orientation_highlighted as i32);
             let view_orientation = match orientation {
                 ScreenOrientation::Normal => ViewScreenOrientation::Normal,
                 ScreenOrientation::MonitorClockwise => ViewScreenOrientation::MonitorClockwise,
@@ -848,8 +844,6 @@ mod macos {
 
         fn sync_orientation_geometry(&self) {
             let bridge = self.launcher.global::<MisterBridge>();
-            bridge.set_orientation_active_label(self.orientation.label().into());
-            bridge.set_orientation_combo_open(self.launcher_nav.orientation_combo_open);
             let settings = self.launcher.global::<SettingsView>();
             settings.set_active_orientation(match self.orientation {
                 ScreenOrientation::Normal => ViewScreenOrientation::Normal,
@@ -923,10 +917,6 @@ mod macos {
                     _ => unreachable!("system hub selection is bounded to four cards"),
                 });
             }
-            bridge.set_settings_selected(self.selection as i32);
-            bridge.set_about_selected(self.selection as i32);
-            bridge.set_licenses_selected(self.selection as i32);
-            bridge.set_screensaver_settings_selected(self.selection as i32);
             let settings = self.launcher.global::<SettingsView>();
             match self.scenario {
                 Scenario::Settings | Scenario::OrientationChoice => {
@@ -980,10 +970,9 @@ mod macos {
 
         fn activate_selection(&mut self) {
             if self.scenario == Scenario::Settings && self.selection == 0 {
-                let bridge = self.launcher.global::<MisterBridge>();
-                let open = !bridge.get_display_combo_open();
-                bridge.set_display_combo_open(open);
-                self.launcher.global::<SettingsView>().set_popup(if open {
+                let settings = self.launcher.global::<SettingsView>();
+                let open = settings.get_popup() != SettingsPopup::DisplayResolution;
+                settings.set_popup(if open {
                     SettingsPopup::DisplayResolution
                 } else {
                     SettingsPopup::None
@@ -3981,12 +3970,6 @@ mod macos {
         bridge.set_last_event_label("Button A pressed".into());
         bridge.set_last_raw_event("type=1 code=304 value=1".into());
         let display_resolutions = settings_display_resolutions().collect::<Vec<_>>();
-        bridge.set_display_options(ModelRc::new(VecModel::from(
-            display_resolutions
-                .iter()
-                .map(|mode| SharedString::from(mode.label))
-                .collect::<Vec<_>>(),
-        )));
         settings.set_display_options(ModelRc::new(VecModel::from(
             display_resolutions
                 .iter()
@@ -3999,10 +3982,6 @@ mod macos {
         let active_resolution =
             mister_magik_mister_runtime::display_resolution::DISPLAY_RESOLUTIONS
                 [display_profile.display_resolution_index()];
-        let display_selected = display_profile.settings_display_resolution_index();
-        bridge.set_display_active_label(active_resolution.label.into());
-        bridge.set_display_selected(display_selected.map_or(-1, |index| index as i32));
-        bridge.set_display_highlighted(display_selected.map_or(0, |index| index as i32));
         let active_display = ChoiceOption {
             id: active_resolution.id.into(),
             label: active_resolution.label.into(),
@@ -4010,12 +3989,6 @@ mod macos {
         settings.set_active_display(active_display.clone());
         settings.set_selected_display(active_display.clone());
         settings.set_highlighted_display(active_display);
-        bridge.set_orientation_options(ModelRc::new(VecModel::from(
-            ScreenOrientation::ALL
-                .iter()
-                .map(|orientation| SharedString::from(orientation.label()))
-                .collect::<Vec<_>>(),
-        )));
         settings.set_orientation_options(ModelRc::new(VecModel::from(
             ScreenOrientation::ALL
                 .iter()
@@ -4038,8 +4011,8 @@ mod macos {
             "FFmpeg 8.1",
             "Rust third-party license inventory",
         ]);
-        bridge.set_license_lines(license_lines.clone());
         settings.set_license_lines(license_lines);
+        settings.set_license_titles(strings(&mister_magik_fb::licenses::LICENSE_TITLES));
     }
 
     fn apply_scenario(launcher: &Launcher, scenario: Scenario) {
@@ -4073,16 +4046,6 @@ mod macos {
         navigation.set_home_scroll_phase(HomeScrollPhase::Idle);
         navigation.set_home_scroll_x(0);
         navigation.set_transition_state(ViewNavigationTransitionState::Idle);
-        bridge.set_settings_selected(0);
-        bridge.set_about_selected(0);
-        bridge.set_licenses_selected(0);
-        bridge.set_screensaver_settings_selected(0);
-        bridge.set_screensaver_enabled(true);
-        bridge.set_screensaver_delay_minutes(5);
-        bridge.set_simple_joystick_handling(true);
-        bridge.set_reduce_motion(false);
-        bridge.set_info_kernel_version("Linux 6.6.68-MiSTer".into());
-        bridge.set_info_database_build("1,284 ms · 12,846 games".into());
         let settings = launcher.global::<SettingsView>();
         settings.set_section(SettingsSection::Display);
         settings.set_popup(SettingsPopup::None);
@@ -4177,7 +4140,6 @@ mod macos {
         )));
         bridge.set_media_pack_summary("".into());
         bridge.set_setup_visible(false);
-        bridge.set_display_combo_open(false);
         bridge.set_arcade_games_loading(false);
         bridge.set_arcade_preview_placeholder_visible(true);
     }
@@ -4488,7 +4450,7 @@ mod macos {
         #[derive(Clone, Debug, PartialEq)]
         struct BridgeSemanticSnapshot {
             screen: LauncherScreen,
-            settings_selected: i32,
+            settings_section: SettingsSection,
             arcade_search_active: bool,
             arcade_search_status: i32,
             arcade_search_pane: i32,
@@ -4506,7 +4468,7 @@ mod macos {
             let bridge = launcher.global::<MisterBridge>();
             BridgeSemanticSnapshot {
                 screen: launcher.global::<NavigationView>().get_screen(),
-                settings_selected: bridge.get_settings_selected(),
+                settings_section: launcher.global::<SettingsView>().get_section(),
                 arcade_search_active: bridge.get_arcade_search_active(),
                 arcade_search_status: bridge.get_arcade_search_status(),
                 arcade_search_pane: bridge.get_arcade_search_pane(),
@@ -4539,59 +4501,19 @@ mod macos {
             );
         }
 
-        fn assert_settings_dual_projection(launcher: &Launcher) {
-            let bridge = launcher.global::<MisterBridge>();
+        fn assert_settings_projection(launcher: &Launcher) {
             let settings = launcher.global::<SettingsView>();
-            assert_eq!(
-                settings.get_section(),
-                match bridge.get_settings_selected() {
-                    0 => SettingsSection::Display,
-                    1 => SettingsSection::Orientation,
-                    2 => SettingsSection::Screensaver,
-                    3 => SettingsSection::ReduceMotion,
-                    4 => SettingsSection::Exit,
-                    5 => SettingsSection::Rebuild,
-                    6 => SettingsSection::About,
-                    value => panic!("unknown legacy settings section {value}"),
-                }
-            );
-            assert_eq!(
-                settings.get_popup(),
-                match (
-                    bridge.get_display_combo_open(),
-                    bridge.get_orientation_combo_open(),
-                ) {
-                    (false, false) => SettingsPopup::None,
-                    (true, false) => SettingsPopup::DisplayResolution,
-                    (false, true) => SettingsPopup::ScreenOrientation,
-                    (true, true) => panic!("legacy settings popups overlap"),
-                }
-            );
-            assert_eq!(
-                settings.get_display_options().row_count(),
-                bridge.get_display_options().row_count()
-            );
-            assert_eq!(
-                settings.get_active_display().label.as_str(),
-                bridge.get_display_active_label().as_str()
-            );
-            assert_eq!(
-                settings.get_screensaver_enabled(),
-                bridge.get_screensaver_enabled()
-            );
-            assert_eq!(
-                settings.get_screensaver_delay_minutes(),
-                bridge.get_screensaver_delay_minutes()
-            );
-            assert_eq!(settings.get_reduce_motion(), bridge.get_reduce_motion());
-            assert_eq!(
-                launcher.global::<InformationView>().get_kernel_version(),
-                bridge.get_info_kernel_version()
-            );
-            assert_eq!(
-                launcher.global::<InformationView>().get_database_build(),
-                bridge.get_info_database_build()
-            );
+            assert!(settings.get_display_options().row_count() > 0);
+            assert!(settings.get_orientation_options().row_count() > 0);
+            assert!(settings.get_license_titles().row_count() > 0);
+            for index in 0..settings.get_display_options().row_count() {
+                let option = settings
+                    .get_display_options()
+                    .row_data(index)
+                    .expect("display option");
+                assert!(!option.id.is_empty());
+                assert!(!option.label.is_empty());
+            }
         }
 
         fn manifest_scenario(scenario: SceneScenario) -> Scenario {
@@ -4622,7 +4544,7 @@ mod macos {
                 initialize_bridge(&launcher, DisplayProfile::Hdmi);
                 apply_scenario(&launcher, manifest_scenario(scene.scenario));
                 assert_navigation_projection(&launcher);
-                assert_settings_dual_projection(&launcher);
+                assert_settings_projection(&launcher);
                 let snapshot = bridge_semantic_snapshot(&launcher);
                 if let Some(expected) = expected_by_scenario.get(&scene.scenario) {
                     assert_eq!(&snapshot, expected, "semantic drift in {}", scene.id);
@@ -4676,20 +4598,20 @@ mod macos {
                 let mut presenter = LauncherBridgePresenter::default();
                 presenter.sync(&production, &nav, &fixtures.catalog, Some(1), false);
                 assert_navigation_projection(&production);
-                assert_settings_dual_projection(&production);
+                assert_settings_projection(&production);
 
                 let preview = Launcher::new().expect("preview launcher fixture");
                 initialize_bridge(&preview, DisplayProfile::Hdmi);
                 apply_scenario(&preview, Scenario::from_screen(screen));
                 assert_navigation_projection(&preview);
-                assert_settings_dual_projection(&preview);
+                assert_settings_projection(&preview);
 
                 let production_snapshot = bridge_semantic_snapshot(&production);
                 let preview_snapshot = bridge_semantic_snapshot(&preview);
                 assert_eq!(production_snapshot.screen, preview_snapshot.screen);
                 assert_eq!(
-                    production_snapshot.settings_selected,
-                    preview_snapshot.settings_selected
+                    production_snapshot.settings_section,
+                    preview_snapshot.settings_section
                 );
                 assert_eq!(
                     production_snapshot.arcade_search_active,

@@ -79,30 +79,9 @@ pub(super) fn init_launcher_bridge(app: &slint_ui::launcher::Launcher, pad: &Pad
     navigation.set_present_mode_label("Mode=/dev/fb0".into());
     information.set_present_mode_label("Mode=/dev/fb0".into());
     let kernel_version = SharedString::from(kernel_version());
-    bridge.set_info_kernel_version(kernel_version.clone());
     information.set_kernel_version(kernel_version);
     let database_build = SharedString::from(last_database_build());
-    bridge.set_info_database_build(database_build.clone());
     information.set_database_build(database_build);
-    bridge.set_settings_selected(0);
-    bridge.set_about_selected(0);
-    bridge.set_display_options(ModelRc::new(VecModel::from(
-        launcher::settings_display_resolutions()
-            .map(|mode| SharedString::from(mode.label))
-            .collect::<Vec<_>>(),
-    )));
-    bridge.set_orientation_options(ModelRc::new(VecModel::from(
-        crate::settings::ScreenOrientation::ALL
-            .iter()
-            .map(|orientation| SharedString::from(orientation.label()))
-            .collect::<Vec<_>>(),
-    )));
-    bridge.set_simple_joystick_handling(false);
-    bridge.set_reduce_motion(false);
-    bridge.set_licenses_selected(0);
-    bridge.set_licenses_expanded(false);
-    bridge.set_licenses_scroll_y(0);
-    bridge.set_license_lines(ModelRc::new(VecModel::from(Vec::<SharedString>::new())));
     bridge.set_confirm_visible(false);
     bridge.set_confirm_title("".into());
     bridge.set_confirm_message("".into());
@@ -155,112 +134,50 @@ pub(super) fn sync_settings_bridge(
     if navigation.get_screen() != screen {
         navigation.set_screen(screen);
     }
-    set_bridge_if_changed!(
-        bridge,
-        get_settings_selected,
-        set_settings_selected,
-        nav.settings_selected as i32
-    );
-    set_bridge_if_changed!(
-        bridge,
-        get_about_selected,
-        set_about_selected,
-        nav.about_selected as i32
-    );
-    let active_label = mister_magik_mister_runtime::display_resolution::DISPLAY_RESOLUTIONS
-        .get(nav.display_selected)
-        .map_or("Custom/current mode", |mode| mode.label);
-    set_bridge_string_if_changed!(
-        bridge,
-        get_display_active_label,
-        set_display_active_label,
-        active_label
-    );
-    set_bridge_if_changed!(
-        bridge,
-        get_display_combo_open,
-        set_display_combo_open,
-        nav.display_combo_open
-    );
-    set_bridge_if_changed!(
-        bridge,
-        get_display_selected,
-        set_display_selected,
-        launcher::settings_display_selection_index(nav.display_selected)
-            .map_or(-1, |index| index as i32)
-    );
-    set_bridge_if_changed!(
-        bridge,
-        get_display_highlighted,
-        set_display_highlighted,
-        nav.display_highlighted as i32
-    );
-    set_bridge_if_changed!(
-        bridge,
-        get_display_confirm_remaining,
-        set_display_confirm_remaining,
-        nav.display_confirm_remaining as i32
-    );
-    set_bridge_string_if_changed!(
-        bridge,
-        get_orientation_active_label,
-        set_orientation_active_label,
-        nav.settings.screen_orientation.label()
-    );
-    set_bridge_if_changed!(
-        bridge,
-        get_orientation_combo_open,
-        set_orientation_combo_open,
-        nav.orientation_combo_open
-    );
-    set_bridge_if_changed!(
-        bridge,
-        get_orientation_selected,
-        set_orientation_selected,
-        nav.orientation_selected as i32
-    );
-    set_bridge_if_changed!(
-        bridge,
-        get_orientation_highlighted,
-        set_orientation_highlighted,
-        nav.orientation_highlighted as i32
-    );
-    set_bridge_if_changed!(
-        bridge,
-        get_orientation_confirm_remaining,
-        set_orientation_confirm_remaining,
-        nav.orientation_confirm_remaining as i32
-    );
-    set_bridge_if_changed!(
-        bridge,
-        get_simple_joystick_handling,
-        set_simple_joystick_handling,
-        nav.settings.simple_joystick_handling
-    );
-    set_bridge_if_changed!(
-        bridge,
-        get_reduce_motion,
-        set_reduce_motion,
-        nav.settings.reduce_motion
-    );
-    set_bridge_if_changed!(
-        bridge,
-        get_screensaver_settings_selected,
-        set_screensaver_settings_selected,
-        nav.screensaver_selected as i32
-    );
-    set_bridge_if_changed!(
-        bridge,
-        get_screensaver_enabled,
-        set_screensaver_enabled,
-        nav.settings.screensaver_enabled
-    );
-    set_bridge_if_changed!(
-        bridge,
-        get_screensaver_delay_minutes,
-        set_screensaver_delay_minutes,
-        nav.settings.screensaver_delay_minutes as i32
-    );
+    let settings = app.global::<slint_ui::launcher::SettingsView>();
+    settings.set_section(crate::launcher_view_types::settings_section(
+        nav.settings_selected,
+    ));
+    settings.set_popup(crate::launcher_view_types::settings_popup(
+        nav.display_combo_open,
+        nav.orientation_combo_open,
+    ));
+    let display_choice = |index| {
+        launcher::settings_display_resolution(index).map_or_else(
+            slint_ui::launcher::ChoiceOption::default,
+            |mode| slint_ui::launcher::ChoiceOption {
+                id: mode.id.into(),
+                label: mode.label.into(),
+            },
+        )
+    };
+    settings.set_active_display(display_choice(nav.display_selected));
+    settings.set_selected_display(display_choice(nav.display_selected));
+    settings.set_highlighted_display(display_choice(nav.display_highlighted));
+    settings.set_display_confirm_remaining(nav.display_confirm_remaining as i32);
+    settings.set_active_orientation(crate::launcher_view_types::screen_orientation(
+        nav.settings.screen_orientation,
+    ));
+    settings.set_selected_orientation(crate::launcher_view_types::orientation_at(
+        nav.orientation_selected,
+    ));
+    settings.set_highlighted_orientation(crate::launcher_view_types::orientation_at(
+        nav.orientation_highlighted,
+    ));
+    settings.set_orientation_confirm_remaining(nav.orientation_confirm_remaining as i32);
+    settings.set_simple_joystick_handling(nav.settings.simple_joystick_handling);
+    settings.set_reduce_motion(nav.settings.reduce_motion);
+    settings.set_screensaver_setting(crate::launcher_view_types::screensaver_setting(
+        nav.screensaver_selected,
+    ));
+    settings.set_screensaver_enabled(nav.settings.screensaver_enabled);
+    settings.set_screensaver_delay_minutes(nav.settings.screensaver_delay_minutes as i32);
+    settings.set_about_section(crate::launcher_view_types::about_section(
+        nav.about_selected,
+    ));
+    settings.set_selected_license_index(nav.licenses_selected as i32);
+    settings.set_license_expanded(nav.licenses_expanded);
+    settings.set_license_scroll_y(nav.licenses_scroll_y());
     if matches!(nav.screen, Screen::Settings | Screen::Screensaver)
         || matches!(
             nav.confirm_action,
@@ -861,10 +778,6 @@ pub(super) fn sync_bridge_launcher(
     let clock_text = SharedString::from(launcher_clock_text());
     app.global::<slint_ui::launcher::NavigationView>()
         .set_clock_text(clock_text);
-    let active_label = mister_magik_mister_runtime::display_resolution::DISPLAY_RESOLUTIONS
-        .get(nav.display_selected)
-        .map_or("Custom/current mode", |mode| mode.label);
-    bridge.set_display_active_label(active_label.into());
     sync_arcade_list_geometry_bridge(&bridge, nav, ui);
     let active_games_loading = active_system_games_loading(catalog, nav);
     sync_launcher_confirm_bridge(&bridge, nav, lifecycle);
@@ -1601,27 +1514,46 @@ mod tests {
         );
         sync_settings_bridge(&app, &nav, &lifecycle);
 
-        let bridge = app.global::<slint_ui::launcher::MisterBridge>();
+        let settings = app.global::<slint_ui::launcher::SettingsView>();
         assert_eq!(
             app.global::<slint_ui::launcher::NavigationView>()
                 .get_screen(),
             slint_ui::launcher::LauncherScreen::ScreensaverSettings
         );
-        assert_eq!(bridge.get_settings_selected(), 3);
-        assert!(bridge.get_display_combo_open());
-        assert_eq!(bridge.get_display_selected(), 1);
-        assert_eq!(bridge.get_display_highlighted(), 2);
-        assert_eq!(bridge.get_screensaver_settings_selected(), 1);
         assert_eq!(
-            bridge.get_screensaver_enabled(),
+            settings.get_section(),
+            slint_ui::launcher::SettingsSection::ReduceMotion
+        );
+        assert_eq!(
+            settings.get_popup(),
+            slint_ui::launcher::SettingsPopup::DisplayResolution
+        );
+        assert_eq!(
+            settings.get_selected_display().id.as_str(),
+            launcher::settings_display_resolution(1)
+                .expect("selected display")
+                .id
+        );
+        assert_eq!(
+            settings.get_highlighted_display().id.as_str(),
+            launcher::settings_display_resolution(2)
+                .expect("highlighted display")
+                .id
+        );
+        assert_eq!(
+            settings.get_screensaver_setting(),
+            slint_ui::launcher::ScreensaverSetting::Delay
+        );
+        assert_eq!(
+            settings.get_screensaver_enabled(),
             nav.settings.screensaver_enabled
         );
         assert_eq!(
-            bridge.get_screensaver_delay_minutes(),
+            settings.get_screensaver_delay_minutes(),
             nav.settings.screensaver_delay_minutes as i32
         );
-        assert!(bridge.get_simple_joystick_handling());
-        assert!(bridge.get_reduce_motion());
+        assert!(settings.get_simple_joystick_handling());
+        assert!(settings.get_reduce_motion());
     }
 
     #[test]

@@ -421,6 +421,7 @@ pub struct LauncherBridgePresenter {
     selection_feedback_callback_installed: bool,
     display_options: Option<Rc<VecModel<ChoiceOption>>>,
     orientation_options: Option<Rc<VecModel<ChoiceOption>>>,
+    license_titles: Option<Rc<VecModel<SharedString>>>,
 }
 
 impl LauncherBridgePresenter {
@@ -511,12 +512,6 @@ impl LauncherBridgePresenter {
                     label: mode.label.into(),
                 })
                 .collect::<Vec<_>>();
-            bridge.set_display_options(ModelRc::new(VecModel::from(
-                choices
-                    .iter()
-                    .map(|choice| choice.label.clone())
-                    .collect::<Vec<_>>(),
-            )));
             self.display_options = Some(Rc::new(VecModel::from(choices)));
             settings.set_display_options(ModelRc::from(
                 self.display_options
@@ -533,17 +528,25 @@ impl LauncherBridgePresenter {
                     label: orientation.label().into(),
                 })
                 .collect::<Vec<_>>();
-            bridge.set_orientation_options(ModelRc::new(VecModel::from(
-                choices
-                    .iter()
-                    .map(|choice| choice.label.clone())
-                    .collect::<Vec<_>>(),
-            )));
             self.orientation_options = Some(Rc::new(VecModel::from(choices)));
             settings.set_orientation_options(ModelRc::from(
                 self.orientation_options
                     .as_ref()
                     .expect("orientation choices initialized")
+                    .clone(),
+            ));
+        }
+        if self.license_titles.is_none() {
+            self.license_titles = Some(Rc::new(VecModel::from(
+                crate::licenses::LICENSE_TITLES
+                    .iter()
+                    .map(|title| SharedString::from(*title))
+                    .collect::<Vec<_>>(),
+            )));
+            settings.set_license_titles(ModelRc::from(
+                self.license_titles
+                    .as_ref()
+                    .expect("license titles initialized")
                     .clone(),
             ));
         }
@@ -572,12 +575,6 @@ impl LauncherBridgePresenter {
             set_active_display,
             active_display.clone()
         );
-        set_string_if_changed!(
-            bridge,
-            get_display_active_label,
-            set_display_active_label,
-            active_display.label
-        );
         set_if_changed!(
             settings,
             get_highlighted_display,
@@ -605,12 +602,6 @@ impl LauncherBridgePresenter {
             get_active_orientation,
             set_active_orientation,
             screen_orientation(nav.settings.screen_orientation)
-        );
-        set_string_if_changed!(
-            bridge,
-            get_orientation_active_label,
-            set_orientation_active_label,
-            nav.settings.screen_orientation.label()
         );
         set_if_changed!(
             settings,
@@ -694,94 +685,9 @@ impl LauncherBridgePresenter {
             set_license_scroll_y,
             nav.licenses_scroll_y()
         );
-        set_if_changed!(
-            bridge,
-            get_settings_selected,
-            set_settings_selected,
-            nav.settings_selected as i32
-        );
-        set_if_changed!(
-            bridge,
-            get_about_selected,
-            set_about_selected,
-            nav.about_selected as i32
-        );
-        set_if_changed!(
-            bridge,
-            get_display_combo_open,
-            set_display_combo_open,
-            nav.display_combo_open
-        );
-        set_if_changed!(
-            bridge,
-            get_display_selected,
-            set_display_selected,
-            nav.display_selected as i32
-        );
-        set_if_changed!(
-            bridge,
-            get_display_highlighted,
-            set_display_highlighted,
-            nav.display_highlighted as i32
-        );
-        set_if_changed!(
-            bridge,
-            get_display_confirm_remaining,
-            set_display_confirm_remaining,
-            nav.display_confirm_remaining as i32
-        );
-        set_if_changed!(
-            bridge,
-            get_simple_joystick_handling,
-            set_simple_joystick_handling,
-            nav.settings.simple_joystick_handling
-        );
-        set_if_changed!(
-            bridge,
-            get_reduce_motion,
-            set_reduce_motion,
-            nav.settings.reduce_motion
-        );
-        set_if_changed!(
-            bridge,
-            get_screensaver_settings_selected,
-            set_screensaver_settings_selected,
-            nav.screensaver_selected as i32
-        );
-        set_if_changed!(
-            bridge,
-            get_screensaver_enabled,
-            set_screensaver_enabled,
-            nav.settings.screensaver_enabled
-        );
-        set_if_changed!(
-            bridge,
-            get_screensaver_delay_minutes,
-            set_screensaver_delay_minutes,
-            nav.settings.screensaver_delay_minutes as i32
-        );
-        set_if_changed!(
-            bridge,
-            get_licenses_selected,
-            set_licenses_selected,
-            nav.licenses_selected as i32
-        );
-        set_if_changed!(
-            bridge,
-            get_licenses_expanded,
-            set_licenses_expanded,
-            nav.licenses_expanded
-        );
-        set_if_changed!(
-            bridge,
-            get_licenses_scroll_y,
-            set_licenses_scroll_y,
-            nav.licenses_scroll_y()
-        );
         if self.license_lines_index != Some(nav.licenses_selected) {
             let lines = self.license_lines(nav.licenses_selected);
-            settings.set_license_lines(lines.clone());
-            bridge.set_license_lines(lines);
+            settings.set_license_lines(lines);
         }
 
         if let Some(catalog_version) = catalog_version {

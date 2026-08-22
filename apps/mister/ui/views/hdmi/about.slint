@@ -4,7 +4,7 @@
 import { Start2P, Start2PSize } from "../../components/start2p.slint";
 import { Nocive15, Nocive15Size } from "../../components/nocive_15.slint";
 
-import { MisterBridge } from "../../api.slint";
+import { AboutSection, FeedbackView, SettingsView } from "../../api.slint";
 
 component AboutRow inherits Rectangle {
     in property <string> label;
@@ -61,14 +61,14 @@ export component AboutScreen inherits Rectangle {
         AboutRow {
             label: "Info";
             detail: "Build, display, database, and kernel details";
-            focused: MisterBridge.about-selected == 0;
-            acknowledged: MisterBridge.selection-feedback-query("about", "info", MisterBridge.selection-feedback-revision);
+            focused: SettingsView.about-section == AboutSection.information;
+            acknowledged: FeedbackView.acknowledged("about", "info", FeedbackView.revision);
         }
         AboutRow {
             label: "Licenses";
             detail: "Open source licenses and acknowledgements";
-            focused: MisterBridge.about-selected == 1;
-            acknowledged: MisterBridge.selection-feedback-query("about", "licenses", MisterBridge.selection-feedback-revision);
+            focused: SettingsView.about-section == AboutSection.licenses;
+            acknowledged: FeedbackView.acknowledged("about", "licenses", FeedbackView.revision);
         }
 
         Start2P { text: "B: back"; color: #6f8198; size: Start2PSize.px8; horizontal-alignment: center; }

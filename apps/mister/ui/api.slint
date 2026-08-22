@@ -129,6 +129,7 @@ export global SettingsView {
     in property <int> screensaver-delay-minutes;
     in property <AboutSection> about-section;
     in property <int> selected-license-index;
+    in property <[string]> license-titles;
     in property <bool> license-expanded;
     in property <int> license-scroll-y;
     in property <[string]> license-lines;
@@ -178,37 +179,10 @@ export global MisterBridge {
     in-out property <string> input-fault-notice;
     // Full-screen boot splash, cleared after the first launcher state sync.
     in-out property <bool> startup-visible;
-    in-out property <string> info-kernel-version;
-    in-out property <string> info-database-build;
     // Rust-owned physically confirmed focus acknowledgements. The revision is
     // an explicit Slint dependency; the callback resolves stable surface/item IDs.
     in-out property <int> selection-feedback-revision;
     pure callback selection-feedback-query(string, string, int) -> bool;
-    // Settings focus: 0=display, 1=orientation, 2=screensaver, 3=reduce motion, 4=exit, 5=rebuild, 6=about.
-    in-out property <int> settings-selected;
-    // About focus: 0=info, 1=licenses.
-    in-out property <int> about-selected;
-    in-out property <[string]> display-options;
-    in-out property <string> display-active-label;
-    in-out property <bool> display-combo-open;
-    in-out property <int> display-selected;
-    in-out property <int> display-highlighted;
-    in-out property <int> display-confirm-remaining;
-    in-out property <[string]> orientation-options;
-    in-out property <string> orientation-active-label: "Normal";
-    in-out property <bool> orientation-combo-open;
-    in-out property <int> orientation-selected;
-    in-out property <int> orientation-highlighted;
-    in-out property <int> orientation-confirm-remaining;
-    in-out property <bool> simple-joystick-handling;
-    in-out property <bool> reduce-motion;
-    in-out property <int> screensaver-settings-selected;
-    in-out property <bool> screensaver-enabled;
-    in-out property <int> screensaver-delay-minutes;
-    in-out property <int> licenses-selected;
-    in-out property <bool> licenses-expanded;
-    in-out property <int> licenses-scroll-y;
-    in-out property <[string]> license-lines;
     // Confirmation dialog.
     in-out property <bool> confirm-visible;
     in-out property <string> confirm-title;

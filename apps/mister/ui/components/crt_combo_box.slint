@@ -4,7 +4,7 @@
 import { Spleen6x12, Spleen6x12Size } from "spleen_6x12.slint";
 
 import { MisterUi } from "../mister_window.slint";
-import { MisterBridge } from "../api.slint";
+import { FeedbackView, ScreenOrientation, SettingsPopup, SettingsView } from "../api.slint";
 import { CrtTheme, CrtHeader, CrtFooter } from "crt_ui.slint";
 
 component CrtResolutionRow inherits Rectangle {
@@ -70,7 +70,17 @@ component CrtResolutionRow inherits Rectangle {
 }
 
 export component CrtComboBoxOverlay inherits Rectangle {
-    property <bool> orientation: MisterBridge.orientation-combo-open;
+    property <bool> orientation: SettingsView.popup == SettingsPopup.screen-orientation;
+    property <string> selected-id: orientation
+        ? SettingsView.selected-orientation == ScreenOrientation.normal ? "normal"
+        : SettingsView.selected-orientation == ScreenOrientation.monitor-clockwise ? "monitor-clockwise"
+        : "monitor-counterclockwise"
+        : SettingsView.selected-display.id;
+    property <string> highlighted-id: orientation
+        ? SettingsView.highlighted-orientation == ScreenOrientation.normal ? "normal"
+        : SettingsView.highlighted-orientation == ScreenOrientation.monitor-clockwise ? "monitor-clockwise"
+        : "monitor-counterclockwise"
+        : SettingsView.highlighted-display.id;
     background: CrtTheme.background;
 
     VerticalLayout {
@@ -88,13 +98,13 @@ export component CrtComboBoxOverlay inherits Rectangle {
             clip: true;
             VerticalLayout {
                 spacing: 0px;
-                for option[index] in root.orientation ? MisterBridge.orientation-options : MisterBridge.display-options : CrtResolutionRow {
+                for option[index] in root.orientation ? SettingsView.orientation-options : SettingsView.display-options : CrtResolutionRow {
                     vertical-stretch: 1;
-                    label: option;
-                    detail: index == (root.orientation ? MisterBridge.orientation-selected : MisterBridge.display-selected) ? "Selected" : "";
-                    focused: index == (root.orientation ? MisterBridge.orientation-highlighted : MisterBridge.display-highlighted);
-                    acknowledged: MisterBridge.selection-feedback-query(
-                        "", "option:" + index, MisterBridge.selection-feedback-revision);
+                    label: option.label;
+                    detail: option.id == root.selected-id ? "Selected" : "";
+                    focused: option.id == root.highlighted-id;
+                    acknowledged: FeedbackView.acknowledged(
+                        "", "option:" + index, FeedbackView.revision);
                 }
             }
         }

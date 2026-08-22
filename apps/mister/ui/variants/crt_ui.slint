@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { MisterUi } from "../mister_window.slint";
-import { LauncherScreen, MisterBridge, NavigationView } from "../api.slint";
+import { LauncherScreen, MisterBridge, NavigationView, SettingsPopup, SettingsView } from "../api.slint";
 import { CrtTheme } from "../components/crt_ui.slint";
 import { CrtControllerPanel } from "../views/crt/controller_panel.slint";
 import { SetupOverlay } from "crt_setup.slint";
@@ -61,7 +61,7 @@ export component CrtLauncherUi inherits Rectangle {
         }
         if MisterBridge.catalog-scan-visible : CatalogScanPopup { }
         if MisterBridge.confirm-visible : ConfirmDialog { }
-        if MisterBridge.display-combo-open || MisterBridge.orientation-combo-open : CrtComboBoxOverlay { }
+        if SettingsView.popup != SettingsPopup.none : CrtComboBoxOverlay { }
         if MisterBridge.loading-message != "" : LoadingOverlay { }
         if MisterBridge.startup-visible : StartupSplash { }
     }

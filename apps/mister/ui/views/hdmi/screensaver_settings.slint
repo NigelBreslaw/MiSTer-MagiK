@@ -4,7 +4,7 @@
 import { Start2P, Start2PSize } from "../../components/start2p.slint";
 import { Nocive15, Nocive15Size } from "../../components/nocive_15.slint";
 
-import { MisterBridge } from "../../api.slint";
+import { FeedbackView, ScreensaverSetting, SettingsView } from "../../api.slint";
 
 component SaverRow inherits Rectangle {
     in property <string> label;
@@ -31,22 +31,22 @@ export component ScreensaverSettingsScreen inherits Rectangle {
         Start2P { text: "Screensaver"; color: #e8e0f0; size: Start2PSize.px24; horizontal-alignment: center; }
         SaverRow {
             label: "Screensaver enabled";
-            detail: MisterBridge.screensaver-enabled ? "Yes" : "No";
-            focused: MisterBridge.screensaver-settings-selected == 0;
-            acknowledged: MisterBridge.selection-feedback-query("screensaver-settings", "enabled", MisterBridge.selection-feedback-revision);
+            detail: SettingsView.screensaver-enabled ? "Yes" : "No";
+            focused: SettingsView.screensaver-setting == ScreensaverSetting.enabled;
+            acknowledged: FeedbackView.acknowledged("screensaver-settings", "enabled", FeedbackView.revision);
         }
         SaverRow {
             label: "Show screensaver after";
-            detail: MisterBridge.screensaver-delay-minutes == 1 ? "1 minute" : MisterBridge.screensaver-delay-minutes + " minutes";
-            focused: MisterBridge.screensaver-settings-selected == 1;
-            acknowledged: MisterBridge.selection-feedback-query("screensaver-settings", "delay", MisterBridge.selection-feedback-revision);
-            enabled: MisterBridge.screensaver-enabled;
+            detail: SettingsView.screensaver-delay-minutes == 1 ? "1 minute" : SettingsView.screensaver-delay-minutes + " minutes";
+            focused: SettingsView.screensaver-setting == ScreensaverSetting.delay;
+            acknowledged: FeedbackView.acknowledged("screensaver-settings", "delay", FeedbackView.revision);
+            enabled: SettingsView.screensaver-enabled;
         }
         SaverRow {
             label: "Preview screensaver";
             detail: "Show it now";
-            focused: MisterBridge.screensaver-settings-selected == 2;
-            acknowledged: MisterBridge.selection-feedback-query("screensaver-settings", "preview", MisterBridge.selection-feedback-revision);
+            focused: SettingsView.screensaver-setting == ScreensaverSetting.preview;
+            acknowledged: FeedbackView.acknowledged("screensaver-settings", "preview", FeedbackView.revision);
         }
         Rectangle { vertical-stretch: 1; background: transparent; }
     }
