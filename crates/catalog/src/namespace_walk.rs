@@ -6,8 +6,9 @@
 //! The established WalkDir backend streams entries directly to the caller.
 //! Linux can optionally avoid repeatedly resolving full directory paths by
 //! walking with `openat` and `getdents64`. The optional backend captures a
-//! bounded target before publishing it, so any syscall or budget failure can
-//! discard the partial capture and restart through the streaming backend.
+//! bounded target before publishing it. A benchmark-selected variant instead
+//! publishes entries as one reusable `getdents64` buffer is consumed; any
+//! partial failure explicitly restarts the target before WalkDir fallback.
 
 use std::path::{Path, PathBuf};
 use std::time::Instant;
@@ -80,6 +81,15 @@ pub(crate) struct DirectorySignatureProbe {
     pub(crate) child_signatures: Vec<Option<(u64, i64)>>,
 }
 
+pub(crate) enum NamespaceVisit<'a> {
+    Entry(&'a NamespaceEntry),
+    #[cfg_attr(
+        not(target_os = "linux"),
+        expect(dead_code, reason = "streaming restarts are Linux-only")
+    )]
+    Restart(&'a str),
+}
+
 impl NamespaceWalkStats {
     pub(crate) fn add(&mut self, other: &Self) {
         if self.backend != other.backend {
@@ -120,6 +130,7 @@ impl NamespaceWalkStats {
 /// `auto` selects bounded fd-relative traversal on Linux and the established
 /// streaming backend elsewhere. Any fd-relative failure or capture-budget
 /// limit restarts the untouched target through streaming WalkDir.
+#[cfg(test)]
 pub(crate) fn visit(
     target: &Path,
     max_depth: Option<usize>,
@@ -135,6 +146,7 @@ pub(crate) fn visit(
     )
 }
 
+#[cfg(test)]
 pub(crate) fn visit_with_signature_capture(
     target: &Path,
     max_depth: Option<usize>,
@@ -152,6 +164,7 @@ pub(crate) fn visit_with_signature_capture(
     )
 }
 
+#[cfg(test)]
 pub(crate) fn visit_with_root_policy_and_signature_capture(
     target: &Path,
     max_depth: Option<usize>,
@@ -160,16 +173,38 @@ pub(crate) fn visit_with_root_policy_and_signature_capture(
     ignore: impl Fn(&Path) -> bool,
     mut visitor: impl FnMut(&NamespaceEntry) -> bool,
 ) -> NamespaceWalkStats {
+    visit_restartable_with_root_policy_and_signature_capture(
+        target,
+        max_depth,
+        root_policy,
+        signature_capture,
+        ignore,
+        |event| match event {
+            NamespaceVisit::Entry(entry) => visitor(entry),
+            NamespaceVisit::Restart(_) => true,
+        },
+    )
+}
+
+pub(crate) fn visit_restartable_with_root_policy_and_signature_capture(
+    target: &Path,
+    max_depth: Option<usize>,
+    root_policy: NamespaceRootPolicy,
+    signature_capture: NamespaceSignatureCapture,
+    ignore: impl Fn(&Path) -> bool,
+    mut visitor: impl FnMut(NamespaceVisit<'_>) -> bool,
+) -> NamespaceWalkStats {
     let requested =
         std::env::var("MISTER_LIBRARY_NAMESPACE_BACKEND").unwrap_or_else(|_| "auto".to_string());
     if requested == "walkdir" {
+        let mut entry_visitor = |entry: &NamespaceEntry| visitor(NamespaceVisit::Entry(entry));
         return visit_walkdir(
             target,
             max_depth,
             root_policy,
             signature_capture,
             &ignore,
-            &mut visitor,
+            &mut entry_visitor,
             None,
         );
     }
@@ -184,50 +219,88 @@ pub(crate) fn visit_with_root_policy_and_signature_capture(
                     let elapsed_us = visit_started.elapsed().as_micros() as u64;
                     capture.stats.first_entry_us.get_or_insert(elapsed_us);
                     capture.stats.final_entry_us = Some(elapsed_us);
-                    if !visitor(entry) {
+                    if !visitor(NamespaceVisit::Entry(entry)) {
                         break;
                     }
                 }
                 return capture.stats;
             }
             Err(reason) => {
+                let mut entry_visitor =
+                    |entry: &NamespaceEntry| visitor(NamespaceVisit::Entry(entry));
                 return visit_walkdir(
                     target,
                     max_depth,
                     root_policy,
                     signature_capture,
                     &ignore,
-                    &mut visitor,
+                    &mut entry_visitor,
                     Some(reason),
                 );
             }
         }
     }
 
+    #[cfg(target_os = "linux")]
+    if requested == "fd-relative-stream" {
+        match linux::visit_fd_relative_stream(
+            target,
+            max_depth,
+            root_policy,
+            signature_capture,
+            &ignore,
+            &mut |entry| visitor(NamespaceVisit::Entry(entry)),
+        ) {
+            Ok(stats) => return stats,
+            Err(mut failure) => {
+                failure.stats.fallback_reason = Some(failure.reason.clone());
+                if !visitor(NamespaceVisit::Restart(&failure.reason)) {
+                    return failure.stats;
+                }
+                let mut entry_visitor =
+                    |entry: &NamespaceEntry| visitor(NamespaceVisit::Entry(entry));
+                let mut fallback = visit_walkdir(
+                    target,
+                    max_depth,
+                    root_policy,
+                    signature_capture,
+                    &ignore,
+                    &mut entry_visitor,
+                    Some(failure.reason),
+                );
+                fallback.add(&failure.stats);
+                fallback.backend = "walkdir-fallback";
+                return fallback;
+            }
+        }
+    }
+
     if requested == "auto" {
+        let mut entry_visitor = |entry: &NamespaceEntry| visitor(NamespaceVisit::Entry(entry));
         return visit_walkdir(
             target,
             max_depth,
             root_policy,
             signature_capture,
             &ignore,
-            &mut visitor,
+            &mut entry_visitor,
             None,
         );
     }
 
-    let reason = if requested == "fd-relative" {
+    let reason = if requested == "fd-relative" || requested == "fd-relative-stream" {
         Some("fd-relative backend unsupported on this operating system".to_string())
     } else {
         Some(format!("unknown namespace backend {requested:?}"))
     };
+    let mut entry_visitor = |entry: &NamespaceEntry| visitor(NamespaceVisit::Entry(entry));
     visit_walkdir(
         target,
         max_depth,
         root_policy,
         signature_capture,
         &ignore,
-        &mut visitor,
+        &mut entry_visitor,
         reason,
     )
 }
@@ -455,6 +528,11 @@ mod linux {
         pub(super) stats: NamespaceWalkStats,
     }
 
+    pub(super) struct StreamFailure {
+        pub(super) reason: String,
+        pub(super) stats: NamespaceWalkStats,
+    }
+
     #[derive(Clone, Copy)]
     struct CaptureBudget {
         max_entries: usize,
@@ -487,6 +565,360 @@ mod linux {
             ignore,
             CaptureBudget::default(),
         )
+    }
+
+    pub(super) fn visit_fd_relative_stream(
+        target: &Path,
+        max_depth: Option<usize>,
+        root_policy: NamespaceRootPolicy,
+        signature_capture: NamespaceSignatureCapture,
+        ignore: &dyn Fn(&Path) -> bool,
+        visitor: &mut dyn FnMut(&NamespaceEntry) -> bool,
+    ) -> Result<NamespaceWalkStats, StreamFailure> {
+        visit_fd_relative_stream_with_failure(
+            target,
+            max_depth,
+            root_policy,
+            signature_capture,
+            ignore,
+            visitor,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn visit_fd_relative_stream_with_failure(
+        target: &Path,
+        max_depth: Option<usize>,
+        root_policy: NamespaceRootPolicy,
+        signature_capture: NamespaceSignatureCapture,
+        ignore: &dyn Fn(&Path) -> bool,
+        visitor: &mut dyn FnMut(&NamespaceEntry) -> bool,
+        fail_after_entries: Option<usize>,
+    ) -> Result<NamespaceWalkStats, StreamFailure> {
+        let started = std::time::Instant::now();
+        let mut stats = NamespaceWalkStats {
+            backend: "fd-relative-stream",
+            fallback_reason: None,
+            dir_opens: 0,
+            read_calls: 0,
+            read_bytes: 0,
+            type_stats: 0,
+            captured_entries: 0,
+            peak_buffered_entries: 0,
+            peak_buffered_bytes: 0,
+            buffer_allocations: 0,
+            fallback_count: 0,
+            restart_count: 0,
+            first_entry_us: None,
+            final_entry_us: None,
+            target_signature: None,
+        };
+        if max_depth == Some(0) || ignore(target) {
+            return Ok(stats);
+        }
+        let target_name = match c_string(target.as_os_str().as_bytes(), "target path") {
+            Ok(target_name) => target_name,
+            Err(reason) => return Err(StreamFailure { reason, stats }),
+        };
+        let no_follow = if root_policy == NamespaceRootPolicy::NoFollow {
+            libc::O_NOFOLLOW
+        } else {
+            0
+        };
+        let raw_fd = unsafe {
+            libc::open(
+                target_name.as_ptr(),
+                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC | no_follow,
+            )
+        };
+        if raw_fd < 0 {
+            return Err(StreamFailure {
+                reason: format!(
+                    "open target {}: {}",
+                    target.display(),
+                    io::Error::last_os_error()
+                ),
+                stats,
+            });
+        }
+        let root = unsafe { OwnedFd::from_raw_fd(raw_fd) };
+        stats.dir_opens = 1;
+        let target_signature_before = if signature_capture.target() {
+            stat_fd(root.as_raw_fd()).ok().and_then(directory_signature)
+        } else {
+            None
+        };
+        let mut buffer = Vec::new();
+        if let Err(error) = buffer.try_reserve_exact(GETDENTS_BUFFER_BYTES) {
+            return Err(StreamFailure {
+                reason: format!("stream allocation: getdents buffer: {error}"),
+                stats,
+            });
+        }
+        buffer.resize(GETDENTS_BUFFER_BYTES, 0u8);
+        stats.buffer_allocations = 1;
+        if let Err(reason) = stream_directory(
+            &root,
+            target,
+            0,
+            max_depth,
+            signature_capture,
+            ignore,
+            visitor,
+            &mut buffer,
+            &mut stats,
+            started,
+            fail_after_entries,
+        ) {
+            return Err(StreamFailure { reason, stats });
+        }
+        if signature_capture.target() {
+            let target_signature_after =
+                stat_fd(root.as_raw_fd()).ok().and_then(directory_signature);
+            stats.target_signature =
+                super::stable_directory_signature(target_signature_before, target_signature_after);
+        }
+        Ok(stats)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn stream_directory(
+        directory: &OwnedFd,
+        directory_path: &Path,
+        depth: usize,
+        max_depth: Option<usize>,
+        signature_capture: NamespaceSignatureCapture,
+        ignore: &dyn Fn(&Path) -> bool,
+        visitor: &mut dyn FnMut(&NamespaceEntry) -> bool,
+        buffer: &mut [u8],
+        stats: &mut NamespaceWalkStats,
+        started: std::time::Instant,
+        fail_after_entries: Option<usize>,
+    ) -> Result<bool, String> {
+        loop {
+            crate::cooperative_work::checkpoint();
+            let read = unsafe {
+                libc::syscall(
+                    libc::SYS_getdents64,
+                    directory.as_raw_fd(),
+                    buffer.as_mut_ptr(),
+                    buffer.len(),
+                )
+            };
+            stats.read_calls = stats.read_calls.saturating_add(1);
+            if read < 0 {
+                return Err(format!(
+                    "getdents64 {}: {}",
+                    directory_path.display(),
+                    io::Error::last_os_error()
+                ));
+            }
+            if read == 0 {
+                return Ok(true);
+            }
+            let read = usize::try_from(read).map_err(|_| "negative getdents64 size")?;
+            stats.read_bytes = stats.read_bytes.saturating_add(read as u64);
+            let mut offset = 0usize;
+            while offset < read {
+                if stats.captured_entries.is_multiple_of(16) {
+                    crate::cooperative_work::checkpoint();
+                }
+                if read - offset < DIRENT64_HEADER_BYTES {
+                    return Err(format!(
+                        "truncated getdents64 record in {}",
+                        directory_path.display()
+                    ));
+                }
+                let record_len =
+                    u16::from_ne_bytes([buffer[offset + 16], buffer[offset + 17]]) as usize;
+                if record_len <= DIRENT64_HEADER_BYTES || offset + record_len > read {
+                    return Err(format!(
+                        "invalid getdents64 record in {}",
+                        directory_path.display()
+                    ));
+                }
+                let record = &buffer[offset..offset + record_len];
+                offset += record_len;
+                let next_cookie =
+                    i64::from_ne_bytes(record[8..16].try_into().expect("dirent cookie"));
+                let name_region = &record[DIRENT64_HEADER_BYTES..];
+                let name_len = name_region
+                    .iter()
+                    .position(|byte| *byte == 0)
+                    .ok_or_else(|| {
+                        format!(
+                            "unterminated getdents64 name in {}",
+                            directory_path.display()
+                        )
+                    })?;
+                let name = &name_region[..name_len];
+                if name.is_empty() || name == b"." || name == b".." {
+                    continue;
+                }
+                if fail_after_entries.is_some_and(|limit| stats.captured_entries >= limit) {
+                    return Err(format!(
+                        "injected streaming failure after {} entries",
+                        stats.captured_entries
+                    ));
+                }
+                let child_path = directory_path.join(OsString::from_vec(name.to_vec()));
+                if ignore(&child_path) {
+                    continue;
+                }
+                let child_name = c_string(name, "directory entry name")?;
+                let entry_depth = depth.saturating_add(1);
+                let mut stat = None;
+                let kind = match record[18] {
+                    libc::DT_DIR => NamespaceEntryKind::Directory,
+                    libc::DT_REG => NamespaceEntryKind::File,
+                    libc::DT_UNKNOWN => {
+                        stats.type_stats = stats.type_stats.saturating_add(1);
+                        let value = stat_entry(directory.as_raw_fd(), &child_name, &child_path)?;
+                        let kind = kind_from_mode(value.st_mode);
+                        stat = Some(value);
+                        kind
+                    }
+                    _ => NamespaceEntryKind::Other,
+                };
+                let zip_signature = if kind == NamespaceEntryKind::File && is_zip_path(&child_path)
+                {
+                    let value = match stat {
+                        Some(value) => value,
+                        None => stat_entry(directory.as_raw_fd(), &child_name, &child_path)?,
+                    };
+                    Some((
+                        u64::try_from(value.st_size).unwrap_or(0),
+                        #[allow(clippy::unnecessary_cast)]
+                        unix_timestamp_nanos(value.st_mtime as i64, value.st_mtime_nsec as i64),
+                    ))
+                } else {
+                    None
+                };
+                let should_descend = kind == NamespaceEntryKind::Directory
+                    && max_depth.is_none_or(|limit| entry_depth < limit);
+                let capture_directory_signature = kind == NamespaceEntryKind::Directory
+                    && entry_depth == 1
+                    && signature_capture.depth_one_directories();
+                let mut entry = NamespaceEntry {
+                    path: child_path.clone(),
+                    kind,
+                    zip_signature,
+                    directory_signature: None,
+                };
+                let mut child = None;
+                let mut child_signature_before = None;
+                if should_descend {
+                    if entry_depth >= MAX_OPEN_DIRECTORY_FDS {
+                        return Err(format!(
+                            "stream budget: more than {MAX_OPEN_DIRECTORY_FDS} open directory fds under {}",
+                            child_path.display()
+                        ));
+                    }
+                    let raw_child = unsafe {
+                        libc::openat(
+                            directory.as_raw_fd(),
+                            child_name.as_ptr(),
+                            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC | libc::O_NOFOLLOW,
+                        )
+                    };
+                    if raw_child < 0 {
+                        return Err(format!(
+                            "openat directory {}: {}",
+                            child_path.display(),
+                            io::Error::last_os_error()
+                        ));
+                    }
+                    stats.dir_opens = stats.dir_opens.saturating_add(1);
+                    child = Some(unsafe { OwnedFd::from_raw_fd(raw_child) });
+                    if capture_directory_signature {
+                        child_signature_before = child
+                            .as_ref()
+                            .and_then(|value| stat_fd(value.as_raw_fd()).ok())
+                            .and_then(directory_signature);
+                    }
+                } else if capture_directory_signature {
+                    let value = match stat {
+                        Some(value) => Some(value),
+                        None => stat_entry(directory.as_raw_fd(), &child_name, &child_path).ok(),
+                    };
+                    entry.directory_signature = value.and_then(directory_signature);
+                }
+
+                if !capture_directory_signature
+                    && !publish_stream_entry(&entry, visitor, stats, started)
+                {
+                    return Ok(false);
+                }
+                if let Some(child) = child {
+                    if next_cookie <= 0 {
+                        return Err(format!(
+                            "invalid getdents64 continuation cookie in {}",
+                            directory_path.display()
+                        ));
+                    }
+                    let seek =
+                        unsafe { libc::lseek(directory.as_raw_fd(), next_cookie, libc::SEEK_SET) };
+                    if seek < 0 {
+                        return Err(format!(
+                            "lseek directory {}: {}",
+                            directory_path.display(),
+                            io::Error::last_os_error()
+                        ));
+                    }
+                    if !stream_directory(
+                        &child,
+                        &child_path,
+                        entry_depth,
+                        max_depth,
+                        signature_capture,
+                        ignore,
+                        visitor,
+                        buffer,
+                        stats,
+                        started,
+                        fail_after_entries,
+                    )? {
+                        return Ok(false);
+                    }
+                    if capture_directory_signature {
+                        let after = stat_fd(child.as_raw_fd())
+                            .ok()
+                            .and_then(directory_signature);
+                        entry.directory_signature =
+                            super::stable_directory_signature(child_signature_before, after);
+                    }
+                    if capture_directory_signature
+                        && !publish_stream_entry(&entry, visitor, stats, started)
+                    {
+                        return Ok(false);
+                    }
+                    break;
+                }
+                if capture_directory_signature
+                    && !publish_stream_entry(&entry, visitor, stats, started)
+                {
+                    return Ok(false);
+                }
+            }
+        }
+    }
+
+    fn publish_stream_entry(
+        entry: &NamespaceEntry,
+        visitor: &mut dyn FnMut(&NamespaceEntry) -> bool,
+        stats: &mut NamespaceWalkStats,
+        started: std::time::Instant,
+    ) -> bool {
+        stats.captured_entries = stats.captured_entries.saturating_add(1);
+        stats.peak_buffered_entries = 1;
+        stats.peak_buffered_bytes = stats.peak_buffered_bytes.max(
+            std::mem::size_of::<NamespaceEntry>().saturating_add(entry.path.as_os_str().len()),
+        );
+        let elapsed_us = started.elapsed().as_micros() as u64;
+        stats.first_entry_us.get_or_insert(elapsed_us);
+        stats.final_entry_us = Some(elapsed_us);
+        visitor(entry)
     }
 
     pub(super) fn probe_directory_signatures(
@@ -951,6 +1383,23 @@ mod linux {
             },
         )
     }
+
+    #[cfg(test)]
+    pub(super) fn visit_stream_with_failure_for_test(
+        target: &Path,
+        fail_after_entries: usize,
+        visitor: &mut dyn FnMut(&NamespaceEntry) -> bool,
+    ) -> Result<NamespaceWalkStats, StreamFailure> {
+        visit_fd_relative_stream_with_failure(
+            target,
+            None,
+            NamespaceRootPolicy::NoFollow,
+            NamespaceSignatureCapture::None,
+            &|_| false,
+            visitor,
+            Some(fail_after_entries),
+        )
+    }
 }
 
 #[cfg(test)]
@@ -1205,6 +1654,33 @@ mod tests {
     }
 
     #[cfg(target_os = "linux")]
+    fn stream_snapshot(
+        root: &Path,
+        max_depth: Option<usize>,
+        ignore: &dyn Fn(&Path) -> bool,
+    ) -> (Snapshot, NamespaceWalkStats) {
+        let mut entries = Vec::new();
+        let stats = linux::visit_fd_relative_stream(
+            root,
+            max_depth,
+            NamespaceRootPolicy::NoFollow,
+            NamespaceSignatureCapture::None,
+            ignore,
+            &mut |entry| {
+                entries.push((
+                    entry.path.strip_prefix(root).unwrap().to_path_buf(),
+                    entry.kind,
+                    entry.zip_signature,
+                ));
+                true
+            },
+        )
+        .unwrap();
+        entries.sort_by(|left, right| left.0.cmp(&right.0));
+        (entries, stats)
+    }
+
+    #[cfg(target_os = "linux")]
     #[test]
     fn fd_relative_matches_walkdir_and_zip_signature() {
         use crate::test_support::{set_file_mtime_for_test, write_stored_zip};
@@ -1225,6 +1701,10 @@ mod tests {
         for max_depth in [Some(0), Some(1), Some(2), None] {
             let (walkdir, _) = walkdir_snapshot(&dir, max_depth, &ignore);
             assert_eq!(fd_snapshot(&dir, max_depth, &ignore), walkdir);
+            let (streamed, stats) = stream_snapshot(&dir, max_depth, &ignore);
+            assert_eq!(streamed, walkdir);
+            assert!(stats.buffer_allocations <= 1);
+            assert!(stats.peak_buffered_entries <= 1);
         }
         let expected = fs::metadata(&zip).unwrap();
         let signature = fd_snapshot(&dir, None, &ignore)
@@ -1307,6 +1787,53 @@ mod tests {
         assert_eq!(stats.backend, "walkdir-fallback");
         assert_eq!(stats.fallback_count, 1);
         assert_eq!(stats.restart_count, 1);
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn streaming_failure_exposes_partial_work_before_identical_retry() {
+        let dir = unique_temp_dir("namespace-stream-restart");
+        fs::create_dir_all(dir.join("nested/deep")).unwrap();
+        fs::write(dir.join("one.rom"), b"one").unwrap();
+        fs::write(dir.join("nested/two.rom"), b"two").unwrap();
+        fs::write(dir.join("nested/deep/three.rom"), b"three").unwrap();
+
+        let expected = walkdir_snapshot(&dir, None, &|_| false).0;
+        let mut partial = Vec::new();
+        let failure = linux::visit_stream_with_failure_for_test(&dir, 2, &mut |entry| {
+            partial.push(entry.path.clone());
+            true
+        })
+        .err()
+        .expect("the deterministic streaming fault must interrupt the target");
+        assert_eq!(partial.len(), 2);
+        assert_eq!(failure.stats.backend, "fd-relative-stream");
+        assert_eq!(failure.stats.buffer_allocations, 1);
+        assert_eq!(failure.stats.peak_buffered_entries, 1);
+
+        let mut restarted = Vec::new();
+        let retry = visit_walkdir(
+            &dir,
+            None,
+            NamespaceRootPolicy::NoFollow,
+            NamespaceSignatureCapture::None,
+            &|_| false,
+            &mut |entry| {
+                restarted.push((
+                    entry.path.strip_prefix(&dir).unwrap().to_path_buf(),
+                    entry.kind,
+                    entry.zip_signature,
+                ));
+                true
+            },
+            Some(failure.reason),
+        );
+        restarted.sort_by(|left, right| left.0.cmp(&right.0));
+        assert_eq!(restarted, expected);
+        assert_eq!(retry.fallback_count, 1);
+        assert_eq!(retry.restart_count, 1);
 
         fs::remove_dir_all(dir).unwrap();
     }

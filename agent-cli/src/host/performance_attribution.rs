@@ -447,8 +447,9 @@ fn storage_prepare_command() -> String {
 }
 
 fn storage_catalog_command(subcommand: &str) -> String {
+    let namespace_backend = storage_namespace_backend();
     format!(
-        "env MISTER_SHARDED_CATALOG_DIR={catalog} MISTER_LIBRARY_SQLITE={library} MISTER_ARCADE_BOOTSTRAP_INDEX={bootstrap} MISTER_LIBRARY_REFRESH_LOCK={refresh_lock} MISTER_CATALOG_BUILDER_LOCK={builder_lock} MISTER_CATALOG_READY_SNAPSHOT={ready_snapshot} MISTER_CATALOG_DIAGNOSTICS_DIR={diagnostics} MISTER_LIBRARY_NAMESPACE_BACKEND=fd-relative MISTER_MAGIK_FOREGROUND_LIBRARY_REFRESH=1 {gui} {subcommand}",
+        "env MISTER_SHARDED_CATALOG_DIR={catalog} MISTER_LIBRARY_SQLITE={library} MISTER_ARCADE_BOOTSTRAP_INDEX={bootstrap} MISTER_LIBRARY_REFRESH_LOCK={refresh_lock} MISTER_CATALOG_BUILDER_LOCK={builder_lock} MISTER_CATALOG_READY_SNAPSHOT={ready_snapshot} MISTER_CATALOG_DIAGNOSTICS_DIR={diagnostics} MISTER_LIBRARY_NAMESPACE_BACKEND={namespace_backend} MISTER_MAGIK_FOREGROUND_LIBRARY_REFRESH=1 {gui} {subcommand}",
         catalog = sh(&format!("{STORAGE_OUTPUT_ROOT}/catalog-v3")),
         library = sh(&format!("{STORAGE_OUTPUT_ROOT}/library.sqlite3")),
         bootstrap = sh(&format!("{STORAGE_OUTPUT_ROOT}/arcade-bootstrap.nav.lz4b")),
@@ -456,9 +457,20 @@ fn storage_catalog_command(subcommand: &str) -> String {
         builder_lock = sh(&format!("{STORAGE_OUTPUT_ROOT}/catalog-builder.lock")),
         ready_snapshot = sh(&format!("{STORAGE_OUTPUT_ROOT}/catalog-ready.snapshot")),
         diagnostics = sh(&format!("{STORAGE_OUTPUT_ROOT}/diagnostics")),
+        namespace_backend = sh(&namespace_backend),
         gui = sh(DEVELOPMENT_GUI_REMOTE),
         subcommand = sh(subcommand),
     )
+}
+
+fn storage_namespace_backend() -> String {
+    let requested = std::env::var("MISTER_BENCH_CATALOG_NAMESPACE_BACKEND")
+        .unwrap_or_else(|_| "fd-relative".to_string());
+    assert!(
+        matches!(requested.as_str(), "fd-relative" | "fd-relative-stream"),
+        "MISTER_BENCH_CATALOG_NAMESPACE_BACKEND must be fd-relative or fd-relative-stream"
+    );
+    requested
 }
 
 fn storage_workload_command(block_device: &str) -> String {
@@ -812,7 +824,7 @@ fn summarize_namespace_arm(markers: &Value) -> Result<Value> {
         return Err("namespace arm produced no per-target attribution".into());
     }
     Ok(json!({
-        "backend_selector": "fd-relative",
+        "backend_selector": storage_namespace_backend(),
         "producer_us": number(attribution, "execution_producer_us")?,
         "channel_wait_us": number(attribution, "execution_send_us")?,
         "consumer_wait_us": number(handoff, "receive_wait_us")?,
