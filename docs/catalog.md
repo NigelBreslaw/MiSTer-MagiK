@@ -386,6 +386,14 @@ refresh. The 2026-08-22 production corpus recorded zero collisions and zero
 duplicate work across 503 requests, so in-flight deduplication remains closed
 until a changed corpus passes the documented opportunity gate.
 
+Arcade search uses the resident catalog projection after its system shard has
+loaded. The persisted FTS shard remains the fallback for nonresident search
+requests and opens read-only SQLite state per query. Exact-device attribution
+found that open and preparation were below the retained-worker opportunity
+gate, while the qualified resident Arcade UI created no persisted-search
+worker. Connection retention therefore remains closed unless a changed
+production route proves sufficient nonresident churn.
+
 ## Compatibility And Recovery
 
 The projection contract and shard schema identify generated catalog formats,
