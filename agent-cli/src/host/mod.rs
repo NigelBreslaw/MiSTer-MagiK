@@ -7454,49 +7454,69 @@ fn restart_and_reconcile_launcher_response_arm(
     intended_item: Option<&str>,
 ) -> Result<()> {
     let mut last_status = Value::Null;
+    let mut last_main = Value::Null;
     let mut last_trace_matches = false;
+    let mut env_pending_before_cleanup = false;
     for attempt in 1..=2 {
-        restart_launcher_with_one_shot_env(session, options.clone())?;
+        let previous = wait_launcher_ready(session, Instant::now(), Duration::from_secs(5))?;
+        stage_one_shot_launcher_env(session, &options)?;
         let started = Instant::now();
+        if let Err(error) = issue_launcher_restart(session) {
+            let cleanup = clear_one_shot_launcher_env(session, &options.remote_env);
+            return match cleanup {
+                Ok(()) => Err(error),
+                Err(cleanup) => {
+                    Err(format!("{error}; one-shot launcher env cleanup failed: {cleanup}").into())
+                }
+            };
+        }
         let mut stable_pid = None;
         let mut stable_since = None;
-        loop {
-            last_status = read_launcher_status(session)?;
+        let mut observed_exact_run = false;
+        while started.elapsed() < Duration::from_secs(options.timeout_secs) {
+            last_status = remote_read(session, SLINT_STATUS_REMOTE)
+                .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+                .unwrap_or(Value::Null);
+            last_main = remote_read(session, MAIN_STATUS_REMOTE)
+                .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+                .unwrap_or(Value::Null);
             last_trace_matches = remote_read(session, LAUNCHER_RESPONSE_TRACE_REMOTE)
                 .as_deref()
                 .is_some_and(|raw| launcher_response_trace_matches_run(raw, run_id));
-            let intended_state = last_status.get("input_enabled").and_then(Value::as_bool)
-                == Some(true)
-                && last_status.get("screen").and_then(Value::as_str) == Some(intended_screen)
-                && intended_item.is_none_or(|item| {
-                    last_status.get("selected_item_id").and_then(Value::as_str) == Some(item)
-                });
+            observed_exact_run |= last_trace_matches;
+            let intended_state =
+                launcher_response_intended_state(&last_status, intended_screen, intended_item);
             if last_trace_matches && intended_state {
                 let observed_pid = last_status.get("pid").and_then(Value::as_u64);
-                if stable_pid != observed_pid {
+                if stable_pid != observed_pid
+                    && observed_pid != u64::try_from(previous.launcher_pid).ok()
+                {
                     stable_pid = observed_pid;
                     stable_since = Some(Instant::now());
                 }
-                if observed_pid.is_some()
-                    && stable_since.is_some_and(|since| since.elapsed() >= Duration::from_secs(2))
+                if observed_pid.is_some_and(|pid| {
+                    Some(pid) == stable_pid
+                        && Some(pid) != u64::try_from(previous.launcher_pid).ok()
+                }) && stable_since.is_some_and(|since| since.elapsed() >= Duration::from_secs(2))
                 {
+                    clear_one_shot_launcher_env(session, &options.remote_env)?;
                     return Ok(());
                 }
             } else {
                 stable_pid = None;
                 stable_since = None;
             }
-            if started.elapsed() >= Duration::from_secs(10) {
-                break;
-            }
             thread::sleep(Duration::from_millis(20));
         }
-        if attempt == 1 {
+        env_pending_before_cleanup = remote_read(session, &options.remote_env).is_some();
+        clear_one_shot_launcher_env(session, &options.remote_env)?;
+        if attempt == 1 && !observed_exact_run {
             continue;
         }
+        break;
     }
     Err(format!(
-        "launcher response arm was not observed on the live intended state after one reconciled retry: run_id={run_id} trace_matches={last_trace_matches} status={last_status}"
+        "launcher response arm was not observed on the live intended state after one reconciled retry: run_id={run_id} trace_matches={last_trace_matches} env_pending_before_cleanup={env_pending_before_cleanup} status={last_status} main={last_main}"
     )
     .into())
 }
@@ -7506,6 +7526,17 @@ fn launcher_response_trace_matches_run(raw: &str, run_id: &str) -> bool {
         trace["schema"] == "mister-magik-launcher-response-trace-v6"
             && trace["run_id"].as_str() == Some(run_id)
     })
+}
+
+fn launcher_response_intended_state(
+    status: &Value,
+    intended_screen: &str,
+    intended_item: Option<&str>,
+) -> bool {
+    status.get("input_enabled").and_then(Value::as_bool) == Some(true)
+        && status.get("screen").and_then(Value::as_str) == Some(intended_screen)
+        && intended_item
+            .is_none_or(|item| status.get("selected_item_id").and_then(Value::as_str) == Some(item))
 }
 
 fn summarize_computers_sweep(trace: Value, interval_ms: u64, start_delay_ms: u64) -> Result<Value> {
@@ -24409,20 +24440,8 @@ fn restart_launcher_with_one_shot_env(
     session: &Session,
     options: LauncherRestartOptions,
 ) -> Result<()> {
-    if options.clear_env || options.env_vars.is_empty() {
-        return Err("one-shot launcher restart requires environment variables".into());
-    }
     let previous = wait_launcher_ready(session, Instant::now(), Duration::from_secs(5))?;
-    let parent = remote_parent_dir(&options.remote_env)?;
-    let out = exec(session, &create_dir_command(parent), true)?;
-    if let Some(error) = exec_failure_message("create one-shot launcher env parent", &out) {
-        return Err(error.into());
-    }
-    put_bytes(
-        session,
-        &options.remote_env,
-        one_shot_launcher_env_text(&options.env_vars, &options.remote_env).as_bytes(),
-    )?;
+    stage_one_shot_launcher_env(session, &options)?;
     let started = Instant::now();
     let restart_result = issue_launcher_restart(session).and_then(|()| {
         wait_launcher_ready_after(
@@ -24433,17 +24452,10 @@ fn restart_launcher_with_one_shot_env(
         )
         .map(|_| ())
     });
-    let clear_result = prepare_launcher_env(
-        session,
-        &LauncherRestartOptions {
-            clear_env: true,
-            remote_env: options.remote_env.clone(),
-            ..LauncherRestartOptions::default()
-        },
-    );
+    let clear_result = clear_one_shot_launcher_env(session, &options.remote_env);
     match (restart_result, clear_result) {
-        (Ok(()), Ok(_)) => Ok(()),
-        (Err(error), Ok(_)) => Err(error),
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(error), Ok(())) => Err(error),
         (Ok(()), Err(error)) => {
             Err(format!("one-shot launcher env cleanup failed: {error}").into())
         }
@@ -24452,6 +24464,35 @@ fn restart_launcher_with_one_shot_env(
         )
         .into()),
     }
+}
+
+fn stage_one_shot_launcher_env(session: &Session, options: &LauncherRestartOptions) -> Result<()> {
+    if options.clear_env || options.env_vars.is_empty() {
+        return Err("one-shot launcher restart requires environment variables".into());
+    }
+    let parent = remote_parent_dir(&options.remote_env)?;
+    let out = exec(session, &create_dir_command(parent), true)?;
+    if let Some(error) = exec_failure_message("create one-shot launcher env parent", &out) {
+        return Err(error.into());
+    }
+    put_bytes(
+        session,
+        &options.remote_env,
+        one_shot_launcher_env_text(&options.env_vars, &options.remote_env).as_bytes(),
+    )?;
+    Ok(())
+}
+
+fn clear_one_shot_launcher_env(session: &Session, remote_env: &str) -> Result<()> {
+    prepare_launcher_env(
+        session,
+        &LauncherRestartOptions {
+            clear_env: true,
+            remote_env: remote_env.to_string(),
+            ..LauncherRestartOptions::default()
+        },
+    )
+    .map(|_| ())
 }
 
 fn one_shot_launcher_env_text(vars: &[(String, String)], remote_env: &str) -> String {
@@ -30587,6 +30628,26 @@ mod tests {
             "incomplete",
             "current-run"
         ));
+    }
+
+    #[test]
+    fn launcher_response_arm_requires_the_exact_live_destination() {
+        let status = json!({
+            "input_enabled": true,
+            "screen": "home",
+            "selected_item_id": "menu:computers",
+        });
+        assert!(launcher_response_intended_state(
+            &status,
+            "home",
+            Some("menu:computers")
+        ));
+        assert!(!launcher_response_intended_state(
+            &status,
+            "home",
+            Some("menu:arcade")
+        ));
+        assert!(!launcher_response_intended_state(&status, "settings", None));
     }
 
     #[test]
