@@ -1497,7 +1497,7 @@ pub fn rom_identity_benchmark_report() -> Result<serde_json::Value, String> {
         "software_hash_cache_sha256": software_hash_cache_sha256,
         "case_count": cases.len(),
         "cases": cases,
-        "result_sha256": format!("{:x}", result_digest.finalize()),
+        "result_sha256": library_db::hex_lower(result_digest.finalize().as_slice()),
         "rss_before_kb": rss_before_kb,
         "rss_after_kb": rss_after_kb,
         "hwm_before_kb": hwm_before_kb,
@@ -1747,7 +1747,7 @@ fn rom_benchmark_cache_digest(cache: &SoftwareHashCache) -> String {
             None => digest.update([0]),
         }
     }
-    format!("{:x}", digest.finalize())
+    library_db::hex_lower(digest.finalize().as_slice())
 }
 
 #[cfg(feature = "builder")]
