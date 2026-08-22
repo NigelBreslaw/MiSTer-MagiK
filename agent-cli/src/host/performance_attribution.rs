@@ -248,6 +248,7 @@ pub(super) fn profile_installed_storage_attribution(
         {
             return Err("isolated storage attribution catalog is invalid".into());
         }
+        let catalog_identity = parse_storage_catalog_identity(&inspect.stdout)?;
         fs::write(output_dir.join("catalog-inspect.tsv"), &inspect.stdout)?;
         let output_kib = exec_checked_output(
             &session,
@@ -273,6 +274,7 @@ pub(super) fn profile_installed_storage_attribution(
         let trace_summary = summarize_storage_trace(&raw_trace, &retained.stats, root_pid)?;
         let workload_log = fs::read_to_string(output_dir.join("library-refresh.log"))?;
         let phases = parse_storage_phase_markers(&workload_log);
+        let namespace_arm = summarize_namespace_arm(&phases)?;
         let trace = json!({
             "path": "storage-trace.txt",
             "sha256": retained.sha256,
@@ -301,6 +303,8 @@ pub(super) fn profile_installed_storage_attribution(
             "process_io": process,
             "block_io": block,
             "phase_markers": phases,
+            "namespace_arm": namespace_arm,
+            "catalog_identity": catalog_identity,
             "trace": trace,
             "artifacts": {
                 "process_samples": "process-io.jsonl",
@@ -444,7 +448,7 @@ fn storage_prepare_command() -> String {
 
 fn storage_catalog_command(subcommand: &str) -> String {
     format!(
-        "env MISTER_SHARDED_CATALOG_DIR={catalog} MISTER_LIBRARY_SQLITE={library} MISTER_ARCADE_BOOTSTRAP_INDEX={bootstrap} MISTER_LIBRARY_REFRESH_LOCK={refresh_lock} MISTER_CATALOG_BUILDER_LOCK={builder_lock} MISTER_CATALOG_READY_SNAPSHOT={ready_snapshot} MISTER_CATALOG_DIAGNOSTICS_DIR={diagnostics} MISTER_MAGIK_FOREGROUND_LIBRARY_REFRESH=1 {gui} {subcommand}",
+        "env MISTER_SHARDED_CATALOG_DIR={catalog} MISTER_LIBRARY_SQLITE={library} MISTER_ARCADE_BOOTSTRAP_INDEX={bootstrap} MISTER_LIBRARY_REFRESH_LOCK={refresh_lock} MISTER_CATALOG_BUILDER_LOCK={builder_lock} MISTER_CATALOG_READY_SNAPSHOT={ready_snapshot} MISTER_CATALOG_DIAGNOSTICS_DIR={diagnostics} MISTER_LIBRARY_NAMESPACE_BACKEND=fd-relative MISTER_MAGIK_FOREGROUND_LIBRARY_REFRESH=1 {gui} {subcommand}",
         catalog = sh(&format!("{STORAGE_OUTPUT_ROOT}/catalog-v3")),
         library = sh(&format!("{STORAGE_OUTPUT_ROOT}/library.sqlite3")),
         bootstrap = sh(&format!("{STORAGE_OUTPUT_ROOT}/arcade-bootstrap.nav.lz4b")),
@@ -702,6 +706,127 @@ fn parse_storage_phase_markers(log: &str) -> Value {
     )
 }
 
+fn parse_storage_catalog_identity(inspect: &str) -> Result<Value> {
+    let summary = inspect
+        .lines()
+        .find(|line| line.starts_with("catalog_v3_summary_tsv\t"))
+        .ok_or("storage catalog inspection omitted its summary row")?;
+    let fields = summary
+        .split('\t')
+        .skip(1)
+        .filter_map(|field| field.split_once('='))
+        .collect::<BTreeMap<_, _>>();
+    if fields.get("valid").copied() != Some("1") {
+        return Err("storage catalog inspection is not valid".into());
+    }
+    let required = |key: &str| {
+        fields
+            .get(key)
+            .copied()
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| format!("storage catalog inspection omitted {key}"))
+    };
+    Ok(json!({
+        "valid": true,
+        "systems": required("systems")?.parse::<u64>()?,
+        "total_games": required("total_games")?.parse::<u64>()?,
+        "fingerprint": required("fingerprint")?,
+        "identity_sha256": required("identity_sha256")?,
+        "ordering_sha256": required("ordering_sha256")?,
+        "launch_sha256": required("launch_sha256")?,
+        "search_sha256": required("search_sha256")?,
+        "artifact_set_sha256": required("artifact_set_sha256")?,
+    }))
+}
+
+fn summarize_namespace_arm(markers: &Value) -> Result<Value> {
+    let markers = markers
+        .as_array()
+        .ok_or("storage phase markers are not an array")?;
+    let marker = |event: &str| {
+        markers
+            .iter()
+            .find(|marker| marker["event"].as_str() == Some(event))
+            .and_then(|marker| marker["fields"].as_object())
+    };
+    let number = |fields: &serde_json::Map<String, Value>, key: &str| -> Result<u64> {
+        fields
+            .get(key)
+            .and_then(Value::as_str)
+            .ok_or_else(|| format!("namespace attribution omitted {key}"))?
+            .parse::<u64>()
+            .map_err(Into::into)
+    };
+    let handoff = marker("catalog_scan_handoff_tsv")
+        .ok_or("namespace arm omitted catalog scan handoff attribution")?;
+    let attribution = marker("catalog_scan_attribution_tsv")
+        .ok_or("namespace arm omitted catalog scan attribution")?;
+    let handoffs = markers
+        .iter()
+        .filter(|marker| marker["event"] == "catalog_target_handoff_tsv")
+        .filter_map(|marker| marker["fields"].as_object())
+        .filter_map(|fields| {
+            let ordinal = fields.get("ordinal")?.as_str()?.parse::<u64>().ok()?;
+            Some((ordinal, fields))
+        })
+        .collect::<BTreeMap<_, _>>();
+    let mut backend_counts = BTreeMap::<String, u64>::new();
+    let mut targets = Vec::new();
+    for fields in markers
+        .iter()
+        .filter(|marker| marker["event"] == "catalog_namespace_target_tsv")
+        .filter_map(|marker| marker["fields"].as_object())
+    {
+        let ordinal = number(fields, "ordinal")?;
+        let backend = fields
+            .get("backend")
+            .and_then(Value::as_str)
+            .ok_or("namespace target omitted backend")?;
+        *backend_counts.entry(backend.to_string()).or_default() += 1;
+        let consumer = handoffs.get(&ordinal).copied();
+        targets.push(json!({
+            "ordinal": ordinal,
+            "path": fields.get("path").and_then(Value::as_str).unwrap_or("unknown"),
+            "backend": backend,
+            "first_entry_us": number(fields, "first_entry_us")?,
+            "final_entry_us": number(fields, "final_entry_us")?,
+            "producer_complete_us": number(fields, "producer_complete_us")?,
+            "consumer_first_work_us": consumer
+                .and_then(|fields| fields.get("consumer_first_work_us"))
+                .and_then(Value::as_str)
+                .and_then(|value| value.parse::<u64>().ok())
+                .unwrap_or(0),
+            "target_complete_us": consumer
+                .and_then(|fields| fields.get("consumer_complete_us"))
+                .and_then(Value::as_str)
+                .and_then(|value| value.parse::<u64>().ok())
+                .unwrap_or(0),
+            "buffered_entries": number(fields, "buffered_entries")?,
+            "buffered_bytes": number(fields, "buffered_bytes")?,
+            "buffer_allocations": number(fields, "buffer_allocations")?,
+            "fallbacks": number(fields, "fallbacks")?,
+            "restarts": number(fields, "restarts")?,
+        }));
+    }
+    if targets.is_empty() {
+        return Err("namespace arm produced no per-target attribution".into());
+    }
+    Ok(json!({
+        "backend_selector": "fd-relative",
+        "producer_us": number(attribution, "execution_producer_us")?,
+        "channel_wait_us": number(attribution, "execution_send_us")?,
+        "consumer_wait_us": number(handoff, "receive_wait_us")?,
+        "consumer_active_us": number(handoff, "consumer_active_us")?,
+        "maximum_buffered_entries": number(attribution, "execution_peak_buffered_entries")?,
+        "maximum_buffered_bytes": number(attribution, "execution_peak_buffered_bytes")?,
+        "buffer_allocations": number(attribution, "execution_buffer_allocations")?,
+        "fallbacks": number(attribution, "execution_fallback_count")?,
+        "restarts": number(attribution, "execution_restart_count")?,
+        "backend_counts": backend_counts,
+        "targets": targets,
+    }))
+}
+
 fn storage_report(summary: &Value) -> Result<String> {
     let mut report = String::from("# exFAT storage attribution\n\n");
     writeln!(
@@ -751,6 +876,36 @@ fn storage_report(summary: &Value) -> Result<String> {
         report,
         "- Maximum in-flight I/O: {}\n",
         summary["block_io"]["max_in_flight"].as_u64().unwrap_or(0)
+    )?;
+    writeln!(
+        report,
+        "- Namespace producer/channel wait: {} / {} us",
+        summary["namespace_arm"]["producer_us"]
+            .as_u64()
+            .unwrap_or(0),
+        summary["namespace_arm"]["channel_wait_us"]
+            .as_u64()
+            .unwrap_or(0)
+    )?;
+    writeln!(
+        report,
+        "- Namespace consumer wait/active: {} / {} us",
+        summary["namespace_arm"]["consumer_wait_us"]
+            .as_u64()
+            .unwrap_or(0),
+        summary["namespace_arm"]["consumer_active_us"]
+            .as_u64()
+            .unwrap_or(0)
+    )?;
+    writeln!(
+        report,
+        "- Namespace peak buffer: {} entries / {} bytes\n",
+        summary["namespace_arm"]["maximum_buffered_entries"]
+            .as_u64()
+            .unwrap_or(0),
+        summary["namespace_arm"]["maximum_buffered_bytes"]
+            .as_u64()
+            .unwrap_or(0)
     )?;
     report.push_str("This capture is diagnostic attribution only. All writable catalog paths were redirected to the isolated Dev benchmark root and removed after capture.\n");
     Ok(report)
@@ -890,6 +1045,7 @@ mod tests {
         assert!(workload.contains(STORAGE_OUTPUT_ROOT));
         assert!(workload.contains(&STORAGE_TIMEOUT_TENTHS.to_string()));
         assert!(workload.contains(&STORAGE_MAX_KIB.to_string()));
+        assert!(workload.contains("MISTER_LIBRARY_NAMESPACE_BACKEND=fd-relative"));
         assert!(workload.contains("/proc/$pid/exe"));
         assert!(cleanup.contains("test \"$exe\" ="));
         assert!(cleanup.contains(STORAGE_OUTPUT_ROOT));
@@ -904,5 +1060,35 @@ mod tests {
         assert_eq!(markers.as_array().map(Vec::len), Some(1));
         assert_eq!(markers[0]["event"], "catalog_phase_tsv");
         assert_eq!(markers[0]["fields"]["elapsed_us"], "42");
+    }
+
+    #[test]
+    fn namespace_arm_joins_producer_and_consumer_target_timing() {
+        let markers = parse_storage_phase_markers(
+            "catalog_scan_handoff_tsv receive_wait_us=30 consumer_active_us=40\n\
+             catalog_scan_attribution_tsv execution_producer_us=10 execution_send_us=20 execution_peak_buffered_entries=7 execution_peak_buffered_bytes=700 execution_buffer_allocations=3 execution_fallback_count=1 execution_restart_count=1\n\
+             catalog_namespace_target_tsv ordinal=2 first_entry_us=5 final_entry_us=8 producer_complete_us=9 buffered_entries=7 buffered_bytes=700 buffer_allocations=3 fallbacks=1 restarts=1 backend=walkdir-fallback path=/games/test\n\
+             catalog_target_handoff_tsv ordinal=2 consumer_first_work_us=6 consumer_complete_us=12\n",
+        );
+        let summary = summarize_namespace_arm(&markers).unwrap();
+
+        assert_eq!(summary["producer_us"], 10);
+        assert_eq!(summary["consumer_active_us"], 40);
+        assert_eq!(summary["maximum_buffered_entries"], 7);
+        assert_eq!(summary["targets"][0]["consumer_first_work_us"], 6);
+        assert_eq!(summary["targets"][0]["target_complete_us"], 12);
+        assert_eq!(summary["targets"][0]["restarts"], 1);
+    }
+
+    #[test]
+    fn storage_catalog_identity_requires_all_behavior_hashes() {
+        let identity = parse_storage_catalog_identity(
+            "catalog_v3_summary_tsv\tvalid=1\tsystems=2\ttotal_games=3\tfingerprint=f\tidentity_sha256=i\tordering_sha256=o\tlaunch_sha256=l\tsearch_sha256=s\tartifact_set_sha256=a\n",
+        )
+        .unwrap();
+
+        assert_eq!(identity["systems"], 2);
+        assert_eq!(identity["ordering_sha256"], "o");
+        assert_eq!(identity["artifact_set_sha256"], "a");
     }
 }

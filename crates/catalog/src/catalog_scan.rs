@@ -60,6 +60,11 @@ pub(crate) struct NamespaceRouteAttribution {
     pub(crate) read_bytes: u64,
     pub(crate) type_stats: usize,
     pub(crate) captured_entries: usize,
+    pub(crate) peak_buffered_entries: usize,
+    pub(crate) peak_buffered_bytes: usize,
+    pub(crate) buffer_allocations: usize,
+    pub(crate) fallback_count: usize,
+    pub(crate) restart_count: usize,
     pub(crate) backends: BTreeMap<String, usize>,
     pub(crate) fallbacks: BTreeMap<String, usize>,
     pub(crate) slowest_targets: Vec<SlowWalkTarget>,
@@ -82,6 +87,21 @@ impl NamespaceRouteAttribution {
         self.captured_entries = self
             .captured_entries
             .saturating_add(stats.namespace.captured_entries);
+        self.peak_buffered_entries = self
+            .peak_buffered_entries
+            .max(stats.namespace.peak_buffered_entries);
+        self.peak_buffered_bytes = self
+            .peak_buffered_bytes
+            .max(stats.namespace.peak_buffered_bytes);
+        self.buffer_allocations = self
+            .buffer_allocations
+            .saturating_add(stats.namespace.buffer_allocations);
+        self.fallback_count = self
+            .fallback_count
+            .saturating_add(stats.namespace.fallback_count);
+        self.restart_count = self
+            .restart_count
+            .saturating_add(stats.namespace.restart_count);
         *self
             .backends
             .entry(stats.namespace.backend.to_string())
@@ -131,7 +151,7 @@ impl NamespaceRouteAttribution {
             .collect::<Vec<_>>()
             .join(",");
         format!(
-            "{prefix}_targets={} {prefix}_aborted={} {prefix}_dirs={} {prefix}_files={} {prefix}_candidates={} {prefix}_target_us={} {prefix}_producer_us={} {prefix}_send_us={} {prefix}_sends={} {prefix}_slow_sends={} {prefix}_send_max_us={} {prefix}_dir_opens={} {prefix}_reads={} {prefix}_read_bytes={} {prefix}_type_stats={} {prefix}_captured={} {prefix}_backends={backends} {prefix}_fallbacks={fallbacks} {prefix}_slowest={slowest}",
+            "{prefix}_targets={} {prefix}_aborted={} {prefix}_dirs={} {prefix}_files={} {prefix}_candidates={} {prefix}_target_us={} {prefix}_producer_us={} {prefix}_send_us={} {prefix}_sends={} {prefix}_slow_sends={} {prefix}_send_max_us={} {prefix}_dir_opens={} {prefix}_reads={} {prefix}_read_bytes={} {prefix}_type_stats={} {prefix}_captured={} {prefix}_peak_buffered_entries={} {prefix}_peak_buffered_bytes={} {prefix}_buffer_allocations={} {prefix}_fallback_count={} {prefix}_restart_count={} {prefix}_backends={backends} {prefix}_fallbacks={fallbacks} {prefix}_slowest={slowest}",
             self.targets,
             self.aborted_targets,
             self.dirs,
@@ -148,6 +168,11 @@ impl NamespaceRouteAttribution {
             self.read_bytes,
             self.type_stats,
             self.captured_entries,
+            self.peak_buffered_entries,
+            self.peak_buffered_bytes,
+            self.buffer_allocations,
+            self.fallback_count,
+            self.restart_count,
         )
     }
 }
@@ -744,6 +769,7 @@ fn walk_index_candidates_with_plan(
             }
         };
         attribution.record(&descriptor.path, &stats);
+        report_namespace_target(&descriptor, &stats);
         dirs += stats.dirs;
         if stats.aborted {
             send_stats.add(&target_send_stats);
@@ -1350,6 +1376,27 @@ fn report_walk_target(
             stats.namespace.type_stats,
             stats.namespace.fallback_reason.as_deref().unwrap_or("none"),
         ),
+    );
+}
+
+fn report_namespace_target(descriptor: &ScanTargetDescriptor, stats: &WalkTargetStats) {
+    crate::catalog_logln!(
+        "catalog_namespace_target_tsv\tordinal={}\tfirst_entry_us={}\tfinal_entry_us={}\tproducer_complete_us={}\tbuffered_entries={}\tbuffered_bytes={}\tbuffer_allocations={}\tfallbacks={}\trestarts={}\tbackend={}\tpath={}",
+        descriptor.ordinal,
+        stats.namespace.first_entry_us.unwrap_or(0),
+        stats.namespace.final_entry_us.unwrap_or(0),
+        stats.elapsed_us,
+        stats.namespace.peak_buffered_entries,
+        stats.namespace.peak_buffered_bytes,
+        stats.namespace.buffer_allocations,
+        stats.namespace.fallback_count,
+        stats.namespace.restart_count,
+        stats.namespace.backend,
+        descriptor
+            .path
+            .display()
+            .to_string()
+            .replace(['\t', '\n', '\r', ' '], "_"),
     );
 }
 
@@ -2362,6 +2409,13 @@ mod tests {
                         read_bytes: 3,
                         type_stats: 4,
                         captured_entries: 5,
+                        peak_buffered_entries: 6,
+                        peak_buffered_bytes: 7,
+                        buffer_allocations: 8,
+                        fallback_count: usize::from(index == 1),
+                        restart_count: usize::from(index == 1),
+                        first_entry_us: Some(9),
+                        final_entry_us: Some(10),
                         target_signature: None,
                     },
                 },

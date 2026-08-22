@@ -1326,6 +1326,8 @@ fn scan_library_with_progress_and_events(
     let mut scanning_systems = BTreeSet::new();
     let mut target_descriptor = None;
     let mut target_offsets = None;
+    let mut target_consumer_started_at: Option<Instant> = None;
+    let mut target_consumer_first_work_us = None;
     let mut target_fingerprint = Fingerprint::new();
     let mut skip_target = false;
     let mut target_checkpointable = true;
@@ -1349,6 +1351,17 @@ fn scan_library_with_progress_and_events(
         let Some(event) = event else {
             break;
         };
+        if target_consumer_first_work_us.is_none()
+            && matches!(
+                &event,
+                DiscoveryEvent::File(_)
+                    | DiscoveryEvent::GameDirFacts(_)
+                    | DiscoveryEvent::RuntimeDirectory(_)
+            )
+            && let Some(started) = target_consumer_started_at
+        {
+            target_consumer_first_work_us = Some(started.elapsed().as_micros() as u64);
+        }
         handoff_attribution.events = handoff_attribution.events.saturating_add(1);
         let consumer_active_started = Instant::now();
         crate::cooperative_work::checkpoint();
@@ -1450,6 +1463,8 @@ fn scan_library_with_progress_and_events(
                     }
                 }
                 target_descriptor = Some(descriptor);
+                target_consumer_started_at = Some(Instant::now());
+                target_consumer_first_work_us = None;
                 Vec::new()
             }
             DiscoveryEvent::TargetComplete(descriptor) => {
@@ -1490,10 +1505,14 @@ fn scan_library_with_progress_and_events(
                         .or_insert((descriptor.ordinal, ready_us, 1));
                 }
                 crate::catalog_logln!(
-                    "catalog_target_handoff_tsv\tordinal={}\tkind={:?}\tready_us={}\tdiscoveries={}\tsystems={}\tpath={}",
+                    "catalog_target_handoff_tsv\tordinal={}\tkind={:?}\tready_us={}\tconsumer_first_work_us={}\tconsumer_complete_us={}\tdiscoveries={}\tsystems={}\tpath={}",
                     descriptor.ordinal,
                     descriptor.kind,
                     ready_us,
+                    target_consumer_first_work_us.unwrap_or(0),
+                    target_consumer_started_at
+                        .map(|started| started.elapsed().as_micros() as u64)
+                        .unwrap_or(0),
                     discoveries.len().saturating_sub(offsets.discoveries),
                     if target_systems.is_empty() {
                         "none".to_string()
@@ -1570,6 +1589,8 @@ fn scan_library_with_progress_and_events(
                 );
                 target_descriptor = None;
                 target_offsets = None;
+                target_consumer_started_at = None;
+                target_consumer_first_work_us = None;
                 skip_target = false;
                 target_checkpointable = true;
                 Vec::new()

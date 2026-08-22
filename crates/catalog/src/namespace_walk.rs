@@ -10,6 +10,7 @@
 //! discard the partial capture and restart through the streaming backend.
 
 use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum NamespaceEntryKind {
@@ -63,6 +64,13 @@ pub(crate) struct NamespaceWalkStats {
     pub(crate) read_bytes: u64,
     pub(crate) type_stats: usize,
     pub(crate) captured_entries: usize,
+    pub(crate) peak_buffered_entries: usize,
+    pub(crate) peak_buffered_bytes: usize,
+    pub(crate) buffer_allocations: usize,
+    pub(crate) fallback_count: usize,
+    pub(crate) restart_count: usize,
+    pub(crate) first_entry_us: Option<u64>,
+    pub(crate) final_entry_us: Option<u64>,
     pub(crate) target_signature: Option<(u64, i64)>,
 }
 
@@ -85,6 +93,21 @@ impl NamespaceWalkStats {
         self.read_bytes = self.read_bytes.saturating_add(other.read_bytes);
         self.type_stats = self.type_stats.saturating_add(other.type_stats);
         self.captured_entries = self.captured_entries.saturating_add(other.captured_entries);
+        self.peak_buffered_entries = self.peak_buffered_entries.max(other.peak_buffered_entries);
+        self.peak_buffered_bytes = self.peak_buffered_bytes.max(other.peak_buffered_bytes);
+        self.buffer_allocations = self
+            .buffer_allocations
+            .saturating_add(other.buffer_allocations);
+        self.fallback_count = self.fallback_count.saturating_add(other.fallback_count);
+        self.restart_count = self.restart_count.saturating_add(other.restart_count);
+        self.first_entry_us = match (self.first_entry_us, other.first_entry_us) {
+            (Some(left), Some(right)) => Some(left.min(right)),
+            (left, right) => left.or(right),
+        };
+        self.final_entry_us = match (self.final_entry_us, other.final_entry_us) {
+            (Some(left), Some(right)) => Some(left.max(right)),
+            (left, right) => left.or(right),
+        };
         // Aggregated stats no longer describe one target. Callers that need a
         // target signature consume it before combining subordinate walks.
         self.target_signature = None;
@@ -153,10 +176,14 @@ pub(crate) fn visit_with_root_policy_and_signature_capture(
 
     #[cfg(target_os = "linux")]
     if requested == "fd-relative" || requested == "auto" {
+        let visit_started = Instant::now();
         match linux::collect_fd_relative(target, max_depth, root_policy, signature_capture, &ignore)
         {
-            Ok(capture) => {
+            Ok(mut capture) => {
                 for entry in &capture.entries {
+                    let elapsed_us = visit_started.elapsed().as_micros() as u64;
+                    capture.stats.first_entry_us.get_or_insert(elapsed_us);
+                    capture.stats.final_entry_us = Some(elapsed_us);
                     if !visitor(entry) {
                         break;
                     }
@@ -276,6 +303,7 @@ fn visit_walkdir(
     visitor: &mut dyn FnMut(&NamespaceEntry) -> bool,
     fallback_reason: Option<String>,
 ) -> NamespaceWalkStats {
+    let visit_started = Instant::now();
     let mut builder = walkdir::WalkDir::new(target)
         .follow_links(false)
         .follow_root_links(root_policy == NamespaceRootPolicy::FollowSymlink);
@@ -283,6 +311,9 @@ fn visit_walkdir(
         builder = builder.max_depth(max_depth);
     }
     let mut visited_entries = 0usize;
+    let mut peak_buffered_bytes = 0usize;
+    let mut first_entry_us = None;
+    let mut final_entry_us = None;
     let mut target_signature_before = None;
     for entry in builder
         .into_iter()
@@ -321,13 +352,21 @@ fn visit_walkdir(
         // Leave child signatures unavailable on this conservative fallback;
         // the warm validator will run the exact path instead.
         let directory_signature = None;
-        visited_entries = visited_entries.saturating_add(1);
-        if !visitor(&NamespaceEntry {
+        let visitor_entry = NamespaceEntry {
             path: path.to_path_buf(),
             kind,
             zip_signature,
             directory_signature,
-        }) {
+        };
+        visited_entries = visited_entries.saturating_add(1);
+        peak_buffered_bytes = peak_buffered_bytes.max(
+            std::mem::size_of::<NamespaceEntry>()
+                .saturating_add(visitor_entry.path.as_os_str().len()),
+        );
+        let elapsed_us = visit_started.elapsed().as_micros() as u64;
+        first_entry_us.get_or_insert(elapsed_us);
+        final_entry_us = Some(elapsed_us);
+        if !visitor(&visitor_entry) {
             break;
         }
     }
@@ -343,8 +382,9 @@ fn visit_walkdir(
     } else {
         None
     };
+    let restarted = fallback_reason.is_some();
     NamespaceWalkStats {
-        backend: if fallback_reason.is_some() {
+        backend: if restarted {
             "walkdir-fallback"
         } else {
             "walkdir"
@@ -355,6 +395,13 @@ fn visit_walkdir(
         read_bytes: 0,
         type_stats: 0,
         captured_entries: visited_entries,
+        peak_buffered_entries: usize::from(visited_entries > 0),
+        peak_buffered_bytes,
+        buffer_allocations: 0,
+        fallback_count: usize::from(restarted),
+        restart_count: usize::from(restarted),
+        first_entry_us,
+        final_entry_us,
         target_signature,
     }
 }
@@ -518,6 +565,13 @@ mod linux {
                     read_bytes: 0,
                     type_stats: 0,
                     captured_entries: 0,
+                    peak_buffered_entries: 0,
+                    peak_buffered_bytes: 0,
+                    buffer_allocations: 0,
+                    fallback_count: 0,
+                    restart_count: 0,
+                    first_entry_us: None,
+                    final_entry_us: None,
                     target_signature: None,
                 },
             });
@@ -560,6 +614,13 @@ mod linux {
             read_bytes: 0,
             type_stats: 0,
             captured_entries: 0,
+            peak_buffered_entries: 0,
+            peak_buffered_bytes: 0,
+            buffer_allocations: 0,
+            fallback_count: 0,
+            restart_count: 0,
+            first_entry_us: None,
+            final_entry_us: None,
             target_signature: None,
         };
         collect_directory(
@@ -602,6 +663,7 @@ mod linux {
             .try_reserve_exact(GETDENTS_BUFFER_BYTES)
             .map_err(|error| format!("capture allocation: getdents buffer: {error}"))?;
         buffer.resize(GETDENTS_BUFFER_BYTES, 0u8);
+        stats.buffer_allocations = stats.buffer_allocations.saturating_add(1);
         loop {
             crate::cooperative_work::checkpoint();
             let read = unsafe {
@@ -682,9 +744,13 @@ mod linux {
                             directory_path.display()
                         )
                     })?;
+                let previous_capacity = entries.capacity();
                 entries
                     .try_reserve(1)
                     .map_err(|error| format!("capture allocation: namespace entry: {error}"))?;
+                if entries.capacity() != previous_capacity {
+                    stats.buffer_allocations = stats.buffer_allocations.saturating_add(1);
+                }
                 let child_name = c_string(name, "directory entry name")?;
                 let entry_depth = depth.saturating_add(1);
                 let mut stat = None;
@@ -771,6 +837,13 @@ mod linux {
                     directory_signature: captured_directory_signature,
                 });
                 *captured_path_bytes = next_path_bytes;
+                stats.peak_buffered_entries = stats.peak_buffered_entries.max(entries.len());
+                stats.peak_buffered_bytes = stats.peak_buffered_bytes.max(
+                    entries
+                        .capacity()
+                        .saturating_mul(std::mem::size_of::<NamespaceEntry>())
+                        .saturating_add(*captured_path_bytes),
+                );
                 if should_descend {
                     let child = opened_child.expect("descended directory must be open");
                     collect_directory(
@@ -1187,6 +1260,53 @@ mod tests {
         .err()
         .unwrap();
         assert!(error.starts_with("capture budget:"));
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn injected_mid_target_failure_restarts_with_identical_output() {
+        let dir = unique_temp_dir("namespace-fd-restart");
+        fs::create_dir_all(dir.join("nested")).unwrap();
+        fs::write(dir.join("one.rom"), b"one").unwrap();
+        fs::write(dir.join("nested/two.rom"), b"two").unwrap();
+
+        let injected = linux::collect_with_budget_for_test(
+            &dir,
+            None,
+            NamespaceSignatureCapture::None,
+            &|_| false,
+            1,
+            usize::MAX,
+            usize::MAX,
+        )
+        .err()
+        .expect("the deterministic entry budget must fail mid-target");
+        let expected = walkdir_snapshot(&dir, None, &|_| false).0;
+        let mut restarted = Vec::new();
+        let stats = visit_walkdir(
+            &dir,
+            None,
+            NamespaceRootPolicy::NoFollow,
+            NamespaceSignatureCapture::None,
+            &|_| false,
+            &mut |entry| {
+                restarted.push((
+                    entry.path.strip_prefix(&dir).unwrap().to_path_buf(),
+                    entry.kind,
+                    entry.zip_signature,
+                ));
+                true
+            },
+            Some(injected),
+        );
+        restarted.sort_by(|left, right| left.0.cmp(&right.0));
+
+        assert_eq!(restarted, expected);
+        assert_eq!(stats.backend, "walkdir-fallback");
+        assert_eq!(stats.fallback_count, 1);
+        assert_eq!(stats.restart_count, 1);
 
         fs::remove_dir_all(dir).unwrap();
     }
