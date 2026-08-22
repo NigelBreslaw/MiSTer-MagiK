@@ -139,7 +139,10 @@ pub fn execute_movie(output: Option<&Path>, seconds: u64) -> AgentResult<Capture
         .map_err(|error| classified("camera_clock_invalid", error.to_string()))?
         .as_millis();
     let destination = movie_destination(output, &std::env::temp_dir(), timestamp_ms)?;
-    native::record(&destination, Duration::from_secs(seconds))?;
+    if let Err(error) = native::record(&destination, Duration::from_secs(seconds)) {
+        let _ = fs::remove_file(&destination);
+        return Err(error);
+    }
     let bytes = fs::metadata(&destination)
         .map_err(|error| classified("camera_output_failed", error.to_string()))?
         .len()

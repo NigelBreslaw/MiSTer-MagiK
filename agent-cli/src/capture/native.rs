@@ -28,18 +28,20 @@ use objc2_core_video::{
     kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange, kCVReturnSuccess,
 };
 use objc2_foundation::{
-    NSArray, NSDictionary, NSError, NSNumber, NSObject, NSObjectProtocol, NSURL, ns_string,
+    NSArray, NSDate, NSDictionary, NSError, NSNumber, NSObject, NSObjectProtocol, NSRunLoop, NSURL,
+    ns_string,
 };
 use std::path::Path;
 use std::slice;
 use std::sync::Mutex;
-use std::sync::mpsc::{self, SyncSender};
-use std::time::Duration;
+use std::sync::mpsc::{self, Receiver, SyncSender};
+use std::time::{Duration, Instant};
 
 const DEVICE_NAME: &str = "USB Video";
 const REQUESTED_RATE: f64 = 30.0;
 const PERMISSION_TIMEOUT: Duration = Duration::from_secs(30);
-const CAPTURE_COMPLETION_TIMEOUT: Duration = Duration::from_secs(10);
+const MOVIE_START_TIMEOUT: Duration = Duration::from_secs(10);
+const MOVIE_COMPLETION_TIMEOUT: Duration = Duration::from_secs(10);
 
 struct DelegateIvars {
     result: Mutex<Option<SyncSender<AgentResult<EncodedFrame>>>>,
@@ -95,7 +97,12 @@ impl FrameDelegate {
 }
 
 struct MovieDelegateIvars {
-    result: Mutex<Option<SyncSender<AgentResult<()>>>>,
+    events: Mutex<Option<SyncSender<MovieEvent>>>,
+}
+
+enum MovieEvent {
+    Started,
+    Finished(AgentResult<()>),
 }
 
 define_class!(
@@ -108,6 +115,18 @@ define_class!(
     unsafe impl NSObjectProtocol for MovieDelegate {}
 
     unsafe impl AVCaptureFileOutputRecordingDelegate for MovieDelegate {
+        #[unsafe(method(captureOutput:didStartRecordingToOutputFileAtURL:fromConnections:))]
+        unsafe fn capture_output_did_start_recording(
+            &self,
+            _output: &AVCaptureFileOutput,
+            _output_file_url: &NSURL,
+            _connections: &NSArray<AVCaptureConnection>,
+        ) {
+            if let Some(sender) = self.ivars().events.lock().unwrap().as_ref() {
+                let _ = sender.send(MovieEvent::Started);
+            }
+        }
+
         #[unsafe(method(captureOutput:didFinishRecordingToOutputFileAtURL:fromConnections:error:))]
         unsafe fn capture_output_did_finish_recording(
             &self,
@@ -125,20 +144,87 @@ define_class!(
                     ))
                 },
             );
-            if let Some(sender) = self.ivars().result.lock().unwrap().take() {
-                let _ = sender.send(result);
+            if let Some(sender) = self.ivars().events.lock().unwrap().take() {
+                let _ = sender.send(MovieEvent::Finished(result));
             }
         }
     }
 );
 
 impl MovieDelegate {
-    fn new(sender: SyncSender<AgentResult<()>>) -> Retained<Self> {
+    fn new(sender: SyncSender<MovieEvent>) -> Retained<Self> {
         let this = Self::alloc().set_ivars(MovieDelegateIvars {
-            result: Mutex::new(Some(sender)),
+            events: Mutex::new(Some(sender)),
         });
         // SAFETY: The instance variables are initialized and NSObject's initializer is valid.
         unsafe { msg_send![super(this), init] }
+    }
+}
+
+fn wait_for_movie_start(receiver: &Receiver<MovieEvent>) -> AgentResult<()> {
+    match receive_movie_event(receiver, MOVIE_START_TIMEOUT) {
+        Ok(MovieEvent::Started) => Ok(()),
+        Ok(MovieEvent::Finished(Err(error))) => Err(error),
+        Ok(MovieEvent::Finished(Ok(()))) => Err(classified(
+            "camera_recording_failed",
+            "USB Video movie finished before recording started",
+        )),
+        Err(mpsc::RecvTimeoutError::Timeout) => Err(classified(
+            "camera_timeout",
+            format!(
+                "USB Video movie did not start within {} seconds",
+                MOVIE_START_TIMEOUT.as_secs()
+            ),
+        )),
+        Err(mpsc::RecvTimeoutError::Disconnected) => Err(classified(
+            "camera_recording_failed",
+            "USB Video movie callback disconnected before recording started",
+        )),
+    }
+}
+
+fn wait_for_movie_completion(receiver: &Receiver<MovieEvent>) -> AgentResult<()> {
+    match receive_movie_event(receiver, MOVIE_COMPLETION_TIMEOUT) {
+        Ok(MovieEvent::Finished(result)) => result,
+        Ok(MovieEvent::Started) => Err(classified(
+            "camera_recording_failed",
+            "USB Video movie emitted a duplicate recording-start event",
+        )),
+        Err(mpsc::RecvTimeoutError::Timeout) => Err(classified(
+            "camera_timeout",
+            format!(
+                "USB Video movie did not finish writing within {} seconds",
+                MOVIE_COMPLETION_TIMEOUT.as_secs()
+            ),
+        )),
+        Err(mpsc::RecvTimeoutError::Disconnected) => Err(classified(
+            "camera_recording_failed",
+            "USB Video movie callback disconnected before recording finished",
+        )),
+    }
+}
+
+fn receive_movie_event(
+    receiver: &Receiver<MovieEvent>,
+    timeout: Duration,
+) -> Result<MovieEvent, mpsc::RecvTimeoutError> {
+    let deadline = Instant::now() + timeout;
+    let run_loop = NSRunLoop::currentRunLoop();
+    loop {
+        match receiver.try_recv() {
+            Ok(event) => return Ok(event),
+            Err(mpsc::TryRecvError::Disconnected) => {
+                return Err(mpsc::RecvTimeoutError::Disconnected);
+            }
+            Err(mpsc::TryRecvError::Empty) => {}
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(mpsc::RecvTimeoutError::Timeout);
+        }
+        let slice = remaining.min(Duration::from_millis(10));
+        let limit = NSDate::dateWithTimeIntervalSinceNow(slice.as_secs_f64());
+        run_loop.runUntilDate(&limit);
     }
 }
 
@@ -278,33 +364,27 @@ fn record_inner(output_path: &Path, duration: Duration) -> AgentResult<()> {
             format!("cannot create a file URL for {}", output_path.display()),
         )
     })?;
-    let (sender, receiver) = mpsc::sync_channel(1);
+    let (sender, receiver) = mpsc::sync_channel(2);
     let delegate = MovieDelegate::new(sender);
     let protocol = ProtocolObject::from_ref(&*delegate);
     unsafe {
         session.startRunning();
         output.startRecordingToOutputFileURL_recordingDelegate(&output_url, protocol);
     }
-    std::thread::sleep(duration);
-    unsafe {
-        if output.isRecording() {
-            output.stopRecording();
-        }
+
+    let result = wait_for_movie_start(&receiver).and_then(|()| {
+        std::thread::sleep(duration);
+        // SAFETY: The delegate's start event proves this output accepted the recording.
+        // Request its asynchronous finalization directly; a later property snapshot must
+        // not be allowed to suppress the matching stop request.
+        unsafe { output.stopRecording() };
+        wait_for_movie_completion(&receiver)
+    });
+    if result.is_err() && unsafe { output.isRecording() } {
+        unsafe { output.stopRecording() };
     }
-    let result = receiver
-        .recv_timeout(CAPTURE_COMPLETION_TIMEOUT)
-        .map_err(|error| match error {
-            mpsc::RecvTimeoutError::Timeout => classified(
-                "camera_timeout",
-                "USB Video movie did not finish writing within 10 seconds",
-            ),
-            mpsc::RecvTimeoutError::Disconnected => classified(
-                "camera_recording_failed",
-                "USB Video movie callback disconnected",
-            ),
-        });
     unsafe { session.stopRunning() };
-    result?
+    result
 }
 
 fn require_camera_access() -> AgentResult<()> {
