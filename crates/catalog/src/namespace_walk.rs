@@ -857,8 +857,14 @@ mod linux {
                             directory_path.display()
                         ));
                     }
+                    let seek_offset = libc::off_t::try_from(next_cookie).map_err(|_| {
+                        format!(
+                            "getdents64 continuation cookie {next_cookie} exceeds off_t in {}",
+                            directory_path.display()
+                        )
+                    })?;
                     let seek =
-                        unsafe { libc::lseek(directory.as_raw_fd(), next_cookie, libc::SEEK_SET) };
+                        unsafe { libc::lseek(directory.as_raw_fd(), seek_offset, libc::SEEK_SET) };
                     if seek < 0 {
                         return Err(format!(
                             "lseek directory {}: {}",
