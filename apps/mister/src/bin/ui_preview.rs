@@ -36,7 +36,7 @@ mod macos {
         ArcadeSearchPane, LauncherAction, LauncherEvent, LauncherNav, NavigationTransitionState,
         Screen, settings_display_resolution_index, settings_display_resolutions,
     };
-    use mister_magik_fb::launcher_presentation::LauncherBridgePresenter;
+    use mister_magik_fb::launcher_presentation::LauncherViewPresenters;
     use mister_magik_fb::launcher_runtime::catalog::{
         ShardedCatalogSeed, load_sharded_registry_seed_at,
     };
@@ -77,6 +77,8 @@ mod macos {
     };
     use mister_magik_fb::visual_platform::{MisterPlatform, MisterSoftwareWindow};
     use mister_magik_framebuffer_scenes::Rgb565SurfaceMut;
+    #[cfg(test)]
+    use mister_magik_ui::launcher::FeedbackView;
     use mister_magik_ui::launcher::{
         AboutSection, ArcadeGame, ArcadeLoadState, ArcadeSearchMode,
         ArcadeSearchPane as ViewArcadeSearchPane, ArcadeSearchStatus as ViewArcadeSearchStatus,
@@ -89,8 +91,6 @@ mod macos {
         ScreensaverSetting, SettingsPopup, SettingsSection, SettingsView, SetupEntry, SetupField,
         SetupPhase as ViewSetupPhase, SetupView, SystemHubSection,
     };
-    #[cfg(test)]
-    use mister_magik_ui::launcher::{FeedbackView, MisterBridge};
     use sha2::{Digest, Sha256};
     use slint::platform::software_renderer::{RepaintBufferType, Rgb565Pixel};
     use slint::{ComponentHandle, Model, ModelRc, PhysicalSize, SharedString, VecModel};
@@ -443,7 +443,7 @@ mod macos {
         launcher_press_sequence: u64,
         launcher_epoch: Instant,
         launcher_ui_actions: LauncherUiActionsAdapter,
-        bridge_presenter: LauncherBridgePresenter,
+        view_presenters: LauncherViewPresenters,
         content: PreviewContent,
         catalog: ArcadeCatalog,
         catalog_generation: Option<u64>,
@@ -673,7 +673,7 @@ mod macos {
                 }),
                 launcher_epoch: Instant::now(),
                 launcher_ui_actions,
-                bridge_presenter: LauncherBridgePresenter::default(),
+                view_presenters: LauncherViewPresenters::default(),
                 content,
                 catalog,
                 catalog_generation,
@@ -1602,7 +1602,7 @@ mod macos {
                 self.preview_current_index = None;
                 self.preview_transition.reset();
             }
-            self.bridge_presenter.sync(
+            self.view_presenters.sync(
                 &self.launcher,
                 &self.launcher_nav,
                 &self.catalog,
@@ -4598,16 +4598,17 @@ mod macos {
         }
 
         fn assert_navigation_projection(launcher: &Launcher) {
-            let bridge = launcher.global::<MisterBridge>();
             let navigation = launcher.global::<NavigationView>();
             assert_eq!(
                 navigation.get_menu_items().row_count(),
                 navigation.get_menu_item_presentation().row_count()
             );
-            assert_eq!(
-                launcher.global::<FeedbackView>().get_revision(),
-                bridge.get_selection_feedback_revision()
-            );
+            let feedback = launcher.global::<FeedbackView>();
+            assert!(!feedback.invoke_acknowledged(
+                "__fixture".into(),
+                "__missing".into(),
+                feedback.get_revision(),
+            ));
         }
 
         fn assert_settings_projection(launcher: &Launcher) {
@@ -4757,7 +4758,7 @@ mod macos {
                 }
 
                 let production = Launcher::new().expect("production launcher fixture");
-                let mut presenter = LauncherBridgePresenter::default();
+                let mut presenter = LauncherViewPresenters::default();
                 presenter.sync(&production, &nav, &fixtures.catalog, Some(1), false);
                 assert_navigation_projection(&production);
                 assert_settings_projection(&production);

@@ -105,8 +105,8 @@ impl ScreenshotMediaUpdateSession {
 
     pub(super) fn note_nav_change(
         &mut self,
-        before: &LauncherBridgeKey,
-        after: &LauncherBridgeKey,
+        before: &LauncherProjectionKey,
+        after: &LauncherProjectionKey,
         now: Instant,
     ) {
         if before.screen == Screen::Arcade || after.screen == Screen::Arcade {
@@ -682,10 +682,10 @@ mod tests {
 
         let mut before_nav = LauncherNav::new();
         before_nav.screen = Screen::Home;
-        let before = LauncherBridgeKey::from_nav(&before_nav);
+        let before = LauncherProjectionKey::from_nav(&before_nav);
         let mut after_nav = LauncherNav::new();
         after_nav.screen = Screen::Arcade;
-        let after = LauncherBridgeKey::from_nav(&after_nav);
+        let after = LauncherProjectionKey::from_nav(&after_nav);
         session.note_nav_change(&before, &after, now);
         let scroll = session.current_gate(true, false, false, false, now);
         assert!(scroll.active);

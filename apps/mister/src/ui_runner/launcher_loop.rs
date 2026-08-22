@@ -5533,7 +5533,7 @@ pub(super) fn run_launcher_loop(
     let mut system_entry_cpu_profile = None;
     let mut screensaver_cpu_profile =
         cpu_profile::ScreensaverProfiler::from_config(profile_config.cpu());
-    let mut bridge_models = LauncherBridgeModels::default();
+    let mut bridge_models = LauncherViewModels::default();
     let mut catalog_version = 0usize;
     let user_state_session = UserStateSession::start(
         launcher_config
@@ -7021,7 +7021,7 @@ pub(super) fn run_launcher_loop(
             .record_scheduler_interval("pre-input-launch-lifecycle", scheduler_phase);
 
         if arcade_screen_pending && arcade_navigation_ready(catalog_ready, &catalog) {
-            let before = LauncherBridgeKey::from_nav(&nav);
+            let before = LauncherProjectionKey::from_nav(&nav);
             if nav.active_collection().is_none() {
                 let _ = nav.open_default_arcade(&catalog);
             } else {
@@ -7029,7 +7029,7 @@ pub(super) fn run_launcher_loop(
             }
             arcade_screen_pending = false;
             full_bridge_dirty = true;
-            let after = LauncherBridgeKey::from_nav(&nav);
+            let after = LauncherProjectionKey::from_nav(&nav);
             if before != after {
                 media_session.note_nav_change(&before, &after, Instant::now());
             }
@@ -7086,7 +7086,7 @@ pub(super) fn run_launcher_loop(
                     .as_ref()
                     .map(|pending| pending.event.clone())
                     .expect("checked pending transition");
-                let before = LauncherBridgeKey::from_nav(&nav);
+                let before = LauncherProjectionKey::from_nav(&nav);
                 let committing_cold_collection = event.action == LauncherAction::OpenCollection
                     && pending_collection_entry.is_some();
                 let committed = if committing_cold_collection {
@@ -7107,7 +7107,7 @@ pub(super) fn run_launcher_loop(
                     if let Some(pending) = pending_navigation_transition.as_mut() {
                         pending.committed = true;
                     }
-                    let after = LauncherBridgeKey::from_nav(&nav);
+                    let after = LauncherProjectionKey::from_nav(&nav);
                     if before != after {
                         media_session.note_nav_change(&before, &after, Instant::now());
                     }
@@ -7127,14 +7127,14 @@ pub(super) fn run_launcher_loop(
 
         if let Some(menu_id) = pending_start_menu.take() {
             if catalog_ready {
-                let before = LauncherBridgeKey::from_nav(&nav);
+                let before = LauncherProjectionKey::from_nav(&nav);
                 if nav.open_menu(&menu_id) {
                     print_startup_event(
                         start,
                         "launcher_start_menu_applied",
                         format!("menu={menu_id}"),
                     );
-                    let after = LauncherBridgeKey::from_nav(&nav);
+                    let after = LauncherProjectionKey::from_nav(&nav);
                     if before != after {
                         media_session.note_nav_change(&before, &after, Instant::now());
                         full_bridge_dirty = true;
@@ -7155,7 +7155,7 @@ pub(super) fn run_launcher_loop(
 
         if let Some(system_id) = pending_start_system.take() {
             if arcade_navigation_ready(catalog_ready, &catalog) {
-                let before = LauncherBridgeKey::from_nav(&nav);
+                let before = LauncherProjectionKey::from_nav(&nav);
                 if apply_start_system_from_env(
                     &mut nav,
                     &catalog,
@@ -7167,7 +7167,7 @@ pub(super) fn run_launcher_loop(
                         "launcher_start_system_applied",
                         format!("system={system_id}"),
                     );
-                    let after = LauncherBridgeKey::from_nav(&nav);
+                    let after = LauncherProjectionKey::from_nav(&nav);
                     if before != after {
                         media_session.note_nav_change(&before, &after, Instant::now());
                         full_bridge_dirty = true;
@@ -7227,7 +7227,7 @@ pub(super) fn run_launcher_loop(
             && arcade_navigation_ready(catalog_ready, &catalog)
             && let Some(scenario) = latch_v5_qualification.stress_class().bench_scenario()
         {
-            let before = LauncherBridgeKey::from_nav(&nav);
+            let before = LauncherProjectionKey::from_nav(&nav);
             if launcher_bench_step(
                 scenario,
                 &benchmark_config,
@@ -7238,7 +7238,7 @@ pub(super) fn run_launcher_loop(
                 loop_start,
             ) {
                 latch_v5_bench_state.advance_if(true);
-                let after = LauncherBridgeKey::from_nav(&nav);
+                let after = LauncherProjectionKey::from_nav(&nav);
                 if before != after {
                     media_session.note_nav_change(&before, &after, loop_start);
                     full_bridge_dirty = true;
@@ -7314,7 +7314,7 @@ pub(super) fn run_launcher_loop(
                 && !launcher_bench_waiting_for_initial_preview
                 && launcher_bench_next_step.elapsed() >= scenario.period()
             {
-                let before = LauncherBridgeKey::from_nav(&nav);
+                let before = LauncherProjectionKey::from_nav(&nav);
                 let bench_step_ran = launcher_bench_step(
                     scenario,
                     &benchmark_config,
@@ -7325,7 +7325,7 @@ pub(super) fn run_launcher_loop(
                     Instant::now(),
                 );
                 if bench_step_ran {
-                    let after = LauncherBridgeKey::from_nav(&nav);
+                    let after = LauncherProjectionKey::from_nav(&nav);
                     if before != after {
                         media_session.note_nav_change(&before, &after, Instant::now());
                         if !dirty_opt
@@ -7721,7 +7721,7 @@ pub(super) fn run_launcher_loop(
                             full_bridge_dirty |= setup_before != SetupBridgeKey::from_setup(&setup);
                         }
                         if !setup.is_active() {
-                            let nav_before = LauncherBridgeKey::from_nav(&nav);
+                            let nav_before = LauncherProjectionKey::from_nav(&nav);
                             let arcade_selected_before_input = nav.arcade.selected;
                             if transition_picker_enabled && nav.screen == Screen::Arcade {
                                 let left = routed_event_this_loop.as_ref().is_some_and(|event| {
@@ -8637,7 +8637,7 @@ pub(super) fn run_launcher_loop(
                                     request_launcher_redraw!();
                                 }
                             }
-                            let nav_after = LauncherBridgeKey::from_nav(&nav);
+                            let nav_after = LauncherProjectionKey::from_nav(&nav);
                             if nav_before != nav_after {
                                 if let Some(entry) = pending_collection_entry.take() {
                                     preview.cancel_system_entry_preview();
@@ -10704,9 +10704,9 @@ pub(super) fn run_launcher_loop(
                         arcade_entry_latency.cancel_enter();
                     }
                     if let Some(pending) = pending {
-                        let before = LauncherBridgeKey::from_nav(&nav);
+                        let before = LauncherProjectionKey::from_nav(&nav);
                         nav.restore_navigation_transition_state(pending.source_state);
-                        let after = LauncherBridgeKey::from_nav(&nav);
+                        let after = LauncherProjectionKey::from_nav(&nav);
                         if before != after {
                             media_session.note_nav_change(&before, &after, Instant::now());
                         }
@@ -16959,7 +16959,7 @@ mod tests {
             source: nav.home_view_state(),
             open_game_list_directly: false,
         });
-        let source_bridge = LauncherBridgeKey::from_nav(&nav);
+        let source_bridge = LauncherProjectionKey::from_nav(&nav);
 
         assert!(!commit_pending_collection_entry(
             &mut pending,
@@ -16969,9 +16969,9 @@ mod tests {
         ));
         assert_eq!(nav.screen, Screen::Home);
         assert!(pending.is_some());
-        assert_eq!(LauncherBridgeKey::from_nav(&nav).screen, Screen::Home);
+        assert_eq!(LauncherProjectionKey::from_nav(&nav).screen, Screen::Home);
         assert_eq!(
-            LauncherBridgeKey::from_nav(&nav).menu_id,
+            LauncherProjectionKey::from_nav(&nav).menu_id,
             source_bridge.menu_id
         );
 
@@ -16985,7 +16985,7 @@ mod tests {
         assert!(pending.is_none());
         assert_eq!(active_system_game_view(&hydrated, &nav).len(), 1);
         assert!(!empty_collection_invariant_violated(&hydrated, &nav));
-        assert_eq!(LauncherBridgeKey::from_nav(&nav).screen, Screen::Arcade);
+        assert_eq!(LauncherProjectionKey::from_nav(&nav).screen, Screen::Arcade);
     }
 
     #[test]

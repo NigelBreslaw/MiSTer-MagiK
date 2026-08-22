@@ -146,7 +146,7 @@ Cover:
 - empty, loading, ready, and failed catalog states;
 - long labels and missing optional metadata.
 
-Populate the real `MisterBridge`, `MenuItem`, `ArcadeGame`, and
+Populate the real typed launcher globals, `MenuItem`, `ArcadeGame`, and
 `ScreenshotPackProgress` types. Do not create preview-only Slint properties.
 
 Controls:

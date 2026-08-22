@@ -270,11 +270,3 @@ export global LauncherActions {
     callback dismiss-overlay();
     callback quit();
 }
-
-export global MisterBridge {
-    // Rust-owned physically confirmed focus acknowledgements. The revision is
-    // an explicit Slint dependency; the callback resolves stable surface/item IDs.
-    in-out property <int> selection-feedback-revision;
-    pure callback selection-feedback-query(string, string, int) -> bool;
-    callback quit-requested();
-}

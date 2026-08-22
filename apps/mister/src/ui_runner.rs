@@ -83,7 +83,7 @@ use mister_magik_fb::framebuffer::{
     format::rgb565_stride_bytes,
     scanout_slots::{HiddenRgb565BufferIndex, ScanoutSlotsRgb565Framebuffer},
 };
-use mister_magik_fb::launcher_presentation::LauncherBridgePresenter;
+use mister_magik_fb::launcher_presentation::LauncherViewPresenters;
 use mister_magik_fb::launcher_runtime::catalog::*;
 use mister_magik_fb::launcher_runtime::composition::*;
 use mister_magik_fb::launcher_runtime::full_screen_transition::*;

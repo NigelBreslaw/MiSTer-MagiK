@@ -16,7 +16,7 @@ use crate::launcher_view_types::{
 };
 use mister_magik_ui::launcher::{
     ArcadeLoadState, ArcadeSearchMode, ArcadeView, ChoiceOption, FeedbackView, Launcher, MenuItem,
-    MenuItemKind, MenuItemPresentation, MenuItemStatus, MisterBridge, NavigationView, SettingsView,
+    MenuItemKind, MenuItemPresentation, MenuItemStatus, NavigationView, SettingsView,
 };
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 use std::cell::{Cell, RefCell};
@@ -394,23 +394,33 @@ fn bridge_churn_record(update: impl FnOnce(&mut BridgeChurnCounters)) {
 }
 
 #[derive(Default)]
-pub struct LauncherBridgePresenter {
+struct NavigationViewPresenter {
     menu_items_key: Option<(usize, String)>,
     menu_items: Option<Rc<VecModel<MenuItem>>>,
     menu_item_presentation: Option<Rc<VecModel<MenuItemPresentation>>>,
     projected_selected_index: Option<usize>,
-    license_lines_index: Option<usize>,
-    license_lines: Option<Rc<VecModel<SharedString>>>,
     selection_feedback: SelectionFeedback,
     projected_selection_feedback: SelectionFeedbackStamp,
     published_selection_feedback: Rc<RefCell<SelectionFeedbackStamp>>,
     selection_feedback_callback_installed: bool,
+}
+
+#[derive(Default)]
+struct SettingsViewPresenter {
+    license_lines_index: Option<usize>,
+    license_lines: Option<Rc<VecModel<SharedString>>>,
     display_options: Option<Rc<VecModel<ChoiceOption>>>,
     orientation_options: Option<Rc<VecModel<ChoiceOption>>>,
     license_titles: Option<Rc<VecModel<SharedString>>>,
 }
 
-impl LauncherBridgePresenter {
+#[derive(Default)]
+pub struct LauncherViewPresenters {
+    navigation: NavigationViewPresenter,
+    settings: SettingsViewPresenter,
+}
+
+impl LauncherViewPresenters {
     pub fn sync(
         &mut self,
         app: &Launcher,
@@ -419,7 +429,6 @@ impl LauncherBridgePresenter {
         catalog_version: Option<usize>,
         defer_arcade_overlay: bool,
     ) {
-        let bridge = app.global::<MisterBridge>();
         let navigation = app.global::<NavigationView>();
         set_if_changed!(
             navigation,
@@ -491,22 +500,23 @@ impl LauncherBridgePresenter {
             nav.favourite_count() as i32
         );
         let settings = app.global::<SettingsView>();
-        if self.display_options.is_none() {
+        if self.settings.display_options.is_none() {
             let choices = crate::launcher::settings_display_resolutions()
                 .map(|mode| ChoiceOption {
                     id: mode.id.into(),
                     label: mode.label.into(),
                 })
                 .collect::<Vec<_>>();
-            self.display_options = Some(Rc::new(VecModel::from(choices)));
+            self.settings.display_options = Some(Rc::new(VecModel::from(choices)));
             settings.set_display_options(ModelRc::from(
-                self.display_options
+                self.settings
+                    .display_options
                     .as_ref()
                     .expect("display choices initialized")
                     .clone(),
             ));
         }
-        if self.orientation_options.is_none() {
+        if self.settings.orientation_options.is_none() {
             let choices = crate::settings::ScreenOrientation::ALL
                 .iter()
                 .map(|orientation| ChoiceOption {
@@ -514,23 +524,25 @@ impl LauncherBridgePresenter {
                     label: orientation.label().into(),
                 })
                 .collect::<Vec<_>>();
-            self.orientation_options = Some(Rc::new(VecModel::from(choices)));
+            self.settings.orientation_options = Some(Rc::new(VecModel::from(choices)));
             settings.set_orientation_options(ModelRc::from(
-                self.orientation_options
+                self.settings
+                    .orientation_options
                     .as_ref()
                     .expect("orientation choices initialized")
                     .clone(),
             ));
         }
-        if self.license_titles.is_none() {
-            self.license_titles = Some(Rc::new(VecModel::from(
+        if self.settings.license_titles.is_none() {
+            self.settings.license_titles = Some(Rc::new(VecModel::from(
                 crate::licenses::LICENSE_TITLES
                     .iter()
                     .map(|title| SharedString::from(*title))
                     .collect::<Vec<_>>(),
             )));
             settings.set_license_titles(ModelRc::from(
-                self.license_titles
+                self.settings
+                    .license_titles
                     .as_ref()
                     .expect("license titles initialized")
                     .clone(),
@@ -671,14 +683,14 @@ impl LauncherBridgePresenter {
             set_license_scroll_y,
             nav.licenses_scroll_y()
         );
-        if self.license_lines_index != Some(nav.licenses_selected) {
+        if self.settings.license_lines_index != Some(nav.licenses_selected) {
             let lines = self.license_lines(nav.licenses_selected);
             settings.set_license_lines(lines);
         }
 
         if let Some(catalog_version) = catalog_version {
             let key = (catalog_version, nav.current_menu_id().to_string());
-            if self.menu_items_key.as_ref() != Some(&key) {
+            if self.navigation.menu_items_key.as_ref() != Some(&key) {
                 let menu_items = self.menu_items(nav, catalog_version);
                 let menu_item_presentation = self.menu_item_presentation();
                 bridge_churn_record_model_replacements(2);
@@ -687,7 +699,7 @@ impl LauncherBridgePresenter {
             }
         }
         self.sync_menu_item_state(nav);
-        self.publish_selection_feedback(&bridge, &app.global::<FeedbackView>());
+        self.publish_selection_feedback(&app.global::<FeedbackView>());
 
         let games = active_game_view(catalog, nav);
         let (title, count) = active_header(catalog, nav, games.len());
@@ -732,16 +744,18 @@ impl LauncherBridgePresenter {
 
     pub fn menu_items(&mut self, nav: &LauncherNav, catalog_version: usize) -> ModelRc<MenuItem> {
         let key = (catalog_version, nav.current_menu_id().to_string());
-        if self.menu_items_key.as_ref() != Some(&key) {
-            let feedback = self.selection_feedback.stamp();
-            self.menu_items = Some(build_menu_items(nav));
-            self.menu_item_presentation = Some(build_menu_item_presentation(nav, &feedback));
-            self.menu_items_key = Some(key);
-            self.projected_selected_index = Some(nav.selected);
-            self.projected_selection_feedback = feedback;
+        if self.navigation.menu_items_key.as_ref() != Some(&key) {
+            let feedback = self.navigation.selection_feedback.stamp();
+            self.navigation.menu_items = Some(build_menu_items(nav));
+            self.navigation.menu_item_presentation =
+                Some(build_menu_item_presentation(nav, &feedback));
+            self.navigation.menu_items_key = Some(key);
+            self.navigation.projected_selected_index = Some(nav.selected);
+            self.navigation.projected_selection_feedback = feedback;
         }
         ModelRc::from(
-            self.menu_items
+            self.navigation
+                .menu_items
                 .as_ref()
                 .expect("launcher menu model initialized")
                 .clone(),
@@ -750,7 +764,8 @@ impl LauncherBridgePresenter {
 
     pub fn menu_item_presentation(&self) -> ModelRc<MenuItemPresentation> {
         ModelRc::from(
-            self.menu_item_presentation
+            self.navigation
+                .menu_item_presentation
                 .as_ref()
                 .expect("launcher menu presentation initialized")
                 .clone(),
@@ -760,8 +775,8 @@ impl LauncherBridgePresenter {
     #[cfg(feature = "ui")]
     pub(crate) fn republish_cached_menu_models(&self, app: &Launcher) {
         let (Some(items), Some(presentation)) = (
-            self.menu_items.as_ref(),
-            self.menu_item_presentation.as_ref(),
+            self.navigation.menu_items.as_ref(),
+            self.navigation.menu_item_presentation.as_ref(),
         ) else {
             return;
         };
@@ -772,16 +787,17 @@ impl LauncherBridgePresenter {
     }
 
     pub fn license_lines(&mut self, index: usize) -> ModelRc<SharedString> {
-        if self.license_lines_index != Some(index) {
+        if self.settings.license_lines_index != Some(index) {
             let lines = crate::licenses::wrapped_lines(index)
                 .iter()
                 .map(|line| SharedString::from(line.as_str()))
                 .collect::<Vec<_>>();
-            self.license_lines = Some(Rc::new(VecModel::from(lines)));
-            self.license_lines_index = Some(index);
+            self.settings.license_lines = Some(Rc::new(VecModel::from(lines)));
+            self.settings.license_lines_index = Some(index);
         }
         ModelRc::from(
-            self.license_lines
+            self.settings
+                .license_lines
                 .as_ref()
                 .expect("license line model initialized")
                 .clone(),
@@ -792,7 +808,7 @@ impl LauncherBridgePresenter {
         &mut self,
         target: Option<&SelectionFeedbackTarget>,
     ) -> bool {
-        self.selection_feedback.sync_surface(target)
+        self.navigation.selection_feedback.sync_surface(target)
     }
 
     pub fn note_selection_feedback_change(
@@ -805,18 +821,18 @@ impl LauncherBridgePresenter {
         };
         if before.is_some_and(|before| before.surface == after.surface && before.item != after.item)
         {
-            self.selection_feedback.register(after.clone())
+            self.navigation.selection_feedback.register(after.clone())
         } else {
             false
         }
     }
 
     pub fn expire_selection_feedback(&mut self, now: Instant) -> bool {
-        self.selection_feedback.expire_due(now)
+        self.navigation.selection_feedback.expire_due(now)
     }
 
     pub fn selection_feedback_stamp(&self) -> SelectionFeedbackStamp {
-        self.projected_selection_feedback.clone()
+        self.navigation.projected_selection_feedback.clone()
     }
 
     pub fn confirm_selection_feedback(
@@ -824,22 +840,24 @@ impl LauncherBridgePresenter {
         stamp: &SelectionFeedbackStamp,
         confirmed_at: Instant,
     ) -> Vec<SelectionFeedbackConfirmation> {
-        self.selection_feedback.confirm(stamp, confirmed_at)
+        self.navigation
+            .selection_feedback
+            .confirm(stamp, confirmed_at)
     }
 
     fn sync_menu_item_state(&mut self, nav: &LauncherNav) {
-        let stamp = self.selection_feedback.stamp();
-        if self.projected_selected_index == Some(nav.selected)
-            && self.projected_selection_feedback == stamp
+        let stamp = self.navigation.selection_feedback.stamp();
+        if self.navigation.projected_selected_index == Some(nav.selected)
+            && self.navigation.projected_selection_feedback == stamp
         {
             return;
         }
-        if let Some(model) = self.menu_item_presentation.as_ref() {
-            if self.projected_selection_feedback == stamp {
-                if let Some(previous) = self.projected_selected_index {
+        if let Some(model) = self.navigation.menu_item_presentation.as_ref() {
+            if self.navigation.projected_selection_feedback == stamp {
+                if let Some(previous) = self.navigation.projected_selected_index {
                     sync_menu_item_presentation_row(model, nav, &stamp, previous);
                 }
-                if self.projected_selected_index != Some(nav.selected) {
+                if self.navigation.projected_selected_index != Some(nav.selected) {
                     sync_menu_item_presentation_row(model, nav, &stamp, nav.selected);
                 }
             } else {
@@ -848,33 +866,26 @@ impl LauncherBridgePresenter {
                 }
             }
         }
-        self.projected_selected_index = Some(nav.selected);
-        self.projected_selection_feedback = stamp;
+        self.navigation.projected_selected_index = Some(nav.selected);
+        self.navigation.projected_selection_feedback = stamp;
     }
 
-    fn publish_selection_feedback(&mut self, bridge: &MisterBridge, feedback: &FeedbackView) {
-        if !self.selection_feedback_callback_installed {
-            let published = self.published_selection_feedback.clone();
-            bridge.on_selection_feedback_query(move |surface, item, _revision| {
-                published.borrow().entries.iter().any(|entry| {
-                    (surface.is_empty() || entry.target.surface == surface.as_str())
-                        && entry.target.item == item.as_str()
-                })
-            });
-            let published = self.published_selection_feedback.clone();
+    fn publish_selection_feedback(&mut self, feedback: &FeedbackView) {
+        if !self.navigation.selection_feedback_callback_installed {
+            let published = self.navigation.published_selection_feedback.clone();
             feedback.on_acknowledged(move |surface, item, _revision| {
                 published.borrow().entries.iter().any(|entry| {
                     entry.target.surface == surface.as_str() && entry.target.item == item.as_str()
                 })
             });
-            self.selection_feedback_callback_installed = true;
+            self.navigation.selection_feedback_callback_installed = true;
         }
-        if *self.published_selection_feedback.borrow() != self.projected_selection_feedback {
-            *self.published_selection_feedback.borrow_mut() =
-                self.projected_selection_feedback.clone();
-            bridge
-                .set_selection_feedback_revision(self.projected_selection_feedback.revision as i32);
-            feedback.set_revision(self.projected_selection_feedback.revision as i32);
+        if *self.navigation.published_selection_feedback.borrow()
+            != self.navigation.projected_selection_feedback
+        {
+            *self.navigation.published_selection_feedback.borrow_mut() =
+                self.navigation.projected_selection_feedback.clone();
+            feedback.set_revision(self.navigation.projected_selection_feedback.revision as i32);
         }
     }
 }
@@ -1286,7 +1297,7 @@ mod tests {
 
     #[test]
     fn unchanged_boundaries_and_replaced_surfaces_do_not_register_feedback() {
-        let mut presenter = LauncherBridgePresenter::default();
+        let mut presenter = LauncherViewPresenters::default();
         let apple = target("apple-ii");
         let consoles = SelectionFeedbackTarget::new("menu:consoles", "nintendo");
 

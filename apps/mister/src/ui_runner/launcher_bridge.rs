@@ -755,7 +755,7 @@ pub(super) fn sync_bridge_launcher(
     loading_detail: &str,
     catalog: &ArcadeCatalog,
     preview: &mut PreviewState,
-    models: &mut LauncherBridgeModels,
+    models: &mut LauncherViewModels,
     catalog_version: usize,
     defer_selected_preview: bool,
     measure_model_projection: bool,
@@ -812,7 +812,7 @@ pub(super) fn sync_bridge_launcher_light(
     app: &slint_ui::launcher::Launcher,
     nav: &LauncherNav,
     lifecycle: &LauncherLifecycle,
-    models: &mut LauncherBridgeModels,
+    models: &mut LauncherViewModels,
     loading_message: &str,
     loading_detail: &str,
     catalog: &ArcadeCatalog,
@@ -976,7 +976,7 @@ impl SetupBridgeKey {
 }
 
 #[derive(PartialEq, Eq)]
-pub(super) struct LauncherBridgeKey {
+pub(super) struct LauncherProjectionKey {
     pub(super) screen: Screen,
     pub(super) menu_id: String,
     active_collection_id: Option<String>,
@@ -1004,7 +1004,7 @@ pub(super) struct LauncherBridgeKey {
     arcade_search_pane: launcher::ArcadeSearchPane,
 }
 
-impl LauncherBridgeKey {
+impl LauncherProjectionKey {
     pub(super) fn from_nav(nav: &LauncherNav) -> Self {
         Self {
             screen: nav.screen,
@@ -1036,7 +1036,7 @@ impl LauncherBridgeKey {
     }
 }
 
-pub(super) type LauncherBridgeModels = LauncherBridgePresenter;
+pub(super) type LauncherViewModels = LauncherViewPresenters;
 
 const BRIDGE_CHURN_MEDIA_UPDATES: usize = 60;
 const BRIDGE_CHURN_MENU_ROWS: usize = 128;
@@ -1106,7 +1106,7 @@ impl BridgeChurnPlayback {
         phase: Option<GuiProfilePhase>,
         app: &slint_ui::launcher::Launcher,
         nav: &LauncherNav,
-        models: &LauncherBridgeModels,
+        models: &LauncherViewModels,
         full_bridge_dirty: &mut bool,
         light_bridge_dirty: &mut bool,
     ) {
@@ -1564,9 +1564,9 @@ mod tests {
         nav.screen = Screen::Arcade;
         nav.arcade_filter.active = arcade_catalog::ArcadeFilter::Search;
 
-        let before = LauncherBridgeKey::from_nav(&nav);
+        let before = LauncherProjectionKey::from_nav(&nav);
         nav.arcade_search.suggestion = "street".to_string();
-        let after = LauncherBridgeKey::from_nav(&nav);
+        let after = LauncherProjectionKey::from_nav(&nav);
 
         assert!(before != after);
     }
@@ -1577,7 +1577,7 @@ mod tests {
         let app = slint_ui::launcher::Launcher::new().expect("launcher component");
         let mut nav = LauncherNav::new();
         nav.screen = Screen::Screensaver;
-        let before = LauncherBridgeKey::from_nav(&nav);
+        let before = LauncherProjectionKey::from_nav(&nav);
 
         nav.settings_selected = 3;
         nav.display_combo_open = true;
@@ -1589,7 +1589,7 @@ mod tests {
         nav.settings.simple_joystick_handling = true;
         nav.settings.reduce_motion = true;
 
-        assert!(before == LauncherBridgeKey::from_nav(&nav));
+        assert!(before == LauncherProjectionKey::from_nav(&nav));
 
         let lifecycle = LauncherLifecycle::new(
             LauncherLifecycleConfig {
@@ -1664,7 +1664,7 @@ mod tests {
         held.dpad_right = true;
         let start = Instant::now();
         nav.handle_held_tick_with_navigation_intents(&held, start, &catalog);
-        let pressed = LauncherBridgeKey::from_nav(&nav);
+        let pressed = LauncherProjectionKey::from_nav(&nav);
         assert!(pressed.home_scroll_held);
         assert!(!pressed.home_scroll_repeat_active);
         nav.handle_held_tick_with_navigation_intents(
@@ -1672,14 +1672,14 @@ mod tests {
             start + Duration::from_millis(199),
             &catalog,
         );
-        assert!(!LauncherBridgeKey::from_nav(&nav).home_scroll_repeat_active);
+        assert!(!LauncherProjectionKey::from_nav(&nav).home_scroll_repeat_active);
         nav.handle_held_tick_with_navigation_intents(
             &held,
             start + Duration::from_millis(200),
             &catalog,
         );
 
-        let repeating = LauncherBridgeKey::from_nav(&nav);
+        let repeating = LauncherProjectionKey::from_nav(&nav);
         assert!(repeating.home_scroll_held);
         assert!(repeating.home_scroll_repeat_active);
 
@@ -1688,7 +1688,7 @@ mod tests {
             start + Duration::from_millis(201),
             &catalog,
         );
-        let released = LauncherBridgeKey::from_nav(&nav);
+        let released = LauncherProjectionKey::from_nav(&nav);
         assert!(!released.home_scroll_held);
         assert!(!released.home_scroll_repeat_active);
         assert!(repeating != released);
@@ -1748,7 +1748,7 @@ mod tests {
         );
         let mut nav = LauncherNav::new();
         nav.sync_launcher_taxonomy(&catalog);
-        let mut models = LauncherBridgeModels::default();
+        let mut models = LauncherViewModels::default();
         let rows = models.menu_items(&nav, 1);
         let presentation = models.menu_item_presentation();
 
@@ -1793,11 +1793,11 @@ mod tests {
         assert!(presentation_after[1].acknowledged);
         assert_eq!(presentation_before[2], presentation_after[2]);
         assert_eq!(presentation_before[3], presentation_after[3]);
-        let bridge = app.global::<slint_ui::launcher::MisterBridge>();
-        assert!(bridge.invoke_selection_feedback_query(
-            "".into(),
+        let feedback = app.global::<slint_ui::launcher::FeedbackView>();
+        assert!(feedback.invoke_acknowledged(
+            nav.current_menu_id().into(),
             after[1].id.clone(),
-            bridge.get_selection_feedback_revision(),
+            feedback.get_revision(),
         ));
     }
 
@@ -1826,7 +1826,7 @@ mod tests {
         );
         let mut nav = LauncherNav::new();
         nav.sync_launcher_taxonomy(&catalog);
-        let mut models = LauncherBridgeModels::default();
+        let mut models = LauncherViewModels::default();
         let root_rows = models.menu_items(&nav, 1);
 
         assert!(nav.open_menu("computers"));
@@ -1873,7 +1873,7 @@ mod tests {
         nav.catalog_system_hydration_started("snes");
         nav.catalog_system_hydration_started("n64");
 
-        let mut models = LauncherBridgeModels::default();
+        let mut models = LauncherViewModels::default();
         let rows = models.menu_items(&nav, 1);
 
         assert!(rows.row_count() >= 3);
@@ -1937,7 +1937,7 @@ mod tests {
         nav.sync_launcher_taxonomy(&catalog);
         assert!(nav.open_default_arcade(&catalog));
         let mut preview = PreviewState::new();
-        let mut models = LauncherBridgeModels::default();
+        let mut models = LauncherViewModels::default();
         let mut lifecycle = LauncherLifecycle::new(
             LauncherLifecycleConfig {
                 catalog_worker_enabled: true,
@@ -2031,7 +2031,7 @@ mod tests {
             nav.screen = screen;
             nav.sync_launcher_taxonomy(&catalog);
             let mut preview = PreviewState::new();
-            let mut models = LauncherBridgeModels::default();
+            let mut models = LauncherViewModels::default();
 
             for catalog_version in [index, index + 1] {
                 sync_bridge_launcher(

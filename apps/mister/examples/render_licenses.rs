@@ -27,34 +27,41 @@ fn main() {
     window.set_size(PhysicalSize::new(960, 540));
 
     let app = mister_magik_ui::launcher::Launcher::new().expect("create launcher");
-    let bridge = app.global::<mister_magik_ui::launcher::MisterBridge>();
-    bridge.set_startup_visible(false);
-    bridge.set_screen_mode(match state.as_str() {
-        "catalog-tiles" => 0,
-        "settings" => 3,
-        "about" => 4,
-        "info" => 6,
-        _ => 5,
+    use mister_magik_ui::launcher::{
+        InformationView, LauncherScreen, LoadingState, NavigationView, OverlayView, SettingsView,
+    };
+    let navigation = app.global::<NavigationView>();
+    navigation.set_screen(match state.as_str() {
+        "catalog-tiles" => LauncherScreen::Home,
+        "settings" => LauncherScreen::Settings,
+        "about" => LauncherScreen::About,
+        "info" => LauncherScreen::Info,
+        _ => LauncherScreen::Licenses,
     });
-    bridge.set_build_label("Build 42 | 2026-07-12 12:00 UTC".into());
-    bridge.set_present_mode_label("RGB565 /dev/fb0".into());
-    bridge.set_info_database_build("1,284 ms (scan 1,107 ms, save 177 ms)".into());
-    bridge.set_info_kernel_version("Kernel version detected at launcher startup".into());
-    bridge.set_licenses_selected(1);
-    bridge.set_licenses_expanded(expanded);
+    navigation.set_build_label("Build 42 | 2026-07-12 12:00 UTC".into());
+    navigation.set_present_mode_label("RGB565 /dev/fb0".into());
+    let information = app.global::<InformationView>();
+    information.set_build_label("Build 42 | 2026-07-12 12:00 UTC".into());
+    information.set_present_mode_label("RGB565 /dev/fb0".into());
+    information.set_database_build("1,284 ms (scan 1,107 ms, save 177 ms)".into());
+    information.set_kernel_version("Kernel version detected at launcher startup".into());
+    let settings = app.global::<SettingsView>();
+    settings.set_selected_license_index(1);
+    settings.set_license_expanded(expanded);
+    app.global::<OverlayView>()
+        .set_startup_state(LoadingState::Idle);
     if state == "catalog-tiles" {
-        use mister_magik_ui::launcher::{MenuItem, MenuItemKind, MenuItemStatus};
-        bridge.set_startup_visible(false);
-        bridge.set_menu_title("MiSTer MagiK".into());
-        bridge.set_menu_breadcrumb("Systems".into());
-        bridge.set_selected_index(0);
-        bridge.set_menu_items(ModelRc::new(VecModel::from(vec![
+        use mister_magik_ui::launcher::{
+            MenuItem, MenuItemKind, MenuItemPresentation, MenuItemStatus,
+        };
+        navigation.set_menu_title("MiSTer MagiK".into());
+        navigation.set_menu_breadcrumb("Systems".into());
+        navigation.set_home_selected_index(0);
+        let items = vec![
             MenuItem {
                 id: "arcade".into(),
                 label: "Arcade".into(),
                 subtitle: "2,184 games".into(),
-                focused: true,
-                focus_transition_enabled: false,
                 available: true,
                 node_kind: MenuItemKind::Collection,
                 status: MenuItemStatus::Ready,
@@ -63,8 +70,6 @@ fn main() {
                 id: "snes".into(),
                 label: "SNES".into(),
                 subtitle: "Scanning…".into(),
-                focused: false,
-                focus_transition_enabled: false,
                 available: true,
                 node_kind: MenuItemKind::Collection,
                 status: MenuItemStatus::Scanning,
@@ -73,8 +78,6 @@ fn main() {
                 id: "c64".into(),
                 label: "Commodore 64".into(),
                 subtitle: "Scanning…".into(),
-                focused: false,
-                focus_transition_enabled: false,
                 available: true,
                 node_kind: MenuItemKind::Collection,
                 status: MenuItemStatus::Scanning,
@@ -83,15 +86,24 @@ fn main() {
                 id: "megadrive".into(),
                 label: "Mega Drive".into(),
                 subtitle: "Scan failed".into(),
-                focused: false,
-                focus_transition_enabled: false,
                 available: true,
                 node_kind: MenuItemKind::Collection,
                 status: MenuItemStatus::Failed,
             },
-        ])));
+        ];
+        navigation.set_menu_item_presentation(ModelRc::new(VecModel::from(
+            items
+                .iter()
+                .enumerate()
+                .map(|(index, _item)| MenuItemPresentation {
+                    selected: index == 0,
+                    acknowledged: false,
+                })
+                .collect::<Vec<_>>(),
+        )));
+        navigation.set_menu_items(ModelRc::new(VecModel::from(items)));
     }
-    bridge.set_license_lines(ModelRc::new(VecModel::from(
+    settings.set_license_lines(ModelRc::new(VecModel::from(
         [
             "FFmpeg 8.1.2",
             "",
