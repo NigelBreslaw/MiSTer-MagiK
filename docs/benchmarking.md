@@ -92,14 +92,17 @@ background refresh.
 `media-pack-persistence` is the read-only exact-device authority for the raw
 `.mmlz4b` download/save flow. It selects the small, median, and largest pack for
 the configured production image size, primes the remote cache, and runs three
-isolated staged controls through `media-bench-download`. Benchmark artifacts
+alternating staged/direct-stream pairs through `media-bench-download`. Benchmark artifacts
 use hidden, timestamped paths and are removed after every arm; authoritative
 pack, index, and media-state files are never replaced. The report records raw
 network/tmpfs/exFAT bytes, coupled network-and-destination-write time,
 verification, save/publication, total flow, throughput, process RSS/HWM, and
 that production decode time is zero. Index metadata and single-writer policy
 are recorded; the isolated persistence arm deliberately does not download the
-sidecar, so index overlap is explicitly reported as unexercised. Catalog refresh
+sidecar, so index overlap is explicitly reported as unexercised. The
+`stream-fat` arm writes and hashes into a hidden sibling exFAT temporary file,
+then syncs, renames, and parent-syncs after verification. It is a benchmark-only
+selector; production remains on staged tmpfs publication. Catalog refresh
 remains off and is never forced for this scenario.
 
 The Arcade velocity-scroll profiling scenarios default to the active display
