@@ -515,13 +515,17 @@ mod linux {
     use std::io;
     use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
     use std::os::unix::ffi::{OsStrExt, OsStringExt};
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
+    use std::rc::Rc;
 
     const GETDENTS_BUFFER_BYTES: usize = 128 * 1024;
     const DIRENT64_HEADER_BYTES: usize = 19;
     const MAX_CAPTURED_ENTRIES: usize = 65_536;
     const MAX_CAPTURED_PATH_BYTES: usize = 16 * 1024 * 1024;
     const MAX_OPEN_DIRECTORY_FDS: usize = 64;
+    pub(super) const MAX_STREAM_PENDING_ENTRIES: usize = 8_192;
+    pub(super) const MAX_STREAM_PENDING_BYTES: usize = 2 * 1024 * 1024;
+    const INITIAL_STREAM_TASK_CAPACITY: usize = 512;
 
     pub(super) struct NamespaceCapture {
         pub(super) entries: Vec<NamespaceEntry>,
@@ -642,7 +646,7 @@ mod linux {
                 stats,
             });
         }
-        let root = unsafe { OwnedFd::from_raw_fd(raw_fd) };
+        let root = Rc::new(unsafe { OwnedFd::from_raw_fd(raw_fd) });
         stats.dir_opens = 1;
         let target_signature_before = if signature_capture.target() {
             stat_fd(root.as_raw_fd()).ok().and_then(directory_signature)
@@ -658,10 +662,9 @@ mod linux {
         }
         buffer.resize(GETDENTS_BUFFER_BYTES, 0u8);
         stats.buffer_allocations = 1;
-        if let Err(reason) = stream_directory(
-            &root,
-            target,
-            0,
+        if let Err(reason) = stream_namespace(
+            Rc::clone(&root),
+            target.to_path_buf(),
             max_depth,
             signature_capture,
             ignore,
@@ -682,11 +685,34 @@ mod linux {
         Ok(stats)
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn stream_directory(
-        directory: &OwnedFd,
-        directory_path: &Path,
+    struct PendingStreamEntry {
+        parent: Rc<OwnedFd>,
+        name: CString,
+        path: PathBuf,
+        d_type: u8,
         depth: usize,
+        buffered_bytes: usize,
+    }
+
+    enum StreamTask {
+        ReadDirectory {
+            directory: Rc<OwnedFd>,
+            path: PathBuf,
+            depth: usize,
+        },
+        ProcessEntry(PendingStreamEntry),
+        FinishDirectory {
+            directory: Rc<OwnedFd>,
+            entry: NamespaceEntry,
+            signature_before: Option<(u64, i64)>,
+            buffered_bytes: usize,
+        },
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn stream_namespace(
+        root: Rc<OwnedFd>,
+        root_path: PathBuf,
         max_depth: Option<usize>,
         signature_capture: NamespaceSignatureCapture,
         ignore: &dyn Fn(&Path) -> bool,
@@ -695,219 +721,310 @@ mod linux {
         stats: &mut NamespaceWalkStats,
         started: std::time::Instant,
         fail_after_entries: Option<usize>,
-    ) -> Result<bool, String> {
-        loop {
-            crate::cooperative_work::checkpoint();
-            let read = unsafe {
-                libc::syscall(
-                    libc::SYS_getdents64,
-                    directory.as_raw_fd(),
-                    buffer.as_mut_ptr(),
-                    buffer.len(),
-                )
-            };
-            stats.read_calls = stats.read_calls.saturating_add(1);
-            if read < 0 {
-                return Err(format!(
-                    "getdents64 {}: {}",
-                    directory_path.display(),
-                    io::Error::last_os_error()
-                ));
-            }
-            if read == 0 {
-                return Ok(true);
-            }
-            let read = usize::try_from(read).map_err(|_| "negative getdents64 size")?;
-            stats.read_bytes = stats.read_bytes.saturating_add(read as u64);
-            let mut offset = 0usize;
-            while offset < read {
-                if stats.captured_entries.is_multiple_of(16) {
-                    crate::cooperative_work::checkpoint();
-                }
-                if read - offset < DIRENT64_HEADER_BYTES {
-                    return Err(format!(
-                        "truncated getdents64 record in {}",
-                        directory_path.display()
-                    ));
-                }
-                let record_len =
-                    u16::from_ne_bytes([buffer[offset + 16], buffer[offset + 17]]) as usize;
-                if record_len <= DIRENT64_HEADER_BYTES || offset + record_len > read {
-                    return Err(format!(
-                        "invalid getdents64 record in {}",
-                        directory_path.display()
-                    ));
-                }
-                let record = &buffer[offset..offset + record_len];
-                offset += record_len;
-                let next_cookie =
-                    i64::from_ne_bytes(record[8..16].try_into().expect("dirent cookie"));
-                let name_region = &record[DIRENT64_HEADER_BYTES..];
-                let name_len = name_region
-                    .iter()
-                    .position(|byte| *byte == 0)
-                    .ok_or_else(|| {
-                        format!(
-                            "unterminated getdents64 name in {}",
-                            directory_path.display()
-                        )
-                    })?;
-                let name = &name_region[..name_len];
-                if name.is_empty() || name == b"." || name == b".." {
-                    continue;
-                }
-                if fail_after_entries.is_some_and(|limit| stats.captured_entries >= limit) {
-                    return Err(format!(
-                        "injected streaming failure after {} entries",
-                        stats.captured_entries
-                    ));
-                }
-                let child_path = directory_path.join(OsString::from_vec(name.to_vec()));
-                if ignore(&child_path) {
-                    continue;
-                }
-                let child_name = c_string(name, "directory entry name")?;
-                let entry_depth = depth.saturating_add(1);
-                let mut stat = None;
-                let kind = match record[18] {
-                    libc::DT_DIR => NamespaceEntryKind::Directory,
-                    libc::DT_REG => NamespaceEntryKind::File,
-                    libc::DT_UNKNOWN => {
-                        stats.type_stats = stats.type_stats.saturating_add(1);
-                        let value = stat_entry(directory.as_raw_fd(), &child_name, &child_path)?;
-                        let kind = kind_from_mode(value.st_mode);
-                        stat = Some(value);
-                        kind
-                    }
-                    _ => NamespaceEntryKind::Other,
-                };
-                let zip_signature = if kind == NamespaceEntryKind::File && is_zip_path(&child_path)
-                {
-                    let value = match stat {
-                        Some(value) => value,
-                        None => stat_entry(directory.as_raw_fd(), &child_name, &child_path)?,
-                    };
-                    Some((
-                        u64::try_from(value.st_size).unwrap_or(0),
-                        #[allow(clippy::unnecessary_cast)]
-                        unix_timestamp_nanos(value.st_mtime as i64, value.st_mtime_nsec as i64),
-                    ))
-                } else {
-                    None
-                };
-                let should_descend = kind == NamespaceEntryKind::Directory
-                    && max_depth.is_none_or(|limit| entry_depth < limit);
-                let capture_directory_signature = kind == NamespaceEntryKind::Directory
-                    && entry_depth == 1
-                    && signature_capture.depth_one_directories();
-                let mut entry = NamespaceEntry {
-                    path: child_path.clone(),
-                    kind,
-                    zip_signature,
-                    directory_signature: None,
-                };
-                let mut child = None;
-                let mut child_signature_before = None;
-                if should_descend {
-                    if entry_depth >= MAX_OPEN_DIRECTORY_FDS {
-                        return Err(format!(
-                            "stream budget: more than {MAX_OPEN_DIRECTORY_FDS} open directory fds under {}",
-                            child_path.display()
-                        ));
-                    }
-                    let raw_child = unsafe {
-                        libc::openat(
-                            directory.as_raw_fd(),
-                            child_name.as_ptr(),
-                            libc::O_RDONLY | libc::O_DIRECTORY | libc::O_CLOEXEC | libc::O_NOFOLLOW,
-                        )
-                    };
-                    if raw_child < 0 {
-                        return Err(format!(
-                            "openat directory {}: {}",
-                            child_path.display(),
-                            io::Error::last_os_error()
-                        ));
-                    }
-                    stats.dir_opens = stats.dir_opens.saturating_add(1);
-                    child = Some(unsafe { OwnedFd::from_raw_fd(raw_child) });
-                    if capture_directory_signature {
-                        child_signature_before = child
-                            .as_ref()
-                            .and_then(|value| stat_fd(value.as_raw_fd()).ok())
-                            .and_then(directory_signature);
-                    }
-                } else if capture_directory_signature {
-                    let value = match stat {
-                        Some(value) => Some(value),
-                        None => stat_entry(directory.as_raw_fd(), &child_name, &child_path).ok(),
-                    };
-                    entry.directory_signature = value.and_then(directory_signature);
-                }
+    ) -> Result<(), String> {
+        let mut tasks = Vec::new();
+        tasks
+            .try_reserve_exact(INITIAL_STREAM_TASK_CAPACITY)
+            .map_err(|error| format!("stream allocation: task stack: {error}"))?;
+        let mut batch = Vec::new();
+        batch
+            .try_reserve_exact(INITIAL_STREAM_TASK_CAPACITY)
+            .map_err(|error| format!("stream allocation: directory batch: {error}"))?;
+        stats.buffer_allocations = stats.buffer_allocations.saturating_add(2);
+        push_stream_task(
+            &mut tasks,
+            StreamTask::ReadDirectory {
+                directory: root,
+                path: root_path,
+                depth: 0,
+            },
+            stats,
+        )?;
+        let mut pending_entries = 0usize;
+        let mut pending_bytes = 0usize;
 
-                if !capture_directory_signature
-                    && !publish_stream_entry(&entry, visitor, stats, started)
-                {
-                    return Ok(false);
-                }
-                if let Some(child) = child {
-                    if next_cookie <= 0 {
-                        return Err(format!(
-                            "invalid getdents64 continuation cookie in {}",
-                            directory_path.display()
-                        ));
-                    }
-                    let seek_offset = libc::off_t::try_from(next_cookie).map_err(|_| {
-                        format!(
-                            "getdents64 continuation cookie {next_cookie} exceeds off_t in {}",
-                            directory_path.display()
+        while let Some(task) = tasks.pop() {
+            crate::cooperative_work::checkpoint();
+            match task {
+                StreamTask::ReadDirectory {
+                    directory,
+                    path,
+                    depth,
+                } => {
+                    let read = unsafe {
+                        libc::syscall(
+                            libc::SYS_getdents64,
+                            directory.as_raw_fd(),
+                            buffer.as_mut_ptr(),
+                            buffer.len(),
                         )
-                    })?;
-                    let seek =
-                        unsafe { libc::lseek(directory.as_raw_fd(), seek_offset, libc::SEEK_SET) };
-                    if seek < 0 {
+                    };
+                    stats.read_calls = stats.read_calls.saturating_add(1);
+                    if read < 0 {
                         return Err(format!(
-                            "lseek directory {}: {}",
-                            directory_path.display(),
+                            "getdents64 {}: {}",
+                            path.display(),
                             io::Error::last_os_error()
                         ));
                     }
-                    if !stream_directory(
-                        &child,
-                        &child_path,
-                        entry_depth,
-                        max_depth,
-                        signature_capture,
-                        ignore,
-                        visitor,
-                        buffer,
+                    if read == 0 {
+                        continue;
+                    }
+                    let read = usize::try_from(read).map_err(|_| "negative getdents64 size")?;
+                    stats.read_bytes = stats.read_bytes.saturating_add(read as u64);
+                    batch.clear();
+                    let mut batch_buffered_bytes = 0usize;
+                    let mut offset = 0usize;
+                    while offset < read {
+                        if read - offset < DIRENT64_HEADER_BYTES {
+                            return Err(format!(
+                                "truncated getdents64 record in {}",
+                                path.display()
+                            ));
+                        }
+                        let record_len =
+                            u16::from_ne_bytes([buffer[offset + 16], buffer[offset + 17]]) as usize;
+                        if record_len <= DIRENT64_HEADER_BYTES || offset + record_len > read {
+                            return Err(format!("invalid getdents64 record in {}", path.display()));
+                        }
+                        let record = &buffer[offset..offset + record_len];
+                        offset += record_len;
+                        let name_region = &record[DIRENT64_HEADER_BYTES..];
+                        let name_len =
+                            name_region
+                                .iter()
+                                .position(|byte| *byte == 0)
+                                .ok_or_else(|| {
+                                    format!("unterminated getdents64 name in {}", path.display())
+                                })?;
+                        let name = &name_region[..name_len];
+                        if name.is_empty() || name == b"." || name == b".." {
+                            continue;
+                        }
+                        let child_path = path.join(OsString::from_vec(name.to_vec()));
+                        if ignore(&child_path) {
+                            continue;
+                        }
+                        let buffered_bytes = child_path
+                            .as_os_str()
+                            .len()
+                            .saturating_add(name.len())
+                            .saturating_add(std::mem::size_of::<PendingStreamEntry>());
+                        if pending_entries.saturating_add(batch.len()) >= MAX_STREAM_PENDING_ENTRIES
+                            || pending_bytes
+                                .saturating_add(batch_buffered_bytes)
+                                .saturating_add(buffered_bytes)
+                                > MAX_STREAM_PENDING_BYTES
+                        {
+                            return Err(format!(
+                                "stream budget: pending namespace batch exceeds {} entries or {} bytes under {}",
+                                MAX_STREAM_PENDING_ENTRIES,
+                                MAX_STREAM_PENDING_BYTES,
+                                path.display()
+                            ));
+                        }
+                        let previous_capacity = batch.capacity();
+                        batch.try_reserve(1).map_err(|error| {
+                            format!("stream allocation: directory entry: {error}")
+                        })?;
+                        if batch.capacity() != previous_capacity {
+                            stats.buffer_allocations = stats.buffer_allocations.saturating_add(1);
+                        }
+                        batch.push(PendingStreamEntry {
+                            parent: Rc::clone(&directory),
+                            name: c_string(name, "directory entry name")?,
+                            path: child_path,
+                            d_type: record[18],
+                            depth: depth.saturating_add(1),
+                            buffered_bytes,
+                        });
+                        batch_buffered_bytes = batch_buffered_bytes.saturating_add(buffered_bytes);
+                    }
+                    pending_entries = pending_entries.saturating_add(batch.len());
+                    pending_bytes = pending_bytes.saturating_add(batch_buffered_bytes);
+                    stats.peak_buffered_entries = stats.peak_buffered_entries.max(pending_entries);
+                    stats.peak_buffered_bytes = stats.peak_buffered_bytes.max(pending_bytes);
+                    push_stream_task(
+                        &mut tasks,
+                        StreamTask::ReadDirectory {
+                            directory,
+                            path,
+                            depth,
+                        },
                         stats,
-                        started,
-                        fail_after_entries,
-                    )? {
-                        return Ok(false);
+                    )?;
+                    for entry in batch.drain(..).rev() {
+                        push_stream_task(&mut tasks, StreamTask::ProcessEntry(entry), stats)?;
                     }
-                    if capture_directory_signature {
-                        let after = stat_fd(child.as_raw_fd())
-                            .ok()
-                            .and_then(directory_signature);
-                        entry.directory_signature =
-                            super::stable_directory_signature(child_signature_before, after);
-                    }
-                    if capture_directory_signature
-                        && !publish_stream_entry(&entry, visitor, stats, started)
-                    {
-                        return Ok(false);
-                    }
-                    break;
                 }
-                if capture_directory_signature
-                    && !publish_stream_entry(&entry, visitor, stats, started)
-                {
-                    return Ok(false);
+                StreamTask::ProcessEntry(pending) => {
+                    pending_entries = pending_entries.saturating_sub(1);
+                    pending_bytes = pending_bytes.saturating_sub(pending.buffered_bytes);
+                    if fail_after_entries.is_some_and(|limit| stats.captured_entries >= limit) {
+                        return Err(format!(
+                            "injected streaming failure after {} entries",
+                            stats.captured_entries
+                        ));
+                    }
+                    let mut stat = None;
+                    let kind = match pending.d_type {
+                        libc::DT_DIR => NamespaceEntryKind::Directory,
+                        libc::DT_REG => NamespaceEntryKind::File,
+                        libc::DT_UNKNOWN => {
+                            stats.type_stats = stats.type_stats.saturating_add(1);
+                            let value = stat_entry(
+                                pending.parent.as_raw_fd(),
+                                &pending.name,
+                                &pending.path,
+                            )?;
+                            let kind = kind_from_mode(value.st_mode);
+                            stat = Some(value);
+                            kind
+                        }
+                        _ => NamespaceEntryKind::Other,
+                    };
+                    let zip_signature = if kind == NamespaceEntryKind::File
+                        && is_zip_path(&pending.path)
+                    {
+                        let value = match stat {
+                            Some(value) => value,
+                            None => stat_entry(
+                                pending.parent.as_raw_fd(),
+                                &pending.name,
+                                &pending.path,
+                            )?,
+                        };
+                        Some((
+                            u64::try_from(value.st_size).unwrap_or(0),
+                            #[allow(clippy::unnecessary_cast)]
+                            unix_timestamp_nanos(value.st_mtime as i64, value.st_mtime_nsec as i64),
+                        ))
+                    } else {
+                        None
+                    };
+                    let should_descend = kind == NamespaceEntryKind::Directory
+                        && max_depth.is_none_or(|limit| pending.depth < limit);
+                    let capture_directory_signature = kind == NamespaceEntryKind::Directory
+                        && pending.depth == 1
+                        && signature_capture.depth_one_directories();
+                    let mut entry = NamespaceEntry {
+                        path: pending.path.clone(),
+                        kind,
+                        zip_signature,
+                        directory_signature: None,
+                    };
+                    if should_descend {
+                        if pending.depth >= MAX_OPEN_DIRECTORY_FDS {
+                            return Err(format!(
+                                "stream budget: more than {MAX_OPEN_DIRECTORY_FDS} open directory fds under {}",
+                                pending.path.display()
+                            ));
+                        }
+                        let raw_child = unsafe {
+                            libc::openat(
+                                pending.parent.as_raw_fd(),
+                                pending.name.as_ptr(),
+                                libc::O_RDONLY
+                                    | libc::O_DIRECTORY
+                                    | libc::O_CLOEXEC
+                                    | libc::O_NOFOLLOW,
+                            )
+                        };
+                        if raw_child < 0 {
+                            return Err(format!(
+                                "openat directory {}: {}",
+                                pending.path.display(),
+                                io::Error::last_os_error()
+                            ));
+                        }
+                        stats.dir_opens = stats.dir_opens.saturating_add(1);
+                        let child = Rc::new(unsafe { OwnedFd::from_raw_fd(raw_child) });
+                        if capture_directory_signature {
+                            let signature_before = stat_fd(child.as_raw_fd())
+                                .ok()
+                                .and_then(directory_signature);
+                            pending_entries = pending_entries.saturating_add(1);
+                            pending_bytes = pending_bytes.saturating_add(pending.buffered_bytes);
+                            stats.peak_buffered_entries =
+                                stats.peak_buffered_entries.max(pending_entries);
+                            stats.peak_buffered_bytes =
+                                stats.peak_buffered_bytes.max(pending_bytes);
+                            push_stream_task(
+                                &mut tasks,
+                                StreamTask::FinishDirectory {
+                                    directory: Rc::clone(&child),
+                                    entry,
+                                    signature_before,
+                                    buffered_bytes: pending.buffered_bytes,
+                                },
+                                stats,
+                            )?;
+                        } else if !publish_stream_entry(&entry, visitor, stats, started) {
+                            return Ok(());
+                        }
+                        push_stream_task(
+                            &mut tasks,
+                            StreamTask::ReadDirectory {
+                                directory: child,
+                                path: pending.path,
+                                depth: pending.depth,
+                            },
+                            stats,
+                        )?;
+                    } else {
+                        if capture_directory_signature {
+                            let value = match stat {
+                                Some(value) => Some(value),
+                                None => stat_entry(
+                                    pending.parent.as_raw_fd(),
+                                    &pending.name,
+                                    &pending.path,
+                                )
+                                .ok(),
+                            };
+                            entry.directory_signature = value.and_then(directory_signature);
+                        }
+                        if !publish_stream_entry(&entry, visitor, stats, started) {
+                            return Ok(());
+                        }
+                    }
+                }
+                StreamTask::FinishDirectory {
+                    directory,
+                    mut entry,
+                    signature_before,
+                    buffered_bytes,
+                } => {
+                    pending_entries = pending_entries.saturating_sub(1);
+                    pending_bytes = pending_bytes.saturating_sub(buffered_bytes);
+                    let signature_after = stat_fd(directory.as_raw_fd())
+                        .ok()
+                        .and_then(directory_signature);
+                    entry.directory_signature =
+                        super::stable_directory_signature(signature_before, signature_after);
+                    if !publish_stream_entry(&entry, visitor, stats, started) {
+                        return Ok(());
+                    }
                 }
             }
         }
+        Ok(())
+    }
+
+    fn push_stream_task(
+        tasks: &mut Vec<StreamTask>,
+        task: StreamTask,
+        stats: &mut NamespaceWalkStats,
+    ) -> Result<(), String> {
+        let previous_capacity = tasks.capacity();
+        tasks
+            .try_reserve(1)
+            .map_err(|error| format!("stream allocation: task entry: {error}"))?;
+        if tasks.capacity() != previous_capacity {
+            stats.buffer_allocations = stats.buffer_allocations.saturating_add(1);
+        }
+        tasks.push(task);
+        Ok(())
     }
 
     fn publish_stream_entry(
@@ -1709,8 +1826,9 @@ mod tests {
             assert_eq!(fd_snapshot(&dir, max_depth, &ignore), walkdir);
             let (streamed, stats) = stream_snapshot(&dir, max_depth, &ignore);
             assert_eq!(streamed, walkdir);
-            assert!(stats.buffer_allocations <= 1);
-            assert!(stats.peak_buffered_entries <= 1);
+            assert!(stats.buffer_allocations <= 4);
+            assert!(stats.peak_buffered_entries <= linux::MAX_STREAM_PENDING_ENTRIES);
+            assert!(stats.peak_buffered_bytes <= linux::MAX_STREAM_PENDING_BYTES);
         }
         let expected = fs::metadata(&zip).unwrap();
         let signature = fd_snapshot(&dir, None, &ignore)
@@ -1816,8 +1934,9 @@ mod tests {
         .expect("the deterministic streaming fault must interrupt the target");
         assert_eq!(partial.len(), 2);
         assert_eq!(failure.stats.backend, "fd-relative-stream");
-        assert_eq!(failure.stats.buffer_allocations, 1);
-        assert_eq!(failure.stats.peak_buffered_entries, 1);
+        assert_eq!(failure.stats.buffer_allocations, 3);
+        assert!(failure.stats.peak_buffered_entries <= linux::MAX_STREAM_PENDING_ENTRIES);
+        assert!(failure.stats.peak_buffered_bytes <= linux::MAX_STREAM_PENDING_BYTES);
 
         let mut restarted = Vec::new();
         let retry = visit_walkdir(
