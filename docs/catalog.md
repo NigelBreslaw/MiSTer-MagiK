@@ -21,14 +21,14 @@ catalog storage.
   only when its system is activated.
 - Load every system, including Arcade, only when activated.
 - Rebuild and publish only changed system projections.
-- Keep the published generation launchable while warm reconciliation prepares
-  its replacement.
+- Keep the published generation launchable while a user-triggered warm
+  reconciliation prepares its replacement.
 - Report queued, scanning, prepared, and failed activity per system rather than
   treating the whole catalog as one binary scan.
-- Pause catalog work during launcher scrolling or navigation motion. Before
-  first reveal, and after a stationary idle settle, allow bounded catalog work
-  to burst across both A9 cores; visible post-reveal animation confines it to
-  CPU0.
+- Pause active catalog work during launcher scrolling or navigation motion.
+  During a first build or user-triggered rebuild, allow bounded work to burst
+  across both A9 cores before first reveal or after a stationary idle settle;
+  visible post-reveal animation confines it to CPU0.
 - Keep catalog construction testable and benchmarkable without Slint, the
   framebuffer, Main, or a complete MiSTer installation.
 
@@ -309,6 +309,15 @@ catalog always becomes an initial build. `ChangedInputs` uses committed
 scan-unit dependencies to select exact systems. `AllSystems`, used by Settings
 → **Rebuild Database**, deliberately rebuilds every published/current system
 without deleting the active generation.
+
+An ordinary warm launch with an existing catalog issues `LoadOnly`. It does not
+scan game roots, check for newly installed games, or start reconciliation in
+the background. Newly installed games become visible only after the user
+selects Settings → **Rebuild Database**. Automatic catalog construction is
+limited to startup without a usable catalog. `MISTER_CATALOG_REFRESH=force` is
+a volatile diagnostic/stress override; routine UI qualification must not enable
+it automatically or treat its exceptional-path timing as a steady-state
+release gate.
 
 The scanner computes the canonical catalog stamp and uses its scanner cache and
 builder state to avoid unnecessary source work. Projection reconciliation

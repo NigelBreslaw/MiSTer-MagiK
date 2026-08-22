@@ -470,14 +470,14 @@ name = "MISTER_CATALOG_REFRESH"
 owner = "apps/mister/src/ui_runner/ui_frame_target.rs"
 classification = "production"
 value_shape = "boolean token"
-default_behavior = "uses the owner-defined enabled or disabled default when unset or unrecognized"
+default_behavior = "loads an existing catalog without reconciliation and builds only when no usable catalog exists"
 visibility = "internal runtime"
 parser = "bool"
 scope = "command"
 conflicts = []
 sensitivity = "public"
 aliases = []
-documentation = { summary = "Controls catalog refresh behavior", accepted_values = [], value_policy = "document" }
+documentation = { summary = "Selects catalog startup policy; force is an explicit diagnostic/stress override and off disables the worker", accepted_values = ["default", "force", "off", "load-only"], value_policy = "document" }
 
 [[control]]
 name = "MISTER_CATALOG_SHARD_STAGING"

@@ -5374,6 +5374,9 @@ const INPUT_LATENCY_LAB_READY_REMOTE: &str = "/tmp/mister-magik/input-latency-la
 const INPUT_LATENCY_LAB_SESSION_REMOTE: &str = "/tmp/mister-magik/input-latency-lab-session";
 const MAIN_INPUT_LATENCY_TRACE_REMOTE: &str = "/tmp/mister-magik/main-input-latency-trace.json";
 const INPUT_INTEGRITY_EXPECTED_PRESSES: u64 = 109;
+const STEADY_STATE_CATALOG_REFRESH_POLICY: &str = "default";
+const LAUNCHER_RESPONSE_QUALIFICATION_SCENARIOS: [(&str, &str); 1] =
+    [("idle", STEADY_STATE_CATALOG_REFRESH_POLICY)];
 const CATALOG_LIFECYCLE_FIRST_VISIBLE_TIMEOUT_SECS: u64 = 60;
 const CATALOG_LIFECYCLE_COMPLETE_TIMEOUT_SECS: u64 = 20 * 60;
 const ALPHA_CATALOG_COMPLETE_TIMEOUT_SECS: u64 = 8 * 60;
@@ -5403,17 +5406,30 @@ fn verify_installed_input_integrity(
         )
         .into());
     }
-    let idle = run_input_integrity_scenario(&session, "idle", "off", None, false, "down")?;
+    let idle = run_input_integrity_scenario(
+        &session,
+        "idle",
+        STEADY_STATE_CATALOG_REFRESH_POLICY,
+        None,
+        false,
+        "down",
+    )?;
     let stress = run_input_integrity_scenario(
         &session,
-        "catalog-cpu-stall",
-        "force",
+        "cpu-stall",
+        STEADY_STATE_CATALOG_REFRESH_POLICY,
         Some(500),
         true,
         "down",
     )?;
-    let horizontal =
-        run_input_integrity_scenario(&session, "horizontal-idle", "off", None, false, "right")?;
+    let horizontal = run_input_integrity_scenario(
+        &session,
+        "horizontal-idle",
+        STEADY_STATE_CATALOG_REFRESH_POLICY,
+        None,
+        false,
+        "right",
+    )?;
     let launcher = read_launcher_status(&session)?;
     let main_after: Value = serde_json::from_str(
         &remote_read(&session, MAIN_STATUS_REMOTE).ok_or("Main status is missing after run")?,
@@ -5530,27 +5546,21 @@ fn verify_installed_launcher_response(
                     &session,
                     display_label,
                     "idle-round-trip",
-                    "off",
+                    STEADY_STATE_CATALOG_REFRESH_POLICY,
                     true,
                     retained,
                 )?);
             } else {
-                scenario_values.push(run_launcher_response_scenario(
-                    &session,
-                    display_label,
-                    "idle",
-                    "off",
-                    false,
-                    retained,
-                )?);
-                scenario_values.push(run_launcher_response_scenario(
-                    &session,
-                    display_label,
-                    "catalog",
-                    "force",
-                    false,
-                    retained,
-                )?);
+                for (scenario_label, catalog_refresh) in LAUNCHER_RESPONSE_QUALIFICATION_SCENARIOS {
+                    scenario_values.push(run_launcher_response_scenario(
+                        &session,
+                        display_label,
+                        scenario_label,
+                        catalog_refresh,
+                        false,
+                        retained,
+                    )?);
+                }
             }
         }
         Ok(())
@@ -6064,13 +6074,14 @@ fn verify_installed_input_latency_lab(
         .iter()
         .find(|arm| arm["label"] == "real-forced-catalog")
         .is_some_and(|arm| arm["catalog_attribution_status"] == "passed");
-    let current_product_quality = ["baseline", "real-forced-catalog"]
-        .into_iter()
-        .all(|label| {
-            arms.iter()
-                .find(|arm| arm["label"] == label)
-                .is_some_and(|arm| arm["product_quality_status"] == "passed")
-        });
+    let current_product_quality = arms
+        .iter()
+        .find(|arm| arm["label"] == "baseline")
+        .is_some_and(|arm| arm["product_quality_status"] == "passed");
+    let forced_catalog_stress_quality = arms
+        .iter()
+        .find(|arm| arm["label"] == "real-forced-catalog")
+        .is_some_and(|arm| arm["product_quality_status"] == "passed");
     let reader_policy_winners = arms
         .iter()
         .filter(|arm| arm["catalog_refresh"] == "force")
@@ -6098,6 +6109,7 @@ fn verify_installed_input_latency_lab(
         "real_catalog_attribution_status": pass_fail(catalog_attributed),
         "first_eligible_vblank_status": pass_fail(first_eligible),
         "current_product_quality_status": pass_fail(current_product_quality),
+        "forced_catalog_stress_quality_status": pass_fail(forced_catalog_stress_quality),
         "reader_policy_comparison_status": pass_fail(!reader_policy_winners.is_empty()),
         "reader_policy_winners": reader_policy_winners,
         "arms": arms,
@@ -30540,6 +30552,20 @@ mod tests {
             "catalog_system_shard_ready system=snes games=20 adoption_us=3456 detail=ok\n",
         );
         assert_eq!(parse_catalog_adoption_max_us(events), Some(3_456));
+    }
+
+    #[test]
+    fn routine_input_qualification_never_forces_catalog_reconciliation() {
+        assert_eq!(STEADY_STATE_CATALOG_REFRESH_POLICY, "default");
+        assert_eq!(
+            LAUNCHER_RESPONSE_QUALIFICATION_SCENARIOS,
+            [("idle", "default")]
+        );
+        assert!(
+            LAUNCHER_RESPONSE_QUALIFICATION_SCENARIOS
+                .iter()
+                .all(|(_, policy)| *policy != "force")
+        );
     }
 
     #[test]

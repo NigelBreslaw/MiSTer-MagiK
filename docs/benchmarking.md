@@ -191,19 +191,20 @@ ordinary launcher. Evidence is written below
 `build/agent-benchmarks/navigation-transitions/<timestamp>/`.
 
 `launcher-response` is the release gate for interactive selection latency and
-confirmed focus feedback. Schema v2 has no v1 compatibility parser. It drives
-the exact Computers route from Acorn through Apple II, Commodore, Atari,
-Sinclair, CoCo 2, DOS, Japanese, and Other with a 100 ms baseline plus rotated
-50/57/64/71 ms start-to-start schedules. It also covers discrete System Hub and
-Settings focus and Arcade press-to-first-motion through supported Main proxy
-protocol v2 or sequence-tagged laboratory protocol v3.
+confirmed focus feedback. Schema v2 has no v1 compatibility parser. It runs
+with the production-default catalog policy: an existing catalog is loaded but
+no source reconciliation is requested. It drives eight independent Computers
+focus changes by alternating Acorn and Apple II, using a 100 ms baseline plus
+rotated 50/57/64/71 ms start-to-start schedules. It also covers discrete System
+Hub and Settings focus and Arcade press-to-first-motion through supported Main
+proxy protocol v2 or sequence-tagged laboratory protocol v3.
 
 Each eligible destination must have one exact pulse-on and pulse-off active
 latch sequence with at least 80,000 µs between their physical confirmations.
-Pulses may overlap; the final Other selection must confirm without waiting for
-an older pulse deadline. Arcade's velocity list deliberately has no pulse and
-is gated on first confirmed motion instead. Runs execute idle and during forced
-catalog work at physical 60 Hz and 50 Hz, with zero input loss, duplication,
+Pulses may overlap; the final focus change must confirm without waiting for an
+older pulse deadline. Arcade's velocity list deliberately has no pulse and
+is gated on first confirmed motion instead. Runs execute the normal warm-launch
+state at physical 60 Hz and 50 Hz, with zero input loss, duplication,
 coalescing, reorder, overflow, desync, latch drops, or ownership loss. Every
 response and feedback frame must become active on its first eligible vblank.
 Repeated vblanks while the UI is intentionally static remain reported but are
@@ -212,9 +213,21 @@ not classified as input loss or dropped response frames.
 Dispatch P95 must be at most 3 ms and its maximum at most 5 ms. Input-to-visible
 median must be at most 12 ms; each display-rate leg independently limits P95 to
 one refresh period plus 3 ms and the maximum to one refresh period plus 8 ms.
-The report exposes independent input-response, pulse, integrity, and background
-adoption statuses. Forced catalog adoption remains a separate below-8-ms gate,
-and the overall result passes only when every status passes.
+The report exposes independent input-response, pulse, and integrity statuses.
+Background adoption is not applicable to this steady-state qualification and
+must not be forced by `launcher-response` or `launcher-response-retained`.
+Their overall result is authoritative only for the ordinary interactive state.
+
+Forced catalog reconciliation is exceptional-path evidence, not a release gate
+for ordinary interaction. A missing catalog may build on first boot, and a user
+may explicitly choose Settings → **Rebuild Database**; those paths retain their
+own correctness and responsiveness coverage. Forced catalog work may be used
+only by an explicitly named stress or attribution arm such as
+`input-latency-lab`. Its timing, cadence, and feedback results are reported
+separately and must be compared for candidate regressions, but they do not veto
+an otherwise passing steady-state optimization. Do not set
+`MISTER_CATALOG_REFRESH=force` automatically when adding or extending a routine
+UI qualification.
 
 For attended diagnosis of intermittent single-press latency, set
 `MISTER_LAUNCHER_RESPONSE_ISOLATED_PROFILE=1` when running `launcher-response`.
@@ -318,10 +331,13 @@ round-robin scheduling on CPU0 and CPU1. These
 reader policies require the same consumed volatile lab token and do not alter
 ordinary runtime scheduling. Per-event `/proc` scheduler accounting is enabled
 only for the current-policy baseline/forced attribution pair; candidate timing
-arms retain the non-perturbing poll, CPU, and thread-clock stamps. The experiment reports
-artifact validity, input integrity, obstruction reproduction, cooperative
-recovery, catalog attribution, first-eligible-vblank behavior, and the current
-product-quality result independently. Reader-policy candidates separately
+arms retain the non-perturbing poll, CPU, and thread-clock stamps. The
+experiment reports artifact validity, input integrity, obstruction
+reproduction, cooperative recovery, catalog attribution,
+first-eligible-vblank behavior, steady-state product quality, and
+forced-catalog stress quality independently. Forced arms are diagnostic
+comparisons and do not contribute to steady-state product qualification.
+Reader-policy candidates separately
 require an applied policy, capture P95 at or below 250 us, maximum at or below
 1 ms, and clean input integrity. A failed latency status is retained as a
 successful experimental observation; missing, stale, truncated, or incomplete
