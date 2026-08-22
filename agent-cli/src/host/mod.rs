@@ -17300,79 +17300,88 @@ fn profile_installed_catalog_resume_validation(
     fs::create_dir_all(output_dir)?;
 
     let run_result = (|| -> Result<Value> {
-        let mut samples = Vec::with_capacity(CATALOG_BUILD_REBUILD_SAMPLES);
-        for sample_index in 1..=CATALOG_BUILD_REBUILD_SAMPLES {
-            require_catalog_benchmark_active("resume-validation sample preparation")?;
-            let sample_dir = output_dir.join(format!("sample-{sample_index}"));
-            fs::create_dir_all(&sample_dir)?;
-            exec_checked(
-                &session,
-                "prepare isolated resume-validation sample",
-                &catalog_build_rebuild_prepare_command(),
-            )?;
-            let launcher_env = catalog_resume_validation_launcher_env();
-            let interrupted_started = Instant::now();
-            restart_launcher_with_one_shot_env(
-                &session,
-                LauncherRestartOptions {
-                    env_vars: launcher_env.clone(),
-                    timeout_secs: CATALOG_LIFECYCLE_FIRST_VISIBLE_TIMEOUT_SECS,
-                    remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str().into(),
-                    ..LauncherRestartOptions::default()
-                },
-            )?;
-            let checkpoint = wait_for_catalog_resume_checkpoint(&session, interrupted_started)?;
-            fs::write(
-                sample_dir.join("interrupted-launcher.log"),
-                checkpoint["launcher_log"].as_str().unwrap_or_default(),
-            )?;
-            fs::write(
-                sample_dir.join("interrupted-status.json"),
-                format!("{}\n", serde_json::to_string_pretty(&checkpoint["status"])?),
-            )?;
+        let mut samples = Vec::with_capacity(CATALOG_BUILD_REBUILD_SAMPLES * 2);
+        for pair_index in 1..=CATALOG_BUILD_REBUILD_SAMPLES {
+            for arm in ["baseline", "walker-native"] {
+                require_catalog_benchmark_active("resume-validation sample preparation")?;
+                let sample_dir = output_dir.join(format!("pair-{pair_index}-{arm}"));
+                fs::create_dir_all(&sample_dir)?;
+                exec_checked(
+                    &session,
+                    "prepare isolated resume-validation sample",
+                    &catalog_build_rebuild_prepare_command(),
+                )?;
+                let mut launcher_env = catalog_resume_validation_launcher_env();
+                if arm == "walker-native" {
+                    launcher_env.push((
+                        "MISTER_CATALOG_RESUME_VALIDATION_BACKEND".into(),
+                        "walker-native".into(),
+                    ));
+                }
+                let interrupted_started = Instant::now();
+                restart_launcher_with_one_shot_env(
+                    &session,
+                    LauncherRestartOptions {
+                        env_vars: launcher_env.clone(),
+                        timeout_secs: CATALOG_LIFECYCLE_FIRST_VISIBLE_TIMEOUT_SECS,
+                        remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str().into(),
+                        ..LauncherRestartOptions::default()
+                    },
+                )?;
+                let checkpoint = wait_for_catalog_resume_checkpoint(&session, interrupted_started)?;
+                fs::write(
+                    sample_dir.join("interrupted-launcher.log"),
+                    checkpoint["launcher_log"].as_str().unwrap_or_default(),
+                )?;
+                fs::write(
+                    sample_dir.join("interrupted-status.json"),
+                    format!("{}\n", serde_json::to_string_pretty(&checkpoint["status"])?),
+                )?;
 
-            // This ordinary launcher restart is the handled interruption. The
-            // next process receives the same isolated catalog contract and
-            // resumes from the already-synced target frame.
-            let resumed = run_catalog_build_rebuild_leg(
-                config,
-                &session,
-                &endpoint,
-                &sample_dir,
-                "resumed",
-                None,
-                CatalogBuildRebuildLegOptions {
-                    exercise_arcade_ui: false,
-                    require_updater_index: false,
-                    launcher_env,
-                    runtime_command: catalog_build_rebuild_runtime_command,
-                },
-            )?;
-            let resume_metrics = catalog_resume_validation_metrics(&resumed["phase_evidence"])?;
-            let reused = resume_metrics
-                .get("resume_reused")
-                .and_then(Value::as_u64)
-                .unwrap_or(0);
-            let committed = resume_metrics
-                .get("resume_committed")
-                .and_then(Value::as_u64)
-                .unwrap_or(0);
-            let artifact_set_valid = catalog_artifact_set_valid(&resumed["catalog"]);
-            let exact_identity = catalog_exact_identity(&resumed["catalog"])?;
-            let status = if reused > 0 && committed > 0 && artifact_set_valid {
-                "passed"
-            } else {
-                "failed"
-            };
-            samples.push(json!({
-                "sample": sample_index,
-                "status": status,
-                "interruption": checkpoint,
-                "resume_metrics": resume_metrics,
-                "exact_identity": exact_identity,
-                "artifact_set_valid": artifact_set_valid,
-                "resumed": resumed,
-            }));
+                // This ordinary launcher restart is the handled interruption. The
+                // next process receives the same isolated catalog contract and
+                // resumes from the already-synced target frame.
+                let resumed = run_catalog_build_rebuild_leg(
+                    config,
+                    &session,
+                    &endpoint,
+                    &sample_dir,
+                    "resumed",
+                    None,
+                    CatalogBuildRebuildLegOptions {
+                        exercise_arcade_ui: false,
+                        require_updater_index: false,
+                        launcher_env,
+                        runtime_command: catalog_build_rebuild_runtime_command,
+                    },
+                )?;
+                let resume_metrics = catalog_resume_validation_metrics(&resumed["phase_evidence"])?;
+                let reused = resume_metrics
+                    .get("resume_reused")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0);
+                let committed = resume_metrics
+                    .get("resume_committed")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0);
+                let artifact_set_valid = catalog_artifact_set_valid(&resumed["catalog"]);
+                let exact_identity = catalog_exact_identity(&resumed["catalog"])?;
+                let status = if reused > 0 && committed > 0 && artifact_set_valid {
+                    "passed"
+                } else {
+                    "failed"
+                };
+                samples.push(json!({
+                    "pair": pair_index,
+                    "arm": arm,
+                    "status": status,
+                    "interruption": checkpoint,
+                    "resume_metrics": resume_metrics,
+                    "exact_identity": exact_identity,
+                    "artifact_set_valid": artifact_set_valid,
+                    "resumed": resumed,
+                }));
+            }
         }
         let status = if samples
             .iter()
@@ -17383,11 +17392,12 @@ fn profile_installed_catalog_resume_validation(
             "failed"
         };
         Ok(json!({
-            "schema": "mister-magik-catalog-resume-validation-v1",
+            "schema": "mister-magik-catalog-resume-validation-v2",
             "scenario": "catalog-resume-validation",
             "status": status,
             "configuration": {
                 "samples": CATALOG_BUILD_REBUILD_SAMPLES,
+                "arms": ["baseline", "walker-native"],
                 "interruption": "ordinary Dev launcher restart after a synced target checkpoint",
                 "direct_reset": false,
                 "forced_background_catalog": false,
@@ -21991,13 +22001,14 @@ fn catalog_resume_validation_report(summary: &Value) -> Result<String> {
         "Status: **{}**\n\n",
         summary["status"].as_str().unwrap_or("failed")
     ));
-    report.push_str("| Sample | Checkpoint | Open | Frame decode | Validation | Output decode | Reused | Invalidated |\n");
-    report.push_str("| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n");
+    report.push_str("| Pair | Arm | Checkpoint | Open | Frame decode | Validation | Output decode | Reused | Invalidated |\n");
+    report.push_str("| ---: | :--- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n");
     for sample in samples {
         let metrics = &sample["resume_metrics"];
         report.push_str(&format!(
-            "| {} | {} ms | {} us | {} us | {} us | {} us | {} | {} |\n",
-            sample["sample"].as_u64().unwrap_or(0),
+            "| {} | {} | {} ms | {} us | {} us | {} us | {} us | {} | {} |\n",
+            sample["pair"].as_u64().unwrap_or(0),
+            sample["arm"].as_str().unwrap_or("unknown"),
             sample
                 .pointer("/interruption/checkpoint_ms")
                 .and_then(Value::as_u64)

@@ -196,6 +196,52 @@ pub(crate) struct FoundFile {
     pub(crate) mtime_secs: i64,
 }
 
+pub(crate) struct TargetFingerprint(u64);
+
+impl TargetFingerprint {
+    pub(crate) fn new() -> Self {
+        Self(0xcbf29ce484222325)
+    }
+
+    pub(crate) fn for_descriptor(descriptor: &ScanTargetDescriptor) -> Self {
+        let mut value = Self::new();
+        value.bytes(descriptor.path.to_string_lossy().as_bytes());
+        value.bytes(format!("{:?}", descriptor.kind).as_bytes());
+        value
+    }
+
+    fn bytes(&mut self, bytes: &[u8]) {
+        for byte in bytes {
+            self.0 ^= u64::from(*byte);
+            self.0 = self.0.wrapping_mul(0x100000001b3);
+        }
+        self.0 ^= 0xff;
+        self.0 = self.0.wrapping_mul(0x100000001b3);
+    }
+
+    pub(crate) fn file(&mut self, file: &FoundFile) {
+        self.bytes(file.path.to_string_lossy().as_bytes());
+        self.bytes(file.ext.as_bytes());
+        self.bytes(&file.size.to_le_bytes());
+        self.bytes(&file.mtime_secs.to_le_bytes());
+    }
+
+    pub(crate) fn facts(&mut self, facts: &GameDirFact) {
+        if let Ok(encoded) = serde_json::to_vec(facts) {
+            self.bytes(&encoded);
+        }
+    }
+
+    pub(crate) fn finish(&self) -> String {
+        format!("{:016x}", self.0)
+    }
+}
+
+pub(crate) struct ResumeFingerprintWalk {
+    pub(crate) fingerprints: Vec<(ScanTargetDescriptor, String)>,
+    pub(crate) attribution: NamespaceRouteAttribution,
+}
+
 pub(crate) struct RuntimeDirectoryCandidates {
     pub(crate) header: GameDirHeader,
     pub(crate) facts: GameDirFact,
@@ -407,6 +453,90 @@ pub(crate) fn discover_files_pipelined_for_resume_validation(
         role,
         crate::pmu_phase::WALK_RESUME_VALIDATION,
     )
+}
+
+pub(crate) fn fingerprint_resume_targets(
+    roots: Vec<String>,
+    plan: CatalogScanPlan,
+    excluded_targets: Vec<PathBuf>,
+    role: RuntimeThreadRole,
+) -> std::thread::JoinHandle<ResumeFingerprintWalk> {
+    std::thread::Builder::new()
+        .name("library-walker".to_string())
+        .spawn(move || {
+            apply_runtime_thread_policy(role);
+            let _background_scope = (role == RuntimeThreadRole::LibraryWalker)
+                .then(crate::cooperative_work::BackgroundScope::enter);
+            let walk_pmu =
+                mister_magik_perf_events::sampled_span(crate::pmu_phase::WALK_RESUME_VALIDATION);
+            let result = fingerprint_resume_targets_on_worker(&roots, &plan, &excluded_targets);
+            drop(walk_pmu);
+            mister_magik_perf_events::submit_thread_profile("library-walker");
+            result
+        })
+        .expect("spawn resume-validation walker")
+}
+
+fn fingerprint_resume_targets_on_worker(
+    roots: &[String],
+    plan: &CatalogScanPlan,
+    excluded_targets: &[PathBuf],
+) -> ResumeFingerprintWalk {
+    let profiles = plan.base_profiles();
+    let candidate_exts = source_index_extensions(profiles);
+    let targets = scan_targets_for_plan(roots, plan, profiles, excluded_targets);
+    let mut fingerprints = Vec::with_capacity(targets.len());
+    let mut attribution = NamespaceRouteAttribution::default();
+    let producer_started = Instant::now();
+    for (ordinal, target) in targets.into_iter().enumerate() {
+        let descriptor = target.descriptor(ordinal);
+        let mut fingerprint = TargetFingerprint::for_descriptor(&descriptor);
+        let stats = match target {
+            PlannedScanTarget::Static {
+                path,
+                game_dir_header,
+            } => {
+                let (stats, facts) = scan_target_candidates_with_facts(
+                    &path,
+                    profiles,
+                    &candidate_exts,
+                    game_dir_header.as_ref(),
+                    |file| {
+                        fingerprint.file(&file);
+                        true
+                    },
+                );
+                if let Some(facts) = facts {
+                    fingerprint.facts(&facts);
+                }
+                stats
+            }
+            PlannedScanTarget::Runtime(header) => {
+                let (stats, runtime) = scan_runtime_target_candidates(&header, plan);
+                fingerprint.facts(&runtime.facts);
+                for file in &runtime.files {
+                    fingerprint.file(file);
+                }
+                stats
+            }
+            PlannedScanTarget::FactsOnly(header) => {
+                let (stats, facts) = scan_game_dir_facts_only(&header);
+                fingerprint.facts(&facts);
+                stats
+            }
+        };
+        attribution.record(&descriptor.path, &stats);
+        report_namespace_target(&descriptor, &stats);
+        if stats.aborted {
+            break;
+        }
+        fingerprints.push((descriptor, fingerprint.finish()));
+    }
+    attribution.producer_us = producer_started.elapsed().as_micros() as u64;
+    ResumeFingerprintWalk {
+        fingerprints,
+        attribution,
+    }
 }
 
 fn discover_files_pipelined_with_plan_and_phase(
@@ -1957,6 +2087,77 @@ mod tests {
     use std::path::Path;
     use std::sync::mpsc;
     use std::time::Duration;
+
+    #[test]
+    fn walker_native_resume_fingerprints_match_event_pipeline() {
+        let root = unique_temp_dir("resume-fingerprint-parity");
+        let arcade = root.join("_Arcade");
+        std::fs::create_dir_all(&arcade).unwrap();
+        std::fs::write(
+            arcade.join("Parity Game.mra"),
+            "<misterromdescription><name>Parity Game</name><setname>parity</setname></misterromdescription>",
+        )
+        .unwrap();
+        let roots = vec![root.display().to_string()];
+        let plan = CatalogScanPlan::for_roots(&roots);
+        let rx = discover_files_pipelined_for_resume_validation(
+            roots.clone(),
+            plan.clone(),
+            Vec::new(),
+            RuntimeThreadRole::LibraryWalkerForeground,
+        );
+        let mut current = None;
+        let mut event_fingerprints = Vec::new();
+        while let Ok(event) = rx.recv() {
+            match event {
+                DiscoveryEvent::TargetStart(descriptor) => {
+                    current = Some((
+                        descriptor.clone(),
+                        TargetFingerprint::for_descriptor(&descriptor),
+                    ));
+                }
+                DiscoveryEvent::TargetRestart(restart) => {
+                    current = Some((
+                        restart.descriptor.clone(),
+                        TargetFingerprint::for_descriptor(&restart.descriptor),
+                    ));
+                }
+                DiscoveryEvent::File(file) => current.as_mut().unwrap().1.file(&file),
+                DiscoveryEvent::GameDirFacts(facts) => {
+                    current.as_mut().unwrap().1.facts(&facts);
+                }
+                DiscoveryEvent::RuntimeDirectory(runtime) => {
+                    let fingerprint = &mut current.as_mut().unwrap().1;
+                    fingerprint.facts(&runtime.facts);
+                    for file in &runtime.files {
+                        fingerprint.file(file);
+                    }
+                }
+                DiscoveryEvent::TargetComplete(_) => {
+                    let (descriptor, fingerprint) = current.take().unwrap();
+                    event_fingerprints.push((descriptor.path, fingerprint.finish()));
+                }
+                DiscoveryEvent::Done { .. } => break,
+            }
+        }
+
+        let native = fingerprint_resume_targets(
+            roots,
+            plan,
+            Vec::new(),
+            RuntimeThreadRole::LibraryWalkerForeground,
+        )
+        .join()
+        .unwrap();
+        let native_fingerprints = native
+            .fingerprints
+            .into_iter()
+            .map(|(descriptor, fingerprint)| (descriptor.path, fingerprint))
+            .collect::<Vec<_>>();
+        assert_eq!(native_fingerprints, event_fingerprints);
+        assert_eq!(native.attribution.targets, event_fingerprints.len());
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn background_scanner_pauses_and_resumes_without_losing_discoveries() {

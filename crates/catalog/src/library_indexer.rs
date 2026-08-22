@@ -9,7 +9,7 @@
 
 use crate::catalog_config::SCHEMA_VERSION;
 use crate::catalog_progress::{CatalogProgress, report_catalog_progress};
-use crate::catalog_scan::{self, DiscoveryEvent};
+use crate::catalog_scan::{self, DiscoveryEvent, TargetFingerprint as Fingerprint};
 use crate::core_audit;
 use crate::game_discovery::{
     GameDiscovery, catalog_system_id_for_discovery, discovery_from_profile_archive_entry,
@@ -465,6 +465,8 @@ pub(crate) struct ResumeValidationAttribution {
     pub(crate) open_us: u64,
     pub(crate) frame_decode_us: u64,
     pub(crate) validation_us: u64,
+    pub(crate) validation_backend: &'static str,
+    pub(crate) validation_join_us: u64,
     pub(crate) validation_receive_wait_us: u64,
     pub(crate) validation_consumer_us: u64,
     pub(crate) validation_events: usize,
@@ -501,7 +503,7 @@ pub(crate) struct CatalogScanAttribution {
 impl CatalogScanAttribution {
     pub(crate) fn compact_detail(&self) -> String {
         format!(
-            "scan_total_us={} scan_accounted_us={} scan_unattributed_us={} scan_plan_us={} scan_resume_us={} scan_prepared_payload_us={} scan_execution_pipeline_us={} scan_post_pipeline_us={} resume_enabled={} resume_state_present={} resume_state_seeded={} resume_open_us={} resume_frame_decode_us={} resume_validation_us={} resume_validation_receive_wait_us={} resume_validation_consumer_us={} resume_validation_events={} resume_validation_file_events={} resume_validation_facts_events={} resume_validation_runtime_events={} resume_output_decode_us={} resume_output_decode_bytes={} resume_output_decode_targets={} resume_committed={} resume_validated={} resume_reused={} resume_invalidated={} resume_unavailable={} resume_errors={} resume_setup_errors={} {} {}",
+            "scan_total_us={} scan_accounted_us={} scan_unattributed_us={} scan_plan_us={} scan_resume_us={} scan_prepared_payload_us={} scan_execution_pipeline_us={} scan_post_pipeline_us={} resume_enabled={} resume_state_present={} resume_state_seeded={} resume_open_us={} resume_frame_decode_us={} resume_validation_us={} resume_validation_backend={} resume_validation_join_us={} resume_validation_receive_wait_us={} resume_validation_consumer_us={} resume_validation_events={} resume_validation_file_events={} resume_validation_facts_events={} resume_validation_runtime_events={} resume_output_decode_us={} resume_output_decode_bytes={} resume_output_decode_targets={} resume_committed={} resume_validated={} resume_reused={} resume_invalidated={} resume_unavailable={} resume_errors={} resume_setup_errors={} {} {}",
             self.total_us,
             self.accounted_us,
             self.unattributed_us,
@@ -516,6 +518,8 @@ impl CatalogScanAttribution {
             self.resume.open_us,
             self.resume.frame_decode_us,
             self.resume.validation_us,
+            self.resume.validation_backend,
+            self.resume.validation_join_us,
             self.resume.validation_receive_wait_us,
             self.resume.validation_consumer_us,
             self.resume.validation_events,
@@ -541,44 +545,28 @@ impl CatalogScanAttribution {
 const RESUME_CHECKPOINT_TARGET_BATCH: usize = 16;
 const RESUME_CHECKPOINT_MAX_BYTES: usize = 2 * 1024 * 1024;
 
-struct Fingerprint(u64);
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ResumeValidationBackend {
+    EventPipeline,
+    WalkerNative,
+}
 
-impl Fingerprint {
-    fn new() -> Self {
-        Self(0xcbf29ce484222325)
-    }
-
-    fn for_descriptor(descriptor: &catalog_scan::ScanTargetDescriptor) -> Self {
-        let mut value = Self::new();
-        value.bytes(descriptor.path.to_string_lossy().as_bytes());
-        value.bytes(format!("{:?}", descriptor.kind).as_bytes());
-        value
-    }
-
-    fn bytes(&mut self, bytes: &[u8]) {
-        for byte in bytes {
-            self.0 ^= u64::from(*byte);
-            self.0 = self.0.wrapping_mul(0x100000001b3);
-        }
-        self.0 ^= 0xff;
-        self.0 = self.0.wrapping_mul(0x100000001b3);
-    }
-
-    fn file(&mut self, file: &catalog_scan::FoundFile) {
-        self.bytes(file.path.to_string_lossy().as_bytes());
-        self.bytes(file.ext.as_bytes());
-        self.bytes(&file.size.to_le_bytes());
-        self.bytes(&file.mtime_secs.to_le_bytes());
-    }
-
-    fn facts(&mut self, facts: &crate::catalog_discovery::GameDirFact) {
-        if let Ok(encoded) = serde_json::to_vec(facts) {
-            self.bytes(&encoded);
+impl ResumeValidationBackend {
+    fn capture_process() -> Self {
+        match std::env::var("MISTER_CATALOG_RESUME_VALIDATION_BACKEND")
+            .ok()
+            .as_deref()
+        {
+            Some("walker-native") => Self::WalkerNative,
+            _ => Self::EventPipeline,
         }
     }
 
-    fn finish(&self) -> String {
-        format!("{:016x}", self.0)
+    fn label(self) -> &'static str {
+        match self {
+            Self::EventPipeline => "event-pipeline",
+            Self::WalkerNative => "walker-native",
+        }
     }
 }
 
@@ -763,20 +751,32 @@ fn prepare_resume_scan(
         .collect();
     attribution.committed_targets = completed.len();
     let validation_started = Instant::now();
+    let validation_backend = ResumeValidationBackend::capture_process();
+    attribution.validation_backend = validation_backend.label();
     let (fingerprints, validation_namespace) = if completed.is_empty() {
         (
             HashMap::new(),
             catalog_scan::NamespaceRouteAttribution::default(),
         )
     } else {
-        validate_target_fingerprints(
-            cfg,
-            plan,
-            excluded_targets,
-            priority,
-            &completed,
-            &mut attribution,
-        )
+        match validation_backend {
+            ResumeValidationBackend::EventPipeline => validate_target_fingerprints_from_events(
+                cfg,
+                plan,
+                excluded_targets,
+                priority,
+                &completed,
+                &mut attribution,
+            ),
+            ResumeValidationBackend::WalkerNative => validate_target_fingerprints_in_walker(
+                cfg,
+                plan,
+                excluded_targets,
+                priority,
+                &completed,
+                &mut attribution,
+            ),
+        }
     };
     attribution.validation_us = validation_started.elapsed().as_micros() as u64;
     attribution.validated_targets = fingerprints.len();
@@ -846,7 +846,7 @@ fn target_output_systems(output_json: &str) -> BTreeSet<String> {
         .unwrap_or_default()
 }
 
-fn validate_target_fingerprints(
+fn validate_target_fingerprints_from_events(
     cfg: &BenchConfig,
     plan: &launch_profiles::CatalogScanPlan,
     excluded_targets: &[PathBuf],
@@ -973,6 +973,74 @@ fn validate_target_fingerprints(
             .saturating_add(consumer_started.elapsed().as_micros() as u64);
     }
     (fingerprints, namespace_attribution)
+}
+
+fn validate_target_fingerprints_in_walker(
+    cfg: &BenchConfig,
+    plan: &launch_profiles::CatalogScanPlan,
+    excluded_targets: &[PathBuf],
+    priority: LibraryScanPriority,
+    completed: &HashMap<u32, crate::build_progress::CompletedTarget>,
+    attribution: &mut ResumeValidationAttribution,
+) -> (
+    HashMap<u32, String>,
+    catalog_scan::NamespaceRouteAttribution,
+) {
+    let descriptors =
+        catalog_scan::planned_scan_target_descriptors(cfg.roots.as_slice(), plan, excluded_targets);
+    let completed_paths: BTreeSet<_> = completed
+        .values()
+        .map(|saved| saved.target.path.as_str())
+        .collect();
+    let mut validation_exclusions = excluded_targets.to_vec();
+    validation_exclusions.extend(
+        descriptors
+            .iter()
+            .filter(|descriptor| {
+                !completed_paths.contains(descriptor.path.to_string_lossy().as_ref())
+            })
+            .map(|descriptor| descriptor.path.clone()),
+    );
+    let role = match priority {
+        LibraryScanPriority::Background => crate::runtime_thread::RuntimeThreadRole::LibraryWalker,
+        LibraryScanPriority::Foreground => {
+            crate::runtime_thread::RuntimeThreadRole::LibraryWalkerForeground
+        }
+    };
+    let worker = catalog_scan::fingerprint_resume_targets(
+        cfg.roots.clone(),
+        plan.clone(),
+        validation_exclusions,
+        role,
+    );
+    let join_started = Instant::now();
+    let Ok(walk) = worker.join() else {
+        attribution.error_targets = attribution.error_targets.saturating_add(completed.len());
+        return (
+            HashMap::new(),
+            catalog_scan::NamespaceRouteAttribution::default(),
+        );
+    };
+    attribution.validation_join_us = join_started.elapsed().as_micros() as u64;
+    let consumer_started = Instant::now();
+    let fingerprints = walk
+        .fingerprints
+        .into_iter()
+        .filter_map(|(descriptor, fingerprint)| {
+            completed
+                .values()
+                .find(|saved| {
+                    saved.target.path == descriptor.path.to_string_lossy()
+                        && saved
+                            .target
+                            .key
+                            .starts_with(&format!("{:?}:", descriptor.kind))
+                })
+                .map(|saved| (saved.target.ordinal, fingerprint))
+        })
+        .collect();
+    attribution.validation_consumer_us = consumer_started.elapsed().as_micros() as u64;
+    (fingerprints, walk.attribution)
 }
 
 #[derive(Default)]
