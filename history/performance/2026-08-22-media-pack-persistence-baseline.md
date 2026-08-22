@@ -66,3 +66,18 @@ usable pack, and lowers memory. Production therefore retains direct streaming,
 with transactional sync/rename ordering and a bounded tmpfs recovery path only
 for destination create/write/flush failures. Network, size, and hash failures
 are never replayed automatically.
+
+## Retained production control
+
+The production-only authority passed after Dev delivery of `930d62582`:
+
+- Artifact: `build/agent-benchmarks/media-pack-persistence/1787409664`
+- NeoGeo median: 0.781 s total, 0.019 s finalize.
+- Arcade median: 2.932 s total, 0.062 s finalize.
+- Amiga median: 6.229 s total, 0.117 s finalize.
+- Process HWM: 6,576 KiB.
+- Nine of nine rows were `bench-ok` with the expected pack byte counts and
+  SHA-256 identities.
+
+The typed authority now exposes only the retained direct-stream production
+path; the staged/direct selector is absent.
