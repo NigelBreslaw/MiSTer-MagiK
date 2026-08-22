@@ -46,7 +46,9 @@ enum DriverSequence {
     TransitionRight,
     TransitionBack,
     ComputersSweep,
+    ComputersEnterSweep,
     ComputersRoundTrip,
+    ComputersEnterRoundTrip,
     LauncherResponse,
 }
 
@@ -91,6 +93,24 @@ impl DriverPlan {
                 sequence: DriverSequence::ComputersSweep,
             });
         }
+        if args.first().map(String::as_str) == Some("computers-enter-sweep") {
+            let interval_ms = parse_bounded(args.get(1), "interval_ms", 50, 600)?;
+            let start_delay_ms = parse_bounded(args.get(2), "start_delay_ms", 0, interval_ms - 1)?;
+            if args.len() != 3 {
+                return Err("usage: computers-enter-sweep interval_ms start_delay_ms".to_string());
+            }
+            return Ok(Self {
+                key_code: 106,
+                pulse_ms: 40,
+                gap_ms: interval_ms - 40,
+                start_delay_ms,
+                start_at_us: 0,
+                count: 9,
+                qualification: false,
+                cpu_load: false,
+                sequence: DriverSequence::ComputersEnterSweep,
+            });
+        }
         if args.first().map(String::as_str) == Some("computers-round-trip") {
             let interval_ms = parse_bounded(args.get(1), "interval_ms", 50, 600)?;
             let cycles = parse_bounded(args.get(2), "cycles", 1, 8)? as u32;
@@ -107,6 +127,24 @@ impl DriverPlan {
                 qualification: false,
                 cpu_load: false,
                 sequence: DriverSequence::ComputersRoundTrip,
+            });
+        }
+        if args.first().map(String::as_str) == Some("computers-enter-round-trip") {
+            let interval_ms = parse_bounded(args.get(1), "interval_ms", 50, 600)?;
+            let cycles = parse_bounded(args.get(2), "cycles", 1, 8)? as u32;
+            if args.len() != 3 {
+                return Err("usage: computers-enter-round-trip interval_ms cycles".to_string());
+            }
+            return Ok(Self {
+                key_code: 106,
+                pulse_ms: 40,
+                gap_ms: interval_ms - 40,
+                start_delay_ms: 0,
+                start_at_us: 0,
+                count: cycles * 16 + 1,
+                qualification: false,
+                cpu_load: false,
+                sequence: DriverSequence::ComputersEnterRoundTrip,
             });
         }
         if args.first().map(String::as_str) == Some("computers-round-trip-at") {
@@ -323,7 +361,11 @@ impl UinputDevice {
                 }
                 return self.pulse(106, 500);
             }
-            DriverSequence::ComputersSweep => {
+            DriverSequence::ComputersSweep | DriverSequence::ComputersEnterSweep => {
+                if plan.sequence == DriverSequence::ComputersEnterSweep {
+                    self.pulse(28, 10)?;
+                    std::thread::sleep(Duration::from_millis(1_200));
+                }
                 std::thread::sleep(Duration::from_millis(plan.start_delay_ms));
                 for index in 0..8 {
                     self.pulse(106, plan.pulse_ms)?;
@@ -333,8 +375,15 @@ impl UinputDevice {
                 }
                 return Ok(());
             }
-            DriverSequence::ComputersRoundTrip => {
-                for index in 0..plan.count {
+            DriverSequence::ComputersRoundTrip | DriverSequence::ComputersEnterRoundTrip => {
+                let measured_count = if plan.sequence == DriverSequence::ComputersEnterRoundTrip {
+                    self.pulse(28, 10)?;
+                    std::thread::sleep(Duration::from_millis(1_200));
+                    plan.count - 1
+                } else {
+                    plan.count
+                };
+                for index in 0..measured_count {
                     if plan.start_at_us > 0 {
                         let scheduled_at_us = plan.start_at_us.saturating_add(
                             u64::from(index)
@@ -546,6 +595,11 @@ mod tests {
         assert_eq!(sweep.pulse_ms, 40);
         assert_eq!(sweep.gap_ms, 10);
         assert_eq!(sweep.start_delay_ms, 13);
+        let enter_sweep =
+            DriverPlan::parse(&["computers-enter-sweep", "57", "7"].map(str::to_string)).unwrap();
+        assert_eq!(enter_sweep.sequence, DriverSequence::ComputersEnterSweep);
+        assert_eq!(enter_sweep.count, 9);
+        assert_eq!(enter_sweep.start_delay_ms, 7);
         let isolated =
             DriverPlan::parse(&["computers-sweep", "600", "455"].map(str::to_string)).unwrap();
         assert_eq!(isolated.gap_ms, 560);
@@ -557,6 +611,14 @@ mod tests {
         assert_eq!(round_trip.pulse_ms, 40);
         assert_eq!(round_trip.gap_ms, 560);
         assert_eq!(round_trip.count, 64);
+        let enter_round_trip =
+            DriverPlan::parse(&["computers-enter-round-trip", "600", "2"].map(str::to_string))
+                .unwrap();
+        assert_eq!(
+            enter_round_trip.sequence,
+            DriverSequence::ComputersEnterRoundTrip
+        );
+        assert_eq!(enter_round_trip.count, 33);
         let scheduled = DriverPlan::parse(
             &["computers-round-trip-at", "12345678", "600", "4"].map(str::to_string),
         )

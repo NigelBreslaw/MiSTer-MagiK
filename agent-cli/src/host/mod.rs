@@ -7405,17 +7405,15 @@ fn run_launcher_response_computers_sweep(
         "home",
         Some("menu:computers"),
     )?;
-    enter_computers_acorn_for_benchmark(session)?;
-    thread::sleep(Duration::from_millis(200));
     let driver = if isolated_profile {
-        format!("computers-round-trip {interval_ms} 2")
+        format!("computers-enter-round-trip {interval_ms} 2")
     } else {
-        format!("computers-sweep {interval_ms} {start_delay_ms}")
+        format!("computers-enter-sweep {interval_ms} {start_delay_ms}")
     };
     let driver_evidence = run_launcher_response_driver_evidence(session, &driver)?;
     validate_launcher_response_driver_evidence(
         &driver_evidence,
-        if isolated_profile { 32 } else { 8 },
+        if isolated_profile { 33 } else { 9 },
     )?;
     if let Err(error) = wait_launcher_response_completion(
         session,
