@@ -232,6 +232,17 @@ export global OverlayView {
     in property <LoadingState> startup-state;
 }
 
+// Narrow host-owned geometry shared by the independent CRT and HDMI shells.
+// Display policy, safe areas, typography, themes, and decoration remain with
+// their existing presentation owners.
+export global LauncherLayout {
+    in property <LayoutRect> arcade-list;
+    in property <LayoutRect> arcade-preview;
+    in property <LayoutRect> crt-header;
+    in property <LayoutRect> crt-footer;
+    in property <LayoutRect> crt-keyboard;
+}
+
 export global MisterBridge {
     // Rust-owned physically confirmed focus acknowledgements. The revision is
     // an explicit Slint dependency; the callback resolves stable surface/item IDs.

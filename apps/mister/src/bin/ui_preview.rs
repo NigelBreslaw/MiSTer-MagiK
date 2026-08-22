@@ -83,12 +83,13 @@ mod macos {
         ArcadeSearchPane as ViewArcadeSearchPane, ArcadeSearchStatus as ViewArcadeSearchStatus,
         ArcadeView, CatalogActivity, CatalogView, ChoiceOption, ConfirmationKind, DialogChoice,
         HomeFocus, HomeScrollPhase, InformationView, InputAvailability, InputView, Launcher,
-        LauncherScreen, LoadingState, MediaPackRow, MediaPackState, MediaView, MenuItem,
-        MenuItemKind, MenuItemPresentation, MenuItemStatus, MisterBridge, MisterUi,
-        NavigationTransitionState as ViewNavigationTransitionState, NavigationView, OverlayView,
-        PreviewState as ViewPreviewState, ProgressMode, ScreenOrientation as ViewScreenOrientation,
-        ScreensaverSetting, SettingsPopup, SettingsSection, SettingsView, SetupEntry, SetupField,
-        SetupPhase as ViewSetupPhase, SetupView, SystemHubSection,
+        LauncherLayout, LauncherScreen, LayoutRect, LoadingState, MediaPackRow, MediaPackState,
+        MediaView, MenuItem, MenuItemKind, MenuItemPresentation, MenuItemStatus, MisterBridge,
+        MisterUi, NavigationTransitionState as ViewNavigationTransitionState, NavigationView,
+        OverlayView, PreviewState as ViewPreviewState, ProgressMode,
+        ScreenOrientation as ViewScreenOrientation, ScreensaverSetting, SettingsPopup,
+        SettingsSection, SettingsView, SetupEntry, SetupField, SetupPhase as ViewSetupPhase,
+        SetupView, SystemHubSection,
     };
     use sha2::{Digest, Sha256};
     use slint::platform::software_renderer::{RepaintBufferType, Rgb565Pixel};
@@ -849,6 +850,7 @@ mod macos {
 
         fn sync_orientation_geometry(&self) {
             let bridge = self.launcher.global::<MisterBridge>();
+            let layout = self.launcher.global::<LauncherLayout>();
             let settings = self.launcher.global::<SettingsView>();
             settings.set_active_orientation(match self.orientation {
                 ScreenOrientation::Normal => ViewScreenOrientation::Normal,
@@ -872,6 +874,12 @@ mod macos {
             bridge.set_arcade_preview_box_y(preview.y0 as i32);
             bridge.set_arcade_preview_box_width(preview.width() as i32);
             bridge.set_arcade_preview_box_height(preview.rows() as i32);
+            layout.set_arcade_preview(LayoutRect {
+                x: preview.x0 as i32,
+                y: preview.y0 as i32,
+                width: preview.width() as i32,
+                height: preview.rows() as i32,
+            });
             let margin = 16usize;
             let search = matches!(self.scenario, Scenario::ArcadeSearch);
             let list_y = if search { 56 } else { preview.y1 + 12 };
@@ -884,6 +892,12 @@ mod macos {
             bridge.set_arcade_list_y(list_y as i32);
             bridge.set_arcade_list_width(self.frame_width.saturating_sub(margin * 2) as i32);
             bridge.set_arcade_list_height(list_height as i32);
+            layout.set_arcade_list(LayoutRect {
+                x: margin as i32,
+                y: list_y as i32,
+                width: self.frame_width.saturating_sub(margin * 2) as i32,
+                height: list_height as i32,
+            });
         }
 
         fn move_selection(&mut self, delta: isize) {
@@ -4416,6 +4430,7 @@ mod macos {
         selected: usize,
     ) {
         let bridge = launcher.global::<MisterBridge>();
+        let layout = launcher.global::<LauncherLayout>();
         let arcade = launcher.global::<ArcadeView>();
         arcade.set_active_title(title.into());
         arcade.set_active_count(games.len() as i32);
@@ -4445,6 +4460,12 @@ mod macos {
         bridge.set_arcade_list_y(56);
         bridge.set_arcade_list_width(510);
         bridge.set_arcade_list_height(452);
+        layout.set_arcade_list(LayoutRect {
+            x: 8,
+            y: 56,
+            width: 510,
+            height: 452,
+        });
         arcade.set_list_visible(true);
         arcade.set_preview_state(ViewPreviewState::Ready);
         arcade.set_preview_title(
@@ -4462,6 +4483,12 @@ mod macos {
         bridge.set_arcade_preview_box_y(92);
         bridge.set_arcade_preview_box_width(320);
         bridge.set_arcade_preview_box_height(320);
+        layout.set_arcade_preview(LayoutRect {
+            x: 8,
+            y: 92,
+            width: 320,
+            height: 320,
+        });
     }
 
     fn scale_rgb565_nearest(

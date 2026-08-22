@@ -105,7 +105,7 @@ pub(super) fn init_launcher_bridge(app: &slint_ui::launcher::Launcher, pad: &Pad
     >::new())));
     arcade.set_selected_game_index(0);
     arcade.set_selected_game_id("".into());
-    sync_launcher_arcade_geometry_bridge(&bridge);
+    sync_launcher_arcade_geometry_bridge(app);
     arcade.set_load_state(slint_ui::launcher::ArcadeLoadState::Ready);
     let search_keys = crate::launcher::ARCADE_SEARCH_KEYS
         .iter()
@@ -223,7 +223,28 @@ fn last_database_build() -> String {
     .unwrap_or_else(|| "No completed database build recorded yet".to_string())
 }
 
-pub(super) fn sync_launcher_arcade_geometry_bridge(bridge: &slint_ui::launcher::MisterBridge) {
+fn layout_rect(x: i32, y: i32, width: i32, height: i32) -> slint_ui::launcher::LayoutRect {
+    slint_ui::launcher::LayoutRect {
+        x,
+        y,
+        width,
+        height,
+    }
+}
+
+fn layout_rect_matches(
+    current: &slint_ui::launcher::LayoutRect,
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+) -> bool {
+    current.x == x && current.y == y && current.width == width && current.height == height
+}
+
+pub(super) fn sync_launcher_arcade_geometry_bridge(app: &slint_ui::launcher::Launcher) {
+    let bridge = app.global::<slint_ui::launcher::MisterBridge>();
+    let layout = app.global::<slint_ui::launcher::LauncherLayout>();
     bridge.set_arcade_list_x(ARCADE_LIST_X as i32);
     bridge.set_arcade_list_y(ARCADE_LIST_Y as i32);
     bridge.set_arcade_list_width(ARCADE_LIST_W as i32);
@@ -232,25 +253,46 @@ pub(super) fn sync_launcher_arcade_geometry_bridge(bridge: &slint_ui::launcher::
     bridge.set_arcade_preview_box_y(ARCADE_PREVIEW_BOX_Y as i32);
     bridge.set_arcade_preview_box_width(ARCADE_PREVIEW_BOX_W as i32);
     bridge.set_arcade_preview_box_height(ARCADE_PREVIEW_BOX_H as i32);
+    layout.set_arcade_list(layout_rect(
+        ARCADE_LIST_X as i32,
+        ARCADE_LIST_Y as i32,
+        ARCADE_LIST_W as i32,
+        ARCADE_LIST_H as i32,
+    ));
+    layout.set_arcade_preview(layout_rect(
+        ARCADE_PREVIEW_BOX_X as i32,
+        ARCADE_PREVIEW_BOX_Y as i32,
+        ARCADE_PREVIEW_BOX_W as i32,
+        ARCADE_PREVIEW_BOX_H as i32,
+    ));
 }
 
 fn sync_arcade_list_geometry_bridge(
-    bridge: &slint_ui::launcher::MisterBridge,
+    app: &slint_ui::launcher::Launcher,
     nav: &LauncherNav,
     ui: &UiDisplay,
 ) {
+    let bridge = app.global::<slint_ui::launcher::MisterBridge>();
+    let layout = app.global::<slint_ui::launcher::LauncherLayout>();
     // Rust and Slint consume one route-owned PAL geometry contract.
     let (geometry, visible_height) = arcade_list_layout(nav, ui);
     bridge.set_arcade_list_x(geometry.x as i32);
     bridge.set_arcade_list_y(geometry.y as i32);
     bridge.set_arcade_list_width(geometry.width as i32);
     bridge.set_arcade_list_height(visible_height as i32);
-    sync_crt_arcade_layout_bridge(bridge, nav, ui);
-    sync_arcade_preview_geometry_bridge(bridge, nav, ui);
+    layout.set_arcade_list(layout_rect(
+        geometry.x as i32,
+        geometry.y as i32,
+        geometry.width as i32,
+        visible_height as i32,
+    ));
+    sync_crt_arcade_layout_bridge(&bridge, &layout, nav, ui);
+    sync_arcade_preview_geometry_bridge(&bridge, &layout, nav, ui);
 }
 
 fn sync_arcade_preview_geometry_bridge(
     bridge: &slint_ui::launcher::MisterBridge,
+    layout: &slint_ui::launcher::LauncherLayout,
     nav: &LauncherNav,
     ui: &UiDisplay,
 ) {
@@ -264,6 +306,12 @@ fn sync_arcade_preview_geometry_bridge(
     bridge.set_arcade_preview_box_y(rect.y0 as i32);
     bridge.set_arcade_preview_box_width(rect.width() as i32);
     bridge.set_arcade_preview_box_height(rect.rows() as i32);
+    layout.set_arcade_preview(layout_rect(
+        rect.x0 as i32,
+        rect.y0 as i32,
+        rect.width() as i32,
+        rect.rows() as i32,
+    ));
 }
 
 pub(super) fn arcade_list_layout(nav: &LauncherNav, ui: &UiDisplay) -> (ArcadeListGeometry, usize) {
@@ -293,6 +341,7 @@ pub(super) fn arcade_list_layout(nav: &LauncherNav, ui: &UiDisplay) -> (ArcadeLi
 
 fn sync_crt_arcade_layout_bridge(
     bridge: &slint_ui::launcher::MisterBridge,
+    layout: &slint_ui::launcher::LauncherLayout,
     nav: &LauncherNav,
     ui: &UiDisplay,
 ) {
@@ -314,8 +363,8 @@ fn sync_crt_arcade_layout_bridge(
             rect.height as i32,
         )
     };
-    let (header_x, header_y, header_width, _) = relative(arcade.header);
-    let (footer_x, footer_y, footer_width, _) = relative(arcade.footer);
+    let (header_x, header_y, header_width, header_height) = relative(arcade.header);
+    let (footer_x, footer_y, footer_width, footer_height) = relative(arcade.footer);
     let (keyboard_x, keyboard_y, keyboard_width, keyboard_height) =
         arcade.search_keyboard.map(relative).unwrap_or_default();
     bridge.set_arcade_crt_header_x(header_x);
@@ -328,6 +377,14 @@ fn sync_crt_arcade_layout_bridge(
     bridge.set_arcade_crt_keyboard_y(keyboard_y);
     bridge.set_arcade_crt_keyboard_width(keyboard_width);
     bridge.set_arcade_crt_keyboard_height(keyboard_height);
+    layout.set_crt_header(layout_rect(header_x, header_y, header_width, header_height));
+    layout.set_crt_footer(layout_rect(footer_x, footer_y, footer_width, footer_height));
+    layout.set_crt_keyboard(layout_rect(
+        keyboard_x,
+        keyboard_y,
+        keyboard_width,
+        keyboard_height,
+    ));
 }
 
 pub(super) struct CatalogScanBridgeStatus {
@@ -748,7 +805,6 @@ pub(super) fn sync_bridge_launcher(
     measure_model_projection: bool,
     ui: &UiDisplay,
 ) -> LauncherBridgeSyncTiming {
-    let bridge = app.global::<slint_ui::launcher::MisterBridge>();
     let model_started = measure_model_projection.then(Instant::now);
     models.sync(
         app,
@@ -766,7 +822,7 @@ pub(super) fn sync_bridge_launcher(
     let clock_text = SharedString::from(launcher_clock_text());
     app.global::<slint_ui::launcher::NavigationView>()
         .set_clock_text(clock_text);
-    sync_arcade_list_geometry_bridge(&bridge, nav, ui);
+    sync_arcade_list_geometry_bridge(app, nav, ui);
     let active_games_loading = active_system_games_loading(catalog, nav);
     sync_launcher_confirm_bridge(
         &app.global::<slint_ui::launcher::OverlayView>(),
@@ -816,9 +872,8 @@ pub(super) fn sync_bridge_launcher_light(
     let model_projection_us = model_started
         .map(|started| started.elapsed().as_micros())
         .unwrap_or(0);
-    let bridge = app.global::<slint_ui::launcher::MisterBridge>();
     let active_games_loading = active_system_games_loading(catalog, nav);
-    sync_arcade_list_geometry_bridge_if_changed(&bridge, nav, ui);
+    sync_arcade_list_geometry_bridge_if_changed(app, nav, ui);
     sync_launcher_confirm_bridge(
         &app.global::<slint_ui::launcher::OverlayView>(),
         nav,
@@ -884,10 +939,12 @@ pub(super) fn active_system_game_view<'a>(
 }
 
 fn sync_arcade_list_geometry_bridge_if_changed(
-    bridge: &slint_ui::launcher::MisterBridge,
+    app: &slint_ui::launcher::Launcher,
     nav: &LauncherNav,
     ui: &UiDisplay,
 ) {
+    let bridge = app.global::<slint_ui::launcher::MisterBridge>();
+    let layout = app.global::<slint_ui::launcher::LauncherLayout>();
     let (geometry, visible_height) = arcade_list_layout(nav, ui);
     set_bridge_if_changed!(
         bridge,
@@ -913,7 +970,21 @@ fn sync_arcade_list_geometry_bridge_if_changed(
         set_arcade_list_height,
         visible_height as i32
     );
-    sync_crt_arcade_layout_bridge(bridge, nav, ui);
+    if !layout_rect_matches(
+        &layout.get_arcade_list(),
+        geometry.x as i32,
+        geometry.y as i32,
+        geometry.width as i32,
+        visible_height as i32,
+    ) {
+        layout.set_arcade_list(layout_rect(
+            geometry.x as i32,
+            geometry.y as i32,
+            geometry.width as i32,
+            visible_height as i32,
+        ));
+    }
+    sync_crt_arcade_layout_bridge(&bridge, &layout, nav, ui);
     let (width, height) = if nav.uses_portrait_layout() {
         (ui.render_h(), ui.render_w())
     } else {
@@ -944,6 +1015,20 @@ fn sync_arcade_list_geometry_bridge_if_changed(
         set_arcade_preview_box_height,
         preview.rows() as i32
     );
+    if !layout_rect_matches(
+        &layout.get_arcade_preview(),
+        preview.x0 as i32,
+        preview.y0 as i32,
+        preview.width() as i32,
+        preview.rows() as i32,
+    ) {
+        layout.set_arcade_preview(layout_rect(
+            preview.x0 as i32,
+            preview.y0 as i32,
+            preview.width() as i32,
+            preview.rows() as i32,
+        ));
+    }
 }
 
 pub(super) fn active_system_games_loading(catalog: &ArcadeCatalog, nav: &LauncherNav) -> bool {
@@ -1411,6 +1496,85 @@ mod tests {
     use std::path::PathBuf;
     use std::rc::Rc;
     use std::time::{Duration, Instant};
+
+    fn assert_layout_dual_projection(nav: &LauncherNav, ui: &UiDisplay, label: &str) {
+        let app = slint_ui::launcher::Launcher::new().expect("launcher component");
+        sync_arcade_list_geometry_bridge(&app, nav, ui);
+        let bridge = app.global::<slint_ui::launcher::MisterBridge>();
+        let layout = app.global::<slint_ui::launcher::LauncherLayout>();
+        let list = layout.get_arcade_list();
+        assert_eq!(list.x, bridge.get_arcade_list_x(), "{label} list x");
+        assert_eq!(list.y, bridge.get_arcade_list_y(), "{label} list y");
+        assert_eq!(
+            list.width,
+            bridge.get_arcade_list_width(),
+            "{label} list width"
+        );
+        assert_eq!(
+            list.height,
+            bridge.get_arcade_list_height(),
+            "{label} list height"
+        );
+        let preview = layout.get_arcade_preview();
+        assert_eq!(
+            preview.x,
+            bridge.get_arcade_preview_box_x(),
+            "{label} preview x"
+        );
+        assert_eq!(
+            preview.y,
+            bridge.get_arcade_preview_box_y(),
+            "{label} preview y"
+        );
+        assert_eq!(
+            preview.width,
+            bridge.get_arcade_preview_box_width(),
+            "{label} preview width"
+        );
+        assert_eq!(
+            preview.height,
+            bridge.get_arcade_preview_box_height(),
+            "{label} preview height"
+        );
+        if nav.uses_crt_layout() {
+            let header = layout.get_crt_header();
+            assert_eq!(header.x, bridge.get_arcade_crt_header_x());
+            assert_eq!(header.y, bridge.get_arcade_crt_header_y());
+            assert_eq!(header.width, bridge.get_arcade_crt_header_width());
+            let footer = layout.get_crt_footer();
+            assert_eq!(footer.x, bridge.get_arcade_crt_footer_x());
+            assert_eq!(footer.y, bridge.get_arcade_crt_footer_y());
+            assert_eq!(footer.width, bridge.get_arcade_crt_footer_width());
+            let keyboard = layout.get_crt_keyboard();
+            assert_eq!(keyboard.x, bridge.get_arcade_crt_keyboard_x());
+            assert_eq!(keyboard.y, bridge.get_arcade_crt_keyboard_y());
+            assert_eq!(keyboard.width, bridge.get_arcade_crt_keyboard_width());
+            assert_eq!(keyboard.height, bridge.get_arcade_crt_keyboard_height());
+        }
+    }
+
+    #[test]
+    fn launcher_layout_matches_legacy_geometry_for_all_display_families() {
+        init_test_slint_platform();
+        for (pal, label) in [(0, "CRT 240p"), (1, "CRT 288p")] {
+            let plan = crate::ui_display::UiDisplayPlan::from_mister_ini_text(&format!(
+                "[MiSTer]\ndirect_video=1\nmenu_pal={pal}\nforced_scandoubler=0\n"
+            ))
+            .expect("CRT display plan");
+            let ui = UiDisplay::for_plan(plan);
+            let metrics = CrtUiMetrics::for_display(&ui);
+            let nav = LauncherNav::for_crt_layout_with_row_height(true, metrics.game_row_height);
+            assert_layout_dual_projection(&nav, &ui, label);
+        }
+
+        let hdmi = UiDisplay::for_framebuffer(960, 540);
+        let landscape = LauncherNav::new();
+        assert_layout_dual_projection(&landscape, &hdmi, "HDMI landscape");
+
+        let mut portrait = LauncherNav::new();
+        portrait.settings.screen_orientation = ScreenOrientation::MonitorClockwise;
+        assert_layout_dual_projection(&portrait, &hdmi, "HDMI portrait");
+    }
 
     #[test]
     fn info_build_label_uses_version_without_repeating_build_number() {
