@@ -37,7 +37,7 @@
 //!                        build supplemental HBMAME metadata from parsed MRA parents
 //!   Bench tools (`--features bench-tools`):
 //!     media-bench-download
-//!                        benchmark screenshot pack downloads and variant decoding
+//!                        benchmark raw screenshot pack persistence
 //!     media-bench-save   benchmark screenshot pack save/publish paths
 //!     preview-pack-bench benchmark screenshot pack entry access/decode timings
 //!     preview-index-refresh-bench

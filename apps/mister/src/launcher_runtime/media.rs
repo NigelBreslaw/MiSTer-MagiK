@@ -692,6 +692,15 @@ fn download_raw_pack_and_index(
         unix_ms_now()
     ));
     let _ = fs::remove_file(&stage_path);
+    let pack_publish = prepare_artifact_publish(
+        local_path,
+        hidden_timestamped_temp_path_for(local_path, "screenshot-pack", unix_ms_now()),
+        ArtifactPublishLabels {
+            destination: "pack destination",
+            parent: "pack destination parent",
+        },
+    )
+    .ok();
     let index_path = index_path_for_pack_path(local_path);
     let index_publish = if pack.index.is_some() {
         Some(prepare_artifact_publish(
@@ -718,15 +727,47 @@ fn download_raw_pack_and_index(
             )?),
             _ => None,
         };
-        let pack_stream_result = stream_variant_to_stage_file(
-            variant,
-            pack,
-            &stage_path,
-            &headers_tmp,
-            pack_index,
-            pack_count,
-            tx,
-        );
+        let (pack_stream_result, streamed_directly) = if let Some(publish) = &pack_publish {
+            match stream_variant_to_stage_file(
+                variant,
+                pack,
+                publish.temp_path(),
+                &headers_tmp,
+                pack_index,
+                pack_count,
+                tx,
+            ) {
+                Err(error) if recoverable_direct_pack_write_error(&error) => {
+                    publish.cleanup_temp();
+                    (
+                        stream_variant_to_stage_file(
+                            variant,
+                            pack,
+                            &stage_path,
+                            &headers_tmp,
+                            pack_index,
+                            pack_count,
+                            tx,
+                        ),
+                        false,
+                    )
+                }
+                result => (result, true),
+            }
+        } else {
+            (
+                stream_variant_to_stage_file(
+                    variant,
+                    pack,
+                    &stage_path,
+                    &headers_tmp,
+                    pack_index,
+                    pack_count,
+                    tx,
+                ),
+                false,
+            )
+        };
         let index_stream_result = pending_index
             .map(join_silent_index_download)
             .transpose()
@@ -756,15 +797,31 @@ fn download_raw_pack_and_index(
         } else {
             None
         };
-        install_staged_pack(
-            &stage_path,
-            &streamed,
-            local_path,
-            pack,
-            pack_index,
-            pack_count,
-            tx,
-        )?;
+        if streamed_directly {
+            install_streamed_object(
+                pack_publish
+                    .as_ref()
+                    .expect("direct stream requires a publish plan"),
+                &streamed,
+                pack,
+                "identity",
+                "screenshot pack",
+                pack_index,
+                pack_count,
+                tx,
+                true,
+            )?;
+        } else {
+            install_staged_pack(
+                &stage_path,
+                &streamed,
+                local_path,
+                pack,
+                pack_index,
+                pack_count,
+                tx,
+            )?;
+        }
         if let (Some(index), Some(index_publish), Some(index_streamed)) =
             (&pack.index, index_publish.as_ref(), index_streamed.as_ref())
         {
@@ -789,6 +846,9 @@ fn download_raw_pack_and_index(
     })();
     if result.is_err() {
         let _ = fs::remove_file(&stage_path);
+        if let Some(pack_publish) = &pack_publish {
+            pack_publish.cleanup_temp();
+        }
         cleanup_pack_publish_temps(local_path);
         if let Some(index_publish) = index_publish.as_ref() {
             index_publish.cleanup_temp();
@@ -799,6 +859,12 @@ fn download_raw_pack_and_index(
         let _ = fs::remove_file(stage_path);
     }
     result
+}
+
+fn recoverable_direct_pack_write_error(error: &str) -> bool {
+    error.starts_with("create ")
+        || error.starts_with("write streamed pack:")
+        || error.starts_with("flush streamed pack ")
 }
 
 fn download_index_for_current_pack(
@@ -1275,9 +1341,13 @@ fn install_streamed_object_with_fault_control(
             streamed.bytes
         ));
     }
-    if progress_variant == "index" {
+    if let Some(point) = match progress_variant {
+        "identity" => Some("media.pack.after_temp_write"),
+        "index" => Some("media.index.after_temp_write"),
+        _ => None,
+    } {
         mister_magik_catalog::fs_fault::maybe_fault_with_control(
-            "media.index.after_temp_write",
+            point,
             publish.temp_path(),
             fault_control,
         );
@@ -1306,9 +1376,13 @@ fn install_streamed_object_with_fault_control(
             publish.temp_path().display()
         )
     })?;
-    if progress_variant == "index" {
+    if let Some(point) = match progress_variant {
+        "identity" => Some("media.pack.after_temp_sync"),
+        "index" => Some("media.index.after_temp_sync"),
+        _ => None,
+    } {
         mister_magik_catalog::fs_fault::maybe_fault_with_control(
-            "media.index.after_temp_sync",
+            point,
             publish.temp_path(),
             fault_control,
         );
@@ -1321,9 +1395,13 @@ fn install_streamed_object_with_fault_control(
         );
     }
     publish.install_temp(Some(install_label))?;
-    if progress_variant == "index" {
+    if let Some(point) = match progress_variant {
+        "identity" => Some("media.pack.after_rename_before_parent_sync"),
+        "index" => Some("media.index.after_rename_before_parent_sync"),
+        _ => None,
+    } {
         mister_magik_catalog::fs_fault::maybe_fault_with_control(
-            "media.index.after_rename_before_parent_sync",
+            point,
             publish.temp_path(),
             fault_control,
         );
@@ -2449,6 +2527,83 @@ mod tests {
         assert!(err.contains("staged file size mismatch"));
         assert_eq!(fs::read(&final_path).unwrap(), b"old");
         let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn streamed_pack_publish_preserves_progress_and_fault_order() {
+        let dir = temp_dir("mister-magik-stream-publish-pack");
+        let final_path = dir.join("arcade-screenshots-320x320.mmlz4b");
+        let temp_path = hidden_timestamped_temp_path_for(&final_path, "screenshot-pack", "test");
+        let publish = prepare_artifact_publish(
+            &final_path,
+            temp_path.clone(),
+            ArtifactPublishLabels {
+                destination: "test pack destination",
+                parent: "test pack parent",
+            },
+        )
+        .unwrap();
+        fs::write(publish.temp_path(), b"new").unwrap();
+        fs::write(&final_path, b"old").unwrap();
+        let streamed = StreamedPackDownload {
+            bytes: 3,
+            sha256: SHA.to_string(),
+        };
+        let pack = pack_fixture();
+        let (tx, rx) = mpsc::channel();
+        let mut fault_control = RecordingFaultControl::default();
+
+        install_streamed_object_with_fault_control(
+            &publish,
+            &streamed,
+            &pack,
+            "identity",
+            "screenshot pack",
+            1,
+            1,
+            &tx,
+            true,
+            &mut fault_control,
+        )
+        .unwrap();
+
+        assert_eq!(fs::read(&final_path).unwrap(), b"new");
+        assert!(!temp_path.exists());
+        let phases = rx
+            .try_iter()
+            .filter_map(|message| match message {
+                MediaWorkerMessage::Progress(event) => Some(event.phase),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(phases, ["save", "sync", "rename", "parent-sync"]);
+        assert_eq!(
+            fault_control.points,
+            [
+                "media.pack.after_temp_write",
+                "media.pack.after_temp_sync",
+                "media.pack.after_rename_before_parent_sync",
+            ]
+        );
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn direct_pack_fallback_is_limited_to_destination_write_failures() {
+        for error in [
+            "create /media/fat/pack.tmp: no space",
+            "write streamed pack: input/output error",
+            "flush streamed pack /media/fat/pack.tmp: input/output error",
+        ] {
+            assert!(recoverable_direct_pack_write_error(error));
+        }
+        for error in [
+            "curl exited with exit status: 28",
+            "write pack hash stream: broken pipe",
+            "pack exceeds declared size expected=3",
+        ] {
+            assert!(!recoverable_direct_pack_write_error(error));
+        }
     }
 
     #[test]

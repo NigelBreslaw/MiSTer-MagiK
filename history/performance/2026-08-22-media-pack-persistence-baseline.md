@@ -37,3 +37,32 @@ catalog work beside the UI now occurs only for the genuine first boot with no
 catalog or after an explicit user rebuild. Forced background catalog work is
 therefore not a qualification gate for this item. The large current save phase
 justifies a fresh production-off direct-stream comparison.
+
+## Direct-stream comparison and retention
+
+Experiment revision `b1ea232a2` ran three alternating staged/direct pairs in
+`build/agent-benchmarks/media-pack-persistence/1787408792`. Every arm selected
+the same three pack identities and byte counts, matched the production hashes,
+reported `bench-ok`, and removed its hidden pack/state artifacts.
+
+| Pack | Staged total | Direct total | Total delta | Staged save | Direct finalize | Save delta |
+|---|---:|---:|---:|---:|---:|---:|
+| NeoGeo | 0.899 s | 0.790 s | -12.1% | 0.400 s | 0.033 s | -91.8% |
+| Arcade | 3.755 s | 3.285 s | -12.5% | 1.923 s | 0.062 s | -96.8% |
+| Amiga | 7.038 s | 6.100 s | -13.3% | 3.607 s | 0.118 s | -96.7% |
+
+Candidate HWM was 6,568 KiB versus 6,620 KiB for staged controls, and tmpfs
+pack bytes fell from one full pack per row to zero. Direct download/write
+throughput was 53–64 Mbit/s versus 110–160 Mbit/s for tmpfs staging because the
+same unavoidable exFAT write moved into that phase. That misses the isolated
+network-throughput sub-gate, but every representative end-to-end flow finishes
+12.1–13.3% sooner and the separate post-download wait is nearly eliminated.
+
+The original reason for reinstating tmpfs was interference from automatic
+background catalog scans, which no longer occur. With catalog refresh off and
+no forced-background requirement, the throughput movement is not a product
+regression: it changes when the user sees the exFAT work, reduces the time to a
+usable pack, and lowers memory. Production therefore retains direct streaming,
+with transactional sync/rename ordering and a bounded tmpfs recovery path only
+for destination create/write/flush failures. Network, size, and hash failures
+are never replayed automatically.

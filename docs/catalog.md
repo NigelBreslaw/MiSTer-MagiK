@@ -354,6 +354,17 @@ replace an active changed collection, remove deleted systems, or return Home
 when the active collection was removed. A warm failure keeps the old generation
 and screenshot media available.
 
+Raw screenshot packs stream through one bounded 256 KiB buffer directly into a
+hidden sibling temporary file on exFAT while the same bytes feed SHA-256. Size
+and hash must match both the selected raw variant and pack identity before the
+temporary file is synced, renamed, and followed by a parent-directory sync.
+Only then may the index and media-state authority publish. Failure before
+rename leaves the previous pack authoritative and removes the incomplete
+sibling. A destination create/write/flush failure may retry through the bounded
+tmpfs staging path; network, size, and hash failures are not replayed. The raw
+`.mmlz4b` production format has no decode phase. Index download remains bounded
+and may overlap the pack transfer, but exFAT publication remains serialized.
+
 ## Compatibility And Recovery
 
 The projection contract and shard schema identify generated catalog formats,

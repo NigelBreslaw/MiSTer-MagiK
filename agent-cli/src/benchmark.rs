@@ -2209,28 +2209,13 @@ fn execute_media_pack_persistence(
 
 fn evaluate_media_pack_persistence_summary(summary: &Value) -> AgentResult<()> {
     if summary.get("schema").and_then(Value::as_str)
-        != Some("mister-magik-media-pack-persistence-comparison-v1")
+        != Some("mister-magik-media-pack-persistence-v1")
         || summary.get("status").and_then(Value::as_str) != Some("passed")
+        || summary.get("save_strategy").and_then(Value::as_str) != Some("stream-fat")
+        || summary.get("decode_ms").and_then(Value::as_u64) != Some(0)
+        || summary.get("row_count").and_then(Value::as_u64) != Some(9)
     {
-        return Err("media-pack persistence benchmark is not a passing comparison".into());
-    }
-    for (field, strategy) in [
-        ("baseline_runs", "staged"),
-        ("candidate_runs", "stream-fat"),
-    ] {
-        let runs = summary
-            .get(field)
-            .and_then(Value::as_array)
-            .ok_or_else(|| format!("media-pack persistence comparison has no {field}"))?;
-        if runs.len() != 3
-            || runs.iter().any(|run| {
-                run.get("save_strategy").and_then(Value::as_str) != Some(strategy)
-                    || run.get("decode_ms").and_then(Value::as_u64) != Some(0)
-                    || run.get("row_count").and_then(Value::as_u64) != Some(3)
-            })
-        {
-            return Err(format!("media-pack persistence comparison has invalid {field}").into());
-        }
+        return Err("media-pack persistence benchmark is not a passing production report".into());
     }
     Ok(())
 }
@@ -3384,25 +3369,22 @@ mod tests {
     }
 
     #[test]
-    fn media_pack_persistence_evaluator_requires_three_paired_runs() {
-        let baseline = json!({
-            "save_strategy": "staged",
-            "decode_ms": 0,
-            "row_count": 3,
-        });
-        let candidate = json!({
+    fn media_pack_persistence_evaluator_requires_production_streaming_rows() {
+        let passing = json!({
+            "schema": "mister-magik-media-pack-persistence-v1",
+            "status": "passed",
             "save_strategy": "stream-fat",
             "decode_ms": 0,
-            "row_count": 3,
-        });
-        let passing = json!({
-            "schema": "mister-magik-media-pack-persistence-comparison-v1",
-            "status": "passed",
-            "baseline_runs": [baseline.clone(), baseline.clone(), baseline],
-            "candidate_runs": [candidate.clone(), candidate.clone(), candidate],
+            "row_count": 9,
         });
         evaluate_media_pack_persistence_summary(&passing).unwrap();
-        for field in ["schema", "status", "baseline_runs", "candidate_runs"] {
+        for field in [
+            "schema",
+            "status",
+            "save_strategy",
+            "decode_ms",
+            "row_count",
+        ] {
             let mut invalid = passing.clone();
             invalid[field] = Value::Null;
             assert!(evaluate_media_pack_persistence_summary(&invalid).is_err());

@@ -5,9 +5,7 @@ use crate::artifact_publish::{
     ArtifactPublishLabels, prepare_artifact_publish, sync_path_rust_best_effort,
     timestamped_temp_path_for,
 };
-use crate::media_pack_save::{
-    PackSaveMetrics, cleanup_pack_publish_temps, publish_pack_file_with_progress,
-};
+use crate::media_pack_save::cleanup_pack_publish_temps;
 use mister_magik_fb::media_update::{
     DEFAULT_ASSET_DIR, DEFAULT_IMAGE_SIZE, DEFAULT_MANIFEST_URL, MediaPack, MediaVariant,
     parse_manifest_json, size_qualified_pack_path, state_path, valid_image_size,
@@ -32,7 +30,6 @@ struct BenchConfig {
     image_size: String,
     asset_dir: PathBuf,
     prime_cache: bool,
-    save_strategy: SaveStrategy,
 }
 
 #[derive(Clone, Debug)]
@@ -60,29 +57,6 @@ struct HttpMetadata {
     etag: String,
     content_encoding: String,
     cf_cache_status: String,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum SaveStrategy {
-    Staged,
-    StreamFat,
-}
-
-impl SaveStrategy {
-    fn parse(value: &str) -> Result<Self, String> {
-        match value {
-            "staged" | "stage" | "current" => Ok(Self::Staged),
-            "stream-fat" | "stream" | "direct" => Ok(Self::StreamFat),
-            other => Err(format!("unsupported --save-strategy: {other}")),
-        }
-    }
-
-    fn label(self) -> &'static str {
-        match self {
-            Self::Staged => "staged",
-            Self::StreamFat => "stream-fat",
-        }
-    }
 }
 
 pub fn run() {
@@ -147,7 +121,7 @@ where
             let label = format!("{}-{:02}", config.label, iteration);
             let row = run_one(&config, pack, variant, &local_path, &label)?;
             crate::ui_logln!("{}", row.to_tsv());
-            reports.push(row.to_json(pack, config.save_strategy));
+            reports.push(row.to_json(pack));
         }
     }
     crate::ui_logln!(
@@ -155,7 +129,7 @@ where
         serde_json::json!({
             "schema": "mister-magik-media-pack-persistence-v1",
             "status": "passed",
-            "save_strategy": config.save_strategy.label(),
+            "save_strategy": "stream-fat",
             "production_format": "raw-mmlz4b",
             "decode_ms": 0,
             "representative_policy": if config.system == "representative" {
@@ -214,7 +188,6 @@ where
                 .unwrap_or_else(|_| DEFAULT_ASSET_DIR.to_string()),
         ),
         prime_cache: false,
-        save_strategy: SaveStrategy::Staged,
     };
     let mut args = args.into_iter();
     while let Some(arg) = args.next() {
@@ -252,10 +225,6 @@ where
                 config.asset_dir = PathBuf::from(args.next().ok_or("--asset-dir requires a path")?);
             }
             "--prime-cache" => config.prime_cache = true,
-            "--save-strategy" => {
-                config.save_strategy =
-                    SaveStrategy::parse(&args.next().ok_or("--save-strategy requires a value")?)?;
-            }
             "-h" | "--help" => {
                 print_usage();
                 std::process::exit(0);
@@ -281,7 +250,7 @@ where
 
 fn print_usage() {
     crate::ui_logln!(
-        "usage: mister-magik-fb media-bench-download --system ID|all|representative [--variant identity] --iterations N [--prime-cache] [--save-strategy staged|stream-fat]"
+        "usage: mister-magik-fb media-bench-download --system ID|all|representative [--variant identity] --iterations N [--prime-cache]"
     );
 }
 
@@ -346,14 +315,8 @@ fn run_one(
         result: "bench-ok".to_string(),
     };
     let result = (|| {
-        let metadata = match config.save_strategy {
-            SaveStrategy::Staged => {
-                run_staged_download_publish(pack, variant, &encoded, &bench_final, label, &mut row)?
-            }
-            SaveStrategy::StreamFat => {
-                run_stream_fat_download_publish(variant, &bench_final, label, pack, &mut row)?
-            }
-        };
+        let metadata =
+            run_stream_fat_download_publish(variant, &bench_final, label, pack, &mut row)?;
 
         let state_started = Instant::now();
         write_bench_download_state(&bench_state, pack, &bench_final, variant, &metadata)?;
@@ -365,11 +328,7 @@ fn run_one(
             state_ms,
             file_len(&bench_state).unwrap_or(0),
             "bench-ok",
-            &format!(
-                "save_strategy={} path={}",
-                config.save_strategy.label(),
-                bench_state.display()
-            ),
+            &format!("save_strategy=stream-fat path={}", bench_state.display()),
         );
         row.save_ms += state_ms;
         Ok::<(), String>(())
@@ -391,10 +350,7 @@ fn run_one(
             .as_ref()
             .map(|_| "bench-ok")
             .unwrap_or("bench-cleanup-failed"),
-        &format!(
-            "save_strategy={} {cleanup_detail}",
-            config.save_strategy.label()
-        ),
+        &format!("save_strategy=stream-fat {cleanup_detail}"),
     );
     if let Err(error) = result {
         row.result = error;
@@ -410,41 +366,6 @@ fn run_one(
         return Err(row.to_tsv());
     }
     Ok(row)
-}
-
-fn run_staged_download_publish(
-    pack: &MediaPack,
-    variant: &MediaVariant,
-    encoded: &Path,
-    bench_final: &Path,
-    label: &str,
-    row: &mut BenchRow,
-) -> Result<HttpMetadata, String> {
-    let headers_path = encoded.with_extension("headers");
-    let stream = stream_fat_download_to_publish_temp(variant, encoded, &headers_path);
-    let _ = fs::remove_file(&headers_path);
-    let stream = stream?;
-    let metadata = stream.metadata;
-    row.download_ms = stream.download_ms;
-    row.verify_ms = stream.verify_ms;
-    row.etag = metadata.etag.clone();
-    row.content_encoding = metadata.content_encoding.clone();
-    row.cf_cache_status = metadata.cf_cache_status.clone();
-    row.encoded_bytes = stream.bytes;
-
-    verify_downloaded_bytes(stream.bytes, &stream.sha256, variant.bytes, &variant.sha256)?;
-
-    row.decompress_ms = 0;
-    row.decoded_bytes = file_len(encoded)?;
-
-    let verify_started = Instant::now();
-    verify_file(encoded, pack.raw.bytes, &pack.raw.sha256)?;
-    row.verify_ms += elapsed_ms(verify_started.elapsed());
-
-    let publish_metrics = publish_pack_file_with_progress(encoded, bench_final, |_| {})?;
-    emit_publish_stage_rows(label, pack, SaveStrategy::Staged, &publish_metrics);
-    row.save_ms += publish_metrics.total_ms;
-    Ok(metadata)
 }
 
 fn run_stream_fat_download_publish(
@@ -486,7 +407,7 @@ fn run_stream_fat_download_publish(
         stream.download_ms,
         stream.bytes,
         "bench-ok",
-        &format!("save_strategy={}", SaveStrategy::StreamFat.label()),
+        "save_strategy=stream-fat",
     );
     emit_stage_row(
         label,
@@ -495,7 +416,7 @@ fn run_stream_fat_download_publish(
         stream.verify_ms,
         stream.bytes,
         "bench-ok",
-        &format!("save_strategy={}", SaveStrategy::StreamFat.label()),
+        "save_strategy=stream-fat",
     );
     verify_downloaded_bytes(
         stream.bytes,
@@ -746,61 +667,6 @@ fn parse_http_headers(text: &str) -> HttpMetadata {
     }
 }
 
-fn verify_file(path: &Path, expected_bytes: u64, expected_sha: &str) -> Result<(), String> {
-    let actual_bytes = file_len(path)?;
-    if actual_bytes != expected_bytes {
-        return Err(format!(
-            "size-mismatch-expected-{expected_bytes}-actual-{actual_bytes}"
-        ));
-    }
-    let actual_sha = sha256_hex(path)?;
-    if actual_sha != expected_sha {
-        return Err(format!(
-            "sha256-mismatch-expected-{expected_sha}-actual-{actual_sha}"
-        ));
-    }
-    Ok(())
-}
-
-fn sha256_hex(path: &Path) -> Result<String, String> {
-    let output = Command::new("sha256sum")
-        .arg(path)
-        .output()
-        .map_err(|e| format!("spawn sha256sum: {e}"))?;
-    if !output.status.success() {
-        return Err(format!("sha256sum failed with {}", output.status));
-    }
-    parse_sha256_output(&output.stdout)
-}
-
-fn emit_publish_stage_rows(
-    label: &str,
-    pack: &MediaPack,
-    strategy: SaveStrategy,
-    metrics: &PackSaveMetrics,
-) {
-    for (stage, ms) in [
-        ("publish_copy", metrics.copy_ms),
-        ("publish_sync", metrics.sync_ms),
-        ("publish_rename", metrics.rename_ms),
-        ("publish_parent_sync", metrics.parent_sync_ms),
-    ] {
-        emit_stage_row(
-            label,
-            pack,
-            stage,
-            ms,
-            metrics.bytes,
-            "bench-ok",
-            &format!(
-                "save_strategy={} progress_events={}",
-                strategy.label(),
-                metrics.progress_events
-            ),
-        );
-    }
-}
-
 fn emit_stream_publish_stage_rows(label: &str, pack: &MediaPack, metrics: &StreamPublishMetrics) {
     for (stage, ms) in [
         ("stream_sync", metrics.sync_ms),
@@ -814,7 +680,7 @@ fn emit_stream_publish_stage_rows(label: &str, pack: &MediaPack, metrics: &Strea
             ms,
             metrics.bytes,
             "bench-ok",
-            &format!("save_strategy={}", SaveStrategy::StreamFat.label()),
+            "save_strategy=stream-fat",
         );
     }
 }
@@ -1032,7 +898,7 @@ impl BenchRow {
         )
     }
 
-    fn to_json(&self, pack: &MediaPack, strategy: SaveStrategy) -> Value {
+    fn to_json(&self, pack: &MediaPack) -> Value {
         serde_json::json!({
             "label": self.label,
             "system": self.system,
@@ -1054,7 +920,7 @@ impl BenchRow {
             },
             "bytes": {
                 "network": self.encoded_bytes,
-                "tmpfs": if strategy == SaveStrategy::Staged { self.encoded_bytes } else { 0 },
+                "tmpfs": 0,
                 "exfat": self.decoded_bytes,
             },
             "throughput_mbps": {
@@ -1153,8 +1019,6 @@ mod tests {
             "--label".to_string(),
             "CACHE-20260623".to_string(),
             "--prime-cache".to_string(),
-            "--save-strategy".to_string(),
-            "stream-fat".to_string(),
         ])
         .unwrap();
 
@@ -1162,7 +1026,6 @@ mod tests {
         assert_eq!(config.variant, "identity");
         assert_eq!(config.iterations, 10);
         assert!(config.prime_cache);
-        assert_eq!(config.save_strategy, SaveStrategy::StreamFat);
     }
 
     #[test]
@@ -1188,19 +1051,10 @@ mod tests {
     }
 
     #[test]
-    fn save_strategy_defaults_to_staged_and_rejects_unknown_values() {
-        assert_eq!(
-            parse_args(Vec::<String>::new()).unwrap().save_strategy,
-            SaveStrategy::Staged
-        );
+    fn retired_save_strategy_selector_is_rejected() {
+        let error = parse_args(["--save-strategy".to_string(), "staged".to_string()]).unwrap_err();
 
-        let error = parse_args([
-            "--save-strategy".to_string(),
-            "optimistic-direct".to_string(),
-        ])
-        .unwrap_err();
-
-        assert!(error.contains("unsupported --save-strategy"));
+        assert!(error.contains("unknown option"));
     }
 
     #[test]

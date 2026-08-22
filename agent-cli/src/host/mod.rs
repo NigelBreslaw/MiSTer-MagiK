@@ -12233,84 +12233,31 @@ fn profile_installed_media_pack_persistence(
     {
         return Err("installed app does not support media-pack-persistence-v1".into());
     }
-    let execution_order = [
-        ("baseline-a", "staged", true),
-        ("candidate-a", "stream-fat", false),
-        ("baseline-b", "staged", false),
-        ("candidate-b", "stream-fat", false),
-        ("baseline-c", "staged", false),
-        ("candidate-c", "stream-fat", false),
-    ];
-    let mut baselines = Vec::with_capacity(3);
-    let mut candidates = Vec::with_capacity(3);
-    let mut expected_packs = None;
-    for (label, strategy, prime_cache) in execution_order {
-        let prime = if prime_cache { " --prime-cache" } else { "" };
-        let command = development_gui_command(&format!(
-            "media-bench-download --system representative --iterations 1{prime} --save-strategy {strategy} --label {label}"
-        ));
-        let output = exec(&session, &command, true)?;
-        let mut log = output.stdout.clone();
-        log.push_str(&output.stderr);
-        fs::write(output_dir.join(format!("{label}.log")), &log)?;
-        if let Some(message) =
-            exec_failure_message("installed media-pack persistence benchmark", &output)
-        {
-            return Err(format!("{label}: {message}").into());
-        }
-        let arm = last_json_line(&output.stdout)
-            .ok_or_else(|| format!("installed media-pack persistence {label} returned no JSON"))?;
-        if arm.get("schema").and_then(Value::as_str)
-            != Some("mister-magik-media-pack-persistence-v1")
-            || arm.get("status").and_then(Value::as_str) != Some("passed")
-            || arm.get("save_strategy").and_then(Value::as_str) != Some(strategy)
-            || arm.get("row_count").and_then(Value::as_u64) != Some(3)
-        {
-            return Err(
-                format!("media-pack persistence {label} returned an invalid report").into(),
-            );
-        }
-        let packs = arm
-            .get("rows")
-            .and_then(Value::as_array)
-            .ok_or_else(|| format!("media-pack persistence {label} has no rows"))?
-            .iter()
-            .map(|row| {
-                json!({
-                    "system": row.get("system"),
-                    "bytes": row.get("pack_bytes"),
-                    "sha256": row.get("pack_sha256"),
-                })
-            })
-            .collect::<Vec<_>>();
-        if let Some(expected) = expected_packs.as_ref() {
-            if expected != &packs {
-                return Err("media-pack persistence arm identities differ".into());
-            }
-        } else {
-            expected_packs = Some(packs);
-        }
-        fs::write(
-            output_dir.join(format!("{label}.json")),
-            format!("{}\n", serde_json::to_string_pretty(&arm)?),
-        )?;
-        if strategy == "staged" {
-            baselines.push(arm);
-        } else {
-            candidates.push(arm);
-        }
+    let output = exec(
+        &session,
+        &development_gui_command(
+            "media-bench-download --system representative --iterations 3 --prime-cache --label production",
+        ),
+        true,
+    )?;
+    let mut log = output.stdout.clone();
+    log.push_str(&output.stderr);
+    fs::write(output_dir.join("production.log"), &log)?;
+    if let Some(message) =
+        exec_failure_message("installed media-pack persistence benchmark", &output)
+    {
+        return Err(message.into());
     }
-    let summary = json!({
-        "schema": "mister-magik-media-pack-persistence-comparison-v1",
-        "status": "passed",
-        "execution_order": execution_order.map(|(label, strategy, _)| json!({
-            "label": label,
-            "strategy": strategy,
-        })),
-        "baseline_runs": baselines,
-        "candidate_runs": candidates,
-        "packs": expected_packs.unwrap_or_default(),
-    });
+    let summary = last_json_line(&output.stdout)
+        .ok_or("installed media-pack persistence benchmark returned no JSON")?;
+    if summary.get("schema").and_then(Value::as_str)
+        != Some("mister-magik-media-pack-persistence-v1")
+        || summary.get("status").and_then(Value::as_str) != Some("passed")
+        || summary.get("save_strategy").and_then(Value::as_str) != Some("stream-fat")
+        || summary.get("row_count").and_then(Value::as_u64) != Some(9)
+    {
+        return Err("installed media-pack persistence benchmark returned an invalid report".into());
+    }
     fs::write(
         output_dir.join("summary.json"),
         format!("{}\n", serde_json::to_string_pretty(&summary)?),
