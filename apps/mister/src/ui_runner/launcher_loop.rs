@@ -11216,6 +11216,14 @@ pub(super) fn run_launcher_loop(
             prepare_us,
             presented_copied_rows,
         );
+        gui_profiling.record_composition(
+            frames,
+            &composition_status,
+            composition_decision.force_full_slint_present,
+            composition_decision.force_full_slint_raster,
+            full_frame_present,
+            navigation_transition.is_active(),
+        );
         gui_profiling.record_frame_work(GuiFrameWorkRecord::from_traces(
             frames,
             frame_t4.saturating_duration_since(loop_start).as_micros(),
@@ -11661,9 +11669,12 @@ pub(super) fn run_launcher_loop(
                     crate::ui_errln!("preview_compositor_pmu_flush_timeout");
                 }
                 gui_profiling.observe_route_presentation(
+                    frames,
                     screen_label(nav.screen),
                     nav.arcade.is_scroll_active(),
                     terminal_preview,
+                    confirm_visible,
+                    &composition_status,
                     Instant::now(),
                     crate::input_hub::monotonic_us(),
                 );

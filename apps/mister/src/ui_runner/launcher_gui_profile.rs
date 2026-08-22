@@ -11,6 +11,7 @@ use super::launcher_frame_accounting::LauncherCustomDrawTrace;
 const ENABLE_ENV: &str = "MISTER_GUI_FRAME_PROFILE";
 const COMPLETE_ENV: &str = "MISTER_GUI_FRAME_PROFILE_COMPLETE";
 const PMU_ENV: &str = "MISTER_GUI_FRAME_PROFILE_PMU";
+const ROUTE_ENV: &str = "MISTER_GUI_FRAME_PROFILE_ROUTE";
 const PHASE_TIMEOUT: Duration = Duration::from_secs(20);
 const ARCADE_SCROLL_PHASE_TIMEOUT: Duration = Duration::from_secs(50);
 const FRAME_LIMIT: usize = 4_096;
@@ -20,6 +21,7 @@ pub(crate) struct GuiProfileConfig {
     enabled: bool,
     completion_path: Option<PathBuf>,
     pmu_requested: bool,
+    route: GuiProfileRoute,
 }
 
 impl GuiProfileConfig {
@@ -30,6 +32,30 @@ impl GuiProfileConfig {
                 .map(PathBuf::from)
                 .filter(|path| valid_volatile_profile_path(path)),
             pmu_requested: get(PMU_ENV).is_some_and(profile_flag_is_true),
+            route: GuiProfileRoute::from_value(get(ROUTE_ENV)),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum GuiProfileRoute {
+    #[default]
+    ArcadeVelocity,
+    SettledComposition,
+}
+
+impl GuiProfileRoute {
+    fn from_value(value: Option<&str>) -> Self {
+        match value {
+            Some("settled-composition") => Self::SettledComposition,
+            _ => Self::ArcadeVelocity,
+        }
+    }
+
+    const fn phases(self) -> &'static [GuiProfilePhase] {
+        match self {
+            Self::ArcadeVelocity => &GuiProfilePhase::ARCADE_VELOCITY_ORDERED,
+            Self::SettledComposition => &GuiProfilePhase::SETTLED_COMPOSITION_ORDERED,
         }
     }
 }
@@ -227,15 +253,26 @@ impl<'a> GuiFrameWorkRecord<'a> {
 pub(super) enum GuiProfilePhase {
     ArcadeScroll,
     SettledArcade,
+    ModalOverArcade,
+    SettingsDestination,
+    SettingsFollowing,
 }
 
 impl GuiProfilePhase {
-    const ORDERED: [Self; 2] = [Self::ArcadeScroll, Self::SettledArcade];
+    const ARCADE_VELOCITY_ORDERED: [Self; 2] = [Self::ArcadeScroll, Self::SettledArcade];
+    const SETTLED_COMPOSITION_ORDERED: [Self; 3] = [
+        Self::ModalOverArcade,
+        Self::SettingsDestination,
+        Self::SettingsFollowing,
+    ];
 
     pub(super) const fn label(self) -> &'static str {
         match self {
             Self::ArcadeScroll => "arcade-scroll",
             Self::SettledArcade => "settled-arcade",
+            Self::ModalOverArcade => "modal-over-arcade",
+            Self::SettingsDestination => "settings-destination",
+            Self::SettingsFollowing => "settings-following",
         }
     }
 
@@ -267,6 +304,9 @@ pub(super) struct GuiProfilingController {
     frames: Vec<serde_json::Value>,
     dropped_frames: u64,
     pmu_requested: bool,
+    route: GuiProfileRoute,
+    settled_modal_presentations: u8,
+    settings_destination_frame: Option<u64>,
     phase_markers: Vec<serde_json::Value>,
     last_loop_start: Option<Instant>,
     last_frame_t4: Option<Instant>,
@@ -370,6 +410,7 @@ impl GuiProfilingController {
             enabled,
             completion_path,
             pmu_requested,
+            route,
         } = config;
         if !enabled || completion_path.is_none() {
             return Self::dormant();
@@ -390,7 +431,10 @@ impl GuiProfilingController {
             frames: Vec::with_capacity(FRAME_LIMIT),
             dropped_frames: 0,
             pmu_requested,
-            phase_markers: Vec::with_capacity(GuiProfilePhase::ORDERED.len() * 2),
+            route,
+            settled_modal_presentations: 0,
+            settings_destination_frame: None,
+            phase_markers: Vec::with_capacity(route.phases().len() * 2),
             last_loop_start: None,
             last_frame_t4: None,
             last_timing_finalized_at: None,
@@ -408,6 +452,9 @@ impl GuiProfilingController {
             frames: Vec::new(),
             dropped_frames: 0,
             pmu_requested: false,
+            route: GuiProfileRoute::ArcadeVelocity,
+            settled_modal_presentations: 0,
+            settings_destination_frame: None,
             phase_markers: Vec::new(),
             last_loop_start: None,
             last_frame_t4: None,
@@ -427,6 +474,9 @@ impl GuiProfilingController {
             frames: Vec::new(),
             dropped_frames: 0,
             pmu_requested: false,
+            route: GuiProfileRoute::ArcadeVelocity,
+            settled_modal_presentations: 0,
+            settings_destination_frame: None,
             phase_markers: Vec::new(),
             last_loop_start: None,
             last_frame_t4: None,
@@ -482,7 +532,7 @@ impl GuiProfilingController {
         if !self.enabled() {
             return Ok(());
         }
-        let expected = GuiProfilePhase::ORDERED.get(self.next_phase).copied();
+        let expected = self.route.phases().get(self.next_phase).copied();
         if expected != Some(phase)
             || !matches!(
                 self.state,
@@ -496,6 +546,9 @@ impl GuiProfilingController {
             ));
         }
         self.state = GuiProfileState::AwaitingPresentation(phase);
+        if phase == GuiProfilePhase::ModalOverArcade {
+            self.settled_modal_presentations = 0;
+        }
         self.phase_markers.push(json!({
             "phase": phase.label(),
             "event": "started",
@@ -526,7 +579,7 @@ impl GuiProfilingController {
         }));
         self.next_phase = self.next_phase.saturating_add(1);
         self.deadline = Some(now + PHASE_TIMEOUT);
-        if phase == GuiProfilePhase::SettledArcade {
+        if self.next_phase == self.route.phases().len() {
             self.finish();
         } else {
             self.state = GuiProfileState::Measuring(phase);
@@ -554,9 +607,23 @@ impl GuiProfilingController {
             let _ = self.interrupt_input();
             return;
         }
-        let phase = match (screen, event.action) {
-            ("arcade", crate::input_event::LogicalAction::Down) => {
-                Some(GuiProfilePhase::ArcadeScroll)
+        let phase = match (self.route, screen, event.action) {
+            (
+                GuiProfileRoute::ArcadeVelocity,
+                "arcade",
+                crate::input_event::LogicalAction::Down,
+            ) => Some(GuiProfilePhase::ArcadeScroll),
+            (
+                GuiProfileRoute::SettledComposition,
+                "arcade",
+                crate::input_event::LogicalAction::X,
+            ) if self.state == GuiProfileState::Warmup => Some(GuiProfilePhase::ModalOverArcade),
+            (
+                GuiProfileRoute::SettledComposition,
+                "home",
+                crate::input_event::LogicalAction::Activate,
+            ) if self.state == GuiProfileState::Measuring(GuiProfilePhase::ModalOverArcade) => {
+                Some(GuiProfilePhase::SettingsDestination)
             }
             _ => None,
         };
@@ -575,9 +642,12 @@ impl GuiProfilingController {
 
     pub(super) fn observe_route_presentation(
         &mut self,
+        frame: u64,
         screen: &'static str,
         arcade_motion_active: bool,
         terminal_preview: bool,
+        confirm_visible: bool,
+        composition: &crate::launcher_runtime::composition::UiCompositionStatus,
         now: Instant,
         monotonic_us: u64,
     ) {
@@ -595,6 +665,33 @@ impl GuiProfilingController {
             {
                 Some(GuiProfilePhase::SettledArcade)
             }
+            GuiProfileState::AwaitingPresentation(GuiProfilePhase::ModalOverArcade)
+                if screen == "arcade"
+                    && confirm_visible
+                    && composition.state == "modal-over-arcade"
+                    && composition.retirement_state == "idle"
+                    && !composition.retirement_receipt.is_empty() =>
+            {
+                self.settled_modal_presentations =
+                    self.settled_modal_presentations.saturating_add(1);
+                (self.settled_modal_presentations >= 8).then_some(GuiProfilePhase::ModalOverArcade)
+            }
+            GuiProfileState::AwaitingPresentation(GuiProfilePhase::SettingsDestination)
+                if screen == "settings"
+                    && composition.state == "navigation-destination"
+                    && composition.retirement_state == "idle" =>
+            {
+                self.settings_destination_frame = Some(frame);
+                Some(GuiProfilePhase::SettingsDestination)
+            }
+            GuiProfileState::AwaitingPresentation(GuiProfilePhase::SettingsFollowing)
+                if screen == "settings"
+                    && self
+                        .settings_destination_frame
+                        .is_some_and(|destination| frame > destination) =>
+            {
+                Some(GuiProfilePhase::SettingsFollowing)
+            }
             _ => None,
         };
         let Some(phase) = phase else {
@@ -603,9 +700,16 @@ impl GuiProfilingController {
         if self
             .confirm_phase_presented(phase, now, monotonic_us)
             .is_ok()
-            && phase == GuiProfilePhase::ArcadeScroll
         {
-            let _ = self.request_phase(GuiProfilePhase::SettledArcade, now);
+            match phase {
+                GuiProfilePhase::ArcadeScroll => {
+                    let _ = self.request_phase(GuiProfilePhase::SettledArcade, now);
+                }
+                GuiProfilePhase::SettingsDestination => {
+                    let _ = self.request_phase(GuiProfilePhase::SettingsFollowing, now);
+                }
+                _ => {}
+            }
         }
     }
 
@@ -762,6 +866,53 @@ impl GuiProfilingController {
             "presentation": {
                 "hidden_copied_bytes": physical_layer_presentation.hidden_copied_bytes,
             },
+        });
+    }
+
+    pub(super) fn record_composition(
+        &mut self,
+        frame: u64,
+        status: &crate::launcher_runtime::composition::UiCompositionStatus,
+        force_full_present: bool,
+        force_full_raster: bool,
+        full_frame_present: bool,
+        navigation_transition_active: bool,
+    ) {
+        if !self.active() {
+            return;
+        }
+        let Some(record) =
+            self.frames.iter_mut().rev().find(|record| {
+                record.get("frame").and_then(serde_json::Value::as_u64) == Some(frame)
+            })
+        else {
+            self.dropped_frames = self.dropped_frames.saturating_add(1);
+            return;
+        };
+        let full_present_reason = if force_full_raster {
+            "composition-forced-raster"
+        } else if force_full_present {
+            "composition-forced-present"
+        } else if navigation_transition_active && full_frame_present {
+            "navigation-transition"
+        } else if full_frame_present {
+            "other-full"
+        } else {
+            "damage"
+        };
+        record["composition"] = json!({
+            "state": status.state,
+            "retirement_state": status.retirement_state,
+            "retirement_generation": status.retirement_generation,
+            "retirement_obligations": status.retirement_obligations,
+            "retirement_receipt": status.retirement_receipt,
+            "retirement_receipt_sequence": status.retirement_receipt_sequence,
+            "retirement_receipt_slot": status.retirement_receipt_slot,
+            "retirement_receipt_route_epoch": status.retirement_receipt_route_epoch,
+            "force_full_present": force_full_present,
+            "force_full_raster": force_full_raster,
+            "full_frame_present": full_frame_present,
+            "full_present_reason": full_present_reason,
         });
     }
 
@@ -1015,9 +1166,80 @@ mod tests {
     fn fixed_phase_sequence_completes_after_final_presentation() {
         let now = Instant::now();
         let mut controller = GuiProfilingController::enabled_for_test(now);
-        complete_through(&mut controller, &GuiProfilePhase::ORDERED);
+        complete_through(&mut controller, &GuiProfilePhase::ARCADE_VELOCITY_ORDERED);
         assert_eq!(controller.state, GuiProfileState::Complete);
         assert!(!controller.active());
+    }
+
+    #[test]
+    fn settled_composition_waits_for_retirement_and_immediate_following_frame() {
+        let now = Instant::now();
+        let mut controller = GuiProfilingController::enabled_for_test(now);
+        controller.route = GuiProfileRoute::SettledComposition;
+        controller
+            .request_phase(GuiProfilePhase::ModalOverArcade, now)
+            .unwrap();
+        let modal = crate::launcher_runtime::composition::UiCompositionStatus {
+            state: "modal-over-arcade",
+            retirement_state: "idle",
+            retirement_receipt: "sequence=9 slot=1 route_epoch=3 carrier=full-slint".into(),
+            ..crate::launcher_runtime::composition::UiCompositionStatus::default()
+        };
+        for frame in 1..=7 {
+            controller.observe_route_presentation(
+                frame,
+                "arcade",
+                false,
+                true,
+                true,
+                &modal,
+                now,
+                1_000 + frame,
+            );
+            assert_eq!(
+                controller.state,
+                GuiProfileState::AwaitingPresentation(GuiProfilePhase::ModalOverArcade)
+            );
+        }
+        controller.observe_route_presentation(8, "arcade", false, true, true, &modal, now, 1_008);
+        assert_eq!(
+            controller.state,
+            GuiProfileState::Measuring(GuiProfilePhase::ModalOverArcade)
+        );
+
+        controller
+            .request_phase(GuiProfilePhase::SettingsDestination, now)
+            .unwrap();
+        let destination = crate::launcher_runtime::composition::UiCompositionStatus {
+            state: "navigation-destination",
+            retirement_state: "idle",
+            ..crate::launcher_runtime::composition::UiCompositionStatus::default()
+        };
+        controller.observe_route_presentation(
+            20,
+            "settings",
+            false,
+            false,
+            false,
+            &destination,
+            now,
+            2_000,
+        );
+        assert_eq!(
+            controller.state,
+            GuiProfileState::AwaitingPresentation(GuiProfilePhase::SettingsFollowing)
+        );
+        controller.observe_route_presentation(
+            21,
+            "settings",
+            false,
+            false,
+            false,
+            &crate::launcher_runtime::composition::UiCompositionStatus::default(),
+            now,
+            2_001,
+        );
+        assert_eq!(controller.state, GuiProfileState::Complete);
     }
 
     #[test]
@@ -1496,17 +1718,45 @@ mod tests {
         controller
             .request_phase(GuiProfilePhase::ArcadeScroll, now)
             .unwrap();
-        controller.observe_route_presentation("arcade", false, false, now, 4_000);
+        let composition = crate::launcher_runtime::composition::UiCompositionStatus::default();
+        controller.observe_route_presentation(
+            1,
+            "arcade",
+            false,
+            false,
+            false,
+            &composition,
+            now,
+            4_000,
+        );
         assert_eq!(
             controller.state,
             GuiProfileState::AwaitingPresentation(GuiProfilePhase::ArcadeScroll)
         );
-        controller.observe_route_presentation("arcade", false, true, now, 5_000);
+        controller.observe_route_presentation(
+            2,
+            "arcade",
+            false,
+            true,
+            false,
+            &composition,
+            now,
+            5_000,
+        );
         assert_eq!(
             controller.state,
             GuiProfileState::AwaitingPresentation(GuiProfilePhase::SettledArcade)
         );
-        controller.observe_route_presentation("arcade", false, true, now, 6_000);
+        controller.observe_route_presentation(
+            3,
+            "arcade",
+            false,
+            true,
+            false,
+            &composition,
+            now,
+            6_000,
+        );
         assert_eq!(controller.state, GuiProfileState::Complete);
     }
 }
