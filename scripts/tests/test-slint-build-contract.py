@@ -24,7 +24,7 @@ REQUIRED_BUILD_SCRIPT_FRAGMENTS = (
     'cargo:rerun-if-env-changed=SLINT_FONT_SIZES',
     'std::env::set_var("SLINT_FONT_SIZES", "8,16,24,32")',
     'std::env::var_os("CARGO_FEATURE_BENCH_SCENES")',
-    '"launcher" | "arcade" => true',
+    '"launcher" | "arcade" | "production" => true',
     'cargo:rustc-cfg=mister_ui_scope_launcher',
     'cargo:rustc-cfg=mister_bench_scenes',
     '"../ui/controller_test.slint"',

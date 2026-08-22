@@ -301,6 +301,7 @@ pub(crate) struct BridgeChurnCounters {
 }
 
 impl BridgeChurnCounters {
+    #[cfg(feature = "ui")]
     pub(crate) fn saturating_sub(self, earlier: Self) -> Self {
         Self {
             model_replacements: self
@@ -331,16 +332,19 @@ thread_local! {
     };
 }
 
+#[cfg(feature = "ui")]
 pub(crate) fn bridge_churn_begin() {
     BRIDGE_CHURN_COUNTERS.with(|counters| *counters.borrow_mut() = BridgeChurnCounters::default());
     BRIDGE_CHURN_ENABLED.with(|enabled| enabled.set(true));
 }
 
+#[cfg(feature = "ui")]
 pub(crate) fn bridge_churn_end() -> BridgeChurnCounters {
     BRIDGE_CHURN_ENABLED.with(|enabled| enabled.set(false));
     bridge_churn_snapshot()
 }
 
+#[cfg(feature = "ui")]
 pub(crate) fn bridge_churn_snapshot() -> BridgeChurnCounters {
     BRIDGE_CHURN_COUNTERS.with(|counters| *counters.borrow())
 }
@@ -611,6 +615,7 @@ impl LauncherBridgePresenter {
         )
     }
 
+    #[cfg(feature = "ui")]
     pub(crate) fn republish_cached_menu_models(&self, app: &Launcher) {
         let (Some(items), Some(presentation)) = (
             self.menu_items.as_ref(),
