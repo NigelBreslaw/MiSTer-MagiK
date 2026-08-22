@@ -7439,6 +7439,8 @@ fn restart_and_reconcile_launcher_response_arm(
     for attempt in 1..=2 {
         restart_launcher_with_one_shot_env(session, options.clone())?;
         let started = Instant::now();
+        let mut stable_pid = None;
+        let mut stable_since = None;
         loop {
             last_status = read_launcher_status(session)?;
             last_trace_matches = remote_read(session, LAUNCHER_RESPONSE_TRACE_REMOTE)
@@ -7449,7 +7451,19 @@ fn restart_and_reconcile_launcher_response_arm(
                 && last_status.get("selected_item_id").and_then(Value::as_str)
                     == Some("menu:computers");
             if last_trace_matches && intended_state {
-                return Ok(());
+                let observed_pid = last_status.get("pid").and_then(Value::as_u64);
+                if stable_pid != observed_pid {
+                    stable_pid = observed_pid;
+                    stable_since = Some(Instant::now());
+                }
+                if observed_pid.is_some()
+                    && stable_since.is_some_and(|since| since.elapsed() >= Duration::from_secs(2))
+                {
+                    return Ok(());
+                }
+            } else {
+                stable_pid = None;
+                stable_since = None;
             }
             if started.elapsed() >= Duration::from_secs(10) {
                 break;
