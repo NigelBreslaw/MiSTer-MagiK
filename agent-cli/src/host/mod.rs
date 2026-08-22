@@ -8522,7 +8522,13 @@ fn run_settled_composition_route(
         let home = wait_gui_profile_snapshot(
             config,
             &nonce,
-            |snapshot| gui_profile_effective_view(snapshot) == Some("home"),
+            |snapshot| {
+                gui_profile_effective_view(snapshot) == Some("home")
+                    && snapshot
+                        .pointer("/semantic/navigation_transition_active")
+                        .and_then(Value::as_bool)
+                        == Some(false)
+            },
             "Home before Settings destination",
         )?;
         let select_settings =
