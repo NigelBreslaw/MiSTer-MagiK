@@ -260,8 +260,10 @@ mod tests {
         assert!(is_known_command("pmu-profile"));
         assert!(is_known_command("search-bench"));
         assert!(is_known_command("rom-identity-bench"));
+        assert!(is_known_command("media-bench-download"));
         assert!(is_known_command("read"));
         assert!(is_known_command("fpga-latch-report"));
+        assert_command_kind("media-bench-download", CommandKind::PreFpga);
         assert_command_kind("fpga-latch-report", CommandKind::Fpga);
         for command in [
             "vsync-probe",
@@ -275,12 +277,7 @@ mod tests {
         ] {
             assert!(!is_known_command(command), "{command}");
         }
-        for command in [
-            "media-bench-download",
-            "media-bench-save",
-            "launch-prep-bench",
-            "audio-tone",
-        ] {
+        for command in ["media-bench-save", "launch-prep-bench", "audio-tone"] {
             assert!(!is_known_command(command), "{command}");
         }
     }

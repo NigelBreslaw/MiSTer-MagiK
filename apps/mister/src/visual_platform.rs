@@ -348,7 +348,7 @@ mod tests {
     use slint::platform::software_renderer::Rgb565Pixel;
 
     slint::slint! {
-        component ReusedRasterProbe inherits Window {
+        export component ReusedRasterProbe inherits Window {
             in property <length> tile-x;
             in property <bool> tile-visible: true;
             width: 64px;

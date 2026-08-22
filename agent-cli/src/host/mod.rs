@@ -17884,7 +17884,8 @@ fn profile_installed_catalog_resume_validation(
     let run_result = (|| -> Result<Value> {
         let mut samples = Vec::with_capacity(CATALOG_BUILD_REBUILD_SAMPLES);
         for pair_index in 1..=CATALOG_BUILD_REBUILD_SAMPLES {
-            for arm in ["production"] {
+            {
+                let arm = "production";
                 require_catalog_benchmark_active("resume-validation sample preparation")?;
                 let sample_dir = output_dir.join(format!("pair-{pair_index}-{arm}"));
                 fs::create_dir_all(&sample_dir)?;

@@ -3433,14 +3433,21 @@ mod tests {
 
     #[test]
     fn search_evaluators_require_timing_and_ready_results() {
+        let query = json!({
+            "query": "A",
+            "result_hash": "0".repeat(64),
+        });
+        let run = json!({
+            "queries": [query.clone(), query.clone(), query.clone(), query],
+        });
         let timing = json!({
-            "schema": "mister-magik-search-benchmark-v1",
-            "queries": [{"query": "A"}],
+            "schema": "mister-magik-search-benchmark-v2",
+            "runs": [run.clone(), run.clone(), run],
             "warm_all_queries": {"total_us": {"p95": 1}}
         });
         evaluate_search_summary(&timing).unwrap();
         let mut no_queries = timing.clone();
-        no_queries["queries"] = json!([]);
+        no_queries["runs"][0]["queries"] = json!([]);
         assert!(evaluate_search_summary(&no_queries).is_err());
         let mut no_timing = timing;
         no_timing["warm_all_queries"] = Value::Null;
