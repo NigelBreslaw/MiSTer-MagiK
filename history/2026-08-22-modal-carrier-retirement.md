@@ -48,3 +48,16 @@ Retain receipt-scoped modal carrier forcing as the sole production path. Keep
 forcing for entry, pending retirement, stale receipts, and reconciliation; stop
 only after the matching modal retirement receipt. Preserve the required
 invalid-slot convergence copy and its explicit attribution.
+
+## Post-retention qualification
+
+The retained production commit `87fb83f73f6c17dba0901aa05a0e9008c790df64`
+was delivered independently and requalified:
+
+- `build/agent-benchmarks/settled-composition/1787372130/summary.json`:
+  0/50 steady full presents, zero steady copy bytes, one 1,843,200-byte
+  convergence copy, zero cadence and protocol faults.
+- `build/agent-benchmarks/modal-input/1787372158/summary.json`: passed.
+- `build/agent-benchmarks/arcade-velocity-scroll/1787372183/summary.json`:
+  59.9 minimum physical FPS with zero dropped frames, repeated vblanks,
+  ownership losses, and latch drops.
