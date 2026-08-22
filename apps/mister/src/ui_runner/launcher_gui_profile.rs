@@ -324,6 +324,7 @@ pub(super) struct GuiProfilingController {
     route: GuiProfileRoute,
     settled_modal_presentations: u8,
     settings_destination_frame: Option<u64>,
+    settings_cache_recovery_frame: Option<u64>,
     phase_markers: Vec<serde_json::Value>,
     bridge_churn_summary: Option<serde_json::Value>,
     last_loop_start: Option<Instant>,
@@ -464,6 +465,7 @@ impl GuiProfilingController {
             route,
             settled_modal_presentations: 0,
             settings_destination_frame: None,
+            settings_cache_recovery_frame: None,
             phase_markers: Vec::with_capacity(route.phases().len() * 2),
             bridge_churn_summary: None,
             last_loop_start: None,
@@ -486,6 +488,7 @@ impl GuiProfilingController {
             route: GuiProfileRoute::ArcadeVelocity,
             settled_modal_presentations: 0,
             settings_destination_frame: None,
+            settings_cache_recovery_frame: None,
             phase_markers: Vec::new(),
             bridge_churn_summary: None,
             last_loop_start: None,
@@ -509,6 +512,7 @@ impl GuiProfilingController {
             route: GuiProfileRoute::ArcadeVelocity,
             settled_modal_presentations: 0,
             settings_destination_frame: None,
+            settings_cache_recovery_frame: None,
             phase_markers: Vec::new(),
             bridge_churn_summary: None,
             last_loop_start: None,
@@ -591,6 +595,9 @@ impl GuiProfilingController {
         self.state = GuiProfileState::AwaitingPresentation(phase);
         if phase == GuiProfilePhase::ModalOverArcade {
             self.settled_modal_presentations = 0;
+        }
+        if phase == GuiProfilePhase::SettingsCacheRecovery {
+            self.settings_cache_recovery_frame = None;
         }
         self.phase_markers.push(json!({
             "phase": phase.label(),
@@ -710,6 +717,16 @@ impl GuiProfilingController {
         if !self.enabled() {
             return;
         }
+        if self.state
+            == GuiProfileState::AwaitingPresentation(GuiProfilePhase::SettingsCacheRecovery)
+            && self.settings_cache_recovery_frame.is_none()
+            && screen == "settings"
+            && composition.state == "full-slint"
+            && actual_slint_raster
+        {
+            self.settings_cache_recovery_frame = Some(frame);
+            return;
+        }
         let phase = match self.state {
             GuiProfileState::AwaitingPresentation(GuiProfilePhase::ArcadeScroll)
                 if screen == "arcade" && !arcade_motion_active && terminal_preview =>
@@ -757,8 +774,9 @@ impl GuiProfilingController {
             }
             GuiProfileState::AwaitingPresentation(GuiProfilePhase::SettingsCacheRecovery)
                 if screen == "settings"
-                    && composition.state == "full-slint"
-                    && actual_slint_raster =>
+                    && self
+                        .settings_cache_recovery_frame
+                        .is_some_and(|recovery| frame > recovery) =>
             {
                 Some(GuiProfilePhase::SettingsCacheRecovery)
             }
@@ -1372,6 +1390,21 @@ mod tests {
             &full_slint,
             now,
             2_002,
+        );
+        assert_eq!(
+            controller.state,
+            GuiProfileState::AwaitingPresentation(GuiProfilePhase::SettingsCacheRecovery)
+        );
+        controller.observe_route_presentation(
+            23,
+            "settings",
+            false,
+            false,
+            false,
+            false,
+            &full_slint,
+            now,
+            2_003,
         );
         assert_eq!(controller.state, GuiProfileState::Complete);
     }
