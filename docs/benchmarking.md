@@ -141,9 +141,10 @@ frames after direct-layer retirement has a matching physical receipt, then
 cancels the dialog and drives Home → Settings. The destination frame and its
 immediately following frame are reported separately with composition state,
 retirement generation/receipt, full-present reason, Slint damage and raster
-time, custom-layer work, latch-copy bytes, and protocol-v5 cadence. The route
-restores the original Home selection and display mode, and leaves favorite
-state unchanged. Evidence is retained below
+time, custom-layer work, latch-copy bytes, and protocol-v5 cadence. An
+authoritative terminal Settings PNG and its hash support pixel-parity checks.
+The route restores the original Home selection and display mode, and leaves
+favorite state unchanged. Evidence is retained below
 `build/agent-benchmarks/settled-composition/<timestamp>/`.
 
 Production modal carriers are receipt-scoped: the entry carrier remains forced
@@ -151,10 +152,6 @@ until direct-layer retirement has a matching physical receipt. The summary
 separates any required invalid-slot convergence copy from recurring steady
 modal work while retaining the total retirement-confirmed byte count.
 
-`settled-composition-reused-cache` is the production-off Item 10 arm for the
-same fixed route. It marks the full logical region dirty while retaining
-Slint's reused-buffer dependency cache. Only this diagnostic route consumes
-the selector; ordinary production full rasters retain the new-buffer policy.
 
 `navigation-transitions` runs the fixed scripted route Home → Arcade → Home →
 Consoles → System → Consoles → Home with the Super-Scaler POC enabled. It
