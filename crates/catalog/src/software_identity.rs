@@ -1732,9 +1732,10 @@ fn rom_benchmark_list_for_path(path: &Path) -> Option<&'static str> {
 }
 
 #[cfg(feature = "builder")]
-fn rom_benchmark_scan_roots(roots: &[PathBuf]) -> Vec<PathBuf> {
+fn rom_benchmark_scan_roots(roots: &[String]) -> Vec<PathBuf> {
     let mut candidates = std::collections::BTreeSet::new();
     for root in roots {
+        let root = Path::new(root);
         collect_rom_benchmark_system_dirs(root, &mut candidates);
         if root
             .file_name()
@@ -1957,7 +1958,8 @@ mod tests {
             std::fs::create_dir_all(root.join(directory)).expect("create system directory");
         }
 
-        let roots = rom_benchmark_scan_roots(std::slice::from_ref(&root));
+        let configured_roots = vec![root.to_string_lossy().into_owned()];
+        let roots = rom_benchmark_scan_roots(&configured_roots);
 
         assert_eq!(
             roots,
