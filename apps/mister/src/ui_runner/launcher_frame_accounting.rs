@@ -963,6 +963,12 @@ impl LauncherFrameAccounting {
 
 #[derive(Clone, Copy, Default)]
 pub(super) struct LauncherCustomDrawTrace {
+    pub(super) arcade_bbox_invalidation: bool,
+    pub(super) arcade_rect_invalidation: bool,
+    pub(super) arcade_false_positive_invalidation: bool,
+    pub(super) preview_bbox_invalidation: bool,
+    pub(super) preview_rect_invalidation: bool,
+    pub(super) preview_false_positive_invalidation: bool,
     pub(super) arcade_list_update_us: u128,
     pub(super) persistent_arcade_composition:
         crate::arcade_list_renderer::PersistentArcadeCompositionTrace,

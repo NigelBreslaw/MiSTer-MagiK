@@ -53,6 +53,21 @@ const SETTINGS_NAVIGATION_STATUS_DRAIN_LIMIT: Duration = Duration::from_secs(2);
 const SQLITE_HEADER: &[u8; 16] = b"SQLite format 3\0";
 const MODAL_INPUT_TEST_ROOT: &str = "/tmp/mister-magik/modal-input-benchmark";
 
+fn custom_damage_invalidation_comparison(
+    bounding_rect: Option<DirtyRect>,
+    damage: &DirtyRectList,
+    target: DirtyRect,
+    full_frame_present: bool,
+) -> (bool, bool, bool) {
+    let bounding =
+        full_frame_present || bounding_rect.is_some_and(|rect| rect.intersection(target).is_some());
+    let rectangles = full_frame_present
+        || damage
+            .iter()
+            .any(|rect| rect.intersection(target).is_some());
+    (bounding, rectangles, bounding && !rectangles)
+}
+
 fn navigation_geometry_to_composition(
     layout: UiLayoutGeometry,
     mut geometry: NavigationTransitionGeometry,
@@ -10001,6 +10016,20 @@ pub(super) fn run_launcher_loop(
                 rect
             }
         });
+        let mut logical_slint_damage_for_custom = DirtyRectList::new();
+        if layout.is_portrait() {
+            for rect in slint_damage.iter() {
+                logical_slint_damage_for_custom.push(layout.composition_rect_to_logical_rect(rect));
+            }
+        } else {
+            logical_slint_damage_for_custom.extend_from(&slint_damage);
+        }
+        let mut arcade_bbox_invalidation = false;
+        let mut arcade_rect_invalidation = false;
+        let mut arcade_false_positive_invalidation = false;
+        let mut preview_bbox_invalidation = false;
+        let mut preview_rect_invalidation = false;
+        let mut preview_false_positive_invalidation = false;
         let gui_custom_selection = gui_custom_profile_selection(
             wants_arcade_list && composition_decision.allow_arcade_list_blit,
             (wants_preview || preview.empty_base_commit_pending())
@@ -10020,6 +10049,17 @@ pub(super) fn run_launcher_loop(
                 mister_magik_perf_events::sampled_span("gui.custom.crt-arcade-list-update");
             arcade_list_renderer.set_crt_portrait_rows(layout.is_portrait());
             configure_arcade_list_renderer_geometry(&mut arcade_list_renderer, &nav, ui);
+            let arcade_rect = arcade_list_renderer.dirty_rect();
+            (
+                arcade_bbox_invalidation,
+                arcade_rect_invalidation,
+                arcade_false_positive_invalidation,
+            ) = custom_damage_invalidation_comparison(
+                logical_slint_rect,
+                &logical_slint_damage_for_custom,
+                arcade_rect,
+                full_frame_present,
+            );
             let force_arcade_redraw = if layout.is_portrait() && !crt_layout {
                 // The portrait list is a separately versioned physical layer.
                 // Slint/base damage is restored by the latch presenter and
@@ -10092,6 +10132,18 @@ pub(super) fn run_launcher_loop(
             preview_compositor_pending,
             preview_compositor_telemetry,
         ) = if wants_preview && composition_decision.allow_preview_blit && !memory_guard.active() {
+            let logical_ui = UiDisplay::for_framebuffer(layout.logical_w(), layout.logical_h());
+            let preview_rect = preview_screen_rect(&logical_ui);
+            (
+                preview_bbox_invalidation,
+                preview_rect_invalidation,
+                preview_false_positive_invalidation,
+            ) = custom_damage_invalidation_comparison(
+                logical_slint_rect,
+                &logical_slint_damage_for_custom,
+                preview_rect,
+                full_frame_present,
+            );
             layer_target.blit_raw_preview_if_needed(
                 &mut preview,
                 &mut preview_transition,
@@ -10444,6 +10496,12 @@ pub(super) fn run_launcher_loop(
         let effect_label_us = navigation_transition_render_us;
         let navigation_telemetry = navigation_transition.telemetry();
         let mut custom_draw_trace = LauncherCustomDrawTrace {
+            arcade_bbox_invalidation,
+            arcade_rect_invalidation,
+            arcade_false_positive_invalidation,
+            preview_bbox_invalidation,
+            preview_rect_invalidation,
+            preview_false_positive_invalidation,
             arcade_list_update_us,
             portrait_arcade_list_pixels,
             portrait_arcade_list_bytes,
@@ -14061,6 +14119,49 @@ fn apply_home_selected(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn disjoint_damage_exposes_bounding_box_false_positive() {
+        let left = DirtyRect {
+            x0: 0,
+            y0: 0,
+            x1: 10,
+            y1: 10,
+        };
+        let right = DirtyRect {
+            x0: 90,
+            y0: 0,
+            x1: 100,
+            y1: 10,
+        };
+        let target = DirtyRect {
+            x0: 40,
+            y0: 0,
+            x1: 60,
+            y1: 10,
+        };
+        let mut damage = DirtyRectList::from_one(left);
+        damage.push(right);
+
+        assert_eq!(
+            custom_damage_invalidation_comparison(
+                Some(DirtyRect {
+                    x0: 0,
+                    y0: 0,
+                    x1: 100,
+                    y1: 10,
+                }),
+                &damage,
+                target,
+                false,
+            ),
+            (true, false, true)
+        );
+        assert_eq!(
+            custom_damage_invalidation_comparison(None, &damage, target, true),
+            (true, true, false)
+        );
+    }
 
     #[test]
     fn base_damage_is_shielded_only_by_a_full_reapply_publication() {

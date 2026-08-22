@@ -789,6 +789,14 @@ impl GuiProfilingController {
         };
         record["wall_us"] = json!(wall_us.min(u128::from(u64::MAX)) as u64);
         record["vsync_us"] = json!(vsync_us.min(u128::from(u64::MAX)) as u64);
+        record["custom_damage_invalidation"] = json!({
+            "arcade_bbox": custom_draw.arcade_bbox_invalidation,
+            "arcade_rects": custom_draw.arcade_rect_invalidation,
+            "arcade_false_positive": custom_draw.arcade_false_positive_invalidation,
+            "preview_bbox": custom_draw.preview_bbox_invalidation,
+            "preview_rects": custom_draw.preview_rect_invalidation,
+            "preview_false_positive": custom_draw.preview_false_positive_invalidation,
+        });
         record["crt_backdrop_prepare_us"] = json!(custom_draw.crt_backdrop_prepare_us);
         record["crt_backdrop_prepare_pixels"] = json!(custom_draw.crt_backdrop_prepare_pixels);
         record["crt_backdrop_blend_us"] = json!(custom_draw.crt_backdrop_blend_us);
