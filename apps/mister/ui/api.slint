@@ -248,26 +248,5 @@ export global MisterBridge {
     // an explicit Slint dependency; the callback resolves stable surface/item IDs.
     in-out property <int> selection-feedback-revision;
     pure callback selection-feedback-query(string, string, int) -> bool;
-    // Rust-painted arcade list geometry, in logical pixels.
-    in-out property <int> arcade-list-x;
-    in-out property <int> arcade-list-y;
-    in-out property <int> arcade-list-width;
-    in-out property <int> arcade-list-height;
-    // CRT chrome geometry relative to the route-owned content rectangle.
-    in-out property <int> arcade-crt-header-x;
-    in-out property <int> arcade-crt-header-y;
-    in-out property <int> arcade-crt-header-width;
-    in-out property <int> arcade-crt-footer-x;
-    in-out property <int> arcade-crt-footer-y;
-    in-out property <int> arcade-crt-footer-width;
-    in-out property <int> arcade-crt-keyboard-x;
-    in-out property <int> arcade-crt-keyboard-y;
-    in-out property <int> arcade-crt-keyboard-width;
-    in-out property <int> arcade-crt-keyboard-height;
-    // Screenshot box geometry, in logical pixels.
-    in-out property <int> arcade-preview-box-x;
-    in-out property <int> arcade-preview-box-y;
-    in-out property <int> arcade-preview-box-width;
-    in-out property <int> arcade-preview-box-height;
     callback quit-requested();
 }

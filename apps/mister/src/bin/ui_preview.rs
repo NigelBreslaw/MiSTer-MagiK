@@ -76,21 +76,20 @@ mod macos {
     };
     use mister_magik_fb::visual_platform::{MisterPlatform, MisterSoftwareWindow};
     use mister_magik_framebuffer_scenes::Rgb565SurfaceMut;
-    #[cfg(test)]
-    use mister_magik_ui::launcher::FeedbackView;
     use mister_magik_ui::launcher::{
         AboutSection, ArcadeGame, ArcadeLoadState, ArcadeSearchMode,
         ArcadeSearchPane as ViewArcadeSearchPane, ArcadeSearchStatus as ViewArcadeSearchStatus,
         ArcadeView, CatalogActivity, CatalogView, ChoiceOption, ConfirmationKind, DialogChoice,
         HomeFocus, HomeScrollPhase, InformationView, InputAvailability, InputView, Launcher,
         LauncherLayout, LauncherScreen, LayoutRect, LoadingState, MediaPackRow, MediaPackState,
-        MediaView, MenuItem, MenuItemKind, MenuItemPresentation, MenuItemStatus, MisterBridge,
-        MisterUi, NavigationTransitionState as ViewNavigationTransitionState, NavigationView,
-        OverlayView, PreviewState as ViewPreviewState, ProgressMode,
-        ScreenOrientation as ViewScreenOrientation, ScreensaverSetting, SettingsPopup,
-        SettingsSection, SettingsView, SetupEntry, SetupField, SetupPhase as ViewSetupPhase,
-        SetupView, SystemHubSection,
+        MediaView, MenuItem, MenuItemKind, MenuItemPresentation, MenuItemStatus, MisterUi,
+        NavigationTransitionState as ViewNavigationTransitionState, NavigationView, OverlayView,
+        PreviewState as ViewPreviewState, ProgressMode, ScreenOrientation as ViewScreenOrientation,
+        ScreensaverSetting, SettingsPopup, SettingsSection, SettingsView, SetupEntry, SetupField,
+        SetupPhase as ViewSetupPhase, SetupView, SystemHubSection,
     };
+    #[cfg(test)]
+    use mister_magik_ui::launcher::{FeedbackView, MisterBridge};
     use sha2::{Digest, Sha256};
     use slint::platform::software_renderer::{RepaintBufferType, Rgb565Pixel};
     use slint::{ComponentHandle, Model, ModelRc, PhysicalSize, SharedString, VecModel};
@@ -849,7 +848,6 @@ mod macos {
         }
 
         fn sync_orientation_geometry(&self) {
-            let bridge = self.launcher.global::<MisterBridge>();
             let layout = self.launcher.global::<LauncherLayout>();
             let settings = self.launcher.global::<SettingsView>();
             settings.set_active_orientation(match self.orientation {
@@ -870,10 +868,6 @@ mod macos {
                 return;
             }
             let preview = hdmi_preview_rect(self.frame_width, self.frame_height);
-            bridge.set_arcade_preview_box_x(preview.x0 as i32);
-            bridge.set_arcade_preview_box_y(preview.y0 as i32);
-            bridge.set_arcade_preview_box_width(preview.width() as i32);
-            bridge.set_arcade_preview_box_height(preview.rows() as i32);
             layout.set_arcade_preview(LayoutRect {
                 x: preview.x0 as i32,
                 y: preview.y0 as i32,
@@ -888,10 +882,6 @@ mod macos {
             } else {
                 self.frame_height.saturating_sub(list_y + margin)
             };
-            bridge.set_arcade_list_x(margin as i32);
-            bridge.set_arcade_list_y(list_y as i32);
-            bridge.set_arcade_list_width(self.frame_width.saturating_sub(margin * 2) as i32);
-            bridge.set_arcade_list_height(list_height as i32);
             layout.set_arcade_list(LayoutRect {
                 x: margin as i32,
                 y: list_y as i32,
@@ -4429,7 +4419,6 @@ mod macos {
         games: &[&ArcadeGameEntry],
         selected: usize,
     ) {
-        let bridge = launcher.global::<MisterBridge>();
         let layout = launcher.global::<LauncherLayout>();
         let arcade = launcher.global::<ArcadeView>();
         arcade.set_active_title(title.into());
@@ -4456,10 +4445,6 @@ mod macos {
                 .unwrap_or("")
                 .into(),
         );
-        bridge.set_arcade_list_x(8);
-        bridge.set_arcade_list_y(56);
-        bridge.set_arcade_list_width(510);
-        bridge.set_arcade_list_height(452);
         layout.set_arcade_list(LayoutRect {
             x: 8,
             y: 56,
@@ -4479,10 +4464,6 @@ mod macos {
         arcade.set_preview_source_height(120);
         arcade.set_preview_display_width(320);
         arcade.set_preview_display_height(240);
-        bridge.set_arcade_preview_box_x(8);
-        bridge.set_arcade_preview_box_y(92);
-        bridge.set_arcade_preview_box_width(320);
-        bridge.set_arcade_preview_box_height(320);
         layout.set_arcade_preview(LayoutRect {
             x: 8,
             y: 92,

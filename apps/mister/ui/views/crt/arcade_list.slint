@@ -4,7 +4,7 @@
 import { Spleen6x12 } from "../../components/spleen_6x12.slint";
 
 import { MisterUi } from "../../mister_window.slint";
-import { ArcadeLoadState, ArcadeSearchMode, ArcadeSearchPane, ArcadeSearchStatus, ArcadeView, FeedbackView, MisterBridge } from "../../api.slint";
+import { ArcadeLoadState, ArcadeSearchMode, ArcadeSearchPane, ArcadeSearchStatus, ArcadeView, FeedbackView, LauncherLayout } from "../../api.slint";
 import { CrtTheme, CrtHeader, CrtFooter } from "../../components/crt_ui.slint";
 
 component SearchKey inherits Rectangle {
@@ -86,9 +86,9 @@ export component ArcadeListScreen inherits Rectangle {
     background: CrtTheme.background;
 
     CrtHeader {
-        x: MisterBridge.arcade-crt-header-x * 1px;
-        y: MisterBridge.arcade-crt-header-y * 1px;
-        width: MisterBridge.arcade-crt-header-width * 1px;
+        x: LauncherLayout.crt-header.x * 1px;
+        y: LauncherLayout.crt-header.y * 1px;
+        width: LauncherLayout.crt-header.width * 1px;
         background: transparent;
         border-width: 0px;
         border-color: transparent;
@@ -103,17 +103,17 @@ export component ArcadeListScreen inherits Rectangle {
     }
 
     if ArcadeView.search-mode == ArcadeSearchMode.active : SearchKeyboard {
-        x: MisterBridge.arcade-crt-keyboard-x * 1px;
-        y: MisterBridge.arcade-crt-keyboard-y * 1px;
-        width: MisterBridge.arcade-crt-keyboard-width * 1px;
-        height: MisterBridge.arcade-crt-keyboard-height * 1px;
+        x: LauncherLayout.crt-keyboard.x * 1px;
+        y: LauncherLayout.crt-keyboard.y * 1px;
+        width: LauncherLayout.crt-keyboard.width * 1px;
+        height: LauncherLayout.crt-keyboard.height * 1px;
     }
 
     Rectangle {
-        x: (MisterBridge.arcade-list-x - MisterUi.crt-content-x) * 1px;
-        y: (MisterBridge.arcade-list-y - MisterUi.crt-content-y) * 1px;
-        width: MisterBridge.arcade-list-width * 1px;
-        height: MisterBridge.arcade-list-height * 1px;
+        x: (LauncherLayout.arcade-list.x - MisterUi.crt-content-x) * 1px;
+        y: (LauncherLayout.arcade-list.y - MisterUi.crt-content-y) * 1px;
+        width: LauncherLayout.arcade-list.width * 1px;
+        height: LauncherLayout.arcade-list.height * 1px;
         background: CrtTheme.panel-alt;
         border-width: MisterUi.border;
         border-color: ArcadeView.search-pane == ArcadeSearchPane.results ? CrtTheme.accent : CrtTheme.border;
@@ -135,10 +135,10 @@ export component ArcadeListScreen inherits Rectangle {
     }
 
     if ArcadeView.load-state == ArcadeLoadState.loading : Rectangle {
-        x: (MisterBridge.arcade-list-x - MisterUi.crt-content-x) * 1px;
-        y: (MisterBridge.arcade-list-y - MisterUi.crt-content-y) * 1px;
-        width: MisterBridge.arcade-list-width * 1px;
-        height: MisterBridge.arcade-list-height * 1px;
+        x: (LauncherLayout.arcade-list.x - MisterUi.crt-content-x) * 1px;
+        y: (LauncherLayout.arcade-list.y - MisterUi.crt-content-y) * 1px;
+        width: LauncherLayout.arcade-list.width * 1px;
+        height: LauncherLayout.arcade-list.height * 1px;
         background: CrtTheme.panel-alt;
 
         Spleen6x12 {
@@ -151,9 +151,9 @@ export component ArcadeListScreen inherits Rectangle {
     }
 
     CrtFooter {
-        x: MisterBridge.arcade-crt-footer-x * 1px;
-        y: MisterBridge.arcade-crt-footer-y * 1px;
-        width: MisterBridge.arcade-crt-footer-width * 1px;
+        x: LauncherLayout.crt-footer.x * 1px;
+        y: LauncherLayout.crt-footer.y * 1px;
+        width: LauncherLayout.crt-footer.width * 1px;
         background: transparent;
         border-width: 0px;
         border-color: transparent;

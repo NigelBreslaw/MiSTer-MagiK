@@ -4,7 +4,7 @@
 import { Start2P, Start2PSize } from "../../components/start2p.slint";
 
 import { MisterUi } from "../../mister_window.slint";
-import { ArcadeLoadState, ArcadeSearchMode, ArcadeSearchPane, ArcadeSearchStatus, ArcadeView, FeedbackView, MisterBridge } from "../../api.slint";
+import { ArcadeLoadState, ArcadeSearchMode, ArcadeSearchPane, ArcadeSearchStatus, ArcadeView, FeedbackView, LauncherLayout } from "../../api.slint";
 
 component SearchKey inherits Rectangle {
     in property <string> label;
@@ -151,10 +151,10 @@ export component ArcadeListScreen inherits Rectangle {
 
             // Rust draws the animated game rows into this reserved viewport.
             if ArcadeView.search-mode == ArcadeSearchMode.inactive : Rectangle {
-                x: MisterBridge.arcade-list-x * 1px;
-                y: MisterBridge.arcade-list-y * 1px;
-                width: MisterBridge.arcade-list-width * 1px;
-                height: MisterBridge.arcade-list-height * 1px;
+                x: LauncherLayout.arcade-list.x * 1px;
+                y: LauncherLayout.arcade-list.y * 1px;
+                width: LauncherLayout.arcade-list.width * 1px;
+                height: LauncherLayout.arcade-list.height * 1px;
                 background: #120d1a;
                 border-width: 1px;
                 border-color: #352848;
@@ -162,10 +162,10 @@ export component ArcadeListScreen inherits Rectangle {
             }
 
             if ArcadeView.search-mode == ArcadeSearchMode.inactive : Rectangle {
-                x: MisterBridge.arcade-list-x * 1px;
-                y: MisterBridge.arcade-list-y * 1px;
-                width: MisterBridge.arcade-list-width * 1px;
-                height: MisterBridge.arcade-list-height * 1px;
+                x: LauncherLayout.arcade-list.x * 1px;
+                y: LauncherLayout.arcade-list.y * 1px;
+                width: LauncherLayout.arcade-list.width * 1px;
+                height: LauncherLayout.arcade-list.height * 1px;
                 visible: root.games-loading || self.opacity > 0;
                 opacity: root.games-loading ? 1 : 0;
                 background: #120d1a;
@@ -214,10 +214,10 @@ export component ArcadeListScreen inherits Rectangle {
                 }
 
                 Rectangle {
-                    x: (MisterBridge.arcade-list-x - MisterUi.window-width / 2) * 1px;
-                    y: MisterBridge.arcade-list-y * 1px;
-                    width: MisterBridge.arcade-list-width * 1px;
-                    height: MisterBridge.arcade-list-height * 1px;
+                    x: (LauncherLayout.arcade-list.x - MisterUi.window-width / 2) * 1px;
+                    y: LauncherLayout.arcade-list.y * 1px;
+                    width: LauncherLayout.arcade-list.width * 1px;
+                    height: LauncherLayout.arcade-list.height * 1px;
                     background: #120d1a;
                     border-width: 1px;
                     border-color: ArcadeView.search-pane == ArcadeSearchPane.results ? #06d6a0 : #352848;
@@ -250,20 +250,20 @@ export component ArcadeListScreen inherits Rectangle {
         }
 
         if ArcadeView.search-mode == ArcadeSearchMode.inactive : Rectangle {
-            x: MisterBridge.arcade-preview-box-x * 1px;
-            y: MisterBridge.arcade-preview-box-y * 1px;
-            width: MisterBridge.arcade-preview-box-width * 1px;
-            height: MisterBridge.arcade-preview-box-height * 1px;
+            x: LauncherLayout.arcade-preview.x * 1px;
+            y: LauncherLayout.arcade-preview.y * 1px;
+            width: LauncherLayout.arcade-preview.width * 1px;
+            height: LauncherLayout.arcade-preview.height * 1px;
             background: black;
             border-width: 1px;
             border-color: #352848;
         }
 
         Rectangle {
-            x: MisterBridge.arcade-list-x * 1px;
-            y: MisterBridge.arcade-list-y * 1px;
-            width: MisterBridge.arcade-list-width * 1px;
-            height: MisterBridge.arcade-list-height * 1px;
+            x: LauncherLayout.arcade-list.x * 1px;
+            y: LauncherLayout.arcade-list.y * 1px;
+            width: LauncherLayout.arcade-list.width * 1px;
+            height: LauncherLayout.arcade-list.height * 1px;
             background: #120d1a;
             border-width: ArcadeView.search-mode == ArcadeSearchMode.active && ArcadeView.search-pane == ArcadeSearchPane.results ? 2px : 1px;
             border-color: ArcadeView.search-mode == ArcadeSearchMode.active && ArcadeView.search-pane == ArcadeSearchPane.results ? #06d6a0 : #352848;
@@ -272,7 +272,7 @@ export component ArcadeListScreen inherits Rectangle {
 
         if ArcadeView.search-mode == ArcadeSearchMode.active : SearchKeyboard {
             x: 0px;
-            y: MisterBridge.arcade-list-y * 1px + MisterBridge.arcade-list-height * 1px + 8px;
+            y: LauncherLayout.arcade-list.y * 1px + LauncherLayout.arcade-list.height * 1px + 8px;
             width: parent.width;
             height: parent.height - self.y;
         }
@@ -282,7 +282,7 @@ export component ArcadeListScreen inherits Rectangle {
         x: 0px;
         y: 0px;
         width: parent.width;
-        height: MisterBridge.arcade-list-y * 1px;
+        height: LauncherLayout.arcade-list.y * 1px;
         background: #1a1424;
 
         Start2P {
@@ -306,13 +306,13 @@ export component ArcadeListScreen inherits Rectangle {
 
     if !MisterUi.portrait-layout && ArcadeView.search-mode == ArcadeSearchMode.inactive : Rectangle {
         x: 0px;
-        y: (MisterBridge.arcade-list-y + MisterBridge.arcade-list-height) * 1px;
+        y: (LauncherLayout.arcade-list.y + LauncherLayout.arcade-list.height) * 1px;
         width: parent.width;
         height: parent.height > self.y ? parent.height - self.y : 0px;
         background: #1a1424;
 
         Rectangle {
-            x: MisterBridge.arcade-list-x * 1px;
+            x: LauncherLayout.arcade-list.x * 1px;
             y: 4px;
             width: parent.width > self.x * 2 ? parent.width - self.x * 2 : 0px;
             height: parent.height > self.y + 8px ? parent.height - self.y - 8px : 0px;
