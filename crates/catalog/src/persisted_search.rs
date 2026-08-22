@@ -10,6 +10,7 @@ use std::fmt;
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::time::Instant;
 
 pub const SEARCH_SCHEMA_VERSION: u32 = 1;
@@ -34,9 +35,28 @@ pub struct PersistedAutocompleteCandidate {
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct PersistedSearchTiming {
     pub rust_prepare_us: u64,
+    pub sqlite_open_us: u64,
+    pub statement_prepare_us: u64,
+    pub sqlite_execute_us: u64,
     pub sqlite_us: u64,
     pub rust_finalize_us: u64,
     pub total_us: u64,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct PersistedSearchRuntimeMetrics {
+    pub sqlite_opens: u64,
+    pub statement_prepares: u64,
+}
+
+static SEARCH_SQLITE_OPENS: AtomicU64 = AtomicU64::new(0);
+static SEARCH_STATEMENT_PREPARES: AtomicU64 = AtomicU64::new(0);
+
+pub fn runtime_metrics() -> PersistedSearchRuntimeMetrics {
+    PersistedSearchRuntimeMetrics {
+        sqlite_opens: SEARCH_SQLITE_OPENS.load(AtomicOrdering::Relaxed),
+        statement_prepares: SEARCH_STATEMENT_PREPARES.load(AtomicOrdering::Relaxed),
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -176,6 +196,18 @@ fn search_system_shards_in_manifest(
             .timing
             .sqlite_us
             .saturating_add(shard.timing.sqlite_us);
+        result.timing.sqlite_open_us = result
+            .timing
+            .sqlite_open_us
+            .saturating_add(shard.timing.sqlite_open_us);
+        result.timing.statement_prepare_us = result
+            .timing
+            .statement_prepare_us
+            .saturating_add(shard.timing.statement_prepare_us);
+        result.timing.sqlite_execute_us = result
+            .timing
+            .sqlite_execute_us
+            .saturating_add(shard.timing.sqlite_execute_us);
     }
     result.matches.sort_by(|left, right| {
         left.rank
@@ -223,16 +255,21 @@ pub fn search_system_shard(
 
     let sqlite_started = Instant::now();
     let sqlite_pmu = mister_magik_perf_events::sampled_span("search.sqlite");
+    let open_started = Instant::now();
     let connection = open_read_only(sqlite_path)?;
+    let sqlite_open_us = elapsed_us(open_started);
     let sql = format!(
         "SELECT rowid - 1, bm25(game_search_fts,{SEARCH_WEIGHTS})
          FROM game_search_fts
          WHERE game_search_fts MATCH ?1
          ORDER BY 2 ASC, rowid ASC"
     );
+    let prepare_started = Instant::now();
+    SEARCH_STATEMENT_PREPARES.fetch_add(1, AtomicOrdering::Relaxed);
     let mut statement = connection
         .prepare(&sql)
         .map_err(|error| PersistedSearchError::with("prepare FTS query", error))?;
+    let mut statement_prepare_us = elapsed_us(prepare_started);
     let rows = statement
         .query_map([&match_query], |row| {
             Ok((row.get::<_, i64>(0)?, row.get::<_, f64>(1)?))
@@ -246,28 +283,36 @@ pub fn search_system_shard(
 
     let autocomplete = if autocomplete_prefix.len() >= 2 {
         let upper_bound = format!("{autocomplete_prefix}\u{10ffff}");
-        connection
-            .query_row(
+        let autocomplete_prepare_started = Instant::now();
+        SEARCH_STATEMENT_PREPARES.fetch_add(1, AtomicOrdering::Relaxed);
+        let mut autocomplete_statement = connection
+            .prepare(
                 "SELECT word,source_rank,score
                  FROM autocomplete_words
                  WHERE word >= ?1 AND word < ?2
                  ORDER BY source_rank DESC,score DESC,word ASC
                  LIMIT 1",
-                [&autocomplete_prefix, &upper_bound],
-                |row| {
-                    Ok(PersistedAutocompleteCandidate {
-                        word: row.get(0)?,
-                        source_rank: row.get(1)?,
-                        score: row.get(2)?,
-                    })
-                },
             )
+            .map_err(|error| PersistedSearchError::with("prepare autocomplete", error))?;
+        statement_prepare_us =
+            statement_prepare_us.saturating_add(elapsed_us(autocomplete_prepare_started));
+        autocomplete_statement
+            .query_row([&autocomplete_prefix, &upper_bound], |row| {
+                Ok(PersistedAutocompleteCandidate {
+                    word: row.get(0)?,
+                    source_rank: row.get(1)?,
+                    score: row.get(2)?,
+                })
+            })
             .optional()
             .map_err(|error| PersistedSearchError::with("query autocomplete", error))?
     } else {
         None
     };
     let sqlite_us = elapsed_us(sqlite_started);
+    let sqlite_execute_us = sqlite_us
+        .saturating_sub(sqlite_open_us)
+        .saturating_sub(statement_prepare_us);
     drop(sqlite_pmu);
 
     let finalize_started = Instant::now();
@@ -288,6 +333,9 @@ pub fn search_system_shard(
         autocomplete,
         timing: PersistedSearchTiming {
             rust_prepare_us,
+            sqlite_open_us,
+            statement_prepare_us,
+            sqlite_execute_us,
             sqlite_us,
             rust_finalize_us,
             total_us: elapsed_us(total_started),
@@ -670,6 +718,7 @@ fn search_meta_usize(connection: &Connection, key: &str) -> Result<usize, Persis
 }
 
 fn open_read_only(path: &Path) -> Result<Connection, PersistedSearchError> {
+    SEARCH_SQLITE_OPENS.fetch_add(1, AtomicOrdering::Relaxed);
     let connection = Connection::open_with_flags(
         path,
         OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,

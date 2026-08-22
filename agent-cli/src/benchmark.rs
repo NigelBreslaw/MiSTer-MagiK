@@ -2271,15 +2271,29 @@ fn evaluate_rom_identity_hashing_summary(summary: &Value) -> AgentResult<()> {
 }
 
 fn evaluate_search_summary(summary: &Value) -> AgentResult<()> {
-    if summary.get("schema").and_then(Value::as_str) != Some("mister-magik-search-benchmark-v1") {
+    if summary.get("schema").and_then(Value::as_str) != Some("mister-magik-search-benchmark-v2") {
         return Err("persisted search benchmark summary has the wrong schema".into());
     }
-    let queries = summary
-        .get("queries")
+    let runs = summary
+        .get("runs")
         .and_then(Value::as_array)
-        .ok_or("persisted search benchmark summary has no queries")?;
-    if queries.is_empty() {
-        return Err("persisted search benchmark ran no queries".into());
+        .ok_or("persisted search benchmark summary has no runs")?;
+    if runs.len() != 3
+        || runs.iter().any(|run| {
+            run.get("queries")
+                .and_then(Value::as_array)
+                .is_none_or(|queries| {
+                    queries.len() != 4
+                        || queries.iter().any(|query| {
+                            query
+                                .get("result_hash")
+                                .and_then(Value::as_str)
+                                .is_none_or(|hash| hash.len() != 64)
+                        })
+                })
+        })
+    {
+        return Err("persisted search benchmark lacks three exact query suites".into());
     }
     if summary
         .pointer("/warm_all_queries/total_us/p95")
@@ -2297,6 +2311,11 @@ fn evaluate_search_ui_summary(summary: &Value) -> AgentResult<()> {
         || summary.get("status").and_then(Value::as_str) != Some("ready")
         || summary.get("query").and_then(Value::as_str) != Some("A")
         || summary.get("results").and_then(Value::as_u64).unwrap_or(0) == 0
+        || summary
+            .get("worker_threads")
+            .and_then(Value::as_u64)
+            .unwrap_or(0)
+            == 0
     {
         return Err("persisted search UI verification did not reach ready results".into());
     }

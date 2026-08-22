@@ -866,9 +866,15 @@ impl LauncherScheduler {
         let storage = self.catalog_paths.sharded_catalog_dir().to_path_buf();
         let (tx, rx) = mpsc::channel();
         self.search_query = SearchQueryJobState::Running(rx);
+        crate::ui_logln!(
+            "search_query_tsv\tspawn\t{}\t{}",
+            request.catalog_version,
+            request.query
+        );
         if std::thread::Builder::new()
             .name("catalog-search-query".to_string())
             .spawn(move || {
+                let started = Instant::now();
                 mister_magik_catalog::runtime_thread::apply_runtime_thread_policy(
                     mister_magik_catalog::runtime_thread::RuntimeThreadRole::CatalogWorker,
                 );
@@ -881,10 +887,19 @@ impl LauncherScheduler {
                     catalog.search(&worker_request.system_ids, &worker_request.query)
                 });
                 let message = match result {
-                    Ok(result) => CatalogWorkerMessage::SearchQueryReady {
-                        request: worker_request,
-                        result,
-                    },
+                    Ok(result) => {
+                        crate::ui_logln!(
+                            "search_query_tsv\tfinish\t{}\t{}\t{}\t{}",
+                            worker_request.catalog_version,
+                            worker_request.query,
+                            started.elapsed().as_micros(),
+                            result.timing.total_us,
+                        );
+                        CatalogWorkerMessage::SearchQueryReady {
+                            request: worker_request,
+                            result,
+                        }
+                    }
                     Err(error) => CatalogWorkerMessage::SearchQueryFailed {
                         request: worker_request,
                         error: error.to_string(),

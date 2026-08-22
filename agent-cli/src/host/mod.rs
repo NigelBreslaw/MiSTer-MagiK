@@ -12677,7 +12677,7 @@ fn profile_installed_search(config: &NativeDeviceConfig, output_dir: &Path) -> R
     fs::write(output_dir.join("search-bench.log"), &log)?;
     let summary =
         last_json_line(&output.stdout).ok_or("installed search benchmark returned no JSON")?;
-    if summary.get("schema").and_then(Value::as_str) != Some("mister-magik-search-benchmark-v1") {
+    if summary.get("schema").and_then(Value::as_str) != Some("mister-magik-search-benchmark-v2") {
         return Err("installed search benchmark returned the wrong schema".into());
     }
     fs::write(
@@ -15657,16 +15657,6 @@ fn verify_installed_search_ui(config: &NativeDeviceConfig, output_dir: &Path) ->
     let session = connect_with(&config.connection, 10)?;
     fs::create_dir_all(output_dir)?;
     let run_result = (|| -> Result<Value> {
-        let initial = read_launcher_status(&session)?;
-        if initial.get("catalog_ready").and_then(Value::as_bool) != Some(true)
-            || initial
-                .get("catalog_games")
-                .and_then(Value::as_u64)
-                .unwrap_or(0)
-                == 0
-        {
-            return Err("search UI verification requires an existing usable cached catalog".into());
-        }
         restart_launcher_with_one_shot_env(
             &session,
             LauncherRestartOptions {
@@ -15693,12 +15683,20 @@ fn verify_installed_search_ui(config: &NativeDeviceConfig, output_dir: &Path) ->
         loop {
             let status = read_launcher_status(&session)?;
             if search_ui_status_ready(&status) {
+                let launcher_log = remote_read(&session, "/tmp/mister-magik-slint.log")
+                    .ok_or("search UI launcher log is missing")?;
+                fs::write(output_dir.join("launcher.log"), &launcher_log)?;
+                let worker_threads = launcher_log
+                    .lines()
+                    .filter(|line| line.contains("search_query_tsv\tspawn\t"))
+                    .count();
                 return Ok(json!({
                     "schema": "mister-magik-search-ui-verification-v1",
                     "status": "ready",
                     "query": "A",
                     "results": status["arcade_search_results"],
                     "elapsed_ms": started.elapsed().as_millis() as u64,
+                    "worker_threads": worker_threads,
                 }));
             }
             if status.get("arcade_search_status").and_then(Value::as_str) == Some("failed") {
