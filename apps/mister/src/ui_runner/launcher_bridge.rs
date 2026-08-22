@@ -1285,12 +1285,12 @@ impl BridgeChurnPlayback {
                     let model = bridge.get_media_pack_progresses();
                     self.media_bridge_terminal = Some(json!({
                         "rows": (0..model.row_count()).filter_map(|index| model.row_data(index)).map(|row| json!({
-                            "system": row.system,
-                            "phase": row.phase,
+                            "system": row.system.as_str(),
+                            "phase": row.phase.as_str(),
                             "percent": row.percent,
-                            "pack_position": row.pack_position,
+                            "pack_position": row.pack_position.as_str(),
                         })).collect::<Vec<_>>(),
-                        "summary": bridge.get_media_pack_summary(),
+                        "summary": bridge.get_media_pack_summary().as_str(),
                     }));
                 }
                 self.pending_presentation = true;

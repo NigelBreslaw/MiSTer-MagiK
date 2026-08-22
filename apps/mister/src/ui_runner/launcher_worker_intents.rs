@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use super::*;
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 
 pub(super) enum LauncherWorkerUiIntent {

@@ -16,6 +16,7 @@ use super::launcher_pacing::{
     LauncherPhaseAlignment,
 };
 use super::launcher_screensaver::ScreensaverRenderTrace;
+use super::launcher_worker_intents::reset_retained_media_progress_bridge;
 use super::launcher_worker_intents::{
     LauncherWorkerUiIntent, apply_launcher_worker_ui_intent, catalog_scan_message,
 };
