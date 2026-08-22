@@ -916,6 +916,21 @@ aliases = []
 documentation = { summary = "Controls gui frame profile pmu behavior", accepted_values = [], value_policy = "document" }
 
 [[control]]
+name = "MISTER_GUI_FRAME_PROFILE_ROUTE"
+owner = "apps/mister/src/ui_runner/launcher_gui_profile.rs"
+classification = "diagnostic"
+value_shape = "enum token"
+default_behavior = "uses arcade-velocity when unset or unrecognized"
+visibility = "developer diagnostic"
+parser = "enum"
+typed_default = "arcade-velocity"
+scope = "instrumentation"
+conflicts = []
+sensitivity = "public"
+aliases = []
+documentation = { summary = "Selects the fixed GUI frame profiling route", accepted_values = ["arcade-velocity", "settled-composition", "bridge-churn"], value_policy = "document" }
+
+[[control]]
 name = "MISTER_HBMAME_SQLITE"
 owner = "crates/catalog/src/catalog_config.rs"
 classification = "production"
