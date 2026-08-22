@@ -7700,7 +7700,7 @@ fn run_launcher_response_arcade_route(session: &Session, catalog_refresh: &str) 
         "arcade-{}",
         SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos()
     );
-    let mut env_vars = vec![
+    let env_vars = vec![
         ("MISTER_CATALOG_REFRESH".into(), catalog_refresh.into()),
         ("MISTER_LAUNCHER_START_SCREEN".into(), "arcade".into()),
         ("MISTER_SYSTEM_ENTRY_BENCHMARK_SYSTEM".into(), "snes".into()),
