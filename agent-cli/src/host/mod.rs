@@ -15656,6 +15656,7 @@ fn analyze_streamline_capture(capture: &Path, output_dir: &Path) -> Result<()> {
 fn verify_installed_search_ui(config: &NativeDeviceConfig, output_dir: &Path) -> Result<String> {
     let session = connect_with(&config.connection, 10)?;
     fs::create_dir_all(output_dir)?;
+    let mut nonce = None;
     let run_result = (|| -> Result<Value> {
         restart_launcher_with_one_shot_env(
             &session,
@@ -15666,19 +15667,107 @@ fn verify_installed_search_ui(config: &NativeDeviceConfig, output_dir: &Path) ->
                         "MISTER_SYSTEM_ENTRY_BENCHMARK_SYSTEM".into(),
                         "arcade".into(),
                     ),
-                    (
-                        "MISTER_LAUNCHER_INPUT_SCRIPT".into(),
-                        "left,b,down,a,a,wait:180".into(),
-                    ),
-                    (
-                        "MISTER_LAUNCHER_INPUT_SCRIPT_WAIT_FRAMES".into(),
-                        "120".into(),
-                    ),
                 ],
                 timeout_secs: 45,
                 remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str().into(),
                 ..LauncherRestartOptions::default()
             },
+        )?;
+        let status = read_launcher_status(&session)?;
+        let main_status: Value = serde_json::from_str(
+            &remote_read(&session, MAIN_STATUS_REMOTE).ok_or("Main status is missing")?,
+        )?;
+        let begin = launcher_automation::begin(
+            config,
+            status
+                .pointer("/build/version")
+                .and_then(Value::as_str)
+                .ok_or("search UI status has no build version")?,
+            status
+                .pointer("/build/source_revision")
+                .and_then(Value::as_str)
+                .ok_or("search UI status has no source revision")?,
+            main_status
+                .get("main_generation")
+                .and_then(Value::as_u64)
+                .ok_or("search UI Main status has no generation")?,
+            45,
+        )?;
+        let begin: Value = serde_json::from_str(&begin)?;
+        let active_nonce = begin["nonce"]
+            .as_str()
+            .ok_or("search UI automation has no nonce")?
+            .to_string();
+        nonce = Some(active_nonce.clone());
+        wait_gui_profile_snapshot(
+            config,
+            &active_nonce,
+            |snapshot| {
+                gui_profile_effective_view(snapshot) == Some("arcade")
+                    && snapshot
+                        .pointer("/semantic/navigation_transition_active")
+                        .and_then(Value::as_bool)
+                        == Some(false)
+            },
+            "search UI cached Arcade entry",
+        )?;
+        modal_input_action(
+            config,
+            &active_nonce,
+            AutomationAction::Tap(AutomationButton::Left),
+        )?;
+        wait_gui_profile_snapshot(
+            config,
+            &active_nonce,
+            |snapshot| {
+                snapshot
+                    .pointer("/semantic/drawer_open")
+                    .and_then(Value::as_bool)
+                    == Some(true)
+            },
+            "search UI drawer open",
+        )?;
+        modal_input_action(
+            config,
+            &active_nonce,
+            AutomationAction::Tap(AutomationButton::B),
+        )?;
+        wait_gui_profile_snapshot(
+            config,
+            &active_nonce,
+            |snapshot| {
+                snapshot
+                    .pointer("/semantic/drawer_level")
+                    .and_then(Value::as_str)
+                    == Some("Filters")
+            },
+            "search UI drawer top level",
+        )?;
+        modal_input_action(
+            config,
+            &active_nonce,
+            AutomationAction::Tap(AutomationButton::Down),
+        )?;
+        modal_input_action(
+            config,
+            &active_nonce,
+            AutomationAction::Tap(AutomationButton::A),
+        )?;
+        wait_gui_profile_snapshot(
+            config,
+            &active_nonce,
+            |snapshot| {
+                snapshot
+                    .pointer("/semantic/search_active")
+                    .and_then(Value::as_bool)
+                    == Some(true)
+            },
+            "search UI keyboard",
+        )?;
+        modal_input_action(
+            config,
+            &active_nonce,
+            AutomationAction::Tap(AutomationButton::A),
         )?;
         let started = Instant::now();
         let timeout = Duration::from_secs(30);
@@ -15718,6 +15807,10 @@ fn verify_installed_search_ui(config: &NativeDeviceConfig, output_dir: &Path) ->
             thread::sleep(Duration::from_millis(100));
         }
     })();
+    let end_result = nonce
+        .as_deref()
+        .map(|nonce| launcher_automation::end(config, nonce).map(|_| ()))
+        .unwrap_or(Ok(()));
     let restore_result = launcher_restart(
         &session,
         &LauncherRestartOptions {
@@ -15727,15 +15820,22 @@ fn verify_installed_search_ui(config: &NativeDeviceConfig, output_dir: &Path) ->
             ..LauncherRestartOptions::default()
         },
     );
-    let summary = match (run_result, restore_result) {
-        (Ok(summary), Ok(())) => summary,
-        (Err(error), Ok(())) => return Err(error),
-        (Ok(_), Err(error)) => {
-            return Err(format!("search UI verification cleanup failed: {error}").into());
-        }
-        (Err(run_error), Err(cleanup_error)) => {
+    let summary = match (run_result, end_result, restore_result) {
+        (Ok(summary), Ok(()), Ok(())) => summary,
+        (Err(error), Ok(()), Ok(())) => return Err(error),
+        (Ok(_), end, restore) => {
             return Err(format!(
-                "{run_error}; search UI verification cleanup failed: {cleanup_error}"
+                "search UI verification cleanup failed: end={:?}; restore={:?}",
+                end.err(),
+                restore.err()
+            )
+            .into());
+        }
+        (Err(run_error), end, restore) => {
+            return Err(format!(
+                "{run_error}; search UI verification cleanup failed: end={:?}; restore={:?}",
+                end.err(),
+                restore.err()
             )
             .into());
         }
