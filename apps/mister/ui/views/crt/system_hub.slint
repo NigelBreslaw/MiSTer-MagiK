@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { MisterBridge } from "../../api.slint";
+import { FeedbackView, NavigationView, SystemHubSection } from "../../api.slint";
 import { MisterUi } from "../../mister_window.slint";
 import { Spleen6x12 } from "../../components/spleen_6x12.slint";
 import { CrtTheme, CrtFooter } from "../../components/crt_ui.slint";
@@ -29,10 +29,10 @@ export component SystemHubScreen inherits Rectangle {
     property <length> card-height: (root.height - 150px - MisterUi.footer-height - MisterUi.grid-y * 3) / 2;
     Jersey25 { x: MisterUi.grid-x * 2; y: 0px; width: 300px; height: 41px; text: "SUPER NINTENDO"; color: CrtTheme.text; }
     Spleen6x12 { x: MisterUi.grid-x * 2; y: 50px; text: "1990 / 16-BIT CONSOLE"; size: MisterUi.crt-body-font; color: CrtTheme.warning; }
-    Image { x: parent.width - 185px - MisterUi.grid-x * 2; y: MisterUi.grid-y; visible: MisterBridge.snes-artwork-visible; source: MisterBridge.snes-artwork; width: 185px; height: 82px; }
-    HubCard { x: MisterUi.grid-x * 2; y: 104px; width: card-width; height: card-height; glyph: "+"; label: "GAMES"; detail: MisterBridge.system-hub-games-count + " TITLES"; focused: MisterBridge.system-hub-selected == 0; acknowledged: MisterBridge.selection-feedback-query("system-hub", "games", MisterBridge.selection-feedback-revision); }
-    HubCard { x: MisterUi.grid-x * 3 + card-width; y: 104px; width: card-width; height: card-height; glyph: "@"; label: "RECENT"; detail: MisterBridge.system-hub-recent-count + " PLAYED"; focused: MisterBridge.system-hub-selected == 1; acknowledged: MisterBridge.selection-feedback-query("system-hub", "recent", MisterBridge.selection-feedback-revision); }
-    HubCard { x: MisterUi.grid-x * 2; y: 104px + card-height + MisterUi.grid-y; width: card-width; height: card-height; glyph: "*"; label: "FAVORITES"; detail: MisterBridge.system-hub-favourites-count + " SAVED"; focused: MisterBridge.system-hub-selected == 2; acknowledged: MisterBridge.selection-feedback-query("system-hub", "favorites", MisterBridge.selection-feedback-revision); }
-    HubCard { x: MisterUi.grid-x * 3 + card-width; y: 104px + card-height + MisterUi.grid-y; width: card-width; height: card-height; glyph: "i"; label: "INFO"; detail: "COMING SOON"; enabled: false; focused: MisterBridge.system-hub-selected == 3; acknowledged: MisterBridge.selection-feedback-query("system-hub", "info", MisterBridge.selection-feedback-revision); }
+    Image { x: parent.width - 185px - MisterUi.grid-x * 2; y: MisterUi.grid-y; visible: NavigationView.system-artwork-available; source: NavigationView.system-artwork; width: 185px; height: 82px; }
+    HubCard { x: MisterUi.grid-x * 2; y: 104px; width: card-width; height: card-height; glyph: "+"; label: "GAMES"; detail: NavigationView.system-hub-games-count + " TITLES"; focused: NavigationView.system-hub-section == SystemHubSection.games; acknowledged: FeedbackView.acknowledged("system-hub", "games", FeedbackView.revision); }
+    HubCard { x: MisterUi.grid-x * 3 + card-width; y: 104px; width: card-width; height: card-height; glyph: "@"; label: "RECENT"; detail: NavigationView.system-hub-recent-count + " PLAYED"; focused: NavigationView.system-hub-section == SystemHubSection.recent; acknowledged: FeedbackView.acknowledged("system-hub", "recent", FeedbackView.revision); }
+    HubCard { x: MisterUi.grid-x * 2; y: 104px + card-height + MisterUi.grid-y; width: card-width; height: card-height; glyph: "*"; label: "FAVORITES"; detail: NavigationView.system-hub-favourites-count + " SAVED"; focused: NavigationView.system-hub-section == SystemHubSection.favourites; acknowledged: FeedbackView.acknowledged("system-hub", "favorites", FeedbackView.revision); }
+    HubCard { x: MisterUi.grid-x * 3 + card-width; y: 104px + card-height + MisterUi.grid-y; width: card-width; height: card-height; glyph: "i"; label: "INFO"; detail: "COMING SOON"; enabled: false; focused: NavigationView.system-hub-section == SystemHubSection.information; acknowledged: FeedbackView.acknowledged("system-hub", "info", FeedbackView.revision); }
     CrtFooter { x: MisterUi.grid-x * 2; y: parent.height - MisterUi.footer-height - MisterUi.grid-y; width: parent.width - MisterUi.grid-x * 4; left-hint: "A Open   B Back"; right-hint: "HOME Launcher"; }
 }

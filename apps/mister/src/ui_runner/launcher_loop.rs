@@ -1033,11 +1033,7 @@ fn sync_navigation_transition_active(
     app: &slint_ui::launcher::Launcher,
     transition: &NavigationTransitionRuntime,
 ) {
-    let bridge = app.global::<slint_ui::launcher::MisterBridge>();
     let active = transition.is_active();
-    if bridge.get_navigation_transition_active() != active {
-        bridge.set_navigation_transition_active(active);
-    }
     let navigation = app.global::<slint_ui::launcher::NavigationView>();
     let state = crate::launcher_view_types::navigation_transition_state(active);
     if navigation.get_transition_state() != state {
@@ -1046,26 +1042,18 @@ fn sync_navigation_transition_active(
 }
 
 fn set_launcher_clock_text(app: &slint_ui::launcher::Launcher, value: &str) {
-    let value = slint::SharedString::from(value);
-    app.global::<slint_ui::launcher::MisterBridge>()
-        .set_clock_text(value.clone());
     app.global::<slint_ui::launcher::NavigationView>()
-        .set_clock_text(value);
+        .set_clock_text(value.into());
 }
 
 fn set_launcher_update_available(app: &slint_ui::launcher::Launcher, available: bool) {
-    app.global::<slint_ui::launcher::MisterBridge>()
-        .set_update_available(available);
     app.global::<slint_ui::launcher::NavigationView>()
         .set_update_available(available);
 }
 
 fn set_launcher_present_mode_label(app: &slint_ui::launcher::Launcher, value: &str) {
-    let value = slint::SharedString::from(value);
-    app.global::<slint_ui::launcher::MisterBridge>()
-        .set_present_mode_label(value.clone());
     app.global::<slint_ui::launcher::NavigationView>()
-        .set_present_mode_label(value);
+        .set_present_mode_label(value.into());
 }
 
 fn begin_navigation_full_screen_transition(
@@ -5809,20 +5797,16 @@ pub(super) fn run_launcher_loop(
     let navigation = app.global::<slint_ui::launcher::NavigationView>();
     let menu_title = slint::SharedString::from(nav.current_menu_title());
     let menu_breadcrumb = slint::SharedString::from(nav.current_menu_breadcrumb());
-    bridge.set_menu_title(menu_title.clone());
     navigation.set_menu_title(menu_title);
-    bridge.set_menu_breadcrumb(menu_breadcrumb.clone());
     navigation.set_menu_breadcrumb(menu_breadcrumb);
     set_launcher_update_available(&app, false);
     let menu_items = bridge_models.menu_items(&nav, catalog_version);
     let menu_item_presentation = bridge_models.menu_item_presentation();
-    bridge.set_menu_item_presentation(menu_item_presentation.clone());
     navigation.set_menu_item_presentation(menu_item_presentation);
-    bridge.set_menu_items(menu_items.clone());
     navigation.set_menu_items(menu_items);
     let mut update_check = UpdateCheck::start(should_check_for_updates(
         launcher_bench_scenario.is_some(),
-        bridge.get_dev_mode(),
+        navigation.get_development_build(),
     ));
     print_startup_event(
         start,
@@ -7355,12 +7339,6 @@ pub(super) fn run_launcher_loop(
         launching = effective_view.launch_active();
         frame_accounting.set_effective_view(effective_view.label());
         frame_accounting.set_catalog_generation(catalog_generation.current.as_deref());
-        let bridge = app.global::<slint_ui::launcher::MisterBridge>();
-        if (startup_intro.is_none() || startup_intro_needs_live_launcher)
-            && bridge.get_effective_view().as_str() != effective_view.label()
-        {
-            bridge.set_effective_view(effective_view.label().into());
-        }
 
         scheduler_phase = launcher_response_trace
             .record_scheduler_interval("pre-input-view-housekeeping", scheduler_phase);
@@ -9070,12 +9048,6 @@ pub(super) fn run_launcher_loop(
         launching = effective_view.launch_active();
         frame_accounting.set_effective_view(effective_view.label());
         frame_accounting.set_catalog_generation(catalog_generation.current.as_deref());
-        let bridge = app.global::<slint_ui::launcher::MisterBridge>();
-        if !startup_intro_suppress_launcher_ui
-            && bridge.get_effective_view().as_str() != effective_view.label()
-        {
-            bridge.set_effective_view(effective_view.label().into());
-        }
         let mut full_frame_present = std::mem::take(&mut orientation_full_redraw_pending)
             || std::mem::take(&mut unpublished_cached_frame_present)
             || display_session.should_present_full_frame(launching, route_action)
@@ -11348,9 +11320,11 @@ pub(super) fn run_launcher_loop(
                 && lifecycle.startup_status().state == StartupRevealState::RevealLauncher
             {
                 first_launcher_frame_logged = true;
-                let bridge = app.global::<slint_ui::launcher::MisterBridge>();
                 let nav_menu_items = nav.current_menu_count();
-                let bridge_menu_items = bridge.get_menu_items().row_count();
+                let bridge_menu_items = app
+                    .global::<slint_ui::launcher::NavigationView>()
+                    .get_menu_items()
+                    .row_count();
                 print_startup_event(
                     start,
                     "launcher_first_frame_presented",

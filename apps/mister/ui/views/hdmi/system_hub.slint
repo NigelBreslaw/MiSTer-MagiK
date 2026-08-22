@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { MisterBridge } from "../../api.slint";
+import { FeedbackView, NavigationView, SystemHubSection } from "../../api.slint";
 import { MisterUi } from "../../mister_window.slint";
 import { Start2P, Start2PSize } from "../../components/start2p.slint";
 import { Jersey25 } from "../../components/jersey_25.slint";
@@ -130,7 +130,7 @@ export component SystemHubScreen inherits Rectangle {
     }
     Nocive15 {
         x: 30px; y: 104px; width: 300px; height: 18px;
-        text: MisterBridge.system-hub-games-count + " GAMES";
+        text: NavigationView.system-hub-games-count + " GAMES";
         color: #ddd4e4;
         size: Nocive15Size.px15;
     }
@@ -154,8 +154,8 @@ export component SystemHubScreen inherits Rectangle {
         Rectangle { x: parent.width - 9px; y: parent.height - 23px; width: 2px; height: 16px; background: #766486; }
         Image {
             x: 5px; y: 18px;
-            visible: MisterBridge.snes-artwork-visible;
-            source: MisterBridge.snes-artwork;
+            visible: NavigationView.system-artwork-available;
+            source: NavigationView.system-artwork;
             width: 370px; height: 164px;
             image-fit: fill;
             image-rendering: pixelated;
@@ -191,10 +191,10 @@ export component SystemHubScreen inherits Rectangle {
         }
     }
 
-    HubCard { x: cards-x; y: cards-y; width: card-width; height: card-height; kind: 0; label: "GAMES"; detail: MisterBridge.system-hub-games-count + " TITLES"; focused: MisterBridge.system-hub-selected == 0; acknowledged: MisterBridge.selection-feedback-query("system-hub", "games", MisterBridge.selection-feedback-revision); }
-    HubCard { x: cards-x + card-width + 14px; y: cards-y; width: card-width; height: card-height; kind: 1; label: "RECENT"; detail: MisterBridge.system-hub-recent-count + " PLAYED"; focused: MisterBridge.system-hub-selected == 1; acknowledged: MisterBridge.selection-feedback-query("system-hub", "recent", MisterBridge.selection-feedback-revision); }
-    HubCard { x: cards-x; y: cards-y + card-height + 14px; width: card-width; height: card-height; kind: 2; label: "FAVORITES"; detail: MisterBridge.system-hub-favourites-count + " SAVED"; focused: MisterBridge.system-hub-selected == 2; acknowledged: MisterBridge.selection-feedback-query("system-hub", "favorites", MisterBridge.selection-feedback-revision); }
-    // HubCard { x: cards-x + card-width + 14px; y: cards-y + card-height + 14px; width: card-width; height: card-height; kind: 3; label: "INFO"; detail: "COMING SOON"; enabled: false; focused: MisterBridge.system-hub-selected == 3; acknowledged: MisterBridge.selection-feedback-query("system-hub", "info", MisterBridge.selection-feedback-revision); }
+    HubCard { x: cards-x; y: cards-y; width: card-width; height: card-height; kind: 0; label: "GAMES"; detail: NavigationView.system-hub-games-count + " TITLES"; focused: NavigationView.system-hub-section == SystemHubSection.games; acknowledged: FeedbackView.acknowledged("system-hub", "games", FeedbackView.revision); }
+    HubCard { x: cards-x + card-width + 14px; y: cards-y; width: card-width; height: card-height; kind: 1; label: "RECENT"; detail: NavigationView.system-hub-recent-count + " PLAYED"; focused: NavigationView.system-hub-section == SystemHubSection.recent; acknowledged: FeedbackView.acknowledged("system-hub", "recent", FeedbackView.revision); }
+    HubCard { x: cards-x; y: cards-y + card-height + 14px; width: card-width; height: card-height; kind: 2; label: "FAVORITES"; detail: NavigationView.system-hub-favourites-count + " SAVED"; focused: NavigationView.system-hub-section == SystemHubSection.favourites; acknowledged: FeedbackView.acknowledged("system-hub", "favorites", FeedbackView.revision); }
+    // HubCard { x: cards-x + card-width + 14px; y: cards-y + card-height + 14px; width: card-width; height: card-height; kind: 3; label: "INFO"; detail: "COMING SOON"; enabled: false; focused: NavigationView.system-hub-section == SystemHubSection.information; acknowledged: FeedbackView.acknowledged("system-hub", "info", FeedbackView.revision); }
 
     Rectangle {
         x: 28px; y: parent.height - 50px; width: parent.width - 56px; height: 1px;

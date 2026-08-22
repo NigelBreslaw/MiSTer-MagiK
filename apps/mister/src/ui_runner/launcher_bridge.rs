@@ -65,31 +65,18 @@ pub(super) fn init_launcher_bridge(app: &slint_ui::launcher::Launcher, pad: &Pad
     let bridge = app.global::<slint_ui::launcher::MisterBridge>();
     let navigation = app.global::<slint_ui::launcher::NavigationView>();
     bridge.set_startup_visible(true);
-    bridge.set_screen_mode(0);
     navigation.set_screen(slint_ui::launcher::LauncherScreen::Home);
-    bridge.set_system_hub_selected(0);
-    bridge.set_system_hub_games_count(0);
-    bridge.set_system_hub_recent_count(0);
-    bridge.set_system_hub_favourites_count(0);
     if let Some(image) = load_snes_artwork_image() {
-        bridge.set_snes_artwork(image.clone());
-        bridge.set_snes_artwork_visible(true);
         navigation.set_system_artwork(image);
         navigation.set_system_artwork_available(true);
     } else {
-        bridge.set_snes_artwork_visible(false);
         navigation.set_system_artwork_available(false);
     }
-    bridge.set_effective_view("home".into());
     let build_label = SharedString::from(build_label());
-    bridge.set_build_label(build_label.clone());
     navigation.set_build_label(build_label);
-    bridge.set_present_mode_label("Mode=/dev/fb0".into());
     navigation.set_present_mode_label("Mode=/dev/fb0".into());
     bridge.set_info_kernel_version(kernel_version().into());
     bridge.set_info_database_build(last_database_build().into());
-    bridge.set_selected_index(0);
-    bridge.set_settings_focused(false);
     bridge.set_settings_selected(0);
     bridge.set_about_selected(0);
     bridge.set_display_options(ModelRc::new(VecModel::from(
@@ -115,23 +102,15 @@ pub(super) fn init_launcher_bridge(app: &slint_ui::launcher::Launcher, pad: &Pad
     bridge.set_confirm_left_label("".into());
     bridge.set_confirm_right_label("".into());
     bridge.set_confirm_selected(0);
-    bridge.set_menu_title("MiSTer MagiK".into());
-    bridge.set_menu_breadcrumb("".into());
     let development_build = mister_magik_catalog::device_layout::DeviceLayout::current()
         == mister_magik_catalog::device_layout::DeviceLayout::Dev;
-    bridge.set_dev_mode(development_build);
     navigation.set_development_build(development_build);
     let menu_items = ModelRc::new(VecModel::from(Vec::<slint_ui::launcher::MenuItem>::new()));
     let menu_item_presentation = ModelRc::new(VecModel::from(Vec::<
         slint_ui::launcher::MenuItemPresentation,
     >::new()));
-    bridge.set_menu_items(menu_items.clone());
     navigation.set_menu_items(menu_items);
-    bridge.set_menu_item_presentation(menu_item_presentation.clone());
     navigation.set_menu_item_presentation(menu_item_presentation);
-    bridge.set_home_scroll_repeat_active(false);
-    bridge.set_home_scroll_held(false);
-    bridge.set_home_scroll_x(0);
     bridge.set_active_system_title("".into());
     bridge.set_active_system_count(0);
     bridge.set_arcade_games(ModelRc::new(VecModel::from(Vec::<
@@ -164,22 +143,11 @@ pub(super) fn sync_settings_bridge(
     lifecycle: &LauncherLifecycle,
 ) {
     let bridge = app.global::<slint_ui::launcher::MisterBridge>();
-    set_bridge_if_changed!(
-        bridge,
-        get_screen_mode,
-        set_screen_mode,
-        match nav.screen {
-            Screen::Home => 0,
-            Screen::SystemHub => 8,
-            Screen::Controller => 1,
-            Screen::Arcade => 2,
-            Screen::Settings => 3,
-            Screen::About => 4,
-            Screen::Licenses => 5,
-            Screen::Info => 6,
-            Screen::Screensaver => 7,
-        }
-    );
+    let navigation = app.global::<slint_ui::launcher::NavigationView>();
+    let screen = crate::launcher_view_types::launcher_screen(nav.screen);
+    if navigation.get_screen() != screen {
+        navigation.set_screen(screen);
+    }
     set_bridge_if_changed!(
         bridge,
         get_settings_selected,
@@ -884,18 +852,13 @@ pub(super) fn sync_bridge_launcher(
     bridge.set_startup_visible(false);
     sync_bridge_pad_launcher(&bridge, pad);
     let clock_text = SharedString::from(launcher_clock_text());
-    bridge.set_clock_text(clock_text.clone());
     app.global::<slint_ui::launcher::NavigationView>()
         .set_clock_text(clock_text);
-    bridge.set_system_hub_selected(nav.system_hub_selected as i32);
     let active_label = mister_magik_mister_runtime::display_resolution::DISPLAY_RESOLUTIONS
         .get(nav.display_selected)
         .map_or("Custom/current mode", |mode| mode.label);
     bridge.set_display_active_label(active_label.into());
     sync_arcade_list_geometry_bridge(&bridge, nav, ui);
-    bridge.set_system_hub_games_count(catalog.system_game_count("snes") as i32);
-    bridge.set_system_hub_recent_count(nav.recent_count() as i32);
-    bridge.set_system_hub_favourites_count(nav.favourite_count() as i32);
     let active_games_loading = active_system_games_loading(catalog, nav);
     sync_launcher_confirm_bridge(&bridge, nav, lifecycle);
     LauncherStatusPresenter::new(&bridge).sync_loading(loading_message, loading_detail);
@@ -944,30 +907,6 @@ pub(super) fn sync_bridge_launcher_light(
         .unwrap_or(0);
     let bridge = app.global::<slint_ui::launcher::MisterBridge>();
     let active_games_loading = active_system_games_loading(catalog, nav);
-    set_bridge_if_changed!(
-        bridge,
-        get_system_hub_selected,
-        set_system_hub_selected,
-        nav.system_hub_selected as i32
-    );
-    set_bridge_if_changed!(
-        bridge,
-        get_system_hub_games_count,
-        set_system_hub_games_count,
-        catalog.system_game_count("snes") as i32
-    );
-    set_bridge_if_changed!(
-        bridge,
-        get_system_hub_recent_count,
-        set_system_hub_recent_count,
-        nav.recent_count() as i32
-    );
-    set_bridge_if_changed!(
-        bridge,
-        get_system_hub_favourites_count,
-        set_system_hub_favourites_count,
-        nav.favourite_count() as i32
-    );
     sync_arcade_list_geometry_bridge_if_changed(&bridge, nav, ui);
     sync_launcher_confirm_bridge(&bridge, nav, lifecycle);
     let status_presenter = LauncherStatusPresenter::new(&bridge);
@@ -1314,7 +1253,8 @@ impl BridgeChurnPlayback {
                 LauncherStatusPresenter::new(&bridge)
                     .sync_media_progresses(empty_media_pack_progress_model(), "");
                 models.republish_cached_menu_models(app);
-                bridge.set_selected_index(nav.selected as i32);
+                app.global::<slint_ui::launcher::NavigationView>()
+                    .set_home_selected_index(nav.selected as i32);
                 *full_bridge_dirty = true;
                 self.pending_presentation = true;
             }
@@ -1430,12 +1370,12 @@ impl BridgeChurnPlayback {
             );
             self.menu_items = Some(Rc::new(VecModel::from(items)));
             self.menu_presentation = Some(Rc::new(VecModel::from(presentation)));
-            let bridge = app.global::<slint_ui::launcher::MisterBridge>();
+            let navigation = app.global::<slint_ui::launcher::NavigationView>();
             crate::launcher_presentation::bridge_churn_record_model_replacements(2);
-            bridge.set_menu_items(ModelRc::from(
+            navigation.set_menu_items(ModelRc::from(
                 self.menu_items.as_ref().expect("benchmark items").clone(),
             ));
-            bridge.set_menu_item_presentation(ModelRc::from(
+            navigation.set_menu_item_presentation(ModelRc::from(
                 self.menu_presentation
                     .as_ref()
                     .expect("benchmark presentation")
@@ -1450,8 +1390,8 @@ impl BridgeChurnPlayback {
             }
         }
         self.menu_selected = selected;
-        app.global::<slint_ui::launcher::MisterBridge>()
-            .set_selected_index(selected as i32);
+        app.global::<slint_ui::launcher::NavigationView>()
+            .set_home_selected_index(selected as i32);
     }
 
     fn menu_terminal_snapshot(&self) -> Option<serde_json::Value> {
@@ -1655,7 +1595,11 @@ mod tests {
         sync_settings_bridge(&app, &nav, &lifecycle);
 
         let bridge = app.global::<slint_ui::launcher::MisterBridge>();
-        assert_eq!(bridge.get_screen_mode(), 7);
+        assert_eq!(
+            app.global::<slint_ui::launcher::NavigationView>()
+                .get_screen(),
+            slint_ui::launcher::LauncherScreen::ScreensaverSettings
+        );
         assert_eq!(bridge.get_settings_selected(), 3);
         assert!(bridge.get_display_combo_open());
         assert_eq!(bridge.get_display_selected(), 1);

@@ -76,9 +76,11 @@ mod macos {
     };
     use mister_magik_fb::visual_platform::{MisterPlatform, MisterSoftwareWindow};
     use mister_magik_framebuffer_scenes::Rgb565SurfaceMut;
+    #[cfg(test)]
+    use mister_magik_ui::launcher::FeedbackView;
     use mister_magik_ui::launcher::{
-        ArcadeGame, FeedbackView, HomeFocus, HomeScrollPhase, Launcher, LauncherScreen, MenuItem,
-        MenuItemKind, MenuItemPresentation, MenuItemStatus, MisterBridge, MisterUi,
+        ArcadeGame, HomeFocus, HomeScrollPhase, Launcher, LauncherScreen, MenuItem, MenuItemKind,
+        MenuItemPresentation, MenuItemStatus, MisterBridge, MisterUi,
         NavigationTransitionState as ViewNavigationTransitionState, NavigationView,
         ScreenshotPackProgress, SystemHubSection,
     };
@@ -175,7 +177,6 @@ mod macos {
         let launcher = Launcher::new()?;
         let ui = launcher.global::<MisterUi>();
         configure_display_profile(&ui, options.display_profile, options.orientation);
-        let bridge = launcher.global::<MisterBridge>();
         initialize_bridge(&launcher, options.display_profile);
         launcher.show()?;
         slint_window.request_redraw();
@@ -582,8 +583,6 @@ mod macos {
                         artwork.height as u32,
                     ),
                 );
-                bridge.set_snes_artwork(image.clone());
-                bridge.set_snes_artwork_visible(true);
                 let navigation = launcher.global::<NavigationView>();
                 navigation.set_system_artwork(image);
                 navigation.set_system_artwork_available(true);
@@ -623,9 +622,6 @@ mod macos {
                 .is_none_or(|layout| layout.card_root.is_dir());
             let build_label =
                 SharedString::from(format!("Mac visual preview · {}", content.label()));
-            launcher
-                .global::<MisterBridge>()
-                .set_build_label(build_label.clone());
             launcher
                 .global::<NavigationView>()
                 .set_build_label(build_label);
@@ -882,9 +878,6 @@ mod macos {
         fn update_selection(&self) {
             let bridge = self.launcher.global::<MisterBridge>();
             let navigation = self.launcher.global::<NavigationView>();
-            bridge.set_selected_index(self.selection as i32);
-            bridge.set_system_hub_selected(self.selection as i32);
-            bridge.set_settings_focused(self.settings_focused);
             navigation.set_home_selected_index(self.selection as i32);
             navigation.set_home_focus(if self.settings_focused {
                 HomeFocus::Settings
@@ -1424,11 +1417,7 @@ mod macos {
         }
 
         fn sync_navigation_transition_active(&self) {
-            let bridge = self.launcher.global::<MisterBridge>();
             let active = self.navigation_transition.is_active();
-            if bridge.get_navigation_transition_active() != active {
-                bridge.set_navigation_transition_active(active);
-            }
             self.launcher
                 .global::<NavigationView>()
                 .set_transition_state(if active {
@@ -3908,9 +3897,6 @@ mod macos {
     fn initialize_bridge(launcher: &Launcher, display_profile: DisplayProfile) {
         let bridge = launcher.global::<MisterBridge>();
         let navigation = launcher.global::<NavigationView>();
-        bridge.set_clock_text("12:34".into());
-        bridge.set_build_label("Mac visual preview".into());
-        bridge.set_present_mode_label("RGB565 host composition".into());
         navigation.set_clock_text("12:34".into());
         navigation.set_build_label("Mac visual preview".into());
         navigation.set_present_mode_label("RGB565 host composition".into());
@@ -3963,17 +3949,6 @@ mod macos {
         let bridge = launcher.global::<MisterBridge>();
         let navigation = launcher.global::<NavigationView>();
         reset_transient_bridge(&bridge);
-        bridge.set_screen_mode(match scenario {
-            Scenario::Controller | Scenario::ControllerSetup => 1,
-            Scenario::SystemHub => 8,
-            Scenario::Arcade | Scenario::ArcadeSearch | Scenario::ArcadeCrossfade => 2,
-            Scenario::Settings | Scenario::OrientationChoice => 3,
-            Scenario::About => 4,
-            Scenario::Licenses => 5,
-            Scenario::Info => 6,
-            Scenario::ScreensaverSettings => 7,
-            _ => 0,
-        });
         navigation.set_screen(match scenario {
             Scenario::Controller | Scenario::ControllerSetup => LauncherScreen::Controller,
             Scenario::SystemHub => LauncherScreen::SystemHub,
@@ -3987,37 +3962,15 @@ mod macos {
             Scenario::ScreensaverSettings => LauncherScreen::ScreensaverSettings,
             _ => LauncherScreen::Home,
         });
-        bridge.set_effective_view(
-            match scenario {
-                Scenario::Arcade | Scenario::ArcadeSearch | Scenario::ArcadeCrossfade => "arcade",
-                Scenario::SystemHub => "system-hub",
-                Scenario::Settings | Scenario::OrientationChoice => "settings",
-                Scenario::Controller | Scenario::ControllerSetup => "controller",
-                Scenario::About => "about",
-                Scenario::Licenses => "licenses",
-                Scenario::Info => "info",
-                Scenario::ScreensaverSettings => "screensaver-settings",
-                Scenario::ParticleScreensaver | Scenario::ScreenshotTiles => "screensaver",
-                _ => "home",
-            }
-            .into(),
-        );
-        bridge.set_menu_title("MiSTer MagiK".into());
-        bridge.set_menu_breadcrumb("Systems".into());
-        bridge.set_dev_mode(true);
         navigation.set_menu_title("MiSTer MagiK".into());
         navigation.set_menu_breadcrumb("Systems".into());
         navigation.set_development_build(true);
         if !scenario.uses_launcher_navigation() {
             let menu_items = home_menu_items();
             let presentation = home_menu_presentation(menu_items.row_count());
-            bridge.set_menu_item_presentation(presentation.clone());
             navigation.set_menu_item_presentation(presentation);
-            bridge.set_menu_items(menu_items.clone());
             navigation.set_menu_items(menu_items);
         }
-        bridge.set_selected_index(0);
-        bridge.set_settings_focused(false);
         navigation.set_home_selected_index(0);
         navigation.set_home_focus(HomeFocus::Menu);
         navigation.set_home_scroll_phase(HomeScrollPhase::Idle);
@@ -4033,10 +3986,6 @@ mod macos {
         bridge.set_reduce_motion(false);
         bridge.set_info_kernel_version("Linux 6.6.68-MiSTer".into());
         bridge.set_info_database_build("1,284 ms · 12,846 games".into());
-        bridge.set_system_hub_selected(0);
-        bridge.set_system_hub_games_count(1_482);
-        bridge.set_system_hub_recent_count(12);
-        bridge.set_system_hub_favourites_count(28);
         navigation.set_system_hub_section(SystemHubSection::Games);
         navigation.set_system_hub_games_count(1_482);
         navigation.set_system_hub_recent_count(12);
@@ -4424,9 +4373,9 @@ mod macos {
 
         static NEXT_CAPTURE_PATH: AtomicU64 = AtomicU64::new(0);
 
-        #[derive(Clone, Debug, PartialEq, Eq)]
-        struct LegacyBridgeSemanticSnapshot {
-            screen_mode: i32,
+        #[derive(Clone, Debug, PartialEq)]
+        struct BridgeSemanticSnapshot {
+            screen: LauncherScreen,
             settings_selected: i32,
             arcade_search_active: bool,
             arcade_search_status: i32,
@@ -4441,10 +4390,10 @@ mod macos {
             input_active: bool,
         }
 
-        fn legacy_bridge_semantic_snapshot(launcher: &Launcher) -> LegacyBridgeSemanticSnapshot {
+        fn bridge_semantic_snapshot(launcher: &Launcher) -> BridgeSemanticSnapshot {
             let bridge = launcher.global::<MisterBridge>();
-            LegacyBridgeSemanticSnapshot {
-                screen_mode: bridge.get_screen_mode(),
+            BridgeSemanticSnapshot {
+                screen: launcher.global::<NavigationView>().get_screen(),
                 settings_selected: bridge.get_settings_selected(),
                 arcade_search_active: bridge.get_arcade_search_active(),
                 arcade_search_status: bridge.get_arcade_search_status(),
@@ -4465,42 +4414,12 @@ mod macos {
             }
         }
 
-        fn assert_navigation_dual_projection(launcher: &Launcher) {
+        fn assert_navigation_projection(launcher: &Launcher) {
             let bridge = launcher.global::<MisterBridge>();
             let navigation = launcher.global::<NavigationView>();
-            let expected_screen = match bridge.get_screen_mode() {
-                0 => LauncherScreen::Home,
-                1 => LauncherScreen::Controller,
-                2 => LauncherScreen::Arcade,
-                3 => LauncherScreen::Settings,
-                4 => LauncherScreen::About,
-                5 => LauncherScreen::Licenses,
-                6 => LauncherScreen::Info,
-                7 => LauncherScreen::ScreensaverSettings,
-                8 => LauncherScreen::SystemHub,
-                value => panic!("unknown legacy screen mode {value}"),
-            };
-            assert_eq!(navigation.get_screen(), expected_screen);
-            assert_eq!(
-                navigation.get_home_selected_index(),
-                bridge.get_selected_index()
-            );
-            assert_eq!(
-                navigation.get_home_focus(),
-                if bridge.get_settings_focused() {
-                    HomeFocus::Settings
-                } else {
-                    HomeFocus::Menu
-                }
-            );
-            assert_eq!(navigation.get_home_scroll_x(), bridge.get_home_scroll_x());
             assert_eq!(
                 navigation.get_menu_items().row_count(),
-                bridge.get_menu_items().row_count()
-            );
-            assert_eq!(
-                navigation.get_menu_item_presentation().row_count(),
-                bridge.get_menu_item_presentation().row_count()
+                navigation.get_menu_item_presentation().row_count()
             );
             assert_eq!(
                 launcher.global::<FeedbackView>().get_revision(),
@@ -4535,8 +4454,8 @@ mod macos {
                 let launcher = Launcher::new().expect("launcher");
                 initialize_bridge(&launcher, DisplayProfile::Hdmi);
                 apply_scenario(&launcher, manifest_scenario(scene.scenario));
-                assert_navigation_dual_projection(&launcher);
-                let snapshot = legacy_bridge_semantic_snapshot(&launcher);
+                assert_navigation_projection(&launcher);
+                let snapshot = bridge_semantic_snapshot(&launcher);
                 if let Some(expected) = expected_by_scenario.get(&scene.scenario) {
                     assert_eq!(&snapshot, expected, "semantic drift in {}", scene.id);
                 } else {
@@ -4564,7 +4483,7 @@ mod macos {
                 let launcher = Launcher::new().expect("launcher");
                 initialize_bridge(&launcher, DisplayProfile::Hdmi);
                 apply_scenario(&launcher, scenario);
-                let snapshot = legacy_bridge_semantic_snapshot(&launcher);
+                let snapshot = bridge_semantic_snapshot(&launcher);
                 assert!(
                     !snapshots.contains(&snapshot),
                     "{label} collapsed onto another semantic state"
@@ -4588,19 +4507,16 @@ mod macos {
                 let production = Launcher::new().expect("production launcher fixture");
                 let mut presenter = LauncherBridgePresenter::default();
                 presenter.sync(&production, &nav, &fixtures.catalog, Some(1), false);
-                assert_navigation_dual_projection(&production);
+                assert_navigation_projection(&production);
 
                 let preview = Launcher::new().expect("preview launcher fixture");
                 initialize_bridge(&preview, DisplayProfile::Hdmi);
                 apply_scenario(&preview, Scenario::from_screen(screen));
-                assert_navigation_dual_projection(&preview);
+                assert_navigation_projection(&preview);
 
-                let production_snapshot = legacy_bridge_semantic_snapshot(&production);
-                let preview_snapshot = legacy_bridge_semantic_snapshot(&preview);
-                assert_eq!(
-                    production_snapshot.screen_mode,
-                    preview_snapshot.screen_mode
-                );
+                let production_snapshot = bridge_semantic_snapshot(&production);
+                let preview_snapshot = bridge_semantic_snapshot(&preview);
+                assert_eq!(production_snapshot.screen, preview_snapshot.screen);
                 assert_eq!(
                     production_snapshot.settings_selected,
                     preview_snapshot.settings_selected

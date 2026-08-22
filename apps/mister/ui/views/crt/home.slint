@@ -2,15 +2,15 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { MisterUi } from "../../mister_window.slint";
-import { MisterBridge } from "../../api.slint";
+import { NavigationView } from "../../api.slint";
 import { CrtTheme, CrtHeader, CrtFooter, CrtCard } from "../../components/crt_ui.slint";
 import { MenuItemStatus } from "../../launcher_menu.slint";
 
 export component HomeGrid inherits Rectangle {
-    property <bool> root-menu: MisterBridge.menu-breadcrumb == "";
+    property <bool> root-menu: NavigationView.menu-breadcrumb == "";
     property <length> card-gap: MisterUi.grid-y;
     property <int> root-card-count: MisterUi.portrait-layout
-        ? max(1, MisterBridge.menu-items.length)
+        ? max(1, NavigationView.menu-items.length)
         : 4;
     property <length> card-height: root.root-menu
         ? (menu-viewport.height - root.card-gap * (root.root-card-count - 1))
@@ -18,11 +18,11 @@ export component HomeGrid inherits Rectangle {
         : (menu-viewport.height - root.card-gap * 4) / 4.5;
     property <length> card-pitch: root.card-height + root.card-gap;
     property <bool> bottom-window: !root.root-menu
-        && MisterBridge.menu-items.length > 4
-        && MisterBridge.selected-index >= MisterBridge.menu-items.length - 2;
+        && NavigationView.menu-items.length > 4
+        && NavigationView.home-selected-index >= NavigationView.menu-items.length - 2;
     property <int> first-visible-row: root.root-menu ? 0
-        : root.bottom-window ? MisterBridge.menu-items.length - 5
-        : (MisterBridge.selected-index - 2).clamp(0, (MisterBridge.menu-items.length - 5).max(0));
+        : root.bottom-window ? NavigationView.menu-items.length - 5
+        : (NavigationView.home-selected-index - 2).clamp(0, (NavigationView.menu-items.length - 5).max(0));
     property <length> leading-clip: root.bottom-window ? root.card-pitch / 2 : 0px;
 
     background: CrtTheme.background;
@@ -35,11 +35,11 @@ export component HomeGrid inherits Rectangle {
         spacing: MisterUi.grid-y;
 
         CrtHeader {
-            title: MisterBridge.menu-title;
-            subtitle: MisterBridge.menu-breadcrumb != "" ? MisterBridge.menu-breadcrumb
-                : MisterBridge.dev-mode ? "DEV MODE"
-                : MisterBridge.update-available ? "Update Available" : "";
-            status: MisterBridge.clock-text;
+            title: NavigationView.menu-title;
+            subtitle: NavigationView.menu-breadcrumb != "" ? NavigationView.menu-breadcrumb
+                : NavigationView.development-build ? "DEV MODE"
+                : NavigationView.update-available ? "Update Available" : "";
+            status: NavigationView.clock-text;
         }
 
         menu-viewport := Rectangle {
@@ -47,17 +47,17 @@ export component HomeGrid inherits Rectangle {
             background: CrtTheme.background;
             clip: true;
 
-            for state[index] in MisterBridge.menu-item-presentation : CrtCard {
+            for state[index] in NavigationView.menu-item-presentation : CrtCard {
                 y: (index - root.first-visible-row) * root.card-pitch - root.leading-clip;
                 width: parent.width;
                 height: root.card-height;
-                label: MisterBridge.menu-items[index].label;
+                label: NavigationView.menu-items[index].label;
                 detail: root.root-menu
-                    && MisterBridge.menu-items[index].status == MenuItemStatus.ready
-                    ? "" : MisterBridge.menu-items[index].subtitle;
+                    && NavigationView.menu-items[index].status == MenuItemStatus.ready
+                    ? "" : NavigationView.menu-items[index].subtitle;
                 focused: state.selected;
                 acknowledged: state.acknowledged && !state.selected;
-                status: MisterBridge.menu-items[index].status;
+                status: NavigationView.menu-items[index].status;
             }
         }
 

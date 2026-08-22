@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { MisterUi } from "../mister_window.slint";
-import { MisterBridge } from "../api.slint";
+import { LauncherScreen, MisterBridge, NavigationView } from "../api.slint";
 import { CrtTheme } from "../components/crt_ui.slint";
 import { CrtControllerPanel } from "../views/crt/controller_panel.slint";
 import { SetupOverlay } from "crt_setup.slint";
@@ -35,15 +35,15 @@ export component CrtLauncherUi inherits Rectangle {
         background: transparent;
         clip: true;
 
-        if MisterBridge.screen-mode == 0 : HomeGrid { }
-        if MisterBridge.screen-mode == 1 : CrtControllerPanel { width: 100%; height: 100%; }
-        if MisterBridge.screen-mode == 2 : ArcadeListScreen { }
-        if MisterBridge.screen-mode == 3 : SettingsScreen { }
-        if MisterBridge.screen-mode == 4 : AboutScreen { }
-        if MisterBridge.screen-mode == 5 : LicensesScreen { }
-        if MisterBridge.screen-mode == 6 : InfoScreen { }
-        if MisterBridge.screen-mode == 7 : ScreensaverSettingsScreen { }
-        if MisterBridge.screen-mode == 8 : SystemHubScreen { }
+        if NavigationView.screen == LauncherScreen.home : HomeGrid { }
+        if NavigationView.screen == LauncherScreen.controller : CrtControllerPanel { width: 100%; height: 100%; }
+        if NavigationView.screen == LauncherScreen.arcade : ArcadeListScreen { }
+        if NavigationView.screen == LauncherScreen.settings : SettingsScreen { }
+        if NavigationView.screen == LauncherScreen.about : AboutScreen { }
+        if NavigationView.screen == LauncherScreen.licenses : LicensesScreen { }
+        if NavigationView.screen == LauncherScreen.info : InfoScreen { }
+        if NavigationView.screen == LauncherScreen.screensaver-settings : ScreensaverSettingsScreen { }
+        if NavigationView.screen == LauncherScreen.system-hub : SystemHubScreen { }
 
         if MisterBridge.catalog-background-scan-visible : BackgroundScanBadge { }
         if MisterBridge.setup-visible : SetupOverlay {

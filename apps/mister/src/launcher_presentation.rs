@@ -500,49 +500,6 @@ impl LauncherBridgePresenter {
         );
         set_if_changed!(
             bridge,
-            get_screen_mode,
-            set_screen_mode,
-            screen_mode(nav.screen)
-        );
-        set_if_changed!(
-            bridge,
-            get_selected_index,
-            set_selected_index,
-            nav.selected as i32
-        );
-        set_if_changed!(
-            bridge,
-            get_home_scroll_held,
-            set_home_scroll_held,
-            nav.home_horizontal_held()
-        );
-        set_if_changed!(
-            bridge,
-            get_home_scroll_repeat_active,
-            set_home_scroll_repeat_active,
-            nav.home_horizontal_repeat_active()
-        );
-        set_if_changed!(bridge, get_home_scroll_x, set_home_scroll_x, nav.scroll_x);
-        set_string_if_changed!(
-            bridge,
-            get_menu_title,
-            set_menu_title,
-            nav.current_menu_title()
-        );
-        set_string_if_changed!(
-            bridge,
-            get_menu_breadcrumb,
-            set_menu_breadcrumb,
-            nav.current_menu_breadcrumb()
-        );
-        set_if_changed!(
-            bridge,
-            get_settings_focused,
-            set_settings_focused,
-            nav.settings_focused
-        );
-        set_if_changed!(
-            bridge,
             get_settings_selected,
             set_settings_selected,
             nav.settings_selected as i32
@@ -635,10 +592,8 @@ impl LauncherBridgePresenter {
                 let menu_items = self.menu_items(nav, catalog_version);
                 let menu_item_presentation = self.menu_item_presentation();
                 bridge_churn_record_model_replacements(2);
-                navigation.set_menu_item_presentation(menu_item_presentation.clone());
-                navigation.set_menu_items(menu_items.clone());
-                bridge.set_menu_item_presentation(menu_item_presentation);
-                bridge.set_menu_items(menu_items);
+                navigation.set_menu_item_presentation(menu_item_presentation);
+                navigation.set_menu_items(menu_items);
             }
         }
         self.sync_menu_item_state(nav);
@@ -710,10 +665,10 @@ impl LauncherBridgePresenter {
         ) else {
             return;
         };
-        let bridge = app.global::<MisterBridge>();
+        let navigation = app.global::<NavigationView>();
         bridge_churn_record_model_replacements(2);
-        bridge.set_menu_items(ModelRc::from(items.clone()));
-        bridge.set_menu_item_presentation(ModelRc::from(presentation.clone()));
+        navigation.set_menu_items(ModelRc::from(items.clone()));
+        navigation.set_menu_item_presentation(ModelRc::from(presentation.clone()));
     }
 
     pub fn license_lines(&mut self, index: usize) -> ModelRc<SharedString> {
@@ -848,20 +803,6 @@ fn sync_menu_item_presentation_row(
         row.acknowledged = acknowledged;
         bridge_churn_record_row_mutations(1);
         model.set_row_data(index, row);
-    }
-}
-
-pub fn screen_mode(screen: Screen) -> i32 {
-    match screen {
-        Screen::Home => 0,
-        Screen::SystemHub => 8,
-        Screen::Controller => 1,
-        Screen::Arcade => 2,
-        Screen::Settings => 3,
-        Screen::About => 4,
-        Screen::Licenses => 5,
-        Screen::Info => 6,
-        Screen::Screensaver => 7,
     }
 }
 

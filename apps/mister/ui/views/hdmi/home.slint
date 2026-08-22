@@ -5,7 +5,7 @@ import { Start2P, Start2PSize } from "../../components/start2p.slint";
 import { Xerxes10, Xerxes10Size } from "../../components/xerxes_10.slint";
 import { Nocive15, Nocive15Size } from "../../components/nocive_15.slint";
 
-import { MisterBridge } from "../../api.slint";
+import { FeedbackView, HomeFocus, NavigationView } from "../../api.slint";
 import { MisterUi } from "../../mister_window.slint";
 import { LauncherTile, SettingsButton } from "../../components/launcher_chrome.slint";
 
@@ -33,7 +33,7 @@ component HomeFooter inherits Rectangle {
 }
 
 export component HomeGrid inherits Rectangle {
-    property <bool> root-menu: MisterBridge.menu-breadcrumb == "";
+    property <bool> root-menu: NavigationView.menu-breadcrumb == "";
     property <float> nested-rail-scale: (root.width - 36px) / 924px;
     property <length> tile-gap: root-menu ? 16px : 16px * nested-rail-scale;
     // Nested Home always exposes four full cards and half of the next card.
@@ -44,11 +44,11 @@ export component HomeGrid inherits Rectangle {
         : narrow-tile-width;
     property <length> tile-pitch: tile-width + tile-gap;
     property <float> canonical-scroll-scale: root-menu ? 1 : nested-rail-scale;
-    property <int> layout-item-count: root-menu ? Math.max(4, MisterBridge.menu-items.length)
-        : MisterBridge.menu-items.length;
+    property <int> layout-item-count: root-menu ? Math.max(4, NavigationView.menu-items.length)
+        : NavigationView.menu-items.length;
     property <length> content-width: layout-item-count * tile-width
         + Math.max(0, layout-item-count - 1) * tile-gap;
-    property <length> scroll-x: MisterBridge.home-scroll-x * 1px * canonical-scroll-scale;
+    property <length> scroll-x: NavigationView.home-scroll-x * 1px * canonical-scroll-scale;
 
     background: transparent;
 
@@ -79,26 +79,26 @@ export component HomeGrid inherits Rectangle {
 
                             Nocive15 {
                                 width: 100%;
-                                text: MisterBridge.menu-title;
+                                text: NavigationView.menu-title;
                                 color: #d7eef8;
                                 size: Nocive15Size.px15;
                                 vertical-alignment: center;
                                 overflow: elide;
                             }
 
-                            if (MisterBridge.dev-mode || MisterBridge.update-available)
-                                && MisterBridge.menu-breadcrumb == "" : Xerxes10 {
+                            if (NavigationView.development-build || NavigationView.update-available)
+                                && NavigationView.menu-breadcrumb == "" : Xerxes10 {
                                 width: 100%;
-                                text: MisterBridge.dev-mode ? "DEV MODE" : "Update Available";
-                                color: MisterBridge.dev-mode ? #ffb347 : #06d6a0;
+                                text: NavigationView.development-build ? "DEV MODE" : "Update Available";
+                                color: NavigationView.development-build ? #ffb347 : #06d6a0;
                                 size: Xerxes10Size.px10;
                                 vertical-alignment: center;
                                 overflow: elide;
                             }
 
-                            if MisterBridge.menu-breadcrumb != "" : Xerxes10 {
+                            if NavigationView.menu-breadcrumb != "" : Xerxes10 {
                                 width: 100%;
-                                text: MisterBridge.menu-breadcrumb;
+                                text: NavigationView.menu-breadcrumb;
                                 color: #8ca4b5;
                                 size: Xerxes10Size.px10;
                                 vertical-alignment: center;
@@ -108,7 +108,7 @@ export component HomeGrid inherits Rectangle {
                     }
 
                     Nocive15 {
-                        text: MisterBridge.clock-text;
+                        text: NavigationView.clock-text;
                         color: #d7eef8;
                         size: Nocive15Size.px15;
                         horizontal-alignment: right;
@@ -118,9 +118,9 @@ export component HomeGrid inherits Rectangle {
                     SettingsButton {
                         width: 34px;
                         height: 34px;
-                        focused: MisterBridge.settings-focused;
-                        acknowledged: MisterBridge.selection-feedback-query(
-                            "", "__settings", MisterBridge.selection-feedback-revision);
+                        focused: NavigationView.home-focus == HomeFocus.settings;
+                        acknowledged: FeedbackView.acknowledged(
+                            "", "__settings", FeedbackView.revision);
                     }
                 }
             }
@@ -139,14 +139,14 @@ export component HomeGrid inherits Rectangle {
                     // Menus are bounded and retained by Rust. Direct delegates preserve Slint's
                     // row identity, so changing selection or acknowledgement repaints only the
                     // rows whose derived presentation state changed.
-                    for state[index] in MisterBridge.menu-item-presentation : LauncherTile {
+                    for state[index] in NavigationView.menu-item-presentation : LauncherTile {
                         x: index * root.tile-pitch;
                         width: root.tile-width;
                         height: parent.height;
-                        label: MisterBridge.menu-items[index].label;
-                        subtitle: MisterBridge.menu-items[index].subtitle;
-                        status: MisterBridge.menu-items[index].status;
-                        focused: !MisterBridge.settings-focused && state.selected;
+                        label: NavigationView.menu-items[index].label;
+                        subtitle: NavigationView.menu-items[index].subtitle;
+                        status: NavigationView.menu-items[index].status;
+                        focused: NavigationView.home-focus == HomeFocus.menu && state.selected;
                         acknowledged: state.acknowledged && !state.selected;
                         flat-focus-style: true;
                     }
@@ -180,22 +180,22 @@ export component HomeGrid inherits Rectangle {
                     horizontal-stretch: 1;
                     spacing: 3px;
                     Nocive15 {
-                        text: MisterBridge.menu-title;
+                        text: NavigationView.menu-title;
                         color: #d7eef8;
                         size: Nocive15Size.px15;
                         overflow: elide;
                     }
                     Xerxes10 {
-                        text: MisterBridge.menu-breadcrumb != "" ? MisterBridge.menu-breadcrumb
-                            : MisterBridge.dev-mode ? "DEV MODE"
-                            : MisterBridge.update-available ? "Update Available" : "";
-                        color: MisterBridge.dev-mode ? #ffb347 : #8ca4b5;
+                        text: NavigationView.menu-breadcrumb != "" ? NavigationView.menu-breadcrumb
+                            : NavigationView.development-build ? "DEV MODE"
+                            : NavigationView.update-available ? "Update Available" : "";
+                        color: NavigationView.development-build ? #ffb347 : #8ca4b5;
                         size: Xerxes10Size.px10;
                         overflow: elide;
                     }
                 }
                 Xerxes10 {
-                    text: MisterBridge.clock-text;
+                    text: NavigationView.clock-text;
                     color: #d7eef8;
                     size: Xerxes10Size.px10;
                     horizontal-alignment: right;
@@ -204,8 +204,8 @@ export component HomeGrid inherits Rectangle {
                     width: 36px;
                     height: 36px;
                     focused: false;
-                    acknowledged: MisterBridge.selection-feedback-query(
-                        "", "__settings", MisterBridge.selection-feedback-revision);
+                    acknowledged: FeedbackView.acknowledged(
+                        "", "__settings", FeedbackView.revision);
                 }
             }
         }
@@ -217,17 +217,17 @@ export component HomeGrid inherits Rectangle {
             property <length> gap: 12px;
             property <length> card-height: (self.height - gap * 3.5) / 4.5;
             property <length> pitch: card-height + gap;
-            property <int> first-row: (MisterBridge.selected-index - 2).clamp(
-                0, (MisterBridge.menu-items.length - 5).max(0));
+            property <int> first-row: (NavigationView.home-selected-index - 2).clamp(
+                0, (NavigationView.menu-items.length - 5).max(0));
 
-            for state[index] in MisterBridge.menu-item-presentation : LauncherTile {
+            for state[index] in NavigationView.menu-item-presentation : LauncherTile {
                 x: 0px;
                 y: (index - portrait-viewport.first-row) * portrait-viewport.pitch;
                 width: parent.width;
                 height: portrait-viewport.card-height;
-                label: MisterBridge.menu-items[index].label;
-                subtitle: MisterBridge.menu-items[index].subtitle;
-                status: MisterBridge.menu-items[index].status;
+                label: NavigationView.menu-items[index].label;
+                subtitle: NavigationView.menu-items[index].subtitle;
+                status: NavigationView.menu-items[index].status;
                 focused: state.selected;
                 acknowledged: state.acknowledged && !state.selected;
                 flat-focus-style: true;

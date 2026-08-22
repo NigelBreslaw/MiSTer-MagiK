@@ -144,24 +144,8 @@ export global MisterBridge {
     in-out property <string> input-fault-notice;
     // Full-screen boot splash, cleared after the first launcher state sync.
     in-out property <bool> startup-visible;
-    // Launcher navigation: 0=home, 1=controller test, 2=game list, 3=settings, 4=about, 5=licenses, 6=info, 7=screensaver, 8=system hub.
-    in-out property <int> screen-mode;
-    in-out property <int> system-hub-selected;
-    in-out property <int> system-hub-games-count;
-    in-out property <int> system-hub-recent-count;
-    in-out property <int> system-hub-favourites-count;
-    in-out property <image> snes-artwork;
-    in-out property <bool> snes-artwork-visible;
-    // Rust-owned effective full-screen view; navigation remains the return view.
-    in-out property <string> effective-view;
-    in-out property <string> clock-text;
-    in-out property <string> build-label;
-    in-out property <string> present-mode-label;
     in-out property <string> info-kernel-version;
     in-out property <string> info-database-build;
-    // Home focus: selected row in the responsive launcher list; Settings is Home-only.
-    in-out property <int> selected-index;
-    in-out property <bool> settings-focused;
     // Rust-owned physically confirmed focus acknowledgements. The revision is
     // an explicit Slint dependency; the callback resolves stable surface/item IDs.
     in-out property <int> selection-feedback-revision;
@@ -199,22 +183,6 @@ export global MisterBridge {
     in-out property <string> confirm-right-label;
     // Dialog focus: 0=cancel, 1=confirm.
     in-out property <int> confirm-selected;
-    // Current launcher hierarchy level. Root uses the product name and no breadcrumb.
-    in-out property <string> menu-title: "MiSTer MagiK";
-    in-out property <string> menu-breadcrumb;
-    // Destination hydration must not start an unrelated chrome tween behind a snapshot transition.
-    in-out property <bool> navigation-transition-active;
-    // Set asynchronously after comparing the configured Downloader feed with the installed build.
-    in-out property <bool> update-available;
-    // Derived from the executable's fixed public/development installation layout.
-    in-out property <bool> dev-mode;
-    in-out property <[MenuItem]> menu-items;
-    in-out property <[MenuItemPresentation]> menu-item-presentation;
-    // Scroll offset in canonical 960-wide rail pixels (0 = left). The Home view
-    // scales this stable navigation coordinate to its responsive card pitch.
-    in-out property <bool> home-scroll-held;
-    in-out property <bool> home-scroll-repeat-active;
-    in-out property <int> home-scroll-x;
     in-out property <string> active-system-title;
     in-out property <int> active-system-count;
     in-out property <[ArcadeGame]> arcade-games;
