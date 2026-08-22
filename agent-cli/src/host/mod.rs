@@ -7000,6 +7000,7 @@ fn run_launcher_response_scenario_with_instrumentation(
                 "launcher-response",
                 17,
                 "system-hub",
+                retained,
             )?,
             run_launcher_response_focus_route(
                 session,
@@ -7009,8 +7010,9 @@ fn run_launcher_response_scenario_with_instrumentation(
                 "down 10 4 50",
                 4,
                 "settings",
+                retained,
             )?,
-            run_launcher_response_arcade_route(session, catalog_refresh)?,
+            run_launcher_response_arcade_route(session, catalog_refresh, retained)?,
         )
     };
 
@@ -7392,6 +7394,8 @@ fn run_launcher_response_computers_sweep(
             ..LauncherRestartOptions::default()
         },
         &run_id,
+        "home",
+        Some("menu:computers"),
     )?;
     enter_computers_acorn_for_benchmark(session)?;
     thread::sleep(Duration::from_millis(200));
@@ -7440,6 +7444,8 @@ fn restart_and_reconcile_launcher_response_arm(
     session: &Session,
     options: LauncherRestartOptions,
     run_id: &str,
+    intended_screen: &str,
+    intended_item: Option<&str>,
 ) -> Result<()> {
     let mut last_status = Value::Null;
     let mut last_trace_matches = false;
@@ -7455,8 +7461,10 @@ fn restart_and_reconcile_launcher_response_arm(
                 .is_some_and(|raw| launcher_response_trace_matches_run(raw, run_id));
             let intended_state = last_status.get("input_enabled").and_then(Value::as_bool)
                 == Some(true)
-                && last_status.get("selected_item_id").and_then(Value::as_str)
-                    == Some("menu:computers");
+                && last_status.get("screen").and_then(Value::as_str) == Some(intended_screen)
+                && intended_item.is_none_or(|item| {
+                    last_status.get("selected_item_id").and_then(Value::as_str) == Some(item)
+                });
             if last_trace_matches && intended_state {
                 let observed_pid = last_status.get("pid").and_then(Value::as_u64);
                 if stable_pid != observed_pid {
@@ -7590,6 +7598,7 @@ fn run_launcher_response_focus_route(
     driver: &str,
     expected_records: usize,
     pulse_surface: &str,
+    retained: bool,
 ) -> Result<Value> {
     let run_id = format!(
         "focus-{start_screen}-{}",
@@ -7616,7 +7625,10 @@ fn run_launcher_response_focus_route(
     if let Some(system) = start_system {
         env_vars.push(("MISTER_LAUNCHER_START_SYSTEM".into(), system.into()));
     }
-    restart_launcher_with_one_shot_env(
+    if retained {
+        env_vars.push(("MISTER_BRIDGE_MODEL_POLICY".into(), "retained".into()));
+    }
+    restart_and_reconcile_launcher_response_arm(
         session,
         LauncherRestartOptions {
             env_vars,
@@ -7624,18 +7636,20 @@ fn run_launcher_response_focus_route(
             remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str().into(),
             ..LauncherRestartOptions::default()
         },
+        &run_id,
+        start_screen,
+        None,
     )?;
-    wait_launcher_response_status(session, Duration::from_secs(45), |status| {
-        status.get("input_enabled").and_then(Value::as_bool) == Some(true)
-            && status.get("screen").and_then(Value::as_str) == Some(start_screen)
-    })?;
-    run_launcher_response_driver(session, driver)?;
-    wait_launcher_response_completion(
+    let driver_evidence = run_launcher_response_driver(session, driver)?;
+    if let Err(error) = wait_launcher_response_completion(
         session,
         LAUNCHER_RESPONSE_COMPLETE_REMOTE,
         Duration::from_secs(10),
-    )?;
-    let trace = read_completed_launcher_response_trace(session, &run_id)?;
+    ) {
+        return Err(format!("{error}; driver={driver_evidence}").into());
+    }
+    let mut trace = read_completed_launcher_response_trace(session, &run_id)?;
+    trace["driver"] = driver_evidence;
     validate_launcher_response_trace(&trace)?;
     let records = launcher_response_confirmed_records(&trace, Some(pulse_surface));
     let expected_items = records
@@ -7656,48 +7670,58 @@ fn run_launcher_response_focus_route(
     ))
 }
 
-fn run_launcher_response_arcade_route(session: &Session, catalog_refresh: &str) -> Result<Value> {
+fn run_launcher_response_arcade_route(
+    session: &Session,
+    catalog_refresh: &str,
+    retained: bool,
+) -> Result<Value> {
     let run_id = format!(
         "arcade-{}",
         SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos()
     );
-    restart_launcher_with_one_shot_env(
+    let mut env_vars = vec![
+        ("MISTER_CATALOG_REFRESH".into(), catalog_refresh.into()),
+        ("MISTER_LAUNCHER_START_SCREEN".into(), "arcade".into()),
+        ("MISTER_LAUNCHER_RESPONSE_TRACE".into(), "1".into()),
+        ("MISTER_LAUNCHER_RESPONSE_RUN_ID".into(), run_id.clone()),
+        (
+            "MISTER_LAUNCHER_RESPONSE_EXPECTED_CONFIRMED".into(),
+            "1".into(),
+        ),
+        (
+            "MISTER_LAUNCHER_RESPONSE_EXPECTED_FEEDBACK_HIDDEN".into(),
+            "0".into(),
+        ),
+        (
+            "MISTER_LAUNCHER_RESPONSE_COMPLETE".into(),
+            LAUNCHER_RESPONSE_COMPLETE_REMOTE.into(),
+        ),
+    ];
+    if retained {
+        env_vars.push(("MISTER_BRIDGE_MODEL_POLICY".into(), "retained".into()));
+    }
+    restart_and_reconcile_launcher_response_arm(
         session,
         LauncherRestartOptions {
-            env_vars: vec![
-                ("MISTER_CATALOG_REFRESH".into(), catalog_refresh.into()),
-                ("MISTER_LAUNCHER_START_SCREEN".into(), "arcade".into()),
-                ("MISTER_LAUNCHER_RESPONSE_TRACE".into(), "1".into()),
-                ("MISTER_LAUNCHER_RESPONSE_RUN_ID".into(), run_id.clone()),
-                (
-                    "MISTER_LAUNCHER_RESPONSE_EXPECTED_CONFIRMED".into(),
-                    "1".into(),
-                ),
-                (
-                    "MISTER_LAUNCHER_RESPONSE_EXPECTED_FEEDBACK_HIDDEN".into(),
-                    "0".into(),
-                ),
-                (
-                    "MISTER_LAUNCHER_RESPONSE_COMPLETE".into(),
-                    LAUNCHER_RESPONSE_COMPLETE_REMOTE.into(),
-                ),
-            ],
+            env_vars,
             timeout_secs: 45,
             remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str().into(),
             ..LauncherRestartOptions::default()
         },
+        &run_id,
+        "arcade",
+        None,
     )?;
-    wait_launcher_response_status(session, Duration::from_secs(45), |status| {
-        status.get("input_enabled").and_then(Value::as_bool) == Some(true)
-            && status.get("screen").and_then(Value::as_str) == Some("arcade")
-    })?;
-    run_launcher_response_driver(session, "down 10 1 1")?;
-    wait_launcher_response_completion(
+    let driver_evidence = run_launcher_response_driver(session, "down 10 1 1")?;
+    if let Err(error) = wait_launcher_response_completion(
         session,
         LAUNCHER_RESPONSE_COMPLETE_REMOTE,
         Duration::from_secs(10),
-    )?;
-    let trace = read_completed_launcher_response_trace(session, &run_id)?;
+    ) {
+        return Err(format!("{error}; driver={driver_evidence}").into());
+    }
+    let mut trace = read_completed_launcher_response_trace(session, &run_id)?;
+    trace["driver"] = driver_evidence;
     validate_launcher_response_trace(&trace)?;
     let records = launcher_response_confirmed_records(&trace, None);
     let excluded_pulses = trace["feedback_records"]
