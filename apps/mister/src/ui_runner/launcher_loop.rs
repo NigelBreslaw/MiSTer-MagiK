@@ -5009,9 +5009,13 @@ fn apply_orientation_layout(
     mister_ui.set_window_width(layout.logical_w() as i32);
     mister_ui.set_window_height(layout.logical_h() as i32);
     mister_ui.set_screen_orientation(match orientation {
-        ScreenOrientation::Normal => 0,
-        ScreenOrientation::MonitorClockwise => 1,
-        ScreenOrientation::MonitorCounterclockwise => 2,
+        ScreenOrientation::Normal => slint_ui::launcher::ScreenOrientation::Normal,
+        ScreenOrientation::MonitorClockwise => {
+            slint_ui::launcher::ScreenOrientation::MonitorClockwise
+        }
+        ScreenOrientation::MonitorCounterclockwise => {
+            slint_ui::launcher::ScreenOrientation::MonitorCounterclockwise
+        }
     });
     if ui.output_route().is_crt() {
         let content = layout.content_rect();

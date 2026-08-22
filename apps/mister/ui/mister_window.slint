@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { Spleen6x12Metrics, Spleen6x12Size } from "components/spleen_6x12.slint";
+import { ScreenOrientation } from "api.slint";
 
 // Rust sets the root window dimensions before show. Defaults preserve the
 // current launcher/benchmark design size when a caller does not override them.
@@ -9,9 +10,8 @@ export global MisterUi {
     in-out property <int> window-width: 960;
     in-out property <int> window-height: 540;
     in-out property <bool> crt-layout: false;
-    // 0=normal, 1=monitor clockwise, 2=monitor counterclockwise.
-    in-out property <int> screen-orientation: 0;
-    out property <bool> portrait-layout: screen-orientation != 0;
+    in-out property <ScreenOrientation> screen-orientation: ScreenOrientation.normal;
+    out property <bool> portrait-layout: screen-orientation != ScreenOrientation.normal;
     out property <bool> compact-layout: crt-layout || portrait-layout;
     // Defaults preserve the HDMI contract; Rust overrides them for CRT routes.
     in-out property <int> crt-grid-x: 8;

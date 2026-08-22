@@ -3585,9 +3585,11 @@ mod macos {
         ui.set_window_height(layout.logical_h() as i32);
         ui.set_crt_layout(profile.is_crt());
         ui.set_screen_orientation(match orientation {
-            ScreenOrientation::Normal => 0,
-            ScreenOrientation::MonitorClockwise => 1,
-            ScreenOrientation::MonitorCounterclockwise => 2,
+            ScreenOrientation::Normal => ViewScreenOrientation::Normal,
+            ScreenOrientation::MonitorClockwise => ViewScreenOrientation::MonitorClockwise,
+            ScreenOrientation::MonitorCounterclockwise => {
+                ViewScreenOrientation::MonitorCounterclockwise
+            }
         });
         if !profile.is_crt() {
             return;

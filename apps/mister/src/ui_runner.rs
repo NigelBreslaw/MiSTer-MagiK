@@ -361,11 +361,6 @@ macro_rules! with_scene_app_layout {
         mister_ui.set_window_width($layout.logical_w() as i32);
         mister_ui.set_window_height($layout.logical_h() as i32);
         mister_ui.set_crt_layout($ui.output_route().is_crt());
-        mister_ui.set_screen_orientation(match $layout.orientation() {
-            ScreenOrientation::Normal => 0,
-            ScreenOrientation::MonitorClockwise => 1,
-            ScreenOrientation::MonitorCounterclockwise => 2,
-        });
         // HDMI keeps the legacy shared metrics; CRT profiles are route-owned.
         if $ui.output_route().is_crt() {
             let crt_metrics = CrtUiMetrics::for_display($ui);
@@ -549,6 +544,16 @@ pub fn run_ui(
             );
             let launcher_layout = UiLayoutGeometry::for_display(&ui, launcher_orientation);
             with_scene_app_layout!(launcher::Launcher, &ui, &launcher_layout, &window, app, {
+                app.global::<slint_ui::launcher::MisterUi>()
+                    .set_screen_orientation(match launcher_orientation {
+                        ScreenOrientation::Normal => slint_ui::launcher::ScreenOrientation::Normal,
+                        ScreenOrientation::MonitorClockwise => {
+                            slint_ui::launcher::ScreenOrientation::MonitorClockwise
+                        }
+                        ScreenOrientation::MonitorCounterclockwise => {
+                            slint_ui::launcher::ScreenOrientation::MonitorCounterclockwise
+                        }
+                    });
                 boot_analytics::event("app_show_attempt", "scene=launcher");
                 app.show().expect("show");
                 boot_analytics::event("app_show", "scene=launcher ok=1");
