@@ -208,3 +208,26 @@ Artifacts:
   `build/agent-benchmarks/input-latency-lab/1787363077/`
 - Latch-wait recovery comparison:
   `build/agent-benchmarks/input-latency-lab/1787363987/`
+
+### Restored production-path qualification
+
+Revision `44f64688fb0f4ba24c4272e8291fe063f3a13c59` was delivered to the Dev
+layout after removing the selector and candidate branches.
+
+- `input-integrity` passed protocol v3 in both idle and forced 500ms UI-stall
+  scenarios: 109/109 initial presses and 109/109 releases per scenario, final
+  held state false, and zero loss, duplication, write failures, journal
+  overflows, or sequence gaps.
+- `modal-input` passed exclusive modal routing, release isolation, and a fresh
+  post-release Arcade activation.
+- `launcher-response` reached 8/9 response confirmations and all 8/8 required
+  hidden receipts, with zero outstanding feedback, zero latch drops, and zero
+  ownership loss. The ninth response confirmation timed out, so this existing
+  presentation-completion gate remains open independently of the rejected
+  routing experiment.
+
+Qualification artifacts:
+
+- `build/agent-benchmarks/input-integrity/1787364797/summary.json`
+- `build/agent-benchmarks/modal-input/1787364824/summary.json`
+- `build/agent-benchmarks/launcher-response/1787364846/`
