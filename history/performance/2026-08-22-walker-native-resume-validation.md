@@ -20,6 +20,9 @@ only 0.39%.
 - Experiment runtime revision: `61ec1fb2aec93c47e9d3ea8a8abed81085943219`
 - Paired artifact:
   `build/agent-benchmarks/catalog-resume-validation/1787411656`
+- Retained production revision: `271f532fd76843a6f0c5079852e4f99d9ea75299`
+- Production-only artifact:
+  `build/agent-benchmarks/catalog-resume-validation/1787412397`
 - Device boot ID remained
   `bb2f71ac-ed0d-43bd-be6b-e1ddda37507b`.
 - Interruption was an ordinary Dev launcher restart after a synced target
@@ -47,6 +50,13 @@ All six arms reused four committed targets, invalidated none, produced one
 identical set of identity/ordering/launch/search hashes, validated every
 artifact set, retained the same boot, and left both production registries
 byte-identical.
+
+After selector removal, three production-only controls completed in 40.214s,
+41.513s, and 42.456s (41.513s median). Validation completed in 4.417s, 3.740s,
+and 3.789s (3.789s median), emitted zero validation events, reused all four
+targets, and invalidated none. The production report identified
+`walker-native` in all three samples and again preserved exact identities,
+artifacts, boot ID, and production registries.
 
 ## Attribution and remaining opportunity
 
