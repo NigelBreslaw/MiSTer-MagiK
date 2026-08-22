@@ -15,6 +15,12 @@ incorrectly accepted the signal-loss bars. The classifier now identifies this
 fixed pattern as `signal_lost`; the same preserved input then timed out waiting
 for a visible frame.
 
+Immediately before the transition, the same fixed `USB Video` device produced
+a clean MiSTer MagiK frame. That ignored local control image has SHA-256
+`2585e70a4700123f7065c8951e70e0101747aac4770cff2c033ffe77eda17cf7`.
+This excludes selection of an unrelated camera or a permanently disconnected
+capture input as the explanation for the post-transition bars.
+
 The evidence places the failure beyond the application framebuffer and latch
 transport. It is consistent with absent or invalid HDMI at the capture-card
 input, but the capture card alone cannot distinguish a MiSTer HDMI/TMDS fault
