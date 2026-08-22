@@ -7988,12 +7988,15 @@ fn run_launcher_response_driver(session: &Session, arguments: &str) -> Result<Va
 }
 
 fn enter_computers_acorn_for_benchmark(session: &Session) -> Result<()> {
-    run_launcher_response_driver(session, "a 10 1 50")?;
-    wait_launcher_response_status(session, Duration::from_secs(5), |status| {
+    let driver = run_launcher_response_driver(session, "a 10 1 50")?;
+    validate_launcher_response_driver_evidence(&driver, 1)?;
+    if let Err(error) = wait_launcher_response_status(session, Duration::from_secs(5), |status| {
         status.get("menu_id").and_then(Value::as_str) == Some("menu:computers")
             && status.get("selected_item_id").and_then(Value::as_str)
                 == Some("menu:computers:acorn")
-    })?;
+    }) {
+        return Err(format!("{error}; activation_driver={driver}").into());
+    }
     Ok(())
 }
 
@@ -8012,7 +8015,11 @@ where
             return Ok(status);
         }
         if started.elapsed() >= timeout {
-            return Err(format!("launcher response state timed out: {status}").into());
+            let main =
+                remote_read(session, MAIN_STATUS_REMOTE).unwrap_or_else(|| "missing".to_string());
+            return Err(
+                format!("launcher response state timed out: status={status}; main={main}").into(),
+            );
         }
         thread::sleep(Duration::from_millis(10));
     }
