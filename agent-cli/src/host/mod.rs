@@ -6132,12 +6132,7 @@ fn run_input_latency_lab_arm(
         status.get("input_enabled").and_then(Value::as_bool) == Some(true)
             && status.get("selected_item_id").and_then(Value::as_str) == Some("menu:computers")
     })?;
-    run_launcher_response_driver(session, "transition-right")?;
-    wait_launcher_response_status(session, Duration::from_secs(5), |status| {
-        status.get("menu_id").and_then(Value::as_str) == Some("menu:computers")
-            && status.get("selected_item_id").and_then(Value::as_str)
-                == Some("menu:computers:acorn")
-    })?;
+    enter_computers_acorn_for_benchmark(session)?;
     let ready = wait_input_latency_lab_ready(session, spec.runtime_arm, Duration::from_secs(5))?;
     let epoch_us = ready["epoch_us"]
         .as_u64()
@@ -7330,12 +7325,7 @@ fn run_launcher_response_computers_sweep(
         status.get("input_enabled").and_then(Value::as_bool) == Some(true)
             && status.get("selected_item_id").and_then(Value::as_str) == Some("menu:computers")
     })?;
-    run_launcher_response_driver(session, "transition-right")?;
-    wait_launcher_response_status(session, Duration::from_secs(5), |status| {
-        status.get("menu_id").and_then(Value::as_str) == Some("menu:computers")
-            && status.get("selected_item_id").and_then(Value::as_str)
-                == Some("menu:computers:acorn")
-    })?;
+    enter_computers_acorn_for_benchmark(session)?;
     thread::sleep(Duration::from_millis(200));
     let driver = if isolated_profile {
         format!("computers-round-trip {interval_ms} 2")
@@ -7843,6 +7833,20 @@ fn run_launcher_response_driver(session: &Session, arguments: &str) -> Result<()
             development_gui_command("input-integrity-driver")
         ),
     )?;
+    Ok(())
+}
+
+fn enter_computers_acorn_for_benchmark(session: &Session) -> Result<()> {
+    run_launcher_response_driver(session, "a 10 1 50")?;
+    wait_launcher_response_status(session, Duration::from_secs(5), |status| {
+        status.get("menu_id").and_then(Value::as_str) == Some("menu:computers")
+    })?;
+    run_launcher_response_driver(session, "right 10 1 50")?;
+    wait_launcher_response_status(session, Duration::from_secs(5), |status| {
+        status.get("menu_id").and_then(Value::as_str) == Some("menu:computers")
+            && status.get("selected_item_id").and_then(Value::as_str)
+                == Some("menu:computers:acorn")
+    })?;
     Ok(())
 }
 
