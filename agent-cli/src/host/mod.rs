@@ -7435,23 +7435,23 @@ fn restart_and_reconcile_launcher_response_arm(
     run_id: &str,
 ) -> Result<()> {
     let mut last_status = Value::Null;
+    let mut last_trace_matches = false;
     for attempt in 1..=2 {
         restart_launcher_with_one_shot_env(session, options.clone())?;
         let started = Instant::now();
         loop {
             last_status = read_launcher_status(session)?;
-            let trace_matches = remote_read(session, LAUNCHER_RESPONSE_TRACE_REMOTE)
+            last_trace_matches = remote_read(session, LAUNCHER_RESPONSE_TRACE_REMOTE)
                 .as_deref()
                 .is_some_and(|raw| launcher_response_trace_matches_run(raw, run_id));
-            if trace_matches {
-                wait_launcher_response_status(session, Duration::from_secs(45), |status| {
-                    status.get("input_enabled").and_then(Value::as_bool) == Some(true)
-                        && status.get("selected_item_id").and_then(Value::as_str)
-                            == Some("menu:computers")
-                })?;
+            let intended_state = last_status.get("input_enabled").and_then(Value::as_bool)
+                == Some(true)
+                && last_status.get("selected_item_id").and_then(Value::as_str)
+                    == Some("menu:computers");
+            if last_trace_matches && intended_state {
                 return Ok(());
             }
-            if started.elapsed() >= Duration::from_secs(5) {
+            if started.elapsed() >= Duration::from_secs(10) {
                 break;
             }
             thread::sleep(Duration::from_millis(20));
@@ -7461,7 +7461,7 @@ fn restart_and_reconcile_launcher_response_arm(
         }
     }
     Err(format!(
-        "launcher response arm was not observed after one reconciled retry: run_id={run_id} status={last_status}"
+        "launcher response arm was not observed on the live intended state after one reconciled retry: run_id={run_id} trace_matches={last_trace_matches} status={last_status}"
     )
     .into())
 }
