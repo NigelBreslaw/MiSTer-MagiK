@@ -85,11 +85,12 @@ mod macos {
         ArcadeView, CatalogActivity, CatalogView, ChoiceOption, ConfirmationKind, DialogChoice,
         HomeFocus, HomeScrollPhase, InformationView, InputAvailability, InputView, Launcher,
         LauncherLayout, LauncherScreen, LayoutRect, LoadingState, MediaPackRow, MediaPackState,
-        MediaView, MenuItem, MenuItemKind, MenuItemPresentation, MenuItemStatus, MisterUi,
-        NavigationTransitionState as ViewNavigationTransitionState, NavigationView, OverlayView,
-        PreviewState as ViewPreviewState, ProgressMode, ScreenOrientation as ViewScreenOrientation,
-        ScreensaverSetting, SettingsPopup, SettingsSection, SettingsView, SetupEntry, SetupField,
-        SetupPhase as ViewSetupPhase, SetupView, SystemHubSection,
+        MediaView, MenuHierarchy, MenuItem, MenuItemKind, MenuItemPresentation, MenuItemStatus,
+        MisterUi, NavigationTransitionState as ViewNavigationTransitionState, NavigationView,
+        OverlayView, PreviewState as ViewPreviewState, ProgressMode,
+        ScreenOrientation as ViewScreenOrientation, ScreensaverSetting, SettingsPopup,
+        SettingsSection, SettingsView, SetupEntry, SetupField, SetupPhase as ViewSetupPhase,
+        SetupView, SystemHubSection,
     };
     use sha2::{Digest, Sha256};
     use slint::platform::software_renderer::{RepaintBufferType, Rgb565Pixel};
@@ -4124,6 +4125,7 @@ mod macos {
         });
         navigation.set_menu_title("MiSTer MagiK".into());
         navigation.set_menu_breadcrumb("Systems".into());
+        navigation.set_menu_hierarchy(MenuHierarchy::Nested);
         navigation.set_development_build(true);
         if !scenario.uses_launcher_navigation() {
             let menu_items = home_menu_items();

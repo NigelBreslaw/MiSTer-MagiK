@@ -8,11 +8,11 @@
 
 use crate::arcade_catalog::{ArcadeCatalog, ArcadeGameView};
 use crate::launcher::{CatalogMenuItemStatus, DisplayTransactionPhase, LauncherNav, Screen};
-use crate::launcher_taxonomy::LauncherMenuItemKind;
+use crate::launcher_taxonomy::{LauncherMenuItemKind, ROOT_MENU_ID};
 use crate::launcher_view_types::{
     about_section, active_display_choice, arcade_list_mode, arcade_search_pane,
     arcade_search_status, display_transaction_state, home_focus, home_scroll_phase,
-    launcher_screen, orientation_at, screen_orientation, screensaver_setting,
+    launcher_screen, menu_hierarchy, orientation_at, screen_orientation, screensaver_setting,
     selected_display_choice, settings_display_choice, settings_popup, settings_section,
     system_hub_section,
 };
@@ -443,6 +443,12 @@ impl LauncherViewPresenters {
             get_home_selected_index,
             set_home_selected_index,
             nav.selected as i32
+        );
+        set_if_changed!(
+            navigation,
+            get_menu_hierarchy,
+            set_menu_hierarchy,
+            menu_hierarchy(nav.current_menu_id() == ROOT_MENU_ID)
         );
         set_if_changed!(
             navigation,

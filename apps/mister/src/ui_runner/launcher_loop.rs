@@ -5849,6 +5849,9 @@ pub(super) fn run_launcher_loop(
     let navigation = app.global::<slint_ui::launcher::NavigationView>();
     let menu_title = slint::SharedString::from(nav.current_menu_title());
     let menu_breadcrumb = slint::SharedString::from(nav.current_menu_breadcrumb());
+    navigation.set_menu_hierarchy(crate::launcher_view_types::menu_hierarchy(
+        nav.current_menu_id() == crate::launcher_taxonomy::ROOT_MENU_ID,
+    ));
     navigation.set_menu_title(menu_title);
     navigation.set_menu_breadcrumb(menu_breadcrumb);
     set_launcher_update_available(&app, false);

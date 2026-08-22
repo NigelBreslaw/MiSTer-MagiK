@@ -2,12 +2,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { MisterUi } from "../../mister_window.slint";
-import { NavigationView } from "../../api.slint";
+import { MenuHierarchy, NavigationView } from "../../api.slint";
 import { CrtTheme, CrtHeader, CrtFooter, CrtCard } from "../../components/crt_ui.slint";
 import { MenuItemStatus } from "../../launcher_menu.slint";
 
 export component HomeGrid inherits Rectangle {
-    property <bool> root-menu: NavigationView.menu-breadcrumb == "";
+    property <bool> root-menu: NavigationView.menu-hierarchy == MenuHierarchy.root;
     property <length> card-gap: MisterUi.grid-y;
     property <int> root-card-count: MisterUi.portrait-layout
         ? max(1, NavigationView.menu-items.length)
@@ -36,7 +36,7 @@ export component HomeGrid inherits Rectangle {
 
         CrtHeader {
             title: NavigationView.menu-title;
-            subtitle: NavigationView.menu-breadcrumb != "" ? NavigationView.menu-breadcrumb
+            subtitle: NavigationView.menu-hierarchy == MenuHierarchy.nested ? NavigationView.menu-breadcrumb
                 : NavigationView.development-build ? "DEV MODE"
                 : NavigationView.update-available ? "Update Available" : "";
             status: NavigationView.clock-text;

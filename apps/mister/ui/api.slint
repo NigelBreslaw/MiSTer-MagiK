@@ -9,6 +9,7 @@ import { MenuItem, MenuItemPresentation } from "launcher_menu.slint";
 // boundary as enums; integers remain reserved for counts, geometry, timing,
 // percentages, and indices into dynamic models.
 export enum LauncherScreen { home, system-hub, controller, arcade, settings, screensaver-settings, about, licenses, info }
+export enum MenuHierarchy { root, nested }
 export enum SystemHubSection { games, recent, favourites, information }
 export enum HomeFocus { menu, settings }
 export enum HomeScrollPhase { idle, held, repeating }
@@ -65,6 +66,7 @@ export struct LayoutRect { x: int, y: int, width: int, height: int }
 // presentation trees. Models preserve their Rust-owned retained identity.
 export global NavigationView {
     in property <LauncherScreen> screen;
+    in property <MenuHierarchy> menu-hierarchy;
     in property <string> menu-title: "MiSTer MagiK";
     in property <string> menu-breadcrumb;
     in property <SystemHubSection> system-hub-section;

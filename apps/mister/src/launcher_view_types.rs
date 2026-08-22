@@ -69,6 +69,14 @@ pub const fn home_focus(settings_focused: bool) -> view::HomeFocus {
     }
 }
 
+pub const fn menu_hierarchy(root: bool) -> view::MenuHierarchy {
+    if root {
+        view::MenuHierarchy::Root
+    } else {
+        view::MenuHierarchy::Nested
+    }
+}
+
 pub const fn home_scroll_phase(held: bool, repeating: bool) -> view::HomeScrollPhase {
     if repeating {
         view::HomeScrollPhase::Repeating
@@ -219,6 +227,8 @@ mod tests {
             view::LauncherScreen::SystemHub
         );
         assert_eq!(system_hub_section(3), view::SystemHubSection::Information);
+        assert_eq!(menu_hierarchy(true), view::MenuHierarchy::Root);
+        assert_eq!(menu_hierarchy(false), view::MenuHierarchy::Nested);
         assert_eq!(
             setup_phase(DomainSetupPhase::NameKind),
             view::SetupPhase::NameKind
