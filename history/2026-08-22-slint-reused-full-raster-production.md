@@ -54,3 +54,44 @@ fallback for newly allocated or otherwise discontinuous backing storage.
 - Pair 2 control: `build/agent-benchmarks/settled-composition/1787398786/summary.json`
 - Pair 3 control: `build/agent-benchmarks/settled-composition/1787398817/summary.json`
 - Pair 3 candidate: `build/agent-benchmarks/settled-composition-reused-cache/1787398839/summary.json`
+
+## Production-default controls
+
+Revision `a11689dcc7a5835e4c28ef6d6eddd777428bf8eb` was delivered after selector
+removal. Its ordinary `settled-composition` run reported policy
+`reused-buffer`, 17,979us combined recovery work, 927us subsequent recovery,
+zero duplicate full recovery rasters, the same terminal PNG hash, and no
+presentation fault:
+
+- `build/agent-benchmarks/settled-composition/1787399178/summary.json`
+
+Four unprofiled Settings navigation controls exercised six landscape and six
+portrait-left transitions each. The first run recorded two physical repeats on
+portrait-left Home return despite only 4,026us maximum work in that leg. The
+next three complete controls passed all 36 legs with zero physical drops. This
+matches the benchmark's retained intermittent portrait-repeat history and is
+not attributable to a frame-work overrun:
+
+- isolated failure: `build/agent-benchmarks/settings-navigation/1787399205/`
+- confirmations: `build/agent-benchmarks/settings-navigation/1787399288/`,
+  `1787399344/`, and `1787399414/`
+
+The dedicated six-leg brightness-fade orientation qualification passed normal,
+clockwise, and counterclockwise transitions with zero repeated vblanks, latch
+drops, ownership losses, or sequence gaps; maximum whole-frame work was
+9,341us:
+
+- `build/agent-benchmarks/orientation-transition-fade/1787399597/`
+
+The modal-input control also passed exact modal ownership, held-input release,
+and direct-layer retirement/restoration behavior:
+
+- `build/agent-benchmarks/modal-input/1787399679/`
+
+The general `navigation-transitions` runner did not reach its route in two
+attempts because its shared screensaver profiling prerequisite timed out. These
+runs produced no cache, pixel, or cadence result and are recorded as an
+unrelated benchmark-runner issue:
+
+- `build/agent-benchmarks/navigation-transitions/1787399468/`
+- `build/agent-benchmarks/navigation-transitions/1787399534/`
