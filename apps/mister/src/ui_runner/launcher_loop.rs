@@ -7312,7 +7312,6 @@ pub(super) fn run_launcher_loop(
         let route_input_early = benchmark_config.route_input_early();
         let mut effective_view =
             EffectiveLauncherView::resolve(&lifecycle, screensaver.active, nav.screen);
-        let mut launching = effective_view.launch_active();
         let mut setup_active = setup.is_active();
         let mut light_bridge_dirty = false;
         let mut pad_changed_for_input = None;
@@ -7649,7 +7648,7 @@ pub(super) fn run_launcher_loop(
             request_launcher_redraw!();
         }
         effective_view = EffectiveLauncherView::resolve(&lifecycle, screensaver.active, nav.screen);
-        launching = effective_view.launch_active();
+        let mut launching = effective_view.launch_active();
         setup_active = setup.is_active();
         let loop_elapsed_ms = loop_start
             .saturating_duration_since(start)
