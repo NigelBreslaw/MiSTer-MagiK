@@ -10975,6 +10975,7 @@ fn profile_installed_preview_work_attribution(
         let mut system_entry = Vec::with_capacity(SAMPLES_PER_ROUTE);
         let mut ordinary_scroll = Vec::with_capacity(SAMPLES_PER_ROUTE);
         let mut turbo_scroll = Vec::with_capacity(SAMPLES_PER_ROUTE);
+        fs::create_dir_all(output_dir.join("system-entry"))?;
         for sample in 1..=SAMPLES_PER_ROUTE {
             system_entry.push(run_system_entry_sample(
                 config,
