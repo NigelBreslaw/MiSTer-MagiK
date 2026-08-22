@@ -7840,10 +7840,6 @@ fn enter_computers_acorn_for_benchmark(session: &Session) -> Result<()> {
     run_launcher_response_driver(session, "a 10 1 50")?;
     wait_launcher_response_status(session, Duration::from_secs(5), |status| {
         status.get("menu_id").and_then(Value::as_str) == Some("menu:computers")
-    })?;
-    run_launcher_response_driver(session, "right 10 1 50")?;
-    wait_launcher_response_status(session, Duration::from_secs(5), |status| {
-        status.get("menu_id").and_then(Value::as_str) == Some("menu:computers")
             && status.get("selected_item_id").and_then(Value::as_str)
                 == Some("menu:computers:acorn")
     })?;
