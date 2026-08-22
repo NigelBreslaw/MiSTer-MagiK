@@ -79,8 +79,11 @@ is reported separately because it is the only production-default full-ROM hash
 policy; all other systems are opportunity context and cannot justify promotion
 on their own. Candidate discovery uses the authoritative software-hash cache and
 the five target system directories; it must not traverse the complete library
-namespace. The scenario neither starts catalog work nor enables forced
-background refresh.
+namespace. The unprofiled split-timing pass runs every selected case; duplicate
+production-path parity and PMU attribution are bounded to the small
+production-default Lynx case so transformed opt-in ROMs cannot exhaust the
+typed operation timeout. The scenario neither starts catalog work nor enables
+forced background refresh.
 
 The Arcade velocity-scroll profiling scenarios default to the active display
 route. A typed arm also accepts `--route active`, `--route hdmi-landscape`,

@@ -1608,18 +1608,26 @@ fn benchmark_current_rom_identity(
         .as_ref()
         .and_then(|key| software_hash_cache.entries.get(key));
     let total_us = total_started.elapsed().as_micros() as u64;
-    let production_identity = match_software_by_full_rom_hash(
-        input.path.to_string_lossy().as_ref(),
-        input.list_name,
-        metadata,
-    );
-    if identity != production_identity {
-        return Err(format!(
-            "diagnostic and production identity differ for {}",
-            input.path.display()
-        ));
-    }
-    let pmu = benchmark_rom_identity_pmu(input, metadata);
+    let bounded_production_validation = input.list_name == "lynx" && input.size < 4 * 1024 * 1024;
+    let pmu = if bounded_production_validation {
+        let production_identity = match_software_by_full_rom_hash(
+            input.path.to_string_lossy().as_ref(),
+            input.list_name,
+            metadata,
+        );
+        if identity != production_identity {
+            return Err(format!(
+                "diagnostic and production identity differ for {}",
+                input.path.display()
+            ));
+        }
+        benchmark_rom_identity_pmu(input, metadata)
+    } else {
+        json!({
+            "available": false,
+            "reason": "bounded-to-small-production-default-case",
+        })
+    };
     let faults_after = process_faults();
     Ok(json!({
         "list_name": input.list_name,
@@ -1627,6 +1635,7 @@ fn benchmark_current_rom_identity(
         "size_bytes": input.size,
         "size_class": rom_benchmark_size_class(input.size),
         "production_default": input.list_name == "lynx",
+        "production_parity_executed": bounded_production_validation,
         "identity": identity,
         "family_id": family_id,
         "matched_candidate_index": matched.as_ref().map(|(index, _)| index),
