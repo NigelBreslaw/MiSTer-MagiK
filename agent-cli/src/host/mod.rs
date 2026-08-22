@@ -7383,7 +7383,7 @@ fn run_launcher_response_computers_sweep(
             &run_id,
         ));
     }
-    restart_launcher_with_one_shot_env(
+    restart_and_reconcile_launcher_response_arm(
         session,
         LauncherRestartOptions {
             env_vars,
@@ -7391,11 +7391,8 @@ fn run_launcher_response_computers_sweep(
             remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str().into(),
             ..LauncherRestartOptions::default()
         },
+        &run_id,
     )?;
-    wait_launcher_response_status(session, Duration::from_secs(45), |status| {
-        status.get("input_enabled").and_then(Value::as_bool) == Some(true)
-            && status.get("selected_item_id").and_then(Value::as_str) == Some("menu:computers")
-    })?;
     enter_computers_acorn_for_benchmark(session)?;
     thread::sleep(Duration::from_millis(200));
     let driver = if isolated_profile {
@@ -7430,6 +7427,50 @@ fn run_launcher_response_computers_sweep(
         .clone();
     trace["display"] = read_launcher_status(session)?["display"].clone();
     Ok(trace)
+}
+
+fn restart_and_reconcile_launcher_response_arm(
+    session: &Session,
+    options: LauncherRestartOptions,
+    run_id: &str,
+) -> Result<()> {
+    let mut last_status = Value::Null;
+    for attempt in 1..=2 {
+        restart_launcher_with_one_shot_env(session, options.clone())?;
+        let started = Instant::now();
+        loop {
+            last_status = read_launcher_status(session)?;
+            let trace_matches = remote_read(session, LAUNCHER_RESPONSE_TRACE_REMOTE)
+                .as_deref()
+                .is_some_and(|raw| launcher_response_trace_matches_run(raw, run_id));
+            if trace_matches {
+                wait_launcher_response_status(session, Duration::from_secs(45), |status| {
+                    status.get("input_enabled").and_then(Value::as_bool) == Some(true)
+                        && status.get("selected_item_id").and_then(Value::as_str)
+                            == Some("menu:computers")
+                })?;
+                return Ok(());
+            }
+            if started.elapsed() >= Duration::from_secs(5) {
+                break;
+            }
+            thread::sleep(Duration::from_millis(20));
+        }
+        if attempt == 1 {
+            continue;
+        }
+    }
+    Err(format!(
+        "launcher response arm was not observed after one reconciled retry: run_id={run_id} status={last_status}"
+    )
+    .into())
+}
+
+fn launcher_response_trace_matches_run(raw: &str, run_id: &str) -> bool {
+    serde_json::from_str::<Value>(raw).is_ok_and(|trace| {
+        trace["schema"] == "mister-magik-launcher-response-trace-v6"
+            && trace["run_id"].as_str() == Some(run_id)
+    })
 }
 
 fn summarize_computers_sweep(trace: Value, interval_ms: u64, start_delay_ms: u64) -> Result<Value> {
@@ -30341,6 +30382,25 @@ mod tests {
         ];
         assert_eq!(percentile_nearest_rank(&values, 95), 19);
         assert_eq!(percentile_nearest_rank(&[], 95), u64::MAX);
+    }
+
+    #[test]
+    fn launcher_response_arm_requires_the_exact_trace_run() {
+        let exact = json!({
+            "schema": "mister-magik-launcher-response-trace-v6",
+            "run_id": "current-run",
+        })
+        .to_string();
+        assert!(launcher_response_trace_matches_run(&exact, "current-run"));
+        assert!(!launcher_response_trace_matches_run(&exact, "stale-run"));
+        assert!(!launcher_response_trace_matches_run(
+            r#"{"schema":"mister-magik-launcher-response-trace-v5","run_id":"current-run"}"#,
+            "current-run"
+        ));
+        assert!(!launcher_response_trace_matches_run(
+            "incomplete",
+            "current-run"
+        ));
     }
 
     #[test]
