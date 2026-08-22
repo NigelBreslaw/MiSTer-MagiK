@@ -101,6 +101,8 @@ use mister_magik_mister_runtime::settings;
 
 #[cfg(feature = "diagnostics")]
 use mister_magik_fb::input;
+#[cfg(feature = "bench-tools")]
+use mister_magik_fb::media_bench_save;
 #[cfg(any(feature = "bench-tools", feature = "diagnostics"))]
 use mister_magik_fb::preview_pack_bench;
 #[cfg(mister_experiments)]
@@ -114,11 +116,9 @@ pub use mister_magik_fb::{
     return_catalog_capsule, setup_nav, spring_animation, ui_errln, ui_log, ui_logln,
 };
 use mister_magik_fb::{
-    cpu_profile, input_integrity_driver, pmu_probe, pmu_profile, search_bench, ui_display,
-    ui_runner,
+    cpu_profile, input_integrity_driver, media_bench_download, pmu_probe, pmu_profile,
+    search_bench, ui_display, ui_runner,
 };
-#[cfg(feature = "bench-tools")]
-use mister_magik_fb::{media_bench_download, media_bench_save};
 
 #[cfg(all(feature = "diagnostics", feature = "ui"))]
 use fpga::LatchedFbufGeometry;
@@ -380,7 +380,6 @@ fn dispatch_pre_fpga(
         "search-bench" => search_bench::run(),
         "rom-identity-bench" => run_rom_identity_benchmark(args.get(2..).unwrap_or_default()),
         command_args::CATALOG_CORPUS_INVENTORY_COMMAND => run_catalog_corpus_inventory(),
-        #[cfg(feature = "bench-tools")]
         "media-bench-download" => media_bench_download::run(),
         #[cfg(feature = "bench-tools")]
         "media-bench-save" => media_bench_save::run(),

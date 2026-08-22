@@ -80,7 +80,6 @@ pub const COMMANDS: &[CommandSpec] = &[
     CommandSpec::new("search-bench", CommandKind::PreFpga),
     CommandSpec::new("rom-identity-bench", CommandKind::PreFpga),
     CommandSpec::new(CATALOG_CORPUS_INVENTORY_COMMAND, CommandKind::PreFpga),
-    #[cfg(feature = "bench-tools")]
     CommandSpec::new("media-bench-download", CommandKind::PreFpga),
     #[cfg(feature = "bench-tools")]
     CommandSpec::new("media-bench-save", CommandKind::PreFpga),

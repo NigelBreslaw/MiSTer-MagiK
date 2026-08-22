@@ -106,7 +106,7 @@ pub mod launcher_taxonomy;
 pub mod licenses;
 #[cfg(all(feature = "ui-preview", target_os = "macos"))]
 pub mod macos_preview_content;
-#[cfg(all(feature = "ui", feature = "bench-tools"))]
+#[cfg(feature = "ui")]
 #[doc(hidden)]
 pub mod media_bench_download;
 #[cfg(all(feature = "ui", feature = "bench-tools"))]
