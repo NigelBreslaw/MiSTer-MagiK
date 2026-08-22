@@ -874,10 +874,8 @@ pub(crate) fn match_software_by_full_rom_hash(
     list_name: &str,
     metadata: &MameSoftwareMetadata,
 ) -> Option<String> {
-    let bytes = std::fs::read(source_path).ok()?;
-    for candidate in rom_hash_candidates(list_name, &bytes) {
-        let crc = crc32(&candidate);
-        let key = (list_name.to_string(), candidate.len() as u64, crc);
+    for (length, crc) in stream_rom_candidate_hashes_from_path(source_path, list_name)? {
+        let key = (list_name.to_string(), length, crc);
         if let Some(names) = metadata
             .hash_index
             .get(&key)
@@ -887,6 +885,35 @@ pub(crate) fn match_software_by_full_rom_hash(
         }
     }
     None
+}
+
+const ROM_IDENTITY_STREAM_BUFFER_BYTES: usize = 256 * 1024;
+
+fn stream_rom_candidate_hashes_from_path(
+    source_path: &str,
+    list_name: &str,
+) -> Option<Vec<(u64, u32)>> {
+    let mut file = File::open(source_path).ok()?;
+    let expected_size = file.metadata().ok()?.len();
+    let mut buffer = vec![0u8; ROM_IDENTITY_STREAM_BUFFER_BYTES];
+    let first_bytes = file.read(&mut buffer).ok()?;
+    let mut hasher =
+        StreamingRomCandidateHasher::new(list_name, expected_size, &buffer[..first_bytes.min(4)]);
+    let mut bytes_read = first_bytes as u64;
+    if first_bytes > 0 {
+        hasher.update(&buffer[..first_bytes]);
+        crate::cooperative_work::checkpoint();
+    }
+    loop {
+        let bytes = file.read(&mut buffer).ok()?;
+        if bytes == 0 {
+            break;
+        }
+        bytes_read = bytes_read.saturating_add(bytes as u64);
+        hasher.update(&buffer[..bytes]);
+        crate::cooperative_work::checkpoint();
+    }
+    (bytes_read == expected_size).then(|| hasher.finish())
 }
 
 impl SoftwareHashCache {
@@ -1056,10 +1083,8 @@ pub(crate) fn crc32(bytes: &[u8]) -> u32 {
     !crc
 }
 
-#[cfg(feature = "builder")]
 const CRC32_TABLES: [[u32; 256]; 8] = build_crc32_tables();
 
-#[cfg(feature = "builder")]
 const fn build_crc32_tables() -> [[u32; 256]; 8] {
     let mut tables = [[0u32; 256]; 8];
     let mut index = 0usize;
@@ -1087,14 +1112,12 @@ const fn build_crc32_tables() -> [[u32; 256]; 8] {
     tables
 }
 
-#[cfg(feature = "builder")]
 #[derive(Clone, Debug)]
 struct IncrementalCrc32 {
     state: u32,
     length: u64,
 }
 
-#[cfg(feature = "builder")]
 impl Default for IncrementalCrc32 {
     fn default() -> Self {
         Self {
@@ -1104,7 +1127,6 @@ impl Default for IncrementalCrc32 {
     }
 }
 
-#[cfg(feature = "builder")]
 impl IncrementalCrc32 {
     fn update(&mut self, bytes: &[u8]) {
         let mut crc = self.state;
@@ -1133,7 +1155,6 @@ impl IncrementalCrc32 {
     }
 }
 
-#[cfg(feature = "builder")]
 #[derive(Clone, Debug)]
 enum StreamingRomCandidateHasher {
     Linear {
@@ -1150,7 +1171,6 @@ enum StreamingRomCandidateHasher {
     },
 }
 
-#[cfg(feature = "builder")]
 impl StreamingRomCandidateHasher {
     fn new(list_name: &str, file_size: u64, prefix: &[u8]) -> Self {
         if list_name == "n64" {
@@ -1262,7 +1282,6 @@ impl StreamingRomCandidateHasher {
     }
 }
 
-#[cfg(feature = "builder")]
 #[inline]
 fn update_n64_transforms(
     pairs: &mut IncrementalCrc32,
@@ -1276,7 +1295,6 @@ fn update_n64_transforms(
     reversed.update(&[chunk[3], chunk[2], chunk[1], chunk[0]]);
 }
 
-#[cfg(feature = "builder")]
 #[inline]
 fn update_n64_transform_octets(
     pairs: &mut IncrementalCrc32,
@@ -1575,23 +1593,6 @@ struct RomIdentityBenchmarkInput {
 }
 
 #[cfg(feature = "builder")]
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum RomIdentityBenchmarkImplementation {
-    WholeFile,
-    Streaming,
-}
-
-#[cfg(feature = "builder")]
-impl RomIdentityBenchmarkImplementation {
-    fn label(self) -> &'static str {
-        match self {
-            Self::WholeFile => "whole-file-scalar-crc32",
-            Self::Streaming => "streaming-slicing-by-eight-crc32",
-        }
-    }
-}
-
-#[cfg(feature = "builder")]
 struct CountingReader<'a> {
     file: &'a mut File,
     read_calls: u64,
@@ -1609,9 +1610,7 @@ impl Read for CountingReader<'_> {
 }
 
 #[cfg(feature = "builder")]
-pub fn rom_identity_benchmark_report(
-    implementation: RomIdentityBenchmarkImplementation,
-) -> Result<serde_json::Value, String> {
+pub fn rom_identity_benchmark_report() -> Result<serde_json::Value, String> {
     use serde_json::json;
     use sha2::{Digest, Sha256};
     use walkdir::WalkDir;
@@ -1730,14 +1729,7 @@ pub fn rom_identity_benchmark_report(
         if input.list_name == "lynx" {
             production_default_selected = production_default_selected.saturating_add(1);
         }
-        let case = match implementation {
-            RomIdentityBenchmarkImplementation::WholeFile => {
-                benchmark_current_rom_identity(&input, &metadata, &software_hash_cache)?
-            }
-            RomIdentityBenchmarkImplementation::Streaming => {
-                benchmark_streaming_rom_identity(&input, &metadata, &software_hash_cache)?
-            }
-        };
+        let case = benchmark_streaming_rom_identity(&input, &metadata, &software_hash_cache)?;
         result_digest.update(input.list_name.as_bytes());
         result_digest.update(input.path.as_os_str().as_encoded_bytes());
         result_digest.update(input.size.to_le_bytes());
@@ -1769,7 +1761,7 @@ pub fn rom_identity_benchmark_report(
     Ok(json!({
         "schema": "mister-magik-rom-identity-benchmark-v1",
         "status": "passed",
-        "implementation": implementation.label(),
+        "implementation": "streaming-slicing-by-eight-crc32",
         "production_default_policy": "lynx-only",
         "roots": roots,
         "scan_roots": scan_roots,
@@ -1958,14 +1950,12 @@ struct StreamingHashMetrics {
 fn stream_rom_candidate_hashes(
     input: &RomIdentityBenchmarkInput,
 ) -> Result<(Vec<(u64, u32)>, StreamingHashMetrics), String> {
-    const BUFFER_BYTES: usize = 256 * 1024;
-
     let total_started = Instant::now();
     let open_started = Instant::now();
     let mut file = File::open(&input.path)
         .map_err(|error| format!("open benchmark ROM {}: {error}", input.path.display()))?;
     let open_us = open_started.elapsed().as_micros() as u64;
-    let mut buffer = vec![0u8; BUFFER_BYTES];
+    let mut buffer = vec![0u8; ROM_IDENTITY_STREAM_BUFFER_BYTES];
     let mut read_us = 0u64;
     let mut process_us = 0u64;
     let mut checkpoint_us = 0u64;
@@ -2559,6 +2549,38 @@ mod tests {
                 assert_eq!(streaming.finish(), expected, "{list_name}/{chunk_bytes}");
             }
         }
+    }
+
+    #[test]
+    fn production_streaming_rom_file_matches_scalar_candidates() {
+        let root = unique_temp_dir("streaming-rom-file");
+        std::fs::create_dir_all(&root).expect("create ROM fixture directory");
+        let cases = [
+            ("nes", b"NES\x1a".as_slice(), 16usize, 131_089usize),
+            ("lynx", b"LYNX".as_slice(), 64usize, 262_157usize),
+            ("snes", b"".as_slice(), 512usize, 1_048_579usize),
+            ("n64", b"".as_slice(), 0usize, 1_048_583usize),
+        ];
+        for (list_name, prefix, header_bytes, length) in cases {
+            let mut bytes = (0..length)
+                .map(|index| ((index * 37 + index / 13) & 0xff) as u8)
+                .collect::<Vec<_>>();
+            bytes[..prefix.len()].copy_from_slice(prefix);
+            if header_bytes > prefix.len() {
+                bytes[prefix.len()..header_bytes].fill(0x5a);
+            }
+            let path = root.join(format!("{list_name}.rom"));
+            std::fs::write(&path, &bytes).expect("write ROM fixture");
+            let expected = rom_hash_candidates(list_name, &bytes)
+                .iter()
+                .map(|candidate| (candidate.len() as u64, crc32(candidate)))
+                .collect::<Vec<_>>();
+            let actual =
+                stream_rom_candidate_hashes_from_path(path.to_string_lossy().as_ref(), list_name)
+                    .expect("stream ROM candidates");
+            assert_eq!(actual, expected, "{list_name}");
+        }
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

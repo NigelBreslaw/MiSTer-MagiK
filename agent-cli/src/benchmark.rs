@@ -2171,28 +2171,28 @@ fn execute_rom_identity_hashing(
 
 fn evaluate_rom_identity_hashing_summary(summary: &Value) -> AgentResult<()> {
     if summary.get("schema").and_then(Value::as_str)
-        != Some("mister-magik-rom-identity-comparison-v1")
+        != Some("mister-magik-rom-identity-production-v1")
         || summary.get("status").and_then(Value::as_str) != Some("passed")
     {
-        return Err("ROM identity benchmark is not a passing comparison report".into());
+        return Err("ROM identity benchmark is not a passing production report".into());
     }
-    for field in ["baseline_runs", "candidate_runs"] {
-        let runs = summary
-            .get(field)
-            .and_then(Value::as_array)
-            .ok_or_else(|| format!("ROM identity comparison has no {field}"))?;
-        if runs.len() != 2
-            || runs.iter().any(|run| {
-                run.get("case_count").and_then(Value::as_u64).unwrap_or(0) == 0
-                    || run
-                        .get("production_default_selected")
-                        .and_then(Value::as_u64)
-                        .unwrap_or(0)
-                        == 0
-            })
-        {
-            return Err(format!("ROM identity comparison has invalid {field}").into());
-        }
+    let runs = summary
+        .get("runs")
+        .and_then(Value::as_array)
+        .ok_or("ROM identity production report has no runs")?;
+    if runs.len() != 3
+        || runs.iter().any(|run| {
+            run.get("case_count").and_then(Value::as_u64).unwrap_or(0) == 0
+                || run
+                    .get("production_default_selected")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0)
+                    == 0
+                || run.get("implementation").and_then(Value::as_str)
+                    != Some("streaming-slicing-by-eight-crc32")
+        })
+    {
+        return Err("ROM identity production report has invalid runs".into());
     }
     Ok(())
 }
@@ -3302,15 +3302,15 @@ mod tests {
         let arm = json!({
             "case_count": 3,
             "production_default_selected": 1,
+            "implementation": "streaming-slicing-by-eight-crc32",
         });
         let passing = json!({
-            "schema": "mister-magik-rom-identity-comparison-v1",
+            "schema": "mister-magik-rom-identity-production-v1",
             "status": "passed",
-            "baseline_runs": [arm.clone(), arm.clone()],
-            "candidate_runs": [arm.clone(), arm],
+            "runs": [arm.clone(), arm.clone(), arm],
         });
         evaluate_rom_identity_hashing_summary(&passing).unwrap();
-        for field in ["schema", "status", "baseline_runs", "candidate_runs"] {
+        for field in ["schema", "status", "runs"] {
             let mut invalid = passing.clone();
             invalid[field] = Value::Null;
             assert!(evaluate_rom_identity_hashing_summary(&invalid).is_err());

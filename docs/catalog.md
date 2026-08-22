@@ -526,6 +526,14 @@ launch plans remain in canonical catalog state; only the visible system shard
 and navigation list are collapsed. Variants remain hidden until a dedicated
 variant-selection UI is added.
 
+Full-ROM software identity reads through one reusable 256 KiB buffer and
+checkpoints between chunks. Raw, header-stripped, and N64 byte-order candidates
+feed incremental slicing-by-eight CRC32 states in the same pass, so catalog
+construction does not allocate a whole ROM or transformed ROM copies. Lynx is
+the only production-default full-ROM hashing policy; other systems remain
+explicitly opt-in through `MISTER_LIBRARY_SOFTWARE_HASH`. The scalar CRC and
+whole-buffer candidate generator remain parity oracles in tests.
+
 Generic manifest profiles are authoritative for canonical system/core pairs.
 An installed MGL descriptor may bind a system to a shared physical core only
 when that core is declared in the profile's `compatible_core_names`. This

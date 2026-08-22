@@ -70,28 +70,23 @@ Supported scenarios:
 - `search`
 - `streamline`
 
-`rom-identity-hashing` is a read-only exact-device authority for the current
-whole-file ROM identity implementation. It selects deterministic small, medium,
+`rom-identity-hashing` is a read-only exact-device authority for the production
+streaming ROM identity implementation. It selects deterministic small, medium,
 and large production files for Lynx, NES, SNES, Mega Drive, and N64 where those
-classes exist, records I/O, transformation, scalar CRC, lookup, faults, RSS/HWM,
-CPU placement, and PMU attribution, and hashes every candidate and result. Lynx
+classes exist, records I/O, fused transformation/CRC work, lookup, cooperative
+checkpoints, faults, RSS/HWM, CPU placement, and PMU attribution, and hashes
+every candidate and result. Lynx
 is reported separately because it is the only production-default full-ROM hash
 policy; all other systems are opportunity context and cannot justify promotion
 on their own. Candidate discovery uses the authoritative software-hash cache and
 the five target system directories; it must not traverse the complete library
-namespace. The unprofiled split-timing pass runs every selected case; duplicate
-production-path parity and PMU attribution are bounded to the small
+namespace. Three isolated production runs provide comparable RSS/HWM and must
+agree on all candidate CRC, identity, family, rank, and software-cache hashes.
+Duplicate production-path parity and PMU attribution are bounded to the small
 production-default Lynx case so transformed opt-in ROMs cannot exhaust the
-typed operation timeout. The scenario neither starts catalog work nor enables
-forced background refresh.
-
-During the streaming experiment, the typed host workflow consumes the app's
-closed `whole-file` and `streaming` ROM-identity selectors in the balanced order
-baseline A, candidate A, candidate B, baseline B. Each arm runs in a separate
-process so RSS/HWM remains comparable. The host accepts the comparison only when
-all candidate CRC, identity, family, rank, and software-cache hashes equal both
-whole-file arms. The selector does not affect catalog construction or the
-production matcher.
+typed operation timeout. The retired whole-file/streaming selector is not
+available. The scenario neither starts catalog work nor enables forced
+background refresh.
 
 The Arcade velocity-scroll profiling scenarios default to the active display
 route. A typed arm also accepts `--route active`, `--route hdmi-landscape`,

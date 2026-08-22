@@ -12218,32 +12218,18 @@ fn profile_installed_rom_identity_hashing(
     let capability = last_json_line(&capability.stdout)
         .ok_or("installed benchmark capability output contains no JSON report")?;
     if capability
-        .get("rom-identity-benchmark-v2")
+        .get("rom-identity-benchmark-v3")
         .and_then(Value::as_bool)
         != Some(true)
     {
-        return Err("installed app does not support rom-identity-benchmark-v2".into());
+        return Err("installed app does not support rom-identity-benchmark-v3".into());
     }
-    let execution_order = [
-        ("baseline-a", "whole-file", "whole-file-scalar-crc32"),
-        (
-            "candidate-a",
-            "streaming",
-            "streaming-slicing-by-eight-crc32",
-        ),
-        (
-            "candidate-b",
-            "streaming",
-            "streaming-slicing-by-eight-crc32",
-        ),
-        ("baseline-b", "whole-file", "whole-file-scalar-crc32"),
-    ];
-    let mut baselines = Vec::with_capacity(2);
-    let mut candidates = Vec::with_capacity(2);
-    for (label, mode, implementation) in execution_order.iter().copied() {
+    let execution_order = ["production-a", "production-b", "production-c"];
+    let mut runs = Vec::with_capacity(execution_order.len());
+    for label in execution_order {
         let output = exec(
             &session,
-            &development_gui_command(&format!("rom-identity-bench {mode}")),
+            &development_gui_command("rom-identity-bench"),
             true,
         )?;
         let mut log = output.stdout.clone();
@@ -12257,7 +12243,8 @@ fn profile_installed_rom_identity_hashing(
         if arm.get("schema").and_then(Value::as_str)
             != Some("mister-magik-rom-identity-benchmark-v1")
             || arm.get("status").and_then(Value::as_str) != Some("passed")
-            || arm.get("implementation").and_then(Value::as_str) != Some(implementation)
+            || arm.get("implementation").and_then(Value::as_str)
+                != Some("streaming-slicing-by-eight-crc32")
         {
             return Err(format!(
                 "installed ROM identity benchmark {label} returned an invalid arm"
@@ -12268,41 +12255,33 @@ fn profile_installed_rom_identity_hashing(
             output_dir.join(format!("{label}.json")),
             format!("{}\n", serde_json::to_string_pretty(&arm)?),
         )?;
-        if mode == "streaming" {
-            candidates.push(arm);
-        } else {
-            baselines.push(arm);
-        }
+        runs.push(arm);
     }
-    let expected_result = baselines[0]
+    let expected_result = runs[0]
         .get("result_sha256")
         .and_then(Value::as_str)
-        .ok_or("ROM identity baseline has no result hash")?
+        .ok_or("ROM identity production run has no result hash")?
         .to_owned();
-    let expected_cache = baselines[0]
+    let expected_cache = runs[0]
         .get("software_hash_cache_sha256")
         .and_then(Value::as_str)
-        .ok_or("ROM identity baseline has no cache hash")?
+        .ok_or("ROM identity production run has no cache hash")?
         .to_owned();
-    for arm in baselines.iter().chain(&candidates) {
+    for arm in &runs {
         if arm.get("result_sha256").and_then(Value::as_str) != Some(expected_result.as_str())
             || arm
                 .get("software_hash_cache_sha256")
                 .and_then(Value::as_str)
                 != Some(expected_cache.as_str())
         {
-            return Err("ROM identity baseline and streaming results differ".into());
+            return Err("ROM identity production results differ".into());
         }
     }
     let summary = json!({
-        "schema": "mister-magik-rom-identity-comparison-v1",
+        "schema": "mister-magik-rom-identity-production-v1",
         "status": "passed",
-        "execution_order": execution_order.map(|(label, mode, _)| json!({
-            "label": label,
-            "mode": mode,
-        })),
-        "baseline_runs": baselines,
-        "candidate_runs": candidates,
+        "execution_order": execution_order,
+        "runs": runs,
         "result_sha256": expected_result,
         "software_hash_cache_sha256": expected_cache,
     });

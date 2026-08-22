@@ -54,6 +54,37 @@ is 1.137 s. Against the historical 70.190 s scan this is 1.62%, below the 2%
 affected-operation gate even though the identity-phase and memory gates pass.
 
 Candidate processing remains dominant at 4.467 ms of the 5.651 ms Lynx total.
-The planned bounded recovery is therefore justified: try one slicing-by-eight
-incremental CRC implementation. Promotion remains blocked until that recovery
-is measured; production behavior is unchanged at this revision.
+The planned bounded recovery was therefore justified: try one slicing-by-eight
+incremental CRC implementation.
+
+## Slicing-by-eight recovery and retention
+
+Recovery revision `f3e1a169e` replaced the byte-at-a-time incremental table
+loop with slicing-by-eight while retaining the scalar CRC oracle and bounded
+transform carry. Three further balanced captures produced six whole-file and
+six candidate arms:
+
+- `build/agent-benchmarks/rom-identity-hashing/1787406628`
+- `build/agent-benchmarks/rom-identity-hashing/1787406683`
+- `build/agent-benchmarks/rom-identity-hashing/1787406827`
+
+All arms retained the same result and cache SHA-256 values recorded above.
+
+| Measurement | Whole-file | Recovered streaming | Delta |
+|---|---:|---:|---:|
+| Production-default Lynx identity | 9.185 ms | 2.836 ms | -69.1% |
+| Lynx CRC / fused processing | 7.172 ms | 1.778 ms | -75.2% |
+| Sum of nine selected identity cases | 6.615 s | 1.965 s | -70.3% |
+| Large N64 identity | 4.437 s | 1.332 s | -70.0% |
+| Process HWM | 187,998 KiB | 24,044 KiB | -87.2% |
+| Large N64 transformed candidate allocation | 134,217,728 B | 0 B | -100% |
+
+Every selected size class improved by 27.1% to 77.1%; none regressed. The
+maximum cooperative checkpoint was 29 microseconds. Applying the 6.349 ms Lynx
+median saving to the 321 production-default cache entries projects 2.038 s, or
+2.90% of the historical 70.190 s scan. The 20% identity-phase, 2% affected
+operation, memory, parity, checkpoint, and per-class regression gates all pass.
+
+The production matcher therefore uses the recovered streaming implementation.
+The experiment selector and whole-file production path were removed; the
+scalar implementation remains only as a parity oracle.
