@@ -146,11 +146,10 @@ restores the original Home selection and display mode, and leaves favorite
 state unchanged. Evidence is retained below
 `build/agent-benchmarks/settled-composition/<timestamp>/`.
 
-`settled-composition-receipt-scoped` is the experiment arm for the same fixed
-route. It is the only route that consumes the receipt-scoped modal-carrier
-selector; ordinary production startup and `settled-composition` retain the
-always-force policy. Compare its unprofiled summary directly with a fresh
-`settled-composition` control from the same installed revision.
+Production modal carriers are receipt-scoped: the entry carrier remains forced
+until direct-layer retirement has a matching physical receipt. The summary
+separates any required invalid-slot convergence copy from recurring steady
+modal work while retaining the total retirement-confirmed byte count.
 
 `navigation-transitions` runs the fixed scripted route Home → Arcade → Home →
 Consoles → System → Consoles → Home with the Super-Scaler POC enabled. It

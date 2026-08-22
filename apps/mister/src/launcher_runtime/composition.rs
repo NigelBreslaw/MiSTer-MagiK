@@ -15,13 +15,6 @@ pub enum UiCompositionState {
     Recovering,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum ModalCarrierPolicy {
-    #[default]
-    Always,
-    RetirementReceiptScoped,
-}
-
 impl UiCompositionState {
     pub fn label(self) -> &'static str {
         match self {
@@ -250,7 +243,6 @@ struct DirectLayerRetirement {
 
 #[derive(Debug)]
 pub struct UiCompositionController {
-    modal_carrier_policy: ModalCarrierPolicy,
     state: UiCompositionState,
     recovery_count: u64,
     last_invariant_kind: String,
@@ -264,12 +256,7 @@ pub struct UiCompositionController {
 
 impl UiCompositionController {
     pub fn new() -> Self {
-        Self::with_modal_carrier_policy(ModalCarrierPolicy::Always)
-    }
-
-    pub fn with_modal_carrier_policy(modal_carrier_policy: ModalCarrierPolicy) -> Self {
         Self {
-            modal_carrier_policy,
             state: UiCompositionState::FullSlint,
             recovery_count: 0,
             last_invariant_kind: String::new(),
@@ -386,8 +373,7 @@ impl UiCompositionController {
             .retirement
             .and_then(|retirement| retirement.receipt)
             .or(self.last_retirement_receipt);
-        if self.modal_carrier_policy == ModalCarrierPolicy::RetirementReceiptScoped
-            && state == UiCompositionState::ModalOverArcade
+        if state == UiCompositionState::ModalOverArcade
             && previous == state
             && self.retirement.is_none()
             && self.last_retirement_generation == Some(self.retirement_generation)
@@ -1067,9 +1053,7 @@ mod tests {
 
     #[test]
     fn receipt_scoped_modal_carrier_waits_for_matching_physical_retirement() {
-        let mut controller = UiCompositionController::with_modal_carrier_policy(
-            ModalCarrierPolicy::RetirementReceiptScoped,
-        );
+        let mut controller = UiCompositionController::new();
         acquire_direct_layers(&mut controller);
         let pending = controller.tick(UiCompositionInput {
             confirm_visible: true,

@@ -53,28 +53,6 @@ const SETTINGS_NAVIGATION_STATUS_DRAIN_LIMIT: Duration = Duration::from_secs(2);
 const SQLITE_HEADER: &[u8; 16] = b"SQLite format 3\0";
 const MODAL_INPUT_TEST_ROOT: &str = "/tmp/mister-magik/modal-input-benchmark";
 
-fn settled_modal_carrier_policy_from_values(
-    route: Option<&str>,
-    policy: Option<&str>,
-) -> ModalCarrierPolicy {
-    if route == Some("settled-composition") && policy == Some("receipt-scoped") {
-        ModalCarrierPolicy::RetirementReceiptScoped
-    } else {
-        ModalCarrierPolicy::Always
-    }
-}
-
-fn settled_modal_carrier_policy() -> ModalCarrierPolicy {
-    settled_modal_carrier_policy_from_values(
-        std::env::var("MISTER_GUI_FRAME_PROFILE_ROUTE")
-            .ok()
-            .as_deref(),
-        std::env::var("MISTER_SETTLED_MODAL_CARRIER_POLICY")
-            .ok()
-            .as_deref(),
-    )
-}
-
 fn navigation_geometry_to_composition(
     layout: UiLayoutGeometry,
     mut geometry: NavigationTransitionGeometry,
@@ -157,30 +135,6 @@ fn settings_navigation_status_drain_plan(
         (sequence_before_frame, false)
     } else {
         (sequence_after_frame, true)
-    }
-}
-
-#[cfg(test)]
-mod settled_modal_carrier_policy_tests {
-    use super::*;
-
-    #[test]
-    fn selector_is_consumed_only_by_the_settled_composition_route() {
-        assert_eq!(
-            settled_modal_carrier_policy_from_values(
-                Some("settled-composition"),
-                Some("receipt-scoped"),
-            ),
-            ModalCarrierPolicy::RetirementReceiptScoped
-        );
-        assert_eq!(
-            settled_modal_carrier_policy_from_values(None, Some("receipt-scoped")),
-            ModalCarrierPolicy::Always
-        );
-        assert_eq!(
-            settled_modal_carrier_policy_from_values(Some("settled-composition"), None),
-            ModalCarrierPolicy::Always
-        );
     }
 }
 
@@ -5405,8 +5359,7 @@ pub(super) fn run_launcher_loop(
     let mut launcher_preview_publication: Option<PhysicalLayerPublication> = None;
     let mut launcher_arcade_publication: Option<PhysicalLayerPublication> = None;
     let mut arcade_drawer_view_cache = ArcadeDrawerViewCache::default();
-    let mut composition =
-        UiCompositionController::with_modal_carrier_policy(settled_modal_carrier_policy());
+    let mut composition = UiCompositionController::new();
     let mut cpu = process_entry_cpu_profile.or_else(|| cpu_profile::start(profile_config.cpu()));
     let mut system_entry_cpu_profile = None;
     let mut screensaver_cpu_profile =
