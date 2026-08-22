@@ -128,6 +128,10 @@ impl InputLatencyLab {
         }
     }
 
+    pub(super) const fn is_armed(&self) -> bool {
+        self.arm.is_some() && !self.disarmed
+    }
+
     pub(super) fn arm_if_computers_ready(&mut self, nav: &LauncherNav) -> Option<Value> {
         let arm = self.arm?;
         if self.epoch_us.is_some() || self.disarmed || !computers_acorn_ready(nav) {
@@ -427,6 +431,7 @@ mod tests {
             input_probe: None,
             disarmed: false,
         };
+        assert!(lab.is_armed());
         assert_eq!(
             lab.claim_due_work(epoch_us, epoch_us - OBSTRUCTION_LEAD_US - 1),
             DueWork::NotDue
@@ -445,6 +450,7 @@ mod tests {
             } if ordinal == MOVE_COUNT - 1
         ));
         assert!(lab.disarmed);
+        assert!(!lab.is_armed());
     }
 
     #[test]

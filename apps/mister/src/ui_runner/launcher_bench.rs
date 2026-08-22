@@ -138,15 +138,7 @@ impl LauncherBenchmarkConfig {
 }
 
 fn route_input_early_from_value(value: Option<&str>) -> bool {
-    #[cfg(not(feature = "bench-tools"))]
-    {
-        let _ = value;
-        false
-    }
-    #[cfg(feature = "bench-tools")]
-    {
-        value == Some("early")
-    }
+    value == Some("early")
 }
 
 fn normalized_nonempty(value: Option<&str>) -> Option<String> {
@@ -777,19 +769,14 @@ mod tests {
     #[test]
     #[cfg(not(feature = "bench-tools"))]
     fn production_config_cannot_arm_a_benchmark_scenario() {
-        let values = std::collections::BTreeMap::from([
-            (BENCH_SCENARIO, "rapid-taps"),
-            (INPUT_ROUTE_POLICY, "early"),
-        ]);
+        let values = std::collections::BTreeMap::from([(BENCH_SCENARIO, "rapid-taps")]);
         let config = LauncherBenchmarkConfig::capture_with(|name| values.get(name).copied());
 
         assert_eq!(config.scenario(), None);
-        assert!(!config.route_input_early());
     }
 
     #[test]
-    #[cfg(feature = "bench-tools")]
-    fn benchmark_build_requires_the_exact_early_input_policy() {
+    fn input_route_selector_requires_the_exact_early_policy() {
         let early = LauncherBenchmarkConfig::capture_with(|name| {
             (name == INPUT_ROUTE_POLICY).then_some("early")
         });

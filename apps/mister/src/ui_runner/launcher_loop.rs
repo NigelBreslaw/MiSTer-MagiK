@@ -7358,7 +7358,8 @@ pub(super) fn run_launcher_loop(
         }
         let mut full_bridge_dirty = std::mem::take(&mut navigation_source_bridge_sync_pending)
             || std::mem::take(&mut modal_input_test_bridge_sync_pending);
-        let route_input_early = benchmark_config.route_input_early();
+        let route_input_early =
+            benchmark_config.route_input_early() && input_latency_lab.is_armed();
         let mut effective_view =
             EffectiveLauncherView::resolve(&lifecycle, screensaver.active, nav.screen);
         let mut setup_active = setup.is_active();
