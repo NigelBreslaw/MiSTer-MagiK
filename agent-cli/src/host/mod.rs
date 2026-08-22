@@ -8534,6 +8534,38 @@ fn run_settled_composition_route(
             },
             "settled Arcade before favorite dialog",
         )?;
+        let open_drawer = modal_input_action(
+            config,
+            &nonce,
+            AutomationAction::Tap(AutomationButton::Left),
+        )?;
+        let drawer_open = wait_gui_profile_snapshot(
+            config,
+            &nonce,
+            |snapshot| {
+                gui_profile_effective_view(snapshot) == Some("arcade")
+                    && snapshot
+                        .pointer("/semantic/drawer_open")
+                        .and_then(Value::as_bool)
+                        == Some(true)
+            },
+            "Arcade filter drawer open",
+        )?;
+        thread::sleep(Duration::from_millis(250));
+        let close_drawer =
+            modal_input_action(config, &nonce, AutomationAction::Tap(AutomationButton::B))?;
+        let drawer_closed = wait_gui_profile_snapshot(
+            config,
+            &nonce,
+            |snapshot| {
+                gui_profile_effective_view(snapshot) == Some("arcade")
+                    && snapshot
+                        .pointer("/semantic/drawer_open")
+                        .and_then(Value::as_bool)
+                        == Some(false)
+            },
+            "Arcade filter drawer closed",
+        )?;
         let open_modal =
             modal_input_action(config, &nonce, AutomationAction::Tap(AutomationButton::X))?;
         let modal = wait_gui_profile_snapshot(
@@ -8650,6 +8682,8 @@ fn run_settled_composition_route(
             "schema": "mister-magik-settled-composition-route-v1",
             "actions": {
                 "enter_arcade": enter_arcade,
+                "open_drawer": open_drawer,
+                "close_drawer": close_drawer,
                 "open_modal": open_modal,
                 "cancel_modal": cancel_modal,
                 "return_home": return_home,
@@ -8660,6 +8694,8 @@ fn run_settled_composition_route(
             },
             "initial": initial,
             "arcade": arcade,
+            "drawer_open": drawer_open,
+            "drawer_closed": drawer_closed,
             "modal": modal,
             "modal_hold": modal_hold,
             "home": home,

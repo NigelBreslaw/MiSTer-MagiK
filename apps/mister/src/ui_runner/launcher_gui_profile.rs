@@ -253,6 +253,7 @@ impl<'a> GuiFrameWorkRecord<'a> {
 pub(super) enum GuiProfilePhase {
     ArcadeScroll,
     SettledArcade,
+    CustomDamage,
     ModalOverArcade,
     SettingsDestination,
     SettingsFollowing,
@@ -260,7 +261,8 @@ pub(super) enum GuiProfilePhase {
 
 impl GuiProfilePhase {
     const ARCADE_VELOCITY_ORDERED: [Self; 2] = [Self::ArcadeScroll, Self::SettledArcade];
-    const SETTLED_COMPOSITION_ORDERED: [Self; 3] = [
+    const SETTLED_COMPOSITION_ORDERED: [Self; 4] = [
+        Self::CustomDamage,
         Self::ModalOverArcade,
         Self::SettingsDestination,
         Self::SettingsFollowing,
@@ -270,6 +272,7 @@ impl GuiProfilePhase {
         match self {
             Self::ArcadeScroll => "arcade-scroll",
             Self::SettledArcade => "settled-arcade",
+            Self::CustomDamage => "custom-damage",
             Self::ModalOverArcade => "modal-over-arcade",
             Self::SettingsDestination => "settings-destination",
             Self::SettingsFollowing => "settings-following",
@@ -616,8 +619,15 @@ impl GuiProfilingController {
             (
                 GuiProfileRoute::SettledComposition,
                 "arcade",
+                crate::input_event::LogicalAction::Left,
+            ) if self.state == GuiProfileState::Warmup => Some(GuiProfilePhase::CustomDamage),
+            (
+                GuiProfileRoute::SettledComposition,
+                "arcade",
                 crate::input_event::LogicalAction::X,
-            ) if self.state == GuiProfileState::Warmup => Some(GuiProfilePhase::ModalOverArcade),
+            ) if self.state == GuiProfileState::Measuring(GuiProfilePhase::CustomDamage) => {
+                Some(GuiProfilePhase::ModalOverArcade)
+            }
             (
                 GuiProfileRoute::SettledComposition,
                 "home",
@@ -664,6 +674,13 @@ impl GuiProfilingController {
                 if screen == "arcade" && !arcade_motion_active && terminal_preview =>
             {
                 Some(GuiProfilePhase::SettledArcade)
+            }
+            GuiProfileState::AwaitingPresentation(GuiProfilePhase::CustomDamage)
+                if screen == "arcade"
+                    && composition.state == "mixed-arcade"
+                    && composition.retirement_state == "idle" =>
+            {
+                Some(GuiProfilePhase::CustomDamage)
             }
             GuiProfileState::AwaitingPresentation(GuiProfilePhase::ModalOverArcade)
                 if screen == "arcade"
@@ -1184,6 +1201,27 @@ mod tests {
         let now = Instant::now();
         let mut controller = GuiProfilingController::enabled_for_test(now);
         controller.route = GuiProfileRoute::SettledComposition;
+        controller
+            .request_phase(GuiProfilePhase::CustomDamage, now)
+            .unwrap();
+        controller.observe_route_presentation(
+            0,
+            "arcade",
+            false,
+            true,
+            false,
+            &crate::launcher_runtime::composition::UiCompositionStatus {
+                state: "mixed-arcade",
+                retirement_state: "idle",
+                ..crate::launcher_runtime::composition::UiCompositionStatus::default()
+            },
+            now,
+            999,
+        );
+        assert_eq!(
+            controller.state,
+            GuiProfileState::Measuring(GuiProfilePhase::CustomDamage)
+        );
         controller
             .request_phase(GuiProfilePhase::ModalOverArcade, now)
             .unwrap();

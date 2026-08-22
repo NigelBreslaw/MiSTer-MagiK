@@ -136,7 +136,9 @@ unchanged.
 
 `settled-composition` is the unprofiled authority for steady modal ownership
 and the two-frame cost of a full-raster navigation destination. It opens the
-real Arcade favorite confirmation without accepting it, waits for eight
+real Arcade filter drawer first to capture disjoint Slint chrome damage while
+custom layers remain active, then opens the favorite confirmation without
+accepting it and waits for eight
 frames after direct-layer retirement has a matching physical receipt, then
 cancels the dialog and drives Home → Settings. The destination frame and its
 immediately following frame are reported separately with composition state,
