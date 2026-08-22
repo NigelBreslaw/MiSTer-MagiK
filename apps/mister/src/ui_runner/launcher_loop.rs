@@ -7448,13 +7448,11 @@ pub(super) fn run_launcher_loop(
                     }
                 }
             }
-            let bridge = app.global::<slint_ui::launcher::MisterBridge>();
             let input_notice = input_fault_notice.or_else(|| {
                 setup_disconnect_notice.then_some(
                     "Controller disconnected. Press a button after reconnecting to restart setup.",
                 )
             });
-            bridge.set_input_fault_notice(input_notice.unwrap_or_default().into());
             let input = app.global::<slint_ui::launcher::InputView>();
             input.set_fault_notice(input_notice.unwrap_or_default().into());
             input.set_input_availability(if input_notice.is_some() {
@@ -7485,10 +7483,6 @@ pub(super) fn run_launcher_loop(
                     crate::ui_errln!("controller setup: target disconnected; closing setup flow");
                     setup.cancel_disconnected();
                     setup_disconnect_notice = true;
-                    bridge.set_input_fault_notice(
-                    "Controller disconnected. Press a button after reconnecting to restart setup."
-                        .into(),
-                );
                     input.set_fault_notice(
                         "Controller disconnected. Press a button after reconnecting to restart setup."
                             .into(),
@@ -8787,7 +8781,6 @@ pub(super) fn run_launcher_loop(
                     &nav,
                     &lifecycle,
                     &mut bridge_models,
-                    &setup,
                     scheduler.visible_loading_title(&loading_title),
                     "",
                     &catalog,

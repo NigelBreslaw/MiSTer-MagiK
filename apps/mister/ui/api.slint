@@ -191,40 +191,6 @@ export global SetupView {
 }
 
 export global MisterBridge {
-    in-out property <bool> dpad-up;
-    in-out property <bool> dpad-down;
-    in-out property <bool> dpad-left;
-    in-out property <bool> dpad-right;
-    in-out property <bool> btn-a;
-    in-out property <bool> btn-b;
-    in-out property <bool> btn-x;
-    in-out property <bool> btn-y;
-    in-out property <bool> btn-l;
-    in-out property <bool> btn-r;
-    in-out property <bool> btn-zl;
-    in-out property <bool> btn-zr;
-    in-out property <bool> btn-select;
-    in-out property <bool> btn-start;
-    in-out property <bool> btn-l3;
-    in-out property <bool> btn-r3;
-    in-out property <bool> btn-home;
-    in-out property <bool> btn-capture;
-    in-out property <bool> capture-available;
-    in-out property <float> left-x;
-    in-out property <float> left-y;
-    in-out property <float> right-x;
-    in-out property <float> right-y;
-    in-out property <string> device-label;
-    in-out property <string> device-name;
-    in-out property <string> usb-port;
-    in-out property <string> usb-id;
-    in-out property <string> serial-id;
-    in-out property <string> js-counts;
-    in-out property <string> pressed-now;
-    in-out property <string> last-event-label;
-    in-out property <string> last-raw-event;
-    // Non-empty when the sole Main proxy v2 navigation path is unavailable.
-    in-out property <string> input-fault-notice;
     // Full-screen boot splash, cleared after the first launcher state sync.
     in-out property <bool> startup-visible;
     // Rust-owned physically confirmed focus acknowledgements. The revision is
@@ -299,17 +265,5 @@ export global MisterBridge {
     // Non-empty while launching a game - full-screen loading overlay.
     in-out property <string> loading-message;
     in-out property <string> loading-detail;
-    // Controller setup overlay (see controller_setup.slint).
-    in-out property <bool> setup-visible;
-    // 0=hidden, 1=detected, 2=new-or-existing, 3=pick-existing, 4=configure
-    in-out property <int> setup-phase;
-    in-out property <string> setup-title;
-    in-out property <string> setup-subtitle;
-    in-out property <[string]> setup-list;
-    in-out property <int> setup-selected;
-    in-out property <[string]> setup-config-labels;
-    in-out property <[string]> setup-config-values;
-    in-out property <string> setup-name;
-    in-out property <string> setup-kind-label;
     callback quit-requested();
 }

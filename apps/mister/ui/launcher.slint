@@ -106,7 +106,7 @@ export component Launcher inherits MisterWindow {
     if MisterUi.crt-layout : CrtLauncherUi { }
     if !MisterUi.crt-layout : HdmiLauncherUi { }
 
-    if MisterBridge.input-fault-notice != "" : Rectangle {
+    if InputView.fault-notice != "" : Rectangle {
         x: 12px;
         y: 12px;
         width: parent.width - 24px;
@@ -119,7 +119,7 @@ export component Launcher inherits MisterWindow {
             x: 12px;
             width: parent.width - 24px;
             height: parent.height;
-            text: MisterBridge.input-fault-notice;
+            text: InputView.fault-notice;
             color: white;
             size: Start2PSize.px8;
             vertical-alignment: center;
@@ -130,7 +130,7 @@ export component Launcher inherits MisterWindow {
             x: 12px;
             width: parent.width - 24px;
             height: parent.height;
-            text: MisterBridge.input-fault-notice;
+            text: InputView.fault-notice;
             color: white;
             size: MisterUi.crt-body-font;
             vertical-alignment: center;

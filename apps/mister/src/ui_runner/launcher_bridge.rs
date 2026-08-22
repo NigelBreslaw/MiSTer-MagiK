@@ -401,8 +401,6 @@ impl<'a, 'b> LauncherStatusPresenter<'a, 'b> {
             -1,
         ));
         self.sync_media_progresses(empty_media_pack_progress_model(), "");
-        self.sync_setup_visible(false);
-        self.bridge.set_setup_phase(0);
     }
 
     pub(super) fn sync_loading(&self, message: impl AsRef<str>, detail: impl AsRef<str>) {
@@ -452,10 +450,6 @@ impl<'a, 'b> LauncherStatusPresenter<'a, 'b> {
         self.bridge
             .set_media_pack_summary(SharedString::from(summary.as_ref()));
     }
-
-    pub(super) fn sync_setup_visible(&self, visible: bool) {
-        self.bridge.set_setup_visible(visible);
-    }
 }
 
 fn empty_media_pack_progress_model() -> ModelRc<slint_ui::launcher::ScreenshotPackProgress> {
@@ -465,7 +459,7 @@ fn empty_media_pack_progress_model() -> ModelRc<slint_ui::launcher::ScreenshotPa
 }
 
 pub(super) fn sync_bridge(app: &slint_ui::controller::ControllerTest, pad: &PadPool) {
-    sync_bridge_pad_controller(&app.global::<slint_ui::controller::MisterBridge>(), pad);
+    sync_bridge_pad_controller(&app.global::<slint_ui::controller::InputView>(), pad);
 }
 
 pub(super) fn sync_confirm_bridge(
@@ -809,7 +803,6 @@ pub(super) fn sync_bridge_launcher_light(
     nav: &LauncherNav,
     lifecycle: &LauncherLifecycle,
     models: &mut LauncherBridgeModels,
-    setup: &SetupNav,
     loading_message: &str,
     loading_detail: &str,
     catalog: &ArcadeCatalog,
@@ -847,7 +840,6 @@ pub(super) fn sync_bridge_launcher_light(
             nav.arcade.is_turbo_active(),
         );
     }
-    status_presenter.sync_setup_visible(setup.is_active());
     LauncherBridgeSyncTiming {
         model_projection_us,
     }
@@ -1867,7 +1859,6 @@ mod tests {
             &nav,
             &lifecycle,
             &mut models,
-            &SetupNav::new(),
             "",
             "",
             &catalog,
@@ -1961,7 +1952,6 @@ mod tests {
                     &nav,
                     &lifecycle,
                     &mut models,
-                    &setup,
                     "",
                     "",
                     &catalog,

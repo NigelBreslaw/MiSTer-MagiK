@@ -3956,21 +3956,23 @@ mod macos {
         let navigation = launcher.global::<NavigationView>();
         let settings = launcher.global::<SettingsView>();
         let information = launcher.global::<InformationView>();
+        let input = launcher.global::<InputView>();
         navigation.set_clock_text("12:34".into());
         navigation.set_build_label("Mac visual preview".into());
         navigation.set_present_mode_label("RGB565 host composition".into());
         information.set_build_label("Mac visual preview".into());
         information.set_present_mode_label("RGB565 host composition".into());
-        bridge.set_capture_available(true);
-        bridge.set_device_label("Controller 1".into());
-        bridge.set_device_name("Fixture Gamepad".into());
-        bridge.set_usb_port("USB 1-2".into());
-        bridge.set_usb_id("045e:028e".into());
-        bridge.set_serial_id("PREVIEW-0001".into());
-        bridge.set_js_counts("16 buttons · 6 axes".into());
-        bridge.set_pressed_now("A · D-pad Right".into());
-        bridge.set_last_event_label("Button A pressed".into());
-        bridge.set_last_raw_event("type=1 code=304 value=1".into());
+        input.set_capture_availability(InputAvailability::Available);
+        input.set_input_availability(InputAvailability::Available);
+        input.set_device_label("Controller 1".into());
+        input.set_device_name("Fixture Gamepad".into());
+        input.set_usb_port("USB 1-2".into());
+        input.set_usb_id("045e:028e".into());
+        input.set_serial_id("PREVIEW-0001".into());
+        input.set_js_counts("16 buttons · 6 axes".into());
+        input.set_pressed_now("A · D-pad Right".into());
+        input.set_last_event_label("Button A pressed".into());
+        input.set_last_raw_event("type=1 code=304 value=1".into());
         let display_resolutions = settings_display_resolutions().collect::<Vec<_>>();
         settings.set_display_options(ModelRc::new(VecModel::from(
             display_resolutions
@@ -4015,102 +4017,14 @@ mod macos {
         ]);
         settings.set_license_lines(license_lines);
         settings.set_license_titles(strings(&mister_magik_fb::licenses::LICENSE_TITLES));
-        sync_preview_input_view(launcher);
-    }
-
-    fn sync_preview_input_view(launcher: &Launcher) {
-        let bridge = launcher.global::<MisterBridge>();
-        let input = launcher.global::<InputView>();
-        input.set_dpad_up(bridge.get_dpad_up());
-        input.set_dpad_down(bridge.get_dpad_down());
-        input.set_dpad_left(bridge.get_dpad_left());
-        input.set_dpad_right(bridge.get_dpad_right());
-        input.set_button_a(bridge.get_btn_a());
-        input.set_button_b(bridge.get_btn_b());
-        input.set_button_x(bridge.get_btn_x());
-        input.set_button_y(bridge.get_btn_y());
-        input.set_button_l(bridge.get_btn_l());
-        input.set_button_r(bridge.get_btn_r());
-        input.set_button_zl(bridge.get_btn_zl());
-        input.set_button_zr(bridge.get_btn_zr());
-        input.set_button_select(bridge.get_btn_select());
-        input.set_button_start(bridge.get_btn_start());
-        input.set_button_l3(bridge.get_btn_l3());
-        input.set_button_r3(bridge.get_btn_r3());
-        input.set_button_home(bridge.get_btn_home());
-        input.set_button_capture(bridge.get_btn_capture());
-        input.set_capture_availability(if bridge.get_capture_available() {
-            InputAvailability::Available
-        } else {
-            InputAvailability::Unavailable
-        });
-        input.set_left_x(bridge.get_left_x());
-        input.set_left_y(bridge.get_left_y());
-        input.set_right_x(bridge.get_right_x());
-        input.set_right_y(bridge.get_right_y());
-        input.set_device_label(bridge.get_device_label());
-        input.set_device_name(bridge.get_device_name());
-        input.set_usb_port(bridge.get_usb_port());
-        input.set_usb_id(bridge.get_usb_id());
-        input.set_serial_id(bridge.get_serial_id());
-        input.set_js_counts(bridge.get_js_counts());
-        input.set_pressed_now(bridge.get_pressed_now());
-        input.set_last_event_label(bridge.get_last_event_label());
-        input.set_last_raw_event(bridge.get_last_raw_event());
-        input.set_fault_notice(bridge.get_input_fault_notice());
-        input.set_input_availability(if bridge.get_input_fault_notice().is_empty() {
-            InputAvailability::Available
-        } else {
-            InputAvailability::Unavailable
-        });
-    }
-
-    fn sync_preview_setup_view(launcher: &Launcher) {
-        let bridge = launcher.global::<MisterBridge>();
-        let setup = launcher.global::<SetupView>();
-        setup.set_phase(match bridge.get_setup_phase() {
-            0 => ViewSetupPhase::None,
-            1 => ViewSetupPhase::Detected,
-            2 => ViewSetupPhase::NewOrExisting,
-            3 => ViewSetupPhase::PickExisting,
-            4 => ViewSetupPhase::Configure,
-            5 => ViewSetupPhase::NameKind,
-            value => panic!("unknown preview setup phase {value}"),
-        });
-        setup.set_title(bridge.get_setup_title());
-        setup.set_subtitle(bridge.get_setup_subtitle());
-        setup.set_selected_entry_index(bridge.get_setup_selected());
-        setup.set_entries(ModelRc::new(VecModel::from(
-            (0..bridge.get_setup_list().row_count())
-                .filter_map(|index| {
-                    Some(SetupEntry {
-                        id: format!("preview-setup-{index}").into(),
-                        label: bridge.get_setup_list().row_data(index)?,
-                    })
-                })
-                .collect::<Vec<_>>(),
-        )));
-        setup.set_fields(ModelRc::new(VecModel::from(
-            (0..bridge
-                .get_setup_config_labels()
-                .row_count()
-                .min(bridge.get_setup_config_values().row_count()))
-                .filter_map(|index| {
-                    Some(SetupField {
-                        label: bridge.get_setup_config_labels().row_data(index)?,
-                        value: bridge.get_setup_config_values().row_data(index)?,
-                    })
-                })
-                .collect::<Vec<_>>(),
-        )));
-        setup.set_name(bridge.get_setup_name());
-        setup.set_kind_label(bridge.get_setup_kind_label());
     }
 
     fn apply_scenario(launcher: &Launcher, scenario: Scenario) {
         let bridge = launcher.global::<MisterBridge>();
         let navigation = launcher.global::<NavigationView>();
+        let setup = launcher.global::<SetupView>();
         reset_transient_bridge(&bridge);
+        setup.set_phase(ViewSetupPhase::None);
         navigation.set_screen(match scenario {
             Scenario::Controller | Scenario::ControllerSetup => LauncherScreen::Controller,
             Scenario::SystemHub => LauncherScreen::SystemHub,
@@ -4204,21 +4118,31 @@ mod macos {
                 ])));
             }
             Scenario::ControllerSetup => {
-                bridge.set_setup_visible(true);
-                bridge.set_setup_phase(4);
-                bridge.set_setup_title("Configure Fixture Gamepad".into());
-                bridge.set_setup_subtitle("Press the requested control".into());
-                bridge.set_setup_list(strings(&["D-pad", "Buttons", "Shoulders", "System"]));
-                bridge.set_setup_selected(1);
-                bridge.set_setup_config_labels(strings(&["A", "B", "X", "Y", "Start"]));
-                bridge.set_setup_config_values(strings(&["Button 0", "Button 1", "—", "—", "—"]));
-                bridge.set_setup_name("Fixture Gamepad".into());
-                bridge.set_setup_kind_label("Standard controller".into());
+                setup.set_phase(ViewSetupPhase::Configure);
+                setup.set_title("Configure Fixture Gamepad".into());
+                setup.set_subtitle("Press the requested control".into());
+                setup.set_entries(ModelRc::new(VecModel::from(Vec::<SetupEntry>::new())));
+                setup.set_selected_entry_index(1);
+                setup.set_fields(ModelRc::new(VecModel::from(
+                    [
+                        ("A", "Button 0"),
+                        ("B", "Button 1"),
+                        ("X", "—"),
+                        ("Y", "—"),
+                        ("Start", "—"),
+                    ]
+                    .into_iter()
+                    .map(|(label, value)| SetupField {
+                        label: label.into(),
+                        value: value.into(),
+                    })
+                    .collect::<Vec<_>>(),
+                )));
+                setup.set_name("Fixture Gamepad".into());
+                setup.set_kind_label("Standard controller".into());
             }
             _ => {}
         }
-        sync_preview_input_view(launcher);
-        sync_preview_setup_view(launcher);
         launcher.window().request_redraw();
     }
 
@@ -4233,7 +4157,6 @@ mod macos {
             Vec::<ScreenshotPackProgress>::new(),
         )));
         bridge.set_media_pack_summary("".into());
-        bridge.set_setup_visible(false);
         bridge.set_arcade_games_loading(false);
         bridge.set_arcade_preview_placeholder_visible(true);
     }
@@ -4549,7 +4472,7 @@ mod macos {
             arcade_search_status: i32,
             arcade_search_pane: i32,
             setup_visible: bool,
-            setup_phase: i32,
+            setup_phase: ViewSetupPhase,
             catalog_scan_visible: bool,
             catalog_scan_percent: i32,
             media_progress_rows: usize,
@@ -4560,25 +4483,27 @@ mod macos {
 
         fn bridge_semantic_snapshot(launcher: &Launcher) -> BridgeSemanticSnapshot {
             let bridge = launcher.global::<MisterBridge>();
+            let setup = launcher.global::<SetupView>();
+            let input = launcher.global::<InputView>();
             BridgeSemanticSnapshot {
                 screen: launcher.global::<NavigationView>().get_screen(),
                 settings_section: launcher.global::<SettingsView>().get_section(),
                 arcade_search_active: bridge.get_arcade_search_active(),
                 arcade_search_status: bridge.get_arcade_search_status(),
                 arcade_search_pane: bridge.get_arcade_search_pane(),
-                setup_visible: bridge.get_setup_visible(),
-                setup_phase: bridge.get_setup_phase(),
+                setup_visible: setup.get_phase() != ViewSetupPhase::None,
+                setup_phase: setup.get_phase(),
                 catalog_scan_visible: bridge.get_catalog_scan_visible(),
                 catalog_scan_percent: bridge.get_catalog_scan_percent(),
                 media_progress_rows: bridge.get_media_pack_progresses().row_count(),
                 confirm_visible: bridge.get_confirm_visible(),
                 loading_visible: !bridge.get_loading_message().is_empty(),
-                input_active: bridge.get_dpad_up()
-                    || bridge.get_dpad_down()
-                    || bridge.get_dpad_left()
-                    || bridge.get_dpad_right()
-                    || bridge.get_btn_a()
-                    || bridge.get_btn_b(),
+                input_active: input.get_dpad_up()
+                    || input.get_dpad_down()
+                    || input.get_dpad_left()
+                    || input.get_dpad_right()
+                    || input.get_button_a()
+                    || input.get_button_b(),
             }
         }
 
@@ -4610,25 +4535,19 @@ mod macos {
             }
         }
 
-        fn assert_input_setup_dual_projection(launcher: &Launcher) {
-            let bridge = launcher.global::<MisterBridge>();
+        fn assert_input_setup_projection(launcher: &Launcher) {
             let input = launcher.global::<InputView>();
-            assert_eq!(input.get_dpad_up(), bridge.get_dpad_up());
-            assert_eq!(input.get_dpad_down(), bridge.get_dpad_down());
-            assert_eq!(input.get_button_a(), bridge.get_btn_a());
-            assert_eq!(input.get_button_b(), bridge.get_btn_b());
-            assert_eq!(input.get_device_name(), bridge.get_device_name());
+            assert_eq!(input.get_input_availability(), InputAvailability::Available);
+            assert_eq!(
+                input.get_capture_availability(),
+                InputAvailability::Available
+            );
             let setup = launcher.global::<SetupView>();
-            assert_eq!(
-                setup.get_phase() != ViewSetupPhase::None,
-                bridge.get_setup_visible()
-            );
-            assert_eq!(setup.get_title(), bridge.get_setup_title());
-            assert_eq!(setup.get_subtitle(), bridge.get_setup_subtitle());
-            assert_eq!(
-                setup.get_selected_entry_index(),
-                bridge.get_setup_selected()
-            );
+            if setup.get_phase() == ViewSetupPhase::None {
+                assert!(setup.get_title().is_empty());
+            } else {
+                assert!(!setup.get_title().is_empty());
+            }
         }
 
         fn manifest_scenario(scenario: SceneScenario) -> Scenario {
@@ -4649,7 +4568,7 @@ mod macos {
         }
 
         #[test]
-        fn every_manifest_scene_has_profile_independent_legacy_semantics() {
+        fn every_manifest_scene_has_profile_independent_semantics() {
             init_test_slint_platform();
             let manifest = launcher_scene_manifest().expect("launcher scene manifest");
             let mut expected_by_scenario = BTreeMap::new();
@@ -4660,7 +4579,7 @@ mod macos {
                 apply_scenario(&launcher, manifest_scenario(scene.scenario));
                 assert_navigation_projection(&launcher);
                 assert_settings_projection(&launcher);
-                assert_input_setup_dual_projection(&launcher);
+                assert_input_setup_projection(&launcher);
                 let snapshot = bridge_semantic_snapshot(&launcher);
                 if let Some(expected) = expected_by_scenario.get(&scene.scenario) {
                     assert_eq!(&snapshot, expected, "semantic drift in {}", scene.id);
@@ -4673,7 +4592,7 @@ mod macos {
         }
 
         #[test]
-        fn representative_legacy_states_are_distinguishable_without_rendering() {
+        fn representative_states_are_distinguishable_without_rendering() {
             init_test_slint_platform();
             let cases = [
                 (Scenario::ArcadeSearch, "arcade-search"),
@@ -4699,6 +4618,20 @@ mod macos {
         }
 
         #[test]
+        fn input_view_preserves_simultaneous_button_facts() {
+            init_test_slint_platform();
+            let launcher = Launcher::new().expect("launcher");
+            initialize_bridge(&launcher, DisplayProfile::Hdmi);
+            let input = launcher.global::<InputView>();
+
+            input.set_button_a(true);
+            input.set_button_b(true);
+
+            assert!(input.get_button_a());
+            assert!(input.get_button_b());
+        }
+
+        #[test]
         fn production_and_preview_presenters_share_navigation_fixture_semantics() {
             init_test_slint_platform();
             for screen in [Screen::Home, Screen::Settings, Screen::Arcade] {
@@ -4715,14 +4648,14 @@ mod macos {
                 presenter.sync(&production, &nav, &fixtures.catalog, Some(1), false);
                 assert_navigation_projection(&production);
                 assert_settings_projection(&production);
-                assert_input_setup_dual_projection(&production);
+                assert_input_setup_projection(&production);
 
                 let preview = Launcher::new().expect("preview launcher fixture");
                 initialize_bridge(&preview, DisplayProfile::Hdmi);
                 apply_scenario(&preview, Scenario::from_screen(screen));
                 assert_navigation_projection(&preview);
                 assert_settings_projection(&preview);
-                assert_input_setup_dual_projection(&preview);
+                assert_input_setup_projection(&preview);
 
                 let production_snapshot = bridge_semantic_snapshot(&production);
                 let preview_snapshot = bridge_semantic_snapshot(&preview);

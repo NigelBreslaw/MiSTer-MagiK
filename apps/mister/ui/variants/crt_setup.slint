@@ -4,19 +4,18 @@
 import { Spleen6x12 } from "../components/spleen_6x12.slint";
 
 import { MisterUi } from "../mister_window.slint";
-import { MisterBridge } from "../api.slint";
+import { FeedbackView, SetupEntry, SetupField, SetupPhase, SetupView } from "../api.slint";
 import { CrtTheme, CrtHeader, CrtFooter, CrtMenuRow } from "../components/crt_ui.slint";
 
 export component SetupOverlay inherits Rectangle {
-    in property <int> phase;
-    in property <string> title;
-    in property <string> subtitle;
-    in property <[string]> list-items;
-    in property <int> list-selected;
-    in property <[string]> config-labels;
-    in property <[string]> config-values;
-    in property <string> setup-name;
-    in property <string> setup-kind-label;
+    property <SetupPhase> phase: SetupView.phase;
+    property <string> title: SetupView.title;
+    property <string> subtitle: SetupView.subtitle;
+    property <[SetupEntry]> list-items: SetupView.entries;
+    property <int> list-selected: SetupView.selected-entry-index;
+    property <[SetupField]> fields: SetupView.fields;
+    property <string> setup-name: SetupView.name;
+    property <string> setup-kind-label: SetupView.kind-label;
     property <int> setup-visible-rows: 7;
     property <int> setup-first-visible: (root.list-selected - 3).clamp(
         0,
@@ -34,7 +33,7 @@ export component SetupOverlay inherits Rectangle {
 
         CrtHeader { title: root.title; subtitle: "Controller setup"; status: ""; }
 
-        if root.phase != 4 : Spleen6x12 {
+        if root.phase != SetupPhase.configure : Spleen6x12 {
             text: root.subtitle;
             color: CrtTheme.muted;
             size: MisterUi.crt-body-font;
@@ -42,20 +41,20 @@ export component SetupOverlay inherits Rectangle {
             wrap: word-wrap;
         }
 
-        if root.phase == 2 : CrtMenuRow {
+        if root.phase == SetupPhase.new-or-existing : CrtMenuRow {
             label: "New controller";
             detail: "Create";
             focused: root.list-selected == 0;
-            acknowledged: MisterBridge.selection-feedback-query("", "new", MisterBridge.selection-feedback-revision);
+            acknowledged: FeedbackView.acknowledged("", "new", FeedbackView.revision);
         }
-        if root.phase == 2 : CrtMenuRow {
+        if root.phase == SetupPhase.new-or-existing : CrtMenuRow {
             label: "Existing controller";
             detail: "Rebind";
             focused: root.list-selected == 1;
-            acknowledged: MisterBridge.selection-feedback-query("", "existing", MisterBridge.selection-feedback-revision);
+            acknowledged: FeedbackView.acknowledged("", "existing", FeedbackView.revision);
         }
 
-        if root.phase == 3 : Rectangle {
+        if root.phase == SetupPhase.pick-existing : Rectangle {
             vertical-stretch: 1;
             background: transparent;
             clip: true;
@@ -64,21 +63,21 @@ export component SetupOverlay inherits Rectangle {
                 y: (i - root.setup-first-visible) * parent.height / root.setup-visible-rows;
                 width: parent.width;
                 height: parent.height / root.setup-visible-rows;
-                label: item;
+                label: item.label;
                 detail: "";
                 focused: root.list-selected == i;
-                acknowledged: MisterBridge.selection-feedback-query("", "saved:" + i, MisterBridge.selection-feedback-revision);
+                acknowledged: FeedbackView.acknowledged("", "saved:" + i, FeedbackView.revision);
             }
         }
 
-        if root.phase == 4 : Spleen6x12 {
+        if root.phase == SetupPhase.configure : Spleen6x12 {
             text: root.subtitle;
             color: CrtTheme.accent;
             size: MisterUi.crt-body-font;
             horizontal-alignment: center;
             wrap: word-wrap;
         }
-        if root.phase == 4 : Rectangle {
+        if root.phase == SetupPhase.configure : Rectangle {
             vertical-stretch: 1;
             background: CrtTheme.panel;
             border-width: MisterUi.border;
@@ -88,21 +87,21 @@ export component SetupOverlay inherits Rectangle {
                 width: 100%;
                 height: 100%;
                 VerticalLayout {
-                    for label[i] in root.config-labels : CrtMenuRow {
-                        label: label;
-                        detail: root.config-values[i];
+                    for field in root.fields : CrtMenuRow {
+                        label: field.label;
+                        detail: field.value;
                         focused: false;
                     }
                 }
             }
         }
 
-        if root.phase == 5 : CrtMenuRow {
+        if root.phase == SetupPhase.name-kind : CrtMenuRow {
             label: "Name";
             detail: root.setup-name;
             focused: false;
         }
-        if root.phase == 5 : CrtMenuRow {
+        if root.phase == SetupPhase.name-kind : CrtMenuRow {
             label: "Type";
             detail: root.setup-kind-label;
             focused: true;
@@ -110,9 +109,9 @@ export component SetupOverlay inherits Rectangle {
 
         Rectangle { vertical-stretch: 1; background: transparent; }
         CrtFooter {
-            left-hint: root.phase == 1 ? "BUTTON Continue"
-                : root.phase == 4 ? "A Continue"
-                : root.phase == 5 ? "DPAD Type   A Save" : "DPAD Choose   A Confirm";
+            left-hint: root.phase == SetupPhase.detected ? "BUTTON Continue"
+                : root.phase == SetupPhase.configure ? "A Continue"
+                : root.phase == SetupPhase.name-kind ? "DPAD Type   A Save" : "DPAD Choose   A Confirm";
             right-hint: "";
         }
     }

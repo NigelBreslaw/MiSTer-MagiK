@@ -529,15 +529,14 @@ pub(super) fn sync_setup_bridge(
     pad: &PadPool,
     setup: &SetupNav,
 ) {
-    let bridge = app.global::<slint_ui::launcher::MisterBridge>();
     let info = setup_pad_info(pad, setup);
     let db = pad.db();
     let active = setup.phase != SetupPhase::None;
-    bridge.set_setup_visible(active);
-    bridge.set_setup_phase(setup.phase as i32);
+    let view = app.global::<slint_ui::launcher::SetupView>();
+    view.set_phase(crate::launcher_view_types::setup_phase(setup.phase));
+    view.set_selected_entry_index(setup.list_index as i32);
     if active {
-        bridge.set_setup_title(setup.title().into());
-        bridge.set_setup_selected(setup.list_index as i32);
+        view.set_title(setup.title().into());
         let js_path = setup
             .target_device
             .as_ref()
@@ -546,36 +545,35 @@ pub(super) fn sync_setup_bridge(
 
         if setup.phase == SetupPhase::Configure {
             let fields = SetupNav::configure_fields(info, js_path, db);
-            let labels: Vec<SharedString> = fields.iter().map(|(k, _)| k.clone().into()).collect();
-            let values: Vec<SharedString> = fields.iter().map(|(_, v)| v.clone().into()).collect();
-            bridge.set_setup_config_labels(ModelRc::new(VecModel::from(labels)));
-            bridge.set_setup_config_values(ModelRc::new(VecModel::from(values)));
-            bridge.set_setup_list(ModelRc::new(VecModel::from(Vec::<SharedString>::new())));
+            view.set_fields(ModelRc::new(VecModel::from(
+                fields
+                    .into_iter()
+                    .map(|(label, value)| slint_ui::launcher::SetupField {
+                        label: label.into(),
+                        value: value.into(),
+                    })
+                    .collect::<Vec<_>>(),
+            )));
+            view.set_entries(ModelRc::new(VecModel::from(Vec::new())));
             let live = setup
                 .target_device
                 .as_ref()
                 .and_then(|device| pad.state_for_device(device))
                 .map(SetupNav::configure_live_hint)
                 .unwrap_or_else(|| "Controller disconnected".into());
-            bridge.set_setup_subtitle(live.into());
-            bridge.set_setup_name(String::new().into());
-            bridge.set_setup_kind_label(String::new().into());
+            view.set_subtitle(live.into());
+            view.set_name(String::new().into());
+            view.set_kind_label(String::new().into());
         } else if setup.phase == SetupPhase::NameKind {
-            bridge.set_setup_subtitle(setup.subtitle(info, db).into());
-            bridge.set_setup_name(setup.draft_label.clone().into());
-            bridge.set_setup_kind_label(setup.draft_kind_label().into());
-            bridge.set_setup_list(ModelRc::new(VecModel::from(Vec::<SharedString>::new())));
-            bridge
-                .set_setup_config_labels(ModelRc::new(VecModel::from(Vec::<SharedString>::new())));
-            bridge
-                .set_setup_config_values(ModelRc::new(VecModel::from(Vec::<SharedString>::new())));
+            view.set_subtitle(setup.subtitle(info, db).into());
+            view.set_name(setup.draft_label.clone().into());
+            view.set_kind_label(setup.draft_kind_label().into());
+            view.set_entries(ModelRc::new(VecModel::from(Vec::new())));
+            view.set_fields(ModelRc::new(VecModel::from(Vec::new())));
         } else if setup.phase == SetupPhase::PickExisting {
-            bridge.set_setup_subtitle(setup.subtitle(info, db).into());
-            bridge
-                .set_setup_config_labels(ModelRc::new(VecModel::from(Vec::<SharedString>::new())));
-            bridge
-                .set_setup_config_values(ModelRc::new(VecModel::from(Vec::<SharedString>::new())));
-            let rows: Vec<SharedString> = db
+            view.set_subtitle(setup.subtitle(info, db).into());
+            view.set_fields(ModelRc::new(VecModel::from(Vec::new())));
+            let rows = db
                 .list_entries()
                 .iter()
                 .map(|item| {
@@ -584,129 +582,74 @@ pub(super) fn sync_setup_bridge(
                     } else {
                         format!("was {}", item.last_usb_port)
                     };
-                    format!("{} — {}", item.label, port).into()
-                })
-                .collect();
-            bridge.set_setup_list(ModelRc::new(VecModel::from(rows)));
-        } else {
-            bridge.set_setup_subtitle(setup.subtitle(info, db).into());
-            bridge.set_setup_list(ModelRc::new(VecModel::from(Vec::<SharedString>::new())));
-            bridge
-                .set_setup_config_labels(ModelRc::new(VecModel::from(Vec::<SharedString>::new())));
-            bridge
-                .set_setup_config_values(ModelRc::new(VecModel::from(Vec::<SharedString>::new())));
-            bridge.set_setup_name(String::new().into());
-            bridge.set_setup_kind_label(String::new().into());
-        }
-    }
-    let view = app.global::<slint_ui::launcher::SetupView>();
-    view.set_phase(crate::launcher_view_types::setup_phase(setup.phase));
-    view.set_title(bridge.get_setup_title());
-    view.set_subtitle(bridge.get_setup_subtitle());
-    view.set_selected_entry_index(setup.list_index as i32);
-    let entries = if setup.phase == SetupPhase::PickExisting {
-        db.list_entries()
-            .into_iter()
-            .map(|item| slint_ui::launcher::SetupEntry {
-                id: item.id.into(),
-                label: format!(
-                    "{} — {}",
-                    item.label,
-                    if item.last_usb_port.is_empty() {
-                        "unknown port".to_string()
-                    } else {
-                        format!("was {}", item.last_usb_port)
+                    slint_ui::launcher::SetupEntry {
+                        id: item.id.clone().into(),
+                        label: format!("{} — {}", item.label, port).into(),
                     }
-                )
-                .into(),
-            })
-            .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>();
+            view.set_entries(ModelRc::new(VecModel::from(rows)));
+            view.set_name(String::new().into());
+            view.set_kind_label(String::new().into());
+        } else {
+            view.set_subtitle(setup.subtitle(info, db).into());
+            view.set_entries(ModelRc::new(VecModel::from(Vec::new())));
+            view.set_fields(ModelRc::new(VecModel::from(Vec::new())));
+            view.set_name(String::new().into());
+            view.set_kind_label(String::new().into());
+        }
     } else {
-        Vec::new()
-    };
-    view.set_entries(ModelRc::new(VecModel::from(entries)));
-    let labels = bridge.get_setup_config_labels();
-    let values = bridge.get_setup_config_values();
-    let fields = (0..labels.row_count().min(values.row_count()))
-        .filter_map(|index| {
-            Some(slint_ui::launcher::SetupField {
-                label: labels.row_data(index)?,
-                value: values.row_data(index)?,
-            })
-        })
-        .collect::<Vec<_>>();
-    view.set_fields(ModelRc::new(VecModel::from(fields)));
-    view.set_name(bridge.get_setup_name());
-    view.set_kind_label(bridge.get_setup_kind_label());
+        view.set_title(String::new().into());
+        view.set_subtitle(String::new().into());
+        view.set_entries(ModelRc::new(VecModel::from(Vec::new())));
+        view.set_fields(ModelRc::new(VecModel::from(Vec::new())));
+        view.set_name(String::new().into());
+        view.set_kind_label(String::new().into());
+    }
 }
 
-pub(super) fn sync_bridge_pad_controller(
-    bridge: &slint_ui::controller::MisterBridge,
-    pad: &PadPool,
-) {
+pub(super) fn sync_bridge_pad_controller(view: &slint_ui::controller::InputView, pad: &PadPool) {
     let state = pad.state();
     let info = pad.info();
-    bridge.set_dpad_up(state.dpad_up);
-    bridge.set_dpad_down(state.dpad_down);
-    bridge.set_dpad_left(state.dpad_left);
-    bridge.set_dpad_right(state.dpad_right);
-    bridge.set_btn_a(state.btn_a);
-    bridge.set_btn_b(state.btn_b);
-    bridge.set_btn_x(state.btn_x);
-    bridge.set_btn_y(state.btn_y);
-    bridge.set_btn_l(state.btn_l);
-    bridge.set_btn_r(state.btn_r);
-    bridge.set_btn_zl(state.btn_zl);
-    bridge.set_btn_zr(state.btn_zr);
-    bridge.set_btn_select(state.btn_select);
-    bridge.set_btn_start(state.btn_start);
-    bridge.set_btn_l3(state.btn_l3);
-    bridge.set_btn_r3(state.btn_r3);
-    bridge.set_btn_home(state.btn_home);
-    bridge.set_btn_capture(state.btn_capture);
-    bridge.set_capture_available(info.capture_available);
-    bridge.set_left_x(state.left_x);
-    bridge.set_left_y(state.left_y);
-    bridge.set_right_x(state.right_x);
-    bridge.set_right_y(state.right_y);
-    sync_device_info_controller(bridge, info, pad.db(), pad.path(), pad.len());
-    bridge.set_pressed_now(state.pressed_now.clone().into());
-    bridge.set_last_event_label(state.last_event_label.clone().into());
-    bridge.set_last_raw_event(state.last_raw.clone().into());
+    view.set_dpad_up(state.dpad_up);
+    view.set_dpad_down(state.dpad_down);
+    view.set_dpad_left(state.dpad_left);
+    view.set_dpad_right(state.dpad_right);
+    view.set_button_a(state.btn_a);
+    view.set_button_b(state.btn_b);
+    view.set_button_x(state.btn_x);
+    view.set_button_y(state.btn_y);
+    view.set_button_l(state.btn_l);
+    view.set_button_r(state.btn_r);
+    view.set_button_zl(state.btn_zl);
+    view.set_button_zr(state.btn_zr);
+    view.set_button_select(state.btn_select);
+    view.set_button_start(state.btn_start);
+    view.set_button_l3(state.btn_l3);
+    view.set_button_r3(state.btn_r3);
+    view.set_button_home(state.btn_home);
+    view.set_button_capture(state.btn_capture);
+    view.set_capture_availability(if info.capture_available {
+        slint_ui::controller::InputAvailability::Available
+    } else {
+        slint_ui::controller::InputAvailability::Unavailable
+    });
+    view.set_input_availability(slint_ui::controller::InputAvailability::Available);
+    view.set_fault_notice(String::new().into());
+    view.set_left_x(state.left_x);
+    view.set_left_y(state.left_y);
+    view.set_right_x(state.right_x);
+    view.set_right_y(state.right_y);
+    sync_device_info_controller(view, info, pad.db(), pad.path(), pad.len());
+    view.set_pressed_now(state.pressed_now.clone().into());
+    view.set_last_event_label(state.last_event_label.clone().into());
+    view.set_last_raw_event(state.last_raw.clone().into());
 }
 
 pub(super) fn sync_bridge_pad_launcher(app: &slint_ui::launcher::Launcher, pad: &PadPool) {
-    let bridge = app.global::<slint_ui::launcher::MisterBridge>();
     let view = app.global::<slint_ui::launcher::InputView>();
     let state = pad.state();
     let info = pad.info();
-    bridge.set_dpad_up(state.dpad_up);
-    bridge.set_dpad_down(state.dpad_down);
-    bridge.set_dpad_left(state.dpad_left);
-    bridge.set_dpad_right(state.dpad_right);
-    bridge.set_btn_a(state.btn_a);
-    bridge.set_btn_b(state.btn_b);
-    bridge.set_btn_x(state.btn_x);
-    bridge.set_btn_y(state.btn_y);
-    bridge.set_btn_l(state.btn_l);
-    bridge.set_btn_r(state.btn_r);
-    bridge.set_btn_zl(state.btn_zl);
-    bridge.set_btn_zr(state.btn_zr);
-    bridge.set_btn_select(state.btn_select);
-    bridge.set_btn_start(state.btn_start);
-    bridge.set_btn_l3(state.btn_l3);
-    bridge.set_btn_r3(state.btn_r3);
-    bridge.set_btn_home(state.btn_home);
-    bridge.set_btn_capture(state.btn_capture);
-    bridge.set_capture_available(info.capture_available);
-    bridge.set_left_x(state.left_x);
-    bridge.set_left_y(state.left_y);
-    bridge.set_right_x(state.right_x);
-    bridge.set_right_y(state.right_y);
-    sync_device_info_launcher(bridge, info, pad.db(), pad.path(), pad.len());
-    bridge.set_pressed_now(state.pressed_now.clone().into());
-    bridge.set_last_event_label(state.last_event_label.clone().into());
-    bridge.set_last_raw_event(state.last_raw.clone().into());
     view.set_dpad_up(state.dpad_up);
     view.set_dpad_down(state.dpad_down);
     view.set_dpad_left(state.dpad_left);
@@ -734,49 +677,36 @@ pub(super) fn sync_bridge_pad_launcher(app: &slint_ui::launcher::Launcher, pad: 
     view.set_left_y(state.left_y);
     view.set_right_x(state.right_x);
     view.set_right_y(state.right_y);
-    view.set_device_label(bridge.get_device_label());
-    view.set_device_name(bridge.get_device_name());
-    view.set_usb_port(bridge.get_usb_port());
-    view.set_usb_id(bridge.get_usb_id());
-    view.set_serial_id(bridge.get_serial_id());
-    view.set_js_counts(bridge.get_js_counts());
-    view.set_pressed_now(state.pressed_now.clone().into());
-    view.set_last_event_label(state.last_event_label.clone().into());
-    view.set_last_raw_event(state.last_raw.clone().into());
-}
-
-pub(super) fn sync_device_info_controller(
-    bridge: &slint_ui::controller::MisterBridge,
-    info: &PadInfo,
-    db: &ControllerDb,
-    js_path: &str,
-    pad_count: usize,
-) {
-    let label = if pad_count > 1 {
-        format!("{js_path} ({pad_count} pads)")
-    } else {
-        js_path.to_string()
-    };
-    bridge.set_device_label(label.into());
-    bridge.set_device_name(db.display_label(info).into());
-    bridge.set_usb_port(info.usb_port.clone().into());
-    bridge.set_usb_id(format!("{}:{}", info.vendor_id, info.product_id).into());
-    bridge.set_serial_id(if info.serial.is_empty() {
+    view.set_device_label(
+        if pad.len() > 1 {
+            format!("{} ({} pads)", pad.path(), pad.len())
+        } else {
+            pad.path().to_string()
+        }
+        .into(),
+    );
+    view.set_device_name(pad.db().display_label(info).into());
+    view.set_usb_port(info.usb_port.clone().into());
+    view.set_usb_id(format!("{}:{}", info.vendor_id, info.product_id).into());
+    view.set_serial_id(if info.serial.is_empty() {
         "(no serial)".into()
     } else {
         info.serial.clone().into()
     });
-    bridge.set_js_counts(
+    view.set_js_counts(
         format!(
             "js API: {} buttons, {} axes · evdev: {} keys, {} abs axes",
             info.js_buttons, info.js_axes, info.evdev_key_count, info.evdev_abs_count
         )
         .into(),
     );
+    view.set_pressed_now(state.pressed_now.clone().into());
+    view.set_last_event_label(state.last_event_label.clone().into());
+    view.set_last_raw_event(state.last_raw.clone().into());
 }
 
-pub(super) fn sync_device_info_launcher(
-    bridge: &slint_ui::launcher::MisterBridge,
+pub(super) fn sync_device_info_controller(
+    view: &slint_ui::controller::InputView,
     info: &PadInfo,
     db: &ControllerDb,
     js_path: &str,
@@ -787,16 +717,16 @@ pub(super) fn sync_device_info_launcher(
     } else {
         js_path.to_string()
     };
-    bridge.set_device_label(label.into());
-    bridge.set_device_name(db.display_label(info).into());
-    bridge.set_usb_port(info.usb_port.clone().into());
-    bridge.set_usb_id(format!("{}:{}", info.vendor_id, info.product_id).into());
-    bridge.set_serial_id(if info.serial.is_empty() {
+    view.set_device_label(label.into());
+    view.set_device_name(db.display_label(info).into());
+    view.set_usb_port(info.usb_port.clone().into());
+    view.set_usb_id(format!("{}:{}", info.vendor_id, info.product_id).into());
+    view.set_serial_id(if info.serial.is_empty() {
         "(no serial)".into()
     } else {
         info.serial.clone().into()
     });
-    bridge.set_js_counts(
+    view.set_js_counts(
         format!(
             "js API: {} buttons, {} axes · evdev: {} keys, {} abs axes",
             info.js_buttons, info.js_axes, info.evdev_key_count, info.evdev_abs_count

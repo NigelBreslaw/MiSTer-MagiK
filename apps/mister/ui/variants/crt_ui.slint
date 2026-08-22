@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import { MisterUi } from "../mister_window.slint";
-import { LauncherScreen, MisterBridge, NavigationView, SettingsPopup, SettingsView } from "../api.slint";
+import { LauncherScreen, MisterBridge, NavigationView, SettingsPopup, SettingsView, SetupPhase, SetupView } from "../api.slint";
 import { CrtTheme } from "../components/crt_ui.slint";
 import { CrtControllerPanel } from "../views/crt/controller_panel.slint";
 import { SetupOverlay } from "crt_setup.slint";
@@ -46,17 +46,7 @@ export component CrtLauncherUi inherits Rectangle {
         if NavigationView.screen == LauncherScreen.system-hub : SystemHubScreen { }
 
         if MisterBridge.catalog-background-scan-visible : BackgroundScanBadge { }
-        if MisterBridge.setup-visible : SetupOverlay {
-            phase: MisterBridge.setup-phase;
-            title: MisterBridge.setup-title;
-            subtitle: MisterBridge.setup-subtitle;
-            list-items: MisterBridge.setup-list;
-            list-selected: MisterBridge.setup-selected;
-            config-labels: MisterBridge.setup-config-labels;
-            config-values: MisterBridge.setup-config-values;
-            setup-name: MisterBridge.setup-name;
-            setup-kind-label: MisterBridge.setup-kind-label;
-        }
+        if SetupView.phase != SetupPhase.none : SetupOverlay { }
         if !MisterBridge.catalog-scan-visible && MisterBridge.media-pack-progresses.length > 0 : MediaProgressPopup {
         }
         if MisterBridge.catalog-scan-visible : CatalogScanPopup { }

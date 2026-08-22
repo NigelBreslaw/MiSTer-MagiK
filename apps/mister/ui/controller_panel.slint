@@ -4,10 +4,9 @@
 import { Start2P, Start2PSize } from "components/start2p.slint";
 import { Nocive15, Nocive15Size } from "components/nocive_15.slint";
 
-import { MisterBridge } from "api.slint";
+import { InputAvailability, InputView } from "api.slint";
 import { MisterUi } from "mister_window.slint";
 import "fonts/PressStart2P-Regular.ttf";
-export { MisterBridge }
 
 // Palette — flat fills only (software renderer friendly).
 global ControllerColors {
@@ -445,7 +444,7 @@ export component ControllerPanel inherits Rectangle {
             VerticalLayout {
                 spacing: 4px;
                 Start2P {
-                    text: MisterBridge.device-name;
+                    text: InputView.device-name;
                     color: #e8e0f0;
                     size: Start2PSize.px32;
                 }
@@ -462,19 +461,19 @@ export component ControllerPanel inherits Rectangle {
                 spacing: 6px;
                 alignment: end;
                 Nocive15 {
-                    text: "USB " + MisterBridge.usb-port;
+                    text: "USB " + InputView.usb-port;
                     color: #06d6a0;
                     size: Nocive15Size.px15;
                     horizontal-alignment: right;
                 }
                 Nocive15 {
-                    text: MisterBridge.usb-id + "  ·  " + MisterBridge.serial-id;
+                    text: InputView.usb-id + "  ·  " + InputView.serial-id;
                     color: #9080a8;
                     size: Nocive15Size.px15;
                     horizontal-alignment: right;
                 }
                 Nocive15 {
-                    text: MisterBridge.js-counts;
+                    text: InputView.js-counts;
                     color: #706080;
                     size: Nocive15Size.px15;
                     horizontal-alignment: right;
@@ -487,27 +486,27 @@ export component ControllerPanel inherits Rectangle {
             ControllerBody {
                 x: (parent.width - self.width) / 2;
                 y: (parent.height - self.height) / 2;
-                dpad-up: MisterBridge.dpad-up;
-                dpad-down: MisterBridge.dpad-down;
-                dpad-left: MisterBridge.dpad-left;
-                dpad-right: MisterBridge.dpad-right;
-                btn-a: MisterBridge.btn-a;
-                btn-b: MisterBridge.btn-b;
-                btn-x: MisterBridge.btn-x;
-                btn-y: MisterBridge.btn-y;
-                btn-l: MisterBridge.btn-l;
-                btn-r: MisterBridge.btn-r;
-                btn-zl: MisterBridge.btn-zl;
-                btn-zr: MisterBridge.btn-zr;
-                btn-select: MisterBridge.btn-select;
-                btn-start: MisterBridge.btn-start;
-                btn-home: MisterBridge.btn-home;
-                btn-capture: MisterBridge.btn-capture;
-                capture-available: MisterBridge.capture-available;
-                left-x: MisterBridge.left-x;
-                left-y: MisterBridge.left-y;
-                right-x: MisterBridge.right-x;
-                right-y: MisterBridge.right-y;
+                dpad-up: InputView.dpad-up;
+                dpad-down: InputView.dpad-down;
+                dpad-left: InputView.dpad-left;
+                dpad-right: InputView.dpad-right;
+                btn-a: InputView.button-a;
+                btn-b: InputView.button-b;
+                btn-x: InputView.button-x;
+                btn-y: InputView.button-y;
+                btn-l: InputView.button-l;
+                btn-r: InputView.button-r;
+                btn-zl: InputView.button-zl;
+                btn-zr: InputView.button-zr;
+                btn-select: InputView.button-select;
+                btn-start: InputView.button-start;
+                btn-home: InputView.button-home;
+                btn-capture: InputView.button-capture;
+                capture-available: InputView.capture-availability == InputAvailability.available;
+                left-x: InputView.left-x;
+                left-y: InputView.left-y;
+                right-x: InputView.right-x;
+                right-y: InputView.right-y;
             }
         }
 
@@ -522,7 +521,7 @@ export component ControllerPanel inherits Rectangle {
                     size: Nocive15Size.px15;
                 }
                 Nocive15 {
-                    text: MisterBridge.pressed-now;
+                    text: InputView.pressed-now;
                     color: #06d6a0;
                     size: Nocive15Size.px15;
                     horizontal-stretch: 1;
@@ -537,7 +536,7 @@ export component ControllerPanel inherits Rectangle {
                     size: Nocive15Size.px15;
                 }
                 Nocive15 {
-                    text: MisterBridge.last-event-label;
+                    text: InputView.last-event-label;
                     color: #c8b8d8;
                     size: Nocive15Size.px15;
                     horizontal-stretch: 1;
@@ -545,7 +544,7 @@ export component ControllerPanel inherits Rectangle {
             }
 
             Nocive15 {
-                text: MisterBridge.last-raw-event;
+                text: InputView.last-raw-event;
                 color: #605068;
                 size: Nocive15Size.px15;
             }
@@ -559,13 +558,13 @@ export component ControllerPanel inherits Rectangle {
         VerticalLayout {
             spacing: 4px;
             Start2P {
-                text: MisterBridge.device-name;
+                text: InputView.device-name;
                 color: #e8e0f0;
                 size: Start2PSize.px24;
                 overflow: elide;
             }
             Start2P {
-                text: "INPUT TEST  ·  USB " + MisterBridge.usb-port;
+                text: "INPUT TEST  ·  USB " + InputView.usb-port;
                 color: #06d6a0;
                 size: Start2PSize.px8;
                 overflow: elide;
@@ -582,13 +581,13 @@ export component ControllerPanel inherits Rectangle {
                 spacing: 10px;
                 HorizontalLayout {
                     spacing: 10px;
-                    ShoulderBtn { horizontal-stretch: 1; width: 100px; caption: "L"; pressed: MisterBridge.btn-l; }
-                    ShoulderBtn { horizontal-stretch: 1; width: 100px; caption: "R"; pressed: MisterBridge.btn-r; }
+                    ShoulderBtn { horizontal-stretch: 1; width: 100px; caption: "L"; pressed: InputView.button-l; }
+                    ShoulderBtn { horizontal-stretch: 1; width: 100px; caption: "R"; pressed: InputView.button-r; }
                 }
                 HorizontalLayout {
                     spacing: 10px;
-                    ShoulderBtn { horizontal-stretch: 1; width: 100px; height: 22px; caption: "ZL"; pressed: MisterBridge.btn-zl; }
-                    ShoulderBtn { horizontal-stretch: 1; width: 100px; height: 22px; caption: "ZR"; pressed: MisterBridge.btn-zr; }
+                    ShoulderBtn { horizontal-stretch: 1; width: 100px; height: 22px; caption: "ZL"; pressed: InputView.button-zl; }
+                    ShoulderBtn { horizontal-stretch: 1; width: 100px; height: 22px; caption: "ZR"; pressed: InputView.button-zr; }
                 }
             }
         }
@@ -598,16 +597,16 @@ export component ControllerPanel inherits Rectangle {
             spacing: 28px;
             alignment: center;
             Dpad {
-                up: MisterBridge.dpad-up;
-                down: MisterBridge.dpad-down;
-                left: MisterBridge.dpad-left;
-                right: MisterBridge.dpad-right;
+                up: InputView.dpad-up;
+                down: InputView.dpad-down;
+                left: InputView.dpad-left;
+                right: InputView.dpad-right;
             }
             FaceCluster {
-                btn-x: MisterBridge.btn-x;
-                btn-y: MisterBridge.btn-y;
-                btn-a: MisterBridge.btn-a;
-                btn-b: MisterBridge.btn-b;
+                btn-x: InputView.button-x;
+                btn-y: InputView.button-y;
+                btn-a: InputView.button-a;
+                btn-b: InputView.button-b;
             }
         }
 
@@ -620,8 +619,8 @@ export component ControllerPanel inherits Rectangle {
                 padding: 18px;
                 spacing: 36px;
                 alignment: center;
-                StickWell { stick-x: MisterBridge.left-x; stick-y: MisterBridge.left-y; }
-                StickWell { stick-x: MisterBridge.right-x; stick-y: MisterBridge.right-y; }
+                StickWell { stick-x: InputView.left-x; stick-y: InputView.left-y; }
+                StickWell { stick-x: InputView.right-x; stick-y: InputView.right-y; }
             }
         }
 
@@ -629,10 +628,10 @@ export component ControllerPanel inherits Rectangle {
             height: 74px;
             spacing: 18px;
             alignment: center;
-            PillBtn { caption: "SELECT"; pressed: MisterBridge.btn-select; }
-            SysBtn { caption: "Home"; pressed: MisterBridge.btn-home; }
-            SysBtn { caption: "Capture"; pressed: MisterBridge.btn-capture; available: MisterBridge.capture-available; }
-            PillBtn { caption: "START"; pressed: MisterBridge.btn-start; }
+            PillBtn { caption: "SELECT"; pressed: InputView.button-select; }
+            SysBtn { caption: "Home"; pressed: InputView.button-home; }
+            SysBtn { caption: "Capture"; pressed: InputView.button-capture; available: InputView.capture-availability == InputAvailability.available; }
+            PillBtn { caption: "START"; pressed: InputView.button-start; }
         }
 
         Rectangle {
@@ -643,9 +642,9 @@ export component ControllerPanel inherits Rectangle {
             VerticalLayout {
                 padding: 12px;
                 spacing: 8px;
-                Start2P { text: "Pressed  " + MisterBridge.pressed-now; color: #06d6a0; size: Start2PSize.px8; overflow: elide; }
-                Start2P { text: "Last  " + MisterBridge.last-event-label; color: #c8b8d8; size: Start2PSize.px8; overflow: elide; }
-                Start2P { text: MisterBridge.last-raw-event; color: #706080; size: Start2PSize.px8; overflow: elide; }
+                Start2P { text: "Pressed  " + InputView.pressed-now; color: #06d6a0; size: Start2PSize.px8; overflow: elide; }
+                Start2P { text: "Last  " + InputView.last-event-label; color: #c8b8d8; size: Start2PSize.px8; overflow: elide; }
+                Start2P { text: InputView.last-raw-event; color: #706080; size: Start2PSize.px8; overflow: elide; }
             }
         }
     }

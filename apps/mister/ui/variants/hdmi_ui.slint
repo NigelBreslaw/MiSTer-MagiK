@@ -1,7 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { LauncherScreen, MisterBridge, NavigationView, SettingsPopup, SettingsView } from "../api.slint";
+import { LauncherScreen, MisterBridge, NavigationView, SettingsPopup, SettingsView, SetupPhase, SetupView } from "../api.slint";
 import { ControllerPanel } from "../controller_panel.slint";
 import { SetupOverlay } from "hdmi_setup.slint";
 import { ArcadeListScreen } from "../views/hdmi/arcade_list.slint";
@@ -35,17 +35,7 @@ export component HdmiLauncherUi inherits Rectangle {
     if NavigationView.screen == LauncherScreen.system-hub : SystemHubScreen { }
 
     if MisterBridge.catalog-background-scan-visible : BackgroundScanBadge { }
-    if MisterBridge.setup-visible : SetupOverlay {
-        phase: MisterBridge.setup-phase;
-        title: MisterBridge.setup-title;
-        subtitle: MisterBridge.setup-subtitle;
-        list-items: MisterBridge.setup-list;
-        list-selected: MisterBridge.setup-selected;
-        config-labels: MisterBridge.setup-config-labels;
-        config-values: MisterBridge.setup-config-values;
-        setup-name: MisterBridge.setup-name;
-        setup-kind-label: MisterBridge.setup-kind-label;
-    }
+    if SetupView.phase != SetupPhase.none : SetupOverlay { }
     if !MisterBridge.catalog-scan-visible && MisterBridge.media-pack-progresses.length > 0 : MediaProgressPopup {
     }
     if MisterBridge.catalog-scan-visible : CatalogScanPopup { }

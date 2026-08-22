@@ -4,7 +4,7 @@
 import { Start2P, Start2PSize } from "../components/start2p.slint";
 import { Nocive15, Nocive15Size } from "../components/nocive_15.slint";
 import { MisterUi } from "../mister_window.slint";
-import { MisterBridge } from "../api.slint";
+import { FeedbackView, SetupEntry, SetupField, SetupPhase, SetupView } from "../api.slint";
 
 // Controller setup overlay — new pad detection and USB port change rebinding.
 component ConfigRow inherits HorizontalLayout {
@@ -31,16 +31,15 @@ component ConfigRow inherits HorizontalLayout {
 }
 
 export component SetupOverlay inherits Rectangle {
-    in property <int> phase;
+    property <SetupPhase> phase: SetupView.phase;
     // 1=detected, 2=new-or-existing, 3=pick-existing, 4=configure, 5=name-kind
-    in property <string> title;
-    in property <string> subtitle;
-    in property <[string]> list-items;
-    in property <int> list-selected;
-    in property <[string]> config-labels;
-    in property <[string]> config-values;
-    in property <string> setup-name;
-    in property <string> setup-kind-label;
+    property <string> title: SetupView.title;
+    property <string> subtitle: SetupView.subtitle;
+    property <[SetupEntry]> list-items: SetupView.entries;
+    property <int> list-selected: SetupView.selected-entry-index;
+    property <[SetupField]> fields: SetupView.fields;
+    property <string> setup-name: SetupView.name;
+    property <string> setup-kind-label: SetupView.kind-label;
 
     background: #1a1424e0;
 
@@ -67,7 +66,7 @@ export component SetupOverlay inherits Rectangle {
             wrap: word-wrap;
         }
 
-        if phase != 4 && phase != 5 : Nocive15 {
+        if phase != SetupPhase.configure && phase != SetupPhase.name-kind : Nocive15 {
             text: subtitle;
             color: #9080a8;
             size: Nocive15Size.px15;
@@ -75,13 +74,13 @@ export component SetupOverlay inherits Rectangle {
             wrap: word-wrap;
         }
 
-        if phase == 2 : HorizontalLayout {
+        if phase == SetupPhase.new-or-existing : HorizontalLayout {
             spacing: 24px;
             alignment: center;
 
             Rectangle {
-                property <bool> acknowledged: MisterBridge.selection-feedback-query(
-                    "", "new", MisterBridge.selection-feedback-revision);
+                property <bool> acknowledged: FeedbackView.acknowledged(
+                    "", "new", FeedbackView.revision);
                 width: 180px;
                 height: 60px;
                 border-radius: 8px;
@@ -99,8 +98,8 @@ export component SetupOverlay inherits Rectangle {
             }
 
             Rectangle {
-                property <bool> acknowledged: MisterBridge.selection-feedback-query(
-                    "", "existing", MisterBridge.selection-feedback-revision);
+                property <bool> acknowledged: FeedbackView.acknowledged(
+                    "", "existing", FeedbackView.revision);
                 width: 180px;
                 height: 60px;
                 border-radius: 8px;
@@ -118,13 +117,13 @@ export component SetupOverlay inherits Rectangle {
             }
         }
 
-        if phase == 3 : VerticalLayout {
+        if phase == SetupPhase.pick-existing : VerticalLayout {
             spacing: 6px;
             alignment: center;
 
             for item[i] in list-items : Rectangle {
-                property <bool> acknowledged: MisterBridge.selection-feedback-query(
-                    "", "saved:" + i, MisterBridge.selection-feedback-revision);
+                property <bool> acknowledged: FeedbackView.acknowledged(
+                    "", "saved:" + i, FeedbackView.revision);
                 width: 450px;
                 height: 36px;
                 border-radius: 6px;
@@ -133,7 +132,7 @@ export component SetupOverlay inherits Rectangle {
                 background: list-selected == i ? #2a2236 : #1e1828;
 
                 Nocive15 {
-                    text: item;
+                    text: item.label;
                     color: list-selected == i ? #06d6a0 : #e8e0f0;
                     size: Nocive15Size.px15;
                     horizontal-alignment: center;
@@ -142,7 +141,7 @@ export component SetupOverlay inherits Rectangle {
             }
         }
 
-        if phase == 4 : VerticalLayout {
+        if phase == SetupPhase.configure : VerticalLayout {
             spacing: 8px;
             vertical-stretch: 1;
 
@@ -170,16 +169,16 @@ export component SetupOverlay inherits Rectangle {
                         padding: 10px;
                         spacing: 1px;
 
-                        for label[i] in config-labels : ConfigRow {
-                            label: label;
-                            value: config-values[i];
+                        for field in fields : ConfigRow {
+                            label: field.label;
+                            value: field.value;
                         }
                     }
                 }
             }
         }
 
-        if phase == 5 : VerticalLayout {
+        if phase == SetupPhase.name-kind : VerticalLayout {
             spacing: 12px;
             alignment: center;
 
@@ -252,11 +251,11 @@ export component SetupOverlay inherits Rectangle {
         }
 
         Start2P {
-            text: phase == 1 ? "Press any button to continue"
-                : phase == 2 ? "D-pad: choose  ·  A: confirm"
-                : phase == 3 ? "D-pad: choose  ·  A: confirm"
-                : phase == 4 ? "A: continue to naming"
-                : phase == 5 ? "D-pad: change type  ·  A: save"
+            text: phase == SetupPhase.detected ? "Press any button to continue"
+                : phase == SetupPhase.new-or-existing ? "D-pad: choose  ·  A: confirm"
+                : phase == SetupPhase.pick-existing ? "D-pad: choose  ·  A: confirm"
+                : phase == SetupPhase.configure ? "A: continue to naming"
+                : phase == SetupPhase.name-kind ? "D-pad: change type  ·  A: save"
                 : "";
             color: #706080;
             size: Start2PSize.px8;
