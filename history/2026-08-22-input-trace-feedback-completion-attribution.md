@@ -83,3 +83,75 @@ Recovery artifacts:
 - `build/agent-benchmarks/input-latency-lab/1787356409/`
 - `build/agent-benchmarks/launcher-response/1787356226/`
 - `build/agent-benchmarks/launcher-response/1787356719/`
+
+## Proxy-v3 authority recovery
+
+The host recovery commits `550087a86`, `137b02fa3`, `4ef8155f3`, and
+`61e8ee7eb` made incomplete response arms diagnostic without weakening any
+product gate. The completed exact-device run used installed MagiK
+`e9bb74b9a9144978204ae95d9592f8dc9e610bf9`, Main
+`639d3694e1b93660020e9587cd0fe27f0170ce4c`, and host `61e8ee7eb`.
+
+### Authority checklist
+
+- [x] Completed all nine fixed arms in their declared order.
+- [x] Retained one driver, partial launcher trace, and Main trace per arm.
+- [x] Required exactly 128 contiguous proxy records per arm.
+- [x] Required ordered kernel, poll, read, map, journal, and write timestamps.
+- [x] Observed zero trace-ring drops and zero proxy `EAGAIN` records.
+- [x] Observed zero proxy write failures, journal overflows, and sequence gaps.
+- [x] Verified the requested reader affinity, nice value, and scheduler report.
+- [x] Preserved failed launcher completion and product-quality status.
+- [x] Restored the launcher and original display mode through the canonical runner.
+
+Every arm captured all 64 timed presses and releases in Main. The launcher
+confirmed only 56--61 of the 64 timed presses, depending on the arm. This is
+why input-integrity and first-eligible-vblank remain failed in the summary even
+though Main trace authority passed. No reader-policy winner can be retained
+from this run.
+
+### Pre-dispatch attribution
+
+The following figures use only timed presses with a confirmed launcher record.
+They are diagnostic subsets, not product-pass samples.
+
+| Arm | Reader capture p95 / max | Capture to publish p95 / max | Publish to drain p95 / max | Drain to dispatch p95 / max | Kernel to dispatch p95 / max |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Baseline, current | 238us / 287us | 11us / 13us | 356us / 450us | 121us / 154us | 670us / 835us |
+| Forced catalog, current | 3,066us / 27,060us | 25us / 30us | 16,007us / 35,303us | 153us / 182us | 25,702us / 35,766us |
+| Forced catalog, CPU1 nice | 796us / 12,693us | 17us / 30us | 12,202us / 16,707us | 168us / 230us | 13,572us / 16,955us |
+| Forced catalog, CPU0 RR | 159us / 89,539us | 30us / 114us | 29,743us / 99,893us | 178us / 229us | 41,837us / 100,109us |
+| Forced catalog, CPU1 RR | 100us / 3,121us | 34us / 40us | 4,457us / 9,383us | 152us / 193us | 4,610us / 9,678us |
+
+Against the prior idle current-policy capture of 223us p95 and 291us maximum,
+the fresh baseline is +15us (+6.7%) at p95 and -4us (-1.4%) at maximum. Against
+the prior CPU1 RR result of 84us p95 and 134us maximum, the forced-catalog arm
+is +16us (+19.0%) at p95 and +2,987us (+2,229.1%) at maximum. The large maximum
+and the incomplete response record reject a scheduling-policy change.
+
+The dominant forced-catalog pre-dispatch phase is publication to launcher
+drain, not drain to dispatch. The worst current-policy forced-catalog sample is
+proxy sequence 2333 / press 22 at 35,303us publication-to-drain and 35,766us
+kernel-to-dispatch. CPU1 RR reduces that phase, but proxy sequence 3221 / press
+11 still reaches 9,383us publication-to-drain and 9,678us kernel-to-dispatch.
+This directly selects the early-routing experiment while keeping reader
+scheduling unchanged.
+
+Main-side maxima remain separately attributable. In the idle baseline,
+sequence 2225 owns the 201,297us kernel-to-poll maximum and sequence 2161 owns
+the 9,117us read-to-map maximum. These are not conflated with the downstream
+proxy-reader capture or mailbox stages.
+
+### Completion outcome
+
+- Baseline: 61/65 total confirmations, 60/64 hidden, zero outstanding.
+- Forced catalog current: 57/65 confirmations, 56/64 hidden, zero outstanding.
+- Monolithic 16ms: 58/65 confirmations, 56/64 hidden, one outstanding.
+- Monolithic 64ms: 62/65 confirmations, 61/64 hidden, zero outstanding.
+- Cooperative 2ms: 60/65 confirmations, 59/64 hidden, zero outstanding.
+- Cooperative 1ms: 60/65 confirmations, 58/64 hidden, one outstanding.
+- Forced catalog CPU1 nice: 60/65 confirmations, 59/64 hidden, zero outstanding.
+- Forced catalog CPU0 RR: 62/65 confirmations, 61/64 hidden, zero outstanding.
+- Forced catalog CPU1 RR: 61/65 confirmations, 60/64 hidden, zero outstanding.
+
+Artifact: `build/agent-benchmarks/input-latency-lab/1787358833/summary.json`.
