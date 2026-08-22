@@ -97,7 +97,6 @@ use mister_magik_fb::launcher_runtime::settings::{
     ConfirmedOrientationStore, FileSettingsStore, SettingsStore,
 };
 use mister_magik_fb::launcher_runtime::settings_navigation_bench::*;
-use slint_ui::launcher::PreviewStatus;
 use std::path::PathBuf;
 use std::sync::{OnceLock, mpsc};
 

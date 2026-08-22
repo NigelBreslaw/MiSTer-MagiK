@@ -5,12 +5,6 @@
 import { ArcadeGame } from "arcade_game.slint";
 import { MenuItem, MenuItemPresentation } from "launcher_menu.slint";
 
-export enum PreviewStatus {
-    empty,
-    loading,
-    ready,
-}
-
 // Shared semantic vocabulary. Finite launcher state crosses the Rust/Slint
 // boundary as enums; integers remain reserved for counts, geometry, timing,
 // percentages, and indices into dynamic models.
@@ -233,10 +227,6 @@ export global MisterBridge {
     in-out property <string> confirm-right-label;
     // Dialog focus: 0=cancel, 1=confirm.
     in-out property <int> confirm-selected;
-    in-out property <string> active-system-title;
-    in-out property <int> active-system-count;
-    in-out property <[ArcadeGame]> arcade-games;
-    in-out property <int> arcade-selected;
     // Rust-painted arcade list geometry, in logical pixels.
     in-out property <int> arcade-list-x;
     in-out property <int> arcade-list-y;
@@ -253,25 +243,6 @@ export global MisterBridge {
     in-out property <int> arcade-crt-keyboard-y;
     in-out property <int> arcade-crt-keyboard-width;
     in-out property <int> arcade-crt-keyboard-height;
-    in-out property <bool> arcade-list-visible: true;
-    in-out property <bool> arcade-games-loading;
-    in-out property <bool> arcade-search-active;
-    in-out property <string> arcade-search-query;
-    in-out property <string> arcade-search-suggestion;
-    // 0 idle, 1 searching, 2 ready, 3 failed.
-    in-out property <int> arcade-search-status;
-    in-out property <[string]> arcade-search-keys;
-    in-out property <int> arcade-search-key-selected;
-    // 0=keyboard, 1=results.
-    in-out property <int> arcade-search-pane;
-    in-out property <string> arcade-preview-title;
-    in-out property <string> arcade-preview-run-label;
-    in-out property <bool> arcade-preview-placeholder-visible: true;
-    in-out property <PreviewStatus> arcade-preview-status: PreviewStatus.empty;
-    in-out property <int> arcade-preview-source-width;
-    in-out property <int> arcade-preview-source-height;
-    in-out property <int> arcade-preview-display-width;
-    in-out property <int> arcade-preview-display-height;
     // Screenshot box geometry, in logical pixels.
     in-out property <int> arcade-preview-box-x;
     in-out property <int> arcade-preview-box-y;

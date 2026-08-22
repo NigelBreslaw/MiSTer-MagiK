@@ -4,7 +4,7 @@
 import { Start2P, Start2PSize } from "../../components/start2p.slint";
 
 import { MisterUi } from "../../mister_window.slint";
-import { MisterBridge } from "../../api.slint";
+import { ArcadeLoadState, ArcadeSearchMode, ArcadeSearchPane, ArcadeSearchStatus, ArcadeView, FeedbackView, MisterBridge } from "../../api.slint";
 
 component SearchKey inherits Rectangle {
     in property <string> label;
@@ -39,12 +39,12 @@ component SearchKeyboardRow inherits Rectangle {
 
         for key-offset in root.key-count: SearchKey {
             horizontal-stretch: 1;
-            label: MisterBridge.arcade-search-keys[root.start-index + key-offset];
-            selected: MisterBridge.arcade-search-key-selected == root.start-index + key-offset;
-            keyboard-focused: MisterBridge.arcade-search-pane == 0;
-            acknowledged: MisterBridge.selection-feedback-query(
+            label: ArcadeView.search-keys[root.start-index + key-offset];
+            selected: ArcadeView.selected-search-key-index == root.start-index + key-offset;
+            keyboard-focused: ArcadeView.search-pane == ArcadeSearchPane.keyboard;
+            acknowledged: FeedbackView.acknowledged(
                 "", "key:" + (root.start-index + key-offset),
-                MisterBridge.selection-feedback-revision);
+                FeedbackView.revision);
         }
     }
 
@@ -67,16 +67,16 @@ component SearchKeyboard inherits Rectangle {
         Rectangle {
             height: 46px;
             background: #120d1a;
-            border-width: MisterBridge.arcade-search-pane == 0 ? 2px : 1px;
-            border-color: MisterBridge.arcade-search-pane == 0 ? #06d6a0 : #352848;
+            border-width: ArcadeView.search-pane == ArcadeSearchPane.keyboard ? 2px : 1px;
+            border-color: ArcadeView.search-pane == ArcadeSearchPane.keyboard ? #06d6a0 : #352848;
 
             Start2P {
                 x: 10px;
                 y: 0px;
                 width: parent.width - 20px;
                 height: parent.height;
-                text: MisterBridge.arcade-search-query == "" ? "_" : MisterBridge.arcade-search-query;
-                color: MisterBridge.arcade-search-query == "" ? #706080 : #d7eef8;
+                text: ArcadeView.search-query == "" ? "_" : ArcadeView.search-query;
+                color: ArcadeView.search-query == "" ? #706080 : #d7eef8;
                 size: Start2PSize.px8;
                 vertical-alignment: center;
                 overflow: elide;
@@ -85,9 +85,9 @@ component SearchKeyboard inherits Rectangle {
 
         Rectangle {
             height: 30px;
-            background: MisterBridge.arcade-search-suggestion == "" ? #15101d : #211a2b;
+            background: ArcadeView.search-suggestion == "" ? #15101d : #211a2b;
             border-width: 1px;
-            border-color: MisterBridge.arcade-search-suggestion == "" ? #2a2236 : #5c4a72;
+            border-color: ArcadeView.search-suggestion == "" ? #2a2236 : #5c4a72;
 
             HorizontalLayout {
                 padding-left: 10px;
@@ -97,13 +97,13 @@ component SearchKeyboard inherits Rectangle {
                 Rectangle {
                     width: 26px;
                     height: 18px;
-                    background: MisterBridge.arcade-search-suggestion == "" ? #20182a : #06d6a0;
+                    background: ArcadeView.search-suggestion == "" ? #20182a : #06d6a0;
                     border-width: 1px;
-                    border-color: MisterBridge.arcade-search-suggestion == "" ? #352848 : #ffffff;
+                    border-color: ArcadeView.search-suggestion == "" ? #352848 : #ffffff;
 
                     Start2P {
                         text: "Y";
-                        color: MisterBridge.arcade-search-suggestion == "" ? #706080 : #101420;
+                        color: ArcadeView.search-suggestion == "" ? #706080 : #101420;
                         size: Start2PSize.px8;
                         horizontal-alignment: center;
                         vertical-alignment: center;
@@ -111,10 +111,10 @@ component SearchKeyboard inherits Rectangle {
                 }
 
                 Start2P {
-                    text: MisterBridge.arcade-search-status == 1 ? "Searching..." :
-                        (MisterBridge.arcade-search-status == 3 ? "Search unavailable" :
-                        (MisterBridge.arcade-search-suggestion == "" ? "" : MisterBridge.arcade-search-suggestion));
-                    color: MisterBridge.arcade-search-suggestion == "" ? #706080 : #d7eef8;
+                    text: ArcadeView.search-status == ArcadeSearchStatus.searching ? "Searching..." :
+                        (ArcadeView.search-status == ArcadeSearchStatus.failed ? "Search unavailable" :
+                        (ArcadeView.search-suggestion == "" ? "" : ArcadeView.search-suggestion));
+                    color: ArcadeView.search-suggestion == "" ? #706080 : #d7eef8;
                     size: Start2PSize.px8;
                     vertical-alignment: center;
                     overflow: elide;
@@ -135,8 +135,8 @@ component SearchKeyboard inherits Rectangle {
 }
 
 export component ArcadeListScreen inherits Rectangle {
-    property <int> count: MisterBridge.active-system-count;
-    property <bool> games-loading: MisterBridge.arcade-games-loading;
+    property <int> count: ArcadeView.active-count;
+    property <bool> games-loading: ArcadeView.load-state == ArcadeLoadState.loading;
     background: #1a1424;
 
     if !MisterUi.portrait-layout : HorizontalLayout {
@@ -145,12 +145,12 @@ export component ArcadeListScreen inherits Rectangle {
         Rectangle {
             horizontal-stretch: 1;
             vertical-stretch: 1;
-            visible: MisterBridge.arcade-list-visible;
+            visible: ArcadeView.list-visible;
 
-            if MisterBridge.arcade-search-active : SearchKeyboard { }
+            if ArcadeView.search-mode == ArcadeSearchMode.active : SearchKeyboard { }
 
             // Rust draws the animated game rows into this reserved viewport.
-            if !MisterBridge.arcade-search-active : Rectangle {
+            if ArcadeView.search-mode == ArcadeSearchMode.inactive : Rectangle {
                 x: MisterBridge.arcade-list-x * 1px;
                 y: MisterBridge.arcade-list-y * 1px;
                 width: MisterBridge.arcade-list-width * 1px;
@@ -161,7 +161,7 @@ export component ArcadeListScreen inherits Rectangle {
                 clip: true;
             }
 
-            if !MisterBridge.arcade-search-active : Rectangle {
+            if ArcadeView.search-mode == ArcadeSearchMode.inactive : Rectangle {
                 x: MisterBridge.arcade-list-x * 1px;
                 y: MisterBridge.arcade-list-y * 1px;
                 width: MisterBridge.arcade-list-width * 1px;
@@ -195,7 +195,7 @@ export component ArcadeListScreen inherits Rectangle {
             vertical-stretch: 1;
             background: #000000;
 
-            if MisterBridge.arcade-search-active : Rectangle {
+            if ArcadeView.search-mode == ArcadeSearchMode.active : Rectangle {
                 x: 0px;
                 y: 0px;
                 width: parent.width;
@@ -205,11 +205,11 @@ export component ArcadeListScreen inherits Rectangle {
                 Start2P {
                     x: 16px;
                     y: 16px;
-                    text: MisterBridge.arcade-search-status == 1 ? "Searching..." :
-                        (MisterBridge.arcade-search-status == 3 ? "Search unavailable" :
-                        (count == 0 && MisterBridge.arcade-search-status == 2 ? "No matches" :
+                    text: ArcadeView.search-status == ArcadeSearchStatus.searching ? "Searching..." :
+                        (ArcadeView.search-status == ArcadeSearchStatus.failed ? "Search unavailable" :
+                        (count == 0 && ArcadeView.search-status == ArcadeSearchStatus.ready ? "No matches" :
                         count + " matches"));
-                    color: MisterBridge.arcade-search-pane == 1 ? #06d6a0 : #706080;
+                    color: ArcadeView.search-pane == ArcadeSearchPane.results ? #06d6a0 : #706080;
                     size: Start2PSize.px8;
                 }
 
@@ -220,15 +220,15 @@ export component ArcadeListScreen inherits Rectangle {
                     height: MisterBridge.arcade-list-height * 1px;
                     background: #120d1a;
                     border-width: 1px;
-                    border-color: MisterBridge.arcade-search-pane == 1 ? #06d6a0 : #352848;
+                    border-color: ArcadeView.search-pane == ArcadeSearchPane.results ? #06d6a0 : #352848;
                     clip: true;
 
                     Start2P {
                         width: parent.width;
                         height: parent.height;
-                        visible: MisterBridge.arcade-search-status != 2 || count == 0;
-                        text: MisterBridge.arcade-search-status == 1 ? "Searching..." :
-                            (MisterBridge.arcade-search-status == 3 ? "Search unavailable" :
+                        visible: ArcadeView.search-status != ArcadeSearchStatus.ready || count == 0;
+                        text: ArcadeView.search-status == ArcadeSearchStatus.searching ? "Searching..." :
+                            (ArcadeView.search-status == ArcadeSearchStatus.failed ? "Search unavailable" :
                             (count == 0 ? "No matches" : ""));
                         color: #706080;
                         size: Start2PSize.px8;
@@ -241,7 +241,7 @@ export component ArcadeListScreen inherits Rectangle {
     }
 
     if MisterUi.portrait-layout : Rectangle {
-        if MisterBridge.arcade-search-active : Rectangle {
+        if ArcadeView.search-mode == ArcadeSearchMode.active : Rectangle {
             x: 0px;
             y: 0px;
             width: parent.width;
@@ -249,7 +249,7 @@ export component ArcadeListScreen inherits Rectangle {
             background: #1a1424;
         }
 
-        if !MisterBridge.arcade-search-active : Rectangle {
+        if ArcadeView.search-mode == ArcadeSearchMode.inactive : Rectangle {
             x: MisterBridge.arcade-preview-box-x * 1px;
             y: MisterBridge.arcade-preview-box-y * 1px;
             width: MisterBridge.arcade-preview-box-width * 1px;
@@ -265,12 +265,12 @@ export component ArcadeListScreen inherits Rectangle {
             width: MisterBridge.arcade-list-width * 1px;
             height: MisterBridge.arcade-list-height * 1px;
             background: #120d1a;
-            border-width: MisterBridge.arcade-search-active && MisterBridge.arcade-search-pane == 1 ? 2px : 1px;
-            border-color: MisterBridge.arcade-search-active && MisterBridge.arcade-search-pane == 1 ? #06d6a0 : #352848;
+            border-width: ArcadeView.search-mode == ArcadeSearchMode.active && ArcadeView.search-pane == ArcadeSearchPane.results ? 2px : 1px;
+            border-color: ArcadeView.search-mode == ArcadeSearchMode.active && ArcadeView.search-pane == ArcadeSearchPane.results ? #06d6a0 : #352848;
             clip: true;
         }
 
-        if MisterBridge.arcade-search-active : SearchKeyboard {
+        if ArcadeView.search-mode == ArcadeSearchMode.active : SearchKeyboard {
             x: 0px;
             y: MisterBridge.arcade-list-y * 1px + MisterBridge.arcade-list-height * 1px + 8px;
             width: parent.width;
@@ -278,7 +278,7 @@ export component ArcadeListScreen inherits Rectangle {
         }
     }
 
-    if !MisterUi.portrait-layout && !MisterBridge.arcade-search-active : Rectangle {
+    if !MisterUi.portrait-layout && ArcadeView.search-mode == ArcadeSearchMode.inactive : Rectangle {
         x: 0px;
         y: 0px;
         width: parent.width;
@@ -289,7 +289,7 @@ export component ArcadeListScreen inherits Rectangle {
             x: 16px;
             y: 16px;
             width: parent.width - 32px;
-            text: MisterBridge.active-system-title;
+            text: ArcadeView.active-title;
             color: #e8e0f0;
             size: Start2PSize.px24;
             overflow: elide;
@@ -304,7 +304,7 @@ export component ArcadeListScreen inherits Rectangle {
         }
     }
 
-    if !MisterUi.portrait-layout && !MisterBridge.arcade-search-active : Rectangle {
+    if !MisterUi.portrait-layout && ArcadeView.search-mode == ArcadeSearchMode.inactive : Rectangle {
         x: 0px;
         y: (MisterBridge.arcade-list-y + MisterBridge.arcade-list-height) * 1px;
         width: parent.width;

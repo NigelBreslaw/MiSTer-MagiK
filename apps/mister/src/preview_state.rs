@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 use mister_magik_ui as slint_ui;
 use slint::ComponentHandle;
 use slint::platform::software_renderer::Rgb565Pixel;
-use slint_ui::launcher::PreviewStatus;
+use slint_ui::launcher::PreviewState as ViewPreviewState;
 
 use crate::arcade_catalog::{ArcadeGameEntry, ArcadeGameView};
 use crate::crt_backdrop::BackdropSource;
@@ -293,21 +293,21 @@ fn preview_display_size(
 }
 
 fn apply_preview_image_bridge(
-    bridge: &slint_ui::launcher::MisterBridge,
+    bridge: &slint_ui::launcher::ArcadeView,
     preview_image: &PreviewImage,
 ) {
-    bridge.set_arcade_preview_status(PreviewStatus::Ready);
-    bridge.set_arcade_preview_source_width(preview_image.source_w as i32);
-    bridge.set_arcade_preview_source_height(preview_image.source_h as i32);
-    bridge.set_arcade_preview_display_width(preview_image.display_w as i32);
-    bridge.set_arcade_preview_display_height(preview_image.display_h as i32);
+    bridge.set_preview_state(ViewPreviewState::Ready);
+    bridge.set_preview_source_width(preview_image.source_w as i32);
+    bridge.set_preview_source_height(preview_image.source_h as i32);
+    bridge.set_preview_display_width(preview_image.display_w as i32);
+    bridge.set_preview_display_height(preview_image.display_h as i32);
 }
 
-fn clear_preview_image_bridge(bridge: &slint_ui::launcher::MisterBridge) {
-    bridge.set_arcade_preview_source_width(0);
-    bridge.set_arcade_preview_source_height(0);
-    bridge.set_arcade_preview_display_width(0);
-    bridge.set_arcade_preview_display_height(0);
+fn clear_preview_image_bridge(bridge: &slint_ui::launcher::ArcadeView) {
+    bridge.set_preview_source_width(0);
+    bridge.set_preview_source_height(0);
+    bridge.set_preview_display_width(0);
+    bridge.set_preview_display_height(0);
 }
 
 fn preview_image_from_pixels(pixels: PreviewPixels, visual_pct: u32) -> PreviewImage {
@@ -764,7 +764,7 @@ impl PreviewState {
         self.demand_empty(PreviewTransitionMode::CrossFade);
     }
 
-    pub fn clear(&mut self, bridge: &slint_ui::launcher::MisterBridge) {
+    pub fn clear(&mut self, bridge: &slint_ui::launcher::ArcadeView) {
         if self.presentation_state == PreviewPresentationState::Detached
             && self.selected_mra_path.is_none()
             && self.current_generation == 0
@@ -788,9 +788,8 @@ impl PreviewState {
         self.last_prefetch_window = None;
         self.prefetch_throttle_until = None;
         self.backdrop_epoch = self.backdrop_epoch.wrapping_add(1).max(1);
-        bridge.set_arcade_preview_placeholder_visible(true);
-        bridge.set_arcade_preview_status(PreviewStatus::Empty);
-        bridge.set_arcade_preview_title("".into());
+        bridge.set_preview_state(ViewPreviewState::Empty);
+        bridge.set_preview_title("".into());
         clear_preview_image_bridge(bridge);
     }
 
@@ -1537,7 +1536,7 @@ fn next_ready_result_index(
 }
 
 pub fn request_arcade_preview_window(
-    bridge: &slint_ui::launcher::MisterBridge,
+    bridge: &slint_ui::launcher::ArcadeView,
     games: ArcadeGameView<'_>,
     selected: usize,
     preview: &mut PreviewState,
@@ -1559,13 +1558,11 @@ pub fn request_arcade_preview_window(
         preview.last_prefetch_selected = None;
         preview.prefetch_direction = 0;
         preview.last_prefetch_window = None;
-        bridge.set_arcade_preview_placeholder_visible(true);
-        bridge.set_arcade_preview_status(PreviewStatus::Empty);
-        bridge.set_arcade_preview_title("".into());
+        bridge.set_preview_state(ViewPreviewState::Empty);
+        bridge.set_preview_title("".into());
         clear_preview_image_bridge(bridge);
         return true;
     };
-    bridge.set_arcade_preview_placeholder_visible(true);
 
     let turbo_runway_active = turbo_active && preview.config.turbo_runway_enabled;
     let prefetch_radius = if turbo_runway_active {
@@ -1608,7 +1605,7 @@ pub fn request_arcade_preview_window(
                         return false;
                     }
                     if let Some(candidate) = candidate.as_ref() {
-                        bridge.set_arcade_preview_title(candidate.game.title.as_ref().into());
+                        bridge.set_preview_title(candidate.game.title.as_ref().into());
                     }
                     preview.current_generation = 0;
                     preview.has_visible_preview = true;
@@ -1635,7 +1632,7 @@ pub fn request_arcade_preview_window(
                 }
                 if preview.cache.contains_failed(&path) {
                     preview.select_empty_preview(preview_transition_mode(turbo_active));
-                    bridge.set_arcade_preview_status(PreviewStatus::Empty);
+                    bridge.set_preview_state(ViewPreviewState::Empty);
                     request_preview_prefetches_if_allowed(
                         games,
                         selected,
@@ -1692,9 +1689,8 @@ pub fn request_arcade_preview_window(
             );
         }
         preview.select_empty_preview(preview_transition_mode(turbo_active));
-        bridge.set_arcade_preview_placeholder_visible(true);
         clear_preview_image_bridge(bridge);
-        bridge.set_arcade_preview_status(PreviewStatus::Empty);
+        bridge.set_preview_state(ViewPreviewState::Empty);
         request_preview_prefetches_if_allowed(
             games,
             selected,
@@ -1707,7 +1703,7 @@ pub fn request_arcade_preview_window(
     };
 
     let candidate_game = candidate.game;
-    bridge.set_arcade_preview_title(candidate_game.title.as_ref().into());
+    bridge.set_preview_title(candidate_game.title.as_ref().into());
     if preview_startup_trace_enabled() {
         crate::ui_errln!(
             "startup_timing\tpreview_selected_candidate\t{}ms\tsystem={}\tselected_index={}\ttitle={}\thas_preview=1\tasset_key={}\tcandidate_index={}\tselected_has_preview={}",
@@ -1724,7 +1720,7 @@ pub fn request_arcade_preview_window(
     preview.selected_preview_key = Some(preview_key.clone());
     if preview.cache.contains_failed(&preview_key) {
         preview.select_empty_preview(preview_transition_mode(turbo_active));
-        bridge.set_arcade_preview_status(PreviewStatus::Empty);
+        bridge.set_preview_state(ViewPreviewState::Empty);
         request_preview_prefetches_if_allowed(
             games,
             selected,
@@ -2194,7 +2190,7 @@ fn same_selected_preview_needs_request(
 }
 
 pub fn schedule_arcade_preview_window(
-    bridge: &slint_ui::launcher::MisterBridge,
+    bridge: &slint_ui::launcher::ArcadeView,
     games: ArcadeGameView<'_>,
     selected: usize,
     preview: &mut PreviewState,
@@ -2258,7 +2254,7 @@ pub fn apply_ready_preview(
         preview.deferred_selected_result = None;
         return false;
     }
-    let bridge = app.global::<slint_ui::launcher::MisterBridge>();
+    let bridge = app.global::<slint_ui::launcher::ArcadeView>();
     let mut dirty = false;
     let mut ready_backlog = VecDeque::new();
     if !defer_selected_result {
@@ -2407,7 +2403,7 @@ pub fn apply_ready_preview(
                     decoded_bytes: result.decoded_bytes.try_into().unwrap_or(u64::MAX),
                 };
                 preview.current_generation = 0;
-                bridge.set_arcade_preview_title(result_title.clone().into());
+                bridge.set_preview_title(result_title.clone().into());
                 preview.has_visible_preview = true;
                 preview.visible_preview_load_source = result.load_source.label();
                 preview.begin_raw_transition_to(
@@ -2449,7 +2445,7 @@ pub fn apply_ready_preview(
             if is_selected_result {
                 preview.select_empty_preview(preview_transition_mode(turbo_active));
                 clear_preview_image_bridge(&bridge);
-                bridge.set_arcade_preview_status(PreviewStatus::Empty);
+                bridge.set_preview_state(ViewPreviewState::Empty);
                 dirty = true;
             }
         }
@@ -2901,7 +2897,7 @@ mod tests {
     fn selected_row_without_preview_fades_visible_raw_preview_to_empty() {
         init_test_slint_platform();
         let app = slint_ui::launcher::Launcher::new().expect("launcher component");
-        let bridge = app.global::<slint_ui::launcher::MisterBridge>();
+        let bridge = app.global::<slint_ui::launcher::ArcadeView>();
         let games = vec![
             preview_game("With Preview", "with-preview.mra", "with-preview.png", true),
             preview_game("No Preview", "no-preview.mra", "", false),
@@ -2939,7 +2935,7 @@ mod tests {
         assert!(!preview.has_visible_preview);
         assert!(preview.visible_preview_key.is_empty());
         assert!(preview.raw_dirty());
-        assert_eq!(bridge.get_arcade_preview_status(), PreviewStatus::Empty);
+        assert_eq!(bridge.get_preview_state(), ViewPreviewState::Empty);
         let frame = preview
             .raw_transition_frame()
             .expect("empty raw transition frame");
@@ -2951,7 +2947,7 @@ mod tests {
     fn empty_demand_is_idempotent_while_detached() {
         init_test_slint_platform();
         let app = slint_ui::launcher::Launcher::new().expect("launcher component");
-        let bridge = app.global::<slint_ui::launcher::MisterBridge>();
+        let bridge = app.global::<slint_ui::launcher::ArcadeView>();
         let mut preview = PreviewState::new();
 
         let generation = preview.presentation_generation;

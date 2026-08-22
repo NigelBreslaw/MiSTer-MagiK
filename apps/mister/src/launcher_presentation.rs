@@ -7,10 +7,7 @@
 //! in `ui_runner`; this presenter is deliberately shared with the macOS host.
 
 use crate::arcade_catalog::{ArcadeCatalog, ArcadeGameView};
-use crate::launcher::{
-    ArcadeSearchPane, ArcadeSearchStatus, CatalogMenuItemStatus, DisplayTransactionPhase,
-    LauncherNav, Screen,
-};
+use crate::launcher::{CatalogMenuItemStatus, DisplayTransactionPhase, LauncherNav, Screen};
 use crate::launcher_taxonomy::LauncherMenuItemKind;
 use crate::launcher_view_types::{
     about_section, arcade_list_mode, arcade_search_pane, arcade_search_status,
@@ -283,17 +280,6 @@ macro_rules! set_if_changed {
         let value = $value;
         if $bridge.$getter() != value {
             $bridge.$setter(value);
-        }
-    }};
-}
-
-macro_rules! set_string_if_changed {
-    ($bridge:expr, $getter:ident, $setter:ident, $value:expr) => {{
-        let source = $value;
-        let source = AsRef::<str>::as_ref(&source);
-        if $bridge.$getter().as_str() != source {
-            bridge_churn_record_shared_strings(1);
-            $bridge.$setter(SharedString::from(source));
         }
     }};
 }
@@ -724,31 +710,7 @@ impl LauncherBridgePresenter {
         );
         set_view_string_if_changed!(arcade, get_active_title, set_active_title, &title);
         set_if_changed!(arcade, get_active_count, set_active_count, count as i32);
-        set_string_if_changed!(
-            bridge,
-            get_active_system_title,
-            set_active_system_title,
-            title
-        );
-        set_if_changed!(
-            bridge,
-            get_active_system_count,
-            set_active_system_count,
-            count as i32
-        );
-        set_if_changed!(
-            bridge,
-            get_arcade_games_loading,
-            set_arcade_games_loading,
-            active_games_loading(catalog, nav)
-        );
         if !(defer_arcade_overlay && nav.screen == Screen::Arcade) {
-            set_if_changed!(
-                bridge,
-                get_arcade_selected,
-                set_arcade_selected,
-                nav.arcade.selected as i32
-            );
             set_if_changed!(
                 arcade,
                 get_selected_game_index,
@@ -765,7 +727,6 @@ impl LauncherBridgePresenter {
                     .unwrap_or("")
             );
         }
-        sync_search(&bridge, nav);
         sync_arcade_search(&arcade, nav);
     }
 
@@ -1085,53 +1046,6 @@ fn active_games_loading(catalog: &ArcadeCatalog, nav: &LauncherNav) -> bool {
     nav.active_collection().is_some_and(|collection| {
         collection.count > 0 && catalog.system_game_count(&collection.id) < collection.count
     })
-}
-
-fn sync_search(bridge: &MisterBridge, nav: &LauncherNav) {
-    set_if_changed!(
-        bridge,
-        get_arcade_search_active,
-        set_arcade_search_active,
-        nav.arcade_search.is_active(&nav.arcade_filter.active)
-    );
-    set_string_if_changed!(
-        bridge,
-        get_arcade_search_query,
-        set_arcade_search_query,
-        nav.arcade_search.query.clone()
-    );
-    set_string_if_changed!(
-        bridge,
-        get_arcade_search_suggestion,
-        set_arcade_search_suggestion,
-        nav.arcade_search.suggestion.clone()
-    );
-    set_if_changed!(
-        bridge,
-        get_arcade_search_status,
-        set_arcade_search_status,
-        match nav.arcade_search.status {
-            ArcadeSearchStatus::Idle => 0,
-            ArcadeSearchStatus::Searching => 1,
-            ArcadeSearchStatus::Ready => 2,
-            ArcadeSearchStatus::Failed => 3,
-        }
-    );
-    set_if_changed!(
-        bridge,
-        get_arcade_search_key_selected,
-        set_arcade_search_key_selected,
-        nav.arcade_search.selected_key as i32
-    );
-    set_if_changed!(
-        bridge,
-        get_arcade_search_pane,
-        set_arcade_search_pane,
-        match nav.arcade_search.pane {
-            ArcadeSearchPane::Keyboard => 0,
-            ArcadeSearchPane::Results => 1,
-        }
-    );
 }
 
 fn sync_arcade_search(arcade: &ArcadeView, nav: &LauncherNav) {

@@ -6519,7 +6519,7 @@ pub(super) fn run_launcher_loop(
                     ),
                 );
                 if sample.active {
-                    let bridge = app.global::<slint_ui::launcher::MisterBridge>();
+                    let bridge = app.global::<slint_ui::launcher::ArcadeView>();
                     preview.clear(&bridge);
                     apply_screenshot_media_update_effects(
                         media_session.pause_for_low_memory(media_benchmark_contention),
@@ -8977,7 +8977,7 @@ pub(super) fn run_launcher_loop(
             && !arcade_search_active
             && !memory_guard.active()
         {
-            let bridge = app.global::<slint_ui::launcher::MisterBridge>();
+            let bridge = app.global::<slint_ui::launcher::ArcadeView>();
             if schedule_arcade_preview_window(
                 &bridge,
                 active_arcade_games,
@@ -13433,7 +13433,7 @@ fn apply_catalog_session_effects(
                 nav.set_arcade_exit_locked(false);
                 nav.sync_launcher_taxonomy(catalog);
                 let _ = reapply_pending_launch_return_state(nav, catalog, launch_return_session);
-                let bridge = app.global::<slint_ui::launcher::MisterBridge>();
+                let bridge = app.global::<slint_ui::launcher::ArcadeView>();
                 preview.clear(&bridge);
                 *full_bridge_dirty = true;
             }

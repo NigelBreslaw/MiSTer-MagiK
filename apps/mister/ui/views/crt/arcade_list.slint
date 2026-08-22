@@ -4,7 +4,7 @@
 import { Spleen6x12 } from "../../components/spleen_6x12.slint";
 
 import { MisterUi } from "../../mister_window.slint";
-import { MisterBridge } from "../../api.slint";
+import { ArcadeLoadState, ArcadeSearchMode, ArcadeSearchPane, ArcadeSearchStatus, ArcadeView, FeedbackView, MisterBridge } from "../../api.slint";
 import { CrtTheme, CrtHeader, CrtFooter } from "../../components/crt_ui.slint";
 
 component SearchKey inherits Rectangle {
@@ -37,12 +37,12 @@ component SearchKeyboardRow inherits Rectangle {
 
         for key-offset in root.key-count : SearchKey {
             horizontal-stretch: 1;
-            label: MisterBridge.arcade-search-keys[root.start-index + key-offset];
-            selected: MisterBridge.arcade-search-key-selected == root.start-index + key-offset;
-            keyboard-focused: MisterBridge.arcade-search-pane == 0;
-            acknowledged: MisterBridge.selection-feedback-query(
+            label: ArcadeView.search-keys[root.start-index + key-offset];
+            selected: ArcadeView.selected-search-key-index == root.start-index + key-offset;
+            keyboard-focused: ArcadeView.search-pane == ArcadeSearchPane.keyboard;
+            acknowledged: FeedbackView.acknowledged(
                 "", "key:" + (root.start-index + key-offset),
-                MisterBridge.selection-feedback-revision);
+                FeedbackView.revision);
         }
     }
 }
@@ -58,13 +58,13 @@ component SearchKeyboard inherits Rectangle {
             height: MisterUi.footer-height;
             background: CrtTheme.panel-alt;
             border-width: MisterUi.border;
-            border-color: MisterBridge.arcade-search-pane == 0 ? CrtTheme.accent : CrtTheme.border;
+            border-color: ArcadeView.search-pane == ArcadeSearchPane.keyboard ? CrtTheme.accent : CrtTheme.border;
 
             Spleen6x12 {
                 x: MisterUi.grid-x;
                 width: parent.width - 16px;
                 height: parent.height;
-                text: MisterBridge.arcade-search-query == "" ? "_" : MisterBridge.arcade-search-query;
+                text: ArcadeView.search-query == "" ? "_" : ArcadeView.search-query;
                 color: CrtTheme.text;
                 size: MisterUi.crt-body-font;
                 vertical-alignment: center;
@@ -82,7 +82,7 @@ component SearchKeyboard inherits Rectangle {
 }
 
 export component ArcadeListScreen inherits Rectangle {
-    property <int> count: MisterBridge.active-system-count;
+    property <int> count: ArcadeView.active-count;
     background: CrtTheme.background;
 
     CrtHeader {
@@ -92,17 +92,17 @@ export component ArcadeListScreen inherits Rectangle {
         background: transparent;
         border-width: 0px;
         border-color: transparent;
-        title: MisterBridge.arcade-search-active ? "Search" : MisterBridge.active-system-title;
+        title: ArcadeView.search-mode == ArcadeSearchMode.active ? "Search" : ArcadeView.active-title;
         subtitle: "";
-        status: MisterBridge.arcade-search-active
-            ? (MisterBridge.arcade-search-status == 1 ? "Searching..." :
-                (MisterBridge.arcade-search-status == 3 ? "Search unavailable" :
-                (root.count == 0 && MisterBridge.arcade-search-status == 2
+        status: ArcadeView.search-mode == ArcadeSearchMode.active
+            ? (ArcadeView.search-status == ArcadeSearchStatus.searching ? "Searching..." :
+                (ArcadeView.search-status == ArcadeSearchStatus.failed ? "Search unavailable" :
+                (root.count == 0 && ArcadeView.search-status == ArcadeSearchStatus.ready
                     ? "No matches" : root.count + " matches")))
             : root.count + " games";
     }
 
-    if MisterBridge.arcade-search-active : SearchKeyboard {
+    if ArcadeView.search-mode == ArcadeSearchMode.active : SearchKeyboard {
         x: MisterBridge.arcade-crt-keyboard-x * 1px;
         y: MisterBridge.arcade-crt-keyboard-y * 1px;
         width: MisterBridge.arcade-crt-keyboard-width * 1px;
@@ -116,16 +116,16 @@ export component ArcadeListScreen inherits Rectangle {
         height: MisterBridge.arcade-list-height * 1px;
         background: CrtTheme.panel-alt;
         border-width: MisterUi.border;
-        border-color: MisterBridge.arcade-search-pane == 1 ? CrtTheme.accent : CrtTheme.border;
+        border-color: ArcadeView.search-pane == ArcadeSearchPane.results ? CrtTheme.accent : CrtTheme.border;
         clip: true;
 
         Spleen6x12 {
             width: parent.width;
             height: parent.height;
-            visible: MisterBridge.arcade-search-active
-                && (MisterBridge.arcade-search-status != 2 || root.count == 0);
-            text: MisterBridge.arcade-search-status == 1 ? "Searching..." :
-                (MisterBridge.arcade-search-status == 3 ? "Search unavailable" :
+            visible: ArcadeView.search-mode == ArcadeSearchMode.active
+                && (ArcadeView.search-status != ArcadeSearchStatus.ready || root.count == 0);
+            text: ArcadeView.search-status == ArcadeSearchStatus.searching ? "Searching..." :
+                (ArcadeView.search-status == ArcadeSearchStatus.failed ? "Search unavailable" :
                 (root.count == 0 ? "No matches" : ""));
             color: CrtTheme.muted;
             size: MisterUi.crt-body-font;
@@ -134,7 +134,7 @@ export component ArcadeListScreen inherits Rectangle {
         }
     }
 
-    if MisterBridge.arcade-games-loading : Rectangle {
+    if ArcadeView.load-state == ArcadeLoadState.loading : Rectangle {
         x: (MisterBridge.arcade-list-x - MisterUi.crt-content-x) * 1px;
         y: (MisterBridge.arcade-list-y - MisterUi.crt-content-y) * 1px;
         width: MisterBridge.arcade-list-width * 1px;
