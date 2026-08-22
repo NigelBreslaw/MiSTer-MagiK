@@ -2746,11 +2746,14 @@ impl LauncherResponseTrace {
             .iter()
             .filter(|record| record.disposition == "confirmed")
             .count();
-        if confirmed >= self.expected_confirmed
-            && self
-                .hidden_feedback_count
-                .saturating_add(self.cancelled_feedback_count)
-                >= self.expected_feedback_hidden
+        let resolved_feedback = self
+            .hidden_feedback_count
+            .saturating_add(self.cancelled_feedback_count);
+        let required_non_feedback_confirmations = self
+            .expected_confirmed
+            .saturating_sub(self.expected_feedback_hidden);
+        if confirmed >= required_non_feedback_confirmations
+            && resolved_feedback >= self.expected_feedback_hidden
             && self.outstanding_feedback.is_empty()
         {
             self.complete = true;
@@ -15242,6 +15245,25 @@ mod tests {
         assert!(trace.complete);
         assert!(trace.take_frame_trace_finalize_pending());
         assert!(!trace.take_frame_trace_finalize_pending());
+    }
+
+    #[test]
+    fn launcher_response_trace_completes_after_never_visible_feedback_is_cancelled() {
+        let nav = LauncherNav::new();
+        let mut trace = LauncherResponseTrace::configured_for_test(&nav, 1, 1);
+        trace.record_feedback_confirmation(
+            &crate::launcher_presentation::SelectionFeedbackConfirmation::Cancelled {
+                event_id: 9,
+                target: SelectionFeedbackTarget::new("system-hub", "recent"),
+                confirmed_at: Instant::now(),
+            },
+            42,
+            7,
+        );
+
+        assert!(trace.complete);
+        assert_eq!(trace.cancelled_feedback_count, 1);
+        assert!(trace.outstanding_feedback.is_empty());
     }
 
     #[test]

@@ -7510,7 +7510,7 @@ fn launcher_response_trace_matches_run(raw: &str, run_id: &str) -> bool {
 
 fn summarize_computers_sweep(trace: Value, interval_ms: u64, start_delay_ms: u64) -> Result<Value> {
     validate_launcher_response_trace(&trace)?;
-    let records = launcher_response_confirmed_records(&trace, Some("menu:computers"));
+    let records = launcher_response_applied_records(&trace, Some("menu:computers"));
     let selected_item_ids = records
         .iter()
         .filter_map(|record| {
@@ -7556,7 +7556,7 @@ fn summarize_computers_sweep(trace: Value, interval_ms: u64, start_delay_ms: u64
 
 fn summarize_computers_round_trip(trace: Value, interval_ms: u64, cycles: usize) -> Result<Value> {
     validate_launcher_response_trace(&trace)?;
-    let records = launcher_response_confirmed_records(&trace, Some("menu:computers"));
+    let records = launcher_response_applied_records(&trace, Some("menu:computers"));
     let selected_indices = records
         .iter()
         .filter_map(|record| {
@@ -7658,7 +7658,7 @@ fn run_launcher_response_focus_route(
     let mut trace = read_completed_launcher_response_trace(session, &run_id)?;
     trace["driver"] = driver_evidence;
     validate_launcher_response_trace(&trace)?;
-    let records = launcher_response_confirmed_records(&trace, Some(pulse_surface));
+    let records = launcher_response_applied_records(&trace, Some(pulse_surface));
     let expected_items = records
         .iter()
         .filter_map(|record| {
@@ -7858,6 +7858,27 @@ fn launcher_response_confirmed_records<'a>(
         .collect()
 }
 
+fn launcher_response_applied_records<'a>(
+    trace: &'a Value,
+    menu_id: Option<&str>,
+) -> Vec<&'a Value> {
+    trace["records"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|record| {
+            record["trigger"].as_str() == Some("initial")
+                && matches!(
+                    record["disposition"].as_str(),
+                    Some("confirmed" | "state-changed")
+                )
+                && menu_id.is_none_or(|menu| {
+                    record.pointer("/before/menu_id").and_then(Value::as_str) == Some(menu)
+                })
+        })
+        .collect()
+}
+
 fn summarize_launcher_response_pulses(
     trace: &Value,
     surface: &str,
@@ -7866,47 +7887,63 @@ fn summarize_launcher_response_pulses(
     let feedback = trace["feedback_records"]
         .as_array()
         .ok_or("launcher response trace has no feedback records")?;
-    let visible = feedback
+    let mut events = BTreeMap::<u64, Vec<&Value>>::new();
+    for record in feedback
         .iter()
-        .filter(|record| {
-            record["phase"].as_str() == Some("visible")
-                && record["surface"].as_str() == Some(surface)
-                && expected_items.contains(&record["item"].as_str().unwrap_or(""))
-        })
-        .collect::<Vec<_>>();
-    let visible_items = visible
-        .iter()
-        .filter_map(|record| record["item"].as_str())
-        .collect::<Vec<_>>();
-    let mut dwell_us = Vec::new();
-    let exact_pairs = visible.iter().all(|on| {
-        let event_id = on["event_id"].as_u64();
-        let on_frame = on["confirmed_frame"].as_u64().unwrap_or(u64::MAX);
-        let matches = feedback
-            .iter()
-            .filter(|off| {
-                off["phase"].as_str() == Some("hidden")
-                    && off["event_id"].as_u64() == event_id
-                    && off["surface"].as_str() == Some(surface)
-            })
-            .collect::<Vec<_>>();
-        if matches.len() != 1 {
-            return false;
+        .filter(|record| record["surface"].as_str() == Some(surface))
+    {
+        if let Some(event_id) = record["event_id"].as_u64() {
+            events.entry(event_id).or_default().push(record);
         }
-        let off = matches[0];
-        let dwell = off["dwell_us"].as_u64().unwrap_or(0);
-        dwell_us.push(dwell);
-        off["confirmed_frame"].as_u64().unwrap_or(0) > on_frame && dwell >= 80_000
-    });
-    let passed = visible_items == expected_items && exact_pairs;
+    }
+    let mut visible_items = Vec::new();
+    let mut cancelled_items = Vec::new();
+    let mut dwell_us = Vec::new();
+    let mut exact_lifecycle = events.len() == expected_items.len();
+    for ((_, records), expected_item) in events.iter().zip(expected_items.iter()) {
+        let target_matches = records
+            .iter()
+            .all(|record| record["item"].as_str() == Some(*expected_item));
+        let visible = records
+            .iter()
+            .filter(|record| record["phase"].as_str() == Some("visible"))
+            .copied()
+            .collect::<Vec<_>>();
+        let hidden = records
+            .iter()
+            .filter(|record| record["phase"].as_str() == Some("hidden"))
+            .copied()
+            .collect::<Vec<_>>();
+        let cancelled = records
+            .iter()
+            .filter(|record| record["phase"].as_str() == Some("cancelled"))
+            .copied()
+            .collect::<Vec<_>>();
+        if visible.len() == 1 && hidden.len() == 1 && cancelled.is_empty() {
+            let on_frame = visible[0]["confirmed_frame"].as_u64().unwrap_or(u64::MAX);
+            let off_frame = hidden[0]["confirmed_frame"].as_u64().unwrap_or(0);
+            let dwell = hidden[0]["dwell_us"].as_u64().unwrap_or(0);
+            visible_items.push(*expected_item);
+            dwell_us.push(dwell);
+            exact_lifecycle &= target_matches && off_frame > on_frame && dwell >= 80_000;
+        } else if cancelled.len() == 1 && visible.is_empty() && hidden.is_empty() {
+            cancelled_items.push(*expected_item);
+            exact_lifecycle &= target_matches;
+        } else {
+            exact_lifecycle = false;
+        }
+    }
     Ok(json!({
-        "status": if passed { "passed" } else { "failed" },
+        "status": if exact_lifecycle { "passed" } else { "failed" },
         "surface": surface,
         "expected_items": expected_items,
         "visible_items": visible_items,
+        "cancelled_items": cancelled_items,
+        "visible_count": visible_items.len(),
+        "cancelled_count": cancelled_items.len(),
         "dwell_us": dwell_us,
         "minimum_dwell_us": 80_000,
-        "exact_on_off_pairs": exact_pairs,
+        "exact_on_off_pairs": exact_lifecycle,
     }))
 }
 
@@ -7917,15 +7954,20 @@ fn launcher_response_route_summary(
     pulse: Value,
     detail: Value,
 ) -> Value {
-    let dispatch_latencies_us = records
+    let confirmed_records = records
+        .iter()
+        .copied()
+        .filter(|record| record["disposition"].as_str() == Some("confirmed"))
+        .collect::<Vec<_>>();
+    let dispatch_latencies_us = confirmed_records
         .iter()
         .filter_map(|record| record["dispatch_latency_us"].as_u64())
         .collect::<Vec<_>>();
-    let confirmed_latencies_us = records
+    let confirmed_latencies_us = confirmed_records
         .iter()
         .filter_map(|record| record["confirmed_latency_us"].as_u64())
         .collect::<Vec<_>>();
-    let frames = records
+    let frames = confirmed_records
         .iter()
         .filter_map(|record| record["confirmed_frame"].as_u64())
         .collect::<Vec<_>>();
@@ -7936,6 +7978,15 @@ fn launcher_response_route_summary(
         .and_then(Value::as_u64)
         .unwrap_or(records.len() as u64);
     let observed = records.len() as u64;
+    let cancelled = pulse["cancelled_count"].as_u64().unwrap_or(0);
+    let required_confirmed = expected.saturating_sub(cancelled);
+    let confirmation_coverage = confirmed_records.len() as u64 >= required_confirmed;
+    let first_eligible = confirmed_records.iter().all(|record| {
+        record
+            .pointer("/frame/first_eligible_vblank")
+            .and_then(Value::as_bool)
+            == Some(true)
+    });
     let latch_drops = trace
         .pointer("/presentation/latch_drop_delta")
         .and_then(Value::as_u64)
@@ -7957,7 +8008,7 @@ fn launcher_response_route_summary(
             .and_then(Value::as_bool)
             == Some(true);
     json!({
-        "route_status": if route_passed && reordered == 0 { "passed" } else { "failed" },
+        "route_status": if route_passed && reordered == 0 && confirmation_coverage && first_eligible { "passed" } else { "failed" },
         "pulse_status": pulse["status"],
         "refresh_period_us": trace.pointer("/presentation/refresh_period_us").and_then(Value::as_u64),
         "dispatch_latencies_us": dispatch_latencies_us,
@@ -7965,6 +8016,9 @@ fn launcher_response_route_summary(
         "lost_actions": expected.saturating_sub(observed),
         "duplicated_actions": observed.saturating_sub(expected),
         "coalesced_actions": expected.saturating_sub(observed),
+        "cancelled_actions": cancelled,
+        "confirmation_coverage": if confirmation_coverage { "passed" } else { "failed" },
+        "first_eligible_vblank_status": if first_eligible { "passed" } else { "failed" },
         "reordered_actions": reordered,
         "latch_drops": latch_drops,
         "repeated_vblanks": repeated,
@@ -30454,6 +30508,22 @@ mod tests {
             summarize_launcher_response_pulses(&trace, "settings", &["orientation", "screensaver"])
                 .unwrap();
         assert_eq!(summary["status"], "passed");
+
+        let cancelled = json!({
+            "feedback_records": [
+                {"phase": "visible", "event_id": 1, "surface": "settings", "item": "orientation", "confirmed_frame": 10},
+                {"phase": "hidden", "event_id": 1, "surface": "settings", "item": "orientation", "confirmed_frame": 15, "dwell_us": 83_000},
+                {"phase": "cancelled", "event_id": 2, "surface": "settings", "item": "screensaver", "confirmed_frame": 16},
+            ],
+        });
+        let cancelled_summary = summarize_launcher_response_pulses(
+            &cancelled,
+            "settings",
+            &["orientation", "screensaver"],
+        )
+        .unwrap();
+        assert_eq!(cancelled_summary["status"], "passed");
+        assert_eq!(cancelled_summary["cancelled_count"], 1);
 
         let mut short = trace;
         short["feedback_records"][3]["dwell_us"] = json!(79_999);
