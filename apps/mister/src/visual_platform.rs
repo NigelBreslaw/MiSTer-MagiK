@@ -3,7 +3,7 @@
 
 use slint::platform::software_renderer::{RenderingRotation, RepaintBufferType, SoftwareRenderer};
 use slint::platform::{Platform, WindowAdapter};
-use slint::{LogicalPosition, LogicalRect, LogicalSize, PhysicalSize, Window};
+use slint::{PhysicalSize, Window};
 use std::cell::Cell;
 use std::rc::{Rc, Weak};
 use std::time::{Duration, Instant};
@@ -67,9 +67,12 @@ impl MisterSoftwareWindow {
             return false;
         }
         self.renderer.mark_dirty_region(
-            LogicalRect::new(
-                LogicalPosition::default(),
-                LogicalSize::new(logical_width as f32, logical_height as f32),
+            i_slint_core::lengths::LogicalRect::new(
+                i_slint_core::lengths::LogicalPoint::default(),
+                i_slint_core::lengths::LogicalSize::new(
+                    logical_width as f32,
+                    logical_height as f32,
+                ),
             )
             .into(),
         );
