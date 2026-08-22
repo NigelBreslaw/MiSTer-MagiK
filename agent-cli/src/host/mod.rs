@@ -15662,15 +15662,17 @@ fn verify_installed_search_ui(config: &NativeDeviceConfig, output_dir: &Path) ->
             LauncherRestartOptions {
                 env_vars: vec![
                     ("MISTER_CATALOG_REFRESH".into(), "off".into()),
-                    ("MISTER_LAUNCHER_START_SCREEN".into(), "arcade".into()),
-                    ("MISTER_LAUNCHER_START_SYSTEM".into(), "arcade".into()),
+                    (
+                        "MISTER_SYSTEM_ENTRY_BENCHMARK_SYSTEM".into(),
+                        "arcade".into(),
+                    ),
                     (
                         "MISTER_LAUNCHER_INPUT_SCRIPT".into(),
                         "left,b,down,a,a,wait:180".into(),
                     ),
                     (
                         "MISTER_LAUNCHER_INPUT_SCRIPT_WAIT_FRAMES".into(),
-                        "10".into(),
+                        "120".into(),
                     ),
                 ],
                 timeout_secs: 45,
