@@ -16,7 +16,7 @@ use super::launcher_pacing::{
     LauncherPhaseAlignment,
 };
 use super::launcher_screensaver::ScreensaverRenderTrace;
-use super::launcher_worker_intents::reset_retained_media_progress_bridge;
+use super::launcher_worker_intents::reset_media_progress_bridge;
 use super::launcher_worker_intents::{
     LauncherWorkerUiIntent, apply_launcher_worker_ui_intent, catalog_scan_message,
 };
@@ -53,60 +53,6 @@ const SETTINGS_NAVIGATION_STATUS_DRAIN_MIN: Duration = Duration::from_millis(500
 const SETTINGS_NAVIGATION_STATUS_DRAIN_LIMIT: Duration = Duration::from_secs(2);
 const SQLITE_HEADER: &[u8; 16] = b"SQLite format 3\0";
 const MODAL_INPUT_TEST_ROOT: &str = "/tmp/mister-magik/modal-input-benchmark";
-
-fn bridge_model_retained_policy_from_values(
-    route: Option<&str>,
-    response_trace: Option<&str>,
-    policy: Option<&str>,
-) -> bool {
-    (route == Some("bridge-churn") || response_trace == Some("1")) && policy == Some("retained")
-}
-
-fn bridge_model_retained_policy() -> bool {
-    bridge_model_retained_policy_from_values(
-        std::env::var("MISTER_GUI_FRAME_PROFILE_ROUTE")
-            .ok()
-            .as_deref(),
-        std::env::var("MISTER_LAUNCHER_RESPONSE_TRACE")
-            .ok()
-            .as_deref(),
-        std::env::var("MISTER_BRIDGE_MODEL_POLICY").ok().as_deref(),
-    )
-}
-
-#[cfg(test)]
-mod bridge_model_retained_policy_tests {
-    use super::*;
-
-    #[test]
-    fn selector_is_consumed_only_by_the_bridge_churn_route() {
-        assert!(bridge_model_retained_policy_from_values(
-            Some("bridge-churn"),
-            None,
-            Some("retained")
-        ));
-        assert!(bridge_model_retained_policy_from_values(
-            None,
-            Some("1"),
-            Some("retained")
-        ));
-        assert!(!bridge_model_retained_policy_from_values(
-            None,
-            None,
-            Some("retained")
-        ));
-        assert!(!bridge_model_retained_policy_from_values(
-            Some("bridge-churn"),
-            None,
-            None
-        ));
-        assert!(!bridge_model_retained_policy_from_values(
-            Some("settled-composition"),
-            None,
-            Some("retained")
-        ));
-    }
-}
 
 fn custom_damage_invalidation_comparison(
     bounding_rect: Option<DirtyRect>,
@@ -5386,8 +5332,7 @@ pub(super) fn run_launcher_loop(
         input_observation_probe.clone(),
     );
     let mut gui_profiling = GuiProfilingController::from_config(profile_config.gui().clone());
-    crate::launcher_presentation::set_bridge_model_retained_policy(bridge_model_retained_policy());
-    reset_retained_media_progress_bridge();
+    reset_media_progress_bridge();
     let mut bridge_churn_playback = BridgeChurnPlayback::new(gui_profiling.bridge_churn_route());
     let mut input_latency_lab = InputLatencyLab::from_env(input_observation_probe.clone());
     let mut loading_title = String::new();

@@ -18,17 +18,9 @@ macro_rules! set_bridge_string_if_changed {
     ($bridge:expr, $getter:ident, $setter:ident, $value:expr) => {{
         let source = $value;
         let source = AsRef::<str>::as_ref(&source);
-        if crate::launcher_presentation::bridge_model_retained_policy_enabled() {
-            if $bridge.$getter().as_str() != source {
-                crate::launcher_presentation::bridge_churn_record_shared_strings(1);
-                $bridge.$setter(SharedString::from(source));
-            }
-        } else {
+        if $bridge.$getter().as_str() != source {
             crate::launcher_presentation::bridge_churn_record_shared_strings(1);
-            let value = SharedString::from(source);
-            if $bridge.$getter() != value {
-                $bridge.$setter(value);
-            }
+            $bridge.$setter(SharedString::from(source));
         }
     }};
 }
@@ -1439,15 +1431,9 @@ impl BridgeChurnPlayback {
         }
         let selected = self.step % BRIDGE_CHURN_MENU_ROWS;
         if let Some(model) = self.menu_presentation.as_ref() {
-            if crate::launcher_presentation::bridge_model_retained_policy_enabled() {
-                bridge_churn_sync_benchmark_menu_row(model, self.menu_selected, selected);
-                if self.menu_selected != selected {
-                    bridge_churn_sync_benchmark_menu_row(model, selected, selected);
-                }
-            } else {
-                for index in 0..model.row_count() {
-                    bridge_churn_sync_benchmark_menu_row(model, index, selected);
-                }
+            bridge_churn_sync_benchmark_menu_row(model, self.menu_selected, selected);
+            if self.menu_selected != selected {
+                bridge_churn_sync_benchmark_menu_row(model, selected, selected);
             }
         }
         self.menu_selected = selected;

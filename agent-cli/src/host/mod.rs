@@ -756,18 +756,14 @@ impl NativeDevice {
         &mut self,
         output_dir: &Path,
     ) -> std::result::Result<String, DeviceFailure> {
-        self.benchmark_profile(|config| {
-            profile_installed_bridge_model_churn(config, output_dir, false)
-        })
+        self.benchmark_profile(|config| profile_installed_bridge_model_churn(config, output_dir))
     }
 
     pub(crate) fn profile_bridge_model_churn_retained(
         &mut self,
         output_dir: &Path,
     ) -> std::result::Result<String, DeviceFailure> {
-        self.benchmark_profile(|config| {
-            profile_installed_bridge_model_churn(config, output_dir, true)
-        })
+        self.benchmark_profile(|config| profile_installed_bridge_model_churn(config, output_dir))
     }
 
     pub(crate) fn profile_scheduler_trace(
@@ -1031,18 +1027,14 @@ impl NativeDevice {
         &mut self,
         output_dir: &Path,
     ) -> std::result::Result<String, DeviceFailure> {
-        self.benchmark_profile(|config| {
-            verify_installed_launcher_response(config, output_dir, false)
-        })
+        self.benchmark_profile(|config| verify_installed_launcher_response(config, output_dir))
     }
 
     pub(crate) fn verify_launcher_response_retained(
         &mut self,
         output_dir: &Path,
     ) -> std::result::Result<String, DeviceFailure> {
-        self.benchmark_profile(|config| {
-            verify_installed_launcher_response(config, output_dir, true)
-        })
+        self.benchmark_profile(|config| verify_installed_launcher_response(config, output_dir))
     }
 
     pub(crate) fn verify_input_latency_lab(
@@ -5489,7 +5481,6 @@ fn verify_installed_input_integrity(
 fn verify_installed_launcher_response(
     config: &NativeDeviceConfig,
     output_dir: &Path,
-    retained: bool,
 ) -> Result<String> {
     let isolated_profile = std::env::var("MISTER_LAUNCHER_RESPONSE_ISOLATED_PROFILE")
         .ok()
@@ -5548,7 +5539,6 @@ fn verify_installed_launcher_response(
                     "idle-round-trip",
                     STEADY_STATE_CATALOG_REFRESH_POLICY,
                     true,
-                    retained,
                 )?);
             } else {
                 for (scenario_label, catalog_refresh) in LAUNCHER_RESPONSE_QUALIFICATION_SCENARIOS {
@@ -5558,7 +5548,6 @@ fn verify_installed_launcher_response(
                         scenario_label,
                         catalog_refresh,
                         false,
-                        retained,
                     )?);
                 }
             }
@@ -5633,7 +5622,7 @@ fn verify_installed_launcher_response(
         input_response_passed && pulse_passed && integrity_passed && background_adoption_passed;
     let summary = json!({
         "schema": "mister-magik-launcher-response-v2",
-        "bridge_model_policy": if retained { "retained" } else { "replacement" },
+        "bridge_model_policy": "retained",
         "status": if passed { "passed" } else { "failed" },
         "protocol": input_proxy_protocol,
         "routes": if isolated_profile {
@@ -5774,7 +5763,6 @@ fn profile_installed_launcher_response_attribution(
                 arm.label(),
                 "off",
                 true,
-                false,
                 Some(&instrumentation),
             )?;
             validate_launcher_response_attribution_arm(arm, &route)?;
@@ -6957,7 +6945,6 @@ fn run_launcher_response_scenario(
     label: &str,
     catalog_refresh: &str,
     isolated_profile: bool,
-    retained: bool,
 ) -> Result<Value> {
     run_launcher_response_scenario_with_instrumentation(
         session,
@@ -6965,7 +6952,6 @@ fn run_launcher_response_scenario(
         label,
         catalog_refresh,
         isolated_profile,
-        retained,
         None,
     )
 }
@@ -6976,7 +6962,6 @@ fn run_launcher_response_scenario_with_instrumentation(
     label: &str,
     catalog_refresh: &str,
     isolated_profile: bool,
-    retained: bool,
     instrumentation: Option<&LauncherResponseInstrumentation<'_>>,
 ) -> Result<Value> {
     let main_before: Value = serde_json::from_str(
@@ -6995,7 +6980,6 @@ fn run_launcher_response_scenario_with_instrumentation(
             interval_ms,
             start_delay_ms,
             isolated_profile,
-            retained,
             instrumentation,
         )?;
         computers_sweeps.push(if isolated_profile {
@@ -7020,7 +7004,6 @@ fn run_launcher_response_scenario_with_instrumentation(
                 "launcher-response",
                 17,
                 "system-hub",
-                retained,
             )?,
             run_launcher_response_focus_route(
                 session,
@@ -7030,9 +7013,8 @@ fn run_launcher_response_scenario_with_instrumentation(
                 "down 10 4 50",
                 4,
                 "settings",
-                retained,
             )?,
-            run_launcher_response_arcade_route(session, catalog_refresh, retained)?,
+            run_launcher_response_arcade_route(session, catalog_refresh)?,
         )
     };
 
@@ -7365,7 +7347,6 @@ fn run_launcher_response_computers_sweep(
     interval_ms: u64,
     start_delay_ms: u64,
     isolated_profile: bool,
-    retained: bool,
     instrumentation: Option<&LauncherResponseInstrumentation<'_>>,
 ) -> Result<Value> {
     let run_id = format!(
@@ -7395,9 +7376,6 @@ fn run_launcher_response_computers_sweep(
     ];
     if isolated_profile {
         env_vars.push(("MISTER_PROFILE".into(), "full".into()));
-    }
-    if retained {
-        env_vars.push(("MISTER_BRIDGE_MODEL_POLICY".into(), "retained".into()));
     }
     if let Some(instrumentation) = instrumentation {
         env_vars.extend(launcher_response_attribution_env(
@@ -7648,7 +7626,6 @@ fn run_launcher_response_focus_route(
     driver: &str,
     expected_records: usize,
     pulse_surface: &str,
-    retained: bool,
 ) -> Result<Value> {
     let run_id = format!(
         "focus-{start_screen}-{}",
@@ -7674,9 +7651,6 @@ fn run_launcher_response_focus_route(
     ];
     if let Some(system) = start_system {
         env_vars.push(("MISTER_LAUNCHER_START_SYSTEM".into(), system.into()));
-    }
-    if retained {
-        env_vars.push(("MISTER_BRIDGE_MODEL_POLICY".into(), "retained".into()));
     }
     restart_and_reconcile_launcher_response_arm(
         session,
@@ -7721,11 +7695,7 @@ fn run_launcher_response_focus_route(
     ))
 }
 
-fn run_launcher_response_arcade_route(
-    session: &Session,
-    catalog_refresh: &str,
-    retained: bool,
-) -> Result<Value> {
+fn run_launcher_response_arcade_route(session: &Session, catalog_refresh: &str) -> Result<Value> {
     let run_id = format!(
         "arcade-{}",
         SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos()
@@ -7749,9 +7719,6 @@ fn run_launcher_response_arcade_route(
             LAUNCHER_RESPONSE_COMPLETE_REMOTE.into(),
         ),
     ];
-    if retained {
-        env_vars.push(("MISTER_BRIDGE_MODEL_POLICY".into(), "retained".into()));
-    }
     restart_and_reconcile_launcher_response_arm(
         session,
         LauncherRestartOptions {
@@ -8510,8 +8477,8 @@ fn settled_composition_launcher_env() -> Vec<(String, String)> {
     ]
 }
 
-fn bridge_model_churn_launcher_env(retained: bool) -> Vec<(String, String)> {
-    let mut environment = vec![
+fn bridge_model_churn_launcher_env() -> Vec<(String, String)> {
+    vec![
         ("MISTER_CATALOG_REFRESH".into(), "off".into()),
         ("MISTER_LAUNCHER_START_SCREEN".into(), "home".into()),
         ("MISTER_GUI_FRAME_PROFILE".into(), "1".into()),
@@ -8523,11 +8490,7 @@ fn bridge_model_churn_launcher_env(retained: bool) -> Vec<(String, String)> {
             "MISTER_GUI_FRAME_PROFILE_ROUTE".into(),
             "bridge-churn".into(),
         ),
-    ];
-    if retained {
-        environment.push(("MISTER_BRIDGE_MODEL_POLICY".into(), "retained".into()));
-    }
-    environment
+    ]
 }
 
 fn gui_profile_route_cleanup_command() -> String {
@@ -8880,7 +8843,6 @@ fn run_bridge_model_churn_route(
     config: &NativeDeviceConfig,
     session: &Session,
     output_dir: &Path,
-    retained: bool,
 ) -> Result<Value> {
     fs::create_dir_all(output_dir)?;
     exec_checked(
@@ -8891,7 +8853,7 @@ fn run_bridge_model_churn_route(
     restart_launcher_with_one_shot_env(
         session,
         LauncherRestartOptions {
-            env_vars: bridge_model_churn_launcher_env(retained),
+            env_vars: bridge_model_churn_launcher_env(),
             timeout_secs: 45,
             remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str().into(),
             ..LauncherRestartOptions::default()
@@ -12866,14 +12828,8 @@ fn profile_installed_launcher_response_streamline(
         let capture_thread = capture.start();
         capture.wait_ready(Duration::from_secs(10))?;
         let capture_started_monotonic_ns = capture.monotonic_ns("capture start")?;
-        let route_result = run_launcher_response_scenario(
-            &session,
-            "60-hz",
-            "streamline-round-trip",
-            "off",
-            true,
-            false,
-        );
+        let route_result =
+            run_launcher_response_scenario(&session, "60-hz", "streamline-round-trip", "off", true);
         let capture_result = capture.stop(capture_thread);
         let capture_ended_monotonic_ns = capture.monotonic_ns("capture end")?;
         capture.retain_log()?;
@@ -13094,7 +13050,6 @@ fn profile_installed_settled_composition(
 fn profile_installed_bridge_model_churn(
     config: &NativeDeviceConfig,
     output_dir: &Path,
-    retained: bool,
 ) -> Result<String> {
     fs::create_dir_all(output_dir)?;
     let session = connect_with(&config.connection, 10)?;
@@ -13124,7 +13079,7 @@ fn profile_installed_bridge_model_churn(
     drop(session);
     apply_confirmed_display_mode(config, capture_mode, "bridge model churn")?;
     let session = connect_with(&config.connection, 10)?;
-    let route_result = run_bridge_model_churn_route(config, &session, output_dir, retained);
+    let route_result = run_bridge_model_churn_route(config, &session, output_dir);
     if let Some(log) = remote_read(&session, "/tmp/mister-magik-slint.log") {
         fs::write(output_dir.join("launcher.log"), log)?;
     }
@@ -13177,7 +13132,7 @@ fn profile_installed_bridge_model_churn(
         "product_quality_status": route.pointer("/metrics/presentation/quality_status")
             .cloned().unwrap_or_else(|| json!("unknown")),
         "performance_authority": "unprofiled-installed-dev",
-        "bridge_model_policy": if retained { "retained" } else { "replacement" },
+        "bridge_model_policy": "retained",
         "display_mode": capture_mode.id,
         "identity": {
             "boot_id": boot_id.trim(),
@@ -31065,6 +31020,7 @@ mod tests {
     #[test]
     fn gui_profile_route_environment_is_fixed_and_pmu_is_independent() {
         let control = gui_profile_route_launcher_env_with_pprof(false, None, 40_000, None);
+        let bridge_churn = bridge_model_churn_launcher_env();
         let pmu = gui_profile_route_launcher_env_with_pprof(true, None, 40_000, None);
         let pprof = gui_profile_route_launcher_env_with_pprof(
             false,
@@ -31083,6 +31039,14 @@ mod tests {
                 .any(|(name, value)| name == "MISTER_CATALOG_REFRESH" && value == "off")
         );
         assert!(control.iter().all(|(name, _)| name != "MISTER_PMU_PROFILE"));
+        assert!(bridge_churn.iter().any(|(name, value)| {
+            name == "MISTER_GUI_FRAME_PROFILE_ROUTE" && value == "bridge-churn"
+        }));
+        assert!(
+            bridge_churn
+                .iter()
+                .all(|(name, _)| name != "MISTER_BRIDGE_MODEL_POLICY")
+        );
         assert!(
             pmu.iter()
                 .any(|(name, value)| { name == "MISTER_GUI_FRAME_PROFILE_PMU" && value == "1" })

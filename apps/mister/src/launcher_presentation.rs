@@ -284,17 +284,9 @@ macro_rules! set_string_if_changed {
     ($bridge:expr, $getter:ident, $setter:ident, $value:expr) => {{
         let source = $value;
         let source = AsRef::<str>::as_ref(&source);
-        if bridge_model_retained_policy_enabled() {
-            if $bridge.$getter().as_str() != source {
-                bridge_churn_record_shared_strings(1);
-                $bridge.$setter(SharedString::from(source));
-            }
-        } else {
+        if $bridge.$getter().as_str() != source {
             bridge_churn_record_shared_strings(1);
-            let value = SharedString::from(source);
-            if $bridge.$getter() != value {
-                $bridge.$setter(value);
-            }
+            $bridge.$setter(SharedString::from(source));
         }
     }};
 }
@@ -327,7 +319,6 @@ impl BridgeChurnCounters {
 }
 
 thread_local! {
-    static BRIDGE_MODEL_RETAINED_POLICY: Cell<bool> = const { Cell::new(false) };
     static BRIDGE_CHURN_ENABLED: Cell<bool> = const { Cell::new(false) };
     static BRIDGE_CHURN_COUNTERS: RefCell<BridgeChurnCounters> = const {
         RefCell::new(BridgeChurnCounters {
@@ -338,14 +329,6 @@ thread_local! {
             model_allocation_us: 0,
         })
     };
-}
-
-pub(crate) fn set_bridge_model_retained_policy(enabled: bool) {
-    BRIDGE_MODEL_RETAINED_POLICY.with(|policy| policy.set(enabled));
-}
-
-pub(crate) fn bridge_model_retained_policy_enabled() -> bool {
-    BRIDGE_MODEL_RETAINED_POLICY.with(Cell::get)
 }
 
 pub(crate) fn bridge_churn_begin() {
@@ -705,8 +688,7 @@ impl LauncherBridgePresenter {
             return;
         }
         if let Some(model) = self.menu_item_presentation.as_ref() {
-            if bridge_model_retained_policy_enabled() && self.projected_selection_feedback == stamp
-            {
+            if self.projected_selection_feedback == stamp {
                 if let Some(previous) = self.projected_selected_index {
                     sync_menu_item_presentation_row(model, nav, &stamp, previous);
                 }

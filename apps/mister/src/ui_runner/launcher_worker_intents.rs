@@ -74,7 +74,7 @@ pub(super) fn sync_launcher_worker_ui_intent(
             summary,
             terminal,
         } => {
-            return sync_media_progress_bridge(&bridge, &status_presenter, rows, summary, terminal);
+            return sync_media_progress_bridge(&bridge, rows, summary, terminal);
         }
     }
     true
@@ -83,7 +83,7 @@ pub(super) fn sync_launcher_worker_ui_intent(
 const MEDIA_PROGRESS_COALESCE_INTERVAL: Duration = Duration::from_millis(100);
 
 #[derive(Default)]
-struct RetainedMediaProgressBridge {
+struct MediaProgressBridge {
     model: Option<Rc<VecModel<slint_ui::launcher::ScreenshotPackProgress>>>,
     rows: Vec<MediaProgressDisplayRow>,
     summary: String,
@@ -91,27 +91,21 @@ struct RetainedMediaProgressBridge {
 }
 
 thread_local! {
-    static RETAINED_MEDIA_PROGRESS_BRIDGE: RefCell<RetainedMediaProgressBridge> =
-        RefCell::new(RetainedMediaProgressBridge::default());
+    static MEDIA_PROGRESS_BRIDGE: RefCell<MediaProgressBridge> =
+        RefCell::new(MediaProgressBridge::default());
 }
 
-pub(super) fn reset_retained_media_progress_bridge() {
-    RETAINED_MEDIA_PROGRESS_BRIDGE.with(|state| *state.borrow_mut() = Default::default());
+pub(super) fn reset_media_progress_bridge() {
+    MEDIA_PROGRESS_BRIDGE.with(|state| *state.borrow_mut() = Default::default());
 }
 
 fn sync_media_progress_bridge(
     bridge: &slint_ui::launcher::MisterBridge,
-    presenter: &LauncherStatusPresenter<'_, '_>,
     rows: Vec<MediaProgressDisplayRow>,
     summary: String,
     terminal: bool,
 ) -> bool {
-    if !crate::launcher_presentation::bridge_model_retained_policy_enabled() {
-        let model = media_progress_model(&rows);
-        presenter.sync_media_progresses(model, summary);
-        return true;
-    }
-    RETAINED_MEDIA_PROGRESS_BRIDGE.with(|state| {
+    MEDIA_PROGRESS_BRIDGE.with(|state| {
         let mut state = state.borrow_mut();
         let now = Instant::now();
         if !terminal

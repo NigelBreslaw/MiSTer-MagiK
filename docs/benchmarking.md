@@ -166,15 +166,14 @@ and clears benchmark media before completing. The original semantic Home state,
 display mode, installed manifest, boot identity, and ordinary launcher are
 restored. Evidence is retained below
 `build/agent-benchmarks/bridge-model-churn/<timestamp>/`.
-The `bridge-model-churn-retained` arm consumes the one-shot
-`MISTER_BRIDGE_MODEL_POLICY=retained` selector only while the bridge-churn route
-or an exact launcher-response trace is active. Ordinary launches and both
-baseline arms remain on replacement behavior. `launcher-response-retained`
-applies the same selector to the production interaction qualification without
-changing ordinary launcher policy. The candidate retains the media `VecModel`, coalesces only
-nonterminal progress to 100 ms, publishes completion/failure immediately,
-updates only previous/current menu rows when feedback identity is stable, and
-avoids `SharedString` construction for unchanged bridge values.
+Retained bridge models are the sole production policy. The launcher retains the
+media `VecModel`, coalesces only nonterminal progress to 100 ms, publishes
+completion/failure immediately, updates only previous/current menu rows when
+feedback identity is stable, and avoids `SharedString` construction for
+unchanged bridge values. `bridge-model-churn-retained` and
+`launcher-response-retained` remain compatibility aliases for historical
+automation; they execute the same production path as `bridge-model-churn` and
+`launcher-response` and no selector exists.
 
 Production modal carriers are receipt-scoped: the entry carrier remains forced
 until direct-layer retirement has a matching physical receipt. The summary
