@@ -463,7 +463,17 @@ pub(crate) struct ResumeValidationAttribution {
     pub(crate) committed_state_present: bool,
     pub(crate) committed_state_seeded: bool,
     pub(crate) open_us: u64,
+    pub(crate) frame_decode_us: u64,
     pub(crate) validation_us: u64,
+    pub(crate) validation_receive_wait_us: u64,
+    pub(crate) validation_consumer_us: u64,
+    pub(crate) validation_events: usize,
+    pub(crate) validation_file_events: usize,
+    pub(crate) validation_facts_events: usize,
+    pub(crate) validation_runtime_events: usize,
+    pub(crate) output_decode_us: u64,
+    pub(crate) output_decode_bytes: usize,
+    pub(crate) output_decode_targets: usize,
     pub(crate) committed_targets: usize,
     pub(crate) validated_targets: usize,
     pub(crate) reused_targets: usize,
@@ -491,7 +501,7 @@ pub(crate) struct CatalogScanAttribution {
 impl CatalogScanAttribution {
     pub(crate) fn compact_detail(&self) -> String {
         format!(
-            "scan_total_us={} scan_accounted_us={} scan_unattributed_us={} scan_plan_us={} scan_resume_us={} scan_prepared_payload_us={} scan_execution_pipeline_us={} scan_post_pipeline_us={} resume_enabled={} resume_state_present={} resume_state_seeded={} resume_open_us={} resume_validation_us={} resume_committed={} resume_validated={} resume_reused={} resume_invalidated={} resume_unavailable={} resume_errors={} resume_setup_errors={} {} {}",
+            "scan_total_us={} scan_accounted_us={} scan_unattributed_us={} scan_plan_us={} scan_resume_us={} scan_prepared_payload_us={} scan_execution_pipeline_us={} scan_post_pipeline_us={} resume_enabled={} resume_state_present={} resume_state_seeded={} resume_open_us={} resume_frame_decode_us={} resume_validation_us={} resume_validation_receive_wait_us={} resume_validation_consumer_us={} resume_validation_events={} resume_validation_file_events={} resume_validation_facts_events={} resume_validation_runtime_events={} resume_output_decode_us={} resume_output_decode_bytes={} resume_output_decode_targets={} resume_committed={} resume_validated={} resume_reused={} resume_invalidated={} resume_unavailable={} resume_errors={} resume_setup_errors={} {} {}",
             self.total_us,
             self.accounted_us,
             self.unattributed_us,
@@ -504,7 +514,17 @@ impl CatalogScanAttribution {
             u8::from(self.resume.committed_state_present),
             u8::from(self.resume.committed_state_seeded),
             self.resume.open_us,
+            self.resume.frame_decode_us,
             self.resume.validation_us,
+            self.resume.validation_receive_wait_us,
+            self.resume.validation_consumer_us,
+            self.resume.validation_events,
+            self.resume.validation_file_events,
+            self.resume.validation_facts_events,
+            self.resume.validation_runtime_events,
+            self.resume.output_decode_us,
+            self.resume.output_decode_bytes,
+            self.resume.output_decode_targets,
             self.resume.committed_targets,
             self.resume.validated_targets,
             self.resume.reused_targets,
@@ -731,9 +751,11 @@ fn prepare_resume_scan(
             return (None, attribution);
         }
     };
+    attribution.open_us = open_started.elapsed().as_micros() as u64;
     let decode_started = Instant::now();
     let decoded = journal.completed_targets();
     let decode_us = decode_started.elapsed().as_micros() as u64;
+    attribution.frame_decode_us = decode_us;
     let completed: HashMap<_, _> = decoded
         .unwrap_or_default()
         .into_iter()
@@ -747,7 +769,14 @@ fn prepare_resume_scan(
             catalog_scan::NamespaceRouteAttribution::default(),
         )
     } else {
-        validate_target_fingerprints(cfg, plan, excluded_targets, priority, &completed)
+        validate_target_fingerprints(
+            cfg,
+            plan,
+            excluded_targets,
+            priority,
+            &completed,
+            &mut attribution,
+        )
     };
     attribution.validation_us = validation_started.elapsed().as_micros() as u64;
     attribution.validated_targets = fingerprints.len();
@@ -801,7 +830,6 @@ fn prepare_resume_scan(
         },
     };
     report_resume(&state, "journal-open", 0, &format!("{status:?}"));
-    attribution.open_us = open_started.elapsed().as_micros() as u64;
     (Some(state), attribution)
 }
 
@@ -824,6 +852,7 @@ fn validate_target_fingerprints(
     excluded_targets: &[PathBuf],
     priority: LibraryScanPriority,
     completed: &HashMap<u32, crate::build_progress::CompletedTarget>,
+    attribution: &mut ResumeValidationAttribution,
 ) -> (
     HashMap<u32, String>,
     catalog_scan::NamespaceRouteAttribution,
@@ -857,8 +886,17 @@ fn validate_target_fingerprints(
     );
     let mut current: Option<(u32, Fingerprint)> = None;
     let mut fingerprints = HashMap::new();
-    let mut attribution = catalog_scan::NamespaceRouteAttribution::default();
-    while let Ok(event) = rx.recv() {
+    let mut namespace_attribution = catalog_scan::NamespaceRouteAttribution::default();
+    loop {
+        let receive_started = Instant::now();
+        let Ok(event) = rx.recv() else {
+            break;
+        };
+        attribution.validation_receive_wait_us = attribution
+            .validation_receive_wait_us
+            .saturating_add(receive_started.elapsed().as_micros() as u64);
+        attribution.validation_events = attribution.validation_events.saturating_add(1);
+        let consumer_started = Instant::now();
         match event {
             DiscoveryEvent::TargetStart(descriptor) => {
                 let original = completed.values().find(|saved| {
@@ -891,16 +929,22 @@ fn validate_target_fingerprints(
                 });
             }
             DiscoveryEvent::File(file) => {
+                attribution.validation_file_events =
+                    attribution.validation_file_events.saturating_add(1);
                 if let Some((_, fingerprint)) = current.as_mut() {
                     fingerprint.file(&file);
                 }
             }
             DiscoveryEvent::GameDirFacts(facts) => {
+                attribution.validation_facts_events =
+                    attribution.validation_facts_events.saturating_add(1);
                 if let Some((_, fingerprint)) = current.as_mut() {
                     fingerprint.facts(&facts);
                 }
             }
             DiscoveryEvent::RuntimeDirectory(runtime) => {
+                attribution.validation_runtime_events =
+                    attribution.validation_runtime_events.saturating_add(1);
                 if let Some((_, fingerprint)) = current.as_mut() {
                     fingerprint.facts(&runtime.facts);
                     for file in &runtime.files {
@@ -917,12 +961,18 @@ fn validate_target_fingerprints(
                 attribution: route_attribution,
                 ..
             } => {
-                attribution = route_attribution;
+                namespace_attribution = route_attribution;
+                attribution.validation_consumer_us = attribution
+                    .validation_consumer_us
+                    .saturating_add(consumer_started.elapsed().as_micros() as u64);
                 break;
             }
         }
+        attribution.validation_consumer_us = attribution
+            .validation_consumer_us
+            .saturating_add(consumer_started.elapsed().as_micros() as u64);
     }
-    (fingerprints, attribution)
+    (fingerprints, namespace_attribution)
 }
 
 #[derive(Default)]
@@ -1264,7 +1314,7 @@ fn scan_library_with_progress_and_events(
         ),
     );
     let resume_started = Instant::now();
-    let (mut resume, resume_attribution) =
+    let (mut resume, mut resume_attribution) =
         prepare_resume_scan(cfg, &plan, &excluded_targets, priority, durable_resume);
     let resume_us = resume_started.elapsed().as_micros() as u64;
     if let (Some(state), Some(report)) = (resume.as_ref(), scan_events.as_mut()) {
@@ -1410,6 +1460,9 @@ fn scan_library_with_progress_and_events(
         enabled: durable_resume,
         ..CheckpointAttribution::default()
     };
+    let mut resumed_output_decode_us = 0u64;
+    let mut resumed_output_decode_bytes = 0usize;
+    let mut resumed_output_decode_targets = 0usize;
     let mut handoff_attribution = ScanHandoffAttribution::default();
     let mut system_finality = BTreeMap::<String, (usize, u64, usize)>::new();
     let mut last_target_heartbeat = Instant::now();
@@ -1542,6 +1595,10 @@ fn scan_library_with_progress_and_events(
                     .as_mut()
                     .and_then(|state| state.reusable.remove(&(descriptor.ordinal as u32)))
                 {
+                    let output_decode_started = Instant::now();
+                    resumed_output_decode_bytes =
+                        resumed_output_decode_bytes.saturating_add(saved.output_json.len());
+                    resumed_output_decode_targets = resumed_output_decode_targets.saturating_add(1);
                     match serde_json::from_str::<TargetOutput>(&saved.output_json) {
                         Ok(output) => {
                             let first = discoveries.len();
@@ -1581,6 +1638,8 @@ fn scan_library_with_progress_and_events(
                             }
                         }
                     }
+                    resumed_output_decode_us = resumed_output_decode_us
+                        .saturating_add(output_decode_started.elapsed().as_micros() as u64);
                 }
                 target_descriptor = Some(descriptor);
                 target_consumer_started_at = Some(Instant::now());
@@ -2165,6 +2224,9 @@ fn scan_library_with_progress_and_events(
         CoverageAuditMode::Deferred => Vec::new(),
     };
     let post_pipeline_us = post_pipeline_started.elapsed().as_micros() as u64;
+    resume_attribution.output_decode_us = resumed_output_decode_us;
+    resume_attribution.output_decode_bytes = resumed_output_decode_bytes;
+    resume_attribution.output_decode_targets = resumed_output_decode_targets;
     let total_us = discover_t.elapsed().as_micros() as u64;
     let accounted_us = plan_us
         .saturating_add(resume_us)
@@ -2874,6 +2936,7 @@ mod timing_tests {
                 error_targets: 1,
                 setup_errors: 0,
                 namespace: catalog_scan::NamespaceRouteAttribution::default(),
+                ..ResumeValidationAttribution::default()
             },
             execution: catalog_scan::NamespaceRouteAttribution::default(),
         };

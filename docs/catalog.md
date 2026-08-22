@@ -132,6 +132,13 @@ changed targets invalidate only their dependent checkpoints. A manifest or
 semantic-contract change discards the journal. Both builder state databases are
 disposable internal state and are never publication authority.
 
+The typed `catalog-resume-validation` benchmark exercises this contract by
+restarting only the Dev launcher after a synced target batch. Its timing record
+splits progress-journal open, compact-frame decode, fingerprint-validation
+producer/channel/consumer work, and target-output decode. It uses an isolated
+catalog root and a naturally missing first-boot catalog; it must not enable the
+forced-background refresh option or touch the production registry.
+
 The retired files `library.sqlite3`, `library.summary.json`, and
 `library.nav.lz4b` are not production inputs or outputs. Acceptance fails if a
 current build recreates them.

@@ -905,6 +905,7 @@ mod tests {
             "screensaver",
             "catalog-lifecycle",
             "catalog-build-rebuild",
+            "catalog-resume-validation",
             "catalog-full-build-rebuild",
             "system-entry",
             "system-entry-critical",

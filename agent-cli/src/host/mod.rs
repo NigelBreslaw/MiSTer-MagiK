@@ -872,6 +872,15 @@ impl NativeDevice {
         self.benchmark_profile(|config| profile_installed_catalog_build_rebuild(config, output_dir))
     }
 
+    pub(crate) fn profile_catalog_resume_validation(
+        &mut self,
+        output_dir: &Path,
+    ) -> std::result::Result<String, DeviceFailure> {
+        self.benchmark_profile(|config| {
+            profile_installed_catalog_resume_validation(config, output_dir)
+        })
+    }
+
     pub(crate) fn profile_catalog_full_build_rebuild(
         &mut self,
         output_dir: &Path,
@@ -17274,6 +17283,220 @@ fn profile_installed_catalog_build_rebuild(
     serde_json::to_string(&summary).map_err(Into::into)
 }
 
+fn profile_installed_catalog_resume_validation(
+    config: &NativeDeviceConfig,
+    output_dir: &Path,
+) -> Result<String> {
+    let _signal_guard = AttendedOperationSignalGuard::install();
+    let session = connect_with(&config.connection, 10)?;
+    let endpoint = config.agent()?.clone();
+    let manifest = remote_read(&session, LOCAL_MAIN_MANIFEST_REMOTE)
+        .ok_or("development platform manifest is missing")?;
+    let boot_id = remote_read(&session, "/proc/sys/kernel/random/boot_id")
+        .ok_or("device boot id is unavailable")?
+        .trim()
+        .to_string();
+    let production_registry_before = catalog_production_registry_identity(&session)?;
+    fs::create_dir_all(output_dir)?;
+
+    let run_result = (|| -> Result<Value> {
+        let mut samples = Vec::with_capacity(CATALOG_BUILD_REBUILD_SAMPLES);
+        for sample_index in 1..=CATALOG_BUILD_REBUILD_SAMPLES {
+            require_catalog_benchmark_active("resume-validation sample preparation")?;
+            let sample_dir = output_dir.join(format!("sample-{sample_index}"));
+            fs::create_dir_all(&sample_dir)?;
+            exec_checked(
+                &session,
+                "prepare isolated resume-validation sample",
+                &catalog_build_rebuild_prepare_command(),
+            )?;
+            let launcher_env = catalog_resume_validation_launcher_env();
+            let interrupted_started = Instant::now();
+            restart_launcher_with_one_shot_env(
+                &session,
+                LauncherRestartOptions {
+                    env_vars: launcher_env.clone(),
+                    timeout_secs: CATALOG_LIFECYCLE_FIRST_VISIBLE_TIMEOUT_SECS,
+                    remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str().into(),
+                    ..LauncherRestartOptions::default()
+                },
+            )?;
+            let checkpoint = wait_for_catalog_resume_checkpoint(&session, interrupted_started)?;
+            fs::write(
+                sample_dir.join("interrupted-launcher.log"),
+                checkpoint["launcher_log"].as_str().unwrap_or_default(),
+            )?;
+            fs::write(
+                sample_dir.join("interrupted-status.json"),
+                format!("{}\n", serde_json::to_string_pretty(&checkpoint["status"])?),
+            )?;
+
+            // This ordinary launcher restart is the handled interruption. The
+            // next process receives the same isolated catalog contract and
+            // resumes from the already-synced target frame.
+            let resumed = run_catalog_build_rebuild_leg(
+                config,
+                &session,
+                &endpoint,
+                &sample_dir,
+                "resumed",
+                None,
+                CatalogBuildRebuildLegOptions {
+                    exercise_arcade_ui: false,
+                    require_updater_index: false,
+                    launcher_env,
+                    runtime_command: catalog_build_rebuild_runtime_command,
+                },
+            )?;
+            let resume_metrics = catalog_resume_validation_metrics(&resumed["phase_evidence"])?;
+            let reused = resume_metrics
+                .get("resume_reused")
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            let committed = resume_metrics
+                .get("resume_committed")
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            let artifact_set_valid = catalog_artifact_set_valid(&resumed["catalog"]);
+            let exact_identity = catalog_exact_identity(&resumed["catalog"])?;
+            let status = if reused > 0 && committed > 0 && artifact_set_valid {
+                "passed"
+            } else {
+                "failed"
+            };
+            samples.push(json!({
+                "sample": sample_index,
+                "status": status,
+                "interruption": checkpoint,
+                "resume_metrics": resume_metrics,
+                "exact_identity": exact_identity,
+                "artifact_set_valid": artifact_set_valid,
+                "resumed": resumed,
+            }));
+        }
+        let status = if samples
+            .iter()
+            .all(|sample| sample.get("status").and_then(Value::as_str) == Some("passed"))
+        {
+            "passed"
+        } else {
+            "failed"
+        };
+        Ok(json!({
+            "schema": "mister-magik-catalog-resume-validation-v1",
+            "scenario": "catalog-resume-validation",
+            "status": status,
+            "configuration": {
+                "samples": CATALOG_BUILD_REBUILD_SAMPLES,
+                "interruption": "ordinary Dev launcher restart after a synced target checkpoint",
+                "direct_reset": false,
+                "forced_background_catalog": false,
+                "catalog_root": CATALOG_BUILD_REBUILD_REMOTE_DIR,
+                "publication_filesystem": "exfat",
+            },
+            "samples": samples,
+            "manifest": parse_manifest_evidence(&manifest),
+            "boot_id": boot_id,
+        }))
+    })();
+
+    let restart_result = launcher_restart(
+        &session,
+        &LauncherRestartOptions {
+            clear_env: true,
+            remote_env: DEVELOPMENT_LAUNCHER_ENV_REMOTE.as_str().into(),
+            timeout_secs: CATALOG_LIFECYCLE_FIRST_VISIBLE_TIMEOUT_SECS,
+            ..LauncherRestartOptions::default()
+        },
+    );
+    let cleanup_result = exec_checked(
+        &session,
+        "clean isolated resume-validation state",
+        &catalog_build_rebuild_cleanup_command(),
+    );
+    let mut summary = finish_catalog_benchmark_profile(run_result, cleanup_result, restart_result)?;
+
+    drop(session);
+    let session = connect_with(&config.connection, 10)?;
+    let final_boot_id = remote_read(&session, "/proc/sys/kernel/random/boot_id")
+        .ok_or("device boot id is unavailable after resume-validation benchmark")?;
+    if final_boot_id.trim() != boot_id {
+        return Err("device rebooted during resume-validation benchmark".into());
+    }
+    let production_registry_after = catalog_production_registry_identity(&session)?;
+    let production_registry_unchanged = production_registry_after == production_registry_before;
+    if !production_registry_unchanged {
+        return Err(
+            "production catalog registry changed during resume-validation benchmark".into(),
+        );
+    }
+    summary["production_registry"] = json!({
+        "before": production_registry_before,
+        "after": production_registry_after,
+        "unchanged": true,
+    });
+    fs::write(
+        output_dir.join("summary.json"),
+        format!("{}\n", serde_json::to_string_pretty(&summary)?),
+    )?;
+    fs::write(
+        output_dir.join("report.md"),
+        catalog_resume_validation_report(&summary)?,
+    )?;
+    serde_json::to_string(&summary).map_err(Into::into)
+}
+
+fn wait_for_catalog_resume_checkpoint(session: &Session, started: Instant) -> Result<Value> {
+    loop {
+        require_catalog_benchmark_active("waiting for durable resume checkpoint")?;
+        let status = read_launcher_status(session)?;
+        let launcher_log = remote_read(session, "/tmp/mister-magik-slint.log").unwrap_or_default();
+        if launcher_log.lines().any(|line| {
+            line.contains("catalog_resume_tsv") && line.contains("phase=targets-committed")
+        }) {
+            let progress_dir = format!(
+                "{}/catalog-v3/state/catalog-build-progress-v3",
+                CATALOG_BUILD_REBUILD_REMOTE_DIR
+            );
+            let disk = exec_checked_output(
+                session,
+                "measure durable resume checkpoint",
+                &format!(
+                    "set -eu; path={}; test -d \"$path\"; du -sk \"$path\"; find \"$path\" -type f -maxdepth 1 -exec wc -c {{}} +",
+                    sh(&progress_dir)
+                ),
+            )?;
+            return Ok(json!({
+                "checkpoint_ms": started.elapsed().as_millis() as u64,
+                "status": status,
+                "launcher_log": launcher_log,
+                "progress_storage": disk.stdout,
+            }));
+        }
+        if status.get("catalog_refresh_done").and_then(Value::as_bool) == Some(true) {
+            return Err("catalog completed before a durable resume checkpoint was observed".into());
+        }
+        if started.elapsed() >= Duration::from_secs(CATALOG_LIFECYCLE_COMPLETE_TIMEOUT_SECS) {
+            return Err("timed out waiting for a durable resume checkpoint".into());
+        }
+        thread::sleep(Duration::from_millis(250));
+    }
+}
+
+fn catalog_resume_validation_metrics(phase_evidence: &Value) -> Result<Value> {
+    phase_evidence
+        .get("records")
+        .and_then(Value::as_array)
+        .and_then(|records| {
+            records.iter().find(|record| {
+                record.get("record").and_then(Value::as_str) == Some("catalog_scan_attribution_tsv")
+            })
+        })
+        .and_then(|record| record.get("metrics"))
+        .cloned()
+        .ok_or_else(|| "resumed catalog has no scan-attribution metrics".into())
+}
+
 fn profile_installed_catalog_full_build_rebuild(
     config: &NativeDeviceConfig,
     output_dir: &Path,
@@ -20998,6 +21221,13 @@ fn catalog_build_rebuild_launcher_env() -> Vec<(String, String)> {
     ]
 }
 
+fn catalog_resume_validation_launcher_env() -> Vec<(String, String)> {
+    catalog_build_rebuild_launcher_env()
+        .into_iter()
+        .filter(|(key, _)| key != "MISTER_CATALOG_REFRESH")
+        .collect()
+}
+
 fn catalog_production_registry_identity(session: &Session) -> Result<String> {
     let command = "set -eu; for path in /media/fat/mister-magik/catalog-v3/registry/manifest-a.json /media/fat/mister-magik/catalog-v3/registry/manifest-b.json /media/fat/mister-magik-dev/catalog-v3/registry/manifest-a.json /media/fat/mister-magik-dev/catalog-v3/registry/manifest-b.json; do if test -f \"$path\"; then printf '%s\\t' \"$path\"; sha256sum \"$path\" | cut -d' ' -f1; else printf '%s\\tmissing\\n' \"$path\"; fi; done";
     Ok(
@@ -21748,6 +21978,38 @@ fn catalog_build_rebuild_report(summary: &Value) -> Result<String> {
             .and_then(Value::as_bool)
             .unwrap_or(false),
     ));
+    Ok(report)
+}
+
+fn catalog_resume_validation_report(summary: &Value) -> Result<String> {
+    let samples = summary
+        .get("samples")
+        .and_then(Value::as_array)
+        .ok_or("resume-validation report has no samples")?;
+    let mut report = String::from("# Catalog resume-validation benchmark\n\n");
+    report.push_str(&format!(
+        "Status: **{}**\n\n",
+        summary["status"].as_str().unwrap_or("failed")
+    ));
+    report.push_str("| Sample | Checkpoint | Open | Frame decode | Validation | Output decode | Reused | Invalidated |\n");
+    report.push_str("| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n");
+    for sample in samples {
+        let metrics = &sample["resume_metrics"];
+        report.push_str(&format!(
+            "| {} | {} ms | {} us | {} us | {} us | {} us | {} | {} |\n",
+            sample["sample"].as_u64().unwrap_or(0),
+            sample
+                .pointer("/interruption/checkpoint_ms")
+                .and_then(Value::as_u64)
+                .unwrap_or(0),
+            metrics["resume_open_us"].as_u64().unwrap_or(0),
+            metrics["resume_frame_decode_us"].as_u64().unwrap_or(0),
+            metrics["resume_validation_us"].as_u64().unwrap_or(0),
+            metrics["resume_output_decode_us"].as_u64().unwrap_or(0),
+            metrics["resume_reused"].as_u64().unwrap_or(0),
+            metrics["resume_invalidated"].as_u64().unwrap_or(0),
+        ));
+    }
     Ok(report)
 }
 

@@ -55,6 +55,7 @@ enum BenchmarkProfile {
     SearchUi,
     CatalogLifecycle,
     CatalogBuildRebuild,
+    CatalogResumeValidation,
     CatalogFullBuildRebuild,
     CatalogCorpusInventory,
     CatalogAttributionControl,
@@ -140,6 +141,9 @@ impl BenchmarkDevice for DeviceClient {
             BenchmarkProfile::CatalogLifecycle => device.profile_catalog_lifecycle(&output_dir),
             BenchmarkProfile::CatalogBuildRebuild => {
                 device.profile_catalog_build_rebuild(&output_dir)
+            }
+            BenchmarkProfile::CatalogResumeValidation => {
+                device.profile_catalog_resume_validation(&output_dir)
             }
             BenchmarkProfile::CatalogFullBuildRebuild => {
                 device.profile_catalog_full_build_rebuild(&output_dir)
@@ -362,6 +366,9 @@ fn require_clean_installed_commit(
         }
         BenchmarkScenario::CatalogBuildRebuild => {
             execute_catalog_build_rebuild(&mut device, manifest, output_dir, reporter)
+        }
+        BenchmarkScenario::CatalogResumeValidation => {
+            execute_catalog_resume_validation(&mut device, manifest, output_dir, reporter)
         }
         BenchmarkScenario::CatalogFullBuildRebuild => {
             execute_catalog_full_build_rebuild(&mut device, manifest, output_dir, reporter)
@@ -1042,6 +1049,7 @@ fn particle_scene_lab_command(scenario: BenchmarkScenario) -> Option<&'static st
         | BenchmarkScenario::ColdBootPprof
         | BenchmarkScenario::CatalogLifecycle
         | BenchmarkScenario::CatalogBuildRebuild
+        | BenchmarkScenario::CatalogResumeValidation
         | BenchmarkScenario::CatalogFullBuildRebuild
         | BenchmarkScenario::CatalogCorpusInventory
         | BenchmarkScenario::CatalogAttributionControl
@@ -2339,6 +2347,73 @@ fn execute_catalog_build_rebuild(
         Some(100),
     )?;
     Ok(Outcome::Passed)
+}
+
+fn execute_catalog_resume_validation(
+    device: &mut impl BenchmarkDevice,
+    manifest: String,
+    output_dir: std::path::PathBuf,
+    reporter: &mut Reporter<'_>,
+) -> AgentResult<Outcome> {
+    reporter.emit(
+        EventKind::Progress,
+        "profile",
+        "benchmarking handled interrupted catalog resume validation",
+        Some(35),
+    )?;
+    let detail = device.profile(
+        BenchmarkProfile::CatalogResumeValidation,
+        output_dir.clone(),
+    )?;
+    let summary: Value = serde_json::from_str(&detail).map_err(|error| error.to_string())?;
+    device.verify_health()?;
+    evaluate_catalog_resume_validation_summary(&summary)?;
+    reporter.emit(
+        EventKind::Progress,
+        "benchmark-result",
+        &serde_json::to_string(&json!({
+            "installed_manifest": manifest,
+            "summary": summary,
+            "output_dir": output_dir,
+        }))
+        .map_err(|error| error.to_string())?,
+        Some(100),
+    )?;
+    Ok(Outcome::Passed)
+}
+
+fn evaluate_catalog_resume_validation_summary(summary: &Value) -> AgentResult<()> {
+    if summary.get("schema").and_then(Value::as_str)
+        != Some("mister-magik-catalog-resume-validation-v1")
+        || summary.get("scenario").and_then(Value::as_str) != Some("catalog-resume-validation")
+        || summary.get("status").and_then(Value::as_str) != Some("passed")
+    {
+        return Err("catalog resume-validation summary is not a passing v1 report".into());
+    }
+    let samples = summary
+        .get("samples")
+        .and_then(Value::as_array)
+        .ok_or("catalog resume-validation summary has no samples")?;
+    if samples.len() != 3
+        || samples.iter().any(|sample| {
+            sample
+                .pointer("/resume_metrics/resume_reused")
+                .and_then(Value::as_u64)
+                .unwrap_or(0)
+                == 0
+                || sample
+                    .pointer("/artifact_set_valid")
+                    .and_then(Value::as_bool)
+                    != Some(true)
+        })
+        || summary
+            .pointer("/production_registry/unchanged")
+            .and_then(Value::as_bool)
+            != Some(true)
+    {
+        return Err("catalog resume-validation lacks three reusable exact samples".into());
+    }
+    Ok(())
 }
 
 fn evaluate_catalog_build_rebuild_summary(summary: &Value) -> AgentResult<()> {

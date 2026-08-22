@@ -52,6 +52,7 @@ Supported scenarios:
 - `particle-step`
 - `particle-profile`
 - `catalog-lifecycle`
+- `catalog-resume-validation`
 - `launch-return`
 - `launch-return-once`
 - `launch-return-fallback`
@@ -103,6 +104,18 @@ sidecar, so index overlap is explicitly reported as unexercised. Production
 writes and hashes into a hidden sibling exFAT temporary file, then syncs,
 renames, and parent-syncs after verification. The staged/direct selector is
 retired. Catalog refresh remains off and is never forced for this scenario.
+
+`catalog-resume-validation` is the exact-device authority for interrupted
+initial-build recovery. Each of three samples creates an isolated missing
+catalog, waits until the production builder has synced at least one durable
+target checkpoint, and then interrupts it with an ordinary Dev launcher
+restart. The restarted launcher receives the same isolated catalog contract and
+must reuse committed targets, publish a valid exact catalog, and leave the
+production registry unchanged. The report separates journal open, compact-frame
+decode, validation walk, bounded-channel wait, validation consumer work, and
+recovered-output decode, together with namespace I/O and RSS/HWM evidence. It
+never uses direct-reset fault injection and does not set the forced-background
+catalog option; the absent isolated catalog invokes genuine first-build policy.
 
 The Arcade velocity-scroll profiling scenarios default to the active display
 route. A typed arm also accepts `--route active`, `--route hdmi-landscape`,
