@@ -79,6 +79,7 @@ enum BenchmarkProfile {
     LauncherResponseAttribution,
     GuiFrameAttribution,
     SettledComposition,
+    SettledCompositionReusedCache,
     BridgeModelChurn,
     BridgeModelChurnRetained,
     SchedulerTrace,
@@ -197,6 +198,9 @@ impl BenchmarkDevice for DeviceClient {
                 device.profile_gui_frame_attribution(&output_dir)
             }
             BenchmarkProfile::SettledComposition => device.profile_settled_composition(&output_dir),
+            BenchmarkProfile::SettledCompositionReusedCache => {
+                device.profile_settled_composition_reused_cache(&output_dir)
+            }
             BenchmarkProfile::BridgeModelChurn => device.profile_bridge_model_churn(&output_dir),
             BenchmarkProfile::BridgeModelChurnRetained => {
                 device.profile_bridge_model_churn_retained(&output_dir)
@@ -514,6 +518,15 @@ fn require_clean_installed_commit(
             reporter,
             BenchmarkProfile::SettledComposition,
             "settled-composition",
+            "mister-magik-settled-composition-v1",
+        ),
+        BenchmarkScenario::SettledCompositionReusedCache => execute_attribution_capture(
+            &mut device,
+            manifest,
+            output_dir,
+            reporter,
+            BenchmarkProfile::SettledCompositionReusedCache,
+            "settled-composition-reused-cache",
             "mister-magik-settled-composition-v1",
         ),
         BenchmarkScenario::BridgeModelChurn => execute_attribution_capture(
@@ -1054,6 +1067,7 @@ fn particle_scene_lab_command(scenario: BenchmarkScenario) -> Option<&'static st
         | BenchmarkScenario::LauncherResponseAttribution
         | BenchmarkScenario::GuiFrameAttribution
         | BenchmarkScenario::SettledComposition
+        | BenchmarkScenario::SettledCompositionReusedCache
         | BenchmarkScenario::BridgeModelChurn
         | BenchmarkScenario::BridgeModelChurnRetained
         | BenchmarkScenario::SchedulerTrace

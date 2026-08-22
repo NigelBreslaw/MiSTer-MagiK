@@ -157,6 +157,13 @@ The route restores the original Home selection and display mode, and leaves
 favorite state unchanged. Evidence is retained below
 `build/agent-benchmarks/settled-composition/<timestamp>/`.
 
+`settled-composition-reused-cache` runs the identical fixed route with the
+production-off cache-preserving full-raster candidate. It consumes the policy
+only while the settled-composition profiling route is armed; ordinary launcher
+starts retain the NewBuffer fallback. Compare paired summaries by the aggregate
+`full_raster_recovery.combined_raster_us` and require identical terminal pixels,
+zero duplicate full recovery rasters, and unchanged cadence.
+
 `bridge-model-churn` is the unprofiled exact-device authority for repeated
 production bridge updates. A consumed laboratory route publishes 60 fixed
 media-progress events through `MediaProgressDisplay` and the worker UI intent,

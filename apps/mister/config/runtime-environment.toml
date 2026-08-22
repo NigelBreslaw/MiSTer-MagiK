@@ -11,8 +11,8 @@ source_roots = [
 ]
 
 [baseline]
-literal_occurrences = 416
-unique_names = 277
+literal_occurrences = 418
+unique_names = 278
 external_build_names = 7
 
 [[control]]
@@ -3337,6 +3337,21 @@ conflicts = []
 sensitivity = "path"
 aliases = []
 documentation = { summary = "Controls settings navigation evidence dir behavior", accepted_values = [], value_policy = "document" }
+
+[[control]]
+name = "MISTER_SETTLED_FULL_RASTER_POLICY"
+owner = "apps/mister/src/ui_runner/launcher_loop.rs"
+classification = "benchmark"
+value_shape = "enum token"
+default_behavior = "uses the production NewBuffer full-raster path when unset or unrecognized"
+visibility = "benchmark only"
+parser = "enum"
+typed_default = "new-buffer"
+scope = "instrumentation"
+conflicts = []
+sensitivity = "public"
+aliases = []
+documentation = { summary = "Selects cache-preserving full raster only for the fixed settled-composition arm", accepted_values = ["reused-buffer"], value_policy = "document" }
 
 [[control]]
 name = "MISTER_SHARDED_CATALOG_DIR"
