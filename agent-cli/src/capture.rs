@@ -53,6 +53,7 @@ struct EncodedFrame {
 #[serde(rename_all = "snake_case")]
 pub enum CaptureVisibility {
     Black,
+    SignalLost,
     Visible,
 }
 
@@ -431,7 +432,9 @@ fn analyze_luma(
     if maximum <= 1 {
         return None;
     }
-    let visibility = if mean > 24 || maximum.saturating_sub(minimum) > 12 {
+    let visibility = if is_capture_card_signal_loss(luma, width, height, row_bytes) {
+        CaptureVisibility::SignalLost
+    } else if mean > 24 || maximum.saturating_sub(minimum) > 12 {
         CaptureVisibility::Visible
     } else {
         CaptureVisibility::Black
@@ -442,6 +445,35 @@ fn analyze_luma(
         mean,
         visibility,
     })
+}
+
+#[must_use]
+#[cfg(any(target_os = "macos", test))]
+fn is_capture_card_signal_loss(luma: &[u8], width: usize, height: usize, row_bytes: usize) -> bool {
+    // This USB capture device substitutes eight full-height, video-range bars
+    // when its HDMI input is absent. Treating those bars as ordinary nonblack
+    // content turns a lost signal into a false physical-visibility pass.
+    const BARS: [u8; 8] = [235, 210, 170, 145, 106, 81, 41, 16];
+    const TOLERANCE: u8 = 6;
+
+    if width < BARS.len() || height == 0 || row_bytes < width {
+        return false;
+    }
+    let mut matched = 0_u64;
+    let mut sampled = 0_u64;
+    for (band, expected) in BARS.into_iter().enumerate() {
+        for fraction in [1_usize, 2, 3] {
+            let x = ((band * 4 + fraction) * width) / (BARS.len() * 4);
+            for y in (0..height).step_by(32) {
+                let sample = luma[y * row_bytes + x.min(width - 1)];
+                sampled += 1;
+                if sample.abs_diff(expected) <= TOLERANCE {
+                    matched += 1;
+                }
+            }
+        }
+    }
+    sampled > 0 && matched * 100 >= sampled * 95
 }
 
 #[cfg(target_os = "macos")]
@@ -526,6 +558,18 @@ mod tests {
         assert_eq!(
             analyze_luma(&padded, 64, 64, 80).unwrap().visibility,
             CaptureVisibility::Visible
+        );
+
+        let bars = [235_u8, 210, 170, 145, 106, 81, 41, 16];
+        let mut signal_lost = vec![0; 64 * 64];
+        for y in 0..64 {
+            for x in 0..64 {
+                signal_lost[y * 64 + x] = bars[x * bars.len() / 64];
+            }
+        }
+        assert_eq!(
+            analyze_luma(&signal_lost, 64, 64, 64).unwrap().visibility,
+            CaptureVisibility::SignalLost
         );
     }
 
