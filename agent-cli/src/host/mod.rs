@@ -8328,8 +8328,36 @@ fn settled_composition_frame_metrics(frame: &Value) -> Value {
         "custom_draw_us": frame["custom_draw_us"],
         "copied_bytes": frame.pointer("/latch/copied_bytes").cloned().unwrap_or(Value::Null),
         "copied_rectangles": frame.pointer("/latch/copied_rectangles").cloned().unwrap_or(Value::Null),
+        "copy_path": frame.pointer("/latch/copy_path").cloned().unwrap_or(Value::Null),
+        "catchup_bytes": frame.pointer("/latch/catchup_bytes").cloned().unwrap_or(Value::Null),
+        "invalid_bytes": frame.pointer("/latch/invalid_bytes").cloned().unwrap_or(Value::Null),
         "presentation": frame["presentation"],
     })
+}
+
+fn settled_modal_receipt_convergence_copy(frame: &Value) -> bool {
+    let copied_bytes = frame
+        .pointer("/latch/copied_bytes")
+        .and_then(Value::as_u64)
+        .unwrap_or(0);
+    copied_bytes > 0
+        && frame.pointer("/latch/copy_path").and_then(Value::as_str) == Some("identity-full")
+        && frame
+            .pointer("/latch/catchup_bytes")
+            .and_then(Value::as_u64)
+            == Some(copied_bytes)
+        && frame
+            .pointer("/latch/invalid_bytes")
+            .and_then(Value::as_u64)
+            == Some(copied_bytes)
+        && frame
+            .get("slint_damage_rects")
+            .and_then(Value::as_array)
+            .is_some_and(Vec::is_empty)
+        && frame
+            .pointer("/composition/force_full_present")
+            .and_then(Value::as_bool)
+            == Some(false)
 }
 
 fn summarize_settled_composition_profile(profile: &Value) -> Result<Value> {
@@ -8397,7 +8425,12 @@ fn summarize_settled_composition_profile(profile: &Value) -> Result<Value> {
             .filter_map(|frame| frame.get(field).and_then(Value::as_u64))
             .sum()
     };
-    let modal_full_presents = settled_modal
+    let convergence_frame_count = settled_modal
+        .iter()
+        .take_while(|frame| settled_modal_receipt_convergence_copy(frame))
+        .count();
+    let steady_modal = &settled_modal[convergence_frame_count..];
+    let modal_full_presents = steady_modal
         .iter()
         .filter(|frame| {
             frame
@@ -8406,16 +8439,28 @@ fn summarize_settled_composition_profile(profile: &Value) -> Result<Value> {
                 == Some(true)
         })
         .count();
-    let modal_copy_bytes = settled_modal
+    let modal_copy_bytes = steady_modal
+        .iter()
+        .filter_map(|frame| frame.pointer("/latch/copied_bytes").and_then(Value::as_u64))
+        .sum::<u64>();
+    let retirement_confirmed_copy_bytes = settled_modal
+        .iter()
+        .filter_map(|frame| frame.pointer("/latch/copied_bytes").and_then(Value::as_u64))
+        .sum::<u64>();
+    let convergence_copy_bytes = settled_modal[..convergence_frame_count]
         .iter()
         .filter_map(|frame| frame.pointer("/latch/copied_bytes").and_then(Value::as_u64))
         .sum::<u64>();
     Ok(json!({
         "modal_over_arcade": {
             "retirement_confirmed_frames": settled_modal.len(),
+            "retirement_confirmed_copy_bytes": retirement_confirmed_copy_bytes,
+            "receipt_convergence_frames": convergence_frame_count,
+            "receipt_convergence_copy_bytes": convergence_copy_bytes,
+            "steady_frames": steady_modal.len(),
             "steady_full_presents": modal_full_presents,
-            "steady_slint_raster_us": sum("slint_render_us", &settled_modal),
-            "steady_custom_draw_us": sum("custom_draw_us", &settled_modal),
+            "steady_slint_raster_us": sum("slint_render_us", steady_modal),
+            "steady_custom_draw_us": sum("custom_draw_us", steady_modal),
             "steady_copy_bytes": modal_copy_bytes,
             "frames": settled_modal.into_iter().map(settled_composition_frame_metrics).collect::<Vec<_>>(),
         },
@@ -30555,6 +30600,33 @@ mod tests {
             8
         );
         assert_eq!(summary["home_to_settings"]["two_frame_raster_us"], 200);
+
+        let mut converging = profile.clone();
+        for (index, frame) in converging["frames"]
+            .as_array_mut()
+            .unwrap()
+            .iter_mut()
+            .take(8)
+            .enumerate()
+        {
+            frame["composition"]["force_full_present"] = json!(false);
+            frame["composition"]["full_frame_present"] = json!(false);
+            frame["slint_damage_rects"] = json!([]);
+            let copied_bytes = if index == 0 { 1_843_200 } else { 0 };
+            frame["latch"] = json!({
+                "copied_bytes": copied_bytes,
+                "copied_rectangles": u64::from(copied_bytes > 0),
+                "copy_path": if copied_bytes > 0 { "identity-full" } else { "external-direct" },
+                "catchup_bytes": copied_bytes,
+                "invalid_bytes": copied_bytes,
+            });
+        }
+        let converging_summary = summarize_settled_composition_profile(&converging).unwrap();
+        let modal = &converging_summary["modal_over_arcade"];
+        assert_eq!(modal["receipt_convergence_frames"], 1);
+        assert_eq!(modal["receipt_convergence_copy_bytes"], 1_843_200);
+        assert_eq!(modal["steady_frames"], 7);
+        assert_eq!(modal["steady_copy_bytes"], 0);
 
         let mut missing = profile;
         missing["frames"].as_array_mut().unwrap().pop();
