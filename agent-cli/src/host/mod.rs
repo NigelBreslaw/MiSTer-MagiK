@@ -6196,6 +6196,11 @@ fn run_input_latency_lab_arm(
                 .or_else(|| remote_read(session, LAUNCHER_RESPONSE_TRACE_REMOTE))
                 .ok_or("incomplete input latency arm omitted its partial launcher trace")?,
         )?;
+        if let Some(diagnostic_trace) = remote_read(session, LAUNCHER_RESPONSE_TRACE_REMOTE)
+            .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
+        {
+            merge_incomplete_launcher_diagnostics(&mut partial_trace, &diagnostic_trace, &run_id)?;
+        }
         partial_trace["installed_manifest"] = Value::String(
             remote_read(session, LOCAL_MAIN_MANIFEST_REMOTE)
                 .ok_or("input latency laboratory installed manifest is missing")?,
@@ -6253,6 +6258,22 @@ fn run_input_latency_lab_arm(
         &main_before,
         &main_after,
     )
+}
+
+fn merge_incomplete_launcher_diagnostics(
+    partial_trace: &mut Value,
+    diagnostic_trace: &Value,
+    run_id: &str,
+) -> Result<()> {
+    if diagnostic_trace["schema"] != "mister-magik-launcher-response-trace-v6"
+        || diagnostic_trace["run_id"] != run_id
+    {
+        return Err("incomplete launcher diagnostic trace has the wrong identity".into());
+    }
+    for field in ["catalog_phases", "scheduler_phases", "lab_records"] {
+        partial_trace[field] = diagnostic_trace[field].clone();
+    }
+    Ok(())
 }
 
 fn validate_main_input_latency_trace(trace: &Value, run_id: &str) -> Result<()> {
@@ -29483,6 +29504,42 @@ mod tests {
         assert_eq!(summary["pipeline_eagain_count"], 2);
         assert_eq!(summary["completion"]["confirmed"], 62);
         assert_eq!(summary["product_quality_status"], "failed");
+    }
+
+    #[test]
+    fn incomplete_input_latency_arm_merges_only_matching_diagnostic_vectors() {
+        let run_id = "input-latency-baseline-test";
+        let mut partial = json!({
+            "schema": "mister-magik-launcher-response-trace-v6",
+            "run_id": run_id,
+            "completion": {"state": "running"},
+            "catalog_phases": [],
+            "scheduler_phases": [],
+            "lab_records": [],
+        });
+        let diagnostic = json!({
+            "schema": "mister-magik-launcher-response-trace-v6",
+            "run_id": run_id,
+            "completion": {"state": "running", "confirmed": 12},
+            "catalog_phases": [{"label": "catalog"}],
+            "scheduler_phases": [{"label": "scheduler"}],
+            "lab_records": [{"phase": "early-input-drain-attribution"}],
+        });
+        merge_incomplete_launcher_diagnostics(&mut partial, &diagnostic, run_id).unwrap();
+        assert_eq!(partial["completion"]["state"], "running");
+        assert_eq!(partial["completion"].get("confirmed"), None);
+        assert_eq!(partial["catalog_phases"][0]["label"], "catalog");
+        assert_eq!(partial["scheduler_phases"][0]["label"], "scheduler");
+        assert_eq!(
+            partial["lab_records"][0]["phase"],
+            "early-input-drain-attribution"
+        );
+
+        let wrong = json!({
+            "schema": "mister-magik-launcher-response-trace-v6",
+            "run_id": "different",
+        });
+        assert!(merge_incomplete_launcher_diagnostics(&mut partial, &wrong, run_id).is_err());
     }
 
     fn passing_catalog_pmu_summary() -> Value {
