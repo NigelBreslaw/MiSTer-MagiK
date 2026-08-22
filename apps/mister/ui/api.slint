@@ -190,6 +190,34 @@ export global SetupView {
     in property <string> kind-label;
 }
 
+// Semantic Arcade state shared by the independent CRT and HDMI render trees.
+// Dynamic list indices remain numeric; stable game selection crosses the
+// boundary as the MRA path in selected-game-id.
+export global ArcadeView {
+    in property <ArcadeListMode> list-mode;
+    in property <ArcadeLoadState> load-state;
+    in property <string> active-title;
+    in property <int> active-count;
+    in property <[ArcadeGame]> games;
+    in property <int> selected-game-index;
+    in property <string> selected-game-id;
+    in property <bool> list-visible: true;
+    in property <ArcadeSearchMode> search-mode;
+    in property <string> search-query;
+    in property <string> search-suggestion;
+    in property <ArcadeSearchStatus> search-status;
+    in property <[string]> search-keys;
+    in property <int> selected-search-key-index;
+    in property <ArcadeSearchPane> search-pane;
+    in property <PreviewState> preview-state;
+    in property <string> preview-title;
+    in property <string> preview-run-label;
+    in property <int> preview-source-width;
+    in property <int> preview-source-height;
+    in property <int> preview-display-width;
+    in property <int> preview-display-height;
+}
+
 export global MisterBridge {
     // Full-screen boot splash, cleared after the first launcher state sync.
     in-out property <bool> startup-visible;

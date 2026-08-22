@@ -79,13 +79,15 @@ mod macos {
     #[cfg(test)]
     use mister_magik_ui::launcher::FeedbackView;
     use mister_magik_ui::launcher::{
-        AboutSection, ArcadeGame, ChoiceOption, HomeFocus, HomeScrollPhase, InformationView,
-        InputAvailability, InputView, Launcher, LauncherScreen, MenuItem, MenuItemKind,
-        MenuItemPresentation, MenuItemStatus, MisterBridge, MisterUi,
+        AboutSection, ArcadeGame, ArcadeLoadState, ArcadeSearchMode,
+        ArcadeSearchPane as ViewArcadeSearchPane, ArcadeSearchStatus as ViewArcadeSearchStatus,
+        ArcadeView, ChoiceOption, HomeFocus, HomeScrollPhase, InformationView, InputAvailability,
+        InputView, Launcher, LauncherScreen, MenuItem, MenuItemKind, MenuItemPresentation,
+        MenuItemStatus, MisterBridge, MisterUi,
         NavigationTransitionState as ViewNavigationTransitionState, NavigationView,
-        ScreenOrientation as ViewScreenOrientation, ScreensaverSetting, ScreenshotPackProgress,
-        SettingsPopup, SettingsSection, SettingsView, SetupEntry, SetupField,
-        SetupPhase as ViewSetupPhase, SetupView, SystemHubSection,
+        PreviewState as ViewPreviewState, ScreenOrientation as ViewScreenOrientation,
+        ScreensaverSetting, ScreenshotPackProgress, SettingsPopup, SettingsSection, SettingsView,
+        SetupEntry, SetupField, SetupPhase as ViewSetupPhase, SetupView, SystemHubSection,
     };
     use sha2::{Digest, Sha256};
     use slint::platform::software_renderer::{RepaintBufferType, Rgb565Pixel};
@@ -4017,6 +4019,61 @@ mod macos {
         ]);
         settings.set_license_lines(license_lines);
         settings.set_license_titles(strings(&mister_magik_fb::licenses::LICENSE_TITLES));
+        sync_preview_arcade_view(launcher);
+    }
+
+    fn sync_preview_arcade_view(launcher: &Launcher) {
+        let bridge = launcher.global::<MisterBridge>();
+        let arcade = launcher.global::<ArcadeView>();
+        arcade.set_active_title(bridge.get_active_system_title());
+        arcade.set_active_count(bridge.get_active_system_count());
+        arcade.set_games(bridge.get_arcade_games());
+        arcade.set_selected_game_index(bridge.get_arcade_selected());
+        arcade.set_selected_game_id(
+            bridge
+                .get_arcade_games()
+                .row_data(bridge.get_arcade_selected().max(0) as usize)
+                .map(|game| game.mra_path)
+                .unwrap_or_default(),
+        );
+        arcade.set_list_visible(bridge.get_arcade_list_visible());
+        arcade.set_load_state(if bridge.get_arcade_games_loading() {
+            ArcadeLoadState::Loading
+        } else {
+            ArcadeLoadState::Ready
+        });
+        arcade.set_search_mode(if bridge.get_arcade_search_active() {
+            ArcadeSearchMode::Active
+        } else {
+            ArcadeSearchMode::Inactive
+        });
+        arcade.set_search_query(bridge.get_arcade_search_query());
+        arcade.set_search_suggestion(bridge.get_arcade_search_suggestion());
+        arcade.set_search_status(match bridge.get_arcade_search_status() {
+            0 => ViewArcadeSearchStatus::Idle,
+            1 => ViewArcadeSearchStatus::Searching,
+            2 => ViewArcadeSearchStatus::Ready,
+            3 => ViewArcadeSearchStatus::Failed,
+            value => panic!("unknown preview Arcade search status {value}"),
+        });
+        arcade.set_search_keys(bridge.get_arcade_search_keys());
+        arcade.set_selected_search_key_index(bridge.get_arcade_search_key_selected());
+        arcade.set_search_pane(match bridge.get_arcade_search_pane() {
+            0 => ViewArcadeSearchPane::Keyboard,
+            1 => ViewArcadeSearchPane::Results,
+            value => panic!("unknown preview Arcade search pane {value}"),
+        });
+        arcade.set_preview_state(match bridge.get_arcade_preview_status() {
+            mister_magik_ui::launcher::PreviewStatus::Empty => ViewPreviewState::Empty,
+            mister_magik_ui::launcher::PreviewStatus::Loading => ViewPreviewState::Loading,
+            mister_magik_ui::launcher::PreviewStatus::Ready => ViewPreviewState::Ready,
+        });
+        arcade.set_preview_title(bridge.get_arcade_preview_title());
+        arcade.set_preview_run_label(bridge.get_arcade_preview_run_label());
+        arcade.set_preview_source_width(bridge.get_arcade_preview_source_width());
+        arcade.set_preview_source_height(bridge.get_arcade_preview_source_height());
+        arcade.set_preview_display_width(bridge.get_arcade_preview_display_width());
+        arcade.set_preview_display_height(bridge.get_arcade_preview_display_height());
     }
 
     fn apply_scenario(launcher: &Launcher, scenario: Scenario) {
@@ -4143,6 +4200,7 @@ mod macos {
             }
             _ => {}
         }
+        sync_preview_arcade_view(launcher);
         launcher.window().request_redraw();
     }
 
@@ -4408,6 +4466,7 @@ mod macos {
         bridge.set_arcade_preview_box_y(92);
         bridge.set_arcade_preview_box_width(320);
         bridge.set_arcade_preview_box_height(320);
+        sync_preview_arcade_view(launcher);
     }
 
     fn scale_rgb565_nearest(
@@ -4550,6 +4609,43 @@ mod macos {
             }
         }
 
+        fn assert_arcade_dual_projection(launcher: &Launcher) {
+            let bridge = launcher.global::<MisterBridge>();
+            let arcade = launcher.global::<ArcadeView>();
+            assert_eq!(arcade.get_active_title(), bridge.get_active_system_title());
+            assert_eq!(arcade.get_active_count(), bridge.get_active_system_count());
+            assert_eq!(
+                arcade.get_selected_game_index(),
+                bridge.get_arcade_selected()
+            );
+            assert_eq!(
+                arcade.get_games().row_count(),
+                bridge.get_arcade_games().row_count()
+            );
+            assert_eq!(
+                arcade.get_search_mode() == ArcadeSearchMode::Active,
+                bridge.get_arcade_search_active()
+            );
+            assert_eq!(
+                arcade.get_search_status(),
+                match bridge.get_arcade_search_status() {
+                    0 => ViewArcadeSearchStatus::Idle,
+                    1 => ViewArcadeSearchStatus::Searching,
+                    2 => ViewArcadeSearchStatus::Ready,
+                    3 => ViewArcadeSearchStatus::Failed,
+                    value => panic!("unknown Arcade search status {value}"),
+                }
+            );
+            assert_eq!(
+                arcade.get_search_pane(),
+                match bridge.get_arcade_search_pane() {
+                    0 => ViewArcadeSearchPane::Keyboard,
+                    1 => ViewArcadeSearchPane::Results,
+                    value => panic!("unknown Arcade search pane {value}"),
+                }
+            );
+        }
+
         fn manifest_scenario(scenario: SceneScenario) -> Scenario {
             match scenario {
                 SceneScenario::Home | SceneScenario::NavigationTransitionMidpoint => Scenario::Home,
@@ -4580,6 +4676,7 @@ mod macos {
                 assert_navigation_projection(&launcher);
                 assert_settings_projection(&launcher);
                 assert_input_setup_projection(&launcher);
+                assert_arcade_dual_projection(&launcher);
                 let snapshot = bridge_semantic_snapshot(&launcher);
                 if let Some(expected) = expected_by_scenario.get(&scene.scenario) {
                     assert_eq!(&snapshot, expected, "semantic drift in {}", scene.id);
@@ -4649,6 +4746,7 @@ mod macos {
                 assert_navigation_projection(&production);
                 assert_settings_projection(&production);
                 assert_input_setup_projection(&production);
+                assert_arcade_dual_projection(&production);
 
                 let preview = Launcher::new().expect("preview launcher fixture");
                 initialize_bridge(&preview, DisplayProfile::Hdmi);
@@ -4656,6 +4754,7 @@ mod macos {
                 assert_navigation_projection(&preview);
                 assert_settings_projection(&preview);
                 assert_input_setup_projection(&preview);
+                assert_arcade_dual_projection(&preview);
 
                 let production_snapshot = bridge_semantic_snapshot(&production);
                 let preview_snapshot = bridge_semantic_snapshot(&preview);

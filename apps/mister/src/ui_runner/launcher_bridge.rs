@@ -102,15 +102,19 @@ pub(super) fn init_launcher_bridge(app: &slint_ui::launcher::Launcher, pad: &Pad
     bridge.set_arcade_games(ModelRc::new(VecModel::from(Vec::<
         slint_ui::launcher::ArcadeGame,
     >::new())));
+    let arcade = app.global::<slint_ui::launcher::ArcadeView>();
+    arcade.set_games(ModelRc::new(VecModel::from(Vec::<
+        slint_ui::launcher::ArcadeGame,
+    >::new())));
     bridge.set_arcade_selected(0);
     sync_launcher_arcade_geometry_bridge(&bridge);
     bridge.set_arcade_games_loading(false);
-    bridge.set_arcade_search_keys(ModelRc::new(VecModel::from(
-        crate::launcher::ARCADE_SEARCH_KEYS
-            .iter()
-            .map(|key| SharedString::from(key.label))
-            .collect::<Vec<_>>(),
-    )));
+    let search_keys = crate::launcher::ARCADE_SEARCH_KEYS
+        .iter()
+        .map(|key| SharedString::from(key.label))
+        .collect::<Vec<_>>();
+    bridge.set_arcade_search_keys(ModelRc::new(VecModel::from(search_keys.clone())));
+    arcade.set_search_keys(ModelRc::new(VecModel::from(search_keys)));
     bridge.set_arcade_preview_placeholder_visible(true);
     bridge.set_arcade_preview_status(PreviewStatus::Empty);
     bridge.set_arcade_preview_title("".into());
@@ -119,8 +123,26 @@ pub(super) fn init_launcher_bridge(app: &slint_ui::launcher::Launcher, pad: &Pad
     bridge.set_arcade_preview_source_height(0);
     bridge.set_arcade_preview_display_width(0);
     bridge.set_arcade_preview_display_height(0);
+    sync_arcade_compat_projection(app);
     LauncherStatusPresenter::new(&bridge).init();
     sync_bridge_pad_launcher(app, pad);
+}
+
+fn sync_arcade_compat_projection(app: &slint_ui::launcher::Launcher) {
+    let bridge = app.global::<slint_ui::launcher::MisterBridge>();
+    let arcade = app.global::<slint_ui::launcher::ArcadeView>();
+    arcade.set_list_visible(bridge.get_arcade_list_visible());
+    arcade.set_preview_state(match bridge.get_arcade_preview_status() {
+        PreviewStatus::Empty => slint_ui::launcher::PreviewState::Empty,
+        PreviewStatus::Loading => slint_ui::launcher::PreviewState::Loading,
+        PreviewStatus::Ready => slint_ui::launcher::PreviewState::Ready,
+    });
+    arcade.set_preview_title(bridge.get_arcade_preview_title());
+    arcade.set_preview_run_label(bridge.get_arcade_preview_run_label());
+    arcade.set_preview_source_width(bridge.get_arcade_preview_source_width());
+    arcade.set_preview_source_height(bridge.get_arcade_preview_source_height());
+    arcade.set_preview_display_width(bridge.get_arcade_preview_display_width());
+    arcade.set_preview_display_height(bridge.get_arcade_preview_display_height());
 }
 
 pub(super) fn sync_settings_bridge(
@@ -793,6 +815,7 @@ pub(super) fn sync_bridge_launcher(
         );
     }
     sync_setup_bridge(app, pad, setup);
+    sync_arcade_compat_projection(app);
     LauncherBridgeSyncTiming {
         model_projection_us,
     }
@@ -840,6 +863,7 @@ pub(super) fn sync_bridge_launcher_light(
             nav.arcade.is_turbo_active(),
         );
     }
+    sync_arcade_compat_projection(app);
     LauncherBridgeSyncTiming {
         model_projection_us,
     }

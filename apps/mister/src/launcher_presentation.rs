@@ -13,13 +13,13 @@ use crate::launcher::{
 };
 use crate::launcher_taxonomy::LauncherMenuItemKind;
 use crate::launcher_view_types::{
-    about_section, display_transaction_state, home_focus, home_scroll_phase, launcher_screen,
-    orientation_at, screen_orientation, screensaver_setting, settings_popup, settings_section,
-    system_hub_section,
+    about_section, arcade_list_mode, arcade_search_pane, arcade_search_status,
+    display_transaction_state, home_focus, home_scroll_phase, launcher_screen, orientation_at,
+    screen_orientation, screensaver_setting, settings_popup, settings_section, system_hub_section,
 };
 use mister_magik_ui::launcher::{
-    ChoiceOption, FeedbackView, Launcher, MenuItem, MenuItemKind, MenuItemPresentation,
-    MenuItemStatus, MisterBridge, NavigationView, SettingsView,
+    ArcadeLoadState, ArcadeSearchMode, ArcadeView, ChoiceOption, FeedbackView, Launcher, MenuItem,
+    MenuItemKind, MenuItemPresentation, MenuItemStatus, MisterBridge, NavigationView, SettingsView,
 };
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 use std::cell::{Cell, RefCell};
@@ -705,6 +705,25 @@ impl LauncherBridgePresenter {
 
         let games = active_game_view(catalog, nav);
         let (title, count) = active_header(catalog, nav, games.len());
+        let arcade = app.global::<ArcadeView>();
+        set_if_changed!(
+            arcade,
+            get_list_mode,
+            set_list_mode,
+            arcade_list_mode(nav.arcade_user_list_mode())
+        );
+        set_if_changed!(
+            arcade,
+            get_load_state,
+            set_load_state,
+            if active_games_loading(catalog, nav) {
+                ArcadeLoadState::Loading
+            } else {
+                ArcadeLoadState::Ready
+            }
+        );
+        set_view_string_if_changed!(arcade, get_active_title, set_active_title, &title);
+        set_if_changed!(arcade, get_active_count, set_active_count, count as i32);
         set_string_if_changed!(
             bridge,
             get_active_system_title,
@@ -730,8 +749,24 @@ impl LauncherBridgePresenter {
                 set_arcade_selected,
                 nav.arcade.selected as i32
             );
+            set_if_changed!(
+                arcade,
+                get_selected_game_index,
+                set_selected_game_index,
+                nav.arcade.selected as i32
+            );
+            set_view_string_if_changed!(
+                arcade,
+                get_selected_game_id,
+                set_selected_game_id,
+                games
+                    .get(nav.arcade.selected)
+                    .map(|game| game.mra_path.as_ref())
+                    .unwrap_or("")
+            );
         }
         sync_search(&bridge, nav);
+        sync_arcade_search(&arcade, nav);
     }
 
     pub fn menu_items(&mut self, nav: &LauncherNav, catalog_version: usize) -> ModelRc<MenuItem> {
@@ -1096,6 +1131,49 @@ fn sync_search(bridge: &MisterBridge, nav: &LauncherNav) {
             ArcadeSearchPane::Keyboard => 0,
             ArcadeSearchPane::Results => 1,
         }
+    );
+}
+
+fn sync_arcade_search(arcade: &ArcadeView, nav: &LauncherNav) {
+    set_if_changed!(
+        arcade,
+        get_search_mode,
+        set_search_mode,
+        if nav.arcade_search.is_active(&nav.arcade_filter.active) {
+            ArcadeSearchMode::Active
+        } else {
+            ArcadeSearchMode::Inactive
+        }
+    );
+    set_view_string_if_changed!(
+        arcade,
+        get_search_query,
+        set_search_query,
+        &nav.arcade_search.query
+    );
+    set_view_string_if_changed!(
+        arcade,
+        get_search_suggestion,
+        set_search_suggestion,
+        &nav.arcade_search.suggestion
+    );
+    set_if_changed!(
+        arcade,
+        get_search_status,
+        set_search_status,
+        arcade_search_status(nav.arcade_search.status)
+    );
+    set_if_changed!(
+        arcade,
+        get_selected_search_key_index,
+        set_selected_search_key_index,
+        nav.arcade_search.selected_key as i32
+    );
+    set_if_changed!(
+        arcade,
+        get_search_pane,
+        set_search_pane,
+        arcade_search_pane(nav.arcade_search.pane)
     );
 }
 

@@ -204,6 +204,14 @@ mod tests {
             view::ArcadeSearchStatus::Failed
         );
         assert_eq!(
+            arcade_list_mode(ArcadeUserListMode::Favourites),
+            view::ArcadeListMode::Favourites
+        );
+        assert_eq!(
+            arcade_search_pane(DomainArcadeSearchPane::Results),
+            view::ArcadeSearchPane::Results
+        );
+        assert_eq!(
             confirmation_kind(Some(ConfirmAction::RemoveFavourite)),
             view::ConfirmationKind::RemoveFavourite
         );
