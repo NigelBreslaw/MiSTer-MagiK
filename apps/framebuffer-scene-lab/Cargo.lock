@@ -927,6 +927,7 @@ dependencies = [
  "mister-magik-latch-contract",
  "mister-magik-mister-runtime",
  "mister-magik-particles",
+ "mister-magik-perf-events",
  "mister-magik-screenshot-parade",
  "png",
  "pprof",
@@ -2132,9 +2133,9 @@ checksum = "c6f5d3c3b1bf09027a88a6bc961fc00497d651009560b5463668dc81b0fa87a8"
 
 [[package]]
 name = "uuid"
-version = "1.24.1"
+version = "1.25.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2cefc03fd367c0c6d4305de1b312cf00248c4114f4a0418ce6a6af769e3b0bd9"
+checksum = "f053576934f05a761a402421fbbe3d425d9366f75f978806a037b3ca481abecc"
 dependencies = [
  "js-sys",
  "wasm-bindgen",
