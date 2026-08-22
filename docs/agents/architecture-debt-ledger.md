@@ -1,7 +1,8 @@
 # Architecture boundary and remaining P1 ownership ledger
 
-This is the current handoff from completed P1 Enforce work to the remaining
-Decompose and Type streams. It records enforced boundaries and edit ownership;
+This is the current handoff from completed P1 Enforce and typed shared launcher
+contract work to the remaining launcher-loop decomposition and typed runtime
+configuration streams. It records enforced boundaries and edit ownership;
 it is not an acceptance target based on file length. The typed checks in
 `agent-cli/src/checks.rs` and their selection in `agent-cli/src/planner.rs`
 remain the executable containment boundary.
@@ -67,8 +68,9 @@ currently owned names and its explicit source roots. Its generated reference is
 `docs/reference/mister-runtime-environment.md`. Registration is a temporary
 growth boundary, not approval for new downstream reads.
 
-P1 Type owns the schema expansion, process-boundary capture, typed subconfigs,
-and removal of downstream direct reads. The registry and generated reference
+The deferred typed runtime-configuration stream owns schema expansion,
+process-boundary capture, typed subconfigs, and removal of downstream direct
+reads. The registry and generated reference
 remain after migration. The P0 baseline counts and legacy read tolerance may be
 removed only when each process has one named parse site, registered aliases and
 external inputs remain explicit, and the negative fixtures reject downstream
@@ -82,9 +84,34 @@ diagnostic section captures the readiness-report JSON modifier. The existing
 acceptance, posted-frame evidence, retry, or send behavior. Compatible fault
 configuration is also derived from the same snapshot through the catalog-owned
 redacting parser. Remaining registered controls retain their temporary direct
-read sites until their named Type-A migration batches land.
+read sites until a separately planned typed runtime-configuration migration
+lands. The typed shared Slint contract did not complete, waive, or partially
+claim that work.
 The retired catalog-owned `MISTER_CMD` fault command is no longer registered;
 typed runtime fault control owns reset execution without an environment command.
+
+## Typed shared launcher contract closure
+
+`apps/mister/ui/api.slint` now owns the shared semantic vocabulary consumed by
+the separate CRT and HDMI launcher trees. Domain globals are host-owned input
+projections, finite state is enum-typed, stable selection uses IDs, and retained
+models keep minimal-delta ownership in Rust. `LauncherLayout` contains only the
+narrow projected geometry needed by both shells and the CRT compositor.
+
+Named `LauncherActions` callbacks enqueue bounded typed actions. Production and
+preview register the same API, and the launcher consumes queued actions at the
+existing input-routing phase with controller-equivalent precedence. The
+monolithic MisterBridge, LauncherBridgePresenter, LauncherBridgeKey, legacy
+compatibility setters, and generic action callback are removed. The executable
+typed-launcher checker rejects their restoration as well as integer finite
+state and numeric comparisons against typed state.
+
+The reviewed 18-scene host matrix covers HDMI, CRT 240p, and CRT 480p steady
+scenes and navigation-transition midpoints. It is required locally and in CI
+for every owned UI/presenter/layout/preview/composition seam. It does not claim
+physical sink visibility or device timing equivalence; attended device evidence
+remains a separate task when such a claim is needed. Closure evidence is in
+`history/2026-08-22-typed-shared-launcher-contract.md`.
 
 ## Platform-v3 authority
 
@@ -302,7 +329,7 @@ These destinations govern the next work; line-count reduction alone does not.
 
 | Owner ID and current source | Next owner and intended seam |
 |---|---|
-| `launcher-runtime` — `apps/mister/src/ui_runner/launcher_loop.rs` | P1 Decompose: explicit launcher state, frame phases, effects, composition, and presentation. |
+| `launcher-runtime` — `apps/mister/src/ui_runner/launcher_loop.rs` | Deferred decomposition: explicit launcher state, frame phases, effects, composition, and presentation. Consume the completed typed shared UI globals; do not rerun presenter or bridge migration. |
 | `host-workflows` — `agent-cli/src/host/mod.rs` | P2-A: typed host workflow modules after structured failures exist. |
 | `desktop-app` — `apps/desktop/src/main.rs` | P2 next-tier consolidation: desktop ownership seams. |
 | `catalog-persistence` — `crates/catalog/src/sqlite_catalog.rs` | P2-B characterization/decomposition, then P3 persistence separation. |
@@ -322,9 +349,9 @@ are serialized in this order:
 - Enforce establishes one app module-root authority and migrates launcher
   platform effects before deep Decompose work. Type supplies typed process
   configuration before Decompose assembles `LauncherRuntime`.
-- Type's typed presenters precede Decompose projection work that consumes
-  them. Until then, Decompose uses the existing presenter without editing the
-  bridge concurrently.
+- The typed shared presenters are complete. Future decomposition consumes them
+  as an established boundary and must not reintroduce a monolithic bridge,
+  integer/string discriminants, or a parallel projection path.
 
 The following are no-concurrent-edit seams regardless of worktree separation:
 

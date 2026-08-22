@@ -419,6 +419,40 @@ Historical evidence:
 
 ## Launcher Composition
 
+### Shared launcher UI contract
+
+`apps/mister/ui/api.slint` is the semantic contract shared by the independent
+CRT and HDMI launcher trees. Navigation, settings, information, input, setup,
+Arcade, catalog, media, overlays, feedback, and UI actions cross the Rust/Slint
+boundary through named globals. Finite choices, phases, modes, statuses, and
+mutually exclusive states are enums. Integers remain presentation quantities
+or indices into dynamic retained models; independent facts may remain
+booleans. Breadcrumbs, labels, stable IDs, and other strings are data, never
+state discriminants.
+
+Rust owns projected state. The production launcher and macOS preview use the
+same domain presenters, including retained-model and minimal-delta behavior.
+`LauncherActions` callbacks enqueue bounded typed actions; they do not write
+projected state or perform persistence, platform, rendering, or presentation
+effects. The launcher consumes those actions at its existing input-routing
+phase with the same modal, setup, transition, screensaver, feedback, and
+recovery precedence as controller input.
+
+`variants/crt_ui.slint` and `variants/hdmi_ui.slint`, their view trees, layout,
+typography, and decoration remain separate presentation owners. They consume
+the same semantic globals but may express them differently. `LauncherLayout`
+is the deliberately narrow non-semantic exception: Rust projects generic
+list/preview rectangles and CRT compositor geometry from the existing display
+and route authorities. Neither shell derives platform geometry independently.
+
+The retired monolithic bridge, its generic presenter/key, compatibility
+setters, and generic action callback have no source references. The typed
+launcher-contract checker ratchets that absence and rejects integer finite
+state or numeric comparisons against typed state. The deterministic 18-scene
+matrix selects for Slint, presenter, layout, preview, composition, scene, and
+baseline changes. It is host-rendered semantic and RGB565 composition evidence;
+physical HDMI or CRT visibility remains an attended device claim.
+
 Normal launcher rendering is governed by a small composition controller. The
 cached RGB565 frame is the complete base in every state; Rust direct-blitted
 layers are legal only on HDMI while the controller is in `MixedArcade`. CRT
@@ -513,8 +547,8 @@ prefetch remains disabled.
 
 Screenshot presentation and direct-layer retirement are parallel state-chart
 regions. Preview demand (`Empty` or `Image`) is independent from route
-eligibility (`Eligible`, `Occluded`, or `Unavailable`). Bridge synchronization
-only projects navigation and catalog state; it does not clear or advance the
+eligibility (`Eligible`, `Occluded`, or `Unavailable`). Domain-presenter
+synchronization only projects semantic state; it does not clear or advance the
 preview lifecycle. `Loading` retains an existing image, while a request started
 from `Detached` remains black. Only actionable `PreviewFrameIntent` from an
 eligible `Animating` state wakes rendering. Normal transitions use 130 ms and
