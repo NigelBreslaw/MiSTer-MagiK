@@ -155,3 +155,56 @@ proxy-reader capture or mailbox stages.
 - Forced catalog CPU1 RR: 61/65 confirmations, 60/64 hidden, zero outstanding.
 
 Artifact: `build/agent-benchmarks/input-latency-lab/1787358833/summary.json`.
+
+## Early-routing experiment rejection
+
+The benchmark-selected early-routing experiment was implemented at
+`9522a3dcc`, authorized only by the consumed volatile laboratory token at
+`a4b544741`, and given one bounded latch-wait recovery at `837dd70d3` with the
+target-lifetime correction at `98d551994`. Production remained on the current
+route for every unarmed launch.
+
+### Rejection checklist
+
+- [x] Captured a fresh adjacent current-policy control on the exact device.
+- [x] Captured the token-authorized early-routing candidate on the same build.
+- [x] Preserved 128 contiguous proxy-v3 Main records with zero trace drops.
+- [x] Identified the first failed candidate's dominant delay before the next loop.
+- [x] Attempted one bounded recovery during an interruptible latch wait.
+- [x] Reused the existing input phase and resumed the same physical receipt path.
+- [x] Compared publication, dispatch, confirmation, feedback, and vblank evidence.
+- [x] Rejected the candidate without changing production reader scheduling.
+
+The first authorized candidate run reduced neither the tail nor completion:
+publication-to-dispatch was 9,110us p95 / 100,390us maximum, with 56/65
+confirmations and 55/64 hidden receipts, versus the adjacent current control's
+1,188us p95 / 40,447us maximum, 63/65 confirmations, and 62/64 hidden receipts.
+Its records attributed the delay to input becoming observable while the prior
+response/presentation remained in flight.
+
+The latch-wait recovery improved the candidate publication-to-dispatch p95
+from 9,110us to 1,571us (-7,539us, -82.8%), but it did not meet the 1,000us
+gate and introduced an unacceptable tail. Against its fresh adjacent control:
+
+| Metric | Current control | Recovered early route | Absolute / percentage delta |
+| --- | ---: | ---: | ---: |
+| Reader capture p95 / max | 256us / 286us | 665us / 2,689us | +409us (+159.8%) / +2,403us (+840.2%) |
+| Publication to dispatch p95 / max | 3,660us / 4,063us | 1,571us / 29,080us | -2,089us (-57.1%) / +25,017us (+615.7%) |
+| Kernel to dispatch p95 / max | 3,886us / 4,262us | 3,472us / 29,327us | -414us (-10.7%) / +25,065us (+588.1%) |
+| Dispatch to confirmation p95 / max | 35,883us / 59,041us | 39,345us / 1,838,172us | +3,462us (+9.6%) / +1,779,131us (+3,013.4%) |
+| Confirmed / hidden | 61/65 / 60/64 | 58/65 / 57/64 | -3 (-4.9%) / -3 (-5.0%) |
+
+All 58 confirmed candidate records used their first eligible vblank, but the
+candidate missed the publication-to-dispatch p95 and maximum gates, the
+kernel-to-dispatch p95 and maximum gates, and the response-completion gate.
+The 1.838s confirmation outlier moves the dominant failure beyond the bounded
+pre-dispatch hypothesis. A second recovery would therefore combine a new
+presentation hypothesis with this rejected routing change and is not
+permitted. The selector and all early/latch routing branches are removed.
+
+Artifacts:
+
+- First authorized comparison:
+  `build/agent-benchmarks/input-latency-lab/1787363077/`
+- Latch-wait recovery comparison:
+  `build/agent-benchmarks/input-latency-lab/1787363987/`
