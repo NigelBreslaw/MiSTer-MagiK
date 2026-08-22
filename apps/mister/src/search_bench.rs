@@ -5,6 +5,7 @@ use mister_magik_catalog::persisted_search::{PersistedSearchCatalog, PersistedSe
 use mister_magik_catalog::shard_registry::production_registry_limits;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
+use std::fmt::Write as _;
 use std::fs;
 use std::path::Path;
 
@@ -170,7 +171,12 @@ fn hash_search_result(
         hash.update([candidate.source_rank]);
         hash.update(candidate.score.to_le_bytes());
     }
-    format!("{:x}", hash.finalize())
+    let digest = hash.finalize();
+    let mut encoded = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        let _ = write!(encoded, "{byte:02x}");
+    }
+    encoded
 }
 
 #[derive(Clone, Copy, Debug, Default, serde::Serialize)]
