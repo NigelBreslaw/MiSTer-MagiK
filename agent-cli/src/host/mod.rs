@@ -518,6 +518,12 @@ impl NativeDevice {
                     LauncherCommand::CaptureFirstArcade(args) => {
                         capture_first_arcade(&prepared.config, &args.output)
                     }
+                    LauncherCommand::LaunchReturnOnce(args) => {
+                        let summary =
+                            profile_installed_launch_return_once(&prepared.config, &args.output)?;
+                        println!("{summary}");
+                        Ok(())
+                    }
                     LauncherCommand::CaptureCrtFontAb(args) => {
                         capture_crt_font_ab(&prepared.config, &args.pair, &args.output)
                     }

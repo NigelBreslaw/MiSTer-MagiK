@@ -280,6 +280,7 @@ pub enum LauncherCommand {
     Status,
     Restart(LauncherRestartArgs),
     CaptureFirstArcade(FirstArcadeCaptureArgs),
+    LaunchReturnOnce(FirstArcadeCaptureArgs),
     CaptureCrtFontAb(CrtFontAbCaptureArgs),
     CaptureSnesHub(FirstArcadeCaptureArgs),
     ReturnToLauncher(AttendedArgs),
@@ -597,6 +598,17 @@ mod tests {
             .is_err()
         );
         assert!(TestCli::try_parse_from(["test", "mode", "set", "dev", "--attended"]).is_ok());
+        assert!(
+            TestCli::try_parse_from([
+                "test",
+                "launcher",
+                "launch-return-once",
+                "--attended",
+                "--output",
+                "/tmp/launch-return-once",
+            ])
+            .is_ok()
+        );
         assert!(
             TestCli::try_parse_from([
                 "test",
