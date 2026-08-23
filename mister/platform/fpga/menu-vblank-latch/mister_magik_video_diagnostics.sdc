@@ -73,13 +73,15 @@ set_net_delay -max 10.0 \
 	-from $magik_scaler_diag_source_route \
 	-to $magik_scaler_diag_source_meta
 
-# Keep the drain crossing separate because Quartus may route its production
-# fanout independently from the other six diagnostic source bits.
-set magik_scaler_diag_drain [get_registers -nowarn \
-	{*ascal:ascal|avl_return_drain*}]
-if {[get_collection_size $magik_scaler_diag_drain] < 1} {
-	post_message -type error "MagiK diagnostic drain routed source is missing"
-	error "MagiK diagnostic drain routed source is missing"
+# Keep the drain crossing separate because Quartus maps this monotonic state
+# through a control route. Intel's own Quartus 17 synchronizer constraints use
+# the physical source Q pin for this case; the logical register has no net-delay
+# path even though report_metastability recognizes the exact chain.
+set magik_scaler_diag_drain [get_pins -compatibility_mode \
+	{*ascal:ascal|avl_return_drain|q}]
+if {[get_collection_size $magik_scaler_diag_drain] != 1} {
+	post_message -type error "MagiK diagnostic drain source Q pin mismatch"
+	error "MagiK diagnostic drain source Q pin mismatch"
 }
 set magik_scaler_diag_drain_meta [magik_require_registers diagnostic_drain_meta \
 	{*ascal:ascal|magik_diag_source_meta[3]} 1]
