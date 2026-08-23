@@ -198,7 +198,7 @@ index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..b1c2581d8665d3db4f4042ed668ee711
  
  	SUBTYPE uint12 IS natural RANGE 0 TO 4095;
  	SUBTYPE uint13 IS natural RANGE 0 TO 8191;
-@@ -418,7 +588,17 @@ ARCHITECTURE rtl OF ascal IS
+@@ -418,7 +588,16 @@ ARCHITECTURE rtl OF ascal IS
  	SIGNAL avl_walt,avl_wline,avl_rline : std_logic;
  	SIGNAL avl_dw,avl_dr : unsigned(N_DW-1 DOWNTO 0);
  	SIGNAL avl_wr : std_logic;
@@ -208,7 +208,6 @@ index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..b1c2581d8665d3db4f4042ed668ee711
 +	SIGNAL avl_return_drain : std_logic:='1';
 +	SIGNAL avl_return_credits : natural RANGE 0 TO 2:=0;
 +	SIGNAL avl_return_phase : natural RANGE 0 TO BLEN-1:=0;
-+	SIGNAL avl_diag_return_phase_nonzero : std_logic:='0';
 +	SIGNAL avl_read_accepted : std_logic:='0';
 +	SIGNAL avl_readack : std_logic;
 +	ATTRIBUTE preserve OF avl_readdataack : SIGNAL IS true;
@@ -230,7 +229,7 @@ index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..b1c2581d8665d3db4f4042ed668ee711
  	SIGNAL o_copyv : unsigned(0 TO 14);
  	SIGNAL o_adrs : unsigned(31 DOWNTO 0); -- Avalon address
  	SIGNAL o_adrs_pre : natural RANGE 0 TO 2**24-1;
-@@ -1160,6 +1345,29 @@ BEGIN
+@@ -1160,6 +1345,23 @@ BEGIN
  	o_reset_na<='0'   WHEN reset_na='0' ELSE '1' WHEN rising_edge(o_clk);
  	avl_reset_na<='0' WHEN reset_na='0' ELSE '1' WHEN rising_edge(avl_clk);
 +	-- These radix-BLEN accounting fields deliberately have no core-reset branch.
@@ -261,12 +260,6 @@ index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..b1c2581d8665d3db4f4042ed668ee711
 +				issued_v,returned_v,BLEN);
 +			avl_return_phase<=return_phase_next(
 +				avl_return_phase,returned_v,BLEN);
-+			IF reset_na='0' THEN
-+				avl_diag_return_phase_nonzero<='0';
-+			ELSE
-+				avl_diag_return_phase_nonzero<=to_std_logic(
-+					return_phase_next(avl_return_phase,returned_v,BLEN)/=0);
-+			END IF;
 +			IF avl_read_i='0' THEN
 +				avl_read_accepted<='0';
 +			ELSIF issued_v THEN

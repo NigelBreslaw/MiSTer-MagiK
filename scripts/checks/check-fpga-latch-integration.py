@@ -481,7 +481,6 @@ def main() -> None:
             "SIGNAL avl_return_drain : std_logic:='1';": 1,
             "SIGNAL avl_return_credits : natural RANGE 0 TO 2:=0;": 1,
             "SIGNAL avl_return_phase : natural RANGE 0 TO BLEN-1:=0;": 1,
-            "SIGNAL avl_diag_return_phase_nonzero : std_logic:='0';": 1,
             "SIGNAL avl_read_accepted : std_logic:='0';": 1,
             "ATTRIBUTE preserve OF avl_readdataack : SIGNAL IS true;": 1,
             "SIGNAL o_readdataack,o_readdataack_sync,o_readdataack_sync2 : std_logic;": 1,
