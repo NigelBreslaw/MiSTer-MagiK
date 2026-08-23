@@ -462,6 +462,8 @@ def main() -> None:
             "SIGNAL avl_read_accepted : std_logic:='0';": 1,
             "ATTRIBUTE preserve OF avl_readdataack : SIGNAL IS true;": 1,
             "ATTRIBUTE preserve OF magik_diag_word : SIGNAL IS true;": 1,
+            "ATTRIBUTE preserve OF magik_diag_source_meta : SIGNAL IS true;": 1,
+            "ATTRIBUTE preserve OF magik_diag_source_sync : SIGNAL IS true;": 1,
             "SIGNAL o_readdataack,o_readdataack_sync,o_readdataack_sync2 : std_logic;": 1,
             "SYNCHRONIZER_IDENTIFICATION FORCED\";": 2,
             "SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS\";": 2,

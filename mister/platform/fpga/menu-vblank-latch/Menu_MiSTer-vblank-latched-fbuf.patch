@@ -294,6 +294,8 @@ index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..b1c2581d8665d3db4f4042ed668ee711
 +	SIGNAL magik_diag_read_seen,magik_diag_completion_seen : std_logic:='0';
 +	SIGNAL magik_diag_have_previous : std_logic:='0';
 +	ATTRIBUTE preserve OF magik_diag_word : SIGNAL IS true;
++	ATTRIBUTE preserve OF magik_diag_source_meta : SIGNAL IS true;
++	ATTRIBUTE preserve OF magik_diag_source_sync : SIGNAL IS true;
 +	ATTRIBUTE altera_attribute OF magik_diag_source_meta : SIGNAL IS
 +		"-name SYNCHRONIZER_IDENTIFICATION FORCED";
 +	ATTRIBUTE altera_attribute OF magik_diag_source_sync : SIGNAL IS
