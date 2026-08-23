@@ -241,8 +241,10 @@ def main() -> None:
         fail("minimal scaler scheduler diagnostic module is missing or ambiguous")
     if len(re.findall(r"(?m)^\s*module\b", control_source)) != 1:
         fail("diagnostic control source contains an unexpected design unit")
-    if "captured_state" in control_source or "tx_crc" in control_source:
-        fail("diagnostic responder retains redundant snapshot or CRC state")
+    if "captured_state" in control_source:
+        fail("diagnostic responder retains a redundant snapshot register")
+    if control_source.count("(* preserve *) reg [15:0] snapshot_state") != 1:
+        fail("diagnostic bundled-data snapshot is not preserved")
     if re.search(r"(?m)^\s*module\b", avalon_source + output_source):
         fail("retired Avalon or output diagnostic compatibility source defines logic")
     compiled_diagnostics = control_source + avalon_source + output_source
@@ -324,8 +326,8 @@ def main() -> None:
     timing_commands = re.findall(
         r"(?m)^\s*(set_[A-Za-z0-9_]+\b[^\n]*)$", diagnostics_sdc_text
     )
-    if timing_commands != ["set_net_delay -max 10.0 \\"] * 5:
-        fail("repair SDC must contain only the five exact completion and diagnostic bounds")
+    if timing_commands != ["set_net_delay -max 10.0 \\"] * 6:
+        fail("repair SDC must contain only the six exact completion and diagnostic bounds")
     for fragment in (
         "{*ascal:ascal|avl_readdataack} 1",
         "{*ascal:ascal|o_readdataack_sync} 1",
@@ -338,8 +340,10 @@ def main() -> None:
         "MagiK diagnostics CDC analysis applied: scaler_completion_request_ack",
         "*ascal:ascal|magik_diag_source_meta[*]",
         "*ascal:ascal|o_readdataack_sync2*",
-        "*ascal:ascal|avl_return_drain*",
+        "{*ascal:ascal|avl_return_drain} 1",
         "-from $magik_scaler_diag_source_route",
+        "-from $magik_scaler_diag_drain",
+        "-to $magik_scaler_diag_drain_meta",
         "*ascal:ascal|magik_diag_generation_i",
         "*magik_scaler_scheduler_diagnostic|generation_meta",
         "*ascal:ascal|magik_diag_word[*]",

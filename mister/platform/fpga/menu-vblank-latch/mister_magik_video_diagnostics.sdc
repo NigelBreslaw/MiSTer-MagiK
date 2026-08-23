@@ -60,20 +60,28 @@ set magik_scaler_diag_source_route [get_registers -nowarn -no_duplicates {
 	*ascal:ascal|avl_readdataack
 	*ascal:ascal|avl_completion_pending
 	*ascal:ascal|avl_completion_ack_sync
-	*ascal:ascal|avl_return_drain*
 	*ascal:ascal|avl_return_credits[*]
 	*ascal:ascal|avl_diag_return_phase_nonzero
 }]
 set magik_scaler_diag_source_route_count \
 	[get_collection_size $magik_scaler_diag_source_route]
-if {$magik_scaler_diag_source_route_count < 7 ||
-	$magik_scaler_diag_source_route_count > 8} {
+if {$magik_scaler_diag_source_route_count != 6} {
 	post_message -type error "MagiK scaler diagnostic routed source collection mismatch"
 	error "MagiK scaler diagnostic routed source collection mismatch"
 }
 set_net_delay -max 10.0 \
 	-from $magik_scaler_diag_source_route \
 	-to $magik_scaler_diag_source_meta
+
+# Keep the drain crossing separate because Quartus may route its production
+# fanout independently from the other six diagnostic source bits.
+set magik_scaler_diag_drain [magik_require_registers diagnostic_drain \
+	{*ascal:ascal|avl_return_drain} 1]
+set magik_scaler_diag_drain_meta [magik_require_registers diagnostic_drain_meta \
+	{*ascal:ascal|magik_diag_source_meta[3]} 1]
+set_net_delay -max 10.0 \
+	-from $magik_scaler_diag_drain \
+	-to $magik_scaler_diag_drain_meta
 
 # The state word is a bundled-data crossing. It is registered and held stable
 # before the generation toggle changes; the receiver synchronizes that toggle

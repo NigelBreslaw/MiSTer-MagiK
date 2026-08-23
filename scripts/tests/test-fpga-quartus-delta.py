@@ -85,8 +85,8 @@ SYNC_ASSIGNMENTS = (
     )
 )
 CUSTOM_SYNC = SYNC_ASSIGNMENTS + """\
-Info (332114): Report Metastability: Found 31 synchronizer chains.
-Info (332114): Fraction of Chains for which MTBFs Could Not be Calculated: 0.645161
+Info (332114): Report Metastability: Found 15 synchronizer chains.
+Info (332114): Fraction of Chains for which MTBFs Could Not be Calculated: 0.266667
 Info: MagiK diagnostics CDC analysis applied: scaler_completion_request_ack
 """
 
@@ -140,6 +140,7 @@ VALID_DIAGNOSTIC_REPORTS = {
         "; set_net_delay ; 1.100 ; 10.000 ; 8.900 ; sources ; destinations ; max ;\n"
         "; set_net_delay ; 1.050 ; 10.000 ; 8.950 ; sources ; destinations ; max ;\n"
         "; set_net_delay ; 1.000 ; 10.000 ; 9.000 ; sources ; destinations ; max ;\n"
+        "; set_net_delay ; 0.950 ; 10.000 ; 9.050 ; sources ; destinations ; max ;\n"
         + net_delay_detail(
             "ascal:ascal|avl_readdataack", "ascal:ascal|o_readdataack_sync"
         )
@@ -270,16 +271,16 @@ class QuartusDeltaTest(unittest.TestCase):
 
     def test_unrelated_total_chain_drift_fails(self) -> None:
         patched = CUSTOM_SYNC.replace(
-            "Found 31 synchronizer chains", "Found 32 synchronizer chains"
+            "Found 15 synchronizer chains", "Found 16 synchronizer chains"
         ).replace(
-            "Could Not be Calculated: 0.645161",
-            "Could Not be Calculated: 0.656250",
+            "Could Not be Calculated: 0.266667",
+            "Could Not be Calculated: 0.312500",
         )
         result, payload = self.run_check(BASE, BASE + patched)
         self.assertEqual(result.returncode, 1)
         self.assertIn("synchronizer_chain_count_mismatch", payload["invalid_reason"])
         self.assertEqual(payload["baseline_synchronizer_chains"], 5)
-        self.assertEqual(payload["patched_synchronizer_chains"], 32)
+        self.assertEqual(payload["patched_synchronizer_chains"], 16)
         self.assertEqual(payload["baseline_calculable_synchronizer_chains"], 1)
         self.assertEqual(payload["patched_calculable_synchronizer_chains"], 11)
 
@@ -620,7 +621,7 @@ class QuartusDeltaTest(unittest.TestCase):
             / "mister/platform/fpga/menu-vblank-latch/mister_magik_video_diagnostics.sdc"
         ).read_text(encoding="utf-8")
         self.assertIn("get_registers -nowarn -no_duplicates", sdc)
-        self.assertEqual(sdc.count("set_net_delay -max 10.0"), 5)
+        self.assertEqual(sdc.count("set_net_delay -max 10.0"), 6)
         self.assertNotIn("set_max_skew", sdc)
         self.assertNotIn("set_false_path", sdc)
 

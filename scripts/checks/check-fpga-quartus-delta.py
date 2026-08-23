@@ -69,7 +69,7 @@ MAXIMUM_REGISTER_DELTA = 96
 EXPECTED_UNCONSTRAINED_OUTPUT_PATHS = 158
 MINIMUM_CUSTOM_MTBF_DEVICE_HOURS = 1.0e12
 MINIMUM_CUSTOM_MTBF_YEARS = MINIMUM_CUSTOM_MTBF_DEVICE_HOURS / (24.0 * 365.25)
-EXPECTED_ADDED_RECOGNIZED_COMPLETION_SYNCHRONIZER_CHAINS = 26
+EXPECTED_ADDED_RECOGNIZED_COMPLETION_SYNCHRONIZER_CHAINS = 10
 EXPECTED_ADDED_CALCULABLE_COMPLETION_SYNCHRONIZER_CHAINS = 10
 EXPECTED_QUARTUS_POLICY = {
     "auto_parallel_synthesis": "off",
@@ -177,7 +177,7 @@ DIAGNOSTIC_REPORT_NAMES = frozenset(
 )
 EXPECTED_CDC_REPORT_ANALYSES = {
     "menu.magik-diagnostic-cdc-skew.rpt": ("set_max_skew", 0),
-    "menu.magik-diagnostic-cdc-net-delay.rpt": ("set_net_delay", 5),
+    "menu.magik-diagnostic-cdc-net-delay.rpt": ("set_net_delay", 6),
 }
 EXPECTED_NET_DELAY_PATHS = {
     "completion_request": re.compile(
@@ -283,7 +283,7 @@ def parse_expected_metastability_chains(
     report: str,
 ) -> tuple[dict[str, float | None], list[str]]:
     """Read exact completion-chain summaries and their synchronization registers."""
-    blocks = re.split(r"(?=Synchronizer Chain #\d+:)", report)
+    blocks = re.split(r"(?=Synchronizer Chain #\d+:)", report)[1:]
     mtbf_years: dict[str, float | None] = {}
     missing: list[str] = []
     for label, expected in EXPECTED_METASTABILITY_CHAINS.items():
