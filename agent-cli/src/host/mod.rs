@@ -3480,34 +3480,100 @@ fn experimental_fpga_cleanup_script() -> String {
     )
 }
 
+fn experimental_fpga_architecture_is_current(diagnostics: &Value) -> bool {
+    match diagnostics
+        .get("diagnostic_architecture")
+        .and_then(Value::as_str)
+    {
+        Some("scaler-completion-repair-v1") => {
+            diagnostics.get("classification").and_then(Value::as_str)
+                == Some("repair_transport_ready")
+                && diagnostics
+                    .pointer("/capabilities/passive_video_observer")
+                    .and_then(Value::as_bool)
+                    == Some(false)
+                && diagnostics
+                    .pointer("/capabilities/protocol_version")
+                    .and_then(Value::as_u64)
+                    == Some(5)
+                && diagnostics
+                    .pointer("/capabilities/flags")
+                    .and_then(Value::as_u64)
+                    == Some(0x03ff)
+                && diagnostics
+                    .pointer("/capabilities/crc")
+                    .and_then(Value::as_u64)
+                    .is_some()
+                && diagnostics
+                    .pointer("/presentation_telemetry/magik_ownership")
+                    .and_then(Value::as_bool)
+                    == Some(true)
+                && diagnostics
+                    .pointer("/presentation_telemetry/lifetime_invariant_valid")
+                    .and_then(Value::as_bool)
+                    == Some(true)
+                && diagnostics
+                    .pointer("/presentation_telemetry/presented_vblank_count")
+                    .and_then(Value::as_u64)
+                    .is_some_and(|count| count >= 2)
+                && diagnostics
+                    .pointer("/presentation_telemetry/active_sequence")
+                    .and_then(Value::as_u64)
+                    .is_some_and(|sequence| {
+                        diagnostics
+                            .pointer("/latch_status/active_sequence")
+                            .and_then(Value::as_u64)
+                            == Some(sequence)
+                    })
+                && diagnostics
+                    .pointer("/presentation_telemetry/crc")
+                    .and_then(Value::as_u64)
+                    .is_some()
+        }
+        Some("scaler-scheduler-state-v1") => {
+            matches!(
+                diagnostics.get("classification").and_then(Value::as_str),
+                Some(
+                    "completion_queue_backlog"
+                        | "credit_accounting_stall"
+                        | "scaler_scheduler_not_stalled"
+                )
+            ) && diagnostics
+                .pointer("/capabilities/passive_video_observer")
+                .and_then(Value::as_bool)
+                == Some(true)
+                && diagnostics
+                    .pointer("/capabilities/scaler_scheduler_state")
+                    .and_then(Value::as_bool)
+                    == Some(true)
+                && diagnostics
+                    .pointer("/capabilities/pixel_observer")
+                    .and_then(Value::as_bool)
+                    == Some(false)
+                && diagnostics
+                    .pointer("/capabilities/pll_observer")
+                    .and_then(Value::as_bool)
+                    == Some(false)
+                && diagnostics
+                    .pointer("/coherence/three_samples_match")
+                    .and_then(Value::as_bool)
+                    == Some(true)
+                && diagnostics
+                    .pointer("/scheduler_state/raw_samples")
+                    .and_then(Value::as_array)
+                    .is_some_and(|samples| samples.len() == 3)
+        }
+        _ => false,
+    }
+}
+
 fn experimental_fpga_evidence_is_current(diagnostics: &Value) -> bool {
     diagnostics.get("schema").and_then(Value::as_str)
         == Some("mister-magik-fpga-video-diagnostics-v2")
-        && diagnostics
-            .get("diagnostic_architecture")
-            .and_then(Value::as_str)
-            == Some("scaler-completion-repair-v1")
+        && experimental_fpga_architecture_is_current(diagnostics)
         && diagnostics.get("available").and_then(Value::as_bool) == Some(true)
         && diagnostics.get("coherent").and_then(Value::as_bool) == Some(true)
-        && diagnostics.get("classification").and_then(Value::as_str)
-            == Some("repair_transport_ready")
         && diagnostics.get("sink_visibility").and_then(Value::as_str) == Some("unobserved")
-        && diagnostics
-            .pointer("/capabilities/passive_video_observer")
-            .and_then(Value::as_bool)
-            == Some(false)
-        && diagnostics
-            .pointer("/capabilities/protocol_version")
-            .and_then(Value::as_u64)
-            == Some(5)
-        && diagnostics
-            .pointer("/capabilities/flags")
-            .and_then(Value::as_u64)
-            == Some(0x03ff)
-        && diagnostics
-            .pointer("/capabilities/crc")
-            .and_then(Value::as_u64)
-            .is_some()
         && diagnostics
             .pointer("/coherence/latch_ownership_stable")
             .and_then(Value::as_bool)
@@ -3551,31 +3617,6 @@ fn experimental_fpga_evidence_is_current(diagnostics: &Value) -> bool {
             })
         && diagnostics
             .pointer("/latch_status/crc")
-            .and_then(Value::as_u64)
-            .is_some()
-        && diagnostics
-            .pointer("/presentation_telemetry/magik_ownership")
-            .and_then(Value::as_bool)
-            == Some(true)
-        && diagnostics
-            .pointer("/presentation_telemetry/lifetime_invariant_valid")
-            .and_then(Value::as_bool)
-            == Some(true)
-        && diagnostics
-            .pointer("/presentation_telemetry/presented_vblank_count")
-            .and_then(Value::as_u64)
-            .is_some_and(|count| count >= 2)
-        && diagnostics
-            .pointer("/presentation_telemetry/active_sequence")
-            .and_then(Value::as_u64)
-            .is_some_and(|sequence| {
-                diagnostics
-                    .pointer("/latch_status/active_sequence")
-                    .and_then(Value::as_u64)
-                    == Some(sequence)
-            })
-        && diagnostics
-            .pointer("/presentation_telemetry/crc")
             .and_then(Value::as_u64)
             .is_some()
 }
@@ -33996,6 +34037,67 @@ H: Handlers=event3 js0"#
             },
         });
         assert!(experimental_fpga_evidence_is_current(&current));
+        let scheduler = json!({
+            "schema": "mister-magik-fpga-video-diagnostics-v2",
+            "diagnostic_architecture": "scaler-scheduler-state-v1",
+            "available": true,
+            "coherent": true,
+            "classification": "scaler_scheduler_not_stalled",
+            "sink_visibility": "unobserved",
+            "owner_epoch_before": 13,
+            "owner_epoch_after": 13,
+            "coherence": {
+                "three_samples_match": true,
+                "latch_ownership_stable": true,
+                "launcher_state_stable": true,
+                "ownership_check_error": null,
+            },
+            "capabilities": {
+                "passive_video_observer": true,
+                "scaler_scheduler_state": true,
+                "pixel_observer": false,
+                "pll_observer": false,
+            },
+            "latch_status": {
+                "active_sequence": 7,
+                "flags": 1 << mister_magik_latch_contract::STATUS_MAGIK_OWNERSHIP,
+                "active_width": 960,
+                "active_height": 540,
+                "active_stride": 1920,
+                "crc": 0,
+            },
+            "scheduler_state": {
+                "raw_samples": [[1, 2, 3], [1, 2, 3], [1, 2, 3]],
+            },
+        });
+        for classification in [
+            "scaler_scheduler_not_stalled",
+            "completion_queue_backlog",
+            "credit_accounting_stall",
+        ] {
+            let mut classified = scheduler.clone();
+            classified["classification"] = json!(classification);
+            assert!(experimental_fpga_evidence_is_current(&classified));
+        }
+        for (pointer, value) in [
+            ("/coherence/three_samples_match", json!(false)),
+            ("/capabilities/passive_video_observer", json!(false)),
+            ("/capabilities/scaler_scheduler_state", json!(false)),
+            ("/capabilities/pixel_observer", json!(true)),
+            ("/capabilities/pll_observer", json!(true)),
+            (
+                "/classification",
+                json!("scaler_scheduler_evidence_inconclusive"),
+            ),
+            (
+                "/scheduler_state/raw_samples",
+                json!([[1, 2, 3], [1, 2, 3]]),
+            ),
+        ] {
+            let mut invalid = scheduler.clone();
+            *invalid.pointer_mut(pointer).unwrap() = value;
+            assert!(!experimental_fpga_evidence_is_current(&invalid));
+        }
         for pointer in [
             "/coherence/latch_ownership_stable",
             "/coherence/launcher_state_stable",
