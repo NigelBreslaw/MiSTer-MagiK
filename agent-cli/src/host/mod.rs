@@ -3923,6 +3923,50 @@ fn install_experimental_agent_transaction(
         return Err("installed Dev RBF does not match the experimental agent transaction".into());
     }
     experimental_fpga_activation_status(&session)?;
+    if let Some(state) = remote_read(&session, &transaction) {
+        if state.trim() != "activating" {
+            return Err(format!(
+                "experimental device-agent transaction requires reconciliation: {}",
+                state.trim()
+            )
+            .into());
+        }
+        exec_checked(
+            &session,
+            "experimental device-agent reconciled hash",
+            &format!(
+                "test \"$(sha256sum {remote} | awk '{{print $1}}')\" = {agent_hash}",
+                remote = sh(remote),
+                agent_hash = sh(&agent_sha256),
+            ),
+        )?;
+        let diagnostics = agent_request_at(
+            config.agent()?,
+            "diagnostics",
+            json!({}),
+            Duration::from_secs(5),
+        )?;
+        let evidence = diagnostics
+            .response
+            .pointer("/result/fpga_video_diagnostics")
+            .ok_or("reconciled experimental device-agent returned no FPGA evidence")?;
+        if !experimental_scheduler_evidence_available(evidence) {
+            return Err(format!(
+                "reconciled experimental device-agent does not expose the scheduler observer: {evidence}"
+            )
+            .into());
+        }
+        exec_checked(
+            &session,
+            "experimental device-agent reconciled commit",
+            &format!(
+                "rm -f {remote}.delivery-rollback {remote}.upload {transaction}; sync",
+                remote = sh(remote),
+                transaction = sh(&transaction),
+            ),
+        )?;
+        return Ok(());
+    }
     exec_checked(
         &session,
         "experimental device-agent snapshot",
@@ -3974,12 +4018,7 @@ fn install_experimental_agent_transaction(
             .response
             .pointer("/result/fpga_video_diagnostics")
             .ok_or("experimental device-agent returned no FPGA evidence")?;
-        if evidence
-            .get("diagnostic_architecture")
-            .and_then(Value::as_str)
-            != Some("scaler-scheduler-state-v1")
-            || !experimental_fpga_evidence_is_current(evidence)
-        {
+        if !experimental_scheduler_evidence_available(evidence) {
             return Err(format!(
                 "experimental device-agent did not expose coherent scaler scheduler evidence: {evidence}"
             )
@@ -3994,7 +4033,7 @@ fn install_experimental_agent_transaction(
                 &rollback,
                 "experimental device-agent rollback",
                 &format!(
-                    "set -eu; test -f {remote}.delivery-rollback; cp -p {remote}.delivery-rollback {remote}; chmod 755 {remote}; printf 'rolled-back\\n' > {transaction}; sync",
+                    "set -eu; test -f {remote}.delivery-rollback; cp -p {remote}.delivery-rollback {remote}.upload; chmod 755 {remote}.upload; mv -f {remote}.upload {remote}; printf 'rolled-back\\n' > {transaction}; sync",
                     remote = sh(remote),
                     transaction = sh(&transaction),
                 ),
@@ -4036,6 +4075,35 @@ fn install_experimental_agent_transaction(
         ),
     )?;
     Ok(())
+}
+
+fn experimental_scheduler_evidence_available(evidence: &Value) -> bool {
+    evidence
+        .get("diagnostic_architecture")
+        .and_then(Value::as_str)
+        == Some("scaler-scheduler-state-v1")
+        && evidence.get("available").and_then(Value::as_bool) == Some(true)
+        && evidence.get("sink_visibility").and_then(Value::as_str) == Some("unobserved")
+        && evidence
+            .pointer("/capabilities/passive_video_observer")
+            .and_then(Value::as_bool)
+            == Some(true)
+        && evidence
+            .pointer("/capabilities/scaler_scheduler_state")
+            .and_then(Value::as_bool)
+            == Some(true)
+        && evidence
+            .pointer("/capabilities/pixel_observer")
+            .and_then(Value::as_bool)
+            == Some(false)
+        && evidence
+            .pointer("/capabilities/pll_observer")
+            .and_then(Value::as_bool)
+            == Some(false)
+        && evidence
+            .pointer("/scheduler_state/raw_samples")
+            .and_then(Value::as_array)
+            .is_some_and(|samples| samples.len() == 3)
 }
 
 fn device_failure(error: impl std::fmt::Display) -> DeviceFailure {
@@ -34254,6 +34322,7 @@ H: Handlers=event3 js0"#
                 "raw_samples": [[1, 2, 3], [1, 2, 3], [1, 2, 3]],
             },
         });
+        assert!(experimental_scheduler_evidence_available(&scheduler));
         for classification in [
             "scaler_scheduler_not_stalled",
             "completion_queue_backlog",
