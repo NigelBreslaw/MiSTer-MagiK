@@ -520,9 +520,24 @@ impl NativeDevice {
                         capture_first_arcade(&prepared.config, &args.output)
                     }
                     LauncherCommand::LaunchReturnOnce(args) => {
-                        let summary =
+                        let summary_text =
                             profile_installed_launch_return_once(&prepared.config, &args.output)?;
-                        println!("{summary}");
+                        let summary: Value = serde_json::from_str(&summary_text)?;
+                        let artifact_status = summary
+                            .get("artifact_status")
+                            .and_then(Value::as_str)
+                            .unwrap_or("malformed");
+                        let visibility = summary
+                            .pointer("/usb_video/visibility")
+                            .and_then(Value::as_str)
+                            .unwrap_or("malformed");
+                        println!(
+                            "launch-return-once artifact_status={artifact_status} \
+                             magik_usb_visibility={visibility} evidence={}",
+                            args.output.display()
+                        );
+                        validate_attended_launch_return_summary(&summary, &args.output)?;
+                        thread::sleep(ATTENDED_LAUNCH_RETURN_COOLDOWN);
                         Ok(())
                     }
                     LauncherCommand::CaptureCrtFontAb(args) => {
@@ -19947,6 +19962,61 @@ const LAUNCH_RETURN_CYCLES: usize = 2;
 const LAUNCH_RETURN_BLACK_LIMIT_MS: u64 = 5_000;
 const LAUNCH_RETURN_GAME_SETTLE_SECS: u64 = 10;
 const LAUNCH_RETURN_ONCE_GAME: &str = "/media/fat/_Arcade/1943 Kai Midway Kaisen (Japan).mra";
+const ATTENDED_LAUNCH_RETURN_COOLDOWN: Duration = Duration::from_secs(5);
+
+fn validate_attended_launch_return_summary(summary: &Value, output_dir: &Path) -> Result<()> {
+    if summary.get("schema").and_then(Value::as_str) != Some("mister-magik-launch-return-once-v1") {
+        return Err("attended launch-return evidence has the wrong schema".into());
+    }
+
+    let semantic = summary
+        .pointer("/snes_view/semantic")
+        .and_then(Value::as_object)
+        .ok_or("attended launch-return evidence has no settled MagiK semantic state")?;
+    let settled_magik = semantic.get("effective_view").and_then(Value::as_str)
+        == Some("system-hub")
+        && semantic.get("selected_system_id").and_then(Value::as_str) == Some("snes")
+        && semantic.get("launch_state").and_then(Value::as_str) == Some("idle")
+        && semantic.get("input_enabled").and_then(Value::as_bool) == Some(true)
+        && semantic
+            .get("navigation_transition_active")
+            .and_then(Value::as_bool)
+            == Some(false);
+    if !settled_magik {
+        return Err(
+            "attended launch-return evidence was not captured from settled post-return MagiK"
+                .into(),
+        );
+    }
+
+    let artifact_status = summary
+        .get("artifact_status")
+        .and_then(Value::as_str)
+        .ok_or("attended launch-return evidence has no artifact status")?;
+    let physical_visible = summary
+        .get("physical_video_visible")
+        .and_then(Value::as_bool)
+        .ok_or("attended launch-return evidence has no physical visibility result")?;
+    let usb_visibility = summary
+        .pointer("/usb_video/visibility")
+        .and_then(Value::as_str)
+        .ok_or("attended launch-return evidence has no USB-video classification")?;
+
+    match (artifact_status, physical_visible, usb_visibility) {
+        ("passed", true, "visible") => Ok(()),
+        ("failed", false, visibility) if visibility != "visible" => Err(format!(
+            "post-return MagiK physical video failed closed: visibility={visibility}; evidence={}",
+            output_dir.display()
+        )
+        .into()),
+        _ => Err(format!(
+            "attended launch-return evidence is internally inconsistent: \
+             artifact_status={artifact_status} physical_visible={physical_visible} \
+             usb_visibility={usb_visibility}"
+        )
+        .into()),
+    }
+}
 const LAUNCH_RETURN_ONCE_STEP_DEADLINE_MS: u64 = 2_000;
 
 const COLD_BOOT_PROFILE_REMOTE_DIR: &str = "/tmp/mister-magik/cold-boot-profile";
@@ -32536,6 +32606,34 @@ mod tests {
         assert!(LAUNCH_RETURN_ONCE_GAME.ends_with("1943 Kai Midway Kaisen (Japan).mra"));
         assert_eq!(LAUNCH_RETURN_ONCE_STEP_DEADLINE_MS, 2_000);
         assert_eq!(LAUNCH_RETURN_CYCLES, 2);
+    }
+
+    #[test]
+    fn attended_launch_return_accepts_only_settled_visible_magik() {
+        let output = Path::new("/tmp/launch-return-once-test");
+        let mut summary = json!({
+            "schema": "mister-magik-launch-return-once-v1",
+            "artifact_status": "passed",
+            "physical_video_visible": true,
+            "usb_video": { "visibility": "visible" },
+            "snes_view": { "semantic": {
+                "effective_view": "system-hub",
+                "selected_system_id": "snes",
+                "launch_state": "idle",
+                "input_enabled": true,
+                "navigation_transition_active": false
+            }}
+        });
+        assert!(validate_attended_launch_return_summary(&summary, output).is_ok());
+
+        summary["snes_view"]["semantic"]["launch_state"] = json!("launching");
+        assert!(validate_attended_launch_return_summary(&summary, output).is_err());
+
+        summary["snes_view"]["semantic"]["launch_state"] = json!("idle");
+        summary["artifact_status"] = json!("failed");
+        summary["physical_video_visible"] = json!(false);
+        summary["usb_video"]["visibility"] = json!("black");
+        assert!(validate_attended_launch_return_summary(&summary, output).is_err());
     }
 
     #[test]
