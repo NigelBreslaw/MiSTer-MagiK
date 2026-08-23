@@ -19981,6 +19981,24 @@ const LAUNCH_RETURN_BLACK_LIMIT_MS: u64 = 5_000;
 const LAUNCH_RETURN_GAME_SETTLE_SECS: u64 = 10;
 const LAUNCH_RETURN_ONCE_GAME: &str = "/media/fat/_Arcade/1943 Kai Midway Kaisen (Japan).mra";
 const ATTENDED_LAUNCH_RETURN_COOLDOWN: Duration = Duration::from_secs(5);
+const LAUNCH_RETURN_CORRUPTION_CONFIRMATIONS: usize = 2;
+const LAUNCH_RETURN_CORRUPTION_CONFIRMATION_INTERVAL: Duration = Duration::from_millis(100);
+
+fn launch_return_effective_usb_visibility(
+    primary: crate::capture::CaptureVisibility,
+    confirmations: &[(crate::capture::CaptureVisibility, bool)],
+) -> crate::capture::CaptureVisibility {
+    if primary == crate::capture::CaptureVisibility::Corrupted
+        && confirmations.len() == LAUNCH_RETURN_CORRUPTION_CONFIRMATIONS
+        && confirmations.iter().all(|(visibility, identical)| {
+            *visibility == crate::capture::CaptureVisibility::Corrupted && *identical
+        })
+    {
+        crate::capture::CaptureVisibility::Visible
+    } else {
+        primary
+    }
+}
 
 fn validate_attended_launch_return_summary(summary: &Value, output_dir: &Path) -> Result<()> {
     if summary.get("schema").and_then(Value::as_str) != Some("mister-magik-launch-return-once-v2") {
@@ -20017,7 +20035,8 @@ fn validate_attended_launch_return_summary(summary: &Value, output_dir: &Path) -
         .and_then(Value::as_bool)
         .ok_or("attended launch-return evidence has no physical visibility result")?;
     let usb_visibility = summary
-        .pointer("/usb_video/visibility")
+        .get("usb_video_effective_visibility")
+        .or_else(|| summary.pointer("/usb_video/visibility"))
         .and_then(Value::as_str)
         .ok_or("attended launch-return evidence has no USB-video classification")?;
 
@@ -20895,6 +20914,26 @@ fn profile_installed_launch_return_once(
             output_dir.join("returned-usb-video.json"),
             format!("{}\n", serde_json::to_string_pretty(&usb_json)?),
         )?;
+        let primary_usb_bytes = fs::read(&usb.artifact.path)?;
+        let mut usb_confirmation = Vec::new();
+        let mut confirmation_states = Vec::new();
+        if usb.visibility == crate::capture::CaptureVisibility::Corrupted {
+            for index in 1..=LAUNCH_RETURN_CORRUPTION_CONFIRMATIONS {
+                thread::sleep(LAUNCH_RETURN_CORRUPTION_CONFIRMATION_INTERVAL);
+                let confirmation = crate::capture::execute_analyzed(Some(
+                    &output_dir.join(format!("returned-usb-video-confirmation-{index}.jpg")),
+                ))?;
+                let identical_to_primary =
+                    fs::read(&confirmation.artifact.path)? == primary_usb_bytes;
+                confirmation_states.push((confirmation.visibility, identical_to_primary));
+                usb_confirmation.push(json!({
+                    "capture": confirmation,
+                    "identical_to_primary": identical_to_primary,
+                }));
+            }
+        }
+        let effective_usb_visibility =
+            launch_return_effective_usb_visibility(usb.visibility, &confirmation_states);
 
         let diagnostics_reply = agent_request_at(
             config.agent()?,
@@ -20921,7 +20960,7 @@ fn profile_installed_launch_return_once(
             )?;
         }
 
-        let visible = usb.visibility == crate::capture::CaptureVisibility::Visible;
+        let visible = effective_usb_visibility == crate::capture::CaptureVisibility::Visible;
         Ok(json!({
             "schema": "mister-magik-launch-return-once-v2",
             "artifact_status": if visible { "passed" } else { "failed" },
@@ -20933,6 +20972,13 @@ fn profile_installed_launch_return_once(
             "framebuffer": framebuffer,
             "fpga_video_diagnostics": diagnostics.get("fpga_video_diagnostics"),
             "usb_video": usb_json,
+            "usb_video_effective_visibility": effective_usb_visibility,
+            "usb_video_corruption_confirmation": {
+                "schema": "mister-magik-moving-corruption-confirmation-v1",
+                "required_confirmations": LAUNCH_RETURN_CORRUPTION_CONFIRMATIONS,
+                "interval_ms": LAUNCH_RETURN_CORRUPTION_CONFIRMATION_INTERVAL.as_millis(),
+                "captures": usb_confirmation,
+            },
             "physical_video_visible": visible,
         }))
     })();
@@ -32691,6 +32737,41 @@ mod tests {
         summary["physical_video_visible"] = json!(false);
         summary["usb_video"]["visibility"] = json!("black");
         assert!(validate_attended_launch_return_summary(&summary, output).is_err());
+
+        summary["artifact_status"] = json!("passed");
+        summary["physical_video_visible"] = json!(true);
+        summary["usb_video"]["visibility"] = json!("corrupted");
+        summary["usb_video_effective_visibility"] = json!("visible");
+        assert!(validate_attended_launch_return_summary(&summary, output).is_ok());
+    }
+
+    #[test]
+    fn launch_return_temporal_confirmation_rejects_motion_but_accepts_static_edges() {
+        use crate::capture::CaptureVisibility::{Black, Corrupted, Visible};
+
+        assert_eq!(
+            launch_return_effective_usb_visibility(Visible, &[]),
+            Visible
+        );
+        assert_eq!(launch_return_effective_usb_visibility(Black, &[]), Black);
+        assert_eq!(
+            launch_return_effective_usb_visibility(
+                Corrupted,
+                &[(Corrupted, true), (Corrupted, true)]
+            ),
+            Visible
+        );
+        assert_eq!(
+            launch_return_effective_usb_visibility(
+                Corrupted,
+                &[(Corrupted, true), (Corrupted, false)]
+            ),
+            Corrupted
+        );
+        assert_eq!(
+            launch_return_effective_usb_visibility(Corrupted, &[(Corrupted, true)]),
+            Corrupted
+        );
     }
 
     #[test]
