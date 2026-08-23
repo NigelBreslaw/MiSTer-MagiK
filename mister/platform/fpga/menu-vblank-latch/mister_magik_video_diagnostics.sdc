@@ -81,15 +81,8 @@ if {[get_collection_size $magik_scaler_diag_drain] < 1} {
 	post_message -type error "MagiK diagnostic drain routed source is missing"
 	error "MagiK diagnostic drain routed source is missing"
 }
-# Quartus implements this active-high/reset-low bit through a register control
-# input. Constrain every physical pin on the exact first synchronizer stage so
-# the routed control input is covered as well as an ordinary data input.
-set magik_scaler_diag_drain_meta [get_pins -nowarn -hierarchical \
-	{*magik_diag_source_meta[3]|*}]
-if {[get_collection_size $magik_scaler_diag_drain_meta] < 1} {
-	post_message -type error "MagiK diagnostic drain first-stage pins are missing"
-	error "MagiK diagnostic drain first-stage pins are missing"
-}
+set magik_scaler_diag_drain_meta [magik_require_registers diagnostic_drain_meta \
+	{*ascal:ascal|magik_diag_source_meta[3]} 1]
 set_net_delay -max 10.0 \
 	-from $magik_scaler_diag_drain \
 	-to $magik_scaler_diag_drain_meta

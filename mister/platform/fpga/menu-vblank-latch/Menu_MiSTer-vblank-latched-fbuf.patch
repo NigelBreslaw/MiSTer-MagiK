@@ -289,6 +289,7 @@ index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..b1c2581d8665d3db4f4042ed668ee711
 +	ATTRIBUTE altera_attribute OF o_readdataack_sync2 : SIGNAL IS
 +		"-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS; -name PRESERVE_REGISTER ON";
 +	SIGNAL magik_diag_source_meta,magik_diag_source_sync : std_logic_vector(6 DOWNTO 0);
++	SIGNAL magik_diag_return_drain : std_logic:='0';
 +	SIGNAL magik_diag_word : std_logic_vector(15 DOWNTO 0):=(OTHERS =>'0');
 +	SIGNAL magik_diag_generation_i : std_logic:='0';
 +	SIGNAL magik_diag_read_seen,magik_diag_completion_seen : std_logic:='0';
@@ -317,6 +318,7 @@ index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..b1c2581d8665d3db4f4042ed668ee711
 +		IF o_reset_na='0' THEN
 +			magik_diag_source_meta<=(OTHERS =>'0');
 +			magik_diag_source_sync<=(OTHERS =>'0');
++			magik_diag_return_drain<='0';
 +			magik_diag_word<=(OTHERS =>'0');
 +			magik_diag_generation_i<='0';
 +			magik_diag_read_seen<='0';
@@ -325,10 +327,11 @@ index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..b1c2581d8665d3db4f4042ed668ee711
 +		ELSIF rising_edge(o_clk) THEN
 +			magik_diag_source_meta<=
 +				avl_readdataack & avl_completion_pending &
-+				avl_completion_ack_sync & avl_return_drain &
++				avl_completion_ack_sync & NOT avl_return_drain &
 +				std_logic_vector(to_unsigned(avl_return_credits,2)) &
 +				avl_diag_return_phase_nonzero; -- <ASYNC>
 +			magik_diag_source_sync<=magik_diag_source_meta;
++			magik_diag_return_drain<=NOT magik_diag_source_sync(3);
 +			magik_diag_read_seen<=magik_diag_read_seen OR o_readack;
 +			magik_diag_completion_seen<=
 +				magik_diag_completion_seen OR o_readdataack;
@@ -338,7 +341,9 @@ index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..b1c2581d8665d3db4f4042ed668ee711
 +					o_run,
 +					magik_diag_read_seen OR o_readack,
 +					magik_diag_completion_seen OR o_readdataack,
-+					o_readlev,o_copylev,magik_diag_source_sync,
++					o_readlev,o_copylev,
++					magik_diag_source_sync(6 DOWNTO 4) &
++					magik_diag_return_drain & magik_diag_source_sync(2 DOWNTO 0),
 +					o_readdataack_sync2);
 +				word_v:=scheduler_diagnostic_word(
 +					magik_diag_have_previous,magik_diag_word,candidate_v);
