@@ -1,4 +1,9 @@
-# Raw-scaler boundary black-screen result — 2026-08-23
+# Raw-scaler boundary phase-2 invalid attempt — 2026-08-23
+
+> Correction: the clock-only USB still described below was incorrectly called
+> a reproduction of the target black-screen failure. The physical operator
+> rejected that classification. No core launched and no return transition
+> occurred, so this attempt provides no root-cause attribution.
 
 ## Candidate
 
@@ -33,7 +38,7 @@ the complete MagiK home screen.
 
 - baseline diagnostic SHA-256: `2da673071442442345b5f711474b55b2b0d708d2f0482bfd1db6a2b24f173948`
 
-## Captured occurrence
+## Invalid phase-2 attempt
 
 The normal benchmark surface refused to run because a local experimental RBF
 does not match the qualified delivery tuple. No delivery was run because that
@@ -42,12 +47,15 @@ used instead. It timed out after 300 seconds without leaving the home screen;
 its final semantic state reported action sequence zero and a transient cached
 catalog count of zero.
 
-The first native USB still after that timeout was physically black except for
-the top-right clock. No restart, RBF reload, route mutation, or recovery action
-was issued. Two independent diagnostics bundles were then captured, followed
-by an authoritative latched-framebuffer capture.
+The first native USB still after that timeout contained only the top-right
+clock. It was initially misclassified as the target black-screen failure. That
+classification is invalid: the launcher automation never performed a core
+launch or return, the still was not confirmed by the physical operator as the
+reported failure, and a later capture showed the normal UI without recovery.
+Two independent diagnostics bundles and a latched-framebuffer capture remain
+useful only as records of this failed harness attempt.
 
-- black/clock-only USB still SHA-256: `813646ce52bc134df6b7e8a748d97e0642515eef39acf4a0d26fd300f4312184`
+- invalid clock-only USB still SHA-256: `813646ce52bc134df6b7e8a748d97e0642515eef39acf4a0d26fd300f4312184`
 - authoritative framebuffer SHA-256: `7d99d905cff17ee7508ebf7b4dd6135268f81b0bd822b2b39587bec906290fe4`
 - diagnostics A SHA-256: `d9fcd4b4a517616194aca874111af11e24d2cea6db964249c3b2bddead144e53`
 - diagnostics A bundle SHA-256: `acde2ae7b0a1685b0c91f71498efaf1994ddf684d29f71e7ccbba7ca6e7d02c9`
@@ -61,35 +69,30 @@ post count, and flip count advanced; drops and rejects remained zero. The
 authoritative framebuffer contained the complete expected 922-game home
 screen.
 
-A later explicit USB still showed the complete home screen again without any
-recovery action. Therefore the physical black/clock-only presentation was
-transient. The repeated observer reads and framebuffer capture were close in
-time but not synchronized to the exact black physical frame; they must not be
-described as frame-locked proof.
+A later explicit USB still showed the complete home screen without any
+recovery action. The repeated observer reads and framebuffer capture were not
+synchronized to a valid target failure and must not be used as black-screen
+evidence.
 
-## Attribution
+## Attribution status
 
-This occurrence does not support a persistent raw-scaler timing stall, missing
-DE, or persistent all-zero raw output. Around the occurrence the raw boundary,
-latch, and framebuffer all continued to advance and contain nonzero data.
+No attribution can be made from this attempt. It established only that the new
+observer, decoder, transactional installation, baseline physical output, and
+read-only evidence collection work. Phase 2 did not execute a valid return
+transition and did not reproduce the reported black-screen failure.
 
-The present probe cannot prove that the raw scaler emitted a spatially complete
-frame. Its four-bit count saturates after 15 nonzero active samples, and the
-visible clock alone contains enough pixels to saturate it. Consequently
-`raw_scaler_active` distinguishes all-zero/stopped output but cannot distinguish
-the complete UI from a clock-only or narrow-region raw frame. That limitation,
-not the transport, is the remaining diagnostic gap.
+The known probe limitation still applies: its four-bit count saturates after 15
+nonzero active samples, so `raw_scaler_active` does not prove spatial
+completeness. That limitation should be considered only if it affects a future
+operator-confirmed failure capture; it is not a result from this attempt.
 
 ## Next decision
 
-Retire Design 5 after this evidence is archived. Do not add recovery controls,
-pixel buses, PLL state, or more Avalon/scheduler state to it. If another RBF is
-authorized, replace this probe with one small HDMI-domain spatial-coverage
-observer at the same raw-scaler boundary: bounded nonzero occupancy for several
-widely separated active-frame regions plus the existing frame heartbeat. Its
-single purpose is to distinguish complete raw spatial coverage from a
-clock-only/banded/partial raw frame. Only if raw spatial coverage is complete
-should the following experiment move downstream toward the final mux/output
-boundary.
+Keep Design 5 installed as the experimental diagnostic candidate. Correct the
+phase-2 launcher/catalog harness without changing the RBF, then run valid
+bounded core launch/return transitions. Stop only on an operator-confirmed
+physical black, banded, or corrupted screen and capture three `0x67` records,
+the authoritative framebuffer, and native USB evidence before recovery.
 
-The diagnostic RBF remains experimental and is not eligible for CI or release.
+Do not design another FPGA observer from this invalid attempt. The diagnostic
+RBF remains experimental and is not eligible for CI or release.

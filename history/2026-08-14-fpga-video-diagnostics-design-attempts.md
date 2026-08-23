@@ -842,7 +842,7 @@ not waive added unconstrained identities or any timing, CDC, MTBF, resource,
 warning, or device-identity gate. This exception does not qualify the RBF for
 production release.
 
-### Physical attribution result
+### Invalid first phase-2 attempt
 
 The attended phase-2 campaign reproduced a persistent physical black screen on
 the third valid transition with this exact candidate. Native USB video was
@@ -911,23 +911,18 @@ checker defaults used by CI remain unchanged.
 The exact Design 5 candidate was installed through the attended agent-first,
 rollback-capable transaction. Baseline USB video was complete and internal
 evidence classified `raw_scaler_active`. The first typed Arcade automation did
-not launch a core and timed out, but the immediate native USB still reproduced
-a transient physical black screen with only the top-right clock visible.
+not launch a core and timed out. A subsequent clock-only USB still was
+incorrectly called the target black-screen failure; the physical operator
+rejected that classification.
 
-Two subsequent read-only bundles reported advancing `raw_scaler_active`, stable
-latch ownership, advancing posts/flips/route epochs, and zero drops or rejects.
-The authoritative framebuffer remained the complete expected home screen. A
-later native USB still recovered to the complete screen without any recovery
-action. The diagnostic reads were not frame-locked to the exact black physical
-frame, so they prove continuing activity around the event, not exact
-simultaneity.
+Two subsequent read-only bundles reported advancing `raw_scaler_active`, and
+the authoritative framebuffer remained complete. Those records were not tied
+to a valid launch/return failure and provide no black-screen attribution.
 
-Design 5 rules out a persistent stopped, missing-DE, or all-zero raw boundary
-for this occurrence. It does not prove spatial completeness: the 4-bit
-nonzero counter saturates after 15 pixels, so the visible clock alone can
-classify as active. Design 5 is now complete and should be retired. The exact
-candidate, evidence hashes, limitations, and minimal next boundary are recorded
-in
+Design 5 remains installed and active. Correct only the phase-2
+launcher/catalog harness, then run valid bounded return transitions until an
+operator-confirmed failure is captured. Do not retire or replace the observer
+based on this invalid attempt. The exact correction is recorded in
 [`2026-08-23-raw-scaler-boundary-black-result.md`](2026-08-23-raw-scaler-boundary-black-result.md).
 
 ## Facts established despite the failed implementations
