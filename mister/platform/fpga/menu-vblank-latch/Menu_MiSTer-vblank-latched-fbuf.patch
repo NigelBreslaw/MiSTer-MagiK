@@ -279,7 +279,7 @@ index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..b1c2581d8665d3db4f4042ed668ee711
  	SIGNAL avl_radrs,avl_wadrs : unsigned(31 DOWNTO 0);
  	SIGNAL avl_i_offset0,avl_o_offset0 : unsigned(31 DOWNTO 0);
  	SIGNAL avl_i_offset1,avl_o_offset1 : unsigned(31 DOWNTO 0);
-@@ -481,6 +661,10 @@ ARCHITECTURE rtl OF ascal IS
+@@ -481,6 +661,11 @@ ARCHITECTURE rtl OF ascal IS
  	SIGNAL o_pshift : natural RANGE 0 TO 15;
  	SIGNAL o_readack,o_readack_sync,o_readack_sync2 : std_logic;
  	SIGNAL o_readdataack,o_readdataack_sync,o_readdataack_sync2 : std_logic;
@@ -293,6 +293,7 @@ index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..b1c2581d8665d3db4f4042ed668ee711
 +	SIGNAL magik_diag_generation_i : std_logic:='0';
 +	SIGNAL magik_diag_read_seen,magik_diag_completion_seen : std_logic:='0';
 +	SIGNAL magik_diag_have_previous : std_logic:='0';
++	ATTRIBUTE preserve OF magik_diag_word : SIGNAL IS true;
 +	ATTRIBUTE altera_attribute OF magik_diag_source_meta : SIGNAL IS
 +		"-name SYNCHRONIZER_IDENTIFICATION FORCED";
 +	ATTRIBUTE altera_attribute OF magik_diag_source_sync : SIGNAL IS
@@ -300,7 +301,7 @@ index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..b1c2581d8665d3db4f4042ed668ee711
  	SIGNAL o_copyv : unsigned(0 TO 14);
  	SIGNAL o_adrs : unsigned(31 DOWNTO 0); -- Avalon address
  	SIGNAL o_adrs_pre : natural RANGE 0 TO 2**24-1;
-@@ -1160,6 +1344,29 @@ BEGIN
+@@ -1160,6 +1345,29 @@ BEGIN
  	o_reset_na<='0'   WHEN reset_na='0' ELSE '1' WHEN rising_edge(o_clk);
  	avl_reset_na<='0' WHEN reset_na='0' ELSE '1' WHEN rising_edge(avl_clk);
 +	magik_diag_state<=magik_diag_word;
@@ -399,7 +400,7 @@ index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..b1c2581d8665d3db4f4042ed668ee711
  	-----------------------------------------------------------------------------
  	-- Input pixels FIFO and shreg
  	InAT:PROCESS(i_clk,i_reset_na) IS
-@@ -1672,15 +1879,29 @@ BEGIN
+@@ -1672,15 +1880,29 @@ BEGIN
  	-- AVALON interface
  	Avaloir:PROCESS(avl_clk,avl_reset_na) IS
  		VARIABLE adr_v : unsigned(31 DOWNTO 0);
@@ -424,7 +425,7 @@ index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..b1c2581d8665d3db4f4042ed668ee711
  			----------------------------------
  			avl_write_sync<=i_write; -- <ASYNC>
  			avl_write_sync2<=avl_write_sync;
-@@ -1774,29 +1995,50 @@ BEGIN
+@@ -1774,29 +1996,50 @@ BEGIN
  					END IF;
  					avl_address<=std_logic_vector(adr_v(N_AW+NB_LA-1 DOWNTO NB_LA));
  
@@ -492,7 +493,7 @@ index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..b1c2581d8665d3db4f4042ed668ee711
 +	avl_read<=avl_read_i AND NOT avl_read_accepted
 +		WHEN avl_reset_na='0' OR avl_state=sREAD ELSE '0';
  	avl_write<=avl_write_i;
-@@ -1877,6 +2119,9 @@ BEGIN
+@@ -1877,6 +2120,9 @@ BEGIN
  			o_readlev<=0;
  			o_copylev<=0;
  			o_hsp<='0';
