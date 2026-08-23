@@ -369,6 +369,7 @@ impl NativeDevice {
                 | DeviceCommand::Launcher {
                     command: LauncherCommand::Status
                         | LauncherCommand::CaptureFirstArcade(_)
+                        | LauncherCommand::LaunchReturnOnce(_)
                         | LauncherCommand::CaptureCrtFontAb(_)
                         | LauncherCommand::CaptureSnesHub(_)
                         | LauncherCommand::ReturnToLauncher(_),
