@@ -4019,8 +4019,14 @@ mod linux {
     }
 
     enum VideoDiagnosticsReadout {
+        ScalerScheduler(ScalerSchedulerDiagnosticsReadout),
         HdmiLock(HdmiLockDiagnosticsReadout),
         Legacy(Box<LegacyVideoDiagnosticsReadout>),
+    }
+
+    struct ScalerSchedulerDiagnosticsReadout {
+        samples: [mister_magik_video_diagnostics_contract::ScalerSchedulerState; 3],
+        sample_interval_us: [u64; 2],
     }
 
     struct HdmiLockDiagnosticsReadout {
@@ -4079,6 +4085,33 @@ mod linux {
     pub(super) struct ScalerFetchDeltas {
         pub(super) batch_two: u8,
         pub(super) starved_frame: u8,
+    }
+
+    pub(super) fn scaler_scheduler_classification(
+        samples: &[mister_magik_video_diagnostics_contract::ScalerSchedulerState; 3],
+    ) -> &'static str {
+        use mister_magik_video_diagnostics_contract as contract;
+        let state = samples[0].state();
+        if samples
+            .iter()
+            .any(|sample| !sample.coherent() || sample.state() != state)
+        {
+            return "scaler_scheduler_evidence_inconclusive";
+        }
+        let flag = |bit| state & (1 << bit) != 0;
+        let request = flag(contract::SCALER_SCHEDULER_STATE_REQUEST_TOGGLE_BIT);
+        let pending = flag(contract::SCALER_SCHEDULER_STATE_COMPLETION_PENDING_BIT);
+        let acknowledgement = flag(contract::SCALER_SCHEDULER_STATE_ACKNOWLEDGEMENT_BIT);
+        let destination_seen = flag(contract::SCALER_SCHEDULER_STATE_DESTINATION_SEEN_BIT);
+        if pending || request != acknowledgement || destination_seen != acknowledgement {
+            return "completion_queue_backlog";
+        }
+        let no_activity = !flag(contract::SCALER_SCHEDULER_STATE_READ_ACCEPTED_BIT)
+            && !flag(contract::SCALER_SCHEDULER_STATE_COMPLETION_BIT);
+        if samples[0].read_level() == 2 && samples[0].copy_level() == 0 && no_activity {
+            return "credit_accounting_stall";
+        }
+        "scaler_scheduler_not_stalled"
     }
 
     #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -4536,6 +4569,67 @@ mod linux {
     impl VideoDiagnosticsReadout {
         fn to_json(&self, context: VideoDiagnosticsJsonContext) -> Value {
             match self {
+                Self::ScalerScheduler(readout) => {
+                    use mister_magik_video_diagnostics_contract as contract;
+                    let state = readout.samples[0].state();
+                    let flag = |bit| state & (1 << bit) != 0;
+                    let samples_match = readout
+                        .samples
+                        .iter()
+                        .all(|sample| sample.coherent() && sample.state() == state);
+                    let coherent = context.owner_stable
+                        && context.latch_ownership_stable == Some(true)
+                        && context.launcher_state_stable
+                        && samples_match;
+                    json!({
+                        "schema": "mister-magik-fpga-video-diagnostics-v2",
+                        "diagnostic_architecture": "scaler-scheduler-state-v1",
+                        "available": true,
+                        "coherent": coherent,
+                        "classification": if coherent {
+                            scaler_scheduler_classification(&readout.samples)
+                        } else {
+                            "scaler_scheduler_evidence_inconclusive"
+                        },
+                        "sink_visibility": "unobserved",
+                        "capture_start_monotonic_us": context.capture_start_monotonic_us,
+                        "capture_end_monotonic_us": context.capture_end_monotonic_us,
+                        "owner_epoch_before": context.owner_epoch_before,
+                        "owner_epoch_after": context.owner_epoch_after,
+                        "latch_status": context.latch_status_json,
+                        "coherence": {
+                            "three_samples_match": samples_match,
+                            "sample_interval_us": readout.sample_interval_us,
+                            "latch_ownership_stable": context.latch_ownership_stable,
+                            "launcher_state_stable": context.launcher_state_stable,
+                            "ownership_check_error": context.ownership_check_error,
+                        },
+                        "capabilities": {
+                            "passive_video_observer": true,
+                            "scaler_scheduler_state": true,
+                            "pixel_observer": false,
+                            "pll_observer": false,
+                        },
+                        "scheduler_state": {
+                            "running": flag(contract::SCALER_SCHEDULER_STATE_RUNNING_BIT),
+                            "read_accepted": flag(contract::SCALER_SCHEDULER_STATE_READ_ACCEPTED_BIT),
+                            "completion": flag(contract::SCALER_SCHEDULER_STATE_COMPLETION_BIT),
+                            "read_level": readout.samples[0].read_level(),
+                            "copy_level": readout.samples[0].copy_level(),
+                            "request_toggle": flag(contract::SCALER_SCHEDULER_STATE_REQUEST_TOGGLE_BIT),
+                            "completion_pending": flag(contract::SCALER_SCHEDULER_STATE_COMPLETION_PENDING_BIT),
+                            "acknowledgement": flag(contract::SCALER_SCHEDULER_STATE_ACKNOWLEDGEMENT_BIT),
+                            "destination_seen": flag(contract::SCALER_SCHEDULER_STATE_DESTINATION_SEEN_BIT),
+                            "return_drain": flag(contract::SCALER_SCHEDULER_STATE_RETURN_DRAIN_BIT),
+                            "return_credits": readout.samples[0].field(
+                                contract::SCALER_SCHEDULER_STATE_RETURN_CREDITS_BIT,
+                                contract::SCALER_SCHEDULER_STATE_RETURN_CREDITS_MASK,
+                            ),
+                            "return_phase_nonzero": flag(contract::SCALER_SCHEDULER_STATE_RETURN_PHASE_NONZERO_BIT),
+                            "raw_samples": readout.samples.iter().map(|sample| sample.words).collect::<Vec<_>>(),
+                        },
+                    })
+                }
                 Self::HdmiLock(readout) => {
                     use mister_magik_video_diagnostics_contract as contract;
                     let evidence = &readout.lock;
@@ -4954,6 +5048,11 @@ mod linux {
         }
 
         fn read_video_diagnostics(&mut self) -> io::Result<VideoDiagnosticsReadout> {
+            match self.read_scaler_scheduler_diagnostics() {
+                Ok(readout) => return Ok(VideoDiagnosticsReadout::ScalerScheduler(readout)),
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(error) => return Err(error),
+            }
             match self.read_hdmi_lock_evidence() {
                 Ok(lock) => {
                     let output_activity = match self.read_hdmi_output_activity_window() {
@@ -4994,6 +5093,57 @@ mod linux {
                 }
                 result => result.map(Box::new).map(VideoDiagnosticsReadout::Legacy),
             }
+        }
+
+        fn read_scaler_scheduler_diagnostics(
+            &mut self,
+        ) -> io::Result<ScalerSchedulerDiagnosticsReadout> {
+            let first = self.read_scaler_scheduler_state()?;
+            let first_started = Instant::now();
+            thread::sleep(Duration::from_millis(25));
+            let second = self.read_scaler_scheduler_state().map_err(|error| {
+                if error.kind() == io::ErrorKind::NotFound {
+                    io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!("scaler scheduler state disappeared during sampling: {error}"),
+                    )
+                } else {
+                    error
+                }
+            })?;
+            let first_interval_us = first_started.elapsed().as_micros() as u64;
+            let second_started = Instant::now();
+            thread::sleep(Duration::from_millis(25));
+            let third = self.read_scaler_scheduler_state().map_err(|error| {
+                if error.kind() == io::ErrorKind::NotFound {
+                    io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!("scaler scheduler state disappeared during sampling: {error}"),
+                    )
+                } else {
+                    error
+                }
+            })?;
+            Ok(ScalerSchedulerDiagnosticsReadout {
+                samples: [first, second, third],
+                sample_interval_us: [
+                    first_interval_us,
+                    second_started.elapsed().as_micros() as u64,
+                ],
+            })
+        }
+
+        fn read_scaler_scheduler_state(
+            &mut self,
+        ) -> io::Result<mister_magik_video_diagnostics_contract::ScalerSchedulerState> {
+            use mister_magik_video_diagnostics_contract as contract;
+            let words = self.read_diagnostic_words::<{ contract::SCALER_SCHEDULER_STATE_WORDS }>(
+                contract::GET_SCALER_SCHEDULER_STATE,
+                contract::SCALER_SCHEDULER_STATE_MAGIC,
+                "scaler scheduler state",
+            )?;
+            contract::decode_scaler_scheduler_state(&words)
+                .map_err(|message| io::Error::new(io::ErrorKind::InvalidData, message))
         }
 
         fn read_hdmi_lock_evidence(
@@ -8070,6 +8220,43 @@ mod tests {
                 },
             ),
             "scaler_fetch_recovered_two_completion_batch"
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn scaler_scheduler_classification_requires_three_coherent_equal_samples() {
+        use mister_magik_video_diagnostics_contract as contract;
+
+        let samples = |state| -> [contract::ScalerSchedulerState; 3] {
+            std::array::from_fn(|_| contract::ScalerSchedulerState {
+                words: [contract::SCALER_SCHEDULER_STATE_SCHEMA, state, 0],
+            })
+        };
+        let coherent = 1 << contract::SCALER_SCHEDULER_STATE_COHERENT_BIT;
+        let stalled = coherent | (2 << contract::SCALER_SCHEDULER_STATE_READ_LEVEL_BIT);
+        assert_eq!(
+            linux::scaler_scheduler_classification(&samples(stalled)),
+            "credit_accounting_stall"
+        );
+
+        let backlog = stalled | (1 << contract::SCALER_SCHEDULER_STATE_COMPLETION_PENDING_BIT);
+        assert_eq!(
+            linux::scaler_scheduler_classification(&samples(backlog)),
+            "completion_queue_backlog"
+        );
+
+        let progressing = stalled | (1 << contract::SCALER_SCHEDULER_STATE_COMPLETION_BIT);
+        assert_eq!(
+            linux::scaler_scheduler_classification(&samples(progressing)),
+            "scaler_scheduler_not_stalled"
+        );
+
+        let mut mismatched = samples(stalled);
+        mismatched[2].words[contract::SCALER_SCHEDULER_STATE_STATE_WORD] ^= 1 << 1;
+        assert_eq!(
+            linux::scaler_scheduler_classification(&mismatched),
+            "scaler_scheduler_evidence_inconclusive"
         );
     }
 

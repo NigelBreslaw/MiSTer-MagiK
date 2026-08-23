@@ -130,6 +130,28 @@ def render_rust(spec: dict) -> str:
             f"pub const {prefix}_ZERO_GOLDEN_CRC: u16 = "
             f"0x{zero_golden_crc(record, spec['crc']):04x};"
         )
+    scheduler = spec["scaler_scheduler_state"]
+    lines.extend(
+        [
+            "",
+            f"pub const SCALER_SCHEDULER_STATE_SCHEMA: u16 = {scheduler['schema']};",
+            f"pub const GET_SCALER_SCHEDULER_STATE: u16 = 0x{scheduler['command']:02x};",
+            f"pub const SCALER_SCHEDULER_STATE_MAGIC: u16 = 0x{scheduler['magic']:04x};",
+            f"pub const SCALER_SCHEDULER_STATE_WORDS: usize = {scheduler['word_count']};",
+        ]
+    )
+    for index, name in enumerate(scheduler["words"]):
+        lines.append(f"pub const SCALER_SCHEDULER_STATE_{name.upper()}_WORD: usize = {index};")
+    for name, field in scheduler["fields"].items():
+        lines.append(f"pub const SCALER_SCHEDULER_STATE_{name.upper()}_BIT: usize = {field['bit']};")
+        lines.append(
+            f"pub const SCALER_SCHEDULER_STATE_{name.upper()}_MASK: u16 = "
+            f"0x{((1 << field['width']) - 1):04x};"
+        )
+    lines.append(
+        "pub const SCALER_SCHEDULER_STATE_ZERO_GOLDEN_CRC: u16 = "
+        f"0x{zero_golden_crc(scheduler, spec['crc']):04x};"
+    )
     return "\n".join(lines) + "\n"
 
 
@@ -190,7 +212,22 @@ def main() -> None:
                     if field_mask & mask:
                         raise SystemExit(
                             f"HDMI {name} field {field_name} overlaps reserved-zero bits"
-                        )
+                    )
+    scheduler = spec["scaler_scheduler_state"]
+    if len(scheduler["words"]) != scheduler["word_count"] or scheduler["words"][-1] != "crc":
+        raise SystemExit("scaler scheduler state layout must match word count and end in CRC")
+    if scheduler["command"] in commands or scheduler["magic"] in magics:
+        raise SystemExit("scaler scheduler state command or magic overlaps another record")
+    used_mask = 0
+    for field_name, field in scheduler["fields"].items():
+        if field["bit"] < 0 or field["width"] <= 0 or field["bit"] + field["width"] > 16:
+            raise SystemExit(f"scaler scheduler state field {field_name} is outside one word")
+        field_mask = ((1 << field["width"]) - 1) << field["bit"]
+        if used_mask & field_mask:
+            raise SystemExit(f"scaler scheduler state field {field_name} overlaps another field")
+        used_mask |= field_mask
+    if used_mask != 0xffff:
+        raise SystemExit("scaler scheduler state must define all 16 state bits")
     write_or_check(RUST_PATH, render_rust(spec), args.check)
 
 

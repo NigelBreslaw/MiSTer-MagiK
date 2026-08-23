@@ -132,6 +132,46 @@ pub struct HdmiOutputActivity {
     pub words: [u16; HDMI_OUTPUT_ACTIVITY_WORDS],
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ScalerSchedulerState {
+    pub words: [u16; SCALER_SCHEDULER_STATE_WORDS],
+}
+
+impl ScalerSchedulerState {
+    pub fn state(&self) -> u16 {
+        self.words[SCALER_SCHEDULER_STATE_STATE_WORD]
+    }
+
+    pub fn field(&self, bit: usize, mask: u16) -> u16 {
+        (self.state() >> bit) & mask
+    }
+
+    pub fn coherent(&self) -> bool {
+        self.field(
+            SCALER_SCHEDULER_STATE_COHERENT_BIT,
+            SCALER_SCHEDULER_STATE_COHERENT_MASK,
+        ) != 0
+    }
+
+    pub fn read_level(&self) -> u8 {
+        self.field(
+            SCALER_SCHEDULER_STATE_READ_LEVEL_BIT,
+            SCALER_SCHEDULER_STATE_READ_LEVEL_MASK,
+        ) as u8
+    }
+
+    pub fn copy_level(&self) -> u8 {
+        self.field(
+            SCALER_SCHEDULER_STATE_COPY_LEVEL_BIT,
+            SCALER_SCHEDULER_STATE_COPY_LEVEL_MASK,
+        ) as u8
+    }
+
+    pub fn flag(&self, bit: usize) -> bool {
+        self.state() & (1 << bit) != 0
+    }
+}
+
 impl HdmiOutputActivity {
     pub fn flags(&self) -> u16 {
         self.words[HDMI_OUTPUT_ACTIVITY_FLAGS_WORD]
@@ -619,6 +659,46 @@ pub fn decode_hdmi_scaler_fetch_activity(words: &[u16]) -> Result<HdmiScalerFetc
     .map(|words| HdmiScalerFetchActivity { words })
 }
 
+pub fn decode_scaler_scheduler_state(words: &[u16]) -> Result<ScalerSchedulerState, String> {
+    if words.len() != SCALER_SCHEDULER_STATE_WORDS {
+        return Err(format!(
+            "scaler scheduler state command 0x{GET_SCALER_SCHEDULER_STATE:02x} needs \
+             {SCALER_SCHEDULER_STATE_WORDS} words, got {}",
+            words.len()
+        ));
+    }
+    if words[SCALER_SCHEDULER_STATE_SCHEMA_WORD] != SCALER_SCHEDULER_STATE_SCHEMA {
+        return Err(format!(
+            "unsupported scaler scheduler state schema {}",
+            words[SCALER_SCHEDULER_STATE_SCHEMA_WORD]
+        ));
+    }
+    let expected = words[SCALER_SCHEDULER_STATE_CRC_WORD];
+    let actual = message_crc_with_schema(
+        GET_SCALER_SCHEDULER_STATE,
+        SCALER_SCHEDULER_STATE_SCHEMA,
+        &words[..SCALER_SCHEDULER_STATE_CRC_WORD],
+    );
+    if expected != actual {
+        return Err(format!(
+            "scaler scheduler state CRC mismatch expected=0x{expected:04x} actual=0x{actual:04x}"
+        ));
+    }
+    let state = words[SCALER_SCHEDULER_STATE_STATE_WORD];
+    let read_level =
+        (state >> SCALER_SCHEDULER_STATE_READ_LEVEL_BIT) & SCALER_SCHEDULER_STATE_READ_LEVEL_MASK;
+    let copy_level =
+        (state >> SCALER_SCHEDULER_STATE_COPY_LEVEL_BIT) & SCALER_SCHEDULER_STATE_COPY_LEVEL_MASK;
+    let return_credits = (state >> SCALER_SCHEDULER_STATE_RETURN_CREDITS_BIT)
+        & SCALER_SCHEDULER_STATE_RETURN_CREDITS_MASK;
+    if read_level > 2 || copy_level > 2 || return_credits > 2 {
+        return Err("scaler scheduler state contains an out-of-range level".to_string());
+    }
+    let mut owned = [0; SCALER_SCHEDULER_STATE_WORDS];
+    owned.copy_from_slice(words);
+    Ok(ScalerSchedulerState { words: owned })
+}
+
 fn decode<const N: usize>(
     command: u16,
     generation_index: usize,
@@ -766,6 +846,48 @@ mod tests {
         assert_eq!(words[HDMI_EVIDENCE_CRC_WORD], HDMI_EVIDENCE_ZERO_GOLDEN_CRC);
         let decoded = decode_hdmi_evidence(&words).unwrap();
         assert_eq!(decoded.flags(), 0);
+    }
+
+    #[test]
+    fn scaler_scheduler_state_decodes_exact_packed_levels() {
+        let state = (1 << SCALER_SCHEDULER_STATE_COHERENT_BIT)
+            | (1 << SCALER_SCHEDULER_STATE_RUNNING_BIT)
+            | (2 << SCALER_SCHEDULER_STATE_READ_LEVEL_BIT)
+            | (1 << SCALER_SCHEDULER_STATE_COPY_LEVEL_BIT)
+            | (2 << SCALER_SCHEDULER_STATE_RETURN_CREDITS_BIT);
+        let mut words = zero_hdmi_words::<SCALER_SCHEDULER_STATE_WORDS>(
+            GET_SCALER_SCHEDULER_STATE,
+            SCALER_SCHEDULER_STATE_SCHEMA,
+        );
+        words[SCALER_SCHEDULER_STATE_STATE_WORD] = state;
+        words[SCALER_SCHEDULER_STATE_CRC_WORD] = message_crc_with_schema(
+            GET_SCALER_SCHEDULER_STATE,
+            SCALER_SCHEDULER_STATE_SCHEMA,
+            &words[..SCALER_SCHEDULER_STATE_CRC_WORD],
+        );
+        let decoded = decode_scaler_scheduler_state(&words).unwrap();
+        assert!(decoded.coherent());
+        assert_eq!(decoded.read_level(), 2);
+        assert_eq!(decoded.copy_level(), 1);
+        assert_eq!(decoded.state(), state);
+    }
+
+    #[test]
+    fn scaler_scheduler_state_rejects_crc_and_out_of_range_levels() {
+        let mut words = zero_hdmi_words::<SCALER_SCHEDULER_STATE_WORDS>(
+            GET_SCALER_SCHEDULER_STATE,
+            SCALER_SCHEDULER_STATE_SCHEMA,
+        );
+        words[SCALER_SCHEDULER_STATE_CRC_WORD] ^= 1;
+        assert!(decode_scaler_scheduler_state(&words).is_err());
+
+        words[SCALER_SCHEDULER_STATE_STATE_WORD] = 3 << SCALER_SCHEDULER_STATE_READ_LEVEL_BIT;
+        words[SCALER_SCHEDULER_STATE_CRC_WORD] = message_crc_with_schema(
+            GET_SCALER_SCHEDULER_STATE,
+            SCALER_SCHEDULER_STATE_SCHEMA,
+            &words[..SCALER_SCHEDULER_STATE_CRC_WORD],
+        );
+        assert!(decode_scaler_scheduler_state(&words).is_err());
     }
 
     #[test]

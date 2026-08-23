@@ -791,6 +791,37 @@ The vertical-band symptom is not declared fixed by the completion CDC proof.
 
 ---
 
+## Design 4: minimal scaler-scheduler attribution (`0x67`)
+
+The queued repair reduced the apparent failure rate but did not eliminate the
+physical black screen. On 2026-08-23 a lossless physical capture showed stable
+video-level black while the internal RGB565 framebuffer remained correct and
+owned vblank continued. The repair-only RBF could not expose the internal
+scheduler state because its historical diagnostic fields were compatibility
+stubs.
+
+Design 4 is an experimental attribution candidate, not another functional
+repair. It retains Design 3 bit-for-bit and adds one read-only 16-bit state
+word assembled inside `ascal`. Seven Avalon-side state bits cross through
+explicit two-stage synchronizers. The HDMI domain publishes the word only
+after two identical completed-frame samples; a generation-toggle bundled-data
+crossing then transfers the stable word to the independent `clk_sys` responder.
+
+The record contains only run state, per-frame read/completion activity,
+read/copy levels, completion request/pending/acknowledgement state, destination
+observation, and retained return drain/credit/phase state. It does not tap RGB,
+DE, PLL, route, address, framebuffer, mux, reset-control, or transmitter cones.
+Command `0x67` returns magic `0x4d57`, schema 1, the immutable state word, and
+CRC-16. Commands `0x60` through `0x66`, latch-v5, and capabilities `0x03ff`
+remain unchanged.
+
+Three identical coherent records are required for classification. Backlogged
+request/ack state, idle `readlev=2`/`copylev=0` credit loss, and continuing
+scheduler progress are distinct outcomes; malformed or changing evidence is
+inconclusive. The observer remains experimental until exact simulation,
+formal-regression, fixed-seed Apple-container timing/CDC/area signoff, and
+attended physical smoke all pass.
+
 ## Facts established despite the failed implementations
 
 The work was not diagnostically empty. It established the following facts:

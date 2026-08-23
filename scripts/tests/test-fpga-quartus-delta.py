@@ -70,38 +70,78 @@ SYNC_NAMES = tuple(
     f"ascal:ascal|{name}"
     for name in COMPLETION_SYNC_NAMES
 )
-SYNC_ASSIGNMENTS = COMPLETION_SYNC_ASSIGNMENTS
+DIAGNOSTIC_ASCAL_SYNC_NAMES = tuple(
+    name
+    for bit in range(7)
+    for name in (f"magik_diag_source_meta[{bit}]", f"magik_diag_source_sync[{bit}]")
+)
+DIAGNOSTIC_SYS_SYNC_NAMES = ("generation_meta", "generation_sync")
+SYNC_ASSIGNMENTS = (
+    COMPLETION_SYNC_ASSIGNMENTS
+    + quartus_assignment_section("ascal:ascal", DIAGNOSTIC_ASCAL_SYNC_NAMES)
+    + quartus_assignment_section(
+        "magik_scaler_scheduler_diagnostic:magik_scaler_scheduler_diagnostic",
+        DIAGNOSTIC_SYS_SYNC_NAMES,
+    )
+)
 CUSTOM_SYNC = SYNC_ASSIGNMENTS + """\
-Info (332114): Report Metastability: Found 7 synchronizer chains.
-Info (332114): Fraction of Chains for which MTBFs Could Not be Calculated: 0.571429
+Info (332114): Report Metastability: Found 15 synchronizer chains.
+Info (332114): Fraction of Chains for which MTBFs Could Not be Calculated: 0.266667
 Info: MagiK diagnostics CDC analysis applied: scaler_completion_request_ack
 """
+
+
+def metastability_chain(
+    index: int, source: str, synchronization_node: str, registers: tuple[str, ...]
+) -> str:
+    return (
+        f"Synchronizer Chain #{index}: Worst-Case MTBF is Greater than 10 Billion Years\n"
+        f"; Source Node ; {source} ;\n"
+        f"; Synchronization Node ; {synchronization_node} ;\n"
+        "; Worst-Case MTBF (years) ; Greater than 10 Billion ;\n"
+        "; Synchronization Registers ; ;\n"
+        + "".join(f"; {register} ; ;\n" for register in registers)
+    )
+
+
+METASTABILITY_CHAINS = [
+    ("ascal:ascal|avl_readdataack", "ascal:ascal|o_readdataack_sync", ("ascal:ascal|o_readdataack_sync",)),
+    ("ascal:ascal|o_readdataack_sync2", "ascal:ascal|avl_completion_ack_meta", ("ascal:ascal|avl_completion_ack_meta", "ascal:ascal|avl_completion_ack_sync")),
+    ("ascal:ascal|avl_readdataack", "ascal:ascal|magik_diag_source_meta[6]", ("ascal:ascal|magik_diag_source_meta[6]", "ascal:ascal|magik_diag_source_sync[6]")),
+    ("ascal:ascal|avl_completion_pending", "ascal:ascal|magik_diag_source_meta[5]", ("ascal:ascal|magik_diag_source_meta[5]", "ascal:ascal|magik_diag_source_sync[5]")),
+    ("ascal:ascal|avl_completion_ack_sync", "ascal:ascal|magik_diag_source_meta[4]", ("ascal:ascal|magik_diag_source_meta[4]", "ascal:ascal|magik_diag_source_sync[4]")),
+    ("ascal:ascal|avl_return_drain", "ascal:ascal|magik_diag_source_meta[3]", ("ascal:ascal|magik_diag_source_meta[3]", "ascal:ascal|magik_diag_source_sync[3]")),
+    ("ascal:ascal|avl_return_credits[1]", "ascal:ascal|magik_diag_source_meta[2]", ("ascal:ascal|magik_diag_source_meta[2]", "ascal:ascal|magik_diag_source_sync[2]")),
+    ("ascal:ascal|avl_return_credits[0]", "ascal:ascal|magik_diag_source_meta[1]", ("ascal:ascal|magik_diag_source_meta[1]", "ascal:ascal|magik_diag_source_sync[1]")),
+    ("ascal:ascal|avl_diag_return_phase_nonzero", "ascal:ascal|magik_diag_source_meta[0]", ("ascal:ascal|magik_diag_source_meta[0]", "ascal:ascal|magik_diag_source_sync[0]")),
+    ("ascal:ascal|magik_diag_generation_i", "magik_scaler_scheduler_diagnostic:magik_scaler_scheduler_diagnostic|generation_meta", ("magik_scaler_scheduler_diagnostic:magik_scaler_scheduler_diagnostic|generation_meta", "magik_scaler_scheduler_diagnostic:magik_scaler_scheduler_diagnostic|generation_sync")),
+]
 
 VALID_DIAGNOSTIC_REPORTS = {
     "menu.magik-diagnostic-cdc-skew.rpt": "No paths to report.\n",
     "menu.magik-diagnostic-cdc-net-delay.rpt": (
         "; set_net_delay ; 1.250 ; 10.000 ; 8.750 ; sources ; destinations ; max ;\n"
         "; set_net_delay ; 1.150 ; 10.000 ; 8.850 ; sources ; destinations ; max ;\n"
+        "; set_net_delay ; 1.100 ; 10.000 ; 8.900 ; sources ; destinations ; max ;\n"
+        "; set_net_delay ; 1.050 ; 10.000 ; 8.950 ; sources ; destinations ; max ;\n"
+        "; set_net_delay ; 1.000 ; 10.000 ; 9.000 ; sources ; destinations ; max ;\n"
         "; -- ; 1.500 ; 10.000 ; 8.500 ; ascal:ascal|avl_readdataack ; "
         "ascal:ascal|o_readdataack_sync ; max ;\n"
         "; -- ; 1.250 ; 10.000 ; 8.750 ; ascal:ascal|o_readdataack_sync2 ; "
         "ascal:ascal|avl_completion_ack_meta ; max ;\n"
+        "; -- ; 1.200 ; 10.000 ; 8.800 ; ascal:ascal|avl_completion_pending ; "
+        "ascal:ascal|magik_diag_source_meta[5] ; max ;\n"
+        "; -- ; 1.100 ; 10.000 ; 8.900 ; ascal:ascal|magik_diag_generation_i ; "
+        "magik_scaler_scheduler_diagnostic:magik_scaler_scheduler_diagnostic|generation_meta ; max ;\n"
+        "; -- ; 1.000 ; 10.000 ; 9.000 ; ascal:ascal|magik_diag_word[0] ; "
+        "magik_scaler_scheduler_diagnostic:magik_scaler_scheduler_diagnostic|captured_state[0] ; max ;\n"
     ),
     "menu.magik-diagnostic-metastability.rpt": (
-        "Report Metastability: Found 40 synchronizer chains.\n"
-        "Synchronizer Chain #1: Worst-Case MTBF is Greater than 1 Billion Years\n"
-        "; Source Node ; ascal:ascal|avl_readdataack ;\n"
-        "; Synchronization Node ; ascal:ascal|o_readdataack_sync ;\n"
-        "; Worst-Case MTBF (years) ; Greater than 1 Billion ;\n"
-        "; Synchronization Registers ; ;\n"
-        "; ascal:ascal|o_readdataack_sync ; ;\n"
-        "Synchronizer Chain #2: Worst-Case MTBF is Greater than 1 Billion Years\n"
-        "; Source Node ; ascal:ascal|o_readdataack_sync2 ;\n"
-        "; Synchronization Node ; ascal:ascal|avl_completion_ack_meta ;\n"
-        "; Worst-Case MTBF (years) ; Greater than 1 Billion ;\n"
-        "; Synchronization Registers ; ;\n"
-        "; ascal:ascal|avl_completion_ack_meta ; ;\n"
-        "; ascal:ascal|avl_completion_ack_sync ; ;\n"
+        "Report Metastability: Found 48 synchronizer chains.\n"
+        + "".join(
+            metastability_chain(index, source, node, registers)
+            for index, (source, node, registers) in enumerate(METASTABILITY_CHAINS, 1)
+        )
     ),
 }
 
@@ -200,18 +240,18 @@ class QuartusDeltaTest(unittest.TestCase):
 
     def test_unrelated_total_chain_drift_fails(self) -> None:
         patched = CUSTOM_SYNC.replace(
-            "Found 7 synchronizer chains", "Found 10 synchronizer chains"
+            "Found 15 synchronizer chains", "Found 18 synchronizer chains"
         ).replace(
-            "Could Not be Calculated: 0.571429",
-            "Could Not be Calculated: 0.800",
+            "Could Not be Calculated: 0.266667",
+            "Could Not be Calculated: 0.444444",
         )
         result, payload = self.run_check(BASE, BASE + patched)
         self.assertEqual(result.returncode, 1)
         self.assertIn("synchronizer_chain_count_mismatch", payload["invalid_reason"])
         self.assertEqual(payload["baseline_synchronizer_chains"], 5)
-        self.assertEqual(payload["patched_synchronizer_chains"], 10)
+        self.assertEqual(payload["patched_synchronizer_chains"], 18)
         self.assertEqual(payload["baseline_calculable_synchronizer_chains"], 1)
-        self.assertEqual(payload["patched_calculable_synchronizer_chains"], 2)
+        self.assertEqual(payload["patched_calculable_synchronizer_chains"], 10)
 
     def test_new_warning_fails_even_when_warning_code_is_inherited(self) -> None:
         result, payload = self.run_check(BASE, BASE + "Warning (10001): different warning\n" + CUSTOM_SYNC)
@@ -483,7 +523,7 @@ class QuartusDeltaTest(unittest.TestCase):
         reports["menu.magik-diagnostic-metastability.rpt"] = reports[
             "menu.magik-diagnostic-metastability.rpt"
         ].replace(
-            "; Worst-Case MTBF (years) ; Greater than 1 Billion ;",
+            "; Worst-Case MTBF (years) ; Greater than 10 Billion ;",
             "; Worst-Case MTBF (years) ; 1e+08 ;",
             1,
         )
@@ -550,7 +590,7 @@ class QuartusDeltaTest(unittest.TestCase):
             / "mister/platform/fpga/menu-vblank-latch/mister_magik_video_diagnostics.sdc"
         ).read_text(encoding="utf-8")
         self.assertIn("get_registers -nowarn -no_duplicates", sdc)
-        self.assertEqual(sdc.count("set_net_delay -max 10.0"), 2)
+        self.assertEqual(sdc.count("set_net_delay -max 10.0"), 5)
         self.assertNotIn("set_max_skew", sdc)
         self.assertNotIn("set_false_path", sdc)
 

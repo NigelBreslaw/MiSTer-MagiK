@@ -16,11 +16,19 @@ a queued one-bit request/acknowledgement repair which preserves the legacy
 HDMI-side completion cone and keeps all FPGA observer commands out of the
 production RBF.
 
-Commands `0x60` through `0x67` are therefore unsupported by the implemented
-repair candidate. Decoders remain only for already-qualified historical
-RBFs and rollback evidence. Explicit unsupported diagnostics are not an
-activation failure when exact manifest/RBF identity and the unchanged latch-v5
-contract pass.
+The production repair candidate continues to expose no observer. A subsequent
+experimental attribution candidate adds only `0x67`,
+`scaler-scheduler-state-v1`. It exports one coherent scheduler-state word and
+does not tap pixels, PLL state, routes, addresses, or final-output logic.
+Commands `0x60` through `0x66` remain unsupported. Latch-v5 and capabilities
+`0x03ff` remain unchanged, and the record always reports sink visibility as
+unobserved.
+
+`0x67` is diagnostic evidence, not a recovery command or production release
+requirement. It has no write, clear, arm, reset, or freeze operation. Three
+CRC-valid, identical coherent records are required before the host classifies
+completion backlog, idle credit-accounting stall, or continuing scheduler
+progress.
 
 The complete attempt history and retained measurements are in
 [FPGA video diagnostics: two attempted designs and their retirement](../history/2026-08-14-fpga-video-diagnostics-design-attempts.md).

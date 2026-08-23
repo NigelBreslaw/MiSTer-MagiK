@@ -171,6 +171,12 @@ This deliberately separates correctness proof from field attribution. FPGA
 observers which alter placement cannot qualify the production artifact they are
 meant to describe.
 
+The later experimental `scaler-scheduler-state-v1` attribution candidate is
+not part of this production contract. It preserves this repair unchanged and
+adds only read-only command `0x67`; `0x60` through `0x66` remain unsupported.
+Promotion still requires removing or separately qualifying that observer after
+the captured state identifies the remaining fault.
+
 ### Activation profile
 
 Experimental and release activation must accept `0x60` through `0x67` being

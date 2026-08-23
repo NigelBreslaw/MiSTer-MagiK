@@ -42,6 +42,32 @@
       "crc"
     ]
   },
+  "scaler_scheduler_state": {
+    "schema": 1,
+    "command": 103,
+    "magic": 19799,
+    "word_count": 3,
+    "words": [
+      "schema",
+      "state",
+      "crc"
+    ],
+    "fields": {
+      "coherent": {"bit": 0, "width": 1},
+      "running": {"bit": 1, "width": 1},
+      "read_accepted": {"bit": 2, "width": 1},
+      "completion": {"bit": 3, "width": 1},
+      "read_level": {"bit": 4, "width": 2},
+      "copy_level": {"bit": 6, "width": 2},
+      "request_toggle": {"bit": 8, "width": 1},
+      "completion_pending": {"bit": 9, "width": 1},
+      "acknowledgement": {"bit": 10, "width": 1},
+      "destination_seen": {"bit": 11, "width": 1},
+      "return_drain": {"bit": 12, "width": 1},
+      "return_credits": {"bit": 13, "width": 2},
+      "return_phase_nonzero": {"bit": 15, "width": 1}
+    }
+  },
   "path_activity": {
     "counter_bits": 4,
     "records": {

@@ -28,4 +28,46 @@ set magik_scaler_completion_ack_meta [magik_require_registers ack_meta \
 set_net_delay -max 10.0 \
 	-from $magik_scaler_completion_ack \
 	-to $magik_scaler_completion_ack_meta
-post_message -type info "MagiK diagnostics CDC analysis applied: scaler_completion_request_ack"
+
+# Seven passive state bits cross from clk_100m into the HDMI-domain coherence
+# sampler. The two encoded credit bits and the phase reduction are accepted
+# only after identical completed-frame samples, but every physical route into
+# the first synchronizer bank remains explicitly bounded.
+set magik_scaler_diag_source [get_registers -nowarn -no_duplicates {
+	*ascal:ascal|avl_readdataack
+	*ascal:ascal|avl_completion_pending
+	*ascal:ascal|avl_completion_ack_sync
+	*ascal:ascal|avl_return_drain
+	*ascal:ascal|avl_return_credits[*]
+	*ascal:ascal|avl_diag_return_phase_nonzero
+}]
+if {[get_collection_size $magik_scaler_diag_source] != 7} {
+	post_message -type error "MagiK scaler diagnostic source collection mismatch"
+	error "MagiK scaler diagnostic source collection mismatch"
+}
+set magik_scaler_diag_source_meta [magik_require_registers diagnostic_source_meta \
+	{*ascal:ascal|magik_diag_source_meta[*]} 7]
+set_net_delay -max 10.0 \
+	-from $magik_scaler_diag_source \
+	-to $magik_scaler_diag_source_meta
+
+# The state word is a bundled-data crossing. It is registered and held stable
+# before the generation toggle changes; the receiver synchronizes that toggle
+# and waits one additional clk_sys edge before sampling the word.
+set magik_scaler_diag_generation [magik_require_registers diagnostic_generation \
+	{*ascal:ascal|magik_diag_generation_i} 1]
+set magik_scaler_diag_generation_meta [magik_require_registers diagnostic_generation_meta \
+	{*magik_scaler_scheduler_diagnostic|generation_meta} 1]
+set_net_delay -max 10.0 \
+	-from $magik_scaler_diag_generation \
+	-to $magik_scaler_diag_generation_meta
+
+set magik_scaler_diag_word [magik_require_registers diagnostic_word \
+	{*ascal:ascal|magik_diag_word[*]} 16]
+set magik_scaler_diag_capture [magik_require_registers diagnostic_capture \
+	{*magik_scaler_scheduler_diagnostic|captured_state[*]} 16]
+set_net_delay -max 10.0 \
+	-from $magik_scaler_diag_word \
+	-to $magik_scaler_diag_capture
+
+post_message -type info "MagiK diagnostics CDC analysis applied: scaler_completion_request_ack scaler_scheduler_state"

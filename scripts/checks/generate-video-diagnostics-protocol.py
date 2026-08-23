@@ -195,6 +195,25 @@ def render_sv(spec: dict, hdmi_evidence: dict) -> str:
             lines.append(
                 f"localparam [15:0] {prefix}_{upper(name)}_MASK = 16'h{((1 << field['width']) - 1):04X};"
             )
+    scheduler = hdmi_evidence["scaler_scheduler_state"]
+    prefix = "MAGIK_SCALER_SCHEDULER_STATE"
+    lines.extend(
+        [
+            "",
+            f"localparam [15:0] {prefix}_SCHEMA = 16'd{scheduler['schema']};",
+            f"localparam [7:0] MAGIK_UIO_GET_SCALER_SCHEDULER_STATE = 8'h{scheduler['command']:02X};",
+            f"localparam [15:0] {prefix}_MAGIC = 16'h{scheduler['magic']:04X};",
+            f"localparam [1:0] {prefix}_WORDS = 2'd{scheduler['word_count']};",
+            f"localparam [15:0] {prefix}_HEADER_CRC = 16'h{hdmi_evidence_header_crc(scheduler, hdmi_evidence['crc']):04X};",
+        ]
+    )
+    for index, name in enumerate(scheduler["words"]):
+        lines.append(f"localparam [1:0] {prefix}_{upper(name)}_WORD = 2'd{index};")
+    for name, field in scheduler["fields"].items():
+        lines.append(f"localparam [3:0] {prefix}_{upper(name)}_BIT = 4'd{field['bit']};")
+        lines.append(
+            f"localparam [15:0] {prefix}_{upper(name)}_MASK = 16'h{((1 << field['width']) - 1):04X};"
+        )
     return "\n".join(lines) + "\n"
 
 
