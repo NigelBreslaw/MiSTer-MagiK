@@ -403,6 +403,7 @@ pub(super) fn exercise_launch_return(
     nonce: &str,
     expected_game_id: &str,
     lifetime_seconds: u64,
+    game_dwell: Duration,
 ) -> std::result::Result<String, LaunchReturnError> {
     if !(1..=120).contains(&lifetime_seconds) {
         return fail_before_launch(config, nonce, "invalid replacement automation lifetime");
@@ -504,6 +505,7 @@ pub(super) fn exercise_launch_return(
             return recover_after_launch_failure(config, nonce, &identity, error);
         }
     };
+    thread::sleep(game_dwell);
     if let Err(error) = request_return_to_launcher(config, handoff_main.generation) {
         return Err(LaunchReturnError::RecoveryRequired(format!(
             "game handoff passed but typed return failed: {error}"
@@ -542,6 +544,7 @@ pub(super) fn exercise_launch_return(
         "post_return_action_sequence": post_return_sequence,
         "pre_launch_snapshot": pre_launch,
         "handoff": handoff,
+        "game_dwell_ms": game_dwell.as_millis(),
         "restored_status": restored,
         "restored_snapshot": restored_snapshot,
     }))

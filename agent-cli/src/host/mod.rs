@@ -1603,6 +1603,7 @@ impl NativeDevice {
             nonce,
             expected_game_id,
             lifetime_seconds,
+            Duration::ZERO,
         ) {
             Ok(detail) => detail,
             Err(launcher_automation::LaunchReturnError::Failed(detail)) => {
@@ -19979,25 +19980,53 @@ const LAUNCH_RETURN_STATE_REMOTE: &str = "/tmp/mister-magik/launcher-return-stat
 const LAUNCH_RETURN_PROFILE_REMOTE_DIR: &str = "/tmp/mister-magik/launch-return-profile";
 const LAUNCH_RETURN_CYCLES: usize = 2;
 const LAUNCH_RETURN_BLACK_LIMIT_MS: u64 = 5_000;
-const LAUNCH_RETURN_GAME_SETTLE_SECS: u64 = 12;
+const LAUNCH_RETURN_GAME_SETTLE_SECS: u64 = 10;
 const LAUNCH_RETURN_ONCE_GAME: &str = "/media/fat/_Arcade/1943 Kai Midway Kaisen (Japan).mra";
 const ATTENDED_LAUNCH_RETURN_COOLDOWN: Duration = Duration::from_secs(5);
-const LAUNCH_RETURN_CORRUPTION_CONFIRMATIONS: usize = 2;
-const LAUNCH_RETURN_CORRUPTION_CONFIRMATION_INTERVAL: Duration = Duration::from_millis(100);
+const ATTENDED_LAUNCH_RETURN_GAME_DWELL: Duration = Duration::from_secs(2);
+const LAUNCH_RETURN_PHYSICAL_CONFIRMATIONS: usize = 2;
+const LAUNCH_RETURN_PHYSICAL_CONFIRMATION_INTERVAL: Duration = Duration::from_millis(100);
 
 fn launch_return_effective_usb_visibility(
     primary: crate::capture::CaptureVisibility,
     confirmations: &[(crate::capture::CaptureVisibility, bool)],
 ) -> crate::capture::CaptureVisibility {
-    if primary == crate::capture::CaptureVisibility::Corrupted
-        && confirmations.len() == LAUNCH_RETURN_CORRUPTION_CONFIRMATIONS
-        && confirmations.iter().all(|(visibility, identical)| {
-            *visibility == crate::capture::CaptureVisibility::Corrupted && *identical
-        })
+    use crate::capture::CaptureVisibility::{Black, Corrupted, SignalLost, Visible};
+
+    if matches!(primary, Black | SignalLost)
+        || confirmations.len() != LAUNCH_RETURN_PHYSICAL_CONFIRMATIONS
     {
-        crate::capture::CaptureVisibility::Visible
-    } else {
-        primary
+        return primary;
+    }
+    if confirmations
+        .iter()
+        .any(|(visibility, _)| *visibility == SignalLost)
+    {
+        return SignalLost;
+    }
+    if confirmations
+        .iter()
+        .any(|(visibility, _)| *visibility == Black)
+    {
+        return Black;
+    }
+    match primary {
+        Visible
+            if confirmations
+                .iter()
+                .all(|(visibility, _)| *visibility == Visible) =>
+        {
+            Visible
+        }
+        Corrupted
+            if confirmations
+                .iter()
+                .all(|(visibility, identical)| *visibility == Corrupted && *identical) =>
+        {
+            Visible
+        }
+        Visible | Corrupted => Corrupted,
+        Black | SignalLost => unreachable!("terminal primary visibility returned above"),
     }
 }
 
@@ -20871,6 +20900,7 @@ fn profile_installed_launch_return_once(
             &nonce,
             LAUNCH_RETURN_ONCE_GAME,
             120,
+            ATTENDED_LAUNCH_RETURN_GAME_DWELL,
         )
         .map_err(|error| format!("launch-return-once failed: {error}"))?;
         let returned: Value = serde_json::from_str(&returned)?;
@@ -20908,6 +20938,7 @@ fn profile_installed_launch_return_once(
             output_dir,
         )?)?;
 
+        let usb_observation_started = Instant::now();
         let usb =
             crate::capture::execute_analyzed(Some(&output_dir.join("returned-usb-video.jpg")))?;
         let usb_json = serde_json::to_value(&usb)?;
@@ -20918,9 +20949,13 @@ fn profile_installed_launch_return_once(
         let primary_usb_bytes = fs::read(&usb.artifact.path)?;
         let mut usb_confirmation = Vec::new();
         let mut confirmation_states = Vec::new();
-        if usb.visibility == crate::capture::CaptureVisibility::Corrupted {
-            for index in 1..=LAUNCH_RETURN_CORRUPTION_CONFIRMATIONS {
-                thread::sleep(LAUNCH_RETURN_CORRUPTION_CONFIRMATION_INTERVAL);
+        if matches!(
+            usb.visibility,
+            crate::capture::CaptureVisibility::Visible
+                | crate::capture::CaptureVisibility::Corrupted
+        ) {
+            for index in 1..=LAUNCH_RETURN_PHYSICAL_CONFIRMATIONS {
+                thread::sleep(LAUNCH_RETURN_PHYSICAL_CONFIRMATION_INTERVAL);
                 let confirmation = crate::capture::execute_analyzed(Some(
                     &output_dir.join(format!("returned-usb-video-confirmation-{index}.jpg")),
                 ))?;
@@ -20935,6 +20970,11 @@ fn profile_installed_launch_return_once(
         }
         let effective_usb_visibility =
             launch_return_effective_usb_visibility(usb.visibility, &confirmation_states);
+        let usb_observation_ms = usb_observation_started
+            .elapsed()
+            .as_millis()
+            .try_into()
+            .unwrap_or(u64::MAX);
 
         let diagnostics_reply = agent_request_at(
             config.agent()?,
@@ -20974,10 +21014,11 @@ fn profile_installed_launch_return_once(
             "fpga_video_diagnostics": diagnostics.get("fpga_video_diagnostics"),
             "usb_video": usb_json,
             "usb_video_effective_visibility": effective_usb_visibility,
-            "usb_video_corruption_confirmation": {
-                "schema": "mister-magik-moving-corruption-confirmation-v1",
-                "required_confirmations": LAUNCH_RETURN_CORRUPTION_CONFIRMATIONS,
-                "interval_ms": LAUNCH_RETURN_CORRUPTION_CONFIRMATION_INTERVAL.as_millis(),
+            "usb_video_return_confirmation": {
+                "schema": "mister-magik-return-physical-confirmation-v1",
+                "required_confirmations": LAUNCH_RETURN_PHYSICAL_CONFIRMATIONS,
+                "interval_ms": LAUNCH_RETURN_PHYSICAL_CONFIRMATION_INTERVAL.as_millis(),
+                "observation_ms": usb_observation_ms,
                 "captures": usb_confirmation,
             },
             "physical_video_visible": visible,
@@ -32707,6 +32748,7 @@ mod tests {
                 | "MISTER_LAUNCHER_INPUT_SCRIPT"
         )));
         assert!(LAUNCH_RETURN_ONCE_GAME.ends_with("1943 Kai Midway Kaisen (Japan).mra"));
+        assert_eq!(ATTENDED_LAUNCH_RETURN_GAME_DWELL, Duration::from_secs(2));
         assert_eq!(LAUNCH_RETURN_ONCE_STEP_DEADLINE_MS, 2_000);
         assert_eq!(LAUNCH_RETURN_CYCLES, 2);
     }
@@ -32748,13 +32790,35 @@ mod tests {
 
     #[test]
     fn launch_return_temporal_confirmation_rejects_motion_but_accepts_static_edges() {
-        use crate::capture::CaptureVisibility::{Black, Corrupted, Visible};
+        use crate::capture::CaptureVisibility::{Black, Corrupted, SignalLost, Visible};
 
         assert_eq!(
             launch_return_effective_usb_visibility(Visible, &[]),
             Visible
         );
         assert_eq!(launch_return_effective_usb_visibility(Black, &[]), Black);
+        assert_eq!(
+            launch_return_effective_usb_visibility(Visible, &[(Visible, false), (Visible, false)]),
+            Visible
+        );
+        assert_eq!(
+            launch_return_effective_usb_visibility(Visible, &[(Visible, false), (Black, false)]),
+            Black
+        );
+        assert_eq!(
+            launch_return_effective_usb_visibility(
+                Visible,
+                &[(Visible, false), (Corrupted, false)]
+            ),
+            Corrupted
+        );
+        assert_eq!(
+            launch_return_effective_usb_visibility(
+                Visible,
+                &[(Visible, false), (SignalLost, false)]
+            ),
+            SignalLost
+        );
         assert_eq!(
             launch_return_effective_usb_visibility(
                 Corrupted,
