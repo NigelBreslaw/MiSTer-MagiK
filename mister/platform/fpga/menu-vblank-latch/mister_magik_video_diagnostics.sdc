@@ -25,7 +25,17 @@ set magik_scaler_completion_ack [magik_require_registers ack_source \
 	{*ascal:ascal|o_readdataack_sync2} 1]
 set magik_scaler_completion_ack_meta [magik_require_registers ack_meta \
 	{*ascal:ascal|avl_completion_ack_meta} 1]
+set magik_scaler_completion_ack_route [get_registers -nowarn -no_duplicates \
+	{*ascal:ascal|o_readdataack_sync2*}]
+set magik_scaler_completion_ack_route_count \
+	[get_collection_size $magik_scaler_completion_ack_route]
+if {$magik_scaler_completion_ack_route_count < 1 ||
+	$magik_scaler_completion_ack_route_count > 2} {
+	post_message -type error "MagiK scaler completion acknowledgement route mismatch"
+	error "MagiK scaler completion acknowledgement route mismatch"
+}
 set_net_delay -max 10.0 \
+	-from $magik_scaler_completion_ack_route \
 	-to $magik_scaler_completion_ack_meta
 
 # Seven passive state bits cross from clk_100m into the HDMI-domain coherence
@@ -46,7 +56,23 @@ if {[get_collection_size $magik_scaler_diag_source] != 7} {
 }
 set magik_scaler_diag_source_meta [magik_require_registers diagnostic_source_meta \
 	{*ascal:ascal|magik_diag_source_meta[*]} 7]
+set magik_scaler_diag_source_route [get_registers -nowarn -no_duplicates {
+	*ascal:ascal|avl_readdataack
+	*ascal:ascal|avl_completion_pending
+	*ascal:ascal|avl_completion_ack_sync
+	*ascal:ascal|avl_return_drain*
+	*ascal:ascal|avl_return_credits[*]
+	*ascal:ascal|avl_diag_return_phase_nonzero
+}]
+set magik_scaler_diag_source_route_count \
+	[get_collection_size $magik_scaler_diag_source_route]
+if {$magik_scaler_diag_source_route_count < 7 ||
+	$magik_scaler_diag_source_route_count > 8} {
+	post_message -type error "MagiK scaler diagnostic routed source collection mismatch"
+	error "MagiK scaler diagnostic routed source collection mismatch"
+}
 set_net_delay -max 10.0 \
+	-from $magik_scaler_diag_source_route \
 	-to $magik_scaler_diag_source_meta
 
 # The state word is a bundled-data crossing. It is registered and held stable
