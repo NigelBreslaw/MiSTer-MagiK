@@ -164,10 +164,10 @@ def main() -> None:
     diagnostics_sdc = source_dir / "mister_magik_video_diagnostics.sdc"
     timing_report = source_dir / "report_top_timing.tcl"
     integration_tb = source_dir / "tb_mister_magik_sys_top_integration.sv"
-    completion_queue_tb = source_dir / "tb_mister_magik_scaler_completion_queue.vhd"
-    scheduler_diagnostic_tb = (
-        source_dir / "tb_mister_magik_scaler_scheduler_diagnostic.vhd"
+    raw_scaler_diagnostic_tb = (
+        source_dir / "tb_mister_magik_video_diagnostics_control.sv"
     )
+    completion_queue_tb = source_dir / "tb_mister_magik_scaler_completion_queue.vhd"
     completion_formal_dut = (
         source_dir / "mister_magik_scaler_completion_formal_dut.vhd"
     )
@@ -181,7 +181,7 @@ def main() -> None:
         completion_formal_dut,
         completion_formal_wrapper,
         completion_formal_check,
-        scheduler_diagnostic_tb,
+        raw_scaler_diagnostic_tb,
     ):
         if not formal_input.is_file():
             fail(f"scaler completion formal input is missing: {formal_input}")
@@ -237,14 +237,31 @@ def main() -> None:
     control_source = diagnostics_control.read_text()
     avalon_source = diagnostics_avalon.read_text()
     output_source = diagnostics_output.read_text()
-    if len(re.findall(r"(?m)^\s*module\s+mister_magik_scaler_scheduler_diagnostic\b", control_source)) != 1:
-        fail("minimal scaler scheduler diagnostic module is missing or ambiguous")
+    if len(re.findall(r"(?m)^\s*module\s+mister_magik_raw_scaler_diagnostic\b", control_source)) != 1:
+        fail("minimal raw scaler diagnostic module is missing or ambiguous")
     if len(re.findall(r"(?m)^\s*module\b", control_source)) != 1:
         fail("diagnostic control source contains an unexpected design unit")
     if "captured_state" in control_source:
         fail("diagnostic responder retains a redundant snapshot register")
     if control_source.count("(* preserve *) reg [15:0] snapshot_state") != 1:
         fail("diagnostic bundled-data snapshot is not preserved")
+    if control_source.count("(* preserve *) reg [15:0] source_state") != 1:
+        fail("raw scaler source state is not preserved for bundled-data capture")
+    for exact_probe in (
+        "input  wire        raw_ce",
+        "input  wire [23:0] raw_rgb",
+        "input  wire        raw_de",
+        "input  wire        raw_hs",
+        "input  wire        raw_vs",
+        "wire frame_start = raw_ce && raw_vs && !raw_vs_previous;",
+        "wire active_sample = raw_ce && raw_de;",
+        "nonzero_count <= saturating_increment(nonzero_count);",
+        "source_generation <= ~source_generation;",
+    ):
+        if control_source.count(exact_probe) != 1:
+            fail(f"raw scaler diagnostic probe is missing or ambiguous: {exact_probe}")
+    if "raw_rgb" not in control_source or control_source.count("|raw_rgb") != 1:
+        fail("raw scaler diagnostic must reduce the unmodified RGB boundary exactly once")
     if re.search(r"(?m)^\s*module\b", avalon_source + output_source):
         fail("retired Avalon or output diagnostic compatibility source defines logic")
     compiled_diagnostics = control_source + avalon_source + output_source
@@ -306,8 +323,6 @@ def main() -> None:
         if redundant_register in control_source:
             fail(f"retired diagnostic state remains: {redundant_register}")
     for forbidden_probe in (
-        "rgb",
-        "pixel",
         "hdmi_pll",
         "vbuf_",
         "route_",
@@ -326,8 +341,8 @@ def main() -> None:
     timing_commands = re.findall(
         r"(?m)^\s*(set_[A-Za-z0-9_]+\b[^\n]*)$", diagnostics_sdc_text
     )
-    if timing_commands != ["set_net_delay -max 10.0 \\"] * 6:
-        fail("repair SDC must contain only the six exact completion and diagnostic bounds")
+    if timing_commands != ["set_net_delay -max 10.0 \\"] * 4:
+        fail("repair SDC must contain only the four exact completion and diagnostic bounds")
     for fragment in (
         "{*ascal:ascal|avl_readdataack} 1",
         "{*ascal:ascal|o_readdataack_sync} 1",
@@ -338,17 +353,12 @@ def main() -> None:
         "-from $magik_scaler_completion_ack_route",
         "-to $magik_scaler_completion_ack_meta",
         "MagiK diagnostics CDC analysis applied: scaler_completion_request_ack",
-        "*ascal:ascal|magik_diag_source_meta[*]",
         "*ascal:ascal|o_readdataack_sync2*",
-        "{*ascal:ascal|avl_return_drain*}",
-        "-from $magik_scaler_diag_source_route",
-        "-from $magik_scaler_diag_drain",
-        "-to $magik_scaler_diag_drain_meta",
-        "*ascal:ascal|magik_diag_generation_i",
-        "*magik_scaler_scheduler_diagnostic|generation_meta",
-        "*ascal:ascal|magik_diag_word[*]",
-        "*magik_scaler_scheduler_diagnostic|snapshot_state[*]",
-        "scaler_scheduler_state",
+        "*magik_raw_scaler_diagnostic|source_generation",
+        "*magik_raw_scaler_diagnostic|generation_meta",
+        "*magik_raw_scaler_diagnostic|source_state[*]",
+        "*magik_raw_scaler_diagnostic|snapshot_state[*]",
+        "raw_scaler_state",
     ):
         if diagnostics_sdc_text.count(fragment) != 1:
             fail(f"scaler completion request/ack constraint is missing or ambiguous: {fragment}")
@@ -420,7 +430,7 @@ def main() -> None:
             "mister_magik_video_diagnostics_control magik_video_diagnostics": 0,
             "mister_magik_video_diagnostics_avalon magik_video_diagnostics_avalon": 0,
             "mister_magik_video_diagnostics_output magik_video_diagnostics_output": 0,
-            "mister_magik_scaler_scheduler_diagnostic magik_scaler_scheduler_diagnostic": 1,
+            "mister_magik_raw_scaler_diagnostic magik_raw_scaler_diagnostic": 1,
             "magik_diag_response_valid": 4,
             "magik_diag_response_data": 4,
         }
@@ -431,6 +441,16 @@ def main() -> None:
         ]
         if mismatches:
             fail("patched production bridge binding mismatch: " + "; ".join(mismatches))
+        for raw_binding in (
+            ".clk_hdmi(clk_hdmi)",
+            ".raw_ce(scaler_out)",
+            ".raw_rgb(hdmi_data)",
+            ".raw_de(hdmi_de)",
+            ".raw_hs(hdmi_hs)",
+            ".raw_vs(hdmi_vs)",
+        ):
+            if patched.count(raw_binding) != 1:
+                fail(f"raw scaler boundary binding is missing or ambiguous: {raw_binding}")
         for fragment in (
             "magik_scaler_completion_gray",
             "magik_scaler_completion_pulse",
@@ -462,12 +482,11 @@ def main() -> None:
             "SIGNAL avl_diag_return_phase_nonzero : std_logic:='0';": 1,
             "SIGNAL avl_read_accepted : std_logic:='0';": 1,
             "ATTRIBUTE preserve OF avl_readdataack : SIGNAL IS true;": 1,
-            "ATTRIBUTE preserve OF magik_diag_word : SIGNAL IS true;": 1,
             "SIGNAL o_readdataack,o_readdataack_sync,o_readdataack_sync2 : std_logic;": 1,
             "SYNCHRONIZER_IDENTIFICATION FORCED\";": 1,
             "SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS\";": 1,
-            "SYNCHRONIZER_IDENTIFICATION FORCED; -name PRESERVE_REGISTER ON\";": 2,
-            "SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS; -name PRESERVE_REGISTER ON\";": 2,
+            "SYNCHRONIZER_IDENTIFICATION FORCED; -name PRESERVE_REGISTER ON\";": 1,
+            "SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS; -name PRESERVE_REGISTER ON\";": 1,
             "avl_completion_ack_meta<=o_readdataack_sync2; -- <ASYNC>": 1,
             "avl_completion_ack_sync<=avl_completion_ack_meta;": 1,
             "AvalonReturnAccounting:PROCESS(avl_clk) IS": 1,
@@ -483,10 +502,6 @@ def main() -> None:
             "ELSIF issued_v THEN": 1,
             "avl_read_accepted<='1';": 1,
             "avl_return_drain<='1';": 1,
-            "magik_diag_source_meta<=(OTHERS =>'0');": 1,
-            "magik_diag_source_sync<=(OTHERS =>'0');": 1,
-            "avl_completion_ack_sync & NOT avl_return_drain &": 1,
-            "candidate_v(11):=NOT source_state(3);": 1,
             "IF return_drain_ready(": 1,
             "avl_return_credits,avl_return_phase) THEN": 1,
             "IF avl_return_drain='0' THEN": 1,
@@ -532,47 +547,17 @@ def main() -> None:
         ):
             if forbidden_repair in patched_ascal:
                 fail(f"superseded completion repair state remains: {forbidden_repair}")
-        for observer_fragment, expected_count in (
-            ("magik_diag_state   : OUT   std_logic_vector(15 DOWNTO 0);", 1),
-            ("magik_diag_generation : OUT std_logic;", 1),
-            ("MagiKScalerDiagnostic:PROCESS(o_clk,o_reset_na) IS", 1),
-            ("magik_diag_source_meta<=", 2),
-            ("magik_diag_source_sync<=magik_diag_source_meta;", 1),
-            ("FUNCTION scheduler_diagnostic_candidate(", 2),
-            ("FUNCTION scheduler_diagnostic_word(", 2),
-            ("magik_diag_have_previous,magik_diag_word,candidate_v", 1),
-            ("candidate_v(4 DOWNTO 3):=", 1),
-            ("candidate_v(6 DOWNTO 5):=", 1),
-            ("magik_diag_word<=word_v;", 1),
-            ("magik_diag_generation_i<=NOT magik_diag_generation_i;", 1),
+        for retired_observer_fragment in (
+            "magik_diag_state",
+            "magik_diag_generation",
+            "MagiKScalerDiagnostic",
+            "scheduler_diagnostic_candidate",
+            "scheduler_diagnostic_word",
         ):
-            if patched_ascal.count(observer_fragment) != expected_count:
+            if retired_observer_fragment in patched_ascal:
                 fail(
-                    "minimal scaler diagnostic binding mismatch: "
-                    f"{observer_fragment} expected {expected_count}, "
-                    f"found {patched_ascal.count(observer_fragment)}"
-                )
-        observer_process = re.search(
-            r"MagiKScalerDiagnostic:PROCESS.*?END PROCESS MagiKScalerDiagnostic;",
-            patched_ascal,
-            re.S,
-        )
-        if observer_process is None:
-            fail("minimal scaler diagnostic process is missing")
-        for forbidden_observer_source in (
-            "o_r",
-            "o_g",
-            "o_b",
-            "o_de",
-            "o_hs",
-            "hdmi",
-            "LFB",
-            "vbuf",
-        ):
-            if re.search(rf"\b{forbidden_observer_source}\b", observer_process.group(0)):
-                fail(
-                    "minimal scaler diagnostic reads a forbidden source: "
-                    f"{forbidden_observer_source}"
+                    "retired scheduler observer remains in production ascal: "
+                    f"{retired_observer_fragment}"
                 )
         assignment_text = patched_ascal.replace(";", ";\n")
         if re.search(
@@ -752,7 +737,6 @@ def main() -> None:
                     f"--workdir={ghdl_work}",
                     str(work / "sys/ascal.vhd"),
                     str(completion_queue_tb),
-                    str(scheduler_diagnostic_tb),
                 ],
                 cwd=ghdl_work,
                 check=True,
@@ -764,29 +748,6 @@ def main() -> None:
                     "--std=08",
                     f"--workdir={ghdl_work}",
                     "tb_mister_magik_scaler_completion_queue",
-                ],
-                cwd=ghdl_work,
-                check=True,
-            )
-            subprocess.run(
-                [
-                    "ghdl",
-                    "-e",
-                    "--std=08",
-                    f"--workdir={ghdl_work}",
-                    "tb_mister_magik_scaler_scheduler_diagnostic",
-                ],
-                cwd=ghdl_work,
-                check=True,
-            )
-            subprocess.run(
-                [
-                    "ghdl",
-                    "-r",
-                    "--std=08",
-                    f"--workdir={ghdl_work}",
-                    "tb_mister_magik_scaler_scheduler_diagnostic",
-                    "--assert-level=error",
                 ],
                 cwd=ghdl_work,
                 check=True,
@@ -825,6 +786,23 @@ def main() -> None:
                 check=True,
             )
             subprocess.run(["vvp", str(simulation)], check=True)
+            raw_scaler_simulation = Path(temporary) / "raw-scaler-diagnostic.vvp"
+            subprocess.run(
+                [
+                    "iverilog",
+                    "-g2012",
+                    "-I",
+                    str(source_dir),
+                    "-s",
+                    "tb_mister_magik_video_diagnostics_control",
+                    "-o",
+                    str(raw_scaler_simulation),
+                    str(diagnostics_control),
+                    str(raw_scaler_diagnostic_tb),
+                ],
+                check=True,
+            )
+            subprocess.run(["vvp", str(raw_scaler_simulation)], check=True)
 
     print(f"COVER LATCH-009 pinned Menu production bridge and opcode ownership ({commit})")
     print("FPGA latch integration check passed")

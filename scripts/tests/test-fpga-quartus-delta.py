@@ -70,23 +70,17 @@ SYNC_NAMES = tuple(
     f"ascal:ascal|{name}"
     for name in COMPLETION_SYNC_NAMES
 )
-DIAGNOSTIC_ASCAL_SYNC_NAMES = tuple(
-    name
-    for bit in range(7)
-    for name in (f"magik_diag_source_meta[{bit}]", f"magik_diag_source_sync[{bit}]")
-)
 DIAGNOSTIC_SYS_SYNC_NAMES = ("generation_meta", "generation_sync")
 SYNC_ASSIGNMENTS = (
     COMPLETION_SYNC_ASSIGNMENTS
-    + quartus_assignment_section("ascal:ascal", DIAGNOSTIC_ASCAL_SYNC_NAMES)
     + quartus_assignment_section(
-        "magik_scaler_scheduler_diagnostic:magik_scaler_scheduler_diagnostic",
+        "mister_magik_raw_scaler_diagnostic:magik_raw_scaler_diagnostic",
         DIAGNOSTIC_SYS_SYNC_NAMES,
     )
 )
 CUSTOM_SYNC = SYNC_ASSIGNMENTS + """\
-Info (332114): Report Metastability: Found 15 synchronizer chains.
-Info (332114): Fraction of Chains for which MTBFs Could Not be Calculated: 0.266667
+Info (332114): Report Metastability: Found 8 synchronizer chains.
+Info (332114): Fraction of Chains for which MTBFs Could Not be Calculated: 0.500000
 Info: MagiK diagnostics CDC analysis applied: scaler_completion_request_ack
 """
 
@@ -107,30 +101,13 @@ def metastability_chain(
 METASTABILITY_CHAINS = [
     ("ascal:ascal|avl_readdataack", "ascal:ascal|o_readdataack_sync", ("ascal:ascal|o_readdataack_sync",)),
     ("ascal:ascal|o_readdataack_sync2", "ascal:ascal|avl_completion_ack_meta", ("ascal:ascal|avl_completion_ack_meta", "ascal:ascal|avl_completion_ack_sync")),
-    ("ascal:ascal|avl_readdataack", "ascal:ascal|magik_diag_source_meta[6]", ("ascal:ascal|magik_diag_source_meta[6]", "ascal:ascal|magik_diag_source_sync[6]")),
-    ("ascal:ascal|avl_completion_pending", "ascal:ascal|magik_diag_source_meta[5]", ("ascal:ascal|magik_diag_source_meta[5]", "ascal:ascal|magik_diag_source_sync[5]")),
-    ("ascal:ascal|avl_completion_ack_sync", "ascal:ascal|magik_diag_source_meta[4]", ("ascal:ascal|magik_diag_source_meta[4]", "ascal:ascal|magik_diag_source_sync[4]")),
-    ("ascal:ascal|avl_return_drain", "ascal:ascal|magik_diag_source_meta[3]", ("ascal:ascal|magik_diag_source_meta[3]", "ascal:ascal|magik_diag_source_sync[3]")),
-    ("ascal:ascal|avl_return_credits[1]", "ascal:ascal|magik_diag_source_meta[2]", ("ascal:ascal|magik_diag_source_meta[2]", "ascal:ascal|magik_diag_source_sync[2]")),
-    ("ascal:ascal|avl_return_credits[0]", "ascal:ascal|magik_diag_source_meta[1]", ("ascal:ascal|magik_diag_source_meta[1]", "ascal:ascal|magik_diag_source_sync[1]")),
-    ("ascal:ascal|avl_diag_return_phase_nonzero", "ascal:ascal|magik_diag_source_meta[0]", ("ascal:ascal|magik_diag_source_meta[0]", "ascal:ascal|magik_diag_source_sync[0]")),
-    ("ascal:ascal|magik_diag_generation_i", "mister_magik_scaler_scheduler_diagnostic:magik_scaler_scheduler_diagnostic|generation_meta", ("mister_magik_scaler_scheduler_diagnostic:magik_scaler_scheduler_diagnostic|generation_meta", "mister_magik_scaler_scheduler_diagnostic:magik_scaler_scheduler_diagnostic|generation_sync")),
+    ("mister_magik_raw_scaler_diagnostic:magik_raw_scaler_diagnostic|source_generation", "mister_magik_raw_scaler_diagnostic:magik_raw_scaler_diagnostic|generation_meta", ("mister_magik_raw_scaler_diagnostic:magik_raw_scaler_diagnostic|generation_meta", "mister_magik_raw_scaler_diagnostic:magik_raw_scaler_diagnostic|generation_sync")),
 ]
 
 
 def net_delay_detail(source: str, target: str) -> str:
     return f"; -- ; 1.000 ; 10.000 ; 9.000 ; {source} ; {target} ; max ;\n"
 
-
-DIAGNOSTIC_SOURCE_PATHS = (
-    ("avl_readdataack", 6),
-    ("avl_completion_pending", 5),
-    ("avl_completion_ack_sync", 4),
-    ("avl_return_drain~DUPLICATE", 3),
-    ("avl_return_credits[1]", 2),
-    ("avl_return_credits[0]", 1),
-    ("avl_diag_return_phase_nonzero", 0),
-)
 
 VALID_DIAGNOSTIC_REPORTS = {
     "menu.magik-diagnostic-cdc-skew.rpt": "No paths to report.\n",
@@ -139,8 +116,6 @@ VALID_DIAGNOSTIC_REPORTS = {
         "; set_net_delay ; 1.150 ; 10.000 ; 8.850 ; sources ; destinations ; max ;\n"
         "; set_net_delay ; 1.100 ; 10.000 ; 8.900 ; sources ; destinations ; max ;\n"
         "; set_net_delay ; 1.050 ; 10.000 ; 8.950 ; sources ; destinations ; max ;\n"
-        "; set_net_delay ; 1.000 ; 10.000 ; 9.000 ; sources ; destinations ; max ;\n"
-        "; set_net_delay ; 0.950 ; 10.000 ; 9.050 ; sources ; destinations ; max ;\n"
         + net_delay_detail(
             "ascal:ascal|avl_readdataack", "ascal:ascal|o_readdataack_sync"
         )
@@ -148,27 +123,21 @@ VALID_DIAGNOSTIC_REPORTS = {
             "ascal:ascal|o_readdataack_sync2~DUPLICATE",
             "ascal:ascal|avl_completion_ack_meta",
         )
-        + "".join(
-            net_delay_detail(
-                f"ascal:ascal|{source}", f"ascal:ascal|magik_diag_source_meta[{bit}]"
-            )
-            for source, bit in DIAGNOSTIC_SOURCE_PATHS
-        )
         + net_delay_detail(
-            "ascal:ascal|magik_diag_generation_i",
-            "mister_magik_scaler_scheduler_diagnostic:magik_scaler_scheduler_diagnostic|generation_meta",
+            "mister_magik_raw_scaler_diagnostic:magik_raw_scaler_diagnostic|source_generation",
+            "mister_magik_raw_scaler_diagnostic:magik_raw_scaler_diagnostic|generation_meta",
         )
         + "".join(
             net_delay_detail(
-                f"ascal:ascal|magik_diag_word[{bit}]",
-                "mister_magik_scaler_scheduler_diagnostic:"
-                f"magik_scaler_scheduler_diagnostic|snapshot_state[{bit}]",
+                f"mister_magik_raw_scaler_diagnostic:magik_raw_scaler_diagnostic|source_state[{bit}]",
+                "mister_magik_raw_scaler_diagnostic:"
+                f"magik_raw_scaler_diagnostic|snapshot_state[{bit}]",
             )
             for bit in range(16)
         )
     ),
     "menu.magik-diagnostic-metastability.rpt": (
-        "Report Metastability: Found 48 synchronizer chains.\n"
+        "Report Metastability: Found 41 synchronizer chains.\n"
         + "".join(
             metastability_chain(index, source, node, registers)
             for index, (source, node, registers) in enumerate(METASTABILITY_CHAINS, 1)
@@ -271,18 +240,18 @@ class QuartusDeltaTest(unittest.TestCase):
 
     def test_unrelated_total_chain_drift_fails(self) -> None:
         patched = CUSTOM_SYNC.replace(
-            "Found 15 synchronizer chains", "Found 16 synchronizer chains"
+            "Found 8 synchronizer chains", "Found 9 synchronizer chains"
         ).replace(
-            "Could Not be Calculated: 0.266667",
-            "Could Not be Calculated: 0.312500",
+            "Could Not be Calculated: 0.500000",
+            "Could Not be Calculated: 0.555556",
         )
         result, payload = self.run_check(BASE, BASE + patched)
         self.assertEqual(result.returncode, 1)
         self.assertIn("synchronizer_chain_count_mismatch", payload["invalid_reason"])
         self.assertEqual(payload["baseline_synchronizer_chains"], 5)
-        self.assertEqual(payload["patched_synchronizer_chains"], 16)
+        self.assertEqual(payload["patched_synchronizer_chains"], 9)
         self.assertEqual(payload["baseline_calculable_synchronizer_chains"], 1)
-        self.assertEqual(payload["patched_calculable_synchronizer_chains"], 11)
+        self.assertEqual(payload["patched_calculable_synchronizer_chains"], 4)
 
     def test_new_warning_fails_even_when_warning_code_is_inherited(self) -> None:
         result, payload = self.run_check(BASE, BASE + "Warning (10001): different warning\n" + CUSTOM_SYNC)
@@ -630,7 +599,7 @@ class QuartusDeltaTest(unittest.TestCase):
             / "mister/platform/fpga/menu-vblank-latch/mister_magik_video_diagnostics.sdc"
         ).read_text(encoding="utf-8")
         self.assertIn("get_registers -nowarn -no_duplicates", sdc)
-        self.assertEqual(sdc.count("set_net_delay -max 10.0"), 6)
+        self.assertEqual(sdc.count("set_net_delay -max 10.0"), 4)
         self.assertNotIn("set_max_skew", sdc)
         self.assertNotIn("set_false_path", sdc)
 

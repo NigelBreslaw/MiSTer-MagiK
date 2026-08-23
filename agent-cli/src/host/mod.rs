@@ -3538,13 +3538,15 @@ fn experimental_fpga_architecture_is_current(diagnostics: &Value) -> bool {
                     .and_then(Value::as_u64)
                     .is_some()
         }
-        Some("scaler-scheduler-state-v1") => {
+        Some("raw-scaler-boundary-v1") => {
             matches!(
                 diagnostics.get("classification").and_then(Value::as_str),
                 Some(
-                    "completion_queue_backlog"
-                        | "credit_accounting_stall"
-                        | "scaler_scheduler_not_stalled"
+                    "raw_scaler_timing_stalled"
+                        | "raw_scaler_no_active_video"
+                        | "raw_scaler_black"
+                        | "raw_scaler_sparse_or_corrupt"
+                        | "raw_scaler_active"
                 )
             ) && diagnostics
                 .pointer("/capabilities/passive_video_observer")
@@ -3553,21 +3555,29 @@ fn experimental_fpga_architecture_is_current(diagnostics: &Value) -> bool {
                 && diagnostics
                     .pointer("/capabilities/scaler_scheduler_state")
                     .and_then(Value::as_bool)
+                    == Some(false)
+                && diagnostics
+                    .pointer("/capabilities/raw_scaler_boundary")
+                    .and_then(Value::as_bool)
                     == Some(true)
                 && diagnostics
                     .pointer("/capabilities/pixel_observer")
                     .and_then(Value::as_bool)
-                    == Some(false)
+                    == Some(true)
                 && diagnostics
                     .pointer("/capabilities/pll_observer")
                     .and_then(Value::as_bool)
                     == Some(false)
                 && diagnostics
-                    .pointer("/coherence/three_samples_match")
+                    .pointer("/coherence/three_samples_valid")
                     .and_then(Value::as_bool)
                     == Some(true)
                 && diagnostics
-                    .pointer("/scheduler_state/raw_samples")
+                    .pointer("/coherence/frame_deltas")
+                    .and_then(Value::as_array)
+                    .is_some_and(|deltas| deltas.len() == 2)
+                && diagnostics
+                    .pointer("/raw_scaler_state/raw_samples")
                     .and_then(Value::as_array)
                     .is_some_and(|samples| samples.len() == 3)
         }
@@ -3951,9 +3961,9 @@ fn install_experimental_agent_transaction(
             .response
             .pointer("/result/fpga_video_diagnostics")
             .ok_or("reconciled experimental device-agent returned no FPGA evidence")?;
-        if !experimental_scheduler_evidence_available(evidence) {
+        if !experimental_raw_scaler_evidence_available(evidence) {
             return Err(format!(
-                "reconciled experimental device-agent does not expose the scheduler observer: {evidence}"
+                "reconciled experimental device-agent does not expose the raw scaler observer: {evidence}"
             )
             .into());
         }
@@ -4019,9 +4029,9 @@ fn install_experimental_agent_transaction(
             .response
             .pointer("/result/fpga_video_diagnostics")
             .ok_or("experimental device-agent returned no FPGA evidence")?;
-        if !experimental_scheduler_evidence_available(evidence) {
+        if !experimental_raw_scaler_evidence_available(evidence) {
             return Err(format!(
-                "experimental device-agent did not expose coherent scaler scheduler evidence: {evidence}"
+                "experimental device-agent did not expose coherent raw scaler evidence: {evidence}"
             )
             .into());
         }
@@ -4078,11 +4088,11 @@ fn install_experimental_agent_transaction(
     Ok(())
 }
 
-fn experimental_scheduler_evidence_available(evidence: &Value) -> bool {
+fn experimental_raw_scaler_evidence_available(evidence: &Value) -> bool {
     evidence
         .get("diagnostic_architecture")
         .and_then(Value::as_str)
-        == Some("scaler-scheduler-state-v1")
+        == Some("raw-scaler-boundary-v1")
         && evidence.get("available").and_then(Value::as_bool) == Some(true)
         && evidence.get("sink_visibility").and_then(Value::as_str) == Some("unobserved")
         && evidence
@@ -4092,17 +4102,25 @@ fn experimental_scheduler_evidence_available(evidence: &Value) -> bool {
         && evidence
             .pointer("/capabilities/scaler_scheduler_state")
             .and_then(Value::as_bool)
+            == Some(false)
+        && evidence
+            .pointer("/capabilities/raw_scaler_boundary")
+            .and_then(Value::as_bool)
             == Some(true)
         && evidence
             .pointer("/capabilities/pixel_observer")
             .and_then(Value::as_bool)
-            == Some(false)
+            == Some(true)
         && evidence
             .pointer("/capabilities/pll_observer")
             .and_then(Value::as_bool)
             == Some(false)
         && evidence
-            .pointer("/scheduler_state/raw_samples")
+            .pointer("/coherence/three_samples_valid")
+            .and_then(Value::as_bool)
+            == Some(true)
+        && evidence
+            .pointer("/raw_scaler_state/raw_samples")
             .and_then(Value::as_array)
             .is_some_and(|samples| samples.len() == 3)
 }
@@ -34290,25 +34308,27 @@ H: Handlers=event3 js0"#
             },
         });
         assert!(experimental_fpga_evidence_is_current(&current));
-        let scheduler = json!({
+        let raw_scaler = json!({
             "schema": "mister-magik-fpga-video-diagnostics-v2",
-            "diagnostic_architecture": "scaler-scheduler-state-v1",
+            "diagnostic_architecture": "raw-scaler-boundary-v1",
             "available": true,
             "coherent": true,
-            "classification": "scaler_scheduler_not_stalled",
+            "classification": "raw_scaler_active",
             "sink_visibility": "unobserved",
             "owner_epoch_before": 13,
             "owner_epoch_after": 13,
             "coherence": {
-                "three_samples_match": true,
+                "three_samples_valid": true,
+                "frame_deltas": [1, 2],
                 "latch_ownership_stable": true,
                 "launcher_state_stable": true,
                 "ownership_check_error": null,
             },
             "capabilities": {
                 "passive_video_observer": true,
-                "scaler_scheduler_state": true,
-                "pixel_observer": false,
+                "scaler_scheduler_state": false,
+                "raw_scaler_boundary": true,
+                "pixel_observer": true,
                 "pll_observer": false,
             },
             "latch_status": {
@@ -34319,36 +34339,36 @@ H: Handlers=event3 js0"#
                 "active_stride": 1920,
                 "crc": 0,
             },
-            "scheduler_state": {
+            "raw_scaler_state": {
                 "raw_samples": [[1, 2, 3], [1, 2, 3], [1, 2, 3]],
             },
         });
-        assert!(experimental_scheduler_evidence_available(&scheduler));
+        assert!(experimental_raw_scaler_evidence_available(&raw_scaler));
         for classification in [
-            "scaler_scheduler_not_stalled",
-            "completion_queue_backlog",
-            "credit_accounting_stall",
+            "raw_scaler_timing_stalled",
+            "raw_scaler_no_active_video",
+            "raw_scaler_black",
+            "raw_scaler_sparse_or_corrupt",
+            "raw_scaler_active",
         ] {
-            let mut classified = scheduler.clone();
+            let mut classified = raw_scaler.clone();
             classified["classification"] = json!(classification);
             assert!(experimental_fpga_evidence_is_current(&classified));
         }
         for (pointer, value) in [
-            ("/coherence/three_samples_match", json!(false)),
+            ("/coherence/three_samples_valid", json!(false)),
             ("/capabilities/passive_video_observer", json!(false)),
-            ("/capabilities/scaler_scheduler_state", json!(false)),
-            ("/capabilities/pixel_observer", json!(true)),
+            ("/capabilities/scaler_scheduler_state", json!(true)),
+            ("/capabilities/raw_scaler_boundary", json!(false)),
+            ("/capabilities/pixel_observer", json!(false)),
             ("/capabilities/pll_observer", json!(true)),
+            ("/classification", json!("raw_scaler_evidence_inconclusive")),
             (
-                "/classification",
-                json!("scaler_scheduler_evidence_inconclusive"),
-            ),
-            (
-                "/scheduler_state/raw_samples",
+                "/raw_scaler_state/raw_samples",
                 json!([[1, 2, 3], [1, 2, 3]]),
             ),
         ] {
-            let mut invalid = scheduler.clone();
+            let mut invalid = raw_scaler.clone();
             *invalid.pointer_mut(pointer).unwrap() = value;
             assert!(!experimental_fpga_evidence_is_current(&invalid));
         }

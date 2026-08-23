@@ -30,5 +30,16 @@ CRC-valid, identical coherent records are required before the host classifies
 completion backlog, idle credit-accounting stall, or continuing scheduler
 progress.
 
+That experiment subsequently reproduced physical black with nine identical
+coherent `0x0da3` samples. It ruled out the completion queue and the specified
+credit-accounting stall for that occurrence, so the scheduler observer is
+retired from the next candidate.
+
+The current disposable experiment is
+[Experimental raw-scaler boundary diagnostic](fpga-raw-scaler-diagnostic.md).
+It reuses only `0x67` with schema 2 and replaces all scheduler taps with a
+frame-freshness heartbeat plus saturating active/nonzero evidence at the
+unmodified raw scaler output wires.
+
 The complete attempt history and retained measurements are in
 [FPGA video diagnostics: two attempted designs and their retirement](../history/2026-08-14-fpga-video-diagnostics-design-attempts.md).

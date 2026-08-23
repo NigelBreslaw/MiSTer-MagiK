@@ -860,6 +860,33 @@ evidence hashes are recorded in
 The next authorized experiment should use a separate minimal raw-scaler
 boundary probe, preserving Design 3 and latch-v5 unchanged.
 
+## Design 5: disposable raw-scaler boundary attribution (`0x67` schema 2)
+
+Design 5 implements the decision from the captured `0x0da3` incident. It
+removes Design 4's scheduler functions, ports, HDMI process, seven-bit reverse
+observer synchronizer, and scheduler ABI. It retains the queued completion
+repair unchanged.
+
+One SystemVerilog observer beside `sys_top` reads only the existing raw scaler
+RGB, DE, HS, VS, and clock-enable wires. Per completed frame it publishes a
+modulo-16 heartbeat, saturating active and nonzero sample counts, HS/CE state,
+and validity in one 16-bit word. One registered generation toggle and stable
+bundled word cross to the existing read-only responder. This makes a stopped
+HDMI/scaler clock observable as a stale frame sequence, correcting Design 4's
+inability to distinguish a coherent last sample from fresh identical state.
+
+The host requires three CRC-valid samples and classifies stopped timing,
+missing active video, active all-zero raw output, sparse/corrupt output, or
+substantial nonzero raw output. A single flashing pixel cannot qualify as a
+healthy raw image. The complete frozen ABI and diagnostic-only gates are in
+[`docs/fpga-raw-scaler-diagnostic.md`](../docs/fpga-raw-scaler-diagnostic.md).
+
+Before synthesis, patched production GHDL compilation, queue simulation,
+sys_top/latch simulation, the raw-boundary Icarus suite, all 40 Quartus checker
+fixtures, exact-source BMC, nine non-vacuity covers, and temporal induction
+passed. Physical and Quartus results remain to be appended against the frozen
+candidate identity.
+
 ## Facts established despite the failed implementations
 
 The work was not diagnostically empty. It established the following facts:

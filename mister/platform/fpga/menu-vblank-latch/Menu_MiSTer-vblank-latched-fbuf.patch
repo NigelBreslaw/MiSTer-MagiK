@@ -54,20 +54,6 @@ index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..b1c2581d8665d3db4f4042ed668ee711
 +		credits : natural;
 +		phase   : natural)
 +		RETURN boolean;
-+	FUNCTION scheduler_diagnostic_candidate(
-+		running         : std_logic;
-+		read_seen       : std_logic;
-+		completion_seen : std_logic;
-+		read_level      : natural;
-+		copy_level      : natural;
-+		source_state    : std_logic_vector(6 DOWNTO 0);
-+		destination_seen : std_logic)
-+		RETURN std_logic_vector;
-+	FUNCTION scheduler_diagnostic_word(
-+		have_previous     : std_logic;
-+		previous_word      : std_logic_vector(15 DOWNTO 0);
-+		current_candidate  : std_logic_vector(14 DOWNTO 0))
-+		RETURN std_logic_vector;
 +END PACKAGE mister_magik_scaler_completion_queue;
 +
 +LIBRARY ieee;
@@ -193,44 +179,6 @@ index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..b1c2581d8665d3db4f4042ed668ee711
 +		RETURN credits=0 AND phase=0;
 +	END FUNCTION return_drain_ready;
 +
-+	FUNCTION scheduler_diagnostic_candidate(
-+		running         : std_logic;
-+		read_seen       : std_logic;
-+		completion_seen : std_logic;
-+		read_level      : natural;
-+		copy_level      : natural;
-+		source_state    : std_logic_vector(6 DOWNTO 0);
-+		destination_seen : std_logic)
-+		RETURN std_logic_vector IS
-+		VARIABLE candidate_v : std_logic_vector(14 DOWNTO 0):=(OTHERS =>'0');
-+	BEGIN
-+		candidate_v(0):=running;
-+		candidate_v(1):=read_seen;
-+		candidate_v(2):=completion_seen;
-+		candidate_v(4 DOWNTO 3):=std_logic_vector(to_unsigned(read_level,2));
-+		candidate_v(6 DOWNTO 5):=std_logic_vector(to_unsigned(copy_level,2));
-+		candidate_v(7):=source_state(6);
-+		candidate_v(8):=source_state(5);
-+		candidate_v(9):=source_state(4);
-+		candidate_v(10):=destination_seen;
-+		candidate_v(11):=NOT source_state(3);
-+		candidate_v(13 DOWNTO 12):=source_state(2 DOWNTO 1);
-+		candidate_v(14):=source_state(0);
-+		RETURN candidate_v;
-+	END FUNCTION scheduler_diagnostic_candidate;
-+
-+	FUNCTION scheduler_diagnostic_word(
-+		have_previous     : std_logic;
-+		previous_word      : std_logic_vector(15 DOWNTO 0);
-+		current_candidate  : std_logic_vector(14 DOWNTO 0))
-+		RETURN std_logic_vector IS
-+	BEGIN
-+		IF have_previous='1' AND
-+			current_candidate=previous_word(15 DOWNTO 1) THEN
-+			RETURN current_candidate & '1';
-+		END IF;
-+		RETURN current_candidate & '0';
-+	END FUNCTION scheduler_diagnostic_word;
 +END PACKAGE BODY mister_magik_scaler_completion_queue;
 +
 +LIBRARY ieee;
@@ -241,15 +189,6 @@ index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..b1c2581d8665d3db4f4042ed668ee711
  -- MODE[2:0]
  -- 000 : Nearest
  -- 001 : Bilinear
-@@ -250,6 +418,7 @@ ENTITY ascal IS
- 		avl_address        : OUT   std_logic_vector(N_AW-1 DOWNTO 0);
- 		avl_write          : OUT   std_logic;
- 		avl_read           : OUT   std_logic;
-+		magik_diag_state   : OUT   std_logic_vector(15 DOWNTO 0);
-+		magik_diag_generation : OUT std_logic;
- 		avl_byteenable     : OUT   std_logic_vector(N_DW/8-1 DOWNTO 0);
- 
- 		------------------------------------
 @@ -335,6 +503,8 @@ ARCHITECTURE rtl OF ascal IS
  	TYPE arr_pix IS ARRAY (natural RANGE <>) OF type_pix;
  	TYPE arr_pixq IS ARRAY(natural RANGE <>) OF arr_pix(0 TO 3);
@@ -288,71 +227,12 @@ index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..b1c2581d8665d3db4f4042ed668ee711
 +		"-name SYNCHRONIZER_IDENTIFICATION FORCED; -name PRESERVE_REGISTER ON";
 +	ATTRIBUTE altera_attribute OF o_readdataack_sync2 : SIGNAL IS
 +		"-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS; -name PRESERVE_REGISTER ON";
-+	SIGNAL magik_diag_source_meta,magik_diag_source_sync : std_logic_vector(6 DOWNTO 0);
-+	SIGNAL magik_diag_word : std_logic_vector(15 DOWNTO 0):=(OTHERS =>'0');
-+	SIGNAL magik_diag_generation_i : std_logic:='0';
-+	SIGNAL magik_diag_read_seen,magik_diag_completion_seen : std_logic:='0';
-+	SIGNAL magik_diag_have_previous : std_logic:='0';
-+	ATTRIBUTE preserve OF magik_diag_word : SIGNAL IS true;
-+	ATTRIBUTE altera_attribute OF magik_diag_source_meta : SIGNAL IS
-+		"-name SYNCHRONIZER_IDENTIFICATION FORCED; -name PRESERVE_REGISTER ON";
-+	ATTRIBUTE altera_attribute OF magik_diag_source_sync : SIGNAL IS
-+		"-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS; -name PRESERVE_REGISTER ON";
  	SIGNAL o_copyv : unsigned(0 TO 14);
  	SIGNAL o_adrs : unsigned(31 DOWNTO 0); -- Avalon address
  	SIGNAL o_adrs_pre : natural RANGE 0 TO 2**24-1;
 @@ -1160,6 +1345,29 @@ BEGIN
  	o_reset_na<='0'   WHEN reset_na='0' ELSE '1' WHEN rising_edge(o_clk);
  	avl_reset_na<='0' WHEN reset_na='0' ELSE '1' WHEN rising_edge(avl_clk);
-+	magik_diag_state<=magik_diag_word;
-+	magik_diag_generation<=magik_diag_generation_i;
-+
-+	-- Passive scheduler state only. The exported word is invalidated until two
-+	-- consecutive completed frames observe the same synchronized source state.
-+	-- Nothing in the production scheduler reads this diagnostic cone.
-+	MagiKScalerDiagnostic:PROCESS(o_clk,o_reset_na) IS
-+		VARIABLE candidate_v : std_logic_vector(14 DOWNTO 0);
-+		VARIABLE word_v : std_logic_vector(15 DOWNTO 0);
-+	BEGIN
-+		IF o_reset_na='0' THEN
-+			magik_diag_source_meta<=(OTHERS =>'0');
-+			magik_diag_source_sync<=(OTHERS =>'0');
-+			magik_diag_word<=(OTHERS =>'0');
-+			magik_diag_generation_i<='0';
-+			magik_diag_read_seen<='0';
-+			magik_diag_completion_seen<='0';
-+			magik_diag_have_previous<='0';
-+		ELSIF rising_edge(o_clk) THEN
-+			magik_diag_source_meta<=
-+				avl_readdataack & avl_completion_pending &
-+				avl_completion_ack_sync & NOT avl_return_drain &
-+				std_logic_vector(to_unsigned(avl_return_credits,2)) &
-+				avl_diag_return_phase_nonzero; -- <ASYNC>
-+			magik_diag_source_sync<=magik_diag_source_meta;
-+			magik_diag_read_seen<=magik_diag_read_seen OR o_readack;
-+			magik_diag_completion_seen<=
-+				magik_diag_completion_seen OR o_readdataack;
-+
-+			IF o_vsv(1)='1' AND o_vsv(0)='0' THEN
-+				candidate_v:=scheduler_diagnostic_candidate(
-+					o_run,
-+					magik_diag_read_seen OR o_readack,
-+					magik_diag_completion_seen OR o_readdataack,
-+					o_readlev,o_copylev,magik_diag_source_sync,
-+					o_readdataack_sync2);
-+				word_v:=scheduler_diagnostic_word(
-+					magik_diag_have_previous,magik_diag_word,candidate_v);
-+				IF magik_diag_word/=word_v THEN
-+					magik_diag_word<=word_v;
-+					magik_diag_generation_i<=NOT magik_diag_generation_i;
-+				END IF;
-+				magik_diag_have_previous<='1';
-+				magik_diag_read_seen<='0';
-+				magik_diag_completion_seen<='0';
-+			END IF;
-+		END IF;
-+	END PROCESS MagiKScalerDiagnostic;
- 
 +	-- These radix-BLEN accounting fields deliberately have no core-reset branch.
 +	-- Together they encode remaining words as credits*BLEN-phase. The HPS port
 +	-- does not tag or cancel an accepted read when reset_req is asserted, so
@@ -394,7 +274,7 @@ index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..b1c2581d8665d3db4f4042ed668ee711
 +			END IF;
 +		END IF;
 +	END PROCESS AvalonReturnAccounting;
-+
+ 
  	-----------------------------------------------------------------------------
  	-- Input pixels FIFO and shreg
  	InAT:PROCESS(i_clk,i_reset_na) IS
@@ -513,8 +393,6 @@ index a4168795b68bed4b655b00cb7ced5cf5b4f32741..4d81fc6df5732b81d71a78ad650f41ed
 +wire [15:0] magik_response_data;
 +wire        magik_diag_response_valid;
 +wire [15:0] magik_diag_response_data;
-+wire [15:0] magik_scaler_diag_state;
-+wire        magik_scaler_diag_generation;
 +wire        magik_lfb_apply_accepted;
 +wire        magik_lfb_en;
 +wire        magik_lfb_flt;
@@ -575,19 +453,6 @@ index a4168795b68bed4b655b00cb7ced5cf5b4f32741..4d81fc6df5732b81d71a78ad650f41ed
 +	.active_route_epoch(magik_lfb_active_route_epoch)
 +);
 +
-+mister_magik_scaler_scheduler_diagnostic magik_scaler_scheduler_diagnostic
-+(
-+	.clk_sys(clk_sys),
-+	.reset_active(reset_req),
-+	.io_uio(io_uio),
-+	.io_strobe(io_strobe),
-+	.io_din(io_din),
-+	.source_state(magik_scaler_diag_state),
-+	.source_generation(magik_scaler_diag_generation),
-+	.response_valid(magik_diag_response_valid),
-+	.response_data(magik_diag_response_data)
-+);
-+
  always@(posedge clk_sys) begin
  	reg  [7:0] cmd;
  	reg        has_cmd;
@@ -629,14 +494,29 @@ index a4168795b68bed4b655b00cb7ced5cf5b4f32741..4d81fc6df5732b81d71a78ad650f41ed
  			if(cmd == 'h25) {led_overtake, led_state} <= io_din;
  			if(cmd == 'h26) vol_att <= io_din[4:0];
  			if(cmd == 'h27) VSET <= io_din[11:0];
-@@ -825,6 +978,8 @@ wire         freeze;
+@@ -825,6 +963,22 @@ wire         freeze;
  		.avl_address      (vbuf_address),
  		.avl_write        (vbuf_write),
  		.avl_read         (vbuf_read),
-+		.magik_diag_state (magik_scaler_diag_state),
-+		.magik_diag_generation(magik_scaler_diag_generation),
  		.avl_byteenable   (vbuf_byteenable)
  	);
++
++mister_magik_raw_scaler_diagnostic magik_raw_scaler_diagnostic
++(
++	.clk_hdmi(clk_hdmi),
++	.clk_sys(clk_sys),
++	.reset_active(reset_req),
++	.raw_ce(scaler_out),
++	.raw_rgb(hdmi_data),
++	.raw_de(hdmi_de),
++	.raw_hs(hdmi_hs),
++	.raw_vs(hdmi_vs),
++	.io_uio(io_uio),
++	.io_strobe(io_strobe),
++	.io_din(io_din),
++	.response_valid(magik_diag_response_valid),
++	.response_data(magik_diag_response_data)
++);
  `endif
 @@ -1380,15 +1535,30 @@ assign HDMI_TX_D  = hdmi_out_d;
  
