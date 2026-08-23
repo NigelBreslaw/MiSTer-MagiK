@@ -120,6 +120,22 @@ module tb_mister_magik_video_diagnostics_control;
 		strobe_word(16'd0, 1'b0, 16'd0);
 		end_command();
 
+		// A generation observed while a response is active is deferred, then
+		// captured after the immutable transaction ends.
+		repeat(4) @(posedge clk_sys);
+		expected_crc = 16'hffff;
+		expected_crc = crc_word(expected_crc, 16'h0067);
+		expected_crc = crc_word(expected_crc, 16'h0001);
+		expected_crc = crc_word(expected_crc, 16'h0002);
+		expected_crc = crc_word(expected_crc, 16'h0001);
+		expected_crc = crc_word(expected_crc, 16'h8c31);
+		io_uio = 1'b1;
+		strobe_word(16'h0067, 1'b1, 16'h4d57);
+		strobe_word(16'd0, 1'b1, 16'h0001);
+		strobe_word(16'd0, 1'b1, 16'h8c31);
+		strobe_word(16'd0, 1'b1, expected_crc);
+		end_command();
+
 		// Reset invalidates the cached observation without affecting UIO framing.
 		reset_active = 1'b1;
 		repeat(2) @(posedge clk_sys);

@@ -36,15 +36,15 @@ BEGIN
 
 		-- A first sample and any changing second sample remain invalid.
 		word_v:=scheduler_diagnostic_word('0',(OTHERS =>'0'),first_v);
-		ASSERT word_v=x"0000" REPORT "first sample became coherent" SEVERITY failure;
+		ASSERT word_v=first_v & '0' REPORT "first sample became coherent" SEVERITY failure;
 		second_v:=first_v;
 		second_v(1):=NOT second_v(1);
-		word_v:=scheduler_diagnostic_word('1',first_v,second_v);
-		ASSERT word_v=x"0000" REPORT "changing sample became coherent" SEVERITY failure;
+		word_v:=scheduler_diagnostic_word('1',first_v & '0',second_v);
+		ASSERT word_v=second_v & '0' REPORT "changing sample became coherent" SEVERITY failure;
 
 		-- Two identical completed-frame samples publish exactly the state ABI,
 		-- with coherence in bit zero.
-		word_v:=scheduler_diagnostic_word('1',first_v,first_v);
+		word_v:=scheduler_diagnostic_word('1',first_v & '0',first_v);
 		ASSERT word_v=first_v & '1' REPORT "stable sample packing mismatch" SEVERITY failure;
 		ASSERT word_v(0)='1' REPORT "coherence bit mismatch" SEVERITY failure;
 		ASSERT word_v(5 DOWNTO 4)="10" REPORT "public read level mismatch" SEVERITY failure;
@@ -56,7 +56,7 @@ BEGIN
 			FOR copy_level IN 0 TO 2 LOOP
 				first_v:=scheduler_diagnostic_candidate(
 					'1','0','0',read_level,copy_level,"0000000",'0');
-				word_v:=scheduler_diagnostic_word('1',first_v,first_v);
+				word_v:=scheduler_diagnostic_word('1',first_v & '0',first_v);
 				ASSERT to_integer(unsigned(word_v(5 DOWNTO 4)))=read_level
 					REPORT "read level roundtrip failed" SEVERITY failure;
 				ASSERT to_integer(unsigned(word_v(7 DOWNTO 6)))=copy_level

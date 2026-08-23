@@ -241,8 +241,8 @@ def main() -> None:
         fail("minimal scaler scheduler diagnostic module is missing or ambiguous")
     if len(re.findall(r"(?m)^\s*module\b", control_source)) != 1:
         fail("diagnostic control source contains an unexpected design unit")
-    if control_source.count("(* preserve *) reg [15:0] captured_state") != 1:
-        fail("diagnostic bundled-data capture register is not preserved")
+    if "captured_state" in control_source or "tx_crc" in control_source:
+        fail("diagnostic responder retains redundant snapshot or CRC state")
     if re.search(r"(?m)^\s*module\b", avalon_source + output_source):
         fail("retired Avalon or output diagnostic compatibility source defines logic")
     compiled_diagnostics = control_source + avalon_source + output_source
@@ -333,14 +333,13 @@ def main() -> None:
         "{*ascal:ascal|avl_completion_ack_meta} 1",
         "-from $magik_scaler_completion_request",
         "-to $magik_scaler_completion_request_meta",
-        "-from $magik_scaler_completion_ack",
         "-to $magik_scaler_completion_ack_meta",
         "MagiK diagnostics CDC analysis applied: scaler_completion_request_ack",
         "*ascal:ascal|magik_diag_source_meta[*]",
         "*ascal:ascal|magik_diag_generation_i",
         "*magik_scaler_scheduler_diagnostic|generation_meta",
         "*ascal:ascal|magik_diag_word[*]",
-        "*magik_scaler_scheduler_diagnostic|captured_state[*]",
+        "*magik_scaler_scheduler_diagnostic|snapshot_state[*]",
         "scaler_scheduler_state",
     ):
         if diagnostics_sdc_text.count(fragment) != 1:
@@ -528,6 +527,7 @@ def main() -> None:
             ("magik_diag_source_sync<=magik_diag_source_meta;", 1),
             ("FUNCTION scheduler_diagnostic_candidate(", 2),
             ("FUNCTION scheduler_diagnostic_word(", 2),
+            ("magik_diag_have_previous,magik_diag_word,candidate_v", 1),
             ("candidate_v(4 DOWNTO 3):=", 1),
             ("candidate_v(6 DOWNTO 5):=", 1),
             ("magik_diag_word<=word_v;", 1),

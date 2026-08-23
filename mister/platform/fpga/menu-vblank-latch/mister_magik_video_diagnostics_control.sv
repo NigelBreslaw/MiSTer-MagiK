@@ -28,13 +28,11 @@ module mister_magik_scaler_scheduler_diagnostic (
 	reg generation_sync = 1'b0;
 	reg generation_seen = 1'b0;
 	reg capture_pending = 1'b0;
-	(* preserve *) reg [15:0] captured_state = 16'd0;
 
 	reg has_command = 1'b0;
 	reg command_selected = 1'b0;
 	reg [1:0] word_count = 2'd0;
 	reg [15:0] snapshot_state = 16'd0;
-	reg [15:0] tx_crc = MAGIK_SCALER_SCHEDULER_STATE_HEADER_CRC;
 	reg [15:0] response_word;
 
 	wire command_start = io_uio && io_strobe && !has_command;
@@ -60,6 +58,10 @@ module mister_magik_scaler_scheduler_diagnostic (
 		end
 	endfunction
 
+	wire [15:0] snapshot_crc = crc_update_word(
+		crc_update_word(MAGIK_SCALER_SCHEDULER_STATE_HEADER_CRC,
+			MAGIK_SCALER_SCHEDULER_STATE_SCHEMA), snapshot_state);
+
 	function automatic [15:0] crc_update_word;
 		input [15:0] crc_in;
 		input [15:0] word_in;
@@ -75,7 +77,7 @@ module mister_magik_scaler_scheduler_diagnostic (
 				response_word = MAGIK_SCALER_SCHEDULER_STATE_SCHEMA;
 			MAGIK_SCALER_SCHEDULER_STATE_STATE_WORD:
 				response_word = snapshot_state;
-			default: response_word = tx_crc;
+			default: response_word = snapshot_crc;
 		endcase
 
 		response_data = 16'd0;
@@ -93,14 +95,14 @@ module mister_magik_scaler_scheduler_diagnostic (
 		if(reset_active) begin
 			generation_seen <= generation_sync;
 			capture_pending <= 1'b0;
-			captured_state <= 16'd0;
+			snapshot_state <= 16'd0;
 		end
-		else if(generation_sync != generation_seen) begin
+		else if(!has_command && generation_sync != generation_seen) begin
 			generation_seen <= generation_sync;
 			capture_pending <= 1'b1;
 		end
-		else if(capture_pending) begin
-			captured_state <= source_state;
+		else if(!has_command && capture_pending) begin
+			snapshot_state <= source_state;
 			capture_pending <= 1'b0;
 		end
 
@@ -108,16 +110,10 @@ module mister_magik_scaler_scheduler_diagnostic (
 			has_command <= 1'b1;
 			command_selected <= selected_start;
 			word_count <= 2'd0;
-			if(selected_start) begin
-				snapshot_state <= captured_state;
-				tx_crc <= MAGIK_SCALER_SCHEDULER_STATE_HEADER_CRC;
-			end
 		end
 		else if(command_data && selected_command &&
 			(word_count < MAGIK_SCALER_SCHEDULER_STATE_WORDS)) begin
 			word_count <= word_count + 1'd1;
-			if(word_count < MAGIK_SCALER_SCHEDULER_STATE_CRC_WORD)
-				tx_crc <= crc_update_word(tx_crc, response_word);
 		end
 
 		if(!io_uio && has_command) begin

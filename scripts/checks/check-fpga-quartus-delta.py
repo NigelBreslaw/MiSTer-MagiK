@@ -69,7 +69,8 @@ MAXIMUM_REGISTER_DELTA = 96
 EXPECTED_UNCONSTRAINED_OUTPUT_PATHS = 158
 MINIMUM_CUSTOM_MTBF_DEVICE_HOURS = 1.0e12
 MINIMUM_CUSTOM_MTBF_YEARS = MINIMUM_CUSTOM_MTBF_DEVICE_HOURS / (24.0 * 365.25)
-EXPECTED_ADDED_RECOGNIZED_COMPLETION_SYNCHRONIZER_CHAINS = 10
+EXPECTED_ADDED_RECOGNIZED_COMPLETION_SYNCHRONIZER_CHAINS = 26
+EXPECTED_ADDED_CALCULABLE_COMPLETION_SYNCHRONIZER_CHAINS = 10
 EXPECTED_QUARTUS_POLICY = {
     "auto_parallel_synthesis": "off",
     "parallel_synthesis": "off",
@@ -193,7 +194,7 @@ EXPECTED_NET_DELAY_PATHS = {
         r"magik_diag_generation_i[^\n]*generation_meta", re.IGNORECASE
     ),
     "diagnostic_bundle": re.compile(
-        r"magik_diag_word[^\n]*captured_state", re.IGNORECASE
+        r"magik_diag_word[^\n]*snapshot_state", re.IGNORECASE
     ),
 }
 
@@ -293,7 +294,7 @@ def parse_expected_metastability_chains(
                 candidate
                 for candidate in blocks
                 if re.search(
-                    rf";\s*Source Node\s*;\s*{re.escape(source)}\s*;",
+                    rf";\s*Source Node\s*;\s*{re.escape(source)}(?:~DUPLICATE)?\s*;",
                     candidate,
                     re.IGNORECASE,
                 )
@@ -533,7 +534,7 @@ def validate_diagnostic_reports(
                 )
             )
             detailed_path_counts[name] = len(detailed_rows)
-            if len(detailed_rows) != 5:
+            if len(detailed_rows) != 26:
                 reasons.append("diagnostic_cdc_analysis_count")
             detailed_path_identities = {
                 label: sum(
@@ -547,7 +548,14 @@ def validate_diagnostic_reports(
                     for label, count in detailed_path_identities.items()
                 }
             )
-            if any(count != 1 for count in detailed_path_identities.values()):
+            expected_identity_counts = {
+                "completion_request": 1,
+                "completion_ack": 1,
+                "diagnostic_source": 7,
+                "diagnostic_generation": 1,
+                "diagnostic_bundle": 16,
+            }
+            if detailed_path_identities != expected_identity_counts:
                 reasons.append("diagnostic_cdc_path_identity_mismatch")
             detailed_slacks = [finite_number(row.group(1)) for row in detailed_rows]
             if any(value is None for value in detailed_slacks):
@@ -770,7 +778,7 @@ def compare(
         and patched_calculable_chains is not None
         and patched_calculable_chains
         == baseline_calculable_chains
-        + EXPECTED_ADDED_RECOGNIZED_COMPLETION_SYNCHRONIZER_CHAINS
+        + EXPECTED_ADDED_CALCULABLE_COMPLETION_SYNCHRONIZER_CHAINS
     )
     if not custom_assignment_seen:
         reasons.append("custom_synchronizer_missing")

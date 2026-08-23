@@ -65,7 +65,7 @@ index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..b1c2581d8665d3db4f4042ed668ee711
 +		RETURN std_logic_vector;
 +	FUNCTION scheduler_diagnostic_word(
 +		have_previous     : std_logic;
-+		previous_candidate : std_logic_vector(14 DOWNTO 0);
++		previous_word      : std_logic_vector(15 DOWNTO 0);
 +		current_candidate  : std_logic_vector(14 DOWNTO 0))
 +		RETURN std_logic_vector;
 +END PACKAGE mister_magik_scaler_completion_queue;
@@ -221,14 +221,15 @@ index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..b1c2581d8665d3db4f4042ed668ee711
 +
 +	FUNCTION scheduler_diagnostic_word(
 +		have_previous     : std_logic;
-+		previous_candidate : std_logic_vector(14 DOWNTO 0);
++		previous_word      : std_logic_vector(15 DOWNTO 0);
 +		current_candidate  : std_logic_vector(14 DOWNTO 0))
 +		RETURN std_logic_vector IS
 +	BEGIN
-+		IF have_previous='1' AND current_candidate=previous_candidate THEN
++		IF have_previous='1' AND
++			current_candidate=previous_word(15 DOWNTO 1) THEN
 +			RETURN current_candidate & '1';
 +		END IF;
-+		RETURN x"0000";
++		RETURN current_candidate & '0';
 +	END FUNCTION scheduler_diagnostic_word;
 +END PACKAGE BODY mister_magik_scaler_completion_queue;
 +
@@ -288,7 +289,6 @@ index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..b1c2581d8665d3db4f4042ed668ee711
 +	ATTRIBUTE altera_attribute OF o_readdataack_sync2 : SIGNAL IS
 +		"-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS; -name PRESERVE_REGISTER ON";
 +	SIGNAL magik_diag_source_meta,magik_diag_source_sync : std_logic_vector(6 DOWNTO 0);
-+	SIGNAL magik_diag_previous : std_logic_vector(14 DOWNTO 0):=(OTHERS =>'0');
 +	SIGNAL magik_diag_word : std_logic_vector(15 DOWNTO 0):=(OTHERS =>'0');
 +	SIGNAL magik_diag_generation_i : std_logic:='0';
 +	SIGNAL magik_diag_read_seen,magik_diag_completion_seen : std_logic:='0';
@@ -317,7 +317,6 @@ index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..b1c2581d8665d3db4f4042ed668ee711
 +		IF o_reset_na='0' THEN
 +			magik_diag_source_meta<=(OTHERS =>'0');
 +			magik_diag_source_sync<=(OTHERS =>'0');
-+			magik_diag_previous<=(OTHERS =>'0');
 +			magik_diag_word<=(OTHERS =>'0');
 +			magik_diag_generation_i<='0';
 +			magik_diag_read_seen<='0';
@@ -342,12 +341,11 @@ index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..b1c2581d8665d3db4f4042ed668ee711
 +					o_readlev,o_copylev,magik_diag_source_sync,
 +					o_readdataack_sync2);
 +				word_v:=scheduler_diagnostic_word(
-+					magik_diag_have_previous,magik_diag_previous,candidate_v);
++					magik_diag_have_previous,magik_diag_word,candidate_v);
 +				IF magik_diag_word/=word_v THEN
 +					magik_diag_word<=word_v;
 +					magik_diag_generation_i<=NOT magik_diag_generation_i;
 +				END IF;
-+				magik_diag_previous<=candidate_v;
 +				magik_diag_have_previous<='1';
 +				magik_diag_read_seen<='0';
 +				magik_diag_completion_seen<='0';

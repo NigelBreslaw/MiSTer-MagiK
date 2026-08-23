@@ -26,7 +26,6 @@ set magik_scaler_completion_ack [magik_require_registers ack_source \
 set magik_scaler_completion_ack_meta [magik_require_registers ack_meta \
 	{*ascal:ascal|avl_completion_ack_meta} 1]
 set_net_delay -max 10.0 \
-	-from $magik_scaler_completion_ack \
 	-to $magik_scaler_completion_ack_meta
 
 # Seven passive state bits cross from clk_100m into the HDMI-domain coherence
@@ -48,7 +47,6 @@ if {[get_collection_size $magik_scaler_diag_source] != 7} {
 set magik_scaler_diag_source_meta [magik_require_registers diagnostic_source_meta \
 	{*ascal:ascal|magik_diag_source_meta[*]} 7]
 set_net_delay -max 10.0 \
-	-from $magik_scaler_diag_source \
 	-to $magik_scaler_diag_source_meta
 
 # The state word is a bundled-data crossing. It is registered and held stable
@@ -65,7 +63,7 @@ set_net_delay -max 10.0 \
 set magik_scaler_diag_word [magik_require_registers diagnostic_word \
 	{*ascal:ascal|magik_diag_word[*]} 16]
 set magik_scaler_diag_capture [magik_require_registers diagnostic_capture \
-	{*magik_scaler_scheduler_diagnostic|captured_state[*]} 16]
+	{*magik_scaler_scheduler_diagnostic|snapshot_state[*]} 16]
 set_net_delay -max 10.0 \
 	-from $magik_scaler_diag_word \
 	-to $magik_scaler_diag_capture
