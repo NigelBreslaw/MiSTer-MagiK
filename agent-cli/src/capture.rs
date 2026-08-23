@@ -15,12 +15,13 @@ const JPEG_WIDTH: u32 = 1920;
 const JPEG_HEIGHT: u32 = 1080;
 const MOVIE_MIN_SECONDS: u64 = 1;
 const MOVIE_MAX_SECONDS: u64 = 60;
-// Calibrated against the fixed Phase 2 launcher scene: 59 known-good captures
-// measured 44 permille and all 732 preserved corruption frames measured at
-// least 72 permille. Sixty keeps the detector between those observed sets.
+// Calibrated against the fixed Phase 2 launcher scene using native capture
+// luma: a known-good return measured 25 permille and all 732 frames from the
+// preserved corruption movie measured 60..=622 permille. Forty-five keeps
+// equal distance from the nearest observed good and corrupt values.
 const SPATIAL_LUMA_SAMPLE_STEP: usize = 4;
 const STRONG_ROW_DISCONTINUITY: u8 = 12;
-const CORRUPTED_ROW_DISCONTINUITY_PERMILLE: u16 = 60;
+const CORRUPTED_ROW_DISCONTINUITY_PERMILLE: u16 = 45;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct CaptureArtifact {

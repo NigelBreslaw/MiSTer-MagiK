@@ -135,3 +135,40 @@ record does not claim a final root cause or that the black-screen occurrence
 is necessarily the same mechanism. A later phase-oriented diagnostic may use
 this evidence; no new diagnostic design or device recovery is part of this
 incident-preservation commit.
+
+## Phase 2 spatial detector follow-up
+
+After preservation, the host-side Phase 2 USB-video analysis gained a passive
+moving-band classifier. It samples the native 1920x1080 NV12 luma plane every
+four pixels and records the fraction of adjacent row pairs whose mean absolute
+luma difference is at least 12. Black and capture-card signal-loss detection
+retain priority; a nonblack frame at or above 45 permille is classified
+`corrupted` and fails the existing Phase 2 physical-video gate. The still and
+raw metric remain in the evidence bundle. This does not alter the FPGA,
+launcher, latch protocol, or device state.
+
+The threshold was calibrated from native buffers rather than decoded stills:
+
+| Corpus | Frames | Observed permille |
+| --- | ---: | ---: |
+| healthy fixed SNES return | 1 | 25 |
+| preserved 30-second corruption movie | 732 | 60–622 |
+
+The midpoint threshold leaves 20 permille from the observed healthy sample and
+15 permille from the weakest observed corrupt frame. The ignored calibration
+tables are retained locally as
+`build/raw-scaler-phase2-corrupt-native-luma-calibration.csv` and
+`build/raw-scaler-phase2-spatial-integrity-calibration.csv`.
+
+One bounded attended validation run passed on the installed diagnostic RBF:
+
+- evidence:
+  `build/raw-scaler-phase2-spatial-detector-validation-20260823/`;
+- physical result: `visible`;
+- native strong-row discontinuity: 25 permille;
+- FPGA diagnostic: coherent `raw_scaler_active`;
+- latch drops/rejects: zero.
+
+This detector is scoped to reproducing the fixed Phase 2 return scene. It is a
+fast failure classifier, not proof of HDMI visibility and not a root-cause
+diagnostic by itself.
