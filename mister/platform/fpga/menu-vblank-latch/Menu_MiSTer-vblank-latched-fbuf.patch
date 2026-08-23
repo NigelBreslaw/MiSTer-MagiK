@@ -269,7 +269,7 @@ index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..b1c2581d8665d3db4f4042ed668ee711
 +	SIGNAL avl_return_drain : std_logic:='1';
 +	SIGNAL avl_return_credits : natural RANGE 0 TO 2:=0;
 +	SIGNAL avl_return_phase : natural RANGE 0 TO BLEN-1:=0;
-+	SIGNAL avl_diag_return_phase_nonzero : std_logic:='0';
++	SIGNAL avl_diag_return_phase_nonzero,avl_diag_return_drain : std_logic:='0';
 +	SIGNAL avl_read_accepted : std_logic:='0';
 +	SIGNAL avl_readack : std_logic;
 +	ATTRIBUTE preserve OF avl_readdataack : SIGNAL IS true;
@@ -304,7 +304,7 @@ index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..b1c2581d8665d3db4f4042ed668ee711
 @@ -1160,6 +1345,29 @@ BEGIN
  	o_reset_na<='0'   WHEN reset_na='0' ELSE '1' WHEN rising_edge(o_clk);
  	avl_reset_na<='0' WHEN reset_na='0' ELSE '1' WHEN rising_edge(avl_clk);
-+	magik_diag_state<=magik_diag_word;
++	magik_diag_state<=magik_diag_word; avl_diag_return_drain<='0' WHEN avl_reset_na='0' ELSE avl_return_drain WHEN rising_edge(avl_clk);
 +	magik_diag_generation<=magik_diag_generation_i;
 +
 +	-- Passive scheduler state only. The exported word is invalidated until two
@@ -315,8 +315,8 @@ index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..b1c2581d8665d3db4f4042ed668ee711
 +		VARIABLE word_v : std_logic_vector(15 DOWNTO 0);
 +	BEGIN
 +		IF o_reset_na='0' THEN
-+			magik_diag_source_meta<=(3 =>'1',OTHERS =>'0');
-+			magik_diag_source_sync<=(3 =>'1',OTHERS =>'0');
++			magik_diag_source_meta<=(OTHERS =>'0');
++			magik_diag_source_sync<=(OTHERS =>'0');
 +			magik_diag_word<=(OTHERS =>'0');
 +			magik_diag_generation_i<='0';
 +			magik_diag_read_seen<='0';
@@ -325,7 +325,7 @@ index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..b1c2581d8665d3db4f4042ed668ee711
 +		ELSIF rising_edge(o_clk) THEN
 +			magik_diag_source_meta<=
 +				avl_readdataack & avl_completion_pending &
-+				avl_completion_ack_sync & avl_return_drain &
++				avl_completion_ack_sync & avl_diag_return_drain &
 +				std_logic_vector(to_unsigned(avl_return_credits,2)) &
 +				avl_diag_return_phase_nonzero; -- <ASYNC>
 +			magik_diag_source_sync<=magik_diag_source_meta;

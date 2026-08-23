@@ -340,7 +340,7 @@ def main() -> None:
         "MagiK diagnostics CDC analysis applied: scaler_completion_request_ack",
         "*ascal:ascal|magik_diag_source_meta[*]",
         "*ascal:ascal|o_readdataack_sync2*",
-        "{*ascal:ascal|avl_return_drain*}",
+        "{*ascal:ascal|avl_diag_return_drain*}",
         "-from $magik_scaler_diag_source_route",
         "-from $magik_scaler_diag_drain",
         "-to $magik_scaler_diag_drain_meta",
@@ -459,6 +459,7 @@ def main() -> None:
             "SIGNAL avl_return_drain : std_logic:='1';": 1,
             "SIGNAL avl_return_credits : natural RANGE 0 TO 2:=0;": 1,
             "SIGNAL avl_return_phase : natural RANGE 0 TO BLEN-1:=0;": 1,
+            "SIGNAL avl_diag_return_phase_nonzero,avl_diag_return_drain : std_logic:='0';": 1,
             "SIGNAL avl_read_accepted : std_logic:='0';": 1,
             "ATTRIBUTE preserve OF avl_readdataack : SIGNAL IS true;": 1,
             "ATTRIBUTE preserve OF magik_diag_word : SIGNAL IS true;": 1,
@@ -482,9 +483,10 @@ def main() -> None:
             "ELSIF issued_v THEN": 1,
             "avl_read_accepted<='1';": 1,
             "avl_return_drain<='1';": 1,
-            "magik_diag_source_meta<=(3 =>'1',OTHERS =>'0');": 1,
-            "magik_diag_source_sync<=(3 =>'1',OTHERS =>'0');": 1,
-            "avl_completion_ack_sync & avl_return_drain &": 1,
+            "avl_diag_return_drain<='0' WHEN avl_reset_na='0' ELSE avl_return_drain WHEN rising_edge(avl_clk);": 1,
+            "magik_diag_source_meta<=(OTHERS =>'0');": 1,
+            "magik_diag_source_sync<=(OTHERS =>'0');": 1,
+            "avl_completion_ack_sync & avl_diag_return_drain &": 1,
             "IF return_drain_ready(": 1,
             "avl_return_credits,avl_return_phase) THEN": 1,
             "IF avl_return_drain='0' THEN": 1,
@@ -573,10 +575,15 @@ def main() -> None:
                     f"{forbidden_observer_source}"
                 )
         if re.search(
-            r"(?m)^\s*(?!magik_diag_)[A-Za-z0-9_]+\s*<=.*magik_diag_",
+            r"(?m)^\s*(?!magik_diag_)[A-Za-z0-9_]+\s*<=[^;\n]*magik_diag_",
             patched_ascal,
         ):
             fail("minimal scaler diagnostic feeds a production ascal assignment")
+        if re.search(
+            r"(?m)^\s*(?!avl_diag_return_drain\s*<=)[A-Za-z0-9_]+\s*<=[^;\n]*avl_diag_return_drain",
+            patched_ascal,
+        ):
+            fail("scaler drain observer replica feeds a production ascal assignment")
         for reset_fragment in (
             "avl_readdataack<='0';",
             "avl_completion_pending<='0';",
