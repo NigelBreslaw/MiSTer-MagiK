@@ -125,7 +125,7 @@ EXPECTED_METASTABILITY_CHAINS = {
         ),
     },
     "diagnostic_return_drain": {
-        "source": "ascal:ascal|avl_diag_return_drain",
+        "source": "ascal:ascal|avl_return_drain",
         "synchronization_node": "ascal:ascal|magik_diag_source_meta[3]",
         "registers": (
             "ascal:ascal|magik_diag_source_meta[3]",
@@ -187,7 +187,7 @@ EXPECTED_NET_DELAY_PATHS = {
         r"o_readdataack_sync2[^\n]*avl_completion_ack_meta", re.IGNORECASE
     ),
     "diagnostic_source": re.compile(
-        r"avl_(?:readdataack|completion_pending|completion_ack_sync|diag_return_drain|return_credits|diag_return_phase_nonzero)[^\n]*magik_diag_source_meta",
+        r"avl_(?:readdataack|completion_pending|completion_ack_sync|return_drain|return_credits|diag_return_phase_nonzero)[^\n]*magik_diag_source_meta",
         re.IGNORECASE,
     ),
     "diagnostic_generation": re.compile(

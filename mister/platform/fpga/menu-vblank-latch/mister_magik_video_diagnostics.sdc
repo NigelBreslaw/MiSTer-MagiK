@@ -46,7 +46,7 @@ set magik_scaler_diag_source [get_registers -nowarn -no_duplicates {
 	*ascal:ascal|avl_readdataack
 	*ascal:ascal|avl_completion_pending
 	*ascal:ascal|avl_completion_ack_sync
-	*ascal:ascal|avl_diag_return_drain
+	*ascal:ascal|avl_return_drain
 	*ascal:ascal|avl_return_credits[*]
 	*ascal:ascal|avl_diag_return_phase_nonzero
 }]
@@ -76,7 +76,7 @@ set_net_delay -max 10.0 \
 # Keep the drain crossing separate because Quartus may route its production
 # fanout independently from the other six diagnostic source bits.
 set magik_scaler_diag_drain [get_registers -nowarn \
-	{*ascal:ascal|avl_diag_return_drain*}]
+	{*ascal:ascal|avl_return_drain*}]
 if {[get_collection_size $magik_scaler_diag_drain] < 1} {
 	post_message -type error "MagiK diagnostic drain routed source is missing"
 	error "MagiK diagnostic drain routed source is missing"
