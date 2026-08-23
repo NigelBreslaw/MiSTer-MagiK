@@ -946,6 +946,26 @@ device remained unrecovered while the complete 793-artifact integrity manifest
 was created. See
 [`2026-08-23-moving-band-corruption-result.md`](2026-08-23-moving-band-corruption-result.md).
 
+### Direct-Arcade transient-corruption result
+
+The later direct-Arcade campaign removed the irrelevant SNES navigation while
+retaining the same fixed game and launch/handoff/typed-return boundary. It
+added an explicit two-second in-game dwell and three physical MagiK samples.
+After 14 valid passes in boot epoch 4, the middle sample was corrupt while the
+samples before and after were byte-identical healthy output.
+
+The latched RGB565 framebuffer stayed correct. Failure-time and subsequent
+read-only records were coherent `raw_scaler_active` with zero latch drops or
+rejects. A native 30-second follow-up contained 755 healthy frames, proving the
+sampled corruption self-cleared before the movie and was not the earlier
+continuous moving-band state.
+
+Design 5 again shows that substantial raw activity continues during physical
+corruption, but its activity counters cannot identify timing, geometry, or
+sync-order faults. No black-screen attribution follows from this event. The
+unrecovered-state record is in
+[`2026-08-24-phase2-transient-corruption-result.md`](2026-08-24-phase2-transient-corruption-result.md).
+
 ## Facts established despite the failed implementations
 
 The work was not diagnostically empty. It established the following facts:

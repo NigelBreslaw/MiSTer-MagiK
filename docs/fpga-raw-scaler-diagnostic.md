@@ -122,3 +122,12 @@ physical line/frame corruption. It does not invalidate the observer, but it
 completes its narrow attribution value: activity counts alone cannot establish
 sync ordering or phase integrity. The exact unrecovered-state evidence is in
 [`history/2026-08-23-moving-band-corruption-result.md`](../history/2026-08-23-moving-band-corruption-result.md).
+
+On 2026-08-24 the direct-Arcade campaign captured a second, shorter physical
+event after 14 valid passes in a fresh boot epoch. One corrupt native frame sat
+between two byte-identical healthy MagiK frames while the authoritative
+framebuffer remained correct and both read-only snapshots stayed coherent
+`raw_scaler_active`. A subsequent 755-frame native movie was entirely healthy,
+so this event self-cleared and is not the earlier persistent moving-band state.
+The device remains unrecovered. See
+[`history/2026-08-24-phase2-transient-corruption-result.md`](../history/2026-08-24-phase2-transient-corruption-result.md).

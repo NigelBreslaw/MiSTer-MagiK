@@ -1,0 +1,83 @@
+{
+  "schema": "mister-magik-phase2-transient-corruption-incident-v1",
+  "captured_on": "2026-08-24",
+  "preservation_state": "captured-unrecovered",
+  "classification": "single-sampled-transient-physical-corruption",
+  "sink_visibility": "physically_observed_by_native_usb_video",
+  "host_revision": "b183c350d101f9289836770cb8d2abd0aed64b74",
+  "launcher": {
+    "version": "0.2.5219",
+    "build_number": 5219,
+    "source_revision": "aa954e639ee3461c90f0420f9eed56ec00e6b637",
+    "pid": 5839
+  },
+  "main": {
+    "generation": 426855,
+    "pid": 5818,
+    "launcher_state": "LauncherActive",
+    "fpga_owner": "magik"
+  },
+  "attempt": {
+    "boot_epoch": 4,
+    "index": 15,
+    "preceding_passes_in_epoch": 14,
+    "game": "/media/fat/_Arcade/1943 Kai Midway Kaisen (Japan).mra",
+    "game_dwell_ms": 2000,
+    "return_observation_ms": 3283
+  },
+  "physical_sequence": [
+    {
+      "order": 1,
+      "classification": "healthy_reference",
+      "sha256": "5e106ecf8c4df7585ad8019ff3b7667d7395a29dda6397b2e665916d8f7d9ad1",
+      "luma": { "minimum": 16, "maximum": 235, "mean": 54 },
+      "strong_row_discontinuity_permille": 74
+    },
+    {
+      "order": 2,
+      "classification": "transient_corruption",
+      "sha256": "9c55f042898a36f0982736c9fa59e8aeaa139992e1aca4df80e595259052f750",
+      "luma": { "minimum": 0, "maximum": 255, "mean": 44 },
+      "strong_row_discontinuity_permille": 92
+    },
+    {
+      "order": 3,
+      "classification": "healthy_reference",
+      "sha256": "5e106ecf8c4df7585ad8019ff3b7667d7395a29dda6397b2e665916d8f7d9ad1",
+      "luma": { "minimum": 16, "maximum": 235, "mean": 54 },
+      "strong_row_discontinuity_permille": 74
+    }
+  ],
+  "internal_evidence": {
+    "framebuffer_sha256": "288f47335560f1169890ee50d02ddf3707ef4b568a22ccb06593a78d275ad250",
+    "framebuffer_state": "complete_correct_arcade",
+    "diagnostic_architecture": "raw-scaler-boundary-v1",
+    "diagnostic_classification_at_failure": "raw_scaler_active",
+    "diagnostic_classification_after_preservation": "raw_scaler_active",
+    "diagnostic_coherent": true,
+    "latch_drop_count": 0,
+    "latch_reject_count": 0,
+    "observer_sink_visibility": "unobserved"
+  },
+  "subsequent_movie": {
+    "frames": 755,
+    "duration_ms": 30160,
+    "all_frames_luma_mean": 54,
+    "all_frames_strong_row_discontinuity_permille": 73,
+    "classification": "healthy_after_transient"
+  },
+  "artifact_root": "build/raw-scaler-phase2-epoch4-15",
+  "artifacts": [
+    { "path": "summary.json", "bytes": 444796, "sha256": "2cac12cc35520b0ae1b152093ab8f31055e98ae99c3983c769bca7e04fda993f" },
+    { "path": "returned-usb-video.jpg", "bytes": 385626, "sha256": "5e106ecf8c4df7585ad8019ff3b7667d7395a29dda6397b2e665916d8f7d9ad1" },
+    { "path": "returned-usb-video-confirmation-1.jpg", "bytes": 396343, "sha256": "9c55f042898a36f0982736c9fa59e8aeaa139992e1aca4df80e595259052f750" },
+    { "path": "returned-usb-video-confirmation-2.jpg", "bytes": 385626, "sha256": "5e106ecf8c4df7585ad8019ff3b7667d7395a29dda6397b2e665916d8f7d9ad1" },
+    { "path": "returned-framebuffer.png", "bytes": 119288, "sha256": "288f47335560f1169890ee50d02ddf3707ef4b568a22ccb06593a78d275ad250" },
+    { "path": "preserved-failure-30s.mov", "bytes": 14469643, "sha256": "df365a412f44d5cfeef582e35c3181623daa46395e5e5632328d3be3dffc9d7a" },
+    { "path": "preserved-failure-frame-metrics.csv", "bytes": 17051, "sha256": "c53ec688b9d38bf29969b6dd652352f5195c42bb9262f90e6b62ebd06c4a726d" },
+    { "path": "fpga-video-diagnostics.json", "sha256": "945954b94de53565b71cefe801876342d909b3704d99ae2dae710fca0beabddf" },
+    { "path": "diagnostics-preserved/fpga-video-diagnostics.json", "sha256": "5e3997c42647942f4a7e72c4ffceb3cb3d4b6e034a5cd4f795df7353951e8b86" },
+    { "path": "diagnostics-preserved/main-status.json", "sha256": "0f7b87a98e5dd3f8c51f0a1dfe6f664b3ab4b4e4c7d6ca2a41c83265b5faad32" },
+    { "path": "diagnostics-preserved/bundle.json", "sha256": "455d5e718001d51c80d40c831b95bb3f3635fcb5f046ebbaaad267e6a643b6cb" }
+  ]
+}
