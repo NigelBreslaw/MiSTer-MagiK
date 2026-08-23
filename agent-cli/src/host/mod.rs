@@ -3945,7 +3945,7 @@ fn install_experimental_agent_transaction(
             ),
         )?;
         drop(session);
-        one_shot_recovery_reboot_wait(config)?;
+        one_shot_recovery_reboot_wait(config).map_err(|error| format!("{error:?}"))?;
         let verify = connect_with(&config.connection, 10)?;
         exec_checked(
             &verify,
@@ -4000,7 +4000,7 @@ fn install_experimental_agent_transaction(
                 ),
             )?;
             drop(rollback);
-            one_shot_recovery_reboot_wait(config)?;
+            one_shot_recovery_reboot_wait(config).map_err(|error| format!("{error:?}"))?;
             verify_delivery_health(config).map_err(|failure| format!("{failure:?}"))?;
             let cleanup = connect_with(&config.connection, 10)?;
             exec_checked(
