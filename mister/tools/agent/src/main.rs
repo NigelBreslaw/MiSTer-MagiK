@@ -4098,7 +4098,7 @@ mod linux {
         {
             return "scaler_scheduler_evidence_inconclusive";
         }
-        let flag = |bit| state & (1 << bit) != 0;
+        let flag = |bit| state & (1u16 << bit) != 0;
         let request = flag(contract::SCALER_SCHEDULER_STATE_REQUEST_TOGGLE_BIT);
         let pending = flag(contract::SCALER_SCHEDULER_STATE_COMPLETION_PENDING_BIT);
         let acknowledgement = flag(contract::SCALER_SCHEDULER_STATE_ACKNOWLEDGEMENT_BIT);
@@ -4572,7 +4572,7 @@ mod linux {
                 Self::ScalerScheduler(readout) => {
                     use mister_magik_video_diagnostics_contract as contract;
                     let state = readout.samples[0].state();
-                    let flag = |bit| state & (1 << bit) != 0;
+                    let flag = |bit| state & (1u16 << bit) != 0;
                     let samples_match = readout
                         .samples
                         .iter()
