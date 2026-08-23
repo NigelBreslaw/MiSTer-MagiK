@@ -247,6 +247,8 @@ def main() -> None:
         fail("diagnostic bundled-data snapshot is not preserved")
     if control_source.count("(* preserve *) reg [15:0] source_state") != 1:
         fail("raw scaler source state is not preserved for bundled-data capture")
+    if control_source.count("(* preserve *) reg source_generation") != 1:
+        fail("raw scaler frame generation is not preserved as a distinct CDC source")
     for exact_probe in (
         "input  wire        raw_ce",
         "input  wire [23:0] raw_rgb",

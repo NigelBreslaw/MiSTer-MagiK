@@ -32,7 +32,7 @@ module mister_magik_raw_scaler_diagnostic (
 	reg hs_seen = 1'b0;
 	reg [3:0] frame_sequence = 4'd0;
 	(* preserve *) reg [15:0] source_state = 16'd0;
-	reg source_generation = 1'b0;
+	(* preserve *) reg source_generation = 1'b0;
 
 	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED" *)
 	reg generation_meta = 1'b0;

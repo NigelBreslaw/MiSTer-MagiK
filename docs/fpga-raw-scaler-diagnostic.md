@@ -37,7 +37,8 @@ The 16-bit state word is:
 Saturating counts distinguish a single flashing pixel from a substantial
 nonzero image without exporting RGB, fingerprints, geometry, or wide counters.
 
-The HDMI-domain word is registered before its generation toggle changes. The
+The HDMI-domain word and distinct preserved generation toggle are registered
+before the generation changes. The
 clk_sys responder synchronizes only that toggle through two explicit stages,
 waits one additional clock, and samples the stable word. The command snapshot
 remains immutable until the transaction ends and uses the existing CRC-16
