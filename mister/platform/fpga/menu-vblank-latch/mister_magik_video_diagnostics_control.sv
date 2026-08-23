@@ -28,7 +28,7 @@ module mister_magik_scaler_scheduler_diagnostic (
 	reg generation_sync = 1'b0;
 	reg generation_seen = 1'b0;
 	reg capture_pending = 1'b0;
-	reg [15:0] captured_state = 16'd0;
+	(* preserve *) reg [15:0] captured_state = 16'd0;
 
 	reg has_command = 1'b0;
 	reg command_selected = 1'b0;

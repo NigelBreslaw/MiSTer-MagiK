@@ -284,9 +284,9 @@ index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..b1c2581d8665d3db4f4042ed668ee711
  	SIGNAL o_readack,o_readack_sync,o_readack_sync2 : std_logic;
  	SIGNAL o_readdataack,o_readdataack_sync,o_readdataack_sync2 : std_logic;
 +	ATTRIBUTE altera_attribute OF o_readdataack_sync : SIGNAL IS
-+		"-name SYNCHRONIZER_IDENTIFICATION FORCED";
++		"-name SYNCHRONIZER_IDENTIFICATION FORCED; -name PRESERVE_REGISTER ON";
 +	ATTRIBUTE altera_attribute OF o_readdataack_sync2 : SIGNAL IS
-+		"-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS";
++		"-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS; -name PRESERVE_REGISTER ON";
 +	SIGNAL magik_diag_source_meta,magik_diag_source_sync : std_logic_vector(6 DOWNTO 0);
 +	SIGNAL magik_diag_previous : std_logic_vector(14 DOWNTO 0):=(OTHERS =>'0');
 +	SIGNAL magik_diag_word : std_logic_vector(15 DOWNTO 0):=(OTHERS =>'0');

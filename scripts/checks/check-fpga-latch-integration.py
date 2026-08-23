@@ -241,6 +241,8 @@ def main() -> None:
         fail("minimal scaler scheduler diagnostic module is missing or ambiguous")
     if len(re.findall(r"(?m)^\s*module\b", control_source)) != 1:
         fail("diagnostic control source contains an unexpected design unit")
+    if control_source.count("(* preserve *) reg [15:0] captured_state") != 1:
+        fail("diagnostic bundled-data capture register is not preserved")
     if re.search(r"(?m)^\s*module\b", avalon_source + output_source):
         fail("retired Avalon or output diagnostic compatibility source defines logic")
     compiled_diagnostics = control_source + avalon_source + output_source
@@ -453,8 +455,10 @@ def main() -> None:
             "SIGNAL avl_read_accepted : std_logic:='0';": 1,
             "ATTRIBUTE preserve OF avl_readdataack : SIGNAL IS true;": 1,
             "SIGNAL o_readdataack,o_readdataack_sync,o_readdataack_sync2 : std_logic;": 1,
-            "SYNCHRONIZER_IDENTIFICATION FORCED\";": 3,
-            "SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS\";": 3,
+            "SYNCHRONIZER_IDENTIFICATION FORCED\";": 2,
+            "SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS\";": 2,
+            "SYNCHRONIZER_IDENTIFICATION FORCED; -name PRESERVE_REGISTER ON\";": 1,
+            "SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS; -name PRESERVE_REGISTER ON\";": 1,
             "avl_completion_ack_meta<=o_readdataack_sync2; -- <ASYNC>": 1,
             "avl_completion_ack_sync<=avl_completion_ack_meta;": 1,
             "AvalonReturnAccounting:PROCESS(avl_clk) IS": 1,
