@@ -398,6 +398,7 @@ pub struct MediaDownloadArgs {
 #[derive(Debug, Subcommand)]
 pub enum DeviceFpgaCommand {
     InstallExperimental(ExperimentalFpgaArgs),
+    InstallExperimentalAgent(ExperimentalAgentArgs),
 }
 
 #[derive(Debug, Args)]
@@ -408,6 +409,16 @@ pub struct ExperimentalFpgaArgs {
     pub(crate) metadata: PathBuf,
     #[arg(long)]
     pub(crate) signoff_report: PathBuf,
+    #[arg(long, required = true)]
+    attended: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct ExperimentalAgentArgs {
+    #[arg(long)]
+    pub(crate) agent: PathBuf,
+    #[arg(long)]
+    pub(crate) expected_rbf_sha256: String,
     #[arg(long, required = true)]
     attended: bool,
 }
@@ -594,6 +605,19 @@ mod tests {
                 "--attended",
                 "--crt-font-experiment",
                 "phase-even",
+            ])
+            .is_ok()
+        );
+        assert!(
+            TestCli::try_parse_from([
+                "test",
+                "fpga",
+                "install-experimental-agent",
+                "--agent",
+                "mister-magik-agent",
+                "--expected-rbf-sha256",
+                "3701ec7e5ef7be168bc221fe208f41e8035e60d31d308ed3ecafcbb9a96ffde0",
+                "--attended",
             ])
             .is_ok()
         );

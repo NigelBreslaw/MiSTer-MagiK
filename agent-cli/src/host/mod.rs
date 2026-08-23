@@ -564,6 +564,13 @@ impl NativeDevice {
                             &args.signoff_report,
                         )
                     }
+                    DeviceFpgaCommand::InstallExperimentalAgent(args) => {
+                        install_experimental_agent_transaction(
+                            &prepared.config,
+                            &args.agent,
+                            &args.expected_rbf_sha256,
+                        )
+                    }
                 },
             }
         })();
@@ -3851,6 +3858,183 @@ fn install_experimental_fpga_transaction(
             "experimental FPGA activation is verified but commit cleanup is incomplete; rollback was not attempted: {error}"
         )
     })?;
+    Ok(())
+}
+
+fn experimental_agent_transaction_remote() -> String {
+    installed_layout::app_path(Layout::Development, "experimental-agent.delivery-state")
+        .expect("static installed path")
+}
+
+fn validate_experimental_agent(path: &Path) -> Result<String> {
+    let metadata = fs::metadata(path).map_err(|error| {
+        format!(
+            "experimental device-agent artifact is missing {}: {error}",
+            path.display()
+        )
+    })?;
+    if !metadata.is_file() || metadata.len() < 20 || metadata.len() > 32 * 1024 * 1024 {
+        return Err(format!(
+            "experimental device-agent artifact has an invalid size: {}",
+            path.display()
+        )
+        .into());
+    }
+    let mut header = [0_u8; 20];
+    fs::File::open(path)
+        .and_then(|mut file| file.read_exact(&mut header))
+        .map_err(|error| format!("cannot read experimental device-agent ELF header: {error}"))?;
+    let machine = u16::from_le_bytes([header[18], header[19]]);
+    if &header[..4] != b"\x7fELF" || header[4] != 1 || header[5] != 1 || machine != 40 {
+        return Err(format!(
+            "experimental device-agent is not a 32-bit little-endian ARM ELF: {}",
+            path.display()
+        )
+        .into());
+    }
+    file_sha256(path.to_path_buf())
+}
+
+fn install_experimental_agent_transaction(
+    config: &NativeDeviceConfig,
+    agent: &Path,
+    expected_rbf_sha256: &str,
+) -> Result<()> {
+    if expected_rbf_sha256.len() != 64
+        || !expected_rbf_sha256
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    {
+        return Err("expected experimental RBF SHA-256 is not canonical lowercase hex".into());
+    }
+    let agent_sha256 = validate_experimental_agent(agent)?;
+    let transaction = experimental_agent_transaction_remote();
+    let remote = DEVELOPMENT_AGENT_REMOTE.as_str();
+    let session = connect_with(&config.connection, 10)?;
+    exec_checked(
+        &session,
+        "installed Dev platform verification before experimental agent install",
+        &installed_platform_verify_command(Layout::Development),
+    )?;
+    let manifest_text = remote_read(&session, LOCAL_MAIN_MANIFEST_REMOTE)
+        .ok_or("installed Dev manifest is missing")?;
+    let manifest = parse_local_main_manifest_text(&manifest_text)?;
+    if manifest["latch_rbf_sha256"] != expected_rbf_sha256 {
+        return Err("installed Dev RBF does not match the experimental agent transaction".into());
+    }
+    experimental_fpga_activation_status(&session)?;
+    exec_checked(
+        &session,
+        "experimental device-agent snapshot",
+        &format!(
+            "set -eu; test ! -e {transaction}; test ! -e {remote}.delivery-rollback; rm -f {remote}.upload; cp -p {remote} {remote}.delivery-rollback; printf 'snapshot\\n' > {transaction}; sync",
+            transaction = sh(&transaction),
+            remote = sh(remote),
+        ),
+    )?;
+    let install = (|| -> Result<()> {
+        put(&session, agent, &format!("{remote}.upload"))?;
+        exec_checked(
+            &session,
+            "experimental device-agent activation",
+            &format!(
+                "set -eu; test \"$(sha256sum {remote}.upload | awk '{{print $1}}')\" = {agent_hash}; chmod 755 {remote}.upload; printf 'activating\\n' > {transaction}; mv -f {remote}.upload {remote}; sync",
+                remote = sh(remote),
+                agent_hash = sh(&agent_sha256),
+                transaction = sh(&transaction),
+            ),
+        )?;
+        drop(session);
+        one_shot_recovery_reboot_wait(config)?;
+        let verify = connect_with(&config.connection, 10)?;
+        exec_checked(
+            &verify,
+            "experimental device-agent installed hash",
+            &format!(
+                "test \"$(sha256sum {remote} | awk '{{print $1}}')\" = {agent_hash}",
+                remote = sh(remote),
+                agent_hash = sh(&agent_sha256),
+            ),
+        )?;
+        let installed_manifest = remote_read(&verify, LOCAL_MAIN_MANIFEST_REMOTE)
+            .ok_or("installed Dev manifest is missing after experimental agent reboot")?;
+        if parse_local_main_manifest_text(&installed_manifest)?["latch_rbf_sha256"]
+            != expected_rbf_sha256
+        {
+            return Err("experimental RBF identity changed during device-agent reboot".into());
+        }
+        verify_delivery_health(config).map_err(|error| format!("{error:?}"))?;
+        let diagnostics = agent_request_at(
+            config.agent()?,
+            "diagnostics",
+            json!({}),
+            Duration::from_secs(5),
+        )?;
+        let evidence = diagnostics
+            .response
+            .pointer("/result/fpga_video_diagnostics")
+            .ok_or("experimental device-agent returned no FPGA evidence")?;
+        if evidence
+            .get("diagnostic_architecture")
+            .and_then(Value::as_str)
+            != Some("scaler-scheduler-state-v1")
+            || !experimental_fpga_evidence_is_current(evidence)
+        {
+            return Err(format!(
+                "experimental device-agent did not expose coherent scaler scheduler evidence: {evidence}"
+            )
+            .into());
+        }
+        Ok(())
+    })();
+    if let Err(error) = install {
+        let rollback = (|| -> Result<()> {
+            let rollback = connect_with(&config.connection, 10)?;
+            exec_checked(
+                &rollback,
+                "experimental device-agent rollback",
+                &format!(
+                    "set -eu; test -f {remote}.delivery-rollback; cp -p {remote}.delivery-rollback {remote}; chmod 755 {remote}; printf 'rolled-back\\n' > {transaction}; sync",
+                    remote = sh(remote),
+                    transaction = sh(&transaction),
+                ),
+            )?;
+            drop(rollback);
+            one_shot_recovery_reboot_wait(config)?;
+            verify_delivery_health(config).map_err(|failure| format!("{failure:?}"))?;
+            let cleanup = connect_with(&config.connection, 10)?;
+            exec_checked(
+                &cleanup,
+                "experimental device-agent rollback cleanup",
+                &format!(
+                    "rm -f {remote}.delivery-rollback {remote}.upload {transaction}; sync",
+                    remote = sh(remote),
+                    transaction = sh(&transaction),
+                ),
+            )?;
+            Ok(())
+        })();
+        return match rollback {
+            Ok(()) => Err(format!(
+                "experimental device-agent install failed ({error}); rollback=complete"
+            )
+            .into()),
+            Err(rollback) => Err(format!(
+                "experimental device-agent install failed ({error}); rollback failed ({rollback})"
+            )
+            .into()),
+        };
+    }
+    let commit = connect_with(&config.connection, 10)?;
+    exec_checked(
+        &commit,
+        "experimental device-agent commit",
+        &format!(
+            "rm -f {remote}.delivery-rollback {remote}.upload {transaction}; sync",
+            remote = sh(remote),
+            transaction = sh(&transaction),
+        ),
+    )?;
     Ok(())
 }
 
