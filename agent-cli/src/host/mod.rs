@@ -29918,7 +29918,7 @@ fn capture_arcade_variant(
             }
         }
 
-        let settle = (|| -> Result<()> {
+        (|| -> Result<()> {
             let started = Instant::now();
             let timeout = Duration::from_secs(15);
             loop {
@@ -29936,8 +29936,7 @@ fn capture_arcade_variant(
                 }
                 thread::sleep(Duration::from_millis(20));
             }
-        })();
-        settle
+        })()
     })();
     drop(session);
 
