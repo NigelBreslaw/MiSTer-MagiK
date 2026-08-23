@@ -160,12 +160,14 @@ tables are retained locally as
 `build/raw-scaler-phase2-corrupt-native-luma-calibration.csv` and
 `build/raw-scaler-phase2-spatial-integrity-calibration.csv`.
 
-One bounded attended validation run passed on the installed diagnostic RBF:
+Two bounded attended validation runs passed on the installed diagnostic RBF,
+including one after the final threshold was selected:
 
 - evidence:
-  `build/raw-scaler-phase2-spatial-detector-validation-20260823/`;
+  `build/raw-scaler-phase2-spatial-detector-validation-20260823/` and
+  `build/raw-scaler-phase2-spatial-detector-final-20260823/`;
 - physical result: `visible`;
-- native strong-row discontinuity: 25 permille;
+- native strong-row discontinuity: 25 permille in both runs;
 - FPGA diagnostic: coherent `raw_scaler_active`;
 - latch drops/rejects: zero.
 
