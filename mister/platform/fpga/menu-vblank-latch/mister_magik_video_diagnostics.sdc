@@ -73,9 +73,9 @@ set_net_delay -max 10.0 \
 	-from $magik_scaler_diag_source_route \
 	-to $magik_scaler_diag_source_meta
 
-# Keep the drain crossing separate. An observer-only LCELL makes the monotonic
-# source an ordinary one-input data route without adding state or feeding any
-# production signal.
+# Keep the drain crossing separate because Quartus may route its production
+# fanout independently from the other six diagnostic source bits. The sampled
+# data bit is drain-inactive so reset maps to zero and remains on the D route.
 set magik_scaler_diag_drain [get_registers -nowarn \
 	{*ascal:ascal|avl_return_drain*}]
 if {[get_collection_size $magik_scaler_diag_drain] < 1} {

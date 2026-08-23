@@ -18,7 +18,9 @@ BEGIN
 		VARIABLE word_v : std_logic_vector(15 DOWNTO 0);
 	BEGIN
 		-- Every public bit is bound to the exact production packing function.
-		source_v:="1011010";
+		-- Source bit 3 is encoded as drain-inactive; the public word restores
+		-- the required drain-active meaning.
+		source_v:="1010010";
 		first_v:=scheduler_diagnostic_candidate('1','1','0',2,1,source_v,'0');
 		ASSERT first_v(0)='1' REPORT "running bit mismatch" SEVERITY failure;
 		ASSERT first_v(1)='1' REPORT "read activity bit mismatch" SEVERITY failure;
@@ -29,7 +31,7 @@ BEGIN
 		ASSERT first_v(8)=source_v(5) REPORT "pending bit mismatch" SEVERITY failure;
 		ASSERT first_v(9)=source_v(4) REPORT "acknowledgement mismatch" SEVERITY failure;
 		ASSERT first_v(10)='0' REPORT "destination seen mismatch" SEVERITY failure;
-		ASSERT first_v(11)=source_v(3) REPORT "return drain mismatch" SEVERITY failure;
+		ASSERT first_v(11)=NOT source_v(3) REPORT "return drain mismatch" SEVERITY failure;
 		ASSERT first_v(13 DOWNTO 12)=source_v(2 DOWNTO 1)
 			REPORT "return credits mismatch" SEVERITY failure;
 		ASSERT first_v(14)=source_v(0) REPORT "return phase mismatch" SEVERITY failure;

@@ -442,7 +442,6 @@ def main() -> None:
         required_completion_counts = {
             "PACKAGE mister_magik_scaler_completion_queue IS": 1,
             "PACKAGE BODY mister_magik_scaler_completion_queue IS": 1,
-            "ATTRIBUTE preserve : boolean; COMPONENT LCELL PORT (a_in : IN std_logic; a_out : OUT std_logic); END COMPONENT;": 1,
             "USE work.mister_magik_scaler_completion_queue.ALL;": 1,
             "FUNCTION completion_queue_next(": 2,
             "FUNCTION completion_queue_overflow(": 2,
@@ -460,7 +459,7 @@ def main() -> None:
             "SIGNAL avl_return_drain : std_logic:='1';": 1,
             "SIGNAL avl_return_credits : natural RANGE 0 TO 2:=0;": 1,
             "SIGNAL avl_return_phase : natural RANGE 0 TO BLEN-1:=0;": 1,
-            "SIGNAL avl_diag_return_phase_nonzero,avl_diag_return_drain : std_logic:='0';": 1,
+            "SIGNAL avl_diag_return_phase_nonzero : std_logic:='0';": 1,
             "SIGNAL avl_read_accepted : std_logic:='0';": 1,
             "ATTRIBUTE preserve OF avl_readdataack : SIGNAL IS true;": 1,
             "ATTRIBUTE preserve OF magik_diag_word : SIGNAL IS true;": 1,
@@ -484,10 +483,10 @@ def main() -> None:
             "ELSIF issued_v THEN": 1,
             "avl_read_accepted<='1';": 1,
             "avl_return_drain<='1';": 1,
-            "MagiKDrainDataRoute: LCELL PORT MAP(avl_return_drain,avl_diag_return_drain);": 1,
             "magik_diag_source_meta<=(OTHERS =>'0');": 1,
             "magik_diag_source_sync<=(OTHERS =>'0');": 1,
-            "avl_completion_ack_sync & avl_diag_return_drain &": 1,
+            "avl_completion_ack_sync & NOT avl_return_drain &": 1,
+            "candidate_v(11):=NOT source_state(3);": 1,
             "IF return_drain_ready(": 1,
             "avl_return_credits,avl_return_phase) THEN": 1,
             "IF avl_return_drain='0' THEN": 1,
@@ -516,8 +515,6 @@ def main() -> None:
                     f"{fragment} expected {expected_count}, "
                     f"found {patched_ascal.count(fragment)}"
                 )
-        if patched_ascal.count("avl_diag_return_drain") != 3:
-            fail("scaler drain LCELL alias is not isolated to declaration, input, and observer use")
         for forbidden_repair in (
             "avl_completion_bin",
             "completion_gray",
