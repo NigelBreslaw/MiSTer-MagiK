@@ -29,7 +29,7 @@ BEGIN
 		ASSERT first_v(8)=source_v(5) REPORT "pending bit mismatch" SEVERITY failure;
 		ASSERT first_v(9)=source_v(4) REPORT "acknowledgement mismatch" SEVERITY failure;
 		ASSERT first_v(10)='0' REPORT "destination seen mismatch" SEVERITY failure;
-		ASSERT first_v(11)=NOT source_v(3) REPORT "return drain mismatch" SEVERITY failure;
+		ASSERT first_v(11)=source_v(3) REPORT "return drain mismatch" SEVERITY failure;
 		ASSERT first_v(13 DOWNTO 12)=source_v(2 DOWNTO 1)
 			REPORT "return credits mismatch" SEVERITY failure;
 		ASSERT first_v(14)=source_v(0) REPORT "return phase mismatch" SEVERITY failure;
