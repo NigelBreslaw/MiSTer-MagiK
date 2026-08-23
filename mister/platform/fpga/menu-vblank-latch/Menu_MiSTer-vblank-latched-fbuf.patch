@@ -289,11 +289,13 @@ index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..b1c2581d8665d3db4f4042ed668ee711
 +	ATTRIBUTE altera_attribute OF o_readdataack_sync2 : SIGNAL IS
 +		"-name SYNCHRONIZER_IDENTIFICATION FORCED_IF_ASYNCHRONOUS; -name PRESERVE_REGISTER ON";
 +	SIGNAL magik_diag_source_meta,magik_diag_source_sync : std_logic_vector(6 DOWNTO 0);
++	SIGNAL avl_diag_return_drain : std_logic:='1';
 +	SIGNAL magik_diag_word : std_logic_vector(15 DOWNTO 0):=(OTHERS =>'0');
 +	SIGNAL magik_diag_generation_i : std_logic:='0';
 +	SIGNAL magik_diag_read_seen,magik_diag_completion_seen : std_logic:='0';
 +	SIGNAL magik_diag_have_previous : std_logic:='0';
 +	ATTRIBUTE preserve OF magik_diag_word : SIGNAL IS true;
++	ATTRIBUTE preserve OF avl_diag_return_drain : SIGNAL IS true;
 +	ATTRIBUTE altera_attribute OF magik_diag_source_meta : SIGNAL IS
 +		"-name SYNCHRONIZER_IDENTIFICATION FORCED";
 +	ATTRIBUTE altera_attribute OF magik_diag_source_sync : SIGNAL IS
@@ -325,7 +327,7 @@ index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..b1c2581d8665d3db4f4042ed668ee711
 +		ELSIF rising_edge(o_clk) THEN
 +			magik_diag_source_meta<=
 +				avl_readdataack & avl_completion_pending &
-+				avl_completion_ack_sync & avl_return_drain &
++				avl_completion_ack_sync & avl_diag_return_drain &
 +				std_logic_vector(to_unsigned(avl_return_credits,2)) &
 +				avl_diag_return_phase_nonzero; -- <ASYNC>
 +			magik_diag_source_sync<=magik_diag_source_meta;
@@ -414,10 +416,12 @@ index a735e6b40db8b1e7b5ef2c7836a11d521a96eb7c..b1c2581d8665d3db4f4042ed668ee711
 +			avl_completion_ack_meta<='0';
 +			avl_completion_ack_sync<='0';
 +			avl_return_drain<='1';
++			avl_diag_return_drain<='1';
  			avl_readack<='0';
  
  		ELSIF rising_edge(avl_clk) THEN
 +			completion_v:='0';
++			avl_diag_return_drain<=avl_return_drain;
 +			avl_completion_ack_meta<=o_readdataack_sync2; -- <ASYNC>
 +			avl_completion_ack_sync<=avl_completion_ack_meta;
  			----------------------------------
