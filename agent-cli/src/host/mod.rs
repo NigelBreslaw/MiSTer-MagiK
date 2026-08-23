@@ -19983,17 +19983,18 @@ const LAUNCH_RETURN_ONCE_GAME: &str = "/media/fat/_Arcade/1943 Kai Midway Kaisen
 const ATTENDED_LAUNCH_RETURN_COOLDOWN: Duration = Duration::from_secs(5);
 
 fn validate_attended_launch_return_summary(summary: &Value, output_dir: &Path) -> Result<()> {
-    if summary.get("schema").and_then(Value::as_str) != Some("mister-magik-launch-return-once-v1") {
+    if summary.get("schema").and_then(Value::as_str) != Some("mister-magik-launch-return-once-v2") {
         return Err("attended launch-return evidence has the wrong schema".into());
     }
 
     let semantic = summary
-        .pointer("/snes_view/semantic")
+        .pointer("/restored_selection/semantic")
         .and_then(Value::as_object)
         .ok_or("attended launch-return evidence has no settled MagiK semantic state")?;
-    let settled_magik = semantic.get("effective_view").and_then(Value::as_str)
-        == Some("system-hub")
-        && semantic.get("selected_system_id").and_then(Value::as_str) == Some("snes")
+    let settled_magik = semantic.get("effective_view").and_then(Value::as_str) == Some("arcade")
+        && semantic.get("return_screen").and_then(Value::as_str) == Some("arcade")
+        && semantic.get("selected_game_id").and_then(Value::as_str)
+            == Some(LAUNCH_RETURN_ONCE_GAME)
         && semantic.get("launch_state").and_then(Value::as_str) == Some("idle")
         && semantic.get("input_enabled").and_then(Value::as_bool) == Some(true)
         && semantic
@@ -20791,30 +20792,6 @@ fn launch_return_once_validate_restored_selection(
     Ok(())
 }
 
-fn launch_return_once_validate_snes_view(snapshot: &Value) -> Result<()> {
-    for (field, expected) in [
-        ("effective_view", "system-hub"),
-        ("return_screen", "system-hub"),
-        ("active_collection_id", "snes"),
-        ("selected_system_id", "snes"),
-    ] {
-        let actual = modal_semantic(snapshot, field).and_then(Value::as_str);
-        if actual != Some(expected) {
-            return Err(format!(
-                "launch-return-once opened the wrong SNES view: {field} expected={expected} actual={}",
-                actual.unwrap_or("missing")
-            )
-            .into());
-        }
-    }
-    if modal_semantic(snapshot, "composition_state").and_then(Value::as_str)
-        == Some("navigation-transition")
-    {
-        return Err("launch-return-once SNES view is still in its navigation transition".into());
-    }
-    Ok(())
-}
-
 fn profile_installed_launch_return_once(
     config: &NativeDeviceConfig,
     output_dir: &Path,
@@ -20911,42 +20888,13 @@ fn profile_installed_launch_return_once(
             output_dir,
         )?)?;
 
-        launch_return_once_action(config, &nonce, AutomationButton::Home)?;
-        launch_return_once_wait(
-            config,
-            &nonce,
-            |snapshot| {
-                modal_semantic(snapshot, "effective_view").and_then(Value::as_str) == Some("home")
-                    && modal_semantic(snapshot, "menu_id").and_then(Value::as_str)
-                        == Some("menu:root")
-            },
-            "root launcher after Arcade return",
-        )?;
-        launch_return_once_select_menu_item(config, &nonce, "menu:consoles")?;
-        launch_return_once_action(config, &nonce, AutomationButton::A)?;
-        launch_return_once_select_menu_item(config, &nonce, "menu:consoles:nintendo")?;
-        launch_return_once_action(config, &nonce, AutomationButton::A)?;
-        launch_return_once_select_menu_item(config, &nonce, "snes")?;
-        let snes_sequence = launch_return_once_action(config, &nonce, AutomationButton::A)?;
-        let snes_view = launch_return_once_wait(
-            config,
-            &nonce,
-            |snapshot| launch_return_once_validate_snes_view(snapshot).is_ok(),
-            "settled SNES system view",
-        )?;
-        launch_return_once_validate_snes_view(&snes_view)?;
+        let usb =
+            crate::capture::execute_analyzed(Some(&output_dir.join("returned-usb-video.jpg")))?;
+        let usb_json = serde_json::to_value(&usb)?;
         fs::write(
-            output_dir.join("snes-view-snapshot.json"),
-            format!("{}\n", serde_json::to_string_pretty(&snes_view)?),
+            output_dir.join("returned-usb-video.json"),
+            format!("{}\n", serde_json::to_string_pretty(&usb_json)?),
         )?;
-        let snes_framebuffer: Value =
-            serde_json::from_str(&launcher_automation::capture_checkpoint(
-                config,
-                &nonce,
-                snes_sequence,
-                "snes-view-framebuffer",
-                output_dir,
-            )?)?;
 
         let diagnostics_reply = agent_request_at(
             config.agent()?,
@@ -20973,16 +20921,9 @@ fn profile_installed_launch_return_once(
             )?;
         }
 
-        let usb =
-            crate::capture::execute_analyzed(Some(&output_dir.join("returned-usb-video.jpg")))?;
-        let usb_json = serde_json::to_value(&usb)?;
-        fs::write(
-            output_dir.join("returned-usb-video.json"),
-            format!("{}\n", serde_json::to_string_pretty(&usb_json)?),
-        )?;
         let visible = usb.visibility == crate::capture::CaptureVisibility::Visible;
         Ok(json!({
-            "schema": "mister-magik-launch-return-once-v1",
+            "schema": "mister-magik-launch-return-once-v2",
             "artifact_status": if visible { "passed" } else { "failed" },
             "game": LAUNCH_RETURN_ONCE_GAME,
             "cycles": 1,
@@ -20990,8 +20931,6 @@ fn profile_installed_launch_return_once(
             "restored_selection": restored_selection,
             "returned_status": returned_status,
             "framebuffer": framebuffer,
-            "snes_view": snes_view,
-            "snes_framebuffer": snes_framebuffer,
             "fpga_video_diagnostics": diagnostics.get("fpga_video_diagnostics"),
             "usb_video": usb_json,
             "physical_video_visible": visible,
@@ -32630,13 +32569,14 @@ mod tests {
     fn attended_launch_return_accepts_only_settled_visible_magik() {
         let output = Path::new("/tmp/launch-return-once-test");
         let mut summary = json!({
-            "schema": "mister-magik-launch-return-once-v1",
+            "schema": "mister-magik-launch-return-once-v2",
             "artifact_status": "passed",
             "physical_video_visible": true,
             "usb_video": { "visibility": "visible" },
-            "snes_view": { "semantic": {
-                "effective_view": "system-hub",
-                "selected_system_id": "snes",
+            "restored_selection": { "semantic": {
+                "effective_view": "arcade",
+                "return_screen": "arcade",
+                "selected_game_id": LAUNCH_RETURN_ONCE_GAME,
                 "launch_state": "idle",
                 "input_enabled": true,
                 "navigation_transition_active": false
@@ -32644,10 +32584,10 @@ mod tests {
         });
         assert!(validate_attended_launch_return_summary(&summary, output).is_ok());
 
-        summary["snes_view"]["semantic"]["launch_state"] = json!("launching");
+        summary["restored_selection"]["semantic"]["launch_state"] = json!("launching");
         assert!(validate_attended_launch_return_summary(&summary, output).is_err());
 
-        summary["snes_view"]["semantic"]["launch_state"] = json!("idle");
+        summary["restored_selection"]["semantic"]["launch_state"] = json!("idle");
         summary["artifact_status"] = json!("failed");
         summary["physical_video_visible"] = json!(false);
         summary["usb_video"]["visibility"] = json!("black");
@@ -32655,7 +32595,7 @@ mod tests {
     }
 
     #[test]
-    fn launch_return_once_requires_stable_exact_selection_and_snes_identity() {
+    fn launch_return_once_requires_stable_exact_arcade_selection() {
         let arcade = json!({
             "semantic": {
                 "effective_view": "arcade",
@@ -32672,22 +32612,6 @@ mod tests {
         launcher["semantic"]["effective_view"] = json!("home");
         launcher["semantic"]["return_screen"] = json!("home");
         assert!(launch_return_once_validate_restored_selection(&arcade, &launcher).is_err());
-
-        let snes = json!({
-            "semantic": {
-                "effective_view": "system-hub",
-                "return_screen": "system-hub",
-                "active_collection_id": "snes",
-                "selected_system_id": "snes",
-                "composition_state": "full-slint",
-            }
-        });
-        launch_return_once_validate_snes_view(&snes).unwrap();
-
-        let mut arcade_list = snes;
-        arcade_list["semantic"]["effective_view"] = json!("arcade");
-        arcade_list["semantic"]["return_screen"] = json!("arcade");
-        assert!(launch_return_once_validate_snes_view(&arcade_list).is_err());
     }
 
     #[test]

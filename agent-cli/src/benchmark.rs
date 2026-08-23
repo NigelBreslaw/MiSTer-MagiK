@@ -497,7 +497,7 @@ fn require_clean_installed_commit(
             reporter,
             BenchmarkProfile::LaunchReturnOnce,
             "launch-return-once",
-            "mister-magik-launch-return-once-v1",
+            "mister-magik-launch-return-once-v2",
         ),
         BenchmarkScenario::LaunchReturnFallback => {
             execute_launch_return(&mut device, manifest, output_dir, reporter, true)

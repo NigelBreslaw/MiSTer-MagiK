@@ -689,14 +689,12 @@ Home, enters Arcade through typed semantic automation, selects
 `1943 Kai Midway Kaisen (Japan).mra`, launches it once, and returns once. It
 never queues a second launch. The route requires the exact Arcade collection,
 game, and list index to remain restored after authoritative catalog
-reconciliation. In the same automation lease it then returns to root Home,
-opens Consoles, scrolls through Nintendo to SNES, and requires the settled SNES
-system-hub identity rather than an Arcade list or another launcher view. It
-records authoritative framebuffers for both restored Arcade and SNES, passive
-FPGA diagnostics, Main and launcher logs, and an analyzed 1920x1080 USB Video
-frame. A video-level black frame is retained as evidence and fails the run;
-cleanup releases only the volatile automation lease so the final SNES state is
-not repaired or restarted.
+reconciliation. It captures the restored Arcade framebuffer and physical USB
+Video frame immediately at that boundary, then records passive FPGA
+diagnostics and Main/launcher logs without navigating elsewhere. A video-level
+black or classified corrupt frame is retained as evidence and fails the run;
+cleanup releases only the volatile automation lease and does not repair or
+restart the launcher.
 
 `launch-return-attribution` repeats the same fixed two-cycle route in four
 independent launcher processes: unprofiled control, PMU, existing pprof, and
