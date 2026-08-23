@@ -78,8 +78,11 @@ set_net_delay -max 10.0 \
 # the physical source Q pin for this case; the logical register has no net-delay
 # path even though report_metastability recognizes the exact chain.
 set magik_scaler_diag_drain [get_pins -compatibility_mode \
-	{*ascal:ascal|avl_return_drain|q}]
-if {[get_collection_size $magik_scaler_diag_drain] != 1} {
+	{*ascal:ascal|avl_return_drain*|q}]
+set magik_scaler_diag_drain_count \
+	[get_collection_size $magik_scaler_diag_drain]
+if {$magik_scaler_diag_drain_count < 1 ||
+	$magik_scaler_diag_drain_count > 2} {
 	post_message -type error "MagiK diagnostic drain source Q pin mismatch"
 	error "MagiK diagnostic drain source Q pin mismatch"
 }
