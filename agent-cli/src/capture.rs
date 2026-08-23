@@ -621,6 +621,7 @@ mod tests {
         for y in 0..64 {
             corrupted[y * 64..(y + 1) * 64].fill(if y % 2 == 0 { 16 } else { 64 });
         }
+        corrupted[32 * 64 + 32] = 64;
         let analysis = analyze_luma(&corrupted, 64, 64, 64).unwrap();
         assert_eq!(analysis.visibility, CaptureVisibility::Corrupted);
         assert_eq!(analysis.strong_row_discontinuity_permille, 1000);
