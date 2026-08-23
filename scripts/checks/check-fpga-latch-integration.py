@@ -442,7 +442,7 @@ def main() -> None:
         required_completion_counts = {
             "PACKAGE mister_magik_scaler_completion_queue IS": 1,
             "PACKAGE BODY mister_magik_scaler_completion_queue IS": 1,
-            "ATTRIBUTE preserve : boolean; COMPONENT LCELL PORT (in1 : IN std_logic; out1 : OUT std_logic); END COMPONENT;": 1,
+            "ATTRIBUTE preserve : boolean; COMPONENT LCELL PORT (a_in : IN std_logic; a_out : OUT std_logic); END COMPONENT;": 1,
             "USE work.mister_magik_scaler_completion_queue.ALL;": 1,
             "FUNCTION completion_queue_next(": 2,
             "FUNCTION completion_queue_overflow(": 2,
