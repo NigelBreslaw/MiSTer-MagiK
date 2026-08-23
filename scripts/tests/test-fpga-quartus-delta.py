@@ -114,7 +114,7 @@ METASTABILITY_CHAINS = [
     ("ascal:ascal|avl_return_credits[1]", "ascal:ascal|magik_diag_source_meta[2]", ("ascal:ascal|magik_diag_source_meta[2]", "ascal:ascal|magik_diag_source_sync[2]")),
     ("ascal:ascal|avl_return_credits[0]", "ascal:ascal|magik_diag_source_meta[1]", ("ascal:ascal|magik_diag_source_meta[1]", "ascal:ascal|magik_diag_source_sync[1]")),
     ("ascal:ascal|avl_diag_return_phase_nonzero", "ascal:ascal|magik_diag_source_meta[0]", ("ascal:ascal|magik_diag_source_meta[0]", "ascal:ascal|magik_diag_source_sync[0]")),
-    ("ascal:ascal|magik_diag_generation_i", "magik_scaler_scheduler_diagnostic:magik_scaler_scheduler_diagnostic|generation_meta", ("magik_scaler_scheduler_diagnostic:magik_scaler_scheduler_diagnostic|generation_meta", "magik_scaler_scheduler_diagnostic:magik_scaler_scheduler_diagnostic|generation_sync")),
+    ("ascal:ascal|magik_diag_generation_i", "mister_magik_scaler_scheduler_diagnostic:magik_scaler_scheduler_diagnostic|generation_meta", ("mister_magik_scaler_scheduler_diagnostic:magik_scaler_scheduler_diagnostic|generation_meta", "mister_magik_scaler_scheduler_diagnostic:magik_scaler_scheduler_diagnostic|generation_sync")),
 ]
 
 
@@ -156,7 +156,7 @@ VALID_DIAGNOSTIC_REPORTS = {
         )
         + net_delay_detail(
             "ascal:ascal|magik_diag_generation_i",
-            "magik_scaler_scheduler_diagnostic:magik_scaler_scheduler_diagnostic|generation_meta",
+            "mister_magik_scaler_scheduler_diagnostic:magik_scaler_scheduler_diagnostic|generation_meta",
         )
         + "".join(
             net_delay_detail(

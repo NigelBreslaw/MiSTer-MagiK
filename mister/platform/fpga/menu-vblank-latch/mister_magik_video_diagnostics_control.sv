@@ -33,7 +33,7 @@ module mister_magik_scaler_scheduler_diagnostic (
 	reg command_selected = 1'b0;
 	reg [1:0] word_count = 2'd0;
 	(* preserve *) reg [15:0] snapshot_state = 16'd0;
-	reg [15:0] tx_crc = MAGIK_SCALER_SCHEDULER_STATE_HEADER_CRC;
+	reg [15:0] tx_crc;
 	reg [15:0] response_word;
 
 	wire command_start = io_uio && io_strobe && !has_command;
@@ -67,6 +67,12 @@ module mister_magik_scaler_scheduler_diagnostic (
 				crc_update_byte(crc_update_byte(crc_in, word_in[15:8]), word_in[7:0]);
 		end
 	endfunction
+
+	// Magic, word count, and schema are immutable. Folding the schema update
+	// into the initial value leaves only the state-word CRC in hardware.
+	localparam [15:0] MAGIK_SCALER_SCHEDULER_STATE_SCHEMA_CRC =
+		crc_update_word(MAGIK_SCALER_SCHEDULER_STATE_HEADER_CRC,
+			MAGIK_SCALER_SCHEDULER_STATE_SCHEMA);
 
 	always @(*) begin
 		case(word_count)
@@ -108,12 +114,12 @@ module mister_magik_scaler_scheduler_diagnostic (
 			command_selected <= selected_start;
 			word_count <= 2'd0;
 			if(selected_start)
-				tx_crc <= MAGIK_SCALER_SCHEDULER_STATE_HEADER_CRC;
+				tx_crc <= MAGIK_SCALER_SCHEDULER_STATE_SCHEMA_CRC;
 		end
 		else if(command_data && selected_command &&
 			(word_count < MAGIK_SCALER_SCHEDULER_STATE_WORDS)) begin
 			word_count <= word_count + 1'd1;
-			if(word_count < MAGIK_SCALER_SCHEDULER_STATE_CRC_WORD)
+			if(word_count == MAGIK_SCALER_SCHEDULER_STATE_STATE_WORD)
 				tx_crc <= crc_update_word(tx_crc, response_word);
 		end
 

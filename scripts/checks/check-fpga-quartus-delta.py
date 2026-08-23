@@ -158,7 +158,7 @@ EXPECTED_METASTABILITY_CHAINS = {
     },
     "diagnostic_generation": {
         "source": "ascal:ascal|magik_diag_generation_i",
-        "synchronization_node": "magik_scaler_scheduler_diagnostic:magik_scaler_scheduler_diagnostic|generation_meta",
+        "synchronization_node": "mister_magik_scaler_scheduler_diagnostic:magik_scaler_scheduler_diagnostic|generation_meta",
         "registers": (
             "magik_scaler_scheduler_diagnostic:magik_scaler_scheduler_diagnostic|generation_meta",
             "magik_scaler_scheduler_diagnostic:magik_scaler_scheduler_diagnostic|generation_sync",

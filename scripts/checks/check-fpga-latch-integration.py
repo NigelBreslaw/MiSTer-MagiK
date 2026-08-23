@@ -340,7 +340,7 @@ def main() -> None:
         "MagiK diagnostics CDC analysis applied: scaler_completion_request_ack",
         "*ascal:ascal|magik_diag_source_meta[*]",
         "*ascal:ascal|o_readdataack_sync2*",
-        "{*ascal:ascal|avl_return_drain} 1",
+        "{*ascal:ascal|avl_return_drain*}",
         "-from $magik_scaler_diag_source_route",
         "-from $magik_scaler_diag_drain",
         "-to $magik_scaler_diag_drain_meta",
