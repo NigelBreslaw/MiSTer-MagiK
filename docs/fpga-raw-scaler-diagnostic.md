@@ -110,3 +110,15 @@ active experimental diagnostic candidate. Correct only the launcher/catalog
 harness, then execute valid bounded launch/return transitions and wait for an
 operator-confirmed failure. Exact hashes and the correction are in
 [`history/2026-08-23-raw-scaler-boundary-black-result.md`](../history/2026-08-23-raw-scaler-boundary-black-result.md).
+
+The corrected harness later completed 55 uninterrupted valid returns. After a
+subsequent attended reboot, the operator confirmed the rare continuously
+moving spatial-corruption state on fresh MagiK Home. Native video, all 732
+captured frames, a temporal heatmap, a correct authoritative framebuffer, and
+two coherent `raw_scaler_active` snapshots were preserved before recovery.
+
+This valid incident shows that substantial raw activity can coexist with
+physical line/frame corruption. It does not invalidate the observer, but it
+completes its narrow attribution value: activity counts alone cannot establish
+sync ordering or phase integrity. The exact unrecovered-state evidence is in
+[`history/2026-08-23-moving-band-corruption-result.md`](../history/2026-08-23-moving-band-corruption-result.md).

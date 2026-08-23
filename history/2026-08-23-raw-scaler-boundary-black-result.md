@@ -96,3 +96,23 @@ the authoritative framebuffer, and native USB evidence before recovery.
 
 Do not design another FPGA observer from this invalid attempt. The diagnostic
 RBF remains experimental and is not eligible for CI or release.
+
+## Subsequent operator-confirmed moving-band incident
+
+After the launcher harness was corrected, 55 uninterrupted valid returns
+passed without reproducing black. An attended reboot then completed despite
+the host command being interrupted, and the fresh MagiK Home presentation
+entered the rare continuously moving spatial-corruption state.
+
+The physical operator confirmed the failure. A 30-second native movie, every
+one of its 732 captured frames, a temporal row-change heatmap, the correct
+authoritative framebuffer, and two coherent `raw_scaler_active` snapshots were
+preserved before recovery. Unlike the invalid attempt above, this is a valid
+physical incident tied to fresh `LauncherActive` MagiK ownership. It proves
+that Design 5's activity classification is too coarse to detect line/frame
+phase integrity, but it does not yet locate the fault or establish that the
+black-screen mechanism is identical.
+
+The exact hashes and unrecovered-state record are in
+[`2026-08-23-moving-band-corruption-result.md`](2026-08-23-moving-band-corruption-result.md)
+and its schema-v1 integrity manifest.

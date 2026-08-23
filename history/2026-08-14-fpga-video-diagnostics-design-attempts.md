@@ -925,6 +925,27 @@ operator-confirmed failure is captured. Do not retire or replace the observer
 based on this invalid attempt. The exact correction is recorded in
 [`2026-08-23-raw-scaler-boundary-black-result.md`](2026-08-23-raw-scaler-boundary-black-result.md).
 
+### Operator-confirmed moving-band result
+
+The corrected harness completed 55 uninterrupted valid returns without a
+black result. A subsequent attended reboot completed and immediately exposed
+the rare moving-band corruption on fresh MagiK Home. The physical 1920x1080
+output contained continuously descending spatial discontinuities while the
+authoritative latched RGB565 framebuffer remained complete and correct.
+
+Two independent read-only snapshots retained coherent `raw_scaler_active`,
+stable `LauncherActive` ownership, latch presentation status `ok`, and zero
+drops. A 30-second native movie and all 732 delivered frames prove that the
+band moves from top to bottom and wraps repeatedly. Design 5 therefore answers
+only that substantial nonzero raw activity continues; its saturating activity
+counters cannot prove line count, sync ordering, active width, or phase.
+
+This is valid attribution evidence, but not a final root cause and not proof
+that the moving-band and persistent-black mechanisms are identical. The
+device remained unrecovered while the complete 793-artifact integrity manifest
+was created. See
+[`2026-08-23-moving-band-corruption-result.md`](2026-08-23-moving-band-corruption-result.md).
+
 ## Facts established despite the failed implementations
 
 The work was not diagnostically empty. It established the following facts:
