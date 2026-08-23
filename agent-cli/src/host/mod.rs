@@ -548,11 +548,13 @@ impl NativeDevice {
                 DeviceCommand::Media { command } => match command {
                     MediaCommand::Check(args) => {
                         let session = connect(10)?;
-                        media::media_check(&session, &device_media_args(args))
+                        let asset_dir = active_media_asset_dir(&session)?;
+                        media::media_check(&session, &device_media_args(args, &asset_dir))
                     }
                     MediaCommand::Download(args) => {
                         let session = connect(10)?;
-                        media::media_download(&session, &device_media_args(&args.media))
+                        let asset_dir = active_media_asset_dir(&session)?;
+                        media::media_download(&session, &device_media_args(&args.media, &asset_dir))
                     }
                 },
                 DeviceCommand::Fpga { command } => match command {
@@ -3918,8 +3920,8 @@ fn device_strings<const N: usize>(values: [&str; N]) -> Vec<String> {
     values.into_iter().map(str::to_owned).collect()
 }
 
-fn device_media_args(args: &crate::commands::device::MediaArgs) -> Vec<String> {
-    let mut values = Vec::new();
+fn device_media_args(args: &crate::commands::device::MediaArgs, asset_dir: &str) -> Vec<String> {
+    let mut values = vec!["--asset-dir".into(), asset_dir.into()];
     if let Some(system) = &args.system {
         values.extend(["--system".into(), system.clone()]);
     }
@@ -3927,6 +3929,22 @@ fn device_media_args(args: &crate::commands::device::MediaArgs) -> Vec<String> {
         values.extend(["--manifest-url".into(), url.clone()]);
     }
     values
+}
+
+fn active_media_asset_dir(session: &Session) -> Result<String> {
+    let active = parse_active_runtime_status(remote_read(session, MAIN_STATUS_REMOTE).as_deref());
+    let layout = if active.is_development_launcher() {
+        Layout::Development
+    } else if active.is_public_launcher() {
+        Layout::Public
+    } else {
+        return Err(format!(
+            "media operation requires an active coherent launcher, found {}",
+            active.description()
+        )
+        .into());
+    };
+    installed_layout::app_path(layout, "assets")
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

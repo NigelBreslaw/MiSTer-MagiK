@@ -36,8 +36,8 @@ fn remote_asset_dir() -> String {
     env::var("MISTER_MAGIK_ASSET_DIR").unwrap_or_else(|_| DEFAULT_REMOTE_ASSET_DIR.to_string())
 }
 
-fn remote_state_path() -> String {
-    format!("{}/.screenshot-media-state.json", remote_asset_dir())
+fn remote_state_path(asset_dir: &str) -> String {
+    format!("{asset_dir}/.screenshot-media-state.json")
 }
 
 fn layout_local_path(path: &str) -> String {
@@ -89,6 +89,7 @@ struct MediaIndex {
 struct MediaArgs {
     manifest_url: String,
     system: String,
+    asset_dir: String,
 }
 
 #[derive(Clone, Debug)]
@@ -113,7 +114,8 @@ struct RemoteBenchRow {
 
 pub(crate) fn media_check(sess: &Session, args: &[String]) -> Result<()> {
     let parsed = parse_media_args(args)?;
-    let manifest = load_manifest(&parsed.manifest_url)?;
+    let mut manifest = load_manifest(&parsed.manifest_url)?;
+    relayout_manifest(&mut manifest, &parsed.asset_dir);
     print_manifest_summary(&manifest);
     for pack in selected_packs(&manifest, &parsed.system)? {
         let status = remote_pack_status(sess, pack)?;
@@ -132,7 +134,8 @@ pub(crate) fn media_check(sess: &Session, args: &[String]) -> Result<()> {
 
 pub(crate) fn media_download(sess: &Session, args: &[String]) -> Result<()> {
     let parsed = parse_media_args(args)?;
-    let manifest = load_manifest(&parsed.manifest_url)?;
+    let mut manifest = load_manifest(&parsed.manifest_url)?;
+    relayout_manifest(&mut manifest, &parsed.asset_dir);
     let packs = selected_packs(&manifest, &parsed.system)?;
     for pack in packs {
         let status = remote_pack_status(sess, pack)?;
@@ -181,6 +184,7 @@ pub(crate) fn media_download(sess: &Session, args: &[String]) -> Result<()> {
             "identity",
             pack_row.as_ref(),
             index_row.as_ref(),
+            &parsed.asset_dir,
         )?;
     }
     Ok(())
@@ -215,6 +219,7 @@ fn parse_media_args(args: &[String]) -> Result<MediaArgs> {
         manifest_url: env::var("MISTER_MEDIA_MANIFEST_URL")
             .unwrap_or_else(|_| DEFAULT_MANIFEST_URL.to_string()),
         system: "all".to_string(),
+        asset_dir: remote_asset_dir(),
     };
     let mut idx = 0;
     while idx < args.len() {
@@ -227,6 +232,10 @@ fn parse_media_args(args: &[String]) -> Result<MediaArgs> {
                 idx += 1;
                 parsed.system = args.get(idx).ok_or("--system needs id|all")?.clone();
             }
+            "--asset-dir" => {
+                idx += 1;
+                parsed.asset_dir = args.get(idx).ok_or("--asset-dir needs path")?.clone();
+            }
             "-h" | "--help" => {
                 media_usage();
                 return Err("help requested".into());
@@ -236,6 +245,17 @@ fn parse_media_args(args: &[String]) -> Result<MediaArgs> {
         idx += 1;
     }
     Ok(parsed)
+}
+
+fn relayout_manifest(manifest: &mut MediaManifest, asset_dir: &str) {
+    for pack in &mut manifest.packs {
+        if let Some(suffix) = pack
+            .local_path
+            .strip_prefix(DEFAULT_REMOTE_ASSET_DIR.as_str())
+        {
+            pack.local_path = format!("{asset_dir}{suffix}");
+        }
+    }
 }
 
 pub(crate) fn media_usage() {
@@ -656,10 +676,11 @@ fn update_remote_state_after_download(
     variant: &str,
     row: Option<&RemoteBenchRow>,
     index_row: Option<&RemoteBenchRow>,
+    asset_dir: &str,
 ) -> Result<()> {
     let cmd = format!(
         "cat {} 2>/dev/null || true",
-        shell_quote(&remote_state_path())
+        shell_quote(&remote_state_path(asset_dir))
     );
     let current = exec_stdout(sess, &cmd)?;
     let mut root = serde_json::from_str::<Value>(&current)
@@ -717,9 +738,9 @@ fn update_remote_state_after_download(
     sftp_write(sess, &tmp, &bytes)?;
     let publish = format!(
         "mkdir -p {dir}; cp {tmp} {state}.tmp; sync {state}.tmp 2>/dev/null || sync; mv {state}.tmp {state}; sync {dir} 2>/dev/null || sync; rm -f {tmp}",
-        dir = shell_quote(&remote_asset_dir()),
+        dir = shell_quote(asset_dir),
         tmp = shell_quote(&tmp),
-        state = shell_quote(&remote_state_path()),
+        state = shell_quote(&remote_state_path(asset_dir)),
     );
     let out = exec(sess, &publish)?;
     if out.rc != 0 {
@@ -1309,6 +1330,43 @@ mod tests {
         assert_eq!(
             manifest.packs[0].identity.decoded_sha256,
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        );
+    }
+
+    #[test]
+    fn explicit_asset_directory_relayouts_only_installed_pack_paths() {
+        let value = json!({
+            "schema_version": 1,
+            "base_url": "https://media.example.test",
+            "packs": [
+                {
+                    "system": "arcade",
+                    "local_path": "/media/fat/mister-magik/assets/arcade-screenshots.mmlz4b",
+                    "remote_path": "/packs/arcade.mmlz4b",
+                    "bytes": 1,
+                    "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                },
+                {
+                    "system": "nes",
+                    "local_path": "/tmp/operator-owned/nes.mmlz4b",
+                    "remote_path": "/packs/nes.mmlz4b",
+                    "bytes": 1,
+                    "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                }
+            ]
+        });
+        let mut manifest =
+            parse_manifest(&value, "https://media.example.test/manifest.json").unwrap();
+
+        relayout_manifest(&mut manifest, "/media/fat/mister-magik-dev/assets");
+
+        assert_eq!(
+            manifest.packs[0].local_path,
+            "/media/fat/mister-magik-dev/assets/arcade-screenshots.mmlz4b"
+        );
+        assert_eq!(
+            manifest.packs[1].local_path,
+            "/tmp/operator-owned/nes.mmlz4b"
         );
     }
 
