@@ -374,7 +374,8 @@ impl NativeDevice {
                         | LauncherCommand::ReturnToLauncher(_),
                 }
                 | DeviceCommand::Fpga {
-                    command: DeviceFpgaCommand::InstallExperimental(_),
+                    command: DeviceFpgaCommand::InstallExperimental(_)
+                        | DeviceFpgaCommand::InstallExperimentalAgent(_),
                 }
         );
         let mutation = command.is_mutation();
