@@ -1,31 +1,25 @@
-# Reproduced physical signal loss after Arcade return
+# USB capture unavailable while Morph 4K was powered off
 
-## Summary
+## Correction
 
-On 2026-08-23 the fixed `launch-return-once` benchmark completed one real
-Arcade launch and return on the unchanged `platform-v0.29` FPGA platform. The
-internal RGB565 framebuffer was correct and the latch transport remained
-coherent, but the fixed `USB Video` capture showed the capture card's exact
-eight-bar signal-loss pattern instead of MiSTer MagiK. Two stills taken 23.99
-seconds apart were byte-identical.
+The operator confirmed that the Morph 4K had been powered off. Its downstream
+USB capture therefore supplied its fixed eight-bar unavailable-input pattern.
+The bars were not evidence of a MiSTer HDMI failure and have no causal relation
+to the preceding Arcade return. This record preserves the false-positive
+analysis so it cannot be mistaken for a product incident later.
 
-This run must not be counted as a physical-video pass. The benchmark's old
-luma-only classifier called any sufficiently nonblack frame `visible`, so it
-incorrectly accepted the signal-loss bars. The classifier now identifies this
-fixed pattern as `signal_lost`; the same preserved input then timed out waiting
-for a visible frame.
+The affected run remains unqualified because its physical evidence source was
+unavailable. The benchmark's old luma-only classifier called any sufficiently
+nonblack frame `visible`, so it incorrectly accepted the bars. The classifier
+now identifies this fixed pattern as `signal_lost`; with the Morph powered off,
+the same input then timed out waiting for a visible frame.
 
-Immediately before the transition, the same fixed `USB Video` device produced
-a clean MiSTer MagiK frame. That ignored local control image has SHA-256
+An earlier fixed `USB Video` control frame showed clean MiSTer MagiK output and
+has SHA-256
 `2585e70a4700123f7065c8951e70e0101747aac4770cff2c033ffe77eda17cf7`.
-This excludes selection of an unrelated camera or a permanently disconnected
-capture input as the explanation for the post-transition bars.
-
-The evidence places the failure beyond the application framebuffer and latch
-transport. It is consistent with absent or invalid HDMI at the capture-card
-input, but the capture card alone cannot distinguish a MiSTer HDMI/TMDS fault
-from a capture-device input fault. A correlated display or second analyzer is
-still required for that distinction.
+After the Morph was powered on again, the same device immediately returned a
+clean SNES MagiK frame. Together these controls identify capture-equipment
+availability, not MiSTer output, as the cause of the bars.
 
 ## Exact software and platform identity
 
@@ -119,15 +113,7 @@ They remain ignored local evidence and are not committed.
 
 ## Design implication
 
-The next diagnostic RBF should remain passive and isolated from the working
-latch protocol. It needs enough read-only evidence to separate these remaining
-boundaries during a preserved incident:
-
-- scaler fetch requests, accepts, returns, and completion-credit state;
-- scaler HDMI-domain progress and output pixel/DE/HS/VS counters;
-- final pre-TMDS RGB/DE/HS/VS fingerprints;
-- HDMI clock, PLL-lock, output-enable, reset, and transmitter-state evidence.
-
-No observer result should be described as sink visibility. A second physical
-sink/analyzer correlation remains the authority for whether the failure is in
-MiSTer output or the USB capture input.
+No RBF diagnosis can be inferred from this event. The useful implementation
+result is fail-closed capture preflight: unavailable-input bars can no longer
+qualify as physical visibility. Transition qualification must restart from zero
+with the Morph powered and a clean control frame established first.
