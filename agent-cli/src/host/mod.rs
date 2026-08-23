@@ -528,7 +528,8 @@ impl NativeDevice {
                             .and_then(Value::as_str)
                             .unwrap_or("malformed");
                         let visibility = summary
-                            .pointer("/usb_video/visibility")
+                            .get("usb_video_effective_visibility")
+                            .or_else(|| summary.pointer("/usb_video/visibility"))
                             .and_then(Value::as_str)
                             .unwrap_or("malformed");
                         println!(
