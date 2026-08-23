@@ -97,3 +97,19 @@ checker use remains production-strict. Only a committed candidate may enter
 the cache. A passing local result permits the attended rollback-capable Dev
 install and phase-2 reproduction; it does not qualify the RBF for production
 or CI.
+
+## Result
+
+Phase 2 captured a transient physical black frame with only the top-right clock
+visible while the authoritative framebuffer remained complete. Two nearby
+evidence bundles reported an advancing, nonzero raw scaler boundary and stable,
+advancing latch state; later physical video recovered without intervention.
+The reads were not frame-locked to the exact black physical frame.
+
+The probe has therefore completed its useful scope. It excludes a persistent
+raw timing stop, missing active video, or persistent all-zero raw output for
+this occurrence, but its counter saturates after 15 nonzero pixels and cannot
+distinguish the complete UI from a clock-only spatial fragment. Do not expand
+Design 5. Exact hashes, qualification results, and the bounded next diagnostic
+boundary are in
+[`history/2026-08-23-raw-scaler-boundary-black-result.md`](../history/2026-08-23-raw-scaler-boundary-black-result.md).

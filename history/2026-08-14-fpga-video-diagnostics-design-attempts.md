@@ -906,6 +906,30 @@ assignments, calculable-chain delta, endpoint delay reports, MTBF, hold, TNS,
 warnings, resources, and device identities remain mandatory. The production
 checker defaults used by CI remain unchanged.
 
+### Physical attribution result
+
+The exact Design 5 candidate was installed through the attended agent-first,
+rollback-capable transaction. Baseline USB video was complete and internal
+evidence classified `raw_scaler_active`. The first typed Arcade automation did
+not launch a core and timed out, but the immediate native USB still reproduced
+a transient physical black screen with only the top-right clock visible.
+
+Two subsequent read-only bundles reported advancing `raw_scaler_active`, stable
+latch ownership, advancing posts/flips/route epochs, and zero drops or rejects.
+The authoritative framebuffer remained the complete expected home screen. A
+later native USB still recovered to the complete screen without any recovery
+action. The diagnostic reads were not frame-locked to the exact black physical
+frame, so they prove continuing activity around the event, not exact
+simultaneity.
+
+Design 5 rules out a persistent stopped, missing-DE, or all-zero raw boundary
+for this occurrence. It does not prove spatial completeness: the 4-bit
+nonzero counter saturates after 15 pixels, so the visible clock alone can
+classify as active. Design 5 is now complete and should be retired. The exact
+candidate, evidence hashes, limitations, and minimal next boundary are recorded
+in
+[`2026-08-23-raw-scaler-boundary-black-result.md`](2026-08-23-raw-scaler-boundary-black-result.md).
+
 ## Facts established despite the failed implementations
 
 The work was not diagnostically empty. It established the following facts:
