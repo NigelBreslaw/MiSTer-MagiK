@@ -29372,15 +29372,7 @@ fn capture_and_restore_launcher(
         config.agent()?,
         &["--output".into(), output.to_string_lossy().into_owned()],
     );
-    let cleanup = connect_with(&config.connection, 10).and_then(|session| {
-        launcher_restart(
-            &session,
-            &LauncherRestartOptions {
-                clear_env: true,
-                ..LauncherRestartOptions::default()
-            },
-        )
-    });
+    let cleanup = restore_launcher_after_fixture(config);
     match (capture, cleanup) {
         (Ok(()), Ok(())) => Ok(()),
         (Err(capture), Ok(())) => Err(capture),
@@ -29394,16 +29386,40 @@ fn capture_and_restore_launcher(
     }
 }
 
+fn restore_launcher_after_fixture(config: &NativeDeviceConfig) -> Result<()> {
+    connect_with(&config.connection, 10).and_then(|session| {
+        launcher_restart(
+            &session,
+            &LauncherRestartOptions {
+                clear_env: true,
+                ..LauncherRestartOptions::default()
+            },
+        )
+    })
+}
+
 fn capture_first_arcade(config: &NativeDeviceConfig, output: &Path) -> Result<()> {
-    capture_arcade_variant(
-        config,
-        output,
-        Some("off"),
-        "home",
-        Some("wait:120,a,wait:120"),
-        None,
-        "first Arcade screen",
-    )
+    capture_arcade_variant(config, output, None, "home", None, "first Arcade screen")
+}
+
+fn first_arcade_capture_ready(status: &Value, experiment: Option<&str>) -> bool {
+    status.get("screen").and_then(Value::as_str) == Some("arcade")
+        && status.get("composition_state").and_then(Value::as_str) == Some("mixed-arcade")
+        && status.get("crt_font_experiment").and_then(Value::as_str)
+            == Some(experiment.unwrap_or("baseline"))
+        && status
+            .get("selected_game_id")
+            .and_then(Value::as_str)
+            .is_some_and(|game| !game.is_empty())
+        && status
+            .get("selected_game_has_preview")
+            .and_then(Value::as_bool)
+            == Some(true)
+        && status.get("preview_cache_state").and_then(Value::as_str) == Some("exact")
+        && status
+            .get("preview_presentation_state")
+            .and_then(Value::as_str)
+            == Some("visible")
 }
 
 fn capture_crt_font_ab(config: &NativeDeviceConfig, pair: &str, output: &Path) -> Result<()> {
@@ -29460,7 +29476,6 @@ fn capture_crt_font_ab(config: &NativeDeviceConfig, pair: &str, output: &Path) -
             &a_stem,
             None,
             "arcade",
-            None,
             Some("baseline"),
             "CRT font row phase A (odd rows)",
         )?;
@@ -29469,7 +29484,6 @@ fn capture_crt_font_ab(config: &NativeDeviceConfig, pair: &str, output: &Path) -
             &b_stem,
             None,
             "arcade",
-            None,
             Some("phase-even"),
             "CRT font row phase B (even rows)",
         )?;
@@ -29529,7 +29543,6 @@ fn capture_arcade_variant(
     output: &Path,
     catalog_refresh: Option<&str>,
     start_screen: &str,
-    input_script: Option<&str>,
     experiment: Option<&str>,
     label: &str,
 ) -> Result<()> {
@@ -29538,13 +29551,6 @@ fn capture_arcade_variant(
     }
     let session = connect_with(&config.connection, 10)?;
     let mut env_vars = vec![("MISTER_LAUNCHER_START_SCREEN".into(), start_screen.into())];
-    if let Some(input_script) = input_script {
-        env_vars.push(("MISTER_LAUNCHER_INPUT_SCRIPT".into(), input_script.into()));
-        env_vars.push((
-            "MISTER_LAUNCHER_INPUT_SCRIPT_WAIT_FRAMES".into(),
-            "1".into(),
-        ));
-    }
     if let Some(catalog_refresh) = catalog_refresh {
         env_vars.insert(0, ("MISTER_CATALOG_REFRESH".into(), catalog_refresh.into()));
     }
@@ -29561,31 +29567,89 @@ fn capture_arcade_variant(
         },
     )?;
 
-    let started = Instant::now();
-    let timeout = Duration::from_secs(300);
-    loop {
+    let fixture = (|| -> Result<()> {
         let status = read_launcher_status(&session)?;
-        let arcade_settled = status.get("screen").and_then(Value::as_str) == Some("arcade")
-            && status.get("composition_state").and_then(Value::as_str) == Some("mixed-arcade")
-            && status.get("crt_font_experiment").and_then(Value::as_str)
-                == Some(experiment.unwrap_or("baseline"))
-            && status
-                .get("selected_game_id")
+        let main_status: Value = serde_json::from_str(
+            &remote_read(&session, MAIN_STATUS_REMOTE).ok_or("Main status is missing")?,
+        )?;
+        let begin = launcher_automation::begin(
+            config,
+            status
+                .pointer("/build/version")
                 .and_then(Value::as_str)
-                .is_some_and(|game| !game.is_empty());
-        if arcade_settled {
-            break;
+                .ok_or("Arcade capture status has no build version")?,
+            status
+                .pointer("/build/source_revision")
+                .and_then(Value::as_str)
+                .ok_or("Arcade capture status has no source revision")?,
+            main_status
+                .get("main_generation")
+                .and_then(Value::as_u64)
+                .ok_or("Arcade capture Main status has no generation")?,
+            30,
+        )?;
+        let begin: Value = serde_json::from_str(&begin)?;
+        let nonce = begin
+            .get("nonce")
+            .and_then(Value::as_str)
+            .ok_or("Arcade capture automation has no nonce")?
+            .to_owned();
+        let navigate = (|| -> Result<()> {
+            if status.get("screen").and_then(Value::as_str) != Some("arcade") {
+                modal_input_action(config, &nonce, AutomationAction::Tap(AutomationButton::A))?;
+            }
+            Ok(())
+        })();
+        let end = launcher_automation::end(config, &nonce).map(|_| ());
+        match (navigate, end) {
+            (Ok(()), Ok(())) => {}
+            (Err(navigate), Ok(())) => return Err(navigate),
+            (Ok(()), Err(end)) => {
+                return Err(format!(
+                    "Arcade capture navigation completed but automation cleanup failed: {end}"
+                )
+                .into());
+            }
+            (Err(navigate), Err(end)) => {
+                return Err(format!(
+                    "Arcade capture navigation failed ({navigate}); automation cleanup also failed ({end})"
+                )
+                .into());
+            }
         }
-        if started.elapsed() >= timeout {
-            return Err(format!(
-                "first Arcade entry did not settle within {} ms; final status={status}",
-                started.elapsed().as_millis()
-            )
-            .into());
-        }
-        thread::sleep(Duration::from_millis(20));
-    }
+
+        let settle = (|| -> Result<()> {
+            let started = Instant::now();
+            let timeout = Duration::from_secs(15);
+            loop {
+                let status = read_launcher_status(&session)?;
+                let arcade_settled = first_arcade_capture_ready(&status, experiment);
+                if arcade_settled {
+                    return Ok(());
+                }
+                if started.elapsed() >= timeout {
+                    return Err(format!(
+                        "Arcade capture did not settle within {} ms; final status={status}",
+                        started.elapsed().as_millis()
+                    )
+                    .into());
+                }
+                thread::sleep(Duration::from_millis(20));
+            }
+        })();
+        settle
+    })();
     drop(session);
+
+    if let Err(fixture) = fixture {
+        return match restore_launcher_after_fixture(config) {
+            Ok(()) => Err(fixture),
+            Err(cleanup) => Err(format!(
+                "{label} fixture failed ({fixture}); launcher cleanup also failed ({cleanup})"
+            )
+            .into()),
+        };
+    }
 
     capture_and_restore_launcher(config, output, label)
 }
@@ -31388,6 +31452,42 @@ fn unix_secs() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn ready_arcade_capture_status() -> Value {
+        json!({
+            "screen": "arcade",
+            "composition_state": "mixed-arcade",
+            "crt_font_experiment": "baseline",
+            "selected_game_id": "1941",
+            "selected_game_has_preview": true,
+            "preview_cache_state": "exact",
+            "preview_presentation_state": "visible",
+        })
+    }
+
+    #[test]
+    fn first_arcade_capture_waits_for_confirmed_exact_preview() {
+        let ready = ready_arcade_capture_status();
+        assert!(first_arcade_capture_ready(&ready, None));
+
+        for (field, value) in [
+            ("selected_game_has_preview", json!(false)),
+            ("preview_cache_state", json!("empty")),
+            ("preview_presentation_state", json!("animating")),
+        ] {
+            let mut pending = ready.clone();
+            pending[field] = value;
+            assert!(!first_arcade_capture_ready(&pending, None), "{field}");
+        }
+    }
+
+    #[test]
+    fn first_arcade_capture_requires_the_requested_experiment() {
+        let mut status = ready_arcade_capture_status();
+        assert!(!first_arcade_capture_ready(&status, Some("phase-even")));
+        status["crt_font_experiment"] = json!("phase-even");
+        assert!(first_arcade_capture_ready(&status, Some("phase-even")));
+    }
 
     fn presentation_sample(captured_monotonic_us: u64, count: u32, pending: bool) -> Value {
         json!({

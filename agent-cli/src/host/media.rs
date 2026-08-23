@@ -1,6 +1,7 @@
 // Copyright (C) 2026 Nigel Breslaw
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+use mister_magik_catalog::media_identity::size_qualified_screenshot_pack_filename;
 use mister_magik_media_contract::ManifestTrustMode;
 use serde_json::{Map, Value, json};
 use ssh2::{ExtendedData, Session};
@@ -22,7 +23,7 @@ static DEFAULT_REMOTE_ASSET_DIR: LazyLock<String> = LazyLock::new(|| {
 #[cfg(test)]
 static DEFAULT_ARCADE_ARCHIVE_PATH: LazyLock<String> = LazyLock::new(|| {
     format!(
-        "{}/arcade-screenshots.mmlz4b",
+        "{}/arcade-screenshots-320x320.mmlz4b",
         DEFAULT_REMOTE_ASSET_DIR.as_str()
     )
 });
@@ -396,12 +397,14 @@ fn parse_manifest(value: &Value, manifest_url: &str) -> Result<MediaManifest> {
             .and_then(Value::as_str)
             .ok_or("manifest pack missing system/id")?
             .to_string();
+        let image_size =
+            image_size_from_pack(pack).unwrap_or_else(|| DEFAULT_IMAGE_SIZE.to_string());
         let local_path = layout_local_path(
             &pack
                 .get("local_path")
                 .and_then(Value::as_str)
                 .map(str::to_string)
-                .unwrap_or_else(|| default_local_path_for_pack(&system)),
+                .unwrap_or_else(|| default_local_path_for_pack(&system, &image_size)),
         );
         let asset_count = pack.get("asset_count").and_then(Value::as_u64);
         let version = pack
@@ -409,8 +412,6 @@ fn parse_manifest(value: &Value, manifest_url: &str) -> Result<MediaManifest> {
             .and_then(Value::as_str)
             .unwrap_or(&published_at)
             .to_string();
-        let image_size =
-            image_size_from_pack(pack).unwrap_or_else(|| DEFAULT_IMAGE_SIZE.to_string());
         let identity_value = pack
             .get("variants")
             .and_then(|variants| variants.get("identity"))
@@ -498,11 +499,10 @@ fn manifest_object_base_url(manifest_url: &str) -> String {
     mister_magik_media_contract::manifest_origin(manifest_url).unwrap_or_default()
 }
 
-fn default_local_path_for_pack(system: &str) -> String {
-    match system {
-        "arcade" => format!("{}/arcade-screenshots.mmlz4b", remote_asset_dir()),
-        other => format!("{}/{other}-screenshots.mmlz4b", remote_asset_dir()),
-    }
+fn default_local_path_for_pack(system: &str, image_size: &str) -> String {
+    let filename = size_qualified_screenshot_pack_filename(system, image_size)
+        .unwrap_or_else(|_| format!("{system}-screenshots-{image_size}.mmlz4b"));
+    format!("{}/{filename}", remote_asset_dir())
 }
 
 fn selected_packs<'a>(manifest: &'a MediaManifest, system: &str) -> Result<Vec<&'a MediaPack>> {
@@ -1325,7 +1325,7 @@ mod tests {
 
         assert_eq!(
             manifest.packs[0].local_path,
-            "/media/fat/mister-magik/assets/nes-screenshots.mmlz4b"
+            "/media/fat/mister-magik/assets/nes-screenshots-320x320.mmlz4b"
         );
         assert_eq!(
             manifest.packs[0].identity.decoded_sha256,
