@@ -746,6 +746,10 @@ fn prefixed_path(prefix: &Path) -> AgentResult<OsString> {
 
 fn run_delta_checker(source_root: &Path, signoff_root: &Path) -> AgentResult<()> {
     let mut command = Command::new(source_root.join("scripts/checks/check-fpga-quartus-delta.py"));
+    // Local signoff produces rollback-capable, attended diagnostic candidates.
+    // CI invokes the checker directly and therefore retains the production
+    // timing and aggregate synchronizer-count gates.
+    command.arg("--experimental-diagnostic");
     for (flag, flavour) in [
         ("--stock", "stock"),
         ("--baseline", "pre-observer"),

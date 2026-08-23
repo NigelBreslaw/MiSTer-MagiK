@@ -882,10 +882,29 @@ healthy raw image. The complete frozen ABI and diagnostic-only gates are in
 [`docs/fpga-raw-scaler-diagnostic.md`](../docs/fpga-raw-scaler-diagnostic.md).
 
 Before synthesis, patched production GHDL compilation, queue simulation,
-sys_top/latch simulation, the raw-boundary Icarus suite, all 40 Quartus checker
+sys_top/latch simulation, the raw-boundary Icarus suite, all 41 Quartus checker
 fixtures, exact-source BMC, nine non-vacuity covers, and temporal induction
 passed. Physical and Quartus results remain to be appended against the frozen
 candidate identity.
+
+The first exact Design 5 Quartus build exposed and rejected one retired
+Design 4 Avalon diagnostic register that remained assigned but unread. Commit
+`dee39545b` removed only that dead state; patched-production GHDL and Icarus
+integration simulations passed again before synthesis. The corrected seed-2
+build has zero added warning classes, zero TNS, setup `0.389 ns`, hold
+`0.216 ns`, `+109` ALMs, `+55` registers, unchanged RAM/DSP/PLL identity, all
+19 exact diagnostic CDC paths, the required three calculable custom chains,
+and per-chain MTBF above `10^12` device-hours.
+
+That result is deliberately not production-qualified: it misses the production
+`0.428 ns` setup floor and `0.150 ns` matched-baseline degradation limit, and
+Quartus's placement-sensitive aggregate automatic synchronizer count changed.
+For this removable observer only, local Apple-container signoff uses a named
+`experimental_raw_scaler` profile with a `0.350 ns` setup floor and `0.300 ns`
+degradation ceiling. It may ignore only the aggregate chain total; exact
+assignments, calculable-chain delta, endpoint delay reports, MTBF, hold, TNS,
+warnings, resources, and device identities remain mandatory. The production
+checker defaults used by CI remain unchanged.
 
 ## Facts established despite the failed implementations
 

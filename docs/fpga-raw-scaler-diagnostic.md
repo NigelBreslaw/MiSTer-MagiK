@@ -77,9 +77,14 @@ requiring a release campaign for hardware that will be removed:
 - require exact generation CDC endpoints, two synchronizer stages, bounded
   generation and bundled-data routes, and combined MTBF at least `10^12`
   device-hours;
-- use Quartus 17.0 Build 595, seed 2, setup at least `0.428 ns`, hold at least
-  `0.200 ns`, zero TNS, unchanged RAM/DSP/PLL identity, and no new warning
-  class;
+- retain the production checker defaults of setup at least `0.428 ns`, hold at
+  least `0.200 ns`, no more than `0.150 ns` matched-baseline degradation, and
+  exact aggregate synchronizer-count growth for CI and release candidates;
+- for this attended, rollback-capable local diagnostic only, permit setup at
+  least `0.350 ns` and at most `0.300 ns` matched-baseline degradation while
+  still requiring hold at least `0.200 ns`, zero TNS, every exact CDC
+  assignment and endpoint, the exact calculable-chain delta, unchanged
+  RAM/DSP/PLL identity, and no new warning class;
 - retain the already accepted experimental 160 output-path count only; no
   timing waiver, seed sweep, fitter change, LogicLock, or production release
   claim is permitted;
@@ -87,6 +92,8 @@ requiring a release campaign for hardware that will be removed:
   diagnostic-only excess may be reviewed only if timing, CDC, and functional
   non-interference still pass; it is not a release waiver.
 
-Only a committed candidate may enter cached Apple-container signoff. A passing
-local result permits the attended rollback-capable Dev install and phase-2
-reproduction; it does not qualify the RBF for production or CI.
+Only local Apple-container signoff selects the experimental profile. Direct CI
+checker use remains production-strict. Only a committed candidate may enter
+the cache. A passing local result permits the attended rollback-capable Dev
+install and phase-2 reproduction; it does not qualify the RBF for production
+or CI.

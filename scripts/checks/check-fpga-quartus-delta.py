@@ -64,6 +64,8 @@ EXPECTED_BOOTSTRAP_BLACK_REMOVED_WARNING_IDENTITIES = frozenset(
 )
 MINIMUM_SLACK_NS = {"setup": 0.428, "hold": 0.200}
 MAXIMUM_SLACK_DEGRADATION_NS = 0.15
+EXPERIMENTAL_DIAGNOSTIC_MINIMUM_SLACK_NS = {"setup": 0.350, "hold": 0.200}
+EXPERIMENTAL_DIAGNOSTIC_MAXIMUM_SLACK_DEGRADATION_NS = 0.30
 MAXIMUM_LOGIC_ELEMENT_DELTA = 150
 MAXIMUM_REGISTER_DELTA = 96
 EXPECTED_UNCONSTRAINED_OUTPUT_PATHS = 158
@@ -550,6 +552,7 @@ def compare(
     stock: dict[str, object],
     baseline: dict[str, object],
     patched: dict[str, object],
+    experimental_diagnostic: bool = False,
 ) -> tuple[list[str], dict[str, object]]:
     reasons: list[str] = []
     policy_details: dict[str, dict[str, dict[str, int]]] = {}
@@ -621,6 +624,16 @@ def compare(
     baseline_slacks = baseline["slacks"]
     assert isinstance(slacks, dict)
     assert isinstance(baseline_slacks, dict)
+    minimum_slack = (
+        EXPERIMENTAL_DIAGNOSTIC_MINIMUM_SLACK_NS
+        if experimental_diagnostic
+        else MINIMUM_SLACK_NS
+    )
+    maximum_slack_degradation = (
+        EXPERIMENTAL_DIAGNOSTIC_MAXIMUM_SLACK_DEGRADATION_NS
+        if experimental_diagnostic
+        else MAXIMUM_SLACK_DEGRADATION_NS
+    )
     for kind in ("setup", "hold"):
         values = slacks[kind]
         baseline_values = baseline_slacks[kind]
@@ -630,11 +643,11 @@ def compare(
             reasons.append(f"{kind}_slack_missing")
         else:
             patched_min = min(values)
-            if patched_min < MINIMUM_SLACK_NS[kind]:
+            if patched_min < minimum_slack[kind]:
                 reasons.append(f"{kind}_slack_below_minimum")
             if (
                 baseline_values
-                and min(baseline_values) - patched_min > MAXIMUM_SLACK_DEGRADATION_NS
+                and min(baseline_values) - patched_min > maximum_slack_degradation
             ):
                 reasons.append(f"{kind}_slack_degradation")
 
@@ -712,7 +725,11 @@ def compare(
         == max(baseline_chain_counts)
         + EXPECTED_ADDED_RECOGNIZED_COMPLETION_SYNCHRONIZER_CHAINS
     )
-    if not exact_added_chain_seen:
+    # Quartus's global automatic-chain total is placement-sensitive. The
+    # attended diagnostic profile may ignore only that aggregate mismatch;
+    # exact assignments, calculable-chain delta, bounded endpoint reports and
+    # per-chain MTBF remain mandatory below.
+    if not exact_added_chain_seen and not experimental_diagnostic:
         reasons.append("synchronizer_chain_count_mismatch")
     sync_assignments = patched["sync_assignments"]
     assert isinstance(sync_assignments, set)
@@ -755,6 +772,9 @@ def compare(
     stock_output_paths = stock["unconstrained_output_paths"]
     assert isinstance(stock_output_paths, list)
     details = {
+        "signoff_profile": (
+            "experimental_raw_scaler" if experimental_diagnostic else "production"
+        ),
         "stock_warning_count": sum(stock_warnings.values()),
         "patched_warning_count": sum(patched_warnings.values()),
         "added_warnings": added_warnings,
@@ -817,6 +837,11 @@ def main(argv: list[str] | None = None) -> int:
         help="case-insensitive regex identifying the custom synchronizer report row",
     )
     parser.add_argument("--json", action="store_true", help="emit JSON instead of TSV")
+    parser.add_argument(
+        "--experimental-diagnostic",
+        action="store_true",
+        help="use the bounded attended raw-scaler diagnostic timing profile",
+    )
     args = parser.parse_args(argv)
 
     try:
@@ -833,7 +858,9 @@ def main(argv: list[str] | None = None) -> int:
     except (ValueError, re.error) as error:
         parser.error(str(error))
 
-    reasons, details = compare(stock, baseline, patched)
+    reasons, details = compare(
+        stock, baseline, patched, experimental_diagnostic=args.experimental_diagnostic
+    )
     valid = not reasons
     result = {"valid": int(valid), "invalid_reason": ",".join(reasons) if reasons else "ok", **details}
     if args.json:

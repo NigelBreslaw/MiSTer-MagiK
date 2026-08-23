@@ -169,6 +169,7 @@ class QuartusDeltaTest(unittest.TestCase):
         baseline: str | None = None,
         fitter_resources: tuple[str, str, str] | None = None,
         diagnostic_reports: dict[str, str] | None = None,
+        experimental_diagnostic: bool = False,
     ) -> tuple[subprocess.CompletedProcess[str], dict[str, object]]:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -189,6 +190,8 @@ class QuartusDeltaTest(unittest.TestCase):
                 "--patched",
                 str(patched_path),
             ]
+            if experimental_diagnostic:
+                command.append("--experimental-diagnostic")
             reports = (
                 VALID_DIAGNOSTIC_REPORTS
                 if diagnostic_reports is None
@@ -252,6 +255,28 @@ class QuartusDeltaTest(unittest.TestCase):
         self.assertEqual(payload["patched_synchronizer_chains"], 9)
         self.assertEqual(payload["baseline_calculable_synchronizer_chains"], 1)
         self.assertEqual(payload["patched_calculable_synchronizer_chains"], 4)
+
+    def test_experimental_profile_accepts_bounded_timing_and_aggregate_chain_drift(self) -> None:
+        baseline = BASE.replace("setup slack is 0.500", "setup slack is 0.660").replace(
+            "0.500               0.000", "0.660               0.000"
+        )
+        patched = (
+            baseline.replace("setup slack is 0.660", "setup slack is 0.389")
+            .replace("0.660               0.000", "0.389               0.000")
+            + CUSTOM_SYNC.replace("Found 8 synchronizer chains", "Found 6 synchronizer chains")
+            .replace("Could Not be Calculated: 0.500000", "Could Not be Calculated: 0.333333")
+        )
+        result, payload = self.run_check(
+            BASE, patched, baseline, experimental_diagnostic=True
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(payload["signoff_profile"], "experimental_raw_scaler")
+
+        result, payload = self.run_check(BASE, patched, baseline)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("setup_slack_below_minimum", payload["invalid_reason"])
+        self.assertIn("setup_slack_degradation", payload["invalid_reason"])
+        self.assertIn("synchronizer_chain_count_mismatch", payload["invalid_reason"])
 
     def test_new_warning_fails_even_when_warning_code_is_inherited(self) -> None:
         result, payload = self.run_check(BASE, BASE + "Warning (10001): different warning\n" + CUSTOM_SYNC)
