@@ -842,6 +842,24 @@ not waive added unconstrained identities or any timing, CDC, MTBF, resource,
 warning, or device-identity gate. This exception does not qualify the RBF for
 production release.
 
+### Physical attribution result
+
+The attended phase-2 campaign reproduced a persistent physical black screen on
+the third valid transition with this exact candidate. Native USB video was
+uniform black while the authoritative RGB565 framebuffer remained correct and
+nonblank. The initial failure capture and two later read-only captures produced
+nine identical, coherent `0x67` samples with state word `0x0da3`:
+`readlev=2`, `copylev=2`, request/acknowledgement/destination toggles aligned,
+no pending completion, and no retained reset-return credits or phase.
+
+This rules out completion-queue backlog and the specified idle-credit-loss
+state for the captured occurrence. Design 4 has therefore completed its narrow
+attribution purpose and must not be expanded in place. The exact result and
+evidence hashes are recorded in
+[`2026-08-23-scaler-scheduler-black-screen-result.md`](2026-08-23-scaler-scheduler-black-screen-result.md).
+The next authorized experiment should use a separate minimal raw-scaler
+boundary probe, preserving Design 3 and latch-v5 unchanged.
+
 ## Facts established despite the failed implementations
 
 The work was not diagnostically empty. It established the following facts:

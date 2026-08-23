@@ -1,0 +1,59 @@
+{
+  "available": true,
+  "capabilities": {
+    "passive_video_observer": true,
+    "pixel_observer": false,
+    "pll_observer": false,
+    "scaler_scheduler_state": true
+  },
+  "capture_end_monotonic_us": 462780000,
+  "capture_start_monotonic_us": 462730000,
+  "classification": "scaler_scheduler_not_stalled",
+  "coherence": {
+    "latch_ownership_stable": true,
+    "launcher_state_stable": true,
+    "ownership_check_error": null,
+    "sample_interval_us": [25100, 25101],
+    "three_samples_match": true
+  },
+  "coherent": true,
+  "diagnostic_architecture": "scaler-scheduler-state-v1",
+  "latch_status": {
+    "accepted_sequence": 0,
+    "accepted_transaction": 485,
+    "active_base": 578719744,
+    "active_height": 540,
+    "active_route_epoch": 537,
+    "active_sequence": 485,
+    "active_stride": 1920,
+    "active_transaction": 485,
+    "active_width": 960,
+    "crc": 536,
+    "drop_count": 0,
+    "flags": 9,
+    "flip_count": 485,
+    "pending_sequence": 0,
+    "pending_transaction": 0,
+    "post_count": 485,
+    "reject_count": 0
+  },
+  "owner_epoch_after": 1,
+  "owner_epoch_before": 1,
+  "scheduler_state": {
+    "acknowledgement": true,
+    "completion": false,
+    "completion_pending": false,
+    "copy_level": 2,
+    "destination_seen": true,
+    "raw_samples": [[1, 3491, 37040], [1, 3491, 37040], [1, 3491, 37040]],
+    "read_accepted": false,
+    "read_level": 2,
+    "request_toggle": true,
+    "return_credits": 0,
+    "return_drain": false,
+    "return_phase_nonzero": false,
+    "running": true
+  },
+  "schema": "mister-magik-fpga-video-diagnostics-v2",
+  "sink_visibility": "unobserved"
+}
