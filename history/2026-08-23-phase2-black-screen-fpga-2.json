@@ -1,0 +1,56 @@
+{
+  "available": true,
+  "capabilities": {
+    "crc": 7234,
+    "flags": 1023,
+    "max_height": 768,
+    "max_stride_bytes": 2736,
+    "max_width": 1366,
+    "passive_video_observer": false,
+    "protocol_version": 5
+  },
+  "capture_end_monotonic_us": 461090000,
+  "capture_start_monotonic_us": 461090000,
+  "classification": "repair_transport_ready",
+  "coherence": {
+    "latch_ownership_stable": true,
+    "launcher_state_stable": true,
+    "ownership_check_error": null
+  },
+  "coherent": true,
+  "diagnostic_architecture": "scaler-completion-repair-v1",
+  "latch_status": {
+    "accepted_sequence": 0,
+    "accepted_transaction": 301,
+    "active_base": 578719744,
+    "active_height": 540,
+    "active_route_epoch": 353,
+    "active_sequence": 301,
+    "active_stride": 1920,
+    "active_transaction": 301,
+    "active_width": 960,
+    "crc": 43513,
+    "drop_count": 0,
+    "flags": 9,
+    "flip_count": 301,
+    "pending_sequence": 0,
+    "pending_transaction": 0,
+    "post_count": 301,
+    "reject_count": 0
+  },
+  "owner_epoch_after": 1,
+  "owner_epoch_before": 1,
+  "presentation_telemetry": {
+    "active_sequence": 301,
+    "crc": 43423,
+    "flags": 9,
+    "lifetime_invariant_valid": true,
+    "magik_ownership": true,
+    "owned_vblank_count": 5047,
+    "ownership_loss_count": 0,
+    "presented_vblank_count": 301,
+    "repeated_vblank_count": 4746
+  },
+  "schema": "mister-magik-fpga-video-diagnostics-v2",
+  "sink_visibility": "unobserved"
+}
