@@ -15,6 +15,12 @@ const JPEG_WIDTH: u32 = 1920;
 const JPEG_HEIGHT: u32 = 1080;
 const MOVIE_MIN_SECONDS: u64 = 1;
 const MOVIE_MAX_SECONDS: u64 = 60;
+// Calibrated against the fixed Phase 2 launcher scene: 59 known-good captures
+// measured 44 permille and all 732 preserved corruption frames measured at
+// least 72 permille. Sixty keeps the detector between those observed sets.
+const SPATIAL_LUMA_SAMPLE_STEP: usize = 4;
+const STRONG_ROW_DISCONTINUITY: u8 = 12;
+const CORRUPTED_ROW_DISCONTINUITY_PERMILLE: u16 = 60;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct CaptureArtifact {
@@ -53,6 +59,7 @@ struct EncodedFrame {
 #[serde(rename_all = "snake_case")]
 pub enum CaptureVisibility {
     Black,
+    Corrupted,
     SignalLost,
     Visible,
 }
@@ -62,6 +69,7 @@ struct LumaAnalysis {
     minimum: u8,
     maximum: u8,
     mean: u8,
+    strong_row_discontinuity_permille: u16,
     visibility: CaptureVisibility,
 }
 
@@ -73,6 +81,7 @@ pub struct AnalyzedCaptureArtifact {
     pub luma_minimum: u8,
     pub luma_maximum: u8,
     pub luma_mean: u8,
+    pub strong_row_discontinuity_permille: u16,
 }
 
 trait CaptureBackend {
@@ -122,6 +131,7 @@ pub fn execute_analyzed(output: Option<&Path>) -> AgentResult<AnalyzedCaptureArt
         luma_minimum: luma.minimum,
         luma_maximum: luma.maximum,
         luma_mean: luma.mean,
+        strong_row_discontinuity_permille: luma.strong_row_discontinuity_permille,
     })
 }
 
@@ -432,8 +442,14 @@ fn analyze_luma(
     if maximum <= 1 {
         return None;
     }
+    let strong_row_discontinuity_permille =
+        strong_row_discontinuity_permille(luma, width, height, row_bytes);
     let visibility = if is_capture_card_signal_loss(luma, width, height, row_bytes) {
         CaptureVisibility::SignalLost
+    } else if (mean > 24 || maximum.saturating_sub(minimum) > 12)
+        && strong_row_discontinuity_permille >= CORRUPTED_ROW_DISCONTINUITY_PERMILLE
+    {
+        CaptureVisibility::Corrupted
     } else if mean > 24 || maximum.saturating_sub(minimum) > 12 {
         CaptureVisibility::Visible
     } else {
@@ -443,8 +459,36 @@ fn analyze_luma(
         minimum,
         maximum,
         mean,
+        strong_row_discontinuity_permille,
         visibility,
     })
+}
+
+#[must_use]
+#[cfg(any(target_os = "macos", test))]
+fn strong_row_discontinuity_permille(
+    luma: &[u8],
+    width: usize,
+    height: usize,
+    row_bytes: usize,
+) -> u16 {
+    if height < 2 {
+        return 0;
+    }
+    let samples_per_row = width.div_ceil(SPATIAL_LUMA_SAMPLE_STEP);
+    let strong_total = usize::from(STRONG_ROW_DISCONTINUITY) * samples_per_row;
+    let strong_rows = (1..height)
+        .filter(|&y| {
+            (0..width)
+                .step_by(SPATIAL_LUMA_SAMPLE_STEP)
+                .map(|x| {
+                    usize::from(luma[y * row_bytes + x].abs_diff(luma[(y - 1) * row_bytes + x]))
+                })
+                .sum::<usize>()
+                >= strong_total
+        })
+        .count();
+    u16::try_from(strong_rows * 1000 / (height - 1)).unwrap_or(u16::MAX)
 }
 
 #[must_use]
@@ -571,6 +615,14 @@ mod tests {
             analyze_luma(&signal_lost, 64, 64, 64).unwrap().visibility,
             CaptureVisibility::SignalLost
         );
+
+        let mut corrupted = vec![0; 64 * 64];
+        for y in 0..64 {
+            corrupted[y * 64..(y + 1) * 64].fill(if y % 2 == 0 { 16 } else { 64 });
+        }
+        let analysis = analyze_luma(&corrupted, 64, 64, 64).unwrap();
+        assert_eq!(analysis.visibility, CaptureVisibility::Corrupted);
+        assert_eq!(analysis.strong_row_discontinuity_permille, 1000);
     }
 
     #[test]

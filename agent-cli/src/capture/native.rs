@@ -70,7 +70,10 @@ define_class!(
                 Ok(Some(frame)) => {
                     !self.ivars().require_visible
                         || frame.luma.is_some_and(|analysis| {
-                            analysis.visibility == CaptureVisibility::Visible
+                            matches!(
+                                analysis.visibility,
+                                CaptureVisibility::Visible | CaptureVisibility::Corrupted
+                            )
                         })
                 }
                 Ok(None) => false,
