@@ -3961,9 +3961,9 @@ fn install_experimental_agent_transaction(
             .response
             .pointer("/result/fpga_video_diagnostics")
             .ok_or("reconciled experimental device-agent returned no FPGA evidence")?;
-        if !experimental_raw_scaler_evidence_available(evidence) {
+        if !experimental_agent_preload_evidence_accepted(evidence) {
             return Err(format!(
-                "reconciled experimental device-agent does not expose the raw scaler observer: {evidence}"
+                "reconciled experimental device-agent is not compatible with the installed diagnostic RBF: {evidence}"
             )
             .into());
         }
@@ -4029,9 +4029,9 @@ fn install_experimental_agent_transaction(
             .response
             .pointer("/result/fpga_video_diagnostics")
             .ok_or("experimental device-agent returned no FPGA evidence")?;
-        if !experimental_raw_scaler_evidence_available(evidence) {
+        if !experimental_agent_preload_evidence_accepted(evidence) {
             return Err(format!(
-                "experimental device-agent did not expose coherent raw scaler evidence: {evidence}"
+                "experimental device-agent is not compatible with the installed diagnostic RBF: {evidence}"
             )
             .into());
         }
@@ -4123,6 +4123,19 @@ fn experimental_raw_scaler_evidence_available(evidence: &Value) -> bool {
             .pointer("/raw_scaler_state/raw_samples")
             .and_then(Value::as_array)
             .is_some_and(|samples| samples.len() == 3)
+}
+
+fn experimental_agent_preload_evidence_accepted(evidence: &Value) -> bool {
+    experimental_raw_scaler_evidence_available(evidence)
+        || (evidence.get("available").and_then(Value::as_bool) == Some(false)
+            && evidence.get("coherent").and_then(Value::as_bool) == Some(false)
+            && evidence.get("schema").and_then(Value::as_str)
+                == Some("mister-magik-fpga-video-diagnostics-v1")
+            && evidence.get("classification").and_then(Value::as_str) == Some("unclassified")
+            && evidence.get("reason").and_then(Value::as_str)
+                == Some(
+                    "read passive FPGA video diagnostics: unsupported raw scaler state schema 1",
+                ))
 }
 
 fn device_failure(error: impl std::fmt::Display) -> DeviceFailure {
@@ -34344,6 +34357,28 @@ H: Handlers=event3 js0"#
             },
         });
         assert!(experimental_raw_scaler_evidence_available(&raw_scaler));
+        assert!(experimental_agent_preload_evidence_accepted(&raw_scaler));
+        let retired_scheduler = json!({
+            "available": false,
+            "classification": "unclassified",
+            "coherent": false,
+            "reason": "read passive FPGA video diagnostics: unsupported raw scaler state schema 1",
+            "schema": "mister-magik-fpga-video-diagnostics-v1",
+        });
+        assert!(experimental_agent_preload_evidence_accepted(
+            &retired_scheduler
+        ));
+        for (pointer, value) in [
+            ("/schema", json!("mister-magik-fpga-video-diagnostics-v2")),
+            ("/available", json!(true)),
+            ("/coherent", json!(true)),
+            ("/classification", json!("raw_scaler_active")),
+            ("/reason", json!("unsupported diagnostic")),
+        ] {
+            let mut invalid = retired_scheduler.clone();
+            *invalid.pointer_mut(pointer).unwrap() = value;
+            assert!(!experimental_agent_preload_evidence_accepted(&invalid));
+        }
         for classification in [
             "raw_scaler_timing_stalled",
             "raw_scaler_no_active_video",
