@@ -341,6 +341,7 @@ def main() -> None:
         "*ascal:ascal|magik_diag_source_meta[*]",
         "*ascal:ascal|o_readdataack_sync2*",
         "{*ascal:ascal|avl_return_drain*}",
+        "{*magik_diag_source_meta[3]|*}",
         "-from $magik_scaler_diag_source_route",
         "-from $magik_scaler_diag_drain",
         "-to $magik_scaler_diag_drain_meta",
