@@ -13,9 +13,15 @@ The review intentionally excludes:
 - FPGA changes and unqualified platform substitutions;
 - desktop-only rendering behavior except where it consumes production evidence.
 
-Work runs on branch `nigel/production-performance-review-2026-08-23`, based on
-the clean local `main` tip that was seven commits ahead of `origin/main` when
-the branch was created.
+Phase one ran on branch `nigel/production-performance-review-2026-08-23`, based
+on the clean local `main` tip that was seven commits ahead of `origin/main` when
+the branch was created. Those additional commits touched only FPGA diagnostic,
+device-agent, and supporting evidence paths. Before phase two, an exact diff
+confirmed that `apps/mister`, `crates/catalog`, and `mister/platform/runtime`
+were byte-identical to the qualified `origin/main` base. Hardware evidence is
+therefore collected on
+`nigel/production-performance-review-2026-08-23-qualified`, carrying this report
+but excluding the unrelated unqualified FPGA diagnostic changes.
 
 The investigation has two deliberately separate evidence phases:
 
