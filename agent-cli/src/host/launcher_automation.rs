@@ -88,6 +88,7 @@ pub(super) enum LaunchReturnError {
 enum LaunchProgress {
     Started,
     HandoffObserved,
+    AutomationUnavailable,
 }
 
 impl std::fmt::Display for LaunchReturnError {
@@ -759,11 +760,13 @@ fn wait_for_launch_progress(
         }
         thread::sleep(Duration::from_millis(25));
     }
-    if !observed_snapshot && let Some(error) = last_snapshot_error {
-        return Err(format!(
-            "launcher automation became unavailable before launch progress: {error}"
-        )
-        .into());
+    if !observed_snapshot && last_snapshot_error.is_some() {
+        // The launcher process normally exits during a real core handoff, and
+        // its socket can disappear before the replacement Main status becomes
+        // observable. This is only permission to enter the longer handoff
+        // proof; wait_for_handoff still requires a fresh Main epoch, no live
+        // launcher process, and a non-Menu core before return is requested.
+        return Ok(Some(LaunchProgress::AutomationUnavailable));
     }
     Ok(None)
 }
