@@ -73,9 +73,9 @@ set_net_delay -max 10.0 \
 	-from $magik_scaler_diag_source_route \
 	-to $magik_scaler_diag_source_meta
 
-# Keep the drain crossing separate. A kept observer-only combinational node
-# prevents Quartus from absorbing this monotonic state into control logic, so
-# the source register has an ordinary bounded data route to the first stage.
+# Keep the drain crossing separate. An observer-only LCELL makes the monotonic
+# source an ordinary one-input data route without adding state or feeding any
+# production signal.
 set magik_scaler_diag_drain [get_registers -nowarn \
 	{*ascal:ascal|avl_return_drain*}]
 if {[get_collection_size $magik_scaler_diag_drain] < 1} {
