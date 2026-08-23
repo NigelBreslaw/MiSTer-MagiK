@@ -205,6 +205,11 @@ fn run_screenshot_media_worker(
             );
         }
         poll_active_downloads(&mut active, &mut pending_reconciliation, &mut counts, &tx);
+        for (_system, (pack, local_path)) in
+            take_pending_reconciliations(!interaction_active, &mut pending_reconciliation)
+        {
+            reconcile_pack_preview_availability(&config.catalog_root, &pack, &local_path, &tx);
+        }
         if config.benchmark_auto_finish
             && queue.requested_count > 0
             && active.is_empty()
@@ -226,7 +231,9 @@ fn run_screenshot_media_worker(
             benchmark_quiescent_since = None;
         }
         if finish_requested && active.is_empty() && queue.pending.is_empty() {
-            for (_system, (pack, local_path)) in std::mem::take(&mut pending_reconciliation) {
+            for (_system, (pack, local_path)) in
+                take_pending_reconciliations(true, &mut pending_reconciliation)
+            {
                 reconcile_pack_preview_availability(&config.catalog_root, &pack, &local_path, &tx);
             }
             break;
@@ -291,6 +298,17 @@ fn run_screenshot_media_worker(
             counts.failed
         ),
     });
+}
+
+fn take_pending_reconciliations(
+    idle: bool,
+    pending: &mut BTreeMap<String, (MediaPack, PathBuf)>,
+) -> BTreeMap<String, (MediaPack, PathBuf)> {
+    if idle {
+        std::mem::take(pending)
+    } else {
+        BTreeMap::new()
+    }
 }
 
 fn packs_by_system_for_size(packs: &[MediaPack], image_size: &str) -> BTreeMap<String, MediaPack> {
@@ -2303,6 +2321,31 @@ mod tests {
             dequeue_startable_requests(&mut pending, 1, MAX_CONCURRENT_MEDIA_DOWNLOADS);
         assert!(still_no_slots.is_empty());
         assert_eq!(pending.len(), 4);
+    }
+
+    #[test]
+    fn preview_reconciliation_waits_for_idle_then_drains_once() {
+        let mut pending = BTreeMap::from([
+            (
+                "neogeo".to_string(),
+                (pack_with_id("neogeo"), PathBuf::from("neogeo.mmlz4b")),
+            ),
+            (
+                "arcade".to_string(),
+                (pack_with_id("arcade"), PathBuf::from("arcade.mmlz4b")),
+            ),
+        ]);
+
+        assert!(take_pending_reconciliations(false, &mut pending).is_empty());
+        assert_eq!(pending.len(), 2);
+
+        let ready = take_pending_reconciliations(true, &mut pending);
+        assert_eq!(
+            ready.keys().map(String::as_str).collect::<Vec<_>>(),
+            ["arcade", "neogeo"]
+        );
+        assert!(pending.is_empty());
+        assert!(take_pending_reconciliations(true, &mut pending).is_empty());
     }
 
     #[test]
