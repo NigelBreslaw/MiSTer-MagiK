@@ -377,6 +377,15 @@ class QuartusDeltaTest(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertIn("unconstrained_output_paths_mismatch", payload["invalid_reason"])
 
+    def test_diagnostic_two_path_exception_is_explicit(self) -> None:
+        patched = BASE.replace(
+            "; Unconstrained Output Port Paths ; 158 ; 158 ;",
+            "; Unconstrained Output Port Paths ; 160 ; 160 ;",
+        ) + CUSTOM_SYNC
+        result, payload = self.run_check(BASE, patched)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(payload["diagnostic_unconstrained_output_paths_exception"])
+
     def test_repair_budgets_are_relative_to_pre_observer_build(self) -> None:
         stock = BASE.replace("setup slack is 0.500", "setup slack is 0.600")
         baseline = stock.replace("setup slack is 0.400", "setup slack is 0.300").replace(

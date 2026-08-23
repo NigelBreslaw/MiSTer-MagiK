@@ -67,6 +67,7 @@ MAXIMUM_SLACK_DEGRADATION_NS = 0.15
 MAXIMUM_LOGIC_ELEMENT_DELTA = 150
 MAXIMUM_REGISTER_DELTA = 96
 EXPECTED_UNCONSTRAINED_OUTPUT_PATHS = 158
+EXPECTED_DIAGNOSTIC_UNCONSTRAINED_OUTPUT_PATHS = 160
 MINIMUM_CUSTOM_MTBF_DEVICE_HOURS = 1.0e12
 MINIMUM_CUSTOM_MTBF_YEARS = MINIMUM_CUSTOM_MTBF_DEVICE_HOURS / (24.0 * 365.25)
 EXPECTED_ADDED_RECOGNIZED_COMPLETION_SYNCHRONIZER_CHAINS = 10
@@ -656,11 +657,27 @@ def compare(
     baseline_output_paths = baseline["unconstrained_output_paths"]
     patched_output_paths = patched["unconstrained_output_paths"]
     assert isinstance(baseline_output_paths, list) and isinstance(patched_output_paths, list)
+    diagnostic_output_paths_exception = False
     if not baseline_output_paths or not patched_output_paths:
         reasons.append("unconstrained_output_summary_missing")
-    elif max(patched_output_paths) != max(baseline_output_paths):
+    else:
+        diagnostic_output_paths_exception = (
+            max(baseline_output_paths) == EXPECTED_UNCONSTRAINED_OUTPUT_PATHS
+            and max(patched_output_paths)
+            == EXPECTED_DIAGNOSTIC_UNCONSTRAINED_OUTPUT_PATHS
+        )
+    if (
+        baseline_output_paths
+        and patched_output_paths
+        and max(patched_output_paths) != max(baseline_output_paths)
+        and not diagnostic_output_paths_exception
+    ):
         reasons.append("unconstrained_output_paths_mismatch")
-    elif max(patched_output_paths) != EXPECTED_UNCONSTRAINED_OUTPUT_PATHS:
+    elif (
+        patched_output_paths
+        and max(patched_output_paths) != EXPECTED_UNCONSTRAINED_OUTPUT_PATHS
+        and not diagnostic_output_paths_exception
+    ):
         reasons.append("unconstrained_output_paths_not_canonical")
 
     slacks = patched["slacks"]
@@ -821,6 +838,7 @@ def compare(
         "stock_unconstrained_output_paths": max(stock_output_paths, default=None),
         "baseline_unconstrained_output_paths": max(baseline_output_paths, default=None),
         "patched_unconstrained_output_paths": max(patched_output_paths, default=None),
+        "diagnostic_unconstrained_output_paths_exception": diagnostic_output_paths_exception,
         "stock_resources": stock["resources"],
         "baseline_resources": baseline_resources,
         "patched_resources": patched["resources"],

@@ -822,6 +822,26 @@ inconclusive. The observer remains experimental until exact simulation,
 formal-regression, fixed-seed Apple-container timing/CDC/area signoff, and
 attended physical smoke all pass.
 
+### Local candidate result and experimental path-count exception
+
+Candidate `612a04a0f` encodes the reset-return crossing as drain-inactive and
+restores the public drain-active meaning only in the HDMI-domain packing
+function. This keeps the crossing on a normal one-source data route without an
+extra register or an observer primitive. GHDL production-patch simulation,
+Icarus latch/sys-top simulation, and exact-source formal proof passed with all
+required covers.
+
+The canonical Quartus 17.0 Build 595 seed-2 run produced setup slack `0.660 ns`,
+hold slack `0.249 ns`, zero TNS, `+131` ALMs, `+89` registers, unchanged
+RAM/DSP/PLL identity, all 26 expected diagnostic CDC paths, and MTBF above the
+fixed gate. Its only original rejection was 160 unconstrained output-port
+paths versus the matched baseline's 158. The operator explicitly accepted the
+two-path delta for this experimental diagnostic RBF. The verifier records that
+exception as `diagnostic_unconstrained_output_paths_exception=true`; it does
+not waive added unconstrained identities or any timing, CDC, MTBF, resource,
+warning, or device-identity gate. This exception does not qualify the RBF for
+production release.
+
 ## Facts established despite the failed implementations
 
 The work was not diagnostically empty. It established the following facts:
