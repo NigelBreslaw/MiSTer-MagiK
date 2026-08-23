@@ -19985,7 +19985,7 @@ const LAUNCH_RETURN_ONCE_GAME: &str = "/media/fat/_Arcade/1943 Kai Midway Kaisen
 const ATTENDED_LAUNCH_RETURN_COOLDOWN: Duration = Duration::from_secs(5);
 const ATTENDED_LAUNCH_RETURN_GAME_DWELL: Duration = Duration::from_secs(2);
 const LAUNCH_RETURN_PHYSICAL_CONFIRMATIONS: usize = 2;
-const LAUNCH_RETURN_PHYSICAL_CONFIRMATION_INTERVAL: Duration = Duration::from_millis(100);
+const LAUNCH_RETURN_PHYSICAL_CONFIRMATION_INTERVAL: Duration = Duration::from_secs(1);
 
 fn launch_return_effective_usb_visibility(
     primary: crate::capture::CaptureVisibility,
@@ -32749,6 +32749,10 @@ mod tests {
         )));
         assert!(LAUNCH_RETURN_ONCE_GAME.ends_with("1943 Kai Midway Kaisen (Japan).mra"));
         assert_eq!(ATTENDED_LAUNCH_RETURN_GAME_DWELL, Duration::from_secs(2));
+        assert_eq!(
+            LAUNCH_RETURN_PHYSICAL_CONFIRMATION_INTERVAL,
+            Duration::from_secs(1)
+        );
         assert_eq!(LAUNCH_RETURN_ONCE_STEP_DEADLINE_MS, 2_000);
         assert_eq!(LAUNCH_RETURN_CYCLES, 2);
     }
