@@ -2,16 +2,18 @@
 
 Status: the functional repair remains unchanged. Schema 7 and both schema-8
 observers failed unchanged local signoff gates and were never installed. The
-current disposable schema-9 candidate narrows only diagnostic signature state
-to remove 48 synthesized registers. Fixed-seed Apple signoff and device
-validation remain separate gates. The rejected storage-only fit and current
-reduction are recorded in [the storage-reduction receipt](../history/2026-08-25-raw-scaler-signature-storage-reduction.md)
-and [the schema-9 design](../history/2026-08-25-raw-scaler-signature-v2-design.md).
+current disposable schema-10 candidate retains the 16-bit ordered signature,
+generates its response sequence after coherent capture, and samples the native
+RGB565 color information. Fixed-seed Apple signoff and device validation remain
+separate gates. The rejected fits and current reduction are recorded in
+[the storage-reduction receipt](../history/2026-08-25-raw-scaler-signature-storage-reduction.md),
+[the schema-9 design](../history/2026-08-25-raw-scaler-signature-v2-design.md),
+and [the schema-10 design](../history/2026-08-25-raw-scaler-signature-v3-design.md).
 
 The disposable schema-6 `scaler-copy-retirement-v1` diagnostic is retired.
 Its first genuine persistent-black result isolated a production copy-FSM
-deadlock. The new experiment adds only read-only command `0x67`, schema 9,
-`raw-scaler-ordered-signature-v2`; commands `0x60` through `0x66` remain
+deadlock. The new experiment adds only read-only command `0x67`, schema 10,
+`raw-scaler-ordered-signature-v3`; commands `0x60` through `0x66` remain
 unsupported, while latch protocol `5` and capabilities `0x03ff` remain
 unchanged. Its exact taps, byte encoding, ABI, interpretation boundary, and
 cost are frozen in
@@ -78,7 +80,7 @@ reset controller, PLL, mux, or output cone is otherwise changed.
 
 The rare moving-band movie leaves the authoritative RGB565 framebuffer
 correct while completion, copy-tail, latch, and route evidence remains
-coherent. Schema 9 fingerprints ordered active RGB and line boundaries at the
+coherent. Schema 10 fingerprints ordered active RGB565 and line boundaries at the
 direct `ascal` output through an explicit isolation register. It publishes one
 shallow 16-bit ordered signature and sequence; the host requires three
 strictly advancing frames. It does not tap a final output cone and cannot infer
@@ -90,7 +92,8 @@ independently byte-stable source support an at-or-before-`ascal` fault. Without
 that independent proof, changing evidence is inconclusive because a scene
 transition has the same local signature.
 
-The source CDC bundle contains only the 16-bit signature and 16-bit sequence.
+The source CDC bundle contains only the 16-bit signature. The destination
+advances the 16-bit response sequence on each coherent capture.
 One destination valid bit reconstructs the unchanged flags word after coherent
 capture, including when the 16-bit sequence wraps to zero. This retains the
 settle cycle and immutable response while avoiding duplicate 16-bit flag words.
@@ -104,7 +107,7 @@ The local candidate requires:
   creates pixel validity, and tail age remains below 18 output-clock steps,
   plus a retirement cover witness;
 - unchanged completion queue BMC, cover, and induction proofs;
-- structural proof that schema 9 has only the exact direct-ascal taps, an
+- structural proof that schema 10 has only the exact direct-ascal taps, an
   observer-only isolation stage, response-only fanout, and no protected-cone
   changes;
 - Icarus proof of the one-step ordered signature, line-order changes, empty

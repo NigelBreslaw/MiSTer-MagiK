@@ -35,7 +35,7 @@ module mister_magik_raw_scaler_ordered_frame (
 	// Observer-only isolation. These registers are the sole direct consumers
 	// of the production ascal output nets.
 	(* preserve *) reg        isolated_ce = 1'b0;
-	(* preserve *) reg [23:0] isolated_rgb = 24'd0;
+	(* preserve *) reg [15:0] isolated_rgb = 16'd0;
 	(* preserve *) reg        isolated_de = 1'b0;
 	(* preserve *) reg        isolated_hs = 1'b0;
 	(* preserve *) reg        isolated_vs = 1'b0;
@@ -46,19 +46,16 @@ module mister_magik_raw_scaler_ordered_frame (
 	reg frame_nonempty = 1'b0;
 	reg [15:0] frame_signature = SIGNATURE_INITIAL;
 
-	reg [15:0] published_sequence = 16'd0;
 	reg [15:0] published_signature = 16'd0;
 	(* preserve *) reg source_generation = 1'b0;
 
-	// Words 2..3 in ascending response order. The source state remains stable
+	// Word 3 is the stable source state. The response sequence is advanced only
+	// when the destination coherently captures a newly published signature.
 	// between completed nonempty frames; generation changes only after every
 	// source register is updated on the same clk_hdmi edge. Word 1 is derived
 	// from a single destination valid bit instead of storing a 16-bit flag word
 	// in both clock domains.
-	wire [31:0] source_state = {
-		published_signature,
-		published_sequence
-	};
+	wire [15:0] source_state = published_signature;
 
 	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED" *)
 	reg generation_meta = 1'b0;
@@ -102,7 +99,7 @@ module mister_magik_raw_scaler_ordered_frame (
 	endfunction
 
 	function automatic [31:0] pixel_token;
-		input [23:0] rgb;
+		input [15:0] rgb;
 		input line_start;
 		input hs;
 		begin
@@ -110,7 +107,8 @@ module mister_magik_raw_scaler_ordered_frame (
 				TOKEN_PIXEL |
 				(line_start ? TOKEN_LINE_START : 8'd0) |
 				(hs ? TOKEN_HS : 8'd0),
-				rgb
+				rgb,
+				8'd0
 			};
 		end
 	endfunction
@@ -156,7 +154,7 @@ module mister_magik_raw_scaler_ordered_frame (
 		reg [15:0] completed_signature;
 		if(reset_active) begin
 			isolated_ce <= 1'b0;
-			isolated_rgb <= 24'd0;
+			isolated_rgb <= 16'd0;
 			isolated_de <= 1'b0;
 			isolated_hs <= 1'b0;
 			isolated_vs <= 1'b0;
@@ -165,13 +163,14 @@ module mister_magik_raw_scaler_ordered_frame (
 			frame_open <= 1'b0;
 			frame_nonempty <= 1'b0;
 			frame_signature <= SIGNATURE_INITIAL;
-			published_sequence <= 16'd0;
 			published_signature <= 16'd0;
 			source_generation <= 1'b0;
 		end
 		else begin
 			isolated_ce <= raw_ce;
-			isolated_rgb <= raw_rgb;
+			isolated_rgb <= {
+				raw_rgb[23:19], raw_rgb[15:10], raw_rgb[7:3]
+			};
 			isolated_de <= raw_de;
 			isolated_hs <= raw_hs;
 			isolated_vs <= raw_vs;
@@ -185,7 +184,6 @@ module mister_magik_raw_scaler_ordered_frame (
 						ordered_signature_update(frame_signature,
 							line_end_token(isolated_hs)) : frame_signature;
 					if(frame_open && frame_nonempty) begin
-						published_sequence <= published_sequence + 1'd1;
 						published_signature <= completed_signature;
 						source_generation <= ~source_generation;
 					end
@@ -249,7 +247,9 @@ module mister_magik_raw_scaler_ordered_frame (
 				capture_pending <= 1'b1;
 			end
 			else if(!has_command && capture_pending) begin
-				snapshot_state <= source_state;
+				snapshot_state <= {
+					source_state, snapshot_state[15:0] + 1'd1
+				};
 				snapshot_valid <= 1'b1;
 				capture_pending <= 1'b0;
 			end

@@ -4580,7 +4580,7 @@ mod linux {
                         && classification_stable;
                     json!({
                         "schema": "mister-magik-fpga-video-diagnostics-v2",
-                        "diagnostic_architecture": "raw-scaler-ordered-signature-v2",
+                        "diagnostic_architecture": "raw-scaler-ordered-signature-v3",
                         "available": true,
                         "coherent": coherent,
                         "classification": if coherent {

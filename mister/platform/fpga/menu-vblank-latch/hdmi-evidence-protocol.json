@@ -43,7 +43,7 @@
     ]
   },
   "raw_scaler_state": {
-    "schema": 9,
+    "schema": 10,
     "command": 103,
     "magic": 19799,
     "word_count": 5,

@@ -99,19 +99,34 @@ module tb_mister_magik_video_diagnostics_control;
 		end
 	endfunction
 
+	function automatic [15:0] golden_rgb565(input [23:0] rgb);
+		golden_rgb565 = {rgb[23:19], rgb[15:10], rgb[7:3]};
+	endfunction
+
+	function automatic [31:0] golden_pixel_token(
+		input [7:0] header,
+		input [23:0] rgb
+	);
+		golden_pixel_token = {header, golden_rgb565(rgb), 8'd0};
+	endfunction
+
 	function automatic [15:0] golden_frame_signature(input [7:0] seed, input swapped);
 		reg [15:0] next;
 		reg [7:0] first_line;
 		reg [7:0] second_line;
 		begin
-			first_line = swapped ? seed + 8'd2 : seed;
-			second_line = swapped ? seed : seed + 8'd2;
+			first_line = swapped ? seed + 8'd32 : seed;
+			second_line = swapped ? seed : seed + 8'd32;
 			next = 16'h56da;
-			next = golden_update(next, {8'hc1, first_line, 8'h10, 8'h20});
-			next = golden_update(next, {8'h41, first_line + 1'd1, 8'h11, 8'h21});
+			next = golden_update(next,
+				golden_pixel_token(8'hc1, {first_line, 8'h10, 8'h20}));
+			next = golden_update(next,
+				golden_pixel_token(8'h41, {first_line + 1'd1, 8'h11, 8'h21}));
 			next = golden_update(next, {8'ha0, 24'd0});
-			next = golden_update(next, {8'h81, second_line, 8'h12, 8'h22});
-			next = golden_update(next, {8'h01, second_line + 1'd1, 8'h13, 8'h23});
+			next = golden_update(next,
+				golden_pixel_token(8'h81, {second_line, 8'h12, 8'h22}));
+			next = golden_update(next,
+				golden_pixel_token(8'h01, {second_line + 1'd1, 8'h13, 8'h23}));
 			golden_frame_signature = golden_update(next, {8'he0, 24'd0});
 		end
 	endfunction
@@ -140,8 +155,8 @@ module tb_mister_magik_video_diagnostics_control;
 		reg [7:0] first_line;
 		reg [7:0] second_line;
 		begin
-			first_line = swapped ? seed + 8'd2 : seed;
-			second_line = swapped ? seed : seed + 8'd2;
+			first_line = swapped ? seed + 8'd32 : seed;
+			second_line = swapped ? seed : seed + 8'd32;
 			raw_sample(1'b1, 1'b1, 1'b0, 1'b0, 24'd0);
 			raw_sample(1'b1, 1'b0, 1'b0, 1'b0, 24'd0);
 			if(!empty) begin
@@ -281,8 +296,8 @@ module tb_mister_magik_video_diagnostics_control;
 			fail("immutable mid-read snapshot CRC mismatch");
 
 		// Sequence wrap remains observable.
-		dut.published_sequence = 16'hffff;
 		drive_frame(8'h55, 1'b0, 1'b0);
+		dut.snapshot_state[15:0] = 16'hffff;
 		complete_frame();
 		read_record();
 		if(words[1] != MAGIK_RAW_SCALER_STATE_FLAG_FRAME_VALID ||

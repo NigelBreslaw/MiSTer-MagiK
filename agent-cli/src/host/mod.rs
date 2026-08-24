@@ -3643,7 +3643,7 @@ fn experimental_fpga_architecture_is_current(diagnostics: &Value) -> bool {
                     .and_then(Value::as_array)
                     .is_some_and(|samples| samples.len() == 3)
         }
-        Some("raw-scaler-ordered-signature-v2") => {
+        Some("raw-scaler-ordered-signature-v3") => {
             matches!(
                 diagnostics.get("classification").and_then(Value::as_str),
                 Some(
@@ -34940,7 +34940,7 @@ H: Handlers=event3 js0"#
         assert!(!experimental_fpga_evidence_is_current(&latched_mismatch));
         let ordered_signature = json!({
             "schema": "mister-magik-fpga-video-diagnostics-v2",
-            "diagnostic_architecture": "raw-scaler-ordered-signature-v2",
+            "diagnostic_architecture": "raw-scaler-ordered-signature-v3",
             "available": true,
             "coherent": true,
             "classification": "raw_scaler_ordered_stable",
@@ -34974,7 +34974,7 @@ H: Handlers=event3 js0"#
             "raw_scaler_state": {
                 "frame_sequence": [100, 101, 103],
                 "ordered_signature": ["5678", "5678", "5678"],
-                "raw_samples": vec![vec![9; 5]; 3],
+                "raw_samples": vec![vec![10; 5]; 3],
             },
         });
         assert!(experimental_raw_scaler_evidence_available(

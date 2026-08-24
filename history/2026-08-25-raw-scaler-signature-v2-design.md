@@ -37,3 +37,15 @@ downstream origin only when all three records match the exact same-candidate
 healthy static scene and the committed temporal detector independently proves
 moving physical corruption during the capture interval. Anything less remains
 inconclusive. The FPGA never proves sink visibility.
+
+## Rejected first fit
+
+Committed candidate `ce3eb949eed3f55fa6376dd19c79872faef5704f`
+reduced the observer hierarchy from 187 to 139 registers and restored all
+three exact CDC paths, but fixed-seed placement failed production timing and
+aggregate resources. Setup was `-0.150 ns`, hold was `0.242 ns`, and total
+growth was 126 ALMs and 277 registers. The worst four paths were production
+`ascal` `o_vcpt_pre3` paths; no observer endpoint was involved. The retained
+delta report SHA-256 is
+`50b42bfe00842f20d25f49b50a648eb6ce7ed4b112798b48c3e864d6ea17fed2`.
+This candidate is rejected and was never installed.

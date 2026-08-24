@@ -277,7 +277,7 @@ def main() -> None:
         fail("retired Avalon/output compatibility sources must define no design unit")
     for required_observer_fragment in (
         "isolated_ce <= raw_ce;",
-        "isolated_rgb <= raw_rgb;",
+        "raw_rgb[23:19], raw_rgb[15:10], raw_rgb[7:3]",
         "isolated_de <= raw_de;",
         "isolated_hs <= raw_hs;",
         "isolated_vs <= raw_vs;",
@@ -287,22 +287,28 @@ def main() -> None:
         "pixel_token(isolated_rgb, !previous_de, isolated_hs)",
         "line_end_token(isolated_hs)",
         "published_signature <= completed_signature;",
-        "wire [31:0] source_state",
+        "wire [15:0] source_state",
         "reg [31:0] snapshot_state",
         "reg snapshot_valid",
         "response_word = snapshot_valid ?",
         "source_generation <= ~source_generation;",
         "generation_meta <= source_generation;",
         "generation_sync <= generation_meta;",
-        "snapshot_state <= source_state;",
+        "source_state, snapshot_state[15:0] + 1'd1",
     ):
         if required_observer_fragment not in control_source:
             fail(
                 "raw ordered-frame observer structure is missing: "
                 f"{required_observer_fragment}"
             )
-    for direct_tap in ("raw_ce", "raw_rgb", "raw_de", "raw_hs", "raw_vs"):
-        if len(re.findall(rf"\b{direct_tap}\b", control_source)) != 2:
+    for direct_tap, expected_count in (
+        ("raw_ce", 2),
+        ("raw_rgb", 4),
+        ("raw_de", 2),
+        ("raw_hs", 2),
+        ("raw_vs", 2),
+    ):
+        if len(re.findall(rf"\b{direct_tap}\b", control_source)) != expected_count:
             fail(
                 "production direct-ascal tap must appear only at its port and isolation assignment: "
                 f"{direct_tap}"
@@ -347,6 +353,8 @@ def main() -> None:
         "reg [63:0] snapshot_state",
         "wire [47:0] source_state",
         "reg [47:0] snapshot_state",
+        "wire [31:0] source_state",
+        "published_sequence",
         "pipeline_state",
         "pipeline_generation",
         "avl_magik",
