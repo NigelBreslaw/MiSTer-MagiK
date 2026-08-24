@@ -62,3 +62,15 @@ It adds `o_last` only to the shift-activity gate and suppresses new pixel-valid
 events during those tail-only shifts. The candidate exposes no diagnostic
 opcode. The epoch-8 attempt-06 incident remains preserved and unrecovered;
 this implementation work performs no device action.
+
+## Repair follow-through
+
+The exact repair later passed formal, simulation, structural, and fixed-seed
+Apple-container production gates, then completed 51 clean physical returns
+without reproducing the black deadlock. Transition 52 emitted one transient
+corrupted physical frame between exact healthy frames while the authoritative
+framebuffer and latch remained correct. The campaign stopped and the candidate
+was rejected for commercial release. This is evidence for the already-separate
+physical timing/phase corruption class, not a counterexample to the captured
+copy-retirement deadlock or its bounded repair proof. Full results are in
+[`2026-08-24-scaler-copy-tail-repair-result.md`](2026-08-24-scaler-copy-tail-repair-result.md).

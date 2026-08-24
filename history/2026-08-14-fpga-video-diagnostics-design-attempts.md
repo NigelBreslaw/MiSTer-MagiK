@@ -1081,6 +1081,22 @@ The preserved device incident remains untouched while local simulation,
 formal, structural, and commit gates run. Fixed-seed Apple signoff and physical
 validation remain separate requirements.
 
+The repair subsequently passed the separated copy-tail and unchanged
+completion formal proofs, patched-production GHDL/Icarus, structural checks,
+and the fixed-seed Apple-container production gates. The fitted candidate had
+`0.557 ns` setup slack, `0.212 ns` hold slack, zero TNS, 158 constrained output
+relationships, `+87` ALMs, and `+7` registers, with unchanged RAM/DSP/PLL
+identity.
+
+Device validation then completed 51 clean physical returns across six boot
+epochs without reproducing the persistent black screen. Transition 52 emitted
+one transient corrupted physical frame between two byte-identical healthy
+frames while the authoritative framebuffer and latch state remained correct.
+The candidate is therefore not commercially qualified even though the captured
+failure is distinct from the copy-retirement black deadlock. Exact results and
+artifact hashes are recorded in
+[`2026-08-24-scaler-copy-tail-repair-result.md`](2026-08-24-scaler-copy-tail-repair-result.md).
+
 ## Facts established despite the failed implementations
 
 The work was not diagnostically empty. It established the following facts:

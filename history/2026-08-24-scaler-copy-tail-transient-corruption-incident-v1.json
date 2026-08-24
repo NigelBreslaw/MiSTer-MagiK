@@ -1,0 +1,97 @@
+{
+  "schema": "mister-magik-scaler-copy-tail-transient-corruption-incident-v1",
+  "date": "2026-08-24",
+  "candidate": {
+    "implementation_commit": "518862fe4c49e4be252f532f7a943c5529beebf0",
+    "patch_sha256": "fad82f36ec04b09ef758812fd5a4c3766e096f28a91da55a09574eaf7932b839",
+    "rbf_sha256": "b1bfb33d564852856fde1e4cfc4671fe1591fa16ad4398202031f7d8bc25512b",
+    "metadata_sha256": "62a7a66eada10e00bf69ec430f9471bcd00f81fb9cf71df8be267487c95dd7b4",
+    "signoff_report_sha256": "b9bfd9519a734f9e847dacc5c7328fdf6fcf8473a8c070854637674f53872e6a"
+  },
+  "campaign": {
+    "game_dwell_ms": 2000,
+    "boot_epochs": 6,
+    "clean_returns_before_failure": 51,
+    "failure_transition": 52,
+    "failure_epoch": 6,
+    "failure_attempt": 2,
+    "black_screen_observed": false,
+    "physical_corruption_observed": true,
+    "campaign_stopped_on_failure": true,
+    "recovery_performed": false
+  },
+  "failure_state": {
+    "classification": "transient_physical_corruption",
+    "internal_framebuffer_correct": true,
+    "fpga_classification": "repair_transport_ready",
+    "latch_protocol": 5,
+    "latch_capabilities": "0x03ff",
+    "latch_drop_count": 0,
+    "latch_reject_count": 0,
+    "owner_epoch": 1,
+    "sink_visibility": "unobserved"
+  },
+  "post_failure_movie": {
+    "frames": 755,
+    "duration_ms": 30160,
+    "luma_mean_range": [54, 54],
+    "row_discontinuity_permille_range": [73, 73],
+    "result": "healthy_after_transient"
+  },
+  "artifacts": [
+    {
+      "path": "build/scaler-copy-tail-phase2-epoch6-02/returned-usb-video.jpg",
+      "bytes": 385836,
+      "sha256": "84068db55c9f625b287b8c37426457d742e6b695a6a7f4050d053348a0a04f38",
+      "role": "healthy_physical_before"
+    },
+    {
+      "path": "build/scaler-copy-tail-phase2-epoch6-02/returned-usb-video-confirmation-1.jpg",
+      "bytes": 535621,
+      "sha256": "1982056bc94ecc9a6f24a6e6070d6b675808b2fc13dca419b1602c56622fc2f4",
+      "role": "transient_corrupt_physical_frame"
+    },
+    {
+      "path": "build/scaler-copy-tail-phase2-epoch6-02/returned-usb-video-confirmation-2.jpg",
+      "bytes": 385836,
+      "sha256": "84068db55c9f625b287b8c37426457d742e6b695a6a7f4050d053348a0a04f38",
+      "role": "healthy_physical_after"
+    },
+    {
+      "path": "build/scaler-copy-tail-phase2-epoch6-02/returned-framebuffer.png",
+      "bytes": 119288,
+      "sha256": "288f47335560f1169890ee50d02ddf3707ef4b568a22ccb06593a78d275ad250",
+      "role": "authoritative_rgb565_framebuffer"
+    },
+    {
+      "path": "build/scaler-copy-tail-phase2-epoch6-02/summary.json",
+      "bytes": 435751,
+      "sha256": "8f74ae72048f019d77bd14aabeb86c3fa389cbc24d79ca2a3098c7d0fb35dd96",
+      "role": "phase2_failure_summary"
+    },
+    {
+      "path": "build/scaler-copy-tail-phase2-epoch6-02-live-30s.mov",
+      "bytes": 14478664,
+      "sha256": "621672b713da2162c9dd3deb1d3922354b68833e32757704f89ea034e5b9265e",
+      "role": "post_failure_native_movie"
+    },
+    {
+      "path": "build/scaler-copy-tail-phase2-epoch6-02-live-30s-metrics.csv",
+      "bytes": 17051,
+      "sha256": "c53ec688b9d38bf29969b6dd652352f5195c42bb9262f90e6b62ebd06c4a726d",
+      "role": "all_delivered_frame_metrics"
+    },
+    {
+      "path": "build/scaler-copy-tail-phase2-epoch6-02-live-diagnostics/fpga-video-diagnostics.json",
+      "bytes": 1461,
+      "sha256": "c345a660e039da1107b2f90a5e8bb1c134dddd44a87ff980ed1521adaf8cdfec",
+      "role": "post_failure_fpga_state"
+    },
+    {
+      "path": "build/scaler-copy-tail-phase2-epoch6-02-live-diagnostics/bundle.json",
+      "bytes": 734133,
+      "sha256": "37ed61ae95e2079e0a4b3c90295b9c131feb61ee08459a10128928cd1de3ff46",
+      "role": "post_failure_diagnostic_bundle"
+    }
+  ]
+}
