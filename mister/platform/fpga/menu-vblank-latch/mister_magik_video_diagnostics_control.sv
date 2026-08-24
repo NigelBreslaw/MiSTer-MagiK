@@ -114,6 +114,19 @@ module mister_magik_raw_scaler_diagnostic (
 		end
 	endfunction
 
+	function automatic [15:0] control_crc_update;
+		input [15:0] crc_in;
+		input [3:0] control_sample;
+		integer bit_index;
+		reg [15:0] value;
+		begin
+			value = crc_in ^ {control_sample, 12'h000};
+			for(bit_index = 0; bit_index < 4; bit_index = bit_index + 1)
+				value = value[15] ? ((value << 1) ^ 16'h1021) : (value << 1);
+			control_crc_update = value;
+		end
+	endfunction
+
 	localparam [15:0] MAGIK_RAW_SCALER_STATE_SCHEMA_CRC =
 		crc_update_word(MAGIK_RAW_SCALER_STATE_HEADER_CRC,
 			MAGIK_RAW_SCALER_STATE_SCHEMA);
@@ -154,8 +167,8 @@ module mister_magik_raw_scaler_diagnostic (
 
 			if(frame_start) begin
 				frame_open <= 1'b1;
-				control_crc <= crc_update_byte(16'hffff,
-					{4'b0000, raw_ce, raw_de, raw_hs, raw_vs});
+				control_crc <= control_crc_update(16'hffff,
+					{raw_ce, raw_de, raw_hs, raw_vs});
 				ce_seen <= raw_ce;
 				hs_seen <= raw_ce && raw_hs;
 				vs_seen <= raw_ce && raw_vs;
@@ -225,8 +238,8 @@ module mister_magik_raw_scaler_diagnostic (
 				end
 			end
 			else begin
-				control_crc <= crc_update_byte(control_crc,
-					{4'b0000, raw_ce, raw_de, raw_hs, raw_vs});
+				control_crc <= control_crc_update(control_crc,
+					{raw_ce, raw_de, raw_hs, raw_vs});
 				ce_seen <= ce_seen | raw_ce;
 				hs_seen <= hs_seen | (raw_ce && raw_hs);
 				vs_seen <= vs_seen | (raw_ce && raw_vs);

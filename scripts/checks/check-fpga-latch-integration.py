@@ -257,7 +257,7 @@ def main() -> None:
         "wire frame_start = raw_ce && raw_vs && !raw_vs_previous;",
         "wire completed_nonempty = ce_seen && hs_seen && vs_seen && de_seen;",
         "candidate_streak == 2'd2",
-        "crc_update_byte(control_crc,",
+        "control_crc_update(control_crc,",
     ):
         if control_source.count(exact_probe) != 1:
             fail(f"raw scaler diagnostic probe is missing or ambiguous: {exact_probe}")

@@ -22,7 +22,7 @@ out of scope.
 ## Frozen design
 
 - Observe only CE, DE, HS, and VS in `clk_hdmi`.
-- Fingerprint ordered control samples with CRC-16 and count HS edges, DE starts,
+- Fingerprint the ordered four-bit control sample stream with CRC-16 and count HS edges, DE starts,
   and active CE samples per completed frame.
 - Establish a baseline after exactly three identical nonempty frames.
 - Retain the first mismatch and its frame sequence until common reset/RBF reload.

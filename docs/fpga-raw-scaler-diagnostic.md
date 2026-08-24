@@ -16,7 +16,7 @@ read-only responder beside the latch bridge in `sys_top`.
 
 For every completed frame it derives:
 
-- CRC-16 of every ordered `{CE, DE, HS, VS}` control sample;
+- CRC-16 of the ordered four-bit `{CE, DE, HS, VS}` sample stream;
 - rising HS edge count;
 - rising DE/start count;
 - active `CE && DE` sample count.
