@@ -1,0 +1,127 @@
+{
+  "schema": "mister-magik-scaler-pipeline-black-incident-v1",
+  "captured_on": "2026-08-24",
+  "preservation_state": "captured-unrecovered",
+  "classification": "persistent-physical-black-with-saturated-scaler-pipeline",
+  "sink_visibility": "physically_observed_by_native_usb_video",
+  "host_revision": "c27f40f00",
+  "fpga": {
+    "builder_commit": "fac0a8fcf95fed4e10beb0814fb0fd3a6c8fe327",
+    "menu_source_commit": "3c3634c0105d78f27aeba66b38966c50dbc42c9b",
+    "patch_sha256": "5d10c0148898b31612028d69720ce66246a383f40742e9373d30f668fafc228d",
+    "rbf_sha256": "00c37925ce4003449a3495647a43bcab7c2cd503803fe687294850c12fdc42c4",
+    "metadata_sha256": "c3c2fbd271c726753dcc2c53dd84aa06136a280e34bef3260ad92d63e45f9e73",
+    "signoff_report_sha256": "3b3ef9f23dc041330c6d2096f61d9741c95b18515f53a06ce812c9084a8cf7a4",
+    "diagnostic_architecture": "scaler-pipeline-state-v1",
+    "diagnostic_classification_at_failure": "scaler_read_scheduler_stall",
+    "diagnostic_classification_after_preservation": "scaler_read_scheduler_stall",
+    "flags": [1345, 1345, 1345],
+    "state": [4106, 4106, 4106],
+    "read_level": [2, 2, 2],
+    "copy_level": [2, 2, 2],
+    "read_accept_seen": [false, false, false],
+    "current_return_seen": [false, false, false],
+    "return_nonzero_seen": [false, false, false],
+    "completion_request": [false, false, false],
+    "completion_pending": [false, false, false],
+    "completion_source_ack": [false, false, false],
+    "completion_destination_seen": [false, false, false],
+    "return_credits": [0, 0, 0],
+    "return_phase_nonzero": [false, false, false],
+    "return_drain_active": [false, false, false],
+    "copy_read_seen": [true, true, true],
+    "copy_nonzero_seen": [false, false, false],
+    "line_write_seen": [true, true, true],
+    "line_nonzero_seen": [false, false, false],
+    "raw_active_seen": [true, true, true],
+    "raw_nonzero_seen": [false, false, false],
+    "scaler_running": [true, true, true],
+    "records_identical": true,
+    "coherent": true,
+    "observer_sink_visibility": "unobserved"
+  },
+  "launcher": {
+    "version": "0.2.5219",
+    "build_number": 5219,
+    "source_revision": "aa954e639ee3461c90f0420f9eed56ec00e6b637",
+    "pid": 9093
+  },
+  "main": {
+    "generation": 9003147,
+    "pid": 9070,
+    "launcher_state": "LauncherActive",
+    "fpga_owner": "magik",
+    "owner_epoch": 1
+  },
+  "agent": {
+    "agent_version": 28,
+    "protocol_version": 2
+  },
+  "attempt": {
+    "boot_epoch": 1,
+    "index": 1,
+    "preceding_valid_passes_total": 0,
+    "preceding_valid_passes_in_epoch": 0,
+    "game": "/media/fat/_Arcade/1943 Kai Midway Kaisen (Japan).mra",
+    "game_dwell_ms": 2000
+  },
+  "physical_evidence": {
+    "classification": "black",
+    "width": 1920,
+    "height": 1080,
+    "luma_minimum": 16,
+    "luma_maximum": 16,
+    "luma_mean": 16,
+    "still_sha256": "dc4ee4f1eb9ede8c4b031b29fc8ba97d72068a296fb716cec2de087b6b25255e",
+    "live_movie_sha256": "79baa31621e8cc48f7353df84ab0995b2f6adeac053581ca311a18d2f5dc306c"
+  },
+  "internal_evidence": {
+    "framebuffer_sha256": "288f47335560f1169890ee50d02ddf3707ef4b568a22ccb06593a78d275ad250",
+    "framebuffer_state": "complete-varied-correct-arcade",
+    "latch_drop_count": 0,
+    "latch_reject_count": 0
+  },
+  "artifact_root": "build/scaler-pipeline-state-phase2-epoch1-01",
+  "artifacts": [
+    {
+      "path": "summary.json",
+      "bytes": 438127,
+      "sha256": "357b67ceee247141516e2b61bf9e2dc671ddee5b663d884d8e4a1ecfec54bf1f"
+    },
+    {
+      "path": "returned-usb-video.jpg",
+      "bytes": 37739,
+      "sha256": "dc4ee4f1eb9ede8c4b031b29fc8ba97d72068a296fb716cec2de087b6b25255e"
+    },
+    {
+      "path": "returned-framebuffer.png",
+      "bytes": 119288,
+      "sha256": "288f47335560f1169890ee50d02ddf3707ef4b568a22ccb06593a78d275ad250"
+    },
+    {
+      "path": "black-live-30s.mov",
+      "bytes": 553988,
+      "sha256": "79baa31621e8cc48f7353df84ab0995b2f6adeac053581ca311a18d2f5dc306c"
+    },
+    {
+      "path": "fpga-video-diagnostics.json",
+      "bytes": 781016,
+      "sha256": "45a3cb84d6169554657195eb718482f4639e287d5bf56de9c09a003273a297e5"
+    },
+    {
+      "path": "live-diagnostics/fpga-video-diagnostics.json",
+      "bytes": 2548,
+      "sha256": "a8002286fa52725c837ca00216ce712fe6aad0eac3edbd05fff2b895841c7d84"
+    },
+    {
+      "path": "live-diagnostics/main-status.json",
+      "bytes": 1370,
+      "sha256": "d0dc0e79fa24fe9d62fdebc00a09436f6f03d468dd6e98eb8c1859e5615b3685"
+    },
+    {
+      "path": "live-diagnostics/bundle.json",
+      "bytes": 739759,
+      "sha256": "146e3fa24fb010fb88c03fd24714eaa02efdf93e0fa4f5bdbbf418f0df974cad"
+    }
+  ]
+}
