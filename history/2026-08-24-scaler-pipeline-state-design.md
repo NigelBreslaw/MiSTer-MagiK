@@ -123,3 +123,11 @@ hardware, ABI, seed, fitter policy, or acceptance threshold changed.
 Device installation and physical testing remain outside this implementation
 commit. The retained RBF report must be rechecked with the corrected fail-closed
 evidence policy before the candidate is device-ready.
+
+The first attended installation rolled back cleanly because the installed
+device agent still implemented schema 4 and rejected schema 5. The decoder
+change had not advanced the agent identity, so the typed bootstrap policy
+mistook that older binary for the current one. Agent version 28 supersedes it;
+the protocol version remains 2 because the authenticated transport is
+unchanged. This makes the existing transactional bootstrap install and verify
+the schema-5 decoder before another experimental FPGA activation.
