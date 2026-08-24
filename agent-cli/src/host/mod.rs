@@ -20050,44 +20050,41 @@ const LAUNCH_RETURN_PHYSICAL_CONFIRMATION_INTERVAL: Duration = Duration::from_se
 fn launch_return_effective_usb_visibility(
     primary: crate::capture::CaptureVisibility,
     confirmations: &[(crate::capture::CaptureVisibility, bool)],
-) -> crate::capture::CaptureVisibility {
+) -> Option<crate::capture::CaptureVisibility> {
     use crate::capture::CaptureVisibility::{Black, Corrupted, SignalLost, Visible};
 
-    if matches!(primary, Black | SignalLost)
-        || confirmations.len() != LAUNCH_RETURN_PHYSICAL_CONFIRMATIONS
-    {
-        return primary;
+    if matches!(primary, Black | SignalLost) {
+        return Some(primary);
+    }
+    if confirmations.len() != LAUNCH_RETURN_PHYSICAL_CONFIRMATIONS {
+        return None;
     }
     if confirmations
         .iter()
         .any(|(visibility, _)| *visibility == SignalLost)
     {
-        return SignalLost;
+        return Some(SignalLost);
     }
     if confirmations
         .iter()
         .any(|(visibility, _)| *visibility == Black)
     {
-        return Black;
+        return Some(Black);
     }
-    match primary {
-        Visible
-            if confirmations
-                .iter()
-                .all(|(visibility, _)| *visibility == Visible) =>
-        {
-            Visible
-        }
-        Corrupted
-            if confirmations
-                .iter()
-                .all(|(visibility, identical)| *visibility == Corrupted && *identical) =>
-        {
-            Visible
-        }
-        Visible | Corrupted => Corrupted,
-        Black | SignalLost => unreachable!("terminal primary visibility returned above"),
+    if primary == Corrupted
+        || confirmations
+            .iter()
+            .any(|(visibility, _)| *visibility == Corrupted)
+    {
+        return Some(Corrupted);
     }
+    debug_assert!(
+        primary == Visible
+            && confirmations
+                .iter()
+                .all(|(visibility, _)| *visibility == Visible)
+    );
+    Some(Visible)
 }
 
 fn validate_attended_launch_return_summary(summary: &Value, output_dir: &Path) -> Result<()> {
@@ -20129,9 +20126,31 @@ fn validate_attended_launch_return_summary(summary: &Value, output_dir: &Path) -
         .or_else(|| summary.pointer("/usb_video/visibility"))
         .and_then(Value::as_str)
         .ok_or("attended launch-return evidence has no USB-video classification")?;
+    let raw_primary_visibility = summary
+        .pointer("/usb_video/visibility")
+        .and_then(Value::as_str);
+    let raw_confirmations = summary
+        .pointer("/usb_video_return_confirmation/captures")
+        .and_then(Value::as_array);
+    let all_raw_samples_visible = raw_primary_visibility == Some("visible")
+        && raw_confirmations.is_some_and(|captures| {
+            captures.len() == LAUNCH_RETURN_PHYSICAL_CONFIRMATIONS
+                && captures.iter().all(|capture| {
+                    capture
+                        .pointer("/capture/visibility")
+                        .and_then(Value::as_str)
+                        == Some("visible")
+                })
+        });
 
     match (artifact_status, physical_visible, usb_visibility) {
-        ("passed", true, "visible") => Ok(()),
+        ("passed", true, "visible") if all_raw_samples_visible => Ok(()),
+        ("passed", true, "visible") => Err(format!(
+            "attended launch-return evidence promoted a non-visible or incomplete raw physical \
+             sample set; evidence={}",
+            output_dir.display()
+        )
+        .into()),
         ("failed", false, visibility) if visibility != "visible" => Err(format!(
             "post-return MagiK physical video failed closed: visibility={visibility}; evidence={}",
             output_dir.display()
@@ -21030,6 +21049,10 @@ fn profile_installed_launch_return_once(
         }
         let effective_usb_visibility =
             launch_return_effective_usb_visibility(usb.visibility, &confirmation_states);
+        let effective_usb_visibility_json = effective_usb_visibility
+            .map(serde_json::to_value)
+            .transpose()?
+            .unwrap_or_else(|| json!("inconclusive"));
         let usb_observation_ms = usb_observation_started
             .elapsed()
             .as_millis()
@@ -21061,7 +21084,7 @@ fn profile_installed_launch_return_once(
             )?;
         }
 
-        let visible = effective_usb_visibility == crate::capture::CaptureVisibility::Visible;
+        let visible = effective_usb_visibility == Some(crate::capture::CaptureVisibility::Visible);
         Ok(json!({
             "schema": "mister-magik-launch-return-once-v2",
             "artifact_status": if visible { "passed" } else { "failed" },
@@ -21073,7 +21096,7 @@ fn profile_installed_launch_return_once(
             "framebuffer": framebuffer,
             "fpga_video_diagnostics": diagnostics.get("fpga_video_diagnostics"),
             "usb_video": usb_json,
-            "usb_video_effective_visibility": effective_usb_visibility,
+            "usb_video_effective_visibility": effective_usb_visibility_json,
             "usb_video_return_confirmation": {
                 "schema": "mister-magik-return-physical-confirmation-v1",
                 "required_confirmations": LAUNCH_RETURN_PHYSICAL_CONFIRMATIONS,
@@ -32825,6 +32848,11 @@ mod tests {
             "artifact_status": "passed",
             "physical_video_visible": true,
             "usb_video": { "visibility": "visible" },
+            "usb_video_effective_visibility": "visible",
+            "usb_video_return_confirmation": { "captures": [
+                { "capture": { "visibility": "visible" }, "identical_to_primary": false },
+                { "capture": { "visibility": "visible" }, "identical_to_primary": false }
+            ]},
             "restored_selection": { "semantic": {
                 "effective_view": "arcade",
                 "return_screen": "arcade",
@@ -32849,57 +32877,61 @@ mod tests {
         summary["physical_video_visible"] = json!(true);
         summary["usb_video"]["visibility"] = json!("corrupted");
         summary["usb_video_effective_visibility"] = json!("visible");
-        assert!(validate_attended_launch_return_summary(&summary, output).is_ok());
+        summary["usb_video_return_confirmation"]["captures"] = json!([
+            { "capture": { "visibility": "corrupted" }, "identical_to_primary": true },
+            { "capture": { "visibility": "corrupted" }, "identical_to_primary": true }
+        ]);
+        assert!(validate_attended_launch_return_summary(&summary, output).is_err());
     }
 
     #[test]
-    fn launch_return_temporal_confirmation_rejects_motion_but_accepts_static_edges() {
+    fn launch_return_temporal_confirmation_fails_closed() {
         use crate::capture::CaptureVisibility::{Black, Corrupted, SignalLost, Visible};
 
+        assert_eq!(launch_return_effective_usb_visibility(Visible, &[]), None);
         assert_eq!(
-            launch_return_effective_usb_visibility(Visible, &[]),
-            Visible
+            launch_return_effective_usb_visibility(Black, &[]),
+            Some(Black)
         );
-        assert_eq!(launch_return_effective_usb_visibility(Black, &[]), Black);
         assert_eq!(
             launch_return_effective_usb_visibility(Visible, &[(Visible, false), (Visible, false)]),
-            Visible
+            Some(Visible)
         );
         assert_eq!(
             launch_return_effective_usb_visibility(Visible, &[(Visible, false), (Black, false)]),
-            Black
+            Some(Black)
         );
         assert_eq!(
             launch_return_effective_usb_visibility(
                 Visible,
                 &[(Visible, false), (Corrupted, false)]
             ),
-            Corrupted
+            Some(Corrupted)
         );
         assert_eq!(
             launch_return_effective_usb_visibility(
                 Visible,
                 &[(Visible, false), (SignalLost, false)]
             ),
-            SignalLost
+            Some(SignalLost)
         );
         assert_eq!(
             launch_return_effective_usb_visibility(
                 Corrupted,
                 &[(Corrupted, true), (Corrupted, true)]
             ),
-            Visible
+            Some(Corrupted)
         );
         assert_eq!(
             launch_return_effective_usb_visibility(
                 Corrupted,
                 &[(Corrupted, true), (Corrupted, false)]
             ),
-            Corrupted
+            Some(Corrupted)
         );
         assert_eq!(
             launch_return_effective_usb_visibility(Corrupted, &[(Corrupted, true)]),
-            Corrupted
+            None
         );
     }
 
