@@ -4267,7 +4267,8 @@ fn experimental_raw_scaler_evidence_available(evidence: &Value) -> bool {
 }
 
 fn experimental_agent_preload_evidence_accepted(evidence: &Value) -> bool {
-    experimental_raw_scaler_evidence_available(evidence)
+    experimental_fpga_evidence_is_current(evidence)
+        || experimental_raw_scaler_evidence_available(evidence)
         || (evidence.get("available").and_then(Value::as_bool) == Some(false)
             && evidence.get("coherent").and_then(Value::as_bool) == Some(false)
             && evidence.get("schema").and_then(Value::as_str)
@@ -34854,6 +34855,19 @@ H: Handlers=event3 js0"#
             },
         });
         assert!(experimental_fpga_evidence_is_current(&current));
+        assert!(experimental_agent_preload_evidence_accepted(&current));
+        for (pointer, value) in [
+            ("/diagnostic_architecture", json!("raw-scaler-boundary-v1")),
+            ("/available", json!(false)),
+            ("/coherent", json!(false)),
+            ("/classification", json!("unclassified")),
+            ("/sink_visibility", json!("observed")),
+            ("/capabilities/passive_video_observer", json!(true)),
+        ] {
+            let mut invalid = current.clone();
+            *invalid.pointer_mut(pointer).unwrap() = value;
+            assert!(!experimental_agent_preload_evidence_accepted(&invalid));
+        }
         let raw_scaler = json!({
             "schema": "mister-magik-fpga-video-diagnostics-v2",
             "diagnostic_architecture": "raw-scaler-boundary-v1",
