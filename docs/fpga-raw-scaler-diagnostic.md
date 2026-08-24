@@ -105,3 +105,23 @@ within the probe's coverage, but schema 3 deliberately did not observe RGB.
 
 The preserved unrecovered incident and exact candidate identity are in
 [`history/2026-08-24-frame-integrity-black-result.md`](../history/2026-08-24-frame-integrity-black-result.md).
+
+## Signoff and first device result
+
+The first schema-4 fit was rejected at `0.289 ns` setup slack. One forward
+revision isolated the production RGB/DE/VS taps behind preserved HDMI-domain
+registers. At the same seed and settings, the exact candidate passed with
+`0.671 ns` setup, `0.223 ns` hold, zero TNS, `+136` ALMs, `+111` registers,
+and unchanged RAM/DSP/PLL identity.
+
+The installed candidate completed 46 visible Phase 2 returns across three boot
+epochs. Overall attempt 47 reproduced the known transient physical corruption:
+two byte-identical healthy frames followed by the known corrupt frame, while
+the authoritative framebuffer stayed correct. Failure-time and later live
+schema-4 records were coherent `raw_rgb_varied` and byte-identical to healthy
+attempts. This excludes black or constant raw RGB for that corruption event,
+but the deliberately coarse state does not prove every raw pixel was correct.
+The black-screen decision therefore remains pending a genuine black return.
+
+See
+[`history/2026-08-24-raw-rgb-transient-corruption-result.md`](../history/2026-08-24-raw-rgb-transient-corruption-result.md).

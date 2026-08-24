@@ -1,0 +1,41 @@
+{
+  "schema": "mister-magik-raw-rgb-transient-corruption-incident-v1",
+  "captured_on": "2026-08-24",
+  "classification": "known-transient-physical-corruption-with-varied-raw-rgb",
+  "attempt": {
+    "boot_epoch": 3,
+    "index": 7,
+    "preceding_valid_passes_total": 46,
+    "game_dwell_ms": 2000
+  },
+  "candidate": {
+    "source_commit": "e5fb64ae230820ed74f02dc528f99766b22940d4",
+    "rbf_sha256": "3b27159580fcf4071ed78fbf1431fda9fe40d6f4b0c0c88cc7fe40da62db6c70",
+    "setup_slack_ns": 0.671,
+    "hold_slack_ns": 0.223,
+    "tns_ns": 0.0
+  },
+  "physical_frames": [
+    {"order": 1, "sha256": "5e106ecf8c4df7585ad8019ff3b7667d7395a29dda6397b2e665916d8f7d9ad1"},
+    {"order": 2, "sha256": "5e106ecf8c4df7585ad8019ff3b7667d7395a29dda6397b2e665916d8f7d9ad1"},
+    {"order": 3, "sha256": "9c55f042898a36f0982736c9fa59e8aeaa139992e1aca4df80e595259052f750"}
+  ],
+  "internal_evidence": {
+    "framebuffer_sha256": "288f47335560f1169890ee50d02ddf3707ef4b568a22ccb06593a78d275ad250",
+    "diagnostic_architecture": "raw-scaler-rgb-state-v1",
+    "classification_at_failure": "raw_rgb_varied",
+    "classification_later_live": "raw_rgb_varied",
+    "raw_samples": [[4, 15, 5153, 24, 36564], [4, 15, 5153, 24, 36564], [4, 15, 5153, 24, 36564]],
+    "latch_drop_count": 0,
+    "latch_reject_count": 0,
+    "sink_visibility": "unobserved"
+  },
+  "artifacts": {
+    "root": "build/raw-scaler-rgb-state-phase2-epoch3-07",
+    "summary_sha256": "eacf8d6155508d55277eccc43d2ffe4c3b2332c206f7101aa604f0386a44de2a",
+    "failure_diagnostics_sha256": "a73a61c5875c96f5ba203b98e29f709b5f5e76463e44dd611ad3ba9a193f7b7c",
+    "live_diagnostics_sha256": "1252d01d55d435dcf004d3ffc94df6ad3ebfa9e49ddf98ca0487f50d7a44d63c",
+    "live_bundle_sha256": "1abc7667860c35c0161d35ec1d1f2c5d136694f08b8277239829dce4c6d84119",
+    "movie_sha256": "5a877f4a49e852fcbd37b836d2126ad7f3266a782d055d7308c5653c489f2f8d"
+  }
+}
