@@ -142,28 +142,25 @@ impl RawScalerState {
         self.words[RAW_SCALER_STATE_FLAGS_WORD]
     }
 
-    pub fn sample_valid(&self) -> bool {
-        self.flags() & RAW_SCALER_STATE_FLAG_SAMPLE_VALID != 0
+    pub fn frame_valid(&self) -> bool {
+        self.flags() & RAW_SCALER_STATE_FLAG_FRAME_VALID != 0
     }
 
-    pub fn sample_nonempty(&self) -> bool {
-        self.flags() & RAW_SCALER_STATE_FLAG_SAMPLE_NONEMPTY != 0
+    pub fn active_seen(&self) -> bool {
+        self.flags() & RAW_SCALER_STATE_FLAG_ACTIVE_SEEN != 0
     }
 
-    pub fn baseline_valid(&self) -> bool {
-        self.flags() & RAW_SCALER_STATE_FLAG_BASELINE_VALID != 0
+    pub fn any_nonblack(&self) -> bool {
+        self.flags() & RAW_SCALER_STATE_FLAG_ANY_NONBLACK != 0
     }
 
-    pub fn mismatch_latched(&self) -> bool {
-        self.flags() & RAW_SCALER_STATE_FLAG_MISMATCH_LATCHED != 0
+    pub fn variation_seen(&self) -> bool {
+        self.flags() & RAW_SCALER_STATE_FLAG_VARIATION_SEEN != 0
     }
 
-    pub fn baseline_control_crc(&self) -> u16 {
-        self.words[RAW_SCALER_STATE_BASELINE_CONTROL_CRC_WORD]
-    }
-
-    pub fn first_bad_control_crc(&self) -> u16 {
-        self.words[RAW_SCALER_STATE_FIRST_BAD_CONTROL_CRC_WORD]
+    pub fn first_active_rgb(&self) -> u32 {
+        u32::from(self.words[RAW_SCALER_STATE_FIRST_ACTIVE_RGB_LOW_WORD])
+            | (u32::from(self.words[RAW_SCALER_STATE_FIRST_ACTIVE_RGB_HIGH_WORD]) << 16)
     }
 }
 
@@ -679,8 +676,12 @@ pub fn decode_raw_scaler_state(words: &[u16]) -> Result<RawScalerState, String> 
             "raw scaler state CRC mismatch expected=0x{expected:04x} actual=0x{actual:04x}"
         ));
     }
-    if words[RAW_SCALER_STATE_FLAGS_WORD] & !RAW_SCALER_STATE_FLAGS_MASK != 0 {
-        return Err("raw scaler frame-integrity record contains nonzero reserved bits".to_string());
+    if words[RAW_SCALER_STATE_FLAGS_WORD] & !RAW_SCALER_STATE_FLAGS_MASK != 0
+        || words[RAW_SCALER_STATE_FIRST_ACTIVE_RGB_HIGH_WORD]
+            & RAW_SCALER_STATE_FIRST_ACTIVE_RGB_HIGH_RESERVED_ZERO_MASK
+            != 0
+    {
+        return Err("raw scaler RGB state record contains nonzero reserved bits".to_string());
     }
     let mut owned = [0; RAW_SCALER_STATE_WORDS];
     owned.copy_from_slice(words);
@@ -837,29 +838,28 @@ mod tests {
     }
 
     #[test]
-    fn raw_scaler_state_decodes_frame_integrity_tuple() {
+    fn raw_scaler_state_decodes_rgb_state() {
         let mut words = zero_hdmi_words::<RAW_SCALER_STATE_WORDS>(
             GET_RAW_SCALER_STATE,
             RAW_SCALER_STATE_SCHEMA,
         );
-        words[RAW_SCALER_STATE_FLAGS_WORD] = RAW_SCALER_STATE_FLAG_SAMPLE_VALID
-            | RAW_SCALER_STATE_FLAG_SAMPLE_NONEMPTY
-            | RAW_SCALER_STATE_FLAG_BASELINE_VALID
-            | RAW_SCALER_STATE_FLAG_MISMATCH_LATCHED;
-        words[RAW_SCALER_STATE_BASELINE_CONTROL_CRC_WORD] = 0x1234;
-        words[RAW_SCALER_STATE_FIRST_BAD_CONTROL_CRC_WORD] = 0x5678;
+        words[RAW_SCALER_STATE_FLAGS_WORD] = RAW_SCALER_STATE_FLAG_FRAME_VALID
+            | RAW_SCALER_STATE_FLAG_ACTIVE_SEEN
+            | RAW_SCALER_STATE_FLAG_ANY_NONBLACK
+            | RAW_SCALER_STATE_FLAG_VARIATION_SEEN;
+        words[RAW_SCALER_STATE_FIRST_ACTIVE_RGB_LOW_WORD] = 0xcdef;
+        words[RAW_SCALER_STATE_FIRST_ACTIVE_RGB_HIGH_WORD] = 0x00ab;
         words[RAW_SCALER_STATE_CRC_WORD] = message_crc_with_schema(
             GET_RAW_SCALER_STATE,
             RAW_SCALER_STATE_SCHEMA,
             &words[..RAW_SCALER_STATE_CRC_WORD],
         );
         let decoded = decode_raw_scaler_state(&words).unwrap();
-        assert!(decoded.sample_valid());
-        assert!(decoded.sample_nonempty());
-        assert!(decoded.baseline_valid());
-        assert!(decoded.mismatch_latched());
-        assert_eq!(decoded.baseline_control_crc(), 0x1234);
-        assert_eq!(decoded.first_bad_control_crc(), 0x5678);
+        assert!(decoded.frame_valid());
+        assert!(decoded.active_seen());
+        assert!(decoded.any_nonblack());
+        assert!(decoded.variation_seen());
+        assert_eq!(decoded.first_active_rgb(), 0x00ab_cdef);
     }
 
     #[test]
@@ -872,6 +872,15 @@ mod tests {
         assert!(decode_raw_scaler_state(&words).is_err());
 
         words[RAW_SCALER_STATE_FLAGS_WORD] = 1 << 15;
+        words[RAW_SCALER_STATE_CRC_WORD] = message_crc_with_schema(
+            GET_RAW_SCALER_STATE,
+            RAW_SCALER_STATE_SCHEMA,
+            &words[..RAW_SCALER_STATE_CRC_WORD],
+        );
+        assert!(decode_raw_scaler_state(&words).is_err());
+
+        words[RAW_SCALER_STATE_FLAGS_WORD] = 0;
+        words[RAW_SCALER_STATE_FIRST_ACTIVE_RGB_HIGH_WORD] = 0x0100;
         words[RAW_SCALER_STATE_CRC_WORD] = message_crc_with_schema(
             GET_RAW_SCALER_STATE,
             RAW_SCALER_STATE_SCHEMA,

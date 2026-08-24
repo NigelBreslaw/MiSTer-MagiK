@@ -4090,21 +4090,38 @@ mod linux {
     pub(super) fn raw_scaler_classification(
         samples: &[mister_magik_video_diagnostics_contract::RawScalerState; 3],
     ) -> &'static str {
-        if samples[0] != samples[1]
-            || samples[1] != samples[2]
-            || samples
-                .iter()
-                .any(|sample| !sample.sample_valid() || !sample.baseline_valid())
+        if samples
+            .iter()
+            .any(|sample| !sample.frame_valid() || !sample.active_seen())
         {
-            return "raw_frame_integrity_inconclusive";
+            return "raw_rgb_evidence_inconclusive";
         }
-        if samples[0].mismatch_latched() {
-            "raw_control_mismatch_latched"
-        } else if !samples[0].sample_nonempty() {
-            "raw_frame_integrity_inconclusive"
-        } else {
-            "raw_control_stable_since_baseline"
+        if samples
+            .iter()
+            .all(|sample| sample.variation_seen() && sample.any_nonblack())
+        {
+            return "raw_rgb_varied";
         }
+        let constant = samples.iter().all(|sample| !sample.variation_seen());
+        let first_rgb_stable = samples[0].first_active_rgb() == samples[1].first_active_rgb()
+            && samples[1].first_active_rgb() == samples[2].first_active_rgb();
+        if constant
+            && first_rgb_stable
+            && samples
+                .iter()
+                .all(|sample| !sample.any_nonblack() && sample.first_active_rgb() == 0)
+        {
+            return "raw_rgb_black";
+        }
+        if constant
+            && first_rgb_stable
+            && samples
+                .iter()
+                .all(|sample| sample.any_nonblack() && sample.first_active_rgb() != 0)
+        {
+            return "raw_rgb_constant";
+        }
+        "raw_rgb_evidence_inconclusive"
     }
 
     #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -4566,23 +4583,23 @@ mod linux {
                     let valid_samples = readout
                         .samples
                         .iter()
-                        .all(|sample| sample.sample_valid() && sample.baseline_valid());
-                    let records_identical = readout.samples[0] == readout.samples[1]
-                        && readout.samples[1] == readout.samples[2];
+                        .all(|sample| sample.frame_valid() && sample.active_seen());
+                    let classification = raw_scaler_classification(&readout.samples);
+                    let state_fields_stable = classification != "raw_rgb_evidence_inconclusive";
                     let coherent = context.owner_stable
                         && context.latch_ownership_stable == Some(true)
                         && context.launcher_state_stable
                         && valid_samples
-                        && records_identical;
+                        && state_fields_stable;
                     json!({
                         "schema": "mister-magik-fpga-video-diagnostics-v2",
-                        "diagnostic_architecture": "raw-scaler-frame-integrity-v1",
+                        "diagnostic_architecture": "raw-scaler-rgb-state-v1",
                         "available": true,
                         "coherent": coherent,
                         "classification": if coherent {
-                            raw_scaler_classification(&readout.samples)
+                            classification
                         } else {
-                            "raw_frame_integrity_inconclusive"
+                            "raw_rgb_evidence_inconclusive"
                         },
                         "sink_visibility": "unobserved",
                         "capture_start_monotonic_us": context.capture_start_monotonic_us,
@@ -4592,7 +4609,7 @@ mod linux {
                         "latch_status": context.latch_status_json,
                         "coherence": {
                             "three_samples_valid": valid_samples,
-                            "records_identical": records_identical,
+                            "state_fields_stable": state_fields_stable,
                             "sample_interval_us": readout.sample_interval_us,
                             "latch_ownership_stable": context.latch_ownership_stable,
                             "launcher_state_stable": context.launcher_state_stable,
@@ -4601,13 +4618,16 @@ mod linux {
                         "capabilities": {
                             "passive_video_observer": true,
                             "scaler_scheduler_state": false,
-                            "raw_scaler_frame_integrity": true,
-                            "pixel_observer": false,
+                            "raw_scaler_rgb_state": true,
+                            "pixel_observer": true,
                             "pll_observer": false,
                         },
                         "raw_scaler_state": {
-                            "baseline_control_crc": readout.samples.iter().map(|sample| sample.baseline_control_crc()).collect::<Vec<_>>(),
-                            "first_bad_control_crc": readout.samples.iter().map(|sample| sample.first_bad_control_crc()).collect::<Vec<_>>(),
+                            "frame_valid": readout.samples.iter().map(|sample| sample.frame_valid()).collect::<Vec<_>>(),
+                            "active_seen": readout.samples.iter().map(|sample| sample.active_seen()).collect::<Vec<_>>(),
+                            "any_nonblack": readout.samples.iter().map(|sample| sample.any_nonblack()).collect::<Vec<_>>(),
+                            "variation_seen": readout.samples.iter().map(|sample| sample.variation_seen()).collect::<Vec<_>>(),
+                            "first_active_rgb": readout.samples.iter().map(|sample| sample.first_active_rgb()).collect::<Vec<_>>(),
                             "raw_samples": readout.samples.iter().map(|sample| sample.words).collect::<Vec<_>>(),
                         },
                     })
@@ -8205,45 +8225,64 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
-    fn raw_scaler_classification_requires_three_stable_valid_records() {
+    fn raw_scaler_rgb_classification_requires_three_coherent_active_frames() {
         use mister_magik_video_diagnostics_contract as contract;
 
-        let sample = |mismatch: bool| {
+        let sample = |rgb: u32, nonblack: bool, varied: bool| {
             let mut words = [0; contract::RAW_SCALER_STATE_WORDS];
             words[contract::RAW_SCALER_STATE_SCHEMA_WORD] = contract::RAW_SCALER_STATE_SCHEMA;
             words[contract::RAW_SCALER_STATE_FLAGS_WORD] =
-                contract::RAW_SCALER_STATE_FLAG_SAMPLE_VALID
-                    | contract::RAW_SCALER_STATE_FLAG_SAMPLE_NONEMPTY
-                    | contract::RAW_SCALER_STATE_FLAG_BASELINE_VALID
-                    | if mismatch {
-                        contract::RAW_SCALER_STATE_FLAG_MISMATCH_LATCHED
+                contract::RAW_SCALER_STATE_FLAG_FRAME_VALID
+                    | contract::RAW_SCALER_STATE_FLAG_ACTIVE_SEEN
+                    | if nonblack {
+                        contract::RAW_SCALER_STATE_FLAG_ANY_NONBLACK
+                    } else {
+                        0
+                    }
+                    | if varied {
+                        contract::RAW_SCALER_STATE_FLAG_VARIATION_SEEN
                     } else {
                         0
                     };
-            words[contract::RAW_SCALER_STATE_BASELINE_CONTROL_CRC_WORD] = 0x1234;
+            words[contract::RAW_SCALER_STATE_FIRST_ACTIVE_RGB_LOW_WORD] = rgb as u16;
+            words[contract::RAW_SCALER_STATE_FIRST_ACTIVE_RGB_HIGH_WORD] = (rgb >> 16) as u16;
             contract::RawScalerState { words }
         };
-        let stable = [sample(false), sample(false), sample(false)];
+        let black = [
+            sample(0, false, false),
+            sample(0, false, false),
+            sample(0, false, false),
+        ];
+        assert_eq!(linux::raw_scaler_classification(&black), "raw_rgb_black");
+        let constant = [
+            sample(0xabcdef, true, false),
+            sample(0xabcdef, true, false),
+            sample(0xabcdef, true, false),
+        ];
         assert_eq!(
-            linux::raw_scaler_classification(&stable),
-            "raw_control_stable_since_baseline"
+            linux::raw_scaler_classification(&constant),
+            "raw_rgb_constant"
         );
-        let mismatch = [sample(true), sample(true), sample(true)];
-        assert_eq!(
-            linux::raw_scaler_classification(&mismatch),
-            "raw_control_mismatch_latched"
-        );
-        let mut changing = stable.clone();
-        changing[1].words[contract::RAW_SCALER_STATE_BASELINE_CONTROL_CRC_WORD] ^= 1;
-        assert_eq!(
-            linux::raw_scaler_classification(&changing),
-            "raw_frame_integrity_inconclusive"
-        );
-        let mut invalid = stable;
+        let varied = [
+            sample(0x010203, true, true),
+            sample(0x112233, true, true),
+            sample(0x445566, true, true),
+        ];
+        assert_eq!(linux::raw_scaler_classification(&varied), "raw_rgb_varied");
+        let mut invalid = varied.clone();
         invalid[1].words[contract::RAW_SCALER_STATE_FLAGS_WORD] = 0;
         assert_eq!(
             linux::raw_scaler_classification(&invalid),
-            "raw_frame_integrity_inconclusive"
+            "raw_rgb_evidence_inconclusive"
+        );
+        let changing_constant = [
+            sample(0x010101, true, false),
+            sample(0x020202, true, false),
+            sample(0x030303, true, false),
+        ];
+        assert_eq!(
+            linux::raw_scaler_classification(&changing_constant),
+            "raw_rgb_evidence_inconclusive"
         );
     }
 

@@ -38,8 +38,8 @@ set_net_delay -max 10.0 \
 	-from $magik_scaler_completion_ack_route \
 	-to $magik_scaler_completion_ack_meta
 
-# The retained baseline/first-mismatch record is a bundled-data crossing. It is
-# registered and held stable before the observation-generation toggle changes; the receiver
+# The most recently completed raw-RGB frame state is a bundled-data crossing.
+# It is registered and held stable before the frame-generation toggle changes; the receiver
 # synchronizes that toggle and waits one additional clk_sys edge before
 # sampling the word. Both routes are bounded explicitly because the existing
 # asynchronous clock groups cut normal setup/hold analysis.

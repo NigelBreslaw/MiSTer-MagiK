@@ -1,118 +1,101 @@
-# Experimental raw-scaler frame-integrity diagnostic
+# Experimental raw-scaler RGB-state diagnostic
 
-This disposable RBF observer preserves the first raw-scaler control-timing
-anomaly after a stable baseline. It exists to classify the next physical black
-or corrupt MagiK frame; it is not a production feature or recovery mechanism.
+This disposable RBF observer answers one question during the next persistent
+physical MagiK black screen: is the raw scaler RGB itself black, constant, or
+varied? It is evidence only, not a production feature or recovery mechanism.
 
-The queued completion repair is unchanged. The schema-2 RGB/activity observer
-is removed rather than stacked with this design.
+The queued completion repair and latch-v5 remain unchanged. The schema-3
+CE/DE/HS/VS control-CRC observer is removed rather than retained or stacked.
 
-## Passive boundary and retained state
+## Passive boundary
 
-The HDMI-domain observer reads only the existing raw scaler `CE`, `DE`, `HS`,
-and `VS` controls. It does not read RGB, framebuffer addresses, metadata, final
-output, routing, latch, reset, or PLL signals. Its output reaches only the
-read-only responder beside the latch bridge in `sys_top`.
+Production `sys_top` maps the direct ascal output to `hdmi_data[23:0]` as
+`R[23:16]`, `G[15:8]`, and `B[7:0]`. Its exact black value is `24'h000000`.
+The observer reads only that raw RGB bus, raw DE, and raw VS for completed-frame
+delimiting. It does not read scheduler/completion state, framebuffer data or
+addresses, latch or route state, reset control, PLL, mux control, post-OSD/final
+pixels, or TMDS. Its outputs reach only the read-only UIO responder.
 
-For every completed frame it derives a CRC-16 of the ordered four-bit
-`{CE, DE, HS, VS}` sample stream. The complete waveform fingerprint retains
-ordering, phase, sync, enable, and active-area changes without duplicating wide
-per-frame counters.
+For the current frame the HDMI-domain logic retains only:
 
-A frame is nonempty only after CE, HS, VS, and DE were all observed. Three
-consecutive identical, nonempty fingerprints establish the baseline. After
-that, the first fingerprint difference or empty frame is latched. The
-baseline and first-bad record remain immutable until the existing common reset
-or RBF reload. There is no software clear, arm, freeze, write, or recovery
-operation.
+- whether an active DE sample was seen;
+- whether any active pixel differed from exact black;
+- whether any active pixel differed from the first active RGB sample;
+- the exact first active 24-bit RGB sample.
+
+At rising raw VS, the previous completed frame is atomically published. An
+empty/no-DE frame is published as invalid so stale evidence cannot be reused.
+The next frame starts immediately with cleared state. There is no content
+baseline or sticky comparison: the RBF reloads on return, black may occur from
+its first complete frame, and healthy UI pixels legitimately change.
 
 ## Read-only ABI
 
-Command `0x67` exposes `raw-scaler-frame-integrity-v1`, schema `3`. Commands
-`0x60` through `0x66` remain unsupported. Latch protocol `5` and capabilities
-`0x03ff` are unchanged.
+Command `0x67` exposes `raw-scaler-rgb-state-v1`, schema `4`. Commands `0x60`
+through `0x66` remain unsupported. Latch protocol `5` and capabilities `0x03ff`
+are unchanged.
 
 After magic `0x4d57`, the fixed five-word response is:
 
 | Word | Meaning |
 | --- | --- |
-| 0 | schema `3` |
-| 1 | flags: sample valid, nonempty, baseline valid, mismatch latched |
-| 2–3 | baseline and first-bad control CRC |
+| 0 | schema `4` |
+| 1 | flags: completed-frame valid, active seen, any nonblack, variation seen |
+| 2 | first active RGB bits `15:0` (`G`, `B`) |
+| 3 | first active RGB bits `23:16` (`R`); high byte reserved zero |
 | 4 | existing framed CRC-16 |
 
-The HDMI bundle is registered before its generation toggle changes. The
-`clk_sys` receiver uses the explicit two-stage generation synchronizer, waits
-one additional clock, and snapshots the stable bundle. A command transaction
-then reads an immutable snapshot.
+The complete 48-bit HDMI bundle is registered before its generation toggle
+changes. The `clk_sys` receiver synchronizes only that toggle through two
+explicit stages, waits one additional edge, and copies the stable bundle. Each
+UIO transaction uses an immutable snapshot. The generation is transport state,
+not part of the record and does not need to remain unchanged across host reads.
 
 ## Host classification
 
-The device agent reads three records 25 ms apart and requires valid framing,
-identical records, a valid baseline, stable ownership, and stable launcher
-state. A retained mismatch remains classifiable even when the bad frame itself
-was empty.
+The device agent reads three records at bounded 25 ms intervals. All three must
+be CRC-valid completed active frames with stable classification fields.
 
-| Classification | Meaning |
-| --- | --- |
-| `raw_control_mismatch_latched` | the observer retained a first control-waveform mismatch |
-| `raw_control_stable_since_baseline` | no raw control mismatch has been retained; a later probe should move downstream |
-| `raw_frame_integrity_inconclusive` | evidence is unsupported, malformed, changing, invalid, empty, or lacks a baseline |
+| Classification | Exact requirement | Decision after a confirmed physical black |
+| --- | --- | --- |
+| `raw_rgb_black` | no nonblack and no variation; first RGB exactly `0x000000` in all samples | investigate scaler fetch, pixel-data, or reset-epoch behavior |
+| `raw_rgb_constant` | no variation; one stable nonblack first RGB in all samples | investigate scaler fetch, pixel-data, or reset-epoch behavior |
+| `raw_rgb_varied` | variation and nonblack observed in all samples; first RGB may change | move downstream to a minimal final-output probe |
+| `raw_rgb_evidence_inconclusive` | empty, invalid, malformed, mixed, or unstable evidence | repair only this sampling or transport |
 
-Every result retains `sink_visibility: "unobserved"`. Stable control evidence
-does not prove pixels or the physical sink were correct.
+Healthy experimental activation is fail-closed: only coherent
+`raw_rgb_varied` evidence is accepted. Black, constant, and inconclusive
+evidence reject activation. Every result retains
+`sink_visibility: "unobserved"`; varied internal RGB does not prove correct
+pixels or a visible sink.
 
 ## Local gates before synthesis
 
 - Apply the production patch and compile patched production `ascal.vhd`.
-- Keep the exact completion-queue GHDL simulation and formal proof passing.
-- Simulate exact three-frame baseline acquisition, changing and empty frames,
-  phase-only CRC mismatch and independent HS/DE/active waveform changes,
-  sticky first-bad retention, reset, immutable command framing,
-  CRC, malformed reads, and latch-v5 non-interference.
-- Structurally reject the retired RGB/activity observer, production fanout, or
-  any new framebuffer, latch, route, reset, PLL, mux, or pixel tap.
-- Require exact generation synchronizer endpoints, bounded generation and
-  bundled-data paths, and the existing MTBF policy.
-- For this disposable diagnostic profile only, cap growth at 208 ALMs and 224
-  registers while still requiring unchanged RAM, DSP, and PLL identity. Keep
-  the 0.200 ns hold floor and zero-TNS requirement.
-- Do not run CI or install this RBF until the committed candidate passes the
+- Keep the exact completion-queue GHDL simulation, BMC, required covers, and
+  induction unchanged and passing.
+- Simulate varied, all-black-from-first-frame, constant nonblack, changing-first
+  sample, empty/no-DE, reset during accumulation and response, atomic
+  completed-frame publication, immutable transaction snapshots, CRC, malformed
+  reads, `0x60–0x66`, and latch-v5 non-interference.
+- Structurally reject the schema-3 control CRC/baseline, any production fanout,
+  and any new completion, framebuffer, latch, route, reset-control, PLL, mux,
+  final-pixel, or TMDS tap.
+- Require exact generation synchronizer endpoints and bounded generation and
+  48-bit bundled-data paths under the existing MTBF policy.
+- Infer no RAM, DSP, or PLL and remain comfortably below the disposable
+  schema-3 cap of `+208` ALMs and `+224` registers.
+- Do not run CI or install this RBF until the committed candidate later passes
   cached Apple-container signoff. No seed sweep, waiver, fitter change,
   LogicLock, or direct Quartus command is permitted.
 
-## Why this observer replaces schema 2
+## Why schema 4 is next
 
-On 2026-08-24 one corrupt native frame appeared between byte-identical healthy
-MagiK frames while the authoritative framebuffer stayed correct. The old
-activity snapshots remained saturated and active, and the subsequent
-755-frame native movie was entirely healthy. The anomaly therefore disappeared
-before a delayed movie or non-sticky activity record could classify it.
+The schema-3 RBF reproduced a persistent physical black screen while its raw
+CE/DE/HS/VS fingerprint remained at the healthy baseline in two independent
+three-sample records. The framebuffer remained correct and latch ownership and
+counters remained healthy. That result excludes a raw control-waveform change
+within the probe's coverage, but schema 3 deliberately did not observe RGB.
 
-This design retains the first raw control-timing anomaly across self-recovery.
-If no mismatch is retained during a confirmed physical failure, the raw
-control boundary is excluded only within this probe's limits and the next
-minimal observer moves downstream. The preserved incident is documented in
-[`history/2026-08-24-phase2-transient-corruption-result.md`](../history/2026-08-24-phase2-transient-corruption-result.md).
-
-## Phase 2 result
-
-The signed schema-3 RBF reproduced a persistent physical black screen on boot
-epoch 3, attempt 5 after 44 clean direct-Arcade returns and two supervised
-reboots. The USB-video still was uniform video-level black and byte-identical
-to the earlier confirmed black incident. At the same checkpoint, the
-authoritative RGB565 framebuffer was byte-identical to the known-correct
-Arcade return.
-
-The failure-time record and a second live three-sample record both remained
-`raw_control_stable_since_baseline`: baseline CRC `45489`, first-bad CRC `0`,
-three identical coherent samples, stable ownership, and zero latch drops or
-rejects. No reboot, RBF reload, launcher restart, or additional transition was
-performed after detection.
-
-This result rejects a CE/DE/HS/VS waveform change at the observed raw-scaler
-boundary as the cause of this black incident, within the CRC probe's coverage.
-It does not cover RGB pixel data. The next diagnostic should retire this probe
-and move to one equally passive, sticky fingerprint at the next downstream
-boundary. See
+The preserved unrecovered incident and exact candidate identity are in
 [`history/2026-08-24-frame-integrity-black-result.md`](../history/2026-08-24-frame-integrity-black-result.md).

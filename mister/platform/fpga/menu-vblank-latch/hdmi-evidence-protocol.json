@@ -43,25 +43,26 @@
     ]
   },
   "raw_scaler_state": {
-    "schema": 3,
+    "schema": 4,
     "command": 103,
     "magic": 19799,
     "word_count": 5,
     "words": [
       "schema",
       "flags",
-      "baseline_control_crc",
-      "first_bad_control_crc",
+      "first_active_rgb_low",
+      "first_active_rgb_high",
       "crc"
     ],
     "flags": {
-      "sample_valid": 0,
-      "sample_nonempty": 1,
-      "baseline_valid": 2,
-      "mismatch_latched": 3
+      "frame_valid": 0,
+      "active_seen": 1,
+      "any_nonblack": 2,
+      "variation_seen": 3
     },
     "reserved_zero_masks": {
-      "flags": 65520
+      "flags": 65520,
+      "first_active_rgb_high": 65280
     }
   },
   "path_activity": {

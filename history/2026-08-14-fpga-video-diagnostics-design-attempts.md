@@ -1000,6 +1000,24 @@ the safer fixed-seed tradeoff.
 The design and pre-synthesis gates are frozen in
 [`2026-08-24-raw-scaler-frame-integrity-design.md`](2026-08-24-raw-scaler-frame-integrity-design.md).
 
+## Design 7: completed-frame raw RGB state
+
+Design 6 reproduced a persistent physical black while CE/DE/HS/VS stayed at
+the healthy baseline. Design 7 therefore removes the schema-3 control CRC and
+does not stack another observer. It reads only the direct ascal RGB output plus
+raw DE and VS, publishes the most recently completed active frame, and retains
+only any-nonblack, variation, and the exact first 24-bit RGB sample.
+
+The production boundary is unambiguous: `hdmi_data[23:0]` maps as 8-bit R, G,
+and B with exact black `0x000000`. Command `0x67` becomes
+`raw-scaler-rgb-state-v1`, schema 4. The record stays five words, has no
+write/clear/arm/freeze behavior, and never infers sink visibility. Healthy
+activation accepts only three coherent `raw_rgb_varied` samples; black,
+constant, or inconclusive evidence fails closed.
+
+The frozen design and next-result decision are in
+[`2026-08-24-raw-scaler-rgb-state-design.md`](2026-08-24-raw-scaler-rgb-state-design.md).
+
 ## Facts established despite the failed implementations
 
 The work was not diagnostically empty. It established the following facts:

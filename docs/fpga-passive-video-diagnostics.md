@@ -36,9 +36,9 @@ credit-accounting stall for that occurrence, so the scheduler observer is
 retired from the next candidate.
 
 The current disposable experiment is
-[Experimental raw-scaler frame-integrity diagnostic](fpga-raw-scaler-diagnostic.md).
-It reuses only `0x67` with schema 3 and replaces the retired RGB/activity taps
-with a CE/DE/HS/VS-only stable-baseline and sticky first-mismatch recorder.
+[Experimental raw-scaler RGB-state diagnostic](fpga-raw-scaler-diagnostic.md).
+It reuses only `0x67` with schema 4 and replaces the retired control CRC with a
+completed-frame raw RGB class and exact first active sample.
 
 The complete attempt history and retained measurements are in
 [FPGA video diagnostics: two attempted designs and their retirement](../history/2026-08-14-fpga-video-diagnostics-design-attempts.md).

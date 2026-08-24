@@ -250,24 +250,40 @@ def main() -> None:
     if control_source.count("(* preserve *) reg source_generation") != 1:
         fail("raw scaler frame generation is not preserved as a distinct CDC source")
     for exact_probe in (
-        "input  wire        raw_ce",
+        "input  wire [23:0] raw_rgb",
         "input  wire        raw_de",
-        "input  wire        raw_hs",
         "input  wire        raw_vs",
-        "wire frame_start = raw_ce && raw_vs && !raw_vs_previous;",
-        "wire completed_nonempty = ce_seen && hs_seen && vs_seen && de_seen;",
-        "candidate_streak == 2'd2",
-        "control_crc_update(control_crc,",
+        "wire frame_start = raw_vs && !raw_vs_previous;",
+        "wire active_sample = raw_de;",
+        "raw_rgb != first_active_rgb",
     ):
         if control_source.count(exact_probe) != 1:
             fail(f"raw scaler diagnostic probe is missing or ambiguous: {exact_probe}")
-    if control_source.count("MAGIK_RAW_SCALER_STATE_FLAG_MISMATCH_LATCHED") != 2:
-        fail("raw scaler sticky mismatch publication is incomplete")
-    if control_source.count("source_generation <= ~source_generation;") != 2:
-        fail("raw scaler publication toggle sites are missing or ambiguous")
-    for forbidden_pixel_probe in ("raw_rgb", "hdmi_data", "rgb_in", "input  wire [23:0]"):
-        if forbidden_pixel_probe in control_source:
-            fail(f"raw scaler frame-integrity observer taps pixel data: {forbidden_pixel_probe}")
+    if control_source.count("raw_rgb != 24'h000000") != 2:
+        fail("raw scaler black comparison is missing or ambiguous")
+    if control_source.count("source_generation <= ~source_generation;") != 1:
+        fail("raw scaler completed-frame publication toggle is missing or ambiguous")
+    for retired_control_observer in (
+        "control_crc",
+        "candidate_streak",
+        "candidate_valid",
+        "baseline_valid",
+        "baseline_matches",
+        "mismatch_latched",
+        "raw_ce",
+        "raw_hs",
+    ):
+        if retired_control_observer in control_source:
+            fail(f"retired schema-3 control observer remains: {retired_control_observer}")
+    for forbidden_rgb_probe in (
+        "hdmi_data",
+        "rgb_in",
+        "hdmi_data_osd",
+        "HDMI_TX",
+        "TMDS",
+    ):
+        if forbidden_rgb_probe in control_source:
+            fail(f"raw RGB observer taps a non-raw or final pixel cone: {forbidden_rgb_probe}")
     if re.search(r"(?m)^\s*module\b", avalon_source + output_source):
         fail("retired Avalon or output diagnostic compatibility source defines logic")
     compiled_diagnostics = control_source + avalon_source + output_source
@@ -449,13 +465,15 @@ def main() -> None:
             fail("patched production bridge binding mismatch: " + "; ".join(mismatches))
         for raw_binding in (
             ".clk_hdmi(clk_hdmi)",
-            ".raw_ce(scaler_out)",
+            ".raw_rgb(hdmi_data)",
             ".raw_de(hdmi_de)",
-            ".raw_hs(hdmi_hs)",
             ".raw_vs(hdmi_vs)",
         ):
             if patched.count(raw_binding) != 1:
                 fail(f"raw scaler boundary binding is missing or ambiguous: {raw_binding}")
+        for retired_binding in (".raw_ce(scaler_out)", ".raw_hs(hdmi_hs)"):
+            if retired_binding in patched:
+                fail(f"retired schema-3 boundary binding remains: {retired_binding}")
         for fragment in (
             "magik_scaler_completion_gray",
             "magik_scaler_completion_pulse",

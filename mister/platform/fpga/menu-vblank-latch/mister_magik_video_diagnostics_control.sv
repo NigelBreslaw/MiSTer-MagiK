@@ -4,17 +4,16 @@
 `timescale 1ns/1ps
 `default_nettype none
 
-// Disposable passive observer at the unmodified ascal control boundary. It
-// retains the first completed-frame control-timing mismatch after a stable
-// three-frame baseline. No observer output is connected to scaler, latch,
-// reset, route, PLL, mux, framebuffer, or pixel control/data logic.
+// Disposable passive observer at the unmodified ascal RGB boundary. It
+// publishes only the most recently completed frame's active-pixel class and
+// first active RGB sample. No observer output is connected to scaler, latch,
+// reset, route, PLL, mux, framebuffer, final output, or pixel control/data.
 module mister_magik_raw_scaler_diagnostic (
 	input  wire        clk_hdmi,
 	input  wire        clk_sys,
 	input  wire        reset_active,
-	input  wire        raw_ce,
+	input  wire [23:0] raw_rgb,
 	input  wire        raw_de,
-	input  wire        raw_hs,
 	input  wire        raw_vs,
 	input  wire        io_uio,
 	input  wire        io_strobe,
@@ -27,18 +26,13 @@ module mister_magik_raw_scaler_diagnostic (
 
 	reg raw_vs_previous = 1'b0;
 	reg frame_open = 1'b0;
-	reg ce_seen = 1'b0;
-	reg hs_seen = 1'b0;
-	reg vs_seen = 1'b0;
-	reg de_seen = 1'b0;
-	reg [15:0] control_crc = 16'hffff;
+	reg active_seen = 1'b0;
+	reg any_nonblack = 1'b0;
+	reg variation_seen = 1'b0;
+	reg [23:0] first_active_rgb = 24'd0;
 
-	reg candidate_valid = 1'b0;
-	reg [1:0] candidate_streak = 2'd0;
-
-	// Slots 0..2 are response words 1..3. Before publication the baseline slot
-	// holds the current candidate CRC; no generation toggle exposes it.
-	// baseline/first-bad storage and remains stable between publications.
+	// Slots 0..2 are response words 1..3. The complete bundle is registered
+	// before its generation toggle changes and remains stable for the receiver.
 	(* preserve *) reg [47:0] source_state = 48'd0;
 	(* preserve *) reg source_generation = 1'b0;
 
@@ -56,15 +50,9 @@ module mister_magik_raw_scaler_diagnostic (
 	reg [15:0] tx_crc = 16'hffff;
 	reg [15:0] response_word;
 
-	wire frame_start = raw_ce && raw_vs && !raw_vs_previous;
+	wire frame_start = raw_vs && !raw_vs_previous;
 	wire completed_frame = frame_start && frame_open;
-	wire completed_nonempty = ce_seen && hs_seen && vs_seen && de_seen;
-	wire candidate_matches = source_state[31:16] == control_crc;
-	wire baseline_matches = source_state[31:16] == control_crc;
-	wire baseline_valid =
-		(source_state[15:0] & MAGIK_RAW_SCALER_STATE_FLAG_BASELINE_VALID) != 0;
-	wire mismatch_latched =
-		(source_state[15:0] & MAGIK_RAW_SCALER_STATE_FLAG_MISMATCH_LATCHED) != 0;
+	wire active_sample = raw_de;
 	wire command_start = io_uio && io_strobe && !has_command;
 	wire command_data = io_uio && io_strobe && has_command;
 	wire selected_start = io_din[7:0] == MAGIK_UIO_GET_RAW_SCALER_STATE;
@@ -97,37 +85,21 @@ module mister_magik_raw_scaler_diagnostic (
 		end
 	endfunction
 
-	function automatic [15:0] control_crc_update;
-		input [15:0] crc_in;
-		input [3:0] control_sample;
-		integer bit_index;
-		reg [15:0] value;
-		begin
-			value = crc_in ^ {control_sample, 12'h000};
-			for(bit_index = 0; bit_index < 4; bit_index = bit_index + 1)
-				value = value[15] ? ((value << 1) ^ 16'h1021) : (value << 1);
-			control_crc_update = value;
-		end
-	endfunction
-
 	localparam [15:0] MAGIK_RAW_SCALER_STATE_SCHEMA_CRC =
 		crc_update_word(MAGIK_RAW_SCALER_STATE_HEADER_CRC,
 			MAGIK_RAW_SCALER_STATE_SCHEMA);
 
-	// Fingerprint the exact ordered raw control waveform. The rising
-	// VS sample begins the next frame and is intentionally excluded from the
-	// tuple being completed on the same edge.
+	// RGB is the production ascal {R,G,B} 8:8:8 output. Its exact black value
+	// is 24'h000000. The rising VS sample starts the next frame and is excluded
+	// from the completed bundle published on the same edge.
 	always @(posedge clk_hdmi or posedge reset_active) begin
 		if(reset_active) begin
 			raw_vs_previous <= 1'b0;
 			frame_open <= 1'b0;
-			ce_seen <= 1'b0;
-			hs_seen <= 1'b0;
-			vs_seen <= 1'b0;
-			de_seen <= 1'b0;
-			control_crc <= 16'hffff;
-			candidate_valid <= 1'b0;
-			candidate_streak <= 2'd0;
+			active_seen <= 1'b0;
+			any_nonblack <= 1'b0;
+			variation_seen <= 1'b0;
+			first_active_rgb <= 24'd0;
 			source_state <= 48'd0;
 			source_generation <= 1'b0;
 		end
@@ -136,60 +108,36 @@ module mister_magik_raw_scaler_diagnostic (
 
 			if(frame_start) begin
 				frame_open <= 1'b1;
-				control_crc <= control_crc_update(16'hffff,
-					{raw_ce, raw_de, raw_hs, raw_vs});
-				ce_seen <= raw_ce;
-				hs_seen <= raw_ce && raw_hs;
-				vs_seen <= raw_ce && raw_vs;
-				de_seen <= raw_ce && raw_de;
+				active_seen <= active_sample;
+				any_nonblack <= active_sample && (raw_rgb != 24'h000000);
+				variation_seen <= 1'b0;
+				first_active_rgb <= active_sample ? raw_rgb : 24'd0;
 
 				if(completed_frame) begin
-					if(!baseline_valid) begin
-						if(!completed_nonempty) begin
-							candidate_valid <= 1'b0;
-							candidate_streak <= 2'd0;
-						end
-						else if(candidate_valid && candidate_matches) begin
-							if(candidate_streak == 2'd2) begin
-								source_state <= {
-									16'd0, control_crc,
-									MAGIK_RAW_SCALER_STATE_FLAG_SAMPLE_VALID |
-									MAGIK_RAW_SCALER_STATE_FLAG_SAMPLE_NONEMPTY |
-									MAGIK_RAW_SCALER_STATE_FLAG_BASELINE_VALID
-								};
-								source_generation <= ~source_generation;
-								candidate_valid <= 1'b0;
-								candidate_streak <= 2'd0;
-							end
-							else
-								candidate_streak <= candidate_streak + 1'd1;
-						end
-						else begin
-							candidate_valid <= 1'b1;
-							candidate_streak <= 2'd1;
-							source_state[31:16] <= control_crc;
-						end
-					end
-					else if(!mismatch_latched &&
-						(!completed_nonempty || !baseline_matches)) begin
-						source_state[15:0] <=
-							MAGIK_RAW_SCALER_STATE_FLAG_SAMPLE_VALID |
-							MAGIK_RAW_SCALER_STATE_FLAG_BASELINE_VALID |
-							MAGIK_RAW_SCALER_STATE_FLAG_MISMATCH_LATCHED |
-							(completed_nonempty ?
-								MAGIK_RAW_SCALER_STATE_FLAG_SAMPLE_NONEMPTY : 16'd0);
-						source_state[47:32] <= control_crc;
-						source_generation <= ~source_generation;
-					end
+					source_state <= {
+						{8'd0, first_active_rgb[23:16]},
+						first_active_rgb[15:0],
+						MAGIK_RAW_SCALER_STATE_FLAG_FRAME_VALID |
+						(active_seen ?
+							MAGIK_RAW_SCALER_STATE_FLAG_ACTIVE_SEEN : 16'd0) |
+						(any_nonblack ?
+							MAGIK_RAW_SCALER_STATE_FLAG_ANY_NONBLACK : 16'd0) |
+						(variation_seen ?
+							MAGIK_RAW_SCALER_STATE_FLAG_VARIATION_SEEN : 16'd0)
+					};
+					source_generation <= ~source_generation;
 				end
 			end
-			else begin
-				control_crc <= control_crc_update(control_crc,
-					{raw_ce, raw_de, raw_hs, raw_vs});
-				ce_seen <= ce_seen | raw_ce;
-				hs_seen <= hs_seen | (raw_ce && raw_hs);
-				vs_seen <= vs_seen | (raw_ce && raw_vs);
-				de_seen <= de_seen | (raw_ce && raw_de);
+			else if(active_sample) begin
+				if(!active_seen) begin
+					active_seen <= 1'b1;
+					first_active_rgb <= raw_rgb;
+				end
+				else if(raw_rgb != first_active_rgb)
+					variation_seen <= 1'b1;
+
+				if(raw_rgb != 24'h000000)
+					any_nonblack <= 1'b1;
 			end
 		end
 	end
@@ -210,9 +158,9 @@ module mister_magik_raw_scaler_diagnostic (
 			response_data = response_word;
 	end
 
-	// Toggle plus stable bundled data. The source changes only on baseline
-	// publication or the first sticky mismatch; a transaction snapshot never
-	// changes until io_uio is released.
+	// Toggle plus stable bundled data. The receiver waits one clk_sys edge
+	// after observing a new generation before copying the complete bundle. A
+	// command snapshot remains immutable until io_uio is released.
 	always @(posedge clk_sys or posedge reset_active) begin
 		if(reset_active) begin
 			generation_meta <= 1'b0;

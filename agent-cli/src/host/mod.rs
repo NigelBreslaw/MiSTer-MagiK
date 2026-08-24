@@ -3643,6 +3643,41 @@ fn experimental_fpga_architecture_is_current(diagnostics: &Value) -> bool {
                     .and_then(Value::as_array)
                     .is_some_and(|samples| samples.len() == 3)
         }
+        Some("raw-scaler-rgb-state-v1") => {
+            diagnostics.get("classification").and_then(Value::as_str) == Some("raw_rgb_varied")
+                && diagnostics
+                    .pointer("/capabilities/passive_video_observer")
+                    .and_then(Value::as_bool)
+                    == Some(true)
+                && diagnostics
+                    .pointer("/capabilities/scaler_scheduler_state")
+                    .and_then(Value::as_bool)
+                    == Some(false)
+                && diagnostics
+                    .pointer("/capabilities/raw_scaler_rgb_state")
+                    .and_then(Value::as_bool)
+                    == Some(true)
+                && diagnostics
+                    .pointer("/capabilities/pixel_observer")
+                    .and_then(Value::as_bool)
+                    == Some(true)
+                && diagnostics
+                    .pointer("/capabilities/pll_observer")
+                    .and_then(Value::as_bool)
+                    == Some(false)
+                && diagnostics
+                    .pointer("/coherence/three_samples_valid")
+                    .and_then(Value::as_bool)
+                    == Some(true)
+                && diagnostics
+                    .pointer("/coherence/state_fields_stable")
+                    .and_then(Value::as_bool)
+                    == Some(true)
+                && diagnostics
+                    .pointer("/raw_scaler_state/raw_samples")
+                    .and_then(Value::as_array)
+                    .is_some_and(|samples| samples.len() == 3)
+        }
         _ => false,
     }
 }
@@ -4176,6 +4211,7 @@ fn experimental_agent_preload_evidence_accepted(evidence: &Value) -> bool {
                 Some(
                     "read passive FPGA video diagnostics: unsupported raw scaler state schema 1"
                         | "read passive FPGA video diagnostics: unsupported raw scaler state schema 2"
+                        | "read passive FPGA video diagnostics: unsupported raw scaler state schema 3"
                 )
             ))
 }
@@ -34717,6 +34753,72 @@ H: Handlers=event3 js0"#
         let mut latched_mismatch = frame_integrity.clone();
         latched_mismatch["classification"] = json!("raw_control_mismatch_latched");
         assert!(!experimental_fpga_evidence_is_current(&latched_mismatch));
+        let raw_rgb_state = json!({
+            "schema": "mister-magik-fpga-video-diagnostics-v2",
+            "diagnostic_architecture": "raw-scaler-rgb-state-v1",
+            "available": true,
+            "coherent": true,
+            "classification": "raw_rgb_varied",
+            "sink_visibility": "unobserved",
+            "owner_epoch_before": 13,
+            "owner_epoch_after": 13,
+            "coherence": {
+                "three_samples_valid": true,
+                "state_fields_stable": true,
+                "latch_ownership_stable": true,
+                "launcher_state_stable": true,
+                "ownership_check_error": null,
+            },
+            "capabilities": {
+                "passive_video_observer": true,
+                "scaler_scheduler_state": false,
+                "raw_scaler_rgb_state": true,
+                "pixel_observer": true,
+                "pll_observer": false,
+            },
+            "latch_status": {
+                "active_sequence": 7,
+                "flags": 1 << mister_magik_latch_contract::STATUS_MAGIK_OWNERSHIP,
+                "active_width": 960,
+                "active_height": 540,
+                "active_stride": 1920,
+                "crc": 0,
+            },
+            "raw_scaler_state": {
+                "raw_samples": [
+                    [4, 15, 0x0203, 0x0001, 0],
+                    [4, 15, 0x2233, 0x0011, 0],
+                    [4, 15, 0x5566, 0x0044, 0],
+                ],
+            },
+        });
+        assert!(experimental_raw_scaler_evidence_available(&raw_rgb_state));
+        assert!(experimental_agent_preload_evidence_accepted(&raw_rgb_state));
+        assert!(experimental_fpga_evidence_is_current(&raw_rgb_state));
+        for rejected in [
+            "raw_rgb_black",
+            "raw_rgb_constant",
+            "raw_rgb_evidence_inconclusive",
+        ] {
+            let mut evidence = raw_rgb_state.clone();
+            evidence["classification"] = json!(rejected);
+            assert!(!experimental_raw_scaler_evidence_available(&evidence));
+            assert!(!experimental_agent_preload_evidence_accepted(&evidence));
+            assert!(!experimental_fpga_evidence_is_current(&evidence));
+        }
+        for (pointer, value) in [
+            ("/coherence/three_samples_valid", json!(false)),
+            ("/coherence/state_fields_stable", json!(false)),
+            ("/capabilities/passive_video_observer", json!(false)),
+            ("/capabilities/scaler_scheduler_state", json!(true)),
+            ("/capabilities/raw_scaler_rgb_state", json!(false)),
+            ("/capabilities/pixel_observer", json!(false)),
+            ("/capabilities/pll_observer", json!(true)),
+        ] {
+            let mut evidence = raw_rgb_state.clone();
+            *evidence.pointer_mut(pointer).unwrap() = value;
+            assert!(!experimental_fpga_evidence_is_current(&evidence));
+        }
         let retired_scheduler = json!({
             "available": false,
             "classification": "unclassified",
@@ -34736,6 +34838,16 @@ H: Handlers=event3 js0"#
         });
         assert!(experimental_agent_preload_evidence_accepted(
             &retired_raw_activity
+        ));
+        let retired_frame_integrity = json!({
+            "available": false,
+            "classification": "unclassified",
+            "coherent": false,
+            "reason": "read passive FPGA video diagnostics: unsupported raw scaler state schema 3",
+            "schema": "mister-magik-fpga-video-diagnostics-v1",
+        });
+        assert!(experimental_agent_preload_evidence_accepted(
+            &retired_frame_integrity
         ));
         for (pointer, value) in [
             ("/schema", json!("mister-magik-fpga-video-diagnostics-v2")),
