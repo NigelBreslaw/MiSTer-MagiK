@@ -120,15 +120,21 @@ every ten completed attempts. Preflight and every post-reboot check reported
 ownership, and zero latch drops or rejects. No all-zero physical black screen
 was observed.
 
-The campaign nevertheless failed at additional attempt 43. All three physical
-captures over the 3,258 ms confirmation window were byte-identical and showed
-a persistent partial-black/corrupted launcher: most list and preview content
-was absent even though the authoritative RGB565 framebuffer was the exact
-known-good frame. Failure-time FPGA evidence remained coherent
+The original audit identified a failure at additional attempt 43. A later
+fail-closed rerun forced direct comparison of every distinct physical hash
+against the authoritative framebuffer and corrected that audit: attempts 6,
+8, and 12 had already emitted a byte-identical `9db0...` preview-loss frame.
+The Arcade list remained visible, but the physical preview region was black
+and contained vertical dotted corruption while the framebuffer contained the
+complete preview. Attempt 43 then emitted the more extensive `d5cb...`
+partial-black frame. Each occurrence persisted through its three-capture
+confirmation window. The earliest confirmed failure was therefore attempt 6,
+not attempt 43. Failure-time FPGA evidence remained coherent
 `repair_transport_ready`, with a 960x540 route and zero latch drops/rejects.
 
 | Artifact | SHA-256 |
 | --- | --- |
+| preview-loss physical capture at attempts 6, 8, and 12 | `9db0ffa57c146b643d4881b813983ab7252a4d76c17b7c41262af0c52035e0da` |
 | physical capture | `d5cb2957b17abf7d3875fb07a4ff19fe352f179aa7b8af5f97ae159bd2bac521` |
 | physical confirmation 1 | `d5cb2957b17abf7d3875fb07a4ff19fe352f179aa7b8af5f97ae159bd2bac521` |
 | physical confirmation 2 | `d5cb2957b17abf7d3875fb07a4ff19fe352f179aa7b8af5f97ae159bd2bac521` |
@@ -162,3 +168,56 @@ build/scaler-copy-tail-additional75-block5-03/
 
 The compact integrity record is
 [`2026-08-24-scaler-copy-tail-additional75-partial-black-incident-v1.json`](2026-08-24-scaler-copy-tail-additional75-partial-black-incident-v1.json).
+
+## Fail-closed rerun
+
+Host commit `563b807cc` removed the invalid temporal aggregation rule. A raw
+`corrupted` sample can no longer become `visible` because later samples are
+byte-identical, incomplete confirmation sets become `inconclusive`, and the
+outer validator independently requires the primary and both confirmations to
+be explicitly `visible` before accepting a pass. Rust semantic diagnostics
+reported zero findings and the repository pre-commit gate passed.
+
+The unchanged RBF passed preflight. The rerun used the same direct Arcade path,
+2,000 ms dwell, and scheduled reboot every ten attempts. Returns 1 through 27
+all produced the exact manually reviewed complete physical frame
+`84068d...` and exact framebuffer `288f47...`; two attended reboots and both
+post-boot coherence checks passed.
+
+Attempt 28 reproduced the `9db0...` preview-loss failure and the corrected
+harness stopped before attempt 29 or another reboot. The primary and two
+confirmations were byte-identical across 3,286 ms. The physical Arcade list was
+present, but the preview region was black with vertical dotted corruption. The
+authoritative framebuffer was the exact complete frame, launcher state reported
+the preview visible at transition progress `1.0`, and failure-time FPGA state
+remained coherent `repair_transport_ready` with latch-v5/`0x03ff`, stable owner
+epoch `1`, and zero drops/rejects.
+
+A native AVFoundation 30-second movie and read-only diagnostic bundle were
+captured before any recovery. The movie delivered 754 frames over 30,120 ms;
+coarse luma mean remained `54` and row-discontinuity remained 73 permille.
+Representative frames at 0.5 and 18.5 seconds contained the complete preview,
+proving that the physical corruption self-cleared before the movie.
+No reboot, RBF reload, relaunch, or recovery was performed after the failure.
+
+The requested 75-return rerun therefore stopped and failed at return 28. No
+full all-zero black screen occurred. The copy-tail deadlock repair remains
+frozen, but the repeated preview-loss/partial-black physical-integrity failure
+is now reproducible often enough that another blind transition campaign has
+low value. The next FPGA work should be a single minimal passive boundary probe
+that distinguishes raw-scaler corruption from a correct raw scaler followed by
+downstream corruption, without changing latch-v5, routing, reset, completion,
+or copy-tail logic.
+
+Large evidence remains ignored under:
+
+```text
+build/scaler-copy-tail-corrected75-attempt-28/
+build/scaler-copy-tail-corrected75-attempt-28-live-30s.mov
+build/scaler-copy-tail-corrected75-attempt-28-live-30s-metrics.csv
+build/scaler-copy-tail-corrected75-attempt-28-live-diagnostics/
+build/scaler-copy-tail-corrected75-attempt-28-live-samples/
+```
+
+The compact integrity record is
+[`2026-08-24-scaler-copy-tail-preview-loss-incident-v1.json`](2026-08-24-scaler-copy-tail-preview-loss-incident-v1.json).

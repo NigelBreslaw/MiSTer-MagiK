@@ -14,7 +14,9 @@
     "game_dwell_ms": 2000,
     "reboot_interval_returns": 10,
     "reboots_completed": 7,
-    "clean_returns_before_failure": 42,
+    "reviewed_healthy_returns_before_earliest_failure": 5,
+    "earliest_confirmed_failure_transition": 6,
+    "confirmed_failure_transitions": [6, 8, 12, 43],
     "failure_transition": 43,
     "failure_block": 5,
     "failure_attempt_in_block": 3,
@@ -23,6 +25,14 @@
     "campaign_passed": false,
     "campaign_incorrectly_continued_after_failure": true,
     "live_failure_state_preserved": false
+  },
+  "retrospective_correction": {
+    "reason": "the fail-closed rerun proved that a physical hash previously treated as a static-edge false positive actually omitted the preview present in the authoritative framebuffer",
+    "preview_loss_sha256": "9db0ffa57c146b643d4881b813983ab7252a4d76c17b7c41262af0c52035e0da",
+    "preview_loss_transitions": [6, 8, 12],
+    "preview_loss_capture_count": 9,
+    "previous_interpretation": "healthy_static_edge_false_positive",
+    "corrected_interpretation": "persistent_preview_loss_physical_corruption"
   },
   "failure_state": {
     "classification": "persistent_partial_black_physical_corruption",

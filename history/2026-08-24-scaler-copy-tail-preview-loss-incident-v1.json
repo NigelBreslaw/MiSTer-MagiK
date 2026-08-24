@@ -1,0 +1,124 @@
+{
+  "schema": "mister-magik-scaler-copy-tail-preview-loss-incident-v1",
+  "date": "2026-08-24",
+  "candidate": {
+    "implementation_commit": "518862fe4c49e4be252f532f7a943c5529beebf0",
+    "host_fail_closed_commit": "563b807cc",
+    "patch_sha256": "fad82f36ec04b09ef758812fd5a4c3766e096f28a91da55a09574eaf7932b839",
+    "rbf_sha256": "b1bfb33d564852856fde1e4cfc4671fe1591fa16ad4398202031f7d8bc25512b",
+    "metadata_sha256": "62a7a66eada10e00bf69ec430f9471bcd00f81fb9cf71df8be267487c95dd7b4",
+    "signoff_report_sha256": "b9bfd9519a734f9e847dacc5c7328fdf6fcf8473a8c070854637674f53872e6a"
+  },
+  "campaign": {
+    "requested_returns": 75,
+    "completed_returns": 28,
+    "game_dwell_ms": 2000,
+    "reboot_interval_returns": 10,
+    "reboots_completed": 2,
+    "reviewed_healthy_returns_before_failure": 27,
+    "failure_transition": 28,
+    "failure_boot_epoch": 3,
+    "full_black_screen_observed": false,
+    "preview_loss_corruption_observed": true,
+    "campaign_stopped_on_failure": true,
+    "recovery_performed": false
+  },
+  "failure_state": {
+    "classification": "persistent_preview_loss_physical_corruption",
+    "physical_description": "Arcade list visible; preview region black with vertical dotted corruption",
+    "physical_confirmations": 2,
+    "physical_observation_ms": 3286,
+    "physical_captures_byte_identical": true,
+    "physical_capture_visibility": "corrupted",
+    "strong_row_discontinuity_permille": 74,
+    "internal_framebuffer_correct": true,
+    "launcher_preview_state": "visible",
+    "launcher_preview_transition_progress": 1.0,
+    "fpga_classification": "repair_transport_ready",
+    "latch_protocol": 5,
+    "latch_capabilities": "0x03ff",
+    "active_geometry": "960x540",
+    "latch_drop_count": 0,
+    "latch_reject_count": 0,
+    "owner_epoch": 1,
+    "sink_visibility": "unobserved"
+  },
+  "post_failure_movie": {
+    "frames": 754,
+    "duration_ms": 30120,
+    "luma_mean_range": [54, 54],
+    "row_discontinuity_permille_range": [73, 73],
+    "representative_sample_start_seconds": 0.5,
+    "representative_sample_end_seconds": 18.5,
+    "representative_samples_show_complete_preview": true,
+    "result": "physical_corruption_self_cleared_before_movie"
+  },
+  "retrospective_match": {
+    "same_hash_in_previous_campaign": true,
+    "previous_campaign_transitions": [6, 8, 12],
+    "previous_capture_count": 9,
+    "previous_interpretation_corrected": true
+  },
+  "artifacts": [
+    {
+      "path": "build/scaler-copy-tail-corrected75-attempt-28/returned-usb-video.jpg",
+      "bytes": 394237,
+      "sha256": "9db0ffa57c146b643d4881b813983ab7252a4d76c17b7c41262af0c52035e0da",
+      "role": "preview_loss_physical_primary"
+    },
+    {
+      "path": "build/scaler-copy-tail-corrected75-attempt-28/returned-usb-video-confirmation-1.jpg",
+      "bytes": 394237,
+      "sha256": "9db0ffa57c146b643d4881b813983ab7252a4d76c17b7c41262af0c52035e0da",
+      "role": "preview_loss_physical_confirmation_1"
+    },
+    {
+      "path": "build/scaler-copy-tail-corrected75-attempt-28/returned-usb-video-confirmation-2.jpg",
+      "bytes": 394237,
+      "sha256": "9db0ffa57c146b643d4881b813983ab7252a4d76c17b7c41262af0c52035e0da",
+      "role": "preview_loss_physical_confirmation_2"
+    },
+    {
+      "path": "build/scaler-copy-tail-corrected75-attempt-28/returned-framebuffer.png",
+      "bytes": 119288,
+      "sha256": "288f47335560f1169890ee50d02ddf3707ef4b568a22ccb06593a78d275ad250",
+      "role": "authoritative_complete_rgb565_framebuffer"
+    },
+    {
+      "path": "build/scaler-copy-tail-corrected75-attempt-28/summary.json",
+      "bytes": 439979,
+      "sha256": "59c4fd0e05c461d6bfc6e2d6a4e6d95527503c5e2d8144f7dc0f85e1456e0314",
+      "role": "correct_fail_closed_phase2_summary"
+    },
+    {
+      "path": "build/scaler-copy-tail-corrected75-attempt-28/fpga-video-diagnostics.json",
+      "bytes": 766768,
+      "sha256": "8dfd447720bdceceb3655f734971ea04d1703e80ab24a1acce7a2e6615cd59e9",
+      "role": "failure_time_diagnostic_bundle"
+    },
+    {
+      "path": "build/scaler-copy-tail-corrected75-attempt-28-live-30s.mov",
+      "bytes": 14875482,
+      "sha256": "68aacfd9328b67d08bc0aef770ef7bad5f33b6ca900b8c8e099617079f88eced",
+      "role": "post_failure_native_movie"
+    },
+    {
+      "path": "build/scaler-copy-tail-corrected75-attempt-28-live-30s-metrics.csv",
+      "bytes": 17028,
+      "sha256": "a32bf6a667f38ea595f05dff7720593d378f4840a4c047b28621f75a328b11df",
+      "role": "all_delivered_frame_coarse_metrics"
+    },
+    {
+      "path": "build/scaler-copy-tail-corrected75-attempt-28-live-diagnostics/fpga-video-diagnostics.json",
+      "bytes": 1462,
+      "sha256": "7ae98971c72251e465bc0b73e5af076d20428cd39eb2889a4bcf3655358d9ad0",
+      "role": "post_failure_read_only_fpga_state"
+    },
+    {
+      "path": "build/scaler-copy-tail-corrected75-attempt-28-live-diagnostics/bundle.json",
+      "bytes": 725562,
+      "sha256": "a70ba8c15b2b29f132a670eeaaa561946667d703aa4f579a26ab9e5a991f3233",
+      "role": "post_failure_read_only_diagnostic_bundle"
+    }
+  ]
+}

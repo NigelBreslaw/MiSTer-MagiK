@@ -1110,6 +1110,22 @@ classifier first, and do not interpret physical-frame identity as visibility.
 The compact record is
 [`2026-08-24-scaler-copy-tail-additional75-partial-black-incident-v1.json`](2026-08-24-scaler-copy-tail-additional75-partial-black-incident-v1.json).
 
+The host aggregation was then repaired in commit `563b807cc`: corruption can
+no longer be promoted to visible by temporal identity, incomplete confirmations
+are inconclusive, and the outer validator requires all three raw samples to be
+visible. The unchanged RBF rerun stopped correctly at return 28 on hash
+`9db0...`. The physical preview was absent and vertical dotted corruption was
+present while the authoritative framebuffer contained the complete preview;
+the launcher reported the preview visible and the latch remained coherent with
+zero drops/rejects. A native 30-second movie showed that the corruption had
+self-cleared before recording. Retrospective comparison also proved the same
+hash at earlier additional-campaign returns 6, 8, and 12, correcting their
+prior classification as healthy static edges. No full black occurred. Further
+blind transition testing is deferred: the next useful FPGA artifact is one
+minimal passive raw-scaler-versus-downstream boundary discriminator, with the
+copy-tail and latch-v5 logic frozen. The compact record is
+[`2026-08-24-scaler-copy-tail-preview-loss-incident-v1.json`](2026-08-24-scaler-copy-tail-preview-loss-incident-v1.json).
+
 ## Facts established despite the failed implementations
 
 The work was not diagnostically empty. It established the following facts:
