@@ -110,3 +110,55 @@ build/scaler-copy-tail-phase2-epoch6-02-live-diagnostics/
 
 The compact integrity record is
 [`2026-08-24-scaler-copy-tail-transient-corruption-incident-v1.json`](2026-08-24-scaler-copy-tail-transient-corruption-incident-v1.json).
+
+## Additional 75-return campaign
+
+An additional 75 direct-Arcade launch/return attempts used the same exact
+candidate, the proven 2,000 ms in-game dwell, and an attended reboot after
+every ten completed attempts. Preflight and every post-reboot check reported
+`repair_transport_ready`, latch protocol `5`, capabilities `0x03ff`, stable
+ownership, and zero latch drops or rejects. No all-zero physical black screen
+was observed.
+
+The campaign nevertheless failed at additional attempt 43. All three physical
+captures over the 3,258 ms confirmation window were byte-identical and showed
+a persistent partial-black/corrupted launcher: most list and preview content
+was absent even though the authoritative RGB565 framebuffer was the exact
+known-good frame. Failure-time FPGA evidence remained coherent
+`repair_transport_ready`, with a 960x540 route and zero latch drops/rejects.
+
+| Artifact | SHA-256 |
+| --- | --- |
+| physical capture | `d5cb2957b17abf7d3875fb07a4ff19fe352f179aa7b8af5f97ae159bd2bac521` |
+| physical confirmation 1 | `d5cb2957b17abf7d3875fb07a4ff19fe352f179aa7b8af5f97ae159bd2bac521` |
+| physical confirmation 2 | `d5cb2957b17abf7d3875fb07a4ff19fe352f179aa7b8af5f97ae159bd2bac521` |
+| authoritative framebuffer | `288f47335560f1169890ee50d02ddf3707ef4b568a22ccb06593a78d275ad250` |
+| Phase-2 summary | `b2251f42f40cddf59c73dcbe84477dde7997e3ad6b53ad81e07f95ee3b9c0f8f` |
+| FPGA diagnostics | `f67869dc62330c82e459a180ae78ba5835756dd55405eae2a8f9be350cb882af` |
+
+The Phase-2 harness correctly classified the primary and both confirmations as
+`corrupted` with a strong-row-discontinuity metric of 74 permille. Its final
+aggregation then incorrectly changed the effective result to `visible` solely
+because both corrupt confirmations were identical to the primary. It therefore
+reported `artifact_status: passed` and allowed the remaining attempts and
+scheduled reboots to continue. The live failure state was consequently not
+preserved, but the three physical frames, framebuffer, summary, and FPGA
+diagnostics remain intact in ignored local evidence.
+
+This supersedes the initial 75/75 interpretation: the requested campaign did
+not pass. Across the 52 earlier and 75 additional returns, no full all-zero
+black screen occurred, which continues to support the copy-tail deadlock
+repair. The repeated partial-black output is still a commercial rejection and
+supports a separate raw-to-final physical-integrity failure. The copy-tail RTL
+must remain frozen while the Phase-2 classifier is corrected so identical
+`corrupted` captures can never be promoted to visible. Only then should the
+75-return campaign be repeated.
+
+Large evidence remains ignored under:
+
+```text
+build/scaler-copy-tail-additional75-block5-03/
+```
+
+The compact integrity record is
+[`2026-08-24-scaler-copy-tail-additional75-partial-black-incident-v1.json`](2026-08-24-scaler-copy-tail-additional75-partial-black-incident-v1.json).

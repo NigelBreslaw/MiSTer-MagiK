@@ -1097,6 +1097,19 @@ failure is distinct from the copy-retirement black deadlock. Exact results and
 artifact hashes are recorded in
 [`2026-08-24-scaler-copy-tail-repair-result.md`](2026-08-24-scaler-copy-tail-repair-result.md).
 
+An additional 75-return campaign later found a second, stronger instance of
+that separate physical-integrity class. Attempt 43 produced the same
+partial-black/corrupted physical frame in three consecutive captures spanning
+3,258 ms while the authoritative framebuffer remained exact and latch state
+remained healthy. The Phase-2 classifier correctly marked all three captures
+`corrupted`, but its aggregation incorrectly promoted identical corrupt
+confirmations to `visible`, so the campaign continued and the live state was
+not retained. The additional campaign therefore failed despite observing no
+full all-zero black screen. Preserve Design 10 unchanged, repair the test
+classifier first, and do not interpret physical-frame identity as visibility.
+The compact record is
+[`2026-08-24-scaler-copy-tail-additional75-partial-black-incident-v1.json`](2026-08-24-scaler-copy-tail-additional75-partial-black-incident-v1.json).
+
 ## Facts established despite the failed implementations
 
 The work was not diagnostically empty. It established the following facts:
