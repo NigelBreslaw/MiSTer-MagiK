@@ -96,3 +96,20 @@ candidate removes only that placement-affecting hint. The preserved
 unchanged report gate still rejects a duplicated launch endpoint. No RTL
 datapath, schema, CDC stage, timing bound, protected cone, fitter setting,
 seed, or signoff threshold changes.
+
+Candidate 6 (`a01834676e6bc07101ac6e3a2fbf6ca7a76226cd`) produced
+the same RBF and delta report as candidate 5: RBF SHA-256
+`7d8f44096ad4f589979ba905fe043310fcd69e6a605435b04f6d8d71d04679a3`
+and report SHA-256
+`bdc401471031a94ec52b71fd8f93799e2aea22fb8d7aef47d16be4ec066d7494`.
+Removing the hint did not change synthesis or placement, proving that the
+additional launch topology—not the hint—caused the fixed-seed regression.
+Candidate 6 is rejected and was never installed.
+
+The next candidate returns to candidate 4's already timing-clean CDC topology
+and changes only the synthesis identity of its existing `source_generation`
+register to forbid replication. The bounded route is again exactly
+`source_generation -> generation_meta`; both the net-delay and metastability
+report parsers reject a `~DUPLICATE` source. This removes the extra launch
+register without changing the signature datapath, schema, synchronizer depth,
+destination settle cycle, protected production cones, seed, fitter, or gates.

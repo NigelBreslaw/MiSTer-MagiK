@@ -104,7 +104,7 @@ EXPECTED_METASTABILITY_CHAINS = {
 }
 EXPERIMENTAL_RAW_SCALER_METASTABILITY_CHAIN = {
     "raw_scaler_generation": {
-        "source": "mister_magik_raw_scaler_ordered_frame:magik_raw_scaler_ordered_frame|generation_launch",
+        "source": "mister_magik_raw_scaler_ordered_frame:magik_raw_scaler_ordered_frame|source_generation",
         "synchronization_node": "mister_magik_raw_scaler_ordered_frame:magik_raw_scaler_ordered_frame|generation_meta",
         "allow_source_duplicate": False,
         "registers": (
@@ -137,7 +137,7 @@ EXPECTED_NET_DELAY_PATHS = {
 }
 EXPERIMENTAL_RAW_SCALER_NET_DELAY_PATH = {
     "raw_scaler_generation": re.compile(
-        r"generation_launch\s*;[^\n]*generation_meta\s*;", re.IGNORECASE
+        r"source_generation\s*;[^\n]*generation_meta\s*;", re.IGNORECASE
     )
 }
 

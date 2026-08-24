@@ -32,3 +32,12 @@ later and has exactly one data fanout, the existing `generation_meta` first
 synchronizer stage. The bounded identity is therefore
 `generation_launch -> generation_meta`; the two-stage synchronizer, settle
 cycle, immutable response, schema, and signature datapath are unchanged.
+
+Fixed-seed candidates 5 and 6 proved that the additional launch register itself
+caused an identical timing/resource failure regardless of the
+`dont_replicate` hint. The forward candidate therefore removes that rejected
+stage and returns to candidate 4's timing-clean source topology. The existing
+`source_generation` register is marked non-replicable, while the exact report
+gate rejects `source_generation~DUPLICATE`. The signature datapath, schema,
+two-stage synchronizer, destination settle cycle, and immutable response do not
+change.

@@ -243,23 +243,7 @@ module tb_mister_magik_video_diagnostics_control;
 		end
 
 		drive_frame(8'h11, 1'b0, 1'b0);
-		// Completion first commits the stable bundle and toggles the source.
-		// The dedicated launch register must remain at the old generation for
-		// that edge, then advance exactly one HDMI edge later.
-		raw_sample(1'b1, 1'b1, 1'b0, 1'b0, 24'd0);
-		raw_sample(1'b1, 1'b0, 1'b0, 1'b0, 24'd0);
-		#1;
-		if(dut.generation_launch == dut.source_generation)
-			fail("generation launch did not delay the source toggle");
-		if(dut.published_signature != golden_frame_signature(8'h11, 1'b0))
-			fail("signature bundle was not stable before launch");
-		@(posedge clk_hdmi);
-		#1;
-		if(dut.generation_launch != dut.source_generation)
-			fail("generation launch did not forward on the next HDMI edge");
-		if(dut.published_signature != golden_frame_signature(8'h11, 1'b0))
-			fail("signature bundle changed during generation launch");
-		repeat(8) @(posedge clk_sys);
+		complete_frame();
 		read_record();
 		if(words[1] != MAGIK_RAW_SCALER_STATE_FLAG_FRAME_VALID || words[2] != 16'd1)
 			fail("first completed-frame flags or sequence mismatch");
@@ -329,7 +313,7 @@ module tb_mister_magik_video_diagnostics_control;
 		reset_active = 1'b0;
 		repeat(6) @(posedge clk_sys);
 		read_record();
-		if(dut.generation_launch != 1'b0 || words[1] != 16'd0 || words[2] != 16'd0 ||
+		if(words[1] != 16'd0 || words[2] != 16'd0 ||
 		   words[3] != 16'd0)
 			fail("reset did not clear observer snapshot coherently");
 

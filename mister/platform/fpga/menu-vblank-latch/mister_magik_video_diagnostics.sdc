@@ -38,12 +38,12 @@ set_net_delay -max 10.0 \
 	-from $magik_scaler_completion_ack_route \
 	-to $magik_scaler_completion_ack_meta
 
-set magik_raw_frame_generation_launch [magik_require_registers raw_frame_generation_launch \
-	{*mister_magik_raw_scaler_ordered_frame:magik_raw_scaler_ordered_frame|generation_launch} 1]
+set magik_raw_frame_generation [magik_require_registers raw_frame_generation \
+	{*mister_magik_raw_scaler_ordered_frame:magik_raw_scaler_ordered_frame|source_generation} 1]
 set magik_raw_frame_generation_meta [magik_require_registers raw_frame_generation_meta \
 	{*mister_magik_raw_scaler_ordered_frame:magik_raw_scaler_ordered_frame|generation_meta} 1]
 set_net_delay -max 10.0 \
-	-from $magik_raw_frame_generation_launch \
+	-from $magik_raw_frame_generation \
 	-to $magik_raw_frame_generation_meta
 
 post_message -type info "MagiK diagnostics CDC analysis applied: scaler_completion_request_ack scaler_copy_tail raw_scaler_ordered_signature"
