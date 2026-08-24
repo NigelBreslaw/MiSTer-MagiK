@@ -987,6 +987,10 @@ The first synthesis of the wide schema-3 record was rejected at commit
 matched baseline. The forward candidate removes the duplicated count records
 and keeps the 0.200 ns hold floor. This is a causal reduction, not a waiver or
 seed change.
+The subsequent 48-bit fit reached 0.516 ns setup, 0.224 ns hold, zero TNS, 165
+registers, and unchanged hard-block identity, but exceeded the frozen
+experimental ALM cap by six. Redundant observer state and the generic response
+selector were removed before the next fixed-seed build; the cap was not waived.
 
 The design and pre-synthesis gates are frozen in
 [`2026-08-24-raw-scaler-frame-integrity-design.md`](2026-08-24-raw-scaler-frame-integrity-design.md).

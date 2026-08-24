@@ -48,6 +48,11 @@ ceiling: setup was 0.439 ns, hold 0.206 ns, TNS zero, growth 154 ALMs and 284
 registers. The final reduction removes the event sequence and reuses the
 unpublished baseline slot during acquisition, eliminating 64 logical retained
 bits without weakening fault retention.
+That fit passed every functional, timing, CDC, and hard-block gate but used 206
+ALMs against the frozen 200-ALM diagnostic ceiling. The final source removes
+redundant `frame_open`, `ce_seen`, and candidate-valid state and replaces the
+generic response selector with the fixed five-word decode. The ceiling remains
+unchanged.
 The disposable profile is frozen at no more than 200 ALMs and 224 registers
 above the matched baseline, with unchanged RAM/DSP/PLL identity and the same
 0.200 ns hold floor.

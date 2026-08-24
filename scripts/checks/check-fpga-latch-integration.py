@@ -255,7 +255,7 @@ def main() -> None:
         "input  wire        raw_hs",
         "input  wire        raw_vs",
         "wire frame_start = raw_ce && raw_vs && !raw_vs_previous;",
-        "wire completed_nonempty = ce_seen && hs_seen && vs_seen && de_seen;",
+        "wire completed_nonempty = hs_seen && vs_seen && de_seen;",
         "candidate_streak == 2'd2",
         "control_crc_update(control_crc,",
     ):
