@@ -396,7 +396,7 @@ def main() -> None:
         "\t-file output_files/menu.magik-diagnostic-cdc-net-delay.rpt"
     )
     if timing_report_text.count(diagnostic_net_delay_report) != 1:
-        fail("diagnostic net-delay report must retain all 49 exact CDC paths")
+        fail("diagnostic net-delay report must retain all 48 exact CDC paths")
     if "-nworst 50" in timing_report_text:
         fail("diagnostic net-delay report retains the truncated schema-4 depth")
     timing_commands = re.findall(
@@ -606,11 +606,13 @@ def main() -> None:
             "SIGNAL avl_magik_frame_flags : std_logic_vector(3 DOWNTO 0):=(OTHERS=>'0');": 1,
             "SIGNAL avl_magik_bundle : std_logic_vector(12 DOWNTO 0):=(OTHERS=>'0');": 1,
             "VARIABLE diag_bundle_v : std_logic_vector(12 DOWNTO 0);": 1,
+            "diag_bundle_v(12):='1';": 1,
             "SIGNAL avl_magik_generation : std_logic:='0';": 1,
             "SIGNAL o_magik_frame_flags : std_logic_vector(4 DOWNTO 0):=(OTHERS=>'0');": 1,
             "SIGNAL o_magik_completed_flags : std_logic_vector(4 DOWNTO 0):=(OTHERS=>'0');": 1,
             "o_magik_generation_meta<=avl_magik_generation; -- <ASYNC>": 1,
             "o_magik_generation_sync<=o_magik_generation_meta;": 1,
+            "flags_v(0):=avl_magik_bundle(12) AND o_magik_frame_valid;": 1,
             "MagiKScalerPipelineDiagnostic:PROCESS(o_clk,o_reset_na) IS": 1,
             "diag_flags_v:=magik_avl_flags_next(": 2,
             "events_v:=magik_output_flags_next(": 1,

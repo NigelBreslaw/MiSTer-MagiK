@@ -493,7 +493,7 @@ def validate_diagnostic_reports(
                 )
             )
             detailed_path_counts[name] = len(detailed_rows)
-            if len(detailed_rows) != 49:
+            if len(detailed_rows) != 48:
                 reasons.append("diagnostic_cdc_analysis_count")
             detailed_path_identities = {
                 label: sum(
@@ -511,7 +511,10 @@ def validate_diagnostic_reports(
                 "completion_request": 1,
                 "completion_ack": 1,
                 "avalon_diagnostic_generation": 1,
-                "avalon_diagnostic_bundle": 13,
+                # Source bit 12 is literal 1 for every published bucket and
+                # is used only as a coherent-valid marker. Quartus retains
+                # its preserved register but correctly has no dynamic path.
+                "avalon_diagnostic_bundle": 12,
                 "responder_diagnostic_generation": 1,
                 "responder_diagnostic_bundle": 32,
             }

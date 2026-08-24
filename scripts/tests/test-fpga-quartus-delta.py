@@ -140,7 +140,7 @@ VALID_DIAGNOSTIC_REPORTS = {
                 f"ascal:ascal|avl_magik_bundle[{bit}]",
                 f"ascal:ascal|o_magik_diag_state[{bit}]",
             )
-            for bit in range(13)
+            for bit in range(12)
         )
         + net_delay_detail(
             "mister_magik_raw_scaler_diagnostic:magik_raw_scaler_diagnostic|source_generation",
@@ -243,11 +243,15 @@ class QuartusDeltaTest(unittest.TestCase):
         self.assertEqual(payload["invalid_reason"], "ok")
         detailed = payload["diagnostic_cdc_detailed_path_counts"]
         report = "menu.magik-diagnostic-cdc-net-delay.rpt"
-        self.assertEqual(detailed[report], 49)
+        self.assertEqual(detailed[report], 48)
         self.assertEqual(detailed[f"{report}:completion_request"], 1)
         self.assertEqual(detailed[f"{report}:completion_ack"], 1)
         self.assertEqual(detailed[f"{report}:avalon_diagnostic_generation"], 1)
-        self.assertEqual(detailed[f"{report}:avalon_diagnostic_bundle"], 13)
+        self.assertEqual(detailed[f"{report}:avalon_diagnostic_bundle"], 12)
+        self.assertNotIn(
+            "avl_magik_bundle[12]",
+            VALID_DIAGNOSTIC_REPORTS[report],
+        )
         self.assertEqual(detailed[f"{report}:responder_diagnostic_generation"], 1)
         self.assertEqual(detailed[f"{report}:responder_diagnostic_bundle"], 32)
         self.assertEqual(
@@ -620,8 +624,8 @@ class QuartusDeltaTest(unittest.TestCase):
         reports["menu.magik-diagnostic-cdc-net-delay.rpt"] = reports[
             "menu.magik-diagnostic-cdc-net-delay.rpt"
         ].replace(
-            "ascal:ascal|avl_magik_bundle[12] ; ascal:ascal|o_magik_diag_state[12]",
-            "ascal:ascal|unrelated_bundle[12] ; ascal:ascal|unrelated_state[12]",
+            "ascal:ascal|avl_magik_bundle[11] ; ascal:ascal|o_magik_diag_state[11]",
+            "ascal:ascal|unrelated_bundle[11] ; ascal:ascal|unrelated_state[11]",
             1,
         )
         result, payload = self.run_check(

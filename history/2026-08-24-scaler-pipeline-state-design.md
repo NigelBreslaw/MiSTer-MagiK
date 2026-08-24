@@ -99,15 +99,22 @@ The first fixed-seed post-fit run assembled the RBF and completed STA under the
 disposable diagnostic envelope: setup `0.427 ns`, hold `0.247 ns`, zero TNS,
 158 constrained relationships, `+154` ALMs, `+199` registers, and unchanged
 RAM/DSP/PLL identity. Its only rejection was checker/report drift inherited
-from schema 4: the report retained six bounded analyses but truncated the
-detailed table at 48 rows, and the checker knew only three of the four
+from schema 4: the report retained six bounded analyses, but the checker
+interpreted its 48 detailed rows as truncation and knew only three of the four
 calculable synchronizer chains.
 
-The evidence-only correction raises report depth from 50 to 100 and requires
-the complete schema-5 topology: six analysis groups and exactly 49 detailed
-identities (1 completion request, 1 completion acknowledgement, 1 Avalon
-diagnostic generation, 13 Avalon bundle, 1 responder generation, and 32
-responder bundle paths). MTBF parsing now requires the Avalon generation chain
+The evidence-only correction raises report depth from 50 to 100. A second
+fixed-seed report then proved that 48 rows are the complete physical data-path
+topology, not another truncation: 1 completion request, 1 completion
+acknowledgement, 1 Avalon diagnostic generation, 12 Avalon bundle, 1 responder
+generation, and 32 responder bundle paths. The 13th Avalon source register is
+bundle bit 12, assigned literal `1` whenever a completed bucket is published
+and consumed only as the coherent-valid gate after the generation handshake.
+Quartus retains that preserved source register but correctly removes its
+constant value from the dynamic CDC data cone. Structural proof now requires
+that sole literal assignment and sole valid-gate use while the report checker
+requires dynamic bundle bits 0 through 11 exactly. MTBF parsing also requires
+the Avalon generation chain
 `avl_magik_generation -> o_magik_generation_meta ->
 o_magik_generation_sync`, an exact `+4` calculable-chain delta from baseline,
 and both per-chain and combined MTBF of at least `10^12` device-hours. No
