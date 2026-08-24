@@ -94,3 +94,25 @@ If no mismatch is retained during a confirmed physical failure, the raw
 control boundary is excluded only within this probe's limits and the next
 minimal observer moves downstream. The preserved incident is documented in
 [`history/2026-08-24-phase2-transient-corruption-result.md`](../history/2026-08-24-phase2-transient-corruption-result.md).
+
+## Phase 2 result
+
+The signed schema-3 RBF reproduced a persistent physical black screen on boot
+epoch 3, attempt 5 after 44 clean direct-Arcade returns and two supervised
+reboots. The USB-video still was uniform video-level black and byte-identical
+to the earlier confirmed black incident. At the same checkpoint, the
+authoritative RGB565 framebuffer was byte-identical to the known-correct
+Arcade return.
+
+The failure-time record and a second live three-sample record both remained
+`raw_control_stable_since_baseline`: baseline CRC `45489`, first-bad CRC `0`,
+three identical coherent samples, stable ownership, and zero latch drops or
+rejects. No reboot, RBF reload, launcher restart, or additional transition was
+performed after detection.
+
+This result rejects a CE/DE/HS/VS waveform change at the observed raw-scaler
+boundary as the cause of this black incident, within the CRC probe's coverage.
+It does not cover RGB pixel data. The next diagnostic should retire this probe
+and move to one equally passive, sticky fingerprint at the next downstream
+boundary. See
+[`history/2026-08-24-frame-integrity-black-result.md`](../history/2026-08-24-frame-integrity-black-result.md).

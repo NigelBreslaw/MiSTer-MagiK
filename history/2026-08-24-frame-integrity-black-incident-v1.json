@@ -1,0 +1,99 @@
+{
+  "schema": "mister-magik-frame-integrity-black-incident-v1",
+  "captured_on": "2026-08-24",
+  "preservation_state": "captured-unrecovered",
+  "classification": "persistent-physical-black-with-stable-raw-control",
+  "sink_visibility": "physically_observed_by_native_usb_video",
+  "host_revision": "a1366ac98f7b31d08729ec86e2b73826995c6ee1",
+  "fpga": {
+    "source_commit": "20164bf981ed4950370ca3595427b73da2eb4afa",
+    "rbf_sha256": "d0db56092eb652e8f51e4cf42cd8174d725f92b47e61384e140ec67f2898528f",
+    "metadata_sha256": "47b3a9b51ab4497dd3f3d16cf58cbc822f07aaf444ef54a971ffb155607ad50b",
+    "signoff_report_sha256": "d0818ba3831e666f21bc4469b484d22b52212f27a651f405ce4f81bf174a473a",
+    "diagnostic_architecture": "raw-scaler-frame-integrity-v1",
+    "diagnostic_classification_at_failure": "raw_control_stable_since_baseline",
+    "diagnostic_classification_after_preservation": "raw_control_stable_since_baseline",
+    "baseline_control_crc": 45489,
+    "first_bad_control_crc": 0,
+    "records_identical": true,
+    "coherent": true,
+    "observer_sink_visibility": "unobserved"
+  },
+  "launcher": {
+    "version": "0.2.5219",
+    "build_number": 5219,
+    "source_revision": "aa954e639ee3461c90f0420f9eed56ec00e6b637",
+    "pid": 2775
+  },
+  "main": {
+    "generation": 161924,
+    "pid": 2748,
+    "launcher_state": "LauncherActive",
+    "fpga_owner": "magik",
+    "owner_epoch": 1
+  },
+  "attempt": {
+    "boot_epoch": 3,
+    "index": 5,
+    "preceding_valid_passes_total": 44,
+    "preceding_valid_passes_in_epoch": 4,
+    "game": "/media/fat/_Arcade/1943 Kai Midway Kaisen (Japan).mra",
+    "game_dwell_ms": 2000
+  },
+  "physical_evidence": {
+    "classification": "black",
+    "width": 1920,
+    "height": 1080,
+    "luma_minimum": 16,
+    "luma_maximum": 16,
+    "luma_mean": 16,
+    "later_visible_frame_probe_timeout_ms": 3000,
+    "still_sha256": "dc4ee4f1eb9ede8c4b031b29fc8ba97d72068a296fb716cec2de087b6b25255e",
+    "live_movie_sha256": "7fba5b369abb4682e8577a90978b40a2302b240cd4daaa38aecfa7f2753b26bf"
+  },
+  "internal_evidence": {
+    "framebuffer_sha256": "288f47335560f1169890ee50d02ddf3707ef4b568a22ccb06593a78d275ad250",
+    "framebuffer_state": "complete-varied-correct-arcade",
+    "latch_drop_count": 0,
+    "latch_reject_count": 0
+  },
+  "artifact_root": "build/raw-scaler-frame-integrity-phase2-epoch3-05",
+  "artifacts": [
+    {
+      "path": "summary.json",
+      "bytes": 437197,
+      "sha256": "4b71a52a1304292c9508f9d86dec2451cfafccfd2b573a1b6256d50767344840"
+    },
+    {
+      "path": "returned-usb-video.jpg",
+      "bytes": 37739,
+      "sha256": "dc4ee4f1eb9ede8c4b031b29fc8ba97d72068a296fb716cec2de087b6b25255e"
+    },
+    {
+      "path": "returned-framebuffer.png",
+      "bytes": 119288,
+      "sha256": "288f47335560f1169890ee50d02ddf3707ef4b568a22ccb06593a78d275ad250"
+    },
+    {
+      "path": "black-screen-live-30s.mov",
+      "bytes": 554202,
+      "sha256": "7fba5b369abb4682e8577a90978b40a2302b240cd4daaa38aecfa7f2753b26bf"
+    },
+    {
+      "path": "fpga-video-diagnostics.json",
+      "sha256": "b1e9ba2918359fd66f0162196a70a9843c849fdbabd61ea2d5be431c91e1cb63"
+    },
+    {
+      "path": "../raw-scaler-frame-integrity-phase2-epoch3-05-live-diagnostics/fpga-video-diagnostics.json",
+      "sha256": "4f1bc2c502181cdaf9527d22f698ef38df9c124a599f522494d2447234058145"
+    },
+    {
+      "path": "../raw-scaler-frame-integrity-phase2-epoch3-05-live-diagnostics/main-status.json",
+      "sha256": "62e9568c0a4f4c80cadd3ba0cf79f1d1d0c969e5daa2d7df5dadf8f27fde1a2a"
+    },
+    {
+      "path": "../raw-scaler-frame-integrity-phase2-epoch3-05-live-diagnostics/bundle.json",
+      "sha256": "3956d4867ee28474ae062ba385f3213c583813f1d776fdd1fcb0682251d1da65"
+    }
+  ]
+}
