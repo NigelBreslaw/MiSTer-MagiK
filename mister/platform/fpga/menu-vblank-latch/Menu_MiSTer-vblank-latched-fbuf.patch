@@ -523,12 +523,14 @@ diff --git a/sys/sys_top.v b/sys/sys_top.v
 index a416879..4d81fc6 100644
 --- a/sys/sys_top.v
 +++ b/sys/sys_top.v
-@@ -351,6 +351,68 @@ reg [12:0] arc2x = 0;
+@@ -351,6 +351,70 @@ reg [12:0] arc2x = 0;
  reg [12:0] arc2y = 0;
  reg [15:0] io_dout_sys;
  
 +wire        magik_response_valid;
 +wire [15:0] magik_response_data;
++wire        magik_diag_response_valid;
++wire [15:0] magik_diag_response_data;
 +wire        magik_lfb_apply_accepted;
 +wire        magik_lfb_en;
 +wire        magik_lfb_flt;
@@ -592,7 +594,7 @@ index a416879..4d81fc6 100644
  always@(posedge clk_sys) begin
  	reg  [7:0] cmd;
  	reg        has_cmd;
-@@ -360,6 +422,19 @@ always@(posedge clk_sys) begin
+@@ -360,6 +424,19 @@ always@(posedge clk_sys) begin
  	reg  [7:0] fb_crc;
  	reg  [1:0] sl_r;
  
@@ -612,23 +614,46 @@ index a416879..4d81fc6 100644
  	coef_wr <= 0;
  	sl_r <= FB_EN ? 2'b00 : scanlines;
  
-@@ -407,6 +482,7 @@ always@(posedge clk_sys) begin
+@@ -407,6 +484,8 @@ always@(posedge clk_sys) begin
  			if(io_din[7:0] == 'h40) io_dout_sys <= fb_crc;
  `endif
  			if(io_din[7:0] == 'h42) io_dout_sys <= {1'b1, frame_cnt};
 +			if(magik_response_valid) io_dout_sys <= magik_response_data;
++			if(magik_diag_response_valid) io_dout_sys <= magik_diag_response_data;
  			if(io_din[7:0] == 'h44) io_dout_sys <= 1;
  		end
  		else begin
-@@ -462,6 +538,7 @@ always@(posedge clk_sys) begin
+@@ -462,6 +541,8 @@ always@(posedge clk_sys) begin
  					9: LFB_STRIDE      <= io_din[13:0];
  				endcase
  			end
 +			if(magik_response_valid) io_dout_sys <= magik_response_data;
++			if(magik_diag_response_valid) io_dout_sys <= magik_diag_response_data;
  			if(cmd == 'h25) {led_overtake, led_state} <= io_din;
  			if(cmd == 'h26) vol_att <= io_din[4:0];
  			if(cmd == 'h27) VSET <= io_din[11:0];
-@@ -1380,15 +1457,30 @@ assign HDMI_TX_D  = hdmi_out_d;
+@@ -825,6 +906,23 @@ wire         freeze;
+ 		.avl_byteenable   (vbuf_byteenable)
+ 	);
++
++mister_magik_raw_scaler_ordered_frame magik_raw_scaler_ordered_frame
++(
++	.clk_hdmi(clk_hdmi),
++	.clk_sys(clk_sys),
++	.reset_active(reset_req),
++	.raw_ce(scaler_out),
++	.raw_rgb(hdmi_data),
++	.raw_de(hdmi_de),
++	.raw_hs(hdmi_hs),
++	.raw_vs(hdmi_vs),
++	.io_uio(io_uio),
++	.io_strobe(io_strobe),
++	.io_din(io_din),
++	.response_valid(magik_diag_response_valid),
++	.response_data(magik_diag_response_data)
++);
+ `endif
+@@ -1380,15 +1478,30 @@ assign HDMI_TX_D  = hdmi_out_d;
  
  wire [23:0] vga_data_sl;
  wire        vga_de_sl, vga_ce_sl, vga_vs_sl, vga_hs_sl;

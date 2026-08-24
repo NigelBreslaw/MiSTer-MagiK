@@ -48,5 +48,14 @@ Schema 6 decisively observed the stalled terminal predicate and is not present
 in the functional repair candidate. Its generated host decoder remains only
 for rollback evidence compatibility.
 
+Schema 7 is a new, separate disposable experiment for the rare moving-band
+corruption, not another black-screen repair. It fingerprints ordered active RGB
+and line/frame delimiters only at the direct `ascal` boundary, after one
+observer-only isolation register. It retains three CRC-32C frame signatures,
+geometry, sequence, and an eight-comparison variation window through read-only
+`0x67`; `0x60`–`0x66`, latch-v5, and capabilities remain unchanged. It has no
+final-HDMI observer and continues to report sink visibility as unobserved. See
+[the frozen design](../history/2026-08-24-raw-scaler-ordered-frame-design.md).
+
 The complete attempt history and retained measurements are in
 [FPGA video diagnostics: two attempted designs and their retirement](../history/2026-08-14-fpga-video-diagnostics-design-attempts.md).

@@ -268,33 +268,75 @@ def main() -> None:
     control_source = diagnostics_control.read_text()
     avalon_source = diagnostics_avalon.read_text()
     output_source = diagnostics_output.read_text()
-    if re.search(r"(?m)^\s*module\b", control_source + avalon_source + output_source):
-        fail("retired diagnostic compatibility sources must define no design unit")
+    if control_source.count("module mister_magik_raw_scaler_ordered_frame (") != 1:
+        fail("raw ordered-frame observer design unit is missing or ambiguous")
+    if re.search(r"(?m)^\s*module\b", avalon_source + output_source):
+        fail("retired Avalon/output compatibility sources must define no design unit")
+    for required_observer_fragment in (
+        "isolated_ce <= raw_ce;",
+        "isolated_rgb <= raw_rgb;",
+        "isolated_de <= raw_de;",
+        "isolated_hs <= raw_hs;",
+        "isolated_vs <= raw_vs;",
+        "crc32c_update_byte",
+        "crc32c_update_pixel",
+        "32'h82f63b78",
+        "8'hf0",
+        "8'hf1",
+        "8'ha0 | {7'd0, isolated_hs}",
+        "8'ha2 | {7'd0, isolated_hs}",
+        "published_oldest_crc <= published_previous_crc;",
+        "published_previous_crc <= published_newest_crc;",
+        "published_newest_crc <= completed_crc;",
+        "next_history = {variation_history[6:0], changed};",
+        "source_generation <= ~source_generation;",
+        "generation_meta <= source_generation;",
+        "generation_sync <= generation_meta;",
+        "snapshot_state <= source_state;",
+    ):
+        if required_observer_fragment not in control_source:
+            fail(
+                "raw ordered-frame observer structure is missing: "
+                f"{required_observer_fragment}"
+            )
+    for direct_tap in ("raw_ce", "raw_rgb", "raw_de", "raw_hs", "raw_vs"):
+        if len(re.findall(rf"\b{direct_tap}\b", control_source)) != 2:
+            fail(
+                "production direct-ascal tap must appear only at its port and isolation assignment: "
+                f"{direct_tap}"
+            )
+    for forbidden_observer_input in (
+        "LFB_",
+        "vbuf_",
+        "hdmi_data_mask",
+        "hdmi_data_osd",
+        "hdmi_out_",
+        "shadowmask",
+        "pll",
+        "framebuffer",
+        "completion_pending",
+        "o_copylev",
+        "o_readlev",
+    ):
+        if forbidden_observer_input in control_source:
+            fail(f"ordered-frame observer exceeds its passive tap boundary: {forbidden_observer_input}")
     for retired_control_observer in (
         "mister_magik_raw_scaler_diagnostic",
-        "snapshot_state",
-        "source_state",
-        "source_generation",
         "control_crc",
         "candidate_streak",
         "candidate_valid",
         "baseline_valid",
         "baseline_matches",
         "mismatch_latched",
-        "raw_ce",
-        "raw_hs",
         "first_active_rgb",
         "variation_seen",
-        "raw_rgb",
-        "raw_de",
-        "raw_vs",
         "pipeline_state",
         "pipeline_generation",
         "avl_magik",
     ):
         if retired_control_observer in control_source + avalon_source + output_source:
             fail(f"retired disposable observer remains: {retired_control_observer}")
-    compiled_diagnostics = control_source + avalon_source + output_source
+    compiled_diagnostics = avalon_source + output_source
     for retired_fragment in (
         "snapshot_payload",
         "snapshot_request",
@@ -373,8 +415,8 @@ def main() -> None:
     timing_commands = re.findall(
         r"(?m)^\s*(set_[A-Za-z0-9_]+\b[^\n]*)$", diagnostics_sdc_text
     )
-    if timing_commands != ["set_net_delay -max 10.0 \\"] * 2:
-        fail("repair SDC must contain only the two exact completion bounds")
+    if timing_commands != ["set_net_delay -max 10.0 \\"] * 3:
+        fail("diagnostic SDC must contain the two completion bounds and one observer bound")
     for fragment in (
         "{*ascal:ascal|avl_readdataack} 1",
         "{*ascal:ascal|o_readdataack_sync} 1",
@@ -384,7 +426,11 @@ def main() -> None:
         "-to $magik_scaler_completion_request_meta",
         "-from $magik_scaler_completion_ack_route",
         "-to $magik_scaler_completion_ack_meta",
-        "MagiK diagnostics CDC analysis applied: scaler_completion_request_ack",
+        "{*mister_magik_raw_scaler_ordered_frame:magik_raw_scaler_ordered_frame|source_generation} 1",
+        "{*mister_magik_raw_scaler_ordered_frame:magik_raw_scaler_ordered_frame|generation_meta} 1",
+        "-from $magik_raw_frame_generation",
+        "-to $magik_raw_frame_generation_meta",
+        "MagiK diagnostics CDC analysis applied: scaler_completion_request_ack scaler_copy_tail raw_scaler_ordered_frame",
         "*ascal:ascal|o_readdataack_sync2*",
         "scaler_copy_tail",
     ):
@@ -395,8 +441,6 @@ def main() -> None:
         "magik_require_data_pin",
         "control_pll_lock",
         "magik_raw_scaler_diagnostic",
-        "source_state",
-        "snapshot_state",
     ):
         if forbidden_sdc in diagnostics_sdc_text:
             fail(f"retired HDMI lock constraint remains: {forbidden_sdc}")
@@ -460,14 +504,15 @@ def main() -> None:
             BRIDGE_MAPPING: 1,
             APPLY_BUNDLE: 1,
             "if(magik_response_valid) io_dout_sys <= magik_response_data;": 2,
+            "if(magik_diag_response_valid) io_dout_sys <= magik_diag_response_data;": 2,
             "mister_magik_hdmi_lock_evidence magik_hdmi_lock_evidence": 0,
             "mister_magik_scaler_completion_cdc magik_scaler_completion_cdc": 0,
             "mister_magik_video_diagnostics_control magik_video_diagnostics": 0,
             "mister_magik_video_diagnostics_avalon magik_video_diagnostics_avalon": 0,
             "mister_magik_video_diagnostics_output magik_video_diagnostics_output": 0,
-            "mister_magik_raw_scaler_diagnostic magik_raw_scaler_diagnostic": 0,
-            "magik_diag_response_valid": 0,
-            "magik_diag_response_data": 0,
+            "mister_magik_raw_scaler_ordered_frame magik_raw_scaler_ordered_frame": 1,
+            "magik_diag_response_valid": 4,
+            "magik_diag_response_data": 4,
         }
         mismatches = [
             f"{fragment.splitlines()[0]!r} expected {expected}, found {patched.count(fragment)}"
@@ -476,13 +521,38 @@ def main() -> None:
         ]
         if mismatches:
             fail("patched production bridge binding mismatch: " + "; ".join(mismatches))
+        required_observer_bindings = {
+            ".reset_active(reset_req)": 1,
+            ".raw_ce(scaler_out)": 1,
+            ".raw_rgb(hdmi_data)": 1,
+            ".raw_de(hdmi_de)": 1,
+            ".raw_hs(hdmi_hs)": 1,
+            ".raw_vs(hdmi_vs)": 1,
+        }
+        for binding, expected_count in required_observer_bindings.items():
+            if patched.count(binding) != expected_count:
+                fail(
+                    "raw ordered-frame production tap mismatch: "
+                    f"{binding} expected {expected_count}, found {patched.count(binding)}"
+                )
+        observer_mapping = re.compile(
+            r"mister_magik_raw_scaler_ordered_frame\s+"
+            r"magik_raw_scaler_ordered_frame\s*\(.*?"
+            r"\.clk_hdmi\(clk_hdmi\).*?\.clk_sys\(clk_sys\).*?"
+            r"\.reset_active\(reset_req\).*?\.raw_ce\(scaler_out\).*?"
+            r"\.raw_rgb\(hdmi_data\).*?\.raw_de\(hdmi_de\).*?"
+            r"\.raw_hs\(hdmi_hs\).*?\.raw_vs\(hdmi_vs\).*?"
+            r"\.response_valid\(magik_diag_response_valid\).*?"
+            r"\.response_data\(magik_diag_response_data\).*?\);",
+            re.S,
+        )
+        if len(observer_mapping.findall(patched)) != 1:
+            fail("raw ordered-frame observer mapping is missing or ambiguous")
         for retired_binding in (
-            ".raw_ce(scaler_out)",
-            ".raw_hs(hdmi_hs)",
             "magik_scaler_copy_state",
             ".magik_diag_state",
             ".magik_diag_generation",
-            "magik_raw_scaler_diagnostic",
+            "mister_magik_raw_scaler_diagnostic",
         ):
             if retired_binding in patched:
                 fail(f"retired disposable observer binding remains: {retired_binding}")

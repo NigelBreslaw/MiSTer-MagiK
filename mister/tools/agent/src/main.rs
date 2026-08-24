@@ -4092,58 +4092,36 @@ mod linux {
     ) -> &'static str {
         use mister_magik_video_diagnostics_contract as contract;
 
-        let classify = |sample: &contract::RawScalerState| {
-            if !sample.frame_valid() {
-                return "scaler_copy_retirement_evidence_inconclusive";
-            }
-            let start = sample.flag(contract::RAW_SCALER_STATE_FLAG_COPY_START_SEEN);
-            let lev_dec = sample.flag(contract::RAW_SCALER_STATE_FLAG_LEV_DEC_SEEN);
-            let copy_active = sample.flag(contract::RAW_SCALER_STATE_FLAG_COPY_ACTIVE_STATE_SEEN);
-            let shift = sample.flag(contract::RAW_SCALER_STATE_FLAG_COPY_SHIFT_SAMPLE_SEEN);
-            let adturn = sample.flag(contract::RAW_SCALER_STATE_FLAG_ADTURN_SEEN);
-            let shift_next = sample.flag(contract::RAW_SCALER_STATE_FLAG_SHIFT_NEXT_SEEN);
-            let terminal_metadata = sample.flag(contract::RAW_SCALER_STATE_FLAG_BANK_TERMINAL_SEEN)
-                || sample.flag(contract::RAW_SCALER_STATE_FLAG_LINE_LAST_SEEN);
-            let address_wrap = sample.flag(contract::RAW_SCALER_STATE_FLAG_ADDRESS_WRAP_SEEN);
-            let terminal = sample.flag(contract::RAW_SCALER_STATE_FLAG_TERMINAL_CONDITION_SEEN);
-            let nonzero = sample.flag(contract::RAW_SCALER_STATE_FLAG_COPY_NONZERO_SEEN);
-
-            if terminal && !lev_dec {
-                return "scaler_copy_lev_dec_missing";
-            }
-            if !terminal
-                && !lev_dec
-                && copy_active
-                && shift
-                && adturn
-                && shift_next
-                && terminal_metadata
-                && address_wrap
-            {
-                return "scaler_copy_terminal_condition_stall";
-            }
-            if start && lev_dec && !nonzero {
-                if sample.flag(contract::RAW_SCALER_STATE_FLAG_SAME_START_SIGNATURE_SEEN)
-                    && !sample.flag(contract::RAW_SCALER_STATE_FLAG_DIFFERENT_START_SIGNATURE_SEEN)
-                {
-                    return "scaler_copy_metadata_or_buffer_repetition";
-                }
-                return "scaler_copy_buffer_selection_zero";
-            }
-            if start && lev_dec && terminal && copy_active && shift && nonzero {
-                return "scaler_copy_retirement_active";
-            }
-            "scaler_copy_retirement_evidence_inconclusive"
-        };
-
-        let classification = classify(&samples[0]);
-        if samples[1..]
-            .iter()
-            .all(|sample| classify(sample) == classification)
-        {
-            classification
+        let valid = samples.iter().all(|sample| {
+            sample.frame_valid()
+                && sample.flags() & contract::RAW_SCALER_STATE_FLAG_NONEMPTY != 0
+                && sample.flags() & contract::RAW_SCALER_STATE_FLAG_VARIATION_WINDOW_FULL != 0
+        });
+        let geometry_stable = samples[1..].iter().all(|sample| {
+            sample.active_pixels() == samples[0].active_pixels()
+                && sample.active_lines() == samples[0].active_lines()
+        });
+        let sequence_coherent = samples.windows(2).all(|pair| {
+            let delta = pair[1]
+                .frame_sequence()
+                .wrapping_sub(pair[0].frame_sequence());
+            delta <= 0x7fff
+        });
+        if !valid || !geometry_stable || !sequence_coherent {
+            return "raw_scaler_ordered_evidence_inconclusive";
+        }
+        let frame_history_stable = samples.iter().all(|sample| {
+            sample.newest_crc32c() == sample.previous_crc32c()
+                && sample.previous_crc32c() == sample.oldest_crc32c()
+                && sample.variation_count() == 0
+        });
+        if frame_history_stable {
+            "raw_scaler_ordered_stable"
         } else {
-            "scaler_copy_retirement_evidence_inconclusive"
+            // A scene transition can also change this passive fingerprint.
+            // Root-cause attribution therefore requires independent proof that
+            // the source framebuffer and scene remained byte-stable.
+            "raw_scaler_order_changed_requires_static_source_proof"
         }
     }
 
@@ -4606,7 +4584,7 @@ mod linux {
                     let valid_samples = readout.samples.iter().all(|sample| sample.frame_valid());
                     let classification = raw_scaler_classification(&readout.samples);
                     let classification_stable =
-                        classification != "scaler_copy_retirement_evidence_inconclusive";
+                        classification != "raw_scaler_ordered_evidence_inconclusive";
                     let coherent = context.owner_stable
                         && context.latch_ownership_stable == Some(true)
                         && context.launcher_state_stable
@@ -4614,13 +4592,13 @@ mod linux {
                         && classification_stable;
                     json!({
                         "schema": "mister-magik-fpga-video-diagnostics-v2",
-                        "diagnostic_architecture": "scaler-copy-retirement-v1",
+                        "diagnostic_architecture": "raw-scaler-ordered-frame-v1",
                         "available": true,
                         "coherent": coherent,
                         "classification": if coherent {
                             classification
                         } else {
-                            "scaler_copy_retirement_evidence_inconclusive"
+                            "raw_scaler_ordered_evidence_inconclusive"
                         },
                         "sink_visibility": "unobserved",
                         "capture_start_monotonic_us": context.capture_start_monotonic_us,
@@ -4640,32 +4618,21 @@ mod linux {
                             "passive_video_observer": true,
                             "scaler_scheduler_state": false,
                             "scaler_pipeline_state": false,
-                            "scaler_copy_retirement": true,
+                            "scaler_copy_retirement": false,
+                            "raw_scaler_ordered_frame": true,
                             "pixel_observer": true,
                             "pll_observer": false,
                         },
                         "raw_scaler_state": {
                             "frame_valid": readout.samples.iter().map(|sample| sample.frame_valid()).collect::<Vec<_>>(),
                             "flags": readout.samples.iter().map(|sample| sample.flags()).collect::<Vec<_>>(),
-                            "state": readout.samples.iter().map(|sample| sample.state()).collect::<Vec<_>>(),
-                            "read_level": readout.samples.iter().map(|sample| sample.read_level()).collect::<Vec<_>>(),
-                            "copy_level": readout.samples.iter().map(|sample| sample.copy_level()).collect::<Vec<_>>(),
-                            "copy_state": readout.samples.iter()
-                                .map(|sample| sample.copy_state()).collect::<Vec<_>>(),
-                            "adturn": readout.samples.iter()
-                                .map(|sample| sample.adturn()).collect::<Vec<_>>(),
-                            "front_prim": readout.samples.iter()
-                                .map(|sample| sample.front_prim()).collect::<Vec<_>>(),
-                            "front_last": readout.samples.iter()
-                                .map(|sample| sample.front_last()).collect::<Vec<_>>(),
-                            "front_bank": readout.samples.iter()
-                                .map(|sample| sample.front_bank()).collect::<Vec<_>>(),
-                            "front_offset": readout.samples.iter()
-                                .map(|sample| sample.front_offset()).collect::<Vec<_>>(),
-                            "line_last_pipeline": readout.samples.iter()
-                                .map(|sample| sample.line_last_pipeline()).collect::<Vec<_>>(),
-                            "copy_write_active": readout.samples.iter()
-                                .map(|sample| sample.copy_write_active()).collect::<Vec<_>>(),
+                            "frame_sequence": readout.samples.iter().map(|sample| sample.frame_sequence()).collect::<Vec<_>>(),
+                            "active_pixels": readout.samples.iter().map(|sample| sample.active_pixels()).collect::<Vec<_>>(),
+                            "active_lines": readout.samples.iter().map(|sample| sample.active_lines()).collect::<Vec<_>>(),
+                            "variation_count": readout.samples.iter().map(|sample| sample.variation_count()).collect::<Vec<_>>(),
+                            "newest_crc32c": readout.samples.iter().map(|sample| format!("{:08x}", sample.newest_crc32c())).collect::<Vec<_>>(),
+                            "previous_crc32c": readout.samples.iter().map(|sample| format!("{:08x}", sample.previous_crc32c())).collect::<Vec<_>>(),
+                            "oldest_crc32c": readout.samples.iter().map(|sample| format!("{:08x}", sample.oldest_crc32c())).collect::<Vec<_>>(),
                             "raw_samples": readout.samples.iter().map(|sample| sample.words).collect::<Vec<_>>(),
                         },
                     })
@@ -8263,76 +8230,57 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
-    fn copy_retirement_classification_requires_three_matching_completed_frames() {
+    fn ordered_frame_classification_requires_coherent_history_and_geometry() {
         use mister_magik_video_diagnostics_contract as contract;
 
-        let sample = |flags: u16, state: u16| {
+        let sample = |sequence: u16, pixels: u32, lines: u16, variation: u8, crcs: [u32; 3]| {
             let mut words = [0; contract::RAW_SCALER_STATE_WORDS];
             words[contract::RAW_SCALER_STATE_SCHEMA_WORD] = contract::RAW_SCALER_STATE_SCHEMA;
-            words[contract::RAW_SCALER_STATE_FLAGS_WORD] = flags;
-            words[contract::RAW_SCALER_STATE_STATE_WORD] = state;
+            words[contract::RAW_SCALER_STATE_FLAGS_WORD] =
+                contract::RAW_SCALER_STATE_FLAG_FRAME_VALID
+                    | contract::RAW_SCALER_STATE_FLAG_NONEMPTY
+                    | contract::RAW_SCALER_STATE_FLAG_VARIATION_WINDOW_FULL;
+            words[contract::RAW_SCALER_STATE_FRAME_SEQUENCE_WORD] = sequence;
+            words[contract::RAW_SCALER_STATE_ACTIVE_PIXELS_LOW_WORD] = pixels as u16;
+            words[contract::RAW_SCALER_STATE_ACTIVE_PIXELS_HIGH_WORD] = (pixels >> 16) as u16;
+            words[contract::RAW_SCALER_STATE_LINES_VARIATION_WORD] =
+                lines | (u16::from(variation) << 12);
+            words[contract::RAW_SCALER_STATE_NEWEST_CRC_LOW_WORD] = crcs[0] as u16;
+            words[contract::RAW_SCALER_STATE_NEWEST_CRC_HIGH_WORD] = (crcs[0] >> 16) as u16;
+            words[contract::RAW_SCALER_STATE_PREVIOUS_CRC_LOW_WORD] = crcs[1] as u16;
+            words[contract::RAW_SCALER_STATE_PREVIOUS_CRC_HIGH_WORD] = (crcs[1] >> 16) as u16;
+            words[contract::RAW_SCALER_STATE_OLDEST_CRC_LOW_WORD] = crcs[2] as u16;
+            words[contract::RAW_SCALER_STATE_OLDEST_CRC_HIGH_WORD] = (crcs[2] >> 16) as u16;
             contract::RawScalerState { words }
         };
-        let classify = |flags: u16| {
-            let samples = [
-                sample(flags, 0x002a),
-                sample(flags, 0x002a),
-                sample(flags, 0x002a),
-            ];
-            linux::raw_scaler_classification(&samples)
-        };
-        let healthy = contract::RAW_SCALER_STATE_FLAG_FRAME_VALID
-            | contract::RAW_SCALER_STATE_FLAG_COPY_START_SEEN
-            | contract::RAW_SCALER_STATE_FLAG_LEV_DEC_SEEN
-            | contract::RAW_SCALER_STATE_FLAG_COPY_ACTIVE_STATE_SEEN
-            | contract::RAW_SCALER_STATE_FLAG_COPY_SHIFT_SAMPLE_SEEN
-            | contract::RAW_SCALER_STATE_FLAG_TERMINAL_CONDITION_SEEN
-            | contract::RAW_SCALER_STATE_FLAG_COPY_NONZERO_SEEN;
-        assert_eq!(classify(healthy), "scaler_copy_retirement_active");
-        assert_eq!(
-            classify(healthy & !contract::RAW_SCALER_STATE_FLAG_LEV_DEC_SEEN),
-            "scaler_copy_lev_dec_missing"
-        );
-        let terminal_stall = contract::RAW_SCALER_STATE_FLAG_FRAME_VALID
-            | contract::RAW_SCALER_STATE_FLAG_COPY_ACTIVE_STATE_SEEN
-            | contract::RAW_SCALER_STATE_FLAG_COPY_SHIFT_SAMPLE_SEEN
-            | contract::RAW_SCALER_STATE_FLAG_ADTURN_SEEN
-            | contract::RAW_SCALER_STATE_FLAG_SHIFT_NEXT_SEEN
-            | contract::RAW_SCALER_STATE_FLAG_BANK_TERMINAL_SEEN
-            | contract::RAW_SCALER_STATE_FLAG_ADDRESS_WRAP_SEEN;
-        assert_eq!(
-            classify(terminal_stall),
-            "scaler_copy_terminal_condition_stall"
-        );
-        let repeated_zero = contract::RAW_SCALER_STATE_FLAG_FRAME_VALID
-            | contract::RAW_SCALER_STATE_FLAG_COPY_START_SEEN
-            | contract::RAW_SCALER_STATE_FLAG_LEV_DEC_SEEN
-            | contract::RAW_SCALER_STATE_FLAG_COPY_ACTIVE_STATE_SEEN
-            | contract::RAW_SCALER_STATE_FLAG_COPY_SHIFT_SAMPLE_SEEN
-            | contract::RAW_SCALER_STATE_FLAG_TERMINAL_CONDITION_SEEN
-            | contract::RAW_SCALER_STATE_FLAG_SAME_START_SIGNATURE_SEEN;
-        assert_eq!(
-            classify(repeated_zero),
-            "scaler_copy_metadata_or_buffer_repetition"
-        );
-        assert_eq!(
-            classify(
-                repeated_zero | contract::RAW_SCALER_STATE_FLAG_DIFFERENT_START_SIGNATURE_SEEN
-            ),
-            "scaler_copy_buffer_selection_zero"
-        );
-        assert_eq!(
-            classify(healthy & !contract::RAW_SCALER_STATE_FLAG_FRAME_VALID),
-            "scaler_copy_retirement_evidence_inconclusive"
-        );
-        let mixed = [
-            sample(healthy, 0x002a),
-            sample(terminal_stall, 0x002a),
-            sample(healthy, 0x002a),
+        let stable = [
+            sample(100, 2_073_600, 1080, 0, [0x1234_5678; 3]),
+            sample(101, 2_073_600, 1080, 0, [0x1234_5678; 3]),
+            sample(103, 2_073_600, 1080, 0, [0x1234_5678; 3]),
         ];
         assert_eq!(
-            linux::raw_scaler_classification(&mixed),
-            "scaler_copy_retirement_evidence_inconclusive"
+            linux::raw_scaler_classification(&stable),
+            "raw_scaler_ordered_stable"
+        );
+
+        let varying = [
+            sample(100, 2_073_600, 1080, 1, [3, 2, 1]),
+            sample(101, 2_073_600, 1080, 2, [4, 3, 2]),
+            sample(103, 2_073_600, 1080, 3, [6, 5, 4]),
+        ];
+        assert_eq!(
+            linux::raw_scaler_classification(&varying),
+            "raw_scaler_order_changed_requires_static_source_proof"
+        );
+
+        let incoherent_geometry = [
+            stable[0].clone(),
+            stable[1].clone(),
+            sample(103, 2_073_599, 1080, 0, [0x1234_5678; 3]),
+        ];
+        assert_eq!(
+            linux::raw_scaler_classification(&incoherent_geometry),
+            "raw_scaler_ordered_evidence_inconclusive"
         );
     }
 

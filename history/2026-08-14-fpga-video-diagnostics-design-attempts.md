@@ -1177,3 +1177,26 @@ Related retained evidence:
 - [Decode timing experiment](2026-08-14-fpga-diagnostic-decode-timing-experiment.md)
 - [Current scaler-return recovery design](../docs/fpga-scaler-return-recovery.md)
 - [Current physical return qualification](../docs/return-video-qualification.md)
+
+## Design 11 — direct-ascal ordered-frame CRC (2026-08-24)
+
+A preserved 30-second USB-video movie showed a recognizable Arcade launcher
+under fine horizontal combing and a roughly 80–120-row corruption band moving
+downward and wrapping. At the same time the authoritative RGB565 framebuffer,
+latch-v5 state, completion queue, and repaired copy-tail evidence were
+coherent. This is a separate attribution problem from the persistent black
+screen fixed by Designs 3 and 10.
+
+The next disposable candidate therefore asks one boundary question only. A
+single observer-only register stage samples direct `ascal` CE, RGB, DE, HS,
+and VS in `clk_hdmi`. CRC-32C fingerprints ordered active RGB with explicit
+line and frame delimiters; three completed-frame CRCs, geometry, a wrapping
+sequence, and an eight-comparison variation count cross as a stable bundle to
+read-only command `0x67`, schema 7. There is no final-output fingerprint and no
+observer signal feeds production logic. Commands `0x60`–`0x66`, latch protocol
+5, and capabilities `0x03ff` remain unchanged.
+
+The frozen encoding, ABI, proof obligations, and decision contract are in
+[`2026-08-24-raw-scaler-ordered-frame-design.md`](2026-08-24-raw-scaler-ordered-frame-design.md).
+This entry records an implementation candidate only. Apple-container signoff,
+device installation, and physical interpretation remain later explicit gates.

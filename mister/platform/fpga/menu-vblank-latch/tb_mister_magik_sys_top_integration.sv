@@ -29,6 +29,8 @@ module mister_magik_sys_top_latch_path (
 
 	wire magik_response_valid;
 	wire [15:0] magik_response_data;
+	wire magik_diag_response_valid;
+	wire [15:0] magik_diag_response_data;
 	wire magik_lfb_apply;
 	wire magik_lfb_apply_accepted;
 	wire legacy_lfb_write;
@@ -91,6 +93,22 @@ module mister_magik_sys_top_latch_path (
 		.active_route_epoch(magik_lfb_active_route_epoch)
 	);
 
+	mister_magik_raw_scaler_ordered_frame diagnostic (
+		.clk_hdmi(clk_sys),
+		.clk_sys(clk_sys),
+		.reset_active(1'b0),
+		.raw_ce(1'b0),
+		.raw_rgb(24'd0),
+		.raw_de(1'b0),
+		.raw_hs(1'b0),
+		.raw_vs(1'b0),
+		.io_uio(io_uio),
+		.io_strobe(io_strobe),
+		.io_din(io_din),
+		.response_valid(magik_diag_response_valid),
+		.response_data(magik_diag_response_data)
+	);
+
 	always @(posedge clk_sys) begin
 		if(magik_lfb_apply_accepted) begin
 			LFB_EN <= magik_lfb_en;
@@ -128,6 +146,8 @@ module mister_magik_sys_top_latch_path (
 				io_dout_sys <= 16'd1;
 			if(magik_response_valid)
 				io_dout_sys <= magik_response_data;
+			if(magik_diag_response_valid)
+				io_dout_sys <= magik_diag_response_data;
 		end
 	end
 endmodule
@@ -323,11 +343,18 @@ module tb_mister_magik_sys_top_integration;
 			telemetry_crc = crc_word(telemetry_crc, telemetry[index]);
 		expect16(telemetry[10], telemetry_crc, "sys_top telemetry CRC");
 
-		// The repair-only candidate exposes no FPGA diagnostic command.
-		for(index = 8'h60; index <= 8'h67; index = index + 1) begin
+		// Only the ordered raw-scaler record is supported. Legacy diagnostics
+		// remain explicitly unsupported and cannot disturb latch-v5 state.
+		for(index = 8'h60; index <= 8'h66; index = index + 1) begin
 			begin_command(index[7:0], 16'd0);
 			end_command();
 		end
+		begin_command(MAGIK_UIO_GET_RAW_SCALER_STATE, MAGIK_RAW_SCALER_STATE_MAGIC);
+		for(index = 0; index < MAGIK_RAW_SCALER_STATE_WORDS; index = index + 1)
+			transfer_word(16'd0, response);
+		end_command();
+		expect16(dut.magik_lfb_active_seq, 16'h002b,
+			"diagnostic read changed latch-v5 active sequence");
 
 		// Post another route, then collide its vblank apply with a real 0x2f
 		// payload edge. The production legacy-write expression must win.

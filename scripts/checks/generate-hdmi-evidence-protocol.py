@@ -153,10 +153,13 @@ def render_rust(spec: dict) -> str:
             f"0x{reserved_mask:04x};"
         )
     for name, field in raw_scaler.get("fields", {}).items():
-        lines.append(
-            f"pub const RAW_SCALER_STATE_{name.upper()}_WORD: usize = "
-            f"RAW_SCALER_STATE_{field['word'].upper()}_WORD;"
-        )
+        word_constant = f"RAW_SCALER_STATE_{name.upper()}_WORD"
+        word_value = f"RAW_SCALER_STATE_{field['word'].upper()}_WORD"
+        declaration = f"pub const {word_constant}: usize = {word_value};"
+        if len(declaration) > 100:
+            lines.extend((f"pub const {word_constant}: usize =", f"    {word_value};"))
+        else:
+            lines.append(declaration)
         lines.append(f"pub const RAW_SCALER_STATE_{name.upper()}_BIT: usize = {field['bit']};")
         lines.append(
             f"pub const RAW_SCALER_STATE_{name.upper()}_MASK: u16 = "

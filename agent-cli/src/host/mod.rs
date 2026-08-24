@@ -3643,6 +3643,54 @@ fn experimental_fpga_architecture_is_current(diagnostics: &Value) -> bool {
                     .and_then(Value::as_array)
                     .is_some_and(|samples| samples.len() == 3)
         }
+        Some("raw-scaler-ordered-frame-v1") => {
+            matches!(
+                diagnostics.get("classification").and_then(Value::as_str),
+                Some(
+                    "raw_scaler_ordered_stable"
+                        | "raw_scaler_order_changed_requires_static_source_proof"
+                )
+            ) && diagnostics
+                .pointer("/capabilities/passive_video_observer")
+                .and_then(Value::as_bool)
+                == Some(true)
+                && diagnostics
+                    .pointer("/capabilities/scaler_scheduler_state")
+                    .and_then(Value::as_bool)
+                    == Some(false)
+                && diagnostics
+                    .pointer("/capabilities/scaler_pipeline_state")
+                    .and_then(Value::as_bool)
+                    == Some(false)
+                && diagnostics
+                    .pointer("/capabilities/scaler_copy_retirement")
+                    .and_then(Value::as_bool)
+                    == Some(false)
+                && diagnostics
+                    .pointer("/capabilities/raw_scaler_ordered_frame")
+                    .and_then(Value::as_bool)
+                    == Some(true)
+                && diagnostics
+                    .pointer("/capabilities/pixel_observer")
+                    .and_then(Value::as_bool)
+                    == Some(true)
+                && diagnostics
+                    .pointer("/capabilities/pll_observer")
+                    .and_then(Value::as_bool)
+                    == Some(false)
+                && diagnostics
+                    .pointer("/coherence/three_samples_valid")
+                    .and_then(Value::as_bool)
+                    == Some(true)
+                && diagnostics
+                    .pointer("/coherence/classification_stable")
+                    .and_then(Value::as_bool)
+                    == Some(true)
+                && diagnostics
+                    .pointer("/raw_scaler_state/raw_samples")
+                    .and_then(Value::as_array)
+                    .is_some_and(|samples| samples.len() == 3)
+        }
         Some("scaler-copy-retirement-v1") => {
             diagnostics.get("classification").and_then(Value::as_str)
                 == Some("scaler_copy_retirement_active")
@@ -34876,6 +34924,62 @@ H: Handlers=event3 js0"#
         let mut latched_mismatch = frame_integrity.clone();
         latched_mismatch["classification"] = json!("raw_control_mismatch_latched");
         assert!(!experimental_fpga_evidence_is_current(&latched_mismatch));
+        let ordered_frame = json!({
+            "schema": "mister-magik-fpga-video-diagnostics-v2",
+            "diagnostic_architecture": "raw-scaler-ordered-frame-v1",
+            "available": true,
+            "coherent": true,
+            "classification": "raw_scaler_ordered_stable",
+            "sink_visibility": "unobserved",
+            "owner_epoch_before": 13,
+            "owner_epoch_after": 13,
+            "coherence": {
+                "three_samples_valid": true,
+                "classification_stable": true,
+                "latch_ownership_stable": true,
+                "launcher_state_stable": true,
+                "ownership_check_error": null,
+            },
+            "capabilities": {
+                "passive_video_observer": true,
+                "scaler_scheduler_state": false,
+                "scaler_pipeline_state": false,
+                "scaler_copy_retirement": false,
+                "raw_scaler_ordered_frame": true,
+                "pixel_observer": true,
+                "pll_observer": false,
+            },
+            "latch_status": {
+                "active_sequence": 7,
+                "flags": 1 << mister_magik_latch_contract::STATUS_MAGIK_OWNERSHIP,
+                "active_width": 960,
+                "active_height": 540,
+                "active_stride": 1920,
+                "crc": 0,
+            },
+            "raw_scaler_state": {
+                "frame_sequence": [100, 101, 103],
+                "active_pixels": [2073600, 2073600, 2073600],
+                "active_lines": [1080, 1080, 1080],
+                "variation_count": [0, 0, 0],
+                "newest_crc32c": ["12345678", "12345678", "12345678"],
+                "previous_crc32c": ["12345678", "12345678", "12345678"],
+                "oldest_crc32c": ["12345678", "12345678", "12345678"],
+                "raw_samples": vec![vec![7; 13]; 3],
+            },
+        });
+        assert!(experimental_raw_scaler_evidence_available(&ordered_frame));
+        assert!(experimental_agent_preload_evidence_accepted(&ordered_frame));
+        assert!(experimental_fpga_evidence_is_current(&ordered_frame));
+        let mut ordered_changed = ordered_frame.clone();
+        ordered_changed["classification"] =
+            json!("raw_scaler_order_changed_requires_static_source_proof");
+        assert!(experimental_fpga_evidence_is_current(&ordered_changed));
+        let mut ordered_inconclusive = ordered_frame.clone();
+        ordered_inconclusive["classification"] = json!("raw_scaler_ordered_evidence_inconclusive");
+        assert!(!experimental_fpga_evidence_is_current(
+            &ordered_inconclusive
+        ));
         let scaler_copy_retirement = json!({
             "schema": "mister-magik-fpga-video-diagnostics-v2",
             "diagnostic_architecture": "scaler-copy-retirement-v1",
