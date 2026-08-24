@@ -249,18 +249,39 @@ def main() -> None:
         fail("raw scaler source state is not preserved for bundled-data capture")
     if control_source.count("(* preserve *) reg source_generation") != 1:
         fail("raw scaler frame generation is not preserved as a distinct CDC source")
+    for staged_input in (
+        "(* preserve *) reg [23:0] raw_rgb_staged",
+        "(* preserve *) reg raw_de_staged",
+        "(* preserve *) reg raw_vs_staged",
+        "raw_rgb_staged <= raw_rgb;",
+        "raw_de_staged <= raw_de;",
+        "raw_vs_staged <= raw_vs;",
+    ):
+        if control_source.count(staged_input) != 1:
+            fail(f"raw scaler timing-isolation stage is missing or ambiguous: {staged_input}")
     for exact_probe in (
         "input  wire [23:0] raw_rgb",
         "input  wire        raw_de",
         "input  wire        raw_vs",
-        "wire frame_start = raw_vs && !raw_vs_previous;",
-        "wire active_sample = raw_de;",
-        "raw_rgb != first_active_rgb",
+        "wire frame_start = raw_vs_staged && !raw_vs_previous;",
+        "wire active_sample = raw_de_staged;",
+        "raw_rgb_staged != first_active_rgb",
     ):
         if control_source.count(exact_probe) != 1:
             fail(f"raw scaler diagnostic probe is missing or ambiguous: {exact_probe}")
-    if control_source.count("raw_rgb != 24'h000000") != 2:
+    if control_source.count("raw_rgb_staged != 24'h000000") != 2:
         fail("raw scaler black comparison is missing or ambiguous")
+    for direct_production_use in (
+        "wire frame_start = raw_vs &&",
+        "wire active_sample = raw_de;",
+        "raw_rgb != 24'h000000",
+        "raw_rgb != first_active_rgb",
+    ):
+        if direct_production_use in control_source:
+            fail(
+                "raw scaler comparison bypasses the timing-isolation stage: "
+                f"{direct_production_use}"
+            )
     if control_source.count("source_generation <= ~source_generation;") != 1:
         fail("raw scaler completed-frame publication toggle is missing or ambiguous")
     for retired_control_observer in (

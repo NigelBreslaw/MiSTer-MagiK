@@ -40,3 +40,18 @@ Quartus action is part of this implementation step.
 
 Source incident:
 [schema-3 persistent black result](2026-08-24-frame-integrity-black-result.md).
+
+## Timing-isolation revision
+
+The first schema-4 Apple fit passed hold, TNS, CDC/MTBF, hard-block identity,
+and area, but setup reached only `0.289 ns` against the `0.428 ns` gate. The
+worst paths were unrelated internal ascal paths, showing placement
+perturbation from the direct 24-bit comparison fanout rather than an observer
+path failure.
+
+The forward revision adds one preserved, coherent RGB/DE/VS register boundary
+in `clk_hdmi`. Production raw outputs now drive only that shallow stage, while
+all comparisons and frame delimiting operate on its consistently delayed
+values. Schema, response, classifications, CDC transport, and production
+logic remain unchanged. The 26 added boundary bits keep the expected total at
+about `+178` registers, below the disposable `+224` cap.

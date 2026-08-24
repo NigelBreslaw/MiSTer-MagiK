@@ -16,6 +16,12 @@ delimiting. It does not read scheduler/completion state, framebuffer data or
 addresses, latch or route state, reset control, PLL, mux control, post-OSD/final
 pixels, or TMDS. Its outputs reach only the read-only UIO responder.
 
+One explicitly preserved `clk_hdmi` input stage captures RGB, DE, and VS as a
+coherent bundle. The production ascal outputs therefore drive only shallow
+diagnostic flip-flop inputs; black/variation comparisons and frame delimiting
+use the consistently one-cycle-delayed bundle. This timing isolation does not
+change the sampled frame or the ABI.
+
 For the current frame the HDMI-domain logic retains only:
 
 - whether an active DE sample was seen;

@@ -24,6 +24,12 @@ module mister_magik_raw_scaler_diagnostic (
 
 `include "mister_magik_video_diagnostics_protocol.svh"
 
+	// Preserve one coherent HDMI-domain boundary stage so the production ascal
+	// RGB/control outputs drive only shallow diagnostic flip-flop inputs. All
+	// classification logic operates from the consistently delayed bundle.
+	(* preserve *) reg [23:0] raw_rgb_staged = 24'd0;
+	(* preserve *) reg raw_de_staged = 1'b0;
+	(* preserve *) reg raw_vs_staged = 1'b0;
 	reg raw_vs_previous = 1'b0;
 	reg frame_open = 1'b0;
 	reg active_seen = 1'b0;
@@ -50,9 +56,9 @@ module mister_magik_raw_scaler_diagnostic (
 	reg [15:0] tx_crc = 16'hffff;
 	reg [15:0] response_word;
 
-	wire frame_start = raw_vs && !raw_vs_previous;
+	wire frame_start = raw_vs_staged && !raw_vs_previous;
 	wire completed_frame = frame_start && frame_open;
-	wire active_sample = raw_de;
+	wire active_sample = raw_de_staged;
 	wire command_start = io_uio && io_strobe && !has_command;
 	wire command_data = io_uio && io_strobe && has_command;
 	wire selected_start = io_din[7:0] == MAGIK_UIO_GET_RAW_SCALER_STATE;
@@ -94,6 +100,9 @@ module mister_magik_raw_scaler_diagnostic (
 	// from the completed bundle published on the same edge.
 	always @(posedge clk_hdmi or posedge reset_active) begin
 		if(reset_active) begin
+			raw_rgb_staged <= 24'd0;
+			raw_de_staged <= 1'b0;
+			raw_vs_staged <= 1'b0;
 			raw_vs_previous <= 1'b0;
 			frame_open <= 1'b0;
 			active_seen <= 1'b0;
@@ -104,14 +113,17 @@ module mister_magik_raw_scaler_diagnostic (
 			source_generation <= 1'b0;
 		end
 		else begin
-			raw_vs_previous <= raw_vs;
+			raw_rgb_staged <= raw_rgb;
+			raw_de_staged <= raw_de;
+			raw_vs_staged <= raw_vs;
+			raw_vs_previous <= raw_vs_staged;
 
 			if(frame_start) begin
 				frame_open <= 1'b1;
 				active_seen <= active_sample;
-				any_nonblack <= active_sample && (raw_rgb != 24'h000000);
+				any_nonblack <= active_sample && (raw_rgb_staged != 24'h000000);
 				variation_seen <= 1'b0;
-				first_active_rgb <= active_sample ? raw_rgb : 24'd0;
+				first_active_rgb <= active_sample ? raw_rgb_staged : 24'd0;
 
 				if(completed_frame) begin
 					source_state <= {
@@ -131,12 +143,12 @@ module mister_magik_raw_scaler_diagnostic (
 			else if(active_sample) begin
 				if(!active_seen) begin
 					active_seen <= 1'b1;
-					first_active_rgb <= raw_rgb;
+					first_active_rgb <= raw_rgb_staged;
 				end
-				else if(raw_rgb != first_active_rgb)
+				else if(raw_rgb_staged != first_active_rgb)
 					variation_seen <= 1'b1;
 
-				if(raw_rgb != 24'h000000)
+				if(raw_rgb_staged != 24'h000000)
 					any_nonblack <= 1'b1;
 			end
 		end
