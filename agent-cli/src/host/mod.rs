@@ -4158,10 +4158,13 @@ fn experimental_agent_preload_evidence_accepted(evidence: &Value) -> bool {
             && evidence.get("schema").and_then(Value::as_str)
                 == Some("mister-magik-fpga-video-diagnostics-v1")
             && evidence.get("classification").and_then(Value::as_str) == Some("unclassified")
-            && evidence.get("reason").and_then(Value::as_str)
-                == Some(
-                    "read passive FPGA video diagnostics: unsupported raw scaler state schema 1",
-                ))
+            && matches!(
+                evidence.get("reason").and_then(Value::as_str),
+                Some(
+                    "read passive FPGA video diagnostics: unsupported raw scaler state schema 1"
+                        | "read passive FPGA video diagnostics: unsupported raw scaler state schema 2"
+                )
+            ))
 }
 
 fn device_failure(error: impl std::fmt::Display) -> DeviceFailure {
@@ -34663,6 +34666,16 @@ H: Handlers=event3 js0"#
         });
         assert!(experimental_agent_preload_evidence_accepted(
             &retired_scheduler
+        ));
+        let retired_raw_activity = json!({
+            "available": false,
+            "classification": "unclassified",
+            "coherent": false,
+            "reason": "read passive FPGA video diagnostics: unsupported raw scaler state schema 2",
+            "schema": "mister-magik-fpga-video-diagnostics-v1",
+        });
+        assert!(experimental_agent_preload_evidence_accepted(
+            &retired_raw_activity
         ));
         for (pointer, value) in [
             ("/schema", json!("mister-magik-fpga-video-diagnostics-v2")),
