@@ -74,3 +74,25 @@ signature and `generation_launch` captures it on the following HDMI edge,
 after the source bundle is stable. The exact bounded CDC identity becomes
 `generation_launch -> generation_meta`. No duplicate wildcard, warning waiver,
 gate relaxation, seed change, or fitter change is permitted.
+
+## Rejected candidate 5 and placement-neutral launch
+
+Committed candidate `3b277d1c1fff0b6c3dd649d0363068225e8c76c1`
+proved the exact named `generation_launch -> generation_meta` path, all three
+bounded CDC paths, and all three custom MTBF chains. It added no warning class,
+used 106 ALMs over the matched baseline, and retained `0.248 ns` hold slack.
+It nevertheless failed fixed-seed signoff because setup fell to `-0.232 ns`
+and aggregate register growth rose to 241. The retained delta-report SHA-256
+is `bdc401471031a94ec52b71fd8f93799e2aea22fb8d7aef47d16be4ec066d7494`.
+RBF `7d8f44096ad4f589979ba905fe043310fcd69e6a605435b04f6d8d71d04679a3`
+and metadata
+`85b4fd80c901f0c84ddf40d83d58aaaece20c182a8bffbd8386c5484dd496cc1`
+are rejected and must never be installed.
+
+Quartus mapped the `dont_replicate` synthesis hint to
+`ADV_NETLIST_OPT_ALLOWED = Never Allow` on the launch register. The next
+candidate removes only that placement-affecting hint. The preserved
+`generation_launch` topology still has exactly one data fanout, and the
+unchanged report gate still rejects a duplicated launch endpoint. No RTL
+datapath, schema, CDC stage, timing bound, protected cone, fitter setting,
+seed, or signoff threshold changes.

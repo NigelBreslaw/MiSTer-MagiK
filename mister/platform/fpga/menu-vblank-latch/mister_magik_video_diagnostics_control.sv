@@ -51,7 +51,7 @@ module mister_magik_raw_scaler_ordered_frame (
 	// Dedicated one-fanout CDC launch point. It follows source_generation one
 	// HDMI clock after the published signature is committed, so the bundled
 	// source data is already stable before this value can reach generation_meta.
-	(* preserve, dont_replicate *) reg generation_launch = 1'b0;
+	(* preserve *) reg generation_launch = 1'b0;
 
 	// Word 3 is the stable source state. The response sequence is advanced only
 	// when the destination coherently captures a newly published signature.

@@ -292,7 +292,7 @@ def main() -> None:
         "reg snapshot_valid",
         "response_word = snapshot_valid ?",
         "source_generation <= ~source_generation;",
-        "(* preserve, dont_replicate *) reg generation_launch = 1'b0;",
+        "(* preserve *) reg generation_launch = 1'b0;",
         "generation_launch <= source_generation;",
         "generation_meta <= generation_launch;",
         "generation_sync <= generation_meta;",
