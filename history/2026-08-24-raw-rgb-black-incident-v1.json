@@ -1,0 +1,53 @@
+{
+  "schema": "mister-magik-raw-rgb-black-incident-v1",
+  "captured_on": "2026-08-24",
+  "classification": "persistent-physical-black-with-black-raw-scaler-rgb",
+  "attempt": {
+    "boot_epoch": 7,
+    "index": 8,
+    "preceding_valid_passes_total": 74,
+    "game_dwell_ms": 2000
+  },
+  "candidate": {
+    "source_commit": "e5fb64ae230820ed74f02dc528f99766b22940d4",
+    "rbf_sha256": "3b27159580fcf4071ed78fbf1431fda9fe40d6f4b0c0c88cc7fe40da62db6c70",
+    "setup_slack_ns": 0.671,
+    "hold_slack_ns": 0.223,
+    "tns_ns": 0.0
+  },
+  "physical_evidence": {
+    "visibility": "black",
+    "width": 1920,
+    "height": 1080,
+    "luma_minimum": 16,
+    "luma_maximum": 16,
+    "luma_mean": 16,
+    "still_sha256": "dc4ee4f1eb9ede8c4b031b29fc8ba97d72068a296fb716cec2de087b6b25255e",
+    "movie_sha256": "729c79287f4523743f4cb4b72480763baeb9d1722ac9c90b04355496e5a02c43"
+  },
+  "internal_evidence": {
+    "framebuffer_sha256": "288f47335560f1169890ee50d02ddf3707ef4b568a22ccb06593a78d275ad250",
+    "framebuffer_authoritative_scanout": true,
+    "framebuffer_content_nonzero_bytes": 808882,
+    "framebuffer_content_varied": true,
+    "diagnostic_architecture": "raw-scaler-rgb-state-v1",
+    "classification_at_failure": "raw_rgb_black",
+    "classification_later_live": "raw_rgb_black",
+    "raw_samples": [[4, 3, 0, 0, 63078], [4, 3, 0, 0, 63078], [4, 3, 0, 0, 63078]],
+    "active_seen": [true, true, true],
+    "any_nonblack": [false, false, false],
+    "variation_seen": [false, false, false],
+    "first_active_rgb": [0, 0, 0],
+    "owner_epoch": 1,
+    "latch_drop_count": 0,
+    "latch_reject_count": 0,
+    "sink_visibility": "unobserved"
+  },
+  "artifacts": {
+    "root": "build/raw-scaler-rgb-state-phase2-epoch7-08",
+    "summary_sha256": "33dbd67c891f692ec9a12aa0c14d01e7fe8431f6d592121c415f5981961588e0",
+    "failure_diagnostics_sha256": "328a1efd5e966f5dec015e3773e8f11de66aa27be3a819d7b5fdb35b712ba529",
+    "live_diagnostics_sha256": "e5a37759363c0c91340e7b62f3da5dffd271ec3504973cb4d7e8af682e5addef",
+    "live_bundle_sha256": "915d063968e271e04fab6c7d1d72ab36e0c37e102ec40588e37765af42236465"
+  }
+}

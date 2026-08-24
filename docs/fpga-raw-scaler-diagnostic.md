@@ -121,7 +121,25 @@ the authoritative framebuffer stayed correct. Failure-time and later live
 schema-4 records were coherent `raw_rgb_varied` and byte-identical to healthy
 attempts. This excludes black or constant raw RGB for that corruption event,
 but the deliberately coarse state does not prove every raw pixel was correct.
-The black-screen decision therefore remains pending a genuine black return.
+
+After changing the supervised reboot cadence to every ten valid attempts, the
+campaign reproduced a genuine persistent MagiK black screen on boot epoch 7,
+attempt 8, after 74 valid clean returns. The physical still was byte-identical
+to the earlier black incidents and the authoritative framebuffer remained the
+same correct Arcade frame. Both failure-time and later live schema-4 records
+were coherent `raw_rgb_black`: active video remained present, but three
+completed frames contained no nonblack or varying raw RGB pixels.
+
+The black frame therefore already exists at the ascal output. Combined with
+the earlier stable raw-control result, this narrows the fault to scaler
+framebuffer fetch, returned pixel data, or reset/traffic epoch handling rather
+than a defect introduced only after the raw scaler boundary. The next probe
+should distinguish missing/stalled memory-return activity from returned or
+selected zero pixel data without changing latch-v5 or the queued completion
+repair.
 
 See
 [`history/2026-08-24-raw-rgb-transient-corruption-result.md`](../history/2026-08-24-raw-rgb-transient-corruption-result.md).
+
+The decisive persistent-black record is in
+[`history/2026-08-24-raw-rgb-black-result.md`](../history/2026-08-24-raw-rgb-black-result.md).
