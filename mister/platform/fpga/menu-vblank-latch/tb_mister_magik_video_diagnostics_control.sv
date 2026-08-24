@@ -5,8 +5,12 @@
 `default_nettype none
 
 module tb_mister_magik_video_diagnostics_control;
+	reg clk_hdmi = 1'b0;
 	reg clk_sys = 1'b0;
 	reg reset_active = 1'b1;
+	reg [23:0] raw_rgb = 24'd0;
+	reg raw_de = 1'b0;
+	reg raw_vs = 1'b0;
 	reg [31:0] pipeline_state = 32'd0;
 	reg pipeline_generation = 1'b0;
 	reg io_uio = 1'b0;
@@ -21,11 +25,13 @@ module tb_mister_magik_video_diagnostics_control;
 	integer index;
 
 	always #5 clk_sys = ~clk_sys;
+	always #7 clk_hdmi = ~clk_hdmi;
 
 	`include "mister_magik_video_diagnostics_protocol.svh"
 
 	mister_magik_raw_scaler_diagnostic dut (
-		.clk_sys(clk_sys), .reset_active(reset_active),
+		.clk_hdmi(clk_hdmi), .clk_sys(clk_sys), .reset_active(reset_active),
+		.raw_rgb(raw_rgb), .raw_de(raw_de), .raw_vs(raw_vs),
 		.pipeline_state(pipeline_state),
 		.pipeline_generation(pipeline_generation),
 		.io_uio(io_uio), .io_strobe(io_strobe), .io_din(io_din),
@@ -57,10 +63,34 @@ module tb_mister_magik_video_diagnostics_control;
 		input [15:0] flags;
 		input [15:0] state;
 		begin
-			@(negedge clk_sys);
+			@(negedge clk_hdmi);
 			pipeline_state = {state, flags};
 			#2 pipeline_generation = ~pipeline_generation;
+			repeat(4) @(posedge clk_hdmi);
 			repeat(6) @(posedge clk_sys);
+		end
+	endtask
+
+	task automatic complete_raw_frame;
+		input active;
+		input nonzero;
+		begin
+			// Rising VS opens the frame; the following rising VS publishes it.
+			@(negedge clk_hdmi); raw_vs = 1'b1;
+			repeat(2) @(posedge clk_hdmi);
+			@(negedge clk_hdmi); raw_vs = 1'b0;
+			repeat(2) @(posedge clk_hdmi);
+			if(active) begin
+				@(negedge clk_hdmi);
+				raw_de = 1'b1;
+				raw_rgb = nonzero ? 24'h123456 : 24'd0;
+				repeat(3) @(posedge clk_hdmi);
+				@(negedge clk_hdmi); raw_de = 1'b0; raw_rgb = 24'd0;
+			end
+			@(negedge clk_hdmi); raw_vs = 1'b1;
+			repeat(2) @(posedge clk_hdmi);
+			@(negedge clk_hdmi); raw_vs = 1'b0;
+			repeat(3) @(posedge clk_hdmi);
 		end
 	endtask
 
@@ -154,32 +184,45 @@ module tb_mister_magik_video_diagnostics_control;
 		end_command();
 		expect_record(16'h0000, 16'h0000);
 
-		// Exact healthy stage flags and queue/reset state are transported intact.
-		publish_record(16'h0fff, 16'h5759);
+		// The external raw boundary closes one nonzero active frame. The next
+		// ascal pipeline generation merges those two flags atomically.
+		complete_raw_frame(1'b1, 1'b1);
+		publish_record(16'h03ff, 16'h5759);
 		expect_record(16'h0fff, 16'h5759);
 
 		// Every diagnostic stage can independently remain absent without the
 		// responder altering the immutable production record.
-		for(index = 1; index < 12; index = index + 1) begin
-			publish_record(16'h0fff & ~(16'h0001 << index), 16'h1000 | index);
+		for(index = 1; index < 10; index = index + 1) begin
+			publish_record(16'h03ff & ~(16'h0001 << index), 16'h1000 | index);
 			expect_record(16'h0fff & ~(16'h0001 << index), 16'h1000 | index);
 		end
+		complete_raw_frame(1'b0, 1'b0);
+		// A completed raw frame alone cannot mutate the last atomic record;
+		// it is merged only when the corresponding ascal generation arrives.
+		expect_record(16'h0dff, 16'h1009);
+		publish_record(16'h03ff, 16'h100a);
+		expect_record(16'h03ff, 16'h100a);
+		complete_raw_frame(1'b1, 1'b0);
+		publish_record(16'h03ff, 16'h100b);
+		expect_record(16'h07ff, 16'h100b);
+		complete_raw_frame(1'b1, 1'b1);
 
 		// A command snapshot remains immutable while a new frame arrives.
-		publish_record(16'h0fff, 16'h1234);
+		publish_record(16'h03ff, 16'h1234);
 		read_record();
 		for(index = 0; index < 4; index = index + 1) saved[index] = record[index];
 		io_uio = 1'b1;
 		strobe_word(16'h0067, 1'b1, 16'h4d57);
 		strobe_word(16'd0, 1'b1, saved[0]);
-		pipeline_state = {16'h2222, 16'h0555};
+		pipeline_state = {16'h2222, 16'h0155};
 		pipeline_generation = ~pipeline_generation;
 		for(index = 1; index < 4; index = index + 1)
 			strobe_word(16'd0, 1'b1, saved[index]);
 		strobe_word(16'd0, 1'b0, 16'd0);
 		end_command();
+		repeat(4) @(posedge clk_hdmi);
 		repeat(6) @(posedge clk_sys);
-		expect_record(16'h0555, 16'h2222);
+		expect_record(16'h0d55, 16'h2222);
 
 		// Reset during a transaction clears transport and response state.
 		io_uio = 1'b1;

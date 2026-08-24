@@ -1038,6 +1038,10 @@ claims physical visibility.
 
 The design and exact encoding are in
 [`2026-08-24-scaler-pipeline-state-design.md`](2026-08-24-scaler-pipeline-state-design.md).
+Quartus 17 rejected the initial VHDL form because it read ascal OUT ports. The
+forward form keeps internal flags 1 through 9 in ascal and merges only raw
+active/nonzero flags from a preserved external HDMI boundary stage; it changes
+neither port modes nor production output cones.
 
 ## Facts established despite the failed implementations
 

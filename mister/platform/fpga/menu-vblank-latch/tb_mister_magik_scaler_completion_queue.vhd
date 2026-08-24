@@ -91,7 +91,7 @@ BEGIN
 		VARIABLE read_asserted_v,read_accepted_v,waitrequest_v : std_logic;
 		VARIABLE acceptance_count_v : natural;
 		VARIABLE avl_flags_v : std_logic_vector(3 DOWNTO 0);
-		VARIABLE output_flags_v : std_logic_vector(6 DOWNTO 0);
+		VARIABLE output_flags_v : std_logic_vector(4 DOWNTO 0);
 		PROCEDURE produce IS
 		BEGIN
 			WAIT UNTIL falling_edge(source_clk);
@@ -106,8 +106,8 @@ BEGIN
 		avl_flags_v:=magik_avl_flags_next(
 			"0000",false,false,false,false);
 		output_flags_v:=magik_output_flags_next(
-			"0000000",false,false,false,false,false,false,false);
-		ASSERT avl_flags_v="0000" AND output_flags_v="0000000"
+			"00000",false,false,false,false,false);
+		ASSERT avl_flags_v="0000" AND output_flags_v="00000"
 			REPORT "empty pipeline frame gained activity" SEVERITY failure;
 
 		-- Every Avalon stage maps to exactly one bit and accumulation is sticky.
@@ -133,18 +133,18 @@ BEGIN
 
 		-- The output-domain stages similarly retain the first activity through
 		-- the completed-frame boundary, including zero/nonzero distinctions.
-		FOR stage IN 0 TO 6 LOOP
+		FOR stage IN 0 TO 4 LOOP
 			output_flags_v:=(OTHERS=>'0');
 			output_flags_v:=magik_output_flags_next(
 				output_flags_v,
-				stage=0,stage=1,stage=2,stage=3,stage=4,stage=5,stage=6);
+				stage=0,stage=1,stage=2,stage=3,stage=4);
 			ASSERT output_flags_v=
-				std_logic_vector(shift_left(to_unsigned(1,7),stage))
+				std_logic_vector(shift_left(to_unsigned(1,5),stage))
 				REPORT "output pipeline flag mapping changed" SEVERITY failure;
 		END LOOP;
 		output_flags_v:=magik_output_flags_next(
-			output_flags_v,true,true,true,true,true,true,true);
-		ASSERT output_flags_v="1111111"
+			output_flags_v,true,true,true,true,true);
+		ASSERT output_flags_v="11111"
 			REPORT "output pipeline flags were not sticky" SEVERITY failure;
 
 		-- Exhaust the exact production transition function truth table.

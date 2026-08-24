@@ -246,10 +246,18 @@ def main() -> None:
     if control_source.count("(* preserve *) reg [31:0] snapshot_state") != 1:
         fail("diagnostic bundled-data snapshot is not preserved")
     for exact_input in (
+        "input  wire        clk_hdmi",
+        "input  wire [23:0] raw_rgb",
+        "input  wire        raw_de",
+        "input  wire        raw_vs",
         "input  wire [31:0] pipeline_state",
         "input  wire        pipeline_generation",
-        "generation_meta <= pipeline_generation;",
-        "snapshot_state <= pipeline_state;",
+        "generation_meta <= source_generation;",
+        "snapshot_state <= source_state;",
+        "(* preserve *) reg [31:0] source_state",
+        "(* preserve *) reg source_generation",
+        "wire raw_frame_start = raw_vs_staged && !raw_vs_previous;",
+        "source_state <= completed_pipeline_state;",
     ):
         if control_source.count(exact_input) != 1:
             fail(f"scaler pipeline responder input is missing or ambiguous: {exact_input}")
@@ -262,16 +270,24 @@ def main() -> None:
         "mismatch_latched",
         "raw_ce",
         "raw_hs",
-        "raw_rgb",
-        "raw_de",
-        "raw_vs",
-        "source_state",
-        "source_generation",
         "first_active_rgb",
         "variation_seen",
     ):
         if retired_control_observer in control_source:
             fail(f"retired pre-schema-5 observer remains: {retired_control_observer}")
+    for raw_merge_fragment in (
+        "(* preserve *) reg [23:0] raw_rgb_staged",
+        "(* preserve *) reg raw_de_staged",
+        "(* preserve *) reg raw_vs_staged",
+        "reg [1:0] raw_completed_flags",
+        "wire [31:0] completed_pipeline_state",
+        "pipeline_capture_pending <= 1'b1;",
+        "source_generation <= ~source_generation;",
+    ):
+        if control_source.count(raw_merge_fragment) != 1:
+            fail(f"raw boundary merge is missing or ambiguous: {raw_merge_fragment}")
+    if control_source.count("raw_rgb_staged != 24'd0") != 2:
+        fail("raw boundary nonzero sampling is missing or ambiguous")
     for forbidden_rgb_probe in (
         "hdmi_data",
         "rgb_in",
@@ -376,14 +392,15 @@ def main() -> None:
         "*ascal:ascal|avl_magik_generation",
         "*ascal:ascal|o_magik_generation_meta",
         "*ascal:ascal|avl_magik_bundle[*]",
-        "*ascal:ascal|o_magik_diag_generation",
+        "*magik_raw_scaler_diagnostic|source_generation",
         "*magik_raw_scaler_diagnostic|generation_meta",
+        "*magik_raw_scaler_diagnostic|source_state[*]",
         "*magik_raw_scaler_diagnostic|snapshot_state[*]",
         "scaler_pipeline_state",
     ):
         if diagnostics_sdc_text.count(fragment) != 1:
             fail(f"scaler completion request/ack constraint is missing or ambiguous: {fragment}")
-    if diagnostics_sdc_text.count("*ascal:ascal|o_magik_diag_state[*]") != 2:
+    if diagnostics_sdc_text.count("*ascal:ascal|o_magik_diag_state[*]") != 1:
         fail("scaler pipeline state capture endpoints are missing or ambiguous")
     for forbidden_sdc in ("set_false_path", "magik_require_data_pin", "control_pll_lock"):
         if forbidden_sdc in diagnostics_sdc_text:
@@ -467,6 +484,10 @@ def main() -> None:
         for pipeline_binding in (
             ".magik_diag_state (magik_scaler_pipeline_state)",
             ".magik_diag_generation(magik_scaler_pipeline_generation)",
+            ".clk_hdmi(clk_hdmi)",
+            ".raw_rgb(hdmi_data)",
+            ".raw_de(hdmi_de)",
+            ".raw_vs(hdmi_vs)",
             ".pipeline_state(magik_scaler_pipeline_state)",
             ".pipeline_generation(magik_scaler_pipeline_generation)",
         ):
@@ -476,10 +497,6 @@ def main() -> None:
                     f"{pipeline_binding}"
                 )
         for retired_binding in (
-            ".clk_hdmi(clk_hdmi)",
-            ".raw_rgb(hdmi_data)",
-            ".raw_de(hdmi_de)",
-            ".raw_vs(hdmi_vs)",
             ".raw_ce(scaler_out)",
             ".raw_hs(hdmi_hs)",
         ):
@@ -562,6 +579,8 @@ def main() -> None:
             "SIGNAL avl_magik_frame_flags : std_logic_vector(3 DOWNTO 0):=(OTHERS=>'0');": 1,
             "SIGNAL avl_magik_bundle : std_logic_vector(15 DOWNTO 0):=(OTHERS=>'0');": 1,
             "SIGNAL avl_magik_generation : std_logic:='0';": 1,
+            "SIGNAL o_magik_frame_flags : std_logic_vector(4 DOWNTO 0):=(OTHERS=>'0');": 1,
+            "SIGNAL o_magik_completed_flags : std_logic_vector(4 DOWNTO 0):=(OTHERS=>'0');": 1,
             "o_magik_generation_meta<=avl_magik_generation; -- <ASYNC>": 1,
             "o_magik_generation_sync<=o_magik_generation_meta;": 1,
             "MagiKScalerPipelineDiagnostic:PROCESS(o_clk,o_reset_na) IS": 1,
@@ -609,6 +628,26 @@ def main() -> None:
                     "retired scheduler observer remains in production ascal: "
                     f"{retired_observer_fragment}"
                 )
+        diagnostic_process = re.search(
+            r"MagiKScalerPipelineDiagnostic:PROCESS\(o_clk,o_reset_na\) IS"
+            r"(?P<body>.*?)END PROCESS MagiKScalerPipelineDiagnostic;",
+            patched_ascal,
+            re.S,
+        )
+        if diagnostic_process is None:
+            fail("scaler pipeline diagnostic process is missing")
+        forbidden_out_reads = re.findall(
+            r"\b(?:o_de|o_r|o_g|o_b)\b", diagnostic_process.group("body")
+        )
+        if forbidden_out_reads:
+            fail(
+                "Quartus-17-incompatible ascal OUT-port read remains: "
+                + ", ".join(sorted(set(forbidden_out_reads)))
+            )
+        if patched_ascal.count("flags_v(9 DOWNTO 5):=o_magik_completed_flags;") != 1:
+            fail("ascal pipeline record does not reserve raw boundary flag bits")
+        if "flags_v(11 DOWNTO 5):=o_magik_completed_flags;" in patched_ascal:
+            fail("ascal still publishes raw flags by reading its OUT ports")
         assignment_text = patched_ascal.replace(";", ";\n")
         diagnostic_rhs_assignments = re.findall(
             r"(?m)^\s*([A-Za-z0-9_]+)\s*<=[^;\n]*(?:avl_magik_|o_magik_|magik_diag_)[^;\n]*;",

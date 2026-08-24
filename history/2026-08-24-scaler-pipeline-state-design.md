@@ -30,6 +30,24 @@ result crosses to `clk_sys` with the same bounded generation/stable-bundle
 pattern. Only the responder reads it. There is no write, clear, arm, freeze,
 reset, route, or recovery action and no observer signal feeds production logic.
 
+## Quartus-17 boundary correction
+
+The first implementation compiled in GHDL's VHDL-2008 mode but Quartus 17
+analysis rejected five reads of the ascal OUT ports `o_de/o_r/o_g/o_b`. Port
+modes were not weakened and production output assignments were not changed.
+There is no single readable internal signal after ascal's mode, mask, and
+border selection, so duplicating that selection would create a second logic
+definition rather than an exact probe.
+
+The forward correction removes every raw OUT-port read from VHDL. Ascal now
+publishes only flags 0 through 9. One preserved HDMI-domain boundary stage
+beside `sys_top` samples the unchanged raw RGB/DE/VS ports, retains only
+completed-frame active/nonzero flags, and merges them with the stable ascal
+record after a same-domain settling edge. The merged bundle alone crosses into
+`clk_sys`. Structural proof explicitly rejects any future ascal OUT-port read;
+Icarus proves raw active, raw zero, atomic merge, reset, and immutable response
+behavior.
+
 Command `0x67` remains the only diagnostic command. Magic stays `0x4d57`, the
 schema is `5`, the response is four words including the existing CRC, commands
 `0x60–0x66` remain unsupported, and latch-v5/capabilities `0x03ff` remain

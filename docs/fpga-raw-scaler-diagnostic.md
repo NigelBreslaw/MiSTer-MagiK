@@ -6,10 +6,11 @@ or nonzero data first disappear? It is evidence only, not a production feature
 or recovery mechanism.
 
 The queued completion repair and latch-v5 remain unchanged. The schema-4 raw
-RGB observer is removed rather than retained or stacked. The observer is built
-inside production `ascal.vhd` so each event uses the exact registered signal at
-the stage that consumes it. Every diagnostic output flows only to the read-only
-responder beside the latch bridge.
+RGB observer is removed rather than retained or stacked. Stages through the
+line buffer are observed inside production `ascal.vhd` using the exact
+registered signal at the consuming stage. Raw DE/RGB alone are sampled at the
+unchanged ascal boundary beside `sys_top`. Every diagnostic output flows only
+to the read-only responder beside the latch bridge.
 
 ## Per-frame activity record
 
@@ -27,22 +28,28 @@ Bits `11:0` are sticky within one completed frame:
 | 7 | copied DPRAM word `o_dr` was nonzero on an `o_sh3` edge |
 | 8 | line-buffer write enable `o_wr` was nonzero |
 | 9 | line-buffer write pixel `o_ldw` was nonzero on an `o_wr` edge |
-| 10 | raw output DE `o_de` was active |
-| 11 | registered raw output RGB was nonzero on an active `o_de` edge |
+| 10 | raw boundary `hdmi_de` was active |
+| 11 | raw boundary `hdmi_data[23:0]` was nonzero while DE was active |
 
 Copy and line-write observations use the same registered values consumed by
-`Scalaire` and `OLBUF` on that edge. Raw RGB is observed one `o_clk` after
-`VSCAL` registers it and remains within the same frame. The accumulator
+`Scalaire` and `OLBUF` on that edge. Quartus 17 rejects reads of the VHDL OUT
+ports `o_de/o_r/o_g/o_b`, and ascal has no single internal signal representing
+the final mode/border-selected RGB. The raw flags therefore use one preserved
+schema-4-style HDMI-domain input stage outside ascal. Rising staged VS closes
+the preceding raw frame and is excluded from it. No first pixel, variation
+state, content baseline, or schema-4 record remains. The internal accumulator
 functions live in the package compiled from patched production `ascal.vhd`;
 the GHDL test and synthesis call those same functions.
 
 The Avalon bucket closes on the existing synchronized output-VS boundary. Its
 stable 16-bit bundle is published with a generation toggle. The HDMI receiver
 uses an explicit two-stage generation synchronizer and waits one further edge
-before capture. It combines that Avalon record with the completed HDMI-domain
-bucket and publishes one stable 32-bit bundle into `clk_sys` through the same
-toggle, two-stage synchronizer, and one-edge settling pattern. A UIO
-transaction snapshots the bundle immutably.
+before capture. Ascal publishes flags 0 through 9 and the state word in
+`clk_hdmi`. The responder waits one same-domain edge after its generation,
+merges the already completed external raw-frame flags 10 and 11, and only then
+publishes one stable 32-bit bundle into `clk_sys` through the toggle, two-stage
+synchronizer, and one-edge settling pattern. A UIO transaction snapshots the
+bundle immutably.
 
 The high state word is:
 

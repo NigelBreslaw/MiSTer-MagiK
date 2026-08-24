@@ -58,11 +58,12 @@ set_net_delay -max 10.0 \
 	-from $magik_scaler_avl_diag_word \
 	-to $magik_scaler_avl_diag_capture
 
-# The completed o_clk record repeats the same toggle-plus-stable-bundle
+# The clk_hdmi responder merges the same-domain completed raw-frame flags into
+# the stable ascal pipeline record, then repeats the toggle-plus-stable-bundle
 # protocol into clk_sys. Existing asynchronous clock groups cut normal
 # setup/hold analysis, so both routes are bounded explicitly.
 set magik_scaler_diag_generation [magik_require_registers diagnostic_generation \
-	{*ascal:ascal|o_magik_diag_generation} 1]
+	{*magik_raw_scaler_diagnostic|source_generation} 1]
 set magik_scaler_diag_generation_meta [magik_require_registers diagnostic_generation_meta \
 	{*magik_raw_scaler_diagnostic|generation_meta} 1]
 set_net_delay -max 10.0 \
@@ -70,7 +71,7 @@ set_net_delay -max 10.0 \
 	-to $magik_scaler_diag_generation_meta
 
 set magik_scaler_diag_word [magik_require_registers diagnostic_word \
-	{*ascal:ascal|o_magik_diag_state[*]} 32]
+	{*magik_raw_scaler_diagnostic|source_state[*]} 32]
 set magik_scaler_diag_capture [magik_require_registers diagnostic_capture \
 	{*magik_raw_scaler_diagnostic|snapshot_state[*]} 32]
 set_net_delay -max 10.0 \
