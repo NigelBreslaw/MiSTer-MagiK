@@ -3607,6 +3607,42 @@ fn experimental_fpga_architecture_is_current(diagnostics: &Value) -> bool {
                     .and_then(Value::as_array)
                     .is_some_and(|samples| samples.len() == 3)
         }
+        Some("raw-scaler-frame-integrity-v1") => {
+            diagnostics.get("classification").and_then(Value::as_str)
+                == Some("raw_control_stable_since_baseline")
+                && diagnostics
+                    .pointer("/capabilities/passive_video_observer")
+                    .and_then(Value::as_bool)
+                    == Some(true)
+                && diagnostics
+                    .pointer("/capabilities/scaler_scheduler_state")
+                    .and_then(Value::as_bool)
+                    == Some(false)
+                && diagnostics
+                    .pointer("/capabilities/raw_scaler_frame_integrity")
+                    .and_then(Value::as_bool)
+                    == Some(true)
+                && diagnostics
+                    .pointer("/capabilities/pixel_observer")
+                    .and_then(Value::as_bool)
+                    == Some(false)
+                && diagnostics
+                    .pointer("/capabilities/pll_observer")
+                    .and_then(Value::as_bool)
+                    == Some(false)
+                && diagnostics
+                    .pointer("/coherence/three_samples_valid")
+                    .and_then(Value::as_bool)
+                    == Some(true)
+                && diagnostics
+                    .pointer("/coherence/records_identical")
+                    .and_then(Value::as_bool)
+                    == Some(true)
+                && diagnostics
+                    .pointer("/raw_scaler_state/raw_samples")
+                    .and_then(Value::as_array)
+                    .is_some_and(|samples| samples.len() == 3)
+        }
         _ => false,
     }
 }
@@ -4115,34 +4151,11 @@ fn install_experimental_agent_transaction(
 }
 
 fn experimental_raw_scaler_evidence_available(evidence: &Value) -> bool {
-    evidence
-        .get("diagnostic_architecture")
-        .and_then(Value::as_str)
-        == Some("raw-scaler-boundary-v1")
+    experimental_fpga_architecture_is_current(evidence)
         && evidence.get("available").and_then(Value::as_bool) == Some(true)
         && evidence.get("sink_visibility").and_then(Value::as_str) == Some("unobserved")
         && evidence
             .pointer("/capabilities/passive_video_observer")
-            .and_then(Value::as_bool)
-            == Some(true)
-        && evidence
-            .pointer("/capabilities/scaler_scheduler_state")
-            .and_then(Value::as_bool)
-            == Some(false)
-        && evidence
-            .pointer("/capabilities/raw_scaler_boundary")
-            .and_then(Value::as_bool)
-            == Some(true)
-        && evidence
-            .pointer("/capabilities/pixel_observer")
-            .and_then(Value::as_bool)
-            == Some(true)
-        && evidence
-            .pointer("/capabilities/pll_observer")
-            .and_then(Value::as_bool)
-            == Some(false)
-        && evidence
-            .pointer("/coherence/three_samples_valid")
             .and_then(Value::as_bool)
             == Some(true)
         && evidence
@@ -34657,6 +34670,53 @@ H: Handlers=event3 js0"#
         });
         assert!(experimental_raw_scaler_evidence_available(&raw_scaler));
         assert!(experimental_agent_preload_evidence_accepted(&raw_scaler));
+        let frame_integrity = json!({
+            "schema": "mister-magik-fpga-video-diagnostics-v2",
+            "diagnostic_architecture": "raw-scaler-frame-integrity-v1",
+            "available": true,
+            "coherent": true,
+            "classification": "raw_control_stable_since_baseline",
+            "sink_visibility": "unobserved",
+            "owner_epoch_before": 13,
+            "owner_epoch_after": 13,
+            "coherence": {
+                "three_samples_valid": true,
+                "records_identical": true,
+                "latch_ownership_stable": true,
+                "launcher_state_stable": true,
+                "ownership_check_error": null,
+            },
+            "capabilities": {
+                "passive_video_observer": true,
+                "scaler_scheduler_state": false,
+                "raw_scaler_frame_integrity": true,
+                "pixel_observer": false,
+                "pll_observer": false,
+            },
+            "latch_status": {
+                "active_sequence": 7,
+                "flags": 1 << mister_magik_latch_contract::STATUS_MAGIK_OWNERSHIP,
+                "active_width": 960,
+                "active_height": 540,
+                "active_stride": 1920,
+                "crc": 0,
+            },
+            "raw_scaler_state": {
+                "raw_samples": [
+                    [3, 7, 0x1234, 0, 0],
+                    [3, 7, 0x1234, 0, 0],
+                    [3, 7, 0x1234, 0, 0],
+                ],
+            },
+        });
+        assert!(experimental_raw_scaler_evidence_available(&frame_integrity));
+        assert!(experimental_agent_preload_evidence_accepted(
+            &frame_integrity
+        ));
+        assert!(experimental_fpga_evidence_is_current(&frame_integrity));
+        let mut latched_mismatch = frame_integrity.clone();
+        latched_mismatch["classification"] = json!("raw_control_mismatch_latched");
+        assert!(!experimental_fpga_evidence_is_current(&latched_mismatch));
         let retired_scheduler = json!({
             "available": false,
             "classification": "unclassified",
