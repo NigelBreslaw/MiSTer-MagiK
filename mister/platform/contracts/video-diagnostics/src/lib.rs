@@ -150,9 +150,8 @@ impl RawScalerState {
         self.words[RAW_SCALER_STATE_FRAME_SEQUENCE_WORD]
     }
 
-    pub fn ordered_signature(&self) -> u32 {
-        u32::from(self.words[RAW_SCALER_STATE_ORDERED_SIGNATURE_LOW_WORD])
-            | (u32::from(self.words[RAW_SCALER_STATE_ORDERED_SIGNATURE_HIGH_WORD]) << 16)
+    pub fn ordered_signature(&self) -> u16 {
+        self.words[RAW_SCALER_STATE_ORDERED_SIGNATURE_WORD]
     }
 }
 
@@ -849,8 +848,7 @@ mod tests {
         );
         words[RAW_SCALER_STATE_FLAGS_WORD] = RAW_SCALER_STATE_FLAG_FRAME_VALID;
         words[RAW_SCALER_STATE_FRAME_SEQUENCE_WORD] = 0x1234;
-        words[RAW_SCALER_STATE_ORDERED_SIGNATURE_LOW_WORD] = 0x5678;
-        words[RAW_SCALER_STATE_ORDERED_SIGNATURE_HIGH_WORD] = 0x1234;
+        words[RAW_SCALER_STATE_ORDERED_SIGNATURE_WORD] = 0x5678;
         words[RAW_SCALER_STATE_CRC_WORD] = message_crc_with_schema(
             GET_RAW_SCALER_STATE,
             RAW_SCALER_STATE_SCHEMA,
@@ -859,7 +857,7 @@ mod tests {
         let decoded = decode_raw_scaler_state(&words).unwrap();
         assert!(decoded.frame_valid());
         assert_eq!(decoded.frame_sequence(), 0x1234);
-        assert_eq!(decoded.ordered_signature(), 0x1234_5678);
+        assert_eq!(decoded.ordered_signature(), 0x5678);
     }
 
     #[test]
@@ -879,7 +877,7 @@ mod tests {
         assert!(decode_raw_scaler_state(&words).is_err());
 
         words[RAW_SCALER_STATE_FLAGS_WORD] = 0;
-        words[RAW_SCALER_STATE_ORDERED_SIGNATURE_LOW_WORD] = 1;
+        words[RAW_SCALER_STATE_ORDERED_SIGNATURE_WORD] = 1;
         words[RAW_SCALER_STATE_CRC_WORD] = message_crc_with_schema(
             GET_RAW_SCALER_STATE,
             RAW_SCALER_STATE_SCHEMA,

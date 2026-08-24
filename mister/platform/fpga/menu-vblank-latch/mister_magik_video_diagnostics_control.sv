@@ -25,8 +25,8 @@ module mister_magik_raw_scaler_ordered_frame (
 
 `include "mister_magik_video_diagnostics_protocol.svh"
 
-	localparam [31:0] SIGNATURE_INITIAL = 32'h6d5a56da;
-	localparam [31:0] SIGNATURE_POLYNOMIAL = 32'h82f63b78;
+	localparam [15:0] SIGNATURE_INITIAL = 16'h56da;
+	localparam [15:0] SIGNATURE_POLYNOMIAL = 16'ha001;
 	localparam [7:0] TOKEN_PIXEL = 8'h01;
 	localparam [7:0] TOKEN_LINE_START = 8'h80;
 	localparam [7:0] TOKEN_HS = 8'h40;
@@ -44,20 +44,19 @@ module mister_magik_raw_scaler_ordered_frame (
 	reg previous_vs = 1'b0;
 	reg frame_open = 1'b0;
 	reg frame_nonempty = 1'b0;
-	reg [31:0] frame_signature = SIGNATURE_INITIAL;
+	reg [15:0] frame_signature = SIGNATURE_INITIAL;
 
 	reg [15:0] published_sequence = 16'd0;
-	reg [31:0] published_signature = 32'd0;
+	reg [15:0] published_signature = 16'd0;
 	(* preserve *) reg source_generation = 1'b0;
 
-	// Words 2..4 in ascending response order. The source state remains stable
+	// Words 2..3 in ascending response order. The source state remains stable
 	// between completed nonempty frames; generation changes only after every
 	// source register is updated on the same clk_hdmi edge. Word 1 is derived
 	// from a single destination valid bit instead of storing a 16-bit flag word
 	// in both clock domains.
-	wire [47:0] source_state = {
-		published_signature[31:16],
-		published_signature[15:0],
+	wire [31:0] source_state = {
+		published_signature,
 		published_sequence
 	};
 
@@ -71,7 +70,7 @@ module mister_magik_raw_scaler_ordered_frame (
 	reg has_command = 1'b0;
 	reg command_selected = 1'b0;
 	reg [2:0] word_count = 3'd0;
-	reg [47:0] snapshot_state = 48'd0;
+	reg [31:0] snapshot_state = 32'd0;
 	reg snapshot_valid = 1'b0;
 	reg [15:0] tx_crc = 16'hffff;
 	reg [15:0] response_word;
@@ -91,14 +90,14 @@ module mister_magik_raw_scaler_ordered_frame (
 	// deliberately one shallow update per clk_hdmi edge, rather than four
 	// cascaded byte-CRC transforms. Active RGB and DE/HS line boundaries remain
 	// ordered in the signature.
-	function automatic [31:0] ordered_signature_update;
-		input [31:0] signature_in;
+	function automatic [15:0] ordered_signature_update;
+		input [15:0] signature_in;
 		input [31:0] token_in;
-		reg [31:0] mixed;
+		reg [15:0] mixed;
 		begin
-			mixed = signature_in ^ token_in;
+			mixed = signature_in ^ token_in[15:0] ^ token_in[31:16];
 			ordered_signature_update = (mixed >> 1) ^
-				(mixed[0] ? SIGNATURE_POLYNOMIAL : 32'd0);
+				(mixed[0] ? SIGNATURE_POLYNOMIAL : 16'd0);
 		end
 	endfunction
 
@@ -154,7 +153,7 @@ module mister_magik_raw_scaler_ordered_frame (
 
 	// The observer consumes the previous cycle's isolated values.
 	always @(posedge clk_hdmi or posedge reset_active) begin : ordered_frame
-		reg [31:0] completed_signature;
+		reg [15:0] completed_signature;
 		if(reset_active) begin
 			isolated_ce <= 1'b0;
 			isolated_rgb <= 24'd0;
@@ -167,7 +166,7 @@ module mister_magik_raw_scaler_ordered_frame (
 			frame_nonempty <= 1'b0;
 			frame_signature <= SIGNATURE_INITIAL;
 			published_sequence <= 16'd0;
-			published_signature <= 32'd0;
+			published_signature <= 16'd0;
 			source_generation <= 1'b0;
 		end
 		else begin
@@ -234,7 +233,7 @@ module mister_magik_raw_scaler_ordered_frame (
 			generation_sync <= 1'b0;
 			generation_seen <= 1'b0;
 			capture_pending <= 1'b0;
-			snapshot_state <= 48'd0;
+			snapshot_state <= 32'd0;
 			snapshot_valid <= 1'b0;
 			has_command <= 1'b0;
 			command_selected <= 1'b0;

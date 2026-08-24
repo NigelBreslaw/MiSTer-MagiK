@@ -43,13 +43,12 @@
     ]
   },
   "raw_scaler_state": {
-    "schema": 8,
+    "schema": 9,
     "command": 103,
     "magic": 19799,
-    "word_count": 6,
+    "word_count": 5,
     "words": [
-      "schema", "flags", "frame_sequence", "ordered_signature_low",
-      "ordered_signature_high", "crc"
+      "schema", "flags", "frame_sequence", "ordered_signature", "crc"
     ],
     "flags": {
       "frame_valid": 0

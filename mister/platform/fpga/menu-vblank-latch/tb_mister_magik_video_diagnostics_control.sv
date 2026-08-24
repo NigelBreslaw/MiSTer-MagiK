@@ -21,8 +21,8 @@ module tb_mister_magik_video_diagnostics_control;
 	wire [15:0] response_data;
 	reg [15:0] words [0:5];
 	reg [15:0] immutable_words [0:5];
-	reg [31:0] first_signature;
-	reg [31:0] second_signature;
+	reg [15:0] first_signature;
+	reg [15:0] second_signature;
 	integer index;
 
 	mister_magik_raw_scaler_ordered_frame dut (
@@ -88,25 +88,25 @@ module tb_mister_magik_video_diagnostics_control;
 	endfunction
 
 	// Independent executable model of the one-step ordered signature.
-	function automatic [31:0] golden_update;
-		input [31:0] current;
+	function automatic [15:0] golden_update;
+		input [15:0] current;
 		input [31:0] token;
-		reg [31:0] mixed;
+		reg [15:0] mixed;
 		begin
-			mixed = current ^ token;
+			mixed = current ^ token[15:0] ^ token[31:16];
 			golden_update = (mixed >> 1) ^
-				(mixed[0] ? 32'h82f63b78 : 32'd0);
+				(mixed[0] ? 16'ha001 : 16'd0);
 		end
 	endfunction
 
-	function automatic [31:0] golden_frame_signature(input [7:0] seed, input swapped);
-		reg [31:0] next;
+	function automatic [15:0] golden_frame_signature(input [7:0] seed, input swapped);
+		reg [15:0] next;
 		reg [7:0] first_line;
 		reg [7:0] second_line;
 		begin
 			first_line = swapped ? seed + 8'd2 : seed;
 			second_line = swapped ? seed : seed + 8'd2;
-			next = 32'h6d5a56da;
+			next = 16'h56da;
 			next = golden_update(next, {8'hc1, first_line, 8'h10, 8'h20});
 			next = golden_update(next, {8'h41, first_line + 1'd1, 8'h11, 8'h21});
 			next = golden_update(next, {8'ha0, 24'd0});
@@ -207,12 +207,12 @@ module tb_mister_magik_video_diagnostics_control;
 	task automatic read_record;
 		begin
 			command_start(MAGIK_UIO_GET_RAW_SCALER_STATE);
-			for(index = 0; index < 6; index = index + 1)
+			for(index = 0; index < 5; index = index + 1)
 				read_word(words[index]);
 			command_end();
 			if(words[0] != MAGIK_RAW_SCALER_STATE_SCHEMA)
 				fail("schema mismatch");
-			if(words[5] != response_crc(4))
+			if(words[4] != response_crc(3))
 				fail("response CRC mismatch");
 		end
 	endtask
@@ -232,7 +232,7 @@ module tb_mister_magik_video_diagnostics_control;
 		read_record();
 		if(words[1] != MAGIK_RAW_SCALER_STATE_FLAG_FRAME_VALID || words[2] != 16'd1)
 			fail("first completed-frame flags or sequence mismatch");
-		first_signature = {words[4], words[3]};
+		first_signature = words[3];
 		if(first_signature != golden_frame_signature(8'h11, 1'b0))
 			fail("ordered signature model mismatch");
 
@@ -240,21 +240,21 @@ module tb_mister_magik_video_diagnostics_control;
 		drive_frame(8'h00, 1'b1, 1'b0);
 		complete_frame();
 		read_record();
-		if(words[2] != 16'd1 || {words[4], words[3]} != first_signature)
+		if(words[2] != 16'd1 || words[3] != first_signature)
 			fail("empty frame changed retained evidence");
 
 		// Repeating the exact frame advances sequence but preserves signature.
 		drive_frame(8'h11, 1'b0, 1'b0);
 		complete_frame();
 		read_record();
-		if(words[2] != 16'd2 || {words[4], words[3]} != first_signature)
+		if(words[2] != 16'd2 || words[3] != first_signature)
 			fail("static ordered frame did not retain its signature");
 
 		// Swapping complete lines must change the order-sensitive signature.
 		drive_frame(8'h11, 1'b0, 1'b1);
 		complete_frame();
 		read_record();
-		second_signature = {words[4], words[3]};
+		second_signature = words[3];
 		if(second_signature != golden_frame_signature(8'h11, 1'b1) ||
 		   second_signature == first_signature)
 			fail("line-order change was not detected");
@@ -272,12 +272,12 @@ module tb_mister_magik_video_diagnostics_control;
 			read_word(immutable_words[index]);
 		drive_frame(8'h44, 1'b0, 1'b0);
 		complete_frame();
-		for(index = 3; index < 6; index = index + 1)
+		for(index = 3; index < 5; index = index + 1)
 			read_word(immutable_words[index]);
 		command_end();
-		for(index = 0; index < 6; index = index + 1)
+		for(index = 0; index < 5; index = index + 1)
 			words[index] = immutable_words[index];
-		if(words[5] != response_crc(4))
+		if(words[4] != response_crc(3))
 			fail("immutable mid-read snapshot CRC mismatch");
 
 		// Sequence wrap remains observable.
@@ -299,7 +299,7 @@ module tb_mister_magik_video_diagnostics_control;
 		repeat(6) @(posedge clk_sys);
 		read_record();
 		if(words[1] != 16'd0 || words[2] != 16'd0 ||
-		   words[3] != 16'd0 || words[4] != 16'd0)
+		   words[3] != 16'd0)
 			fail("reset did not clear observer snapshot coherently");
 
 		$display("PASS: raw scaler ordered-signature observer framing and state");

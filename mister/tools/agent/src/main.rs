@@ -4580,7 +4580,7 @@ mod linux {
                         && classification_stable;
                     json!({
                         "schema": "mister-magik-fpga-video-diagnostics-v2",
-                        "diagnostic_architecture": "raw-scaler-ordered-signature-v1",
+                        "diagnostic_architecture": "raw-scaler-ordered-signature-v2",
                         "available": true,
                         "coherent": coherent,
                         "classification": if coherent {
@@ -4615,7 +4615,7 @@ mod linux {
                             "frame_valid": readout.samples.iter().map(|sample| sample.frame_valid()).collect::<Vec<_>>(),
                             "flags": readout.samples.iter().map(|sample| sample.flags()).collect::<Vec<_>>(),
                             "frame_sequence": readout.samples.iter().map(|sample| sample.frame_sequence()).collect::<Vec<_>>(),
-                            "ordered_signature": readout.samples.iter().map(|sample| format!("{:08x}", sample.ordered_signature())).collect::<Vec<_>>(),
+                            "ordered_signature": readout.samples.iter().map(|sample| format!("{:04x}", sample.ordered_signature())).collect::<Vec<_>>(),
                             "raw_samples": readout.samples.iter().map(|sample| sample.words).collect::<Vec<_>>(),
                         },
                     })
@@ -8216,21 +8216,19 @@ mod tests {
     fn ordered_signature_classification_requires_three_advancing_frames() {
         use mister_magik_video_diagnostics_contract as contract;
 
-        let sample = |sequence: u16, signature: u32| {
+        let sample = |sequence: u16, signature: u16| {
             let mut words = [0; contract::RAW_SCALER_STATE_WORDS];
             words[contract::RAW_SCALER_STATE_SCHEMA_WORD] = contract::RAW_SCALER_STATE_SCHEMA;
             words[contract::RAW_SCALER_STATE_FLAGS_WORD] =
                 contract::RAW_SCALER_STATE_FLAG_FRAME_VALID;
             words[contract::RAW_SCALER_STATE_FRAME_SEQUENCE_WORD] = sequence;
-            words[contract::RAW_SCALER_STATE_ORDERED_SIGNATURE_LOW_WORD] = signature as u16;
-            words[contract::RAW_SCALER_STATE_ORDERED_SIGNATURE_HIGH_WORD] =
-                (signature >> 16) as u16;
+            words[contract::RAW_SCALER_STATE_ORDERED_SIGNATURE_WORD] = signature;
             contract::RawScalerState { words }
         };
         let stable = [
-            sample(100, 0x1234_5678),
-            sample(101, 0x1234_5678),
-            sample(103, 0x1234_5678),
+            sample(100, 0x5678),
+            sample(101, 0x5678),
+            sample(103, 0x5678),
         ];
         assert_eq!(
             linux::raw_scaler_classification(&stable),
@@ -8238,9 +8236,9 @@ mod tests {
         );
 
         let varying = [
-            sample(100, 0x1234_5678),
-            sample(101, 0x1234_5679),
-            sample(103, 0x1234_5678),
+            sample(100, 0x5678),
+            sample(101, 0x5679),
+            sample(103, 0x5678),
         ];
         assert_eq!(
             linux::raw_scaler_classification(&varying),
@@ -8254,9 +8252,9 @@ mod tests {
         );
 
         let wrapping = [
-            sample(0xfffe, 0x1234_5678),
-            sample(0xffff, 0x1234_5678),
-            sample(0x0001, 0x1234_5678),
+            sample(0xfffe, 0x5678),
+            sample(0xffff, 0x5678),
+            sample(0x0001, 0x5678),
         ];
         assert_eq!(
             linux::raw_scaler_classification(&wrapping),

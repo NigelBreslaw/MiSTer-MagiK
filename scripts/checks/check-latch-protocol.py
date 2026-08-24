@@ -258,22 +258,21 @@ for name, record in path_activity["records"].items():
     platform_magics.add(record["magic"])
 raw_scaler = hdmi_evidence["raw_scaler_state"]
 if raw_scaler != {
-    "schema": 8,
+    "schema": 9,
     "command": 0x67,
     "magic": 0x4D57,
-    "word_count": 6,
+    "word_count": 5,
     "words": [
         "schema",
         "flags",
         "frame_sequence",
-        "ordered_signature_low",
-        "ordered_signature_high",
+        "ordered_signature",
         "crc",
     ],
     "flags": {"frame_valid": 0},
     "reserved_zero_masks": {"flags": 0xFFFE},
 }:
-    raise SystemExit("raw scaler ordered-signature schema 8 changed without an ABI update")
+    raise SystemExit("raw scaler ordered-signature schema 9 changed without an ABI update")
 if raw_scaler["command"] in platform_commands:
     raise SystemExit("raw scaler ordered-frame command overlaps an existing platform command")
 if raw_scaler["magic"] in platform_magics:

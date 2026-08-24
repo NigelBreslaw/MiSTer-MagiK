@@ -25,15 +25,26 @@ only `{ordered_signature, frame_sequence}` as 48 bits. A single destination
 valid bit is set only when that coherent bundle is captured after the existing
 two-stage generation synchronizer and settle cycle.
 
-Before this change, the one-bit valid fact occupied a 16-bit published flags
-register in the HDMI domain and another 16 bits inside the system-domain
-snapshot. Reconstructing the unchanged flags response from one destination bit
-removes 31 real registers and associated bundle fanout. Sequence wrap to zero
-does not clear validity. The response remains immutable for the entire UIO
-transaction because bundle capture and valid-bit update are both blocked while
-a command is active.
+Before this change, the one-bit valid fact was written as a 16-bit published
+flags value in the HDMI domain and another 16-bit word inside the system-domain
+snapshot. The RTL rewrite removed 31 nominal storage bits and retained validity
+across sequence wrap. Fixed-seed synthesis then proved that Quartus had already
+collapsed those constant-zero flag bits: the observer hierarchy fell only from
+188 to 187 real registers.
 
 The preserved isolation stage remains the sole consumer of direct `ascal` CE,
 RGB, DE, HS, and VS. Source generation, its exact two-stage synchronizer,
 read-only command `0x67`, CRC-16/CCITT-FALSE, latch-v5, capabilities `0x03ff`,
 and all protected production cones remain unchanged.
+
+## Rejected fit
+
+Committed candidate `bf2590f39a54407475ba98bef8235406e694eab0` recovered
+timing to `0.531 ns` setup and `0.243 ns` hold with zero TNS, but failed the
+unchanged resource and CDC gates. Aggregate register growth was 253. The fitter
+duplicated `source_generation` for routing, leaving the named original without
+a path to `generation_meta`; the exact net-delay report therefore contained
+only the two completion paths and emitted two new warning 17866 instances.
+The retained delta report SHA-256 is
+`965ea7382851780001b5c7aa65b5e51154d8dcd4bbe77621241d77ab028fdf79`.
+This candidate is rejected and was never installed.
