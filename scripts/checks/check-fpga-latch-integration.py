@@ -284,8 +284,12 @@ def main() -> None:
         "function automatic [15:0] ordered_signature_update;",
         "mixed = signature_in ^ token_in[15:0] ^ token_in[31:16];",
         "(mixed[0] ? SIGNATURE_POLYNOMIAL : 16'd0);",
-        "pixel_token(isolated_rgb, !previous_de, isolated_hs)",
-        "line_end_token(isolated_hs)",
+        "signature_rgb <= isolated_rgb;",
+        "signature_de <= isolated_de;",
+        "signature_hs <= isolated_hs;",
+        "signature_vs <= isolated_vs;",
+        "pixel_token(signature_rgb, !previous_de, signature_hs)",
+        "line_end_token(signature_hs)",
         "published_signature <= completed_signature;",
         "wire [15:0] source_state",
         "reg [31:0] snapshot_state",
@@ -313,6 +317,20 @@ def main() -> None:
             fail(
                 "production direct-ascal tap must appear only at its port and isolation assignment: "
                 f"{direct_tap}"
+            )
+    for isolated_signal in (
+        "isolated_ce",
+        "isolated_rgb",
+        "isolated_de",
+        "isolated_hs",
+        "isolated_vs",
+    ):
+        if len(re.findall(rf"\b{isolated_signal}\b", control_source)) != 4 or len(
+            re.findall(rf"<=\s*{isolated_signal}\b", control_source)
+        ) != 1:
+            fail(
+                "direct-tap isolation must feed only the observer signature pipeline: "
+                f"{isolated_signal}"
             )
     if "generation_launch" in control_source:
         fail("rejected placement-heavy generation launch stage remains present")

@@ -40,6 +40,15 @@ module mister_magik_raw_scaler_ordered_frame (
 	(* preserve *) reg        isolated_hs = 1'b0;
 	(* preserve *) reg        isolated_vs = 1'b0;
 
+	// A second observer-only stage lets the direct-tap isolation registers stay
+	// close to ascal while the signature cone is placed independently. It has no
+	// production fanout and changes only the observer's sampling latency.
+	reg        signature_ce = 1'b0;
+	reg [15:0] signature_rgb = 16'd0;
+	reg        signature_de = 1'b0;
+	reg        signature_hs = 1'b0;
+	reg        signature_vs = 1'b0;
+
 	reg previous_de = 1'b0;
 	reg previous_vs = 1'b0;
 	reg frame_open = 1'b0;
@@ -72,7 +81,7 @@ module mister_magik_raw_scaler_ordered_frame (
 	reg [15:0] tx_crc = 16'hffff;
 	reg [15:0] response_word;
 
-	wire frame_start = isolated_ce && isolated_vs && !previous_vs;
+	wire frame_start = signature_ce && signature_vs && !previous_vs;
 	wire command_start = io_uio && io_strobe && !has_command;
 	wire command_data = io_uio && io_strobe && has_command;
 	wire selected_start = io_din[7:0] == MAGIK_UIO_GET_RAW_SCALER_STATE;
@@ -158,6 +167,11 @@ module mister_magik_raw_scaler_ordered_frame (
 			isolated_de <= 1'b0;
 			isolated_hs <= 1'b0;
 			isolated_vs <= 1'b0;
+			signature_ce <= 1'b0;
+			signature_rgb <= 16'd0;
+			signature_de <= 1'b0;
+			signature_hs <= 1'b0;
+			signature_vs <= 1'b0;
 			previous_de <= 1'b0;
 			previous_vs <= 1'b0;
 			frame_open <= 1'b0;
@@ -174,15 +188,20 @@ module mister_magik_raw_scaler_ordered_frame (
 			isolated_de <= raw_de;
 			isolated_hs <= raw_hs;
 			isolated_vs <= raw_vs;
+			signature_ce <= isolated_ce;
+			signature_rgb <= isolated_rgb;
+			signature_de <= isolated_de;
+			signature_hs <= isolated_hs;
+			signature_vs <= isolated_vs;
 
-			if(isolated_ce) begin
-				previous_de <= isolated_de;
-				previous_vs <= isolated_vs;
+			if(signature_ce) begin
+				previous_de <= signature_de;
+				previous_vs <= signature_vs;
 
 				if(frame_start) begin
 					completed_signature = previous_de ?
 						ordered_signature_update(frame_signature,
-							line_end_token(isolated_hs)) : frame_signature;
+							line_end_token(signature_hs)) : frame_signature;
 					if(frame_open && frame_nonempty) begin
 						published_signature <= completed_signature;
 						source_generation <= ~source_generation;
@@ -191,14 +210,14 @@ module mister_magik_raw_scaler_ordered_frame (
 					frame_nonempty <= 1'b0;
 					frame_signature <= SIGNATURE_INITIAL;
 				end
-				else if(frame_open && isolated_de) begin
+				else if(frame_open && signature_de) begin
 					frame_signature <= ordered_signature_update(frame_signature,
-						pixel_token(isolated_rgb, !previous_de, isolated_hs));
+						pixel_token(signature_rgb, !previous_de, signature_hs));
 					frame_nonempty <= 1'b1;
 				end
 				else if(frame_open && previous_de)
 					frame_signature <= ordered_signature_update(frame_signature,
-						line_end_token(isolated_hs));
+						line_end_token(signature_hs));
 			end
 		end
 	end

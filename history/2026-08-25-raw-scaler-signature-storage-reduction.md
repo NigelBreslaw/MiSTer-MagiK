@@ -113,3 +113,25 @@ register to forbid replication. The bounded route is again exactly
 report parsers reject a `~DUPLICATE` source. This removes the extra launch
 register without changing the signature datapath, schema, synchronizer depth,
 destination settle cycle, protected production cones, seed, fitter, or gates.
+
+## Rejected candidate 7 and observer placement isolation
+
+Candidate 7 (`c3cccab50ab33c063c8297987486b5f0342529c1`) passed the
+exact non-duplicated CDC identity, warning, MTBF, hold, and resource gates. Its
+matched-baseline growth fell to 117 ALMs and 127 registers, but fixed-seed
+setup reached only `0.173 ns`, below the unchanged `0.350 ns` experimental
+floor. The report, RBF, and metadata SHA-256 values are respectively
+`900ec5b33d829d8ab349b760aeed2b2c9f2785bd50ec017f8d4b34a46d22cbb4`,
+`345967e949aadf37925a3ca70874940616a9b7b1b5089d67b8213ceb565ba5c0`,
+and `f5923c7fd80cb8a9547cf568c9133a0b06e786df405404179e6fe8c8ac890df7`.
+It is rejected and was never installed.
+
+All four worst setup paths were internal production `ascal` luminance paths
+from `o_h_lum_pix.g[4]` to `o_poly_lum`; no observer node was an endpoint. The
+next candidate therefore adds one coherent observer-only HDMI pipeline between
+the preserved direct-tap isolation registers and the signature recurrence.
+This gives the fitter freedom to keep the direct consumers close to `ascal`
+while placing the disposable signature cone elsewhere. It adds 20 observer
+registers and one cycle of sampling latency, but changes no direct tap,
+signature encoding, schema, CDC, production cone, seed, fitter setting, or
+gate.
