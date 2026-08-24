@@ -95,8 +95,24 @@ endpoints, reject retained schema-4 taps, and reject observer fanout into
 production cones. The unchanged completion BMC, required covers, and temporal
 induction must remain green.
 
-Quartus timing/resource/CDC signoff, device installation, and physical testing
-are intentionally outside this implementation commit. No RAM, DSP, or PLL is
-expected; the main integration risk is placement perturbation in dense
-`ascal`, so the candidate is not device-ready until fixed-seed Apple-container
-signoff passes.
+The first fixed-seed post-fit run assembled the RBF and completed STA under the
+disposable diagnostic envelope: setup `0.427 ns`, hold `0.247 ns`, zero TNS,
+158 constrained relationships, `+154` ALMs, `+199` registers, and unchanged
+RAM/DSP/PLL identity. Its only rejection was checker/report drift inherited
+from schema 4: the report retained six bounded analyses but truncated the
+detailed table at 48 rows, and the checker knew only three of the four
+calculable synchronizer chains.
+
+The evidence-only correction raises report depth from 50 to 100 and requires
+the complete schema-5 topology: six analysis groups and exactly 49 detailed
+identities (1 completion request, 1 completion acknowledgement, 1 Avalon
+diagnostic generation, 13 Avalon bundle, 1 responder generation, and 32
+responder bundle paths). MTBF parsing now requires the Avalon generation chain
+`avl_magik_generation -> o_magik_generation_meta ->
+o_magik_generation_sync`, an exact `+4` calculable-chain delta from baseline,
+and both per-chain and combined MTBF of at least `10^12` device-hours. No
+hardware, ABI, seed, fitter policy, or acceptance threshold changed.
+
+Device installation and physical testing remain outside this implementation
+commit. The retained RBF report must be rechecked with the corrected fail-closed
+evidence policy before the candidate is device-ready.

@@ -121,6 +121,14 @@ or a visible sink.
   completion, framebuffer, latch, route, reset, PLL, mux, or final-output cones.
 - Both bundled-data crossings and their generation synchronizers have explicit
   endpoints and bounded net delay under the existing MTBF policy.
+- The signoff report retains all six bounded CDC groups and all 49 physical
+  identities: the two one-bit completion paths, the one-bit Avalon generation
+  path, 13 Avalon bundle bits, the one-bit responder generation path, and 32
+  responder bundle bits. Report depth is 100 so no identity is truncated.
+- MTBF evidence must include four calculable chains: completion request,
+  completion acknowledgement, Avalon diagnostic generation, and responder
+  diagnostic generation. Each chain and their combined failure rate must meet
+  `10^12` device-hours.
 - Quartus must resolve exactly 13 Avalon bundle registers and exactly 25 ascal
   capture registers; constant ABI-reserved bits are reconstructed externally.
 - No RAM, DSP, or PLL is expected. The record uses small sticky flag buckets,

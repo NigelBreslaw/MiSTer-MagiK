@@ -74,8 +74,8 @@ EXPECTED_UNCONSTRAINED_OUTPUT_PATHS = 158
 EXPECTED_DIAGNOSTIC_UNCONSTRAINED_OUTPUT_PATHS = 160
 MINIMUM_CUSTOM_MTBF_DEVICE_HOURS = 1.0e12
 MINIMUM_CUSTOM_MTBF_YEARS = MINIMUM_CUSTOM_MTBF_DEVICE_HOURS / (24.0 * 365.25)
-EXPECTED_ADDED_RECOGNIZED_COMPLETION_SYNCHRONIZER_CHAINS = 3
-EXPECTED_ADDED_CALCULABLE_COMPLETION_SYNCHRONIZER_CHAINS = 3
+EXPECTED_ADDED_RECOGNIZED_COMPLETION_SYNCHRONIZER_CHAINS = 4
+EXPECTED_ADDED_CALCULABLE_COMPLETION_SYNCHRONIZER_CHAINS = 4
 EXPECTED_QUARTUS_POLICY = {
     "auto_parallel_synthesis": "off",
     "parallel_synthesis": "off",
@@ -86,6 +86,8 @@ EXPECTED_SYNC_ASSIGNMENT_SUFFIXES = (
     "ascal:ascal|o_readdataack_sync2",
     "ascal:ascal|avl_completion_ack_meta",
     "ascal:ascal|avl_completion_ack_sync",
+    "ascal:ascal|o_magik_generation_meta",
+    "ascal:ascal|o_magik_generation_sync",
     "mister_magik_raw_scaler_diagnostic:magik_raw_scaler_diagnostic|generation_meta",
     "mister_magik_raw_scaler_diagnostic:magik_raw_scaler_diagnostic|generation_sync",
 )
@@ -103,7 +105,15 @@ EXPECTED_METASTABILITY_CHAINS = {
             "ascal:ascal|avl_completion_ack_sync",
         ),
     },
-    "diagnostic_generation": {
+    "avalon_diagnostic_generation": {
+        "source": "ascal:ascal|avl_magik_generation",
+        "synchronization_node": "ascal:ascal|o_magik_generation_meta",
+        "registers": (
+            "ascal:ascal|o_magik_generation_meta",
+            "ascal:ascal|o_magik_generation_sync",
+        ),
+    },
+    "responder_diagnostic_generation": {
         "source": "mister_magik_raw_scaler_diagnostic:magik_raw_scaler_diagnostic|source_generation",
         "synchronization_node": "mister_magik_raw_scaler_diagnostic:magik_raw_scaler_diagnostic|generation_meta",
         "registers": (
@@ -124,7 +134,7 @@ DIAGNOSTIC_REPORT_NAMES = frozenset(
 )
 EXPECTED_CDC_REPORT_ANALYSES = {
     "menu.magik-diagnostic-cdc-skew.rpt": ("set_max_skew", 0),
-    "menu.magik-diagnostic-cdc-net-delay.rpt": ("set_net_delay", 4),
+    "menu.magik-diagnostic-cdc-net-delay.rpt": ("set_net_delay", 6),
 }
 EXPECTED_NET_DELAY_PATHS = {
     "completion_request": re.compile(
@@ -133,10 +143,16 @@ EXPECTED_NET_DELAY_PATHS = {
     "completion_ack": re.compile(
         r"o_readdataack_sync2[^\n]*avl_completion_ack_meta", re.IGNORECASE
     ),
-    "diagnostic_generation": re.compile(
+    "avalon_diagnostic_generation": re.compile(
+        r"avl_magik_generation[^\n]*o_magik_generation_meta", re.IGNORECASE
+    ),
+    "avalon_diagnostic_bundle": re.compile(
+        r"avl_magik_bundle[^\n]*o_magik_diag_state", re.IGNORECASE
+    ),
+    "responder_diagnostic_generation": re.compile(
         r"source_generation[^\n]*generation_meta", re.IGNORECASE
     ),
-    "diagnostic_bundle": re.compile(
+    "responder_diagnostic_bundle": re.compile(
         r"source_state[^\n]*snapshot_state", re.IGNORECASE
     ),
 }
@@ -477,7 +493,7 @@ def validate_diagnostic_reports(
                 )
             )
             detailed_path_counts[name] = len(detailed_rows)
-            if len(detailed_rows) != 51:
+            if len(detailed_rows) != 49:
                 reasons.append("diagnostic_cdc_analysis_count")
             detailed_path_identities = {
                 label: sum(
@@ -494,8 +510,10 @@ def validate_diagnostic_reports(
             expected_identity_counts = {
                 "completion_request": 1,
                 "completion_ack": 1,
-                "diagnostic_generation": 1,
-                "diagnostic_bundle": 48,
+                "avalon_diagnostic_generation": 1,
+                "avalon_diagnostic_bundle": 13,
+                "responder_diagnostic_generation": 1,
+                "responder_diagnostic_bundle": 32,
             }
             if detailed_path_identities != expected_identity_counts:
                 reasons.append("diagnostic_cdc_path_identity_mismatch")
@@ -520,17 +538,24 @@ def validate_diagnostic_reports(
         reasons.append("diagnostic_metastability_mtbf_missing")
         combined_mtbf_years = None
     else:
-        failure_rate = sum(
-            1.0 / value
-            for value in custom_mtbf_years.values()
-            if value is not None
-        )
-        combined_mtbf_years = 1.0 / failure_rate if failure_rate > 0 else None
+        positive_mtbf_years = [
+            value for value in custom_mtbf_years.values() if value is not None
+        ]
+        if any(value <= 0 for value in positive_mtbf_years):
+            combined_mtbf_years = 0.0
+        else:
+            failure_rate = sum(1.0 / value for value in positive_mtbf_years)
+            combined_mtbf_years = 1.0 / failure_rate if failure_rate > 0 else None
         if any(
             value is not None and value < MINIMUM_CUSTOM_MTBF_YEARS
             for value in custom_mtbf_years.values()
         ):
             reasons.append("diagnostic_metastability_mtbf_below_minimum")
+        if (
+            combined_mtbf_years is not None
+            and combined_mtbf_years < MINIMUM_CUSTOM_MTBF_YEARS
+        ):
+            reasons.append("diagnostic_metastability_combined_mtbf_below_minimum")
 
     return sorted(set(reasons)), {
         "diagnostic_cdc_reports": sorted(reports),

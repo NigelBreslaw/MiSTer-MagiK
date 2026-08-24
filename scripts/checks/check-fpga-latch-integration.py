@@ -389,6 +389,16 @@ def main() -> None:
     )
     if timing_report_text.count(unconstrained_report) != 1:
         fail("full unconstrained-path timing report is missing or ambiguous")
+    diagnostic_net_delay_report = (
+        "report_net_delay \\\n"
+        '\t-panel_name "MagiK Diagnostic CDC Net Delay" \\\n'
+        "\t-nworst 100 \\\n"
+        "\t-file output_files/menu.magik-diagnostic-cdc-net-delay.rpt"
+    )
+    if timing_report_text.count(diagnostic_net_delay_report) != 1:
+        fail("diagnostic net-delay report must retain all 49 exact CDC paths")
+    if "-nworst 50" in timing_report_text:
+        fail("diagnostic net-delay report retains the truncated schema-4 depth")
     timing_commands = re.findall(
         r"(?m)^\s*(set_[A-Za-z0-9_]+\b[^\n]*)$", diagnostics_sdc_text
     )
