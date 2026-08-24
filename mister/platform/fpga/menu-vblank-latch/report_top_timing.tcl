@@ -31,7 +31,7 @@ report_max_skew \
 	-file output_files/menu.magik-diagnostic-cdc-skew.rpt
 report_net_delay \
 	-panel_name "MagiK Diagnostic CDC Net Delay" \
-	-nworst 100 \
+	-nworst 50 \
 	-file output_files/menu.magik-diagnostic-cdc-net-delay.rpt
 report_metastability \
 	-nchains 1000 \

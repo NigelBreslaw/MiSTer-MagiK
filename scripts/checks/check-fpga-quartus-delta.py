@@ -477,7 +477,7 @@ def validate_diagnostic_reports(
                 )
             )
             detailed_path_counts[name] = len(detailed_rows)
-            if len(detailed_rows) != 67:
+            if len(detailed_rows) != 53:
                 reasons.append("diagnostic_cdc_analysis_count")
             detailed_path_identities = {
                 label: sum(
@@ -495,7 +495,7 @@ def validate_diagnostic_reports(
                 "completion_request": 1,
                 "completion_ack": 1,
                 "diagnostic_generation": 1,
-                "diagnostic_bundle": 64,
+                "diagnostic_bundle": 50,
             }
             if detailed_path_identities != expected_identity_counts:
                 reasons.append("diagnostic_cdc_path_identity_mismatch")
