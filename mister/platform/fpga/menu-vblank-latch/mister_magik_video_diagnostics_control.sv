@@ -26,32 +26,22 @@ module mister_magik_raw_scaler_diagnostic (
 `include "mister_magik_video_diagnostics_protocol.svh"
 
 	reg raw_vs_previous = 1'b0;
-	reg raw_hs_previous = 1'b0;
-	reg raw_de_previous = 1'b0;
 	reg frame_open = 1'b0;
 	reg ce_seen = 1'b0;
 	reg hs_seen = 1'b0;
 	reg vs_seen = 1'b0;
 	reg de_seen = 1'b0;
-	reg frame_overflow = 1'b0;
 	reg [15:0] control_crc = 16'hffff;
-	reg [15:0] hs_edge_count = 16'd0;
-	reg [15:0] de_start_count = 16'd0;
-	reg [23:0] active_sample_count = 24'd0;
 	reg [15:0] frame_sequence = 16'd0;
 
 	reg candidate_valid = 1'b0;
 	reg [1:0] candidate_streak = 2'd0;
 	reg [15:0] candidate_crc = 16'd0;
-	reg [15:0] candidate_hs_edges = 16'd0;
-	reg [15:0] candidate_de_starts = 16'd0;
-	reg [23:0] candidate_active_samples = 24'd0;
 
-	// Slots 0..12 are response words 1..13. This is the only retained
+	// Slots 0..3 are response words 1..4. This is the only retained
 	// baseline/first-bad storage and remains stable between publications.
-	(* preserve *) reg [207:0] source_state = 208'd0;
+	(* preserve *) reg [63:0] source_state = 64'd0;
 	(* preserve *) reg source_generation = 1'b0;
-	reg [15:0] observation_generation = 16'd0;
 
 	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED" *)
 	reg generation_meta = 1'b0;
@@ -62,22 +52,16 @@ module mister_magik_raw_scaler_diagnostic (
 
 	reg has_command = 1'b0;
 	reg command_selected = 1'b0;
-	reg [3:0] word_count = 4'd0;
-	(* preserve *) reg [207:0] snapshot_state = 208'd0;
+	reg [2:0] word_count = 3'd0;
+	(* preserve *) reg [63:0] snapshot_state = 64'd0;
 	reg [15:0] tx_crc = 16'hffff;
 	reg [15:0] response_word;
 
 	wire frame_start = raw_ce && raw_vs && !raw_vs_previous;
 	wire completed_frame = frame_start && frame_open;
 	wire completed_nonempty = ce_seen && hs_seen && vs_seen && de_seen;
-	wire candidate_matches = candidate_crc == control_crc &&
-		candidate_hs_edges == hs_edge_count &&
-		candidate_de_starts == de_start_count &&
-		candidate_active_samples == active_sample_count;
-	wire baseline_matches = source_state[31:16] == control_crc &&
-		source_state[63:48] == hs_edge_count &&
-		source_state[95:80] == de_start_count &&
-		{source_state[143:136], source_state[127:112]} == active_sample_count;
+	wire candidate_matches = candidate_crc == control_crc;
+	wire baseline_matches = source_state[31:16] == control_crc;
 	wire baseline_valid =
 		(source_state[15:0] & MAGIK_RAW_SCALER_STATE_FLAG_BASELINE_VALID) != 0;
 	wire mismatch_latched =
@@ -131,39 +115,27 @@ module mister_magik_raw_scaler_diagnostic (
 		crc_update_word(MAGIK_RAW_SCALER_STATE_HEADER_CRC,
 			MAGIK_RAW_SCALER_STATE_SCHEMA);
 
-	// Count and fingerprint the exact ordered raw control waveform. The rising
+	// Fingerprint the exact ordered raw control waveform. The rising
 	// VS sample begins the next frame and is intentionally excluded from the
 	// tuple being completed on the same edge.
 	always @(posedge clk_hdmi or posedge reset_active) begin
 		if(reset_active) begin
 			raw_vs_previous <= 1'b0;
-			raw_hs_previous <= 1'b0;
-			raw_de_previous <= 1'b0;
 			frame_open <= 1'b0;
 			ce_seen <= 1'b0;
 			hs_seen <= 1'b0;
 			vs_seen <= 1'b0;
 			de_seen <= 1'b0;
-			frame_overflow <= 1'b0;
 			control_crc <= 16'hffff;
-			hs_edge_count <= 16'd0;
-			de_start_count <= 16'd0;
-			active_sample_count <= 24'd0;
 			frame_sequence <= 16'd0;
 			candidate_valid <= 1'b0;
 			candidate_streak <= 2'd0;
 			candidate_crc <= 16'd0;
-			candidate_hs_edges <= 16'd0;
-			candidate_de_starts <= 16'd0;
-			candidate_active_samples <= 24'd0;
-			source_state <= 208'd0;
+			source_state <= 64'd0;
 			source_generation <= 1'b0;
-			observation_generation <= 16'd0;
 		end
 		else begin
 			raw_vs_previous <= raw_vs;
-			raw_hs_previous <= raw_hs;
-			raw_de_previous <= raw_de;
 
 			if(frame_start) begin
 				frame_open <= 1'b1;
@@ -173,32 +145,22 @@ module mister_magik_raw_scaler_diagnostic (
 				hs_seen <= raw_ce && raw_hs;
 				vs_seen <= raw_ce && raw_vs;
 				de_seen <= raw_ce && raw_de;
-				frame_overflow <= 1'b0;
-				hs_edge_count <= (raw_ce && raw_hs && !raw_hs_previous) ? 16'd1 : 16'd0;
-				de_start_count <= (raw_ce && raw_de && !raw_de_previous) ? 16'd1 : 16'd0;
-				active_sample_count <= (raw_ce && raw_de) ? 24'd1 : 24'd0;
 
 				if(completed_frame) begin
 					frame_sequence <= frame_sequence + 1'd1;
 					if(!baseline_valid) begin
-						if(!completed_nonempty || frame_overflow) begin
+						if(!completed_nonempty) begin
 							candidate_valid <= 1'b0;
 							candidate_streak <= 2'd0;
 						end
 						else if(candidate_valid && candidate_matches) begin
 							if(candidate_streak == 2'd2) begin
 								source_state <= {
-									16'd0, 16'd0, 16'd0, 16'd0,
-									{8'd0, active_sample_count[23:16]},
-									active_sample_count[15:0],
-									16'd0, de_start_count,
-									16'd0, hs_edge_count,
-									16'd0, control_crc,
+									16'd0, 16'd0, control_crc,
 									MAGIK_RAW_SCALER_STATE_FLAG_SAMPLE_VALID |
 									MAGIK_RAW_SCALER_STATE_FLAG_SAMPLE_NONEMPTY |
 									MAGIK_RAW_SCALER_STATE_FLAG_BASELINE_VALID
 								};
-								observation_generation <= observation_generation + 1'd1;
 								source_generation <= ~source_generation;
 								candidate_valid <= 1'b0;
 								candidate_streak <= 2'd0;
@@ -210,29 +172,18 @@ module mister_magik_raw_scaler_diagnostic (
 							candidate_valid <= 1'b1;
 							candidate_streak <= 2'd1;
 							candidate_crc <= control_crc;
-							candidate_hs_edges <= hs_edge_count;
-							candidate_de_starts <= de_start_count;
-							candidate_active_samples <= active_sample_count;
 						end
 					end
 					else if(!mismatch_latched &&
-						(!completed_nonempty || frame_overflow || !baseline_matches)) begin
+						(!completed_nonempty || !baseline_matches)) begin
 						source_state[15:0] <=
 							MAGIK_RAW_SCALER_STATE_FLAG_SAMPLE_VALID |
 							MAGIK_RAW_SCALER_STATE_FLAG_BASELINE_VALID |
 							MAGIK_RAW_SCALER_STATE_FLAG_MISMATCH_LATCHED |
 							(completed_nonempty ?
-								MAGIK_RAW_SCALER_STATE_FLAG_SAMPLE_NONEMPTY : 16'd0) |
-							(frame_overflow ?
-								MAGIK_RAW_SCALER_STATE_FLAG_SAMPLE_OVERFLOW : 16'd0);
+								MAGIK_RAW_SCALER_STATE_FLAG_SAMPLE_NONEMPTY : 16'd0);
 						source_state[47:32] <= control_crc;
-						source_state[79:64] <= hs_edge_count;
-						source_state[111:96] <= de_start_count;
-						source_state[159:144] <= active_sample_count[15:0];
-						source_state[175:160] <= {8'd0, active_sample_count[23:16]};
-						source_state[191:176] <= frame_sequence + 1'd1;
-						source_state[207:192] <= observation_generation + 1'd1;
-						observation_generation <= observation_generation + 1'd1;
+						source_state[63:48] <= frame_sequence + 1'd1;
 						source_generation <= ~source_generation;
 					end
 				end
@@ -244,25 +195,6 @@ module mister_magik_raw_scaler_diagnostic (
 				hs_seen <= hs_seen | (raw_ce && raw_hs);
 				vs_seen <= vs_seen | (raw_ce && raw_vs);
 				de_seen <= de_seen | (raw_ce && raw_de);
-
-				if(raw_ce && raw_hs && !raw_hs_previous) begin
-					if(&hs_edge_count)
-						frame_overflow <= 1'b1;
-					else
-						hs_edge_count <= hs_edge_count + 1'd1;
-				end
-				if(raw_ce && raw_de && !raw_de_previous) begin
-					if(&de_start_count)
-						frame_overflow <= 1'b1;
-					else
-						de_start_count <= de_start_count + 1'd1;
-				end
-				if(raw_ce && raw_de) begin
-					if(&active_sample_count)
-						frame_overflow <= 1'b1;
-					else
-						active_sample_count <= active_sample_count + 1'd1;
-				end
 			end
 		end
 	end
@@ -292,10 +224,10 @@ module mister_magik_raw_scaler_diagnostic (
 			generation_sync <= 1'b0;
 			generation_seen <= 1'b0;
 			capture_pending <= 1'b0;
-			snapshot_state <= 208'd0;
+			snapshot_state <= 64'd0;
 			has_command <= 1'b0;
 			command_selected <= 1'b0;
-			word_count <= 4'd0;
+			word_count <= 3'd0;
 			tx_crc <= 16'hffff;
 		end
 		else begin
@@ -314,7 +246,7 @@ module mister_magik_raw_scaler_diagnostic (
 			if(command_start) begin
 				has_command <= 1'b1;
 				command_selected <= selected_start;
-				word_count <= 4'd0;
+				word_count <= 3'd0;
 				if(selected_start)
 					tx_crc <= MAGIK_RAW_SCALER_STATE_SCHEMA_CRC;
 			end
@@ -329,7 +261,7 @@ module mister_magik_raw_scaler_diagnostic (
 			if(!io_uio && has_command) begin
 				has_command <= 1'b0;
 				command_selected <= 1'b0;
-				word_count <= 4'd0;
+				word_count <= 3'd0;
 			end
 		end
 	end

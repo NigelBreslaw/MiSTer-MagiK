@@ -972,16 +972,21 @@ The one-frame 2026-08-24 event self-cleared before the 30-second movie, while
 Design 5 continued to report saturated raw activity. Design 6 therefore removes
 the RGB/activity observer rather than widening or stacking it. The replacement
 reads only raw CE, DE, HS, and VS, establishes a three-identical-frame baseline,
-and retains the first differing ordered-control CRC and count tuple until the
+and retains the first differing ordered-control CRC until the
 existing reset or RBF reload.
 
 Command `0x67` becomes `raw-scaler-frame-integrity-v1`, schema 3. Commands
 `0x60–0x66`, latch protocol 5, capabilities `0x03ff`, the completion repair,
 and all production routing/reset/pixel cones remain unchanged. The fixed record
-contains baseline and first-bad control CRC, HS-edge count, DE-start count,
-24-bit active sample count, and the first-bad frame sequence/generation. It has
+contains baseline and first-bad control CRC and the first-bad frame sequence. It has
 no write, clear, arm, freeze, or recovery operation and never claims physical
 sink visibility.
+
+The first synthesis of the wide schema-3 record was rejected at commit
+`53ba7c96a`: hold slack was 0.174 ns, with 397 ALMs and 661 registers above the
+matched baseline. The forward candidate removes the duplicated count records
+and keeps the 0.200 ns hold floor. This is a causal reduction, not a waiver or
+seed change.
 
 The design and pre-synthesis gates are frozen in
 [`2026-08-24-raw-scaler-frame-integrity-design.md`](2026-08-24-raw-scaler-frame-integrity-design.md).

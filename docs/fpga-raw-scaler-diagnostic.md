@@ -14,17 +14,15 @@ and `VS` controls. It does not read RGB, framebuffer addresses, metadata, final
 output, routing, latch, reset, or PLL signals. Its output reaches only the
 read-only responder beside the latch bridge in `sys_top`.
 
-For every completed frame it derives:
-
-- CRC-16 of the ordered four-bit `{CE, DE, HS, VS}` sample stream;
-- rising HS edge count;
-- rising DE/start count;
-- active `CE && DE` sample count.
+For every completed frame it derives a CRC-16 of the ordered four-bit
+`{CE, DE, HS, VS}` sample stream. The complete waveform fingerprint retains
+ordering, phase, sync, enable, and active-area changes without duplicating wide
+per-frame counters.
 
 A frame is nonempty only after CE, HS, VS, and DE were all observed. Three
-consecutive identical, nonempty, non-overflowing tuples establish the baseline.
-After that, the first tuple difference, empty frame, or counter overflow is
-latched with its modulo-65536 frame sequence and observation generation. The
+consecutive identical, nonempty fingerprints establish the baseline. After
+that, the first fingerprint difference or empty frame is latched with its
+modulo-65536 frame sequence. The
 baseline and first-bad record remain immutable until the existing common reset
 or RBF reload. There is no software clear, arm, freeze, write, or recovery
 operation.
@@ -35,20 +33,15 @@ Command `0x67` exposes `raw-scaler-frame-integrity-v1`, schema `3`. Commands
 `0x60` through `0x66` remain unsupported. Latch protocol `5` and capabilities
 `0x03ff` are unchanged.
 
-After magic `0x4d57`, the fixed 15-word response is:
+After magic `0x4d57`, the fixed six-word response is:
 
 | Word | Meaning |
 | --- | --- |
 | 0 | schema `3` |
-| 1 | flags: sample valid, nonempty, overflow, baseline valid, mismatch latched |
+| 1 | flags: sample valid, nonempty, baseline valid, mismatch latched |
 | 2–3 | baseline and first-bad control CRC |
-| 4–5 | baseline and first-bad HS edge count |
-| 6–7 | baseline and first-bad DE-start count |
-| 8–9 | baseline 24-bit active sample count, low then high |
-| 10–11 | first-bad 24-bit active sample count, low then high |
-| 12 | first-bad frame sequence |
-| 13 | first-bad observation generation |
-| 14 | existing framed CRC-16 |
+| 4 | first-bad frame sequence |
+| 5 | existing framed CRC-16 |
 
 The HDMI bundle is registered before its generation toggle changes. The
 `clk_sys` receiver uses the explicit two-stage generation synchronizer, waits
@@ -60,13 +53,13 @@ then reads an immutable snapshot.
 The device agent reads three records 25 ms apart and requires valid framing,
 identical records, a valid baseline, stable ownership, and stable launcher
 state. A retained mismatch remains classifiable even when the bad frame itself
-was empty or overflowed a diagnostic counter.
+was empty.
 
 | Classification | Meaning |
 | --- | --- |
-| `raw_control_mismatch_latched` | the observer retained a first control-waveform or count mismatch |
+| `raw_control_mismatch_latched` | the observer retained a first control-waveform mismatch |
 | `raw_control_stable_since_baseline` | no raw control mismatch has been retained; a later probe should move downstream |
-| `raw_frame_integrity_inconclusive` | evidence is unsupported, malformed, changing, invalid, empty, overflowing, or lacks a baseline |
+| `raw_frame_integrity_inconclusive` | evidence is unsupported, malformed, changing, invalid, empty, or lacks a baseline |
 
 Every result retains `sink_visibility: "unobserved"`. Stable control evidence
 does not prove pixels or the physical sink were correct.
@@ -76,13 +69,16 @@ does not prove pixels or the physical sink were correct.
 - Apply the production patch and compile patched production `ascal.vhd`.
 - Keep the exact completion-queue GHDL simulation and formal proof passing.
 - Simulate exact three-frame baseline acquisition, changing and empty frames,
-  phase-only CRC mismatch with equal counts, each independent count mismatch,
+  phase-only CRC mismatch and independent HS/DE/active waveform changes,
   sticky first-bad retention, sequence wrap, reset, immutable command framing,
   CRC, malformed reads, and latch-v5 non-interference.
 - Structurally reject the retired RGB/activity observer, production fanout, or
   any new framebuffer, latch, route, reset, PLL, mux, or pixel tap.
 - Require exact generation synchronizer endpoints, bounded generation and
   bundled-data paths, and the existing MTBF policy.
+- For this disposable diagnostic profile only, cap growth at 200 ALMs and 224
+  registers while still requiring unchanged RAM, DSP, and PLL identity. Keep
+  the 0.200 ns hold floor and zero-TNS requirement.
 - Do not run CI or install this RBF until the committed candidate passes the
   cached Apple-container signoff. No seed sweep, waiver, fitter change,
   LogicLock, or direct Quartus command is permitted.

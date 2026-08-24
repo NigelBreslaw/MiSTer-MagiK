@@ -133,7 +133,7 @@ VALID_DIAGNOSTIC_REPORTS = {
                 "mister_magik_raw_scaler_diagnostic:"
                 f"magik_raw_scaler_diagnostic|snapshot_state[{bit}]",
             )
-            for bit in range(16)
+            for bit in range(64)
         )
     ),
     "menu.magik-diagnostic-metastability.rpt": (
@@ -277,6 +277,29 @@ class QuartusDeltaTest(unittest.TestCase):
         self.assertIn("setup_slack_below_minimum", payload["invalid_reason"])
         self.assertIn("setup_slack_degradation", payload["invalid_reason"])
         self.assertIn("synchronizer_chain_count_mismatch", payload["invalid_reason"])
+
+    def test_experimental_profile_has_explicit_resource_ceiling(self) -> None:
+        resources = (
+            "Logic utilization (in ALMs) : 7,000\nTotal registers : 20,000\n"
+            "Total block memory bits : 1,000,000\nTotal DSP Blocks : 2\nTotal PLLs : 3 / 6\n",
+            "Logic utilization (in ALMs) : 7,800\nTotal registers : 20,500\n"
+            "Total block memory bits : 1,000,000\nTotal DSP Blocks : 2\nTotal PLLs : 3 / 6\n",
+            "Logic utilization (in ALMs) : 8,000\nTotal registers : 20,724\n"
+            "Total block memory bits : 1,000,000\nTotal DSP Blocks : 2\nTotal PLLs : 3 / 6\n",
+        )
+        result, payload = self.run_check(
+            BASE,
+            BASE + CUSTOM_SYNC,
+            BASE,
+            resources,
+            experimental_diagnostic=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+        result, payload = self.run_check(BASE, BASE + CUSTOM_SYNC, BASE, resources)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("logic_alms_delta", payload["invalid_reason"])
+        self.assertIn("registers_delta", payload["invalid_reason"])
 
     def test_new_warning_fails_even_when_warning_code_is_inherited(self) -> None:
         result, payload = self.run_check(BASE, BASE + "Warning (10001): different warning\n" + CUSTOM_SYNC)

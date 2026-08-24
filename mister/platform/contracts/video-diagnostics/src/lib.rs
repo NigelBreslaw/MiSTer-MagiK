@@ -150,10 +150,6 @@ impl RawScalerState {
         self.flags() & RAW_SCALER_STATE_FLAG_SAMPLE_NONEMPTY != 0
     }
 
-    pub fn sample_overflow(&self) -> bool {
-        self.flags() & RAW_SCALER_STATE_FLAG_SAMPLE_OVERFLOW != 0
-    }
-
     pub fn baseline_valid(&self) -> bool {
         self.flags() & RAW_SCALER_STATE_FLAG_BASELINE_VALID != 0
     }
@@ -170,38 +166,8 @@ impl RawScalerState {
         self.words[RAW_SCALER_STATE_FIRST_BAD_CONTROL_CRC_WORD]
     }
 
-    pub fn baseline_hs_edges(&self) -> u16 {
-        self.words[RAW_SCALER_STATE_BASELINE_HS_EDGES_WORD]
-    }
-
-    pub fn first_bad_hs_edges(&self) -> u16 {
-        self.words[RAW_SCALER_STATE_FIRST_BAD_HS_EDGES_WORD]
-    }
-
-    pub fn baseline_de_starts(&self) -> u16 {
-        self.words[RAW_SCALER_STATE_BASELINE_DE_STARTS_WORD]
-    }
-
-    pub fn first_bad_de_starts(&self) -> u16 {
-        self.words[RAW_SCALER_STATE_FIRST_BAD_DE_STARTS_WORD]
-    }
-
-    pub fn baseline_active_samples(&self) -> u32 {
-        u32::from(self.words[RAW_SCALER_STATE_BASELINE_ACTIVE_LOW_WORD])
-            | (u32::from(self.words[RAW_SCALER_STATE_BASELINE_ACTIVE_HIGH_WORD]) << 16)
-    }
-
-    pub fn first_bad_active_samples(&self) -> u32 {
-        u32::from(self.words[RAW_SCALER_STATE_FIRST_BAD_ACTIVE_LOW_WORD])
-            | (u32::from(self.words[RAW_SCALER_STATE_FIRST_BAD_ACTIVE_HIGH_WORD]) << 16)
-    }
-
     pub fn first_bad_frame_sequence(&self) -> u16 {
         self.words[RAW_SCALER_STATE_FIRST_BAD_FRAME_SEQUENCE_WORD]
-    }
-
-    pub fn first_bad_generation(&self) -> u16 {
-        self.words[RAW_SCALER_STATE_FIRST_BAD_GENERATION_WORD]
     }
 }
 
@@ -717,14 +683,7 @@ pub fn decode_raw_scaler_state(words: &[u16]) -> Result<RawScalerState, String> 
             "raw scaler state CRC mismatch expected=0x{expected:04x} actual=0x{actual:04x}"
         ));
     }
-    if words[RAW_SCALER_STATE_FLAGS_WORD] & !RAW_SCALER_STATE_FLAGS_MASK != 0
-        || words[RAW_SCALER_STATE_BASELINE_ACTIVE_HIGH_WORD]
-            & RAW_SCALER_STATE_BASELINE_ACTIVE_HIGH_RESERVED_ZERO_MASK
-            != 0
-        || words[RAW_SCALER_STATE_FIRST_BAD_ACTIVE_HIGH_WORD]
-            & RAW_SCALER_STATE_FIRST_BAD_ACTIVE_HIGH_RESERVED_ZERO_MASK
-            != 0
-    {
+    if words[RAW_SCALER_STATE_FLAGS_WORD] & !RAW_SCALER_STATE_FLAGS_MASK != 0 {
         return Err("raw scaler frame-integrity record contains nonzero reserved bits".to_string());
     }
     let mut owned = [0; RAW_SCALER_STATE_WORDS];
@@ -893,16 +852,7 @@ mod tests {
             | RAW_SCALER_STATE_FLAG_MISMATCH_LATCHED;
         words[RAW_SCALER_STATE_BASELINE_CONTROL_CRC_WORD] = 0x1234;
         words[RAW_SCALER_STATE_FIRST_BAD_CONTROL_CRC_WORD] = 0x5678;
-        words[RAW_SCALER_STATE_BASELINE_HS_EDGES_WORD] = 240;
-        words[RAW_SCALER_STATE_FIRST_BAD_HS_EDGES_WORD] = 239;
-        words[RAW_SCALER_STATE_BASELINE_DE_STARTS_WORD] = 240;
-        words[RAW_SCALER_STATE_FIRST_BAD_DE_STARTS_WORD] = 241;
-        words[RAW_SCALER_STATE_BASELINE_ACTIVE_LOW_WORD] = 0x3456;
-        words[RAW_SCALER_STATE_BASELINE_ACTIVE_HIGH_WORD] = 0x0012;
-        words[RAW_SCALER_STATE_FIRST_BAD_ACTIVE_LOW_WORD] = 0x789a;
-        words[RAW_SCALER_STATE_FIRST_BAD_ACTIVE_HIGH_WORD] = 0x0056;
         words[RAW_SCALER_STATE_FIRST_BAD_FRAME_SEQUENCE_WORD] = 0xffff;
-        words[RAW_SCALER_STATE_FIRST_BAD_GENERATION_WORD] = 7;
         words[RAW_SCALER_STATE_CRC_WORD] = message_crc_with_schema(
             GET_RAW_SCALER_STATE,
             RAW_SCALER_STATE_SCHEMA,
@@ -915,14 +865,7 @@ mod tests {
         assert!(decoded.mismatch_latched());
         assert_eq!(decoded.baseline_control_crc(), 0x1234);
         assert_eq!(decoded.first_bad_control_crc(), 0x5678);
-        assert_eq!(decoded.baseline_hs_edges(), 240);
-        assert_eq!(decoded.first_bad_hs_edges(), 239);
-        assert_eq!(decoded.baseline_de_starts(), 240);
-        assert_eq!(decoded.first_bad_de_starts(), 241);
-        assert_eq!(decoded.baseline_active_samples(), 0x0012_3456);
-        assert_eq!(decoded.first_bad_active_samples(), 0x0056_789a);
         assert_eq!(decoded.first_bad_frame_sequence(), 0xffff);
-        assert_eq!(decoded.first_bad_generation(), 7);
     }
 
     #[test]

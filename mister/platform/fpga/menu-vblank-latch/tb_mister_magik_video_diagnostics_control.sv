@@ -17,8 +17,8 @@ module tb_mister_magik_video_diagnostics_control;
 	reg [15:0] io_din = 16'd0;
 	wire response_valid;
 	wire [15:0] response_data;
-	reg [15:0] record [0:14];
-	reg [15:0] saved_bad [0:14];
+	reg [15:0] record [0:5];
+	reg [15:0] saved_bad [0:5];
 	reg [15:0] expected_crc;
 	integer command;
 	integer index;
@@ -156,7 +156,7 @@ module tb_mister_magik_video_diagnostics_control;
 		begin
 			io_uio = 1'b1;
 			strobe_word(16'h0067, 1'b1, 16'h4d57);
-			for(index = 0; index < 15; index = index + 1) begin
+			for(index = 0; index < 6; index = index + 1) begin
 				@(negedge clk_sys);
 				io_din = 16'd0;
 				io_strobe = 1'b1;
@@ -175,12 +175,12 @@ module tb_mister_magik_video_diagnostics_control;
 			expected_crc = 16'hffff;
 			expected_crc = crc_word(expected_crc, 16'h0067);
 			expected_crc = crc_word(expected_crc, 16'h0003);
-			expected_crc = crc_word(expected_crc, 16'd14);
-			for(index = 0; index < 14; index = index + 1)
+			expected_crc = crc_word(expected_crc, 16'd5);
+			for(index = 0; index < 5; index = index + 1)
 				expected_crc = crc_word(expected_crc, record[index]);
-			if(record[0] != 16'd3 || record[14] != expected_crc) begin
+			if(record[0] != 16'd3 || record[5] != expected_crc) begin
 				$display("FAIL: schema/CRC schema=%h crc=%h expected=%h",
-					record[0], record[14], expected_crc);
+					record[0], record[5], expected_crc);
 				$fatal(1);
 			end
 		end
@@ -208,12 +208,8 @@ module tb_mister_magik_video_diagnostics_control;
 				$fatal(1, "baseline established after two frames");
 			complete_pattern(0);
 			read_record();
-			if((record[1] & 16'h001b) != 16'h000b)
+			if((record[1] & 16'h000f) != 16'h0007)
 				$fatal(1, "baseline not valid after exactly three frames: %h", record[1]);
-			if(record[4] != 1 || record[6] != 1 ||
-			   record[8] != 3 || record[9] != 0)
-				$fatal(1, "baseline counts wrong hs=%0d de=%0d active=%0d/%0d",
-					record[4], record[6], record[9], record[8]);
 		end
 	endtask
 
@@ -248,42 +244,40 @@ module tb_mister_magik_video_diagnostics_control;
 
 		// Phase/order-only mismatch retains equal counts but a different CRC.
 		establish_baseline();
-		for(index = 0; index < 15; index = index + 1) saved_bad[index] = record[index];
+		for(index = 0; index < 6; index = index + 1) saved_bad[index] = record[index];
 		// The response stays immutable while the first mismatch arrives.
 		io_uio = 1'b1;
 		strobe_word(16'h0067, 1'b1, 16'h4d57);
 		strobe_word(16'd0, 1'b1, saved_bad[0]);
 		complete_pattern(1);
-		for(index = 1; index < 15; index = index + 1)
+		for(index = 1; index < 6; index = index + 1)
 			strobe_word(16'd0, 1'b1, saved_bad[index]);
 		strobe_word(16'd0, 1'b0, 16'd0);
 		end_command();
 		repeat(7) @(posedge clk_sys);
 		read_record();
-		if((record[1] & 16'h001f) != 16'h001b || record[2] == record[3] ||
-		   record[4] != record[5] || record[6] != record[7] ||
-		   record[8] != record[10] || record[9] != record[11])
+		if((record[1] & 16'h000f) != 16'h000f || record[2] == record[3])
 			$fatal(1, "phase-only mismatch evidence wrong");
-		for(index = 0; index < 15; index = index + 1) saved_bad[index] = record[index];
+		for(index = 0; index < 6; index = index + 1) saved_bad[index] = record[index];
 		complete_pattern(0); complete_pattern(4);
 		read_record();
-		for(index = 0; index < 15; index = index + 1)
+		for(index = 0; index < 6; index = index + 1)
 			if(record[index] != saved_bad[index]) $fatal(1, "first-bad record mutated");
 
-		// Each aggregate count independently causes a mismatch.
+		// Independent HS, DE, and active waveform changes alter the fingerprint.
 		apply_reset(); establish_baseline(); complete_pattern(2); read_record();
-		if(record[4] == record[5]) $fatal(1, "HS mismatch not retained");
+		if(record[2] == record[3]) $fatal(1, "HS mismatch not retained");
 		apply_reset(); establish_baseline(); complete_pattern(3); read_record();
-		if(record[6] == record[7]) $fatal(1, "DE mismatch not retained");
+		if(record[2] == record[3]) $fatal(1, "DE mismatch not retained");
 		apply_reset(); establish_baseline(); complete_pattern(4); read_record();
-		if(record[8] == record[10] && record[9] == record[11])
+		if(record[2] == record[3])
 			$fatal(1, "active-count mismatch not retained");
 
 		// Frame sequence wraps coherently and reset clears retained evidence.
 		apply_reset(); establish_baseline();
 		dut.frame_sequence = 16'hffff;
 		complete_pattern(1); read_record();
-		if(record[12] != 16'h0000) $fatal(1, "frame sequence did not wrap");
+		if(record[4] != 16'h0000) $fatal(1, "frame sequence did not wrap");
 		io_uio = 1'b1;
 		strobe_word(16'h0067, 1'b1, 16'h4d57);
 		reset_active = 1'b1;

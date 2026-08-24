@@ -46,35 +46,23 @@
     "schema": 3,
     "command": 103,
     "magic": 19799,
-    "word_count": 15,
+    "word_count": 6,
     "words": [
       "schema",
       "flags",
       "baseline_control_crc",
       "first_bad_control_crc",
-      "baseline_hs_edges",
-      "first_bad_hs_edges",
-      "baseline_de_starts",
-      "first_bad_de_starts",
-      "baseline_active_low",
-      "baseline_active_high",
-      "first_bad_active_low",
-      "first_bad_active_high",
       "first_bad_frame_sequence",
-      "first_bad_generation",
       "crc"
     ],
     "flags": {
       "sample_valid": 0,
       "sample_nonempty": 1,
-      "sample_overflow": 2,
-      "baseline_valid": 3,
-      "mismatch_latched": 4
+      "baseline_valid": 2,
+      "mismatch_latched": 3
     },
     "reserved_zero_masks": {
-      "flags": 65504,
-      "baseline_active_high": 65280,
-      "first_bad_active_high": 65280
+      "flags": 65520
     }
   },
   "path_activity": {

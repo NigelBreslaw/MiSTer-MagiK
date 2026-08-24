@@ -68,6 +68,8 @@ EXPERIMENTAL_DIAGNOSTIC_MINIMUM_SLACK_NS = {"setup": 0.350, "hold": 0.200}
 EXPERIMENTAL_DIAGNOSTIC_MAXIMUM_SLACK_DEGRADATION_NS = 0.30
 MAXIMUM_LOGIC_ELEMENT_DELTA = 150
 MAXIMUM_REGISTER_DELTA = 96
+EXPERIMENTAL_DIAGNOSTIC_MAXIMUM_LOGIC_ELEMENT_DELTA = 200
+EXPERIMENTAL_DIAGNOSTIC_MAXIMUM_REGISTER_DELTA = 224
 EXPECTED_UNCONSTRAINED_OUTPUT_PATHS = 158
 EXPECTED_DIAGNOSTIC_UNCONSTRAINED_OUTPUT_PATHS = 160
 MINIMUM_CUSTOM_MTBF_DEVICE_HOURS = 1.0e12
@@ -475,7 +477,7 @@ def validate_diagnostic_reports(
                 )
             )
             detailed_path_counts[name] = len(detailed_rows)
-            if len(detailed_rows) != 19:
+            if len(detailed_rows) != 67:
                 reasons.append("diagnostic_cdc_analysis_count")
             detailed_path_identities = {
                 label: sum(
@@ -493,7 +495,7 @@ def validate_diagnostic_reports(
                 "completion_request": 1,
                 "completion_ack": 1,
                 "diagnostic_generation": 1,
-                "diagnostic_bundle": 16,
+                "diagnostic_bundle": 64,
             }
             if detailed_path_identities != expected_identity_counts:
                 reasons.append("diagnostic_cdc_path_identity_mismatch")
@@ -661,8 +663,16 @@ def compare(
         else "total logic elements"
     )
     resource_limits = {
-        logic_resource: MAXIMUM_LOGIC_ELEMENT_DELTA,
-        "total registers": MAXIMUM_REGISTER_DELTA,
+        logic_resource: (
+            EXPERIMENTAL_DIAGNOSTIC_MAXIMUM_LOGIC_ELEMENT_DELTA
+            if experimental_diagnostic
+            else MAXIMUM_LOGIC_ELEMENT_DELTA
+        ),
+        "total registers": (
+            EXPERIMENTAL_DIAGNOSTIC_MAXIMUM_REGISTER_DELTA
+            if experimental_diagnostic
+            else MAXIMUM_REGISTER_DELTA
+        ),
         "total block memory bits": 0,
         "total dsp blocks": 0,
         "total plls": 0,

@@ -4100,7 +4100,7 @@ mod linux {
         }
         if samples[0].mismatch_latched() {
             "raw_control_mismatch_latched"
-        } else if !samples[0].sample_nonempty() || samples[0].sample_overflow() {
+        } else if !samples[0].sample_nonempty() {
             "raw_frame_integrity_inconclusive"
         } else {
             "raw_control_stable_since_baseline"
@@ -4608,14 +4608,7 @@ mod linux {
                         "raw_scaler_state": {
                             "baseline_control_crc": readout.samples.iter().map(|sample| sample.baseline_control_crc()).collect::<Vec<_>>(),
                             "first_bad_control_crc": readout.samples.iter().map(|sample| sample.first_bad_control_crc()).collect::<Vec<_>>(),
-                            "baseline_hs_edges": readout.samples.iter().map(|sample| sample.baseline_hs_edges()).collect::<Vec<_>>(),
-                            "first_bad_hs_edges": readout.samples.iter().map(|sample| sample.first_bad_hs_edges()).collect::<Vec<_>>(),
-                            "baseline_de_starts": readout.samples.iter().map(|sample| sample.baseline_de_starts()).collect::<Vec<_>>(),
-                            "first_bad_de_starts": readout.samples.iter().map(|sample| sample.first_bad_de_starts()).collect::<Vec<_>>(),
-                            "baseline_active_samples": readout.samples.iter().map(|sample| sample.baseline_active_samples()).collect::<Vec<_>>(),
-                            "first_bad_active_samples": readout.samples.iter().map(|sample| sample.first_bad_active_samples()).collect::<Vec<_>>(),
                             "first_bad_frame_sequence": readout.samples.iter().map(|sample| sample.first_bad_frame_sequence()).collect::<Vec<_>>(),
-                            "first_bad_generation": readout.samples.iter().map(|sample| sample.first_bad_generation()).collect::<Vec<_>>(),
                             "raw_samples": readout.samples.iter().map(|sample| sample.words).collect::<Vec<_>>(),
                         },
                     })
