@@ -120,45 +120,35 @@ every ten completed attempts. Preflight and every post-reboot check reported
 ownership, and zero latch drops or rejects. No all-zero physical black screen
 was observed.
 
-The original audit identified a failure at additional attempt 43. A later
-fail-closed rerun forced direct comparison of every distinct physical hash
-against the authoritative framebuffer and corrected that audit: attempts 6,
-8, and 12 had already emitted a byte-identical `9db0...` preview-loss frame.
-The Arcade list remained visible, but the physical preview region was black
-and contained vertical dotted corruption while the framebuffer contained the
-complete preview. Attempt 43 then emitted the more extensive `d5cb...`
-partial-black frame. Each occurrence persisted through its three-capture
-confirmation window. The earliest confirmed failure was therefore attempt 6,
-not attempt 43. Failure-time FPGA evidence remained coherent
-`repair_transport_ready`, with a 960x540 route and zero latch drops/rejects.
+The first audit incorrectly classified several normal launcher captures as
+preview-loss or partial-black corruption. Native CoreGraphics decoding and
+exact pixel comparison corrected that conclusion. The `9db0...` captures at
+attempts 6, 8, and 12 and the `d5cb...` capture at attempt 43 contain the
+complete Arcade launcher and preview. Compared with the known-good `84068d...`
+capture, all changed pixels are confined to columns 1888 through 1919 of the
+1920-pixel capture; the launcher content and preview region are pixel-identical.
 
 | Artifact | SHA-256 |
 | --- | --- |
-| preview-loss physical capture at attempts 6, 8, and 12 | `9db0ffa57c146b643d4881b813983ab7252a4d76c17b7c41262af0c52035e0da` |
-| physical capture | `d5cb2957b17abf7d3875fb07a4ff19fe352f179aa7b8af5f97ae159bd2bac521` |
-| physical confirmation 1 | `d5cb2957b17abf7d3875fb07a4ff19fe352f179aa7b8af5f97ae159bd2bac521` |
-| physical confirmation 2 | `d5cb2957b17abf7d3875fb07a4ff19fe352f179aa7b8af5f97ae159bd2bac521` |
+| complete launcher with right-edge variation at attempts 6, 8, and 12 | `9db0ffa57c146b643d4881b813983ab7252a4d76c17b7c41262af0c52035e0da` |
+| complete launcher with right-edge variation at attempt 43 | `d5cb2957b17abf7d3875fb07a4ff19fe352f179aa7b8af5f97ae159bd2bac521` |
 | authoritative framebuffer | `288f47335560f1169890ee50d02ddf3707ef4b568a22ccb06593a78d275ad250` |
 | Phase-2 summary | `b2251f42f40cddf59c73dcbe84477dde7997e3ad6b53ad81e07f95ee3b9c0f8f` |
 | FPGA diagnostics | `f67869dc62330c82e459a180ae78ba5835756dd55405eae2a8f9be350cb882af` |
 
 The Phase-2 harness correctly classified the primary and both confirmations as
-`corrupted` with a strong-row-discontinuity metric of 74 permille. Its final
-aggregation then incorrectly changed the effective result to `visible` solely
-because both corrupt confirmations were identical to the primary. It therefore
-reported `artifact_status: passed` and allowed the remaining attempts and
-scheduled reboots to continue. The live failure state was consequently not
-preserved, but the three physical frames, framebuffer, summary, and FPGA
-diagnostics remain intact in ignored local evidence.
+`corrupted` because its strong-row-discontinuity heuristic rejects this normal
+static Arcade screen. Its old aggregation then promoted identical captures to
+`visible`. Commit `563b807cc` correctly removed that unsafe aggregation even
+though native review subsequently proved these particular inputs were false
+positives. The fail-closed rule remains valuable: a raw failure classification
+must never become visible merely because it repeats.
 
-This supersedes the initial 75/75 interpretation: the requested campaign did
-not pass. Across the 52 earlier and 75 additional returns, no full all-zero
-black screen occurred, which continues to support the copy-tail deadlock
-repair. The repeated partial-black output is still a commercial rejection and
-supports a separate raw-to-final physical-integrity failure. The copy-tail RTL
-must remain frozen while the Phase-2 classifier is corrected so identical
-`corrupted` captures can never be promoted to visible. Only then should the
-75-return campaign be repeated.
+After native review, the original additional campaign is 75/75 complete
+launcher returns with no full all-zero black screen and no partial-black
+corruption. This continues to support the copy-tail deadlock repair. It does
+not erase the separate, genuine single-frame transient corruption recorded in
+the earlier 52-return campaign, and it is not commercial qualification.
 
 Large evidence remains ignored under:
 
@@ -166,7 +156,7 @@ Large evidence remains ignored under:
 build/scaler-copy-tail-additional75-block5-03/
 ```
 
-The compact integrity record is
+The retracted incident record is
 [`2026-08-24-scaler-copy-tail-additional75-partial-black-incident-v1.json`](2026-08-24-scaler-copy-tail-additional75-partial-black-incident-v1.json).
 
 ## Fail-closed rerun
@@ -184,30 +174,25 @@ all produced the exact manually reviewed complete physical frame
 `84068d...` and exact framebuffer `288f47...`; two attended reboots and both
 post-boot coherence checks passed.
 
-Attempt 28 reproduced the `9db0...` preview-loss failure and the corrected
-harness stopped before attempt 29 or another reboot. The primary and two
-confirmations were byte-identical across 3,286 ms. The physical Arcade list was
-present, but the preview region was black with vertical dotted corruption. The
-authoritative framebuffer was the exact complete frame, launcher state reported
-the preview visible at transition progress `1.0`, and failure-time FPGA state
-remained coherent `repair_transport_ready` with latch-v5/`0x03ff`, stable owner
-epoch `1`, and zero drops/rejects.
+Attempt 28 produced `9db0...`, so the corrected harness stopped before attempt
+29. Native CoreGraphics decoding then showed that the primary and both
+confirmations contain the complete Arcade launcher and preview. Exact comparison
+with `84068d...` confines all differences to columns 1888 through 1919; the
+entire content area is identical. The classifier result was therefore a false
+positive, not physical corruption.
 
-A native AVFoundation 30-second movie and read-only diagnostic bundle were
-captured before any recovery. The movie delivered 754 frames over 30,120 ms;
-coarse luma mean remained `54` and row-discontinuity remained 73 permille.
-Representative frames at 0.5 and 18.5 seconds contained the complete preview,
-proving that the physical corruption self-cleared before the movie.
-No reboot, RBF reload, relaunch, or recovery was performed after the failure.
+A native AVFoundation 30-second movie captured before any state change delivered
+754 frames over 30,120 ms. Every inspected frame contained the complete stable
+launcher. This independently confirms the native still-image result; there was
+no self-clearing preview loss. No reboot, RBF reload, relaunch, or recovery was
+performed before the correction.
 
-The requested 75-return rerun therefore stopped and failed at return 28. No
-full all-zero black screen occurred. The copy-tail deadlock repair remains
-frozen, but the repeated preview-loss/partial-black physical-integrity failure
-is now reproducible often enough that another blind transition campaign has
-low value. The next FPGA work should be a single minimal passive boundary probe
-that distinguishes raw-scaler corruption from a correct raw scaler followed by
-downstream corruption, without changing latch-v5, routing, reset, completion,
-or copy-tail logic.
+The campaign therefore resumes after return 28 using the unchanged RBF and the
+same fail-closed host build. Exact known-good hashes may be accepted only after
+native comparison proves that their content area is complete; any unknown hash,
+incomplete confirmation set, framebuffer mismatch, black frame, or visible
+corruption stops the campaign immediately. This false positive does not justify
+a new FPGA boundary probe.
 
 Large evidence remains ignored under:
 
@@ -219,5 +204,5 @@ build/scaler-copy-tail-corrected75-attempt-28-live-diagnostics/
 build/scaler-copy-tail-corrected75-attempt-28-live-samples/
 ```
 
-The compact integrity record is
+The retracted incident record is
 [`2026-08-24-scaler-copy-tail-preview-loss-incident-v1.json`](2026-08-24-scaler-copy-tail-preview-loss-incident-v1.json).

@@ -1097,33 +1097,26 @@ failure is distinct from the copy-retirement black deadlock. Exact results and
 artifact hashes are recorded in
 [`2026-08-24-scaler-copy-tail-repair-result.md`](2026-08-24-scaler-copy-tail-repair-result.md).
 
-An additional 75-return campaign later found a second, stronger instance of
-that separate physical-integrity class. Attempt 43 produced the same
-partial-black/corrupted physical frame in three consecutive captures spanning
-3,258 ms while the authoritative framebuffer remained exact and latch state
-remained healthy. The Phase-2 classifier correctly marked all three captures
-`corrupted`, but its aggregation incorrectly promoted identical corrupt
-confirmations to `visible`, so the campaign continued and the live state was
-not retained. The additional campaign therefore failed despite observing no
-full all-zero black screen. Preserve Design 10 unchanged, repair the test
-classifier first, and do not interpret physical-frame identity as visibility.
-The compact record is
+An additional 75-return campaign completed with no full black screen. An
+initial audit incorrectly treated captures at attempts 6, 8, 12, and 43 as
+preview-loss or partial-black corruption. Native CoreGraphics decoding and
+exact comparison with a known-good capture prove that every disputed frame
+contains the complete launcher and preview; all changed pixels are confined to
+the rightmost 32 of 1920 capture columns. The strong-row-discontinuity heuristic
+therefore produced false positives on a normal static Arcade screen. Preserve
+Design 10 unchanged. The retracted incident record is
 [`2026-08-24-scaler-copy-tail-additional75-partial-black-incident-v1.json`](2026-08-24-scaler-copy-tail-additional75-partial-black-incident-v1.json).
 
 The host aggregation was then repaired in commit `563b807cc`: corruption can
 no longer be promoted to visible by temporal identity, incomplete confirmations
 are inconclusive, and the outer validator requires all three raw samples to be
-visible. The unchanged RBF rerun stopped correctly at return 28 on hash
-`9db0...`. The physical preview was absent and vertical dotted corruption was
-present while the authoritative framebuffer contained the complete preview;
-the launcher reported the preview visible and the latch remained coherent with
-zero drops/rejects. A native 30-second movie showed that the corruption had
-self-cleared before recording. Retrospective comparison also proved the same
-hash at earlier additional-campaign returns 6, 8, and 12, correcting their
-prior classification as healthy static edges. No full black occurred. Further
-blind transition testing is deferred: the next useful FPGA artifact is one
-minimal passive raw-scaler-versus-downstream boundary discriminator, with the
-copy-tail and latch-v5 logic frozen. The compact record is
+visible. The unchanged RBF rerun stopped fail-closed at return 28 on hash
+`9db0...`. Native decoding proved this was also a complete launcher frame with
+differences confined to the rightmost 32 capture columns, and a 754-frame
+native movie showed the complete stable launcher throughout 30,120 ms. The
+host aggregation repair remains correct, but the triggering classifier result
+was a false positive. The campaign resumes after return 28; this evidence does
+not justify another FPGA boundary probe. The retracted incident record is
 [`2026-08-24-scaler-copy-tail-preview-loss-incident-v1.json`](2026-08-24-scaler-copy-tail-preview-loss-incident-v1.json).
 
 ## Facts established despite the failed implementations

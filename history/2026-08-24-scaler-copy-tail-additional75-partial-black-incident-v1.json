@@ -1,6 +1,7 @@
 {
   "schema": "mister-magik-scaler-copy-tail-additional75-partial-black-incident-v1",
   "date": "2026-08-24",
+  "record_status": "retracted_false_positive",
   "candidate": {
     "implementation_commit": "518862fe4c49e4be252f532f7a943c5529beebf0",
     "patch_sha256": "fad82f36ec04b09ef758812fd5a4c3766e096f28a91da55a09574eaf7932b839",
@@ -14,72 +15,47 @@
     "game_dwell_ms": 2000,
     "reboot_interval_returns": 10,
     "reboots_completed": 7,
-    "reviewed_healthy_returns_before_earliest_failure": 5,
-    "earliest_confirmed_failure_transition": 6,
-    "confirmed_failure_transitions": [6, 8, 12, 43],
-    "failure_transition": 43,
-    "failure_block": 5,
-    "failure_attempt_in_block": 3,
+    "reviewed_complete_launcher_returns": 75,
     "full_black_screen_observed": false,
-    "partial_black_corruption_observed": true,
-    "campaign_passed": false,
-    "campaign_incorrectly_continued_after_failure": true,
-    "live_failure_state_preserved": false
+    "partial_black_corruption_observed": false,
+    "campaign_passed_after_native_review": true
   },
-  "retrospective_correction": {
-    "reason": "the fail-closed rerun proved that a physical hash previously treated as a static-edge false positive actually omitted the preview present in the authoritative framebuffer",
-    "preview_loss_sha256": "9db0ffa57c146b643d4881b813983ab7252a4d76c17b7c41262af0c52035e0da",
-    "preview_loss_transitions": [6, 8, 12],
-    "preview_loss_capture_count": 9,
-    "previous_interpretation": "healthy_static_edge_false_positive",
-    "corrected_interpretation": "persistent_preview_loss_physical_corruption"
+  "retraction": {
+    "previous_classification": "persistent_partial_black_physical_corruption",
+    "corrected_classification": "complete_launcher_with_right_edge_capture_variation",
+    "reason": "native CoreGraphics decoding and exact pixel comparison show the disputed frames contain the complete launcher and preview",
+    "known_good_sha256": "84068db55c9f625b287b8c37426457d742e6b695a6a7f4050d053348a0a04f38",
+    "disputed_sha256": "d5cb2957b17abf7d3875fb07a4ff19fe352f179aa7b8af5f97ae159bd2bac521",
+    "image_geometry": "1920x1080",
+    "changed_pixel_bbox": "x=1888..1919,y=0..1079",
+    "changed_pixels_over_delta_16": 1221,
+    "launcher_content_outside_rightmost_32_columns_identical": true,
+    "preview_region_identical": true,
+    "classifier_explanation": "the strong-row-discontinuity heuristic rejects a normal static launcher frame and therefore cannot establish corruption by itself"
   },
-  "failure_state": {
-    "classification": "persistent_partial_black_physical_corruption",
-    "physical_confirmations": 2,
-    "physical_observation_ms": 3258,
-    "physical_captures_byte_identical": true,
-    "physical_capture_visibility": "corrupted",
-    "strong_row_discontinuity_permille": 74,
-    "internal_framebuffer_correct": true,
-    "fpga_classification": "repair_transport_ready",
-    "latch_protocol": 5,
-    "latch_capabilities": "0x03ff",
-    "active_geometry": "960x540",
-    "latch_drop_count": 0,
-    "latch_reject_count": 0,
-    "owner_epoch": 1,
-    "sink_visibility": "unobserved"
-  },
-  "classifier_defect": {
-    "primary_visibility": "corrupted",
-    "confirmation_visibilities": [
-      "corrupted",
-      "corrupted"
-    ],
-    "reported_effective_visibility": "visible",
-    "reported_artifact_status": "passed",
-    "cause": "identical corrupt confirmations were promoted to visible",
-    "consequence": "the campaign continued and later rebooted instead of preserving the live failure state"
+  "host_aggregation_fix": {
+    "commit": "563b807cc",
+    "retained": true,
+    "reason": "fail-closed aggregation remains correct even though the triggering captures were classifier false positives"
   },
   "artifacts": [
     {
       "path": "build/scaler-copy-tail-additional75-block5-03/returned-usb-video.jpg",
       "bytes": 393542,
       "sha256": "d5cb2957b17abf7d3875fb07a4ff19fe352f179aa7b8af5f97ae159bd2bac521",
-      "role": "partial_black_physical_primary"
+      "role": "retracted_false_positive_physical_primary"
     },
     {
       "path": "build/scaler-copy-tail-additional75-block5-03/returned-usb-video-confirmation-1.jpg",
       "bytes": 393542,
       "sha256": "d5cb2957b17abf7d3875fb07a4ff19fe352f179aa7b8af5f97ae159bd2bac521",
-      "role": "partial_black_physical_confirmation_1"
+      "role": "retracted_false_positive_physical_confirmation_1"
     },
     {
       "path": "build/scaler-copy-tail-additional75-block5-03/returned-usb-video-confirmation-2.jpg",
       "bytes": 393542,
       "sha256": "d5cb2957b17abf7d3875fb07a4ff19fe352f179aa7b8af5f97ae159bd2bac521",
-      "role": "partial_black_physical_confirmation_2"
+      "role": "retracted_false_positive_physical_confirmation_2"
     },
     {
       "path": "build/scaler-copy-tail-additional75-block5-03/returned-framebuffer.png",
@@ -91,13 +67,7 @@
       "path": "build/scaler-copy-tail-additional75-block5-03/summary.json",
       "bytes": 440087,
       "sha256": "b2251f42f40cddf59c73dcbe84477dde7997e3ad6b53ad81e07f95ee3b9c0f8f",
-      "role": "phase2_false_pass_summary"
-    },
-    {
-      "path": "build/scaler-copy-tail-additional75-block5-03/fpga-video-diagnostics.json",
-      "bytes": 774774,
-      "sha256": "f67869dc62330c82e459a180ae78ba5835756dd55405eae2a8f9be350cb882af",
-      "role": "failure_time_fpga_diagnostics"
+      "role": "raw_classifier_false_positive_summary"
     }
   ]
 }
