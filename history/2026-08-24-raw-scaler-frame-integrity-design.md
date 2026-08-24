@@ -26,7 +26,7 @@ out of scope.
   retain duplicate wide counters; the fingerprint already covers their
   underlying control waveform.
 - Establish a baseline after exactly three identical nonempty frames.
-- Retain the first mismatch and its frame sequence until common reset/RBF reload.
+- Retain the first mismatch until common reset/RBF reload.
 - Export only read-only command `0x67`, schema 3; keep `0x60–0x66` unsupported,
   latch protocol 5, and capabilities `0x03ff`.
 - Require three identical valid host records and always report sink visibility
@@ -40,9 +40,14 @@ sent to CI or installed before that local gate.
 The first schema-3 synthesis at commit `53ba7c96a` was rejected: it used 397
 ALMs and 661 registers above baseline and produced only 0.174 ns hold slack.
 The forward candidate therefore retains only the baseline CRC, first-bad CRC,
-nonempty status, and first-bad sequence. The 0.200 ns experimental hold floor
+and nonempty status. The 0.200 ns experimental hold floor
 is unchanged; the reduction removes evidence that did not change the next
 diagnostic decision.
+The second synthesis passed every hardware gate except the frozen register
+ceiling: setup was 0.439 ns, hold 0.206 ns, TNS zero, growth 154 ALMs and 284
+registers. The final reduction removes the event sequence and reuses the
+unpublished baseline slot during acquisition, eliminating 64 logical retained
+bits without weakening fault retention.
 The disposable profile is frozen at no more than 200 ALMs and 224 registers
 above the matched baseline, with unchanged RAM/DSP/PLL identity and the same
 0.200 ns hold floor.

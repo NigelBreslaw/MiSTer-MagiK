@@ -32,15 +32,14 @@ module mister_magik_raw_scaler_diagnostic (
 	reg vs_seen = 1'b0;
 	reg de_seen = 1'b0;
 	reg [15:0] control_crc = 16'hffff;
-	reg [15:0] frame_sequence = 16'd0;
 
 	reg candidate_valid = 1'b0;
 	reg [1:0] candidate_streak = 2'd0;
-	reg [15:0] candidate_crc = 16'd0;
 
-	// Slots 0..3 are response words 1..4. This is the only retained
+	// Slots 0..2 are response words 1..3. Before publication the baseline slot
+	// holds the current candidate CRC; no generation toggle exposes it.
 	// baseline/first-bad storage and remains stable between publications.
-	(* preserve *) reg [63:0] source_state = 64'd0;
+	(* preserve *) reg [47:0] source_state = 48'd0;
 	(* preserve *) reg source_generation = 1'b0;
 
 	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED" *)
@@ -53,14 +52,14 @@ module mister_magik_raw_scaler_diagnostic (
 	reg has_command = 1'b0;
 	reg command_selected = 1'b0;
 	reg [2:0] word_count = 3'd0;
-	(* preserve *) reg [63:0] snapshot_state = 64'd0;
+	(* preserve *) reg [47:0] snapshot_state = 48'd0;
 	reg [15:0] tx_crc = 16'hffff;
 	reg [15:0] response_word;
 
 	wire frame_start = raw_ce && raw_vs && !raw_vs_previous;
 	wire completed_frame = frame_start && frame_open;
 	wire completed_nonempty = ce_seen && hs_seen && vs_seen && de_seen;
-	wire candidate_matches = candidate_crc == control_crc;
+	wire candidate_matches = source_state[31:16] == control_crc;
 	wire baseline_matches = source_state[31:16] == control_crc;
 	wire baseline_valid =
 		(source_state[15:0] & MAGIK_RAW_SCALER_STATE_FLAG_BASELINE_VALID) != 0;
@@ -127,11 +126,9 @@ module mister_magik_raw_scaler_diagnostic (
 			vs_seen <= 1'b0;
 			de_seen <= 1'b0;
 			control_crc <= 16'hffff;
-			frame_sequence <= 16'd0;
 			candidate_valid <= 1'b0;
 			candidate_streak <= 2'd0;
-			candidate_crc <= 16'd0;
-			source_state <= 64'd0;
+			source_state <= 48'd0;
 			source_generation <= 1'b0;
 		end
 		else begin
@@ -147,7 +144,6 @@ module mister_magik_raw_scaler_diagnostic (
 				de_seen <= raw_ce && raw_de;
 
 				if(completed_frame) begin
-					frame_sequence <= frame_sequence + 1'd1;
 					if(!baseline_valid) begin
 						if(!completed_nonempty) begin
 							candidate_valid <= 1'b0;
@@ -156,7 +152,7 @@ module mister_magik_raw_scaler_diagnostic (
 						else if(candidate_valid && candidate_matches) begin
 							if(candidate_streak == 2'd2) begin
 								source_state <= {
-									16'd0, 16'd0, control_crc,
+									16'd0, control_crc,
 									MAGIK_RAW_SCALER_STATE_FLAG_SAMPLE_VALID |
 									MAGIK_RAW_SCALER_STATE_FLAG_SAMPLE_NONEMPTY |
 									MAGIK_RAW_SCALER_STATE_FLAG_BASELINE_VALID
@@ -171,7 +167,7 @@ module mister_magik_raw_scaler_diagnostic (
 						else begin
 							candidate_valid <= 1'b1;
 							candidate_streak <= 2'd1;
-							candidate_crc <= control_crc;
+							source_state[31:16] <= control_crc;
 						end
 					end
 					else if(!mismatch_latched &&
@@ -183,7 +179,6 @@ module mister_magik_raw_scaler_diagnostic (
 							(completed_nonempty ?
 								MAGIK_RAW_SCALER_STATE_FLAG_SAMPLE_NONEMPTY : 16'd0);
 						source_state[47:32] <= control_crc;
-						source_state[63:48] <= frame_sequence + 1'd1;
 						source_generation <= ~source_generation;
 					end
 				end
@@ -224,7 +219,7 @@ module mister_magik_raw_scaler_diagnostic (
 			generation_sync <= 1'b0;
 			generation_seen <= 1'b0;
 			capture_pending <= 1'b0;
-			snapshot_state <= 64'd0;
+			snapshot_state <= 48'd0;
 			has_command <= 1'b0;
 			command_selected <= 1'b0;
 			word_count <= 3'd0;

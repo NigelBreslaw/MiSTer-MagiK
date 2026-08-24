@@ -4608,7 +4608,6 @@ mod linux {
                         "raw_scaler_state": {
                             "baseline_control_crc": readout.samples.iter().map(|sample| sample.baseline_control_crc()).collect::<Vec<_>>(),
                             "first_bad_control_crc": readout.samples.iter().map(|sample| sample.first_bad_control_crc()).collect::<Vec<_>>(),
-                            "first_bad_frame_sequence": readout.samples.iter().map(|sample| sample.first_bad_frame_sequence()).collect::<Vec<_>>(),
                             "raw_samples": readout.samples.iter().map(|sample| sample.words).collect::<Vec<_>>(),
                         },
                     })

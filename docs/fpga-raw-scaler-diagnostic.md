@@ -21,8 +21,7 @@ per-frame counters.
 
 A frame is nonempty only after CE, HS, VS, and DE were all observed. Three
 consecutive identical, nonempty fingerprints establish the baseline. After
-that, the first fingerprint difference or empty frame is latched with its
-modulo-65536 frame sequence. The
+that, the first fingerprint difference or empty frame is latched. The
 baseline and first-bad record remain immutable until the existing common reset
 or RBF reload. There is no software clear, arm, freeze, write, or recovery
 operation.
@@ -33,15 +32,14 @@ Command `0x67` exposes `raw-scaler-frame-integrity-v1`, schema `3`. Commands
 `0x60` through `0x66` remain unsupported. Latch protocol `5` and capabilities
 `0x03ff` are unchanged.
 
-After magic `0x4d57`, the fixed six-word response is:
+After magic `0x4d57`, the fixed five-word response is:
 
 | Word | Meaning |
 | --- | --- |
 | 0 | schema `3` |
 | 1 | flags: sample valid, nonempty, baseline valid, mismatch latched |
 | 2–3 | baseline and first-bad control CRC |
-| 4 | first-bad frame sequence |
-| 5 | existing framed CRC-16 |
+| 4 | existing framed CRC-16 |
 
 The HDMI bundle is registered before its generation toggle changes. The
 `clk_sys` receiver uses the explicit two-stage generation synchronizer, waits
@@ -70,7 +68,7 @@ does not prove pixels or the physical sink were correct.
 - Keep the exact completion-queue GHDL simulation and formal proof passing.
 - Simulate exact three-frame baseline acquisition, changing and empty frames,
   phase-only CRC mismatch and independent HS/DE/active waveform changes,
-  sticky first-bad retention, sequence wrap, reset, immutable command framing,
+  sticky first-bad retention, reset, immutable command framing,
   CRC, malformed reads, and latch-v5 non-interference.
 - Structurally reject the retired RGB/activity observer, production fanout, or
   any new framebuffer, latch, route, reset, PLL, mux, or pixel tap.

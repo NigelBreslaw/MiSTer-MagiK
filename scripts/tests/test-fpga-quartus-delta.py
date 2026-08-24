@@ -133,7 +133,7 @@ VALID_DIAGNOSTIC_REPORTS = {
                 "mister_magik_raw_scaler_diagnostic:"
                 f"magik_raw_scaler_diagnostic|snapshot_state[{bit}]",
             )
-            for bit in range(50)
+            for bit in range(48)
         )
     ),
     "menu.magik-diagnostic-metastability.rpt": (

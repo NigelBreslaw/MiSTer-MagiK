@@ -978,7 +978,7 @@ existing reset or RBF reload.
 Command `0x67` becomes `raw-scaler-frame-integrity-v1`, schema 3. Commands
 `0x60–0x66`, latch protocol 5, capabilities `0x03ff`, the completion repair,
 and all production routing/reset/pixel cones remain unchanged. The fixed record
-contains baseline and first-bad control CRC and the first-bad frame sequence. It has
+contains baseline and first-bad control CRC. It has
 no write, clear, arm, freeze, or recovery operation and never claims physical
 sink visibility.
 

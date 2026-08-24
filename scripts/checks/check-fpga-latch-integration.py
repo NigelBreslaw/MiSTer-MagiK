@@ -243,9 +243,9 @@ def main() -> None:
         fail("diagnostic control source contains an unexpected design unit")
     if "captured_state" in control_source:
         fail("diagnostic responder retains a redundant snapshot register")
-    if control_source.count("(* preserve *) reg [63:0] snapshot_state") != 1:
+    if control_source.count("(* preserve *) reg [47:0] snapshot_state") != 1:
         fail("diagnostic bundled-data snapshot is not preserved")
-    if control_source.count("(* preserve *) reg [63:0] source_state") != 1:
+    if control_source.count("(* preserve *) reg [47:0] source_state") != 1:
         fail("raw scaler source state is not preserved for bundled-data capture")
     if control_source.count("(* preserve *) reg source_generation") != 1:
         fail("raw scaler frame generation is not preserved as a distinct CDC source")

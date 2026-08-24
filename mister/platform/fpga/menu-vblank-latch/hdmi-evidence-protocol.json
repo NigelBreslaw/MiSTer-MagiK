@@ -46,13 +46,12 @@
     "schema": 3,
     "command": 103,
     "magic": 19799,
-    "word_count": 6,
+    "word_count": 5,
     "words": [
       "schema",
       "flags",
       "baseline_control_crc",
       "first_bad_control_crc",
-      "first_bad_frame_sequence",
       "crc"
     ],
     "flags": {

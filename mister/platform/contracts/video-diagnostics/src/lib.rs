@@ -165,10 +165,6 @@ impl RawScalerState {
     pub fn first_bad_control_crc(&self) -> u16 {
         self.words[RAW_SCALER_STATE_FIRST_BAD_CONTROL_CRC_WORD]
     }
-
-    pub fn first_bad_frame_sequence(&self) -> u16 {
-        self.words[RAW_SCALER_STATE_FIRST_BAD_FRAME_SEQUENCE_WORD]
-    }
 }
 
 impl HdmiOutputActivity {
@@ -852,7 +848,6 @@ mod tests {
             | RAW_SCALER_STATE_FLAG_MISMATCH_LATCHED;
         words[RAW_SCALER_STATE_BASELINE_CONTROL_CRC_WORD] = 0x1234;
         words[RAW_SCALER_STATE_FIRST_BAD_CONTROL_CRC_WORD] = 0x5678;
-        words[RAW_SCALER_STATE_FIRST_BAD_FRAME_SEQUENCE_WORD] = 0xffff;
         words[RAW_SCALER_STATE_CRC_WORD] = message_crc_with_schema(
             GET_RAW_SCALER_STATE,
             RAW_SCALER_STATE_SCHEMA,
@@ -865,7 +860,6 @@ mod tests {
         assert!(decoded.mismatch_latched());
         assert_eq!(decoded.baseline_control_crc(), 0x1234);
         assert_eq!(decoded.first_bad_control_crc(), 0x5678);
-        assert_eq!(decoded.first_bad_frame_sequence(), 0xffff);
     }
 
     #[test]
