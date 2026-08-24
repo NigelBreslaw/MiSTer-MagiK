@@ -391,7 +391,7 @@ def main() -> None:
         "*ascal:ascal|o_readdataack_sync2*",
         "*ascal:ascal|avl_magik_generation",
         "*ascal:ascal|o_magik_generation_meta",
-        "*ascal:ascal|avl_magik_bundle[*]",
+        "{*ascal:ascal|avl_magik_bundle[*]} 13]",
         "*magik_raw_scaler_diagnostic|source_generation",
         "*magik_raw_scaler_diagnostic|generation_meta",
         "*magik_raw_scaler_diagnostic|source_state[*]",
@@ -577,7 +577,8 @@ def main() -> None:
             "magik_diag_state      : OUT std_logic_vector(31 DOWNTO 0);": 1,
             "magik_diag_generation : OUT std_logic;": 1,
             "SIGNAL avl_magik_frame_flags : std_logic_vector(3 DOWNTO 0):=(OTHERS=>'0');": 1,
-            "SIGNAL avl_magik_bundle : std_logic_vector(15 DOWNTO 0):=(OTHERS=>'0');": 1,
+            "SIGNAL avl_magik_bundle : std_logic_vector(12 DOWNTO 0):=(OTHERS=>'0');": 1,
+            "VARIABLE diag_bundle_v : std_logic_vector(12 DOWNTO 0);": 1,
             "SIGNAL avl_magik_generation : std_logic:='0';": 1,
             "SIGNAL o_magik_frame_flags : std_logic_vector(4 DOWNTO 0):=(OTHERS=>'0');": 1,
             "SIGNAL o_magik_completed_flags : std_logic_vector(4 DOWNTO 0):=(OTHERS=>'0');": 1,
@@ -615,6 +616,12 @@ def main() -> None:
         ):
             if forbidden_repair in patched_ascal:
                 fail(f"superseded completion repair state remains: {forbidden_repair}")
+        for retired_wide_bundle in (
+            "SIGNAL avl_magik_bundle : std_logic_vector(15 DOWNTO 0)",
+            "VARIABLE diag_bundle_v : std_logic_vector(15 DOWNTO 0);",
+        ):
+            if retired_wide_bundle in patched_ascal:
+                fail("optimized-away Avalon diagnostic bundle bits remain in source")
         for retired_observer_fragment in (
             "scheduler_diagnostic_candidate",
             "scheduler_diagnostic_word",

@@ -48,6 +48,10 @@ record after a same-domain settling edge. The merged bundle alone crosses into
 Icarus proves raw active, raw zero, atomic merge, reset, and immutable response
 behavior.
 
+The Avalon bundle is exactly 13 physical registers for fields 0 through 12.
+Quartus must find exactly those 13 source endpoints; no dummy preserved
+registers exist for ABI-reserved bits.
+
 Command `0x67` remains the only diagnostic command. Magic stays `0x4d57`, the
 schema is `5`, the response is four words including the existing CRC, commands
 `0x60–0x66` remain unsupported, and latch-v5/capabilities `0x03ff` remain

@@ -42,7 +42,9 @@ functions live in the package compiled from patched production `ascal.vhd`;
 the GHDL test and synthesis call those same functions.
 
 The Avalon bucket closes on the existing synchronized output-VS boundary. Its
-stable 16-bit bundle is published with a generation toggle. The HDMI receiver
+stable 13-bit bundle contains exactly fields 0 through 12 and is published with
+a generation toggle; no constant reserved registers are synthesized. The HDMI
+receiver
 uses an explicit two-stage generation synchronizer and waits one further edge
 before capture. Ascal publishes flags 0 through 9 and the state word in
 `clk_hdmi`. The responder waits one same-domain edge after its generation,

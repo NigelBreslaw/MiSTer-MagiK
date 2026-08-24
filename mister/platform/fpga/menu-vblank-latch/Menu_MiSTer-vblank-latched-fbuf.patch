@@ -1,5 +1,5 @@
 diff --git a/sys/ascal.vhd b/sys/ascal.vhd
-index a735e6b..bc71837 100644
+index a735e6b..0398fb5 100644
 --- a/sys/ascal.vhd
 +++ b/sys/ascal.vhd
 @@ -75,6 +75,238 @@ LIBRARY ieee;
@@ -286,7 +286,7 @@ index a735e6b..bc71837 100644
  	SIGNAL avl_o_vs_sync,avl_o_vs : std_logic;
  	SIGNAL avl_fb_ena : std_logic;
 +	SIGNAL avl_magik_frame_flags : std_logic_vector(3 DOWNTO 0):=(OTHERS=>'0');
-+	SIGNAL avl_magik_bundle : std_logic_vector(15 DOWNTO 0):=(OTHERS=>'0');
++	SIGNAL avl_magik_bundle : std_logic_vector(12 DOWNTO 0):=(OTHERS=>'0');
 +	SIGNAL avl_magik_generation : std_logic:='0';
 +	ATTRIBUTE preserve OF avl_magik_bundle : SIGNAL IS true;
 +	ATTRIBUTE preserve OF avl_magik_generation : SIGNAL IS true;
@@ -374,7 +374,7 @@ index a735e6b..bc71837 100644
 +		VARIABLE completion_state_v : std_logic_vector(1 DOWNTO 0);
 +		VARIABLE read_accept_v : boolean;
 +		VARIABLE diag_flags_v : std_logic_vector(3 DOWNTO 0);
-+		VARIABLE diag_bundle_v : std_logic_vector(15 DOWNTO 0);
++		VARIABLE diag_bundle_v : std_logic_vector(12 DOWNTO 0);
  	BEGIN
  		IF avl_reset_na='0' THEN
  			avl_state<=sIDLE;
