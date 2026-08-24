@@ -2,8 +2,13 @@
 
 Status: the functional repair remains unchanged. The oversized schema-7 CRC
 observer failed local timing/resource signoff and was replaced, not layered,
-by a disposable schema-8 ordered-signature candidate. Fixed-seed Apple signoff
-and device validation remain separate gates.
+by a disposable schema-8 ordered-signature candidate. Its first fixed-seed fit
+reached positive setup slack but missed the experimental floor by `0.044 ns`
+and the register cap by 10. The next candidate preserves the wire ABI while
+removing 31 redundant diagnostic storage registers. Fixed-seed Apple signoff
+and device validation remain separate gates. The exact reduction and failed-fit
+receipt are recorded in
+[the dated storage-reduction design](../history/2026-08-25-raw-scaler-signature-storage-reduction.md).
 
 The disposable schema-6 `scaler-copy-retirement-v1` diagnostic is retired.
 Its first genuine persistent-black result isolated a production copy-FSM
@@ -86,6 +91,11 @@ downstream of direct `ascal`; an ordered-signature change paired with an
 independently byte-stable source support an at-or-before-`ascal` fault. Without
 that independent proof, changing evidence is inconclusive because a scene
 transition has the same local signature.
+
+The source CDC bundle contains only the 32-bit signature and 16-bit sequence.
+One destination valid bit reconstructs the unchanged flags word after coherent
+capture, including when the 16-bit sequence wraps to zero. This retains the
+settle cycle and immutable response while avoiding duplicate 16-bit flag words.
 
 The local candidate requires:
 

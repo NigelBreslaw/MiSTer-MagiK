@@ -46,19 +46,19 @@ module mister_magik_raw_scaler_ordered_frame (
 	reg frame_nonempty = 1'b0;
 	reg [31:0] frame_signature = SIGNATURE_INITIAL;
 
-	reg [15:0] published_flags = 16'd0;
 	reg [15:0] published_sequence = 16'd0;
 	reg [31:0] published_signature = 32'd0;
 	(* preserve *) reg source_generation = 1'b0;
 
-	// Words 1..4 in ascending response order. The source state remains stable
+	// Words 2..4 in ascending response order. The source state remains stable
 	// between completed nonempty frames; generation changes only after every
-	// source register is updated on the same clk_hdmi edge.
-	wire [63:0] source_state = {
+	// source register is updated on the same clk_hdmi edge. Word 1 is derived
+	// from a single destination valid bit instead of storing a 16-bit flag word
+	// in both clock domains.
+	wire [47:0] source_state = {
 		published_signature[31:16],
 		published_signature[15:0],
-		published_sequence,
-		published_flags
+		published_sequence
 	};
 
 	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED" *)
@@ -71,7 +71,8 @@ module mister_magik_raw_scaler_ordered_frame (
 	reg has_command = 1'b0;
 	reg command_selected = 1'b0;
 	reg [2:0] word_count = 3'd0;
-	reg [63:0] snapshot_state = 64'd0;
+	reg [47:0] snapshot_state = 48'd0;
+	reg snapshot_valid = 1'b0;
 	reg [15:0] tx_crc = 16'hffff;
 	reg [15:0] response_word;
 
@@ -165,7 +166,6 @@ module mister_magik_raw_scaler_ordered_frame (
 			frame_open <= 1'b0;
 			frame_nonempty <= 1'b0;
 			frame_signature <= SIGNATURE_INITIAL;
-			published_flags <= 16'd0;
 			published_sequence <= 16'd0;
 			published_signature <= 32'd0;
 			source_generation <= 1'b0;
@@ -188,7 +188,6 @@ module mister_magik_raw_scaler_ordered_frame (
 					if(frame_open && frame_nonempty) begin
 						published_sequence <= published_sequence + 1'd1;
 						published_signature <= completed_signature;
-						published_flags <= MAGIK_RAW_SCALER_STATE_FLAG_FRAME_VALID;
 						source_generation <= ~source_generation;
 					end
 					frame_open <= 1'b1;
@@ -210,10 +209,13 @@ module mister_magik_raw_scaler_ordered_frame (
 	always @(*) begin
 		if(word_count == MAGIK_RAW_SCALER_STATE_SCHEMA_WORD)
 			response_word = MAGIK_RAW_SCALER_STATE_SCHEMA;
+		else if(word_count == MAGIK_RAW_SCALER_STATE_FLAGS_WORD)
+			response_word = snapshot_valid ?
+				MAGIK_RAW_SCALER_STATE_FLAG_FRAME_VALID : 16'd0;
 		else if(word_count == MAGIK_RAW_SCALER_STATE_CRC_WORD)
 			response_word = tx_crc;
 		else
-			response_word = snapshot_state[(word_count - 1'd1) * 16 +: 16];
+			response_word = snapshot_state[(word_count - 2'd2) * 16 +: 16];
 
 		response_data = 16'd0;
 		if(command_start && selected_start)
@@ -232,7 +234,8 @@ module mister_magik_raw_scaler_ordered_frame (
 			generation_sync <= 1'b0;
 			generation_seen <= 1'b0;
 			capture_pending <= 1'b0;
-			snapshot_state <= 64'd0;
+			snapshot_state <= 48'd0;
+			snapshot_valid <= 1'b0;
 			has_command <= 1'b0;
 			command_selected <= 1'b0;
 			word_count <= 3'd0;
@@ -248,6 +251,7 @@ module mister_magik_raw_scaler_ordered_frame (
 			end
 			else if(!has_command && capture_pending) begin
 				snapshot_state <= source_state;
+				snapshot_valid <= 1'b1;
 				capture_pending <= 1'b0;
 			end
 

@@ -285,8 +285,9 @@ module tb_mister_magik_video_diagnostics_control;
 		drive_frame(8'h55, 1'b0, 1'b0);
 		complete_frame();
 		read_record();
-		if(words[2] != 16'h0000)
-			fail("completed-frame sequence did not wrap");
+		if(words[1] != MAGIK_RAW_SCALER_STATE_FLAG_FRAME_VALID ||
+		   words[2] != 16'h0000)
+			fail("completed-frame valid state or sequence did not survive wrap");
 
 		// Reset during an active frame clears the coherent source and snapshot.
 		drive_frame(8'h99, 1'b0, 1'b0);
