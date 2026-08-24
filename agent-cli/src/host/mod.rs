@@ -20047,9 +20047,15 @@ const ATTENDED_LAUNCH_RETURN_GAME_DWELL: Duration = Duration::from_secs(2);
 const LAUNCH_RETURN_PHYSICAL_CONFIRMATIONS: usize = 2;
 const LAUNCH_RETURN_PHYSICAL_CONFIRMATION_INTERVAL: Duration = Duration::from_secs(1);
 
+#[derive(Clone, Copy)]
+struct LaunchReturnUsbConfirmation {
+    visibility: crate::capture::CaptureVisibility,
+    temporal_luma_delta_permille: u16,
+}
+
 fn launch_return_effective_usb_visibility(
     primary: crate::capture::CaptureVisibility,
-    confirmations: &[(crate::capture::CaptureVisibility, bool)],
+    confirmations: &[LaunchReturnUsbConfirmation],
 ) -> Option<crate::capture::CaptureVisibility> {
     use crate::capture::CaptureVisibility::{Black, Corrupted, SignalLost, Visible};
 
@@ -20061,20 +20067,24 @@ fn launch_return_effective_usb_visibility(
     }
     if confirmations
         .iter()
-        .any(|(visibility, _)| *visibility == SignalLost)
+        .any(|confirmation| confirmation.visibility == SignalLost)
     {
         return Some(SignalLost);
     }
     if confirmations
         .iter()
-        .any(|(visibility, _)| *visibility == Black)
+        .any(|confirmation| confirmation.visibility == Black)
     {
         return Some(Black);
     }
     if primary == Corrupted
         || confirmations
             .iter()
-            .any(|(visibility, _)| *visibility == Corrupted)
+            .any(|confirmation| confirmation.visibility == Corrupted)
+        || confirmations.iter().any(|confirmation| {
+            confirmation.temporal_luma_delta_permille
+                >= crate::capture::TEMPORAL_LUMA_CORRUPTION_PERMILLE
+        })
     {
         return Some(Corrupted);
     }
@@ -20082,7 +20092,7 @@ fn launch_return_effective_usb_visibility(
         primary == Visible
             && confirmations
                 .iter()
-                .all(|(visibility, _)| *visibility == Visible)
+                .all(|confirmation| confirmation.visibility == Visible)
     );
     Some(Visible)
 }
@@ -20132,7 +20142,16 @@ fn validate_attended_launch_return_summary(summary: &Value, output_dir: &Path) -
     let raw_confirmations = summary
         .pointer("/usb_video_return_confirmation/captures")
         .and_then(Value::as_array);
-    let all_raw_samples_visible = raw_primary_visibility == Some("visible")
+    let temporal_contract_valid = summary
+        .pointer("/usb_video_return_confirmation/schema")
+        .and_then(Value::as_str)
+        == Some("mister-magik-return-physical-confirmation-v2")
+        && summary
+            .pointer("/usb_video_return_confirmation/temporal_luma_corruption_threshold_permille")
+            .and_then(Value::as_u64)
+            == Some(u64::from(crate::capture::TEMPORAL_LUMA_CORRUPTION_PERMILLE));
+    let all_raw_samples_visible = temporal_contract_valid
+        && raw_primary_visibility == Some("visible")
         && raw_confirmations.is_some_and(|captures| {
             captures.len() == LAUNCH_RETURN_PHYSICAL_CONFIRMATIONS
                 && captures.iter().all(|capture| {
@@ -20140,6 +20159,12 @@ fn validate_attended_launch_return_summary(summary: &Value, output_dir: &Path) -
                         .pointer("/capture/visibility")
                         .and_then(Value::as_str)
                         == Some("visible")
+                        && capture
+                            .get("temporal_luma_delta_permille")
+                            .and_then(Value::as_u64)
+                            .is_some_and(|delta| {
+                                delta < u64::from(crate::capture::TEMPORAL_LUMA_CORRUPTION_PERMILLE)
+                            })
                 })
         });
 
@@ -21040,10 +21065,15 @@ fn profile_installed_launch_return_once(
                 ))?;
                 let identical_to_primary =
                     fs::read(&confirmation.artifact.path)? == primary_usb_bytes;
-                confirmation_states.push((confirmation.visibility, identical_to_primary));
+                let temporal_luma_delta_permille = usb.temporal_luma_delta_permille(&confirmation);
+                confirmation_states.push(LaunchReturnUsbConfirmation {
+                    visibility: confirmation.visibility,
+                    temporal_luma_delta_permille,
+                });
                 usb_confirmation.push(json!({
                     "capture": confirmation,
                     "identical_to_primary": identical_to_primary,
+                    "temporal_luma_delta_permille": temporal_luma_delta_permille,
                 }));
             }
         }
@@ -21098,10 +21128,12 @@ fn profile_installed_launch_return_once(
             "usb_video": usb_json,
             "usb_video_effective_visibility": effective_usb_visibility_json,
             "usb_video_return_confirmation": {
-                "schema": "mister-magik-return-physical-confirmation-v1",
+                "schema": "mister-magik-return-physical-confirmation-v2",
                 "required_confirmations": LAUNCH_RETURN_PHYSICAL_CONFIRMATIONS,
                 "interval_ms": LAUNCH_RETURN_PHYSICAL_CONFIRMATION_INTERVAL.as_millis(),
                 "observation_ms": usb_observation_ms,
+                "temporal_luma_grid": "16x9-active-area-v1",
+                "temporal_luma_corruption_threshold_permille": crate::capture::TEMPORAL_LUMA_CORRUPTION_PERMILLE,
                 "captures": usb_confirmation,
             },
             "physical_video_visible": visible,
@@ -32849,10 +32881,23 @@ mod tests {
             "physical_video_visible": true,
             "usb_video": { "visibility": "visible" },
             "usb_video_effective_visibility": "visible",
-            "usb_video_return_confirmation": { "captures": [
-                { "capture": { "visibility": "visible" }, "identical_to_primary": false },
-                { "capture": { "visibility": "visible" }, "identical_to_primary": false }
-            ]},
+            "usb_video_return_confirmation": {
+                "schema": "mister-magik-return-physical-confirmation-v2",
+                "temporal_luma_corruption_threshold_permille":
+                    crate::capture::TEMPORAL_LUMA_CORRUPTION_PERMILLE,
+                "captures": [
+                    {
+                        "capture": { "visibility": "visible" },
+                        "identical_to_primary": false,
+                        "temporal_luma_delta_permille": 0
+                    },
+                    {
+                        "capture": { "visibility": "visible" },
+                        "identical_to_primary": false,
+                        "temporal_luma_delta_permille": 0
+                    }
+                ]
+            },
             "restored_selection": { "semantic": {
                 "effective_view": "arcade",
                 "return_screen": "arcade",
@@ -32878,9 +32923,26 @@ mod tests {
         summary["usb_video"]["visibility"] = json!("corrupted");
         summary["usb_video_effective_visibility"] = json!("visible");
         summary["usb_video_return_confirmation"]["captures"] = json!([
-            { "capture": { "visibility": "corrupted" }, "identical_to_primary": true },
-            { "capture": { "visibility": "corrupted" }, "identical_to_primary": true }
+            {
+                "capture": { "visibility": "corrupted" },
+                "identical_to_primary": true,
+                "temporal_luma_delta_permille": 0
+            },
+            {
+                "capture": { "visibility": "corrupted" },
+                "identical_to_primary": true,
+                "temporal_luma_delta_permille": 0
+            }
         ]);
+        assert!(validate_attended_launch_return_summary(&summary, output).is_err());
+
+        summary["usb_video"]["visibility"] = json!("visible");
+        summary["usb_video_return_confirmation"]["captures"][0]["capture"]["visibility"] =
+            json!("visible");
+        summary["usb_video_return_confirmation"]["captures"][1]["capture"]["visibility"] =
+            json!("visible");
+        summary["usb_video_return_confirmation"]["captures"][0]["temporal_luma_delta_permille"] =
+            json!(crate::capture::TEMPORAL_LUMA_CORRUPTION_PERMILLE);
         assert!(validate_attended_launch_return_summary(&summary, output).is_err());
     }
 
@@ -32888,50 +32950,71 @@ mod tests {
     fn launch_return_temporal_confirmation_fails_closed() {
         use crate::capture::CaptureVisibility::{Black, Corrupted, SignalLost, Visible};
 
+        let confirmation = |visibility, temporal_luma_delta_permille| LaunchReturnUsbConfirmation {
+            visibility,
+            temporal_luma_delta_permille,
+        };
+
         assert_eq!(launch_return_effective_usb_visibility(Visible, &[]), None);
         assert_eq!(
             launch_return_effective_usb_visibility(Black, &[]),
             Some(Black)
         );
         assert_eq!(
-            launch_return_effective_usb_visibility(Visible, &[(Visible, false), (Visible, false)]),
+            launch_return_effective_usb_visibility(
+                Visible,
+                &[confirmation(Visible, 0), confirmation(Visible, 0)]
+            ),
             Some(Visible)
         );
         assert_eq!(
-            launch_return_effective_usb_visibility(Visible, &[(Visible, false), (Black, false)]),
+            launch_return_effective_usb_visibility(
+                Visible,
+                &[confirmation(Visible, 0), confirmation(Black, 0)]
+            ),
             Some(Black)
         );
         assert_eq!(
             launch_return_effective_usb_visibility(
                 Visible,
-                &[(Visible, false), (Corrupted, false)]
+                &[confirmation(Visible, 0), confirmation(Corrupted, 0)]
             ),
             Some(Corrupted)
         );
         assert_eq!(
             launch_return_effective_usb_visibility(
                 Visible,
-                &[(Visible, false), (SignalLost, false)]
+                &[confirmation(Visible, 0), confirmation(SignalLost, 0)]
             ),
             Some(SignalLost)
         );
         assert_eq!(
             launch_return_effective_usb_visibility(
                 Corrupted,
-                &[(Corrupted, true), (Corrupted, true)]
+                &[confirmation(Corrupted, 0), confirmation(Corrupted, 0)]
             ),
             Some(Corrupted)
         );
         assert_eq!(
             launch_return_effective_usb_visibility(
                 Corrupted,
-                &[(Corrupted, true), (Corrupted, false)]
+                &[confirmation(Corrupted, 0), confirmation(Corrupted, 0)]
             ),
             Some(Corrupted)
         );
         assert_eq!(
-            launch_return_effective_usb_visibility(Corrupted, &[(Corrupted, true)]),
+            launch_return_effective_usb_visibility(Corrupted, &[confirmation(Corrupted, 0)]),
             None
+        );
+        assert_eq!(
+            launch_return_effective_usb_visibility(
+                Visible,
+                &[
+                    confirmation(Visible, crate::capture::TEMPORAL_LUMA_CORRUPTION_PERMILLE),
+                    confirmation(Visible, 0)
+                ]
+            ),
+            Some(Corrupted)
         );
     }
 

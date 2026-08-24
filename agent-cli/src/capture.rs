@@ -17,13 +17,16 @@ const MOVIE_MIN_SECONDS: u64 = 1;
 const MOVIE_MAX_SECONDS: u64 = 60;
 const MOVIE_DURATION_TOLERANCE_SECONDS: f64 = 0.5;
 const MOVIE_MIN_DECODED_FRAMES_PER_SECOND: u64 = 5;
-// Calibrated against the fixed Phase 2 launcher scene using native capture
-// luma: a known-good return measured 25 permille and all 732 frames from the
-// preserved corruption movie measured 60..=622 permille. Forty-five keeps
-// equal distance from the nearest observed good and corrupt values.
 const SPATIAL_LUMA_SAMPLE_STEP: usize = 4;
 const STRONG_ROW_DISCONTINUITY: u8 = 12;
-const CORRUPTED_ROW_DISCONTINUITY_PERMILLE: u16 = 45;
+const TEMPORAL_LUMA_GRID_COLUMNS: usize = 16;
+const TEMPORAL_LUMA_GRID_ROWS: usize = 9;
+const TEMPORAL_LUMA_GRID_LEN: usize = TEMPORAL_LUMA_GRID_COLUMNS * TEMPORAL_LUMA_GRID_ROWS;
+const TEMPORAL_LUMA_IGNORED_RIGHT_COLUMNS: usize = 32;
+// Native one-second comparisons over two known-good Phase 2 movies measured
+// zero permille. Every usable comparison from the preserved moving-corruption
+// movie measured 11..=585 permille. Eight leaves margin on both sides.
+pub(crate) const TEMPORAL_LUMA_CORRUPTION_PERMILLE: u16 = 8;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct CaptureArtifact {
@@ -127,6 +130,7 @@ struct LumaAnalysis {
     maximum: u8,
     mean: u8,
     strong_row_discontinuity_permille: u16,
+    temporal_luma_grid: [u8; TEMPORAL_LUMA_GRID_LEN],
     visibility: CaptureVisibility,
 }
 
@@ -139,6 +143,15 @@ pub struct AnalyzedCaptureArtifact {
     pub luma_maximum: u8,
     pub luma_mean: u8,
     pub strong_row_discontinuity_permille: u16,
+    #[serde(skip)]
+    temporal_luma_grid: [u8; TEMPORAL_LUMA_GRID_LEN],
+}
+
+impl AnalyzedCaptureArtifact {
+    #[must_use]
+    pub(crate) fn temporal_luma_delta_permille(&self, other: &Self) -> u16 {
+        temporal_luma_delta_permille(&self.temporal_luma_grid, &other.temporal_luma_grid)
+    }
 }
 
 trait CaptureBackend {
@@ -189,6 +202,7 @@ pub fn execute_analyzed(output: Option<&Path>) -> AgentResult<AnalyzedCaptureArt
         luma_maximum: luma.maximum,
         luma_mean: luma.mean,
         strong_row_discontinuity_permille: luma.strong_row_discontinuity_permille,
+        temporal_luma_grid: luma.temporal_luma_grid,
     })
 }
 
@@ -501,12 +515,9 @@ fn analyze_luma(
     }
     let strong_row_discontinuity_permille =
         strong_row_discontinuity_permille(luma, width, height, row_bytes);
+    let temporal_luma_grid = temporal_luma_grid(luma, width, height, row_bytes)?;
     let visibility = if is_capture_card_signal_loss(luma, width, height, row_bytes) {
         CaptureVisibility::SignalLost
-    } else if (mean > 24 || maximum.saturating_sub(minimum) > 12)
-        && strong_row_discontinuity_permille >= CORRUPTED_ROW_DISCONTINUITY_PERMILLE
-    {
-        CaptureVisibility::Corrupted
     } else if mean > 24 || maximum.saturating_sub(minimum) > 12 {
         CaptureVisibility::Visible
     } else {
@@ -517,8 +528,60 @@ fn analyze_luma(
         maximum,
         mean,
         strong_row_discontinuity_permille,
+        temporal_luma_grid,
         visibility,
     })
+}
+
+#[must_use]
+#[cfg(any(target_os = "macos", test))]
+fn temporal_luma_grid(
+    luma: &[u8],
+    width: usize,
+    height: usize,
+    row_bytes: usize,
+) -> Option<[u8; TEMPORAL_LUMA_GRID_LEN]> {
+    if width < TEMPORAL_LUMA_GRID_COLUMNS || height < TEMPORAL_LUMA_GRID_ROWS {
+        return None;
+    }
+    let active_width = if width > TEMPORAL_LUMA_IGNORED_RIGHT_COLUMNS * 2 {
+        width - TEMPORAL_LUMA_IGNORED_RIGHT_COLUMNS
+    } else {
+        width
+    };
+    let mut totals = [0_u64; TEMPORAL_LUMA_GRID_LEN];
+    let mut samples = [0_u64; TEMPORAL_LUMA_GRID_LEN];
+    for y in (0..height).step_by(SPATIAL_LUMA_SAMPLE_STEP) {
+        let grid_y = y * TEMPORAL_LUMA_GRID_ROWS / height;
+        for x in (0..active_width).step_by(SPATIAL_LUMA_SAMPLE_STEP) {
+            let grid_x = x * TEMPORAL_LUMA_GRID_COLUMNS / active_width;
+            let index = grid_y * TEMPORAL_LUMA_GRID_COLUMNS + grid_x;
+            totals[index] += u64::from(luma[y * row_bytes + x]);
+            samples[index] += 1;
+        }
+    }
+    let mut grid = [0_u8; TEMPORAL_LUMA_GRID_LEN];
+    for (index, sample_count) in samples.into_iter().enumerate() {
+        if sample_count == 0 {
+            return None;
+        }
+        grid[index] = u8::try_from(totals[index] / sample_count).unwrap_or(u8::MAX);
+    }
+    Some(grid)
+}
+
+#[must_use]
+fn temporal_luma_delta_permille(
+    first: &[u8; TEMPORAL_LUMA_GRID_LEN],
+    second: &[u8; TEMPORAL_LUMA_GRID_LEN],
+) -> u16 {
+    let delta = first
+        .iter()
+        .zip(second)
+        .map(|(first, second)| u64::from(first.abs_diff(*second)))
+        .sum::<u64>();
+    let maximum = 255_u64 * TEMPORAL_LUMA_GRID_LEN as u64;
+    u16::try_from(delta * 1000 / maximum).unwrap_or(u16::MAX)
 }
 
 #[must_use]
@@ -679,8 +742,47 @@ mod tests {
         }
         corrupted[32 * 64 + 32] = 64;
         let analysis = analyze_luma(&corrupted, 64, 64, 64).unwrap();
-        assert_eq!(analysis.visibility, CaptureVisibility::Corrupted);
+        assert_eq!(analysis.visibility, CaptureVisibility::Visible);
         assert_eq!(analysis.strong_row_discontinuity_permille, 1000);
+    }
+
+    #[test]
+    fn temporal_luma_detects_moving_corruption_but_ignores_right_edge_noise() {
+        let width = 192;
+        let height = 108;
+        let baseline_pixels = vec![32; width * height];
+        let mut moving_band_pixels = baseline_pixels.clone();
+        moving_band_pixels[36 * width..72 * width].fill(96);
+
+        let baseline = analyze_luma(&baseline_pixels, width, height, width).unwrap();
+        let moving_band = analyze_luma(&moving_band_pixels, width, height, width).unwrap();
+        assert!(
+            temporal_luma_delta_permille(
+                &baseline.temporal_luma_grid,
+                &moving_band.temporal_luma_grid
+            ) >= TEMPORAL_LUMA_CORRUPTION_PERMILLE
+        );
+        assert_eq!(
+            temporal_luma_delta_permille(
+                &baseline.temporal_luma_grid,
+                &baseline.temporal_luma_grid
+            ),
+            0
+        );
+
+        let mut right_edge_noise_pixels = baseline_pixels;
+        for row in right_edge_noise_pixels.chunks_exact_mut(width) {
+            row[width - TEMPORAL_LUMA_IGNORED_RIGHT_COLUMNS..].fill(235);
+        }
+        let right_edge_noise =
+            analyze_luma(&right_edge_noise_pixels, width, height, width).unwrap();
+        assert_eq!(
+            temporal_luma_delta_permille(
+                &baseline.temporal_luma_grid,
+                &right_edge_noise.temporal_luma_grid
+            ),
+            0
+        );
     }
 
     #[test]
