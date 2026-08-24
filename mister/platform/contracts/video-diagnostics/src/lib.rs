@@ -150,48 +150,9 @@ impl RawScalerState {
         self.words[RAW_SCALER_STATE_FRAME_SEQUENCE_WORD]
     }
 
-    pub fn active_pixels(&self) -> u32 {
-        u32::from(self.words[RAW_SCALER_STATE_ACTIVE_PIXELS_LOW_WORD])
-            | (u32::from(
-                self.words[RAW_SCALER_STATE_ACTIVE_PIXELS_HIGH_WORD]
-                    & RAW_SCALER_STATE_ACTIVE_PIXELS_UPPER_MASK,
-            ) << 16)
-    }
-
-    pub fn active_lines(&self) -> u16 {
-        (self.words[RAW_SCALER_STATE_LINES_VARIATION_WORD] >> RAW_SCALER_STATE_ACTIVE_LINES_BIT)
-            & RAW_SCALER_STATE_ACTIVE_LINES_MASK
-    }
-
-    pub fn variation_count(&self) -> u8 {
-        ((self.words[RAW_SCALER_STATE_LINES_VARIATION_WORD]
-            >> RAW_SCALER_STATE_VARIATION_COUNT_BIT)
-            & RAW_SCALER_STATE_VARIATION_COUNT_MASK) as u8
-    }
-
-    fn crc32(&self, low_word: usize, high_word: usize) -> u32 {
-        u32::from(self.words[low_word]) | (u32::from(self.words[high_word]) << 16)
-    }
-
-    pub fn newest_crc32c(&self) -> u32 {
-        self.crc32(
-            RAW_SCALER_STATE_NEWEST_CRC_LOW_WORD,
-            RAW_SCALER_STATE_NEWEST_CRC_HIGH_WORD,
-        )
-    }
-
-    pub fn previous_crc32c(&self) -> u32 {
-        self.crc32(
-            RAW_SCALER_STATE_PREVIOUS_CRC_LOW_WORD,
-            RAW_SCALER_STATE_PREVIOUS_CRC_HIGH_WORD,
-        )
-    }
-
-    pub fn oldest_crc32c(&self) -> u32 {
-        self.crc32(
-            RAW_SCALER_STATE_OLDEST_CRC_LOW_WORD,
-            RAW_SCALER_STATE_OLDEST_CRC_HIGH_WORD,
-        )
+    pub fn ordered_signature(&self) -> u32 {
+        u32::from(self.words[RAW_SCALER_STATE_ORDERED_SIGNATURE_LOW_WORD])
+            | (u32::from(self.words[RAW_SCALER_STATE_ORDERED_SIGNATURE_HIGH_WORD]) << 16)
     }
 }
 
@@ -713,12 +674,6 @@ pub fn decode_raw_scaler_state(words: &[u16]) -> Result<RawScalerState, String> 
             "raw scaler ordered-frame flags contain reserved bits: 0x{flags:04x}"
         ));
     }
-    if words[RAW_SCALER_STATE_ACTIVE_PIXELS_HIGH_WORD]
-        & RAW_SCALER_STATE_ACTIVE_PIXELS_HIGH_RESERVED_ZERO_MASK
-        != 0
-    {
-        return Err("raw scaler ordered-frame pixel count has reserved bits".to_string());
-    }
     let mut owned = [0; RAW_SCALER_STATE_WORDS];
     owned.copy_from_slice(words);
     let decoded = RawScalerState { words: owned };
@@ -733,30 +688,6 @@ pub fn decode_raw_scaler_state(words: &[u16]) -> Result<RawScalerState, String> 
             );
         }
         return Ok(decoded);
-    }
-    if flags & RAW_SCALER_STATE_FLAG_NONEMPTY == 0 {
-        return Err("raw scaler ordered-frame valid evidence is not marked nonempty".to_string());
-    }
-    if decoded.active_pixels() == 0
-        || decoded.active_lines() == 0
-        || u32::from(decoded.active_lines()) > decoded.active_pixels()
-    {
-        return Err(format!(
-            "raw scaler ordered-frame geometry is impossible: pixels={} lines={}",
-            decoded.active_pixels(),
-            decoded.active_lines()
-        ));
-    }
-    if decoded.variation_count() > 8 {
-        return Err(format!(
-            "raw scaler ordered-frame variation count {} exceeds eight comparisons",
-            decoded.variation_count()
-        ));
-    }
-    let window_full = flags & RAW_SCALER_STATE_FLAG_VARIATION_WINDOW_FULL != 0;
-    let saturated = flags & RAW_SCALER_STATE_FLAG_VARIATION_SATURATED != 0;
-    if saturated != (window_full && decoded.variation_count() == 8) {
-        return Err("raw scaler ordered-frame variation flags are incoherent".to_string());
     }
     Ok(decoded)
 }
@@ -916,19 +847,10 @@ mod tests {
             GET_RAW_SCALER_STATE,
             RAW_SCALER_STATE_SCHEMA,
         );
-        words[RAW_SCALER_STATE_FLAGS_WORD] = RAW_SCALER_STATE_FLAG_FRAME_VALID
-            | RAW_SCALER_STATE_FLAG_NONEMPTY
-            | RAW_SCALER_STATE_FLAG_VARIATION_WINDOW_FULL;
+        words[RAW_SCALER_STATE_FLAGS_WORD] = RAW_SCALER_STATE_FLAG_FRAME_VALID;
         words[RAW_SCALER_STATE_FRAME_SEQUENCE_WORD] = 0x1234;
-        words[RAW_SCALER_STATE_ACTIVE_PIXELS_LOW_WORD] = 0xa000;
-        words[RAW_SCALER_STATE_ACTIVE_PIXELS_HIGH_WORD] = 0x001f;
-        words[RAW_SCALER_STATE_LINES_VARIATION_WORD] = 1080 | (3 << 12);
-        words[RAW_SCALER_STATE_NEWEST_CRC_LOW_WORD] = 0x5678;
-        words[RAW_SCALER_STATE_NEWEST_CRC_HIGH_WORD] = 0x1234;
-        words[RAW_SCALER_STATE_PREVIOUS_CRC_LOW_WORD] = 0xdef0;
-        words[RAW_SCALER_STATE_PREVIOUS_CRC_HIGH_WORD] = 0x9abc;
-        words[RAW_SCALER_STATE_OLDEST_CRC_LOW_WORD] = 0x3210;
-        words[RAW_SCALER_STATE_OLDEST_CRC_HIGH_WORD] = 0x7654;
+        words[RAW_SCALER_STATE_ORDERED_SIGNATURE_LOW_WORD] = 0x5678;
+        words[RAW_SCALER_STATE_ORDERED_SIGNATURE_HIGH_WORD] = 0x1234;
         words[RAW_SCALER_STATE_CRC_WORD] = message_crc_with_schema(
             GET_RAW_SCALER_STATE,
             RAW_SCALER_STATE_SCHEMA,
@@ -937,27 +859,18 @@ mod tests {
         let decoded = decode_raw_scaler_state(&words).unwrap();
         assert!(decoded.frame_valid());
         assert_eq!(decoded.frame_sequence(), 0x1234);
-        assert_eq!(decoded.active_pixels(), 2_072_576);
-        assert_eq!(decoded.active_lines(), 1080);
-        assert_eq!(decoded.variation_count(), 3);
-        assert_eq!(decoded.newest_crc32c(), 0x1234_5678);
-        assert_eq!(decoded.previous_crc32c(), 0x9abc_def0);
-        assert_eq!(decoded.oldest_crc32c(), 0x7654_3210);
+        assert_eq!(decoded.ordered_signature(), 0x1234_5678);
     }
 
     #[test]
-    fn raw_scaler_state_rejects_crc_reserved_bits_and_incoherent_geometry() {
+    fn raw_scaler_state_rejects_crc_reserved_bits_and_prepublication_payload() {
         let mut words = zero_hdmi_words::<RAW_SCALER_STATE_WORDS>(
             GET_RAW_SCALER_STATE,
             RAW_SCALER_STATE_SCHEMA,
         );
         words[RAW_SCALER_STATE_CRC_WORD] ^= 1;
         assert!(decode_raw_scaler_state(&words).is_err());
-        words[RAW_SCALER_STATE_FLAGS_WORD] =
-            RAW_SCALER_STATE_FLAG_FRAME_VALID | RAW_SCALER_STATE_FLAG_NONEMPTY;
-        words[RAW_SCALER_STATE_ACTIVE_PIXELS_LOW_WORD] = 1;
-        words[RAW_SCALER_STATE_ACTIVE_PIXELS_HIGH_WORD] = 0x0100;
-        words[RAW_SCALER_STATE_LINES_VARIATION_WORD] = 1;
+        words[RAW_SCALER_STATE_FLAGS_WORD] = 1 << 15;
         words[RAW_SCALER_STATE_CRC_WORD] = message_crc_with_schema(
             GET_RAW_SCALER_STATE,
             RAW_SCALER_STATE_SCHEMA,
@@ -965,9 +878,8 @@ mod tests {
         );
         assert!(decode_raw_scaler_state(&words).is_err());
 
-        words[RAW_SCALER_STATE_ACTIVE_PIXELS_HIGH_WORD] = 0;
-        words[RAW_SCALER_STATE_ACTIVE_PIXELS_LOW_WORD] = 1;
-        words[RAW_SCALER_STATE_LINES_VARIATION_WORD] = 2;
+        words[RAW_SCALER_STATE_FLAGS_WORD] = 0;
+        words[RAW_SCALER_STATE_ORDERED_SIGNATURE_LOW_WORD] = 1;
         words[RAW_SCALER_STATE_CRC_WORD] = message_crc_with_schema(
             GET_RAW_SCALER_STATE,
             RAW_SCALER_STATE_SCHEMA,

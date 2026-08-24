@@ -46,4 +46,4 @@ set_net_delay -max 10.0 \
 	-from $magik_raw_frame_generation \
 	-to $magik_raw_frame_generation_meta
 
-post_message -type info "MagiK diagnostics CDC analysis applied: scaler_completion_request_ack scaler_copy_tail raw_scaler_ordered_frame"
+post_message -type info "MagiK diagnostics CDC analysis applied: scaler_completion_request_ack scaler_copy_tail raw_scaler_ordered_signature"

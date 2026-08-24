@@ -76,6 +76,15 @@ Info (332114): Report Metastability: Found 7 synchronizer chains.
 Info (332114): Fraction of Chains for which MTBFs Could Not be Calculated: 0.571429
 Info: MagiK diagnostics CDC analysis applied: scaler_completion_request_ack
 """
+RAW_SCALER_SYNC_ASSIGNMENTS = quartus_assignment_section(
+    "mister_magik_raw_scaler_ordered_frame:magik_raw_scaler_ordered_frame",
+    ("generation_meta", "generation_sync"),
+)
+EXPERIMENTAL_CUSTOM_SYNC = SYNC_ASSIGNMENTS + RAW_SCALER_SYNC_ASSIGNMENTS + """\
+Info (332114): Report Metastability: Found 8 synchronizer chains.
+Info (332114): Fraction of Chains for which MTBFs Could Not be Calculated: 0.500000
+Info: MagiK diagnostics CDC analysis applied: scaler_completion_request_ack
+"""
 
 
 def metastability_chain(
@@ -119,6 +128,29 @@ VALID_DIAGNOSTIC_REPORTS = {
         + "".join(
             metastability_chain(index, source, node, registers)
             for index, (source, node, registers) in enumerate(METASTABILITY_CHAINS, 1)
+        )
+    ),
+}
+EXPERIMENTAL_DIAGNOSTIC_REPORTS = {
+    **VALID_DIAGNOSTIC_REPORTS,
+    "menu.magik-diagnostic-cdc-net-delay.rpt": (
+        VALID_DIAGNOSTIC_REPORTS["menu.magik-diagnostic-cdc-net-delay.rpt"]
+        + "; set_net_delay ; 1.050 ; 10.000 ; 8.950 ; sources ; destinations ; max ;\n"
+        + net_delay_detail(
+            "mister_magik_raw_scaler_ordered_frame:magik_raw_scaler_ordered_frame|source_generation",
+            "mister_magik_raw_scaler_ordered_frame:magik_raw_scaler_ordered_frame|generation_meta",
+        )
+    ),
+    "menu.magik-diagnostic-metastability.rpt": (
+        VALID_DIAGNOSTIC_REPORTS["menu.magik-diagnostic-metastability.rpt"]
+        + metastability_chain(
+            3,
+            "mister_magik_raw_scaler_ordered_frame:magik_raw_scaler_ordered_frame|source_generation",
+            "mister_magik_raw_scaler_ordered_frame:magik_raw_scaler_ordered_frame|generation_meta",
+            (
+                "mister_magik_raw_scaler_ordered_frame:magik_raw_scaler_ordered_frame|generation_meta",
+                "mister_magik_raw_scaler_ordered_frame:magik_raw_scaler_ordered_frame|generation_sync",
+            ),
         )
     ),
 }
@@ -257,11 +289,19 @@ class QuartusDeltaTest(unittest.TestCase):
         patched = (
             baseline.replace("setup slack is 0.660", "setup slack is 0.389")
             .replace("0.660               0.000", "0.389               0.000")
-            + CUSTOM_SYNC.replace("Found 7 synchronizer chains", "Found 6 synchronizer chains")
-            .replace("Could Not be Calculated: 0.571429", "Could Not be Calculated: 0.500000")
+            + EXPERIMENTAL_CUSTOM_SYNC.replace(
+                "Found 8 synchronizer chains", "Found 6 synchronizer chains"
+            ).replace(
+                "Could Not be Calculated: 0.500000",
+                "Could Not be Calculated: 0.333333",
+            )
         )
         result, payload = self.run_check(
-            BASE, patched, baseline, experimental_diagnostic=True
+            BASE,
+            patched,
+            baseline,
+            diagnostic_reports=EXPERIMENTAL_DIAGNOSTIC_REPORTS,
+            experimental_diagnostic=True,
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(payload["signoff_profile"], "experimental_raw_scaler")
@@ -283,9 +323,10 @@ class QuartusDeltaTest(unittest.TestCase):
         )
         result, payload = self.run_check(
             BASE,
-            BASE + CUSTOM_SYNC,
+            BASE + EXPERIMENTAL_CUSTOM_SYNC,
             BASE,
             resources,
+            diagnostic_reports=EXPERIMENTAL_DIAGNOSTIC_REPORTS,
             experimental_diagnostic=True,
         )
         self.assertEqual(result.returncode, 0, result.stderr)

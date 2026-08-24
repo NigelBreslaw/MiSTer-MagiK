@@ -258,39 +258,22 @@ for name, record in path_activity["records"].items():
     platform_magics.add(record["magic"])
 raw_scaler = hdmi_evidence["raw_scaler_state"]
 if raw_scaler != {
-    "schema": 7,
+    "schema": 8,
     "command": 0x67,
     "magic": 0x4D57,
-    "word_count": 13,
+    "word_count": 6,
     "words": [
         "schema",
         "flags",
         "frame_sequence",
-        "active_pixels_low",
-        "active_pixels_high",
-        "lines_variation",
-        "newest_crc_low",
-        "newest_crc_high",
-        "previous_crc_low",
-        "previous_crc_high",
-        "oldest_crc_low",
-        "oldest_crc_high",
+        "ordered_signature_low",
+        "ordered_signature_high",
         "crc",
     ],
-    "flags": {
-        "frame_valid": 0,
-        "nonempty": 1,
-        "variation_window_full": 2,
-        "variation_saturated": 3,
-    },
-    "reserved_zero_masks": {"flags": 0xFFF0, "active_pixels_high": 0xFF00},
-    "fields": {
-        "active_pixels_upper": {"word": "active_pixels_high", "bit": 0, "width": 8},
-        "active_lines": {"word": "lines_variation", "bit": 0, "width": 12},
-        "variation_count": {"word": "lines_variation", "bit": 12, "width": 4},
-    },
+    "flags": {"frame_valid": 0},
+    "reserved_zero_masks": {"flags": 0xFFFE},
 }:
-    raise SystemExit("raw scaler ordered-frame schema 7 changed without an ABI update")
+    raise SystemExit("raw scaler ordered-signature schema 8 changed without an ABI update")
 if raw_scaler["command"] in platform_commands:
     raise SystemExit("raw scaler ordered-frame command overlaps an existing platform command")
 if raw_scaler["magic"] in platform_magics:

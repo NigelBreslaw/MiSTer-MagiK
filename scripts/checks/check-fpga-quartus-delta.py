@@ -102,6 +102,16 @@ EXPECTED_METASTABILITY_CHAINS = {
         ),
     },
 }
+EXPERIMENTAL_RAW_SCALER_METASTABILITY_CHAIN = {
+    "raw_scaler_generation": {
+        "source": "mister_magik_raw_scaler_ordered_frame:magik_raw_scaler_ordered_frame|source_generation",
+        "synchronization_node": "mister_magik_raw_scaler_ordered_frame:magik_raw_scaler_ordered_frame|generation_meta",
+        "registers": (
+            "mister_magik_raw_scaler_ordered_frame:magik_raw_scaler_ordered_frame|generation_meta",
+            "mister_magik_raw_scaler_ordered_frame:magik_raw_scaler_ordered_frame|generation_sync",
+        ),
+    }
+}
 EXPECTED_CDC_ANALYSIS_LABELS: frozenset[str] = frozenset(
     {"scaler_completion_request_ack"}
 )
@@ -123,6 +133,11 @@ EXPECTED_NET_DELAY_PATHS = {
     "completion_ack": re.compile(
         r"o_readdataack_sync2[^\n]*avl_completion_ack_meta", re.IGNORECASE
     ),
+}
+EXPERIMENTAL_RAW_SCALER_NET_DELAY_PATH = {
+    "raw_scaler_generation": re.compile(
+        r"source_generation[^\n]*generation_meta", re.IGNORECASE
+    )
 }
 
 
@@ -208,12 +223,13 @@ def parse_mtbf_years(value: str) -> float | None:
 
 def parse_expected_metastability_chains(
     report: str,
+    expected_chains: dict[str, dict[str, object]],
 ) -> tuple[dict[str, float | None], list[str]]:
     """Read exact completion-chain summaries and their synchronization registers."""
     blocks = re.split(r"(?=Synchronizer Chain #\d+:)", report)[1:]
     mtbf_years: dict[str, float | None] = {}
     missing: list[str] = []
-    for label, expected in EXPECTED_METASTABILITY_CHAINS.items():
+    for label, expected in expected_chains.items():
         source = str(expected["source"])
         synchronization_node = str(expected["synchronization_node"])
         block = next(
@@ -415,7 +431,9 @@ def estimated_calculable_chains(chain_counts: list[int], uncalculated_fractions:
 
 
 def validate_diagnostic_reports(
-    reports: dict[str, str], analysis_labels: Counter[str]
+    reports: dict[str, str],
+    analysis_labels: Counter[str],
+    experimental_diagnostic: bool,
 ) -> tuple[list[str], dict[str, object]]:
     reasons: list[str] = []
     missing_reports = sorted(DIAGNOSTIC_REPORT_NAMES - reports.keys())
@@ -432,7 +450,13 @@ def validate_diagnostic_reports(
     analysis_counts: dict[str, int | None] = {}
     detailed_path_counts: dict[str, int | None] = {}
     minimum_slacks: dict[str, float | None] = {}
-    for name, (command, expected_count) in EXPECTED_CDC_REPORT_ANALYSES.items():
+    expected_report_analyses = dict(EXPECTED_CDC_REPORT_ANALYSES)
+    if experimental_diagnostic:
+        expected_report_analyses["menu.magik-diagnostic-cdc-net-delay.rpt"] = (
+            "set_net_delay",
+            3,
+        )
+    for name, (command, expected_count) in expected_report_analyses.items():
         text = reports.get(name, "")
         summary_rows = list(
             re.finditer(
@@ -461,13 +485,16 @@ def validate_diagnostic_reports(
                 )
             )
             detailed_path_counts[name] = len(detailed_rows)
-            if len(detailed_rows) != 2:
+            expected_net_delay_paths = dict(EXPECTED_NET_DELAY_PATHS)
+            if experimental_diagnostic:
+                expected_net_delay_paths.update(EXPERIMENTAL_RAW_SCALER_NET_DELAY_PATH)
+            if len(detailed_rows) != len(expected_net_delay_paths):
                 reasons.append("diagnostic_cdc_analysis_count")
             detailed_path_identities = {
                 label: sum(
                     1 for row in detailed_rows if pattern.search(row.group(0))
                 )
-                for label, pattern in EXPECTED_NET_DELAY_PATHS.items()
+                for label, pattern in expected_net_delay_paths.items()
             }
             detailed_path_counts.update(
                 {
@@ -475,10 +502,7 @@ def validate_diagnostic_reports(
                     for label, count in detailed_path_identities.items()
                 }
             )
-            expected_identity_counts = {
-                "completion_request": 1,
-                "completion_ack": 1,
-            }
+            expected_identity_counts = {label: 1 for label in expected_net_delay_paths}
             if detailed_path_identities != expected_identity_counts:
                 reasons.append("diagnostic_cdc_path_identity_mismatch")
             detailed_slacks = [finite_number(row.group(1)) for row in detailed_rows]
@@ -488,8 +512,11 @@ def validate_diagnostic_reports(
                 reasons.append("diagnostic_cdc_slack_negative")
 
     metastability = reports.get("menu.magik-diagnostic-metastability.rpt", "")
-    custom_mtbf_years, missing_metastability_chains = (
-        parse_expected_metastability_chains(metastability)
+    expected_metastability_chains = dict(EXPECTED_METASTABILITY_CHAINS)
+    if experimental_diagnostic:
+        expected_metastability_chains.update(EXPERIMENTAL_RAW_SCALER_METASTABILITY_CHAIN)
+    custom_mtbf_years, missing_metastability_chains = parse_expected_metastability_chains(
+        metastability, expected_metastability_chains
     )
     if not metastability.strip() or re.search(
         r"\bno (?:valid )?(?:chains?|results?)\b", metastability, re.IGNORECASE
@@ -732,9 +759,17 @@ def compare(
         reasons.append("synchronizer_chain_count_mismatch")
     sync_assignments = patched["sync_assignments"]
     assert isinstance(sync_assignments, set)
+    expected_sync_assignment_suffixes = list(EXPECTED_SYNC_ASSIGNMENT_SUFFIXES)
+    if experimental_diagnostic:
+        expected_sync_assignment_suffixes.extend(
+            (
+                "mister_magik_raw_scaler_ordered_frame:magik_raw_scaler_ordered_frame|generation_meta",
+                "mister_magik_raw_scaler_ordered_frame:magik_raw_scaler_ordered_frame|generation_sync",
+            )
+        )
     missing_sync_assignments = [
         suffix
-        for suffix in EXPECTED_SYNC_ASSIGNMENT_SUFFIXES
+        for suffix in expected_sync_assignment_suffixes
         if not any(
             assignment.endswith(suffix) or f"{suffix}[" in assignment
             for assignment in sync_assignments
@@ -754,6 +789,7 @@ def compare(
         and patched_calculable_chains
         == baseline_calculable_chains
         + EXPECTED_ADDED_CALCULABLE_COMPLETION_SYNCHRONIZER_CHAINS
+        + (1 if experimental_diagnostic else 0)
     )
     if not custom_assignment_seen:
         reasons.append("custom_synchronizer_missing")
@@ -764,7 +800,7 @@ def compare(
     diagnostic_reports = patched["diagnostic_reports"]
     assert isinstance(analysis_labels, Counter) and isinstance(diagnostic_reports, dict)
     diagnostic_reasons, diagnostic_details = validate_diagnostic_reports(
-        diagnostic_reports, analysis_labels
+        diagnostic_reports, analysis_labels, experimental_diagnostic
     )
     reasons.extend(diagnostic_reasons)
 

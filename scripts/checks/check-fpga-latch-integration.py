@@ -162,6 +162,7 @@ def main() -> None:
     diagnostics_output = source_dir / "mister_magik_video_diagnostics_output.sv"
     diagnostics_protocol = source_dir / "mister_magik_video_diagnostics_protocol.svh"
     diagnostics_sdc = source_dir / "mister_magik_video_diagnostics.sdc"
+    local_signoff_profile = source_dir / "local-signoff-profile.txt"
     timing_report = source_dir / "report_top_timing.tcl"
     integration_tb = source_dir / "tb_mister_magik_sys_top_integration.sv"
     raw_scaler_diagnostic_tb = (
@@ -268,6 +269,8 @@ def main() -> None:
     control_source = diagnostics_control.read_text()
     avalon_source = diagnostics_avalon.read_text()
     output_source = diagnostics_output.read_text()
+    if local_signoff_profile.read_text().strip() != "experimental_raw_scaler-v1":
+        fail("ordered-signature candidate lacks its exact local signoff profile identity")
     if control_source.count("module mister_magik_raw_scaler_ordered_frame (") != 1:
         fail("raw ordered-frame observer design unit is missing or ambiguous")
     if re.search(r"(?m)^\s*module\b", avalon_source + output_source):
@@ -278,17 +281,14 @@ def main() -> None:
         "isolated_de <= raw_de;",
         "isolated_hs <= raw_hs;",
         "isolated_vs <= raw_vs;",
-        "crc32c_update_byte",
-        "crc32c_update_pixel",
-        "32'h82f63b78",
-        "8'hf0",
-        "8'hf1",
-        "8'ha0 | {7'd0, isolated_hs}",
-        "8'ha2 | {7'd0, isolated_hs}",
-        "published_oldest_crc <= published_previous_crc;",
-        "published_previous_crc <= published_newest_crc;",
-        "published_newest_crc <= completed_crc;",
-        "next_history = {variation_history[6:0], changed};",
+        "function automatic [31:0] ordered_signature_update;",
+        "mixed = signature_in ^ token_in;",
+        "(mixed[0] ? SIGNATURE_POLYNOMIAL : 32'd0);",
+        "pixel_token(isolated_rgb, !previous_de, isolated_hs)",
+        "line_end_token(isolated_hs)",
+        "published_signature <= completed_signature;",
+        "wire [63:0] source_state",
+        "reg [63:0] snapshot_state",
         "source_generation <= ~source_generation;",
         "generation_meta <= source_generation;",
         "generation_sync <= generation_meta;",
@@ -330,6 +330,16 @@ def main() -> None:
         "mismatch_latched",
         "first_active_rgb",
         "variation_seen",
+        "crc32c_update_byte",
+        "crc32c_update_pixel",
+        "published_oldest_crc",
+        "published_previous_crc",
+        "published_newest_crc",
+        "variation_history",
+        "comparison_count",
+        "frame_pixels",
+        "frame_lines",
+        "(* preserve *) reg [63:0] snapshot_state",
         "pipeline_state",
         "pipeline_generation",
         "avl_magik",
@@ -430,7 +440,7 @@ def main() -> None:
         "{*mister_magik_raw_scaler_ordered_frame:magik_raw_scaler_ordered_frame|generation_meta} 1",
         "-from $magik_raw_frame_generation",
         "-to $magik_raw_frame_generation_meta",
-        "MagiK diagnostics CDC analysis applied: scaler_completion_request_ack scaler_copy_tail raw_scaler_ordered_frame",
+        "MagiK diagnostics CDC analysis applied: scaler_completion_request_ack scaler_copy_tail raw_scaler_ordered_signature",
         "*ascal:ascal|o_readdataack_sync2*",
         "scaler_copy_tail",
     ):

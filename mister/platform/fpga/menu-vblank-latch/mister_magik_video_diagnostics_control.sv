@@ -25,7 +25,12 @@ module mister_magik_raw_scaler_ordered_frame (
 
 `include "mister_magik_video_diagnostics_protocol.svh"
 
-	localparam [31:0] CRC32C_INITIAL = 32'hffffffff;
+	localparam [31:0] SIGNATURE_INITIAL = 32'h6d5a56da;
+	localparam [31:0] SIGNATURE_POLYNOMIAL = 32'h82f63b78;
+	localparam [7:0] TOKEN_PIXEL = 8'h01;
+	localparam [7:0] TOKEN_LINE_START = 8'h80;
+	localparam [7:0] TOKEN_HS = 8'h40;
+	localparam [7:0] TOKEN_LINE_END = 8'ha0;
 
 	// Observer-only isolation. These registers are the sole direct consumers
 	// of the production ascal output nets.
@@ -38,35 +43,20 @@ module mister_magik_raw_scaler_ordered_frame (
 	reg previous_de = 1'b0;
 	reg previous_vs = 1'b0;
 	reg frame_open = 1'b0;
-	reg [31:0] frame_crc = CRC32C_INITIAL;
-	reg [23:0] frame_pixels = 24'd0;
-	reg [11:0] frame_lines = 12'd0;
+	reg frame_nonempty = 1'b0;
+	reg [31:0] frame_signature = SIGNATURE_INITIAL;
 
 	reg [15:0] published_flags = 16'd0;
 	reg [15:0] published_sequence = 16'd0;
-	reg [23:0] published_pixels = 24'd0;
-	reg [11:0] published_lines = 12'd0;
-	reg [3:0] published_variation = 4'd0;
-	reg [31:0] published_newest_crc = 32'd0;
-	reg [31:0] published_previous_crc = 32'd0;
-	reg [31:0] published_oldest_crc = 32'd0;
-	reg [7:0] variation_history = 8'd0;
-	reg [3:0] comparison_count = 4'd0;
+	reg [31:0] published_signature = 32'd0;
 	(* preserve *) reg source_generation = 1'b0;
 
-	// Words 1..11 in ascending response order. The source state remains stable
-	// between completed nonempty frames; generation changes only after all of
-	// these source registers are updated on the same clk_hdmi edge.
-	wire [175:0] source_state = {
-		published_oldest_crc[31:16],
-		published_oldest_crc[15:0],
-		published_previous_crc[31:16],
-		published_previous_crc[15:0],
-		published_newest_crc[31:16],
-		published_newest_crc[15:0],
-		published_variation, published_lines,
-		8'd0, published_pixels[23:16],
-		published_pixels[15:0],
+	// Words 1..4 in ascending response order. The source state remains stable
+	// between completed nonempty frames; generation changes only after every
+	// source register is updated on the same clk_hdmi edge.
+	wire [63:0] source_state = {
+		published_signature[31:16],
+		published_signature[15:0],
 		published_sequence,
 		published_flags
 	};
@@ -80,8 +70,8 @@ module mister_magik_raw_scaler_ordered_frame (
 
 	reg has_command = 1'b0;
 	reg command_selected = 1'b0;
-	reg [4:0] word_count = 5'd0;
-	(* preserve *) reg [175:0] snapshot_state = 176'd0;
+	reg [2:0] word_count = 3'd0;
+	reg [63:0] snapshot_state = 64'd0;
 	reg [15:0] tx_crc = 16'hffff;
 	reg [15:0] response_word;
 
@@ -96,41 +86,42 @@ module mister_magik_raw_scaler_ordered_frame (
 		(command_data && selected_command &&
 		 (word_count < MAGIK_RAW_SCALER_STATE_WORDS));
 
-	function automatic [31:0] crc32c_update_byte;
-		input [31:0] crc_in;
-		input [7:0] byte_in;
-		integer bit_index;
-		reg [31:0] value;
+	// One reflected Galois step consumes one qualified sample token. This is
+	// deliberately one shallow update per clk_hdmi edge, rather than four
+	// cascaded byte-CRC transforms. Active RGB and DE/HS line boundaries remain
+	// ordered in the signature.
+	function automatic [31:0] ordered_signature_update;
+		input [31:0] signature_in;
+		input [31:0] token_in;
+		reg [31:0] mixed;
 		begin
-			value = crc_in ^ byte_in;
-			for(bit_index = 0; bit_index < 8; bit_index = bit_index + 1)
-				value = value[0] ? ((value >> 1) ^ 32'h82f63b78) :
-					(value >> 1);
-			crc32c_update_byte = value;
+			mixed = signature_in ^ token_in;
+			ordered_signature_update = (mixed >> 1) ^
+				(mixed[0] ? SIGNATURE_POLYNOMIAL : 32'd0);
 		end
 	endfunction
 
-	function automatic [31:0] crc32c_update_pixel;
-		input [31:0] crc_in;
+	function automatic [31:0] pixel_token;
 		input [23:0] rgb;
-		reg [31:0] value;
+		input line_start;
+		input hs;
 		begin
-			value = crc32c_update_byte(crc_in, 8'h01);
-			value = crc32c_update_byte(value, rgb[23:16]);
-			value = crc32c_update_byte(value, rgb[15:8]);
-			crc32c_update_pixel = crc32c_update_byte(value, rgb[7:0]);
+			pixel_token = {
+				TOKEN_PIXEL |
+				(line_start ? TOKEN_LINE_START : 8'd0) |
+				(hs ? TOKEN_HS : 8'd0),
+				rgb
+			};
 		end
 	endfunction
 
-	function automatic [3:0] popcount8;
-		input [7:0] value;
-		integer index;
-		reg [3:0] count;
+	function automatic [31:0] line_end_token;
+		input hs;
 		begin
-			count = 4'd0;
-			for(index = 0; index < 8; index = index + 1)
-				count = count + value[index];
-			popcount8 = count;
+			line_end_token = {
+				TOKEN_LINE_END | (hs ? TOKEN_HS : 8'd0),
+				24'd0
+			};
 		end
 	endfunction
 
@@ -160,14 +151,9 @@ module mister_magik_raw_scaler_ordered_frame (
 		crc16_update_word(MAGIK_RAW_SCALER_STATE_HEADER_CRC,
 			MAGIK_RAW_SCALER_STATE_SCHEMA);
 
-	// The observer consumes the previous cycle's isolated values. Variables
-	// make delimiter ordering explicit when multiple tokens share one sample.
+	// The observer consumes the previous cycle's isolated values.
 	always @(posedge clk_hdmi or posedge reset_active) begin : ordered_frame
-		reg [31:0] crc_value;
-		reg [31:0] completed_crc;
-		reg [7:0] next_history;
-		reg changed;
-		reg [3:0] next_variation;
+		reg [31:0] completed_signature;
 		if(reset_active) begin
 			isolated_ce <= 1'b0;
 			isolated_rgb <= 24'd0;
@@ -177,19 +163,11 @@ module mister_magik_raw_scaler_ordered_frame (
 			previous_de <= 1'b0;
 			previous_vs <= 1'b0;
 			frame_open <= 1'b0;
-			frame_crc <= CRC32C_INITIAL;
-			frame_pixels <= 24'd0;
-			frame_lines <= 12'd0;
+			frame_nonempty <= 1'b0;
+			frame_signature <= SIGNATURE_INITIAL;
 			published_flags <= 16'd0;
 			published_sequence <= 16'd0;
-			published_pixels <= 24'd0;
-			published_lines <= 12'd0;
-			published_variation <= 4'd0;
-			published_newest_crc <= 32'd0;
-			published_previous_crc <= 32'd0;
-			published_oldest_crc <= 32'd0;
-			variation_history <= 8'd0;
-			comparison_count <= 4'd0;
+			published_signature <= 32'd0;
 			source_generation <= 1'b0;
 		end
 		else begin
@@ -204,65 +182,27 @@ module mister_magik_raw_scaler_ordered_frame (
 				previous_vs <= isolated_vs;
 
 				if(frame_start) begin
-					if(frame_open && frame_pixels != 24'd0) begin
-						crc_value = frame_crc;
-						if(previous_de)
-							crc_value = crc32c_update_byte(crc_value,
-								8'ha2 | {7'd0, isolated_hs});
-						completed_crc = crc32c_update_byte(crc_value, 8'hf1) ^
-							32'hffffffff;
-						changed = published_flags[0] &&
-							(completed_crc != published_newest_crc ||
-							 frame_pixels != published_pixels ||
-							 frame_lines != published_lines);
-						next_history = {variation_history[6:0], changed};
-						next_variation = popcount8(next_history);
-
+					completed_signature = previous_de ?
+						ordered_signature_update(frame_signature,
+							line_end_token(isolated_hs)) : frame_signature;
+					if(frame_open && frame_nonempty) begin
 						published_sequence <= published_sequence + 1'd1;
-						published_pixels <= frame_pixels;
-						published_lines <= frame_lines;
-						published_variation <= next_variation;
-						published_oldest_crc <= published_previous_crc;
-						published_previous_crc <= published_newest_crc;
-						published_newest_crc <= completed_crc;
-						variation_history <= next_history;
-						if(comparison_count < 4'd8)
-							comparison_count <= comparison_count + 1'd1;
-						published_flags <=
-							MAGIK_RAW_SCALER_STATE_FLAG_FRAME_VALID |
-							MAGIK_RAW_SCALER_STATE_FLAG_NONEMPTY |
-							((comparison_count >= 4'd7) ?
-								MAGIK_RAW_SCALER_STATE_FLAG_VARIATION_WINDOW_FULL :
-								16'd0) |
-							((next_variation == 4'd8) ?
-								MAGIK_RAW_SCALER_STATE_FLAG_VARIATION_SATURATED :
-								16'd0);
+						published_signature <= completed_signature;
+						published_flags <= MAGIK_RAW_SCALER_STATE_FLAG_FRAME_VALID;
 						source_generation <= ~source_generation;
 					end
-
 					frame_open <= 1'b1;
-					frame_crc <= crc32c_update_byte(CRC32C_INITIAL, 8'hf0);
-					frame_pixels <= 24'd0;
-					frame_lines <= 12'd0;
+					frame_nonempty <= 1'b0;
+					frame_signature <= SIGNATURE_INITIAL;
 				end
-				else if(frame_open) begin
-					crc_value = frame_crc;
-					if(isolated_de && !previous_de) begin
-						crc_value = crc32c_update_byte(crc_value,
-							8'ha0 | {7'd0, isolated_hs});
-						if(frame_lines != 12'hfff)
-							frame_lines <= frame_lines + 1'd1;
-					end
-					if(isolated_de) begin
-						crc_value = crc32c_update_pixel(crc_value, isolated_rgb);
-						if(frame_pixels != 24'hffffff)
-							frame_pixels <= frame_pixels + 1'd1;
-					end
-					else if(previous_de)
-						crc_value = crc32c_update_byte(crc_value,
-							8'ha2 | {7'd0, isolated_hs});
-					frame_crc <= crc_value;
+				else if(frame_open && isolated_de) begin
+					frame_signature <= ordered_signature_update(frame_signature,
+						pixel_token(isolated_rgb, !previous_de, isolated_hs));
+					frame_nonempty <= 1'b1;
 				end
+				else if(frame_open && previous_de)
+					frame_signature <= ordered_signature_update(frame_signature,
+						line_end_token(isolated_hs));
 			end
 		end
 	end
@@ -292,10 +232,10 @@ module mister_magik_raw_scaler_ordered_frame (
 			generation_sync <= 1'b0;
 			generation_seen <= 1'b0;
 			capture_pending <= 1'b0;
-			snapshot_state <= 176'd0;
+			snapshot_state <= 64'd0;
 			has_command <= 1'b0;
 			command_selected <= 1'b0;
-			word_count <= 5'd0;
+			word_count <= 3'd0;
 			tx_crc <= 16'hffff;
 		end
 		else begin
@@ -314,7 +254,7 @@ module mister_magik_raw_scaler_ordered_frame (
 			if(command_start) begin
 				has_command <= 1'b1;
 				command_selected <= selected_start;
-				word_count <= 5'd0;
+				word_count <= 3'd0;
 				if(selected_start)
 					tx_crc <= MAGIK_RAW_SCALER_STATE_SCHEMA_CRC;
 			end
@@ -329,7 +269,7 @@ module mister_magik_raw_scaler_ordered_frame (
 			if(!io_uio && has_command) begin
 				has_command <= 1'b0;
 				command_selected <= 1'b0;
-				word_count <= 5'd0;
+				word_count <= 3'd0;
 			end
 		end
 	end

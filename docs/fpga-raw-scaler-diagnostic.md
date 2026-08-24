@@ -1,17 +1,18 @@
-# Scaler copy-tail repair and ordered-frame experiment
+# Scaler copy-tail repair and ordered-signature experiment
 
-Status: the functional repair remains unchanged. A disposable schema-7
-ordered-frame observer is a local proof candidate; fixed-seed Apple signoff and
-device validation remain separate gates.
+Status: the functional repair remains unchanged. The oversized schema-7 CRC
+observer failed local timing/resource signoff and was replaced, not layered,
+by a disposable schema-8 ordered-signature candidate. Fixed-seed Apple signoff
+and device validation remain separate gates.
 
 The disposable schema-6 `scaler-copy-retirement-v1` diagnostic is retired.
 Its first genuine persistent-black result isolated a production copy-FSM
-deadlock. The new experiment adds only read-only command `0x67`, schema 7,
-`raw-scaler-ordered-frame-v1`; commands `0x60` through `0x66` remain
+deadlock. The new experiment adds only read-only command `0x67`, schema 8,
+`raw-scaler-ordered-signature-v1`; commands `0x60` through `0x66` remain
 unsupported, while latch protocol `5` and capabilities `0x03ff` remain
 unchanged. Its exact taps, byte encoding, ABI, interpretation boundary, and
 cost are frozen in
-[the dated ordered-frame design](../history/2026-08-24-raw-scaler-ordered-frame-design.md).
+[the dated ordered-signature design](../history/2026-08-24-raw-scaler-ordered-signature-design.md).
 
 ## Decisive result
 
@@ -74,13 +75,14 @@ reset controller, PLL, mux, or output cone is otherwise changed.
 
 The rare moving-band movie leaves the authoritative RGB565 framebuffer
 correct while completion, copy-tail, latch, and route evidence remains
-coherent. Schema 7 fingerprints ordered active RGB at the direct `ascal`
-output through an explicit isolation register and retains three frame CRC-32C
-values plus geometry and a bounded variation window. It does not tap a final
-output cone and cannot infer sink visibility.
+coherent. Schema 8 fingerprints ordered active RGB and line boundaries at the
+direct `ascal` output through an explicit isolation register. It publishes one
+shallow 32-bit ordered signature and sequence; the host requires three
+strictly advancing frames. It does not tap a final output cone and cannot infer
+sink visibility.
 
 Stable raw evidence paired with moving physical corruption supports a fault
-downstream of direct `ascal`; raw CRC or geometry changes paired with an
+downstream of direct `ascal`; an ordered-signature change paired with an
 independently byte-stable source support an at-or-before-`ascal` fault. Without
 that independent proof, changing evidence is inconclusive because a scene
 transition has the same local signature.
@@ -94,11 +96,11 @@ The local candidate requires:
   creates pixel validity, and tail age remains below 18 output-clock steps,
   plus a retirement cover witness;
 - unchanged completion queue BMC, cover, and induction proofs;
-- structural proof that schema 7 has only the exact direct-ascal taps, an
+- structural proof that schema 8 has only the exact direct-ascal taps, an
   observer-only isolation stage, response-only fanout, and no protected-cone
   changes;
-- Icarus proof of ordered CRC/delimiters, empty frames, geometry, retention,
-  wrap, variation, immutable and partial reads, reset, unsupported `0x60`
+- Icarus proof of the one-step ordered signature, line-order changes, empty
+  frames, sequence advance/wrap, immutable and partial reads, reset, unsupported `0x60`
   through `0x66`, and every unchanged latch-v5 command; and
 - exact completion CDC/net-delay/MTBF gates plus the one bounded
   source-generation synchronizer route used by the stable observer bundle.
@@ -107,7 +109,7 @@ The functional repair itself adds no new register, RAM, DSP, or PLL. The helper 
 registered-state term to the existing copy shift enable and a tail-only clear
 of the existing pixel-valid register. Fixed-seed Apple signoff must still prove
 commercial setup/hold, resource, warning, CDC, and hard-block gates before any
-installation. The disposable observer is expected to add approximately 500
-registers and 150–250 ALMs without RAM, DSP, or PLL changes; fixed-seed
-synthesis remains the authority. Device validation must begin by preserving
+installation. The disposable observer must remain within the checked-in
+experimental profile ceilings of 224 registers and 208 ALMs without RAM, DSP,
+or PLL changes; fixed-seed synthesis remains the authority. Device validation must begin by preserving
 the current incident; this document authorizes no recovery or device action.

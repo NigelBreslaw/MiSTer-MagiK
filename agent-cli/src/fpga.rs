@@ -29,6 +29,8 @@ const QUARTUS_PROCESSORS: &str = "4";
 const QUARTUS_SEED_SOURCE: &str =
     include_str!("../../mister/platform/fpga/menu-vblank-latch/Quartus.seed");
 const BUILD_EPOCH_SOURCE: &str = include_str!("../../scripts/quartus/fpga-build-epoch-v1.txt");
+const LOCAL_SIGNOFF_PROFILE_PATH: &str =
+    "mister/platform/fpga/menu-vblank-latch/local-signoff-profile.txt";
 const BUILD_DEADLINE: Duration = Duration::from_secs(3 * 60 * 60);
 const SETUP_DEADLINE: Duration = Duration::from_secs(2 * 60 * 60);
 
@@ -294,6 +296,7 @@ fn synthesis_files_identity(
     }
     if include_diagnostics {
         paths.extend([
+            LOCAL_SIGNOFF_PROFILE_PATH,
             "mister/platform/fpga/menu-vblank-latch/mister_magik_video_diagnostics_control.sv",
             "mister/platform/fpga/menu-vblank-latch/mister_magik_video_diagnostics_avalon.sv",
             "mister/platform/fpga/menu-vblank-latch/mister_magik_video_diagnostics_output.sv",
@@ -746,8 +749,11 @@ fn prefixed_path(prefix: &Path) -> AgentResult<OsString> {
 
 fn run_delta_checker(source_root: &Path, signoff_root: &Path) -> AgentResult<()> {
     let mut command = Command::new(source_root.join("scripts/checks/check-fpga-quartus-delta.py"));
-    // The disposable diagnostic hardware is retired. Local signoff and CI now
-    // apply the same production timing, resource, and synchronizer gates.
+    let profile = fs::read_to_string(source_root.join(LOCAL_SIGNOFF_PROFILE_PATH))
+        .map_err(|error| format!("cannot read checked-in FPGA local signoff profile: {error}"))?;
+    if validate_local_signoff_profile(&profile)? {
+        command.arg("--experimental-diagnostic");
+    }
     for (flag, flavour) in [
         ("--stock", "stock"),
         ("--baseline", "pre-observer"),
@@ -777,6 +783,14 @@ fn run_delta_checker(source_root: &Path, signoff_root: &Path) -> AgentResult<()>
         .into());
     }
     Ok(())
+}
+
+fn validate_local_signoff_profile(profile: &str) -> AgentResult<bool> {
+    match profile.trim() {
+        "production-v1" => Ok(false),
+        "experimental_raw_scaler-v1" => Ok(true),
+        value => Err(format!("unsupported checked-in FPGA local signoff profile {value:?}").into()),
+    }
 }
 
 fn reports(root: &Path) -> AgentResult<Vec<PathBuf>> {
@@ -940,6 +954,14 @@ mod tests {
     #[test]
     fn canonical_build_epoch_is_stable_and_well_formed() {
         assert_eq!(canonical_build_epoch().unwrap(), "260814");
+    }
+
+    #[test]
+    fn checked_in_local_signoff_profile_is_fail_closed() {
+        assert!(!validate_local_signoff_profile("production-v1\n").unwrap());
+        assert!(validate_local_signoff_profile("experimental_raw_scaler-v1\n").unwrap());
+        assert!(validate_local_signoff_profile("experimental\n").is_err());
+        assert!(validate_local_signoff_profile("").is_err());
     }
 
     #[test]

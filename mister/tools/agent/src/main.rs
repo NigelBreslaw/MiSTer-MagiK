@@ -4090,32 +4090,20 @@ mod linux {
     pub(super) fn raw_scaler_classification(
         samples: &[mister_magik_video_diagnostics_contract::RawScalerState; 3],
     ) -> &'static str {
-        use mister_magik_video_diagnostics_contract as contract;
-
-        let valid = samples.iter().all(|sample| {
-            sample.frame_valid()
-                && sample.flags() & contract::RAW_SCALER_STATE_FLAG_NONEMPTY != 0
-                && sample.flags() & contract::RAW_SCALER_STATE_FLAG_VARIATION_WINDOW_FULL != 0
-        });
-        let geometry_stable = samples[1..].iter().all(|sample| {
-            sample.active_pixels() == samples[0].active_pixels()
-                && sample.active_lines() == samples[0].active_lines()
-        });
-        let sequence_coherent = samples.windows(2).all(|pair| {
+        let valid = samples.iter().all(|sample| sample.frame_valid());
+        let sequence_advancing = samples.windows(2).all(|pair| {
             let delta = pair[1]
                 .frame_sequence()
                 .wrapping_sub(pair[0].frame_sequence());
-            delta <= 0x7fff
+            delta != 0 && delta <= 0x7fff
         });
-        if !valid || !geometry_stable || !sequence_coherent {
+        if !valid || !sequence_advancing {
             return "raw_scaler_ordered_evidence_inconclusive";
         }
-        let frame_history_stable = samples.iter().all(|sample| {
-            sample.newest_crc32c() == sample.previous_crc32c()
-                && sample.previous_crc32c() == sample.oldest_crc32c()
-                && sample.variation_count() == 0
-        });
-        if frame_history_stable {
+        if samples[1..]
+            .iter()
+            .all(|sample| sample.ordered_signature() == samples[0].ordered_signature())
+        {
             "raw_scaler_ordered_stable"
         } else {
             // A scene transition can also change this passive fingerprint.
@@ -4592,7 +4580,7 @@ mod linux {
                         && classification_stable;
                     json!({
                         "schema": "mister-magik-fpga-video-diagnostics-v2",
-                        "diagnostic_architecture": "raw-scaler-ordered-frame-v1",
+                        "diagnostic_architecture": "raw-scaler-ordered-signature-v1",
                         "available": true,
                         "coherent": coherent,
                         "classification": if coherent {
@@ -4619,7 +4607,7 @@ mod linux {
                             "scaler_scheduler_state": false,
                             "scaler_pipeline_state": false,
                             "scaler_copy_retirement": false,
-                            "raw_scaler_ordered_frame": true,
+                            "raw_scaler_ordered_signature": true,
                             "pixel_observer": true,
                             "pll_observer": false,
                         },
@@ -4627,12 +4615,7 @@ mod linux {
                             "frame_valid": readout.samples.iter().map(|sample| sample.frame_valid()).collect::<Vec<_>>(),
                             "flags": readout.samples.iter().map(|sample| sample.flags()).collect::<Vec<_>>(),
                             "frame_sequence": readout.samples.iter().map(|sample| sample.frame_sequence()).collect::<Vec<_>>(),
-                            "active_pixels": readout.samples.iter().map(|sample| sample.active_pixels()).collect::<Vec<_>>(),
-                            "active_lines": readout.samples.iter().map(|sample| sample.active_lines()).collect::<Vec<_>>(),
-                            "variation_count": readout.samples.iter().map(|sample| sample.variation_count()).collect::<Vec<_>>(),
-                            "newest_crc32c": readout.samples.iter().map(|sample| format!("{:08x}", sample.newest_crc32c())).collect::<Vec<_>>(),
-                            "previous_crc32c": readout.samples.iter().map(|sample| format!("{:08x}", sample.previous_crc32c())).collect::<Vec<_>>(),
-                            "oldest_crc32c": readout.samples.iter().map(|sample| format!("{:08x}", sample.oldest_crc32c())).collect::<Vec<_>>(),
+                            "ordered_signature": readout.samples.iter().map(|sample| format!("{:08x}", sample.ordered_signature())).collect::<Vec<_>>(),
                             "raw_samples": readout.samples.iter().map(|sample| sample.words).collect::<Vec<_>>(),
                         },
                     })
@@ -8230,33 +8213,24 @@ mod tests {
 
     #[cfg(target_os = "linux")]
     #[test]
-    fn ordered_frame_classification_requires_coherent_history_and_geometry() {
+    fn ordered_signature_classification_requires_three_advancing_frames() {
         use mister_magik_video_diagnostics_contract as contract;
 
-        let sample = |sequence: u16, pixels: u32, lines: u16, variation: u8, crcs: [u32; 3]| {
+        let sample = |sequence: u16, signature: u32| {
             let mut words = [0; contract::RAW_SCALER_STATE_WORDS];
             words[contract::RAW_SCALER_STATE_SCHEMA_WORD] = contract::RAW_SCALER_STATE_SCHEMA;
             words[contract::RAW_SCALER_STATE_FLAGS_WORD] =
-                contract::RAW_SCALER_STATE_FLAG_FRAME_VALID
-                    | contract::RAW_SCALER_STATE_FLAG_NONEMPTY
-                    | contract::RAW_SCALER_STATE_FLAG_VARIATION_WINDOW_FULL;
+                contract::RAW_SCALER_STATE_FLAG_FRAME_VALID;
             words[contract::RAW_SCALER_STATE_FRAME_SEQUENCE_WORD] = sequence;
-            words[contract::RAW_SCALER_STATE_ACTIVE_PIXELS_LOW_WORD] = pixels as u16;
-            words[contract::RAW_SCALER_STATE_ACTIVE_PIXELS_HIGH_WORD] = (pixels >> 16) as u16;
-            words[contract::RAW_SCALER_STATE_LINES_VARIATION_WORD] =
-                lines | (u16::from(variation) << 12);
-            words[contract::RAW_SCALER_STATE_NEWEST_CRC_LOW_WORD] = crcs[0] as u16;
-            words[contract::RAW_SCALER_STATE_NEWEST_CRC_HIGH_WORD] = (crcs[0] >> 16) as u16;
-            words[contract::RAW_SCALER_STATE_PREVIOUS_CRC_LOW_WORD] = crcs[1] as u16;
-            words[contract::RAW_SCALER_STATE_PREVIOUS_CRC_HIGH_WORD] = (crcs[1] >> 16) as u16;
-            words[contract::RAW_SCALER_STATE_OLDEST_CRC_LOW_WORD] = crcs[2] as u16;
-            words[contract::RAW_SCALER_STATE_OLDEST_CRC_HIGH_WORD] = (crcs[2] >> 16) as u16;
+            words[contract::RAW_SCALER_STATE_ORDERED_SIGNATURE_LOW_WORD] = signature as u16;
+            words[contract::RAW_SCALER_STATE_ORDERED_SIGNATURE_HIGH_WORD] =
+                (signature >> 16) as u16;
             contract::RawScalerState { words }
         };
         let stable = [
-            sample(100, 2_073_600, 1080, 0, [0x1234_5678; 3]),
-            sample(101, 2_073_600, 1080, 0, [0x1234_5678; 3]),
-            sample(103, 2_073_600, 1080, 0, [0x1234_5678; 3]),
+            sample(100, 0x1234_5678),
+            sample(101, 0x1234_5678),
+            sample(103, 0x1234_5678),
         ];
         assert_eq!(
             linux::raw_scaler_classification(&stable),
@@ -8264,23 +8238,29 @@ mod tests {
         );
 
         let varying = [
-            sample(100, 2_073_600, 1080, 1, [3, 2, 1]),
-            sample(101, 2_073_600, 1080, 2, [4, 3, 2]),
-            sample(103, 2_073_600, 1080, 3, [6, 5, 4]),
+            sample(100, 0x1234_5678),
+            sample(101, 0x1234_5679),
+            sample(103, 0x1234_5678),
         ];
         assert_eq!(
             linux::raw_scaler_classification(&varying),
             "raw_scaler_order_changed_requires_static_source_proof"
         );
 
-        let incoherent_geometry = [
-            stable[0].clone(),
-            stable[1].clone(),
-            sample(103, 2_073_599, 1080, 0, [0x1234_5678; 3]),
+        let nonadvancing = [stable[0].clone(), stable[0].clone(), stable[2].clone()];
+        assert_eq!(
+            linux::raw_scaler_classification(&nonadvancing),
+            "raw_scaler_ordered_evidence_inconclusive"
+        );
+
+        let wrapping = [
+            sample(0xfffe, 0x1234_5678),
+            sample(0xffff, 0x1234_5678),
+            sample(0x0001, 0x1234_5678),
         ];
         assert_eq!(
-            linux::raw_scaler_classification(&incoherent_geometry),
-            "raw_scaler_ordered_evidence_inconclusive"
+            linux::raw_scaler_classification(&wrapping),
+            "raw_scaler_ordered_stable"
         );
     }
 

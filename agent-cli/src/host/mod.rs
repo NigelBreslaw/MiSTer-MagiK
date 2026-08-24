@@ -3643,7 +3643,7 @@ fn experimental_fpga_architecture_is_current(diagnostics: &Value) -> bool {
                     .and_then(Value::as_array)
                     .is_some_and(|samples| samples.len() == 3)
         }
-        Some("raw-scaler-ordered-frame-v1") => {
+        Some("raw-scaler-ordered-signature-v1") => {
             matches!(
                 diagnostics.get("classification").and_then(Value::as_str),
                 Some(
@@ -3667,7 +3667,7 @@ fn experimental_fpga_architecture_is_current(diagnostics: &Value) -> bool {
                     .and_then(Value::as_bool)
                     == Some(false)
                 && diagnostics
-                    .pointer("/capabilities/raw_scaler_ordered_frame")
+                    .pointer("/capabilities/raw_scaler_ordered_signature")
                     .and_then(Value::as_bool)
                     == Some(true)
                 && diagnostics
@@ -3690,6 +3690,20 @@ fn experimental_fpga_architecture_is_current(diagnostics: &Value) -> bool {
                     .pointer("/raw_scaler_state/raw_samples")
                     .and_then(Value::as_array)
                     .is_some_and(|samples| samples.len() == 3)
+                && diagnostics
+                    .pointer("/raw_scaler_state/frame_sequence")
+                    .and_then(Value::as_array)
+                    .is_some_and(|sequences| {
+                        sequences.len() == 3
+                            && sequences.windows(2).all(|pair| {
+                                pair[0].as_u64().zip(pair[1].as_u64()).is_some_and(
+                                    |(left, right)| {
+                                        let delta = (right as u16).wrapping_sub(left as u16);
+                                        delta != 0 && delta <= 0x7fff
+                                    },
+                                )
+                            })
+                    })
         }
         Some("scaler-copy-retirement-v1") => {
             diagnostics.get("classification").and_then(Value::as_str)
@@ -34924,9 +34938,9 @@ H: Handlers=event3 js0"#
         let mut latched_mismatch = frame_integrity.clone();
         latched_mismatch["classification"] = json!("raw_control_mismatch_latched");
         assert!(!experimental_fpga_evidence_is_current(&latched_mismatch));
-        let ordered_frame = json!({
+        let ordered_signature = json!({
             "schema": "mister-magik-fpga-video-diagnostics-v2",
-            "diagnostic_architecture": "raw-scaler-ordered-frame-v1",
+            "diagnostic_architecture": "raw-scaler-ordered-signature-v1",
             "available": true,
             "coherent": true,
             "classification": "raw_scaler_ordered_stable",
@@ -34945,7 +34959,7 @@ H: Handlers=event3 js0"#
                 "scaler_scheduler_state": false,
                 "scaler_pipeline_state": false,
                 "scaler_copy_retirement": false,
-                "raw_scaler_ordered_frame": true,
+                "raw_scaler_ordered_signature": true,
                 "pixel_observer": true,
                 "pll_observer": false,
             },
@@ -34959,23 +34973,27 @@ H: Handlers=event3 js0"#
             },
             "raw_scaler_state": {
                 "frame_sequence": [100, 101, 103],
-                "active_pixels": [2073600, 2073600, 2073600],
-                "active_lines": [1080, 1080, 1080],
-                "variation_count": [0, 0, 0],
-                "newest_crc32c": ["12345678", "12345678", "12345678"],
-                "previous_crc32c": ["12345678", "12345678", "12345678"],
-                "oldest_crc32c": ["12345678", "12345678", "12345678"],
-                "raw_samples": vec![vec![7; 13]; 3],
+                "ordered_signature": ["12345678", "12345678", "12345678"],
+                "raw_samples": vec![vec![8; 6]; 3],
             },
         });
-        assert!(experimental_raw_scaler_evidence_available(&ordered_frame));
-        assert!(experimental_agent_preload_evidence_accepted(&ordered_frame));
-        assert!(experimental_fpga_evidence_is_current(&ordered_frame));
-        let mut ordered_changed = ordered_frame.clone();
+        assert!(experimental_raw_scaler_evidence_available(
+            &ordered_signature
+        ));
+        assert!(experimental_agent_preload_evidence_accepted(
+            &ordered_signature
+        ));
+        assert!(experimental_fpga_evidence_is_current(&ordered_signature));
+        let mut ordered_nonadvancing = ordered_signature.clone();
+        ordered_nonadvancing["raw_scaler_state"]["frame_sequence"] = json!([100, 100, 103]);
+        assert!(!experimental_fpga_evidence_is_current(
+            &ordered_nonadvancing
+        ));
+        let mut ordered_changed = ordered_signature.clone();
         ordered_changed["classification"] =
             json!("raw_scaler_order_changed_requires_static_source_proof");
         assert!(experimental_fpga_evidence_is_current(&ordered_changed));
-        let mut ordered_inconclusive = ordered_frame.clone();
+        let mut ordered_inconclusive = ordered_signature.clone();
         ordered_inconclusive["classification"] = json!("raw_scaler_ordered_evidence_inconclusive");
         assert!(!experimental_fpga_evidence_is_current(
             &ordered_inconclusive

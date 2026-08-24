@@ -43,30 +43,19 @@
     ]
   },
   "raw_scaler_state": {
-    "schema": 7,
+    "schema": 8,
     "command": 103,
     "magic": 19799,
-    "word_count": 13,
+    "word_count": 6,
     "words": [
-      "schema", "flags", "frame_sequence", "active_pixels_low",
-      "active_pixels_high", "lines_variation", "newest_crc_low",
-      "newest_crc_high", "previous_crc_low", "previous_crc_high",
-      "oldest_crc_low", "oldest_crc_high", "crc"
+      "schema", "flags", "frame_sequence", "ordered_signature_low",
+      "ordered_signature_high", "crc"
     ],
     "flags": {
-      "frame_valid": 0,
-      "nonempty": 1,
-      "variation_window_full": 2,
-      "variation_saturated": 3
+      "frame_valid": 0
     },
     "reserved_zero_masks": {
-      "flags": 65520,
-      "active_pixels_high": 65280
-    },
-    "fields": {
-      "active_pixels_upper": {"word": "active_pixels_high", "bit": 0, "width": 8},
-      "active_lines": {"word": "lines_variation", "bit": 0, "width": 12},
-      "variation_count": {"word": "lines_variation", "bit": 12, "width": 4}
+      "flags": 65534
     }
   },
   "path_activity": {
