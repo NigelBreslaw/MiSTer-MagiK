@@ -189,10 +189,12 @@ module mister_magik_raw_scaler_ordered_frame (
 			isolated_hs <= raw_hs;
 			isolated_vs <= raw_vs;
 			signature_ce <= isolated_ce;
-			signature_rgb <= isolated_rgb;
-			signature_de <= isolated_de;
-			signature_hs <= isolated_hs;
-			signature_vs <= isolated_vs;
+			if(isolated_ce) begin
+				signature_rgb <= isolated_rgb;
+				signature_de <= isolated_de;
+				signature_hs <= isolated_hs;
+				signature_vs <= isolated_vs;
+			end
 
 			if(signature_ce) begin
 				previous_de <= signature_de;

@@ -135,3 +135,22 @@ while placing the disposable signature cone elsewhere. It adds 20 observer
 registers and one cycle of sampling latency, but changes no direct tap,
 signature encoding, schema, CDC, production cone, seed, fitter setting, or
 gate.
+
+## Rejected candidate 8 and qualified pipeline capture
+
+Candidate 8 (`dd637da829019d553efc4cb48aa9eeaf2de8f046`) recovered
+setup to `0.452 ns` and passed exact CDC, warning, MTBF, resource, and setup
+gates. It failed only the unchanged hold floor: `0.109 ns` versus `0.200 ns`.
+The worst hold path was unrelated production `pll_hdmi_adj`, from `mfrac[25]`
+to `pdata[25]`; no observer node appeared. The report, RBF, and metadata
+SHA-256 values are respectively
+`c8b5cba373d29d50a657df4386b9e0b131b9aaf657ade1f265516aacff62ce2b`,
+`e54d8b5bfaf202ad5b18c83efdfaac8eaa031ecc1c82035a519fef4df4252a2b`,
+and `03f7e613bfda702125337dc2154510c56a60492ff93398cde08b2315a75bc9a9`.
+It is rejected and was never installed.
+
+The next candidate leaves that production path and every constraint untouched.
+The observer pipeline still samples every CE-qualified RGB565/control tuple in
+order, but its data registers hold during unqualified HDMI cycles. This shared
+observer-only enable reduces unnecessary switching without changing the
+signature, schema, direct taps, CDC, production fanout, seed, fitter, or gates.

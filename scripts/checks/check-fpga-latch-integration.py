@@ -325,13 +325,16 @@ def main() -> None:
         "isolated_hs",
         "isolated_vs",
     ):
-        if len(re.findall(rf"\b{isolated_signal}\b", control_source)) != 4 or len(
+        expected_isolated_count = 5 if isolated_signal == "isolated_ce" else 4
+        if len(re.findall(rf"\b{isolated_signal}\b", control_source)) != expected_isolated_count or len(
             re.findall(rf"<=\s*{isolated_signal}\b", control_source)
         ) != 1:
             fail(
                 "direct-tap isolation must feed only the observer signature pipeline: "
                 f"{isolated_signal}"
             )
+    if control_source.count("if(isolated_ce) begin") != 1:
+        fail("qualified observer pipeline must use isolated_ce only as its local capture enable")
     if "generation_launch" in control_source:
         fail("rejected placement-heavy generation launch stage remains present")
     for forbidden_observer_input in (

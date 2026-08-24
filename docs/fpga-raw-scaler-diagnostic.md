@@ -107,7 +107,9 @@ The direct-tap isolation registers feed one further observer-only HDMI-domain
 pipeline stage before the signature recurrence. This keeps the sole direct
 consumers physically separable from the signature cone; it adds one sampling
 cycle without changing frame order, schema, or evidence meaning. Neither stage
-has production fanout.
+has production fanout. The second stage holds its data on unqualified cycles
+and captures only when the isolated scaler CE is asserted, so it preserves
+every ordered sample without unnecessary observer switching.
 
 The local candidate requires:
 
