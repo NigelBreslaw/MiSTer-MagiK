@@ -34,7 +34,31 @@ including that edge. State is the registered pre-edge snapshot at closure.
 The first copy-start signature is reset at every frame boundary; later starts
 set sticky same/different flags.
 
-The preserved schema-5 incident remains unrecovered. This design work performs
-no device action. Local proof is intentionally close to commercial standards,
-but synthesis, Apple signoff, installation, and the next physical attempt are
-separate attended gates.
+## Decisive field result and retirement
+
+The schema-6 candidate subsequently passed its local and fixed-seed gates and
+was installed experimentally. After 75 valid clean returns it reproduced a
+genuine persistent MagiK black. The preserved failure and live records both
+classified `scaler_copy_terminal_condition_stall`; three coherent samples were
+identical at flags `0x15e1` and state `0x83ea`.
+
+The copy FSM was `sCOPY` with `readlev=2`, `copylev=2`, `o_adturn=1`, front
+`prim=1`, front `last=1`, bank `1`, offset `0`, and `o_copyv(0)=1`. Sticky
+events proved active copy shifts, next-word phases, line-last activity, and an
+address wrap. The bank-terminal term, exact terminal branch, `lev_dec_v`, and
+nonzero copied-word event were all absent. The physical output was uniformly
+black while the authoritative framebuffer remained correct.
+
+Production inspection then identified the exact missing transition. The last
+horizontal-carry edge registers `o_last`, but the legacy shift branch is gated
+only by `hcarry_v or o_dshi>0`; it closes on the next edge before `o_last` can
+drain through `o_last1/o_last2`. Front `last=1` also disables the alternative
+bank terminal, so the block cannot retire.
+
+Schema 6 is now retired rather than stacked. The next candidate is the
+functional copy-tail repair documented in
+[`../docs/fpga-raw-scaler-diagnostic.md`](../docs/fpga-raw-scaler-diagnostic.md).
+It adds `o_last` only to the shift-activity gate and suppresses new pixel-valid
+events during those tail-only shifts. The candidate exposes no diagnostic
+opcode. The epoch-8 attempt-06 incident remains preserved and unrecovered;
+this implementation work performs no device action.

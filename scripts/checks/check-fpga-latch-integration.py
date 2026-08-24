@@ -174,12 +174,20 @@ def main() -> None:
     completion_formal_wrapper = (
         source_dir / "mister_magik_ascal_completion_formal.sv"
     )
+    copy_tail_formal_dut = (
+        source_dir / "mister_magik_scaler_copy_tail_formal_dut.vhd"
+    )
+    copy_tail_formal_wrapper = (
+        source_dir / "mister_magik_scaler_copy_tail_formal.sv"
+    )
     completion_formal_check = (
         root / "scripts/checks/check-fpga-scaler-completion-formal.py"
     )
     for formal_input in (
         completion_formal_dut,
         completion_formal_wrapper,
+        copy_tail_formal_dut,
+        copy_tail_formal_wrapper,
         completion_formal_check,
         raw_scaler_diagnostic_tb,
     ):
@@ -187,6 +195,8 @@ def main() -> None:
             fail(f"scaler completion formal input is missing: {formal_input}")
     formal_dut_source = completion_formal_dut.read_text()
     formal_wrapper_source = completion_formal_wrapper.read_text()
+    copy_tail_dut_source = copy_tail_formal_dut.read_text()
+    copy_tail_wrapper_source = copy_tail_formal_wrapper.read_text()
     formal_check_source = completion_formal_check.read_text()
     for fragment in (
         "USE work.mister_magik_scaler_completion_queue.ALL;",
@@ -224,11 +234,32 @@ def main() -> None:
         if fragment not in formal_wrapper_source:
             fail(f"formal environment obligation is missing: {fragment}")
     for fragment in (
+        "USE work.mister_magik_scaler_completion_queue.ALL;",
+        "copy_shift_active(false,0,'1')",
+        "copy_shift_onext((acpt+1) MOD 16,active_format,128)",
+        "active_format<=format;",
+        "copy_terminal_ready(",
+        "pixel_valid_o<='0';",
+    ):
+        if fragment not in copy_tail_dut_source:
+            fail(f"copy-tail formal DUT is detached from production helper: {fragment}")
+    for fragment in (
+        "assert(shift);",
+        "assert(!pixel_valid);",
+        "assert(age < 18);",
+        "assert(terminal);",
+        "retired <= 1'b1;",
+        "cover(retired);",
+    ):
+        if fragment not in copy_tail_wrapper_source:
+            fail(f"copy-tail formal obligation is missing: {fragment}")
+    for fragment in (
         'run(["git", "apply", "--recount", str(patch)]',
         '"ghdl",\n                "synth",',
         "-tempinduct",
         '"patched_ascal_sha256"',
         '"ghdl_netlist_sha256"',
+        '"copy_tail_bounded_depth": 48',
     ):
         if fragment not in formal_check_source:
             fail(f"formal checker source binding is missing: {fragment}")
@@ -237,28 +268,13 @@ def main() -> None:
     control_source = diagnostics_control.read_text()
     avalon_source = diagnostics_avalon.read_text()
     output_source = diagnostics_output.read_text()
-    if len(re.findall(r"(?m)^\s*module\s+mister_magik_raw_scaler_diagnostic\b", control_source)) != 1:
-        fail("minimal raw scaler diagnostic module is missing or ambiguous")
-    if len(re.findall(r"(?m)^\s*module\b", control_source)) != 1:
-        fail("diagnostic control source contains an unexpected design unit")
-    if "captured_state" in control_source:
-        fail("diagnostic responder retains a redundant snapshot register")
-    if control_source.count("(* preserve *) reg [31:0] snapshot_state") != 1:
-        fail("diagnostic bundled-data snapshot is not preserved")
-    for exact_input in (
-        "input  wire        clk_hdmi",
-        "input  wire [31:0] copy_state",
-        "input  wire        copy_generation",
-        "copy_generation_seen <= copy_generation;",
-        "source_state <= copy_state;",
-        "generation_meta <= source_generation;",
-        "snapshot_state <= source_state;",
-        "(* preserve *) reg [31:0] source_state",
-        "(* preserve *) reg source_generation",
-    ):
-        if control_source.count(exact_input) != 1:
-            fail(f"copy-retirement responder input is missing or ambiguous: {exact_input}")
+    if re.search(r"(?m)^\s*module\b", control_source + avalon_source + output_source):
+        fail("retired diagnostic compatibility sources must define no design unit")
     for retired_control_observer in (
+        "mister_magik_raw_scaler_diagnostic",
+        "snapshot_state",
+        "source_state",
+        "source_generation",
         "control_crc",
         "candidate_streak",
         "candidate_valid",
@@ -276,25 +292,8 @@ def main() -> None:
         "pipeline_generation",
         "avl_magik",
     ):
-        if retired_control_observer in control_source:
-            fail(f"retired pre-schema-6 observer remains: {retired_control_observer}")
-    for copy_capture_fragment in (
-        "copy_capture_pending <= 1'b1;",
-        "source_generation <= ~source_generation;",
-    ):
-        if control_source.count(copy_capture_fragment) != 1:
-            fail(f"copy-retirement capture is missing or ambiguous: {copy_capture_fragment}")
-    for forbidden_rgb_probe in (
-        "hdmi_data",
-        "rgb_in",
-        "hdmi_data_osd",
-        "HDMI_TX",
-        "TMDS",
-    ):
-        if forbidden_rgb_probe in control_source:
-            fail(f"raw RGB observer taps a non-raw or final pixel cone: {forbidden_rgb_probe}")
-    if re.search(r"(?m)^\s*module\b", avalon_source + output_source):
-        fail("retired Avalon or output diagnostic compatibility source defines logic")
+        if retired_control_observer in control_source + avalon_source + output_source:
+            fail(f"retired disposable observer remains: {retired_control_observer}")
     compiled_diagnostics = control_source + avalon_source + output_source
     for retired_fragment in (
         "snapshot_payload",
@@ -353,14 +352,6 @@ def main() -> None:
     ):
         if redundant_register in control_source:
             fail(f"retired diagnostic state remains: {redundant_register}")
-    for forbidden_probe in (
-        "hdmi_pll",
-        "vbuf_",
-        "route_",
-        "LFB_",
-    ):
-        if forbidden_probe in control_source:
-            fail(f"minimal scaler diagnostic observes a forbidden cone: {forbidden_probe}")
     diagnostics_sdc_text = diagnostics_sdc.read_text()
     timing_report_text = timing_report.read_text()
     unconstrained_report = (
@@ -376,14 +367,14 @@ def main() -> None:
         "\t-file output_files/menu.magik-diagnostic-cdc-net-delay.rpt"
     )
     if timing_report_text.count(diagnostic_net_delay_report) != 1:
-        fail("diagnostic net-delay report must retain all 35 exact CDC paths")
+        fail("completion net-delay report is missing or ambiguous")
     if "-nworst 50" in timing_report_text:
         fail("diagnostic net-delay report retains the truncated schema-4 depth")
     timing_commands = re.findall(
         r"(?m)^\s*(set_[A-Za-z0-9_]+\b[^\n]*)$", diagnostics_sdc_text
     )
-    if timing_commands != ["set_net_delay -max 10.0 \\"] * 4:
-        fail("repair SDC must contain only the four exact completion and diagnostic bounds")
+    if timing_commands != ["set_net_delay -max 10.0 \\"] * 2:
+        fail("repair SDC must contain only the two exact completion bounds")
     for fragment in (
         "{*ascal:ascal|avl_readdataack} 1",
         "{*ascal:ascal|o_readdataack_sync} 1",
@@ -395,15 +386,18 @@ def main() -> None:
         "-to $magik_scaler_completion_ack_meta",
         "MagiK diagnostics CDC analysis applied: scaler_completion_request_ack",
         "*ascal:ascal|o_readdataack_sync2*",
-        "*magik_raw_scaler_diagnostic|source_generation",
-        "*magik_raw_scaler_diagnostic|generation_meta",
-        "*magik_raw_scaler_diagnostic|source_state[*]",
-        "*magik_raw_scaler_diagnostic|snapshot_state[*]",
-        "scaler_copy_retirement",
+        "scaler_copy_tail",
     ):
         if diagnostics_sdc_text.count(fragment) != 1:
             fail(f"scaler completion request/ack constraint is missing or ambiguous: {fragment}")
-    for forbidden_sdc in ("set_false_path", "magik_require_data_pin", "control_pll_lock"):
+    for forbidden_sdc in (
+        "set_false_path",
+        "magik_require_data_pin",
+        "control_pll_lock",
+        "magik_raw_scaler_diagnostic",
+        "source_state",
+        "snapshot_state",
+    ):
         if forbidden_sdc in diagnostics_sdc_text:
             fail(f"retired HDMI lock constraint remains: {forbidden_sdc}")
     with tempfile.TemporaryDirectory(prefix="mister-magik-fpga-integration-") as temporary:
@@ -471,9 +465,9 @@ def main() -> None:
             "mister_magik_video_diagnostics_control magik_video_diagnostics": 0,
             "mister_magik_video_diagnostics_avalon magik_video_diagnostics_avalon": 0,
             "mister_magik_video_diagnostics_output magik_video_diagnostics_output": 0,
-            "mister_magik_raw_scaler_diagnostic magik_raw_scaler_diagnostic": 1,
-            "magik_diag_response_valid": 4,
-            "magik_diag_response_data": 4,
+            "mister_magik_raw_scaler_diagnostic magik_raw_scaler_diagnostic": 0,
+            "magik_diag_response_valid": 0,
+            "magik_diag_response_data": 0,
         }
         mismatches = [
             f"{fragment.splitlines()[0]!r} expected {expected}, found {patched.count(fragment)}"
@@ -482,25 +476,16 @@ def main() -> None:
         ]
         if mismatches:
             fail("patched production bridge binding mismatch: " + "; ".join(mismatches))
-        for pipeline_binding in (
-            "wire [31:0] magik_scaler_copy_state;",
-            ".magik_diag_state (magik_scaler_copy_state)",
-            ".magik_diag_generation(magik_scaler_copy_generation)",
-            ".clk_hdmi(clk_hdmi)",
-            ".copy_state(magik_scaler_copy_state)",
-            ".copy_generation(magik_scaler_copy_generation)",
-        ):
-            if patched.count(pipeline_binding) != 1:
-                fail(
-                    "scaler copy-retirement binding is missing or ambiguous: "
-                    f"{pipeline_binding}"
-                )
         for retired_binding in (
             ".raw_ce(scaler_out)",
             ".raw_hs(hdmi_hs)",
+            "magik_scaler_copy_state",
+            ".magik_diag_state",
+            ".magik_diag_generation",
+            "magik_raw_scaler_diagnostic",
         ):
             if retired_binding in patched:
-                fail(f"retired external observer binding remains: {retired_binding}")
+                fail(f"retired disposable observer binding remains: {retired_binding}")
         for fragment in (
             "magik_scaler_completion_gray",
             "magik_scaler_completion_pulse",
@@ -521,7 +506,9 @@ def main() -> None:
             "FUNCTION return_accounting_invalid(": 2,
             "FUNCTION read_obligation_accept(": 2,
             "FUNCTION return_drain_ready(": 2,
-            "FUNCTION magik_copy_flags_next(": 2,
+            "FUNCTION copy_shift_active(": 2,
+            "FUNCTION copy_shift_onext(": 2,
+            "FUNCTION copy_terminal_ready(": 2,
             "state_v:=request_toggle & completion_pending;": 1,
             "state_v(0):=completion;": 1,
             "RETURN request_toggle/=completion_ack AND": 1,
@@ -572,18 +559,11 @@ def main() -> None:
             "o_readdataack<=o_readdataack_sync XOR o_readdataack_sync2;": 1,
             "IF lev_dec_v='1' AND o_readdataack='0' THEN": 1,
             "ELSIF lev_dec_v='0' AND o_readdataack='1' THEN": 1,
-            "magik_diag_state      : OUT std_logic_vector(31 DOWNTO 0);": 1,
-            "magik_diag_generation : OUT std_logic;": 1,
-            "SIGNAL o_magik_frame_flags : std_logic_vector(14 DOWNTO 0):=(OTHERS=>'0');": 1,
-            "SIGNAL o_magik_start_signature : std_logic_vector(6 DOWNTO 0):=(OTHERS=>'0');": 1,
-            "SIGNAL o_magik_previous_ad : natural RANGE 0 TO 2*BLEN-1:=0;": 1,
-            "SIGNAL o_magik_diag_state : std_logic_vector(31 DOWNTO 0):=(OTHERS=>'0');": 1,
-            "magik_flags_v:=magik_copy_flags_next(magik_flags_v,magik_events_v);": 1,
-            "magik_record_flags_v:=magik_flags_v & '1';": 1,
-            "o_magik_diag_state<=magik_state_v & magik_record_flags_v;": 1,
-            "o_magik_diag_generation<=NOT o_magik_diag_generation;": 1,
-            "magik_diag_state<=o_magik_diag_state;": 1,
-            "magik_diag_generation<=o_magik_diag_generation;": 1,
+            "RETURN copy_shift_onext(acpt,format(2 DOWNTO 0),N_DW);": 1,
+            "IF copy_shift_active(hcarry_v,o_dshi,o_last) THEN": 1,
+            "IF NOT hcarry_v AND o_dshi=0 AND o_last='1' THEN": 1,
+            "o_copyv(0)<='0';": 2,
+            "IF copy_terminal_ready(": 1,
         }
         for fragment, expected_count in required_completion_counts.items():
             if patched_ascal.count(fragment) != expected_count:
@@ -620,6 +600,10 @@ def main() -> None:
             "MagiKScalerPipelineDiagnostic",
             "o_magik_generation_meta",
             "o_magik_completed_flags",
+            "o_magik_",
+            "magik_diag_",
+            "magik_events",
+            "magik_copy_flags_next",
         ):
             if retired_observer_fragment in patched_ascal:
                 fail(
@@ -633,40 +617,32 @@ def main() -> None:
         )
         if scalaire_process is None:
             fail("production Scalaire process is missing")
-        for exact_event in (
-            "IF lev_dec_v='1' THEN magik_events_v(1):='1'; END IF;",
-            "IF o_copy=sCOPY AND o_ad<o_magik_previous_ad THEN",
-            "IF o_sh3='1' AND o_dr/=0 THEN magik_events_v(14):='1'; END IF;",
-            "IF o_ad MOD BLEN=0 AND o_lastv(0)='0' THEN\n"
-            "\t\t\t\t\t\t\tmagik_events_v(8):='1';",
-            "magik_events_v(10):='1';\n\t\t\t\t\t\t\to_copy<=sWAIT;\n\t\t\t\t\t\t\tlev_dec_v:='1';",
+        scalaire_body = scalaire_process.group("body")
+        for exact_tail in (
+            "IF copy_shift_active(hcarry_v,o_dshi,o_last) THEN",
+            "IF NOT hcarry_v AND o_dshi=0 AND o_last='1' THEN\n"
+            "\t\t\t\t\t\t\to_copyv(0)<='0';",
+            "o_last1<=o_last;\n\t\t\t\t\t\to_last2<=o_last1;",
+            "IF copy_terminal_ready(\n"
+            "\t\t\t\t\t\t\to_adturn,shift_onext((o_acpt+1) MOD 16,o_format),\n"
+            "\t\t\t\t\t\t\to_ad MOD BLEN=0,o_lastv(0),o_last2) THEN",
+            "o_copy<=sWAIT;\n\t\t\t\t\t\t\tlev_dec_v:='1';",
         ):
-            if scalaire_process.group("body").count(exact_event) != 1:
-                fail(f"copy-retirement exact event binding is missing: {exact_event}")
-        assignment_text = patched_ascal.replace(";", ";\n")
-        diagnostic_rhs_assignments = re.findall(
-            r"(?m)^\s*([A-Za-z0-9_]+)\s*<=[^;\n]*(?:o_magik_|magik_diag_)[^;\n]*;",
-            assignment_text,
+            if scalaire_body.count(exact_tail) != 1:
+                fail(f"copy-tail exact production binding is missing: {exact_tail}")
+        for retired_tail in (
+            "IF hcarry_v OR o_dshi>0 THEN",
+            "IF o_adturn='1' AND shift_onext((o_acpt+1) MOD 16,o_format) AND",
+        ):
+            if retired_tail in scalaire_body:
+                fail(f"superseded copy terminal expression remains: {retired_tail}")
+        tail_suppression = re.search(
+            r"IF NOT hcarry_v AND o_dshi=0 AND o_last='1' THEN\s*"
+            r"o_copyv\(0\)<='0';\s*END IF;",
+            scalaire_body,
         )
-        allowed_diagnostic_rhs_targets = {
-            "o_magik_frame_flags",
-            "o_magik_frame_open",
-            "o_magik_start_signature",
-            "o_magik_start_signature_valid",
-            "o_magik_previous_ad",
-            "o_magik_diag_state",
-            "o_magik_diag_generation",
-            "magik_diag_state",
-            "magik_diag_generation",
-        }
-        unexpected_diagnostic_rhs_targets = sorted(
-            set(diagnostic_rhs_assignments) - allowed_diagnostic_rhs_targets
-        )
-        if unexpected_diagnostic_rhs_targets:
-            fail(
-                "scaler diagnostic feeds production ascal assignments: "
-                + ", ".join(unexpected_diagnostic_rhs_targets)
-            )
+        if tail_suppression is None:
+            fail("copy tail does not suppress new pixel validity")
         for reset_fragment in (
             "avl_readdataack<='0';",
             "avl_completion_pending<='0';",
@@ -699,26 +675,24 @@ def main() -> None:
                     "Avalon reset branch must retain return accounting: "
                     f"{retained_accounting}"
                 )
-        output_diagnostic_reset = re.search(
+        output_copy_reset = re.search(
             r"Scalaire:PROCESS\s*\(o_clk,o_reset_na\) IS.*?IF o_reset_na='0' THEN"
             r"(?P<body>.*?)ELSIF rising_edge\(o_clk\) THEN",
             patched_ascal, re.S)
-        if output_diagnostic_reset is None:
-            fail("HDMI-domain copy-retirement reset branch is missing")
-        for diagnostic_reset in (
-            "o_magik_frame_open<='0';",
-            "o_magik_frame_flags<=(OTHERS=>'0');",
-            "o_magik_start_signature<=(OTHERS=>'0');",
-            "o_magik_start_signature_valid<='0';",
-            "o_magik_previous_ad<=0;",
-            "o_magik_diag_state<=(OTHERS=>'0');",
-            "o_magik_diag_generation<='0';",
+        if output_copy_reset is None:
+            fail("HDMI-domain scaler reset branch is missing")
+        for last_reset in (
+            "o_last<='0';",
+            "o_last1<='0';",
+            "o_last2<='0';",
         ):
-            if output_diagnostic_reset.group("body").count(diagnostic_reset) != 1:
+            if output_copy_reset.group("body").count(last_reset) != 1:
                 fail(
-                    "HDMI-domain diagnostic reset is missing or ambiguous: "
-                    f"{diagnostic_reset}"
+                    "HDMI-domain copy-tail reset is missing or ambiguous: "
+                    f"{last_reset}"
                 )
+            if scalaire_body.count(last_reset) != 2:
+                fail(f"copy-tail phase must also clear at line start: {last_reset}")
         vs_release = re.search(
             r"IF avl_o_vs_sync='0' AND avl_o_vs='1' THEN\s*"
             r"IF return_drain_ready\(\s*"

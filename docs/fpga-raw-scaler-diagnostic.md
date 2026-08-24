@@ -1,123 +1,92 @@
-# Experimental scaler copy-retirement diagnostic
+# Scaler copy-tail repair
 
-Schema 5 established a persistent physical MagiK black with a correct varied
-framebuffer while the scaler reported `readlev=2`, `copylev=2`, no new reads or
-returns, and zero data at every observed pixel stage. Copy-read, line-write,
-and raw-active timing nevertheless continued. This disposable schema-6 probe
-therefore replaces the broad pipeline observer and asks only why a full copy
-queue is not retiring.
+Status: local proof candidate; fixed-seed Apple signoff and device validation
+remain separate gates.
 
-The queued completion repair and every production reset, latch, route, mux,
-PLL, framebuffer, and pixel behavior remain unchanged. Diagnostic state is
-output-only. No schema-5 observer or Avalon diagnostic crossing remains.
+The disposable schema-6 `scaler-copy-retirement-v1` diagnostic is retired.
+Its first genuine persistent-black result isolated a production copy-FSM
+deadlock. The repair candidate implements no FPGA diagnostic responder:
+commands `0x60` through `0x67` are unsupported, while latch protocol `5` and
+capabilities `0x03ff` remain unchanged. The generated schema-6 host decoder is
+retained only so already-installed rollback experiments can still be read.
 
-## Exact production boundary
+## Decisive result
 
-The production copy FSM retires one buffered block only when this existing
-predicate is true during an active `sCOPY` shift:
+After 75 valid returns, the installed schema-6 RBF reproduced a uniform
+physical MagiK black screen with the authoritative framebuffer still correct.
+Three coherent records were identical: flags `0x15e1`, state `0x83ea`, copy
+state `sCOPY`, `readlev=2`, `copylev=2`, `o_adturn=1`, front `prim=1`, front
+`last=1`, front bank `1`, offset `0`, and `o_copyv(0)=1`.
+
+The frame had copy shifts, next-word phases, line-last activity, and address
+wrap, but no bank-terminal event, exact terminal event, `lev_dec_v`, or
+nonzero copied word. This rules out a lost decrement after a successful
+terminal branch. It identifies a last-block terminal-condition stall.
+
+## Exact defect
+
+The legacy `sCOPY` word/last pipeline advanced only while:
 
 ```text
-o_adturn
-and shift_onext((o_acpt + 1) mod 16, o_format)
-and (((o_ad mod BLEN = 0) and not o_lastv(0)) or o_last2)
+hcarry_v or o_dshi > 0
 ```
 
-The same branch sets `o_copy <= sWAIT` and `lev_dec_v := '1'`. The observer
-records that exact branch, the resulting level decrement, and the individual
-terms needed to explain a predicate that never becomes true.
+The final horizontal-carry edge registers `o_last = 1`. On the following edge
+`hcarry_v` is already false and `o_dshi` is zero, so the branch stops before
+`o_last` can pass through `o_last1` to `o_last2`. For a front block with
+`last=1`, the alternative bank terminal is deliberately false. The copy FSM
+therefore never reaches its existing terminal branch, never asserts
+`lev_dec_v`, and permanently holds both two-entry scheduler levels full.
 
-## Schema 6 record
+## Minimal repair
 
-Command `0x67` remains the only diagnostic command. Magic is `0x4d57`; the
-four response words are schema `6`, flags, state, and the existing CRC-16.
-Commands `0x60` through `0x66` remain unsupported. Latch protocol `5` and
-capabilities `0x03ff` are unchanged. There is no arm, clear, freeze, write, or
-recovery operation.
+The shift gate becomes:
 
-The flags word is sticky from one completed output frame boundary to the next:
+```text
+hcarry_v or o_dshi > 0 or o_last = 1
+```
 
-| Bit | Event seen during the frame |
-| --- | --- |
-| 0 | completed-frame record valid |
-| 1 | copy started from `sWAIT` with `o_copylev>0` |
-| 2 | `lev_dec_v` asserted |
-| 3 | copy FSM observed in `sWAIT` |
-| 4 | copy FSM observed in `sSHIFT` |
-| 5 | copy FSM observed in `sCOPY` |
-| 6 | active copy shift (`hcarry_v or o_dshi>0`) |
-| 7 | `o_adturn` seen during an active shift |
-| 8 | next pixel phase required a word shift |
-| 9 | `o_ad mod BLEN=0` and front `last=0` seen together |
-| 10 | `o_last2` seen |
-| 11 | exact terminal predicate branch taken |
-| 12 | `o_ad` wrapped while in `sCOPY` |
-| 13 | a later copy start repeated the first `{prim,last,bank,offset}` signature |
-| 14 | a later copy start differed from the first signature |
-| 15 | copied DPRAM word was nonzero on `o_sh3` |
+The added `o_last` term keeps the existing word phase and two-register
+line-last pipeline moving until the unchanged terminal semantics can retire
+the last block. On a tail-only edge (`not hcarry_v`, `o_dshi=0`, `o_last=1`),
+`o_copyv(0)` is forced low. Tail edges therefore retire only phase and
+line-last state; they create no new pixel-valid sample or line-buffer write.
+Already-valid delayed samples from the final real horizontal carry continue
+through the existing pipeline normally.
 
-Internal event bit 0 maps to exported flag bit 1; exported bit 0 is added only
-when a complete frame is published. Events and frame publication occur in the
-existing `Scalaire` process, so `lev_dec_v`, `hcarry_v`, and the terminal
-predicate retain their exact same-edge production meaning. State fields are
-the registered pre-edge values at the closing VS boundary:
+Three exact helper functions are compiled from patched production `ascal.vhd`
+and shared by synthesis and proof:
 
-| Bits | State |
-| --- | --- |
-| 1:0 | copy FSM: 0 wait, 1 shift, 2 copy |
-| 3:2 | `o_readlev` |
-| 5:4 | `o_copylev` |
-| 6 | `o_adturn` |
-| 7 | front `prim` metadata |
-| 8 | front `last` metadata |
-| 9 | front DPRAM bank |
-| 13:10 | front pixel offset |
-| 14 | `o_last2` line-terminal pipeline state |
-| 15 | `o_copyv(0)` copy-output active |
+- `copy_shift_active` — legacy shift cases plus only the registered line-last
+  tail;
+- `copy_shift_onext` — the unmodified 8/16/24/32-bpp word-phase truth table;
+- `copy_terminal_ready` — the unmodified terminal predicate.
 
-The completed 32-bit record and generation toggle are stable in `clk_hdmi`.
-The responder waits one HDMI edge, then transfers the bundle into `clk_sys`
-with the existing generation synchronizer plus one-edge bundle-settling
-pattern. UIO snapshots remain immutable for the transaction.
+Normal non-last blocks retain the legacy gate because `o_last=0`. The common
+reset and each first-line initialization explicitly clear `o_last`, `o_last1`,
+and `o_last2`. No scheduler/completion transport, framebuffer, latch, route,
+reset controller, PLL, mux, or output cone is otherwise changed.
 
-## Conservative host decisions
+## Proof and qualification boundary
 
-Three valid samples are required and must independently yield one stable
-classification. Harmless state differences do not invalidate otherwise
-matching evidence.
+The local candidate requires:
 
-| Classification | Meaning |
-| --- | --- |
-| `scaler_copy_lev_dec_missing` | exact terminal branch was observed without its same-branch decrement |
-| `scaler_copy_terminal_condition_stall` | a full frame showed active copy shifts, address turn and wrap, next-word phase, and terminal metadata, but neither terminal branch nor decrement |
-| `scaler_copy_metadata_or_buffer_repetition` | blocks retired with zero copied data and every later start repeated the first metadata signature |
-| `scaler_copy_buffer_selection_zero` | blocks retired with zero copied data, but metadata was not a pure repetition |
-| `scaler_copy_retirement_active` | copy start, active shift, terminal branch, decrement, and nonzero copied data were all observed |
-| `scaler_copy_retirement_evidence_inconclusive` | invalid, mixed, transitional, or insufficient evidence |
+- exhaustive GHDL checks for every active-gate input, every supported format,
+  all 16 phases, normal non-last retirement, no early last-block retirement,
+  and bounded last-tail retirement;
+- exact-source formal safety showing every active tail shifts, no tail edge
+  creates pixel validity, and tail age remains below 18 output-clock steps,
+  plus a retirement cover witness;
+- unchanged completion queue BMC, cover, and induction proofs;
+- structural proof that no schema-6 observer or responder remains and that
+  only the exact `sCOPY` tail sites changed;
+- Icarus proof that `0x60` through `0x67` remain unsupported and every
+  latch-v5 command remains unchanged; and
+- exact two-chain completion CDC/net-delay/MTBF gates, with no diagnostic CDC.
 
-Healthy experimental activation accepts only
-`scaler_copy_retirement_active`. Every result retains
-`sink_visibility: "unobserved"`.
-
-## Proof and signoff boundary
-
-- GHDL compiles patched production `ascal.vhd` and calls the exact shared
-  15-bit sticky accumulator for empty, one-hot, simultaneous, and retained
-  events.
-- Structural proof binds start, decrement, address-wrap, nonzero DPRAM, and the
-  terminal event to the exact production FSM sites and rejects observer fanout
-  into production assignments.
-- Icarus proves schema-6 framing, CRC, immutable snapshots, reset/partial-read
-  behavior, `0x60`–`0x66` unsupported, and latch-v5 non-interference.
-- Completion queue GHDL/formal proof remains unchanged.
-- Only one diagnostic CDC remains: 32 stable bundle bits and one generation
-  toggle from HDMI to sys. Together with completion request and acknowledgement
-  this is four bounded net-delay groups, 35 exact paths, and three calculable
-  chains above the matched baseline. Every chain and their combined MTBF must
-  remain at least `10^12` device-hours.
-- No new RAM, DSP, or PLL is expected. Compared with schema 5, removing the
-  Avalon bucket, its bundle and synchronizers, and broad stage flags should
-  reduce both area and placement pressure. Quartus/Apple signoff is a separate
-  root-owned gate and is not implied by the local proof.
-
-The next implementation must be selected only from preserved physical-black
-evidence. This probe is removed after the copy-retirement mechanism is known.
+No new register, RAM, DSP, or PLL is expected. The helper logic adds one
+registered-state term to the existing copy shift enable and a tail-only clear
+of the existing pixel-valid register. Fixed-seed Apple signoff must still prove
+commercial setup/hold, resource, warning, CDC, and hard-block gates before any
+installation. Device validation must begin by preserving the current incident;
+this document authorizes no recovery or device action.

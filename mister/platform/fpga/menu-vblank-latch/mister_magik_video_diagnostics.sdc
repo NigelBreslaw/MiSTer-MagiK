@@ -38,24 +38,4 @@ set_net_delay -max 10.0 \
 	-from $magik_scaler_completion_ack_route \
 	-to $magik_scaler_completion_ack_meta
 
-# The completed copy-retirement record is built entirely in clk_hdmi. The
-# responder repeats its toggle-plus-stable-bundle protocol into clk_sys.
-# Existing asynchronous clock groups cut normal setup/hold analysis, so both
-# routes are bounded explicitly.
-set magik_scaler_diag_generation [magik_require_registers diagnostic_generation \
-	{*magik_raw_scaler_diagnostic|source_generation} 1]
-set magik_scaler_diag_generation_meta [magik_require_registers diagnostic_generation_meta \
-	{*magik_raw_scaler_diagnostic|generation_meta} 1]
-set_net_delay -max 10.0 \
-	-from $magik_scaler_diag_generation \
-	-to $magik_scaler_diag_generation_meta
-
-set magik_scaler_diag_word [magik_require_registers diagnostic_word \
-	{*magik_raw_scaler_diagnostic|source_state[*]} 32]
-set magik_scaler_diag_capture [magik_require_registers diagnostic_capture \
-	{*magik_raw_scaler_diagnostic|snapshot_state[*]} 32]
-set_net_delay -max 10.0 \
-	-from $magik_scaler_diag_word \
-	-to $magik_scaler_diag_capture
-
-post_message -type info "MagiK diagnostics CDC analysis applied: scaler_completion_request_ack scaler_copy_retirement"
+post_message -type info "MagiK diagnostics CDC analysis applied: scaler_completion_request_ack scaler_copy_tail"

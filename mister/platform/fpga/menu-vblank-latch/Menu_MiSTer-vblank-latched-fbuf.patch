@@ -1,8 +1,8 @@
 diff --git a/sys/ascal.vhd b/sys/ascal.vhd
-index a735e6b..5047950 100644
+index a735e6b..b1d403c 100644
 --- a/sys/ascal.vhd
 +++ b/sys/ascal.vhd
-@@ -75,6 +75,202 @@ LIBRARY ieee;
+@@ -75,6 +75,248 @@ LIBRARY ieee;
  USE ieee.std_logic_1164.ALL;
  USE ieee.numeric_std.ALL;
  
@@ -54,10 +54,23 @@ index a735e6b..5047950 100644
 +		credits : natural;
 +		phase   : natural)
 +		RETURN boolean;
-+	FUNCTION magik_copy_flags_next(
-+		flags  : std_logic_vector(14 DOWNTO 0);
-+		events : std_logic_vector(14 DOWNTO 0))
-+		RETURN std_logic_vector;
++	FUNCTION copy_shift_active(
++		hcarry       : boolean;
++		initial_shift : natural;
++		line_last     : std_logic)
++		RETURN boolean;
++	FUNCTION copy_shift_onext(
++		acpt       : natural;
++		format     : unsigned(2 DOWNTO 0);
++		data_width : positive)
++		RETURN boolean;
++	FUNCTION copy_terminal_ready(
++		adturn             : std_logic;
++		shift_next         : boolean;
++		bank_boundary      : boolean;
++		front_last         : std_logic;
++		line_last_pipeline : std_logic)
++		RETURN boolean;
 +END PACKAGE mister_magik_scaler_completion_queue;
 +
 +LIBRARY ieee;
@@ -183,17 +196,50 @@ index a735e6b..5047950 100644
 +		RETURN credits=0 AND phase=0;
 +	END FUNCTION return_drain_ready;
 +
-+	-- Exact sticky accumulator shared by synthesis and the GHDL observer proof.
-+	-- Events are derived only from the production copy FSM on the current edge.
-+	FUNCTION magik_copy_flags_next(
-+		flags  : std_logic_vector(14 DOWNTO 0);
-+		events : std_logic_vector(14 DOWNTO 0))
-+		RETURN std_logic_vector IS
-+		VARIABLE next_flags : std_logic_vector(14 DOWNTO 0):=flags;
++	FUNCTION copy_shift_active(
++		hcarry       : boolean;
++		initial_shift : natural;
++		line_last     : std_logic)
++		RETURN boolean IS
 +	BEGIN
-+		next_flags:=flags OR events;
-+		RETURN next_flags;
-+	END FUNCTION magik_copy_flags_next;
++		RETURN hcarry OR initial_shift>0 OR line_last='1';
++	END FUNCTION copy_shift_active;
++
++	FUNCTION copy_shift_onext(
++		acpt       : natural;
++		format     : unsigned(2 DOWNTO 0);
++		data_width : positive)
++		RETURN boolean IS
++	BEGIN
++		CASE format IS
++			WHEN "011" =>
++				RETURN (data_width=128 AND (acpt MOD 16)=0) OR
++					(data_width=64 AND (acpt MOD 8)=0);
++			WHEN "100" =>
++				RETURN (data_width=128 AND (acpt MOD 8)=0) OR
++					(data_width=64 AND (acpt MOD 4)=0);
++			WHEN "101" =>
++				RETURN (data_width=128 AND
++					((acpt MOD 16)=0 OR (acpt MOD 16)=5 OR (acpt MOD 16)=10)) OR
++					(data_width=64 AND
++					((acpt MOD 8)=0 OR (acpt MOD 8)=2 OR (acpt MOD 8)=5));
++			WHEN OTHERS =>
++				RETURN (data_width=128 AND (acpt MOD 4)=0) OR
++					(data_width=64 AND (acpt MOD 2)=0);
++		END CASE;
++	END FUNCTION copy_shift_onext;
++
++	FUNCTION copy_terminal_ready(
++		adturn             : std_logic;
++		shift_next         : boolean;
++		bank_boundary      : boolean;
++		front_last         : std_logic;
++		line_last_pipeline : std_logic)
++		RETURN boolean IS
++	BEGIN
++		RETURN adturn='1' AND shift_next AND
++			((bank_boundary AND front_last='0') OR line_last_pipeline='1');
++	END FUNCTION copy_terminal_ready;
 +
 +END PACKAGE BODY mister_magik_scaler_completion_queue;
 +
@@ -205,19 +251,7 @@ index a735e6b..5047950 100644
  -- MODE[2:0]
  -- 000 : Nearest
  -- 001 : Bilinear
-@@ -252,6 +448,11 @@ ENTITY ascal IS
- 		avl_read           : OUT   std_logic;
- 		avl_byteenable     : OUT   std_logic_vector(N_DW/8-1 DOWNTO 0);
- 
-+		------------------------------------
-+		-- Disposable passive MagiK diagnostic
-+		magik_diag_state      : OUT std_logic_vector(31 DOWNTO 0);
-+		magik_diag_generation : OUT std_logic;
-+
- 		------------------------------------
- 		reset_na           : IN    std_logic
- 		);
-@@ -335,6 +536,8 @@ ARCHITECTURE rtl OF ascal IS
+@@ -335,6 +577,8 @@ ARCHITECTURE rtl OF ascal IS
  	TYPE arr_pix IS ARRAY (natural RANGE <>) OF type_pix;
  	TYPE arr_pixq IS ARRAY(natural RANGE <>) OF arr_pix(0 TO 3);
  	ATTRIBUTE ramstyle : string;
@@ -226,7 +260,7 @@ index a735e6b..5047950 100644
  
  	SUBTYPE uint12 IS natural RANGE 0 TO 4095;
  	SUBTYPE uint13 IS natural RANGE 0 TO 8191;
-@@ -418,14 +621,24 @@ ARCHITECTURE rtl OF ascal IS
+@@ -418,14 +662,24 @@ ARCHITECTURE rtl OF ascal IS
  	SIGNAL avl_walt,avl_wline,avl_rline : std_logic;
  	SIGNAL avl_dw,avl_dr : unsigned(N_DW-1 DOWNTO 0);
  	SIGNAL avl_wr : std_logic;
@@ -253,7 +287,7 @@ index a735e6b..5047950 100644
  	FUNCTION buf_next(a,b : natural RANGE 0 TO 2; freeze : std_logic := '0') RETURN natural IS
  	BEGIN
  		IF (freeze='1') THEN RETURN a; END IF;
-@@ -481,6 +694,10 @@ ARCHITECTURE rtl OF ascal IS
+@@ -481,6 +735,10 @@ ARCHITECTURE rtl OF ascal IS
  	SIGNAL o_pshift : natural RANGE 0 TO 15;
  	SIGNAL o_readack,o_readack_sync,o_readack_sync2 : std_logic;
  	SIGNAL o_readdataack,o_readdataack_sync,o_readdataack_sync2 : std_logic;
@@ -264,23 +298,37 @@ index a735e6b..5047950 100644
  	SIGNAL o_copyv : unsigned(0 TO 14);
  	SIGNAL o_adrs : unsigned(31 DOWNTO 0); -- Avalon address
  	SIGNAL o_adrs_pre : natural RANGE 0 TO 2**24-1;
-@@ -557,6 +774,15 @@ ARCHITECTURE rtl OF ascal IS
+@@ -557,7 +815,6 @@ ARCHITECTURE rtl OF ascal IS
  	SIGNAL o_hacpt,o_vacpt : unsigned(11 DOWNTO 0);
  	SIGNAL o_vacptl : unsigned(1 DOWNTO 0);
  	signal o_newres : integer range 0 to 3;
-+	SIGNAL o_magik_frame_open : std_logic:='0';
-+	SIGNAL o_magik_frame_flags : std_logic_vector(14 DOWNTO 0):=(OTHERS=>'0');
-+	SIGNAL o_magik_start_signature : std_logic_vector(6 DOWNTO 0):=(OTHERS=>'0');
-+	SIGNAL o_magik_start_signature_valid : std_logic:='0';
-+	SIGNAL o_magik_previous_ad : natural RANGE 0 TO 2*BLEN-1:=0;
-+	SIGNAL o_magik_diag_state : std_logic_vector(31 DOWNTO 0):=(OTHERS=>'0');
-+	SIGNAL o_magik_diag_generation : std_logic:='0';
-+	ATTRIBUTE preserve OF o_magik_diag_state : SIGNAL IS true;
-+	ATTRIBUTE preserve OF o_magik_diag_generation : SIGNAL IS true;
- 
+-
  	-----------------------------------------------------------------------------
  	FUNCTION shift_ishift(shift : unsigned(0 TO 119);
-@@ -1159,6 +1385,41 @@ BEGIN
+ 												pix   : type_pix;
+@@ -681,20 +938,7 @@ ARCHITECTURE rtl OF ascal IS
+ 	FUNCTION shift_onext (acpt   : natural RANGE 0 TO 15;
+ 								 format : unsigned(5 DOWNTO 0)) RETURN boolean IS
+ 	BEGIN
+-		CASE format(2 DOWNTO 0) IS
+-			WHEN "011" => -- 8bpp
+-				RETURN (N_DW=128 AND acpt=0) OR
+-						 (N_DW=64  AND ((acpt MOD 8)=0));
+-			WHEN "100" => -- 16bpp
+-				RETURN (N_DW=128 AND ((acpt MOD 8)=0)) OR
+-						 (N_DW=64  AND ((acpt MOD 4)=0));
+-			WHEN "101" => -- 24bpp
+-				RETURN (N_DW=128 AND (acpt=0 OR acpt=5 OR acpt=10)) OR
+-						 (N_DW=64  AND ((acpt MOD 8)=0 OR (acpt MOD 8)=2 OR (acpt MOD 8)=5));
+-			WHEN OTHERS => -- 32bpp
+-				RETURN (N_DW=128 AND ((acpt MOD 4)=0)) OR
+-						 (N_DW=64  AND ((acpt MOD 2)=0));
+-		END CASE;
++		RETURN copy_shift_onext(acpt,format(2 DOWNTO 0),N_DW);
+ 	END FUNCTION;
+ 
+ 	FUNCTION shift_opix (shift  : unsigned(0 TO N_DW+15);
+@@ -1159,6 +1403,41 @@ BEGIN
  	i_reset_na<='0'   WHEN reset_na='0' ELSE '1' WHEN rising_edge(i_clk);
  	o_reset_na<='0'   WHEN reset_na='0' ELSE '1' WHEN rising_edge(o_clk);
  	avl_reset_na<='0' WHEN reset_na='0' ELSE '1' WHEN rising_edge(avl_clk);
@@ -322,7 +370,7 @@ index a735e6b..5047950 100644
  
  	-----------------------------------------------------------------------------
  	-- Input pixels FIFO and shreg
-@@ -1672,15 +1933,24 @@ BEGIN
+@@ -1672,15 +1951,24 @@ BEGIN
  	-- AVALON interface
  	Avaloir:PROCESS(avl_clk,avl_reset_na) IS
  		VARIABLE adr_v : unsigned(31 DOWNTO 0);
@@ -347,7 +395,7 @@ index a735e6b..5047950 100644
  			----------------------------------
  			avl_write_sync<=i_write; -- <ASYNC>
  			avl_write_sync2<=avl_write_sync;
-@@ -1774,34 +2044,58 @@ BEGIN
+@@ -1774,34 +2062,58 @@ BEGIN
  					END IF;
  					avl_address<=std_logic_vector(adr_v(N_AW+NB_LA-1 DOWNTO NB_LA));
  
@@ -415,172 +463,72 @@ index a735e6b..5047950 100644
  	avl_write<=avl_write_i;
  	avl_writedata<=std_logic_vector(swap(avl_dr));
  	avl_burstcount<=std_logic_vector(to_unsigned(BLEN,8));
-@@ -1869,6 +2163,10 @@ BEGIN
- 		VARIABLE hcarry_v,vcarry_v : boolean;
- 		VARIABLE dif_v : natural RANGE 0 TO 8*OHRESH-1;
- 		VARIABLE off_v : natural RANGE 0 TO 15;
-+		VARIABLE magik_events_v,magik_flags_v : std_logic_vector(14 DOWNTO 0);
-+		VARIABLE magik_state_v,magik_record_flags_v : std_logic_vector(15 DOWNTO 0);
-+		VARIABLE magik_start_signature_v : std_logic_vector(6 DOWNTO 0);
-+		VARIABLE magik_copy_start_v : boolean;
- 	BEGIN
- 		IF o_reset_na='0' THEN
- 			o_copy<=sWAIT;
-@@ -1877,8 +2175,29 @@ BEGIN
+@@ -1877,6 +2189,12 @@ BEGIN
  			o_readlev<=0;
  			o_copylev<=0;
  			o_hsp<='0';
 +			o_readdataack<='0';
 +			o_readdataack_sync<='0';
 +			o_readdataack_sync2<='0';
-+			o_magik_frame_open<='0';
-+			o_magik_frame_flags<=(OTHERS=>'0');
-+			o_magik_start_signature<=(OTHERS=>'0');
-+			o_magik_start_signature_valid<='0';
-+			o_magik_previous_ad<=0;
-+			o_magik_diag_state<=(OTHERS=>'0');
-+			o_magik_diag_generation<='0';
++			o_last<='0';
++			o_last1<='0';
++			o_last2<='0';
  
  		ELSIF rising_edge(o_clk) THEN
-+			magik_events_v:=(OTHERS=>'0');
-+			magik_flags_v:=o_magik_frame_flags;
-+			magik_copy_start_v:=false;
-+			IF o_copy=sWAIT THEN magik_events_v(2):='1';
-+			ELSIF o_copy=sSHIFT THEN magik_events_v(3):='1';
-+			ELSE magik_events_v(4):='1';
-+			END IF;
-+			IF o_copy=sCOPY AND o_ad<o_magik_previous_ad THEN
-+				magik_events_v(11):='1';
-+			END IF;
-+			IF o_sh3='1' AND o_dr/=0 THEN magik_events_v(14):='1'; END IF;
  			------------------------------------------------------
- 			o_mode   <=mode; -- <ASYNC> ?
- 			o_format <="0001" & format; -- <ASYNC> ?
-@@ -2189,6 +2508,8 @@ BEGIN
- 				WHEN sWAIT =>
- 					o_copyv(0)<='0';
- 					IF o_copylev>0 AND o_copyv(0)='0' THEN
-+						magik_copy_start_v:=true;
-+						magik_events_v(0):='1';
- 						o_copy<=sCOPY;
- 						IF o_off(0)>0 AND o_primv(0)='1' THEN
- 							o_copy<=sSHIFT;
-@@ -2217,6 +2538,7 @@ BEGIN
+@@ -2208,6 +2526,8 @@ BEGIN
+ 						o_acpt<=0;
+ 						o_first<='1';
+ 						o_last<='0';
++						o_last1<='0';
++						o_last2<='0';
  					END IF;
  
- 				WHEN sSHIFT =>
-+					magik_events_v(5):='1';
- 					o_hacpt<=o_hacpt+1;
- 					o_sh<='1';
- 					o_acpt<=(o_acpt+1) MOD 16;
-@@ -2255,6 +2577,15 @@ BEGIN
+ 					IF o_bibv(0)='0' THEN
+@@ -2254,7 +2574,20 @@ BEGIN
+ 						o_last <=to_std_logic(o_hacpt>=o_ihsizem);
  					END IF;
  
- 					IF hcarry_v OR o_dshi>0 THEN
-+						magik_events_v(5):='1';
-+						IF o_adturn='1' THEN magik_events_v(6):='1'; END IF;
-+						IF shift_onext((o_acpt+1) MOD 16,o_format) THEN
-+							magik_events_v(7):='1';
+-					IF hcarry_v OR o_dshi>0 THEN
++					-- Continue shifting after the final horizontal carry. This drains
++					-- o_last through o_last1/o_last2 and advances the word phase until
++					-- the existing terminal predicate can retire the last block.
++					-- synthesis translate_off
++					ASSERT NOT (o_last='1' AND
++						NOT copy_shift_active(hcarry_v,o_dshi,o_last))
++						REPORT "line-last tail stopped before retirement" SEVERITY failure;
++					-- synthesis translate_on
++					IF copy_shift_active(hcarry_v,o_dshi,o_last) THEN
++						-- Tail shifts retire word/last phase only. They must not create
++						-- new valid pixels or line-buffer writes after hcarry has ended.
++						IF NOT hcarry_v AND o_dshi=0 AND o_last='1' THEN
++							o_copyv(0)<='0';
 +						END IF;
-+						IF o_ad MOD BLEN=0 AND o_lastv(0)='0' THEN
-+							magik_events_v(8):='1';
-+						END IF;
-+						IF o_last2='1' THEN magik_events_v(9):='1'; END IF;
  						o_sh<='1';
  						o_acpt<=(o_acpt+1) MOD 16;
  
-@@ -2268,6 +2599,7 @@ BEGIN
+@@ -2266,8 +2599,9 @@ BEGIN
+ 							o_ad<=(o_ad+1) MOD (2*BLEN);
+ 						END IF;
  
- 						IF o_adturn='1' AND (shift_onext((o_acpt+1) MOD 16,o_format)) AND
- 							(((o_ad MOD BLEN=0) AND o_lastv(0)='0') OR o_last2='1')  THEN
-+							magik_events_v(10):='1';
+-						IF o_adturn='1' AND (shift_onext((o_acpt+1) MOD 16,o_format)) AND
+-							(((o_ad MOD BLEN=0) AND o_lastv(0)='0') OR o_last2='1')  THEN
++						IF copy_terminal_ready(
++							o_adturn,shift_onext((o_acpt+1) MOD 16,o_format),
++							o_ad MOD BLEN=0,o_lastv(0),o_last2) THEN
  							o_copy<=sWAIT;
  							lev_dec_v:='1';
  						END IF;
-@@ -2365,6 +2697,59 @@ BEGIN
- 				o_off  (2)<=off_v;
- 			END IF;
- 
-+			-- Passive per-completed-frame copy-retirement record. Event bits use
-+			-- the exact production FSM predicates above; they never feed the FSM,
-+			-- counters, metadata FIFO, DPRAM, line buffers, or pixel path.
-+			IF lev_dec_v='1' THEN magik_events_v(1):='1'; END IF;
-+			IF magik_copy_start_v THEN
-+				magik_start_signature_v:=o_primv(0) & o_lastv(0) & o_bibv(0) &
-+					std_logic_vector(to_unsigned(o_off(0),4));
-+				IF o_magik_start_signature_valid='1' THEN
-+					IF magik_start_signature_v=o_magik_start_signature THEN
-+						magik_events_v(12):='1';
-+					ELSE
-+						magik_events_v(13):='1';
-+					END IF;
-+				ELSE
-+					o_magik_start_signature<=magik_start_signature_v;
-+					o_magik_start_signature_valid<='1';
-+				END IF;
-+			END IF;
-+			magik_flags_v:=magik_copy_flags_next(magik_flags_v,magik_events_v);
-+			o_magik_previous_ad<=o_ad;
-+
-+			IF o_vsv(1)='1' AND o_vsv(0)='0' THEN
-+				IF o_magik_frame_open='1' THEN
-+					magik_record_flags_v:=magik_flags_v & '1';
-+					magik_state_v:=(OTHERS=>'0');
-+					CASE o_copy IS
-+						WHEN sWAIT  => magik_state_v(1 DOWNTO 0):="00";
-+						WHEN sSHIFT => magik_state_v(1 DOWNTO 0):="01";
-+						WHEN sCOPY  => magik_state_v(1 DOWNTO 0):="10";
-+					END CASE;
-+					magik_state_v(3 DOWNTO 2):=
-+						std_logic_vector(to_unsigned(o_readlev,2));
-+					magik_state_v(5 DOWNTO 4):=
-+						std_logic_vector(to_unsigned(o_copylev,2));
-+					magik_state_v(6):=o_adturn;
-+					magik_state_v(7):=o_primv(0);
-+					magik_state_v(8):=o_lastv(0);
-+					magik_state_v(9):=o_bibv(0);
-+					magik_state_v(13 DOWNTO 10):=
-+						std_logic_vector(to_unsigned(o_off(0),4));
-+					magik_state_v(14):=o_last2;
-+					magik_state_v(15):=o_copyv(0);
-+					o_magik_diag_state<=magik_state_v & magik_record_flags_v;
-+					o_magik_diag_generation<=NOT o_magik_diag_generation;
-+				ELSE
-+					o_magik_frame_open<='1';
-+				END IF;
-+				o_magik_frame_flags<=(OTHERS=>'0');
-+				o_magik_start_signature_valid<='0';
-+			ELSE
-+				o_magik_frame_flags<=magik_flags_v;
-+			END IF;
-+
- 			------------------------------------------------------
- 		END IF;
- 	END PROCESS Scalaire;
-@@ -3017,6 +3402,9 @@ BEGIN
- 		END IF;
- 	END PROCESS VSCAL;
- 
-+	magik_diag_state<=o_magik_diag_state;
-+	magik_diag_generation<=o_magik_diag_generation;
-+
- 	-----------------------------------------------------------------------------
- 	-- Low Lag syntoniser interface
- 	o_lltune<=(0 => i_vss,
 diff --git a/sys/sys_top.v b/sys/sys_top.v
-index a416879..e347c54 100644
+index a416879..4d81fc6 100644
 --- a/sys/sys_top.v
 +++ b/sys/sys_top.v
-@@ -351,6 +351,72 @@ reg [12:0] arc2x = 0;
+@@ -351,6 +351,68 @@ reg [12:0] arc2x = 0;
  reg [12:0] arc2y = 0;
  reg [15:0] io_dout_sys;
  
 +wire        magik_response_valid;
 +wire [15:0] magik_response_data;
-+wire        magik_diag_response_valid;
-+wire [15:0] magik_diag_response_data;
-+wire [31:0] magik_scaler_copy_state;
-+wire        magik_scaler_copy_generation;
 +wire        magik_lfb_apply_accepted;
 +wire        magik_lfb_en;
 +wire        magik_lfb_flt;
@@ -644,7 +592,7 @@ index a416879..e347c54 100644
  always@(posedge clk_sys) begin
  	reg  [7:0] cmd;
  	reg        has_cmd;
-@@ -360,6 +426,19 @@ always@(posedge clk_sys) begin
+@@ -360,6 +422,19 @@ always@(posedge clk_sys) begin
  	reg  [7:0] fb_crc;
  	reg  [1:0] sl_r;
  
@@ -664,51 +612,23 @@ index a416879..e347c54 100644
  	coef_wr <= 0;
  	sl_r <= FB_EN ? 2'b00 : scanlines;
  
-@@ -407,6 +486,8 @@ always@(posedge clk_sys) begin
+@@ -407,6 +482,7 @@ always@(posedge clk_sys) begin
  			if(io_din[7:0] == 'h40) io_dout_sys <= fb_crc;
  `endif
  			if(io_din[7:0] == 'h42) io_dout_sys <= {1'b1, frame_cnt};
 +			if(magik_response_valid) io_dout_sys <= magik_response_data;
-+			if(magik_diag_response_valid) io_dout_sys <= magik_diag_response_data;
  			if(io_din[7:0] == 'h44) io_dout_sys <= 1;
  		end
  		else begin
-@@ -462,6 +543,8 @@ always@(posedge clk_sys) begin
+@@ -462,6 +538,7 @@ always@(posedge clk_sys) begin
  					9: LFB_STRIDE      <= io_din[13:0];
  				endcase
  			end
 +			if(magik_response_valid) io_dout_sys <= magik_response_data;
-+			if(magik_diag_response_valid) io_dout_sys <= magik_diag_response_data;
  			if(cmd == 'h25) {led_overtake, led_state} <= io_din;
  			if(cmd == 'h26) vol_att <= io_din[4:0];
  			if(cmd == 'h27) VSET <= io_din[11:0];
-@@ -826,8 +909,24 @@ wire         bob_deint;
- 		.avl_address      (vbuf_address),
- 		.avl_write        (vbuf_write),
- 		.avl_read         (vbuf_read),
--		.avl_byteenable   (vbuf_byteenable)
-+		.avl_byteenable   (vbuf_byteenable),
-+		.magik_diag_state (magik_scaler_copy_state),
-+		.magik_diag_generation(magik_scaler_copy_generation)
- 	);
-+
-+mister_magik_raw_scaler_diagnostic magik_raw_scaler_diagnostic
-+(
-+	.clk_hdmi(clk_hdmi),
-+	.clk_sys(clk_sys),
-+	.reset_active(reset_req),
-+	.copy_state(magik_scaler_copy_state),
-+	.copy_generation(magik_scaler_copy_generation),
-+	.io_uio(io_uio),
-+	.io_strobe(io_strobe),
-+	.io_din(io_din),
-+	.response_valid(magik_diag_response_valid),
-+	.response_data(magik_diag_response_data)
-+);
- `endif
- 
- reg        LFB_EN     = 0;
-@@ -1380,15 +1479,30 @@ assign HDMI_TX_D  = hdmi_out_d;
+@@ -1380,15 +1457,30 @@ assign HDMI_TX_D  = hdmi_out_d;
  
  wire [23:0] vga_data_sl;
  wire        vga_de_sl, vga_ce_sl, vga_vs_sl, vga_hs_sl;

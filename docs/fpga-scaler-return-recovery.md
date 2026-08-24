@@ -1,11 +1,18 @@
 # FPGA scaler return recovery design
 
-Status: implemented candidate, qualification blocked; not release-qualified.
+Status: queued completion repair retained; copy-tail forward repair in local
+proof; not release-qualified.
 
-No RBF produced by the two retired diagnostic designs, including the current
-repair-only `754f70ed` candidate, may be installed or published. The measured
-attempts and their disposition remain in
+No retired diagnostic RBF is release-qualified. The measured attempts and
+their disposition remain in
 [FPGA video diagnostics: two attempted designs and their retirement](../history/2026-08-14-fpga-video-diagnostics-design-attempts.md).
+
+Later passive evidence found a second causal defect after the queued completion
+transport was already healthy: the final `sCOPY` horizontal carry can register
+`o_last` on the last edge admitted by the legacy shift gate, stranding the
+delayed line terminal and preventing `lev_dec_v`. The narrow forward repair is
+documented in [Scaler copy-tail repair](fpga-raw-scaler-diagnostic.md). It
+preserves the queued completion repair and removes the disposable observer.
 
 ## Decision
 

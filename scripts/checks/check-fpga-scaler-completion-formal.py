@@ -73,13 +73,19 @@ def yosys_binary() -> str:
     fail("Yosys is unavailable")
 
 
-def yosys_prefix(netlist: Path, wrapper: Path, *, define: str | None = None) -> str:
+def yosys_prefix(
+    netlist: Path,
+    wrapper: Path,
+    *,
+    top: str = "mister_magik_ascal_completion_formal",
+    define: str | None = None,
+) -> str:
     define_option = f" -D{define}" if define else ""
     return "; ".join(
         (
             f"read_verilog -formal {netlist}",
             f"read_verilog -formal -sv{define_option} {wrapper}",
-            "hierarchy -check -top mister_magik_ascal_completion_formal",
+            f"hierarchy -check -top {top}",
             "proc",
             "flatten",
             "clk2fflogic",
@@ -122,6 +128,8 @@ def main() -> None:
     queue_tb = source_dir / "tb_mister_magik_scaler_completion_queue.vhd"
     formal_dut = source_dir / "mister_magik_scaler_completion_formal_dut.vhd"
     formal_wrapper = source_dir / "mister_magik_ascal_completion_formal.sv"
+    tail_formal_dut = source_dir / "mister_magik_scaler_copy_tail_formal_dut.vhd"
+    tail_formal_wrapper = source_dir / "mister_magik_scaler_copy_tail_formal.sv"
     pin = (source_dir / "Menu_MiSTer.commit").read_text().strip()
 
     root_commit = run(["git", "rev-parse", "HEAD"], cwd=root, capture=True).strip()
@@ -132,7 +140,15 @@ def main() -> None:
     if not args.allow_unpinned and menu_commit != pin:
         fail(f"Menu commit {menu_commit} is not pinned {pin}")
 
-    required = (patch, queue_tb, formal_dut, formal_wrapper, menu / "sys/ascal.vhd")
+    required = (
+        patch,
+        queue_tb,
+        formal_dut,
+        formal_wrapper,
+        tail_formal_dut,
+        tail_formal_wrapper,
+        menu / "sys/ascal.vhd",
+    )
     missing = [str(path) for path in required if not path.is_file()]
     if missing:
         fail("missing proof input: " + ", ".join(missing))
@@ -225,6 +241,7 @@ def main() -> None:
                 str(patched_ascal),
                 str(queue_tb),
                 str(formal_dut),
+                str(tail_formal_dut),
             ],
             cwd=ghdl_work,
         )
@@ -268,9 +285,64 @@ def main() -> None:
             r"module\s+mister_magik_scaler_completion_formal_dut\b", netlist_text
         ):
             fail("GHDL synthesis did not emit the narrow formal DUT")
+        tail_netlist_text = run(
+            [
+                "ghdl",
+                "synth",
+                "--std=08",
+                f"--workdir={ghdl_work}",
+                "--out=verilog",
+                "mister_magik_scaler_copy_tail_formal_dut",
+            ],
+            cwd=ghdl_work,
+            capture=True,
+        )
+        tail_netlist = temporary / "mister-magik-scaler-copy-tail-formal.v"
+        tail_netlist.write_text(tail_netlist_text)
+        if not re.search(
+            r"module\s+mister_magik_scaler_copy_tail_formal_dut\b",
+            tail_netlist_text,
+        ):
+            fail("GHDL synthesis did not emit the copy-tail formal DUT")
         if artifacts is not None:
             shutil.copy2(patched_ascal, artifacts / "patched-ascal.vhd")
             shutil.copy2(netlist, artifacts / "formal-dut.v")
+            shutil.copy2(tail_netlist, artifacts / "copy-tail-formal-dut.v")
+
+        tail_prefix = yosys_prefix(
+            tail_netlist,
+            tail_formal_wrapper,
+            top="mister_magik_scaler_copy_tail_formal",
+        )
+        tail_base_command = (
+            tail_prefix
+            + "; chformal -cover -remove"
+            + "; sat -seq 48 -set-assumes -set-init-zero"
+            + " -prove-asserts -verify"
+            + f" -timeout {args.solver_timeout}"
+        )
+        tail_base_log = run_solver(
+            [yosys, "-Q", "-p", tail_base_command],
+            cwd=root,
+            log_path=artifacts / "copy-tail-base.log" if artifacts else None,
+        )
+        if "SAT proof finished - no model found" not in tail_base_log:
+            fail("Yosys did not complete the copy-tail bounded proof")
+
+        tail_cover_command = (
+            tail_prefix
+            + "; chformal -cover -remove; chformal -assert -remove"
+            + "; sat -seq 48 -set-assumes -set-init-zero"
+            + " -set-at 48 retired 1"
+            + f" -timeout {args.solver_timeout} -show retired"
+        )
+        tail_cover_log = run_solver(
+            [yosys, "-Q", "-p", tail_cover_command],
+            cwd=root,
+            log_path=artifacts / "copy-tail-cover.log" if artifacts else None,
+        )
+        if "SAT solving finished - model found" not in tail_cover_log:
+            fail("required copy-tail retirement cover is unreachable")
 
         prefix = yosys_prefix(netlist, formal_wrapper)
         base_command = (
@@ -362,10 +434,15 @@ def main() -> None:
             "patched_ascal_sha256": sha256(patched_ascal),
             "formal_dut_sha256": sha256(formal_dut),
             "formal_wrapper_sha256": sha256(formal_wrapper),
+            "copy_tail_formal_dut_sha256": sha256(tail_formal_dut),
+            "copy_tail_formal_wrapper_sha256": sha256(tail_formal_wrapper),
             "ghdl_netlist_sha256": sha256(netlist),
+            "copy_tail_ghdl_netlist_sha256": sha256(tail_netlist),
             "blen": 128,
             "reset_reachable_base_depth": args.base_depth,
             "safety_induction_maxsteps": args.safety_maxsteps,
+            "copy_tail_bounded_depth": 48,
+            "copy_tail_retirement_cover_depth": 48,
             "covers": cover_results,
             "result": "preflight-pass" if args.preflight else "pass",
         }

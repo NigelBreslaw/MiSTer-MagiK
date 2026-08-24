@@ -74,8 +74,8 @@ EXPECTED_UNCONSTRAINED_OUTPUT_PATHS = 158
 EXPECTED_DIAGNOSTIC_UNCONSTRAINED_OUTPUT_PATHS = 160
 MINIMUM_CUSTOM_MTBF_DEVICE_HOURS = 1.0e12
 MINIMUM_CUSTOM_MTBF_YEARS = MINIMUM_CUSTOM_MTBF_DEVICE_HOURS / (24.0 * 365.25)
-EXPECTED_ADDED_RECOGNIZED_COMPLETION_SYNCHRONIZER_CHAINS = 3
-EXPECTED_ADDED_CALCULABLE_COMPLETION_SYNCHRONIZER_CHAINS = 3
+EXPECTED_ADDED_RECOGNIZED_COMPLETION_SYNCHRONIZER_CHAINS = 2
+EXPECTED_ADDED_CALCULABLE_COMPLETION_SYNCHRONIZER_CHAINS = 2
 EXPECTED_QUARTUS_POLICY = {
     "auto_parallel_synthesis": "off",
     "parallel_synthesis": "off",
@@ -86,8 +86,6 @@ EXPECTED_SYNC_ASSIGNMENT_SUFFIXES = (
     "ascal:ascal|o_readdataack_sync2",
     "ascal:ascal|avl_completion_ack_meta",
     "ascal:ascal|avl_completion_ack_sync",
-    "mister_magik_raw_scaler_diagnostic:magik_raw_scaler_diagnostic|generation_meta",
-    "mister_magik_raw_scaler_diagnostic:magik_raw_scaler_diagnostic|generation_sync",
 )
 EXPECTED_METASTABILITY_CHAINS = {
     "completion_request": {
@@ -103,14 +101,6 @@ EXPECTED_METASTABILITY_CHAINS = {
             "ascal:ascal|avl_completion_ack_sync",
         ),
     },
-    "responder_diagnostic_generation": {
-        "source": "mister_magik_raw_scaler_diagnostic:magik_raw_scaler_diagnostic|source_generation",
-        "synchronization_node": "mister_magik_raw_scaler_diagnostic:magik_raw_scaler_diagnostic|generation_meta",
-        "registers": (
-            "mister_magik_raw_scaler_diagnostic:magik_raw_scaler_diagnostic|generation_meta",
-            "mister_magik_raw_scaler_diagnostic:magik_raw_scaler_diagnostic|generation_sync",
-        ),
-    },
 }
 EXPECTED_CDC_ANALYSIS_LABELS: frozenset[str] = frozenset(
     {"scaler_completion_request_ack"}
@@ -124,7 +114,7 @@ DIAGNOSTIC_REPORT_NAMES = frozenset(
 )
 EXPECTED_CDC_REPORT_ANALYSES = {
     "menu.magik-diagnostic-cdc-skew.rpt": ("set_max_skew", 0),
-    "menu.magik-diagnostic-cdc-net-delay.rpt": ("set_net_delay", 4),
+    "menu.magik-diagnostic-cdc-net-delay.rpt": ("set_net_delay", 2),
 }
 EXPECTED_NET_DELAY_PATHS = {
     "completion_request": re.compile(
@@ -132,12 +122,6 @@ EXPECTED_NET_DELAY_PATHS = {
     ),
     "completion_ack": re.compile(
         r"o_readdataack_sync2[^\n]*avl_completion_ack_meta", re.IGNORECASE
-    ),
-    "responder_diagnostic_generation": re.compile(
-        r"source_generation[^\n]*generation_meta", re.IGNORECASE
-    ),
-    "responder_diagnostic_bundle": re.compile(
-        r"source_state[^\n]*snapshot_state", re.IGNORECASE
     ),
 }
 
@@ -477,7 +461,7 @@ def validate_diagnostic_reports(
                 )
             )
             detailed_path_counts[name] = len(detailed_rows)
-            if len(detailed_rows) != 35:
+            if len(detailed_rows) != 2:
                 reasons.append("diagnostic_cdc_analysis_count")
             detailed_path_identities = {
                 label: sum(
@@ -494,8 +478,6 @@ def validate_diagnostic_reports(
             expected_identity_counts = {
                 "completion_request": 1,
                 "completion_ack": 1,
-                "responder_diagnostic_generation": 1,
-                "responder_diagnostic_bundle": 32,
             }
             if detailed_path_identities != expected_identity_counts:
                 reasons.append("diagnostic_cdc_path_identity_mismatch")

@@ -1056,6 +1056,31 @@ metadata signature. This is the smallest probe that separates a lost
 selection. Details are in
 [`2026-08-24-scaler-copy-retirement-design.md`](2026-08-24-scaler-copy-retirement-design.md).
 
+## Design 10: functional scaler copy-tail repair
+
+Design 9 reproduced a genuine persistent black after 75 valid returns. Three
+identical schema-6 records (`flags=0x15e1`, `state=0x83ea`) proved `sCOPY`,
+`readlev=2`, `copylev=2`, active shifts, word-phase progress, line-last
+activity, and address wrap, but no terminal branch or `lev_dec_v`. Front
+metadata was the last block of a line, so the normal bank-boundary alternative
+was intentionally unavailable.
+
+Exact production inspection found that final horizontal carry registers
+`o_last` on the last edge for which the legacy `hcarry_v or o_dshi>0` gate is
+true. The next edge closes the branch, preventing `o_last` from reaching
+`o_last2`; the last block can never retire. Design 10 removes schema 6 and all
+diagnostic response logic. It extends only that shift gate with registered
+`o_last` and forces `o_copyv(0)=0` on tail-only edges, allowing phase/last state
+to drain without creating a new pixel or line-buffer write. The original
+terminal truth table and normal non-last behavior are retained through shared
+exact-source helpers.
+
+The repair is described in
+[`../docs/fpga-raw-scaler-diagnostic.md`](../docs/fpga-raw-scaler-diagnostic.md).
+The preserved device incident remains untouched while local simulation,
+formal, structural, and commit gates run. Fixed-seed Apple signoff and physical
+validation remain separate requirements.
+
 ## Facts established despite the failed implementations
 
 The work was not diagnostically empty. It established the following facts:
@@ -1081,6 +1106,10 @@ The work was not diagnostically empty. It established the following facts:
 11. The vertical-colour-band occurrence may involve partial line integrity or
     fetch starvation, but the captured evidence and attempted diagnostics did
     not prove that it shares the black-screen mechanism.
+12. Schema 6 proved a genuine black can leave the copy FSM in `sCOPY` with both
+    levels full because the registered line-last indication is stranded before
+    its delayed terminal stage; this is the causal production defect repaired
+    by Design 10.
 
 ## Final disposition
 

@@ -90,7 +90,10 @@ BEGIN
 		VARIABLE vs_edge_v : boolean;
 		VARIABLE read_asserted_v,read_accepted_v,waitrequest_v : std_logic;
 		VARIABLE acceptance_count_v : natural;
-		VARIABLE copy_flags_v,copy_events_v : std_logic_vector(14 DOWNTO 0);
+		VARIABLE format_v : unsigned(2 DOWNTO 0);
+		VARIABLE tail_last_v,tail_last1_v,tail_last2_v : std_logic;
+		VARIABLE acpt_v,shift_count_v : natural;
+		VARIABLE retired_v : boolean;
 		PROCEDURE produce IS
 		BEGIN
 			WAIT UNTIL falling_edge(source_clk);
@@ -100,33 +103,70 @@ BEGIN
 			produced<=produced+1;
 		END PROCEDURE;
 	BEGIN
-		-- Exercise the exact observer accumulator compiled from patched
-		-- production ascal. Empty frame state stays empty, every event maps to
-		-- exactly one bit, and a later quiet edge cannot clear prior evidence.
-		copy_flags_v:=(OTHERS=>'0');
-		copy_events_v:=(OTHERS=>'0');
-		copy_flags_v:=magik_copy_flags_next(copy_flags_v,copy_events_v);
-		ASSERT copy_flags_v=(copy_flags_v'RANGE=>'0')
-			REPORT "empty copy-retirement frame gained activity" SEVERITY failure;
-		FOR event_bit IN 0 TO 14 LOOP
-			copy_flags_v:=(OTHERS=>'0');
-			copy_events_v:=(OTHERS=>'0');
-			copy_events_v(event_bit):='1';
-			copy_flags_v:=magik_copy_flags_next(copy_flags_v,copy_events_v);
-			ASSERT copy_flags_v=std_logic_vector(
-				shift_left(to_unsigned(1,15),event_bit))
-				REPORT "copy-retirement event mapping changed" SEVERITY failure;
-			copy_events_v:=(OTHERS=>'0');
-			copy_flags_v:=magik_copy_flags_next(copy_flags_v,copy_events_v);
-			ASSERT copy_flags_v=std_logic_vector(
-				shift_left(to_unsigned(1,15),event_bit))
-				REPORT "copy-retirement event was not sticky" SEVERITY failure;
+		-- The exact production helper must preserve every legacy active case and
+		-- add only the registered line-last tail.
+		FOR hcarry_i IN 0 TO 1 LOOP
+			FOR dshi_i IN 0 TO 3 LOOP
+				FOR last_i IN 0 TO 1 LOOP
+					ASSERT copy_shift_active(
+						hcarry_i=1,dshi_i,to_unsigned(last_i,1)(0)) =
+						(hcarry_i=1 OR dshi_i>0 OR last_i=1)
+						REPORT "copy tail active predicate mismatch" SEVERITY failure;
+				END LOOP;
+			END LOOP;
 		END LOOP;
-		copy_flags_v:=(OTHERS=>'0');
-		copy_events_v:=(OTHERS=>'1');
-		copy_flags_v:=magik_copy_flags_next(copy_flags_v,copy_events_v);
-		ASSERT copy_flags_v=(copy_flags_v'RANGE=>'1')
-			REPORT "simultaneous copy-retirement events were lost" SEVERITY failure;
+
+		-- Normal non-last blocks still retire only on an aligned bank boundary.
+		ASSERT copy_terminal_ready('1',true,true,'0','0')
+			REPORT "normal non-last block no longer retires" SEVERITY failure;
+		ASSERT NOT copy_terminal_ready('1',true,true,'1','0')
+			REPORT "last block retired before its delayed line-last" SEVERITY failure;
+		ASSERT copy_terminal_ready('1',true,false,'1','1')
+			REPORT "delayed line-last no longer retires the last block" SEVERITY failure;
+
+		-- Exhaust all starting pixel phases and supported output word formats.
+		-- Once final hcarry registers o_last, two tail shifts drain last1/last2;
+		-- every format reaches a next-word phase within 16 more shifts.
+		FOR format_i IN 0 TO 3 LOOP
+			CASE format_i IS
+				WHEN 0 => format_v:="011"; -- 8bpp
+				WHEN 1 => format_v:="100"; -- 16bpp
+				WHEN 2 => format_v:="101"; -- 24bpp
+				WHEN OTHERS => format_v:="110"; -- 32bpp
+			END CASE;
+			shift_count_v:=0;
+			FOR phase_i IN 0 TO 15 LOOP
+				IF copy_shift_onext(phase_i,format_v,128) THEN
+					shift_count_v:=shift_count_v+1;
+				END IF;
+			END LOOP;
+			ASSERT shift_count_v>0
+				REPORT "supported format has no terminal word phase" SEVERITY failure;
+			FOR start_phase IN 0 TO 15 LOOP
+				tail_last_v:='1';
+				tail_last1_v:='0';
+				tail_last2_v:='0';
+				acpt_v:=start_phase;
+				retired_v:=false;
+				FOR tail_step IN 0 TO 17 LOOP
+					IF NOT retired_v THEN
+						ASSERT copy_shift_active(false,0,tail_last_v)
+							REPORT "line-last tail stopped" SEVERITY failure;
+						IF copy_terminal_ready(
+							'1',copy_shift_onext((acpt_v+1) MOD 16,format_v,128),
+							false,'1',tail_last2_v) THEN
+							retired_v:=true;
+						ELSE
+							tail_last2_v:=tail_last1_v;
+							tail_last1_v:=tail_last_v;
+							acpt_v:=(acpt_v+1) MOD 16;
+						END IF;
+					END IF;
+				END LOOP;
+				ASSERT retired_v
+					REPORT "line-last tail failed bounded retirement" SEVERITY failure;
+			END LOOP;
+		END LOOP;
 
 		-- Exhaust the exact production transition function truth table.
 		FOR request_i IN 0 TO 1 LOOP
