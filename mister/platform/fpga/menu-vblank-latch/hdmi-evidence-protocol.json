@@ -43,23 +43,38 @@
     ]
   },
   "raw_scaler_state": {
-    "schema": 2,
+    "schema": 3,
     "command": 103,
     "magic": 19799,
-    "word_count": 3,
+    "word_count": 15,
     "words": [
       "schema",
-      "state",
+      "flags",
+      "baseline_control_crc",
+      "first_bad_control_crc",
+      "baseline_hs_edges",
+      "first_bad_hs_edges",
+      "baseline_de_starts",
+      "first_bad_de_starts",
+      "baseline_active_low",
+      "baseline_active_high",
+      "first_bad_active_low",
+      "first_bad_active_high",
+      "first_bad_frame_sequence",
+      "first_bad_generation",
       "crc"
     ],
-    "fields": {
-      "valid": {"bit": 0, "width": 1},
-      "clock_enable_seen": {"bit": 1, "width": 1},
-      "horizontal_sync_seen": {"bit": 2, "width": 1},
-      "reserved_zero": {"bit": 3, "width": 1},
-      "active_sample_count": {"bit": 4, "width": 4},
-      "nonzero_sample_count": {"bit": 8, "width": 4},
-      "frame_sequence": {"bit": 12, "width": 4}
+    "flags": {
+      "sample_valid": 0,
+      "sample_nonempty": 1,
+      "sample_overflow": 2,
+      "baseline_valid": 3,
+      "mismatch_latched": 4
+    },
+    "reserved_zero_masks": {
+      "flags": 65504,
+      "baseline_active_high": 65280,
+      "first_bad_active_high": 65280
     }
   },
   "path_activity": {

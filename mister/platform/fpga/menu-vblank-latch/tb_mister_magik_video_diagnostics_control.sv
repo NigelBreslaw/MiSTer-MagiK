@@ -9,7 +9,6 @@ module tb_mister_magik_video_diagnostics_control;
 	reg clk_sys = 1'b0;
 	reg reset_active = 1'b1;
 	reg raw_ce = 1'b1;
-	reg [23:0] raw_rgb = 24'd0;
 	reg raw_de = 1'b0;
 	reg raw_hs = 1'b0;
 	reg raw_vs = 1'b0;
@@ -18,27 +17,22 @@ module tb_mister_magik_video_diagnostics_control;
 	reg [15:0] io_din = 16'd0;
 	wire response_valid;
 	wire [15:0] response_data;
+	reg [15:0] record [0:14];
+	reg [15:0] saved_bad [0:14];
 	reg [15:0] expected_crc;
 	integer command;
-	integer frame_index;
+	integer index;
 
 	always #7 clk_hdmi = ~clk_hdmi;
 	always #5 clk_sys = ~clk_sys;
 
+	`include "mister_magik_video_diagnostics_protocol.svh"
+
 	mister_magik_raw_scaler_diagnostic dut (
-		.clk_hdmi(clk_hdmi),
-		.clk_sys(clk_sys),
-		.reset_active(reset_active),
-		.raw_ce(raw_ce),
-		.raw_rgb(raw_rgb),
-		.raw_de(raw_de),
-		.raw_hs(raw_hs),
-		.raw_vs(raw_vs),
-		.io_uio(io_uio),
-		.io_strobe(io_strobe),
-		.io_din(io_din),
-		.response_valid(response_valid),
-		.response_data(response_data)
+		.clk_hdmi(clk_hdmi), .clk_sys(clk_sys), .reset_active(reset_active),
+		.raw_ce(raw_ce), .raw_de(raw_de), .raw_hs(raw_hs), .raw_vs(raw_vs),
+		.io_uio(io_uio), .io_strobe(io_strobe), .io_din(io_din),
+		.response_valid(response_valid), .response_data(response_data)
 	);
 
 	function automatic [15:0] crc_byte;
@@ -63,36 +57,68 @@ module tb_mister_magik_video_diagnostics_control;
 	endfunction
 
 	task automatic hdmi_sample;
+		input ce;
 		input de;
 		input hs;
-		input [23:0] rgb;
+		input vs;
 		begin
 			@(negedge clk_hdmi);
+			raw_ce = ce;
 			raw_de = de;
 			raw_hs = hs;
-			raw_rgb = rgb;
+			raw_vs = vs;
 			@(posedge clk_hdmi);
 		end
 	endtask
 
-	task automatic complete_frame;
-		input integer active_samples;
-		input integer nonzero_samples;
-		input hs_present;
-		integer index;
+	task automatic frame_boundary;
 		begin
-			raw_vs = 1'b0;
-			hdmi_sample(1'b0, hs_present, 24'd0);
-			for(index = 0; index < active_samples; index = index + 1)
-				hdmi_sample(1'b1, 1'b0,
-					index < nonzero_samples ? (24'h010101 + index) : 24'd0);
-			hdmi_sample(1'b0, 1'b0, 24'd0);
-			@(negedge clk_hdmi);
-			raw_vs = 1'b1;
-			@(posedge clk_hdmi);
-			@(negedge clk_hdmi);
-			raw_vs = 1'b0;
-			repeat(7) @(posedge clk_sys);
+			hdmi_sample(1'b1, 1'b0, 1'b0, 1'b1);
+			hdmi_sample(1'b1, 1'b0, 1'b0, 1'b0);
+		end
+	endtask
+
+	// Patterns 0 and 1 have identical aggregate counts but different ordering.
+	// Patterns 2, 3, and 4 change HS, DE-start, and active counts respectively.
+	task automatic complete_pattern;
+		input integer pattern;
+		begin
+			case(pattern)
+				0: begin
+					hdmi_sample(1, 0, 1, 0); hdmi_sample(1, 0, 0, 0);
+					hdmi_sample(1, 1, 0, 0); hdmi_sample(1, 1, 0, 0);
+					hdmi_sample(1, 1, 0, 0); hdmi_sample(1, 0, 0, 0);
+				end
+				1: begin
+					hdmi_sample(1, 1, 0, 0); hdmi_sample(1, 1, 0, 0);
+					hdmi_sample(1, 1, 0, 0); hdmi_sample(1, 0, 0, 0);
+					hdmi_sample(1, 0, 1, 0); hdmi_sample(1, 0, 0, 0);
+				end
+				2: begin
+					hdmi_sample(1, 0, 1, 0); hdmi_sample(1, 0, 0, 0);
+					hdmi_sample(1, 0, 1, 0); hdmi_sample(1, 0, 0, 0);
+					hdmi_sample(1, 1, 0, 0); hdmi_sample(1, 1, 0, 0);
+					hdmi_sample(1, 1, 0, 0); hdmi_sample(1, 0, 0, 0);
+				end
+				3: begin
+					hdmi_sample(1, 0, 1, 0); hdmi_sample(1, 0, 0, 0);
+					hdmi_sample(1, 1, 0, 0); hdmi_sample(1, 0, 0, 0);
+					hdmi_sample(1, 1, 0, 0); hdmi_sample(1, 1, 0, 0);
+					hdmi_sample(1, 0, 0, 0);
+				end
+				4: begin
+					hdmi_sample(1, 0, 1, 0); hdmi_sample(1, 0, 0, 0);
+					hdmi_sample(1, 1, 0, 0); hdmi_sample(1, 1, 0, 0);
+					hdmi_sample(1, 1, 0, 0); hdmi_sample(1, 1, 0, 0);
+					hdmi_sample(1, 0, 0, 0);
+				end
+				default: begin
+					hdmi_sample(1, 0, 1, 0); hdmi_sample(1, 0, 0, 0);
+					hdmi_sample(1, 0, 0, 0); hdmi_sample(1, 0, 0, 0);
+				end
+			endcase
+			frame_boundary();
+			repeat(5) @(posedge clk_hdmi);
 		end
 	endtask
 
@@ -126,22 +152,68 @@ module tb_mister_magik_video_diagnostics_control;
 		end
 	endtask
 
-	task automatic read_state;
-		input [15:0] expected_state;
+	task automatic read_record;
 		begin
-			expected_crc = 16'hffff;
-			expected_crc = crc_word(expected_crc, 16'h0067);
-			expected_crc = crc_word(expected_crc, 16'h0002);
-			expected_crc = crc_word(expected_crc, 16'h0002);
-			expected_crc = crc_word(expected_crc, 16'h0002);
-			expected_crc = crc_word(expected_crc, expected_state);
 			io_uio = 1'b1;
 			strobe_word(16'h0067, 1'b1, 16'h4d57);
-			strobe_word(16'd0, 1'b1, 16'h0002);
-			strobe_word(16'd0, 1'b1, expected_state);
-			strobe_word(16'd0, 1'b1, expected_crc);
+			for(index = 0; index < 15; index = index + 1) begin
+				@(negedge clk_sys);
+				io_din = 16'd0;
+				io_strobe = 1'b1;
+				#1;
+				if(!response_valid) begin
+					$display("FAIL: missing response word %0d", index);
+					$fatal(1);
+				end
+				record[index] = response_data;
+				@(posedge clk_sys);
+				@(negedge clk_sys);
+				io_strobe = 1'b0;
+			end
 			strobe_word(16'd0, 1'b0, 16'd0);
 			end_command();
+			expected_crc = 16'hffff;
+			expected_crc = crc_word(expected_crc, 16'h0067);
+			expected_crc = crc_word(expected_crc, 16'h0003);
+			expected_crc = crc_word(expected_crc, 16'd14);
+			for(index = 0; index < 14; index = index + 1)
+				expected_crc = crc_word(expected_crc, record[index]);
+			if(record[0] != 16'd3 || record[14] != expected_crc) begin
+				$display("FAIL: schema/CRC schema=%h crc=%h expected=%h",
+					record[0], record[14], expected_crc);
+				$fatal(1);
+			end
+		end
+	endtask
+
+	task automatic apply_reset;
+		begin
+			reset_active = 1'b1;
+			repeat(2) @(posedge clk_sys);
+			reset_active = 1'b0;
+			repeat(3) @(posedge clk_sys);
+			frame_boundary();
+			repeat(5) @(posedge clk_hdmi);
+		end
+	endtask
+
+	task automatic establish_baseline;
+		begin
+			apply_reset();
+			complete_pattern(0);
+			if(dut.source_state[15:0] != 0)
+				$fatal(1, "baseline established after one frame");
+			complete_pattern(0);
+			if(dut.source_state[15:0] != 0)
+				$fatal(1, "baseline established after two frames");
+			complete_pattern(0);
+			read_record();
+			if((record[1] & 16'h001b) != 16'h000b)
+				$fatal(1, "baseline not valid after exactly three frames: %h", record[1]);
+			if(record[4] != 1 || record[6] != 1 ||
+			   record[8] != 3 || record[9] != 0)
+				$fatal(1, "baseline counts wrong hs=%0d de=%0d active=%0d/%0d",
+					record[4], record[6], record[9], record[8]);
 		end
 	endtask
 
@@ -149,65 +221,79 @@ module tb_mister_magik_video_diagnostics_control;
 		repeat(3) @(posedge clk_sys);
 		reset_active = 1'b0;
 
-		// Retired observer and latch commands remain unsupported by this responder.
+		// Retired diagnostics and every latch-v5 command are unsupported here.
 		for(command = 8'h60; command <= 8'h66; command = command + 1) begin
-			io_uio = 1'b1;
-			strobe_word(command[15:0], 1'b0, 16'd0);
-			end_command();
+			io_uio = 1'b1; strobe_word(command[15:0], 1'b0, 16'd0); end_command();
 		end
-		for(command = 8'h57; command <= 8'h5f; command = command + 1) begin
-			io_uio = 1'b1;
-			strobe_word(command[15:0], 1'b0, 16'd0);
-			end_command();
+		for(command = 8'h50; command <= 8'h5f; command = command + 1) begin
+			io_uio = 1'b1; strobe_word(command[15:0], 1'b0, 16'd0); end_command();
 		end
-
-		// Healthy, raw-black, missing-DE, and sparse-frame evidence.
-		complete_frame(20, 20, 1'b1);
-		read_state(16'h1ff7);
-		complete_frame(20, 0, 1'b1);
-		read_state(16'h20f7);
-		complete_frame(0, 0, 1'b1);
-		read_state(16'h3007);
-		complete_frame(20, 1, 1'b1);
-		read_state(16'h41f7);
-
-		// A stopped HDMI clock-enable cannot manufacture a fresh frame heartbeat.
-		raw_ce = 1'b0;
-		raw_vs = 1'b1;
-		repeat(8) @(posedge clk_hdmi);
-		raw_vs = 1'b0;
-		read_state(16'h41f7);
-		raw_ce = 1'b1;
-
-		// Frame sequence is explicitly modulo 16 and does not affect counters.
-		for(frame_index = 0; frame_index < 12; frame_index = frame_index + 1)
-			complete_frame(16, 16, 1'b1);
-		read_state(16'h0ff7);
-
-		// A response is immutable even when a new raw frame completes mid-command.
-		expected_crc = 16'hffff;
-		expected_crc = crc_word(expected_crc, 16'h0067);
-		expected_crc = crc_word(expected_crc, 16'h0002);
-		expected_crc = crc_word(expected_crc, 16'h0002);
-		expected_crc = crc_word(expected_crc, 16'h0002);
-		expected_crc = crc_word(expected_crc, 16'h0ff7);
+		// An aborted partial read cannot poison the next command.
 		io_uio = 1'b1;
 		strobe_word(16'h0067, 1'b1, 16'h4d57);
-		complete_frame(20, 0, 1'b1);
-		strobe_word(16'd0, 1'b1, 16'h0002);
-		strobe_word(16'd0, 1'b1, 16'h0ff7);
-		strobe_word(16'd0, 1'b1, expected_crc);
+		strobe_word(16'd0, 1'b1, 16'h0003);
+		end_command();
+
+		// Changing and empty frames cannot create a baseline.
+		frame_boundary();
+		complete_pattern(0); complete_pattern(1); complete_pattern(0); complete_pattern(5);
+		read_record();
+		if(record[1] != 0) $fatal(1, "changing/empty sequence established baseline");
+
+		// Reset during candidate streaks returns to a coherent empty record.
+		complete_pattern(0); apply_reset();
+		complete_pattern(0); complete_pattern(0); apply_reset();
+		read_record();
+		if(record[1] != 0) $fatal(1, "candidate reset did not clear observer");
+
+		// Phase/order-only mismatch retains equal counts but a different CRC.
+		establish_baseline();
+		for(index = 0; index < 15; index = index + 1) saved_bad[index] = record[index];
+		// The response stays immutable while the first mismatch arrives.
+		io_uio = 1'b1;
+		strobe_word(16'h0067, 1'b1, 16'h4d57);
+		strobe_word(16'd0, 1'b1, saved_bad[0]);
+		complete_pattern(1);
+		for(index = 1; index < 15; index = index + 1)
+			strobe_word(16'd0, 1'b1, saved_bad[index]);
+		strobe_word(16'd0, 1'b0, 16'd0);
 		end_command();
 		repeat(7) @(posedge clk_sys);
-		read_state(16'h10f7);
+		read_record();
+		if((record[1] & 16'h001f) != 16'h001b || record[2] == record[3] ||
+		   record[4] != record[5] || record[6] != record[7] ||
+		   record[8] != record[10] || record[9] != record[11])
+			$fatal(1, "phase-only mismatch evidence wrong");
+		for(index = 0; index < 15; index = index + 1) saved_bad[index] = record[index];
+		complete_pattern(0); complete_pattern(4);
+		read_record();
+		for(index = 0; index < 15; index = index + 1)
+			if(record[index] != saved_bad[index]) $fatal(1, "first-bad record mutated");
 
-		// Reset invalidates both the raw frame sample and clk_sys snapshot.
+		// Each aggregate count independently causes a mismatch.
+		apply_reset(); establish_baseline(); complete_pattern(2); read_record();
+		if(record[4] == record[5]) $fatal(1, "HS mismatch not retained");
+		apply_reset(); establish_baseline(); complete_pattern(3); read_record();
+		if(record[6] == record[7]) $fatal(1, "DE mismatch not retained");
+		apply_reset(); establish_baseline(); complete_pattern(4); read_record();
+		if(record[8] == record[10] && record[9] == record[11])
+			$fatal(1, "active-count mismatch not retained");
+
+		// Frame sequence wraps coherently and reset clears retained evidence.
+		apply_reset(); establish_baseline();
+		dut.frame_sequence = 16'hffff;
+		complete_pattern(1); read_record();
+		if(record[12] != 16'h0000) $fatal(1, "frame sequence did not wrap");
+		io_uio = 1'b1;
+		strobe_word(16'h0067, 1'b1, 16'h4d57);
 		reset_active = 1'b1;
 		repeat(2) @(posedge clk_sys);
 		reset_active = 1'b0;
-		read_state(16'h0000);
+		end_command();
+		read_record();
+		if(record[1] != 0) $fatal(1, "reset did not clear retained mismatch");
 
-		$display("PASS: minimal raw scaler boundary diagnostic framing and activity");
+		$display("PASS: sticky raw-scaler frame-integrity observer and responder");
 		$finish;
 	end
 endmodule

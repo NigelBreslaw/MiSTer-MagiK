@@ -142,11 +142,15 @@ def render_rust(spec: dict) -> str:
     )
     for index, name in enumerate(raw_scaler["words"]):
         lines.append(f"pub const RAW_SCALER_STATE_{name.upper()}_WORD: usize = {index};")
-    for name, field in raw_scaler["fields"].items():
-        lines.append(f"pub const RAW_SCALER_STATE_{name.upper()}_BIT: usize = {field['bit']};")
+    mask = 0
+    for name, bit in raw_scaler.get("flags", {}).items():
+        lines.append(f"pub const RAW_SCALER_STATE_FLAG_{name.upper()}: u16 = 1 << {bit};")
+        mask |= 1 << bit
+    lines.append(f"pub const RAW_SCALER_STATE_FLAGS_MASK: u16 = 0x{mask:04x};")
+    for word_name, reserved_mask in raw_scaler.get("reserved_zero_masks", {}).items():
         lines.append(
-            f"pub const RAW_SCALER_STATE_{name.upper()}_MASK: u16 = "
-            f"0x{((1 << field['width']) - 1):04x};"
+            f"pub const RAW_SCALER_STATE_{word_name.upper()}_RESERVED_ZERO_MASK: u16 = "
+            f"0x{reserved_mask:04x};"
         )
     lines.append(
         "pub const RAW_SCALER_STATE_ZERO_GOLDEN_CRC: u16 = "
@@ -219,15 +223,15 @@ def main() -> None:
     if raw_scaler["command"] in commands or raw_scaler["magic"] in magics:
         raise SystemExit("raw scaler state command or magic overlaps another record")
     used_mask = 0
-    for field_name, field in raw_scaler["fields"].items():
-        if field["bit"] < 0 or field["width"] <= 0 or field["bit"] + field["width"] > 16:
-            raise SystemExit(f"raw scaler state field {field_name} is outside one word")
-        field_mask = ((1 << field["width"]) - 1) << field["bit"]
-        if used_mask & field_mask:
-            raise SystemExit(f"raw scaler state field {field_name} overlaps another field")
-        used_mask |= field_mask
-    if used_mask != 0xffff:
-        raise SystemExit("raw scaler state must define all 16 state bits")
+    for flag_name, bit in raw_scaler.get("flags", {}).items():
+        if bit < 0 or bit > 15 or used_mask & (1 << bit):
+            raise SystemExit(f"raw scaler state flag {flag_name} is invalid or overlaps")
+        used_mask |= 1 << bit
+    for word_name, mask in raw_scaler.get("reserved_zero_masks", {}).items():
+        if word_name not in raw_scaler["words"] or mask < 0 or mask > 0xffff:
+            raise SystemExit(f"raw scaler state reserved mask {word_name} is invalid")
+        if word_name == "flags" and mask & used_mask:
+            raise SystemExit("raw scaler state flag and reserved masks overlap")
     write_or_check(RUST_PATH, render_rust(spec), args.check)
 
 

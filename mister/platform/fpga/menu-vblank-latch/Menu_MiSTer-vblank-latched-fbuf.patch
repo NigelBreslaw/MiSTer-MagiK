@@ -500,7 +500,6 @@ index a4168795b68bed4b655b00cb7ced5cf5b4f32741..4d81fc6df5732b81d71a78ad650f41ed
 +	.clk_sys(clk_sys),
 +	.reset_active(reset_req),
 +	.raw_ce(scaler_out),
-+	.raw_rgb(hdmi_data),
 +	.raw_de(hdmi_de),
 +	.raw_hs(hdmi_hs),
 +	.raw_vs(hdmi_vs),

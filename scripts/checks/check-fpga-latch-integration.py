@@ -243,27 +243,31 @@ def main() -> None:
         fail("diagnostic control source contains an unexpected design unit")
     if "captured_state" in control_source:
         fail("diagnostic responder retains a redundant snapshot register")
-    if control_source.count("(* preserve *) reg [15:0] snapshot_state") != 1:
+    if control_source.count("(* preserve *) reg [207:0] snapshot_state") != 1:
         fail("diagnostic bundled-data snapshot is not preserved")
-    if control_source.count("(* preserve *) reg [15:0] source_state") != 1:
+    if control_source.count("(* preserve *) reg [207:0] source_state") != 1:
         fail("raw scaler source state is not preserved for bundled-data capture")
     if control_source.count("(* preserve *) reg source_generation") != 1:
         fail("raw scaler frame generation is not preserved as a distinct CDC source")
     for exact_probe in (
         "input  wire        raw_ce",
-        "input  wire [23:0] raw_rgb",
         "input  wire        raw_de",
         "input  wire        raw_hs",
         "input  wire        raw_vs",
         "wire frame_start = raw_ce && raw_vs && !raw_vs_previous;",
-        "wire active_sample = raw_ce && raw_de;",
-        "nonzero_count <= saturating_increment(nonzero_count);",
-        "source_generation <= ~source_generation;",
+        "wire completed_nonempty = ce_seen && hs_seen && vs_seen && de_seen;",
+        "candidate_streak == 2'd2",
+        "crc_update_byte(control_crc,",
     ):
         if control_source.count(exact_probe) != 1:
             fail(f"raw scaler diagnostic probe is missing or ambiguous: {exact_probe}")
-    if "raw_rgb" not in control_source or control_source.count("|raw_rgb") != 1:
-        fail("raw scaler diagnostic must reduce the unmodified RGB boundary exactly once")
+    if control_source.count("MAGIK_RAW_SCALER_STATE_FLAG_MISMATCH_LATCHED") != 2:
+        fail("raw scaler sticky mismatch publication is incomplete")
+    if control_source.count("source_generation <= ~source_generation;") != 2:
+        fail("raw scaler publication toggle sites are missing or ambiguous")
+    for forbidden_pixel_probe in ("raw_rgb", "hdmi_data", "rgb_in", "input  wire [23:0]"):
+        if forbidden_pixel_probe in control_source:
+            fail(f"raw scaler frame-integrity observer taps pixel data: {forbidden_pixel_probe}")
     if re.search(r"(?m)^\s*module\b", avalon_source + output_source):
         fail("retired Avalon or output diagnostic compatibility source defines logic")
     compiled_diagnostics = control_source + avalon_source + output_source
@@ -446,7 +450,6 @@ def main() -> None:
         for raw_binding in (
             ".clk_hdmi(clk_hdmi)",
             ".raw_ce(scaler_out)",
-            ".raw_rgb(hdmi_data)",
             ".raw_de(hdmi_de)",
             ".raw_hs(hdmi_hs)",
             ".raw_vs(hdmi_vs)",

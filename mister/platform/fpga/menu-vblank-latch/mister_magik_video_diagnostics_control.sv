@@ -4,16 +4,15 @@
 `timescale 1ns/1ps
 `default_nettype none
 
-// Disposable passive observer at the unmodified ascal output boundary. The
-// HDMI-domain half only counts completed-frame activity. The clk_sys half is a
-// bundled-data receiver and read-only UIO responder. No observer output is
-// connected to scaler, latch, reset, route, PLL, mux, or pixel control logic.
+// Disposable passive observer at the unmodified ascal control boundary. It
+// retains the first completed-frame control-timing mismatch after a stable
+// three-frame baseline. No observer output is connected to scaler, latch,
+// reset, route, PLL, mux, framebuffer, or pixel control/data logic.
 module mister_magik_raw_scaler_diagnostic (
 	input  wire        clk_hdmi,
 	input  wire        clk_sys,
 	input  wire        reset_active,
 	input  wire        raw_ce,
-	input  wire [23:0] raw_rgb,
 	input  wire        raw_de,
 	input  wire        raw_hs,
 	input  wire        raw_vs,
@@ -27,12 +26,32 @@ module mister_magik_raw_scaler_diagnostic (
 `include "mister_magik_video_diagnostics_protocol.svh"
 
 	reg raw_vs_previous = 1'b0;
-	reg [3:0] active_count = 4'd0;
-	reg [3:0] nonzero_count = 4'd0;
+	reg raw_hs_previous = 1'b0;
+	reg raw_de_previous = 1'b0;
+	reg frame_open = 1'b0;
+	reg ce_seen = 1'b0;
 	reg hs_seen = 1'b0;
-	reg [3:0] frame_sequence = 4'd0;
-	(* preserve *) reg [15:0] source_state = 16'd0;
+	reg vs_seen = 1'b0;
+	reg de_seen = 1'b0;
+	reg frame_overflow = 1'b0;
+	reg [15:0] control_crc = 16'hffff;
+	reg [15:0] hs_edge_count = 16'd0;
+	reg [15:0] de_start_count = 16'd0;
+	reg [23:0] active_sample_count = 24'd0;
+	reg [15:0] frame_sequence = 16'd0;
+
+	reg candidate_valid = 1'b0;
+	reg [1:0] candidate_streak = 2'd0;
+	reg [15:0] candidate_crc = 16'd0;
+	reg [15:0] candidate_hs_edges = 16'd0;
+	reg [15:0] candidate_de_starts = 16'd0;
+	reg [23:0] candidate_active_samples = 24'd0;
+
+	// Slots 0..12 are response words 1..13. This is the only retained
+	// baseline/first-bad storage and remains stable between publications.
+	(* preserve *) reg [207:0] source_state = 208'd0;
 	(* preserve *) reg source_generation = 1'b0;
+	reg [15:0] observation_generation = 16'd0;
 
 	(* altera_attribute = "-name SYNCHRONIZER_IDENTIFICATION FORCED" *)
 	reg generation_meta = 1'b0;
@@ -43,13 +62,26 @@ module mister_magik_raw_scaler_diagnostic (
 
 	reg has_command = 1'b0;
 	reg command_selected = 1'b0;
-	reg [1:0] word_count = 2'd0;
-	(* preserve *) reg [15:0] snapshot_state = 16'd0;
-	reg [15:0] tx_crc;
+	reg [3:0] word_count = 4'd0;
+	(* preserve *) reg [207:0] snapshot_state = 208'd0;
+	reg [15:0] tx_crc = 16'hffff;
 	reg [15:0] response_word;
 
 	wire frame_start = raw_ce && raw_vs && !raw_vs_previous;
-	wire active_sample = raw_ce && raw_de;
+	wire completed_frame = frame_start && frame_open;
+	wire completed_nonempty = ce_seen && hs_seen && vs_seen && de_seen;
+	wire candidate_matches = candidate_crc == control_crc &&
+		candidate_hs_edges == hs_edge_count &&
+		candidate_de_starts == de_start_count &&
+		candidate_active_samples == active_sample_count;
+	wire baseline_matches = source_state[31:16] == control_crc &&
+		source_state[63:48] == hs_edge_count &&
+		source_state[95:80] == de_start_count &&
+		{source_state[143:136], source_state[127:112]} == active_sample_count;
+	wire baseline_valid =
+		(source_state[15:0] & MAGIK_RAW_SCALER_STATE_FLAG_BASELINE_VALID) != 0;
+	wire mismatch_latched =
+		(source_state[15:0] & MAGIK_RAW_SCALER_STATE_FLAG_MISMATCH_LATCHED) != 0;
 	wire command_start = io_uio && io_strobe && !has_command;
 	wire command_data = io_uio && io_strobe && has_command;
 	wire selected_start = io_din[7:0] == MAGIK_UIO_GET_RAW_SCALER_STATE;
@@ -59,13 +91,6 @@ module mister_magik_raw_scaler_diagnostic (
 		(command_start && selected_start) ||
 		(command_data && selected_command &&
 		 (word_count < MAGIK_RAW_SCALER_STATE_WORDS));
-
-	function automatic [3:0] saturating_increment;
-		input [3:0] value;
-		begin
-			saturating_increment = (&value) ? value : value + 1'd1;
-		end
-	endfunction
 
 	function automatic [15:0] crc_update_byte;
 		input [15:0] crc_in;
@@ -93,57 +118,149 @@ module mister_magik_raw_scaler_diagnostic (
 		crc_update_word(MAGIK_RAW_SCALER_STATE_HEADER_CRC,
 			MAGIK_RAW_SCALER_STATE_SCHEMA);
 
-	// Per-frame state: [15:12] heartbeat, [11:8] nonzero active samples,
-	// [7:4] active samples, [3] reserved zero, [2] HS observed, [1] CE
-	// observed, [0] completed-frame sample valid. Counts saturate at 15 so one
-	// flashing pixel remains distinguishable from substantial image activity.
+	// Count and fingerprint the exact ordered raw control waveform. The rising
+	// VS sample begins the next frame and is intentionally excluded from the
+	// tuple being completed on the same edge.
 	always @(posedge clk_hdmi or posedge reset_active) begin
 		if(reset_active) begin
 			raw_vs_previous <= 1'b0;
-			active_count <= 4'd0;
-			nonzero_count <= 4'd0;
+			raw_hs_previous <= 1'b0;
+			raw_de_previous <= 1'b0;
+			frame_open <= 1'b0;
+			ce_seen <= 1'b0;
 			hs_seen <= 1'b0;
-			frame_sequence <= 4'd0;
-			source_state <= 16'd0;
+			vs_seen <= 1'b0;
+			de_seen <= 1'b0;
+			frame_overflow <= 1'b0;
+			control_crc <= 16'hffff;
+			hs_edge_count <= 16'd0;
+			de_start_count <= 16'd0;
+			active_sample_count <= 24'd0;
+			frame_sequence <= 16'd0;
+			candidate_valid <= 1'b0;
+			candidate_streak <= 2'd0;
+			candidate_crc <= 16'd0;
+			candidate_hs_edges <= 16'd0;
+			candidate_de_starts <= 16'd0;
+			candidate_active_samples <= 24'd0;
+			source_state <= 208'd0;
 			source_generation <= 1'b0;
+			observation_generation <= 16'd0;
 		end
 		else begin
-			if(raw_ce) begin
-				raw_vs_previous <= raw_vs;
-				hs_seen <= hs_seen | raw_hs;
-				if(active_sample)
-					active_count <= saturating_increment(active_count);
-				if(active_sample && (|raw_rgb))
-					nonzero_count <= saturating_increment(nonzero_count);
-			end
+			raw_vs_previous <= raw_vs;
+			raw_hs_previous <= raw_hs;
+			raw_de_previous <= raw_de;
 
 			if(frame_start) begin
-				frame_sequence <= frame_sequence + 1'd1;
-				source_state <= {
-					frame_sequence + 1'd1,
-					nonzero_count,
-					active_count,
-					1'b0,
-					hs_seen | raw_hs,
-					1'b1,
-					1'b1
-				};
-				source_generation <= ~source_generation;
-				active_count <= 4'd0;
-				nonzero_count <= 4'd0;
-				hs_seen <= 1'b0;
+				frame_open <= 1'b1;
+				control_crc <= crc_update_byte(16'hffff,
+					{4'b0000, raw_ce, raw_de, raw_hs, raw_vs});
+				ce_seen <= raw_ce;
+				hs_seen <= raw_ce && raw_hs;
+				vs_seen <= raw_ce && raw_vs;
+				de_seen <= raw_ce && raw_de;
+				frame_overflow <= 1'b0;
+				hs_edge_count <= (raw_ce && raw_hs && !raw_hs_previous) ? 16'd1 : 16'd0;
+				de_start_count <= (raw_ce && raw_de && !raw_de_previous) ? 16'd1 : 16'd0;
+				active_sample_count <= (raw_ce && raw_de) ? 24'd1 : 24'd0;
+
+				if(completed_frame) begin
+					frame_sequence <= frame_sequence + 1'd1;
+					if(!baseline_valid) begin
+						if(!completed_nonempty || frame_overflow) begin
+							candidate_valid <= 1'b0;
+							candidate_streak <= 2'd0;
+						end
+						else if(candidate_valid && candidate_matches) begin
+							if(candidate_streak == 2'd2) begin
+								source_state <= {
+									16'd0, 16'd0, 16'd0, 16'd0,
+									{8'd0, active_sample_count[23:16]},
+									active_sample_count[15:0],
+									16'd0, de_start_count,
+									16'd0, hs_edge_count,
+									16'd0, control_crc,
+									MAGIK_RAW_SCALER_STATE_FLAG_SAMPLE_VALID |
+									MAGIK_RAW_SCALER_STATE_FLAG_SAMPLE_NONEMPTY |
+									MAGIK_RAW_SCALER_STATE_FLAG_BASELINE_VALID
+								};
+								observation_generation <= observation_generation + 1'd1;
+								source_generation <= ~source_generation;
+								candidate_valid <= 1'b0;
+								candidate_streak <= 2'd0;
+							end
+							else
+								candidate_streak <= candidate_streak + 1'd1;
+						end
+						else begin
+							candidate_valid <= 1'b1;
+							candidate_streak <= 2'd1;
+							candidate_crc <= control_crc;
+							candidate_hs_edges <= hs_edge_count;
+							candidate_de_starts <= de_start_count;
+							candidate_active_samples <= active_sample_count;
+						end
+					end
+					else if(!mismatch_latched &&
+						(!completed_nonempty || frame_overflow || !baseline_matches)) begin
+						source_state[15:0] <=
+							MAGIK_RAW_SCALER_STATE_FLAG_SAMPLE_VALID |
+							MAGIK_RAW_SCALER_STATE_FLAG_BASELINE_VALID |
+							MAGIK_RAW_SCALER_STATE_FLAG_MISMATCH_LATCHED |
+							(completed_nonempty ?
+								MAGIK_RAW_SCALER_STATE_FLAG_SAMPLE_NONEMPTY : 16'd0) |
+							(frame_overflow ?
+								MAGIK_RAW_SCALER_STATE_FLAG_SAMPLE_OVERFLOW : 16'd0);
+						source_state[47:32] <= control_crc;
+						source_state[79:64] <= hs_edge_count;
+						source_state[111:96] <= de_start_count;
+						source_state[159:144] <= active_sample_count[15:0];
+						source_state[175:160] <= {8'd0, active_sample_count[23:16]};
+						source_state[191:176] <= frame_sequence + 1'd1;
+						source_state[207:192] <= observation_generation + 1'd1;
+						observation_generation <= observation_generation + 1'd1;
+						source_generation <= ~source_generation;
+					end
+				end
+			end
+			else begin
+				control_crc <= crc_update_byte(control_crc,
+					{4'b0000, raw_ce, raw_de, raw_hs, raw_vs});
+				ce_seen <= ce_seen | raw_ce;
+				hs_seen <= hs_seen | (raw_ce && raw_hs);
+				vs_seen <= vs_seen | (raw_ce && raw_vs);
+				de_seen <= de_seen | (raw_ce && raw_de);
+
+				if(raw_ce && raw_hs && !raw_hs_previous) begin
+					if(&hs_edge_count)
+						frame_overflow <= 1'b1;
+					else
+						hs_edge_count <= hs_edge_count + 1'd1;
+				end
+				if(raw_ce && raw_de && !raw_de_previous) begin
+					if(&de_start_count)
+						frame_overflow <= 1'b1;
+					else
+						de_start_count <= de_start_count + 1'd1;
+				end
+				if(raw_ce && raw_de) begin
+					if(&active_sample_count)
+						frame_overflow <= 1'b1;
+					else
+						active_sample_count <= active_sample_count + 1'd1;
+				end
 			end
 		end
 	end
 
 	always @(*) begin
-		case(word_count)
-			MAGIK_RAW_SCALER_STATE_SCHEMA_WORD:
-				response_word = MAGIK_RAW_SCALER_STATE_SCHEMA;
-			MAGIK_RAW_SCALER_STATE_STATE_WORD:
-				response_word = snapshot_state;
-			default: response_word = tx_crc;
-		endcase
+		if(word_count == MAGIK_RAW_SCALER_STATE_SCHEMA_WORD)
+			response_word = MAGIK_RAW_SCALER_STATE_SCHEMA;
+		else if(word_count == MAGIK_RAW_SCALER_STATE_CRC_WORD)
+			response_word = tx_crc;
+		else
+			response_word = snapshot_state[(word_count - 1'd1) * 16 +: 16];
 
 		response_data = 16'd0;
 		if(command_start && selected_start)
@@ -153,42 +270,54 @@ module mister_magik_raw_scaler_diagnostic (
 			response_data = response_word;
 	end
 
-	always @(posedge clk_sys) begin
-		generation_meta <= source_generation;
-		generation_sync <= generation_meta;
-
+	// Toggle plus stable bundled data. The source changes only on baseline
+	// publication or the first sticky mismatch; a transaction snapshot never
+	// changes until io_uio is released.
+	always @(posedge clk_sys or posedge reset_active) begin
 		if(reset_active) begin
-			generation_seen <= generation_sync;
+			generation_meta <= 1'b0;
+			generation_sync <= 1'b0;
+			generation_seen <= 1'b0;
 			capture_pending <= 1'b0;
-			snapshot_state <= 16'd0;
-		end
-		else if(!has_command && generation_sync != generation_seen) begin
-			generation_seen <= generation_sync;
-			capture_pending <= 1'b1;
-		end
-		else if(!has_command && capture_pending) begin
-			snapshot_state <= source_state;
-			capture_pending <= 1'b0;
-		end
-
-		if(command_start) begin
-			has_command <= 1'b1;
-			command_selected <= selected_start;
-			word_count <= 2'd0;
-			if(selected_start)
-				tx_crc <= MAGIK_RAW_SCALER_STATE_SCHEMA_CRC;
-		end
-		else if(command_data && selected_command &&
-			(word_count < MAGIK_RAW_SCALER_STATE_WORDS)) begin
-			word_count <= word_count + 1'd1;
-			if(word_count == MAGIK_RAW_SCALER_STATE_STATE_WORD)
-				tx_crc <= crc_update_word(tx_crc, response_word);
-		end
-
-		if(!io_uio && has_command) begin
+			snapshot_state <= 208'd0;
 			has_command <= 1'b0;
 			command_selected <= 1'b0;
-			word_count <= 2'd0;
+			word_count <= 4'd0;
+			tx_crc <= 16'hffff;
+		end
+		else begin
+			generation_meta <= source_generation;
+			generation_sync <= generation_meta;
+
+			if(!has_command && generation_sync != generation_seen) begin
+				generation_seen <= generation_sync;
+				capture_pending <= 1'b1;
+			end
+			else if(!has_command && capture_pending) begin
+				snapshot_state <= source_state;
+				capture_pending <= 1'b0;
+			end
+
+			if(command_start) begin
+				has_command <= 1'b1;
+				command_selected <= selected_start;
+				word_count <= 4'd0;
+				if(selected_start)
+					tx_crc <= MAGIK_RAW_SCALER_STATE_SCHEMA_CRC;
+			end
+			else if(command_data && selected_command &&
+				(word_count < MAGIK_RAW_SCALER_STATE_WORDS)) begin
+				word_count <= word_count + 1'd1;
+				if(word_count > MAGIK_RAW_SCALER_STATE_SCHEMA_WORD &&
+				   word_count < MAGIK_RAW_SCALER_STATE_CRC_WORD)
+					tx_crc <= crc_update_word(tx_crc, response_word);
+			end
+
+			if(!io_uio && has_command) begin
+				has_command <= 1'b0;
+				command_selected <= 1'b0;
+				word_count <= 4'd0;
+			end
 		end
 	end
 endmodule

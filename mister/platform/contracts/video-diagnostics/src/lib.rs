@@ -138,37 +138,70 @@ pub struct RawScalerState {
 }
 
 impl RawScalerState {
-    pub fn state(&self) -> u16 {
-        self.words[RAW_SCALER_STATE_STATE_WORD]
+    pub fn flags(&self) -> u16 {
+        self.words[RAW_SCALER_STATE_FLAGS_WORD]
     }
 
-    pub fn field(&self, bit: usize, mask: u16) -> u16 {
-        (self.state() >> bit) & mask
+    pub fn sample_valid(&self) -> bool {
+        self.flags() & RAW_SCALER_STATE_FLAG_SAMPLE_VALID != 0
     }
 
-    pub fn valid(&self) -> bool {
-        self.field(RAW_SCALER_STATE_VALID_BIT, RAW_SCALER_STATE_VALID_MASK) != 0
+    pub fn sample_nonempty(&self) -> bool {
+        self.flags() & RAW_SCALER_STATE_FLAG_SAMPLE_NONEMPTY != 0
     }
 
-    pub fn active_sample_count(&self) -> u8 {
-        self.field(
-            RAW_SCALER_STATE_ACTIVE_SAMPLE_COUNT_BIT,
-            RAW_SCALER_STATE_ACTIVE_SAMPLE_COUNT_MASK,
-        ) as u8
+    pub fn sample_overflow(&self) -> bool {
+        self.flags() & RAW_SCALER_STATE_FLAG_SAMPLE_OVERFLOW != 0
     }
 
-    pub fn nonzero_sample_count(&self) -> u8 {
-        self.field(
-            RAW_SCALER_STATE_NONZERO_SAMPLE_COUNT_BIT,
-            RAW_SCALER_STATE_NONZERO_SAMPLE_COUNT_MASK,
-        ) as u8
+    pub fn baseline_valid(&self) -> bool {
+        self.flags() & RAW_SCALER_STATE_FLAG_BASELINE_VALID != 0
     }
 
-    pub fn frame_sequence(&self) -> u8 {
-        self.field(
-            RAW_SCALER_STATE_FRAME_SEQUENCE_BIT,
-            RAW_SCALER_STATE_FRAME_SEQUENCE_MASK,
-        ) as u8
+    pub fn mismatch_latched(&self) -> bool {
+        self.flags() & RAW_SCALER_STATE_FLAG_MISMATCH_LATCHED != 0
+    }
+
+    pub fn baseline_control_crc(&self) -> u16 {
+        self.words[RAW_SCALER_STATE_BASELINE_CONTROL_CRC_WORD]
+    }
+
+    pub fn first_bad_control_crc(&self) -> u16 {
+        self.words[RAW_SCALER_STATE_FIRST_BAD_CONTROL_CRC_WORD]
+    }
+
+    pub fn baseline_hs_edges(&self) -> u16 {
+        self.words[RAW_SCALER_STATE_BASELINE_HS_EDGES_WORD]
+    }
+
+    pub fn first_bad_hs_edges(&self) -> u16 {
+        self.words[RAW_SCALER_STATE_FIRST_BAD_HS_EDGES_WORD]
+    }
+
+    pub fn baseline_de_starts(&self) -> u16 {
+        self.words[RAW_SCALER_STATE_BASELINE_DE_STARTS_WORD]
+    }
+
+    pub fn first_bad_de_starts(&self) -> u16 {
+        self.words[RAW_SCALER_STATE_FIRST_BAD_DE_STARTS_WORD]
+    }
+
+    pub fn baseline_active_samples(&self) -> u32 {
+        u32::from(self.words[RAW_SCALER_STATE_BASELINE_ACTIVE_LOW_WORD])
+            | (u32::from(self.words[RAW_SCALER_STATE_BASELINE_ACTIVE_HIGH_WORD]) << 16)
+    }
+
+    pub fn first_bad_active_samples(&self) -> u32 {
+        u32::from(self.words[RAW_SCALER_STATE_FIRST_BAD_ACTIVE_LOW_WORD])
+            | (u32::from(self.words[RAW_SCALER_STATE_FIRST_BAD_ACTIVE_HIGH_WORD]) << 16)
+    }
+
+    pub fn first_bad_frame_sequence(&self) -> u16 {
+        self.words[RAW_SCALER_STATE_FIRST_BAD_FRAME_SEQUENCE_WORD]
+    }
+
+    pub fn first_bad_generation(&self) -> u16 {
+        self.words[RAW_SCALER_STATE_FIRST_BAD_GENERATION_WORD]
     }
 }
 
@@ -684,9 +717,15 @@ pub fn decode_raw_scaler_state(words: &[u16]) -> Result<RawScalerState, String> 
             "raw scaler state CRC mismatch expected=0x{expected:04x} actual=0x{actual:04x}"
         ));
     }
-    let state = words[RAW_SCALER_STATE_STATE_WORD];
-    if ((state >> RAW_SCALER_STATE_RESERVED_ZERO_BIT) & RAW_SCALER_STATE_RESERVED_ZERO_MASK) != 0 {
-        return Err("raw scaler state contains a nonzero reserved bit".to_string());
+    if words[RAW_SCALER_STATE_FLAGS_WORD] & !RAW_SCALER_STATE_FLAGS_MASK != 0
+        || words[RAW_SCALER_STATE_BASELINE_ACTIVE_HIGH_WORD]
+            & RAW_SCALER_STATE_BASELINE_ACTIVE_HIGH_RESERVED_ZERO_MASK
+            != 0
+        || words[RAW_SCALER_STATE_FIRST_BAD_ACTIVE_HIGH_WORD]
+            & RAW_SCALER_STATE_FIRST_BAD_ACTIVE_HIGH_RESERVED_ZERO_MASK
+            != 0
+    {
+        return Err("raw scaler frame-integrity record contains nonzero reserved bits".to_string());
     }
     let mut owned = [0; RAW_SCALER_STATE_WORDS];
     owned.copy_from_slice(words);
@@ -843,29 +882,47 @@ mod tests {
     }
 
     #[test]
-    fn raw_scaler_state_decodes_exact_packed_activity() {
-        let state = (1 << RAW_SCALER_STATE_VALID_BIT)
-            | (1 << RAW_SCALER_STATE_CLOCK_ENABLE_SEEN_BIT)
-            | (1 << RAW_SCALER_STATE_HORIZONTAL_SYNC_SEEN_BIT)
-            | (15 << RAW_SCALER_STATE_ACTIVE_SAMPLE_COUNT_BIT)
-            | (12 << RAW_SCALER_STATE_NONZERO_SAMPLE_COUNT_BIT)
-            | (14 << RAW_SCALER_STATE_FRAME_SEQUENCE_BIT);
+    fn raw_scaler_state_decodes_frame_integrity_tuple() {
         let mut words = zero_hdmi_words::<RAW_SCALER_STATE_WORDS>(
             GET_RAW_SCALER_STATE,
             RAW_SCALER_STATE_SCHEMA,
         );
-        words[RAW_SCALER_STATE_STATE_WORD] = state;
+        words[RAW_SCALER_STATE_FLAGS_WORD] = RAW_SCALER_STATE_FLAG_SAMPLE_VALID
+            | RAW_SCALER_STATE_FLAG_SAMPLE_NONEMPTY
+            | RAW_SCALER_STATE_FLAG_BASELINE_VALID
+            | RAW_SCALER_STATE_FLAG_MISMATCH_LATCHED;
+        words[RAW_SCALER_STATE_BASELINE_CONTROL_CRC_WORD] = 0x1234;
+        words[RAW_SCALER_STATE_FIRST_BAD_CONTROL_CRC_WORD] = 0x5678;
+        words[RAW_SCALER_STATE_BASELINE_HS_EDGES_WORD] = 240;
+        words[RAW_SCALER_STATE_FIRST_BAD_HS_EDGES_WORD] = 239;
+        words[RAW_SCALER_STATE_BASELINE_DE_STARTS_WORD] = 240;
+        words[RAW_SCALER_STATE_FIRST_BAD_DE_STARTS_WORD] = 241;
+        words[RAW_SCALER_STATE_BASELINE_ACTIVE_LOW_WORD] = 0x3456;
+        words[RAW_SCALER_STATE_BASELINE_ACTIVE_HIGH_WORD] = 0x0012;
+        words[RAW_SCALER_STATE_FIRST_BAD_ACTIVE_LOW_WORD] = 0x789a;
+        words[RAW_SCALER_STATE_FIRST_BAD_ACTIVE_HIGH_WORD] = 0x0056;
+        words[RAW_SCALER_STATE_FIRST_BAD_FRAME_SEQUENCE_WORD] = 0xffff;
+        words[RAW_SCALER_STATE_FIRST_BAD_GENERATION_WORD] = 7;
         words[RAW_SCALER_STATE_CRC_WORD] = message_crc_with_schema(
             GET_RAW_SCALER_STATE,
             RAW_SCALER_STATE_SCHEMA,
             &words[..RAW_SCALER_STATE_CRC_WORD],
         );
         let decoded = decode_raw_scaler_state(&words).unwrap();
-        assert!(decoded.valid());
-        assert_eq!(decoded.active_sample_count(), 15);
-        assert_eq!(decoded.nonzero_sample_count(), 12);
-        assert_eq!(decoded.frame_sequence(), 14);
-        assert_eq!(decoded.state(), state);
+        assert!(decoded.sample_valid());
+        assert!(decoded.sample_nonempty());
+        assert!(decoded.baseline_valid());
+        assert!(decoded.mismatch_latched());
+        assert_eq!(decoded.baseline_control_crc(), 0x1234);
+        assert_eq!(decoded.first_bad_control_crc(), 0x5678);
+        assert_eq!(decoded.baseline_hs_edges(), 240);
+        assert_eq!(decoded.first_bad_hs_edges(), 239);
+        assert_eq!(decoded.baseline_de_starts(), 240);
+        assert_eq!(decoded.first_bad_de_starts(), 241);
+        assert_eq!(decoded.baseline_active_samples(), 0x0012_3456);
+        assert_eq!(decoded.first_bad_active_samples(), 0x0056_789a);
+        assert_eq!(decoded.first_bad_frame_sequence(), 0xffff);
+        assert_eq!(decoded.first_bad_generation(), 7);
     }
 
     #[test]
@@ -877,7 +934,7 @@ mod tests {
         words[RAW_SCALER_STATE_CRC_WORD] ^= 1;
         assert!(decode_raw_scaler_state(&words).is_err());
 
-        words[RAW_SCALER_STATE_STATE_WORD] = 1 << RAW_SCALER_STATE_RESERVED_ZERO_BIT;
+        words[RAW_SCALER_STATE_FLAGS_WORD] = 1 << 15;
         words[RAW_SCALER_STATE_CRC_WORD] = message_crc_with_schema(
             GET_RAW_SCALER_STATE,
             RAW_SCALER_STATE_SCHEMA,

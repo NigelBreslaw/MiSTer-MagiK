@@ -38,8 +38,8 @@ set_net_delay -max 10.0 \
 	-from $magik_scaler_completion_ack_route \
 	-to $magik_scaler_completion_ack_meta
 
-# The raw scaler frame word is a bundled-data crossing. It is registered and
-# held stable before the frame-generation toggle changes; the receiver
+# The retained baseline/first-mismatch record is a bundled-data crossing. It is
+# registered and held stable before the observation-generation toggle changes; the receiver
 # synchronizes that toggle and waits one additional clk_sys edge before
 # sampling the word. Both routes are bounded explicitly because the existing
 # asynchronous clock groups cut normal setup/hold analysis.
@@ -53,12 +53,12 @@ set_net_delay -max 10.0 \
 
 set magik_scaler_diag_word [get_registers -nowarn \
 	{*magik_raw_scaler_diagnostic|source_state[*]}]
-if {[get_collection_size $magik_scaler_diag_word] < 16} {
+if {[get_collection_size $magik_scaler_diag_word] != 208} {
 	post_message -type error "MagiK diagnostic bundled routed source is incomplete"
 	error "MagiK diagnostic bundled routed source is incomplete"
 }
 set magik_scaler_diag_capture [magik_require_registers diagnostic_capture \
-	{*magik_raw_scaler_diagnostic|snapshot_state[*]} 16]
+	{*magik_raw_scaler_diagnostic|snapshot_state[*]} 208]
 set_net_delay -max 10.0 \
 	-from $magik_scaler_diag_word \
 	-to $magik_scaler_diag_capture

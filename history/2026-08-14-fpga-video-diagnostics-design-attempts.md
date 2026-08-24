@@ -966,6 +966,26 @@ sync-order faults. No black-screen attribution follows from this event. The
 unrecovered-state record is in
 [`2026-08-24-phase2-transient-corruption-result.md`](2026-08-24-phase2-transient-corruption-result.md).
 
+## Design 6: sticky raw-scaler frame-integrity recorder
+
+The one-frame 2026-08-24 event self-cleared before the 30-second movie, while
+Design 5 continued to report saturated raw activity. Design 6 therefore removes
+the RGB/activity observer rather than widening or stacking it. The replacement
+reads only raw CE, DE, HS, and VS, establishes a three-identical-frame baseline,
+and retains the first differing ordered-control CRC and count tuple until the
+existing reset or RBF reload.
+
+Command `0x67` becomes `raw-scaler-frame-integrity-v1`, schema 3. Commands
+`0x60–0x66`, latch protocol 5, capabilities `0x03ff`, the completion repair,
+and all production routing/reset/pixel cones remain unchanged. The fixed record
+contains baseline and first-bad control CRC, HS-edge count, DE-start count,
+24-bit active sample count, and the first-bad frame sequence/generation. It has
+no write, clear, arm, freeze, or recovery operation and never claims physical
+sink visibility.
+
+The design and pre-synthesis gates are frozen in
+[`2026-08-24-raw-scaler-frame-integrity-design.md`](2026-08-24-raw-scaler-frame-integrity-design.md).
+
 ## Facts established despite the failed implementations
 
 The work was not diagnostically empty. It established the following facts:

@@ -203,16 +203,20 @@ def render_sv(spec: dict, hdmi_evidence: dict) -> str:
             f"localparam [15:0] {prefix}_SCHEMA = 16'd{raw_scaler['schema']};",
             f"localparam [7:0] MAGIK_UIO_GET_RAW_SCALER_STATE = 8'h{raw_scaler['command']:02X};",
             f"localparam [15:0] {prefix}_MAGIC = 16'h{raw_scaler['magic']:04X};",
-            f"localparam [1:0] {prefix}_WORDS = 2'd{raw_scaler['word_count']};",
+            f"localparam [4:0] {prefix}_WORDS = 5'd{raw_scaler['word_count']};",
             f"localparam [15:0] {prefix}_HEADER_CRC = 16'h{hdmi_evidence_header_crc(raw_scaler, hdmi_evidence['crc']):04X};",
         ]
     )
     for index, name in enumerate(raw_scaler["words"]):
-        lines.append(f"localparam [1:0] {prefix}_{upper(name)}_WORD = 2'd{index};")
-    for name, field in raw_scaler["fields"].items():
-        lines.append(f"localparam [3:0] {prefix}_{upper(name)}_BIT = 4'd{field['bit']};")
+        lines.append(f"localparam [4:0] {prefix}_{upper(name)}_WORD = 5'd{index};")
+    mask = 0
+    for name, bit in raw_scaler.get("flags", {}).items():
+        lines.append(f"localparam [15:0] {prefix}_FLAG_{upper(name)} = 16'h{1 << bit:04X};")
+        mask |= 1 << bit
+    lines.append(f"localparam [15:0] {prefix}_FLAGS_MASK = 16'h{mask:04X};")
+    for word_name, reserved_mask in raw_scaler.get("reserved_zero_masks", {}).items():
         lines.append(
-            f"localparam [15:0] {prefix}_{upper(name)}_MASK = 16'h{((1 << field['width']) - 1):04X};"
+            f"localparam [15:0] {prefix}_{upper(word_name)}_RESERVED_ZERO_MASK = 16'h{reserved_mask:04X};"
         )
     return "\n".join(lines) + "\n"
 
