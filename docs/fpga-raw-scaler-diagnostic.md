@@ -46,8 +46,11 @@ stable 13-bit bundle contains exactly fields 0 through 12 and is published with
 a generation toggle; no constant reserved registers are synthesized. The HDMI
 receiver
 uses an explicit two-stage generation synchronizer and waits one further edge
-before capture. Ascal publishes flags 0 through 9 and the state word in
-`clk_hdmi`. The responder waits one same-domain edge after its generation,
+before capture. Ascal publishes an exact 25-bit physical record in `clk_hdmi`:
+state bits 14 through 0 followed by internal flags 9 through 0. Reserved state
+bit 15 and flags 15 through 12 are not implemented as dummy registers. The
+responder reconstructs their canonical zero values, waits one same-domain edge
+after the ascal generation,
 merges the already completed external raw-frame flags 10 and 11, and only then
 publishes one stable 32-bit bundle into `clk_sys` through the toggle, two-stage
 synchronizer, and one-edge settling pattern. A UIO transaction snapshots the
@@ -118,6 +121,8 @@ or a visible sink.
   completion, framebuffer, latch, route, reset, PLL, mux, or final-output cones.
 - Both bundled-data crossings and their generation synchronizers have explicit
   endpoints and bounded net delay under the existing MTBF policy.
+- Quartus must resolve exactly 13 Avalon bundle registers and exactly 25 ascal
+  capture registers; constant ABI-reserved bits are reconstructed externally.
 - No RAM, DSP, or PLL is expected. The record uses small sticky flag buckets,
   two 16-bit stable bundles, one 32-bit bundle, synchronizers, and responder
   snapshot state; Quartus resource and timing signoff remains mandatory before

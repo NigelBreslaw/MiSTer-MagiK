@@ -250,7 +250,7 @@ def main() -> None:
         "input  wire [23:0] raw_rgb",
         "input  wire        raw_de",
         "input  wire        raw_vs",
-        "input  wire [31:0] pipeline_state",
+        "input  wire [24:0] pipeline_state",
         "input  wire        pipeline_generation",
         "generation_meta <= source_generation;",
         "snapshot_state <= source_state;",
@@ -281,6 +281,7 @@ def main() -> None:
         "(* preserve *) reg raw_vs_staged",
         "reg [1:0] raw_completed_flags",
         "wire [31:0] completed_pipeline_state",
+        "pipeline_state[24:10]",
         "pipeline_capture_pending <= 1'b1;",
         "source_generation <= ~source_generation;",
     ):
@@ -288,6 +289,21 @@ def main() -> None:
             fail(f"raw boundary merge is missing or ambiguous: {raw_merge_fragment}")
     if control_source.count("raw_rgb_staged != 24'd0") != 2:
         fail("raw boundary nonzero sampling is missing or ambiguous")
+    completed_record = re.search(
+        r"wire \[31:0\] completed_pipeline_state = \{(?P<body>.*?)\};",
+        control_source,
+        re.S,
+    )
+    if completed_record is None:
+        fail("canonical pipeline record reconstruction is missing")
+    completed_record_body = re.sub(r"\s+", "", completed_record.group("body"))
+    if completed_record_body != (
+        "1'b0,pipeline_state[24:10],4'b0000,"
+        "raw_completed_valid&&raw_completed_flags[1],"
+        "raw_completed_valid&&raw_completed_flags[0],"
+        "pipeline_state[9:1],pipeline_state[0]&&raw_completed_valid"
+    ):
+        fail("25-bit ascal record is not reconstructed into the exact schema-5 mapping")
     for forbidden_rgb_probe in (
         "hdmi_data",
         "rgb_in",
@@ -400,7 +416,7 @@ def main() -> None:
     ):
         if diagnostics_sdc_text.count(fragment) != 1:
             fail(f"scaler completion request/ack constraint is missing or ambiguous: {fragment}")
-    if diagnostics_sdc_text.count("*ascal:ascal|o_magik_diag_state[*]") != 1:
+    if diagnostics_sdc_text.count("{*ascal:ascal|o_magik_diag_state[*]} 25]") != 1:
         fail("scaler pipeline state capture endpoints are missing or ambiguous")
     for forbidden_sdc in ("set_false_path", "magik_require_data_pin", "control_pll_lock"):
         if forbidden_sdc in diagnostics_sdc_text:
@@ -482,6 +498,7 @@ def main() -> None:
         if mismatches:
             fail("patched production bridge binding mismatch: " + "; ".join(mismatches))
         for pipeline_binding in (
+            "wire [24:0] magik_scaler_pipeline_state;",
             ".magik_diag_state (magik_scaler_pipeline_state)",
             ".magik_diag_generation(magik_scaler_pipeline_generation)",
             ".clk_hdmi(clk_hdmi)",
@@ -574,7 +591,7 @@ def main() -> None:
             "o_readdataack<=o_readdataack_sync XOR o_readdataack_sync2;": 1,
             "IF lev_dec_v='1' AND o_readdataack='0' THEN": 1,
             "ELSIF lev_dec_v='0' AND o_readdataack='1' THEN": 1,
-            "magik_diag_state      : OUT std_logic_vector(31 DOWNTO 0);": 1,
+            "magik_diag_state      : OUT std_logic_vector(24 DOWNTO 0);": 1,
             "magik_diag_generation : OUT std_logic;": 1,
             "SIGNAL avl_magik_frame_flags : std_logic_vector(3 DOWNTO 0):=(OTHERS=>'0');": 1,
             "SIGNAL avl_magik_bundle : std_logic_vector(12 DOWNTO 0):=(OTHERS=>'0');": 1,
@@ -587,7 +604,8 @@ def main() -> None:
             "MagiKScalerPipelineDiagnostic:PROCESS(o_clk,o_reset_na) IS": 1,
             "diag_flags_v:=magik_avl_flags_next(": 2,
             "events_v:=magik_output_flags_next(": 1,
-            "o_magik_diag_state<=state_v & flags_v;": 1,
+            "SIGNAL o_magik_diag_state : std_logic_vector(24 DOWNTO 0):=(OTHERS=>'0');": 1,
+            "o_magik_diag_state<=state_v(14 DOWNTO 0) & flags_v(9 DOWNTO 0);": 1,
             "o_magik_diag_generation<=NOT o_magik_diag_generation;": 1,
             "magik_diag_state<=o_magik_diag_state;": 1,
             "magik_diag_generation<=o_magik_diag_generation;": 1,
@@ -619,6 +637,9 @@ def main() -> None:
         for retired_wide_bundle in (
             "SIGNAL avl_magik_bundle : std_logic_vector(15 DOWNTO 0)",
             "VARIABLE diag_bundle_v : std_logic_vector(15 DOWNTO 0);",
+            "magik_diag_state      : OUT std_logic_vector(31 DOWNTO 0);",
+            "SIGNAL o_magik_diag_state : std_logic_vector(31 DOWNTO 0)",
+            "o_magik_diag_state<=state_v & flags_v;",
         ):
             if retired_wide_bundle in patched_ascal:
                 fail("optimized-away Avalon diagnostic bundle bits remain in source")

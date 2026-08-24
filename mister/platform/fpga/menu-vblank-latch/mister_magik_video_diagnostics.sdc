@@ -53,7 +53,7 @@ set_net_delay -max 10.0 \
 set magik_scaler_avl_diag_word [magik_require_registers avl_diagnostic_word \
 	{*ascal:ascal|avl_magik_bundle[*]} 13]
 set magik_scaler_avl_diag_capture [magik_require_registers avl_diagnostic_capture \
-	{*ascal:ascal|o_magik_diag_state[*]} 32]
+	{*ascal:ascal|o_magik_diag_state[*]} 25]
 set_net_delay -max 10.0 \
 	-from $magik_scaler_avl_diag_word \
 	-to $magik_scaler_avl_diag_capture

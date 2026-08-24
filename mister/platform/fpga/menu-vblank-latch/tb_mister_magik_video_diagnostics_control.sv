@@ -11,7 +11,7 @@ module tb_mister_magik_video_diagnostics_control;
 	reg [23:0] raw_rgb = 24'd0;
 	reg raw_de = 1'b0;
 	reg raw_vs = 1'b0;
-	reg [31:0] pipeline_state = 32'd0;
+	reg [24:0] pipeline_state = 25'd0;
 	reg pipeline_generation = 1'b0;
 	reg io_uio = 1'b0;
 	reg io_strobe = 1'b0;
@@ -64,7 +64,7 @@ module tb_mister_magik_video_diagnostics_control;
 		input [15:0] state;
 		begin
 			@(negedge clk_hdmi);
-			pipeline_state = {state, flags};
+			pipeline_state = {state[14:0], flags[9:0]};
 			#2 pipeline_generation = ~pipeline_generation;
 			repeat(4) @(posedge clk_hdmi);
 			repeat(6) @(posedge clk_sys);
@@ -189,6 +189,10 @@ module tb_mister_magik_video_diagnostics_control;
 		complete_raw_frame(1'b1, 1'b1);
 		publish_record(16'h03ff, 16'h5759);
 		expect_record(16'h0fff, 16'h5759);
+		// All 25 physical ascal bits map exactly into the canonical record;
+		// reserved flag bits 15:12 and state bit 15 reconstruct as zero.
+		publish_record(16'h03ff, 16'h7fff);
+		expect_record(16'h0fff, 16'h7fff);
 
 		// Every diagnostic stage can independently remain absent without the
 		// responder altering the immutable production record.
@@ -214,7 +218,7 @@ module tb_mister_magik_video_diagnostics_control;
 		io_uio = 1'b1;
 		strobe_word(16'h0067, 1'b1, 16'h4d57);
 		strobe_word(16'd0, 1'b1, saved[0]);
-		pipeline_state = {16'h2222, 16'h0155};
+		pipeline_state = {15'h2222, 10'h155};
 		pipeline_generation = ~pipeline_generation;
 		for(index = 1; index < 4; index = index + 1)
 			strobe_word(16'd0, 1'b1, saved[index]);

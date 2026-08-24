@@ -14,7 +14,7 @@ module mister_magik_raw_scaler_diagnostic (
 	input  wire [23:0] raw_rgb,
 	input  wire        raw_de,
 	input  wire        raw_vs,
-	input  wire [31:0] pipeline_state,
+	input  wire [24:0] pipeline_state,
 	input  wire        pipeline_generation,
 	input  wire        io_uio,
 	input  wire        io_strobe,
@@ -67,7 +67,9 @@ module mister_magik_raw_scaler_diagnostic (
 	wire raw_frame_start = raw_vs_staged && !raw_vs_previous;
 	wire raw_active_sample = raw_de_staged;
 	wire [31:0] completed_pipeline_state = {
-		pipeline_state[31:12],
+		1'b0,
+		pipeline_state[24:10],
+		4'b0000,
 		raw_completed_valid && raw_completed_flags[1],
 		raw_completed_valid && raw_completed_flags[0],
 		pipeline_state[9:1],

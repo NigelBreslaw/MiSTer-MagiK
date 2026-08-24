@@ -1,5 +1,5 @@
 diff --git a/sys/ascal.vhd b/sys/ascal.vhd
-index a735e6b..0398fb5 100644
+index a735e6b..85455b0 100644
 --- a/sys/ascal.vhd
 +++ b/sys/ascal.vhd
 @@ -75,6 +75,238 @@ LIBRARY ieee;
@@ -247,7 +247,7 @@ index a735e6b..0398fb5 100644
  
 +		------------------------------------
 +		-- Disposable passive MagiK diagnostic
-+		magik_diag_state      : OUT std_logic_vector(31 DOWNTO 0);
++		magik_diag_state      : OUT std_logic_vector(24 DOWNTO 0);
 +		magik_diag_generation : OUT std_logic;
 +
  		------------------------------------
@@ -317,7 +317,7 @@ index a735e6b..0398fb5 100644
 +	SIGNAL o_magik_frame_flags : std_logic_vector(4 DOWNTO 0):=(OTHERS=>'0');
 +	SIGNAL o_magik_completed_flags : std_logic_vector(4 DOWNTO 0):=(OTHERS=>'0');
 +	SIGNAL o_magik_frame_valid : std_logic:='0';
-+	SIGNAL o_magik_diag_state : std_logic_vector(31 DOWNTO 0):=(OTHERS=>'0');
++	SIGNAL o_magik_diag_state : std_logic_vector(24 DOWNTO 0):=(OTHERS=>'0');
 +	SIGNAL o_magik_diag_generation : std_logic:='0';
 +	ATTRIBUTE preserve OF o_magik_diag_state : SIGNAL IS true;
 +	ATTRIBUTE preserve OF o_magik_diag_generation : SIGNAL IS true;
@@ -578,7 +578,7 @@ index a735e6b..0398fb5 100644
 +				state_v(13):=to_std_logic(o_newres>0);
 +				state_v(14):=avl_magik_bundle(11);
 +
-+				o_magik_diag_state<=state_v & flags_v;
++				o_magik_diag_state<=state_v(14 DOWNTO 0) & flags_v(9 DOWNTO 0);
 +				o_magik_diag_generation<=NOT o_magik_diag_generation;
 +				o_magik_capture_pending<='0';
 +			END IF;
@@ -592,7 +592,7 @@ index a735e6b..0398fb5 100644
  	-- Low Lag syntoniser interface
  	o_lltune<=(0 => i_vss,
 diff --git a/sys/sys_top.v b/sys/sys_top.v
-index a416879..c53f70c 100644
+index a416879..a1bf222 100644
 --- a/sys/sys_top.v
 +++ b/sys/sys_top.v
 @@ -351,6 +351,72 @@ reg [12:0] arc2x = 0;
@@ -603,7 +603,7 @@ index a416879..c53f70c 100644
 +wire [15:0] magik_response_data;
 +wire        magik_diag_response_valid;
 +wire [15:0] magik_diag_response_data;
-+wire [31:0] magik_scaler_pipeline_state;
++wire [24:0] magik_scaler_pipeline_state;
 +wire        magik_scaler_pipeline_generation;
 +wire        magik_lfb_apply_accepted;
 +wire        magik_lfb_en;
